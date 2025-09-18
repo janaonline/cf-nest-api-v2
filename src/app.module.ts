@@ -4,11 +4,13 @@ import { AppService } from './app.service';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
 import { UsersModule } from './users/users.module';
+import { FilesModule } from './files/files.module';
+import { S3Module } from './s3/s3.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
-      isGlobal: true
+      isGlobal: true,
     }),
     // Async Mongoose config with env
     MongooseModule.forRootAsync({
@@ -19,8 +21,10 @@ import { UsersModule } from './users/users.module';
       }),
     }),
     UsersModule,
+    FilesModule,
+    S3Module,
   ],
   controllers: [AppController],
   providers: [AppService],
 })
-export class AppModule { }
+export class AppModule {}
