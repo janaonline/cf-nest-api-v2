@@ -1,71 +1,115 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Schema as MongooseSchema } from 'mongoose';
 
-// ---- Shared helper schemas ----
+// --------------------------------------------
+//            ENUM DEFINITIONS
+// --------------------------------------------
+export const STATUS_ENUM = [
+  'PENDING',
+  'APPROVED',
+  'REJECTED',
+  'N/A',
+  '',
+] as const;
+export type StatusEnumType = (typeof STATUS_ENUM)[number];
 
-const statusEnum = ['PENDING', 'APPROVED', 'REJECTED', 'N/A', ''] as const;
-const auditStatusEnum = ['Audited', 'Unaudited'] as const;
+export const AUDIT_STATUS_ENUM = ['Audited', 'Unaudited'] as const;
+export type AuditStatusEnumType = (typeof AUDIT_STATUS_ENUM)[number];
 
+export const FORMDATA_STATUS_ENUM = [
+  'APPROVED',
+  'REJECTED',
+  'PENDING',
+] as const;
+export type FormDataStatusEnumType = (typeof FORMDATA_STATUS_ENUM)[number];
+
+/**
+ * ---------------------------------------------
+ *                EMBEDDED SCHEMAS
+ * ---------------------------------------------
+ */
+//  File object (PDF or Excel).
+//  Stores metadata about uploaded files.
 @Schema({ _id: false })
 class PdfFile {
-  @Prop() url: string;
-  @Prop() name: string;
-}
-const PdfFileSchema = SchemaFactory.createForClass(PdfFile);
+  @Prop({ required: true })
+  url: string;
 
+  @Prop({ required: true })
+  name: string;
+}
+export const PdfFileSchema = SchemaFactory.createForClass(PdfFile);
+
+// Generic content schema used for balance sheet, schedules, income-expense, etc.
 @Schema({ _id: false })
 class Content {
-  @Prop() pdf: PdfFile;
+  @Prop({ type: PdfFileSchema })
+  pdf: PdfFile;
 
-  @Prop() excel: PdfFile;
+  @Prop({ type: PdfFileSchema })
+  excel: PdfFile;
 
   @Prop({
     type: String,
-    enum: ['PENDING', 'APPROVED', 'REJECTED', 'N/A', null],
+    enum: [...STATUS_ENUM, null],
+    default: 'PENDING',
   })
-  status: string;
+  status: StatusEnumType;
 
-  @Prop({ default: '' }) rejectReason: string;
+  @Prop({ default: '' })
+  rejectReason: string;
 
-  @Prop() responseFile: PdfFile;
+  @Prop({ type: PdfFileSchema })
+  responseFile: PdfFile;
 
-  @Prop({ default: '' }) rejectReason_state: string;
+  @Prop({ default: '' })
+  rejectReason_state: string;
 
-  @Prop({ default: '' }) rejectReason_mohua: string;
+  @Prop({ default: '' })
+  rejectReason_mohua: string;
 
-  @Prop() responseFile_state: PdfFile;
+  @Prop({ type: PdfFileSchema })
+  responseFile_state: PdfFile;
 
-  @Prop() responseFile_mohua: PdfFile;
+  @Prop({ type: PdfFileSchema })
+  responseFile_mohua: PdfFile;
 }
-const ContentSchema = SchemaFactory.createForClass(Content);
+export const ContentSchema = SchemaFactory.createForClass(Content);
 
+// Auditor report schema (similar to Content but only for PDF).
 @Schema({ _id: false })
 class ContentPDF {
-  @Prop() pdf: PdfFile;
+  @Prop({ type: PdfFileSchema })
+  pdf: PdfFile;
 
-  @Prop({
-    type: String,
-    enum: ['PENDING', 'APPROVED', 'REJECTED', 'N/A', null],
-  })
-  status: string;
+  @Prop({ type: String, enum: STATUS_ENUM })
+  status: StatusEnumType;
 
-  @Prop({ default: '' }) rejectReason: string;
+  @Prop({ default: '' })
+  rejectReason: string;
 
-  @Prop() responseFile: PdfFile;
+  @Prop({ type: PdfFileSchema })
+  responseFile: PdfFile;
 
-  @Prop({ default: '' }) rejectReason_state: string;
+  @Prop({ default: '' })
+  rejectReason_state: string;
 
-  @Prop({ default: '' }) rejectReason_mohua: string;
+  @Prop({ default: '' })
+  rejectReason_mohua: string;
 
-  @Prop() responseFile_state: PdfFile;
+  @Prop({ type: PdfFileSchema })
+  responseFile_state: PdfFile;
 
-  @Prop() responseFile_mohua: PdfFile;
+  @Prop({ type: PdfFileSchema })
+  responseFile_mohua: PdfFile;
 }
-const ContentPDFSchema = SchemaFactory.createForClass(ContentPDF);
+export const ContentPDFSchema = SchemaFactory.createForClass(ContentPDF);
 
+// Provisional Data schema – stores unaudited/initial financial data.
 @Schema({ _id: false })
 class ProvisionalData {
-  @Prop() bal_sheet: Content;
+  @Prop({ type: ContentSchema })
+  bal_sheet: Content;
 
   @Prop() assets: number;
 
@@ -75,105 +119,136 @@ class ProvisionalData {
 
   @Prop() c_grant: number;
 
-  @Prop() bal_sheet_schedules: Content;
+  @Prop({ type: ContentSchema })
+  bal_sheet_schedules: Content;
 
-  @Prop() inc_exp: Content;
+  @Prop({ type: ContentSchema })
+  inc_exp: Content;
 
   @Prop() revenue: number;
 
   @Prop() expense: number;
 
-  @Prop() inc_exp_schedules: Content;
+  @Prop({ type: ContentSchema })
+  inc_exp_schedules: Content;
 
-  @Prop() cash_flow: Content;
+  @Prop({ type: ContentSchema })
+  cash_flow: Content;
 
-  @Prop() auditor_report: ContentPDF;
+  @Prop({ type: ContentPDFSchema })
+  auditor_report: ContentPDF;
 }
-const ProvisionalDataSchema = SchemaFactory.createForClass(ProvisionalData);
+export const ProvisionalDataSchema =
+  SchemaFactory.createForClass(ProvisionalData);
 
+// Standardized Data schema – represents structured formats required by regulators.
 @Schema({ _id: false })
 class StandardizedData {
-  @Prop() excel: PdfFile;
+  @Prop({ type: PdfFileSchema })
+  excel: PdfFile;
 
-  @Prop({ default: null }) declaration: boolean;
+  @Prop({ default: null })
+  declaration: boolean;
 }
-const StandardizedDataSchema = SchemaFactory.createForClass(StandardizedData);
+export const StandardizedDataSchema =
+  SchemaFactory.createForClass(StandardizedData);
 
+// Form Data schema – holds provisional + standardized data submissions.
 @Schema({ _id: false })
 class FormData {
-  @Prop() provisional_data: ProvisionalData;
+  @Prop({ type: ProvisionalDataSchema })
+  provisional_data: ProvisionalData;
 
-  @Prop() standardized_data: StandardizedData;
+  @Prop({ type: StandardizedDataSchema })
+  standardized_data: StandardizedData;
 
-  @Prop({ type: String, enum: ['APPROVED', 'REJECTED', 'PENDING'] })
-  status: string;
+  @Prop({ type: String, enum: FORMDATA_STATUS_ENUM })
+  status: FormDataStatusEnumType;
 
-  @Prop({ default: '' }) rejectReason: string;
+  @Prop({ default: '' })
+  rejectReason: string;
 
-  @Prop() responseFile: PdfFile;
+  @Prop({ type: PdfFileSchema })
+  responseFile: PdfFile;
 
-  @Prop({ default: '' }) rejectReason_state: string;
+  @Prop({ default: '' })
+  rejectReason_state: string;
 
-  @Prop({ default: '' }) rejectReason_mohua: string;
+  @Prop({ default: '' })
+  rejectReason_mohua: string;
 
-  @Prop() responseFile_state: PdfFile;
+  @Prop({ type: PdfFileSchema })
+  responseFile_state: PdfFile;
 
-  @Prop() responseFile_mohua: PdfFile;
+  @Prop({ type: PdfFileSchema })
+  responseFile_mohua: PdfFile;
 
-  @Prop({ type: String, enum: auditStatusEnum })
-  audit_status: string;
+  @Prop({ type: String, enum: AUDIT_STATUS_ENUM })
+  audit_status: AuditStatusEnumType;
 
-  @Prop({ default: null }) submit_annual_accounts: boolean;
+  @Prop({ default: null })
+  submit_annual_accounts: boolean;
 
-  @Prop({ default: null }) submit_standardized_data: boolean;
+  @Prop({ default: null })
+  submit_standardized_data: boolean;
 
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Year', required: true })
-  year: string;
+  year: MongooseSchema.Types.ObjectId;
 }
-const FormDataSchema = SchemaFactory.createForClass(FormData);
+export const FormDataSchema = SchemaFactory.createForClass(FormData);
 
-// ---- Main AnnualAccountData Schema ----
-
-@Schema({
-  timestamps: { createdAt: 'createdAt', updatedAt: 'modifiedAt' },
-})
+/**
+ * ---------------------------------------------
+ *                    ROOT SCHEMA
+ * ---------------------------------------------
+ */
+// AnnualAccountData – Main collection storing audited & unaudited accounts.
+@Schema({ timestamps: { createdAt: 'createdAt', updatedAt: 'modifiedAt' } })
 export class AnnualAccountData extends Document {
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Ulb', required: true })
-  ulb: string;
+  ulb: MongooseSchema.Types.ObjectId;
 
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Year', required: true })
-  design_year: string;
+  design_year: MongooseSchema.Types.ObjectId;
 
-  @Prop({ type: String, enum: statusEnum })
-  status: string;
+  @Prop({ type: String, enum: STATUS_ENUM })
+  status: StatusEnumType;
 
   @Prop({ type: Boolean, default: false, required: true })
   isDraft: boolean;
 
   @Prop({ type: Array, default: [] })
-  history: any[];
+  history: Record<string, any>[];
 
-  @Prop() audited: FormData;
+  @Prop({ type: FormDataSchema })
+  audited: FormData;
 
-  @Prop() unAudited: FormData;
+  @Prop({ type: FormDataSchema })
+  unAudited: FormData;
 
-  @Prop({ default: Date.now }) modifiedAt: Date;
+  @Prop({ default: Date.now })
+  modifiedAt: Date;
 
   @Prop() ulbSubmit: Date;
 
-  @Prop({ default: Date.now }) createdAt: Date;
+  @Prop({ default: Date.now })
+  createdAt: Date;
 
-  @Prop({ default: 1 }) isActive: boolean;
+  @Prop({ default: 1 })
+  isActive: boolean;
 
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
-  actionTakenBy: string;
+  actionTakenBy: MongooseSchema.Types.ObjectId;
 
-  @Prop({ default: null }) actionTakenByRole: string;
+  @Prop({ default: null })
+  actionTakenByRole: string;
 
-  @Prop() currentFormStatus: number;
+  @Prop()
+  currentFormStatus: number;
 }
 
 export const AnnualAccountDataSchema =
   SchemaFactory.createForClass(AnnualAccountData);
 
+// Compound index to ensure one record per ULB & Design Year.
 AnnualAccountDataSchema.index({ ulb: 1, design_year: 1 }, { unique: true });
