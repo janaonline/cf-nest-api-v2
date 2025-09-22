@@ -1,8 +1,7 @@
 import { Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
+import { Ulb, UlbDocument } from '../../src/schemas/ulb.schema';
 import { QueryAnnualAccountsDto } from './dto/query-annualaccounts.dto';
 
 @Injectable()
@@ -10,7 +9,6 @@ export class AnnualAccountsService {
   constructor(
     @InjectModel(Ulb.name)
     private ulbModel: Model<UlbDocument>,
-    private configService: ConfigService,
   ) {}
 
   // Get annual accounts raw file links (2019-20 onwards)
@@ -38,7 +36,7 @@ export class AnnualAccountsService {
     if (year) matchCondition2['audited.year'] = new Types.ObjectId(year);
     if (auditType) matchCondition2['auditType'] = new Types.ObjectId(year);
 
-    const pipeline: any[] = [
+    const pipeline = [
       {
         $addFields: {
           popCat: {
