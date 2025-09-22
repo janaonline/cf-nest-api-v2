@@ -8,7 +8,6 @@ export class AnnualAccountsController {
 
   @Get('annualaccounts')
   async getAnnualAccounts(@Query() query: QueryAnnualAccountsDto) {
-    console.log('API called');
-    return this.annualAccountsService.findAll(query);
+    return this.annualAccountsService.getRawFiles(query);
   }
 }

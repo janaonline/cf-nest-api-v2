@@ -13,8 +13,31 @@ export class AnnualAccountsService {
     private configService: ConfigService,
   ) {}
 
-  async findAll(query: QueryAnnualAccountsDto) {
-    console.log('Query: ', query);
+  // Get annual accounts raw file links (2019-20 onwards)
+  async getRawFiles(query: QueryAnnualAccountsDto) {
+    const { ulb, state, ulbType, popCat, year, auditType } = query;
+
+    // TODO: Add validations/ Error response accordingly
+
+    // Filters on Ulbs collection
+    const matchCondition1 = {
+      isActive: true,
+      isPublish: true,
+    };
+    if (ulb) matchCondition1['_id'] = new Types.ObjectId(ulb);
+    if (state) matchCondition1['state'] = new Types.ObjectId(state);
+    if (ulbType) matchCondition1['ulbType'] = new Types.ObjectId(ulbType);
+    if (popCat) matchCondition1['popCat'] = popCat;
+
+    // Filters on AnnualAccounts collection.
+    const matchCondition2 = {
+      $expr: { $eq: ['$ulb', '$$ulbId'] },
+      // "audited.submit_annual_accounts": true,
+      // currentFormStatus: { $in: [ 4 ] }
+    };
+    if (year) matchCondition2['audited.year'] = new Types.ObjectId(year);
+    if (auditType) matchCondition2['auditType'] = new Types.ObjectId(year);
+
     const pipeline: any[] = [
       {
         $addFields: {
@@ -56,16 +79,7 @@ export class AnnualAccountsService {
           },
         },
       },
-      {
-        $match: {
-          isActive: true,
-          isPublish: true,
-          // _id: new Types.ObjectId('5dd006d4ffbcc50cfd92c87c'),
-          state: new Types.ObjectId('5dcf9d7316a06aed41c748ec'),
-          // ulbType: new Types.ObjectId('5dcfa67543263a0e75c71697'),
-          // popCat: '500K-1M',
-        },
-      },
+      { $match: matchCondition1 },
       {
         $lookup: {
           from: 'states',
@@ -78,16 +92,7 @@ export class AnnualAccountsService {
         $lookup: {
           from: 'annualaccountdatas',
           let: { ulbId: '$_id' },
-          pipeline: [
-            {
-              $match: {
-                $expr: { $eq: ['$ulb', '$$ulbId'] },
-                'audited.year': new Types.ObjectId('606aaf854dff55e6c075d219'),
-                // "audited.submit_annual_accounts": true,
-                // currentFormStatus: { $in: [ 4 ] }
-              },
-            },
-          ],
+          pipeline: [{ $match: matchCondition2 }],
           as: 'annualaccountdata',
         },
       },
@@ -103,8 +108,8 @@ export class AnnualAccountsService {
           ulbName: '$name',
           state: 1,
           stateName: { $arrayElemAt: ['$stateData.name', 0] },
-          auditType: 'audited Make dynamic',
-          year: '2020-21 Make dynamic',
+          auditType: auditType,
+          year: year,
           files: [
             {
               name: 'Balance Sheet',
