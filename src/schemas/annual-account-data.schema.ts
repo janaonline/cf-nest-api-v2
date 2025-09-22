@@ -247,6 +247,8 @@ export class AnnualAccountData extends Document {
   currentFormStatus: number;
 }
 
+export type AnnualAccountDataDocument = AnnualAccountData & Document;
+
 export const AnnualAccountDataSchema =
   SchemaFactory.createForClass(AnnualAccountData);
 
