@@ -1,10 +1,10 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
-import { AnnualAccountsModule } from './annualaccounts/annualaccounts.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { FilesModule } from './files/files.module';
+import { ResourcesSectionModule } from './resources-section/resources-section.module';
 import { S3Module } from './s3/s3.module';
 import { UsersModule } from './users/users.module';
 
@@ -24,7 +24,7 @@ import { UsersModule } from './users/users.module';
     UsersModule,
     FilesModule,
     S3Module,
-    AnnualAccountsModule,
+    ResourcesSectionModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -1,7 +1,7 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsOptional, IsString } from 'class-validator';
 
-export class QueryAnnualAccountsDto {
+export class QueryResourcesSectionDto {
   @ApiPropertyOptional({
     description: 'ULB ObjectId',
     example: '5dd006d4ffbcc50cfd92c87c',

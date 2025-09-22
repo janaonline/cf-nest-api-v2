@@ -1,18 +1,18 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { Ulb, UlbDocument } from '../../src/schemas/ulb.schema';
-import { QueryAnnualAccountsDto } from './dto/query-annualaccounts.dto';
+import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
+import { QueryResourcesSectionDto } from './dto/query-resources-section.dto';
 
 @Injectable()
-export class AnnualAccountsService {
+export class ResourcesSectionService {
   constructor(
     @InjectModel(Ulb.name)
     private ulbModel: Model<UlbDocument>,
   ) {}
 
   // Get annual accounts raw file links (2019-20 onwards)
-  async getRawFiles(query: QueryAnnualAccountsDto) {
+  async getRawFiles(query: QueryResourcesSectionDto) {
     const { ulb, state, ulbType, popCat, year, auditType } = query;
 
     // TODO: Add validations/ Error response accordingly

@@ -1,16 +1,16 @@
 import { getModelToken } from '@nestjs/mongoose';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Model } from 'mongoose';
-import { AnnualAccountsService } from './annualaccounts.service';
+import { ResourcesSectionService } from './resources-section.service';
 
-describe('AnnualAccountsService - getRawFiles()', () => {
-  let service: AnnualAccountsService;
+describe('ResourcesSectionService - getRawFiles()', () => {
+  let service: ResourcesSectionService;
   let ulbModel: Model<any>;
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
-        AnnualAccountsService,
+        ResourcesSectionService,
         {
           provide: getModelToken('Ulb'),
           useValue: {
@@ -21,7 +21,7 @@ describe('AnnualAccountsService - getRawFiles()', () => {
       ],
     }).compile();
 
-    service = module.get<AnnualAccountsService>(AnnualAccountsService);
+    service = module.get<ResourcesSectionService>(ResourcesSectionService);
     ulbModel = module.get<Model<any>>(getModelToken('Ulb'));
   });
 
