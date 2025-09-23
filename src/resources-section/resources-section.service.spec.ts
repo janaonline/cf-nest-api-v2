@@ -29,9 +29,9 @@ describe('ResourcesSectionService', () => {
   });
 
   describe('getFiles', () => {
-    it('should call getRawFiles for rawPdf', async () => {
+    it('should call getRawFiles1920Onwards for rawPdf', async () => {
       const spy = jest
-        .spyOn(service as any, 'getRawFiles')
+        .spyOn(service as any, 'getRawFiles1920Onwards')
         .mockResolvedValue({ success: true });
 
       const result = await service.getFiles({
@@ -73,7 +73,7 @@ describe('ResourcesSectionService', () => {
     });
   });
 
-  describe('getRawFiles', () => {
+  describe('getRawFiles1920Onwards', () => {
     it('should build pipeline and return results', async () => {
       const fakeResult = [{ ulbId: '1', ulbName: 'Test ULB' }];
 
@@ -89,7 +89,7 @@ describe('ResourcesSectionService', () => {
         downloadType: 'rawPdf',
       } as QueryResourcesSectionDto;
 
-      const result = await service.getRawFiles(query);
+      const result = await service.getRawFiles1920Onwards(query);
 
       // eslint-disable-next-line @typescript-eslint/unbound-method
       expect(ulbModel.aggregate as jest.Mock).toHaveBeenCalledWith(

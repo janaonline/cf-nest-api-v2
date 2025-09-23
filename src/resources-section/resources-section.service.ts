@@ -1,6 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import {
+  DataCollectionForm,
+  DataCollectionFormDocument,
+} from 'src/schemas/data-collection-form-schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { YEARS } from 'src/shared/files/constant';
 import { QueryTemplates } from 'src/shared/files/queryTemplates';
@@ -32,8 +36,9 @@ const ANNUAL_ACCOUNTS_DOCS = [
 @Injectable()
 export class ResourcesSectionService {
   constructor(
-    @InjectModel(Ulb.name)
-    private ulbModel: Model<UlbDocument>,
+    @InjectModel(Ulb.name) private ulbModel: Model<UlbDocument>,
+    @InjectModel(DataCollectionForm.name)
+    private dataCollectionModel: Model<DataCollectionFormDocument>,
     private queryTemplate: QueryTemplates,
   ) {}
 
@@ -49,9 +54,14 @@ export class ResourcesSectionService {
     }
 
     switch (downloadType) {
-      case 'rawPdf':
-        return await this.getRawFiles(query);
-
+      case 'rawPdf': {
+        const endYear = Number(year.split('-')[1]);
+        if (endYear > 19) {
+          return await this.getRawFiles1920Onwards(query);
+        } else {
+          return await this.getRawFilesBefore1920(query);
+        }
+      }
       case 'standardizedExcel':
         return { msg: 'Dev in-progress' };
 
@@ -61,19 +71,12 @@ export class ResourcesSectionService {
   }
 
   // Get annual accounts raw file links (2019-20 onwards)
-  async getRawFiles(query: QueryResourcesSectionDto) {
-    const { ulb, state, ulbType, popCat, year, auditType } = query;
+  async getRawFiles1920Onwards(query: QueryResourcesSectionDto) {
+    const { year, auditType } = query;
     const yearId = year ? YEARS[year] : '606aaf854dff55e6c075d219';
 
     // Filters on Ulbs collection
-    const matchCondition1 = {
-      isActive: true,
-      isPublish: true,
-    };
-    if (ulb) matchCondition1['_id'] = new Types.ObjectId(ulb);
-    if (state) matchCondition1['state'] = new Types.ObjectId(state);
-    if (ulbType) matchCondition1['ulbType'] = new Types.ObjectId(ulbType);
-    if (popCat) matchCondition1['popCat'] = popCat;
+    const matchCondition1 = this.getUlbMatchCondition(query);
 
     // Filters on AnnualAccounts collection.
     const matchCondition2 = {
@@ -130,10 +133,110 @@ export class ResourcesSectionService {
       // { $count: "count" }
     ];
 
-    const results = await this.ulbModel.aggregate(pipeline).exec();
+    const results: any[] = await this.ulbModel.aggregate(pipeline).exec();
+    return this.responseStructure(true, results);
+  }
 
+  // Get annual accounts raw file links (before 2019-20)
+  async getRawFilesBefore1920(query: QueryResourcesSectionDto) {
+    const { year, auditType, ulb, state, ulbType, popCat } = query;
+    const yearKey = year.replace('-', '_');
+
+    const matchCondition1 = {};
+    if (ulb) matchCondition1['ulb'] = new Types.ObjectId(ulb);
+    if (state) matchCondition1['state'] = new Types.ObjectId(state);
+
+    const matchCondition2 = {
+      fileUrl: { $ne: null },
+      'ulbData.isPublish': true,
+      'ulbData.isActive': true,
+    };
+
+    if (popCat) matchCondition2['popCat'] = popCat;
+    if (ulbType)
+      matchCondition2['ulbData.ulbType'] = new Types.ObjectId(ulbType);
+
+    const pipeline = [
+      { $match: matchCondition1 },
+      {
+        $addFields: {
+          fileUrl: {
+            $arrayElemAt: [`$documents.financial_year_${yearKey}.pdf.url`, 0],
+          },
+        },
+      },
+      {
+        $lookup: {
+          from: 'ulbs',
+          localField: 'ulb',
+          foreignField: '_id',
+          as: 'ulbData',
+        },
+      },
+      {
+        $lookup: {
+          from: 'states',
+          localField: 'state',
+          foreignField: '_id',
+          as: 'stateData',
+        },
+      },
+      {
+        $unwind: {
+          path: '$ulbData',
+          preserveNullAndEmptyArrays: false,
+        },
+      },
+      {
+        $addFields: {
+          popCat: this.queryTemplate.popCatQuerySwitch('$ulbData.population'),
+        },
+      },
+      { $match: matchCondition2 },
+      {
+        $project: {
+          ulbId: '$ulbData._id',
+          ulbName: '$ulbData.name',
+          state: 1,
+          stateName: {
+            $arrayElemAt: ['$stateData.name', 0],
+          },
+          auditType,
+          year,
+          files: [
+            {
+              name: { $concat: ['$name', '_', year] },
+              url: '$fileUrl',
+            },
+          ],
+        },
+      },
+    ];
+
+    const results: any[] = await this.dataCollectionModel
+      .aggregate(pipeline)
+      .exec();
+    return this.responseStructure(true, results);
+  }
+
+  // Helper: Create matchCondition object - Ulbs collection.
+  private getUlbMatchCondition(query: QueryResourcesSectionDto) {
+    const { ulb, state, ulbType, popCat } = query;
+    const condition = {
+      isActive: true,
+      isPublish: true,
+    };
+    if (ulb) condition['_id'] = new Types.ObjectId(ulb);
+    if (state) condition['state'] = new Types.ObjectId(state);
+    if (ulbType) condition['ulbType'] = new Types.ObjectId(ulbType);
+    if (popCat) condition['popCat'] = popCat;
+    return condition;
+  }
+
+  // Helper: Create response object.
+  private responseStructure(success: boolean, results: any[]) {
     return {
-      success: true,
+      success,
       msg: `${results.length} document(s) found for searched options.`,
       data: results,
     };
