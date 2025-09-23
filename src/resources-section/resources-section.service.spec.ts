@@ -1,56 +1,90 @@
 import { getModelToken } from '@nestjs/mongoose';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Model } from 'mongoose';
+import { UlbDocument } from 'src/schemas/ulb.schema';
+import { QueryTemplates } from 'src/shared/queryTemplates';
+import { QueryResourcesSectionDto } from './dto/query-resources-section.dto';
 import { ResourcesSectionService } from './resources-section.service';
 
-describe('ResourcesSectionService - getRawFiles()', () => {
+describe('ResourcesSectionService', () => {
   let service: ResourcesSectionService;
-  let ulbModel: Model<any>;
+  let ulbModel: jest.Mocked<Model<UlbDocument>>;
 
   beforeEach(async () => {
+    const mockUlbModel = {
+      aggregate: jest.fn().mockReturnThis(),
+      exec: jest.fn(),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ResourcesSectionService,
-        {
-          provide: getModelToken('Ulb'),
-          useValue: {
-            aggregate: jest.fn().mockReturnThis(),
-            exec: jest.fn(),
-          },
-        },
+        { provide: getModelToken('Ulb'), useValue: mockUlbModel },
+        { provide: QueryTemplates, useValue: { popCatQuerySwitch: jest.fn() } },
       ],
     }).compile();
 
     service = module.get<ResourcesSectionService>(ResourcesSectionService);
-    ulbModel = module.get<Model<any>>(getModelToken('Ulb'));
+    ulbModel = module.get(getModelToken('Ulb'));
   });
 
-  afterEach(() => {
-    jest.clearAllMocks();
+  describe('getFiles', () => {
+    it('should call getRawFiles for rawPdf', async () => {
+      const spy = jest
+        .spyOn(service as any, 'getRawFiles')
+        .mockResolvedValue({ success: true });
+
+      const result = await service.getFiles({
+        downloadType: 'rawPdf',
+      } as QueryResourcesSectionDto);
+
+      expect(spy).toHaveBeenCalled();
+      expect(result).toEqual({ success: true });
+    });
+
+    it('should return in-progress for standardizedExcel', async () => {
+      const result = await service.getFiles({
+        downloadType: 'standardizedExcel',
+      } as QueryResourcesSectionDto);
+      expect(result).toEqual({ msg: 'Dev in-progress' });
+    });
+
+    it('should return in-progress for budget', async () => {
+      const result = await service.getFiles({
+        downloadType: 'budget',
+      } as QueryResourcesSectionDto);
+      expect(result).toEqual({ msg: 'Dev in-progress' });
+    });
   });
 
-  // Test Case 1
-  it('should build pipeline and return data', async () => {
-    const query = {
-      ulb: '5dd006d4ffbcc50cfd92c87c',
-      state: '5dcf9d7316a06aed41c748ec',
-      ulbType: '5dcfa67543263a0e75c71697',
-      popCat: '500K-1M',
-      year: '606aaf854dff55e6c075d219',
-      auditType: 'audited',
-    };
+  describe('getRawFiles', () => {
+    it('should build pipeline and return results', async () => {
+      const fakeResult = [{ ulbId: '1', ulbName: 'Test ULB' }];
 
-    const mockData = [{ ulbName: 'Test City' }];
+      ulbModel.aggregate.mockReturnThis();
+      (ulbModel.aggregate().exec as jest.Mock).mockImplementation(
+        () => fakeResult,
+      );
 
-    const mockExec = jest.fn().mockResolvedValue(mockData);
-    const mockAggregate = jest.fn().mockReturnValue({ exec: mockExec });
+      const query = {
+        ulb: '5dd006d4ffbcc50cfd92c87c',
+        year: '606aaf854dff55e6c075d219',
+        auditType: 'audited',
+        downloadType: 'rawPdf',
+      } as QueryResourcesSectionDto;
 
-    ulbModel.aggregate = mockAggregate;
+      const result = await service.getRawFiles(query);
 
-    const result = await service.getRawFiles(query);
+      // eslint-disable-next-line @typescript-eslint/unbound-method
+      expect(ulbModel.aggregate as jest.Mock).toHaveBeenCalledWith(
+        expect.any(Array),
+      );
 
-    expect(mockAggregate).toHaveBeenCalledTimes(1);
-    expect(mockExec).toHaveBeenCalledTimes(1);
-    expect(result).toEqual({ success: true, data: mockData });
+      expect(result).toEqual({
+        success: true,
+        msg: `${fakeResult.length} document(s) found for searched options.`,
+        data: fakeResult,
+      });
+    });
   });
 });
