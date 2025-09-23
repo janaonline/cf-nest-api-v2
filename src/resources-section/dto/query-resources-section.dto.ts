@@ -4,6 +4,9 @@ import {
   IsMongoId,
   IsNotEmpty,
   IsOptional,
+  IsString,
+  MaxLength,
+  MinLength,
   ValidateIf,
 } from 'class-validator';
 
@@ -42,11 +45,13 @@ export class QueryResourcesSectionDto {
   popCat: string;
 
   @ApiPropertyOptional({
-    description: 'Audit yearId',
-    example: '606aaf854dff55e6c075d219',
+    description: 'Audit year',
+    example: '2021-22',
   })
   @IsNotEmpty()
-  @IsMongoId()
+  @IsString()
+  @MaxLength(7)
+  @MinLength(7)
   year: string;
 
   @ApiPropertyOptional({
@@ -57,7 +62,7 @@ export class QueryResourcesSectionDto {
     ['rawPdf', 'standardizedExcel'].includes(o.downloadType),
   )
   @IsIn(['audited', 'unAudited'])
-  auditType: 'audited' | 'unAudited';
+  auditType: 'audited' | 'unAudited' = 'audited';
 
   @ApiPropertyOptional({
     description: 'Download type: rawPdf | standardizedExcel | budget',

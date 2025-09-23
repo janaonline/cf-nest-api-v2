@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose/dist/mongoose.module';
 import { Ulb, UlbSchema } from 'src/schemas/ulb.schema';
-import { QueryTemplates } from 'src/shared/queryTemplates';
+import { QueryTemplates } from 'src/shared/files/queryTemplates';
 import { ResourcesSectionController } from './resources-section.controller';
 import { ResourcesSectionService } from './resources-section.service';
 

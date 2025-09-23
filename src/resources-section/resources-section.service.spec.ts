@@ -2,7 +2,7 @@ import { getModelToken } from '@nestjs/mongoose';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Model } from 'mongoose';
 import { UlbDocument } from 'src/schemas/ulb.schema';
-import { QueryTemplates } from 'src/shared/queryTemplates';
+import { QueryTemplates } from 'src/shared/files/queryTemplates';
 import { QueryResourcesSectionDto } from './dto/query-resources-section.dto';
 import { ResourcesSectionService } from './resources-section.service';
 
@@ -36,6 +36,7 @@ describe('ResourcesSectionService', () => {
 
       const result = await service.getFiles({
         downloadType: 'rawPdf',
+        year: '2021-22',
       } as QueryResourcesSectionDto);
 
       expect(spy).toHaveBeenCalled();
@@ -45,6 +46,7 @@ describe('ResourcesSectionService', () => {
     it('should return in-progress for standardizedExcel', async () => {
       const result = await service.getFiles({
         downloadType: 'standardizedExcel',
+        year: '2021-22',
       } as QueryResourcesSectionDto);
       expect(result).toEqual({ msg: 'Dev in-progress' });
     });
@@ -52,8 +54,22 @@ describe('ResourcesSectionService', () => {
     it('should return in-progress for budget', async () => {
       const result = await service.getFiles({
         downloadType: 'budget',
+        year: '2021-22',
       } as QueryResourcesSectionDto);
       expect(result).toEqual({ msg: 'Dev in-progress' });
+    });
+
+    it('should return bad request for invalid year', async () => {
+      const result = await service.getFiles({
+        downloadType: 'rawPdf',
+        year: '2099-00',
+      } as QueryResourcesSectionDto);
+
+      expect(result).toEqual({
+        message: ['Please pass a valid year between range 2015-16 to 2026-27'],
+        error: 'Bad Request',
+        statusCode: 400,
+      });
     });
   });
 
@@ -68,7 +84,7 @@ describe('ResourcesSectionService', () => {
 
       const query = {
         ulb: '5dd006d4ffbcc50cfd92c87c',
-        year: '606aaf854dff55e6c075d219',
+        year: '2021-22',
         auditType: 'audited',
         downloadType: 'rawPdf',
       } as QueryResourcesSectionDto;

@@ -2,7 +2,8 @@ import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
-import { QueryTemplates } from 'src/shared/queryTemplates';
+import { YEARS } from 'src/shared/files/constant';
+import { QueryTemplates } from 'src/shared/files/queryTemplates';
 import { QueryResourcesSectionDto } from './dto/query-resources-section.dto';
 
 const ANNUAL_ACCOUNTS_DOCS = [
@@ -38,7 +39,15 @@ export class ResourcesSectionService {
 
   // Call the functions based on downloadType.
   async getFiles(query: QueryResourcesSectionDto) {
-    const { downloadType } = query;
+    const { downloadType, year } = query;
+    if (!(year in YEARS)) {
+      return {
+        message: ['Please pass a valid year between range 2015-16 to 2026-27'],
+        error: 'Bad Request',
+        statusCode: 400,
+      };
+    }
+
     switch (downloadType) {
       case 'rawPdf':
         return await this.getRawFiles(query);
@@ -54,6 +63,7 @@ export class ResourcesSectionService {
   // Get annual accounts raw file links (2019-20 onwards)
   async getRawFiles(query: QueryResourcesSectionDto) {
     const { ulb, state, ulbType, popCat, year, auditType } = query;
+    const yearId = year ? YEARS[year] : '606aaf854dff55e6c075d219';
 
     // Filters on Ulbs collection
     const matchCondition1 = {
@@ -71,7 +81,8 @@ export class ResourcesSectionService {
       // "audited.submit_annual_accounts": true,
       // currentFormStatus: { $in: [ 4 ] }
     };
-    if (year) matchCondition2[`${auditType}.year`] = new Types.ObjectId(year);
+    if (yearId)
+      matchCondition2[`${auditType}.year`] = new Types.ObjectId(yearId);
 
     const pipeline = [
       {
