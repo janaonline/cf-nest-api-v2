@@ -1,52 +1,68 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsString } from 'class-validator';
+import {
+  IsIn,
+  IsMongoId,
+  IsNotEmpty,
+  IsOptional,
+  ValidateIf,
+} from 'class-validator';
 
 export class QueryResourcesSectionDto {
   @ApiPropertyOptional({
-    description: 'ULB ObjectId',
+    description: 'ULB objectId',
     example: '5dd006d4ffbcc50cfd92c87c',
   })
   @IsOptional()
-  @IsString()
-  ulb?: string;
+  @IsMongoId()
+  ulb: string;
 
   @ApiPropertyOptional({
-    description: 'State ObjectId',
+    description: 'State objectId',
     example: '5dcf9d7316a06aed41c748ec',
   })
   @IsOptional()
-  @IsString()
-  state?: string;
+  @IsMongoId()
+  state: string;
 
   @ApiPropertyOptional({
-    description: 'ULB Type ObjectId',
+    description: 'ULB type objectId',
     example: '5dcfa67543263a0e75c71697',
   })
   @IsOptional()
-  @IsString()
-  ulbType?: string;
+  @IsMongoId()
+  ulbType: string;
 
   @ApiPropertyOptional({
-    description: 'Population category',
+    description:
+      'Population category: 4M+ | 1M-4M | 500K-1M | 100K-500K | <100K',
     example: '500K-1M',
   })
   @IsOptional()
-  @IsString()
-  popCat?: string;
+  @IsIn(['4M+', '1M-4M', '500K-1M', '100K-500K', '<100K'])
+  popCat: string;
 
   @ApiPropertyOptional({
     description: 'Audit yearId',
     example: '606aaf854dff55e6c075d219',
   })
-  @IsOptional()
-  @IsString()
-  year?: string;
+  @IsNotEmpty()
+  @IsMongoId()
+  year: string;
 
   @ApiPropertyOptional({
-    description: 'Audit Type must be audited or unaudited',
+    description: 'Audit type: audited | unaudited',
     example: 'audited',
   })
-  @IsOptional()
-  @IsString()
-  auditType?: string;
+  @ValidateIf((o: QueryResourcesSectionDto) =>
+    ['rawPdf', 'standardizedExcel'].includes(o.downloadType),
+  )
+  @IsIn(['audited', 'unaudited'])
+  auditType: 'audited' | 'unaudited';
+
+  @ApiPropertyOptional({
+    description: 'Download type: rawPdf | standardizedExcel | budget',
+    example: 'rawPdf',
+  })
+  @IsIn(['rawPdf', 'standardizedExcel', 'budget'])
+  downloadType: 'rawPdf' | 'standardizedExcel' | 'budget';
 }

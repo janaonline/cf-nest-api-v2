@@ -10,6 +10,6 @@ export class ResourcesSectionController {
 
   @Get('data-sets')
   async getAnnualAccounts(@Query() query: QueryResourcesSectionDto) {
-    return this.resourcesSectionService.getRawFiles(query);
+    return this.resourcesSectionService.getFiles(query);
   }
 }

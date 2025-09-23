@@ -4,6 +4,29 @@ import { Model, Types } from 'mongoose';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { QueryResourcesSectionDto } from './dto/query-resources-section.dto';
 
+const ANNUAL_ACCOUNTS_DOCS = [
+  {
+    name: 'Balance Sheet',
+    dbKey: 'bal_sheet',
+  },
+  {
+    name: 'Schedules To Balance Sheet',
+    dbKey: 'bal_sheet_schedules',
+  },
+  {
+    name: 'Income And Expenditure',
+    dbKey: 'inc_exp',
+  },
+  {
+    name: 'Schedules To Income And Expenditure',
+    dbKey: 'inc_exp_schedules',
+  },
+  {
+    name: 'Cash Flow Statement',
+    dbKey: 'cash_flow',
+  },
+];
+
 @Injectable()
 export class ResourcesSectionService {
   constructor(
@@ -11,11 +34,24 @@ export class ResourcesSectionService {
     private ulbModel: Model<UlbDocument>,
   ) {}
 
+  // Call the functions based on downloadType.
+  async getFiles(query: QueryResourcesSectionDto) {
+    const { downloadType } = query;
+    switch (downloadType) {
+      case 'rawPdf':
+        return await this.getRawFiles(query);
+
+      case 'standardizedExcel':
+        return { msg: 'Dev in-progress' };
+
+      case 'budget':
+        return { msg: 'Dev in-progress' };
+    }
+  }
+
   // Get annual accounts raw file links (2019-20 onwards)
   async getRawFiles(query: QueryResourcesSectionDto) {
     const { ulb, state, ulbType, popCat, year, auditType } = query;
-
-    // TODO: Add validations/ Error response accordingly
 
     // Filters on Ulbs collection
     const matchCondition1 = {
@@ -34,7 +70,6 @@ export class ResourcesSectionService {
       // currentFormStatus: { $in: [ 4 ] }
     };
     if (year) matchCondition2['audited.year'] = new Types.ObjectId(year);
-    if (auditType) matchCondition2['auditType'] = new Types.ObjectId(year);
 
     const pipeline = [
       {
@@ -108,28 +143,10 @@ export class ResourcesSectionService {
           stateName: { $arrayElemAt: ['$stateData.name', 0] },
           auditType: auditType,
           year: year,
-          files: [
-            {
-              name: 'Balance Sheet',
-              url: '$annualaccountdata.audited.provisional_data.bal_sheet.pdf.url',
-            },
-            {
-              name: 'Schedules To Balance Sheet',
-              url: '$annualaccountdata.audited.provisional_data.bal_sheet_schedules.pdf.url',
-            },
-            {
-              name: 'Income And Expenditure',
-              url: '$annualaccountdata.audited.provisional_data.inc_exp.pdf.url',
-            },
-            {
-              name: 'Schedules To Income And Expenditure',
-              url: '$annualaccountdata.audited.provisional_data.inc_exp_schedules.pdf.url',
-            },
-            {
-              name: 'Cash Flow Statement',
-              url: '$annualaccountdata.audited.provisional_data.cash_flow.pdf.url',
-            },
-          ],
+          files: ANNUAL_ACCOUNTS_DOCS.map((o) => ({
+            name: o.name,
+            url: `$annualaccountdata.${auditType}.provisional_data.${o.dbKey}.pdf.url`,
+          })),
         },
       },
       // { $count: "count" }
