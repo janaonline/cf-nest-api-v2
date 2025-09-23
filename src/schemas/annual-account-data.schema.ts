@@ -105,7 +105,7 @@ class ContentPDF {
 }
 export const ContentPDFSchema = SchemaFactory.createForClass(ContentPDF);
 
-// Provisional Data schema – stores unaudited/initial financial data.
+// Provisional Data schema – stores unAudited/initial financial data.
 @Schema({ _id: false })
 class ProvisionalData {
   @Prop({ type: ContentSchema })
@@ -202,7 +202,7 @@ export const FormDataSchema = SchemaFactory.createForClass(FormData);
  *                    ROOT SCHEMA
  * ---------------------------------------------
  */
-// AnnualAccountData – Main collection storing audited & unaudited accounts.
+// AnnualAccountData – Main collection storing audited & unAudited accounts.
 @Schema({ timestamps: { createdAt: 'createdAt', updatedAt: 'modifiedAt' } })
 export class AnnualAccountData extends Document {
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Ulb', required: true })

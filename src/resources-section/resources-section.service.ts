@@ -69,7 +69,7 @@ export class ResourcesSectionService {
       // "audited.submit_annual_accounts": true,
       // currentFormStatus: { $in: [ 4 ] }
     };
-    if (year) matchCondition2['audited.year'] = new Types.ObjectId(year);
+    if (year) matchCondition2[`${auditType}.year`] = new Types.ObjectId(year);
 
     const pipeline = [
       {
@@ -156,6 +156,7 @@ export class ResourcesSectionService {
 
     return {
       success: true,
+      msg: `${results.length} document(s) found for searched options.`,
       data: results,
     };
   }

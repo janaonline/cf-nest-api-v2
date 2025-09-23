@@ -50,14 +50,14 @@ export class QueryResourcesSectionDto {
   year: string;
 
   @ApiPropertyOptional({
-    description: 'Audit type: audited | unaudited',
+    description: 'Audit type: audited | unAudited',
     example: 'audited',
   })
   @ValidateIf((o: QueryResourcesSectionDto) =>
     ['rawPdf', 'standardizedExcel'].includes(o.downloadType),
   )
-  @IsIn(['audited', 'unaudited'])
-  auditType: 'audited' | 'unaudited';
+  @IsIn(['audited', 'unAudited'])
+  auditType: 'audited' | 'unAudited';
 
   @ApiPropertyOptional({
     description: 'Download type: rawPdf | standardizedExcel | budget',
