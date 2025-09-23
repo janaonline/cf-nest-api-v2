@@ -205,7 +205,7 @@ export class ResourcesSectionService {
           year,
           files: [
             {
-              name: { $concat: ['$name', '_', year] },
+              name: { $concat: ['$ulbData.name', '_', year] },
               url: '$fileUrl',
             },
           ],
