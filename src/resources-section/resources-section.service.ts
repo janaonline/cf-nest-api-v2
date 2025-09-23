@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
+import { QueryTemplates } from 'src/shared/queryTemplates';
 import { QueryResourcesSectionDto } from './dto/query-resources-section.dto';
 
 const ANNUAL_ACCOUNTS_DOCS = [
@@ -32,6 +33,7 @@ export class ResourcesSectionService {
   constructor(
     @InjectModel(Ulb.name)
     private ulbModel: Model<UlbDocument>,
+    private queryTemplate: QueryTemplates,
   ) {}
 
   // Call the functions based on downloadType.
@@ -74,42 +76,7 @@ export class ResourcesSectionService {
     const pipeline = [
       {
         $addFields: {
-          popCat: {
-            $switch: {
-              branches: [
-                { case: { $lt: ['$population', 100000] }, then: '<100K' },
-                {
-                  case: {
-                    $and: [
-                      { $gte: ['$population', 100000] },
-                      { $lt: ['$population', 500000] },
-                    ],
-                  },
-                  then: '100K-500K',
-                },
-                {
-                  case: {
-                    $and: [
-                      { $gte: ['$population', 500000] },
-                      { $lt: ['$population', 1000000] },
-                    ],
-                  },
-                  then: '500K-1M',
-                },
-                {
-                  case: {
-                    $and: [
-                      { $gte: ['$population', 1000000] },
-                      { $lt: ['$population', 4000000] },
-                    ],
-                  },
-                  then: '1M-4M',
-                },
-                { case: { $gte: ['$population', 4000000] }, then: '4M+' },
-              ],
-              default: 'Unknown',
-            },
-          },
+          popCat: this.queryTemplate.popCatQuerySwitch('$population'),
         },
       },
       { $match: matchCondition1 },
