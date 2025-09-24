@@ -8,6 +8,8 @@ import { Ulb, UlbSchema } from 'src/schemas/ulb.schema';
 import { QueryTemplates } from 'src/shared/files/queryTemplates';
 import { ResourcesSectionController } from './resources-section.controller';
 import { ResourcesSectionService } from './resources-section.service';
+import { FilesModule } from 'src/files/files.module';
+import { S3ZipService } from 'src/files/s3-zip.service';
 
 @Module({
   imports: [
@@ -15,8 +17,9 @@ import { ResourcesSectionService } from './resources-section.service';
       { name: Ulb.name, schema: UlbSchema },
       { name: DataCollectionForm.name, schema: DataCollectionFormSchema },
     ]),
+    FilesModule,
   ],
   controllers: [ResourcesSectionController],
-  providers: [ResourcesSectionService, QueryTemplates],
+  providers: [ResourcesSectionService, QueryTemplates, S3ZipService],
 })
 export class ResourcesSectionModule {}
