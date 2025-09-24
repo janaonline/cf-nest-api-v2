@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Document, Schema as MongooseSchema } from 'mongoose';
+import { Document, Types } from 'mongoose';
 
 // --------------------------------------------
 //            ENUM DEFINITIONS
@@ -192,8 +192,8 @@ class FormData {
   @Prop({ default: null })
   submit_standardized_data: boolean;
 
-  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Year', required: true })
-  year: MongooseSchema.Types.ObjectId;
+  @Prop({ type: Types.ObjectId, ref: 'Year', required: true })
+  year: Types.ObjectId;
 }
 export const FormDataSchema = SchemaFactory.createForClass(FormData);
 
@@ -205,11 +205,11 @@ export const FormDataSchema = SchemaFactory.createForClass(FormData);
 // AnnualAccountData – Main collection storing audited & unAudited accounts.
 @Schema({ timestamps: { createdAt: 'createdAt', updatedAt: 'modifiedAt' } })
 export class AnnualAccountData extends Document {
-  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Ulb', required: true })
-  ulb: MongooseSchema.Types.ObjectId;
+  @Prop({ type: Types.ObjectId, ref: 'Ulb', required: true })
+  ulb: Types.ObjectId;
 
-  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Year', required: true })
-  design_year: MongooseSchema.Types.ObjectId;
+  @Prop({ type: Types.ObjectId, ref: 'Year', required: true })
+  design_year: Types.ObjectId;
 
   @Prop({ type: String, enum: STATUS_ENUM })
   status: StatusEnumType;
@@ -237,8 +237,8 @@ export class AnnualAccountData extends Document {
   @Prop({ default: 1 })
   isActive: boolean;
 
-  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
-  actionTakenBy: MongooseSchema.Types.ObjectId;
+  @Prop({ type: Types.ObjectId, ref: 'User', required: true })
+  actionTakenBy: Types.ObjectId;
 
   @Prop({ default: null })
   actionTakenByRole: string;

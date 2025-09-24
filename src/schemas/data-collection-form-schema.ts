@@ -1,7 +1,5 @@
-// src/schemas/data-collection-form.schema.ts
-
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Document, Schema as MongooseSchema } from 'mongoose';
+import { Document, Types } from 'mongoose';
 
 enum BodyTypeEnum {
   PARASTATAL = 'parastatal',
@@ -34,8 +32,8 @@ export class DataCollectionForm {
   @Prop({ required: true, enum: BodyTypeEnum, index: true })
   bodyType: BodyTypeEnum;
 
-  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Ulb', default: null })
-  ulb: MongooseSchema.Types.ObjectId | null;
+  @Prop({ type: Types.ObjectId, ref: 'Ulb', default: null })
+  ulb: Types.ObjectId | null;
 
   @Prop({ default: null })
   parastatalName: string;
@@ -69,8 +67,8 @@ export class DataCollectionForm {
     financial_year_2020_21?: YearlyDocuments | null;
   };
 
-  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'State', required: true })
-  state: MongooseSchema.Types.ObjectId;
+  @Prop({ type: Types.ObjectId, ref: 'State', required: true })
+  state: Types.ObjectId;
 
   @Prop()
   createdAt: Date;

@@ -2,7 +2,6 @@ import { getModelToken } from '@nestjs/mongoose';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Model } from 'mongoose';
 import { UlbDocument } from 'src/schemas/ulb.schema';
-import { QueryTemplates } from 'src/shared/files/queryTemplates';
 import { QueryResourcesSectionDto } from './dto/query-resources-section.dto';
 import { ResourcesSectionService } from './resources-section.service';
 
@@ -20,7 +19,6 @@ describe('ResourcesSectionService', () => {
       providers: [
         ResourcesSectionService,
         { provide: getModelToken('Ulb'), useValue: mockUlbModel },
-        { provide: QueryTemplates, useValue: { popCatQuerySwitch: jest.fn() } },
       ],
     }).compile();
 

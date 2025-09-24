@@ -137,7 +137,6 @@ export class Ulb {
   @Prop({ default: '' })
   regionalName: string;
 
-  // ✅ Nest way to embed sub-documents for multiple years
   @Prop({
     type: {
       '2023-24': GSDPEligibilitySchema,
