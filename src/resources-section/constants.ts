@@ -99,7 +99,11 @@ const getUlbMatchCondition = (query: QueryResourcesSectionDto) => {
     isActive: true,
     isPublish: true,
   };
-  if (ulb) condition['_id'] = new Types.ObjectId(ulb);
+  if (ulb) {
+    const ulbIds = [new Types.ObjectId(ulb)];
+    // const ulbIds = [new Types.ObjectId('5dcfca53df6f59198c4ac3d5'), new Types.ObjectId('5fa24660072dab780a6f1395')];
+    condition['_id'] = { $in: ulbIds };
+  }
   if (state) condition['state'] = new Types.ObjectId(state);
   if (ulbType) condition['ulbType'] = new Types.ObjectId(ulbType);
   if (popCat) condition['popCat'] = popCat;
@@ -116,7 +120,11 @@ export const getRawFilesBefore1920Pipeline = (query: QueryResourcesSectionDto) =
   const yearKey = year.replace('-', '_');
 
   const matchCondition1 = {};
-  if (ulb) matchCondition1['ulb'] = new Types.ObjectId(ulb);
+  if (ulb) {
+    const ulbIds = [new Types.ObjectId(ulb)];
+    // const ulbIds = [new Types.ObjectId('5e7dacbe3e4f276f2f26eeed'), new Types.ObjectId('5dd24728437ba31f7eb42e7e')];
+    matchCondition1['ulb'] = { $in: ulbIds };
+  }
   if (state) matchCondition1['state'] = new Types.ObjectId(state);
 
   const matchCondition2 = {
@@ -195,7 +203,11 @@ export const getBudgetPipeline = (query: QueryResourcesSectionDto) => {
   const { ulb, popCat, ulbType, state, auditType, year } = query;
 
   const matchCondition1 = { 'yearsData.designYear': year };
-  if (ulb) matchCondition1['ulb'] = new Types.ObjectId(ulb);
+  if (ulb) {
+    const ulbIds = [new Types.ObjectId(ulb)];
+    // const ulbIds = [new Types.ObjectId('5dd24728437ba31f7eb42e79'), new Types.ObjectId('5dd24728437ba31f7eb42e8c')];
+    matchCondition1['ulb'] = { $in: ulbIds };
+  }
 
   const matchCondition2 = {
     'ulbData.isActive': true,
