@@ -1,6 +1,6 @@
 // file: s3-zip.service.ts
 import { Injectable } from '@nestjs/common';
-import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, GetObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
 import archiver from 'archiver';
 import { PassThrough } from 'stream';
 import { ConfigService } from '@nestjs/config';
@@ -46,5 +46,34 @@ export class S3ZipService {
 
         archive.finalize();
         return passThrough;
+    }
+
+    async getSizesForFiles(keys: string[]) {
+        let totalSize = 0;
+        const files: { key: string; size: number }[] = [];
+
+        for (const key of keys) {
+            try {
+                const response = await this.s3.send(
+                    new HeadObjectCommand({
+                        Bucket: this.bucket,
+                        Key: decodeURIComponent(key), // decode if key has %28 etc.
+                    })
+                );
+
+                const size = response.ContentLength ?? 0;
+                totalSize += size;
+                files.push({ key, size });
+            } catch (err) {
+                console.error(`Error fetching size for key: ${key}`, err.message);
+                files.push({ key, size: -1 }); // mark as missing
+            }
+        }
+
+        return {
+            totalSizeBytes: totalSize,
+            totalSizeMB: (totalSize / (1024 * 1024)).toFixed(2),
+            files,
+        };
     }
 }

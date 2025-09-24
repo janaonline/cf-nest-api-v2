@@ -17,13 +17,14 @@ async function bootstrap() {
     .setTitle('City Finance APIs') // Title of the API docs
     .setDescription('V2 documentation.') // Description shown in Swagger UI
     .setVersion('1.0') // API version
+    .addServer('/api/v2') // Base path for the APIs
     .build();
 
   // Generate Swagger document from app's routes and metadata
   const documentFactory = SwaggerModule.createDocument(app, swaggerConfig);
 
   // Serve Swagger UI at /api-docs
-  SwaggerModule.setup('api-docs', app, documentFactory);
+  SwaggerModule.setup('api/v2/api-docs', app, documentFactory);
 
   /**
    * -------------------------------------------------------
@@ -50,6 +51,9 @@ async function bootstrap() {
    * -------------------------------------------------------
    * Reads port from environment configuration; defaults to 3000
    */
+
+  app.setGlobalPrefix('api/v2');
+
   const configService = app.get(ConfigService);
   const port = configService.get<number>('PORT') || 3000;
 
