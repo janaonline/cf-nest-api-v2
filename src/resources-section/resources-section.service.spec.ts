@@ -52,9 +52,7 @@ describe('ResourcesSectionService', () => {
         auditType: 'audited',
       };
 
-      await expect(service.getFiles(invalidQuery)).rejects.toThrow(
-        BadRequestException,
-      );
+      await expect(service.getFiles(invalidQuery)).rejects.toThrow(BadRequestException);
 
       await expect(service.getFiles(invalidQuery)).rejects.toMatchObject({
         response: {
@@ -71,9 +69,7 @@ describe('ResourcesSectionService', () => {
         year: '2020-21',
       };
 
-      const spy = jest
-        .spyOn(service, 'getRawFiles1920Onwards')
-        .mockResolvedValue(resolveValue);
+      const spy = jest.spyOn(service, 'getRawFiles1920Onwards').mockResolvedValue(resolveValue);
 
       await service.getFiles(query);
 
@@ -87,9 +83,7 @@ describe('ResourcesSectionService', () => {
         year: '2018-19',
       };
 
-      const spy = jest
-        .spyOn(service, 'getRawFilesBefore1920')
-        .mockResolvedValue(resolveValue);
+      const spy = jest.spyOn(service, 'getRawFilesBefore1920').mockResolvedValue(resolveValue);
 
       await service.getRawFilesBefore1920(query);
 
@@ -113,9 +107,7 @@ describe('ResourcesSectionService', () => {
         downloadType: 'budget',
       };
 
-      const spy = jest
-        .spyOn(service, 'getBudget')
-        .mockResolvedValue(resolveValue);
+      const spy = jest.spyOn(service, 'getBudget').mockResolvedValue(resolveValue);
 
       await service.getFiles(query);
 

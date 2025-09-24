@@ -4,23 +4,13 @@ import { Document, Types } from 'mongoose';
 // --------------------------------------------
 //            ENUM DEFINITIONS
 // --------------------------------------------
-export const STATUS_ENUM = [
-  'PENDING',
-  'APPROVED',
-  'REJECTED',
-  'N/A',
-  '',
-] as const;
+export const STATUS_ENUM = ['PENDING', 'APPROVED', 'REJECTED', 'N/A', ''] as const;
 export type StatusEnumType = (typeof STATUS_ENUM)[number];
 
 export const AUDIT_STATUS_ENUM = ['Audited', 'Unaudited'] as const;
 export type AuditStatusEnumType = (typeof AUDIT_STATUS_ENUM)[number];
 
-export const FORMDATA_STATUS_ENUM = [
-  'APPROVED',
-  'REJECTED',
-  'PENDING',
-] as const;
+export const FORMDATA_STATUS_ENUM = ['APPROVED', 'REJECTED', 'PENDING'] as const;
 export type FormDataStatusEnumType = (typeof FORMDATA_STATUS_ENUM)[number];
 
 /**
@@ -138,8 +128,7 @@ class ProvisionalData {
   @Prop({ type: ContentPDFSchema })
   auditor_report: ContentPDF;
 }
-export const ProvisionalDataSchema =
-  SchemaFactory.createForClass(ProvisionalData);
+export const ProvisionalDataSchema = SchemaFactory.createForClass(ProvisionalData);
 
 // Standardized Data schema – represents structured formats required by regulators.
 @Schema({ _id: false })
@@ -150,8 +139,7 @@ class StandardizedData {
   @Prop({ default: null })
   declaration: boolean;
 }
-export const StandardizedDataSchema =
-  SchemaFactory.createForClass(StandardizedData);
+export const StandardizedDataSchema = SchemaFactory.createForClass(StandardizedData);
 
 // Form Data schema – holds provisional + standardized data submissions.
 @Schema({ _id: false })
@@ -249,8 +237,7 @@ export class AnnualAccountData extends Document {
 
 export type AnnualAccountDataDocument = AnnualAccountData & Document;
 
-export const AnnualAccountDataSchema =
-  SchemaFactory.createForClass(AnnualAccountData);
+export const AnnualAccountDataSchema = SchemaFactory.createForClass(AnnualAccountData);
 
 // Compound index to ensure one record per ULB & Design Year.
 AnnualAccountDataSchema.index({ ulb: 1, design_year: 1 }, { unique: true });

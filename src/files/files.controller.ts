@@ -5,7 +5,10 @@ import { Response } from 'express';
 
 @Controller('files')
 export class FilesController {
-  constructor(private readonly filesService: FilesService, private readonly s3ZipService: S3ZipService) { }
+  constructor(
+    private readonly filesService: FilesService,
+    private readonly s3ZipService: S3ZipService,
+  ) {}
 
   /**
    * Step 1: Query DB and return matching file list
@@ -14,7 +17,7 @@ export class FilesController {
   @Get('list')
   listFiles(@Query('filter') filter: string) {
     // return this.filesService.listFiles(filter);
-    return [{ 'key': 'test1' }];
+    return [{ key: 'test1' }];
   }
 
   /**

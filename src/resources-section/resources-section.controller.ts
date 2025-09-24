@@ -9,7 +9,7 @@ import { response } from './responseJson';
 export class ResourcesSectionController {
   constructor(
     private readonly resourcesSectionService: ResourcesSectionService,
-    private readonly s3ZipService: S3ZipService
+    private readonly s3ZipService: S3ZipService,
   ) {}
 
   @Get('data-sets')
@@ -26,13 +26,13 @@ export class ResourcesSectionController {
     // const resp = responseJsonUlb;
     const resp = response;
 
-    const keys:string[] = [
+    const keys: string[] = [
       // 'https://jana-cityfinance-stg.s3.ap-south-1.amazonaws.com/objects/cbf4213f-ac2b-4fcf-8e8f-b684a339acf7.pdf',
       // 'files/cbf4213f-ac2b-4fcf-8e8f-b684a339acf7.pdf',
       // 'files/7c4399f4-1ad1-4a02-a467-f7d7940f5591.pdf',
     ];
-    resp.data.forEach(element => {
-      element.files.forEach(file => {
+    resp.data.forEach((element) => {
+      element.files.forEach((file) => {
         keys.push(decodeURIComponent(file.url));
       });
     });
@@ -43,13 +43,13 @@ export class ResourcesSectionController {
     zipStream.pipe(res);
   }
 
-  @Get("sizes")
+  @Get('sizes')
   async getSizes() {
-    const keys:string[] = [];
+    const keys: string[] = [];
     let resp = response;
     // let resp = responseJsonUlb;
-    resp.data.forEach(element => {
-      element.files.forEach(file => {
+    resp.data.forEach((element) => {
+      element.files.forEach((file) => {
         keys.push(decodeURIComponent(file.url));
       });
     });

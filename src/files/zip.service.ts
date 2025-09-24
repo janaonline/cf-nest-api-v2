@@ -16,12 +16,7 @@ export class ZipService {
    * @param params.res - Express Response (writable stream)
    * @param params.zipName - download filename (default 'files.zip')
    */
-  async streamZipFromS3(params: {
-    bucket: string;
-    keys: string[];
-    res: import('express').Response;
-    zipName?: string;
-  }) {
+  async streamZipFromS3(params: { bucket: string; keys: string[]; res: import('express').Response; zipName?: string }) {
     const { bucket, keys, res, zipName = 'files.zip' } = params;
 
     // HTTP headers for download
@@ -56,9 +51,7 @@ export class ZipService {
       const filename = key.split('/').pop() || key;
 
       // Fetch S3 object stream
-      const obj = await this.s3.send(
-        new GetObjectCommand({ Bucket: bucket, Key: key }),
-      );
+      const obj = await this.s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
 
       const body = obj.Body as NodeJS.ReadableStream | undefined;
 

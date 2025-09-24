@@ -23,8 +23,8 @@ export class FilesService {
     const files = [];
     // const keys = files.map((f) => f.s3Key);
     const keys = [
-        'https://jana-cityfinance-live.s3.ap-south-1.amazonaws.com/objects/cbf4213f-ac2b-4fcf-8e8f-b684a339acf7.pdf',
-    'https://jana-cityfinance-live.s3.ap-south-1.amazonaws.com/objects/7c4399f4-1ad1-4a02-a467-f7d7940f5591.pdf'
+      'https://jana-cityfinance-live.s3.ap-south-1.amazonaws.com/objects/cbf4213f-ac2b-4fcf-8e8f-b684a339acf7.pdf',
+      'https://jana-cityfinance-live.s3.ap-south-1.amazonaws.com/objects/7c4399f4-1ad1-4a02-a467-f7d7940f5591.pdf',
     ];
 
     // Step 2: Generate unique zip key
@@ -33,7 +33,7 @@ export class FilesService {
     // Step 3: Zip + upload + get presigned link
     const url = await this.awsS3Service.zipAndUpload(
       keys,
-    //   process.env.AWS_BUCKET,
+      //   process.env.AWS_BUCKET,
       zipKey,
     );
 

@@ -1,11 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import {
-  IsIn,
-  IsMongoId,
-  IsNotEmpty,
-  IsOptional,
-  ValidateIf,
-} from 'class-validator';
+import { IsIn, IsMongoId, IsNotEmpty, IsOptional, ValidateIf } from 'class-validator';
 import { YEARS } from 'src/shared/files/constant';
 
 export class QueryResourcesSectionDto {
@@ -34,8 +28,7 @@ export class QueryResourcesSectionDto {
   ulbType: string;
 
   @ApiPropertyOptional({
-    description:
-      'Population category: 4M+ | 1M-4M | 500K-1M | 100K-500K | <100K',
+    description: 'Population category: 4M+ | 1M-4M | 500K-1M | 100K-500K | <100K',
     example: '500K-1M',
   })
   @IsOptional()
@@ -56,9 +49,7 @@ export class QueryResourcesSectionDto {
     description: 'Audit type: audited | unAudited',
     example: 'audited',
   })
-  @ValidateIf((o: QueryResourcesSectionDto) =>
-    ['rawPdf', 'standardizedExcel'].includes(o.downloadType),
-  )
+  @ValidateIf((o: QueryResourcesSectionDto) => ['rawPdf', 'standardizedExcel'].includes(o.downloadType))
   @IsIn(['audited', 'unAudited'])
   auditType: 'audited' | 'unAudited' = 'audited';
 

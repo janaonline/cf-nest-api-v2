@@ -9,9 +9,7 @@ describe('ResourcesSectionController', () => {
       controllers: [ResourcesSectionController],
     }).compile();
 
-    controller = module.get<ResourcesSectionController>(
-      ResourcesSectionController,
-    );
+    controller = module.get<ResourcesSectionController>(ResourcesSectionController);
   });
 
   it('should be defined', () => {

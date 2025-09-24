@@ -24,8 +24,7 @@ export class YearlyDocuments {
   @Prop({ type: [FileEntrySchema], default: [] })
   excel: FileEntry[];
 }
-export const YearlyDocumentsSchema =
-  SchemaFactory.createForClass(YearlyDocuments);
+export const YearlyDocumentsSchema = SchemaFactory.createForClass(YearlyDocuments);
 
 @Schema({ timestamps: { createdAt: 'createdAt', updatedAt: 'modifiedAt' } })
 export class DataCollectionForm {
@@ -78,5 +77,4 @@ export class DataCollectionForm {
 }
 
 export type DataCollectionFormDocument = DataCollectionForm & Document;
-export const DataCollectionFormSchema =
-  SchemaFactory.createForClass(DataCollectionForm);
+export const DataCollectionFormSchema = SchemaFactory.createForClass(DataCollectionForm);

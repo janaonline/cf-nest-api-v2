@@ -10,8 +10,7 @@ export class GSDPEligibility {
   upload: boolean;
 }
 
-export const GSDPEligibilitySchema =
-  SchemaFactory.createForClass(GSDPEligibility);
+export const GSDPEligibilitySchema = SchemaFactory.createForClass(GSDPEligibility);
 
 @Schema()
 export class DulyElected {

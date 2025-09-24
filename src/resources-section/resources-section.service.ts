@@ -1,20 +1,10 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
-import {
-  BudgetDocument,
-  BudgetDocumentDoc,
-} from 'src/schemas/budget-document.schema';
-import {
-  DataCollectionForm,
-  DataCollectionFormDocument,
-} from 'src/schemas/data-collection-form-schema';
+import { BudgetDocument, BudgetDocumentDoc } from 'src/schemas/budget-document.schema';
+import { DataCollectionForm, DataCollectionFormDocument } from 'src/schemas/data-collection-form-schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
-import {
-  getBudgetPipeline,
-  getRawFiles1920OnwardsPipeline,
-  getRawFilesBefore1920Pipeline,
-} from './constants';
+import { getBudgetPipeline, getRawFiles1920OnwardsPipeline, getRawFilesBefore1920Pipeline } from './constants';
 import { QueryResourcesSectionDto } from './dto/query-resources-section.dto';
 
 @Injectable()
@@ -81,9 +71,7 @@ export class ResourcesSectionService {
       });
     }
 
-    return endYear > 19
-      ? this.getRawFiles1920Onwards(query)
-      : this.getRawFilesBefore1920(query);
+    return endYear > 19 ? this.getRawFiles1920Onwards(query) : this.getRawFilesBefore1920(query);
   }
 
   // Raw PDF files (2019-20 onwards)

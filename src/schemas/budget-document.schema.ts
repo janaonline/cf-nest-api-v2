@@ -67,7 +67,6 @@ export class BudgetDocument extends Document {
 }
 
 export type BudgetDocumentDoc = BudgetDocument & Document;
-export const BudgetDocumentSchema =
-  SchemaFactory.createForClass(BudgetDocument);
+export const BudgetDocumentSchema = SchemaFactory.createForClass(BudgetDocument);
 
 BudgetDocumentSchema.index({ ulb: 1 }, { unique: true });

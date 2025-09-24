@@ -30,9 +30,7 @@ const ANNUAL_ACCOUNTS_DOCS = [
  * Helper: Create pipeline/ query for getRawFiles1920Onwards()
  * ------------------------------------------------------------------
  * */
-export const getRawFiles1920OnwardsPipeline = (
-  query: QueryResourcesSectionDto,
-) => {
+export const getRawFiles1920OnwardsPipeline = (query: QueryResourcesSectionDto) => {
   const { year, auditType } = query;
   const yearId = year ? YEARS[year] : '606aaf854dff55e6c075d219';
 
@@ -113,9 +111,7 @@ const getUlbMatchCondition = (query: QueryResourcesSectionDto) => {
  * Helper: Create pipeline/ query for getRawFilesBefore1920()
  * ------------------------------------------------------------------
  * */
-export const getRawFilesBefore1920Pipeline = (
-  query: QueryResourcesSectionDto,
-) => {
+export const getRawFilesBefore1920Pipeline = (query: QueryResourcesSectionDto) => {
   const { year, auditType, ulb, state, ulbType, popCat } = query;
   const yearKey = year.replace('-', '_');
 
