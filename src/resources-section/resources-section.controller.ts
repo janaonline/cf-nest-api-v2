@@ -23,8 +23,8 @@ export class ResourcesSectionController {
     console.log('tesdt');
     const bucket = process.env.AWS_BUCKET_NAME!;
     // const keys = files.split(',');
-    // const resp = responseJsonUlb;
-    const resp = response;
+    const resp = responseJsonUlb;
+    // const resp = response;
 
     const keys: string[] = [
       // 'https://jana-cityfinance-stg.s3.ap-south-1.amazonaws.com/objects/cbf4213f-ac2b-4fcf-8e8f-b684a339acf7.pdf',
@@ -46,13 +46,14 @@ export class ResourcesSectionController {
   @Get('sizes')
   async getSizes() {
     const keys: string[] = [];
-    let resp = response;
-    // let resp = responseJsonUlb;
+    // let resp = response;
+    const resp = responseJsonUlb;
     resp.data.forEach((element) => {
       element.files.forEach((file) => {
         keys.push(decodeURIComponent(file.url));
       });
     });
+    console.log('keys', keys);
     return this.s3ZipService.getSizesForFiles(keys);
   }
 }

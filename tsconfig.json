@@ -1,5 +1,7 @@
 {
   "compilerOptions": {
+    "allowJs": true,
+    "checkJs": false,
     "module": "nodenext",
     "moduleResolution": "nodenext",
     "resolvePackageJsonExports": true,
