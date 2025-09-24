@@ -1,104 +1,126 @@
 import { getModelToken } from '@nestjs/mongoose';
 import { Test, TestingModule } from '@nestjs/testing';
-import { Model } from 'mongoose';
-import { UlbDocument } from 'src/schemas/ulb.schema';
+// import { Model } from 'mongoose';
+// import { UlbDocument } from 'src/schemas/ulb.schema';
+import { BadRequestException } from '@nestjs/common';
 import { QueryResourcesSectionDto } from './dto/query-resources-section.dto';
 import { ResourcesSectionService } from './resources-section.service';
 
 describe('ResourcesSectionService', () => {
   let service: ResourcesSectionService;
-  let ulbModel: jest.Mocked<Model<UlbDocument>>;
+  // let ulbModel: jest.Mocked<Model<UlbDocument>>;
+  // const results = [];
 
   beforeEach(async () => {
-    const mockUlbModel = {
+    const mockModel = {
       aggregate: jest.fn().mockReturnThis(),
       exec: jest.fn(),
     };
-
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ResourcesSectionService,
-        { provide: getModelToken('Ulb'), useValue: mockUlbModel },
+        { provide: getModelToken('Ulb'), useValue: mockModel },
+        { provide: getModelToken('DataCollectionForm'), useValue: mockModel },
+        { provide: getModelToken('BudgetDocument'), useValue: mockModel },
       ],
     }).compile();
 
     service = module.get<ResourcesSectionService>(ResourcesSectionService);
-    ulbModel = module.get(getModelToken('Ulb'));
+    // ulbModel = module.get(getModelToken('Ulb'));
   });
 
-  describe('getFiles', () => {
-    it('should call getRawFiles1920Onwards for rawPdf', async () => {
-      const spy = jest
-        .spyOn(service as any, 'getRawFiles1920Onwards')
-        .mockResolvedValue({ success: true });
+  const payload: QueryResourcesSectionDto = {
+    ulb: '5dd006d4ffbcc50cfd92c87c',
+    state: '5dcf9d7316a06aed41c748ec',
+    ulbType: '5dcfa67543263a0e75c71697',
+    popCat: '500K-1M',
+    auditType: 'audited',
+    year: '',
+    downloadType: 'rawPdf',
+  };
+  const resolveValue = { success: true, message: '', data: [] };
 
-      const result = await service.getFiles({
+  describe('getFiles()', () => {
+    it('should return bad request if either state or ulb is not present', async () => {
+      const invalidQuery: QueryResourcesSectionDto = {
         downloadType: 'rawPdf',
-        year: '2021-22',
-      } as QueryResourcesSectionDto);
-
-      expect(spy).toHaveBeenCalled();
-      expect(result).toEqual({ success: true });
-    });
-
-    it('should return in-progress for standardizedExcel', async () => {
-      const result = await service.getFiles({
-        downloadType: 'standardizedExcel',
-        year: '2021-22',
-      } as QueryResourcesSectionDto);
-      expect(result).toEqual({ msg: 'Dev in-progress' });
-    });
-
-    it('should return in-progress for budget', async () => {
-      const result = await service.getFiles({
-        downloadType: 'budget',
-        year: '2021-22',
-      } as QueryResourcesSectionDto);
-      expect(result).toEqual({ msg: 'Dev in-progress' });
-    });
-
-    it('should return bad request for invalid year', async () => {
-      const result = await service.getFiles({
-        downloadType: 'rawPdf',
-        year: '2099-00',
-      } as QueryResourcesSectionDto);
-
-      expect(result).toEqual({
-        message: ['Please pass a valid year between range 2015-16 to 2026-27'],
-        error: 'Bad Request',
-        statusCode: 400,
-      });
-    });
-  });
-
-  describe('getRawFiles1920Onwards', () => {
-    it('should build pipeline and return results', async () => {
-      const fakeResult = [{ ulbId: '1', ulbName: 'Test ULB' }];
-
-      ulbModel.aggregate.mockReturnThis();
-      (ulbModel.aggregate().exec as jest.Mock).mockImplementation(
-        () => fakeResult,
-      );
-
-      const query = {
-        ulb: '5dd006d4ffbcc50cfd92c87c',
-        year: '2021-22',
+        year: '2020-21',
+        ulb: '',
+        state: '',
+        ulbType: '',
+        popCat: '',
         auditType: 'audited',
-        downloadType: 'rawPdf',
-      } as QueryResourcesSectionDto;
+      };
 
-      const result = await service.getRawFiles1920Onwards(query);
-
-      // eslint-disable-next-line @typescript-eslint/unbound-method
-      expect(ulbModel.aggregate as jest.Mock).toHaveBeenCalledWith(
-        expect.any(Array),
+      await expect(service.getFiles(invalidQuery)).rejects.toThrow(
+        BadRequestException,
       );
 
-      expect(result).toEqual({
-        success: true,
-        msg: `${fakeResult.length} document(s) found for searched options.`,
-        data: fakeResult,
+      await expect(service.getFiles(invalidQuery)).rejects.toMatchObject({
+        response: {
+          message: ['Either ULB or State is required.'],
+          error: 'Bad Request',
+          statusCode: 400,
+        },
       });
+    });
+
+    it('should call getRawFiles1920Onwards() if downloadType is rawPdf & year is 2019-20 onwards', async () => {
+      const query: QueryResourcesSectionDto = {
+        ...payload,
+        year: '2020-21',
+      };
+
+      const spy = jest
+        .spyOn(service, 'getRawFiles1920Onwards')
+        .mockResolvedValue(resolveValue);
+
+      await service.getFiles(query);
+
+      expect(spy).toHaveBeenCalledWith(query);
+      spy.mockRestore();
+    });
+
+    it('should call getRawFilesBefore1920() if downloadType is rawPdf & year is before 2019-20', async () => {
+      const query: QueryResourcesSectionDto = {
+        ...payload,
+        year: '2018-19',
+      };
+
+      const spy = jest
+        .spyOn(service, 'getRawFilesBefore1920')
+        .mockResolvedValue(resolveValue);
+
+      await service.getRawFilesBefore1920(query);
+
+      expect(spy).toHaveBeenCalledWith(query);
+      spy.mockRestore();
+    });
+
+    it('should return in-progress when downloadType is standardizedExcel', async () => {
+      const query: QueryResourcesSectionDto = {
+        ...payload,
+        downloadType: 'standardizedExcel',
+      };
+
+      const reponse = await service.getFiles(query);
+      expect(reponse.message).toMatch('in-progress');
+    });
+
+    it('should call getBudget() when downloadType is budget', async () => {
+      const query: QueryResourcesSectionDto = {
+        ...payload,
+        downloadType: 'budget',
+      };
+
+      const spy = jest
+        .spyOn(service, 'getBudget')
+        .mockResolvedValue(resolveValue);
+
+      await service.getFiles(query);
+
+      expect(spy).toHaveBeenCalledWith(query);
+      spy.mockRestore();
     });
   });
 });

@@ -1,5 +1,11 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsIn, IsMongoId, IsOptional, ValidateIf } from 'class-validator';
+import {
+  IsIn,
+  IsMongoId,
+  IsNotEmpty,
+  IsOptional,
+  ValidateIf,
+} from 'class-validator';
 import { YEARS } from 'src/shared/files/constant';
 
 export class QueryResourcesSectionDto {
@@ -40,6 +46,7 @@ export class QueryResourcesSectionDto {
     description: 'Audit year',
     example: '2021-22',
   })
+  @IsNotEmpty()
   @IsIn(Object.keys(YEARS), {
     message: 'year must be between 2015-16 and 2026-27',
   })

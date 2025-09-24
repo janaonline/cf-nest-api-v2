@@ -198,7 +198,7 @@ export const getRawFilesBefore1920Pipeline = (
 export const getBudgetPipeline = (query: QueryResourcesSectionDto) => {
   const { ulb, popCat, ulbType, state, auditType, year } = query;
 
-  const matchCondition1 = { 'yearsData.designYear': '2023-24' };
+  const matchCondition1 = { 'yearsData.designYear': year };
   if (ulb) matchCondition1['ulb'] = new Types.ObjectId(ulb);
 
   const matchCondition2 = {
