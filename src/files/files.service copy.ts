@@ -4,21 +4,42 @@ import { Upload } from '@aws-sdk/lib-storage';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import archiver from 'archiver';
 import { PassThrough } from 'stream';
-import { finished as streamFinished } from 'stream/promises';
 import * as path from 'path';
+
+export interface FileItem {
+  name: string;
+  url: string;
+} // url = S3 key
+export interface ULBItem {
+  ulbName?: string;
+  files: FileItem[];
+}
+export interface ZipBuildRequest {
+  data: ULBItem[];
+  zipKey?: string;
+}
+export interface ZipBuildResult {
+  zipKey: string;
+  url: string;
+  totalFiles: number;
+  skippedFiles: number;
+  sizeBytes?: number;
+}
 
 @Injectable()
 export class FilesService {
-  // private readonly bucket = 'jana-cityfinance-stg';
-  private readonly bucket = process.env.AWS_BUCKET_NAME!;
+  // private readonly bucket = process.env.AWS_BUCKET_NAME!;
+  private readonly bucket = 'jana-cityfinance-stg';
+  // private readonly bucket = 'cityfinance-resources';
   constructor(private readonly s3: S3Client) {}
 
-  async buildZipAndGetUrl(files: string[]) {
+  async buildZipAndGetUrl(files: string[]): Promise<ZipBuildResult> {
+    // const files = req.data.flatMap((x) => x.files || []);
     if (!files.length) throw new Error('No files in request');
 
     const zipKey = `bundles/${Date.now()}-${Math.random().toString(36).slice(2)}.zip`;
 
-    // If (by chance) already exists, sign & return
+    // short-circuit reuse if already built
     try {
       await this.s3.send(new HeadObjectCommand({ Bucket: this.bucket, Key: zipKey }));
       const url = await getSignedUrl(this.s3, new GetObjectCommand({ Bucket: this.bucket, Key: zipKey }), {
@@ -28,8 +49,6 @@ export class FilesService {
     } catch {}
 
     const pass = new PassThrough();
-
-    // IMPORTANT: start the multipart upload *before* finalize, but don't await yet
     const uploader = new Upload({
       client: this.s3,
       params: { Bucket: this.bucket, Key: zipKey, Body: pass, ContentType: 'application/zip' },
@@ -37,16 +56,9 @@ export class FilesService {
       partSize: 8 * 1024 * 1024,
       leavePartsOnError: false,
     });
-    const uploadPromise = uploader.done(); // starts consuming 'pass' now
 
-    const archive = archiver('zip', { zlib: { level: 0 } });
-    archive.on('warning', (e) => console.warn('archiver warning:', e));
-    archive.on('error', (e) => {
-      console.error('archiver error:', e);
-      pass.destroy(e); // propagate to upload
-    });
-
-    // Pipe archive → pass (which the uploader is reading)
+    const archive = archiver('zip', { zlib: { level: 0 } }); // PDFs/images => 0 is fastest
+    archive.on('error', (e) => pass.destroy(e));
     archive.pipe(pass);
 
     const used = new Map<string, number>();
@@ -60,12 +72,11 @@ export class FilesService {
 
     let skipped = 0;
     let i = 0;
-
-    for (const key of files) {
+    for (const f of files) {
+      const key = f;
       const ext = path.extname(key) || '';
-      const baseRaw = (key.trim() || path.basename(key)).replace(/[\\/]/g, '_');
+      const baseRaw = (f.trim() || path.basename(key)).replace(/[\\/]/g, '_');
       const base = baseRaw.endsWith(ext) ? baseRaw : baseRaw + ext;
-
       try {
         await this.s3.send(new HeadObjectCommand({ Bucket: this.bucket, Key: key }));
       } catch (e) {
@@ -73,14 +84,11 @@ export class FilesService {
         skipped++;
         continue;
       }
-
       console.log('key---1-');
       try {
         const obj = await this.s3.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }));
         const body = obj.Body as NodeJS.ReadableStream;
         const nameInZip = unique(base);
-
-        // Append and wait until this object stream is fully consumed by archiver
         await new Promise<void>((resolve) => {
           body.once('error', () => {
             skipped++;
@@ -95,23 +103,14 @@ export class FilesService {
       }
       console.log('key---2-', i++);
     }
-
     console.log('key---3-');
-
-    // DO NOT await archive.finalize(); instead, kick it off and await the stream closing.
-    archive.finalize(); // signals no more entries
-
-    // Wait for the archive->pass stream to finish flushing all bytes
-    await streamFinished(pass); // ensures 'pass' ended cleanly
-    await uploadPromise; // ensures S3 multipart completed
-
-    console.log('key---4-'); // <-- you should see this now
-
+    await archive.finalize();
+    await uploader.done();
+    console.log('key---4-');
     const url = await getSignedUrl(this.s3, new GetObjectCommand({ Bucket: this.bucket, Key: zipKey }), {
       expiresIn: 3600,
     });
     console.log('key---5-');
-
     return { zipKey, url, totalFiles: files.length, skippedFiles: skipped };
   }
 }

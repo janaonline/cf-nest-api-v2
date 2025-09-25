@@ -1,13 +1,15 @@
 import { Controller, Get, Query, Res } from '@nestjs/common';
 import { FilesService } from './files.service';
 import { S3ZipService } from './s3-zip.service';
-import { Response } from 'express';
+import { ZipService } from './zip.service';
+import { responseJsonUlb } from 'src/resources-section/responseJsonUlb';
 
 @Controller('files')
 export class FilesController {
   constructor(
     private readonly filesService: FilesService,
     private readonly s3ZipService: S3ZipService,
+    private readonly zip: ZipService,
   ) {}
 
   /**
@@ -20,13 +22,37 @@ export class FilesController {
     return [{ key: 'test1' }];
   }
 
-  /**
-   * Step 2: Zip matching files, upload to S3, return pre-signed URL
-   * Example: GET /files/download?filter=report
-   */
   @Get('download')
-  async downloadFiles(@Query('filter') filter: string) {
-    return this.filesService.downloadFiles(filter);
+  async downloadFiles() {
+    // const files: string[] = responseJsonUlb.data.flatMap((x) => x.files.map((f) => decodeURIComponent(f.url)));
+    const files: string[] = [
+      // 'https://jana-cityfinance-stg.s3.ap-south-1.amazonaws.com/objects/cbf4213f-ac2b-4fcf-8e8f-b684a339acf7.pdf',
+      'files/cbf4213f-ac2b-4fcf-8e8f-b684a339acf7.pdf',
+      // 'files/7c4399f4-1ad1-4a02-a467-f7d7940f5591.pdf',
+    ];
+    const result = await this.zip.buildZipToS3(files);
+    console.log('result', result);
+    return { result };
+  }
+
+  @Get('download/zip')
+  async downloadFilesZip() {
+    // const files: string[] = responseJsonUlb.data.flatMap((x) => x.files.map((f) => decodeURIComponent(f.url)));
+    const files: string[] = [
+      // 'https://jana-cityfinance-stg.s3.ap-south-1.amazonaws.com/objects/cbf4213f-ac2b-4fcf-8e8f-b684a339acf7.pdf',
+      // 'files/cbf4213f-ac2b-4fcf-8e8f-b684a339acf7.pdf',
+      // 'files/7c4399f4-1ad1-4a02-a467-f7d7940f5591.pdf',
+    ];
+
+    responseJsonUlb.data.forEach((element) => {
+      element.files.forEach((file) => {
+        files.push(decodeURIComponent(file.url));
+      });
+    });
+    console.log('files', files);
+    const result = await this.filesService.buildZipAndGetUrl(files);
+    console.log('result', result);
+    return { result };
   }
 
   @Get('zip')

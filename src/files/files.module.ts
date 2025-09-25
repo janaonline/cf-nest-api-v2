@@ -4,6 +4,7 @@ import { FilesService } from './files.service';
 import { AwsS3Service } from 'src/services/aws-s3.service';
 import { S3ZipService } from './s3-zip.service';
 import { S3Client } from '@aws-sdk/client-s3';
+import { ZipService } from './zip.service';
 
 @Module({
   controllers: [FilesController],
@@ -22,6 +23,7 @@ import { S3Client } from '@aws-sdk/client-s3';
     AwsS3Service,
     FilesService,
     S3ZipService,
+    ZipService,
   ],
 })
 export class FilesModule {}
