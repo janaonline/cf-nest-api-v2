@@ -14,7 +14,7 @@ async function bootstrap() {
    * -------------------------------------------------------
    */
   const swaggerConfig = new DocumentBuilder()
-    .setTitle('City Finance APIs') // Title of the API docs
+    .setTitle('City Finance APIs v2') // Title of the API docs
     .setDescription('V2 documentation.') // Description shown in Swagger UI
     .setVersion('1.0') // API version
     .addServer('/api/v2') // Base path for the APIs
