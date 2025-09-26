@@ -46,8 +46,8 @@ export class ResourcesSectionController {
   @Get('sizes')
   async getSizes() {
     const keys: string[] = [];
-    // let resp = response;
-    const resp = responseJsonUlb;
+    const resp = response;
+    // const resp = responseJsonUlb;
     resp.data.forEach((element) => {
       element.files.forEach((file) => {
         keys.push(decodeURIComponent(file.url));
