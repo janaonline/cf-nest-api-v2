@@ -3,6 +3,7 @@ import { FilesService } from './files.service';
 import { S3ZipService } from './s3-zip.service';
 import { ZipService } from './zip.service';
 import { responseJsonUlb } from 'src/resources-section/responseJsonUlb';
+import { response } from 'src/resources-section/responseJson';
 
 @Controller('files')
 export class FilesController {
@@ -44,7 +45,8 @@ export class FilesController {
       // 'files/7c4399f4-1ad1-4a02-a467-f7d7940f5591.pdf',
     ];
 
-    responseJsonUlb.data.forEach((element) => {
+    response.data.forEach((element) => {
+      // responseJsonUlb.data.forEach((element) => {
       element.files.forEach((file) => {
         files.push(decodeURIComponent(file.url));
       });
