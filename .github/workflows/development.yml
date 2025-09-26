@@ -20,8 +20,8 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
             cd /var/www/html/development-cicd/cf-nest-api-v2
-            git fetch --all
-            git reset --hard origin/development
-            npm ci --omit=dev
+            git reset --hard
+            git pull origin development
+            npm install --legacy-peer-deps
             npm run build
             pm2 reload ecosystem.config.js --only dev-cf-nest-api-v2 || pm2 start ecosystem.config.js --only dev-cf-nest-api-v2
