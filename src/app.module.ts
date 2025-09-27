@@ -8,7 +8,7 @@ import { ResourcesSectionModule } from './resources-section/resources-section.mo
 import { S3Module } from './s3/s3.module';
 import { UsersModule } from './users/users.module';
 import { ZipModule } from './zip/zip.module';
-import { MailerModule } from './core/mailer/mailer.module';
+import { NodeMailerModule } from './core/node-mailer/node-mailer.module';
 
 @Module({
   imports: [
@@ -28,7 +28,7 @@ import { MailerModule } from './core/mailer/mailer.module';
     S3Module,
     ZipModule,
     ResourcesSectionModule,
-    MailerModule,
+    NodeMailerModule,
   ],
   controllers: [AppController],
   providers: [AppService],
