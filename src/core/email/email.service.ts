@@ -24,7 +24,6 @@ export class EmailService {
   async handleUnsubscribe(token: string): Promise<{ success: boolean; email?: string; error?: string }> {
     const decoded: UnsubscribePayload | null = this.verifyToken(token);
     if (!decoded) return { success: false, error: 'Invalid or expired token.' };
-    this.logger.log({ decoded });
     const { email, desc } = decoded;
     try {
       // Add unsubscribed user to DB.

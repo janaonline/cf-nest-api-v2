@@ -1,0 +1,104 @@
+const styles = ` 
+    body {
+    	font-family: Arial, sans-serif;;
+    	margin: 2rem;
+    	background-color: #f9f9f9;
+    	color: #333;
+    }
+    
+    form {
+    	margin-top: 1.5rem;
+    }
+    
+    h3, h1, p, .logo {
+        margin: 0.25rem;
+    }
+
+    .container {
+        background-color: #e7e4e4ff;
+        border: 1px solid gray;
+        border-radius: 1rem;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        flex-direction: column;
+        padding: 2rem;
+    }
+
+    .city {
+        color: #0dcaf0;
+    }
+    
+    .finance {
+        color: #183367;
+
+    }
+    
+    .logo {
+        font-weight: 'bold';
+        font-size: 1.75rem;
+    }
+
+    button {
+    	background-color: #d32f2f;
+    	color: white;
+    	padding: 0.6rem 1.2rem;
+    	border: none;
+    	border-radius: 4px;
+    	font-size: 1rem;
+    	cursor: pointer;
+        margin: 0;
+    }
+    
+    button:hover {
+    	background-color: #b71c1c;
+    }
+`;
+
+export const htmlUnsubscribeTemplate = (token: string) => {
+  return `
+    <!doctype html>
+    <html lang="en">
+      <head>
+        <meta charset="utf-8"/>
+        <meta name="viewport" content="width=device-width, initial-scale=1"/>
+        <title>Confirm Unsubscribe</title>
+        <style>${styles}</style>
+      </head>
+      <body>
+        <div class="container">
+            ${cityFinanceLogo}            
+            <h3>Are you sure you want to unsubscribe?</h3>
+            <form method="POST" action="${process.env.BASE_URL}email/unsubscribe">
+            <input type="hidden" name="token" value="${token}" />
+            <button type="submit">Yes, unsubscribe me</button>
+            </form>
+        </div>
+      </body>
+    </html>
+  `;
+};
+
+const cityFinanceLogo = `
+    <h1><span class='city'>city</span><span class='finance'>finance.in</span></h1>
+`;
+
+export const getHtmlFromTemplate = (content: string) => {
+  return `
+    <!doctype html>
+    <html lang="en">
+      <head>
+        <meta charset="utf-8"/>
+        <meta name="viewport" content="width=device-width, initial-scale=1"/>
+        <title>Confirm Unsubscribe</title>
+        <style>${styles}</style>
+      </head>
+      <body>
+        <div class="container">
+            ${cityFinanceLogo}
+            <h3>${content}</h3>
+        </div>
+      </body>
+    </html>
+  `;
+};

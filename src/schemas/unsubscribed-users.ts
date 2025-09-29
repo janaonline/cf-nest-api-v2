@@ -14,6 +14,9 @@ export class UnsubscribedUser extends Document {
 
   @Prop({ required: true, default: () => new Date() })
   unsubscribedAt: Date;
+
+  @Prop({ required: true, default: true })
+  isUnsubscribed: boolean;
 }
 
 export const UnsubscribedUserSchema = SchemaFactory.createForClass(UnsubscribedUser);
