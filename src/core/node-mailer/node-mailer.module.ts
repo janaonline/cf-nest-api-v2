@@ -1,7 +1,9 @@
-import { Module } from '@nestjs/common';
-import { NodeMailerService } from './node-mailer.service';
-import { NodeMailerController } from './node-mailer.controller';
 import { MailerModule } from '@nestjs-modules/mailer';
+import { HandlebarsAdapter } from '@nestjs-modules/mailer/dist/adapters/handlebars.adapter';
+import { Module } from '@nestjs/common';
+import { join } from 'path';
+import { NodeMailerController } from './node-mailer.controller';
+import { NodeMailerService } from './node-mailer.service';
 
 @Module({
   imports: [
@@ -18,7 +20,9 @@ import { MailerModule } from '@nestjs-modules/mailer';
         from: '"NestJS App" <no-reply@example.com>',
       },
       template: {
-        dir: join(__dirname, 'templates'), // folder for templates
+        dir: join(__dirname, 'templates'), // folder for templates1
+        // dir: join(__dirname, '/views/mail'), // folder for templates
+        // dir: 'views/mail', // folder for templates
         adapter: new HandlebarsAdapter(), // using handlebars
         options: {
           strict: true,
