@@ -1,9 +1,10 @@
-import { Module } from '@nestjs/common';
+import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { FilesModule } from './files/files.module';
+import { LoggerMiddleware } from './middleware/logger-middleware';
 import { ResourcesSectionModule } from './resources-section/resources-section.module';
 import { S3Module } from './s3/s3.module';
 import { UsersModule } from './users/users.module';
@@ -33,4 +34,8 @@ import { NodeMailerModule } from './core/node-mailer/node-mailer.module';
   controllers: [AppController],
   providers: [AppService],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer) {
+    consumer.apply(LoggerMiddleware).forRoutes('/');
+  }
+}
