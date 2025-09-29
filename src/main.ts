@@ -47,6 +47,36 @@ async function bootstrap() {
 
   /**
    * -------------------------------------------------------
+   * CORS (Cross-Origin Resource Sharing) Setup
+   * -------------------------------------------------------
+   * Allows only whitelisted origins to access the API.
+   * - WHITELIST: array of allowed origins
+   * - methods: allowed HTTP methods
+   * - preflightContinue: whether OPTIONS requests should pass to routes
+   * - optionsSuccessStatus: HTTP status for successful OPTIONS response
+   *
+   */
+  // const WHITELIST = ['http://localhost:4100'];
+
+  // const corsOptions: CorsOptions = {
+  //   origin: (origin: string | undefined, callback: (err: CallbackError, allow?: boolean) => void) => {
+  //     if (!origin || WHITELIST.includes(origin)) {
+  //       // Allow if in whitelist or same-origin
+  //       callback(null, true);
+  //     } else {
+  //       // Block
+  //       callback(new Error('Not allowed by CORS'));
+  //     }
+  //   },
+  //   methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
+  //   preflightContinue: false,
+  //   optionsSuccessStatus: 204,
+  // };
+
+  app.enableCors({});
+
+  /**
+   * -------------------------------------------------------
    * Start the Application
    * -------------------------------------------------------
    * Reads port from environment configuration; defaults to 3000
