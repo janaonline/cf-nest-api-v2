@@ -6,7 +6,7 @@
     "deleteOutDir": true,
     "assets": [
       {
-        "include": "core/node-mailer/templates/**/*.hbs",
+        "include": "views/**/*",
         "outDir": "dist/src"
       }
     ]

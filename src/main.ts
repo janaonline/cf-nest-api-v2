@@ -3,10 +3,22 @@ import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
+import { join } from 'path';
+import * as hbs from 'hbs';
+import { NestExpressApplication } from '@nestjs/platform-express';
 
 async function bootstrap() {
   // Create the main NestJS application instance using the root AppModule
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    logger: process.env.NODE_ENV === 'production' ? ['error', 'warn'] : ['log', 'error', 'warn', 'debug', 'verbose'],
+  });
+
+  // Tell Nest where views are stored
+  app.setBaseViewsDir(join(__dirname, '..', 'views'));
+  app.setViewEngine('hbs');
+
+  // Optional: partials/helpers
+  // hbs.registerPartials(join(__dirname, '..', 'views/partials'));
 
   /**
    * -------------------------------------------------------

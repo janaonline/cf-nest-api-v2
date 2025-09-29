@@ -7,6 +7,7 @@ import { DataCollectionForm, DataCollectionFormSchema } from 'src/schemas/data-c
 import { Ulb, UlbSchema } from 'src/schemas/ulb.schema';
 import { ResourcesSectionController } from './resources-section.controller';
 import { ResourcesSectionService } from './resources-section.service';
+import { ZipModule } from 'src/zip/zip.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { ResourcesSectionService } from './resources-section.service';
       { name: BudgetDocument.name, schema: BudgetDocumentSchema },
     ]),
     FilesModule,
+    ZipModule,
   ],
   controllers: [ResourcesSectionController],
   providers: [ResourcesSectionService, S3ZipService],

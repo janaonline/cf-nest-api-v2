@@ -35,6 +35,7 @@ import { MailerService } from './mailer.service';
       },
     }),
   ],
+  exports: [BullModule], // Export so other modules can use it
   controllers: [ZipController],
   providers: [ZipJobsProcessor, S3Service, ZipBuildService, MailerService],
 })
