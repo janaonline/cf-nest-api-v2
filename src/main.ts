@@ -14,7 +14,7 @@ async function bootstrap() {
   });
 
   // Tell Nest where views are stored
-  app.setBaseViewsDir(join(__dirname, '..', 'views'));
+  app.setBaseViewsDir(join(__dirname, '..', 'src/views'));
   app.setViewEngine('hbs');
 
   // Optional: partials/helpers

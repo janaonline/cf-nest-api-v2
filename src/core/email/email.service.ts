@@ -9,7 +9,7 @@ import { UnsubscribePayload } from './interface';
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
-  private secret: string | undefined;
+  private secret: string;
 
   constructor(
     @InjectModel(UnsubscribedUser.name)
@@ -17,7 +17,7 @@ export class EmailService {
 
     private readonly configService: ConfigService,
   ) {
-    this.secret = this.configService.get<string>('UNSUBSCRIBE_SECRET');
+    this.secret = this.configService.get<string>('UNSUBSCRIBE_SECRET')!;
     if (!this.secret) throw new Error('UNSUBSCRIBE_SECRET is not defined in environment variables');
   }
 
@@ -63,7 +63,7 @@ export class EmailService {
 
   generateToken(payload: UnsubscribePayload): string {
     if (!payload.email) throw new Error('Email is required to generate unsubscribe token');
-    if (!this.secret) throw new Error('UNSUBSCRIBE_SECRET is not defined in environment variables');
+    // if (!this.secret) throw new Error('UNSUBSCRIBE_SECRET is not defined in environment variables');
 
     return sign(payload, this.secret, { expiresIn: '7d' });
   }
