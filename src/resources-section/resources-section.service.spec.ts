@@ -36,14 +36,14 @@ describe('ResourcesSectionService', () => {
     popCat: '500K-1M',
     auditType: 'audited',
     year: '',
-    downloadType: 'rawPdf',
+    downloadType: 'Raw Data PDF',
   };
   const resolveValue = { success: true, message: '', data: [] };
 
   describe('getFiles()', () => {
     it('should return bad request if either state or ulb is not present', async () => {
       const invalidQuery: QueryResourcesSectionDto = {
-        downloadType: 'rawPdf',
+        downloadType: 'Raw Data PDF',
         year: '2020-21',
         ulb: '',
         state: '',
@@ -63,7 +63,7 @@ describe('ResourcesSectionService', () => {
       });
     });
 
-    it('should call getRawFiles1920Onwards() if downloadType is rawPdf & year is 2019-20 onwards', async () => {
+    it('should call getRawFiles1920Onwards() if downloadType is Raw Data PDF & year is 2019-20 onwards', async () => {
       const query: QueryResourcesSectionDto = {
         ...payload,
         year: '2020-21',
@@ -77,7 +77,7 @@ describe('ResourcesSectionService', () => {
       spy.mockRestore();
     });
 
-    it('should call getRawFilesBefore1920() if downloadType is rawPdf & year is before 2019-20', async () => {
+    it('should call getRawFilesBefore1920() if downloadType is Raw Data PDF & year is before 2019-20', async () => {
       const query: QueryResourcesSectionDto = {
         ...payload,
         year: '2018-19',
@@ -91,20 +91,20 @@ describe('ResourcesSectionService', () => {
       spy.mockRestore();
     });
 
-    it('should return in-progress when downloadType is standardizedExcel', async () => {
+    // it('should return in-progress when downloadType is standardizedExcel', async () => {
+    //   const query: QueryResourcesSectionDto = {
+    //     ...payload,
+    //     downloadType: 'standardizedExcel',
+    //   };
+
+    //   const reponse = await service.getFiles(query);
+    //   expect(reponse.message).toMatch('in-progress');
+    // });
+
+    it('should call getBudget() when downloadType is Budget PDF', async () => {
       const query: QueryResourcesSectionDto = {
         ...payload,
-        downloadType: 'standardizedExcel',
-      };
-
-      const reponse = await service.getFiles(query);
-      expect(reponse.message).toMatch('in-progress');
-    });
-
-    it('should call getBudget() when downloadType is budget', async () => {
-      const query: QueryResourcesSectionDto = {
-        ...payload,
-        downloadType: 'budget',
+        downloadType: 'Budget PDF',
       };
 
       const spy = jest.spyOn(service, 'getBudget').mockResolvedValue(resolveValue);

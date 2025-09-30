@@ -40,13 +40,13 @@ export class ResourcesSectionService {
     }
 
     switch (downloadType) {
-      case 'rawPdf':
+      case 'Raw Data PDF':
         return this.handleRawPdfDownload(query);
 
-      case 'standardizedExcel':
-        return this.responseStructure(true, [], 'Development in-progress.');
+      // case 'Standardised Excel':
+      //   return this.responseStructure(true, [], 'Development in-progress.');
 
-      case 'budget':
+      case 'Budget PDF':
         return this.getBudget(query);
 
       default:

@@ -28,7 +28,7 @@ export class ResourcesSectionController {
     // this.zipService.buildZipToS3(response);
 
     const body = {} as ZipJobRequest;
-    body.email = 'jeevanantham.d@janaagraha.org';
+    body.email = query.email;
     body.ulbData = response.data;
     console.log('body', body);
     // Add job to queue

@@ -1,8 +1,16 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsIn, IsMongoId, IsNotEmpty, IsOptional, ValidateIf } from 'class-validator';
+import { IsEmail, IsIn, IsMongoId, IsNotEmpty, IsOptional, ValidateIf } from 'class-validator';
 import { YEARS } from 'src/shared/files/constant';
 
 export class QueryResourcesSectionDto {
+  @ApiPropertyOptional({
+    description: 'Email Id',
+    example: '',
+  })
+  @IsNotEmpty()
+  @IsEmail()
+  email: string;
+
   @ApiPropertyOptional({
     description: 'ULB objectId',
     example: '5dd006d4ffbcc50cfd92c87c',
@@ -57,6 +65,8 @@ export class QueryResourcesSectionDto {
     description: 'Download type: rawPdf | standardizedExcel | budget',
     example: 'rawPdf',
   })
-  @IsIn(['rawPdf', 'standardizedExcel', 'budget'])
-  downloadType: 'rawPdf' | 'standardizedExcel' | 'budget';
+  @IsIn(['Raw Data PDF', 'Budget PDF'])
+  // downloadType: 'rawPdf' | 'standardizedExcel' | 'budget'; // Change keys as per UI.
+  // 'Raw Data PDF' | 'Raw Data Excel' | 'Standardised Excel' | 'Budget PDF'
+  downloadType: 'Raw Data PDF' | 'Budget PDF';
 }
