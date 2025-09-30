@@ -17,8 +17,8 @@ export class EmailService {
 
     private readonly configService: ConfigService,
   ) {
-    this.secret = this.configService.get<string>('UNSUBSCRIBE_SECRET');
-    if (!this.secret) throw new Error('UNSUBSCRIBE_SECRET is not defined in environment variables');
+    this.secret = this.configService.get<string>('JWT_TOKEN');
+    if (!this.secret) throw new Error('JWT_TOKEN is not defined in environment variables');
   }
 
   async handleUnsubscribe(token: string): Promise<{ success: boolean; email?: string; error?: string }> {
@@ -63,14 +63,14 @@ export class EmailService {
 
   generateToken(payload: UnsubscribePayload): string {
     if (!payload.email) throw new Error('Email is required to generate unsubscribe token');
-    if (!this.secret) throw new Error('UNSUBSCRIBE_SECRET is not defined in environment variables');
+    if (!this.secret) throw new Error('JWT_TOKEN is not defined in environment variables');
 
     return sign(payload, this.secret, { expiresIn: '7d' });
   }
 
   private verifyToken(token: string): UnsubscribePayload | null {
     try {
-      if (!this.secret) throw new Error('UNSUBSCRIBE_SECRET is not defined in environment variables');
+      if (!this.secret) throw new Error('JWT_TOKEN is not defined in environment variables');
       return verify(token, this.secret) as UnsubscribePayload;
     } catch (err) {
       console.error('Failed to verify unsubscribe token:', err);
