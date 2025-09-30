@@ -8,5 +8,6 @@ import { EmailService } from './email.service';
   imports: [MongooseModule.forFeature([{ name: UnsubscribedUser.name, schema: UnsubscribedUserSchema }])],
   controllers: [EmailController],
   providers: [EmailService],
+  exports: [EmailService],
 })
 export class EmailModule {}

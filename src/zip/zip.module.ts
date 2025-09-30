@@ -7,6 +7,8 @@ import { ZipJobsProcessor } from './zip-jobs.processor';
 import { S3Service } from '../s3/s3.service';
 import { ZipBuildService } from './zip.service';
 import { MailerService } from './mailer.service';
+import { EmailModule } from 'src/core/email/email.module';
+import { SESMailService } from 'src/core/aws-ses/ses.service';
 
 @Module({
   imports: [
@@ -34,9 +36,10 @@ import { MailerService } from './mailer.service';
         attempts: 1,
       },
     }),
+    EmailModule,
   ],
   exports: [BullModule], // Export so other modules can use it
   controllers: [ZipController],
-  providers: [ZipJobsProcessor, S3Service, ZipBuildService, MailerService],
+  providers: [ZipJobsProcessor, S3Service, ZipBuildService, MailerService, SESMailService],
 })
 export class ZipModule {}

@@ -1,13 +1,13 @@
 // mailer.service.ts
-import { Injectable, Logger } from '@nestjs/common';
 import { SESClient, SendEmailCommand } from '@aws-sdk/client-ses';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as fs from 'fs';
-import * as path from 'path';
 import * as handlebars from 'handlebars';
+import * as path from 'path';
 
-import { renderFile } from 'hbs';
-import { join } from 'path';
+import { SESMailService } from 'src/core/aws-ses/ses.service';
+import { EmailService } from 'src/core/email/email.service';
 
 @Injectable()
 export class MailerService {
@@ -16,14 +16,18 @@ export class MailerService {
 
   private readonly logger = new Logger(MailerService.name);
 
-  constructor(cfg: ConfigService) {
-    this.ses = new SESClient({
-      region: cfg.get('AWS_REGION', 'ap-south-1'),
-      credentials: {
-        accessKeyId: cfg.get<string>('NEWSLETTER_AWS_ACCESS_KEY_ID')!,
-        secretAccessKey: cfg.get<string>('NEWSLETTER_AWS_SECRET_ACCESS_KEY')!,
-      },
-    });
+  constructor(
+    private readonly cfg: ConfigService,
+    private emailService: EmailService,
+    private sesV2: SESMailService,
+  ) {
+    // this.ses = new SESClient({
+    //   region: cfg.get('AWS_REGION', 'ap-south-1'),
+    //   credentials: {
+    //     accessKeyId: cfg.get<string>('NEWSLETTER_AWS_ACCESS_KEY_ID')!,
+    //     secretAccessKey: cfg.get<string>('NEWSLETTER_AWS_SECRET_ACCESS_KEY')!,
+    //   },
+    // });
     this.from = cfg.get<string>('MAIL_FROM', 'no-reply@example.com');
   }
 
@@ -35,6 +39,11 @@ export class MailerService {
     return template(data);
   }
 
+  private compileTemplate1(templateName: string, data: any): string {
+    const filePath = path.join(__dirname, '..', '..', 'views/mail', `${templateName}.hbs`);
+    const source = fs.readFileSync(filePath, 'utf-8');
+    return handlebars.compile(source)(data);
+  }
   // private async renderTemplate(template: string, data: any): Promise<string> {
   //   const filePath = join(__dirname, '..', '..', 'views', `${template}.hbs`);
   //   return new Promise((resolve, reject) => {
@@ -89,6 +98,14 @@ export class MailerService {
     counts: { total: number; skipped: number };
   }) {
     const name = params.to.split('@')[0];
+    const token = this.emailService.generateToken({ email: params.to, desc: params.subject });
+    const unsubscribeUrl = encodeURIComponent(`${this.cfg.get<string>('BASE_URL')}email/unsubscribe?token=${token}`);
+    const htmlBody = this.compileTemplate('resource-zip-ready', {
+      name,
+      download_link: params.link,
+      unsubscribeUrl,
+    });
+
     try {
       // console.log('Sending email to', params.to, 'from', this.from);
       const html1 = `
@@ -96,59 +113,21 @@ export class MailerService {
       <p><a href="${params.link}">Click to download</a> (expires soon)</p>
       <p>Key: ${params.key}<br/>Files: ${params.counts.total} (skipped: ${params.counts.skipped})</p>
     `;
-      const html = `
-    <html lang="en">
-  <body>
-    <h2>Your City Finance Data is Ready to Download</h2>
-
-    <p>Hello <strong>${name}</strong>,</p>
-
-    <p>
-      The City Finance data you requested is now ready for download.  
-      The link will expire in <strong>30 days</strong>.
-    </p>
-
-    <p>
-      <a href="${params.link}">Click here to Download</a>
-    </p>
-
-    <p><strong>Export Details:</strong></p>
-    <ul>
-      <li>Data submitted by ULBs in PDF</li>
-      <li>Karnataka files – Bangalore, Mysuru, Davangere</li>
-      <li>2021-22 to 2023-24</li>
-    </ul>
-
-    <p>
-      <strong>Usage:</strong> This data is open for everyone to use without restriction.  
-      However, if you use this data, we request that you acknowledge/cite  
-      <em>City Finance</em> as the source.
-    </p>
-
-    <p>
-      Have questions about the data? Reply to this email to get in touch.
-    </p>
-
-    <p>Regards,<br/>Team City Finance</p>
-
-    <hr />
-    <p>
-      You received this email because you requested data on City Finance.  
-      If you did not make this request, you can ignore this message.
-    </p>
-  </body>
-</html>
-    `;
-      const result = await this.ses.send(
-        new SendEmailCommand({
-          Destination: { ToAddresses: [params.to] },
-          Source: this.from,
-          Message: {
-            Subject: { Data: params.subject },
-            Body: { Html: { Data: html } },
-          },
-        }),
-      );
+      // const result = await this.ses.send(
+      //   new SendEmailCommand({
+      //     Destination: { ToAddresses: [params.to] },
+      //     Source: this.from,
+      //     Message: {
+      //       Subject: { Data: params.subject },
+      //       Body: { Html: { Data: htmlBody } },
+      //     },
+      //   }),
+      // );
+      await this.sesV2.sendEmail({
+        to: params.to,
+        html: htmlBody,
+        subject: 'Your City Finance Data is Ready to Download',
+      });
       // console.log('Email sent', result);
     } catch (error) {
       this.logger.error('Error sending email', error);
