@@ -185,7 +185,8 @@ export const getRawFilesBefore1920Pipeline = (query: QueryResourcesSectionDto) =
         year,
         files: [
           {
-            name: { $concat: ['$ulbData.name', '_', year] },
+            // name: { $concat: ['$ulbData.name', '_', year] },
+            name: 'Raw_AFS_PDF',
             url: '$fileUrl',
           },
         ],
@@ -266,7 +267,8 @@ export const getBudgetPipeline = (query: QueryResourcesSectionDto) => {
         year,
         files: [
           {
-            name: { $concat: ['$ulbData.name', '_', year] },
+            // name: { $concat: ['$ulbData.name', '_', year] },
+            name: 'Budget',
             url: { $arrayElemAt: ['$yearsData.files.url', 0] },
           },
         ],
