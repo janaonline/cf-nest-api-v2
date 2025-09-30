@@ -8,6 +8,7 @@ import * as path from 'path';
 
 import { SESMailService } from 'src/core/aws-ses/ses.service';
 import { EmailService } from 'src/core/email/email.service';
+import { ULBData } from './zip.types';
 
 @Injectable()
 export class MailerService {
@@ -95,15 +96,24 @@ export class MailerService {
     subject: string;
     link: string;
     key: string;
+    ulbData?: ULBData[];
     counts: { total: number; skipped: number };
   }) {
     const name = params.to.split('@')[0];
     const token = this.emailService.generateToken({ email: params.to, desc: params.subject });
     const unsubscribeUrl = encodeURIComponent(`${this.cfg.get<string>('BASE_URL')}email/unsubscribe?token=${token}`);
+    const ulbData = params.ulbData || [];
+    if (ulbData.length === 0) {
+      this.logger.warn('No ULB data provided for email');
+      return;
+    }
     const htmlBody = this.compileTemplate('resource-zip-ready', {
       name,
       download_link: params.link,
       unsubscribeUrl,
+      state: ulbData[0]?.stateName || 'State',
+      year: ulbData[0]?.year || 'Year',
+      ulbs: ulbData?.map((u) => u.ulbName).join(', ') || '',
     });
 
     try {

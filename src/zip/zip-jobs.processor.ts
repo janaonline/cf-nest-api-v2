@@ -22,9 +22,10 @@ export class ZipJobsProcessor extends WorkerHost {
     const { ulbData, outputKey, email, title } = job.data;
     // console.log(`Processing job ${job.id} with ${files.length} files`);
     // Make a safe output key if not provided
-    const zipKey =
-      outputKey ||
-      path.posix.join('zips', `${new Date().toISOString().slice(0, 10)}`, `bundle-${crypto.randomUUID()}.zip`);
+    // const zipKey =
+    //   outputKey ||
+    //   path.posix.join('zips', `${new Date().toISOString().slice(0, 10)}`, `bundle-${crypto.randomUUID()}.zip`);
+    const zipKey: string = outputKey || `${ulbData[0].stateName}_${ulbData[0].year}_${new Date().getTime()}.zip`;
 
     await job.updateProgress(5);
     // console.log('start');
@@ -46,6 +47,7 @@ export class ZipJobsProcessor extends WorkerHost {
         to: email,
         subject: title || 'Your ZIP is ready',
         link: url,
+        ulbData,
         key: result.zipKey,
         counts: {
           total: result.totalFiles,

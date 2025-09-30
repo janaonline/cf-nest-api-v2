@@ -57,13 +57,13 @@ export class QueryResourcesSectionDto {
     description: 'Audit type: audited | unAudited',
     example: 'audited',
   })
-  @ValidateIf((o: QueryResourcesSectionDto) => ['rawPdf', 'standardizedExcel'].includes(o.downloadType))
+  @ValidateIf((o: QueryResourcesSectionDto) => ['Raw Data PDF', 'Budget PDF'].includes(o.downloadType))
   @IsIn(['audited', 'unAudited'])
   auditType: 'audited' | 'unAudited' = 'audited';
 
   @ApiPropertyOptional({
-    description: 'Download type: rawPdf | standardizedExcel | budget',
-    example: 'rawPdf',
+    description: 'Download type: Raw Data PDF | Budget PDF',
+    example: 'Raw Data PDF',
   })
   @IsIn(['Raw Data PDF', 'Budget PDF'])
   // downloadType: 'rawPdf' | 'standardizedExcel' | 'budget'; // Change keys as per UI.

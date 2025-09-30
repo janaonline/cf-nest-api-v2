@@ -60,16 +60,29 @@ export class ZipBuildService {
       });
       // console.log('----step 2--------');
       // Append files sequentially (safe for memory)
+      const stateName = ulbData[0]?.stateName || 'State';
+      const year = ulbData[0]?.year || 'Year';
+      const ulbs: string[] = [];
       for (const ulb of ulbData) {
+        const ulbFolder = `${stateName}_${year}/${ulb.ulbName.replace(/[/\\?%*:|"<>]/g, '-')}/`;
+        ulbs.push(ulb.ulbName);
+        // console.log('ulbFolder', ulbFolder);
+        archive.append('', { name: `${ulbFolder}/` }); // folder entry
+        // console.log('ulb---', ulb.ulbName);
+        // this.logger.log(`ulb--- ${ulb.ulbName}`);
         for (const f of ulb.files) {
           const name = f.name?.trim() || path.basename(f.url) || `file-${++totalFiles}.bin`;
           f.url = this.cleanUrl(f.url);
+          const ext = path.posix.extname(f.url);
           try {
             // (Optional) HEAD to validate existence quickly
             await this.s3svc.headObject(f.url);
 
+            // 👉 Put file inside the ULB folder
+            const entryName = path.posix.join(ulbFolder, name) + ext;
+
             const obj = await this.s3svc.getObjectStream(f.url);
-            archive.append(obj as Readable, { name });
+            archive.append(obj as Readable, { name: entryName });
             totalFiles++;
           } catch (e) {
             skippedFiles++;
@@ -101,5 +114,13 @@ export class ZipBuildService {
     // Remove the first slash if it exists
     const cleanedPath = filePath.startsWith('/') ? filePath.slice(1) : filePath;
     return decodeURIComponent(cleanedPath);
+  }
+
+  getExtFromUrl(u: string): string {
+    const q = u.indexOf('?');
+    if (q !== -1) u = u.slice(0, q);
+    const h = u.indexOf('#');
+    if (h !== -1) u = u.slice(0, h);
+    return path.posix.extname(u) || '';
   }
 }
