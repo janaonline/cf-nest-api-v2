@@ -25,7 +25,8 @@ export class ZipJobsProcessor extends WorkerHost {
     // const zipKey =
     //   outputKey ||
     //   path.posix.join('zips', `${new Date().toISOString().slice(0, 10)}`, `bundle-${crypto.randomUUID()}.zip`);
-    const zipKey: string = outputKey || `${ulbData[0].stateName}_${ulbData[0].year}_${new Date().getTime()}.zip`;
+    const zipKey: string =
+      outputKey || path.posix.join('zips', `${ulbData[0].stateName}_${ulbData[0].year}_${new Date().getTime()}.zip`);
 
     await job.updateProgress(5);
     // console.log('start');
