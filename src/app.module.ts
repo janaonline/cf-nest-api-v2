@@ -5,7 +5,6 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { EmailModule } from './core/email/email.module';
 import { NodeMailerModule } from './core/node-mailer/node-mailer.module';
-import { FilesModule } from './files/files.module';
 import { LoggerMiddleware } from './middleware/logger-middleware';
 import { ResourcesSectionModule } from './resources-section/resources-section.module';
 import { UsersModule } from './users/users.module';
@@ -26,7 +25,6 @@ import { S3Module } from './core/s3/s3.module';
       }),
     }),
     UsersModule,
-    FilesModule,
     S3Module,
     ZipModule,
     ResourcesSectionModule,

@@ -33,7 +33,7 @@ export class ZipController {
   }
 
   @Get('test')
-  getHello1(): string {
+  getHello(): string {
     return 'test';
   }
 
@@ -44,8 +44,8 @@ export class ZipController {
     return { message: 'HTML Template Mail sent!' };
   }
 
-  @Get(':id')
-  async status1(@Param('id') id: string) {
+  @Get('status/:id')
+  async status(@Param('id') id: string) {
     const job = await this.queue.getJob(id);
     if (!job) return { status: 'not_found' };
 
@@ -62,10 +62,5 @@ export class ZipController {
     }
 
     return { status: state, progress };
-  }
-
-  @Get('test1')
-  getHello12(): string {
-    return 'test';
   }
 }

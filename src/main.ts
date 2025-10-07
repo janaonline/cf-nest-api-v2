@@ -11,6 +11,7 @@ async function bootstrap() {
   // Create the main NestJS application instance using the root AppModule
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     logger: process.env.NODE_ENV === 'production' ? ['error', 'warn'] : ['log', 'error', 'warn', 'debug', 'verbose'],
+    // logger: false, // disable default logger
   });
   const configService = app.get(ConfigService);
   const logger = new Logger('MAIN');
