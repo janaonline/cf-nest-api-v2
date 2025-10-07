@@ -1,17 +1,19 @@
-import { ValidationPipe } from '@nestjs/common';
+import { Logger, ValidationPipe } from '@nestjs/common';
+import { CorsOptions } from '@nestjs/common/interfaces/external/cors-options.interface';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
-import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
-import { AppModule } from './app.module';
-import { join } from 'path';
-import * as hbs from 'hbs';
 import { NestExpressApplication } from '@nestjs/platform-express';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { join } from 'path';
+import { AppModule } from './app.module';
 
 async function bootstrap() {
   // Create the main NestJS application instance using the root AppModule
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     logger: process.env.NODE_ENV === 'production' ? ['error', 'warn'] : ['log', 'error', 'warn', 'debug', 'verbose'],
   });
+  const configService = app.get(ConfigService);
+  const logger = new Logger('MAIN');
 
   // Tell Nest where views are stored
   app.setBaseViewsDir(join(__dirname, '..', 'src/views'));
@@ -66,26 +68,27 @@ async function bootstrap() {
    * - methods: allowed HTTP methods
    * - preflightContinue: whether OPTIONS requests should pass to routes
    * - optionsSuccessStatus: HTTP status for successful OPTIONS response
-   *
+   * - Note: Comma seperate the domains in .env eg: WHITELISTED_DOMAINS="http://localhost:4200,http://localhost:4100"
    */
-  // const WHITELIST = ['http://localhost:4100'];
+  let WHITELISTED_DOMAINS: string[] = [];
+  const DOMAINS = configService.get<string>('WHITELISTED_DOMAINS');
+  if (DOMAINS) {
+    WHITELISTED_DOMAINS = DOMAINS.split(',')
+      .map((domain: string) => domain.trim())
+      .filter(Boolean);
+    // logger.log({ WHITELISTED_DOMAINS });
+  } else {
+    logger.warn('WHITELISTED_DOMAINS are not available!');
+  }
 
-  // const corsOptions: CorsOptions = {
-  //   origin: (origin: string | undefined, callback: (err: CallbackError, allow?: boolean) => void) => {
-  //     if (!origin || WHITELIST.includes(origin)) {
-  //       // Allow if in whitelist or same-origin
-  //       callback(null, true);
-  //     } else {
-  //       // Block
-  //       callback(new Error('Not allowed by CORS'));
-  //     }
-  //   },
-  //   methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
-  //   preflightContinue: false,
-  //   optionsSuccessStatus: 204,
-  // };
+  const corsOptions: CorsOptions = {
+    origin: WHITELISTED_DOMAINS,
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
+    preflightContinue: false,
+    optionsSuccessStatus: 204,
+  };
 
-  app.enableCors({});
+  app.enableCors(corsOptions);
 
   /**
    * -------------------------------------------------------
@@ -95,13 +98,9 @@ async function bootstrap() {
    */
 
   app.setGlobalPrefix('api/v2');
-
-  const configService = app.get(ConfigService);
   const port = configService.get<number>('PORT') || 3000;
-
   await app.listen(port);
-
-  console.log(`🚀 Server running on http://localhost:${port}/api/v2/`);
+  logger.log(`🚀 Server running on http://localhost:${port}/api/v2/`);
 }
 
 bootstrap();
