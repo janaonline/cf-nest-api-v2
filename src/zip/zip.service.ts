@@ -4,8 +4,8 @@ import archiver from 'archiver';
 import { PassThrough, Readable } from 'stream';
 import * as path from 'path';
 import { Upload } from '@aws-sdk/lib-storage';
-import { S3Service } from '../s3/s3.service';
 import { FileItem, ULBData, ZipJobResult } from './zip.types';
+import { S3Service } from 'src/core/s3/s3.service';
 
 @Injectable()
 export class ZipBuildService {

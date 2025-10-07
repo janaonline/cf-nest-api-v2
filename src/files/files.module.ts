@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { FilesController } from './files.controller';
 import { FilesService } from './files.service';
 import { AwsS3Service } from 'src/services/aws-s3.service';
-import { S3ZipService } from './s3-zip.service';
+import { S3ZipService } from '../resources-section/s3-zip.service';
 import { S3Client } from '@aws-sdk/client-s3';
 import { ZipService } from './zip.service';
 

@@ -2,11 +2,11 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
 import { ZipBuildService } from './zip.service';
-import { S3Service } from '../s3/s3.service';
 import { MailerService } from './mailer.service';
 import { ZipJobRequest, ZipJobResult } from './zip.types';
 import * as crypto from 'crypto';
 import * as path from 'path';
+import { S3Service } from 'src/core/s3/s3.service';
 
 @Processor('zip', { concurrency: 2 }) // run up to 2 jobs in parallel
 export class ZipJobsProcessor extends WorkerHost {

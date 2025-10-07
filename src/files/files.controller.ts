@@ -1,6 +1,6 @@
 import { Controller, Get, Query, Res } from '@nestjs/common';
 import { FilesService } from './files.service';
-import { S3ZipService } from './s3-zip.service';
+import { S3ZipService } from '../resources-section/s3-zip.service';
 import { ZipService } from './zip.service';
 import { responseJsonUlb } from 'src/resources-section/responseJsonUlb';
 import { response } from 'src/resources-section/responseJson';

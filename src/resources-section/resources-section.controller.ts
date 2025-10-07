@@ -1,7 +1,7 @@
 import { Controller, Get, Query, Res } from '@nestjs/common';
 import { QueryResourcesSectionDto } from './dto/query-resources-section.dto';
 import { ResourcesSectionService } from './resources-section.service';
-import { S3ZipService } from '../files/s3-zip.service';
+import { S3ZipService } from './s3-zip.service';
 import { responseJsonUlb } from './responseJsonUlb';
 import { response } from './responseJson';
 import { JobsOptions, Queue } from 'bullmq';

@@ -4,11 +4,11 @@ import { BullModule } from '@nestjs/bullmq';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ZipController } from './zip.controller';
 import { ZipJobsProcessor } from './zip-jobs.processor';
-import { S3Service } from '../s3/s3.service';
 import { ZipBuildService } from './zip.service';
 import { MailerService } from './mailer.service';
 import { EmailModule } from 'src/core/email/email.module';
 import { SESMailService } from 'src/core/aws-ses/ses.service';
+import { S3Service } from 'src/core/s3/s3.service';
 
 @Module({
   imports: [
