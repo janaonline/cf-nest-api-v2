@@ -70,17 +70,23 @@ export class EmailController {
   @ApiResponse({ status: 429, description: 'Rate limit exceeded' })
   @ApiBody({ type: SendOtpDto })
   async sendOtp(@Body() body: SendOtpDto) {
-    const { email } = body;
-    // if (!email) throw new BadRequestException('Email is required');
-    await this.rateLimit.checkLimit(`otp:${email}:limit`);
+    try {
+      const { email } = body;
 
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    await this.redis.set(`otp:${email}`, otp, 300); // 5 min TTL
-    const html = `<p>Your OTP is <b>${otp}</b>. It is valid for 5 minutes.</p>`;
-    await this.mailQueue.addEmailJob({ to: email, subject: 'CityFinance - Your OTP Code', html });
-    this.logger.log(`Sent OTP ${otp} to ${email}`);
+      // 🔒 Rate limit sending attempts
+      await this.rateLimit.checkLimit(`otp:${email}:send`);
 
-    return { message: 'OTP sent successfully' };
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      await this.redis.set(`otp:${email}`, otp, 300); // 5 min TTL
+      const html = `<p>Your OTP is <b>${otp}</b>. It is valid for 5 minutes.</p>`;
+      // await this.mailQueue.addEmailJob({ to: email, subject: 'CityFinance - Your OTP Code', html });
+      this.logger.log(`Sent OTP ${otp} to ${email}`);
+
+      return { message: 'OTP sent successfully' };
+    } catch (error) {
+      this.logger.error(error);
+      throw error;
+    }
   }
 
   @Post('verifyOtp')
@@ -90,6 +96,9 @@ export class EmailController {
   @ApiBody({ type: VerifyOtpDto })
   async verifyOtp(@Body() body: VerifyOtpDto) {
     const { email, otp } = body;
+
+    // 🔒 Rate limit verification attempts
+    await this.rateLimit.checkLimit(`otp:${email}:verify`);
 
     const stored = await this.redis.get(`otp:${email}`);
     if (!stored) throw new BadRequestException('OTP expired');
