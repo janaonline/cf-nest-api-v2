@@ -1,9 +1,9 @@
-import { Body, Controller, Get, HttpStatus, Logger, LoggerService, Post, Query, Res } from '@nestjs/common';
+import { Body, Controller, Get, HttpStatus, Logger, Post, Query, Res } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import express from 'express';
 import { getHtmlFromTemplate, htmlUnsubscribeTemplate } from './constant';
 import { EmailService } from './email.service';
 import { UnsubscribePayload } from './interface';
-import { ConfigService } from '@nestjs/config';
 
 @Controller('email')
 export class EmailController {
@@ -23,6 +23,7 @@ export class EmailController {
     // return res.status(HttpStatus.OK).send(htmlTemplate);
     res.render('unsubscribe/unsubscribe', { token, baseUrl: this.configService.get('BASE_URL') as string });
   }
+
   @Get('unsubscribe/view')
   unsubscribeView(@Query('token') token: string, @Res() res: express.Response) {
     if (!token) return res.status(HttpStatus.BAD_REQUEST).send(getHtmlFromTemplate('Missing token.'));
@@ -52,5 +53,12 @@ export class EmailController {
     const payload: UnsubscribePayload = { email, desc };
     const token = this.emailService.generateToken(payload);
     return res.status(HttpStatus.OK).send({ success: true, message: token });
+  }
+
+  @Get('verify')
+  async verifyEmail(@Query('email') email: string, @Query('otp') otp: number, @Res() res: express.Response) {
+    const validatedObj = await this.emailService.verifyEmail(email, otp);
+    const statusCode = validatedObj.success ? HttpStatus.OK : HttpStatus.BAD_REQUEST;
+    return res.status(statusCode).send(validatedObj);
   }
 }
