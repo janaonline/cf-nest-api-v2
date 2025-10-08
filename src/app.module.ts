@@ -6,8 +6,8 @@ import { AppService } from './app.service';
 import { EmailModule } from './core/email/email.module';
 import { NodeMailerModule } from './core/node-mailer/node-mailer.module';
 import { LoggerMiddleware } from './middleware/logger-middleware';
-import { ResourcesSectionModule } from './resources-section/resources-section.module';
 import { UsersModule } from './users/users.module';
+import { ResourcesSectionModule } from './web/resources-section/resources-section.module';
 
 @Module({
   imports: [

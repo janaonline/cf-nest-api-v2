@@ -43,7 +43,7 @@ export class ZipJobsProcessor extends WorkerHost {
     // Optional email
     if (email) {
       // console.log('Sending email');
-      await this.mailer.sendDownloadLink({
+      const mailData = {
         to: email,
         subject: title || 'Your ZIP is ready',
         link: url,
@@ -53,7 +53,8 @@ export class ZipJobsProcessor extends WorkerHost {
           total: result.totalFiles,
           skipped: result.skippedFiles,
         },
-      });
+      };
+      await this.mailer.sendDownloadLink(mailData);
     }
 
     await job.updateProgress(100);

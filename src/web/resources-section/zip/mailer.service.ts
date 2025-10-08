@@ -20,7 +20,7 @@ export class MailerService {
   ) {}
 
   private compileTemplate(templateName: string, data: any): string {
-    const filePath = path.join(__dirname, '..', '..', 'views', 'mail', `${templateName}.hbs`);
+    const filePath = path.join(__dirname, '..', '..', '..', 'views', 'mail', `${templateName}.hbs`);
     // const filePath = join(__dirname, '..', '..', 'views', `${templateName}.hbs`);
     const source = fs.readFileSync(filePath, 'utf-8');
     const template = handlebars.compile(source);
