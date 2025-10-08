@@ -80,6 +80,7 @@ export class SESMailService {
           },
         },
       });
+      this.logger.log(`Sending email to ${params.to}`);
       return this.ses.send(cmd);
     } catch (error) {
       this.logger.error('Error sending email:', error);
