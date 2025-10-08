@@ -5,6 +5,7 @@ import { JobsOptions, Queue } from 'bullmq';
 import type { ZipJobRequest, ZipJobResult } from './zip.types';
 import { responseJsonUlb } from './responseJsonUlb';
 import { MailerService } from './mailer.service';
+import { count } from 'console';
 
 @Controller('zip-jobs')
 export class ZipController {
@@ -14,7 +15,7 @@ export class ZipController {
   ) {}
 
   @Post()
-  async create(@Body() body1: ZipJobRequest) {
+  async create() {
     const body = {} as ZipJobRequest;
     body.email = 'jeevanantham.d@janaagraha.org';
     body.ulbData = responseJsonUlb.data;
@@ -40,7 +41,23 @@ export class ZipController {
   @Get('mail')
   async sendmail() {
     console.log('Sending mail');
-    await this.mailer.sendDataReadyEmail('jeevanantham.d@janaagraha.org', 'Jeeva', 'http://example.com/download.zip');
+    const params = {
+      to: 'jeevanantham.d@janaagraha.org',
+      subject: 'test mail',
+      link: 'http://example.com/download.zip',
+      counts: { total: 10, skipped: 2 },
+      ulbData: responseJsonUlb.data,
+      name: 'Jeeva',
+
+      // link: string;
+      // key: string;
+      // ulbData?: ULBData[];
+      // counts: { total: number; skipped: number };
+    };
+    await this.mailer.sendDownloadLink(
+      params,
+      // 'jeevanantham.d@janaagraha.org', 'Jeeva', 'http://example.com/download.zip'
+    );
     return { message: 'HTML Template Mail sent!' };
   }
 

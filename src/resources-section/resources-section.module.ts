@@ -6,7 +6,7 @@ import { DataCollectionForm, DataCollectionFormSchema } from 'src/schemas/data-c
 import { Ulb, UlbSchema } from 'src/schemas/ulb.schema';
 import { ResourcesSectionController } from './resources-section.controller';
 import { ResourcesSectionService } from './resources-section.service';
-import { ZipModule } from 'src/zip/zip.module';
+import { ZipModule } from './zip/zip.module';
 
 @Module({
   imports: [

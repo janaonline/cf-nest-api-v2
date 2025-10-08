@@ -8,8 +8,6 @@ import { NodeMailerModule } from './core/node-mailer/node-mailer.module';
 import { LoggerMiddleware } from './middleware/logger-middleware';
 import { ResourcesSectionModule } from './resources-section/resources-section.module';
 import { UsersModule } from './users/users.module';
-import { ZipModule } from './zip/zip.module';
-import { S3Module } from './core/s3/s3.module';
 
 @Module({
   imports: [
@@ -25,8 +23,6 @@ import { S3Module } from './core/s3/s3.module';
       }),
     }),
     UsersModule,
-    S3Module,
-    ZipModule,
     ResourcesSectionModule,
     NodeMailerModule,
     EmailModule,

@@ -1,4 +1,3 @@
-// zip-jobs.processor.ts
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
 import { ZipBuildService } from './zip.service';

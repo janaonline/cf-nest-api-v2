@@ -3,10 +3,9 @@ import { QueryResourcesSectionDto } from './dto/query-resources-section.dto';
 import { ResourcesSectionService } from './resources-section.service';
 import { S3ZipService } from './s3-zip.service';
 import { responseJsonUlb } from './responseJsonUlb';
-import { response } from './responseJson';
 import { JobsOptions, Queue } from 'bullmq';
 import { InjectQueue } from '@nestjs/bullmq';
-import { ZipJobRequest } from 'src/zip/zip.types';
+import { ZipJobRequest } from './zip/zip.types';
 
 @Controller('resources-section')
 export class ResourcesSectionController {
@@ -30,7 +29,7 @@ export class ResourcesSectionController {
     const body = {} as ZipJobRequest;
     body.email = query.email;
     body.ulbData = response.data;
-    console.log('body', body);
+    // console.log('body', body);
     // Add job to queue
     const opts: JobsOptions = {
       removeOnComplete: { age: 86400, count: 2000 },
@@ -75,8 +74,8 @@ export class ResourcesSectionController {
   @Get('sizes')
   async getSizes() {
     const keys: string[] = [];
-    const resp = response;
-    // const resp = responseJsonUlb;
+    // const resp = response;
+    const resp = responseJsonUlb;
     resp.data.forEach((element) => {
       element.files.forEach((file) => {
         keys.push(decodeURIComponent(file.url));
