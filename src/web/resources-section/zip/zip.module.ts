@@ -12,21 +12,21 @@ import { S3Service } from 'src/core/s3/s3.service';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
-    BullModule.forRootAsync({
-      useFactory: (cfg: ConfigService) => {
-        const redisUrl = cfg.get<string>('REDIS_URL');
-        if (!redisUrl) {
-          throw new Error('REDIS_URL is not defined in configuration');
-        }
-        // Parse REDIS_URL to ConnectionOptions if needed, or use as host string
-        // Example for simple host:port
-        return {
-          connection: { url: redisUrl },
-          // optional: shared bullmq options here
-        };
-      },
-      inject: [ConfigService],
-    }),
+    // BullModule.forRootAsync({
+    //   useFactory: (cfg: ConfigService) => {
+    //     const redisUrl = cfg.get<string>('REDIS_URL');
+    //     if (!redisUrl) {
+    //       throw new Error('REDIS_URL is not defined in configuration');
+    //     }
+    //     // Parse REDIS_URL to ConnectionOptions if needed, or use as host string
+    //     // Example for simple host:port
+    //     return {
+    //       connection: { url: redisUrl },
+    //       // optional: shared bullmq options here
+    //     };
+    //   },
+    //   inject: [ConfigService],
+    // }),
     BullModule.registerQueue({
       name: 'zip',
       defaultJobOptions: {

@@ -3,6 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import * as fs from 'fs';
 import * as handlebars from 'handlebars';
 import * as path from 'path';
+import { EmailJob } from './email-job.type';
 
 @Injectable()
 export class SESMailService {
@@ -30,41 +31,39 @@ export class SESMailService {
   //   }
 
   //   async sendEmail(to: string, name: string, link: string) {
-  async sendEmail(params: { from?: string; to: string; html: string; text?: string; subject: string }) {
-    const cmd = new SendEmailCommand({
-      FromEmailAddress: params.from || 'updates@cityfinance.in',
-      Destination: { ToAddresses: [params.to] },
-      Content: {
-        Simple: {
-          Subject: { Data: params.subject },
-          Body: {
-            Html: { Data: params.html },
-            // Text: { Data: texts || 'Your City Finance Data is Ready' },
+  async sendEmail(params: EmailJob) {
+    try {
+      const cmd = new SendEmailCommand({
+        FromEmailAddress: params.from || 'updates@cityfinance.in',
+        Destination: { ToAddresses: [params.to] },
+        Content: {
+          Simple: {
+            Subject: { Data: params.subject },
+            Body: {
+              Html: { Data: params.html },
+              // Text: { Data: texts || 'Your City Finance Data is Ready' },
+            },
           },
         },
-      },
-    });
+      });
 
-    // const cmd = new SendEmailCommand({
-    //   Destination: { ToAddresses: [params.to] },
-    //   FromEmailAddress: params.from,
-    //   Message: {
-    //     Subject: { Data: params.subject },
-    //     Body: { Html: { Data: params.htmlBody } },
-    //   },
-    // });
-
-    return this.ses.send(cmd);
+      // const cmd = new SendEmailCommand({
+      //   Destination: { ToAddresses: [params.to] },
+      //   FromEmailAddress: params.from,
+      //   Message: {
+      //     Subject: { Data: params.subject },
+      //     Body: { Html: { Data: params.htmlBody } },
+      //   },
+      // });
+      this.logger.log(`Sending email to ${params.to}`);
+      return this.ses.send(cmd);
+    } catch (error) {
+      this.logger.error('Error sending email:', error);
+      throw error;
+    }
   }
 
-  async sendEmailTemplate(params: {
-    from?: string;
-    to: string;
-    mailData: any;
-    templateName: string;
-    text?: string;
-    subject: string;
-  }) {
+  async sendEmailTemplate(params: EmailJob) {
     try {
       const htmlTemplate = this.compileTemplate('resource-zip-ready', params.mailData);
       const cmd = new SendEmailCommand({

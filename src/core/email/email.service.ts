@@ -5,6 +5,8 @@ import { sign, verify } from 'jsonwebtoken';
 import { Model } from 'mongoose';
 import { EmailList } from 'src/schemas/email-list';
 import { EmailResInterface, UnsubscribePayload } from './interface';
+import { Queue } from 'bullmq';
+import { InjectQueue } from '@nestjs/bullmq';
 
 @Injectable()
 export class EmailService {
@@ -14,7 +16,7 @@ export class EmailService {
   constructor(
     @InjectModel(EmailList.name)
     private readonly emailListModel: Model<EmailList>,
-
+    // @InjectQueue('emailQueue') private readonly queue: Queue,
     private readonly configService: ConfigService,
   ) {
     this.secret = this.configService.get<string>('JWT_TOKEN');
