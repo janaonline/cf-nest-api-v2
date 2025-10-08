@@ -1,11 +1,12 @@
 import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import * as fs from 'fs';
 import * as handlebars from 'handlebars';
 import * as path from 'path';
 
 @Injectable()
 export class SESMailService {
+  logger = new Logger(SESMailService.name);
   private ses = new SESv2Client({
     region: 'ap-south-1',
     credentials: {
@@ -19,6 +20,14 @@ export class SESMailService {
     const source = fs.readFileSync(filePath, 'utf-8');
     return handlebars.compile(source)(data);
   }
+
+  // private compileTemplate(templateName: string, data: any): string {
+  //     const filePath = path.join(__dirname, '..', '..', '..', 'views', 'mail', `${templateName}.hbs`);
+  //     // const filePath = join(__dirname, '..', '..', 'views', `${templateName}.hbs`);
+  //     const source = fs.readFileSync(filePath, 'utf-8');
+  //     const template = handlebars.compile(source);
+  //     return template(data);
+  //   }
 
   //   async sendEmail(to: string, name: string, link: string) {
   async sendEmail(params: { from?: string; to: string; html: string; text?: string; subject: string }) {
@@ -46,5 +55,35 @@ export class SESMailService {
     // });
 
     return this.ses.send(cmd);
+  }
+
+  async sendEmailTemplate(params: {
+    from?: string;
+    to: string;
+    mailData: any;
+    templateName: string;
+    text?: string;
+    subject: string;
+  }) {
+    try {
+      const htmlTemplate = this.compileTemplate('resource-zip-ready', params.mailData);
+      const cmd = new SendEmailCommand({
+        FromEmailAddress: params.from || 'updates@cityfinance.in',
+        Destination: { ToAddresses: [params.to] },
+        Content: {
+          Simple: {
+            Subject: { Data: params.subject },
+            Body: {
+              Html: { Data: htmlTemplate },
+              // Text: { Data: texts || 'Your City Finance Data is Ready' },
+            },
+          },
+        },
+      });
+      return this.ses.send(cmd);
+    } catch (error) {
+      this.logger.error('Error sending email:', error);
+      throw error;
+    }
   }
 }

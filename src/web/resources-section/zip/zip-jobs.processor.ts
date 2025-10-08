@@ -1,18 +1,15 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
-import { ZipBuildService } from './zip.service';
-import { MailerService } from './mailer.service';
-import { ZipJobRequest, ZipJobResult } from './zip.types';
-import * as crypto from 'crypto';
 import * as path from 'path';
 import { S3Service } from 'src/core/s3/s3.service';
+import { ZipBuildService } from './zip-build.service';
+import { ZipJobRequest, ZipJobResult } from './zip.types';
 
 @Processor('zip', { concurrency: 2 }) // run up to 2 jobs in parallel
 export class ZipJobsProcessor extends WorkerHost {
   constructor(
     private readonly zip: ZipBuildService,
     private readonly s3: S3Service,
-    private readonly mailer: MailerService,
   ) {
     super();
   }
@@ -54,7 +51,8 @@ export class ZipJobsProcessor extends WorkerHost {
           skipped: result.skippedFiles,
         },
       };
-      await this.mailer.sendDownloadLink(mailData);
+      // await this.mailer.sendDownloadLink(mailData);
+      await this.zip.sendDownloadLink(mailData);
     }
 
     await job.updateProgress(100);

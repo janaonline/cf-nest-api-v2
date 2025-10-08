@@ -1,17 +1,16 @@
 // zip-jobs.controller.ts
 import { InjectQueue } from '@nestjs/bullmq';
-import { Body, Controller, Get, Param, Post } from '@nestjs/common';
+import { Controller, Get, Param, Post } from '@nestjs/common';
 import { JobsOptions, Queue } from 'bullmq';
-import type { ZipJobRequest, ZipJobResult } from './zip.types';
 import { responseJsonUlb } from './responseJsonUlb';
-import { MailerService } from './mailer.service';
-import { count } from 'console';
+import { ZipBuildService } from './zip-build.service';
+import type { ZipJobRequest, ZipJobResult } from './zip.types';
 
 @Controller('zip-jobs')
 export class ZipController {
   constructor(
     @InjectQueue('zip') private readonly queue: Queue,
-    private readonly mailer: MailerService,
+    private readonly mailer: ZipBuildService,
   ) {}
 
   @Post()

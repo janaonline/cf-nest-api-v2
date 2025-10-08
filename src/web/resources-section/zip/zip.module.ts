@@ -4,8 +4,7 @@ import { BullModule } from '@nestjs/bullmq';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ZipController } from './zip.controller';
 import { ZipJobsProcessor } from './zip-jobs.processor';
-import { ZipBuildService } from './zip.service';
-import { MailerService } from './mailer.service';
+import { ZipBuildService } from './zip-build.service';
 import { EmailModule } from 'src/core/email/email.module';
 import { SESMailService } from 'src/core/aws-ses/ses.service';
 import { S3Service } from 'src/core/s3/s3.service';
@@ -40,6 +39,6 @@ import { S3Service } from 'src/core/s3/s3.service';
   ],
   exports: [BullModule], // Export so other modules can use it
   controllers: [ZipController],
-  providers: [ZipJobsProcessor, S3Service, ZipBuildService, MailerService, SESMailService],
+  providers: [ZipJobsProcessor, S3Service, ZipBuildService, SESMailService],
 })
 export class ZipModule {}

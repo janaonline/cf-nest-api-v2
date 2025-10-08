@@ -1,17 +1,25 @@
 // zip-build.service.ts
-import { Injectable, Logger } from '@nestjs/common';
-import archiver from 'archiver';
-import { PassThrough, Readable } from 'stream';
-import * as path from 'path';
 import { Upload } from '@aws-sdk/lib-storage';
-import { FileItem, ULBData, ZipJobResult } from './zip.types';
+import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import archiver from 'archiver';
+import * as path from 'path';
+import { SESMailService } from 'src/core/aws-ses/ses.service';
+import { EmailService } from 'src/core/email/email.service';
 import { S3Service } from 'src/core/s3/s3.service';
+import { PassThrough, Readable } from 'stream';
+import { ULBData, ZipJobResult } from './zip.types';
 
 @Injectable()
 export class ZipBuildService {
   private readonly logger = new Logger(ZipBuildService.name);
 
-  constructor(private readonly s3svc: S3Service) {}
+  constructor(
+    private readonly s3svc: S3Service,
+    private readonly cfg: ConfigService,
+    private emailService: EmailService,
+    private sesV2: SESMailService,
+  ) {}
 
   /**
    * Streams all files into a ZIP and uploads to S3 via multipart streaming.
@@ -23,7 +31,7 @@ export class ZipBuildService {
       const { ulbData, outputKey } = params;
 
       const archive = archiver('zip', {
-        zlib: { level: 0 },
+        zlib: { level: 0 }, // compression level 0-9 (0 = no compression, 9 = max compression)
         forceZip64: true, // important for big zips / many entries
       });
 
@@ -116,11 +124,67 @@ export class ZipBuildService {
     return decodeURIComponent(cleanedPath);
   }
 
-  getExtFromUrl(u: string): string {
-    const q = u.indexOf('?');
-    if (q !== -1) u = u.slice(0, q);
-    const h = u.indexOf('#');
-    if (h !== -1) u = u.slice(0, h);
-    return path.posix.extname(u) || '';
+  async sendDownloadLink(params: {
+    name?: string;
+    to: string;
+    subject: string;
+    link: string;
+    key?: string;
+    ulbData?: ULBData[];
+    counts?: { total: number; skipped: number };
+  }) {
+    try {
+      const name = params.name || params.to.split('@')[0];
+      const token = this.emailService.generateToken({ email: params.to, desc: params.subject });
+      const unsubscribeUrl = encodeURIComponent(`${this.cfg.get<string>('BASE_URL')}email/unsubscribe?token=${token}`);
+      const ulbData = params.ulbData || [];
+      if (ulbData.length === 0) {
+        this.logger.warn('No ULB data provided for email');
+        return;
+      }
+      // const htmlBody = this.compileTemplate('resource-zip-ready', {
+      //   name,
+      //   download_link: params.link,
+      //   unsubscribeUrl,
+      //   state: ulbData[0]?.stateName || 'State',
+      //   year: ulbData[0]?.year || 'Year',
+      //   ulbs: ulbData?.map((u) => u.ulbName).join(', ') || '',
+      // });
+
+      // console.log('Sending email to', params.to, 'from', this.from);
+      //   const html1 = `
+      //   <p>Your ZIP is ready.</p>
+      //   <p><a href="${params.link}">Click to download</a> (expires soon)</p>
+      //   <p>Key: ${params.key}<br/>Files: ${params.counts.total} (skipped: ${params.counts.skipped})</p>
+      // `;
+      // const result = await this.ses.send(
+      //   new SendEmailCommand({
+      //     Destination: { ToAddresses: [params.to] },
+      //     Source: this.from,
+      //     Message: {
+      //       Subject: { Data: params.subject },
+      //       Body: { Html: { Data: htmlBody } },
+      //     },
+      //   }),
+      // );
+      const mailData = {
+        name,
+        download_link: params.link,
+        unsubscribeUrl,
+        state: ulbData[0]?.stateName || 'State',
+        year: ulbData[0]?.year || 'Year',
+        ulbs: ulbData?.map((u) => u.ulbName).join(', ') || '',
+      };
+      await this.sesV2.sendEmailTemplate({
+        templateName: 'resource-zip-ready',
+        mailData,
+        to: params.to,
+        subject: 'Your City Finance Data is Ready to Download',
+      });
+      this.logger.log(`Email sent to ${params.to}`);
+      // console.log('Email sent', result);
+    } catch (error) {
+      this.logger.error('Error sending email', error);
+    }
   }
 }
