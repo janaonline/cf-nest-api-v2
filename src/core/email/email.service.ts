@@ -3,8 +3,8 @@ import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { sign, verify } from 'jsonwebtoken';
 import { Model } from 'mongoose';
-import { UnsubscribedUser } from 'src/schemas/unsubscribed-users';
-import { UnsubscribePayload } from './interface';
+import { EmailList } from 'src/schemas/email-list';
+import { EmailResInterface, UnsubscribePayload } from './interface';
 
 @Injectable()
 export class EmailService {
@@ -12,8 +12,8 @@ export class EmailService {
   private secret: string | undefined;
 
   constructor(
-    @InjectModel(UnsubscribedUser.name)
-    private readonly unsubscribeduserModel: Model<UnsubscribedUser>,
+    @InjectModel(EmailList.name)
+    private readonly emailListModel: Model<EmailList>,
 
     private readonly configService: ConfigService,
   ) {
@@ -24,15 +24,33 @@ export class EmailService {
   async handleUnsubscribe(token: string): Promise<{ success: boolean; email?: string; error?: string }> {
     const decoded: UnsubscribePayload | null = this.verifyToken(token);
     if (!decoded) return { success: false, error: 'Invalid or expired token.' };
-    const { email, desc } = decoded;
+    const { email } = decoded;
     try {
       // Add unsubscribed user to DB.
       const payload = {
         email,
-        source: desc,
+        // source: desc,
         unsubscribedAt: new Date(),
+        isUnsubscribed: true,
       };
-      await this.unsubscribeduserModel.insertOne(payload);
+
+      const dbRes = await this.emailListModel.findOneAndUpdate(
+        { email },
+        {
+          $set: { ...payload },
+          $setOnInsert: {
+            isVerified: false,
+            verifiedAt: null,
+            attempt: 1,
+          },
+        },
+        {
+          upsert: true,
+          new: true,
+          setDefaultsOnInsert: true,
+        },
+      );
+      this.logger.log({ dbRes });
 
       // TODO: Unsubscribe in ses Contact list.
       // await this.unsubscribeInSesContactList(email);
@@ -72,9 +90,42 @@ export class EmailService {
     try {
       if (!this.secret) throw new Error('JWT_TOKEN is not defined in environment variables');
       return verify(token, this.secret) as UnsubscribePayload;
-    } catch (err) {
-      console.error('Failed to verify unsubscribe token:', err);
+    } catch (error) {
+      this.logger.error('Failed to verify unsubscribe token:', error);
       return null;
+    }
+  }
+
+  /**
+   * If otp matches then mark isVerified to true.
+   */
+  async verifyEmail(email: string, otp: number): Promise<Partial<EmailResInterface>> {
+    if (!email || !otp) return { success: false, message: 'Email or otp is missing!' };
+
+    try {
+      // TODO: check valid otp.
+      if (otp !== 1234) return { success: false, message: 'Incorrect OTP!' };
+
+      let user: EmailList | null = await this.emailListModel.findOne({ email }).lean();
+      const insertObj = { isVerified: true, verifiedAt: new Date() };
+
+      if (!user) {
+        return {
+          success: false,
+          message: 'Email not found!',
+        };
+      }
+
+      user = await this.emailListModel.findOneAndUpdate({ email }, { $set: insertObj }, { new: true });
+      return {
+        success: true,
+        message: 'Email verified!',
+        isVerified: user?.isVerified,
+        isUnsubscribed: user?.isUnsubscribed,
+      };
+    } catch (error) {
+      this.logger.error('Failed to validate email', error);
+      return { success: false, message: 'Error validating email.' };
     }
   }
 }
