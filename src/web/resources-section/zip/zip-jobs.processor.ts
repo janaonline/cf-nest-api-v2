@@ -42,7 +42,7 @@ export class ZipJobsProcessor extends WorkerHost {
       // console.log('Sending email');
       const mailData = {
         to: email,
-        subject: title || 'Your ZIP is ready',
+        subject: 'Your City Finance Data is Ready to Download',
         link: url,
         ulbData,
         key: result.zipKey,

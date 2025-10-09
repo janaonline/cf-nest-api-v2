@@ -9,18 +9,20 @@ import { LoggerMiddleware } from './middleware/logger-middleware';
 import { UsersModule } from './users/users.module';
 import { ResourcesSectionModule } from './web/resources-section/resources-section.module';
 import { BullModule } from '@nestjs/bullmq';
-import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { seconds, ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
+import { AuthModule } from './module/auth/auth.module';
 
 @Module({
   imports: [
     ThrottlerModule.forRoot([
       {
-        ttl: 60, // time window in seconds
-        limit: 10, // max requests per window
+        ttl: seconds(60), // time window in seconds
+        limit: 60, // max requests per window
       },
     ]),
     ConfigModule.forRoot({ isGlobal: true }),
+    AuthModule,
     BullModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (cfg: ConfigService) => {
