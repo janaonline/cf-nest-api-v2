@@ -9,7 +9,7 @@ import { EmailJob } from './email-job.type';
 export class SESMailService {
   logger = new Logger(SESMailService.name);
   private ses = new SESv2Client({
-    region: 'ap-south-1',
+    region: process.env.AWS_REGION,
     credentials: {
       accessKeyId: process.env.SES_AWS_ACCESS_KEY_ID!,
       secretAccessKey: process.env.SES_AWS_SECRET_ACCESS_KEY!,

@@ -8,7 +8,7 @@ import { SendEmailCommand, SESv2Client } from '@aws-sdk/client-sesv2';
 import { SendRawEmailCommand } from '@aws-sdk/client-ses';
 
 const sesV2 = new SESv2Client({
-  region: 'ap-south-1',
+  region: process.env.AWS_REGION,
   credentials: {
     accessKeyId: process.env.SES_AWS_ACCESS_KEY_ID!,
     secretAccessKey: process.env.SES_AWS_SECRET_ACCESS_KEY!,
@@ -39,26 +39,26 @@ const sesv2Adapter = {
 @Module({
   imports: [
     MailerModule.forRoot({
-      transport: { SES: sesv2Adapter as any },
-      // transport: {
-      //   SES: { ses },
+      // transport: { SES: sesv2Adapter as any },
+      transport: {
+        // SES: { ses },
 
-      //   // SES: {
-      //   //   ses: new SESv2Client({
-      //   //     region: 'ap-south-1',
-      //   //     credentials: {
-      //   //       accessKeyId: process.env.SES_AWS_ACCESS_KEY_ID!,
-      //   //       secretAccessKey: process.env.SES_AWS_SECRET_ACCESS_KEY!,
-      //   //     },
-      //   //   }),
-      //   // },
-      //   // host: process.env.MAIL_HOST, // smtp.mailtrap.io
-      //   // port: Number(process.env.MAIL_PORT), // 2525
-      //   // auth: {
-      //   //   user: process.env.MAIL_USER,
-      //   //   pass: process.env.MAIL_PASS,
-      //   // },
-      // },
+        // SES: {
+        //   ses: new SESv2Client({
+        //     region: 'ap-south-1',
+        //     credentials: {
+        //       accessKeyId: process.env.SES_AWS_ACCESS_KEY_ID!,
+        //       secretAccessKey: process.env.SES_AWS_SECRET_ACCESS_KEY!,
+        //     },
+        //   }),
+        // },
+        host: process.env.MAIL_HOST, // smtp.mailtrap.io
+        port: Number(process.env.MAIL_PORT), // 2525
+        auth: {
+          user: process.env.MAIL_USER,
+          pass: process.env.MAIL_PASS,
+        },
+      },
       defaults: {
         // from: '"NestJS App" <no-reply@example.com>
         from: '"City Finance" <updates@cityfinance.in>',
