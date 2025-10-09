@@ -1,14 +1,14 @@
-import { BadRequestException, Body, Controller, Get, HttpStatus, Logger, Post, Query, Res } from '@nestjs/common';
+import { Body, Controller, Get, HttpStatus, Logger, Post, Query, Res } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { ApiBody, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import express from 'express';
+import { EmailQueueService } from '../queue/email-queue/email-queue.service';
 import { RateLimitService } from '../services/rate-limit/rate-limit.service';
 import { RedisService } from '../services/redis/redis.service';
 import { getHtmlFromTemplate, htmlUnsubscribeTemplate } from './constant';
+import { SendOtpDto, VerifyOtpDto } from './dto/otp.dto';
 import { EmailService } from './email.service';
 import { UnsubscribePayload } from './interface';
-import { EmailQueueService } from '../queue/email-queue/email-queue.service';
-import { SendOtpDto, VerifyOtpDto } from './dto/otp.dto';
-import { ApiBody, ApiOperation, ApiResponse } from '@nestjs/swagger';
 
 @Controller('email')
 export class EmailController {
@@ -70,23 +70,7 @@ export class EmailController {
   @ApiResponse({ status: 429, description: 'Rate limit exceeded' })
   @ApiBody({ type: SendOtpDto })
   async sendOtp(@Body() body: SendOtpDto) {
-    try {
-      const { email } = body;
-
-      // 🔒 Rate limit sending attempts
-      await this.rateLimit.checkLimit(`otp:${email}:send`);
-
-      const otp = Math.floor(100000 + Math.random() * 900000).toString();
-      await this.redis.set(`otp:${email}`, otp, 300); // 5 min TTL
-      const html = `<p>Your OTP is <b>${otp}</b>. It is valid for 5 minutes.</p>`;
-      // await this.mailQueue.addEmailJob({ to: email, subject: 'CityFinance - Your OTP Code', html });
-      this.logger.log(`Sent OTP ${otp} to ${email}`);
-
-      return { message: 'OTP sent successfully' };
-    } catch (error) {
-      this.logger.error(error);
-      throw error;
-    }
+    return await this.emailService.sendOtp(body);
   }
 
   @Post('verifyOtp')
@@ -95,18 +79,9 @@ export class EmailController {
   @ApiResponse({ status: 400, description: 'Invalid or expired OTP' })
   @ApiBody({ type: VerifyOtpDto })
   async verifyOtp(@Body() body: VerifyOtpDto) {
-    const { email, otp } = body;
-
-    // 🔒 Rate limit verification attempts
-    await this.rateLimit.checkLimit(`otp:${email}:verify`);
-
-    const stored = await this.redis.get(`otp:${email}`);
-    if (!stored) throw new BadRequestException('OTP expired');
-    if (stored !== otp) throw new BadRequestException('Invalid OTP');
-
-    await this.redis.del(`otp:${email}`);
-    return { message: 'OTP verified successfully' };
+    return await this.emailService.verifyOtp(body);
   }
+
   // @Post('verify')
   // async verifyOtp(@Body() body: { email: string; otp: string }) {
   //   const { email, otp } = body;
