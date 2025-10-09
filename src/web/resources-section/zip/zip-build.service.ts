@@ -1,0 +1,190 @@
+// zip-build.service.ts
+import { Upload } from '@aws-sdk/lib-storage';
+import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import archiver from 'archiver';
+import * as path from 'path';
+import { SESMailService } from 'src/core/aws-ses/ses.service';
+import { EmailService } from 'src/core/email/email.service';
+import { S3Service } from 'src/core/s3/s3.service';
+import { PassThrough, Readable } from 'stream';
+import { ULBData, ZipJobResult } from './zip.types';
+
+@Injectable()
+export class ZipBuildService {
+  private readonly logger = new Logger(ZipBuildService.name);
+
+  constructor(
+    private readonly s3svc: S3Service,
+    private readonly cfg: ConfigService,
+    private emailService: EmailService,
+    private sesV2: SESMailService,
+  ) {}
+
+  /**
+   * Streams all files into a ZIP and uploads to S3 via multipart streaming.
+   * No large buffers on the app server.
+   */
+  async buildZipToS3(params: { ulbData: ULBData[]; outputKey: string }): Promise<ZipJobResult> {
+    try {
+      const bucket = this.s3svc.bucket;
+      const { ulbData, outputKey } = params;
+
+      const archive = archiver('zip', {
+        zlib: { level: 0 }, // compression level 0-9 (0 = no compression, 9 = max compression)
+        forceZip64: true, // important for big zips / many entries
+      });
+
+      let totalFiles = 0;
+      let skippedFiles = 0;
+
+      // Wire multipart upload
+      const bodyStream = new PassThrough();
+      const multipart = new Upload({
+        client: this.s3svc.client,
+        params: {
+          Bucket: bucket,
+          Key: outputKey,
+          Body: bodyStream,
+          ContentType: 'application/zip',
+        },
+        queueSize: 4, // parts in parallel
+        partSize: 10 * 1024 * 1024, // 10MB parts
+        leavePartsOnError: false,
+      });
+      // console.log('----step 1--------');
+
+      // ✅ Start the upload NOW so it drains the stream as we write
+      const uploadPromise = multipart.done();
+      // Propagate archiver output → S3 multipart
+      archive.pipe(bodyStream);
+
+      // Archiver logging
+      archive.on('warning', (err) => {
+        this.logger.warn(`archiver warning: ${err.message}`);
+      });
+      archive.on('error', (err) => {
+        throw err;
+      });
+      // console.log('----step 2--------');
+      // Append files sequentially (safe for memory)
+      const stateName = ulbData[0]?.stateName || 'State';
+      const year = ulbData[0]?.year || 'Year';
+      const ulbs: string[] = [];
+      for (const ulb of ulbData) {
+        const ulbFolder = `${stateName}_${year}/${ulb.ulbName.replace(/[/\\?%*:|"<>]/g, '-')}/`;
+        ulbs.push(ulb.ulbName);
+        // console.log('ulbFolder', ulbFolder);
+        archive.append('', { name: `${ulbFolder}/` }); // folder entry
+        // console.log('ulb---', ulb.ulbName);
+        // this.logger.log(`ulb--- ${ulb.ulbName}`);
+        for (const f of ulb.files) {
+          const name = f.name?.trim() || path.basename(f.url) || `file-${++totalFiles}.bin`;
+          f.url = this.cleanUrl(f.url);
+          const ext = path.posix.extname(f.url);
+          try {
+            // (Optional) HEAD to validate existence quickly
+            await this.s3svc.headObject(f.url);
+
+            // 👉 Put file inside the ULB folder
+            const entryName = path.posix.join(ulbFolder, name) + ext;
+
+            const obj = await this.s3svc.getObjectStream(f.url);
+            archive.append(obj as Readable, { name: entryName });
+            totalFiles++;
+          } catch (e) {
+            skippedFiles++;
+            this.logger.warn(`Skipping ${f.url}: ${e}`);
+          }
+          // console.log('file---', totalFiles);
+          this.logger.log(`file--- ${totalFiles}`);
+        }
+      }
+
+      archive.on('finish', () => this.logger.log('archive finish'));
+      archive.on('end', () => this.logger.log('archive end'));
+      archive.on('close', () => this.logger.log('archive close'));
+
+      // console.log('----step 3--------');
+      await archive.finalize(); // flush zip central directory
+      // console.log('----step 4--------');
+      await uploadPromise; // ✅ wait for S3 multipart to complete
+      // await multipart.done(); // complete multipart upload
+      // console.log('----step 5--------');
+      return { bucket, zipKey: outputKey, totalFiles, skippedFiles };
+    } catch (error) {
+      this.logger.error('Error building zip to S3', error);
+      throw error;
+    }
+  }
+
+  cleanUrl(filePath: string): string {
+    // Remove the first slash if it exists
+    const cleanedPath = filePath.startsWith('/') ? filePath.slice(1) : filePath;
+    return decodeURIComponent(cleanedPath);
+  }
+
+  async sendDownloadLink(params: {
+    name?: string;
+    to: string;
+    subject: string;
+    link: string;
+    key?: string;
+    ulbData?: ULBData[];
+    counts?: { total: number; skipped: number };
+  }) {
+    try {
+      const name = params.name || params.to.split('@')[0];
+      const token = this.emailService.generateToken({ email: params.to, desc: params.subject });
+      const unsubscribeUrl = encodeURIComponent(`${this.cfg.get<string>('BASE_URL')}email/unsubscribe?token=${token}`);
+      const ulbData = params.ulbData || [];
+      if (ulbData.length === 0) {
+        this.logger.warn('No ULB data provided for email');
+        return;
+      }
+      // const htmlBody = this.compileTemplate('resource-zip-ready', {
+      //   name,
+      //   download_link: params.link,
+      //   unsubscribeUrl,
+      //   state: ulbData[0]?.stateName || 'State',
+      //   year: ulbData[0]?.year || 'Year',
+      //   ulbs: ulbData?.map((u) => u.ulbName).join(', ') || '',
+      // });
+
+      // console.log('Sending email to', params.to, 'from', this.from);
+      //   const html1 = `
+      //   <p>Your ZIP is ready.</p>
+      //   <p><a href="${params.link}">Click to download</a> (expires soon)</p>
+      //   <p>Key: ${params.key}<br/>Files: ${params.counts.total} (skipped: ${params.counts.skipped})</p>
+      // `;
+      // const result = await this.ses.send(
+      //   new SendEmailCommand({
+      //     Destination: { ToAddresses: [params.to] },
+      //     Source: this.from,
+      //     Message: {
+      //       Subject: { Data: params.subject },
+      //       Body: { Html: { Data: htmlBody } },
+      //     },
+      //   }),
+      // );
+      const mailData = {
+        name,
+        download_link: params.link,
+        unsubscribeUrl,
+        state: ulbData[0]?.stateName || 'State',
+        year: ulbData[0]?.year || 'Year',
+        ulbs: ulbData?.map((u) => u.ulbName).join(', ') || '',
+      };
+      await this.sesV2.sendEmailTemplate({
+        templateName: 'resource-zip-ready',
+        mailData,
+        to: params.to,
+        subject: 'Your City Finance Data is Ready to Download',
+      });
+      this.logger.log(`Email sent to ${params.to}`);
+      // console.log('Email sent', result);
+    } catch (error) {
+      this.logger.error('Error sending email', error);
+    }
+  }
+}

@@ -1,0 +1,27 @@
+name: Deploy - NestJS (development)
+
+on:
+  push:
+    branches: ['development']
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy over SSH with PM2
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SERVER_IP }}
+          username: ${{ secrets.SERVER_USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /var/www/html/development-cicd/cf-nest-api-v2
+            git reset --hard
+            git pull origin development
+            npm install --legacy-peer-deps
+            npm run build
+            pm2 reload ecosystem.config.js --only dev-cf-nest-api-v2 || pm2 start ecosystem.config.js --only dev-cf-nest-api-v2
