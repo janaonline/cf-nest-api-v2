@@ -1,0 +1,34 @@
+NODE_ENV=development
+#NODE_ENV=production
+
+PORT=3000
+
+BASE_URL=https://dev.cityfinance.in/api/v2/
+
+# MongoDB connection
+MONGO_URI=mongodb://localhost:27017/perfect_dev-25-06-03
+
+# AWS S3
+AWS_REGION="ap-south-1"
+
+AWS_ACCESS_KEY_ID=""
+AWS_SECRET_ACCESS_KEY=""
+AWS_BUCKET_NAME="jana-cityfinance-live"
+
+# Mail (using AWS SES)
+SES_AWS_ACCESS_KEY_ID=""
+SES_AWS_SECRET_ACCESS_KEY=""
+
+# If using SES API instead:
+MAIL_FROM="CityFinance <data@cityfinance.in>"
+
+# SMTP CREDENTIALS
+MAIL_HOST=sandbox.smtp.mailtrap.io
+MAIL_PORT=2525
+MAIL_USER=
+MAIL_PASS=
+
+# Redis
+REDIS_URL=redis://localhost:6379
+
+JWT_SECRET=
