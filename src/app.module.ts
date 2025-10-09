@@ -11,6 +11,7 @@ import { ResourcesSectionModule } from './web/resources-section/resources-sectio
 import { BullModule } from '@nestjs/bullmq';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
+import { AuthModule } from './module/auth/auth.module';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { APP_GUARD } from '@nestjs/core';
       },
     ]),
     ConfigModule.forRoot({ isGlobal: true }),
+    AuthModule,
     BullModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (cfg: ConfigService) => {

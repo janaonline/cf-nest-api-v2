@@ -1,26 +1,25 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { JwtService } from '@nestjs/jwt';
 import { InjectModel } from '@nestjs/mongoose';
-import { sign, verify } from 'jsonwebtoken';
 import { Model } from 'mongoose';
 import { EmailList } from 'src/schemas/email-list';
 import { EmailResInterface, UnsubscribePayload } from './interface';
-import { Queue } from 'bullmq';
-import { InjectQueue } from '@nestjs/bullmq';
 
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
-  private secret: string | undefined;
+  private secret: string;
 
   constructor(
     @InjectModel(EmailList.name)
     private readonly emailListModel: Model<EmailList>,
     // @InjectQueue('emailQueue') private readonly queue: Queue,
     private readonly configService: ConfigService,
+    private readonly jwtService: JwtService,
   ) {
-    this.secret = this.configService.get<string>('JWT_TOKEN');
-    if (!this.secret) throw new Error('JWT_TOKEN is not defined in environment variables');
+    this.secret = this.configService.get<string>('JWT_SECRET')!;
+    if (!this.secret) throw new Error('JWT_SECRET is not defined in environment variables');
   }
 
   async handleUnsubscribe(token: string): Promise<{ success: boolean; email?: string; error?: string }> {
@@ -82,16 +81,14 @@ export class EmailService {
   };
 
   generateToken(payload: UnsubscribePayload): string {
-    if (!payload.email) throw new Error('Email is required to generate unsubscribe token');
-    if (!this.secret) throw new Error('JWT_TOKEN is not defined in environment variables');
-
-    return sign(payload, this.secret, { expiresIn: '7d' });
+    // return sign(payload, this.secret, { expiresIn: '7d' });
+    return this.jwtService.sign(payload, { expiresIn: '7d' });
   }
 
   private verifyToken(token: string): UnsubscribePayload | null {
     try {
-      if (!this.secret) throw new Error('JWT_TOKEN is not defined in environment variables');
-      return verify(token, this.secret) as UnsubscribePayload;
+      // return verify(token, this.secret) as UnsubscribePayload;
+      return this.jwtService.verify(token) as UnsubscribePayload;
     } catch (error) {
       this.logger.error('Failed to verify unsubscribe token:', error);
       return null;
