@@ -9,6 +9,7 @@ import { EmailService } from 'src/core/email/email.service';
 import { S3Service } from 'src/core/s3/s3.service';
 import { PassThrough, Readable } from 'stream';
 import { ULBData, ZipJobResult } from './zip.types';
+import { NodeMailerService } from 'src/core/node-mailer/node-mailer.service';
 
 @Injectable()
 export class ZipBuildService {
@@ -18,7 +19,8 @@ export class ZipBuildService {
     private readonly s3svc: S3Service,
     private readonly cfg: ConfigService,
     private emailService: EmailService,
-    private sesV2: SESMailService,
+    // private sesV2: SESMailService,
+    private readonly mailer: NodeMailerService,
   ) {}
 
   /**
@@ -175,12 +177,14 @@ export class ZipBuildService {
         year: ulbData[0]?.year || 'Year',
         ulbs: ulbData?.map((u) => u.ulbName).join(', ') || '',
       };
-      await this.sesV2.sendEmailTemplate({
-        templateName: 'resource-zip-ready',
-        mailData,
-        to: params.to,
-        subject: 'Your City Finance Data is Ready to Download',
-      });
+
+      await this.mailer.sendEmailWithTemplate(params.to, params.subject, 'resource-zip-ready', mailData);
+      // await this.sesV2.sendEmailTemplate({
+      //   templateName: 'resource-zip-ready',
+      //   mailData,
+      //   to: params.to,
+      //   subject: 'Your City Finance Data is Ready to Download',
+      // });
       this.logger.log(`Email sent to ${params.to}`);
       // console.log('Email sent', result);
     } catch (error) {

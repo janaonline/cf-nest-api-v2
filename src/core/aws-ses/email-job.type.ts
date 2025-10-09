@@ -4,6 +4,6 @@ export type EmailJob = {
   html?: string;
   text?: string;
   from?: string;
-  templateName?: string;
+  templateName: string;
   mailData?: Record<string, any>;
 };

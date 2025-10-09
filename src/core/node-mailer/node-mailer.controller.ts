@@ -7,7 +7,7 @@ export class NodeMailerController {
 
   @Get()
   async sendTestMail() {
-    await this.nodeMailerService.sendWelcomeEmail('test@example.com', 'Jeeva');
+    await this.nodeMailerService.sendWelcomeEmail('jeevanantham.d@janaagraha.org', 'Jeeva');
     return { message: 'HTML Template Mail sent!' };
   }
 }

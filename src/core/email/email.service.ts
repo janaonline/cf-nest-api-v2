@@ -158,7 +158,12 @@ export class EmailService {
     // Set OTP to cache.
     await this.redis.set(`otp:${email}`, otp, 300); // 5 min TTL
     const html = `<p>Your OTP is <b>${otp}</b>. It is valid for 5 minutes.</p>`;
-    await this.mailQueue.addEmailJob({ to: email, subject: 'CityFinance - Your OTP Code', html });
+    await this.mailQueue.addEmailJob({
+      to: email,
+      subject: 'CityFinance - Your OTP Code',
+      templateName: 'otp',
+      mailData: { otp },
+    });
 
     this.logger.log(`Sent OTP ${otp} to ${email}`);
     return this.createResponseStructure('OTP sent successfully', true);

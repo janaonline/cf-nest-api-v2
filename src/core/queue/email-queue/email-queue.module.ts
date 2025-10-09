@@ -1,11 +1,11 @@
 import { BullModule } from '@nestjs/bullmq';
 import { Module } from '@nestjs/common';
-import { ConfigModule, ConfigService } from '@nestjs/config';
-import { EmailModule } from 'src/core/email/email.module';
+import { ConfigModule } from '@nestjs/config';
+import { SESMailService } from 'src/core/aws-ses/ses.service';
+import { NodeMailerModule } from 'src/core/node-mailer/node-mailer.module';
+import { EMAIL_QUEUE } from './email-queue.constant';
 import { EmailQueueProcessor } from './email-queue.processor';
 import { EmailQueueService } from './email-queue.service';
-import { SESMailService } from 'src/core/aws-ses/ses.service';
-import { EMAIL_QUEUE } from './email-queue.constant';
 
 // @Module({
 //   exports: [EmailQueueModule],
@@ -24,6 +24,7 @@ import { EMAIL_QUEUE } from './email-queue.constant';
         attempts: 1,
       },
     }),
+    NodeMailerModule,
     // EmailModule,
   ],
   //   exports: [BullModule], // Export so other modules can use it
