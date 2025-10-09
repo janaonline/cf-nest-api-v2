@@ -22,8 +22,8 @@ import { NodeMailerService } from './node-mailer.service';
           },
           tls: {
             minVersion: 'TLSv1.2',
-            ciphers: 'SSLv3',
-            rejectUnauthorized: false, // TODO: 👈 TEMP fix for "self-signed certificate in certificate chain"
+            // ciphers: 'SSLv3',
+            // rejectUnauthorized: false, // TODO: 👈 TEMP fix for "self-signed certificate in certificate chain"
           },
         },
         defaults: {
