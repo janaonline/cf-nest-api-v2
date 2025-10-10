@@ -14,7 +14,7 @@ export class S3Service {
   constructor(cfg: ConfigService) {
     this.region = cfg.get<string>('AWS_REGION', 'ap-south-1');
     this.bucket = cfg.get<string>('AWS_BUCKET_NAME', '');
-    this.presign = Number(cfg.get<string>('PRESIGN_EXPIRES', '3600'));
+    this.presign = Number(cfg.get<string>('PRESIGN_EXPIRES', '2592000')); // 30 days
     this.client = new S3Client({ region: this.region });
   }
 
