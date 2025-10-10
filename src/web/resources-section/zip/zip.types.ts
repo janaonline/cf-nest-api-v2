@@ -16,6 +16,7 @@ export interface ZipJobRequest {
   title?: string; // optional title for email
   ulbData: ULBData[];
   userName: string;
+  downloadType: string;
 }
 
 export interface ZipJobResult {

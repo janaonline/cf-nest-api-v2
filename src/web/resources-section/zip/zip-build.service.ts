@@ -27,10 +27,10 @@ export class ZipBuildService {
    * Streams all files into a ZIP and uploads to S3 via multipart streaming.
    * No large buffers on the app server.
    */
-  async buildZipToS3(params: { ulbData: ULBData[]; outputKey: string }): Promise<ZipJobResult> {
+  async buildZipToS3(params: { ulbData: ULBData[]; outputKey: string; downloadType: string }): Promise<ZipJobResult> {
     try {
       const bucket = this.s3svc.bucket;
-      const { ulbData, outputKey } = params;
+      const { ulbData, outputKey, downloadType } = params;
 
       const archive = archiver('zip', {
         zlib: { level: 0 }, // compression level 0-9 (0 = no compression, 9 = max compression)
@@ -74,7 +74,7 @@ export class ZipBuildService {
       const year = ulbData[0]?.year || 'Year';
       const ulbs: string[] = [];
       for (const ulb of ulbData) {
-        const ulbFolder = `${stateName}_${year}/${ulb.ulbName.replace(/[/\\?%*:|"<>]/g, '-')}/`;
+        const ulbFolder = `${stateName}_${year}_${downloadType}/${ulb.ulbName.replace(/[/\\?%*:|"<>]/g, '-')}/`;
         ulbs.push(ulb.ulbName);
         // console.log('ulbFolder', ulbFolder);
         archive.append('', { name: `${ulbFolder}/` }); // folder entry
@@ -134,6 +134,7 @@ export class ZipBuildService {
     key?: string;
     ulbData?: ULBData[];
     counts?: { total: number; skipped: number };
+    downloadType: string;
   }) {
     try {
       const name = params.name || params.to.split('@')[0];
@@ -144,6 +145,7 @@ export class ZipBuildService {
         this.logger.warn('No ULB data provided for email');
         return;
       }
+      const downloadType = params.downloadType;
       // const htmlBody = this.compileTemplate('resource-zip-ready', {
       //   name,
       //   download_link: params.link,
@@ -176,6 +178,7 @@ export class ZipBuildService {
         state: ulbData[0]?.stateName || 'State',
         year: ulbData[0]?.year || 'Year',
         ulbs: ulbData?.map((u) => u.ulbName).join(', ') || '',
+        downloadType,
       };
 
       await this.mailer.sendEmailWithTemplate(params.to, params.subject, 'resource-zip-ready', mailData);

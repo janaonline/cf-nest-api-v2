@@ -47,7 +47,7 @@ export class ZipController {
       counts: { total: 10, skipped: 2 },
       ulbData: responseJsonUlb.data,
       name: 'Jeeva',
-
+      downloadType: 'test',
       // link: string;
       // key: string;
       // ulbData?: ULBData[];

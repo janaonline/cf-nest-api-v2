@@ -10,6 +10,10 @@ import { getBudgetPipeline, getRawFiles1920OnwardsPipeline, getRawFilesBefore192
 import { QueryResourcesSectionDto } from './dto/query-resources-section.dto';
 import { DataSetsRes, ZipJobRequest } from './zip/zip.types';
 import { EmailList, EmailListDocument } from 'src/schemas/email-list';
+const DOWNLOAD_TYPE = {
+  'Raw Data PDF': 'Audited Financial Statement',
+  'Budget PDF': 'Budget',
+};
 
 @Injectable()
 export class ResourcesSectionService {
@@ -142,13 +146,14 @@ export class ResourcesSectionService {
     }
 
     // this.zipService.buildZipToS3(response);
-
+    const downloadType = DOWNLOAD_TYPE[query.downloadType];
     const body: ZipJobRequest = {
       success: true,
       message: '',
       email: query.email,
       ulbData: response.data,
       userName: query.userName,
+      downloadType,
     };
 
     // Add job to queue
