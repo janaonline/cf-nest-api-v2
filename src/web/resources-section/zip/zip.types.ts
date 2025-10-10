@@ -26,6 +26,28 @@ export interface ZipJobResult {
   sizeBytes?: number; // best-effort; may not be known at runtime
 }
 
+interface File {
+  name: string;
+  url: string;
+}
+
+interface DataSets {
+  _id: string;
+  state: string;
+  ulbId: string;
+  ulbName: string;
+  stateName: string;
+  auditType: string;
+  year: string;
+  files: File[];
+}
+
+export interface DataSetsRes {
+  success: boolean;
+  message: string;
+  data: DataSets[];
+}
+
 // export interface File {
 //   name: string;
 //   url: string;

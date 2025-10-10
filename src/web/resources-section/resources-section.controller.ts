@@ -1,11 +1,11 @@
+import { InjectQueue } from '@nestjs/bullmq';
 import { Controller, Get, Query, Res } from '@nestjs/common';
+import { JobsOptions, Queue } from 'bullmq';
 import { QueryResourcesSectionDto } from './dto/query-resources-section.dto';
 import { ResourcesSectionService } from './resources-section.service';
-import { S3ZipService } from './s3-zip.service';
 import { responseJsonUlb } from './responseJsonUlb';
-import { JobsOptions, Queue } from 'bullmq';
-import { InjectQueue } from '@nestjs/bullmq';
-import { ZipJobRequest } from './zip/zip.types';
+import { S3ZipService } from './s3-zip.service';
+import { DataSetsRes, ZipJobRequest } from './zip/zip.types';
 
 @Controller('resources-section')
 export class ResourcesSectionController {
@@ -22,7 +22,17 @@ export class ResourcesSectionController {
 
   @Get('data-sets/zip')
   async getAnnualAccountsZip(@Query() query: QueryResourcesSectionDto) {
-    const response: any = await this.resourcesSectionService.getFiles(query);
+    const response: DataSetsRes = await this.resourcesSectionService.getFiles(query);
+
+    // console.log({ response });
+
+    if (response && response.data.length === 0) {
+      return {
+        status: false,
+        message:
+          'No data available for the selected filter. Please select different option(s) to proceed with the download.',
+      };
+    }
 
     // this.zipService.buildZipToS3(response);
 
@@ -39,7 +49,7 @@ export class ResourcesSectionController {
 
     const job = await this.queue.add('zip-build', body, opts);
     return {
-      message: 'Job submitted',
+      message: "Success! Your state bundle is being prepared. We'll email you the files in about 30 minutes.",
       jobId: job.id,
       statusUrl: `/zip-jobs/${job.id}`,
       poll: true, // hint to client to poll this endpoint

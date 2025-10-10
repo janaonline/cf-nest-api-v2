@@ -99,7 +99,7 @@ export class ResourcesSectionService {
   private responseStructure(
     success: boolean,
     results: any[],
-    message = `${results.length} document(s) found for selected filters.`,
+    message = `${results.length} ULB(s) found for selected filters.`,
   ) {
     return {
       success,
