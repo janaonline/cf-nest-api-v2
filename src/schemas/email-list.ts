@@ -29,6 +29,7 @@ export class EmailList extends Document {
   attempt?: number;
 }
 
+export type EmailListDocument = EmailList & Document;
 export const EmailListSchema = SchemaFactory.createForClass(EmailList);
 
 EmailListSchema.index({ email: 1 });

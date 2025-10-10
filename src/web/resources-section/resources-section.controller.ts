@@ -1,18 +1,14 @@
-import { InjectQueue } from '@nestjs/bullmq';
 import { Controller, Get, Query, Res } from '@nestjs/common';
-import { JobsOptions, Queue } from 'bullmq';
 import { QueryResourcesSectionDto } from './dto/query-resources-section.dto';
 import { ResourcesSectionService } from './resources-section.service';
 import { responseJsonUlb } from './responseJsonUlb';
 import { S3ZipService } from './s3-zip.service';
-import { DataSetsRes, ZipJobRequest } from './zip/zip.types';
 
 @Controller('resources-section')
 export class ResourcesSectionController {
   constructor(
     private readonly resourcesSectionService: ResourcesSectionService,
     private readonly s3ZipService: S3ZipService,
-    @InjectQueue('zip') private readonly queue: Queue,
   ) {}
 
   @Get('data-sets')
@@ -22,38 +18,7 @@ export class ResourcesSectionController {
 
   @Get('data-sets/zip')
   async getAnnualAccountsZip(@Query() query: QueryResourcesSectionDto) {
-    const response: DataSetsRes = await this.resourcesSectionService.getFiles(query);
-
-    // console.log({ response });
-
-    if (response && response.data.length === 0) {
-      return {
-        status: false,
-        message:
-          'No data available for the selected filter. Please select different option(s) to proceed with the download.',
-      };
-    }
-
-    // this.zipService.buildZipToS3(response);
-
-    const body = {} as ZipJobRequest;
-    body.email = query.email;
-    body.ulbData = response.data;
-    body.userName = query.userName;
-    // console.log('body', body);
-    // Add job to queue
-    const opts: JobsOptions = {
-      removeOnComplete: { age: 86400, count: 2000 },
-      removeOnFail: 1000,
-    };
-
-    const job = await this.queue.add('zip-build', body, opts);
-    return {
-      message: "Success! Your state bundle is being prepared. We'll email you the files in about 30 minutes.",
-      jobId: job.id,
-      statusUrl: `/zip-jobs/${job.id}`,
-      poll: true, // hint to client to poll this endpoint
-    };
+    return this.resourcesSectionService.zipData(query);
   }
 
   @Get('data-sets/download')

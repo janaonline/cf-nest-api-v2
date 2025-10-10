@@ -1,11 +1,15 @@
+import { InjectQueue } from '@nestjs/bullmq';
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
+import { JobsOptions, Queue } from 'bullmq';
 import { Model } from 'mongoose';
 import { BudgetDocument, BudgetDocumentDoc } from 'src/schemas/budget-document.schema';
 import { DataCollectionForm, DataCollectionFormDocument } from 'src/schemas/data-collection-form-schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { getBudgetPipeline, getRawFiles1920OnwardsPipeline, getRawFilesBefore1920Pipeline } from './constants';
 import { QueryResourcesSectionDto } from './dto/query-resources-section.dto';
+import { DataSetsRes, ZipJobRequest } from './zip/zip.types';
+import { EmailList, EmailListDocument } from 'src/schemas/email-list';
 
 @Injectable()
 export class ResourcesSectionService {
@@ -20,6 +24,12 @@ export class ResourcesSectionService {
 
     @InjectModel(BudgetDocument.name)
     private readonly budgetDocModel: Model<BudgetDocumentDoc>,
+
+    @InjectModel(EmailList.name)
+    private readonly emailListModel: Model<EmailListDocument>,
+
+    @InjectQueue('zip')
+    private readonly queue: Queue,
   ) {}
 
   /**
@@ -105,6 +115,54 @@ export class ResourcesSectionService {
       success,
       message,
       data: results,
+    };
+  }
+
+  /**
+   * --------------------------------------------------------------------------------
+   * Zip the files.
+   * --------------------------------------------------------------------------------
+   */
+  async zipData(query: QueryResourcesSectionDto) {
+    const response: DataSetsRes = await this.getFiles(query);
+
+    // If Email is not verified return;
+    const user = await this.emailListModel.findOne({ email: query.email }).lean();
+    if (!user || !user.isVerified) {
+      throw new BadRequestException('Email ID is not verified!');
+    }
+
+    // If ULB files are not available.
+    if (response && response.data.length === 0) {
+      return {
+        status: false,
+        message:
+          'No data available for the selected filter. Please select different option(s) to proceed with the download.',
+      };
+    }
+
+    // this.zipService.buildZipToS3(response);
+
+    const body: ZipJobRequest = {
+      success: true,
+      message: '',
+      email: query.email,
+      ulbData: response.data,
+      userName: query.userName,
+    };
+
+    // Add job to queue
+    const opts: JobsOptions = {
+      removeOnComplete: { age: 86400, count: 2000 },
+      removeOnFail: 1000,
+    };
+    const job = await this.queue.add('zip-build', body, opts);
+
+    return {
+      message: "Success! Your state bundle is being prepared. We'll email you the files in about 30 minutes.",
+      jobId: job.id,
+      statusUrl: `/zip-jobs/${job.id}`,
+      poll: true, // hint to client to poll this endpoint
     };
   }
 }
