@@ -15,6 +15,8 @@ export interface ZipJobRequest {
   email?: string; // optional notify recipient
   title?: string; // optional title for email
   ulbData: ULBData[];
+  userName: string;
+  downloadType: string;
 }
 
 export interface ZipJobResult {
@@ -23,6 +25,28 @@ export interface ZipJobResult {
   totalFiles: number;
   skippedFiles: number;
   sizeBytes?: number; // best-effort; may not be known at runtime
+}
+
+interface File {
+  name: string;
+  url: string;
+}
+
+interface DataSets {
+  _id: string;
+  state: string;
+  ulbId: string;
+  ulbName: string;
+  stateName: string;
+  auditType: string;
+  year: string;
+  files: File[];
+}
+
+export interface DataSetsRes {
+  success: boolean;
+  message: string;
+  data: DataSets[];
 }
 
 // export interface File {

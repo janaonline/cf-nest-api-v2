@@ -1,18 +1,14 @@
 import { Controller, Get, Query, Res } from '@nestjs/common';
 import { QueryResourcesSectionDto } from './dto/query-resources-section.dto';
 import { ResourcesSectionService } from './resources-section.service';
-import { S3ZipService } from './s3-zip.service';
 import { responseJsonUlb } from './responseJsonUlb';
-import { JobsOptions, Queue } from 'bullmq';
-import { InjectQueue } from '@nestjs/bullmq';
-import { ZipJobRequest } from './zip/zip.types';
+import { S3ZipService } from './s3-zip.service';
 
 @Controller('resources-section')
 export class ResourcesSectionController {
   constructor(
     private readonly resourcesSectionService: ResourcesSectionService,
     private readonly s3ZipService: S3ZipService,
-    @InjectQueue('zip') private readonly queue: Queue,
   ) {}
 
   @Get('data-sets')
@@ -22,27 +18,7 @@ export class ResourcesSectionController {
 
   @Get('data-sets/zip')
   async getAnnualAccountsZip(@Query() query: QueryResourcesSectionDto) {
-    const response: any = await this.resourcesSectionService.getFiles(query);
-
-    // this.zipService.buildZipToS3(response);
-
-    const body = {} as ZipJobRequest;
-    body.email = query.email;
-    body.ulbData = response.data;
-    // console.log('body', body);
-    // Add job to queue
-    const opts: JobsOptions = {
-      removeOnComplete: { age: 86400, count: 2000 },
-      removeOnFail: 1000,
-    };
-
-    const job = await this.queue.add('zip-build', body, opts);
-    return {
-      message: 'Job submitted',
-      jobId: job.id,
-      statusUrl: `/zip-jobs/${job.id}`,
-      poll: true, // hint to client to poll this endpoint
-    };
+    return this.resourcesSectionService.zipData(query);
   }
 
   @Get('data-sets/download')

@@ -1,8 +1,16 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEmail, IsIn, IsMongoId, IsNotEmpty, IsOptional, ValidateIf } from 'class-validator';
+import { IsEmail, IsIn, IsMongoId, IsNotEmpty, IsOptional, IsString, ValidateIf } from 'class-validator';
 import { YEARS } from 'src/shared/files/constant';
 
 export class QueryResourcesSectionDto {
+  @ApiPropertyOptional({
+    description: 'User Name',
+    example: '',
+  })
+  @IsNotEmpty()
+  @IsString()
+  userName: string;
+
   @ApiPropertyOptional({
     description: 'Email Id',
     example: '',
