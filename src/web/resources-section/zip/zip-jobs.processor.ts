@@ -15,7 +15,7 @@ export class ZipJobsProcessor extends WorkerHost {
   }
 
   async process(job: Job<ZipJobRequest, ZipJobResult>) {
-    const { ulbData, outputKey, email, title } = job.data;
+    const { ulbData, outputKey, email, title, userName } = job.data;
     // console.log(`Processing job ${job.id} with ${files.length} files`);
     // Make a safe output key if not provided
     // const zipKey =
@@ -41,6 +41,7 @@ export class ZipJobsProcessor extends WorkerHost {
     if (email) {
       // console.log('Sending email');
       const mailData = {
+        name: userName,
         to: email,
         subject: 'Your City Finance Data is Ready to Download',
         link: url,

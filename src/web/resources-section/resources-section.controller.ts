@@ -29,6 +29,7 @@ export class ResourcesSectionController {
     const body = {} as ZipJobRequest;
     body.email = query.email;
     body.ulbData = response.data;
+    body.userName = query.userName;
     // console.log('body', body);
     // Add job to queue
     const opts: JobsOptions = {
