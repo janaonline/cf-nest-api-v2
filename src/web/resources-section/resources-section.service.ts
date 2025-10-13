@@ -32,7 +32,7 @@ export class ResourcesSectionService {
     @InjectModel(EmailList.name)
     private readonly emailListModel: Model<EmailListDocument>,
 
-    @InjectQueue('zip')
+    @InjectQueue('zipResources')
     private readonly queue: Queue,
   ) {}
 
@@ -161,7 +161,7 @@ export class ResourcesSectionService {
       removeOnComplete: { age: 86400, count: 2000 },
       removeOnFail: 1000,
     };
-    const job = await this.queue.add('zip-build', body, opts);
+    const job = await this.queue.add('zipResources', body, opts);
 
     return {
       message: "Success! Your state bundle is being prepared. We'll email you the files in about 30 minutes.",

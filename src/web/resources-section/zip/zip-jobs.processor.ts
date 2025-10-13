@@ -4,9 +4,12 @@ import * as path from 'path';
 import { S3Service } from 'src/core/s3/s3.service';
 import { ZipBuildService } from './zip-build.service';
 import { ZipJobRequest, ZipJobResult } from './zip.types';
+import { Logger } from '@nestjs/common';
 
-@Processor('zip', { concurrency: 2 }) // run up to 2 jobs in parallel
+@Processor('zipResources', { concurrency: 2 }) // run up to 2 jobs in parallel
 export class ZipJobsProcessor extends WorkerHost {
+  logger = new Logger(ZipJobsProcessor.name);
+
   constructor(
     private readonly zip: ZipBuildService,
     private readonly s3: S3Service,
@@ -15,6 +18,7 @@ export class ZipJobsProcessor extends WorkerHost {
   }
 
   async process(job: Job<ZipJobRequest, ZipJobResult>) {
+    this.logger.log(`Processing job ${job.id} of type ${job.name}`);
     const { ulbData, outputKey, email, title, userName, downloadType } = job.data;
     // console.log(`Processing job ${job.id} with ${files.length} files`);
     // Make a safe output key if not provided
@@ -37,8 +41,13 @@ export class ZipJobsProcessor extends WorkerHost {
     // console.log('job 95-----');
     await job.updateProgress(95);
     // console.log('Zip built', result);
+
     // Generate pre-signed URL
-    const url = await this.s3.presignGet(result.zipKey);
+    // const url = await this.s3.presignGet(result.zipKey);
+
+    // Step 2: Generate permanent public URL
+    const url = this.s3.getPublicUrl(result.zipKey);
+
     const payload: ZipJobResult & { url: string } = { ...result, url };
     // console.log('out Sending email ');
     // Send email
