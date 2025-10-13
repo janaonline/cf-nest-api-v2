@@ -29,7 +29,7 @@ import { NodeMailerModule } from 'src/core/node-mailer/node-mailer.module';
     //   inject: [ConfigService],
     // }),
     BullModule.registerQueue({
-      name: 'zip',
+      name: 'zipResources',
       defaultJobOptions: {
         removeOnComplete: { age: 86400, count: 2000 }, // keep for a day or 2k jobs
         removeOnFail: 1000,

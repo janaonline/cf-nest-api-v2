@@ -9,7 +9,7 @@ import type { ZipJobRequest, ZipJobResult } from './zip.types';
 @Controller('zip-jobs')
 export class ZipController {
   constructor(
-    @InjectQueue('zip') private readonly queue: Queue,
+    @InjectQueue('zipResources') private readonly queue: Queue,
     private readonly mailer: ZipBuildService,
   ) {}
 
@@ -24,7 +24,7 @@ export class ZipController {
       removeOnComplete: { age: 86400, count: 2000 },
       removeOnFail: 1000,
     };
-    const job = await this.queue.add('zip-build', body, opts);
+    const job = await this.queue.add('zipResources', body, opts);
     return {
       jobId: job.id,
       statusUrl: `/zip-jobs/${job.id}`,
