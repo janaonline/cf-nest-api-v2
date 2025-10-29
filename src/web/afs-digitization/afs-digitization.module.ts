@@ -1,5 +1,8 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
+import { State, StateSchema } from 'src/schemas/state.schema';
+import { Ulb, UlbSchema } from 'src/schemas/ulb.schema';
+import { Year, YearSchema } from 'src/schemas/year.schema';
 import { AfsDigitizationController } from './afs-digitization.controller';
 import { AfsDigitizationService } from './afs-digitization.service';
 import { AfsGeneratedExcel, AfsGeneratedExcelSchema } from './entities/afs-generated-excel.schema';
@@ -8,6 +11,11 @@ import { AfsReuploadedPdf, AfsReuploadedPdfSchema } from './entities/afs-reuploa
 
 @Module({
   imports: [
+    MongooseModule.forFeature([
+      { name: Ulb.name, schema: UlbSchema },
+      { name: State.name, schema: StateSchema },
+      { name: Year.name, schema: YearSchema },
+    ]),
     MongooseModule.forFeature(
       [
         { name: AfsGeneratedExcel.name, schema: AfsGeneratedExcelSchema },

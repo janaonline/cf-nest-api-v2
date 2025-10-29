@@ -6,7 +6,6 @@ export class EmailList extends Document {
   @Prop({
     required: true,
     unique: true,
-    index: true,
     lowercase: true,
     trim: true,
     match: [/^\S+@\S+\.\S+$/, 'Please use a valid email address.'],
