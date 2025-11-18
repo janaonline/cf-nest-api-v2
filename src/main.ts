@@ -69,7 +69,7 @@ async function bootstrap() {
    * - methods: allowed HTTP methods
    * - preflightContinue: whether OPTIONS requests should pass to routes
    * - optionsSuccessStatus: HTTP status for successful OPTIONS response
-   * - Note: Comma seperate the domains in .env eg: WHITELISTED_DOMAINS="http://localhost:4200,http://localhost:4100"
+   * - Note: Comma seperate the domains in .env eg: WHITELISTED_DOMAINS="url1,url2"
    */
   let WHITELISTED_DOMAINS: string[] = [];
   const DOMAINS = configService.get<string>('WHITELISTED_DOMAINS');

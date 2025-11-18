@@ -32,4 +32,4 @@ export class EmailList extends Document {
 export type EmailListDocument = EmailList & Document;
 export const EmailListSchema = SchemaFactory.createForClass(EmailList);
 
-EmailListSchema.index({ email: 1 });
+// EmailListSchema.index({ email: 1 });
