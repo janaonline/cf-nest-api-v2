@@ -49,7 +49,7 @@ import { ResourcesSectionModule } from './web/resources-section/resources-sectio
       useFactory: (configService: ConfigService) => ({
         uri: configService.get<string>('MONGO_URI_2'),
       }),
-      connectionName: 'CONNECTION_2',
+      connectionName: 'digitization_db',
     }),
     UsersModule,
     ResourcesSectionModule,
