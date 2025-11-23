@@ -1,17 +1,18 @@
+import { BullModule } from '@nestjs/bullmq';
 import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { APP_GUARD } from '@nestjs/core';
 import { MongooseModule } from '@nestjs/mongoose';
+import { seconds, ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { EmailModule } from './core/email/email.module';
 import { NodeMailerModule } from './core/node-mailer/node-mailer.module';
 import { LoggerMiddleware } from './middleware/logger-middleware';
-import { UsersModule } from './users/users.module';
-import { ResourcesSectionModule } from './web/resources-section/resources-section.module';
-import { BullModule } from '@nestjs/bullmq';
-import { seconds, ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
-import { APP_GUARD } from '@nestjs/core';
 import { AuthModule } from './module/auth/auth.module';
+import { UsersModule } from './users/users.module';
+import { AfsDigitizationModule } from './web/afs-digitization/afs-digitization.module';
+import { ResourcesSectionModule } from './web/resources-section/resources-section.module';
 
 @Module({
   imports: [
@@ -42,10 +43,19 @@ import { AuthModule } from './module/auth/auth.module';
         uri: configService.get<string>('MONGO_URI'),
       }),
     }),
+    MongooseModule.forRootAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (configService: ConfigService) => ({
+        uri: configService.get<string>('MONGO_URI_2'),
+      }),
+      connectionName: 'digitization_db',
+    }),
     UsersModule,
     ResourcesSectionModule,
     NodeMailerModule,
     EmailModule,
+    AfsDigitizationModule,
   ],
   controllers: [AppController],
   providers: [
