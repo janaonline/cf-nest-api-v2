@@ -11,15 +11,9 @@ import { AnnualAccountData, AnnualAccountDataDocument } from 'src/schemas/annual
 import { DigitizationReportQueryDto } from './dto/digitization-report-query.dto';
 import { YearIdToLabel } from 'src/core/constants/years';
 import { DigitizationLog, DigitizationLogDocument } from 'src/schemas/digitization-log.schema';
-
-const docTypes = {
-  bal_sheet: 'Balance Sheet',
-  bal_sheet_schedules: 'Schedules To Balance Sheet',
-  inc_exp: 'Income And Expenditure',
-  inc_exp_schedules: 'Schedules To Income And Expenditure',
-  cash_flow: ' Cash Flow Statement',
-  // auditor_report: 'Auditors report',
-};
+import { DOC_TYPES } from './constants/docTypes';
+import { getPopulationCategory } from 'src/core/helpers/populationCategory.helper';
+import { afsQuery } from './queries/afs-excel-files.query';
 
 @Injectable()
 export class AfsDumpService {
@@ -61,11 +55,14 @@ export class AfsDumpService {
 
   async exportAfsExcelFiles(query: DigitizationReportQueryDto): Promise<Buffer> {
     // const docs = await this.afsExcelFileModel.find().lean();
-    const docs = await this.getAnnualWithAfsExcel(query);
+    // const docs = await this.getAnnualWithAfsExcel(query);
+
+    // console.log('Generating AFS Excel Report for query:', afsQuery(query));
+    const docs = await this.annualAccountModel.aggregate(afsQuery(query)).exec();
     const s3LiveUrlPrefix = 'https://jana-cityfinance-live.s3.ap-south-1.amazonaws.com';
     const s3UrlPrefix = 'https://jana-cityfinance-stg.s3.ap-south-1.amazonaws.com';
     const s3DigitizationUrlPrefix = 'https://cf-digitization-dev.s3.amazonaws.com';
-    const yearLabel: string = YearIdToLabel[query.yearId];
+    const yearLabel: string = YearIdToLabel[query.yearId.toString()];
 
     // console.log('docs', docs);
 
@@ -77,6 +74,7 @@ export class AfsDumpService {
       { header: 'ULB (ObjectId)', key: 'ulb', width: 26 },
       { header: 'ULB Code', key: 'ulbCode', width: 14 },
       { header: 'ULB Name', key: 'ulbName', width: 26 },
+      { header: 'Population Category', key: 'populationCat', width: 12 },
       { header: 'Financial Year', key: 'financialYear', width: 16 },
       { header: 'Audit Type', key: 'auditType', width: 14 },
       { header: 'Doc Type', key: 'docType', width: 30 },
@@ -93,9 +91,6 @@ export class AfsDumpService {
       { header: 'AFS Digitized On', key: 'afsDigitizedOn', width: 18 },
       { header: 'AFS Request ID', key: 'afsRequestId', width: 18 },
       { header: 'AFS Digitize Msg', key: 'afsDigitizeLogMsg', width: 18 },
-
-      // { header: 'ULB', key: 'afsUploaded', width: 18 },
-      // { header: 'ULB', key: 'afsUploaded', width: 18 },
     ];
 
     ws.getRow(1).font = { bold: true };
@@ -119,6 +114,7 @@ export class AfsDumpService {
       ulb?: Types.ObjectId | string;
       ulbCode?: string;
       ulbName?: string;
+      ulbPopulation?: number;
       [key: string]: unknown;
     };
 
@@ -153,7 +149,7 @@ export class AfsDumpService {
         ? afsDigitizedFiles.fileUrl === 'https://placeholder-link.com/none'
           ? 'Failed'
           : 'Success'
-        : 'Not-Digitized';
+        : null;
 
       // Safely extract the dynamic pdf url property (query.docType)
       let pdfUrl: string | undefined;
@@ -166,16 +162,16 @@ export class AfsDumpService {
       }
 
       // pdfUrl = doc[query.docType] ? doc[query.docType][url] : null;
-
       ws.addRow({
         stateName: doc.stateName ?? null,
-        ulb: doc.ulb ?? null,
+        ulb: doc.ulb?.toString() ?? null,
         ulbCode: doc.ulbCode ?? null,
         ulbName: doc.ulbName ?? null,
+        populationCat: getPopulationCategory(doc.ulbPopulation),
 
         financialYear: yearLabel,
         auditType: doc.afsexcelfiles?.auditType ?? 'audited',
-        docType: docTypes[`${query.docType}`],
+        docType: DOC_TYPES[`${query.docType}`],
         // ulbUploaded: doc.bal_sheet.url,
         ulbUploaded: pdfUrl ? s3LiveUrlPrefix + pdfUrl : null,
         afsUploaded: doc.afsfiles ? s3UrlPrefix + '/' + doc.afsfiles?.s3Key : null,
@@ -199,148 +195,145 @@ export class AfsDumpService {
     return Buffer.from(excelBuffer as ArrayBuffer); // convert to Node Buffer
   }
 
-  excelExport() {
-    // State	City	ULB Code	Year	AuditStatus	PDF Document ulb uploaded	PDF Document afs uploaded	Form Uploaded On	ULB Digitize Status	ULB Excel Link	ULB Digitized On	ULB Request ID	AFS Digitize Status	AFS Excel Link	AFS Digitized On	AFS Request ID
-  }
-
   async getAnnualWithAfsExcel(query: DigitizationReportQueryDto): Promise<any[]> {
-    const auditedYearObjectId = new Types.ObjectId(query.yearId);
-    const ulbObjectId = new Types.ObjectId(query.ulbId);
+    // const auditedYearObjectId = new Types.ObjectId(query.yearId);
+    // const ulbObjectId = new Types.ObjectId(query.ulbId);
+    return await this.annualAccountModel.aggregate(afsQuery(query)).exec();
+    // return await this.annualAccountModel
+    //   .aggregate([
+    //     {
+    //       $match: {
+    //         'audited.year': query.yearId,
+    //         ...(query.ulbId && { ulb: query.ulbId }), // optional ulb filter
+    //       },
+    //     },
+    //     {
+    //       $lookup: {
+    //         from: 'afsexcelfiles',
+    //         let: {
+    //           fyId: '$audited.year', // annualaccountdatas.audited.year
+    //           ulbId: '$ulb', // annualaccountdatas.ulb
+    //         },
+    //         pipeline: [
+    //           {
+    //             $match: {
+    //               $expr: {
+    //                 $and: [
+    //                   { $eq: ['$financialYearId', '$$fyId'] }, // match year
+    //                   { $eq: ['$ulb', '$$ulbId'] }, // match ulb
+    //                   { $eq: ['$docType', DOC_TYPES[`${query.docType}`]] }, // match docType
+    //                 ],
+    //               },
+    //             },
+    //           },
+    //         ],
+    //         as: 'afsexcelfiles',
+    //       },
+    //     },
+    //     // { $unwind: '$afsexcelfiles' },
+    //     {
+    //       $unwind: {
+    //         path: '$afsexcelfiles',
+    //         preserveNullAndEmptyArrays: true,
+    //       },
+    //     },
+    //     {
+    //       $lookup: {
+    //         from: 'afsfiles',
+    //         let: {
+    //           fyId: '$afsexcelfiles.financialYear', // afsexcelfiles.financialYear
+    //           ulbIds: '$afsexcelfiles.ulbId', // afsexcelfiles.ulb
+    //           docType: '$afsexcelfiles.docType', // afsexcelfiles.docType
+    //         },
+    //         pipeline: [
+    //           {
+    //             $match: {
+    //               $expr: {
+    //                 $and: [
+    //                   {
+    //                     $eq: ['$financialYear', '$$fyId'],
+    //                   }, // match year
+    //                   {
+    //                     $eq: ['$ulbId', '$$ulbIds'],
+    //                   }, // match ulb
+    //                   {
+    //                     $eq: ['$docType', '$$docType'],
+    //                   }, // match docType
+    //                 ],
+    //               },
+    //             },
+    //           },
+    //         ],
+    //         as: 'afsfiles',
+    //       },
+    //     },
+    //     {
+    //       $unwind: {
+    //         path: '$afsfiles',
+    //         preserveNullAndEmptyArrays: true,
+    //       },
+    //     },
+    //     // Join ULB collection to get ULB name / code / state id
+    //     {
+    //       $lookup: {
+    //         from: 'ulbs', // <-- or "ulbs" if that's your collection name
+    //         localField: 'ulb',
+    //         foreignField: '_id',
+    //         as: 'ulbDoc',
+    //       },
+    //     },
+    //     { $unwind: '$ulbDoc' },
+    //     //   Join State collection to get State name
+    //     {
+    //       $lookup: {
+    //         from: 'states',
+    //         localField: 'ulbDoc.state',
+    //         foreignField: '_id',
+    //         as: 'stateDoc',
+    //       },
+    //     },
+    //     { $unwind: '$stateDoc' },
 
-    return await this.annualAccountModel
-      .aggregate([
-        {
-          $match: {
-            'audited.year': auditedYearObjectId,
-            ...(query.ulbId && { ulb: ulbObjectId }), // optional ulb filter
-          },
-        },
-        {
-          $lookup: {
-            from: 'afsexcelfiles',
-            let: {
-              fyId: '$audited.year', // annualaccountdatas.audited.year
-              ulbId: '$ulb', // annualaccountdatas.ulb
-            },
-            pipeline: [
-              {
-                $match: {
-                  $expr: {
-                    $and: [
-                      { $eq: ['$financialYearId', '$$fyId'] }, // match year
-                      { $eq: ['$ulb', '$$ulbId'] }, // match ulb
-                      { $eq: ['$docType', docTypes[`${query.docType}`]] }, // match docType
-                    ],
-                  },
-                },
-              },
-            ],
-            as: 'afsexcelfiles',
-          },
-        },
-        // { $unwind: '$afsexcelfiles' },
-        {
-          $unwind: {
-            path: '$afsexcelfiles',
-            preserveNullAndEmptyArrays: true,
-          },
-        },
-        {
-          $lookup: {
-            from: 'afsfiles',
-            let: {
-              fyId: '$afsexcelfiles.financialYear', // afsexcelfiles.financialYear
-              ulbIds: '$afsexcelfiles.ulbId', // afsexcelfiles.ulb
-              docType: '$afsexcelfiles.docType', // afsexcelfiles.docType
-            },
-            pipeline: [
-              {
-                $match: {
-                  $expr: {
-                    $and: [
-                      {
-                        $eq: ['$financialYear', '$$fyId'],
-                      }, // match year
-                      {
-                        $eq: ['$ulbId', '$$ulbIds'],
-                      }, // match ulb
-                      {
-                        $eq: ['$docType', '$$docType'],
-                      }, // match docType
-                    ],
-                  },
-                },
-              },
-            ],
-            as: 'afsfiles',
-          },
-        },
-        {
-          $unwind: {
-            path: '$afsfiles',
-            preserveNullAndEmptyArrays: true,
-          },
-        },
-        // Join ULB collection to get ULB name / code / state id
-        {
-          $lookup: {
-            from: 'ulbs', // <-- or "ulbs" if that's your collection name
-            localField: 'ulb',
-            foreignField: '_id',
-            as: 'ulbDoc',
-          },
-        },
-        { $unwind: '$ulbDoc' },
-        //   Join State collection to get State name
-        {
-          $lookup: {
-            from: 'states',
-            localField: 'ulbDoc.state',
-            foreignField: '_id',
-            as: 'stateDoc',
-          },
-        },
-        { $unwind: '$stateDoc' },
+    //     // Shape the main document
+    //     {
+    //       $project: {
+    //         _id: 1,
+    //         ulb: 1,
+    //         year: '$audited.year',
+    //         [`${query.docType}`]: `$audited.provisional_data.${query.docType}.pdf`,
+    //         // bal_sheet: '$audited.provisional_data.bal_sheet.pdf',
+    //         // inc_exp: '$audited.provisional_data.inc_exp.pdf',
+    //         afsexcelfiles: 1,
+    //         afsfiles: 1,
+    //         createdAt: 1,
+    //         // 'afsexcelfiles.files.data': 0,
 
-        // Shape the main document
-        {
-          $project: {
-            _id: 1,
-            ulb: 1,
-            year: '$audited.year',
-            [`${query.docType}`]: `$audited.provisional_data.${query.docType}.pdf`,
-            // bal_sheet: '$audited.provisional_data.bal_sheet.pdf',
-            // inc_exp: '$audited.provisional_data.inc_exp.pdf',
-            afsexcelfiles: 1,
-            afsfiles: 1,
-            createdAt: 1,
-            // 'afsexcelfiles.files.data': 0,
-
-            ulbName: '$ulbDoc.name',
-            ulbCode: '$ulbDoc.code',
-            stateId: '$ulbDoc.state',
-            stateName: '$stateDoc.name',
-          },
-        },
-        // Unwind afsexcelfiles to have a single object instead of array
-        // {
-        //   $addFields: {
-        //     afsexcelfiles: {
-        //       $ifNull: [
-        //         {
-        //           $arrayElemAt: ['$afsexcelfiles', 0],
-        //         },
-        //         {},
-        //       ],
-        //     },
-        //   },
-        // },
-        {
-          $project: {
-            'afsexcelfiles.files.data': 0,
-          },
-        },
-      ])
-      .exec();
+    //         ulbPopulation: '$ulbDoc.population',
+    //         ulbName: '$ulbDoc.name',
+    //         ulbCode: '$ulbDoc.code',
+    //         stateId: '$ulbDoc.state',
+    //         stateName: '$stateDoc.name',
+    //       },
+    //     },
+    //     // Unwind afsexcelfiles to have a single object instead of array
+    //     // {
+    //     //   $addFields: {
+    //     //     afsexcelfiles: {
+    //     //       $ifNull: [
+    //     //         {
+    //     //           $arrayElemAt: ['$afsexcelfiles', 0],
+    //     //         },
+    //     //         {},
+    //     //       ],
+    //     //     },
+    //     //   },
+    //     // },
+    //     {
+    //       $project: {
+    //         'afsexcelfiles.files.data': 0,
+    //       },
+    //     },
+    //   ])
+    //   .exec();
   }
 }
