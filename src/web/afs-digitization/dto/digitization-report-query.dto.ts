@@ -1,7 +1,8 @@
 // digitization-report-query.dto.ts
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import { IsEnum, IsInt, IsMongoId, IsOptional, Min } from 'class-validator';
+import { Types } from 'mongoose';
 
 export enum AuditType {
   AUDITED = 'audited',
@@ -23,7 +24,8 @@ export class DigitizationReportQueryDto {
     example: '606aaf854dff55e6c075d219',
   })
   @IsMongoId()
-  yearId: string;
+  // @Transform(({ value }) => (value ? new Types.ObjectId(String(value)) : undefined), { toClassOnly: true })
+  yearId: Types.ObjectId;
 
   @ApiPropertyOptional({
     description: 'ULB ObjectId (optional, if omitted fetch all ULBs for that year)',
@@ -31,7 +33,8 @@ export class DigitizationReportQueryDto {
   })
   @IsMongoId()
   @IsOptional()
-  ulbId?: string;
+  // @Transform(({ value }) => new Types.ObjectId(String(value)), { toClassOnly: true })
+  ulbId?: Types.ObjectId;
 
   //   @ApiPropertyOptional({
   //     description: 'State ObjectId to filter by state (optional)',
