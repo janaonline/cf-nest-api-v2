@@ -3,10 +3,14 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Job, Queue } from 'bullmq';
 import { DigitizationJobData } from '../../dto/digitization-job-data';
 import { DigitizationJobDataDto } from '../../dto/digitization-job.dto';
+import { DigitizationResponseDto } from '../../dto/digitization-response.dto';
 import { firstValueFrom, map } from 'rxjs';
 import { HttpService } from '@nestjs/axios';
 import FormData from 'form-data';
 import { AxiosRequestConfig } from 'axios';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
+import { DigitizationLog, DigitizationLogDocument } from 'src/schemas/digitization-log.schema';
 
 @Injectable()
 export class DigitizationQueueService {
@@ -16,6 +20,8 @@ export class DigitizationQueueService {
     @InjectQueue('afsDigitization')
     private readonly digitizationQueue: Queue<DigitizationJobData>,
     private readonly http: HttpService,
+    @InjectModel(DigitizationLog.name, 'digitization_db')
+    private readonly digitizationLogModel: Model<DigitizationLogDocument>,
   ) {}
 
   // digitization.service.ts (as before)
@@ -115,12 +121,11 @@ export class DigitizationQueueService {
     // );
     this.logger.log(`Digitization job for ${fileUrl} completed with status ${digitizeResp.status}`, digitizeResp.data);
 
-    const respData = digitizeResp.data;
+    const respData = digitizeResp.data as DigitizationResponseDto;
     // this.logger.debug(`Digitize API response for job ${job.id}: ${JSON.stringify(respData)}`);
 
-    // 4. TODO: Save S3_Excel_Storage_Link, request_id, metrics in your DB
-    //    - You can inject a repository/service here and persist:
-    //      respData.S3_Excel_Storage_Link, respData.request_id, etc.
+    // 4. Save S3_Excel_Storage_Link, request_id, metrics in your DB
+    await this.saveDigitizationResponse(respData, fileUrl);
   }
 
   getPdfBufferFromS3(fileUrl: string): Promise<Buffer> {
@@ -151,5 +156,99 @@ export class DigitizationQueueService {
         headers: formData.getHeaders(),
       }),
     );
+  }
+
+  /**
+   * Saves the digitization response data to the database.
+   * This includes S3_Excel_Storage_Link, request_id, and various metrics.
+   */
+  async saveDigitizationResponse(respData: DigitizationResponseDto, sourceUrl: string): Promise<void> {
+    try {
+      const logData: Partial<DigitizationLog> = {
+        RequestId: respData.request_id,
+        Timestamp: new Date(),
+        SourcePDFUrl: sourceUrl,
+        DigitizedExcelUrl: respData.S3_Excel_Storage_Link,
+        Message: respData.Message || 'Digitization completed',
+
+        // PDF Upload metrics
+        PDFUpload_Status: respData.PDFUpload_Status,
+        PDFUpload_StatusCode: respData.PDFUpload_StatusCode,
+        PDFUpload_FileName: respData.PDFUpload_FileName,
+        PDFUpload_FileType: respData.PDFUpload_FileType,
+        PDFUpload_FileSize_In_Bytes: respData.PDFUpload_FileSize_In_Bytes,
+
+        // PDF Quality Check metrics
+        PDFQualityCheck_Status: respData.PDFQualityCheck_Status,
+        PDFQualityCheck_StatusCode: respData.PDFQualityCheck_StatusCode,
+        PDFQualityCheck_ProcessingTimeMs: respData.PDFQualityCheck_ProcessingTimeMs,
+        PDFQualityCheck_BlurScore: respData.PDFQualityCheck_BlurScore,
+
+        // PDF Enhancement metrics
+        PDFEnhancement_Status: respData.PDFEnhancement_Status,
+        PDFEnhancement_StatusCode: respData.PDFEnhancement_StatusCode,
+        PDFEnhancement_ProcessingTimeMs: respData.PDFEnhancement_ProcessingTimeMs,
+
+        // S3 Upload metrics
+        S3Upload_Status: respData.S3Upload_Status,
+        S3Upload_StatusCode: respData.S3Upload_StatusCode,
+        S3Upload_ProcessingTimeMs: respData.S3Upload_ProcessingTimeMs,
+
+        // OCR metrics
+        OCR_Status: respData.OCR_Status,
+        OCR_StatusCode: respData.OCR_StatusCode,
+        OCR_ProcessingTimeMs: respData.OCR_ProcessingTimeMs,
+
+        // LLM Post-processing metrics
+        LLM_Postprocessing_Status: respData.LLM_Postprocessing_Status,
+        LLM_Postprocessing_StatusCode: respData.LLM_Postprocessing_StatusCode,
+        LLM_Postprocessing_ProcessingTimeMs: respData.LLM_Postprocessing_ProcessingTimeMs,
+
+        // LLM Confidence Scoring metrics
+        LLM_ConfidenceScoring_Status: respData.LLM_ConfidenceScoring_Status,
+        LLM_ConfidenceScoring_StatusCode: respData.LLM_ConfidenceScoring_StatusCode,
+        LLM_ConfidenceScoring_ProcessingTimeMs: respData.LLM_ConfidenceScoring_ProcessingTimeMs,
+
+        // LLM Validation metrics
+        LLM_Validation_Status: respData.LLM_Validation_Status,
+        LLM_Validation_StatusCode: respData.LLM_Validation_StatusCode,
+        LLM_Validation_ProcessingTimeMs: respData.LLM_Validation_ProcessingTimeMs,
+
+        // Excel Generation metrics
+        ExcelGeneration_Status: respData.ExcelGeneration_Status,
+        ExcelGeneration_StatusCode: respData.ExcelGeneration_StatusCode,
+        ExcelGeneration_ProcessingTimeMs: respData.ExcelGeneration_ProcessingTimeMs,
+
+        // Excel Storage metrics
+        ExcelStorage_Status: respData.ExcelStorage_Status,
+        ExcelStorage_StatusCode: respData.ExcelStorage_StatusCode,
+        ExcelStorage_ProcessingTimeMs: respData.ExcelStorage_ProcessingTimeMs,
+
+        // Overall metrics
+        TotalProcessingTimeMs: respData.TotalProcessingTimeMs,
+        ProcessingMode: respData.ProcessingMode,
+        RetryCount: respData.RetryCount || 0,
+        FinalStatusCode: respData.FinalStatusCode,
+
+        // Error information (if any)
+        ErrorCode: respData.ErrorCode,
+        ErrorMessage: respData.ErrorMessage,
+        ErrorResolution: respData.ErrorResolution,
+        OriginalErrorMessage: respData.OriginalErrorMessage,
+        IPAddress: respData.IPAddress,
+      };
+
+      // Use upsert to update existing record or create new one
+      await this.digitizationLogModel.updateOne(
+        { RequestId: respData.request_id },
+        { $set: logData },
+        { upsert: true },
+      );
+
+      this.logger.log(`Saved digitization response for request_id: ${respData.request_id}`);
+    } catch (error) {
+      this.logger.error(`Failed to save digitization response: ${error.message}`, error.stack);
+      // Don't throw error to prevent job failure due to logging issues
+    }
   }
 }
