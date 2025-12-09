@@ -40,6 +40,10 @@ export class AfsExcelFile {
   @Prop({ type: Types.ObjectId, ref: 'Ulb' })
   ulb: Types.ObjectId;
 
+  // new ObjectId field referencing ulb collection
+  @Prop({ type: Types.ObjectId, ref: 'Year' })
+  year: Types.ObjectId;
+
   @Prop({ type: String, required: true })
   financialYear: string; // e.g. "2020-21"
 

@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model, Types } from 'mongoose';
-import { AfsExcelFile, AfsExcelFileDocument } from 'src/schemas/afs-excel-file.schema';
+import mongoose, { Model, Types } from 'mongoose';
+import { AfsExcelFile, AfsExcelFileDocument } from 'src/schemas/afs/afs-excel-file.schema';
 import { State, StateDocument } from 'src/schemas/state.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { Year, YearDocument } from 'src/schemas/year.schema';
@@ -106,6 +106,7 @@ export class AfsDumpService {
       files?: DigitizedFile[];
       auditType?: string;
     };
+
     type AfsReportDoc = {
       afsexcelfiles?: AfsExcelFiles | null;
       afsfiles?: { s3Key?: string } | null;
@@ -118,9 +119,14 @@ export class AfsDumpService {
       [key: string]: unknown;
     };
 
-    const typedDocs = docs as AfsReportDoc[];
+    type AfsReportRes = {
+      data: AfsReportDoc[];
+      totalCount: { count: number }[];
+    };
 
-    for (const doc of typedDocs) {
+    const typedDocs = docs as AfsReportRes[];
+
+    for (const doc of typedDocs[0].data) {
       // console.log('doc---', doc);
       const ulbDigitizedFiles =
         doc.afsexcelfiles?.files && doc.afsexcelfiles.files.length !== 0 ? doc.afsexcelfiles.files[0] : null;
@@ -196,6 +202,7 @@ export class AfsDumpService {
   }
 
   async getAnnualWithAfsExcel(query: DigitizationReportQueryDto): Promise<any[]> {
+    mongoose.set('debug', true);
     // const auditedYearObjectId = new Types.ObjectId(query.yearId);
     // const ulbObjectId = new Types.ObjectId(query.ulbId);
     return await this.annualAccountModel.aggregate(afsQuery(query)).exec();
