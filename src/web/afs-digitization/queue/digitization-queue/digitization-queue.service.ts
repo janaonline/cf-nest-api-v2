@@ -11,6 +11,58 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { DigitizationLog, DigitizationLogDocument } from 'src/schemas/digitization-log.schema';
 
+interface DigitizationApiResponse {
+  request_id?: string;
+  RequestId?: string;
+  IPAddress?: string;
+  Message?: string;
+  message?: string;
+  PDFUpload_Status?: string;
+  PDFUpload_StatusCode?: number;
+  PDFUpload_FileName?: string;
+  PDFUpload_FileType?: string;
+  PDFUpload_FileSize_In_Bytes?: number;
+  PDFQualityCheck_Status?: string;
+  PDFQualityCheck_StatusCode?: number;
+  PDFQualityCheck_ProcessingTimeMs?: number;
+  PDFQualityCheck_BlurScore?: number;
+  PDFEnhancement_Status?: string;
+  PDFEnhancement_StatusCode?: number;
+  PDFEnhancement_ProcessingTimeMs?: number;
+  S3Upload_Status?: string;
+  S3Upload_StatusCode?: number;
+  S3Upload_ProcessingTimeMs?: number;
+  OCR_Status?: string;
+  OCR_StatusCode?: number;
+  OCR_ProcessingTimeMs?: number;
+  LLM_Postprocessing_Status?: string;
+  LLM_Postprocessing_StatusCode?: number;
+  LLM_Postprocessing_ProcessingTimeMs?: number;
+  LLM_ConfidenceScoring_Status?: string;
+  LLM_ConfidenceScoring_StatusCode?: number;
+  LLM_ConfidenceScoring_ProcessingTimeMs?: number;
+  LLM_Validation_Status?: string;
+  LLM_Validation_StatusCode?: number;
+  LLM_Validation_ProcessingTimeMs?: number;
+  ExcelGeneration_Status?: string;
+  ExcelGeneration_StatusCode?: number;
+  ExcelGeneration_ProcessingTimeMs?: number;
+  ExcelStorage_Status?: string;
+  ExcelStorage_StatusCode?: number;
+  ExcelStorage_ProcessingTimeMs?: number;
+  S3_Excel_Storage_Link?: string;
+  DigitizedExcelUrl?: string;
+  TotalProcessingTimeMs?: number;
+  ProcessingMode?: string;
+  RetryCount?: number;
+  ErrorCode?: string;
+  ErrorMessage?: string;
+  ErrorResolution?: string;
+  OriginalErrorMessage?: string;
+  FinalStatusCode?: number;
+  status_code?: number;
+}
+
 @Injectable()
 export class DigitizationQueueService {
   private readonly logger = new Logger(DigitizationQueueService.name);
@@ -161,7 +213,7 @@ export class DigitizationQueueService {
     );
   }
 
-  async saveDigitizationLog(respData: any, job: DigitizationJobData): Promise<void> {
+  async saveDigitizationLog(respData: DigitizationApiResponse, job: DigitizationJobData): Promise<void> {
     try {
       const logData = {
         RequestId: respData.request_id || respData.RequestId,

@@ -95,7 +95,7 @@ export class EmailService {
   private verifyToken(token: string): UnsubscribePayload | null {
     try {
       // return verify(token, this.secret) as UnsubscribePayload;
-      return this.jwtService.verify(token);
+      return this.jwtService.verify(token) as UnsubscribePayload;
     } catch (error) {
       this.logger.error('Failed to verify unsubscribe token:', error);
       return null;
