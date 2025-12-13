@@ -13,10 +13,13 @@ import { BullModule } from '@nestjs/bullmq';
 import { DigitizationQueueService } from './queue/digitization-queue/digitization-queue.service';
 import { DigitizationProcessor } from './queue/digitization.processor';
 import { HttpModule } from '@nestjs/axios';
+import { S3Module } from 'src/core/s3/s3.module';
+import { S3Service } from 'src/core/s3/s3.service';
 
 @Module({
   imports: [
     HttpModule,
+    S3Module,
     MongooseModule.forFeature([
       { name: Ulb.name, schema: UlbSchema },
       { name: State.name, schema: StateSchema },
@@ -30,6 +33,6 @@ import { HttpModule } from '@nestjs/axios';
     }),
   ],
   controllers: [AfsDigitizationController],
-  providers: [AfsDigitizationService, AfsDumpService, DigitizationQueueService, DigitizationProcessor],
+  providers: [AfsDigitizationService, AfsDumpService, DigitizationQueueService, DigitizationProcessor, S3Service],
 })
 export class AfsDigitizationModule {}

@@ -70,7 +70,7 @@ export class AfsDigitizationService {
       removeOnFail: 1000,
     });
 
-    this.logger.log(`Enqueued digitization job ${job.id} for ULB ${data.ulb} (${data.sourceType})`);
+    this.logger.log(`Enqueued digitization job ${job.id} for ULB ${data.ulb} (${data.uploadedBy})`);
 
     return { jobId: job.id };
   }

@@ -1,14 +1,13 @@
 import { Body, Controller, Get, Logger, Param, Post, Query, Res, UsePipes, ValidationPipe } from '@nestjs/common';
+import { ApiBody } from '@nestjs/swagger';
 import type { Response } from 'express';
+import { YearIdToLabel } from 'src/core/constants/years';
 import { AfsDigitizationService } from './afs-digitization.service';
 import { AfsDumpService } from './afs-dump.service';
-import { DigitizationReportQueryDto } from './dto/digitization-report-query.dto';
-import { Types } from 'mongoose';
-import { YearIdToLabel } from 'src/core/constants/years';
-import type { DigitizationJobData } from './dto/digitization-job-data';
+import { DigitizationJobDataDto } from './dto/digitization-job-data';
 import { DigitizationJobBatchDto } from './dto/digitization-job.dto';
-import { ApiBody } from '@nestjs/swagger';
-import { DigitizationQueueService } from './queue/digitization-queue/digitization-queue.service';
+import { DigitizationReportQueryDto } from './dto/digitization-report-query.dto';
+import { DigitizationQueueService, DigitizationResponse } from './queue/digitization-queue/digitization-queue.service';
 
 @Controller('afs-digitization')
 export class AfsDigitizationController {
@@ -58,7 +57,27 @@ export class AfsDigitizationController {
   }
 
   @Post('digitize')
-  async digitize(@Body() body: DigitizationJobData) {
+  async digitize(@Body() body: DigitizationJobDataDto) {
+    // body = {
+    //   annualAccountsId: '630085be29ef916762354bdc',
+    //   ulb: '5dd24729437ba31f7eb42f46',
+    //   year: '606aadac4dff55e6c075c507',
+    //   auditType: 'audited',
+    //   docType: 'bal_sheet_schedules',
+    //   fileUrl:
+    //     'https://jana-cityfinance-stg.s3-12345.ap-south-1.amazonaws.com/objects/c908edc2-1b41-47e9-9a1e-62bc827d80c1.pdf',
+    //   uploadedBy: 'AFS',
+    // };
+    const result = await this.digitizationQueueService.handleDigitizationJob(body);
+    // HTTP 202 semantics: accepted for processing
+    return {
+      status: 'queued',
+      ...result,
+    };
+  }
+
+  @Post('copy-excel')
+  async copyExcel(@Body() body: DigitizationJobDataDto) {
     body = {
       annualAccountsId: '630085be29ef916762354bdc',
       ulb: '5dd24729437ba31f7eb42f46',
@@ -67,9 +86,45 @@ export class AfsDigitizationController {
       docType: 'bal_sheet_schedules',
       fileUrl:
         'https://jana-cityfinance-stg.s3.ap-south-1.amazonaws.com/objects/c908edc2-1b41-47e9-9a1e-62bc827d80c1.pdf',
-      sourceType: 'ULB',
+      uploadedBy: 'ULB',
+      digitizedExcelUrl:
+        'afs/5dd24729437ba31f7eb42f46_606aadac4dff55e6c075c507_audited_bal_sheet_schedules_9778ccc5-c775-4369-a3bb-244dfc8240f0.xlsx',
     };
-    const result = await this.digitizationQueueService.handleDigitizationJob(body);
+    const result = await this.digitizationQueueService.copyDigitizedExcel(body, body.digitizedExcelUrl!);
+    // HTTP 202 semantics: accepted for processing
+    return {
+      status: 'queued',
+      // ...result,
+    };
+  }
+
+  @Post('read-excel')
+  async readExcel(@Body() body: DigitizationJobDataDto) {
+    body = {
+      annualAccountsId: '630085be29ef916762354bdc',
+      ulb: '5dd24729437ba31f7eb42f46',
+      year: '606aadac4dff55e6c075c507',
+      auditType: 'audited',
+      docType: 'bal_sheet_schedules',
+      digitizedExcelUrl:
+        'afs/5dd24729437ba31f7eb42f46_606aadac4dff55e6c075c507_audited_bal_sheet_schedules_9778ccc5-c775-4369-a3bb-244dfc8240f0.xlsx',
+      // 'https://jana-cityfinance-stg.s3.ap-south-1.amazonaws.com/afs/5dd24729437ba31f7eb42f46_606aadac4dff55e6c075c507_audited_bal_sheet_schedules_9778ccc5-c775-4369-a3bb-244dfc8240f0.xlsx',
+      fileUrl:
+        'https://jana-cityfinance-stg.s3.ap-south-1.amazonaws.com/objects/c908edc2-1b41-47e9-9a1e-62bc827d80c1.pdf',
+      uploadedBy: 'ULB',
+    };
+    const digitResp: DigitizationResponse = {
+      overall_confidence_score: 95,
+      request_id: 'req-12345',
+      error_code: null,
+      status: 'completed',
+      message: 'Success',
+      S3_Excel_Storage_Link: '',
+      status_code: 200,
+      processing_mode: 'direct',
+      total_processing_time_ms: 12345,
+    };
+    const result = await this.digitizationQueueService.saveAfsExcelFileRecord(body, digitResp);
     // HTTP 202 semantics: accepted for processing
     return {
       status: 'queued',
@@ -93,6 +148,12 @@ export class AfsDigitizationController {
   @Get('status/:id')
   async status(@Param('id') id: string) {
     const result = await this.digitizationQueueService.jobStatus(id);
+    return result;
+  }
+
+  @Get('file/:id')
+  async getFile(@Param('id') id: string) {
+    const result = await this.digitizationQueueService.getFile(id);
     return result;
   }
 }

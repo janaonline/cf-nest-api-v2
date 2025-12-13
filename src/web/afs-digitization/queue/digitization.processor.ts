@@ -18,7 +18,7 @@ export class DigitizationProcessor extends WorkerHost {
   // BullMQ entry point
   async process(job: Job<DigitizationJobData>): Promise<void> {
     const data = job.data;
-    this.logger.log(`Processing job ${job.id} | ULB: ${data.ulb} | ${data.year} | ${data.sourceType}`);
+    this.logger.log(`Processing job ${job.id} | ULB: ${data.ulb} | ${data.year} | ${data.uploadedBy}`);
 
     try {
       // await this.handleDigitizationJob(job);

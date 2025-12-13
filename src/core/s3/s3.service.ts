@@ -1,17 +1,21 @@
 // s3.service.ts
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import {
   S3Client,
   GetObjectCommand,
   HeadObjectCommand,
   GetObjectCommandOutput,
   PutObjectCommand,
+  CopyObjectCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { ConfigService } from '@nestjs/config';
+import { Readable } from 'stream';
 
 @Injectable()
 export class S3Service {
+  private readonly logger = new Logger(S3Service.name);
+
   public readonly client: S3Client;
   public readonly bucket: string;
   private readonly region: string;
@@ -28,9 +32,20 @@ export class S3Service {
     await this.client.send(new HeadObjectCommand({ Bucket: this.bucket, Key }));
   }
 
-  async getObjectStream(Key: string) {
+  async getObjectStream(Key: string): Promise<Readable> {
     const out: GetObjectCommandOutput = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key }));
-    return out.Body!; // Node.js Readable
+    return out.Body! as Readable; // Node.js Readable
+  }
+
+  async getBuffer(key: string): Promise<Buffer> {
+    const dataStream = await this.getObjectStream(key);
+    const chunks: Uint8Array[] = [];
+    for await (const chunk of dataStream) {
+      chunks.push(chunk);
+    }
+
+    // IMPORTANT: standardize to Node Buffer
+    return Buffer.from(Buffer.concat(chunks));
   }
 
   async presignGet(Key: string) {
@@ -53,5 +68,25 @@ export class S3Service {
 
   getPublicUrl(Key: string) {
     return `https://${this.bucket}.s3.${this.region}.amazonaws.com/${Key}`;
+  }
+
+  /**
+   *
+   * @param copySource // key with bucket name
+   * @param destKey
+   */
+  async copyFileBetweenBuckets(copySource: string, destKey: string): Promise<void> {
+    // this.logger.log(`Copying s3://${copySource} -> s3://${destBucket}/${destKey}`);
+
+    const cmd = new CopyObjectCommand({
+      Bucket: this.bucket,
+      Key: destKey,
+      CopySource: copySource,
+      // You can set ACL / Metadata / StorageClass here if needed
+    });
+
+    await this.client.send(cmd);
+
+    this.logger.log(`✅ Copied to s3://${this.bucket}/${destKey}`);
   }
 }

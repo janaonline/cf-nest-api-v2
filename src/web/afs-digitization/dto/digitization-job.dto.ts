@@ -3,7 +3,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsArray, IsEnum, IsNotEmpty, IsOptional, IsString, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 
-export enum DigitizationSourceType {
+export enum DigitizationUploadedBy {
   ULB = 'ULB',
   AFS = 'AFS',
 }
@@ -19,12 +19,12 @@ export class DigitizationFileDto {
   fileUrl!: string;
 
   @ApiProperty({
-    enum: DigitizationSourceType,
+    enum: DigitizationUploadedBy,
     description: 'Source of this file (ULB main file or AFS attachment)',
-    example: DigitizationSourceType.ULB,
+    example: DigitizationUploadedBy.ULB,
   })
-  @IsEnum(DigitizationSourceType)
-  sourceType!: DigitizationSourceType;
+  @IsEnum(DigitizationUploadedBy)
+  uploadedBy!: DigitizationUploadedBy;
 
   @ApiPropertyOptional({
     description: 'Original file name for logging / display',
