@@ -194,14 +194,12 @@ export const afsQuery = (query: DigitizationReportQueryDto): any[] => {
 };
 
 export const afsQueryDump = (query: DigitizationReportQueryDto): any[] => {
-  //   const auditedYearObjectId = new Types.ObjectId(query.yearId);
-  //   const ulbObjectId = new Types.ObjectId(query.ulbId);
-
+  const ulbObjectIds = query.ulbId ? query.ulbId.map((id) => new Types.ObjectId(id)) : undefined;
   return [
     {
       $match: {
-        'audited.year': query.yearId,
-        ...(query.ulbId && { ulb: query.ulbId }), // optional ulb filter
+        'audited.year': new Types.ObjectId(query.yearId),
+        ...(ulbObjectIds && { ulb: { $in: ulbObjectIds } }),
       },
     },
     {
@@ -239,7 +237,7 @@ export const afsQueryDump = (query: DigitizationReportQueryDto): any[] => {
         from: 'afsfiles',
         let: {
           fyId: '$afsexcelfiles.financialYear', // afsexcelfiles.financialYear
-          ulbIds: '$afsexcelfiles.ulbId', // afsexcelfiles.ulb
+          ulbIds: '$afsexcelfiles.ulb', // afsexcelfiles.ulb
           docType: '$afsexcelfiles.docType', // afsexcelfiles.docType
         },
         pipeline: [
@@ -251,7 +249,7 @@ export const afsQueryDump = (query: DigitizationReportQueryDto): any[] => {
                     $eq: ['$financialYear', '$$fyId'],
                   }, // match year
                   {
-                    $eq: ['$ulbId', '$$ulbIds'],
+                    $eq: ['$ulb', '$$ulbIds'],
                   }, // match ulb
                   {
                     $eq: ['$docType', '$$docType'],
