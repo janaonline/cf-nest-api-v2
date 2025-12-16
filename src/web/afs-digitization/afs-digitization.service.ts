@@ -2,7 +2,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Queue } from 'bullmq';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { AnnualAccountData, AnnualAccountDataDocument } from 'src/schemas/annual-account-data.schema';
 import { DigitizationLog, DigitizationLogDocument } from 'src/schemas/digitization-log.schema';
 import { State, StateDocument } from 'src/schemas/state.schema';
@@ -11,6 +11,8 @@ import { Year, YearDocument } from 'src/schemas/year.schema';
 import { DigitizationJobData } from './dto/digitization-job-data';
 import { DigitizationReportQueryDto } from './dto/digitization-report-query.dto';
 import { afsCountQuery, afsQuery } from './queries/afs-excel-files.query';
+import { name } from 'eslint-plugin-prettier/recommended';
+import { buildPopulationMatch } from 'src/core/helpers/populationCategory.helper';
 
 @Injectable()
 export class AfsDigitizationService {
@@ -37,17 +39,55 @@ export class AfsDigitizationService {
   ) {}
 
   async getAfsFilters() {
+    const documentTypes = [
+      { key: 'bal_sheet', name: 'Balance Sheet' },
+      { key: 'bal_sheet_schedules', name: 'Balance Sheet Schedules' },
+      { key: 'inc_exp', name: 'Income and Expenditure' },
+      { key: 'inc_exp_schedules', name: 'Income and Expenditure Schedules' },
+      { key: 'cash_flow', name: 'Cashflow Statement' },
+      { key: 'auditor_report', name: "Auditor's Report" },
+    ];
+    const auditTypes = [
+      { key: 'audited', name: 'Audited' },
+      { key: 'unaudited', name: 'Unaudited' },
+    ];
+
+    const populationCategories = ['All', '4M+', '1M-4M', '500K-1M', '100K-500K', '<100K'];
     const [states, ulbs, years] = await Promise.all([
-      this.stateModel.find({ isActive: true }, { _id: 1, name: 1 }).sort({ name: 1 }),
+      this.stateModel.find({ isActive: true, isPublish: true }, { _id: 1, name: 1 }).sort({ name: 1 }),
       this.ulbModel
-        .find({ isActive: true }, { _id: 1, name: 1, population: 1, state: 1, code: 1 })
-        .populate('state', 'name')
+        .find({ isActive: true, isPublish: true }, { _id: 1, name: 1, population: 1, state: 1, code: 1 })
+        // .populate('state', 'name')
         .sort({ name: 1 }),
-      this.yearModel.find({ isActive: true }, { _id: 1, name: 1 }).sort({ name: -1 }),
+      // .limit(1000),
+      this.yearModel.find({ isActive: true }, { _id: 1, year: 1 }).sort({ year: -1 }),
     ]);
 
     // TODO: migration pending.
-    return { states, ulbs, years };
+    return { data: { states, ulbs, years, populationCategories, documentTypes, auditTypes } };
+  }
+
+  async getUlbs(params: {
+    populationCategory: string;
+    stateId?: string[];
+    limit?: number;
+  }): Promise<{ data: UlbDocument[] }> {
+    const populationRange = buildPopulationMatch(params.populationCategory || '');
+    const stateObjectIds = params.stateId ? params.stateId.map((id) => new Types.ObjectId(id)) : undefined;
+
+    const data = await this.ulbModel
+      .find(
+        {
+          isActive: true,
+          isPublish: true,
+          ...(params.populationCategory && populationRange),
+          ...(stateObjectIds && { state: { $in: stateObjectIds } }),
+        },
+        { _id: 1, name: 1, population: 1, state: 1, code: 1 },
+      )
+      .sort({ name: 1 })
+      .limit(params.limit || 2000);
+    return { data };
   }
 
   async afsList(query: DigitizationReportQueryDto): Promise<any> {

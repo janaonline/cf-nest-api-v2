@@ -22,6 +22,16 @@ export class AfsDigitizationController {
     private digitizationQueueService: DigitizationQueueService,
   ) {}
 
+  @Get('filters')
+  async getAfsFilters() {
+    return await this.afsService.getAfsFilters();
+  }
+
+  @Get('ulbs')
+  async getUlbs(@Query() query: { populationCategory: string }) {
+    return await this.afsService.getUlbs(query);
+  }
+
   @Get('afs-list')
   async afsList(@Query() query: DigitizationReportQueryDto) {
     // query.yearId = new Types.ObjectId(query.yearId);
@@ -35,7 +45,7 @@ export class AfsDigitizationController {
     return { data: await this.afsService.getRequestLog(requestId) };
   }
 
-  @Get('afsexcelfiles')
+  @Get('dump/afs-excel')
   // async downloadAfsExcelFiles(@Query('yearId') yearId: string, @Query('ulbId') ulbId?: string, @Res() res: Response) {
   async downloadAfsExcelFiles(@Query() query: DigitizationReportQueryDto, @Res() res: Response) {
     // query.yearId = new Types.ObjectId(query.yearId);
@@ -47,13 +57,6 @@ export class AfsDigitizationController {
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
 
     return res.send(buffer);
-  }
-
-  @Get('with-afs')
-  async getWithAfs(@Query() query: DigitizationReportQueryDto) {
-    // query.yearId = new Types.ObjectId(query.yearId);
-    // query.ulbId = query.ulbId ? new Types.ObjectId(query.ulbId) : undefined;
-    return await this.afsDumpService.getAnnualWithAfsExcel(query);
   }
 
   @Post('digitize')
@@ -76,61 +79,61 @@ export class AfsDigitizationController {
     };
   }
 
-  @Post('copy-excel')
-  async copyExcel(@Body() body: DigitizationJobDataDto) {
-    body = {
-      annualAccountsId: '630085be29ef916762354bdc',
-      ulb: '5dd24729437ba31f7eb42f46',
-      year: '606aadac4dff55e6c075c507',
-      auditType: 'audited',
-      docType: 'bal_sheet_schedules',
-      fileUrl:
-        'https://jana-cityfinance-stg.s3.ap-south-1.amazonaws.com/objects/c908edc2-1b41-47e9-9a1e-62bc827d80c1.pdf',
-      uploadedBy: 'ULB',
-      digitizedExcelUrl:
-        'afs/5dd24729437ba31f7eb42f46_606aadac4dff55e6c075c507_audited_bal_sheet_schedules_9778ccc5-c775-4369-a3bb-244dfc8240f0.xlsx',
-    };
-    const result = await this.digitizationQueueService.copyDigitizedExcel(body, body.digitizedExcelUrl!);
-    // HTTP 202 semantics: accepted for processing
-    return {
-      status: 'queued',
-      // ...result,
-    };
-  }
+  // @Post('copy-excel')
+  // async copyExcel(@Body() body: DigitizationJobDataDto) {
+  //   body = {
+  //     annualAccountsId: '630085be29ef916762354bdc',
+  //     ulb: '5dd24729437ba31f7eb42f46',
+  //     year: '606aadac4dff55e6c075c507',
+  //     auditType: 'audited',
+  //     docType: 'bal_sheet_schedules',
+  //     fileUrl:
+  //       'https://jana-cityfinance-stg.s3.ap-south-1.amazonaws.com/objects/c908edc2-1b41-47e9-9a1e-62bc827d80c1.pdf',
+  //     uploadedBy: 'ULB',
+  //     digitizedExcelUrl:
+  //       'afs/5dd24729437ba31f7eb42f46_606aadac4dff55e6c075c507_audited_bal_sheet_schedules_9778ccc5-c775-4369-a3bb-244dfc8240f0.xlsx',
+  //   };
+  //   const result = await this.digitizationQueueService.copyDigitizedExcel(body, body.digitizedExcelUrl!);
+  //   // HTTP 202 semantics: accepted for processing
+  //   return {
+  //     status: 'queued',
+  //     // ...result,
+  //   };
+  // }
 
-  @Post('read-excel')
-  async readExcel(@Body() body: DigitizationJobDataDto) {
-    body = {
-      annualAccountsId: '630085be29ef916762354bdc',
-      ulb: '5dd24729437ba31f7eb42f46',
-      year: '606aadac4dff55e6c075c507',
-      auditType: 'audited',
-      docType: 'bal_sheet_schedules',
-      digitizedExcelUrl:
-        'afs/5dd24729437ba31f7eb42f46_606aadac4dff55e6c075c507_audited_bal_sheet_schedules_9778ccc5-c775-4369-a3bb-244dfc8240f0.xlsx',
-      // 'https://jana-cityfinance-stg.s3.ap-south-1.amazonaws.com/afs/5dd24729437ba31f7eb42f46_606aadac4dff55e6c075c507_audited_bal_sheet_schedules_9778ccc5-c775-4369-a3bb-244dfc8240f0.xlsx',
-      fileUrl:
-        'https://jana-cityfinance-stg.s3.ap-south-1.amazonaws.com/objects/c908edc2-1b41-47e9-9a1e-62bc827d80c1.pdf',
-      uploadedBy: 'ULB',
-    };
-    const digitResp: DigitizationResponse = {
-      overall_confidence_score: 95,
-      request_id: 'req-12345',
-      error_code: null,
-      status: 'completed',
-      message: 'Success',
-      S3_Excel_Storage_Link: '',
-      status_code: 200,
-      processing_mode: 'direct',
-      total_processing_time_ms: 12345,
-    };
-    const result = await this.digitizationQueueService.saveAfsExcelFileRecord(body, digitResp);
-    // HTTP 202 semantics: accepted for processing
-    return {
-      status: 'queued',
-      // ...result,
-    };
-  }
+  // @Post('read-excel')
+  // async readExcel(@Body() body: DigitizationJobDataDto) {
+  //   body = {
+  //     annualAccountsId: '630085be29ef916762354bdc',
+  //     ulb: '5dd24729437ba31f7eb42f46',
+  //     year: '606aadac4dff55e6c075c507',
+  //     auditType: 'audited',
+  //     docType: 'bal_sheet_schedules',
+  //     digitizedExcelUrl:
+  //       'afs/5dd24729437ba31f7eb42f46_606aadac4dff55e6c075c507_audited_bal_sheet_schedules_9778ccc5-c775-4369-a3bb-244dfc8240f0.xlsx',
+  //     // 'https://jana-cityfinance-stg.s3.ap-south-1.amazonaws.com/afs/5dd24729437ba31f7eb42f46_606aadac4dff55e6c075c507_audited_bal_sheet_schedules_9778ccc5-c775-4369-a3bb-244dfc8240f0.xlsx',
+  //     fileUrl:
+  //       'https://jana-cityfinance-stg.s3.ap-south-1.amazonaws.com/objects/c908edc2-1b41-47e9-9a1e-62bc827d80c1.pdf',
+  //     uploadedBy: 'ULB',
+  //   };
+  //   const digitResp: DigitizationResponse = {
+  //     overall_confidence_score: 95,
+  //     request_id: 'req-12345',
+  //     error_code: null,
+  //     status: 'completed',
+  //     message: 'Success',
+  //     S3_Excel_Storage_Link: '',
+  //     status_code: 200,
+  //     processing_mode: 'direct',
+  //     total_processing_time_ms: 12345,
+  //   };
+  //   const result = await this.digitizationQueueService.saveAfsExcelFileRecord(body, digitResp);
+  //   // HTTP 202 semantics: accepted for processing
+  //   return {
+  //     status: 'queued',
+  //     // ...result,
+  //   };
+  // }
 
   @Post('enqueue-batch')
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
