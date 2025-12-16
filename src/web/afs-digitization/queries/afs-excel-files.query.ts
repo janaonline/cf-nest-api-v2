@@ -11,6 +11,7 @@ export const afsQuery = (query: DigitizationReportQueryDto): any[] => {
   const ulbObjectIds = query.ulbId ? query.ulbId.map((id) => new Types.ObjectId(id)) : undefined;
   const stateObjectIds = query.stateId ? query.stateId.map((id) => new Types.ObjectId(id)) : undefined;
   const yearLabel = YearIdToLabel[`${query.yearId}`];
+  const skip = (query.page - 1) * query.limit;
 
   const populationRange = buildPopulationMatch(query.populationCategory || '');
   return [
@@ -41,7 +42,7 @@ export const afsQuery = (query: DigitizationReportQueryDto): any[] => {
     },
     { $unwind: '$ulbDoc' },
     { $sort: { 'ulbDoc.name': 1 } },
-    { $skip: (query.page - 1) * query.limit }, // Pagination
+    { $skip: skip }, // Pagination
     { $limit: query.limit },
     // {
     //   $match: {
@@ -180,15 +181,54 @@ export const afsQuery = (query: DigitizationReportQueryDto): any[] => {
         'afsexcelfiles.files.data': 0,
       },
     },
+    // {
+    //   $facet: {
+    //     data: [
+    //       { $sort: { ulbName: 1 } },
+    //       { $skip: (query.page - 1) * query.limit }, // Pagination
+    //       { $limit: query.limit },
+    //     ],
+    //     totalCount: [{ $count: 'count' }],
+    //   },
+    // },
+  ];
+};
+
+export const afsCountQuery = (query: DigitizationReportQueryDto): any[] => {
+  const auditedYearObjectId = new Types.ObjectId(query.yearId);
+  const ulbObjectIds = query.ulbId ? query.ulbId.map((id) => new Types.ObjectId(id)) : undefined;
+  const stateObjectIds = query.stateId ? query.stateId.map((id) => new Types.ObjectId(id)) : undefined;
+
+  const populationRange = buildPopulationMatch(query.populationCategory || '');
+  return [
     {
-      $facet: {
-        data: [
-          { $sort: { ulbName: 1 } },
-          { $skip: (query.page - 1) * query.limit }, // Pagination
-          { $limit: query.limit },
-        ],
-        totalCount: [{ $count: 'count' }],
+      $match: {
+        'audited.year': auditedYearObjectId,
+        ...(ulbObjectIds && { ulb: { $in: ulbObjectIds } }), // optional ulb filter
       },
+    },
+    // Join ULB collection to get ULB name / code / state id
+    {
+      $lookup: {
+        from: 'ulbs',
+        localField: 'ulb',
+        foreignField: '_id',
+        pipeline: [
+          {
+            $match: {
+              isActive: true,
+              isPublish: true,
+              ...(stateObjectIds && { state: { $in: stateObjectIds } }),
+              ...(query.populationCategory && populationRange),
+            },
+          },
+        ],
+        as: 'ulbDoc',
+      },
+    },
+    { $unwind: '$ulbDoc' },
+    {
+      $count: 'count',
     },
   ];
 };

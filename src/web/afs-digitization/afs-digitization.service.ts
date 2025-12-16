@@ -1,16 +1,16 @@
+import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import mongoose, { Model } from 'mongoose';
+import { Queue } from 'bullmq';
+import { Model } from 'mongoose';
+import { AnnualAccountData, AnnualAccountDataDocument } from 'src/schemas/annual-account-data.schema';
+import { DigitizationLog, DigitizationLogDocument } from 'src/schemas/digitization-log.schema';
 import { State, StateDocument } from 'src/schemas/state.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { Year, YearDocument } from 'src/schemas/year.schema';
-import { DigitizationReportQueryDto } from './dto/digitization-report-query.dto';
-import { AnnualAccountData, AnnualAccountDataDocument } from 'src/schemas/annual-account-data.schema';
-import { DigitizationLog, DigitizationLogDocument } from 'src/schemas/digitization-log.schema';
-import { afsQuery } from './queries/afs-excel-files.query';
 import { DigitizationJobData } from './dto/digitization-job-data';
-import { InjectQueue } from '@nestjs/bullmq';
-import { Queue } from 'bullmq';
+import { DigitizationReportQueryDto } from './dto/digitization-report-query.dto';
+import { afsCountQuery, afsQuery } from './queries/afs-excel-files.query';
 
 @Injectable()
 export class AfsDigitizationService {
@@ -51,11 +51,18 @@ export class AfsDigitizationService {
   }
 
   async afsList(query: DigitizationReportQueryDto): Promise<any> {
-    mongoose.set('debug', true);
+    // mongoose.set('debug', true);
     // const auditedYearObjectId = new Types.ObjectId(query.yearId);
     // const ulbObjectId = new Types.ObjectId(query.ulbId);
-    const results = await this.annualAccountModel.aggregate(afsQuery(query)).exec();
-    return results ? results[0] : null;
+    // const results = await this.annualAccountModel.aggregate(afsQuery(query)).exec();
+    const [data, countResult] = await Promise.all([
+      this.annualAccountModel.aggregate(afsQuery(query)).exec(),
+      this.annualAccountModel.aggregate<{ count: number }>(afsCountQuery(query)).exec(),
+    ]);
+
+    // this.logger.log(`AFS List fetched: ${data.length} records`, countResult);
+    const totalCount: number = countResult[0]?.count ?? 0;
+    return { data, totalCount };
   }
 
   async getRequestLog(requestId: string): Promise<DigitizationLogDocument | null> {
