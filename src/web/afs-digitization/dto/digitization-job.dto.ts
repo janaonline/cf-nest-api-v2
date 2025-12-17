@@ -35,7 +35,7 @@ export class DigitizationFileDto {
   originalFileName?: string;
 }
 
-export class DigitizationJobDataDto {
+export class DigitizationJobDto {
   @ApiProperty({
     description: 'Annual Accounts identifier',
     example: '65a7dd50b0c7e600128b1234',
@@ -77,14 +77,40 @@ export class DigitizationJobDataDto {
   docType!: string;
 
   @ApiProperty({
-    description: 'List of files (ULB + AFS PDFs) to be digitized for this ULB',
-    type: () => DigitizationFileDto,
-    isArray: true,
+    description: 'Public or internal URL of the PDF to digitize',
+    example:
+      'https://jana-cityfinance-stg.s3.ap-south-1.amazonaws.com/objects/c908edc2-1b41-47e9-9a1e-62bc827d80c1.pdf',
   })
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => DigitizationFileDto)
-  files!: DigitizationFileDto[];
+  @IsString()
+  @IsNotEmpty()
+  pdfUrl!: string;
+
+  @ApiProperty({
+    description: 'Public or internal URL of the digitized Excel file',
+    example:
+      'afs/5dd24729437ba31f7eb42f46_606aadac4dff55e6c075c507_audited_bal_sheet_schedules_9778ccc5-c775-4369-a3bb-244dfc8240f0.xlsx',
+  })
+  @IsString()
+  @IsOptional()
+  digitizedExcelUrl?: string;
+
+  @ApiProperty({
+    enum: DigitizationUploadedBy,
+    description: 'Source of this file (ULB main file or AFS attachment)',
+    example: DigitizationUploadedBy.ULB,
+  })
+  @IsEnum(DigitizationUploadedBy)
+  uploadedBy!: DigitizationUploadedBy;
+
+  // @ApiProperty({
+  //   description: 'List of files (ULB + AFS PDFs) to be digitized for this ULB',
+  //   type: () => DigitizationFileDto,
+  //   isArray: true,
+  // })
+  // @IsArray()
+  // @ValidateNested({ each: true })
+  // @Type(() => DigitizationFileDto)
+  // files!: DigitizationFileDto[];
 }
 
 /**
@@ -94,11 +120,11 @@ export class DigitizationJobDataDto {
 export class DigitizationJobBatchDto {
   @ApiProperty({
     description: 'Array of digitization jobs to queue',
-    type: () => DigitizationJobDataDto,
+    type: () => DigitizationJobDto,
     isArray: true,
   })
   @IsArray()
   @ValidateNested({ each: true })
-  @Type(() => DigitizationJobDataDto)
-  jobs!: DigitizationJobDataDto[];
+  @Type(() => DigitizationJobDto)
+  jobs!: DigitizationJobDto[];
 }

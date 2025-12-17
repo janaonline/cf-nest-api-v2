@@ -1,11 +1,10 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
-import { Job } from 'bullmq';
 import { Logger } from '@nestjs/common';
+import { Job } from 'bullmq';
 // import { DigitizationJobData } from './dto/digitization-job-data';
 import { HttpService } from '@nestjs/axios';
-import { firstValueFrom, of, delay } from 'rxjs';
-import { DigitizationJobData } from '../dto/digitization-job-data';
-import FormData from 'form-data';
+import { delay, firstValueFrom, of } from 'rxjs';
+import { DigitizationJobDto } from '../dto/digitization-job.dto';
 
 @Processor('afsDigitization', { concurrency: 2 })
 export class DigitizationProcessor extends WorkerHost {
@@ -16,16 +15,16 @@ export class DigitizationProcessor extends WorkerHost {
   }
 
   // BullMQ entry point
-  async process(job: Job<DigitizationJobData>): Promise<void> {
+  async process(job: Job<DigitizationJobDto>): Promise<void> {
     const data = job.data;
     this.logger.log(`Processing job ${job.id} | ULB: ${data.ulb} | ${data.year} | ${data.uploadedBy}`);
 
     try {
       // await this.handleDigitizationJob(job);
-      await this.handleDigitizationJob_test();
+      // await this.handleDigitizationJob_test();
       this.logger.log(`✅ Digitization job ${job.id} completed`);
     } catch (err: any) {
-      this.logger.error(`❌ Digitization job ${job.id} failed: ${err?.message || err}`);
+      // this.logger.error(`❌ Digitization job ${job.id} failed: ${err?.message || err}`);
       // rethrow so BullMQ can handle retries
       throw err;
     }

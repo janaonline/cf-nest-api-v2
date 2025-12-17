@@ -37,7 +37,8 @@ export class S3Service {
     return out.Body! as Readable; // Node.js Readable
   }
 
-  async getBuffer(key: string): Promise<Buffer> {
+  async getBuffer(url: string): Promise<Buffer> {
+    const key = this.getKeyFromS3Url(url); // extract key from full S3 URL
     const dataStream = await this.getObjectStream(key);
     const chunks: Uint8Array[] = [];
     for await (const chunk of dataStream) {
@@ -88,5 +89,10 @@ export class S3Service {
     await this.client.send(cmd);
 
     this.logger.log(`✅ Copied to s3://${this.bucket}/${destKey}`);
+  }
+
+  getKeyFromS3Url(url: string): string {
+    const parsedUrl = new URL(url);
+    return parsedUrl.pathname.substring(1); // remove leading '/'
   }
 }

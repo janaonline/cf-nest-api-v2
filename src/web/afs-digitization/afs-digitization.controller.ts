@@ -4,10 +4,9 @@ import type { Response } from 'express';
 import { YearIdToLabel } from 'src/core/constants/years';
 import { AfsDigitizationService } from './afs-digitization.service';
 import { AfsDumpService } from './afs-dump.service';
-import { DigitizationJobDataDto } from './dto/digitization-job-data';
-import { DigitizationJobBatchDto } from './dto/digitization-job.dto';
+import { DigitizationJobBatchDto, DigitizationJobDto } from './dto/digitization-job.dto';
 import { DigitizationReportQueryDto } from './dto/digitization-report-query.dto';
-import { DigitizationQueueService, DigitizationResponse } from './queue/digitization-queue/digitization-queue.service';
+import { DigitizationQueueService } from './queue/digitization-queue/digitization-queue.service';
 
 @Controller('afs-digitization')
 export class AfsDigitizationController {
@@ -60,7 +59,7 @@ export class AfsDigitizationController {
   }
 
   @Post('digitize')
-  async digitize(@Body() body: DigitizationJobDataDto) {
+  async digitize(@Body() body: DigitizationJobDto) {
     // body = {
     //   annualAccountsId: '630085be29ef916762354bdc',
     //   ulb: '5dd24729437ba31f7eb42f46',
@@ -156,7 +155,7 @@ export class AfsDigitizationController {
 
   @Get('file/:id')
   async getFile(@Param('id') id: string) {
-    const result = await this.digitizationQueueService.getFile(id);
+    const result = await this.afsService.getFile(id);
     return result;
   }
 }

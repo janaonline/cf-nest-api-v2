@@ -3,6 +3,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Queue } from 'bullmq';
 import { Model, Types } from 'mongoose';
+import { buildPopulationMatch } from 'src/core/helpers/populationCategory.helper';
+import { AfsExcelFile, AfsExcelFileDocument } from 'src/schemas/afs/afs-excel-file.schema';
 import { AnnualAccountData, AnnualAccountDataDocument } from 'src/schemas/annual-account-data.schema';
 import { DigitizationLog, DigitizationLogDocument } from 'src/schemas/digitization-log.schema';
 import { State, StateDocument } from 'src/schemas/state.schema';
@@ -11,8 +13,6 @@ import { Year, YearDocument } from 'src/schemas/year.schema';
 import { DigitizationJobData } from './dto/digitization-job-data';
 import { DigitizationReportQueryDto } from './dto/digitization-report-query.dto';
 import { afsCountQuery, afsQuery } from './queries/afs-excel-files.query';
-import { name } from 'eslint-plugin-prettier/recommended';
-import { buildPopulationMatch } from 'src/core/helpers/populationCategory.helper';
 
 @Injectable()
 export class AfsDigitizationService {
@@ -30,6 +30,9 @@ export class AfsDigitizationService {
 
     @InjectModel(AnnualAccountData.name)
     private readonly annualAccountModel: Model<AnnualAccountDataDocument>,
+
+    @InjectModel(AfsExcelFile.name)
+    private readonly afsExcelFileModel: Model<AfsExcelFileDocument>,
 
     @InjectModel(DigitizationLog.name, 'digitization_db')
     private readonly digitizationModel: Model<DigitizationLogDocument>,
@@ -88,6 +91,10 @@ export class AfsDigitizationService {
       .sort({ name: 1 })
       .limit(params.limit || 2000);
     return { data };
+  }
+
+  async getFile(id: string) {
+    return this.afsExcelFileModel.findById(id);
   }
 
   async afsList(query: DigitizationReportQueryDto): Promise<any> {
