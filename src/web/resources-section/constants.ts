@@ -24,6 +24,21 @@ const ANNUAL_ACCOUNTS_DOCS = [
     dbKey: 'cash_flow',
   },
 ];
+const ALLOWED_STATUS = [
+  {
+    status: 'APPROVED',
+    actionTakenByRole: 'STATE',
+  },
+  {
+    status: 'APPROVED',
+    actionTakenByRole: 'MoHUA',
+  },
+  {
+    status: 'PENDING',
+    actionTakenByRole: 'MoHUA',
+  },
+  { currentFormStatus: { $in: [4, 6] } },
+];
 
 /**
  * ------------------------------------------------------------------
@@ -40,8 +55,7 @@ export const getRawFiles1920OnwardsPipeline = (query: QueryResourcesSectionDto) 
   // Filters on AnnualAccounts collection.
   const matchCondition2 = {
     $expr: { $eq: ['$ulb', '$$ulbId'] },
-    // "audited.submit_annual_accounts": true,
-    // currentFormStatus: { $in: [ 4 ] }
+    $or: ALLOWED_STATUS,
   };
   if (yearId) matchCondition2[`${auditType}.year`] = new Types.ObjectId(yearId);
 
