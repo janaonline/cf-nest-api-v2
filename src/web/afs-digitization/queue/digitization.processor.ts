@@ -5,29 +5,28 @@ import { Job } from 'bullmq';
 import { HttpService } from '@nestjs/axios';
 import { delay, firstValueFrom, of } from 'rxjs';
 import { DigitizationJobDto } from '../dto/digitization-job.dto';
+import { DigitizationQueueService } from './digitization-queue/digitization-queue.service';
 
-@Processor('afsDigitization', { concurrency: 2 })
+@Processor('afsDigitization', { concurrency: 1 })
 export class DigitizationProcessor extends WorkerHost {
   private readonly logger = new Logger(DigitizationProcessor.name);
 
-  constructor(private readonly http: HttpService) {
+  constructor(
+    private readonly http: HttpService,
+    private readonly digitizationQueueService: DigitizationQueueService,
+  ) {
     super();
   }
 
   // BullMQ entry point
   async process(job: Job<DigitizationJobDto>): Promise<void> {
     const data = job.data;
-    this.logger.log(`Processing job ${job.id} | ULB: ${data.ulb} | ${data.year} | ${data.uploadedBy}`);
+    // this.logger.log(`Processing `, data);
 
-    try {
-      // await this.handleDigitizationJob(job);
-      // await this.handleDigitizationJob_test();
-      this.logger.log(`✅ Digitization job ${job.id} completed`);
-    } catch (err: any) {
-      // this.logger.error(`❌ Digitization job ${job.id} failed: ${err?.message || err}`);
-      // rethrow so BullMQ can handle retries
-      throw err;
-    }
+    await this.digitizationQueueService.handleDigitizationJob(data);
+    // await this.handleDigitizationJob(job);
+    // await this.handleDigitizationJob_test();
+    this.logger.log(`✅ Digitization job ${job.id} completed`);
   }
 
   async handleDigitizationJob_test() {

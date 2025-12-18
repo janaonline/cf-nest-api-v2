@@ -74,7 +74,7 @@ export class AfsDigitizationController {
     // HTTP 202 semantics: accepted for processing
     return {
       status: 'queued',
-      ...result,
+      result,
     };
   }
 
@@ -143,7 +143,7 @@ export class AfsDigitizationController {
     const result = await this.digitizationQueueService.enqueueBatch(jobs);
     return {
       status: 'queued',
-      // ...result,
+      ...result,
     };
   }
 

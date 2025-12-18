@@ -10,7 +10,7 @@ import { DigitizationLog, DigitizationLogDocument } from 'src/schemas/digitizati
 import { State, StateDocument } from 'src/schemas/state.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { Year, YearDocument } from 'src/schemas/year.schema';
-import { DigitizationJobData } from './dto/digitization-job-data';
+import { DigitizationJobDto } from './dto/digitization-job.dto';
 import { DigitizationReportQueryDto } from './dto/digitization-report-query.dto';
 import { afsCountQuery, afsQuery } from './queries/afs-excel-files.query';
 
@@ -38,7 +38,7 @@ export class AfsDigitizationService {
     private readonly digitizationModel: Model<DigitizationLogDocument>,
 
     @InjectQueue('afsDigitization')
-    private readonly digitizationQueue: Queue<DigitizationJobData>,
+    private readonly digitizationQueue: Queue<DigitizationJobDto>,
   ) {}
 
   async getAfsFilters() {
@@ -116,16 +116,16 @@ export class AfsDigitizationService {
     return this.digitizationModel.findOne({ RequestId: requestId }).exec();
   }
 
-  async enqueueDigitizationJob(data: DigitizationJobData) {
-    const job = await this.digitizationQueue.add('afsDigitization', data, {
-      attempts: 3,
-      backoff: { type: 'exponential', delay: 10_000 },
-      removeOnComplete: 200,
-      removeOnFail: 1000,
-    });
+  // async enqueueDigitizationJob(data: DigitizationJobDto) {
+  //   const job = await this.digitizationQueue.add('afsDigitization', data, {
+  //     attempts: 3,
+  //     backoff: { type: 'exponential', delay: 10_000 },
+  //     removeOnComplete: 200,
+  //     removeOnFail: 1000,
+  //   });
 
-    this.logger.log(`Enqueued digitization job ${job.id} for ULB ${data.ulb} (${data.uploadedBy})`);
+  //   this.logger.log(`Enqueued digitization job ${job.id} for ULB ${data.ulb} (${data.uploadedBy})`);
 
-    return { jobId: job.id };
-  }
+  //   return { jobId: job.id };
+  // }
 }

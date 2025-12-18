@@ -50,25 +50,35 @@ export class DigitizationQueueService {
     private readonly s3Service: S3Service,
   ) {}
 
+  async jobStatus(id: string) {
+    const job = await this.digitizationQueue.getJob(id);
+    if (!job) return { status: 'not_found' };
+
+    const state = await job.getState(); // waiting | active | completed | failed | delayed
+    const progress = job.progress || 0;
+
+    if (state === 'completed') {
+      // const result = (await job.returnvalue) as ZipJobResult & { url: string };
+      return {
+        status: 'completed',
+        progress: 100,
+        // , result
+      };
+    }
+
+    if (state === 'failed') {
+      return { status: 'failed', progress, reason: job.failedReason };
+    }
+
+    return { status: state, progress };
+  }
+
   // digitization.service.ts (as before)
   async enqueueBatch(jobs: DigitizationJobDto[]) {
     // add BullMQ job with jobs as payload
-    this.logger.log(`Enqueuing batch of ${jobs.length} digitization jobs`, jobs);
-
-    const queues: Array<{ name: string; data: any }> = [];
+    this.logger.log(`Enqueuing batch of ${jobs.length} digitization jobs`);
 
     for (const job of jobs) {
-      // const data = {
-      //   annualAccountsId: job.annualAccountsId,
-      //   ulb: job.ulb,
-      //   year: job.year,
-      //   docType: job.docType,
-      //   auditType: job.auditType,
-      //   pdfUrl: job.pdfUrl,
-      //   uploadedBy: job.uploadedBy,
-      // };
-
-      // await this.addAfsExcel(job, jobRes);
       await this.upsertAfsExcelFile(job);
     }
     // this.logger.log(`Prepared ${queues.length} jobs for enqueuing.`, queues);
@@ -96,7 +106,6 @@ export class DigitizationQueueService {
 
     // Build the embedded object (store only what you need)
     const embedded = {
-      // requestId: '', // or a real requestId if you have one
       uploadedAt: now,
       uploadedBy: job.uploadedBy,
       pdfUrl: job.pdfUrl,
@@ -129,34 +138,35 @@ export class DigitizationQueueService {
     });
   }
 
-  async markJobCompleted(params: {
-    annualAccountsId: string;
-    ulb: string;
-    year: string;
-    auditType: string;
-    docType: string;
-    uploadedBy: 'ULB' | 'AFS';
-    requestId: string; // final requestId you want to store
-    jobId: string; // bullmq jobId
-    finishedAt?: Date;
-  }) {
+  async markJobCompleted(job: DigitizationJobDto, digitizationResp: DigitizationResponse) {
+    // mongoose.set('debug', true);
     const filter = {
-      annualAccountsId: new Types.ObjectId(params.annualAccountsId),
-      ulb: new Types.ObjectId(params.ulb),
-      year: new Types.ObjectId(params.year),
-      auditType: params.auditType,
-      docType: params.docType,
+      // annualAccountsId: new Types.ObjectId(params.annualAccountsId),
+      ulb: new Types.ObjectId(job.ulb),
+      year: new Types.ObjectId(job.year),
+      auditType: job.auditType,
+      docType: job.docType,
     };
 
-    const filePath = params.uploadedBy === 'ULB' ? 'ulbFile' : 'afsFile';
-    const now = params.finishedAt ?? new Date();
-
-    return this.afsExcelFileModel.updateOne(
+    const filePath = job.uploadedBy === 'ULB' ? 'ulbFile' : 'afsFile';
+    const now = new Date();
+    let parsedData: any[] = [];
+    let digitizationStatus = 'failed';
+    if (job.digitizedExcelUrl) {
+      parsedData = await this.readDataFromExcelBuffer(job.digitizedExcelUrl);
+      digitizationStatus = 'digitized';
+    }
+    // this.logger.log('Parsed data rows count:', job, filter);
+    return await this.afsExcelFileModel.updateOne(
       filter,
       {
         $set: {
-          [`${filePath}.requestId`]: params.requestId,
-          [`${filePath}.queue.jobId`]: params.jobId,
+          [`${filePath}.digitizationStatus`]: digitizationStatus,
+          [`${filePath}.data`]: parsedData,
+          [`${filePath}.excelUrl`]: job.digitizedExcelUrl || '',
+          [`${filePath}.requestId`]: digitizationResp.request_id,
+          [`${filePath}.overallConfidenceScore`]: digitizationResp.overall_confidence_score,
+          // [`${filePath}.queue.jobId`]: job.jobId,
           [`${filePath}.queue.status`]: 'completed',
           [`${filePath}.queue.progress`]: 100,
           [`${filePath}.queue.finishedAt`]: now,
@@ -166,81 +176,30 @@ export class DigitizationQueueService {
     );
   }
 
-  // async addAfsExcel(job: DigitizationJobDto, jobRes: any) {
-  //   mongoose.set('debug', true);
-  //   const filter = {
-  //     ulb: new Types.ObjectId(job.ulb),
-  //     year: new Types.ObjectId(job.year),
-  //     auditType: job.auditType,
-  //     docType: job.docType,
-  //   };
-
-  //   const existingDoc = await this.afsExcelFileModel.findOne(filter);
-
-  //   if (existingDoc) {
-  //     this.logger.log(
-  //       `AFS Excel document already exists for ULB ${job.ulb}, year ${job.year}, auditType ${job.auditType}, docType ${job.docType}. Skipping creation.`,
-  //     );
-  //     return;
-  //   }
-  //   const newFileEntry = {
-  //     createdAt: new Date(),
-  //     pdfUrl: job.pdfUrl || '',
-  //     queue: {
-  //       jobId: jobRes?.id, // to be filled
-  //       status: QueueStatus.QUEUED,
-  //       progress: 0,
-  //       queuedAt: new Date(),
-  //       attemptsMade: 0,
-  //       startedOn: undefined,
-  //       processedOn: undefined,
-  //       finishedOn: undefined,
-  //     },
-  //     data: [], // empty data for now
-  //   };
-
-  //   const newDocData = {
-  //     ...filter,
-  //     annualAccountsId: new Types.ObjectId(job.annualAccountsId),
-  //     [job.uploadedBy === 'ULB' ? 'ulbFile' : 'afsFile']: newFileEntry, // Initialize with the first entry
-  //   };
-  //   const newDoc = new this.afsExcelFileModel(newDocData);
-  //   return newDoc.save(); // Insert the new document
-  // }
-
-  async jobStatus(id: string) {
-    const job = await this.digitizationQueue.getJob(id);
-    if (!job) return { status: 'not_found' };
-
-    const state = await job.getState(); // waiting | active | completed | failed | delayed
-    const progress = job.progress || 0;
-
-    if (state === 'completed') {
-      // const result = (await job.returnvalue) as ZipJobResult & { url: string };
-      return {
-        status: 'completed',
-        progress: 100,
-        // , result
-      };
-    }
-
-    if (state === 'failed') {
-      return { status: 'failed', progress, reason: job.failedReason };
-    }
-
-    return { status: state, progress };
-  }
-
-  async handleDigitizationJob(job: DigitizationJobDto): Promise<AfsExcelFileDocument | null> {
+  async handleDigitizationJob(job: DigitizationJobDto) {
     const digitizeResp = await this.callDigitizationApi(job);
+    // const digitizeResp = {
+    //   request_id: 'req-20251218-9a1b9b',
+    //   status: 'success',
+    //   message: 'Document processing completed successfully',
+    //   processing_mode: 'direct',
+    //   S3_Excel_Storage_Link:
+    //     'https://cf-digitization-dev.s3.amazonaws.com/excel-output/default_user/default_session/document.xlsx?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAYMBHWUBN5KGTKY2E%2F20251218%2Fap-south-1%2Fs3%2Faws4_request&X-Amz-Date=20251218T090433Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host&X-Amz-Signature=91c9f8351807dce528338662156ad061485432905c999a8f7e9b51b4ad5a4cb7',
+    //   total_processing_time_ms: 82163,
+    //   error_code: null,
+    //   overall_confidence_score: 98.67,
+    //   status_code: 200,
+    // };
     this.logger.log(`Digitization job for ${job.pdfUrl} completed with status `, digitizeResp);
 
-    // copy digitized excel to our S3 bucket
-    job.digitizedExcelUrl = await this.copyDigitizedExcel(job, digitizeResp.S3_Excel_Storage_Link);
-    // job.digitizedExcelUrl = `afs/5dd24729437ba31f7eb42f46_606aadac4dff55e6c075c507_audited_bal_sheet_schedules_68d7d461-8e4d-4e64-b1cc-8146f37a2034.xlsx`;
-    this.logger.log(`Copied digitized Excel to ${job.digitizedExcelUrl}`);
+    //afs/5dd24729437ba31f7eb42f46_606aadac4dff55e6c075c507_audited_bal_sheet_schedules_efabadee-d036-4baf-9d85-8d608f8d8dfa.xlsx
 
-    return await this.saveAfsExcelFileRecord(job, digitizeResp);
+    // copy digitized excel to our S3 bucket
+    if (!digitizeResp.S3_Excel_Storage_Link) {
+      job.digitizedExcelUrl = await this.copyDigitizedExcel(job, digitizeResp.S3_Excel_Storage_Link);
+    }
+    await this.markJobCompleted(job, digitizeResp);
+
     // 4. TODO: Save S3_Excel_Storage_Link, request_id, metrics in your DB
     //    - You can inject a repository/service here and persist:
     //      respData.S3_Excel_Storage_Link, respData.request_id, etc.
@@ -288,131 +247,10 @@ export class DigitizationQueueService {
     return destinationKey;
   }
 
-  async saveAfsExcelFileRecord(
-    job: DigitizationJobDto,
-    digitizationResp: DigitizationResponse,
-  ): Promise<AfsExcelFileDocument | null> {
-    // mongoose.set('debug', true);
-    // Define the common fields for the filter
-    const filter = {
-      ulb: new Types.ObjectId(job.ulb),
-      year: new Types.ObjectId(job.year),
-      auditType: job.auditType,
-      docType: job.docType,
-    };
-
-    const parsedData = await this.readDataFromExcelBuffer(job.digitizedExcelUrl!);
-    // Prepare the new file object to push
-    const newFileEntry = {
-      overallConfidenceScore: digitizationResp.overall_confidence_score,
-      requestId: digitizationResp.request_id,
-      uploadedAt: new Date(),
-      uploadedBy: job.uploadedBy,
-      pdfUrl: job.pdfUrl || '',
-      excelUrl: job.digitizedExcelUrl || '',
-      // This part requires you to move your readDataFromExcelBuffer call
-      // outside this atomic block if you use this method directly.
-      // data: [parsedData[0]],
-      data: parsedData,
-    };
-
-    // Atomically find and update the document (if it exists) using $push
-    // const updateResult = await this.afsExcelFileModel.updateOne(filter, { $push: { files: newFileEntry } });
-    // const updateResult = await this.afsExcelFileModel.updateOne(
-    //   filter,
-    //   {
-    //     // 1️⃣ remove old entry for same uploadedBy
-    //     $pull: { files: { uploadedBy: job.uploadedBy } },
-
-    //     // 2️⃣ add new file entry
-    //     $push: { files: newFileEntry },
-    //   },
-    //   // Use the $ operator as a placeholder for the matched element
-    //   // { $set: { 'files.$.data': newFileEntry.data } },
-    // );
-
-    // await this.afsExcelFileModel.updateOne(filter, { $pull: { files: { uploadedBy: job.uploadedBy } } });
-    // const updateResult = await this.afsExcelFileModel.updateOne(filter, { $push: { files: newFileEntry } });
-
-    const updateResult = await this.afsExcelFileModel.bulkWrite([
-      { updateOne: { filter, update: { $pull: { files: { uploadedBy: job.uploadedBy } } } } },
-      { updateOne: { filter, update: { $push: { files: newFileEntry } } } },
-    ]);
-
-    this.logger.log('Update result:', updateResult);
-    // If updateResult.modifiedCount is 0, the document didn't exist.
-    // We need to create it and insert the data.
-    if (updateResult.modifiedCount === 0) {
-      const newDocData = {
-        ...filter,
-        annualAccountsId: new Types.ObjectId(job.annualAccountsId),
-        files: [newFileEntry], // Initialize with the first entry
-      };
-      const newDoc = new this.afsExcelFileModel(newDocData);
-      return newDoc.save(); // Insert the new document
-    }
-
-    // Return something meaningful if the update succeeded
-    return await this.afsExcelFileModel.findOne(filter);
-  }
-  async saveAfsExcelFileRecord_bkp(
-    job: DigitizationJobDto,
-    digitizationResp: DigitizationResponse,
-  ): Promise<AfsExcelFileDocument> {
-    let parentDoc = await this.afsExcelFileModel.findOne({
-      ulb: new Types.ObjectId(job.ulb),
-      year: new Types.ObjectId(job.year),
-      auditType: job.auditType,
-      docType: job.docType,
-    });
-
-    if (!parentDoc) {
-      parentDoc = new this.afsExcelFileModel({
-        annualAccountsId: new Types.ObjectId(job.annualAccountsId),
-        ulb: new Types.ObjectId(job.ulb),
-        year: new Types.ObjectId(job.year),
-        auditType: job.auditType,
-        docType: job.docType,
-        files: [],
-      });
-    }
-
-    // if (!Array.isArray(parentDoc.files)) {
-    //   parentDoc.files = [];
-    // }
-    if (!job.digitizedExcelUrl) {
-      throw new Error('Digitized Excel URL is missing in the job data.');
-    }
-
-    const parsedData = await this.readDataFromExcelBuffer(job.digitizedExcelUrl);
-
-    parentDoc.ulbFile = {
-      overallConfidenceScore: digitizationResp.overall_confidence_score,
-      requestId: digitizationResp.request_id,
-      uploadedAt: new Date(),
-      uploadedBy: job.uploadedBy,
-      pdfUrl: job.pdfUrl || '',
-      excelUrl: job.digitizedExcelUrl || '',
-      data: parsedData,
-      queue: {
-        jobId: '', // to be filled
-        status: 'completed',
-        progress: 100,
-        queuedAt: new Date(),
-        attemptsMade: 1,
-        finishedOn: Date.now(),
-      },
-    };
-    return parentDoc.save();
-  }
-
   async readDataFromExcelBuffer(url: string) {
-    // const buffer = await this.s3Service.getObjectBuffer(url);
-    // const buffer = await this.s3Service.getBuffer(url);
-    // const buffer = await this.getBufferFromS3(url);
     this.logger.log('Reading Excel from S3 URL:', url);
+
     const buffer: Buffer = await this.s3Service.getBuffer(url);
-    // const buffer: Buffer = await this.s3Service.readExcelFromS3AsJson(url);
     const workbook = XLSX.read(buffer, { type: 'buffer' });
     const sheetName = workbook.SheetNames[0];
     const sheetData: any[][] = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], {

@@ -49,6 +49,13 @@ export class AfsExcelFileItem {
   @Prop({ type: Number, default: -1 })
   overallConfidenceScore: number;
 
+  @Prop({
+    type: String,
+    enum: ['not-started', 'not-digitized', 'in-progress', 'digitized', 'failed'],
+    default: 'not-digitized',
+  })
+  digitizationStatus: string; // e.g. "not-started","completed", "failed"
+
   @Prop({ type: String })
   requestId: string;
 

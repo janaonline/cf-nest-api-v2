@@ -88,10 +88,13 @@ export class S3Service {
 
     await this.client.send(cmd);
 
-    this.logger.log(`✅ Copied to s3://${this.bucket}/${destKey}`);
+    // this.logger.log(`✅ Copied to s3://${this.bucket}/${destKey}`);
   }
 
   getKeyFromS3Url(url: string): string {
+    if (!url.startsWith('http')) {
+      return url; // already a key
+    }
     const parsedUrl = new URL(url);
     return parsedUrl.pathname.substring(1); // remove leading '/'
   }
