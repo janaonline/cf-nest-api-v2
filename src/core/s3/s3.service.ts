@@ -39,6 +39,7 @@ export class S3Service {
 
   async getBuffer(url: string): Promise<Buffer> {
     const key = this.getKeyFromS3Url(url); // extract key from full S3 URL
+    // this.logger.log(`Fetching buffer from S3 for key: ${key}`);
     const dataStream = await this.getObjectStream(key);
     const chunks: Uint8Array[] = [];
     for await (const chunk of dataStream) {
@@ -92,6 +93,9 @@ export class S3Service {
   }
 
   getKeyFromS3Url(url: string): string {
+    if (url.startsWith('/')) {
+      return url.substring(1); // remove leading '/'
+    }
     if (!url.startsWith('http')) {
       return url; // already a key
     }

@@ -32,7 +32,7 @@ export class AfsDigitizationController {
   }
 
   @Get('afs-list')
-  async afsList(@Query() query: DigitizationReportQueryDto) {
+  async afsList(@Query() query: DigitizationReportQueryDto): Promise<any> {
     // query.yearId = new Types.ObjectId(query.yearId);
     // query.ulbId = query.ulbId ? new Types.ObjectId(query.ulbId) : undefined;
     // this.logger.log(`Received afs-list request with query: ${JSON.stringify(query)}`);
@@ -58,18 +58,17 @@ export class AfsDigitizationController {
     return res.send(buffer);
   }
 
+  @Post('upload-afs-file')
+  async uploadAFSFile(@Body() body: DigitizationJobDto) {
+    const result = await this.digitizationQueueService.upsertAfsExcelFile(body);
+    return {
+      status: 'success',
+      data: result,
+    };
+  }
+
   @Post('digitize')
   async digitize(@Body() body: DigitizationJobDto) {
-    // body = {
-    //   annualAccountsId: '630085be29ef916762354bdc',
-    //   ulb: '5dd24729437ba31f7eb42f46',
-    //   year: '606aadac4dff55e6c075c507',
-    //   auditType: 'audited',
-    //   docType: 'bal_sheet_schedules',
-    //   fileUrl:
-    //     'https://jana-cityfinance-stg.s3-12345.ap-south-1.amazonaws.com/objects/c908edc2-1b41-47e9-9a1e-62bc827d80c1.pdf',
-    //   uploadedBy: 'AFS',
-    // };
     const result = await this.digitizationQueueService.handleDigitizationJob(body);
     // HTTP 202 semantics: accepted for processing
     return {
@@ -77,62 +76,6 @@ export class AfsDigitizationController {
       result,
     };
   }
-
-  // @Post('copy-excel')
-  // async copyExcel(@Body() body: DigitizationJobDataDto) {
-  //   body = {
-  //     annualAccountsId: '630085be29ef916762354bdc',
-  //     ulb: '5dd24729437ba31f7eb42f46',
-  //     year: '606aadac4dff55e6c075c507',
-  //     auditType: 'audited',
-  //     docType: 'bal_sheet_schedules',
-  //     fileUrl:
-  //       'https://jana-cityfinance-stg.s3.ap-south-1.amazonaws.com/objects/c908edc2-1b41-47e9-9a1e-62bc827d80c1.pdf',
-  //     uploadedBy: 'ULB',
-  //     digitizedExcelUrl:
-  //       'afs/5dd24729437ba31f7eb42f46_606aadac4dff55e6c075c507_audited_bal_sheet_schedules_9778ccc5-c775-4369-a3bb-244dfc8240f0.xlsx',
-  //   };
-  //   const result = await this.digitizationQueueService.copyDigitizedExcel(body, body.digitizedExcelUrl!);
-  //   // HTTP 202 semantics: accepted for processing
-  //   return {
-  //     status: 'queued',
-  //     // ...result,
-  //   };
-  // }
-
-  // @Post('read-excel')
-  // async readExcel(@Body() body: DigitizationJobDataDto) {
-  //   body = {
-  //     annualAccountsId: '630085be29ef916762354bdc',
-  //     ulb: '5dd24729437ba31f7eb42f46',
-  //     year: '606aadac4dff55e6c075c507',
-  //     auditType: 'audited',
-  //     docType: 'bal_sheet_schedules',
-  //     digitizedExcelUrl:
-  //       'afs/5dd24729437ba31f7eb42f46_606aadac4dff55e6c075c507_audited_bal_sheet_schedules_9778ccc5-c775-4369-a3bb-244dfc8240f0.xlsx',
-  //     // 'https://jana-cityfinance-stg.s3.ap-south-1.amazonaws.com/afs/5dd24729437ba31f7eb42f46_606aadac4dff55e6c075c507_audited_bal_sheet_schedules_9778ccc5-c775-4369-a3bb-244dfc8240f0.xlsx',
-  //     fileUrl:
-  //       'https://jana-cityfinance-stg.s3.ap-south-1.amazonaws.com/objects/c908edc2-1b41-47e9-9a1e-62bc827d80c1.pdf',
-  //     uploadedBy: 'ULB',
-  //   };
-  //   const digitResp: DigitizationResponse = {
-  //     overall_confidence_score: 95,
-  //     request_id: 'req-12345',
-  //     error_code: null,
-  //     status: 'completed',
-  //     message: 'Success',
-  //     S3_Excel_Storage_Link: '',
-  //     status_code: 200,
-  //     processing_mode: 'direct',
-  //     total_processing_time_ms: 12345,
-  //   };
-  //   const result = await this.digitizationQueueService.saveAfsExcelFileRecord(body, digitResp);
-  //   // HTTP 202 semantics: accepted for processing
-  //   return {
-  //     status: 'queued',
-  //     // ...result,
-  //   };
-  // }
 
   @Post('enqueue-batch')
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))

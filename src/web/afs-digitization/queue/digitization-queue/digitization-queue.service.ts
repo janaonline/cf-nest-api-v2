@@ -11,7 +11,7 @@ import { S3Service } from 'src/core/s3/s3.service';
 import { AfsExcelFile, AfsExcelFileDocument, QueueStatus } from 'src/schemas/afs/afs-excel-file.schema';
 import { v4 as uuidv4 } from 'uuid';
 import * as XLSX from 'xlsx';
-import { DigitizationJobDto } from '../../dto/digitization-job.dto';
+import { DigitizationJobDto, DigitizationUploadedBy } from '../../dto/digitization-job.dto';
 
 export interface DigitizationResponse {
   request_id: string;
@@ -79,7 +79,7 @@ export class DigitizationQueueService {
     this.logger.log(`Enqueuing batch of ${jobs.length} digitization jobs`);
 
     for (const job of jobs) {
-      await this.upsertAfsExcelFile(job);
+      await this.upsertAfsExcelFile(job, true);
     }
     // this.logger.log(`Prepared ${queues.length} jobs for enqueuing.`, queues);
 
@@ -88,10 +88,17 @@ export class DigitizationQueueService {
     return { queuedJobs: jobs.length };
   }
 
-  async upsertAfsExcelFile(job: DigitizationJobDto) {
-    const jobRes = await this.digitizationQueue.add(`digitization-job-${job.ulb}-${job.year}-${job.docType}`, job);
-    // this.logger.log(`Enqueued job `, res.id);
+  async upsertAfsExcelFile(job: DigitizationJobDto, isQueue: boolean = false) {
+    let queue: { jobId: string } | undefined = undefined;
 
+    if (isQueue) {
+      const jobRes = await this.digitizationQueue.add(`digitization-job-${job.ulb}-${job.year}-${job.docType}`, job);
+      // this.logger.log(`Enqueued job `, res.id);
+
+      queue = {
+        jobId: jobRes.id || '',
+      };
+    }
     // mongoose.set('debug', true);
     const filter = {
       ulb: new Types.ObjectId(job.ulb),
@@ -100,25 +107,16 @@ export class DigitizationQueueService {
       docType: job.docType,
     };
 
-    const filePath = job.uploadedBy === 'ULB' ? 'ulbFile' : 'afsFile';
-
-    const now = new Date();
+    const filePath = job.uploadedBy === DigitizationUploadedBy.ULB ? 'ulbFile' : 'afsFile';
 
     // Build the embedded object (store only what you need)
     const embedded = {
-      uploadedAt: now,
       uploadedBy: job.uploadedBy,
       pdfUrl: job.pdfUrl,
-      excelUrl: job.digitizedExcelUrl,
-      overallConfidenceScore: -1,
+      // excelUrl: job.digitizedExcelUrl,
+      // overallConfidenceScore: -1,
       data: [],
-      queue: {
-        jobId: jobRes?.id,
-        status: QueueStatus.WAITING,
-        progress: 0,
-        queuedAt: now,
-        attemptsMade: 0,
-      },
+      queue,
     };
 
     const update = {
@@ -148,7 +146,7 @@ export class DigitizationQueueService {
       docType: job.docType,
     };
 
-    const filePath = job.uploadedBy === 'ULB' ? 'ulbFile' : 'afsFile';
+    const filePath = job.uploadedBy === DigitizationUploadedBy.ULB ? 'ulbFile' : 'afsFile';
     const now = new Date();
     let parsedData: any[] = [];
     let digitizationStatus = 'failed';
@@ -179,15 +177,15 @@ export class DigitizationQueueService {
   async handleDigitizationJob(job: DigitizationJobDto) {
     const digitizeResp = await this.callDigitizationApi(job);
     // const digitizeResp = {
-    //   request_id: 'req-20251218-9a1b9b',
+    //   request_id: 'req-20251218-ad3d47',
     //   status: 'success',
     //   message: 'Document processing completed successfully',
     //   processing_mode: 'direct',
     //   S3_Excel_Storage_Link:
-    //     'https://cf-digitization-dev.s3.amazonaws.com/excel-output/default_user/default_session/document.xlsx?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAYMBHWUBN5KGTKY2E%2F20251218%2Fap-south-1%2Fs3%2Faws4_request&X-Amz-Date=20251218T090433Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host&X-Amz-Signature=91c9f8351807dce528338662156ad061485432905c999a8f7e9b51b4ad5a4cb7',
-    //   total_processing_time_ms: 82163,
+    //     'https://cf-digitization-dev.s3.amazonaws.com/excel-output/default_user/default_session/document.xlsx?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAYMBHWUBN5KGTKY2E%2F20251218%2Fap-south-1%2Fs3%2Faws4_request&X-Amz-Date=20251218T112216Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host&X-Amz-Signature=12ffc187c9749c2d53f225a9d2ac35a944ef5340c2d59369ee841756d4301ac3',
+    //   total_processing_time_ms: 86003,
     //   error_code: null,
-    //   overall_confidence_score: 98.67,
+    //   overall_confidence_score: 99.39,
     //   status_code: 200,
     // };
     this.logger.log(`Digitization job for ${job.pdfUrl} completed with status `, digitizeResp);
@@ -195,7 +193,7 @@ export class DigitizationQueueService {
     //afs/5dd24729437ba31f7eb42f46_606aadac4dff55e6c075c507_audited_bal_sheet_schedules_efabadee-d036-4baf-9d85-8d608f8d8dfa.xlsx
 
     // copy digitized excel to our S3 bucket
-    if (!digitizeResp.S3_Excel_Storage_Link) {
+    if (digitizeResp.S3_Excel_Storage_Link) {
       job.digitizedExcelUrl = await this.copyDigitizedExcel(job, digitizeResp.S3_Excel_Storage_Link);
     }
     await this.markJobCompleted(job, digitizeResp);
@@ -219,6 +217,7 @@ export class DigitizationQueueService {
   }
 
   async callDigitizationApi(job: DigitizationJobDto): Promise<DigitizationResponse> {
+    this.logger.log(`Calling digitization API for job: ${job.pdfUrl}`);
     const formData = await this.getFormDataForDigitization(job);
     return firstValueFrom(
       this.http
@@ -235,6 +234,7 @@ export class DigitizationQueueService {
   }
 
   async copyDigitizedExcel(job: DigitizationJobDto, sourceUrl: string): Promise<string> {
+    this.logger.log(`Copying digitized Excel for job: ${job.pdfUrl}`);
     const filename = this.getFilenameFromUrl(sourceUrl);
     // Get original extension
     const ext = path.extname(filename) || '.xlsx'; // default to .xlsx

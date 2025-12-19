@@ -41,8 +41,8 @@ export class DigitizationJobDto {
     example: '65a7dd50b0c7e600128b1234',
   })
   @IsString()
-  @IsNotEmpty()
-  annualAccountsId!: string;
+  @IsOptional()
+  annualAccountsId?: string;
 
   @ApiProperty({
     description: 'ULB identifier',

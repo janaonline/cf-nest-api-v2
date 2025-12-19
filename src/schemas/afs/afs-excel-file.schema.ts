@@ -5,6 +5,7 @@ import { HydratedDocument, Types, Schema as MongooseSchema } from 'mongoose';
 export type AfsExcelFileDocument = HydratedDocument<AfsExcelFile>;
 
 export enum QueueStatus {
+  NOT_STARTED = 'not-started',
   ON_THE_JOB = 'on-the-job',
   COMPLETED = 'completed',
   FAILED = 'failed',
@@ -13,34 +14,36 @@ export enum QueueStatus {
   QUEUED = 'queued',
 }
 
-@Schema()
+export enum UploadedBy {
+  ULB = 'ULB',
+  AFS = 'AFS',
+}
+
+@Schema({ _id: false })
 export class AfsExcelFileQueue {
   @Prop({ type: String })
   jobId: string;
 
-  @Prop({ type: String, enum: Object.values(QueueStatus) })
+  @Prop({ type: String, enum: Object.values(QueueStatus), default: QueueStatus.WAITING })
   status: string;
 
-  @Prop({ type: Number }) // 0-100
+  @Prop({ type: Number, default: 0 }) // 0-100
   progress: number;
 
   @Prop({ type: String, required: false })
   failedReason?: string;
 
-  @Prop({ type: Number, required: false })
-  startedOn?: number;
+  @Prop({ type: Date, default: Date.now })
+  createdAt: Date;
 
-  @Prop({ type: Date })
-  queuedAt: Date;
-
-  @Prop({ type: Number })
+  @Prop({ type: Number, default: 0 })
   attemptsMade: number;
 
-  @Prop({ type: Number, required: false })
-  processedOn?: number;
+  @Prop({ type: Date, required: false })
+  processedOn?: Date;
 
-  @Prop({ type: Number, required: false })
-  finishedOn?: number;
+  @Prop({ type: Date, required: false })
+  finishedOn?: Date;
 }
 
 export const AfsExcelFileQueueSchema = SchemaFactory.createForClass(AfsExcelFileQueue);
@@ -59,11 +62,11 @@ export class AfsExcelFileItem {
   @Prop({ type: String })
   requestId: string;
 
-  @Prop({ type: Date })
-  uploadedAt: Date;
+  @Prop({ type: Date, default: Date.now })
+  createdAt: Date;
 
-  @Prop({ type: String, enum: ['ULB', 'AFS'] })
-  uploadedBy: string; // e.g. "ULB", "AFS"
+  @Prop({ type: String, enum: Object.values(UploadedBy) })
+  uploadedBy: UploadedBy; // e.g. "ULB", "AFS"
 
   // @Prop({ type: String })
   // fileUrl: string;
@@ -73,6 +76,9 @@ export class AfsExcelFileItem {
 
   @Prop({ type: String })
   pdfUrl: string;
+
+  @Prop({ type: Number })
+  noOfPages: number;
 
   @Prop({ type: String })
   excelUrl: string;
