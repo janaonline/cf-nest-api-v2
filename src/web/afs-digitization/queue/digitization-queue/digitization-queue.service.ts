@@ -113,6 +113,7 @@ export class DigitizationQueueService {
     const embedded = {
       uploadedBy: job.uploadedBy,
       pdfUrl: job.pdfUrl,
+      digitizationStatus: isQueue ? QueueStatus.QUEUED : QueueStatus.NOT_STARTED,
       // excelUrl: job.digitizedExcelUrl,
       // overallConfidenceScore: -1,
       data: [],

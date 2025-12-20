@@ -54,7 +54,7 @@ export class AfsExcelFileItem {
 
   @Prop({
     type: String,
-    enum: ['not-started', 'not-digitized', 'in-progress', 'digitized', 'failed'],
+    enum: ['not-started', 'not-digitized', 'queued', 'digitized', 'failed'],
     default: 'not-digitized',
   })
   digitizationStatus: string; // e.g. "not-started","completed", "failed"
