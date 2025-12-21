@@ -1,31 +1,54 @@
-import { Controller, Get, Query, Res } from '@nestjs/common';
+import { Body, Controller, Get, Logger, Param, Post, Query, Res, UsePipes, ValidationPipe } from '@nestjs/common';
+import { ApiBody } from '@nestjs/swagger';
 import type { Response } from 'express';
+import { YearIdToLabel } from 'src/core/constants/years';
 import { AfsDigitizationService } from './afs-digitization.service';
 import { AfsDumpService } from './afs-dump.service';
+import { DigitizationJobBatchDto, DigitizationJobDto } from './dto/digitization-job.dto';
 import { DigitizationReportQueryDto } from './dto/digitization-report-query.dto';
-import { Types } from 'mongoose';
-import { YearIdToLabel } from 'src/core/constants/years';
+import { DigitizationQueueService } from './queue/digitization-queue/digitization-queue.service';
 
 @Controller('afs-digitization')
 export class AfsDigitizationController {
+  logger = new Logger(AfsDigitizationController.name);
+
   constructor(
     // @InjectModel(AfsMetric.name, 'CONNECTION_2')
     // private afsMetricModel: Model<AfsMetricDocument>,
 
     private afsService: AfsDigitizationService,
     private afsDumpService: AfsDumpService,
+    private digitizationQueueService: DigitizationQueueService,
   ) {}
 
-  @Get('dump-report')
-  async dumpAfsReport() {
-    return await this.afsDumpService.dumpReport();
+  @Get('filters')
+  async getAfsFilters() {
+    return await this.afsService.getAfsFilters();
   }
 
-  @Get('afsexcelfiles')
+  @Get('ulbs')
+  async getUlbs(@Query() query: { populationCategory: string }) {
+    return await this.afsService.getUlbs(query);
+  }
+
+  @Get('afs-list')
+  async afsList(@Query() query: DigitizationReportQueryDto): Promise<any> {
+    // query.yearId = new Types.ObjectId(query.yearId);
+    // query.ulbId = query.ulbId ? new Types.ObjectId(query.ulbId) : undefined;
+    // this.logger.log(`Received afs-list request with query: ${JSON.stringify(query)}`);
+    return await this.afsService.afsList(query);
+  }
+
+  @Get('request-log/:requestId')
+  async getRequestLog(@Param('requestId') requestId: string) {
+    return { data: await this.afsService.getRequestLog(requestId) };
+  }
+
+  @Get('dump/afs-excel')
   // async downloadAfsExcelFiles(@Query('yearId') yearId: string, @Query('ulbId') ulbId?: string, @Res() res: Response) {
   async downloadAfsExcelFiles(@Query() query: DigitizationReportQueryDto, @Res() res: Response) {
-    query.yearId = new Types.ObjectId(query.yearId);
-    query.ulbId = query.ulbId ? new Types.ObjectId(query.ulbId) : undefined;
+    // query.yearId = new Types.ObjectId(query.yearId);
+    // query.ulbId = query.ulbId ? new Types.ObjectId(query.ulbId) : undefined;
     const buffer = await this.afsDumpService.exportAfsExcelFiles(query);
 
     const filename = `afs-dump-${YearIdToLabel[query.yearId.toString()]}-${query.docType}.xlsx`;
@@ -35,10 +58,47 @@ export class AfsDigitizationController {
     return res.send(buffer);
   }
 
-  @Get('with-afs')
-  async getWithAfs(@Query() query: DigitizationReportQueryDto) {
-    query.yearId = new Types.ObjectId(query.yearId);
-    query.ulbId = query.ulbId ? new Types.ObjectId(query.ulbId) : undefined;
-    return await this.afsDumpService.getAnnualWithAfsExcel(query);
+  @Post('upload-afs-file')
+  async uploadAFSFile(@Body() body: DigitizationJobDto) {
+    const result = await this.digitizationQueueService.upsertAfsExcelFile(body);
+    return {
+      status: 'success',
+      data: result,
+    };
+  }
+
+  @Post('digitize')
+  async digitize(@Body() body: DigitizationJobDto) {
+    const result = await this.digitizationQueueService.handleDigitizationJob(body);
+    // HTTP 202 semantics: accepted for processing
+    return {
+      status: 'queued',
+      result,
+    };
+  }
+
+  @Post('enqueue-batch')
+  @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
+  @ApiBody({ type: DigitizationJobBatchDto })
+  async enqueueBatch(@Body() body: DigitizationJobBatchDto) {
+    const { jobs } = body;
+
+    const result = await this.digitizationQueueService.enqueueBatch(jobs);
+    return {
+      status: 'queued',
+      ...result,
+    };
+  }
+
+  @Get('status/:id')
+  async status(@Param('id') id: string) {
+    const result = await this.digitizationQueueService.jobStatus(id);
+    return result;
+  }
+
+  @Get('file/:id')
+  async getFile(@Param('id') id: string) {
+    const result = await this.afsService.getFile(id);
+    return result;
   }
 }
