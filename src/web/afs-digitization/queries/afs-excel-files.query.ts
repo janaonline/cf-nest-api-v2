@@ -42,19 +42,12 @@ export const afsQuery = (query: DigitizationReportQueryDto): any[] => {
       },
     },
     { $unwind: '$ulbDoc' },
-    { $sort: { 'ulbDoc.name': 1 } },
+    { $sort: { [query.sortBy || 'ulbDoc.name']: query.sortOrder === 'desc' ? -1 : 1 } },
     { $skip: skip }, // Pagination
     { $limit: query.limit },
-    // {
-    //   $match: {
-    //     'ulbDoc.isActive': true,
-    //     'ulbDoc.isPublish': true,
-    //     ...(stateObjectIds && { state: { $in: stateObjectIds } }),
-    //   },
-    // },
     {
       $lookup: {
-        from: 'afsexcelfiles',
+        from: 'afs_xl_files',
         let: {
           fyId: '$audited.year', // annualaccountdatas.audited.year
           ulbId: '$ulb', // annualaccountdatas.ulb
@@ -182,7 +175,7 @@ export const afsQuery_v1 = (query: DigitizationReportQueryDto): any[] => {
     // },
     {
       $lookup: {
-        from: 'afsexcelfiles',
+        from: 'afs_xl_files',
         let: {
           fyId: '$audited.year', // annualaccountdatas.audited.year
           ulbId: '$ulb', // annualaccountdatas.ulb
@@ -373,7 +366,7 @@ export const afsQueryDump = (query: DigitizationReportQueryDto): any[] => {
     },
     {
       $lookup: {
-        from: 'afsexcelfiles',
+        from: 'afs_xl_files',
         let: {
           fyId: '$audited.year', // annualaccountdatas.audited.year
           ulbId: '$ulb', // annualaccountdatas.ulb
@@ -546,7 +539,7 @@ export const afsQuery_bkp = (query: DigitizationReportQueryDto): any[] => {
     // },
     {
       $lookup: {
-        from: 'afsexcelfiles',
+        from: 'afs_xl_files',
         let: {
           fyId: '$audited.year', // annualaccountdatas.audited.year
           ulbId: '$ulb', // annualaccountdatas.ulb
@@ -743,7 +736,7 @@ export const ulbAfsQuery = (query: DigitizationReportQueryDto): any[] => {
 
     {
       $lookup: {
-        from: 'afsexcelfiles',
+        from: 'afs_xl_files',
         let: {
           fyId: '$annualaccountdatas.audited.year', // annualaccountdatas.audited.year
           ulbId: '$_id', // ulbs.ulb

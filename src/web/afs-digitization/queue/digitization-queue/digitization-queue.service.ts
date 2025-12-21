@@ -309,7 +309,7 @@ export class DigitizationQueueService {
     return formattedData;
   }
 
-  // async buildAfsExcelFileItem(job: DigitizationJobData, digitizationResp: DigitizationResponse) {
+  // async buildAfsExcelFileItem(job: DigitizationJobDto, digitizationResp: DigitizationResponse) {
   //   // Excel → JSON (structured rows)
   //   const workbook = xlsx.read(buffer, { type: 'buffer' });
   //   const sheetName = workbook.SheetNames[0];

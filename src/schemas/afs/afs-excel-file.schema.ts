@@ -19,6 +19,14 @@ export enum UploadedBy {
   AFS = 'AFS',
 }
 
+export enum DigitizationStatuses {
+  NOT_STARTED = 'not-started',
+  NOT_DIGITIZED = 'not-digitized',
+  QUEUED = 'queued',
+  DIGITIZED = 'digitized',
+  FAILED = 'failed',
+}
+
 @Schema({ _id: false })
 export class AfsExcelFileQueue {
   @Prop({ type: String })
@@ -54,10 +62,10 @@ export class AfsExcelFileItem {
 
   @Prop({
     type: String,
-    enum: ['not-started', 'not-digitized', 'queued', 'digitized', 'failed'],
-    default: 'not-digitized',
+    enum: Object.values(DigitizationStatuses),
+    default: DigitizationStatuses.NOT_DIGITIZED,
   })
-  digitizationStatus: string; // e.g. "not-started","completed", "failed"
+  digitizationStatus: DigitizationStatuses; // e.g. "not-started","completed", "failed"
 
   @Prop({ type: String })
   requestId: string;
@@ -93,7 +101,7 @@ export class AfsExcelFileItem {
 
 const AfsExcelFileItemSchema = SchemaFactory.createForClass(AfsExcelFileItem);
 
-@Schema({ collection: 'afsexcelfiles' })
+@Schema({ collection: 'afs_xl_files' })
 export class AfsExcelFile {
   // @Prop({ type: String, required: true })
   // ulbId: string; // original string ID

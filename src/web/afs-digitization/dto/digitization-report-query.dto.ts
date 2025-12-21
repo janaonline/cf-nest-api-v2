@@ -2,6 +2,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import { IsArray, IsEnum, IsInt, IsMongoId, IsOptional, Min } from 'class-validator';
+import { DigitizationStatuses } from 'src/schemas/afs/afs-excel-file.schema';
 
 export enum AuditType {
   AUDITED = 'audited',
@@ -127,6 +128,15 @@ export class DigitizationReportQueryDto {
   auditType?: AuditType;
 
   @ApiPropertyOptional({
+    description: 'Filter by digitizationStatus',
+    example: 'not-digitized',
+    enum: DigitizationStatuses,
+  })
+  @IsOptional()
+  @IsEnum(DigitizationStatuses)
+  digitizationStatus?: DigitizationStatuses;
+
+  @ApiPropertyOptional({
     description: 'Filter by populationCategory',
     example: '1M-4M',
     enum: PopulationCategoryies,
@@ -135,25 +145,30 @@ export class DigitizationReportQueryDto {
   @IsEnum(PopulationCategoryies)
   populationCategory?: PopulationCategoryies;
 
-  // @ApiPropertyOptional({
-  //   description: 'Filter by document type (e.g. "bal_sheet")',
-  //   example: 'bal_sheet',
-  //   enum: AuditType,
-  // })
-  // //   @IsString()
-  // @IsEnum(AuditType)
-  // @IsOptional()
-  // isAudited?: string;
-
   @ApiPropertyOptional({
     description: 'Filter by document type (e.g. "bal_sheet")',
     example: 'bal_sheet',
     enum: DocumentType,
   })
-  //   @IsString()
   @IsEnum(DocumentType)
-  //   @IsOptional()
   docType: string;
+
+  @ApiPropertyOptional({
+    description: 'Sort by field (not implemented)',
+    example: 'ulbDoc.name',
+  })
+  @IsOptional()
+  @IsEnum(['ulbDoc.name'] as const, { message: 'sortBy must be a valid field name' })
+  sortBy?: string;
+
+  @ApiPropertyOptional({
+    description: 'Sort order: asc or desc (not implemented)',
+    example: 'asc',
+    default: 'asc',
+  })
+  @IsOptional()
+  @IsEnum(['asc', 'desc'] as const, { message: 'sortOrder must be either "asc" or "desc"' })
+  sortOrder?: 'asc' | 'desc';
 
   @ApiPropertyOptional({
     description: 'Page number for pagination (1-based)',

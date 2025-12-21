@@ -1,7 +1,6 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
-// import { DigitizationJobData } from './dto/digitization-job-data';
 import { HttpService } from '@nestjs/axios';
 import { delay, firstValueFrom, of } from 'rxjs';
 import { DigitizationJobDto } from '../dto/digitization-job.dto';

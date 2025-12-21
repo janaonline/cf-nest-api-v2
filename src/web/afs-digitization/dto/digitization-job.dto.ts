@@ -101,16 +101,6 @@ export class DigitizationJobDto {
   })
   @IsEnum(DigitizationUploadedBy)
   uploadedBy!: DigitizationUploadedBy;
-
-  // @ApiProperty({
-  //   description: 'List of files (ULB + AFS PDFs) to be digitized for this ULB',
-  //   type: () => DigitizationFileDto,
-  //   isArray: true,
-  // })
-  // @IsArray()
-  // @ValidateNested({ each: true })
-  // @Type(() => DigitizationFileDto)
-  // files!: DigitizationFileDto[];
 }
 
 /**

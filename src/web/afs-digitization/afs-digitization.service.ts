@@ -4,7 +4,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Queue } from 'bullmq';
 import { Model, Types } from 'mongoose';
 import { buildPopulationMatch } from 'src/core/helpers/populationCategory.helper';
-import { AfsExcelFile, AfsExcelFileDocument } from 'src/schemas/afs/afs-excel-file.schema';
+import { AfsExcelFile, AfsExcelFileDocument, DigitizationStatuses } from 'src/schemas/afs/afs-excel-file.schema';
 import { AnnualAccountData, AnnualAccountDataDocument } from 'src/schemas/annual-account-data.schema';
 import { DigitizationLog, DigitizationLogDocument } from 'src/schemas/digitization-log.schema';
 import { State, StateDocument } from 'src/schemas/state.schema';
@@ -55,6 +55,11 @@ export class AfsDigitizationService {
       { key: 'unaudited', name: 'Unaudited' },
     ];
 
+    const digitizationStatuses = Object.values(DigitizationStatuses).map((status) => ({
+      key: status,
+      name: status.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+    }));
+
     const populationCategories = ['All', '4M+', '1M-4M', '500K-1M', '100K-500K', '<100K'];
     const [states, ulbs, years] = await Promise.all([
       this.stateModel.find({ isActive: true, isPublish: true }, { _id: 1, name: 1 }).sort({ name: 1 }),
@@ -67,7 +72,7 @@ export class AfsDigitizationService {
     ]);
 
     // TODO: migration pending.
-    return { data: { states, ulbs, years, populationCategories, documentTypes, auditTypes } };
+    return { data: { states, ulbs, years, populationCategories, documentTypes, auditTypes, digitizationStatuses } };
   }
 
   async getUlbs(params: {
