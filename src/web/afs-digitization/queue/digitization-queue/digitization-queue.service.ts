@@ -1,4 +1,5 @@
 import { HttpService } from '@nestjs/axios';
+import { AxiosError } from 'axios';
 import { InjectQueue } from '@nestjs/bullmq';
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
@@ -24,6 +25,18 @@ export interface DigitizationResponse {
   overall_confidence_score: number;
   status_code: number;
 }
+
+//  data: {
+// 7|dev-cf-nest-api-v2  |       request_id: 'req-20251222-593af9',
+// 7|dev-cf-nest-api-v2  |       status: 'error',
+// 7|dev-cf-nest-api-v2  |       message: 'An error occurred during confidence scoring. Please try again, and if it persists, contact support.',
+// 7|dev-cf-nest-api-v2  |       processing_mode: 'direct',
+// 7|dev-cf-nest-api-v2  |       S3_Excel_Storage_Link: null,
+// 7|dev-cf-nest-api-v2  |       total_processing_time_ms: 114844,
+// 7|dev-cf-nest-api-v2  |       error_code: 'DOC_016',
+// 7|dev-cf-nest-api-v2  |       overall_confidence_score: null,
+// 7|dev-cf-nest-api-v2  |       status_code: '500'
+// 7|dev-cf-nest-api-v2  |     }
 
 // sample respData:
 //   request_id: 'req-20251209-80ea34',
@@ -138,7 +151,7 @@ export class DigitizationQueueService {
     });
   }
 
-  async markJobCompleted(job: DigitizationJobDto, digitizationResp: DigitizationResponse) {
+  async updateAfsExcelFile(job: DigitizationJobDto, updateData: Partial<AfsExcelFile>) {
     // mongoose.set('debug', true);
     const filter = {
       // annualAccountsId: new Types.ObjectId(params.annualAccountsId),
@@ -147,9 +160,12 @@ export class DigitizationQueueService {
       auditType: job.auditType,
       docType: job.docType,
     };
+    return this.afsExcelFileModel.updateOne(filter, { $set: updateData }, { runValidators: true });
+  }
 
+  async markJobCompleted(job: DigitizationJobDto, digitizationResp: DigitizationResponse) {
+    // mongoose.set('debug', true);
     const filePath = job.uploadedBy === DigitizationUploadedBy.ULB ? 'ulbFile' : 'afsFile';
-    const now = new Date();
     let parsedData: any[] = [];
     let digitizationStatus = 'failed';
     if (job.digitizedExcelUrl) {
@@ -157,48 +173,53 @@ export class DigitizationQueueService {
       digitizationStatus = 'digitized';
     }
     // this.logger.log('Parsed data rows count:', job, filter);
-    return await this.afsExcelFileModel.updateOne(
-      filter,
-      {
-        $set: {
-          [`${filePath}.digitizationStatus`]: digitizationStatus,
-          [`${filePath}.data`]: parsedData,
-          [`${filePath}.excelUrl`]: job.digitizedExcelUrl || '',
-          [`${filePath}.requestId`]: digitizationResp.request_id,
-          [`${filePath}.overallConfidenceScore`]: digitizationResp.overall_confidence_score,
-          // [`${filePath}.queue.jobId`]: job.jobId,
-          [`${filePath}.queue.status`]: 'completed',
-          [`${filePath}.queue.progress`]: 100,
-          [`${filePath}.queue.finishedAt`]: now,
-        },
-      },
-      { runValidators: true },
-    );
+    return await this.updateAfsExcelFile(job, {
+      [`${filePath}.digitizationStatus`]: digitizationStatus,
+      [`${filePath}.data`]: parsedData,
+      [`${filePath}.excelUrl`]: job.digitizedExcelUrl || '',
+      [`${filePath}.requestId`]: digitizationResp.request_id,
+      [`${filePath}.overallConfidenceScore`]: digitizationResp.overall_confidence_score,
+      [`${filePath}.totalProcessingTimeMs`]: digitizationResp.total_processing_time_ms,
+      // [`${filePath}.digitizationMsg`]: digitizationResp.message,
+      // [`${filePath}.queue.jobId`]: job.jobId,
+      [`${filePath}.queue.status`]: 'completed',
+      [`${filePath}.queue.progress`]: 100,
+      [`${filePath}.queue.finishedAt`]: new Date(),
+    });
+  }
+
+  async markJobFailed(job: DigitizationJobDto, responseData: DigitizationResponse) {
+    const filePath = job.uploadedBy === DigitizationUploadedBy.ULB ? 'ulbFile' : 'afsFile';
+
+    return await this.updateAfsExcelFile(job, {
+      [`${filePath}.requestId`]: responseData?.request_id,
+      [`${filePath}.totalProcessingTimeMs`]: responseData?.total_processing_time_ms,
+      // [`${filePath}.digitizationMsg`]: responseData.message,
+      [`${filePath}.digitizationStatus`]: 'failed',
+      [`${filePath}.queue.status`]: 'failed',
+      [`${filePath}.queue.progress`]: 100,
+      [`${filePath}.queue.finishedOn`]: new Date(),
+      [`${filePath}.queue.failedReason`]: responseData?.message,
+    });
   }
 
   async handleDigitizationJob(job: DigitizationJobDto) {
-    const digitizeResp = await this.callDigitizationApi(job);
-    // const digitizeResp = {
-    //   request_id: 'req-20251218-ad3d47',
-    //   status: 'success',
-    //   message: 'Document processing completed successfully',
-    //   processing_mode: 'direct',
-    //   S3_Excel_Storage_Link:
-    //     'https://cf-digitization-dev.s3.amazonaws.com/excel-output/default_user/default_session/document.xlsx?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAYMBHWUBN5KGTKY2E%2F20251218%2Fap-south-1%2Fs3%2Faws4_request&X-Amz-Date=20251218T112216Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host&X-Amz-Signature=12ffc187c9749c2d53f225a9d2ac35a944ef5340c2d59369ee841756d4301ac3',
-    //   total_processing_time_ms: 86003,
-    //   error_code: null,
-    //   overall_confidence_score: 99.39,
-    //   status_code: 200,
-    // };
-    this.logger.log(`Digitization job for ${job.pdfUrl} completed with status `, digitizeResp);
+    try {
+      const digitizeResp = await this.callDigitizationApi(job);
 
-    //afs/5dd24729437ba31f7eb42f46_606aadac4dff55e6c075c507_audited_bal_sheet_schedules_efabadee-d036-4baf-9d85-8d608f8d8dfa.xlsx
+      this.logger.log(`Digitization job for ${job.pdfUrl} completed with status `, digitizeResp);
 
-    // copy digitized excel to our S3 bucket
-    if (digitizeResp.S3_Excel_Storage_Link) {
-      job.digitizedExcelUrl = await this.copyDigitizedExcel(job, digitizeResp.S3_Excel_Storage_Link);
+      // copy digitized excel to our S3 bucket
+      if (digitizeResp.S3_Excel_Storage_Link) {
+        job.digitizedExcelUrl = await this.copyDigitizedExcel(job, digitizeResp.S3_Excel_Storage_Link);
+      }
+      await this.markJobCompleted(job, digitizeResp);
+    } catch (error) {
+      this.logger.error(`Error processing digitization : `);
+      throw error;
+      // mark job as failed in DB
+      // await this.markJobFailed(job, error);
     }
-    await this.markJobCompleted(job, digitizeResp);
 
     // 4. TODO: Save S3_Excel_Storage_Link, request_id, metrics in your DB
     //    - You can inject a repository/service here and persist:
@@ -206,28 +227,51 @@ export class DigitizationQueueService {
   }
 
   async getFormDataForDigitization(job: DigitizationJobDto): Promise<FormData> {
-    this.logger.log(`Fetching S3 object for digitization: ${job.pdfUrl}`);
-    const buffer = await this.s3Service.getBuffer(job.pdfUrl);
-    const formData = new FormData();
-    formData.append('file', buffer, {
-      filename: 'document.pdf',
-      //   contentType: 'application/pdf',
-    });
+    try {
+      this.logger.log(`Fetching S3 object for digitization: ${job.pdfUrl}`);
+      // const buffer = await this.s3Service.getBuffer(job.pdfUrl);
+      const buffer = await this.s3Service.getPdfBufferFromS3(job.pdfUrl);
+      const formData = new FormData();
+      formData.append('file', buffer, {
+        filename: 'document.pdf',
+        //   contentType: 'application/pdf',
+      });
 
-    formData.append('Document_type_ID', job.docType || 'bal_sheet');
-    return formData;
+      formData.append('Document_type_ID', job.docType || 'bal_sheet');
+      return formData;
+    } catch (error: any) {
+      this.logger.error(`Error fetching S3 object for digitization:`);
+      throw error;
+    }
   }
 
   async callDigitizationApi(job: DigitizationJobDto): Promise<DigitizationResponse> {
     this.logger.log(`Calling digitization API for job: ${job.pdfUrl}`);
-    const formData = await this.getFormDataForDigitization(job);
-    return firstValueFrom(
-      this.http
-        .post(process.env.DIGITIZATION_API_URL + 'digitization/AFS_Digitization', formData, {
-          headers: formData.getHeaders(),
-        })
-        .pipe(map((resp) => resp.data as DigitizationResponse)),
-    );
+    try {
+      const formData = await this.getFormDataForDigitization(job);
+      return await firstValueFrom(
+        this.http
+          .post(process.env.DIGITIZATION_API_URL + 'digitization/AFS_Digitization', formData, {
+            headers: formData.getHeaders(),
+          })
+          .pipe(map((resp) => resp.data as DigitizationResponse)),
+      );
+    } catch (error: any) {
+      // const err = error as AxiosError<any>;
+
+      const n = this.normalizeError(error);
+
+      // Build a safe failure payload for markJobFailed (prefer response.data when present)
+      const err = error as AxiosError<any>;
+      const failurePayload = err?.response?.data ?? ({ message: n.message, status: (n as any).status } as any);
+
+      this.logger.error(`Error calling digitization API:`, failurePayload);
+
+      await this.markJobFailed(job, failurePayload as DigitizationResponse);
+      // await this.markJobFailed(job, (err.response?.data || error) as DigitizationResponse);
+      // For BullMQ retries:
+      throw error;
+    }
   }
 
   getFilenameFromUrl(url: string): string {
@@ -308,6 +352,48 @@ export class DigitizationQueueService {
     });
     // this.logger.log('formattedData', formattedData);
     return formattedData;
+  }
+
+  normalizeError(err: unknown) {
+    const e: any = err;
+
+    const isAxios = !!(e?.isAxiosError || (e?.response && e?.config));
+    if (isAxios) {
+      const ax = e as AxiosError<any>;
+      return {
+        kind: 'axios',
+        message:
+          ax.response?.data?.message ||
+          ax.response?.data?.error ||
+          (typeof ax.response?.data === 'string' ? ax.response.data : undefined) ||
+          ax.message ||
+          'Axios error',
+        status: ax.response?.status,
+        statusText: ax.response?.statusText,
+        responseData: ax.response?.data,
+      };
+    }
+
+    // AWS SDK v3 and similar
+    const awsStatus = e?.$metadata?.httpStatusCode;
+    const awsRequestId = e?.$metadata?.requestId;
+    const awsCode = e?.name || e?.Code || e?.code;
+
+    if (awsStatus || awsRequestId || awsCode) {
+      return {
+        kind: 'aws',
+        message: e?.message || 'AWS error',
+        code: awsCode,
+        status: awsStatus,
+        requestId: awsRequestId,
+      };
+    }
+
+    if (err instanceof Error) {
+      return { kind: 'error', message: err.message };
+    }
+
+    return { kind: 'unknown', message: String(err) };
   }
 
   // async buildAfsExcelFileItem(job: DigitizationJobDto, digitizationResp: DigitizationResponse) {

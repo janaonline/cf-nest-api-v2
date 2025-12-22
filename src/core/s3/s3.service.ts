@@ -38,16 +38,25 @@ export class S3Service {
   }
 
   async getBuffer(url: string): Promise<Buffer> {
-    const key = this.getKeyFromS3Url(url); // extract key from full S3 URL
-    // this.logger.log(`Fetching buffer from S3 for key: ${key}`);
-    const dataStream = await this.getObjectStream(key);
-    const chunks: Uint8Array[] = [];
-    for await (const chunk of dataStream) {
-      chunks.push(chunk);
-    }
+    try {
+      const key = this.getKeyFromS3Url(url); // extract key from full S3 URL
+      // this.logger.log(`Fetching buffer from S3 for key: ${key}`);
+      const dataStream = await this.getObjectStream(key);
+      const chunks: Uint8Array[] = [];
+      for await (const chunk of dataStream) {
+        chunks.push(chunk);
+      }
 
-    // IMPORTANT: standardize to Node Buffer
-    return Buffer.from(Buffer.concat(chunks));
+      // IMPORTANT: standardize to Node Buffer
+      return Buffer.from(Buffer.concat(chunks));
+    } catch (e) {
+      this.logger.error(`Error fetching buffer from S3`);
+      // throw error;
+      const status = e?.$metadata?.httpStatusCode;
+      const code = e?.name;
+
+      throw new Error(`S3 GetObject failed (code=${code}, status=${status}), message=${e.message}`);
+    }
   }
 
   async presignGet(Key: string) {
@@ -100,6 +109,49 @@ export class S3Service {
       return url; // already a key
     }
     const parsedUrl = new URL(url);
-    return parsedUrl.pathname.substring(1); // remove leading '/'
+    const path = parsedUrl.pathname.substring(1); // remove leading '/'
+
+    // Remove leading slash and decode %20 etc.
+    const key = decodeURIComponent(path).replace(/^\/+/, '');
+    return key;
+  }
+
+  toS3Key(input: string): string {
+    // If it's a full URL, extract pathname. If it's already a path/key, use as-is.
+    let path = input;
+    try {
+      // Works for https://... or s3://... style URLs
+      const u = new URL(input);
+      path = u.pathname; // includes leading '/'
+    } catch {
+      // not a valid absolute URL; keep as provided
+    }
+
+    // Remove leading slash and decode %20 etc.
+    const key = decodeURIComponent(path).replace(/^\/+/, '');
+
+    return key;
+  }
+
+  async streamToBuffer(body: any): Promise<Buffer> {
+    const stream = body as Readable;
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    return Buffer.concat(chunks);
+  }
+
+  async getPdfBufferFromS3(urlOrKey: string): Promise<Buffer> {
+    const Key = this.toS3Key(urlOrKey);
+
+    try {
+      const resp = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key }));
+      if (!resp.Body) throw new Error('S3 GetObject returned empty Body');
+      return await this.streamToBuffer(resp.Body);
+    } catch (e: any) {
+      // Log useful diagnostics; AWS SDK v3 errors often have `name` and `$metadata`
+      const status = e?.$metadata?.httpStatusCode;
+      const code = e?.name;
+      throw new Error(`S3 GetObject failed (code=${code}, status=${status}), message=${e.message}`);
+    }
   }
 }
