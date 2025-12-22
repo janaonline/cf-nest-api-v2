@@ -13,6 +13,7 @@ import { Year, YearDocument } from 'src/schemas/year.schema';
 import { DigitizationJobDto } from './dto/digitization-job.dto';
 import { DigitizationReportQueryDto } from './dto/digitization-report-query.dto';
 import { afsCountQuery, afsQuery } from './queries/afs-excel-files.query';
+import { documentTypes } from './constants/docTypes';
 
 @Injectable()
 export class AfsDigitizationService {
@@ -42,14 +43,6 @@ export class AfsDigitizationService {
   ) {}
 
   async getAfsFilters() {
-    const documentTypes = [
-      { key: 'bal_sheet', name: 'Balance Sheet' },
-      { key: 'bal_sheet_schedules', name: 'Balance Sheet Schedules' },
-      { key: 'inc_exp', name: 'Income and Expenditure' },
-      { key: 'inc_exp_schedules', name: 'Income and Expenditure Schedules' },
-      { key: 'cash_flow', name: 'Cashflow Statement' },
-      { key: 'auditor_report', name: "Auditor's Report" },
-    ];
     const auditTypes = [
       { key: 'audited', name: 'Audited' },
       { key: 'unaudited', name: 'Unaudited' },
@@ -71,7 +64,6 @@ export class AfsDigitizationService {
       this.yearModel.find({ isActive: true }, { _id: 1, year: 1 }).sort({ year: -1 }),
     ]);
 
-    // TODO: migration pending.
     return { data: { states, ulbs, years, populationCategories, documentTypes, auditTypes, digitizationStatuses } };
   }
 
