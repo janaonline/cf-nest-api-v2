@@ -44,7 +44,7 @@ export const afsQuery = (query: DigitizationReportQueryDto): any[] => {
     { $unwind: '$ulbDoc' },
     { $sort: { [query.sortBy || 'ulbDoc.name']: query.sortOrder === 'desc' ? -1 : 1 } },
     { $skip: skip }, // Pagination
-    { $limit: query.limit },
+    ...(query.limit ? [{ $limit: query.limit }] : []),
     {
       $lookup: {
         from: 'afs_xl_files',

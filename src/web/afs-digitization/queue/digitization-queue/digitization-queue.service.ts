@@ -62,12 +62,13 @@ export class DigitizationQueueService {
       return {
         status: 'completed',
         progress: 100,
+        data: job.data,
         // , result
       };
     }
 
     if (state === 'failed') {
-      return { status: 'failed', progress, reason: job.failedReason };
+      return { status: 'failed', progress, reason: job.failedReason, data: job.data };
     }
 
     return { status: state, progress };

@@ -5,7 +5,7 @@ import * as ExcelJS from 'exceljs';
 import mongoose, { Model, Types } from 'mongoose';
 import { YearIdToLabel } from 'src/core/constants/years';
 import { getPopulationCategory } from 'src/core/helpers/populationCategory.helper';
-import { AfsExcelFile, AfsExcelFileDocument } from 'src/schemas/afs/afs-excel-file.schema';
+import { AfsExcelFile, AfsExcelFileDocument, AfsExcelFileItem } from 'src/schemas/afs/afs-excel-file.schema';
 import { AnnualAccountData, AnnualAccountDataDocument } from 'src/schemas/annual-account-data.schema';
 import { DigitizationLog, DigitizationLogDocument } from 'src/schemas/digitization-log.schema';
 import { State, StateDocument } from 'src/schemas/state.schema';
@@ -43,7 +43,8 @@ export class AfsDumpService {
     // console.log('Generating AFS Excel Report for query:', afsQuery(query));
     // const docs = await this.annualAccountModel.aggregate(afsQuery(query)).exec();
     // mongoose.set('debug', true);
-    const docs = await this.annualAccountModel.aggregate(afsQueryDump(query)).exec();
+    // const docs = await this.annualAccountModel.aggregate(afsQueryDump(query)).exec();
+    const docs = await this.annualAccountModel.aggregate(afsQuery(query)).exec();
     const s3LiveUrlPrefix = 'https://jana-cityfinance-live.s3.ap-south-1.amazonaws.com';
     const s3UrlPrefix = 'https://jana-cityfinance-stg.s3.ap-south-1.amazonaws.com';
     const s3DigitizationUrlPrefix = 'https://cf-digitization-dev.s3.amazonaws.com';
@@ -89,12 +90,13 @@ export class AfsDumpService {
       uploadedAt?: Date | string;
     };
     type AfsExcelFiles = {
-      files?: DigitizedFile[];
+      ulbFile?: AfsExcelFileItem;
+      afsFile?: AfsExcelFileItem;
       auditType?: string;
     };
     type AfsReportDoc = {
       afsexcelfiles?: AfsExcelFiles | null;
-      afsfiles?: { s3Key?: string } | null;
+      // afsfiles?: { s3Key?: string } | null;
       createdAt?: Date | string;
       stateName?: string;
       ulb?: Types.ObjectId | string;
@@ -107,34 +109,29 @@ export class AfsDumpService {
     const typedDocs = docs as AfsReportDoc[];
 
     for (const doc of typedDocs) {
-      const ulbDigitizedFiles =
-        doc.afsexcelfiles?.files && doc.afsexcelfiles.files.length !== 0 ? doc.afsexcelfiles.files[0] : null;
-      const afsDigitizedFiles =
-        doc.afsexcelfiles?.files && doc.afsexcelfiles.files.length === 2 ? doc.afsexcelfiles.files[1] : null;
+      // const ulbDigitizedFiles =
+      //   doc.afsexcelfiles?.files && doc.afsexcelfiles.files.length !== 0 ? doc.afsexcelfiles.files[0] : null;
+      // const afsDigitizedFiles =
+      //   doc.afsexcelfiles?.files && doc.afsexcelfiles.files.length === 2 ? doc.afsexcelfiles.files[1] : null;
 
+      const ulbFile = doc.afsexcelfiles?.ulbFile;
+      const afsFile = doc.afsexcelfiles?.afsFile;
       let ulbDigitizeLogMsg = '';
-      if (ulbDigitizedFiles?.requestId) {
+      if (ulbFile?.requestId) {
         // safe optional chaining and await inside an async function context is valid here
-        const log = await this.digitizationModel.findOne({ RequestId: ulbDigitizedFiles.requestId }).exec();
+        const log = await this.digitizationModel.findOne({ RequestId: ulbFile.requestId }).exec();
         ulbDigitizeLogMsg = log ? log.Message : '';
       }
 
       let afsDigitizeLogMsg = '';
-      if (afsDigitizedFiles?.requestId) {
-        const afsDigitizeLog = await this.digitizationModel.findOne({ RequestId: afsDigitizedFiles.requestId }).exec();
+      if (afsFile?.requestId) {
+        const afsDigitizeLog = await this.digitizationModel.findOne({ RequestId: afsFile.requestId }).exec();
         afsDigitizeLogMsg = afsDigitizeLog ? afsDigitizeLog.Message : '';
       }
 
-      const ulbDigitizedStatus = ulbDigitizedFiles
-        ? ulbDigitizedFiles.fileUrl === 'https://placeholder-link.com/none'
-          ? 'Failed'
-          : 'Success'
-        : 'Not-Digitized';
-      const afsDigitizedStatus = afsDigitizedFiles
-        ? afsDigitizedFiles.fileUrl === 'https://placeholder-link.com/none'
-          ? 'Failed'
-          : 'Success'
-        : null;
+      const ulbDigitizedStatus = ulbFile?.digitizationStatus || 'Not-Digitized';
+
+      const afsDigitizedStatus = afsFile?.digitizationStatus || 'Not-Digitized';
 
       // Safely extract the dynamic pdf url property (query.docType)
       let pdfUrl: string | undefined;
@@ -159,18 +156,18 @@ export class AfsDumpService {
         docType: DOC_TYPES[`${query.docType}`],
         // ulbUploaded: doc.bal_sheet.url,
         ulbUploaded: pdfUrl ? s3LiveUrlPrefix + pdfUrl : null,
-        afsUploaded: doc.afsfiles ? s3UrlPrefix + '/' + doc.afsfiles?.s3Key : null,
+        afsUploaded: afsFile?.pdfUrl ? s3UrlPrefix + '/' + afsFile?.pdfUrl : null,
         formUploadedOn: doc.createdAt ?? null,
         ulbDigitizedStatus,
-        ulbDigitizedFile: ulbDigitizedFiles ? s3UrlPrefix + '/' + ulbDigitizedFiles?.s3Key : null,
-        ulbDigitizedOn: ulbDigitizedFiles?.uploadedAt ?? null,
-        ulbRequestId: ulbDigitizedFiles?.requestId ?? null,
+        ulbDigitizedFile: ulbFile?.excelUrl ? s3UrlPrefix + '/' + ulbFile?.excelUrl : null,
+        ulbDigitizedOn: ulbFile?.createdAt ?? null,
+        ulbRequestId: ulbFile?.requestId ?? null,
         ulbDigitizeLogMsg,
 
         afsDigitizedStatus,
-        afsDigitizedFile: afsDigitizedFiles ? s3UrlPrefix + '/' + afsDigitizedFiles?.s3Key : null,
-        afsDigitizedOn: afsDigitizedFiles?.uploadedAt ?? null,
-        afsRequestId: afsDigitizedFiles?.requestId ?? null,
+        afsDigitizedFile: afsFile?.excelUrl ? s3UrlPrefix + '/' + afsFile?.excelUrl : null,
+        afsDigitizedOn: afsFile?.createdAt ?? null,
+        afsRequestId: afsFile?.requestId ?? null,
         afsDigitizeLogMsg,
       });
     }
