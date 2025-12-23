@@ -4,7 +4,12 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Queue } from 'bullmq';
 import { Model, Types } from 'mongoose';
 import { buildPopulationMatch } from 'src/core/helpers/populationCategory.helper';
-import { AfsExcelFile, AfsExcelFileDocument, DigitizationStatuses } from 'src/schemas/afs/afs-excel-file.schema';
+import {
+  AfsExcelFile,
+  AfsExcelFileDocument,
+  AuditType,
+  DigitizationStatuses,
+} from 'src/schemas/afs/afs-excel-file.schema';
 import { AnnualAccountData, AnnualAccountDataDocument } from 'src/schemas/annual-account-data.schema';
 import { DigitizationLog, DigitizationLogDocument } from 'src/schemas/digitization-log.schema';
 import { State, StateDocument } from 'src/schemas/state.schema';
@@ -43,10 +48,15 @@ export class AfsDigitizationService {
   ) {}
 
   async getAfsFilters() {
-    const auditTypes = [
-      { key: 'audited', name: 'Audited' },
-      { key: 'unaudited', name: 'Unaudited' },
-    ];
+    // const auditTypes = [
+    //   { key: 'audited', name: 'Audited' },
+    //   { key: 'unAudited', name: 'Unaudited' },
+    // ];
+
+    const auditTypes = Object.values(AuditType).map((type) => ({
+      key: type,
+      name: type.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+    }));
 
     const digitizationStatuses = Object.values(DigitizationStatuses).map((status) => ({
       key: status,
@@ -64,7 +74,17 @@ export class AfsDigitizationService {
       this.yearModel.find({ isActive: true }, { _id: 1, year: 1 }).sort({ year: -1 }),
     ]);
 
-    return { data: { states, ulbs, years, populationCategories, documentTypes, auditTypes, digitizationStatuses } };
+    return {
+      data: {
+        states,
+        ulbs,
+        years,
+        populationCategories,
+        documentTypes,
+        auditTypes,
+        digitizationStatuses,
+      },
+    };
   }
 
   async getUlbs(params: {
