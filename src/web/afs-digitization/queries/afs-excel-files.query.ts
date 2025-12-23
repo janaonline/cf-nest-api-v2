@@ -3,9 +3,73 @@ import { YearIdToLabel } from 'src/core/constants/years';
 import { DOC_TYPES } from '../constants/docTypes';
 import { DigitizationReportQueryDto } from '../dto/digitization-report-query.dto';
 import { buildPopulationMatch } from 'src/core/helpers/populationCategory.helper';
+import { DigitizationStatuses } from 'src/schemas/afs/afs-excel-file.schema';
+
+function digitizationStatusCond(query: DigitizationReportQueryDto, isTotal = false) {
+  const status = query.digitizationStatus;
+  let cond = {};
+  if (status === DigitizationStatuses.NOT_DIGITIZED) {
+    cond = {
+      $and: [
+        { 'afsexcelfiles.ulbFile.digitizationStatus': { $exists: false } },
+        // { 'afsexcelfiles.ulbFile.digitizationStatus': status },
+        { 'afsexcelfiles.afsFile.digitizationStatus': { $exists: false } },
+        // { 'afsexcelfiles.afsFile.digitizationStatus': status },
+      ],
+    };
+  } else {
+    cond = {
+      $or: [
+        { 'afsexcelfiles.ulbFile.digitizationStatus': status },
+        { 'afsexcelfiles.afsFile.digitizationStatus': status },
+      ],
+    };
+  }
+  const pipeline: any[] = [{ $match: { ...cond } }];
+  if (!isTotal) {
+    pipeline.push({ $skip: (query.page - 1) * query.limit });
+    pipeline.push({ $limit: query.limit });
+  }
+
+  return pipeline;
+}
+
+function getAfsXlFileLookupPipeline(query: DigitizationReportQueryDto) {
+  return [
+    {
+      $lookup: {
+        from: 'afs_xl_files',
+        let: {
+          fyId: '$audited.year', // annualaccountdatas.audited.year
+          ulbId: '$ulb', // annualaccountdatas.ulb
+        },
+        pipeline: [
+          {
+            $match: {
+              $expr: {
+                $and: [
+                  { $eq: ['$year', '$$fyId'] }, // match year
+                  { $eq: ['$ulb', '$$ulbId'] }, // match ulb
+                  { $eq: ['$docType', query.docType] }, // match docType
+                ],
+              },
+            },
+          },
+        ],
+        as: 'afsexcelfiles',
+      },
+    },
+    {
+      $unwind: {
+        path: '$afsexcelfiles',
+        preserveNullAndEmptyArrays: true,
+      },
+    },
+  ];
+}
 
 export const afsQuery = (query: DigitizationReportQueryDto): any[] => {
-  // mongoose.set('debug', true);
+  mongoose.set('debug', true);
   const auditedYearObjectId = new Types.ObjectId(query.yearId);
   // const ulbObjectIds = new Types.ObjectId(query.ulbId);
 
@@ -13,6 +77,7 @@ export const afsQuery = (query: DigitizationReportQueryDto): any[] => {
   const stateObjectIds = query.stateId ? query.stateId.map((id) => new Types.ObjectId(id)) : undefined;
   const yearLabel = YearIdToLabel[`${query.yearId}`];
   const skip = (query.page - 1) * query.limit;
+  // const digitizationStatusCondition = ;
 
   const populationRange = buildPopulationMatch(query.populationCategory || '');
   return [
@@ -43,37 +108,38 @@ export const afsQuery = (query: DigitizationReportQueryDto): any[] => {
     },
     { $unwind: '$ulbDoc' },
     { $sort: { [query.sortBy || 'ulbDoc.name']: query.sortOrder === 'desc' ? -1 : 1 } },
-    { $skip: skip }, // Pagination
-    ...(query.limit ? [{ $limit: query.limit }] : []),
-    {
-      $lookup: {
-        from: 'afs_xl_files',
-        let: {
-          fyId: '$audited.year', // annualaccountdatas.audited.year
-          ulbId: '$ulb', // annualaccountdatas.ulb
-        },
-        pipeline: [
-          {
-            $match: {
-              $expr: {
-                $and: [
-                  { $eq: ['$year', '$$fyId'] }, // match year
-                  { $eq: ['$ulb', '$$ulbId'] }, // match ulb
-                  { $eq: ['$docType', query.docType] }, // match docType
-                ],
-              },
-            },
-          },
-        ],
-        as: 'afsexcelfiles',
-      },
-    },
-    {
-      $unwind: {
-        path: '$afsexcelfiles',
-        preserveNullAndEmptyArrays: true,
-      },
-    },
+    ...(!query.digitizationStatus ? [{ $skip: skip }, ...(query.limit ? [{ $limit: query.limit }] : [])] : []), // Pagination
+    // {
+    //   $lookup: {
+    //     from: 'afs_xl_files',
+    //     let: {
+    //       fyId: '$audited.year', // annualaccountdatas.audited.year
+    //       ulbId: '$ulb', // annualaccountdatas.ulb
+    //     },
+    //     pipeline: [
+    //       {
+    //         $match: {
+    //           $expr: {
+    //             $and: [
+    //               { $eq: ['$year', '$$fyId'] }, // match year
+    //               { $eq: ['$ulb', '$$ulbId'] }, // match ulb
+    //               { $eq: ['$docType', query.docType] }, // match docType
+    //             ],
+    //           },
+    //         },
+    //       },
+    //     ],
+    //     as: 'afsexcelfiles',
+    //   },
+    // },
+    // {
+    //   $unwind: {
+    //     path: '$afsexcelfiles',
+    //     preserveNullAndEmptyArrays: true,
+    //   },
+    // },
+    ...getAfsXlFileLookupPipeline(query),
+    ...(query.digitizationStatus ? digitizationStatusCond(query) : []),
     //   Join State collection to get State name
     {
       $lookup: {
@@ -123,6 +189,47 @@ export const afsQuery = (query: DigitizationReportQueryDto): any[] => {
         'afsexcelfiles.ulbFile.data': 0,
         'afsexcelfiles.afsFile.data': 0,
       },
+    },
+  ];
+};
+
+export const afsCountQuery = (query: DigitizationReportQueryDto): any[] => {
+  const auditedYearObjectId = new Types.ObjectId(query.yearId);
+  const ulbObjectIds = query.ulbId ? query.ulbId.map((id) => new Types.ObjectId(id)) : undefined;
+  const stateObjectIds = query.stateId ? query.stateId.map((id) => new Types.ObjectId(id)) : undefined;
+
+  const populationRange = buildPopulationMatch(query.populationCategory || '');
+  return [
+    {
+      $match: {
+        'audited.year': auditedYearObjectId,
+        ...(ulbObjectIds && { ulb: { $in: ulbObjectIds } }), // optional ulb filter
+      },
+    },
+    // Join ULB collection to get ULB name / code / state id
+    {
+      $lookup: {
+        from: 'ulbs',
+        localField: 'ulb',
+        foreignField: '_id',
+        pipeline: [
+          {
+            $match: {
+              isActive: true,
+              isPublish: true,
+              ...(stateObjectIds && { state: { $in: stateObjectIds } }),
+              ...(query.populationCategory && populationRange),
+            },
+          },
+        ],
+        as: 'ulbDoc',
+      },
+    },
+    { $unwind: '$ulbDoc' },
+    ...(query.digitizationStatus ? getAfsXlFileLookupPipeline(query) : []),
+    ...(query.digitizationStatus ? digitizationStatusCond(query, true) : []),
+    {
+      $count: 'count',
     },
   ];
 };
@@ -313,45 +420,6 @@ export const afsQuery_v1 = (query: DigitizationReportQueryDto): any[] => {
     //     totalCount: [{ $count: 'count' }],
     //   },
     // },
-  ];
-};
-
-export const afsCountQuery = (query: DigitizationReportQueryDto): any[] => {
-  const auditedYearObjectId = new Types.ObjectId(query.yearId);
-  const ulbObjectIds = query.ulbId ? query.ulbId.map((id) => new Types.ObjectId(id)) : undefined;
-  const stateObjectIds = query.stateId ? query.stateId.map((id) => new Types.ObjectId(id)) : undefined;
-
-  const populationRange = buildPopulationMatch(query.populationCategory || '');
-  return [
-    {
-      $match: {
-        'audited.year': auditedYearObjectId,
-        ...(ulbObjectIds && { ulb: { $in: ulbObjectIds } }), // optional ulb filter
-      },
-    },
-    // Join ULB collection to get ULB name / code / state id
-    {
-      $lookup: {
-        from: 'ulbs',
-        localField: 'ulb',
-        foreignField: '_id',
-        pipeline: [
-          {
-            $match: {
-              isActive: true,
-              isPublish: true,
-              ...(stateObjectIds && { state: { $in: stateObjectIds } }),
-              ...(query.populationCategory && populationRange),
-            },
-          },
-        ],
-        as: 'ulbDoc',
-      },
-    },
-    { $unwind: '$ulbDoc' },
-    {
-      $count: 'count',
-    },
   ];
 };
 

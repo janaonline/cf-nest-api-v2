@@ -4,6 +4,10 @@ import { HydratedDocument, Types, Schema as MongooseSchema } from 'mongoose';
 
 export type AfsExcelFileDocument = HydratedDocument<AfsExcelFile>;
 
+export enum AuditType {
+  AUDITED = 'audited',
+  UNAUDITED = 'unAudited',
+}
 export enum QueueStatus {
   NOT_STARTED = 'not-started',
   ON_THE_JOB = 'on-the-job',
@@ -20,7 +24,7 @@ export enum UploadedBy {
 }
 
 export enum DigitizationStatuses {
-  NOT_STARTED = 'not-started',
+  // NOT_STARTED = 'not-started',
   NOT_DIGITIZED = 'not-digitized',
   QUEUED = 'queued',
   DIGITIZED = 'digitized',
@@ -127,8 +131,8 @@ export class AfsExcelFile {
   // @Prop({ type: String, required: true })
   // financialYear: string; // e.g. "2020-21"
 
-  @Prop({ type: String, required: true })
-  auditType: string; // e.g. "audited"
+  @Prop({ type: String, enum: Object.values(AuditType), required: true })
+  auditType: AuditType; // e.g. "audited"
 
   @Prop({ type: String, required: true })
   docType: string; // e.g. "bal_sheet_schedules"
