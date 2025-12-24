@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Buffer } from 'buffer';
 import * as ExcelJS from 'exceljs';
-import mongoose, { Model, Types } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { YearIdToLabel } from 'src/core/constants/years';
 import { getPopulationCategory } from 'src/core/helpers/populationCategory.helper';
 import { AfsExcelFile, AfsExcelFileDocument, AfsExcelFileItem } from 'src/schemas/afs/afs-excel-file.schema';
@@ -13,7 +13,7 @@ import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { Year, YearDocument } from 'src/schemas/year.schema';
 import { DOC_TYPES } from './constants/docTypes';
 import { DigitizationReportQueryDto } from './dto/digitization-report-query.dto';
-import { afsQuery, afsQueryDump } from './queries/afs-excel-files.query';
+import { afsQuery } from './queries/afs-excel-files.query';
 
 @Injectable()
 export class AfsDumpService {
