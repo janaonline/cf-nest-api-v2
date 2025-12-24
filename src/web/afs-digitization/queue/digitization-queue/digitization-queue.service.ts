@@ -5,14 +5,15 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Queue } from 'bullmq';
 import FormData from 'form-data';
-import { Model, Types } from 'mongoose';
+import mongoose, { Model, Types } from 'mongoose';
 import * as path from 'path';
-import { firstValueFrom, map } from 'rxjs';
+import { firstValueFrom, map, queue } from 'rxjs';
 import { S3Service } from 'src/core/s3/s3.service';
 import { AfsExcelFile, AfsExcelFileDocument, QueueStatus } from 'src/schemas/afs/afs-excel-file.schema';
 import { v4 as uuidv4 } from 'uuid';
 import * as XLSX from 'xlsx';
 import { DigitizationJobDto, DigitizationUploadedBy } from '../../dto/digitization-job.dto';
+import { AfsMetric, AfsMetricDocument } from 'src/schemas/afs/afs-metrics.schema';
 
 export interface DigitizationResponse {
   request_id: string;
@@ -59,6 +60,8 @@ export class DigitizationQueueService {
     private readonly digitizationQueue: Queue<DigitizationJobDto>,
     @InjectModel(AfsExcelFile.name)
     private readonly afsExcelFileModel: Model<AfsExcelFileDocument>,
+    @InjectModel(AfsMetric.name)
+    private readonly afsMetricModel: Model<AfsMetricDocument>,
     private readonly http: HttpService,
     private readonly s3Service: S3Service,
   ) {}
@@ -102,9 +105,21 @@ export class DigitizationQueueService {
     return { queuedJobs: jobs.length };
   }
 
+  async removeJob(jobId: string): Promise<{ message: string }> {
+    const job = await this.digitizationQueue.getJob(jobId); // Retrieve the job instance
+    let message = `Job with ID ${jobId} not found.`;
+    if (job) {
+      await job.remove(); // Call the remove method on the job instance
+      console.log(`Job with ID ${jobId} removed from queue.`);
+      message = `Job with ID ${jobId} removed from queue.`;
+    }
+    return { message };
+  }
+
   async upsertAfsExcelFile(job: DigitizationJobDto, isQueue: boolean = false) {
     let queue: { jobId: string } | undefined = undefined;
-
+    job.noOfPages = this.s3Service.getPdfPageCountFromBuffer(await this.s3Service.getPdfBufferFromS3(job.pdfUrl));
+    // mongoose.set('debug', true);
     if (isQueue) {
       const jobRes = await this.digitizationQueue.add(`digitization-job-${job.ulb}-${job.year}-${job.docType}`, job);
       // this.logger.log(`Enqueued job `, res.id);
@@ -112,6 +127,11 @@ export class DigitizationQueueService {
       queue = {
         jobId: jobRes.id || '',
       };
+      const metrics = {
+        queuedFiles: 1,
+        queuedPages: job.noOfPages || 0,
+      };
+      await this.updateAfsMetrics(metrics);
     }
     // mongoose.set('debug', true);
     const filter = {
@@ -132,6 +152,7 @@ export class DigitizationQueueService {
       // overallConfidenceScore: -1,
       data: [],
       queue,
+      noOfPages: job.noOfPages || 0,
     };
 
     const update = {
@@ -160,7 +181,46 @@ export class DigitizationQueueService {
       auditType: job.auditType,
       docType: job.docType,
     };
-    return this.afsExcelFileModel.updateOne(filter, { $set: updateData }, { runValidators: true });
+    return await this.afsExcelFileModel.updateOne(filter, { $set: updateData }, { runValidators: true });
+  }
+
+  async markJobRemoved(job: DigitizationJobDto) {
+    const filePath = job.uploadedBy === DigitizationUploadedBy.ULB ? 'ulbFile' : 'afsFile';
+    return await this.updateAfsExcelFile(job, {
+      [`${filePath}.digitizationStatus`]: 'not-digitized',
+      [`${filePath}.queue.status`]: 'removed',
+      [`${filePath}.queue.finishedAt`]: new Date(),
+    });
+  }
+
+  async handleJobRemoval(job: DigitizationJobDto) {
+    try {
+      await this.markJobRemoved(job);
+    } catch (error) {
+      this.logger.error(`Error marking job as removed: `);
+      throw error;
+    }
+  }
+
+  async updateAfsMetrics(metrics: Partial<AfsMetricDocument>) {
+    // const metrics = {
+    //   digitizedFiles: 0,
+    //   digitizedPages: 0,
+
+    //   failedFiles: 0,
+    //   failedPages: 0,
+
+    //   queuedFiles: 0,
+    //   queuedPages: 0,
+    // };
+    metrics.queuedFiles = !metrics.queuedFiles
+      ? -(metrics.digitizedFiles || metrics.failedFiles || 0)
+      : metrics.queuedFiles;
+    metrics.queuedPages = !metrics.queuedPages
+      ? -(metrics.digitizedPages || metrics.failedPages || 0)
+      : metrics.queuedPages;
+    this.logger.log('Updating AFS metrics with: ', metrics);
+    await this.afsMetricModel.updateOne({}, { $inc: metrics }, { runValidators: true });
   }
 
   async markJobCompleted(job: DigitizationJobDto, digitizationResp: DigitizationResponse) {
@@ -172,9 +232,20 @@ export class DigitizationQueueService {
       parsedData = await this.readDataFromExcelBuffer(job.digitizedExcelUrl);
       digitizationStatus = 'digitized';
     }
+
+    // Update AFS metrics
+    const metrics = {
+      digitizedFiles: 1,
+      digitizedPages: job.noOfPages || 0,
+      // queuedFiles: -1,
+      // queuedPages: -(job.noOfPages || 0),
+    };
+    await this.updateAfsMetrics(metrics);
+
     // this.logger.log('Parsed data rows count:', job, filter);
     return await this.updateAfsExcelFile(job, {
       [`${filePath}.digitizationStatus`]: digitizationStatus,
+      [`${filePath}.noOfPages`]: job.noOfPages,
       [`${filePath}.data`]: parsedData,
       [`${filePath}.excelUrl`]: job.digitizedExcelUrl || '',
       [`${filePath}.requestId`]: digitizationResp.request_id,
@@ -190,6 +261,15 @@ export class DigitizationQueueService {
 
   async markJobFailed(job: DigitizationJobDto, responseData: DigitizationResponse) {
     const filePath = job.uploadedBy === DigitizationUploadedBy.ULB ? 'ulbFile' : 'afsFile';
+
+    // Update AFS metrics
+    const metrics = {
+      failedFiles: 1,
+      failedPages: job.noOfPages || 0,
+      // queuedFiles: -1,
+      // queuedPages: -(job.noOfPages || 0),
+    };
+    await this.updateAfsMetrics(metrics);
 
     return await this.updateAfsExcelFile(job, {
       [`${filePath}.requestId`]: responseData?.request_id,
@@ -231,6 +311,7 @@ export class DigitizationQueueService {
       this.logger.log(`Fetching S3 object for digitization: ${job.pdfUrl}`);
       // const buffer = await this.s3Service.getBuffer(job.pdfUrl);
       const buffer = await this.s3Service.getPdfBufferFromS3(job.pdfUrl);
+      job.noOfPages = this.s3Service.getPdfPageCountFromBuffer(buffer);
       const formData = new FormData();
       formData.append('file', buffer, {
         filename: 'document.pdf',

@@ -94,6 +94,13 @@ export class DigitizationJobDto {
   @IsOptional()
   digitizedExcelUrl?: string;
 
+  @ApiPropertyOptional({
+    description: 'Total number of pages in the PDF',
+    example: 10,
+  })
+  @IsOptional()
+  noOfPages?: number;
+
   @ApiProperty({
     enum: DigitizationUploadedBy,
     description: 'Source of this file (ULB main file or AFS attachment)',

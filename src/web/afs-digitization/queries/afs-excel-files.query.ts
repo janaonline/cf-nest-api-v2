@@ -25,7 +25,7 @@ function digitizationStatusCond(query: DigitizationReportQueryDto, isTotal = fal
       ],
     };
   }
-  const pipeline: any[] = [{ $match: { ...cond } }];
+  const pipeline: { [key: string]: any }[] = [{ $match: { ...cond } }];
   if (!isTotal) {
     pipeline.push({ $skip: (query.page - 1) * query.limit });
     pipeline.push({ $limit: query.limit });
@@ -56,6 +56,24 @@ function getAfsXlFileLookupPipeline(query: DigitizationReportQueryDto) {
               },
             },
           },
+          // Drop heavy binary fields early (avoids carrying them through the pipeline)
+          {
+            $project: {
+              // keep whichever metadata you need
+              year: 1,
+              ulb: 1,
+              auditType: 1,
+              docType: 1,
+              createdAt: 1,
+              updatedAt: 1,
+              ulbFile: 1,
+              afsFile: 1,
+              // drop data fields
+              // 'ulbFile.data': 0,
+              // 'afsFile.data': 0,
+            },
+          },
+          { $project: { 'ulbFile.data': 0, 'afsFile.data': 0 } },
         ],
         as: 'afsexcelfiles',
       },
@@ -69,30 +87,29 @@ function getAfsXlFileLookupPipeline(query: DigitizationReportQueryDto) {
   ];
 }
 
-export const afsQuery = (query: DigitizationReportQueryDto): any[] => {
-  // mongoose.set('debug', true);
-  const yearObjectId = new Types.ObjectId(query.yearId);
-  // const ulbObjectIds = new Types.ObjectId(query.ulbId);
-
-  const ulbObjectIds = query.ulbId ? query.ulbId.map((id) => new Types.ObjectId(id)) : undefined;
-  const stateObjectIds = query.stateId ? query.stateId.map((id) => new Types.ObjectId(id)) : undefined;
-  const yearLabel = YearIdToLabel[`${query.yearId}`];
-  const skip = (query.page - 1) * query.limit;
-  // const digitizationStatusCondition = ;
-
-  const populationRange = buildPopulationMatch(query.populationCategory || '');
+function getStateLookup() {
   return [
     {
-      $match: {
-        // 'audited.year': yearObjectId,
-        [`${query.auditType}.year`]: yearObjectId,
-        ...(ulbObjectIds && { ulb: { $in: ulbObjectIds } }), // optional ulb filter
+      $lookup: {
+        from: 'states',
+        localField: 'ulbDoc.state',
+        foreignField: '_id',
+        pipeline: [{ $match: { isActive: true, isPublish: true } }, { $project: { name: 1 } }],
+        as: 'stateDoc',
       },
     },
-    // Join ULB collection to get ULB name / code / state id
+    { $unwind: '$stateDoc' },
+  ];
+}
+
+function getUlbsLookupPipeline(query: DigitizationReportQueryDto) {
+  const stateObjectIds = query.stateId ? query.stateId.map((id) => new Types.ObjectId(id)) : undefined;
+  const populationRange = buildPopulationMatch(query.populationCategory || '');
+
+  return [
     {
       $lookup: {
-        from: 'ulbs', // <-- or "ulbs" if that's your collection name
+        from: 'ulbs',
         localField: 'ulb',
         foreignField: '_id',
         pipeline: [
@@ -104,37 +121,72 @@ export const afsQuery = (query: DigitizationReportQueryDto): any[] => {
               ...(query.populationCategory && populationRange),
             },
           },
+          // keep only what you actually use downstream
+          { $project: { name: 1, code: 1, state: 1, population: 1 } },
         ],
         as: 'ulbDoc',
       },
     },
     { $unwind: '$ulbDoc' },
+  ];
+}
+
+function getAnnualAccountsDataFields(query: DigitizationReportQueryDto) {
+  return [
+    {
+      $project: {
+        _id: 1,
+        ulb: 1,
+        currentFormStatus: 1,
+        ulbSubmit: 1,
+        status: 1,
+        actionTakenByRole: 1,
+        isDraft: 1,
+        isActive: 1,
+
+        // keep only the pdf you actually return
+        [`${query.docType}`]: `$${query.auditType}.provisional_data.${query.docType}.pdf`,
+      },
+    },
+  ];
+}
+export const afsQuery = (query: DigitizationReportQueryDto): any[] => {
+  // mongoose.set('debug', true);
+  const yearObjectId = new Types.ObjectId(query.yearId);
+  // const ulbObjectIds = new Types.ObjectId(query.ulbId);
+
+  const ulbObjectIds = query.ulbId ? query.ulbId.map((id) => new Types.ObjectId(id)) : undefined;
+  const yearLabel = YearIdToLabel[`${query.yearId}`];
+  const skip = (query.page - 1) * query.limit;
+  // const digitizationStatusCondition = ;
+
+  return [
+    {
+      $match: {
+        // 'audited.year': yearObjectId,
+        [`${query.auditType}.year`]: yearObjectId,
+        ...(ulbObjectIds && { ulb: { $in: ulbObjectIds } }), // optional ulb filter
+      },
+    },
+    // EARLY PROJECT: keep only what you need + the pdf field you expose
+    ...getAnnualAccountsDataFields(query),
+    // Join ULB collection to get ULB name / code / state id
+    ...getUlbsLookupPipeline(query),
+    // { $unwind: '$ulbDoc' },
     { $sort: { [query.sortBy || 'ulbDoc.name']: query.sortOrder === 'desc' ? -1 : 1 } },
     ...(!query.digitizationStatus ? [{ $skip: skip }, ...(query.limit ? [{ $limit: query.limit }] : [])] : []), // Pagination
     ...getAfsXlFileLookupPipeline(query),
     ...(query.digitizationStatus ? digitizationStatusCond(query) : []),
     //   Join State collection to get State name
-    {
-      $lookup: {
-        from: 'states',
-        localField: 'ulbDoc.state',
-        foreignField: '_id',
-        pipeline: [
-          {
-            $match: { isActive: true, isPublish: true },
-          },
-        ],
-        as: 'stateDoc',
-      },
-    },
-    { $unwind: '$stateDoc' },
+    ...getStateLookup(),
 
     // Shape the main document
     {
       $project: {
         _id: 1,
         ulb: 1,
-        [`${query.docType}`]: `$${query.auditType}.provisional_data.${query.docType}.pdf`,
+        // [`${query.docType}`]: `$${query.auditType}.provisional_data.${query.docType}.pdf`,
+        [`${query.docType}`]: 1,
         currentFormStatus: 1,
         ulbSubmit: 1,
         status: 1,
@@ -151,24 +203,24 @@ export const afsQuery = (query: DigitizationReportQueryDto): any[] => {
         stateName: '$stateDoc.name',
         doctType: `${DOC_TYPES[`${query.docType}`]}`,
         yearLabel: yearLabel,
+        year: yearObjectId,
       },
     },
 
-    {
-      $project: {
-        'afsexcelfiles.ulbFile.data': 0,
-        'afsexcelfiles.afsFile.data': 0,
-      },
-    },
+    // {
+    //   $project: {
+    //     'afsexcelfiles.ulbFile.data': 0,
+    //     'afsexcelfiles.afsFile.data': 0,
+    //   },
+    // },
   ];
 };
 
 export const afsCountQuery = (query: DigitizationReportQueryDto): any[] => {
   const yearObjectId = new Types.ObjectId(query.yearId);
   const ulbObjectIds = query.ulbId ? query.ulbId.map((id) => new Types.ObjectId(id)) : undefined;
-  const stateObjectIds = query.stateId ? query.stateId.map((id) => new Types.ObjectId(id)) : undefined;
-
-  const populationRange = buildPopulationMatch(query.populationCategory || '');
+  // const stateObjectIds = query.stateId ? query.stateId.map((id) => new Types.ObjectId(id)) : undefined;
+  // const populationRange = buildPopulationMatch(query.populationCategory || '');
   return [
     {
       $match: {
@@ -177,26 +229,11 @@ export const afsCountQuery = (query: DigitizationReportQueryDto): any[] => {
         ...(ulbObjectIds && { ulb: { $in: ulbObjectIds } }), // optional ulb filter
       },
     },
+    // same ULB filtering logic (state/population) without carrying big fields
+    { $project: { _id: 1, ulb: 1 } },
     // Join ULB collection to get ULB name / code / state id
-    {
-      $lookup: {
-        from: 'ulbs',
-        localField: 'ulb',
-        foreignField: '_id',
-        pipeline: [
-          {
-            $match: {
-              isActive: true,
-              isPublish: true,
-              ...(stateObjectIds && { state: { $in: stateObjectIds } }),
-              ...(query.populationCategory && populationRange),
-            },
-          },
-        ],
-        as: 'ulbDoc',
-      },
-    },
-    { $unwind: '$ulbDoc' },
+    ...getUlbsLookupPipeline(query),
+    // { $unwind: '$ulbDoc' },
     ...(query.digitizationStatus ? getAfsXlFileLookupPipeline(query) : []),
     ...(query.digitizationStatus ? digitizationStatusCond(query, true) : []),
     {

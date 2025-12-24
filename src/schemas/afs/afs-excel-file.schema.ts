@@ -16,6 +16,7 @@ export enum QueueStatus {
   PROCESSING = 'processing',
   WAITING = 'waiting',
   QUEUED = 'queued',
+  REMOVED = 'removed',
 }
 
 export enum UploadedBy {
