@@ -19,6 +19,7 @@ import { DigitizationJobDto } from './dto/digitization-job.dto';
 import { DigitizationReportQueryDto } from './dto/digitization-report-query.dto';
 import { afsCountQuery, afsQuery } from './queries/afs-excel-files.query';
 import { documentTypes } from './constants/docTypes';
+import { AfsMetric, AfsMetricDocument } from 'src/schemas/afs/afs-metrics.schema';
 
 @Injectable()
 export class AfsDigitizationService {
@@ -39,6 +40,9 @@ export class AfsDigitizationService {
 
     @InjectModel(AfsExcelFile.name)
     private readonly afsExcelFileModel: Model<AfsExcelFileDocument>,
+
+    @InjectModel(AfsMetric.name)
+    private readonly afsMetricModel: Model<AfsMetricDocument>,
 
     @InjectModel(DigitizationLog.name, 'digitization_db')
     private readonly digitizationModel: Model<DigitizationLogDocument>,
@@ -85,6 +89,46 @@ export class AfsDigitizationService {
         digitizationStatuses,
       },
     };
+  }
+
+  async getMetrics() {
+    const result = await this.afsMetricModel.findOne().lean();
+    const cards = [
+      {
+        icon: 'bi bi-folder-check',
+        class: 'text-info',
+        title: 'Files Digitized',
+        value: result?.queuedPages || 0,
+      },
+      {
+        icon: 'bi bi-file-earmark-text',
+        class: 'text-info',
+        title: 'Pages Digitized',
+        value: result?.digitizedPages || 0,
+      },
+      {
+        icon: 'bi bi-folder-x',
+        class: 'text-danger',
+        title: 'Files Failed',
+        value: result?.failedFiles || 0,
+      },
+      {
+        icon: 'bi bi-file-earmark-x',
+        class: 'text-danger',
+        title: 'Pages Failed',
+        value: result?.failedPages || 0,
+      },
+      {
+        icon: 'bi bi-check-circle',
+        class: 'text-success',
+        title: 'Successful',
+        value:
+          result && result.queuedPages + result.failedPages > 0
+            ? `${Math.round((result.digitizedPages / (result.queuedPages + result.failedPages)) * 100)}%`
+            : '0%',
+      },
+    ];
+    return { data: { cards } };
   }
 
   async getUlbs(params: {

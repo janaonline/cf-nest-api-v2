@@ -154,4 +154,12 @@ export class S3Service {
       throw new Error(`S3 GetObject failed (code=${code}, status=${status}), message=${e.message}`);
     }
   }
+
+  getPdfPageCountFromBuffer(buffer: Buffer): number {
+    // Simple PDF page count by counting "/Type /Page" occurrences
+    const pdfText = buffer.toString('latin1'); // Use 'latin1' to preserve byte values
+    const pageRegex = /\/Type\s*\/Page[^s]/g; // Match "/Type /Page" not followed by 's'
+    const matches = pdfText.match(pageRegex);
+    return matches ? matches.length : 0;
+  }
 }

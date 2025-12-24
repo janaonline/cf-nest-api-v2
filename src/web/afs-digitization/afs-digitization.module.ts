@@ -15,6 +15,7 @@ import { DigitizationProcessor } from './queue/digitization.processor';
 import { HttpModule } from '@nestjs/axios';
 import { S3Module } from 'src/core/s3/s3.module';
 import { S3Service } from 'src/core/s3/s3.service';
+import { AfsMetric, AfsMetricSchema } from 'src/schemas/afs/afs-metrics.schema';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { S3Service } from 'src/core/s3/s3.service';
       { name: Year.name, schema: YearSchema },
       { name: AfsExcelFile.name, schema: AfsExcelFileSchema },
       { name: AnnualAccountData.name, schema: AnnualAccountDataSchema },
+      { name: AfsMetric.name, schema: AfsMetricSchema },
     ]),
     MongooseModule.forFeature([{ name: DigitizationLog.name, schema: DigitizationLogSchema }], 'digitization_db'),
     BullModule.registerQueue({

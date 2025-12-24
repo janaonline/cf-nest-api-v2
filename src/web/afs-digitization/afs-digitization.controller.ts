@@ -1,4 +1,16 @@
-import { Body, Controller, Get, Logger, Param, Post, Query, Res, UsePipes, ValidationPipe } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Logger,
+  Param,
+  Post,
+  Query,
+  Res,
+  UsePipes,
+  ValidationPipe,
+} from '@nestjs/common';
 import { ApiBody } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { YearIdToLabel } from 'src/core/constants/years';
@@ -90,15 +102,23 @@ export class AfsDigitizationController {
     };
   }
 
+  @Get('metrics')
+  async getMetrics() {
+    return await this.afsService.getMetrics();
+  }
+
   @Get('status/:id')
   async status(@Param('id') id: string) {
-    const result = await this.digitizationQueueService.jobStatus(id);
-    return result;
+    return await this.digitizationQueueService.jobStatus(id);
+  }
+
+  @Delete('remove-job/:id')
+  async removeJob(@Param('id') id: string) {
+    return await this.digitizationQueueService.removeJob(id);
   }
 
   @Get('file/:id')
   async getFile(@Param('id') id: string) {
-    const result = await this.afsService.getFile(id);
-    return result;
+    return await this.afsService.getFile(id);
   }
 }
