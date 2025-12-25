@@ -112,9 +112,9 @@ export class AfsDigitizationController {
     return await this.digitizationQueueService.jobStatus(id);
   }
 
-  @Delete('remove-job/:id')
-  async removeJob(@Param('id') id: string) {
-    return await this.digitizationQueueService.removeJob(id);
+  @Post('remove-job')
+  async removeJob(@Body() job: DigitizationJobDto) {
+    return await this.digitizationQueueService.markJobRemoved(job);
   }
 
   @Get('file/:id')
