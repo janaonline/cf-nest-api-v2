@@ -105,12 +105,40 @@ export class DigitizationQueueService {
     return { queuedJobs: jobs.length };
   }
 
+  // async removeFromBatch(jobs: DigitizationJobDto[]) {
+  //   for (const job of jobs) {
+  //     await this.handleJobRemoval(job);
+  //   }
+  //   return { queuedJobs: jobs.length };
+  // }
+  // async handleJobRemoval(job: DigitizationJobDto) {
+  //   try {
+  //     await this.markJobRemoved(job);
+  //   } catch (error) {
+  //     this.logger.error(`Error marking job as removed: `);
+  //     throw error;
+  //   }
+  // }
+
+  async markJobRemoved(job: DigitizationJobDto) {
+    // const jobId = job.jobId;
+    if (!job.jobId) {
+      throw new BadRequestException('Job ID is required to remove a job from the queue.');
+    }
+    await this.removeJob(job.jobId);
+    const filePath = job.uploadedBy === DigitizationUploadedBy.ULB ? 'ulbFile' : 'afsFile';
+    return await this.updateAfsExcelFile(job, {
+      [`${filePath}.digitizationStatus`]: 'not-digitized',
+      [`${filePath}.queue.status`]: 'removed',
+      [`${filePath}.queue.finishedAt`]: new Date(),
+    });
+  }
+
   async removeJob(jobId: string): Promise<{ message: string }> {
     const job = await this.digitizationQueue.getJob(jobId); // Retrieve the job instance
     let message = `Job with ID ${jobId} not found.`;
     if (job) {
       await job.remove(); // Call the remove method on the job instance
-      console.log(`Job with ID ${jobId} removed from queue.`);
       message = `Job with ID ${jobId} removed from queue.`;
     }
     return { message };
@@ -148,8 +176,6 @@ export class DigitizationQueueService {
       uploadedBy: job.uploadedBy,
       pdfUrl: job.pdfUrl,
       digitizationStatus: isQueue ? QueueStatus.QUEUED : QueueStatus.NOT_STARTED,
-      // excelUrl: job.digitizedExcelUrl,
-      // overallConfidenceScore: -1,
       data: [],
       queue,
       noOfPages: job.noOfPages || 0,
@@ -182,24 +208,6 @@ export class DigitizationQueueService {
       docType: job.docType,
     };
     return await this.afsExcelFileModel.updateOne(filter, { $set: updateData }, { runValidators: true });
-  }
-
-  async markJobRemoved(job: DigitizationJobDto) {
-    const filePath = job.uploadedBy === DigitizationUploadedBy.ULB ? 'ulbFile' : 'afsFile';
-    return await this.updateAfsExcelFile(job, {
-      [`${filePath}.digitizationStatus`]: 'not-digitized',
-      [`${filePath}.queue.status`]: 'removed',
-      [`${filePath}.queue.finishedAt`]: new Date(),
-    });
-  }
-
-  async handleJobRemoval(job: DigitizationJobDto) {
-    try {
-      await this.markJobRemoved(job);
-    } catch (error) {
-      this.logger.error(`Error marking job as removed: `);
-      throw error;
-    }
   }
 
   async updateAfsMetrics(metrics: Partial<AfsMetricDocument>) {

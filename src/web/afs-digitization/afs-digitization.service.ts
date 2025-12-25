@@ -96,13 +96,13 @@ export class AfsDigitizationService {
     const cards = [
       {
         icon: 'bi bi-folder-check',
-        class: 'text-info',
+        class: 'text-success',
         title: 'Files Digitized',
-        value: result?.queuedPages || 0,
+        value: result?.digitizedFiles || 0,
       },
       {
         icon: 'bi bi-file-earmark-text',
-        class: 'text-info',
+        class: 'text-success',
         title: 'Pages Digitized',
         value: result?.digitizedPages || 0,
       },
@@ -119,12 +119,18 @@ export class AfsDigitizationService {
         value: result?.failedPages || 0,
       },
       {
+        icon: 'bi bi-file-earmark-x',
+        class: 'text-info',
+        title: 'Queued Files',
+        value: result?.queuedFiles || 0,
+      },
+      {
         icon: 'bi bi-check-circle',
         class: 'text-success',
         title: 'Successful',
         value:
-          result && result.queuedPages + result.failedPages > 0
-            ? `${Math.round((result.digitizedPages / (result.queuedPages + result.failedPages)) * 100)}%`
+          result && result.digitizedFiles + result.failedFiles > 0
+            ? `${Math.round((result.digitizedFiles / (result.digitizedFiles + result.failedFiles)) * 100)}%`
             : '0%',
       },
     ];

@@ -116,18 +116,6 @@ export class AfsDumpService {
 
       const ulbFile = doc.afsexcelfiles?.ulbFile;
       const afsFile = doc.afsexcelfiles?.afsFile;
-      let ulbDigitizeLogMsg = '';
-      if (ulbFile?.requestId) {
-        // safe optional chaining and await inside an async function context is valid here
-        const log = await this.digitizationModel.findOne({ RequestId: ulbFile.requestId }).exec();
-        ulbDigitizeLogMsg = log ? log.Message : '';
-      }
-
-      let afsDigitizeLogMsg = '';
-      if (afsFile?.requestId) {
-        const afsDigitizeLog = await this.digitizationModel.findOne({ RequestId: afsFile.requestId }).exec();
-        afsDigitizeLogMsg = afsDigitizeLog ? afsDigitizeLog.Message : '';
-      }
 
       const ulbDigitizedStatus = ulbFile?.digitizationStatus || 'Not-Digitized';
 
@@ -155,20 +143,20 @@ export class AfsDumpService {
         auditType: doc.afsexcelfiles?.auditType ?? 'audited',
         docType: DOC_TYPES[`${query.docType}`],
         // ulbUploaded: doc.bal_sheet.url,
-        ulbUploaded: pdfUrl ? s3LiveUrlPrefix + pdfUrl : null,
+        ulbUploaded: pdfUrl ? s3UrlPrefix + pdfUrl : null,
         afsUploaded: afsFile?.pdfUrl ? s3UrlPrefix + '/' + afsFile?.pdfUrl : null,
         formUploadedOn: doc.createdAt ?? null,
         ulbDigitizedStatus,
         ulbDigitizedFile: ulbFile?.excelUrl ? s3UrlPrefix + '/' + ulbFile?.excelUrl : null,
         ulbDigitizedOn: ulbFile?.createdAt ?? null,
         ulbRequestId: ulbFile?.requestId ?? null,
-        ulbDigitizeLogMsg,
+        ulbDigitizeLogMsg: ulbFile?.queue?.failedReason || '',
 
         afsDigitizedStatus,
         afsDigitizedFile: afsFile?.excelUrl ? s3UrlPrefix + '/' + afsFile?.excelUrl : null,
         afsDigitizedOn: afsFile?.createdAt ?? null,
         afsRequestId: afsFile?.requestId ?? null,
-        afsDigitizeLogMsg,
+        afsDigitizeLogMsg: afsFile?.queue?.failedReason || '',
       });
     }
 

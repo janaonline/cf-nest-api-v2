@@ -61,6 +61,14 @@ export class DigitizationJobDto {
   year!: string;
 
   @ApiProperty({
+    description: 'job id',
+    example: '123',
+  })
+  @IsString()
+  @IsOptional()
+  jobId?: string;
+
+  @ApiProperty({
     description: 'Audit type (audited / unAudited)',
     example: 'audited',
   })
