@@ -14,6 +14,7 @@ import { v4 as uuidv4 } from 'uuid';
 import * as XLSX from 'xlsx';
 import { DigitizationJobDto, DigitizationUploadedBy } from '../../dto/digitization-job.dto';
 import { AfsMetric, AfsMetricDocument } from 'src/schemas/afs/afs-metrics.schema';
+import { YearIdToLabel } from 'src/core/constants/years';
 
 export interface DigitizationResponse {
   request_id: string;
@@ -374,7 +375,9 @@ export class DigitizationQueueService {
     // Get original extension
     const ext = path.extname(filename) || '.xlsx'; // default to .xlsx
     const sourceBucket = 'cf-digitization-dev';
-    const destinationKey = `afs/${job.ulb}_${job.year}_${job.auditType}_${job.docType}_${uuidv4()}${ext}`;
+    const yearLabel = YearIdToLabel[job.year] || job.year;
+    const uniqueTime = new Date().getTime();
+    const destinationKey = `afs/${job.ulb}_${yearLabel}_${job.auditType}_${job.docType}_${uniqueTime}${ext}`;
     await this.s3Service.copyFileBetweenBuckets(
       `${sourceBucket}/excel-output/default_user/default_session/${filename}`, // source key including bucket path
       destinationKey,
