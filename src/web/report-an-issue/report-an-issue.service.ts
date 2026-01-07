@@ -2,6 +2,7 @@ import { HttpStatus, Injectable, InternalServerErrorException, Logger } from '@n
 import { InjectModel } from '@nestjs/mongoose';
 import { Buffer } from 'exceljs';
 import { Model } from 'mongoose';
+import { EmailQueueService } from 'src/core/queue/email-queue/email-queue.service';
 import { ReportAnIssue, ReportAnIssueDocument } from 'src/schemas/report-an-issue.schema';
 import { ExcelService, RowHeader } from 'src/services/excel/excel.service';
 import { ReportAnIssueDto } from './dto/report-an-issue.dto';
@@ -18,8 +19,8 @@ export class ReportAnIssueService {
   constructor(
     @InjectModel(ReportAnIssue.name)
     private readonly reportAnIssueModel: Model<ReportAnIssueDocument>,
-
     private excelService: ExcelService,
+    private emailQueueService: EmailQueueService,
   ) {}
 
   /**
@@ -39,6 +40,23 @@ export class ReportAnIssueService {
 
       if (!res?._id) {
         throw new InternalServerErrorException('Database insert failed');
+      }
+
+      // Send mail - when user sends feedback
+      const toEmails: string | undefined = process.env.USER_FEEDBACKS_TO_EMAILS;
+      if (toEmails) {
+        const emails = toEmails.split(',').map((e) => e.trim());
+
+        await Promise.all(
+          emails.map((email) =>
+            this.emailQueueService.addEmailJob({
+              to: email,
+              subject: 'New user gave a feedback!',
+              templateName: 'report-an-isssue',
+              mailData: { payload },
+            }),
+          ),
+        );
       }
 
       return {

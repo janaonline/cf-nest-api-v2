@@ -1,0 +1,12 @@
+<html>
+  <body>
+    <h2>Hello!</h2>
+    <p>🎉 New user gave a feedback!</p>
+    <p>User feedback:</p>
+    <ul>
+      {{#each payload}}
+        <li>{{@key}}: {{this}}</li>
+      {{/each}}
+    </ul>
+  </body>
+</html>
