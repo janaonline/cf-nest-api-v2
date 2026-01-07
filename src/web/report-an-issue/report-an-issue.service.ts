@@ -69,6 +69,7 @@ export class ReportAnIssueService {
         { label: 'Description', key: 'desc', width: 30 },
         { label: 'Email Address', key: 'email' },
         { label: 'Include screenshot', key: 'issueScreenshotUrl', width: 30 },
+        { label: 'Auto Capture Context', key: 'autoCaptureContext', width: 30 },
         { label: 'Creation date', key: 'createdAt', width: 15 },
       ];
 

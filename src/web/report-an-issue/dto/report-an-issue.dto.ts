@@ -36,4 +36,12 @@ export class ReportAnIssueDto {
   @IsOptional()
   @IsString()
   issueScreenshotUrl?: string;
+
+  @ApiPropertyOptional({
+    description: 'Auto captured context',
+    example: '/municipal-data/city/bengaluru',
+  })
+  @IsString()
+  @IsNotEmpty()
+  autoCaptureContext: string;
 }

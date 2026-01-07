@@ -21,6 +21,9 @@ export class ReportAnIssue {
 
   @Prop({ default: undefined })
   issueScreenshotUrl?: string;
+
+  @Prop({ required: true, trim: true })
+  autoCaptureContext: string;
 }
 
 export type ReportAnIssueDocument = ReportAnIssue & Document;
