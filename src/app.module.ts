@@ -11,6 +11,7 @@ import { NodeMailerModule } from './core/node-mailer/node-mailer.module';
 import { LoggerMiddleware } from './middleware/logger-middleware';
 import { AuthModule } from './module/auth/auth.module';
 import { UsersModule } from './users/users.module';
+import { ReportAnIssueModule } from './web/report-an-issue/report-an-issue.module';
 import { AfsDigitizationModule } from './web/afs-digitization/afs-digitization.module';
 import { ResourcesSectionModule } from './web/resources-section/resources-section.module';
 
@@ -55,6 +56,7 @@ import { ResourcesSectionModule } from './web/resources-section/resources-sectio
     ResourcesSectionModule,
     NodeMailerModule,
     EmailModule,
+    ReportAnIssueModule,
     AfsDigitizationModule,
   ],
   controllers: [AppController],
