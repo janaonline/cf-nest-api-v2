@@ -19,7 +19,7 @@ export class ReportAnIssue {
   })
   email: string;
 
-  @Prop({ default: false })
+  @Prop({ default: undefined })
   issueScreenshotUrl?: string;
 }
 
