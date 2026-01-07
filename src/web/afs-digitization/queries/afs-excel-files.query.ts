@@ -26,7 +26,7 @@ function digitizationStatusCond(query: DigitizationReportQueryDto, isTotal = fal
     };
   }
   const pipeline: { [key: string]: any }[] = [{ $match: { ...cond } }];
-  if (!isTotal) {
+  if (!isTotal && query.limit) {
     pipeline.push({ $skip: (query.page - 1) * query.limit });
     pipeline.push({ $limit: query.limit });
   }
@@ -103,7 +103,8 @@ function getStateLookup() {
 }
 
 function getUlbsLookupPipeline(query: DigitizationReportQueryDto) {
-  const stateObjectIds = query.stateId ? query.stateId.map((id) => new Types.ObjectId(id)) : undefined;
+  const stateObjectIds =
+    query.stateId && query.stateId.length > 0 ? query.stateId.map((id) => new Types.ObjectId(id)) : undefined;
   const populationRange = buildPopulationMatch(query.populationCategory || '');
 
   return [
@@ -155,7 +156,8 @@ export const afsQuery = (query: DigitizationReportQueryDto): any[] => {
   const yearObjectId = new Types.ObjectId(query.yearId);
   // const ulbObjectIds = new Types.ObjectId(query.ulbId);
 
-  const ulbObjectIds = query.ulbId ? query.ulbId.map((id) => new Types.ObjectId(id)) : undefined;
+  const ulbObjectIds =
+    query.ulbId && query.ulbId.length > 0 ? query.ulbId.map((id) => new Types.ObjectId(id)) : undefined;
   const yearLabel = YearIdToLabel[`${query.yearId}`];
   const skip = (query.page - 1) * query.limit;
   // const digitizationStatusCondition = ;
@@ -174,7 +176,9 @@ export const afsQuery = (query: DigitizationReportQueryDto): any[] => {
     ...getUlbsLookupPipeline(query),
     // { $unwind: '$ulbDoc' },
     { $sort: { [query.sortBy || 'ulbDoc.name']: query.sortOrder === 'desc' ? -1 : 1 } },
-    ...(!query.digitizationStatus ? [{ $skip: skip }, ...(query.limit ? [{ $limit: query.limit }] : [])] : []), // Pagination
+    ...(!query.digitizationStatus && query.limit
+      ? [{ $skip: skip }, ...(query.limit ? [{ $limit: query.limit }] : [])]
+      : []), // Pagination
     ...getAfsXlFileLookupPipeline(query),
     ...(query.digitizationStatus ? digitizationStatusCond(query) : []),
     //   Join State collection to get State name
