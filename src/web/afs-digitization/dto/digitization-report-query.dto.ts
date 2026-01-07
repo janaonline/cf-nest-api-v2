@@ -49,16 +49,20 @@ export class DigitizationReportQueryDto {
   })
   @IsOptional()
   @IsArray()
-  @IsMongoId({ each: true, message: 'Each stateId must be a valid MongoDB ObjectId' })
+  // @IsMongoId({ each: true, message: 'Each stateId must be a valid MongoDB ObjectId' })
   @Transform(
     ({ value }) => {
-      if (value === undefined || value === null || value === '') return undefined;
+      if (value === undefined || value === null || value === '' || (Array.isArray(value) && value.length === 0))
+        return undefined;
 
-      // Query string: stateId=...&stateId=...
       if (Array.isArray(value)) return value.map((v) => String(v));
 
-      // Single value: stateId=...
-      return [String(value)];
+      // Single value: stateId...
+      // return [String(value)];
+      return String(value)
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
     },
     { toClassOnly: true },
   )
@@ -90,16 +94,19 @@ export class DigitizationReportQueryDto {
   })
   @IsOptional()
   @IsArray()
-  @IsMongoId({ each: true, message: 'Each ulbId must be a valid MongoDB ObjectId' })
+  // @IsMongoId({ each: true, message: 'Each ulbId must be a valid MongoDB ObjectId' })
   @Transform(
     ({ value }) => {
-      if (value === undefined || value === null || value === '') return undefined;
+      if (value === undefined || value === null || value === '' || (Array.isArray(value) && value.length === 0))
+        return undefined;
 
       // Query string: ulbId=...&ulbId=...
       if (Array.isArray(value)) return value.map((v) => String(v));
 
-      // Single value: ulbId=...
-      return [String(value)];
+      return String(value)
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
     },
     { toClassOnly: true },
   )
@@ -181,7 +188,7 @@ export class DigitizationReportQueryDto {
   })
   @Type(() => Number)
   @IsInt()
-  @Min(1)
+  // @Min(1)
   @IsOptional()
   limit: number = 100;
 }

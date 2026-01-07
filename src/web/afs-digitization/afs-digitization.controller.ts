@@ -43,12 +43,12 @@ export class AfsDigitizationController {
     return await this.afsService.getUlbs(query);
   }
 
-  @Get('afs-list')
-  async afsList(@Query() query: DigitizationReportQueryDto): Promise<any> {
+  @Post('afs-list')
+  async afsList(@Body() body: DigitizationReportQueryDto): Promise<any> {
     // query.yearId = new Types.ObjectId(query.yearId);
     // query.ulbId = query.ulbId ? new Types.ObjectId(query.ulbId) : undefined;
     // this.logger.log(`Received afs-list request with query: ${JSON.stringify(query)}`);
-    return await this.afsService.afsList(query);
+    return await this.afsService.afsList(body);
   }
 
   @Get('request-log/:requestId')
