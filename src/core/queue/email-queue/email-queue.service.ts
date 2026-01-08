@@ -11,8 +11,8 @@ export class EmailQueueService {
   constructor(@InjectQueue(EMAIL_QUEUE) private readonly queue: Queue<EmailJob>) {}
 
   async addEmailJob(payload: EmailJob): Promise<void> {
-    await this.queue.add('emailJob', payload);
-    this.logger.log(`Added job to emailQueue: ${JSON.stringify(payload)}`);
+    const job = await this.queue.add('emailJob', payload);
+    this.logger.log(`JOB: ${job.id} Added job to emailQueue: ${JSON.stringify(payload)}`, job.id);
     // this.queue.on('completed', (job) => {
     //   console.log(`Job with ID ${job.id} has been completed`);
     // });
