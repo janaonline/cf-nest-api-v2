@@ -6,7 +6,6 @@ export class EmailList extends Document {
   @Prop({
     required: true,
     unique: true,
-    index: true,
     lowercase: true,
     trim: true,
     match: [/^\S+@\S+\.\S+$/, 'Please use a valid email address.'],
@@ -32,4 +31,4 @@ export class EmailList extends Document {
 export type EmailListDocument = EmailList & Document;
 export const EmailListSchema = SchemaFactory.createForClass(EmailList);
 
-EmailListSchema.index({ email: 1 });
+// EmailListSchema.index({ email: 1 });

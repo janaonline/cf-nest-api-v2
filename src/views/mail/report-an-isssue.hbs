@@ -1,0 +1,16 @@
+<html>
+  <body>
+    <h2>Hello!</h2>
+    <p>🎉 New user gave a feedback!</p>
+    <p>User feedback:</p>
+    <ul>
+      {{#each emailContent}}
+        <li>
+          <b>{{@key}}</b><br />
+          <span style='margin-left: 1.5em;'>{{this}}</span>
+        </li>
+      {{/each}}
+    </ul>
+    <a href='{{baseUrl}}report-an-issue/get-dump'>Click here to download dump.</a>
+  </body>
+</html>
