@@ -31,7 +31,7 @@ export class ReportAnIssueDto {
 
   @ApiPropertyOptional({
     description: 'Include screenshot',
-    example: 'http://url.com',
+    example: '/report-an-issue/mikey_1b20c1c1-1917-403c-afa3-ca84e6201834.png',
   })
   @IsOptional()
   @IsString()
