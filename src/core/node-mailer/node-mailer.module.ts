@@ -1,13 +1,23 @@
 import { MailerModule } from '@nestjs-modules/mailer';
 import { HandlebarsAdapter } from '@nestjs-modules/mailer/dist/adapters/handlebars.adapter';
+import { BullModule } from '@nestjs/bullmq';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { join } from 'path';
+import { EMAIL_QUEUE } from '../queue/email-queue/email-queue.constant';
 import { NodeMailerController } from './node-mailer.controller';
 import { NodeMailerService } from './node-mailer.service';
 
 @Module({
   imports: [
+    BullModule.registerQueue({
+      name: EMAIL_QUEUE,
+      defaultJobOptions: {
+        removeOnComplete: { age: 86400, count: 2000 }, // keep for a day or 2k jobs
+        removeOnFail: 1000,
+        attempts: 1,
+      },
+    }),
     MailerModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
