@@ -1,4 +1,5 @@
 import { HttpStatus, Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Buffer } from 'exceljs';
 import { Model } from 'mongoose';
@@ -32,6 +33,7 @@ export class ReportAnIssueService {
     private readonly reportAnIssueModel: Model<ReportAnIssueDocument>,
     private excelService: ExcelService,
     private emailQueueService: EmailQueueService,
+    private config: ConfigService,
   ) {}
 
   /**
@@ -59,13 +61,15 @@ export class ReportAnIssueService {
         if (key in HEADERS) {
           const newKey = HEADERS[key];
 
-          if (key === 'issueScreenshotUrl') emailContent[newKey] = process.env.AWS_STORAGE_URL + value;
-          else emailContent[newKey] = value;
+          if (key === 'issueScreenshotUrl') {
+            const url = value ? this.config.get<string>('AWS_STORAGE_URL') + value : 'N/A';
+            emailContent[newKey] = url;
+          } else emailContent[newKey] = value;
         }
       }
 
       // Send mail - when user sends feedback
-      const toEmails: string | undefined = process.env.USER_FEEDBACKS_TO_EMAILS;
+      const toEmails: string | undefined = this.config.get<string>('USER_FEEDBACKS_TO_EMAILS');
       if (!toEmails) {
         this.logger.warn('No email found!');
       } else {
@@ -77,7 +81,7 @@ export class ReportAnIssueService {
               to: email,
               subject: 'New user gave a feedback!',
               templateName: 'report-an-isssue',
-              mailData: { emailContent, baseUrl: process.env.URL },
+              mailData: { emailContent, baseUrl: this.config.get<string>('BASE_URL') },
             }),
           ),
         );
@@ -119,7 +123,7 @@ export class ReportAnIssueService {
       data.forEach((el: ReportAnIssueDto) => {
         // Add base URL to S3 path.
         if (el.issueScreenshotUrl) {
-          el.issueScreenshotUrl = `${process.env.AWS_STORAGE_URL}${el.issueScreenshotUrl}`;
+          el.issueScreenshotUrl = `${this.config.get<string>('AWS_STORAGE_URL')}${el.issueScreenshotUrl}`;
         }
       });
       return await this.excelService.generateExcel(headers, data, 'User_Feedback');
