@@ -12,6 +12,7 @@ import { LoggerMiddleware } from './middleware/logger-middleware';
 import { AuthModule } from './module/auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { ReportAnIssueModule } from './web/report-an-issue/report-an-issue.module';
+import { AfsDigitizationModule } from './web/afs-digitization/afs-digitization.module';
 import { ResourcesSectionModule } from './web/resources-section/resources-section.module';
 
 @Module({
@@ -43,11 +44,20 @@ import { ResourcesSectionModule } from './web/resources-section/resources-sectio
         uri: configService.get<string>('MONGO_URI'),
       }),
     }),
+    MongooseModule.forRootAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (configService: ConfigService) => ({
+        uri: configService.get<string>('MONGO_URI_2'),
+      }),
+      connectionName: 'digitization_db',
+    }),
     UsersModule,
     ResourcesSectionModule,
     NodeMailerModule,
     EmailModule,
     ReportAnIssueModule,
+    AfsDigitizationModule,
   ],
   controllers: [AppController],
   providers: [

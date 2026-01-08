@@ -26,6 +26,7 @@
     "@aws-sdk/lib-storage": "^3.896.0",
     "@aws-sdk/s3-request-presigner": "^3.896.0",
     "@nestjs-modules/mailer": "^2.0.2",
+    "@nestjs/axios": "^4.0.1",
     "@nestjs/bullmq": "^11.0.3",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^4.0.2",
@@ -34,10 +35,11 @@
     "@nestjs/mapped-types": "*",
     "@nestjs/mongoose": "^11.0.3",
     "@nestjs/passport": "^11.0.5",
-    "@nestjs/platform-express": "^11.0.1",
+    "@nestjs/platform-express": "^11.1.9",
     "@nestjs/swagger": "^11.2.0",
     "@nestjs/throttler": "^6.4.0",
     "archiver": "^7.0.1",
+    "axios": "^1.13.2",
     "bcrypt": "^6.0.0",
     "bullmq": "^5.58.8",
     "class-transformer": "^0.5.1",
@@ -48,12 +50,14 @@
     "ioredis": "^5.8.0",
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.18.1",
+    "multer": "^2.0.2",
     "nodemailer": "^7.0.6",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
-    "swagger-ui-express": "^5.0.1"
+    "swagger-ui-express": "^5.0.1",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",
@@ -65,6 +69,7 @@
     "@types/express": "^5.0.0",
     "@types/jest": "^30.0.0",
     "@types/jsonwebtoken": "^9.0.10",
+    "@types/multer": "^2.0.0",
     "@types/node": "^22.10.7",
     "@types/passport-jwt": "^4.0.1",
     "@types/supertest": "^6.0.2",
@@ -82,5 +87,8 @@
     "tsconfig-paths": "^4.2.0",
     "typescript": "^5.7.3",
     "typescript-eslint": "^8.20.0"
+  },
+  "optionalDependencies": {
+    "@css-inline/css-inline-linux-x64-gnu": "^0.18.0"
   }
 }
