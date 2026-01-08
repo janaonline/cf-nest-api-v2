@@ -2,9 +2,21 @@ import { HttpStatus, Injectable, InternalServerErrorException, Logger } from '@n
 import { InjectModel } from '@nestjs/mongoose';
 import { Buffer } from 'exceljs';
 import { Model } from 'mongoose';
+import { EmailQueueService } from 'src/core/queue/email-queue/email-queue.service';
 import { ReportAnIssue, ReportAnIssueDocument } from 'src/schemas/report-an-issue.schema';
 import { ExcelService, RowHeader } from 'src/services/excel/excel.service';
 import { ReportAnIssueDto } from './dto/report-an-issue.dto';
+const HEADERS = {
+  issueKind: 'What kind of issues are you facing?',
+  desc: 'Description',
+  email: 'Email Address',
+  issueScreenshotUrl: 'Include screenshot',
+  autoCaptureContext: 'Auto Capture Context',
+  createdAt: 'Creation date',
+};
+type HeaderKey = keyof typeof HEADERS;
+type HeaderValue = (typeof HEADERS)[HeaderKey];
+
 export interface ResponseData {
   message: string[];
   error?: string;
@@ -18,8 +30,8 @@ export class ReportAnIssueService {
   constructor(
     @InjectModel(ReportAnIssue.name)
     private readonly reportAnIssueModel: Model<ReportAnIssueDocument>,
-
     private excelService: ExcelService,
+    private emailQueueService: EmailQueueService,
   ) {}
 
   /**
@@ -39,6 +51,36 @@ export class ReportAnIssueService {
 
       if (!res?._id) {
         throw new InternalServerErrorException('Database insert failed');
+      }
+
+      // Restructure payload to send email.
+      const emailContent: Partial<Record<HeaderValue, string>> = {};
+      for (const [key, value] of Object.entries(payload) as [keyof typeof payload, string][]) {
+        if (key in HEADERS) {
+          const newKey = HEADERS[key];
+
+          if (key === 'issueScreenshotUrl') emailContent[newKey] = process.env.AWS_STORAGE_URL + value;
+          else emailContent[newKey] = value;
+        }
+      }
+
+      // Send mail - when user sends feedback
+      const toEmails: string | undefined = process.env.USER_FEEDBACKS_TO_EMAILS;
+      if (!toEmails) {
+        this.logger.warn('No email found!');
+      } else {
+        const emails = toEmails.split(',').map((e) => e.trim());
+
+        await Promise.all(
+          emails.map((email) =>
+            this.emailQueueService.addEmailJob({
+              to: email,
+              subject: 'New user gave a feedback!',
+              templateName: 'report-an-isssue',
+              mailData: { emailContent, baseUrl: process.env.URL },
+            }),
+          ),
+        );
       }
 
       return {
@@ -65,12 +107,12 @@ export class ReportAnIssueService {
   public async dumpIssueReported(): Promise<Buffer> {
     try {
       const headers: RowHeader[] = [
-        { label: 'What kind of issues are you facing?', key: 'issueKind', width: 30 },
-        { label: 'Description', key: 'desc', width: 30 },
-        { label: 'Email Address', key: 'email' },
-        { label: 'Include screenshot', key: 'issueScreenshotUrl', width: 30 },
-        { label: 'Auto Capture Context', key: 'autoCaptureContext', width: 30 },
-        { label: 'Creation date', key: 'createdAt', width: 15 },
+        { label: HEADERS.issueKind, key: 'issueKind', width: 30 },
+        { label: HEADERS.desc, key: 'desc', width: 30 },
+        { label: HEADERS.email, key: 'email', width: 20 },
+        { label: HEADERS.issueScreenshotUrl, key: 'issueScreenshotUrl', width: 30 },
+        { label: HEADERS.autoCaptureContext, key: 'autoCaptureContext', width: 30 },
+        { label: HEADERS.createdAt, key: 'createdAt', width: 15 },
       ];
 
       const data: any[] = await this.reportAnIssueModel.find({}).lean();
