@@ -1,7 +1,9 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, Query } from '@nestjs/common';
 import { EventsService } from './events.service';
 import { CreateEventDto } from './dto/create-event.dto';
 import { UpdateEventDto } from './dto/update-event.dto';
+import { FindEventDto } from './dto/find-event-dto';
+import { Types } from 'mongoose';
 
 @Controller('events')
 export class EventsController {
@@ -13,14 +15,14 @@ export class EventsController {
   }
 
   @Get()
-  findAll() {
-    return this.eventsService.findAll();
+  find(@Query() query: FindEventDto) {
+    return this.eventsService.find(query);
   }
-
-  @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.eventsService.findOne(+id);
-  }
+  //
+  // @Get(':id')
+  // findOne(@Param('id') id: string) {
+  //   return this.eventsService.findOne(+id);
+  // }
 
   @Patch(':id')
   update(@Param('id') id: string, @Body() updateEventDto: UpdateEventDto) {
@@ -29,6 +31,6 @@ export class EventsController {
 
   @Delete(':id')
   remove(@Param('id') id: string) {
-    return this.eventsService.remove(+id);
+    return this.eventsService.deactivate(id);
   }
 }

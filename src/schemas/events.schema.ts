@@ -1,12 +1,24 @@
-import { Prop, Schema } from '@nestjs/mongoose';
+import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
+import { Types } from 'mongoose';
 
 export enum EventStatus {
-  ACTIVE = 'active',
-  INACTIVE = 'inactive',
-  DRAFT = 'draft',
+  INACTIVE = 0,
+  ACTIVE = 1,
+  DRAFT = 2,
 }
 
-export type EventChange = Record<string, { old: any; new: any }>;
+export const CONSTRAINTS = {
+  title: {
+    maxLength: 100,
+    minLength: 10,
+  },
+  desc: {
+    maxLength: 1000,
+    minLength: 50,
+  },
+};
+
+export type EventChange = Record<string, { old: unknown; new: unknown }>;
 
 export class EventHistory {
   @Prop({ required: true, default: new Date() })
@@ -18,14 +30,24 @@ export class EventHistory {
 
 @Schema({ timestamps: true })
 export class Event {
-  @Prop({ required: true, trim: true })
+  @Prop({
+    required: true,
+    trim: true,
+    maxLength: CONSTRAINTS.title.maxLength,
+    minLength: CONSTRAINTS.title.minLength,
+  })
   title: string;
 
-  @Prop({ required: true, trim: true })
-  description: string;
+  @Prop({
+    required: true,
+    trim: true,
+    maxLength: CONSTRAINTS.desc.maxLength,
+    minLength: CONSTRAINTS.desc.minLength,
+  })
+  desc: string;
 
   @Prop({ required: true, default: EventStatus.ACTIVE })
-  isActive: EventStatus;
+  eventStatus: EventStatus;
 
   @Prop({ required: true })
   startAt: Date;
@@ -33,21 +55,37 @@ export class Event {
   @Prop({ required: true })
   endAt: Date;
 
+  @Prop({ type: Types.ObjectId, ref: 'User', required: true })
+  createdBy: Types.ObjectId;
+
+  @Prop({ type: Types.ObjectId, ref: 'User', required: true })
+  deleteBy: Types.ObjectId;
+
   @Prop({ trim: true })
   redirectionLink?: string;
 
-  @Prop()
-  formId?: number; // TODO: make this number or _id from formJson?
+  @Prop({ type: Types.ObjectId, ref: 'FormJson' })
+  formId?: Types.ObjectId;
 
   @Prop({ type: [String], default: [] })
   buttonLabels?: string[];
 
-  @Prop()
-  imgUrl?: string;
+  @Prop({ type: [String], default: [] })
+  imgUrl?: string[];
 
   @Prop({
-    type: [{ changedAt: { type: Date, required: true }, changes: { type: Object, required: true } }],
+    type: [
+      {
+        changedAt: { type: Date, required: true },
+        changes: { type: Object, required: true },
+      },
+    ],
     default: [],
   })
   history: { changedAt: Date; changes: EventChange }[];
 }
+
+// TODO: add index
+
+export type EventDocument = Event & Document;
+export const EventSchema = SchemaFactory.createForClass(Event);
