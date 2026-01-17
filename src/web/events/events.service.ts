@@ -4,7 +4,6 @@ import {
   InternalServerErrorException,
   Logger,
   NotFoundException,
-  UnauthorizedException,
 } from '@nestjs/common';
 import { CreateEventDto } from './dto/create-event.dto';
 import { UpdateEventDto } from './dto/update-event.dto';
@@ -28,15 +27,7 @@ export class EventsService {
    * @param dto The event creation data
    * @returns The created event
    */
-  async create(dto: CreateEventDto) {
-    // TODO: get user from token - allow only admin to create event.
-    // Create a middleware - that takes array of user role and validates them.
-    // In controller.
-    const user = { _id: '6402dd7803b5a6b6c2cb6d43' };
-    if (!user || !Types.ObjectId.isValid(user._id)) {
-      throw new UnauthorizedException('You must be logged in to create an event.');
-    }
-
+  async create(dto: CreateEventDto, user: any) {
     if (!dto.redirectionLink && !dto.formId) {
       throw new BadRequestException('redirectionLink or formJson id is mandatory.');
     }
@@ -52,7 +43,7 @@ export class EventsService {
       ...dto,
       startAt,
       endAt,
-      createdBy: user._id,
+      createdBy: user?._id,
     };
 
     try {

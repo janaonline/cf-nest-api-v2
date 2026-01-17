@@ -58,8 +58,8 @@ export class Event {
   @Prop({ type: Types.ObjectId, ref: 'User', required: true })
   createdBy: Types.ObjectId;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', required: true })
-  deleteBy: Types.ObjectId;
+  @Prop({ type: Types.ObjectId, ref: 'User' })
+  deletedBy: Types.ObjectId;
 
   @Prop({ trim: true })
   redirectionLink?: string;
