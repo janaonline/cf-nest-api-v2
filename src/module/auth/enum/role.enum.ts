@@ -1,0 +1,12 @@
+export const enum Role {
+  ADMIN = 'ADMIN',
+  MoHUA = 'MoHUA',
+  PARTNER = 'PARTNER',
+  STATE = 'STATE',
+  ULB = 'ULB',
+  USER = 'USER',
+  XVIFC_STATE = 'XVIFC_STATE',
+  STATE_DASHBOARD = 'STATE_DASHBOARD',
+  AFS_ADMIN = 'AFS_ADMIN',
+  XVIFC = 'XVIFC',
+}
