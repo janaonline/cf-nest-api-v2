@@ -33,6 +33,7 @@ async function bootstrap() {
     .setDescription('V2 documentation.') // Description shown in Swagger UI
     .setVersion('1.0') // API version
     .addServer('/api/v2') // Base path for the APIs
+    .addBearerAuth() // Authorize button
     .build();
 
   // Generate Swagger document from app's routes and metadata

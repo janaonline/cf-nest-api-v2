@@ -8,10 +8,12 @@ import { RolesGuard } from 'src/module/auth/guards/roles.guard';
 import { Roles } from 'src/module/auth/decorators/roles.decorator';
 import { Role } from 'src/module/auth/enum/role.enum';
 import { CurrentUser } from 'src/module/auth/decorators/current-user.decorator';
+import { ApiBearerAuth } from '@nestjs/swagger';
 
-@Controller('events')
 @UseGuards(RolesGuard)
 @Roles([Role.ADMIN])
+@ApiBearerAuth()
+@Controller('events')
 export class EventsController {
   constructor(private readonly eventsService: EventsService) {}
 
@@ -27,7 +29,7 @@ export class EventsController {
 
   @Patch(':id')
   update(@Param('id') id: string, @Body() updateEventDto: UpdateEventDto) {
-    return this.eventsService.update(+id, updateEventDto);
+    return this.eventsService.update(id, updateEventDto);
   }
 
   @Delete(':id')

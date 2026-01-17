@@ -9,8 +9,10 @@ import { CreateEventDto } from './dto/create-event.dto';
 import { UpdateEventDto } from './dto/update-event.dto';
 import { EventDocument, EventStatus } from 'src/schemas/events.schema';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model, Types } from 'mongoose';
+import { FilterQuery, Model, ProjectionType, Types } from 'mongoose';
 import { toIST } from 'src/shared/files/constant';
+import { FindEventDto } from './dto/find-event-dto';
+import { EventListItemDto, PaginatedResponse } from './dto/interface';
 
 @Injectable()
 export class EventsService {
@@ -55,26 +57,57 @@ export class EventsService {
     }
   }
 
-  async find({ page = 1, limit = 10 }): Promise<unknown[]> {
+  /**
+   * Fetch a paginated list of events from the DB.
+   * Supports filtering by event status, searching by title, and sorting by config fields.
+   * Also converts date fields from UTC to IST before returning.
+   *
+   * @param query - DTO containing optional filters, pagination, and sorting options
+   * @returns A paginated response with event items and metadata (page, limit, total, pages)
+   * @throws InternalServerErrorException if database operation fails
+   */
+  async find(query: FindEventDto): Promise<PaginatedResponse<EventListItemDto>> {
     try {
-      // TODO: Add sort feature
-      // Search by title
-      // Search by eventStatus: active/ draft donot allow inactive search
-      // Search between date range
-
-      limit = Math.min(limit, 15);
+      const page = query.page ?? 1;
+      const limit = Math.min(query.limit, 15);
       const skip = (page - 1) * limit;
 
-      const events = await this.eventModel
-        .find({ eventStatus: { $ne: EventStatus.INACTIVE } }, { history: false })
-        .sort({ startAt: 1 })
-        .skip(skip)
-        .limit(limit)
-        .lean()
-        .exec();
+      // DB filter and projection.
+      const projection: ProjectionType<EventDocument> = { history: 0 };
+      const filter: FilterQuery<EventDocument> = {
+        eventStatus: { $ne: EventStatus.INACTIVE },
+      };
 
-      return events.map((event) => {
-        const e = event as any;
+      // If eventStatus is provided, override the base filter.
+      if (query.eventStatus) {
+        filter.eventStatus = query.eventStatus;
+      }
+
+      // Use case-sensitive regex.
+      const title = query.title?.trim();
+      if (title) {
+        // Escaping regex to avoid regex DoS patterns
+        const escaped = title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        filter.title = { $regex: escaped, $options: 'i' };
+      }
+
+      // Determine sort field and direction.
+      const sortBy = query.sortBy ?? 'startAt';
+      const sortDir = query.sortDir ?? 1;
+
+      // Build MongoDB query with filtering, sorting, pagination
+      const findQuery = this.eventModel
+        .find(filter, projection)
+        .sort({ [sortBy]: sortDir })
+        .skip(skip)
+        .limit(limit);
+
+      // Execute queries in parallel: fetch items(events) and count total.
+      const [items, total] = await Promise.all([findQuery.lean(), this.eventModel.countDocuments(filter)]);
+
+      // Convert all date fields to IST timezone before returning (DB returns UTC)
+      const eventListWithIST: EventListItemDto[] = items.map((item) => {
+        const e = item as any;
         return {
           ...e,
           startAt: toIST(e.startAt),
@@ -83,17 +116,21 @@ export class EventsService {
           updatedAt: toIST(e.updatedAt),
         };
       });
+
+      return {
+        items: eventListWithIST,
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit),
+      };
     } catch (error) {
       this.logger.error('Failed to fetch events: ', error);
       throw new InternalServerErrorException('Unable to fetch events at this time.');
     }
   }
 
-  // findOne(id: number) {
-  //   return `This action returns a #${id} event`;
-  // }
-
-  update(id: number, updateEventDto: UpdateEventDto) {
+  update(id: string, updateEventDto: UpdateEventDto) {
     return `This action updates a #${id} event`;
   }
 

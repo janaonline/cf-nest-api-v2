@@ -1,4 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 import {
   IsArray,
   IsDateString,
@@ -35,11 +36,11 @@ export class CreateEventDto {
   desc: string;
 
   @ApiProperty({
-    example: 1,
+    example: EventStatus.ACTIVE,
     description: 'Status of the event. Allowed values are: 0 (Inactive), 1 (Active), 2 (Draft).',
   })
-  @IsNotEmpty({ message: `eventStatus must be ${Object.values(EventStatus)}` })
-  @IsIn(Object.values(EventStatus))
+  @IsIn(Object.values(EventStatus).filter((e) => typeof e === 'number'))
+  @Type(() => Number)
   eventStatus: EventStatus;
 
   @ApiProperty({
