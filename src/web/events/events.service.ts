@@ -10,9 +10,9 @@ import { UpdateEventDto } from './dto/update-event.dto';
 import { EventDocument, EventStatus } from 'src/schemas/events.schema';
 import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model, ProjectionType, Types } from 'mongoose';
-import { toIST } from 'src/shared/files/constant';
 import { FindEventDto } from './dto/find-event-dto';
 import { EventListItemDto, PaginatedResponse } from './dto/interface';
+import { toIST } from 'src/shared/utils/date.utils';
 
 @Injectable()
 export class EventsService {
