@@ -7,12 +7,13 @@ import {
 } from '@nestjs/common';
 import { CreateEventDto } from './dto/create-event.dto';
 import { UpdateEventDto } from './dto/update-event.dto';
-import { EventDocument, EventStatus } from 'src/schemas/events.schema';
+import { EventChange, EventDocument, EventStatus } from 'src/schemas/events.schema';
 import { InjectModel } from '@nestjs/mongoose';
-import { FilterQuery, Model, ProjectionType, Types } from 'mongoose';
 import { FindEventDto } from './dto/find-event-dto';
 import { EventListItemDto, PaginatedResponse } from './dto/interface';
-import { toIST } from 'src/shared/utils/date.utils';
+import { toIST, toValidDate } from 'src/shared/utils/date.utils';
+import { Model, ProjectionType, FilterQuery, Types, UpdateQuery } from 'mongoose';
+import { isDeepEqual } from 'src/shared/utils/equality.utils';
 
 @Injectable()
 export class EventsService {
@@ -75,7 +76,7 @@ export class EventsService {
       // DB filter and projection.
       const projection: ProjectionType<EventDocument> = { history: 0 };
       const filter: FilterQuery<EventDocument> = {
-        eventStatus: { $ne: EventStatus.INACTIVE },
+        eventStatus: { $in: [EventStatus.ACTIVE, EventStatus.INACTIVE] },
       };
 
       // If eventStatus is provided, override the base filter.
@@ -87,8 +88,9 @@ export class EventsService {
       const title = query.title?.trim();
       if (title) {
         // Escaping regex to avoid regex DoS patterns
-        const escaped = title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        filter.title = { $regex: escaped, $options: 'i' };
+        // const escaped = title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        // filter.title = { $regex: escaped, $options: 'i' };
+        filter.$text = { $search: title };
       }
 
       // Determine sort field and direction.
@@ -130,10 +132,111 @@ export class EventsService {
     }
   }
 
-  update(id: string, updateEventDto: UpdateEventDto) {
-    return `This action updates a #${id} event`;
+  /**
+   * Update an existing event by its id.
+   *
+   * Responsibilities:
+   * - Validate input (id + payload)
+   * - Convert and validate date fields
+   * - Ensure startAt <= endAt
+   * - Track field-level change history
+   * - Persist update atomically
+   *
+   * @param id MongoDB ObjectId of the event
+   * @param dto Partial update payload
+   * @returns Updated event document
+   */
+  async update(id: string, dto: UpdateEventDto) {
+    // Validate id (must be an ObjectId)
+    if (!id || !Types.ObjectId.isValid(id)) {
+      throw new BadRequestException('Invalid or missing event id!');
+    }
+
+    // Prevent "empty update"
+    if (!dto || Object.keys(dto).length === 0) {
+      throw new BadRequestException('No fields provided to update.');
+    }
+
+    // Load existing document
+    const _id = new Types.ObjectId(id);
+    const event = await this.eventModel.findById(_id).lean<EventDocument>();
+    if (!event) {
+      throw new NotFoundException('Event not found!');
+    }
+
+    // Create patch object from dto.
+    const patch = { ...dto };
+
+    // Convert ISO strings to Date obj.
+    if (dto.startAt) {
+      patch.startAt = toValidDate(dto.startAt?.toString());
+    }
+    if (dto.endAt) {
+      patch.endAt = toValidDate(dto.endAt?.toString());
+    }
+
+    // Validate date relationship.
+    if (patch.startAt || patch.endAt) {
+      const startAt = patch.startAt ?? event.startAt;
+      const endAt = patch.endAt ?? event.endAt;
+
+      if (endAt && new Date(endAt) < new Date(startAt)) {
+        throw new BadRequestException('endAt must be after startAt.');
+      }
+    }
+
+    // Prepare History obj
+    const historyEntry: { changeAt: Date; changes: EventChange } = { changeAt: new Date(), changes: {} };
+    for (const [key, newValue] of Object.entries(patch)) {
+      const oldValue = event[key];
+
+      if (isDeepEqual(oldValue, newValue)) {
+        continue;
+      }
+
+      historyEntry.changes[key] = { old: oldValue, new: newValue };
+    }
+
+    // If startAt & endAt both are changed then only add to history.
+    const dateKeys = ['startAt', 'endAt'];
+    const changedKeys = Object.keys(historyEntry.changes);
+    const shouldPushHistory = changedKeys.length > 0 && dateKeys.every((k) => changedKeys.includes(k));
+
+    const updateQuery: UpdateQuery<EventDocument> = {
+      $set: patch,
+      ...(shouldPushHistory ? { $push: { history: historyEntry } } : {}),
+    };
+
+    try {
+      const updatedEvent = await this.eventModel
+        .findOneAndUpdate({ _id } as FilterQuery<EventDocument>, updateQuery, {
+          new: true,
+          runValidators: true,
+          context: 'query',
+        })
+        .lean();
+
+      if (!updatedEvent) {
+        throw new NotFoundException('Event not found!');
+      }
+
+      return updatedEvent;
+    } catch (error) {
+      this.logger.error({ msg: 'Failed to update event', id, error });
+      throw new InternalServerErrorException('Failed to update event!');
+    }
   }
 
+  /**
+   * Deactivates an event by setting its `eventStatus` to INACTIVE.
+   *
+   * @param string id - The MongoDB ObjectId of the event to deactivate.
+   * @throws BadRequestException If the `id` is missing or not a valid ObjectId.
+   * @throws NotFoundException If no event is found with the given `id`.
+   * @throws InternalServerErrorException If the update operation fails unexpectedly.
+   *
+   * @returns Promise<{ success: boolean; message: string }> A success response if the event is deactivated.
+   */
   async deactivate(id: string) {
     if (!id || !Types.ObjectId.isValid(id)) {
       throw new BadRequestException('Invalid or missing event id!');

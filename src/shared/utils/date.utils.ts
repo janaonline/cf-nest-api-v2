@@ -1,3 +1,5 @@
+import { BadRequestException } from '@nestjs/common';
+
 /**
  * @param includeTime - If true (default), returns both date and time in 'YYYY-MM-DD_HH-MM-SS' format.
  *                      If false, returns only the date in 'YYYY-MM-DD' format.
@@ -44,4 +46,19 @@ export function toIST(date: Date): string {
   const istDate = new Date(date.getTime() + IST_OFFSET_MS);
 
   return istDate.toISOString();
+}
+
+/**
+ * Converts a string value into a valid JavaScript Date object.
+ *
+ * @param value - Date string to be parsed (ISO 8601 or Date-parsable format)
+ * @returns A valid JavaScript `Date` object
+ * @throws BadRequestException if the value is not a valid date
+ */
+export function toValidDate(value: string) {
+  const d = new Date(value);
+  if (isNaN(d.getTime())) {
+    throw new BadRequestException(`Invalid date value: ${value}`);
+  }
+  return d;
 }

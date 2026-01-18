@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Types } from 'mongoose';
+import { Types, Document } from 'mongoose';
 
 export enum EventStatus {
   INACTIVE = 0,
@@ -20,13 +20,15 @@ export const CONSTRAINTS = {
 
 export type EventChange = Record<string, { old: unknown; new: unknown }>;
 
+@Schema()
 export class EventHistory {
-  @Prop({ required: true, default: new Date() })
+  @Prop({ required: true, default: Date.now })
   changeAt: Date;
 
   @Prop({ type: Object, required: true })
   changes: EventChange;
 }
+const EventHistorySchema = SchemaFactory.createForClass(EventHistory);
 
 @Schema({ timestamps: true })
 export class Event {
@@ -46,7 +48,12 @@ export class Event {
   })
   desc: string;
 
-  @Prop({ required: true, default: EventStatus.ACTIVE })
+  @Prop({
+    required: true,
+    type: Number,
+    enum: Object.values(EventStatus).filter((v) => typeof v === 'number'),
+    default: EventStatus.ACTIVE,
+  })
   eventStatus: EventStatus;
 
   @Prop({ required: true })
@@ -74,18 +81,15 @@ export class Event {
   imgUrl?: string[];
 
   @Prop({
-    type: [
-      {
-        changedAt: { type: Date, required: true },
-        changes: { type: Object, required: true },
-      },
-    ],
+    type: [EventHistorySchema],
     default: [],
   })
-  history: { changedAt: Date; changes: EventChange }[];
+  history: EventHistory[];
 }
-
-// TODO: add index
 
 export type EventDocument = Event & Document;
 export const EventSchema = SchemaFactory.createForClass(Event);
+
+EventSchema.index({ eventStatus: 1, startAt: 1 });
+EventSchema.index({ eventStatus: 1, endAt: 1 });
+EventSchema.index({ title: 'text' });
