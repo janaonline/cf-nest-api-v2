@@ -10,3 +10,20 @@ export const enum Role {
   AFS_ADMIN = 'AFS_ADMIN',
   XVIFC = 'XVIFC',
 }
+
+type UserRole =
+  | Role.ADMIN
+  | Role.MoHUA
+  | Role.PARTNER
+  | Role.STATE
+  | Role.ULB
+  | Role.USER
+  | Role.XVIFC_STATE
+  | Role.STATE_DASHBOARD
+  | Role.AFS_ADMIN
+  | Role.XVIFC;
+
+export interface User {
+  _id: string;
+  role: UserRole;
+}

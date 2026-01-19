@@ -5,22 +5,24 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { CreateEventDto } from './dto/create-event.dto';
-import { UpdateEventDto } from './dto/update-event.dto';
-import { EventChange, EventDocument, EventStatus } from 'src/schemas/events.schema';
 import { InjectModel } from '@nestjs/mongoose';
+import { FilterQuery, Model, ProjectionType, Types, UpdateQuery } from 'mongoose';
+import { User } from 'src/module/auth/enum/role.enum';
+import { EventChange, EventDocument, Events, EventStatus } from 'src/schemas/events.schema';
+import { toIST, toValidDate } from 'src/shared/utils/date.utils';
+import { isDeepEqual } from 'src/shared/utils/equality.utils';
+import { CreateEventDto } from './dto/create-event.dto';
 import { FindEventDto } from './dto/find-event-dto';
 import { EventListItemDto, PaginatedResponse } from './dto/interface';
-import { toIST, toValidDate } from 'src/shared/utils/date.utils';
-import { Model, ProjectionType, FilterQuery, Types, UpdateQuery } from 'mongoose';
-import { isDeepEqual } from 'src/shared/utils/equality.utils';
+import { UpdateEventDto } from './dto/update-event.dto';
 
 @Injectable()
 export class EventsService {
   private logger = new Logger();
+  private readonly EventStatusCheck = { $in: [EventStatus.ACTIVE, EventStatus.INACTIVE] };
 
   constructor(
-    @InjectModel(Event.name)
+    @InjectModel(Events.name)
     private readonly eventModel: Model<EventDocument>,
   ) {}
 
@@ -30,7 +32,7 @@ export class EventsService {
    * @param dto The event creation data
    * @returns The created event
    */
-  async create(dto: CreateEventDto, user: any) {
+  async create(dto: CreateEventDto, user: User) {
     if (!dto.redirectionLink && !dto.formId) {
       throw new BadRequestException('redirectionLink or formJson id is mandatory.');
     }
@@ -46,7 +48,7 @@ export class EventsService {
       ...dto,
       startAt,
       endAt,
-      createdBy: user?._id,
+      createdBy: user._id,
     };
 
     try {
@@ -59,6 +61,31 @@ export class EventsService {
   }
 
   /**
+   * Fetch a single event by its id.
+   * @param id - MongoDB ObjectId of the event
+   * @returns The event document or null if not found
+   */
+  async findOne(webinarId: string): Promise<{ success: boolean; message: string; data: Events | null }> {
+    if (!webinarId) {
+      throw new BadRequestException('Invalid or missing event id!');
+    }
+
+    try {
+      const event = await this.eventModel
+        .findOne({ webinarId: webinarId, eventStatus: this.EventStatusCheck }, { history: 0 })
+        .lean<Events>();
+      return {
+        success: true,
+        message: 'Event fetched successfully',
+        data: event,
+      };
+    } catch (error) {
+      this.logger.error('Failed to fetch event: ', error);
+      throw new InternalServerErrorException('Unable to fetch event at this time.');
+    }
+  }
+
+  /**
    * Fetch a paginated list of events from the DB.
    * Supports filtering by event status, searching by title, and sorting by config fields.
    * Also converts date fields from UTC to IST before returning.
@@ -67,7 +94,7 @@ export class EventsService {
    * @returns A paginated response with event items and metadata (page, limit, total, pages)
    * @throws InternalServerErrorException if database operation fails
    */
-  async find(query: FindEventDto): Promise<PaginatedResponse<EventListItemDto>> {
+  async findAll(query: FindEventDto): Promise<PaginatedResponse<EventListItemDto>> {
     try {
       const page = query.page ?? 1;
       const limit = Math.min(query.limit, 15);
@@ -75,9 +102,7 @@ export class EventsService {
 
       // DB filter and projection.
       const projection: ProjectionType<EventDocument> = { history: 0 };
-      const filter: FilterQuery<EventDocument> = {
-        eventStatus: { $in: [EventStatus.ACTIVE, EventStatus.INACTIVE] },
-      };
+      const filter: FilterQuery<EventDocument> = { eventStatus: this.EventStatusCheck };
 
       // If eventStatus is provided, override the base filter.
       if (query.eventStatus) {
@@ -105,19 +130,15 @@ export class EventsService {
         .limit(limit);
 
       // Execute queries in parallel: fetch items(events) and count total.
-      const [items, total] = await Promise.all([findQuery.lean(), this.eventModel.countDocuments(filter)]);
+      const [items, total] = await Promise.all([findQuery.lean<Events[]>(), this.eventModel.countDocuments(filter)]);
 
       // Convert all date fields to IST timezone before returning (DB returns UTC)
-      const eventListWithIST: EventListItemDto[] = items.map((item) => {
-        const e = item as any;
-        return {
-          ...e,
-          startAt: toIST(e.startAt),
-          endAt: toIST(e.endAt),
-          createdAt: toIST(e.createdAt),
-          updatedAt: toIST(e.updatedAt),
-        };
-      });
+      const eventListWithIST: EventListItemDto[] = items.map((item) => ({
+        startAt: toIST(item.startAt),
+        endAt: toIST(item.endAt),
+        createdAt: toIST(item.createdAt),
+        updatedAt: toIST(item.updatedAt),
+      }));
 
       return {
         items: eventListWithIST,
@@ -165,7 +186,7 @@ export class EventsService {
     }
 
     // Create patch object from dto.
-    const patch = { ...dto };
+    const patch: Partial<Events> = { ...dto };
 
     // Convert ISO strings to Date obj.
     if (dto.startAt) {
@@ -186,15 +207,19 @@ export class EventsService {
     }
 
     // Prepare History obj
-    const historyEntry: { changeAt: Date; changes: EventChange } = { changeAt: new Date(), changes: {} };
-    for (const [key, newValue] of Object.entries(patch)) {
+    const historyEntry: { changeAt: Date; changes: EventChange<Event> } = { changeAt: new Date(), changes: {} };
+    for (const key of Object.keys(patch) as (keyof Events)[]) {
+      const newValue = patch[key];
       const oldValue = event[key];
 
       if (isDeepEqual(oldValue, newValue)) {
         continue;
       }
 
-      historyEntry.changes[key] = { old: oldValue, new: newValue };
+      historyEntry.changes[key] = {
+        old: oldValue,
+        new: newValue,
+      };
     }
 
     // If startAt & endAt both are changed then only add to history.
@@ -221,7 +246,7 @@ export class EventsService {
       }
 
       return updatedEvent;
-    } catch (error) {
+    } catch (error: unknown) {
       this.logger.error({ msg: 'Failed to update event', id, error });
       throw new InternalServerErrorException('Failed to update event!');
     }

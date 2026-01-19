@@ -35,8 +35,8 @@ export function getTimeStamp(includeTime: boolean = true): string {
  */
 export function toIST(date: Date): string {
   if (!(date instanceof Date) || isNaN(date.getTime())) {
-    return 'NA';
-    // throw new Error('Invalid Date provided to toIST()');
+    // return null;
+    throw new Error('Invalid Date provided to toIST()');
   }
 
   // IST is UTC + 5 hours 30 minutes

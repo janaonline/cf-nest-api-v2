@@ -1,14 +1,27 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, Query, UseGuards } from '@nestjs/common';
-import { EventsService } from './events.service';
-import { CreateEventDto } from './dto/create-event.dto';
-import { UpdateEventDto } from './dto/update-event.dto';
-import { FindEventDto } from './dto/find-event-dto';
-import { Types } from 'mongoose';
-import { RolesGuard } from 'src/module/auth/guards/roles.guard';
-import { Roles } from 'src/module/auth/decorators/roles.decorator';
-import { Role } from 'src/module/auth/enum/role.enum';
-import { CurrentUser } from 'src/module/auth/decorators/current-user.decorator';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Response,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth } from '@nestjs/swagger';
+import { CurrentUser } from 'src/module/auth/decorators/current-user.decorator';
+import { Roles } from 'src/module/auth/decorators/roles.decorator';
+import type { User } from 'src/module/auth/enum/role.enum';
+import { Role } from 'src/module/auth/enum/role.enum';
+import { RolesGuard } from 'src/module/auth/guards/roles.guard';
+import { CreateEventDto } from './dto/create-event.dto';
+import { FindEventDto } from './dto/find-event-dto';
+import { UpdateEventDto } from './dto/update-event.dto';
+import { EventsService } from './events.service';
 
 @UseGuards(RolesGuard)
 @Roles([Role.ADMIN])
@@ -18,13 +31,20 @@ export class EventsController {
   constructor(private readonly eventsService: EventsService) {}
 
   @Post()
-  create(@Body() createEventDto: CreateEventDto, @CurrentUser() user: any) {
+  create(@Body() createEventDto: CreateEventDto, @CurrentUser() user: User) {
     return this.eventsService.create(createEventDto, user);
   }
 
+  @HttpCode(HttpStatus.OK)
+  @Roles([Role.ADMIN, Role.ULB, Role.STATE])
+  @Get(':webinarId')
+  findOne(@Param('webinarId') webinarId: string) {
+    return this.eventsService.findOne(webinarId);
+  }
+
   @Get()
-  find(@Query() query: FindEventDto) {
-    return this.eventsService.find(query);
+  findAll(@Query() query: FindEventDto) {
+    return this.eventsService.findAll(query);
   }
 
   @Patch(':id')

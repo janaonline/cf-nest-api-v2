@@ -12,9 +12,20 @@ import {
   MaxLength,
   MinLength,
 } from 'class-validator';
+import { Types } from 'mongoose';
 import { CONSTRAINTS, EventStatus } from 'src/schemas/events.schema';
 
 export class CreateEventDto {
+  @ApiProperty({
+    example: 'ulb_webinar_alert',
+    description: 'Unique identifier for the webinar or event.',
+  })
+  @IsNotEmpty()
+  @IsString()
+  @MaxLength(CONSTRAINTS.webinarId.maxLength)
+  @MinLength(CONSTRAINTS.webinarId.minLength)
+  webinarId: string;
+
   @ApiProperty({
     example: 'WEBINAR ALERT',
     description: 'Title of the event or webinar. Maximum and minimum length constraints apply.',
@@ -59,7 +70,7 @@ export class CreateEventDto {
   @IsNotEmpty()
   endAt: Date;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     example: 'https://extrnal-form-link.com',
     description: 'External form link',
   })
@@ -73,7 +84,7 @@ export class CreateEventDto {
   })
   @IsOptional()
   @IsMongoId()
-  formId?: string;
+  formId?: Types.ObjectId;
 
   @ApiPropertyOptional({
     example: ['Register for event.'],

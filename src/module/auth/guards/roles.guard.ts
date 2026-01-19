@@ -7,11 +7,11 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { ROLES_KEY } from '../decorators/roles.decorator';
-import { Request } from 'express';
 import { JwtService } from '@nestjs/jwt';
-import { Role } from '../enum/role.enum';
+import { Request } from 'express';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
+import { ROLES_KEY } from '../decorators/roles.decorator';
+import { Role, User } from '../enum/role.enum';
 
 @Injectable()
 export class RolesGuard implements CanActivate {
@@ -28,12 +28,14 @@ export class RolesGuard implements CanActivate {
       context.getHandler(),
       context.getClass(),
     ]);
-
     if (isPublic) {
       return true;
     }
 
     const request = context.switchToHttp().getRequest<Request>();
+    // if (request.method === 'OPTIONS') {
+    //   return true;
+    // }
 
     // Read required roles from metadata
     const requiredRoles = this.reflector.getAllAndOverride<Role[]>(ROLES_KEY, [
@@ -49,12 +51,12 @@ export class RolesGuard implements CanActivate {
     }
 
     // Verify token & attach user to request
-    let payload: any;
+    let payload: User;
     try {
       payload = await this.jwtService.verifyAsync(token);
       request['user'] = payload;
     } catch (error) {
-      this.logger.warn('JWT verification failed', error?.message);
+      this.logger.warn('JWT verification failed', error);
       throw new UnauthorizedException('Invalid token');
     }
 
@@ -63,7 +65,9 @@ export class RolesGuard implements CanActivate {
       const userRoles = Array.isArray(payload.role) ? payload.role : [payload.role];
       const hasRole = requiredRoles.some((role) => userRoles.includes(role));
       if (!hasRole) {
-        this.logger.warn(`Insufficient permissions. Allowed roles: ${requiredRoles}, Provided roles: ${userRoles}`);
+        this.logger.warn(
+          `Insufficient permissions. Allowed roles: ${requiredRoles.join(', ')}, Provided roles: ${userRoles.join(', ')}`,
+        );
         throw new ForbiddenException('Insufficient permissions');
       }
     }

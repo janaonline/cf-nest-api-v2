@@ -5,6 +5,8 @@ export interface PaginatedResponse<T> {
   total: number;
   pages: number;
 }
+
+// Response DTO for event list items.
 export interface EventListItemDto {
   // TODO: Every item from schema.
   startAt: string | null;

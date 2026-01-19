@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Types, Document } from 'mongoose';
+import { HydratedDocument, Types, Schema as MongooseSchema } from 'mongoose';
 
 export enum EventStatus {
   INACTIVE = 0,
@@ -16,9 +16,25 @@ export const CONSTRAINTS = {
     maxLength: 1000,
     minLength: 50,
   },
+  webinarId: {
+    maxLength: 50,
+    minLength: 5,
+  },
 };
 
-export type EventChange = Record<string, { old: unknown; new: unknown }>;
+// export type EventChange = Partial<{
+//   [K in keyof Events]: {
+//     old: Events[K];
+//     new: Events[K];
+//   };
+// }>;
+type StringKeyOf<T> = Extract<keyof T, string>;
+export type EventChange<T extends object> = Partial<{
+  [K in StringKeyOf<T>]: {
+    old: T[K];
+    new: T[K];
+  };
+}>;
 
 @Schema()
 export class EventHistory {
@@ -26,12 +42,23 @@ export class EventHistory {
   changeAt: Date;
 
   @Prop({ type: Object, required: true })
-  changes: EventChange;
+  changes: EventChange<Event>;
 }
 const EventHistorySchema = SchemaFactory.createForClass(EventHistory);
 
 @Schema({ timestamps: true })
-export class Event {
+export class Events {
+  createdAt!: Date;
+  updatedAt!: Date;
+
+  @Prop({
+    required: true,
+    trim: true,
+    maxLength: CONSTRAINTS.webinarId.maxLength,
+    minLength: CONSTRAINTS.webinarId.minLength,
+  })
+  webinarId: string;
+
   @Prop({
     required: true,
     trim: true,
@@ -62,16 +89,16 @@ export class Event {
   @Prop({ required: true })
   endAt: Date;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', required: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
   createdBy: Types.ObjectId;
 
-  @Prop({ type: Types.ObjectId, ref: 'User' })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User' })
   deletedBy: Types.ObjectId;
 
   @Prop({ trim: true })
   redirectionLink?: string;
 
-  @Prop({ type: Types.ObjectId, ref: 'FormJson' })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'FormJson' })
   formId?: Types.ObjectId;
 
   @Prop({ type: [String], default: [] })
@@ -87,9 +114,10 @@ export class Event {
   history: EventHistory[];
 }
 
-export type EventDocument = Event & Document;
-export const EventSchema = SchemaFactory.createForClass(Event);
+export type EventDocument = HydratedDocument<Events>;
+export const EventSchema = SchemaFactory.createForClass(Events);
 
 EventSchema.index({ eventStatus: 1, startAt: 1 });
 EventSchema.index({ eventStatus: 1, endAt: 1 });
 EventSchema.index({ title: 'text' });
+EventSchema.index({ webinarId: 1 }, { unique: true });
