@@ -1,7 +1,7 @@
 import { Body, Controller, Get, Post, StreamableFile } from '@nestjs/common';
-import { getTimeStamp } from 'src/shared/files/constant';
 import { ReportAnIssueDto } from './dto/report-an-issue.dto';
 import { ReportAnIssueService } from './report-an-issue.service';
+import { getTimeStamp } from 'src/shared/utils/date.utils';
 
 @Controller('report-an-issue')
 export class ReportAnIssueController {
