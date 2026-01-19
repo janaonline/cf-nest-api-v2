@@ -13,13 +13,13 @@ import { toIST, toValidDate } from 'src/shared/utils/date.utils';
 import { isDeepEqual } from 'src/shared/utils/equality.utils';
 import { CreateEventDto } from './dto/create-event.dto';
 import { FindEventDto } from './dto/find-event-dto';
-import { EventListItemDto, PaginatedResponse } from './dto/interface';
+import { EventListItemDto, EventReponse, PaginatedResponse } from './dto/interface';
 import { UpdateEventDto } from './dto/update-event.dto';
 
 @Injectable()
 export class EventsService {
   private logger = new Logger();
-  private readonly EventStatusCheck = { $in: [EventStatus.ACTIVE, EventStatus.INACTIVE] };
+  private readonly EventStatusCheck = { $in: [EventStatus.ACTIVE, EventStatus.DRAFT] };
 
   constructor(
     @InjectModel(Events.name)
@@ -65,7 +65,7 @@ export class EventsService {
    * @param id - MongoDB ObjectId of the event
    * @returns The event document or null if not found
    */
-  async findOne(webinarId: string): Promise<{ success: boolean; message: string; data: Events | null }> {
+  async findOne(webinarId: string): Promise<EventReponse> {
     if (!webinarId) {
       throw new BadRequestException('Invalid or missing event id!');
     }
@@ -134,6 +134,7 @@ export class EventsService {
 
       // Convert all date fields to IST timezone before returning (DB returns UTC)
       const eventListWithIST: EventListItemDto[] = items.map((item) => ({
+        ...item,
         startAt: toIST(item.startAt),
         endAt: toIST(item.endAt),
         createdAt: toIST(item.createdAt),
@@ -141,11 +142,13 @@ export class EventsService {
       }));
 
       return {
-        items: eventListWithIST,
+        data: eventListWithIST,
         page,
         limit,
         total,
         pages: Math.ceil(total / limit),
+        success: true,
+        message: 'Event fetched successfully',
       };
     } catch (error) {
       this.logger.error('Failed to fetch events: ', error);
@@ -167,7 +170,7 @@ export class EventsService {
    * @param dto Partial update payload
    * @returns Updated event document
    */
-  async update(id: string, dto: UpdateEventDto) {
+  async update(id: string, dto: UpdateEventDto): Promise<EventReponse> {
     // Validate id (must be an ObjectId)
     if (!id || !Types.ObjectId.isValid(id)) {
       throw new BadRequestException('Invalid or missing event id!');
@@ -245,7 +248,14 @@ export class EventsService {
         throw new NotFoundException('Event not found!');
       }
 
-      return updatedEvent;
+      // Remove history from response
+      updatedEvent.history = [];
+
+      return {
+        data: updatedEvent,
+        success: true,
+        message: 'Event fetched successfully',
+      };
     } catch (error: unknown) {
       this.logger.error({ msg: 'Failed to update event', id, error });
       throw new InternalServerErrorException('Failed to update event!');
