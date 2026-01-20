@@ -6,14 +6,15 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
+import { MongoServerError } from 'mongodb';
 import { FilterQuery, Model, ProjectionType, Types, UpdateQuery } from 'mongoose';
 import { User } from 'src/module/auth/enum/role.enum';
 import { EventChange, EventDocument, Events, EventStatus } from 'src/schemas/events.schema';
-import { toIST, toValidDate } from 'src/shared/utils/date.utils';
+import { toValidDate } from 'src/shared/utils/date.utils';
 import { isDeepEqual } from 'src/shared/utils/equality.utils';
 import { CreateEventDto } from './dto/create-event.dto';
 import { FindEventDto } from './dto/find-event-dto';
-import { EventListItemDto, EventReponse, PaginatedResponse } from './dto/interface';
+import { EventReponse, PaginatedResponse } from './dto/interface';
 import { UpdateEventDto } from './dto/update-event.dto';
 
 @Injectable()
@@ -48,13 +49,18 @@ export class EventsService {
       ...dto,
       startAt,
       endAt,
-      createdBy: user._id,
+      createdBy: user?._id || '5eb53b3f6ffdf8c7cf01bf82',
     };
 
     try {
       const createdEvent = await this.eventModel.create(eventData);
       return createdEvent;
-    } catch (error) {
+    } catch (error: unknown) {
+      // MongoDB duplicate key error
+      if (error instanceof MongoServerError && error.code === 11000) {
+        this.logger.warn(`Duplicate webinarId detected: ${dto.webinarId}`);
+        throw new BadRequestException('An event with this webinarId already exists.');
+      }
       this.logger.error('Failed to create event: ', error);
       throw new BadRequestException('Failed to create event');
     }
@@ -94,7 +100,7 @@ export class EventsService {
    * @returns A paginated response with event items and metadata (page, limit, total, pages)
    * @throws InternalServerErrorException if database operation fails
    */
-  async findAll(query: FindEventDto): Promise<PaginatedResponse<EventListItemDto>> {
+  async findAll(query: FindEventDto): Promise<PaginatedResponse<Events>> {
     try {
       const page = query.page ?? 1;
       const limit = Math.min(query.limit, 15);
@@ -130,19 +136,19 @@ export class EventsService {
         .limit(limit);
 
       // Execute queries in parallel: fetch items(events) and count total.
-      const [items, total] = await Promise.all([findQuery.lean<Events[]>(), this.eventModel.countDocuments(filter)]);
+      const [data, total] = await Promise.all([findQuery.lean<Events[]>(), this.eventModel.countDocuments(filter)]);
 
-      // Convert all date fields to IST timezone before returning (DB returns UTC)
-      const eventListWithIST: EventListItemDto[] = items.map((item) => ({
-        ...item,
-        startAt: toIST(item.startAt),
-        endAt: toIST(item.endAt),
-        createdAt: toIST(item.createdAt),
-        updatedAt: toIST(item.updatedAt),
-      }));
+      // // Convert all date fields to IST timezone before returning (DB returns UTC)
+      // const eventListWithIST: EventListItemDto[] = items.map((item) => ({
+      //   ...item,
+      //   startAt: toIST(item.startAt),
+      //   endAt: toIST(item.endAt),
+      //   createdAt: toIST(item.createdAt),
+      //   updatedAt: toIST(item.updatedAt),
+      // }));
 
       return {
-        data: eventListWithIST,
+        data,
         page,
         limit,
         total,
