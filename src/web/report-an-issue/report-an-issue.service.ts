@@ -75,16 +75,14 @@ export class ReportAnIssueService {
       } else {
         const emails = toEmails.split(',').map((e) => e.trim());
 
-        await Promise.all(
-          emails.map((email) =>
-            this.emailQueueService.addEmailJob({
-              to: email,
-              subject: 'New user gave a feedback!',
-              templateName: 'report-an-isssue',
-              mailData: { emailContent, baseUrl: this.config.get<string>('BASE_URL') },
-            }),
-          ),
-        );
+        for (const email of emails) {
+          await this.emailQueueService.addEmailJob({
+            to: email,
+            subject: 'New user gave a feedback!',
+            templateName: 'report-an-isssue',
+            mailData: { emailContent, baseUrl: this.config.get<string>('BASE_URL') },
+          });
+        }
       }
 
       return {
