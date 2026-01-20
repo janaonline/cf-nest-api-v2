@@ -1,7 +1,7 @@
 import { Types } from 'mongoose';
-import { YEARS } from 'src/shared/files/constant';
-import { popCatQuerySwitch } from 'src/shared/files/queryTemplates';
 import { QueryResourcesSectionDto } from './dto/query-resources-section.dto';
+import { YEARS } from 'src/shared/constants/years.constant';
+import { popCatQuerySwitch } from 'src/shared/utils/mongo-query.utils';
 const ANNUAL_ACCOUNTS_DOCS = [
   {
     name: 'Balance Sheet',
