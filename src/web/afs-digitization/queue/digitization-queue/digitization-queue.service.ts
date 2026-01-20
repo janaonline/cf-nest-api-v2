@@ -341,7 +341,7 @@ export class DigitizationQueueService {
       const formData = await this.getFormDataForDigitization(job);
       return await firstValueFrom(
         this.http
-          .post(process.env.DIGITIZATION_API_URL + 'digitization/AFS_Digitization', formData, {
+          .post(process.env.DIGITIZATION_API_URL + 'AFS_Digitization', formData, {
             headers: formData.getHeaders(),
           })
           .pipe(map((resp) => resp.data as DigitizationResponse)),
@@ -355,6 +355,7 @@ export class DigitizationQueueService {
       const err = error as AxiosError<any>;
       const failurePayload = err?.response?.data ?? ({ message: n.message, status: (n as any).status } as any);
 
+      // this.logger.error(`Error:`, error);
       this.logger.error(`Error calling digitization API:`, failurePayload);
 
       await this.markJobFailed(job, failurePayload as DigitizationResponse);
