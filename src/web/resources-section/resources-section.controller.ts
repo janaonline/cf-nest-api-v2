@@ -24,7 +24,7 @@ export class ResourcesSectionController {
   @Get('data-sets/download')
   async getAnnualAccountsDownload(@Query() query: QueryResourcesSectionDto, @Res() res) {
     // return this.resourcesSectionService.getFiles(query);
-    console.log('tesdt');
+    // console.log('tesdt');
     const bucket = process.env.AWS_BUCKET_NAME!;
     // const keys = files.split(',');
     const resp = responseJsonUlb;
@@ -57,7 +57,7 @@ export class ResourcesSectionController {
         keys.push(decodeURIComponent(file.url));
       });
     });
-    console.log('keys', keys);
+    // console.log('keys', keys);
     return this.s3ZipService.getSizesForFiles(keys);
   }
 }
