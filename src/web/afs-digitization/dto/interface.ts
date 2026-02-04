@@ -15,3 +15,18 @@ export interface AfsFileList {
   success: boolean;
   data: AfsFile[];
 }
+
+export interface IAfsExcelFile {
+  name: string;
+  url: string;
+}
+
+export interface AfsExcelData {
+  excel: IAfsExcelFile[];
+  type: string;
+}
+
+export interface AfsFileReport {
+  success: boolean;
+  data: AfsExcelData;
+}

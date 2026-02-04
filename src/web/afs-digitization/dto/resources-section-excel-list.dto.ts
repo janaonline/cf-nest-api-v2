@@ -5,7 +5,7 @@ import { IsArray, IsEnum, IsIn, IsInt, IsMongoId, IsOptional, IsString } from 'c
 import { YearLabels } from 'src/core/constants/years';
 import { PopulationCategoryies } from './digitization-report-query.dto';
 
-export class ResourcesSectionQueryDto {
+export class ResourcesSectionExcelListDto {
   @ApiPropertyOptional({
     description: 'Optional array of state ObjectIds',
     example: ['5dcf9d7516a06aed41c748fe', '5dcf9d7216a06aed41c748e0'],
@@ -18,7 +18,7 @@ export class ResourcesSectionQueryDto {
   @IsMongoId({ each: true, message: 'Each stateId must be a valid MongoDB ObjectId' })
   stateId?: string[];
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     description: 'Year _id (e.g. audited.year)',
     example: '606aadac4dff55e6c075c507',
   })
@@ -80,7 +80,7 @@ export class ResourcesSectionQueryDto {
   @Type(() => Number)
   @IsInt()
   @IsOptional()
-  skip: number = 0;
+  skip?: number = 0;
 
   // @ApiPropertyOptional({
   //   description: 'Filter by document type (e.g. "bal_sheet")',

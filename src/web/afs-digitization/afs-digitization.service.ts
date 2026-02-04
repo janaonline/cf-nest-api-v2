@@ -20,9 +20,10 @@ import { Year, YearDocument } from 'src/schemas/year.schema';
 import { documentTypes } from './constants/docTypes';
 import { DigitizationJobDto } from './dto/digitization-job.dto';
 import { DigitizationReportQueryDto } from './dto/digitization-report-query.dto';
-import { AfsFile, AfsFileList } from './dto/interface';
-import { ResourcesSectionQueryDto } from './dto/resources-section-query.dto';
-import { afsCountQuery, afsQuery, getAfsListPipeline } from './queries/afs-excel-files.query';
+import { AfsFile, AfsFileList, AfsFileReport, IAfsExcelFile } from './dto/interface';
+import { ResourcesSectionExcelListDto } from './dto/resources-section-excel-list.dto';
+import { ResourcesSectionExcelReportDto } from './dto/resources-section-excel-report.dto';
+import { afsCountQuery, afsQuery, getAfsListPipeline, getAfsReportPipeline } from './queries/afs-excel-files.query';
 
 @Injectable()
 export class AfsDigitizationService {
@@ -199,21 +200,53 @@ export class AfsDigitizationService {
   //   return { jobId: job.id };
   // }
 
-  async getAfsList(query: ResourcesSectionQueryDto): Promise<AfsFileList> {
+  /**
+   * Retrieves a list of ULBs with available digitized excel based on the provided query params.
+   * Ensures that the year and yearId in the query are consistent before fetching the data.
+   */
+  async getAfsList(query: ResourcesSectionExcelListDto): Promise<AfsFileList> {
     // query.year is always correct (validation in dto)
     // validate if query.yearId and query.year matches.
-    if (query.year !== YearLabelToId[query.year]) {
+    if (query.yearId !== YearLabelToId[query.year]) {
       this.logger.warn(`YearId ${query.yearId} does not match year ${query.year}`);
       query.yearId = YearLabelToId[query.year];
     }
 
     try {
       const pipeline = getAfsListPipeline(query);
-      const data: AfsFile[] = (await this.afsExcelFileModel.aggregate(pipeline).exec()) as AfsFile[];
+      const data = (await this.afsExcelFileModel.aggregate(pipeline).exec()) as AfsFile[];
       return { success: true, data };
     } catch (err) {
-      console.error('Failed to get afs list', err);
+      console.error('Failed to get afs digitized list', err);
       throw new InternalServerErrorException('Failed to fetch list.');
+    }
+  }
+
+  /**
+   * Retrieves excel urls of a given ULB.
+   * Ensures that the year and yearId in the query are consistent before fetching the data.
+   */
+  async getAfsReport(query: ResourcesSectionExcelReportDto): Promise<AfsFileReport> {
+    // query.year is always correct (validation in dto)
+    // validate if query.yearId and query.year matches.
+    if (query.yearId !== YearLabelToId[query.year]) {
+      this.logger.warn(`YearId ${query.yearId} does not match year ${query.year}`);
+      query.yearId = YearLabelToId[query.year];
+    }
+
+    try {
+      const pipeline = getAfsReportPipeline(query);
+      const dbRes = (await this.afsExcelFileModel.aggregate(pipeline).exec()) as IAfsExcelFile[];
+      return {
+        success: true,
+        data: {
+          type: query.auditType,
+          excel: dbRes,
+        },
+      };
+    } catch (err) {
+      console.error('Failed to get afs digitized report', err);
+      throw new InternalServerErrorException('Failed to fetch reports.');
     }
   }
 }

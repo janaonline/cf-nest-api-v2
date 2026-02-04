@@ -3,9 +3,10 @@ import { YearIdToLabel } from 'src/core/constants/years';
 import { buildPopulationMatch } from 'src/core/helpers/populationCategory.helper';
 import { DigitizationStatuses } from 'src/schemas/afs/afs-excel-file.schema';
 import { popCatQuerySwitch } from 'src/shared/files/queryTemplates';
-import { DOC_TYPES } from '../constants/docTypes';
+import { DOC_TYPES, getAfsDocType } from '../constants/docTypes';
 import { DigitizationReportQueryDto } from '../dto/digitization-report-query.dto';
-import { ResourcesSectionQueryDto } from '../dto/resources-section-query.dto';
+import { ResourcesSectionExcelListDto } from '../dto/resources-section-excel-list.dto';
+import { ResourcesSectionExcelReportDto } from '../dto/resources-section-excel-report.dto';
 
 function digitizationStatusCond(query: DigitizationReportQueryDto, isTotal = false) {
   const status = query.digitizationStatus;
@@ -248,8 +249,9 @@ export const afsCountQuery = (query: DigitizationReportQueryDto): any[] => {
   ];
 };
 
-export const getAfsListPipeline = (query: ResourcesSectionQueryDto): PipelineStage[] => {
+export const getAfsListPipeline = (query: ResourcesSectionExcelListDto): PipelineStage[] => {
   const pipeline: PipelineStage[] = [];
+  const yearId = new Types.ObjectId(query.yearId as string);
 
   // Project only required fields (avoid ulbFile.data and afsFile.data)
   pipeline.push({
@@ -271,14 +273,16 @@ export const getAfsListPipeline = (query: ResourcesSectionQueryDto): PipelineSta
     },
   });
 
+  // Filter based on yearId
+  pipeline.push({ $match: { year: yearId } });
+
   // Add ULB filter if provided
   const ulbObjectIds =
-    query.ulbId && query.ulbId.length > 0 ? query.ulbId.map((id) => new Types.ObjectId(id)) : undefined;
+    query.ulbId && query.ulbId.length > 0 ? query.ulbId.map((id: string) => new Types.ObjectId(id)) : undefined;
   if (ulbObjectIds) {
     pipeline.push({ $match: { ulb: { $in: ulbObjectIds } } });
   }
 
-  const yearId = new Types.ObjectId(query.yearId);
   pipeline.push(
     // Priority 1: afsFile if digitized, Priority 2: ulbFile if digitized
     {
@@ -408,7 +412,7 @@ export const getAfsListPipeline = (query: ResourcesSectionQueryDto): PipelineSta
 
   // If state filter is provided
   const stateIds =
-    query.stateId && query.stateId.length > 0 ? query.stateId.map((id) => new Types.ObjectId(id)) : undefined;
+    query.stateId && query.stateId.length > 0 ? query.stateId.map((id: string) => new Types.ObjectId(id)) : undefined;
   if (stateIds) {
     pipeline.push({ $match: { 'stateData._id': { $in: stateIds } } });
   }
@@ -418,36 +422,6 @@ export const getAfsListPipeline = (query: ResourcesSectionQueryDto): PipelineSta
     const switchStage = popCatQuerySwitch('$ulbData.population');
     pipeline.push({ $addFields: { popCat: switchStage } }, { $match: { popCat: query.populationCategory } });
   }
-
-  // // Create project - Structure is as per resources section UI.
-  // pipeline.push({
-  //   $project: {
-  //     auditType: 1,
-  //     fileName: {
-  //       $concat: [
-  //         '$stateData.name',
-  //         '_',
-  //         '$ulbData.name',
-  //         '_',
-  //         query.year,
-  //         '_',
-  //         query.yearId,
-  //         '_ocr_',
-  //         { $cond: [{ $eq: ['$fileType', 'afsFile'] }, 'outsourced', '$auditType'] },
-  //       ],
-  //     },
-  //     // fileUrl: null,
-  //     // file: 1,
-  //     fileType: 1,
-  //     type: 'excel',
-  //     ulbId: '$ulb',
-  //     year: query.year,
-  //     modifiedAt: '$file.createdAt',
-  //     ulbName: '$ulbData.name',
-  //     state: '$stateData.name',
-  //     // stateId: '$stateData._id',
-  //   },
-  // });
 
   // Create group to avoid re-entries
   pipeline.push({
@@ -484,7 +458,40 @@ export const getAfsListPipeline = (query: ResourcesSectionQueryDto): PipelineSta
   // const limit = query.limit || 10;
   pipeline.push({ $sort: { modifiedAt: -1 } }, { $skip: skip }, { $limit: limit });
 
-  console.log(JSON.stringify(pipeline, null, 2));
+  // console.log(JSON.stringify(pipeline, null, 2));
+  return pipeline;
+};
 
+export const getAfsReportPipeline = (query: ResourcesSectionExcelReportDto): PipelineStage[] => {
+  const pipeline = [
+    {
+      $match: {
+        ulb: new Types.ObjectId(query.ulbId),
+        year: new Types.ObjectId(query.yearId),
+        auditType: query.auditType,
+        [`${query.fileType}.digitizationStatus`]: 'digitized',
+      },
+    },
+    // TODO: Fix URLs, URL is stored without /
+    {
+      $project: {
+        url: {
+          $cond: [
+            { $regexMatch: { input: `$${query.fileType}.excelUrl`, regex: /^\// } },
+            `$${query.fileType}.excelUrl`,
+            { $concat: ['/', `$${query.fileType}.excelUrl`] },
+          ],
+        },
+        name: getAfsDocType('$docType'),
+      },
+    },
+    // {
+    //   $project: {
+    //     url: '/' + `$${query.fileType}.excelUrl`,
+    //     name: getAfsDocType('$docType'),
+    //   },
+    // },
+  ];
+  // console.log(JSON.stringify(pipeline, null, 2));
   return pipeline;
 };

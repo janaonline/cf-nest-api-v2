@@ -6,8 +6,9 @@ import { AfsDigitizationService } from './afs-digitization.service';
 import { AfsDumpService } from './afs-dump.service';
 import { DigitizationJobBatchDto, DigitizationJobDto } from './dto/digitization-job.dto';
 import { DigitizationReportQueryDto } from './dto/digitization-report-query.dto';
-import { AfsFileList } from './dto/interface';
-import { ResourcesSectionQueryDto } from './dto/resources-section-query.dto';
+import { AfsFileList, AfsFileReport } from './dto/interface';
+import { ResourcesSectionExcelListDto } from './dto/resources-section-excel-list.dto';
+import { ResourcesSectionExcelReportDto } from './dto/resources-section-excel-report.dto';
 import { DigitizationQueueService } from './queue/digitization-queue/digitization-queue.service';
 
 @Controller('afs-digitization')
@@ -42,8 +43,13 @@ export class AfsDigitizationController {
   }
 
   @Get('afs-list')
-  async getAfsList(@Query() query: ResourcesSectionQueryDto): Promise<AfsFileList> {
+  async getAfsList(@Query() query: ResourcesSectionExcelListDto): Promise<AfsFileList> {
     return await this.afsService.getAfsList(query);
+  }
+
+  @Get('afs-excel-report')
+  async getAfsReport(@Query() query: ResourcesSectionExcelReportDto): Promise<AfsFileReport> {
+    return await this.afsService.getAfsReport(query);
   }
 
   @Get('request-log/:requestId')
