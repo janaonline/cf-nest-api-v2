@@ -1,8 +1,9 @@
 import { InjectQueue } from '@nestjs/bullmq';
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Queue } from 'bullmq';
 import { Model, Types } from 'mongoose';
+import { YearLabelToId } from 'src/core/constants/years';
 import { buildPopulationMatch } from 'src/core/helpers/populationCategory.helper';
 import {
   AfsExcelFile,
@@ -10,16 +11,18 @@ import {
   AuditType,
   DigitizationStatuses,
 } from 'src/schemas/afs/afs-excel-file.schema';
+import { AfsMetric, AfsMetricDocument } from 'src/schemas/afs/afs-metrics.schema';
 import { AnnualAccountData, AnnualAccountDataDocument } from 'src/schemas/annual-account-data.schema';
 import { DigitizationLog, DigitizationLogDocument } from 'src/schemas/digitization-log.schema';
 import { State, StateDocument } from 'src/schemas/state.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { Year, YearDocument } from 'src/schemas/year.schema';
+import { documentTypes } from './constants/docTypes';
 import { DigitizationJobDto } from './dto/digitization-job.dto';
 import { DigitizationReportQueryDto } from './dto/digitization-report-query.dto';
-import { afsCountQuery, afsQuery } from './queries/afs-excel-files.query';
-import { documentTypes } from './constants/docTypes';
-import { AfsMetric, AfsMetricDocument } from 'src/schemas/afs/afs-metrics.schema';
+import { AfsFile, AfsFileList } from './dto/interface';
+import { ResourcesSectionQueryDto } from './dto/resources-section-query.dto';
+import { afsCountQuery, afsQuery, getAfsListPipeline } from './queries/afs-excel-files.query';
 
 @Injectable()
 export class AfsDigitizationService {
@@ -195,4 +198,22 @@ export class AfsDigitizationService {
 
   //   return { jobId: job.id };
   // }
+
+  async getAfsList(query: ResourcesSectionQueryDto): Promise<AfsFileList> {
+    // query.year is always correct (validation in dto)
+    // validate if query.yearId and query.year matches.
+    if (query.year !== YearLabelToId[query.year]) {
+      this.logger.warn(`YearId ${query.yearId} does not match year ${query.year}`);
+      query.yearId = YearLabelToId[query.year];
+    }
+
+    try {
+      const pipeline = getAfsListPipeline(query);
+      const data: AfsFile[] = (await this.afsExcelFileModel.aggregate(pipeline).exec()) as AfsFile[];
+      return { success: true, data };
+    } catch (err) {
+      console.error('Failed to get afs list', err);
+      throw new InternalServerErrorException('Failed to fetch list.');
+    }
+  }
 }
