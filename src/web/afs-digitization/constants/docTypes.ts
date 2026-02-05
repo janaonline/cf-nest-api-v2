@@ -15,3 +15,12 @@ export const documentTypes = [
   { key: 'cash_flow', name: 'Cashflow Statement' },
   { key: 'auditor_report', name: "Auditor's Report" },
 ];
+
+export const getAfsDocType = (key: string) => {
+  return {
+    $switch: {
+      branches: documentTypes.map((e) => ({ case: { $eq: [key, e.key] }, then: e.name })),
+      default: key,
+    },
+  };
+};

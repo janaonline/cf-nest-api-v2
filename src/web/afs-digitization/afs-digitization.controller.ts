@@ -1,16 +1,4 @@
-import {
-  Body,
-  Controller,
-  Delete,
-  Get,
-  Logger,
-  Param,
-  Post,
-  Query,
-  Res,
-  UsePipes,
-  ValidationPipe,
-} from '@nestjs/common';
+import { Body, Controller, Get, Logger, Param, Post, Query, Res, UsePipes, ValidationPipe } from '@nestjs/common';
 import { ApiBody } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { YearIdToLabel } from 'src/core/constants/years';
@@ -18,6 +6,9 @@ import { AfsDigitizationService } from './afs-digitization.service';
 import { AfsDumpService } from './afs-dump.service';
 import { DigitizationJobBatchDto, DigitizationJobDto } from './dto/digitization-job.dto';
 import { DigitizationReportQueryDto } from './dto/digitization-report-query.dto';
+import { AfsFileList, AfsFileReport } from './dto/interface';
+import { ResourcesSectionExcelListDto } from './dto/resources-section-excel-list.dto';
+import { ResourcesSectionExcelReportDto } from './dto/resources-section-excel-report.dto';
 import { DigitizationQueueService } from './queue/digitization-queue/digitization-queue.service';
 
 @Controller('afs-digitization')
@@ -49,6 +40,16 @@ export class AfsDigitizationController {
     // query.ulbId = query.ulbId ? new Types.ObjectId(query.ulbId) : undefined;
     // this.logger.log(`Received afs-list request with query: ${JSON.stringify(query)}`);
     return await this.afsService.afsList(body);
+  }
+
+  @Get('afs-list')
+  async getAfsList(@Query() query: ResourcesSectionExcelListDto): Promise<AfsFileList> {
+    return await this.afsService.getAfsList(query);
+  }
+
+  @Get('afs-excel-report')
+  async getAfsReport(@Query() query: ResourcesSectionExcelReportDto): Promise<AfsFileReport> {
+    return await this.afsService.getAfsReport(query);
   }
 
   @Get('request-log/:requestId')
