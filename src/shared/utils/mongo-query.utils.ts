@@ -1,3 +1,19 @@
+/**
+ * Builds a MongoDB aggregation `$switch` expression to categorize a population
+ *
+ * Population categories:
+ * - < 1,00,000          → "<100K"
+ * - 1,00,000-4,99,999   → "100K-500K"
+ * - 5,00,000–9,99,999   → "500K-1M"
+ * - 10,00,000–39,99,999 → "1M-4M"
+ * - ≥ 40,00,000         → "4M+"
+ *
+ * If the population value is missing or does not match any condition,
+ * the category defaults to "Unknown".
+ *
+ * @param populationKey - MongoDB aggregation field reference (e.g. "$population")
+ * @returns MongoDB `$switch` aggregation expression
+ */
 export const popCatQuerySwitch = (populationKey: string) => {
   return {
     $switch: {
