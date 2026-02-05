@@ -2,7 +2,7 @@ import { PipelineStage, Types } from 'mongoose';
 import { YearIdToLabel } from 'src/core/constants/years';
 import { buildPopulationMatch } from 'src/core/helpers/populationCategory.helper';
 import { DigitizationStatuses } from 'src/schemas/afs/afs-excel-file.schema';
-import { popCatQuerySwitch } from 'src/shared/files/queryTemplates';
+import { popCatQuerySwitch } from 'src/shared/utils/mongo-query.utils';
 import { DOC_TYPES, getAfsDocType } from '../constants/docTypes';
 import { DigitizationReportQueryDto } from '../dto/digitization-report-query.dto';
 import { ResourcesSectionExcelListDto } from '../dto/resources-section-excel-list.dto';

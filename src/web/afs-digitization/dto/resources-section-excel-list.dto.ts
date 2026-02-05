@@ -4,6 +4,7 @@ import { Transform, Type } from 'class-transformer';
 import { IsArray, IsEnum, IsIn, IsInt, IsMongoId, IsOptional, IsString } from 'class-validator';
 import { YearLabels } from 'src/core/constants/years';
 import { PopulationCategoryies } from './digitization-report-query.dto';
+import { parseMongoIdToArray } from 'src/shared/transforms/parse-mongo-id-array.transform';
 
 export class ResourcesSectionExcelListDto {
   @ApiPropertyOptional({
@@ -108,20 +109,4 @@ export class ResourcesSectionExcelListDto {
   // @IsInt()
   // @IsOptional()
   // limit: number = 100;
-}
-
-// TODO: Add this to transforms/parse-mongo-id-array.transform.ts
-function parseMongoIdToArray(value: any) {
-  if (value === undefined || value === null || value === '' || (Array.isArray(value) && value.length === 0)) {
-    return undefined;
-  }
-
-  if (Array.isArray(value)) {
-    return value.map((v) => String(v));
-  }
-
-  return String(value)
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
 }

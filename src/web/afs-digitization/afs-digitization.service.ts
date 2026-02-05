@@ -208,7 +208,7 @@ export class AfsDigitizationService {
     // query.year is always correct (validation in dto)
     // validate if query.yearId and query.year matches.
     if (query.yearId !== YearLabelToId[query.year]) {
-      this.logger.warn(`YearId ${query.yearId} does not match year ${query.year}`);
+      // this.logger.warn(`YearId ${query.yearId} does not match year ${query.year}`);
       query.yearId = YearLabelToId[query.year];
     }
 
@@ -230,7 +230,7 @@ export class AfsDigitizationService {
     // query.year is always correct (validation in dto)
     // validate if query.yearId and query.year matches.
     if (query.yearId !== YearLabelToId[query.year]) {
-      this.logger.warn(`YearId ${query.yearId} does not match year ${query.year}`);
+      // this.logger.warn(`YearId ${query.yearId} does not match year ${query.year}`);
       query.yearId = YearLabelToId[query.year];
     }
 
