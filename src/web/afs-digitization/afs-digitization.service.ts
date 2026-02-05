@@ -242,6 +242,7 @@ export class AfsDigitizationService {
         data: {
           type: query.auditType,
           excel: dbRes,
+          source: 'digitizedExcel',
         },
       };
     } catch (err) {

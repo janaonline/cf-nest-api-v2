@@ -24,6 +24,7 @@ export interface IAfsExcelFile {
 export interface AfsExcelData {
   excel: IAfsExcelFile[];
   type: string;
+  source: string;
 }
 
 export interface AfsFileReport {
