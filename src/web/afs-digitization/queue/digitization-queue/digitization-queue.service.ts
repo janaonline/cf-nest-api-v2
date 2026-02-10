@@ -323,14 +323,13 @@ export class DigitizationQueueService {
       job.noOfPages = this.s3Service.getPdfPageCountFromBuffer(buffer);
       const formData = new FormData();
       formData.append('file', buffer, {
-        filename: this.getFilenameFromUrl(job.pdfUrl),
+        filename: path.basename(job.pdfUrl),
         //   contentType: 'application/pdf',
       });
-
       formData.append('Document_type_ID', job.docType || 'bal_sheet');
       return formData;
     } catch (error: any) {
-      this.logger.error(`Error fetching S3 object for digitization:`);
+      this.logger.error(`Error fetching S3 object for digitization: ${job.pdfUrl}`);
       throw error;
     }
   }
