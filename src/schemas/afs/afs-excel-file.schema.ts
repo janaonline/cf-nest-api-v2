@@ -4,6 +4,11 @@ import { HydratedDocument, Types, Schema as MongooseSchema } from 'mongoose';
 
 export type AfsExcelFileDocument = HydratedDocument<AfsExcelFile>;
 
+export enum FileType {
+  ULB_FILE = 'ulbFile',
+  AFS_FILE = 'afsFile',
+}
+
 export enum AuditType {
   AUDITED = 'audited',
   UNAUDITED = 'unAudited',

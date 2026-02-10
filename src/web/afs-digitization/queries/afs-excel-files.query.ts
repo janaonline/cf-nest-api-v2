@@ -1,9 +1,12 @@
-import mongoose, { Types } from 'mongoose';
+import { PipelineStage, Types } from 'mongoose';
 import { YearIdToLabel } from 'src/core/constants/years';
-import { DOC_TYPES } from '../constants/docTypes';
-import { DigitizationReportQueryDto } from '../dto/digitization-report-query.dto';
 import { buildPopulationMatch } from 'src/core/helpers/populationCategory.helper';
 import { DigitizationStatuses } from 'src/schemas/afs/afs-excel-file.schema';
+import { popCatQuerySwitch } from 'src/shared/utils/mongo-query.utils';
+import { DOC_TYPES, getAfsDocType } from '../constants/docTypes';
+import { DigitizationReportQueryDto } from '../dto/digitization-report-query.dto';
+import { ResourcesSectionExcelListDto } from '../dto/resources-section-excel-list.dto';
+import { ResourcesSectionExcelReportDto } from '../dto/resources-section-excel-report.dto';
 
 function digitizationStatusCond(query: DigitizationReportQueryDto, isTotal = false) {
   const status = query.digitizationStatus;
@@ -244,4 +247,251 @@ export const afsCountQuery = (query: DigitizationReportQueryDto): any[] => {
       $count: 'count',
     },
   ];
+};
+
+export const getAfsListPipeline = (query: ResourcesSectionExcelListDto): PipelineStage[] => {
+  const pipeline: PipelineStage[] = [];
+  const yearId = new Types.ObjectId(query.yearId as string);
+
+  // Project only required fields (avoid ulbFile.data and afsFile.data)
+  pipeline.push({
+    $project: {
+      'ulbFile.noOfPages': 1,
+      'ulbFile.digitizationStatus': 1,
+      'ulbFile.excelUrl': 1,
+      'ulbFile.createdAt': 1,
+
+      'afsFile.noOfPages': 1,
+      'afsFile.digitizationStatus': 1,
+      'afsFile.excelUrl': 1,
+      'afsFile.createdAt': 1,
+
+      ulb: 1,
+      year: 1,
+      auditType: 1,
+      docType: 1,
+    },
+  });
+
+  // Filter based on yearId
+  pipeline.push({ $match: { year: yearId } });
+
+  // Add ULB filter if provided
+  const ulbObjectIds =
+    query.ulbId && query.ulbId.length > 0 ? query.ulbId.map((id: string) => new Types.ObjectId(id)) : undefined;
+  if (ulbObjectIds) {
+    pipeline.push({ $match: { ulb: { $in: ulbObjectIds } } });
+  }
+
+  pipeline.push(
+    // Priority 1: afsFile if digitized, Priority 2: ulbFile if digitized
+    {
+      $addFields: {
+        file: {
+          $switch: {
+            branches: [
+              {
+                case: { $eq: ['$afsFile.digitizationStatus', 'digitized'] },
+                then: '$afsFile',
+              },
+              {
+                case: { $eq: ['$ulbFile.digitizationStatus', 'digitized'] },
+                then: '$ulbFile',
+              },
+            ],
+            default: null,
+          },
+        },
+        fileType: {
+          $switch: {
+            branches: [
+              {
+                case: { $eq: ['$afsFile.digitizationStatus', 'digitized'] },
+                then: 'afsFile',
+              },
+              {
+                case: { $eq: ['$ulbFile.digitizationStatus', 'digitized'] },
+                then: 'ulbFile',
+              },
+            ],
+            default: null,
+          },
+        },
+      },
+    },
+
+    // Keep only documents which have a digitized file (digitizationStatus = 'digitized')
+    { $match: { file: { $ne: null } } },
+
+    // Lookup from annual accounts collection.
+    {
+      $lookup: {
+        from: 'annualaccountdatas',
+        let: {
+          ulbId: '$ulb',
+          auditType: '$auditType',
+        },
+        pipeline: [
+          { $match: { $expr: { $eq: ['$ulb', '$$ulbId'] } } },
+          {
+            $match: {
+              // If auditType is 'audited' then filter audited.year in annual accounts collection.
+              // If auditType is 'unAudited' then filter unAudited.year in annual accounts collection.
+              $expr: {
+                $cond: [
+                  { $eq: ['$$auditType', 'audited'] },
+                  { $eq: ['$audited.year', yearId] },
+                  { $eq: ['$unAudited.year', yearId] },
+                ],
+              },
+              // Fetch only Under review by MoHUA and Approved by MoHUA.
+              $or: [
+                { status: 'APPROVED', actionTakenByRole: 'STATE' },
+                { status: 'APPROVED', actionTakenByRole: 'MoHUA' },
+                { status: 'PENDING', actionTakenByRole: 'MoHUA' },
+                { currentFormStatus: { $in: [4, 6] } },
+              ],
+            },
+          },
+          { $project: { _id: 1 } },
+        ],
+        as: 'aaData',
+      },
+    },
+
+    // Unwind aaData
+    {
+      $unwind: {
+        path: '$aaData',
+        preserveNullAndEmptyArrays: false,
+      },
+    },
+
+    // Lookup from ulbs collection.
+    {
+      $lookup: {
+        from: 'ulbs',
+        let: { ulbId: '$ulb' },
+        pipeline: [
+          { $match: { $expr: { $eq: ['$_id', '$$ulbId'] } } },
+          { $project: { name: 1, state: 1, population: 1, isPublish: true } },
+        ],
+        as: 'ulbData',
+      },
+    },
+
+    // Lookup from states collection.
+    {
+      $lookup: {
+        from: 'states',
+        let: { stateId: { $arrayElemAt: ['$ulbData.state', 0] } },
+        pipeline: [
+          { $match: { $expr: { $eq: ['$_id', '$$stateId'] } } },
+          { $project: { name: 1, state: 1, isPublish: 1 } },
+        ],
+        as: 'stateData',
+      },
+    },
+
+    // Unwind ulbData
+    {
+      $unwind: {
+        path: '$ulbData',
+        preserveNullAndEmptyArrays: false,
+      },
+    },
+
+    // Unwind stateData
+    {
+      $unwind: {
+        path: '$stateData',
+        preserveNullAndEmptyArrays: false,
+      },
+    },
+  );
+
+  // If state filter is provided
+  const stateIds =
+    query.stateId && query.stateId.length > 0 ? query.stateId.map((id: string) => new Types.ObjectId(id)) : undefined;
+  if (stateIds) {
+    pipeline.push({ $match: { 'stateData._id': { $in: stateIds } } });
+  }
+
+  // If population category filter is provided
+  if (query.populationCategory) {
+    const switchStage = popCatQuerySwitch('$ulbData.population');
+    pipeline.push({ $addFields: { popCat: switchStage } }, { $match: { popCat: query.populationCategory } });
+  }
+
+  // Create group to avoid re-entries
+  pipeline.push({
+    $group: {
+      _id: '$ulb',
+      auditType: { $first: '$auditType' },
+      fileType: { $first: '$fileType' },
+      type: { $first: 'excel' },
+      ulbId: { $first: '$ulb' },
+      year: { $first: query.year },
+      modifiedAt: { $first: '$file.createdAt' },
+      ulbName: { $first: '$ulbData.name' },
+      state: { $first: '$stateData.name' },
+      fileName: {
+        $first: {
+          $concat: [
+            { $ifNull: ['$stateData.name', 'UnknownState'] },
+            '_',
+            { $ifNull: ['$ulbData.name', 'UnknownULB'] },
+            '_',
+            query.year,
+            '_ocr_',
+            {
+              $cond: [{ $eq: ['$fileType', 'afsFile'] }, 'outsourced', { $ifNull: ['$auditType', 'unknown'] }],
+            },
+          ],
+        },
+      },
+    },
+  });
+
+  const skip = query.skip || 0;
+  const limit = 10;
+  // const limit = query.limit || 10;
+  pipeline.push({ $sort: { modifiedAt: -1 } }, { $skip: skip }, { $limit: limit });
+
+  // console.log(JSON.stringify(pipeline, null, 2));
+  return pipeline;
+};
+
+export const getAfsReportPipeline = (query: ResourcesSectionExcelReportDto): PipelineStage[] => {
+  const pipeline = [
+    {
+      $match: {
+        ulb: new Types.ObjectId(query.ulbId),
+        year: new Types.ObjectId(query.yearId),
+        auditType: query.auditType,
+        [`${query.fileType}.digitizationStatus`]: 'digitized',
+      },
+    },
+    // TODO: Fix URLs, URL is stored without /
+    {
+      $project: {
+        url: {
+          $cond: [
+            { $regexMatch: { input: `$${query.fileType}.excelUrl`, regex: /^\// } },
+            `$${query.fileType}.excelUrl`,
+            { $concat: ['/', `$${query.fileType}.excelUrl`] },
+          ],
+        },
+        name: getAfsDocType('$docType'),
+      },
+    },
+    // {
+    //   $project: {
+    //     url: '/' + `$${query.fileType}.excelUrl`,
+    //     name: getAfsDocType('$docType'),
+    //   },
+    // },
+  ];
+  // console.log(JSON.stringify(pipeline, null, 2));
+  return pipeline;
 };

@@ -1,8 +1,9 @@
 import { InjectQueue } from '@nestjs/bullmq';
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Queue } from 'bullmq';
 import { Model, Types } from 'mongoose';
+import { YearLabelToId } from 'src/core/constants/years';
 import { buildPopulationMatch } from 'src/core/helpers/populationCategory.helper';
 import {
   AfsExcelFile,
@@ -10,16 +11,19 @@ import {
   AuditType,
   DigitizationStatuses,
 } from 'src/schemas/afs/afs-excel-file.schema';
+import { AfsMetric, AfsMetricDocument } from 'src/schemas/afs/afs-metrics.schema';
 import { AnnualAccountData, AnnualAccountDataDocument } from 'src/schemas/annual-account-data.schema';
 import { DigitizationLog, DigitizationLogDocument } from 'src/schemas/digitization-log.schema';
 import { State, StateDocument } from 'src/schemas/state.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { Year, YearDocument } from 'src/schemas/year.schema';
+import { documentTypes } from './constants/docTypes';
 import { DigitizationJobDto } from './dto/digitization-job.dto';
 import { DigitizationReportQueryDto } from './dto/digitization-report-query.dto';
-import { afsCountQuery, afsQuery } from './queries/afs-excel-files.query';
-import { documentTypes } from './constants/docTypes';
-import { AfsMetric, AfsMetricDocument } from 'src/schemas/afs/afs-metrics.schema';
+import { AfsFile, AfsFileList, AfsFileReport, IAfsExcelFile } from './dto/interface';
+import { ResourcesSectionExcelListDto } from './dto/resources-section-excel-list.dto';
+import { ResourcesSectionExcelReportDto } from './dto/resources-section-excel-report.dto';
+import { afsCountQuery, afsQuery, getAfsListPipeline, getAfsReportPipeline } from './queries/afs-excel-files.query';
 
 @Injectable()
 export class AfsDigitizationService {
@@ -195,4 +199,55 @@ export class AfsDigitizationService {
 
   //   return { jobId: job.id };
   // }
+
+  /**
+   * Retrieves a list of ULBs with available digitized excel based on the provided query params.
+   * Ensures that the year and yearId in the query are consistent before fetching the data.
+   */
+  async getAfsList(query: ResourcesSectionExcelListDto): Promise<AfsFileList> {
+    // query.year is always correct (validation in dto)
+    // validate if query.yearId and query.year matches.
+    if (query.yearId !== YearLabelToId[query.year]) {
+      // this.logger.warn(`YearId ${query.yearId} does not match year ${query.year}`);
+      query.yearId = YearLabelToId[query.year];
+    }
+
+    try {
+      const pipeline = getAfsListPipeline(query);
+      const data = (await this.afsExcelFileModel.aggregate(pipeline).exec()) as AfsFile[];
+      return { success: true, data };
+    } catch (err) {
+      console.error('Failed to get afs digitized list', err);
+      throw new InternalServerErrorException('Failed to fetch list.');
+    }
+  }
+
+  /**
+   * Retrieves excel urls of a given ULB.
+   * Ensures that the year and yearId in the query are consistent before fetching the data.
+   */
+  async getAfsReport(query: ResourcesSectionExcelReportDto): Promise<AfsFileReport> {
+    // query.year is always correct (validation in dto)
+    // validate if query.yearId and query.year matches.
+    if (query.yearId !== YearLabelToId[query.year]) {
+      // this.logger.warn(`YearId ${query.yearId} does not match year ${query.year}`);
+      query.yearId = YearLabelToId[query.year];
+    }
+
+    try {
+      const pipeline = getAfsReportPipeline(query);
+      const dbRes = (await this.afsExcelFileModel.aggregate(pipeline).exec()) as IAfsExcelFile[];
+      return {
+        success: true,
+        data: {
+          type: query.auditType,
+          excel: dbRes,
+          source: 'digitizedExcel',
+        },
+      };
+    } catch (err) {
+      console.error('Failed to get afs digitized report', err);
+      throw new InternalServerErrorException('Failed to fetch reports.');
+    }
+  }
 }
