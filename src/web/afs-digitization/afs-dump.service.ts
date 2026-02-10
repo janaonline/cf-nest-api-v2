@@ -45,9 +45,7 @@ export class AfsDumpService {
     // mongoose.set('debug', true);
     // const docs = await this.annualAccountModel.aggregate(afsQueryDump(query)).exec();
     const docs = await this.annualAccountModel.aggregate(afsQuery(query)).exec();
-    const s3LiveUrlPrefix = 'https://jana-cityfinance-live.s3.ap-south-1.amazonaws.com';
-    const s3UrlPrefix = 'https://jana-cityfinance-stg.s3.ap-south-1.amazonaws.com';
-    const s3DigitizationUrlPrefix = 'https://cf-digitization-dev.s3.amazonaws.com';
+    const s3UrlPrefix = `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com`;
     const yearLabel: string = YearIdToLabel[query.yearId.toString()];
 
     // console.log('docs', docs);
