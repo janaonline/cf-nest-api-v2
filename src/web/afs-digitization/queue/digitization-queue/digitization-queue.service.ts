@@ -323,7 +323,7 @@ export class DigitizationQueueService {
       job.noOfPages = this.s3Service.getPdfPageCountFromBuffer(buffer);
       const formData = new FormData();
       formData.append('file', buffer, {
-        filename: 'document.pdf',
+        filename: this.getFilenameFromUrl(job.pdfUrl),
         //   contentType: 'application/pdf',
       });
 
