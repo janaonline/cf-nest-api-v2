@@ -116,6 +116,9 @@ export class DigitizationJobDto {
   })
   @IsEnum(DigitizationUploadedBy)
   uploadedBy!: DigitizationUploadedBy;
+
+  @IsOptional()
+  requestId?: string; // generated at enqueue time, used for tracking in DB and logs
 }
 
 /**

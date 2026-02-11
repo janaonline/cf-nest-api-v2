@@ -147,6 +147,9 @@ export class DigitizationQueueService {
 
   async upsertAfsExcelFile(job: DigitizationJobDto, isQueue: boolean = false) {
     let queue: { jobId: string } | undefined = undefined;
+    // job.requestId = uuidv4(); // generate a unique request ID for tracking
+    job.requestId = `req-${new Date().toISOString().split('T')[0].replace(/-/g, '')}-${uuidv4().substring(0, 6)}`;
+
     job.noOfPages = this.s3Service.getPdfPageCountFromBuffer(await this.s3Service.getPdfBufferFromS3(job.pdfUrl));
     // mongoose.set('debug', true);
     if (isQueue) {
@@ -174,6 +177,7 @@ export class DigitizationQueueService {
 
     // Build the embedded object (store only what you need)
     const embedded = {
+      requestId: job.requestId,
       uploadedBy: job.uploadedBy,
       pdfUrl: job.pdfUrl,
       digitizationStatus: isQueue ? QueueStatus.QUEUED : QueueStatus.NOT_STARTED,
@@ -327,6 +331,8 @@ export class DigitizationQueueService {
         //   contentType: 'application/pdf',
       });
       formData.append('Document_type_ID', job.docType || 'bal_sheet');
+      formData.append('request_id', job.requestId);
+      this.logger.log(`Prepared form data for digitization API for job: ${job.pdfUrl}, requestId: ${job.requestId}`);
       return formData;
     } catch (error: any) {
       this.logger.error(`Error fetching S3 object for digitization: ${job.pdfUrl}`);
