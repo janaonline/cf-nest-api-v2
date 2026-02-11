@@ -16,6 +16,9 @@ import { HttpModule } from '@nestjs/axios';
 import { S3Module } from 'src/core/s3/s3.module';
 import { S3Service } from 'src/core/s3/s3.service';
 import { AfsMetric, AfsMetricSchema } from 'src/schemas/afs/afs-metrics.schema';
+import { BullBoardModule } from '@bull-board/nestjs/dist/bull-board.module';
+import { ExpressAdapter } from '@bull-board/express/dist/ExpressAdapter';
+import { BullMQAdapter } from '@bull-board/api/dist/queueAdapters/bullMQ.js';
 
 @Module({
   imports: [
@@ -33,6 +36,15 @@ import { AfsMetric, AfsMetricSchema } from 'src/schemas/afs/afs-metrics.schema';
     BullModule.registerQueue({
       name: 'afsDigitization',
     }),
+    // Queue UI
+    BullBoardModule.forRoot({
+      route: '/admin/queues',
+      adapter: ExpressAdapter,
+    }),
+    BullBoardModule.forFeature(
+      { name: 'afsDigitization', adapter: BullMQAdapter },
+      { name: 'zipResources', adapter: BullMQAdapter },
+    ),
   ],
   controllers: [AfsDigitizationController],
   providers: [AfsDigitizationService, AfsDumpService, DigitizationQueueService, DigitizationProcessor, S3Service],

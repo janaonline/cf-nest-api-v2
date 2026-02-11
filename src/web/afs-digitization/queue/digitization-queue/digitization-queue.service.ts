@@ -310,7 +310,11 @@ export class DigitizationQueueService {
       }
       await this.markJobCompleted(job, digitizeResp);
     } catch (error) {
-      this.logger.error(`Error processing digitization : `, error);
+      // this.logger.error(`Error processing digitization : `, error);
+      this.logger.error(
+        `Error processing digitization :`,
+        error instanceof Error ? { message: error.message, stack: error.stack } : {},
+      );
       throw error;
       // mark job as failed in DB
       // await this.markJobFailed(job, error);
@@ -495,70 +499,4 @@ export class DigitizationQueueService {
 
     return { kind: 'unknown', message: String(err) };
   }
-
-  // async buildAfsExcelFileItem(job: DigitizationJobDto, digitizationResp: DigitizationResponse) {
-  //   // Excel → JSON (structured rows)
-  //   const workbook = xlsx.read(buffer, { type: 'buffer' });
-  //   const sheetName = workbook.SheetNames[0];
-  //   const sheetData: any[][] = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName], {
-  //     header: 1,
-  //   });
-
-  //   if (!sheetData || sheetData.length === 0) {
-  //     throw new BadRequestException('Excel file is empty or invalid.');
-  //   }
-
-  //   const maxColLength = Math.max(...sheetData.map((row) => row.length));
-  //   const normalizedData = sheetData.map((row) => {
-  //     const cloned = [...row];
-  //     while (cloned.length < maxColLength) cloned.push('');
-  //     return cloned;
-  //   });
-
-  //   // find header row
-  //   let headerRowIndex = -1;
-  //   for (let r = 0; r < normalizedData.length; r++) {
-  //     const rowStr = normalizedData[r].join(' ');
-  //     if (headerKeywords.some((k) => rowStr.includes(k))) {
-  //       headerRowIndex = r;
-  //       break;
-  //     }
-  //   }
-
-  //   if (headerRowIndex === -1) {
-  //     throw new BadRequestException('No valid header row found in Excel.');
-  //   }
-
-  //   // pick headers
-  //   const headers = normalizedData[headerRowIndex].map((h, idx) =>
-  //     h && h.toString().trim() !== '' ? h.toString().trim() : `Column${idx + 1}`,
-  //   );
-
-  //   // build formatted data after header
-  //   const formattedData = normalizedData.slice(headerRowIndex + 1).map((row) => {
-  //     const rowItems = headers.map((header, idx) => ({
-  //       title: header,
-  //       value: row[idx] !== '' ? row[idx] : null,
-  //     }));
-
-  //     // add classification + page_number
-  //     rowItems.push({ title: 'classification', value: 'other' });
-  //     rowItems.push({ title: 'page_number', value: 0 });
-
-  //     return { row: rowItems };
-  //   });
-
-  //   // Remove old entry for same uploader (ULB/AFS)
-  //   parentDoc.files = parentDoc.files.filter((f: any) => f.uploadedBy !== uploadedBy);
-
-  //   parentDoc.files.push({
-  //     s3Key,
-  //     fileUrl,
-  //     requestId,
-  //     uploadedAt: new Date(),
-  //     uploadedBy,
-  //     data: formattedData,
-  //     overallConfidenceScore,
-  //   });
-  // }
 }
