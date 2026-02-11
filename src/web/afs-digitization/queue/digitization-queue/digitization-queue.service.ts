@@ -1,20 +1,21 @@
 import { HttpService } from '@nestjs/axios';
-import { AxiosError } from 'axios';
 import { InjectQueue } from '@nestjs/bullmq';
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
+import { AxiosError } from 'axios';
 import { Queue } from 'bullmq';
 import FormData from 'form-data';
-import mongoose, { Model, Types } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import * as path from 'path';
-import { firstValueFrom, map, queue } from 'rxjs';
+import { firstValueFrom, map } from 'rxjs';
+import { YearIdToLabel } from 'src/core/constants/years';
 import { S3Service } from 'src/core/s3/s3.service';
 import { AfsExcelFile, AfsExcelFileDocument, QueueStatus } from 'src/schemas/afs/afs-excel-file.schema';
+import { AfsMetric, AfsMetricDocument } from 'src/schemas/afs/afs-metrics.schema';
 import { v4 as uuidv4 } from 'uuid';
 import * as XLSX from 'xlsx';
 import { DigitizationJobDto, DigitizationUploadedBy } from '../../dto/digitization-job.dto';
-import { AfsMetric, AfsMetricDocument } from 'src/schemas/afs/afs-metrics.schema';
-import { YearIdToLabel } from 'src/core/constants/years';
 
 export interface DigitizationResponse {
   request_id: string;
@@ -65,6 +66,7 @@ export class DigitizationQueueService {
     private readonly afsMetricModel: Model<AfsMetricDocument>,
     private readonly http: HttpService,
     private readonly s3Service: S3Service,
+    private readonly config: ConfigService,
   ) {}
 
   async jobStatus(id: string) {
@@ -261,7 +263,7 @@ export class DigitizationQueueService {
       [`${filePath}.noOfPages`]: job.noOfPages,
       [`${filePath}.data`]: parsedData,
       [`${filePath}.excelUrl`]: job.digitizedExcelUrl || '',
-      [`${filePath}.requestId`]: digitizationResp.request_id,
+      // [`${filePath}.requestId`]: digitizationResp.request_id,
       [`${filePath}.overallConfidenceScore`]: digitizationResp.overall_confidence_score,
       [`${filePath}.totalProcessingTimeMs`]: digitizationResp.total_processing_time_ms,
       // [`${filePath}.digitizationMsg`]: digitizationResp.message,
@@ -285,7 +287,7 @@ export class DigitizationQueueService {
     await this.updateAfsMetrics(metrics);
 
     return await this.updateAfsExcelFile(job, {
-      [`${filePath}.requestId`]: responseData?.request_id,
+      // [`${filePath}.requestId`]: responseData?.request_id,
       [`${filePath}.totalProcessingTimeMs`]: responseData?.total_processing_time_ms,
       // [`${filePath}.digitizationMsg`]: responseData.message,
       [`${filePath}.digitizationStatus`]: 'failed',
@@ -308,7 +310,7 @@ export class DigitizationQueueService {
       }
       await this.markJobCompleted(job, digitizeResp);
     } catch (error) {
-      this.logger.error(`Error processing digitization : `);
+      this.logger.error(`Error processing digitization : `, error);
       throw error;
       // mark job as failed in DB
       // await this.markJobFailed(job, error);
@@ -380,7 +382,7 @@ export class DigitizationQueueService {
     const filename = this.getFilenameFromUrl(sourceUrl);
     // Get original extension
     const ext = path.extname(filename) || '.xlsx'; // default to .xlsx
-    const sourceBucket = 'cf-digitization-dev';
+    const sourceBucket: string = this.config.get('AWS_DIGITIZATION_BUCKET_NAME') || 'cf-digitization-dev';
     const yearLabel = YearIdToLabel[job.year] || job.year;
     const uniqueTime = new Date().getTime();
     const destinationKey = `afs/${job.ulb}_${yearLabel}_${job.auditType}_${job.docType}_${uniqueTime}${ext}`;
