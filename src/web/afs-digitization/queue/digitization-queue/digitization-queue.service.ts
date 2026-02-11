@@ -348,7 +348,7 @@ export class DigitizationQueueService {
       const formData = await this.getFormDataForDigitization(job);
       return await firstValueFrom(
         this.http
-          .post(this.config.get('DIGITIZATION_API_URL') + 'AFS_Digitization', formData, {
+          .post(process.env.DIGITIZATION_API_URL + 'AFS_Digitization', formData, {
             headers: formData.getHeaders(),
           })
           .pipe(map((resp) => resp.data as DigitizationResponse)),
