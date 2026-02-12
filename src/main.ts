@@ -6,6 +6,7 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { join } from 'path';
 import { AppModule } from './app.module';
+import basicAuth from 'express-basic-auth';
 
 async function bootstrap() {
   // Create the main NestJS application instance using the root AppModule
@@ -22,6 +23,18 @@ async function bootstrap() {
 
   // Optional: partials/helpers
   // hbs.registerPartials(join(__dirname, '..', 'views/partials'));
+
+  app.setGlobalPrefix('api/v2');
+
+  app.use(
+    ['/api/v2/api-docs', '/api/v2/api-docs-json'], // protect Swagger and BullMQ UI
+    basicAuth({
+      challenge: true,
+      users: {
+        [configService.get<string>('ADMIN_USER')!]: configService.get<string>('ADMIN_PASSWORD')!,
+      },
+    }),
+  );
 
   /**
    * -------------------------------------------------------
@@ -99,7 +112,7 @@ async function bootstrap() {
    * Reads port from environment configuration; defaults to 3000
    */
 
-  app.setGlobalPrefix('api/v2');
+  // app.setGlobalPrefix('api/v2');
   const port = configService.get<number>('PORT') || 3000;
   await app.listen(port);
   logger.log(`🚀 Server running on http://localhost:${port}/api/v2/`);
