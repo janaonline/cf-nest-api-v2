@@ -16,6 +16,7 @@ import { AfsMetric, AfsMetricDocument } from 'src/schemas/afs/afs-metrics.schema
 import { v4 as uuidv4 } from 'uuid';
 import * as XLSX from 'xlsx';
 import { DigitizationJobDto, DigitizationUploadedBy } from '../../dto/digitization-job.dto';
+import { AFS_DIGITIZATION_QUEUE } from 'src/core/constants/queues';
 
 export interface DigitizationResponse {
   request_id: string;
@@ -58,7 +59,7 @@ export class DigitizationQueueService {
   private readonly logger = new Logger(DigitizationQueueService.name);
 
   constructor(
-    @InjectQueue('afsDigitization')
+    @InjectQueue(AFS_DIGITIZATION_QUEUE)
     private readonly digitizationQueue: Queue<DigitizationJobDto>,
     @InjectModel(AfsExcelFile.name)
     private readonly afsExcelFileModel: Model<AfsExcelFileDocument>,

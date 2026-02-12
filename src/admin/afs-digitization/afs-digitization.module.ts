@@ -22,6 +22,7 @@ import { BullMQAdapter } from '@bull-board/api/dist/queueAdapters/bullMQ.js';
 import basicAuth from 'express-basic-auth';
 import { ConfigService } from '@nestjs/config';
 import { EMAIL_QUEUE } from 'src/core/queue/email-queue/email-queue.constant';
+import { AFS_DIGITIZATION_QUEUE, ZIP_RESOURCES_QUEUE } from 'src/core/constants/queues';
 
 @Module({
   imports: [
@@ -37,7 +38,7 @@ import { EMAIL_QUEUE } from 'src/core/queue/email-queue/email-queue.constant';
     ]),
     MongooseModule.forFeature([{ name: DigitizationLog.name, schema: DigitizationLogSchema }], 'digitization_db'),
     BullModule.registerQueue({
-      name: 'afsDigitization',
+      name: AFS_DIGITIZATION_QUEUE,
     }),
     // Queue UI
     BullModule.forRootAsync({
@@ -66,8 +67,8 @@ import { EMAIL_QUEUE } from 'src/core/queue/email-queue/email-queue.constant';
     }),
 
     BullBoardModule.forFeature(
-      { name: 'afsDigitization', adapter: BullMQAdapter },
-      { name: 'zipResources', adapter: BullMQAdapter },
+      { name: AFS_DIGITIZATION_QUEUE, adapter: BullMQAdapter },
+      { name: ZIP_RESOURCES_QUEUE, adapter: BullMQAdapter },
       { name: EMAIL_QUEUE, adapter: BullMQAdapter },
     ),
   ],

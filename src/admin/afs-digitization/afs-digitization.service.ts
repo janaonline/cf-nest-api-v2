@@ -24,6 +24,7 @@ import { AfsFile, AfsFileList, AfsFileReport, IAfsExcelFile } from './dto/interf
 import { ResourcesSectionExcelListDto } from './dto/resources-section-excel-list.dto';
 import { ResourcesSectionExcelReportDto } from './dto/resources-section-excel-report.dto';
 import { afsCountQuery, afsQuery, getAfsListPipeline, getAfsReportPipeline } from './queries/afs-excel-files.query';
+import { AFS_DIGITIZATION_QUEUE } from 'src/core/constants/queues';
 
 @Injectable()
 export class AfsDigitizationService {
@@ -51,8 +52,8 @@ export class AfsDigitizationService {
     @InjectModel(DigitizationLog.name, 'digitization_db')
     private readonly digitizationModel: Model<DigitizationLogDocument>,
 
-    @InjectQueue('afsDigitization')
-    private readonly digitizationQueue: Queue<DigitizationJobDto>,
+    // @InjectQueue(AFS_DIGITIZATION_QUEUE)
+    // private readonly digitizationQueue: Queue<DigitizationJobDto>,
   ) {}
 
   async getAfsFilters() {
