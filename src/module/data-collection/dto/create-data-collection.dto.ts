@@ -1,23 +1,23 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsMongoId, IsNotEmpty } from 'class-validator';
-import * as dataCollectionSchema from '../entities/data-collection.schema';
+import type { LineItemsMap } from '../entities/data-collection.schema';
 const lineItemsExample = {
   '1': 150,
-  '1.1': 10,
-  '1.2': 10,
-  '1.3': 10,
-  '1.4': 10,
-  '1.5': 10,
-  '1.6': 10,
-  '1.7': 10,
-  '1.8': 10,
-  '1.9': 10,
-  '1.10': 10,
-  '1.11': 10,
-  '1.12': 10,
-  '1.13': 10,
-  '1.14': 10,
-  '1.15': 10,
+  '1_1': 10,
+  '1_2': 10,
+  '1_3': 10,
+  '1_4': 10,
+  '1_5': 10,
+  '1_6': 10,
+  '1_7': 10,
+  '1_8': 10,
+  '1_9': 10,
+  '1_10': 10,
+  '1_11': 10,
+  '1_12': 10,
+  '1_13': 10,
+  '1_14': 10,
+  '1_15': 10,
 };
 
 export class CreateDataCollectionDto {
@@ -42,5 +42,5 @@ export class CreateDataCollectionDto {
     description: 'Line items',
   })
   @IsNotEmpty()
-  lineItems: dataCollectionSchema.LineItems;
+  lineItems: LineItemsMap;
 }
