@@ -24,7 +24,7 @@ async function bootstrap() {
   // Optional: partials/helpers
   // hbs.registerPartials(join(__dirname, '..', 'views/partials'));
 
-  app.setGlobalPrefix('api/v2');
+  // app.setGlobalPrefix('api/v2');
 
   app.use(
     ['/api/v2/api-docs', '/api/v2/api-docs-json'], // protect Swagger and BullMQ UI
@@ -112,7 +112,7 @@ async function bootstrap() {
    * Reads port from environment configuration; defaults to 3000
    */
 
-  // app.setGlobalPrefix('api/v2');
+  app.setGlobalPrefix('api/v2');
   const port = configService.get<number>('PORT') || 3000;
   await app.listen(port);
   logger.log(`🚀 Server running on http://localhost:${port}/api/v2/`);

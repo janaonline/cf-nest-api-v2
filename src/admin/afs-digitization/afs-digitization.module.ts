@@ -41,16 +41,18 @@ import { AFS_DIGITIZATION_QUEUE, ZIP_RESOURCES_QUEUE } from 'src/core/constants/
       name: AFS_DIGITIZATION_QUEUE,
     }),
     // Queue UI
-    BullModule.forRootAsync({
+    BullBoardModule.forRootAsync({
       inject: [ConfigService],
-      useFactory: (cfg: ConfigService) => {
-        const redisUrl = cfg.get<string>('REDIS_URL');
-        if (!redisUrl) throw new Error('REDIS_URL missing');
-        return {
-          connection: { url: redisUrl }, // supports redis:// and rediss://
-          prefix: 'appq', // optional key prefix
-        };
-      },
+      useFactory: (cfg: ConfigService) => ({
+        route: '/admin/queues',
+        adapter: ExpressAdapter,
+        middleware: basicAuth({
+          challenge: true,
+          users: {
+            [cfg.get<string>('ADMIN_USER')!]: cfg.get<string>('ADMIN_PASSWORD')!,
+          },
+        }),
+      }),
     }),
     BullBoardModule.forRootAsync({
       inject: [ConfigService],
