@@ -138,7 +138,8 @@ export class AfsDumpService {
         populationCat: getPopulationCategory(doc.ulbPopulation),
 
         financialYear: yearLabel,
-        auditType: doc.afsexcelfiles?.auditType ?? 'audited',
+        // auditType: doc.afsexcelfiles?.auditType ?? 'audited',
+        auditType: query.auditType ?? 'audited',
         docType: DOC_TYPES[`${query.docType}`],
         // ulbUploaded: doc.bal_sheet.url,
         ulbUploaded: pdfUrl ? s3UrlPrefix + pdfUrl : null,

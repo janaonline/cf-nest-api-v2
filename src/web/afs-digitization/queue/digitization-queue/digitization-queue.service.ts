@@ -372,7 +372,7 @@ export class DigitizationQueueService {
       await this.markJobFailed(job, failurePayload as DigitizationResponse);
       // await this.markJobFailed(job, (err.response?.data || error) as DigitizationResponse);
       // For BullMQ retries:
-      throw error;
+      throw failurePayload;
     }
   }
 
