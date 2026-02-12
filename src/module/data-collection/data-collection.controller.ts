@@ -1,7 +1,6 @@
-import { Body, Controller, Get, Post, Put } from '@nestjs/common';
+import { Body, Controller, Get, Patch, Post } from '@nestjs/common';
 import { DataCollectionService } from './data-collection.service';
-import { CreateDataCollectionDto } from './dto/create-data-collection.dto';
-import { UpdateDataCollectionDto } from './dto/update-data-collection.dto';
+import { DataCollectionDto } from './dto/data-collection.dto';
 
 @Controller('data-collection')
 export class DataCollectionController {
@@ -23,12 +22,12 @@ export class DataCollectionController {
   }
 
   @Post('submit-financial-data')
-  create(@Body() createDataCollectionDto: CreateDataCollectionDto) {
-    return this.dataCollectionService.create(createDataCollectionDto);
+  create(@Body() payload: DataCollectionDto) {
+    return this.dataCollectionService.create(payload);
   }
 
-  @Put('modify-financial-data')
-  update(@Body() updateDataCollectionDto: UpdateDataCollectionDto) {
-    return this.dataCollectionService.update(updateDataCollectionDto);
+  @Patch('modify-financial-data')
+  update(@Body() payload: DataCollectionDto) {
+    return this.dataCollectionService.update(payload);
   }
 }

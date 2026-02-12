@@ -35,7 +35,7 @@ export class DataCollection {
       },
     },
   })
-  lineItems: Map<string, number | null>;
+  lineItems: Map<LineItemKey, number | null>;
 }
 
 export type DataCollectionDocument = HydratedDocument<DataCollection>;

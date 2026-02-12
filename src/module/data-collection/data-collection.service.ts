@@ -5,15 +5,15 @@ import {
   Injectable,
   InternalServerErrorException,
   Logger,
+  NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { Year, YearDocument } from 'src/schemas/year.schema';
-import type { DatacollectionRes, LineItemRules, Rule, ValidationErr } from './constant';
+import type { DatacollectionRes, LineItemRules, LineItemsTemplate, Rule, ValidationErr } from './constant';
 import { lineItems } from './constant';
-import { CreateDataCollectionDto } from './dto/create-data-collection.dto';
-import { UpdateDataCollectionDto } from './dto/update-data-collection.dto';
+import { DataCollectionDto } from './dto/data-collection.dto';
 import { DataCollection, DataCollectionDocument, LineItemKey, LineItemsMap } from './entities/data-collection.schema';
 
 @Injectable()
@@ -31,85 +31,205 @@ export class DataCollectionService {
     private readonly yearModel: Model<YearDocument>,
   ) {}
 
+  // TODO: do DB call.
   getFinancialDataTemplate() {
-    return `This action returns financial data template`;
+    return { lineItems, keys: lineItems.map((i) => i.cfCode) };
   }
 
-  getUlbsList() {
-    return `This action returns list of ulbs from the state`;
+  async getUlbsList() {
+    // TODO: get state id from token;
+    // TODO: send consolidated code instead of censusCode and sbCode;
+    const AP_ID = '5dcf9d7216a06aed41c748dd';
+    try {
+      return await this.ulbModel
+        .find(
+          {
+            state: new Types.ObjectId(AP_ID),
+            isActive: true,
+          },
+          {
+            _id: 1,
+            name: 1,
+            censusCode: 1,
+            sbCode: 1,
+          },
+        )
+        .lean<UlbDocument[]>();
+    } catch (error: unknown) {
+      this.createErrorResponse(error, 'getYearsList');
+    }
   }
 
-  getYearsList() {
-    return `This action returns list of years`;
+  async getYearsList() {
+    try {
+      return await this.yearModel.find({ isActive: true }).lean<YearDocument[]>();
+    } catch (error: unknown) {
+      this.createErrorResponse(error, 'getYearsList');
+    }
   }
 
-  async create(payload: CreateDataCollectionDto) {
+  async create(payload: DataCollectionDto) {
     // TODO: validate if the ulb if from same state (token).
+    const { ulbId, yearId, lineItems } = payload;
+
     // Fetch data of payload.ulbId for payload.yearId
     const data = await this.dataCollectionModel
       .findOne({
-        ulbId: new Types.ObjectId(payload.ulbId),
-        yearId: new Types.ObjectId(payload.yearId),
+        ulbId: new Types.ObjectId(ulbId),
+        yearId: new Types.ObjectId(yearId),
       })
       .lean<DataCollectionDocument>();
 
     // If data exists -> exit.
     if (data) {
       throw new ConflictException(
-        `Data for ulbId: ${payload.ulbId} and yearId: ${payload.yearId} already exists. Try using PUT/ POST method.`,
+        `Data for ulbId: ${ulbId} and yearId: ${yearId} already exists. Try using PATCH method.`,
       );
     }
 
-    // Validated data (payload.lineItems)
     // Get from template from DB - rename variable.
-    const lineItemsFromDB = lineItems;
-    const lineItemRules: LineItemRules = {};
-    for (const item of lineItemsFromDB) {
-      if (item.rules && item.rules.length > 0) {
-        lineItemRules[item.cfCode] = item.rules;
-      }
-    }
-    const validationError: ValidationErr[] = this.validatePayloadData(payload.lineItems, lineItemRules);
+    // Build validation rules
+    const lineItemsFromDB: LineItemsTemplate[] = this.getLineItemDetails();
+    const lineItemRules: LineItemRules = this.getLineItemRules(lineItemsFromDB);
+
+    // Validated data (payload.lineItems)
+    const validationError: ValidationErr[] = this.validatePayloadData(lineItems, lineItemRules);
 
     try {
       // If payload.lineItems has error - return errors else save in DB.
       if (validationError.length === 0) {
         const created = new this.dataCollectionModel({
           ...payload,
-          ulbId: new Types.ObjectId(payload.ulbId),
-          yearId: new Types.ObjectId(payload.yearId),
+          ulbId: new Types.ObjectId(ulbId),
+          yearId: new Types.ObjectId(yearId),
         });
         return await created.save();
       } else {
         return {
-          ulbId: payload.ulbId,
-          yearId: payload.yearId,
+          ulbId,
+          yearId,
           success: validationError.length === 0,
           errors: validationError,
-          lineItems: payload.lineItems,
+          lineItems: lineItems,
         } as DatacollectionRes;
       }
     } catch (error: unknown) {
-      this.logger.error('Failed to create entry in DataCollection model.', error);
-
-      // Preserve already thrown HTTP exception
-      if (error instanceof HttpException) {
-        throw error;
-      }
-
-      // Invalid key in payload.lineItems - thrown from validator in schema.
-      if (error instanceof Error && error.name === 'ValidationError') {
-        throw new BadRequestException(error.message);
-      }
-
-      throw new InternalServerErrorException('Something went wrong while creating DataCollection');
+      this.createErrorResponse(error, 'create');
     }
   }
 
-  update(updateDataCollectionDto: UpdateDataCollectionDto) {
-    return { message: `This action updates existing dataCollection`, updateDataCollectionDto };
+  async update(payload: DataCollectionDto) {
+    // TODO: validate if the ulb if from same state (token).
+    const { ulbId, yearId, lineItems } = payload;
+
+    // Fetch existing document
+    const existing = await this.dataCollectionModel.findOne({
+      ulbId: new Types.ObjectId(ulbId),
+      yearId: new Types.ObjectId(yearId),
+    });
+
+    if (!existing) {
+      throw new NotFoundException(
+        `Data for ulbId: ${ulbId} and yearId: ${yearId} does not exist. Try using POST method.`,
+      );
+    }
+
+    // Merge old (from DB) + new lineItems
+    const mergedLineItems: Record<string, number | null> = {
+      ...Object.fromEntries(existing.lineItems),
+    };
+
+    // const invalidValues: ValidationErr[] = [];
+    for (const [key, value] of Object.entries(lineItems)) {
+      if (value === 0 || value) {
+        mergedLineItems[key] = value;
+      }
+      // else {
+      //   invalidValues.push(this.getInvalidValueErrObj(key));
+      // }
+    }
+
+    // Build validation rules
+    const template: LineItemsTemplate[] = this.getLineItemDetails();
+    const lineItemRules: LineItemRules = this.getLineItemRules(template);
+
+    // Validate merged object (IMPORTANT)
+    const validationError: ValidationErr[] = this.validatePayloadData(mergedLineItems, lineItemRules);
+
+    if (validationError.length > 0) {
+      return {
+        ulbId,
+        yearId,
+        success: false,
+        errors: validationError,
+        lineItems: mergedLineItems,
+      } as DatacollectionRes;
+    }
+
+    // If valid -> assign + save
+    existing.lineItems = new Map(Object.entries(mergedLineItems));
+
+    try {
+      const saved = await existing.save();
+      return saved;
+    } catch (error: unknown) {
+      this.createErrorResponse(error, 'update');
+    }
   }
 
+  // TODO: Add DB call.
+  private getLineItemDetails(): LineItemsTemplate[] {
+    return lineItems;
+  }
+
+  /**
+   * Helper: Extracts line item rules from database template array and organizes them by cfCode.
+   * @param lineItemsFromDB - Array of line item templates from the database
+   * @returns An object mapping CF codes to their corresponding rules arrays
+   */
+  private getLineItemRules(lineItemsFromDB: LineItemsTemplate[]): LineItemRules {
+    const lineItemRules: LineItemRules = {};
+    for (const item of lineItemsFromDB) {
+      if (item.rules && item.rules.length > 0) {
+        lineItemRules[item.cfCode] = item.rules;
+      }
+    }
+    return lineItemRules;
+  }
+
+  /**
+   * Helper: Handles and transforms errors into appropriate HTTP exceptions.
+   *
+   * @param error - The error object to be processed. Can be any type of error.
+   * @throws {HttpException} If the error is already an HTTP exception, it is re-thrown as-is.
+   * @throws {BadRequestException} If the error is a ValidationError, thrown when invalid keys exist in payload.lineItems.
+   * @throws {InternalServerErrorException} For all other error types.
+   * @private
+   */
+  private createErrorResponse(error: unknown, functionName: string) {
+    this.logger.error(`${functionName}() Failed to perform operation`, error);
+
+    // Preserve already thrown HTTP exception
+    if (error instanceof HttpException) {
+      throw error;
+    }
+
+    // Invalid key in payload.lineItems - thrown from validator in schema.
+    if (error instanceof Error && error.name === 'ValidationError') {
+      throw new BadRequestException(error.message);
+    }
+
+    throw new InternalServerErrorException('Something went wrong while creating DataCollection');
+  }
+
+  /**
+   * Validates payload data against defined rules for line items.
+   * @param lineItems - Map of line items with their values, keyed by CF code
+   * @param rules - Rules to validate against, keyed by CF code
+   * @returns Array of validation errors, if any. Returns empty array if validation passes
+   * @description Iterates through line items and validates each against its corresponding rules.
+   * Only validates line items that have values (including 0) and have associated rules defined.
+   */
   private validatePayloadData(lineItems: LineItemsMap, rules: LineItemRules): ValidationErr[] {
     const errors: ValidationErr[] = [];
     for (const [cfCode, value] of Object.entries(lineItems)) {
@@ -128,11 +248,56 @@ export class DataCollectionService {
             });
           }
         }
+      } else if (!value) {
+        errors.push(this.getInvalidValueErrObj(cfCode));
       }
     }
     return errors;
   }
 
+  /**
+   * Creates a validation error object for an invalid cfCode value.
+   * @param cfCode - The line item key that failed validation
+   * @returns A ValidationErr object containing the cfCode, null value, and error message
+   */
+  private getInvalidValueErrObj(cfCode: LineItemKey): ValidationErr {
+    return {
+      cfCode,
+      value: null,
+      message: `cfCode: ${cfCode} must be a valid number or null`,
+    };
+  }
+
+  /**
+   * Validates a line item value against a specified rule.
+   *
+   * @param rule - The validation rule to apply (formula or comparison type)
+   * @param currItemCfcode - The current line item key identifier
+   * @param value - The numeric value to validate
+   * @param lineItems - Map of all line items used for formula operations
+   *
+   * @returns An error message string if validation fails, or null if validation passes
+   *
+   * @throws {BadRequestException} When rule operation or comparison operator is not supported
+   *
+   * @example
+   * // Formula validation (sum)
+   * const error = validateLineItem(
+   *   { type: 'formula', operation: 'sum', operands: ['code1', 'code2'] },
+   *   'totalCode',
+   *   100,
+   *   { code1: 50, code2: 50 }
+   * ); // returns null (valid)
+   *
+   * @example
+   * // Comparison validation (greater than)
+   * const error = validateLineItem(
+   *   { type: 'comparison', operator: '>', value: 50 },
+   *   'amountCode',
+   *   30,
+   *   {}
+   * ); // returns error message (invalid)
+   */
   private validateLineItem(
     rule: Rule,
     currItemCfcode: LineItemKey,
