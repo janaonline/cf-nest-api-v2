@@ -5,8 +5,9 @@ import { HttpService } from '@nestjs/axios';
 import { delay, firstValueFrom, of } from 'rxjs';
 import { DigitizationJobDto } from '../dto/digitization-job.dto';
 import { DigitizationQueueService } from './digitization-queue/digitization-queue.service';
+import { AFS_DIGITIZATION_QUEUE } from 'src/core/constants/queues';
 
-@Processor('afsDigitization', { concurrency: 1 })
+@Processor(AFS_DIGITIZATION_QUEUE, { concurrency: 1 })
 export class DigitizationProcessor extends WorkerHost {
   private readonly logger = new Logger(DigitizationProcessor.name);
 
