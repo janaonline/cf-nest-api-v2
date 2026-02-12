@@ -19,6 +19,9 @@ import { AfsMetric, AfsMetricSchema } from 'src/schemas/afs/afs-metrics.schema';
 import { BullBoardModule } from '@bull-board/nestjs/dist/bull-board.module';
 import { ExpressAdapter } from '@bull-board/express/dist/ExpressAdapter';
 import { BullMQAdapter } from '@bull-board/api/dist/queueAdapters/bullMQ.js';
+import basicAuth from 'express-basic-auth';
+import { ConfigService } from '@nestjs/config';
+import { EMAIL_QUEUE } from 'src/core/queue/email-queue/email-queue.constant';
 
 @Module({
   imports: [
@@ -37,13 +40,35 @@ import { BullMQAdapter } from '@bull-board/api/dist/queueAdapters/bullMQ.js';
       name: 'afsDigitization',
     }),
     // Queue UI
-    BullBoardModule.forRoot({
-      route: '/admin/queues',
-      adapter: ExpressAdapter,
+    BullModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (cfg: ConfigService) => {
+        const redisUrl = cfg.get<string>('REDIS_URL');
+        if (!redisUrl) throw new Error('REDIS_URL missing');
+        return {
+          connection: { url: redisUrl }, // supports redis:// and rediss://
+          prefix: 'appq', // optional key prefix
+        };
+      },
     }),
+    BullBoardModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (cfg: ConfigService) => ({
+        route: '/admin/queues',
+        adapter: ExpressAdapter,
+        middleware: basicAuth({
+          challenge: true,
+          users: {
+            [cfg.get<string>('ADMIN_USER')!]: cfg.get<string>('ADMIN_PASSWORD')!,
+          },
+        }),
+      }),
+    }),
+
     BullBoardModule.forFeature(
       { name: 'afsDigitization', adapter: BullMQAdapter },
       { name: 'zipResources', adapter: BullMQAdapter },
+      { name: EMAIL_QUEUE, adapter: BullMQAdapter },
     ),
   ],
   controllers: [AfsDigitizationController],
