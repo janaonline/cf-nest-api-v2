@@ -14,7 +14,13 @@ import { Year, YearDocument } from 'src/schemas/year.schema';
 import type { DatacollectionRes, LineItemRules, LineItemsTemplate, Rule, ValidationErr } from './constant';
 import { lineItems } from './constant';
 import { DataCollectionDto } from './dto/data-collection.dto';
-import { DataCollection, DataCollectionDocument, LineItemKey, LineItemsMap } from './entities/data-collection.schema';
+import {
+  CODE,
+  DataCollection,
+  DataCollectionDocument,
+  LineItemKey,
+  LineItemsMap,
+} from './entities/data-collection.schema';
 
 @Injectable()
 export class DataCollectionService {
@@ -33,7 +39,7 @@ export class DataCollectionService {
 
   // TODO: do DB call.
   getFinancialDataTemplate() {
-    return { lineItems, cfCodes: lineItems.map((i) => i.cfCode) };
+    return { lineItems, [CODE]: lineItems.map((i) => i[CODE]) };
   }
 
   async getUlbsList() {
@@ -183,7 +189,7 @@ export class DataCollectionService {
   }
 
   /**
-   * Helper: Extracts line item rules from database template array and organizes them by cfCode.
+   * Helper: Extracts line item rules from database template array and organizes them by CODE.
    * @param lineItemsFromDB - Array of line item templates from the database
    * @returns An object mapping CF codes to their corresponding rules arrays
    */
@@ -191,7 +197,7 @@ export class DataCollectionService {
     const lineItemRules: LineItemRules = {};
     for (const item of lineItemsFromDB) {
       if (item.rules && item.rules.length > 0) {
-        lineItemRules[item.cfCode] = item.rules;
+        lineItemRules[item[CODE]] = item.rules;
       }
     }
     return lineItemRules;
@@ -224,47 +230,47 @@ export class DataCollectionService {
 
   /**
    * Validates payload data against defined rules for line items.
-   * @param lineItems - Map of line items with their values, keyed by CF code
-   * @param rules - Rules to validate against, keyed by CF code
+   * @param lineItems - Map of line items with their values, keyed by CODE
+   * @param rules - Rules to validate against, keyed by CODE
    * @returns Array of validation errors, if any. Returns empty array if validation passes
    * @description Iterates through line items and validates each against its corresponding rules.
    * Only validates line items that have values (including 0) and have associated rules defined.
    */
   private validatePayloadData(lineItems: LineItemsMap, rules: LineItemRules): ValidationErr[] {
     const errors: ValidationErr[] = [];
-    for (const [cfCode, value] of Object.entries(lineItems)) {
+    for (const [lineItemCode, value] of Object.entries(lineItems)) {
       // Validate a lineItem only if value is avaialbe (can have 0) and rules are available.
-      const rulesOfCurrLineItem = rules[cfCode];
+      const rulesOfCurrLineItem = rules[lineItemCode];
       if ((value === 0 || value) && rulesOfCurrLineItem && rulesOfCurrLineItem.length) {
         // Validate all the rules.
         for (const rule of rulesOfCurrLineItem) {
-          const errMsg = this.validateLineItem(rule, cfCode, value, lineItems);
+          const errMsg = this.validateLineItem(rule, lineItemCode, value, lineItems);
 
           if (errMsg) {
             errors.push({
-              cfCode,
+              lineItemCode,
               value,
               message: errMsg,
             });
           }
         }
       } else if (!value) {
-        errors.push(this.getInvalidValueErrObj(cfCode));
+        errors.push(this.getInvalidValueErrObj(CODE));
       }
     }
     return errors;
   }
 
   /**
-   * Creates a validation error object for an invalid cfCode value.
-   * @param cfCode - The line item key that failed validation
-   * @returns A ValidationErr object containing the cfCode, null value, and error message
+   * Creates a validation error object for an invalid lineItemCode value.
+   * @param lineItemCode - The line item key that failed validation
+   * @returns A ValidationErr object containing the lineItemCode, null value, and error message
    */
-  private getInvalidValueErrObj(cfCode: LineItemKey): ValidationErr {
+  private getInvalidValueErrObj(lineItemCode: LineItemKey): ValidationErr {
     return {
-      cfCode,
+      lineItemCode,
       value: null,
-      message: `cfCode: ${cfCode} must be a valid number or null`,
+      message: `lineItemCode: ${lineItemCode} must be a valid number or null`,
     };
   }
 
@@ -272,7 +278,7 @@ export class DataCollectionService {
    * Validates a line item value against a specified rule.
    *
    * @param rule - The validation rule to apply (formula or comparison type)
-   * @param currItemCfcode - The current line item key identifier
+   * @param currLineItemCode - The current line item key identifier
    * @param value - The numeric value to validate
    * @param lineItems - Map of all line items used for formula operations
    *
@@ -300,7 +306,7 @@ export class DataCollectionService {
    */
   private validateLineItem(
     rule: Rule,
-    currItemCfcode: LineItemKey,
+    currLineItemCode: LineItemKey,
     value: number,
     lineItems: LineItemsMap,
   ): string | null {
@@ -311,8 +317,8 @@ export class DataCollectionService {
         case 'sum': {
           let sumValue = 0;
 
-          for (const cfCode of rule.operands) {
-            const operandValue = lineItems[cfCode];
+          for (const lineItemCode of rule.operands) {
+            const operandValue = lineItems[lineItemCode];
 
             if (operandValue === 0 || operandValue) {
               sumValue += operandValue;
@@ -320,7 +326,7 @@ export class DataCollectionService {
           }
 
           return value !== sumValue
-            ? `cfCode: ${currItemCfcode} must equal sum of ${rule.operands.join(', ')}. Expected: ${sumValue}, Received: ${value}`
+            ? `lineItemCode: ${currLineItemCode} must equal sum of ${rule.operands.join(', ')}. Expected: ${sumValue}, Received: ${value}`
             : null;
         }
 
@@ -334,19 +340,19 @@ export class DataCollectionService {
 
       switch (rule.operator) {
         case '>':
-          return value > compareValue ? null : `${currItemCfcode} must be greater than ${compareValue}`;
+          return value > compareValue ? null : `lineItemCode: ${currLineItemCode} must be greater than ${compareValue}`;
 
         case '<':
-          return value < compareValue ? null : `${currItemCfcode} must be less than ${compareValue}`;
+          return value < compareValue ? null : `lineItemCode: ${currLineItemCode} must be less than ${compareValue}`;
 
         case '>=':
-          return value >= compareValue ? null : `${currItemCfcode} must be ≥ ${compareValue}`;
+          return value >= compareValue ? null : `lineItemCode: ${currLineItemCode} must be ≥ ${compareValue}`;
 
         case '<=':
-          return value <= compareValue ? null : `${currItemCfcode} must be ≤ ${compareValue}`;
+          return value <= compareValue ? null : `lineItemCode: ${currLineItemCode} must be ≤ ${compareValue}`;
 
         case '===':
-          return value === compareValue ? null : `${currItemCfcode} must equal ${compareValue}`;
+          return value === compareValue ? null : `lineItemCode: ${currLineItemCode} must equal ${compareValue}`;
 
         default:
           throw new BadRequestException(`Comparator not supported`);

@@ -1,10 +1,12 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types, ValidatorProps } from 'mongoose';
 import { lineItems } from '../constant';
+// const CODE = 'cfCode';
+export const CODE = 'nmamCode';
 
-export type LineItemKey = (typeof lineItems)[number]['cfCode'];
+export type LineItemKey = (typeof lineItems)[number][typeof CODE];
 export type LineItemsMap = Partial<Record<LineItemKey, number | null>>;
-const LINE_ITEM_KEYS = lineItems.map((i) => i.cfCode);
+const LINE_ITEM_KEYS = lineItems.map((i) => i[CODE]);
 export const LINE_ITEM_KEY_SET = new Set(LINE_ITEM_KEYS);
 
 @Schema({ timestamps: true })
