@@ -33,7 +33,7 @@ export class DataCollectionService {
 
   // TODO: do DB call.
   getFinancialDataTemplate() {
-    return { lineItems, keys: lineItems.map((i) => i.cfCode) };
+    return { lineItems, cfCodes: lineItems.map((i) => i.cfCode) };
   }
 
   async getUlbsList() {
@@ -105,13 +105,13 @@ export class DataCollectionService {
         });
         return await created.save();
       } else {
-        return {
+        throw new BadRequestException({
           ulbId,
           yearId,
           success: validationError.length === 0,
           errors: validationError,
           lineItems: lineItems,
-        } as DatacollectionRes;
+        } as DatacollectionRes);
       }
     } catch (error: unknown) {
       this.createErrorResponse(error, 'create');
@@ -157,13 +157,13 @@ export class DataCollectionService {
     const validationError: ValidationErr[] = this.validatePayloadData(mergedLineItems, lineItemRules);
 
     if (validationError.length > 0) {
-      return {
+      throw new BadRequestException({
         ulbId,
         yearId,
         success: false,
         errors: validationError,
         lineItems: mergedLineItems,
-      } as DatacollectionRes;
+      } as DatacollectionRes);
     }
 
     // If valid -> assign + save
