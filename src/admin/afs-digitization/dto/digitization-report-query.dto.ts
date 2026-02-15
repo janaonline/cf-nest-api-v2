@@ -2,7 +2,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import { IsArray, IsEnum, IsInt, IsMongoId, IsOptional, Min } from 'class-validator';
-import { AuditType, DigitizationStatuses } from 'src/schemas/afs/afs-excel-file.schema';
+import { AuditType, DigitizationStatuses } from 'src/schemas/afs/enums';
 
 export enum DocumentType {
   BALANCE_SHEET = 'bal_sheet',

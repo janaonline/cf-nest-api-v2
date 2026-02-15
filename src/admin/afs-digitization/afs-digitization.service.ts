@@ -5,12 +5,7 @@ import { Queue } from 'bullmq';
 import { Model, Types } from 'mongoose';
 import { YearLabelToId } from 'src/core/constants/years';
 import { buildPopulationMatch } from 'src/core/helpers/populationCategory.helper';
-import {
-  AfsExcelFile,
-  AfsExcelFileDocument,
-  AuditType,
-  DigitizationStatuses,
-} from 'src/schemas/afs/afs-excel-file.schema';
+import { AfsExcelFile, AfsExcelFileDocument } from 'src/schemas/afs/afs-excel-file.schema';
 import { AfsMetric, AfsMetricDocument } from 'src/schemas/afs/afs-metrics.schema';
 import { AnnualAccountData, AnnualAccountDataDocument } from 'src/schemas/annual-account-data.schema';
 import { DigitizationLog, DigitizationLogDocument } from 'src/schemas/digitization-log.schema';
@@ -25,6 +20,7 @@ import { ResourcesSectionExcelListDto } from './dto/resources-section-excel-list
 import { ResourcesSectionExcelReportDto } from './dto/resources-section-excel-report.dto';
 import { afsCountQuery, afsQuery, getAfsListPipeline, getAfsReportPipeline } from './queries/afs-excel-files.query';
 import { AFS_DIGITIZATION_QUEUE } from 'src/core/constants/queues';
+import { AuditType, DigitizationStatuses } from 'src/schemas/afs/enums';
 
 @Injectable()
 export class AfsDigitizationService {
@@ -96,8 +92,8 @@ export class AfsDigitizationService {
     };
   }
 
-  async getMetrics() {
-    const result = await this.afsMetricModel.findOne().lean();
+  async getMetrics(docType: string = 'all') {
+    const result = await this.afsMetricModel.findOne({ docType }).lean();
     const cards = [
       {
         icon: 'bi bi-folder-check',
