@@ -12,10 +12,10 @@ import { LoggerMiddleware } from './middleware/logger-middleware';
 import { AuthModule } from './module/auth/auth.module';
 import { DataCollectionModule } from './module/data-collection/data-collection.module';
 import { UsersModule } from './users/users.module';
-import { AfsDigitizationModule } from './web/afs-digitization/afs-digitization.module';
-import { EventsModule } from './web/events/events.module';
+import { AfsDigitizationModule } from './admin/afs-digitization/afs-digitization.module';
 import { ReportAnIssueModule } from './web/report-an-issue/report-an-issue.module';
 import { ResourcesSectionModule } from './web/resources-section/resources-section.module';
+import { EventsModule } from './admin/events/events.module';
 
 @Module({
   imports: [

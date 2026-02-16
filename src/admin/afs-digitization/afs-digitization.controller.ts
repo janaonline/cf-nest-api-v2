@@ -64,7 +64,7 @@ export class AfsDigitizationController {
     // query.ulbId = query.ulbId ? new Types.ObjectId(query.ulbId) : undefined;
     const buffer = await this.afsDumpService.exportAfsExcelFiles(query);
 
-    const filename = `afs-dump-${YearIdToLabel[query.yearId.toString()]}-${query.docType}.xlsx`;
+    const filename = `afs-dump-${YearIdToLabel[query.yearId.toString()]}-${query.docType}-${query.auditType}-${new Date().toISOString().split('T')[0]}.xlsx`;
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
 
