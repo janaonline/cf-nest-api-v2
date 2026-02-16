@@ -10,6 +10,7 @@ import { EmailModule } from './core/email/email.module';
 import { NodeMailerModule } from './core/node-mailer/node-mailer.module';
 import { LoggerMiddleware } from './middleware/logger-middleware';
 import { AuthModule } from './module/auth/auth.module';
+import { DataCollectionModule } from './module/data-collection/data-collection.module';
 import { UsersModule } from './users/users.module';
 import { AfsDigitizationModule } from './admin/afs-digitization/afs-digitization.module';
 import { ReportAnIssueModule } from './web/report-an-issue/report-an-issue.module';
@@ -60,6 +61,7 @@ import { EventsModule } from './admin/events/events.module';
     ReportAnIssueModule,
     AfsDigitizationModule,
     EventsModule,
+    DataCollectionModule,
   ],
   controllers: [AppController],
   providers: [
