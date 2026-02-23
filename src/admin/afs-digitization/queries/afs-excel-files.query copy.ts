@@ -3,7 +3,7 @@ import { YearIdToLabel } from 'src/core/constants/years';
 import { DOC_TYPES } from '../constants/docTypes';
 import { DigitizationReportQueryDto } from '../dto/digitization-report-query.dto';
 import { buildPopulationMatch } from 'src/core/helpers/populationCategory.helper';
-import { DigitizationStatuses } from 'src/schemas/afs/afs-excel-file.schema';
+import { DigitizationStatuses } from 'src/schemas/afs/enums';
 
 function digitizationStatusCond(query: DigitizationReportQueryDto, isTotal = false) {
   const status = query.digitizationStatus;

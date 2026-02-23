@@ -22,7 +22,10 @@ import { BullMQAdapter } from '@bull-board/api/dist/queueAdapters/bullMQ.js';
 import basicAuth from 'express-basic-auth';
 import { ConfigService } from '@nestjs/config';
 import { EMAIL_QUEUE } from 'src/core/queue/email-queue/email-queue.constant';
-import { AFS_DIGITIZATION_QUEUE, ZIP_RESOURCES_QUEUE } from 'src/core/constants/queues';
+import { AFS_AUDITORS_REPORT_QUEUE, AFS_DIGITIZATION_QUEUE, ZIP_RESOURCES_QUEUE } from 'src/core/constants/queues';
+import { AfsAuditorsReport, AfsAuditorsReportSchema } from 'src/schemas/afs/afs-auditors-report.schema';
+import { AuditorsReportOcrQueueService } from './queue/auditors-report-ocr-queue/auditors-report-ocr-queue.service';
+import { AuditorsReportOcrProcessor } from './queue/auditors-report-ocr.processor';
 
 @Module({
   imports: [
@@ -34,12 +37,18 @@ import { AFS_DIGITIZATION_QUEUE, ZIP_RESOURCES_QUEUE } from 'src/core/constants/
       { name: Year.name, schema: YearSchema },
       { name: AfsExcelFile.name, schema: AfsExcelFileSchema },
       { name: AnnualAccountData.name, schema: AnnualAccountDataSchema },
+      { name: AfsAuditorsReport.name, schema: AfsAuditorsReportSchema },
       { name: AfsMetric.name, schema: AfsMetricSchema },
     ]),
     MongooseModule.forFeature([{ name: DigitizationLog.name, schema: DigitizationLogSchema }], 'digitization_db'),
-    BullModule.registerQueue({
-      name: AFS_DIGITIZATION_QUEUE,
-    }),
+    BullModule.registerQueue(
+      {
+        name: AFS_DIGITIZATION_QUEUE,
+      },
+      {
+        name: AFS_AUDITORS_REPORT_QUEUE,
+      },
+    ),
     // Queue UI
     BullBoardModule.forRootAsync({
       inject: [ConfigService],
@@ -70,11 +79,20 @@ import { AFS_DIGITIZATION_QUEUE, ZIP_RESOURCES_QUEUE } from 'src/core/constants/
 
     BullBoardModule.forFeature(
       { name: AFS_DIGITIZATION_QUEUE, adapter: BullMQAdapter },
+      { name: AFS_AUDITORS_REPORT_QUEUE, adapter: BullMQAdapter },
       { name: ZIP_RESOURCES_QUEUE, adapter: BullMQAdapter },
       { name: EMAIL_QUEUE, adapter: BullMQAdapter },
     ),
   ],
   controllers: [AfsDigitizationController],
-  providers: [AfsDigitizationService, AfsDumpService, DigitizationQueueService, DigitizationProcessor, S3Service],
+  providers: [
+    AfsDigitizationService,
+    AfsDumpService,
+    DigitizationQueueService,
+    DigitizationProcessor,
+    AuditorsReportOcrProcessor,
+    AuditorsReportOcrQueueService,
+    S3Service,
+  ],
 })
 export class AfsDigitizationModule {}

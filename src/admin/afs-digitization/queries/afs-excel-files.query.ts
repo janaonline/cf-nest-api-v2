@@ -1,12 +1,13 @@
-import { PipelineStage, Types } from 'mongoose';
+import mongoose, { PipelineStage, Types } from 'mongoose';
 import { YearIdToLabel } from 'src/core/constants/years';
 import { buildPopulationMatch } from 'src/core/helpers/populationCategory.helper';
-import { DigitizationStatuses } from 'src/schemas/afs/afs-excel-file.schema';
 import { popCatQuerySwitch } from 'src/shared/utils/mongo-query.utils';
 import { DOC_TYPES, getAfsDocType } from '../constants/docTypes';
 import { DigitizationReportQueryDto } from '../dto/digitization-report-query.dto';
 import { ResourcesSectionExcelListDto } from '../dto/resources-section-excel-list.dto';
 import { ResourcesSectionExcelReportDto } from '../dto/resources-section-excel-report.dto';
+import { DigitizationStatuses } from 'src/schemas/afs/enums';
+import { DocumentType } from '../dto/digitization-report-query.dto';
 
 function digitizationStatusCond(query: DigitizationReportQueryDto, isTotal = false) {
   const status = query.digitizationStatus;
@@ -14,18 +15,15 @@ function digitizationStatusCond(query: DigitizationReportQueryDto, isTotal = fal
   if (status === DigitizationStatuses.NOT_DIGITIZED) {
     cond = {
       $and: [
-        { 'afsexcelfiles.ulbFile.digitizationStatus': { $exists: false } },
-        // { 'afsexcelfiles.ulbFile.digitizationStatus': status },
-        { 'afsexcelfiles.afsFile.digitizationStatus': { $exists: false } },
-        // { 'afsexcelfiles.afsFile.digitizationStatus': status },
+        { 'afsFiles.ulbFile.digitizationStatus': { $exists: false } },
+        // { 'afsFiles.ulbFile.digitizationStatus': status },
+        { 'afsFiles.afsFile.digitizationStatus': { $exists: false } },
+        // { 'afsFiles.afsFile.digitizationStatus': status },
       ],
     };
   } else {
     cond = {
-      $or: [
-        { 'afsexcelfiles.ulbFile.digitizationStatus': status },
-        { 'afsexcelfiles.afsFile.digitizationStatus': status },
-      ],
+      $or: [{ 'afsFiles.ulbFile.digitizationStatus': status }, { 'afsFiles.afsFile.digitizationStatus': status }],
     };
   }
   const pipeline: { [key: string]: any }[] = [{ $match: { ...cond } }];
@@ -37,12 +35,14 @@ function digitizationStatusCond(query: DigitizationReportQueryDto, isTotal = fal
   return pipeline;
 }
 
-function getAfsXlFileLookupPipeline(query: DigitizationReportQueryDto) {
+function getAfsLookupPipeline(query: DigitizationReportQueryDto) {
   const yearIdObj = new Types.ObjectId(query.yearId);
+  const collectionName =
+    query.docType === (DocumentType.AUDITORS_REPORT as string) ? 'afs_auditors_report' : 'afs_xl_files';
   return [
     {
       $lookup: {
-        from: 'afs_xl_files',
+        from: collectionName,
         let: {
           ulbId: '$ulb', // annualaccountdatas.ulb
         },
@@ -78,12 +78,12 @@ function getAfsXlFileLookupPipeline(query: DigitizationReportQueryDto) {
           },
           { $project: { 'ulbFile.data': 0, 'afsFile.data': 0 } },
         ],
-        as: 'afsexcelfiles',
+        as: 'afsFiles',
       },
     },
     {
       $unwind: {
-        path: '$afsexcelfiles',
+        path: '$afsFiles',
         preserveNullAndEmptyArrays: true,
       },
     },
@@ -183,7 +183,7 @@ export const afsQuery = (query: DigitizationReportQueryDto): any[] => {
     ...(!query.digitizationStatus && query.limit
       ? [{ $skip: skip }, ...(query.limit ? [{ $limit: query.limit }] : [])]
       : []), // Pagination
-    ...getAfsXlFileLookupPipeline(query),
+    ...getAfsLookupPipeline(query),
     ...(query.digitizationStatus ? digitizationStatusCond(query) : []),
     //   Join State collection to get State name
     ...getStateLookup(),
@@ -200,9 +200,9 @@ export const afsQuery = (query: DigitizationReportQueryDto): any[] => {
         status: 1,
         actionTakenByRole: 1,
         isDraft: 1,
-        afsexcelfiles: 1,
+        afsFiles: 1,
         isActive: 1,
-        // 'afsexcelfiles.files.data': 0,
+        // 'afsFiles.files.data': 0,
 
         ulbPopulation: '$ulbDoc.population',
         ulbName: '$ulbDoc.name',
@@ -217,8 +217,8 @@ export const afsQuery = (query: DigitizationReportQueryDto): any[] => {
 
     // {
     //   $project: {
-    //     'afsexcelfiles.ulbFile.data': 0,
-    //     'afsexcelfiles.afsFile.data': 0,
+    //     'afsFiles.ulbFile.data': 0,
+    //     'afsFiles.afsFile.data': 0,
     //   },
     // },
   ];
@@ -242,7 +242,7 @@ export const afsCountQuery = (query: DigitizationReportQueryDto): any[] => {
     // Join ULB collection to get ULB name / code / state id
     ...getUlbsLookupPipeline(query),
     // { $unwind: '$ulbDoc' },
-    ...(query.digitizationStatus ? getAfsXlFileLookupPipeline(query) : []),
+    ...(query.digitizationStatus ? getAfsLookupPipeline(query) : []),
     ...(query.digitizationStatus ? digitizationStatusCond(query, true) : []),
     {
       $count: 'count',

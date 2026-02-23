@@ -1,70 +1,39 @@
 // afs-excel-file.schema.ts
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types, Schema as MongooseSchema } from 'mongoose';
+import { Queue, QueueSchema } from '../queue.schema';
+import { DigitizationStatuses, UploadedBy, AuditType } from './enums';
 
 export type AfsExcelFileDocument = HydratedDocument<AfsExcelFile>;
 
-export enum FileType {
-  ULB_FILE = 'ulbFile',
-  AFS_FILE = 'afsFile',
-}
+// @Schema({ _id: false })
+// export class AfsExcelFileQueue {
+//   @Prop({ type: String })
+//   jobId: string;
 
-export enum AuditType {
-  AUDITED = 'audited',
-  UNAUDITED = 'unAudited',
-}
-export enum QueueStatus {
-  NOT_STARTED = 'not-started',
-  ON_THE_JOB = 'on-the-job',
-  COMPLETED = 'completed',
-  FAILED = 'failed',
-  PROCESSING = 'processing',
-  WAITING = 'waiting',
-  QUEUED = 'queued',
-  REMOVED = 'removed',
-}
+//   @Prop({ type: String, enum: Object.values(QueueStatus), default: QueueStatus.WAITING })
+//   status: string;
 
-export enum UploadedBy {
-  ULB = 'ULB',
-  AFS = 'AFS',
-}
+//   @Prop({ type: Number, default: 0 }) // 0-100
+//   progress: number;
 
-export enum DigitizationStatuses {
-  // NOT_STARTED = 'not-started',
-  NOT_DIGITIZED = 'not-digitized',
-  QUEUED = 'queued',
-  DIGITIZED = 'digitized',
-  FAILED = 'failed',
-}
+//   @Prop({ type: String, required: false })
+//   failedReason?: string;
 
-@Schema({ _id: false })
-export class AfsExcelFileQueue {
-  @Prop({ type: String })
-  jobId: string;
+//   @Prop({ type: Date, default: Date.now })
+//   createdAt: Date;
 
-  @Prop({ type: String, enum: Object.values(QueueStatus), default: QueueStatus.WAITING })
-  status: string;
+//   @Prop({ type: Number, default: 0 })
+//   attemptsMade: number;
 
-  @Prop({ type: Number, default: 0 }) // 0-100
-  progress: number;
+//   @Prop({ type: Date, required: false })
+//   processedOn?: Date;
 
-  @Prop({ type: String, required: false })
-  failedReason?: string;
+//   @Prop({ type: Date, required: false })
+//   finishedOn?: Date;
+// }
 
-  @Prop({ type: Date, default: Date.now })
-  createdAt: Date;
-
-  @Prop({ type: Number, default: 0 })
-  attemptsMade: number;
-
-  @Prop({ type: Date, required: false })
-  processedOn?: Date;
-
-  @Prop({ type: Date, required: false })
-  finishedOn?: Date;
-}
-
-export const AfsExcelFileQueueSchema = SchemaFactory.createForClass(AfsExcelFileQueue);
+// export const AfsExcelFileQueueSchema = SchemaFactory.createForClass(AfsExcelFileQueue);
 @Schema({ _id: false })
 export class AfsExcelFileItem {
   @Prop({ type: Number, default: -1 })
@@ -111,8 +80,8 @@ export class AfsExcelFileItem {
   @Prop({ type: [MongooseSchema.Types.Mixed], default: [] })
   data: any[];
 
-  @Prop({ type: AfsExcelFileQueueSchema })
-  queue: AfsExcelFileQueue;
+  @Prop({ type: QueueSchema })
+  queue: Queue;
 }
 
 const AfsExcelFileItemSchema = SchemaFactory.createForClass(AfsExcelFileItem);

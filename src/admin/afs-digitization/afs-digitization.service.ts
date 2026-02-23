@@ -5,12 +5,7 @@ import { Queue } from 'bullmq';
 import { Model, Types } from 'mongoose';
 import { YearLabelToId } from 'src/core/constants/years';
 import { buildPopulationMatch } from 'src/core/helpers/populationCategory.helper';
-import {
-  AfsExcelFile,
-  AfsExcelFileDocument,
-  AuditType,
-  DigitizationStatuses,
-} from 'src/schemas/afs/afs-excel-file.schema';
+import { AfsExcelFile, AfsExcelFileDocument } from 'src/schemas/afs/afs-excel-file.schema';
 import { AfsMetric, AfsMetricDocument } from 'src/schemas/afs/afs-metrics.schema';
 import { AnnualAccountData, AnnualAccountDataDocument } from 'src/schemas/annual-account-data.schema';
 import { DigitizationLog, DigitizationLogDocument } from 'src/schemas/digitization-log.schema';
@@ -25,6 +20,9 @@ import { ResourcesSectionExcelListDto } from './dto/resources-section-excel-list
 import { ResourcesSectionExcelReportDto } from './dto/resources-section-excel-report.dto';
 import { afsCountQuery, afsQuery, getAfsListPipeline, getAfsReportPipeline } from './queries/afs-excel-files.query';
 import { AFS_DIGITIZATION_QUEUE } from 'src/core/constants/queues';
+import { AuditType, DigitizationStatuses } from 'src/schemas/afs/enums';
+import { AfsAuditorsReport, AfsAuditorsReportDocument } from 'src/schemas/afs/afs-auditors-report.schema';
+import { SubmitARDecisionDto } from './dto/submit-ar-decision.dto';
 
 @Injectable()
 export class AfsDigitizationService {
@@ -48,6 +46,9 @@ export class AfsDigitizationService {
 
     @InjectModel(AfsMetric.name)
     private readonly afsMetricModel: Model<AfsMetricDocument>,
+
+    @InjectModel(AfsAuditorsReport.name)
+    private readonly afsAuditorsReportModel: Model<AfsAuditorsReportDocument>,
 
     @InjectModel(DigitizationLog.name, 'digitization_db')
     private readonly digitizationModel: Model<DigitizationLogDocument>,
@@ -96,8 +97,8 @@ export class AfsDigitizationService {
     };
   }
 
-  async getMetrics() {
-    const result = await this.afsMetricModel.findOne().lean();
+  async getMetrics(docType: string = 'all') {
+    const result = await this.afsMetricModel.findOne({ docType }).lean();
     const cards = [
       {
         icon: 'bi bi-folder-check',
@@ -250,5 +251,23 @@ export class AfsDigitizationService {
       console.error('Failed to get afs digitized report', err);
       throw new InternalServerErrorException('Failed to fetch reports.');
     }
+  }
+
+  getAuditorsReportItem(id: string) {
+    return this.afsAuditorsReportModel.findById(id);
+  }
+
+  async submitARDecision(payload: SubmitARDecisionDto) {
+    const filePath = payload.type === 'ULB' ? 'ulbFile' : 'afsFile';
+    await this.afsAuditorsReportModel
+      .findByIdAndUpdate(payload.id, {
+        $set: {
+          [`${filePath}.data.${payload.section}.decision`]: payload.decision,
+          [`${filePath}.data.${payload.section}.decisionNote`]: payload.notes,
+          [`${filePath}.data.${payload.section}.decisionAt`]: new Date(),
+        },
+      })
+      .exec();
+    // based on the decision, update the AfsAuditorsReport item with the correct status and if needed, requeue for digitization.
   }
 }
