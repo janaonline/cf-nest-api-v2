@@ -10,6 +10,7 @@ import { AfsFileList } from './dto/interface';
 import { ResourcesSectionExcelListDto } from './dto/resources-section-excel-list.dto';
 import { AuditorsReportOcrQueueService } from './queue/auditors-report-ocr-queue/auditors-report-ocr-queue.service';
 import { DigitizationQueueService } from './queue/digitization-queue/digitization-queue.service';
+import { SubmitARDecisionDto } from './dto/submit-ar-decision.dto';
 
 @Controller('afs-digitization')
 export class AfsDigitizationController {
@@ -144,5 +145,15 @@ export class AfsDigitizationController {
   @Get('file/:id')
   async getFile(@Param('id') id: string) {
     return await this.afsService.getFile(id);
+  }
+
+  @Get('get-ar-item/:id')
+  async getAuditorsReportItem(@Param('id') id: string) {
+    return { data: await this.afsService.getAuditorsReportItem(id) };
+  }
+
+  @Post('submit-ar-decision')
+  async submitARDecision(@Body() body: SubmitARDecisionDto) {
+    return await this.afsService.submitARDecision(body);
   }
 }

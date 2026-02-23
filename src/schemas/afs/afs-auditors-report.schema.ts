@@ -147,9 +147,6 @@ class DataItem {
 
   @Prop({ type: MongooseSchema.Types.Mixed, required: false })
   processing?: any;
-
-  @Prop({ type: QueueSchema })
-  queue: Queue;
 }
 
 export const DataItemSchema = SchemaFactory.createForClass(DataItem);
@@ -184,16 +181,22 @@ class FileItem {
   @Prop({ type: String })
   pdfUrl: string;
 
+  @Prop({ type: String })
+  digitizedFileUrl: string;
+
   @Prop({ type: Number })
   noOfPages: number;
 
   @Prop({ type: DataItemSchema })
   data: DataItem;
+
+  @Prop({ type: QueueSchema })
+  queue: Queue;
 }
 
 export const FileItemSchema = SchemaFactory.createForClass(FileItem);
 
-@Schema({ _id: false })
+@Schema({ collection: 'afs_auditors_report', timestamps: true })
 export class AfsAuditorsReport {
   @Prop({ type: Types.ObjectId, ref: 'AnnualAccountData' })
   annualAccountsId: Types.ObjectId;

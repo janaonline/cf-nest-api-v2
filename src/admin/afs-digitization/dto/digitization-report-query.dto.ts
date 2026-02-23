@@ -88,7 +88,7 @@ export class DigitizationReportQueryDto {
 
   @ApiPropertyOptional({
     description: 'Optional array of ulbId ObjectIds',
-    example: ['5dd247914f14901fa9b4a85d'],
+    example: ['5eb5844f76a3b61f40ba069e'],
     isArray: true,
     type: String,
   })
@@ -149,7 +149,7 @@ export class DigitizationReportQueryDto {
 
   @ApiPropertyOptional({
     description: 'Filter by document type (e.g. "bal_sheet")',
-    example: 'bal_sheet',
+    example: 'auditor_report',
     enum: DocumentType,
   })
   @IsEnum(DocumentType)

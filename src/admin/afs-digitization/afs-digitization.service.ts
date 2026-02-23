@@ -21,6 +21,8 @@ import { ResourcesSectionExcelReportDto } from './dto/resources-section-excel-re
 import { afsCountQuery, afsQuery, getAfsListPipeline, getAfsReportPipeline } from './queries/afs-excel-files.query';
 import { AFS_DIGITIZATION_QUEUE } from 'src/core/constants/queues';
 import { AuditType, DigitizationStatuses } from 'src/schemas/afs/enums';
+import { AfsAuditorsReport, AfsAuditorsReportDocument } from 'src/schemas/afs/afs-auditors-report.schema';
+import { SubmitARDecisionDto } from './dto/submit-ar-decision.dto';
 
 @Injectable()
 export class AfsDigitizationService {
@@ -44,6 +46,9 @@ export class AfsDigitizationService {
 
     @InjectModel(AfsMetric.name)
     private readonly afsMetricModel: Model<AfsMetricDocument>,
+
+    @InjectModel(AfsAuditorsReport.name)
+    private readonly afsAuditorsReportModel: Model<AfsAuditorsReportDocument>,
 
     @InjectModel(DigitizationLog.name, 'digitization_db')
     private readonly digitizationModel: Model<DigitizationLogDocument>,
@@ -246,5 +251,23 @@ export class AfsDigitizationService {
       console.error('Failed to get afs digitized report', err);
       throw new InternalServerErrorException('Failed to fetch reports.');
     }
+  }
+
+  getAuditorsReportItem(id: string) {
+    return this.afsAuditorsReportModel.findById(id);
+  }
+
+  async submitARDecision(payload: SubmitARDecisionDto) {
+    const filePath = payload.type === 'ULB' ? 'ulbFile' : 'afsFile';
+    await this.afsAuditorsReportModel
+      .findByIdAndUpdate(payload.id, {
+        $set: {
+          [`${filePath}.data.${payload.section}.decision`]: payload.decision,
+          [`${filePath}.data.${payload.section}.decisionNote`]: payload.notes,
+          [`${filePath}.data.${payload.section}.decisionAt`]: new Date(),
+        },
+      })
+      .exec();
+    // based on the decision, update the AfsAuditorsReport item with the correct status and if needed, requeue for digitization.
   }
 }

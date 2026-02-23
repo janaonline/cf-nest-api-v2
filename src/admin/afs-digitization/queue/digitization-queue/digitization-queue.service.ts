@@ -219,7 +219,7 @@ export class DigitizationQueueService {
     return await this.afsExcelFileModel.updateOne(filter, { $set: updateData }, { runValidators: true });
   }
 
-  async updateAfsMetrics(metrics: Partial<AfsMetricDocument>) {
+  async updateAfsMetrics(metrics: Partial<AfsMetricDocument>, docType: string = 'all') {
     // const metrics = {
     //   digitizedFiles: 0,
     //   digitizedPages: 0,
@@ -237,7 +237,7 @@ export class DigitizationQueueService {
       ? -(metrics.digitizedPages || metrics.failedPages || 0)
       : metrics.queuedPages;
     this.logger.log('Updating AFS metrics with: ', metrics);
-    await this.afsMetricModel.updateOne({ docType: 'all' }, { $inc: metrics }, { runValidators: true });
+    await this.afsMetricModel.updateOne({ docType }, { $inc: metrics }, { runValidators: true });
   }
 
   async markJobCompleted(job: DigitizationJobDto, digitizationResp: DigitizationResponse) {

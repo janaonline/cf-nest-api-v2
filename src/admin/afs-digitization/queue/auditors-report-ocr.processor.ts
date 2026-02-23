@@ -3,11 +3,11 @@ import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
 import { delay, firstValueFrom, of } from 'rxjs';
-import { AFS_DIGITIZATION_QUEUE } from 'src/core/constants/queues';
+import { AFS_AUDITORS_REPORT_QUEUE } from 'src/core/constants/queues';
 import { DigitizationJobDto } from '../dto/digitization-job.dto';
 import { AuditorsReportOcrQueueService } from './auditors-report-ocr-queue/auditors-report-ocr-queue.service';
 
-@Processor(AFS_DIGITIZATION_QUEUE, { concurrency: 1 })
+@Processor(AFS_AUDITORS_REPORT_QUEUE, { concurrency: 1 })
 export class AuditorsReportOcrProcessor extends WorkerHost {
   private readonly logger = new Logger(AuditorsReportOcrProcessor.name);
 

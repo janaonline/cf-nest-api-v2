@@ -23,8 +23,9 @@ import basicAuth from 'express-basic-auth';
 import { ConfigService } from '@nestjs/config';
 import { EMAIL_QUEUE } from 'src/core/queue/email-queue/email-queue.constant';
 import { AFS_AUDITORS_REPORT_QUEUE, AFS_DIGITIZATION_QUEUE, ZIP_RESOURCES_QUEUE } from 'src/core/constants/queues';
-import { AfsAuditorsReport, AfsAuditorsReportSchema } from 'src/schemas/afs/afs-auditors-report';
+import { AfsAuditorsReport, AfsAuditorsReportSchema } from 'src/schemas/afs/afs-auditors-report.schema';
 import { AuditorsReportOcrQueueService } from './queue/auditors-report-ocr-queue/auditors-report-ocr-queue.service';
+import { AuditorsReportOcrProcessor } from './queue/auditors-report-ocr.processor';
 
 @Module({
   imports: [
@@ -75,6 +76,7 @@ import { AuditorsReportOcrQueueService } from './queue/auditors-report-ocr-queue
     AfsDumpService,
     DigitizationQueueService,
     DigitizationProcessor,
+    AuditorsReportOcrProcessor,
     AuditorsReportOcrQueueService,
     S3Service,
   ],

@@ -3,21 +3,34 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Queue } from 'bullmq';
-import { Model, Types } from 'mongoose';
+import mongoose, { Model, Types } from 'mongoose';
 import { AFS_AUDITORS_REPORT_QUEUE } from 'src/core/constants/queues';
 import { S3Service } from 'src/core/s3/s3.service';
-import { AfsAuditorsReport, AfsAuditorsReportDocument } from 'src/schemas/afs/afs-auditors-report';
+import { AfsAuditorsReport, AfsAuditorsReportDocument } from 'src/schemas/afs/afs-auditors-report.schema';
 import { AfsExcelFile, AfsExcelFileDocument } from 'src/schemas/afs/afs-excel-file.schema';
 import { AfsMetric, AfsMetricDocument } from 'src/schemas/afs/afs-metrics.schema';
 import { QueueStatus } from 'src/schemas/queue.schema';
 import { v4 as uuidv4 } from 'uuid';
 import { DigitizationJobDto, DigitizationUploadedBy } from '../../dto/digitization-job.dto';
 import * as path from 'path';
-import { DigitizationResponse } from '../digitization-queue/digitization-queue.service';
 import { firstValueFrom, map } from 'rxjs';
 import { HttpService } from '@nestjs/axios';
 import { AxiosError } from 'axios';
 import FormData from 'form-data';
+import { YearIdToLabel } from 'src/core/constants/years';
+
+export interface DigitizationResponse {
+  data: {
+    ocr_extraction?: {
+      ocr_text_key?: string;
+    };
+  };
+  digitizedFileUrl?: string; // new field to track the S3 location of the digitized OCR text
+  overall_confidence_score: number;
+  total_processing_time_ms: number;
+  request_id: string;
+  message: string;
+}
 
 @Injectable()
 export class AuditorsReportOcrQueueService {
@@ -60,9 +73,19 @@ export class AuditorsReportOcrQueueService {
 
       this.logger.log(`Digitization job for ${job.pdfUrl} completed with status `, digitizeResp);
 
-      // copy digitized excel to our S3 bucket
-      if (digitizeResp.S3_Excel_Storage_Link) {
-        job.digitizedExcelUrl = await this.copyDigitizedExcel(job, digitizeResp.S3_Excel_Storage_Link);
+      if (!digitizeResp?.data?.ocr_extraction?.ocr_text_key) {
+        this.logger.warn(
+          `OCR text key not found in digitization response for job ${job.pdfUrl}. Response: `,
+          digitizeResp,
+        );
+        throw new BadRequestException('OCR text key not found in digitization response');
+      }
+
+      const ocrTxtUrl: string = digitizeResp?.data?.ocr_extraction?.ocr_text_key;
+
+      // copy digitized ocr to our S3 bucket
+      if (ocrTxtUrl) {
+        job.digitizedFileUrl = await this.copyDigitizedUrl(job, ocrTxtUrl);
       }
       await this.markJobCompleted(job, digitizeResp);
     } catch (error) {
@@ -81,71 +104,16 @@ export class AuditorsReportOcrQueueService {
     //      respData.S3_Excel_Storage_Link, respData.request_id, etc.
   }
 
-  async copyDigitizedExcel(job: DigitizationJobDto, sourceUrl: string): Promise<string> {
-    try {
-      this.logger.log(`Copying digitized excel from ${sourceUrl} for job: ${job.pdfUrl}`);
-      const buffer = await this.s3Service.getBuffer(sourceUrl);
-      const destKey = `digitized_excels/${job.requestId}.xlsx`;
-      await this.s3Service.uploadPublic(
-        destKey,
-        buffer,
-        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      );
-      const publicUrl = this.s3Service.getPublicUrl(destKey);
-      this.logger.log(`Successfully copied digitized excel to ${publicUrl} for job: ${job.pdfUrl}`);
-      return publicUrl;
-    } catch (error) {
-      this.logger.error(
-        `Error copying digitized excel for job: ${job.pdfUrl}`,
-        error instanceof Error ? { message: error.message, stack: error.stack } : {},
-      );
-      throw error;
-    }
-  }
-
-  async markJobCompleted(job: DigitizationJobDto, digitizationResp: DigitizationResponse) {
-    try {
-      await this.afsAuditorsReportModel.updateOne(
-        {
-          ulb: new Types.ObjectId(job.ulb),
-          year: new Types.ObjectId(job.year),
-          auditType: job.auditType,
-          docType: job.docType,
-        },
-        {
-          $set: {
-            afsFile: {
-              pdfUrl: job.pdfUrl,
-              excelUrl: job.digitizedExcelUrl || '',
-              digitizationStatus: 'completed',
-              overallConfidenceScore: digitizationResp.overall_confidence_score,
-              digitizationMsg: digitizationResp.message,
-              totalProcessingTimeMs: digitizationResp.total_processing_time_ms,
-              requestId: job.requestId || '',
-              uploadedBy: job.uploadedBy,
-            },
-          },
-        },
-        { upsert: true },
-      );
-      this.logger.log(`Marked job as completed in DB for ${job.pdfUrl}`);
-    } catch (error) {
-      this.logger.error(`Error marking job as completed in DB for ${job.pdfUrl}`, error);
-    }
-  }
-
   async getFormDataForDigitization(job: DigitizationJobDto): Promise<FormData> {
     try {
       this.logger.log(`Fetching S3 object for digitization: ${job.pdfUrl}`);
-      // const buffer = await this.s3Service.getBuffer(job.pdfUrl);
       const buffer = await this.s3Service.getPdfBufferFromS3(job.pdfUrl);
       job.noOfPages = this.s3Service.getPdfPageCountFromBuffer(buffer);
       const formData = new FormData();
       formData.append('file', buffer, {
         filename: path.basename(job.pdfUrl),
-        //   contentType: 'application/pdf',
+        contentType: 'application/pdf',
       });
-      formData.append('Document_type_ID', job.docType || 'bal_sheet');
       formData.append('request_id', job.requestId);
       this.logger.log(`Prepared form data for digitization API for job: ${job.pdfUrl}, requestId: ${job.requestId}`);
       return formData;
@@ -161,7 +129,7 @@ export class AuditorsReportOcrQueueService {
       const formData = await this.getFormDataForDigitization(job);
       return await firstValueFrom(
         this.http
-          .post(this.config.get('DIGITIZATION_API_URL') + 'AFS_Digitization', formData, {
+          .post(this.config.get('DIGITIZATION_API_URL') + 'documents/upload', formData, {
             headers: formData.getHeaders(),
           })
           .pipe(map((resp) => resp.data as DigitizationResponse)),
@@ -185,34 +153,105 @@ export class AuditorsReportOcrQueueService {
     }
   }
 
-  async markJobFailed(job: DigitizationJobDto, responseData: DigitizationResponse) {
-    try {
-      await this.afsAuditorsReportModel.updateOne(
-        {
-          ulb: new Types.ObjectId(job.ulb),
-          year: new Types.ObjectId(job.year),
-          auditType: job.auditType,
-          docType: job.docType,
-        },
-        {
-          $set: {
-            afsFile: {
-              pdfUrl: job.pdfUrl,
-              digitizationStatus: 'failed',
-              digitizationMsg: responseData.message || 'Digitization failed',
-              overallConfidenceScore: responseData.overall_confidence_score || 0,
-              totalProcessingTimeMs: responseData.total_processing_time_ms || 0,
-              requestId: job.requestId || '',
-              uploadedBy: job.uploadedBy,
-            },
-          },
-        },
-        { upsert: true },
-      );
-      this.logger.log(`Marked job as failed in DB for ${job.pdfUrl}`);
-    } catch (error) {
-      this.logger.error(`Error marking job as failed in DB for ${job.pdfUrl}`, error);
+  async copyDigitizedUrl(job: DigitizationJobDto, sourceUrl: string): Promise<string> {
+    this.logger.log(`Copying digitized URL for job: ${job.pdfUrl}`);
+    const filename = path.basename(sourceUrl);
+    // Get original extension
+    const ext = path.extname(filename) || '.txt'; // default to .txt
+    const sourceBucket: string = this.config.get('AWS_DIGITIZATION_BUCKET_NAME') || 'cf-digitization-dev';
+    const yearLabel = YearIdToLabel[job.year] || job.year;
+    const uniqueTime = new Date().getTime();
+    const destinationKey = `afs/${job.docType}/${job.ulb}_${yearLabel}_${job.auditType}_${job.docType}_${uniqueTime}${ext}`;
+    await this.s3Service.copyFileBetweenBuckets(
+      `${sourceBucket}/${sourceUrl}`, // source key including bucket path
+      destinationKey,
+    );
+    return destinationKey;
+  }
+
+  async markJobCompleted(job: DigitizationJobDto, digitizationResp: DigitizationResponse) {
+    // mongoose.set('debug', true);
+    const filePath = job.uploadedBy === DigitizationUploadedBy.ULB ? 'ulbFile' : 'afsFile';
+    let parsedData: any[] = [];
+    let digitizationStatus = 'failed';
+    if (job.digitizedFileUrl) {
+      digitizationStatus = 'digitized';
     }
+
+    // Update AFS metrics
+    const metrics = {
+      digitizedFiles: 1,
+      digitizedPages: job.noOfPages || 0,
+      // queuedFiles: -1,
+      // queuedPages: -(job.noOfPages || 0),
+    };
+    await this.updateAfsMetrics(metrics);
+
+    if (digitizationResp.data.ocr_extraction) {
+      digitizationResp.data.ocr_extraction.ocr_text_key = job.digitizedFileUrl || ''; // update to new S3 location
+    }
+
+    // const updateData = {
+    //   [`${filePath}.digitizedFileUrl`]: job.digitizedFileUrl || '',
+    //   digitizationStatus,
+    //   // digitizationStatus: isQueue ? QueueStatus.QUEUED : QueueStatus.NOT_STARTED,
+    //   data: digitizationResp.data,
+    //   queue: {
+    //     jobId: job.jobId,
+    //     status: 'completed',
+    //     progress: 100,
+    //     finishedAt: new Date(),
+    //   },
+    //   overallConfidenceScore: digitizationResp.overall_confidence_score,
+    //   totalProcessingTimeMs: digitizationResp.total_processing_time_ms,
+    //   // digitizationMsg: digitizationResp.message,
+    //   // noOfPages: job.noOfPages || 0,
+    // };
+    // this.logger.log('Parsed data rows count:', job, filter);
+    return await this.updateAfsAR(job, {
+      [`${filePath}.digitizationStatus`]: digitizationStatus,
+      // [`${filePath}.noOfPages`]: job.noOfPages,
+      [`${filePath}.data`]: digitizationResp.data,
+      [`${filePath}.digitizedFileUrl`]: job.digitizedFileUrl || '',
+      // [`${filePath}.overallConfidenceScore`]: digitizationResp.overall_confidence_score,
+      // [`${filePath}.totalProcessingTimeMs`]: digitizationResp.total_processing_time_ms,
+      // [`${filePath}.digitizationMsg`]: digitizationResp.message,
+      [`${filePath}.queue.status`]: 'completed',
+      [`${filePath}.queue.progress`]: 100,
+      [`${filePath}.queue.finishedAt`]: new Date(),
+    });
+  }
+
+  async markJobFailed(job: DigitizationJobDto, responseData: DigitizationResponse) {
+    const filePath = job.uploadedBy === DigitizationUploadedBy.ULB ? 'ulbFile' : 'afsFile';
+
+    // Update AFS metrics
+    const metrics = {
+      failedFiles: 1,
+      failedPages: job.noOfPages || 0,
+      // queuedFiles: -1,
+      // queuedPages: -(job.noOfPages || 0),
+    };
+    await this.updateAfsMetrics(metrics);
+    const embededData = {
+      totalProcessingTimeMs: responseData?.total_processing_time_ms,
+      // [`${filePath}.digitizationMsg`]: responseData.message,
+      digitizationStatus: 'failed',
+      'queue.status': 'failed',
+      'queue.progress': 100,
+      'queue.finishedOn': new Date(),
+      'queue.failedReason': responseData?.message,
+    };
+    return await this.updateAfsAR(job, {
+      // [`${filePath}.requestId`]: responseData?.request_id,
+      [`${filePath}.totalProcessingTimeMs`]: responseData?.total_processing_time_ms,
+      // [`${filePath}.digitizationMsg`]: responseData.message,
+      [`${filePath}.digitizationStatus`]: 'failed',
+      [`${filePath}.queue.status`]: 'failed',
+      [`${filePath}.queue.progress`]: 100,
+      [`${filePath}.queue.finishedOn`]: new Date(),
+      [`${filePath}.queue.failedReason`]: responseData?.message,
+    });
   }
 
   normalizeError(err: unknown) {
@@ -250,62 +289,68 @@ export class AuditorsReportOcrQueueService {
    * @returns
    */
   async upsertAfsAR(job: DigitizationJobDto, isQueue: boolean = false) {
-    let queue: { jobId: string } | undefined = undefined;
-    // job.requestId = uuidv4(); // generate a unique request ID for tracking
-    job.requestId = `req-${new Date().toISOString().split('T')[0].replace(/-/g, '')}-${uuidv4().substring(0, 6)}`;
+    try {
+      // mongoose.set('debug', true);
+      let queue: { jobId: string } | undefined = undefined;
+      // job.requestId = uuidv4(); // generate a unique request ID for tracking
+      job.requestId = `req-${new Date().toISOString().split('T')[0].replace(/-/g, '')}-${uuidv4().substring(0, 6)}`;
 
-    job.noOfPages = this.s3Service.getPdfPageCountFromBuffer(await this.s3Service.getPdfBufferFromS3(job.pdfUrl));
+      job.noOfPages = this.s3Service.getPdfPageCountFromBuffer(await this.s3Service.getPdfBufferFromS3(job.pdfUrl));
 
-    // mongoose.set('debug', true);
-    if (isQueue) {
-      const jobRes = await this.arQueue.add(`ocr-job-${job.ulb}-${job.year}-${job.docType}`, job);
-      // this.logger.log(`Enqueued job `, res.id);
+      // mongoose.set('debug', true);
+      if (isQueue) {
+        const jobRes = await this.arQueue.add(`ocr-job-${job.ulb}-${job.year}-${job.docType}`, job);
+        // this.logger.log(`Enqueued job `, res.id);
 
-      queue = {
-        jobId: jobRes.id || '',
+        queue = {
+          jobId: jobRes.id || '',
+        };
+        const metrics = {
+          queuedFiles: 1,
+          queuedPages: job.noOfPages || 0,
+        };
+        await this.updateAfsMetrics(metrics, '');
+      }
+      // mongoose.set('debug', true);
+      const filter = {
+        ulb: new Types.ObjectId(job.ulb),
+        year: new Types.ObjectId(job.year),
+        auditType: job.auditType,
+        docType: job.docType,
       };
-      const metrics = {
-        queuedFiles: 1,
-        queuedPages: job.noOfPages || 0,
+
+      const filePath = job.uploadedBy === DigitizationUploadedBy.ULB ? 'ulbFile' : 'afsFile';
+
+      // Build the embedded object (store only what you need)
+      const embedded = {
+        requestId: job.requestId,
+        uploadedBy: job.uploadedBy,
+        pdfUrl: job.pdfUrl,
+        digitizationStatus: isQueue ? QueueStatus.QUEUED : QueueStatus.NOT_STARTED,
+        data: {},
+        queue,
+        noOfPages: job.noOfPages || 0,
       };
-      await this.updateAfsMetrics(metrics, '');
+
+      const update = {
+        $setOnInsert: {
+          annualAccountsId: new Types.ObjectId(job.annualAccountsId),
+          ...filter,
+        },
+        $set: {
+          [filePath]: embedded,
+        },
+      };
+
+      return this.afsAuditorsReportModel.findOneAndUpdate(filter, update, {
+        upsert: true,
+        new: true,
+        setDefaultsOnInsert: true,
+      });
+    } catch (error) {
+      this.logger.error(`Error upserting AfsAuditorsReport for job: ${job.pdfUrl}`, error);
+      throw error;
     }
-    // mongoose.set('debug', true);
-    const filter = {
-      ulb: new Types.ObjectId(job.ulb),
-      year: new Types.ObjectId(job.year),
-      auditType: job.auditType,
-      docType: job.docType,
-    };
-
-    const filePath = job.uploadedBy === DigitizationUploadedBy.ULB ? 'ulbFile' : 'afsFile';
-
-    // Build the embedded object (store only what you need)
-    const embedded = {
-      requestId: job.requestId,
-      uploadedBy: job.uploadedBy,
-      pdfUrl: job.pdfUrl,
-      digitizationStatus: isQueue ? QueueStatus.QUEUED : QueueStatus.NOT_STARTED,
-      data: [],
-      queue,
-      noOfPages: job.noOfPages || 0,
-    };
-
-    const update = {
-      $setOnInsert: {
-        annualAccountsId: new Types.ObjectId(job.annualAccountsId),
-        ...filter,
-      },
-      $set: {
-        [filePath]: embedded,
-      },
-    };
-
-    return this.afsAuditorsReportModel.findOneAndUpdate(filter, update, {
-      upsert: true,
-      new: true,
-      setDefaultsOnInsert: true,
-    });
   }
 
   async markJobRemoved(job: DigitizationJobDto) {
@@ -315,7 +360,7 @@ export class AuditorsReportOcrQueueService {
     }
     await this.removeJob(job.jobId);
     const filePath = job.uploadedBy === DigitizationUploadedBy.ULB ? 'ulbFile' : 'afsFile';
-    return await this.updateAfsExcelFile(job, {
+    return await this.updateAfsAR(job, {
       [`${filePath}.digitizationStatus`]: 'not-digitized',
       [`${filePath}.queue.status`]: 'removed',
       [`${filePath}.queue.finishedAt`]: new Date(),
@@ -332,7 +377,7 @@ export class AuditorsReportOcrQueueService {
     return { message };
   }
 
-  async updateAfsExcelFile(job: DigitizationJobDto, updateData: Partial<AfsExcelFile>) {
+  async updateAfsAR(job: DigitizationJobDto, updateData: Partial<AfsAuditorsReport>) {
     // mongoose.set('debug', true);
     const filter = {
       // annualAccountsId: new Types.ObjectId(params.annualAccountsId),
@@ -341,10 +386,10 @@ export class AuditorsReportOcrQueueService {
       auditType: job.auditType,
       docType: job.docType,
     };
-    return await this.afsExcelFileModel.updateOne(filter, { $set: updateData }, { runValidators: true });
+    return await this.afsAuditorsReportModel.updateOne(filter, { $set: updateData }, { runValidators: true });
   }
 
-  async updateAfsMetrics(metrics: Partial<AfsMetricDocument>, doctType: string = 'all') {
+  async updateAfsMetrics(metrics: Partial<AfsMetricDocument>, docType: string = 'auditor_report') {
     metrics.queuedFiles = !metrics.queuedFiles
       ? -(metrics.digitizedFiles || metrics.failedFiles || 0)
       : metrics.queuedFiles;
@@ -352,6 +397,6 @@ export class AuditorsReportOcrQueueService {
       ? -(metrics.digitizedPages || metrics.failedPages || 0)
       : metrics.queuedPages;
     this.logger.log('Updating AFS metrics with: ', metrics);
-    await this.afsMetricModel.updateOne({}, { $inc: metrics }, { runValidators: true });
+    await this.afsMetricModel.updateOne({ docType }, { $inc: metrics }, { runValidators: true });
   }
 }
