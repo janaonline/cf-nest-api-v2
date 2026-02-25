@@ -1,13 +1,13 @@
-import mongoose, { PipelineStage, Types } from 'mongoose';
+import { PipelineStage, Types } from 'mongoose';
 import { YearIdToLabel } from 'src/core/constants/years';
 import { buildPopulationMatch } from 'src/core/helpers/populationCategory.helper';
+import { DigitizationStatuses } from 'src/schemas/afs/enums';
 import { popCatQuerySwitch } from 'src/shared/utils/mongo-query.utils';
 import { DOC_TYPES, getAfsDocType } from '../constants/docTypes';
-import { DigitizationReportQueryDto } from '../dto/digitization-report-query.dto';
+import { AuditorReportDto } from '../dto/auditor-report.dto';
+import { DigitizationReportQueryDto, DocumentType } from '../dto/digitization-report-query.dto';
 import { ResourcesSectionExcelListDto } from '../dto/resources-section-excel-list.dto';
 import { ResourcesSectionExcelReportDto } from '../dto/resources-section-excel-report.dto';
-import { DigitizationStatuses } from 'src/schemas/afs/enums';
-import { DocumentType } from '../dto/digitization-report-query.dto';
 
 function digitizationStatusCond(query: DigitizationReportQueryDto, isTotal = false) {
   const status = query.digitizationStatus;
@@ -249,6 +249,43 @@ export const afsCountQuery = (query: DigitizationReportQueryDto): any[] => {
   ];
 };
 
+// Helper: Since both afsFile and ulbFile can be present, we need to prioritize afsFile if digitized, else ulbFile if digitized.
+// This $addFields stage adds a new field 'file' which contains the relevant file based on the priority, and 'fileType' to indicate which one it is
+const addFileFieldsAfsFileVsUlbFile = {
+  $addFields: {
+    file: {
+      $switch: {
+        branches: [
+          {
+            case: { $eq: ['$afsFile.digitizationStatus', 'digitized'] },
+            then: '$afsFile',
+          },
+          {
+            case: { $eq: ['$ulbFile.digitizationStatus', 'digitized'] },
+            then: '$ulbFile',
+          },
+        ],
+        default: null,
+      },
+    },
+    fileType: {
+      $switch: {
+        branches: [
+          {
+            case: { $eq: ['$afsFile.digitizationStatus', 'digitized'] },
+            then: 'afsFile',
+          },
+          {
+            case: { $eq: ['$ulbFile.digitizationStatus', 'digitized'] },
+            then: 'ulbFile',
+          },
+        ],
+        default: null,
+      },
+    },
+  },
+};
+
 export const getAfsListPipeline = (query: ResourcesSectionExcelListDto): PipelineStage[] => {
   const pipeline: PipelineStage[] = [];
   const yearId = new Types.ObjectId(query.yearId as string);
@@ -285,40 +322,7 @@ export const getAfsListPipeline = (query: ResourcesSectionExcelListDto): Pipelin
 
   pipeline.push(
     // Priority 1: afsFile if digitized, Priority 2: ulbFile if digitized
-    {
-      $addFields: {
-        file: {
-          $switch: {
-            branches: [
-              {
-                case: { $eq: ['$afsFile.digitizationStatus', 'digitized'] },
-                then: '$afsFile',
-              },
-              {
-                case: { $eq: ['$ulbFile.digitizationStatus', 'digitized'] },
-                then: '$ulbFile',
-              },
-            ],
-            default: null,
-          },
-        },
-        fileType: {
-          $switch: {
-            branches: [
-              {
-                case: { $eq: ['$afsFile.digitizationStatus', 'digitized'] },
-                then: 'afsFile',
-              },
-              {
-                case: { $eq: ['$ulbFile.digitizationStatus', 'digitized'] },
-                then: 'ulbFile',
-              },
-            ],
-            default: null,
-          },
-        },
-      },
-    },
+    addFileFieldsAfsFileVsUlbFile,
 
     // Keep only documents which have a digitized file (digitizationStatus = 'digitized')
     { $match: { file: { $ne: null } } },
@@ -494,4 +498,30 @@ export const getAfsReportPipeline = (query: ResourcesSectionExcelReportDto): Pip
   ];
   // console.log(JSON.stringify(pipeline, null, 2));
   return pipeline;
+};
+
+/**
+ * Generates a MongoDB aggregation pipeline to retrieve auditor report URLs.
+ *
+ * Filters documents by ULB ID, year ID, document type (auditor_report), and audit type (audited).
+ * Enriches the pipeline with file field mappings, then filters for approved audit decisions.
+ * Finally, projects only the digitized file URL from the matching documents.
+ *
+ * @param query - The auditor report query parameters containing ulbId and yearId
+ * @returns An array of MongoDB pipeline stages to fetch auditor report file URLs
+ */
+export const getAuditorReportUrlPipeline = (query: AuditorReportDto): PipelineStage[] => {
+  return [
+    {
+      $match: {
+        ulb: new Types.ObjectId(query.ulbId),
+        year: new Types.ObjectId(query.yearId),
+        docType: 'auditor_report',
+        auditType: 'audited',
+      },
+    },
+    addFileFieldsAfsFileVsUlbFile,
+    { $match: { 'file.data.audit.decision': 'approved' } },
+    { $project: { file: { url: '$file.digitizedFileUrl' } } },
+  ];
 };

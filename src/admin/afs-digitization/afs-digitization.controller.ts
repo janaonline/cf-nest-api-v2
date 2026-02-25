@@ -8,9 +8,10 @@ import { DigitizationJobBatchDto, DigitizationJobDto } from './dto/digitization-
 import { DigitizationReportQueryDto } from './dto/digitization-report-query.dto';
 import { AfsFileList } from './dto/interface';
 import { ResourcesSectionExcelListDto } from './dto/resources-section-excel-list.dto';
+import { SubmitARDecisionDto } from './dto/submit-ar-decision.dto';
 import { AuditorsReportOcrQueueService } from './queue/auditors-report-ocr-queue/auditors-report-ocr-queue.service';
 import { DigitizationQueueService } from './queue/digitization-queue/digitization-queue.service';
-import { SubmitARDecisionDto } from './dto/submit-ar-decision.dto';
+import { AuditorReportDto } from './dto/auditor-report.dto';
 
 @Controller('afs-digitization')
 export class AfsDigitizationController {
@@ -145,6 +146,11 @@ export class AfsDigitizationController {
   @Get('file/:id')
   async getFile(@Param('id') id: string) {
     return await this.afsService.getFile(id);
+  }
+
+  @Get('get-auditors-report')
+  async getAuditorsReport(@Query() query: AuditorReportDto) {
+    return await this.afsService.getAuditorsReport(query);
   }
 
   @Get('get-ar-item/:id')
