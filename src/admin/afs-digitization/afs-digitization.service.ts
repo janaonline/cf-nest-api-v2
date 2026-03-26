@@ -1,28 +1,31 @@
-import { InjectQueue } from '@nestjs/bullmq';
-import { Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Queue } from 'bullmq';
 import { Model, Types } from 'mongoose';
 import { YearLabelToId } from 'src/core/constants/years';
 import { buildPopulationMatch } from 'src/core/helpers/populationCategory.helper';
+import { AfsAuditorsReport, AfsAuditorsReportDocument } from 'src/schemas/afs/afs-auditors-report.schema';
 import { AfsExcelFile, AfsExcelFileDocument } from 'src/schemas/afs/afs-excel-file.schema';
 import { AfsMetric, AfsMetricDocument } from 'src/schemas/afs/afs-metrics.schema';
+import { AuditType, DigitizationStatuses } from 'src/schemas/afs/enums';
 import { AnnualAccountData, AnnualAccountDataDocument } from 'src/schemas/annual-account-data.schema';
 import { DigitizationLog, DigitizationLogDocument } from 'src/schemas/digitization-log.schema';
 import { State, StateDocument } from 'src/schemas/state.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { Year, YearDocument } from 'src/schemas/year.schema';
 import { documentTypes } from './constants/docTypes';
-import { DigitizationJobDto } from './dto/digitization-job.dto';
+import { AuditorReportDto } from './dto/auditor-report.dto';
 import { DigitizationReportQueryDto } from './dto/digitization-report-query.dto';
-import { AfsFile, AfsFileList, AfsFileReport, IAfsExcelFile } from './dto/interface';
+import { AfsFile, AfsFileList, AfsFileReport, AuditorReport, IAfsExcelFile } from './dto/interface';
 import { ResourcesSectionExcelListDto } from './dto/resources-section-excel-list.dto';
 import { ResourcesSectionExcelReportDto } from './dto/resources-section-excel-report.dto';
-import { afsCountQuery, afsQuery, getAfsListPipeline, getAfsReportPipeline } from './queries/afs-excel-files.query';
-import { AFS_DIGITIZATION_QUEUE } from 'src/core/constants/queues';
-import { AuditType, DigitizationStatuses } from 'src/schemas/afs/enums';
-import { AfsAuditorsReport, AfsAuditorsReportDocument } from 'src/schemas/afs/afs-auditors-report.schema';
 import { SubmitARDecisionDto } from './dto/submit-ar-decision.dto';
+import {
+  afsCountQuery,
+  afsQuery,
+  getAfsListPipeline,
+  getAfsReportPipeline,
+  getAuditorReportUrlPipeline,
+} from './queries/afs-excel-files.query';
 
 @Injectable()
 export class AfsDigitizationService {
@@ -249,6 +252,26 @@ export class AfsDigitizationService {
       };
     } catch (err) {
       console.error('Failed to get afs digitized report', err);
+      throw new InternalServerErrorException('Failed to fetch reports.');
+    }
+  }
+
+  // Fetch digitized auditor's report for a given ULB id and Year id.
+  async getAuditorsReport(query: AuditorReportDto): Promise<{ success: boolean; data: AuditorReport }> {
+    if (!query.yearId && !query.year) {
+      throw new BadRequestException('Year is mandatory.');
+    }
+
+    if (!query.yearId && query.year) {
+      query.yearId = YearLabelToId[query.year];
+    }
+
+    const pipeline = getAuditorReportUrlPipeline(query);
+    try {
+      const auditorReport = (await this.afsAuditorsReportModel.aggregate(pipeline).exec()) as AuditorReport[];
+      return { success: true, data: auditorReport[0] };
+    } catch (err) {
+      console.error('Failed to get auditors report', err);
       throw new InternalServerErrorException('Failed to fetch reports.');
     }
   }
