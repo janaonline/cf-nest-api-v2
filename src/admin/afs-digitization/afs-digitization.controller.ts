@@ -74,14 +74,14 @@ export class AfsDigitizationController {
     return res.send(buffer);
   }
 
-  // @Post('upload-afs-file')
-  // async uploadAFSFile(@Body() body: DigitizationJobDto) {
-  //   const result = await this.digitizationQueueService.upsertAfsExcelFile(body);
-  //   return {
-  //     status: 'success',
-  //     data: result,
-  //   };
-  // }
+  @Post('upload-afs-file')
+  async uploadAFSFile(@Body() body: DigitizationJobDto) {
+    const result = await this.digitizationQueueService.upsertAfsExcelFile(body);
+    return {
+      status: 'success',
+      data: result,
+    };
+  }
 
   // @Post('digitize')
   // async digitize(@Body() body: DigitizationJobDto) {
