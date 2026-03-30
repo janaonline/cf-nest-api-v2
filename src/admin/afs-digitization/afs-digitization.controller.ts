@@ -132,6 +132,11 @@ export class AfsDigitizationController {
   async getMetrics() {
     return await this.afsService.getMetrics();
   }
+  
+  @Get('metrics-afs')
+  async getMetricsAfs() {
+    return await this.afsService.getMetricsAfs();
+  }
 
   @Get('status/:id')
   async status(@Param('id') id: string) {
