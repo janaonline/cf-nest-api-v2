@@ -99,7 +99,410 @@ export class AfsDigitizationService {
       },
     };
   }
+  async getMetricsAfs(docType: string = 'all') {
+     const queryAgg =[
+  {
+    $group: {
+      _id: {
+        ulb: "$ulb",
+        year: "$year",
+        docType: "$docType"
+      },
+      records: {
+        $push: {
+          auditType: "$auditType",
+          afsFile: "$afsFile",
+          ulbFile: "$ulbFile"
+        }
+      }
+    }
+  },
+  {
+    $project: {
+      records: 1,
 
+      hasDigitized: {
+        $cond: [
+          {
+            $gt: [
+              {
+                $size: {
+                  $filter: {
+                    input: "$records",
+                    as: "rec",
+                    cond: {
+                      $or: [
+                        {
+                          $eq: [
+                            "$$rec.afsFile.digitizationStatus",
+                            "digitized"
+                          ]
+                        },
+                        {
+                          $and: [
+                            {
+                              $not: [
+                                "$$rec.afsFile"
+                              ]
+                            },
+                            {
+                              $eq: [
+                                "$$rec.ulbFile.digitizationStatus",
+                                "digitized"
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                }
+              },
+              0
+            ]
+          },
+          1,
+          0
+        ]
+      },
+
+      hasFailed: {
+        $cond: [
+          {
+            $gt: [
+              {
+                $size: {
+                  $filter: {
+                    input: "$records",
+                    as: "rec",
+                    cond: {
+                      $or: [
+                        {
+                          $eq: [
+                            "$$rec.afsFile.digitizationStatus",
+                            "failed"
+                          ]
+                        },
+                        {
+                          $and: [
+                            {
+                              $not: [
+                                "$$rec.afsFile"
+                              ]
+                            },
+                            {
+                              $eq: [
+                                "$$rec.ulbFile.digitizationStatus",
+                                "failed"
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                }
+              },
+              0
+            ]
+          },
+          1,
+          0
+        ]
+      },
+
+      digitizedPages: {
+        $let: {
+          vars: {
+            auditedDigitizedRecord: {
+              $arrayElemAt: [
+                {
+                  $filter: {
+                    input: "$records",
+                    as: "rec",
+                    cond: {
+                      $and: [
+                        { $eq: ["$$rec.auditType", "audited"] },
+                        {
+                          $or: [
+                            {
+                              $eq: [
+                                "$$rec.afsFile.digitizationStatus",
+                                "digitized"
+                              ]
+                            },
+                            {
+                              $and: [
+                                {
+                                  $not: [
+                                    "$$rec.afsFile"
+                                  ]
+                                },
+                                {
+                                  $eq: [
+                                    "$$rec.ulbFile.digitizationStatus",
+                                    "digitized"
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                },
+                0
+              ]
+            },
+            unAuditedDigitizedRecord: {
+              $arrayElemAt: [
+                {
+                  $filter: {
+                    input: "$records",
+                    as: "rec",
+                    cond: {
+                      $and: [
+                        { $eq: ["$$rec.auditType", "unAudited"] },
+                        {
+                          $or: [
+                            {
+                              $eq: [
+                                "$$rec.afsFile.digitizationStatus",
+                                "digitized"
+                              ]
+                            },
+                            {
+                              $and: [
+                                {
+                                  $not: [
+                                    "$$rec.afsFile"
+                                  ]
+                                },
+                                {
+                                  $eq: [
+                                    "$$rec.ulbFile.digitizationStatus",
+                                    "digitized"
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                },
+                0
+              ]
+            }
+          },
+          in: {
+            $let: {
+              vars: {
+                digitizedRecord: {
+                  $ifNull: [
+                    "$$auditedDigitizedRecord",
+                    "$$unAuditedDigitizedRecord"
+                  ]
+                }
+              },
+              in: {
+                $ifNull: [
+                  "$$digitizedRecord.afsFile.noOfPages",
+                  "$$digitizedRecord.ulbFile.noOfPages"
+                ]
+              }
+            }
+          }
+        }
+      },
+
+      failedPages: {
+        $let: {
+          vars: {
+            auditedFailedRecord: {
+              $arrayElemAt: [
+                {
+                  $filter: {
+                    input: "$records",
+                    as: "rec",
+                    cond: {
+                      $and: [
+                        { $eq: ["$$rec.auditType", "audited"] },
+                        {
+                          $or: [
+                            {
+                              $eq: [
+                                "$$rec.afsFile.digitizationStatus",
+                                "failed"
+                              ]
+                            },
+                            {
+                              $and: [
+                                {
+                                  $not: [
+                                    "$$rec.afsFile"
+                                  ]
+                                },
+                                {
+                                  $eq: [
+                                    "$$rec.ulbFile.digitizationStatus",
+                                    "failed"
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                },
+                0
+              ]
+            },
+            unAuditedFailedRecord: {
+              $arrayElemAt: [
+                {
+                  $filter: {
+                    input: "$records",
+                    as: "rec",
+                    cond: {
+                      $and: [
+                        { $eq: ["$$rec.auditType", "unAudited"] },
+                        {
+                          $or: [
+                            {
+                              $eq: [
+                                "$$rec.afsFile.digitizationStatus",
+                                "failed"
+                              ]
+                            },
+                            {
+                              $and: [
+                                {
+                                  $not: [
+                                    "$$rec.afsFile"
+                                  ]
+                                },
+                                {
+                                  $eq: [
+                                    "$$rec.ulbFile.digitizationStatus",
+                                    "failed"
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                },
+                0
+              ]
+            }
+          },
+          in: {
+            $let: {
+              vars: {
+                failedRecord: {
+                  $ifNull: [
+                    "$$auditedFailedRecord",
+                    "$$unAuditedFailedRecord"
+                  ]
+                }
+              },
+              in: {
+                $ifNull: [
+                  "$$failedRecord.afsFile.noOfPages",
+                  "$$failedRecord.ulbFile.noOfPages"
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    $group: {
+      _id: null,
+      filesDigitized: {
+        $sum: "$hasDigitized"
+      },
+      pagesDigitizedSuccessfully: {
+        $sum: {
+          $cond: [
+            { $eq: ["$hasDigitized", 1] },
+            { $ifNull: ["$digitizedPages", 0] },
+            0
+          ]
+        }
+      },
+      failedFiles: {
+        $sum: {
+          $cond: [
+            {
+              $and: [
+                { $eq: ["$hasDigitized", 0] },
+                { $eq: ["$hasFailed", 1] }
+              ]
+            },
+            1,
+            0
+          ]
+        }
+      },
+      failedPages: {
+        $sum: {
+          $cond: [
+            {
+              $and: [
+                { $eq: ["$hasDigitized", 0] },
+                { $eq: ["$hasFailed", 1] }
+              ]
+            },
+            { $ifNull: ["$failedPages", 0] },
+            0
+          ]
+        }
+      }
+    }
+  },
+  {
+    $project: {
+      _id: 0,
+      filesDigitized: 1,
+      pagesDigitizedSuccessfully: 1,
+      failedFiles: 1,
+      failedPages: 1
+    }
+  }
+]
+
+   const result = await this.afsExcelFileModel.aggregate(queryAgg).exec();
+
+  const finalMetrics = {
+    digitizedFiles: result[0]?.filesDigitized ?? 0,
+    digitizedPages: result[0]?.pagesDigitizedSuccessfully ?? 0,
+    failedFiles: result[0]?.failedFiles ?? 0,
+    failedPages: result[0]?.failedPages ?? 0,
+    // queuedFiles: 0,
+    // queuedPages: 0,
+  };
+
+  this.logger.log('Calculated AFS metrics from aggregation', finalMetrics);
+
+  await this.afsMetricModel.updateOne(
+    { docType },
+    { $set: finalMetrics },
+    { runValidators: true, upsert: true }
+  );
+
+  return { data: result[0] ?? finalMetrics };
+  }
   async getMetrics(docType: string = 'all') {
     const result = await this.afsMetricModel.findOne({ docType }).lean();
     const cards = [
