@@ -18,7 +18,7 @@ import * as XLSX from 'xlsx';
 import { DigitizationJobDto, DigitizationUploadedBy } from '../../dto/digitization-job.dto';
 import { AFS_DIGITIZATION_QUEUE } from 'src/core/constants/queues';
 import { QueueStatus } from 'src/schemas/queue.schema';
-import {AfsDigitizationService} from '../../afs-digitization.service';
+import { AfsDigitizationService } from '../../afs-digitization.service';
 export interface DigitizationResponse {
   request_id: string;
   status: string;
@@ -69,7 +69,7 @@ export class DigitizationQueueService {
     private readonly http: HttpService,
     private readonly s3Service: S3Service,
     private readonly config: ConfigService,
-    private readonly  afsDigitizationService: AfsDigitizationService, 
+    private readonly afsDigitizationService: AfsDigitizationService,
   ) {}
 
   async jobStatus(id: string) {
@@ -236,27 +236,21 @@ export class DigitizationQueueService {
     metrics.queuedPages = !metrics.queuedPages
       ? -(metrics.digitizedPages || metrics.failedPages || 0)
       : metrics.queuedPages;
-       // First refresh base metrics from aggregation
-  const result = await this.afsDigitizationService.getMetricsAfs(docType);
+    // First refresh base metrics from aggregation
+    const result = await this.afsDigitizationService.getMetricsAfs(docType);
 
-   this.logger.log('Calculated metrics result:', result);
-  this.logger.log('Computed queued metrics:', {
-    queuedFiles: metrics.queuedFiles,
-    queuedPages: metrics.queuedPages,
-  });
+    this.logger.log('Calculated metrics result:', result);
+    this.logger.log('Computed queued metrics:', {
+      queuedFiles: metrics.queuedFiles,
+      queuedPages: metrics.queuedPages,
+    });
 
-  const updatePayload: Partial<AfsMetricDocument> = {};
-  updatePayload.queuedFiles = metrics.queuedFiles;
-  updatePayload.queuedPages = metrics.queuedPages;
-   // run updateOne only when queuedFiles or queuedPages is positive
- 
+    const updatePayload: Partial<AfsMetricDocument> = {};
+    updatePayload.queuedFiles = metrics.queuedFiles;
+    updatePayload.queuedPages = metrics.queuedPages;
+    // run updateOne only when queuedFiles or queuedPages is positive
 
-    await this.afsMetricModel.updateOne(
-      { docType },
-      { $inc: updatePayload },
-      { runValidators: true },
-    );
-
+    await this.afsMetricModel.updateOne({ docType }, { $inc: updatePayload }, { runValidators: true });
   }
 
   async markJobCompleted(job: DigitizationJobDto, digitizationResp: DigitizationResponse) {
