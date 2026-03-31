@@ -19,6 +19,7 @@ import { AfsFile, AfsFileList, AfsFileReport, AuditorReport, IAfsExcelFile } fro
 import { ResourcesSectionExcelListDto } from './dto/resources-section-excel-list.dto';
 import { ResourcesSectionExcelReportDto } from './dto/resources-section-excel-report.dto';
 import { SubmitARDecisionDto } from './dto/submit-ar-decision.dto';
+import { AfsMetricsDataPipeline } from './queries/afs-metrics-data.query';
 import {
   afsCountQuery,
   afsQuery,
@@ -99,7 +100,24 @@ export class AfsDigitizationService {
       },
     };
   }
+  async getMetricsAfs(docType: string = 'all') {
+    const result = await this.afsExcelFileModel.aggregate(AfsMetricsDataPipeline).exec();
 
+    const finalMetrics = {
+      digitizedFiles: result[0]?.filesDigitized ?? 0,
+      digitizedPages: result[0]?.pagesDigitizedSuccessfully ?? 0,
+      failedFiles: result[0]?.failedFiles ?? 0,
+      failedPages: result[0]?.failedPages ?? 0,
+      // queuedFiles: 0,
+      // queuedPages: 0,
+    };
+
+    this.logger.log('Calculated AFS metrics from aggregation', finalMetrics);
+
+    await this.afsMetricModel.updateOne({ docType }, { $set: finalMetrics }, { runValidators: true, upsert: true });
+
+    return { data: result[0] ?? finalMetrics };
+  }
   async getMetrics(docType: string = 'all') {
     const result = await this.afsMetricModel.findOne({ docType }).lean();
     const cards = [
