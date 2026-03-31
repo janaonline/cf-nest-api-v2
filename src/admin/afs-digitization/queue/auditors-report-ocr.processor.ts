@@ -1,18 +1,19 @@
+import { HttpService } from '@nestjs/axios';
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
-import { HttpService } from '@nestjs/axios';
 import { delay, firstValueFrom, of } from 'rxjs';
+import { AFS_AUDITORS_REPORT_QUEUE } from 'src/core/constants/queues';
 import { DigitizationJobDto } from '../dto/digitization-job.dto';
-import { DigitizationQueueService } from './digitization-queue/digitization-queue.service';
+import { AuditorsReportOcrQueueService } from './auditors-report-ocr-queue/auditors-report-ocr-queue.service';
 
-@Processor('afsDigitization', { concurrency: 1 })
-export class DigitizationProcessor extends WorkerHost {
-  private readonly logger = new Logger(DigitizationProcessor.name);
+@Processor(AFS_AUDITORS_REPORT_QUEUE, { concurrency: 1 })
+export class AuditorsReportOcrProcessor extends WorkerHost {
+  private readonly logger = new Logger(AuditorsReportOcrProcessor.name);
 
   constructor(
     private readonly http: HttpService,
-    private readonly digitizationQueueService: DigitizationQueueService,
+    private readonly ocrService: AuditorsReportOcrQueueService,
   ) {
     super();
   }
@@ -22,10 +23,10 @@ export class DigitizationProcessor extends WorkerHost {
     const data = job.data;
     // this.logger.log(`Processing `, data);
 
-    await this.digitizationQueueService.handleDigitizationJob(data);
+    await this.ocrService.handleAuditorsReportOcrJob(data);
     // await this.handleDigitizationJob(job);
     // await this.handleDigitizationJob_test();
-    this.logger.log(`✅ Digitization job ${job.id} completed`);
+    this.logger.log(`✅ Auditors Report OCR job ${job.id} completed`);
   }
 
   async handleDigitizationJob_test() {

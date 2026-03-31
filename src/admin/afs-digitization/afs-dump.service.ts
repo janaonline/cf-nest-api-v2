@@ -93,7 +93,7 @@ export class AfsDumpService {
       auditType?: string;
     };
     type AfsReportDoc = {
-      afsexcelfiles?: AfsExcelFiles | null;
+      afsFiles?: AfsExcelFiles | null;
       // afsfiles?: { s3Key?: string } | null;
       createdAt?: Date | string;
       stateName?: string;
@@ -107,13 +107,8 @@ export class AfsDumpService {
     const typedDocs = docs as AfsReportDoc[];
 
     for (const doc of typedDocs) {
-      // const ulbDigitizedFiles =
-      //   doc.afsexcelfiles?.files && doc.afsexcelfiles.files.length !== 0 ? doc.afsexcelfiles.files[0] : null;
-      // const afsDigitizedFiles =
-      //   doc.afsexcelfiles?.files && doc.afsexcelfiles.files.length === 2 ? doc.afsexcelfiles.files[1] : null;
-
-      const ulbFile = doc.afsexcelfiles?.ulbFile;
-      const afsFile = doc.afsexcelfiles?.afsFile;
+      const ulbFile = doc.afsFiles?.ulbFile;
+      const afsFile = doc.afsFiles?.afsFile;
 
       const ulbDigitizedStatus = ulbFile?.digitizationStatus || 'Not-Digitized';
 
@@ -138,7 +133,7 @@ export class AfsDumpService {
         populationCat: getPopulationCategory(doc.ulbPopulation),
 
         financialYear: yearLabel,
-        auditType: doc.afsexcelfiles?.auditType ?? 'audited',
+        auditType: query.auditType ?? 'audited',
         docType: DOC_TYPES[`${query.docType}`],
         // ulbUploaded: doc.bal_sheet.url,
         ulbUploaded: pdfUrl ? s3UrlPrefix + pdfUrl : null,

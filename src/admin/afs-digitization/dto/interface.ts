@@ -31,3 +31,11 @@ export interface AfsFileReport {
   success: boolean;
   data: AfsExcelData;
 }
+
+export interface AuditorReport {
+  _id: string;
+  file: {
+    name: string;
+    url: string;
+  };
+}

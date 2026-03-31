@@ -1,21 +1,24 @@
 import { HttpService } from '@nestjs/axios';
-import { AxiosError } from 'axios';
 import { InjectQueue } from '@nestjs/bullmq';
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
+import { AxiosError } from 'axios';
 import { Queue } from 'bullmq';
 import FormData from 'form-data';
-import mongoose, { Model, Types } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import * as path from 'path';
-import { firstValueFrom, map, queue } from 'rxjs';
+import { firstValueFrom, map } from 'rxjs';
+import { YearIdToLabel } from 'src/core/constants/years';
 import { S3Service } from 'src/core/s3/s3.service';
-import { AfsExcelFile, AfsExcelFileDocument, QueueStatus } from 'src/schemas/afs/afs-excel-file.schema';
+import { AfsExcelFile, AfsExcelFileDocument } from 'src/schemas/afs/afs-excel-file.schema';
+import { AfsMetric, AfsMetricDocument } from 'src/schemas/afs/afs-metrics.schema';
 import { v4 as uuidv4 } from 'uuid';
 import * as XLSX from 'xlsx';
 import { DigitizationJobDto, DigitizationUploadedBy } from '../../dto/digitization-job.dto';
-import { AfsMetric, AfsMetricDocument } from 'src/schemas/afs/afs-metrics.schema';
-import { YearIdToLabel } from 'src/core/constants/years';
-
+import { AFS_DIGITIZATION_QUEUE } from 'src/core/constants/queues';
+import { QueueStatus } from 'src/schemas/queue.schema';
+import {AfsDigitizationService} from '../../afs-digitization.service';
 export interface DigitizationResponse {
   request_id: string;
   status: string;
@@ -57,7 +60,7 @@ export class DigitizationQueueService {
   private readonly logger = new Logger(DigitizationQueueService.name);
 
   constructor(
-    @InjectQueue('afsDigitization')
+    @InjectQueue(AFS_DIGITIZATION_QUEUE)
     private readonly digitizationQueue: Queue<DigitizationJobDto>,
     @InjectModel(AfsExcelFile.name)
     private readonly afsExcelFileModel: Model<AfsExcelFileDocument>,
@@ -65,6 +68,8 @@ export class DigitizationQueueService {
     private readonly afsMetricModel: Model<AfsMetricDocument>,
     private readonly http: HttpService,
     private readonly s3Service: S3Service,
+    private readonly config: ConfigService,
+    private readonly  afsDigitizationService: AfsDigitizationService, 
   ) {}
 
   async jobStatus(id: string) {
@@ -147,6 +152,9 @@ export class DigitizationQueueService {
 
   async upsertAfsExcelFile(job: DigitizationJobDto, isQueue: boolean = false) {
     let queue: { jobId: string } | undefined = undefined;
+    // job.requestId = uuidv4(); // generate a unique request ID for tracking
+    job.requestId = `req-${new Date().toISOString().split('T')[0].replace(/-/g, '')}-${uuidv4().substring(0, 6)}`;
+
     job.noOfPages = this.s3Service.getPdfPageCountFromBuffer(await this.s3Service.getPdfBufferFromS3(job.pdfUrl));
     // mongoose.set('debug', true);
     if (isQueue) {
@@ -174,6 +182,7 @@ export class DigitizationQueueService {
 
     // Build the embedded object (store only what you need)
     const embedded = {
+      requestId: job.requestId,
       uploadedBy: job.uploadedBy,
       pdfUrl: job.pdfUrl,
       digitizationStatus: isQueue ? QueueStatus.QUEUED : QueueStatus.NOT_STARTED,
@@ -210,8 +219,7 @@ export class DigitizationQueueService {
     };
     return await this.afsExcelFileModel.updateOne(filter, { $set: updateData }, { runValidators: true });
   }
-
-  async updateAfsMetrics(metrics: Partial<AfsMetricDocument>) {
+  async updateAfsMetrics(metrics: Partial<AfsMetricDocument>, docType: string = 'all') {
     // const metrics = {
     //   digitizedFiles: 0,
     //   digitizedPages: 0,
@@ -228,8 +236,27 @@ export class DigitizationQueueService {
     metrics.queuedPages = !metrics.queuedPages
       ? -(metrics.digitizedPages || metrics.failedPages || 0)
       : metrics.queuedPages;
-    this.logger.log('Updating AFS metrics with: ', metrics);
-    await this.afsMetricModel.updateOne({}, { $inc: metrics }, { runValidators: true });
+       // First refresh base metrics from aggregation
+  const result = await this.afsDigitizationService.getMetricsAfs(docType);
+
+   this.logger.log('Calculated metrics result:', result);
+  this.logger.log('Computed queued metrics:', {
+    queuedFiles: metrics.queuedFiles,
+    queuedPages: metrics.queuedPages,
+  });
+
+  const updatePayload: Partial<AfsMetricDocument> = {};
+  updatePayload.queuedFiles = metrics.queuedFiles;
+  updatePayload.queuedPages = metrics.queuedPages;
+   // run updateOne only when queuedFiles or queuedPages is positive
+ 
+
+    await this.afsMetricModel.updateOne(
+      { docType },
+      { $inc: updatePayload },
+      { runValidators: true },
+    );
+
   }
 
   async markJobCompleted(job: DigitizationJobDto, digitizationResp: DigitizationResponse) {
@@ -257,7 +284,7 @@ export class DigitizationQueueService {
       [`${filePath}.noOfPages`]: job.noOfPages,
       [`${filePath}.data`]: parsedData,
       [`${filePath}.excelUrl`]: job.digitizedExcelUrl || '',
-      [`${filePath}.requestId`]: digitizationResp.request_id,
+      // [`${filePath}.requestId`]: digitizationResp.request_id,
       [`${filePath}.overallConfidenceScore`]: digitizationResp.overall_confidence_score,
       [`${filePath}.totalProcessingTimeMs`]: digitizationResp.total_processing_time_ms,
       // [`${filePath}.digitizationMsg`]: digitizationResp.message,
@@ -281,7 +308,7 @@ export class DigitizationQueueService {
     await this.updateAfsMetrics(metrics);
 
     return await this.updateAfsExcelFile(job, {
-      [`${filePath}.requestId`]: responseData?.request_id,
+      // [`${filePath}.requestId`]: responseData?.request_id,
       [`${filePath}.totalProcessingTimeMs`]: responseData?.total_processing_time_ms,
       // [`${filePath}.digitizationMsg`]: responseData.message,
       [`${filePath}.digitizationStatus`]: 'failed',
@@ -294,17 +321,22 @@ export class DigitizationQueueService {
 
   async handleDigitizationJob(job: DigitizationJobDto) {
     try {
+      console.log(`Processing digitization job for PDF: ${job.pdfUrl}, requestId: ${job.requestId}`);
       const digitizeResp = await this.callDigitizationApi(job);
 
       this.logger.log(`Digitization job for ${job.pdfUrl} completed with status `, digitizeResp);
-
       // copy digitized excel to our S3 bucket
       if (digitizeResp.S3_Excel_Storage_Link) {
         job.digitizedExcelUrl = await this.copyDigitizedExcel(job, digitizeResp.S3_Excel_Storage_Link);
       }
+      this.logger.log(`testing with digitized Excel URL: ${job.digitizedExcelUrl}`);
       await this.markJobCompleted(job, digitizeResp);
     } catch (error) {
-      this.logger.error(`Error processing digitization : `);
+      // this.logger.error(`Error processing digitization : `, error);
+      this.logger.error(
+        `Error processing digitization :`,
+        error instanceof Error ? { message: error.message, stack: error.stack } : {},
+      );
       throw error;
       // mark job as failed in DB
       // await this.markJobFailed(job, error);
@@ -323,14 +355,15 @@ export class DigitizationQueueService {
       job.noOfPages = this.s3Service.getPdfPageCountFromBuffer(buffer);
       const formData = new FormData();
       formData.append('file', buffer, {
-        filename: this.getFilenameFromUrl(job.pdfUrl),
+        filename: path.basename(job.pdfUrl),
         //   contentType: 'application/pdf',
       });
-
       formData.append('Document_type_ID', job.docType || 'bal_sheet');
+      formData.append('request_id', job.requestId);
+      this.logger.log(`Prepared form data for digitization API for job: ${job.pdfUrl}, requestId: ${job.requestId}`);
       return formData;
     } catch (error: any) {
-      this.logger.error(`Error fetching S3 object for digitization:`);
+      this.logger.error(`Error fetching S3 object for digitization: ${job.pdfUrl}`);
       throw error;
     }
   }
@@ -341,7 +374,7 @@ export class DigitizationQueueService {
       const formData = await this.getFormDataForDigitization(job);
       return await firstValueFrom(
         this.http
-          .post(process.env.DIGITIZATION_API_URL + 'AFS_Digitization', formData, {
+          .post(this.config.get('DIGITIZATION_API_URL') + 'AFS_Digitization', formData, {
             headers: formData.getHeaders(),
           })
           .pipe(map((resp) => resp.data as DigitizationResponse)),
@@ -361,7 +394,7 @@ export class DigitizationQueueService {
       await this.markJobFailed(job, failurePayload as DigitizationResponse);
       // await this.markJobFailed(job, (err.response?.data || error) as DigitizationResponse);
       // For BullMQ retries:
-      throw error;
+      throw failurePayload;
     }
   }
 
@@ -375,7 +408,7 @@ export class DigitizationQueueService {
     const filename = this.getFilenameFromUrl(sourceUrl);
     // Get original extension
     const ext = path.extname(filename) || '.xlsx'; // default to .xlsx
-    const sourceBucket = 'cf-digitization-dev';
+    const sourceBucket: string = this.config.get('AWS_DIGITIZATION_BUCKET_NAME') || 'cf-digitization-dev';
     const yearLabel = YearIdToLabel[job.year] || job.year;
     const uniqueTime = new Date().getTime();
     const destinationKey = `afs/${job.ulb}_${yearLabel}_${job.auditType}_${job.docType}_${uniqueTime}${ext}`;
@@ -488,70 +521,4 @@ export class DigitizationQueueService {
 
     return { kind: 'unknown', message: String(err) };
   }
-
-  // async buildAfsExcelFileItem(job: DigitizationJobDto, digitizationResp: DigitizationResponse) {
-  //   // Excel → JSON (structured rows)
-  //   const workbook = xlsx.read(buffer, { type: 'buffer' });
-  //   const sheetName = workbook.SheetNames[0];
-  //   const sheetData: any[][] = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName], {
-  //     header: 1,
-  //   });
-
-  //   if (!sheetData || sheetData.length === 0) {
-  //     throw new BadRequestException('Excel file is empty or invalid.');
-  //   }
-
-  //   const maxColLength = Math.max(...sheetData.map((row) => row.length));
-  //   const normalizedData = sheetData.map((row) => {
-  //     const cloned = [...row];
-  //     while (cloned.length < maxColLength) cloned.push('');
-  //     return cloned;
-  //   });
-
-  //   // find header row
-  //   let headerRowIndex = -1;
-  //   for (let r = 0; r < normalizedData.length; r++) {
-  //     const rowStr = normalizedData[r].join(' ');
-  //     if (headerKeywords.some((k) => rowStr.includes(k))) {
-  //       headerRowIndex = r;
-  //       break;
-  //     }
-  //   }
-
-  //   if (headerRowIndex === -1) {
-  //     throw new BadRequestException('No valid header row found in Excel.');
-  //   }
-
-  //   // pick headers
-  //   const headers = normalizedData[headerRowIndex].map((h, idx) =>
-  //     h && h.toString().trim() !== '' ? h.toString().trim() : `Column${idx + 1}`,
-  //   );
-
-  //   // build formatted data after header
-  //   const formattedData = normalizedData.slice(headerRowIndex + 1).map((row) => {
-  //     const rowItems = headers.map((header, idx) => ({
-  //       title: header,
-  //       value: row[idx] !== '' ? row[idx] : null,
-  //     }));
-
-  //     // add classification + page_number
-  //     rowItems.push({ title: 'classification', value: 'other' });
-  //     rowItems.push({ title: 'page_number', value: 0 });
-
-  //     return { row: rowItems };
-  //   });
-
-  //   // Remove old entry for same uploader (ULB/AFS)
-  //   parentDoc.files = parentDoc.files.filter((f: any) => f.uploadedBy !== uploadedBy);
-
-  //   parentDoc.files.push({
-  //     s3Key,
-  //     fileUrl,
-  //     requestId,
-  //     uploadedAt: new Date(),
-  //     uploadedBy,
-  //     data: formattedData,
-  //     overallConfidenceScore,
-  //   });
-  // }
 }
