@@ -11,13 +11,14 @@ import * as path from 'path';
 import { firstValueFrom, map } from 'rxjs';
 import { YearIdToLabel } from 'src/core/constants/years';
 import { S3Service } from 'src/core/s3/s3.service';
-import { AfsExcelFile, AfsExcelFileDocument, QueueStatus } from 'src/schemas/afs/afs-excel-file.schema';
+import { AfsExcelFile, AfsExcelFileDocument } from 'src/schemas/afs/afs-excel-file.schema';
 import { AfsMetric, AfsMetricDocument } from 'src/schemas/afs/afs-metrics.schema';
 import { v4 as uuidv4 } from 'uuid';
 import * as XLSX from 'xlsx';
 import { DigitizationJobDto, DigitizationUploadedBy } from '../../dto/digitization-job.dto';
 import { AFS_DIGITIZATION_QUEUE } from 'src/core/constants/queues';
-
+import { QueueStatus } from 'src/schemas/queue.schema';
+import { AfsDigitizationService } from '../../afs-digitization.service';
 export interface DigitizationResponse {
   request_id: string;
   status: string;
@@ -68,6 +69,7 @@ export class DigitizationQueueService {
     private readonly http: HttpService,
     private readonly s3Service: S3Service,
     private readonly config: ConfigService,
+    private readonly afsDigitizationService: AfsDigitizationService,
   ) {}
 
   async jobStatus(id: string) {
@@ -217,8 +219,7 @@ export class DigitizationQueueService {
     };
     return await this.afsExcelFileModel.updateOne(filter, { $set: updateData }, { runValidators: true });
   }
-
-  async updateAfsMetrics(metrics: Partial<AfsMetricDocument>) {
+  async updateAfsMetrics(metrics: Partial<AfsMetricDocument>, docType: string = 'all') {
     // const metrics = {
     //   digitizedFiles: 0,
     //   digitizedPages: 0,
@@ -235,8 +236,21 @@ export class DigitizationQueueService {
     metrics.queuedPages = !metrics.queuedPages
       ? -(metrics.digitizedPages || metrics.failedPages || 0)
       : metrics.queuedPages;
-    this.logger.log('Updating AFS metrics with: ', metrics);
-    await this.afsMetricModel.updateOne({}, { $inc: metrics }, { runValidators: true });
+    // First refresh base metrics from aggregation
+    const result = await this.afsDigitizationService.getMetricsAfs(docType);
+
+    this.logger.log('Calculated metrics result:', result);
+    this.logger.log('Computed queued metrics:', {
+      queuedFiles: metrics.queuedFiles,
+      queuedPages: metrics.queuedPages,
+    });
+
+    const updatePayload: Partial<AfsMetricDocument> = {};
+    updatePayload.queuedFiles = metrics.queuedFiles;
+    updatePayload.queuedPages = metrics.queuedPages;
+    // run updateOne only when queuedFiles or queuedPages is positive
+
+    await this.afsMetricModel.updateOne({ docType }, { $inc: updatePayload }, { runValidators: true });
   }
 
   async markJobCompleted(job: DigitizationJobDto, digitizationResp: DigitizationResponse) {
@@ -301,14 +315,15 @@ export class DigitizationQueueService {
 
   async handleDigitizationJob(job: DigitizationJobDto) {
     try {
+      console.log(`Processing digitization job for PDF: ${job.pdfUrl}, requestId: ${job.requestId}`);
       const digitizeResp = await this.callDigitizationApi(job);
 
       this.logger.log(`Digitization job for ${job.pdfUrl} completed with status `, digitizeResp);
-
       // copy digitized excel to our S3 bucket
       if (digitizeResp.S3_Excel_Storage_Link) {
         job.digitizedExcelUrl = await this.copyDigitizedExcel(job, digitizeResp.S3_Excel_Storage_Link);
       }
+      this.logger.log(`testing with digitized Excel URL: ${job.digitizedExcelUrl}`);
       await this.markJobCompleted(job, digitizeResp);
     } catch (error) {
       // this.logger.error(`Error processing digitization : `, error);

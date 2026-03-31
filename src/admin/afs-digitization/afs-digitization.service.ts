@@ -1,30 +1,32 @@
-import { InjectQueue } from '@nestjs/bullmq';
-import { Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Queue } from 'bullmq';
 import { Model, Types } from 'mongoose';
 import { YearLabelToId } from 'src/core/constants/years';
 import { buildPopulationMatch } from 'src/core/helpers/populationCategory.helper';
-import {
-  AfsExcelFile,
-  AfsExcelFileDocument,
-  AuditType,
-  DigitizationStatuses,
-} from 'src/schemas/afs/afs-excel-file.schema';
+import { AfsAuditorsReport, AfsAuditorsReportDocument } from 'src/schemas/afs/afs-auditors-report.schema';
+import { AfsExcelFile, AfsExcelFileDocument } from 'src/schemas/afs/afs-excel-file.schema';
 import { AfsMetric, AfsMetricDocument } from 'src/schemas/afs/afs-metrics.schema';
+import { AuditType, DigitizationStatuses } from 'src/schemas/afs/enums';
 import { AnnualAccountData, AnnualAccountDataDocument } from 'src/schemas/annual-account-data.schema';
 import { DigitizationLog, DigitizationLogDocument } from 'src/schemas/digitization-log.schema';
 import { State, StateDocument } from 'src/schemas/state.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { Year, YearDocument } from 'src/schemas/year.schema';
 import { documentTypes } from './constants/docTypes';
-import { DigitizationJobDto } from './dto/digitization-job.dto';
+import { AuditorReportDto } from './dto/auditor-report.dto';
 import { DigitizationReportQueryDto } from './dto/digitization-report-query.dto';
-import { AfsFile, AfsFileList, AfsFileReport, IAfsExcelFile } from './dto/interface';
+import { AfsFile, AfsFileList, AfsFileReport, AuditorReport, IAfsExcelFile } from './dto/interface';
 import { ResourcesSectionExcelListDto } from './dto/resources-section-excel-list.dto';
 import { ResourcesSectionExcelReportDto } from './dto/resources-section-excel-report.dto';
-import { afsCountQuery, afsQuery, getAfsListPipeline, getAfsReportPipeline } from './queries/afs-excel-files.query';
-import { AFS_DIGITIZATION_QUEUE } from 'src/core/constants/queues';
+import { SubmitARDecisionDto } from './dto/submit-ar-decision.dto';
+import { AfsMetricsDataPipeline } from './queries/afs-metrics-data.query';
+import {
+  afsCountQuery,
+  afsQuery,
+  getAfsListPipeline,
+  getAfsReportPipeline,
+  getAuditorReportUrlPipeline,
+} from './queries/afs-excel-files.query';
 
 @Injectable()
 export class AfsDigitizationService {
@@ -48,6 +50,9 @@ export class AfsDigitizationService {
 
     @InjectModel(AfsMetric.name)
     private readonly afsMetricModel: Model<AfsMetricDocument>,
+
+    @InjectModel(AfsAuditorsReport.name)
+    private readonly afsAuditorsReportModel: Model<AfsAuditorsReportDocument>,
 
     @InjectModel(DigitizationLog.name, 'digitization_db')
     private readonly digitizationModel: Model<DigitizationLogDocument>,
@@ -95,9 +100,26 @@ export class AfsDigitizationService {
       },
     };
   }
+  async getMetricsAfs(docType: string = 'all') {
+    const result = await this.afsExcelFileModel.aggregate(AfsMetricsDataPipeline).exec();
 
-  async getMetrics() {
-    const result = await this.afsMetricModel.findOne().lean();
+    const finalMetrics = {
+      digitizedFiles: result[0]?.filesDigitized ?? 0,
+      digitizedPages: result[0]?.pagesDigitizedSuccessfully ?? 0,
+      failedFiles: result[0]?.failedFiles ?? 0,
+      failedPages: result[0]?.failedPages ?? 0,
+      // queuedFiles: 0,
+      // queuedPages: 0,
+    };
+
+    this.logger.log('Calculated AFS metrics from aggregation', finalMetrics);
+
+    await this.afsMetricModel.updateOne({ docType }, { $set: finalMetrics }, { runValidators: true, upsert: true });
+
+    return { data: result[0] ?? finalMetrics };
+  }
+  async getMetrics(docType: string = 'all') {
+    const result = await this.afsMetricModel.findOne({ docType }).lean();
     const cards = [
       {
         icon: 'bi bi-folder-check',
@@ -250,5 +272,43 @@ export class AfsDigitizationService {
       console.error('Failed to get afs digitized report', err);
       throw new InternalServerErrorException('Failed to fetch reports.');
     }
+  }
+
+  // Fetch digitized auditor's report for a given ULB id and Year id.
+  async getAuditorsReport(query: AuditorReportDto): Promise<{ success: boolean; data: AuditorReport }> {
+    if (!query.yearId && !query.year) {
+      throw new BadRequestException('Year is mandatory.');
+    }
+
+    if (!query.yearId && query.year) {
+      query.yearId = YearLabelToId[query.year];
+    }
+
+    const pipeline = getAuditorReportUrlPipeline(query);
+    try {
+      const auditorReport = (await this.afsAuditorsReportModel.aggregate(pipeline).exec()) as AuditorReport[];
+      return { success: true, data: auditorReport[0] };
+    } catch (err) {
+      console.error('Failed to get auditors report', err);
+      throw new InternalServerErrorException('Failed to fetch reports.');
+    }
+  }
+
+  getAuditorsReportItem(id: string) {
+    return this.afsAuditorsReportModel.findById(id);
+  }
+
+  async submitARDecision(payload: SubmitARDecisionDto) {
+    const filePath = payload.type === 'ULB' ? 'ulbFile' : 'afsFile';
+    await this.afsAuditorsReportModel
+      .findByIdAndUpdate(payload.id, {
+        $set: {
+          [`${filePath}.data.${payload.section}.decision`]: payload.decision,
+          [`${filePath}.data.${payload.section}.decisionNote`]: payload.notes,
+          [`${filePath}.data.${payload.section}.decisionAt`]: new Date(),
+        },
+      })
+      .exec();
+    // based on the decision, update the AfsAuditorsReport item with the correct status and if needed, requeue for digitization.
   }
 }
