@@ -54,7 +54,7 @@ import { EventsModule } from './admin/events/events.module';
       }),
       connectionName: 'digitization_db',
     }),
-    UsersModule,
+    // UsersModule,
     ResourcesSectionModule,
     NodeMailerModule,
     EmailModule,
