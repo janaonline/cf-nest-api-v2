@@ -4,14 +4,15 @@ import type { Response } from 'express';
 import { YearIdToLabel } from 'src/core/constants/years';
 import { AfsDigitizationService } from './afs-digitization.service';
 import { AfsDumpService } from './afs-dump.service';
+import { AuditorReportDto } from './dto/auditor-report.dto';
 import { DigitizationJobBatchDto, DigitizationJobDto } from './dto/digitization-job.dto';
 import { DigitizationReportQueryDto } from './dto/digitization-report-query.dto';
-import { AfsFileList } from './dto/interface';
+import { AfsFileList, AfsFileReport } from './dto/interface';
 import { ResourcesSectionExcelListDto } from './dto/resources-section-excel-list.dto';
+import { ResourcesSectionExcelReportDto } from './dto/resources-section-excel-report.dto';
 import { SubmitARDecisionDto } from './dto/submit-ar-decision.dto';
 import { AuditorsReportOcrQueueService } from './queue/auditors-report-ocr-queue/auditors-report-ocr-queue.service';
 import { DigitizationQueueService } from './queue/digitization-queue/digitization-queue.service';
-import { AuditorReportDto } from './dto/auditor-report.dto';
 
 @Controller('afs-digitization')
 export class AfsDigitizationController {
@@ -50,10 +51,10 @@ export class AfsDigitizationController {
     return await this.afsService.getAfsList(query);
   }
 
-  // @Get('afs-excel-report')
-  // async getAfsReport(@Query() query: ResourcesSectionExcelReportDto): Promise<AfsFileReport> {
-  //   return await this.afsService.getAfsReport(query);
-  // }
+  @Get('afs-excel-report')
+  async getAfsReport(@Query() query: ResourcesSectionExcelReportDto): Promise<AfsFileReport> {
+    return await this.afsService.getAfsReport(query);
+  }
 
   @Get('request-log/:requestId')
   async getRequestLog(@Param('requestId') requestId: string) {
@@ -132,7 +133,7 @@ export class AfsDigitizationController {
   async getMetrics() {
     return await this.afsService.getMetrics();
   }
-  
+
   @Get('metrics-afs')
   async getMetricsAfs() {
     return await this.afsService.getMetricsAfs();
