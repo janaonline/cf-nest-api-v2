@@ -72,7 +72,7 @@ export class RolesGuard implements CanActivate {
         ...user.toObject(),
       } as unknown as AuthenticatedRequest['user'];
 
-      this.logger.debug(`Authenticated user:`, user, request.user);
+      // this.logger.debug(`Authenticated user:`, user);
       // request['user'] = payload;
     } catch (error) {
       this.logger.warn('JWT verification failed', error);
