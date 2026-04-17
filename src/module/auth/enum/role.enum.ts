@@ -1,4 +1,4 @@
-export const enum Role {
+export enum Role {
   ADMIN = 'ADMIN',
   MoHUA = 'MoHUA',
   PARTNER = 'PARTNER',
@@ -25,5 +25,8 @@ type UserRole =
 
 export interface User {
   _id: string;
+  email: string;
   role: UserRole;
+  ulb: string;
+  state: string;
 }
