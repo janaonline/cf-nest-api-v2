@@ -12,6 +12,11 @@ import { Request } from 'express';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 import { ROLES_KEY } from '../decorators/roles.decorator';
 import { Role, User } from '../enum/role.enum';
+import { AuthService } from '../auth.service';
+
+type AuthenticatedRequest = Request & {
+  user?: User;
+};
 
 @Injectable()
 export class RolesGuard implements CanActivate {
@@ -19,8 +24,9 @@ export class RolesGuard implements CanActivate {
 
   constructor(
     private jwtService: JwtService,
+    private authService: AuthService,
     private reflector: Reflector,
-  ) {}
+  ) { }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     // Allow access if the route is marked as public
@@ -32,16 +38,17 @@ export class RolesGuard implements CanActivate {
       return true;
     }
 
-    const request = context.switchToHttp().getRequest<Request>();
+    const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
     // if (request.method === 'OPTIONS') {
     //   return true;
     // }
 
     // Read required roles from metadata
-    const requiredRoles = this.reflector.getAllAndOverride<Role[]>(ROLES_KEY, [
-      context.getHandler(),
-      context.getClass(),
-    ]);
+    const requiredRoles =
+      this.reflector.getAllAndOverride<Role[]>(ROLES_KEY, [
+        context.getHandler(),
+        context.getClass(),
+      ]) ?? [];
 
     // Extract token
     const token = this.extractTokenFromRequest(request);
@@ -54,7 +61,19 @@ export class RolesGuard implements CanActivate {
     let payload: User;
     try {
       payload = await this.jwtService.verifyAsync(token);
-      request['user'] = payload;
+      // Fetch user details and attach to request
+      const user = await this.authService.getUserById(payload._id);
+      if (!user) {
+        this.logger.warn(`User not found for ID: ${payload._id}`);
+        throw new UnauthorizedException('User not found');
+      }
+      request.user = {
+        ...payload,
+        ...user.toObject(),
+      } as unknown as AuthenticatedRequest['user'];
+
+      // this.logger.debug(`Authenticated user:`, user);
+      // request['user'] = payload;
     } catch (error) {
       this.logger.warn('JWT verification failed', error);
       throw new UnauthorizedException('Invalid token');
@@ -62,11 +81,14 @@ export class RolesGuard implements CanActivate {
 
     // Role check (if roles are defined)
     if (requiredRoles.length > 0) {
-      const userRoles = Array.isArray(payload.role) ? payload.role : [payload.role];
-      const hasRole = requiredRoles.some((role) => userRoles.includes(role));
+      const userRole = request.user?.role;
+      if (!userRole) {
+        throw new UnauthorizedException('User role missing');
+      }
+      const hasRole = requiredRoles.includes(userRole);
       if (!hasRole) {
         this.logger.warn(
-          `Insufficient permissions. Allowed roles: ${requiredRoles.join(', ')}, Provided roles: ${userRoles.join(', ')}`,
+          `Insufficient permissions. Allowed roles: ${requiredRoles.join(', ')}, Provided roles: ${userRole}`,
         );
         throw new ForbiddenException('Insufficient permissions');
       }
