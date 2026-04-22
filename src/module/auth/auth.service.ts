@@ -1,7 +1,6 @@
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import {
   ConflictException,
-  ForbiddenException,
   HttpException,
   Inject,
   Injectable,
@@ -16,9 +15,7 @@ import * as crypto from 'crypto';
 import type { Response } from 'express';
 import axios from 'axios';
 import { UserDocument } from 'src/schemas/user/user.schema';
-import { Role } from './enum/role.enum';
 import { UsersRepository } from 'src/users/users.repository';
-import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { AuthResponse, AuthTokens } from './types/auth-tokens.type';
@@ -40,47 +37,6 @@ export class AuthService {
     return u
       ? { email: u.email, role: u.role, isActive: u.isActive, ulb: u.ulb, state: u.state }
       : null;
-  }
-
-  async login(dto: LoginDto, res: Response): Promise<AuthResponse> {
-    const isEmail = dto.email.includes('@');
-    const invalidMsg = isEmail ? 'Invalid email or password' : 'Invalid ULB Code/Census Code or password';
-
-    const user = await this.usersRepository.findByIdentifierWithSensitiveFields(dto.email);
-    if (!user) throw new UnauthorizedException(invalidMsg);
-
-    if (user.status === 'PENDING') throw new ForbiddenException('Waiting for admin action on request.');
-    if (user.status === 'REJECTED') throw new ForbiddenException(`Your request has been rejected. Reason: ${user.rejectReason}`);
-    if (!user.isEmailVerified) {
-      const url = `${this.configService.get<string>('HOSTNAME')}/account-reactivate`;
-      throw new ForbiddenException(`Email not verified yet. Please <a href='${url}'>click here</a> to send the activation link on your registered email`);
-    }
-    if (user.role === Role.ULB && isEmail) throw new ForbiddenException('Please use ULB Code/Census Code for login');
-
-    const userId = (user._id as { toString(): string }).toString();
-
-    if (user.isLocked) {
-      if (!user.lockUntil || Date.now() < user.lockUntil) {
-        throw new ForbiddenException('Your account is temporarily locked for 1 hour');
-      }
-      await this.usersRepository.resetLoginAttempts(userId);
-    }
-
-    const valid = await bcrypt.compare(dto.password, user.password);
-    if (!valid) {
-      await this.usersRepository.incrementLoginAttempts(userId);
-      throw new UnauthorizedException(invalidMsg);
-    }
-
-    if (user.loginAttempts > 0) {
-      await this.usersRepository.resetLoginAttempts(userId);
-    }
-
-    const tokens = await this.generateTokens(userId);
-    await this.saveRefreshToken(userId, tokens.refreshToken);
-    await this.usersRepository.updateLastLogin(userId);
-    this.setRefreshCookie(res, tokens.refreshToken);
-    return { token: tokens.accessToken, user: this.sanitizeUser(user) };
   }
 
   async logout(userId: string, res: Response): Promise<{ success: boolean }> {

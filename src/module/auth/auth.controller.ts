@@ -17,6 +17,7 @@ import {
 import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { AuthService } from './auth.service';
+import { LoginService } from './login.service';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { Public } from './decorators/public.decorator';
 import { LoginDto } from './dto/login.dto';
@@ -29,7 +30,10 @@ import type { User } from 'src/module/auth/enum/role.enum';
 @ApiTags('auth')
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) { }
+  constructor(
+    private readonly authService: AuthService,
+    private readonly loginService: LoginService,
+  ) { }
 
   @Public()
   @Post('login')
@@ -39,7 +43,7 @@ export class AuthController {
   @ApiResponse({ status: 200, description: 'Returns access token and user' })
   @ApiResponse({ status: 401, description: 'Invalid credentials' })
   login(@Body() dto: LoginDto, @Res({ passthrough: true }) res: Response) {
-    return this.authService.login(dto, res);
+    return this.loginService.login(dto, res);
   }
 
   @UseGuards(JwtAuthGuard)

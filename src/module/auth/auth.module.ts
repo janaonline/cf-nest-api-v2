@@ -3,10 +3,15 @@ import { MiddlewareConsumer, Module, NestModule, RequestMethod } from '@nestjs/c
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
+import { MongooseModule } from '@nestjs/mongoose';
 import { PassportModule } from '@nestjs/passport';
+import { State, StateSchema } from 'src/schemas/state.schema';
+import { Ulb, UlbSchema } from 'src/schemas/ulb.schema';
+import { Year, YearSchema } from 'src/schemas/year.schema';
 import { UsersModule } from 'src/users/users.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { LoginService } from './login.service';
 import { RolesGuard } from './guards/roles.guard';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { JwtRefreshGuard } from './guards/jwt-refresh.guard';
@@ -27,11 +32,17 @@ import { JwtRefreshStrategy } from './strategies/jwt-refresh.strategy';
       }),
     }),
     CacheModule.register({ isGlobal: false }),
+    MongooseModule.forFeature([
+      { name: State.name, schema: StateSchema },
+      { name: Ulb.name, schema: UlbSchema },
+      { name: Year.name, schema: YearSchema },
+    ]),
   ],
-  exports: [JwtModule, JwtAuthGuard, RolesGuard, AuthService],
+  exports: [JwtModule, JwtAuthGuard, RolesGuard, AuthService, LoginService],
   controllers: [AuthController],
   providers: [
     AuthService,
+    LoginService,
     RolesGuard,
     JwtAuthGuard,
     JwtRefreshGuard,

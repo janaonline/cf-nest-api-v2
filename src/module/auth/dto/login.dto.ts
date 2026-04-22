@@ -17,6 +17,11 @@ export class LoginDto {
   @MinLength(6)
   password: string;
 
+  @ApiPropertyOptional({ enum: ['15thFC', 'state-dashboard', 'XVIFC', 'fiscalRankings'] })
+  @IsOptional()
+  @IsString()
+  type?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()

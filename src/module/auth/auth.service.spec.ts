@@ -1,5 +1,5 @@
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
-import { ConflictException, ForbiddenException, HttpException, UnauthorizedException } from '@nestjs/common';
+import { ConflictException, HttpException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { Test, TestingModule } from '@nestjs/testing';
@@ -94,40 +94,6 @@ describe('AuthService', () => {
 
   it('should be defined', () => {
     expect(service).toBeDefined();
-  });
-
-  describe('login()', () => {
-    it('returns token and user on valid credentials', async () => {
-      mockUsersRepository.findByEmailWithSensitiveFields.mockResolvedValue(mockUser);
-      jest.spyOn(bcrypt, 'compare').mockImplementation(async () => true);
-
-      const result = await service.login({ email: 'test@example.com', password: 'pass' }, mockRes);
-      expect(result.token).toBe('mock-token');
-      expect(result.user['password']).toBeUndefined();
-    });
-
-    it('throws 401 when user not found (same message as wrong password)', async () => {
-      mockUsersRepository.findByEmailWithSensitiveFields.mockResolvedValue(null);
-      await expect(
-        service.login({ email: 'no@example.com', password: 'pass' }, mockRes),
-      ).rejects.toThrow(UnauthorizedException);
-    });
-
-    it('throws 401 when password mismatch (same message)', async () => {
-      mockUsersRepository.findByEmailWithSensitiveFields.mockResolvedValue(mockUser);
-      jest.spyOn(bcrypt, 'compare').mockImplementation(async () => false);
-      await expect(
-        service.login({ email: 'test@example.com', password: 'wrong' }, mockRes),
-      ).rejects.toThrow(UnauthorizedException);
-    });
-
-    it('throws 403 when user.isActive = false', async () => {
-      mockUsersRepository.findByEmailWithSensitiveFields.mockResolvedValue({ ...mockUser, isActive: false });
-      jest.spyOn(bcrypt, 'compare').mockImplementation(async () => true);
-      await expect(
-        service.login({ email: 'test@example.com', password: 'pass' }, mockRes),
-      ).rejects.toThrow(ForbiddenException);
-    });
   });
 
   describe('logout()', () => {
