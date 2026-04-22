@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(npm install *)",
-      "Bash(npx tsc *)"
+      "Bash(npx tsc *)",
+      "Bash(npx jest *)",
+      "Bash(node -e \"const b = require\\('bcrypt'\\); console.log\\(Object.getOwnPropertyDescriptor\\(b, 'compare'\\)?.configurable\\)\")"
     ]
   }
 }

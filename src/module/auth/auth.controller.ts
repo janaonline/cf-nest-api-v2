@@ -18,10 +18,12 @@ import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { AuthService } from './auth.service';
 import { LoginService } from './login.service';
+import { OtpService } from './otp.service';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { Public } from './decorators/public.decorator';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
+import { SendOtpDto } from './dto/send-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { JwtRefreshGuard } from './guards/jwt-refresh.guard';
@@ -33,12 +35,13 @@ export class AuthController {
   constructor(
     private readonly authService: AuthService,
     private readonly loginService: LoginService,
+    private readonly otpService: OtpService,
   ) { }
 
   @Public()
   @Post('login')
   @HttpCode(HttpStatus.OK)
-  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @Throttle({ default: { limit: 15, ttl: 60000 } })
   @ApiOperation({ summary: 'Login with email and password' })
   @ApiResponse({ status: 200, description: 'Returns access token and user' })
   @ApiResponse({ status: 401, description: 'Invalid credentials' })
@@ -108,10 +111,10 @@ export class AuthController {
   @Post('sendOtp')
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 3, ttl: 600000 } })
-  @ApiOperation({ summary: 'Send OTP to email for passwordless login' })
-  @ApiResponse({ status: 200, description: 'OTP sent if account exists' })
-  sendOtp(@Body('email') email: string) {
-    return this.authService.sendOtp(email);
+  @ApiOperation({ summary: 'Send OTP via SMS and email (accepts email, census code, or SB code)' })
+  @ApiResponse({ status: 200, description: 'OTP sent — returns masked mobile and email' })
+  sendOtp(@Body() dto: SendOtpDto) {
+    return this.otpService.sendOtp(dto);
   }
 
   @Public()
@@ -121,6 +124,6 @@ export class AuthController {
   @ApiResponse({ status: 200, description: 'Returns access token and user' })
   @ApiResponse({ status: 422, description: 'Invalid or expired OTP' })
   verifyOtp(@Body() dto: VerifyOtpDto, @Res({ passthrough: true }) res: Response) {
-    return this.authService.verifyOtp(dto, res);
+    return this.otpService.verifyOtp(dto, res);
   }
 }

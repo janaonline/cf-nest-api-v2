@@ -1,36 +1,26 @@
-import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import {
   ConflictException,
   HttpException,
-  Inject,
   Injectable,
-  Logger,
-  UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
-import type { Cache } from 'cache-manager';
-import * as crypto from 'crypto';
 import type { Response } from 'express';
 import axios from 'axios';
+import type { StringValue } from 'ms';
 import { UserDocument } from 'src/schemas/user/user.schema';
 import { UsersRepository } from 'src/users/users.repository';
 import { RegisterDto } from './dto/register.dto';
-import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { AuthResponse, AuthTokens } from './types/auth-tokens.type';
-import type { StringValue } from 'ms';
 
 @Injectable()
 export class AuthService {
-  private readonly logger = new Logger(AuthService.name);
-
   constructor(
     private readonly usersRepository: UsersRepository,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
-    @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
-  ) { }
+  ) {}
 
   async getUserById(id: string) {
     const u = await this.usersRepository.findById(id);
@@ -89,56 +79,6 @@ export class AuthService {
     } catch {
       return { success: false, message: 'Captcha service unavailable' };
     }
-  }
-
-  async sendOtp(email: string): Promise<{ success: boolean; message: string }> {
-    const user = await this.usersRepository.findByEmail(email);
-    if (!user) return { success: true, message: 'OTP sent if account exists' };
-
-    const rateLimitKey = `otp_rate:${email}`;
-    const limited = await this.cacheManager.get(rateLimitKey);
-    if (limited) throw new HttpException('Please wait before requesting another OTP', 429);
-
-    const otp = crypto.randomInt(100000, 999999).toString();
-    const otpHash = await bcrypt.hash(otp, 10);
-    const ttlSeconds = parseInt(this.configService.get<string>('OTP_TTL_SECONDS') ?? '300', 10);
-    const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
-
-    await this.usersRepository.updateOtp((user._id as { toString(): string }).toString(), {
-      hash: otpHash,
-      expiresAt,
-      attempts: 0,
-    });
-    await this.cacheManager.set(rateLimitKey, true, 60000);
-
-    if (this.configService.get<string>('NODE_ENV') !== 'production') {
-      this.logger.debug(`OTP for ${email}: ${otp}`);
-    }
-    return { success: true, message: 'OTP sent if account exists' };
-  }
-
-  async verifyOtp(dto: VerifyOtpDto, res: Response): Promise<AuthResponse> {
-    const user = await this.usersRepository.findByEmailWithSensitiveFields(dto.email);
-    if (!user?.otpHash) throw new HttpException('OTP expired or not requested', 422);
-
-    if (!user.otpExpiresAt || new Date() > user.otpExpiresAt) {
-      await this.usersRepository.clearOtp((user._id as { toString(): string }).toString());
-      throw new HttpException('OTP has expired', 422);
-    }
-    if (user.otpAttempts >= 3) throw new HttpException('Too many attempts, request a new OTP', 429);
-
-    const valid = await bcrypt.compare(dto.otp, user.otpHash);
-    if (!valid) {
-      await this.usersRepository.incrementOtpAttempts((user._id as { toString(): string }).toString());
-      throw new HttpException('Invalid OTP', 422);
-    }
-
-    const userId = (user._id as { toString(): string }).toString();
-    await this.usersRepository.clearOtp(userId);
-    const tokens = await this.generateTokens(userId);
-    await this.saveRefreshToken(userId, tokens.refreshToken);
-    this.setRefreshCookie(res, tokens.refreshToken);
-    return { token: tokens.accessToken, user: this.sanitizeUser(user) };
   }
 
   private async generateTokens(userId: string): Promise<AuthTokens> {

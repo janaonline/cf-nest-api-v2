@@ -89,6 +89,25 @@ export class UsersRepository {
       .exec();
   }
 
+  async findByIdentifier(identifier: string): Promise<UserDocument | null> {
+    const isEmail = identifier.includes('@');
+    const query = isEmail
+      ? { email: identifier.toLowerCase() }
+      : { $or: [{ censusCode: identifier }, { sbCode: identifier }] };
+    return this.userModel.findOne({ ...query, isDeleted: false, isActive: true }).exec();
+  }
+
+  async findByIdentifierWithOtpFields(identifier: string): Promise<UserDocument | null> {
+    const isEmail = identifier.includes('@');
+    const query = isEmail
+      ? { email: identifier.toLowerCase() }
+      : { $or: [{ censusCode: identifier }, { sbCode: identifier }] };
+    return this.userModel
+      .findOne({ ...query, isDeleted: false })
+      .select('+otpHash +loginAttempts +lockUntil +isLocked')
+      .exec();
+  }
+
   async updateLastLogin(id: string): Promise<void> {
     await this.userModel.findByIdAndUpdate(id, { lastLoginAt: new Date() }).exec();
   }

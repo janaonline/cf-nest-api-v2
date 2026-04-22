@@ -1,3 +1,8 @@
+jest.mock('bcrypt', () => ({
+  compare: jest.fn(),
+  hash: jest.fn().mockResolvedValue('mock-hash'),
+}));
+
 import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
@@ -113,7 +118,7 @@ describe('LoginService', () => {
   describe('login()', () => {
     it('returns token and user on valid credentials', async () => {
       mockUsersRepository.findByIdentifierWithSensitiveFields.mockResolvedValue(mockLoginUser);
-      jest.spyOn(bcrypt, 'compare').mockImplementation(async () => true);
+      (bcrypt.compare as jest.Mock).mockResolvedValue(true);
 
       const result = await service.login({ email: 'test@example.com', password: 'pass' }, mockRes);
       expect(result.token).toBe('mock-token');
@@ -128,7 +133,7 @@ describe('LoginService', () => {
 
     it('throws 401 when password mismatch (same message)', async () => {
       mockUsersRepository.findByIdentifierWithSensitiveFields.mockResolvedValue(mockLoginUser);
-      jest.spyOn(bcrypt, 'compare').mockImplementation(async () => false);
+      (bcrypt.compare as jest.Mock).mockResolvedValue(false);
       await expect(
         service.login({ email: 'test@example.com', password: 'wrong' }, mockRes),
       ).rejects.toThrow(UnauthorizedException);
@@ -150,7 +155,7 @@ describe('LoginService', () => {
         isLocked: true,
         lockUntil: Date.now() + 3600000,
       });
-      jest.spyOn(bcrypt, 'compare').mockImplementation(async () => true);
+      (bcrypt.compare as jest.Mock).mockResolvedValue(true);
       await expect(
         service.login({ email: 'test@example.com', password: 'pass' }, mockRes),
       ).rejects.toThrow(ForbiddenException);
