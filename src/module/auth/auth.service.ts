@@ -16,6 +16,7 @@ import * as crypto from 'crypto';
 import type { Response } from 'express';
 import axios from 'axios';
 import { UserDocument } from 'src/schemas/user/user.schema';
+import { Role } from './enum/role.enum';
 import { UsersRepository } from 'src/users/users.repository';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
@@ -42,13 +43,39 @@ export class AuthService {
   }
 
   async login(dto: LoginDto, res: Response): Promise<AuthResponse> {
-    const user = await this.usersRepository.findByEmailWithSensitiveFields(dto.email);
-    if (!user) throw new UnauthorizedException('Invalid credentials');
-    const valid = await bcrypt.compare(dto.password, user.password);
-    if (!valid) throw new UnauthorizedException('Invalid credentials');
-    if (!user.isActive) throw new ForbiddenException('Account is disabled');
+    const isEmail = dto.email.includes('@');
+    const invalidMsg = isEmail ? 'Invalid email or password' : 'Invalid ULB Code/Census Code or password';
+
+    const user = await this.usersRepository.findByIdentifierWithSensitiveFields(dto.email);
+    if (!user) throw new UnauthorizedException(invalidMsg);
+
+    if (user.status === 'PENDING') throw new ForbiddenException('Waiting for admin action on request.');
+    if (user.status === 'REJECTED') throw new ForbiddenException(`Your request has been rejected. Reason: ${user.rejectReason}`);
+    if (!user.isEmailVerified) {
+      const url = `${this.configService.get<string>('HOSTNAME')}/account-reactivate`;
+      throw new ForbiddenException(`Email not verified yet. Please <a href='${url}'>click here</a> to send the activation link on your registered email`);
+    }
+    if (user.role === Role.ULB && isEmail) throw new ForbiddenException('Please use ULB Code/Census Code for login');
 
     const userId = (user._id as { toString(): string }).toString();
+
+    if (user.isLocked) {
+      if (!user.lockUntil || Date.now() < user.lockUntil) {
+        throw new ForbiddenException('Your account is temporarily locked for 1 hour');
+      }
+      await this.usersRepository.resetLoginAttempts(userId);
+    }
+
+    const valid = await bcrypt.compare(dto.password, user.password);
+    if (!valid) {
+      await this.usersRepository.incrementLoginAttempts(userId);
+      throw new UnauthorizedException(invalidMsg);
+    }
+
+    if (user.loginAttempts > 0) {
+      await this.usersRepository.resetLoginAttempts(userId);
+    }
+
     const tokens = await this.generateTokens(userId);
     await this.saveRefreshToken(userId, tokens.refreshToken);
     await this.usersRepository.updateLastLogin(userId);

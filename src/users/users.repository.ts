@@ -22,6 +22,37 @@ export class UsersRepository {
       .exec();
   }
 
+  async findByIdentifierWithSensitiveFields(identifier: string): Promise<UserDocument | null> {
+    const isEmail = identifier.includes('@');
+    const query = isEmail
+      ? { email: identifier }
+      : { $or: [{ censusCode: identifier }, { sbCode: identifier }] };
+    return this.userModel
+      .findOne({ ...query, isDeleted: false, isActive: true })
+      .select('+password +loginAttempts +lockUntil +isLocked')
+      .exec();
+  }
+
+  async incrementLoginAttempts(id: string): Promise<void> {
+    const MAX_ATTEMPTS = 5;
+    const LOCK_DURATION_MS = 60 * 60 * 1000;
+    const user = await this.userModel
+      .findByIdAndUpdate(id, { $inc: { loginAttempts: 1 } }, { new: true })
+      .select('+loginAttempts')
+      .exec();
+    if (user && user.loginAttempts >= MAX_ATTEMPTS) {
+      await this.userModel
+        .findByIdAndUpdate(id, { isLocked: true, lockUntil: Date.now() + LOCK_DURATION_MS })
+        .exec();
+    }
+  }
+
+  async resetLoginAttempts(id: string): Promise<void> {
+    await this.userModel
+      .findByIdAndUpdate(id, { loginAttempts: 0, isLocked: false, lockUntil: null })
+      .exec();
+  }
+
   async findByIdWithRefreshToken(id: string): Promise<UserDocument | null> {
     return this.userModel.findById(id).select('+refreshTokenHash').exec();
   }
