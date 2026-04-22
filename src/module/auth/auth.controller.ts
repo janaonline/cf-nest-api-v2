@@ -1,7 +1,109 @@
-import { Controller } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  HttpCode,
+  HttpStatus,
+  Post,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
+import type { Response } from 'express';
 import { AuthService } from './auth.service';
+import { CurrentUser } from './decorators/current-user.decorator';
+import { Public } from './decorators/public.decorator';
+import { LoginDto } from './dto/login.dto';
+import { RegisterDto } from './dto/register.dto';
+import { VerifyOtpDto } from './dto/verify-otp.dto';
+import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { JwtRefreshGuard } from './guards/jwt-refresh.guard';
 
+@ApiTags('auth')
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
+
+  @Public()
+  @Post('login')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @ApiOperation({ summary: 'Login with email and password' })
+  @ApiResponse({ status: 200, description: 'Returns access token and user' })
+  @ApiResponse({ status: 401, description: 'Invalid credentials' })
+  login(@Body() dto: LoginDto, @Res({ passthrough: true }) res: Response) {
+    return this.authService.login(dto, res);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('logout')
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Logout and clear refresh token cookie' })
+  @ApiResponse({ status: 200, description: 'Logged out successfully' })
+  logout(
+    @CurrentUser() user: { _id: string },
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    return this.authService.logout(user._id, res);
+  }
+
+  @Public()
+  @UseGuards(JwtRefreshGuard)
+  @Post('refresh')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Rotate access token using refresh token cookie' })
+  @ApiResponse({ status: 200, description: 'Returns new access token' })
+  @ApiResponse({ status: 440, description: 'Session expired' })
+  refresh(
+    @CurrentUser() user: { _id: string; refreshToken: string },
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    return this.authService.refreshTokens(user._id, user.refreshToken, res);
+  }
+
+  @Public()
+  @Post('register')
+  @HttpCode(HttpStatus.CREATED)
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @ApiOperation({ summary: 'Register a new user account' })
+  @ApiResponse({ status: 201, description: 'User registered successfully' })
+  @ApiResponse({ status: 409, description: 'Email already registered' })
+  register(@Body() dto: RegisterDto) {
+    return this.authService.register(dto);
+  }
+
+  @Public()
+  @Post('captcha_validate')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Validate a reCAPTCHA token' })
+  @ApiResponse({ status: 200, description: 'Captcha result' })
+  validateCaptcha(@Body('recaptcha') token: string) {
+    return this.authService.validateCaptcha(token);
+  }
+
+  @Public()
+  @Post('sendOtp')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 3, ttl: 600000 } })
+  @ApiOperation({ summary: 'Send OTP to email for passwordless login' })
+  @ApiResponse({ status: 200, description: 'OTP sent if account exists' })
+  sendOtp(@Body('email') email: string) {
+    return this.authService.sendOtp(email);
+  }
+
+  @Public()
+  @Post('verifyOtp')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Verify OTP and receive access token' })
+  @ApiResponse({ status: 200, description: 'Returns access token and user' })
+  @ApiResponse({ status: 422, description: 'Invalid or expired OTP' })
+  verifyOtp(@Body() dto: VerifyOtpDto, @Res({ passthrough: true }) res: Response) {
+    return this.authService.verifyOtp(dto, res);
+  }
 }

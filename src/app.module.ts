@@ -1,3 +1,4 @@
+import { CacheModule } from '@nestjs/cache-manager';
 import { BullModule } from '@nestjs/bullmq';
 import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
@@ -16,6 +17,15 @@ import { ReportAnIssueModule } from './web/report-an-issue/report-an-issue.modul
 import { ResourcesSectionModule } from './web/resources-section/resources-section.module';
 import { EventsModule } from './admin/events/events.module';
 
+function getQueryCaller(): string {
+  const stack = new Error().stack?.split('\n') ?? [];
+  const frame = stack.find(
+    (line) => line.includes('src') && !line.includes('node_modules') && !line.includes('app.module'),
+  );
+  const match = frame?.match(/\((.+?)\)/) ?? frame?.match(/at (.+)/);
+  return match?.[1]?.trim() ?? 'unknown';
+}
+
 @Module({
   imports: [
     ThrottlerModule.forRoot([
@@ -25,6 +35,7 @@ import { EventsModule } from './admin/events/events.module';
       },
     ]),
     ConfigModule.forRoot({ isGlobal: true }),
+    CacheModule.register({ isGlobal: true, ttl: 300000 }),
     AuthModule,
     BullModule.forRootAsync({
       inject: [ConfigService],
@@ -43,6 +54,13 @@ import { EventsModule } from './admin/events/events.module';
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
         uri: configService.get<string>('MONGO_URI'),
+        // connectionFactory: (connection: any) => {
+        //   connection.set('debug', (collection: string, method: string, ...args: any[]) => {
+        //     const caller = getQueryCaller();
+        //     console.log(`[Query] ${collection}.${method} | ${caller}`, JSON.stringify(args));
+        //   });
+        //   return connection;
+        // },
       }),
     }),
     MongooseModule.forRootAsync({
@@ -50,6 +68,13 @@ import { EventsModule } from './admin/events/events.module';
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
         uri: configService.get<string>('MONGO_URI_2'),
+        // connectionFactory: (connection: any) => {
+        //   connection.set('debug', (collection: string, method: string, ...args: any[]) => {
+        //     const caller = getQueryCaller();
+        //     console.log(`[Query:digitization_db] ${collection}.${method} | ${caller}`, JSON.stringify(args));
+        //   });
+        //   return connection;
+        // },
       }),
       connectionName: 'digitization_db',
     }),

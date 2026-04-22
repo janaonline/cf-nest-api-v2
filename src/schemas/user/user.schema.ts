@@ -1,8 +1,21 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Document, Types } from 'mongoose';
+import { Document, HydratedDocument, Types } from 'mongoose';
 import { Role } from '../../module/auth/enum/role.enum';
 
-@Schema({ timestamps: true })
+export type UserDocument = HydratedDocument<User>;
+export type SafeUser = Omit<User, 'password' | 'refreshTokenHash' | 'otpHash'>;
+
+@Schema({
+  timestamps: true,
+  toJSON: {
+    transform: (_doc, ret: Record<string, unknown>) => {
+      delete ret['password'];
+      delete ret['refreshTokenHash'];
+      delete ret['otpHash'];
+      return ret;
+    },
+  },
+})
 export class User extends Document {
   @Prop({ required: true })
   name!: string;
@@ -120,6 +133,18 @@ export class User extends Document {
 
   @Prop({ type: Date })
   otpBlockedUntil!: Date;
+
+  @Prop({ type: String, default: null, select: false })
+  refreshTokenHash!: string | null;
+
+  @Prop({ type: String, default: null, select: false })
+  otpHash!: string | null;
+
+  @Prop({ type: Date, default: null })
+  otpExpiresAt!: Date | null;
+
+  @Prop({ type: Date, default: null })
+  lastLoginAt!: Date | null;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);
