@@ -106,6 +106,7 @@ async function bootstrap() {
   const corsOptions: CorsOptions = {
     origin: WHITELISTED_DOMAINS,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
+    credentials: true,
     preflightContinue: false,
     optionsSuccessStatus: 204,
   };
