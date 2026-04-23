@@ -1,6 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { getQueueToken } from '@nestjs/bullmq';
 import { NodeMailerController } from './node-mailer.controller';
 import { NodeMailerService } from './node-mailer.service';
+import { EMAIL_QUEUE } from '../queue/email-queue/email-queue.constant';
 
 describe('NodeMailerController', () => {
   let controller: NodeMailerController;
@@ -26,6 +28,12 @@ describe('NodeMailerController', () => {
         {
           provide: 'MailerService',
           useValue: mockMailerService,
+        },
+        {
+          provide: getQueueToken(EMAIL_QUEUE),
+          useValue: {
+            getJob: jest.fn(),
+          },
         },
       ],
     }).compile();
