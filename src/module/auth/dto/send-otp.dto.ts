@@ -1,9 +1,14 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsNotEmpty, IsString } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { IsNotEmpty, IsString, MinLength } from 'class-validator';
 
 export class SendOtpDto {
-  @ApiProperty({ description: 'Email address, census code, or SB code of the user' })
+  @ApiProperty({ example: 'admin@cityfinance.in or ULB Census Code / SB Code' })
   @IsString()
-  @IsNotEmpty()
-  identifier!: string;
+  @MinLength(1)
+  @Transform(({ value }: { value: string }) => {
+    const v = (value as string).trim();
+    return v.includes('@') ? v.toLowerCase() : v;
+  })
+  email!: string;
 }

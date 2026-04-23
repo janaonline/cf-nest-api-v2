@@ -25,7 +25,7 @@ export class OtpService {
     private readonly configService: ConfigService,
     private readonly sesMailService: SESMailService,
     @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
-  ) {}
+  ) { }
 
   async sendOtp(dto: SendOtpDto): Promise<{
     success: boolean;
@@ -34,12 +34,12 @@ export class OtpService {
     email?: string;
     requestId?: string;
   }> {
-    const { identifier } = dto;
+    const { email } = dto;
 
-    const user = await this.usersRepository.findByIdentifier(identifier);
+    const user = await this.usersRepository.findByIdentifier(email);
     if (!user) return { success: true, message: 'OTP sent if account exists' };
 
-    const rateLimitKey = `otp_rate:${identifier}`;
+    const rateLimitKey = `otp_rate:${email}`;
     const limited = await this.cacheManager.get(rateLimitKey);
     if (limited) throw new HttpException('Please wait before requesting another OTP', 429);
 
@@ -62,7 +62,7 @@ export class OtpService {
       if (mobile && this.isValidPhone(mobile)) await this.sendSms(mobile, otp);
       if (user.email) await this.sendOtpEmail(user.email, msg);
     } else {
-      this.logger.debug(`OTP for ${identifier}: ${otp}`);
+      this.logger.debug(`OTP for ${email}: ${otp}`);
     }
 
     return {
