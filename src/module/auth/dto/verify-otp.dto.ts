@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsNotEmpty, IsString, Length, Matches } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { IsOtp } from '../decorators/is-otp.decorator';
 
 export class VerifyOtpDto {
   @ApiProperty({ description: 'Email address, census code, or SB code used during sendOtp' })
@@ -7,9 +8,13 @@ export class VerifyOtpDto {
   @IsNotEmpty()
   identifier!: string;
 
-  @ApiProperty({ example: '123456' })
+  @ApiProperty({ description: 'requestId returned by sendOtp — used for faster ID-based lookup', required: false })
+  @IsOptional()
   @IsString()
-  @Length(6, 6)
-  @Matches(/^\d{6}$/, { message: 'OTP must be 6 digits' })
+  requestId?: string;
+
+  @ApiProperty({ example: '1234', description: 'OTP (length controlled by OTP_DIGITS env, default 4)' })
+  @IsString()
+  @IsOtp()
   otp!: string;
 }

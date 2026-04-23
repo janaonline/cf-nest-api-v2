@@ -44,7 +44,11 @@ export class OtpService {
     if (limited) throw new HttpException('Please wait before requesting another OTP', 429);
 
     const isProd = this.configService.get<string>('NODE_ENV') === 'production';
-    const otp = isProd ? crypto.randomInt(100000, 999999).toString() : '1234';
+    const otpDigits = parseInt(this.configService.get<string>('OTP_DIGITS') ?? '4', 10);
+    const min = Math.pow(10, otpDigits - 1);
+    const max = Math.pow(10, otpDigits) - 1;
+    const devOtp = '123456789'.slice(0, otpDigits);
+    const otp = isProd ? crypto.randomInt(min, max).toString() : devOtp;
 
     const otpHash = await bcrypt.hash(otp, 10);
     const ttlSeconds = parseInt(this.configService.get<string>('OTP_TTL_SECONDS') ?? '300', 10);
@@ -75,7 +79,9 @@ export class OtpService {
   }
 
   async verifyOtp(dto: VerifyOtpDto, res: Response): Promise<AuthResponse> {
-    const user = await this.usersRepository.findByIdentifierWithOtpFields(dto.identifier);
+    const user = dto.requestId
+      ? await this.usersRepository.findByIdWithOtpFields(dto.requestId)
+      : await this.usersRepository.findByIdentifierWithOtpFields(dto.identifier);
     if (!user?.otpHash) throw new HttpException('OTP expired or not requested', 422);
 
     if (!user.otpExpiresAt || new Date() > user.otpExpiresAt) {

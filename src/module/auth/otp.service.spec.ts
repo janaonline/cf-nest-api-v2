@@ -30,6 +30,7 @@ const mockUser = {
 const mockUsersRepository = {
   findByIdentifier: jest.fn(),
   findByIdentifierWithOtpFields: jest.fn(),
+  findByIdWithOtpFields: jest.fn(),
   updateOtp: jest.fn(),
   incrementOtpAttempts: jest.fn(),
   clearOtp: jest.fn(),
@@ -200,6 +201,15 @@ describe('OtpService', () => {
       mockUsersRepository.findByIdentifierWithOtpFields.mockResolvedValue(mockUser);
       (bcrypt.compare as jest.Mock).mockResolvedValue(true);
       const result = await service.verifyOtp({ identifier: 'ABC123', otp: '123456' }, mockRes);
+      expect(result.token).toBe('mock-token');
+    });
+
+    it('uses findByIdWithOtpFields when requestId is provided', async () => {
+      mockUsersRepository.findByIdWithOtpFields.mockResolvedValue(mockUser);
+      (bcrypt.compare as jest.Mock).mockResolvedValue(true);
+      const result = await service.verifyOtp({ identifier: 'test@example.com', requestId: 'user-id-123', otp: '123456' }, mockRes);
+      expect(mockUsersRepository.findByIdWithOtpFields).toHaveBeenCalledWith('user-id-123');
+      expect(mockUsersRepository.findByIdentifierWithOtpFields).not.toHaveBeenCalled();
       expect(result.token).toBe('mock-token');
     });
   });

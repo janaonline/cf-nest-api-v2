@@ -97,6 +97,13 @@ export class UsersRepository {
     return this.userModel.findOne({ ...query, isDeleted: false, isActive: true }).exec();
   }
 
+  async findByIdWithOtpFields(id: string): Promise<UserDocument | null> {
+    return this.userModel
+      .findById(id)
+      .select('+otpHash +otpExpiresAt +otpAttempts')
+      .exec();
+  }
+
   async findByIdentifierWithOtpFields(identifier: string): Promise<UserDocument | null> {
     const isEmail = identifier.includes('@');
     const query = isEmail
