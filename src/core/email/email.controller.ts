@@ -6,7 +6,7 @@ import { EmailQueueService } from '../queue/email-queue/email-queue.service';
 import { RateLimitService } from '../services/rate-limit/rate-limit.service';
 import { RedisService } from '../services/redis/redis.service';
 import { getHtmlFromTemplate, htmlUnsubscribeTemplate } from './constant';
-import { SendOtpDto, VerifyOtpDto } from './dto/otp.dto';
+import { SendEmailOtpDto, VerifyEmailOtpDto } from './dto/otp.dto';
 import { EmailService } from './email.service';
 import { UnsubscribePayload } from './interface';
 
@@ -21,7 +21,7 @@ export class EmailController {
     private readonly redis: RedisService,
     private readonly mailQueue: EmailQueueService,
     // @InjectQueue('emailQueue') private readonly queue: Queue,
-  ) {}
+  ) { }
 
   @Get('unsubscribe')
   unsubscribePage(@Query('token') token: string, @Res() res: express.Response) {
@@ -68,8 +68,8 @@ export class EmailController {
   @ApiOperation({ summary: 'Send OTP to email' })
   @ApiResponse({ status: 200, description: 'OTP sent successfully' })
   @ApiResponse({ status: 429, description: 'Rate limit exceeded' })
-  @ApiBody({ type: SendOtpDto })
-  async sendOtp(@Body() body: SendOtpDto) {
+  @ApiBody({ type: SendEmailOtpDto })
+  async sendOtp(@Body() body: SendEmailOtpDto) {
     return await this.emailService.sendOtp(body);
   }
 
@@ -77,8 +77,8 @@ export class EmailController {
   @ApiOperation({ summary: 'Verify OTP' })
   @ApiResponse({ status: 200, description: 'OTP verified successfully' })
   @ApiResponse({ status: 400, description: 'Invalid or expired OTP' })
-  @ApiBody({ type: VerifyOtpDto })
-  async verifyOtp(@Body() body: VerifyOtpDto) {
+  @ApiBody({ type: VerifyEmailOtpDto })
+  async verifyOtp(@Body() body: VerifyEmailOtpDto) {
     return await this.emailService.verifyOtp(body);
   }
 

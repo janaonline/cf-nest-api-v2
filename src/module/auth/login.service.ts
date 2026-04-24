@@ -31,10 +31,10 @@ export class LoginService {
   ) {}
 
   async login(dto: LoginDto, res: Response): Promise<AuthResponse> {
-    const isEmail = dto.email.includes('@');
+    const isEmail = dto.identifier.includes('@');
     const invalidMsg = isEmail ? 'Invalid email or password' : 'Invalid ULB Code/Census Code or password';
 
-    const user = await this.usersRepository.findByIdentifierWithSensitiveFields(dto.email);
+    const user = await this.usersRepository.findByIdentifierWithSensitiveFields(dto.identifier);
     if (!user) throw new UnauthorizedException(invalidMsg);
 
     if (user.status === 'PENDING') throw new ForbiddenException('Waiting for admin action on request.');

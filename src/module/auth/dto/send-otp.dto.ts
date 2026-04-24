@@ -1,14 +1,27 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import { IsNotEmpty, IsString, MinLength } from 'class-validator';
+import { IsIn, IsOptional, IsString, MinLength } from 'class-validator';
 
 export class SendOtpDto {
-  @ApiProperty({ example: 'admin@cityfinance.in or ULB Census Code / SB Code' })
+  @ApiProperty({
+    description: 'Email address, census code, or SB code of the account',
+    example: 'admin@cityfinance.in',
+  })
   @IsString()
   @MinLength(1)
   @Transform(({ value }: { value: string }) => {
     const v = (value as string).trim();
     return v.includes('@') ? v.toLowerCase() : v;
   })
-  email!: string;
+  identifier!: string;
+
+  @ApiPropertyOptional({
+    description: 'Purpose of the OTP — controls the Redis key namespace',
+    enum: ['login'],
+    default: 'login',
+  })
+  @IsOptional()
+  @IsString()
+  @IsIn(['login'])
+  purpose?: string;
 }

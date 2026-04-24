@@ -41,7 +41,7 @@ export class AuthController {
   @Public()
   @Post('login')
   @HttpCode(HttpStatus.OK)
-  @Throttle({ default: { limit: 15, ttl: 60000 } })
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
   @ApiOperation({ summary: 'Login with email and password' })
   @ApiResponse({ status: 200, description: 'Returns access token and user' })
   @ApiResponse({ status: 401, description: 'Invalid credentials' })

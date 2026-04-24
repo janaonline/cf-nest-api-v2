@@ -7,7 +7,7 @@ import { EmailList } from 'src/schemas/email-list';
 import { EmailQueueService } from '../queue/email-queue/email-queue.service';
 import { RateLimitService } from '../services/rate-limit/rate-limit.service';
 import { RedisService } from '../services/redis/redis.service';
-import { SendOtpDto, VerifyOtpDto } from './dto/otp.dto';
+import { SendEmailOtpDto, VerifyEmailOtpDto } from './dto/otp.dto';
 import { UnsubscribePayload } from './interface';
 
 @Injectable()
@@ -109,7 +109,7 @@ export class EmailService {
    *        - if No: Send OTP.
    *    - No: Add email to EmailList collection and send OTP.
    */
-  async sendOtp(body: SendOtpDto) {
+  async sendOtp(body: SendEmailOtpDto) {
     try {
       const { email } = body;
 
@@ -176,7 +176,7 @@ export class EmailService {
    *        - if No: throw error.
    *    - No: throw error.
    */
-  async verifyOtp(body: VerifyOtpDto) {
+  async verifyOtp(body: VerifyEmailOtpDto) {
     const { email, otp } = body;
 
     // 🔒 Rate limit verification attempts

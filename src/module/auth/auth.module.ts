@@ -1,4 +1,3 @@
-import { CacheModule } from '@nestjs/cache-manager';
 import { MiddlewareConsumer, Module, NestModule, RequestMethod } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
@@ -6,6 +5,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { MongooseModule } from '@nestjs/mongoose';
 import { PassportModule } from '@nestjs/passport';
 import { SESMailService } from 'src/core/aws-ses/ses.service';
+import { RedisModule } from 'src/core/services/redis/redis.module';
 import { State, StateSchema } from 'src/schemas/state.schema';
 import { Ulb, UlbSchema } from 'src/schemas/ulb.schema';
 import { Year, YearSchema } from 'src/schemas/year.schema';
@@ -24,6 +24,7 @@ import { JwtRefreshStrategy } from './strategies/jwt-refresh.strategy';
 @Module({
   imports: [
     UsersModule,
+    RedisModule,
     PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.registerAsync({
       imports: [ConfigModule],
@@ -33,7 +34,6 @@ import { JwtRefreshStrategy } from './strategies/jwt-refresh.strategy';
         signOptions: { expiresIn: '1d' as const },
       }),
     }),
-    CacheModule.register({ isGlobal: false }),
     MongooseModule.forFeature([
       { name: State.name, schema: StateSchema },
       { name: Ulb.name, schema: UlbSchema },

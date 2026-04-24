@@ -10,12 +10,12 @@ export class LoginDto {
     const v = (value as string).trim();
     return v.includes('@') ? v.toLowerCase() : v;
   })
-  email: string;
+  identifier!: string;
 
   @ApiProperty({ example: 'admin@123', minLength: 6 })
   @IsString()
   @MinLength(6)
-  password: string;
+  password!: string;
 
   @ApiPropertyOptional({ enum: ['15thFC', 'state-dashboard', 'XVIFC', 'fiscalRankings'] })
   @IsOptional()
