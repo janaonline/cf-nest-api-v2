@@ -23,6 +23,7 @@ import { CurrentUser } from './decorators/current-user.decorator';
 import { Public } from './decorators/public.decorator';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 import { SendOtpDto } from './dto/send-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
@@ -125,5 +126,17 @@ export class AuthController {
   @ApiResponse({ status: 422, description: 'Invalid or expired OTP' })
   verifyOtp(@Body() dto: VerifyOtpDto, @Res({ passthrough: true }) res: Response) {
     return this.otpService.verifyOtp(dto, res);
+  }
+
+  @Public()
+  @Post('forgot-password/reset')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @ApiOperation({ summary: 'Verify OTP and reset password in one step' })
+  @ApiResponse({ status: 200, description: 'Password updated successfully' })
+  @ApiResponse({ status: 422, description: 'Invalid or expired OTP' })
+  @ApiResponse({ status: 429, description: 'Too many attempts' })
+  forgotPasswordReset(@Body() dto: ResetPasswordDto) {
+    return this.otpService.forgotPasswordReset(dto);
   }
 }

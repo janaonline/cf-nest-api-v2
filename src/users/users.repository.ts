@@ -119,6 +119,10 @@ export class UsersRepository {
     await this.userModel.findByIdAndUpdate(id, { lastLoginAt: new Date() }).exec();
   }
 
+  async updatePassword(id: string, hashedPassword: string): Promise<void> {
+    await this.userModel.findByIdAndUpdate(id, { password: hashedPassword }).exec();
+  }
+
   async exists(email: string): Promise<boolean> {
     const count = await this.userModel.countDocuments({ email: email.toLowerCase() }).exec();
     return count > 0;

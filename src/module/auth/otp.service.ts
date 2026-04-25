@@ -2,13 +2,13 @@ import { Injectable, Logger, HttpException, UnauthorizedException } from '@nestj
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
-import * as crypto from 'crypto';
 import type { Response } from 'express';
 import type { StringValue } from 'ms';
 import axios from 'axios';
 import { SESMailService } from 'src/core/aws-ses/ses.service';
 import { RedisService } from 'src/core/services/redis/redis.service';
 import { UsersRepository } from 'src/users/users.repository';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 import { SendOtpDto } from './dto/send-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { AuthResponse, AuthTokens } from './types/auth-tokens.type';
@@ -147,6 +147,57 @@ export class OtpService {
     this.setRefreshCookie(res, tokens.refreshToken);
 
     return { token: tokens.accessToken, user: this.sanitizeUser(user) };
+  }
+
+  async forgotPasswordReset(dto: ResetPasswordDto): Promise<{ message: string }> {
+    const purpose = 'forgot-password';
+    const id = normalizeIdentifier(dto.identifier);
+    const cfg = getOtpConfig(this.configService);
+
+    await this.assertNotLocked(purpose, id);
+
+    const state = await this.readOtpState(purpose, id);
+    if (!state) throw new HttpException('Invalid or expired OTP', 422);
+
+    if (new Date() > new Date(state.expiresAt)) {
+      await this.redisService.del(otpStateKey(purpose, id));
+      throw new HttpException('Invalid or expired OTP', 422);
+    }
+
+    if (state.verifyAttempts >= cfg.maxVerifyAttempts) {
+      await this.triggerLock(purpose, id, cfg.lockSeconds);
+      throw new HttpException('Too many attempts. Please request a new OTP.', 429);
+    }
+
+    const valid = await bcrypt.compare(dto.otp, state.hashedOtp);
+
+    if (!valid) {
+      state.verifyAttempts += 1;
+
+      if (state.verifyAttempts >= cfg.maxVerifyAttempts) {
+        await this.triggerLock(purpose, id, cfg.lockSeconds);
+        await this.redisService.del(otpStateKey(purpose, id));
+        throw new HttpException('Too many attempts. Please request a new OTP.', 429);
+      }
+
+      const remainingTtl = Math.max(
+        1,
+        Math.ceil((new Date(state.expiresAt).getTime() - Date.now()) / 1000),
+      );
+      await this.redisService.set(otpStateKey(purpose, id), state, remainingTtl);
+      throw new HttpException('Invalid or expired OTP', 422);
+    }
+
+    await this.redisService.del(otpStateKey(purpose, id));
+
+    const user = await this.usersRepository.findByIdentifier(id);
+    if (!user) throw new UnauthorizedException('User not found');
+
+    const userId = (user._id as { toString(): string }).toString();
+    const hashedPassword = await bcrypt.hash(dto.newPassword, 10);
+    await this.usersRepository.updatePassword(userId, hashedPassword);
+
+    return { message: 'Password updated successfully' };
   }
 
   // ─── Redis state helpers ────────────────────────────────────────────────────

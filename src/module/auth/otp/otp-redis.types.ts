@@ -37,3 +37,4 @@ export function otpCooldownKey(purpose: string, identifier: string): string {
 export function otpLockKey(purpose: string, identifier: string): string {
   return `otp:lock:${purpose}:${identifier}`;
 }
+

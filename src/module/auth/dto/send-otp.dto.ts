@@ -17,11 +17,11 @@ export class SendOtpDto {
 
   @ApiPropertyOptional({
     description: 'Purpose of the OTP — controls the Redis key namespace',
-    enum: ['login'],
+    enum: ['login', 'forgot-password'],
     default: 'login',
   })
   @IsOptional()
   @IsString()
-  @IsIn(['login'])
+  @IsIn(['login', 'forgot-password'])
   purpose?: string;
 }

@@ -12,7 +12,7 @@
 
 // ─── Shared ───────────────────────────────────────────────────────────────────
 
-export type OtpPurpose = 'login';
+export type OtpPurpose = 'login' | 'forgot-password';
 
 // ─── POST /auth/sendOtp ───────────────────────────────────────────────────────
 
@@ -32,7 +32,7 @@ export interface SendOtpPayload {
 
   /**
    * Optional — defaults to "login".
-   * Currently only "login" is supported.
+   * Use "forgot-password" to initiate the password-reset flow.
    */
   purpose?: OtpPurpose;
 }
@@ -165,6 +165,30 @@ export interface VerifyOtpResponse {
   user: AuthUser;
   /** Present only for certain admin roles that need cross-year data. */
   allYears?: Record<string, unknown>;
+}
+
+// ─── POST /auth/forgot-password/reset ────────────────────────────────────────
+
+/**
+ * Request body for POST /auth/forgot-password/reset
+ *
+ * Send the OTP received from POST /auth/sendOtp (purpose: "forgot-password")
+ * together with the new password in a single request.
+ */
+export interface ResetPasswordPayload {
+  /** The same identifier used in sendOtp. */
+  identifier: string;
+  /** The numeric OTP received via SMS / email. */
+  otp: string;
+  newPassword: string;
+  confirmPassword: string;
+}
+
+/**
+ * Success response for POST /auth/forgot-password/reset (HTTP 200)
+ */
+export interface ResetPasswordResponse {
+  message: string;
 }
 
 // ─── Error response shape ─────────────────────────────────────────────────────
