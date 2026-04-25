@@ -21,6 +21,7 @@ describe('AuthController', () => {
   const mockOtpService = {
     sendOtp: jest.fn(),
     verifyOtp: jest.fn(),
+    forgotPasswordReset: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -48,7 +49,7 @@ describe('AuthController', () => {
   it('delegates login to LoginService', async () => {
     mockLoginService.login.mockResolvedValue({ token: 'tok' });
     const res = { cookie: jest.fn() } as any;
-    await controller.login({ email: 'a@b.com', password: 'pass' }, res);
+    await controller.login({ identifier: 'a@b.com', password: 'pass' }, res);
     expect(mockLoginService.login).toHaveBeenCalled();
   });
 
@@ -70,5 +71,20 @@ describe('AuthController', () => {
     const res = { cookie: jest.fn() } as any;
     await controller.logout({ _id: 'user-id-123' }, res);
     expect(mockAuthService.logout).toHaveBeenCalledWith('user-id-123', res);
+  });
+
+  it('delegates forgotPasswordReset to OtpService', async () => {
+    mockOtpService.forgotPasswordReset.mockResolvedValue({ message: 'Password updated successfully' });
+    const dto = {
+      identifier: 'a@b.com',
+      otp: '123456',
+      newPassword: 'NewPass@1',
+      confirmPassword: 'NewPass@1',
+    };
+
+    const result = await controller.forgotPasswordReset(dto as any);
+
+    expect(mockOtpService.forgotPasswordReset).toHaveBeenCalledWith(dto);
+    expect(result).toEqual({ message: 'Password updated successfully' });
   });
 });

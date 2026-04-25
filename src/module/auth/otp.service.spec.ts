@@ -51,6 +51,7 @@ function makeState(overrides: Partial<{
 const mockUsersRepository = {
   findByIdentifier: jest.fn(),
   updateRefreshToken: jest.fn(),
+  updatePassword: jest.fn(),
 };
 
 const mockJwtService = {
@@ -117,6 +118,7 @@ describe('OtpService', () => {
 
     mockJwtService.signAsync.mockResolvedValue('mock-token');
     mockUsersRepository.updateRefreshToken.mockResolvedValue(undefined);
+    mockUsersRepository.updatePassword.mockResolvedValue(undefined);
   });
 
   it('should be defined', () => {
@@ -325,6 +327,148 @@ describe('OtpService', () => {
       await expect(
         service.verifyOtp({ identifier: 'test@example.com', otp: '111111' }, mockRes),
       ).rejects.toThrow(UnauthorizedException);
+    });
+  });
+
+  // ─── forgotPasswordReset ─────────────────────────────────────────────────────
+
+  describe('forgotPasswordReset()', () => {
+    const fpDto = {
+      identifier: 'test@example.com',
+      otp: '111111',
+      newPassword: 'NewPass@1',
+      confirmPassword: 'NewPass@1',
+    };
+
+    function makeFpState(overrides: Partial<{
+      hashedOtp: string; expiresAt: string; verifyAttempts: number;
+    }> = {}) {
+      return JSON.stringify({
+        hashedOtp: 'hashed-otp',
+        purpose: 'forgot-password',
+        identifier: 'test@example.com',
+        createdAt: new Date().toISOString(),
+        expiresAt: FUTURE_ISO,
+        resendCount: 1,
+        verifyAttempts: 0,
+        ...overrides,
+      });
+    }
+
+    function fpStateOnlyGet(stateJson: string) {
+      return (key: string) =>
+        key.startsWith('otp:state') ? Promise.resolve(stateJson) : Promise.resolve(null);
+    }
+
+    it('updates password and returns success message on valid OTP', async () => {
+      mockRedisService.get.mockImplementation(fpStateOnlyGet(makeFpState()));
+      mockUsersRepository.findByIdentifier.mockResolvedValue(mockUser);
+      (bcrypt.compare as jest.Mock).mockResolvedValue(true);
+      (bcrypt.hash as jest.Mock).mockResolvedValue('hashed-new-password');
+
+      const result = await service.forgotPasswordReset(fpDto);
+
+      expect(result).toEqual({ message: 'Password updated successfully' });
+      expect(mockUsersRepository.updatePassword).toHaveBeenCalledWith(
+        'user-id-123',
+        'hashed-new-password',
+      );
+    });
+
+    it('hashes the new password before saving', async () => {
+      mockRedisService.get.mockImplementation(fpStateOnlyGet(makeFpState()));
+      mockUsersRepository.findByIdentifier.mockResolvedValue(mockUser);
+      (bcrypt.compare as jest.Mock).mockResolvedValue(true);
+
+      await service.forgotPasswordReset(fpDto);
+
+      expect(bcrypt.hash).toHaveBeenCalledWith(fpDto.newPassword, 10);
+    });
+
+    it('deletes OTP state from Redis after successful reset (no replay)', async () => {
+      mockRedisService.get.mockImplementation(fpStateOnlyGet(makeFpState()));
+      mockUsersRepository.findByIdentifier.mockResolvedValue(mockUser);
+      (bcrypt.compare as jest.Mock).mockResolvedValue(true);
+
+      await service.forgotPasswordReset(fpDto);
+
+      expect(mockRedisService.del).toHaveBeenCalledWith(
+        expect.stringContaining('otp:state:forgot-password:test@example.com'),
+      );
+    });
+
+    it('throws 422 when no OTP state exists in Redis', async () => {
+      mockRedisService.get.mockResolvedValue(null);
+
+      await expect(service.forgotPasswordReset(fpDto)).rejects.toThrow(
+        new HttpException('Invalid or expired OTP', 422),
+      );
+    });
+
+    it('throws 422 and cleans up Redis when OTP TTL has naturally expired', async () => {
+      mockRedisService.get.mockImplementation(fpStateOnlyGet(makeFpState({ expiresAt: PAST_ISO })));
+
+      await expect(service.forgotPasswordReset(fpDto)).rejects.toThrow(
+        new HttpException('Invalid or expired OTP', 422),
+      );
+      expect(mockRedisService.del).toHaveBeenCalledWith(
+        expect.stringContaining('otp:state:forgot-password:test@example.com'),
+      );
+    });
+
+    it('throws 429 immediately when lock key already exists', async () => {
+      mockRedisService.get.mockImplementation((key: string) =>
+        key.startsWith('otp:lock') ? Promise.resolve('1') : Promise.resolve(null),
+      );
+
+      await expect(service.forgotPasswordReset(fpDto)).rejects.toThrow(
+        new HttpException('Too many attempts. Please try again later.', 429),
+      );
+    });
+
+    it('throws 422 and increments verifyAttempts on wrong OTP', async () => {
+      mockRedisService.get.mockImplementation(fpStateOnlyGet(makeFpState({ verifyAttempts: 0 })));
+      (bcrypt.compare as jest.Mock).mockResolvedValue(false);
+
+      await expect(service.forgotPasswordReset(fpDto)).rejects.toThrow(
+        new HttpException('Invalid or expired OTP', 422),
+      );
+
+      const stateArg = mockRedisService.set.mock.calls[0][1];
+      const parsed = typeof stateArg === 'string' ? JSON.parse(stateArg) : stateArg;
+      expect(parsed.verifyAttempts).toBe(1);
+    });
+
+    it('triggers lock and throws 429 after exhausting all verify attempts', async () => {
+      mockRedisService.get.mockImplementation(fpStateOnlyGet(makeFpState({ verifyAttempts: 4 })));
+      (bcrypt.compare as jest.Mock).mockResolvedValue(false);
+
+      await expect(service.forgotPasswordReset(fpDto)).rejects.toThrow(
+        new HttpException('Too many attempts. Please request a new OTP.', 429),
+      );
+
+      expect(mockRedisService.set).toHaveBeenCalledWith(
+        expect.stringContaining('otp:lock:forgot-password:test@example.com'),
+        '1',
+        900,
+      );
+    });
+
+    it('throws 429 when verifyAttempts already == maxVerifyAttempts before comparison', async () => {
+      mockRedisService.get.mockImplementation(fpStateOnlyGet(makeFpState({ verifyAttempts: 5 })));
+      (bcrypt.compare as jest.Mock).mockResolvedValue(true);
+
+      await expect(service.forgotPasswordReset(fpDto)).rejects.toThrow(
+        new HttpException('Too many attempts. Please request a new OTP.', 429),
+      );
+    });
+
+    it('throws UnauthorizedException when user disappears after valid OTP', async () => {
+      mockRedisService.get.mockImplementation(fpStateOnlyGet(makeFpState()));
+      mockUsersRepository.findByIdentifier.mockResolvedValue(null);
+      (bcrypt.compare as jest.Mock).mockResolvedValue(true);
+
+      await expect(service.forgotPasswordReset(fpDto)).rejects.toThrow(UnauthorizedException);
     });
   });
 });

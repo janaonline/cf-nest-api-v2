@@ -120,14 +120,14 @@ describe('LoginService', () => {
       mockUsersRepository.findByIdentifierWithSensitiveFields.mockResolvedValue(mockLoginUser);
       (bcrypt.compare as jest.Mock).mockResolvedValue(true);
 
-      const result = await service.login({ email: 'test@example.com', password: 'pass' }, mockRes);
+      const result = await service.login({ identifier: 'test@example.com', password: 'pass' }, mockRes);
       expect(result.token).toBe('mock-token');
     });
 
     it('throws 401 when user not found (same message as wrong password)', async () => {
       mockUsersRepository.findByIdentifierWithSensitiveFields.mockResolvedValue(null);
       await expect(
-        service.login({ email: 'no@example.com', password: 'pass' }, mockRes),
+        service.login({ identifier: 'no@example.com', password: 'pass' }, mockRes),
       ).rejects.toThrow(UnauthorizedException);
     });
 
@@ -135,7 +135,7 @@ describe('LoginService', () => {
       mockUsersRepository.findByIdentifierWithSensitiveFields.mockResolvedValue(mockLoginUser);
       (bcrypt.compare as jest.Mock).mockResolvedValue(false);
       await expect(
-        service.login({ email: 'test@example.com', password: 'wrong' }, mockRes),
+        service.login({ identifier: 'test@example.com', password: 'wrong' }, mockRes),
       ).rejects.toThrow(UnauthorizedException);
     });
 
@@ -145,7 +145,7 @@ describe('LoginService', () => {
         isEmailVerified: false,
       });
       await expect(
-        service.login({ email: 'test@example.com', password: 'pass' }, mockRes),
+        service.login({ identifier: 'test@example.com', password: 'pass' }, mockRes),
       ).rejects.toThrow(ForbiddenException);
     });
 
@@ -157,7 +157,7 @@ describe('LoginService', () => {
       });
       (bcrypt.compare as jest.Mock).mockResolvedValue(true);
       await expect(
-        service.login({ email: 'test@example.com', password: 'pass' }, mockRes),
+        service.login({ identifier: 'test@example.com', password: 'pass' }, mockRes),
       ).rejects.toThrow(ForbiddenException);
     });
 
@@ -167,7 +167,7 @@ describe('LoginService', () => {
         status: 'PENDING',
       });
       await expect(
-        service.login({ email: 'test@example.com', password: 'pass' }, mockRes),
+        service.login({ identifier: 'test@example.com', password: 'pass' }, mockRes),
       ).rejects.toThrow(ForbiddenException);
     });
 
@@ -178,7 +178,7 @@ describe('LoginService', () => {
         rejectReason: 'Duplicate account',
       });
       await expect(
-        service.login({ email: 'test@example.com', password: 'pass' }, mockRes),
+        service.login({ identifier: 'test@example.com', password: 'pass' }, mockRes),
       ).rejects.toThrow(ForbiddenException);
     });
   });
