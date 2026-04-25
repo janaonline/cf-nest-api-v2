@@ -68,6 +68,9 @@ export class State {
   @Prop({ type: Boolean })
   isHilly: boolean;
 
+  @Prop({ type: Boolean, default: true })
+  accessToXVFC: boolean;
+
   // auditedAccounts: [yearCount],
   // annualBudgets: [yearCount],
 }

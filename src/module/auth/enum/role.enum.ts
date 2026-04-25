@@ -9,6 +9,8 @@ export enum Role {
   STATE_DASHBOARD = 'STATE_DASHBOARD',
   AFS_ADMIN = 'AFS_ADMIN',
   XVIFC = 'XVIFC',
+  PMU = 'PMU',
+  AAINA = 'AAINA',
 }
 
 type UserRole =

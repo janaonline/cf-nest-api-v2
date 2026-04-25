@@ -5,6 +5,7 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  Logger,
   Param,
   Patch,
   Post,
@@ -22,13 +23,16 @@ import { CreateEventDto } from './dto/create-event.dto';
 import { FindEventDto } from './dto/find-event-dto';
 import { UpdateEventDto } from './dto/update-event.dto';
 import { EventsService } from './events.service';
-
 @UseGuards(RolesGuard)
 @Roles([Role.ADMIN])
 @ApiBearerAuth()
 @Controller('events')
 export class EventsController {
-  constructor(private readonly eventsService: EventsService) {}
+  private readonly logger: Logger;
+
+  constructor(private readonly eventsService: EventsService) {
+    this.logger = new Logger(EventsController.name);
+  }
 
   @Post()
   create(@Body() createEventDto: CreateEventDto, @CurrentUser() user: User) {
@@ -38,7 +42,8 @@ export class EventsController {
   @HttpCode(HttpStatus.OK)
   @Roles([Role.ADMIN, Role.ULB, Role.STATE])
   @Get(':webinarId')
-  findOne(@Param('webinarId') webinarId: string) {
+  findOne(@Param('webinarId') webinarId: string, @CurrentUser() user: User) {
+    this.logger.log(`Fetching event with ID: ${webinarId} | User: ${JSON.stringify(user)}`);
     return this.eventsService.findOne(webinarId);
   }
 
