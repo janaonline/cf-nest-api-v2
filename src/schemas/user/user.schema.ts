@@ -145,6 +145,9 @@ export class User extends Document {
 
   @Prop({ type: Date, default: null })
   lastLoginAt!: Date | null;
+
+  @Prop({ type: Boolean, default: false })
+  isXVIFCProfileVerified: boolean;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

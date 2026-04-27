@@ -1,19 +1,5 @@
-import {
-  Body,
-  Controller,
-  Get,
-  HttpCode,
-  HttpStatus,
-  Post,
-  Res,
-  UseGuards,
-} from '@nestjs/common';
-import {
-  ApiBearerAuth,
-  ApiOperation,
-  ApiResponse,
-  ApiTags,
-} from '@nestjs/swagger';
+import { Body, Controller, Get, HttpCode, HttpStatus, Patch, Post, Res, UseGuards } from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { AuthService } from './auth.service';
@@ -25,6 +11,7 @@ import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { SendOtpDto } from './dto/send-otp.dto';
+import { UpdateProfileDto } from './dto/update-profile.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { JwtRefreshGuard } from './guards/jwt-refresh.guard';
@@ -37,7 +24,7 @@ export class AuthController {
     private readonly authService: AuthService,
     private readonly loginService: LoginService,
     private readonly otpService: OtpService,
-  ) { }
+  ) {}
 
   @Public()
   @Post('login')
@@ -67,10 +54,7 @@ export class AuthController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Logout and clear refresh token cookie' })
   @ApiResponse({ status: 200, description: 'Logged out successfully' })
-  logout(
-    @CurrentUser() user: { _id: string },
-    @Res({ passthrough: true }) res: Response,
-  ) {
+  logout(@CurrentUser() user: { _id: string }, @Res({ passthrough: true }) res: Response) {
     return this.authService.logout(user._id, res);
   }
 
@@ -81,10 +65,7 @@ export class AuthController {
   @ApiOperation({ summary: 'Rotate access token using refresh token cookie' })
   @ApiResponse({ status: 200, description: 'Returns new access token' })
   @ApiResponse({ status: 440, description: 'Session expired' })
-  refresh(
-    @CurrentUser() user: { _id: string; refreshToken: string },
-    @Res({ passthrough: true }) res: Response,
-  ) {
+  refresh(@CurrentUser() user: { _id: string; refreshToken: string }, @Res({ passthrough: true }) res: Response) {
     return this.authService.refreshTokens(user._id, user.refreshToken, res);
   }
 
@@ -126,6 +107,16 @@ export class AuthController {
   @ApiResponse({ status: 422, description: 'Invalid or expired OTP' })
   verifyOtp(@Body() dto: VerifyOtpDto, @Res({ passthrough: true }) res: Response) {
     return this.otpService.verifyOtp(dto, res);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch('update-profile')
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Update current user profile fields' })
+  @ApiResponse({ status: 200, description: 'Profile updated successfully' })
+  updateProfile(@CurrentUser() user: { _id: string }, @Body() dto: UpdateProfileDto) {
+    return this.authService.updateProfile(user._id, dto);
   }
 
   @Public()

@@ -17,7 +17,7 @@ import { AfsDigitizationModule } from './admin/afs-digitization/afs-digitization
 import { ReportAnIssueModule } from './web/report-an-issue/report-an-issue.module';
 import { ResourcesSectionModule } from './web/resources-section/resources-section.module';
 import { EventsModule } from './admin/events/events.module';
-
+import { XviFcModule } from './admin/xvi-fc/xvi-fc.module';
 function getQueryCaller(): string {
   const stack = new Error().stack?.split('\n') ?? [];
   const frame = stack.find(
@@ -87,6 +87,7 @@ function getQueryCaller(): string {
     ReportAnIssueModule,
     AfsDigitizationModule,
     EventsModule,
+    XviFcModule,
   ],
   controllers: [AppController],
   providers: [
