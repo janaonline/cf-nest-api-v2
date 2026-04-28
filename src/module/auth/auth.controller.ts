@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Patch, Post, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Logger, Patch, Post, Res, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
@@ -20,11 +20,12 @@ import type { User } from 'src/module/auth/enum/role.enum';
 @ApiTags('auth')
 @Controller('auth')
 export class AuthController {
+  logger = new Logger(AuthController.name);
   constructor(
     private readonly authService: AuthService,
     private readonly loginService: LoginService,
     private readonly otpService: OtpService,
-  ) {}
+  ) { }
 
   @Public()
   @Post('login')
@@ -54,8 +55,8 @@ export class AuthController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Logout and clear refresh token cookie' })
   @ApiResponse({ status: 200, description: 'Logged out successfully' })
-  logout(@CurrentUser() user: { _id: string }, @Res({ passthrough: true }) res: Response) {
-    return this.authService.logout(user._id, res);
+  logout(@CurrentUser() user: { _id: string; jti?: string; exp?: number }, @Res({ passthrough: true }) res: Response) {
+    return this.authService.logout(user._id, res, user.jti, user.exp);
   }
 
   @Public()
