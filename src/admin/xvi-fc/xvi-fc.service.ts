@@ -43,4 +43,52 @@ export class XviFcService {
 
     return menuFactory(yearId);
   }
+
+  getSupportHours(): {
+    nextSupportHour: { date: string; description: string; time: string; hostedBy: string };
+    upcomingSupportHours: { date: string; details: string; status: 'UPCOMING' | 'SCHEDULED' }[];
+  } {
+    const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000;
+    const istNow = new Date(Date.now() + IST_OFFSET_MS);
+
+    const dayOfWeek = istNow.getUTCDay();
+    const istMinutesOfDay = istNow.getUTCHours() * 60 + istNow.getUTCMinutes();
+
+    // Thursday = 4; if today is Thursday but past 4 PM IST, roll to next week
+    let daysUntilThursday = (4 - dayOfWeek + 7) % 7;
+    if (dayOfWeek === 4 && istMinutesOfDay >= 16 * 60) {
+      daysUntilThursday = 7;
+    }
+
+    const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+    const thursdays = Array.from({ length: 3 }, (_, i) => {
+      const d = new Date(istNow);
+      d.setUTCDate(istNow.getUTCDate() + daysUntilThursday + i * 7);
+      return d;
+    });
+
+    const formatLong = (d: Date) =>
+      `Thursday, ${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+
+    const formatShort = (d: Date) =>
+      `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+
+    const NEXT_DETAILS =
+      'Open Q&A session for ULB teams. Bring your questions about audited financial statements, submissions, or validation errors.';
+
+    return {
+      nextSupportHour: {
+        date: formatLong(thursdays[0]),
+        description: NEXT_DETAILS,
+        time: '3:00 PM - 4:00 PM IST',
+        hostedBy: 'CityFinance Product & PMU Team',
+      },
+      upcomingSupportHours: thursdays.slice(1).map((d, i) => ({
+        date: formatShort(d),
+        details: 'Open support hour',
+        status: i === 0 ? 'UPCOMING' : 'SCHEDULED',
+      })),
+    };
+  }
 }

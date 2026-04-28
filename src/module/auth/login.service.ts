@@ -113,7 +113,7 @@ export class LoginService {
         mobile: user.mobile,
         isActive: user.isActive,
         role: user.role,
-        isProfileVerified: user.isXVIFCProfileVerified ?? false,
+        isXVIFCProfileVerified: user.isXVIFCProfileVerified ?? false,
         state: user.state,
         stateName: state?.name ?? null,
         designation: user.designation,

@@ -6,23 +6,26 @@ import { SideMenuResponseDto } from './dto/side-menu.dto';
 import { ParseObjectIdPipe } from '../../common/pipes/parse-object-id.pipe';
 import type { MenuRole } from './config/side-menu.config';
 import { ApiBearerAuth } from '@nestjs/swagger/dist/decorators';
+import { Public } from '../../module/auth/decorators/public.decorator';
 
 @Controller('xvi-fc')
 export class XviFcController {
-  constructor(private readonly xviFcService: XviFcService) { }
+  constructor(private readonly xviFcService: XviFcService) {}
+
   @ApiBearerAuth()
   @Get('state/:stateId')
-  async getStateWiseData(
-    @Param('stateId', ParseObjectIdPipe) stateId: string,
-  ): Promise<StateWiseResponseDto> {
+  async getStateWiseData(@Param('stateId', ParseObjectIdPipe) stateId: string): Promise<StateWiseResponseDto> {
     return this.xviFcService.getStateWiseData(stateId);
   }
 
   @Get('sidebar/:role')
-  async getSideMenu(
-    @Param('role') role: MenuRole,
-    @Query('yearId') yearId: string,
-  ): Promise<SideMenuResponseDto> {
+  async getSideMenu(@Param('role') role: MenuRole, @Query('yearId') yearId: string): Promise<SideMenuResponseDto> {
     return this.xviFcService.getSideMenu(role, yearId);
+  }
+
+  @Public()
+  @Get('support-hours')
+  getSupportHours(): ReturnType<XviFcService['getSupportHours']> {
+    return this.xviFcService.getSupportHours();
   }
 }

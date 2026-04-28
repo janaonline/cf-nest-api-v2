@@ -64,14 +64,18 @@ export class AuthService {
 
   async updateProfile(userId: string, dto: UpdateProfileDto): Promise<Record<string, unknown>> {
     const { mobileNumber, commissionerContactNumber, accountantContactNumber, ...rest } = dto;
-    const update: Record<string, unknown> = { ...rest };
+    const update: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(rest)) {
+      if (value !== undefined) update[key] = value;
+    }
     if (mobileNumber !== undefined) update['mobile'] = mobileNumber;
     if (commissionerContactNumber !== undefined) update['commissionerConatactNumber'] = commissionerContactNumber;
     if (accountantContactNumber !== undefined) update['accountantConatactNumber'] = accountantContactNumber;
 
     const updated = await this.usersRepository.updateProfile(userId, update);
     if (!updated) throw new HttpException('User not found', 404);
-    return this.sanitizeUser(updated);
+
+    return { message: 'Profile updated successfully', updatedFields: update };
   }
 
   async validateCaptcha(token: string): Promise<{ success: boolean; message: string }> {
