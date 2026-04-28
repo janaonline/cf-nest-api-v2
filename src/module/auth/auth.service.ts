@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { ConflictException, HttpException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
@@ -5,6 +6,7 @@ import * as bcrypt from 'bcrypt';
 import type { Response } from 'express';
 import axios from 'axios';
 import type { StringValue } from 'ms';
+import { RedisService } from 'src/core/services/redis/redis.service';
 import { UserDocument } from 'src/schemas/user/user.schema';
 import { UsersRepository } from 'src/users/users.repository';
 import { RegisterDto } from './dto/register.dto';
@@ -17,6 +19,7 @@ export class AuthService {
     private readonly usersRepository: UsersRepository,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
+    private readonly redisService: RedisService,
   ) {}
 
   async getUserById(id: string) {
@@ -24,7 +27,13 @@ export class AuthService {
     return u ? { email: u.email, role: u.role, isActive: u.isActive, ulb: u.ulb, state: u.state } : null;
   }
 
-  async logout(userId: string, res: Response): Promise<{ success: boolean }> {
+  async logout(userId: string, res: Response, jti?: string, exp?: number): Promise<{ success: boolean }> {
+    if (jti && exp) {
+      const ttl = exp - Math.floor(Date.now() / 1000);
+      if (ttl > 0) {
+        await this.redisService.set(`bl:${jti}`, '1', ttl);
+      }
+    }
     await this.usersRepository.updateRefreshToken(userId, null);
     this.clearRefreshCookie(res);
     return { success: true };
@@ -92,13 +101,13 @@ export class AuthService {
     }
   }
 
-  private async generateTokens(userId: string): Promise<AuthTokens> {
+  async generateTokens(userId: string): Promise<AuthTokens> {
     const jwtExpires = (this.configService.get<string>('JWT_EXPIRES_IN') ?? '15m') as StringValue;
     const refreshExpires = (this.configService.get<string>('JWT_REFRESH_EXPIRES_IN') ?? '7d') as StringValue;
 
     const [accessToken, refreshToken] = await Promise.all([
       this.jwtService.signAsync(
-        { sub: userId },
+        { sub: userId, jti: randomUUID() },
         { secret: this.configService.get<string>('JWT_SECRET'), expiresIn: jwtExpires },
       ),
       this.jwtService.signAsync(
@@ -109,12 +118,12 @@ export class AuthService {
     return { accessToken, refreshToken };
   }
 
-  private async saveRefreshToken(userId: string, token: string): Promise<void> {
+  async saveRefreshToken(userId: string, token: string): Promise<void> {
     const hash = await bcrypt.hash(token, 10);
     await this.usersRepository.updateRefreshToken(userId, hash);
   }
 
-  private setRefreshCookie(res: Response, token: string): void {
+  setRefreshCookie(res: Response, token: string): void {
     const cookieName = this.configService.get<string>('REFRESH_COOKIE_NAME') ?? 'refresh_token';
     const maxAge = parseInt(this.configService.get<string>('REFRESH_COOKIE_MAX_AGE_MS') ?? '604800000', 10);
     res.cookie(cookieName, token, {
