@@ -5,7 +5,7 @@ import { User, UserDocument } from 'src/schemas/user/user.schema';
 
 @Injectable()
 export class UsersRepository {
-  constructor(@InjectModel(User.name) private readonly userModel: Model<UserDocument>) { }
+  constructor(@InjectModel(User.name) private readonly userModel: Model<UserDocument>) {}
 
   async findById(id: string): Promise<UserDocument | null> {
     return this.userModel.findById(id).exec();
@@ -24,9 +24,7 @@ export class UsersRepository {
 
   async findByIdentifierWithSensitiveFields(identifier: string): Promise<UserDocument | null> {
     const isEmail = identifier.includes('@');
-    const query = isEmail
-      ? { email: identifier }
-      : { $or: [{ censusCode: identifier }, { sbCode: identifier }] };
+    const query = isEmail ? { email: identifier } : { $or: [{ censusCode: identifier }, { sbCode: identifier }] };
     return this.userModel
       .findOne({ ...query, isDeleted: false, isActive: true })
       .select('+password +loginAttempts +lockUntil +isLocked')
@@ -41,16 +39,12 @@ export class UsersRepository {
       .select('+loginAttempts')
       .exec();
     if (user && user.loginAttempts >= MAX_ATTEMPTS) {
-      await this.userModel
-        .findByIdAndUpdate(id, { isLocked: true, lockUntil: Date.now() + LOCK_DURATION_MS })
-        .exec();
+      await this.userModel.findByIdAndUpdate(id, { isLocked: true, lockUntil: Date.now() + LOCK_DURATION_MS }).exec();
     }
   }
 
   async resetLoginAttempts(id: string): Promise<void> {
-    await this.userModel
-      .findByIdAndUpdate(id, { loginAttempts: 0, isLocked: false, lockUntil: null })
-      .exec();
+    await this.userModel.findByIdAndUpdate(id, { loginAttempts: 0, isLocked: false, lockUntil: null }).exec();
   }
 
   async findByIdWithRefreshToken(id: string): Promise<UserDocument | null> {
@@ -66,10 +60,7 @@ export class UsersRepository {
     await this.userModel.findByIdAndUpdate(id, { refreshTokenHash: hash }).exec();
   }
 
-  async updateOtp(
-    id: string,
-    otpData: { hash: string; expiresAt: Date; attempts: number },
-  ): Promise<void> {
+  async updateOtp(id: string, otpData: { hash: string; expiresAt: Date; attempts: number }): Promise<void> {
     await this.userModel
       .findByIdAndUpdate(id, {
         otpHash: otpData.hash,
@@ -84,9 +75,7 @@ export class UsersRepository {
   }
 
   async clearOtp(id: string): Promise<void> {
-    await this.userModel
-      .findByIdAndUpdate(id, { otpHash: null, otpExpiresAt: null, otpAttempts: 0 })
-      .exec();
+    await this.userModel.findByIdAndUpdate(id, { otpHash: null, otpExpiresAt: null, otpAttempts: 0 }).exec();
   }
 
   async findByIdentifier(identifier: string): Promise<UserDocument | null> {
@@ -98,10 +87,7 @@ export class UsersRepository {
   }
 
   async findByIdWithOtpFields(id: string): Promise<UserDocument | null> {
-    return this.userModel
-      .findById(id)
-      .select('+otpHash +otpExpiresAt +otpAttempts')
-      .exec();
+    return this.userModel.findById(id).select('+otpHash +otpExpiresAt +otpAttempts').exec();
   }
 
   async findByIdentifierWithOtpFields(identifier: string): Promise<UserDocument | null> {
@@ -126,5 +112,9 @@ export class UsersRepository {
   async exists(email: string): Promise<boolean> {
     const count = await this.userModel.countDocuments({ email: email.toLowerCase() }).exec();
     return count > 0;
+  }
+
+  async updateProfile(id: string, data: Record<string, unknown>): Promise<UserDocument | null> {
+    return this.userModel.findByIdAndUpdate(id, { $set: data }, { new: true, runValidators: true }).exec();
   }
 }

@@ -1,8 +1,4 @@
-import {
-  ConflictException,
-  HttpException,
-  Injectable,
-} from '@nestjs/common';
+import { ConflictException, HttpException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
@@ -12,6 +8,7 @@ import type { StringValue } from 'ms';
 import { UserDocument } from 'src/schemas/user/user.schema';
 import { UsersRepository } from 'src/users/users.repository';
 import { RegisterDto } from './dto/register.dto';
+import { UpdateProfileDto } from './dto/update-profile.dto';
 import { AuthResponse, AuthTokens } from './types/auth-tokens.type';
 
 @Injectable()
@@ -24,9 +21,7 @@ export class AuthService {
 
   async getUserById(id: string) {
     const u = await this.usersRepository.findById(id);
-    return u
-      ? { email: u.email, role: u.role, isActive: u.isActive, ulb: u.ulb, state: u.state }
-      : null;
+    return u ? { email: u.email, role: u.role, isActive: u.isActive, ulb: u.ulb, state: u.state } : null;
   }
 
   async logout(userId: string, res: Response): Promise<{ success: boolean }> {
@@ -65,6 +60,22 @@ export class AuthService {
     if (!user?.refreshTokenHash) return null;
     const valid = await bcrypt.compare(token, user.refreshTokenHash);
     return valid ? user : null;
+  }
+
+  async updateProfile(userId: string, dto: UpdateProfileDto): Promise<Record<string, unknown>> {
+    const { mobileNumber, commissionerContactNumber, accountantContactNumber, ...rest } = dto;
+    const update: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(rest)) {
+      if (value !== undefined) update[key] = value;
+    }
+    if (mobileNumber !== undefined) update['mobile'] = mobileNumber;
+    if (commissionerContactNumber !== undefined) update['commissionerConatactNumber'] = commissionerContactNumber;
+    if (accountantContactNumber !== undefined) update['accountantConatactNumber'] = accountantContactNumber;
+
+    const updated = await this.usersRepository.updateProfile(userId, update);
+    if (!updated) throw new HttpException('User not found', 404);
+
+    return { message: 'Profile updated successfully', updatedFields: update };
   }
 
   async validateCaptcha(token: string): Promise<{ success: boolean; message: string }> {

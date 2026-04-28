@@ -28,7 +28,7 @@ export class LoginService {
     @InjectModel(State.name) private readonly stateModel: Model<StateDocument>,
     @InjectModel(Ulb.name) private readonly ulbModel: Model<UlbDocument>,
     @InjectModel(Year.name) private readonly yearModel: Model<YearDocument>,
-  ) {}
+  ) { }
 
   async login(dto: LoginDto, res: Response): Promise<AuthResponse> {
     const isEmail = dto.identifier.includes('@');
@@ -110,8 +110,10 @@ export class LoginService {
         _id: user._id,
         name: user.name,
         email: user.email,
+        mobile: user.mobile,
         isActive: user.isActive,
         role: user.role,
+        isXVIFCProfileVerified: user.isXVIFCProfileVerified ?? false,
         state: user.state,
         stateName: state?.name ?? null,
         designation: user.designation,
@@ -136,7 +138,7 @@ export class LoginService {
 
   private async generateTokens(userId: string): Promise<AuthTokens> {
     const jwtExpires = (this.configService.get<string>('JWT_EXPIRES_IN') ?? '15m') as StringValue;
-    const refreshExpires = (this.configService.get<string>('JWT_REFRESH_EXPIRES_IN') ?? '7d') as StringValue;
+    const refreshExpires = (this.configService.get<string>('JWT_REFRESH_EXPIRES_IN') ?? '10h') as StringValue;
 
     const [accessToken, refreshToken] = await Promise.all([
       this.jwtService.signAsync(
