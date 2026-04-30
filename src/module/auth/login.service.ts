@@ -6,7 +6,6 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
-import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import type { Response } from 'express';
 import { Model } from 'mongoose';
@@ -15,15 +14,15 @@ import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { Year, YearDocument } from 'src/schemas/year.schema';
 import { Role } from './enum/role.enum';
 import { UsersRepository } from 'src/users/users.repository';
+import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
-import { AuthResponse, AuthTokens } from './types/auth-tokens.type';
-import type { StringValue } from 'ms';
+import { AuthResponse } from './types/auth-tokens.type';
 
 @Injectable()
 export class LoginService {
   constructor(
     private readonly usersRepository: UsersRepository,
-    private readonly jwtService: JwtService,
+    private readonly authService: AuthService,
     private readonly configService: ConfigService,
     @InjectModel(State.name) private readonly stateModel: Model<StateDocument>,
     @InjectModel(Ulb.name) private readonly ulbModel: Model<UlbDocument>,
@@ -97,10 +96,10 @@ export class LoginService {
       await this.usersRepository.resetLoginAttempts(userId);
     }
 
-    const tokens = await this.generateTokens(userId);
-    await this.saveRefreshToken(userId, tokens.refreshToken);
+    const tokens = await this.authService.generateTokens(userId);
+    await this.authService.saveRefreshToken(userId, tokens.refreshToken);
     await this.usersRepository.updateLastLogin(userId);
-    this.setRefreshCookie(res, tokens.refreshToken);
+    this.authService.setRefreshCookie(res, tokens.refreshToken);
 
     const allYears = await this.getActiveYears();
 
@@ -134,39 +133,5 @@ export class LoginService {
       acc[y.year] = (y._id as { toString(): string }).toString();
       return acc;
     }, {});
-  }
-
-  private async generateTokens(userId: string): Promise<AuthTokens> {
-    const jwtExpires = (this.configService.get<string>('JWT_EXPIRES_IN') ?? '15m') as StringValue;
-    const refreshExpires = (this.configService.get<string>('JWT_REFRESH_EXPIRES_IN') ?? '10h') as StringValue;
-
-    const [accessToken, refreshToken] = await Promise.all([
-      this.jwtService.signAsync(
-        { sub: userId },
-        { secret: this.configService.get<string>('JWT_SECRET'), expiresIn: jwtExpires },
-      ),
-      this.jwtService.signAsync(
-        { sub: userId },
-        { secret: this.configService.get<string>('JWT_REFRESH_SECRET'), expiresIn: refreshExpires },
-      ),
-    ]);
-    return { accessToken, refreshToken };
-  }
-
-  private async saveRefreshToken(userId: string, token: string): Promise<void> {
-    const hash = await bcrypt.hash(token, 10);
-    await this.usersRepository.updateRefreshToken(userId, hash);
-  }
-
-  private setRefreshCookie(res: Response, token: string): void {
-    const cookieName = this.configService.get<string>('REFRESH_COOKIE_NAME') ?? 'refresh_token';
-    const maxAge = parseInt(this.configService.get<string>('REFRESH_COOKIE_MAX_AGE_MS') ?? '604800000', 10);
-    res.cookie(cookieName, token, {
-      httpOnly: true,
-      secure: this.configService.get<string>('NODE_ENV') === 'production',
-      sameSite: 'strict',
-      maxAge,
-      path: '/',
-    });
   }
 }

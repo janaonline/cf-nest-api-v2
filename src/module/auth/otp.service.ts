@@ -1,17 +1,16 @@
 import { Injectable, Logger, HttpException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import type { Response } from 'express';
-import type { StringValue } from 'ms';
 import axios from 'axios';
 import { SESMailService } from 'src/core/aws-ses/ses.service';
 import { RedisService } from 'src/core/services/redis/redis.service';
 import { UsersRepository } from 'src/users/users.repository';
+import { AuthService } from './auth.service';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { SendOtpDto } from './dto/send-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
-import { AuthResponse, AuthTokens } from './types/auth-tokens.type';
+import { AuthResponse } from './types/auth-tokens.type';
 import { generateOtp, getOtpConfig } from './otp/otp.config';
 import {
   OtpState,
@@ -27,7 +26,7 @@ export class OtpService {
 
   constructor(
     private readonly usersRepository: UsersRepository,
-    private readonly jwtService: JwtService,
+    private readonly authService: AuthService,
     private readonly configService: ConfigService,
     private readonly sesMailService: SESMailService,
     private readonly redisService: RedisService,
@@ -142,9 +141,9 @@ export class OtpService {
     if (!user) throw new UnauthorizedException('User not found');
 
     const userId = (user._id as { toString(): string }).toString();
-    const tokens = await this.generateTokens(userId);
-    await this.saveRefreshToken(userId, tokens.refreshToken);
-    this.setRefreshCookie(res, tokens.refreshToken);
+    const tokens = await this.authService.generateTokens(userId);
+    await this.authService.saveRefreshToken(userId, tokens.refreshToken);
+    this.authService.setRefreshCookie(res, tokens.refreshToken);
 
     return { token: tokens.accessToken, user: this.sanitizeUser(user) };
   }
@@ -275,47 +274,6 @@ export class OtpService {
     } catch (err) {
       this.logger.error('Email OTP send failed', err);
     }
-  }
-
-  // ─── Token helpers ─────────────────────────────────────────────────────────
-
-  private async generateTokens(userId: string): Promise<AuthTokens> {
-    const jwtExpires = (this.configService.get<string>('JWT_EXPIRES_IN') ?? '15m') as StringValue;
-    const refreshExpires = (
-      this.configService.get<string>('JWT_REFRESH_EXPIRES_IN') ?? '7d'
-    ) as StringValue;
-
-    const [accessToken, refreshToken] = await Promise.all([
-      this.jwtService.signAsync(
-        { sub: userId },
-        { secret: this.configService.get<string>('JWT_SECRET'), expiresIn: jwtExpires },
-      ),
-      this.jwtService.signAsync(
-        { sub: userId },
-        { secret: this.configService.get<string>('JWT_REFRESH_SECRET'), expiresIn: refreshExpires },
-      ),
-    ]);
-    return { accessToken, refreshToken };
-  }
-
-  private async saveRefreshToken(userId: string, token: string): Promise<void> {
-    const hash = await bcrypt.hash(token, 10);
-    await this.usersRepository.updateRefreshToken(userId, hash);
-  }
-
-  private setRefreshCookie(res: Response, token: string): void {
-    const cookieName = this.configService.get<string>('REFRESH_COOKIE_NAME') ?? 'refresh_token';
-    const maxAge = parseInt(
-      this.configService.get<string>('REFRESH_COOKIE_MAX_AGE_MS') ?? '604800000',
-      10,
-    );
-    res.cookie(cookieName, token, {
-      httpOnly: true,
-      secure: this.configService.get<string>('NODE_ENV') === 'production',
-      sameSite: 'strict',
-      maxAge,
-      path: '/',
-    });
   }
 
   // ─── Formatting helpers ─────────────────────────────────────────────────────
