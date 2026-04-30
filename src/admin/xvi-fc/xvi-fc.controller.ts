@@ -23,6 +23,12 @@ export class XviFcController {
     return this.xviFcService.getSideMenu(role, yearId);
   }
 
+  @ApiBearerAuth()
+  @Get('years')
+  async getYears(): Promise<{ _id: string; year: string }[]> {
+    return this.xviFcService.getYears();
+  }
+
   @Public()
   @Get('support-hours')
   getSupportHours(): ReturnType<XviFcService['getSupportHours']> {

@@ -2,46 +2,48 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 
-import {
-  GrantAllocation,
-  GrantAllocationDocument,
-} from './schemas/grant-allocation.schema';
+import { GrantAllocation, GrantAllocationDocument } from './schemas/grant-allocation.schema';
 import { StateWiseResponseDto } from './dto/state-wise-response.dto';
 import { buildGetStateWiseDataPipeline } from './quires/get-state-wise-data.query';
 import { SIDE_MENU_CONFIG } from './config/side-menu.config';
 import type { MenuRole } from './config/side-menu.config';
 import { SideMenuResponseDto } from './dto/side-menu.dto';
+import { Year, YearDocument } from './schemas/year.schema';
 
 @Injectable()
 export class XviFcService {
   constructor(
     @InjectModel(GrantAllocation.name)
     private readonly grantAllocationModel: Model<GrantAllocationDocument>,
+    @InjectModel(Year.name)
+    private readonly yearModel: Model<YearDocument>,
   ) {}
 
   async getStateWiseData(stateId: string): Promise<StateWiseResponseDto> {
     const stateObjectId = new Types.ObjectId(stateId);
-
     const pipeline = buildGetStateWiseDataPipeline(stateObjectId);
-
-    const [result] =
-      await this.grantAllocationModel.aggregate<StateWiseResponseDto>(pipeline);
-
+    const [result] = await this.grantAllocationModel.aggregate<StateWiseResponseDto>(pipeline);
     if (!result) {
       throw new NotFoundException('No grant allocation data found for this state');
     }
-
     return result;
   }
 
   async getSideMenu(role: MenuRole, yearId: string): Promise<SideMenuResponseDto> {
     const menuFactory = SIDE_MENU_CONFIG[role];
-
     if (!menuFactory) {
       throw new NotFoundException(`No menu found for role ${role}`);
     }
-
     return menuFactory(yearId);
+  }
+
+  async getYears(): Promise<{ _id: string; year: string }[]> {
+    const YEAR_RANGE = ['2026-27', '2027-28', '2028-29', '2029-30', '2030-31'];
+    const results = await this.yearModel
+      .find({ year: { $in: YEAR_RANGE } }, { _id: 1, year: 1 })
+      .lean()
+      .exec();
+    return results.map((r) => ({ _id: r._id.toString(), year: r.year }));
   }
 
   getSupportHours(): {
