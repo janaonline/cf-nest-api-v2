@@ -70,7 +70,7 @@ describe('AuthController', () => {
     mockAuthService.logout.mockResolvedValue({ success: true });
     const res = { cookie: jest.fn() } as any;
     await controller.logout({ _id: 'user-id-123' }, res);
-    expect(mockAuthService.logout).toHaveBeenCalledWith('user-id-123', res);
+    expect(mockAuthService.logout).toHaveBeenCalledWith('user-id-123', res, undefined, undefined);
   });
 
   it('delegates forgotPasswordReset to OtpService', async () => {
