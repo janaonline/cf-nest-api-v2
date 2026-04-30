@@ -9,6 +9,7 @@ import { JwtService } from '@nestjs/jwt';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as bcrypt from 'bcrypt';
 import { Response } from 'express';
+import { RedisService } from 'src/core/services/redis/redis.service';
 import { UsersRepository } from 'src/users/users.repository';
 import { AuthService } from './auth.service';
 
@@ -51,6 +52,12 @@ const mockConfigService = {
   }),
 };
 
+const mockRedisService = {
+  get: jest.fn().mockResolvedValue(null),
+  set: jest.fn().mockResolvedValue(undefined),
+  del: jest.fn().mockResolvedValue(undefined),
+};
+
 const mockRes = { cookie: jest.fn() } as unknown as Response;
 
 describe('AuthService', () => {
@@ -63,6 +70,7 @@ describe('AuthService', () => {
         { provide: UsersRepository, useValue: mockUsersRepository },
         { provide: JwtService, useValue: mockJwtService },
         { provide: ConfigService, useValue: mockConfigService },
+        { provide: RedisService, useValue: mockRedisService },
       ],
     }).compile();
 

@@ -14,6 +14,7 @@ import { State } from 'src/schemas/state.schema';
 import { Ulb } from 'src/schemas/ulb.schema';
 import { Year } from 'src/schemas/year.schema';
 import { UsersRepository } from 'src/users/users.repository';
+import { AuthService } from './auth.service';
 import { LoginService } from './login.service';
 
 const mockLoginUser = {
@@ -75,6 +76,12 @@ const mockYearModel = {
   }),
 };
 
+const mockAuthService = {
+  generateTokens: jest.fn().mockResolvedValue({ accessToken: 'mock-token', refreshToken: 'mock-refresh' }),
+  saveRefreshToken: jest.fn().mockResolvedValue(undefined),
+  setRefreshCookie: jest.fn(),
+};
+
 const mockRes = { cookie: jest.fn() } as unknown as Response;
 
 describe('LoginService', () => {
@@ -85,6 +92,7 @@ describe('LoginService', () => {
       providers: [
         LoginService,
         { provide: UsersRepository, useValue: mockUsersRepository },
+        { provide: AuthService, useValue: mockAuthService },
         { provide: JwtService, useValue: mockJwtService },
         { provide: ConfigService, useValue: mockConfigService },
         { provide: getModelToken(State.name), useValue: mockStateModel },
@@ -97,6 +105,9 @@ describe('LoginService', () => {
     jest.clearAllMocks();
     mockJwtService.signAsync.mockResolvedValue('mock-token');
     mockUsersRepository.updateRefreshToken.mockResolvedValue(undefined);
+    mockAuthService.generateTokens.mockResolvedValue({ accessToken: 'mock-token', refreshToken: 'mock-refresh' });
+    mockAuthService.saveRefreshToken.mockResolvedValue(undefined);
+    mockAuthService.setRefreshCookie.mockImplementation(() => undefined);
     mockUsersRepository.updateLastLogin.mockResolvedValue(undefined);
     mockUsersRepository.resetLoginAttempts.mockResolvedValue(undefined);
     mockUsersRepository.incrementLoginAttempts.mockResolvedValue(undefined);

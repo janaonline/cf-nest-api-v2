@@ -30,10 +30,10 @@ export class JwtRefreshStrategy extends PassportStrategy(Strategy, 'jwt-refresh'
   async validate(req: Request, payload: JwtRefreshPayload) {
     const cookies = req.cookies as Record<string, string> | undefined;
     const refreshToken = cookies?.[this.cookieName];
-    if (!refreshToken) throw new HttpException('No refresh token', 440);
+    if (!refreshToken) throw new HttpException('Session not found. Please log in again.', 440);
 
     const user = await this.authService.validateRefreshToken(payload.sub, refreshToken);
-    if (!user) throw new HttpException('Session expired', 440);
+    if (!user) throw new HttpException('Your session has expired. Please log in again.', 440);
 
     return { ...user.toObject(), refreshToken };
   }

@@ -5,13 +5,13 @@ jest.mock('bcrypt', () => ({
 
 import { HttpException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { JwtService } from '@nestjs/jwt';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as bcrypt from 'bcrypt';
 import type { Response } from 'express';
 import { SESMailService } from 'src/core/aws-ses/ses.service';
 import { RedisService } from 'src/core/services/redis/redis.service';
 import { UsersRepository } from 'src/users/users.repository';
+import { AuthService } from './auth.service';
 import { OtpService } from './otp.service';
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
@@ -54,8 +54,10 @@ const mockUsersRepository = {
   updatePassword: jest.fn(),
 };
 
-const mockJwtService = {
-  signAsync: jest.fn().mockResolvedValue('mock-token'),
+const mockAuthService = {
+  generateTokens: jest.fn().mockResolvedValue({ accessToken: 'mock-token', refreshToken: 'mock-refresh' }),
+  saveRefreshToken: jest.fn().mockResolvedValue(undefined),
+  setRefreshCookie: jest.fn(),
 };
 
 const mockConfigService = {
@@ -101,7 +103,7 @@ describe('OtpService', () => {
       providers: [
         OtpService,
         { provide: UsersRepository, useValue: mockUsersRepository },
-        { provide: JwtService, useValue: mockJwtService },
+        { provide: AuthService, useValue: mockAuthService },
         { provide: ConfigService, useValue: mockConfigService },
         { provide: SESMailService, useValue: mockSesMailService },
         { provide: RedisService, useValue: mockRedisService },
@@ -116,7 +118,9 @@ describe('OtpService', () => {
     mockRedisService.set.mockResolvedValue(undefined);
     mockRedisService.del.mockResolvedValue(undefined);
 
-    mockJwtService.signAsync.mockResolvedValue('mock-token');
+    mockAuthService.generateTokens.mockResolvedValue({ accessToken: 'mock-token', refreshToken: 'mock-refresh' });
+    mockAuthService.saveRefreshToken.mockResolvedValue(undefined);
+    mockAuthService.setRefreshCookie.mockImplementation(() => undefined);
     mockUsersRepository.updateRefreshToken.mockResolvedValue(undefined);
     mockUsersRepository.updatePassword.mockResolvedValue(undefined);
   });

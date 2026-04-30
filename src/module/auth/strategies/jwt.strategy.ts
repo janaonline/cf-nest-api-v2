@@ -29,7 +29,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     // Reject tokens that were explicitly invalidated on logout (stored in Redis until natural expiry)
     if (payload.jti) {
       const blacklisted = await this.redisService.get(`bl:${payload.jti}`);
-      if (blacklisted) throw new UnauthorizedException('Token has been revoked');
+      if (blacklisted) throw new UnauthorizedException('Your session has expired. Please log in again to continue.');
     }
     const user = await this.usersRepository.findById(payload.sub);
     if (!user || !user.isActive) {
