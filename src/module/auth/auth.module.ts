@@ -9,11 +9,13 @@ import { RedisModule } from 'src/core/services/redis/redis.module';
 import { State, StateSchema } from 'src/schemas/state.schema';
 import { Ulb, UlbSchema } from 'src/schemas/ulb.schema';
 import { Year, YearSchema } from 'src/schemas/year.schema';
+import { VisitSession, VisitSessionSchema } from 'src/schemas/visit-session.schema';
 import { UsersModule } from 'src/users/users.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { LoginService } from './login.service';
 import { OtpService } from './otp.service';
+import { VisitSessionService } from './visit-session.service';
 import { RolesGuard } from './guards/roles.guard';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { JwtRefreshGuard } from './guards/jwt-refresh.guard';
@@ -38,6 +40,7 @@ import { JwtRefreshStrategy } from './strategies/jwt-refresh.strategy';
       { name: State.name, schema: StateSchema },
       { name: Ulb.name, schema: UlbSchema },
       { name: Year.name, schema: YearSchema },
+      { name: VisitSession.name, schema: VisitSessionSchema },
     ]),
   ],
   exports: [JwtModule, JwtAuthGuard, RolesGuard, AuthService, LoginService],
@@ -46,6 +49,7 @@ import { JwtRefreshStrategy } from './strategies/jwt-refresh.strategy';
     AuthService,
     LoginService,
     OtpService,
+    VisitSessionService,
     SESMailService,
     RolesGuard,
     JwtAuthGuard,
