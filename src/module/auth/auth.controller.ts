@@ -1,10 +1,11 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Logger, Patch, Post, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Logger, Param, Patch, Post, Res, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { AuthService } from './auth.service';
 import { LoginService } from './login.service';
 import { OtpService } from './otp.service';
+import { VisitSessionService } from './visit-session.service';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { Public } from './decorators/public.decorator';
 import { LoginDto } from './dto/login.dto';
@@ -25,6 +26,7 @@ export class AuthController {
     private readonly authService: AuthService,
     private readonly loginService: LoginService,
     private readonly otpService: OtpService,
+    private readonly visitSessionService: VisitSessionService,
   ) { }
 
   @Public()
@@ -130,5 +132,30 @@ export class AuthController {
   @ApiResponse({ status: 429, description: 'Too many attempts' })
   forgotPasswordReset(@Body() dto: ResetPasswordDto) {
     return this.otpService.forgotPasswordReset(dto);
+  }
+
+  @Public()
+  @Get('start_session')
+  @ApiOperation({ summary: 'Create a new visit session' })
+  @ApiResponse({ status: 200, description: 'Returns the new session _id' })
+  startSession() {
+    return this.visitSessionService.startSession();
+  }
+
+  @Public()
+  @Get('end_session/:id')
+  @ApiOperation({ summary: 'Mark a visit session as inactive' })
+  @ApiResponse({ status: 200, description: 'Session ended' })
+  @ApiResponse({ status: 404, description: 'Session not found' })
+  endSession(@Param('id') id: string) {
+    return this.visitSessionService.endSession(id);
+  }
+
+  @Public()
+  @Get('visit_count')
+  @ApiOperation({ summary: 'Get total visit session count' })
+  @ApiResponse({ status: 200, description: 'Returns total session count' })
+  visitCount() {
+    return this.visitSessionService.visitCount();
   }
 }
