@@ -13,14 +13,20 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     private readonly usersRepository: UsersRepository,
     private readonly redisService: RedisService,
   ) {
+    const jwtSecret = configService.get<string>('JWT_SECRET');
+
+    if (!jwtSecret) {
+      throw new Error('JWT_SECRET is not configured');
+    }
+
     // Accept token from Authorization: Bearer header or x-access-token header
     const options: StrategyOptionsWithoutRequest = {
       jwtFromRequest: ExtractJwt.fromExtractors([
         ExtractJwt.fromAuthHeaderAsBearerToken(),
-        (req) => (req?.headers?.['x-access-token'] as string | undefined) ?? null,
+        (req: Request) => (req?.headers?.['x-access-token'] as string | undefined) ?? null,
       ]),
       ignoreExpiration: false,
-      secretOrKey: configService.get<string>('JWT_SECRET') as string,
+      secretOrKey: jwtSecret,
     };
     super(options);
   }

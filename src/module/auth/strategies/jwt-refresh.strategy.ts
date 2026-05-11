@@ -14,13 +14,18 @@ export class JwtRefreshStrategy extends PassportStrategy(Strategy, 'jwt-refresh'
     private readonly configService: ConfigService,
     private readonly authService: AuthService,
   ) {
+    const jwtSecret = configService.get<string>('JWT_SECRET');
+
+    if (!jwtSecret) {
+      throw new Error('JWT_SECRET is not configured');
+    }
     const cookieName = configService.get<string>('REFRESH_COOKIE_NAME') ?? 'refresh_token';
     const options: StrategyOptionsWithRequest = {
       jwtFromRequest: ExtractJwt.fromExtractors([
         (req: Request) => (req?.cookies as Record<string, string> | undefined)?.[cookieName] ?? null,
       ]),
       ignoreExpiration: false,
-      secretOrKey: configService.get<string>('JWT_REFRESH_SECRET') as string,
+      secretOrKey: jwtSecret,
       passReqToCallback: true,
     };
     super(options);
