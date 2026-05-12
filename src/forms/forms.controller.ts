@@ -1,4 +1,5 @@
 import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post } from '@nestjs/common';
+import { ApiOperation } from '@nestjs/swagger';
 import type { IAuthUser } from '../common/interfaces/auth-user.interface';
 import { ParseObjectIdPipe } from '../common/pipes/parse-object-id.pipe';
 import { CurrentUser } from '../module/auth/decorators/current-user.decorator';
@@ -21,6 +22,10 @@ export class FormsController {
   ) {}
 
   @Get(':formSubmissionId')
+  @ApiOperation({
+    summary: 'Get form submission',
+    description: 'Show one form submission with its current workflow status.',
+  })
   getFormSubmissionDetails(
     @Param('formSubmissionId', ParseObjectIdPipe) id: string,
     @CurrentUser() user: IAuthUser,
@@ -29,12 +34,17 @@ export class FormsController {
   }
 
   @Get(':formSubmissionId/history')
+  @ApiOperation({
+    summary: 'Get status history',
+    description: 'Show the full audit trail of status changes for a form submission.',
+  })
   getFormStatusHistory(@Param('formSubmissionId') id: string): Promise<IFormStatusHistory[]> {
     return this.statusService.getFormStatusHistory(id);
   }
 
   @Post(':formSubmissionId/save-draft')
   @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Save draft', description: 'Moves the form submission to in-progress state.' })
   saveDraft(
     @Param('formSubmissionId', ParseObjectIdPipe) id: string,
     @Body() dto: SaveDraftDto,
@@ -45,6 +55,7 @@ export class FormsController {
 
   @Post(':formSubmissionId/submit')
   @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Submit form', description: 'Submits the form to State for review.' })
   submitForm(
     @Param('formSubmissionId', ParseObjectIdPipe) id: string,
     @CurrentUser() user: IAuthUser,
@@ -54,6 +65,7 @@ export class FormsController {
 
   @Post(':formSubmissionId/state/return')
   @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Return by State', description: 'Returns the form to ULB with State remarks.' })
   returnFormByState(
     @Param('formSubmissionId', ParseObjectIdPipe) id: string,
     @Body() dto: ReturnFormDto,
@@ -64,6 +76,7 @@ export class FormsController {
 
   @Post(':formSubmissionId/state/approve')
   @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Approve by State', description: 'Forwards the form from State review to MoHUA review.' })
   approveFormByState(
     @Param('formSubmissionId', ParseObjectIdPipe) id: string,
     @Body() dto: ApproveFormDto,
@@ -74,6 +87,7 @@ export class FormsController {
 
   @Post(':formSubmissionId/mohua/return')
   @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Return by MoHUA', description: 'Returns the form to ULB with MoHUA remarks.' })
   returnFormByMoHUA(
     @Param('formSubmissionId', ParseObjectIdPipe) id: string,
     @Body() dto: ReturnFormDto,
@@ -84,6 +98,7 @@ export class FormsController {
 
   @Post(':formSubmissionId/mohua/acknowledge')
   @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Acknowledge by MoHUA', description: 'Marks the form submission as acknowledged by MoHUA.' })
   acknowledgeFormByMoHUA(
     @Param('formSubmissionId', ParseObjectIdPipe) id: string,
     @Body() dto: AcknowledgeFormDto,

@@ -10,6 +10,7 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
+import { ApiOperation } from '@nestjs/swagger';
 import { CONTEXT_TYPE, THREAD_PURPOSE } from '../common/constants/communication.constants';
 import type { IAuthUser } from '../common/interfaces/auth-user.interface';
 import { ParseObjectIdPipe } from '../common/pipes/parse-object-id.pipe';
@@ -32,6 +33,10 @@ export class CommunicationController {
   // ─── Thread list / detail ────────────────────────────────────────────────────
 
   @Get('threads')
+  @ApiOperation({
+    summary: 'Get threads',
+    description: 'Show all form conversations where current user has access.',
+  })
   getThreads(
     @Query() query: GetThreadsDto,
     @CurrentUser() user: IAuthUser,
@@ -48,6 +53,10 @@ export class CommunicationController {
   }
 
   @Get('threads/:threadId')
+  @ApiOperation({
+    summary: 'Get thread details',
+    description: 'Open one conversation and show its metadata.',
+  })
   getThreadDetails(
     @Param('threadId', ParseObjectIdPipe) threadId: string,
     @CurrentUser() user: IAuthUser,
@@ -56,6 +65,10 @@ export class CommunicationController {
   }
 
   @Get('threads/:threadId/messages')
+  @ApiOperation({
+    summary: 'Get thread messages',
+    description: 'Open a conversation and load all messages - paginated.',
+  })
   getThreadMessages(
     @Param('threadId', ParseObjectIdPipe) threadId: string,
     @Query('page') page = '1',
@@ -71,6 +84,10 @@ export class CommunicationController {
   }
 
   @Post('threads/:threadId/messages')
+  @ApiOperation({
+    summary: 'Send message to thread',
+    description: 'Add a new message to an existing conversation.',
+  })
   sendMessageToThread(
     @Param('threadId', ParseObjectIdPipe) threadId: string,
     @Body() dto: SendMessageDto,
@@ -87,6 +104,10 @@ export class CommunicationController {
   }
 
   @Patch('threads/:threadId/read')
+  @ApiOperation({
+    summary: 'Mark thread as read',
+    description: 'Marks the thread as read for the logged-in user. This resets the unread count to zero.',
+  })
   @HttpCode(HttpStatus.OK)
   markThreadAsRead(
     @Param('threadId', ParseObjectIdPipe) threadId: string,
@@ -98,6 +119,11 @@ export class CommunicationController {
   // ─── Form-submission scoped shortcuts ────────────────────────────────────────
 
   @Post(':formSubmissionId/messages')
+  @ApiOperation({
+    summary: 'Send message to form submission',
+    description:
+      'Send a message using the formSubmissionId (This is useful when the UI is on the Form Detail page and does not know the threadId).',
+  })
   async sendMessageToFormSubmission(
     @Param('formSubmissionId', ParseObjectIdPipe) formSubmissionId: string,
     @Body() dto: SendFormMessageDto,
@@ -115,6 +141,11 @@ export class CommunicationController {
   }
 
   @Get(':formSubmissionId/messages')
+  @ApiOperation({
+    summary: 'Get form submission messages',
+    description:
+      'Get all messages for a form submission using the formSubmissionId (This is useful when the UI is on the Form Detail page and does not know the threadId).',
+  })
   async getFormSubmissionMessages(
     @Param('formSubmissionId', ParseObjectIdPipe) formSubmissionId: string,
     @Query('page') page = '1',
@@ -131,6 +162,11 @@ export class CommunicationController {
   }
 
   @Patch(':formSubmissionId/messages/read')
+  @ApiOperation({
+    summary: 'Mark form submission thread as read',
+    description:
+      'Marks the form submission thread as read for the logged-in user. This resets the unread count to zero.',
+  })
   @HttpCode(HttpStatus.OK)
   async markFormSubmissionThreadAsRead(
     @Param('formSubmissionId', ParseObjectIdPipe) formSubmissionId: string,
