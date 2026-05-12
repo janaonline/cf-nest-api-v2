@@ -11,7 +11,6 @@ import { IThreadReadState } from '../interfaces/thread-read-state.interface';
 import { Message, MessageDocument } from '../schemas/message.schema';
 import { ThreadReadState, ThreadReadStateDocument } from '../schemas/thread-read-state.schema';
 import { MessageThreadService } from './message-thread.service';
-import { ThreadParticipantService } from './thread-participant.service';
 
 @Injectable()
 export class MessageService {
@@ -21,7 +20,6 @@ export class MessageService {
     @InjectModel(ThreadReadState.name)
     private readonly readStateModel: Model<ThreadReadStateDocument>,
     private readonly threadService: MessageThreadService,
-    private readonly participantService: ThreadParticipantService,
     private readonly communicationPermissions: CommunicationPermissions,
   ) {}
 
@@ -38,8 +36,7 @@ export class MessageService {
   ): Promise<IMessage> {
     const { threadId, senderUser, body } = options;
 
-    const thread = await this.threadService.getThreadDetails(threadId, senderUser, session);
-    const participants = await this.participantService.getThreadParticipants(threadId, session);
+    const { thread, participants } = await this.threadService.getThreadDetailsForUser(threadId, senderUser, session);
 
     if (!options.isSystemGenerated) {
       this.communicationPermissions.assertCanReplyToThread(senderUser, thread, participants);

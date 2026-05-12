@@ -25,8 +25,8 @@ export class CommunicationPermissions {
       if (p.participantType === 'ROLE_GROUP') {
         const roleMatch = p.roleCode === user.role;
         const orgMatch =
-          (user.role === Role.ULB && !!user.ulb && p.orgId?.toString() === user.ulb) ||
-          (user.role === Role.STATE && !!user.state && p.orgId?.toString() === user.state);
+          (user.role === Role.ULB && !!user.ulb && p.orgId?.toString() === user.ulb.toString()) ||
+          (user.role === Role.STATE && !!user.state && p.orgId?.toString() === user.state.toString());
         return roleMatch && orgMatch;
       }
       return false;
@@ -56,8 +56,8 @@ export class CommunicationPermissions {
       if (p.participantType === 'ROLE_GROUP') {
         const roleMatch = p.roleCode === user.role;
         const orgMatch =
-          (user.role === Role.ULB && !!user.ulb && p.orgId?.toString() === user.ulb) ||
-          (user.role === Role.STATE && !!user.state && p.orgId?.toString() === user.state);
+          (user.role === Role.ULB && !!user.ulb && p.orgId?.toString() === user.ulb.toString()) ||
+          (user.role === Role.STATE && !!user.state && p.orgId?.toString() === user.state.toString());
         return roleMatch && orgMatch && hasReply;
       }
       return false;

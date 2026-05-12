@@ -69,15 +69,12 @@ export class FormSubmissionStatusService {
       updateData['submittedAt'] = new Date();
     }
 
-    await this.formSubmissionModel.findByIdAndUpdate(formSubmissionId, updateData, { session: session ?? null }).exec();
-
-    await this.recordStatusHistory(formSubmissionId, fromStatus, newStatus, actor, action, remarks, session);
-
     const updated = await this.formSubmissionModel
-      .findById(formSubmissionId)
-      .session(session ?? null)
+      .findByIdAndUpdate(formSubmissionId, updateData, { session: session ?? null, new: true })
       .lean()
       .exec();
+
+    await this.recordStatusHistory(formSubmissionId, fromStatus, newStatus, actor, action, remarks, session);
 
     return updated as unknown as IFormSubmission;
   }

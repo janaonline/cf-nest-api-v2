@@ -12,6 +12,7 @@ import { CommunicationPermissions } from '../../common/services/communication.pe
 import { IFormSubmission } from '../../forms/interfaces/form-submission.interface';
 import { Role } from '../../module/auth/enum/role.enum';
 import { IMessageThread } from '../interfaces/message-thread.interface';
+import { IThreadParticipant } from '../interfaces/thread-participant.interface';
 import { MessageThread, MessageThreadDocument } from '../schemas/message-thread.schema';
 import { ThreadParticipantService } from './thread-participant.service';
 
@@ -173,16 +174,21 @@ export class MessageThreadService {
   }
 
   /**
-   * Fetches a single thread by ID and enforces view-level access for the requesting user.
+   * Fetches a thread with its participants in a single logical operation, then checks
+   * view permission. Returns both values so callers avoid a second participant query.
    * Pass session when the thread may have been created within an active transaction.
    * @param threadId Thread ObjectId string.
    * @param user Authenticated user whose role and org determine access.
-   * @param session Optional MongoDB transaction session (for reads inside a transaction).
-   * @returns The matching thread document.
+   * @param session Optional MongoDB transaction session.
+   * @returns Thread and its participants.
    * @throws NotFoundException if the thread does not exist.
    * @throws ForbiddenException if the user is not a participant with view access.
    */
-  async getThreadDetails(threadId: string, user: IAuthUser, session?: ClientSession): Promise<IMessageThread> {
+  async getThreadDetailsForUser(
+    threadId: string,
+    user: IAuthUser,
+    session?: ClientSession,
+  ): Promise<{ thread: IMessageThread; participants: IThreadParticipant[] }> {
     const record = await this.threadModel
       .findById(threadId)
       .session(session ?? null)
@@ -194,6 +200,21 @@ export class MessageThreadService {
     const participants = await this.participantService.getThreadParticipants(threadId, session);
     this.communicationPermissions.assertCanViewThread(user, thread, participants);
 
+    return { thread, participants };
+  }
+
+  /**
+   * Fetches thread details and checks view permission.
+   * Delegates to getThreadDetailsForUser() and returns only the thread.
+   * @param threadId Thread ObjectId string.
+   * @param user Authenticated user whose role and org determine access.
+   * @param session Optional MongoDB transaction session.
+   * @returns The matching thread document.
+   * @throws NotFoundException if the thread does not exist.
+   * @throws ForbiddenException if the user is not a participant with view access.
+   */
+  async getThreadDetails(threadId: string, user: IAuthUser, session?: ClientSession): Promise<IMessageThread> {
+    const { thread } = await this.getThreadDetailsForUser(threadId, user, session);
     return thread;
   }
 

@@ -62,7 +62,7 @@ export class NotificationService {
     };
     if (unreadOnly) filter['isRead'] = false;
 
-    const [notifications, total, unreadCount] = await Promise.all([
+    const [notifications, total] = await Promise.all([
       this.notificationModel
         .find(filter)
         .sort({ createdAt: -1 })
@@ -71,8 +71,13 @@ export class NotificationService {
         .lean()
         .exec(),
       this.notificationModel.countDocuments(filter).exec(),
-      this.notificationModel.countDocuments({ recipientUserId: toObjectId(userId, 'userId'), isRead: false }).exec(),
     ]);
+
+    const unreadCount = unreadOnly
+      ? total
+      : await this.notificationModel
+          .countDocuments({ recipientUserId: toObjectId(userId, 'userId'), isRead: false })
+          .exec();
 
     return {
       notifications: notifications as unknown as INotification[],
