@@ -46,7 +46,7 @@ export class DigitizationJobDto {
 
   @ApiProperty({
     description: 'ULB identifier',
-    example: '65a7dd50b0c7e600128b1234',
+    example: '5eb5844f76a3b61f40ba069e',
   })
   @IsString()
   @IsNotEmpty()
@@ -54,15 +54,15 @@ export class DigitizationJobDto {
 
   @ApiProperty({
     description: 'Financial year for which the document is being digitized',
-    example: '65a7dd50b0c7e600128b1234',
+    example: '606aadac4dff55e6c075c507',
   })
   @IsString()
   @IsNotEmpty()
   year!: string;
 
   @ApiProperty({
-    description: 'job id',
-    example: '123',
+    // description: 'job id',
+    // example: '123',
   })
   @IsString()
   @IsOptional()
@@ -77,8 +77,8 @@ export class DigitizationJobDto {
   auditType!: string;
 
   @ApiProperty({
-    description: 'Default document type for all files in this job (e.g. bal_sheet, income_exp)',
-    example: 'bal_sheet',
+    description: 'Default document type for all files in this job (e.g. bal_sheet, income_exp, auditor_report)',
+    example: 'auditor_report',
   })
   @IsString()
   @IsNotEmpty()
@@ -87,7 +87,9 @@ export class DigitizationJobDto {
   @ApiProperty({
     description: 'Public or internal URL of the PDF to digitize',
     example:
-      'https://jana-cityfinance-stg.s3.ap-south-1.amazonaws.com/objects/c908edc2-1b41-47e9-9a1e-62bc827d80c1.pdf',
+      // 'https://jana-cityfinance-stg.s3.ap-south-1.amazonaws.com/objects/c908edc2-1b41-47e9-9a1e-62bc827d80c1.pdf',
+      // 'https://jana-cityfinance-stg.s3.ap-south-1.amazonaws.com/ULB/2022-23/annual_accounts/TS073/Audit%20Certificate%202020-21_2c6d7fe1-5dc0-4bec-a21f-0ce711cdd2aa.pdf',
+      'https://jana-cityfinance-stg.s3.ap-south-1.amazonaws.com/objects/04679fab-edb0-4631-bf7f-e1bc3973e2a1.pdf',
   })
   @IsString()
   @IsNotEmpty()
@@ -101,6 +103,15 @@ export class DigitizationJobDto {
   @IsString()
   @IsOptional()
   digitizedExcelUrl?: string;
+
+  @ApiProperty({
+    description: 'Public or internal URL of the digitized Excel file',
+    example:
+      'afs/5dd24729437ba31f7eb42f46_606aadac4dff55e6c075c507_audited_bal_sheet_schedules_9778ccc5-c775-4369-a3bb-244dfc8240f0.xlsx',
+  })
+  @IsString()
+  @IsOptional()
+  digitizedFileUrl?: string;
 
   @ApiPropertyOptional({
     description: 'Total number of pages in the PDF',

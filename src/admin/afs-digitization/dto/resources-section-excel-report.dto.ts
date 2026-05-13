@@ -2,7 +2,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsEnum, IsIn, IsMongoId, IsNotEmpty, IsOptional, IsString } from 'class-validator';
 import { YearLabels } from 'src/core/constants/years';
-import { AuditType, FileType } from 'src/schemas/afs/afs-excel-file.schema';
+import { AuditType, FileType } from 'src/schemas/afs/enums';
 
 export class ResourcesSectionExcelReportDto {
   @ApiProperty({

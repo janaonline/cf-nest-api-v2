@@ -3,6 +3,9 @@ import { Document, HydratedDocument } from 'mongoose';
 
 @Schema({ collection: 'afs_metrics', timestamps: true })
 export class AfsMetric {
+  @Prop({ type: String, default: 'all' })
+  docType: string;
+
   @Prop({ type: Number, default: 0 })
   digitizedFiles: number;
 
@@ -25,4 +28,4 @@ export class AfsMetric {
 // export type AfsMetricDocument = AfsMetric & Document;
 export type AfsMetricDocument = HydratedDocument<AfsMetric>;
 export const AfsMetricSchema = SchemaFactory.createForClass(AfsMetric);
-AfsMetricSchema.index({ digitizedFiles: 1, digitizedPages: 1, failedFiles: 1, failedPages: 1 });
+AfsMetricSchema.index({ docType: 1 }, { unique: true });

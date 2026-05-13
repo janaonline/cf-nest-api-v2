@@ -4,11 +4,14 @@ import type { Response } from 'express';
 import { YearIdToLabel } from 'src/core/constants/years';
 import { AfsDigitizationService } from './afs-digitization.service';
 import { AfsDumpService } from './afs-dump.service';
+import { AuditorReportDto } from './dto/auditor-report.dto';
 import { DigitizationJobBatchDto, DigitizationJobDto } from './dto/digitization-job.dto';
 import { DigitizationReportQueryDto } from './dto/digitization-report-query.dto';
 import { AfsFileList, AfsFileReport } from './dto/interface';
 import { ResourcesSectionExcelListDto } from './dto/resources-section-excel-list.dto';
 import { ResourcesSectionExcelReportDto } from './dto/resources-section-excel-report.dto';
+import { SubmitARDecisionDto } from './dto/submit-ar-decision.dto';
+import { AuditorsReportOcrQueueService } from './queue/auditors-report-ocr-queue/auditors-report-ocr-queue.service';
 import { DigitizationQueueService } from './queue/digitization-queue/digitization-queue.service';
 
 @Controller('afs-digitization')
@@ -22,6 +25,7 @@ export class AfsDigitizationController {
     private afsService: AfsDigitizationService,
     private afsDumpService: AfsDumpService,
     private digitizationQueueService: DigitizationQueueService,
+    private ocrQueueService: AuditorsReportOcrQueueService,
   ) {}
 
   @Get('filters')
@@ -80,23 +84,45 @@ export class AfsDigitizationController {
     };
   }
 
-  @Post('digitize')
-  async digitize(@Body() body: DigitizationJobDto) {
-    const result = await this.digitizationQueueService.handleDigitizationJob(body);
-    // HTTP 202 semantics: accepted for processing
-    return {
-      status: 'queued',
-      result,
-    };
-  }
+  // @Post('digitize')
+  // async digitize(@Body() body: DigitizationJobDto) {
+  //   const result = await this.digitizationQueueService.handleDigitizationJob(body);
+  //   // HTTP 202 semantics: accepted for processing
+  //   return {
+  //     status: 'queued',
+  //     result,
+  //   };
+  // }
 
   @Post('enqueue-batch')
   @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
   @ApiBody({ type: DigitizationJobBatchDto })
   async enqueueBatch(@Body() body: DigitizationJobBatchDto) {
     const { jobs } = body;
+    if (jobs[0].docType === 'auditor_report') {
+      const result = await this.ocrQueueService.enqueueBatch(jobs);
+      return {
+        status: 'queued',
+        ...result,
+      };
+    } else {
+      const result = await this.digitizationQueueService.enqueueBatch(jobs);
+      return {
+        status: 'queued',
+        ...result,
+      };
+    }
+  }
 
-    const result = await this.digitizationQueueService.enqueueBatch(jobs);
+  @Post('auditors-report-ocr-queue')
+  @UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
+  @ApiBody({ type: DigitizationJobBatchDto })
+  async enqueueAuditorsReportOcrBatch(@Body() body: DigitizationJobBatchDto) {
+    const { jobs } = body;
+
+    // For now, we can use the same queue method since both jobs have the same structure.
+    // If needed, we can create a separate method in the queue service for auditors report OCR jobs.
+    const result = await this.ocrQueueService.enqueueBatch(jobs);
     return {
       status: 'queued',
       ...result,
@@ -106,6 +132,11 @@ export class AfsDigitizationController {
   @Get('metrics')
   async getMetrics() {
     return await this.afsService.getMetrics();
+  }
+
+  @Get('metrics-afs')
+  async getMetricsAfs() {
+    return await this.afsService.getMetricsAfs();
   }
 
   @Get('status/:id')
@@ -121,5 +152,20 @@ export class AfsDigitizationController {
   @Get('file/:id')
   async getFile(@Param('id') id: string) {
     return await this.afsService.getFile(id);
+  }
+
+  @Get('get-auditors-report')
+  async getAuditorsReport(@Query() query: AuditorReportDto) {
+    return await this.afsService.getAuditorsReport(query);
+  }
+
+  @Get('get-ar-item/:id')
+  async getAuditorsReportItem(@Param('id') id: string) {
+    return { data: await this.afsService.getAuditorsReportItem(id) };
+  }
+
+  @Post('submit-ar-decision')
+  async submitARDecision(@Body() body: SubmitARDecisionDto) {
+    return await this.afsService.submitARDecision(body);
   }
 }
