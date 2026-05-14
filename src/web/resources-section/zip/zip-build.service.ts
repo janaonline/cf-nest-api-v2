@@ -21,7 +21,7 @@ export class ZipBuildService {
     private emailService: EmailService,
     // private sesV2: SESMailService,
     private readonly mailer: NodeMailerService,
-  ) {}
+  ) { }
 
   /**
    * Streams all files into a ZIP and uploads to S3 via multipart streaming.
@@ -147,31 +147,7 @@ export class ZipBuildService {
         return;
       }
       const downloadType = params.downloadType;
-      // const htmlBody = this.compileTemplate('resource-zip-ready', {
-      //   name,
-      //   download_link: params.link,
-      //   unsubscribeUrl,
-      //   state: ulbData[0]?.stateName || 'State',
-      //   year: ulbData[0]?.year || 'Year',
-      //   ulbs: ulbData?.map((u) => u.ulbName).join(', ') || '',
-      // });
 
-      // console.log('Sending email to', params.to, 'from', this.from);
-      //   const html1 = `
-      //   <p>Your ZIP is ready.</p>
-      //   <p><a href="${params.link}">Click to download</a> (expires soon)</p>
-      //   <p>Key: ${params.key}<br/>Files: ${params.counts.total} (skipped: ${params.counts.skipped})</p>
-      // `;
-      // const result = await this.ses.send(
-      //   new SendEmailCommand({
-      //     Destination: { ToAddresses: [params.to] },
-      //     Source: this.from,
-      //     Message: {
-      //       Subject: { Data: params.subject },
-      //       Body: { Html: { Data: htmlBody } },
-      //     },
-      //   }),
-      // );
       const mailData = {
         name,
         download_link: params.link,
