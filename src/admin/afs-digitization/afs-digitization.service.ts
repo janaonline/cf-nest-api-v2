@@ -266,15 +266,7 @@ export class AfsDigitizationService {
       const pipeline = getAfsReportPipeline(query);
       const dbRes = (await this.afsExcelFileModel.aggregate(pipeline).exec()) as IAfsExcelFile[];
 
-      const baseUrl = this.configService.get<string>('BASE_URL', '');
-      const ttlMs = Number(this.configService.get<string>('FILE_TOKEN_TTL_MS')) || 24 * 3600 * 1000; // default to 24 hours
-      const exp = Date.now() + ttlMs;
-
-      const excel = dbRes.map((file) => {
-        if (!file.url) return file;
-        const token = this.fileTokenService.createToken({ path: file.url, exp, disposition: 'attachment' });
-        return { ...file, url: `${baseUrl}file/download?signature=${token}` };
-      });
+      const excel = dbRes.map((file) => ({ ...file, url: this.fileTokenService.signFileUrl(file.url) }));
 
       return {
         success: true,

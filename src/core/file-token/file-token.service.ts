@@ -8,7 +8,7 @@ const TAG_BYTES = 16;
 
 export interface FileDownloadPayload {
   path: string;
-  exp: number;
+  exp?: number;
   disposition?: string;
 }
 
@@ -17,14 +17,23 @@ export type TokenError = { type: 'invalid' | 'expired' | 'tampered' };
 @Injectable()
 export class FileTokenService {
   private readonly key: Buffer;
+  private readonly baseUrl: string;
 
   constructor(cfg: ConfigService) {
-    const secret = cfg.get<string>('FILE_TOKEN_SECRET');
-    if (!secret) throw new Error('FILE_TOKEN_SECRET env variable is not set');
+    const secret = cfg.get<string>('JWT_SECRET');
+    if (!secret) throw new Error('SECRET env variable is not set for FileTokenService');
     this.key = crypto.createHash('sha256').update(secret).digest();
+    this.baseUrl = cfg.get<string>('BASE_URL', '');
+  }
+
+  signFileUrl(url: string): string {
+    if (!url) return url;
+    const token = this.createToken({ path: url, disposition: 'attachment' });
+    return `${this.baseUrl}file/download?signature=${token}`;
   }
 
   createToken(payload: FileDownloadPayload): string {
+    payload.exp = payload.exp || Date.now() + 24 * 60 * 1000; // default 24 hours expiry
     const iv = crypto.randomBytes(IV_BYTES);
     const cipher = crypto.createCipheriv(ALGORITHM, this.key, iv);
     const pt = JSON.stringify(payload);
