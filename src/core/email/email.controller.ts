@@ -9,7 +9,9 @@ import { getHtmlFromTemplate, htmlUnsubscribeTemplate } from './constant';
 import { SendEmailOtpDto, VerifyEmailOtpDto } from './dto/otp.dto';
 import { EmailService } from './email.service';
 import { UnsubscribePayload } from './interface';
+import { Public } from 'src/module/auth/decorators/public.decorator';
 
+@Public()
 @Controller('email')
 export class EmailController {
   private readonly logger = new Logger(EmailController.name);
