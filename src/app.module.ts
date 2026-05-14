@@ -20,6 +20,8 @@ import { ReportAnIssueModule } from './web/report-an-issue/report-an-issue.modul
 import { ResourcesSectionModule } from './web/resources-section/resources-section.module';
 import { EventsModule } from './admin/events/events.module';
 import { XviFcModule } from './admin/xvi-fc/xvi-fc.module';
+import { FileTokenModule } from './core/file-token/file-token.module';
+import { FileDownloadModule } from './file-download/file-download.module';
 function getQueryCaller(): string {
   const stack = new Error().stack?.split('\n') ?? [];
   const frame = stack.find(
@@ -87,6 +89,8 @@ function getQueryCaller(): string {
     NodeMailerModule,
     EmailModule,
     ReportAnIssueModule,
+    FileTokenModule,
+    FileDownloadModule,
     AfsDigitizationModule,
     EventsModule,
     DataCollectionModule,
