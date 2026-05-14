@@ -15,6 +15,16 @@ import { AfsDigitizationModule } from './admin/afs-digitization/afs-digitization
 import { ReportAnIssueModule } from './web/report-an-issue/report-an-issue.module';
 import { ResourcesSectionModule } from './web/resources-section/resources-section.module';
 import { EventsModule } from './admin/events/events.module';
+import { FileTokenModule } from './core/file-token/file-token.module';
+import { FileDownloadModule } from './file-download/file-download.module';
+function getQueryCaller(): string {
+  const stack = new Error().stack?.split('\n') ?? [];
+  const frame = stack.find(
+    (line) => line.includes('src') && !line.includes('node_modules') && !line.includes('app.module'),
+  );
+  const match = frame?.match(/\((.+?)\)/) ?? frame?.match(/at (.+)/);
+  return match?.[1]?.trim() ?? 'unknown';
+}
 
 @Module({
   imports: [
@@ -58,6 +68,8 @@ import { EventsModule } from './admin/events/events.module';
     NodeMailerModule,
     EmailModule,
     ReportAnIssueModule,
+    FileTokenModule,
+    FileDownloadModule,
     AfsDigitizationModule,
     EventsModule,
   ],

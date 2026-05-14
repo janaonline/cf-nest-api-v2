@@ -42,11 +42,8 @@ export class ZipJobsProcessor extends WorkerHost {
     await job.updateProgress(95);
     // console.log('Zip built', result);
 
-    // Generate pre-signed URL
-    // const url = await this.s3.presignGet(result.zipKey);
-
-    // Step 2: Generate permanent public URL
-    const url = this.s3.getPublicUrl(result.zipKey);
+    // Generate pre-signed URL (max expiry: 604800s = 7 days for IAM user credentials)
+    const url = await this.s3.presignGet(result.zipKey);
 
     const payload: ZipJobResult & { url: string } = { ...result, url };
     // console.log('out Sending email ');

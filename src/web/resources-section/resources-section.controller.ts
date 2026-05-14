@@ -9,13 +9,12 @@ export class ResourcesSectionController {
   constructor(
     private readonly resourcesSectionService: ResourcesSectionService,
     private readonly s3ZipService: S3ZipService,
-  ) {}
+  ) { }
 
   @Get('data-sets')
   async getAnnualAccounts(@Query() query: QueryResourcesSectionDto) {
     return this.resourcesSectionService.getFiles(query);
   }
-
   @Get('data-sets/zip')
   async getAnnualAccountsZip(@Query() query: QueryResourcesSectionDto) {
     return this.resourcesSectionService.zipData(query);

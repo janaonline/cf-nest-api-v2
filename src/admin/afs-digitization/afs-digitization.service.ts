@@ -1,6 +1,8 @@
 import { BadRequestException, Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import { ConfigService } from '@nestjs/config';
+import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { YearLabelToId } from 'src/core/constants/years';
 import { buildPopulationMatch } from 'src/core/helpers/populationCategory.helper';
 import { AfsAuditorsReport, AfsAuditorsReportDocument } from 'src/schemas/afs/afs-auditors-report.schema';
@@ -59,7 +61,10 @@ export class AfsDigitizationService {
 
     // @InjectQueue(AFS_DIGITIZATION_QUEUE)
     // private readonly digitizationQueue: Queue<DigitizationJobDto>,
-  ) {}
+
+    private readonly fileTokenService: FileTokenService,
+    private readonly configService: ConfigService,
+  ) { }
 
   async getAfsFilters() {
     // const auditTypes = [
@@ -260,11 +265,22 @@ export class AfsDigitizationService {
     try {
       const pipeline = getAfsReportPipeline(query);
       const dbRes = (await this.afsExcelFileModel.aggregate(pipeline).exec()) as IAfsExcelFile[];
+
+      const baseUrl = this.configService.get<string>('BASE_URL', '');
+      const ttlMs = Number(this.configService.get<string>('FILE_TOKEN_TTL_MS')) || 24 * 3600 * 1000; // default to 24 hours
+      const exp = Date.now() + ttlMs;
+
+      const excel = dbRes.map((file) => {
+        if (!file.url) return file;
+        const token = this.fileTokenService.createToken({ path: file.url, exp, disposition: 'attachment' });
+        return { ...file, url: `${baseUrl}file/download?signature=${token}` };
+      });
+
       return {
         success: true,
         data: {
           type: query.auditType,
-          excel: dbRes,
+          excel,
           source: 'digitizedExcel',
         },
       };
