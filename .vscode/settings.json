@@ -32,7 +32,7 @@
     "**/.nyc_output": true
   },
   "[typescript]": {
-    "editor.defaultFormatter": "vscode.typescript-language-features"
+    "editor.defaultFormatter": "dbaeumer.vscode-eslint"
   },
   "[javascript]": {
     "editor.defaultFormatter": "esbenp.prettier-vscode"

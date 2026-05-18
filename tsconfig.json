@@ -17,7 +17,9 @@
     "outDir": "./dist",
     "baseUrl": "./",
     "paths": {
-      "src/*": ["src/*"]
+      "src/*": [
+        "src/*"
+      ]
     },
     "incremental": true,
     "skipLibCheck": true,
@@ -27,5 +29,16 @@
     "strictBindCallApply": false,
     "noFallthroughCasesInSwitch": false
   },
-  "exclude": ["node_modules", "dist"]
+  "exclude": [
+    "node_modules",
+    "dist",
+    "test",
+    "**/*.spec.ts",
+    "**/*.test.ts"
+  ],
+  "references": [
+    {
+      "path": "./tsconfig.spec.json"
+    }
+  ]
 }
