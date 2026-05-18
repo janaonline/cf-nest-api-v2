@@ -33,6 +33,7 @@ export class S3Service {
   }
 
   async getObjectStream(Key: string): Promise<Readable> {
+    this.logger.log(`Fetching S3 object stream for key: ${this.bucket} -- ${Key}`);
     const out: GetObjectCommandOutput = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key }));
     return out.Body! as Readable; // Node.js Readable
   }
