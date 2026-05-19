@@ -1,12 +1,13 @@
 ﻿import { Test, TestingModule } from '@nestjs/testing';
 import type { User } from 'src/module/auth/enum/role.enum';
 import { RolesGuard } from 'src/module/auth/guards/roles.guard';
-import type { SafeApiClientResponse } from './services/api-client.service';
-import { ApiClientService } from './services/api-client.service';
 import { ApiClientsController } from './api-clients.controller';
 import type { CreateApiClientDto } from './dto/create-api-client.dto';
 import { ListApiClientsQueryDto } from './dto/list-api-clients-query.dto';
 import type { UpdateApiClientStatusDto } from './dto/update-api-client-status.dto';
+import type { UpdateApiClientDto } from './dto/update-api-client.dto';
+import { ApiClientService } from './services/api-client.service';
+import { SafeApiClientResponse } from './types/api-client.service.types';
 
 const VALID_STATE_ID = '5dcf9d7216a06aed41c748dd';
 const VALID_SCOPE = 'data_collection:template:read';
@@ -35,6 +36,7 @@ const mockService = {
     .fn()
     .mockResolvedValue({ clientId: 'cf_state_abc123', clientSecret: 'newSecret', status: 'ACTIVE' }),
   updateStatus: jest.fn().mockResolvedValue({ ...fakeSafeClient, status: 'INACTIVE' }),
+  updateApiClientConfig: jest.fn().mockResolvedValue({ ...fakeSafeClient, name: 'Updated Name' }),
 };
 
 const mockUser: User = { _id: 'admin-id-123', email: 'admin@test.com', role: 'ADMIN' as never, ulb: '', state: '' };
@@ -131,6 +133,27 @@ describe('ApiClientsController', () => {
       expect(await controller.rotateSecret('cf_state_abc123', {}, mockUser, '127.0.0.1')).not.toHaveProperty(
         'secretHash',
       );
+    });
+  });
+
+  describe('update', () => {
+    const dto: UpdateApiClientDto = { name: 'Updated Name', scopes: [VALID_SCOPE] };
+
+    it('delegates to service.updateApiClientConfig with clientId, dto, adminId, and metadata', async () => {
+      await controller.update('cf_state_abc123', dto, mockUser, '127.0.0.1', 'agent');
+      expect(mockService.updateApiClientConfig).toHaveBeenCalledWith('cf_state_abc123', dto, 'admin-id-123', {
+        ip: '127.0.0.1',
+        userAgent: 'agent',
+      });
+    });
+
+    it('response reflects updated name', async () => {
+      const result = await controller.update('cf_state_abc123', dto, mockUser, '127.0.0.1');
+      expect(result.name).toBe('Updated Name');
+    });
+
+    it('response does not include secretHash', async () => {
+      expect(await controller.update('cf_state_abc123', dto, mockUser, '127.0.0.1')).not.toHaveProperty('secretHash');
     });
   });
 

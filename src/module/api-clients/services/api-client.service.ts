@@ -11,6 +11,7 @@ import { DEFAULT_SALT_ROUNDS } from '../constants/api-client.constants';
 import { CreateApiClientDto } from '../dto/create-api-client.dto';
 import { ListApiClientsQueryDto } from '../dto/list-api-clients-query.dto';
 import type { RotateSecretDto } from '../dto/rotate-secret.dto';
+import type { UpdateApiClientDto } from '../dto/update-api-client.dto';
 import { ActorType, ApiClient, ApiClientDocument, ClientStatus } from '../entities/api-client.schema';
 import {
   LeanApiClient,
@@ -423,6 +424,87 @@ export class ApiClientService {
       newStatus: status,
       performedBy: adminObjId,
       reason,
+      ...meta,
+    });
+
+    return this.toSafeResponse(updated);
+  }
+
+  /**
+   * Updates editable API client configuration fields (name, scopes, allowedIps).
+   * Identity fields (actorType, stateId, ulbId, clientId) cannot be changed here.
+   * Only fields that differ from the stored values are recorded in the audit log.
+   * @param clientId API client identifier.
+   * @param dto Editable configuration fields.
+   * @param adminId Authenticated admin user ID for audit tracking.
+   * @param meta Request metadata (ip, userAgent) for audit logging.
+   * @returns Updated safe client details.
+   */
+  async updateApiClientConfig(
+    clientId: string,
+    dto: UpdateApiClientDto,
+    adminId?: string,
+    meta?: { ip?: string; userAgent?: string },
+  ): Promise<SafeApiClientResponse> {
+    if (dto.name === undefined && dto.scopes === undefined && dto.allowedIps === undefined) {
+      throw new BadRequestException('No editable fields provided.');
+    }
+
+    const existing = await this.apiClientModel.findOne({ clientId }).select('-secretHash').lean<LeanApiClient | null>();
+    if (!existing) throw new NotFoundException(`API client '${clientId}' not found`);
+
+    if (dto.scopes !== undefined) {
+      this.validateScopes(dto.scopes);
+      dto.scopes = Array.from(new Set(dto.scopes));
+    }
+
+    if (dto.allowedIps !== undefined) {
+      dto.allowedIps = Array.from(new Set(dto.allowedIps));
+    }
+
+    const changedFields: Record<string, { oldValue: unknown; newValue: unknown }> = {};
+
+    if (dto.name !== undefined && dto.name !== existing.name) {
+      changedFields['name'] = { oldValue: existing.name ?? null, newValue: dto.name };
+    }
+    if (dto.scopes !== undefined) {
+      const old = existing.scopes ?? [];
+      const next = dto.scopes;
+      if (old.length !== next.length || old.some((s, i) => s !== next[i])) {
+        changedFields['scopes'] = { oldValue: old, newValue: next };
+      }
+    }
+    if (dto.allowedIps !== undefined) {
+      const old = existing.allowedIps ?? [];
+      const next = dto.allowedIps;
+      if (old.length !== next.length || old.some((ip, i) => ip !== next[i])) {
+        changedFields['allowedIps'] = { oldValue: old, newValue: next };
+      }
+    }
+
+    if (Object.keys(changedFields).length === 0) {
+      return this.toSafeResponse(existing);
+    }
+
+    const adminObjId = adminId ? new Types.ObjectId(adminId) : undefined;
+    const update: Record<string, unknown> = { ...(adminObjId && { updatedBy: adminObjId }) };
+    if ('name' in changedFields) update['name'] = dto.name;
+    if ('scopes' in changedFields) update['scopes'] = dto.scopes;
+    if ('allowedIps' in changedFields) update['allowedIps'] = dto.allowedIps;
+
+    const updated = await this.apiClientModel
+      .findOneAndUpdate({ clientId }, { $set: update }, { new: true })
+      .select('-secretHash')
+      .lean<LeanApiClient | null>();
+
+    if (!updated) throw new NotFoundException(`API client '${clientId}' not found`);
+
+    await this.auditLogService.logClientUpdated({
+      apiClientId: existing._id,
+      clientId: existing.clientId,
+      changedFields,
+      performedBy: adminObjId,
+      reason: dto.reason,
       ...meta,
     });
 

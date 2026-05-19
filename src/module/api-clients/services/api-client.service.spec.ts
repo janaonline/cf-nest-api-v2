@@ -32,6 +32,7 @@ const mockUlbModel = { exists: jest.fn() };
 
 const mockAuditLogService = {
   logClientCreated: jest.fn().mockResolvedValue(undefined),
+  logClientUpdated: jest.fn().mockResolvedValue(undefined),
   logSecretRotated: jest.fn().mockResolvedValue(undefined),
   logStatusUpdated: jest.fn().mockResolvedValue(undefined),
   logTokenCreated: jest.fn(),
@@ -620,6 +621,175 @@ describe('ApiClientService', () => {
       const query = (model.exists.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
       expect(query).toHaveProperty('_id');
       expect((query['_id'] as Record<string, unknown>)['$ne']).toBeDefined();
+    });
+  });
+
+  describe('updateApiClientConfig', () => {
+    const existingClient = {
+      _id: new Types.ObjectId(),
+      clientId: 'cf_state_abc',
+      actorType: 'STATE' as const,
+      stateId: new Types.ObjectId(VALID_STATE_ID),
+      scopes: ['data_collection:template:read'],
+      allowedIps: ['192.168.1.1'],
+      status: 'ACTIVE' as const,
+      name: 'Old Name',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    const updatedClient = { ...existingClient, name: 'New Name' };
+
+    function mockFindOne(result: unknown) {
+      model.findOne.mockReturnValue({
+        select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(result) }),
+      });
+    }
+
+    function mockFindOneAndUpdate(result: unknown) {
+      model.findOneAndUpdate.mockReturnValue({
+        select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(result) }),
+      });
+    }
+
+    beforeEach(() => {
+      mockAuditLogService.logClientUpdated.mockResolvedValue(undefined);
+      mockFindOne(existingClient);
+      mockFindOneAndUpdate(updatedClient);
+    });
+
+    it('throws BadRequestException when no editable fields provided', async () => {
+      await expect(service.updateApiClientConfig('cf_state_abc', {})).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws NotFoundException when client not found', async () => {
+      mockFindOne(null);
+      await expect(service.updateApiClientConfig('cf_state_abc', { name: 'X' })).rejects.toThrow(NotFoundException);
+    });
+
+    it('updates name successfully', async () => {
+      const result = await service.updateApiClientConfig('cf_state_abc', { name: 'New Name' });
+      expect(result).not.toHaveProperty('secretHash');
+      const $set = ((model.findOneAndUpdate.mock.calls[0] as unknown[])[1] as Record<string, unknown>)[
+        '$set'
+      ] as Record<string, unknown>;
+      expect($set['name']).toBe('New Name');
+    });
+
+    it('updates scopes successfully', async () => {
+      const newScopes = ['data_collection:ulbs:read'];
+      mockFindOneAndUpdate({ ...existingClient, scopes: newScopes });
+      await service.updateApiClientConfig('cf_state_abc', { scopes: newScopes });
+      const $set = ((model.findOneAndUpdate.mock.calls[0] as unknown[])[1] as Record<string, unknown>)[
+        '$set'
+      ] as Record<string, unknown>;
+      expect($set['scopes']).toEqual(newScopes);
+    });
+
+    it('updates allowedIps successfully', async () => {
+      const newIps = ['10.0.0.1'];
+      mockFindOneAndUpdate({ ...existingClient, allowedIps: newIps });
+      await service.updateApiClientConfig('cf_state_abc', { allowedIps: newIps });
+      const $set = ((model.findOneAndUpdate.mock.calls[0] as unknown[])[1] as Record<string, unknown>)[
+        '$set'
+      ] as Record<string, unknown>;
+      expect($set['allowedIps']).toEqual(newIps);
+    });
+
+    it('updates multiple fields together', async () => {
+      const dto = { name: 'Multi', scopes: ['data_collection:years:read'], allowedIps: ['10.0.0.2'] };
+      mockFindOneAndUpdate({ ...existingClient, ...dto });
+      await service.updateApiClientConfig('cf_state_abc', dto);
+      const $set = ((model.findOneAndUpdate.mock.calls[0] as unknown[])[1] as Record<string, unknown>)[
+        '$set'
+      ] as Record<string, unknown>;
+      expect($set['name']).toBe('Multi');
+      expect($set['scopes']).toEqual(dto.scopes);
+      expect($set['allowedIps']).toEqual(dto.allowedIps);
+    });
+
+    it('rejects unknown scope with BadRequestException', async () => {
+      await expect(service.updateApiClientConfig('cf_state_abc', { scopes: ['invalid:scope'] })).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('rejects empty scopes array with BadRequestException', async () => {
+      await expect(service.updateApiClientConfig('cf_state_abc', { scopes: [] })).rejects.toThrow(BadRequestException);
+    });
+
+    it('does not return secretHash in response', async () => {
+      const result = await service.updateApiClientConfig('cf_state_abc', { name: 'New Name' });
+      expect(result).not.toHaveProperty('secretHash');
+    });
+
+    it('sets updatedBy to admin ObjectId when adminId provided', async () => {
+      await service.updateApiClientConfig('cf_state_abc', { name: 'New Name' }, 'aaaaaaaaaaaaaaaaaaaaaaaa');
+      const $set = ((model.findOneAndUpdate.mock.calls[0] as unknown[])[1] as Record<string, unknown>)[
+        '$set'
+      ] as Record<string, unknown>;
+      expect($set['updatedBy']).toBeDefined();
+    });
+
+    it('logs API_CLIENT_UPDATED with correct action', async () => {
+      await service.updateApiClientConfig('cf_state_abc', { name: 'New Name' });
+      expect(mockAuditLogService.logClientUpdated).toHaveBeenCalledTimes(1);
+    });
+
+    it('changedFields includes only changed fields', async () => {
+      await service.updateApiClientConfig('cf_state_abc', { name: 'New Name' });
+      const arg = (mockAuditLogService.logClientUpdated.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(arg['changedFields']).toHaveProperty('name');
+      expect(arg['changedFields']).not.toHaveProperty('scopes');
+      expect(arg['changedFields']).not.toHaveProperty('allowedIps');
+    });
+
+    it('changedFields records oldValue and newValue', async () => {
+      await service.updateApiClientConfig('cf_state_abc', { name: 'New Name' });
+      const arg = (mockAuditLogService.logClientUpdated.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      const changedFields = arg['changedFields'] as Record<string, { oldValue: unknown; newValue: unknown }>;
+      expect(changedFields['name'].oldValue).toBe('Old Name');
+      expect(changedFields['name'].newValue).toBe('New Name');
+    });
+
+    it('does not call findOneAndUpdate when no fields actually changed', async () => {
+      // Same name as existing
+      await service.updateApiClientConfig('cf_state_abc', { name: 'Old Name' });
+      expect(model.findOneAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('returns existing client unchanged when no fields changed', async () => {
+      const result = await service.updateApiClientConfig('cf_state_abc', { name: 'Old Name' });
+      expect(result.clientId).toBe('cf_state_abc');
+    });
+
+    it('does not call logClientUpdated when no fields changed', async () => {
+      await service.updateApiClientConfig('cf_state_abc', { name: 'Old Name' });
+      expect(mockAuditLogService.logClientUpdated).not.toHaveBeenCalled();
+    });
+
+    it('deduplicates scopes before updating', async () => {
+      const dupScopes = ['data_collection:ulbs:read', 'data_collection:ulbs:read'];
+      await service.updateApiClientConfig('cf_state_abc', { scopes: dupScopes });
+      const $set = ((model.findOneAndUpdate.mock.calls[0] as unknown[])[1] as Record<string, unknown>)[
+        '$set'
+      ] as Record<string, unknown>;
+      expect(($set['scopes'] as string[]).length).toBe(1);
+    });
+
+    it('deduplicates allowedIps before updating', async () => {
+      const dupIps = ['10.0.0.1', '10.0.0.1'];
+      await service.updateApiClientConfig('cf_state_abc', { allowedIps: dupIps });
+      const $set = ((model.findOneAndUpdate.mock.calls[0] as unknown[])[1] as Record<string, unknown>)[
+        '$set'
+      ] as Record<string, unknown>;
+      expect(($set['allowedIps'] as string[]).length).toBe(1);
+    });
+
+    it('passes reason to audit log', async () => {
+      await service.updateApiClientConfig('cf_state_abc', { name: 'New Name', reason: 'rebrand' });
+      const arg = (mockAuditLogService.logClientUpdated.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(arg['reason']).toBe('rebrand');
     });
   });
 });

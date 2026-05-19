@@ -3,6 +3,7 @@ import { HydratedDocument, Types } from 'mongoose';
 
 export type AuditAction =
   | 'API_CLIENT_CREATED'
+  | 'API_CLIENT_UPDATED'
   | 'API_CLIENT_SECRET_ROTATED'
   | 'API_CLIENT_STATUS_UPDATED'
   | 'API_CLIENT_TOKEN_CREATED'
@@ -27,6 +28,7 @@ export class ApiClientAuditLog {
     required: true,
     enum: [
       'API_CLIENT_CREATED',
+      'API_CLIENT_UPDATED',
       'API_CLIENT_SECRET_ROTATED',
       'API_CLIENT_STATUS_UPDATED',
       'API_CLIENT_TOKEN_CREATED',
@@ -55,6 +57,10 @@ export class ApiClientAuditLog {
 
   @Prop()
   reason?: string;
+
+  /** Populated by API_CLIENT_UPDATED events; records field-level old/new values. */
+  @Prop({ type: Object })
+  changedFields?: Record<string, { oldValue: unknown; newValue: unknown }>;
 
   @Prop()
   ip?: string;

@@ -32,6 +32,16 @@ export type LogStatusUpdatedData = {
   userAgent?: string;
 };
 
+export type LogClientUpdatedData = {
+  apiClientId: Types.ObjectId;
+  clientId: string;
+  changedFields: Record<string, { oldValue: unknown; newValue: unknown }>;
+  performedBy?: Types.ObjectId;
+  reason?: string;
+  ip?: string;
+  userAgent?: string;
+};
+
 export type LogTokenCreatedData = {
   apiClientId?: Types.ObjectId;
   clientId: string;

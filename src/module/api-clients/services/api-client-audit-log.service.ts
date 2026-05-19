@@ -4,6 +4,7 @@ import { Model } from 'mongoose';
 import { ApiClientAuditLog } from '../entities/api-client-audit-log.schema';
 import type {
   LogClientCreatedData,
+  LogClientUpdatedData,
   LogSecretRotatedData,
   LogStatusUpdatedData,
   LogTokenCreatedData,
@@ -32,6 +33,25 @@ export class ApiClientAuditLogService {
       actorType: data.actorType,
       stateId: data.stateId,
       ulbId: data.ulbId,
+      ip: data.ip,
+      userAgent: data.userAgent,
+      success: true,
+      createdAt: new Date(),
+    });
+  }
+
+  /**
+   * Logs API client configuration update by an admin user.
+   * @param data Audit data including changed field values.
+   */
+  async logClientUpdated(data: LogClientUpdatedData): Promise<void> {
+    await this.auditLogModel.create({
+      apiClientId: data.apiClientId,
+      clientId: data.clientId,
+      action: 'API_CLIENT_UPDATED',
+      performedBy: data.performedBy,
+      changedFields: data.changedFields,
+      reason: data.reason,
       ip: data.ip,
       userAgent: data.userAgent,
       success: true,

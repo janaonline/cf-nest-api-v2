@@ -4,11 +4,12 @@ import { CurrentUser } from 'src/module/auth/decorators/current-user.decorator';
 import { Roles } from 'src/module/auth/decorators/roles.decorator';
 import * as roleEnum from 'src/module/auth/enum/role.enum';
 import { RolesGuard } from 'src/module/auth/guards/roles.guard';
-import { ApiClientService } from './services/api-client.service';
 import { CreateApiClientDto } from './dto/create-api-client.dto';
 import { ListApiClientsQueryDto } from './dto/list-api-clients-query.dto';
 import { RotateSecretDto } from './dto/rotate-secret.dto';
 import { UpdateApiClientStatusDto } from './dto/update-api-client-status.dto';
+import { UpdateApiClientDto } from './dto/update-api-client.dto';
+import { ApiClientService } from './services/api-client.service';
 
 @ApiTags('api-clients')
 @ApiBearerAuth()
@@ -48,6 +49,21 @@ export class ApiClientsController {
   })
   getOne(@Param('clientId') clientId: string) {
     return this.apiClientService.getApiClient(clientId);
+  }
+
+  @Patch(':clientId')
+  @ApiOperation({
+    summary: 'Update API client',
+    description: 'Updates editable integration client configuration.',
+  })
+  update(
+    @Param('clientId') clientId: string,
+    @Body() dto: UpdateApiClientDto,
+    @CurrentUser() user: roleEnum.User,
+    @Ip() ip: string,
+    @Headers('user-agent') userAgent?: string,
+  ) {
+    return this.apiClientService.updateApiClientConfig(clientId, dto, user?._id, { ip, userAgent });
   }
 
   @Patch(':clientId/rotate-secret')
