@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import * as bcrypt from 'bcrypt';
@@ -12,6 +12,13 @@ import { CreateApiClientDto } from '../dto/create-api-client.dto';
 import { ListApiClientsQueryDto } from '../dto/list-api-clients-query.dto';
 import type { RotateSecretDto } from '../dto/rotate-secret.dto';
 import { ActorType, ApiClient, ApiClientDocument, ClientStatus } from '../entities/api-client.schema';
+import {
+  LeanApiClient,
+  PaginatedApiClients,
+  SafeApiClientResponse,
+  StatusSnapshot,
+  StatusWithContext,
+} from '../types/api-client.service.types';
 import { ApiClientAuditLogService } from './api-client-audit-log.service';
 
 /** Escapes special regex metacharacters for safe use in MongoDB $regex queries. */
@@ -19,59 +26,19 @@ function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/** Lean projection type used internally for safe reads (no secretHash). */
-type LeanApiClient = {
-  _id: Types.ObjectId;
-  clientId: string;
-  name?: string;
-  actorType: ActorType;
-  stateId: Types.ObjectId;
-  ulbId?: Types.ObjectId;
-  scopes: string[];
-  allowedIps: string[];
-  status: ClientStatus;
-  lastUsedAt?: Date;
-  lastRotatedAt?: Date;
-  revokedAt?: Date;
-  revokedReason?: string;
-  createdAt: Date;
-  updatedAt: Date;
-};
-
-/** Minimal snapshot for capturing state before an update (audit logging). */
-type StatusSnapshot = {
-  _id: Types.ObjectId;
-  status: ClientStatus;
-};
-
-/** Public-facing shape — never includes secretHash or admin-tracking fields. */
-export type SafeApiClientResponse = {
-  clientId: string;
-  name?: string;
-  actorType: ActorType;
-  stateId: string;
-  ulbId?: string;
-  scopes: string[];
-  allowedIps: string[];
-  status: ClientStatus;
-  lastUsedAt?: Date;
-  lastRotatedAt?: Date;
-  revokedAt?: Date;
-  revokedReason?: string;
-  createdAt: Date;
-  updatedAt: Date;
-};
-
-/** Paginated list response returned by listApiClients. */
-export type PaginatedApiClients = {
-  data: SafeApiClientResponse[];
-  meta: {
-    page: number;
-    limit: number;
-    total: number;
-    totalPages: number;
-  };
-};
+/**
+ * Converts a MongoDB E11000 duplicate key error into a typed ConflictException.
+ * Inspects the keyPattern to identify which unique partial index was violated.
+ */
+function mapDuplicateKeyError(error: unknown): never {
+  if (typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 11000) {
+    const keyPattern = (error as { keyPattern?: Record<string, unknown> }).keyPattern ?? {};
+    if ('ulbId' in keyPattern) throw new ConflictException('An active API client already exists for this ULB.');
+    if ('stateId' in keyPattern) throw new ConflictException('An active API client already exists for this state.');
+    throw new ConflictException('API client id already exists. Please retry.');
+  }
+  throw error;
+}
 
 @Injectable()
 export class ApiClientService {
@@ -138,6 +105,32 @@ export class ApiClientService {
   private generateClientId(actorType: ActorType): string {
     const prefix = actorType === 'STATE' ? 'cf_state' : 'cf_ulb';
     return `${prefix}_${crypto.randomBytes(8).toString('hex')}`;
+  }
+
+  // ─── Uniqueness helpers ───
+
+  /**
+   * Throws ConflictException if another ACTIVE client already exists for the same state or ULB.
+   * Excludes the supplied _id so reactivating the same document never conflicts with itself.
+   */
+  private async assertNoActiveConflict(client: StatusWithContext): Promise<void> {
+    if (client.actorType === 'STATE') {
+      const conflict = await this.apiClientModel.exists({
+        _id: { $ne: client._id },
+        actorType: 'STATE',
+        stateId: client.stateId,
+        status: 'ACTIVE',
+      });
+      if (conflict) throw new ConflictException('An active API client already exists for this state.');
+    } else {
+      const conflict = await this.apiClientModel.exists({
+        _id: { $ne: client._id },
+        actorType: 'ULB',
+        ulbId: client.ulbId,
+        status: 'ACTIVE',
+      });
+      if (conflict) throw new ConflictException('An active API client already exists for this ULB.');
+    }
   }
 
   // ─── Validation ───
@@ -234,24 +227,45 @@ export class ApiClientService {
     this.validateScopes(dto.scopes);
     await this.validateStateAndUlbReferences(dto.actorType, dto.stateId, dto.ulbId);
 
+    // Service-level guard: reject duplicates before the expensive bcrypt hash.
+    if (dto.actorType === 'STATE') {
+      const conflict = await this.apiClientModel.exists({
+        actorType: 'STATE',
+        stateId: new Types.ObjectId(dto.stateId),
+        status: 'ACTIVE',
+      });
+      if (conflict) throw new ConflictException('An active API client already exists for this state.');
+    }
+    if (dto.actorType === 'ULB' && dto.ulbId) {
+      const conflict = await this.apiClientModel.exists({
+        actorType: 'ULB',
+        ulbId: new Types.ObjectId(dto.ulbId),
+        status: 'ACTIVE',
+      });
+      if (conflict) throw new ConflictException('An active API client already exists for this ULB.');
+    }
+
     const clientId = this.generateClientId(dto.actorType);
     const plainSecret = this.generateClientSecret();
     const saltRounds = this.config.get<number>('API_CLIENT_SECRET_SALT_ROUNDS', DEFAULT_SALT_ROUNDS);
     const secretHash = await bcrypt.hash(plainSecret, saltRounds);
     const adminObjId = adminId ? new Types.ObjectId(adminId) : undefined;
 
-    const doc = await this.apiClientModel.create({
-      clientId,
-      name: dto.name,
-      actorType: dto.actorType,
-      stateId: new Types.ObjectId(dto.stateId),
-      ulbId: dto.ulbId ? new Types.ObjectId(dto.ulbId) : undefined,
-      scopes: dto.scopes,
-      allowedIps: dto.allowedIps ?? [],
-      secretHash,
-      lastRotatedAt: new Date(),
-      ...(adminObjId && { createdBy: adminObjId, updatedBy: adminObjId }),
-    });
+    // Wrap create to handle concurrent duplicate races caught by the DB unique partial index.
+    const doc = await this.apiClientModel
+      .create({
+        clientId,
+        name: dto.name,
+        actorType: dto.actorType,
+        stateId: new Types.ObjectId(dto.stateId),
+        ulbId: dto.ulbId ? new Types.ObjectId(dto.ulbId) : undefined,
+        scopes: dto.scopes,
+        allowedIps: dto.allowedIps ?? [],
+        secretHash,
+        lastRotatedAt: new Date(),
+        ...(adminObjId && { createdBy: adminObjId, updatedBy: adminObjId }),
+      })
+      .catch((err: unknown): never => mapDuplicateKeyError(err));
 
     await this.auditLogService.logClientCreated({
       apiClientId: doc._id,
@@ -375,8 +389,16 @@ export class ApiClientService {
     meta?: { ip?: string; userAgent?: string },
     reason?: string,
   ): Promise<SafeApiClientResponse> {
-    const existing = await this.apiClientModel.findOne({ clientId }).select('_id status').lean<StatusSnapshot | null>();
+    const existing = await this.apiClientModel
+      .findOne({ clientId })
+      .select('_id actorType status stateId ulbId')
+      .lean<StatusWithContext | null>();
     if (!existing) throw new NotFoundException(`API client '${clientId}' not found`);
+
+    // Guard reactivation: ensure no other ACTIVE client exists for the same state/ULB.
+    if (status === 'ACTIVE') {
+      await this.assertNoActiveConflict(existing);
+    }
 
     const adminObjId = adminId ? new Types.ObjectId(adminId) : undefined;
     const update: Record<string, unknown> = { status, ...(adminObjId && { updatedBy: adminObjId }) };

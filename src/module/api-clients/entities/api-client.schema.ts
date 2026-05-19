@@ -62,8 +62,25 @@ export class ApiClient {
 export type ApiClientDocument = HydratedDocument<ApiClient>;
 export const ApiClientSchema = SchemaFactory.createForClass(ApiClient);
 
-ApiClientSchema.index({ actorType: 1, stateId: 1 });
 ApiClientSchema.index({ status: 1 });
+
+/** Unique partial index: only one ACTIVE STATE client per state. */
+ApiClientSchema.index(
+  { actorType: 1, stateId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { actorType: 'STATE', status: 'ACTIVE' },
+  },
+);
+
+/** Unique partial index: only one ACTIVE ULB client per ULB. */
+ApiClientSchema.index(
+  { actorType: 1, ulbId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { actorType: 'ULB', status: 'ACTIVE', ulbId: { $exists: true } },
+  },
+);
 
 /** Ensures ULB actors have ulbId; STATE actors do not. */
 ApiClientSchema.pre<ApiClientDocument>('validate', function () {

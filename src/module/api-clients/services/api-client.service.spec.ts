@@ -1,4 +1,4 @@
-﻿import { BadRequestException, NotFoundException } from '@nestjs/common';
+﻿import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { getModelToken } from '@nestjs/mongoose';
 import { Test, TestingModule } from '@nestjs/testing';
@@ -24,6 +24,7 @@ const mockApiClientModel = () => ({
   findOneAndUpdate: jest.fn(),
   find: jest.fn(),
   countDocuments: jest.fn(),
+  exists: jest.fn(),
 });
 
 const mockStateModel = { exists: jest.fn() };
@@ -219,6 +220,7 @@ describe('ApiClientService', () => {
     beforeEach(() => {
       mockStateModel.exists.mockResolvedValue({ _id: new Types.ObjectId() });
       mockUlbModel.exists.mockResolvedValue({ _id: new Types.ObjectId() });
+      model.exists.mockResolvedValue(null); // no active duplicate by default
       mockAuditLogService.logClientCreated.mockResolvedValue(undefined);
       model.create.mockImplementation((doc: Record<string, unknown>) =>
         Promise.resolve({
@@ -296,6 +298,66 @@ describe('ApiClientService', () => {
       const arg = (mockAuditLogService.logClientCreated.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
       expect(arg).not.toHaveProperty('secretHash');
       expect(arg).not.toHaveProperty('clientSecret');
+    });
+
+    // ── Duplicate active client checks ──
+    it('rejects second ACTIVE STATE client for same state', async () => {
+      model.exists.mockResolvedValue({ _id: new Types.ObjectId() });
+      await expect(service.createApiClient(stateDto)).rejects.toThrow(ConflictException);
+    });
+    it('conflict message identifies state actor', async () => {
+      model.exists.mockResolvedValue({ _id: new Types.ObjectId() });
+      await expect(service.createApiClient(stateDto)).rejects.toThrow(
+        'An active API client already exists for this state.',
+      );
+    });
+    it('rejects second ACTIVE ULB client for same ULB', async () => {
+      model.exists.mockResolvedValue({ _id: new Types.ObjectId() });
+      await expect(service.createApiClient(ulbDto)).rejects.toThrow(ConflictException);
+    });
+    it('conflict message identifies ULB actor', async () => {
+      model.exists.mockResolvedValue({ _id: new Types.ObjectId() });
+      await expect(service.createApiClient(ulbDto)).rejects.toThrow(
+        'An active API client already exists for this ULB.',
+      );
+    });
+    it('STATE duplicate check uses stateId not ulbId', async () => {
+      model.exists.mockResolvedValue(null);
+      await service.createApiClient(stateDto);
+      const query = (model.exists.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(query).toHaveProperty('stateId');
+      expect(query).not.toHaveProperty('ulbId');
+      expect(query).toMatchObject({ actorType: 'STATE', status: 'ACTIVE' });
+    });
+    it('ULB duplicate check uses ulbId', async () => {
+      model.exists.mockResolvedValue(null);
+      await service.createApiClient(ulbDto);
+      const query = (model.exists.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(query).toHaveProperty('ulbId');
+      expect(query).toMatchObject({ actorType: 'ULB', status: 'ACTIVE' });
+    });
+
+    // ── Race condition / DB duplicate key error ──
+    it('converts Mongo E11000 on STATE index into ConflictException', async () => {
+      model.create.mockRejectedValue({ code: 11000, keyPattern: { actorType: 1, stateId: 1 } });
+      await expect(service.createApiClient(stateDto)).rejects.toThrow(
+        'An active API client already exists for this state.',
+      );
+    });
+    it('converts Mongo E11000 on ULB index into ConflictException', async () => {
+      model.create.mockRejectedValue({ code: 11000, keyPattern: { actorType: 1, ulbId: 1 } });
+      await expect(service.createApiClient(ulbDto)).rejects.toThrow(
+        'An active API client already exists for this ULB.',
+      );
+    });
+    it('converts Mongo E11000 on clientId index into ConflictException', async () => {
+      model.create.mockRejectedValue({ code: 11000, keyPattern: { clientId: 1 } });
+      await expect(service.createApiClient(stateDto)).rejects.toThrow('API client id already exists. Please retry.');
+    });
+    it('does not swallow non-duplicate DB errors', async () => {
+      const dbError = new Error('Network error');
+      model.create.mockRejectedValue(dbError);
+      await expect(service.createApiClient(stateDto)).rejects.toThrow('Network error');
     });
   });
 
@@ -439,7 +501,12 @@ describe('ApiClientService', () => {
   });
 
   describe('updateStatus', () => {
-    const snap = { _id: new Types.ObjectId(), status: 'ACTIVE' as const };
+    const snap = {
+      _id: new Types.ObjectId(),
+      actorType: 'STATE' as const,
+      status: 'ACTIVE' as const,
+      stateId: new Types.ObjectId(VALID_STATE_ID),
+    };
     const updated = {
       _id: new Types.ObjectId(),
       clientId: 'cf_state_abc',
@@ -454,6 +521,7 @@ describe('ApiClientService', () => {
 
     beforeEach(() => {
       mockAuditLogService.logStatusUpdated.mockResolvedValue(undefined);
+      model.exists.mockResolvedValue(null); // no active conflict by default
       model.findOne.mockReturnValue({ select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(snap) }) });
       model.findOneAndUpdate.mockReturnValue({
         select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(updated) }),
@@ -495,6 +563,63 @@ describe('ApiClientService', () => {
       expect(arg['oldStatus']).toBe('ACTIVE');
       expect(arg['newStatus']).toBe('INACTIVE');
       expect(arg).not.toHaveProperty('secretHash');
+    });
+
+    // ── ACTIVE transition conflict guard ──
+    it('throws ConflictException when reactivating STATE client and another ACTIVE STATE client exists', async () => {
+      model.exists.mockResolvedValue({ _id: new Types.ObjectId() });
+      await expect(service.updateStatus('cf_state_abc', 'ACTIVE')).rejects.toThrow(ConflictException);
+    });
+    it('conflict message identifies state actor on ACTIVE reactivation', async () => {
+      model.exists.mockResolvedValue({ _id: new Types.ObjectId() });
+      await expect(service.updateStatus('cf_state_abc', 'ACTIVE')).rejects.toThrow(
+        'An active API client already exists for this state.',
+      );
+    });
+    it('throws ConflictException when reactivating ULB client and another ACTIVE ULB client exists', async () => {
+      const ulbSnap = {
+        _id: new Types.ObjectId(),
+        actorType: 'ULB' as const,
+        status: 'INACTIVE' as const,
+        stateId: new Types.ObjectId(VALID_STATE_ID),
+        ulbId: new Types.ObjectId(VALID_ULB_ID),
+      };
+      model.findOne.mockReturnValue({
+        select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(ulbSnap) }),
+      });
+      model.exists.mockResolvedValue({ _id: new Types.ObjectId() });
+      await expect(service.updateStatus('cf_ulb_abc', 'ACTIVE')).rejects.toThrow(ConflictException);
+    });
+    it('conflict message identifies ULB actor on ACTIVE reactivation', async () => {
+      const ulbSnap = {
+        _id: new Types.ObjectId(),
+        actorType: 'ULB' as const,
+        status: 'INACTIVE' as const,
+        stateId: new Types.ObjectId(VALID_STATE_ID),
+        ulbId: new Types.ObjectId(VALID_ULB_ID),
+      };
+      model.findOne.mockReturnValue({
+        select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(ulbSnap) }),
+      });
+      model.exists.mockResolvedValue({ _id: new Types.ObjectId() });
+      await expect(service.updateStatus('cf_ulb_abc', 'ACTIVE')).rejects.toThrow(
+        'An active API client already exists for this ULB.',
+      );
+    });
+    it('allows ACTIVE transition when no conflict exists', async () => {
+      model.exists.mockResolvedValue(null);
+      const updatedActive = { ...updated, status: 'ACTIVE' as const };
+      model.findOneAndUpdate.mockReturnValue({
+        select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(updatedActive) }),
+      });
+      await expect(service.updateStatus('cf_state_abc', 'ACTIVE')).resolves.toMatchObject({ status: 'ACTIVE' });
+    });
+    it('conflict check excludes the current document _id', async () => {
+      model.exists.mockResolvedValue(null);
+      await service.updateStatus('cf_state_abc', 'ACTIVE');
+      const query = (model.exists.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(query).toHaveProperty('_id');
+      expect((query['_id'] as Record<string, unknown>)['$ne']).toBeDefined();
     });
   });
 });
