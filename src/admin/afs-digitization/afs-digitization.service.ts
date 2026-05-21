@@ -1,6 +1,8 @@
 import { BadRequestException, Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import { ConfigService } from '@nestjs/config';
+import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { YearLabelToId } from 'src/core/constants/years';
 import { buildPopulationMatch } from 'src/core/helpers/populationCategory.helper';
 import { AfsAuditorsReport, AfsAuditorsReportDocument } from 'src/schemas/afs/afs-auditors-report.schema';
@@ -59,7 +61,10 @@ export class AfsDigitizationService {
 
     // @InjectQueue(AFS_DIGITIZATION_QUEUE)
     // private readonly digitizationQueue: Queue<DigitizationJobDto>,
-  ) {}
+
+    private readonly fileTokenService: FileTokenService,
+    private readonly configService: ConfigService,
+  ) { }
 
   async getAfsFilters() {
     // const auditTypes = [
@@ -260,11 +265,14 @@ export class AfsDigitizationService {
     try {
       const pipeline = getAfsReportPipeline(query);
       const dbRes = (await this.afsExcelFileModel.aggregate(pipeline).exec()) as IAfsExcelFile[];
+
+      const excel = dbRes.map((file) => ({ ...file, url: this.fileTokenService.signFileUrl(file.url) }));
+
       return {
         success: true,
         data: {
           type: query.auditType,
-          excel: dbRes,
+          excel,
           source: 'digitizedExcel',
         },
       };
