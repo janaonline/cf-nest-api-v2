@@ -15,6 +15,8 @@ import { Year, YearDocument } from 'src/schemas/year.schema';
 import type { DatacollectionRes, LineItemRules, LineItemsTemplate, Rule, ValidationErr } from '../constant';
 import { lineItems } from '../constant';
 import { DataCollectionDto } from '../dto/data-collection.dto';
+import type { FinancialDataTemplateQueryDto } from 'src/module/line-items-legends/dto/financial-data-template-query.dto';
+import { LineItemsLegendService } from 'src/module/line-items-legends/line-items-legend.service';
 import {
   CODE,
   DataCollection,
@@ -39,11 +41,12 @@ export class DataCollectionService {
     private readonly yearModel: Model<YearDocument>,
 
     private readonly authorizationService: DataCollectionAuthorizationService,
+    private readonly lineItemsLegendService: LineItemsLegendService,
   ) {}
 
-  /** Returns the current financial data template with line items and codes. */
-  getFinancialDataTemplate() {
-    return { lineItems, [CODE]: lineItems.map((i) => i[CODE]) };
+  /** Returns the current financial data template from DB. */
+  getFinancialDataTemplate(query: FinancialDataTemplateQueryDto = {}) {
+    return this.lineItemsLegendService.getFinancialDataTemplate(query);
   }
 
   /**

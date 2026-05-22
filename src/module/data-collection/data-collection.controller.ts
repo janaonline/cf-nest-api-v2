@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CurrentApiClient } from 'src/module/auth/decorators/current-api-client.decorator';
 import { Scopes } from 'src/module/auth/decorators/scopes.decorator';
@@ -7,6 +7,7 @@ import { ScopesGuard } from 'src/module/auth/guards/scopes.guard';
 import type { ApiClientContext } from 'src/module/auth/types/api-client-context.type';
 import { DATA_COLLECTION_SCOPES } from './constants/data-collection-scopes.constant';
 import { DataCollectionDto } from './dto/data-collection.dto';
+import { FinancialDataTemplateQueryDto } from 'src/module/line-items-legends/dto/financial-data-template-query.dto';
 import { DataCollectionService } from './services/data-collection.service';
 
 @ApiTags('data-collection')
@@ -21,8 +22,8 @@ export class DataCollectionController {
     description: 'Returns active line items and validation rules for the template version.',
   })
   @Scopes(DATA_COLLECTION_SCOPES.TEMPLATE_READ)
-  getFinancialDataTemplate() {
-    return this.dataCollectionService.getFinancialDataTemplate();
+  getFinancialDataTemplate(@Query() query: FinancialDataTemplateQueryDto) {
+    return this.dataCollectionService.getFinancialDataTemplate(query);
   }
 
   @Get('ulbs')

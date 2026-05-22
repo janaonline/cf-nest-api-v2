@@ -7,6 +7,7 @@ import { Year } from 'src/schemas/year.schema';
 import { DataCollection } from '../entities/data-collection.schema';
 import { DataCollectionAuthorizationService } from './data-collection-authorization.service';
 import { DataCollectionService } from './data-collection.service';
+import { LineItemsLegendService } from 'src/module/line-items-legends/line-items-legend.service';
 
 const mockDataCollectionModel = () => ({
   findOne: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(null) }),
@@ -17,6 +18,17 @@ const mockAuthorizationService = {
   validateCanSubmitForUlb: jest.fn().mockResolvedValue(undefined),
   validateCanModifyForUlb: jest.fn().mockResolvedValue(undefined),
   getAllowedUlbFilter: jest.fn().mockReturnValue({ isActive: true }),
+};
+
+const mockTemplateResult = {
+  templateVersion: '2026.1',
+  accountHeads: ['INCOME', 'EXPENDITURE'],
+  lineItems: [{ nmamCode: '110', name: 'Tax Revenue' }],
+  codes: ['110'],
+};
+
+const mockLineItemsLegendService = {
+  getFinancialDataTemplate: jest.fn().mockResolvedValue(mockTemplateResult),
 };
 
 const stateClient: ApiClientContext = {
@@ -42,6 +54,7 @@ describe('DataCollectionService', () => {
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
         { provide: getModelToken(Year.name), useValue: mockYearModel },
         { provide: DataCollectionAuthorizationService, useValue: mockAuthorizationService },
+        { provide: LineItemsLegendService, useValue: mockLineItemsLegendService },
       ],
     }).compile();
 
@@ -51,11 +64,19 @@ describe('DataCollectionService', () => {
   it('should be defined', () => expect(service).toBeDefined());
 
   describe('getFinancialDataTemplate', () => {
-    it('returns line items from constant (does not include cfCode as key)', () => {
-      const result = service.getFinancialDataTemplate();
+    it('delegates to LineItemsLegendService and returns templateVersion/accountHeads/lineItems/codes', async () => {
+      const result = await service.getFinancialDataTemplate();
+      expect(mockLineItemsLegendService.getFinancialDataTemplate).toHaveBeenCalled();
+      expect(result).toHaveProperty('templateVersion');
+      expect(result).toHaveProperty('accountHeads');
       expect(result).toHaveProperty('lineItems');
-      expect(result).toHaveProperty('nmamCode');
-      expect(result).not.toHaveProperty('cfCode');
+      expect(result).toHaveProperty('codes');
+    });
+
+    it('passes query params to LineItemsLegendService', async () => {
+      const query = { templateVersion: '2026.1', accountHead: 'INCOME' as const };
+      await service.getFinancialDataTemplate(query);
+      expect(mockLineItemsLegendService.getFinancialDataTemplate).toHaveBeenCalledWith(query);
     });
   });
 

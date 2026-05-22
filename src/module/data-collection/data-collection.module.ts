@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ApiClientsModule } from 'src/module/api-clients/api-client.module';
 import { AuthModule } from 'src/module/auth/auth.module';
+import { LineItemsLegendsModule } from 'src/module/line-items-legends/line-items-legends.module';
 import { IntegrationJwtGuard } from 'src/module/auth/guards/integration-jwt.guard';
 import { ScopesGuard } from 'src/module/auth/guards/scopes.guard';
 import { Ulb, UlbSchema } from 'src/schemas/ulb.schema';
@@ -22,6 +23,7 @@ import { DataCollectionService } from './services/data-collection.service';
     ]),
     ApiClientsModule,
     AuthModule,
+    LineItemsLegendsModule,
   ],
   controllers: [DataCollectionController, IntegrationAuthController],
   providers: [

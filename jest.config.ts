@@ -12,6 +12,7 @@ const config: Config = {
     '^src/(.*)$': '<rootDir>/src/$1',
   },
   testEnvironment: 'node',
+  setupFiles: ['reflect-metadata'],
 };
 
 export default config;

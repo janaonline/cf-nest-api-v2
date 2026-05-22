@@ -14,8 +14,15 @@ const mockClient: ApiClientContext = {
   scopes: ['data_collection:template:read', 'data_collection:ulbs:read', 'data_collection:years:read'],
 };
 
+const mockTemplateResult = {
+  templateVersion: '2026.1',
+  accountHeads: ['INCOME', 'EXPENDITURE'],
+  lineItems: [],
+  codes: [],
+};
+
 const mockService = {
-  getFinancialDataTemplate: jest.fn().mockReturnValue({ lineItems: [], nmamCode: [] }),
+  getFinancialDataTemplate: jest.fn().mockResolvedValue(mockTemplateResult),
   getUlbsList: jest.fn().mockResolvedValue([]),
   getYearsList: jest.fn().mockResolvedValue([]),
   create: jest.fn().mockResolvedValue({}),
@@ -44,9 +51,18 @@ describe('DataCollectionController', () => {
 
   it('ApiOperation import does not break build', () => expect(ApiOperation).toBeDefined());
 
-  it('getFinancialDataTemplate delegates to service', () => {
-    controller.getFinancialDataTemplate();
-    expect(mockService.getFinancialDataTemplate).toHaveBeenCalled();
+  it('getFinancialDataTemplate delegates to service with query', async () => {
+    const query = { templateVersion: '2026.1' };
+    await controller.getFinancialDataTemplate(query);
+    expect(mockService.getFinancialDataTemplate).toHaveBeenCalledWith(query);
+  });
+
+  it('getFinancialDataTemplate returns templateVersion/accountHeads/lineItems/codes shape', async () => {
+    const result = await controller.getFinancialDataTemplate({});
+    expect(result).toHaveProperty('templateVersion');
+    expect(result).toHaveProperty('accountHeads');
+    expect(result).toHaveProperty('lineItems');
+    expect(result).toHaveProperty('codes');
   });
 
   it('getUlbsList passes client context to service', async () => {
