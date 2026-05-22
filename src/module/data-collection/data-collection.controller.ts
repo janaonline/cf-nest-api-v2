@@ -5,7 +5,7 @@ import { Scopes } from 'src/module/auth/decorators/scopes.decorator';
 import { IntegrationJwtGuard } from 'src/module/auth/guards/integration-jwt.guard';
 import { ScopesGuard } from 'src/module/auth/guards/scopes.guard';
 import type { ApiClientContext } from 'src/module/auth/types/api-client-context.type';
-import { DATA_COLLECTION_SCOPES } from './constants/data-collection-scopes.constant';
+import { DATA_COLLECTION_SCOPES } from './constant';
 import { DataCollectionDto } from './dto/data-collection.dto';
 import { FinancialDataTemplateQueryDto } from 'src/module/line-items-legends/dto/financial-data-template-query.dto';
 import { DataCollectionService } from './services/data-collection.service';

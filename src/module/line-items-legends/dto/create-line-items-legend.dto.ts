@@ -10,8 +10,7 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
-import type { Rule } from 'src/module/data-collection/constant';
-import { ACCOUNT_HEAD_VALUES, DEFAULT_TEMPLATE_VERSION, type AccountHead } from '../constants';
+import * as types from '../types';
 import { LineItemRuleDto } from './line-item-rule.dto';
 
 export class CreateLineItemsLegendDto {
@@ -19,8 +18,8 @@ export class CreateLineItemsLegendDto {
   @IsNotEmpty()
   nmamCode!: string;
 
-  @IsIn(ACCOUNT_HEAD_VALUES)
-  accountHead!: AccountHead;
+  @IsIn(types.ACCOUNT_HEAD_VALUES)
+  accountHead!: types.AccountHead;
 
   @IsString()
   @IsNotEmpty()
@@ -59,7 +58,7 @@ export class CreateLineItemsLegendDto {
 
   @IsString()
   @IsOptional()
-  templateVersion: string = DEFAULT_TEMPLATE_VERSION;
+  templateVersion: string = types.DEFAULT_TEMPLATE_VERSION;
 
   @IsBoolean()
   @IsOptional()
@@ -69,5 +68,5 @@ export class CreateLineItemsLegendDto {
   @IsOptional()
   @ValidateNested({ each: true })
   @Type(() => LineItemRuleDto)
-  rules?: Rule[];
+  rules?: types.Rule[];
 }

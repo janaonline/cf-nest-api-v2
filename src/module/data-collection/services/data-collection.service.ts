@@ -10,25 +10,19 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import type { ApiClientContext } from 'src/module/auth/types/api-client-context.type';
-import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
-import { Year, YearDocument } from 'src/schemas/year.schema';
-import type { DatacollectionRes, LineItemRules, LineItemsTemplate, Rule, ValidationErr } from '../constant';
-import { lineItems } from '../constant';
-import { DataCollectionDto } from '../dto/data-collection.dto';
 import type { FinancialDataTemplateQueryDto } from 'src/module/line-items-legends/dto/financial-data-template-query.dto';
 import { LineItemsLegendService } from 'src/module/line-items-legends/line-items-legend.service';
-import {
-  CODE,
-  DataCollection,
-  DataCollectionDocument,
-  LineItemKey,
-  LineItemsMap,
-} from '../entities/data-collection.schema';
+import { DEFAULT_TEMPLATE_VERSION, type LineItemLegendForValidation } from 'src/module/line-items-legends/types';
+import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
+import { Year, YearDocument } from 'src/schemas/year.schema';
+import { DataCollectionDto } from '../dto/data-collection.dto';
+import { DataCollection, DataCollectionDocument } from '../entities/data-collection.schema';
+import type { DataCollectionValidationIssue, DataCollectionValidationResult } from '../types';
 import { DataCollectionAuthorizationService } from './data-collection-authorization.service';
 
 @Injectable()
 export class DataCollectionService {
-  private logger = new Logger(DataCollectionService.name);
+  private readonly logger = new Logger(DataCollectionService.name);
 
   constructor(
     @InjectModel(DataCollection.name)
@@ -73,50 +67,52 @@ export class DataCollectionService {
   }
 
   /**
-   * Submits financial data for a ULB and year.
-   * Validates client ownership before writing.
-   * @param payload Submission payload.
-   * @param client Authenticated API client context.
+   * Submits new financial data for a ULB and year.
+   * Sparse lineItems are allowed — only submitted keys are stored.
+   * All submitted keys must be valid nmamCodes. Submitted parents must equal
+   * the sum of their submitted operands. Throws BadRequestException on any error.
    */
   async create(payload: DataCollectionDto, client: ApiClientContext) {
     const { ulbId, yearId, lineItems: payloadLineItems } = payload;
+    const templateVersion = payload.templateVersion ?? DEFAULT_TEMPLATE_VERSION;
 
     await this.authorizationService.validateCanSubmitForUlb(client, ulbId);
 
-    const data = await this.dataCollectionModel
-      .findOne({
-        ulbId: new Types.ObjectId(ulbId),
-        yearId: new Types.ObjectId(yearId),
-      })
+    const existing = await this.dataCollectionModel
+      .findOne({ ulbId: new Types.ObjectId(ulbId), yearId: new Types.ObjectId(yearId) })
       .lean<DataCollectionDocument>();
 
-    if (data) {
+    if (existing) {
       throw new ConflictException(
         `Data for ulbId: ${ulbId} and yearId: ${yearId} already exists. Try using PATCH method.`,
       );
     }
 
-    const lineItemsFromDB: LineItemsTemplate[] = this.getLineItemDetails();
-    const lineItemRules: LineItemRules = this.getLineItemRules(lineItemsFromDB);
-    const validationError: ValidationErr[] = this.validatePayloadData(payloadLineItems, lineItemRules);
+    const legends = await this.lineItemsLegendService.getActiveLegendsForValidation(templateVersion);
+    const legendMap = new Map(legends.map((l) => [l.nmamCode, l]));
+    const result = this.validateLineItemsAgainstTemplate(payloadLineItems, legendMap, templateVersion);
+
+    if (result.hasErrors) {
+      throw new BadRequestException({
+        ulbId,
+        yearId,
+        templateVersion,
+        success: false,
+        errors: result.errors,
+        lineItems: payloadLineItems,
+      });
+    }
 
     try {
-      if (validationError.length === 0) {
-        const created = new this.dataCollectionModel({
-          ...payload,
-          ulbId: new Types.ObjectId(ulbId),
-          yearId: new Types.ObjectId(yearId),
-        });
-        return await created.save();
-      } else {
-        throw new BadRequestException({
-          ulbId,
-          yearId,
-          success: false,
-          errors: validationError,
-          lineItems: payloadLineItems,
-        } as DatacollectionRes);
-      }
+      const created = new this.dataCollectionModel({
+        ulbId: new Types.ObjectId(ulbId),
+        yearId: new Types.ObjectId(yearId),
+        templateVersion,
+        lineItems: payloadLineItems,
+        validationStatus: 'VALID',
+      });
+      const data = await created.save();
+      return { success: true as const, validationStatus: 'VALID' as const, data };
     } catch (error: unknown) {
       this.createErrorResponse(error, 'create');
     }
@@ -124,9 +120,8 @@ export class DataCollectionService {
 
   /**
    * Updates existing financial data for a ULB and year.
-   * Merges incoming line items with stored values after ownership check.
-   * @param payload Update payload.
-   * @param client Authenticated API client context.
+   * Merges existing lineItems with incoming, then validates the merged set.
+   * Sparse merged data is allowed; submitted parents must equal their submitted operand sums.
    */
   async update(payload: DataCollectionDto, client: ApiClientContext) {
     const { ulbId, yearId, lineItems: payloadLineItems } = payload;
@@ -144,160 +139,193 @@ export class DataCollectionService {
       );
     }
 
-    const mergedLineItems: Record<string, number | null> = {
-      ...Object.fromEntries(existing.lineItems),
-    };
+    const existingTemplateVersion = existing.templateVersion ?? DEFAULT_TEMPLATE_VERSION;
+    if (payload.templateVersion && payload.templateVersion !== existingTemplateVersion) {
+      throw new BadRequestException('templateVersion cannot be changed for an existing data collection record.');
+    }
+    const templateVersion = existingTemplateVersion;
 
+    // Unconditional merge — null from payload is intentional, validation decides validity.
+    const mergedLineItems: Record<string, unknown> = Object.fromEntries(existing.lineItems) as Record<string, unknown>;
     for (const [key, value] of Object.entries(payloadLineItems)) {
-      if (value === 0 || value) {
-        mergedLineItems[key] = value;
-      }
+      mergedLineItems[key] = value;
     }
 
-    const template: LineItemsTemplate[] = this.getLineItemDetails();
-    const lineItemRules: LineItemRules = this.getLineItemRules(template);
-    const validationError: ValidationErr[] = this.validatePayloadData(mergedLineItems, lineItemRules);
+    const legends = await this.lineItemsLegendService.getActiveLegendsForValidation(templateVersion);
+    const legendMap = new Map(legends.map((l) => [l.nmamCode, l]));
+    const result = this.validateLineItemsAgainstTemplate(mergedLineItems, legendMap, templateVersion);
 
-    if (validationError.length > 0) {
+    if (result.hasErrors) {
       throw new BadRequestException({
         ulbId,
         yearId,
+        templateVersion,
         success: false,
-        errors: validationError,
+        errors: result.errors,
         lineItems: mergedLineItems,
-      } as DatacollectionRes);
+      });
     }
 
-    existing.lineItems = new Map(Object.entries(mergedLineItems));
+    existing.templateVersion = templateVersion;
+    existing.lineItems = new Map(Object.entries(mergedLineItems) as [string, number | null][]);
+    existing.validationStatus = 'VALID';
 
     try {
-      return await existing.save();
+      const data = await existing.save();
+      return { success: true as const, validationStatus: 'VALID' as const, data };
     } catch (error: unknown) {
       this.createErrorResponse(error, 'update');
     }
   }
 
-  private getLineItemDetails(): LineItemsTemplate[] {
-    return lineItems;
-  }
-
   /**
-   * Extracts validation rules from a template array, keyed by nmamCode.
-   * @param lineItemsFromDB Template array.
-   * @returns Rules map keyed by code.
+   * Pass 1: validates each submitted key and value against the template.
+   * Pass 2: validates sparse formula rules (submitted parent must equal submitted operand sum).
    */
-  private getLineItemRules(lineItemsFromDB: LineItemsTemplate[]): LineItemRules {
-    const lineItemRules: LineItemRules = {};
-    for (const item of lineItemsFromDB) {
-      if (item.rules && item.rules.length > 0) {
-        lineItemRules[item[CODE]] = item.rules;
+  private validateLineItemsAgainstTemplate(
+    lineItems: Record<string, unknown>,
+    legendMap: Map<string, LineItemLegendForValidation>,
+    templateVersion: string,
+  ): DataCollectionValidationResult {
+    const errors: DataCollectionValidationIssue[] = [];
+
+    for (const [code, value] of Object.entries(lineItems)) {
+      if (!legendMap.has(code)) {
+        errors.push({
+          lineItemCode: code,
+          value,
+          severity: 'ERROR',
+          message: `Line item code does not exist in template version ${templateVersion}.`,
+        });
+        continue;
       }
+      const issue = this.validateLineItemValue(code, value);
+      if (issue) errors.push(issue);
     }
-    return lineItemRules;
+
+    errors.push(...this.validateFormulaRules(lineItems, legendMap));
+
+    return { errors, hasErrors: errors.length > 0 };
   }
 
   /**
-   * Handles and transforms errors into appropriate HTTP exceptions.
+   * Validates one line item value.
+   * Accepts any finite number including 0. Rejects null, NaN, Infinity, strings, and objects.
    */
-  private createErrorResponse(error: unknown, functionName: string) {
-    this.logger.error(`${functionName}() Failed to perform operation`, error);
-
-    if (error instanceof HttpException) {
-      throw error;
-    }
-
-    if (error instanceof Error && error.name === 'ValidationError') {
-      throw new BadRequestException(error.message);
-    }
-
-    throw new InternalServerErrorException('Something went wrong while processing DataCollection');
+  private validateLineItemValue(code: string, value: unknown): DataCollectionValidationIssue | null {
+    if (typeof value === 'number' && isFinite(value)) return null;
+    return {
+      lineItemCode: code,
+      value,
+      severity: 'ERROR',
+      message: `lineItemCode: ${code} must be a finite number.`,
+    };
   }
 
   /**
-   * Validates payload line items against their rules.
-   * @param lineItems Line items to validate.
-   * @param rules Rules map keyed by code.
-   * @returns Array of validation errors.
+   * Sparse formula validation: runs only when the parent is present in lineItems.
+   * Missing operands are ignored. If no operands are submitted at all, that is an error.
+   * If any operand is referenced but absent from the template, that is a template integrity error.
+   * All operand codes not in legendMap are reported; then sum check is skipped for that rule.
    */
-  private validatePayloadData(lineItems: LineItemsMap, rules: LineItemRules): ValidationErr[] {
-    const errors: ValidationErr[] = [];
+  private validateFormulaRules(
+    lineItems: Record<string, unknown>,
+    legendMap: Map<string, LineItemLegendForValidation>,
+  ): DataCollectionValidationIssue[] {
+    const errors: DataCollectionValidationIssue[] = [];
 
-    for (const [lineItemCode, value] of Object.entries(lineItems)) {
-      const rulesOfCurrLineItem = rules[lineItemCode];
-      if ((value === 0 || value) && rulesOfCurrLineItem && rulesOfCurrLineItem.length) {
-        for (const rule of rulesOfCurrLineItem) {
-          const errMsg = this.validateLineItem(rule, lineItemCode, value, lineItems);
-          if (errMsg) {
-            errors.push({ lineItemCode, value, message: errMsg });
+    for (const legend of legendMap.values()) {
+      if (!legend.rules.length) continue;
+      if (!(legend.nmamCode in lineItems)) continue;
+
+      const parentValue = lineItems[legend.nmamCode];
+
+      for (const rule of legend.rules) {
+        if (rule.type !== 'formula') continue;
+
+        switch (rule.operation) {
+          case 'sum': {
+            const submittedOperands: string[] = [];
+            let sum = 0;
+            let hasTemplateError = false;
+
+            const numericParent = typeof parentValue === 'number' && isFinite(parentValue) ? parentValue : null;
+            const ruleSnapshot = { type: rule.type, operation: rule.operation, operands: [...rule.operands] };
+
+            for (const operandCode of rule.operands) {
+              if (!legendMap.has(operandCode)) {
+                errors.push({
+                  lineItemCode: legend.nmamCode,
+                  value: parentValue,
+                  severity: 'ERROR',
+                  message: `Formula rule for lineItemCode: ${legend.nmamCode} refers to unknown operand ${operandCode}.`,
+                  validationRule: ruleSnapshot,
+                  submittedOperands: [...submittedOperands],
+                  expected: null,
+                  received: numericParent,
+                });
+                hasTemplateError = true;
+                continue;
+              }
+
+              if (!(operandCode in lineItems)) continue; // sparse — skip missing
+
+              submittedOperands.push(operandCode);
+              const v = lineItems[operandCode];
+              if (typeof v === 'number' && isFinite(v)) sum += v;
+              // invalid values are already caught by pass 1
+            }
+
+            if (hasTemplateError) break;
+
+            if (submittedOperands.length === 0) {
+              errors.push({
+                lineItemCode: legend.nmamCode,
+                value: parentValue,
+                severity: 'ERROR',
+                message: `lineItemCode: ${legend.nmamCode} cannot be validated because none of its operands were submitted.`,
+                validationRule: ruleSnapshot,
+                submittedOperands: [],
+                expected: null,
+                received: numericParent,
+              });
+              break;
+            }
+
+            if (typeof parentValue === 'number' && isFinite(parentValue) && parentValue !== sum) {
+              errors.push({
+                lineItemCode: legend.nmamCode,
+                value: parentValue,
+                severity: 'ERROR',
+                message: `lineItemCode: ${legend.nmamCode} must equal sum of submitted operands ${submittedOperands.join(', ')}. Expected: ${sum}, Received: ${parentValue}.`,
+                validationRule: ruleSnapshot,
+                submittedOperands: [...submittedOperands],
+                expected: sum,
+                received: parentValue,
+              });
+            }
+            break;
           }
+          default:
+            errors.push({
+              lineItemCode: legend.nmamCode,
+              value: parentValue,
+              severity: 'ERROR',
+              message: `Unsupported validation rule for lineItemCode: ${legend.nmamCode}.`,
+              validationRule: rule,
+            });
         }
-      } else if (!value) {
-        errors.push(this.getInvalidValueErrObj(lineItemCode));
       }
     }
 
     return errors;
   }
 
-  /**
-   * Creates a validation error object for an invalid lineItemCode value.
-   */
-  private getInvalidValueErrObj(lineItemCode: LineItemKey): ValidationErr {
-    return {
-      lineItemCode,
-      value: null,
-      message: `lineItemCode: ${lineItemCode} must be a valid number or null`,
-    };
-  }
-
-  /**
-   * Validates a single line item value against a rule.
-   */
-  private validateLineItem(
-    rule: Rule,
-    currLineItemCode: LineItemKey,
-    value: number,
-    lineItems: LineItemsMap,
-  ): string | null {
-    if (!rule) return null;
-
-    if (rule.type === 'formula') {
-      switch (rule.operation) {
-        case 'sum': {
-          let sumValue = 0;
-          for (const lineItemCode of rule.operands) {
-            const operandValue = lineItems[lineItemCode];
-            if (operandValue === 0 || operandValue) {
-              sumValue += operandValue;
-            }
-          }
-          return value !== sumValue
-            ? `lineItemCode: ${currLineItemCode} must equal sum of ${rule.operands.join(', ')}. Expected: ${sumValue}, Received: ${value}`
-            : null;
-        }
-        default:
-          throw new BadRequestException(`Operation ${rule.operation} not supported`);
-      }
-    }
-
-    if (rule.type === 'comparison') {
-      const compareValue = rule.value;
-      switch (rule.operator) {
-        case '>':
-          return value > compareValue ? null : `lineItemCode: ${currLineItemCode} must be greater than ${compareValue}`;
-        case '<':
-          return value < compareValue ? null : `lineItemCode: ${currLineItemCode} must be less than ${compareValue}`;
-        case '>=':
-          return value >= compareValue ? null : `lineItemCode: ${currLineItemCode} must be ≥ ${compareValue}`;
-        case '<=':
-          return value <= compareValue ? null : `lineItemCode: ${currLineItemCode} must be ≤ ${compareValue}`;
-        case '===':
-          return value === compareValue ? null : `lineItemCode: ${currLineItemCode} must equal ${compareValue}`;
-        default:
-          throw new BadRequestException(`Comparator not supported`);
-      }
-    }
-
-    return null;
+  /** Transforms any error into an appropriate HTTP exception and re-throws. */
+  private createErrorResponse(error: unknown, functionName: string): never {
+    this.logger.error(`${functionName}() Failed to perform operation`, error);
+    if (error instanceof HttpException) throw error;
+    if (error instanceof Error && error.name === 'ValidationError') throw new BadRequestException(error.message);
+    throw new InternalServerErrorException('Something went wrong while processing DataCollection');
   }
 }

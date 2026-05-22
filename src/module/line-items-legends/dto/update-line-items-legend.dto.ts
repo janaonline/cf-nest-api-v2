@@ -1,6 +1,6 @@
 import { Type } from 'class-transformer';
 import { IsArray, IsBoolean, IsInt, IsOptional, IsString, ValidateNested } from 'class-validator';
-import type { Rule } from 'src/module/data-collection/constant';
+import { Rule } from '../types';
 import { LineItemRuleDto } from './line-item-rule.dto';
 
 export class UpdateLineItemsLegendDto {

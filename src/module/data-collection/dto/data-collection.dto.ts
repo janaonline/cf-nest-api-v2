@@ -1,29 +1,30 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsMongoId, IsNotEmpty } from 'class-validator';
-import { dataCollectionApiPayload } from '../constant';
-import type { LineItemsMap } from '../entities/data-collection.schema';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsMongoId, IsNotEmpty, IsObject, IsOptional, IsString } from 'class-validator';
+import { DEFAULT_TEMPLATE_VERSION } from 'src/module/line-items-legends/types';
 
 export class DataCollectionDto {
-  @ApiProperty({
-    example: dataCollectionApiPayload.ulbId,
-    description: 'ULB Id',
-  })
+  @ApiProperty({ description: 'ULB Id' })
   @IsMongoId()
   @IsNotEmpty()
-  ulbId: string;
+  ulbId!: string;
 
-  @ApiProperty({
-    example: dataCollectionApiPayload.yearId,
-    description: 'Year Id',
-  })
+  @ApiProperty({ description: 'Year Id' })
   @IsMongoId()
   @IsNotEmpty()
-  yearId: string;
+  yearId!: string;
+
+  @ApiPropertyOptional({
+    example: DEFAULT_TEMPLATE_VERSION,
+    description: 'Template version. Defaults to the current active version.',
+  })
+  @IsString()
+  @IsOptional()
+  templateVersion?: string;
 
   @ApiProperty({
-    example: dataCollectionApiPayload.lineItems,
-    description: 'Line items',
+    description: 'Line items keyed by nmamCode with numeric values.',
   })
+  @IsObject()
   @IsNotEmpty()
-  lineItems: LineItemsMap;
+  lineItems!: Record<string, unknown>;
 }

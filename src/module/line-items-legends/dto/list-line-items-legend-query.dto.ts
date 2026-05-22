@@ -1,15 +1,15 @@
 import { Type } from 'class-transformer';
 import { IsBoolean, IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
-import { ACCOUNT_HEAD_VALUES, DEFAULT_TEMPLATE_VERSION, type AccountHead } from '../constants';
+import * as lineItemsLegendTypes from '../types';
 
 export class ListLineItemsLegendQueryDto {
   @IsString()
   @IsOptional()
-  templateVersion: string = DEFAULT_TEMPLATE_VERSION;
+  templateVersion: string = lineItemsLegendTypes.DEFAULT_TEMPLATE_VERSION;
 
-  @IsIn(ACCOUNT_HEAD_VALUES)
+  @IsIn(lineItemsLegendTypes.ACCOUNT_HEAD_VALUES)
   @IsOptional()
-  accountHead?: AccountHead;
+  accountHead?: lineItemsLegendTypes.AccountHead;
 
   @IsString()
   @IsOptional()

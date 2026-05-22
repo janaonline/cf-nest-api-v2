@@ -1,51 +1,22 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model } from 'mongoose';
-import type { Rule } from 'src/module/data-collection/constant';
-import { ACCOUNT_HEAD_VALUES, DEFAULT_TEMPLATE_VERSION, type AccountHead } from './constants';
 import { CreateLineItemsLegendDto } from './dto/create-line-items-legend.dto';
 import { FinancialDataTemplateQueryDto } from './dto/financial-data-template-query.dto';
 import { ImportLineItemsTemplateDto } from './dto/import-line-items-template.dto';
 import { ListLineItemsLegendQueryDto } from './dto/list-line-items-legend-query.dto';
 import { UpdateLineItemsLegendDto } from './dto/update-line-items-legend.dto';
 import { LineItemsLegend, LineItemsLegendDocument } from './entities/line-items-legend.schema';
-
-type RawLineItem = Record<string, unknown>;
-
-type SanitizedLineItem = {
-  nmamCode: string;
-  accountHead: AccountHead;
-  majorCode: string;
-  parentCode: string | null;
-  segmentCode: string;
-  segmentPath: string[];
-  codePath: string[];
-  name: string;
-  desc: string;
-  level: number;
-  sortOrder: number;
-  isActive: boolean;
-  rules: Rule[];
-  templateVersion: string;
-};
-
-export type ImportDryRunResult = {
-  dryRun: true;
-  valid: true;
-  total: number;
-  templateVersion: string;
-  wouldUpsert: number;
-};
-
-export type ImportWriteResult = {
-  dryRun: false;
-  templateVersion: string;
-  total: number;
-  upserted: number;
-  modified: number;
-};
-
-export type ImportResult = ImportDryRunResult | ImportWriteResult;
+import {
+  ACCOUNT_HEAD_VALUES,
+  AccountHead,
+  DEFAULT_TEMPLATE_VERSION,
+  type ImportResult,
+  type LineItemLegendForValidation,
+  type RawLineItem,
+  type Rule,
+  type SanitizedLineItem,
+} from './types';
 
 const TEMPLATE_PROJECTION = '-_id -__v -createdAt -updatedAt -templateVersion' as const;
 
@@ -78,6 +49,18 @@ export class LineItemsLegendService {
     const accountHeads = [...new Set(lineItems.map((i) => i.accountHead))];
 
     return { templateVersion, accountHeads, lineItems, codes };
+  }
+
+  /**
+   * Fetches active legends for validation.
+   * Selects only fields needed for key and rule checks.
+   * @param templateVersion Template version to validate against.
+   * @returns Active legend records for validation.
+   */
+  async getActiveLegendsForValidation(templateVersion: string): Promise<LineItemLegendForValidation[]> {
+    return this.legendModel
+      .find({ templateVersion, isActive: true }, '-_id nmamCode name accountHead level parentCode rules')
+      .lean<LineItemLegendForValidation[]>();
   }
 
   /**

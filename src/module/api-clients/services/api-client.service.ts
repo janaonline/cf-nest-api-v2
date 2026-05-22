@@ -4,7 +4,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
 import { FilterQuery, Model, Types } from 'mongoose';
-import { DATA_COLLECTION_SCOPES } from 'src/module/data-collection/constants/data-collection-scopes.constant';
+import { DATA_COLLECTION_SCOPES } from 'src/module/data-collection/constant';
 import { State } from 'src/schemas/state.schema';
 import { Ulb } from 'src/schemas/ulb.schema';
 import { DEFAULT_SALT_ROUNDS } from '../constants/api-client.constants';

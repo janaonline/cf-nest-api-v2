@@ -1,7 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument } from 'mongoose';
-import type { Rule } from 'src/module/data-collection/constant';
-import { ACCOUNT_HEAD_VALUES, type AccountHead } from '../constants';
+import * as lineItemsLegendTypes from '../types';
 
 @Schema({ timestamps: true, collection: 'lineitemslegends' })
 export class LineItemsLegend {
@@ -11,8 +10,8 @@ export class LineItemsLegend {
   @Prop({ required: true, trim: true })
   nmamCode!: string;
 
-  @Prop({ type: String, required: true, enum: ACCOUNT_HEAD_VALUES })
-  accountHead!: AccountHead;
+  @Prop({ type: String, required: true, enum: lineItemsLegendTypes.ACCOUNT_HEAD_VALUES })
+  accountHead!: lineItemsLegendTypes.AccountHead;
 
   @Prop({ required: true, trim: true })
   majorCode!: string;
@@ -48,7 +47,7 @@ export class LineItemsLegend {
   isActive!: boolean;
 
   @Prop({ type: [Object], default: [] })
-  rules!: Rule[];
+  rules!: lineItemsLegendTypes.Rule[];
 }
 
 export type LineItemsLegendDocument = HydratedDocument<LineItemsLegend>;
