@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiEnvelope } from 'src/common/decorators/api-envelope.decorator';
 import { CurrentApiClient } from 'src/module/auth/decorators/current-api-client.decorator';
 import { Scopes } from 'src/module/auth/decorators/scopes.decorator';
 import { IntegrationJwtGuard } from 'src/module/auth/guards/integration-jwt.guard';
@@ -10,6 +11,7 @@ import { DataCollectionDto } from './dto/data-collection.dto';
 import { FinancialDataTemplateQueryDto } from 'src/module/line-items-legends/dto/financial-data-template-query.dto';
 import { DataCollectionService } from './services/data-collection.service';
 
+@ApiEnvelope()
 @ApiTags('data-collection')
 @UseGuards(IntegrationJwtGuard, ScopesGuard)
 @Controller('data-collection')

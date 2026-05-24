@@ -1,8 +1,10 @@
 import { Body, Controller, Headers, Ip, Post } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiEnvelope } from 'src/common/decorators/api-envelope.decorator';
 import { TokenRequestDto } from 'src/module/api-clients/dto/token-request.dto';
 import { IntegrationAuthService } from './integration-auth.service';
 
+@ApiEnvelope()
 @ApiTags('data-collection-auth')
 @Controller('data-collection/auth')
 export class IntegrationAuthController {

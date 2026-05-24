@@ -1,5 +1,6 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiEnvelope } from 'src/common/decorators/api-envelope.decorator';
 import { Roles } from 'src/module/auth/decorators/roles.decorator';
 import * as roleEnum from 'src/module/auth/enum/role.enum';
 import { RolesGuard } from 'src/module/auth/guards/roles.guard';
@@ -9,6 +10,7 @@ import { ListLineItemsLegendQueryDto } from './dto/list-line-items-legend-query.
 import { UpdateLineItemsLegendDto } from './dto/update-line-items-legend.dto';
 import { LineItemsLegendService } from './line-items-legend.service';
 
+@ApiEnvelope()
 @ApiTags('line-items-legends')
 @ApiBearerAuth()
 @UseGuards(RolesGuard)

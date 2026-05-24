@@ -3,6 +3,7 @@ import { getModelToken } from '@nestjs/mongoose';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Types } from 'mongoose';
 import type { ApiClientContext } from 'src/module/auth/types/api-client-context.type';
+import { LineItemsLegendService } from 'src/module/line-items-legends/line-items-legend.service';
 import { Ulb } from 'src/schemas/ulb.schema';
 import { Year } from 'src/schemas/year.schema';
 import { DataCollection } from '../entities/data-collection.schema';
@@ -10,7 +11,6 @@ import type { DataCollectionValidationIssue } from '../types';
 import { DataCollectionAuthorizationService } from './data-collection-authorization.service';
 import { DataCollectionReferenceResolverService } from './data-collection-reference-resolver.service';
 import { DataCollectionService } from './data-collection.service';
-import { LineItemsLegendService } from 'src/module/line-items-legends/line-items-legend.service';
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -194,9 +194,12 @@ describe('DataCollectionService', () => {
           state: { code: 'AP', name: 'AP State' },
         },
       ];
+
       mockUlbModel.find.mockReturnValueOnce(makeUlbChain(ulbData));
+
       const result = (await service.getUlbsList(stateClient)) as Record<string, unknown>[];
-      expect(result).not.toEqual(expect.arrayContaining([expect.objectContaining({ _id: expect.anything() })]));
+
+      expect(result[0]).not.toHaveProperty('_id');
     });
 
     it('does not return censusCode or sbCode in response', async () => {
