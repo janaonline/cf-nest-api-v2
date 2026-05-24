@@ -24,6 +24,7 @@ const makeLegend = (nmamCode: string, rules = []) => ({
 });
 
 const validUlbId = '5dd24729437ba31f7eb42eee';
+const validStateId = '5dcf9d7216a06aed41c748dd';
 const validYearId = '606aafb14dff55e6c075d3ae';
 const validUlbCode = 'C001';
 const validYearCode = '2021-22';
@@ -32,17 +33,30 @@ const stateClient: ApiClientContext = {
   apiClientId: 'aId',
   clientId: 'c1',
   actorType: 'STATE',
-  stateId: '5dcf9d7216a06aed41c748dd',
+  stateId: validStateId,
   scopes: [],
 };
 
 // ─── Mock factories ────────────────────────────────────────────────────────────
 
+const mockDate = new Date('2024-01-01T00:00:00.000Z');
+
+/** Builds a minimal saved document returned by Mongoose save(). */
+const makeDocSaveResult = (
+  overrides: Partial<{ templateVersion: string; validationStatus: string; lineItems: Map<string, number> }> = {},
+) => ({
+  templateVersion: overrides.templateVersion ?? '2026.1',
+  validationStatus: overrides.validationStatus ?? 'VALID',
+  lineItems: overrides.lineItems ?? new Map<string, number>(),
+  createdAt: mockDate,
+  updatedAt: mockDate,
+});
+
 let mockSave: jest.Mock;
 
 /** Returns a jest constructor mock that supports `new Model(data)` and static `findOne`. */
 const mockDataCollectionModel = () => {
-  mockSave = jest.fn().mockResolvedValue({ _id: 'doc1', templateVersion: '2026.1', lineItems: new Map() });
+  mockSave = jest.fn().mockResolvedValue(makeDocSaveResult());
   const Ctor = jest.fn().mockImplementation((data: object) => ({ ...data, save: mockSave })) as jest.Mock & {
     findOne: jest.Mock;
   };
@@ -69,8 +83,10 @@ const mockAuthorizationService = {
 };
 
 const mockReferenceResolverService = {
-  resolveUlbByCode: jest.fn().mockResolvedValue({ _id: new Types.ObjectId(validUlbId) }),
-  resolveYearByCode: jest.fn().mockResolvedValue({ _id: new Types.ObjectId(validYearId) }),
+  resolveUlbByCode: jest
+    .fn()
+    .mockResolvedValue({ ulbId: new Types.ObjectId(validUlbId), stateId: new Types.ObjectId(validStateId) }),
+  resolveYearByCode: jest.fn().mockResolvedValue({ yearId: new Types.ObjectId(validYearId), yearCode: validYearCode }),
 };
 
 const mockTemplateResult = {
@@ -97,8 +113,14 @@ describe('DataCollectionService', () => {
     jest.clearAllMocks();
     mockUlbModel.find.mockReturnValue(defaultUlbChain);
     mockYearModel.find.mockReturnValue({ lean: jest.fn().mockResolvedValue([]) });
-    mockReferenceResolverService.resolveUlbByCode.mockResolvedValue({ _id: new Types.ObjectId(validUlbId) });
-    mockReferenceResolverService.resolveYearByCode.mockResolvedValue({ _id: new Types.ObjectId(validYearId) });
+    mockReferenceResolverService.resolveUlbByCode.mockResolvedValue({
+      ulbId: new Types.ObjectId(validUlbId),
+      stateId: new Types.ObjectId(validStateId),
+    });
+    mockReferenceResolverService.resolveYearByCode.mockResolvedValue({
+      yearId: new Types.ObjectId(validYearId),
+      yearCode: validYearCode,
+    });
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -457,8 +479,7 @@ describe('DataCollectionService', () => {
       };
 
       const result = (await service.create(payload as never, stateClient)) as Record<string, unknown>;
-      expect(result['success']).toBe(true);
-      expect(result['validationStatus']).toBe('VALID');
+      expect(result['data']).toHaveProperty('validationStatus', 'VALID');
     });
 
     it('sparse: rejects when parent does not match sum of submitted operands', async () => {
@@ -505,8 +526,7 @@ describe('DataCollectionService', () => {
       const payload = { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '11001': 500, '11002': 400 } };
 
       const result = (await service.create(payload as never, stateClient)) as Record<string, unknown>;
-      expect(result['success']).toBe(true);
-      expect(result['validationStatus']).toBe('VALID');
+      expect(result['data']).toHaveProperty('validationStatus', 'VALID');
     });
 
     it('fails when a formula rule references an operand not in the template', async () => {
@@ -532,7 +552,7 @@ describe('DataCollectionService', () => {
       };
 
       const result = (await service.create(payload as never, stateClient)) as Record<string, unknown>;
-      expect(result['validationStatus']).toBe('VALID');
+      expect(result['data']).toHaveProperty('validationStatus', 'VALID');
     });
 
     it('saves with VALID validationStatus and does not save invalid data', async () => {
@@ -540,8 +560,7 @@ describe('DataCollectionService', () => {
       const payload = { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 500 } };
 
       const result = (await service.create(payload as never, stateClient)) as Record<string, unknown>;
-      expect(result['success']).toBe(true);
-      expect(result['validationStatus']).toBe('VALID');
+      expect(result['data']).toHaveProperty('validationStatus', 'VALID');
       expect(dcModel).toHaveBeenCalledWith(expect.objectContaining({ validationStatus: 'VALID' }));
     });
 
@@ -573,6 +592,112 @@ describe('DataCollectionService', () => {
       await service.create(payload as never, stateClient);
       expect(dcModel).toHaveBeenCalledWith(expect.objectContaining({ templateVersion: '2026.1' }));
     });
+
+    // ─── Storage field tests ───────────────────────────────────────────────
+
+    it('stores ulbId as ObjectId on the document', async () => {
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce([makeLegend('110')]);
+      const payload = { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 500 } };
+      await service.create(payload as never, stateClient);
+      const docArg = (dcModel.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(docArg['ulbId']).toBeInstanceOf(Types.ObjectId);
+      expect((docArg['ulbId'] as Types.ObjectId).toString()).toBe(validUlbId);
+    });
+
+    it('stores stateId as ObjectId on the document', async () => {
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce([makeLegend('110')]);
+      const payload = { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 500 } };
+      await service.create(payload as never, stateClient);
+      const docArg = (dcModel.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(docArg['stateId']).toBeInstanceOf(Types.ObjectId);
+      expect((docArg['stateId'] as Types.ObjectId).toString()).toBe(validStateId);
+    });
+
+    it('stores yearId as ObjectId on the document', async () => {
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce([makeLegend('110')]);
+      const payload = { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 500 } };
+      await service.create(payload as never, stateClient);
+      const docArg = (dcModel.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(docArg['yearId']).toBeInstanceOf(Types.ObjectId);
+      expect((docArg['yearId'] as Types.ObjectId).toString()).toBe(validYearId);
+    });
+
+    it('stores yearCode string on the document', async () => {
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce([makeLegend('110')]);
+      const payload = { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 500 } };
+      await service.create(payload as never, stateClient);
+      const docArg = (dcModel.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(docArg['yearCode']).toBe(validYearCode);
+    });
+
+    it('does NOT store ulbCode on the document', async () => {
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce([makeLegend('110')]);
+      const payload = { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 500 } };
+      await service.create(payload as never, stateClient);
+      const docArg = (dcModel.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(docArg).not.toHaveProperty('ulbCode');
+    });
+
+    // ─── External response shape tests ────────────────────────────────────
+
+    it('response includes ulbCode and yearCode', async () => {
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce([makeLegend('110')]);
+      mockSave.mockResolvedValue(makeDocSaveResult({ lineItems: new Map([['110', 500]]) }));
+      const payload = { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 500 } };
+
+      const result = (await service.create(payload as never, stateClient)) as Record<string, unknown>;
+      const data = result['data'] as Record<string, unknown>;
+      expect(data['ulbCode']).toBe(validUlbCode);
+      expect(data['yearCode']).toBe(validYearCode);
+    });
+
+    it('response includes templateVersion, validationStatus, lineItems, createdAt, updatedAt', async () => {
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce([makeLegend('110')]);
+      mockSave.mockResolvedValue(makeDocSaveResult({ lineItems: new Map([['110', 500]]) }));
+      const payload = { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 500 } };
+
+      const result = (await service.create(payload as never, stateClient)) as Record<string, unknown>;
+      const data = result['data'] as Record<string, unknown>;
+      expect(data).toHaveProperty('templateVersion');
+      expect(data).toHaveProperty('validationStatus');
+      expect(data).toHaveProperty('lineItems');
+      expect(data).toHaveProperty('createdAt');
+      expect(data).toHaveProperty('updatedAt');
+    });
+
+    it('response does not include _id, ulbId, stateId, yearId, __v', async () => {
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce([makeLegend('110')]);
+      mockSave.mockResolvedValue(makeDocSaveResult({ lineItems: new Map([['110', 500]]) }));
+      const payload = { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 500 } };
+
+      const result = (await service.create(payload as never, stateClient)) as Record<string, unknown>;
+      const data = result['data'] as Record<string, unknown>;
+      expect(data).not.toHaveProperty('_id');
+      expect(data).not.toHaveProperty('ulbId');
+      expect(data).not.toHaveProperty('stateId');
+      expect(data).not.toHaveProperty('yearId');
+      expect(data).not.toHaveProperty('__v');
+    });
+
+    it('response message says Financial data submitted successfully', async () => {
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce([makeLegend('110')]);
+      mockSave.mockResolvedValue(makeDocSaveResult({ lineItems: new Map([['110', 500]]) }));
+      const payload = { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 500 } };
+
+      const result = (await service.create(payload as never, stateClient)) as Record<string, unknown>;
+      expect(result['message']).toBe('Financial data submitted successfully.');
+    });
+
+    it('lineItems in response is a plain object, not a Map', async () => {
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce([makeLegend('110')]);
+      mockSave.mockResolvedValue(makeDocSaveResult({ lineItems: new Map([['110', 500]]) }));
+      const payload = { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 500 } };
+
+      const result = (await service.create(payload as never, stateClient)) as Record<string, unknown>;
+      const data = result['data'] as Record<string, unknown>;
+      expect(data['lineItems']).not.toBeInstanceOf(Map);
+      expect(data['lineItems']).toEqual({ '110': 500 });
+    });
   });
 
   // ─── update ───────────────────────────────────────────────────────────────
@@ -581,14 +706,20 @@ describe('DataCollectionService', () => {
     const basePayload = { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 500 } };
 
     it('resolves ulbCode and yearCode before any other operation', async () => {
-      dcModel.findOne.mockReturnValue({ lineItems: new Map(), save: jest.fn().mockResolvedValue({}) });
+      dcModel.findOne.mockReturnValue({
+        lineItems: new Map(),
+        save: jest.fn().mockResolvedValue(makeDocSaveResult()),
+      });
       await service.update(basePayload as never, stateClient).catch(() => {});
       expect(mockReferenceResolverService.resolveUlbByCode).toHaveBeenCalledWith(validUlbCode);
       expect(mockReferenceResolverService.resolveYearByCode).toHaveBeenCalledWith(validYearCode);
     });
 
     it('calls ownership validation with resolved ulbId before DB write', async () => {
-      dcModel.findOne.mockReturnValue({ lineItems: new Map(), save: jest.fn().mockResolvedValue({}) });
+      dcModel.findOne.mockReturnValue({
+        lineItems: new Map(),
+        save: jest.fn().mockResolvedValue(makeDocSaveResult()),
+      });
       await service.update(basePayload as never, stateClient).catch(() => {});
       expect(mockAuthorizationService.validateCanModifyForUlb).toHaveBeenCalledWith(stateClient, validUlbId);
     });
@@ -616,7 +747,15 @@ describe('DataCollectionService', () => {
       const existingDoc = {
         templateVersion: '2026.1',
         lineItems: new Map<string, number>([['11001', 600]]),
-        save: jest.fn().mockResolvedValue({}),
+        save: jest.fn().mockResolvedValue(
+          makeDocSaveResult({
+            lineItems: new Map([
+              ['11001', 600],
+              ['110', 1000],
+              ['11002', 400],
+            ]),
+          }),
+        ),
       };
       dcModel.findOne.mockReturnValue(existingDoc);
       const legends = [makeLegend('110'), makeLegend('11001'), makeLegend('11002')];
@@ -643,7 +782,11 @@ describe('DataCollectionService', () => {
     });
 
     it('rejects changing templateVersion for an existing record', async () => {
-      dcModel.findOne.mockReturnValue({ templateVersion: '2026.1', lineItems: new Map(), save: jest.fn() });
+      dcModel.findOne.mockReturnValue({
+        templateVersion: '2026.1',
+        lineItems: new Map(),
+        save: jest.fn(),
+      });
 
       const payload = {
         ulbCode: validUlbCode,
@@ -674,7 +817,7 @@ describe('DataCollectionService', () => {
       const existingDoc = {
         templateVersion: undefined as unknown as string,
         lineItems: new Map<string, number>([['110', 500]]),
-        save: jest.fn().mockResolvedValue({}),
+        save: jest.fn().mockResolvedValue(makeDocSaveResult({ lineItems: new Map([['110', 500]]) })),
       };
       dcModel.findOne.mockReturnValue(existingDoc);
       mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce([makeLegend('110')]);
@@ -691,7 +834,15 @@ describe('DataCollectionService', () => {
       const existingDoc = {
         templateVersion: '2026.1',
         lineItems: new Map<string, number>([['11001', 600]]),
-        save: jest.fn().mockResolvedValue({}),
+        save: jest.fn().mockResolvedValue(
+          makeDocSaveResult({
+            lineItems: new Map([
+              ['11001', 600],
+              ['110', 1600],
+              ['11002', 1000],
+            ]),
+          }),
+        ),
       };
       dcModel.findOne.mockReturnValue(existingDoc);
       mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce([
@@ -703,8 +854,7 @@ describe('DataCollectionService', () => {
 
       const payload = { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 1600, '11002': 1000 } };
       const result = (await service.update(payload as never, stateClient)) as Record<string, unknown>;
-      expect(result['success']).toBe(true);
-      expect(result['validationStatus']).toBe('VALID');
+      expect(result['data']).toHaveProperty('validationStatus', 'VALID');
     });
 
     it('rejects merged data when parent does not match submitted operand sum after merge', async () => {
@@ -727,6 +877,90 @@ describe('DataCollectionService', () => {
       const body = (err as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
       expect(body.errors[0].message).toContain('must equal sum of submitted operands');
       expect(body.errors[0].message).toContain('Expected: 1100');
+    });
+
+    // ─── Update-specific storage + response tests ─────────────────────────
+
+    it('backfills stateId when missing from an older record', async () => {
+      const existingDoc = {
+        templateVersion: '2026.1',
+        stateId: undefined as unknown as Types.ObjectId,
+        yearCode: validYearCode,
+        lineItems: new Map<string, number>([['110', 500]]),
+        save: jest.fn().mockResolvedValue(makeDocSaveResult({ lineItems: new Map([['110', 500]]) })),
+      };
+      dcModel.findOne.mockReturnValue(existingDoc);
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce([makeLegend('110')]);
+
+      await service.update(basePayload as never, stateClient);
+      expect(existingDoc.stateId).toEqual(new Types.ObjectId(validStateId));
+    });
+
+    it('backfills yearCode when missing from an older record', async () => {
+      const existingDoc = {
+        templateVersion: '2026.1',
+        stateId: new Types.ObjectId(validStateId),
+        yearCode: undefined as unknown as string,
+        lineItems: new Map<string, number>([['110', 500]]),
+        save: jest.fn().mockResolvedValue(makeDocSaveResult({ lineItems: new Map([['110', 500]]) })),
+      };
+      dcModel.findOne.mockReturnValue(existingDoc);
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce([makeLegend('110')]);
+
+      await service.update(basePayload as never, stateClient);
+      expect(existingDoc.yearCode).toBe(validYearCode);
+    });
+
+    it('response includes ulbCode and yearCode', async () => {
+      const existingDoc = {
+        templateVersion: '2026.1',
+        stateId: new Types.ObjectId(validStateId),
+        yearCode: validYearCode,
+        lineItems: new Map<string, number>(),
+        save: jest.fn().mockResolvedValue(makeDocSaveResult({ lineItems: new Map([['110', 500]]) })),
+      };
+      dcModel.findOne.mockReturnValue(existingDoc);
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce([makeLegend('110')]);
+
+      const result = (await service.update(basePayload as never, stateClient)) as Record<string, unknown>;
+      const data = result['data'] as Record<string, unknown>;
+      expect(data['ulbCode']).toBe(validUlbCode);
+      expect(data['yearCode']).toBe(validYearCode);
+    });
+
+    it('response does not include internal Mongo IDs', async () => {
+      const existingDoc = {
+        templateVersion: '2026.1',
+        stateId: new Types.ObjectId(validStateId),
+        yearCode: validYearCode,
+        lineItems: new Map<string, number>(),
+        save: jest.fn().mockResolvedValue(makeDocSaveResult({ lineItems: new Map([['110', 500]]) })),
+      };
+      dcModel.findOne.mockReturnValue(existingDoc);
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce([makeLegend('110')]);
+
+      const result = (await service.update(basePayload as never, stateClient)) as Record<string, unknown>;
+      const data = result['data'] as Record<string, unknown>;
+      expect(data).not.toHaveProperty('_id');
+      expect(data).not.toHaveProperty('ulbId');
+      expect(data).not.toHaveProperty('stateId');
+      expect(data).not.toHaveProperty('yearId');
+      expect(data).not.toHaveProperty('__v');
+    });
+
+    it('response message says Financial data updated successfully', async () => {
+      const existingDoc = {
+        templateVersion: '2026.1',
+        stateId: new Types.ObjectId(validStateId),
+        yearCode: validYearCode,
+        lineItems: new Map<string, number>(),
+        save: jest.fn().mockResolvedValue(makeDocSaveResult({ lineItems: new Map([['110', 500]]) })),
+      };
+      dcModel.findOne.mockReturnValue(existingDoc);
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce([makeLegend('110')]);
+
+      const result = (await service.update(basePayload as never, stateClient)) as Record<string, unknown>;
+      expect(result['message']).toBe('Financial data updated successfully.');
     });
   });
 

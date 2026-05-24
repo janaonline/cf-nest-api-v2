@@ -7,6 +7,7 @@ import { Year } from 'src/schemas/year.schema';
 import { DataCollectionReferenceResolverService } from './data-collection-reference-resolver.service';
 
 const ulbId = new Types.ObjectId('5dd24729437ba31f7eb42eee');
+const stateId = new Types.ObjectId('5dcf9d7216a06aed41c748dd');
 const yearId = new Types.ObjectId('606aafb14dff55e6c075d3ae');
 
 const mockUlbModel = { find: jest.fn() };
@@ -33,14 +34,14 @@ describe('DataCollectionReferenceResolverService', () => {
   // ─── resolveUlbByCode ─────────────────────────────────────────────────────
 
   describe('resolveUlbByCode', () => {
-    it('returns the ULB document when exactly one match is found', async () => {
-      mockUlbModel.find.mockReturnValue({ lean: jest.fn().mockResolvedValue([{ _id: ulbId }]) });
+    it('returns ulbId and stateId when exactly one match is found', async () => {
+      mockUlbModel.find.mockReturnValue({ lean: jest.fn().mockResolvedValue([{ _id: ulbId, state: stateId }]) });
       const result = await service.resolveUlbByCode('C001');
-      expect(result).toEqual({ _id: ulbId });
+      expect(result).toEqual({ ulbId, stateId });
     });
 
     it('queries by censusCode OR sbCode', async () => {
-      mockUlbModel.find.mockReturnValue({ lean: jest.fn().mockResolvedValue([{ _id: ulbId }]) });
+      mockUlbModel.find.mockReturnValue({ lean: jest.fn().mockResolvedValue([{ _id: ulbId, state: stateId }]) });
       await service.resolveUlbByCode('C001');
       const queryArg = (mockUlbModel.find.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
       expect(queryArg).toMatchObject({ $or: [{ censusCode: 'C001' }, { sbCode: 'C001' }] });
@@ -58,37 +59,59 @@ describe('DataCollectionReferenceResolverService', () => {
 
     it('throws ConflictException when multiple ULBs match the code', async () => {
       mockUlbModel.find.mockReturnValue({
-        lean: jest.fn().mockResolvedValue([{ _id: ulbId }, { _id: new Types.ObjectId() }]),
+        lean: jest.fn().mockResolvedValue([
+          { _id: ulbId, state: stateId },
+          { _id: new Types.ObjectId(), state: stateId },
+        ]),
       });
       await expect(service.resolveUlbByCode('C001')).rejects.toThrow(ConflictException);
     });
 
     it('ConflictException message contains the requested code', async () => {
       mockUlbModel.find.mockReturnValue({
-        lean: jest.fn().mockResolvedValue([{ _id: ulbId }, { _id: new Types.ObjectId() }]),
+        lean: jest.fn().mockResolvedValue([
+          { _id: ulbId, state: stateId },
+          { _id: new Types.ObjectId(), state: stateId },
+        ]),
       });
       await expect(service.resolveUlbByCode('C001')).rejects.toThrow("Multiple ULBs found for code 'C001'.");
     });
 
-    it('requests only _id projection to minimise data transfer', async () => {
-      mockUlbModel.find.mockReturnValue({ lean: jest.fn().mockResolvedValue([{ _id: ulbId }]) });
+    it('requests _id and state (stateId) projection — no extra fields', async () => {
+      mockUlbModel.find.mockReturnValue({ lean: jest.fn().mockResolvedValue([{ _id: ulbId, state: stateId }]) });
       await service.resolveUlbByCode('C001');
       const projectionArg = (mockUlbModel.find.mock.calls[0] as unknown[])[1] as Record<string, unknown>;
-      expect(projectionArg).toEqual({ _id: 1 });
+      expect(projectionArg).toEqual({ _id: 1, state: 1 });
+    });
+
+    it('result.ulbId matches the DB _id', async () => {
+      mockUlbModel.find.mockReturnValue({ lean: jest.fn().mockResolvedValue([{ _id: ulbId, state: stateId }]) });
+      const result = await service.resolveUlbByCode('C001');
+      expect(result.ulbId).toBe(ulbId);
+    });
+
+    it('result.stateId matches the ULB state field', async () => {
+      mockUlbModel.find.mockReturnValue({ lean: jest.fn().mockResolvedValue([{ _id: ulbId, state: stateId }]) });
+      const result = await service.resolveUlbByCode('C001');
+      expect(result.stateId).toBe(stateId);
     });
   });
 
   // ─── resolveYearByCode ────────────────────────────────────────────────────
 
   describe('resolveYearByCode', () => {
-    it('returns the Year document when a match is found', async () => {
-      mockYearModel.findOne.mockReturnValue({ lean: jest.fn().mockResolvedValue({ _id: yearId }) });
+    it('returns yearId and yearCode when a match is found', async () => {
+      mockYearModel.findOne.mockReturnValue({
+        lean: jest.fn().mockResolvedValue({ _id: yearId, year: '2021-22' }),
+      });
       const result = await service.resolveYearByCode('2021-22');
-      expect(result).toEqual({ _id: yearId });
+      expect(result).toEqual({ yearId, yearCode: '2021-22' });
     });
 
     it('queries by the year field', async () => {
-      mockYearModel.findOne.mockReturnValue({ lean: jest.fn().mockResolvedValue({ _id: yearId }) });
+      mockYearModel.findOne.mockReturnValue({
+        lean: jest.fn().mockResolvedValue({ _id: yearId, year: '2021-22' }),
+      });
       await service.resolveYearByCode('2021-22');
       const queryArg = (mockYearModel.findOne.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
       expect(queryArg).toEqual({ year: '2021-22' });
@@ -104,11 +127,29 @@ describe('DataCollectionReferenceResolverService', () => {
       await expect(service.resolveYearByCode('9999-00')).rejects.toThrow("Year '9999-00' not found.");
     });
 
-    it('requests only _id projection to minimise data transfer', async () => {
-      mockYearModel.findOne.mockReturnValue({ lean: jest.fn().mockResolvedValue({ _id: yearId }) });
+    it('requests _id and year projection — no extra fields', async () => {
+      mockYearModel.findOne.mockReturnValue({
+        lean: jest.fn().mockResolvedValue({ _id: yearId, year: '2021-22' }),
+      });
       await service.resolveYearByCode('2021-22');
       const projectionArg = (mockYearModel.findOne.mock.calls[0] as unknown[])[1] as Record<string, unknown>;
-      expect(projectionArg).toEqual({ _id: 1 });
+      expect(projectionArg).toEqual({ _id: 1, year: 1 });
+    });
+
+    it('result.yearId matches the DB _id', async () => {
+      mockYearModel.findOne.mockReturnValue({
+        lean: jest.fn().mockResolvedValue({ _id: yearId, year: '2021-22' }),
+      });
+      const result = await service.resolveYearByCode('2021-22');
+      expect(result.yearId).toBe(yearId);
+    });
+
+    it('result.yearCode is the canonical year string from DB', async () => {
+      mockYearModel.findOne.mockReturnValue({
+        lean: jest.fn().mockResolvedValue({ _id: yearId, year: '2021-22' }),
+      });
+      const result = await service.resolveYearByCode('2021-22');
+      expect(result.yearCode).toBe('2021-22');
     });
   });
 });

@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Headers, Ip, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiEnvelope } from 'src/common/decorators/api-envelope.decorator';
 import { CurrentUser } from 'src/module/auth/decorators/current-user.decorator';
 import { Roles } from 'src/module/auth/decorators/roles.decorator';
 import * as roleEnum from 'src/module/auth/enum/role.enum';
@@ -11,6 +12,7 @@ import { UpdateApiClientStatusDto } from './dto/update-api-client-status.dto';
 import { UpdateApiClientDto } from './dto/update-api-client.dto';
 import { ApiClientService } from './services/api-client.service';
 
+@ApiEnvelope()
 @ApiTags('api-clients')
 @ApiBearerAuth()
 @UseGuards(RolesGuard)

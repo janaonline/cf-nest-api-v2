@@ -3,9 +3,9 @@ import { HydratedDocument, Types } from 'mongoose';
 
 export const CODE = 'nmamCode';
 
-// Keys are now open strings — validated against DB legends in the service layer.
+// Keys are open strings — validated against DB legends in the service layer.
 export type LineItemKey = string;
-export type LineItemsMap = Record<string, number | null>;
+export type LineItemsMap = Record<string, number>;
 
 @Schema({ timestamps: true })
 export class DataCollection {
@@ -15,18 +15,32 @@ export class DataCollection {
   @Prop({ type: Types.ObjectId, ref: 'Ulb', required: true })
   ulbId!: Types.ObjectId;
 
+  @Prop({ type: Types.ObjectId, ref: 'State', required: true })
+  stateId!: Types.ObjectId;
+
   @Prop({ type: Types.ObjectId, ref: 'Year', required: true })
   yearId!: Types.ObjectId;
 
-  @Prop({ type: String })
-  templateVersion?: string;
+  @Prop({ type: String, required: true, trim: true })
+  yearCode!: string;
+
+  @Prop({ type: String, required: true })
+  templateVersion!: string;
 
   @Prop({ type: String, enum: ['VALID', 'WARNING'], default: 'VALID' })
-  validationStatus?: 'VALID' | 'WARNING';
+  validationStatus!: 'VALID' | 'WARNING';
 
-  @Prop({ type: Map, of: { type: Number, default: null }, required: true })
-  lineItems!: Map<string, number | null>;
+  // 0 is valid (explicit zero). Missing key = not submitted. null is rejected at service layer.
+  @Prop({ type: Map, of: Number, required: true })
+  lineItems!: Map<string, number>;
 }
 
 export type DataCollectionDocument = HydratedDocument<DataCollection>;
 export const DataCollectionSchema = SchemaFactory.createForClass(DataCollection);
+
+// Enforce one submission per ULB per year.
+DataCollectionSchema.index({ ulbId: 1, yearId: 1 }, { unique: true });
+DataCollectionSchema.index({ stateId: 1, yearId: 1 });
+DataCollectionSchema.index({ yearCode: 1 });
+DataCollectionSchema.index({ templateVersion: 1 });
+DataCollectionSchema.index({ updatedAt: -1 });

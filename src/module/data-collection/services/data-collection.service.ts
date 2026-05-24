@@ -8,7 +8,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model, Types } from 'mongoose';
+import { Model } from 'mongoose';
 import type { ApiClientContext } from 'src/module/auth/types/api-client-context.type';
 import type { FinancialDataTemplateQueryDto } from 'src/module/line-items-legends/dto/financial-data-template-query.dto';
 import { LineItemsLegendService } from 'src/module/line-items-legends/line-items-legend.service';
@@ -106,17 +106,12 @@ export class DataCollectionService {
     const { ulbCode, yearCode, lineItems: payloadLineItems } = payload;
     const templateVersion = payload.templateVersion ?? DEFAULT_TEMPLATE_VERSION;
 
-    const ulb = await this.referenceResolverService.resolveUlbByCode(ulbCode);
-    const year = await this.referenceResolverService.resolveYearByCode(yearCode);
+    const { ulbId, stateId } = await this.referenceResolverService.resolveUlbByCode(ulbCode);
+    const { yearId, yearCode: resolvedYearCode } = await this.referenceResolverService.resolveYearByCode(yearCode);
 
-    const ulbId = ulb._id.toString();
-    const yearId = year._id.toString();
+    await this.authorizationService.validateCanSubmitForUlb(client, ulbId.toString());
 
-    await this.authorizationService.validateCanSubmitForUlb(client, ulbId);
-
-    const existing = await this.dataCollectionModel
-      .findOne({ ulbId: new Types.ObjectId(ulbId), yearId: new Types.ObjectId(yearId) })
-      .lean<DataCollectionDocument>();
+    const existing = await this.dataCollectionModel.findOne({ ulbId, yearId }).lean<DataCollectionDocument>();
 
     if (existing) {
       throw new ConflictException(
@@ -141,14 +136,19 @@ export class DataCollectionService {
 
     try {
       const created = new this.dataCollectionModel({
-        ulbId: new Types.ObjectId(ulbId),
-        yearId: new Types.ObjectId(yearId),
+        ulbId,
+        stateId,
+        yearId,
+        yearCode: resolvedYearCode,
         templateVersion,
         lineItems: payloadLineItems,
         validationStatus: 'VALID',
       });
       const data = await created.save();
-      return { success: true as const, validationStatus: 'VALID' as const, data };
+      return {
+        message: 'Financial data submitted successfully.',
+        data: this.mapToExternalDataCollectionResponse(data, ulbCode, yearCode),
+      };
     } catch (error: unknown) {
       this.createErrorResponse(error, 'create');
     }
@@ -159,22 +159,17 @@ export class DataCollectionService {
    * Resolves ulbCode/yearCode to internal ObjectIds before updating.
    * Merges existing lineItems with incoming, then validates the merged set.
    * Sparse merged data is allowed; submitted parents must equal their submitted operand sums.
+   * Backfills stateId/yearCode on older records that pre-date those fields.
    */
   async update(payload: DataCollectionDto, client: ApiClientContext) {
     const { ulbCode, yearCode, lineItems: payloadLineItems } = payload;
 
-    const ulb = await this.referenceResolverService.resolveUlbByCode(ulbCode);
-    const year = await this.referenceResolverService.resolveYearByCode(yearCode);
+    const { ulbId, stateId } = await this.referenceResolverService.resolveUlbByCode(ulbCode);
+    const { yearId, yearCode: resolvedYearCode } = await this.referenceResolverService.resolveYearByCode(yearCode);
 
-    const ulbId = ulb._id.toString();
-    const yearId = year._id.toString();
+    await this.authorizationService.validateCanModifyForUlb(client, ulbId.toString());
 
-    await this.authorizationService.validateCanModifyForUlb(client, ulbId);
-
-    const existing = await this.dataCollectionModel.findOne({
-      ulbId: new Types.ObjectId(ulbId),
-      yearId: new Types.ObjectId(yearId),
-    });
+    const existing = await this.dataCollectionModel.findOne({ ulbId, yearId });
 
     if (!existing) {
       throw new NotFoundException(
@@ -210,15 +205,37 @@ export class DataCollectionService {
     }
 
     existing.templateVersion = templateVersion;
-    existing.lineItems = new Map(Object.entries(mergedLineItems) as [string, number | null][]);
+    existing.lineItems = new Map(Object.entries(mergedLineItems) as [string, number][]);
     existing.validationStatus = 'VALID';
+    // Backfill denormalized fields if missing from records created before these fields were added.
+    if (!existing.stateId) existing.stateId = stateId;
+    if (!existing.yearCode) existing.yearCode = resolvedYearCode;
 
     try {
       const data = await existing.save();
-      return { success: true as const, validationStatus: 'VALID' as const, data };
+      return {
+        message: 'Financial data updated successfully.',
+        data: this.mapToExternalDataCollectionResponse(data, ulbCode, yearCode),
+      };
     } catch (error: unknown) {
       this.createErrorResponse(error, 'update');
     }
+  }
+
+  /**
+   * Maps a saved data collection document to an external API response.
+   * Excludes Mongo identifiers (_id, ulbId, stateId, yearId, __v) and returns public codes.
+   */
+  private mapToExternalDataCollectionResponse(data: DataCollectionDocument, ulbCode: string, yearCode: string) {
+    return {
+      ulbCode,
+      yearCode,
+      templateVersion: data.templateVersion,
+      validationStatus: data.validationStatus,
+      lineItems: Object.fromEntries(data.lineItems),
+      createdAt: data.createdAt,
+      updatedAt: data.updatedAt,
+    };
   }
 
   /**
