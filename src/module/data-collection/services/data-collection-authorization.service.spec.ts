@@ -84,6 +84,20 @@ describe('DataCollectionAuthorizationService', () => {
       expect(filter).toMatchObject({ isActive: true });
       expect(JSON.stringify(filter)).toContain(stateClient.stateId);
     });
+
+    it('STATE client filter uses the ULB schema field "state", not "stateId"', () => {
+      const filter = service.getAllowedUlbFilter(stateClient) as Record<string, unknown>;
+      expect(filter).toHaveProperty('state');
+      expect(filter).not.toHaveProperty('stateId');
+    });
+
+    it('STATE ownership check queries by the "state" field', async () => {
+      mockUlbModel.exists.mockResolvedValue({ _id: 'id' });
+      await service.validateCanAccessUlb(stateClient, '5dd24729437ba31f7eb42eee');
+      const existsArg = (mockUlbModel.exists.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(existsArg).toHaveProperty('state');
+      expect(existsArg).not.toHaveProperty('stateId');
+    });
   });
 
   describe('validateCanSubmitForUlb', () => {

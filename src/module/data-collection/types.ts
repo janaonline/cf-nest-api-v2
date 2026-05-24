@@ -20,3 +20,10 @@ export type DataCollectionValidationResult = {
 
 /** Raw line item map as received from the API request, before value validation. */
 export type SubmittedLineItems = Record<string, unknown>;
+
+/** Public shape of one ULB entry returned by GET /data-collection/ulbs. */
+export type DataCollectionUlbListItem = {
+  code: string;
+  name: string;
+  state?: { code?: string; name?: string };
+};

@@ -1,17 +1,17 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsMongoId, IsNotEmpty, IsObject, IsOptional, IsString } from 'class-validator';
+import { IsNotEmpty, IsObject, IsOptional, IsString } from 'class-validator';
 import { DEFAULT_TEMPLATE_VERSION } from 'src/module/line-items-legends/types';
 
 export class DataCollectionDto {
-  @ApiProperty({ description: 'ULB Id' })
-  @IsMongoId()
+  @ApiProperty({ description: 'Public ULB code (censusCode or sbCode)' })
+  @IsString()
   @IsNotEmpty()
-  ulbId!: string;
+  ulbCode!: string;
 
-  @ApiProperty({ description: 'Year Id' })
-  @IsMongoId()
+  @ApiProperty({ description: 'Financial year code (e.g., 2021-22)' })
+  @IsString()
   @IsNotEmpty()
-  yearId!: string;
+  yearCode!: string;
 
   @ApiPropertyOptional({
     example: DEFAULT_TEMPLATE_VERSION,

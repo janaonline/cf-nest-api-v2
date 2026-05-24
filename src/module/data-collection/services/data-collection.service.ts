@@ -19,6 +19,7 @@ import { DataCollectionDto } from '../dto/data-collection.dto';
 import { DataCollection, DataCollectionDocument } from '../entities/data-collection.schema';
 import type { DataCollectionValidationIssue, DataCollectionValidationResult } from '../types';
 import { DataCollectionAuthorizationService } from './data-collection-authorization.service';
+import { DataCollectionReferenceResolverService } from './data-collection-reference-resolver.service';
 
 @Injectable()
 export class DataCollectionService {
@@ -36,6 +37,7 @@ export class DataCollectionService {
 
     private readonly authorizationService: DataCollectionAuthorizationService,
     private readonly lineItemsLegendService: LineItemsLegendService,
+    private readonly referenceResolverService: DataCollectionReferenceResolverService,
   ) {}
 
   /** Returns the current financial data template from DB. */
@@ -44,37 +46,71 @@ export class DataCollectionService {
   }
 
   /**
-   * Returns ULBs accessible by the API client.
+   * Returns ULBs accessible by the API client as { code, name, state } objects.
+   * code is censusCode when set, sbCode otherwise; ULBs with no public code are skipped.
    * STATE clients see all active ULBs in their state.
    * ULB clients see only their own ULB.
    */
   async getUlbsList(client: ApiClientContext) {
     try {
+      type UlbWithState = Pick<Ulb, 'name' | 'censusCode' | 'sbCode'> & {
+        state: { name: string; code: string } | null;
+      };
       const filter = this.authorizationService.getAllowedUlbFilter(client);
-      return await this.ulbModel.find(filter, { _id: 1, name: 1, censusCode: 1, sbCode: 1 }).lean<UlbDocument[]>();
+      const ulbs = await this.ulbModel
+        .find(filter)
+        .select({ _id: 0, name: 1, censusCode: 1, sbCode: 1, state: 1 })
+        .populate<{ state: { name: string; code: string } | null }>({
+          path: 'state',
+          select: { _id: 0, name: 1, code: 1 },
+        })
+        .lean<UlbWithState[]>();
+      return ulbs
+        .filter((u) => u.censusCode ?? u.sbCode)
+        .map((u) => ({
+          code: u.censusCode ?? u.sbCode,
+          name: u.name,
+          state: u.state ?? undefined,
+        }));
     } catch (error: unknown) {
       this.createErrorResponse(error, 'getUlbsList');
     }
   }
 
-  /** Returns all active financial years. */
+  /** Returns active financial years as { yearCode, displayName } pairs, latest year first. */
   async getYearsList() {
     try {
-      return await this.yearModel.find({ isActive: true }).lean<YearDocument[]>();
+      const years = await this.yearModel.find({ isActive: true }, { _id: 0, year: 1 }).lean<Pick<Year, 'year'>[]>();
+      return years
+        .map((y) => ({ yearCode: y.year, displayName: y.year }))
+        .sort((a, b) => this.getYearStart(b.yearCode) - this.getYearStart(a.yearCode));
     } catch (error: unknown) {
       this.createErrorResponse(error, 'getYearsList');
     }
   }
 
+  /** Extracts the 4-digit start year from a year code like '2024-25'. */
+  private getYearStart(yearCode: string): number {
+    const start = Number(yearCode.split('-')[0]);
+    return Number.isFinite(start) ? start : 0;
+  }
+
   /**
    * Submits new financial data for a ULB and year.
+   * Resolves ulbCode/yearCode to internal ObjectIds before storing.
    * Sparse lineItems are allowed — only submitted keys are stored.
    * All submitted keys must be valid nmamCodes. Submitted parents must equal
    * the sum of their submitted operands. Throws BadRequestException on any error.
    */
   async create(payload: DataCollectionDto, client: ApiClientContext) {
-    const { ulbId, yearId, lineItems: payloadLineItems } = payload;
+    const { ulbCode, yearCode, lineItems: payloadLineItems } = payload;
     const templateVersion = payload.templateVersion ?? DEFAULT_TEMPLATE_VERSION;
+
+    const ulb = await this.referenceResolverService.resolveUlbByCode(ulbCode);
+    const year = await this.referenceResolverService.resolveYearByCode(yearCode);
+
+    const ulbId = ulb._id.toString();
+    const yearId = year._id.toString();
 
     await this.authorizationService.validateCanSubmitForUlb(client, ulbId);
 
@@ -84,7 +120,7 @@ export class DataCollectionService {
 
     if (existing) {
       throw new ConflictException(
-        `Data for ulbId: ${ulbId} and yearId: ${yearId} already exists. Try using PATCH method.`,
+        `Data for ulbCode: ${ulbCode} and yearCode: ${yearCode} already exists. Try using PATCH method.`,
       );
     }
 
@@ -94,8 +130,8 @@ export class DataCollectionService {
 
     if (result.hasErrors) {
       throw new BadRequestException({
-        ulbId,
-        yearId,
+        ulbCode,
+        yearCode,
         templateVersion,
         success: false,
         errors: result.errors,
@@ -120,11 +156,18 @@ export class DataCollectionService {
 
   /**
    * Updates existing financial data for a ULB and year.
+   * Resolves ulbCode/yearCode to internal ObjectIds before updating.
    * Merges existing lineItems with incoming, then validates the merged set.
    * Sparse merged data is allowed; submitted parents must equal their submitted operand sums.
    */
   async update(payload: DataCollectionDto, client: ApiClientContext) {
-    const { ulbId, yearId, lineItems: payloadLineItems } = payload;
+    const { ulbCode, yearCode, lineItems: payloadLineItems } = payload;
+
+    const ulb = await this.referenceResolverService.resolveUlbByCode(ulbCode);
+    const year = await this.referenceResolverService.resolveYearByCode(yearCode);
+
+    const ulbId = ulb._id.toString();
+    const yearId = year._id.toString();
 
     await this.authorizationService.validateCanModifyForUlb(client, ulbId);
 
@@ -135,7 +178,7 @@ export class DataCollectionService {
 
     if (!existing) {
       throw new NotFoundException(
-        `Data for ulbId: ${ulbId} and yearId: ${yearId} does not exist. Try using POST method.`,
+        `Data for ulbCode: ${ulbCode} and yearCode: ${yearCode} does not exist. Try using POST method.`,
       );
     }
 
@@ -157,8 +200,8 @@ export class DataCollectionService {
 
     if (result.hasErrors) {
       throw new BadRequestException({
-        ulbId,
-        yearId,
+        ulbCode,
+        yearCode,
         templateVersion,
         success: false,
         errors: result.errors,

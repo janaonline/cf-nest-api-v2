@@ -76,13 +76,13 @@ describe('DataCollectionController', () => {
   });
 
   it('create passes payload and client to service', async () => {
-    const payload = { ulbId: 'ulb1', yearId: 'yr1', lineItems: { '110': 100 } };
+    const payload = { ulbCode: 'C001', yearCode: '2021-22', lineItems: { '110': 100 } };
     await controller.create(payload as never, mockClient);
     expect(mockService.create).toHaveBeenCalledWith(payload, mockClient);
   });
 
   it('update passes payload and client to service', async () => {
-    const payload = { ulbId: 'ulb1', yearId: 'yr1', lineItems: { '110': 200 } };
+    const payload = { ulbCode: 'C001', yearCode: '2021-22', lineItems: { '110': 200 } };
     await controller.update(payload as never, mockClient);
     expect(mockService.update).toHaveBeenCalledWith(payload, mockClient);
   });
