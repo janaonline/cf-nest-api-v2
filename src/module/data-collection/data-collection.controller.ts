@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Headers, Ip, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ApiEnvelope } from 'src/common/decorators/api-envelope.decorator';
 import { CurrentApiClient } from 'src/module/auth/decorators/current-api-client.decorator';
@@ -54,8 +54,13 @@ export class DataCollectionController {
     description: 'Creates a new data collection record for a ULB and financial year.',
   })
   @Scopes(DATA_COLLECTION_SCOPES.FINANCIAL_DATA_SUBMIT)
-  create(@Body() payload: DataCollectionDto, @CurrentApiClient() client: ApiClientContext) {
-    return this.dataCollectionService.create(payload, client);
+  create(
+    @Body() payload: DataCollectionDto,
+    @CurrentApiClient() client: ApiClientContext,
+    @Ip() ip: string,
+    @Headers('user-agent') userAgent?: string,
+  ) {
+    return this.dataCollectionService.create(payload, client, { ip, userAgent });
   }
 
   @Patch('modify-financial-data')
@@ -64,7 +69,12 @@ export class DataCollectionController {
     description: 'Updates an existing data collection record by merging new line item values.',
   })
   @Scopes(DATA_COLLECTION_SCOPES.FINANCIAL_DATA_MODIFY)
-  update(@Body() payload: DataCollectionDto, @CurrentApiClient() client: ApiClientContext) {
-    return this.dataCollectionService.update(payload, client);
+  update(
+    @Body() payload: DataCollectionDto,
+    @CurrentApiClient() client: ApiClientContext,
+    @Ip() ip: string,
+    @Headers('user-agent') userAgent?: string,
+  ) {
+    return this.dataCollectionService.update(payload, client, { ip, userAgent });
   }
 }

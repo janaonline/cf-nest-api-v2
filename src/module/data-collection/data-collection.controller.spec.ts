@@ -75,15 +75,27 @@ describe('DataCollectionController', () => {
     expect(mockService.getYearsList).toHaveBeenCalled();
   });
 
-  it('create passes payload and client to service', async () => {
+  it('create passes payload, client, and meta to service', async () => {
     const payload = { ulbCode: 'C001', yearCode: '2021-22', lineItems: { '110': 100 } };
-    await controller.create(payload as never, mockClient);
-    expect(mockService.create).toHaveBeenCalledWith(payload, mockClient);
+    await controller.create(payload as never, mockClient, '1.2.3.4', 'TestAgent/1.0');
+    expect(mockService.create).toHaveBeenCalledWith(payload, mockClient, { ip: '1.2.3.4', userAgent: 'TestAgent/1.0' });
   });
 
-  it('update passes payload and client to service', async () => {
+  it('create passes undefined userAgent when header is absent', async () => {
+    const payload = { ulbCode: 'C001', yearCode: '2021-22', lineItems: { '110': 100 } };
+    await controller.create(payload as never, mockClient, '1.2.3.4', undefined);
+    expect(mockService.create).toHaveBeenCalledWith(payload, mockClient, { ip: '1.2.3.4', userAgent: undefined });
+  });
+
+  it('update passes payload, client, and meta to service', async () => {
     const payload = { ulbCode: 'C001', yearCode: '2021-22', lineItems: { '110': 200 } };
-    await controller.update(payload as never, mockClient);
-    expect(mockService.update).toHaveBeenCalledWith(payload, mockClient);
+    await controller.update(payload as never, mockClient, '10.0.0.1', 'Mozilla/5.0');
+    expect(mockService.update).toHaveBeenCalledWith(payload, mockClient, { ip: '10.0.0.1', userAgent: 'Mozilla/5.0' });
+  });
+
+  it('update passes undefined userAgent when header is absent', async () => {
+    const payload = { ulbCode: 'C001', yearCode: '2021-22', lineItems: { '110': 200 } };
+    await controller.update(payload as never, mockClient, '10.0.0.1', undefined);
+    expect(mockService.update).toHaveBeenCalledWith(payload, mockClient, { ip: '10.0.0.1', userAgent: undefined });
   });
 });

@@ -11,7 +11,9 @@ import { Year, YearSchema } from 'src/schemas/year.schema';
 import { IntegrationAuthController } from './auth/integration-auth.controller';
 import { IntegrationAuthService } from './auth/integration-auth.service';
 import { DataCollectionController } from './data-collection.controller';
+import { DataCollectionAuditLog, DataCollectionAuditLogSchema } from './entities/data-collection-audit-log.schema';
 import { DataCollection, DataCollectionSchema } from './entities/data-collection.schema';
+import { DataCollectionAuditLogService } from './services/data-collection-audit-log.service';
 import { DataCollectionAuthorizationService } from './services/data-collection-authorization.service';
 import { DataCollectionReferenceResolverService } from './services/data-collection-reference-resolver.service';
 import { DataCollectionService } from './services/data-collection.service';
@@ -20,6 +22,7 @@ import { DataCollectionService } from './services/data-collection.service';
   imports: [
     MongooseModule.forFeature([
       { name: DataCollection.name, schema: DataCollectionSchema },
+      { name: DataCollectionAuditLog.name, schema: DataCollectionAuditLogSchema },
       { name: Ulb.name, schema: UlbSchema },
       { name: Year.name, schema: YearSchema },
       { name: State.name, schema: StateSchema },
@@ -31,6 +34,7 @@ import { DataCollectionService } from './services/data-collection.service';
   controllers: [DataCollectionController, IntegrationAuthController],
   providers: [
     DataCollectionService,
+    DataCollectionAuditLogService,
     IntegrationAuthService,
     IntegrationJwtGuard,
     ScopesGuard,

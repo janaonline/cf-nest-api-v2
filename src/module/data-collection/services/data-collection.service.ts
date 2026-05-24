@@ -8,7 +8,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import type { ApiClientContext } from 'src/module/auth/types/api-client-context.type';
 import type { FinancialDataTemplateQueryDto } from 'src/module/line-items-legends/dto/financial-data-template-query.dto';
 import { LineItemsLegendService } from 'src/module/line-items-legends/line-items-legend.service';
@@ -17,7 +17,13 @@ import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { Year, YearDocument } from 'src/schemas/year.schema';
 import { DataCollectionDto } from '../dto/data-collection.dto';
 import { DataCollection, DataCollectionDocument } from '../entities/data-collection.schema';
-import type { DataCollectionValidationIssue, DataCollectionValidationResult } from '../types';
+import type {
+  DataCollectionRequestMeta,
+  DataCollectionValidationIssue,
+  DataCollectionValidationResult,
+  SubmittedLineItems,
+} from '../types/data-collection.types';
+import { DataCollectionAuditLogService } from './data-collection-audit-log.service';
 import { DataCollectionAuthorizationService } from './data-collection-authorization.service';
 import { DataCollectionReferenceResolverService } from './data-collection-reference-resolver.service';
 
@@ -38,6 +44,7 @@ export class DataCollectionService {
     private readonly authorizationService: DataCollectionAuthorizationService,
     private readonly lineItemsLegendService: LineItemsLegendService,
     private readonly referenceResolverService: DataCollectionReferenceResolverService,
+    private readonly auditLogService: DataCollectionAuditLogService,
   ) {}
 
   /** Returns the current financial data template from DB. */
@@ -102,7 +109,7 @@ export class DataCollectionService {
    * All submitted keys must be valid nmamCodes. Submitted parents must equal
    * the sum of their submitted operands. Throws BadRequestException on any error.
    */
-  async create(payload: DataCollectionDto, client: ApiClientContext) {
+  async create(payload: DataCollectionDto, client: ApiClientContext, meta: DataCollectionRequestMeta = {}) {
     const { ulbCode, yearCode, lineItems: payloadLineItems } = payload;
     const templateVersion = payload.templateVersion ?? DEFAULT_TEMPLATE_VERSION;
 
@@ -111,9 +118,23 @@ export class DataCollectionService {
 
     await this.authorizationService.validateCanSubmitForUlb(client, ulbId.toString());
 
+    const lineItemCount = this.getLineItemCount(payloadLineItems);
+
     const existing = await this.dataCollectionModel.findOne({ ulbId, yearId }).lean<DataCollectionDocument>();
 
+    const apiClientId = this.getApiClientObjectId(client);
+
     if (existing) {
+      await this.auditLogService.logDuplicateSubmit({
+        apiClientId,
+        stateId,
+        ulbId,
+        yearId,
+        templateVersion,
+        lineItemCount,
+        ip: meta.ip,
+        userAgent: meta.userAgent,
+      });
       throw new ConflictException(
         `Data for ulbCode: ${ulbCode} and yearCode: ${yearCode} already exists. Try using PATCH method.`,
       );
@@ -124,6 +145,26 @@ export class DataCollectionService {
     const result = this.validateLineItemsAgainstTemplate(payloadLineItems, legendMap, templateVersion);
 
     if (result.hasErrors) {
+      await this.auditLogService.logValidationFailed({
+        apiClientId,
+        stateId,
+        ulbId,
+        yearId,
+        templateVersion,
+        lineItemCount,
+        ip: meta.ip,
+        userAgent: meta.userAgent,
+        errorCount: result.errors.length,
+        validationSummary: {
+          errors: result.errors.map((e) => ({
+            lineItemCode: e.lineItemCode,
+            message: e.message,
+            severity: e.severity,
+            expected: e.expected,
+            received: e.received,
+          })),
+        },
+      });
       throw new BadRequestException({
         ulbCode,
         yearCode,
@@ -145,6 +186,18 @@ export class DataCollectionService {
         validationStatus: 'VALID',
       });
       const data = await created.save();
+      await this.auditLogService.logSubmitted({
+        apiClientId,
+        stateId,
+        ulbId,
+        yearId,
+        templateVersion,
+        lineItemCount,
+        ip: meta.ip,
+        userAgent: meta.userAgent,
+        dataCollectionId: data._id,
+        validationStatus: data.validationStatus,
+      });
       return {
         message: 'Financial data submitted successfully.',
         data: this.mapToExternalDataCollectionResponse(data, ulbCode, yearCode),
@@ -161,7 +214,7 @@ export class DataCollectionService {
    * Sparse merged data is allowed; submitted parents must equal their submitted operand sums.
    * Backfills stateId/yearCode on older records that pre-date those fields.
    */
-  async update(payload: DataCollectionDto, client: ApiClientContext) {
+  async update(payload: DataCollectionDto, client: ApiClientContext, meta: DataCollectionRequestMeta = {}) {
     const { ulbCode, yearCode, lineItems: payloadLineItems } = payload;
 
     const { ulbId, stateId } = await this.referenceResolverService.resolveUlbByCode(ulbCode);
@@ -171,7 +224,21 @@ export class DataCollectionService {
 
     const existing = await this.dataCollectionModel.findOne({ ulbId, yearId });
 
+    const lineItemCount = this.getLineItemCount(payloadLineItems);
+
+    const apiClientId = this.getApiClientObjectId(client);
+
     if (!existing) {
+      await this.auditLogService.logModifyNotFound({
+        apiClientId,
+        stateId,
+        ulbId,
+        yearId,
+        templateVersion: payload.templateVersion ?? DEFAULT_TEMPLATE_VERSION,
+        lineItemCount,
+        ip: meta.ip,
+        userAgent: meta.userAgent,
+      });
       throw new NotFoundException(
         `Data for ulbCode: ${ulbCode} and yearCode: ${yearCode} does not exist. Try using POST method.`,
       );
@@ -182,6 +249,8 @@ export class DataCollectionService {
       throw new BadRequestException('templateVersion cannot be changed for an existing data collection record.');
     }
     const templateVersion = existingTemplateVersion;
+
+    const changedLineItemCodes = this.getChangedLineItemCodes(existing.lineItems, payloadLineItems);
 
     // Unconditional merge — null from payload is intentional, validation decides validity.
     const mergedLineItems: Record<string, unknown> = Object.fromEntries(existing.lineItems) as Record<string, unknown>;
@@ -194,6 +263,26 @@ export class DataCollectionService {
     const result = this.validateLineItemsAgainstTemplate(mergedLineItems, legendMap, templateVersion);
 
     if (result.hasErrors) {
+      await this.auditLogService.logValidationFailed({
+        apiClientId,
+        stateId,
+        ulbId,
+        yearId,
+        templateVersion,
+        lineItemCount,
+        ip: meta.ip,
+        userAgent: meta.userAgent,
+        errorCount: result.errors.length,
+        validationSummary: {
+          errors: result.errors.map((e) => ({
+            lineItemCode: e.lineItemCode,
+            message: e.message,
+            severity: e.severity,
+            expected: e.expected,
+            received: e.received,
+          })),
+        },
+      });
       throw new BadRequestException({
         ulbCode,
         yearCode,
@@ -213,6 +302,19 @@ export class DataCollectionService {
 
     try {
       const data = await existing.save();
+      await this.auditLogService.logModified({
+        apiClientId,
+        stateId,
+        ulbId,
+        yearId,
+        templateVersion,
+        changedLineItemCodes,
+        lineItemCount,
+        ip: meta.ip,
+        userAgent: meta.userAgent,
+        dataCollectionId: data._id,
+        validationStatus: data.validationStatus,
+      });
       return {
         message: 'Financial data updated successfully.',
         data: this.mapToExternalDataCollectionResponse(data, ulbCode, yearCode),
@@ -220,6 +322,19 @@ export class DataCollectionService {
     } catch (error: unknown) {
       this.createErrorResponse(error, 'update');
     }
+  }
+
+  /**
+   * Converts API client id from request context to ObjectId.
+   * @param client Authenticated API client context.
+   * @returns API client ObjectId.
+   */
+  private getApiClientObjectId(client: ApiClientContext): Types.ObjectId {
+    if (!Types.ObjectId.isValid(client.apiClientId)) {
+      throw new InternalServerErrorException('Invalid API client context.');
+    }
+
+    return new Types.ObjectId(client.apiClientId);
   }
 
   /**
@@ -379,6 +494,26 @@ export class DataCollectionService {
     }
 
     return errors;
+  }
+
+  /**
+   * Counts submitted line items from payload.
+   * @param lineItems Submitted line item map.
+   * @returns Submitted line item count.
+   */
+  private getLineItemCount(lineItems: SubmittedLineItems): number {
+    return Object.keys(lineItems).length;
+  }
+
+  /**
+   * Gets changed line item codes between existing and incoming data.
+   * A key is changed if it is new or its value differs from the stored value.
+   * @param existing Existing sparse line item map.
+   * @param incoming Incoming sparse line item map.
+   * @returns Codes whose values changed.
+   */
+  private getChangedLineItemCodes(existing: Map<string, number>, incoming: SubmittedLineItems): string[] {
+    return Object.keys(incoming).filter((key) => existing.get(key) !== incoming[key]);
   }
 
   /** Transforms any error into an appropriate HTTP exception and re-throws. */

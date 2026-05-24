@@ -7,7 +7,8 @@ import { LineItemsLegendService } from 'src/module/line-items-legends/line-items
 import { Ulb } from 'src/schemas/ulb.schema';
 import { Year } from 'src/schemas/year.schema';
 import { DataCollection } from '../entities/data-collection.schema';
-import type { DataCollectionValidationIssue } from '../types';
+import type { DataCollectionValidationIssue } from '../types/data-collection.types';
+import { DataCollectionAuditLogService } from './data-collection-audit-log.service';
 import { DataCollectionAuthorizationService } from './data-collection-authorization.service';
 import { DataCollectionReferenceResolverService } from './data-collection-reference-resolver.service';
 import { DataCollectionService } from './data-collection.service';
@@ -26,16 +27,19 @@ const makeLegend = (nmamCode: string, rules = []) => ({
 const validUlbId = '5dd24729437ba31f7eb42eee';
 const validStateId = '5dcf9d7216a06aed41c748dd';
 const validYearId = '606aafb14dff55e6c075d3ae';
+const validApiClientId = new Types.ObjectId().toString();
 const validUlbCode = 'C001';
 const validYearCode = '2021-22';
 
 const stateClient: ApiClientContext = {
-  apiClientId: 'aId',
+  apiClientId: validApiClientId,
   clientId: 'c1',
   actorType: 'STATE',
   stateId: validStateId,
   scopes: [],
 };
+
+const removedAuditFields = ['clientId', 'actorType', 'ulbCode', 'yearCode', 'submittedLineItemCodes', 'warningCount'];
 
 // ─── Mock factories ────────────────────────────────────────────────────────────
 
@@ -101,6 +105,20 @@ const mockLineItemsLegendService = {
   getActiveLegendsForValidation: jest.fn().mockResolvedValue([]),
 };
 
+const mockAuditLogService = {
+  logSubmitted: jest.fn().mockResolvedValue(undefined),
+  logModified: jest.fn().mockResolvedValue(undefined),
+  logValidationFailed: jest.fn().mockResolvedValue(undefined),
+  logDuplicateSubmit: jest.fn().mockResolvedValue(undefined),
+  logModifyNotFound: jest.fn().mockResolvedValue(undefined),
+};
+
+const expectNoRemovedAuditFields = (arg: Record<string, unknown>) => {
+  for (const field of removedAuditFields) {
+    expect(arg).not.toHaveProperty(field);
+  }
+};
+
 // ─── Test suite ────────────────────────────────────────────────────────────────
 
 describe('DataCollectionService', () => {
@@ -121,6 +139,11 @@ describe('DataCollectionService', () => {
       yearId: new Types.ObjectId(validYearId),
       yearCode: validYearCode,
     });
+    mockAuditLogService.logSubmitted.mockResolvedValue(undefined);
+    mockAuditLogService.logModified.mockResolvedValue(undefined);
+    mockAuditLogService.logValidationFailed.mockResolvedValue(undefined);
+    mockAuditLogService.logDuplicateSubmit.mockResolvedValue(undefined);
+    mockAuditLogService.logModifyNotFound.mockResolvedValue(undefined);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -131,6 +154,7 @@ describe('DataCollectionService', () => {
         { provide: DataCollectionAuthorizationService, useValue: mockAuthorizationService },
         { provide: LineItemsLegendService, useValue: mockLineItemsLegendService },
         { provide: DataCollectionReferenceResolverService, useValue: mockReferenceResolverService },
+        { provide: DataCollectionAuditLogService, useValue: mockAuditLogService },
       ],
     }).compile();
 
@@ -698,6 +722,85 @@ describe('DataCollectionService', () => {
       expect(data['lineItems']).not.toBeInstanceOf(Map);
       expect(data['lineItems']).toEqual({ '110': 500 });
     });
+
+    // ─── Audit logging ─────────────────────────────────────────────────────
+
+    it('calls logDuplicateSubmit before throwing ConflictException', async () => {
+      dcModel.findOne.mockReturnValue({ lean: jest.fn().mockResolvedValue({ _id: 'existing' }) });
+      await service.create(basePayload as never, stateClient).catch(() => {});
+      const arg = (mockAuditLogService.logDuplicateSubmit.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(arg['apiClientId']).toBeInstanceOf(Types.ObjectId);
+      expect(arg['stateId']).toEqual(new Types.ObjectId(validStateId));
+      expect(arg['ulbId']).toEqual(new Types.ObjectId(validUlbId));
+      expect(arg['yearId']).toEqual(new Types.ObjectId(validYearId));
+      expectNoRemovedAuditFields(arg);
+    });
+
+    it('logDuplicateSubmit receives lineItemCount without submittedLineItemCodes', async () => {
+      dcModel.findOne.mockReturnValue({ lean: jest.fn().mockResolvedValue({ _id: 'existing' }) });
+      const payload = { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 100, '11001': 200 } };
+      await service.create(payload as never, stateClient).catch(() => {});
+      const arg = (mockAuditLogService.logDuplicateSubmit.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(arg['lineItemCount']).toBe(2);
+      expect(arg).not.toHaveProperty('submittedLineItemCodes');
+    });
+
+    it('does not pass full lineItems values to logDuplicateSubmit', async () => {
+      dcModel.findOne.mockReturnValue({ lean: jest.fn().mockResolvedValue({ _id: 'existing' }) });
+      const payload = { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 100 } };
+      await service.create(payload as never, stateClient).catch(() => {});
+      const arg = (mockAuditLogService.logDuplicateSubmit.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(arg).not.toHaveProperty('lineItems');
+    });
+
+    it('calls logValidationFailed before throwing BadRequestException on invalid keys', async () => {
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce([makeLegend('110')]);
+      const payload = { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { UNKNOWN: 100 } };
+      await service.create(payload as never, stateClient).catch(() => {});
+      expect(mockAuditLogService.logValidationFailed).toHaveBeenCalledWith(expect.objectContaining({ errorCount: 1 }));
+    });
+
+    it('logValidationFailed includes validationSummary with errors array', async () => {
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce([makeLegend('110')]);
+      const payload = { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { UNKNOWN: 100 } };
+      await service.create(payload as never, stateClient).catch(() => {});
+      const arg = (mockAuditLogService.logValidationFailed.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      const summary = arg['validationSummary'] as Record<string, unknown>;
+      expect(Array.isArray(summary['errors'])).toBe(true);
+      expect(arg['lineItemCount']).toBe(1);
+      expectNoRemovedAuditFields(arg);
+      expect(arg).not.toHaveProperty('lineItems');
+    });
+
+    it('calls logSubmitted on successful submission', async () => {
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce([makeLegend('110')]);
+      mockSave.mockResolvedValue(makeDocSaveResult({ lineItems: new Map([['110', 500]]) }));
+      const payload = { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 500 } };
+      await service.create(payload as never, stateClient);
+      const arg = (mockAuditLogService.logSubmitted.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(arg).toEqual(
+        expect.objectContaining({
+          apiClientId: expect.any(Types.ObjectId) as Types.ObjectId,
+          stateId: new Types.ObjectId(validStateId),
+          ulbId: new Types.ObjectId(validUlbId),
+          yearId: new Types.ObjectId(validYearId),
+          templateVersion: '2026.1',
+          lineItemCount: 1,
+          validationStatus: 'VALID',
+        }),
+      );
+      expectNoRemovedAuditFields(arg);
+    });
+
+    it('passes ip and userAgent from meta to audit log', async () => {
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce([makeLegend('110')]);
+      mockSave.mockResolvedValue(makeDocSaveResult({ lineItems: new Map([['110', 500]]) }));
+      const payload = { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 500 } };
+      await service.create(payload as never, stateClient, { ip: '10.0.0.1', userAgent: 'ua/2' });
+      expect(mockAuditLogService.logSubmitted).toHaveBeenCalledWith(
+        expect.objectContaining({ ip: '10.0.0.1', userAgent: 'ua/2' }),
+      );
+    });
   });
 
   // ─── update ───────────────────────────────────────────────────────────────
@@ -961,6 +1064,110 @@ describe('DataCollectionService', () => {
 
       const result = (await service.update(basePayload as never, stateClient)) as Record<string, unknown>;
       expect(result['message']).toBe('Financial data updated successfully.');
+    });
+
+    // ─── Audit logging ─────────────────────────────────────────────────────
+
+    it('calls logModifyNotFound before throwing NotFoundException', async () => {
+      dcModel.findOne.mockReturnValue(null);
+      await service.update(basePayload as never, stateClient).catch(() => {});
+      const arg = (mockAuditLogService.logModifyNotFound.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(arg['apiClientId']).toBeInstanceOf(Types.ObjectId);
+      expect(arg['stateId']).toEqual(new Types.ObjectId(validStateId));
+      expect(arg['ulbId']).toEqual(new Types.ObjectId(validUlbId));
+      expect(arg['yearId']).toEqual(new Types.ObjectId(validYearId));
+      expect(arg['lineItemCount']).toBe(1);
+      expectNoRemovedAuditFields(arg);
+    });
+
+    it('calls logValidationFailed before throwing BadRequestException on merged data', async () => {
+      const existingDoc = {
+        templateVersion: '2026.1',
+        lineItems: new Map<string, number>([['110', 1000]]),
+        save: jest.fn(),
+      };
+      dcModel.findOne.mockReturnValue(existingDoc);
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce([]);
+      await service.update(basePayload as never, stateClient).catch(() => {});
+      expect(mockAuditLogService.logValidationFailed).toHaveBeenCalledWith(
+        expect.objectContaining({ errorCount: expect.any(Number) as unknown as number }),
+      );
+      const arg = (mockAuditLogService.logValidationFailed.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(arg['lineItemCount']).toBe(1);
+      expectNoRemovedAuditFields(arg);
+      expect(arg).not.toHaveProperty('lineItems');
+    });
+
+    it('calls logModified on successful update', async () => {
+      const existingDoc = {
+        templateVersion: '2026.1',
+        stateId: new Types.ObjectId(validStateId),
+        yearCode: validYearCode,
+        lineItems: new Map<string, number>(),
+        save: jest.fn().mockResolvedValue(makeDocSaveResult({ lineItems: new Map([['110', 500]]) })),
+      };
+      dcModel.findOne.mockReturnValue(existingDoc);
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce([makeLegend('110')]);
+      await service.update(basePayload as never, stateClient);
+      const arg = (mockAuditLogService.logModified.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(arg).toEqual(
+        expect.objectContaining({
+          apiClientId: expect.any(Types.ObjectId) as Types.ObjectId,
+          stateId: new Types.ObjectId(validStateId),
+          ulbId: new Types.ObjectId(validUlbId),
+          yearId: new Types.ObjectId(validYearId),
+          templateVersion: '2026.1',
+          lineItemCount: 1,
+          changedLineItemCodes: ['110'],
+          validationStatus: 'VALID',
+        }),
+      );
+      expectNoRemovedAuditFields(arg);
+    });
+
+    it('changedLineItemCodes reflects keys whose values differ from existing', async () => {
+      const existingDoc = {
+        templateVersion: '2026.1',
+        stateId: new Types.ObjectId(validStateId),
+        yearCode: validYearCode,
+        lineItems: new Map<string, number>([['110', 999]]),
+        save: jest.fn().mockResolvedValue(makeDocSaveResult({ lineItems: new Map([['110', 500]]) })),
+      };
+      dcModel.findOne.mockReturnValue(existingDoc);
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce([makeLegend('110')]);
+      await service.update(basePayload as never, stateClient);
+      const arg = (mockAuditLogService.logModified.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(arg['changedLineItemCodes']).toContain('110');
+    });
+
+    it('changedLineItemCodes omits keys whose values are unchanged', async () => {
+      const existingDoc = {
+        templateVersion: '2026.1',
+        stateId: new Types.ObjectId(validStateId),
+        yearCode: validYearCode,
+        lineItems: new Map<string, number>([['110', 500]]),
+        save: jest.fn().mockResolvedValue(makeDocSaveResult({ lineItems: new Map([['110', 500]]) })),
+      };
+      dcModel.findOne.mockReturnValue(existingDoc);
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce([makeLegend('110')]);
+      await service.update(basePayload as never, stateClient);
+      const arg = (mockAuditLogService.logModified.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(arg['changedLineItemCodes']).toEqual([]);
+    });
+
+    it('does not pass full merged lineItems to logModified', async () => {
+      const existingDoc = {
+        templateVersion: '2026.1',
+        stateId: new Types.ObjectId(validStateId),
+        yearCode: validYearCode,
+        lineItems: new Map<string, number>(),
+        save: jest.fn().mockResolvedValue(makeDocSaveResult({ lineItems: new Map([['110', 500]]) })),
+      };
+      dcModel.findOne.mockReturnValue(existingDoc);
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce([makeLegend('110')]);
+      await service.update(basePayload as never, stateClient);
+      const arg = (mockAuditLogService.logModified.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(arg).not.toHaveProperty('lineItems');
     });
   });
 

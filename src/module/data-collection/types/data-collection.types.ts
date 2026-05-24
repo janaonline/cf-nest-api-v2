@@ -27,3 +27,9 @@ export type DataCollectionUlbListItem = {
   name: string;
   state?: { code?: string; name?: string };
 };
+
+/** Request metadata forwarded from the controller to the service for audit logging. */
+export type DataCollectionRequestMeta = {
+  ip?: string;
+  userAgent?: string;
+};
