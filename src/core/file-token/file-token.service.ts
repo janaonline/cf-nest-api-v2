@@ -33,7 +33,7 @@ export class FileTokenService {
   }
 
   createToken(payload: FileDownloadPayload): string {
-    payload.exp = payload.exp || Date.now() + 24 * 60 * 1000; // default 24 hours expiry
+    payload.exp = payload.exp || Date.now() + 72 * 60 * 60 * 1000;
     const iv = crypto.randomBytes(IV_BYTES);
     const cipher = crypto.createCipheriv(ALGORITHM, this.key, iv);
     const pt = JSON.stringify(payload);
