@@ -23,9 +23,11 @@ const baseData = {
   userAgent: 'test-agent/1.0',
 };
 
+const adminUserId = new Types.ObjectId();
+
 const mockModel = { create: jest.fn() };
 const removedFields = ['clientId', 'actorType', 'ulbCode', 'yearCode', 'submittedLineItemCodes', 'warningCount'];
-const requiredFields = ['apiClientId', 'stateId', 'ulbId', 'yearId', 'templateVersion', 'action', 'success'];
+const requiredFields = ['stateId', 'ulbId', 'yearId', 'templateVersion', 'action', 'success'];
 
 // ─── Suite ────────────────────────────────────────────────────────────────────
 
@@ -69,6 +71,7 @@ describe('DataCollectionAuditLogService', () => {
         { ulbId: 1, yearId: 1, createdAt: -1 },
         { action: 1, createdAt: -1 },
         { success: 1, createdAt: -1 },
+        { adminUserId: 1, createdAt: -1 },
       ]);
     });
   });
@@ -226,6 +229,54 @@ describe('DataCollectionAuditLogService', () => {
       for (const field of removedFields) {
         expect(arg).not.toHaveProperty(field);
       }
+    });
+  });
+
+  // ─── logReversed ───────────────────────────────────────────────────────────
+
+  describe('logReversed', () => {
+    const reversedData = {
+      adminUserId,
+      dataCollectionId,
+      stateId,
+      ulbId,
+      yearId,
+      templateVersion: '2026.1',
+      reason: 'Submitted by wrong state agency.',
+      ip: '127.0.0.1',
+      userAgent: 'admin-agent/1.0',
+    };
+
+    it('creates a record with REVERSED action and success=true', async () => {
+      await service.logReversed(reversedData);
+      expect(mockModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: DATA_COLLECTION_AUDIT_ACTION.REVERSED,
+          success: true,
+          dataCollectionId,
+        }),
+      );
+    });
+
+    it('stores adminUserId and reason, not apiClientId', async () => {
+      await service.logReversed(reversedData);
+      const arg = (mockModel.create.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(arg['adminUserId']).toEqual(adminUserId);
+      expect(arg['reason']).toBe(reversedData.reason);
+      expect(arg).not.toHaveProperty('apiClientId');
+    });
+
+    it('does not include failureReason', async () => {
+      await service.logReversed(reversedData);
+      const arg = (mockModel.create.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(arg['failureReason']).toBeUndefined();
+    });
+
+    it('stores stateId, ulbId, yearId, templateVersion', async () => {
+      await service.logReversed(reversedData);
+      expect(mockModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({ stateId, ulbId, yearId, templateVersion: '2026.1' }),
+      );
     });
   });
 

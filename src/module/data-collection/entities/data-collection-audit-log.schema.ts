@@ -24,8 +24,14 @@ export class DataCollectionAuditLog {
   @Prop({ type: String, enum: DATA_COLLECTION_FAILURE_REASON_VALUES })
   failureReason?: DataCollectionFailureReason;
 
-  @Prop({ type: Types.ObjectId, ref: 'ApiClient', required: true })
-  apiClientId!: Types.ObjectId;
+  @Prop({ type: Types.ObjectId, ref: 'ApiClient' })
+  apiClientId?: Types.ObjectId;
+
+  @Prop({ type: Types.ObjectId, ref: 'User' })
+  adminUserId?: Types.ObjectId;
+
+  @Prop({ type: String, trim: true })
+  reason?: string;
 
   @Prop({ type: Types.ObjectId, ref: 'State', required: true })
   stateId!: Types.ObjectId;
@@ -70,3 +76,4 @@ DataCollectionAuditLogSchema.index({ stateId: 1, yearId: 1, createdAt: -1 });
 DataCollectionAuditLogSchema.index({ ulbId: 1, yearId: 1, createdAt: -1 });
 DataCollectionAuditLogSchema.index({ action: 1, createdAt: -1 });
 DataCollectionAuditLogSchema.index({ success: 1, createdAt: -1 });
+DataCollectionAuditLogSchema.index({ adminUserId: 1, createdAt: -1 });

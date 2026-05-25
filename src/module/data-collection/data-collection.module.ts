@@ -8,6 +8,7 @@ import { ScopesGuard } from 'src/module/auth/guards/scopes.guard';
 import { State, StateSchema } from 'src/schemas/state.schema';
 import { Ulb, UlbSchema } from 'src/schemas/ulb.schema';
 import { Year, YearSchema } from 'src/schemas/year.schema';
+import { DataCollectionAdminController } from './admin/data-collection-admin.controller';
 import { IntegrationAuthController } from './auth/integration-auth.controller';
 import { IntegrationAuthService } from './auth/integration-auth.service';
 import { DataCollectionController } from './data-collection.controller';
@@ -31,7 +32,7 @@ import { DataCollectionService } from './services/data-collection.service';
     AuthModule,
     LineItemsLegendsModule,
   ],
-  controllers: [DataCollectionController, IntegrationAuthController],
+  controllers: [DataCollectionController, DataCollectionAdminController, IntegrationAuthController],
   providers: [
     DataCollectionService,
     DataCollectionAuditLogService,

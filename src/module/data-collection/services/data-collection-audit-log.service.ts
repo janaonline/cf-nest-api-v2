@@ -6,6 +6,7 @@ import type {
   LogDataCollectionDuplicateSubmitData,
   LogDataCollectionModifiedData,
   LogDataCollectionModifyNotFoundData,
+  LogDataCollectionReversedData,
   LogDataCollectionSubmittedData,
   LogDataCollectionValidationFailedData,
 } from '../types/data-collection-audit-log.types';
@@ -118,6 +119,25 @@ export class DataCollectionAuditLogService {
       yearId: data.yearId,
       templateVersion: data.templateVersion,
       lineItemCount: data.lineItemCount,
+      ip: data.ip,
+      userAgent: data.userAgent,
+    });
+  }
+
+  /**
+   * Records an admin reversal of a data collection submission.
+   */
+  async logReversed(data: LogDataCollectionReversedData): Promise<void> {
+    await this.write({
+      dataCollectionId: data.dataCollectionId,
+      action: DATA_COLLECTION_AUDIT_ACTION.REVERSED,
+      success: true,
+      adminUserId: data.adminUserId,
+      stateId: data.stateId,
+      ulbId: data.ulbId,
+      yearId: data.yearId,
+      templateVersion: data.templateVersion,
+      reason: data.reason,
       ip: data.ip,
       userAgent: data.userAgent,
     });

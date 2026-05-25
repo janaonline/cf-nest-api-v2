@@ -10,12 +10,14 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import type { ApiClientContext } from 'src/module/auth/types/api-client-context.type';
+import type { User } from 'src/module/auth/enum/role.enum';
 import type { FinancialDataTemplateQueryDto } from 'src/module/line-items-legends/dto/financial-data-template-query.dto';
 import { LineItemsLegendService } from 'src/module/line-items-legends/line-items-legend.service';
 import { DEFAULT_TEMPLATE_VERSION, type LineItemLegendForValidation } from 'src/module/line-items-legends/types';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { Year, YearDocument } from 'src/schemas/year.schema';
 import { DataCollectionDto } from '../dto/data-collection.dto';
+import { ReverseDataCollectionDto } from '../dto/reverse-data-collection.dto';
 import { DataCollection, DataCollectionDocument } from '../entities/data-collection.schema';
 import type {
   DataCollectionRequestMeta,
@@ -120,7 +122,9 @@ export class DataCollectionService {
 
     const lineItemCount = this.getLineItemCount(payloadLineItems);
 
-    const existing = await this.dataCollectionModel.findOne({ ulbId, yearId }).lean<DataCollectionDocument>();
+    const existing = await this.dataCollectionModel
+      .findOne({ ulbId, yearId, isActive: true, status: 'ACTIVE' })
+      .lean<DataCollectionDocument>();
 
     const apiClientId = this.getApiClientObjectId(client);
 
@@ -184,6 +188,8 @@ export class DataCollectionService {
         templateVersion,
         lineItems: payloadLineItems,
         validationStatus: 'VALID',
+        isActive: true,
+        status: 'ACTIVE',
       });
       const data = await created.save();
       await this.auditLogService.logSubmitted({
@@ -222,7 +228,7 @@ export class DataCollectionService {
 
     await this.authorizationService.validateCanModifyForUlb(client, ulbId.toString());
 
-    const existing = await this.dataCollectionModel.findOne({ ulbId, yearId });
+    const existing = await this.dataCollectionModel.findOne({ ulbId, yearId, isActive: true, status: 'ACTIVE' });
 
     const lineItemCount = this.getLineItemCount(payloadLineItems);
 
@@ -322,6 +328,76 @@ export class DataCollectionService {
     } catch (error: unknown) {
       this.createErrorResponse(error, 'update');
     }
+  }
+
+  /**
+   * Reverses an active data collection submission.
+   * Marks the record as inactive/reversed without deleting it.
+   * Only ACTIVE records can be reversed. Reversed records no longer block corrected resubmission.
+   */
+  async reverseSubmission(dto: ReverseDataCollectionDto, admin: User, meta: DataCollectionRequestMeta = {}) {
+    const { ulbCode, yearCode, reason } = dto;
+    const templateVersion = dto.templateVersion ?? DEFAULT_TEMPLATE_VERSION;
+
+    const { ulbId, stateId } = await this.referenceResolverService.resolveUlbByCode(ulbCode);
+    const { yearId } = await this.referenceResolverService.resolveYearByCode(yearCode);
+
+    const adminId = this.getAdminObjectId(admin);
+
+    const existing = await this.dataCollectionModel.findOne({ ulbId, yearId, isActive: true, status: 'ACTIVE' });
+
+    if (!existing) {
+      throw new NotFoundException(
+        `No active data collection record found for ulbCode: ${ulbCode} and yearCode: ${yearCode}.`,
+      );
+    }
+
+    existing.isActive = false;
+    existing.status = 'REVERSED';
+    existing.reversedAt = new Date();
+    existing.reversedBy = adminId;
+    existing.reversalReason = reason;
+
+    try {
+      const data = await existing.save();
+      await this.auditLogService.logReversed({
+        adminUserId: adminId,
+        dataCollectionId: data._id,
+        stateId,
+        ulbId,
+        yearId,
+        templateVersion: data.templateVersion ?? templateVersion,
+        reason,
+        ip: meta.ip,
+        userAgent: meta.userAgent,
+      });
+      return {
+        message: 'Financial data submission reversed successfully.',
+        data: {
+          ulbCode,
+          yearCode,
+          templateVersion: data.templateVersion,
+          status: data.status,
+          reversedAt: data.reversedAt,
+          reversalReason: data.reversalReason,
+        },
+      };
+    } catch (error: unknown) {
+      this.createErrorResponse(error, 'reverseSubmission');
+    }
+  }
+
+  /**
+   * Converts admin user id from request context to ObjectId.
+   * @param admin Authenticated admin user.
+   * @returns Admin user ObjectId.
+   */
+  private getAdminObjectId(admin: User): Types.ObjectId {
+    if (!Types.ObjectId.isValid(admin._id)) {
+      throw new InternalServerErrorException('Invalid admin user context.');
+    }
+
+    return new Types.ObjectId(admin._id);
   }
 
   /**

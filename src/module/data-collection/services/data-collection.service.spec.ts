@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, ForbiddenException, NotFoundExc
 import { getModelToken } from '@nestjs/mongoose';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Types } from 'mongoose';
+import type { User } from 'src/module/auth/enum/role.enum';
 import type { ApiClientContext } from 'src/module/auth/types/api-client-context.type';
 import { LineItemsLegendService } from 'src/module/line-items-legends/line-items-legend.service';
 import { Ulb } from 'src/schemas/ulb.schema';
@@ -28,6 +29,7 @@ const validUlbId = '5dd24729437ba31f7eb42eee';
 const validStateId = '5dcf9d7216a06aed41c748dd';
 const validYearId = '606aafb14dff55e6c075d3ae';
 const validApiClientId = new Types.ObjectId().toString();
+const validAdminId = new Types.ObjectId().toString();
 const validUlbCode = 'C001';
 const validYearCode = '2021-22';
 
@@ -37,6 +39,14 @@ const stateClient: ApiClientContext = {
   actorType: 'STATE',
   stateId: validStateId,
   scopes: [],
+};
+
+const adminUser: User = {
+  _id: validAdminId,
+  email: 'admin@example.com',
+  role: 'ADMIN' as User['role'],
+  ulb: '',
+  state: '',
 };
 
 const removedAuditFields = ['clientId', 'actorType', 'ulbCode', 'yearCode', 'submittedLineItemCodes', 'warningCount'];
@@ -111,6 +121,7 @@ const mockAuditLogService = {
   logValidationFailed: jest.fn().mockResolvedValue(undefined),
   logDuplicateSubmit: jest.fn().mockResolvedValue(undefined),
   logModifyNotFound: jest.fn().mockResolvedValue(undefined),
+  logReversed: jest.fn().mockResolvedValue(undefined),
 };
 
 const expectNoRemovedAuditFields = (arg: Record<string, unknown>) => {
@@ -144,6 +155,7 @@ describe('DataCollectionService', () => {
     mockAuditLogService.logValidationFailed.mockResolvedValue(undefined);
     mockAuditLogService.logDuplicateSubmit.mockResolvedValue(undefined);
     mockAuditLogService.logModifyNotFound.mockResolvedValue(undefined);
+    mockAuditLogService.logReversed.mockResolvedValue(undefined);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -356,6 +368,12 @@ describe('DataCollectionService', () => {
     it('calls ownership validation with resolved ulbId before DB write', async () => {
       await service.create(basePayload as never, stateClient).catch(() => {});
       expect(mockAuthorizationService.validateCanSubmitForUlb).toHaveBeenCalledWith(stateClient, validUlbId);
+    });
+
+    it('duplicate check filters only active records (isActive: true, status: ACTIVE)', async () => {
+      await service.create(basePayload as never, stateClient).catch(() => {});
+      const filterArg = (dcModel.findOne.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(filterArg).toMatchObject({ isActive: true, status: 'ACTIVE' });
     });
 
     it('throws ConflictException when data already exists', async () => {
@@ -827,6 +845,13 @@ describe('DataCollectionService', () => {
       expect(mockAuthorizationService.validateCanModifyForUlb).toHaveBeenCalledWith(stateClient, validUlbId);
     });
 
+    it('findOne for update filters only active records (isActive: true, status: ACTIVE)', async () => {
+      dcModel.findOne.mockReturnValue(null);
+      await service.update(basePayload as never, stateClient).catch(() => {});
+      const filterArg = (dcModel.findOne.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(filterArg).toMatchObject({ isActive: true, status: 'ACTIVE' });
+    });
+
     it('throws NotFoundException when data does not exist', async () => {
       dcModel.findOne.mockReturnValue(null);
       await expect(service.update(basePayload as never, stateClient)).rejects.toThrow(NotFoundException);
@@ -1168,6 +1193,119 @@ describe('DataCollectionService', () => {
       await service.update(basePayload as never, stateClient);
       const arg = (mockAuditLogService.logModified.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
       expect(arg).not.toHaveProperty('lineItems');
+    });
+  });
+
+  // ─── reverseSubmission ────────────────────────────────────────────────────
+
+  describe('reverseSubmission', () => {
+    const reversePayload = { ulbCode: validUlbCode, yearCode: validYearCode, reason: 'Test reason for reversal' };
+    const reversedDocId = new Types.ObjectId();
+    const mockReversedAt = new Date('2026-05-25T00:00:00.000Z');
+
+    const makeActiveDoc = (overrides: object = {}) => ({
+      _id: reversedDocId,
+      isActive: true,
+      status: 'ACTIVE',
+      templateVersion: '2026.1',
+      reversedAt: undefined as unknown as Date,
+      reversalReason: undefined as unknown as string,
+      save: jest.fn().mockResolvedValue({
+        _id: reversedDocId,
+        templateVersion: '2026.1',
+        status: 'REVERSED',
+        isActive: false,
+        reversedAt: mockReversedAt,
+        reversalReason: reversePayload.reason,
+      }),
+      ...overrides,
+    });
+
+    it('resolves ulbCode and yearCode', async () => {
+      dcModel.findOne.mockReturnValue(makeActiveDoc());
+      await service.reverseSubmission(reversePayload, adminUser);
+      expect(mockReferenceResolverService.resolveUlbByCode).toHaveBeenCalledWith(validUlbCode);
+      expect(mockReferenceResolverService.resolveYearByCode).toHaveBeenCalledWith(validYearCode);
+    });
+
+    it('findOne filters by isActive: true and status: ACTIVE', async () => {
+      dcModel.findOne.mockReturnValue(makeActiveDoc());
+      await service.reverseSubmission(reversePayload, adminUser);
+      const filterArg = (dcModel.findOne.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(filterArg).toMatchObject({ isActive: true, status: 'ACTIVE' });
+    });
+
+    it('throws NotFoundException when no active record exists', async () => {
+      dcModel.findOne.mockReturnValue(null);
+      await expect(service.reverseSubmission(reversePayload, adminUser)).rejects.toThrow(NotFoundException);
+    });
+
+    it('NotFoundException message uses public codes not ObjectIds', async () => {
+      dcModel.findOne.mockReturnValue(null);
+      const err = await service.reverseSubmission(reversePayload, adminUser).catch((e: unknown) => e);
+      expect((err as NotFoundException).message).toContain(validUlbCode);
+      expect((err as NotFoundException).message).toContain(validYearCode);
+    });
+
+    it('marks the record as reversed', async () => {
+      const doc = makeActiveDoc();
+      dcModel.findOne.mockReturnValue(doc);
+      await service.reverseSubmission(reversePayload, adminUser);
+      expect(doc.isActive).toBe(false);
+      expect(doc.status).toBe('REVERSED');
+      expect(doc.reversedAt).toBeInstanceOf(Date);
+      expect(doc.reversalReason).toBe(reversePayload.reason);
+    });
+
+    it('sets reversedBy to the admin ObjectId', async () => {
+      const doc = makeActiveDoc();
+      dcModel.findOne.mockReturnValue(doc);
+      await service.reverseSubmission(reversePayload, adminUser);
+      expect((doc as Record<string, unknown>)['reversedBy']).toBeInstanceOf(Types.ObjectId);
+      expect(((doc as Record<string, unknown>)['reversedBy'] as Types.ObjectId).toString()).toBe(validAdminId);
+    });
+
+    it('calls logReversed with adminUserId, dataCollectionId, reason', async () => {
+      dcModel.findOne.mockReturnValue(makeActiveDoc());
+      await service.reverseSubmission(reversePayload, adminUser);
+      expect(mockAuditLogService.logReversed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          adminUserId: expect.any(Types.ObjectId) as Types.ObjectId,
+          dataCollectionId: reversedDocId,
+          reason: reversePayload.reason,
+          stateId: new Types.ObjectId(validStateId),
+          ulbId: new Types.ObjectId(validUlbId),
+          yearId: new Types.ObjectId(validYearId),
+        }),
+      );
+    });
+
+    it('response has message and data with status REVERSED', async () => {
+      dcModel.findOne.mockReturnValue(makeActiveDoc());
+      const result = (await service.reverseSubmission(reversePayload, adminUser)) as Record<string, unknown>;
+      expect(result['message']).toContain('reversed');
+      const data = result['data'] as Record<string, unknown>;
+      expect(data['status']).toBe('REVERSED');
+      expect(data['ulbCode']).toBe(validUlbCode);
+      expect(data['yearCode']).toBe(validYearCode);
+    });
+
+    it('response data does not include internal Mongo IDs', async () => {
+      dcModel.findOne.mockReturnValue(makeActiveDoc());
+      const result = (await service.reverseSubmission(reversePayload, adminUser)) as Record<string, unknown>;
+      const data = result['data'] as Record<string, unknown>;
+      expect(data).not.toHaveProperty('_id');
+      expect(data).not.toHaveProperty('ulbId');
+      expect(data).not.toHaveProperty('stateId');
+      expect(data).not.toHaveProperty('yearId');
+    });
+
+    it('passes ip and userAgent from meta to logReversed', async () => {
+      dcModel.findOne.mockReturnValue(makeActiveDoc());
+      await service.reverseSubmission(reversePayload, adminUser, { ip: '10.0.0.1', userAgent: 'admin/1.0' });
+      expect(mockAuditLogService.logReversed).toHaveBeenCalledWith(
+        expect.objectContaining({ ip: '10.0.0.1', userAgent: 'admin/1.0' }),
+      );
     });
   });
 

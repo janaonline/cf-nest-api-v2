@@ -33,13 +33,27 @@ export class DataCollection {
   // 0 is valid (explicit zero). Missing key = not submitted. null is rejected at service layer.
   @Prop({ type: Map, of: Number, required: true })
   lineItems!: Map<string, number>;
+
+  @Prop({ type: Boolean, required: true, default: true, index: true })
+  isActive!: boolean;
+
+  @Prop({ type: String, enum: ['ACTIVE', 'REVERSED'], required: true, default: 'ACTIVE', index: true })
+  status!: 'ACTIVE' | 'REVERSED';
+
+  @Prop({ type: Date })
+  reversedAt?: Date;
+
+  @Prop({ type: Types.ObjectId, ref: 'User' })
+  reversedBy?: Types.ObjectId;
+
+  @Prop({ type: String, trim: true })
+  reversalReason?: string;
 }
 
 export type DataCollectionDocument = HydratedDocument<DataCollection>;
 export const DataCollectionSchema = SchemaFactory.createForClass(DataCollection);
 
-// Enforce one submission per ULB per year.
-DataCollectionSchema.index({ ulbId: 1, yearId: 1 }, { unique: true });
+DataCollectionSchema.index({ ulbId: 1, yearId: 1 }, { unique: true, partialFilterExpression: { isActive: true } });
 DataCollectionSchema.index({ stateId: 1, yearId: 1 });
 DataCollectionSchema.index({ yearCode: 1 });
 DataCollectionSchema.index({ templateVersion: 1 });
