@@ -22,7 +22,7 @@ async function bootstrap() {
 
   app.use(cookieParser());
   app.useGlobalFilters(new HttpExceptionFilter());
-  app.useGlobalInterceptors(new ResponseTransformInterceptor());
+  // app.useGlobalInterceptors(new ResponseTransformInterceptor());
 
   // Tell Nest where views are stored
   app.setBaseViewsDir(join(__dirname, '..', 'src/views'));
