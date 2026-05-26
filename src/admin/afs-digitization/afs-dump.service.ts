@@ -4,6 +4,7 @@ import { Buffer } from 'buffer';
 import * as ExcelJS from 'exceljs';
 import { Model, Types } from 'mongoose';
 import { YearIdToLabel } from 'src/core/constants/years';
+import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { getPopulationCategory } from 'src/core/helpers/populationCategory.helper';
 import { AfsExcelFile, AfsExcelFileDocument, AfsExcelFileItem } from 'src/schemas/afs/afs-excel-file.schema';
 import { AnnualAccountData, AnnualAccountDataDocument } from 'src/schemas/annual-account-data.schema';
@@ -34,6 +35,8 @@ export class AfsDumpService {
 
     @InjectModel(DigitizationLog.name, 'digitization_db')
     private readonly digitizationModel: Model<DigitizationLogDocument>,
+
+    private readonly fileTokenService: FileTokenService,
   ) {}
 
   async exportAfsExcelFiles(query: DigitizationReportQueryDto): Promise<Buffer> {
@@ -45,7 +48,6 @@ export class AfsDumpService {
     // mongoose.set('debug', true);
     // const docs = await this.annualAccountModel.aggregate(afsQueryDump(query)).exec();
     const docs = await this.annualAccountModel.aggregate(afsQuery(query)).exec();
-    const s3UrlPrefix = `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com`;
     const yearLabel: string = YearIdToLabel[query.yearId.toString()];
 
     // console.log('docs', docs);
@@ -136,17 +138,17 @@ export class AfsDumpService {
         auditType: query.auditType ?? 'audited',
         docType: DOC_TYPES[`${query.docType}`],
         // ulbUploaded: doc.bal_sheet.url,
-        ulbUploaded: pdfUrl ? s3UrlPrefix + pdfUrl : null,
-        afsUploaded: afsFile?.pdfUrl ? s3UrlPrefix + '/' + afsFile?.pdfUrl : null,
+        ulbUploaded: pdfUrl ? this.fileTokenService.signFileUrl(pdfUrl) : null,
+        afsUploaded: afsFile?.pdfUrl ? this.fileTokenService.signFileUrl(afsFile.pdfUrl) : null,
         formUploadedOn: doc.createdAt ?? null,
         ulbDigitizedStatus,
-        ulbDigitizedFile: ulbFile?.excelUrl ? s3UrlPrefix + '/' + ulbFile?.excelUrl : null,
+        ulbDigitizedFile: ulbFile?.excelUrl ? this.fileTokenService.signFileUrl(ulbFile.excelUrl) : null,
         ulbDigitizedOn: ulbFile?.createdAt ?? null,
         ulbRequestId: ulbFile?.requestId ?? null,
         ulbDigitizeLogMsg: ulbFile?.queue?.failedReason || '',
 
         afsDigitizedStatus,
-        afsDigitizedFile: afsFile?.excelUrl ? s3UrlPrefix + '/' + afsFile?.excelUrl : null,
+        afsDigitizedFile: afsFile?.excelUrl ? this.fileTokenService.signFileUrl(afsFile.excelUrl) : null,
         afsDigitizedOn: afsFile?.createdAt ?? null,
         afsRequestId: afsFile?.requestId ?? null,
         afsDigitizeLogMsg: afsFile?.queue?.failedReason || '',
