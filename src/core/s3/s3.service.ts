@@ -103,18 +103,26 @@ export class S3Service {
   }
 
   getKeyFromS3Url(url: string): string {
-    if (url.startsWith('/')) {
-      return url.substring(1); // remove leading '/'
+    // For full URLs extract only the pathname; for relative paths use as-is.
+    let raw = url;
+    if (url.startsWith('http')) {
+      try {
+        raw = new URL(url).pathname;
+      } catch {
+        raw = url;
+      }
     }
-    if (!url.startsWith('http')) {
-      return url; // already a key
-    }
-    const parsedUrl = new URL(url);
-    const path = parsedUrl.pathname.substring(1); // remove leading '/'
 
-    // Remove leading slash and decode %20 etc.
-    const key = decodeURIComponent(path).replace(/^\/+/, '');
-    return key;
+    // Strip any leading slashes to produce a bare S3 key.
+    const stripped = raw.replace(/^\/+/, '');
+
+    // Decode percent-encoded characters (%20 → space, etc.).
+    // Falls back to the stripped key if the encoding is malformed.
+    try {
+      return decodeURIComponent(stripped);
+    } catch {
+      return stripped;
+    }
   }
 
   toS3Key(input: string): string {
