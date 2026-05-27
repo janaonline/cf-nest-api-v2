@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { ConflictException, HttpException, Injectable } from '@nestjs/common';
+import { ConflictException, HttpException, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
@@ -10,6 +10,7 @@ import { RedisService } from 'src/core/services/redis/redis.service';
 import { UserDocument } from 'src/schemas/user/user.schema';
 import { UsersRepository } from 'src/users/users.repository';
 import { RegisterDto } from './dto/register.dto';
+import { SetPasswordDto } from './dto/set-password.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { AuthResponse, AuthTokens } from './types/auth-tokens.type';
 
@@ -20,7 +21,7 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly redisService: RedisService,
-  ) {}
+  ) { }
 
   async getUserById(id: string) {
     const u = await this.usersRepository.findById(id);
@@ -40,6 +41,7 @@ export class AuthService {
   }
 
   async refreshTokens(userId: string, refreshToken: string, res: Response): Promise<AuthResponse> {
+    console.log('Refreshing tokens for user:', userId, 'with refresh, token:', refreshToken);
     const user = await this.usersRepository.findByIdWithRefreshToken(userId);
     if (!user?.refreshTokenHash) throw new HttpException('Session expired', 440);
 
@@ -85,6 +87,18 @@ export class AuthService {
     if (!updated) throw new HttpException('User not found', 404);
 
     return { message: 'Profile updated successfully', updatedFields: update };
+  }
+
+  async setPassword(dto: SetPasswordDto): Promise<{ message: string }> {
+    const user = await this.usersRepository.findByIdentifier(dto.identifier);
+    if (!user) throw new NotFoundException('User not found. Please check your details.');
+
+    const hash = await bcrypt.hash(dto.newPassword, 12);
+    const userId = (user._id as { toString(): string }).toString();
+    await this.usersRepository.updatePassword(userId, hash);
+    await this.usersRepository.updateProfile(userId, { isActive: true, status: 'APPROVED', isXVIFCProfileVerified: true });
+
+    return { message: 'Password updated successfully' };
   }
 
   async validateCaptcha(token: string): Promise<{ success: boolean; message: string }> {

@@ -1,18 +1,14 @@
 import { ApiProperty } from '@nestjs/swagger';
+import { Transform } from 'class-transformer';
 import { IsNotEmpty, IsString, Matches, MinLength } from 'class-validator';
-import { IsOtp } from '../decorators/is-otp.decorator';
 import { Match } from 'src/common/decorators/match.decorator';
 
-export class ResetPasswordDto {
-  @ApiProperty({ description: 'Email address, census code, SB code, or 10-digit mobile number used during sendOtp' })
+export class SetPasswordDto {
+  @ApiProperty({ description: 'Email, mobile number, or census/SB code' })
   @IsString()
   @IsNotEmpty()
+  @Transform(({ value }: { value: string }) => value.trim())
   identifier!: string;
-
-  @ApiProperty({ description: 'OTP received via SMS / email' })
-  @IsString()
-  @IsOtp()
-  otp!: string;
 
   @ApiProperty({
     minLength: 8,

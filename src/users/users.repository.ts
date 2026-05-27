@@ -24,7 +24,9 @@ export class UsersRepository {
 
   async findByIdentifierWithSensitiveFields(identifier: string): Promise<UserDocument | null> {
     const isEmail = identifier.includes('@');
-    const query = isEmail ? { email: identifier } : { $or: [{ censusCode: identifier }, { sbCode: identifier }] };
+    const query = isEmail
+      ? { email: identifier }
+      : { $or: [{ censusCode: identifier }, { sbCode: identifier }, { mobile: identifier }] };
     return this.userModel
       .findOne({ ...query, isDeleted: false, isActive: true })
       .select('+password +loginAttempts +lockUntil +isLocked')
@@ -82,8 +84,17 @@ export class UsersRepository {
     const isEmail = identifier.includes('@');
     const query = isEmail
       ? { email: identifier.toLowerCase() }
-      : { $or: [{ censusCode: identifier }, { sbCode: identifier }] };
-    return this.userModel.findOne({ ...query, isDeleted: false, isActive: true }).exec();
+      : {
+          $or: [
+            { censusCode: identifier },
+            { sbCode: identifier },
+            { mobile: identifier },
+            { accountantConatactNumber: identifier },
+            { commissionerConatactNumber: identifier },
+            { departmentContactNumber: identifier },
+          ],
+        };
+    return this.userModel.findOne({ ...query, isDeleted: false }).exec();
   }
 
   async findByIdWithOtpFields(id: string): Promise<UserDocument | null> {
@@ -94,11 +105,28 @@ export class UsersRepository {
     const isEmail = identifier.includes('@');
     const query = isEmail
       ? { email: identifier.toLowerCase() }
-      : { $or: [{ censusCode: identifier }, { sbCode: identifier }] };
+      : {
+          $or: [
+            { censusCode: identifier },
+            { sbCode: identifier },
+            { mobile: identifier },
+            { accountantConatactNumber: identifier },
+            { commissionerConatactNumber: identifier },
+            { departmentContactNumber: identifier },
+          ],
+        };
     return this.userModel
       .findOne({ ...query, isDeleted: false })
       .select('+otpHash +loginAttempts +lockUntil +isLocked')
       .exec();
+  }
+
+  async findByMobile(mobile: string): Promise<UserDocument | null> {
+    return this.userModel.findOne({ mobile, isDeleted: false }).exec();
+  }
+
+  async findByCensusOrSbCode(code: string): Promise<UserDocument | null> {
+    return this.userModel.findOne({ $or: [{ censusCode: code }, { sbCode: code }], isDeleted: false }).exec();
   }
 
   async updateLastLogin(id: string): Promise<void> {
