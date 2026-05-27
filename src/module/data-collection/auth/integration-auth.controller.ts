@@ -1,6 +1,7 @@
 import { Body, Controller, Headers, Ip, Post } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ApiEnvelope } from 'src/common/decorators/api-envelope.decorator';
+import { Public } from 'src/module/auth/decorators/public.decorator';
 import { TokenRequestDto } from 'src/module/api-clients/dto/token-request.dto';
 import { IntegrationAuthService } from './integration-auth.service';
 
@@ -10,6 +11,7 @@ import { IntegrationAuthService } from './integration-auth.service';
 export class IntegrationAuthController {
   constructor(private readonly integrationAuthService: IntegrationAuthService) {}
 
+  @Public()
   @Post('token')
   @ApiOperation({
     summary: 'Create integration token',
