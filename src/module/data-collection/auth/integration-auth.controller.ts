@@ -11,6 +11,7 @@ import { IntegrationAuthService } from './integration-auth.service';
 export class IntegrationAuthController {
   constructor(private readonly integrationAuthService: IntegrationAuthService) {}
 
+  // @Public() bypasses the global JwtAuthGuard
   @Public()
   @Post('token')
   @ApiOperation({

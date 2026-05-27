@@ -2,6 +2,7 @@ import { Body, Controller, Get, Headers, Ip, Patch, Post, Query, UseGuards } fro
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ApiEnvelope } from 'src/common/decorators/api-envelope.decorator';
 import { CurrentApiClient } from 'src/module/auth/decorators/current-api-client.decorator';
+import { Public } from 'src/module/auth/decorators/public.decorator';
 import { Scopes } from 'src/module/auth/decorators/scopes.decorator';
 import { IntegrationJwtGuard } from 'src/module/auth/guards/integration-jwt.guard';
 import { ScopesGuard } from 'src/module/auth/guards/scopes.guard';
@@ -11,6 +12,8 @@ import { DataCollectionDto } from './dto/data-collection.dto';
 import { FinancialDataTemplateQueryDto } from 'src/module/line-items-legends/dto/financial-data-template-query.dto';
 import { DataCollectionService } from './services/data-collection.service';
 
+// @Public() bypasses the global JwtAuthGuard (portal JWT) so IntegrationJwtGuard can handle auth instead.
+@Public()
 @ApiEnvelope()
 @ApiTags('data-collection')
 @UseGuards(IntegrationJwtGuard, ScopesGuard)
