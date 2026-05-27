@@ -4,7 +4,7 @@ import { IsIn, IsOptional, IsString, MinLength } from 'class-validator';
 
 export class SendOtpDto {
   @ApiProperty({
-    description: 'Email address, census code, or SB code of the account',
+    description: 'Email address, census code, SB code, or 10-digit mobile number of the account',
     example: 'admin@cityfinance.in',
   })
   @IsString()

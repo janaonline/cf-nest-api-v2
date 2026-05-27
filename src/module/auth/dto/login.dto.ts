@@ -3,7 +3,7 @@ import { Transform } from 'class-transformer';
 import { IsOptional, IsString, MinLength } from 'class-validator';
 
 export class LoginDto {
-  @ApiProperty({ example: 'admin@cityfinance.in or ULB Census Code / SB Code' })
+  @ApiProperty({ example: 'admin@cityfinance.in or ULB Census Code / SB Code / 10-digit mobile (16thFC only)' })
   @IsString()
   @MinLength(1)
   @Transform(({ value }: { value: string }) => {
@@ -17,7 +17,7 @@ export class LoginDto {
   @MinLength(6)
   password!: string;
 
-  @ApiPropertyOptional({ enum: ['15thFC', 'state-dashboard', 'XVIFC', 'fiscalRankings'] })
+  @ApiPropertyOptional({ enum: ['15thFC', '16thFC', 'state-dashboard', 'XVIFC', 'fiscalRankings'] })
   @IsOptional()
   @IsString()
   type?: string;

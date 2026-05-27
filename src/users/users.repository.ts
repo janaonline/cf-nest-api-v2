@@ -24,7 +24,9 @@ export class UsersRepository {
 
   async findByIdentifierWithSensitiveFields(identifier: string): Promise<UserDocument | null> {
     const isEmail = identifier.includes('@');
-    const query = isEmail ? { email: identifier } : { $or: [{ censusCode: identifier }, { sbCode: identifier }] };
+    const query = isEmail
+      ? { email: identifier }
+      : { $or: [{ censusCode: identifier }, { sbCode: identifier }, { mobile: identifier }] };
     return this.userModel
       .findOne({ ...query, isDeleted: false, isActive: true })
       .select('+password +loginAttempts +lockUntil +isLocked')
@@ -78,12 +80,36 @@ export class UsersRepository {
     await this.userModel.findByIdAndUpdate(id, { otpHash: null, otpExpiresAt: null, otpAttempts: 0 }).exec();
   }
 
+  private async resolveByIdentifier(identifier: string, extraSelect?: string): Promise<UserDocument | null> {
+    const base = (q: object) =>
+      extraSelect
+        ? this.userModel.findOne({ ...q, isDeleted: false }).select(extraSelect).exec()
+        : this.userModel.findOne({ ...q, isDeleted: false }).exec();
+
+    if (identifier.includes('@')) {
+      return base({ email: identifier.toLowerCase() });
+    }
+
+    // Priority 1: mobile field (exact owner)
+    const byMobile = await base({ mobile: identifier });
+    if (byMobile) return byMobile;
+
+    // Priority 2: census code or SB code
+    const byCode = await base({ $or: [{ censusCode: identifier }, { sbCode: identifier }] });
+    if (byCode) return byCode;
+
+    // Priority 3: contact number sub-fields (accountant / commissioner / department)
+    return base({
+      $or: [
+        { accountantConatactNumber: identifier },
+        { commissionerConatactNumber: identifier },
+        { departmentContactNumber: identifier },
+      ],
+    });
+  }
+
   async findByIdentifier(identifier: string): Promise<UserDocument | null> {
-    const isEmail = identifier.includes('@');
-    const query = isEmail
-      ? { email: identifier.toLowerCase() }
-      : { $or: [{ censusCode: identifier }, { sbCode: identifier }] };
-    return this.userModel.findOne({ ...query, isDeleted: false, isActive: true }).exec();
+    return this.resolveByIdentifier(identifier);
   }
 
   async findByIdWithOtpFields(id: string): Promise<UserDocument | null> {
@@ -91,14 +117,15 @@ export class UsersRepository {
   }
 
   async findByIdentifierWithOtpFields(identifier: string): Promise<UserDocument | null> {
-    const isEmail = identifier.includes('@');
-    const query = isEmail
-      ? { email: identifier.toLowerCase() }
-      : { $or: [{ censusCode: identifier }, { sbCode: identifier }] };
-    return this.userModel
-      .findOne({ ...query, isDeleted: false })
-      .select('+otpHash +loginAttempts +lockUntil +isLocked')
-      .exec();
+    return this.resolveByIdentifier(identifier, '+otpHash +loginAttempts +lockUntil +isLocked');
+  }
+
+  async findByMobile(mobile: string): Promise<UserDocument | null> {
+    return this.userModel.findOne({ mobile, isDeleted: false }).exec();
+  }
+
+  async findByCensusOrSbCode(code: string): Promise<UserDocument | null> {
+    return this.userModel.findOne({ $or: [{ censusCode: code }, { sbCode: code }], isDeleted: false }).exec();
   }
 
   async updateLastLogin(id: string): Promise<void> {

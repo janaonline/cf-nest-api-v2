@@ -13,8 +13,10 @@ import { State, StateDocument } from 'src/schemas/state.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { Year, YearDocument } from 'src/schemas/year.schema';
 import { Role } from './enum/role.enum';
+import { UserDocument } from 'src/schemas/user/user.schema';
 import { UsersRepository } from 'src/users/users.repository';
 import { AuthService } from './auth.service';
+import { CheckUserDto } from './dto/check-user.dto';
 import { LoginDto } from './dto/login.dto';
 import { AuthResponse } from './types/auth-tokens.type';
 
@@ -29,9 +31,66 @@ export class LoginService {
     @InjectModel(Year.name) private readonly yearModel: Model<YearDocument>,
   ) { }
 
+  private static readonly MOBILE_RE = /^[6-9]\d{9}$/;
+  private static readonly EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  private static readonly CODE_RE = /^\d{2,}$/;
+
+  async checkUser(dto: CheckUserDto): Promise<{ status: string; isXVIFCProfileVerified: boolean; maskedContact: string; loginFlow: 'PASSWORD' | 'OTP'; message: string }> {
+    const identifier = dto.identifier;
+    const isEmail = LoginService.EMAIL_RE.test(identifier);
+
+    let user: UserDocument | null = null;
+
+    if (LoginService.MOBILE_RE.test(identifier)) {
+      user = await this.usersRepository.findByMobile(identifier);
+    } else if (isEmail) {
+      user = await this.usersRepository.findByEmail(identifier.toLowerCase());
+    } else if (LoginService.CODE_RE.test(identifier)) {
+      user = await this.usersRepository.findByCensusOrSbCode(identifier);
+    }
+
+    if (!user) throw new NotFoundException('User not found. Please check your details.');
+
+    const loginFlow: 'PASSWORD' | 'OTP' = isEmail
+      ? 'PASSWORD'
+      : user.status === 'APPROVED' && user.isXVIFCProfileVerified
+        ? 'PASSWORD'
+        : 'OTP';
+
+    return {
+      status: user.status ?? '',
+      isXVIFCProfileVerified: user.isXVIFCProfileVerified ?? false,
+      maskedContact: this.maskContact(user.mobile, user.email),
+      loginFlow,
+      message: 'User found',
+    };
+  }
+
+  private maskContact(mobile?: string, email?: string): string {
+    if (mobile?.trim()) {
+      const m = mobile.trim();
+      return 'X'.repeat(Math.max(0, m.length - 4)) + m.slice(-4);
+    }
+    if (email?.trim()) {
+      const [local, domain] = email.split('@');
+      return `${local.slice(0, 2)}**@${domain}`;
+    }
+    return '';
+  }
+
   async login(dto: LoginDto, res: Response): Promise<AuthResponse> {
     const isEmail = dto.identifier.includes('@');
-    const invalidMsg = isEmail ? 'Invalid email or password' : 'Invalid ULB Code/Census Code or password';
+    const isMobile = /^\d{10}$/.test(dto.identifier.trim());
+
+    if (isMobile && dto.type !== '16thFC') {
+      throw new ForbiddenException('Mobile number login is only supported for 16thFC');
+    }
+
+    const invalidMsg = isEmail
+      ? 'Invalid email or password'
+      : isMobile
+        ? 'Invalid mobile number or password'
+        : 'Invalid ULB Code/Census Code or password';
 
     const user = await this.usersRepository.findByIdentifierWithSensitiveFields(dto.identifier);
     if (!user) throw new UnauthorizedException(invalidMsg);
@@ -118,7 +177,7 @@ export class LoginService {
         designation: user.designation,
         ulb: user.ulb,
         ulbCode: user.role === Role.ULB ? (ulb?.code ?? '') : '',
-        stateCode: (user.role === Role.STATE || user.role === Role.ULB) ? (state?.code ?? '') : '',
+        stateCode: user.role === Role.STATE || user.role === Role.ULB ? (state?.code ?? '') : '',
         isUA: user.role === Role.ULB ? (ulb?.isUA ?? null) : null,
         isMillionPlus: user.role === Role.ULB ? (ulb?.isMillionPlus ?? null) : null,
         isUserVerified2223: user.isVerified2223,

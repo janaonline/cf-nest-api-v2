@@ -9,6 +9,8 @@ import { SIDE_MENU_CONFIG } from './config/side-menu.config';
 import type { MenuRole } from './config/side-menu.config';
 import { SideMenuResponseDto } from './dto/side-menu.dto';
 import { Year, YearDocument } from './schemas/year.schema';
+import { Ulb, UlbDocument } from './schemas/ulb.schema';
+import { State, StateDocument } from './schemas/state.schema';
 
 @Injectable()
 export class XviFcService {
@@ -17,6 +19,10 @@ export class XviFcService {
     private readonly grantAllocationModel: Model<GrantAllocationDocument>,
     @InjectModel(Year.name)
     private readonly yearModel: Model<YearDocument>,
+    @InjectModel(Ulb.name)
+    private readonly ulbModel: Model<UlbDocument>,
+    @InjectModel(State.name)
+    private readonly stateModel: Model<StateDocument>,
   ) {}
 
   async getStateWiseData(stateId: string): Promise<StateWiseResponseDto> {
@@ -44,6 +50,24 @@ export class XviFcService {
       .lean()
       .exec();
     return results.map((r) => ({ _id: r._id.toString(), year: r.year }));
+  }
+
+  async getUlbById(ulbId: string): Promise<{ ulbName: string; stateName: string }> {
+    const ulb = await this.ulbModel
+      .findById(ulbId)
+      .select('name state')
+      .populate<{ state: { name: string } }>('state', 'name')
+      .lean()
+      .exec();
+
+    if (!ulb) throw new NotFoundException('ULB not found');
+    return { ulbName: ulb.name, stateName: ulb.state?.name ?? '' };
+  }
+
+  async getStateById(stateId: string): Promise<{ stateName: string }> {
+    const state = await this.stateModel.findById(stateId).select('name').lean().exec();
+    if (!state) throw new NotFoundException('State not found');
+    return { stateName: state.name };
   }
 
   getSupportHours(): {

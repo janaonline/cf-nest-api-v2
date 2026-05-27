@@ -30,7 +30,7 @@ export class OtpService {
     private readonly configService: ConfigService,
     private readonly sesMailService: SESMailService,
     private readonly redisService: RedisService,
-  ) {}
+  ) { }
 
   // ─── Public API ────────────────────────────────────────────────────────────
 
@@ -43,7 +43,7 @@ export class OtpService {
     const purpose = dto.purpose ?? 'login';
     const id = normalizeIdentifier(dto.identifier);
     const cfg = getOtpConfig(this.configService);
-
+    console.log('OTP request for', purpose, id, cfg); // Log normalized identifier for debugging
     // Always return success shape even when user not found (no enumeration)
     const user = await this.usersRepository.findByIdentifier(id);
     if (!user) return { success: true, message: 'OTP sent if account exists' };
@@ -52,6 +52,7 @@ export class OtpService {
     await this.assertCooldownClear(purpose, id);
 
     const existingState = await this.readOtpState(purpose, id);
+    console.log('Existing OTP state:', existingState); // Debug existing state
     const resendCount = existingState?.resendCount ?? 0;
 
     if (resendCount >= cfg.maxResendAttempts) {
@@ -82,12 +83,11 @@ export class OtpService {
     if (!cfg.isProduction) {
       this.logger.debug(`[DEV] OTP for ${id}: ${otp}`);
     }
-
-    const mobile = user.role === 'STATE' ? user.mobile : user.accountantConatactNumber;
+    console.log('OTP sent successfully', user, cfg); // Log OTP dispatch success
     return {
       success: true,
       message: 'OTP sent successfully',
-      mobile: this.maskMobile(mobile),
+      mobile: this.maskMobile(this.resolveContactMobile(user) ?? ''),
       email: this.maskEmail(user.email),
     };
   }
@@ -141,6 +141,8 @@ export class OtpService {
     if (!user) throw new UnauthorizedException('User not found');
 
     const userId = (user._id as { toString(): string }).toString();
+    await this.usersRepository.updateProfile(userId, { isXVIFCProfileVerified: true, status: 'APPROVED', isActive: true });
+
     const tokens = await this.authService.generateTokens(userId);
     await this.authService.saveRefreshToken(userId, tokens.refreshToken);
     this.authService.setRefreshCookie(res, tokens.refreshToken);
@@ -228,14 +230,24 @@ export class OtpService {
 
   // ─── OTP dispatch ──────────────────────────────────────────────────────────
 
+  private resolveContactMobile(user: NonNullable<Awaited<ReturnType<UsersRepository['findByIdentifier']>>>): string | null {
+    const candidates = [
+      user.mobile,
+      user.accountantConatactNumber,
+      user.commissionerConatactNumber,
+      user.departmentContactNumber,
+    ];
+    return candidates.find((n) => n && this.isValidPhone(n)) ?? null;
+  }
+
   private async dispatchOtp(
     user: Awaited<ReturnType<UsersRepository['findByIdentifier']>>,
     otp: string,
     isProduction: boolean,
   ): Promise<void> {
     if (!user || !isProduction) return;
-    const mobile = user.role === 'STATE' ? user.mobile : user.accountantConatactNumber;
-    if (mobile && this.isValidPhone(mobile)) await this.sendSms(mobile, otp);
+    const mobile = this.resolveContactMobile(user);
+    if (mobile) await this.sendSms(mobile, otp);
     if (user.email) await this.sendOtpEmail(user.email, otp);
   }
 

@@ -29,6 +29,18 @@ export class XviFcController {
     return this.xviFcService.getYears();
   }
 
+  @ApiBearerAuth()
+  @Get('ulb/:ulbId')
+  async getUlbById(@Param('ulbId', ParseObjectIdPipe) ulbId: string) {
+    return this.xviFcService.getUlbById(ulbId);
+  }
+
+  @ApiBearerAuth()
+  @Get('state-info/:stateId')
+  async getStateById(@Param('stateId', ParseObjectIdPipe) stateId: string) {
+    return this.xviFcService.getStateById(stateId);
+  }
+
   @Public()
   @Get('support-hours')
   getSupportHours(): ReturnType<XviFcService['getSupportHours']> {
