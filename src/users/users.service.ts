@@ -34,8 +34,6 @@ export class UsersService {
       throw new BadRequestException('ulbId is required for ULB-EDITOR and ULB-VIEWER roles');
     }
 
-    const exists = await this.userModel.findOne({ email: dto.email }).exec();
-    if (exists) throw new BadRequestException('Email already registered');
 
     const user = await this.userModel.create({
       name: dto.name,
