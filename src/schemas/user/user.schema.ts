@@ -23,7 +23,7 @@ export class User extends Document {
   @Prop({ type: String, default: null })
   mobile!: string;
 
-  @Prop({ required: true, unique: true })
+  @Prop({ required: true })
   email!: string;
 
   @Prop({ required: true, select: false })
