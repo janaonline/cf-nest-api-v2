@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import { IsEmail, IsIn, IsMongoId, IsNotEmpty, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
+import { IsEmail, IsIn, IsMongoId, IsNotEmpty, IsOptional, IsString, Matches, MaxLength, ValidateIf } from 'class-validator';
 import { Role } from 'src/module/auth/enum/role.enum';
 
 export class CreateManagedUserDto {
@@ -16,10 +16,12 @@ export class CreateManagedUserDto {
   @MaxLength(100)
   username!: string;
 
-  @ApiProperty({ example: 'kinjal@ulb.gov.in' })
+  @ApiPropertyOptional({ example: 'kinjal@ulb.gov.in' })
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => (typeof value === 'string' && value.trim() ? value.toLowerCase().trim() : undefined))
+  @ValidateIf((o: CreateManagedUserDto) => !!o.email)
   @IsEmail()
-  @Transform(({ value }: { value: string }) => value.toLowerCase().trim())
-  email!: string;
+  email?: string;
 
   @ApiProperty({ example: '8200677025' })
   @IsString()
