@@ -34,11 +34,13 @@ export class UsersService {
       throw new BadRequestException('ulbId is required for ULB-EDITOR and ULB-VIEWER roles');
     }
 
+    const mobileExists = await this.userModel.findOne({ mobile: dto.mobile, isDeleted: false }).exec();
+    if (mobileExists) throw new BadRequestException('Mobile number already registered');
 
     const user = await this.userModel.create({
       name: dto.name,
       username: dto.username,
-      email: dto.email,
+      ...(dto.email && { email: dto.email }),
       mobile: dto.mobile,
       role: dto.role,
       designation: dto.designation ?? '',
