@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { AfsDigitizationController } from './afs-digitization.controller';
 import { AfsDigitizationService } from './afs-digitization.service';
 import { AfsDumpService } from './afs-dump.service';
+import { AuditorsReportOcrQueueService } from './queue/auditors-report-ocr-queue/auditors-report-ocr-queue.service';
 import { DigitizationQueueService } from './queue/digitization-queue/digitization-queue.service';
 import { Response } from 'express';
 
@@ -40,6 +41,12 @@ describe('AfsDigitizationController', () => {
             enqueueBatch: jest.fn(),
             jobStatus: jest.fn(),
             markJobRemoved: jest.fn(),
+          },
+        },
+        {
+          provide: AuditorsReportOcrQueueService,
+          useValue: {
+            enqueueBatch: jest.fn(),
           },
         },
       ],
@@ -213,30 +220,6 @@ describe('AfsDigitizationController', () => {
     });
   });
 
-  describe('digitize', () => {
-    it('should queue digitization job', async () => {
-      const mockBody = {
-        annualAccountsId: '65a7dd50b0c7e600128b1234',
-        ulbId: '65a7dd50b0c7e600128b5678',
-      };
-      const mockResult = { jobId: 'job-123', status: 'queued' };
-      digitizationQueueService.handleDigitizationJob.mockResolvedValue(mockResult);
-
-      const result = await controller.digitize(mockBody as any);
-
-      expect(result.status).toBe('queued');
-      expect(digitizationQueueService.handleDigitizationJob).toHaveBeenCalledWith(mockBody);
-    });
-
-    it('should handle error during job queueing', async () => {
-      const mockBody = { annualAccountsId: 'invalid' };
-      const error = new Error('Queueing failed');
-      digitizationQueueService.handleDigitizationJob.mockRejectedValue(error);
-
-      await expect(controller.digitize(mockBody as any)).rejects.toThrow('Queueing failed');
-    });
-  });
-
   describe('enqueueBatch', () => {
     it('should enqueue batch of digitization jobs', async () => {
       const mockBody = {
@@ -244,6 +227,7 @@ describe('AfsDigitizationController', () => {
           {
             annualAccountsId: '65a7dd50b0c7e600128b1234',
             ulbId: '65a7dd50b0c7e600128b5678',
+            docType: 'bal_sheet',
           },
         ],
       };
@@ -257,7 +241,14 @@ describe('AfsDigitizationController', () => {
     });
 
     it('should handle error during batch enqueueing', async () => {
-      const mockBody = { jobs: [] };
+      const mockBody = {
+        jobs: [
+          {
+            annualAccountsId: 'invalid',
+            docType: 'bal_sheet',
+          },
+        ],
+      };
       const error = new Error('Batch queueing failed');
       digitizationQueueService.enqueueBatch.mockRejectedValue(error);
 

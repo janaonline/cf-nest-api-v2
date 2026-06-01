@@ -8,6 +8,7 @@ import { Year } from 'src/schemas/year.schema';
 import { AnnualAccountData } from 'src/schemas/annual-account-data.schema';
 import { AfsExcelFile } from 'src/schemas/afs/afs-excel-file.schema';
 import { AfsMetric } from 'src/schemas/afs/afs-metrics.schema';
+import { AfsAuditorsReport } from 'src/schemas/afs/afs-auditors-report.schema';
 import { DigitizationLog } from 'src/schemas/digitization-log.schema';
 import { Types } from 'mongoose';
 
@@ -19,6 +20,7 @@ describe('AfsDigitizationService', () => {
   let mockAnnualAccountModel: any;
   let mockAfsExcelFileModel: any;
   let mockAfsMetricModel: any;
+  let mockAfsAuditorsReportModel: any;
   let mockDigitizationModel: any;
   let mockQueue: any;
 
@@ -63,6 +65,16 @@ describe('AfsDigitizationService', () => {
       }),
     };
 
+    mockAfsAuditorsReportModel = {
+      aggregate: jest.fn().mockReturnValue({
+        exec: jest.fn().mockResolvedValue([]),
+      }),
+      findById: jest.fn().mockResolvedValue(null),
+      findByIdAndUpdate: jest.fn().mockReturnValue({
+        exec: jest.fn().mockResolvedValue(null),
+      }),
+    };
+
     mockDigitizationModel = {
       findOne: jest.fn().mockReturnThis(),
       exec: jest.fn().mockResolvedValue({ RequestId: 'req1', status: 'completed' }),
@@ -98,6 +110,10 @@ describe('AfsDigitizationService', () => {
         {
           provide: getModelToken(AfsMetric.name),
           useValue: mockAfsMetricModel,
+        },
+        {
+          provide: getModelToken(AfsAuditorsReport.name),
+          useValue: mockAfsAuditorsReportModel,
         },
         {
           provide: getModelToken(DigitizationLog.name, 'digitization_db'),

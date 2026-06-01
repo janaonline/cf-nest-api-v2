@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
 import { UsersService } from './users.service';
-import { User } from './schemas/user.schema';
+import { User } from 'src/schemas/user/user.schema';
 import { Types } from 'mongoose';
 
 describe('UsersService', () => {
@@ -22,6 +22,7 @@ describe('UsersService', () => {
   beforeEach(async () => {
     mockUserModel = {
       find: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockReturnThis(),
       findById: jest.fn().mockReturnThis(),
       findByIdAndUpdate: jest.fn().mockReturnThis(),
       findByIdAndDelete: jest.fn().mockReturnThis(),
