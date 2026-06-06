@@ -1,4 +1,5 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, Query } from '@nestjs/common';
+/* eslint-disable prettier/prettier */
+import { Controller, Get, Post, Body, Patch, Param, Delete, Query, UseGuards, Req } from '@nestjs/common';
 import { ApiBearerAuth } from '@nestjs/swagger';
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
@@ -7,6 +8,11 @@ import { UpdateProfileContactsDto } from './dto/update-profile-contacts.dto';
 import { ListUsersQueryDto } from './dto/list-users-query.dto';
 import { CreateManagedUserDto } from './dto/create-managed-user.dto';
 import { CurrentUser } from 'src/module/auth/decorators/current-user.decorator';
+import { PermissionGuard } from 'src/module/auth/permission.guard';
+import { JwtAuthGuard } from 'src/module/auth/guards/jwt-auth.guard';
+import { RequirePermissions } from 'src/module/auth/require-permissions.decorator';
+import { Permission } from 'src/module/auth/enum/roles-xvi-fc.enum';
+import { AuthUser } from 'src/module/auth/auth-user.interface';
 
 @Controller('users')
 export class UsersController {
@@ -19,8 +25,11 @@ export class UsersController {
 
   @ApiBearerAuth()
   @Post('create-user')
-  createManagedUser(@Body() dto: CreateManagedUserDto) {
-    return this.usersService.createManagedUser(dto);
+  @UseGuards(JwtAuthGuard, PermissionGuard)
+  @RequirePermissions(Permission.CREATE_MANAGED_USER)
+  createManagedUser(@Body() dto: CreateManagedUserDto, @Req() req: Request & { user: AuthUser }) {
+    console.log('Logged-in user from JWT:', req.user);
+    return this.usersService.createManagedUser(dto, req.user);
   }
 
   @ApiBearerAuth()
@@ -31,6 +40,8 @@ export class UsersController {
 
   @ApiBearerAuth()
   @Get('list')
+  @UseGuards(JwtAuthGuard, PermissionGuard)
+  @RequirePermissions(Permission.VIEW_DATA)
   listUsers(@Query() query: ListUsersQueryDto) {
     return this.usersService.listUsers(query);
   }

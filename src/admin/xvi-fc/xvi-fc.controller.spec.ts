@@ -1,3 +1,4 @@
+/* eslint-disable prettier/prettier */
 import { Test, TestingModule } from '@nestjs/testing';
 import { NotFoundException } from '@nestjs/common';
 import { Types } from 'mongoose';
@@ -17,9 +18,7 @@ describe('XviFcController', () => {
       time: '3:00 PM - 4:00 PM IST',
       hostedBy: 'CityFinance Team',
     },
-    upcomingSupportHours: [
-      { date: '8 May 2025', details: 'Open support hour', status: 'UPCOMING' as const },
-    ],
+    upcomingSupportHours: [{ date: '8 May 2025', details: 'Open support hour', status: 'UPCOMING' as const }],
   };
 
   beforeEach(async () => {

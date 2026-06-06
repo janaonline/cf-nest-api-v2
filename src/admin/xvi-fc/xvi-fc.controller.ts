@@ -1,3 +1,4 @@
+/* eslint-disable prettier/prettier */
 import { Controller, Get, Param, Query } from '@nestjs/common';
 
 import { XviFcService } from './xvi-fc.service';

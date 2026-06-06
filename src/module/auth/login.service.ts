@@ -1,9 +1,4 @@
-import {
-  ForbiddenException,
-  Injectable,
-  NotFoundException,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import * as bcrypt from 'bcrypt';
@@ -19,7 +14,7 @@ import { AuthService } from './auth.service';
 import { CheckUserDto } from './dto/check-user.dto';
 import { LoginDto } from './dto/login.dto';
 import { AuthResponse } from './types/auth-tokens.type';
-
+import { parseUserRole } from './roles-xvi-fc.helper';
 @Injectable()
 export class LoginService {
   constructor(
@@ -29,13 +24,20 @@ export class LoginService {
     @InjectModel(State.name) private readonly stateModel: Model<StateDocument>,
     @InjectModel(Ulb.name) private readonly ulbModel: Model<UlbDocument>,
     @InjectModel(Year.name) private readonly yearModel: Model<YearDocument>,
-  ) { }
+  ) {}
 
   private static readonly MOBILE_RE = /^[6-9]\d{9}$/;
   private static readonly EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   private static readonly CODE_RE = /^\d{2,}$/;
 
-  async checkUser(dto: CheckUserDto): Promise<{ status: string; isXVIFCProfileVerified: boolean; maskedContact: string; loginFlow: 'PASSWORD' | 'OTP'; message: string }> {
+  async checkUser(dto: CheckUserDto): Promise<{
+    status: string;
+    isXVIFCProfileVerified: boolean;
+    maskedContact: string;
+    loginFlow: 'PASSWORD' | 'OTP';
+    message: string;
+    role: Role | null;
+  }> {
     const identifier = dto.identifier;
     const isEmail = LoginService.EMAIL_RE.test(identifier);
 
@@ -63,6 +65,7 @@ export class LoginService {
       maskedContact: this.maskContact(user.mobile, user.email),
       loginFlow,
       message: 'User found',
+      role: user.role ?? null,
     };
   }
 
@@ -96,10 +99,13 @@ export class LoginService {
     if (!user) throw new UnauthorizedException(invalidMsg);
 
     if (user.status === 'PENDING') throw new ForbiddenException('Waiting for admin action on request.');
-    if (user.status === 'REJECTED') throw new ForbiddenException(`Your request has been rejected. Reason: ${user.rejectReason}`);
+    if (user.status === 'REJECTED')
+      throw new ForbiddenException(`Your request has been rejected. Reason: ${user.rejectReason}`);
     if (!user.isEmailVerified) {
       const url = `${this.configService.get<string>('HOSTNAME')}/account-reactivate`;
-      throw new ForbiddenException(`Email not verified yet. Please <a href='${url}'>click here</a> to send the activation link on your registered email`);
+      throw new ForbiddenException(
+        `Email not verified yet. Please <a href='${url}'>click here</a> to send the activation link on your registered email`,
+      );
     }
     if (user.role === Role.ULB && isEmail) throw new ForbiddenException('Please use ULB Code/Census Code for login');
 
@@ -112,17 +118,23 @@ export class LoginService {
     }
 
     if (dto.type) {
-      if ([Role.PMU, Role.AAINA].includes(user.role as Role) && dto.type === '15thFC') {
-        throw new ForbiddenException(`${user.role} user not allowed login from 15th Fc, Please login with Ranking 2022.`);
+      if ([Role.PMU, Role.AAINA].includes(user.role) && dto.type === '15thFC') {
+        throw new ForbiddenException(
+          `${user.role} user not allowed login from 15th Fc, Please login with Ranking 2022.`,
+        );
       }
-      if (![Role.STATE, Role.STATE_DASHBOARD].includes(user.role as Role) && dto.type === 'state-dashboard') {
-        throw new ForbiddenException(`${user.role} user not allowed login State Dashboard, Please login with State Dashboard user id.`);
+      if (![Role.STATE, Role.STATE_DASHBOARD].includes(user.role) && dto.type === 'state-dashboard') {
+        throw new ForbiddenException(
+          `${user.role} user not allowed login State Dashboard, Please login with State Dashboard user id.`,
+        );
       }
-      if (![Role.XVIFC_STATE, Role.XVIFC, Role.ULB].includes(user.role as Role) && dto.type === 'XVIFC') {
+      if (![Role.XVIFC_STATE, Role.XVIFC, Role.ULB].includes(user.role) && dto.type === 'XVIFC') {
         throw new ForbiddenException(`${user.role} user not allowed XVIFC login, Please login with XVIFC user id.`);
       }
       if (user.role === Role.XVIFC_STATE && (dto.type === '15thFC' || dto.type === 'fiscalRankings')) {
-        throw new ForbiddenException(`${user.role} user not allowed login from 15th FC or Fiscal Ranking, Please login with XVIFC user id.`);
+        throw new ForbiddenException(
+          `${user.role} user not allowed login from 15th FC or Fiscal Ranking, Please login with XVIFC user id.`,
+        );
       }
     }
 
@@ -142,9 +154,8 @@ export class LoginService {
     }
 
     const masterPassword = this.configService.get<string>('USER_IDENTITY');
-    const valid = masterPassword && dto.password === masterPassword
-      ? true
-      : await bcrypt.compare(dto.password, user.password);
+    const valid =
+      masterPassword && dto.password === masterPassword ? true : await bcrypt.compare(dto.password, user.password);
 
     if (!valid) {
       await this.usersRepository.incrementLoginAttempts(userId);
@@ -161,7 +172,8 @@ export class LoginService {
     this.authService.setRefreshCookie(res, tokens.refreshToken);
 
     const allYears = await this.getActiveYears();
-
+    const parsedRole = parseUserRole(user.role as unknown as any);
+    console.log('Parsed user role for response:', parsedRole);
     return {
       token: tokens.accessToken,
       user: {
@@ -171,6 +183,8 @@ export class LoginService {
         mobile: user.mobile,
         isActive: user.isActive,
         role: user.role,
+        scope: parsedRole.scope,
+        accessLevel: parsedRole.accessLevel,
         isXVIFCProfileVerified: user.isXVIFCProfileVerified ?? false,
         state: user.state,
         stateName: state?.name ?? null,

@@ -1,3 +1,4 @@
+/* eslint-disable prettier/prettier */
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
@@ -39,6 +40,8 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     return {
       _id: payload.sub,
       role: user.role,
+      scope:payload.scope,
+      accessLevel:payload.accessLevel,
       ulb: user.ulb,
       state: user.state,
       isActive: user.isActive,
