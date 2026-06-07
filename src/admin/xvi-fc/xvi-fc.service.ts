@@ -1,7 +1,11 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+/* eslint-disable prettier/prettier */
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 
+import { AuthUser } from 'src/module/auth/auth-user.interface';
+import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
+import { toObjectIdString } from 'src/users/user-scope.helpers';
 import { GrantAllocation, GrantAllocationDocument } from './schemas/grant-allocation.schema';
 import { StateWiseResponseDto } from './dto/state-wise-response.dto';
 import { buildGetStateWiseDataPipeline } from './quires/get-state-wise-data.query';
@@ -25,7 +29,11 @@ export class XviFcService {
     private readonly stateModel: Model<StateDocument>,
   ) {}
 
-  async getStateWiseData(stateId: string): Promise<StateWiseResponseDto> {
+  async getStateWiseData(stateId: string, requester: AuthUser): Promise<StateWiseResponseDto> {
+    if (requester.scope === Scope.STATE && toObjectIdString(requester.state) !== stateId) {
+      throw new ForbiddenException('You can only view your own state data');
+    }
+
     const stateObjectId = new Types.ObjectId(stateId);
     const pipeline = buildGetStateWiseDataPipeline(stateObjectId);
     const [result] = await this.grantAllocationModel.aggregate<StateWiseResponseDto>(pipeline);

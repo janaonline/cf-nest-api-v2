@@ -1,5 +1,6 @@
+/* eslint-disable prettier/prettier */
 import { randomUUID } from 'crypto';
-import { ConflictException, HttpException, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, HttpException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
@@ -13,6 +14,9 @@ import { RegisterDto } from './dto/register.dto';
 import { SetPasswordDto } from './dto/set-password.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { AuthResponse, AuthTokens } from './types/auth-tokens.type';
+import { parseUserRole } from './roles-xvi-fc.helper';
+import { Types } from 'mongoose';
+import { UserRole } from './otp/otp-contracts';
 
 @Injectable()
 export class AuthService {
@@ -118,14 +122,34 @@ export class AuthService {
   async generateTokens(userId: string): Promise<AuthTokens> {
     const jwtExpires = (this.configService.get<string>('JWT_EXPIRES_IN') ?? '15m') as StringValue;
     const refreshExpires = (this.configService.get<string>('JWT_REFRESH_EXPIRES_IN') ?? '7d') as StringValue;
+     const user = await this.usersRepository.findById(userId);
 
+  if (!user) {
+    throw new UnauthorizedException('User not found');
+  }
+
+  // user.role may come from a different UserRole declaration (otp-contracts)
+  // cast to any to avoid incompatible type errors between separate enum declarations
+  const parsedRole = parseUserRole(user.role as unknown as any);
+
+  const payload = {
+    sub: userId,
+    role: user.role,
+    ...(parsedRole && {
+      scope: parsedRole.scope,
+      accessLevel: parsedRole.accessLevel,
+    }),
+    ulb: this.toObjectIdString(user.ulb),
+    state: this.toObjectIdString(user.state),
+    jti: randomUUID(),
+  };
     const [accessToken, refreshToken] = await Promise.all([
       this.jwtService.signAsync(
-        { sub: userId, jti: randomUUID() },
+          payload,
         { secret: this.configService.get<string>('JWT_SECRET'), expiresIn: jwtExpires },
       ),
       this.jwtService.signAsync(
-        { sub: userId },
+       { sub: userId },
         { secret: this.configService.get<string>('JWT_REFRESH_SECRET'), expiresIn: refreshExpires },
       ),
     ]);
@@ -148,7 +172,35 @@ export class AuthService {
       path: '/',
     });
   }
+  private toObjectIdString(value: unknown): string | null {
+  if (!value) return null;
 
+  if (value instanceof Types.ObjectId) {
+    return value.toString();
+  }
+
+  if (typeof value === 'string') {
+    return value;
+  }
+
+  if (
+    typeof value === 'object' &&
+    value !== null &&
+    '_id' in value
+  ) {
+    const id = (value as { _id?: unknown })._id;
+
+    if (id instanceof Types.ObjectId) {
+      return id.toString();
+    }
+
+    if (typeof id === 'string') {
+      return id;
+    }
+  }
+
+  return null;
+}
   private clearRefreshCookie(res: Response): void {
     const cookieName = this.configService.get<string>('REFRESH_COOKIE_NAME') ?? 'refresh_token';
     res.cookie(cookieName, '', { httpOnly: true, maxAge: 0, path: '/' });

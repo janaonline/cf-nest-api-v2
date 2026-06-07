@@ -1,6 +1,6 @@
 import { SideMenuResponseDto } from '../dto/side-menu.dto';
 
-export type MenuRole = 'ULB' | 'STATE' | 'MOHUA' | 'DOE';
+export type MenuRole = 'ULB' | 'STATE' | 'MOHUA' | 'DOE' | 'ADMIN';
 
 export const SIDE_MENU_CONFIG: Record<MenuRole, (yearId: string) => SideMenuResponseDto> = {
   ULB: (yearId) => ({
@@ -38,7 +38,6 @@ export const SIDE_MENU_CONFIG: Record<MenuRole, (yearId: string) => SideMenuResp
           },
         ],
       },
-
     ],
     bottomModel: [
       //      {
@@ -72,7 +71,8 @@ export const SIDE_MENU_CONFIG: Record<MenuRole, (yearId: string) => SideMenuResp
         label: 'Overview',
         icon: 'bi bi-speedometer2',
         featureKey: 'overview',
-      }, {
+      },
+      {
         label: 'Teams & Roles',
         icon: 'bi bi-clipboard-data',
         items: [
@@ -178,5 +178,60 @@ export const SIDE_MENU_CONFIG: Record<MenuRole, (yearId: string) => SideMenuResp
       },
     ],
     bottomModel: [],
+  }),
+  ADMIN: (yearId) => ({
+    topModel: [
+      {
+        label: 'XVI Financial Commission',
+        icon: 'bi bi-bank',
+        routerLink: ['/xvifc'],
+      },
+      { label: '_', separator: true },
+      {
+        label: 'Overview',
+        icon: 'bi bi-speedometer2',
+        featureKey: 'overview',
+      },
+      // {
+      //   label: 'Teams & Roles',
+      //   icon: 'bi bi-clipboard-data',
+      //   items: [
+      //     {
+      //       label: 'unified view',
+      //       icon: 'bi bi-people-fill',
+      //       featureKey: 'roles-teams-unified-view',
+      //     },
+      //   ],
+      // },
+      {
+        label: 'Automated',
+        icon: 'bi bi-clock-fill',
+        items: [
+          {
+            label: 'Scheduled Reminders',
+            icon: 'bi bi-clock-fill',
+            featureKey: 'scheduled-reminders',
+          },
+        ],
+      },
+    ],
+    bottomModel: [
+      //      {
+      //     label: 'Review',
+      //     icon: 'bi bi-clipboard-data',
+      //     items: [
+      //       {
+      //         label: 'ULB Submissions',
+      //         icon: 'bi bi-upload',
+      //         featureKey: 'ulb-submissions',
+      //       },
+      //       {
+      //         label: 'Insights',
+      //         icon: 'bi bi-bar-chart-line',
+      //         featureKey: 'insights',
+      //       },
+      //     ],
+      //   },
+    ],
   }),
 };

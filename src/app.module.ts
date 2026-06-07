@@ -4,6 +4,7 @@ import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { MongooseModule } from '@nestjs/mongoose';
+import { ScheduleModule } from '@nestjs/schedule';
 import { seconds, ThrottlerModule } from '@nestjs/throttler';
 import { CustomThrottlerGuard } from './common/guards/throttler.guard';
 import { AppController } from './app.controller';
@@ -20,6 +21,8 @@ import { ReportAnIssueModule } from './web/report-an-issue/report-an-issue.modul
 import { ResourcesSectionModule } from './web/resources-section/resources-section.module';
 import { EventsModule } from './admin/events/events.module';
 import { XviFcModule } from './admin/xvi-fc/xvi-fc.module';
+import { EmailTemplatesModule } from './admin/email-templates/email-templates.module';
+import { EmailRemindersModule } from './admin/email-reminders/email-reminders.module';
 import { FileTokenModule } from './core/file-token/file-token.module';
 import { FileDownloadModule } from './file-download/file-download.module';
 function getQueryCaller(): string {
@@ -40,6 +43,7 @@ function getQueryCaller(): string {
       },
     ]),
     ConfigModule.forRoot({ isGlobal: true }),
+    ScheduleModule.forRoot(),
     CacheModule.register({ isGlobal: true, ttl: 300000 }),
     RedisModule,
     AuthModule,
@@ -95,6 +99,8 @@ function getQueryCaller(): string {
     EventsModule,
     DataCollectionModule,
     XviFcModule,
+    EmailTemplatesModule,
+    EmailRemindersModule,
   ],
   controllers: [AppController],
   providers: [

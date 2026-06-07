@@ -12,12 +12,7 @@ export class EmailQueueService {
 
   async addEmailJob(payload: EmailJob): Promise<void> {
     const job = await this.queue.add('emailJob', payload);
-    this.logger.log(`JOB: ${job.id} Added job to emailQueue: ${JSON.stringify(payload)}`, job.id);
-    // this.queue.on('completed', (job) => {
-    //   console.log(`Job with ID ${job.id} has been completed`);
-    // });
-    // this.queue.on('failed', (job, err) => {
-    //   console.log(`Job with ID ${job.id} has failed with error ${err.message}`);
-    // });
+    const to = Array.isArray(payload.to) ? `[${payload.to.join(', ')}]` : payload.to;
+    this.logger.log(`Queued job ${job.id}: "${payload.subject}" → ${to}`);
   }
 }

@@ -1,3 +1,4 @@
+/* eslint-disable prettier/prettier */
 import { Body, Controller, Get, HttpCode, HttpStatus, Logger, Param, Patch, Post, Res, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
@@ -19,7 +20,9 @@ import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { JwtRefreshGuard } from './guards/jwt-refresh.guard';
 import type { User } from 'src/module/auth/enum/role.enum';
-
+import { PermissionGuard } from './permission.guard';
+import { RequirePermissions } from './require-permissions.decorator';
+import { Permission } from './enum/roles-xvi-fc.enum';
 @ApiTags('auth')
 @Controller('auth')
 export class AuthController {
@@ -33,6 +36,8 @@ export class AuthController {
 
   @Public()
   @Post('check-user')
+  // @UseGuards(JwtAuthGuard, PermissionGuard)
+  // @RequirePermissions(Permission.VIEW_STATUS_REPORTS) 
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 10, ttl: 60000 } })
   @ApiOperation({ summary: 'Check if a user exists and determine login flow' })
@@ -125,7 +130,6 @@ export class AuthController {
     return this.otpService.verifyOtp(dto, res);
   }
 
-  @UseGuards(JwtAuthGuard)
   @Patch('update-profile')
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()

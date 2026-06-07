@@ -1,6 +1,8 @@
+/* eslint-disable prettier/prettier */
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, HydratedDocument, Types } from 'mongoose';
 import { Role } from '../../module/auth/enum/role.enum';
+import { Permission } from '../../module/auth/enum/roles-xvi-fc.enum';
 
 export type UserDocument = HydratedDocument<User>;
 export type SafeUser = Omit<User, 'password' | 'refreshTokenHash' | 'otpHash'>;
@@ -147,7 +149,24 @@ export class User extends Document {
   lastLoginAt!: Date | null;
 
   @Prop({ type: Boolean, default: false })
-  isXVIFCProfileVerified: boolean;
+  isXVIFCProfileVerified!: boolean;
+
+  /**
+   * Per-user permission overrides.
+   * Default permissions come from ROLE_PERMISSIONS in permissions.map.ts.
+   * Only store deviations here — keep this empty for the vast majority of users.
+   */
+  @Prop({
+    type: {
+      allow: { type: [String], enum: Object.values(Permission), default: [] },
+      deny: { type: [String], enum: Object.values(Permission), default: [] },
+    },
+    default: () => ({ allow: [], deny: [] }),
+  })
+  permissionOverrides!: {
+    allow: Permission[];
+    deny: Permission[];
+  };
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);
