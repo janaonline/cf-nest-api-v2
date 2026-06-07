@@ -20,10 +20,10 @@ export class User extends Document {
   @Prop({ required: true })
   name!: string;
 
-  @Prop({ type: String, default: null })
+  @Prop({ type: String, default: null, unique: true })
   mobile!: string;
 
-  @Prop({ required: true, unique: true })
+  @Prop({ type: String, default: '' })
   email!: string;
 
   @Prop({ required: true, select: false })

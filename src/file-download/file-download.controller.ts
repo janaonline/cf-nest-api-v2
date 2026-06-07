@@ -1,5 +1,6 @@
 import { Controller, Get, HttpStatus, Logger, Query, Res } from '@nestjs/common';
 import { ApiQuery } from '@nestjs/swagger';
+import { SkipThrottle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { Public } from 'src/module/auth/decorators/public.decorator';
 import { FileDownloadService } from './file-download.service';
@@ -12,6 +13,7 @@ export class FileDownloadController {
   constructor(private readonly fileDownloadService: FileDownloadService) {}
 
   @Public()
+  @SkipThrottle()
   @Get('download')
   @ApiQuery({ name: 'signature', required: true, type: String })
   async download(@Query('signature') signature: string, @Res() res: Response) {
