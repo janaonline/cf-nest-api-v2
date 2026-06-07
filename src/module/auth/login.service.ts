@@ -183,8 +183,10 @@ export class LoginService {
         mobile: user.mobile,
         isActive: user.isActive,
         role: user.role,
-        scope: parsedRole.scope,
-        accessLevel: parsedRole.accessLevel,
+        ...(parsedRole && {
+          scope: parsedRole.scope,
+          accessLevel: parsedRole.accessLevel,
+        }),
         isXVIFCProfileVerified: user.isXVIFCProfileVerified ?? false,
         state: user.state,
         stateName: state?.name ?? null,

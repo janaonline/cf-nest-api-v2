@@ -7,8 +7,7 @@ import { CanActivate, ExecutionContext, ForbiddenException, Injectable } from '@
 import { Reflector } from '@nestjs/core';
 import { REQUIRED_PERMISSIONS_KEY } from './require-permissions.decorator';
 import { Permission } from './enum/roles-xvi-fc.enum';
-import { parseUserRole } from './roles-xvi-fc.helper';
-import { ACCESS_LEVEL_PERMISSIONS } from './permissions.map';
+import { getEffectivePermissions } from './permissions.map';
 
 @Injectable()
 export class PermissionGuard implements CanActivate {
@@ -32,11 +31,11 @@ export class PermissionGuard implements CanActivate {
       throw new ForbiddenException('User role not found');
     }
 
-    const { accessLevel } = parseUserRole(user.role);
+    const effectivePermissions = getEffectivePermissions(user);
 
-    const userPermissions = ACCESS_LEVEL_PERMISSIONS[accessLevel] || [];
-
-    const hasPermission = requiredPermissions.every((permission) => userPermissions.includes(permission));
+    const hasPermission = requiredPermissions.every((permission) =>
+      effectivePermissions.includes(permission),
+    );
 
     if (!hasPermission) {
       throw new ForbiddenException('You do not have permission to perform this action');

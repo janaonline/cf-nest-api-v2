@@ -1,4 +1,4 @@
-import { AccessLevel, Scope, UserRole } from './enum/roles-xvi-fc.enum';
+import { AccessLevel, Permission, Scope, UserRole } from './enum/roles-xvi-fc.enum';
 import { Types } from 'mongoose';
 
 export interface AuthUser {
@@ -11,4 +11,9 @@ export interface AuthUser {
   isActive?: boolean;
   jti?: string;
   exp?: number;
+  /** Per-user permission overrides loaded from the user document at JWT validation time. */
+  permissionOverrides?: {
+    allow: Permission[];
+    deny: Permission[];
+  };
 }

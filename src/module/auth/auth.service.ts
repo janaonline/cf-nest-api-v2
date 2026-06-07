@@ -133,10 +133,12 @@ export class AuthService {
   const parsedRole = parseUserRole(user.role as unknown as any);
 
   const payload = {
-    sub: userId ,
+    sub: userId,
     role: user.role,
-    scope: parsedRole.scope,
-    accessLevel: parsedRole.accessLevel,
+    ...(parsedRole && {
+      scope: parsedRole.scope,
+      accessLevel: parsedRole.accessLevel,
+    }),
     ulb: this.toObjectIdString(user.ulb),
     state: this.toObjectIdString(user.state),
     jti: randomUUID(),

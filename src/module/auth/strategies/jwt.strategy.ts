@@ -40,13 +40,15 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     return {
       _id: payload.sub,
       role: user.role,
-      scope:payload.scope,
-      accessLevel:payload.accessLevel,
+      scope: payload.scope,
+      accessLevel: payload.accessLevel,
       ulb: user.ulb,
       state: user.state,
       isActive: user.isActive,
       jti: payload.jti,
       exp: payload.exp,
+      // Loaded fresh from the DB so in-flight overrides take effect immediately
+      permissionOverrides: user.permissionOverrides ?? { allow: [], deny: [] },
     };
   }
 }

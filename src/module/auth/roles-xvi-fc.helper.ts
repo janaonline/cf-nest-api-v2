@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/restrict-template-expressions */
 // src/common/auth/role.helper.ts
 
 import { AccessLevel, Scope, UserRole } from './enum/roles-xvi-fc.enum';
@@ -6,7 +5,7 @@ import { AccessLevel, Scope, UserRole } from './enum/roles-xvi-fc.enum';
 export function parseUserRole(role: UserRole): {
   scope: Scope;
   accessLevel: AccessLevel;
-} {
+} | null {
   switch (role) {
     case UserRole.ULB:
       return {
@@ -44,7 +43,15 @@ export function parseUserRole(role: UserRole): {
         accessLevel: AccessLevel.VIEWER,
       };
 
+    case UserRole.ADMIN:
+      return {
+        scope: Scope.ADMIN,
+        accessLevel: AccessLevel.ADMIN,
+      };
+
     default:
-      throw new Error(`Unsupported role: ${role}`);
+      // Non-XVI-FC role (e.g. MoHUA, PMU, USER, XVIFC) — skip scope mapping,
+      // token is still issued with just role + sub.
+      return null;
   }
 }

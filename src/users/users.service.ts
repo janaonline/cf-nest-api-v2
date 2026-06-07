@@ -2,18 +2,62 @@
 /* eslint-disable @typescript-eslint/no-unsafe-call */
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
 /* eslint-disable prettier/prettier */
-import { BadRequestException, ForbiddenException, HttpException, Injectable } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, HttpException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model, Types } from 'mongoose';
 import { User } from 'src/schemas/user/user.schema';
 import { Ulb, UlbDocument } from 'src/admin/xvi-fc/schemas/ulb.schema';
 import { State, StateDocument } from 'src/admin/xvi-fc/schemas/state.schema';
-import { UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
+import { Permission, Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
+import { getEffectivePermissions } from 'src/module/auth/permissions.map';
 import { UpdateProfileContactsDto } from './dto/update-profile-contacts.dto';
 import { ListUsersQueryDto } from './dto/list-users-query.dto';
 import { CreateManagedUserDto } from './dto/create-managed-user.dto';
+import { UpdatePermissionOverridesDto } from './dto/update-permission-overrides.dto';
 import { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Role } from 'src/module/auth/enum/role.enum';
+import {
+  assertAdminSameScope,
+  assertManageableTarget,
+  buildScopedQuery,
+  resolveAdminScopeTarget,
+} from './user-scope.helpers';
+import { UpdateUserRoleDto } from './dto/update-user-role.dto';
+import { TransferOwnershipDto } from './dto/transfer-ownership.dto';
+
+// ─── Permission-matrix display types ────────────────────────────────────────
+
+export interface PermissionMatrixRow {
+  label: string;
+  permissionKey: Permission;
+  submitter: boolean;
+  editor: boolean;
+  viewer: boolean;
+}
+
+// Static matrix definitions (for UI display only — not security)
+const ULB_MATRIX: PermissionMatrixRow[] = [
+  { label: 'View status and reports',  permissionKey: Permission.VIEW_STATUS_REPORTS,      submitter: true,  editor: true,  viewer: true  },
+  { label: 'Upload documents',         permissionKey: Permission.UPLOAD_DOCUMENTS,          submitter: true,  editor: true,  viewer: false },
+  { label: 'Message users',            permissionKey: Permission.MESSAGE_USERS,             submitter: true,  editor: true,  viewer: false },
+  { label: 'Final submit to State DMA',permissionKey: Permission.FINAL_SUBMIT_TO_STATE_DMA, submitter: true,  editor: false, viewer: false },
+  { label: 'Manage users',             permissionKey: Permission.MANAGE_USERS,              submitter: true,  editor: false, viewer: false },
+];
+
+const STATE_MATRIX: PermissionMatrixRow[] = [
+  { label: 'View status and reports',       permissionKey: Permission.VIEW_STATUS_REPORTS,          submitter: true,  editor: true,  viewer: true  },
+  { label: 'View dashboards',               permissionKey: Permission.VIEW_DASHBOARDS,              submitter: true,  editor: true,  viewer: true  },
+  { label: 'Upload state-level documents',  permissionKey: Permission.UPLOAD_STATE_LEVEL_DOCUMENTS, submitter: true,  editor: true,  viewer: false },
+  { label: 'Review ULB submissions',        permissionKey: Permission.REVIEW_ULB_SUBMISSIONS,       submitter: true,  editor: true,  viewer: false },
+  { label: 'Message users',                 permissionKey: Permission.MESSAGE_USERS,                submitter: true,  editor: true,  viewer: false },
+  { label: 'Approve ULB submissions',       permissionKey: Permission.APPROVE_ULB_SUBMISSIONS,      submitter: true,  editor: false, viewer: false },
+  { label: 'Prepare grant letters',         permissionKey: Permission.PREPARE_GRANT_LETTERS,        submitter: true,  editor: false, viewer: false },
+  { label: 'Recommend exemptions',          permissionKey: Permission.RECOMMEND_EXEMPTIONS,         submitter: true,  editor: false, viewer: false },
+  { label: 'Final submit to MoHUA',         permissionKey: Permission.FINAL_SUBMIT_TO_MOHUA,        submitter: true,  editor: false, viewer: false },
+  { label: 'Manage users',                  permissionKey: Permission.MANAGE_USERS,                 submitter: true,  editor: false, viewer: false },
+];
+
+// ─── Service ─────────────────────────────────────────────────────────────────
 
 @Injectable()
 export class UsersService {
@@ -29,103 +73,12 @@ export class UsersService {
   }
 
   async createManagedUser(dto: CreateManagedUserDto, creator: AuthUser): Promise<Record<string, unknown>> {
-    const stateManagedRoles = [Role.STATE_EDITOR, Role.STATE_VIEWER] as string[];
-    const ulbManagedRoles = [Role.ULB_EDITOR, Role.ULB_VIEWER] as string[];
-    const adminRoles = [Role.STATE, Role.ULB] as string[];
-
-    if (!adminRoles.includes(creator.role)) {
-      throw new ForbiddenException('Only admin users can create managed users');
-    }
-
-    const creatorId = this.toObjectIdString(creator._id);
-    const creatorStateId = this.toObjectIdString(creator.state);
-    const creatorUlbId = this.toObjectIdString(creator.ulb);
-
-    if (!creatorId || !Types.ObjectId.isValid(creatorId)) {
-      throw new ForbiddenException('Invalid logged-in user');
-    }
-
-    let targetStateId: string | null = null;
-    let targetUlbId: string | null = null;
-
-    /**
-     * STATE admin can create only STATE-EDITOR / STATE-VIEWER
-     * and the new user belongs to the same state as the logged-in STATE admin.
-     */
-    if (creator.role === UserRole.STATE) {
-      if (!stateManagedRoles.includes(dto.role)) {
-        throw new ForbiddenException('STATE admin can create only STATE-EDITOR or STATE-VIEWER users');
-      }
-
-      if (!creatorStateId || !Types.ObjectId.isValid(creatorStateId)) {
-        throw new ForbiddenException('Logged-in STATE admin is not mapped to any valid state');
-      }
-
-      if (dto.stateId && !Types.ObjectId.isValid(dto.stateId)) {
-        throw new BadRequestException('Invalid stateId');
-      }
-
-      /**
-       * If frontend sends stateId, it must match logged-in admin's state.
-       */
-      if (dto.stateId && dto.stateId !== creatorStateId) {
-        throw new ForbiddenException('You cannot create users for another state');
-      }
-
-      /**
-       * STATE admin should not create ULB users through this flow.
-       */
-      if (dto.ulbId) {
-        throw new ForbiddenException('STATE admin cannot directly assign ULB while creating STATE users');
-      }
-
-      targetStateId = creatorStateId;
-      targetUlbId = null;
-    }
-
-    /**
-     * ULB admin can create only ULB-EDITOR / ULB-VIEWER
-     * and the new user belongs to the same ULB as the logged-in ULB admin.
-     */
-    if (creator.role === UserRole.ULB) {
-      if (!ulbManagedRoles.includes(dto.role)) {
-        throw new ForbiddenException('ULB admin can create only ULB-EDITOR or ULB-VIEWER users');
-      }
-
-      if (!creatorUlbId || !Types.ObjectId.isValid(creatorUlbId)) {
-        throw new ForbiddenException('Logged-in ULB admin is not mapped to any valid ULB');
-      }
-
-      if (dto.ulbId && !Types.ObjectId.isValid(dto.ulbId)) {
-        throw new BadRequestException('Invalid ulbId');
-      }
-
-      /**
-       * If frontend sends ulbId, it must match logged-in admin's ULB.
-       */
-      if (dto.ulbId && dto.ulbId !== creatorUlbId) {
-        throw new ForbiddenException('You cannot create users for another ULB');
-      }
-
-      /**
-       * If frontend sends stateId, it must match logged-in admin's state.
-       */
-      if (dto.stateId && creatorStateId && dto.stateId !== creatorStateId) {
-        throw new ForbiddenException('You cannot create users for another state');
-      }
-
-      targetUlbId = creatorUlbId;
-
-      if (creatorStateId && Types.ObjectId.isValid(creatorStateId)) {
-        targetStateId = creatorStateId;
-      }
-    }
-
-    const mobileExists = await this.userModel.exists({
-      mobile: dto.mobile,
-      isDeleted: false,
+    const { creatorId, targetStateId, targetUlbId } = resolveAdminScopeTarget(creator, dto.role, {
+      ulbId: dto.ulbId,
+      stateId: dto.stateId,
     });
 
+    const mobileExists = await this.userModel.exists({ mobile: dto.mobile, isDeleted: false });
     if (mobileExists) {
       throw new BadRequestException('Mobile number already registered');
     }
@@ -164,51 +117,161 @@ export class UsersService {
       isActive: false,
       isXVIFCProfileVerified: false,
       createdBy: new Types.ObjectId(creatorId),
+      ...(targetStateId && { state: new Types.ObjectId(targetStateId) }),
+      ...(targetUlbId && { ulb: new Types.ObjectId(targetUlbId) }),
     };
 
-    if (targetStateId) {
-      createPayload.state = new Types.ObjectId(targetStateId);
-    }
-
-    if (targetUlbId) {
-      createPayload.ulb = new Types.ObjectId(targetUlbId);
-    }
-
     const user = await this.userModel.create(createPayload);
-
     const obj = user.toObject() as unknown as Record<string, unknown>;
-
     delete obj.password;
     delete obj.refreshTokenHash;
-
     return obj;
   }
-  private toObjectIdString(value: unknown): string | null {
-    if (!value) return null;
 
-    if (value instanceof Types.ObjectId) {
-      return value.toString();
+  /**
+   * Sets per-user permission overrides for a managed user.
+   *
+   * allow  → grants permissions beyond the role default.
+   * deny   → revokes permissions from the role default.
+   *
+   * The requester must be a ULB/STATE admin and the target user must
+   * belong to the requester's own ULB or state.
+   *
+   * Returns the resulting effective permission set so the caller can
+   * verify or display the new access level immediately.
+   */
+  async updatePermissionOverrides(
+    targetUserId: string,
+    dto: UpdatePermissionOverridesDto,
+    requester: AuthUser,
+  ): Promise<{ message: string; overrides: { allow: Permission[]; deny: Permission[] }; effectivePermissions: Permission[] }> {
+    if (!Types.ObjectId.isValid(targetUserId)) {
+      throw new BadRequestException('Invalid user ID');
     }
 
-    if (typeof value === 'string') {
-      return value;
+    const targetUser = await this.userModel
+      .findOne({ _id: targetUserId, isDeleted: false })
+      .select('role ulb state')
+      .lean()
+      .exec();
+
+    if (!targetUser) throw new NotFoundException('User not found');
+
+    assertAdminSameScope(requester, targetUser);
+
+    const allow = dto.allow ?? [];
+    const deny = dto.deny ?? [];
+
+    // A permission can't be granted and revoked at the same time
+    const conflict = allow.filter((p) => deny.includes(p));
+    if (conflict.length > 0) {
+      throw new BadRequestException(
+        `These permissions appear in both allow and deny: ${conflict.join(', ')}`,
+      );
     }
 
-    if (typeof value === 'object' && value !== null && '_id' in value) {
-      const id = (value as { _id?: unknown })._id;
+    await this.userModel
+      .findByIdAndUpdate(targetUserId, { $set: { 'permissionOverrides.allow': allow, 'permissionOverrides.deny': deny } })
+      .exec();
 
-      if (id instanceof Types.ObjectId) {
-        return id.toString();
-      }
+    const effectivePermissions = getEffectivePermissions({
+      role: targetUser.role as unknown as UserRole,
+      permissionOverrides: { allow, deny },
+    });
 
-      if (typeof id === 'string') {
-        return id;
-      }
-    }
-
-    return null;
+    return {
+      message: 'Permission overrides updated successfully',
+      overrides: { allow, deny },
+      effectivePermissions,
+    };
   }
-  
+
+  async softDeleteUser(targetUserId: string, requester: AuthUser): Promise<{ message: string }> {
+    if (!Types.ObjectId.isValid(targetUserId)) throw new BadRequestException('Invalid user ID');
+
+    const targetUser = await this.userModel
+      .findOne({ _id: targetUserId, isDeleted: false })
+      .select('role ulb state')
+      .lean()
+      .exec();
+
+    if (!targetUser) throw new NotFoundException('User not found');
+
+    assertManageableTarget(requester, targetUser);
+
+    await this.userModel.findByIdAndUpdate(targetUserId, { $set: { isDeleted: true } }).exec();
+
+    return { message: 'User deleted successfully' };
+  }
+
+  async updateUserRole(targetUserId: string, dto: UpdateUserRoleDto, requester: AuthUser): Promise<{ message: string }> {
+    if (!Types.ObjectId.isValid(targetUserId)) throw new BadRequestException('Invalid user ID');
+
+    const targetUser = await this.userModel
+      .findOne({ _id: targetUserId, isDeleted: false })
+      .select('role ulb state')
+      .lean()
+      .exec();
+
+    if (!targetUser) throw new NotFoundException('User not found');
+
+    assertManageableTarget(requester, targetUser);
+
+    await this.userModel.findByIdAndUpdate(targetUserId, { $set: { role: dto.role } }).exec();
+
+    return { message: 'User role updated successfully' };
+  }
+
+  async transferOwnership(dto: TransferOwnershipDto, requester: AuthUser): Promise<{ message: string }> {
+    if (!Types.ObjectId.isValid(dto.newOwnerId)) throw new BadRequestException('Invalid newOwnerId');
+
+    // requester must be a ULB or STATE admin (or platform ADMIN)
+    const ownerRoles = [UserRole.ULB, UserRole.STATE] as string[];
+    if (requester.role !== UserRole.ADMIN && !ownerRoles.includes(requester.role)) {
+      throw new ForbiddenException('Only ULB or STATE admin can transfer ownership');
+    }
+
+    const newOwner = await this.userModel
+      .findOne({ _id: dto.newOwnerId, isDeleted: false })
+      .select('role ulb state')
+      .lean()
+      .exec();
+
+    if (!newOwner) throw new NotFoundException('New owner user not found');
+
+    // new owner must be in the same ULB/state as the requester
+    assertAdminSameScope(requester, newOwner);
+
+    // new owner must currently be an editor or viewer — not already an admin
+    const eligibleRoles = [UserRole.ULB_EDITOR, UserRole.ULB_VIEWER, UserRole.STATE_EDITOR, UserRole.STATE_VIEWER] as string[];
+    if (!eligibleRoles.includes(newOwner.role as string)) {
+      throw new BadRequestException('New owner must currently be an EDITOR or VIEWER role');
+    }
+
+    // demoteTo must match the requester's scope
+    const ulbDemotionRoles = [UserRole.ULB_EDITOR, UserRole.ULB_VIEWER] as string[];
+    const stateDemotionRoles = [UserRole.STATE_EDITOR, UserRole.STATE_VIEWER] as string[];
+
+    if (requester.role === UserRole.ULB && !ulbDemotionRoles.includes(dto.demoteTo)) {
+      throw new BadRequestException('ULB admin can only demote to ULB-EDITOR or ULB-VIEWER');
+    }
+    if (requester.role === UserRole.STATE && !stateDemotionRoles.includes(dto.demoteTo)) {
+      throw new BadRequestException('STATE admin can only demote to STATE-EDITOR or STATE-VIEWER');
+    }
+
+    // atomic swap inside a MongoDB session
+    const session = await this.userModel.db.startSession();
+    try {
+      await session.withTransaction(async () => {
+        await this.userModel.findByIdAndUpdate(dto.newOwnerId, { $set: { role: requester.role } }, { session });
+        await this.userModel.findByIdAndUpdate(requester._id, { $set: { role: dto.demoteTo } }, { session });
+      });
+    } finally {
+      await session.endSession();
+    }
+
+    return { message: 'Ownership transferred successfully' };
+  }
 
   async findAll(): Promise<User[]> {
     return this.userModel.find().limit(10).exec();
@@ -248,7 +311,14 @@ export class UsersService {
     'isXVIFCProfileVerified',
   ]);
 
-  async updateProfileContacts(userId: string, dto: UpdateProfileContactsDto): Promise<Record<string, unknown>> {
+  async updateProfileContacts(userId: string, dto: UpdateProfileContactsDto, requester: AuthUser): Promise<Record<string, unknown>> {
+    if (!Types.ObjectId.isValid(userId)) throw new BadRequestException('Invalid user ID');
+
+    const targetUser = await this.userModel.findOne({ _id: userId, isDeleted: false }).select('ulb state').lean().exec();
+    if (!targetUser) throw new NotFoundException('User not found');
+
+    assertAdminSameScope(requester, targetUser);
+
     const unknown = Object.keys(dto).filter((k) => !UsersService.UPDATABLE_FIELDS.has(k));
     if (unknown.length) throw new BadRequestException(`Field(s) not updatable: ${unknown.join(', ')}`);
 
@@ -258,8 +328,7 @@ export class UsersService {
     }
     if (!Object.keys(update).length) throw new BadRequestException('No fields provided to update');
 
-    const updated = await this.userModel.findByIdAndUpdate(userId, { $set: update }, { new: true }).exec();
-    if (!updated) throw new HttpException('User not found', 404);
+    await this.userModel.findByIdAndUpdate(userId, { $set: update }).exec();
     return { message: 'Profile contacts updated successfully', updatedFields: update };
   }
 
@@ -271,11 +340,20 @@ export class UsersService {
     return role;
   }
 
-  async listUsers(query: ListUsersQueryDto): Promise<{
+  /**
+   * Lists users for the ULB or STATE that the requesting user belongs to.
+   * Scope is enforced server-side — the requester cannot query another ULB/state.
+   */
+  async listUsers(
+    query: ListUsersQueryDto,
+    requester: AuthUser,
+  ): Promise<{
     ulbDetails?: Record<string, unknown>;
     stateDetails?: Record<string, unknown>;
     data: Record<string, unknown>[];
   }> {
+    query = buildScopedQuery(requester, query);
+
     if (!query.stateId && !query.ulbId) {
       throw new BadRequestException('Provide either stateId or ulbId');
     }
@@ -289,7 +367,7 @@ export class UsersService {
     }
 
     const filter: FilterQuery<User> = {
-      isDeleted: false,
+      isDeleted: query.showDeleted === true,
     };
 
     let ulbDetails: Record<string, unknown> | undefined;
@@ -319,7 +397,7 @@ export class UsersService {
     /**
      * Case 2: State-wise listing
      *
-     * This only lists STATE-level users, not all ULB users inside that state.
+     * Only lists STATE-level users, not all ULB users inside that state.
      */
     if (!query.ulbId && query.stateId) {
       filter.state = new Types.ObjectId(query.stateId);
@@ -392,23 +470,10 @@ export class UsersService {
 
     const managedUsers = users.filter((u) => u.role !== Role.ULB && u.role !== Role.STATE);
 
-    /**
-     * Step 1:
-     * Add all actual user documents into mobile map.
-     *
-     * This includes:
-     * - ULB / STATE submitter
-     * - ULB-EDITOR / STATE-EDITOR
-     * - ULB-VIEWER / STATE-VIEWER
-     *
-     * If any old contact has the same mobile later, it will be skipped.
-     */
+    // Step 1: Populate real-user-by-mobile map (managed users win over main-role users)
     for (const user of users) {
       const normalizedMobile = this.normalizeMobile(user.mobile);
-
-      if (!normalizedMobile) {
-        continue;
-      }
+      if (!normalizedMobile) continue;
 
       const formattedUser = this.formatActualUser(user);
 
@@ -427,84 +492,45 @@ export class UsersService {
       }
 
       const existingRole = existing['rawRole'] as string | undefined;
-      const currentRole = user.role;
-
       const existingIsMainRole = existingRole === Role.ULB || existingRole === Role.STATE;
-
-      const currentIsManagedRole = currentRole !== Role.ULB && currentRole !== Role.STATE;
+      const currentIsManagedRole = user.role !== Role.ULB && user.role !== Role.STATE;
 
       if (existingIsMainRole && currentIsManagedRole) {
         realUserByMobile.set(normalizedMobile, formattedUser);
       }
     }
 
-    /**
-     * Step 2:
-     * Push managed users first.
-     *
-     * This makes activated users appear before old submitter/legacy contacts.
-     */
+    // Step 2: Managed users first (EDITOR / VIEWER)
     for (const user of managedUsers) {
       const normalizedMobile = this.normalizeMobile(user.mobile);
       const normalizedName = this.normalizeText(user.name);
       const nameMobileKey = `${normalizedName}|${normalizedMobile}`;
 
-      if (normalizedMobile && seenMobiles.has(normalizedMobile)) {
-        continue;
-      }
+      if (normalizedMobile && seenMobiles.has(normalizedMobile)) continue;
+      if (!normalizedMobile && seenNameMobileKeys.has(nameMobileKey)) continue;
 
-      if (!normalizedMobile && seenNameMobileKeys.has(nameMobileKey)) {
-        continue;
-      }
-
-      if (normalizedMobile) {
-        seenMobiles.add(normalizedMobile);
-      }
-
+      if (normalizedMobile) seenMobiles.add(normalizedMobile);
       seenNameMobileKeys.add(nameMobileKey);
 
       result.push(this.removeInternalFields(this.formatActualUser(user)));
     }
 
-    /**
-     * Step 3:
-     * Push main ULB / STATE users.
-     *
-     * These are real submitter/admin accounts.
-     */
+    // Step 3: Main ULB / STATE submitter accounts
     for (const user of mainRoleUsers) {
       const normalizedMobile = this.normalizeMobile(user.mobile);
       const normalizedName = this.normalizeText(user.name);
       const nameMobileKey = `${normalizedName}|${normalizedMobile}`;
 
-      if (normalizedMobile && seenMobiles.has(normalizedMobile)) {
-        continue;
-      }
+      if (normalizedMobile && seenMobiles.has(normalizedMobile)) continue;
+      if (!normalizedMobile && seenNameMobileKeys.has(nameMobileKey)) continue;
 
-      if (!normalizedMobile && seenNameMobileKeys.has(nameMobileKey)) {
-        continue;
-      }
-
-      if (normalizedMobile) {
-        seenMobiles.add(normalizedMobile);
-      }
-
+      if (normalizedMobile) seenMobiles.add(normalizedMobile);
       seenNameMobileKeys.add(nameMobileKey);
 
       result.push(this.removeInternalFields(this.formatActualUser(user)));
     }
 
-    /**
-     * Step 4:
-     * Expand old embedded contacts from main ULB / STATE documents.
-     *
-     * But before adding any old contact:
-     *
-     * - If contact mobile already exists as user.mobile in any real user document,
-     *   skip old contact.
-     *
-     * - If contact was already added, skip duplicate.
-     */
+    // Step 4: Legacy embedded contacts — only shown when no real user shares the mobile
     for (const user of mainRoleUsers) {
       const legacyContacts = this.extractLegacyContacts(user);
 
@@ -512,50 +538,22 @@ export class UsersService {
         const normalizedName = this.normalizeText(contact.name);
         const normalizedMobile = this.normalizeMobile(contact.mobile);
 
-        /**
-         * No name and no mobile means useless contact.
-         */
-        if (!normalizedName && !normalizedMobile) {
-          continue;
-        }
+        if (!normalizedName && !normalizedMobile) continue;
 
-        /**
-         * Main important rule:
-         *
-         * If this contact number already exists as a real user.mobile,
-         * do not show old contact.
-         */
-        if (normalizedMobile && realUserByMobile.has(normalizedMobile)) {
-          continue;
-        }
+        // Skip if mobile belongs to a real user document
+        if (normalizedMobile && realUserByMobile.has(normalizedMobile)) continue;
 
         const nameMobileKey = `${normalizedName}|${normalizedMobile}`;
 
-        if (normalizedMobile && seenMobiles.has(normalizedMobile)) {
-          continue;
-        }
+        if (normalizedMobile && seenMobiles.has(normalizedMobile)) continue;
+        if (!normalizedMobile && seenNameMobileKeys.has(nameMobileKey)) continue;
 
-        if (!normalizedMobile && seenNameMobileKeys.has(nameMobileKey)) {
-          continue;
-        }
-
-        /**
-         * Optional fallback:
-         * If mobile is missing but same name already shown, skip.
-         * This avoids duplicate no-mobile legacy contacts.
-         */
         const alreadyExistsByName = result.some(
           (item) => this.normalizeText(item['name'] as string) === normalizedName && normalizedName !== '',
         );
+        if (!normalizedMobile && alreadyExistsByName) continue;
 
-        if (!normalizedMobile && alreadyExistsByName) {
-          continue;
-        }
-
-        if (normalizedMobile) {
-          seenMobiles.add(normalizedMobile);
-        }
-
+        if (normalizedMobile) seenMobiles.add(normalizedMobile);
         seenNameMobileKeys.add(nameMobileKey);
 
         result.push({
@@ -576,39 +574,37 @@ export class UsersService {
     };
   }
 
-  private normalizeText(value?: unknown): string {
-    if (typeof value !== 'string') {
-      return '';
-    }
+  /**
+   * Returns the permission matrix rows for the requester's scope.
+   * Used only for UI display — not a security decision.
+   */
+  getPermissionMatrix(requester: AuthUser): PermissionMatrixRow[] {
+    return requester.scope === Scope.STATE ? STATE_MATRIX : ULB_MATRIX;
+  }
 
+  // ─── Private helpers ───────────────────────────────────────────────────────
+
+  private normalizeText(value?: unknown): string {
+    if (typeof value !== 'string') return '';
     return value.trim().toLowerCase();
   }
-  private normalizeMobile(value?: unknown): string {
-    if (value === null || value === undefined) {
-      return '';
-    }
 
-    /**
-     * Converts:
-     * " 94140 33122 "
-     * "94140-33122"
-     * "+91 9414033122"
-     * into comparable number.
-     */
+  private normalizeMobile(value?: unknown): string {
+    if (value === null || value === undefined) return '';
+
     const digitsOnly = String(value).replace(/\D/g, '');
 
-    /**
-     * If Indian number with country code:
-     * 919414033122 -> 9414033122
-     */
+    // Strip Indian country code: 919414033122 → 9414033122
     if (digitsOnly.length === 12 && digitsOnly.startsWith('91')) {
       return digitsOnly.slice(2);
     }
 
     return digitsOnly;
   }
+
   private formatActualUser(user: Record<string, any>): Record<string, unknown> {
     return {
+      _id: user._id?.toString() ?? '',
       name: user.name?.trim() || '',
       designation: user.designation?.trim() || '',
       email: user.email?.trim() || '',
@@ -621,13 +617,13 @@ export class UsersService {
       isLegacyContact: false,
     };
   }
+
   private removeInternalFields(item: Record<string, unknown>): Record<string, unknown> {
-    const cleaned = { ...item };
-
+    const cleaned = { ...item }
     delete cleaned['rawRole'];
-
     return cleaned;
   }
+
   private extractLegacyContacts(user: Record<string, any>): Array<{
     name?: string;
     email?: string;
@@ -659,6 +655,7 @@ export class UsersService {
       },
     ];
   }
+
   async findUserContacts(
     id: string,
   ): Promise<{ name: string; designation: string; email?: string; mobile?: string }[]> {
@@ -674,18 +671,8 @@ export class UsersService {
 
     const groups = [
       { name: user.name, email: user.email, mobile: user.mobile, designation: user.designation },
-      {
-        name: user.accountantName,
-        email: user.accountantEmail,
-        mobile: user.accountantConatactNumber,
-        designation: '',
-      },
-      {
-        name: user.commissionerName,
-        email: user.commissionerEmail,
-        mobile: user.commissionerConatactNumber,
-        designation: '',
-      },
+      { name: user.accountantName, email: user.accountantEmail, mobile: user.accountantConatactNumber, designation: '' },
+      { name: user.commissionerName, email: user.commissionerEmail, mobile: user.commissionerConatactNumber, designation: '' },
       { name: user.departmentName, email: user.departmentEmail, mobile: user.departmentContactNumber, designation: '' },
     ];
 
