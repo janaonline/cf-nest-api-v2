@@ -540,8 +540,9 @@ export class UsersService {
 
         if (!normalizedName && !normalizedMobile) continue;
 
-        // Skip if mobile belongs to a real user document
-        if (normalizedMobile && realUserByMobile.has(normalizedMobile)) continue;
+        // Skip if mobile belongs to a real active user document.
+        // When showDeleted=true we're viewing archived data so we always include legacy contacts.
+        if (!query.showDeleted && normalizedMobile && realUserByMobile.has(normalizedMobile)) continue;
 
         const nameMobileKey = `${normalizedName}|${normalizedMobile}`;
 
