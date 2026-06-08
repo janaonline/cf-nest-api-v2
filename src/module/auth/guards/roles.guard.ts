@@ -11,7 +11,7 @@ type AuthenticatedRequest = Request & { user?: User };
 export class RolesGuard implements CanActivate {
   private readonly logger = new Logger(RolesGuard.name);
 
-  constructor(private readonly reflector: Reflector) { }
+  constructor(private readonly reflector: Reflector) {}
 
   canActivate(context: ExecutionContext): boolean {
     const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
@@ -21,10 +21,7 @@ export class RolesGuard implements CanActivate {
     if (isPublic) return true;
 
     const requiredRoles =
-      this.reflector.getAllAndOverride<Role[]>(ROLES_KEY, [
-        context.getHandler(),
-        context.getClass(),
-      ]) ?? [];
+      this.reflector.getAllAndOverride<Role[]>(ROLES_KEY, [context.getHandler(), context.getClass()]) ?? [];
 
     if (requiredRoles.length === 0) return true;
 
@@ -38,9 +35,7 @@ export class RolesGuard implements CanActivate {
 
     const hasRole = requiredRoles.includes(userRole);
     if (!hasRole) {
-      this.logger.warn(
-        `Insufficient permissions. Required: ${requiredRoles.join(', ')}, Got: ${userRole}`,
-      );
+      this.logger.warn(`Insufficient permissions. Required: ${requiredRoles.join(', ')}, Got: ${userRole}`);
       throw new ForbiddenException('Insufficient permissions');
     }
     return true;
