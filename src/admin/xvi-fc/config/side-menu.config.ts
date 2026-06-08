@@ -1,3 +1,4 @@
+/* eslint-disable prettier/prettier */
 import { SideMenuResponseDto } from '../dto/side-menu.dto';
 
 export type MenuRole = 'ULB' | 'STATE' | 'MOHUA' | 'DOE' | 'ADMIN';
@@ -24,6 +25,17 @@ export const SIDE_MENU_CONFIG: Record<MenuRole, (yearId: string) => SideMenuResp
             label: 'unified view',
             icon: 'bi bi-people-fill',
             featureKey: 'roles-teams-unified-view',
+          },
+        ],
+      },
+      {
+        label: 'Entry Conditions',
+        icon: 'bi bi-clipboard-data',
+        items: [
+          {
+            label: 'FY ' + yearId+ ' Conditions',
+            icon: 'bi bi-people-fill',
+            featureKey: 'ulb-forms',
           },
         ],
       },

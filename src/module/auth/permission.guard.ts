@@ -33,9 +33,7 @@ export class PermissionGuard implements CanActivate {
 
     const effectivePermissions = getEffectivePermissions(user);
 
-    const hasPermission = requiredPermissions.every((permission) =>
-      effectivePermissions.includes(permission),
-    );
+    const hasPermission = requiredPermissions.every((permission) => effectivePermissions.includes(permission));
 
     if (!hasPermission) {
       throw new ForbiddenException('You do not have permission to perform this action');
