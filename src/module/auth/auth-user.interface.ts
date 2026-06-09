@@ -3,15 +3,17 @@ import { Types } from 'mongoose';
 
 export interface AuthUser {
   _id: string;
-  role: UserRole;
-  scope: Scope;
-  accessLevel: AccessLevel;
+  /** Raw role string from the DB — may be any value from role.enum.ts or roles-xvi-fc.enum.ts */
+  role: string;
+  /** Derived from role at validate() time — null for non-XVI-FC roles (MoHUA, PMU, etc.) */
+  scope: Scope | null;
+  /** Derived from role at validate() time — null for non-XVI-FC roles */
+  accessLevel: AccessLevel | null;
   ulb?: Types.ObjectId | string | null;
   state?: Types.ObjectId | string | null;
   isActive?: boolean;
-  jti?: string;
+  sessionId?: string;
   exp?: number;
-  /** Per-user permission overrides loaded from the user document at JWT validation time. */
   permissionOverrides?: {
     allow: Permission[];
     deny: Permission[];

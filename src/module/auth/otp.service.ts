@@ -143,7 +143,7 @@ export class OtpService {
     const userId = (user._id as { toString(): string }).toString();
     await this.usersRepository.updateProfile(userId, { isXVIFCProfileVerified: true, status: 'APPROVED', isActive: true });
 
-    const tokens = await this.authService.generateTokens(userId);
+    const tokens = await this.authService.generateTokens(userId, 'WEB');
     await this.authService.saveRefreshToken(userId, tokens.refreshToken);
     this.authService.setRefreshCookie(res, tokens.refreshToken);
 

@@ -1,11 +1,8 @@
 export interface JwtPayload {
-  sub: string;
-  role?: string;
-  jti?: string;
-  scope?: string;
-  accessLevel?: string;
-  // email: string;
-  // role: string;
+  _id: string;
+  lh_id: string;
+  sessionId: string;
+  purpose: string;
   iat?: number;
   exp?: number;
 }
