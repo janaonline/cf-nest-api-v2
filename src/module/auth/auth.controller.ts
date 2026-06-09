@@ -75,8 +75,8 @@ export class AuthController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Logout and clear refresh token cookie' })
   @ApiResponse({ status: 200, description: 'Logged out successfully' })
-  logout(@CurrentUser() user: { _id: string; jti?: string; exp?: number }, @Res({ passthrough: true }) res: Response) {
-    return this.authService.logout(user._id, res, user.jti, user.exp);
+  logout(@CurrentUser() user: { _id: string; sessionId?: string; exp?: number }, @Res({ passthrough: true }) res: Response) {
+    return this.authService.logout(user._id, res, user.sessionId, user.exp);
   }
 
   @Public()

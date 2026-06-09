@@ -367,7 +367,7 @@ export class UsersService {
     }
 
     const filter: FilterQuery<User> = {
-      isDeleted: query.showDeleted === true,
+      isDeleted: query.showDeleted === false,
     };
 
     let ulbDetails: Record<string, unknown> | undefined;
@@ -542,7 +542,7 @@ export class UsersService {
 
         // Skip if mobile belongs to a real active user document.
         // When showDeleted=true we're viewing archived data so we always include legacy contacts.
-        if (!query.showDeleted && normalizedMobile && realUserByMobile.has(normalizedMobile)) continue;
+        if ( normalizedMobile && realUserByMobile.has(normalizedMobile)) continue;
 
         const nameMobileKey = `${normalizedName}|${normalizedMobile}`;
 

@@ -166,7 +166,7 @@ export class LoginService {
       await this.usersRepository.resetLoginAttempts(userId);
     }
 
-    const tokens = await this.authService.generateTokens(userId);
+    const tokens = await this.authService.generateTokens(userId, dto.type ?? 'WEB');
     await this.authService.saveRefreshToken(userId, tokens.refreshToken);
     await this.usersRepository.updateLastLogin(userId);
     this.authService.setRefreshCookie(res, tokens.refreshToken);

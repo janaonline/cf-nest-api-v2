@@ -232,41 +232,59 @@ export function assertAdminSameScope(
 // ─── 5. List users ─────────────────────────────────────────────────────────
 
 /**
- * Used by listUsers.
- *
  * Locks the incoming query to the requester's own ULB or state.
- * Throws ForbiddenException when:
- *   - the requester has no valid ULB/state mapping
- *   - the query explicitly requests a different ULB/state
  *
- * Returns the locked query (always overwrites ulbId / stateId).
+ * Edge cases enforced:
+ *   - Both ulbId + stateId in the same request → 400
+ *   - ULB-scope user querying a stateId → 403
+ *   - STATE-scope user querying a ulbId → 403
+ *   - ULB-scope user with no ULB mapping → 403
+ *   - STATE-scope user with no state mapping → 403
+ *   - Either scope querying a different ULB/state than their own → 403
+ *   - ADMIN can query any ULB or state (must still provide one via the service-layer check)
+ *   - Any other role (MoHUA, PMU, …) never reaches here — PermissionGuard blocks them
  */
-export function buildScopedQuery(
-  requester: AuthUser,
-  query: ListUsersQueryDto,
-): ListUsersQueryDto {
-  const requesterUlbId   = toObjectIdString(requester.ulb);
+export function buildScopedQuery(requester: AuthUser, query: ListUsersQueryDto): ListUsersQueryDto {
+  if (query.ulbId && query.stateId) {
+    throw new BadRequestException('Provide either ulbId or stateId, not both');
+  }
+
+  const requesterUlbId = toObjectIdString(requester.ulb);
   const requesterStateId = toObjectIdString(requester.state);
 
   if (requester.scope === Scope.ULB) {
     if (!requesterUlbId || !Types.ObjectId.isValid(requesterUlbId)) {
-      throw new ForbiddenException('You are not mapped to any ULB');
+      throw new ForbiddenException('Your account is not mapped to any ULB');
+    }
+    if (query.stateId) {
+      throw new ForbiddenException('ULB users cannot query a state-scoped user list');
     }
     if (query.ulbId && query.ulbId !== requesterUlbId) {
-      throw new ForbiddenException('You can only view users for your own ULB');
+      throw new ForbiddenException('You can only view users within your own ULB');
     }
+    // Always lock to requester's own ULB regardless of what was passed
     return { ulbId: requesterUlbId };
   }
 
   if (requester.scope === Scope.STATE) {
     if (!requesterStateId || !Types.ObjectId.isValid(requesterStateId)) {
-      throw new ForbiddenException('You are not mapped to any state');
+      throw new ForbiddenException('Your account is not mapped to any state');
+    }
+    if (query.ulbId) {
+      throw new ForbiddenException('STATE users cannot query a ULB-scoped user list');
     }
     if (query.stateId && query.stateId !== requesterStateId) {
-      throw new ForbiddenException('You can only view users for your own state');
+      throw new ForbiddenException('You can only view users within your own state');
     }
+    // Always lock to requester's own state regardless of what was passed
     return { stateId: requesterStateId };
   }
 
-  return query;
+  if (requester.scope === Scope.ADMIN) {
+    // ADMIN can query any ULB or state; service layer enforces that one must be provided
+    return query;
+  }
+
+  // Any other role should have been rejected by PermissionGuard before reaching here
+  throw new ForbiddenException('You do not have access to user listings');
 }

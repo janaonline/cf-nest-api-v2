@@ -2,21 +2,21 @@
 import { randomUUID } from 'crypto';
 import { ConflictException, HttpException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { InjectModel } from '@nestjs/mongoose';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import type { Response } from 'express';
 import axios from 'axios';
 import type { StringValue } from 'ms';
+import { Model, Types } from 'mongoose';
 import { RedisService } from 'src/core/services/redis/redis.service';
 import { UserDocument } from 'src/schemas/user/user.schema';
+import { LoginHistory } from 'src/schemas/user/login-history.schema';
 import { UsersRepository } from 'src/users/users.repository';
 import { RegisterDto } from './dto/register.dto';
 import { SetPasswordDto } from './dto/set-password.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { AuthResponse, AuthTokens } from './types/auth-tokens.type';
-import { parseUserRole } from './roles-xvi-fc.helper';
-import { Types } from 'mongoose';
-import { UserRole } from './otp/otp-contracts';
 
 @Injectable()
 export class AuthService {
@@ -25,6 +25,7 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly redisService: RedisService,
+    @InjectModel(LoginHistory.name) private readonly loginHistoryModel: Model<LoginHistory>,
   ) { }
 
   async getUserById(id: string) {
@@ -32,11 +33,11 @@ export class AuthService {
     return u ? { email: u.email, role: u.role, isActive: u.isActive, ulb: u.ulb, state: u.state } : null;
   }
 
-  async logout(userId: string, res: Response, jti?: string, exp?: number): Promise<{ success: boolean }> {
-    if (jti && exp) {
+  async logout(userId: string, res: Response, sessionId?: string, exp?: number): Promise<{ success: boolean }> {
+    if (sessionId && exp) {
       const ttl = exp - Math.floor(Date.now() / 1000);
       if (ttl > 0) {
-        await this.redisService.set(`bl:${jti}`, '1', ttl);
+        await this.redisService.set(`bl:${sessionId}`, '1', ttl);
       }
     }
     await this.usersRepository.updateRefreshToken(userId, null);
@@ -119,37 +120,28 @@ export class AuthService {
     }
   }
 
-  async generateTokens(userId: string): Promise<AuthTokens> {
+  async generateTokens(userId: string, purpose = 'WEB'): Promise<AuthTokens> {
     const jwtExpires = (this.configService.get<string>('JWT_EXPIRES_IN') ?? '15m') as StringValue;
     const refreshExpires = (this.configService.get<string>('JWT_REFRESH_EXPIRES_IN') ?? '7d') as StringValue;
-     const user = await this.usersRepository.findById(userId);
 
-  if (!user) {
-    throw new UnauthorizedException('User not found');
-  }
+    // Create a login history record for this session — gives us lh_id
+    const lhDoc = await this.loginHistoryModel.create({ user: new Types.ObjectId(userId) });
+    const lhId = (lhDoc._id as Types.ObjectId).toString();
 
-  // user.role may come from a different UserRole declaration (otp-contracts)
-  // cast to any to avoid incompatible type errors between separate enum declarations
-  const parsedRole = parseUserRole(user.role as unknown as any);
+    const payload = {
+      _id: userId,
+      lh_id: lhId,
+      sessionId: randomUUID(),
+      purpose,
+    };
 
-  const payload = {
-    sub: userId,
-    role: user.role,
-    ...(parsedRole && {
-      scope: parsedRole.scope,
-      accessLevel: parsedRole.accessLevel,
-    }),
-    ulb: this.toObjectIdString(user.ulb),
-    state: this.toObjectIdString(user.state),
-    jti: randomUUID(),
-  };
     const [accessToken, refreshToken] = await Promise.all([
+      this.jwtService.signAsync(payload, {
+        secret: this.configService.get<string>('JWT_SECRET'),
+        expiresIn: jwtExpires,
+      }),
       this.jwtService.signAsync(
-          payload,
-        { secret: this.configService.get<string>('JWT_SECRET'), expiresIn: jwtExpires },
-      ),
-      this.jwtService.signAsync(
-       { sub: userId },
+        { sub: userId },
         { secret: this.configService.get<string>('JWT_REFRESH_SECRET'), expiresIn: refreshExpires },
       ),
     ]);
