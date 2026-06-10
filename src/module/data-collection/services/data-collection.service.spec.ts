@@ -41,6 +41,30 @@ const makeComputedLegend = (nmamCode: string, rules = []) => ({
   isComputed: true,
 });
 
+/** Returns legends for every source code used in DATA_COLLECTION_COMPUTED_CONFIG.
+ *  Required so validateComputedTotals runs all four metric checks. */
+const makeComputedSourceLegends = () =>
+  [
+    '110',
+    '120',
+    '130',
+    '140',
+    '150',
+    '160',
+    '170',
+    '171',
+    '180', // income / revenue / ownRevenue
+    '210',
+    '220',
+    '230',
+    '240',
+    '250',
+    '260',
+    '272',
+    '280',
+    '290', // expenditure
+  ].map((code) => makeLegend(code));
+
 const validUlbId = '5dd24729437ba31f7eb42eee';
 const validStateId = '5dcf9d7216a06aed41c748dd';
 const validYearId = '606aafb14dff55e6c075d3ae';
@@ -2197,109 +2221,163 @@ describe('DataCollectionService', () => {
     });
   });
 
-  // ─── computed legend validation ───────────────────────────────────────────
+  // ─── computed totals (config-based) ──────────────────────────────────────
 
-  describe('computed legend validation', () => {
-    const sumRule = { type: 'formula', operation: 'sum', operands: ['110', '120', '130'] };
-    const gtZeroRule = { type: 'comparison', operator: '>', value: 0 };
-    const neZeroRule = { type: 'comparison', operator: '!==', value: 0 };
-
-    const runWithComputed = (computedRules: object[], lineItems: Record<string, unknown>) => {
-      const legends = [
-        makeLegend('110'),
-        makeLegend('120'),
-        makeLegend('130'),
-        makeComputedLegend('computed.totalIncome', computedRules as never),
-      ];
-      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(legends);
-      return service
-        .create({ ulbCode: validUlbCode, yearCode: validYearCode, lineItems } as never, stateClient)
-        .catch((e: unknown) => e);
-    };
-
-    it('computes sum from submitted source codes and passes comparison', async () => {
-      const result = await runWithComputed([sumRule, neZeroRule], { '110': 500, '120': 300, '130': 200 });
-      expect(result).not.toBeInstanceOf(BadRequestException);
+  describe('computed totals', () => {
+    const baseComputedPayload = (lineItems: Record<string, unknown>) => ({
+      ulbCode: validUlbCode,
+      yearCode: validYearCode,
+      lineItems,
     });
 
-    it('!== 0 passes when computed sum is non-zero', async () => {
-      const result = await runWithComputed([sumRule, neZeroRule], { '110': 100 });
-      expect(result).not.toBeInstanceOf(BadRequestException);
+    it('submit stores computed object on the document', async () => {
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(makeComputedSourceLegends());
+      await service.create(baseComputedPayload({ '110': 500, '210': 300 }) as never, stateClient);
+      const modelCallArg = (dcModel.mock.calls[0] as unknown[][])[0] as unknown as Record<string, unknown>;
+      expect(modelCallArg['computed']).toMatchObject({
+        totIncome: 500,
+        totExpenditure: 300,
+        totRevenue: 500,
+        totOwnRevenue: 500,
+      });
     });
 
-    it('!== 0 fails when computed sum is 0', async () => {
-      const result = await runWithComputed([sumRule, neZeroRule], { '110': 0, '120': 0, '130': 0 });
-      expect(result).toBeInstanceOf(BadRequestException);
-      const body = (result as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
-      expect(body.errors.some((e) => e.lineItemCode === 'computed.totalIncome')).toBe(true);
+    it('computed is NOT stored inside lineItems', async () => {
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(makeComputedSourceLegends());
+      await service.create(baseComputedPayload({ '110': 100, '210': 200 }) as never, stateClient);
+      const modelCallArg = (dcModel.mock.calls[0] as unknown[][])[0] as unknown as Record<string, unknown>;
+      const storedKeys = Object.keys(modelCallArg['lineItems'] as Record<string, unknown>);
+      expect(storedKeys.some((k) => k.startsWith('computed.'))).toBe(false);
+      expect(storedKeys).toContain('110');
     });
 
-    it('> 0 fails when computed sum is 0', async () => {
-      const result = await runWithComputed([sumRule, gtZeroRule], { '110': 0, '120': 0 });
-      expect(result).toBeInstanceOf(BadRequestException);
-      const body = (result as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
-      expect(body.errors[0].lineItemCode).toBe('computed.totalIncome');
-      expect(body.errors[0].message).toContain('must be > 0');
-    });
+    it('modify recomputes computed from merged final line items', async () => {
+      const existingDoc = {
+        templateVersion: '2026.1',
+        stateId: new Types.ObjectId(validStateId),
+        yearCode: validYearCode,
+        lineItems: new Map<string, number>([['110', 300]]),
+        computed: { totIncome: 0, totExpenditure: 0, totRevenue: 0, totOwnRevenue: 0 },
+        save: jest.fn().mockResolvedValue(
+          makeDocSaveResult({
+            lineItems: new Map([
+              ['110', 300],
+              ['210', 400],
+            ]),
+          }),
+        ),
+      };
+      dcModel.findOne.mockReturnValue(existingDoc);
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(makeComputedSourceLegends());
 
-    it('> 0 fails and reports the negative computed value as received', async () => {
-      const result = await runWithComputed([sumRule, gtZeroRule], { '110': -100 });
-      expect(result).toBeInstanceOf(BadRequestException);
-      const body = (result as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
-      expect(body.errors[0].received).toBe(-100);
-    });
-
-    it('missing source operands are ignored (sparse)', async () => {
-      // Only '110' submitted; '120' and '130' are absent — still valid
-      const result = await runWithComputed([sumRule, neZeroRule], { '110': 100 });
-      expect(result).not.toBeInstanceOf(BadRequestException);
-    });
-
-    it('explicit 0 source values are included in the computation', async () => {
-      // 0 + 0 + 0 = 0 — should fail !== 0
-      const result = await runWithComputed([sumRule, neZeroRule], { '110': 0, '120': 0, '130': 0 });
-      expect(result).toBeInstanceOf(BadRequestException);
-      const body = (result as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
-      expect(body.errors.some((e) => e.lineItemCode === 'computed.totalIncome')).toBe(true);
-    });
-
-    it('errors when none of the source operands are submitted', async () => {
-      const result = await runWithComputed([sumRule], {});
-      expect(result).toBeInstanceOf(BadRequestException);
-      const body = (result as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
-      expect(body.errors[0].lineItemCode).toBe('computed.totalIncome');
-      expect(body.errors[0].message).toContain(
-        'cannot be computed because none of its source line items were submitted',
+      await service.update(
+        { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '210': 400 } } as never,
+        stateClient,
       );
+
+      // After merge: { '110': 300, '210': 400 }
+      expect(existingDoc.computed).toEqual({
+        totIncome: 300,
+        totExpenditure: 400,
+        totRevenue: 300,
+        totOwnRevenue: 300,
+      });
     });
 
-    it('errors when computed rule references an unknown operand code', async () => {
-      const ruleWithUnknown = { type: 'formula', operation: 'sum', operands: ['110', '999_UNKNOWN'] };
-      const legends = [makeLegend('110'), makeComputedLegend('computed.totalIncome', [ruleWithUnknown] as never)];
-      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(legends);
+    it('missing source line item contributes 0 to its total', async () => {
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(makeComputedSourceLegends());
+      await service.create(baseComputedPayload({ '110': 400, '210': 200 }) as never, stateClient);
+      const modelCallArg = (dcModel.mock.calls[0] as unknown[][])[0] as unknown as Record<string, unknown>;
+      const computed = modelCallArg['computed'] as Record<string, number>;
+      // '120', '130' … not submitted → contribute 0; totIncome = 400 only from '110'
+      expect(computed.totIncome).toBe(400);
+      // '220', '230' … not submitted → totExpenditure = 200 only from '210'
+      expect(computed.totExpenditure).toBe(200);
+    });
+
+    it('computed source code submitted but absent from template is rejected as unknown code', async () => {
+      // '110' is an income source code in the config but is not in this legend set
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce([makeLegend('999')]);
       const err = await service
-        .create({ ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 100 } } as never, stateClient)
+        .create(baseComputedPayload({ '110': 100 }) as never, stateClient)
         .catch((e: unknown) => e);
       expect(err).toBeInstanceOf(BadRequestException);
       const body = (err as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
-      expect(body.errors[0].message).toContain('refers to unknown line item code 999_UNKNOWN');
+      expect(body.errors[0].lineItemCode).toBe('110');
+      expect(body.errors[0].message).toContain('does not exist in template version');
     });
 
-    it('computed values are not stored in lineItems', async () => {
-      const legends = [
-        makeLegend('110'),
-        makeLegend('120'),
-        makeLegend('130'),
-        makeComputedLegend('computed.totalIncome', [sumRule, neZeroRule] as never),
-      ];
-      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(legends);
-      await service.create(
-        { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 100 } } as never,
-        stateClient,
-      );
-      const modelCallArg = (dcModel.mock.calls[0] as unknown[][])[0] as unknown as Record<string, unknown>;
-      expect(Object.keys(modelCallArg['lineItems'] as Record<string, unknown>)).not.toContain('computed.totalIncome');
-      expect(Object.keys(modelCallArg['lineItems'] as Record<string, unknown>)).toContain('110');
+    it('totIncome fails when computed value equals 0 (!== 0 violated)', async () => {
+      // Submit only expenditure — income source codes all contribute 0
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(makeComputedSourceLegends());
+      const err = await service
+        .create(baseComputedPayload({ '210': 500 }) as never, stateClient)
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BadRequestException);
+      const body = (err as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
+      const issue = body.errors.find((e) => e.lineItemCode === 'computed.totIncome');
+      expect(issue).toBeDefined();
+      expect(issue?.expectedCondition).toBe('!== 0');
+      expect(issue?.received).toBe(0);
+    });
+
+    it('totExpenditure fails when computed value is 0 (> 0 violated)', async () => {
+      // Submit only income — no expenditure codes submitted → totExpenditure = 0
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(makeComputedSourceLegends());
+      const err = await service
+        .create(baseComputedPayload({ '110': 500 }) as never, stateClient)
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BadRequestException);
+      const body = (err as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
+      const issue = body.errors.find((e) => e.lineItemCode === 'computed.totExpenditure');
+      expect(issue).toBeDefined();
+      expect(issue?.expectedCondition).toBe('> 0');
+      expect(issue?.received).toBe(0);
+    });
+
+    it('totRevenue fails when computed value is 0 (> 0 violated)', async () => {
+      // Submit only expenditure — revenue uses income source codes, all 0
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(makeComputedSourceLegends());
+      const err = await service
+        .create(baseComputedPayload({ '210': 500 }) as never, stateClient)
+        .catch((e: unknown) => e);
+      const body = (err as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
+      const issue = body.errors.find((e) => e.lineItemCode === 'computed.totRevenue');
+      expect(issue).toBeDefined();
+      expect(issue?.expectedCondition).toBe('> 0');
+      expect(issue?.received).toBe(0);
+    });
+
+    it('totOwnRevenue fails when computed value is negative (>= 0 violated)', async () => {
+      // '110' is in ownRevenue codes; negative value makes totOwnRevenue < 0
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(makeComputedSourceLegends());
+      const err = await service
+        .create(baseComputedPayload({ '110': -100, '210': 500 }) as never, stateClient)
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BadRequestException);
+      const body = (err as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
+      const issue = body.errors.find((e) => e.lineItemCode === 'computed.totOwnRevenue');
+      expect(issue).toBeDefined();
+      expect(issue?.expectedCondition).toBe('>= 0');
+      expect(issue?.received).toBe(-100);
+    });
+
+    it('computed validation error uses expectedCondition, not numeric expected', async () => {
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(makeComputedSourceLegends());
+      const err = await service
+        .create(baseComputedPayload({ '210': 500 }) as never, stateClient)
+        .catch((e: unknown) => e);
+      const body = (err as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
+      const issue = body.errors.find((e) => e.lineItemCode === 'computed.totIncome');
+      expect(issue).toBeDefined();
+      expect(issue).not.toHaveProperty('expected');
+      expect(issue?.expectedCondition).toBeDefined();
+    });
+
+    it('computed validation passes when all four totals satisfy their rules', async () => {
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(makeComputedSourceLegends());
+      const result = await service.create(baseComputedPayload({ '110': 100, '210': 200 }) as never, stateClient);
+      expect(result).not.toBeInstanceOf(BadRequestException);
     });
   });
 

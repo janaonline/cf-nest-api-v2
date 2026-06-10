@@ -1,6 +1,14 @@
 import { Types } from 'mongoose';
-import type { Rule } from 'src/module/line-items-legends/types';
+import type { LineItemLegendForValidation, Rule } from 'src/module/line-items-legends/types';
 import { DataCollection } from '../entities/data-collection.schema';
+
+/** Computed financial totals derived from submitted line items. Never accepted from client. */
+export type ComputedValues = {
+  totIncome: number;
+  totExpenditure: number;
+  totRevenue: number;
+  totOwnRevenue: number;
+};
 
 /** A single validation error for a submitted line item. */
 export type DataCollectionValidationIssue = {
@@ -66,4 +74,21 @@ export type DataCollectionResponseSource = Pick<
   'templateVersion' | 'validationStatus' | 'status' | 'createdAt' | 'updatedAt'
 > & {
   lineItems: Map<string, number> | Record<string, number>;
+  computed?: ComputedValues;
+};
+
+export type ValidationContext = {
+  /** Validated finite-number values keyed by nmamCode. Sparse — only submitted. */
+  submittedLineItems: Record<string, number>;
+  /** Codes that were submitted but had invalid (non-finite) values; already reported. */
+  invalidSubmittedCodes: Set<string>;
+  legendByCode: Map<string, LineItemLegendForValidation>;
+  /** Legend records for every code that passed key + value validation. */
+  submittedLegendItems: LineItemLegendForValidation[];
+  computed: ComputedValues;
+};
+
+export type ValidationOutcome = DataCollectionValidationResult & {
+  computed: ComputedValues;
+  submittedLineItems: Record<string, number>;
 };

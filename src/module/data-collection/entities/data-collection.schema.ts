@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
+import type { ComputedValues } from '../types/data-collection.types';
 
 export const CODE = 'nmamCode';
 
@@ -51,6 +52,18 @@ export class DataCollection {
 
   @Prop({ type: String, trim: true })
   reversalReason?: string;
+
+  @Prop({
+    type: {
+      totIncome: { type: Number, required: true },
+      totExpenditure: { type: Number, required: true },
+      totRevenue: { type: Number, required: true },
+      totOwnRevenue: { type: Number, required: true },
+    },
+    required: true,
+    _id: false,
+  })
+  computed!: ComputedValues;
 }
 
 export type DataCollectionDocument = HydratedDocument<DataCollection>;
