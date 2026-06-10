@@ -5,21 +5,39 @@ export type LineItemLegendForValidation = {
   level: number;
   parentCode: string | null;
   rules: Rule[];
+  isComputed?: boolean;
 };
 
-type FormulaRule = {
+type FormulaSumRule = {
   type: 'formula';
-  operation: 'sum' | 'diff';
+  operation: 'sum';
   operands: string[];
+};
+
+type FormulaDiffRule = {
+  type: 'formula';
+  operation: 'diff';
+  operands: string[];
+};
+
+export type FormulaLinearOperand = {
+  code: string;
+  sign: 1 | -1;
+};
+
+type FormulaLinearRule = {
+  type: 'formula';
+  operation: 'linear';
+  operands: FormulaLinearOperand[];
 };
 
 type ComparisonRule = {
   type: 'comparison';
-  operator: '<=' | '>=' | '===' | '<' | '>';
+  operator: '<=' | '>=' | '===' | '!==' | '<' | '>';
   value: number;
 };
 
-export type Rule = FormulaRule | ComparisonRule;
+export type Rule = FormulaSumRule | FormulaDiffRule | FormulaLinearRule | ComparisonRule;
 
 export const ACCOUNT_HEADS = {
   INCOME: 'INCOME',
@@ -27,6 +45,7 @@ export const ACCOUNT_HEADS = {
   BALANCE_SHEET: 'BALANCE_SHEET',
   ASSET: 'ASSET',
   LIABILITY: 'LIABILITY',
+  COMPUTED: 'COMPUTED',
 } as const;
 
 export type AccountHead = (typeof ACCOUNT_HEADS)[keyof typeof ACCOUNT_HEADS];
@@ -51,6 +70,7 @@ export type SanitizedLineItem = {
   isActive: boolean;
   rules: Rule[];
   templateVersion: string;
+  isComputed?: boolean;
 };
 
 export type ImportDryRunResult = {

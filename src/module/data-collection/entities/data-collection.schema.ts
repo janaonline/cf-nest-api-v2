@@ -12,6 +12,9 @@ export class DataCollection {
   createdAt!: Date;
   updatedAt!: Date;
 
+  @Prop({ type: Types.ObjectId, ref: 'ApiClient', required: true, index: true })
+  apiClientId!: Types.ObjectId;
+
   @Prop({ type: Types.ObjectId, ref: 'Ulb', required: true })
   ulbId!: Types.ObjectId;
 

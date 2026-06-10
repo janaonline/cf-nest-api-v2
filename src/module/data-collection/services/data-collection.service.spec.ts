@@ -1,4 +1,10 @@
-import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  InternalServerErrorException,
+  NotFoundException,
+} from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Types } from 'mongoose';
@@ -25,6 +31,16 @@ const makeLegend = (nmamCode: string, rules = []) => ({
   rules,
 });
 
+const makeComputedLegend = (nmamCode: string, rules = []) => ({
+  nmamCode,
+  name: `Computed ${nmamCode}`,
+  accountHead: 'COMPUTED',
+  level: 1,
+  parentCode: null,
+  rules,
+  isComputed: true,
+});
+
 const validUlbId = '5dd24729437ba31f7eb42eee';
 const validStateId = '5dcf9d7216a06aed41c748dd';
 const validYearId = '606aafb14dff55e6c075d3ae';
@@ -38,6 +54,15 @@ const stateClient: ApiClientContext = {
   clientId: 'c1',
   actorType: 'STATE',
   stateId: validStateId,
+  scopes: [],
+};
+
+const ulbClient: ApiClientContext = {
+  apiClientId: validApiClientId,
+  clientId: 'c2',
+  actorType: 'ULB',
+  stateId: validStateId,
+  ulbId: validUlbId,
   scopes: [],
 };
 
@@ -55,12 +80,18 @@ const removedAuditFields = ['clientId', 'actorType', 'ulbCode', 'yearCode', 'sub
 
 const mockDate = new Date('2024-01-01T00:00:00.000Z');
 
+type SavedDataCollectionOverrides = Partial<{
+  templateVersion: string;
+  validationStatus: 'VALID' | 'WARNING';
+  status: 'ACTIVE';
+  lineItems: Map<string, number>;
+}>;
+
 /** Builds a minimal saved document returned by Mongoose save(). */
-const makeDocSaveResult = (
-  overrides: Partial<{ templateVersion: string; validationStatus: string; lineItems: Map<string, number> }> = {},
-) => ({
+const makeDocSaveResult = (overrides: SavedDataCollectionOverrides = {}) => ({
   templateVersion: overrides.templateVersion ?? '2026.1',
   validationStatus: overrides.validationStatus ?? 'VALID',
+  status: overrides.status ?? 'ACTIVE',
   lineItems: overrides.lineItems ?? new Map<string, number>(),
   createdAt: mockDate,
   updatedAt: mockDate,
@@ -91,6 +122,7 @@ const mockUlbModel = { find: jest.fn() };
 const mockYearModel = { find: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue([]) }) };
 
 const mockAuthorizationService = {
+  validateCanAccessUlb: jest.fn().mockResolvedValue(undefined),
   validateCanSubmitForUlb: jest.fn().mockResolvedValue(undefined),
   validateCanModifyForUlb: jest.fn().mockResolvedValue(undefined),
   getAllowedUlbFilter: jest.fn().mockReturnValue({ isActive: true }),
@@ -130,6 +162,47 @@ const expectNoRemovedAuditFields = (arg: Record<string, unknown>) => {
   }
 };
 
+type ReadDataCollectionRecord = {
+  _id: Types.ObjectId;
+  __v: number;
+  ulbId: Types.ObjectId;
+  stateId: Types.ObjectId;
+  yearId: Types.ObjectId;
+  templateVersion: string;
+  validationStatus: 'VALID' | 'WARNING';
+  status: 'ACTIVE';
+  isActive: boolean;
+  lineItems: Map<string, number> | Record<string, number>;
+  createdAt: Date;
+  updatedAt: Date;
+  reversedAt?: Date;
+  reversedBy?: Types.ObjectId;
+  reversalReason?: string;
+};
+
+const makeReadRecord = (overrides: Partial<ReadDataCollectionRecord> = {}): ReadDataCollectionRecord => ({
+  _id: new Types.ObjectId(),
+  __v: 0,
+  ulbId: new Types.ObjectId(validUlbId),
+  stateId: new Types.ObjectId(validStateId),
+  yearId: new Types.ObjectId(validYearId),
+  templateVersion: '2026.1',
+  validationStatus: 'VALID',
+  status: 'ACTIVE',
+  isActive: true,
+  lineItems: new Map<string, number>([
+    ['110', 500],
+    ['120', 0],
+  ]),
+  createdAt: mockDate,
+  updatedAt: mockDate,
+  ...overrides,
+});
+
+const makeFindOneLean = (result: ReadDataCollectionRecord | null) => ({
+  lean: jest.fn().mockResolvedValue(result),
+});
+
 // ─── Test suite ────────────────────────────────────────────────────────────────
 
 describe('DataCollectionService', () => {
@@ -142,6 +215,9 @@ describe('DataCollectionService', () => {
     jest.clearAllMocks();
     mockUlbModel.find.mockReturnValue(defaultUlbChain);
     mockYearModel.find.mockReturnValue({ lean: jest.fn().mockResolvedValue([]) });
+    mockAuthorizationService.validateCanAccessUlb.mockResolvedValue(undefined);
+    mockAuthorizationService.validateCanSubmitForUlb.mockResolvedValue(undefined);
+    mockAuthorizationService.validateCanModifyForUlb.mockResolvedValue(undefined);
     mockReferenceResolverService.resolveUlbByCode.mockResolvedValue({
       ulbId: new Types.ObjectId(validUlbId),
       stateId: new Types.ObjectId(validStateId),
@@ -356,6 +432,185 @@ describe('DataCollectionService', () => {
 
   // ─── create ───────────────────────────────────────────────────────────────
 
+  describe('findOneByUlbAndYear', () => {
+    const query = { ulbCode: validUlbCode, yearCode: validYearCode };
+
+    it('returns active record by ulbCode and yearCode', async () => {
+      dcModel.findOne.mockReturnValueOnce(makeFindOneLean(makeReadRecord()));
+
+      const result = await service.findOneByUlbAndYear(query, stateClient);
+
+      expect(mockReferenceResolverService.resolveUlbByCode).toHaveBeenCalledWith(validUlbCode);
+      expect(mockReferenceResolverService.resolveYearByCode).toHaveBeenCalledWith(validYearCode);
+      expect(result).toEqual({
+        ulbCode: validUlbCode,
+        yearCode: validYearCode,
+        templateVersion: '2026.1',
+        validationStatus: 'VALID',
+        status: 'ACTIVE',
+        lineItems: { '110': 500, '120': 0 },
+        createdAt: mockDate,
+        updatedAt: mockDate,
+      });
+    });
+
+    it('queries only active submitted records with resolved ids', async () => {
+      dcModel.findOne.mockReturnValueOnce(makeFindOneLean(makeReadRecord()));
+      await service.findOneByUlbAndYear(query, stateClient);
+
+      const filterArg = (dcModel.findOne.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(filterArg).toMatchObject({
+        ulbId: new Types.ObjectId(validUlbId),
+        yearId: new Types.ObjectId(validYearId),
+        isActive: true,
+        status: 'ACTIVE',
+      });
+    });
+
+    it('uses lean for the read-only data collection query', async () => {
+      const chain = makeFindOneLean(makeReadRecord());
+      dcModel.findOne.mockReturnValueOnce(chain);
+      await service.findOneByUlbAndYear(query, stateClient);
+      expect(chain.lean).toHaveBeenCalled();
+    });
+
+    it('applies optional templateVersion', async () => {
+      dcModel.findOne.mockReturnValueOnce(makeFindOneLean(makeReadRecord()));
+      await service.findOneByUlbAndYear({ ...query, templateVersion: '2026.1' }, stateClient);
+
+      const filterArg = (dcModel.findOne.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(filterArg['templateVersion']).toBe('2026.1');
+    });
+
+    it('ULB client can fetch own ULB data', async () => {
+      dcModel.findOne.mockReturnValueOnce(makeFindOneLean(makeReadRecord()));
+      await service.findOneByUlbAndYear(query, ulbClient);
+      expect(mockAuthorizationService.validateCanAccessUlb).toHaveBeenCalledWith(ulbClient, validUlbId);
+    });
+
+    it('ULB client cannot fetch another ULB data', async () => {
+      mockAuthorizationService.validateCanAccessUlb.mockRejectedValueOnce(
+        new ForbiddenException('Client is not allowed to access this ULB.'),
+      );
+
+      await expect(service.findOneByUlbAndYear(query, ulbClient)).rejects.toThrow(ForbiddenException);
+      expect(dcModel.findOne).not.toHaveBeenCalled();
+    });
+
+    it('State client can fetch ULB under its state', async () => {
+      dcModel.findOne.mockReturnValueOnce(makeFindOneLean(makeReadRecord()));
+      await service.findOneByUlbAndYear(query, stateClient);
+      expect(mockAuthorizationService.validateCanAccessUlb).toHaveBeenCalledWith(stateClient, validUlbId);
+    });
+
+    it('State client cannot fetch ULB outside its state', async () => {
+      mockAuthorizationService.validateCanAccessUlb.mockRejectedValueOnce(
+        new ForbiddenException('Client is not allowed to access this ULB.'),
+      );
+
+      await expect(service.findOneByUlbAndYear(query, stateClient)).rejects.toThrow(ForbiddenException);
+      expect(dcModel.findOne).not.toHaveBeenCalled();
+    });
+
+    it('reversed record is not returned', async () => {
+      dcModel.findOne.mockReturnValueOnce(makeFindOneLean(null));
+
+      await expect(service.findOneByUlbAndYear(query, stateClient)).rejects.toThrow(NotFoundException);
+      const filterArg = (dcModel.findOne.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(filterArg['status']).toBe('ACTIVE');
+    });
+
+    it('inactive record is not returned', async () => {
+      dcModel.findOne.mockReturnValueOnce(makeFindOneLean(null));
+
+      await expect(service.findOneByUlbAndYear(query, stateClient)).rejects.toThrow(NotFoundException);
+      const filterArg = (dcModel.findOne.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(filterArg['isActive']).toBe(true);
+    });
+
+    it('not found throws NotFoundException with data collection error code', async () => {
+      dcModel.findOne.mockReturnValueOnce(makeFindOneLean(null));
+
+      const err = await service.findOneByUlbAndYear(query, stateClient).catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(NotFoundException);
+      expect((err as NotFoundException).message).toBe(
+        `Financial data for ulbCode: ${validUlbCode} and yearCode: ${validYearCode} does not exist.`,
+      );
+      expect((err as NotFoundException).getResponse()).toMatchObject({ code: 'DATA_COLLECTION_NOT_FOUND' });
+    });
+
+    it('not-found message without templateVersion omits templateVersion', async () => {
+      dcModel.findOne.mockReturnValueOnce(makeFindOneLean(null));
+      const err = await service.findOneByUlbAndYear(query, stateClient).catch((e: unknown) => e);
+      expect((err as NotFoundException).message).not.toContain('templateVersion');
+    });
+
+    it('not-found message with templateVersion includes templateVersion in the message', async () => {
+      dcModel.findOne.mockReturnValueOnce(makeFindOneLean(null));
+      const err = await service
+        .findOneByUlbAndYear({ ...query, templateVersion: 'alpha' }, stateClient)
+        .catch((e: unknown) => e);
+      expect((err as NotFoundException).message).toContain(validUlbCode);
+      expect((err as NotFoundException).message).toContain(validYearCode);
+      expect((err as NotFoundException).message).toContain('alpha');
+    });
+
+    it('response does not contain internal Mongo fields', async () => {
+      dcModel.findOne.mockReturnValueOnce(
+        makeFindOneLean(
+          makeReadRecord({
+            reversedAt: new Date('2024-02-01T00:00:00.000Z'),
+            reversedBy: new Types.ObjectId(),
+            reversalReason: 'Incorrect submission',
+          }),
+        ),
+      );
+
+      const result = (await service.findOneByUlbAndYear(query, stateClient)) as Record<string, unknown>;
+
+      expect(result).not.toHaveProperty('_id');
+      expect(result).not.toHaveProperty('ulbId');
+      expect(result).not.toHaveProperty('stateId');
+      expect(result).not.toHaveProperty('yearId');
+      expect(result).not.toHaveProperty('__v');
+      expect(result).not.toHaveProperty('reversedAt');
+      expect(result).not.toHaveProperty('reversedBy');
+      expect(result).not.toHaveProperty('reversalReason');
+      expect(result).not.toHaveProperty('apiClientId');
+    });
+
+    it('lineItems remains sparse', async () => {
+      dcModel.findOne.mockReturnValueOnce(makeFindOneLean(makeReadRecord({ lineItems: { '110': 500 } })));
+
+      const result = await service.findOneByUlbAndYear(query, stateClient);
+
+      expect(result.lineItems).toEqual({ '110': 500 });
+      expect(result.lineItems).not.toHaveProperty('120');
+    });
+
+    it('0 values are preserved', async () => {
+      dcModel.findOne.mockReturnValueOnce(makeFindOneLean(makeReadRecord({ lineItems: { '110': 0 } })));
+
+      const result = await service.findOneByUlbAndYear(query, stateClient);
+
+      expect(result.lineItems).toEqual({ '110': 0 });
+    });
+
+    it('does not audit normal GET requests', async () => {
+      dcModel.findOne.mockReturnValueOnce(makeFindOneLean(makeReadRecord()));
+
+      await service.findOneByUlbAndYear(query, stateClient);
+
+      expect(mockAuditLogService.logSubmitted).not.toHaveBeenCalled();
+      expect(mockAuditLogService.logModified).not.toHaveBeenCalled();
+      expect(mockAuditLogService.logValidationFailed).not.toHaveBeenCalled();
+      expect(mockAuditLogService.logDuplicateSubmit).not.toHaveBeenCalled();
+      expect(mockAuditLogService.logModifyNotFound).not.toHaveBeenCalled();
+      expect(mockAuditLogService.logReversed).not.toHaveBeenCalled();
+    });
+  });
+
   describe('create', () => {
     const basePayload = { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: {} };
 
@@ -434,6 +689,55 @@ describe('DataCollectionService', () => {
       expect(body['yearCode']).toBe(validYearCode);
       expect(body).not.toHaveProperty('ulbId');
       expect(body).not.toHaveProperty('yearId');
+    });
+
+    it('stores apiClientId from the API client context', async () => {
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce([makeLegend('110')]);
+      await service.create(
+        { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 100 } } as never,
+        stateClient,
+      );
+      const modelCallArg = (dcModel.mock.calls[0] as unknown[][])[0] as unknown as Record<string, unknown>;
+      expect(modelCallArg['apiClientId']).toBeInstanceOf(Types.ObjectId);
+      expect((modelCallArg['apiClientId'] as Types.ObjectId).toString()).toBe(validApiClientId);
+    });
+
+    it('throws InternalServerErrorException when apiClientId is not a valid ObjectId', async () => {
+      const invalidClient = { ...stateClient, apiClientId: 'not-a-valid-id' };
+      await expect(
+        service.create({ ulbCode: validUlbCode, yearCode: validYearCode, lineItems: {} } as never, invalidClient),
+      ).rejects.toThrow(InternalServerErrorException);
+    });
+
+    it('does not expose apiClientId in the create response', async () => {
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce([makeLegend('110')]);
+      const result = (await service.create(
+        { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 100 } } as never,
+        stateClient,
+      )) as Record<string, unknown>;
+      expect(result['data'] as Record<string, unknown>).not.toHaveProperty('apiClientId');
+    });
+
+    it('duplicate submit audit log includes the existing dataCollectionId', async () => {
+      const existingId = new Types.ObjectId();
+      dcModel.findOne.mockReturnValueOnce({ lean: jest.fn().mockResolvedValue({ _id: existingId }) });
+      await service.create(basePayload as never, stateClient).catch(() => {});
+      expect(mockAuditLogService.logDuplicateSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({ dataCollectionId: existingId }),
+      );
+    });
+
+    it('submit success audit log includes dataCollectionId', async () => {
+      const savedId = new Types.ObjectId();
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce([makeLegend('110')]);
+      mockSave.mockResolvedValueOnce({ ...makeDocSaveResult(), _id: savedId });
+      await service.create(
+        { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 100 } } as never,
+        stateClient,
+      );
+      expect(mockAuditLogService.logSubmitted).toHaveBeenCalledWith(
+        expect.objectContaining({ dataCollectionId: savedId }),
+      );
     });
 
     it('does not use hardcoded constant for key validation', async () => {
@@ -1074,6 +1378,40 @@ describe('DataCollectionService', () => {
       expect(data).not.toHaveProperty('stateId');
       expect(data).not.toHaveProperty('yearId');
       expect(data).not.toHaveProperty('__v');
+      expect(data).not.toHaveProperty('apiClientId');
+    });
+
+    it('does not overwrite the original apiClientId on modify', async () => {
+      const originalApiClientId = new Types.ObjectId();
+      const existingDoc = {
+        templateVersion: '2026.1',
+        stateId: new Types.ObjectId(validStateId),
+        yearCode: validYearCode,
+        lineItems: new Map<string, number>(),
+        apiClientId: originalApiClientId,
+        save: jest.fn().mockResolvedValue(makeDocSaveResult()),
+      };
+      dcModel.findOne.mockReturnValue(existingDoc);
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce([makeLegend('110')]);
+      await service.update(basePayload as never, stateClient);
+      expect(existingDoc.apiClientId).toBe(originalApiClientId);
+    });
+
+    it('modify success audit log includes dataCollectionId', async () => {
+      const savedId = new Types.ObjectId();
+      const existingDoc = {
+        templateVersion: '2026.1',
+        stateId: new Types.ObjectId(validStateId),
+        yearCode: validYearCode,
+        lineItems: new Map<string, number>(),
+        save: jest.fn().mockResolvedValue({ ...makeDocSaveResult(), _id: savedId }),
+      };
+      dcModel.findOne.mockReturnValue(existingDoc);
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce([makeLegend('110')]);
+      await service.update(basePayload as never, stateClient);
+      expect(mockAuditLogService.logModified).toHaveBeenCalledWith(
+        expect.objectContaining({ dataCollectionId: savedId }),
+      );
     });
 
     it('response message says Financial data updated successfully', async () => {
@@ -1434,6 +1772,577 @@ describe('DataCollectionService', () => {
       const body = (err as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
 
       expect(body.errors[0]).not.toHaveProperty('validationRule');
+    });
+  });
+
+  // ─── formula: diff ────────────────────────────────────────────────────────
+
+  describe('formula: diff', () => {
+    const makeDiffRule = (operands: string[]) => ({ type: 'formula', operation: 'diff', operands });
+
+    it('passes when parent equals A - B', async () => {
+      const legends = [makeLegend('A'), makeLegend('B'), makeLegend('110', [makeDiffRule(['A', 'B'])] as never)];
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(legends);
+      const result = (await service.create(
+        { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 300, A: 500, B: 200 } } as never,
+        stateClient,
+      )) as Record<string, unknown>;
+      expect((result['data'] as Record<string, unknown>)['validationStatus']).toBe('VALID');
+    });
+
+    it('passes when parent equals A - B - C', async () => {
+      const legends = [
+        makeLegend('A'),
+        makeLegend('B'),
+        makeLegend('C'),
+        makeLegend('110', [makeDiffRule(['A', 'B', 'C'])] as never),
+      ];
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(legends);
+      const result = (await service.create(
+        { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 100, A: 500, B: 200, C: 200 } } as never,
+        stateClient,
+      )) as Record<string, unknown>;
+      expect((result['data'] as Record<string, unknown>)['validationStatus']).toBe('VALID');
+    });
+
+    it('fails when parent does not equal diff of submitted operands', async () => {
+      const legends = [makeLegend('A'), makeLegend('B'), makeLegend('110', [makeDiffRule(['A', 'B'])] as never)];
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(legends);
+      const err = await service
+        .create(
+          { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 999, A: 500, B: 200 } } as never,
+          stateClient,
+        )
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BadRequestException);
+      const body = (err as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
+      expect(body.errors[0].message).toContain('must equal diff of submitted operands');
+      expect(body.errors[0].expected).toBe(300);
+      expect(body.errors[0].received).toBe(999);
+    });
+
+    it('sparse: skips missing operand and validates with remaining', async () => {
+      const legends = [
+        makeLegend('A'),
+        makeLegend('B'),
+        makeLegend('C'),
+        makeLegend('110', [makeDiffRule(['A', 'B', 'C'])] as never),
+      ];
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(legends);
+      // C not submitted; expected = A - B = 300
+      const result = (await service.create(
+        { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 300, A: 500, B: 200 } } as never,
+        stateClient,
+      )) as Record<string, unknown>;
+      expect((result['data'] as Record<string, unknown>)['validationStatus']).toBe('VALID');
+    });
+
+    it('fails when no operands are submitted', async () => {
+      const legends = [makeLegend('A'), makeLegend('B'), makeLegend('110', [makeDiffRule(['A', 'B'])] as never)];
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(legends);
+      const err = await service
+        .create({ ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 300 } } as never, stateClient)
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BadRequestException);
+      const body = (err as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
+      expect(body.errors[0].message).toContain('cannot be validated because none of its operands were submitted');
+    });
+
+    it('fails when only one operand is submitted', async () => {
+      const legends = [makeLegend('A'), makeLegend('B'), makeLegend('110', [makeDiffRule(['A', 'B'])] as never)];
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(legends);
+      const err = await service
+        .create(
+          { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 500, A: 500 } } as never,
+          stateClient,
+        )
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BadRequestException);
+      const body = (err as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
+      expect(body.errors[0].message).toContain('diff rule requires at least 2 submitted operands');
+    });
+
+    it('fails when a referenced operand is not in the template', async () => {
+      const legends = [makeLegend('A'), makeLegend('110', [makeDiffRule(['A', 'GHOST'])] as never)];
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(legends);
+      const err = await service
+        .create(
+          { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 500, A: 500 } } as never,
+          stateClient,
+        )
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BadRequestException);
+      const body = (err as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
+      expect(body.errors[0].message).toContain('refers to unknown operand GHOST');
+    });
+
+    it('explicit 0 counts as a submitted operand', async () => {
+      const legends = [makeLegend('A'), makeLegend('B'), makeLegend('110', [makeDiffRule(['A', 'B'])] as never)];
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(legends);
+      const result = (await service.create(
+        { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 0, A: 0, B: 0 } } as never,
+        stateClient,
+      )) as Record<string, unknown>;
+      expect((result['data'] as Record<string, unknown>)['validationStatus']).toBe('VALID');
+    });
+  });
+
+  // ─── formula: linear ──────────────────────────────────────────────────────
+
+  describe('formula: linear', () => {
+    const makeLinearRule = (operands: { code: string; sign: 1 | -1 }[]) => ({
+      type: 'formula',
+      operation: 'linear',
+      operands,
+    });
+
+    it('passes for A + B - C', async () => {
+      const rule = makeLinearRule([
+        { code: 'A', sign: 1 },
+        { code: 'B', sign: 1 },
+        { code: 'C', sign: -1 },
+      ]);
+      const legends = [makeLegend('A'), makeLegend('B'), makeLegend('C'), makeLegend('110', [rule] as never)];
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(legends);
+      // 500 + 300 - 100 = 700
+      const result = (await service.create(
+        { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 700, A: 500, B: 300, C: 100 } } as never,
+        stateClient,
+      )) as Record<string, unknown>;
+      expect((result['data'] as Record<string, unknown>)['validationStatus']).toBe('VALID');
+    });
+
+    it('passes for A - B + C', async () => {
+      const rule = makeLinearRule([
+        { code: 'A', sign: 1 },
+        { code: 'B', sign: -1 },
+        { code: 'C', sign: 1 },
+      ]);
+      const legends = [makeLegend('A'), makeLegend('B'), makeLegend('C'), makeLegend('110', [rule] as never)];
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(legends);
+      // 500 - 200 + 100 = 400
+      const result = (await service.create(
+        { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 400, A: 500, B: 200, C: 100 } } as never,
+        stateClient,
+      )) as Record<string, unknown>;
+      expect((result['data'] as Record<string, unknown>)['validationStatus']).toBe('VALID');
+    });
+
+    it('fails when parent does not equal the linear combination', async () => {
+      const rule = makeLinearRule([
+        { code: 'A', sign: 1 },
+        { code: 'B', sign: -1 },
+      ]);
+      const legends = [makeLegend('A'), makeLegend('B'), makeLegend('110', [rule] as never)];
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(legends);
+      const err = await service
+        .create(
+          { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 999, A: 500, B: 200 } } as never,
+          stateClient,
+        )
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BadRequestException);
+      const body = (err as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
+      expect(body.errors[0].message).toContain('must equal linear combination');
+      expect(body.errors[0].expected).toBe(300);
+      expect(body.errors[0].received).toBe(999);
+    });
+
+    it('sparse: skips missing operands and validates with remaining', async () => {
+      const rule = makeLinearRule([
+        { code: 'A', sign: 1 },
+        { code: 'B', sign: -1 },
+        { code: 'C', sign: 1 },
+      ]);
+      const legends = [makeLegend('A'), makeLegend('B'), makeLegend('C'), makeLegend('110', [rule] as never)];
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(legends);
+      // C not submitted; expected = A - B = 300
+      const result = (await service.create(
+        { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 300, A: 500, B: 200 } } as never,
+        stateClient,
+      )) as Record<string, unknown>;
+      expect((result['data'] as Record<string, unknown>)['validationStatus']).toBe('VALID');
+    });
+
+    it('fails when no operands are submitted', async () => {
+      const rule = makeLinearRule([
+        { code: 'A', sign: 1 },
+        { code: 'B', sign: -1 },
+      ]);
+      const legends = [makeLegend('A'), makeLegend('B'), makeLegend('110', [rule] as never)];
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(legends);
+      const err = await service
+        .create({ ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 300 } } as never, stateClient)
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BadRequestException);
+      const body = (err as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
+      expect(body.errors[0].message).toContain('cannot be validated because none of its operands were submitted');
+    });
+
+    it('fails when a referenced operand code is not in the template', async () => {
+      const rule = makeLinearRule([
+        { code: 'A', sign: 1 },
+        { code: 'GHOST', sign: -1 },
+      ]);
+      const legends = [makeLegend('A'), makeLegend('110', [rule] as never)];
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(legends);
+      const err = await service
+        .create(
+          { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 500, A: 500 } } as never,
+          stateClient,
+        )
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BadRequestException);
+      const body = (err as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
+      expect(body.errors[0].message).toContain('refers to unknown operand GHOST');
+    });
+
+    it('fails when an operand has an invalid sign', async () => {
+      const rule = { type: 'formula', operation: 'linear', operands: [{ code: 'A', sign: 99 }] };
+      const legends = [makeLegend('A'), makeLegend('110', [rule] as never)];
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(legends);
+      const err = await service
+        .create(
+          { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 500, A: 500 } } as never,
+          stateClient,
+        )
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BadRequestException);
+      const body = (err as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
+      expect(body.errors[0].message).toContain('invalid operand shape');
+    });
+
+    it('explicit 0 counts as a submitted operand', async () => {
+      const rule = makeLinearRule([
+        { code: 'A', sign: 1 },
+        { code: 'B', sign: -1 },
+      ]);
+      const legends = [makeLegend('A'), makeLegend('B'), makeLegend('110', [rule] as never)];
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(legends);
+      const result = (await service.create(
+        { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 0, A: 0, B: 0 } } as never,
+        stateClient,
+      )) as Record<string, unknown>;
+      expect((result['data'] as Record<string, unknown>)['validationStatus']).toBe('VALID');
+    });
+  });
+
+  // ─── comparison rules ─────────────────────────────────────────────────────
+
+  describe('comparison rules', () => {
+    const makeCompRule = (operator: string, value: number) => ({ type: 'comparison', operator, value });
+
+    const runComparison = async (operator: string, threshold: number, submitted: number) => {
+      const rule = makeCompRule(operator, threshold);
+      const legends = [makeLegend('110', [rule] as never)];
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(legends);
+      return service
+        .create(
+          { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': submitted } } as never,
+          stateClient,
+        )
+        .catch((e: unknown) => e);
+    };
+
+    it('> passes when value satisfies the operator', async () => {
+      const result = await runComparison('>', 0, 100);
+      expect(result).not.toBeInstanceOf(BadRequestException);
+    });
+
+    it('> fails when value does not satisfy the operator', async () => {
+      const result = await runComparison('>', 100, 0);
+      expect(result).toBeInstanceOf(BadRequestException);
+      const body = (result as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
+      expect(body.errors[0].message).toContain('must be > 100');
+    });
+
+    it('>= passes and fails correctly', async () => {
+      expect(await runComparison('>=', 100, 100)).not.toBeInstanceOf(BadRequestException);
+      expect(await runComparison('>=', 100, 99)).toBeInstanceOf(BadRequestException);
+    });
+
+    it('< passes and fails correctly', async () => {
+      expect(await runComparison('<', 100, 50)).not.toBeInstanceOf(BadRequestException);
+      expect(await runComparison('<', 100, 100)).toBeInstanceOf(BadRequestException);
+    });
+
+    it('<= passes and fails correctly', async () => {
+      expect(await runComparison('<=', 100, 100)).not.toBeInstanceOf(BadRequestException);
+      expect(await runComparison('<=', 100, 101)).toBeInstanceOf(BadRequestException);
+    });
+
+    it('=== passes and fails correctly', async () => {
+      expect(await runComparison('===', 42, 42)).not.toBeInstanceOf(BadRequestException);
+      expect(await runComparison('===', 42, 43)).toBeInstanceOf(BadRequestException);
+    });
+
+    it('!== passes and fails correctly', async () => {
+      expect(await runComparison('!==', 0, 1)).not.toBeInstanceOf(BadRequestException);
+      expect(await runComparison('!==', 0, 0)).toBeInstanceOf(BadRequestException);
+    });
+
+    it('comparison rule is NOT silently skipped', async () => {
+      const result = await runComparison('>', 100, 0);
+      expect(result).toBeInstanceOf(BadRequestException);
+      const body = (result as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
+      expect(body.errors.some((e) => e.validationRule?.type === 'comparison')).toBe(true);
+    });
+
+    it('invalid value does not create a duplicate comparison error', async () => {
+      const rule = makeCompRule('>', 0);
+      const legends = [makeLegend('110', [rule] as never)];
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(legends);
+      const err = await service
+        .create({ ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 'bad' } } as never, stateClient)
+        .catch((e: unknown) => e);
+      const body = (err as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
+      // Only one error: the invalid value error from pass 1; no duplicate comparison error
+      expect(body.errors).toHaveLength(1);
+      expect(body.errors[0].message).toContain('must be a finite number');
+    });
+
+    it('comparison error uses expectedCondition, not numeric expected', async () => {
+      const result = await runComparison('>=', 500, 100);
+      const body = (result as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
+      expect(body.errors[0].expectedCondition).toBe('>= 500');
+      expect(body.errors[0].received).toBe(100);
+      expect(body.errors[0]).not.toHaveProperty('expected');
+    });
+
+    it('!== 0 failure returns expectedCondition "!== 0" and no numeric expected', async () => {
+      const result = await runComparison('!==', 0, 0);
+      const body = (result as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
+      expect(body.errors[0].expectedCondition).toBe('!== 0');
+      expect(body.errors[0].received).toBe(0);
+      expect(body.errors[0]).not.toHaveProperty('expected');
+    });
+
+    it('> 0 failure returns expectedCondition "> 0" and no numeric expected', async () => {
+      const result = await runComparison('>', 0, 0);
+      const body = (result as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
+      expect(body.errors[0].expectedCondition).toBe('> 0');
+      expect(body.errors[0].received).toBe(0);
+      expect(body.errors[0]).not.toHaveProperty('expected');
+    });
+
+    it('>= 0 failure with value -1 returns expectedCondition ">= 0" and received -1', async () => {
+      const result = await runComparison('>=', 0, -1);
+      const body = (result as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
+      expect(body.errors[0].expectedCondition).toBe('>= 0');
+      expect(body.errors[0].received).toBe(-1);
+      expect(body.errors[0]).not.toHaveProperty('expected');
+    });
+  });
+
+  // ─── computed key rejection ───────────────────────────────────────────────
+
+  describe('computed key rejection', () => {
+    it('rejects submitted computed.* key with a clear error', async () => {
+      const legends = [makeLegend('110'), makeComputedLegend('computed.totalIncome', [] as never)];
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(legends);
+      const err = await service
+        .create(
+          {
+            ulbCode: validUlbCode,
+            yearCode: validYearCode,
+            lineItems: { 'computed.totalIncome': 100, '110': 500 },
+          } as never,
+          stateClient,
+        )
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BadRequestException);
+      const body = (err as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
+      const computedErr = body.errors.find((e) => e.lineItemCode === 'computed.totalIncome');
+      expect(computedErr).toBeDefined();
+      expect(computedErr?.message).toContain('cannot be submitted in lineItems');
+    });
+  });
+
+  // ─── direct comparison rules — mandatory when present ─────────────────────
+
+  describe('direct comparison rules — mandatory when present', () => {
+    it('fails with clear error when code with comparison rule is not submitted', async () => {
+      const rule = { type: 'comparison', operator: '>', value: 0 };
+      const legends = [makeLegend('110', [rule] as never)];
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(legends);
+      const err = await service
+        .create({ ulbCode: validUlbCode, yearCode: validYearCode, lineItems: {} } as never, stateClient)
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BadRequestException);
+      const body = (err as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
+      expect(body.errors[0].lineItemCode).toBe('110');
+      expect(body.errors[0].message).toContain('cannot be validated because the line item was not submitted');
+    });
+
+    it('passes when submitted value satisfies the comparison rule', async () => {
+      const rule = { type: 'comparison', operator: '>', value: 0 };
+      const legends = [makeLegend('110', [rule] as never)];
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(legends);
+      const result = await service
+        .create({ ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 100 } } as never, stateClient)
+        .catch((e: unknown) => e);
+      expect(result).not.toBeInstanceOf(BadRequestException);
+    });
+
+    it('invalid submitted value does not create a duplicate not-submitted error', async () => {
+      const rule = { type: 'comparison', operator: '>', value: 0 };
+      const legends = [makeLegend('110', [rule] as never)];
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(legends);
+      const err = await service
+        .create({ ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 'bad' } } as never, stateClient)
+        .catch((e: unknown) => e);
+      const body = (err as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
+      expect(body.errors).toHaveLength(1);
+      expect(body.errors[0].message).toContain('must be a finite number');
+    });
+  });
+
+  // ─── computed legend validation ───────────────────────────────────────────
+
+  describe('computed legend validation', () => {
+    const sumRule = { type: 'formula', operation: 'sum', operands: ['110', '120', '130'] };
+    const gtZeroRule = { type: 'comparison', operator: '>', value: 0 };
+    const neZeroRule = { type: 'comparison', operator: '!==', value: 0 };
+
+    const runWithComputed = (computedRules: object[], lineItems: Record<string, unknown>) => {
+      const legends = [
+        makeLegend('110'),
+        makeLegend('120'),
+        makeLegend('130'),
+        makeComputedLegend('computed.totalIncome', computedRules as never),
+      ];
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(legends);
+      return service
+        .create({ ulbCode: validUlbCode, yearCode: validYearCode, lineItems } as never, stateClient)
+        .catch((e: unknown) => e);
+    };
+
+    it('computes sum from submitted source codes and passes comparison', async () => {
+      const result = await runWithComputed([sumRule, neZeroRule], { '110': 500, '120': 300, '130': 200 });
+      expect(result).not.toBeInstanceOf(BadRequestException);
+    });
+
+    it('!== 0 passes when computed sum is non-zero', async () => {
+      const result = await runWithComputed([sumRule, neZeroRule], { '110': 100 });
+      expect(result).not.toBeInstanceOf(BadRequestException);
+    });
+
+    it('!== 0 fails when computed sum is 0', async () => {
+      const result = await runWithComputed([sumRule, neZeroRule], { '110': 0, '120': 0, '130': 0 });
+      expect(result).toBeInstanceOf(BadRequestException);
+      const body = (result as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
+      expect(body.errors.some((e) => e.lineItemCode === 'computed.totalIncome')).toBe(true);
+    });
+
+    it('> 0 fails when computed sum is 0', async () => {
+      const result = await runWithComputed([sumRule, gtZeroRule], { '110': 0, '120': 0 });
+      expect(result).toBeInstanceOf(BadRequestException);
+      const body = (result as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
+      expect(body.errors[0].lineItemCode).toBe('computed.totalIncome');
+      expect(body.errors[0].message).toContain('must be > 0');
+    });
+
+    it('> 0 fails and reports the negative computed value as received', async () => {
+      const result = await runWithComputed([sumRule, gtZeroRule], { '110': -100 });
+      expect(result).toBeInstanceOf(BadRequestException);
+      const body = (result as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
+      expect(body.errors[0].received).toBe(-100);
+    });
+
+    it('missing source operands are ignored (sparse)', async () => {
+      // Only '110' submitted; '120' and '130' are absent — still valid
+      const result = await runWithComputed([sumRule, neZeroRule], { '110': 100 });
+      expect(result).not.toBeInstanceOf(BadRequestException);
+    });
+
+    it('explicit 0 source values are included in the computation', async () => {
+      // 0 + 0 + 0 = 0 — should fail !== 0
+      const result = await runWithComputed([sumRule, neZeroRule], { '110': 0, '120': 0, '130': 0 });
+      expect(result).toBeInstanceOf(BadRequestException);
+      const body = (result as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
+      expect(body.errors.some((e) => e.lineItemCode === 'computed.totalIncome')).toBe(true);
+    });
+
+    it('errors when none of the source operands are submitted', async () => {
+      const result = await runWithComputed([sumRule], {});
+      expect(result).toBeInstanceOf(BadRequestException);
+      const body = (result as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
+      expect(body.errors[0].lineItemCode).toBe('computed.totalIncome');
+      expect(body.errors[0].message).toContain(
+        'cannot be computed because none of its source line items were submitted',
+      );
+    });
+
+    it('errors when computed rule references an unknown operand code', async () => {
+      const ruleWithUnknown = { type: 'formula', operation: 'sum', operands: ['110', '999_UNKNOWN'] };
+      const legends = [makeLegend('110'), makeComputedLegend('computed.totalIncome', [ruleWithUnknown] as never)];
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(legends);
+      const err = await service
+        .create({ ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 100 } } as never, stateClient)
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BadRequestException);
+      const body = (err as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
+      expect(body.errors[0].message).toContain('refers to unknown line item code 999_UNKNOWN');
+    });
+
+    it('computed values are not stored in lineItems', async () => {
+      const legends = [
+        makeLegend('110'),
+        makeLegend('120'),
+        makeLegend('130'),
+        makeComputedLegend('computed.totalIncome', [sumRule, neZeroRule] as never),
+      ];
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(legends);
+      await service.create(
+        { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 100 } } as never,
+        stateClient,
+      );
+      const modelCallArg = (dcModel.mock.calls[0] as unknown[][])[0] as unknown as Record<string, unknown>;
+      expect(Object.keys(modelCallArg['lineItems'] as Record<string, unknown>)).not.toContain('computed.totalIncome');
+      expect(Object.keys(modelCallArg['lineItems'] as Record<string, unknown>)).toContain('110');
+    });
+  });
+
+  // ─── unsupported rules fail closed ────────────────────────────────────────
+
+  describe('unsupported rules fail closed', () => {
+    it('unsupported rule type returns error (not silent skip)', async () => {
+      const rule = { type: 'unknown_type', operator: '>' };
+      const legends = [makeLegend('110', [rule] as never)];
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(legends);
+      const err = await service
+        .create({ ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 100 } } as never, stateClient)
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BadRequestException);
+      const body = (err as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
+      expect(body.errors[0].message).toContain('unsupported rule type');
+    });
+
+    it('unsupported formula operation returns error', async () => {
+      const rule = { type: 'formula', operation: 'product', operands: ['A', 'B'] };
+      const legends = [makeLegend('A'), makeLegend('B'), makeLegend('110', [rule] as never)];
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(legends);
+      const err = await service
+        .create(
+          { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 100, A: 10, B: 10 } } as never,
+          stateClient,
+        )
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BadRequestException);
+      const body = (err as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
+      expect(body.errors[0].message).toContain('unsupported formula operation');
+    });
+
+    it('unsupported comparison operator returns error', async () => {
+      const rule = { type: 'comparison', operator: '!=', value: 0 };
+      const legends = [makeLegend('110', [rule] as never)];
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(legends);
+      const err = await service
+        .create({ ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 100 } } as never, stateClient)
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BadRequestException);
+      const body = (err as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
+      expect(body.errors[0].message).toContain('unsupported comparison operator');
     });
   });
 });

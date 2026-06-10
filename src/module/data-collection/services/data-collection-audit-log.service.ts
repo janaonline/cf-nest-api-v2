@@ -91,6 +91,7 @@ export class DataCollectionAuditLogService {
    */
   async logDuplicateSubmit(data: LogDataCollectionDuplicateSubmitData): Promise<void> {
     await this.write({
+      dataCollectionId: data.dataCollectionId,
       action: DATA_COLLECTION_AUDIT_ACTION.SUBMIT_DUPLICATE,
       success: false,
       failureReason: DATA_COLLECTION_FAILURE_REASON.DUPLICATE_SUBMISSION,

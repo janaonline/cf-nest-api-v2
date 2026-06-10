@@ -189,6 +189,21 @@ describe('LineItemsLegendService', () => {
       mockSave.mockRejectedValue(dbError);
       await expect(service.createLegend(dto)).rejects.toThrow('network error');
     });
+
+    it('sanitizes comparison rule before passing to model constructor', async () => {
+      mockLegendModel.exists.mockResolvedValue(null);
+      mockSave.mockResolvedValue(makeLegend());
+      await service.createLegend({
+        ...dto,
+        rules: [
+          { type: 'comparison', operator: '>' as const, value: 0, operation: undefined, operands: undefined } as never,
+        ],
+      });
+      const constructorArg = (mockLegendModel.mock.calls[0] as unknown[])[0] as { rules: Record<string, unknown>[] };
+      expect(constructorArg.rules[0]).toEqual({ type: 'comparison', operator: '>', value: 0 });
+      expect(constructorArg.rules[0]).not.toHaveProperty('operation');
+      expect(constructorArg.rules[0]).not.toHaveProperty('operands');
+    });
   });
 
   describe('updateLegend', () => {
@@ -202,6 +217,98 @@ describe('LineItemsLegendService', () => {
     it('throws NotFoundException when legend does not exist', async () => {
       mockLegendModel.findOneAndUpdate.mockReturnValue({ lean: jest.fn().mockResolvedValue(null) });
       await expect(service.updateLegend('nonexistent', '2026.1', {})).rejects.toThrow(NotFoundException);
+    });
+
+    describe('rule storage sanitization', () => {
+      const setupUpdate = () =>
+        mockLegendModel.findOneAndUpdate.mockReturnValue({ lean: jest.fn().mockResolvedValue(makeLegend()) });
+
+      const getStoredRules = () => {
+        const call = (mockLegendModel.findOneAndUpdate.mock.calls[0] as unknown[])[1] as {
+          $set: { rules: Record<string, unknown>[] };
+        };
+        return call.$set['rules'];
+      };
+
+      it('comparison rule stores only type, operator, value', async () => {
+        setupUpdate();
+        await service.updateLegend('110', '2026.1', {
+          rules: [{ type: 'comparison', operator: '>', value: 0 } as never],
+        });
+        expect(getStoredRules()[0]).toEqual({ type: 'comparison', operator: '>', value: 0 });
+      });
+
+      it('comparison rule does not store operation or operands', async () => {
+        setupUpdate();
+        await service.updateLegend('110', '2026.1', {
+          rules: [{ type: 'comparison', operator: '>', value: 0, operation: undefined, operands: undefined } as never],
+        });
+        const rule = getStoredRules()[0];
+        expect(rule).not.toHaveProperty('operation');
+        expect(rule).not.toHaveProperty('operands');
+      });
+
+      it('formula sum rule stores only type, operation, operands', async () => {
+        setupUpdate();
+        await service.updateLegend('110', '2026.1', {
+          rules: [{ type: 'formula', operation: 'sum', operands: ['111', '112'] } as never],
+        });
+        const rule = getStoredRules()[0];
+        expect(rule).toEqual({ type: 'formula', operation: 'sum', operands: ['111', '112'] });
+        expect(rule).not.toHaveProperty('operator');
+        expect(rule).not.toHaveProperty('value');
+      });
+
+      it('formula diff rule stores only type, operation, operands', async () => {
+        setupUpdate();
+        await service.updateLegend('110', '2026.1', {
+          rules: [{ type: 'formula', operation: 'diff', operands: ['111', '112'] } as never],
+        });
+        const rule = getStoredRules()[0];
+        expect(rule).toEqual({ type: 'formula', operation: 'diff', operands: ['111', '112'] });
+        expect(rule).not.toHaveProperty('operator');
+        expect(rule).not.toHaveProperty('value');
+      });
+
+      it('linear formula stores correctly shaped { code, sign } operands', async () => {
+        setupUpdate();
+        await service.updateLegend('110', '2026.1', {
+          rules: [
+            {
+              type: 'formula',
+              operation: 'linear',
+              operands: [
+                { code: 'A', sign: 1 },
+                { code: 'B', sign: -1 },
+              ],
+            } as never,
+          ],
+        });
+        expect(getStoredRules()[0]).toEqual({
+          type: 'formula',
+          operation: 'linear',
+          operands: [
+            { code: 'A', sign: 1 },
+            { code: 'B', sign: -1 },
+          ],
+        });
+      });
+
+      it('throws BadRequestException for unsupported rule type before calling the DB', async () => {
+        await expect(service.updateLegend('110', '2026.1', { rules: [{ type: 'INVALID' } as never] })).rejects.toThrow(
+          BadRequestException,
+        );
+        expect(mockLegendModel.findOneAndUpdate).not.toHaveBeenCalled();
+      });
+
+      it('throws BadRequestException for unsupported formula operation before calling the DB', async () => {
+        await expect(
+          service.updateLegend('110', '2026.1', {
+            rules: [{ type: 'formula', operation: 'INVALID', operands: ['111'] } as never],
+          }),
+        ).rejects.toThrow(BadRequestException);
+        expect(mockLegendModel.findOneAndUpdate).not.toHaveBeenCalled();
+      });
     });
   });
 
@@ -388,6 +495,32 @@ describe('LineItemsLegendService', () => {
     it('re-throws non-duplicate bulkWrite errors', async () => {
       mockLegendModel.bulkWrite.mockRejectedValue(new Error('db timeout'));
       await expect(service.importFromJson({ lineItems: [{ ...validRawItem }] })).rejects.toThrow('db timeout');
+    });
+
+    it('import path sanitizes comparison rules before bulkWrite', async () => {
+      mockLegendModel.bulkWrite.mockResolvedValue({ upsertedCount: 1, modifiedCount: 0 });
+      const item = { ...validRawItem, rules: [{ type: 'comparison', operator: '>', value: 0 }] };
+      await service.importFromJson({ lineItems: [item] });
+
+      type BulkOp = { updateOne: { update: { $set: { rules: Record<string, unknown>[] } } } };
+      const calls = mockLegendModel.bulkWrite.mock.calls as unknown as [BulkOp[], unknown][];
+      const rule = calls[0][0][0].updateOne.update.$set.rules[0];
+      expect(rule).toEqual({ type: 'comparison', operator: '>', value: 0 });
+      expect(rule).not.toHaveProperty('operation');
+      expect(rule).not.toHaveProperty('operands');
+    });
+
+    it('import path sanitizes formula sum rules before bulkWrite', async () => {
+      mockLegendModel.bulkWrite.mockResolvedValue({ upsertedCount: 1, modifiedCount: 0 });
+      const item = { ...validRawItem, rules: [{ type: 'formula', operation: 'sum', operands: ['111', '112'] }] };
+      await service.importFromJson({ lineItems: [item] });
+
+      type BulkOp = { updateOne: { update: { $set: { rules: Record<string, unknown>[] } } } };
+      const calls = mockLegendModel.bulkWrite.mock.calls as unknown as [BulkOp[], unknown][];
+      const rule = calls[0][0][0].updateOne.update.$set.rules[0];
+      expect(rule).toEqual({ type: 'formula', operation: 'sum', operands: ['111', '112'] });
+      expect(rule).not.toHaveProperty('operator');
+      expect(rule).not.toHaveProperty('value');
     });
   });
 });

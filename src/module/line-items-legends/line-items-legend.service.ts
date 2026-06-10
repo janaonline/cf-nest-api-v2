@@ -35,7 +35,7 @@ export class LineItemsLegendService {
    */
   async getFinancialDataTemplate(query: FinancialDataTemplateQueryDto = {}) {
     const templateVersion = query.templateVersion ?? DEFAULT_TEMPLATE_VERSION;
-    const filter: FilterQuery<LineItemsLegendDocument> = { templateVersion, isActive: true };
+    const filter: FilterQuery<LineItemsLegendDocument> = { templateVersion, isActive: true, isComputed: { $ne: true } };
     if (query.accountHead) {
       filter['accountHead'] = query.accountHead;
     }
@@ -59,7 +59,7 @@ export class LineItemsLegendService {
    */
   async getActiveLegendsForValidation(templateVersion: string): Promise<LineItemLegendForValidation[]> {
     return this.legendModel
-      .find({ templateVersion, isActive: true }, '-_id nmamCode name accountHead level parentCode rules')
+      .find({ templateVersion, isActive: true }, '-_id nmamCode name accountHead level parentCode rules isComputed')
       .lean<LineItemLegendForValidation[]>();
   }
 
@@ -115,8 +115,10 @@ export class LineItemsLegendService {
     if (duplicate) {
       throw new ConflictException('Line item legend already exists for this template version and nmamCode.');
     }
+    const sanitizedRules = dto.rules?.map((r) => this.sanitizeRuleForStorage(r));
+    const payload = sanitizedRules !== undefined ? { ...dto, rules: sanitizedRules } : dto;
     try {
-      const created = new this.legendModel(dto);
+      const created = new this.legendModel(payload);
       return await created.save();
     } catch (error) {
       if (this.isDuplicateKeyError(error)) {
@@ -139,8 +141,10 @@ export class LineItemsLegendService {
     templateVersion: string = DEFAULT_TEMPLATE_VERSION,
     dto: UpdateLineItemsLegendDto,
   ) {
+    const sanitizedRules = dto.rules?.map((r) => this.sanitizeRuleForStorage(r));
+    const setPayload = sanitizedRules !== undefined ? { ...dto, rules: sanitizedRules } : dto;
     const updated = await this.legendModel
-      .findOneAndUpdate({ nmamCode, templateVersion }, { $set: dto }, { new: true })
+      .findOneAndUpdate({ nmamCode, templateVersion }, { $set: setPayload }, { new: true })
       .lean<LineItemsLegend | null>();
     if (!updated) throw new NotFoundException(`Line item '${nmamCode}' not found for version '${templateVersion}'`);
     return updated;
@@ -192,6 +196,34 @@ export class LineItemsLegendService {
         throw new ConflictException('Bulk import failed due to a duplicate key conflict.');
       }
       throw error;
+    }
+  }
+
+  /**
+   * Creates a clean plain-object copy of a rule, keeping only fields relevant to its type.
+   * Prevents undefined/null fields from leaking into MongoDB via BSON serialisation.
+   */
+  private sanitizeRuleForStorage(rule: Rule): Rule {
+    switch (rule.type) {
+      case 'comparison':
+        return { type: 'comparison', operator: rule.operator, value: rule.value };
+      case 'formula': {
+        switch (rule.operation) {
+          case 'linear':
+            return {
+              type: 'formula',
+              operation: 'linear',
+              operands: rule.operands.map((op) => ({ code: op.code, sign: op.sign })),
+            };
+          case 'sum':
+          case 'diff':
+            return { type: 'formula', operation: rule.operation, operands: [...rule.operands] };
+          default:
+            throw new BadRequestException('Unsupported formula operation.');
+        }
+      }
+      default:
+        throw new BadRequestException('Unsupported rule type.');
     }
   }
 
@@ -328,8 +360,85 @@ export class LineItemsLegendService {
       if (itemVersion !== undefined && itemVersion !== templateVersion) {
         errors.push(`${label} templateVersion '${itemVersion as string}' does not match expected '${templateVersion}'`);
       }
+
+      const rules = item['rules'];
+      if (rules !== undefined) {
+        if (!Array.isArray(rules)) {
+          errors.push(`${label} 'rules' must be an array`);
+        } else {
+          for (let j = 0; j < (rules as unknown[]).length; j++) {
+            errors.push(...this.validateRuleShape((rules as unknown[])[j], `${label}.rules[${j}]`));
+          }
+        }
+      }
+
+      const isComputed = item['isComputed'];
+      if (isComputed === true) {
+        if (typeof nmamCode === 'string' && nmamCode.trim() && !nmamCode.startsWith('computed.')) {
+          errors.push(`${label} isComputed legend must have nmamCode starting with 'computed.'`);
+        }
+        const hasFormulaRule =
+          Array.isArray(rules) && (rules as unknown[]).some((r) => (r as { type?: unknown }).type === 'formula');
+        if (!hasFormulaRule) {
+          errors.push(`${label} isComputed legend must have at least one formula rule`);
+        }
+      }
     }
 
+    return errors;
+  }
+
+  /** Validates the shape of a single rule object from an import payload. */
+  private validateRuleShape(rule: unknown, label: string): string[] {
+    const errors: string[] = [];
+    if (typeof rule !== 'object' || rule === null) {
+      errors.push(`${label} must be an object`);
+      return errors;
+    }
+    const r = rule as Record<string, unknown>;
+    if (r['type'] !== 'formula' && r['type'] !== 'comparison') {
+      errors.push(`${label} type must be 'formula' or 'comparison', got '${String(r['type'])}'`);
+      return errors;
+    }
+    if (r['type'] === 'formula') {
+      if (!['sum', 'diff', 'linear'].includes(r['operation'] as string)) {
+        errors.push(`${label} formula operation must be 'sum', 'diff', or 'linear'`);
+      }
+      if ('linearOperands' in r) {
+        errors.push(`${label} use 'operands' not 'linearOperands'`);
+      }
+      const operands = r['operands'];
+      if (!Array.isArray(operands) || (operands as unknown[]).length === 0) {
+        errors.push(`${label} formula operands must be a non-empty array`);
+      } else if (r['operation'] === 'linear') {
+        for (let i = 0; i < (operands as unknown[]).length; i++) {
+          const op = (operands as unknown[])[i] as Record<string, unknown>;
+          if (
+            typeof op !== 'object' ||
+            op === null ||
+            typeof op['code'] !== 'string' ||
+            (op['sign'] !== 1 && op['sign'] !== -1)
+          ) {
+            errors.push(`${label} operands[${i}] must be { code: string; sign: 1 | -1 }`);
+          }
+        }
+      } else {
+        for (let i = 0; i < (operands as unknown[]).length; i++) {
+          if (typeof (operands as unknown[])[i] !== 'string') {
+            errors.push(`${label} operands[${i}] must be a string`);
+          }
+        }
+      }
+    }
+    if (r['type'] === 'comparison') {
+      const validOperators = ['<=', '>=', '===', '!==', '<', '>'];
+      if (!validOperators.includes(r['operator'] as string)) {
+        errors.push(`${label} comparison operator must be one of ${validOperators.join(', ')}`);
+      }
+      if (typeof r['value'] !== 'number' || !isFinite(r['value'])) {
+        errors.push(`${label} comparison value must be a finite number`);
+      }
+    }
     return errors;
   }
 
@@ -354,8 +463,9 @@ export class LineItemsLegendService {
       level: item['level'] as number,
       sortOrder: item['sortOrder'] as number,
       isActive: (item['isActive'] as boolean) ?? true,
-      rules: (item['rules'] as Rule[]) ?? [],
+      rules: ((item['rules'] as Rule[]) ?? []).map((r) => this.sanitizeRuleForStorage(r)),
       templateVersion,
+      isComputed: (item['isComputed'] as boolean) ?? false,
     };
   }
 }

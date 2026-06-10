@@ -46,6 +46,9 @@ export class LineItemsLegend {
   @Prop({ default: true })
   isActive!: boolean;
 
+  @Prop({ default: false })
+  isComputed!: boolean;
+
   @Prop({ type: [Object], default: [] })
   rules!: lineItemsLegendTypes.Rule[];
 }
