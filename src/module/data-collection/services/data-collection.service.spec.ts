@@ -11,7 +11,7 @@ import { Types } from 'mongoose';
 import type { User } from 'src/module/auth/enum/role.enum';
 import type { ApiClientContext } from 'src/module/auth/types/api-client-context.type';
 import { LineItemsLegendService } from 'src/module/line-items-legends/line-items-legend.service';
-import { Ulb } from 'src/schemas/ulb.schema';
+import { Ulb, UlbSchema } from 'src/schemas/ulb.schema';
 import { Year } from 'src/schemas/year.schema';
 import { DataCollection } from '../entities/data-collection.schema';
 import type { DataCollectionValidationIssue } from '../types/data-collection.types';
@@ -183,6 +183,16 @@ const mockDataCollectionModel = () => {
   Ctor.findOne = jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(null) });
   return Ctor;
 };
+
+/**
+ * Returns a minimal Mongoose-document-like object for use in update() tests.
+ * update() calls findOne() WITHOUT .lean(), so it needs a hydrated document with .save().
+ */
+const makeUpdateRecord = (overrides: Partial<{ templateVersion: string; lineItems: Map<string, number> }> = {}) => ({
+  templateVersion: overrides.templateVersion ?? '2026.1',
+  lineItems: overrides.lineItems ?? new Map<string, number>([['110', 500]]),
+  save: jest.fn().mockResolvedValue(makeDocSaveResult()),
+});
 
 /** Builds a chainable ULB query mock that supports .select().populate().lean(). */
 const makeUlbChain = (leanResult: unknown[] = []) => ({
@@ -2549,6 +2559,233 @@ describe('DataCollectionService', () => {
       expect(
         body.errors.some((e) => e.lineItemCode === 'computed.totIncome' && e.message.includes('cannot be submitted')),
       ).toBe(true);
+    });
+  });
+
+  // ─── Parallelization: ULB + year concurrent resolution ───────────────────
+
+  describe('ULB and year resolution — concurrent execution', () => {
+    /** Builds deferred promises so tests can control resolution order explicitly. */
+    function makeDeferred<T>() {
+      let resolve!: (value: T) => void;
+      let reject!: (reason?: unknown) => void;
+      const promise = new Promise<T>((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      return { promise, resolve, reject };
+    }
+
+    it('both resolver promises are started before either one settles', async () => {
+      const ulbDeferred = makeDeferred<{ ulbId: Types.ObjectId; stateId: Types.ObjectId }>();
+      const yearDeferred = makeDeferred<{ yearId: Types.ObjectId; yearCode: string }>();
+
+      const startOrder: string[] = [];
+      mockReferenceResolverService.resolveUlbByCode.mockImplementationOnce(() => {
+        startOrder.push('ulb');
+        return ulbDeferred.promise;
+      });
+      mockReferenceResolverService.resolveYearByCode.mockImplementationOnce(() => {
+        startOrder.push('year');
+        return yearDeferred.promise;
+      });
+
+      // Start the call but do not await — we inspect concurrency before it resolves.
+      const createPromise = service
+        .create({ ulbCode: validUlbCode, yearCode: validYearCode, lineItems: {} } as never, stateClient)
+        .catch(() => undefined);
+
+      // Yield to the event loop so the service body has started executing.
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // Both resolvers must have been called before either settled.
+      expect(startOrder).toEqual(['ulb', 'year']);
+
+      // Settle so the test cleans up.
+      ulbDeferred.resolve({ ulbId: new Types.ObjectId(validUlbId), stateId: new Types.ObjectId(validStateId) });
+      yearDeferred.resolve({ yearId: new Types.ObjectId(validYearId), yearCode: validYearCode });
+      await createPromise;
+    });
+
+    it('resolveUlbByCode and resolveYearByCode are called for create()', async () => {
+      mockLegendsFor();
+      await service.create(
+        { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { ...computedExtras } } as never,
+        stateClient,
+      );
+      expect(mockReferenceResolverService.resolveUlbByCode).toHaveBeenCalledWith(validUlbCode);
+      expect(mockReferenceResolverService.resolveYearByCode).toHaveBeenCalledWith(validYearCode);
+    });
+
+    it('resolveUlbByCode and resolveYearByCode are called for update()', async () => {
+      mockLegendsFor();
+      dcModel.findOne.mockReturnValueOnce(makeUpdateRecord());
+      await service.update(
+        { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { ...computedExtras } } as never,
+        stateClient,
+      );
+      expect(mockReferenceResolverService.resolveUlbByCode).toHaveBeenCalledWith(validUlbCode);
+      expect(mockReferenceResolverService.resolveYearByCode).toHaveBeenCalledWith(validYearCode);
+    });
+
+    it('authorization runs after both resolutions in create() — auth receives the resolved ulbId', async () => {
+      mockLegendsFor();
+      await service.create(
+        { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { ...computedExtras } } as never,
+        stateClient,
+      );
+      expect(mockAuthorizationService.validateCanSubmitForUlb).toHaveBeenCalledWith(
+        stateClient,
+        expect.stringMatching(/[0-9a-f]{24}/),
+      );
+    });
+
+    it('authorization runs after both resolutions in update() — auth receives the resolved ulbId', async () => {
+      mockLegendsFor();
+      dcModel.findOne.mockReturnValueOnce(makeUpdateRecord());
+      await service.update(
+        { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { ...computedExtras } } as never,
+        stateClient,
+      );
+      expect(mockAuthorizationService.validateCanModifyForUlb).toHaveBeenCalledWith(
+        stateClient,
+        expect.stringMatching(/[0-9a-f]{24}/),
+      );
+    });
+
+    it('ULB resolution failure prevents authorization and write in create()', async () => {
+      mockReferenceResolverService.resolveUlbByCode.mockRejectedValueOnce(
+        new NotFoundException("ULB with code 'BADCODE' not found."),
+      );
+      await expect(
+        service.create({ ulbCode: 'BADCODE', yearCode: validYearCode, lineItems: {} } as never, stateClient),
+      ).rejects.toThrow(NotFoundException);
+      expect(mockAuthorizationService.validateCanSubmitForUlb).not.toHaveBeenCalled();
+      expect(dcModel).not.toHaveBeenCalled();
+    });
+
+    it('year resolution failure prevents authorization and write in create()', async () => {
+      mockReferenceResolverService.resolveYearByCode.mockRejectedValueOnce(
+        new NotFoundException("Year 'BADYEAR' not found."),
+      );
+      await expect(
+        service.create({ ulbCode: validUlbCode, yearCode: 'BADYEAR', lineItems: {} } as never, stateClient),
+      ).rejects.toThrow(NotFoundException);
+      expect(mockAuthorizationService.validateCanSubmitForUlb).not.toHaveBeenCalled();
+      expect(dcModel).not.toHaveBeenCalled();
+    });
+
+    it('no write occurs before authorization succeeds in create()', async () => {
+      mockAuthorizationService.validateCanSubmitForUlb.mockRejectedValueOnce(new Error('Forbidden'));
+      await expect(
+        service
+          .create({ ulbCode: validUlbCode, yearCode: validYearCode, lineItems: {} } as never, stateClient)
+          .catch((e) => e),
+      ).resolves.toBeDefined();
+      // dcModel as constructor must not have been called (no new DataCollection created).
+      expect(dcModel).not.toHaveBeenCalled();
+    });
+  });
+
+  // ─── Parallelization: duplicate check + legend loading concurrent ─────────
+
+  describe('existing-submission lookup and legend loading — concurrent execution', () => {
+    it('getActiveLegendsForValidation is called via the service boundary, not the model directly', async () => {
+      mockLegendsFor();
+      await service.create(
+        { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { ...computedExtras } } as never,
+        stateClient,
+      );
+      expect(mockLineItemsLegendService.getActiveLegendsForValidation).toHaveBeenCalledTimes(1);
+    });
+
+    it('getActiveLegendsForValidation receives the correct templateVersion in create()', async () => {
+      mockLegendsFor();
+      await service.create(
+        {
+          ulbCode: validUlbCode,
+          yearCode: validYearCode,
+          templateVersion: '2026.1',
+          lineItems: { ...computedExtras },
+        } as never,
+        stateClient,
+      );
+      expect(mockLineItemsLegendService.getActiveLegendsForValidation).toHaveBeenCalledWith('2026.1');
+    });
+
+    it('duplicate submission is still rejected via ConflictException when a record already exists', async () => {
+      dcModel.findOne.mockReturnValueOnce(makeFindOneLean(makeReadRecord()));
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce([]);
+      await expect(
+        service.create(
+          { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: {} } as never,
+          stateClient,
+        ),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('duplicate audit log is still recorded before ConflictException is thrown', async () => {
+      const existingRecord = makeReadRecord();
+      dcModel.findOne.mockReturnValueOnce(makeFindOneLean(existingRecord));
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce([]);
+      await service.create({ ulbCode: validUlbCode, yearCode: validYearCode, lineItems: {} } as never, stateClient).catch(() => undefined);
+      expect(mockAuditLogService.logDuplicateSubmit).toHaveBeenCalledTimes(1);
+    });
+
+    it('submit validation uses the legends loaded concurrently', async () => {
+      const customLegend = makeLegend('999');
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce([
+        ...makeComputedSourceLegends(),
+        customLegend,
+        ...makeAllComputedLegends(),
+      ]);
+      const result = await service.create(
+        { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { ...computedExtras } } as never,
+        stateClient,
+      );
+      // Validation used the loaded legends and the submission succeeded.
+      expect(result).toHaveProperty('message', 'Financial data submitted successfully.');
+    });
+
+    it('update validation uses the legends loaded concurrently', async () => {
+      mockLegendsFor();
+      dcModel.findOne.mockReturnValueOnce(makeUpdateRecord());
+      const result = await service.update(
+        { ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { ...computedExtras } } as never,
+        stateClient,
+      );
+      expect(result).toHaveProperty('message', 'Financial data updated successfully.');
+      expect(mockLineItemsLegendService.getActiveLegendsForValidation).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // ─── ULB schema indexes ───────────────────────────────────────────────────
+
+  describe('ULB schema indexes', () => {
+    type IndexTuple = [Record<string, unknown>, Record<string, unknown>];
+    const ulbIndexes = () => UlbSchema.indexes() as IndexTuple[];
+
+    it('UlbSchema declares a censusCode ascending index', () => {
+      const idx = ulbIndexes().find(([key]) => 'censusCode' in key);
+      expect(idx).toBeDefined();
+      expect(idx?.[0]).toEqual({ censusCode: 1 });
+    });
+
+    it('UlbSchema declares an sbCode ascending index', () => {
+      const idx = ulbIndexes().find(([key]) => 'sbCode' in key);
+      expect(idx).toBeDefined();
+      expect(idx?.[0]).toEqual({ sbCode: 1 });
+    });
+
+    it('censusCode index is not declared unique', () => {
+      const idx = ulbIndexes().find(([key]) => 'censusCode' in key);
+      expect(idx?.[1]['unique']).toBeFalsy();
+    });
+
+    it('sbCode index is not declared unique', () => {
+      const idx = ulbIndexes().find(([key]) => 'sbCode' in key);
+      expect(idx?.[1]['unique']).toBeFalsy();
     });
   });
 

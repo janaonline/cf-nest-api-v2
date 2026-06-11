@@ -186,18 +186,24 @@ export class DataCollectionService {
     const { ulbCode, yearCode, lineItems: payloadLineItems } = payload;
     const templateVersion = payload.templateVersion ?? DEFAULT_TEMPLATE_VERSION;
 
-    const { ulbId, stateId } = await this.referenceResolverService.resolveUlbByCode(ulbCode);
-    const { yearId, yearCode: resolvedYearCode } = await this.referenceResolverService.resolveYearByCode(yearCode);
+    const [resolvedUlb, resolvedYear] = await Promise.all([
+      this.referenceResolverService.resolveUlbByCode(ulbCode),
+      this.referenceResolverService.resolveYearByCode(yearCode),
+    ]);
+    const { ulbId, stateId } = resolvedUlb;
+    const { yearId, yearCode: resolvedYearCode } = resolvedYear;
 
     await this.authorizationService.validateCanSubmitForUlb(client, ulbId.toString());
 
     const lineItemCount = this.getLineItemCount(payloadLineItems);
-
-    const existing = await this.dataCollectionModel
-      .findOne({ ulbId, yearId, isActive: true, status: 'ACTIVE' })
-      .lean<DataCollectionDocument>();
-
     const apiClientId = this.getApiClientObjectId(client);
+
+    const [existing, legends] = await Promise.all([
+      this.dataCollectionModel
+        .findOne({ ulbId, yearId, isActive: true, status: 'ACTIVE' })
+        .lean<DataCollectionDocument | null>(),
+      this.lineItemsLegendService.getActiveLegendsForValidation(templateVersion),
+    ]);
 
     if (existing) {
       await this.auditLogService.logDuplicateSubmit({
@@ -216,7 +222,6 @@ export class DataCollectionService {
       );
     }
 
-    const legends = await this.lineItemsLegendService.getActiveLegendsForValidation(templateVersion);
     const result = this.validateLineItemsAgainstTemplate(payloadLineItems, legends, templateVersion);
 
     if (result.hasErrors) {
@@ -294,15 +299,23 @@ export class DataCollectionService {
   async update(payload: DataCollectionDto, client: ApiClientContext, meta: DataCollectionRequestMeta = {}) {
     const { ulbCode, yearCode, lineItems: payloadLineItems } = payload;
 
-    const { ulbId, stateId } = await this.referenceResolverService.resolveUlbByCode(ulbCode);
-    const { yearId, yearCode: resolvedYearCode } = await this.referenceResolverService.resolveYearByCode(yearCode);
+    const [resolvedUlb, resolvedYear] = await Promise.all([
+      this.referenceResolverService.resolveUlbByCode(ulbCode),
+      this.referenceResolverService.resolveYearByCode(yearCode),
+    ]);
+    const { ulbId, stateId } = resolvedUlb;
+    const { yearId, yearCode: resolvedYearCode } = resolvedYear;
 
     await this.authorizationService.validateCanModifyForUlb(client, ulbId.toString());
 
-    const existing = await this.dataCollectionModel.findOne({ ulbId, yearId, isActive: true, status: 'ACTIVE' });
-
     const lineItemCount = this.getLineItemCount(payloadLineItems);
     const apiClientId = this.getApiClientObjectId(client);
+
+    const legendsTemplateVersion = payload.templateVersion ?? DEFAULT_TEMPLATE_VERSION;
+    const [existing, legends] = await Promise.all([
+      this.dataCollectionModel.findOne({ ulbId, yearId, isActive: true, status: 'ACTIVE' }),
+      this.lineItemsLegendService.getActiveLegendsForValidation(legendsTemplateVersion),
+    ]);
 
     if (!existing) {
       await this.auditLogService.logModifyNotFound({
@@ -310,7 +323,7 @@ export class DataCollectionService {
         stateId,
         ulbId,
         yearId,
-        templateVersion: payload.templateVersion ?? DEFAULT_TEMPLATE_VERSION,
+        templateVersion: legendsTemplateVersion,
         lineItemCount,
         ip: meta.ip,
         userAgent: meta.userAgent,
@@ -333,7 +346,7 @@ export class DataCollectionService {
       mergedLineItems[key] = value;
     }
 
-    const legends = await this.lineItemsLegendService.getActiveLegendsForValidation(templateVersion);
+    // Step 07: synchronous validation against the loaded legends.
     const result = this.validateLineItemsAgainstTemplate(mergedLineItems, legends, templateVersion);
 
     if (result.hasErrors) {

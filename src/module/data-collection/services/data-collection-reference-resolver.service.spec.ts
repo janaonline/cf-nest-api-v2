@@ -10,7 +10,23 @@ const ulbId = new Types.ObjectId('5dd24729437ba31f7eb42eee');
 const stateId = new Types.ObjectId('5dcf9d7216a06aed41c748dd');
 const yearId = new Types.ObjectId('606aafb14dff55e6c075d3ae');
 
-const mockUlbModel = { find: jest.fn() };
+// ─── ULB chain helper ─────────────────────────────────────────────────────────
+//
+// resolveUlbByCode now calls .find().limit(2).lean().
+// The mock must support this chain so that both the limit and lean steps resolve
+// to the intended result array.
+
+type UlbDoc = { _id: Types.ObjectId; state: Types.ObjectId };
+
+function makeUlbFindChain(data: UlbDoc[]) {
+  const lean = jest.fn().mockResolvedValue(data);
+  const limit = jest.fn().mockReturnValue({ lean });
+  return { limit };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+const mockUlbModel = { find: jest.fn(), collection: { name: 'ulbs' } };
 const mockYearModel = { findOne: jest.fn() };
 
 describe('DataCollectionReferenceResolverService', () => {
@@ -35,63 +51,71 @@ describe('DataCollectionReferenceResolverService', () => {
 
   describe('resolveUlbByCode', () => {
     it('returns ulbId and stateId when exactly one match is found', async () => {
-      mockUlbModel.find.mockReturnValue({ lean: jest.fn().mockResolvedValue([{ _id: ulbId, state: stateId }]) });
+      mockUlbModel.find.mockReturnValue(makeUlbFindChain([{ _id: ulbId, state: stateId }]));
       const result = await service.resolveUlbByCode('C001');
       expect(result).toEqual({ ulbId, stateId });
     });
 
     it('queries by censusCode OR sbCode', async () => {
-      mockUlbModel.find.mockReturnValue({ lean: jest.fn().mockResolvedValue([{ _id: ulbId, state: stateId }]) });
+      mockUlbModel.find.mockReturnValue(makeUlbFindChain([{ _id: ulbId, state: stateId }]));
       await service.resolveUlbByCode('C001');
       const queryArg = (mockUlbModel.find.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
       expect(queryArg).toMatchObject({ $or: [{ censusCode: 'C001' }, { sbCode: 'C001' }] });
     });
 
+    it('applies .limit(2) to cap the result set', async () => {
+      mockUlbModel.find.mockReturnValue(makeUlbFindChain([{ _id: ulbId, state: stateId }]));
+      await service.resolveUlbByCode('C001');
+      // find() returns the chain; the chain's limit() is the next call
+      const chain = mockUlbModel.find.mock.results[0]?.value as { limit: jest.Mock } | undefined;
+      expect(chain?.limit).toHaveBeenCalledWith(2);
+    });
+
     it('throws NotFoundException when no ULB matches the code', async () => {
-      mockUlbModel.find.mockReturnValue({ lean: jest.fn().mockResolvedValue([]) });
+      mockUlbModel.find.mockReturnValue(makeUlbFindChain([]));
       await expect(service.resolveUlbByCode('UNKNOWN')).rejects.toThrow(NotFoundException);
     });
 
     it('NotFoundException message contains the requested code', async () => {
-      mockUlbModel.find.mockReturnValue({ lean: jest.fn().mockResolvedValue([]) });
+      mockUlbModel.find.mockReturnValue(makeUlbFindChain([]));
       await expect(service.resolveUlbByCode('UNKNOWN')).rejects.toThrow("ULB with code 'UNKNOWN' not found.");
     });
 
     it('throws ConflictException when multiple ULBs match the code', async () => {
-      mockUlbModel.find.mockReturnValue({
-        lean: jest.fn().mockResolvedValue([
+      mockUlbModel.find.mockReturnValue(
+        makeUlbFindChain([
           { _id: ulbId, state: stateId },
           { _id: new Types.ObjectId(), state: stateId },
         ]),
-      });
+      );
       await expect(service.resolveUlbByCode('C001')).rejects.toThrow(ConflictException);
     });
 
     it('ConflictException message contains the requested code', async () => {
-      mockUlbModel.find.mockReturnValue({
-        lean: jest.fn().mockResolvedValue([
+      mockUlbModel.find.mockReturnValue(
+        makeUlbFindChain([
           { _id: ulbId, state: stateId },
           { _id: new Types.ObjectId(), state: stateId },
         ]),
-      });
+      );
       await expect(service.resolveUlbByCode('C001')).rejects.toThrow("Multiple ULBs found for code 'C001'.");
     });
 
     it('requests _id and state (stateId) projection — no extra fields', async () => {
-      mockUlbModel.find.mockReturnValue({ lean: jest.fn().mockResolvedValue([{ _id: ulbId, state: stateId }]) });
+      mockUlbModel.find.mockReturnValue(makeUlbFindChain([{ _id: ulbId, state: stateId }]));
       await service.resolveUlbByCode('C001');
       const projectionArg = (mockUlbModel.find.mock.calls[0] as unknown[])[1] as Record<string, unknown>;
       expect(projectionArg).toEqual({ _id: 1, state: 1 });
     });
 
     it('result.ulbId matches the DB _id', async () => {
-      mockUlbModel.find.mockReturnValue({ lean: jest.fn().mockResolvedValue([{ _id: ulbId, state: stateId }]) });
+      mockUlbModel.find.mockReturnValue(makeUlbFindChain([{ _id: ulbId, state: stateId }]));
       const result = await service.resolveUlbByCode('C001');
       expect(result.ulbId).toBe(ulbId);
     });
 
     it('result.stateId matches the ULB state field', async () => {
-      mockUlbModel.find.mockReturnValue({ lean: jest.fn().mockResolvedValue([{ _id: ulbId, state: stateId }]) });
+      mockUlbModel.find.mockReturnValue(makeUlbFindChain([{ _id: ulbId, state: stateId }]));
       const result = await service.resolveUlbByCode('C001');
       expect(result.stateId).toBe(stateId);
     });

@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
 import { Test, TestingModule } from '@nestjs/testing';
+import { RedisService } from 'src/core/services/redis/redis.service';
 import { LineItemsLegend } from './entities/line-items-legend.schema';
 import { LineItemsLegendService } from './line-items-legend.service';
 import { COMPARISON_OPERATORS, isComparisonOperator } from './types';
@@ -43,6 +44,12 @@ const validRawItem = {
 // mockSave is the .save() on a model instance created via `new Model(dto)`
 const mockSave = jest.fn();
 
+const mockRedisService = {
+  get: jest.fn(),
+  set: jest.fn(),
+  del: jest.fn(),
+};
+
 // mockLegendModel must be both callable as a constructor and have static Mongoose methods.
 const mockLegendModel = Object.assign(
   jest.fn().mockImplementation(() => ({ save: mockSave })),
@@ -65,7 +72,11 @@ describe('LineItemsLegendService', () => {
     jest.clearAllMocks();
 
     const module: TestingModule = await Test.createTestingModule({
-      providers: [LineItemsLegendService, { provide: getModelToken(LineItemsLegend.name), useValue: mockLegendModel }],
+      providers: [
+        LineItemsLegendService,
+        { provide: getModelToken(LineItemsLegend.name), useValue: mockLegendModel },
+        { provide: RedisService, useValue: mockRedisService },
+      ],
     }).compile();
 
     service = module.get<LineItemsLegendService>(LineItemsLegendService);
@@ -865,6 +876,175 @@ describe('LineItemsLegendService', () => {
         expect(result.total).toBe(1);
       }
       expect(mockLegendModel.bulkWrite).toHaveBeenCalled();
+    });
+  });
+
+  // ─── getActiveLegendsForValidation — caching ─────────────────────────────
+
+  describe('getActiveLegendsForValidation — caching', () => {
+    const TV = '2026.1';
+    const CACHE_KEY = `line-items-legends:validation:${TV}`;
+    // Use a LineItemLegendForValidation-shaped fixture (no Date fields) to avoid
+    // JSON serialisation round-trip mismatches on createdAt/updatedAt.
+    const legends = [
+      { nmamCode: '110', name: 'Tax Revenue', accountHead: 'INCOME', level: 1, parentCode: null, rules: [] },
+    ];
+
+    beforeEach(() => {
+      mockRedisService.get.mockResolvedValue(null);
+      mockRedisService.set.mockResolvedValue(undefined);
+      mockLegendModel.find.mockReturnValue({ lean: jest.fn().mockResolvedValue(legends) });
+    });
+
+    it('returns cached value on hit without querying MongoDB', async () => {
+      mockRedisService.get.mockResolvedValueOnce(JSON.stringify(legends));
+      const result = await service.getActiveLegendsForValidation(TV);
+      expect(result).toEqual(legends);
+      expect(mockLegendModel.find).not.toHaveBeenCalled();
+    });
+
+    it('queries MongoDB on cache miss', async () => {
+      const result = await service.getActiveLegendsForValidation(TV);
+      expect(result).toEqual(legends);
+      expect(mockLegendModel.find).toHaveBeenCalledTimes(1);
+    });
+
+    it('populates cache with MongoDB result on miss', async () => {
+      await service.getActiveLegendsForValidation(TV);
+      expect(mockRedisService.set).toHaveBeenCalledWith(CACHE_KEY, legends);
+    });
+
+    it('uses the correct cache key for the templateVersion', async () => {
+      await service.getActiveLegendsForValidation(TV);
+      expect(mockRedisService.get).toHaveBeenCalledWith(CACHE_KEY);
+      expect(mockRedisService.set).toHaveBeenCalledWith(CACHE_KEY, legends);
+    });
+
+    it('falls back to MongoDB when cache read throws', async () => {
+      mockRedisService.get.mockRejectedValueOnce(new Error('Redis unavailable'));
+      const result = await service.getActiveLegendsForValidation(TV);
+      expect(result).toEqual(legends);
+      expect(mockLegendModel.find).toHaveBeenCalledTimes(1);
+    });
+
+    it('still returns MongoDB result when cache write throws', async () => {
+      mockRedisService.set.mockRejectedValueOnce(new Error('Redis write error'));
+      const result = await service.getActiveLegendsForValidation(TV);
+      expect(result).toEqual(legends);
+    });
+
+    it('does not throw when cache write fails', async () => {
+      mockRedisService.set.mockRejectedValueOnce(new Error('Redis write error'));
+      await expect(service.getActiveLegendsForValidation(TV)).resolves.toBeDefined();
+    });
+  });
+
+  // ─── cache invalidation ───────────────────────────────────────────────────
+
+  describe('cache invalidation', () => {
+    const TV = '2026.1';
+    const CACHE_KEY = `line-items-legends:validation:${TV}`;
+
+    beforeEach(() => {
+      mockRedisService.del.mockResolvedValue(undefined);
+    });
+
+    // createLegend
+    it('invalidates cache after createLegend succeeds', async () => {
+      mockLegendModel.exists.mockResolvedValueOnce(null);
+      mockSave.mockResolvedValueOnce(makeLegend());
+      await service.createLegend({ nmamCode: '110', templateVersion: TV, ...validRawItem });
+      expect(mockRedisService.del).toHaveBeenCalledWith(CACHE_KEY);
+    });
+
+    it('does not invalidate cache when createLegend throws ConflictException (duplicate exists)', async () => {
+      mockLegendModel.exists.mockResolvedValueOnce({ _id: 'existing' });
+      await service.createLegend({ nmamCode: '110', templateVersion: TV, ...validRawItem }).catch(() => undefined);
+      expect(mockRedisService.del).not.toHaveBeenCalled();
+    });
+
+    it('does not invalidate cache when createLegend save throws', async () => {
+      mockLegendModel.exists.mockResolvedValueOnce(null);
+      mockSave.mockRejectedValueOnce(new Error('DB error'));
+      await service.createLegend({ nmamCode: '110', templateVersion: TV, ...validRawItem }).catch(() => undefined);
+      expect(mockRedisService.del).not.toHaveBeenCalled();
+    });
+
+    it('cache invalidation failure does not fail createLegend', async () => {
+      mockLegendModel.exists.mockResolvedValueOnce(null);
+      mockSave.mockResolvedValueOnce(makeLegend());
+      mockRedisService.del.mockRejectedValueOnce(new Error('Redis error'));
+      await expect(
+        service.createLegend({ nmamCode: '110', templateVersion: TV, ...validRawItem }),
+      ).resolves.toBeDefined();
+    });
+
+    // updateLegend
+    it('invalidates cache after updateLegend succeeds', async () => {
+      mockLegendModel.findOneAndUpdate.mockReturnValueOnce({ lean: jest.fn().mockResolvedValue(makeLegend()) });
+      await service.updateLegend('110', TV, {});
+      expect(mockRedisService.del).toHaveBeenCalledWith(CACHE_KEY);
+    });
+
+    it('does not invalidate cache when updateLegend throws NotFoundException', async () => {
+      mockLegendModel.findOneAndUpdate.mockReturnValueOnce({ lean: jest.fn().mockResolvedValue(null) });
+      await service.updateLegend('110', TV, {}).catch(() => undefined);
+      expect(mockRedisService.del).not.toHaveBeenCalled();
+    });
+
+    // importFromJson
+    it('invalidates cache after importFromJson succeeds (non-dryRun)', async () => {
+      mockLegendModel.find.mockReturnValue({
+        select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue([]) }),
+      });
+      mockLegendModel.bulkWrite.mockResolvedValueOnce({ upsertedCount: 1, modifiedCount: 0 });
+      await service.importFromJson({ dryRun: false, lineItems: [validRawItem] });
+      expect(mockRedisService.del).toHaveBeenCalledWith(CACHE_KEY);
+    });
+
+    it('does NOT invalidate cache on dryRun import', async () => {
+      await service.importFromJson({ dryRun: true, lineItems: [validRawItem] });
+      expect(mockRedisService.del).not.toHaveBeenCalled();
+    });
+
+    it('does not invalidate cache when bulkWrite throws', async () => {
+      mockLegendModel.find.mockReturnValue({
+        select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue([]) }),
+      });
+      mockLegendModel.bulkWrite.mockRejectedValueOnce(new Error('DB error'));
+      await service.importFromJson({ dryRun: false, lineItems: [validRawItem] }).catch(() => undefined);
+      expect(mockRedisService.del).not.toHaveBeenCalled();
+    });
+
+    // deleteLegend
+    it('invalidates cache after deleteLegend succeeds', async () => {
+      mockLegendModel.exists.mockResolvedValueOnce(null);
+      mockLegendModel.findOneAndDelete.mockReturnValueOnce({ lean: jest.fn().mockResolvedValue(makeLegend()) });
+      await service.deleteLegend('110', TV);
+      expect(mockRedisService.del).toHaveBeenCalledWith(CACHE_KEY);
+    });
+
+    it('does not invalidate cache when deleteLegend throws NotFoundException', async () => {
+      mockLegendModel.exists.mockResolvedValueOnce(null);
+      mockLegendModel.findOneAndDelete.mockReturnValueOnce({ lean: jest.fn().mockResolvedValue(null) });
+      await service.deleteLegend('110', TV).catch(() => undefined);
+      expect(mockRedisService.del).not.toHaveBeenCalled();
+    });
+
+    it('does not invalidate cache when deleteLegend throws ConflictException (has children)', async () => {
+      mockLegendModel.exists.mockResolvedValueOnce({ _id: 'child' });
+      await service.deleteLegend('110', TV).catch(() => undefined);
+      expect(mockRedisService.del).not.toHaveBeenCalled();
+    });
+
+    // deleteLegendSubtree
+    it('invalidates cache after deleteLegendSubtree succeeds', async () => {
+      mockLegendModel.find.mockReturnValue({
+        sort: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue([makeLegend()]) }),
+      });
+      mockLegendModel.deleteMany.mockResolvedValueOnce({ deletedCount: 1 });
+      await service.deleteLegendSubtree('110', TV);
+      expect(mockRedisService.del).toHaveBeenCalledWith(CACHE_KEY);
     });
   });
 });

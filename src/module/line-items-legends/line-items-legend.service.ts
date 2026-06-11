@@ -1,6 +1,7 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model } from 'mongoose';
+import { RedisService } from 'src/core/services/redis/redis.service';
 import { CreateLineItemsLegendDto } from './dto/create-line-items-legend.dto';
 import { FinancialDataTemplateQueryDto } from './dto/financial-data-template-query.dto';
 import { ImportLineItemsTemplateDto } from './dto/import-line-items-template.dto';
@@ -23,12 +24,16 @@ import {
 } from './types';
 
 const TEMPLATE_PROJECTION = '-_id -__v -createdAt -updatedAt -templateVersion' as const;
+const VALIDATION_CACHE_PREFIX = 'line-items-legends:validation';
 
 @Injectable()
 export class LineItemsLegendService {
+  private readonly logger = new Logger(LineItemsLegendService.name);
+
   constructor(
     @InjectModel(LineItemsLegend.name)
     private readonly legendModel: Model<LineItemsLegendDocument>,
+    private readonly redisService: RedisService,
   ) {}
 
   /**
@@ -57,14 +62,45 @@ export class LineItemsLegendService {
 
   /**
    * Fetches active legends for validation (both normal and computed).
-   * Selects only fields needed for key and rule checks.
+   * Results are cached by templateVersion. Cache misses fall back to MongoDB.
    * @param templateVersion Template version to validate against.
    * @returns Active legend records for validation.
    */
   async getActiveLegendsForValidation(templateVersion: string): Promise<LineItemLegendForValidation[]> {
-    return this.legendModel
+    const key = `${VALIDATION_CACHE_PREFIX}:${templateVersion}`;
+
+    // Attempt cache read; fall through to MongoDB on any failure.
+    try {
+      const cached = await this.redisService.get(key);
+      if (cached !== null) {
+        return JSON.parse(cached) as LineItemLegendForValidation[];
+      }
+    } catch (err: unknown) {
+      this.logger.warn(`Cache read failed for ${key}: ${String(err)}`);
+    }
+
+    // Cache miss — fetch from MongoDB.
+    const legends = await this.legendModel
       .find({ templateVersion, isActive: true }, '-_id nmamCode name accountHead level parentCode rules isComputed')
       .lean<LineItemLegendForValidation[]>();
+
+    // Populate cache; a write failure must not affect the caller.
+    try {
+      await this.redisService.set(key, legends);
+    } catch (err: unknown) {
+      this.logger.warn(`Cache write failed for ${key}: ${String(err)}`);
+    }
+
+    return legends;
+  }
+
+  /** Removes the validation cache entry for one template version. Logs and continues on failure. */
+  private async invalidateValidationCache(templateVersion: string): Promise<void> {
+    try {
+      await this.redisService.del(`${VALIDATION_CACHE_PREFIX}:${templateVersion}`);
+    } catch (err: unknown) {
+      this.logger.warn(`Cache invalidation failed for templateVersion ${templateVersion}: ${String(err)}`);
+    }
   }
 
   /**
@@ -123,7 +159,9 @@ export class LineItemsLegendService {
     const payload = sanitizedRules !== undefined ? { ...dto, rules: sanitizedRules } : dto;
     try {
       const created = new this.legendModel(payload);
-      return await created.save();
+      const saved = await created.save();
+      await this.invalidateValidationCache(dto.templateVersion);
+      return saved;
     } catch (error) {
       if (this.isDuplicateKeyError(error)) {
         throw new ConflictException('Line item legend already exists for this template version and nmamCode.');
@@ -151,6 +189,7 @@ export class LineItemsLegendService {
       .findOneAndUpdate({ nmamCode, templateVersion }, { $set: setPayload }, { new: true })
       .lean<LineItemsLegend | null>();
     if (!updated) throw new NotFoundException(`Line item '${nmamCode}' not found for version '${templateVersion}'`);
+    await this.invalidateValidationCache(templateVersion);
     return updated;
   }
 
@@ -205,6 +244,7 @@ export class LineItemsLegendService {
 
     try {
       const result = await this.legendModel.bulkWrite(ops as never, { ordered: false });
+      await this.invalidateValidationCache(templateVersion);
       return {
         dryRun: false,
         templateVersion,
@@ -578,6 +618,7 @@ export class LineItemsLegendService {
       throw new NotFoundException('Line item legend not found.');
     }
 
+    await this.invalidateValidationCache(templateVersion);
     return { message: 'Line item legend deleted successfully.', deleted };
   }
 
@@ -600,6 +641,7 @@ export class LineItemsLegendService {
     }
 
     await this.legendModel.deleteMany({ templateVersion, codePath: nmamCode });
+    await this.invalidateValidationCache(templateVersion);
 
     return {
       message: 'Line item legend subtree deleted successfully.',
