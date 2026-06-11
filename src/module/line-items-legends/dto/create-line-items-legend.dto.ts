@@ -64,6 +64,10 @@ export class CreateLineItemsLegendDto {
   @IsOptional()
   isActive?: boolean;
 
+  @IsBoolean()
+  @IsOptional()
+  isComputed?: boolean;
+
   @IsArray()
   @IsOptional()
   @ValidateNested({ each: true })

@@ -160,3 +160,7 @@ export class Ulb {
 
 export type UlbDocument = Ulb & Document;
 export const UlbSchema = SchemaFactory.createForClass(Ulb);
+
+// Non-unique indexes
+UlbSchema.index({ censusCode: 1 });
+UlbSchema.index({ sbCode: 1 });

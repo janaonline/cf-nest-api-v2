@@ -175,4 +175,86 @@ describe('ApiExceptionFilter', () => {
       expect(error).toHaveProperty('statusCode');
     });
   });
+
+  describe('BadRequestException — structured service exception (e.g. import)', () => {
+    const importErrors = [
+      { index: 0, nmamCode: 'computed.totIncome', field: 'rules', message: 'A computed legend must contain exactly one formula rule.' },
+    ];
+
+    function makeImportException(overrides?: Record<string, unknown>) {
+      return new BadRequestException({
+        message: 'Import validation failed',
+        code: 'IMPORT_VALIDATION_FAILED',
+        errors: importErrors,
+        ...overrides,
+      });
+    }
+
+    it('uses custom code from exception response', () => {
+      const body = captureResponse(filter, makeImportException());
+      expect((body['error'] as Record<string, unknown>)['code']).toBe('IMPORT_VALIDATION_FAILED');
+    });
+
+    it('lifts errors to top-level errors field', () => {
+      const body = captureResponse(filter, makeImportException());
+      expect(body['errors']).toEqual(importErrors);
+    });
+
+    it('preserves message', () => {
+      const body = captureResponse(filter, makeImportException());
+      expect(body['message']).toBe('Import validation failed');
+    });
+
+    it('does not include errors in error.details', () => {
+      const body = captureResponse(filter, makeImportException());
+      expect((body['error'] as Record<string, unknown>)).not.toHaveProperty('details');
+    });
+
+    it('returns statusCode 400', () => {
+      const body = captureResponse(filter, makeImportException());
+      expect((body['error'] as Record<string, unknown>)['statusCode']).toBe(400);
+    });
+
+    it('uses BAD_REQUEST code when no custom code provided', () => {
+      const err = new BadRequestException({ message: 'Something failed', errors: importErrors });
+      const body = captureResponse(filter, err);
+      expect((body['error'] as Record<string, unknown>)['code']).toBe('BAD_REQUEST');
+    });
+
+    it('still lifts errors even without a custom code', () => {
+      const err = new BadRequestException({ message: 'Something failed', errors: importErrors });
+      const body = captureResponse(filter, err);
+      expect(body['errors']).toEqual(importErrors);
+    });
+
+    it('does not set top-level errors when errors field is absent', () => {
+      const err = new BadRequestException({ message: 'Something failed' });
+      const body = captureResponse(filter, err);
+      expect(body).not.toHaveProperty('errors');
+    });
+
+    it('class-validator string[] does not appear at top-level errors', () => {
+      const err = new BadRequestException({ message: ['field is required'], error: 'Bad Request' });
+      const body = captureResponse(filter, err);
+      expect(body).not.toHaveProperty('errors');
+    });
+
+    it('data-collection structured failure does not appear at top-level errors', () => {
+      const err = new BadRequestException({
+        ulbCode: 'C001',
+        yearCode: '2021-22',
+        templateVersion: '2026.1',
+        success: false,
+        errors: [{ lineItemCode: '110', severity: 'ERROR', message: 'must be finite' }],
+        lineItems: {},
+      });
+      const body = captureResponse(filter, err);
+      expect(body).not.toHaveProperty('errors');
+    });
+
+    it('string BadRequestException does not set top-level errors', () => {
+      const body = captureResponse(filter, new BadRequestException('Simple string error'));
+      expect(body).not.toHaveProperty('errors');
+    });
+  });
 });

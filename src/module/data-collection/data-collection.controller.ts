@@ -9,6 +9,7 @@ import { ScopesGuard } from 'src/module/auth/guards/scopes.guard';
 import type { ApiClientContext } from 'src/module/auth/types/api-client-context.type';
 import { DATA_COLLECTION_SCOPES } from './constant';
 import { DataCollectionDto } from './dto/data-collection.dto';
+import { GetDataCollectionDto } from './dto/get-data-collection.dto';
 import { FinancialDataTemplateQueryDto } from 'src/module/line-items-legends/dto/financial-data-template-query.dto';
 import { DataCollectionService } from './services/data-collection.service';
 
@@ -49,6 +50,16 @@ export class DataCollectionController {
   @Scopes(DATA_COLLECTION_SCOPES.YEARS_READ)
   getYearsList() {
     return this.dataCollectionService.getYearsList();
+  }
+
+  @Get('financial-data')
+  @ApiOperation({
+    summary: 'Get submitted financial data',
+    description: 'Returns the active financial data submission for one ULB and financial year.',
+  })
+  @Scopes(DATA_COLLECTION_SCOPES.FINANCIAL_DATA_READ)
+  findOne(@Query() query: GetDataCollectionDto, @CurrentApiClient() client: ApiClientContext) {
+    return this.dataCollectionService.findOneByUlbAndYear(query, client);
   }
 
   @Post('submit-financial-data')

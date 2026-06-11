@@ -13,6 +13,15 @@ const STATUS_CODE_MAP: Record<number, string> = {
   500: 'INTERNAL_SERVER_ERROR',
 };
 
+/** Shape of a structured object thrown via new HttpException / BadRequestException({ ... }). */
+type StructuredHttpExceptionResponse = {
+  message?: string | string[];
+  error?: string;
+  code?: string;
+  errors?: unknown;
+  details?: unknown;
+};
+
 /**
  * Opt-in exception filter that converts any thrown exception into the standard error envelope.
  * Apply via `@ApiEnvelope()` — do NOT register globally.
@@ -46,8 +55,9 @@ export class ApiExceptionFilter implements ExceptionFilter {
     const code = this.resolveCode(statusCode, res);
     const message = this.resolveMessage(statusCode, res);
     const details = this.resolveDetails(statusCode, res);
+    const errors = this.resolveErrors(res);
 
-    return {
+    const body: ApiErrorResponse = {
       success: false,
       message,
       error: {
@@ -56,6 +66,12 @@ export class ApiExceptionFilter implements ExceptionFilter {
         ...(details !== undefined ? { details } : {}),
       },
     };
+
+    if (errors !== undefined) {
+      body.errors = errors;
+    }
+
+    return body;
   }
 
   private resolveCode(statusCode: number, res: unknown): string {
@@ -98,5 +114,20 @@ export class ApiExceptionFilter implements ExceptionFilter {
 
     if (typeof obj['details'] !== 'undefined') return obj['details'];
     return undefined;
+  }
+
+  /**
+   * Lifts `errors` from a structured service exception to the top-level response body.
+   * Excluded cases (handled by resolveDetails instead):
+   *   - class-validator: message is string[] → errors go into details
+   *   - data-collection: success === false → errors go into details
+   */
+  private resolveErrors(res: unknown): unknown {
+    if (typeof res !== 'object' || res === null) return undefined;
+    const obj = res as StructuredHttpExceptionResponse;
+    if (!('errors' in obj)) return undefined;
+    if (Array.isArray(obj.message)) return undefined;   // class-validator → details path
+    if ((obj as Record<string, unknown>)['success'] === false) return undefined; // data-collection → details path
+    return obj.errors;
   }
 }

@@ -20,11 +20,13 @@ export class DataCollectionReferenceResolverService {
   /**
    * Resolves a public ULB code (censusCode or sbCode) to its internal ObjectId and stateId.
    * Throws NotFoundException for no match and ConflictException for multiple matches.
+   * .limit(2) is intentional: we only need to distinguish zero / one / many results.
    */
   async resolveUlbByCode(ulbCode: string): Promise<ResolvedUlb> {
     const ulbs = await this.ulbModel
       .find({ $or: [{ censusCode: ulbCode }, { sbCode: ulbCode }] }, { _id: 1, state: 1 })
-      .lean<{ _id: Types.ObjectId; state: Types.ObjectId }[]>();
+      .limit(2)
+      .lean<Array<{ _id: Types.ObjectId; state: Types.ObjectId }>>();
 
     if (ulbs.length === 0) throw new NotFoundException(`ULB with code '${ulbCode}' not found.`);
     if (ulbs.length > 1) throw new ConflictException(`Multiple ULBs found for code '${ulbCode}'.`);

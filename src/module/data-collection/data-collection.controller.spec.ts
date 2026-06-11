@@ -1,9 +1,13 @@
 import { ApiOperation } from '@nestjs/swagger';
 import { Test, TestingModule } from '@nestjs/testing';
+import { validate } from 'class-validator';
+import { SCOPES_KEY } from 'src/module/auth/decorators/scopes.decorator';
 import { IntegrationJwtGuard } from 'src/module/auth/guards/integration-jwt.guard';
 import { ScopesGuard } from 'src/module/auth/guards/scopes.guard';
 import type { ApiClientContext } from 'src/module/auth/types/api-client-context.type';
+import { DATA_COLLECTION_SCOPES } from './constant';
 import { DataCollectionController } from './data-collection.controller';
+import { GetDataCollectionDto } from './dto/get-data-collection.dto';
 import { DataCollectionService } from './services/data-collection.service';
 
 const mockClient: ApiClientContext = {
@@ -25,6 +29,7 @@ const mockService = {
   getFinancialDataTemplate: jest.fn().mockResolvedValue(mockTemplateResult),
   getUlbsList: jest.fn().mockResolvedValue([]),
   getYearsList: jest.fn().mockResolvedValue([]),
+  findOneByUlbAndYear: jest.fn().mockResolvedValue({}),
   create: jest.fn().mockResolvedValue({}),
   update: jest.fn().mockResolvedValue({}),
 };
@@ -73,6 +78,41 @@ describe('DataCollectionController', () => {
   it('getYearsList delegates to service without client context', async () => {
     await controller.getYearsList();
     expect(mockService.getYearsList).toHaveBeenCalled();
+  });
+
+  it('findOne passes query and client context to service', async () => {
+    const query = { ulbCode: '802992', yearCode: '2024-25', templateVersion: '2026.1' };
+    await controller.findOne(query, mockClient);
+    expect(mockService.findOneByUlbAndYear).toHaveBeenCalledWith(query, mockClient);
+  });
+
+  it('findOne has financial data read scope metadata', () => {
+    const descriptor = Object.getOwnPropertyDescriptor(DataCollectionController.prototype, 'findOne');
+    const handler = descriptor?.value as unknown;
+    expect(typeof handler).toBe('function');
+    const scopes = Reflect.getMetadata(SCOPES_KEY, handler as object) as string[];
+    expect(scopes).toEqual([DATA_COLLECTION_SCOPES.FINANCIAL_DATA_READ]);
+  });
+
+  it('GetDataCollectionDto accepts valid query params', async () => {
+    const dto = Object.assign(new GetDataCollectionDto(), {
+      ulbCode: '802992',
+      yearCode: '2024-25',
+      templateVersion: '2026.1',
+    });
+    await expect(validate(dto)).resolves.toHaveLength(0);
+  });
+
+  it('GetDataCollectionDto rejects empty and overlong query params', async () => {
+    const dto = Object.assign(new GetDataCollectionDto(), {
+      ulbCode: '',
+      yearCode: '2'.repeat(21),
+      templateVersion: 'v'.repeat(21),
+    });
+    const errors = await validate(dto);
+    expect(errors.map((error) => error.property)).toEqual(
+      expect.arrayContaining(['ulbCode', 'yearCode', 'templateVersion']),
+    );
   });
 
   it('create passes payload, client, and meta to service', async () => {

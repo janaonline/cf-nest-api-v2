@@ -3,11 +3,11 @@ export const DATA_COLLECTION_SCOPES = {
   TEMPLATE_READ: 'data_collection:template:read',
   ULBS_READ: 'data_collection:ulbs:read',
   YEARS_READ: 'data_collection:years:read',
+  FINANCIAL_DATA_READ: 'data_collection:financial_data:read',
   FINANCIAL_DATA_SUBMIT: 'data_collection:financial_data:submit',
   FINANCIAL_DATA_MODIFY: 'data_collection:financial_data:modify',
 } as const;
 
-// Data collection audit actions
 /** Audit event action identifiers for data collection submit/modify operations. */
 export const DATA_COLLECTION_AUDIT_ACTION = {
   SUBMITTED: 'DATA_COLLECTION_SUBMITTED',

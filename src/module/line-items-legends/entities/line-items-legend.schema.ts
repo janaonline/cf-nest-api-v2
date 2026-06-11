@@ -13,20 +13,20 @@ export class LineItemsLegend {
   @Prop({ type: String, required: true, enum: lineItemsLegendTypes.ACCOUNT_HEAD_VALUES })
   accountHead!: lineItemsLegendTypes.AccountHead;
 
-  @Prop({ required: true, trim: true })
-  majorCode!: string;
+  @Prop({ trim: true })
+  majorCode?: string;
 
   @Prop({ type: String, default: null })
   parentCode!: string | null;
 
-  @Prop({ required: true, trim: true })
-  segmentCode!: string;
+  @Prop({ trim: true })
+  segmentCode?: string;
 
-  @Prop({ type: [String], required: true })
-  segmentPath!: string[];
+  @Prop({ type: [String] })
+  segmentPath?: string[];
 
-  @Prop({ type: [String], required: true })
-  codePath!: string[];
+  @Prop({ type: [String] })
+  codePath?: string[];
 
   @Prop({ required: true })
   name!: string;
@@ -34,8 +34,8 @@ export class LineItemsLegend {
   @Prop({ type: String, default: '' })
   desc!: string;
 
-  @Prop({ required: true, min: 1 })
-  level!: number;
+  @Prop({ min: 1 })
+  level?: number;
 
   @Prop({ required: true })
   sortOrder!: number;
@@ -45,6 +45,9 @@ export class LineItemsLegend {
 
   @Prop({ default: true })
   isActive!: boolean;
+
+  @Prop({ default: false })
+  isComputed!: boolean;
 
   @Prop({ type: [Object], default: [] })
   rules!: lineItemsLegendTypes.Rule[];
