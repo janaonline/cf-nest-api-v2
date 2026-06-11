@@ -13,6 +13,8 @@ export type ApiSuccessResponse<T = unknown> = {
 export type ApiErrorResponse = {
   success: false;
   message: string;
+  /** Structured validation errors lifted from the service exception (e.g. import or computed-legend failures). */
+  errors?: unknown;
   error: {
     code: string;
     statusCode: number;

@@ -9,6 +9,7 @@ import {
   ValidatorConstraintInterface,
   ValidationArguments,
 } from 'class-validator';
+import { operators, type Operators } from '../types';
 
 @ValidatorConstraint({ name: 'isFormulaOperands' })
 class IsFormulaOperandsConstraint implements ValidatorConstraintInterface {
@@ -56,8 +57,8 @@ export class LineItemRuleDto {
   operands?: string[] | { code: string; sign: 1 | -1 }[];
 
   @ValidateIf((o: { type: string }) => o.type === 'comparison')
-  @IsIn(['<=', '>=', '===', '!==', '<', '>'])
-  operator?: '<=' | '>=' | '===' | '!==' | '<' | '>';
+  @IsIn(operators)
+  operator?: Operators;
 
   @ValidateIf((o: { type: string }) => o.type === 'comparison')
   @IsNumber()

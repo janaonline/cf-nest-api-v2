@@ -1,5 +1,5 @@
 import { Types } from 'mongoose';
-import type { LineItemLegendForValidation, Rule } from 'src/module/line-items-legends/types';
+import type { Rule } from 'src/module/line-items-legends/types';
 import { DataCollection } from '../entities/data-collection.schema';
 
 /** Computed financial totals derived from submitted line items. Never accepted from client. */
@@ -10,7 +10,31 @@ export type ComputedValues = {
   totOwnRevenue: number;
 };
 
-/** A single validation error for a submitted line item. */
+/**
+ * The four property keys that may be set on DataCollection.computed.
+ * A computed legend's nmamCode must resolve to one of these via `computed.<key>`.
+ */
+export const COMPUTED_VALUES_KEYS = ['totIncome', 'totExpenditure', 'totRevenue', 'totOwnRevenue'] as const;
+export type ComputedValuesKey = (typeof COMPUTED_VALUES_KEYS)[number];
+
+/** Runtime type guard for computed property keys. */
+export function isComputedValuesKey(value: string): value is ComputedValuesKey {
+  return (COMPUTED_VALUES_KEYS as readonly string[]).includes(value);
+}
+
+/**
+ * Extracts the ComputedValues property key from a computed legend nmamCode.
+ * Returns null when the nmamCode is not a recognized computed legend code.
+ * Example: 'computed.totIncome' → 'totIncome'
+ */
+export function extractComputedKey(nmamCode: string): ComputedValuesKey | null {
+  const PREFIX = 'computed.';
+  if (!nmamCode.startsWith(PREFIX)) return null;
+  const key = nmamCode.slice(PREFIX.length);
+  return isComputedValuesKey(key) ? key : null;
+}
+
+/** A single validation error for a submitted line item or computed value. */
 export type DataCollectionValidationIssue = {
   lineItemCode: string;
   value: unknown;
@@ -75,20 +99,4 @@ export type DataCollectionResponseSource = Pick<
 > & {
   lineItems: Map<string, number> | Record<string, number>;
   computed?: ComputedValues;
-};
-
-export type ValidationContext = {
-  /** Validated finite-number values keyed by nmamCode. Sparse — only submitted. */
-  submittedLineItems: Record<string, number>;
-  /** Codes that were submitted but had invalid (non-finite) values; already reported. */
-  invalidSubmittedCodes: Set<string>;
-  legendByCode: Map<string, LineItemLegendForValidation>;
-  /** Legend records for every code that passed key + value validation. */
-  submittedLegendItems: LineItemLegendForValidation[];
-  computed: ComputedValues;
-};
-
-export type ValidationOutcome = DataCollectionValidationResult & {
-  computed: ComputedValues;
-  submittedLineItems: Record<string, number>;
 };

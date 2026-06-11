@@ -3,6 +3,7 @@ import { getModelToken } from '@nestjs/mongoose';
 import { Test, TestingModule } from '@nestjs/testing';
 import { LineItemsLegend } from './entities/line-items-legend.schema';
 import { LineItemsLegendService } from './line-items-legend.service';
+import { COMPARISON_OPERATORS, isComparisonOperator } from './types';
 
 const makeLegend = (overrides: Partial<LineItemsLegend> = {}): LineItemsLegend => ({
   nmamCode: '110',
@@ -497,6 +498,173 @@ describe('LineItemsLegendService', () => {
       await expect(service.importFromJson({ lineItems: [{ ...validRawItem }] })).rejects.toThrow('db timeout');
     });
 
+    // ─── isComparisonOperator type guard ──────────────────────────────────────
+
+    it('isComparisonOperator returns true for each valid operator', () => {
+      for (const op of COMPARISON_OPERATORS) {
+        expect(isComparisonOperator(op)).toBe(true);
+      }
+    });
+
+    it('isComparisonOperator returns false for invalid operators', () => {
+      expect(isComparisonOperator('!=')).toBe(false);
+      expect(isComparisonOperator('==')).toBe(false);
+      expect(isComparisonOperator('')).toBe(false);
+      expect(isComparisonOperator(null)).toBe(false);
+      expect(isComparisonOperator(42)).toBe(false);
+    });
+
+    it('comparison operator validation uses isComparisonOperator — no TypeScript error on unknown', async () => {
+      // This test documents that the comparison operator is checked via a type guard,
+      // not via an .includes() call on a typed tuple (which caused TS2345 at line 436).
+      const itemWithValidOperator = { ...validRawItem, rules: [{ type: 'comparison', operator: '>=', value: 0 }] };
+      const itemWithInvalidOperator = { ...validRawItem, rules: [{ type: 'comparison', operator: '!=', value: 0 }] };
+
+      mockLegendModel.bulkWrite.mockResolvedValue({ upsertedCount: 1, modifiedCount: 0 });
+      await expect(service.importFromJson({ lineItems: [itemWithValidOperator] })).resolves.not.toThrow();
+
+      await expect(service.importFromJson({ lineItems: [itemWithInvalidOperator] })).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    // ─── computed legend import validation ────────────────────────────────────
+
+    it('accepts a valid computed legend with formula and comparison rules', async () => {
+      const computedItem = {
+        ...validRawItem,
+        nmamCode: 'computed.totIncome',
+        accountHead: 'COMPUTED',
+        codePath: ['computed.totIncome'],
+        isComputed: true,
+        rules: [
+          { type: 'formula', operation: 'sum', operands: ['110', '120'] },
+          { type: 'comparison', operator: '!==', value: 0 },
+        ],
+      };
+      mockLegendModel.find.mockReturnValue({
+        select: jest
+          .fn()
+          .mockReturnValue({ lean: jest.fn().mockResolvedValue([{ nmamCode: '110' }, { nmamCode: '120' }]) }),
+      });
+      mockLegendModel.bulkWrite.mockResolvedValue({ upsertedCount: 1, modifiedCount: 0 });
+      await expect(service.importFromJson({ lineItems: [computedItem] })).resolves.not.toThrow();
+    });
+
+    it('rejects isComputed legend with nmamCode not starting with computed.', async () => {
+      const item = {
+        ...validRawItem,
+        isComputed: true,
+        rules: [{ type: 'formula', operation: 'sum', operands: ['110'] }],
+      };
+      const err = await service.importFromJson({ lineItems: [item] }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BadRequestException);
+      const body = (err as BadRequestException).getResponse() as { errors: string[] };
+      expect(body.errors.some((e) => e.includes("nmamCode starting with 'computed.'"))).toBe(true);
+    });
+
+    it('rejects computed.* nmamCode without isComputed: true', async () => {
+      const item = { ...validRawItem, nmamCode: 'computed.totIncome', codePath: ['computed.totIncome'] };
+      const err = await service.importFromJson({ lineItems: [item] }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BadRequestException);
+      const body = (err as BadRequestException).getResponse() as { errors: string[] };
+      expect(body.errors.some((e) => e.includes('requires isComputed: true'))).toBe(true);
+    });
+
+    it('rejects isComputed legend with accountHead other than COMPUTED', async () => {
+      const item = {
+        ...validRawItem,
+        nmamCode: 'computed.totIncome',
+        codePath: ['computed.totIncome'],
+        accountHead: 'INCOME',
+        isComputed: true,
+        rules: [{ type: 'formula', operation: 'sum', operands: ['110'] }],
+      };
+      const err = await service.importFromJson({ lineItems: [item] }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BadRequestException);
+      const body = (err as BadRequestException).getResponse() as { errors: string[] };
+      expect(body.errors.some((e) => e.includes("accountHead 'COMPUTED'"))).toBe(true);
+    });
+
+    it('rejects isComputed legend without any formula rule', async () => {
+      const item = {
+        ...validRawItem,
+        nmamCode: 'computed.totIncome',
+        codePath: ['computed.totIncome'],
+        accountHead: 'COMPUTED',
+        isComputed: true,
+        rules: [{ type: 'comparison', operator: '!==', value: 0 }],
+      };
+      const err = await service.importFromJson({ lineItems: [item] }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BadRequestException);
+      const body = (err as BadRequestException).getResponse() as { errors: string[] };
+      expect(body.errors.some((e) => e.includes('formula rule'))).toBe(true);
+    });
+
+    it('rejects computed-to-computed operand reference', async () => {
+      const item = {
+        ...validRawItem,
+        nmamCode: 'computed.totRevenue',
+        codePath: ['computed.totRevenue'],
+        accountHead: 'COMPUTED',
+        isComputed: true,
+        rules: [{ type: 'formula', operation: 'sum', operands: ['computed.totIncome', '110'] }],
+      };
+      const err = await service.importFromJson({ lineItems: [item] }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BadRequestException);
+      const body = (err as BadRequestException).getResponse() as { errors: string[] };
+      expect(body.errors.some((e) => e.includes('computed-to-computed'))).toBe(true);
+    });
+
+    it('accepts computed legend when all operands are in the same import batch', async () => {
+      const normalItem = { ...validRawItem, nmamCode: '110', codePath: ['110'] };
+      const computedItem = {
+        ...validRawItem,
+        nmamCode: 'computed.totIncome',
+        codePath: ['computed.totIncome'],
+        accountHead: 'COMPUTED',
+        isComputed: true,
+        rules: [{ type: 'formula', operation: 'sum', operands: ['110'] }],
+      };
+      // No DB call expected since '110' is in the batch
+      mockLegendModel.bulkWrite.mockResolvedValue({ upsertedCount: 2, modifiedCount: 0 });
+      await expect(service.importFromJson({ lineItems: [normalItem, computedItem] })).resolves.not.toThrow();
+    });
+
+    it('accepts computed legend when operand is found in DB (not in batch)', async () => {
+      const computedItem = {
+        ...validRawItem,
+        nmamCode: 'computed.totIncome',
+        codePath: ['computed.totIncome'],
+        accountHead: 'COMPUTED',
+        isComputed: true,
+        rules: [{ type: 'formula', operation: 'sum', operands: ['110'] }],
+      };
+      mockLegendModel.find.mockReturnValue({
+        select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue([{ nmamCode: '110' }]) }),
+      });
+      mockLegendModel.bulkWrite.mockResolvedValue({ upsertedCount: 1, modifiedCount: 0 });
+      await expect(service.importFromJson({ lineItems: [computedItem] })).resolves.not.toThrow();
+    });
+
+    it('rejects computed legend when operand is not in batch or DB', async () => {
+      const computedItem = {
+        ...validRawItem,
+        nmamCode: 'computed.totIncome',
+        codePath: ['computed.totIncome'],
+        accountHead: 'COMPUTED',
+        isComputed: true,
+        rules: [{ type: 'formula', operation: 'sum', operands: ['999_UNKNOWN'] }],
+      };
+      mockLegendModel.find.mockReturnValue({
+        select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue([]) }),
+      });
+      const err = await service.importFromJson({ lineItems: [computedItem] }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BadRequestException);
+      const body = (err as BadRequestException).getResponse() as { errors: string[] };
+      expect(body.errors.some((e) => e.includes('999_UNKNOWN'))).toBe(true);
+    });
+
     it('import path sanitizes comparison rules before bulkWrite', async () => {
       mockLegendModel.bulkWrite.mockResolvedValue({ upsertedCount: 1, modifiedCount: 0 });
       const item = { ...validRawItem, rules: [{ type: 'comparison', operator: '>', value: 0 }] };
@@ -521,6 +689,182 @@ describe('LineItemsLegendService', () => {
       expect(rule).toEqual({ type: 'formula', operation: 'sum', operands: ['111', '112'] });
       expect(rule).not.toHaveProperty('operator');
       expect(rule).not.toHaveProperty('value');
+    });
+
+    // ─── computed validation: two-path enforcement ────────────────────────────
+
+    const validComputedItem = {
+      nmamCode: 'computed.totIncome',
+      accountHead: 'COMPUTED',
+      name: 'Total Income',
+      desc: 'System-computed Total Income.',
+      sortOrder: 900001,
+      isActive: true,
+      isComputed: true,
+      rules: [
+        { type: 'formula', operation: 'sum', operands: ['110', '120'] },
+        { type: 'comparison', operator: '!==', value: 0 },
+      ],
+    };
+
+    it('accepts valid computed item without any hierarchy fields (majorCode, segmentCode, level, segmentPath, codePath, parentCode)', async () => {
+      mockLegendModel.find.mockReturnValue({
+        select: jest.fn().mockReturnValue({
+          lean: jest.fn().mockResolvedValue([{ nmamCode: '110' }, { nmamCode: '120' }]),
+        }),
+      });
+      mockLegendModel.bulkWrite.mockResolvedValue({ upsertedCount: 1, modifiedCount: 0 });
+      await expect(service.importFromJson({ lineItems: [{ ...validComputedItem }] })).resolves.not.toThrow();
+    });
+
+    it('rejects computed item with numeric nmamCode (isComputed: true, nmamCode: "110")', async () => {
+      const item = {
+        ...validComputedItem,
+        nmamCode: '110',
+        rules: [{ type: 'formula', operation: 'sum', operands: ['110'] }],
+      };
+      const err = await service.importFromJson({ lineItems: [item] }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BadRequestException);
+      const body = (err as BadRequestException).getResponse() as { errors: string[] };
+      expect(body.errors.some((e) => e.includes("nmamCode starting with 'computed.'"))).toBe(true);
+    });
+
+    it('rejects normal item using accountHead COMPUTED', async () => {
+      const item = { ...validRawItem, accountHead: 'COMPUTED' };
+      const err = await service.importFromJson({ lineItems: [item] }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BadRequestException);
+      const body = (err as BadRequestException).getResponse() as { errors: string[] };
+      expect(body.errors.some((e) => e.includes('must not use accountHead'))).toBe(true);
+    });
+
+    it('rejects computed item with unsupported computed nmamCode (computed.unknown)', async () => {
+      const item = { ...validComputedItem, nmamCode: 'computed.unknown' };
+      const err = await service.importFromJson({ lineItems: [item] }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BadRequestException);
+      const body = (err as BadRequestException).getResponse() as { errors: string[] };
+      expect(body.errors.some((e) => e.includes("nmamCode starting with 'computed.'"))).toBe(true);
+    });
+
+    it('rejects computed item with multiple formula rules', async () => {
+      const item = {
+        ...validComputedItem,
+        rules: [
+          { type: 'formula', operation: 'sum', operands: ['110'] },
+          { type: 'formula', operation: 'sum', operands: ['120'] },
+        ],
+      };
+      const err = await service.importFromJson({ lineItems: [item] }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BadRequestException);
+      const body = (err as BadRequestException).getResponse() as { errors: string[] };
+      expect(body.errors.some((e) => e.includes('exactly one formula rule'))).toBe(true);
+    });
+
+    it('rejects computed item with invalid formula operation', async () => {
+      const item = {
+        ...validComputedItem,
+        rules: [{ type: 'formula', operation: 'invalid_op', operands: ['110'] }],
+      };
+      const err = await service.importFromJson({ lineItems: [item] }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BadRequestException);
+      const body = (err as BadRequestException).getResponse() as { errors: string[] };
+      expect(body.errors.some((e) => e.includes('formula operation'))).toBe(true);
+    });
+
+    it('rejects computed item with invalid comparison operator', async () => {
+      const item = {
+        ...validComputedItem,
+        rules: [
+          { type: 'formula', operation: 'sum', operands: ['110'] },
+          { type: 'comparison', operator: '!=', value: 0 }, // != is not valid; !== is required
+        ],
+      };
+      const err = await service.importFromJson({ lineItems: [item] }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BadRequestException);
+      const body = (err as BadRequestException).getResponse() as { errors: string[] };
+      expect(body.errors.some((e) => e.includes('comparison operator'))).toBe(true);
+    });
+
+    it('rejects computed item with duplicate formula operands', async () => {
+      const item = {
+        ...validComputedItem,
+        rules: [{ type: 'formula', operation: 'sum', operands: ['110', '110'] }],
+      };
+      const err = await service.importFromJson({ lineItems: [item] }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BadRequestException);
+      const body = (err as BadRequestException).getResponse() as { errors: string[] };
+      expect(body.errors.some((e) => e.includes('duplicate operand'))).toBe(true);
+    });
+
+    it('accepts computed item appearing BEFORE its source normal item (order-independent validation)', async () => {
+      const normalItem = { ...validRawItem, nmamCode: '110', codePath: ['110'] };
+      const computedItem = {
+        ...validComputedItem,
+        rules: [{ type: 'formula', operation: 'sum', operands: ['110'] }],
+      };
+      // computed is index 0, normal is index 1 — tests that batchNormalCodes is built up-front
+      mockLegendModel.bulkWrite.mockResolvedValue({ upsertedCount: 2, modifiedCount: 0 });
+      await expect(service.importFromJson({ lineItems: [computedItem, normalItem] })).resolves.not.toThrow();
+    });
+
+    it('computed persistence does not store hierarchy fields (majorCode, segmentCode, level, segmentPath, codePath, parentCode)', async () => {
+      mockLegendModel.find.mockReturnValue({
+        select: jest
+          .fn()
+          .mockReturnValue({ lean: jest.fn().mockResolvedValue([{ nmamCode: '110' }, { nmamCode: '120' }]) }),
+      });
+      mockLegendModel.bulkWrite.mockResolvedValue({ upsertedCount: 1, modifiedCount: 0 });
+      await service.importFromJson({ lineItems: [{ ...validComputedItem }] });
+
+      type BulkOp = { updateOne: { update: { $set: Record<string, unknown> } } };
+      const calls = mockLegendModel.bulkWrite.mock.calls as unknown as [BulkOp[], unknown][];
+      const setPayload = calls[0][0][0].updateOne.update.$set;
+
+      expect(setPayload).not.toHaveProperty('majorCode');
+      expect(setPayload).not.toHaveProperty('segmentCode');
+      expect(setPayload).not.toHaveProperty('segmentPath');
+      expect(setPayload).not.toHaveProperty('codePath');
+      expect(setPayload).not.toHaveProperty('level');
+      expect(setPayload).not.toHaveProperty('parentCode');
+
+      expect(setPayload).toHaveProperty('nmamCode', 'computed.totIncome');
+      expect(setPayload).toHaveProperty('accountHead', 'COMPUTED');
+      expect(setPayload).toHaveProperty('isComputed', true);
+    });
+
+    it('dry-run validates computed records without writing to MongoDB', async () => {
+      const singleOperandItem = {
+        ...validComputedItem,
+        rules: [{ type: 'formula', operation: 'sum', operands: ['110'] }],
+      };
+      mockLegendModel.find.mockReturnValue({
+        select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue([{ nmamCode: '110' }]) }),
+      });
+      const result = await service.importFromJson({ dryRun: true, lineItems: [singleOperandItem] });
+      expect(result.dryRun).toBe(true);
+      if (result.dryRun) {
+        expect(result.valid).toBe(true);
+        expect(result.total).toBe(1);
+        expect(result.wouldUpsert).toBe(1);
+      }
+      expect(mockLegendModel.bulkWrite).not.toHaveBeenCalled();
+    });
+
+    it('non-dry-run persists valid computed records to MongoDB', async () => {
+      const singleOperandItem = {
+        ...validComputedItem,
+        rules: [{ type: 'formula', operation: 'sum', operands: ['110'] }],
+      };
+      mockLegendModel.find.mockReturnValue({
+        select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue([{ nmamCode: '110' }]) }),
+      });
+      mockLegendModel.bulkWrite.mockResolvedValue({ upsertedCount: 1, modifiedCount: 0 });
+      const result = await service.importFromJson({ dryRun: false, lineItems: [singleOperandItem] });
+      expect(result.dryRun).toBe(false);
+      if (!result.dryRun) {
+        expect(result.upserted).toBe(1);
+        expect(result.total).toBe(1);
+      }
+      expect(mockLegendModel.bulkWrite).toHaveBeenCalled();
     });
   });
 });

@@ -20,25 +20,48 @@ import {
 } from 'src/module/line-items-legends/types';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { Year, YearDocument } from 'src/schemas/year.schema';
-import { DATA_COLLECTION_COMPUTED_CONFIG, DATA_COLLECTION_FAILURE_REASON } from '../constant';
+import { DATA_COLLECTION_FAILURE_REASON } from '../constant';
 import { DataCollectionDto } from '../dto/data-collection.dto';
 import { GetDataCollectionDto } from '../dto/get-data-collection.dto';
 import { ReverseDataCollectionDto } from '../dto/reverse-data-collection.dto';
 import { DataCollection, DataCollectionDocument } from '../entities/data-collection.schema';
-import type {
-  ActiveDataCollectionFilter,
-  ComputedValues,
-  DataCollectionRequestMeta,
-  DataCollectionResponseSource,
-  DataCollectionValidationIssue,
-  ExternalDataCollectionResponse,
-  SubmittedLineItems,
-  ValidationContext,
-  ValidationOutcome,
+import {
+  extractComputedKey,
+  type ActiveDataCollectionFilter,
+  type ComputedValues,
+  type ComputedValuesKey,
+  type DataCollectionRequestMeta,
+  type DataCollectionResponseSource,
+  type DataCollectionValidationIssue,
+  type DataCollectionValidationResult,
+  type ExternalDataCollectionResponse,
+  type SubmittedLineItems,
 } from '../types/data-collection.types';
 import { DataCollectionAuditLogService } from './data-collection-audit-log.service';
 import { DataCollectionAuthorizationService } from './data-collection-authorization.service';
 import { DataCollectionReferenceResolverService } from './data-collection-reference-resolver.service';
+
+// ─── Private module-level types ──────────────────────────────────────────────
+
+type LegendIndex = {
+  legendByCode: Map<string, LineItemLegendForValidation>;
+  regularLegends: LineItemLegendForValidation[];
+  computedLegends: LineItemLegendForValidation[];
+};
+
+type ValidationContext = LegendIndex & {
+  /** Validated finite-number values keyed by nmamCode. Sparse — only submitted. */
+  submittedLineItems: Record<string, number>;
+  /** Codes submitted with non-finite values; already reported — skip duplicate errors. */
+  invalidSubmittedCodes: Set<string>;
+};
+
+type ValidationOutcome = DataCollectionValidationResult & {
+  computed: ComputedValues;
+  submittedLineItems: Record<string, number>;
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 @Injectable()
 export class DataCollectionService {
@@ -68,8 +91,6 @@ export class DataCollectionService {
   /**
    * Returns ULBs accessible by the API client as { code, name, state } objects.
    * code is censusCode when set, sbCode otherwise; ULBs with no public code are skipped.
-   * STATE clients see all active ULBs in their state.
-   * ULB clients see only their own ULB.
    */
   async getUlbsList(client: ApiClientContext) {
     try {
@@ -109,16 +130,11 @@ export class DataCollectionService {
     }
   }
 
-  /** Extracts the 4-digit start year from a year code like '2024-25'. */
   private getYearStart(yearCode: string): number {
     const start = Number(yearCode.split('-')[0]);
     return Number.isFinite(start) ? start : 0;
   }
 
-  /**
-   * Finds the active financial data submission for a ULB and financial year.
-   * Uses public identifiers and enforces integration client access.
-   */
   async findOneByUlbAndYear(
     query: GetDataCollectionDto,
     client: ApiClientContext,
@@ -164,10 +180,7 @@ export class DataCollectionService {
 
   /**
    * Submits new financial data for a ULB and year.
-   * Resolves ulbCode/yearCode to internal ObjectIds before storing.
-   * Sparse lineItems are allowed — only submitted keys are stored.
-   * All submitted keys must be valid nmamCodes and must not be computed.* prefixed.
-   * Computes and stores the four financial totals in the top-level `computed` field.
+   * Computed totals are derived from DB computed legends and stored in DataCollection.computed.
    */
   async create(payload: DataCollectionDto, client: ApiClientContext, meta: DataCollectionRequestMeta = {}) {
     const { ulbCode, yearCode, lineItems: payloadLineItems } = payload;
@@ -276,8 +289,7 @@ export class DataCollectionService {
   /**
    * Updates existing financial data for a ULB and year.
    * Merges existing lineItems with incoming, then validates the merged set.
-   * Recomputes all four financial totals from the final merged lineItems.
-   * Backfills stateId/yearCode on older records that pre-date those fields.
+   * Recomputes all computed totals from final merged lineItems using DB computed legends.
    */
   async update(payload: DataCollectionDto, client: ApiClientContext, meta: DataCollectionRequestMeta = {}) {
     const { ulbCode, yearCode, lineItems: payloadLineItems } = payload;
@@ -290,7 +302,6 @@ export class DataCollectionService {
     const existing = await this.dataCollectionModel.findOne({ ulbId, yearId, isActive: true, status: 'ACTIVE' });
 
     const lineItemCount = this.getLineItemCount(payloadLineItems);
-
     const apiClientId = this.getApiClientObjectId(client);
 
     if (!existing) {
@@ -317,7 +328,6 @@ export class DataCollectionService {
 
     const changedLineItemCodes = this.getChangedLineItemCodes(existing.lineItems, payloadLineItems);
 
-    // Unconditional merge — null from payload is intentional, validation decides validity.
     const mergedLineItems: Record<string, unknown> = Object.fromEntries(existing.lineItems) as Record<string, unknown>;
     for (const [key, value] of Object.entries(payloadLineItems)) {
       mergedLineItems[key] = value;
@@ -361,7 +371,6 @@ export class DataCollectionService {
     existing.lineItems = new Map(Object.entries(result.submittedLineItems));
     existing.computed = result.computed;
     existing.validationStatus = 'VALID';
-    // Backfill denormalized fields if missing from records created before these fields were added.
     if (!existing.stateId) existing.stateId = stateId;
     if (!existing.yearCode) existing.yearCode = resolvedYearCode;
 
@@ -389,11 +398,6 @@ export class DataCollectionService {
     }
   }
 
-  /**
-   * Reverses an active data collection submission.
-   * Marks the record as inactive/reversed without deleting it.
-   * Only ACTIVE records can be reversed. Reversed records no longer block corrected resubmission.
-   */
   async reverseSubmission(dto: ReverseDataCollectionDto, admin: User, meta: DataCollectionRequestMeta = {}) {
     const { ulbCode, yearCode, reason } = dto;
     const templateVersion = dto.templateVersion ?? DEFAULT_TEMPLATE_VERSION;
@@ -449,57 +453,58 @@ export class DataCollectionService {
   // ─── Validation pipeline ──────────────────────────────────────────────────
 
   /**
-   * Orchestrates the full validation pipeline:
-   *   Step 1 — buildValidationContext: one pass over lineItems (key/value checks,
-   *             legendByCode map, submittedLegendItems collection).
-   *   Step 2 — computeDataCollectionTotals: compute all four totals in one pass
-   *             over DATA_COLLECTION_COMPUTED_CONFIG.
-   *   Step 3 — validateSubmittedLineItemRules: formula + comparison rules for
-   *             submitted legend items only (no full legendMap scan).
-   *   Step 4 — validateMandatoryComparisonRules: one legendMap pass for codes
-   *             with comparison rules that were NOT submitted.
-   *   Step 5 — validateComputedTotals: comparison checks against DATA_COLLECTION_COMPUTED_CONFIG
-   *             (no DB legend records needed).
+   * Orchestrates the DB-driven 3-pass validation pipeline:
+   *
+   *   Pass 1 (over legendItems): categorise → legendByCode, regularLegends, computedLegends
+   *   Pass 2 (over submitted lineItems): validate keys/values → submittedLineItems
+   *   Pass 3a (over regularLegends): comparison rules always; formula rules only for submitted parents
+   *   Pass 3b (over computedLegends): evaluate formula from DB rules; validate comparison; store computed
+   *
+   * Computed legends drive what is calculated — no hardcoded source codes or operators in this service.
    */
   private validateLineItemsAgainstTemplate(
     lineItems: Record<string, unknown>,
     legendItems: LineItemLegendForValidation[],
     templateVersion: string,
   ): ValidationOutcome {
-    const errors: DataCollectionValidationIssue[] = [];
-
     const { context, errors: contextErrors } = this.buildValidationContext(lineItems, legendItems, templateVersion);
-    errors.push(...contextErrors);
+    const regularErrors = this.validateRegularLegendRules(context);
+    const { errors: computedErrors, computed } = this.evaluateComputedLegends(context);
 
-    errors.push(...this.validateSubmittedLineItemRules(context));
-    errors.push(...this.validateMandatoryComparisonRules(context));
-    errors.push(...this.validateComputedTotals(context.computed, context.legendByCode));
-
+    const errors = [...contextErrors, ...regularErrors, ...computedErrors];
     return {
       errors,
       hasErrors: errors.length > 0,
-      computed: context.computed,
+      computed,
       submittedLineItems: context.submittedLineItems,
     };
   }
 
   /**
-   * Step 1: Builds the validation context in one focused pass over lineItems.
-   * Rejects computed.* keys, unknown codes, and non-finite values.
-   * Collects submittedLegendItems directly — avoids a later legendMap scan.
-   * Computes all four financial totals (Step 2) and attaches them to the context.
+   * Pass 1: Categorises legends → legendByCode, regularLegends, computedLegends.
+   * Pass 2: Validates submitted lineItems → submittedLineItems, invalidSubmittedCodes.
    */
   private buildValidationContext(
     lineItems: Record<string, unknown>,
     legendItems: LineItemLegendForValidation[],
     templateVersion: string,
   ): { context: ValidationContext; errors: DataCollectionValidationIssue[] } {
-    const errors: DataCollectionValidationIssue[] = [];
+    const legendByCode = new Map<string, LineItemLegendForValidation>();
+    const regularLegends: LineItemLegendForValidation[] = [];
+    const computedLegends: LineItemLegendForValidation[] = [];
 
-    const legendByCode = new Map(legendItems.map((l) => [l.nmamCode, l]));
+    for (const legend of legendItems) {
+      legendByCode.set(legend.nmamCode, legend);
+      if (legend.isComputed === true) {
+        computedLegends.push(legend);
+      } else {
+        regularLegends.push(legend);
+      }
+    }
+
+    const errors: DataCollectionValidationIssue[] = [];
     const submittedLineItems: Record<string, number> = {};
     const invalidSubmittedCodes = new Set<string>();
-    const submittedLegendItems: LineItemLegendForValidation[] = [];
 
     for (const [code, value] of Object.entries(lineItems)) {
       if (this.isComputedCode(code)) {
@@ -527,66 +532,49 @@ export class DataCollectionService {
         continue;
       }
       submittedLineItems[code] = value as number;
-      submittedLegendItems.push(legendByCode.get(code)!);
     }
 
-    const computed = this.computeDataCollectionTotals(submittedLineItems, legendByCode);
-
     return {
-      context: { submittedLineItems, invalidSubmittedCodes, legendByCode, submittedLegendItems, computed },
+      context: { legendByCode, regularLegends, computedLegends, submittedLineItems, invalidSubmittedCodes },
       errors,
     };
   }
 
   /**
-   * Step 2: Computes all four financial totals from submitted line items.
-   * Source codes absent from the payload contribute 0 (sparse behaviour).
-   * Source codes absent from legendByCode also contribute 0 — the template is
-   * authoritative and missing codes are treated as not applicable for this version.
+   * Pass 3a: One pass over regular legends.
+   * Comparison rules are mandatory — validated for submitted and non-submitted codes alike.
+   * Formula rules are sparse — validated only when the parent code was submitted.
    */
-  private computeDataCollectionTotals(
-    lineItems: Readonly<Record<string, number>>,
-    legendByCode: ReadonlyMap<string, LineItemLegendForValidation>,
-  ): ComputedValues {
-    const computed: ComputedValues = { totIncome: 0, totExpenditure: 0, totRevenue: 0, totOwnRevenue: 0 };
-
-    for (const key of Object.keys(DATA_COLLECTION_COMPUTED_CONFIG) as Array<
-      keyof typeof DATA_COLLECTION_COMPUTED_CONFIG
-    >) {
-      const { sourceCodes } = DATA_COLLECTION_COMPUTED_CONFIG[key];
-      let total = 0;
-      for (const code of sourceCodes) {
-        if (!legendByCode.has(code)) continue; // code not in this template version — treat as 0
-        const v = lineItems[code];
-        if (typeof v === 'number') total += v;
-      }
-      computed[key] = total;
-    }
-
-    return computed;
-  }
-
-  /**
-   * Step 3: Validates formula and comparison rules for submitted legend items only.
-   * Uses submittedLegendItems collected in buildValidationContext — no full legendMap scan.
-   */
-  private validateSubmittedLineItemRules(ctx: ValidationContext): DataCollectionValidationIssue[] {
-    const { submittedLineItems, legendByCode, submittedLegendItems } = ctx;
+  private validateRegularLegendRules(ctx: ValidationContext): DataCollectionValidationIssue[] {
+    const { submittedLineItems, invalidSubmittedCodes, legendByCode } = ctx;
     const errors: DataCollectionValidationIssue[] = [];
 
-    for (const legend of submittedLegendItems) {
-      if (!legend.rules.length || this.isComputedLegend(legend)) continue;
+    for (const legend of ctx.regularLegends) {
+      if (!legend.rules.length) continue;
       const { nmamCode: code } = legend;
-      const value = submittedLineItems[code];
+      const isSubmitted = code in submittedLineItems;
+      const isInvalidSubmitted = invalidSubmittedCodes.has(code);
 
       for (const rule of legend.rules) {
         if (rule.type === 'comparison') {
-          errors.push(...this.validateComparisonRule(code, value, rule));
-        } else {
+          if (isSubmitted) {
+            errors.push(...this.validateComparisonRule(code, submittedLineItems[code], rule));
+          } else if (!isInvalidSubmitted) {
+            // Mandatory: not submitted and not already flagged as invalid value
+            errors.push({
+              lineItemCode: code,
+              value: undefined,
+              severity: 'ERROR',
+              message: `Business validation for lineItemCode ${code} cannot be validated because the line item was not submitted.`,
+              validationRule: rule,
+            });
+          }
+        } else if (isSubmitted) {
+          // Formula rules: sparse — only when parent is submitted
           errors.push(
             ...this.validateRuleForLineItem(
               code,
-              value,
+              submittedLineItems[code],
               rule,
               submittedLineItems as Record<string, unknown>,
               legendByCode,
@@ -600,79 +588,131 @@ export class DataCollectionService {
   }
 
   /**
-   * Step 4: Validates mandatory comparison rules for codes that were NOT submitted.
-   * Codes that were submitted (valid or invalid) are skipped — already handled above.
-   * One pass over legendByCode; skips computed legends and skips submitted codes.
+   * Pass 3b: One pass over computed legends.
+   * For each computed legend:
+   *   1. Evaluate its formula rule using submitted lineItems (absent-but-configured codes = 0)
+   *   2. Validate comparison rules against the computed value
+   *   3. Store in ComputedValues under the key derived from nmamCode (e.g. 'totIncome')
+   *
+   * If a formula operand is not in legendByCode (DB corruption), a configuration error is emitted.
    */
-  private validateMandatoryComparisonRules(ctx: ValidationContext): DataCollectionValidationIssue[] {
-    const { submittedLineItems, invalidSubmittedCodes, legendByCode } = ctx;
+  private evaluateComputedLegends(ctx: ValidationContext): {
+    errors: DataCollectionValidationIssue[];
+    computed: ComputedValues;
+  } {
     const errors: DataCollectionValidationIssue[] = [];
+    const computed: ComputedValues = { totIncome: 0, totExpenditure: 0, totRevenue: 0, totOwnRevenue: 0 };
 
-    for (const [code, legend] of legendByCode.entries()) {
-      if (this.isComputedLegend(legend)) continue;
-      if (code in submittedLineItems) continue; // handled in validateSubmittedLineItemRules
-      if (invalidSubmittedCodes.has(code)) continue; // invalid value already reported — no duplicate
+    for (const legend of ctx.computedLegends) {
+      const key = extractComputedKey(legend.nmamCode);
+      if (!key) {
+        this.logger.warn(`Computed legend '${legend.nmamCode}' has unrecognized ComputedValues key — skipping`);
+        continue;
+      }
+
+      let computedValue = 0;
+      let formulaFailed = false;
+
+      for (const rule of legend.rules) {
+        if (rule.type !== 'formula') continue;
+        const result = this.evaluateFormulaForComputed(
+          legend.nmamCode,
+          key,
+          rule,
+          ctx.submittedLineItems,
+          ctx.legendByCode,
+        );
+        if (result.configError) {
+          errors.push(result.configError);
+          formulaFailed = true;
+          break;
+        }
+        computedValue = result.value;
+        break; // Use the first formula rule
+      }
+
+      if (formulaFailed) continue;
+      computed[key] = computedValue;
 
       for (const rule of legend.rules) {
         if (rule.type !== 'comparison') continue;
-        errors.push({
-          lineItemCode: code,
-          value: undefined,
-          severity: 'ERROR',
-          message: `Business validation for lineItemCode ${code} cannot be validated because the line item was not submitted.`,
-          validationRule: rule,
-        });
+        if (!this.applyComparisonOperator(computedValue, rule.operator, rule.value)) {
+          errors.push({
+            lineItemCode: `computed.${key}`,
+            value: computedValue,
+            severity: 'ERROR',
+            message: `${legend.name} must be ${rule.operator} ${rule.value}. Received: ${computedValue}.`,
+            validationRule: rule,
+            expectedCondition: `${rule.operator} ${rule.value}`,
+            received: computedValue,
+          });
+        }
       }
     }
 
-    return errors;
+    return { errors, computed };
   }
 
   /**
-   * Step 5: Validates computed financial totals against DATA_COLLECTION_COMPUTED_CONFIG.
-   * A metric is only validated when ALL of its configured source codes exist in legendByCode
-   * — this ensures partial template mocks in tests do not produce spurious config errors,
-   * while production templates (which contain every source code) are fully validated.
+   * Evaluates a single formula rule for a computed legend.
+   * Source codes in legendByCode but not submitted → contribute 0 (sparse behaviour).
+   * Source codes NOT in legendByCode → configuration error (should have been caught at import).
    */
-  private validateComputedTotals(
-    computed: ComputedValues,
+  private evaluateFormulaForComputed(
+    legendNmamCode: string,
+    key: ComputedValuesKey,
+    rule: Extract<Rule, { type: 'formula' }>,
+    lineItems: Readonly<Record<string, number>>,
     legendByCode: ReadonlyMap<string, LineItemLegendForValidation>,
-  ): DataCollectionValidationIssue[] {
-    const errors: DataCollectionValidationIssue[] = [];
-
-    for (const key of Object.keys(DATA_COLLECTION_COMPUTED_CONFIG) as Array<
-      keyof typeof DATA_COLLECTION_COMPUTED_CONFIG
-    >) {
-      const { label, comparison, sourceCodes } = DATA_COLLECTION_COMPUTED_CONFIG[key];
-
-      // Skip if any configured source code is absent from the template — template is incomplete.
-      if (!sourceCodes.every((code) => legendByCode.has(code))) continue;
-
-      const { operator, value: threshold } = comparison;
-      const actual = computed[key];
-      const passes = this.applyComparisonOperator(actual, operator, threshold);
-      if (!passes) {
-        errors.push({
+  ): { value: number; configError?: undefined } | { value: 0; configError: DataCollectionValidationIssue } {
+    const makeConfigError = (missingCode: string): { value: 0; configError: DataCollectionValidationIssue } => {
+      this.logger.error(
+        `Computed legend '${legendNmamCode}' references '${missingCode}' which is absent from the active template`,
+      );
+      return {
+        value: 0,
+        configError: {
           lineItemCode: `computed.${key}`,
-          value: actual,
+          value: null,
           severity: 'ERROR',
-          message: `${label} must be ${operator} ${threshold}. Received: ${actual}.`,
-          validationRule: { type: 'comparison', operator, value: threshold },
-          expectedCondition: `${operator} ${threshold}`,
-          received: actual,
-        });
+          message: `Configuration error: computed formula for ${legendNmamCode} references unknown legend '${missingCode}'.`,
+        },
+      };
+    };
+
+    if (rule.operation === 'sum') {
+      let total = 0;
+      for (const code of rule.operands) {
+        if (!legendByCode.has(code)) return makeConfigError(code);
+        total += lineItems[code] ?? 0;
       }
+      return { value: total };
     }
 
-    return errors;
+    if (rule.operation === 'diff') {
+      const values: number[] = [];
+      for (const code of rule.operands) {
+        if (!legendByCode.has(code)) return makeConfigError(code);
+        values.push(lineItems[code] ?? 0);
+      }
+      const total = values.length > 0 ? values[0] - values.slice(1).reduce((a, b) => a + b, 0) : 0;
+      return { value: total };
+    }
+
+    if (rule.operation === 'linear') {
+      let total = 0;
+      for (const { code, sign } of rule.operands) {
+        if (!legendByCode.has(code)) return makeConfigError(code);
+        total += (lineItems[code] ?? 0) * sign;
+      }
+      return { value: total };
+    }
+
+    return { value: 0 };
   }
 
   // ─── Rule validators (unchanged behaviour) ────────────────────────────────
 
-  /**
-   * Validates one line item value.
-   * Accepts any finite number including 0. Rejects null, NaN, Infinity, strings, and objects.
-   */
   private validateLineItemValue(code: string, value: unknown): DataCollectionValidationIssue | null {
     if (typeof value === 'number' && isFinite(value)) return null;
     return {
@@ -683,25 +723,14 @@ export class DataCollectionService {
     };
   }
 
-  /** Returns true when value is a finite number (type guard). */
   private isFiniteNumber(value: unknown): value is number {
     return typeof value === 'number' && isFinite(value);
   }
 
-  /** Returns true when the code represents a virtual computed validation target. */
   private isComputedCode(code: string): boolean {
     return code.startsWith('computed.');
   }
 
-  /** Returns true when the legend is a virtual computed validation target. */
-  private isComputedLegend(legend: LineItemLegendForValidation): boolean {
-    return legend.isComputed === true || legend.nmamCode.startsWith('computed.');
-  }
-
-  /**
-   * Applies a comparison operator and returns whether the condition passes.
-   * Unknown operators fail closed (return false).
-   */
   private applyComparisonOperator(value: number, operator: string, threshold: number): boolean {
     switch (operator) {
       case '<=':
@@ -721,10 +750,6 @@ export class DataCollectionService {
     }
   }
 
-  /**
-   * Dispatches a single rule to the formula or comparison validator.
-   * Unknown rule types fail closed — they return an error, not silent skip.
-   */
   private validateRuleForLineItem(
     code: string,
     value: unknown,
@@ -750,10 +775,6 @@ export class DataCollectionService {
     }
   }
 
-  /**
-   * Dispatches to the correct formula validator by operation.
-   * Unknown operations fail closed.
-   */
   private validateFormulaRule(
     code: string,
     value: unknown,
@@ -781,10 +802,6 @@ export class DataCollectionService {
     }
   }
 
-  /**
-   * Resolves string operand codes for sum/diff rules.
-   * Separates unknown codes from submitted operands; sparse (not submitted) are silently skipped.
-   */
   private resolveStringOperands(
     operandCodes: string[],
     lineItems: Record<string, unknown>,
@@ -806,10 +823,6 @@ export class DataCollectionService {
     return { submittedOperands, unknownOperandCodes };
   }
 
-  /**
-   * Validates formula sum: parent must equal sum of submitted operands.
-   * Sparse — missing operands are skipped. Fails if none submitted or unknown operand found.
-   */
   private validateFormulaSumRule(
     code: string,
     value: unknown,
@@ -868,10 +881,6 @@ export class DataCollectionService {
     return [];
   }
 
-  /**
-   * Validates formula diff: parent = first_operand - remaining_operands (in submitted order).
-   * Requires at least 2 submitted operands. Sparse — missing operands are skipped.
-   */
   private validateFormulaDiffRule(
     code: string,
     value: unknown,
@@ -945,10 +954,6 @@ export class DataCollectionService {
     return [];
   }
 
-  /**
-   * Validates formula linear: parent = sum of (operand.value * operand.sign) for submitted operands.
-   * Operand shapes are validated at runtime; invalid sign or code fails closed.
-   */
   private validateFormulaLinearRule(
     code: string,
     value: unknown,
@@ -1039,11 +1044,6 @@ export class DataCollectionService {
     return [];
   }
 
-  /**
-   * Validates a comparison rule against a finite numeric value.
-   * Skipped when value is not finite (pass 1 already reported invalid value — no duplicate error).
-   * Unknown operators fail closed.
-   */
   private validateComparisonRule(
     code: string,
     value: unknown,
@@ -1086,10 +1086,6 @@ export class DataCollectionService {
 
   // ─── Utility helpers ──────────────────────────────────────────────────────
 
-  /**
-   * Maps a saved data collection document to an external API response.
-   * Excludes Mongo identifiers (_id, ulbId, stateId, yearId, __v) and returns public codes.
-   */
   private mapToExternalDataCollectionResponse(
     data: DataCollectionResponseSource,
     ulbCode: string,
@@ -1111,7 +1107,6 @@ export class DataCollectionService {
     };
   }
 
-  /** Converts Mongoose Map or lean object lineItems into a plain sparse object. */
   private toPlainLineItems(lineItems: Map<string, number> | Record<string, number>): Record<string, number> {
     if (lineItems instanceof Map) return Object.fromEntries(lineItems);
     return { ...lineItems };
@@ -1139,7 +1134,6 @@ export class DataCollectionService {
     return Object.keys(incoming).filter((key) => existing.get(key) !== incoming[key]);
   }
 
-  /** Transforms any error into an appropriate HTTP exception and re-throws. */
   private createErrorResponse(error: unknown, functionName: string): never {
     this.logger.error(`${functionName}() Failed to perform operation`, error);
     if (error instanceof HttpException) throw error;
