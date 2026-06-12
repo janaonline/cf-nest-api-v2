@@ -25,6 +25,7 @@ describe('AfsDigitizationController', () => {
             getRequestLog: jest.fn(),
             getMetrics: jest.fn(),
             getFile: jest.fn(),
+            uploadUlbKeywords: jest.fn(),
           },
         },
         {
@@ -217,6 +218,33 @@ describe('AfsDigitizationController', () => {
       digitizationQueueService.upsertAfsExcelFile.mockRejectedValue(error);
 
       await expect(controller.uploadAFSFile(mockBody as any)).rejects.toThrow('Upload failed');
+    });
+  });
+
+  describe('uploadUlbKeywords', () => {
+    it('should upload ULB keywords successfully', async () => {
+      const mockFile = {
+        buffer: Buffer.from('mock excel data'),
+        originalname: 'keywords.xlsx',
+      } as Express.Multer.File;
+      const mockResult = { totalRows: 2, updated: 2, skipped: 0, notFoundCount: 0, notFound: [] };
+      afsService.uploadUlbKeywords.mockResolvedValue(mockResult);
+
+      const result = await controller.uploadUlbKeywords(mockFile);
+
+      expect(result).toEqual({ status: 'success', data: mockResult });
+      expect(afsService.uploadUlbKeywords).toHaveBeenCalledWith(mockFile);
+    });
+
+    it('should handle error during ULB keywords upload', async () => {
+      const mockFile = {
+        buffer: Buffer.from('mock excel data'),
+        originalname: 'keywords.xlsx',
+      } as Express.Multer.File;
+      const error = new Error('Upload failed');
+      afsService.uploadUlbKeywords.mockRejectedValue(error);
+
+      await expect(controller.uploadUlbKeywords(mockFile)).rejects.toThrow('Upload failed');
     });
   });
 
