@@ -8,7 +8,7 @@ import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { toObjectIdString } from 'src/users/user-scope.helpers';
 import { GrantAllocation, GrantAllocationDocument } from '../../schemas/xvi-fc/grant-allocation.schema';
 import { StateWiseResponseDto } from './dto/state-wise-response.dto';
-import { buildGetStateWiseDataPipeline } from './quires/get-state-wise-data.query';
+import { buildGetStateWiseDataPipeline } from './queries/get-state-wise-data.query';
 import { SIDE_MENU_CONFIG } from './config/side-menu.config';
 import type { MenuRole } from './config/side-menu.config';
 import { SideMenuResponseDto } from './dto/side-menu.dto';
