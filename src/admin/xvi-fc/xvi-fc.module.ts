@@ -6,11 +6,11 @@ import { AnnualAccountService } from './annual-account.service';
 import {
   GrantAllocation,
   GrantAllocationSchema,
-} from './schemas/grant-allocation.schema';
-import { State, StateSchema } from './schemas/state.schema';
-import { Year, YearSchema } from './schemas/year.schema';
-import { Ulb, UlbSchema } from './schemas/ulb.schema';
-import { XviFcAnnualAccount, XviFcAnnualAccountSchema } from './schemas/annual-account.schema';
+} from '../../schemas/xvi-fc/grant-allocation.schema';
+import { State, StateSchema } from '../../schemas/state.schema';
+import { Year, YearSchema } from '../../schemas/year.schema';
+import { Ulb, UlbSchema } from '../../schemas/ulb.schema';
+import { XviFcAnnualAccount, XviFcAnnualAccountSchema } from '../../schemas/xvi-fc/annual-account.schema';
 
 @Module({
   imports: [

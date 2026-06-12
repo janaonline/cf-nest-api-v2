@@ -6,15 +6,15 @@ import { Model, Types } from 'mongoose';
 import { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { toObjectIdString } from 'src/users/user-scope.helpers';
-import { GrantAllocation, GrantAllocationDocument } from './schemas/grant-allocation.schema';
+import { GrantAllocation, GrantAllocationDocument } from '../../schemas/xvi-fc/grant-allocation.schema';
 import { StateWiseResponseDto } from './dto/state-wise-response.dto';
 import { buildGetStateWiseDataPipeline } from './quires/get-state-wise-data.query';
 import { SIDE_MENU_CONFIG } from './config/side-menu.config';
 import type { MenuRole } from './config/side-menu.config';
 import { SideMenuResponseDto } from './dto/side-menu.dto';
-import { Year, YearDocument } from './schemas/year.schema';
-import { Ulb, UlbDocument } from './schemas/ulb.schema';
-import { State, StateDocument } from './schemas/state.schema';
+import { Year, YearDocument } from '../../schemas/year.schema';
+import { Ulb, UlbDocument } from '../../schemas/ulb.schema';
+import { State, StateDocument } from '../../schemas/state.schema';
 
 @Injectable()
 export class XviFcService {

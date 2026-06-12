@@ -3,7 +3,7 @@ import { getModelToken } from '@nestjs/mongoose';
 import { NotFoundException } from '@nestjs/common';
 import { Types } from 'mongoose';
 import { XviFcService } from './xvi-fc.service';
-import { GrantAllocation } from './schemas/grant-allocation.schema';
+import { GrantAllocation } from '../../schemas/xvi-fc/grant-allocation.schema';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 
 const mockUser: AuthUser = {
