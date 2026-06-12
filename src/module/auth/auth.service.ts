@@ -1,15 +1,20 @@
+/* eslint-disable prettier/prettier */
 import { randomUUID } from 'crypto';
-import { ConflictException, HttpException, Injectable } from '@nestjs/common';
+import { ConflictException, HttpException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { InjectModel } from '@nestjs/mongoose';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import type { Response } from 'express';
 import axios from 'axios';
 import type { StringValue } from 'ms';
+import { Model, Types } from 'mongoose';
 import { RedisService } from 'src/core/services/redis/redis.service';
 import { UserDocument } from 'src/schemas/user/user.schema';
+import { LoginHistory } from 'src/schemas/user/login-history.schema';
 import { UsersRepository } from 'src/users/users.repository';
 import { RegisterDto } from './dto/register.dto';
+import { SetPasswordDto } from './dto/set-password.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { AuthResponse, AuthTokens } from './types/auth-tokens.type';
 
@@ -20,18 +25,19 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly redisService: RedisService,
-  ) {}
+    @InjectModel(LoginHistory.name) private readonly loginHistoryModel: Model<LoginHistory>,
+  ) { }
 
   async getUserById(id: string) {
     const u = await this.usersRepository.findById(id);
     return u ? { email: u.email, role: u.role, isActive: u.isActive, ulb: u.ulb, state: u.state } : null;
   }
 
-  async logout(userId: string, res: Response, jti?: string, exp?: number): Promise<{ success: boolean }> {
-    if (jti && exp) {
+  async logout(userId: string, res: Response, sessionId?: string, exp?: number): Promise<{ success: boolean }> {
+    if (sessionId && exp) {
       const ttl = exp - Math.floor(Date.now() / 1000);
       if (ttl > 0) {
-        await this.redisService.set(`bl:${jti}`, '1', ttl);
+        await this.redisService.set(`bl:${sessionId}`, '1', ttl);
       }
     }
     await this.usersRepository.updateRefreshToken(userId, null);
@@ -40,6 +46,7 @@ export class AuthService {
   }
 
   async refreshTokens(userId: string, refreshToken: string, res: Response): Promise<AuthResponse> {
+    console.log('Refreshing tokens for user:', userId, 'with refresh, token:', refreshToken);
     const user = await this.usersRepository.findByIdWithRefreshToken(userId);
     if (!user?.refreshTokenHash) throw new HttpException('Session expired', 440);
 
@@ -87,6 +94,18 @@ export class AuthService {
     return { message: 'Profile updated successfully', updatedFields: update };
   }
 
+  async setPassword(dto: SetPasswordDto): Promise<{ message: string }> {
+    const user = await this.usersRepository.findByIdentifier(dto.identifier);
+    if (!user) throw new NotFoundException('User not found. Please check your details.');
+
+    const hash = await bcrypt.hash(dto.newPassword, 12);
+    const userId = (user._id as { toString(): string }).toString();
+    await this.usersRepository.updatePassword(userId, hash);
+    await this.usersRepository.updateProfile(userId, { isActive: true, status: 'APPROVED', isXVIFCProfileVerified: true });
+
+    return { message: 'Password updated successfully' };
+  }
+
   async validateCaptcha(token: string): Promise<{ success: boolean; message: string }> {
     const secret = this.configService.get<string>('RECAPTCHA_SECRET_KEY');
     try {
@@ -101,15 +120,26 @@ export class AuthService {
     }
   }
 
-  async generateTokens(userId: string): Promise<AuthTokens> {
+  async generateTokens(userId: string, purpose = 'WEB'): Promise<AuthTokens> {
     const jwtExpires = (this.configService.get<string>('JWT_EXPIRES_IN') ?? '15m') as StringValue;
     const refreshExpires = (this.configService.get<string>('JWT_REFRESH_EXPIRES_IN') ?? '7d') as StringValue;
 
+    // Create a login history record for this session — gives us lh_id
+    const lhDoc = await this.loginHistoryModel.create({ user: new Types.ObjectId(userId) });
+    const lhId = (lhDoc._id as Types.ObjectId).toString();
+
+    const payload = {
+      _id: userId,
+      lh_id: lhId,
+      sessionId: randomUUID(),
+      purpose,
+    };
+
     const [accessToken, refreshToken] = await Promise.all([
-      this.jwtService.signAsync(
-        { sub: userId, jti: randomUUID() },
-        { secret: this.configService.get<string>('JWT_SECRET'), expiresIn: jwtExpires },
-      ),
+      this.jwtService.signAsync(payload, {
+        secret: this.configService.get<string>('JWT_SECRET'),
+        expiresIn: jwtExpires,
+      }),
       this.jwtService.signAsync(
         { sub: userId },
         { secret: this.configService.get<string>('JWT_REFRESH_SECRET'), expiresIn: refreshExpires },
@@ -134,7 +164,35 @@ export class AuthService {
       path: '/',
     });
   }
+  private toObjectIdString(value: unknown): string | null {
+  if (!value) return null;
 
+  if (value instanceof Types.ObjectId) {
+    return value.toString();
+  }
+
+  if (typeof value === 'string') {
+    return value;
+  }
+
+  if (
+    typeof value === 'object' &&
+    value !== null &&
+    '_id' in value
+  ) {
+    const id = (value as { _id?: unknown })._id;
+
+    if (id instanceof Types.ObjectId) {
+      return id.toString();
+    }
+
+    if (typeof id === 'string') {
+      return id;
+    }
+  }
+
+  return null;
+}
   private clearRefreshCookie(res: Response): void {
     const cookieName = this.configService.get<string>('REFRESH_COOKIE_NAME') ?? 'refresh_token';
     res.cookie(cookieName, '', { httpOnly: true, maxAge: 0, path: '/' });

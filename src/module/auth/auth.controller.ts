@@ -1,3 +1,4 @@
+/* eslint-disable prettier/prettier */
 import { Body, Controller, Get, HttpCode, HttpStatus, Logger, Param, Patch, Post, Res, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
@@ -8,8 +9,10 @@ import { OtpService } from './otp.service';
 import { VisitSessionService } from './visit-session.service';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { Public } from './decorators/public.decorator';
+import { CheckUserDto } from './dto/check-user.dto';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
+import { SetPasswordDto } from './dto/set-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { SendOtpDto } from './dto/send-otp.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
@@ -17,7 +20,9 @@ import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { JwtRefreshGuard } from './guards/jwt-refresh.guard';
 import type { User } from 'src/module/auth/enum/role.enum';
-
+import { PermissionGuard } from './permission.guard';
+import { RequirePermissions } from './require-permissions.decorator';
+import { Permission } from './enum/roles-xvi-fc.enum';
 @ApiTags('auth')
 @Controller('auth')
 export class AuthController {
@@ -28,6 +33,19 @@ export class AuthController {
     private readonly otpService: OtpService,
     private readonly visitSessionService: VisitSessionService,
   ) { }
+
+  @Public()
+  @Post('check-user')
+  // @UseGuards(JwtAuthGuard, PermissionGuard)
+  // @RequirePermissions(Permission.VIEW_STATUS_REPORTS) 
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
+  @ApiOperation({ summary: 'Check if a user exists and determine login flow' })
+  @ApiResponse({ status: 200, description: 'User found — returns status, isXVIFCProfileVerified, maskedContact' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  checkUser(@Body() dto: CheckUserDto) {
+    return this.loginService.checkUser(dto);
+  }
 
   @Public()
   @Post('login')
@@ -57,8 +75,8 @@ export class AuthController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Logout and clear refresh token cookie' })
   @ApiResponse({ status: 200, description: 'Logged out successfully' })
-  logout(@CurrentUser() user: { _id: string; jti?: string; exp?: number }, @Res({ passthrough: true }) res: Response) {
-    return this.authService.logout(user._id, res, user.jti, user.exp);
+  logout(@CurrentUser() user: { _id: string; sessionId?: string; exp?: number }, @Res({ passthrough: true }) res: Response) {
+    return this.authService.logout(user._id, res, user.sessionId, user.exp);
   }
 
   @Public()
@@ -96,7 +114,7 @@ export class AuthController {
   @Post('sendOtp')
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 3, ttl: 600000 } })
-  @ApiOperation({ summary: 'Send OTP via SMS and email (accepts email, census code, or SB code)' })
+  @ApiOperation({ summary: 'Send OTP via SMS and email (accepts email, census code, or SB code or mobile number)' })
   @ApiResponse({ status: 200, description: 'OTP sent — returns masked mobile and email' })
   sendOtp(@Body() dto: SendOtpDto) {
     return this.otpService.sendOtp(dto);
@@ -112,7 +130,6 @@ export class AuthController {
     return this.otpService.verifyOtp(dto, res);
   }
 
-  @UseGuards(JwtAuthGuard)
   @Patch('update-profile')
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
@@ -120,6 +137,17 @@ export class AuthController {
   @ApiResponse({ status: 200, description: 'Profile updated successfully' })
   updateProfile(@CurrentUser() user: { _id: string }, @Body() dto: UpdateProfileDto) {
     return this.authService.updateProfile(user._id, dto);
+  }
+
+  @Public()
+  @Post('set-password')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @ApiOperation({ summary: 'Set or reset password directly without OTP verification' })
+  @ApiResponse({ status: 200, description: 'Password updated successfully' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  setPassword(@Body() dto: SetPasswordDto) {
+    return this.authService.setPassword(dto);
   }
 
   @Public()

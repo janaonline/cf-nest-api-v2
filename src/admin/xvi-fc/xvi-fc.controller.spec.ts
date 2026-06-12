@@ -1,8 +1,18 @@
+/* eslint-disable prettier/prettier */
 import { Test, TestingModule } from '@nestjs/testing';
 import { NotFoundException } from '@nestjs/common';
 import { Types } from 'mongoose';
 import { XviFcController } from './xvi-fc.controller';
 import { XviFcService } from './xvi-fc.service';
+import { AnnualAccountService } from './annual-account.service';
+import type { AuthUser } from 'src/module/auth/auth-user.interface';
+
+const mockUser: AuthUser = {
+  _id: new Types.ObjectId().toHexString(),
+  role: 'ADMIN',
+  scope: null,
+  accessLevel: null,
+};
 
 describe('XviFcController', () => {
   let controller: XviFcController;
@@ -17,9 +27,7 @@ describe('XviFcController', () => {
       time: '3:00 PM - 4:00 PM IST',
       hostedBy: 'CityFinance Team',
     },
-    upcomingSupportHours: [
-      { date: '8 May 2025', details: 'Open support hour', status: 'UPCOMING' as const },
-    ],
+    upcomingSupportHours: [{ date: '8 May 2025', details: 'Open support hour', status: 'UPCOMING' as const }],
   };
 
   beforeEach(async () => {
@@ -31,7 +39,10 @@ describe('XviFcController', () => {
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [XviFcController],
-      providers: [{ provide: XviFcService, useValue: mockXviFcService }],
+      providers: [
+        { provide: XviFcService, useValue: mockXviFcService },
+        { provide: AnnualAccountService, useValue: { upsert: jest.fn(), findOne: jest.fn() } },
+      ],
     }).compile();
 
     controller = module.get<XviFcController>(XviFcController);
@@ -49,14 +60,14 @@ describe('XviFcController', () => {
 
     it('should call service with stateId and return result', async () => {
       service.getStateWiseData.mockResolvedValue(mockStateWiseData as any);
-      const result = await controller.getStateWiseData(stateId);
+      const result = await controller.getStateWiseData(stateId, mockUser);
       expect(service.getStateWiseData).toHaveBeenCalledWith(stateId);
       expect(result).toEqual(mockStateWiseData);
     });
 
     it('should propagate NotFoundException from service', async () => {
       service.getStateWiseData.mockRejectedValue(new NotFoundException('No grant allocation data found'));
-      await expect(controller.getStateWiseData(stateId)).rejects.toThrow(NotFoundException);
+      await expect(controller.getStateWiseData(stateId, mockUser)).rejects.toThrow(NotFoundException);
     });
   });
 

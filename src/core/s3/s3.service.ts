@@ -25,7 +25,11 @@ export class S3Service {
     this.region = cfg.get<string>('AWS_REGION', 'ap-south-1');
     this.bucket = cfg.get<string>('AWS_BUCKET_NAME', '');
     this.presign = Number(cfg.get<string>('PRESIGN_EXPIRES', '604800')); // 7 days
-    this.client = new S3Client({ region: this.region });
+    this.client = new S3Client({
+      region: this.region,
+      requestChecksumCalculation: 'WHEN_REQUIRED',
+      responseChecksumValidation: 'WHEN_REQUIRED',
+    });
   }
 
   async headObject(Key: string) {
@@ -33,6 +37,7 @@ export class S3Service {
   }
 
   async getObjectStream(Key: string): Promise<Readable> {
+    this.logger.log(`Fetching S3 object stream for key: ${this.bucket} -- ${Key}`);
     const out: GetObjectCommandOutput = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key }));
     return out.Body! as Readable; // Node.js Readable
   }
@@ -102,18 +107,26 @@ export class S3Service {
   }
 
   getKeyFromS3Url(url: string): string {
-    if (url.startsWith('/')) {
-      return url.substring(1); // remove leading '/'
+    // For full URLs extract only the pathname; for relative paths use as-is.
+    let raw = url;
+    if (url.startsWith('http')) {
+      try {
+        raw = new URL(url).pathname;
+      } catch {
+        raw = url;
+      }
     }
-    if (!url.startsWith('http')) {
-      return url; // already a key
-    }
-    const parsedUrl = new URL(url);
-    const path = parsedUrl.pathname.substring(1); // remove leading '/'
 
-    // Remove leading slash and decode %20 etc.
-    const key = decodeURIComponent(path).replace(/^\/+/, '');
-    return key;
+    // Strip any leading slashes to produce a bare S3 key.
+    const stripped = raw.replace(/^\/+/, '');
+
+    // Decode percent-encoded characters (%20 → space, etc.).
+    // Falls back to the stripped key if the encoding is malformed.
+    try {
+      return decodeURIComponent(stripped);
+    } catch {
+      return stripped;
+    }
   }
 
   toS3Key(input: string): string {

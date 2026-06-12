@@ -1,6 +1,8 @@
 import { BadRequestException, Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import { ConfigService } from '@nestjs/config';
+import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { YearLabelToId } from 'src/core/constants/years';
 import { buildPopulationMatch } from 'src/core/helpers/populationCategory.helper';
 import { AfsAuditorsReport, AfsAuditorsReportDocument } from 'src/schemas/afs/afs-auditors-report.schema';
@@ -59,7 +61,10 @@ export class AfsDigitizationService {
 
     // @InjectQueue(AFS_DIGITIZATION_QUEUE)
     // private readonly digitizationQueue: Queue<DigitizationJobDto>,
-  ) {}
+
+    private readonly fileTokenService: FileTokenService,
+    private readonly configService: ConfigService,
+  ) { }
 
   async getAfsFilters() {
     // const auditTypes = [
@@ -192,18 +197,40 @@ export class AfsDigitizationService {
   }
 
   async afsList(query: DigitizationReportQueryDto): Promise<any> {
-    // mongoose.set('debug', true);
-    // const auditedYearObjectId = new Types.ObjectId(query.yearId);
-    // const ulbObjectId = new Types.ObjectId(query.ulbId);
-    // const results = await this.annualAccountModel.aggregate(afsQuery(query)).exec();
     const [data, countResult] = await Promise.all([
       this.annualAccountModel.aggregate(afsQuery(query)).exec(),
       this.annualAccountModel.aggregate<{ count: number }>(afsCountQuery(query)).exec(),
     ]);
 
-    // this.logger.log(`AFS List fetched: ${data.length} records`, countResult);
     const totalCount: number = countResult[0]?.count ?? 0;
-    return { data, totalCount };
+
+    const signedData = data.map((item) => {
+      const docField = item[query.docType];
+      if (docField?.url) {
+        docField.url_signed = this.fileTokenService.signFileUrl(docField.url);
+      }
+      if (item.afsFiles?.ulbFile?.pdfUrl) {
+        item.afsFiles.ulbFile.pdfUrl_signed = this.fileTokenService.signFileUrl(item.afsFiles.ulbFile.pdfUrl);
+      }
+      if (item.afsFiles?.ulbFile?.excelUrl) {
+        item.afsFiles.ulbFile.excelUrl_signed = this.fileTokenService.signFileUrl(item.afsFiles.ulbFile.excelUrl);
+      }
+      if (item.afsFiles?.ulbFile?.digitizedFileUrl) {
+        item.afsFiles.ulbFile.digitizedFileUrl_signed = this.fileTokenService.signFileUrl(item.afsFiles.ulbFile.digitizedFileUrl);
+      }
+      if (item.afsFiles?.afsFile?.pdfUrl) {
+        item.afsFiles.afsFile.pdfUrl_signed = this.fileTokenService.signFileUrl(item.afsFiles.afsFile.pdfUrl);
+      }
+      if (item.afsFiles?.afsFile?.excelUrl) {
+        item.afsFiles.afsFile.excelUrl_signed = this.fileTokenService.signFileUrl(item.afsFiles.afsFile.excelUrl);
+      }
+      if (item.afsFiles?.afsFile?.digitizedFileUrl) {
+        item.afsFiles.afsFile.digitizedFileUrl_signed = this.fileTokenService.signFileUrl(item.afsFiles.afsFile.digitizedFileUrl);
+      }
+      return item;
+    });
+
+    return { data: signedData, totalCount };
   }
 
   async getRequestLog(requestId: string): Promise<DigitizationLogDocument | null> {
@@ -260,11 +287,14 @@ export class AfsDigitizationService {
     try {
       const pipeline = getAfsReportPipeline(query);
       const dbRes = (await this.afsExcelFileModel.aggregate(pipeline).exec()) as IAfsExcelFile[];
+
+      const excel = dbRes.map((file) => ({ ...file, url: this.fileTokenService.signFileUrl(file.url) }));
+
       return {
         success: true,
         data: {
           type: query.auditType,
-          excel: dbRes,
+          excel,
           source: 'digitizedExcel',
         },
       };

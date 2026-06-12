@@ -38,4 +38,14 @@ export class NodeMailerService {
       this.logger.error('Error sending email:', error);
     }
   }
+
+  async sendHtml(to: string | string[], subject: string, html: string): Promise<void> {
+    try {
+      this.logger.log(`Sending HTML email to: ${Array.isArray(to) ? to.join(', ') : to}`);
+      await this.mailerService.sendMail({ to, subject, html });
+    } catch (error) {
+      this.logger.error('Error sending HTML email:', error);
+      throw error;
+    }
+  }
 }

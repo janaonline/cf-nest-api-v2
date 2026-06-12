@@ -10,6 +10,7 @@ import { State, StateSchema } from 'src/schemas/state.schema';
 import { Ulb, UlbSchema } from 'src/schemas/ulb.schema';
 import { Year, YearSchema } from 'src/schemas/year.schema';
 import { VisitSession, VisitSessionSchema } from 'src/schemas/visit-session.schema';
+import { LoginHistory, LoginHistorySchema } from 'src/schemas/user/login-history.schema';
 import { UsersModule } from 'src/users/users.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
@@ -41,6 +42,7 @@ import { JwtRefreshStrategy } from './strategies/jwt-refresh.strategy';
       { name: Ulb.name, schema: UlbSchema },
       { name: Year.name, schema: YearSchema },
       { name: VisitSession.name, schema: VisitSessionSchema },
+      { name: LoginHistory.name, schema: LoginHistorySchema },
     ]),
   ],
   exports: [JwtModule, JwtAuthGuard, RolesGuard, AuthService, LoginService],

@@ -4,7 +4,7 @@ import { IsOtp } from '../decorators/is-otp.decorator';
 import { Match } from 'src/common/decorators/match.decorator';
 
 export class ResetPasswordDto {
-  @ApiProperty({ description: 'Email address, census code, or SB code used during sendOtp' })
+  @ApiProperty({ description: 'Email address, census code, SB code, or 10-digit mobile number used during sendOtp' })
   @IsString()
   @IsNotEmpty()
   identifier!: string;
