@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { XviFcController } from './xvi-fc.controller';
 import { XviFcService } from './xvi-fc.service';
-import { AnnualAccountService } from './annual-account.service';
+import { AnnualAccountsModule } from './ulb/annual_accounts/annual_accounts.module';
 import {
   GrantAllocation,
   GrantAllocationSchema,
@@ -10,7 +10,6 @@ import {
 import { State, StateSchema } from '../../schemas/state.schema';
 import { Year, YearSchema } from '../../schemas/year.schema';
 import { Ulb, UlbSchema } from '../../schemas/ulb.schema';
-import { XviFcAnnualAccount, XviFcAnnualAccountSchema } from '../../schemas/xvi-fc/annual-account.schema';
 
 @Module({
   imports: [
@@ -19,10 +18,10 @@ import { XviFcAnnualAccount, XviFcAnnualAccountSchema } from '../../schemas/xvi-
       { name: State.name, schema: StateSchema },
       { name: Year.name, schema: YearSchema },
       { name: Ulb.name, schema: UlbSchema },
-      { name: XviFcAnnualAccount.name, schema: XviFcAnnualAccountSchema },
     ]),
+    AnnualAccountsModule,
   ],
   controllers: [XviFcController],
-  providers: [XviFcService, AnnualAccountService],
+  providers: [XviFcService],
 })
 export class XviFcModule {}

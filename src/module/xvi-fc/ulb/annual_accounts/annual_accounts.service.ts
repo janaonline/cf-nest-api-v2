@@ -2,12 +2,12 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 
-import { AnnualAccountStatus, XviFcAnnualAccount, XviFcAnnualAccountDocument } from '../../schemas/xvi-fc/annual-account.schema';
-import { AnnualAccountDocumentDto, SaveAnnualAccountDto, YearSectionDto } from './dto/annual-account.dto';
+import { AnnualAccountStatus, XviFcAnnualAccount, XviFcAnnualAccountDocument } from '../../../../schemas/xvi-fc/annual-account.schema';
+import { AnnualAccountDocumentDto, SaveAnnualAccountDto, YearSectionDto } from './dto/create-annual_account.dto';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 
 @Injectable()
-export class AnnualAccountService {
+export class AnnualAccountsService {
   constructor(
     @InjectModel(XviFcAnnualAccount.name)
     private readonly model: Model<XviFcAnnualAccountDocument>,

@@ -11,7 +11,7 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
-import { AnnualAccountStatus } from '../../../schemas/xvi-fc/annual-account.schema';
+import { AnnualAccountStatus } from '../../../../../schemas/xvi-fc/annual-account.schema';
 
 export class AnnualAccountDocumentDto {
   @IsString()
