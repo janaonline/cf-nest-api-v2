@@ -34,7 +34,7 @@ export const SIDE_MENU_CONFIG: Record<MenuRole, (yearId: string) => SideMenuResp
         items: [
           {
             label: 'FY ' + yearId+ ' Conditions',
-            icon: 'bi bi-people-fill',
+            icon: 'bi bi-ui-checks',
             featureKey: 'ulb-forms',
           },
         ],

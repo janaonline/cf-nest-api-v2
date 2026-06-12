@@ -4,6 +4,14 @@ import { NotFoundException } from '@nestjs/common';
 import { Types } from 'mongoose';
 import { XviFcService } from './xvi-fc.service';
 import { GrantAllocation } from './schemas/grant-allocation.schema';
+import type { AuthUser } from 'src/module/auth/auth-user.interface';
+
+const mockUser: AuthUser = {
+  _id: new Types.ObjectId().toHexString(),
+  role: 'ADMIN',
+  scope: null,
+  accessLevel: null,
+};
 
 describe('XviFcService', () => {
   let service: XviFcService;
@@ -39,22 +47,22 @@ describe('XviFcService', () => {
 
     it('should return state wise data when found', async () => {
       mockGrantAllocationModel.aggregate.mockResolvedValue([mockResult]);
-      const result = await service.getStateWiseData(stateId);
+      const result = await service.getStateWiseData(stateId, mockUser);
       expect(result).toEqual(mockResult);
       expect(mockGrantAllocationModel.aggregate).toHaveBeenCalledTimes(1);
     });
 
     it('should throw NotFoundException when no data found', async () => {
       mockGrantAllocationModel.aggregate.mockResolvedValue([]);
-      await expect(service.getStateWiseData(stateId)).rejects.toThrow(NotFoundException);
-      await expect(service.getStateWiseData(stateId)).rejects.toThrow(
+      await expect(service.getStateWiseData(stateId, mockUser)).rejects.toThrow(NotFoundException);
+      await expect(service.getStateWiseData(stateId, mockUser)).rejects.toThrow(
         'No grant allocation data found for this state',
       );
     });
 
     it('should call aggregate with a pipeline array', async () => {
       mockGrantAllocationModel.aggregate.mockResolvedValue([mockResult]);
-      await service.getStateWiseData(stateId);
+      await service.getStateWiseData(stateId, mockUser);
       const [pipeline] = mockGrantAllocationModel.aggregate.mock.calls[0];
       expect(Array.isArray(pipeline)).toBe(true);
     });

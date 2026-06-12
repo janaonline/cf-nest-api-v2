@@ -1,9 +1,11 @@
 /* eslint-disable prettier/prettier */
-import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
 
 import { XviFcService } from './xvi-fc.service';
+import { AnnualAccountService } from './annual-account.service';
 import { StateWiseResponseDto } from './dto/state-wise-response.dto';
 import { SideMenuResponseDto } from './dto/side-menu.dto';
+import { SaveAnnualAccountDto } from './dto/annual-account.dto';
 import { ParseObjectIdPipe } from '../../common/pipes/parse-object-id.pipe';
 import type { MenuRole } from './config/side-menu.config';
 import { ApiBearerAuth } from '@nestjs/swagger/dist/decorators';
@@ -15,7 +17,10 @@ import type { AuthUser } from 'src/module/auth/auth-user.interface';
 
 @Controller('xvi-fc')
 export class XviFcController {
-  constructor(private readonly xviFcService: XviFcService) {}
+  constructor(
+    private readonly xviFcService: XviFcService,
+    private readonly annualAccountService: AnnualAccountService,
+  ) {}
 
   @ApiBearerAuth()
   @Get('state/:stateId')
@@ -66,5 +71,27 @@ export class XviFcController {
   @RequirePermissions(Permission.VIEW_STATUS_REPORTS)
   getSupportHours(): ReturnType<XviFcService['getSupportHours']> {
     return this.xviFcService.getSupportHours();
+  }
+
+  @ApiBearerAuth()
+  @Post('annual-account')
+  @UseGuards(PermissionGuard)
+  @RequirePermissions(Permission.UPLOAD_DOCUMENTS)
+  saveAnnualAccount(
+    @Body() dto: SaveAnnualAccountDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.annualAccountService.upsert(dto, user);
+  }
+
+  @ApiBearerAuth()
+  @Get('annual-account/:ulbId/:yearId')
+  @UseGuards(PermissionGuard)
+  @RequirePermissions(Permission.UPLOAD_DOCUMENTS)
+  getAnnualAccount(
+    @Param('ulbId', ParseObjectIdPipe) ulbId: string,
+    @Param('yearId', ParseObjectIdPipe) yearId: string,
+  ) {
+    return this.annualAccountService.findOne(ulbId, yearId);
   }
 }
