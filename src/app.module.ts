@@ -19,7 +19,7 @@ import { AfsDigitizationModule } from './admin/afs-digitization/afs-digitization
 import { ReportAnIssueModule } from './web/report-an-issue/report-an-issue.module';
 import { ResourcesSectionModule } from './web/resources-section/resources-section.module';
 import { EventsModule } from './admin/events/events.module';
-import { XviFcModule } from './admin/xvi-fc/xvi-fc.module';
+import { XviFcModule } from './module/xvi-fc/xvi-fc.module';
 import { EmailTemplatesModule } from './admin/email-templates/email-templates.module';
 import { EmailRemindersModule } from './admin/email-reminders/email-reminders.module';
 import { FileTokenModule } from './core/file-token/file-token.module';
