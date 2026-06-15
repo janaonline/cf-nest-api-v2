@@ -14,10 +14,10 @@ export class JwtRefreshStrategy extends PassportStrategy(Strategy, 'jwt-refresh'
     private readonly configService: ConfigService,
     private readonly authService: AuthService,
   ) {
-    const jwtSecret = configService.get<string>('JWT_SECRET');
+    const jwtRefreshSecret = configService.get<string>('JWT_REFRESH_SECRET');
 
-    if (!jwtSecret) {
-      throw new Error('JWT_SECRET is not configured');
+    if (!jwtRefreshSecret) {
+      throw new Error('JWT_REFRESH_SECRET is not configured');
     }
     const cookieName = configService.get<string>('REFRESH_COOKIE_NAME') ?? 'refresh_token';
     const options: StrategyOptionsWithRequest = {
@@ -25,7 +25,7 @@ export class JwtRefreshStrategy extends PassportStrategy(Strategy, 'jwt-refresh'
         (req: Request) => (req?.cookies as Record<string, string> | undefined)?.[cookieName] ?? null,
       ]),
       ignoreExpiration: false,
-      secretOrKey: jwtSecret,
+      secretOrKey: jwtRefreshSecret,
       passReqToCallback: true,
     };
     super(options);
