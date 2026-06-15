@@ -4,7 +4,6 @@ import { NotFoundException } from '@nestjs/common';
 import { Types } from 'mongoose';
 import { XviFcController } from './xvi-fc.controller';
 import { XviFcService } from './xvi-fc.service';
-import { AnnualAccountService } from './annual-account.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 
 const mockUser: AuthUser = {
@@ -41,7 +40,6 @@ describe('XviFcController', () => {
       controllers: [XviFcController],
       providers: [
         { provide: XviFcService, useValue: mockXviFcService },
-        { provide: AnnualAccountService, useValue: { upsert: jest.fn(), findOne: jest.fn() } },
       ],
     }).compile();
 
