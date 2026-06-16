@@ -1,6 +1,10 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model, Types } from 'mongoose';
+import { ConfigService } from '@nestjs/config';
+import { Buffer } from 'exceljs';
+import { FilterQuery, Model, Types } from 'mongoose';
+import { FileTokenService } from 'src/core/file-token/file-token.service';
+import { ExcelService, RowHeader } from 'src/services/excel/excel.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
@@ -31,9 +35,65 @@ import type {
 import { XviFcApiResponse } from '../../common/response/xvi-fc-api-response';
 import { throwXviFcValidationError, xviFcSuccess } from '../../common/response/xvi-fc-response.util';
 import { SFC_STATUS_QUESTIONS } from './constants/sfc-status.questions';
+import type { FormFieldOption } from '../../common/types/field-config.type';
 import { SaveSfcStatusDto } from './dto/save-sfc-status.dto';
 import type { SfcFormGetResponseData, SfcFormPermissions } from './sfc-status.types';
 import type { SfcHistoryEntryInput } from './types/sfc-status-history.types';
+import type {
+  SfcStatusDumpFilters,
+  SfcStatusDumpRecord,
+  SfcStatusDumpRow,
+  SfcStatusPopulatedState,
+  SfcStatusPopulatedUser,
+  SfcStatusPopulatedYear,
+} from './types/sfc-status-dump.types';
+
+/** Maps radio field key → { optionId → display label }, derived from SFC_STATUS_QUESTIONS. */
+const RADIO_LABEL_MAP: Record<string, Record<string, string>> = Object.fromEntries(
+  SFC_STATUS_QUESTIONS.filter((q) => q.formFieldType === 'radio' && Array.isArray(q.options)).map((q) => [
+    q.key,
+    Object.fromEntries((q.options as FormFieldOption[]).map((o) => [o.id, o.label])),
+  ]),
+);
+
+const SFC_DUMP_HEADERS: RowHeader[] = [
+  { label: 'State Name', key: 'stateName', width: 25 },
+  { label: 'Year Name', key: 'yearName', width: 15 },
+  { label: 'Form Status', key: 'currentFormStatusLabel', width: 32 },
+  { label: 'Submitted By', key: 'submittedBy', width: 25 },
+  { label: 'Submitted At', key: 'submittedAt', width: 22 },
+  { label: 'Created By', key: 'createdBy', width: 25 },
+  { label: 'Updated By', key: 'updatedBy', width: 25 },
+  { label: 'Created At', key: 'createdAt', width: 22 },
+  { label: 'Updated At', key: 'updatedAt', width: 22 },
+  { label: 'Is Active SFC', key: 'isActiveSfc', width: 16 },
+  { label: 'Award Period', key: 'awardPeriod', width: 16 },
+  { label: 'Award Period Duration (Years)', key: 'awardPeriodDuration', width: 28 },
+  { label: 'SFC Constituted for Interim?', key: 'sfcConstitutedForInterim', width: 28 },
+  { label: 'SFC Award Period Extended?', key: 'sfcAwardPeriodExtended', width: 26 },
+  { label: 'Extension Order - File Name', key: 'extensionOrder_fileName', width: 35 },
+  { label: 'Extension Order - File URL', key: 'extensionOrder_fileUrl', width: 55 },
+  { label: 'Extension Order - File Size', key: 'extensionOrder_fileSize', width: 24 },
+  { label: 'Extension Order - MIME Type', key: 'extensionOrder_mimeType', width: 22 },
+  { label: 'Which Award Period (SFC)', key: 'whichAwardPeriod', width: 25 },
+  { label: 'SFC Report Status', key: 'sfcReportStatus', width: 35 },
+  { label: 'Expected Report Submission Date', key: 'reportSubmissionDate', width: 30 },
+  { label: 'SFC Report - File Name', key: 'sfcReport_fileName', width: 35 },
+  { label: 'SFC Report - File URL', key: 'sfcReport_fileUrl', width: 55 },
+  { label: 'SFC Report - File Size', key: 'sfcReport_fileSize', width: 22 },
+  { label: 'SFC Report - MIME Type', key: 'sfcReport_mimeType', width: 20 },
+  { label: 'ATR Report - File Name', key: 'atrReport_fileName', width: 35 },
+  { label: 'ATR Report - File URL', key: 'atrReport_fileUrl', width: 55 },
+  { label: 'ATR Report - File Size', key: 'atrReport_fileSize', width: 22 },
+  { label: 'ATR Report - MIME Type', key: 'atrReport_mimeType', width: 20 },
+  { label: 'Is New SFC Constituted?', key: 'isNewSfcConstituted', width: 25 },
+  { label: 'Gazette Notification - File Name', key: 'gazetteNotification_fileName', width: 35 },
+  { label: 'Gazette Notification - File URL', key: 'gazetteNotification_fileUrl', width: 55 },
+  { label: 'Gazette Notification - File Size', key: 'gazetteNotification_fileSize', width: 28 },
+  { label: 'Gazette Notification - MIME Type', key: 'gazetteNotification_mimeType', width: 28 },
+  { label: 'Raise an Issue', key: 'raiseAnIssue', width: 45 },
+  { label: 'Checkbox Confirmation', key: 'checkboxConfirmation', width: 22 },
+];
 
 @Injectable()
 export class SfcStatusService {
@@ -43,6 +103,9 @@ export class SfcStatusService {
     @InjectModel(XviFcSfcStatusHistory.name)
     private readonly historyModel: Model<XviFcSfcStatusHistoryDocument>,
     private readonly validator: DynamicFormValidationService,
+    private readonly excelService: ExcelService,
+    private readonly fileTokenService: FileTokenService,
+    private readonly config: ConfigService,
   ) {}
 
   /**
@@ -292,6 +355,38 @@ export class SfcStatusService {
     });
   }
 
+  /**
+   * Exports all SFC Status records as an Excel workbook buffer.
+   * ADMIN scope exports all records; STATE scope is restricted to the user's own state.
+   * Optional filters (stateId, yearId, status) narrow the result set further.
+   *
+   * @param filters   - Optional stateId / yearId / status query params.
+   * @param user      - Authenticated user; used for scope enforcement.
+   * @returns ExcelJS buffer ready to stream as an `.xlsx` download.
+   */
+  async dumpToExcel(filters: SfcStatusDumpFilters, user: AuthUser): Promise<Buffer> {
+    const resolvedFilters = this.resolveDumpFilters(filters, user);
+
+    const mongoFilter: FilterQuery<XviFcSfcStatusDocument> = { isDeleted: false };
+    if (resolvedFilters.stateId) mongoFilter['state'] = new Types.ObjectId(resolvedFilters.stateId);
+    if (resolvedFilters.yearId) mongoFilter['year'] = new Types.ObjectId(resolvedFilters.yearId);
+    if (resolvedFilters.status !== undefined) mongoFilter['currentFormStatus'] = resolvedFilters.status;
+
+    const docs = (await this.model
+      .find(mongoFilter)
+      .populate<{ state: SfcStatusPopulatedState }>('state', 'name')
+      .populate<{ year: SfcStatusPopulatedYear }>('year', 'year')
+      .populate<{ createdBy: SfcStatusPopulatedUser }>('createdBy', 'name')
+      .populate<{ updatedBy: SfcStatusPopulatedUser }>('updatedBy', 'name')
+      .populate<{ submittedBy: SfcStatusPopulatedUser }>('submittedBy', 'name')
+      .lean()
+      .exec()) as unknown as SfcStatusDumpRecord[];
+
+    const rows = docs.map((doc) => this.buildDumpRow(doc));
+
+    return this.excelService.generateExcel(SFC_DUMP_HEADERS, rows, 'SFC Status');
+  }
+
   // ─── Helpers ─────────────────────────────────────────────────────────────────
 
   /**
@@ -356,6 +451,146 @@ export class SfcStatusService {
       isActive: true,
       isDeleted: false,
     });
+  }
+
+  // ─── Dump helpers ────────────────────────────────────────────────────────────
+
+  /**
+   * Enforces scope rules for the dump endpoint and merges any implicit state filter.
+   * ADMIN: filters applied as-is.
+   * STATE: stateId in filters must match the user's own state (or is forced to it).
+   * Any other scope: ForbiddenException.
+   */
+  private resolveDumpFilters(filters: SfcStatusDumpFilters, user: AuthUser): SfcStatusDumpFilters {
+    if (user.scope === Scope.ADMIN) return filters;
+
+    if (user.scope === Scope.STATE) {
+      const userStateId = toObjectIdString(user.state);
+      if (!userStateId) throw new ForbiddenException('Access denied');
+
+      if (filters.stateId && filters.stateId !== userStateId) {
+        throw new ForbiddenException('You can only export your own state data');
+      }
+
+      return { ...filters, stateId: userStateId };
+    }
+
+    throw new ForbiddenException('Access denied');
+  }
+
+  /** Flattens a populated SFC Status document into a single Excel row object. */
+  private buildDumpRow(doc: SfcStatusDumpRecord): SfcStatusDumpRow {
+    const data = doc.data ?? {};
+
+    const awardPeriod = this.strVal(data['awardPeriod']);
+    const extensionOrder = this.extractFileColumns(data['extensionOrder']);
+    const sfcReport = this.extractFileColumns(data['sfcReport']);
+    const atrReport = this.extractFileColumns(data['atrReport']);
+    const gazetteNotification = this.extractFileColumns(data['gazetteNotification']);
+
+    return {
+      stateName: doc.state?.name ?? '',
+      yearName: doc.year?.year ?? '',
+      currentFormStatus: doc.currentFormStatus,
+      currentFormStatusLabel: getFormStatusLabel(doc.currentFormStatus),
+      submittedBy: doc.submittedBy?.name ?? '',
+      submittedAt: doc.submittedAt ? doc.submittedAt.toISOString() : '',
+      createdBy: doc.createdBy?.name ?? '',
+      updatedBy: doc.updatedBy?.name ?? '',
+      createdAt: doc.createdAt ? doc.createdAt.toISOString() : '',
+      updatedAt: doc.updatedAt ? doc.updatedAt.toISOString() : '',
+      isActiveSfc: this.radioVal('isActiveSfc', data['isActiveSfc']),
+      awardPeriod,
+      awardPeriodDuration: this.deriveAwardPeriodDuration(awardPeriod),
+      sfcConstitutedForInterim: this.radioVal('sfcConstitutedForInterim', data['sfcConstitutedForInterim']),
+      sfcAwardPeriodExtended: this.radioVal('sfcAwardPeriodExtended', data['sfcAwardPeriodExtended']),
+      extensionOrder_fileName: extensionOrder.fileName,
+      extensionOrder_fileUrl: extensionOrder.fileUrl,
+      extensionOrder_fileSize: extensionOrder.fileSize,
+      extensionOrder_mimeType: extensionOrder.mimeType,
+      whichAwardPeriod: this.strVal(data['whichAwardPeriod']),
+      sfcReportStatus: this.radioVal('sfcReportStatus', data['sfcReportStatus']),
+      reportSubmissionDate: this.strVal(data['reportSubmissionDate']),
+      sfcReport_fileName: sfcReport.fileName,
+      sfcReport_fileUrl: sfcReport.fileUrl,
+      sfcReport_fileSize: sfcReport.fileSize,
+      sfcReport_mimeType: sfcReport.mimeType,
+      atrReport_fileName: atrReport.fileName,
+      atrReport_fileUrl: atrReport.fileUrl,
+      atrReport_fileSize: atrReport.fileSize,
+      atrReport_mimeType: atrReport.mimeType,
+      isNewSfcConstituted: this.radioVal('isNewSfcConstituted', data['isNewSfcConstituted']),
+      gazetteNotification_fileName: gazetteNotification.fileName,
+      gazetteNotification_fileUrl: gazetteNotification.fileUrl,
+      gazetteNotification_fileSize: gazetteNotification.fileSize,
+      gazetteNotification_mimeType: gazetteNotification.mimeType,
+      raiseAnIssue: this.strVal(data['raiseAnIssue']),
+      checkboxConfirmation: this.strVal(data['checkboxConfirmation']),
+    };
+  }
+
+  /**
+   * Extracts the four file sub-fields from an uploaded-file value.
+   * The fileUrl is signed with a 1-week expiry via FileTokenService.
+   * Returns empty strings for absent or malformed values.
+   */
+  private extractFileColumns(value: unknown): {
+    fileName: string;
+    fileUrl: string;
+    fileSize: string;
+    mimeType: string;
+  } {
+    if (typeof value !== 'object' || value === null) {
+      return { fileName: '', fileUrl: '', fileSize: '', mimeType: '' };
+    }
+
+    const f = value as Record<string, unknown>;
+    const rawUrl = typeof f['fileUrl'] === 'string' ? f['fileUrl'] : '';
+    return {
+      fileName: typeof f['fileName'] === 'string' ? f['fileName'] : '',
+      fileUrl: this.signDumpFileUrl(rawUrl),
+      fileSize: typeof f['fileSize'] === 'number' ? (f['fileSize'] / 1024 / 1024).toFixed(2) + ' MB' : '',
+      mimeType: typeof f['mimeType'] === 'string' ? f['mimeType'] : '',
+    };
+  }
+
+  /**
+   * Builds a signed 1-week download URL for a file stored in S3.
+   * Prepends AWS_STORAGE_URL to convert the relative S3 key to a full path,
+   * then encrypts it into a FileTokenService token with a 7-day expiry.
+   */
+  private signDumpFileUrl(relativePath: string): string {
+    if (!relativePath) return '';
+    const storageUrl = this.config.get<string>('AWS_STORAGE_URL', '');
+    const fullPath = storageUrl ? `${storageUrl}${relativePath}` : relativePath;
+    const exp = Date.now() + 7 * 24 * 60 * 60 * 1000;
+    const token = this.fileTokenService.createToken({ path: fullPath, disposition: 'inline', exp });
+    const baseUrl = this.config.get<string>('BASE_URL', '');
+    return `${baseUrl}file/download?signature=${token}`;
+  }
+
+  /** Resolves a stored radio option id to its display label; falls back to the raw value if not found. */
+  private radioVal(key: string, value: unknown): string {
+    if (typeof value !== 'string' || !value) return '';
+    return RADIO_LABEL_MAP[key]?.[value] ?? value;
+  }
+
+  /** Coerces any scalar form-data value to a string for Excel output. */
+  private strVal(value: unknown): string {
+    if (value === undefined || value === null) return '';
+    if (typeof value === 'string') return value;
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+    return '';
+  }
+
+  /**
+   * Derives the numeric duration from an `awardPeriod` string (e.g. `'2026-2031'` → `'5'`).
+   * Returns an empty string when the format is not `YYYY-YYYY`.
+   */
+  private deriveAwardPeriodDuration(awardPeriod: string): string {
+    const m = /^(\d{4})-(\d{4})$/.exec(awardPeriod);
+    if (!m) return '';
+    return String(parseInt(m[2], 10) - parseInt(m[1], 10));
   }
 
   // ─── Scope enforcement ────────────────────────────────────────────────────

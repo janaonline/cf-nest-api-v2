@@ -1,13 +1,15 @@
-import { Body, Controller, Get, Headers, Ip, Param, Post, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiBody, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Body, Controller, Get, Headers, Ip, Param, Post, Query, StreamableFile, UseGuards } from '@nestjs/common';
+import { ApiBearerAuth, ApiBody, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { PermissionGuard } from 'src/module/auth/permission.guard';
 import { RequirePermissions } from 'src/module/auth/require-permissions.decorator';
 import { Permission } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { CurrentUser } from 'src/module/auth/decorators/current-user.decorator';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { ParseObjectIdPipe } from 'src/common/pipes/parse-object-id.pipe';
+import { getTimeStamp } from 'src/shared/utils/date.utils';
 import { SfcStatusService } from './sfc-status.service';
 import { SaveSfcStatusDto } from './dto/save-sfc-status.dto';
+import { DumpSfcStatusQueryDto } from './dto/dump-sfc-status-query.dto';
 
 @ApiTags('XVI-FC - State Forms - SFC Status')
 @ApiBearerAuth()
@@ -25,6 +27,32 @@ export class SfcStatusController {
   @RequirePermissions(Permission.VIEW_STATE_FORMS)
   getQuestions() {
     return this.sfcStatusService.getQuestions();
+  }
+
+  @ApiOperation({
+    summary: 'Export SFC Status data as Excel',
+    description:
+      'Downloads all SFC Status records as an `.xlsx` file. ' +
+      'Supports optional filters: stateId, yearId, status. ' +
+      'ADMIN exports all records; STATE-scoped users are restricted to their own state.',
+  })
+  @ApiQuery({ name: 'stateId', required: false, description: 'Filter by state ObjectId' })
+  @ApiQuery({ name: 'yearId', required: false, description: 'Filter by year ObjectId' })
+  @ApiQuery({ name: 'status', required: false, description: 'Filter by numeric form status (e.g. 1, 2, 7)' })
+  @Get('dump')
+  @UseGuards(PermissionGuard)
+  @RequirePermissions(Permission.VIEW_STATUS_REPORTS)
+  async dump(@Query() query: DumpSfcStatusQueryDto, @CurrentUser() user: AuthUser): Promise<StreamableFile> {
+    const filters = {
+      stateId: query.stateId,
+      yearId: query.yearId,
+      status: query.status !== undefined ? parseInt(query.status, 10) : undefined,
+    };
+    const buffer = await this.sfcStatusService.dumpToExcel(filters, user);
+    return new StreamableFile(new Uint8Array(buffer as ArrayBuffer), {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      disposition: `attachment; filename="sfc-status-dump_${getTimeStamp(false)}.xlsx"`,
+    });
   }
 
   @ApiOperation({

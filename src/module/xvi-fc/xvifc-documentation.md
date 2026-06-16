@@ -150,6 +150,13 @@ Known note:
 
 ### SFC Status APIs
 
+- `GET /xvi-fc/state/sfc-status/dump`
+  - Permission: `VIEW_STATUS_REPORTS`
+  - Query params (all optional): `stateId`, `yearId`, `status`
+  - Returns `.xlsx` download of all SFC Status records.
+  - ADMIN: exports all records; STATE scope: restricted to own state.
+  - Columns: metadata (state, year, status, submitted/created/updated by+at) + all 15 form fields. File fields split into `_fileName`, `_fileUrl`, `_fileSize`, `_mimeType` sub-columns. `awardPeriodDuration` computed from `awardPeriod` at export time.
+
 - `GET /xvi-fc/state/sfc-status/questions`
   - Permission: `VIEW_STATE_FORMS`
   - Returns `SFC_STATUS_QUESTIONS` config array for frontend form rendering.
@@ -500,7 +507,7 @@ Frontend/sidebar already references:
 
 Location: `src/module/xvi-fc/common/dynamic-form-validation/`
 
-- `dynamic-form-validation.types.ts` — all shared types: `FormFieldConfig`, `VisibleWhen`, `ValidationError`, `YearRangeValidatorConfig`, etc.
+- `dynamic-form-validation.types.ts` — all shared types: `FormFieldConfig`, `VisibleWhen`, `ValidationResult`, `XviFcValidationErrorMap`, `YearRangeValidatorConfig`, etc.
 - `dynamic-form-validation.service.ts` — `DynamicFormValidationService`
 - Provided and exported by `XviFcCommonModule`.
 - Future state form modules import `XviFcCommonModule` to reuse.
@@ -568,8 +575,9 @@ The global `ResponseTransformInterceptor` passes this through unchanged because 
 
 ### Validation error
 
-Thrown as `BadRequestException({ message: 'Validation failed.', errors: [...] })`.
+Thrown as `BadRequestException({ message: 'Validation failed.', errors: { fieldKey: [...] } })`.
 The global `HttpExceptionFilter` forwards `message` and `errors` into the 400 response body.
+`errors` is a `Record<string, XviFcValidationError[]>` keyed by field key; non-field errors use `_form`.
 
 ### Applied to
 
@@ -739,3 +747,64 @@ Before every code push involving XVI-FC backend changes:
 - `finalSubmit`: updates form doc to `SUBMISSION_ACKNOWLEDGED_BY_MOHUA` → inserts `FINAL_SUBMIT` history entry.
 - API response shapes are unchanged — history is internal only.
 - History insert is not wrapped in a transaction; a failed insert does not roll back the main status update.
+
+---
+
+### SFC Status — Status-Aware Permissions + Unified Validation Error Map (State Form v6)
+
+**Modified files**:
+- `src/module/xvi-fc/state/sfc-status/sfc-status.service.ts`
+  - `buildFormPermissions(user, stateId, status)` — now accepts `stateId` and `status`; all three flags gated by role, state scope, and form status.
+  - Added `hasStateAccess(user, stateId): boolean` — pure boolean scope check extracted from `assertStateAccess`; used by both the assert helper and permission building.
+  - `assertStateAccess` refactored to call `hasStateAccess`; error message is now scope-specific.
+  - `getForm` passes `stateId` and `currentFormStatus` to `buildFormPermissions`.
+  - Imported `canStateEditForm` and `canStateFinalSubmitForm` from the status util.
+- `src/module/xvi-fc/common/response/xvi-fc-api-response.ts` — added `XviFcValidationErrorMap = Record<string, XviFcValidationError[]>`; `errors` field on `XviFcApiResponse` changed from `XviFcValidationError[]` to `XviFcValidationErrorMap`.
+- `src/module/xvi-fc/common/response/xvi-fc-response.util.ts` — `throwXviFcValidationError` parameter type updated to `XviFcValidationErrorMap`.
+- `src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.types.ts` — removed `ValidationError` interface; added `XviFcValidationErrorMap` re-export; added `ValidationResult = { isValid: boolean; errors: XviFcValidationErrorMap }`.
+- `src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service.ts` — `validateDraft`/`validateFull` return `ValidationResult` (not an array); added `accumulateErrors` private helper (O(1) map accumulation); `validateField` still returns `XviFcValidationError[]` internally.
+
+**Key behaviours**:
+- `canEdit` and `canFinalSubmit` in GET response are `false` when status is not in the editable set, regardless of role.
+- Validation errors from save-draft/final-submit are now a `Record<string, XviFcValidationError[]>` keyed by field key; frontend accesses errors in O(1): `errors['fieldKey']`. Non-field errors use the `_form` key.
+- Save/final-submit routes re-enforce status server-side independently — the GET permissions flags are UI-gating only and cannot be bypassed.
+
+**Documentation moved**:
+- `xvifc-documentation.md` relocated from project root to `src/module/xvi-fc/xvifc-documentation.md`.
+
+---
+
+### SFC Status — Excel Dump/Export API (State Form v7)
+
+**New files**:
+- `src/module/xvi-fc/state/sfc-status/dto/dump-sfc-status-query.dto.ts` — optional query params DTO (`stateId`, `yearId`, `status`)
+- `src/module/xvi-fc/state/sfc-status/types/sfc-status-dump.types.ts` — `SfcStatusDumpFilters`, `SfcStatusDumpRecord`, `SfcStatusDumpRow`, populated state/year interfaces
+
+**Modified files**:
+- `src/module/xvi-fc/state/sfc-status/sfc-status.service.ts`
+  - `ExcelService` injected via constructor; `Buffer` imported from `exceljs`; `FilterQuery` from mongoose.
+  - `SFC_DUMP_HEADERS` module-level constant — 39 column definitions.
+  - `dumpToExcel(filters, user)` — scope-resolves filters, queries with `.lean().populate()` for state name + year name, maps docs to rows, calls `ExcelService.generateExcel`.
+  - `resolveDumpFilters` — enforces ADMIN/STATE scope; STATE users cannot export another state's data.
+  - `buildDumpRow` — O(n) flat row builder; no nested loops.
+  - `extractFileColumns` — splits file object into 4 sub-fields.
+  - `strVal` / `deriveAwardPeriodDuration` — scalar coercion helpers.
+- `src/module/xvi-fc/state/sfc-status/sfc-status.controller.ts`
+  - `GET dump` route added before `:stateId/:yearId` to avoid param conflict.
+  - Returns `StreamableFile` with `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`.
+  - Filename: `sfc-status-dump_YYYY-MM-DD.xlsx`.
+- `src/module/xvi-fc/state/sfc-status/sfc-status.module.ts` — `ExcelService` added to providers.
+
+**Key behaviours**:
+- Uses `VIEW_STATUS_REPORTS` permission (report-level, broader than `VIEW_STATE_FORMS`).
+- State/Year names populated via `.populate('state', 'name').populate('year', 'year')` — models registered in parent `XviFcModule`.
+- `awardPeriodDuration` is not stored in DB; derived at export time from `awardPeriod`.
+- File fields (`extensionOrder`, `sfcReport`, `atrReport`, `gazetteNotification`) split into 4 columns each.
+- All values coerced to strings for Excel; `Date` fields serialised as ISO 8601.
+
+**Example curl**:
+```bash
+curl -H "Authorization: Bearer <token>" \
+  "http://localhost:3000/xvi-fc/state/sfc-status/dump?status=7" \
+  -o sfc-status-dump.xlsx
+```

@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
+import { ExcelService } from 'src/services/excel/excel.service';
 import { XviFcSfcStatus, XviFcSfcStatusSchema } from '../../../../schemas/xvi-fc/state/sfc-status.schema';
 import {
   XviFcSfcStatusHistory,
@@ -18,7 +19,7 @@ import { SfcStatusService } from './sfc-status.service';
     XviFcCommonModule,
   ],
   controllers: [SfcStatusController],
-  providers: [SfcStatusService],
+  providers: [SfcStatusService, ExcelService],
   exports: [SfcStatusService],
 })
 export class SfcStatusModule {}
