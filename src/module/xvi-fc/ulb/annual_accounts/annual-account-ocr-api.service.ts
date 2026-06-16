@@ -38,6 +38,7 @@ export interface OcrBasicValidation {
 
 export interface OcrJobResult {
   basic_validation?: OcrBasicValidation;
+  error_messages?: string[];
   overall_assessment?: string;
   summary?: string;
 }
