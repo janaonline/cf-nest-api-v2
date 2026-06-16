@@ -11,10 +11,6 @@ import {
   XviFcAnnualAccountUploadHistory,
   XviFcAnnualAccountUploadHistorySchema,
 } from '../../../../schemas/xvi-fc/annual-account-upload-history.schema';
-import {
-  XviFcAnnualAccountProcessingJob,
-  XviFcAnnualAccountProcessingJobSchema,
-} from '../../../../schemas/xvi-fc/annual-account-processing-jobs.schema';
 import { AnnualAccountsController } from './annual_accounts.controller';
 import { AnnualAccountsService } from './annual_accounts.service';
 import { AnnualAccountOcrApiService } from './annual-account-ocr-api.service';
@@ -29,7 +25,6 @@ import { AnnualAccountStatusSyncService } from './annual-account-status-sync.ser
     MongooseModule.forFeature([
       { name: XviFcAnnualAccount.name, schema: XviFcAnnualAccountSchema },
       { name: XviFcAnnualAccountUploadHistory.name, schema: XviFcAnnualAccountUploadHistorySchema },
-      { name: XviFcAnnualAccountProcessingJob.name, schema: XviFcAnnualAccountProcessingJobSchema },
       { name: Ulb.name, schema: UlbSchema },
     ]),
   ],

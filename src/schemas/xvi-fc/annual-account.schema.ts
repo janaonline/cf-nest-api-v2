@@ -1,13 +1,17 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 
-export enum AnnualAccountStatus {
-  DRAFT = 'DRAFT',
-  SUBMITTED = 'SUBMITTED',
-  UNDER_REVIEW = 'UNDER_REVIEW',
-  APPROVED = 'APPROVED',
-  REJECTED = 'REJECTED',
+export enum AnnualAccountFormStatus {
+  NOT_STARTED = 'NOT_STARTED',
+  IN_PROGRESS = 'IN_PROGRESS',
+  UNDER_REVIEW_BY_STATE = 'UNDER_REVIEW_BY_STATE',
 }
+
+export const FORM_STATUS_ID: Record<AnnualAccountFormStatus, number> = {
+  [AnnualAccountFormStatus.NOT_STARTED]: 1,
+  [AnnualAccountFormStatus.IN_PROGRESS]: 2,
+  [AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE]: 3,
+};
 
 export type XviFcAnnualAccountDocument = HydratedDocument<XviFcAnnualAccount>;
 
@@ -52,34 +56,35 @@ export class OCRInfo {
 
   @Prop({ type: Date, default: null })
   completedAt: Date | null;
+
+  @Prop({ type: String, default: null })
+  validationStatus!: string | null;
+
+  @Prop({ type: String, default: null })
+  validationDetails!: string | null;
+
+  @Prop({ type: [String], default: [] })
+  failedChecks!: string[];
 }
 
 export const OCRInfoSchema = SchemaFactory.createForClass(OCRInfo);
 
 @Schema({ _id: false, versionKey: false })
-export class ValidationResult {
-  @Prop({ type: String, default: null })
-  validationStatus: string | null;
-
-  @Prop({ type: String, default: null })
-  validationDetails: string | null;
-
-  @Prop({ type: [String], default: [] })
-  failedChecks: string[];
-}
-
-export const ValidationResultSchema = SchemaFactory.createForClass(ValidationResult);
-
-@Schema({ _id: false, versionKey: false })
-export class UploaderInfo {
+export class UserInfo {
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
-  userId: Types.ObjectId;
+  userId!: Types.ObjectId;
 
   @Prop({ required: true })
-  role: string;
+  role!: string;
+
+  @Prop({ type: String, default: null })
+  ipAddress!: string | null;
+
+  @Prop({ type: String, default: null })
+  userAgent!: string | null;
 }
 
-export const UploaderInfoSchema = SchemaFactory.createForClass(UploaderInfo);
+export const UserInfoSchema = SchemaFactory.createForClass(UserInfo);
 
 // ─── CurrentUpload ────────────────────────────────────────────────────────────
 
@@ -100,11 +105,8 @@ export class CurrentUpload {
   @Prop({ type: OCRInfoSchema, default: () => ({}) })
   ocrInfo!: OCRInfo;
 
-  @Prop({ type: ValidationResultSchema, default: () => ({}) })
-  validationResult: ValidationResult;
-
-  @Prop({ type: UploaderInfoSchema, required: true })
-  uploadedBy: UploaderInfo;
+  @Prop({ type: UserInfoSchema, required: true })
+  userInfo!: UserInfo;
 
   @Prop({ default: () => new Date() })
   uploadedAt: Date;
@@ -117,22 +119,7 @@ export const CurrentUploadSchema = SchemaFactory.createForClass(CurrentUpload);
 @Schema({ _id: false, versionKey: false })
 export class DocumentItem {
   @Prop({ required: true })
-  requirementId: string;
-
-  @Prop({ required: true })
   docId: string;
-
-  @Prop({ required: true })
-  type: string;
-
-  @Prop({ required: true })
-  expectedDocType: string;
-
-  @Prop({ default: true })
-  required: boolean;
-
-  @Prop({ default: 0 })
-  sortOrder: number;
 
   @Prop({
     type: String,
@@ -154,31 +141,6 @@ export class DocumentItem {
 
 export const DocumentItemSchema = SchemaFactory.createForClass(DocumentItem);
 
-// ─── SectionSummary ───────────────────────────────────────────────────────────
-
-@Schema({ _id: false, versionKey: false })
-export class SectionSummary {
-  @Prop({ default: 0 })
-  totalRequired: number;
-
-  @Prop({ default: 0 })
-  uploaded: number;
-
-  @Prop({ default: 0 })
-  processing: number;
-
-  @Prop({ default: 0 })
-  passed: number;
-
-  @Prop({ default: 0 })
-  failed: number;
-
-  @Prop({ default: 0 })
-  notUploaded: number;
-}
-
-export const SectionSummarySchema = SchemaFactory.createForClass(SectionSummary);
-
 // ─── AnnualAccountSection ─────────────────────────────────────────────────────
 
 @Schema({ _id: false, versionKey: false })
@@ -189,11 +151,18 @@ export class AnnualAccountSection {
   @Prop({ required: true })
   year: string;
 
-  @Prop({ type: SectionSummarySchema, default: () => ({}) })
-  summary: SectionSummary;
+  @Prop({
+    type: String,
+    enum: Object.values(AnnualAccountFormStatus),
+    default: AnnualAccountFormStatus.IN_PROGRESS,
+  })
+  form_status!: string;
+
+  @Prop({ type: Number, default: FORM_STATUS_ID[AnnualAccountFormStatus.IN_PROGRESS] })
+  form_status_id!: number;
 
   @Prop({ type: [DocumentItemSchema], default: [] })
-  documents: DocumentItem[];
+  documents!: DocumentItem[];
 }
 
 export const AnnualAccountSectionSchema = SchemaFactory.createForClass(AnnualAccountSection);
@@ -207,23 +176,10 @@ export const AnnualAccountSectionSchema = SchemaFactory.createForClass(AnnualAcc
 })
 export class XviFcAnnualAccount {
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Ulb', required: true })
-  ulb: Types.ObjectId;
+  ulb!: Types.ObjectId;
 
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Year', required: true })
-  design_year: Types.ObjectId;
-
-  @Prop({
-    type: String,
-    enum: Object.values(AnnualAccountStatus),
-    default: AnnualAccountStatus.DRAFT,
-  })
-  status: AnnualAccountStatus;
-
-  @Prop({ type: Boolean, default: true })
-  isDraft: boolean;
-
-  @Prop({ type: Number, default: 1 })
-  documentSetVersion: number;
+  design_year!: Types.ObjectId;
 
   @Prop({ type: AnnualAccountSectionSchema, default: null })
   auditedData: AnnualAccountSection | null;
