@@ -33,7 +33,7 @@ export const SIDE_MENU_CONFIG: Record<MenuRole, (yearId: string) => SideMenuResp
         icon: 'bi bi-clipboard-data',
         items: [
           {
-            label: 'FY ' + yearId+ ' Conditions',
+            label: 'FY ' + yearId + ' Conditions',
             icon: 'bi bi-ui-checks',
             featureKey: 'ulb-forms',
           },
@@ -106,48 +106,48 @@ export const SIDE_MENU_CONFIG: Record<MenuRole, (yearId: string) => SideMenuResp
           },
         ],
       },
-      //   {
-      //     label: 'Review',
-      //     icon: 'bi bi-clipboard-data',
-      //     items: [
-      //       {
-      //         label: 'ULB Submissions',
-      //         icon: 'bi bi-upload',
-      //         featureKey: 'ulb-submissions',
-      //       },
-      //       {
-      //         label: 'Insights',
-      //         icon: 'bi bi-bar-chart-line',
-      //         featureKey: 'insights',
-      //       },
-      //     ],
-      //   },
-      //   {
-      //     label: 'State level conditions',
-      //     icon: 'bi bi-diagram-3',
-      //     items: [
-      //       {
-      //         label: 'Requirements',
-      //         icon: 'bi bi-list-check',
-      //         featureKey: 'requirements',
-      //       },
-      //       {
-      //         label: 'SFC Status',
-      //         icon: 'bi bi-building',
-      //         featureKey: 'sfc-status',
-      //       },
-      //       {
-      //         label: 'Elected Body Status',
-      //         icon: 'bi bi-person-badge',
-      //         featureKey: 'elected-body-status',
-      //       },
-      //       {
-      //         label: 'Devolution Formula',
-      //         icon: 'bi bi-calculator',
-      //         featureKey: 'devolution-formula',
-      //       },
-      //     ],
-      //   },
+      {
+        label: 'Review',
+        icon: 'bi bi-clipboard-data',
+        items: [
+          {
+            label: 'ULB Submissions',
+            icon: 'bi bi-upload',
+            featureKey: 'ulb-submissions',
+          },
+          {
+            label: 'Insights',
+            icon: 'bi bi-bar-chart-line',
+            featureKey: 'insights',
+          },
+        ],
+      },
+      {
+        label: 'State level conditions',
+        icon: 'bi bi-diagram-3',
+        items: [
+          {
+            label: 'Requirements',
+            icon: 'bi bi-list-check',
+            featureKey: 'requirements',
+          },
+          {
+            label: 'SFC Status',
+            icon: 'bi bi-building',
+            featureKey: 'sfc-status',
+          },
+          {
+            label: 'Elected Body Status',
+            icon: 'bi bi-person-badge',
+            featureKey: 'elected-body-status',
+          },
+          {
+            label: 'Devolution Formula',
+            icon: 'bi bi-calculator',
+            featureKey: 'devolution-formula',
+          },
+        ],
+      },
     ],
     bottomModel: [
       //   {

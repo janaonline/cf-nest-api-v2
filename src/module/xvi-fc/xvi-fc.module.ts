@@ -3,10 +3,8 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { XviFcController } from './xvi-fc.controller';
 import { XviFcService } from './xvi-fc.service';
 import { AnnualAccountsModule } from './ulb/annual_accounts/annual_accounts.module';
-import {
-  GrantAllocation,
-  GrantAllocationSchema,
-} from '../../schemas/xvi-fc/grant-allocation.schema';
+import { SfcStatusModule } from './state/sfc-status/sfc-status.module';
+import { GrantAllocation, GrantAllocationSchema } from '../../schemas/xvi-fc/grant-allocation.schema';
 import { State, StateSchema } from '../../schemas/state.schema';
 import { Year, YearSchema } from '../../schemas/year.schema';
 import { Ulb, UlbSchema } from '../../schemas/ulb.schema';
@@ -20,6 +18,7 @@ import { Ulb, UlbSchema } from '../../schemas/ulb.schema';
       { name: Ulb.name, schema: UlbSchema },
     ]),
     AnnualAccountsModule,
+    SfcStatusModule,
   ],
   controllers: [XviFcController],
   providers: [XviFcService],

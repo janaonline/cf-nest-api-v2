@@ -32,10 +32,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
   ],
 
   // ── ULB Viewer ───────────────────────────────────────────────────────────
-  [UserRole.ULB_VIEWER]: [
-    Permission.VIEW_STATUS_REPORTS,
-    Permission.VIEW_MANAGED_USERS,
-  ],
+  [UserRole.ULB_VIEWER]: [Permission.VIEW_STATUS_REPORTS, Permission.VIEW_MANAGED_USERS],
 
   // ── STATE Submitter (admin-level for STATE) ───────────────────────────────
   [UserRole.STATE]: [
@@ -48,6 +45,9 @@ export const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     Permission.PREPARE_GRANT_LETTERS,
     Permission.RECOMMEND_EXEMPTIONS,
     Permission.FINAL_SUBMIT_TO_MOHUA,
+    Permission.VIEW_STATE_FORMS,
+    Permission.EDIT_STATE_FORMS,
+    Permission.FINAL_SUBMIT_STATE_FORMS,
     Permission.MANAGE_USERS,
     Permission.VIEW_MANAGED_USERS,
     Permission.CREATE_MANAGED_USER,
@@ -62,6 +62,8 @@ export const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     Permission.UPLOAD_STATE_LEVEL_DOCUMENTS,
     Permission.REVIEW_ULB_SUBMISSIONS,
     Permission.MESSAGE_USERS,
+    Permission.VIEW_STATE_FORMS,
+    Permission.EDIT_STATE_FORMS,
     Permission.VIEW_MANAGED_USERS,
   ],
 
@@ -69,6 +71,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
   [UserRole.STATE_VIEWER]: [
     Permission.VIEW_STATUS_REPORTS,
     Permission.VIEW_DASHBOARDS,
+    Permission.VIEW_STATE_FORMS,
     Permission.VIEW_MANAGED_USERS,
   ],
 

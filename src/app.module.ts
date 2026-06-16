@@ -25,6 +25,10 @@ import { EmailRemindersModule } from './admin/email-reminders/email-reminders.mo
 import { FileTokenModule } from './core/file-token/file-token.module';
 import { FileDownloadModule } from './file-download/file-download.module';
 import { S3UploadModule } from './s3-upload/s3-upload.module';
+import { FormsModule } from './forms/forms.module';
+import { FormJsonModule } from './form-json/form-json.module';
+import { CommunicationModule } from './communication/communication.module';
+import { NotificationsModule } from './notifications/notifications.module';
 function getQueryCaller(): string {
   const stack = new Error().stack?.split('\n') ?? [];
   const frame = stack.find(
@@ -101,6 +105,10 @@ function getQueryCaller(): string {
     EmailTemplatesModule,
     EmailRemindersModule,
     S3UploadModule,
+    FormsModule,
+    FormJsonModule,
+    CommunicationModule,
+    NotificationsModule,
   ],
   controllers: [AppController],
   providers: [
