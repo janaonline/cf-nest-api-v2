@@ -147,14 +147,13 @@ export class SfcStatusService {
     const savedData: FormData = (doc?.data ?? {}) as FormData;
     const jwtExpiresIn = (this.config.get<string>('JWT_EXPIRES_IN') ?? '24h') as StringValue;
     const jwtExpiresMs = ms(jwtExpiresIn) ?? 24 * 60 * 60 * 1000;
-    const questions = this.signQuestionsFileUrls(this.hydrateQuestions(savedData, formJson), jwtExpiresMs);
+    const questions = this.hydrateQuestions(savedData, formJson, jwtExpiresMs);
     const permissions = this.buildFormPermissions(user, stateId, currentFormStatus);
 
     const responseData: SfcFormGetResponseData = {
       _id: doc ? String(doc._id) : null,
-      formKey: 'sfc-status',
-      formName: 'SFC Status',
-      formType: 'STATE_FORM',
+      formName: formJson.type,
+      formId: formJson.formId,
       stateId,
       yearId,
       currentFormStatus,
@@ -183,13 +182,10 @@ export class SfcStatusService {
     this.assertStateAccess(user, dto.stateId);
 
     const formQuestions = await this.loadFormQuestions(dto.yearId);
-    const { isValid: isDraftValid, errors: draftErrors } = this.validator.validateDraft(
-      formQuestions,
-      dto.data as FormData,
-    );
-    if (!isDraftValid) throwXviFcValidationError(draftErrors);
+    const result = this.validator.validateDraftAndBuildPayload(formQuestions, dto.data as FormData);
+    if (!result.isValid) throwXviFcValidationError(result.errors);
 
-    const sanitizedPayload = this.validator.buildSanitizedPayload(formQuestions, dto.data as FormData);
+    const sanitizedPayload = result.sanitizedPayload;
 
     const stateOid = new Types.ObjectId(dto.stateId);
     const yearOid = new Types.ObjectId(dto.yearId);
@@ -284,13 +280,10 @@ export class SfcStatusService {
 
     assertCanStateFinalSubmitForm(fromStatus);
 
-    const { isValid: isSubmitValid, errors: submitErrors } = this.validator.validateFull(
-      formQuestions,
-      dto.data as FormData,
-    );
-    if (!isSubmitValid) throwXviFcValidationError(submitErrors);
+    const validation = this.validator.validateFinalSubmitAndBuildPayload(formQuestions, dto.data as FormData);
+    if (!validation.isValid) throwXviFcValidationError(validation.errors);
 
-    const sanitizedPayload = this.validator.buildSanitizedPayload(formQuestions, dto.data as FormData);
+    const sanitizedPayload = validation.sanitizedPayload;
     const toStatus = FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA;
     const now = new Date();
 
@@ -391,19 +384,31 @@ export class SfcStatusService {
   // ─── Helpers ─────────────────────────────────────────────────────────────────
 
   /**
-   * Merges saved form data onto the question template.
+   * Merges saved form data onto the question template in one O(n) pass.
    * For each question: uses saved value if the key exists in savedData,
-   * otherwise keeps the template default from SFC_STATUS_QUESTIONS.
-   * O(n) — one pass over questions, no extra DB calls.
+   * otherwise keeps the template default. File-type questions additionally
+   * have their fileUrl signed with a JWT-lifetime token.
    *
-   * @param savedData - Key-value pairs from the stored document's `data` field.
-   * @param formJson  - Form template carrying the question config array.
+   * @param savedData    - Key-value pairs from the stored document's `data` field.
+   * @param formJson     - Form template carrying the question config array.
+   * @param jwtExpiresMs - Token lifetime in milliseconds used to sign file URLs.
    */
-  private hydrateQuestions(savedData: FormData, formJson: FormJson): HydratedFieldConfig[] {
-    return formJson.data.map((question) => ({
-      ...question,
-      value: Object.prototype.hasOwnProperty.call(savedData, question.key) ? savedData[question.key] : question.value,
-    }));
+  private hydrateQuestions(savedData: FormData, formJson: FormJson, jwtExpiresMs: number): HydratedFieldConfig[] {
+    return formJson.data.map((question) => {
+      const value = Object.prototype.hasOwnProperty.call(savedData, question.key)
+        ? savedData[question.key]
+        : question.value;
+
+      if (question.formFieldType === 'file') {
+        const fileVal = value as UploadedFileValue | null | undefined;
+        if (fileVal?.fileUrl) {
+          const signedUrl = this.signStorageFileUrl(fileVal.fileUrl, jwtExpiresMs);
+          return { ...question, value: { ...fileVal, fileUrl: signedUrl } };
+        }
+      }
+
+      return { ...question, value };
+    });
   }
 
   /**
@@ -581,16 +586,6 @@ export class SfcStatusService {
     });
     const baseUrl = this.config.get<string>('BASE_URL', '');
     return `${baseUrl}file/download?signature=${token}`;
-  }
-
-  /** Replaces raw fileUrl values in file-type questions with signed token URLs. */
-  private signQuestionsFileUrls(questions: HydratedFieldConfig[], expMs: number): HydratedFieldConfig[] {
-    return questions.map((q) => {
-      if (q.formFieldType !== 'file') return q;
-      const fileVal = q.value as UploadedFileValue | null | undefined;
-      if (!fileVal?.fileUrl) return q;
-      return { ...q, value: { ...fileVal, fileUrl: this.signStorageFileUrl(fileVal.fileUrl, expMs) } };
-    });
   }
 
   /**

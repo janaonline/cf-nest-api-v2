@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import type { FormData, ValidationResult } from './dynamic-form-validation.types';
+import type { FormData, ValidationWithPayloadResult } from './dynamic-form-validation.types';
 import type { XviFcValidationError, XviFcValidationErrorMap } from '../response/xvi-fc-api-response';
 import type {
   ConditionOperator,
@@ -12,86 +12,57 @@ import type {
 @Injectable()
 export class DynamicFormValidationService {
   /**
-   * Draft validation: skips absent fields ONLY when their sole blocking constraint is a
-   * plain `required` validator. Fields with `requiredTrue` are still enforced even when
-   * absent — a false/missing checkbox must block save. All other validators (maxlength,
-   * pattern, yearRange, etc.) fire normally when a value is present.
-   *
-   * Returns a ValidationResult with `isValid` and an error map keyed by field key.
+   * Draft validation + payload sanitization in one O(n) pass.
+   * Skips absent normal-required fields; still enforces requiredTrue and all other
+   * validators when a value is present.
    */
-  validateDraft(questions: FieldConfig[], data: FormData): ValidationResult {
-    const enriched = this.injectComputedFields(data);
-    const visibilityMap = this.buildVisibilityMap(questions, enriched);
-    const errors: XviFcValidationErrorMap = {};
-
-    for (const field of questions) {
-      if (!this.shouldValidate(field, visibilityMap)) continue;
-      const value = enriched[field.key];
-      // Skip absent fields unless the field requires a truthy checkbox (requiredTrue)
-      if (this.isEmptyValue(value) && !this.hasRequiredTrue(field)) continue;
-      this.accumulateErrors(errors, this.validateField(field, value, false));
-    }
-
-    return { isValid: Object.keys(errors).length === 0, errors };
+  validateDraftAndBuildPayload(questions: FieldConfig[], data: FormData): ValidationWithPayloadResult {
+    return this.validateAndBuildPayload(questions, data, false);
   }
 
   /**
-   * Full validation: validates all visible, payload-included fields.
-   * Required and requiredTrue fields must be present and satisfied.
-   * Used on final submit.
-   *
-   * Returns a ValidationResult with `isValid` and an error map keyed by field key.
+   * Full validation + payload sanitization in one O(n) pass.
+   * All visible required fields must be present and valid before submit.
    */
-  validateFull(questions: FieldConfig[], data: FormData): ValidationResult {
-    const enriched = this.injectComputedFields(data);
-    const visibilityMap = this.buildVisibilityMap(questions, enriched);
-    const errors: XviFcValidationErrorMap = {};
-
-    for (const field of questions) {
-      if (!this.shouldValidate(field, visibilityMap)) continue;
-      const value = enriched[field.key];
-      this.accumulateErrors(errors, this.validateField(field, value, true));
-    }
-
-    return { isValid: Object.keys(errors).length === 0, errors };
+  validateFinalSubmitAndBuildPayload(questions: FieldConfig[], data: FormData): ValidationWithPayloadResult {
+    return this.validateAndBuildPayload(questions, data, true);
   }
 
   /**
-   * Builds the payload that should be persisted in the database.
-   * Only includes fields that are visible, renderable, and marked for payload inclusion.
-   * Hidden fields and fields with `includeInPayload: false` are stripped out.
-   * Computed server-side fields (e.g. `awardPeriodDuration`) are never included because
-   * they carry `includeInPayload: false` in the question config.
-   *
-   * @param questions - The canonical question config array.
-   * @param data      - Raw incoming data from the request body.
+   * Shared implementation for validateDraftAndBuildPayload / validateFinalSubmitAndBuildPayload.
+   * Injects computed fields once, then iterates questions once: validates each visible field
+   * and accumulates the sanitized payload in the same pass.
    */
-  buildSanitizedPayload(questions: FieldConfig[], data: FormData): FormData {
+  private validateAndBuildPayload(
+    questions: FieldConfig[],
+    data: FormData,
+    isFull: boolean,
+  ): ValidationWithPayloadResult {
     const enriched = this.injectComputedFields(data);
-    const visibilityMap = this.buildVisibilityMap(questions, enriched);
-    const payload: FormData = {};
+    const errors: XviFcValidationErrorMap = {};
+    const sanitizedPayload: FormData = {};
 
     for (const field of questions) {
-      if (field.render === false) continue;
-      if (field.includeInPayload === false) continue;
-      if (visibilityMap.get(field.key) !== true) continue;
+      if (!this.shouldValidateField(field, enriched)) continue;
+
+      const value = enriched[field.key];
+
+      if (isFull) {
+        this.accumulateErrors(errors, this.validateField(field, value, true));
+      } else if (!this.isEmptyValue(value) || this.hasRequiredTrue(field)) {
+        // Draft: skip absent fields unless requiredTrue is present
+        this.accumulateErrors(errors, this.validateField(field, value, false));
+      }
+
       if (Object.prototype.hasOwnProperty.call(data, field.key)) {
-        payload[field.key] = data[field.key];
+        sanitizedPayload[field.key] = data[field.key];
       }
     }
 
-    return payload;
+    return { isValid: Object.keys(errors).length === 0, errors, sanitizedPayload };
   }
 
   // ─── Visibility ────────────────────────────────────────────────────────────
-
-  private buildVisibilityMap(questions: FieldConfig[], data: FormData): Map<string, boolean> {
-    const map = new Map<string, boolean>();
-    for (const field of questions) {
-      map.set(field.key, this.isVisible(field, data));
-    }
-    return map;
-  }
 
   private isVisible(field: FieldConfig, data: FormData): boolean {
     if (!field.visibleWhen) return true;
@@ -114,10 +85,11 @@ export class DynamicFormValidationService {
     return OPS[operator]?.() ?? false;
   }
 
-  private shouldValidate(field: FieldConfig, visibilityMap: Map<string, boolean>): boolean {
+  /** Returns true when a field should be validated or included in the payload: renderable, payload-included, and currently visible. */
+  private shouldValidateField(field: FieldConfig, data: FormData): boolean {
     if (field.render === false) return false;
     if (field.includeInPayload === false) return false;
-    return visibilityMap.get(field.key) === true;
+    return this.isVisible(field, data);
   }
 
   // ─── Field-level validation ────────────────────────────────────────────────

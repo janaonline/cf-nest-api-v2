@@ -46,3 +46,10 @@ export interface ValidationResult {
   isValid: boolean;
   errors: XviFcValidationErrorMap;
 }
+
+/** Returned by validateDraftAndBuildPayload / validateFinalSubmitAndBuildPayload. Combines validation and sanitized payload in one pass. */
+export interface ValidationWithPayloadResult {
+  isValid: boolean;
+  errors: XviFcValidationErrorMap;
+  sanitizedPayload: FormData;
+}

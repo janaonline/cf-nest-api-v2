@@ -8,9 +8,8 @@ export interface SfcFormPermissions {
 
 export interface SfcFormGetResponseData {
   _id: string | null;
-  formKey: 'sfc-status';
-  formName: 'SFC Status';
-  formType: 'STATE_FORM';
+  formName: string;
+  formId: number;
   stateId: string;
   yearId: string;
   currentFormStatus: number;
