@@ -17,7 +17,7 @@ export class AnnualAccountsController {
   @Post('upload')
   @UseInterceptors(
     FileInterceptor('file', {
-      limits: { fileSize: 20 * 1024 * 1024 },
+      limits: { fileSize: 50 * 1024 * 1024 },
     }),
   )
   uploadDocument(
