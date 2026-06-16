@@ -21,16 +21,34 @@ export interface OcrSubmitResponse {
 
 export interface OcrStatusResponse {
   job_id: string;
-  status: string; // PENDING | PROCESSING | COMPLETED | FAILED
+  status: string; // pending | processing | completed | failed (Python returns lowercase)
   progress_step?: string;
   message?: string;
 }
 
-export interface OcrResultResponse {
-  job_id: string;
-  validation_status: string; // PASSED | FAILED
+export interface OcrBasicValidation {
+  validation_status: string; // "PASS" | "FAIL" (Python uses short form)
   validation_details?: string;
   failed_checks?: string[];
+  pdf_readability_status?: string;
+  readability_score?: number;
+  pdf_quality_status?: string;
+  overall_assessment?: string;
+}
+
+export interface OcrJobResult {
+  basic_validation?: OcrBasicValidation;
+  error_messages?: string[];
+  overall_assessment?: string;
+  summary?: string;
+}
+
+export interface OcrResultResponse {
+  job_id: string;
+  status: string;
+  progress_step?: string;
+  result?: OcrJobResult;
+  message?: string;
 }
 
 @Injectable()

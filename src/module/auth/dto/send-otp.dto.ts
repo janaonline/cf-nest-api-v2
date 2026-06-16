@@ -22,6 +22,6 @@ export class SendOtpDto {
   })
   @IsOptional()
   @IsString()
-  @IsIn(['login', 'forgot-password'])
+  @IsIn(['login', 'forgot-password', 'mobile-verify'])
   purpose?: string;
 }

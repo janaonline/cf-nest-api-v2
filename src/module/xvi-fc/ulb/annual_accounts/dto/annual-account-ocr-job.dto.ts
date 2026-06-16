@@ -3,7 +3,6 @@ export interface AnnualAccountOcrJobData {
   annualAccountId: string;
   ulbId: string;
   section: string;
-  requirementId: string;
   docId: string;
   s3Key: string;
   expectedDocType: string;

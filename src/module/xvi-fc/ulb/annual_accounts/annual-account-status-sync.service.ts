@@ -7,14 +7,10 @@ import {
   XviFcAnnualAccountDocument,
 } from '../../../../schemas/xvi-fc/annual-account.schema';
 import {
-  XviFcAnnualAccountProcessingJob,
-  XviFcAnnualAccountProcessingJobDocument,
-} from '../../../../schemas/xvi-fc/annual-account-processing-jobs.schema';
-import {
   XviFcAnnualAccountUploadHistory,
   XviFcAnnualAccountUploadHistoryDocument,
 } from '../../../../schemas/xvi-fc/annual-account-upload-history.schema';
-import { AnnualAccountOcrApiService } from './annual-account-ocr-api.service';
+import { AnnualAccountOcrApiService, OcrBasicValidation, OcrResultResponse } from './annual-account-ocr-api.service';
 
 @Injectable()
 export class AnnualAccountStatusSyncService {
@@ -25,17 +21,12 @@ export class AnnualAccountStatusSyncService {
     @InjectModel(XviFcAnnualAccount.name)
     private readonly annualAccountModel: Model<XviFcAnnualAccountDocument>,
 
-    @InjectModel(XviFcAnnualAccountProcessingJob.name)
-    private readonly processingJobModel: Model<XviFcAnnualAccountProcessingJobDocument>,
-
     @InjectModel(XviFcAnnualAccountUploadHistory.name)
     private readonly uploadHistoryModel: Model<XviFcAnnualAccountUploadHistoryDocument>,
 
     private readonly ocrApi: AnnualAccountOcrApiService,
   ) {}
 
-  // Fallback cron: picks up jobs the processor's poll loop did not settle
-  // (e.g. OCR API slower than expected, pod restart mid-poll)
   @Cron('*/5 * * * *', { timeZone: 'Asia/Kolkata' })
   async syncPendingJobs() {
     if (this.isSyncing) {
@@ -44,20 +35,23 @@ export class AnnualAccountStatusSyncService {
     }
     this.isSyncing = true;
 
-    // Only touch jobs started >30 s ago so we don't race with the processor's own poll loop
     const staleThreshold = new Date(Date.now() - 30_000);
 
     try {
-      const runningJobs = await this.processingJobModel
-        .find({ status: 'RUNNING', 'ocrJob.jobId': { $ne: null }, startedAt: { $lt: staleThreshold } })
+      const processingDocs = await this.uploadHistoryModel
+        .find({
+          processingStatus: 'PROCESSING',
+          'ocrInfo.jobId': { $ne: null },
+          startedAt: { $lt: staleThreshold },
+        })
         .lean()
         .exec();
 
-      console.log(`[StatusSync] 🔄 Cron tick — found ${runningJobs.length} RUNNING jobs`);
+      console.log(`[StatusSync] 🔄 Cron tick — found ${processingDocs.length} PROCESSING uploads`);
 
-      if (runningJobs.length === 0) return;
+      if (processingDocs.length === 0) return;
 
-      await Promise.allSettled(runningJobs.map((job) => this.syncOne(job)));
+      await Promise.allSettled(processingDocs.map((doc) => this.syncOne(doc)));
     } catch (err: any) {
       this.logger.error('Status sync error', err?.message);
       console.error(`[StatusSync] ❌ Error:`, err?.message);
@@ -66,36 +60,32 @@ export class AnnualAccountStatusSyncService {
     }
   }
 
-  private async syncOne(processingJob: any) {
-    const { uploadId, annualAccountId, section, requirementId, ocrJob } = processingJob;
-    const pythonJobId: string = ocrJob.jobId;
+  private async syncOne(historyDoc: any) {
+    const { uploadId, annualAccountId, section, docId, ocrInfo } = historyDoc;
+    const pythonJobId: string = ocrInfo.jobId;
 
     console.log(`[StatusSync] syncOne — uploadId=${uploadId} pythonJobId=${pythonJobId}`);
 
     try {
       const statusResp = await this.ocrApi.getJobStatus(pythonJobId);
-      console.log(`[StatusSync] Python status response =`, JSON.stringify(statusResp));
+      const statusNorm = statusResp.status?.toUpperCase();
+      console.log(`[StatusSync] Python status response =`, JSON.stringify(statusResp), `→ normalized=${statusNorm}`);
 
-      // Update progressStep on all 3 if it changed
-      if (statusResp.progress_step && statusResp.progress_step !== ocrJob.progressStep) {
+      if (statusResp.progress_step && statusResp.progress_step !== ocrInfo.progressStep) {
         console.log(`[StatusSync] progressStep changed → ${statusResp.progress_step}`);
         await Promise.all([
-          this.processingJobModel.updateOne(
-            { uploadId },
-            { $set: { 'ocrJob.status': statusResp.status, 'ocrJob.progressStep': statusResp.progress_step } },
-          ),
           this.uploadHistoryModel.updateOne(
             { uploadId },
-            { $set: { 'ocrInfo.status': statusResp.status, 'ocrInfo.progressStep': statusResp.progress_step } },
+            { $set: { 'ocrInfo.status': statusNorm, 'ocrInfo.progressStep': statusResp.progress_step } },
           ),
           this.annualAccountModel.updateOne(
             {
               _id: new Types.ObjectId(annualAccountId),
-              [`${section}.documents.requirementId`]: requirementId,
+              [`${section}.documents.docId`]: docId,
             },
             {
               $set: {
-                [`${section}.documents.$.currentUpload.ocrInfo.status`]: statusResp.status,
+                [`${section}.documents.$.currentUpload.ocrInfo.status`]: statusNorm,
                 [`${section}.documents.$.currentUpload.ocrInfo.progressStep`]: statusResp.progress_step,
               },
             },
@@ -103,14 +93,16 @@ export class AnnualAccountStatusSyncService {
         ]);
       }
 
-      if (statusResp.status === 'COMPLETED') {
-        console.log(`[StatusSync] ✅ COMPLETED — fetching result for pythonJobId=${pythonJobId}`);
-        await this.handleCompleted(processingJob, pythonJobId);
-      } else if (statusResp.status === 'FAILED') {
-        console.log(`[StatusSync] ❌ FAILED — pythonJobId=${pythonJobId} reason=${statusResp.message}`);
-        await this.handleFailed(processingJob, pythonJobId, statusResp.message);
+      if (statusNorm === 'COMPLETED') {
+        console.log(`[StatusSync] ✅ COMPLETED — fetching /result for pythonJobId=${pythonJobId}`);
+        const result = await this.ocrApi.getJobResult(pythonJobId);
+        console.log(`[StatusSync] /result response =`, JSON.stringify(result));
+        await this.handleCompleted(historyDoc, result);
+      } else if (statusNorm === 'FAILED') {
+        console.log(`[StatusSync] ❌ FAILED — uploadId=${uploadId} reason=${statusResp.message}`);
+        await this.handleFailed(historyDoc, statusResp.message);
       } else {
-        console.log(`[StatusSync] ⏳ Still running — status=${statusResp.status}`);
+        console.log(`[StatusSync] ⏳ Still running — status=${statusNorm}`);
       }
     } catch (err: any) {
       this.logger.error(`Failed to sync OCR job ${pythonJobId} (uploadId=${uploadId})`, err?.message);
@@ -118,38 +110,29 @@ export class AnnualAccountStatusSyncService {
     }
   }
 
-  private async handleCompleted(processingJob: any, pythonJobId: string) {
-    const { uploadId, annualAccountId, section, requirementId } = processingJob;
-
-    const result = await this.ocrApi.getJobResult(pythonJobId);
-    console.log(`[StatusSync] getJobResult response =`, JSON.stringify(result));
-
+  private async handleCompleted(historyDoc: any, resp: OcrResultResponse) {
+    const { uploadId, annualAccountId, section, docId } = historyDoc;
     const completedAt = new Date();
-    const processingStatus = result.validation_status === 'PASSED' ? 'PASSED' : 'FAILED';
-    console.log(`[StatusSync] Final processingStatus = ${processingStatus}`);
+
+    const bv: OcrBasicValidation | undefined = resp.result?.basic_validation;
+    const validationStatus = bv?.validation_status ?? null;
+    const processingStatus = validationStatus?.toUpperCase() === 'PASS' ? 'PASSED' : 'FAILED';
+
+    console.log(`[StatusSync] Final processingStatus=${processingStatus} validationStatus=${validationStatus}`);
+    console.log(`[StatusSync] basic_validation =`, JSON.stringify(bv));
 
     await Promise.all([
-      this.processingJobModel.updateOne(
-        { uploadId },
-        {
-          $set: {
-            status: 'COMPLETED',
-            'ocrJob.status': 'COMPLETED',
-            completedAt,
-          },
-        },
-      ),
-
       this.uploadHistoryModel.updateOne(
         { uploadId },
         {
           $set: {
             processingStatus,
+            'queue.status': 'completed',
             'ocrInfo.status': 'COMPLETED',
             'ocrInfo.completedAt': completedAt,
-            'validationResult.validationStatus': result.validation_status,
-            'validationResult.validationDetails': result.validation_details ?? null,
-            'validationResult.failedChecks': result.failed_checks ?? [],
+            'ocrInfo.validationStatus': validationStatus,
+            'ocrInfo.validationDetails': bv?.validation_details ?? null,
+            'ocrInfo.failedChecks': resp.result?.error_messages ?? [],
           },
         },
       ),
@@ -157,47 +140,37 @@ export class AnnualAccountStatusSyncService {
       this.annualAccountModel.updateOne(
         {
           _id: new Types.ObjectId(annualAccountId),
-          [`${section}.documents.requirementId`]: requirementId,
+          [`${section}.documents.docId`]: docId,
         },
         {
           $set: {
             [`${section}.documents.$.processingStatus`]: processingStatus,
             [`${section}.documents.$.currentUpload.ocrInfo.status`]: 'COMPLETED',
             [`${section}.documents.$.currentUpload.ocrInfo.completedAt`]: completedAt,
-            [`${section}.documents.$.currentUpload.validationResult.validationStatus`]: result.validation_status,
-            [`${section}.documents.$.currentUpload.validationResult.validationDetails`]: result.validation_details ?? null,
-            [`${section}.documents.$.currentUpload.validationResult.failedChecks`]: result.failed_checks ?? [],
+            [`${section}.documents.$.currentUpload.ocrInfo.validationStatus`]: validationStatus,
+            [`${section}.documents.$.currentUpload.ocrInfo.validationDetails`]: bv?.validation_details ?? null,
+            [`${section}.documents.$.currentUpload.ocrInfo.failedChecks`]: resp.result?.error_messages ?? [],
           },
         },
       ),
     ]);
 
-    console.log(`[StatusSync] ✔ All 3 collections updated — uploadId=${uploadId} result=${processingStatus}`);
+    console.log(`[StatusSync] ✔ All collections updated — uploadId=${uploadId} result=${processingStatus}`);
     this.logger.log(`OCR job completed — uploadId=${uploadId} result=${processingStatus}`);
   }
 
-  private async handleFailed(processingJob: any, pythonJobId: string, reason?: string) {
-    const { uploadId, annualAccountId, section, requirementId } = processingJob;
+  private async handleFailed(historyDoc: any, reason?: string) {
+    const { uploadId, annualAccountId, section, docId } = historyDoc;
     const completedAt = new Date();
 
     await Promise.all([
-      this.processingJobModel.updateOne(
-        { uploadId },
-        {
-          $set: {
-            status: 'FAILED',
-            'ocrJob.status': 'FAILED',
-            error: reason ?? 'Python OCR job failed',
-            completedAt,
-          },
-        },
-      ),
-
       this.uploadHistoryModel.updateOne(
         { uploadId },
         {
           $set: {
             processingStatus: 'FAILED',
+            error: reason ?? 'OCR job failed',
+            'queue.status': 'failed',
             'ocrInfo.status': 'FAILED',
             'ocrInfo.completedAt': completedAt,
           },
@@ -207,7 +180,7 @@ export class AnnualAccountStatusSyncService {
       this.annualAccountModel.updateOne(
         {
           _id: new Types.ObjectId(annualAccountId),
-          [`${section}.documents.requirementId`]: requirementId,
+          [`${section}.documents.docId`]: docId,
         },
         {
           $set: {
@@ -219,7 +192,7 @@ export class AnnualAccountStatusSyncService {
       ),
     ]);
 
-    console.log(`[StatusSync] ✔ FAILED written to all 3 collections — uploadId=${uploadId}`);
+    console.log(`[StatusSync] ✔ FAILED written — uploadId=${uploadId}`);
     this.logger.warn(`OCR job failed — uploadId=${uploadId} reason=${reason}`);
   }
 }

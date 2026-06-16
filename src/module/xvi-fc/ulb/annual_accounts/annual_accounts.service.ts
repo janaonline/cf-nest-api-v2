@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { InjectModel } from '@nestjs/mongoose';
 import { createHash } from 'crypto';
@@ -6,11 +6,12 @@ import { Queue } from 'bullmq';
 import { Model, Types } from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 import { S3Service } from '../../../../core/s3/s3.service';
-import { XviFcAnnualAccount, XviFcAnnualAccountDocument } from '../../../../schemas/xvi-fc/annual-account.schema';
 import {
-  XviFcAnnualAccountProcessingJob,
-  XviFcAnnualAccountProcessingJobDocument,
-} from '../../../../schemas/xvi-fc/annual-account-processing-jobs.schema';
+  AnnualAccountFormStatus,
+  FORM_STATUS_ID,
+  XviFcAnnualAccount,
+  XviFcAnnualAccountDocument,
+} from '../../../../schemas/xvi-fc/annual-account.schema';
 import {
   XviFcAnnualAccountUploadHistory,
   XviFcAnnualAccountUploadHistoryDocument,
@@ -23,7 +24,7 @@ import type { AuthUser } from '../../../auth/auth-user.interface';
 import { ANNUAL_ACCOUNT_PROCESSING_QUEUE } from '../../../../core/constants/queues';
 
 @Injectable()
-export class AnnualAccountsService {
+export class AnnualAccountsService implements OnModuleInit {
   private readonly logger = new Logger(AnnualAccountsService.name);
 
   constructor(
@@ -32,9 +33,6 @@ export class AnnualAccountsService {
 
     @InjectModel(XviFcAnnualAccountUploadHistory.name)
     private readonly uploadHistoryModel: Model<XviFcAnnualAccountUploadHistoryDocument>,
-
-    @InjectModel(XviFcAnnualAccountProcessingJob.name)
-    private readonly processingJobModel: Model<XviFcAnnualAccountProcessingJobDocument>,
 
     @InjectModel(Ulb.name)
     private readonly ulbModel: Model<UlbDocument>,
@@ -45,9 +43,32 @@ export class AnnualAccountsService {
     private readonly ocrQueue: Queue<AnnualAccountOcrJobData>,
   ) {}
 
+  async onModuleInit() {
+    // Drop legacy requirementId-based indexes replaced by docId indexes.
+    // Mongoose autoIndex creates new indexes but never drops renamed ones.
+    try {
+      await this.uploadHistoryModel.collection.dropIndex(
+        'annualAccountId_1_section_1_requirementId_1_version_1',
+      );
+      this.logger.log('Dropped legacy requirementId+version unique index from upload history');
+    } catch { /* already gone — ignore */ }
+    try {
+      await this.uploadHistoryModel.collection.dropIndex(
+        'annualAccountId_1_section_1_requirementId_1',
+      );
+      this.logger.log('Dropped legacy requirementId compound index from upload history');
+    } catch { /* already gone — ignore */ }
+  }
+
   // ─── Upload document ────────────────────────────────────────────────────────
 
-  async uploadDocument(file: Express.Multer.File, dto: UploadDocumentDto, user: AuthUser) {
+  async uploadDocument(
+    file: Express.Multer.File,
+    dto: UploadDocumentDto,
+    user: AuthUser,
+    ipAddress: string | null = null,
+    userAgent: string | null = null,
+  ) {
     this.validateUploadPermission(user, dto);
     this.validateFile(file);
 
@@ -58,11 +79,10 @@ export class AnnualAccountsService {
 
     const annualAccountId = await this.findOrInitialize(dto.ulbId, dto.designYearId, user);
 
-    // Version = count of existing uploads for this slot + 1
     const existingCount = await this.uploadHistoryModel.countDocuments({
       annualAccountId: new Types.ObjectId(annualAccountId),
       section: dto.section,
-      requirementId: dto.requirementId,
+      docId: dto.docId,
     });
     const version = existingCount + 1;
     const versionLabel = `v${version}`;
@@ -72,7 +92,7 @@ export class AnnualAccountsService {
     const sizeKb = Math.round((file.size / 1024) * 100) / 100;
     const pages = this.s3Service.getPdfPageCountFromBuffer(file.buffer);
 
-    const s3Key = `xvi-fc/annual-accounts/${dto.ulbId}/${dto.designYearId}/${dto.section}/${dto.requirementId}/${uploadId}.pdf`;
+    const s3Key = `xvi-fc/annual-accounts/${dto.ulbId}/${dto.designYearId}/${dto.section}/${dto.docId}/${uploadId}.pdf`;
     await this.s3Service.uploadPrivate(s3Key, file.buffer, 'application/pdf');
 
     const now = new Date();
@@ -86,69 +106,46 @@ export class AnnualAccountsService {
       sha256,
     };
 
+    const ocrInfoInit = {
+      jobId: null,
+      status: null,
+      progressStep: null,
+      submittedAt: null,
+      completedAt: null,
+      validationStatus: null,
+      validationDetails: null,
+      failedChecks: [],
+    };
+
     const currentUpload = {
       uploadId,
       version,
       versionLabel,
       file: fileInfo,
-      ocrInfo: {
-        jobId: null,
-        status: null,
-        progressStep: null,
-        submittedAt: null,
-        completedAt: null,
-      },
-      validationResult: {
-        validationStatus: null,
-        validationDetails: null,
-        failedChecks: [],
-      },
-      uploadedBy: {
+      ocrInfo: ocrInfoInit,
+      userInfo: {
         userId: new Types.ObjectId(user._id),
         role: user.role,
+        ipAddress,
+        userAgent,
       },
       uploadedAt: now,
     };
 
-    await this.upsertDocumentSlot(annualAccountId, dto, currentUpload, expectedDocType);
+    await this.upsertDocumentSlot(annualAccountId, dto, currentUpload);
 
-    await this.uploadHistoryModel.create({
+    const historyDoc = await this.uploadHistoryModel.create({
       annualAccountId: new Types.ObjectId(annualAccountId),
       ulb: new Types.ObjectId(dto.ulbId),
       designYear: new Types.ObjectId(dto.designYearId),
       section: dto.section,
-      requirementId: dto.requirementId,
       docId: dto.docId,
       uploadId,
       version,
       versionLabel,
       file: fileInfo,
       processingStatus: 'PROCESSING',
-      ocrInfo: {
-        jobId: null,
-        status: null,
-        progressStep: null,
-        submittedAt: null,
-        completedAt: null,
-      },
-      validationResult: {
-        validationStatus: null,
-        validationDetails: null,
-        failedChecks: [],
-      },
-      uploadedBy: {
-        userId: new Types.ObjectId(user._id),
-        role: user.role,
-      },
-      uploadedAt: now,
-    });
-
-    await this.processingJobModel.create({
-      annualAccountId: new Types.ObjectId(annualAccountId),
-      uploadId,
-      section: dto.section,
-      requirementId: dto.requirementId,
-      docId: dto.docId,
+      ocrInfo: ocrInfoInit,
       queue: {
         name: ANNUAL_ACCOUNT_PROCESSING_QUEUE,
         bullJobId: null,
@@ -156,24 +153,22 @@ export class AnnualAccountsService {
         attempts: 0,
         maxAttempts: 3,
       },
-      ocrJob: {
-        jobId: null,
-        status: null,
-        progressStep: null,
-      },
-      status: 'PENDING',
       error: null,
       startedAt: null,
-      completedAt: null,
+      userInfo: {
+        userId: new Types.ObjectId(user._id),
+        role: user.role,
+        ipAddress,
+        userAgent,
+      },
+      uploadedAt: now,
     });
 
-    // Enqueue OCR job (fire and forget — BullMQ handles retries)
     await this.enqueueOcrJob({
       uploadId,
       annualAccountId,
       ulbId: dto.ulbId,
       section: dto.section,
-      requirementId: dto.requirementId,
       docId: dto.docId,
       s3Key,
       expectedDocType,
@@ -186,7 +181,6 @@ export class AnnualAccountsService {
       annualAccountId,
       uploadId,
       section: dto.section,
-      requirementId: dto.requirementId,
       docId: dto.docId,
       version,
       versionLabel,
@@ -199,60 +193,41 @@ export class AnnualAccountsService {
 
   async retryUpload(id: string, uploadId: string, user: AuthUser) {
     const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
-
     if (!doc) throw new NotFoundException('Annual account not found');
     this.validateViewAccess(doc, user);
 
-    const processingJob = await this.processingJobModel
+    const historyDoc = await this.uploadHistoryModel
       .findOne({ annualAccountId: new Types.ObjectId(id), uploadId })
       .lean()
       .exec();
 
-    if (!processingJob) throw new NotFoundException('Processing job not found');
-    if (processingJob.status !== 'FAILED') {
-      throw new BadRequestException('Only FAILED jobs can be retried');
+    if (!historyDoc) throw new NotFoundException('Upload not found');
+    if (historyDoc.processingStatus !== 'FAILED') {
+      throw new BadRequestException('Only FAILED uploads can be retried');
     }
-
-    const historyDoc = await this.uploadHistoryModel
-      .findOne({ uploadId })
-      .select('file section requirementId docId')
-      .lean()
-      .exec();
-
-    if (!historyDoc) throw new NotFoundException('Upload history not found');
 
     const expectedDocType = DOC_TYPE_MAP[historyDoc.docId];
     if (!expectedDocType) throw new BadRequestException(`Unknown docId: ${historyDoc.docId}`);
 
-    // Reset processingStatus to PROCESSING
     await Promise.all([
-      this.processingJobModel.updateOne(
-        { uploadId },
-        {
-          $set: {
-            status: 'RETRYING',
-            error: null,
-            'ocrJob.jobId': null,
-            'ocrJob.status': null,
-            'ocrJob.progressStep': null,
-            'queue.attempts': processingJob.queue.attempts + 1,
-            'queue.bullJobId': null,
-            'queue.status': 'waiting',
-            completedAt: null,
-          },
-        },
-      ),
-
       this.uploadHistoryModel.updateOne(
         { uploadId },
         {
           $set: {
             processingStatus: 'PROCESSING',
+            error: null,
+            startedAt: null,
             'ocrInfo.jobId': null,
             'ocrInfo.status': null,
             'ocrInfo.progressStep': null,
             'ocrInfo.submittedAt': null,
             'ocrInfo.completedAt': null,
+            'ocrInfo.validationStatus': null,
+            'ocrInfo.validationDetails': null,
+            'ocrInfo.failedChecks': [],
+            'queue.bullJobId': null,
+            'queue.status': 'waiting',
+            'queue.attempts': (historyDoc.queue?.attempts ?? 0) + 1,
           },
         },
       ),
@@ -260,37 +235,63 @@ export class AnnualAccountsService {
       this.annualAccountModel.updateOne(
         {
           _id: new Types.ObjectId(id),
-          [`${processingJob.section}.documents.requirementId`]: processingJob.requirementId,
+          [`${historyDoc.section}.documents.docId`]: historyDoc.docId,
         },
         {
           $set: {
-            [`${processingJob.section}.documents.$.processingStatus`]: 'PROCESSING',
-            [`${processingJob.section}.documents.$.currentUpload.ocrInfo.jobId`]: null,
-            [`${processingJob.section}.documents.$.currentUpload.ocrInfo.status`]: null,
-            [`${processingJob.section}.documents.$.currentUpload.ocrInfo.progressStep`]: null,
-            [`${processingJob.section}.documents.$.currentUpload.ocrInfo.submittedAt`]: null,
-            [`${processingJob.section}.documents.$.currentUpload.ocrInfo.completedAt`]: null,
-            [`${processingJob.section}.documents.$.currentUpload.validationResult.validationStatus`]: null,
-            [`${processingJob.section}.documents.$.currentUpload.validationResult.failedChecks`]: [],
+            [`${historyDoc.section}.documents.$.processingStatus`]: 'PROCESSING',
+            [`${historyDoc.section}.documents.$.currentUpload.ocrInfo.jobId`]: null,
+            [`${historyDoc.section}.documents.$.currentUpload.ocrInfo.status`]: null,
+            [`${historyDoc.section}.documents.$.currentUpload.ocrInfo.progressStep`]: null,
+            [`${historyDoc.section}.documents.$.currentUpload.ocrInfo.submittedAt`]: null,
+            [`${historyDoc.section}.documents.$.currentUpload.ocrInfo.completedAt`]: null,
+            [`${historyDoc.section}.documents.$.currentUpload.ocrInfo.validationStatus`]: null,
+            [`${historyDoc.section}.documents.$.currentUpload.ocrInfo.validationDetails`]: null,
+            [`${historyDoc.section}.documents.$.currentUpload.ocrInfo.failedChecks`]: [],
           },
         },
       ),
     ]);
 
-    const sectionData = (doc as any)[processingJob.section];
+    const sectionData = (doc as any)[historyDoc.section];
     await this.enqueueOcrJob({
       uploadId,
       annualAccountId: id,
       ulbId: doc.ulb.toString(),
-      section: processingJob.section,
-      requirementId: processingJob.requirementId,
-      docId: processingJob.docId,
+      section: historyDoc.section,
+      docId: historyDoc.docId,
       s3Key: historyDoc.file.s3Key,
       expectedDocType,
       financialYear: sectionData?.year ?? '',
     });
 
     return { uploadId, status: 'PROCESSING', message: 'Retry queued successfully' };
+  }
+
+  // ─── Lightweight form-status by ULB + design year ────────────────────────────
+
+  async getFormStatus(ulbId: string, designYearId: string, user: AuthUser) {
+    const doc = await this.annualAccountModel
+      .findOne({
+        ulb: new Types.ObjectId(ulbId),
+        design_year: new Types.ObjectId(designYearId),
+      })
+      .select('ulb auditedData.form_status auditedData.form_status_id unauditedData.form_status unauditedData.form_status_id')
+      .lean()
+      .exec();
+
+    if (doc) this.validateViewAccess(doc, user);
+
+    const sectionStatus = (section: any) => ({
+      form_status: (section?.form_status ?? AnnualAccountFormStatus.NOT_STARTED) as AnnualAccountFormStatus,
+      form_status_id: section?.form_status_id ?? FORM_STATUS_ID[AnnualAccountFormStatus.NOT_STARTED],
+    });
+
+    return {
+      annualAccountId: doc?._id?.toString() ?? null,
+      auditedData: sectionStatus(doc?.auditedData),
+      unauditedData: sectionStatus(doc?.unauditedData),
+    };
   }
 
   // ─── Lookup by ULB + design year ─────────────────────────────────────────────
@@ -313,30 +314,28 @@ export class AnnualAccountsService {
 
   async getDetails(id: string, user: AuthUser) {
     const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
-
     if (!doc) throw new NotFoundException('Annual account not found');
     this.validateViewAccess(doc, user);
     return this.stripS3Keys(doc);
   }
 
-  // ─── Polling status (read-only, never mutates DB) ────────────────────────────
+  // ─── Polling status ───────────────────────────────────────────────────────────
 
   async getProcessingStatus(id: string, user: AuthUser) {
     const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
-
     if (!doc) throw new NotFoundException('Annual account not found');
     this.validateViewAccess(doc, user);
 
     const buildSectionStatus = (section: any) => {
-      if (!section) return null;
+      if (!section) return { form_status: AnnualAccountFormStatus.NOT_STARTED, form_status_id: FORM_STATUS_ID[AnnualAccountFormStatus.NOT_STARTED], documents: [] };
+      const fs = (section.form_status ?? AnnualAccountFormStatus.IN_PROGRESS) as AnnualAccountFormStatus;
       return {
+        form_status: fs,
+        form_status_id: FORM_STATUS_ID[fs] ?? 2,
         yearId: section.yearId,
         year: section.year,
-        summary: section.summary,
         documents: (section.documents ?? []).map((d: any) => ({
-          requirementId: d.requirementId,
           docId: d.docId,
-          type: d.type,
           uploadStatus: d.uploadStatus,
           processingStatus: d.processingStatus,
           currentUpload: d.currentUpload
@@ -351,8 +350,7 @@ export class AnnualAccountsService {
                   sizeKb: d.currentUpload.file?.sizeKb,
                 },
                 ocrInfo: d.currentUpload.ocrInfo,
-                validationResult: d.currentUpload.validationResult,
-                uploadedBy: d.currentUpload.uploadedBy,
+                userInfo: d.currentUpload.userInfo,
                 uploadedAt: d.currentUpload.uploadedAt,
               }
             : null,
@@ -362,8 +360,6 @@ export class AnnualAccountsService {
 
     return {
       annualAccountId: doc._id,
-      status: doc.status,
-      isDraft: doc.isDraft,
       auditedData: buildSectionStatus(doc.auditedData),
       unauditedData: buildSectionStatus(doc.unauditedData),
     };
@@ -373,7 +369,6 @@ export class AnnualAccountsService {
 
   async getSignedUrl(id: string, uploadId: string, user: AuthUser) {
     const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
-
     if (!doc) throw new NotFoundException('Annual account not found');
     this.validateViewAccess(doc, user);
 
@@ -389,21 +384,58 @@ export class AnnualAccountsService {
     }
 
     if (!s3Key) throw new NotFoundException('Upload not found');
-
     const url = await this.s3Service.presignGet(s3Key);
     return { url };
+  }
+
+  // ─── Submit section to State DMA ─────────────────────────────────────────────
+
+  async submitSection(id: string, section: 'auditedData' | 'unauditedData', user: AuthUser) {
+    const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
+    if (!doc) throw new NotFoundException('Annual account not found');
+    this.validateViewAccess(doc, user);
+
+    const sectionData = (doc as any)[section];
+    if (!sectionData?.documents?.length) {
+      throw new BadRequestException('No documents found in this section');
+    }
+
+    const allPassed = sectionData.documents.every((d: any) => d.processingStatus === 'PASSED');
+    if (!allPassed) {
+      throw new BadRequestException('All documents must pass verification before submitting');
+    }
+
+    await this.annualAccountModel.updateOne(
+      { _id: new Types.ObjectId(id) },
+      {
+        $set: {
+          [`${section}.form_status`]: AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE,
+          [`${section}.form_status_id`]: FORM_STATUS_ID[AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE],
+          modifiedBy: new Types.ObjectId(user._id),
+        },
+      },
+    );
+
+    this.logger.log(`Section ${section} submitted — annualAccountId=${id} by user=${user._id}`);
+
+    return {
+      annualAccountId: id,
+      section,
+      form_status: AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE,
+      form_status_id: FORM_STATUS_ID[AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE],
+    };
   }
 
   // ─── Private helpers ─────────────────────────────────────────────────────────
 
   private async enqueueOcrJob(data: AnnualAccountOcrJobData) {
-    const bullJob = await this.ocrQueue.add(`ocr-${data.section}-${data.requirementId}-${data.uploadId}`, data, {
+    const bullJob = await this.ocrQueue.add(`ocr-${data.section}-${data.docId}-${data.uploadId}`, data, {
       attempts: 3,
       backoff: { type: 'exponential', delay: 5000 },
     });
-    await this.processingJobModel.updateOne(
+    await this.uploadHistoryModel.updateOne(
       { uploadId: data.uploadId },
-      { $set: { 'queue.bullJobId': bullJob.id, 'queue.status': 'waiting' } },
+      { $set: { 'queue.bullJobId': String(bullJob.id), 'queue.status': 'waiting' } },
     );
   }
 
@@ -413,33 +445,36 @@ export class AnnualAccountsService {
       design_year: new Types.ObjectId(designYearId),
     };
 
-    const existing = await this.annualAccountModel.findOne(filter).select('_id').lean().exec();
-    if (existing) return existing._id.toString();
+    // Atomic upsert — eliminates the find→create race condition that caused
+    // duplicate-key 11000 errors when multiple uploads arrived simultaneously.
+    const doc = await this.annualAccountModel
+      .findOneAndUpdate(
+        filter,
+        {
+          $setOnInsert: {
+            auditedData: null,
+            unauditedData: null,
+            createdBy: new Types.ObjectId(user._id),
+            modifiedBy: new Types.ObjectId(user._id),
+          },
+        },
+        { upsert: true, new: true },
+      )
+      .select('_id')
+      .lean()
+      .exec();
 
-    const created = await this.annualAccountModel.create({
-      ...filter,
-      status: 'DRAFT',
-      isDraft: true,
-      documentSetVersion: 1,
-      auditedData: null,
-      unauditedData: null,
-      createdBy: new Types.ObjectId(user._id),
-      modifiedBy: new Types.ObjectId(user._id),
-    });
-
-    return created._id.toString();
+    return doc!._id.toString();
   }
 
   private async upsertDocumentSlot(
     annualAccountId: string,
     dto: UploadDocumentDto,
     currentUpload: Record<string, unknown>,
-    expectedDocType: string,
   ) {
-    const { section, requirementId, docId, type, yearId, year } = dto;
+    const { section, docId, yearId, year } = dto;
     const annAccountObjId = new Types.ObjectId(annualAccountId);
 
-    // Ensure section exists (only sets when it is currently null)
     await this.annualAccountModel.updateOne(
       { _id: annAccountObjId, [section]: null },
       {
@@ -447,25 +482,29 @@ export class AnnualAccountsService {
           [section]: {
             yearId: new Types.ObjectId(yearId),
             year,
-            summary: {
-              totalRequired: 0,
-              uploaded: 0,
-              processing: 0,
-              passed: 0,
-              failed: 0,
-              notUploaded: 0,
-            },
+            form_status: AnnualAccountFormStatus.IN_PROGRESS,
+            form_status_id: FORM_STATUS_ID[AnnualAccountFormStatus.IN_PROGRESS],
             documents: [],
           },
         },
       },
     );
 
-    // Try to update an existing document slot matching requirementId
+    // Ensure form_status is IN_PROGRESS even if section already existed
+    await this.annualAccountModel.updateOne(
+      { _id: annAccountObjId, [`${section}.form_status`]: { $ne: AnnualAccountFormStatus.IN_PROGRESS } },
+      {
+        $set: {
+          [`${section}.form_status`]: AnnualAccountFormStatus.IN_PROGRESS,
+          [`${section}.form_status_id`]: FORM_STATUS_ID[AnnualAccountFormStatus.IN_PROGRESS],
+        },
+      },
+    );
+
     const updated = await this.annualAccountModel.updateOne(
       {
         _id: annAccountObjId,
-        [`${section}.documents.requirementId`]: requirementId,
+        [`${section}.documents.docId`]: docId,
       },
       {
         $set: {
@@ -477,19 +516,13 @@ export class AnnualAccountsService {
       },
     );
 
-    // If no slot existed yet, push a new document item
     if (updated.modifiedCount === 0) {
       await this.annualAccountModel.updateOne(
         { _id: annAccountObjId },
         {
           $push: {
             [`${section}.documents`]: {
-              requirementId,
               docId,
-              type,
-              expectedDocType,
-              required: true,
-              sortOrder: 0,
               uploadStatus: 'UPLOADED',
               processingStatus: 'PROCESSING',
               currentUpload,
@@ -522,8 +555,7 @@ export class AnnualAccountsService {
       throw new BadRequestException('Only PDF files are allowed');
     }
 
-    const maxBytes = 20 * 1024 * 1024; // 20 MB
-    if (file.size > maxBytes) {
+    if (file.size > 20 * 1024 * 1024) {
       throw new BadRequestException('File size must not exceed 20 MB');
     }
   }
