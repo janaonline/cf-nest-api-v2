@@ -1,8 +1,6 @@
 import { Type } from 'class-transformer';
 import {
   IsArray,
-  IsBoolean,
-  IsEnum,
   IsMongoId,
   IsNotEmpty,
   IsNumber,
@@ -11,7 +9,6 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
-import { AnnualAccountStatus } from '../../../../../schemas/xvi-fc/annual-account.schema';
 
 export class AnnualAccountDocumentDto {
   @IsString()
@@ -80,11 +77,4 @@ export class SaveAnnualAccountDto {
   @IsOptional()
   unauditedData?: YearSectionDto;
 
-  @IsEnum(AnnualAccountStatus)
-  @IsOptional()
-  status?: AnnualAccountStatus;
-
-  @IsBoolean()
-  @IsOptional()
-  isDraft?: boolean;
 }

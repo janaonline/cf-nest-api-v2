@@ -1,5 +1,16 @@
-/* eslint-disable prettier/prettier */
-import { Body, Controller, Get, HttpCode, HttpStatus, Logger, Param, Patch, Post, Res, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Logger,
+  Param,
+  Patch,
+  Post,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
@@ -32,12 +43,12 @@ export class AuthController {
     private readonly loginService: LoginService,
     private readonly otpService: OtpService,
     private readonly visitSessionService: VisitSessionService,
-  ) { }
+  ) {}
 
   @Public()
   @Post('check-user')
   // @UseGuards(JwtAuthGuard, PermissionGuard)
-  // @RequirePermissions(Permission.VIEW_STATUS_REPORTS) 
+  // @RequirePermissions(Permission.VIEW_STATUS_REPORTS)
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 10, ttl: 60000 } })
   @ApiOperation({ summary: 'Check if a user exists and determine login flow' })
@@ -75,7 +86,10 @@ export class AuthController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Logout and clear refresh token cookie' })
   @ApiResponse({ status: 200, description: 'Logged out successfully' })
-  logout(@CurrentUser() user: { _id: string; sessionId?: string; exp?: number }, @Res({ passthrough: true }) res: Response) {
+  logout(
+    @CurrentUser() user: { _id: string; sessionId?: string; exp?: number },
+    @Res({ passthrough: true }) res: Response,
+  ) {
     return this.authService.logout(user._id, res, user.sessionId, user.exp);
   }
 

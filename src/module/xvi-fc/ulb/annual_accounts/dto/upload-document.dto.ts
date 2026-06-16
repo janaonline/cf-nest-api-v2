@@ -12,15 +12,7 @@ export class UploadDocumentDto {
 
   @IsString()
   @IsNotEmpty()
-  requirementId: string;
-
-  @IsString()
-  @IsNotEmpty()
   docId: string;
-
-  @IsString()
-  @IsNotEmpty()
-  type: string;
 
   @IsMongoId()
   yearId: string;

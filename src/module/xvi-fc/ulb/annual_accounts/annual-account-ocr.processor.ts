@@ -7,25 +7,21 @@ import { ANNUAL_ACCOUNT_PROCESSING_QUEUE } from '../../../../core/constants/queu
 import { S3Service } from '../../../../core/s3/s3.service';
 import { XviFcAnnualAccount, XviFcAnnualAccountDocument } from '../../../../schemas/xvi-fc/annual-account.schema';
 import {
-  XviFcAnnualAccountProcessingJob,
-  XviFcAnnualAccountProcessingJobDocument,
-} from '../../../../schemas/xvi-fc/annual-account-processing-jobs.schema';
-import {
   XviFcAnnualAccountUploadHistory,
   XviFcAnnualAccountUploadHistoryDocument,
 } from '../../../../schemas/xvi-fc/annual-account-upload-history.schema';
 import { Ulb, UlbDocument } from '../../../../schemas/ulb.schema';
-import { AnnualAccountOcrApiService, OcrResultResponse, OcrSubmitJobDto } from './annual-account-ocr-api.service';
+import { AnnualAccountOcrApiService, OcrResultResponse, OcrSubmitJobDto, OcrBasicValidation } from './annual-account-ocr-api.service';
 import type { AnnualAccountOcrJobData } from './dto/annual-account-ocr-job.dto';
 
 const POLL_INTERVAL_MS = 5_000;
-const MAX_POLLS = 10; // 10 × 5s = 50s max wait
+const MAX_POLLS = 10;
 
 interface OcrCtx {
   uploadId: string;
   annualAccountId: string;
   section: string;
-  requirementId: string;
+  docId: string;
 }
 
 @Processor(ANNUAL_ACCOUNT_PROCESSING_QUEUE, { concurrency: 2 })
@@ -39,9 +35,6 @@ export class AnnualAccountOcrProcessor extends WorkerHost {
     @InjectModel(XviFcAnnualAccountUploadHistory.name)
     private readonly uploadHistoryModel: Model<XviFcAnnualAccountUploadHistoryDocument>,
 
-    @InjectModel(XviFcAnnualAccountProcessingJob.name)
-    private readonly processingJobModel: Model<XviFcAnnualAccountProcessingJobDocument>,
-
     @InjectModel(Ulb.name)
     private readonly ulbModel: Model<UlbDocument>,
 
@@ -52,14 +45,13 @@ export class AnnualAccountOcrProcessor extends WorkerHost {
   }
 
   async process(job: Job<AnnualAccountOcrJobData>): Promise<void> {
-    const { uploadId, annualAccountId, ulbId, section, requirementId, s3Key, expectedDocType, financialYear } =
-      job.data;
+    const { uploadId, annualAccountId, ulbId, section, docId, s3Key, expectedDocType, financialYear } = job.data;
 
     console.log(`[OCR Processor] ▶ START — uploadId=${uploadId} bullJobId=${job.id}`);
 
-    await this.processingJobModel.updateOne(
+    await this.uploadHistoryModel.updateOne(
       { uploadId },
-      { $set: { 'queue.bullJobId': job.id, 'queue.status': 'active', status: 'RUNNING', startedAt: new Date() } },
+      { $set: { 'queue.bullJobId': String(job.id), 'queue.status': 'active', startedAt: new Date() } },
     );
 
     const ulb = await this.ulbModel.findById(new Types.ObjectId(ulbId)).select('name slug keywords').lean().exec();
@@ -69,10 +61,9 @@ export class AnnualAccountOcrProcessor extends WorkerHost {
     console.log(`[OCR Processor] ⬇ Downloading PDF — key=${s3Key}`);
     const pdfBuffer = await this.s3Service.getPdfBufferFromS3(s3Key);
 
-    const fileName = `${requirementId}-${uploadId}.pdf`;
     const ocrJobData: OcrSubmitJobDto = {
       pdfBuffer,
-      fileName,
+      fileName: `${docId}-${uploadId}.pdf`,
       docType: expectedDocType,
       ulbName,
       uploadId,
@@ -85,19 +76,15 @@ export class AnnualAccountOcrProcessor extends WorkerHost {
     console.log(`[OCR Processor] ✔ ocrJobId=${ocrJobId} status=${ocrResp.status}`);
 
     const submittedAt = new Date();
-    const ctx: OcrCtx = { uploadId, annualAccountId, section, requirementId };
+    const ctx: OcrCtx = { uploadId, annualAccountId, section, docId };
 
     await Promise.all([
-      this.processingJobModel.updateOne(
-        { uploadId },
-        { $set: { 'ocrJob.jobId': ocrJobId, 'ocrJob.status': ocrResp.status } },
-      ),
       this.uploadHistoryModel.updateOne(
         { uploadId },
         { $set: { 'ocrInfo.jobId': ocrJobId, 'ocrInfo.status': ocrResp.status, 'ocrInfo.submittedAt': submittedAt } },
       ),
       this.annualAccountModel.updateOne(
-        { _id: new Types.ObjectId(annualAccountId), [`${section}.documents.requirementId`]: requirementId },
+        { _id: new Types.ObjectId(annualAccountId), [`${section}.documents.docId`]: docId },
         {
           $set: {
             [`${section}.documents.$.currentUpload.ocrInfo.jobId`]: ocrJobId,
@@ -108,31 +95,27 @@ export class AnnualAccountOcrProcessor extends WorkerHost {
       ),
     ]);
 
-    // Poll until the OCR job settles; the cron fallback catches anything that exceeds MAX_POLLS
     let settled = false;
     for (let attempt = 1; attempt <= MAX_POLLS; attempt++) {
       await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
 
       const statusResp = await this.ocrApi.getJobStatus(ocrJobId);
+      const statusNorm = statusResp.status?.toUpperCase();
       console.log(
-        `[OCR Processor] poll ${attempt}/${MAX_POLLS} — status=${statusResp.status} step=${statusResp.progress_step ?? '-'}`,
+        `[OCR Processor] poll ${attempt}/${MAX_POLLS} — status=${statusResp.status} (${statusNorm}) step=${statusResp.progress_step ?? '-'}`,
       );
 
       if (statusResp.progress_step) {
         await Promise.all([
-          this.processingJobModel.updateOne(
-            { uploadId },
-            { $set: { 'ocrJob.status': statusResp.status, 'ocrJob.progressStep': statusResp.progress_step } },
-          ),
           this.uploadHistoryModel.updateOne(
             { uploadId },
-            { $set: { 'ocrInfo.status': statusResp.status, 'ocrInfo.progressStep': statusResp.progress_step } },
+            { $set: { 'ocrInfo.status': statusNorm, 'ocrInfo.progressStep': statusResp.progress_step } },
           ),
           this.annualAccountModel.updateOne(
-            { _id: new Types.ObjectId(annualAccountId), [`${section}.documents.requirementId`]: requirementId },
+            { _id: new Types.ObjectId(annualAccountId), [`${section}.documents.docId`]: docId },
             {
               $set: {
-                [`${section}.documents.$.currentUpload.ocrInfo.status`]: statusResp.status,
+                [`${section}.documents.$.currentUpload.ocrInfo.status`]: statusNorm,
                 [`${section}.documents.$.currentUpload.ocrInfo.progressStep`]: statusResp.progress_step,
               },
             },
@@ -140,14 +123,16 @@ export class AnnualAccountOcrProcessor extends WorkerHost {
         ]);
       }
 
-      if (statusResp.status === 'COMPLETED') {
+      if (statusNorm === 'COMPLETED') {
+        console.log(`[OCR Processor] ✅ COMPLETED — fetching /result for ocrJobId=${ocrJobId}`);
         const result = await this.ocrApi.getJobResult(ocrJobId);
+        console.log(`[OCR Processor] /result response =`, JSON.stringify(result));
         await this.writeCompleted(ctx, result);
         settled = true;
         break;
       }
 
-      if (statusResp.status === 'FAILED') {
+      if (statusNorm === 'FAILED') {
         await this.writeFailed(ctx, statusResp.message);
         settled = true;
         break;
@@ -155,51 +140,50 @@ export class AnnualAccountOcrProcessor extends WorkerHost {
     }
 
     if (!settled) {
-      this.logger.warn(
-        `OCR job not settled after ${MAX_POLLS} polls — cron fallback will pick it up — uploadId=${uploadId} ocrJobId=${ocrJobId}`,
-      );
+      this.logger.warn(`OCR not settled after ${MAX_POLLS} polls — cron fallback will pick it up — uploadId=${uploadId}`);
     }
 
     console.log(`[OCR Processor] ✅ DONE — uploadId=${uploadId} settled=${settled}`);
     this.logger.log(`OCR processor finished — uploadId=${uploadId} ocrJobId=${ocrJobId} settled=${settled}`);
   }
 
-  private async writeCompleted(ctx: OcrCtx, result: OcrResultResponse): Promise<void> {
-    const { uploadId, annualAccountId, section, requirementId } = ctx;
+  private async writeCompleted(ctx: OcrCtx, resp: OcrResultResponse): Promise<void> {
+    const { uploadId, annualAccountId, section, docId } = ctx;
     const completedAt = new Date();
-    const processingStatus = result.validation_status === 'PASSED' ? 'PASSED' : 'FAILED';
 
-    console.log(`[OCR Processor] ✔ COMPLETED — uploadId=${uploadId} processingStatus=${processingStatus}`);
+    // Python nests validation inside result.basic_validation and uses "PASS"/"FAIL"
+    const bv: OcrBasicValidation | undefined = resp.result?.basic_validation;
+    const validationStatus = bv?.validation_status ?? null;
+    const processingStatus = validationStatus?.toUpperCase() === 'PASS' ? 'PASSED' : 'FAILED';
+
+    console.log(`[OCR Processor] ✔ writeCompleted — processingStatus=${processingStatus} validationStatus=${validationStatus}`);
+    console.log(`[OCR Processor] basic_validation =`, JSON.stringify(bv));
 
     await Promise.all([
-      this.processingJobModel.updateOne(
-        { uploadId },
-        { $set: { status: 'COMPLETED', 'ocrJob.status': 'COMPLETED', completedAt } },
-      ),
       this.uploadHistoryModel.updateOne(
         { uploadId },
         {
           $set: {
             processingStatus,
+            'queue.status': 'completed',
             'ocrInfo.status': 'COMPLETED',
             'ocrInfo.completedAt': completedAt,
-            'validationResult.validationStatus': result.validation_status,
-            'validationResult.validationDetails': result.validation_details ?? null,
-            'validationResult.failedChecks': result.failed_checks ?? [],
+            'ocrInfo.validationStatus': validationStatus,
+            'ocrInfo.validationDetails': bv?.validation_details ?? null,
+            'ocrInfo.failedChecks': bv?.failed_checks ?? [],
           },
         },
       ),
       this.annualAccountModel.updateOne(
-        { _id: new Types.ObjectId(annualAccountId), [`${section}.documents.requirementId`]: requirementId },
+        { _id: new Types.ObjectId(annualAccountId), [`${section}.documents.docId`]: docId },
         {
           $set: {
             [`${section}.documents.$.processingStatus`]: processingStatus,
             [`${section}.documents.$.currentUpload.ocrInfo.status`]: 'COMPLETED',
             [`${section}.documents.$.currentUpload.ocrInfo.completedAt`]: completedAt,
-            [`${section}.documents.$.currentUpload.validationResult.validationStatus`]: result.validation_status,
-            [`${section}.documents.$.currentUpload.validationResult.validationDetails`]:
-              result.validation_details ?? null,
-            [`${section}.documents.$.currentUpload.validationResult.failedChecks`]: result.failed_checks ?? [],
+            [`${section}.documents.$.currentUpload.ocrInfo.validationStatus`]: validationStatus,
+            [`${section}.documents.$.currentUpload.ocrInfo.validationDetails`]: bv?.validation_details ?? null,
+            [`${section}.documents.$.currentUpload.ocrInfo.failedChecks`]: bv?.failed_checks ?? [],
           },
         },
       ),
@@ -209,22 +193,26 @@ export class AnnualAccountOcrProcessor extends WorkerHost {
   }
 
   private async writeFailed(ctx: OcrCtx, reason?: string): Promise<void> {
-    const { uploadId, annualAccountId, section, requirementId } = ctx;
+    const { uploadId, annualAccountId, section, docId } = ctx;
     const completedAt = new Date();
 
     console.log(`[OCR Processor] ❌ FAILED — uploadId=${uploadId} reason=${reason}`);
 
     await Promise.all([
-      this.processingJobModel.updateOne(
-        { uploadId },
-        { $set: { status: 'FAILED', 'ocrJob.status': 'FAILED', error: reason ?? 'OCR job failed', completedAt } },
-      ),
       this.uploadHistoryModel.updateOne(
         { uploadId },
-        { $set: { processingStatus: 'FAILED', 'ocrInfo.status': 'FAILED', 'ocrInfo.completedAt': completedAt } },
+        {
+          $set: {
+            processingStatus: 'FAILED',
+            error: reason ?? 'OCR job failed',
+            'queue.status': 'failed',
+            'ocrInfo.status': 'FAILED',
+            'ocrInfo.completedAt': completedAt,
+          },
+        },
       ),
       this.annualAccountModel.updateOne(
-        { _id: new Types.ObjectId(annualAccountId), [`${section}.documents.requirementId`]: requirementId },
+        { _id: new Types.ObjectId(annualAccountId), [`${section}.documents.docId`]: docId },
         {
           $set: {
             [`${section}.documents.$.processingStatus`]: 'FAILED',
