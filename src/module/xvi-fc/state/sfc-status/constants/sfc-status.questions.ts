@@ -167,7 +167,6 @@ export const SFC_STATUS_QUESTIONS: FieldConfig[] = [
       ],
     },
     validations: [
-      { name: 'required', validator: null, message: 'This field is required.' },
       {
         name: 'minDate',
         validator: 'TODAY+0D',
@@ -175,8 +174,8 @@ export const SFC_STATUS_QUESTIONS: FieldConfig[] = [
       },
       {
         name: 'maxDate',
-        validator: '2027-03-31',
-        message: 'Date cannot be beyond 31 March 2027.',
+        validator: '2028-03-31',
+        message: 'Date cannot be beyond 31 March 2028.',
       },
     ],
     layout: {
