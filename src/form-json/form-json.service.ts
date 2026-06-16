@@ -6,13 +6,39 @@ import type { IFormJson } from './interfaces/form-json.interface';
 import type { CreateFormJsonDto } from './dto/create-form-json.dto';
 import type { UpdateFormJsonDto } from './dto/update-form-json.dto';
 import type { QueryFormJsonDto } from './dto/query-form-json.dto';
+import { RedisService } from 'src/core/services/redis/redis.service';
 
 @Injectable()
 export class FormJsonService {
   constructor(
     @InjectModel(FormJson.name)
     private readonly model: Model<FormJsonDocument>,
+    private readonly redis: RedisService,
   ) {}
+
+  private getFormJsonCacheKey(designYearId: string, formId: number): string {
+    return `formJson:${designYearId}:${formId}`;
+  }
+
+  /**
+   * Fetches the active FormJson for a specific design year and formId.
+   * Returns the cached value from Redis when available (No TTL).
+   * Cache key format: `formJson:<designYearId>:<formId>`.
+   */
+  async findActiveByDesignYearAndFormId(designYearId: string, formId: number): Promise<IFormJson> {
+    const key = this.getFormJsonCacheKey(designYearId, formId);
+    const cached = await this.redis.get(key);
+    if (cached !== null) return JSON.parse(cached) as IFormJson;
+
+    const doc = (await this.model
+      .findOne({ design_year: new Types.ObjectId(designYearId), formId, isActive: true })
+      .lean()
+      .exec()) as unknown as IFormJson | null;
+    if (!doc) throw new NotFoundException(`FormJson for year ${designYearId} and formId ${formId} not found`);
+
+    await this.redis.set(key, JSON.stringify(doc));
+    return doc;
+  }
 
   /** Returns all documents matching the provided filters. O(n). */
   findAll(query: QueryFormJsonDto): Promise<IFormJson[]> {
@@ -37,7 +63,10 @@ export class FormJsonService {
     return doc;
   }
 
-  /** Creates a new FormJson; unique (design_year + formId) enforcement is delegated to MongoDB. O(1). */
+  /**
+   * Creates a new FormJson; unique (design_year + formId) enforcement is delegated to MongoDB.
+   * Populates the Redis cache for the new document when formId is present and isActive is true.
+   */
   async create(dto: CreateFormJsonDto): Promise<IFormJson> {
     const created = await this.model.create({
       design_year: new Types.ObjectId(dto.design_year),
@@ -47,11 +76,24 @@ export class FormJsonService {
       meta: dto.meta,
       isActive: dto.isActive ?? true,
     });
-    return created.toObject() as unknown as IFormJson;
+    const doc = created.toObject() as unknown as IFormJson;
+
+    if (doc.formId !== undefined && doc.isActive) {
+      const key = this.getFormJsonCacheKey(String(doc.design_year), doc.formId);
+      await this.redis.set(key, JSON.stringify(doc));
+    }
+
+    return doc;
   }
 
-  /** Applies a sparse $set update; only provided fields are written. Throws 404 when absent. O(1). */
+  /**
+   * Applies a sparse $set update; only provided fields are written. Throws 404 when absent.
+   * Fetches the existing document first to compute the old cache key, then deletes both the
+   * old and new cache keys after the update (design_year or formId may have changed).
+   */
   async update(id: string, dto: UpdateFormJsonDto): Promise<IFormJson> {
+    const existing = (await this.model.findById(id).lean().exec()) as unknown as IFormJson | null;
+
     const patch: Record<string, unknown> = {};
     if (dto.design_year !== undefined) patch['design_year'] = new Types.ObjectId(dto.design_year);
     if (dto.formId !== undefined) patch['formId'] = dto.formId;
@@ -65,15 +107,36 @@ export class FormJsonService {
       .lean()
       .exec()) as unknown as IFormJson | null;
     if (!updated) throw new NotFoundException(`FormJson ${id} not found`);
+
+    if (existing?.formId !== undefined) {
+      await this.redis.del(this.getFormJsonCacheKey(String(existing.design_year), existing.formId));
+    }
+    if (updated.formId !== undefined) {
+      const newKey = this.getFormJsonCacheKey(String(updated.design_year), updated.formId);
+      const oldKey =
+        existing?.formId !== undefined ? this.getFormJsonCacheKey(String(existing.design_year), existing.formId) : null;
+      if (newKey !== oldKey) {
+        await this.redis.del(newKey);
+      }
+    }
+
     return updated;
   }
 
-  /** Sets isActive=false without deleting the document. Throws 404 when absent. O(1). */
+  /**
+   * Sets isActive=false without deleting the document. Throws 404 when absent.
+   * Returns the pre-update document from MongoDB (no extra query) to derive the cache key
+   * and delete it immediately after the soft-delete.
+   */
   async remove(id: string): Promise<void> {
-    const result = await this.model
+    const existing = (await this.model
       .findByIdAndUpdate(id, { $set: { isActive: false } })
       .lean()
-      .exec();
-    if (!result) throw new NotFoundException(`FormJson ${id} not found`);
+      .exec()) as unknown as IFormJson | null;
+    if (!existing) throw new NotFoundException(`FormJson ${id} not found`);
+
+    if (existing.formId !== undefined) {
+      await this.redis.del(this.getFormJsonCacheKey(String(existing.design_year), existing.formId));
+    }
   }
 }

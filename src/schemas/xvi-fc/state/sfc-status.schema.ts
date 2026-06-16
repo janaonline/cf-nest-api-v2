@@ -3,6 +3,7 @@ import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 
 export const SFC_STATUS_FORM_TYPE = 'SFC_STATUS';
+export const SFC_FORM_ID = 22;
 
 export enum SfcStatusAction {
   CREATE_DRAFT = 'CREATE_DRAFT',

@@ -1,5 +1,6 @@
-import { ForbiddenException, Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
+import { FormJsonService } from 'src/form-json/form-json.service';
 import { ConfigService } from '@nestjs/config';
 import { Buffer } from 'exceljs';
 import ms, { type StringValue } from 'ms';
@@ -18,6 +19,7 @@ import {
 } from '../../common/utils/xvi-fc-form-status-access.util';
 import { toObjectIdString } from 'src/users/user-scope.helpers';
 import {
+  SFC_FORM_ID,
   SFC_STATUS_FORM_TYPE,
   SfcStatusAction,
   XviFcSfcStatus,
@@ -29,13 +31,13 @@ import {
 } from '../../../../schemas/xvi-fc/state/sfc-status-history.schema';
 import { DynamicFormValidationService } from '../../common/dynamic-form-validation/dynamic-form-validation.service';
 import type {
+  FieldConfig,
   FormData,
   FormJson,
   HydratedFieldConfig,
 } from '../../common/dynamic-form-validation/dynamic-form-validation.types';
 import { XviFcApiResponse } from '../../common/response/xvi-fc-api-response';
 import { throwXviFcValidationError, xviFcSuccess } from '../../common/response/xvi-fc-response.util';
-import { SFC_STATUS_QUESTIONS } from './constants/sfc-status.questions';
 import type { FormFieldOption, UploadedFileValue } from '../../common/types/field-config.type';
 import { SaveSfcStatusDto } from './dto/save-sfc-status.dto';
 import type { SfcFormGetResponseData, SfcFormPermissions } from './sfc-status.types';
@@ -48,14 +50,6 @@ import type {
   SfcStatusPopulatedUser,
   SfcStatusPopulatedYear,
 } from './types/sfc-status-dump.types';
-
-/** Maps radio field key → { optionId → display label }, derived from SFC_STATUS_QUESTIONS. */
-const RADIO_LABEL_MAP: Record<string, Record<string, string>> = Object.fromEntries(
-  SFC_STATUS_QUESTIONS.filter((q) => q.formFieldType === 'radio' && Array.isArray(q.options)).map((q) => [
-    q.key,
-    Object.fromEntries((q.options as FormFieldOption[]).map((o) => [o.id, o.label])),
-  ]),
-);
 
 const SFC_DUMP_HEADERS: RowHeader[] = [
   { label: 'State Name', key: 'stateName', width: 25 },
@@ -103,18 +97,17 @@ export class SfcStatusService {
     private readonly model: Model<XviFcSfcStatusDocument>,
     @InjectModel(XviFcSfcStatusHistory.name)
     private readonly historyModel: Model<XviFcSfcStatusHistoryDocument>,
+    private readonly formJsonService: FormJsonService,
     private readonly validator: DynamicFormValidationService,
     private readonly excelService: ExcelService,
     private readonly fileTokenService: FileTokenService,
     private readonly config: ConfigService,
   ) {}
 
-  /**
-   * Returns the static question config array served to the frontend for rendering.
-   * No DB access; O(1) return.
-   */
-  getQuestions(): XviFcApiResponse<typeof SFC_STATUS_QUESTIONS> {
-    return xviFcSuccess('SFC Status questions fetched.', SFC_STATUS_QUESTIONS);
+  /** Returns the SFC Status question config array from the DB for frontend rendering. */
+  async getQuestions(): Promise<XviFcApiResponse<FieldConfig[]>> {
+    const questions = await this.loadFormQuestions();
+    return xviFcSuccess('SFC Status questions fetched.', questions);
   }
 
   /**
@@ -141,11 +134,12 @@ export class SfcStatusService {
       .lean()
       .exec();
 
+    const formQuestions = await this.loadFormQuestions(yearId);
     const formJson: FormJson = {
       design_year: yearId,
-      formId: 100,
-      type: 'xvifcSfc',
-      data: SFC_STATUS_QUESTIONS,
+      formId: SFC_FORM_ID,
+      type: 'SFC',
+      data: formQuestions,
       isActive: true,
     };
 
@@ -188,13 +182,14 @@ export class SfcStatusService {
   async saveDraft(dto: SaveSfcStatusDto, user: AuthUser, ip: string, userAgent: string): Promise<XviFcApiResponse> {
     this.assertStateAccess(user, dto.stateId);
 
+    const formQuestions = await this.loadFormQuestions(dto.yearId);
     const { isValid: isDraftValid, errors: draftErrors } = this.validator.validateDraft(
-      SFC_STATUS_QUESTIONS,
+      formQuestions,
       dto.data as FormData,
     );
     if (!isDraftValid) throwXviFcValidationError(draftErrors);
 
-    const sanitizedPayload = this.validator.buildSanitizedPayload(SFC_STATUS_QUESTIONS, dto.data as FormData);
+    const sanitizedPayload = this.validator.buildSanitizedPayload(formQuestions, dto.data as FormData);
 
     const stateOid = new Types.ObjectId(dto.stateId);
     const yearOid = new Types.ObjectId(dto.yearId);
@@ -278,6 +273,7 @@ export class SfcStatusService {
   async finalSubmit(dto: SaveSfcStatusDto, user: AuthUser, ip: string, userAgent: string): Promise<XviFcApiResponse> {
     this.assertStateAccess(user, dto.stateId);
 
+    const formQuestions = await this.loadFormQuestions(dto.yearId);
     const stateOid = new Types.ObjectId(dto.stateId);
     const yearOid = new Types.ObjectId(dto.yearId);
     const userOid = new Types.ObjectId(user._id);
@@ -289,12 +285,12 @@ export class SfcStatusService {
     assertCanStateFinalSubmitForm(fromStatus);
 
     const { isValid: isSubmitValid, errors: submitErrors } = this.validator.validateFull(
-      SFC_STATUS_QUESTIONS,
+      formQuestions,
       dto.data as FormData,
     );
     if (!isSubmitValid) throwXviFcValidationError(submitErrors);
 
-    const sanitizedPayload = this.validator.buildSanitizedPayload(SFC_STATUS_QUESTIONS, dto.data as FormData);
+    const sanitizedPayload = this.validator.buildSanitizedPayload(formQuestions, dto.data as FormData);
     const toStatus = FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA;
     const now = new Date();
 
@@ -385,7 +381,9 @@ export class SfcStatusService {
       .lean()
       .exec()) as unknown as SfcStatusDumpRecord[];
 
-    const rows = docs.map((doc) => this.buildDumpRow(doc));
+    const formQuestions = await this.loadFormQuestions();
+    const radioLabelMap = this.buildRadioLabelMap(formQuestions);
+    const rows = docs.map((doc) => this.buildDumpRow(doc, radioLabelMap));
 
     return this.excelService.generateExcel(SFC_DUMP_HEADERS, rows, 'SFC Status');
   }
@@ -482,7 +480,10 @@ export class SfcStatusService {
   }
 
   /** Flattens a populated SFC Status document into a single Excel row object. */
-  private buildDumpRow(doc: SfcStatusDumpRecord): SfcStatusDumpRow {
+  private buildDumpRow(
+    doc: SfcStatusDumpRecord,
+    radioLabelMap: Record<string, Record<string, string>>,
+  ): SfcStatusDumpRow {
     const data = doc.data ?? {};
 
     const awardPeriod = this.strVal(data['awardPeriod']);
@@ -502,17 +503,21 @@ export class SfcStatusService {
       updatedBy: doc.updatedBy?.name ?? '',
       createdAt: doc.createdAt ? doc.createdAt.toISOString() : '',
       updatedAt: doc.updatedAt ? doc.updatedAt.toISOString() : '',
-      isActiveSfc: this.radioVal('isActiveSfc', data['isActiveSfc']),
+      isActiveSfc: this.radioVal(radioLabelMap, 'isActiveSfc', data['isActiveSfc']),
       awardPeriod,
       awardPeriodDuration: this.deriveAwardPeriodDuration(awardPeriod),
-      sfcConstitutedForInterim: this.radioVal('sfcConstitutedForInterim', data['sfcConstitutedForInterim']),
-      sfcAwardPeriodExtended: this.radioVal('sfcAwardPeriodExtended', data['sfcAwardPeriodExtended']),
+      sfcConstitutedForInterim: this.radioVal(
+        radioLabelMap,
+        'sfcConstitutedForInterim',
+        data['sfcConstitutedForInterim'],
+      ),
+      sfcAwardPeriodExtended: this.radioVal(radioLabelMap, 'sfcAwardPeriodExtended', data['sfcAwardPeriodExtended']),
       extensionOrder_fileName: extensionOrder.fileName,
       extensionOrder_fileUrl: extensionOrder.fileUrl,
       extensionOrder_fileSize: extensionOrder.fileSize,
       extensionOrder_mimeType: extensionOrder.mimeType,
       whichAwardPeriod: this.strVal(data['whichAwardPeriod']),
-      sfcReportStatus: this.radioVal('sfcReportStatus', data['sfcReportStatus']),
+      sfcReportStatus: this.radioVal(radioLabelMap, 'sfcReportStatus', data['sfcReportStatus']),
       reportSubmissionDate: this.strVal(data['reportSubmissionDate']),
       sfcReport_fileName: sfcReport.fileName,
       sfcReport_fileUrl: sfcReport.fileUrl,
@@ -522,7 +527,7 @@ export class SfcStatusService {
       atrReport_fileUrl: atrReport.fileUrl,
       atrReport_fileSize: atrReport.fileSize,
       atrReport_mimeType: atrReport.mimeType,
-      isNewSfcConstituted: this.radioVal('isNewSfcConstituted', data['isNewSfcConstituted']),
+      isNewSfcConstituted: this.radioVal(radioLabelMap, 'isNewSfcConstituted', data['isNewSfcConstituted']),
       gazetteNotification_fileName: gazetteNotification.fileName,
       gazetteNotification_fileUrl: gazetteNotification.fileUrl,
       gazetteNotification_fileSize: gazetteNotification.fileSize,
@@ -588,10 +593,34 @@ export class SfcStatusService {
     });
   }
 
+  /**
+   * Fetches SFC form questions via FormJsonService.
+   * When a yearId is provided the call hits the Redis-cached
+   * `findActiveByDesignYearAndFormId(yearId, SFC_FORM_ID)` path.
+   * When no yearId is available (getQuestions, dumpToExcel) it falls back to
+   * `findByType('SFC')` which queries `{ type, isActive: true }`.
+   */
+  private async loadFormQuestions(yearId?: string): Promise<FieldConfig[]> {
+    const formJson = yearId
+      ? await this.formJsonService.findActiveByDesignYearAndFormId(yearId, SFC_FORM_ID)
+      : await this.formJsonService.findByType('SFC');
+    if (!formJson.data?.length) throw new NotFoundException('SFC Status form configuration not found');
+    return formJson.data;
+  }
+
+  /** Builds a radio option id → label map from a questions array. */
+  private buildRadioLabelMap(questions: FieldConfig[]): Record<string, Record<string, string>> {
+    return Object.fromEntries(
+      questions
+        .filter((q) => q.formFieldType === 'radio' && Array.isArray(q.options))
+        .map((q) => [q.key, Object.fromEntries((q.options as FormFieldOption[]).map((o) => [o.id, o.label]))]),
+    );
+  }
+
   /** Resolves a stored radio option id to its display label; falls back to the raw value if not found. */
-  private radioVal(key: string, value: unknown): string {
+  private radioVal(map: Record<string, Record<string, string>>, key: string, value: unknown): string {
     if (typeof value !== 'string' || !value) return '';
-    return RADIO_LABEL_MAP[key]?.[value] ?? value;
+    return map[key]?.[value] ?? value;
   }
 
   /** Coerces any scalar form-data value to a string for Excel output. */

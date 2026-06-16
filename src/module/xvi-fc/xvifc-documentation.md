@@ -808,3 +808,44 @@ curl -H "Authorization: Bearer <token>" \
   "http://localhost:3000/xvi-fc/state/sfc-status/dump?status=7" \
   -o sfc-status-dump.xlsx
 ```
+
+---
+
+### FormJson Redis Caching + SFC Template via FormJsonService (State Form v8)
+
+**Modified files**:
+- `src/form-json/form-json.service.ts`
+  - `RedisService` injected via constructor (globally available, no module import needed).
+  - `getFormJsonCacheKey(designYearId, formId): string` — private helper; returns `formJson:<designYearId>:<formId>`.
+  - `findActiveByDesignYearAndFormId(designYearId, formId): Promise<IFormJson>` — new public method; checks Redis first (TTL 1 h), queries `{ design_year, formId, isActive: true }` on miss, writes result to Redis, returns `IFormJson`.
+  - `create()` — sets fresh cache entry after insert when `formId` is present and `isActive: true`.
+  - `update()` — fetches existing via `findById` before update; deletes old cache key; deletes new cache key if it differs (design_year or formId may have changed).
+  - `remove()` — uses `findByIdAndUpdate` (no `{ new: true }`) to obtain pre-update values in a single query; deletes cache key for that document's `design_year + formId`.
+- `src/module/xvi-fc/state/sfc-status/sfc-status.service.ts`
+  - Removed `@InjectModel(FormJsonSchema.name)` constructor injection and direct `formJsonModel.findOne()` calls.
+  - `FormJsonService` injected in place of the model.
+  - `loadFormQuestions(yearId?: string)` updated: when `yearId` is provided calls `formJsonService.findActiveByDesignYearAndFormId(yearId, SFC_FORM_ID)` (cached); otherwise falls back to `formJsonService.findByType('SFC')`.
+  - `getForm` and `saveDraft`/`finalSubmit` pass `yearId` to `loadFormQuestions`; `getQuestions` and `dumpToExcel` call it without a yearId.
+  - `SFC_FORM_ID = 22` defined as a file-level constant (replaces magic number).
+
+**Cache key format**: `formJson:<designYearId>:<formId>`
+- `designYearId` — string representation of the `design_year` ObjectId.
+- `formId` — numeric form identifier (SFC Status: `22`).
+- Do **not** use `formJson:<formId>` alone — `formId` is only unique per `design_year`.
+
+**Cache TTL**: 3600 seconds (1 hour).
+
+**Cache invalidation**:
+- `create` — sets cache immediately for the new document.
+- `update` — deletes old key (pre-update `design_year + formId`) and new key (post-update values, in case either field changed).
+- `remove` (soft-delete) — deletes cache key for the document being deactivated.
+
+**No module-level change needed**: `RedisModule` is `@Global()` so `RedisService` is injectable everywhere without importing `RedisModule` per-module. `FormJsonModule` already exports `FormJsonService`; `SfcStatusModule` already imports `FormJsonModule`.
+
+**SFC formId**: `22` (`SFC_FORM_ID` constant in `sfc-status.service.ts`).
+
+**Key behaviours**:
+- SFC form questions are no longer fetched by direct `formJsonModel` query from `SfcStatusService`.
+- All `getForm`, `saveDraft`, and `finalSubmit` calls benefit from the 1-hour Redis cache.
+- `getQuestions` and `dumpToExcel` (no yearId context) use `findByType('SFC')` — direct DB query, not cached.
+- Cache miss path: `{ design_year: ObjectId, formId: 22, isActive: true }` — hits the compound `{design_year, formId}` unique index.
