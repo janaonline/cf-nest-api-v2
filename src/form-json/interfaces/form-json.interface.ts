@@ -1,15 +1,5 @@
 import { Types } from 'mongoose';
-
-export interface FormJsonField {
-  id?: string;
-  name?: string;
-  type?: string;
-  required?: boolean;
-  label?: string;
-  placeholder?: string;
-  options?: Record<string, unknown>[];
-  [key: string]: unknown;
-}
+import { FieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
 
 /** Plain-object shape returned by .lean() queries on the formjsons collection. */
 export interface IFormJson {
@@ -17,7 +7,8 @@ export interface IFormJson {
   design_year: Types.ObjectId;
   formId?: number;
   type?: string;
-  data?: FormJsonField[];
+  data?: FieldConfig[];
+  meta?: Record<string, unknown>;
   isActive: boolean;
   createdAt: Date;
   modifiedAt: Date;

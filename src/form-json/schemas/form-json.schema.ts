@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
+import { FieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
 
 export type FormJsonDocument = FormJson & Document;
 
@@ -22,7 +23,10 @@ export class FormJson {
   type?: string;
 
   @Prop({ type: [Object], default: [] })
-  data?: Record<string, unknown>[];
+  data?: FieldConfig[];
+
+  @Prop({ type: Object })
+  meta?: Record<string, unknown>;
 
   @Prop({ type: Boolean, default: true })
   isActive!: boolean;

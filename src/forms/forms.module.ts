@@ -4,7 +4,6 @@ import { FormWorkflowPermissions } from '../common/services/form-workflow.permis
 import { CommunicationModule } from '../communication/communication.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { FormsController } from './forms.controller';
-import { FormJson, FormJsonSchema } from './schemas/form-json.schema';
 import { FormStatusHistory, FormStatusHistorySchema } from './schemas/form-status-history.schema';
 import { FormSubmission, FormSubmissionSchema } from './schemas/form-submission.schema';
 import { FormSubmissionStatusService } from './services/form-submission-status.service';
@@ -17,7 +16,6 @@ import { FormWorkflowService } from './services/form-workflow.service';
     MongooseModule.forFeature([
       { name: FormSubmission.name, schema: FormSubmissionSchema },
       { name: FormStatusHistory.name, schema: FormStatusHistorySchema },
-      { name: FormJson.name, schema: FormJsonSchema },
     ]),
     CommunicationModule,
     NotificationsModule,
