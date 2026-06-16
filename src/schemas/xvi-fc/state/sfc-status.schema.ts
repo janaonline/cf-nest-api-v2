@@ -51,6 +51,10 @@ export class XviFcSfcStatus {
 
   @Prop({ type: Boolean, default: false })
   isDeleted?: boolean;
+
+  // Injected by Mongoose timestamps: true — declared here for TypeScript visibility only.
+  createdAt?: Date;
+  updatedAt?: Date;
 }
 
 export const XviFcSfcStatusSchema = SchemaFactory.createForClass(XviFcSfcStatus);
