@@ -20,11 +20,16 @@ import { AfsDigitizationModule } from './admin/afs-digitization/afs-digitization
 import { ReportAnIssueModule } from './web/report-an-issue/report-an-issue.module';
 import { ResourcesSectionModule } from './web/resources-section/resources-section.module';
 import { EventsModule } from './admin/events/events.module';
-import { XviFcModule } from './admin/xvi-fc/xvi-fc.module';
+import { XviFcModule } from './module/xvi-fc/xvi-fc.module';
 import { EmailTemplatesModule } from './admin/email-templates/email-templates.module';
 import { EmailRemindersModule } from './admin/email-reminders/email-reminders.module';
 import { FileTokenModule } from './core/file-token/file-token.module';
 import { FileDownloadModule } from './file-download/file-download.module';
+import { S3UploadModule } from './s3-upload/s3-upload.module';
+import { FormsModule } from './forms/forms.module';
+import { FormJsonModule } from './form-json/form-json.module';
+import { CommunicationModule } from './communication/communication.module';
+import { NotificationsModule } from './notifications/notifications.module';
 function getQueryCaller(): string {
   const stack = new Error().stack?.split('\n') ?? [];
   const frame = stack.find(
@@ -101,6 +106,11 @@ function getQueryCaller(): string {
     XviFcModule,
     EmailTemplatesModule,
     EmailRemindersModule,
+    S3UploadModule,
+    FormsModule,
+    FormJsonModule,
+    CommunicationModule,
+    NotificationsModule,
   ],
   controllers: [AppController],
   providers: [

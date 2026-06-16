@@ -6,8 +6,8 @@ import { BadRequestException, ForbiddenException, HttpException, Injectable, Not
 import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model, Types } from 'mongoose';
 import { User } from 'src/schemas/user/user.schema';
-import { Ulb, UlbDocument } from 'src/admin/xvi-fc/schemas/ulb.schema';
-import { State, StateDocument } from 'src/admin/xvi-fc/schemas/state.schema';
+import { Ulb, UlbDocument } from '../schemas/ulb.schema';
+import { State, StateDocument } from '../schemas/state.schema';
 import { Permission, Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
 import { UpdateProfileContactsDto } from './dto/update-profile-contacts.dto';
