@@ -144,6 +144,18 @@ export class AuthController {
     return this.otpService.verifyOtp(dto, res);
   }
 
+  @Public()
+  @Post('verifyMobileOtp')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @ApiOperation({ summary: 'Verify a mobile-verify OTP without issuing auth tokens' })
+  @ApiResponse({ status: 200, description: 'OTP verified — returns { success: true }' })
+  @ApiResponse({ status: 422, description: 'Invalid or expired OTP' })
+  @ApiResponse({ status: 429, description: 'Too many attempts' })
+  verifyMobileOtp(@Body() dto: VerifyOtpDto) {
+    return this.otpService.verifyMobileOtp(dto);
+  }
+
   @Patch('update-profile')
   @HttpCode(HttpStatus.OK)
   @ApiBearerAuth()
