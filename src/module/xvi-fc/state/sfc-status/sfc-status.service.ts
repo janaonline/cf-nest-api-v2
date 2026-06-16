@@ -2,6 +2,7 @@ import { ForbiddenException, Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { ConfigService } from '@nestjs/config';
 import { Buffer } from 'exceljs';
+import ms, { type StringValue } from 'ms';
 import { FilterQuery, Model, Types } from 'mongoose';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { ExcelService, RowHeader } from 'src/services/excel/excel.service';
@@ -35,7 +36,7 @@ import type {
 import { XviFcApiResponse } from '../../common/response/xvi-fc-api-response';
 import { throwXviFcValidationError, xviFcSuccess } from '../../common/response/xvi-fc-response.util';
 import { SFC_STATUS_QUESTIONS } from './constants/sfc-status.questions';
-import type { FormFieldOption } from '../../common/types/field-config.type';
+import type { FormFieldOption, UploadedFileValue } from '../../common/types/field-config.type';
 import { SaveSfcStatusDto } from './dto/save-sfc-status.dto';
 import type { SfcFormGetResponseData, SfcFormPermissions } from './sfc-status.types';
 import type { SfcHistoryEntryInput } from './types/sfc-status-history.types';
@@ -150,7 +151,9 @@ export class SfcStatusService {
 
     const currentFormStatus = doc?.currentFormStatus ?? FORM_STATUS.NOT_STARTED;
     const savedData: FormData = (doc?.data ?? {}) as FormData;
-    const questions = this.hydrateQuestions(savedData, formJson);
+    const jwtExpiresIn = (this.config.get<string>('JWT_EXPIRES_IN') ?? '24h') as StringValue;
+    const jwtExpiresMs = ms(jwtExpiresIn) ?? 24 * 60 * 60 * 1000;
+    const questions = this.signQuestionsFileUrls(this.hydrateQuestions(savedData, formJson), jwtExpiresMs);
     const permissions = this.buildFormPermissions(user, stateId, currentFormStatus);
 
     const responseData: SfcFormGetResponseData = {
@@ -548,25 +551,41 @@ export class SfcStatusService {
     const rawUrl = typeof f['fileUrl'] === 'string' ? f['fileUrl'] : '';
     return {
       fileName: typeof f['fileName'] === 'string' ? f['fileName'] : '',
-      fileUrl: this.signDumpFileUrl(rawUrl),
+      fileUrl: this.signStorageFileUrl(rawUrl, 7 * 24 * 60 * 60 * 1000),
       fileSize: typeof f['fileSize'] === 'number' ? (f['fileSize'] / 1024 / 1024).toFixed(2) + ' MB' : '',
       mimeType: typeof f['mimeType'] === 'string' ? f['mimeType'] : '',
     };
   }
 
   /**
-   * Builds a signed 1-week download URL for a file stored in S3.
-   * Prepends AWS_STORAGE_URL to convert the relative S3 key to a full path,
-   * then encrypts it into a FileTokenService token with a 7-day expiry.
+   * Signs a relative S3 file path into an encrypted download token URL.
+   * Prepends AWS_STORAGE_URL to form the full path, encrypts with FileTokenService,
+   * and returns the app download endpoint URL with the token as a query param.
+   *
+   * @param relativePath - S3 key as stored in the DB.
+   * @param expMs        - Token lifetime in milliseconds from now.
    */
-  private signDumpFileUrl(relativePath: string): string {
+  private signStorageFileUrl(relativePath: string, expMs: number): string {
     if (!relativePath) return '';
     const storageUrl = this.config.get<string>('AWS_STORAGE_URL', '');
     const fullPath = storageUrl ? `${storageUrl}${relativePath}` : relativePath;
-    const exp = Date.now() + 7 * 24 * 60 * 60 * 1000;
-    const token = this.fileTokenService.createToken({ path: fullPath, disposition: 'inline', exp });
+    const token = this.fileTokenService.createToken({
+      path: fullPath,
+      disposition: 'inline',
+      exp: Date.now() + expMs,
+    });
     const baseUrl = this.config.get<string>('BASE_URL', '');
     return `${baseUrl}file/download?signature=${token}`;
+  }
+
+  /** Replaces raw fileUrl values in file-type questions with signed token URLs. */
+  private signQuestionsFileUrls(questions: HydratedFieldConfig[], expMs: number): HydratedFieldConfig[] {
+    return questions.map((q) => {
+      if (q.formFieldType !== 'file') return q;
+      const fileVal = q.value as UploadedFileValue | null | undefined;
+      if (!fileVal?.fileUrl) return q;
+      return { ...q, value: { ...fileVal, fileUrl: this.signStorageFileUrl(fileVal.fileUrl, expMs) } };
+    });
   }
 
   /** Resolves a stored radio option id to its display label; falls back to the raw value if not found. */
