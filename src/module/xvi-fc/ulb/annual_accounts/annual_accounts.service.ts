@@ -1,4 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
+import { FormJsonService } from '../../../../form-json/form-json.service';
 import { InjectQueue } from '@nestjs/bullmq';
 import { InjectModel } from '@nestjs/mongoose';
 import { createHash } from 'crypto';
@@ -41,6 +42,8 @@ export class AnnualAccountsService implements OnModuleInit {
 
     @InjectQueue(ANNUAL_ACCOUNT_PROCESSING_QUEUE)
     private readonly ocrQueue: Queue<AnnualAccountOcrJobData>,
+
+    private readonly formJsonService: FormJsonService,
   ) {}
 
   async onModuleInit() {
@@ -388,6 +391,40 @@ export class AnnualAccountsService implements OnModuleInit {
     return { url };
   }
 
+  // ─── Remove (hard-delete) a document slot ────────────────────────────────────
+
+  async removeDocument(
+    id: string,
+    section: 'auditedData' | 'unauditedData',
+    docId: string,
+    user: AuthUser,
+  ) {
+    const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
+    if (!doc) throw new NotFoundException('Annual account not found');
+    this.validateViewAccess(doc, user);
+
+    const sectionData = (doc as any)[section];
+    if (!sectionData) throw new NotFoundException('Section not found');
+
+    const docSlot = (sectionData.documents ?? []).find((d: any) => d.docId === docId);
+    if (!docSlot) throw new NotFoundException('Document not found in this section');
+
+    await this.annualAccountModel.updateOne(
+      { _id: new Types.ObjectId(id), [`${section}.documents.docId`]: docId },
+      {
+        $set: {
+          [`${section}.documents.$.currentUpload`]: null,
+          [`${section}.documents.$.uploadStatus`]: 'NOT_UPLOADED',
+          [`${section}.documents.$.processingStatus`]: 'NOT_STARTED',
+          updatedAt: new Date(),
+        },
+      },
+    );
+
+    this.logger.log(`Document removed — annualAccountId=${id} section=${section} docId=${docId} by user=${user._id}`);
+    return { annualAccountId: id, section, docId, message: 'Document removed successfully' };
+  }
+
   // ─── Submit section to State DMA ─────────────────────────────────────────────
 
   async submitSection(id: string, section: 'auditedData' | 'unauditedData', user: AuthUser) {
@@ -400,7 +437,28 @@ export class AnnualAccountsService implements OnModuleInit {
       throw new BadRequestException('No documents found in this section');
     }
 
-    const allPassed = sectionData.documents.every((d: any) => d.processingStatus === 'PASSED');
+    // Resolve which docIds are currently required by the active upload config.
+    // This means documents that were previously uploaded but are now hidden in the
+    // config (e.g. receipts-payments while temporarily hidden) are not blocking.
+    const FORM_IDS: Record<string, number> = { auditedData: 30, unauditedData: 31 };
+    const designYearId = doc.design_year?.toString();
+    let requiredDocIds: string[] | null = null;
+    try {
+      const formJson = await this.formJsonService.findActiveByDesignYearAndFormId(designYearId, FORM_IDS[section]);
+      requiredDocIds = ((formJson.data ?? []) as Array<{ key: string }>).map((f) => f.key);
+    } catch {
+      // Formjson not found — fall back to checking all uploaded docs
+    }
+
+    const docsToCheck = requiredDocIds
+      ? sectionData.documents.filter((d: any) => requiredDocIds!.includes(d.docId))
+      : sectionData.documents;
+
+    if (!docsToCheck.length) {
+      throw new BadRequestException('No documents found in this section');
+    }
+
+    const allPassed = docsToCheck.every((d: any) => d.processingStatus === 'PASSED');
     if (!allPassed) {
       throw new BadRequestException('All documents must pass verification before submitting');
     }
@@ -590,5 +648,13 @@ export class AnnualAccountsService implements OnModuleInit {
       auditedData: stripSection(doc.auditedData),
       unauditedData: stripSection(doc.unauditedData),
     };
+  }
+
+  async getUploadConfig(type: 'audited' | 'provisional', yearId: string) {
+    const FORM_IDS: Record<string, number> = { audited: 30, provisional: 31 };
+    const formId = FORM_IDS[type];
+    if (!formId) throw new NotFoundException(`Unknown upload config type: ${type}`);
+    const formJson = await this.formJsonService.findActiveByDesignYearAndFormId(yearId, formId);
+    return { meta: formJson.meta ?? {}, data: formJson.data ?? [] };
   }
 }

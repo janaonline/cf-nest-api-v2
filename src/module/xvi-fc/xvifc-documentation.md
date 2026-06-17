@@ -35,9 +35,14 @@
 - Nested sub-modules:
   - `ulb/annual_accounts` — ULB annual account upload/read.
   - `state/sfc-status` — State SFC Status form CRUD + final submit.
+  - `side-menu/` — Admin CRUD for side menu items (DB-driven).
+- Cache layer:
+  - `cache/xvi-fc-cache.service.ts` — Redis get/set/delete/deleteByPattern wrapper.
+  - `cache/xvi-fc-cache.interceptor.ts` — HTTP response cache interceptor; TTL set via `@XviFcCacheTTL()` decorator.
 - Shared schemas:
   - Located outside module under `src/schemas/xvi-fc/`.
   - State form schemas under `src/schemas/xvi-fc/state/`.
+  - `src/schemas/xvi-fc/xvi-fc-side-menu.schema.ts` — side menu items schema.
 - Auth/RBAC:
   - No local guards/decorators inside `xvi-fc`.
   - Auth primitives imported from `src/module/auth`.
@@ -95,13 +100,14 @@
 Role → State Form permissions:
 
 | Role         | VIEW_STATE_FORMS | EDIT_STATE_FORMS | FINAL_SUBMIT_STATE_FORMS |
-|--------------|------------------|------------------|--------------------------|
+| ------------ | ---------------- | ---------------- | ------------------------ |
 | STATE        | ✅               | ✅               | ✅                       |
 | STATE_EDITOR | ✅               | ✅               | ❌                       |
 | STATE_VIEWER | ✅               | ❌               | ❌                       |
 | ADMIN        | ✅               | ✅               | ✅                       |
 
 Known note:
+
 - `MOHUA` and `DOE` appear in sidebar/menu context but are not currently part of the active JWT `UserRole` enum.
 
 ---
@@ -115,10 +121,13 @@ Known note:
   - Returns state-wise data.
   - Has state-scope restriction in service.
 
-- `GET /xvi-fc/sidebar/:role`
+- `GET /xvi-fc/sidebar/:role?yearId=<id>`
   - Permission: `VIEW_STATUS_REPORTS`
-  - Returns role-specific sidebar menu.
-  - Uses menu role, not direct JWT role.
+  - Query param `yearId` (required) — ObjectId of the year.
+  - Returns role-specific sidebar menu fetched from MongoDB (`xvifc_side_menus` collection, `isActive: true`).
+  - Response cached in Redis for 600 s (key: `xvifc:cache:/xvi-fc/sidebar/<role>?yearId=<id>`).
+  - Cache is invalidated automatically on any write to the side-menu collection for that role+year.
+  - Uses `MenuRole` type (`ULB | STATE | MOHUA | DOE | ADMIN`) defined in the schema.
 
 - `GET /xvi-fc/years`
   - Permission: `VIEW_STATUS_REPORTS`
@@ -136,17 +145,62 @@ Known note:
   - Permission: `VIEW_STATUS_REPORTS`
   - Returns next support-hour slots.
 
+### Side Menu Admin APIs (`/xvi-fc/side-menu`)
+
+All require `MANAGE_USERS` permission. Swagger tag: `XVI-FC Side Menu (Admin)`.
+
+- `GET /xvi-fc/side-menu` — list all items; optional query `role`, `yearId`, `includeInactive`.
+- `GET /xvi-fc/side-menu/:id` — get one item by MongoDB `_id`.
+- `POST /xvi-fc/side-menu` — create a single item.
+- `POST /xvi-fc/side-menu/bulk` — create one or many items in one call; body is a raw JSON array.
+- `PATCH /xvi-fc/side-menu/:id` — update any field (partial `UpdateSideMenuDto`).
+- `PATCH /xvi-fc/side-menu/:id/toggle` — flip `isActive` true↔false.
+- `DELETE /xvi-fc/side-menu/:id` — delete one item.
+
+All write operations (create/bulk-create/update/toggle/delete) invalidate the Redis cache for the affected `role+year` pair.
+
+- `DELETE /xvi-fc/admin/cache?pattern=<url-pattern>`
+  - Permission: `MANAGE_USERS`, ADMIN scope only.
+  - Clears Redis cache matching the URL pattern (SCAN-based, non-blocking).
+  - Omit `pattern` to clear all `xvifc:cache:*` keys.
+
 ### Annual Account APIs
 
-- `POST /xvi-fc/annual-account`
+- `GET /xvi-fc/annual-account/upload-config/:type?yearId=<designYearId>`
   - Permission: `UPLOAD_DOCUMENTS`
-  - Saves/upserts annual account data.
-  - Supports document version tracking.
+  - `type`: `audited` (formId 30) or `provisional` (formId 31).
+  - `yearId`: ObjectId of the XVI-FC design year (e.g. 2026-27).
+  - Returns `{ meta, data[] }` from the active `formjsons` document for that year and formId.
+  - `meta` contains: `uploadType`, `description`, `confirmLabel`, `documentYearId`, `documentYear`.
+  - `data[]` is an array of `FieldConfig` file fields (one per upload document).
+  - **Must be declared before `GET /:id`** in the controller to avoid NestJS matching "audited"/"provisional" as ObjectIds.
 
-- `GET /xvi-fc/annual-account/:ulbId/:yearId`
+- `POST /xvi-fc/annual-account/upload`
   - Permission: `UPLOAD_DOCUMENTS`
-  - Returns annual account data.
-  - Populates user references.
+  - Uploads a single PDF document (multipart); upserts the document slot in the annual account.
+
+- `GET /xvi-fc/annual-account/by-ulb/:ulbId/:designYearId`
+  - Permission: `UPLOAD_DOCUMENTS`
+  - Returns current annual account status for a ULB + design year.
+
+- `POST /xvi-fc/annual-account/:id/submit`
+  - Permission: `UPLOAD_DOCUMENTS`
+  - Body: `{ section: 'auditedData' | 'unauditedData' }`.
+  - Validates that all docIds in the **active formjson config** for this section have `processingStatus === 'PASSED'`.
+  - DocIds present in the annual account but absent from the current formjson config are ignored (handles temporarily hidden documents).
+  - Sets `form_status → UNDER_REVIEW_BY_STATE`.
+
+- `GET /xvi-fc/annual-account/:id/status`
+  - Permission: `UPLOAD_DOCUMENTS`
+  - Polling endpoint for OCR processing status.
+
+- `POST /xvi-fc/annual-account/:id/documents/:uploadId/retry`
+  - Permission: `UPLOAD_DOCUMENTS`
+  - Retries OCR for a FAILED upload.
+
+- `GET /xvi-fc/annual-account/:id/documents/:uploadId/signed-url`
+  - Permission: `UPLOAD_DOCUMENTS`
+  - Returns a pre-signed S3 URL for file preview.
 
 ### SFC Status APIs
 
@@ -242,7 +296,7 @@ Known note:
 **When status is editable (NOT_STARTED / IN_PROGRESS / RETURNED_BY_MOHUA):**
 
 | Role         | canView | canEdit | canFinalSubmit |
-|--------------|---------|---------|----------------|
+| ------------ | ------- | ------- | -------------- |
 | STATE        | true    | true    | true           |
 | STATE_EDITOR | true    | true    | false          |
 | STATE_VIEWER | true    | false   | false          |
@@ -251,7 +305,7 @@ Known note:
 **When status is NOT editable (e.g. UNDER_REVIEW_BY_MOHUA, SUBMISSION_ACKNOWLEDGED_BY_MOHUA):**
 
 | Role         | canView | canEdit | canFinalSubmit |
-|--------------|---------|---------|----------------|
+| ------------ | ------- | ------- | -------------- |
 | STATE        | true    | false   | false          |
 | STATE_EDITOR | true    | false   | false          |
 | STATE_VIEWER | true    | false   | false          |
@@ -330,11 +384,13 @@ Both save-draft and final-submit evaluate **visible fields only** — hidden fie
 ### Required fields (final submit)
 
 Always required:
+
 - `isActiveSfc`
 - `isNewSfcConstituted`
 - `checkboxConfirmation === true`
 
 If `isActiveSfc === 'yes'`:
+
 - `awardPeriod` (format `YYYY-YYYY`, start 2020–2026, end 2025–2032, duration 1/5/6, must include 2026)
 - `whichAwardPeriod`
 - `sfcReportStatus`
@@ -352,6 +408,7 @@ If `isNewSfcConstituted === 'yes'`: require `gazetteNotification`
 ### Payload filtering
 
 Before every DB write (both draft and final submit):
+
 - `buildSanitizedPayload` (on `DynamicFormValidationService`) builds the stored object.
 - Excludes fields where `render === false`.
 - Excludes fields where `includeInPayload === false`.
@@ -383,7 +440,11 @@ Errors are returned as an object keyed by field key. One field may have multiple
 Types:
 
 ```ts
-interface XviFcValidationError { field?: string; message: string; code?: string; }
+interface XviFcValidationError {
+  field?: string;
+  message: string;
+  code?: string;
+}
 type XviFcValidationErrorMap = Record<string, XviFcValidationError[]>;
 ```
 
@@ -403,23 +464,23 @@ Never add inline status checks inside services — call these helpers instead.
 
 ### Allowed statuses
 
-| Actor | Operation | Allowed statuses |
-|-------|-----------|-----------------|
-| ULB   | Edit / save / submit | `NOT_STARTED`, `IN_PROGRESS`, `RETURNED_BY_STATE`, `RETURNED_BY_MOHUA` |
-| STATE | Edit / save / final-submit | `NOT_STARTED`, `IN_PROGRESS`, `RETURNED_BY_MOHUA` |
+| Actor | Operation                  | Allowed statuses                                                       |
+| ----- | -------------------------- | ---------------------------------------------------------------------- |
+| ULB   | Edit / save / submit       | `NOT_STARTED`, `IN_PROGRESS`, `RETURNED_BY_STATE`, `RETURNED_BY_MOHUA` |
+| STATE | Edit / save / final-submit | `NOT_STARTED`, `IN_PROGRESS`, `RETURNED_BY_MOHUA`                      |
 
 Lookups use `Set.has(status)` — O(1).
 
 ### Helper API
 
-| Function | Throws | Use when |
-|----------|--------|----------|
-| `canUlbEditForm(status)` | — | Need a boolean check for ULB edit |
-| `canUlbSubmitForm(status)` | — | Need a boolean check for ULB submit |
-| `canStateEditForm(status)` | — | Need a boolean check for STATE edit |
-| `canStateFinalSubmitForm(status)` | — | Need a boolean check for STATE final submit |
-| `assertCanStateEditForm(status)` | `ForbiddenException` | Guard in STATE save-draft handler |
-| `assertCanStateFinalSubmitForm(status)` | `ForbiddenException` | Guard in STATE final-submit handler |
+| Function                                | Throws               | Use when                                    |
+| --------------------------------------- | -------------------- | ------------------------------------------- |
+| `canUlbEditForm(status)`                | —                    | Need a boolean check for ULB edit           |
+| `canUlbSubmitForm(status)`              | —                    | Need a boolean check for ULB submit         |
+| `canStateEditForm(status)`              | —                    | Need a boolean check for STATE edit         |
+| `canStateFinalSubmitForm(status)`       | —                    | Need a boolean check for STATE final submit |
+| `assertCanStateEditForm(status)`        | `ForbiddenException` | Guard in STATE save-draft handler           |
+| `assertCanStateFinalSubmitForm(status)` | `ForbiddenException` | Guard in STATE final-submit handler         |
 
 Error messages produced by the assert helpers:
 
@@ -468,6 +529,7 @@ On save/final-submit routes, status is re-checked server-side (`assertCanStateEd
 ### Merge: `feat/xvi-fc-communication-center` (merged 2026-06-15)
 
 Three new top-level modules were merged in:
+
 - `FormsModule` (`src/forms/`) — generic ULB→State→MoHUA form workflow engine
 - `CommunicationModule` (`src/communication/`) — message threads between org tiers
 - `NotificationsModule` (`src/notifications/`) — in-app notification delivery
@@ -480,9 +542,9 @@ The XVI-FC SFC form now uses the shared `FORM_STATUS` constants from `src/common
 
 #### Two AuthUser interfaces — do not unify without preserving XVI-FC fields
 
-| Interface | File | Used by |
-|---|---|---|
-| `AuthUser` | `src/module/auth/auth-user.interface.ts` | XVI-FC module, PermissionGuard, SfcStatusService |
+| Interface   | File                                           | Used by                                               |
+| ----------- | ---------------------------------------------- | ----------------------------------------------------- |
+| `AuthUser`  | `src/module/auth/auth-user.interface.ts`       | XVI-FC module, PermissionGuard, SfcStatusService      |
 | `IAuthUser` | `src/common/interfaces/auth-user.interface.ts` | FormsModule, CommunicationModule, NotificationsModule |
 
 `AuthUser` carries `scope`, `accessLevel`, and `permissionOverrides` — all required by XVI-FC RBAC guards. `IAuthUser` does not include these. Do not merge or replace `AuthUser` with `IAuthUser` without first moving those fields across.
@@ -536,8 +598,15 @@ Location: `src/module/xvi-fc/common/dynamic-form-validation/`
 ### yearRange validator config
 
 ```ts
-{ startYearMin, startYearMax, endYearMin, endYearMax,
-  requireEndGreaterThanStart, allowedDurations, requiredIncludedYear }
+{
+  (startYearMin,
+    startYearMax,
+    endYearMin,
+    endYearMax,
+    requireEndGreaterThanStart,
+    allowedDurations,
+    requiredIncludedYear);
+}
 ```
 
 ### File validation
@@ -554,7 +623,11 @@ Location: `src/module/xvi-fc/common/dynamic-form-validation/`
 ### Error shape
 
 ```ts
-{ field: string; message: string; code: string }
+{
+  field: string;
+  message: string;
+  code: string;
+}
 ```
 
 ---
@@ -615,21 +688,25 @@ Before every code push involving XVI-FC backend changes:
 ### SFC Status Backend (State Form v1)
 
 **New permissions added** (`src/module/auth/enum/roles-xvi-fc.enum.ts`):
+
 - `VIEW_STATE_FORMS`, `EDIT_STATE_FORMS`, `FINAL_SUBMIT_STATE_FORMS`
 
 **Permission map updated** (`src/module/auth/permissions.map.ts`):
+
 - `STATE`: view + edit + final submit
 - `STATE_EDITOR`: view + edit
 - `STATE_VIEWER`: view only
 - `ADMIN`: all (via `Object.values(Permission)`)
 
 **New schema** (`src/schemas/xvi-fc/state/sfc-status.schema.ts`):
+
 - Collection: `xvi_fc_sfc_status_forms`
 - Unique index: `{ state, year, formType }`
 - Status: 1 (Not Started), 2 (In Progress), 6 (Final Submitted)
 - Embedded `statusHistory` array
 
 **New module** (`src/module/xvi-fc/state/sfc-status/`):
+
 - `sfc-status.module.ts` — registers schema, controller, service
 - `sfc-status.controller.ts` — 4 routes
 - `sfc-status.service.ts` — scope checks, draft upsert, final submit + conditional validation
@@ -638,15 +715,18 @@ Before every code push involving XVI-FC backend changes:
 - `constants/sfc-status.questions.ts` — `SFC_STATUS_QUESTIONS` config for frontend
 
 **XviFcModule updated** (`src/module/xvi-fc/xvi-fc.module.ts`):
+
 - Imports `SfcStatusModule`
 
 **Routes added**:
+
 - `GET /xvi-fc/state/sfc-status/questions`
 - `GET /xvi-fc/state/sfc-status/:stateId/:yearId`
 - `POST /xvi-fc/state/sfc-status`
 - `PATCH /xvi-fc/state/sfc-status/:id/final-submit`
 
 **Follow-ups**:
+
 - Award period validation in `sfcReport` DTO duplicate question keys for multi-condition dependsOn need frontend alignment.
 - Remaining state forms (Elected Body Status, Devolution Formula) still pending.
 
@@ -655,6 +735,7 @@ Before every code push involving XVI-FC backend changes:
 ### SFC Status — Centralized Validator + Uniform Response (State Form v2)
 
 **New files**:
+
 - `src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.types.ts` — all shared form config/validation types
 - `src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service.ts` — `DynamicFormValidationService`
 - `src/module/xvi-fc/common/xvi-fc-common.module.ts` — exports `DynamicFormValidationService`
@@ -662,6 +743,7 @@ Before every code push involving XVI-FC backend changes:
 - `src/module/xvi-fc/common/response/xvi-fc-response.util.ts` — `xviFcSuccess()`, `throwXviFcValidationError()`
 
 **Modified files**:
+
 - `src/module/xvi-fc/state/sfc-status/constants/sfc-status.questions.ts` — migrated to `FormFieldConfig[]`; `visibleWhen` + typed `validators`; `awardPeriodDuration` computed conditions for sfcConstitutedForInterim and sfcAwardPeriodExtended
 - `src/module/xvi-fc/state/sfc-status/sfc-status.service.ts` — removed hand-rolled validation; uses `DynamicFormValidationService`; all methods return `XviFcApiResponse<T>`; JSDoc on all public methods; ip/userAgent stored in statusHistory
 - `src/module/xvi-fc/state/sfc-status/sfc-status.controller.ts` — added `@ApiTags`, `@ApiOperation`; captures `@Ip()` and `@Headers('user-agent')` on saveDraft/finalSubmit
@@ -669,6 +751,7 @@ Before every code push involving XVI-FC backend changes:
 - `src/schemas/xvi-fc/state/sfc-status.schema.ts` — added optional `ip` and `userAgent` fields to `StatusHistoryEntry`
 
 **Key behaviours**:
+
 - Draft validation: only validates present fields; absent fields skipped.
 - Full submit validation: validates all visible required fields driven by question config.
 - `awardPeriodDuration` computed server-side; frontend-supplied value is ignored.
@@ -677,6 +760,7 @@ Before every code push involving XVI-FC backend changes:
 - Validation errors: `BadRequestException` → `{ statusCode, message, errors[], timestamp, path }`.
 
 **Follow-ups**:
+
 - `sfc-status.constants.ts` (award period hardcoded ranges) is now superseded by the `yearRange` config in questions. Can be removed in a cleanup pass.
 - Other state forms (Elected Body Status, Devolution Formula) will reuse `XviFcCommonModule` and the same `FormFieldConfig` pattern.
 
@@ -685,9 +769,11 @@ Before every code push involving XVI-FC backend changes:
 ### SFC Status — Hydrated GET Response (State Form v3)
 
 **New file**:
+
 - `src/module/xvi-fc/state/sfc-status/sfc-status.types.ts` — `SfcFormPermissions`, `SfcFormGetResponseData`
 
 **Modified files**:
+
 - `src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.types.ts` — added `value?: unknown` to `FormFieldConfig`; added `HydratedFieldConfig` type
 - `src/module/xvi-fc/common/response/xvi-fc-api-response.ts` — added `timestamp?: string` to `XviFcApiResponse`
 - `src/module/xvi-fc/common/response/xvi-fc-response.util.ts` — `xviFcSuccess()` now includes `timestamp: new Date().toISOString()`
@@ -696,6 +782,7 @@ Before every code push involving XVI-FC backend changes:
 - `src/module/xvi-fc/state/sfc-status/sfc-status.controller.ts` — updated `@ApiOperation` description for `getForm`
 
 **Key behaviours**:
+
 - Not Started (no DB record): questions returned with template default values.
 - Existing record: questions hydrated from `record.data` — present keys overwrite template defaults, absent keys keep defaults.
 - Hydration is O(n); uses `Object.prototype.hasOwnProperty.call` for safe key presence check.
@@ -707,9 +794,11 @@ Before every code push involving XVI-FC backend changes:
 ### Post-merge Auth Fix
 
 **Fixed file**:
+
 - `src/module/auth/strategies/jwt-refresh.strategy.ts` — `secretOrKey` corrected from `JWT_SECRET` to `JWT_REFRESH_SECRET`; startup null-check updated to match.
 
 **Unaffected**:
+
 - `src/module/auth/strategies/jwt.strategy.ts` — no changes; XVI-FC fields (`scope`, `accessLevel`, `permissionOverrides`, `state`, `ulb`, `sessionId`) are all still returned from `validate()`.
 
 **Context**: The `feat/xvi-fc-communication-center` merge accidentally replaced `JWT_REFRESH_SECRET` with `JWT_SECRET` in `JwtRefreshStrategy`. Environments where both secrets share the same value would not notice; environments with distinct secrets would have refresh token validation silently fail.
@@ -719,10 +808,12 @@ Before every code push involving XVI-FC backend changes:
 ### SFC Status — Shared Form Status Constants (State Form v4)
 
 **Modified files**:
+
 - `src/schemas/xvi-fc/state/sfc-status.schema.ts` — removed local `SfcFormStatus` enum and `SFC_STATUS_LABELS`; imported `FORM_STATUS` from shared constants; `currentFormStatus` default now uses `FORM_STATUS.NOT_STARTED`
 - `src/module/xvi-fc/state/sfc-status/sfc-status.service.ts` — replaced all `SfcFormStatus.*` references with `FORM_STATUS.*`; replaced all `SFC_STATUS_LABELS[...]` lookups with `getFormStatusLabel(...)`
 
 **Status mapping change**:
+
 - `NOT_STARTED`: `1` → no change
 - `IN_PROGRESS`: `2` → no change
 - Final submit: was `SfcFormStatus.FINAL_SUBMITTED = 6`, then `FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA = 7` (v4), now corrected to `FORM_STATUS.UNDER_REVIEW_BY_MOHUA = 5` (v9)
@@ -734,15 +825,18 @@ Before every code push involving XVI-FC backend changes:
 ### SFC Status — Separate History Collection (State Form v5)
 
 **New file**:
+
 - `src/schemas/xvi-fc/state/sfc-status-history.schema.ts` — `XviFcSfcStatusHistory` schema, collection `xvi_fc_sfc_status_histories`
 
 **Modified files**:
+
 - `src/schemas/xvi-fc/state/sfc-status.schema.ts` — removed `StatusHistoryEntry` class and `statusHistory` array prop; main collection now stores only current form state
 - `src/module/xvi-fc/state/sfc-status/sfc-status.types.ts` — added `SfcHistoryEntryInput` interface
 - `src/module/xvi-fc/state/sfc-status/sfc-status.module.ts` — added `XviFcSfcStatusHistory` to `MongooseModule.forFeature`
 - `src/module/xvi-fc/state/sfc-status/sfc-status.service.ts` — injected `historyModel`; replaced `$push: { statusHistory }` in `saveDraft`/`finalSubmit` with `await createHistoryEntry(...)`; added `createHistoryEntry()` private helper
 
 **Key behaviours**:
+
 - `saveDraft` (new record): creates form doc → inserts `CREATE_DRAFT` history entry.
 - `saveDraft` (existing record): updates form doc → inserts `UPDATE_DRAFT` history entry with `fromStatus = existing.currentFormStatus`.
 - `finalSubmit`: updates form doc to `UNDER_REVIEW_BY_MOHUA` → inserts `FINAL_SUBMIT` history entry.
@@ -754,6 +848,7 @@ Before every code push involving XVI-FC backend changes:
 ### SFC Status — Status-Aware Permissions + Unified Validation Error Map (State Form v6)
 
 **Modified files**:
+
 - `src/module/xvi-fc/state/sfc-status/sfc-status.service.ts`
   - `buildFormPermissions(user, stateId, status)` — now accepts `stateId` and `status`; all three flags gated by role, state scope, and form status.
   - Added `hasStateAccess(user, stateId): boolean` — pure boolean scope check extracted from `assertStateAccess`; used by both the assert helper and permission building.
@@ -766,11 +861,13 @@ Before every code push involving XVI-FC backend changes:
 - `src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service.ts` — `validateDraft`/`validateFull` return `ValidationResult` (not an array); added `accumulateErrors` private helper (O(1) map accumulation); `validateField` still returns `XviFcValidationError[]` internally.
 
 **Key behaviours**:
+
 - `canEdit` and `canFinalSubmit` in GET response are `false` when status is not in the editable set, regardless of role.
 - Validation errors from save-draft/final-submit are now a `Record<string, XviFcValidationError[]>` keyed by field key; frontend accesses errors in O(1): `errors['fieldKey']`. Non-field errors use the `_form` key.
 - Save/final-submit routes re-enforce status server-side independently — the GET permissions flags are UI-gating only and cannot be bypassed.
 
 **Documentation moved**:
+
 - `xvifc-documentation.md` relocated from project root to `src/module/xvi-fc/xvifc-documentation.md`.
 
 ---
@@ -778,10 +875,12 @@ Before every code push involving XVI-FC backend changes:
 ### SFC Status — Excel Dump/Export API (State Form v7)
 
 **New files**:
+
 - `src/module/xvi-fc/state/sfc-status/dto/dump-sfc-status-query.dto.ts` — optional query params DTO (`stateId`, `yearId`, `status`)
 - `src/module/xvi-fc/state/sfc-status/types/sfc-status-dump.types.ts` — `SfcStatusDumpFilters`, `SfcStatusDumpRecord`, `SfcStatusDumpRow`, populated state/year interfaces
 
 **Modified files**:
+
 - `src/module/xvi-fc/state/sfc-status/sfc-status.service.ts`
   - `ExcelService` injected via constructor; `Buffer` imported from `exceljs`; `FilterQuery` from mongoose.
   - `SFC_DUMP_HEADERS` module-level constant — 39 column definitions.
@@ -797,6 +896,7 @@ Before every code push involving XVI-FC backend changes:
 - `src/module/xvi-fc/state/sfc-status/sfc-status.module.ts` — `ExcelService` added to providers.
 
 **Key behaviours**:
+
 - Uses `VIEW_STATUS_REPORTS` permission (report-level, broader than `VIEW_STATE_FORMS`).
 - State/Year names populated via `.populate('state', 'name').populate('year', 'year')` — models registered in parent `XviFcModule`.
 - `awardPeriodDuration` is not stored in DB; derived at export time from `awardPeriod`.
@@ -804,6 +904,7 @@ Before every code push involving XVI-FC backend changes:
 - All values coerced to strings for Excel; `Date` fields serialised as ISO 8601.
 
 **Example curl**:
+
 ```bash
 curl -H "Authorization: Bearer <token>" \
   "http://localhost:3000/xvi-fc/state/sfc-status/dump?status=7" \
@@ -815,6 +916,7 @@ curl -H "Authorization: Bearer <token>" \
 ### FormJson Redis Caching + SFC Template via FormJsonService (State Form v8)
 
 **Modified files**:
+
 - `src/form-json/form-json.service.ts`
   - `RedisService` injected via constructor (globally available, no module import needed).
   - `getFormJsonCacheKey(designYearId, formId): string` — private helper; returns `formJson:<designYearId>:<formId>`.
@@ -830,6 +932,7 @@ curl -H "Authorization: Bearer <token>" \
   - `SFC_FORM_ID = 22` defined as a file-level constant (replaces magic number).
 
 **Cache key format**: `formJson:<designYearId>:<formId>`
+
 - `designYearId` — string representation of the `design_year` ObjectId.
 - `formId` — numeric form identifier (SFC Status: `22`).
 - Do **not** use `formJson:<formId>` alone — `formId` is only unique per `design_year`.
@@ -837,6 +940,7 @@ curl -H "Authorization: Bearer <token>" \
 **Cache TTL**: 3600 seconds (1 hour).
 
 **Cache invalidation**:
+
 - `create` — sets cache immediately for the new document.
 - `update` — deletes old key (pre-update `design_year + formId`) and new key (post-update values, in case either field changed).
 - `remove` (soft-delete) — deletes cache key for the document being deactivated.
@@ -846,6 +950,7 @@ curl -H "Authorization: Bearer <token>" \
 **SFC formId**: `22` (`SFC_FORM_ID` constant in `sfc-status.service.ts`).
 
 **Key behaviours**:
+
 - SFC form questions are no longer fetched by direct `formJsonModel` query from `SfcStatusService`.
 - All `getForm`, `saveDraft`, and `finalSubmit` calls benefit from the 1-hour Redis cache.
 - `getQuestions` and `dumpToExcel` (no yearId context) use `findByType('SFC')` — direct DB query, not cached.
@@ -853,17 +958,119 @@ curl -H "Authorization: Bearer <token>" \
 
 ---
 
+### Side Menu — DB-driven with Redis Cache + Admin CRUD
+
+**Context**: Sidebar menu was previously hardcoded in `src/module/xvi-fc/config/side-menu.config.ts`. Migrated to MongoDB so product team can manage items per year and role without code deploys.
+
+**New schema** (`src/schemas/xvi-fc/xvi-fc-side-menu.schema.ts`):
+
+- Collection: `xvifc_side_menus`
+- Fields: `module`, `role`, `year` (ObjectId ref → Year), `isActive`, `section` (`top|bottom`), `sequence`, `type` (`header|separator|item|group`), `label`, `icon`, `featureKey`, `routerLink`, `parentId` (ObjectId ref → self, null for top-level)
+- Indexes: `{ module, role, year, isActive }`, `{ parentId }`
+- Exports `MenuRole` type (`ULB | STATE | MOHUA | DOE | ADMIN`)
+
+**New cache layer** (`src/module/xvi-fc/cache/`):
+
+- `xvi-fc-cache.service.ts` — Redis wrapper: `get`, `set`, `delete`, `deleteByPattern` (SCAN-based, non-blocking). Key prefix: `xvifc:cache`.
+- `xvi-fc-cache.interceptor.ts` — `NestInterceptor` that caches full HTTP response in Redis. Per-route TTL via `@XviFcCacheTTL(seconds)` decorator (default 600 s). Cache key = `xvifc:cache:<request.url>`.
+- `XVIFC_CACHE_KEY_PREFIX` defined in `xvi-fc-cache.service.ts` and re-exported from the interceptor.
+
+**New sub-module** (`src/module/xvi-fc/side-menu/`):
+
+- `side-menu.module.ts`, `side-menu.controller.ts`, `side-menu.service.ts`
+- DTOs: `CreateSideMenuDto`, `UpdateSideMenuDto` (PartialType), `QuerySideMenuDto`
+- All routes require `MANAGE_USERS` permission
+- Routes: GET `/`, GET `/:id`, POST `/`, POST `/bulk`, PATCH `/:id`, PATCH `/:id/toggle`, DELETE `/:id`
+- `bulkCreate` uses `insertMany` and invalidates cache once per unique `role+year` pair in the batch
+
+**Modified files**:
+
+- `src/module/xvi-fc/xvi-fc.service.ts` — `getSideMenu()` now queries DB instead of returning hardcoded config; `clearCache()` added; `XviFcCacheService` injected
+- `src/module/xvi-fc/xvi-fc.controller.ts` — `GET /sidebar/:role` now uses `@UseInterceptors(XviFcCacheInterceptor)` + `@XviFcCacheTTL(600)`; `DELETE /admin/cache` added (ADMIN scope, MANAGE_USERS permission)
+- `src/module/xvi-fc/xvi-fc.module.ts` — imports `SideMenuModule`; registers `XviFcSideMenu` schema; provides `XviFcCacheService`, `XviFcCacheInterceptor`
+
+**Removed**:
+
+- `src/module/xvi-fc/config/side-menu.config.ts` — dead `SIDE_MENU_CONFIG` hardcoded object removed; `MenuRole` type moved to schema file
+- `scripts/seed-xvi-fc-side-menu.ts` — one-time seed script (already executed for 2026-27); removed post-run
+- `package.json` `seed:xvi-fc-side-menu` script removed
+
+**Tree building** (`buildMenuTree` / `buildSection` in `xvi-fc.service.ts`):
+
+- Flat DB docs → `{ topModel, bottomModel }` nested structure
+- Top-level items: `parentId === null`; children matched by `c.parentId.toString() === doc._id.toString()`
+- `separator` type → `{ label: '_', separator: true }` (no other fields)
+- `group` type → item with `items[]` populated from children sorted by `sequence`
+
+**Cache invalidation**:
+
+- On any write (create/bulk/update/toggle/delete): `cache.delete('xvifc:cache:/xvi-fc/sidebar/<role>?yearId=<yearId>')`
+- Admin manual clear: `DELETE /xvi-fc/admin/cache?pattern=<url-pattern>` (uses `deleteByPattern` SCAN loop)
+
+**Data seeded**: 35 documents inserted for year 2026-27 (`yearId: 67d7d136d3d038946a5239e9`) covering roles ULB, STATE, MOHUA, DOE, ADMIN.
+
+### Annual Account — Dynamic Upload Config + Submit Fix
+
+**Context**: Upload document configs (which documents to upload per section, with validation rules) were previously hardcoded in the Angular frontend. Migrated to MongoDB via the existing `form_json` collection so configs can be managed per design year without code deploys.
+
+**New data in `formjsons` collection**:
+
+- `formId: 30` (`UPLOAD_CONFIG_AUDITED`) — 6 file fields for audited section (design_year 2026-27, `documentYear: 2023-24`).
+- `formId: 31` (`UPLOAD_CONFIG_PROVISIONAL`) — 5 file fields for provisional section (design_year 2026-27, `documentYear: 2024-25`).
+- Each field is a `FieldConfig` with `formFieldType: 'file'`, `allowedFileTypes`, `maxFileSize`, and `validations[]`.
+- `auditors-report` field carries an extra validator: `{ name: 'minPages', validator: 2, message: '...' }`.
+- `receipts-payments` was seeded initially but subsequently removed from both configs via `$pull` (temporarily hidden on frontend; excluded from submit validation).
+- **Redis cache keys** `formJson:<designYearId>:30` and `formJson:<designYearId>:31` must be manually flushed after any direct MongoDB update that bypasses the service layer (service layer handles cache invalidation automatically on `create`/`update`/`remove`).
+
+**Modified files**:
+
+- `src/module/xvi-fc/ulb/annual_accounts/annual_accounts.module.ts`
+  - `FormJsonModule` added to `imports`.
+- `src/module/xvi-fc/ulb/annual_accounts/annual_accounts.service.ts`
+  - `FormJsonService` injected via constructor.
+  - `getUploadConfig(type, yearId)` — resolves `formId` from `type` (`audited → 30`, `provisional → 31`); calls `formJsonService.findActiveByDesignYearAndFormId`; returns `{ meta, data }`.
+  - `submitSection()` — now fetches the active formjson config before validating; only checks `processingStatus === 'PASSED'` for `docId`s present in `formJson.data[].key`. Documents in the annual account that are absent from the current config (e.g. previously uploaded then hidden fields) are silently skipped. Falls back to checking all uploaded docs if formjson lookup fails.
+- `src/module/xvi-fc/ulb/annual_accounts/annual_accounts.controller.ts`
+  - `GET upload-config/:type` added **before** `GET :id` to prevent NestJS matching `"audited"` / `"provisional"` as MongoDB ObjectIds.
+  - `@Query('yearId')` extracts the design year.
+
+**New route**:
+
+- `GET /xvi-fc/annual-account/upload-config/:type?yearId=<designYearId>` — see Route Summary above.
+
+**Submit validation change** (key behaviour):
+
+- Before: `sectionData.documents.every(d => d.processingStatus === 'PASSED')` — checked every document ever uploaded into the section, including ones removed from the active config.
+- After: filters `sectionData.documents` to only those whose `docId` is in the current `formjson.data[].key` list, then runs `every(d => d.processingStatus === 'PASSED')` on the filtered set.
+
+**Frontend changes** (Angular — `cityfinance-ng-ui-v2`):
+
+- `upload-documents.service.ts` (new) — fetches `GET upload-config/:type` and maps `FieldConfig[]` to `UploadDocumentDef[]`; extracts `minPages` from `validations[]`.
+- `upload-documents.component.ts` — all config now loaded from API via signals; `config`, `documents`, `totalCount`, `allPassed`, `progressPct` are signals/computed; `loadConfig()` → `loadExistingData()` chain; route data key changed from `{ config: UPLOAD_CONFIGS.audited }` to `{ uploadType: 'audited' }`.
+- `receipts-payments` filtered out in `mapToConfig()` in the service (frontend-only; DB retains the field but it is also removed from `data[]` in both formjsons).
+- `PageErrorStateComponent` (new, `shared/page-error-state/`) — reusable full-screen error state with `title`, `message`, `retryLabel` inputs and `(retry)` output. Wired into `upload-documents`, `overview`, `support-hours`, and `roles-teams-overview` components replacing inline alert banners.
+
+**Follow-ups**:
+
+- Annual account scope enforcement (ULB/STATE) still pending (see Known Gaps).
+- `receipts-payments` removal from frontend is temporary; re-enable by removing the `.filter()` in `mapToConfig()` and re-adding the field to `formjsons.data[]`.
+
+---
+
 ### SFC Status — Correct Final-Submit Transition Status (State Form v9)
 
 **Modified files**:
+
 - `src/module/xvi-fc/state/sfc-status/sfc-status.service.ts`
   - `finalSubmit()` — `toStatus` changed from `FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA` (7) to `FORM_STATUS.UNDER_REVIEW_BY_MOHUA` (5).
 
 **Workflow rule**:
+
 - STATE final-submit → `UNDER_REVIEW_BY_MOHUA` (5). Form is now with MoHUA for review.
 - `SUBMISSION_ACKNOWLEDGED_BY_MOHUA` (7) is reserved for a future MoHUA acknowledge/approval action; it is never set by a state user.
 
 **No changes needed to**:
+
 - Status-gate helpers (`canStateFinalSubmitForm`, `assertCanStateFinalSubmitForm`) — `UNDER_REVIEW_BY_MOHUA` is already outside `STATE_EDITABLE_STATUSES`, so a submitted form is correctly blocked from re-editing by the STATE.
 - `isTerminalStatus()` — remains tied to `SUBMISSION_ACKNOWLEDGED_BY_MOHUA`; `UNDER_REVIEW_BY_MOHUA` is not terminal (MoHUA can return it).
 - Permission logic in `buildFormPermissions` — `canEdit`/`canFinalSubmit` are `false` for `UNDER_REVIEW_BY_MOHUA` because it is not in `STATE_EDITABLE_STATUSES`.

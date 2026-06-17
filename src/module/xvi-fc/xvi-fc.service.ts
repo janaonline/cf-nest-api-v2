@@ -9,12 +9,12 @@ import { toObjectIdString } from 'src/users/user-scope.helpers';
 import { GrantAllocation, GrantAllocationDocument } from '../../schemas/xvi-fc/grant-allocation.schema';
 import { StateWiseResponseDto } from './dto/state-wise-response.dto';
 import { buildGetStateWiseDataPipeline } from './queries/get-state-wise-data.query';
-import { SIDE_MENU_CONFIG } from './config/side-menu.config';
-import type { MenuRole } from './config/side-menu.config';
-import { SideMenuResponseDto } from './dto/side-menu.dto';
+import { SideMenuItemDto, SideMenuResponseDto } from './dto/side-menu.dto';
 import { Year, YearDocument } from '../../schemas/year.schema';
 import { Ulb, UlbDocument } from '../../schemas/ulb.schema';
 import { State, StateDocument } from '../../schemas/state.schema';
+import { XviFcSideMenu, XviFcSideMenuDocument, MenuRole } from '../../schemas/xvi-fc/xvi-fc-side-menu.schema';
+import { XviFcCacheService, XVIFC_CACHE_KEY_PREFIX } from './cache/xvi-fc-cache.service';
 
 @Injectable()
 export class XviFcService {
@@ -27,6 +27,9 @@ export class XviFcService {
     private readonly ulbModel: Model<UlbDocument>,
     @InjectModel(State.name)
     private readonly stateModel: Model<StateDocument>,
+    @InjectModel(XviFcSideMenu.name)
+    private readonly sideMenuModel: Model<XviFcSideMenuDocument>,
+    private readonly cache: XviFcCacheService,
   ) {}
 
   async getStateWiseData(stateId: string, requester: AuthUser): Promise<StateWiseResponseDto> {
@@ -44,11 +47,62 @@ export class XviFcService {
   }
 
   async getSideMenu(role: MenuRole, yearId: string): Promise<SideMenuResponseDto> {
-    const menuFactory = SIDE_MENU_CONFIG[role];
-    if (!menuFactory) {
-      throw new NotFoundException(`No menu found for role ${role}`);
-    }
-    return menuFactory(yearId);
+    if (!yearId) throw new NotFoundException('yearId is required');
+
+    const docs = await this.sideMenuModel
+      .find({ module: 'XVI-FC', role, year: new Types.ObjectId(yearId), isActive: true })
+      .sort({ sequence: 1 })
+      .lean()
+      .exec();
+
+    if (!docs.length) throw new NotFoundException(`No menu configured for role ${role}`);
+
+    return this.buildMenuTree(docs);
+  }
+
+  async clearCache(urlPattern?: string): Promise<void> {
+    const pattern = urlPattern
+      ? `${XVIFC_CACHE_KEY_PREFIX}:${urlPattern}`
+      : `${XVIFC_CACHE_KEY_PREFIX}:*`;
+    await this.cache.deleteByPattern(pattern);
+  }
+
+  private buildMenuTree(docs: XviFcSideMenu[]): SideMenuResponseDto {
+    return {
+      topModel: this.buildSection(docs, 'top'),
+      bottomModel: this.buildSection(docs, 'bottom'),
+    };
+  }
+
+  private buildSection(docs: any[], section: 'top' | 'bottom'): SideMenuItemDto[] {
+    const sectionDocs = docs.filter((d) => d.section === section);
+    const topLevel = sectionDocs.filter((d) => !d.parentId).sort((a, b) => a.sequence - b.sequence);
+    const children = sectionDocs.filter((d) => d.parentId);
+
+    return topLevel.map((doc) => {
+      if (doc.type === 'separator') {
+        return { label: '_', separator: true };
+      }
+
+      const item: SideMenuItemDto = { label: doc.label };
+      if (doc.icon) item.icon = doc.icon;
+      if (doc.routerLink?.length) item.routerLink = doc.routerLink;
+      if (doc.featureKey) item.featureKey = doc.featureKey;
+
+      if (doc.type === 'group') {
+        item.items = children
+          .filter((c) => c.parentId.toString() === doc._id.toString())
+          .sort((a, b) => a.sequence - b.sequence)
+          .map((c) => {
+            const child: SideMenuItemDto = { label: c.label };
+            if (c.icon) child.icon = c.icon;
+            if (c.featureKey) child.featureKey = c.featureKey;
+            return child;
+          });
+      }
+
+      return item;
+    });
   }
 
   async getYears(): Promise<{ _id: string; year: string }[]> {
