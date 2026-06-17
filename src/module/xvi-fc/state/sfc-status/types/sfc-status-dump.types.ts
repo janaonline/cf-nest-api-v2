@@ -21,6 +21,20 @@ export interface SfcStatusPopulatedUser {
   name: string;
 }
 
+/** Shape of a lean+populated SFC Status document returned by getForm(). */
+export interface SfcStatusGetFormDoc {
+  _id: Types.ObjectId;
+  state: SfcStatusPopulatedState;
+  data: Record<string, unknown>;
+  currentFormStatus: number;
+  createdBy?: SfcStatusPopulatedUser;
+  updatedBy?: SfcStatusPopulatedUser;
+  submittedBy?: SfcStatusPopulatedUser;
+  createdAt?: Date;
+  updatedAt?: Date;
+  submittedAt?: Date;
+}
+
 /** Shape of a lean+populated SFC Status document used only in dump row building. */
 export interface SfcStatusDumpRecord {
   _id: Types.ObjectId;
