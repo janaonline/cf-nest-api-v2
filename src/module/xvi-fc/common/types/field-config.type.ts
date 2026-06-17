@@ -67,8 +67,12 @@ export interface FieldLayoutConfig {
 export interface FieldSupportingContent {
   type: string;
   position: string;
-  title: string;
+  title?: string;
+  /** Display label for the supporting link/action (alternative to title) */
+  label?: string;
   description: string;
+  /** URL for template-download or link-type supporting content */
+  url?: string;
 }
 
 // ─── File value shape ─────────────────────────────────────────────────────────
