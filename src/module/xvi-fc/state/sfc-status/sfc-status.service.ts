@@ -319,7 +319,7 @@ export class SfcStatusService {
     if (!validation.isValid) throwXviFcValidationError(validation.errors);
 
     const sanitizedPayload = validation.sanitizedPayload;
-    const toStatus = FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA;
+    const toStatus = FORM_STATUS.UNDER_REVIEW_BY_MOHUA;
     const now = new Date();
 
     let formOid: Types.ObjectId;
