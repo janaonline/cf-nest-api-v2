@@ -60,6 +60,18 @@ export class AfsDigitizationController {
   async getRequestLog(@Param('requestId') requestId: string) {
     return { data: await this.afsService.getRequestLog(requestId) };
   }
+  /**
+   * Updates PDF metadata for a specific annual account
+   * @param id 
+   * @returns 
+   */
+  @Post('annual-account/:id/pdf-metadata')
+  async updateAnnualAccountPdfMetadata(@Param('id') id: string) {
+    return {
+      status: 'success',
+      data: await this.afsService.updatePdfMetadataForAnnualAccount(id),
+    };
+  }
 
   @Get('dump/afs-excel')
   // async downloadAfsExcelFiles(@Query('yearId') yearId: string, @Query('ulbId') ulbId?: string, @Res() res: Response) {

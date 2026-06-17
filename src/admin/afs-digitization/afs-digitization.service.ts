@@ -5,6 +5,7 @@ import { ConfigService } from '@nestjs/config';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { YearLabelToId } from 'src/core/constants/years';
 import { buildPopulationMatch } from 'src/core/helpers/populationCategory.helper';
+import { S3Service } from 'src/core/s3/s3.service';
 import { AfsAuditorsReport, AfsAuditorsReportDocument } from 'src/schemas/afs/afs-auditors-report.schema';
 import { AfsExcelFile, AfsExcelFileDocument } from 'src/schemas/afs/afs-excel-file.schema';
 import { AfsMetric, AfsMetricDocument } from 'src/schemas/afs/afs-metrics.schema';
@@ -29,6 +30,44 @@ import {
   getAfsReportPipeline,
   getAuditorReportUrlPipeline,
 } from './queries/afs-excel-files.query';
+
+const ANNUAL_ACCOUNT_AUDIT_TYPES = ['audited', 'unAudited'] as const;
+const ANNUAL_ACCOUNT_PDF_FIELDS = [
+  'bal_sheet',
+  'bal_sheet_schedules',
+  'inc_exp',
+  'inc_exp_schedules',
+  'cash_flow',
+  'auditor_report',
+] as const;
+
+type AnnualAccountAuditType = (typeof ANNUAL_ACCOUNT_AUDIT_TYPES)[number];
+type AnnualAccountPdfField = (typeof ANNUAL_ACCOUNT_PDF_FIELDS)[number];
+
+interface AnnualAccountPdfFile {
+  name?: string;
+  url?: string;
+  pageCount?: number;
+  fileSizeKb?: number;
+}
+
+type AnnualAccountProvisionalData = Partial<Record<AnnualAccountPdfField, { pdf?: AnnualAccountPdfFile }>>;
+
+type AnnualAccountDataLean = Partial<
+  Record<AnnualAccountAuditType, { provisional_data?: AnnualAccountProvisionalData }>
+>;
+
+interface AnnualAccountPdfMetadata {
+  pageCount: number;
+  fileSizeKb: number;
+}
+
+export interface AnnualAccountPdfMetadataSummary {
+  totalPdfsFound: number;
+  updated: number;
+  skipped: number;
+  failed: number;
+}
 
 @Injectable()
 export class AfsDigitizationService {
@@ -64,7 +103,86 @@ export class AfsDigitizationService {
 
     private readonly fileTokenService: FileTokenService,
     private readonly configService: ConfigService,
-  ) { }
+    private readonly s3Service: S3Service,
+  ) {}
+
+  async updatePdfMetadataForAnnualAccount(annualAccountId: string): Promise<AnnualAccountPdfMetadataSummary> {
+    const summary: AnnualAccountPdfMetadataSummary = {
+      totalPdfsFound: 0,
+      updated: 0,
+      skipped: 0,
+      failed: 0,
+    };
+
+    if (!Types.ObjectId.isValid(annualAccountId)) {
+      this.logger.warn(`Skipping annual account PDF metadata update for invalid id: ${annualAccountId}`);
+      summary.skipped += 1;
+      return summary;
+    }
+
+    const annualAccount = await this.annualAccountModel.findById(annualAccountId).lean<AnnualAccountDataLean>().exec();
+    if (!annualAccount) {
+      this.logger.warn(`Annual account not found for PDF metadata update: ${annualAccountId}`);
+      summary.skipped += 1;
+      return summary;
+    }
+
+    const setPayload: Record<string, number> = {};
+
+    for (const auditType of ANNUAL_ACCOUNT_AUDIT_TYPES) {
+      for (const pdfField of ANNUAL_ACCOUNT_PDF_FIELDS) {
+        const pdfPath = `${auditType}.provisional_data.${pdfField}.pdf`;
+        const pdf = annualAccount[auditType]?.provisional_data?.[pdfField]?.pdf;
+
+        if (!pdf?.url?.trim()) {
+          summary.skipped += 1;
+          continue;
+        }
+
+        summary.totalPdfsFound += 1;
+
+        try {
+          const metadata = await this.getPdfMetadata(pdf.url);
+          setPayload[`${pdfPath}.pageCount`] = metadata.pageCount;
+          setPayload[`${pdfPath}.fileSizeKb`] = metadata.fileSizeKb;
+          summary.updated += 1;
+        } catch (error) {
+          summary.failed += 1;
+          this.logger.error(
+            `Failed to update annual account PDF metadata for ${annualAccountId} at ${pdfPath}`,
+            error instanceof Error ? error.stack : String(error),
+          );
+        }
+      }
+    }
+
+    if (Object.keys(setPayload).length > 0) {
+      await this.annualAccountModel.updateOne({ _id: new Types.ObjectId(annualAccountId) }, { $set: setPayload }).exec();
+    }
+
+    this.logger.log(`Annual account PDF metadata update completed for ${annualAccountId}`, summary);
+    return summary;
+  }
+
+  private async getPdfMetadata(url: string): Promise<AnnualAccountPdfMetadata> {
+    const [buffer, contentLength] = await Promise.all([
+      this.s3Service.getPdfBufferFromS3(url),
+      this.s3Service.getObjectContentLength(url).catch((error) => {
+        this.logger.warn(
+          `Unable to read S3 ContentLength for annual account PDF ${url}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+        return undefined;
+      }),
+    ]);
+
+    const sizeInBytes = contentLength ?? buffer.length;
+    return {
+      pageCount: await this.s3Service.getPdfPageCountFromBuffer(buffer),
+      fileSizeKb: Math.round((sizeInBytes / 1024) * 100) / 100,
+    };
+  }
 
   async getAfsFilters() {
     // const auditTypes = [
@@ -267,7 +385,7 @@ export class AfsDigitizationService {
       const data = (await this.afsExcelFileModel.aggregate(pipeline).exec()) as AfsFile[];
       return { success: true, data };
     } catch (err) {
-      console.error('Failed to get afs digitized list', err);
+      this.logger.error('Failed to get afs digitized list', err instanceof Error ? err.stack : String(err));
       throw new InternalServerErrorException('Failed to fetch list.');
     }
   }
@@ -299,7 +417,7 @@ export class AfsDigitizationService {
         },
       };
     } catch (err) {
-      console.error('Failed to get afs digitized report', err);
+      this.logger.error('Failed to get afs digitized report', err instanceof Error ? err.stack : String(err));
       throw new InternalServerErrorException('Failed to fetch reports.');
     }
   }
@@ -319,7 +437,7 @@ export class AfsDigitizationService {
       const auditorReport = (await this.afsAuditorsReportModel.aggregate(pipeline).exec()) as AuditorReport[];
       return { success: true, data: auditorReport[0] };
     } catch (err) {
-      console.error('Failed to get auditors report', err);
+      this.logger.error('Failed to get auditors report', err instanceof Error ? err.stack : String(err));
       throw new InternalServerErrorException('Failed to fetch reports.');
     }
   }
