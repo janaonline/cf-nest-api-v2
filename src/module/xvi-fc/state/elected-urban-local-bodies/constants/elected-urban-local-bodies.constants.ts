@@ -43,6 +43,10 @@ export const TEMPLATE_HEADERS = [
 
 export const ERROR_EXCEL_HEADERS = [...TEMPLATE_HEADERS, { label: 'Errors', key: 'errors', width: 60 }];
 
+export const EULB_ACTION_DOWNLOAD_TEMPLATE = 'download-template';
+export const EULB_ACTION_VIEW_UPLOADED_DATA = 'view-uploaded-data';
+export const EULB_ACTION_DOWNLOAD_ERROR_SHEET = 'download-error-sheet';
+
 // TODO: Replace static "Andhra Pradesh" with dynamic state name when question-label
 //       interpolation is supported by the shared form config system.
 export const TEMP_QUESTIONS: FieldConfig[] = [
@@ -68,29 +72,6 @@ export const TEMP_QUESTIONS: FieldConfig[] = [
     folderPath: 'state/2026-27/elected-body-status-uploads',
     maxFileSize: 20,
     allowedFileTypes: ['xlsx', 'xls'],
-    supportingContent: [
-      {
-        type: 'template-download',
-        position: 'before',
-        label: 'Download the template',
-        url: '/assets/templates/elected-body-template.xlsx',
-        description: 'Fill in the details and re-upload as a single excel file.',
-      },
-      {
-        type: 'view-table',
-        position: 'before',
-        label: 'View Errors on portal',
-        url: '/assets/templates/elected-body-template.xlsx',
-        description: 'Fill in the details and re-upload as a single excel file.',
-      },
-      {
-        type: 'error-download',
-        position: 'before',
-        label: 'Download Error Sheet',
-        url: '/assets/templates/elected-body-template.xlsx',
-        description: 'Fill in the details and re-upload as a single excel file.',
-      },
-    ],
     appearance: { color: 'success', variant: 'soft' },
   },
   {

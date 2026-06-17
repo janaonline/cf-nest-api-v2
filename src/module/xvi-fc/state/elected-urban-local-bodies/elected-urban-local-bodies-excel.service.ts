@@ -399,14 +399,17 @@ export class ElectedUrbanLocalBodiesExcelService {
 
     const toStr = (v: unknown): string | undefined => {
       if (v === undefined || v === null || v === '') return undefined;
-      return String(v).trim() || undefined;
+      if (typeof v === 'string') return v.trim() || undefined;
+      if (typeof v === 'number' || typeof v === 'boolean') return String(v).trim() || undefined;
+      return undefined;
     };
 
     const toDate = (v: unknown): Date | string | undefined => {
       if (v === undefined || v === null || v === '') return undefined;
       if (v instanceof Date) return v;
-      const s = String(v).trim();
-      return s || undefined;
+      if (typeof v === 'string') return v.trim() || undefined;
+      if (typeof v === 'number') return String(v);
+      return undefined;
     };
 
     return {

@@ -19,7 +19,11 @@ import {
 import { toObjectIdString } from 'src/users/user-scope.helpers';
 import { DynamicFormValidationService } from '../../common/dynamic-form-validation/dynamic-form-validation.service';
 import type { FormData } from '../../common/dynamic-form-validation/dynamic-form-validation.types';
-import type { HydratedFieldConfig, UploadedFileValue } from '../../common/types/field-config.type';
+import type {
+  FieldSupportingContent,
+  HydratedFieldConfig,
+  UploadedFileValue,
+} from '../../common/types/field-config.type';
 import type { XviFcApiResponse } from '../../common/response/xvi-fc-api-response';
 import { throwXviFcValidationError, xviFcSuccess } from '../../common/response/xvi-fc-response.util';
 import {
@@ -29,7 +33,14 @@ import {
   EulbValidationStatus,
 } from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
 import { Ulb, UlbDocument } from '../../../../schemas/ulb.schema';
-import { EULB_FORM_NAME, TEMPLATE_HEADERS, TEMP_QUESTIONS } from './constants/elected-urban-local-bodies.constants';
+import {
+  EULB_ACTION_DOWNLOAD_ERROR_SHEET,
+  EULB_ACTION_DOWNLOAD_TEMPLATE,
+  EULB_ACTION_VIEW_UPLOADED_DATA,
+  EULB_FORM_NAME,
+  TEMPLATE_HEADERS,
+  TEMP_QUESTIONS,
+} from './constants/elected-urban-local-bodies.constants';
 import type { SaveElectedUrbanLocalBodiesDraftDto } from './dto/save-elected-urban-local-bodies-draft.dto';
 import type { FinalSubmitElectedUrbanLocalBodiesDto } from './dto/final-submit-elected-urban-local-bodies.dto';
 import type {
@@ -67,9 +78,16 @@ export class ElectedUrbanLocalBodiesService {
   /**
    * Returns the Elected Urban Local Bodies question config for frontend rendering.
    * Reads directly from TEMP_QUESTIONS — no DB call required.
+   * The electedBodyExcelFile question receives default (no-form) supporting actions.
    */
   getQuestions(): XviFcApiResponse<HydratedFieldConfig[]> {
-    return xviFcSuccess('Elected Urban Local Bodies questions fetched.', TEMP_QUESTIONS as HydratedFieldConfig[]);
+    const questions = TEMP_QUESTIONS.map((q) => {
+      if (q.key === 'electedBodyExcelFile') {
+        return { ...q, supportingContent: this.buildElectedBodyFileSupportingContent(null) };
+      }
+      return q;
+    });
+    return xviFcSuccess('Elected Urban Local Bodies questions fetched.', questions as HydratedFieldConfig[]);
   }
 
   /**
@@ -110,7 +128,7 @@ export class ElectedUrbanLocalBodiesService {
       if (doc.electedBodyExcelFile !== undefined) savedData['electedBodyExcelFile'] = doc.electedBodyExcelFile;
     }
 
-    const questions = this.hydrateQuestions(savedData, jwtExpiresMs);
+    const questions = this.hydrateQuestions(savedData, jwtExpiresMs, doc);
     const permissions = this.buildFormPermissions(user, stateId, currentFormStatus);
     const { actors, stateName } = this.getActors(doc);
     const validationSummary = this.buildValidationSummary(doc);
@@ -177,8 +195,8 @@ export class ElectedUrbanLocalBodiesService {
   async saveDraft(
     dto: SaveElectedUrbanLocalBodiesDraftDto,
     user: AuthUser,
-    ip: string,
-    userAgent: string,
+    _ip: string,
+    _userAgent: string,
   ): Promise<XviFcApiResponse> {
     this.assertStateAccess(user, dto.stateId);
 
@@ -252,8 +270,8 @@ export class ElectedUrbanLocalBodiesService {
   async finalSubmit(
     dto: FinalSubmitElectedUrbanLocalBodiesDto,
     user: AuthUser,
-    ip: string,
-    userAgent: string,
+    _ip: string,
+    _userAgent: string,
   ): Promise<XviFcApiResponse> {
     this.assertStateAccess(user, dto.stateId);
 
@@ -372,26 +390,111 @@ export class ElectedUrbanLocalBodiesService {
   /**
    * Merges saved form data onto TEMP_QUESTIONS in one O(n) pass.
    * File-type questions have their fileUrl signed with a JWT-lifetime token.
+   * The electedBodyExcelFile question receives backend-driven supporting actions based on the form doc.
    *
    * @param savedData    - Key-value pairs extracted from the stored form document's top-level fields.
    * @param jwtExpiresMs - Token lifetime in milliseconds used when signing file URLs.
+   * @param doc          - Lean form document used to compute supporting action/badge visibility.
    */
-  private hydrateQuestions(savedData: FormData, jwtExpiresMs: number): HydratedFieldConfig[] {
+  private hydrateQuestions(
+    savedData: FormData,
+    jwtExpiresMs: number,
+    doc: EulbFormLeanDoc | null,
+  ): HydratedFieldConfig[] {
     return TEMP_QUESTIONS.map((question) => {
-      const value = Object.prototype.hasOwnProperty.call(savedData, question.key)
+      const rawValue = Object.prototype.hasOwnProperty.call(savedData, question.key)
         ? savedData[question.key]
         : question.value;
 
+      let value = rawValue;
       if (question.formFieldType === 'file') {
-        const fileVal = value as UploadedFileValue | null | undefined;
+        const fileVal = rawValue as UploadedFileValue | null | undefined;
         if (fileVal?.fileUrl) {
           const signedUrl = this.signStorageFileUrl(fileVal.fileUrl, jwtExpiresMs);
-          return { ...question, value: { ...fileVal, fileUrl: signedUrl } };
+          value = { ...fileVal, fileUrl: signedUrl };
         }
+      }
+
+      if (question.key === 'electedBodyExcelFile') {
+        return { ...question, value, supportingContent: this.buildElectedBodyFileSupportingContent(doc) };
       }
 
       return { ...question, value };
     });
+  }
+
+  /**
+   * Builds the backend-driven `actions` supporting content item for the electedBodyExcelFile question.
+   * Action and badge visibility is derived from the current form document state.
+   * When doc is null (no form record yet), only the download-template action is visible.
+   *
+   * @param doc - Lean form document; null when no record exists yet.
+   */
+  private buildElectedBodyFileSupportingContent(doc: EulbFormLeanDoc | null): FieldSupportingContent[] {
+    const activeDatasetVersion = doc?.activeDatasetVersion ?? 0;
+    const excelRowCount = doc?.excelRowCount ?? 0;
+    const errorRowCount = doc?.errorRowCount ?? 0;
+    const missingDbUlbCount = doc?.missingDbUlbCount ?? 0;
+    const validationStatus = doc?.validationStatus ?? 'NOT_VALIDATED';
+
+    const hasUploadedData = activeDatasetVersion > 0 && excelRowCount > 0;
+
+    return [
+      {
+        type: 'actions',
+        position: 'before',
+        layout: 'inline',
+        separator: 'dot',
+        description:
+          'Download the template, fill in elected body details for all listed ULBs, add any newly formed ULBs if applicable, and re-upload the completed Excel file.',
+        actions: [
+          {
+            id: EULB_ACTION_DOWNLOAD_TEMPLATE,
+            label: 'Download the template',
+            icon: 'bi bi-file-earmark-arrow-down',
+            tone: 'primary',
+            visible: true,
+          },
+          {
+            id: EULB_ACTION_VIEW_UPLOADED_DATA,
+            label: 'View uploaded data',
+            icon: 'bi bi-table',
+            tone: 'primary',
+            visible: hasUploadedData,
+          },
+          {
+            id: EULB_ACTION_DOWNLOAD_ERROR_SHEET,
+            label: 'Download error sheet',
+            icon: 'bi bi-file-earmark-excel',
+            tone: 'danger',
+            visible: errorRowCount > 0,
+          },
+        ],
+        badges: [
+          {
+            label: `Total rows: ${excelRowCount}`,
+            tone: 'secondary',
+            visible: hasUploadedData,
+          },
+          {
+            label: 'All valid',
+            icon: 'bi bi-check-circle-fill',
+            tone: 'success',
+            visible: validationStatus === 'VALID',
+          },
+          {
+            label: `${errorRowCount} error(s)`,
+            tone: 'danger',
+            visible: errorRowCount > 0,
+          },
+          {
+            label: `${missingDbUlbCount} missing ULB(s)`,
+            tone: 'warning',
+            visible: missingDbUlbCount > 0,
+          },
+        ],
+      },
+    ];
   }
 
   /**

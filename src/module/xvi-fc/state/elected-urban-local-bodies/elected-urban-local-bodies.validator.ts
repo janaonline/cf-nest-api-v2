@@ -80,6 +80,100 @@ export class ElectedUrbanLocalBodiesValidator {
     return errors;
   }
 
+  /**
+   * Validates only the editable fields submitted via a portal PATCH update.
+   * Returns structured errors so the service can throw a uniform 400 response.
+   * All fields are optional — only provided fields are validated.
+   */
+  validatePortalUpdateFields(
+    dto: { electedBodyStatus?: string; dateOfConstitution?: string; dateOfExpiry?: string; remarks?: string },
+    today: Date,
+  ): EulbRowError[] {
+    const errors: EulbRowError[] = [];
+
+    if (dto.electedBodyStatus !== undefined) {
+      if (dto.electedBodyStatus.trim() === '') {
+        errors.push({ field: 'electedBodyStatus', code: 'required', message: 'Elected body status is required.' });
+      } else if (!(ELECTED_BODY_STATUSES as readonly string[]).includes(dto.electedBodyStatus.trim())) {
+        errors.push({
+          field: 'electedBodyStatus',
+          code: 'invalid_enum',
+          message: `Elected Body Status must be one of: ${ELECTED_BODY_STATUSES.join(', ')}.`,
+          value: dto.electedBodyStatus,
+        });
+      }
+    }
+
+    if (dto.dateOfConstitution !== undefined) {
+      const doc = this.parseDate(dto.dateOfConstitution);
+      if (!doc) {
+        errors.push({
+          field: 'dateOfConstitution',
+          code: 'invalidDate',
+          message: 'Date of constitution must be a valid date.',
+          value: dto.dateOfConstitution,
+        });
+      } else {
+        const docNorm = this.normalizeDate(doc);
+        if (docNorm < this.normalizeDate(DATE_OF_CONSTITUTION_MIN)) {
+          errors.push({
+            field: 'dateOfConstitution',
+            code: 'minDate',
+            message: 'Date of constitution cannot be before 31 May 2021.',
+            value: doc.toISOString(),
+          });
+        } else if (docNorm > this.normalizeDate(today)) {
+          errors.push({
+            field: 'dateOfConstitution',
+            code: 'maxDate',
+            message: 'Date of constitution cannot be in the future.',
+            value: doc.toISOString(),
+          });
+        }
+      }
+    }
+
+    if (dto.dateOfExpiry !== undefined) {
+      const doe = this.parseDate(dto.dateOfExpiry);
+      if (!doe) {
+        errors.push({
+          field: 'dateOfExpiry',
+          code: 'invalidDate',
+          message: 'Date of expiry must be a valid date.',
+          value: dto.dateOfExpiry,
+        });
+      } else {
+        const doeNorm = this.normalizeDate(doe);
+        if (doeNorm < this.normalizeDate(today)) {
+          errors.push({
+            field: 'dateOfExpiry',
+            code: 'minDate',
+            message: 'Date of expiry cannot be in the past.',
+            value: doe.toISOString(),
+          });
+        } else if (doeNorm > this.normalizeDate(DATE_OF_EXPIRY_MAX)) {
+          errors.push({
+            field: 'dateOfExpiry',
+            code: 'maxDate',
+            message: 'Date of expiry cannot be after 31 March 2030.',
+            value: doe.toISOString(),
+          });
+        }
+      }
+    }
+
+    if (dto.remarks !== undefined && dto.remarks.trim().length > 250) {
+      errors.push({
+        field: 'remarks',
+        code: 'maxlength',
+        message: 'Remarks must not exceed 250 characters.',
+        value: dto.remarks,
+      });
+    }
+
+    return errors;
+  }
+
   /** Re-validates a single row after a portal update. Delegates to the appropriate validator based on rowType. */
   revalidateRow(
     row: ParsedExcelRow & { rowType: 'DB_ULB' | 'EXTRA_ULB' },

@@ -101,16 +101,28 @@ export class ElectedUrbanLocalBodiesRowService {
       throw new NotFoundException('Row not found in the active dataset.');
     }
 
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // Validate submitted editable fields before applying — produce uniform 400 with errors[]
+    const dtoErrors = this.eulbValidator.validatePortalUpdateFields(dto, today);
+    if (dtoErrors.length > 0) {
+      const errors = dtoErrors.map((e) => ({
+        rowId: String(row._id),
+        rowNumber: row.rowNumber,
+        censusCode: row.censusCode,
+        ulbName: row.ulbName,
+        ...e,
+      }));
+      throw new BadRequestException({ message: 'Row validation failed.', errors });
+    }
+
     // Build update applying only editable fields
     const updateFields: Record<string, unknown> = { updatedBy: userOid, lastUpdatedSource: 'PORTAL' };
     if (dto.electedBodyStatus !== undefined) updateFields['electedBodyStatus'] = dto.electedBodyStatus;
     if (dto.dateOfConstitution !== undefined) updateFields['dateOfConstitution'] = new Date(dto.dateOfConstitution);
     if (dto.dateOfExpiry !== undefined) updateFields['dateOfExpiry'] = new Date(dto.dateOfExpiry);
     if (dto.remarks !== undefined) updateFields['remarks'] = dto.remarks;
-
-    // Revalidate the row with the merged data
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
 
     const mergedRow = {
       censusCode: row.censusCode,
