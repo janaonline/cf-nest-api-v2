@@ -12,6 +12,7 @@ import { XviFcSideMenu, XviFcSideMenuSchema } from '../../schemas/xvi-fc/xvi-fc-
 import { XviFcCacheService } from './cache/xvi-fc-cache.service';
 import { XviFcCacheInterceptor } from './cache/xvi-fc-cache.interceptor';
 import { SideMenuModule } from './side-menu/side-menu.module';
+import { FormJsonModule } from '../../form-json/form-json.module';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { SideMenuModule } from './side-menu/side-menu.module';
     AnnualAccountsModule,
     SfcStatusModule,
     SideMenuModule,
+    FormJsonModule,
   ],
   controllers: [XviFcController],
   providers: [XviFcService, XviFcCacheService, XviFcCacheInterceptor],

@@ -16,11 +16,13 @@ import { AnnualAccountsService } from './annual_accounts.service';
 import { AnnualAccountOcrApiService } from './annual-account-ocr-api.service';
 import { AnnualAccountOcrProcessor } from './annual-account-ocr.processor';
 import { AnnualAccountStatusSyncService } from './annual-account-status-sync.service';
+import { FormJsonModule } from '../../../../form-json/form-json.module';
 
 @Module({
   imports: [
     HttpModule,
     S3Module,
+    FormJsonModule,
     BullModule.registerQueue({ name: ANNUAL_ACCOUNT_PROCESSING_QUEUE }),
     MongooseModule.forFeature([
       { name: XviFcAnnualAccount.name, schema: XviFcAnnualAccountSchema },
