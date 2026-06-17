@@ -184,11 +184,12 @@ Known note:
   - Final submit only — never behaves like draft save.
   - Supports **one-shot submit**: a draft does not need to exist; the record is created if absent.
   - Runs full validation: all visible required fields must be present; `requiredTrue` must be satisfied.
-  - Persists sanitized visible-field payload and transitions status to `SUBMISSION_ACKNOWLEDGED_BY_MOHUA`.
+  - Persists sanitized visible-field payload and transitions status to `UNDER_REVIEW_BY_MOHUA`.
   - Records `submittedBy` and `submittedAt`.
   - Status gate: `assertCanStateFinalSubmitForm` — blocked unless `NOT_STARTED`, `IN_PROGRESS`, or `RETURNED_BY_MOHUA`.
   - History action: `FINAL_SUBMIT`.
   - STATE users can submit only their own state. ADMIN can submit any state.
+  - **Note:** `SUBMISSION_ACKNOWLEDGED_BY_MOHUA` is reserved for a future MoHUA acknowledge/approval action — it is never set by state final submit.
 
 ---
 
@@ -216,7 +217,7 @@ Known note:
     formType: 'STATE_FORM',
     stateId: string,
     yearId: string,
-    currentFormStatus: number, // 1 = Not Started, 2 = In Progress, 7 = Acknowledged by MoHUA
+    currentFormStatus: number, // 1 = Not Started, 2 = In Progress, 5 = Under Review by MoHUA
     currentFormStatusLabel: string,
     questions: HydratedFieldConfig[],  // FormFieldConfig with guaranteed `value`
     permissions: {
@@ -247,7 +248,7 @@ Known note:
 | STATE_VIEWER | true    | false   | false          |
 | ADMIN        | true    | true    | true           |
 
-**When status is NOT editable (e.g. SUBMISSION_ACKNOWLEDGED_BY_MOHUA):**
+**When status is NOT editable (e.g. UNDER_REVIEW_BY_MOHUA, SUBMISSION_ACKNOWLEDGED_BY_MOHUA):**
 
 | Role         | canView | canEdit | canFinalSubmit |
 |--------------|---------|---------|----------------|
@@ -279,7 +280,7 @@ Source: `buildFormPermissions` in `sfc-status.service.ts`, using `canStateEditFo
 - Unique index: `{ state: 1, year: 1, formType: 1 }`
 - Stores only the **current/latest** form state — no embedded history.
 - Status values use shared `FORM_STATUS` from `src/common/constants/form-status.constants.ts`:
-  - `1 = NOT_STARTED`, `2 = IN_PROGRESS`, `7 = SUBMISSION_ACKNOWLEDGED_BY_MOHUA` (final submit)
+  - `1 = NOT_STARTED`, `2 = IN_PROGRESS`, `5 = UNDER_REVIEW_BY_MOHUA` (state final submit), `7 = SUBMISSION_ACKNOWLEDGED_BY_MOHUA` (MoHUA acknowledge — not yet implemented)
 - `data` field: `Mixed` (flexible form data object)
 - `formType` is immutable; always `'SFC_STATUS'`
 - Local `SfcFormStatus` enum and `SFC_STATUS_LABELS` have been removed; use `FORM_STATUS` and `getFormStatusLabel()` throughout
@@ -323,7 +324,7 @@ Both save-draft and final-submit evaluate **visible fields only** — hidden fie
 - Missing or non-true `requiredTrue` fields produce errors.
 - All format validators run as usual.
 - Rejects with `400 Validation failed` if any error is found.
-- Persists sanitized visible payload and transitions status to `SUBMISSION_ACKNOWLEDGED_BY_MOHUA`.
+- Persists sanitized visible payload and transitions status to `UNDER_REVIEW_BY_MOHUA`.
 - Supports one-shot submit: creates the form record if none exists (no prior draft required).
 
 ### Required fields (final submit)
@@ -724,7 +725,7 @@ Before every code push involving XVI-FC backend changes:
 **Status mapping change**:
 - `NOT_STARTED`: `1` → no change
 - `IN_PROGRESS`: `2` → no change
-- Final submit: was `SfcFormStatus.FINAL_SUBMITTED = 6`, now `FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA = 7`
+- Final submit: was `SfcFormStatus.FINAL_SUBMITTED = 6`, then `FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA = 7` (v4), now corrected to `FORM_STATUS.UNDER_REVIEW_BY_MOHUA = 5` (v9)
 
 **Note**: Existing documents in `xvi_fc_sfc_status_forms` with `currentFormStatus = 6` will display as `'Returned by MoHUA'` (the shared label for 6) rather than `'Acknowledged by MoHUA'`. A one-time migration updating those documents from 6 → 7 is required before deploying to any environment with existing submissions.
 
@@ -744,7 +745,7 @@ Before every code push involving XVI-FC backend changes:
 **Key behaviours**:
 - `saveDraft` (new record): creates form doc → inserts `CREATE_DRAFT` history entry.
 - `saveDraft` (existing record): updates form doc → inserts `UPDATE_DRAFT` history entry with `fromStatus = existing.currentFormStatus`.
-- `finalSubmit`: updates form doc to `SUBMISSION_ACKNOWLEDGED_BY_MOHUA` → inserts `FINAL_SUBMIT` history entry.
+- `finalSubmit`: updates form doc to `UNDER_REVIEW_BY_MOHUA` → inserts `FINAL_SUBMIT` history entry.
 - API response shapes are unchanged — history is internal only.
 - History insert is not wrapped in a transaction; a failed insert does not roll back the main status update.
 
@@ -849,3 +850,20 @@ curl -H "Authorization: Bearer <token>" \
 - All `getForm`, `saveDraft`, and `finalSubmit` calls benefit from the 1-hour Redis cache.
 - `getQuestions` and `dumpToExcel` (no yearId context) use `findByType('SFC')` — direct DB query, not cached.
 - Cache miss path: `{ design_year: ObjectId, formId: 22, isActive: true }` — hits the compound `{design_year, formId}` unique index.
+
+---
+
+### SFC Status — Correct Final-Submit Transition Status (State Form v9)
+
+**Modified files**:
+- `src/module/xvi-fc/state/sfc-status/sfc-status.service.ts`
+  - `finalSubmit()` — `toStatus` changed from `FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA` (7) to `FORM_STATUS.UNDER_REVIEW_BY_MOHUA` (5).
+
+**Workflow rule**:
+- STATE final-submit → `UNDER_REVIEW_BY_MOHUA` (5). Form is now with MoHUA for review.
+- `SUBMISSION_ACKNOWLEDGED_BY_MOHUA` (7) is reserved for a future MoHUA acknowledge/approval action; it is never set by a state user.
+
+**No changes needed to**:
+- Status-gate helpers (`canStateFinalSubmitForm`, `assertCanStateFinalSubmitForm`) — `UNDER_REVIEW_BY_MOHUA` is already outside `STATE_EDITABLE_STATUSES`, so a submitted form is correctly blocked from re-editing by the STATE.
+- `isTerminalStatus()` — remains tied to `SUBMISSION_ACKNOWLEDGED_BY_MOHUA`; `UNDER_REVIEW_BY_MOHUA` is not terminal (MoHUA can return it).
+- Permission logic in `buildFormPermissions` — `canEdit`/`canFinalSubmit` are `false` for `UNDER_REVIEW_BY_MOHUA` because it is not in `STATE_EDITABLE_STATUSES`.
