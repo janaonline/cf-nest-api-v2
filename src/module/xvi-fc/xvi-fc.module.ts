@@ -8,6 +8,10 @@ import { GrantAllocation, GrantAllocationSchema } from '../../schemas/xvi-fc/gra
 import { State, StateSchema } from '../../schemas/state.schema';
 import { Year, YearSchema } from '../../schemas/year.schema';
 import { Ulb, UlbSchema } from '../../schemas/ulb.schema';
+import { XviFcSideMenu, XviFcSideMenuSchema } from '../../schemas/xvi-fc/xvi-fc-side-menu.schema';
+import { XviFcCacheService } from './cache/xvi-fc-cache.service';
+import { XviFcCacheInterceptor } from './cache/xvi-fc-cache.interceptor';
+import { SideMenuModule } from './side-menu/side-menu.module';
 
 @Module({
   imports: [
@@ -16,11 +20,14 @@ import { Ulb, UlbSchema } from '../../schemas/ulb.schema';
       { name: State.name, schema: StateSchema },
       { name: Year.name, schema: YearSchema },
       { name: Ulb.name, schema: UlbSchema },
+      { name: XviFcSideMenu.name, schema: XviFcSideMenuSchema },
     ]),
     AnnualAccountsModule,
     SfcStatusModule,
+    SideMenuModule,
   ],
   controllers: [XviFcController],
-  providers: [XviFcService],
+  providers: [XviFcService, XviFcCacheService, XviFcCacheInterceptor],
+  exports: [XviFcCacheService, XviFcCacheInterceptor],
 })
 export class XviFcModule {}
