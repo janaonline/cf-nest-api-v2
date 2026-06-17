@@ -6,16 +6,24 @@ export interface SfcFormPermissions {
   canFinalSubmit: boolean;
 }
 
+export interface SfcFormActor {
+  action: 'Created by' | 'Updated by' | 'Submitted by';
+  by: string | null;
+  date: string | null;
+}
+
 export interface SfcFormGetResponseData {
   _id: string | null;
   formName: string;
   formId: number;
+  stateName: string;
   stateId: string;
   yearId: string;
   currentFormStatus: number;
   currentFormStatusLabel: string;
   questions: HydratedFieldConfig[];
   permissions: SfcFormPermissions;
+  actors: SfcFormActor[];
   instructions: unknown[];
   meta: { version: number };
 }
