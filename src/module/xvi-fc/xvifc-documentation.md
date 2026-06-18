@@ -35,9 +35,14 @@
 - Nested sub-modules:
   - `ulb/annual_accounts` — ULB annual account upload/read.
   - `state/sfc-status` — State SFC Status form CRUD + final submit.
+  - `side-menu/` — Admin CRUD for side menu items (DB-driven).
+- Cache layer:
+  - `cache/xvi-fc-cache.service.ts` — Redis get/set/delete/deleteByPattern wrapper.
+  - `cache/xvi-fc-cache.interceptor.ts` — HTTP response cache interceptor; TTL set via `@XviFcCacheTTL()` decorator.
 - Shared schemas:
   - Located outside module under `src/schemas/xvi-fc/`.
   - State form schemas under `src/schemas/xvi-fc/state/`.
+  - `src/schemas/xvi-fc/xvi-fc-side-menu.schema.ts` — side menu items schema.
 - Auth/RBAC:
   - No local guards/decorators inside `xvi-fc`.
   - Auth primitives imported from `src/module/auth`.
@@ -116,10 +121,13 @@ Known note:
   - Returns state-wise data.
   - Has state-scope restriction in service.
 
-- `GET /xvi-fc/sidebar/:role`
+- `GET /xvi-fc/sidebar/:role?yearId=<id>`
   - Permission: `VIEW_STATUS_REPORTS`
-  - Returns role-specific sidebar menu.
-  - Uses menu role, not direct JWT role.
+  - Query param `yearId` (required) — ObjectId of the year.
+  - Returns role-specific sidebar menu fetched from MongoDB (`xvifc_side_menus` collection, `isActive: true`).
+  - Response cached in Redis for 600 s (key: `xvifc:cache:/xvi-fc/sidebar/<role>?yearId=<id>`).
+  - Cache is invalidated automatically on any write to the side-menu collection for that role+year.
+  - Uses `MenuRole` type (`ULB | STATE | MOHUA | DOE | ADMIN`) defined in the schema.
 
 - `GET /xvi-fc/years`
   - Permission: `VIEW_STATUS_REPORTS`
@@ -137,17 +145,62 @@ Known note:
   - Permission: `VIEW_STATUS_REPORTS`
   - Returns next support-hour slots.
 
+### Side Menu Admin APIs (`/xvi-fc/side-menu`)
+
+All require `MANAGE_USERS` permission. Swagger tag: `XVI-FC Side Menu (Admin)`.
+
+- `GET /xvi-fc/side-menu` — list all items; optional query `role`, `yearId`, `includeInactive`.
+- `GET /xvi-fc/side-menu/:id` — get one item by MongoDB `_id`.
+- `POST /xvi-fc/side-menu` — create a single item.
+- `POST /xvi-fc/side-menu/bulk` — create one or many items in one call; body is a raw JSON array.
+- `PATCH /xvi-fc/side-menu/:id` — update any field (partial `UpdateSideMenuDto`).
+- `PATCH /xvi-fc/side-menu/:id/toggle` — flip `isActive` true↔false.
+- `DELETE /xvi-fc/side-menu/:id` — delete one item.
+
+All write operations (create/bulk-create/update/toggle/delete) invalidate the Redis cache for the affected `role+year` pair.
+
+- `DELETE /xvi-fc/admin/cache?pattern=<url-pattern>`
+  - Permission: `MANAGE_USERS`, ADMIN scope only.
+  - Clears Redis cache matching the URL pattern (SCAN-based, non-blocking).
+  - Omit `pattern` to clear all `xvifc:cache:*` keys.
+
 ### Annual Account APIs
 
-- `POST /xvi-fc/annual-account`
+- `GET /xvi-fc/annual-account/upload-config/:type?yearId=<designYearId>`
   - Permission: `UPLOAD_DOCUMENTS`
-  - Saves/upserts annual account data.
-  - Supports document version tracking.
+  - `type`: `audited` (formId 30) or `provisional` (formId 31).
+  - `yearId`: ObjectId of the XVI-FC design year (e.g. 2026-27).
+  - Returns `{ meta, data[] }` from the active `formjsons` document for that year and formId.
+  - `meta` contains: `uploadType`, `description`, `confirmLabel`, `documentYearId`, `documentYear`.
+  - `data[]` is an array of `FieldConfig` file fields (one per upload document).
+  - **Must be declared before `GET /:id`** in the controller to avoid NestJS matching "audited"/"provisional" as ObjectIds.
 
-- `GET /xvi-fc/annual-account/:ulbId/:yearId`
+- `POST /xvi-fc/annual-account/upload`
   - Permission: `UPLOAD_DOCUMENTS`
-  - Returns annual account data.
-  - Populates user references.
+  - Uploads a single PDF document (multipart); upserts the document slot in the annual account.
+
+- `GET /xvi-fc/annual-account/by-ulb/:ulbId/:designYearId`
+  - Permission: `UPLOAD_DOCUMENTS`
+  - Returns current annual account status for a ULB + design year.
+
+- `POST /xvi-fc/annual-account/:id/submit`
+  - Permission: `UPLOAD_DOCUMENTS`
+  - Body: `{ section: 'auditedData' | 'unauditedData' }`.
+  - Validates that all docIds in the **active formjson config** for this section have `processingStatus === 'PASSED'`.
+  - DocIds present in the annual account but absent from the current formjson config are ignored (handles temporarily hidden documents).
+  - Sets `form_status → UNDER_REVIEW_BY_STATE`.
+
+- `GET /xvi-fc/annual-account/:id/status`
+  - Permission: `UPLOAD_DOCUMENTS`
+  - Polling endpoint for OCR processing status.
+
+- `POST /xvi-fc/annual-account/:id/documents/:uploadId/retry`
+  - Permission: `UPLOAD_DOCUMENTS`
+  - Retries OCR for a FAILED upload.
+
+- `GET /xvi-fc/annual-account/:id/documents/:uploadId/signed-url`
+  - Permission: `UPLOAD_DOCUMENTS`
+  - Returns a pre-signed S3 URL for file preview.
 
 ### SFC Status APIs
 
@@ -902,6 +955,105 @@ curl -H "Authorization: Bearer <token>" \
 - All `getForm`, `saveDraft`, and `finalSubmit` calls benefit from the 1-hour Redis cache.
 - `getQuestions` and `dumpToExcel` (no yearId context) use `findByType('SFC')` — direct DB query, not cached.
 - Cache miss path: `{ design_year: ObjectId, formId: 22, isActive: true }` — hits the compound `{design_year, formId}` unique index.
+
+---
+
+### Side Menu — DB-driven with Redis Cache + Admin CRUD
+
+**Context**: Sidebar menu was previously hardcoded in `src/module/xvi-fc/config/side-menu.config.ts`. Migrated to MongoDB so product team can manage items per year and role without code deploys.
+
+**New schema** (`src/schemas/xvi-fc/xvi-fc-side-menu.schema.ts`):
+
+- Collection: `xvifc_side_menus`
+- Fields: `module`, `role`, `year` (ObjectId ref → Year), `isActive`, `section` (`top|bottom`), `sequence`, `type` (`header|separator|item|group`), `label`, `icon`, `featureKey`, `routerLink`, `parentId` (ObjectId ref → self, null for top-level)
+- Indexes: `{ module, role, year, isActive }`, `{ parentId }`
+- Exports `MenuRole` type (`ULB | STATE | MOHUA | DOE | ADMIN`)
+
+**New cache layer** (`src/module/xvi-fc/cache/`):
+
+- `xvi-fc-cache.service.ts` — Redis wrapper: `get`, `set`, `delete`, `deleteByPattern` (SCAN-based, non-blocking). Key prefix: `xvifc:cache`.
+- `xvi-fc-cache.interceptor.ts` — `NestInterceptor` that caches full HTTP response in Redis. Per-route TTL via `@XviFcCacheTTL(seconds)` decorator (default 600 s). Cache key = `xvifc:cache:<request.url>`.
+- `XVIFC_CACHE_KEY_PREFIX` defined in `xvi-fc-cache.service.ts` and re-exported from the interceptor.
+
+**New sub-module** (`src/module/xvi-fc/side-menu/`):
+
+- `side-menu.module.ts`, `side-menu.controller.ts`, `side-menu.service.ts`
+- DTOs: `CreateSideMenuDto`, `UpdateSideMenuDto` (PartialType), `QuerySideMenuDto`
+- All routes require `MANAGE_USERS` permission
+- Routes: GET `/`, GET `/:id`, POST `/`, POST `/bulk`, PATCH `/:id`, PATCH `/:id/toggle`, DELETE `/:id`
+- `bulkCreate` uses `insertMany` and invalidates cache once per unique `role+year` pair in the batch
+
+**Modified files**:
+
+- `src/module/xvi-fc/xvi-fc.service.ts` — `getSideMenu()` now queries DB instead of returning hardcoded config; `clearCache()` added; `XviFcCacheService` injected
+- `src/module/xvi-fc/xvi-fc.controller.ts` — `GET /sidebar/:role` now uses `@UseInterceptors(XviFcCacheInterceptor)` + `@XviFcCacheTTL(600)`; `DELETE /admin/cache` added (ADMIN scope, MANAGE_USERS permission)
+- `src/module/xvi-fc/xvi-fc.module.ts` — imports `SideMenuModule`; registers `XviFcSideMenu` schema; provides `XviFcCacheService`, `XviFcCacheInterceptor`
+
+**Removed**:
+
+- `src/module/xvi-fc/config/side-menu.config.ts` — dead `SIDE_MENU_CONFIG` hardcoded object removed; `MenuRole` type moved to schema file
+- `scripts/seed-xvi-fc-side-menu.ts` — one-time seed script (already executed for 2026-27); removed post-run
+- `package.json` `seed:xvi-fc-side-menu` script removed
+
+**Tree building** (`buildMenuTree` / `buildSection` in `xvi-fc.service.ts`):
+
+- Flat DB docs → `{ topModel, bottomModel }` nested structure
+- Top-level items: `parentId === null`; children matched by `c.parentId.toString() === doc._id.toString()`
+- `separator` type → `{ label: '_', separator: true }` (no other fields)
+- `group` type → item with `items[]` populated from children sorted by `sequence`
+
+**Cache invalidation**:
+
+- On any write (create/bulk/update/toggle/delete): `cache.delete('xvifc:cache:/xvi-fc/sidebar/<role>?yearId=<yearId>')`
+- Admin manual clear: `DELETE /xvi-fc/admin/cache?pattern=<url-pattern>` (uses `deleteByPattern` SCAN loop)
+
+**Data seeded**: 35 documents inserted for year 2026-27 (`yearId: 67d7d136d3d038946a5239e9`) covering roles ULB, STATE, MOHUA, DOE, ADMIN.
+
+### Annual Account — Dynamic Upload Config + Submit Fix
+
+**Context**: Upload document configs (which documents to upload per section, with validation rules) were previously hardcoded in the Angular frontend. Migrated to MongoDB via the existing `form_json` collection so configs can be managed per design year without code deploys.
+
+**New data in `formjsons` collection**:
+
+- `formId: 30` (`UPLOAD_CONFIG_AUDITED`) — 6 file fields for audited section (design_year 2026-27, `documentYear: 2023-24`).
+- `formId: 31` (`UPLOAD_CONFIG_PROVISIONAL`) — 5 file fields for provisional section (design_year 2026-27, `documentYear: 2024-25`).
+- Each field is a `FieldConfig` with `formFieldType: 'file'`, `allowedFileTypes`, `maxFileSize`, and `validations[]`.
+- `auditors-report` field carries an extra validator: `{ name: 'minPages', validator: 2, message: '...' }`.
+- `receipts-payments` was seeded initially but subsequently removed from both configs via `$pull` (temporarily hidden on frontend; excluded from submit validation).
+- **Redis cache keys** `formJson:<designYearId>:30` and `formJson:<designYearId>:31` must be manually flushed after any direct MongoDB update that bypasses the service layer (service layer handles cache invalidation automatically on `create`/`update`/`remove`).
+
+**Modified files**:
+
+- `src/module/xvi-fc/ulb/annual_accounts/annual_accounts.module.ts`
+  - `FormJsonModule` added to `imports`.
+- `src/module/xvi-fc/ulb/annual_accounts/annual_accounts.service.ts`
+  - `FormJsonService` injected via constructor.
+  - `getUploadConfig(type, yearId)` — resolves `formId` from `type` (`audited → 30`, `provisional → 31`); calls `formJsonService.findActiveByDesignYearAndFormId`; returns `{ meta, data }`.
+  - `submitSection()` — now fetches the active formjson config before validating; only checks `processingStatus === 'PASSED'` for `docId`s present in `formJson.data[].key`. Documents in the annual account that are absent from the current config (e.g. previously uploaded then hidden fields) are silently skipped. Falls back to checking all uploaded docs if formjson lookup fails.
+- `src/module/xvi-fc/ulb/annual_accounts/annual_accounts.controller.ts`
+  - `GET upload-config/:type` added **before** `GET :id` to prevent NestJS matching `"audited"` / `"provisional"` as MongoDB ObjectIds.
+  - `@Query('yearId')` extracts the design year.
+
+**New route**:
+
+- `GET /xvi-fc/annual-account/upload-config/:type?yearId=<designYearId>` — see Route Summary above.
+
+**Submit validation change** (key behaviour):
+
+- Before: `sectionData.documents.every(d => d.processingStatus === 'PASSED')` — checked every document ever uploaded into the section, including ones removed from the active config.
+- After: filters `sectionData.documents` to only those whose `docId` is in the current `formjson.data[].key` list, then runs `every(d => d.processingStatus === 'PASSED')` on the filtered set.
+
+**Frontend changes** (Angular — `cityfinance-ng-ui-v2`):
+
+- `upload-documents.service.ts` (new) — fetches `GET upload-config/:type` and maps `FieldConfig[]` to `UploadDocumentDef[]`; extracts `minPages` from `validations[]`.
+- `upload-documents.component.ts` — all config now loaded from API via signals; `config`, `documents`, `totalCount`, `allPassed`, `progressPct` are signals/computed; `loadConfig()` → `loadExistingData()` chain; route data key changed from `{ config: UPLOAD_CONFIGS.audited }` to `{ uploadType: 'audited' }`.
+- `receipts-payments` filtered out in `mapToConfig()` in the service (frontend-only; DB retains the field but it is also removed from `data[]` in both formjsons).
+- `PageErrorStateComponent` (new, `shared/page-error-state/`) — reusable full-screen error state with `title`, `message`, `retryLabel` inputs and `(retry)` output. Wired into `upload-documents`, `overview`, `support-hours`, and `roles-teams-overview` components replacing inline alert banners.
+
+**Follow-ups**:
+
+- Annual account scope enforcement (ULB/STATE) still pending (see Known Gaps).
+- `receipts-payments` removal from frontend is temporary; re-enable by removing the `.filter()` in `mapToConfig()` and re-adding the field to `formjsons.data[]`.
 
 ---
 

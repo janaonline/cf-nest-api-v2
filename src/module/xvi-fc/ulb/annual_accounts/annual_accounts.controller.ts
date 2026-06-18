@@ -1,6 +1,6 @@
-import { Body, Controller, Get, Param, Post, Req, UploadedFile, UseInterceptors, HttpCode } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, Param, Post, Query, Req, UploadedFile, UseInterceptors, HttpCode } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { ApiBearerAuth } from '@nestjs/swagger/dist/decorators';
+import { ApiBearerAuth, ApiOperation } from '@nestjs/swagger/dist/decorators';
 import type { Request } from 'express';
 import { CurrentUser } from 'src/module/auth/decorators/current-user.decorator';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
@@ -30,6 +30,15 @@ export class AnnualAccountsController {
       (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ?? req.socket?.remoteAddress ?? null;
     const userAgent = (req.headers['user-agent'] as string) ?? null;
     return this.annualAccountsService.uploadDocument(file, dto, user, ipAddress, userAgent);
+  }
+
+  @Get('upload-config/:type')
+  @ApiOperation({ summary: 'Get document upload config (audited or provisional) for a given design year' })
+  getUploadConfig(
+    @Param('type') type: string,
+    @Query('yearId') yearId: string,
+  ) {
+    return this.annualAccountsService.getUploadConfig(type as 'audited' | 'provisional', yearId);
   }
 
   @Get('form-status/:ulbId/:designYearId')
@@ -87,5 +96,20 @@ export class AnnualAccountsController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.annualAccountsService.retryUpload(id, uploadId, user);
+  }
+
+  @Delete(':id/documents/:docId')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Remove a document from an annual account section (clears currentUpload and resets status)' })
+  removeDocument(
+    @Param('id', ParseObjectIdPipe) id: string,
+    @Param('docId') docId: string,
+    @Query('section') section: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    if (section !== 'auditedData' && section !== 'unauditedData') {
+      throw new BadRequestException('section must be "auditedData" or "unauditedData"');
+    }
+    return this.annualAccountsService.removeDocument(id, section, docId, user);
   }
 }

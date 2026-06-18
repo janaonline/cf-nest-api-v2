@@ -124,6 +124,14 @@ export class FormJsonService {
   }
 
   /**
+   * Deletes the Redis cache entry for a specific formJson by designYearId + formId.
+   * Useful for admin cache-clear endpoints.
+   */
+  async clearCache(designYearId: string, formId: number): Promise<void> {
+    await this.redis.del(this.getFormJsonCacheKey(designYearId, formId));
+  }
+
+  /**
    * Sets isActive=false without deleting the document. Throws 404 when absent.
    * Returns the pre-update document from MongoDB (no extra query) to derive the cache key
    * and delete it immediately after the soft-delete.
