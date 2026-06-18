@@ -12,6 +12,7 @@ import { Permission, Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.e
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
 import { UpdateProfileContactsDto } from './dto/update-profile-contacts.dto';
 import { ListUsersQueryDto } from './dto/list-users-query.dto';
+import { ListTeamMembersQueryDto } from './dto/list-team-members-query.dto';
 import { CreateManagedUserDto } from './dto/create-managed-user.dto';
 import { UpdatePermissionOverridesDto } from './dto/update-permission-overrides.dto';
 import { AuthUser } from 'src/module/auth/auth-user.interface';
@@ -572,6 +573,103 @@ export class UsersService {
       ...(ulbDetails && { ulbDetails }),
       ...(stateDetails && { stateDetails }),
       data: result,
+    };
+  }
+
+  /**
+   * Lists real user accounts for the team management view.
+   * Never returns legacy embedded contacts — only actual user documents.
+   *
+   * ULB scope  → all roles belonging to that ULB (ULB, ULB-EDITOR, ULB-VIEWER)
+   * State scope → only STATE / STATE_EDITOR / STATE_VIEWER to avoid returning
+   *               the 100+ ULB users that also carry the same state reference.
+   *
+   * Scope enforcement is delegated to buildScopedQuery — same rules as listUsers.
+   */
+  async listTeamMembers(
+    query: ListTeamMembersQueryDto,
+    requester: AuthUser,
+  ): Promise<{
+    ulbDetails?: Record<string, unknown>;
+    stateDetails?: Record<string, unknown>;
+    data: Record<string, unknown>[];
+  }> {
+    // Reuse the existing scope-enforcement helper — handles ADMIN passthrough,
+    // ULB↔STATE cross-scope blocks, mismatched IDs, both params together, null scope.
+    const scoped = buildScopedQuery(requester, { ulbId: query.ulbId, stateId: query.stateId });
+
+    if (!scoped.ulbId && !scoped.stateId) {
+      throw new BadRequestException('Provide either ulbId or stateId');
+    }
+
+    if (scoped.ulbId && !Types.ObjectId.isValid(scoped.ulbId)) {
+      throw new BadRequestException('Invalid ulbId');
+    }
+
+    if (scoped.stateId && !Types.ObjectId.isValid(scoped.stateId)) {
+      throw new BadRequestException('Invalid stateId');
+    }
+
+    const filter: FilterQuery<User> = { isDeleted: false };
+
+    let ulbDetails: Record<string, unknown> | undefined;
+    let stateDetails: Record<string, unknown> | undefined;
+
+    if (scoped.ulbId) {
+      filter.ulb = new Types.ObjectId(scoped.ulbId);
+
+      const ulb = await this.ulbModel
+        .findById(scoped.ulbId)
+        .populate<{ state: { name: string } }>('state', 'name')
+        .lean()
+        .exec();
+
+      if (ulb) {
+        ulbDetails = { name: ulb.name, code: ulb.code ?? '', stateName: ulb.state?.name ?? '' };
+      }
+    } else {
+      // Role filter is mandatory for state scope — prevents returning 100+ ULB users
+      // that also store the same stateId on their documents.
+      filter.state = new Types.ObjectId(scoped.stateId);
+      filter.role = { $in: [Role.STATE, Role.STATE_EDITOR, Role.STATE_VIEWER] };
+
+      const state = await this.stateModel.findById(scoped.stateId).select('name code').lean().exec();
+      if (state) {
+        stateDetails = { name: state.name, code: state.code ?? '' };
+      }
+    }
+
+    const users = await this.userModel
+      .find(filter)
+      .select('name designation email mobile role status isActive isXVIFCProfileVerified lastLoginAt')
+      .lean()
+      .exec();
+
+    const roleOrder: Record<string, number> = { submitter: 0, editor: 1, viewer: 2 };
+
+    const data = users
+      .map((u) => ({
+        _id: u._id.toString(),
+        name: u.name?.trim() || '',
+        designation: u.designation?.trim() || '',
+        email: u.email?.trim() || '',
+        mobile: (u.mobile ?? '').trim(),
+        role: this.mapRole(u.role),
+        status: u.status ?? '',
+        isActive: u.isActive ?? false,
+        isXVIFCProfileVerified: u.isXVIFCProfileVerified ?? false,
+        lastLoginAt: u.lastLoginAt ?? null,
+      }))
+      .sort((a, b) => {
+        const roleDiff = (roleOrder[a.role] ?? 9) - (roleOrder[b.role] ?? 9);
+        if (roleDiff !== 0) return roleDiff;
+        return a.name.localeCompare(b.name);
+      });
+
+    return {
+      ...(ulbDetails && { ulbDetails }),
+      ...(stateDetails && { stateDetails }),
+      data,
     };
   }
 
