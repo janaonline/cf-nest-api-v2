@@ -73,9 +73,10 @@ export class ElectedUrbanLocalBodiesService {
    * The electedBodyExcelFile question receives default (no-form) supporting actions.
    */
   getQuestions(): XviFcApiResponse<HydratedFieldConfig[]> {
+    const noPermissions: EulbFormPermissions = { canView: false, canEdit: false, canFinalSubmit: false };
     const questions = TEMP_QUESTIONS.map((q) => {
       if (q.key === 'electedBodyExcelFile') {
-        return { ...q, supportingContent: this.buildElectedBodyFileSupportingContent(null, false) };
+        return { ...q, supportingContent: this.buildElectedBodyFileSupportingContent(null, noPermissions) };
       }
       return q;
     });
@@ -121,7 +122,7 @@ export class ElectedUrbanLocalBodiesService {
     }
 
     const permissions = this.buildFormPermissions(user, stateId, currentFormStatus);
-    const questions = this.hydrateQuestions(savedData, jwtExpiresMs, doc, permissions.canEdit);
+    const questions = this.hydrateQuestions(savedData, jwtExpiresMs, doc, permissions);
     const { actors, stateName } = this.xvifcFormActorsService.buildActorsAndStateName(doc);
     const validationSummary = this.buildValidationSummary(doc);
 
@@ -371,7 +372,7 @@ export class ElectedUrbanLocalBodiesService {
     savedData: FormData,
     jwtExpiresMs: number,
     doc: EulbFormLeanDoc | null,
-    canEdit: boolean,
+    permissions: EulbFormPermissions,
   ): HydratedFieldConfig[] {
     return TEMP_QUESTIONS.map((question) => {
       const rawValue = Object.prototype.hasOwnProperty.call(savedData, question.key)
@@ -388,7 +389,7 @@ export class ElectedUrbanLocalBodiesService {
       }
 
       if (question.key === 'electedBodyExcelFile') {
-        return { ...question, value, supportingContent: this.buildElectedBodyFileSupportingContent(doc, canEdit) };
+        return { ...question, value, supportingContent: this.buildElectedBodyFileSupportingContent(doc, permissions) };
       }
 
       return { ...question, value };
@@ -404,8 +405,9 @@ export class ElectedUrbanLocalBodiesService {
    */
   private buildElectedBodyFileSupportingContent(
     doc: EulbFormLeanDoc | null,
-    canEdit: boolean,
+    permissions: EulbFormPermissions,
   ): FieldSupportingContent[] {
+    const { canView, canEdit } = permissions;
     const activeDatasetVersion = doc?.activeDatasetVersion ?? 0;
     const excelRowCount = doc?.excelRowCount ?? 0;
     const errorRowCount = doc?.errorRowCount ?? 0;
@@ -421,29 +423,27 @@ export class ElectedUrbanLocalBodiesService {
         position: 'before',
         layout: 'inline',
         separator: 'dot',
-        description:
-          'Download the template, fill in elected body details for all listed ULBs, add any newly formed ULBs if applicable, and re-upload the completed Excel file.',
         actions: [
           {
             id: EULB_ACTION_DOWNLOAD_TEMPLATE,
             label: 'Download the template',
             icon: 'bi bi-file-earmark-arrow-down',
             tone: 'primary',
-            visible: true,
+            visible: canEdit,
           },
           {
             id: EULB_ACTION_VIEW_UPLOADED_DATA,
             label: 'View uploaded data',
             icon: 'bi bi-table',
             tone: 'primary',
-            visible: hasActiveDataset,
+            visible: canView && hasActiveDataset,
           },
           {
             id: EULB_ACTION_DOWNLOAD_ERROR_SHEET,
             label: 'Download error sheet',
             icon: 'bi bi-file-earmark-excel',
             tone: 'danger',
-            visible: errorRowCount > 0,
+            visible: canView && errorRowCount > 0,
           },
           {
             id: EULB_ACTION_REVALIDATE_EXCEL,

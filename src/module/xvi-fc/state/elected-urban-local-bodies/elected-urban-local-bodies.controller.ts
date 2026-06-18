@@ -109,7 +109,7 @@ export class ElectedUrbanLocalBodiesController {
   })
   @Get(':stateId/:yearId/template')
   @UseGuards(PermissionGuard)
-  @RequirePermissions(Permission.VIEW_STATE_FORMS)
+  @RequirePermissions(Permission.EDIT_STATE_FORMS)
   async getTemplate(
     @Param('stateId', ParseObjectIdPipe) stateId: string,
     @Param('yearId', ParseObjectIdPipe) yearId: string,

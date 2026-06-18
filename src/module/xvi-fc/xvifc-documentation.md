@@ -1231,9 +1231,25 @@ Safe replace order enforced in `validateExcel` (`POST validate-excel`):
 
 **Revalidate action in GET form**:
 
-- `buildElectedBodyFileSupportingContent` now receives `canEdit` from the caller.
+- `buildElectedBodyFileSupportingContent` now receives `EulbFormPermissions` from the caller.
 - `revalidate-excel` action is included in `electedBodyExcelFile.supportingContent.actions`.
-- Visible when: `canEdit && hasUploadedData && validationStatus !== 'VALID'`.
-- Hidden when: no uploaded data, `validationStatus === 'VALID'`, or form not editable.
+- Visible when: `canEdit && hasUploadedExcel && validationStatus !== 'VALID'` (`canEdit` already encodes the editable-status gate).
+- `hasUploadedExcel` is true when `electedBodyExcelFile.fileName` or `fileUrl` is non-empty, regardless of row dataset existence.
 
 **Final submit unchanged** — still requires `validationStatus === 'VALID'`.
+
+---
+
+### Elected Urban Local Bodies — View-Only Access Enforcement
+
+- View-only users (those with `VIEW_STATE_FORMS` but not `EDIT_STATE_FORMS`) can read the form and rows but cannot mutate anything.
+- `GET :stateId/:yearId/template` now requires `EDIT_STATE_FORMS` (changed from `VIEW_STATE_FORMS`). Direct API calls by view-only users return 403.
+- `buildElectedBodyFileSupportingContent` now accepts `EulbFormPermissions` (`canView` + `canEdit`).
+- `download-template` action: visible only when `canEdit` is true (view-only users never see it).
+- `view-uploaded-data` action: visible when `canView && hasActiveDataset` (view-only users can open the data dialog if rows exist).
+- `download-error-sheet` action: visible when `canView && errorRowCount > 0`.
+- `revalidate-excel` action: visible when `canEdit && hasUploadedExcel && validationStatus !== 'VALID'` (view-only users never see it).
+- `supportingContent` description string removed entirely (was the long template instruction text).
+- `updateRow` (PATCH rows/:rowId) now calls `assertCanStateEditForm(formDoc.currentFormStatus)` before processing. Returns 403 when form status does not allow editing; controller-level `EDIT_STATE_FORMS` guard blocks view-only users.
+- All other mutating endpoints (`save-draft`, `validate-excel`, `revalidate-excel`, `delete-uploaded-excel`) already required `EDIT_STATE_FORMS` at controller level and `assertCanStateEditForm` in service — unchanged.
+- Read endpoints (`GET form`, `GET rows`, `GET error-sheet`) continue to require `VIEW_STATE_FORMS` — accessible to view-only users.

@@ -94,6 +94,8 @@ export class ElectedUrbanLocalBodiesRowService {
     this.assertStateAccess(user, stateId);
 
     const formDoc = await this.findFormOrThrow(stateId, yearId);
+    assertCanStateEditForm(formDoc.currentFormStatus);
+
     const activeVersion = formDoc.activeDatasetVersion ?? 0;
     const userOid = new Types.ObjectId(user._id);
 
