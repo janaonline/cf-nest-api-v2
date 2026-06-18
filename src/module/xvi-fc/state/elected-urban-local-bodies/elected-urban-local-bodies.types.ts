@@ -1,16 +1,11 @@
 import type { FieldConfig, HydratedFieldConfig } from '../../common/types/field-config.type';
 import type { EulbValidationStatus } from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
+import type { XvifcFormActor } from '../../common/types/xvifc-form-actors.type';
 
 export interface EulbFormPermissions {
   canView: boolean;
   canEdit: boolean;
   canFinalSubmit: boolean;
-}
-
-export interface EulbFormActor {
-  action: 'Created by' | 'Updated by' | 'Submitted by';
-  by: string | null;
-  date: string | null;
 }
 
 export interface EulbValidationSummary {
@@ -36,7 +31,7 @@ export interface EulbFormGetResponseData {
   questions: HydratedFieldConfig[];
   rowEditFields: FieldConfig[];
   permissions: EulbFormPermissions;
-  actors: EulbFormActor[];
+  actors: XvifcFormActor[];
   validationSummary: EulbValidationSummary;
   instructions: unknown[];
   meta: { version: number };

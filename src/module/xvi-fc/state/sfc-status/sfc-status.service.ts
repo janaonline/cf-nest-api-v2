@@ -30,6 +30,7 @@ import {
   XviFcSfcStatusHistoryDocument,
 } from '../../../../schemas/xvi-fc/state/sfc-status-history.schema';
 import { DynamicFormValidationService } from '../../common/dynamic-form-validation/dynamic-form-validation.service';
+import { XvifcFormActorsService } from '../../common/services/xvifc-form-actors.service';
 import type {
   FieldConfig,
   FormData,
@@ -40,7 +41,7 @@ import { XviFcApiResponse } from '../../common/response/xvi-fc-api-response';
 import { throwXviFcValidationError, xviFcSuccess } from '../../common/response/xvi-fc-response.util';
 import type { FormFieldOption, UploadedFileValue } from '../../common/types/field-config.type';
 import { SaveSfcStatusDto } from './dto/save-sfc-status.dto';
-import type { SfcFormActor, SfcFormGetResponseData, SfcFormPermissions } from './sfc-status.types';
+import type { SfcFormGetResponseData, SfcFormPermissions } from './sfc-status.types';
 import type { SfcHistoryEntryInput } from './types/sfc-status-history.types';
 import type {
   SfcStatusDumpFilters,
@@ -50,19 +51,6 @@ import type {
   SfcStatusPopulatedUser,
   SfcStatusPopulatedYear,
 } from './types/sfc-status-dump.types';
-
-/** Safely extracts `name` from a Mongoose populated ref that TypeScript still types as ObjectId. */
-function getPopulatedName(value: unknown): string | undefined {
-  if (value === null || value === undefined || typeof value !== 'object') return undefined;
-  const name = (value as Record<string, unknown>)['name'];
-  return typeof name === 'string' ? name : undefined;
-}
-
-/** Returns a UTC ISO string for a valid Date; null for non-Date or invalid Date values. */
-const toIsoStringOrNull = (value: unknown): string | null => {
-  if (!(value instanceof Date)) return null;
-  return Number.isNaN(value.getTime()) ? null : value.toISOString();
-};
 
 type PopulatedNameRef = { _id?: Types.ObjectId; name?: string };
 
@@ -127,6 +115,7 @@ export class SfcStatusService {
     private readonly historyModel: Model<XviFcSfcStatusHistoryDocument>,
     private readonly formJsonService: FormJsonService,
     private readonly validator: DynamicFormValidationService,
+    private readonly xvifcFormActorsService: XvifcFormActorsService,
     private readonly excelService: ExcelService,
     private readonly fileTokenService: FileTokenService,
     private readonly config: ConfigService,
@@ -181,7 +170,7 @@ export class SfcStatusService {
     const jwtExpiresMs = ms(jwtExpiresIn) ?? 24 * 60 * 60 * 1000;
     const questions = this.hydrateQuestions(savedData, formJson, jwtExpiresMs);
     const permissions = this.buildFormPermissions(user, stateId, currentFormStatus);
-    const { actors, stateName } = this.getActors(doc);
+    const { actors, stateName } = this.xvifcFormActorsService.buildActorsAndStateName(doc);
 
     const responseData: SfcFormGetResponseData = {
       _id: doc ? String(doc._id) : null,
@@ -417,35 +406,6 @@ export class SfcStatusService {
   }
 
   // ─── Helpers ─────────────────────────────────────────────────────────────────
-
-  /** Builds the actors array and resolves stateName from a lean populated getForm document. */
-  private getActors(doc: SfcStatusLeanDoc | null): { actors: SfcFormActor[]; stateName: string } {
-    const createdByName = getPopulatedName(doc?.createdBy);
-    const updatedByName = getPopulatedName(doc?.updatedBy);
-    const submittedByName = getPopulatedName(doc?.submittedBy);
-    const stateName = getPopulatedName(doc?.state) ?? '';
-    const actors: SfcFormActor[] = [
-      {
-        action: 'Created by',
-        designation: 'State DMA Officer',
-        by: createdByName ?? null,
-        date: toIsoStringOrNull(doc?.createdAt),
-      },
-      {
-        action: 'Updated by',
-        designation: 'State DMA Officer',
-        by: updatedByName ?? null,
-        date: toIsoStringOrNull(doc?.updatedAt),
-      },
-      {
-        action: 'Submitted by',
-        designation: 'State DMA Officer',
-        by: submittedByName ?? null,
-        date: toIsoStringOrNull(doc?.submittedAt),
-      },
-    ];
-    return { actors, stateName };
-  }
 
   /**
    * Merges saved form data onto the question template in one O(n) pass.

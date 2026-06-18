@@ -18,6 +18,7 @@ import {
 } from '../../common/utils/xvi-fc-form-status-access.util';
 import { toObjectIdString } from 'src/users/user-scope.helpers';
 import { DynamicFormValidationService } from '../../common/dynamic-form-validation/dynamic-form-validation.service';
+import { XvifcFormActorsService } from '../../common/services/xvifc-form-actors.service';
 import type { FormData } from '../../common/dynamic-form-validation/dynamic-form-validation.types';
 import type {
   FieldSupportingContent,
@@ -45,23 +46,11 @@ import {
 import type { SaveElectedUrbanLocalBodiesDraftDto } from './dto/save-elected-urban-local-bodies-draft.dto';
 import type { FinalSubmitElectedUrbanLocalBodiesDto } from './dto/final-submit-elected-urban-local-bodies.dto';
 import type {
-  EulbFormActor,
   EulbFormGetResponseData,
   EulbFormLeanDoc,
   EulbFormPermissions,
   EulbValidationSummary,
 } from './elected-urban-local-bodies.types';
-
-function getPopulatedName(value: unknown): string | undefined {
-  if (value === null || value === undefined || typeof value !== 'object') return undefined;
-  const name = (value as Record<string, unknown>)['name'];
-  return typeof name === 'string' ? name : undefined;
-}
-
-const toIsoStringOrNull = (value: unknown): string | null => {
-  if (!(value instanceof Date)) return null;
-  return Number.isNaN(value.getTime()) ? null : value.toISOString();
-};
 
 @Injectable()
 export class ElectedUrbanLocalBodiesService {
@@ -71,6 +60,7 @@ export class ElectedUrbanLocalBodiesService {
     @InjectModel(Ulb.name)
     private readonly ulbModel: Model<UlbDocument>,
     private readonly validator: DynamicFormValidationService,
+    private readonly xvifcFormActorsService: XvifcFormActorsService,
     private readonly excelService: ExcelService,
     private readonly fileTokenService: FileTokenService,
     private readonly config: ConfigService,
@@ -131,7 +121,7 @@ export class ElectedUrbanLocalBodiesService {
 
     const questions = this.hydrateQuestions(savedData, jwtExpiresMs, doc);
     const permissions = this.buildFormPermissions(user, stateId, currentFormStatus);
-    const { actors, stateName } = this.getActors(doc);
+    const { actors, stateName } = this.xvifcFormActorsService.buildActorsAndStateName(doc);
     const validationSummary = this.buildValidationSummary(doc);
 
     const responseData: EulbFormGetResponseData = {
@@ -366,28 +356,6 @@ export class ElectedUrbanLocalBodiesService {
   }
 
   // ─── Helpers ─────────────────────────────────────────────────────────────────
-
-  /**
-   * Extracts the three actor entries (created/updated/submitted) and stateName
-   * from a lean populated getForm document.
-   *
-   * @param doc - Lean form document with populated state, createdBy, updatedBy, submittedBy.
-   */
-  private getActors(doc: EulbFormLeanDoc | null): { actors: EulbFormActor[]; stateName: string } {
-    const stateName = getPopulatedName(doc?.state) ?? '';
-    return {
-      stateName,
-      actors: [
-        { action: 'Created by', by: getPopulatedName(doc?.createdBy) ?? null, date: toIsoStringOrNull(doc?.createdAt) },
-        { action: 'Updated by', by: getPopulatedName(doc?.updatedBy) ?? null, date: toIsoStringOrNull(doc?.updatedAt) },
-        {
-          action: 'Submitted by',
-          by: getPopulatedName(doc?.submittedBy) ?? null,
-          date: toIsoStringOrNull(doc?.submittedAt),
-        },
-      ],
-    };
-  }
 
   /**
    * Merges saved form data onto TEMP_QUESTIONS in one O(n) pass.
