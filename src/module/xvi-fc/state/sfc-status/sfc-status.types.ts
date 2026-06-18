@@ -1,16 +1,10 @@
 import type { HydratedFieldConfig } from '../../common/dynamic-form-validation/dynamic-form-validation.types';
+import type { XvifcFormActor } from '../../common/types/xvifc-form-actors.type';
 
 export interface SfcFormPermissions {
   canView: boolean;
   canEdit: boolean;
   canFinalSubmit: boolean;
-}
-
-export interface SfcFormActor {
-  action: 'Created by' | 'Updated by' | 'Submitted by';
-  by: string | null;
-  date: string | null;
-  designation: string;
 }
 
 export interface SfcFormGetResponseData {
@@ -24,7 +18,7 @@ export interface SfcFormGetResponseData {
   currentFormStatusLabel: string;
   questions: HydratedFieldConfig[];
   permissions: SfcFormPermissions;
-  actors: SfcFormActor[];
+  actors: XvifcFormActor[];
   instructions: unknown[];
   meta: { version: number };
 }

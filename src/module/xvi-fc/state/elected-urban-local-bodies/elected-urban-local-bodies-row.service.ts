@@ -1,10 +1,11 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model, Types } from 'mongoose';
 import { ExcelService, RowHeader } from 'src/services/excel/excel.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { toObjectIdString } from 'src/users/user-scope.helpers';
+import { assertCanStateEditForm } from '../../common/utils/xvi-fc-form-status-access.util';
 import { xviFcSuccess } from '../../common/response/xvi-fc-response.util';
 import type { XviFcApiResponse } from '../../common/response/xvi-fc-api-response';
 import {
@@ -21,6 +22,8 @@ import { ERROR_EXCEL_HEADERS } from './constants/elected-urban-local-bodies.cons
 import type { GetElectedUrbanLocalBodiesRowsQueryDto } from './dto/get-elected-urban-local-bodies-rows-query.dto';
 import type { UpdateElectedUrbanLocalBodiesRowDto } from './dto/update-elected-urban-local-bodies-row.dto';
 import { ElectedUrbanLocalBodiesValidator } from './elected-urban-local-bodies.validator';
+import type { EulbValidationSummary } from './elected-urban-local-bodies.types';
+import type { EulbValidationStatus } from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
 
 interface UlbLean {
   _id: Types.ObjectId;
@@ -31,6 +34,8 @@ interface UlbLean {
 
 @Injectable()
 export class ElectedUrbanLocalBodiesRowService {
+  private readonly logger = new Logger(ElectedUrbanLocalBodiesRowService.name);
+
   constructor(
     @InjectModel(ElectedUrbanLocalBodiesForm.name)
     private readonly formModel: Model<EulbFormDocument>,
@@ -89,6 +94,8 @@ export class ElectedUrbanLocalBodiesRowService {
     this.assertStateAccess(user, stateId);
 
     const formDoc = await this.findFormOrThrow(stateId, yearId);
+    assertCanStateEditForm(formDoc.currentFormStatus);
+
     const activeVersion = formDoc.activeDatasetVersion ?? 0;
     const userOid = new Types.ObjectId(user._id);
 
@@ -153,10 +160,10 @@ export class ElectedUrbanLocalBodiesRowService {
       .lean()
       .exec();
 
-    // Recalculate form validation summary
-    await this.recalculateFormSummary(formDoc._id, activeVersion);
+    // Recalculate form validation summary and include it in the response
+    const validationSummary = await this.recalculateFormSummary(formDoc._id, activeVersion);
 
-    return xviFcSuccess('Row updated successfully.', updatedRow);
+    return xviFcSuccess('Row updated successfully.', { row: updatedRow, validationSummary });
   }
 
   /**
@@ -207,6 +214,72 @@ export class ElectedUrbanLocalBodiesRowService {
     return buf as unknown as ArrayBuffer;
   }
 
+  /**
+   * Deletes the current uploaded Excel dataset for the given EULB form.
+   * Hard-deletes all rows for the active dataset version, clears the file reference,
+   * and resets the validation summary to NOT_VALIDATED.
+   * Blocked when the form status does not allow editing.
+   *
+   * @param stateId    - ObjectId string of the target state.
+   * @param yearId     - ObjectId string of the target year.
+   * @param user       - Authenticated user; scope-checked against stateId.
+   * @param _ip        - Client IP (reserved for future audit trail).
+   * @param _userAgent - User-Agent header (reserved for future audit trail).
+   */
+  async deleteUploadedExcel(
+    stateId: string,
+    yearId: string,
+    user: AuthUser,
+    _ip: string,
+    _userAgent: string,
+  ): Promise<XviFcApiResponse> {
+    this.assertStateAccess(user, stateId);
+
+    const formDoc = await this.findFormOrThrow(stateId, yearId);
+
+    // Enforce same edit status gate as save-draft
+    assertCanStateEditForm(formDoc.currentFormStatus);
+
+    const activeVersion = formDoc.activeDatasetVersion ?? 0;
+    const formId = formDoc._id;
+    const userOid = new Types.ObjectId(user._id);
+
+    // Hard-delete current active rows
+    if (activeVersion > 0) {
+      await this.rowModel.deleteMany({ form: formId, datasetVersion: activeVersion }).exec();
+    }
+
+    // Clear file reference and reset validation summary
+    await this.formModel.findByIdAndUpdate(formId, {
+      $unset: { electedBodyExcelFile: '' },
+      $set: {
+        excelRowCount: 0,
+        matchedDbUlbCount: 0,
+        missingDbUlbCount: 0,
+        extraExcelRowCount: 0,
+        errorRowCount: 0,
+        validationStatus: 'NOT_VALIDATED',
+        updatedBy: userOid,
+      },
+    });
+
+    this.logger.log(`EULB uploaded Excel deleted [form=${formId.toString()} version=${activeVersion}] by ${user._id}`);
+
+    return xviFcSuccess('Uploaded Excel removed successfully.', {
+      validationSummary: {
+        dbUlbCount: formDoc.dbUlbCount ?? 0,
+        maxAllowedExcelRows: formDoc.maxAllowedExcelRows ?? 0,
+        excelRowCount: 0,
+        matchedDbUlbCount: 0,
+        missingDbUlbCount: 0,
+        extraExcelRowCount: 0,
+        errorRowCount: 0,
+        validationStatus: 'NOT_VALIDATED',
+        activeDatasetVersion: activeVersion,
+      },
+    });
+  }
+
   // ─── Helpers ─────────────────────────────────────────────────────────────────
 
   private async findFormOrThrow(stateId: string, yearId: string) {
@@ -227,19 +300,43 @@ export class ElectedUrbanLocalBodiesRowService {
   }
 
   /**
-   * Recounts error rows in the active dataset and updates form validationStatus + errorRowCount.
+   * Recounts error rows in the active dataset, updates form validationStatus + errorRowCount,
+   * and returns the full recalculated validation summary for inclusion in the PATCH response.
    * Marks form VALID only when errorRowCount === 0 and missingDbUlbCount === 0.
    */
-  private async recalculateFormSummary(formId: Types.ObjectId, datasetVersion: number): Promise<void> {
+  private async recalculateFormSummary(formId: Types.ObjectId, datasetVersion: number): Promise<EulbValidationSummary> {
     const [errorRowCount, form] = await Promise.all([
       this.rowModel.countDocuments({ form: formId, datasetVersion, validationStatus: 'INVALID' }),
-      this.formModel.findById(formId, { missingDbUlbCount: 1 }).lean().exec(),
+      this.formModel
+        .findById(formId, {
+          dbUlbCount: 1,
+          maxAllowedExcelRows: 1,
+          excelRowCount: 1,
+          matchedDbUlbCount: 1,
+          missingDbUlbCount: 1,
+          extraExcelRowCount: 1,
+          activeDatasetVersion: 1,
+        })
+        .lean()
+        .exec(),
     ]);
 
     const missingDbUlbCount = form?.missingDbUlbCount ?? 0;
-    const validationStatus = errorRowCount === 0 && missingDbUlbCount === 0 ? 'VALID' : 'INVALID';
+    const validationStatus: EulbValidationStatus = errorRowCount === 0 && missingDbUlbCount === 0 ? 'VALID' : 'INVALID';
 
     await this.formModel.findByIdAndUpdate(formId, { $set: { errorRowCount, validationStatus } });
+
+    return {
+      dbUlbCount: form?.dbUlbCount ?? 0,
+      maxAllowedExcelRows: form?.maxAllowedExcelRows ?? 0,
+      excelRowCount: form?.excelRowCount ?? 0,
+      matchedDbUlbCount: form?.matchedDbUlbCount ?? 0,
+      missingDbUlbCount,
+      extraExcelRowCount: form?.extraExcelRowCount ?? 0,
+      errorRowCount,
+      validationStatus,
+      activeDatasetVersion: form?.activeDatasetVersion ?? 0,
+    };
   }
 
   private hasStateAccess(user: AuthUser, stateId: string): boolean {

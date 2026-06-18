@@ -18,6 +18,7 @@ import {
 } from '../../common/utils/xvi-fc-form-status-access.util';
 import { toObjectIdString } from 'src/users/user-scope.helpers';
 import { DynamicFormValidationService } from '../../common/dynamic-form-validation/dynamic-form-validation.service';
+import { XvifcFormActorsService } from '../../common/services/xvifc-form-actors.service';
 import type { FormData } from '../../common/dynamic-form-validation/dynamic-form-validation.types';
 import type {
   FieldSupportingContent,
@@ -36,31 +37,21 @@ import { Ulb, UlbDocument } from '../../../../schemas/ulb.schema';
 import {
   EULB_ACTION_DOWNLOAD_ERROR_SHEET,
   EULB_ACTION_DOWNLOAD_TEMPLATE,
+  EULB_ACTION_REVALIDATE_EXCEL,
   EULB_ACTION_VIEW_UPLOADED_DATA,
   EULB_FORM_NAME,
+  EULB_ROW_EDIT_FIELDS,
   TEMPLATE_HEADERS,
   TEMP_QUESTIONS,
 } from './constants/elected-urban-local-bodies.constants';
 import type { SaveElectedUrbanLocalBodiesDraftDto } from './dto/save-elected-urban-local-bodies-draft.dto';
 import type { FinalSubmitElectedUrbanLocalBodiesDto } from './dto/final-submit-elected-urban-local-bodies.dto';
 import type {
-  EulbFormActor,
   EulbFormGetResponseData,
   EulbFormLeanDoc,
   EulbFormPermissions,
   EulbValidationSummary,
 } from './elected-urban-local-bodies.types';
-
-function getPopulatedName(value: unknown): string | undefined {
-  if (value === null || value === undefined || typeof value !== 'object') return undefined;
-  const name = (value as Record<string, unknown>)['name'];
-  return typeof name === 'string' ? name : undefined;
-}
-
-const toIsoStringOrNull = (value: unknown): string | null => {
-  if (!(value instanceof Date)) return null;
-  return Number.isNaN(value.getTime()) ? null : value.toISOString();
-};
 
 @Injectable()
 export class ElectedUrbanLocalBodiesService {
@@ -70,6 +61,7 @@ export class ElectedUrbanLocalBodiesService {
     @InjectModel(Ulb.name)
     private readonly ulbModel: Model<UlbDocument>,
     private readonly validator: DynamicFormValidationService,
+    private readonly xvifcFormActorsService: XvifcFormActorsService,
     private readonly excelService: ExcelService,
     private readonly fileTokenService: FileTokenService,
     private readonly config: ConfigService,
@@ -81,9 +73,10 @@ export class ElectedUrbanLocalBodiesService {
    * The electedBodyExcelFile question receives default (no-form) supporting actions.
    */
   getQuestions(): XviFcApiResponse<HydratedFieldConfig[]> {
+    const noPermissions: EulbFormPermissions = { canView: false, canEdit: false, canFinalSubmit: false };
     const questions = TEMP_QUESTIONS.map((q) => {
       if (q.key === 'electedBodyExcelFile') {
-        return { ...q, supportingContent: this.buildElectedBodyFileSupportingContent(null) };
+        return { ...q, supportingContent: this.buildElectedBodyFileSupportingContent(null, noPermissions) };
       }
       return q;
     });
@@ -128,9 +121,9 @@ export class ElectedUrbanLocalBodiesService {
       if (doc.electedBodyExcelFile !== undefined) savedData['electedBodyExcelFile'] = doc.electedBodyExcelFile;
     }
 
-    const questions = this.hydrateQuestions(savedData, jwtExpiresMs, doc);
     const permissions = this.buildFormPermissions(user, stateId, currentFormStatus);
-    const { actors, stateName } = this.getActors(doc);
+    const questions = this.hydrateQuestions(savedData, jwtExpiresMs, doc, permissions);
+    const { actors, stateName } = this.xvifcFormActorsService.buildActorsAndStateName(doc);
     const validationSummary = this.buildValidationSummary(doc);
 
     const responseData: EulbFormGetResponseData = {
@@ -142,6 +135,7 @@ export class ElectedUrbanLocalBodiesService {
       currentFormStatus,
       currentFormStatusLabel: getFormStatusLabel(currentFormStatus),
       questions,
+      rowEditFields: EULB_ROW_EDIT_FIELDS,
       permissions,
       actors,
       validationSummary,
@@ -366,28 +360,6 @@ export class ElectedUrbanLocalBodiesService {
   // ─── Helpers ─────────────────────────────────────────────────────────────────
 
   /**
-   * Extracts the three actor entries (created/updated/submitted) and stateName
-   * from a lean populated getForm document.
-   *
-   * @param doc - Lean form document with populated state, createdBy, updatedBy, submittedBy.
-   */
-  private getActors(doc: EulbFormLeanDoc | null): { actors: EulbFormActor[]; stateName: string } {
-    const stateName = getPopulatedName(doc?.state) ?? '';
-    return {
-      stateName,
-      actors: [
-        { action: 'Created by', by: getPopulatedName(doc?.createdBy) ?? null, date: toIsoStringOrNull(doc?.createdAt) },
-        { action: 'Updated by', by: getPopulatedName(doc?.updatedBy) ?? null, date: toIsoStringOrNull(doc?.updatedAt) },
-        {
-          action: 'Submitted by',
-          by: getPopulatedName(doc?.submittedBy) ?? null,
-          date: toIsoStringOrNull(doc?.submittedAt),
-        },
-      ],
-    };
-  }
-
-  /**
    * Merges saved form data onto TEMP_QUESTIONS in one O(n) pass.
    * File-type questions have their fileUrl signed with a JWT-lifetime token.
    * The electedBodyExcelFile question receives backend-driven supporting actions based on the form doc.
@@ -400,6 +372,7 @@ export class ElectedUrbanLocalBodiesService {
     savedData: FormData,
     jwtExpiresMs: number,
     doc: EulbFormLeanDoc | null,
+    permissions: EulbFormPermissions,
   ): HydratedFieldConfig[] {
     return TEMP_QUESTIONS.map((question) => {
       const rawValue = Object.prototype.hasOwnProperty.call(savedData, question.key)
@@ -416,7 +389,7 @@ export class ElectedUrbanLocalBodiesService {
       }
 
       if (question.key === 'electedBodyExcelFile') {
-        return { ...question, value, supportingContent: this.buildElectedBodyFileSupportingContent(doc) };
+        return { ...question, value, supportingContent: this.buildElectedBodyFileSupportingContent(doc, permissions) };
       }
 
       return { ...question, value };
@@ -430,14 +403,19 @@ export class ElectedUrbanLocalBodiesService {
    *
    * @param doc - Lean form document; null when no record exists yet.
    */
-  private buildElectedBodyFileSupportingContent(doc: EulbFormLeanDoc | null): FieldSupportingContent[] {
+  private buildElectedBodyFileSupportingContent(
+    doc: EulbFormLeanDoc | null,
+    permissions: EulbFormPermissions,
+  ): FieldSupportingContent[] {
+    const { canView, canEdit } = permissions;
     const activeDatasetVersion = doc?.activeDatasetVersion ?? 0;
     const excelRowCount = doc?.excelRowCount ?? 0;
     const errorRowCount = doc?.errorRowCount ?? 0;
     const missingDbUlbCount = doc?.missingDbUlbCount ?? 0;
     const validationStatus = doc?.validationStatus ?? 'NOT_VALIDATED';
 
-    const hasUploadedData = activeDatasetVersion > 0 && excelRowCount > 0;
+    const hasActiveDataset = activeDatasetVersion > 0 && excelRowCount > 0;
+    const hasUploadedExcel = !!(doc?.electedBodyExcelFile?.fileName || doc?.electedBodyExcelFile?.fileUrl);
 
     return [
       {
@@ -445,36 +423,41 @@ export class ElectedUrbanLocalBodiesService {
         position: 'before',
         layout: 'inline',
         separator: 'dot',
-        description:
-          'Download the template, fill in elected body details for all listed ULBs, add any newly formed ULBs if applicable, and re-upload the completed Excel file.',
         actions: [
           {
             id: EULB_ACTION_DOWNLOAD_TEMPLATE,
             label: 'Download the template',
             icon: 'bi bi-file-earmark-arrow-down',
             tone: 'primary',
-            visible: true,
+            visible: canEdit,
           },
           {
             id: EULB_ACTION_VIEW_UPLOADED_DATA,
             label: 'View uploaded data',
             icon: 'bi bi-table',
             tone: 'primary',
-            visible: hasUploadedData,
+            visible: canView && hasActiveDataset,
           },
           {
             id: EULB_ACTION_DOWNLOAD_ERROR_SHEET,
             label: 'Download error sheet',
             icon: 'bi bi-file-earmark-excel',
             tone: 'danger',
-            visible: errorRowCount > 0,
+            visible: canView && errorRowCount > 0,
+          },
+          {
+            id: EULB_ACTION_REVALIDATE_EXCEL,
+            label: 'Revalidate uploaded Excel',
+            icon: 'bi bi-arrow-repeat',
+            tone: 'warning',
+            visible: canEdit && hasUploadedExcel && validationStatus !== 'VALID',
           },
         ],
         badges: [
           {
             label: `Total rows: ${excelRowCount}`,
             tone: 'secondary',
-            visible: hasUploadedData,
+            visible: hasActiveDataset,
           },
           {
             label: 'All valid',
