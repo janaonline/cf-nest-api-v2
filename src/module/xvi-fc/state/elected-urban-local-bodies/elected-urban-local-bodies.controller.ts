@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Headers,
   Ip,
@@ -27,6 +28,7 @@ import { FinalSubmitElectedUrbanLocalBodiesDto } from './dto/final-submit-electe
 import { ValidateElectedUrbanLocalBodiesExcelDto } from './dto/validate-elected-urban-local-bodies-excel.dto';
 import { UpdateElectedUrbanLocalBodiesRowDto } from './dto/update-elected-urban-local-bodies-row.dto';
 import { GetElectedUrbanLocalBodiesRowsQueryDto } from './dto/get-elected-urban-local-bodies-rows-query.dto';
+import { RevalidateEulbExcelDto } from './dto/revalidate-eulb-excel.dto';
 
 @ApiTags('XVI-FC - State Forms - Elected Urban Local Bodies')
 @ApiBearerAuth()
@@ -107,7 +109,7 @@ export class ElectedUrbanLocalBodiesController {
   })
   @Get(':stateId/:yearId/template')
   @UseGuards(PermissionGuard)
-  @RequirePermissions(Permission.VIEW_STATE_FORMS)
+  @RequirePermissions(Permission.EDIT_STATE_FORMS)
   async getTemplate(
     @Param('stateId', ParseObjectIdPipe) stateId: string,
     @Param('yearId', ParseObjectIdPipe) yearId: string,
@@ -166,6 +168,40 @@ export class ElectedUrbanLocalBodiesController {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       disposition: `attachment; filename="elected-bodies-error-sheet_${getTimeStamp(false)}.xlsx"`,
     });
+  }
+
+  @ApiOperation({
+    summary: 'Delete uploaded Elected Bodies Excel',
+    description:
+      'Hard-deletes all current EULB row data and clears the uploaded file reference. Resets validation summary to NOT_VALIDATED. Blocked when the form status does not allow editing.',
+  })
+  @Delete(':stateId/:yearId/uploaded-excel')
+  @UseGuards(PermissionGuard)
+  @RequirePermissions(Permission.EDIT_STATE_FORMS)
+  deleteUploadedExcel(
+    @Param('stateId', ParseObjectIdPipe) stateId: string,
+    @Param('yearId', ParseObjectIdPipe) yearId: string,
+    @CurrentUser() user: AuthUser,
+    @Ip() ip: string,
+    @Headers('user-agent') userAgent: string,
+  ) {
+    return this.eulbRowService.deleteUploadedExcel(stateId, yearId, user, ip ?? '', userAgent ?? '');
+  }
+
+  @ApiOperation({
+    summary: 'Revalidates the already uploaded EULB Excel data after form values such as ULB count are corrected.',
+  })
+  @ApiBody({ type: RevalidateEulbExcelDto })
+  @Post(':stateId/:yearId/revalidate-excel')
+  @UseGuards(PermissionGuard)
+  @RequirePermissions(Permission.EDIT_STATE_FORMS)
+  revalidateExcel(
+    @Param('stateId', ParseObjectIdPipe) stateId: string,
+    @Param('yearId', ParseObjectIdPipe) yearId: string,
+    @Body() dto: RevalidateEulbExcelDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.eulbExcelService.revalidateExcel(stateId, yearId, dto, user);
   }
 
   @ApiOperation({

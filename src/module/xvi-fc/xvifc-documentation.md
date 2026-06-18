@@ -1095,3 +1095,161 @@ curl -H "Authorization: Bearer <token>" \
 - Status-gate helpers — `UNDER_REVIEW_BY_MOHUA` is already outside `STATE_EDITABLE_STATUSES`.
 - `isTerminalStatus()` — unchanged; `UNDER_REVIEW_BY_MOHUA` is not terminal.
 - `buildFormPermissions` — `canEdit`/`canFinalSubmit` are already `false` for `UNDER_REVIEW_BY_MOHUA`.
+
+---
+
+### Elected Urban Local Bodies — Row Data Lifecycle (Hard Delete)
+
+**Modified files**:
+
+- `src/module/xvi-fc/state/elected-urban-local-bodies/elected-urban-local-bodies-excel.service.ts`
+- `src/module/xvi-fc/state/elected-urban-local-bodies/elected-urban-local-bodies-row.service.ts`
+- `src/module/xvi-fc/state/elected-urban-local-bodies/elected-urban-local-bodies.controller.ts`
+
+**Row data lifecycle**:
+
+- EULB row data is hard-deleted on file removal — no soft-delete, no archive, no history collection.
+- The row collection (`xvi_fc_elected_urban_local_bodies_rows`) holds only the current working dataset at any given time.
+- Rows are scoped by `(form, datasetVersion)`. The form's `activeDatasetVersion` determines which rows are live.
+
+**New Excel upload (safe replace)**:
+
+Safe replace order enforced in `validateExcel` (`POST validate-excel`):
+
+1. Parse and validate rows.
+2. Insert new rows with `datasetVersion = activeDatasetVersion + 1` (new rows exist before form points to them).
+3. Update form document: set all summary fields and `activeDatasetVersion = newVersion`.
+4. Delete old rows (`datasetVersion = currentVersion`) only after steps 2 and 3 succeed.
+- If row insert or form update fails, the old active dataset remains untouched.
+- If old-row deletion fails, it is logged and silently skipped — old rows are invisible because the rows API queries by `activeDatasetVersion`.
+- Validation with row errors is still a successful replace: invalid rows are stored alongside their `errors[]`.
+
+**Delete uploaded Excel (`DELETE /:stateId/:yearId/uploaded-excel`)**:
+
+- Permission: `EDIT_STATE_FORMS`.
+- Status gate: `assertCanStateEditForm` — blocked when form is under review/submitted.
+- Hard-deletes rows for `(formId, activeDatasetVersion)`.
+- Clears `electedBodyExcelFile` from the form document (`$unset`).
+- Resets `excelRowCount`, `matchedDbUlbCount`, `missingDbUlbCount`, `extraExcelRowCount`, `errorRowCount` to `0`.
+- Resets `validationStatus` to `NOT_VALIDATED`.
+- Does not clear `ulbCount`, `dbUlbCount`, `maxAllowedExcelRows`, or `activeDatasetVersion`.
+- Does not delete the uploaded file from S3 (only the DB reference is cleared).
+- Returns `{ validationSummary: { ... } }` with zeroed counts.
+
+**Side effects after delete**:
+
+- GET form: `electedBodyExcelFile` is cleared → `view-uploaded-data` and `download-error-sheet` actions hidden, no badges.
+- Rows API: returns empty list (no rows for `activeDatasetVersion` after delete).
+- Error-sheet API: returns controlled 400 (`No uploaded Elected Bodies data found`).
+- GET form supporting actions rebuild from live DB state on every GET.
+
+---
+
+### Elected Urban Local Bodies — Row Edit Fields and Validation Summary Sync
+
+**Modified files**:
+
+- `src/module/xvi-fc/common/types/field-config.type.ts`
+- `src/module/xvi-fc/state/elected-urban-local-bodies/constants/elected-urban-local-bodies.constants.ts`
+- `src/module/xvi-fc/state/elected-urban-local-bodies/elected-urban-local-bodies.types.ts`
+- `src/module/xvi-fc/state/elected-urban-local-bodies/elected-urban-local-bodies.service.ts`
+- `src/module/xvi-fc/state/elected-urban-local-bodies/elected-urban-local-bodies-row.service.ts`
+
+**GET form now returns `rowEditFields`**:
+
+- `GET /:stateId/:yearId` includes `rowEditFields: FieldConfig[]` in `data` alongside `questions`.
+- Contains static field configs for the 4 editable row fields: `electedBodyStatus`, `dateOfConstitution`, `dateOfExpiry`, `remarks`.
+- Frontend uses these configs to render and validate the row-edit dialog without a separate API call.
+- Defined as `EULB_ROW_EDIT_FIELDS` constant in the constants file — static, no DB dependency.
+
+**PATCH row now returns updated row and recalculated summary**:
+
+- `PATCH /:stateId/:yearId/rows/:rowId` response shape changed from `data: EulbRow` to `data: { row: EulbRow, validationSummary: EulbValidationSummary }`.
+- After row revalidation, `recalculateFormSummary()` now returns the full `EulbValidationSummary` instead of `void`.
+- Summary is recalculated from DB counts — not incremented/decremented client-side.
+- Frontend must use the returned summary to update the parent error-count pill without refetching GET form.
+
+**Supporting content remains backend-driven**:
+
+- After row edits, the next GET form call returns refreshed badges and action visibility.
+- Parent UI should reload form after modal close to pick up the latest `supportingContent` from the backend.
+
+---
+
+### XVI-FC Common — Shared Form Actors Service
+
+**New files**:
+
+- `src/module/xvi-fc/common/types/xvifc-form-actors.type.ts` — `XvifcActorSourceDocument`, `XvifcFormActor`, `XvifcFormActorsResult`
+- `src/module/xvi-fc/common/services/xvifc-form-actors.service.ts` — `XvifcFormActorsService.buildActorsAndStateName(doc)`
+
+**Modified files**:
+
+- `src/module/xvi-fc/common/xvi-fc-common.module.ts` — registers and exports `XvifcFormActorsService`
+- `src/module/xvi-fc/state/sfc-status/sfc-status.types.ts` — `SfcFormActor` is now a type alias for `XvifcFormActor` (re-export); removed the local interface definition
+- `src/module/xvi-fc/state/sfc-status/sfc-status.service.ts` — injects `XvifcFormActorsService`; `getForm()` calls `buildActorsAndStateName(doc)`; removed private `getActors()` method and module-level `getPopulatedName`/`toIsoStringOrNull` helpers
+- `src/module/xvi-fc/state/elected-urban-local-bodies/elected-urban-local-bodies.types.ts` — `EulbFormActor` is now a type alias for `XvifcFormActor`; gains `designation: string` field
+- `src/module/xvi-fc/state/elected-urban-local-bodies/elected-urban-local-bodies.service.ts` — injects `XvifcFormActorsService`; `getForm()` calls `buildActorsAndStateName(doc)`; removed private `getActors()` method and module-level helpers
+
+**Key behaviours**:
+
+- Both SFC and EULB actors now include `designation: 'State DMA Officer'` on every entry.
+- No module wiring changes required — both `SfcStatusModule` and `ElectedUrbanLocalBodiesModule` already import `XviFcCommonModule`.
+
+---
+
+### Elected Urban Local Bodies — Revalidate Uploaded Excel API
+
+**New files**:
+
+- `src/module/xvi-fc/state/elected-urban-local-bodies/dto/revalidate-eulb-excel.dto.ts` — `RevalidateEulbExcelDto` with `ulbCount: number`
+
+**Modified files**:
+
+- `src/module/xvi-fc/state/elected-urban-local-bodies/constants/elected-urban-local-bodies.constants.ts` — added `EULB_ACTION_REVALIDATE_EXCEL = 'revalidate-excel'`
+- `src/module/xvi-fc/state/elected-urban-local-bodies/elected-urban-local-bodies.types.ts` — added `EulbRevalidateExcelResponseData`
+- `src/module/xvi-fc/state/elected-urban-local-bodies/elected-urban-local-bodies-excel.service.ts` — added `revalidateExcel()` method; no new dependencies
+- `src/module/xvi-fc/state/elected-urban-local-bodies/elected-urban-local-bodies.service.ts` — `buildElectedBodyFileSupportingContent` now accepts `canEdit: boolean`; `hydrateQuestions` now accepts `canEdit: boolean` as 4th param; `getForm` computes `permissions` before calling `hydrateQuestions`
+- `src/module/xvi-fc/state/elected-urban-local-bodies/elected-urban-local-bodies.controller.ts` — added `POST :stateId/:yearId/revalidate-excel` route
+
+**New route**:
+
+- `POST /xvi-fc/state/elected-urban-local-bodies/:stateId/:yearId/revalidate-excel`
+  - Permission: `EDIT_STATE_FORMS`
+  - Body: `{ ulbCount: number }`
+  - Status gate: `assertCanStateEditForm` — blocked when form is under review/submitted
+
+**Revalidation behaviour**:
+
+- Loads all rows for the current `activeDatasetVersion` — no file re-read from S3.
+- Validates `ulbCount` against current row count; returns field-level 400 under `ulbCount` key if mismatched.
+- Re-runs the same row validation rules as the original `validate-excel` (DB ULB matching, field validators).
+- Updates rows in-place via `bulkWrite` — no rows deleted or duplicated.
+- Recalculates and persists: `dbUlbCount`, `maxAllowedExcelRows`, `excelRowCount`, `matchedDbUlbCount`, `missingDbUlbCount`, `extraExcelRowCount`, `errorRowCount`, `validationStatus`.
+- Returns `{ validationSummary, errors: EulbRowValidationError[] }`.
+- Returns success even when row errors remain — errors are the result, not the failure signal.
+
+**Revalidate action in GET form**:
+
+- `buildElectedBodyFileSupportingContent` now receives `EulbFormPermissions` from the caller.
+- `revalidate-excel` action is included in `electedBodyExcelFile.supportingContent.actions`.
+- Visible when: `canEdit && hasUploadedExcel && validationStatus !== 'VALID'` (`canEdit` already encodes the editable-status gate).
+- `hasUploadedExcel` is true when `electedBodyExcelFile.fileName` or `fileUrl` is non-empty, regardless of row dataset existence.
+
+**Final submit unchanged** — still requires `validationStatus === 'VALID'`.
+
+---
+
+### Elected Urban Local Bodies — View-Only Access Enforcement
+
+- View-only users (those with `VIEW_STATE_FORMS` but not `EDIT_STATE_FORMS`) can read the form and rows but cannot mutate anything.
+- `GET :stateId/:yearId/template` now requires `EDIT_STATE_FORMS` (changed from `VIEW_STATE_FORMS`). Direct API calls by view-only users return 403.
+- `buildElectedBodyFileSupportingContent` now accepts `EulbFormPermissions` (`canView` + `canEdit`).
+- `download-template` action: visible only when `canEdit` is true (view-only users never see it).
+- `view-uploaded-data` action: visible when `canView && hasActiveDataset` (view-only users can open the data dialog if rows exist).
+- `download-error-sheet` action: visible when `canView && errorRowCount > 0`.
+- `revalidate-excel` action: visible when `canEdit && hasUploadedExcel && validationStatus !== 'VALID'` (view-only users never see it).
+- `supportingContent` description string removed entirely (was the long template instruction text).
+- `updateRow` (PATCH rows/:rowId) now calls `assertCanStateEditForm(formDoc.currentFormStatus)` before processing. Returns 403 when form status does not allow editing; controller-level `EDIT_STATE_FORMS` guard blocks view-only users.
+- All other mutating endpoints (`save-draft`, `validate-excel`, `revalidate-excel`, `delete-uploaded-excel`) already required `EDIT_STATE_FORMS` at controller level and `assertCanStateEditForm` in service — unchanged.
+- Read endpoints (`GET form`, `GET rows`, `GET error-sheet`) continue to require `VIEW_STATE_FORMS` — accessible to view-only users.
