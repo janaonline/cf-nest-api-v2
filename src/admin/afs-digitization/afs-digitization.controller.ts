@@ -62,6 +62,45 @@ export class AfsDigitizationController {
   async getRequestLog(@Param('requestId') requestId: string) {
     return { data: await this.afsService.getRequestLog(requestId) };
   }
+  /**
+   * Updates PDF metadata for a specific annual account
+   * @param id 
+   * @returns 
+   */
+  @Post('annual-account/:id/pdf-metadata')
+  async updateAnnualAccountPdfMetadata(@Param('id') id: string) {
+    return {
+      status: 'success',
+      data: await this.afsService.updatePdfMetadataForAnnualAccount(id),
+    };
+  }
+
+  @Get('annual-accounts/pdf-metadata/status')
+  async getAnnualAccountPdfMetadataStatus() {
+    return {
+      status: 'success',
+      data: await this.afsService.getPdfMetadataBackfillStatus(),
+    };
+  }
+
+  /**
+   * Backfills PDF metadata for annual account documents.
+   */
+  @Post('annual-accounts/pdf-metadata/backfill')
+  async backfillAnnualAccountPdfMetadata(
+    @Query('batchSize') batchSize?: string,
+    @Query('limit') limit?: string,
+    @Query('onlyMissing') onlyMissing?: string,
+  ) {
+    return {
+      status: 'success',
+      data: await this.afsService.backfillPdfMetadataForAnnualAccounts({
+        batchSize: batchSize ? Number(batchSize) : undefined,
+        limit: limit ? Number(limit) : undefined,
+        onlyMissing: onlyMissing === undefined ? true : onlyMissing !== 'false',
+      }),
+    };
+  }
 
   @Get('dump/afs-excel')
   // async downloadAfsExcelFiles(@Query('yearId') yearId: string, @Query('ulbId') ulbId?: string, @Res() res: Response) {
