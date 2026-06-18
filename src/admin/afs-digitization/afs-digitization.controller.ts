@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Logger, Param, Post, Query, Res, UsePipes, ValidationPipe } from '@nestjs/common';
-import { ApiBody } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiBody } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { YearIdToLabel } from 'src/core/constants/years';
 import { AfsDigitizationService } from './afs-digitization.service';
@@ -65,6 +65,7 @@ export class AfsDigitizationController {
    * @param id 
    * @returns 
    */
+  @ApiBearerAuth()
   @Post('annual-account/:id/pdf-metadata')
   async updateAnnualAccountPdfMetadata(@Param('id') id: string) {
     return {
@@ -73,6 +74,7 @@ export class AfsDigitizationController {
     };
   }
 
+  @ApiBearerAuth()
   @Get('annual-accounts/pdf-metadata/status')
   async getAnnualAccountPdfMetadataStatus() {
     return {
@@ -84,6 +86,7 @@ export class AfsDigitizationController {
   /**
    * Backfills PDF metadata for annual account documents.
    */
+  @ApiBearerAuth()
   @Post('annual-accounts/pdf-metadata/backfill')
   async backfillAnnualAccountPdfMetadata(
     @Query('batchSize') batchSize?: string,
