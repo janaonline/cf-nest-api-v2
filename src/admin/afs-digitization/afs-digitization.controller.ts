@@ -73,6 +73,33 @@ export class AfsDigitizationController {
     };
   }
 
+  @Get('annual-accounts/pdf-metadata/status')
+  async getAnnualAccountPdfMetadataStatus() {
+    return {
+      status: 'success',
+      data: await this.afsService.getPdfMetadataBackfillStatus(),
+    };
+  }
+
+  /**
+   * Backfills PDF metadata for annual account documents.
+   */
+  @Post('annual-accounts/pdf-metadata/backfill')
+  async backfillAnnualAccountPdfMetadata(
+    @Query('batchSize') batchSize?: string,
+    @Query('limit') limit?: string,
+    @Query('onlyMissing') onlyMissing?: string,
+  ) {
+    return {
+      status: 'success',
+      data: await this.afsService.backfillPdfMetadataForAnnualAccounts({
+        batchSize: batchSize ? Number(batchSize) : undefined,
+        limit: limit ? Number(limit) : undefined,
+        onlyMissing: onlyMissing === undefined ? true : onlyMissing !== 'false',
+      }),
+    };
+  }
+
   @Get('dump/afs-excel')
   // async downloadAfsExcelFiles(@Query('yearId') yearId: string, @Query('ulbId') ulbId?: string, @Res() res: Response) {
   async downloadAfsExcelFiles(@Query() query: DigitizationReportQueryDto, @Res() res: Response) {
