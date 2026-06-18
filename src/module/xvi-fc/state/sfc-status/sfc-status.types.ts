@@ -10,6 +10,7 @@ export interface SfcFormActor {
   action: 'Created by' | 'Updated by' | 'Submitted by';
   by: string | null;
   date: string | null;
+  designation: string;
 }
 
 export interface SfcFormGetResponseData {

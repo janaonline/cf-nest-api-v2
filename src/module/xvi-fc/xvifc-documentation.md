@@ -243,7 +243,7 @@ All write operations (create/bulk-create/update/toggle/delete) invalidate the Re
   - Status gate: `assertCanStateFinalSubmitForm` — blocked unless `NOT_STARTED`, `IN_PROGRESS`, or `RETURNED_BY_MOHUA`.
   - History action: `FINAL_SUBMIT`.
   - STATE users can submit only their own state. ADMIN can submit any state.
-  - **Note:** `SUBMISSION_ACKNOWLEDGED_BY_MOHUA` is reserved for a future MoHUA acknowledge/approval action — it is never set by state final submit.
+  - **Workflow rule (applies to all state forms):** STATE final-submit always transitions to `UNDER_REVIEW_BY_MOHUA` (5). `SUBMISSION_ACKNOWLEDGED_BY_MOHUA` (7) is reserved exclusively for a future MoHUA acknowledge/approval action and is never set by a state user.
 
 ---
 
@@ -1074,3 +1074,24 @@ curl -H "Authorization: Bearer <token>" \
 - Status-gate helpers (`canStateFinalSubmitForm`, `assertCanStateFinalSubmitForm`) — `UNDER_REVIEW_BY_MOHUA` is already outside `STATE_EDITABLE_STATUSES`, so a submitted form is correctly blocked from re-editing by the STATE.
 - `isTerminalStatus()` — remains tied to `SUBMISSION_ACKNOWLEDGED_BY_MOHUA`; `UNDER_REVIEW_BY_MOHUA` is not terminal (MoHUA can return it).
 - Permission logic in `buildFormPermissions` — `canEdit`/`canFinalSubmit` are `false` for `UNDER_REVIEW_BY_MOHUA` because it is not in `STATE_EDITABLE_STATUSES`.
+
+---
+
+### Elected Urban Local Bodies — Correct Final-Submit Transition Status
+
+**Modified file**:
+
+- `src/module/xvi-fc/state/elected-urban-local-bodies/elected-urban-local-bodies.service.ts`
+  - `finalSubmit()` — `toStatus` corrected from `FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA` (7) to `FORM_STATUS.UNDER_REVIEW_BY_MOHUA` (5).
+  - JSDoc updated to reflect correct target status.
+
+**Workflow rule (all state forms)**:
+
+- STATE final-submit → `UNDER_REVIEW_BY_MOHUA` (5). Form moves to MoHUA for review.
+- `SUBMISSION_ACKNOWLEDGED_BY_MOHUA` (7) is reserved for a future MoHUA acknowledge/approval action; it is never set by a state user.
+
+**No changes needed to**:
+
+- Status-gate helpers — `UNDER_REVIEW_BY_MOHUA` is already outside `STATE_EDITABLE_STATUSES`.
+- `isTerminalStatus()` — unchanged; `UNDER_REVIEW_BY_MOHUA` is not terminal.
+- `buildFormPermissions` — `canEdit`/`canFinalSubmit` are already `false` for `UNDER_REVIEW_BY_MOHUA`.

@@ -64,11 +64,45 @@ export interface FieldLayoutConfig {
   labelWidth?: string;
 }
 
+export type SupportingContentTone = 'primary' | 'secondary' | 'success' | 'warning' | 'danger' | 'info' | 'muted';
+
+export interface SupportingContentAction {
+  id: string;
+  label: string;
+  url?: string;
+  icon?: string;
+  tone?: SupportingContentTone;
+  className?: string;
+  iconClassName?: string;
+  variant?: 'link' | 'button';
+  visible?: boolean;
+  disabled?: boolean;
+  loading?: boolean;
+  loadingLabel?: string;
+  meta?: Record<string, unknown>;
+}
+
+export interface SupportingContentBadge {
+  label: string;
+  icon?: string;
+  tone?: SupportingContentTone;
+  className?: string;
+  visible?: boolean;
+}
+
 export interface FieldSupportingContent {
   type: string;
   position: string;
-  title: string;
-  description: string;
+  title?: string;
+  /** Display label for the supporting link/action (alternative to title) */
+  label?: string;
+  description?: string;
+  /** URL for template-download or link-type supporting content */
+  url?: string;
+  layout?: 'inline' | 'stacked';
+  separator?: 'dot' | 'none';
+  actions?: SupportingContentAction[];
+  badges?: SupportingContentBadge[];
 }
 
 // ─── File value shape ─────────────────────────────────────────────────────────
