@@ -37,6 +37,7 @@ import { Ulb, UlbDocument } from '../../../../schemas/ulb.schema';
 import {
   EULB_ACTION_DOWNLOAD_ERROR_SHEET,
   EULB_ACTION_DOWNLOAD_TEMPLATE,
+  EULB_ACTION_REVALIDATE_EXCEL,
   EULB_ACTION_VIEW_UPLOADED_DATA,
   EULB_FORM_NAME,
   EULB_ROW_EDIT_FIELDS,
@@ -74,7 +75,7 @@ export class ElectedUrbanLocalBodiesService {
   getQuestions(): XviFcApiResponse<HydratedFieldConfig[]> {
     const questions = TEMP_QUESTIONS.map((q) => {
       if (q.key === 'electedBodyExcelFile') {
-        return { ...q, supportingContent: this.buildElectedBodyFileSupportingContent(null) };
+        return { ...q, supportingContent: this.buildElectedBodyFileSupportingContent(null, false) };
       }
       return q;
     });
@@ -119,8 +120,8 @@ export class ElectedUrbanLocalBodiesService {
       if (doc.electedBodyExcelFile !== undefined) savedData['electedBodyExcelFile'] = doc.electedBodyExcelFile;
     }
 
-    const questions = this.hydrateQuestions(savedData, jwtExpiresMs, doc);
     const permissions = this.buildFormPermissions(user, stateId, currentFormStatus);
+    const questions = this.hydrateQuestions(savedData, jwtExpiresMs, doc, permissions.canEdit);
     const { actors, stateName } = this.xvifcFormActorsService.buildActorsAndStateName(doc);
     const validationSummary = this.buildValidationSummary(doc);
 
@@ -370,6 +371,7 @@ export class ElectedUrbanLocalBodiesService {
     savedData: FormData,
     jwtExpiresMs: number,
     doc: EulbFormLeanDoc | null,
+    canEdit: boolean,
   ): HydratedFieldConfig[] {
     return TEMP_QUESTIONS.map((question) => {
       const rawValue = Object.prototype.hasOwnProperty.call(savedData, question.key)
@@ -386,7 +388,7 @@ export class ElectedUrbanLocalBodiesService {
       }
 
       if (question.key === 'electedBodyExcelFile') {
-        return { ...question, value, supportingContent: this.buildElectedBodyFileSupportingContent(doc) };
+        return { ...question, value, supportingContent: this.buildElectedBodyFileSupportingContent(doc, canEdit) };
       }
 
       return { ...question, value };
@@ -400,14 +402,18 @@ export class ElectedUrbanLocalBodiesService {
    *
    * @param doc - Lean form document; null when no record exists yet.
    */
-  private buildElectedBodyFileSupportingContent(doc: EulbFormLeanDoc | null): FieldSupportingContent[] {
+  private buildElectedBodyFileSupportingContent(
+    doc: EulbFormLeanDoc | null,
+    canEdit: boolean,
+  ): FieldSupportingContent[] {
     const activeDatasetVersion = doc?.activeDatasetVersion ?? 0;
     const excelRowCount = doc?.excelRowCount ?? 0;
     const errorRowCount = doc?.errorRowCount ?? 0;
     const missingDbUlbCount = doc?.missingDbUlbCount ?? 0;
     const validationStatus = doc?.validationStatus ?? 'NOT_VALIDATED';
 
-    const hasUploadedData = activeDatasetVersion > 0 && excelRowCount > 0;
+    const hasActiveDataset = activeDatasetVersion > 0 && excelRowCount > 0;
+    const hasUploadedExcel = !!(doc?.electedBodyExcelFile?.fileName || doc?.electedBodyExcelFile?.fileUrl);
 
     return [
       {
@@ -430,7 +436,7 @@ export class ElectedUrbanLocalBodiesService {
             label: 'View uploaded data',
             icon: 'bi bi-table',
             tone: 'primary',
-            visible: hasUploadedData,
+            visible: hasActiveDataset,
           },
           {
             id: EULB_ACTION_DOWNLOAD_ERROR_SHEET,
@@ -439,12 +445,19 @@ export class ElectedUrbanLocalBodiesService {
             tone: 'danger',
             visible: errorRowCount > 0,
           },
+          {
+            id: EULB_ACTION_REVALIDATE_EXCEL,
+            label: 'Revalidate uploaded Excel',
+            icon: 'bi bi-arrow-repeat',
+            tone: 'warning',
+            visible: canEdit && hasUploadedExcel && validationStatus !== 'VALID',
+          },
         ],
         badges: [
           {
             label: `Total rows: ${excelRowCount}`,
             tone: 'secondary',
-            visible: hasUploadedData,
+            visible: hasActiveDataset,
           },
           {
             label: 'All valid',

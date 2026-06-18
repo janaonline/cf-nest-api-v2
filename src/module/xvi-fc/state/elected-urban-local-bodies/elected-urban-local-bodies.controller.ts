@@ -28,6 +28,7 @@ import { FinalSubmitElectedUrbanLocalBodiesDto } from './dto/final-submit-electe
 import { ValidateElectedUrbanLocalBodiesExcelDto } from './dto/validate-elected-urban-local-bodies-excel.dto';
 import { UpdateElectedUrbanLocalBodiesRowDto } from './dto/update-elected-urban-local-bodies-row.dto';
 import { GetElectedUrbanLocalBodiesRowsQueryDto } from './dto/get-elected-urban-local-bodies-rows-query.dto';
+import { RevalidateEulbExcelDto } from './dto/revalidate-eulb-excel.dto';
 
 @ApiTags('XVI-FC - State Forms - Elected Urban Local Bodies')
 @ApiBearerAuth()
@@ -185,6 +186,22 @@ export class ElectedUrbanLocalBodiesController {
     @Headers('user-agent') userAgent: string,
   ) {
     return this.eulbRowService.deleteUploadedExcel(stateId, yearId, user, ip ?? '', userAgent ?? '');
+  }
+
+  @ApiOperation({
+    summary: 'Revalidates the already uploaded EULB Excel data after form values such as ULB count are corrected.',
+  })
+  @ApiBody({ type: RevalidateEulbExcelDto })
+  @Post(':stateId/:yearId/revalidate-excel')
+  @UseGuards(PermissionGuard)
+  @RequirePermissions(Permission.EDIT_STATE_FORMS)
+  revalidateExcel(
+    @Param('stateId', ParseObjectIdPipe) stateId: string,
+    @Param('yearId', ParseObjectIdPipe) yearId: string,
+    @Body() dto: RevalidateEulbExcelDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.eulbExcelService.revalidateExcel(stateId, yearId, dto, user);
   }
 
   @ApiOperation({

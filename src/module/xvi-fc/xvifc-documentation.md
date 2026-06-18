@@ -1173,3 +1173,67 @@ Safe replace order enforced in `validateExcel` (`POST validate-excel`):
 
 - After row edits, the next GET form call returns refreshed badges and action visibility.
 - Parent UI should reload form after modal close to pick up the latest `supportingContent` from the backend.
+
+---
+
+### XVI-FC Common — Shared Form Actors Service
+
+**New files**:
+
+- `src/module/xvi-fc/common/types/xvifc-form-actors.type.ts` — `XvifcActorSourceDocument`, `XvifcFormActor`, `XvifcFormActorsResult`
+- `src/module/xvi-fc/common/services/xvifc-form-actors.service.ts` — `XvifcFormActorsService.buildActorsAndStateName(doc)`
+
+**Modified files**:
+
+- `src/module/xvi-fc/common/xvi-fc-common.module.ts` — registers and exports `XvifcFormActorsService`
+- `src/module/xvi-fc/state/sfc-status/sfc-status.types.ts` — `SfcFormActor` is now a type alias for `XvifcFormActor` (re-export); removed the local interface definition
+- `src/module/xvi-fc/state/sfc-status/sfc-status.service.ts` — injects `XvifcFormActorsService`; `getForm()` calls `buildActorsAndStateName(doc)`; removed private `getActors()` method and module-level `getPopulatedName`/`toIsoStringOrNull` helpers
+- `src/module/xvi-fc/state/elected-urban-local-bodies/elected-urban-local-bodies.types.ts` — `EulbFormActor` is now a type alias for `XvifcFormActor`; gains `designation: string` field
+- `src/module/xvi-fc/state/elected-urban-local-bodies/elected-urban-local-bodies.service.ts` — injects `XvifcFormActorsService`; `getForm()` calls `buildActorsAndStateName(doc)`; removed private `getActors()` method and module-level helpers
+
+**Key behaviours**:
+
+- Both SFC and EULB actors now include `designation: 'State DMA Officer'` on every entry.
+- No module wiring changes required — both `SfcStatusModule` and `ElectedUrbanLocalBodiesModule` already import `XviFcCommonModule`.
+
+---
+
+### Elected Urban Local Bodies — Revalidate Uploaded Excel API
+
+**New files**:
+
+- `src/module/xvi-fc/state/elected-urban-local-bodies/dto/revalidate-eulb-excel.dto.ts` — `RevalidateEulbExcelDto` with `ulbCount: number`
+
+**Modified files**:
+
+- `src/module/xvi-fc/state/elected-urban-local-bodies/constants/elected-urban-local-bodies.constants.ts` — added `EULB_ACTION_REVALIDATE_EXCEL = 'revalidate-excel'`
+- `src/module/xvi-fc/state/elected-urban-local-bodies/elected-urban-local-bodies.types.ts` — added `EulbRevalidateExcelResponseData`
+- `src/module/xvi-fc/state/elected-urban-local-bodies/elected-urban-local-bodies-excel.service.ts` — added `revalidateExcel()` method; no new dependencies
+- `src/module/xvi-fc/state/elected-urban-local-bodies/elected-urban-local-bodies.service.ts` — `buildElectedBodyFileSupportingContent` now accepts `canEdit: boolean`; `hydrateQuestions` now accepts `canEdit: boolean` as 4th param; `getForm` computes `permissions` before calling `hydrateQuestions`
+- `src/module/xvi-fc/state/elected-urban-local-bodies/elected-urban-local-bodies.controller.ts` — added `POST :stateId/:yearId/revalidate-excel` route
+
+**New route**:
+
+- `POST /xvi-fc/state/elected-urban-local-bodies/:stateId/:yearId/revalidate-excel`
+  - Permission: `EDIT_STATE_FORMS`
+  - Body: `{ ulbCount: number }`
+  - Status gate: `assertCanStateEditForm` — blocked when form is under review/submitted
+
+**Revalidation behaviour**:
+
+- Loads all rows for the current `activeDatasetVersion` — no file re-read from S3.
+- Validates `ulbCount` against current row count; returns field-level 400 under `ulbCount` key if mismatched.
+- Re-runs the same row validation rules as the original `validate-excel` (DB ULB matching, field validators).
+- Updates rows in-place via `bulkWrite` — no rows deleted or duplicated.
+- Recalculates and persists: `dbUlbCount`, `maxAllowedExcelRows`, `excelRowCount`, `matchedDbUlbCount`, `missingDbUlbCount`, `extraExcelRowCount`, `errorRowCount`, `validationStatus`.
+- Returns `{ validationSummary, errors: EulbRowValidationError[] }`.
+- Returns success even when row errors remain — errors are the result, not the failure signal.
+
+**Revalidate action in GET form**:
+
+- `buildElectedBodyFileSupportingContent` now receives `canEdit` from the caller.
+- `revalidate-excel` action is included in `electedBodyExcelFile.supportingContent.actions`.
+- Visible when: `canEdit && hasUploadedData && validationStatus !== 'VALID'`.
+- Hidden when: no uploaded data, `validationStatus === 'VALID'`, or form not editable.
+
+**Final submit unchanged** — still requires `validationStatus === 'VALID'`.

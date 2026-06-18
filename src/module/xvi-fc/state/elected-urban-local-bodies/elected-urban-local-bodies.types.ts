@@ -65,6 +65,12 @@ export interface EulbValidateExcelResponseData {
   errors: EulbRowValidationError[];
 }
 
+/** Shape of the `data` field returned by POST revalidate-excel. */
+export interface EulbRevalidateExcelResponseData {
+  validationSummary: EulbValidationSummary;
+  errors: EulbRowValidationError[];
+}
+
 /** Lean doc shape returned by Mongoose populate for getForm queries */
 export interface EulbFormLeanDoc {
   _id: unknown;

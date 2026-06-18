@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { ConfigService } from '@nestjs/config';
 import { Model, Types } from 'mongoose';
@@ -10,6 +10,7 @@ import { Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import { toObjectIdString } from 'src/users/user-scope.helpers';
+import { assertCanStateEditForm } from '../../common/utils/xvi-fc-form-status-access.util';
 import { throwXviFcValidationError, xviFcSuccess } from '../../common/response/xvi-fc-response.util';
 import type { XviFcApiResponse } from '../../common/response/xvi-fc-api-response';
 import {
@@ -21,6 +22,8 @@ import {
 import {
   ElectedUrbanLocalBodiesRow,
   EulbRowDocument,
+  EulbRowError,
+  EulbRowValidationStatus,
 } from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
 import { Ulb, UlbDocument } from '../../../../schemas/ulb.schema';
 import { EXCEL_HEADER_MAP, ERROR_EXCEL_HEADERS } from './constants/elected-urban-local-bodies.constants';
@@ -28,6 +31,7 @@ import type { ValidateElectedUrbanLocalBodiesExcelDto } from './dto/validate-ele
 import { ElectedUrbanLocalBodiesValidator, ParsedExcelRow } from './elected-urban-local-bodies.validator';
 import type {
   EulbFileRefData,
+  EulbRevalidateExcelResponseData,
   EulbRowValidationError,
   EulbValidateExcelResponseData,
   EulbValidationSummary,
@@ -342,6 +346,174 @@ export class ElectedUrbanLocalBodiesExcelService {
     const message =
       formValidationStatus === 'VALID' ? 'Excel validated successfully.' : 'Excel validation completed with errors.';
     return xviFcSuccess(message, responseData);
+  }
+
+  async revalidateExcel(
+    stateId: string,
+    yearId: string,
+    dto: { ulbCount: number },
+    user: AuthUser,
+  ): Promise<XviFcApiResponse<EulbRevalidateExcelResponseData>> {
+    this.assertStateAccess(user, stateId);
+    this.assertEditPermission(user);
+
+    const stateOid = new Types.ObjectId(stateId);
+    const yearOid = new Types.ObjectId(yearId);
+    const userOid = new Types.ObjectId(user._id);
+
+    const form = await this.formModel
+      .findOne({ state: stateOid, year: yearOid, formType: EULB_FORM_TYPE, isDeleted: false })
+      .lean()
+      .exec();
+
+    if (!form) {
+      throw new NotFoundException('Elected Urban Local Bodies form not found for this state and year.');
+    }
+
+    assertCanStateEditForm(form.currentFormStatus);
+
+    if (!form.activeDatasetVersion) {
+      throw new BadRequestException('No uploaded Excel data found to revalidate.');
+    }
+
+    const rows = await this.rowModel
+      .find({ form: form._id, datasetVersion: form.activeDatasetVersion })
+      .sort({ rowNumber: 1 })
+      .lean()
+      .exec();
+
+    if (rows.length === 0) {
+      throw new BadRequestException('No uploaded Excel data found to revalidate.');
+    }
+
+    if (dto.ulbCount !== rows.length) {
+      throwXviFcValidationError({
+        ulbCount: [
+          { field: 'ulbCount', code: 'mismatch', message: 'ULB count must match the uploaded Excel row count.' },
+        ],
+      });
+    }
+
+    const dbUlbs = (await this.ulbModel
+      .find({ state: stateOid, isActive: true })
+      .select('_id name censusCode sbCode')
+      .lean()
+      .exec()) as UlbLean[];
+
+    const dbUlbById = new Map<string, UlbLean>();
+    for (const ulb of dbUlbs) {
+      dbUlbById.set(ulb._id.toString(), ulb);
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    let errorRowCount = 0;
+    let extraExcelRowCount = 0;
+    const matchedUlbIds = new Set<string>();
+    const flatErrors: EulbRowValidationError[] = [];
+
+    type RowBulkOp = {
+      updateOne: {
+        filter: { _id: Types.ObjectId };
+        update: {
+          $set: { errors: EulbRowError[]; validationStatus: EulbRowValidationStatus; updatedBy: Types.ObjectId };
+        };
+      };
+    };
+    const bulkOps: RowBulkOp[] = [];
+
+    for (const row of rows) {
+      if (row.rowType === 'EXTRA_ULB') extraExcelRowCount++;
+
+      const parsed: ParsedExcelRow = {
+        censusCode: row.censusCode,
+        ulbName: row.ulbName,
+        electedBodyStatus: row.electedBodyStatus,
+        dateOfConstitution: row.dateOfConstitution,
+        dateOfExpiry: row.dateOfExpiry,
+        remarks: row.remarks,
+        rowNumber: row.rowNumber,
+      };
+
+      let newErrors: EulbRowError[];
+      if (row.rowType === 'DB_ULB' && row.ulbId) {
+        const ulbIdStr = row.ulbId.toString();
+        const dbUlb = dbUlbById.get(ulbIdStr);
+        if (dbUlb) {
+          matchedUlbIds.add(ulbIdStr);
+          newErrors = this.eulbValidator.validateDbUlbRow(parsed, dbUlb, today);
+        } else {
+          newErrors = this.eulbValidator.validateExtraUlbRow(parsed, today);
+        }
+      } else {
+        newErrors = this.eulbValidator.validateExtraUlbRow(parsed, today);
+      }
+
+      const newValidationStatus: EulbRowValidationStatus = newErrors.length === 0 ? 'VALID' : 'INVALID';
+      if (newErrors.length > 0) {
+        errorRowCount++;
+        for (const e of newErrors) {
+          flatErrors.push({
+            rowNumber: row.rowNumber,
+            censusCode: row.censusCode,
+            ulbName: row.ulbName,
+            field: e.field,
+            code: e.code,
+            message: e.message,
+            value: e.value,
+          });
+        }
+      }
+
+      bulkOps.push({
+        updateOne: {
+          filter: { _id: row._id },
+          update: { $set: { errors: newErrors, validationStatus: newValidationStatus, updatedBy: userOid } },
+        },
+      });
+    }
+
+    if (bulkOps.length > 0) {
+      await this.rowModel.bulkWrite(bulkOps as unknown as Parameters<typeof this.rowModel.bulkWrite>[0]);
+    }
+
+    const dbUlbCount = dbUlbs.length;
+    const matchedDbUlbCount = matchedUlbIds.size;
+    const missingDbUlbCount = dbUlbCount - matchedDbUlbCount;
+    const validationStatus: EulbValidationStatus = errorRowCount === 0 && missingDbUlbCount === 0 ? 'VALID' : 'INVALID';
+
+    await this.formModel
+      .findByIdAndUpdate(form._id, {
+        $set: {
+          dbUlbCount,
+          maxAllowedExcelRows: dbUlbCount * 2,
+          excelRowCount: rows.length,
+          matchedDbUlbCount,
+          missingDbUlbCount,
+          extraExcelRowCount,
+          errorRowCount,
+          validationStatus,
+          updatedBy: userOid,
+        },
+      })
+      .lean()
+      .exec();
+
+    const validationSummary: EulbValidationSummary = {
+      dbUlbCount,
+      maxAllowedExcelRows: dbUlbCount * 2,
+      excelRowCount: rows.length,
+      matchedDbUlbCount,
+      missingDbUlbCount,
+      extraExcelRowCount,
+      errorRowCount,
+      validationStatus,
+      activeDatasetVersion: form.activeDatasetVersion,
+    };
+
+    const message = errorRowCount > 0 ? 'Excel revalidation completed with errors.' : 'Excel revalidation completed.';
+    return xviFcSuccess(message, { validationSummary, errors: flatErrors });
   }
 
   // ─── Helpers ─────────────────────────────────────────────────────────────────

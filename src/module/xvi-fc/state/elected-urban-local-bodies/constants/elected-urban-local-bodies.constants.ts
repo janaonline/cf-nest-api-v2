@@ -46,6 +46,7 @@ export const ERROR_EXCEL_HEADERS = [...TEMPLATE_HEADERS, { label: 'Errors', key:
 export const EULB_ACTION_DOWNLOAD_TEMPLATE = 'download-template';
 export const EULB_ACTION_VIEW_UPLOADED_DATA = 'view-uploaded-data';
 export const EULB_ACTION_DOWNLOAD_ERROR_SHEET = 'download-error-sheet';
+export const EULB_ACTION_REVALIDATE_EXCEL = 'revalidate-excel';
 
 /** Static field config for editable uploaded-row fields.
  *  Returned as `rowEditFields` in the GET form response for frontend row-edit dialog rendering. */
@@ -86,7 +87,7 @@ export const EULB_ROW_EDIT_FIELDS: FieldConfig[] = [
     formFieldType: 'text',
     label: 'Remarks',
     validations: [
-      { name: 'minlength', validator: 25, message: 'Remarks must be at least 25 characters.' },
+      // { name: 'minlength', validator: 25, message: 'Remarks must be at least 25 characters.' },
       { name: 'maxlength', validator: 250, message: 'Remarks cannot exceed 250 characters.' },
     ],
   },
