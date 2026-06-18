@@ -103,12 +103,12 @@ export class ElectedUrbanLocalBodiesRow {
 
 export const ElectedUrbanLocalBodiesRowSchema = SchemaFactory.createForClass(ElectedUrbanLocalBodiesRow);
 
-ElectedUrbanLocalBodiesRowSchema.index({ form: 1, datasetVersion: 1 });
-ElectedUrbanLocalBodiesRowSchema.index({ form: 1, datasetVersion: 1, validationStatus: 1 });
-ElectedUrbanLocalBodiesRowSchema.index({ form: 1, datasetVersion: 1, rowType: 1 });
-ElectedUrbanLocalBodiesRowSchema.index({ form: 1, datasetVersion: 1, censusCode: 1 });
+// Primary query + sort: covers all getRows queries filtered by form+datasetVersion and sorted INVALID-first
+ElectedUrbanLocalBodiesRowSchema.index({ form: 1, datasetVersion: 1, validationStatus: 1, rowNumber: 1 });
+// rowType filter with the same sort order
+ElectedUrbanLocalBodiesRowSchema.index({ form: 1, datasetVersion: 1, rowType: 1, validationStatus: 1, rowNumber: 1 });
+// ULB deduplication check used during validate/revalidate
 ElectedUrbanLocalBodiesRowSchema.index({ state: 1, year: 1, ulbId: 1 });
-ElectedUrbanLocalBodiesRowSchema.index({ form: 1, datasetVersion: 1, rowNumber: 1 });
 
 // Partial unique index: prevents duplicate DB ULBs within the same dataset version
 ElectedUrbanLocalBodiesRowSchema.index(

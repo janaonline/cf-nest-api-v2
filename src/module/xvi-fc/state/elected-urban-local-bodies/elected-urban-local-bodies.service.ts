@@ -194,9 +194,14 @@ export class ElectedUrbanLocalBodiesService {
   ): Promise<XviFcApiResponse> {
     this.assertStateAccess(user, dto.stateId);
 
+    const rawExcelFile = dto.data.electedBodyExcelFile;
+    const normalizedExcelFile = rawExcelFile?.fileUrl
+      ? { ...rawExcelFile, fileUrl: this.toRawStoragePath(rawExcelFile.fileUrl) }
+      : rawExcelFile;
+
     const formData: FormData = {
       ulbCount: dto.data.ulbCount,
-      electedBodyExcelFile: dto.data.electedBodyExcelFile,
+      electedBodyExcelFile: normalizedExcelFile,
       checkboxConfirmation: dto.data.checkboxConfirmation,
     };
 
@@ -216,8 +221,7 @@ export class ElectedUrbanLocalBodiesService {
     };
     if (result.sanitizedPayload['ulbCount'] !== undefined)
       fieldUpdates['ulbCount'] = result.sanitizedPayload['ulbCount'];
-    if (result.sanitizedPayload['electedBodyExcelFile'] !== undefined)
-      fieldUpdates['electedBodyExcelFile'] = result.sanitizedPayload['electedBodyExcelFile'];
+    if (normalizedExcelFile !== undefined) fieldUpdates['electedBodyExcelFile'] = normalizedExcelFile;
     if (result.sanitizedPayload['checkboxConfirmation'] !== undefined)
       fieldUpdates['checkboxConfirmation'] = result.sanitizedPayload['checkboxConfirmation'];
 
@@ -291,10 +295,15 @@ export class ElectedUrbanLocalBodiesService {
     const fromStatus = existing?.currentFormStatus ?? FORM_STATUS.NOT_STARTED;
     assertCanStateFinalSubmitForm(fromStatus);
 
+    const normalizedExcelFile = {
+      ...dto.data.electedBodyExcelFile,
+      fileUrl: this.toRawStoragePath(dto.data.electedBodyExcelFile.fileUrl),
+    };
+
     // Full form-level validation
     const formData: FormData = {
       ulbCount: dto.data.ulbCount,
-      electedBodyExcelFile: dto.data.electedBodyExcelFile,
+      electedBodyExcelFile: normalizedExcelFile,
       checkboxConfirmation: dto.data.checkboxConfirmation,
     };
     const validation = this.validator.validateFinalSubmitAndBuildPayload(TEMP_QUESTIONS, formData);
@@ -342,7 +351,7 @@ export class ElectedUrbanLocalBodiesService {
       updatedBy: userOid,
       isDraft: false,
       ulbCount: dto.data.ulbCount,
-      electedBodyExcelFile: dto.data.electedBodyExcelFile,
+      electedBodyExcelFile: normalizedExcelFile,
       checkboxConfirmation: dto.data.checkboxConfirmation,
     };
 
@@ -535,6 +544,28 @@ export class ElectedUrbanLocalBodiesService {
     });
     const baseUrl = this.config.get<string>('BASE_URL', '');
     return `${baseUrl}file/download?signature=${token}`;
+  }
+
+  /**
+   * If `fileUrl` is a signed download URL (echoed back by the frontend from a previous GET response),
+   * decodes the embedded token to recover the original S3-relative path and returns it.
+   * Passes through raw S3 paths unchanged.
+   * Always store the raw S3 path in DB; sign it only on the way out.
+   */
+  private toRawStoragePath(fileUrl: string): string {
+    if (!fileUrl) return fileUrl;
+    const baseUrl = this.config.get<string>('BASE_URL', '');
+    const signedPrefix = `${baseUrl}file/download?signature=`;
+    if (!fileUrl.startsWith(signedPrefix)) return fileUrl;
+    const token = fileUrl.slice(signedPrefix.length);
+    let decoded: { path: string };
+    try {
+      decoded = this.fileTokenService.parseToken(token);
+    } catch {
+      throw new BadRequestException('The file URL has expired. Please reload the page and try again.');
+    }
+    const storageUrl = this.config.get<string>('AWS_STORAGE_URL', '');
+    return storageUrl && decoded.path.startsWith(storageUrl) ? decoded.path.slice(storageUrl.length) : decoded.path;
   }
 
   /**

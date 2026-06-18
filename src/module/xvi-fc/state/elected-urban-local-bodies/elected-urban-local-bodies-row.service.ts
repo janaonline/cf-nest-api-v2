@@ -77,7 +77,7 @@ export class ElectedUrbanLocalBodiesRowService {
     }
 
     const [rows, total] = await Promise.all([
-      this.rowModel.find(filter).skip(skip).limit(limit).lean().exec(),
+      this.rowModel.find(filter).sort({ validationStatus: 1, rowNumber: 1 }).skip(skip).limit(limit).lean().exec(),
       this.rowModel.countDocuments(filter).exec(),
     ]);
 
