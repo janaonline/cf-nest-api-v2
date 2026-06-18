@@ -425,9 +425,24 @@ export class SfcStatusService {
     const submittedByName = getPopulatedName(doc?.submittedBy);
     const stateName = getPopulatedName(doc?.state) ?? '';
     const actors: SfcFormActor[] = [
-      { action: 'Created by', by: createdByName ?? null, date: toIsoStringOrNull(doc?.createdAt) },
-      { action: 'Updated by', by: updatedByName ?? null, date: toIsoStringOrNull(doc?.updatedAt) },
-      { action: 'Submitted by', by: submittedByName ?? null, date: toIsoStringOrNull(doc?.submittedAt) },
+      {
+        action: 'Created by',
+        designation: 'State DMA',
+        by: createdByName ?? null,
+        date: toIsoStringOrNull(doc?.createdAt),
+      },
+      {
+        action: 'Updated by',
+        designation: 'State DMA',
+        by: updatedByName ?? null,
+        date: toIsoStringOrNull(doc?.updatedAt),
+      },
+      {
+        action: 'Submitted by',
+        designation: 'State DMA',
+        by: submittedByName ?? null,
+        date: toIsoStringOrNull(doc?.submittedAt),
+      },
     ];
     return { actors, stateName };
   }
