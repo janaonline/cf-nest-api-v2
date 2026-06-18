@@ -1095,3 +1095,81 @@ curl -H "Authorization: Bearer <token>" \
 - Status-gate helpers — `UNDER_REVIEW_BY_MOHUA` is already outside `STATE_EDITABLE_STATUSES`.
 - `isTerminalStatus()` — unchanged; `UNDER_REVIEW_BY_MOHUA` is not terminal.
 - `buildFormPermissions` — `canEdit`/`canFinalSubmit` are already `false` for `UNDER_REVIEW_BY_MOHUA`.
+
+---
+
+### Elected Urban Local Bodies — Row Data Lifecycle (Hard Delete)
+
+**Modified files**:
+
+- `src/module/xvi-fc/state/elected-urban-local-bodies/elected-urban-local-bodies-excel.service.ts`
+- `src/module/xvi-fc/state/elected-urban-local-bodies/elected-urban-local-bodies-row.service.ts`
+- `src/module/xvi-fc/state/elected-urban-local-bodies/elected-urban-local-bodies.controller.ts`
+
+**Row data lifecycle**:
+
+- EULB row data is hard-deleted on file removal — no soft-delete, no archive, no history collection.
+- The row collection (`xvi_fc_elected_urban_local_bodies_rows`) holds only the current working dataset at any given time.
+- Rows are scoped by `(form, datasetVersion)`. The form's `activeDatasetVersion` determines which rows are live.
+
+**New Excel upload (safe replace)**:
+
+Safe replace order enforced in `validateExcel` (`POST validate-excel`):
+
+1. Parse and validate rows.
+2. Insert new rows with `datasetVersion = activeDatasetVersion + 1` (new rows exist before form points to them).
+3. Update form document: set all summary fields and `activeDatasetVersion = newVersion`.
+4. Delete old rows (`datasetVersion = currentVersion`) only after steps 2 and 3 succeed.
+- If row insert or form update fails, the old active dataset remains untouched.
+- If old-row deletion fails, it is logged and silently skipped — old rows are invisible because the rows API queries by `activeDatasetVersion`.
+- Validation with row errors is still a successful replace: invalid rows are stored alongside their `errors[]`.
+
+**Delete uploaded Excel (`DELETE /:stateId/:yearId/uploaded-excel`)**:
+
+- Permission: `EDIT_STATE_FORMS`.
+- Status gate: `assertCanStateEditForm` — blocked when form is under review/submitted.
+- Hard-deletes rows for `(formId, activeDatasetVersion)`.
+- Clears `electedBodyExcelFile` from the form document (`$unset`).
+- Resets `excelRowCount`, `matchedDbUlbCount`, `missingDbUlbCount`, `extraExcelRowCount`, `errorRowCount` to `0`.
+- Resets `validationStatus` to `NOT_VALIDATED`.
+- Does not clear `ulbCount`, `dbUlbCount`, `maxAllowedExcelRows`, or `activeDatasetVersion`.
+- Does not delete the uploaded file from S3 (only the DB reference is cleared).
+- Returns `{ validationSummary: { ... } }` with zeroed counts.
+
+**Side effects after delete**:
+
+- GET form: `electedBodyExcelFile` is cleared → `view-uploaded-data` and `download-error-sheet` actions hidden, no badges.
+- Rows API: returns empty list (no rows for `activeDatasetVersion` after delete).
+- Error-sheet API: returns controlled 400 (`No uploaded Elected Bodies data found`).
+- GET form supporting actions rebuild from live DB state on every GET.
+
+---
+
+### Elected Urban Local Bodies — Row Edit Fields and Validation Summary Sync
+
+**Modified files**:
+
+- `src/module/xvi-fc/common/types/field-config.type.ts`
+- `src/module/xvi-fc/state/elected-urban-local-bodies/constants/elected-urban-local-bodies.constants.ts`
+- `src/module/xvi-fc/state/elected-urban-local-bodies/elected-urban-local-bodies.types.ts`
+- `src/module/xvi-fc/state/elected-urban-local-bodies/elected-urban-local-bodies.service.ts`
+- `src/module/xvi-fc/state/elected-urban-local-bodies/elected-urban-local-bodies-row.service.ts`
+
+**GET form now returns `rowEditFields`**:
+
+- `GET /:stateId/:yearId` includes `rowEditFields: FieldConfig[]` in `data` alongside `questions`.
+- Contains static field configs for the 4 editable row fields: `electedBodyStatus`, `dateOfConstitution`, `dateOfExpiry`, `remarks`.
+- Frontend uses these configs to render and validate the row-edit dialog without a separate API call.
+- Defined as `EULB_ROW_EDIT_FIELDS` constant in the constants file — static, no DB dependency.
+
+**PATCH row now returns updated row and recalculated summary**:
+
+- `PATCH /:stateId/:yearId/rows/:rowId` response shape changed from `data: EulbRow` to `data: { row: EulbRow, validationSummary: EulbValidationSummary }`.
+- After row revalidation, `recalculateFormSummary()` now returns the full `EulbValidationSummary` instead of `void`.
+- Summary is recalculated from DB counts — not incremented/decremented client-side.
+- Frontend must use the returned summary to update the parent error-count pill without refetching GET form.
+
+**Supporting content remains backend-driven**:
+
+- After row edits, the next GET form call returns refreshed badges and action visibility.
+- Parent UI should reload form after modal close to pick up the latest `supportingContent` from the backend.

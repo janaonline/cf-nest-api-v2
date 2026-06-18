@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Headers,
   Ip,
@@ -166,6 +167,24 @@ export class ElectedUrbanLocalBodiesController {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       disposition: `attachment; filename="elected-bodies-error-sheet_${getTimeStamp(false)}.xlsx"`,
     });
+  }
+
+  @ApiOperation({
+    summary: 'Delete uploaded Elected Bodies Excel',
+    description:
+      'Hard-deletes all current EULB row data and clears the uploaded file reference. Resets validation summary to NOT_VALIDATED. Blocked when the form status does not allow editing.',
+  })
+  @Delete(':stateId/:yearId/uploaded-excel')
+  @UseGuards(PermissionGuard)
+  @RequirePermissions(Permission.EDIT_STATE_FORMS)
+  deleteUploadedExcel(
+    @Param('stateId', ParseObjectIdPipe) stateId: string,
+    @Param('yearId', ParseObjectIdPipe) yearId: string,
+    @CurrentUser() user: AuthUser,
+    @Ip() ip: string,
+    @Headers('user-agent') userAgent: string,
+  ) {
+    return this.eulbRowService.deleteUploadedExcel(stateId, yearId, user, ip ?? '', userAgent ?? '');
   }
 
   @ApiOperation({

@@ -135,6 +135,10 @@ export interface FieldConfig {
   options?: FieldOptions;
   allowedFileTypes?: string[];
   maxFileSize?: number;
+  /** For date fields: earliest selectable date as ISO string or 'TODAY' */
+  minDate?: string;
+  /** For date fields: latest selectable date as ISO string or 'TODAY' */
+  maxDate?: string;
   placeholder?: string;
   folderPath?: string;
   layout?: FieldLayoutConfig;

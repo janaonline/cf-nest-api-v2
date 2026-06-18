@@ -1,4 +1,4 @@
-import type { HydratedFieldConfig } from '../../common/types/field-config.type';
+import type { FieldConfig, HydratedFieldConfig } from '../../common/types/field-config.type';
 import type { EulbValidationStatus } from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
 
 export interface EulbFormPermissions {
@@ -34,6 +34,7 @@ export interface EulbFormGetResponseData {
   currentFormStatus: number;
   currentFormStatusLabel: string;
   questions: HydratedFieldConfig[];
+  rowEditFields: FieldConfig[];
   permissions: EulbFormPermissions;
   actors: EulbFormActor[];
   validationSummary: EulbValidationSummary;

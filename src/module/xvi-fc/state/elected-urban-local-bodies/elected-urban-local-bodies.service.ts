@@ -38,6 +38,7 @@ import {
   EULB_ACTION_DOWNLOAD_TEMPLATE,
   EULB_ACTION_VIEW_UPLOADED_DATA,
   EULB_FORM_NAME,
+  EULB_ROW_EDIT_FIELDS,
   TEMPLATE_HEADERS,
   TEMP_QUESTIONS,
 } from './constants/elected-urban-local-bodies.constants';
@@ -142,6 +143,7 @@ export class ElectedUrbanLocalBodiesService {
       currentFormStatus,
       currentFormStatusLabel: getFormStatusLabel(currentFormStatus),
       questions,
+      rowEditFields: EULB_ROW_EDIT_FIELDS,
       permissions,
       actors,
       validationSummary,

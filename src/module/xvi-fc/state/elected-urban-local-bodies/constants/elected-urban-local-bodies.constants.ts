@@ -47,12 +47,57 @@ export const EULB_ACTION_DOWNLOAD_TEMPLATE = 'download-template';
 export const EULB_ACTION_VIEW_UPLOADED_DATA = 'view-uploaded-data';
 export const EULB_ACTION_DOWNLOAD_ERROR_SHEET = 'download-error-sheet';
 
+/** Static field config for editable uploaded-row fields.
+ *  Returned as `rowEditFields` in the GET form response for frontend row-edit dialog rendering. */
+export const EULB_ROW_EDIT_FIELDS: FieldConfig[] = [
+  {
+    key: 'electedBodyStatus',
+    formFieldType: 'select',
+    label: 'Elected Body Status',
+    options: ELECTED_BODY_STATUSES.map((s) => ({ id: s, label: s })),
+    validations: [{ name: 'required', validator: null, message: 'Elected Body Status is required.' }],
+  },
+  {
+    key: 'dateOfConstitution',
+    formFieldType: 'date',
+    label: 'Date of Constitution',
+    minDate: '2021-05-31',
+    maxDate: 'TODAY',
+    validations: [
+      { name: 'required', validator: null, message: 'Date of Constitution is required.' },
+      { name: 'minDate', validator: '2021-05-31', message: 'Date of Constitution cannot be before 31 May 2021.' },
+      { name: 'maxDate', validator: 'TODAY', message: 'Date of Constitution cannot be a future date.' },
+    ],
+  },
+  {
+    key: 'dateOfExpiry',
+    formFieldType: 'date',
+    label: 'Date of Expiry',
+    minDate: 'TODAY',
+    maxDate: '2030-03-31',
+    validations: [
+      { name: 'required', validator: null, message: 'Date of Expiry is required.' },
+      { name: 'minDate', validator: 'TODAY', message: 'Date of Expiry cannot be before today.' },
+      { name: 'maxDate', validator: '2030-03-31', message: 'Date of Expiry cannot be after 31 March 2030.' },
+    ],
+  },
+  {
+    key: 'remarks',
+    formFieldType: 'text',
+    label: 'Remarks',
+    validations: [
+      { name: 'minlength', validator: 25, message: 'Remarks must be at least 25 characters.' },
+      { name: 'maxlength', validator: 250, message: 'Remarks cannot exceed 250 characters.' },
+    ],
+  },
+];
+
 // TODO: Replace static "Andhra Pradesh" with dynamic state name when question-label
 //       interpolation is supported by the shared form config system.
 export const TEMP_QUESTIONS: FieldConfig[] = [
   {
     formFieldType: 'number',
-    label: 'How many ULBs are there in Andhra Pradesh as of March 31, 2026?',
+    label: 'How many ULBs are there in the state as of March 31, 2026?',
     key: 'ulbCount',
     value: 0,
     placeholder: '',

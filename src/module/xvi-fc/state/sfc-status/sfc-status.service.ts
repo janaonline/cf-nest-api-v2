@@ -427,19 +427,19 @@ export class SfcStatusService {
     const actors: SfcFormActor[] = [
       {
         action: 'Created by',
-        designation: 'State DMA',
+        designation: 'State DMA Officer',
         by: createdByName ?? null,
         date: toIsoStringOrNull(doc?.createdAt),
       },
       {
         action: 'Updated by',
-        designation: 'State DMA',
+        designation: 'State DMA Officer',
         by: updatedByName ?? null,
         date: toIsoStringOrNull(doc?.updatedAt),
       },
       {
         action: 'Submitted by',
-        designation: 'State DMA',
+        designation: 'State DMA Officer',
         by: submittedByName ?? null,
         date: toIsoStringOrNull(doc?.submittedAt),
       },

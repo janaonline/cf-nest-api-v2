@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { ConfigService } from '@nestjs/config';
 import { Model, Types } from 'mongoose';
@@ -51,6 +51,8 @@ interface ProcessedRow extends ParsedExcelRow {
 
 @Injectable()
 export class ElectedUrbanLocalBodiesExcelService {
+  private readonly logger = new Logger(ElectedUrbanLocalBodiesExcelService.name);
+
   constructor(
     @InjectModel(ElectedUrbanLocalBodiesForm.name)
     private readonly formModel: Model<EulbFormDocument>,
@@ -207,72 +209,20 @@ export class ElectedUrbanLocalBodiesExcelService {
     const formValidationStatus: EulbValidationStatus =
       errorRowCount === 0 && missingDbUlbCount === 0 ? 'VALID' : 'INVALID';
 
-    // 10. Upsert form document + insert new dataset version
+    // 10. Safe replace: insert new rows → update form → delete old rows
     const filter = { state: stateOid, year: yearOid, formType: EULB_FORM_TYPE };
     const existing = await this.formModel
       .findOne(filter, { _id: 1, currentFormStatus: 1, activeDatasetVersion: 1 })
       .lean()
       .exec();
 
-    const newVersion = (existing?.activeDatasetVersion ?? 0) + 1;
+    const currentVersion = existing?.activeDatasetVersion ?? 0;
+    const newVersion = currentVersion + 1;
+    // Pre-generate formId for new forms so rows can reference it before the form document is created
+    const formId: Types.ObjectId = existing ? existing._id : new Types.ObjectId();
 
-    // Insert new rows first (before updating activeDatasetVersion)
-    let formId: Types.ObjectId;
-    if (existing) {
-      formId = existing._id;
-      await this.formModel
-        .findOneAndUpdate(
-          { _id: formId },
-          {
-            $set: {
-              ulbCount: dto.ulbCount,
-              electedBodyExcelFile: dto.electedBodyExcelFile,
-              dbUlbCount,
-              maxAllowedExcelRows,
-              excelRowCount,
-              matchedDbUlbCount,
-              missingDbUlbCount,
-              extraExcelRowCount,
-              errorRowCount,
-              validationStatus: formValidationStatus,
-              activeDatasetVersion: newVersion,
-              lastExcelUploadedAt: new Date(),
-              lastExcelUploadedBy: userOid,
-              updatedBy: userOid,
-            },
-          },
-        )
-        .lean()
-        .exec();
-    } else {
-      const created = await this.formModel.create({
-        state: stateOid,
-        year: yearOid,
-        formType: EULB_FORM_TYPE,
-        currentFormStatus: FORM_STATUS.NOT_STARTED,
-        isDraft: true,
-        isActive: true,
-        isDeleted: false,
-        createdBy: userOid,
-        updatedBy: userOid,
-        ulbCount: dto.ulbCount,
-        electedBodyExcelFile: dto.electedBodyExcelFile,
-        dbUlbCount,
-        maxAllowedExcelRows,
-        excelRowCount,
-        matchedDbUlbCount,
-        missingDbUlbCount,
-        extraExcelRowCount,
-        errorRowCount,
-        validationStatus: formValidationStatus,
-        activeDatasetVersion: newVersion,
-        lastExcelUploadedAt: new Date(),
-        lastExcelUploadedBy: userOid,
-      });
-      formId = created._id;
-    }
-
-    // Insert new dataset rows
+    // Step A: Insert new rows BEFORE updating form's activeDatasetVersion.
+    // If this fails, the form still points to the old version and old rows remain intact.
     const rowDocs = processedRows.map((r) => ({
       form: formId,
       state: stateOid,
@@ -300,9 +250,53 @@ export class ElectedUrbanLocalBodiesExcelService {
 
     await this.rowModel.insertMany(rowDocs);
 
-    // Delete old dataset rows after successful insert
+    // Step B: Upsert form with all summary fields and new activeDatasetVersion.
+    const formSummaryFields = {
+      ulbCount: dto.ulbCount,
+      electedBodyExcelFile: dto.electedBodyExcelFile,
+      dbUlbCount,
+      maxAllowedExcelRows,
+      excelRowCount,
+      matchedDbUlbCount,
+      missingDbUlbCount,
+      extraExcelRowCount,
+      errorRowCount,
+      validationStatus: formValidationStatus,
+      activeDatasetVersion: newVersion,
+      lastExcelUploadedAt: new Date(),
+      lastExcelUploadedBy: userOid,
+      updatedBy: userOid,
+    };
+
     if (existing) {
-      await this.rowModel.deleteMany({ form: formId, datasetVersion: { $lt: newVersion } });
+      await this.formModel.findByIdAndUpdate(existing._id, { $set: formSummaryFields }).lean().exec();
+    } else {
+      await this.formModel.create({
+        _id: formId,
+        state: stateOid,
+        year: yearOid,
+        formType: EULB_FORM_TYPE,
+        currentFormStatus: FORM_STATUS.NOT_STARTED,
+        isDraft: true,
+        isActive: true,
+        isDeleted: false,
+        createdBy: userOid,
+        ...formSummaryFields,
+      });
+    }
+
+    // Step C: Hard-delete old rows only after new rows and form summary are saved.
+    // Cleanup failure is logged but does not fail the response — old rows are invisible
+    // because the rows API queries by activeDatasetVersion = newVersion.
+    if (currentVersion > 0) {
+      try {
+        await this.rowModel.deleteMany({ form: formId, datasetVersion: currentVersion }).exec();
+      } catch (err: unknown) {
+        this.logger.error(
+          `EULB old row cleanup failed [form=${formId.toString()} version=${currentVersion}]`,
+          err instanceof Error ? err.stack : String(err),
+        );
+      }
     }
 
     // 11. Generate error Excel if there are row errors and upload to S3
