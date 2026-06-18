@@ -22,6 +22,7 @@ jobs:
             cd /var/www/html/staging-cicd/cf-nest-api-v2
             git fetch --all
             git reset --hard origin/staging
-            npm ci --omit=dev
+            npm ci
             npm run build
+            npm prune --omit=dev
             pm2 reload ecosystem.config.js --only stag-cf-nest-api-v2 || pm2 start ecosystem.config.js --only stag-cf-nest-api-v2
