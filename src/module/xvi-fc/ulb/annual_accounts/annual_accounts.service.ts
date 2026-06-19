@@ -93,7 +93,7 @@ export class AnnualAccountsService implements OnModuleInit {
 
     const sha256 = createHash('sha256').update(file.buffer).digest('hex');
     const sizeKb = Math.round((file.size / 1024) * 100) / 100;
-    const pages = this.s3Service.getPdfPageCountFromBuffer(file.buffer);
+    const pages = await this.s3Service.getPdfPageCountFromBuffer(file.buffer);
 
     const s3Key = `xvi-fc/annual-accounts/${dto.ulbId}/${dto.designYearId}/${dto.section}/${dto.docId}/${uploadId}.pdf`;
     await this.s3Service.uploadPrivate(s3Key, file.buffer, 'application/pdf');
