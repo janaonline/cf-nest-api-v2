@@ -4,14 +4,18 @@ import type { XviFcValidationError, XviFcValidationErrorMap } from '../response/
 import type {
   ConditionOperator,
   FieldConfig,
+  UploadedFileValue,
   Validator,
   VisibilityCondition,
   VisibleWhen,
   YearRangeValidatorConfig,
 } from '../types/field-config.type';
+import { FileUrlNormalizerService } from '../services/file-url-normalizer.service';
 
 @Injectable()
 export class DynamicFormValidationService {
+  constructor(private readonly fileUrlNormalizer: FileUrlNormalizerService) {}
+
   /**
    * Draft validation + payload sanitization in one O(n) pass.
    * Skips absent normal-required fields; still enforces requiredTrue and all other
@@ -64,11 +68,20 @@ export class DynamicFormValidationService {
       }
 
       if (Object.prototype.hasOwnProperty.call(data, field.key)) {
-        sanitizedPayload[field.key] = data[field.key];
+        const raw = data[field.key];
+        sanitizedPayload[field.key] = field.formFieldType === 'file' ? this.normalizeFileForPayload(raw) : raw;
       }
     }
 
     return { isValid: Object.keys(errors).length === 0, errors, sanitizedPayload };
+  }
+
+  // ─── File normalization ────────────────────────────────────────────────────
+
+  private normalizeFileForPayload(value: unknown): unknown {
+    const file = value as UploadedFileValue | null | undefined;
+    if (!file?.fileUrl) return value;
+    return { ...file, fileUrl: this.fileUrlNormalizer.toRawStoragePath(file.fileUrl) };
   }
 
   // ─── Condition evaluation ──────────────────────────────────────────────────
