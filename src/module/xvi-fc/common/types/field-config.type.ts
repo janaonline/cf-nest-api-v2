@@ -129,6 +129,14 @@ export interface FieldConfig {
   /** false → field is excluded from frontend payload and backend validation */
   includeInPayload?: boolean;
   visibleWhen?: VisibleWhen;
+  /** Controls whether the rendered field is enabled or disabled */
+  enabledWhen?: VisibleWhen;
+  /** Controls whether configured validations should be applied */
+  validateWhen?: VisibleWhen;
+  /** Clears/ignores the field value when enabledWhen evaluates false */
+  clearValueWhenDisabled?: boolean;
+  /** Optional UI hint for disabled state */
+  disabledReason?: string;
   /** Array of validators matching the frontend Angular validator contract */
   validations?: Validator[];
   /** Radio fields: FormFieldOption[]; select fields: string[] */

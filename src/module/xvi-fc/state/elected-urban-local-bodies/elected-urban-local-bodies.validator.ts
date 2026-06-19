@@ -20,15 +20,15 @@ export interface ParsedExcelRow {
 export interface DbUlbEntry {
   _id: unknown;
   name: string;
-  censusCode?: string | null;
-  sbCode?: string | null;
+  censusCode?: string | number | null;
+  sbCode?: string | number | null;
 }
 
 @Injectable()
 export class ElectedUrbanLocalBodiesValidator {
   validateDbUlbRow(row: ParsedExcelRow, dbUlb: DbUlbEntry, today: Date): EulbRowError[] {
     const errors: EulbRowError[] = [];
-    const dbCode = (dbUlb.censusCode || dbUlb.sbCode || '').trim();
+    const dbCode = String(dbUlb.censusCode ?? dbUlb.sbCode ?? '').trim();
 
     // censusCode required and must match DB
     if (!row.censusCode || row.censusCode.trim() === '') {
@@ -202,66 +202,72 @@ export class ElectedUrbanLocalBodiesValidator {
       });
     }
 
-    // dateOfConstitution required, valid date, min=2021-05-31, max=today
-    if (!row.dateOfConstitution) {
-      errors.push({ field: 'dateOfConstitution', code: 'required', message: 'Date of constitution is required.' });
-    } else {
-      const doc = this.parseDate(row.dateOfConstitution);
-      if (!doc) {
-        errors.push({
-          field: 'dateOfConstitution',
-          code: 'invalidDate',
-          message: 'Date of constitution must be a valid date.',
-          value: row.dateOfConstitution instanceof Date ? row.dateOfConstitution.toISOString() : row.dateOfConstitution,
-        });
+    // dateOfConstitution and dateOfExpiry are only required and validated when status is Constituted
+    const isConstituted = row.electedBodyStatus?.trim() === 'Constituted';
+
+    if (isConstituted) {
+      // dateOfConstitution required, valid date, min=2021-05-31, max=today
+      if (!row.dateOfConstitution) {
+        errors.push({ field: 'dateOfConstitution', code: 'required', message: 'Date of constitution is required.' });
       } else {
-        const docNorm = this.normalizeDate(doc);
-        if (docNorm < this.normalizeDate(DATE_OF_CONSTITUTION_MIN)) {
+        const doc = this.parseDate(row.dateOfConstitution);
+        if (!doc) {
           errors.push({
             field: 'dateOfConstitution',
-            code: 'minDate',
-            message: 'Date of constitution cannot be before 31 May 2021.',
-            value: doc.toISOString(),
+            code: 'invalidDate',
+            message: 'Date of constitution must be a valid date.',
+            value:
+              row.dateOfConstitution instanceof Date ? row.dateOfConstitution.toISOString() : row.dateOfConstitution,
           });
-        } else if (docNorm > this.normalizeDate(today)) {
-          errors.push({
-            field: 'dateOfConstitution',
-            code: 'maxDate',
-            message: 'Date of constitution cannot be in the future.',
-            value: doc.toISOString(),
-          });
+        } else {
+          const docNorm = this.normalizeDate(doc);
+          if (docNorm < this.normalizeDate(DATE_OF_CONSTITUTION_MIN)) {
+            errors.push({
+              field: 'dateOfConstitution',
+              code: 'minDate',
+              message: 'Date of constitution cannot be before 31 May 2021.',
+              value: doc.toISOString(),
+            });
+          } else if (docNorm > this.normalizeDate(today)) {
+            errors.push({
+              field: 'dateOfConstitution',
+              code: 'maxDate',
+              message: 'Date of constitution cannot be in the future.',
+              value: doc.toISOString(),
+            });
+          }
         }
       }
-    }
 
-    // dateOfExpiry required, valid date, min=today, max=2030-03-31
-    if (!row.dateOfExpiry) {
-      errors.push({ field: 'dateOfExpiry', code: 'required', message: 'Date of expiry is required.' });
-    } else {
-      const doe = this.parseDate(row.dateOfExpiry);
-      if (!doe) {
-        errors.push({
-          field: 'dateOfExpiry',
-          code: 'invalidDate',
-          message: 'Date of expiry must be a valid date.',
-          value: row.dateOfExpiry instanceof Date ? row.dateOfExpiry.toISOString() : row.dateOfExpiry,
-        });
+      // dateOfExpiry required, valid date, min=today, max=2030-03-31
+      if (!row.dateOfExpiry) {
+        errors.push({ field: 'dateOfExpiry', code: 'required', message: 'Date of expiry is required.' });
       } else {
-        const doeNorm = this.normalizeDate(doe);
-        if (doeNorm < this.normalizeDate(today)) {
+        const doe = this.parseDate(row.dateOfExpiry);
+        if (!doe) {
           errors.push({
             field: 'dateOfExpiry',
-            code: 'minDate',
-            message: 'Date of expiry cannot be in the past.',
-            value: doe.toISOString(),
+            code: 'invalidDate',
+            message: 'Date of expiry must be a valid date.',
+            value: row.dateOfExpiry instanceof Date ? row.dateOfExpiry.toISOString() : row.dateOfExpiry,
           });
-        } else if (doeNorm > this.normalizeDate(DATE_OF_EXPIRY_MAX)) {
-          errors.push({
-            field: 'dateOfExpiry',
-            code: 'maxDate',
-            message: 'Date of expiry cannot be after 31 March 2030.',
-            value: doe.toISOString(),
-          });
+        } else {
+          const doeNorm = this.normalizeDate(doe);
+          if (doeNorm < this.normalizeDate(today)) {
+            errors.push({
+              field: 'dateOfExpiry',
+              code: 'minDate',
+              message: 'Date of expiry cannot be in the past.',
+              value: doe.toISOString(),
+            });
+          } else if (doeNorm > this.normalizeDate(DATE_OF_EXPIRY_MAX)) {
+            errors.push({
+              field: 'dateOfExpiry',
+              code: 'maxDate',
+              message: 'Date of expiry cannot be after 31 March 2030.',
+              value: doe.toISOString(),
+            });
+          }
         }
       }
     }

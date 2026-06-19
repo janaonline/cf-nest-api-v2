@@ -13,6 +13,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
     let statusCode: number = HttpStatus.INTERNAL_SERVER_ERROR;
     let message = 'Internal server error';
     let errors: unknown = undefined;
+    let data: unknown = undefined;
 
     if (exception instanceof HttpException) {
       statusCode = exception.getStatus();
@@ -24,6 +25,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
         const resp = exceptionResponse as Record<string, unknown>;
         message = (resp['message'] as string) ?? message;
         if (resp['errors']) errors = resp['errors'];
+        if (resp['data'] !== undefined) data = resp['data'];
       }
     } else if (exception instanceof Error) {
       if (exception.name === 'TokenExpiredError') {
@@ -55,6 +57,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
       path: request.url,
     };
     if (errors !== undefined) body['errors'] = errors;
+    if (data !== undefined) body['data'] = data;
 
     response.status(statusCode).json(body);
   }

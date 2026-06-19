@@ -6,6 +6,7 @@ import type {
   FieldConfig,
   Validator,
   VisibilityCondition,
+  VisibleWhen,
   YearRangeValidatorConfig,
 } from '../types/field-config.type';
 
@@ -45,13 +46,21 @@ export class DynamicFormValidationService {
     for (const field of questions) {
       if (!this.shouldValidateField(field, enriched)) continue;
 
-      const value = enriched[field.key];
+      // Disabled + clearValueWhenDisabled: skip both validation and value inclusion
+      if (field.clearValueWhenDisabled && !this.evaluateConditions(field.enabledWhen, (k) => enriched[k])) {
+        continue;
+      }
 
-      if (isFull) {
-        this.accumulateErrors(errors, this.validateField(field, value, true));
-      } else if (!this.isEmptyValue(value) || this.hasRequiredTrue(field)) {
-        // Draft: skip absent fields unless requiredTrue is present
-        this.accumulateErrors(errors, this.validateField(field, value, false));
+      const value = enriched[field.key];
+      const validationEnabled = this.evaluateConditions(field.validateWhen, (k) => enriched[k]);
+
+      if (validationEnabled) {
+        if (isFull) {
+          this.accumulateErrors(errors, this.validateField(field, value, true));
+        } else if (!this.isEmptyValue(value) || this.hasRequiredTrue(field)) {
+          // Draft: skip absent fields unless requiredTrue is present
+          this.accumulateErrors(errors, this.validateField(field, value, false));
+        }
       }
 
       if (Object.prototype.hasOwnProperty.call(data, field.key)) {
@@ -62,17 +71,21 @@ export class DynamicFormValidationService {
     return { isValid: Object.keys(errors).length === 0, errors, sanitizedPayload };
   }
 
-  // ─── Visibility ────────────────────────────────────────────────────────────
+  // ─── Condition evaluation ──────────────────────────────────────────────────
 
-  private isVisible(field: FieldConfig, data: FormData): boolean {
-    if (!field.visibleWhen) return true;
-    const { mode, conditions } = field.visibleWhen;
-    const results = conditions.map((c) => this.evaluateCondition(c, data));
+  /**
+   * Evaluates a VisibleWhen condition block against a value lookup.
+   * Returns true when the condition is undefined (no restriction).
+   */
+  private evaluateConditions(vw: VisibleWhen | undefined, valueLookup: (key: string) => unknown): boolean {
+    if (!vw) return true;
+    const { mode, conditions } = vw;
+    const results = conditions.map((c) => this.evaluateCondition(c, valueLookup));
     return mode === 'all' ? results.every(Boolean) : results.some(Boolean);
   }
 
-  private evaluateCondition(condition: VisibilityCondition, data: FormData): boolean {
-    const fieldValue = data[condition.key];
+  private evaluateCondition(condition: VisibilityCondition, valueLookup: (key: string) => unknown): boolean {
+    const fieldValue = valueLookup(condition.key);
     const { operator, value } = condition;
 
     const OPS: Record<ConditionOperator, () => boolean> = {
@@ -83,6 +96,10 @@ export class DynamicFormValidationService {
     };
 
     return OPS[operator]?.() ?? false;
+  }
+
+  private isVisible(field: FieldConfig, data: FormData): boolean {
+    return this.evaluateConditions(field.visibleWhen, (k) => data[k]);
   }
 
   /** Returns true when a field should be validated or included in the payload: renderable, payload-included, and currently visible. */

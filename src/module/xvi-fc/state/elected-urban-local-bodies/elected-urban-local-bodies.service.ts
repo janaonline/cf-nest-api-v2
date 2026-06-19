@@ -26,7 +26,11 @@ import type {
   UploadedFileValue,
 } from '../../common/types/field-config.type';
 import type { XviFcApiResponse } from '../../common/response/xvi-fc-api-response';
-import { throwXviFcValidationError, xviFcSuccess } from '../../common/response/xvi-fc-response.util';
+import {
+  throwXviFcValidationError,
+  throwXviFcValidationErrorWithData,
+  xviFcSuccess,
+} from '../../common/response/xvi-fc-response.util';
 import {
   EULB_FORM_TYPE,
   ElectedUrbanLocalBodiesForm,
@@ -213,7 +217,20 @@ export class ElectedUrbanLocalBodiesService {
     const userOid = new Types.ObjectId(user._id);
     const filter = { state: stateOid, year: yearOid, formType: EULB_FORM_TYPE };
 
-    const existing = await this.model.findOne(filter, { _id: 1, currentFormStatus: 1 }).lean().exec();
+    const existing = await this.model.findOne(filter, { _id: 1, currentFormStatus: 1, excelRowCount: 1 }).lean().exec();
+
+    const savedExcelRowCount = existing?.excelRowCount ?? 0;
+    if (dto.data.ulbCount !== undefined && savedExcelRowCount > 0 && dto.data.ulbCount !== savedExcelRowCount) {
+      throwXviFcValidationError({
+        ulbCount: [
+          {
+            field: 'ulbCount',
+            code: 'mismatch',
+            message: `ULB count does not match the validated Excel row count (${savedExcelRowCount}).`,
+          },
+        ],
+      });
+    }
 
     const fieldUpdates: Record<string, unknown> = {
       currentFormStatus: FORM_STATUS.IN_PROGRESS,
@@ -287,7 +304,10 @@ export class ElectedUrbanLocalBodiesService {
         missingDbUlbCount: 1,
         excelRowCount: 1,
         dbUlbCount: 1,
-        ulbCount: 1,
+        maxAllowedExcelRows: 1,
+        matchedDbUlbCount: 1,
+        extraExcelRowCount: 1,
+        activeDatasetVersion: 1,
       })
       .lean()
       .exec();
@@ -311,7 +331,26 @@ export class ElectedUrbanLocalBodiesService {
 
     // Excel/row validation checks
     if (!existing) {
-      throw new BadRequestException('Excel has not been validated. Please validate the Excel file before submitting.');
+      throwXviFcValidationErrorWithData(
+        {
+          electedBodyExcelFile: [
+            {
+              field: 'electedBodyExcelFile',
+              code: 'excelNotValidated',
+              message:
+                'Excel has not been validated. Please validate or revalidate the uploaded Excel before submitting.',
+            },
+          ],
+        },
+        {
+          validationSummary: {
+            validationStatus: 'NOT_VALIDATED' as EulbValidationStatus,
+            excelRowCount: 0,
+            errorRowCount: 0,
+            activeDatasetVersion: 0,
+          },
+        },
+      );
     }
 
     const storedValidationStatus = existing.validationStatus as EulbValidationStatus | undefined;
@@ -319,26 +358,105 @@ export class ElectedUrbanLocalBodiesService {
     const missingDbUlbCount = (existing.missingDbUlbCount as number | undefined) ?? 0;
     const excelRowCount = (existing.excelRowCount as number | undefined) ?? 0;
     const dbUlbCount = (existing.dbUlbCount as number | undefined) ?? 0;
-    const storedUlbCount = existing.ulbCount ?? 0;
+    const maxAllowedExcelRows = (existing.maxAllowedExcelRows as number | undefined) ?? dbUlbCount * 2;
+    const matchedDbUlbCount = (existing.matchedDbUlbCount as number | undefined) ?? 0;
+    const extraExcelRowCount = (existing.extraExcelRowCount as number | undefined) ?? 0;
+    const activeDatasetVersion = (existing.activeDatasetVersion as number | undefined) ?? 0;
 
+    const dbValidationSummary: EulbValidationSummary = {
+      dbUlbCount,
+      maxAllowedExcelRows,
+      excelRowCount,
+      matchedDbUlbCount,
+      missingDbUlbCount,
+      extraExcelRowCount,
+      errorRowCount,
+      validationStatus: storedValidationStatus ?? 'NOT_VALIDATED',
+      activeDatasetVersion,
+    };
+
+    if (!storedValidationStatus || storedValidationStatus === 'NOT_VALIDATED') {
+      throwXviFcValidationErrorWithData(
+        {
+          electedBodyExcelFile: [
+            {
+              field: 'electedBodyExcelFile',
+              code: 'excelNotValidated',
+              message:
+                'Excel has not been validated. Please validate or revalidate the uploaded Excel before submitting.',
+            },
+          ],
+        },
+        { validationSummary: dbValidationSummary },
+      );
+    }
     if (storedValidationStatus !== 'VALID') {
-      throw new BadRequestException('Excel validation status must be VALID before submitting.');
+      throwXviFcValidationErrorWithData(
+        {
+          electedBodyExcelFile: [
+            {
+              field: 'electedBodyExcelFile',
+              code: 'excelInvalid',
+              message:
+                'Uploaded Excel has validation errors. Please view uploaded data, fix errors, and revalidate before final submit.',
+            },
+          ],
+        },
+        { validationSummary: dbValidationSummary },
+      );
     }
     if (errorRowCount > 0) {
-      throw new BadRequestException(
-        `${errorRowCount} row(s) have validation errors. Fix all errors before submitting.`,
+      throwXviFcValidationErrorWithData(
+        {
+          electedBodyExcelFile: [
+            {
+              field: 'electedBodyExcelFile',
+              code: 'excelInvalid',
+              message: `${errorRowCount} row(s) have validation errors. Fix all errors before submitting.`,
+            },
+          ],
+        },
+        { validationSummary: dbValidationSummary },
       );
     }
     if (missingDbUlbCount > 0) {
-      throw new BadRequestException(`${missingDbUlbCount} DB ULB(s) are missing from the Excel file.`);
-    }
-    if (excelRowCount > dbUlbCount * 2) {
-      throw new BadRequestException(
-        `Excel row count (${excelRowCount}) exceeds the maximum allowed (${dbUlbCount * 2}).`,
+      throwXviFcValidationErrorWithData(
+        {
+          electedBodyExcelFile: [
+            {
+              field: 'electedBodyExcelFile',
+              code: 'excelInvalid',
+              message: `${missingDbUlbCount} DB ULB(s) are missing from the Excel file.`,
+            },
+          ],
+        },
+        { validationSummary: dbValidationSummary },
       );
     }
-    if (dto.data.ulbCount !== storedUlbCount || dto.data.ulbCount !== excelRowCount) {
-      throw new BadRequestException('ULB count does not match the validated Excel row count.');
+    if (excelRowCount > dbUlbCount * 2) {
+      throwXviFcValidationErrorWithData(
+        {
+          electedBodyExcelFile: [
+            {
+              field: 'electedBodyExcelFile',
+              code: 'excelInvalid',
+              message: `Excel row count (${excelRowCount}) exceeds the maximum allowed (${dbUlbCount * 2}).`,
+            },
+          ],
+        },
+        { validationSummary: dbValidationSummary },
+      );
+    }
+    if (dto.data.ulbCount !== excelRowCount) {
+      throwXviFcValidationError({
+        ulbCount: [
+          {
+            field: 'ulbCount',
+            code: 'mismatch',
+            message: `ULB count does not match the validated Excel row count (${excelRowCount}).`,
+          },
+        ],
+      });
     }
 
     const toStatus = FORM_STATUS.UNDER_REVIEW_BY_MOHUA;
@@ -466,23 +584,23 @@ export class ElectedUrbanLocalBodiesService {
           {
             label: `Total rows: ${excelRowCount}`,
             tone: 'secondary',
-            visible: hasActiveDataset,
+            visible: canEdit && hasActiveDataset,
           },
           {
             label: 'All valid',
             icon: 'bi bi-check-circle-fill',
             tone: 'success',
-            visible: validationStatus === 'VALID',
+            visible: canEdit && validationStatus === 'VALID',
           },
           {
             label: `${errorRowCount} error(s)`,
             tone: 'danger',
-            visible: errorRowCount > 0,
+            visible: canEdit && errorRowCount > 0,
           },
           {
             label: `${missingDbUlbCount} missing ULB(s)`,
             tone: 'warning',
-            visible: missingDbUlbCount > 0,
+            visible: canEdit && missingDbUlbCount > 0,
           },
         ],
       },

@@ -16,3 +16,12 @@ export function xviFcSuccess<T>(message: string, data: T, meta?: Record<string, 
 export function throwXviFcValidationError(errors: XviFcValidationErrorMap): never {
   throw new BadRequestException({ message: 'Validation failed.', errors });
 }
+
+/**
+ * Like throwXviFcValidationError but also includes a `data` payload in the 400 body.
+ * Used when validation fails but the backend has already persisted partial state that
+ * the frontend needs (e.g., validationSummary after a ulbCount mismatch).
+ */
+export function throwXviFcValidationErrorWithData(errors: XviFcValidationErrorMap, data: unknown): never {
+  throw new BadRequestException({ message: 'Validation failed.', errors, data });
+}
