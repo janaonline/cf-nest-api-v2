@@ -151,6 +151,7 @@ export class OtpService {
 
     const tokens = await this.authService.generateTokens(userId, 'WEB');
     await this.authService.saveRefreshToken(userId, tokens.refreshToken);
+    await this.usersRepository.updateLastLogin(userId);
     this.authService.setRefreshCookie(res, tokens.refreshToken);
 
     return { token: tokens.accessToken, user: this.sanitizeUser(user) };

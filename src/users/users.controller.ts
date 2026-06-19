@@ -5,6 +5,7 @@ import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UpdateProfileContactsDto } from './dto/update-profile-contacts.dto';
 import { ListUsersQueryDto } from './dto/list-users-query.dto';
+import { ListTeamMembersQueryDto } from './dto/list-team-members-query.dto';
 import { CreateManagedUserDto } from './dto/create-managed-user.dto';
 import { UpdatePermissionOverridesDto } from './dto/update-permission-overrides.dto';
 import { UpdateUserRoleDto } from './dto/update-user-role.dto';
@@ -57,6 +58,15 @@ export class UsersController {
   @RequirePermissions(Permission.VIEW_MANAGED_USERS)
   listUsers(@Query() query: ListUsersQueryDto, @CurrentUser() user: AuthUser) {
     return this.usersService.listUsers(query, user);
+  }
+
+  @ApiBearerAuth()
+  @Get('team-members')
+  @UseGuards(JwtAuthGuard, PermissionGuard)
+  @RequirePermissions(Permission.VIEW_MANAGED_USERS)
+  @ApiOperation({ summary: 'List real team members for a ULB or State — no legacy contacts' })
+  listTeamMembers(@Query() query: ListTeamMembersQueryDto, @CurrentUser() user: AuthUser) {
+    return this.usersService.listTeamMembers(query, user);
   }
 
   @ApiBearerAuth()
