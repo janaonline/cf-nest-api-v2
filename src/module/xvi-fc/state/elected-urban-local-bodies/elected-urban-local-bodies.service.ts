@@ -228,7 +228,7 @@ export class ElectedUrbanLocalBodiesService {
           {
             field: 'ulbCount',
             code: 'mismatch',
-            message: `ULB count does not match the validated Excel row count (${savedExcelRowCount}).`,
+            message: `ULB count entered (${dto.data.ulbCount}) does not match the number of ULBs/ rows in the Excel file (${savedExcelRowCount}).`,
           },
         ],
       });
@@ -455,7 +455,7 @@ export class ElectedUrbanLocalBodiesService {
           {
             field: 'ulbCount',
             code: 'mismatch',
-            message: `ULB count does not match the validated Excel row count (${excelRowCount}).`,
+            message: `ULB count entered (${dto.data.ulbCount}) does not match the number of ULBs/ rows in the Excel file (${excelRowCount}).`,
           },
         ],
       });
