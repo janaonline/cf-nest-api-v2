@@ -111,8 +111,14 @@ export class ElectedUrbanLocalBodiesRowService {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
+    const effectiveStatus = dto.electedBodyStatus ?? row.electedBodyStatus ?? undefined;
+    const isConstituted = effectiveStatus === 'Constituted';
+
+    // For non-Constituted rows, exclude dates from DTO validation and clear them in DB
+    const dtoForValidation = isConstituted ? dto : { ...dto, dateOfConstitution: undefined, dateOfExpiry: undefined };
+
     // Validate submitted editable fields before applying — produce uniform 400 with errors[]
-    const dtoErrors = this.eulbValidator.validatePortalUpdateFields(dto, today);
+    const dtoErrors = this.eulbValidator.validatePortalUpdateFields(dtoForValidation, today);
     if (dtoErrors.length > 0) {
       const errors = dtoErrors.map((e) => ({
         rowId: String(row._id),
@@ -124,19 +130,32 @@ export class ElectedUrbanLocalBodiesRowService {
       throw new BadRequestException({ message: 'Row validation failed.', errors });
     }
 
-    // Build update applying only editable fields
+    // Build update applying only editable fields; clear dates for non-Constituted rows
     const updateFields: Record<string, unknown> = { updatedBy: userOid, lastUpdatedSource: 'PORTAL' };
     if (dto.electedBodyStatus !== undefined) updateFields['electedBodyStatus'] = dto.electedBodyStatus;
-    if (dto.dateOfConstitution !== undefined) updateFields['dateOfConstitution'] = new Date(dto.dateOfConstitution);
-    if (dto.dateOfExpiry !== undefined) updateFields['dateOfExpiry'] = new Date(dto.dateOfExpiry);
+    if (isConstituted) {
+      if (dto.dateOfConstitution !== undefined) updateFields['dateOfConstitution'] = new Date(dto.dateOfConstitution);
+      if (dto.dateOfExpiry !== undefined) updateFields['dateOfExpiry'] = new Date(dto.dateOfExpiry);
+    } else {
+      updateFields['dateOfConstitution'] = null;
+      updateFields['dateOfExpiry'] = null;
+    }
     if (dto.remarks !== undefined) updateFields['remarks'] = dto.remarks;
 
     const mergedRow = {
       censusCode: row.censusCode,
       ulbName: row.ulbName,
-      electedBodyStatus: dto.electedBodyStatus ?? row.electedBodyStatus,
-      dateOfConstitution: dto.dateOfConstitution ? new Date(dto.dateOfConstitution) : row.dateOfConstitution,
-      dateOfExpiry: dto.dateOfExpiry ? new Date(dto.dateOfExpiry) : row.dateOfExpiry,
+      electedBodyStatus: effectiveStatus,
+      dateOfConstitution: isConstituted
+        ? dto.dateOfConstitution
+          ? new Date(dto.dateOfConstitution)
+          : (row.dateOfConstitution ?? undefined)
+        : undefined,
+      dateOfExpiry: isConstituted
+        ? dto.dateOfExpiry
+          ? new Date(dto.dateOfExpiry)
+          : (row.dateOfExpiry ?? undefined)
+        : undefined,
       remarks: dto.remarks ?? row.remarks,
       rowNumber: row.rowNumber,
       rowType: row.rowType,

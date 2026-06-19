@@ -64,6 +64,16 @@ export const EULB_ROW_EDIT_FIELDS: FieldConfig[] = [
     label: 'Date of Constitution',
     minDate: '2021-05-31',
     maxDate: 'TODAY',
+    enabledWhen: {
+      mode: 'all',
+      conditions: [{ key: 'electedBodyStatus', operator: 'equals', value: 'Constituted' }],
+    },
+    validateWhen: {
+      mode: 'all',
+      conditions: [{ key: 'electedBodyStatus', operator: 'equals', value: 'Constituted' }],
+    },
+    clearValueWhenDisabled: true,
+    disabledReason: 'Not applicable unless Elected Body Status is Constituted.',
     validations: [
       { name: 'required', validator: null, message: 'Date of Constitution is required.' },
       { name: 'minDate', validator: '2021-05-31', message: 'Date of Constitution cannot be before 31 May 2021.' },
@@ -76,6 +86,16 @@ export const EULB_ROW_EDIT_FIELDS: FieldConfig[] = [
     label: 'Date of Expiry',
     minDate: 'TODAY',
     maxDate: '2030-03-31',
+    enabledWhen: {
+      mode: 'all',
+      conditions: [{ key: 'electedBodyStatus', operator: 'equals', value: 'Constituted' }],
+    },
+    validateWhen: {
+      mode: 'all',
+      conditions: [{ key: 'electedBodyStatus', operator: 'equals', value: 'Constituted' }],
+    },
+    clearValueWhenDisabled: true,
+    disabledReason: 'Not applicable unless Elected Body Status is Constituted.',
     validations: [
       { name: 'required', validator: null, message: 'Date of Expiry is required.' },
       { name: 'minDate', validator: 'TODAY', message: 'Date of Expiry cannot be before today.' },
