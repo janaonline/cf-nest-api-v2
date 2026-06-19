@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { ConfigService } from '@nestjs/config';
 import { Buffer } from 'exceljs';
@@ -19,6 +19,7 @@ import {
 import { toObjectIdString } from 'src/users/user-scope.helpers';
 import { DynamicFormValidationService } from '../../common/dynamic-form-validation/dynamic-form-validation.service';
 import { XvifcFormActorsService } from '../../common/services/xvifc-form-actors.service';
+import { FileUrlNormalizerService } from '../../common/services/file-url-normalizer.service';
 import type { FormData } from '../../common/dynamic-form-validation/dynamic-form-validation.types';
 import type {
   FieldSupportingContent,
@@ -69,6 +70,7 @@ export class ElectedUrbanLocalBodiesService {
     private readonly excelService: ExcelService,
     private readonly fileTokenService: FileTokenService,
     private readonly config: ConfigService,
+    private readonly fileUrlNormalizer: FileUrlNormalizerService,
   ) {}
 
   /**
@@ -200,7 +202,7 @@ export class ElectedUrbanLocalBodiesService {
 
     const rawExcelFile = dto.data.electedBodyExcelFile;
     const normalizedExcelFile = rawExcelFile?.fileUrl
-      ? { ...rawExcelFile, fileUrl: this.toRawStoragePath(rawExcelFile.fileUrl) }
+      ? { ...rawExcelFile, fileUrl: this.fileUrlNormalizer.toRawStoragePath(rawExcelFile.fileUrl) }
       : rawExcelFile;
 
     const formData: FormData = {
@@ -317,7 +319,7 @@ export class ElectedUrbanLocalBodiesService {
 
     const normalizedExcelFile = {
       ...dto.data.electedBodyExcelFile,
-      fileUrl: this.toRawStoragePath(dto.data.electedBodyExcelFile.fileUrl),
+      fileUrl: this.fileUrlNormalizer.toRawStoragePath(dto.data.electedBodyExcelFile.fileUrl),
     };
 
     // Full form-level validation
@@ -662,28 +664,6 @@ export class ElectedUrbanLocalBodiesService {
     });
     const baseUrl = this.config.get<string>('BASE_URL', '');
     return `${baseUrl}file/download?signature=${token}`;
-  }
-
-  /**
-   * If `fileUrl` is a signed download URL (echoed back by the frontend from a previous GET response),
-   * decodes the embedded token to recover the original S3-relative path and returns it.
-   * Passes through raw S3 paths unchanged.
-   * Always store the raw S3 path in DB; sign it only on the way out.
-   */
-  private toRawStoragePath(fileUrl: string): string {
-    if (!fileUrl) return fileUrl;
-    const baseUrl = this.config.get<string>('BASE_URL', '');
-    const signedPrefix = `${baseUrl}file/download?signature=`;
-    if (!fileUrl.startsWith(signedPrefix)) return fileUrl;
-    const token = fileUrl.slice(signedPrefix.length);
-    let decoded: { path: string };
-    try {
-      decoded = this.fileTokenService.parseToken(token);
-    } catch {
-      throw new BadRequestException('The file URL has expired. Please reload the page and try again.');
-    }
-    const storageUrl = this.config.get<string>('AWS_STORAGE_URL', '');
-    return storageUrl && decoded.path.startsWith(storageUrl) ? decoded.path.slice(storageUrl.length) : decoded.path;
   }
 
   /**
