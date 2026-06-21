@@ -6,8 +6,8 @@ import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { toObjectIdString } from 'src/users/user-scope.helpers';
 import { assertCanStateEditForm } from '../../common/utils/xvi-fc-form-status-access.util';
-import { xviFcSuccess } from '../../common/response/xvi-fc-response.util';
-import type { XviFcApiResponse } from '../../common/response/xvi-fc-api-response';
+import { throwXviFcValidationErrorWithData, xviFcSuccess } from '../../common/response/xvi-fc-response.util';
+import type { XviFcApiResponse, XviFcValidationErrorMap } from '../../common/response/xvi-fc-api-response';
 import {
   EULB_FORM_TYPE,
   ElectedUrbanLocalBodiesForm,
@@ -117,17 +117,20 @@ export class ElectedUrbanLocalBodiesRowService {
     // For non-Constituted rows, exclude dates from DTO validation and clear them in DB
     const dtoForValidation = isConstituted ? dto : { ...dto, dateOfConstitution: undefined, dateOfExpiry: undefined };
 
-    // Validate submitted editable fields before applying — produce uniform 400 with errors[]
+    // Validate submitted editable fields before applying — produce uniform 400 with field-keyed errors
     const dtoErrors = this.eulbValidator.validatePortalUpdateFields(dtoForValidation, today);
     if (dtoErrors.length > 0) {
-      const errors = dtoErrors.map((e) => ({
+      const errorMap: XviFcValidationErrorMap = {};
+      for (const e of dtoErrors) {
+        const key = e.field ?? '_form';
+        (errorMap[key] ??= []).push({ field: e.field, code: e.code, message: e.message });
+      }
+      throwXviFcValidationErrorWithData(errorMap, {
         rowId: String(row._id),
         rowNumber: row.rowNumber,
         censusCode: row.censusCode,
         ulbName: row.ulbName,
-        ...e,
-      }));
-      throw new BadRequestException({ message: 'Row validation failed.', errors });
+      });
     }
 
     // Build update applying only editable fields; clear dates for non-Constituted rows
