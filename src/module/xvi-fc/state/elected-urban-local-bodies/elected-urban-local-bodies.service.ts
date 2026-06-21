@@ -163,6 +163,7 @@ export class ElectedUrbanLocalBodiesService {
   async getTemplate(stateId: string, yearId: string, user: AuthUser): Promise<Buffer> {
     this.assertStateAccess(user, stateId);
 
+    // TODO: Add date of constitution/ createdAt condition.
     const ulbs = await this.ulbModel
       .find({ state: new Types.ObjectId(stateId), isActive: true })
       .select('_id name censusCode sbCode')
@@ -552,6 +553,9 @@ export class ElectedUrbanLocalBodiesService {
         position: 'before',
         layout: 'inline',
         separator: 'dot',
+        description: canEdit
+          ? 'Download the template, upload the completed Excel. If errors are found, review the uploaded rows or download the error sheet, make corrections, and revalidate before final submission.'
+          : '',
         actions: [
           {
             id: EULB_ACTION_DOWNLOAD_TEMPLATE,
@@ -564,7 +568,7 @@ export class ElectedUrbanLocalBodiesService {
             id: EULB_ACTION_VIEW_UPLOADED_DATA,
             label: 'View uploaded data',
             icon: 'bi bi-table',
-            tone: 'primary',
+            tone: errorRowCount > 0 ? 'danger' : 'primary',
             visible: canView && hasActiveDataset,
           },
           {
@@ -578,7 +582,7 @@ export class ElectedUrbanLocalBodiesService {
             id: EULB_ACTION_REVALIDATE_EXCEL,
             label: 'Revalidate uploaded Excel',
             icon: 'bi bi-arrow-repeat',
-            tone: 'warning',
+            tone: 'primary',
             visible: canEdit && hasUploadedExcel && validationStatus !== 'VALID',
           },
         ],

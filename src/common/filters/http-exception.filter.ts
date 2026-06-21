@@ -51,6 +51,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
     }
 
     const body: Record<string, unknown> = {
+      success: false,
       statusCode,
       message,
       timestamp: new Date().toISOString(),
