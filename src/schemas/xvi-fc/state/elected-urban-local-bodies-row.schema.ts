@@ -4,8 +4,27 @@ import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 export type EulbRowDocument = HydratedDocument<ElectedUrbanLocalBodiesRow>;
 
 export type EulbRowType = 'DB_ULB' | 'EXTRA_ULB';
-export type EulbRowSource = 'EXCEL' | 'PORTAL';
+export type EulbRowSource = 'EXCEL' | 'PORTAL' | 'POST_SUBMISSION_UPDATE';
 export type EulbRowValidationStatus = 'VALID' | 'INVALID';
+
+export interface EulbRowUpdateHistoryEntry {
+  batchId: Types.ObjectId;
+  source: 'POST_SUBMISSION_UPDATE';
+  previous: {
+    electedBodyStatus?: string | null;
+    dateOfConstitution?: string | null;
+    dateOfExpiry?: string | null;
+    remarks?: string | null;
+  };
+  updated: {
+    electedBodyStatus?: string | null;
+    dateOfConstitution?: string | null;
+    dateOfExpiry?: string | null;
+    remarks?: string | null;
+  };
+  updatedBy: Types.ObjectId;
+  updatedAt: Date;
+}
 
 export interface EulbRowError {
   field: string;
@@ -23,6 +42,17 @@ class EulbRowErrorSubdoc {
 }
 
 const EulbRowErrorSubdocSchema = SchemaFactory.createForClass(EulbRowErrorSubdoc);
+
+@Schema({ _id: false })
+class EulbRowUpdateHistorySubdoc {
+  @Prop({ type: MongooseSchema.Types.ObjectId }) batchId!: Types.ObjectId;
+  @Prop({ type: String, enum: ['POST_SUBMISSION_UPDATE'] }) source!: string;
+  @Prop({ type: MongooseSchema.Types.Mixed }) previous!: Record<string, unknown>;
+  @Prop({ type: MongooseSchema.Types.Mixed }) updated!: Record<string, unknown>;
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User' }) updatedBy!: Types.ObjectId;
+  @Prop({ type: Date }) updatedAt!: Date;
+}
+const EulbRowUpdateHistorySubdocSchema = SchemaFactory.createForClass(EulbRowUpdateHistorySubdoc);
 
 @Schema({
   collection: 'xvi_fc_elected_urban_local_bodies_rows',
@@ -75,7 +105,7 @@ export class ElectedUrbanLocalBodiesRow {
   @Prop({ type: String, enum: ['DB_ULB', 'EXTRA_ULB'], required: true })
   rowType!: EulbRowType;
 
-  @Prop({ type: String, enum: ['EXCEL', 'PORTAL'], required: true })
+  @Prop({ type: String, enum: ['EXCEL', 'PORTAL', 'POST_SUBMISSION_UPDATE'], required: true })
   lastUpdatedSource!: EulbRowSource;
 
   @Prop({ type: String, enum: ['VALID', 'INVALID'], required: true })
@@ -86,6 +116,12 @@ export class ElectedUrbanLocalBodiesRow {
 
   @Prop({ type: MongooseSchema.Types.Mixed })
   rawExcelData?: Record<string, unknown>;
+
+  @Prop({ type: MongooseSchema.Types.ObjectId })
+  lastUpdateBatchId?: Types.ObjectId;
+
+  @Prop({ type: [EulbRowUpdateHistorySubdocSchema], default: [] })
+  updateHistory!: EulbRowUpdateHistoryEntry[];
 
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User' })
   createdBy?: Types.ObjectId;

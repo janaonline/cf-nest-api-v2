@@ -17,6 +17,7 @@ import { ElectedUrbanLocalBodiesService } from './elected-urban-local-bodies.ser
 import { ElectedUrbanLocalBodiesExcelService } from './elected-urban-local-bodies-excel.service';
 import { ElectedUrbanLocalBodiesRowService } from './elected-urban-local-bodies-row.service';
 import { ElectedUrbanLocalBodiesValidator } from './elected-urban-local-bodies.validator';
+import { EulbPostSubmissionUpdateService } from './elected-urban-local-bodies-post-submission-update.service';
 
 @Module({
   imports: [
@@ -33,6 +34,7 @@ import { ElectedUrbanLocalBodiesValidator } from './elected-urban-local-bodies.v
     ElectedUrbanLocalBodiesExcelService,
     ElectedUrbanLocalBodiesRowService,
     ElectedUrbanLocalBodiesValidator,
+    EulbPostSubmissionUpdateService,
     ExcelService,
     S3Service,
   ],
