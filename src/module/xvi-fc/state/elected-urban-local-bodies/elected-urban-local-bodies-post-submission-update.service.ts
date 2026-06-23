@@ -11,7 +11,11 @@ import {
   assertCanViewPostSubmissionUpdate,
   canViewPostSubmissionUpdate,
 } from '../../common/utils/xvi-fc-form-status-access.util';
-import { throwXviFcValidationError, throwXviFcValidationErrorWithData, xviFcSuccess } from '../../common/response/xvi-fc-response.util';
+import {
+  throwXviFcValidationError,
+  throwXviFcValidationErrorWithData,
+  xviFcSuccess,
+} from '../../common/response/xvi-fc-response.util';
 import type { XviFcApiResponse } from '../../common/response/xvi-fc-api-response';
 import {
   EULB_FORM_TYPE,
@@ -41,16 +45,37 @@ import type {
 } from './elected-urban-local-bodies.types';
 
 /**
- * Builds the Mongoose filter condition for post-submission eligible rows.
- * Eligible = 'Not Constituted' (always) OR 'Constituted' with dateOfExpiry strictly after today.
- * 'Not Constituted' rows skip the date check because dates are not applicable for them.
+ * Builds the eligibility `$or` condition: 'Not Constituted' always qualifies; 'Constituted' qualifies only when expired.
+ * @param today Start-of-day reference date for the expiry `$lt` comparison.
  */
 export function buildEligibleRowCondition(today: Date): FilterQuery<EulbRowDocument> {
   return {
-    $or: [
-      { electedBodyStatus: 'Not Constituted' },
-      { electedBodyStatus: 'Constituted', dateOfExpiry: { $gt: today } },
-    ],
+    $or: [{ electedBodyStatus: 'Not Constituted' }, { electedBodyStatus: 'Constituted', dateOfExpiry: { $lt: today } }],
+  };
+}
+
+/**
+ * Full Mongoose filter scoping eligible rows to a specific form, state, year, and dataset version.
+ * @param formId Parent form ObjectId.
+ * @param stateId State ID string.
+ * @param yearId Year ID string.
+ * @param datasetVersion Active dataset version from the form document.
+ * @param today Start-of-day reference date passed into `buildEligibleRowCondition`.
+ */
+export function buildPostSubmissionEligibleRowsFilter(
+  formId: Types.ObjectId,
+  stateId: string,
+  yearId: string,
+  datasetVersion: number,
+  today: Date,
+): FilterQuery<EulbRowDocument> {
+  return {
+    form: formId,
+    state: new Types.ObjectId(stateId),
+    year: new Types.ObjectId(yearId),
+    datasetVersion,
+    isActive: true,
+    $and: [buildEligibleRowCondition(today)],
   };
 }
 
@@ -66,6 +91,12 @@ export class EulbPostSubmissionUpdateService {
     private readonly validator: ElectedUrbanLocalBodiesValidator,
   ) {}
 
+  /**
+   * Returns post-submission update metadata: form status, user permissions, and eligible row count.
+   * @param stateId Target state ID.
+   * @param yearId Target year ID.
+   * @param user Authenticated user making the request.
+   */
   async getMetadata(
     stateId: string,
     yearId: string,
@@ -82,12 +113,9 @@ export class EulbPostSubmissionUpdateService {
     if (canUpdate && formDoc) {
       const today = this.startOfToday();
       eligibleRowCount = await this.rowModel
-        .countDocuments({
-          form: formDoc._id,
-          datasetVersion: formDoc.activeDatasetVersion ?? 0,
-          isActive: true,
-          $and: [buildEligibleRowCondition(today)],
-        })
+        .countDocuments(
+          buildPostSubmissionEligibleRowsFilter(formDoc._id, stateId, yearId, formDoc.activeDatasetVersion ?? 0, today),
+        )
         .exec();
     }
 
@@ -102,6 +130,13 @@ export class EulbPostSubmissionUpdateService {
     return xviFcSuccess('Post-submission update metadata fetched.', data);
   }
 
+  /**
+   * Returns a paginated list of rows eligible for post-submission update with optional status/search filters.
+   * @param stateId Target state ID.
+   * @param yearId Target year ID.
+   * @param query Pagination and filter options (page, limit, validationStatus, electedBodyStatus, search).
+   * @param user Authenticated user making the request.
+   */
   async getEligibleRows(
     stateId: string,
     yearId: string,
@@ -123,22 +158,16 @@ export class EulbPostSubmissionUpdateService {
     const limit = Math.min(query.limit ?? 50, 200);
     const skip = (page - 1) * limit;
 
-    const filter: FilterQuery<EulbRowDocument> = {
-      form: formDoc._id,
-      datasetVersion: activeVersion,
-      isActive: true,
-    };
+    const filter = buildPostSubmissionEligibleRowsFilter(formDoc._id, stateId, yearId, activeVersion, today);
 
     if (query.validationStatus) filter['validationStatus'] = query.validationStatus;
     if (query.electedBodyStatus) filter['electedBodyStatus'] = query.electedBodyStatus;
 
     // Use $and to combine the eligible-row $or with the optional search $or without one overwriting the other
-    const andConditions: FilterQuery<EulbRowDocument>[] = [buildEligibleRowCondition(today)];
     if (query.search) {
       const regex = new RegExp(query.search, 'i');
-      andConditions.push({ $or: [{ censusCode: regex }, { ulbName: regex }] });
+      filter['$and'] = [...(filter['$and'] ?? []), { $or: [{ censusCode: regex }, { ulbName: regex }] }];
     }
-    filter['$and'] = andConditions;
 
     const [rawRows, total] = await Promise.all([
       this.rowModel.find(filter).sort({ rowNumber: 1 }).skip(skip).limit(limit).lean().exec(),
@@ -156,9 +185,7 @@ export class EulbPostSubmissionUpdateService {
           ? r.dateOfConstitution.toISOString().split('T')[0]
           : (r.dateOfConstitution ?? null),
       dateOfExpiry:
-        r.dateOfExpiry instanceof Date
-          ? r.dateOfExpiry.toISOString().split('T')[0]
-          : (r.dateOfExpiry ?? null),
+        r.dateOfExpiry instanceof Date ? r.dateOfExpiry.toISOString().split('T')[0] : (r.dateOfExpiry ?? null),
       remarks: r.remarks ?? null,
       rowType: r.rowType,
       validationStatus: r.validationStatus,
@@ -184,6 +211,13 @@ export class EulbPostSubmissionUpdateService {
     return xviFcSuccess('Eligible rows for post-submission update fetched.', data);
   }
 
+  /**
+   * Validates and atomically applies a post-submission update: writes row history and recalculates the form summary.
+   * @param stateId Target state ID.
+   * @param yearId Target year ID.
+   * @param dto Batch payload containing the supporting document and proposed row updates.
+   * @param user Authenticated user making the request.
+   */
   async submitBatch(
     stateId: string,
     yearId: string,
@@ -202,10 +236,14 @@ export class EulbPostSubmissionUpdateService {
       throwXviFcValidationError({ document: [{ code: 'required', message: 'Document fileUrl is required.' }] });
     }
     if (documentInput.fileSize <= 0) {
-      throwXviFcValidationError({ document: [{ code: 'invalid', message: 'Document fileSize must be greater than 0.' }] });
+      throwXviFcValidationError({
+        document: [{ code: 'invalid', message: 'Document fileSize must be greater than 0.' }],
+      });
     }
     if (documentInput.fileSize > MAX_DOCUMENT_BYTES) {
-      throwXviFcValidationError({ document: [{ code: 'tooLarge', message: 'Document file size must not exceed 20 MB.' }] });
+      throwXviFcValidationError({
+        document: [{ code: 'tooLarge', message: 'Document file size must not exceed 20 MB.' }],
+      });
     }
     if (documentInput.mimeType) {
       if (documentInput.mimeType !== 'application/pdf') {
@@ -213,7 +251,12 @@ export class EulbPostSubmissionUpdateService {
       }
     } else if (!documentInput.fileName.toLowerCase().endsWith('.pdf')) {
       throwXviFcValidationError({
-        document: [{ code: 'invalidType', message: 'File must be a PDF. Provide a valid mimeType or ensure the fileName ends in .pdf.' }],
+        document: [
+          {
+            code: 'invalidType',
+            message: 'File must be a PDF. Provide a valid mimeType or ensure the fileName ends in .pdf.',
+          },
+        ],
       });
     }
 
@@ -276,7 +319,13 @@ export class EulbPostSubmissionUpdateService {
         today,
       );
       if (errors.length > 0) {
-        rowErrors.push({ rowId: proposed.rowId, rowNumber: dbRow.rowNumber, censusCode: dbRow.censusCode ?? null, ulbName: dbRow.ulbName, errors });
+        rowErrors.push({
+          rowId: proposed.rowId,
+          rowNumber: dbRow.rowNumber,
+          censusCode: dbRow.censusCode ?? null,
+          ulbName: dbRow.ulbName,
+          errors,
+        });
         for (const e of errors) {
           const key = e.field ?? '_form';
           const bucket = (fieldErrorMap[key] ??= []);
@@ -363,7 +412,8 @@ export class EulbPostSubmissionUpdateService {
               {
                 $set: {
                   electedBodyStatus: proposed.electedBodyStatus,
-                  dateOfConstitution: isConstituted && proposed.dateOfConstitution ? new Date(proposed.dateOfConstitution) : null,
+                  dateOfConstitution:
+                    isConstituted && proposed.dateOfConstitution ? new Date(proposed.dateOfConstitution) : null,
                   dateOfExpiry: isConstituted && proposed.dateOfExpiry ? new Date(proposed.dateOfExpiry) : null,
                   remarks: proposed.remarks ?? dbRow.remarks ?? null,
                   lastUpdatedSource: 'POST_SUBMISSION_UPDATE',
@@ -381,11 +431,22 @@ export class EulbPostSubmissionUpdateService {
       );
 
       const [errorRowCount, formForSummary] = await Promise.all([
-        this.rowModel.countDocuments({ form: formDoc._id, datasetVersion: activeVersion, validationStatus: 'INVALID' }, { session }),
+        this.rowModel.countDocuments(
+          { form: formDoc._id, datasetVersion: activeVersion, validationStatus: 'INVALID' },
+          { session },
+        ),
         this.formModel
           .findById(
             formDoc._id,
-            { dbUlbCount: 1, maxAllowedExcelRows: 1, excelRowCount: 1, matchedDbUlbCount: 1, missingDbUlbCount: 1, extraExcelRowCount: 1, activeDatasetVersion: 1 },
+            {
+              dbUlbCount: 1,
+              maxAllowedExcelRows: 1,
+              excelRowCount: 1,
+              matchedDbUlbCount: 1,
+              missingDbUlbCount: 1,
+              extraExcelRowCount: 1,
+              activeDatasetVersion: 1,
+            },
             { session },
           )
           .lean()
@@ -395,7 +456,9 @@ export class EulbPostSubmissionUpdateService {
       const missingDbUlbCount = formForSummary?.missingDbUlbCount ?? 0;
       const newValidationStatus = errorRowCount === 0 && missingDbUlbCount === 0 ? 'VALID' : 'INVALID';
 
-      await this.formModel.findByIdAndUpdate(formDoc._id, { $set: { errorRowCount, validationStatus: newValidationStatus } }, { session }).exec();
+      await this.formModel
+        .findByIdAndUpdate(formDoc._id, { $set: { errorRowCount, validationStatus: newValidationStatus } }, { session })
+        .exec();
 
       await session.commitTransaction();
 
@@ -425,6 +488,13 @@ export class EulbPostSubmissionUpdateService {
     }
   }
 
+  /**
+   * Dry-run: validates proposed row updates and returns per-row errors without persisting any changes.
+   * @param stateId Target state ID.
+   * @param yearId Target year ID.
+   * @param dto Proposed row updates to validate.
+   * @param user Authenticated user making the request.
+   */
   async validateBatch(
     stateId: string,
     yearId: string,
@@ -516,6 +586,11 @@ export class EulbPostSubmissionUpdateService {
 
   // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+  /**
+   * Fetches the active EULB form for a (state, year) pair; returns null if not found.
+   * @param stateId State ID string.
+   * @param yearId Year ID string.
+   */
   private async findForm(stateId: string, yearId: string) {
     return this.formModel
       .findOne({
@@ -528,6 +603,12 @@ export class EulbPostSubmissionUpdateService {
       .exec();
   }
 
+  /**
+   * Derives canView/canSubmitUpdate permissions for the requesting user against the given form status.
+   * @param user Authenticated user.
+   * @param stateId Target state ID.
+   * @param formStatus Current numeric form status code.
+   */
   private buildPermissions(user: AuthUser, stateId: string, formStatus: number): EulbPostSubmissionUpdatePermissions {
     const perms = new Set(getEffectivePermissions(user));
     const hasAccess = this.hasStateAccess(user, stateId);
@@ -536,7 +617,11 @@ export class EulbPostSubmissionUpdateService {
     return { canView, canSubmitUpdate: canView };
   }
 
-  /** In-memory equivalent of buildEligibleRowCondition — mirrors the MongoDB $gt logic exactly. */
+  /**
+   * In-memory equivalent of `buildEligibleRowCondition` — mirrors the MongoDB `$lt` logic exactly.
+   * @param row Row document to check; only `electedBodyStatus` and `dateOfExpiry` are read.
+   * @param today Start-of-day reference date for the expiry comparison.
+   */
   private isRowEligibleInMemory(
     row: { electedBodyStatus?: string; dateOfExpiry?: Date | string },
     today: Date,
@@ -549,18 +634,23 @@ export class EulbPostSubmissionUpdateService {
           : typeof row.dateOfExpiry === 'string'
             ? new Date(row.dateOfExpiry)
             : null;
-      return !!expiry && expiry.getTime() > today.getTime();
+      return !!expiry && expiry.getTime() < today.getTime();
     }
     return false;
   }
 
-  /** Returns start-of-day midnight — consistent with existing portal row-update date handling. */
+  /** Returns midnight of the current local day — used as the reference point for all eligibility date comparisons. */
   private startOfToday(): Date {
     const d = new Date();
     d.setHours(0, 0, 0, 0);
     return d;
   }
 
+  /**
+   * Returns true if the user is an admin or is a state user whose state matches `stateId`.
+   * @param user Authenticated user.
+   * @param stateId State ID to check access for.
+   */
   private hasStateAccess(user: AuthUser, stateId: string): boolean {
     if (user.scope === Scope.ADMIN) return true;
     if (user.scope === Scope.STATE) {
@@ -570,6 +660,11 @@ export class EulbPostSubmissionUpdateService {
     return false;
   }
 
+  /**
+   * Throws `ForbiddenException` if the user does not have access to the given state.
+   * @param user Authenticated user.
+   * @param stateId State ID to enforce access on.
+   */
   private assertStateAccess(user: AuthUser, stateId: string): void {
     if (!this.hasStateAccess(user, stateId)) {
       throw new ForbiddenException(
