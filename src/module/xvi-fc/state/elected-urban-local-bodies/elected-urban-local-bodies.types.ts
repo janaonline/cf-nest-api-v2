@@ -81,11 +81,13 @@ export interface EulbPostSubmissionUpdateSummary {
 }
 
 export interface EulbPostSubmissionUpdateMetaData {
+  stateId: string;
   formStatus: number;
   canUpdate: boolean;
   permissions: EulbPostSubmissionUpdatePermissions;
   summary: EulbPostSubmissionUpdateSummary;
   rowEditFields: FieldConfig[];
+  questions: FieldConfig[];
 }
 
 export interface EulbPostSubmissionUpdateRow {

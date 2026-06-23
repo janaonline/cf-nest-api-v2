@@ -26,7 +26,7 @@ import {
   ElectedUrbanLocalBodiesRow,
   EulbRowDocument,
 } from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
-import { EULB_ROW_EDIT_FIELDS } from './constants/elected-urban-local-bodies.constants';
+import { EULB_ROW_EDIT_FIELDS, POST_SUBMIT_UPDATE_FIELDS } from './constants/elected-urban-local-bodies.constants';
 import type { GetEulbPostSubmissionUpdateRowsQueryDto } from './dto/get-eulb-post-submission-update-rows-query.dto';
 import type { ValidateEulbPostSubmissionUpdateDto } from './dto/validate-eulb-post-submission-update.dto';
 import type { SubmitEulbPostSubmissionUpdateDto } from './dto/submit-eulb-post-submission-update.dto';
@@ -120,11 +120,13 @@ export class EulbPostSubmissionUpdateService {
     }
 
     const data: EulbPostSubmissionUpdateMetaData = {
+      stateId,
       formStatus,
       canUpdate,
       permissions,
       summary: { eligibleRowCount },
       rowEditFields: EULB_ROW_EDIT_FIELDS,
+      questions: POST_SUBMIT_UPDATE_FIELDS,
     };
 
     return xviFcSuccess('Post-submission update metadata fetched.', data);
