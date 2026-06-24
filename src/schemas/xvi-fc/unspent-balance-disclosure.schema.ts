@@ -52,7 +52,7 @@ export class XviFcUnspentBalanceDisclosure {
   @Prop({ type: FcPeriodDataSchema, required: true })
   fc15: FcPeriodData;
 
-  @Prop({ required: true, enum: ['DRAFT', 'SUBMITTED'], default: 'SUBMITTED' })
+  @Prop({ required: true, enum: ['DRAFT', 'SUBMITTED'], default: 'DRAFT' })
   formStatus: string;
 
   @Prop({ type: Types.ObjectId, ref: 'User', required: true })
@@ -64,5 +64,5 @@ export class XviFcUnspentBalanceDisclosure {
 
 export const XviFcUnspentBalanceDisclosureSchema = SchemaFactory.createForClass(XviFcUnspentBalanceDisclosure);
 
-// One disclosure record per ULB per year; re-submitting overwrites via upsert.
+// One disclosure record per ULB per year.
 XviFcUnspentBalanceDisclosureSchema.index({ ulb: 1, designYear: 1 }, { unique: true });

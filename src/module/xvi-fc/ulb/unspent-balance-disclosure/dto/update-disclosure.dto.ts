@@ -3,12 +3,10 @@ import {
   ArrayMinSize,
   IsArray,
   IsIn,
-  IsInt,
   IsNumber,
   IsOptional,
   IsString,
   Matches,
-  Min,
   ValidateNested,
 } from 'class-validator';
 import { DisclosureDocDto } from './submit-disclosure.dto';
@@ -46,9 +44,4 @@ export class UpdateDisclosureDto {
   @Type(() => UpdateFcPeriodDto)
   @IsOptional()
   fc15?: UpdateFcPeriodDto;
-
-  @IsString()
-  @IsIn(['DRAFT', 'SUBMITTED'])
-  @IsOptional()
-  formStatus?: string;
 }

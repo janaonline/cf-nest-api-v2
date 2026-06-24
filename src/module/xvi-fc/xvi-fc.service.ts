@@ -109,7 +109,7 @@ export class XviFcService {
     };
   }
 
-  private buildSection(docs: any[], section: 'top' | 'bottom'): SideMenuItemDto[] {
+  private buildSection(docs: XviFcSideMenu[], section: 'top' | 'bottom'): SideMenuItemDto[] {
     const sectionDocs = docs.filter((d) => d.section === section);
     const topLevel = sectionDocs.filter((d) => !d.parentId).sort((a, b) => a.sequence - b.sequence);
     const children = sectionDocs.filter((d) => d.parentId);

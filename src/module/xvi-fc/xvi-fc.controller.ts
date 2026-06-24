@@ -66,6 +66,8 @@ export class XviFcController {
 
   @ApiBearerAuth()
   @Get('form-status/:ulbId/:designYearId')
+  @UseGuards(PermissionGuard)
+  // @RequirePermissions(Permission.VIEW_STATUS_REPORTS)
   getFormStatus(
     @Param('ulbId', ParseObjectIdPipe) ulbId: string,
     @Param('designYearId', ParseObjectIdPipe) designYearId: string,

@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model, Types, UpdateQuery } from 'mongoose';
 import {
@@ -26,6 +26,16 @@ export class UnspentBalanceDisclosureService {
 
     const ulbId      = new Types.ObjectId(user.ulb.toString());
     const designYear = new Types.ObjectId(dto.designYearId);
+
+    const existing = await this.model
+      .findOne({ ulb: ulbId, designYear })
+      .select('formStatus')
+      .lean()
+      .exec();
+
+    if (existing?.formStatus === 'SUBMITTED') {
+      throw new ConflictException('Disclosure already submitted and cannot be overwritten.');
+    }
 
     const payload = {
       ulb:         ulbId,
@@ -62,17 +72,19 @@ export class UnspentBalanceDisclosureService {
     dto: UpdateDisclosureDto,
     user: AuthUser,
   ): Promise<XviFcUnspentBalanceDisclosureDocument> {
-    const disclosure = await this.model.findById(id, 'ulb');
+    const disclosure = await this.model.findById(id, 'ulb formStatus');
     if (!disclosure) throw new NotFoundException('Disclosure not found.');
     if (disclosure.ulb.toString() !== user.ulb?.toString()) {
       throw new ForbiddenException('You are not authorised to update this disclosure.');
     }
+    if (disclosure.formStatus === 'SUBMITTED') {
+      throw new ForbiddenException('This disclosure has already been submitted and cannot be modified.');
+    }
 
     const $set: Record<string, unknown> = {};
-    if (dto.mode   !== undefined) $set['mode']   = dto.mode;
-    if (dto.fc14   !== undefined) $set['fc14']   = dto.fc14;
-    if (dto.fc15   !== undefined) $set['fc15']   = dto.fc15;
-    if (dto.formStatus !== undefined) $set['formStatus'] = dto.formStatus;
+    if (dto.mode !== undefined) $set['mode'] = dto.mode;
+    if (dto.fc14 !== undefined) $set['fc14'] = dto.fc14;
+    if (dto.fc15 !== undefined) $set['fc15'] = dto.fc15;
 
     const update: UpdateQuery<XviFcUnspentBalanceDisclosureDocument> = { $set };
     const updated = await this.model.findByIdAndUpdate(id, update, { new: true, runValidators: true });
@@ -85,11 +97,21 @@ export class UnspentBalanceDisclosureService {
     filepath: string,
     user: AuthUser,
   ): Promise<{ signedUrl: string }> {
-    const disclosure = await this.model.findById(disclosureId, 'ulb');
+    const disclosure = await this.model.findById(disclosureId, 'ulb fc14 fc15').lean().exec();
     if (!disclosure) throw new NotFoundException('Disclosure not found.');
     if (disclosure.ulb.toString() !== user.ulb?.toString()) {
       throw new ForbiddenException('You are not authorised to access this disclosure.');
     }
+
+    const allPaths = [
+      ...(disclosure.fc14?.documents ?? []),
+      ...(disclosure.fc15?.documents ?? []),
+    ].map((d) => d.filepath);
+
+    if (!allPaths.includes(filepath)) {
+      throw new ForbiddenException('The requested file does not belong to this disclosure.');
+    }
+
     const signedUrl = await this.s3.presignGet(filepath);
     return { signedUrl };
   }
