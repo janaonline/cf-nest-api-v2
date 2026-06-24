@@ -53,7 +53,7 @@ export class ElectedUrbanLocalBodiesController {
   @Get('questions')
   @UseGuards(PermissionGuard)
   @RequirePermissions(Permission.VIEW_STATE_FORMS)
-  getQuestions(@CurrentUser() _user: AuthUser) {
+  async getQuestions(@CurrentUser() _user: AuthUser) {
     void _user;
     return this.eulbService.getQuestions();
   }

@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, InternalServerErrorException, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model, Types } from 'mongoose';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
@@ -26,11 +26,10 @@ import {
   ElectedUrbanLocalBodiesRow,
   EulbRowDocument,
 } from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
-import {
-  ELECTED_BODY_STATUSES,
-  EULB_ROW_EDIT_FIELDS,
-  POST_SUBMIT_UPDATE_FIELDS,
-} from './constants/elected-urban-local-bodies.constants';
+import { ELECTED_BODY_STATUSES } from './constants/elected-urban-local-bodies.constants';
+import { EulbFormJsonConfigService } from './elected-urban-local-bodies-form-json.service';
+import { getFieldsByType } from './elected-urban-local-bodies-form-json.helpers';
+import { extractDateConfig } from './elected-urban-local-bodies.validator';
 import type { GetEulbPostSubmissionUpdateRowsQueryDto } from './dto/get-eulb-post-submission-update-rows-query.dto';
 import type { ValidateEulbPostSubmissionUpdateDto } from './dto/validate-eulb-post-submission-update.dto';
 import type { SubmitEulbPostSubmissionUpdateDto } from './dto/submit-eulb-post-submission-update.dto';
@@ -94,6 +93,7 @@ export class EulbPostSubmissionUpdateService {
     @InjectModel(ElectedUrbanLocalBodiesRow.name)
     private readonly rowModel: Model<EulbRowDocument>,
     private readonly validator: ElectedUrbanLocalBodiesValidator,
+    private readonly eulbFormJsonConfig: EulbFormJsonConfigService,
   ) {}
 
   /**
@@ -124,14 +124,21 @@ export class EulbPostSubmissionUpdateService {
         .exec();
     }
 
+    const formJsonFields = await this.eulbFormJsonConfig.loadFields(yearId);
+    const rowEditFields = getFieldsByType(formJsonFields, 'EULB_ROW_EDIT_FIELDS');
+    const questions = getFieldsByType(formJsonFields, 'EULB_POST_SUBMIT_UPDATE_FIELDS');
+    if (rowEditFields.length === 0) {
+      throw new InternalServerErrorException('EULB_ROW_EDIT_FIELDS group is empty in form configuration.');
+    }
+
     const data: EulbPostSubmissionUpdateMetaData = {
       stateId,
       formStatus,
       canUpdate,
       permissions,
       summary: { eligibleRowCount },
-      rowEditFields: EULB_ROW_EDIT_FIELDS,
-      questions: POST_SUBMIT_UPDATE_FIELDS,
+      rowEditFields,
+      questions,
     };
 
     return xviFcSuccess('Post-submission update metadata fetched.', data);
@@ -287,6 +294,10 @@ export class EulbPostSubmissionUpdateService {
     const today = this.startOfToday();
     const activeVersion = formDoc.activeDatasetVersion ?? 0;
 
+    const submitFormJsonFields = await this.eulbFormJsonConfig.loadFields(yearId);
+    const submitRowEditFields = getFieldsByType(submitFormJsonFields, 'EULB_ROW_EDIT_FIELDS');
+    const submitDateConfig = extractDateConfig(submitRowEditFields);
+
     const dbRows = await this.rowModel
       .find({
         _id: { $in: rowIds.map((id) => new Types.ObjectId(id)) },
@@ -326,6 +337,7 @@ export class EulbPostSubmissionUpdateService {
           remarks: proposed.remarks,
         },
         today,
+        submitDateConfig,
       );
       if (errors.length > 0) {
         rowErrors.push({
@@ -526,6 +538,10 @@ export class EulbPostSubmissionUpdateService {
     const today = this.startOfToday();
     const activeVersion = formDoc.activeDatasetVersion ?? 0;
 
+    const validateFormJsonFields = await this.eulbFormJsonConfig.loadFields(yearId);
+    const validateRowEditFields = getFieldsByType(validateFormJsonFields, 'EULB_ROW_EDIT_FIELDS');
+    const validateDateConfig = extractDateConfig(validateRowEditFields);
+
     const dbRows = await this.rowModel
       .find({
         _id: { $in: rowIds.map((id) => new Types.ObjectId(id)) },
@@ -561,6 +577,7 @@ export class EulbPostSubmissionUpdateService {
           remarks: proposed.remarks,
         },
         today,
+        validateDateConfig,
       );
       return {
         rowId: proposed.rowId,

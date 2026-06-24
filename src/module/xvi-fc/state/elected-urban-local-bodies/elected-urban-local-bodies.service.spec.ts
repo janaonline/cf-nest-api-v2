@@ -14,7 +14,9 @@ import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { ConfigService } from '@nestjs/config';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { AccessLevel, Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
-import { EULB_ROW_EDIT_FIELDS } from './constants/elected-urban-local-bodies.constants';
+import { ELECTED_BODY_STATUSES } from './constants/elected-urban-local-bodies.constants';
+import { EulbFormJsonConfigService } from './elected-urban-local-bodies-form-json.service';
+import type { EulbTypedFieldConfig } from './elected-urban-local-bodies-form-json.helpers';
 import type { FormFieldOption } from '../../common/types/field-config.type';
 import type { EulbDumpRowRecord } from './elected-urban-local-bodies.types';
 
@@ -193,6 +195,80 @@ const dumpRows: DumpRowFixture[] = [
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
 
+const MOCK_TYPED_ROW_EDIT_FIELDS: EulbTypedFieldConfig[] = [
+  {
+    key: 'ulbCount',
+    label: 'Total ULBs',
+    formFieldType: 'number',
+    fieldTypes: ['EULB_MAIN_FORM_FIELDS'],
+  },
+  {
+    key: 'censusCode',
+    label: 'Census Code',
+    formFieldType: 'text',
+    fieldTypes: ['EULB_EXTRA_ULB_PORTAL_FIELDS'],
+    validations: [
+      { name: 'required', validator: null, message: 'Census Code is required.' },
+    ],
+  },
+  {
+    key: 'ulbName',
+    label: 'ULB Name',
+    formFieldType: 'text',
+    fieldTypes: ['EULB_EXTRA_ULB_PORTAL_FIELDS'],
+    validations: [
+      { name: 'required', validator: null, message: 'ULB Name is required.' },
+    ],
+  },
+  {
+    key: 'electedBodyStatus',
+    label: 'Elected Body Status',
+    formFieldType: 'select',
+    fieldTypes: ['EULB_ROW_EDIT_FIELDS'],
+    options: ELECTED_BODY_STATUSES.map((s) => ({ id: s, label: s })) as FormFieldOption[],
+    validations: [
+      { name: 'required', validator: null, message: 'Elected Body Status is required.' },
+    ],
+  },
+  {
+    key: 'dateOfConstitution',
+    label: 'Date of Constitution',
+    formFieldType: 'date',
+    fieldTypes: ['EULB_ROW_EDIT_FIELDS'],
+    minDate: '2021-05-31',
+    maxDate: 'TODAY',
+    validations: [
+      { name: 'minDate', validator: '2021-05-31', message: 'Date of Constitution cannot be before 31 May 2021.' },
+      { name: 'maxDate', validator: 'TODAY', message: 'Date of Constitution cannot be a future date.' },
+    ],
+  },
+  {
+    key: 'dateOfExpiry',
+    label: 'Date of Expiry',
+    formFieldType: 'date',
+    fieldTypes: ['EULB_ROW_EDIT_FIELDS'],
+    minDate: 'TODAY',
+    maxDate: '2030-03-31',
+    validations: [
+      { name: 'minDate', validator: 'TODAY', message: 'Date of Expiry cannot be before today.' },
+      { name: 'maxDate', validator: '2030-03-31', message: 'Date of Expiry cannot be after 31 March 2030.' },
+    ],
+  },
+  {
+    key: 'remarks',
+    label: 'Remarks',
+    formFieldType: 'text',
+    fieldTypes: ['EULB_ROW_EDIT_FIELDS'],
+    validations: [
+      { name: 'maxlength', validator: 250, message: 'Remarks must not exceed 250 characters.' },
+    ],
+  },
+];
+
+const mockEulbFormJsonConfigService = {
+  loadFields: jest.fn().mockResolvedValue(MOCK_TYPED_ROW_EDIT_FIELDS),
+};
+
 const mockFormModel = { findOne: jest.fn() };
 const mockRowModel = { find: jest.fn() };
 const mockUlbModel = { find: jest.fn() };
@@ -205,6 +281,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
 
     beforeEach(async () => {
       jest.clearAllMocks();
+      mockEulbFormJsonConfigService.loadFields.mockResolvedValue(MOCK_TYPED_ROW_EDIT_FIELDS);
 
       // Default: no form found → blank template from ULB master.
       mockFormModel.findOne.mockReturnValue(q(null));
@@ -225,6 +302,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           { provide: FileTokenService, useValue: null },
           { provide: ConfigService, useValue: null },
           { provide: FileUrlNormalizerService, useValue: null },
+          { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
         ],
       }).compile();
 
@@ -238,10 +316,10 @@ describe('ElectedUrbanLocalBodiesService', () => {
 
     // ── No active dataset (fallback path) ────────────────────────────────────
 
-    it('generates a workbook with electedBodyStatus dropdown derived from EULB_ROW_EDIT_FIELDS', async () => {
+    it('generates a workbook with electedBodyStatus dropdown derived from MOCK_TYPED_ROW_EDIT_FIELDS', async () => {
       const sheet = await generateAndLoad();
 
-      const statusField = EULB_ROW_EDIT_FIELDS.find((f) => f.key === 'electedBodyStatus')!;
+      const statusField = MOCK_TYPED_ROW_EDIT_FIELDS.find((f) => f.key === 'electedBodyStatus')!;
       const expectedOpts = (statusField.options as FormFieldOption[]).map((o) => o.id).join(',');
 
       const dvValues = Object.values(sheet.dataValidations.model);
@@ -255,7 +333,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
       // so blank date cells may pass client-side validation. Backend upload validation is authoritative.
       const sheet = await generateAndLoad();
 
-      const constitutionMin = EULB_ROW_EDIT_FIELDS.find((f) => f.key === 'dateOfConstitution')!.validations?.find(
+      const constitutionMin = MOCK_TYPED_ROW_EDIT_FIELDS.find((f) => f.key === 'dateOfConstitution')!.validations?.find(
         (v) => v.name === 'minDate',
       )?.validator as string;
 
@@ -292,7 +370,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
     it('generates dateOfExpiry custom formula with config-derived dates and correct per-row references', async () => {
       const sheet = await generateAndLoad();
 
-      const expiryMax = EULB_ROW_EDIT_FIELDS.find((f) => f.key === 'dateOfExpiry')!.validations?.find(
+      const expiryMax = MOCK_TYPED_ROW_EDIT_FIELDS.find((f) => f.key === 'dateOfExpiry')!.validations?.find(
         (v) => v.name === 'maxDate',
       )?.validator as string;
 
@@ -344,10 +422,10 @@ describe('ElectedUrbanLocalBodiesService', () => {
       expect(sheet.dataValidations.model['D6']).toBeUndefined();
     });
 
-    it('generates remarks textLength validation with max length from EULB_ROW_EDIT_FIELDS', async () => {
+    it('generates remarks textLength validation with max length from MOCK_TYPED_ROW_EDIT_FIELDS', async () => {
       const sheet = await generateAndLoad();
 
-      const maxLength = EULB_ROW_EDIT_FIELDS.find((f) => f.key === 'remarks')!.validations?.find(
+      const maxLength = MOCK_TYPED_ROW_EDIT_FIELDS.find((f) => f.key === 'remarks')!.validations?.find(
         (v) => v.name === 'maxlength',
       )?.validator as number;
 
@@ -441,6 +519,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
 
     beforeEach(async () => {
       jest.clearAllMocks();
+      mockEulbFormJsonConfigService.loadFields.mockResolvedValue(MOCK_TYPED_ROW_EDIT_FIELDS);
 
       mockFormModel.findOne.mockReturnValue(
         q({
@@ -477,6 +556,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           { provide: FileTokenService, useValue: null },
           { provide: ConfigService, useValue: null },
           { provide: FileUrlNormalizerService, useValue: null },
+          { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
         ],
       }).compile();
 
@@ -588,6 +668,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
 
     beforeEach(async () => {
       jest.clearAllMocks();
+      mockEulbFormJsonConfigService.loadFields.mockResolvedValue(MOCK_TYPED_ROW_EDIT_FIELDS);
       mockFormModel.findOne.mockReturnValue(q(null)); // no saved form → default NOT_STARTED response
 
       const module: TestingModule = await Test.createTestingModule({
@@ -602,6 +683,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           { provide: FileTokenService, useValue: mockFileTokenService },
           { provide: ConfigService, useValue: mockConfig },
           { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
+          { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
         ],
       }).compile();
 

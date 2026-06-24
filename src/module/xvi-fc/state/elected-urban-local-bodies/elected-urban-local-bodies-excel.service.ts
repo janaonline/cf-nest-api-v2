@@ -33,7 +33,13 @@ import {
 import { Ulb, UlbDocument } from '../../../../schemas/ulb.schema';
 import { EXCEL_HEADER_MAP, ERROR_EXCEL_HEADERS } from './constants/elected-urban-local-bodies.constants';
 import type { ValidateElectedUrbanLocalBodiesExcelDto } from './dto/validate-elected-urban-local-bodies-excel.dto';
-import { ElectedUrbanLocalBodiesValidator, ParsedExcelRow } from './elected-urban-local-bodies.validator';
+import {
+  ElectedUrbanLocalBodiesValidator,
+  ParsedExcelRow,
+  extractDateConfig,
+} from './elected-urban-local-bodies.validator';
+import { EulbFormJsonConfigService } from './elected-urban-local-bodies-form-json.service';
+import { getFieldsByType } from './elected-urban-local-bodies-form-json.helpers';
 import type {
   EulbFileRefData,
   EulbRevalidateExcelResponseData,
@@ -74,6 +80,7 @@ export class ElectedUrbanLocalBodiesExcelService {
     private readonly eulbValidator: ElectedUrbanLocalBodiesValidator,
     private readonly config: ConfigService,
     private readonly fileTokenService: FileTokenService,
+    private readonly eulbFormJsonConfig: EulbFormJsonConfigService,
   ) {}
 
   async validateExcel(
@@ -169,6 +176,10 @@ export class ElectedUrbanLocalBodiesExcelService {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
+    const excelFormJsonFields = await this.eulbFormJsonConfig.loadFields(dto.yearId);
+    const excelRowEditFields = getFieldsByType(excelFormJsonFields, 'EULB_ROW_EDIT_FIELDS');
+    const excelDateConfig = extractDateConfig(excelRowEditFields);
+
     const dbUlbByCode = new Map<string, UlbLean>();
     for (const ulb of dbUlbs) {
       const code = String(ulb.censusCode ?? ulb.sbCode ?? '')
@@ -192,8 +203,8 @@ export class ElectedUrbanLocalBodiesExcelService {
 
       const rowErrors =
         rowType === 'DB_ULB'
-          ? this.eulbValidator.validateDbUlbRow(parsed, dbMatch!, today)
-          : this.eulbValidator.validateExtraUlbRow(parsed, today);
+          ? this.eulbValidator.validateDbUlbRow(parsed, dbMatch!, today, excelDateConfig)
+          : this.eulbValidator.validateExtraUlbRow(parsed, today, excelDateConfig);
 
       processedRows.push({
         ...parsed,
@@ -444,6 +455,10 @@ export class ElectedUrbanLocalBodiesExcelService {
         const today = new Date();
         today.setHours(0, 0, 0, 0);
 
+        const revalFormJsonFields = await this.eulbFormJsonConfig.loadFields(yearId);
+        const revalRowEditFields = getFieldsByType(revalFormJsonFields, 'EULB_ROW_EDIT_FIELDS');
+        const revalDateConfig = extractDateConfig(revalRowEditFields);
+
         let errorRowCount = 0;
         let extraExcelRowCount = 0;
         const matchedUlbIds = new Set<string>();
@@ -483,12 +498,12 @@ export class ElectedUrbanLocalBodiesExcelService {
             const dbUlb = dbUlbById.get(ulbIdStr);
             if (dbUlb) {
               matchedUlbIds.add(ulbIdStr);
-              newErrors = this.eulbValidator.validateDbUlbRow(parsed, dbUlb, today);
+              newErrors = this.eulbValidator.validateDbUlbRow(parsed, dbUlb, today, revalDateConfig);
             } else {
-              newErrors = this.eulbValidator.validateExtraUlbRow(parsed, today);
+              newErrors = this.eulbValidator.validateExtraUlbRow(parsed, today, revalDateConfig);
             }
           } else {
-            newErrors = this.eulbValidator.validateExtraUlbRow(parsed, today);
+            newErrors = this.eulbValidator.validateExtraUlbRow(parsed, today, revalDateConfig);
           }
 
           const newValidationStatus: EulbRowValidationStatus = newErrors.length === 0 ? 'VALID' : 'INVALID';
@@ -576,7 +591,7 @@ export class ElectedUrbanLocalBodiesExcelService {
       throw new BadRequestException('No uploaded Excel data found to revalidate.');
     }
 
-    return this.revalidateFromStoredFile(form, storedFileUrl, dto.ulbCount, userOid, stateOid, yearOid);
+    return this.revalidateFromStoredFile(form, storedFileUrl, dto.ulbCount, userOid, stateOid, yearOid, yearId);
   }
 
   // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -592,6 +607,7 @@ export class ElectedUrbanLocalBodiesExcelService {
     userOid: Types.ObjectId,
     stateOid: Types.ObjectId,
     yearOid: Types.ObjectId,
+    yearId: string,
   ): Promise<XviFcApiResponse<EulbRevalidateExcelResponseData>> {
     const dbUlbs = (await this.ulbModel
       .find({ state: stateOid, isActive: true })
@@ -658,6 +674,10 @@ export class ElectedUrbanLocalBodiesExcelService {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
+    const storedFileFormJsonFields = await this.eulbFormJsonConfig.loadFields(yearId);
+    const storedFileRowEditFields = getFieldsByType(storedFileFormJsonFields, 'EULB_ROW_EDIT_FIELDS');
+    const storedFileDateConfig = extractDateConfig(storedFileRowEditFields);
+
     const dbUlbByCode = new Map<string, UlbLean>();
     for (const ulb of dbUlbs) {
       const code = String(ulb.censusCode ?? ulb.sbCode ?? '')
@@ -680,8 +700,8 @@ export class ElectedUrbanLocalBodiesExcelService {
 
       const rowErrors =
         rowType === 'DB_ULB'
-          ? this.eulbValidator.validateDbUlbRow(parsed, dbMatch!, today)
-          : this.eulbValidator.validateExtraUlbRow(parsed, today);
+          ? this.eulbValidator.validateDbUlbRow(parsed, dbMatch!, today, storedFileDateConfig)
+          : this.eulbValidator.validateExtraUlbRow(parsed, today, storedFileDateConfig);
 
       processedRows.push({
         ...parsed,

@@ -11,6 +11,8 @@ import { S3Service } from 'src/core/s3/s3.service';
 import { ExcelService } from 'src/services/excel/excel.service';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { ElectedUrbanLocalBodiesValidator } from './elected-urban-local-bodies.validator';
+import { EulbFormJsonConfigService } from './elected-urban-local-bodies-form-json.service';
+import type { EulbTypedFieldConfig } from './elected-urban-local-bodies-form-json.helpers';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import type { ValidateElectedUrbanLocalBodiesExcelDto } from './dto/validate-elected-urban-local-bodies-excel.dto';
@@ -49,6 +51,40 @@ const adminUser: AuthUser = {
   role: UserRole.ADMIN,
   scope: Scope.ADMIN,
   accessLevel: null,
+};
+
+const mockExcelTypedFields: EulbTypedFieldConfig[] = [
+  {
+    key: 'dateOfConstitution',
+    label: 'Date of Constitution',
+    formFieldType: 'date',
+    fieldTypes: ['EULB_ROW_EDIT_FIELDS'],
+    validations: [
+      { name: 'minDate', validator: '2021-05-31', message: 'Date of Constitution cannot be before 31 May 2021.' },
+      { name: 'maxDate', validator: 'TODAY', message: 'Date of Constitution cannot be a future date.' },
+    ],
+  },
+  {
+    key: 'dateOfExpiry',
+    label: 'Date of Expiry',
+    formFieldType: 'date',
+    fieldTypes: ['EULB_ROW_EDIT_FIELDS'],
+    validations: [
+      { name: 'minDate', validator: 'TODAY', message: 'Date of Expiry cannot be before today.' },
+      { name: 'maxDate', validator: '2030-03-31', message: 'Date of Expiry cannot be after 31 March 2030.' },
+    ],
+  },
+  {
+    key: 'remarks',
+    label: 'Remarks',
+    formFieldType: 'text',
+    fieldTypes: ['EULB_ROW_EDIT_FIELDS'],
+    validations: [{ name: 'maxlength', validator: 250, message: 'Remarks must not exceed 250 characters.' }],
+  },
+];
+
+const mockEulbFormJsonConfigService = {
+  loadFields: jest.fn().mockResolvedValue(mockExcelTypedFields),
 };
 
 /** One DB ULB present in state so maxAllowedExcelRows >= 1. Its censusCode will NOT match test rows. */
@@ -116,6 +152,7 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel blank-field norm
         },
         { provide: FileTokenService, useValue: { parseToken: jest.fn() } },
         { provide: ConfigService, useValue: { get: jest.fn().mockReturnValue('') } },
+        { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
       ],
     }).compile();
 

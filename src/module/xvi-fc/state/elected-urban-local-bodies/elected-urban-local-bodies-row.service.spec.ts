@@ -7,6 +7,8 @@ import { ElectedUrbanLocalBodiesForm } from '../../../../schemas/xvi-fc/state/el
 import { ElectedUrbanLocalBodiesRow } from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
 import { Ulb } from '../../../../schemas/ulb.schema';
 import { ElectedUrbanLocalBodiesValidator } from './elected-urban-local-bodies.validator';
+import { EulbFormJsonConfigService } from './elected-urban-local-bodies-form-json.service';
+import type { EulbTypedFieldConfig } from './elected-urban-local-bodies-form-json.helpers';
 import { ExcelService } from 'src/services/excel/excel.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
@@ -89,6 +91,40 @@ const mockDbUlbRow = {
 
 const updatedRow = { ...mockRow, electedBodyStatus: 'Not Constituted', dateOfConstitution: null, dateOfExpiry: null };
 
+const mockRowTypedFields: EulbTypedFieldConfig[] = [
+  {
+    key: 'dateOfConstitution',
+    label: 'Date of Constitution',
+    formFieldType: 'date',
+    fieldTypes: ['EULB_ROW_EDIT_FIELDS'],
+    validations: [
+      { name: 'minDate', validator: '2021-05-31', message: 'Date of Constitution cannot be before 31 May 2021.' },
+      { name: 'maxDate', validator: 'TODAY', message: 'Date of Constitution cannot be a future date.' },
+    ],
+  },
+  {
+    key: 'dateOfExpiry',
+    label: 'Date of Expiry',
+    formFieldType: 'date',
+    fieldTypes: ['EULB_ROW_EDIT_FIELDS'],
+    validations: [
+      { name: 'minDate', validator: 'TODAY', message: 'Date of Expiry cannot be before today.' },
+      { name: 'maxDate', validator: '2030-03-31', message: 'Date of Expiry cannot be after 31 March 2030.' },
+    ],
+  },
+  {
+    key: 'remarks',
+    label: 'Remarks',
+    formFieldType: 'text',
+    fieldTypes: ['EULB_ROW_EDIT_FIELDS'],
+    validations: [{ name: 'maxlength', validator: 250, message: 'Remarks must not exceed 250 characters.' }],
+  },
+];
+
+const mockEulbFormJsonConfigService = {
+  loadFields: jest.fn().mockResolvedValue(mockRowTypedFields),
+};
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 describe('ElectedUrbanLocalBodiesRowService', () => {
@@ -124,6 +160,7 @@ describe('ElectedUrbanLocalBodiesRowService', () => {
         { provide: getModelToken(Ulb.name), useValue: ulbModel },
         { provide: ElectedUrbanLocalBodiesValidator, useValue: mockValidator },
         { provide: ExcelService, useValue: { generateExcel: jest.fn() } },
+        { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
       ],
     }).compile();
 

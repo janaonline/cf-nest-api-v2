@@ -21,7 +21,9 @@ import { Ulb, UlbDocument } from '../../../../schemas/ulb.schema';
 import { ERROR_EXCEL_HEADERS } from './constants/elected-urban-local-bodies.constants';
 import type { GetElectedUrbanLocalBodiesRowsQueryDto } from './dto/get-elected-urban-local-bodies-rows-query.dto';
 import type { UpdateElectedUrbanLocalBodiesRowDto } from './dto/update-elected-urban-local-bodies-row.dto';
-import { ElectedUrbanLocalBodiesValidator } from './elected-urban-local-bodies.validator';
+import { ElectedUrbanLocalBodiesValidator, extractDateConfig } from './elected-urban-local-bodies.validator';
+import { EulbFormJsonConfigService } from './elected-urban-local-bodies-form-json.service';
+import { getFieldsByType } from './elected-urban-local-bodies-form-json.helpers';
 import type { EulbValidationSummary } from './elected-urban-local-bodies.types';
 import type { EulbValidationStatus } from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
 
@@ -45,6 +47,7 @@ export class ElectedUrbanLocalBodiesRowService {
     private readonly ulbModel: Model<UlbDocument>,
     private readonly eulbValidator: ElectedUrbanLocalBodiesValidator,
     private readonly excelService: ExcelService,
+    private readonly eulbFormJsonConfig: EulbFormJsonConfigService,
   ) {}
 
   async getRows(
@@ -111,6 +114,10 @@ export class ElectedUrbanLocalBodiesRowService {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
+    const rowFormJsonFields = await this.eulbFormJsonConfig.loadFields(yearId);
+    const rowEditFields = getFieldsByType(rowFormJsonFields, 'EULB_ROW_EDIT_FIELDS');
+    const rowDateConfig = extractDateConfig(rowEditFields);
+
     const effectiveStatus = dto.electedBodyStatus ?? row.electedBodyStatus ?? undefined;
     const isConstituted = effectiveStatus === 'Constituted';
 
@@ -122,7 +129,7 @@ export class ElectedUrbanLocalBodiesRowService {
     };
 
     // Validate submitted editable fields before applying — produce uniform 400 with field-keyed errors
-    const dtoErrors = this.eulbValidator.validatePortalUpdateFields(dtoForValidation, today);
+    const dtoErrors = this.eulbValidator.validatePortalUpdateFields(dtoForValidation, today, rowDateConfig);
     if (dtoErrors.length > 0) {
       const errorMap: XviFcValidationErrorMap = {};
       for (const e of dtoErrors) {
@@ -181,7 +188,7 @@ export class ElectedUrbanLocalBodiesRowService {
         .exec()) as UlbLean | null;
     }
 
-    const newErrors = this.eulbValidator.revalidateRow(mergedRow, dbUlb, today);
+    const newErrors = this.eulbValidator.revalidateRow(mergedRow, dbUlb, today, rowDateConfig);
     updateFields['validationStatus'] = newErrors.length === 0 ? 'VALID' : 'INVALID';
     updateFields['errors'] = newErrors;
 

@@ -8,6 +8,8 @@ import {
   buildPostSubmissionEligibleRowsFilter,
 } from './elected-urban-local-bodies-post-submission-update.service';
 import { ElectedUrbanLocalBodiesValidator } from './elected-urban-local-bodies.validator';
+import { EulbFormJsonConfigService } from './elected-urban-local-bodies-form-json.service';
+import type { EulbTypedFieldConfig } from './elected-urban-local-bodies-form-json.helpers';
 import { ElectedUrbanLocalBodiesForm } from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
 import { ElectedUrbanLocalBodiesRow } from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
@@ -281,6 +283,40 @@ describe('buildPostSubmissionEligibleRowsFilter', () => {
   });
 });
 
+const mockPostSubmitTypedFields: EulbTypedFieldConfig[] = [
+  {
+    key: 'dateOfConstitution',
+    label: 'Date of Constitution',
+    formFieldType: 'date',
+    fieldTypes: ['EULB_ROW_EDIT_FIELDS', 'EULB_POST_SUBMIT_UPDATE_FIELDS'],
+    validations: [
+      { name: 'minDate', validator: '2021-05-31', message: 'Date of Constitution cannot be before 31 May 2021.' },
+      { name: 'maxDate', validator: 'TODAY', message: 'Date of Constitution cannot be a future date.' },
+    ],
+  },
+  {
+    key: 'dateOfExpiry',
+    label: 'Date of Expiry',
+    formFieldType: 'date',
+    fieldTypes: ['EULB_ROW_EDIT_FIELDS', 'EULB_POST_SUBMIT_UPDATE_FIELDS'],
+    validations: [
+      { name: 'minDate', validator: 'TODAY', message: 'Date of Expiry cannot be before today.' },
+      { name: 'maxDate', validator: '2030-03-31', message: 'Date of Expiry cannot be after 31 March 2030.' },
+    ],
+  },
+  {
+    key: 'remarks',
+    label: 'Remarks',
+    formFieldType: 'text',
+    fieldTypes: ['EULB_ROW_EDIT_FIELDS', 'EULB_POST_SUBMIT_UPDATE_FIELDS'],
+    validations: [{ name: 'maxlength', validator: 250, message: 'Remarks must not exceed 250 characters.' }],
+  },
+];
+
+const mockEulbFormJsonConfigService = {
+  loadFields: jest.fn().mockResolvedValue(mockPostSubmitTypedFields),
+};
+
 function makeFormSummary(overrides: Record<string, unknown> = {}) {
   return {
     _id: formOid,
@@ -329,6 +365,7 @@ describe('EulbPostSubmissionUpdateService', () => {
         ElectedUrbanLocalBodiesValidator,
         { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: formModel },
         { provide: getModelToken(ElectedUrbanLocalBodiesRow.name), useValue: rowModel },
+        { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
       ],
     }).compile();
 

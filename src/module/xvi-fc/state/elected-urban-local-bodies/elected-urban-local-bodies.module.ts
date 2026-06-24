@@ -3,6 +3,8 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { ExcelService } from 'src/services/excel/excel.service';
 import { S3Service } from 'src/core/s3/s3.service';
 import { XviFcCommonModule } from '../../common/xvi-fc-common.module';
+import { FormJsonModule } from 'src/form-json/form-json.module';
+import { EulbFormJsonConfigService } from './elected-urban-local-bodies-form-json.service';
 import {
   ElectedUrbanLocalBodiesForm,
   ElectedUrbanLocalBodiesFormSchema,
@@ -27,6 +29,7 @@ import { EulbPostSubmissionUpdateService } from './elected-urban-local-bodies-po
       { name: Ulb.name, schema: UlbSchema },
     ]),
     XviFcCommonModule,
+    FormJsonModule,
   ],
   controllers: [ElectedUrbanLocalBodiesController],
   providers: [
@@ -35,6 +38,7 @@ import { EulbPostSubmissionUpdateService } from './elected-urban-local-bodies-po
     ElectedUrbanLocalBodiesRowService,
     ElectedUrbanLocalBodiesValidator,
     EulbPostSubmissionUpdateService,
+    EulbFormJsonConfigService,
     ExcelService,
     S3Service,
   ],
