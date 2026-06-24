@@ -41,15 +41,6 @@ export class AnnualAccountsController {
     return this.annualAccountsService.getUploadConfig(type as 'audited' | 'provisional', yearId);
   }
 
-  @Get('form-status/:ulbId/:designYearId')
-  getFormStatus(
-    @Param('ulbId', ParseObjectIdPipe) ulbId: string,
-    @Param('designYearId', ParseObjectIdPipe) designYearId: string,
-    @CurrentUser() user: AuthUser,
-  ) {
-    return this.annualAccountsService.getFormStatus(ulbId, designYearId, user);
-  }
-
   @Get('by-ulb/:ulbId/:designYearId')
   findByUlbAndYear(
     @Param('ulbId', ParseObjectIdPipe) ulbId: string,

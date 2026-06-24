@@ -1,5 +1,5 @@
 /* eslint-disable prettier/prettier */
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 
@@ -7,6 +7,16 @@ import { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { toObjectIdString } from 'src/users/user-scope.helpers';
 import { GrantAllocation, GrantAllocationDocument } from '../../schemas/xvi-fc/grant-allocation.schema';
+import {
+  XviFcAnnualAccount,
+  XviFcAnnualAccountDocument,
+  AnnualAccountFormStatus,
+  FORM_STATUS_ID,
+} from '../../schemas/xvi-fc/annual-account.schema';
+import {
+  XviFcUnspentBalanceDisclosure,
+  XviFcUnspentBalanceDisclosureDocument,
+} from '../../schemas/xvi-fc/unspent-balance-disclosure.schema';
 import { StateWiseResponseDto } from './dto/state-wise-response.dto';
 import { buildGetStateWiseDataPipeline } from './queries/get-state-wise-data.query';
 import { SideMenuItemDto, SideMenuResponseDto } from './dto/side-menu.dto';
@@ -15,6 +25,7 @@ import { Ulb, UlbDocument } from '../../schemas/ulb.schema';
 import { State, StateDocument } from '../../schemas/state.schema';
 import { XviFcSideMenu, XviFcSideMenuDocument, MenuRole } from '../../schemas/xvi-fc/xvi-fc-side-menu.schema';
 import { XviFcCacheService, XVIFC_CACHE_KEY_PREFIX } from './cache/xvi-fc-cache.service';
+import { FormJsonService } from '../../form-json/form-json.service';
 
 @Injectable()
 export class XviFcService {
@@ -29,7 +40,12 @@ export class XviFcService {
     private readonly stateModel: Model<StateDocument>,
     @InjectModel(XviFcSideMenu.name)
     private readonly sideMenuModel: Model<XviFcSideMenuDocument>,
+    @InjectModel(XviFcAnnualAccount.name)
+    private readonly annualAccountModel: Model<XviFcAnnualAccountDocument>,
+    @InjectModel(XviFcUnspentBalanceDisclosure.name)
+    private readonly disclosureModel: Model<XviFcUnspentBalanceDisclosureDocument>,
     private readonly cache: XviFcCacheService,
+    private readonly formJsonService: FormJsonService,
   ) {}
 
   async getStateWiseData(stateId: string, requester: AuthUser): Promise<StateWiseResponseDto> {
@@ -60,11 +76,30 @@ export class XviFcService {
     return this.buildMenuTree(docs);
   }
 
-  async clearCache(urlPattern?: string): Promise<void> {
-    const pattern = urlPattern
-      ? `${XVIFC_CACHE_KEY_PREFIX}:${urlPattern}`
+  async clearCacheAdmin(opts: {
+    user: AuthUser;
+    pattern?: string;
+    scope?: string;
+    designYearId?: string;
+    formId?: string;
+  }): Promise<{ message: string }> {
+    if (opts.user.scope !== Scope.ADMIN) {
+      throw new ForbiddenException('Only admins can clear the cache.');
+    }
+
+    if (opts.scope === 'formJson') {
+      if (!opts.designYearId || !opts.formId) {
+        throw new BadRequestException('designYearId and formId are required when scope=formJson.');
+      }
+      await this.formJsonService.clearCache(opts.designYearId, Number(opts.formId));
+      return { message: `FormJson cache cleared for designYearId: ${opts.designYearId}, formId: ${opts.formId}` };
+    }
+
+    const redisPattern = opts.pattern
+      ? `${XVIFC_CACHE_KEY_PREFIX}:${opts.pattern}`
       : `${XVIFC_CACHE_KEY_PREFIX}:*`;
-    await this.cache.deleteByPattern(pattern);
+    await this.cache.deleteByPattern(redisPattern);
+    return { message: `Cache cleared for ${opts.pattern ? `pattern: ${opts.pattern}` : 'all XVI-FC cache'}` };
   }
 
   private buildMenuTree(docs: XviFcSideMenu[]): SideMenuResponseDto {
@@ -74,7 +109,7 @@ export class XviFcService {
     };
   }
 
-  private buildSection(docs: any[], section: 'top' | 'bottom'): SideMenuItemDto[] {
+  private buildSection(docs: XviFcSideMenu[], section: 'top' | 'bottom'): SideMenuItemDto[] {
     const sectionDocs = docs.filter((d) => d.section === section);
     const topLevel = sectionDocs.filter((d) => !d.parentId).sort((a, b) => a.sequence - b.sequence);
     const children = sectionDocs.filter((d) => d.parentId);
@@ -130,6 +165,41 @@ export class XviFcService {
     const state = await this.stateModel.findById(stateId).select('name').lean().exec();
     if (!state) throw new NotFoundException('State not found');
     return { stateName: state.name };
+  }
+
+  async getFormStatus(ulbId: string, designYearId: string) {
+    const ulb        = new Types.ObjectId(ulbId);
+    const designYear = new Types.ObjectId(designYearId);
+
+    const [annualAccount, disclosure] = await Promise.all([
+      this.annualAccountModel
+        .findOne({ ulb, design_year: designYear })
+        .select('auditedData.form_status auditedData.form_status_id unauditedData.form_status unauditedData.form_status_id')
+        .lean()
+        .exec(),
+      this.disclosureModel
+        .findOne({ ulb, designYear })
+        .select('formStatus')
+        .lean()
+        .exec(),
+    ]);
+
+    const sectionStatus = (section: Record<string, unknown> | undefined | null) => ({
+      form_status:    (section?.['form_status']    ?? AnnualAccountFormStatus.NOT_STARTED) as AnnualAccountFormStatus,
+      form_status_id: (section?.['form_status_id'] ?? FORM_STATUS_ID[AnnualAccountFormStatus.NOT_STARTED]) as number,
+    });
+
+    const isSubmitted = (disclosure as Record<string, unknown> | null)?.['formStatus'] === 'SUBMITTED';
+
+    return {
+      annualAccountId: (annualAccount as Record<string, unknown> | null)?.['_id']?.toString() ?? null,
+      auditedData:     sectionStatus((annualAccount as Record<string, unknown> | null)?.['auditedData'] as Record<string, unknown>),
+      unauditedData:   sectionStatus((annualAccount as Record<string, unknown> | null)?.['unauditedData'] as Record<string, unknown>),
+      unspentBalanceDisclosure: {
+        form_status:    isSubmitted ? 'SUBMITTED' : 'NOT_STARTED',
+        form_status_id: null,
+      },
+    };
   }
 
   getSupportHours(): {

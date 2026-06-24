@@ -271,32 +271,6 @@ export class AnnualAccountsService implements OnModuleInit {
     return { uploadId, status: 'PROCESSING', message: 'Retry queued successfully' };
   }
 
-  // ─── Lightweight form-status by ULB + design year ────────────────────────────
-
-  async getFormStatus(ulbId: string, designYearId: string, user: AuthUser) {
-    const doc = await this.annualAccountModel
-      .findOne({
-        ulb: new Types.ObjectId(ulbId),
-        design_year: new Types.ObjectId(designYearId),
-      })
-      .select('ulb auditedData.form_status auditedData.form_status_id unauditedData.form_status unauditedData.form_status_id')
-      .lean()
-      .exec();
-
-    if (doc) this.validateViewAccess(doc, user);
-
-    const sectionStatus = (section: any) => ({
-      form_status: (section?.form_status ?? AnnualAccountFormStatus.NOT_STARTED) as AnnualAccountFormStatus,
-      form_status_id: section?.form_status_id ?? FORM_STATUS_ID[AnnualAccountFormStatus.NOT_STARTED],
-    });
-
-    return {
-      annualAccountId: doc?._id?.toString() ?? null,
-      auditedData: sectionStatus(doc?.auditedData),
-      unauditedData: sectionStatus(doc?.unauditedData),
-    };
-  }
-
   // ─── Lookup by ULB + design year ─────────────────────────────────────────────
 
   async findByUlbAndYear(ulbId: string, designYearId: string, user: AuthUser) {
