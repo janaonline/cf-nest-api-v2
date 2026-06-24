@@ -108,7 +108,10 @@ export class ElectedUrbanLocalBodiesExcelService {
 
     // 4. Read and parse Excel from S3 (use normalized path)
     const buffer = await this.s3Service.getBuffer(normalizedFile.fileUrl);
-    const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true });
+    // cellDates:false (the default) keeps date cells as their raw Excel serial numbers.
+    // We convert serials to UTC midnight directly via excelSerialToUtcDate(), which avoids
+    // the timezone-shift that cellDates:true introduces when creating JS Date objects.
+    const workbook = XLSX.read(buffer, { type: 'buffer' });
     const sheetName = workbook.SheetNames[0];
     if (!sheetName) {
       throwXviFcValidationError({
@@ -226,6 +229,9 @@ export class ElectedUrbanLocalBodiesExcelService {
     const formId: Types.ObjectId = existing ? existing._id : new Types.ObjectId();
 
     // Step A: Insert new rows BEFORE updating form's activeDatasetVersion.
+    // censusCode/ulbName are normalized to '' so required-String schema fields never receive
+    // undefined/null. lean:true bypasses Mongoose document validation — rows are pre-validated
+    // at application level and may intentionally have blank identity fields (stored as INVALID).
     const rowDocs = processedRows.map((r) => {
       const constituted = r.electedBodyStatus?.trim() === 'Constituted';
       return {
@@ -235,7 +241,7 @@ export class ElectedUrbanLocalBodiesExcelService {
         datasetVersion: newVersion,
         rowNumber: r.rowNumber,
         ulbId: r.ulbId,
-        censusCode: r.censusCode,
+        censusCode: r.censusCode ?? '',
         ulbName: r.ulbName,
         dbCensusCode: r.dbCensusCode,
         dbUlbName: r.dbUlbName,
@@ -254,7 +260,7 @@ export class ElectedUrbanLocalBodiesExcelService {
       };
     });
 
-    await this.rowModel.insertMany(rowDocs);
+    await this.rowModel.insertMany(rowDocs, { lean: true });
 
     // Step B: Upsert form with all summary fields, normalized file, and new activeDatasetVersion.
     const formSummaryFields = {
@@ -597,7 +603,7 @@ export class ElectedUrbanLocalBodiesExcelService {
     const maxAllowedExcelRows = dbUlbCount * 2;
 
     const buffer = await this.s3Service.getBuffer(fileUrl);
-    const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true });
+    const workbook = XLSX.read(buffer, { type: 'buffer' });
     const sheetName = workbook.SheetNames[0];
     if (!sheetName) {
       throw new BadRequestException('The uploaded Excel file has no sheets. Please re-upload the file.');
@@ -643,7 +649,7 @@ export class ElectedUrbanLocalBodiesExcelService {
             validationStatus: 'INVALID' as EulbValidationStatus,
             excelRowCount,
             errorRowCount: 0,
-            activeDatasetVersion: (form.activeDatasetVersion as number | undefined) ?? 0,
+            activeDatasetVersion: form.activeDatasetVersion ?? 0,
           },
         },
       );
@@ -698,6 +704,8 @@ export class ElectedUrbanLocalBodiesExcelService {
     const newVersion = currentVersion + 1;
     const formId = form._id;
 
+    // Same normalization as validateExcel: lean:true bypasses Mongoose required-String check
+    // for '' so INVALID rows with blank identity fields are stored without throwing.
     const rowDocs = processedRows.map((r) => {
       const constituted = r.electedBodyStatus?.trim() === 'Constituted';
       return {
@@ -707,7 +715,7 @@ export class ElectedUrbanLocalBodiesExcelService {
         datasetVersion: newVersion,
         rowNumber: r.rowNumber,
         ulbId: r.ulbId,
-        censusCode: r.censusCode,
+        censusCode: r.censusCode ?? '',
         ulbName: r.ulbName,
         dbCensusCode: r.dbCensusCode,
         dbUlbName: r.dbUlbName,
@@ -726,7 +734,7 @@ export class ElectedUrbanLocalBodiesExcelService {
       };
     });
 
-    await this.rowModel.insertMany(rowDocs);
+    await this.rowModel.insertMany(rowDocs, { lean: true });
 
     await this.formModel
       .findByIdAndUpdate(formId, {
@@ -841,9 +849,18 @@ export class ElectedUrbanLocalBodiesExcelService {
 
     const toDate = (v: unknown): Date | string | undefined => {
       if (v === undefined || v === null || v === '') return undefined;
-      if (v instanceof Date) return v;
+      if (typeof v === 'number') {
+        // xlsx (cellDates:false default) returns date cells as raw Excel serial integers.
+        // Convert directly to UTC midnight — no timezone arithmetic involved.
+        return this.excelSerialToUtcDate(v);
+      }
+      if (v instanceof Date) {
+        // Defensive fallback: should not occur with cellDates:false, but if a Date somehow
+        // arrives (e.g. programmatic row injection in tests), normalise via UTC getters.
+        if (isNaN(v.getTime())) return undefined;
+        return new Date(Date.UTC(v.getUTCFullYear(), v.getUTCMonth(), v.getUTCDate(), 0, 0, 0, 0));
+      }
       if (typeof v === 'string') return v.trim() || undefined;
-      if (typeof v === 'number') return String(v);
       return undefined;
     };
 
@@ -862,10 +879,24 @@ export class ElectedUrbanLocalBodiesExcelService {
     };
   }
 
+  // Converts an Excel date serial integer directly to UTC midnight — no timezone involved.
+  // Excel epoch: serial 1 = Jan 1 1900. Anchored at Dec 30, 1899 (serial 0) as Date.UTC.
+  private excelSerialToUtcDate(serial: number): Date {
+    const EXCEL_EPOCH_MS = Date.UTC(1899, 11, 30);
+    return new Date(EXCEL_EPOCH_MS + Math.floor(serial) * 86400000);
+  }
+
+  // Normalises any Date or string value to UTC midnight before persisting.
+  // Inputs are always UTC midnight Dates (produced by excelSerialToUtcDate) or ISO strings
+  // from the portal. Uses UTC getters so the result is timezone-independent.
   private toDate(value: Date | string): Date | undefined {
-    if (value instanceof Date) return isNaN(value.getTime()) ? undefined : value;
+    if (value instanceof Date) {
+      if (isNaN(value.getTime())) return undefined;
+      return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate(), 0, 0, 0, 0));
+    }
     const d = new Date(value);
-    return isNaN(d.getTime()) ? undefined : d;
+    if (isNaN(d.getTime())) return undefined;
+    return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0, 0));
   }
 
   /**

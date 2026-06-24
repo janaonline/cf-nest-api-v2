@@ -3,6 +3,8 @@ import {
   DATE_OF_CONSTITUTION_MIN,
   DATE_OF_EXPIRY_MAX,
   ELECTED_BODY_STATUSES,
+  EULB_CENSUS_CODE_MAX_LENGTH,
+  EULB_ULB_NAME_MAX_LENGTH,
 } from './constants/elected-urban-local-bodies.constants';
 import type { EulbRowError } from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
 
@@ -61,19 +63,28 @@ export class ElectedUrbanLocalBodiesValidator {
   validateExtraUlbRow(row: ParsedExcelRow, today: Date): EulbRowError[] {
     const errors: EulbRowError[] = [];
 
-    // censusCode optional, but max 10 chars if provided
-    if (row.censusCode && row.censusCode.trim().length > 10) {
+    // censusCode required for EXTRA_ULB rows
+    if (!row.censusCode || row.censusCode.trim() === '') {
+      errors.push({ field: 'censusCode', code: 'required', message: 'Census code is required.' });
+    } else if (row.censusCode.trim().length > EULB_CENSUS_CODE_MAX_LENGTH) {
       errors.push({
         field: 'censusCode',
         code: 'maxlength',
-        message: 'Census code must not exceed 10 characters.',
+        message: `Census code must not exceed ${EULB_CENSUS_CODE_MAX_LENGTH} characters.`,
         value: row.censusCode,
       });
     }
 
-    // ulbName required
+    // ulbName required, max length enforced
     if (!row.ulbName || row.ulbName.trim() === '') {
       errors.push({ field: 'ulbName', code: 'required', message: 'ULB name is required.' });
+    } else if (row.ulbName.trim().length > EULB_ULB_NAME_MAX_LENGTH) {
+      errors.push({
+        field: 'ulbName',
+        code: 'maxlength',
+        message: `ULB name must not exceed ${EULB_ULB_NAME_MAX_LENGTH} characters.`,
+        value: row.ulbName,
+      });
     }
 
     errors.push(...this.validateCommonFields(row, today));
@@ -86,10 +97,43 @@ export class ElectedUrbanLocalBodiesValidator {
    * All fields are optional — only provided fields are validated.
    */
   validatePortalUpdateFields(
-    dto: { electedBodyStatus?: string; dateOfConstitution?: string; dateOfExpiry?: string; remarks?: string },
+    dto: {
+      censusCode?: string;
+      ulbName?: string;
+      electedBodyStatus?: string;
+      dateOfConstitution?: string;
+      dateOfExpiry?: string;
+      remarks?: string;
+    },
     today: Date,
   ): EulbRowError[] {
     const errors: EulbRowError[] = [];
+
+    if (dto.censusCode !== undefined) {
+      if (!dto.censusCode || dto.censusCode.trim() === '') {
+        errors.push({ field: 'censusCode', code: 'required', message: 'Census code is required.' });
+      } else if (dto.censusCode.trim().length > EULB_CENSUS_CODE_MAX_LENGTH) {
+        errors.push({
+          field: 'censusCode',
+          code: 'maxlength',
+          message: `Census code must not exceed ${EULB_CENSUS_CODE_MAX_LENGTH} characters.`,
+          value: dto.censusCode,
+        });
+      }
+    }
+
+    if (dto.ulbName !== undefined) {
+      if (!dto.ulbName || dto.ulbName.trim() === '') {
+        errors.push({ field: 'ulbName', code: 'required', message: 'ULB name is required.' });
+      } else if (dto.ulbName.trim().length > EULB_ULB_NAME_MAX_LENGTH) {
+        errors.push({
+          field: 'ulbName',
+          code: 'maxlength',
+          message: `ULB name must not exceed ${EULB_ULB_NAME_MAX_LENGTH} characters.`,
+          value: dto.ulbName,
+        });
+      }
+    }
 
     if (dto.electedBodyStatus !== undefined) {
       if (dto.electedBodyStatus.trim() === '') {

@@ -572,4 +572,58 @@ describe('ElectedUrbanLocalBodiesService', () => {
       expect(sheet.actualRowCount).toBe(1);
     });
   });
+
+  // ─── getForm ─────────────────────────────────────────────────────────────────
+
+  describe('getForm', () => {
+    let service: ElectedUrbanLocalBodiesService;
+
+    const mockActorsService = {
+      buildActorsAndStateName: jest.fn().mockReturnValue({ actors: [], stateName: 'Test State' }),
+    };
+    const mockDynamicFormValidator = { validateForm: jest.fn() };
+    const mockFileTokenService = { signUrl: jest.fn((url: string) => url) };
+    const mockConfig = { get: jest.fn().mockReturnValue('24h') };
+    const mockFileUrlNormalizer = { normalizeFileUrl: jest.fn((v: unknown) => v) };
+
+    beforeEach(async () => {
+      jest.clearAllMocks();
+      mockFormModel.findOne.mockReturnValue(q(null)); // no saved form → default NOT_STARTED response
+
+      const module: TestingModule = await Test.createTestingModule({
+        providers: [
+          ElectedUrbanLocalBodiesService,
+          ExcelService,
+          { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: mockFormModel },
+          { provide: getModelToken(ElectedUrbanLocalBodiesRow.name), useValue: mockRowModel },
+          { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+          { provide: DynamicFormValidationService, useValue: mockDynamicFormValidator },
+          { provide: XvifcFormActorsService, useValue: mockActorsService },
+          { provide: FileTokenService, useValue: mockFileTokenService },
+          { provide: ConfigService, useValue: mockConfig },
+          { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
+        ],
+      }).compile();
+
+      service = module.get<ElectedUrbanLocalBodiesService>(ElectedUrbanLocalBodiesService);
+    });
+
+    it('includes extraUlbEditFields in the response with censusCode and ulbName entries', async () => {
+      const result = await service.getForm(stateOid.toString(), yearOid.toString(), adminUser);
+      const data = result.data as Record<string, unknown>;
+      expect(Array.isArray(data['extraUlbEditFields'])).toBe(true);
+      const fields = data['extraUlbEditFields'] as Array<{ key: string }>;
+      expect(fields.some((f) => f.key === 'censusCode')).toBe(true);
+      expect(fields.some((f) => f.key === 'ulbName')).toBe(true);
+    });
+
+    it('leaves rowEditFields unchanged — does not include censusCode or ulbName', async () => {
+      const result = await service.getForm(stateOid.toString(), yearOid.toString(), adminUser);
+      const data = result.data as Record<string, unknown>;
+      const fields = data['rowEditFields'] as Array<{ key: string }>;
+      expect(Array.isArray(fields)).toBe(true);
+      expect(fields.some((f) => f.key === 'censusCode')).toBe(false);
+      expect(fields.some((f) => f.key === 'ulbName')).toBe(false);
+    });
+  });
 });

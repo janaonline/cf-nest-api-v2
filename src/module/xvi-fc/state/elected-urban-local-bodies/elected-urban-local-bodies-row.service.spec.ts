@@ -74,9 +74,17 @@ const mockRow = {
   censusCode: '1234567',
   ulbName: 'Test City',
   electedBodyStatus: 'Constituted',
-  rowType: 'EXTRA_ULB' as const, // avoids ulbModel lookup
+  rowType: 'EXTRA_ULB' as const,
   datasetVersion: 1,
   errors: [],
+};
+
+const mockDbUlbRow = {
+  ...mockRow,
+  rowType: 'DB_ULB' as const,
+  censusCode: 'DB_CODE',
+  ulbName: 'DB City',
+  ulbId: new Types.ObjectId(),
 };
 
 const updatedRow = { ...mockRow, electedBodyStatus: 'Not Constituted', dateOfConstitution: null, dateOfExpiry: null };
@@ -160,12 +168,22 @@ describe('ElectedUrbanLocalBodiesRowService', () => {
 
     it('throws BadRequestException with errors as Record<string, XviFcValidationError[]> on validation failure', async () => {
       jest.spyOn(validator, 'validatePortalUpdateFields').mockReturnValue([
-        { field: 'electedBodyStatus', code: 'invalid_enum', message: 'Status must be one of: Constituted, Not Constituted, Exempt.' },
+        {
+          field: 'electedBodyStatus',
+          code: 'invalid_enum',
+          message: 'Status must be one of: Constituted, Not Constituted, Exempt.',
+        },
       ]);
 
       let caught: unknown;
       try {
-        await service.updateRow(stateOid.toString(), yearOid.toString(), rowOid.toString(), { electedBodyStatus: 'INVALID' }, adminUser);
+        await service.updateRow(
+          stateOid.toString(),
+          yearOid.toString(),
+          rowOid.toString(),
+          { electedBodyStatus: 'INVALID' },
+          adminUser,
+        );
       } catch (e) {
         caught = e;
       }
@@ -188,13 +206,19 @@ describe('ElectedUrbanLocalBodiesRowService', () => {
     });
 
     it('preserves row context in data when validation fails', async () => {
-      jest.spyOn(validator, 'validatePortalUpdateFields').mockReturnValue([
-        { field: 'electedBodyStatus', code: 'invalid_enum', message: 'Invalid status' },
-      ]);
+      jest
+        .spyOn(validator, 'validatePortalUpdateFields')
+        .mockReturnValue([{ field: 'electedBodyStatus', code: 'invalid_enum', message: 'Invalid status' }]);
 
       let caught: unknown;
       try {
-        await service.updateRow(stateOid.toString(), yearOid.toString(), rowOid.toString(), { electedBodyStatus: 'INVALID' }, adminUser);
+        await service.updateRow(
+          stateOid.toString(),
+          yearOid.toString(),
+          rowOid.toString(),
+          { electedBodyStatus: 'INVALID' },
+          adminUser,
+        );
       } catch (e) {
         caught = e;
       }
@@ -207,6 +231,36 @@ describe('ElectedUrbanLocalBodiesRowService', () => {
         censusCode: mockRow.censusCode,
         ulbName: mockRow.ulbName,
       });
+    });
+
+    it('updates censusCode and ulbName in updateFields for EXTRA_ULB rows', async () => {
+      await service.updateRow(
+        stateOid.toString(),
+        yearOid.toString(),
+        rowOid.toString(),
+        { censusCode: 'NEW_CODE', ulbName: 'New City' },
+        adminUser,
+      );
+      const setArg = (rowModel['findByIdAndUpdate'] as jest.Mock).mock.calls[0][1].$set as Record<string, unknown>;
+      expect(setArg['censusCode']).toBe('NEW_CODE');
+      expect(setArg['ulbName']).toBe('New City');
+    });
+
+    it('ignores censusCode and ulbName from DTO for DB_ULB rows and preserves stored values', async () => {
+      rowModel['findOne'] = jest.fn().mockReturnValue(q(mockDbUlbRow));
+      const updatedDbRow = { ...mockDbUlbRow };
+      rowModel['findByIdAndUpdate'] = jest.fn().mockReturnValue(q(updatedDbRow));
+
+      await service.updateRow(
+        stateOid.toString(),
+        yearOid.toString(),
+        rowOid.toString(),
+        { censusCode: 'IGNORED', ulbName: 'Ignored Name', electedBodyStatus: 'Not Constituted' },
+        adminUser,
+      );
+      const setArg = (rowModel['findByIdAndUpdate'] as jest.Mock).mock.calls[0][1].$set as Record<string, unknown>;
+      expect(setArg).not.toHaveProperty('censusCode');
+      expect(setArg).not.toHaveProperty('ulbName');
     });
 
     it('groups multiple field errors under their respective field keys', async () => {
@@ -236,12 +290,7 @@ describe('ElectedUrbanLocalBodiesRowService', () => {
       rowModel['find'] = jest.fn().mockReturnValue(q([mockRow]));
       rowModel['countDocuments'] = jest.fn().mockReturnValue(q(1));
 
-      const result = await service.getRows(
-        stateOid.toString(),
-        yearOid.toString(),
-        { page: 1, limit: 50 },
-        adminUser,
-      );
+      const result = await service.getRows(stateOid.toString(), yearOid.toString(), { page: 1, limit: 50 }, adminUser);
       expect(result).toMatchObject({
         success: true,
         data: { rows: expect.any(Array), total: 1, page: 1, limit: 50 },

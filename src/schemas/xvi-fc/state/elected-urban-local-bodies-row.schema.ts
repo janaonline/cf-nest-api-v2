@@ -93,6 +93,8 @@ export class ElectedUrbanLocalBodiesRow {
   @Prop({ type: String })
   electedBodyStatus?: string;
 
+  // Always stored as UTC midnight (Date.UTC year, month, day, 0,0,0,0) by the Excel service.
+  // Do not persist raw xlsx Date objects or timezone-local Dates — use toDate() in the service.
   @Prop({ type: MongooseSchema.Types.Mixed })
   dateOfConstitution?: Date | string;
 

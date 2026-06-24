@@ -62,6 +62,9 @@ export const POST_SUBMIT_UPDATE_FIELDS: FieldConfig[] = [
   },
 ];
 
+export const EULB_CENSUS_CODE_MAX_LENGTH = 10;
+export const EULB_ULB_NAME_MAX_LENGTH = 250;
+
 /** Static field config for editable uploaded-row fields.
  *  Returned as `rowEditFields` in the GET form response for frontend row-edit dialog rendering. */
 export const EULB_ROW_EDIT_FIELDS: FieldConfig[] = [
@@ -120,11 +123,40 @@ export const EULB_ROW_EDIT_FIELDS: FieldConfig[] = [
     key: 'remarks',
     formFieldType: 'text',
     label: 'Remarks',
+    validations: [{ name: 'maxlength', validator: 250, message: 'Remarks cannot exceed 250 characters.' }],
+  },
+];
+
+/** Field config for EXTRA_ULB portal editing: identity fields prepended to the common editable fields.
+ *  Returned as `extraUlbEditFields` in the GET form response; rendered only when `rowType === 'EXTRA_ULB'`. */
+export const EULB_EXTRA_ULB_PORTAL_FIELDS: FieldConfig[] = [
+  {
+    key: 'censusCode',
+    formFieldType: 'text',
+    label: 'Census Code',
     validations: [
-      // { name: 'minlength', validator: 25, message: 'Remarks must be at least 25 characters.' },
-      { name: 'maxlength', validator: 250, message: 'Remarks cannot exceed 250 characters.' },
+      { name: 'required', validator: null, message: 'Census code is required.' },
+      {
+        name: 'maxlength',
+        validator: EULB_CENSUS_CODE_MAX_LENGTH,
+        message: `Census code must not exceed ${EULB_CENSUS_CODE_MAX_LENGTH} characters.`,
+      },
     ],
   },
+  {
+    key: 'ulbName',
+    formFieldType: 'text',
+    label: 'ULB Name',
+    validations: [
+      { name: 'required', validator: null, message: 'ULB name is required.' },
+      {
+        name: 'maxlength',
+        validator: EULB_ULB_NAME_MAX_LENGTH,
+        message: `ULB name must not exceed ${EULB_ULB_NAME_MAX_LENGTH} characters.`,
+      },
+    ],
+  },
+  ...EULB_ROW_EDIT_FIELDS,
 ];
 
 // TODO: Replace static "Andhra Pradesh" with dynamic state name when question-label

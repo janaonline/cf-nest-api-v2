@@ -114,8 +114,12 @@ export class ElectedUrbanLocalBodiesRowService {
     const effectiveStatus = dto.electedBodyStatus ?? row.electedBodyStatus ?? undefined;
     const isConstituted = effectiveStatus === 'Constituted';
 
-    // For non-Constituted rows, exclude dates from DTO validation and clear them in DB
-    const dtoForValidation = isConstituted ? dto : { ...dto, dateOfConstitution: undefined, dateOfExpiry: undefined };
+    // For non-Constituted rows, exclude dates from DTO validation and clear them in DB.
+    // DB_ULB identity fields are always ignored — strip them from validation to avoid spurious errors.
+    const dtoForValidation = {
+      ...(isConstituted ? dto : { ...dto, dateOfConstitution: undefined, dateOfExpiry: undefined }),
+      ...(row.rowType === 'DB_ULB' ? { censusCode: undefined, ulbName: undefined } : {}),
+    };
 
     // Validate submitted editable fields before applying — produce uniform 400 with field-keyed errors
     const dtoErrors = this.eulbValidator.validatePortalUpdateFields(dtoForValidation, today);
@@ -144,10 +148,14 @@ export class ElectedUrbanLocalBodiesRowService {
       updateFields['dateOfExpiry'] = null;
     }
     if (dto.remarks !== undefined) updateFields['remarks'] = dto.remarks;
+    if (row.rowType === 'EXTRA_ULB') {
+      if (dto.censusCode !== undefined) updateFields['censusCode'] = dto.censusCode;
+      if (dto.ulbName !== undefined) updateFields['ulbName'] = dto.ulbName;
+    }
 
     const mergedRow = {
-      censusCode: row.censusCode,
-      ulbName: row.ulbName,
+      censusCode: row.rowType === 'EXTRA_ULB' ? (dto.censusCode ?? row.censusCode) : row.censusCode,
+      ulbName: row.rowType === 'EXTRA_ULB' ? (dto.ulbName ?? row.ulbName) : row.ulbName,
       electedBodyStatus: effectiveStatus,
       dateOfConstitution: isConstituted
         ? dto.dateOfConstitution

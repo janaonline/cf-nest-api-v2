@@ -36,6 +36,7 @@ export interface EulbFormGetResponseData {
   currentFormStatusLabel: string;
   questions: HydratedFieldConfig[];
   rowEditFields: FieldConfig[];
+  extraUlbEditFields: FieldConfig[];
   permissions: EulbFormPermissions;
   actors: XvifcFormActor[];
   validationSummary: EulbValidationSummary;
@@ -127,6 +128,13 @@ export interface EulbDumpRow {
   updatedAt: string;
 }
 
+export interface EulbStatusSummary {
+  totalUlbCount: number;
+  constitutedCount: number;
+  notConstitutedCount: number;
+  exemptCount: number;
+}
+
 export interface EulbPostSubmissionUpdatePermissions {
   canView: boolean;
   canSubmitUpdate: boolean;
@@ -174,6 +182,7 @@ export interface EulbPostSubmissionUpdateRowsData {
     allowedFormStatuses: number[];
     today: string;
   };
+  statusSummary: EulbStatusSummary;
 }
 
 export interface EulbPostSubmissionUpdateValidateRow {
