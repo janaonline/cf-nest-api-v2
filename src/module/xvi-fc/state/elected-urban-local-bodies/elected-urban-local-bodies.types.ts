@@ -1,5 +1,11 @@
+import type { Types } from 'mongoose';
 import type { FieldConfig, HydratedFieldConfig } from '../../common/types/field-config.type';
 import type { EulbValidationStatus } from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
+import type {
+  EulbRowSource,
+  EulbRowType,
+  EulbRowValidationStatus,
+} from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
 import type { XvifcFormActor } from '../../common/types/xvifc-form-actors.type';
 
 export interface EulbFormPermissions {
@@ -69,6 +75,56 @@ export interface EulbValidateExcelResponseData {
 export interface EulbRevalidateExcelResponseData {
   validationSummary: EulbValidationSummary;
   errors: EulbRowValidationError[];
+}
+
+export interface EulbDumpFormRecord {
+  _id: Types.ObjectId;
+  activeDatasetVersion?: number;
+  submittedBy?: EulbDumpUser;
+  submittedAt?: Date;
+}
+
+export interface EulbDumpUser {
+  _id: Types.ObjectId;
+  name: string;
+}
+
+export interface EulbDumpRowRecord {
+  rowNumber: number;
+  censusCode?: string | null;
+  ulbName: string;
+  electedBodyStatus?: string | null;
+  dateOfConstitution?: Date | string | null;
+  dateOfExpiry?: Date | string | null;
+  remarks?: string | null;
+  rowType: EulbRowType;
+  validationStatus: EulbRowValidationStatus;
+  lastUpdatedSource: EulbRowSource;
+  datasetVersion: number;
+  createdBy?: EulbDumpUser;
+  updatedBy?: EulbDumpUser;
+  createdAt?: Date;
+  updatedAt?: Date;
+}
+
+export interface EulbDumpRow {
+  rowNumber: number;
+  censusCode: string;
+  ulbName: string;
+  electedBodyStatus: string;
+  dateOfConstitution: string;
+  dateOfExpiry: string;
+  remarks: string;
+  rowType: string;
+  validationStatus: string;
+  latestDataSource: string;
+  datasetVersion: number;
+  submittedBy: string;
+  submittedAt: string;
+  createdBy: string;
+  updatedBy: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface EulbPostSubmissionUpdatePermissions {

@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { ConfigService } from '@nestjs/config';
 import { Buffer } from 'exceljs';
@@ -60,6 +60,9 @@ import type {
   EulbFormGetResponseData,
   EulbFormLeanDoc,
   EulbFormPermissions,
+  EulbDumpFormRecord,
+  EulbDumpRow,
+  EulbDumpRowRecord,
   EulbValidationSummary,
 } from './elected-urban-local-bodies.types';
 
@@ -80,6 +83,17 @@ function dateToTemplateValue(val: Date | string | undefined | null): Date | stri
   return isNaN(d.getTime()) ? '' : d;
 }
 
+function dateToDumpValue(val: Date | string | undefined | null): string {
+  if (!val) return '';
+  if (val instanceof Date) return isNaN(val.getTime()) ? '' : val.toISOString().split('T')[0];
+  const d = new Date(val);
+  return isNaN(d.getTime()) ? val : d.toISOString().split('T')[0];
+}
+
+function datetimeToDumpValue(val: Date | undefined): string {
+  return val ? val.toISOString() : '';
+}
+
 type EulbTemplateRow = {
   censusCode: string;
   ulbName: string;
@@ -88,6 +102,26 @@ type EulbTemplateRow = {
   dateOfExpiry: Date | string;
   remarks: string;
 };
+
+const EULB_DUMP_HEADERS: RowHeader[] = [
+  { label: 'Row Number', key: 'rowNumber', width: 14 },
+  { label: 'Census Code', key: 'censusCode', width: 16 },
+  { label: 'ULB Name', key: 'ulbName', width: 35 },
+  { label: 'Elected Body Status', key: 'electedBodyStatus', width: 24 },
+  { label: 'Date of Constitution', key: 'dateOfConstitution', width: 24 },
+  { label: 'Date of Expiry', key: 'dateOfExpiry', width: 20 },
+  { label: 'Remarks', key: 'remarks', width: 35 },
+  { label: 'Row Type', key: 'rowType', width: 16 },
+  { label: 'Validation Status', key: 'validationStatus', width: 20 },
+  { label: 'Latest Data Source', key: 'latestDataSource', width: 22 },
+  { label: 'Dataset Version', key: 'datasetVersion', width: 18 },
+  { label: 'Submitted By', key: 'submittedBy', width: 25 },
+  { label: 'Submitted At', key: 'submittedAt', width: 24 },
+  { label: 'Created By', key: 'createdBy', width: 25 },
+  { label: 'Updated By', key: 'updatedBy', width: 25 },
+  { label: 'Created At', key: 'createdAt', width: 24 },
+  { label: 'Updated At', key: 'updatedAt', width: 24 },
+];
 
 @Injectable()
 export class ElectedUrbanLocalBodiesService {
@@ -276,6 +310,61 @@ export class ElectedUrbanLocalBodiesService {
       templateRows,
       'Elected Bodies Template',
       validations,
+    );
+  }
+
+  /**
+   * Exports only the latest active EULB row dataset for the given state/year.
+   * Uses the form's activeDatasetVersion and loads a flat row projection only:
+   * histories, raw upload data, post-submission batches, and old dataset versions
+   * are deliberately excluded.
+   */
+  async dumpToExcel(stateId: string, yearId: string, user: AuthUser): Promise<Buffer> {
+    this.assertStateAccess(user, stateId);
+
+    const stateOid = new Types.ObjectId(stateId);
+    const yearOid = new Types.ObjectId(yearId);
+    const formDoc = await this.model
+      .findOne({
+        state: stateOid,
+        year: yearOid,
+        formType: EULB_FORM_TYPE,
+        isDeleted: false,
+      })
+      .select('_id activeDatasetVersion submittedBy submittedAt')
+      .populate('submittedBy', 'name')
+      .lean<EulbDumpFormRecord>()
+      .exec();
+
+    if (!formDoc) {
+      throw new NotFoundException('Elected Urban Local Bodies form not found for this state and year.');
+    }
+
+    const activeVersion = formDoc.activeDatasetVersion ?? 0;
+    const rows =
+      activeVersion > 0
+        ? await this.rowModel
+            .find({
+              form: formDoc._id,
+              state: stateOid,
+              year: yearOid,
+              datasetVersion: activeVersion,
+              isActive: true,
+            })
+            .select(
+              'rowNumber censusCode ulbName electedBodyStatus dateOfConstitution dateOfExpiry remarks rowType validationStatus lastUpdatedSource datasetVersion createdBy updatedBy createdAt updatedAt',
+            )
+            .populate('createdBy', 'name')
+            .populate('updatedBy', 'name')
+            .sort({ rowNumber: 1 })
+            .lean<EulbDumpRowRecord[]>()
+            .exec()
+        : [];
+
+    return this.excelService.generateExcel(
+      EULB_DUMP_HEADERS,
+      rows.map((row) => this.buildDumpRow(row, formDoc)),
+      'EULB Dump',
     );
   }
 
@@ -662,7 +751,7 @@ export class ElectedUrbanLocalBodiesService {
           },
           {
             id: EULB_ACTION_VIEW_UPLOADED_DATA,
-            label: 'View uploaded data',
+            label: 'Review uploaded data',
             icon: 'bi bi-table',
             tone: errorRowCount > 0 ? 'danger' : 'primary',
             visible: canView && hasActiveDataset,
@@ -872,6 +961,28 @@ export class ElectedUrbanLocalBodiesService {
         },
       },
     ];
+  }
+
+  private buildDumpRow(row: EulbDumpRowRecord, form: EulbDumpFormRecord): EulbDumpRow {
+    return {
+      rowNumber: row.rowNumber,
+      censusCode: row.censusCode ?? '',
+      ulbName: row.ulbName,
+      electedBodyStatus: row.electedBodyStatus ?? '',
+      dateOfConstitution: dateToDumpValue(row.dateOfConstitution),
+      dateOfExpiry: dateToDumpValue(row.dateOfExpiry),
+      remarks: row.remarks ?? '',
+      rowType: row.rowType,
+      validationStatus: row.validationStatus,
+      latestDataSource: row.lastUpdatedSource,
+      datasetVersion: row.datasetVersion,
+      submittedBy: form.submittedBy?.name ?? '',
+      submittedAt: datetimeToDumpValue(form.submittedAt),
+      createdBy: row.createdBy?.name ?? '',
+      updatedBy: row.updatedBy?.name ?? '',
+      createdAt: datetimeToDumpValue(row.createdAt),
+      updatedAt: datetimeToDumpValue(row.updatedAt),
+    };
   }
 
   /**

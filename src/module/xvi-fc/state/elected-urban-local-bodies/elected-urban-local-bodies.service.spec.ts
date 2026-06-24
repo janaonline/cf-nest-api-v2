@@ -13,9 +13,10 @@ import { FileUrlNormalizerService } from '../../common/services/file-url-normali
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { ConfigService } from '@nestjs/config';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
-import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
+import { AccessLevel, Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { EULB_ROW_EDIT_FIELDS } from './constants/elected-urban-local-bodies.constants';
 import type { FormFieldOption } from '../../common/types/field-config.type';
+import type { EulbDumpRowRecord } from './elected-urban-local-bodies.types';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -39,17 +40,27 @@ async function loadSheet(buffer: ExcelJS.Buffer, sheetName: string): Promise<Exc
   return wb.getWorksheet(sheetName)!;
 }
 
+function getRowStringValues(row: ExcelJS.Row): string[] {
+  const values = row.values;
+  return Array.isArray(values) ? values.slice(1).map((value) => String(value ?? '')) : [];
+}
+
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 
 const stateOid = new Types.ObjectId();
 const yearOid = new Types.ObjectId();
 const formOid = new Types.ObjectId();
+const submittedByUser = { _id: new Types.ObjectId(), name: 'Submitter User' };
+const createdByUser = { _id: new Types.ObjectId(), name: 'Creator User' };
+const updatedByUser = { _id: new Types.ObjectId(), name: 'Updater User' };
 
 const adminUser: AuthUser = {
   _id: new Types.ObjectId().toString(),
+  role: UserRole.ADMIN,
   scope: Scope.ADMIN,
+  accessLevel: AccessLevel.ADMIN,
   state: null,
-} as unknown as AuthUser;
+};
 
 /** Two ULBs used by the fallback (no-active-dataset) path. */
 const mockUlbs = [
@@ -98,6 +109,85 @@ const mockSavedRows = [
     remarks: 'User added',
     rowType: 'EXTRA_ULB',
     isActive: true,
+  },
+];
+
+type DumpRowFixture = EulbDumpRowRecord & {
+  isActive: boolean;
+  updateHistory?: unknown[];
+  rawExcelData?: Record<string, unknown>;
+  errors?: unknown[];
+};
+
+const dumpRows: DumpRowFixture[] = [
+  {
+    rowNumber: 1,
+    censusCode: 'C001',
+    ulbName: 'Alpha City',
+    electedBodyStatus: 'Constituted',
+    dateOfConstitution: new Date('2022-06-15T00:00:00.000Z'),
+    dateOfExpiry: new Date('2027-06-14T00:00:00.000Z'),
+    remarks: 'Portal corrected',
+    rowType: 'DB_ULB',
+    validationStatus: 'VALID',
+    lastUpdatedSource: 'PORTAL',
+    datasetVersion: 2,
+    createdBy: createdByUser,
+    updatedBy: updatedByUser,
+    isActive: true,
+    updateHistory: [{ previous: { remarks: 'Old' } }],
+    rawExcelData: { remarks: 'Old' },
+    errors: [],
+    createdAt: new Date('2026-01-01T00:00:00.000Z'),
+    updatedAt: new Date('2026-01-02T00:00:00.000Z'),
+  },
+  {
+    rowNumber: 2,
+    censusCode: 'C002',
+    ulbName: 'Beta Town',
+    electedBodyStatus: 'Not Constituted',
+    dateOfConstitution: null,
+    dateOfExpiry: null,
+    remarks: '',
+    rowType: 'DB_ULB',
+    validationStatus: 'VALID',
+    lastUpdatedSource: 'EXCEL',
+    datasetVersion: 2,
+    createdBy: createdByUser,
+    updatedBy: createdByUser,
+    isActive: true,
+  },
+  {
+    rowNumber: 3,
+    censusCode: 'OLD01',
+    ulbName: 'Old Version ULB',
+    electedBodyStatus: 'Exempt',
+    dateOfConstitution: null,
+    dateOfExpiry: null,
+    remarks: 'Old version',
+    rowType: 'EXTRA_ULB',
+    validationStatus: 'VALID',
+    lastUpdatedSource: 'EXCEL',
+    datasetVersion: 1,
+    createdBy: createdByUser,
+    updatedBy: updatedByUser,
+    isActive: true,
+  },
+  {
+    rowNumber: 4,
+    censusCode: 'INACTIVE01',
+    ulbName: 'Inactive ULB',
+    electedBodyStatus: 'Exempt',
+    dateOfConstitution: null,
+    dateOfExpiry: null,
+    remarks: 'Inactive row',
+    rowType: 'EXTRA_ULB',
+    validationStatus: 'VALID',
+    lastUpdatedSource: 'EXCEL',
+    datasetVersion: 2,
+    createdBy: createdByUser,
+    updatedBy: updatedByUser,
+    isActive: false,
   },
 ];
 
@@ -338,6 +428,148 @@ describe('ElectedUrbanLocalBodiesService', () => {
       // Editable fields are blank in the fallback path.
       expect(sheet.getRow(2).getCell(3).value).toBe(''); // electedBodyStatus
       expect(sheet.getRow(2).getCell(4).value).toBe(''); // dateOfConstitution
+    });
+  });
+
+  describe('dumpToExcel', () => {
+    let service: ElectedUrbanLocalBodiesService;
+
+    type RowFindFilter = {
+      datasetVersion?: number;
+      isActive?: boolean;
+    };
+
+    beforeEach(async () => {
+      jest.clearAllMocks();
+
+      mockFormModel.findOne.mockReturnValue(
+        q({
+          _id: formOid,
+          activeDatasetVersion: 2,
+          submittedBy: submittedByUser,
+          submittedAt: new Date('2026-02-01T00:00:00.000Z'),
+        }),
+      );
+      mockRowModel.find.mockImplementation((filter: RowFindFilter) =>
+        q(
+          dumpRows
+            .filter((row) => row.datasetVersion === filter.datasetVersion && row.isActive === filter.isActive)
+            .sort((a, b) => a.rowNumber - b.rowNumber)
+            .map(({ isActive, updateHistory, rawExcelData, errors, ...row }) => {
+              void isActive;
+              void updateHistory;
+              void rawExcelData;
+              void errors;
+              return row;
+            }),
+        ),
+      );
+
+      const module: TestingModule = await Test.createTestingModule({
+        providers: [
+          ElectedUrbanLocalBodiesService,
+          ExcelService,
+          { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: mockFormModel },
+          { provide: getModelToken(ElectedUrbanLocalBodiesRow.name), useValue: mockRowModel },
+          { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+          { provide: DynamicFormValidationService, useValue: null },
+          { provide: XvifcFormActorsService, useValue: null },
+          { provide: FileTokenService, useValue: null },
+          { provide: ConfigService, useValue: null },
+          { provide: FileUrlNormalizerService, useValue: null },
+        ],
+      }).compile();
+
+      service = module.get<ElectedUrbanLocalBodiesService>(ElectedUrbanLocalBodiesService);
+    });
+
+    async function dumpSheet(): Promise<ExcelJS.Worksheet> {
+      const buffer = await service.dumpToExcel(stateOid.toString(), yearOid.toString(), adminUser);
+      return loadSheet(buffer as unknown as ExcelJS.Buffer, 'EULB Dump');
+    }
+
+    it('exports only active rows from the active dataset version', async () => {
+      const sheet = await dumpSheet();
+
+      expect(mockRowModel.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          form: formOid,
+          datasetVersion: 2,
+          isActive: true,
+        }),
+      );
+      expect(sheet.actualRowCount).toBe(3);
+      expect(sheet.getRow(2).getCell(3).value).toBe('Alpha City');
+      expect(sheet.getRow(3).getCell(3).value).toBe('Beta Town');
+    });
+
+    it('excludes rows from older dataset versions', async () => {
+      const sheet = await dumpSheet();
+      const exportedNames = [sheet.getRow(2).getCell(3).value, sheet.getRow(3).getCell(3).value];
+
+      expect(exportedNames).not.toContain('Old Version ULB');
+    });
+
+    it('excludes inactive rows', async () => {
+      const sheet = await dumpSheet();
+      const exportedNames = [sheet.getRow(2).getCell(3).value, sheet.getRow(3).getCell(3).value];
+
+      expect(exportedNames).not.toContain('Inactive ULB');
+    });
+
+    it('does not include history, raw upload, or error array headers', async () => {
+      const sheet = await dumpSheet();
+      const headers = getRowStringValues(sheet.getRow(1));
+
+      expect(headers).toContain('Latest Data Source');
+      expect(headers).not.toContain('Update History');
+      expect(headers).not.toContain('Post Submission Updates');
+      expect(headers).not.toContain('Raw Excel Data');
+      expect(headers).not.toContain('Errors');
+    });
+
+    it('exports latest data source from lastUpdatedSource', async () => {
+      const sheet = await dumpSheet();
+
+      expect(sheet.getRow(2).getCell(10).value).toBe('PORTAL');
+      expect(sheet.getRow(3).getCell(10).value).toBe('EXCEL');
+    });
+
+    it('exports submission metadata and row actor names', async () => {
+      const sheet = await dumpSheet();
+
+      expect(sheet.getRow(2).getCell(12).value).toBe('Submitter User');
+      expect(sheet.getRow(2).getCell(13).value).toBe('2026-02-01T00:00:00.000Z');
+      expect(sheet.getRow(2).getCell(14).value).toBe('Creator User');
+      expect(sheet.getRow(2).getCell(15).value).toBe('Updater User');
+    });
+
+    it('does not throw for empty rows and returns a workbook with headers', async () => {
+      mockRowModel.find.mockReturnValueOnce(q([]));
+
+      const sheet = await dumpSheet();
+      const headers = getRowStringValues(sheet.getRow(1));
+
+      expect(headers).toEqual([
+        'Row Number',
+        'Census Code',
+        'ULB Name',
+        'Elected Body Status',
+        'Date of Constitution',
+        'Date of Expiry',
+        'Remarks',
+        'Row Type',
+        'Validation Status',
+        'Latest Data Source',
+        'Dataset Version',
+        'Submitted By',
+        'Submitted At',
+        'Created By',
+        'Updated By',
+        'Created At',
+        'Updated At',
+      ]);
+      expect(sheet.actualRowCount).toBe(1);
     });
   });
 });

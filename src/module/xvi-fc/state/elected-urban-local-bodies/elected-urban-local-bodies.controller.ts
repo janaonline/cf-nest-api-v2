@@ -176,6 +176,26 @@ export class ElectedUrbanLocalBodiesController {
   }
 
   @ApiOperation({
+    summary: 'Download Elected Body Data dump',
+    description:
+      'Generates an Excel dump of only the latest active EULB row dataset for the given state and year. Excludes row histories, post-submission update history, inactive rows, and older dataset versions.',
+  })
+  @Get(':stateId/:yearId/dump')
+  @UseGuards(PermissionGuard)
+  @RequirePermissions(Permission.VIEW_STATE_FORMS)
+  async dump(
+    @Param('stateId', ParseObjectIdPipe) stateId: string,
+    @Param('yearId', ParseObjectIdPipe) yearId: string,
+    @CurrentUser() user: AuthUser,
+  ): Promise<StreamableFile> {
+    const buffer = await this.eulbService.dumpToExcel(stateId, yearId, user);
+    return new StreamableFile(new Uint8Array(buffer as ArrayBuffer), {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      disposition: `attachment; filename="elected-body-data-dump_${getTimeStamp(false)}.xlsx"`,
+    });
+  }
+
+  @ApiOperation({
     summary: 'Delete uploaded Elected Bodies Excel',
     description:
       'Hard-deletes all current EULB row data and clears the uploaded file reference. Resets validation summary to NOT_VALIDATED. Blocked when the form status does not allow editing.',
