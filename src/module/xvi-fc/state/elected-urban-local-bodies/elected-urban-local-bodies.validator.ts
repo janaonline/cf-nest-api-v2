@@ -174,6 +174,34 @@ export class ElectedUrbanLocalBodiesValidator {
     return errors;
   }
 
+  /**
+   * Validates the editable fields for a post-submission row update.
+   * Unlike validatePortalUpdateFields (which treats all fields as optional partial updates),
+   * this treats electedBodyStatus as required and always enforces cross-field rules:
+   * Constituted status requires both dateOfConstitution and dateOfExpiry.
+   */
+  validatePostSubmissionRowUpdate(
+    dto: {
+      electedBodyStatus: string;
+      dateOfConstitution?: string | null;
+      dateOfExpiry?: string | null;
+      remarks?: string | null;
+    },
+    today: Date,
+  ): EulbRowError[] {
+    return this.validateCommonFields(
+      {
+        rowNumber: 0,
+        ulbName: '',
+        electedBodyStatus: dto.electedBodyStatus,
+        dateOfConstitution: dto.dateOfConstitution ?? undefined,
+        dateOfExpiry: dto.dateOfExpiry ?? undefined,
+        remarks: dto.remarks ?? undefined,
+      },
+      today,
+    );
+  }
+
   /** Re-validates a single row after a portal update. Delegates to the appropriate validator based on rowType. */
   revalidateRow(
     row: ParsedExcelRow & { rowType: 'DB_ULB' | 'EXTRA_ULB' },

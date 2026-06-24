@@ -34,6 +34,29 @@ class EulbFileRef {
 
 const EulbFileRefSchema = SchemaFactory.createForClass(EulbFileRef);
 
+@Schema({ _id: false })
+class EulbPostSubmissionBatchDocument {
+  @Prop({ type: String, required: true }) fileName!: string;
+  @Prop({ type: String, required: true }) fileUrl!: string;
+  @Prop({ type: Number, required: true }) fileSize!: number;
+  @Prop({ type: String, required: true }) mimeType!: string;
+  @Prop({ type: String }) s3Key?: string;
+}
+const EulbPostSubmissionBatchDocumentSchema = SchemaFactory.createForClass(EulbPostSubmissionBatchDocument);
+
+@Schema({ _id: false })
+class EulbPostSubmissionUpdateBatch {
+  @Prop({ type: MongooseSchema.Types.ObjectId, required: true }) batchId!: Types.ObjectId;
+  @Prop({ type: String, enum: ['APPLIED'], required: true }) status!: string;
+  @Prop({ type: EulbPostSubmissionBatchDocumentSchema, required: true }) document!: EulbPostSubmissionBatchDocument;
+  @Prop({ type: [{ type: MongooseSchema.Types.ObjectId, ref: 'ElectedUrbanLocalBodiesRow' }] })
+  rowIds!: Types.ObjectId[];
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true }) submittedBy!: Types.ObjectId;
+  @Prop({ type: Date, required: true }) submittedAt!: Date;
+  @Prop({ type: Date, required: true }) appliedAt!: Date;
+}
+const EulbPostSubmissionUpdateBatchSchema = SchemaFactory.createForClass(EulbPostSubmissionUpdateBatch);
+
 @Schema({
   collection: 'xvi_fc_elected_urban_local_bodies_forms',
   timestamps: true,
@@ -117,6 +140,9 @@ export class ElectedUrbanLocalBodiesForm {
 
   @Prop({ type: Boolean, default: false })
   isDeleted?: boolean;
+
+  @Prop({ type: [EulbPostSubmissionUpdateBatchSchema], default: [] })
+  postSubmissionUpdates!: EulbPostSubmissionUpdateBatch[];
 
   // Injected by Mongoose timestamps: true
   createdAt?: Date;
