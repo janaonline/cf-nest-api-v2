@@ -1,6 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import { IsBoolean, IsEmail, IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsBoolean, IsEmail, IsIn, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
 
 export class UpdateProfileContactsDto {
   @ApiPropertyOptional({ example: 'Tusharbhai R Zalariya' })
@@ -17,7 +17,7 @@ export class UpdateProfileContactsDto {
   @ApiPropertyOptional({ example: '9824052506' })
   @IsOptional()
   @IsString()
-  @MaxLength(20)
+  @Matches(/^\d{10}$/, { message: 'mobile must be a 10-digit number' })
   mobile?: string;
 
   @ApiPropertyOptional({ example: 'john_doe' })
@@ -53,7 +53,7 @@ export class UpdateProfileContactsDto {
   @ApiPropertyOptional({ example: '9876543210' })
   @IsOptional()
   @IsString()
-  @MaxLength(20)
+  @Matches(/^\d{6,15}$/, { message: 'departmentContactNumber must contain 6 to 15 digits' })
   departmentContactNumber?: string;
 
   @ApiPropertyOptional({ example: 'finance@ulb.gov.in' })
@@ -75,7 +75,7 @@ export class UpdateProfileContactsDto {
   @ApiPropertyOptional({ example: '9123456780' })
   @IsOptional()
   @IsString()
-  @MaxLength(20)
+  @Matches(/^\d{6,15}$/, { message: 'commissionerConatactNumber must contain 6 to 15 digits' })
   commissionerConatactNumber?: string;
 
   @ApiPropertyOptional({ example: 'Suresh Patel' })
@@ -92,7 +92,7 @@ export class UpdateProfileContactsDto {
   @ApiPropertyOptional({ example: '9000001111' })
   @IsOptional()
   @IsString()
-  @MaxLength(20)
+  @Matches(/^\d{6,15}$/, { message: 'accountantConatactNumber must contain 6 to 15 digits' })
   accountantConatactNumber?: string;
 
   @ApiPropertyOptional({ enum: ['PENDING', 'APPROVED', 'REJECTED', 'NA'] })

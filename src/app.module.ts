@@ -12,6 +12,7 @@ import { AppService } from './app.service';
 import { EmailModule } from './core/email/email.module';
 import { NodeMailerModule } from './core/node-mailer/node-mailer.module';
 import { RedisModule } from './core/services/redis/redis.module';
+import { SmsModule } from './core/services/sms/sms.module';
 import { LoggerMiddleware } from './middleware/logger-middleware';
 import { AuthModule } from './module/auth/auth.module';
 import { UsersModule } from './users/users.module';
@@ -50,6 +51,7 @@ function getQueryCaller(): string {
     ScheduleModule.forRoot(),
     CacheModule.register({ isGlobal: true, ttl: 300000 }),
     RedisModule,
+    SmsModule,
     AuthModule,
     BullModule.forRootAsync({
       inject: [ConfigService],

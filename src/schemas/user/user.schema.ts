@@ -152,6 +152,24 @@ export class User extends Document {
   isXVIFCProfileVerified!: boolean;
 
   /**
+   * Portal-level designation — parallel to `role`, never replaces it.
+   * Old portals (15th FC etc.) read `role` only and are blind to this field.
+   * First STATE user to verify their profile becomes 'submitter'; subsequent verifiers get 'viewer'.
+   * ULB users always get 'submitter' on first verify.
+   * Managed users (EDITOR/VIEWER roles) get this set explicitly when invited.
+   * Named generically so XVII FC and beyond can reuse the same field.
+   */
+  @Prop({ type: String, enum: ['submitter', 'editor', 'viewer'], default: null })
+  subRole!: 'submitter' | 'editor' | 'viewer' | null;
+
+  /**
+   * Timestamp when an invite was last sent to a pending managed user.
+   * Used to compute the 48-hour invite expiry on the fly — no cron required.
+   */
+  @Prop({ type: Date, default: null })
+  invitedAt!: Date | null;
+
+  /**
    * Per-user permission overrides.
    * Default permissions come from ROLE_PERMISSIONS in permissions.map.ts.
    * Only store deviations here — keep this empty for the vast majority of users.

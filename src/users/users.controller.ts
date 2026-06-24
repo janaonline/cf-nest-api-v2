@@ -117,6 +117,15 @@ export class UsersController {
   }
 
   @ApiBearerAuth()
+  @Post(':id/resend-invite')
+  @UseGuards(JwtAuthGuard, PermissionGuard)
+  @RequirePermissions(Permission.MANAGE_USERS)
+  @ApiOperation({ summary: 'Resend invite SMS to a pending managed user (max 3/hr)' })
+  resendInvite(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.usersService.resendInvite(id, user);
+  }
+
+  @ApiBearerAuth()
   @Patch(':id/role')
   @UseGuards(PermissionGuard)
   @RequirePermissions(Permission.UPDATE_MANAGED_USER)

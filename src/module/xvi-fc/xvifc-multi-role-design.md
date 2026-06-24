@@ -27,6 +27,10 @@
 15. [Overview Page — Suggested Members Pattern](#15-overview-page--suggested-members-pattern)
 16. [Role Change Rules — Editor ↔ Viewer](#16-role-change-rules--editor--viewer)
 17. [Transfer Ownership Rules](#17-transfer-ownership-rules)
+18. [Session Management — JWT and Account Transitions](#18-session-management--jwt-and-account-transitions)
+19. [Routing Guard Rules](#19-routing-guard-rules)
+20. [OTP Abandon, Resume and Pending State Machine](#20-otp-abandon-resume-and-pending-state-machine)
+21. [Transfer Ownership — Force Logout Behaviour](#21-transfer-ownership--force-logout-behaviour)
 
 ---
 
@@ -1349,6 +1353,311 @@ Pending (invited, not yet activated):
 Suggested (not yet invited):
   [Invite as Editor / Viewer ▾]
 ```
+
+---
+
+---
+
+## 18. Session Management — JWT and Account Transitions
+
+### The Two Independent Session Checks
+
+Every XVI-FC route requires BOTH checks to pass:
+
+```
+Check 1: Is the JWT valid and not expired?
+  NO  → redirect to /login
+
+Check 2: isXVIFCProfileVerified on the user document?
+  NO  → redirect to /xvi-fc/verify
+  YES → allow access
+```
+
+A valid JWT does NOT grant XVI-FC access on its own. Both gates must pass independently.
+
+### PATH A — Selecting an Existing Contact (Self)
+
+The logged-in person selects themselves from the contacts list and verifies their mobile.
+The verification updates the SAME user document they are already logged in as.
+
+```
+Session before:  JWT-A { userId: ULB-account-id, role: ULB }
+Action:          OTP verified, name/mobile/designation updated on existing document
+Backend:         Re-issues refreshed JWT for the SAME userId
+Session after:   JWT-A-refreshed { userId: same ULB-account-id, role: ULB }
+Redirect:        /xvi-fc/overview (isXVIFCProfileVerified: true now)
+```
+
+No session switch. Same user, same JWT subject, just updated fields.
+
+### PATH B — Creating a New Account for Yourself
+
+The logged-in person's details are not in the contacts list. They fill in their own details,
+a new user document is created for them, they verify mobile and set password.
+
+```
+Session before:  JWT-A { userId: old-ULB-account-id, role: ULB }
+Action:          New user document created, OTP verified, password set
+Backend:         Issues BRAND NEW JWT for the new user document
+Session after:   JWT-B { userId: new-account-id, role: ULB-EDITOR }
+Frontend:        Replaces JWT-A with JWT-B in storage
+Redirect:        /xvi-fc/overview with JWT-B
+Old JWT-A:       Abandoned. Old ULB account's refreshTokenHash set to null.
+```
+
+This is a full session switch. The person is now logged in as their new personal account.
+
+### Inviting Someone Else (from Overview Page)
+
+The submitter creates an account for a different person. No session concern.
+
+```
+Session:         Submitter's JWT unchanged throughout
+Action:          New pending account created, OTP SMS sent to the new person's mobile
+Backend:         Returns success response to submitter
+Submitter:       Stays on overview page. Their session is unaffected.
+New person:      Logs in SEPARATELY on their own device with their own credentials.
+                 Gets their own fresh JWT. Goes to XVI-FC overview.
+```
+
+There is no session handoff between the submitter and the new person. They are independent sessions.
+
+### Summary Table
+
+| Scenario | Session change | Who holds new JWT |
+|---|---|---|
+| PATH A — select existing contact (self) | No — refreshed JWT same userId | Same person |
+| PATH B — create new account (self) | YES — full session switch | New personal account |
+| Overview page — invite someone else | No change for submitter | New person on their own device |
+| Transfer ownership | YES — force logout for old submitter | Old submitter re-logs in as editor |
+
+---
+
+## 19. Routing Guard Rules
+
+### Guard Logic (Frontend)
+
+```typescript
+// Applied on every route change and on app load
+function xviFcRouteGuard(user, route) {
+  if (!jwt || isJwtExpired(jwt)) {
+    redirect('/login');
+    return;
+  }
+
+  if (!user.isXVIFCProfileVerified) {
+    redirect('/xvi-fc/verify');
+    return;
+  }
+
+  allow(route);
+}
+```
+
+### Behavior Table — All Navigation Scenarios While Unverified
+
+| Action attempted | JWT status | Outcome |
+|---|---|---|
+| Navigate to /xvi-fc/overview | Valid | Blocked → /xvi-fc/verify |
+| Navigate to /xvi-fc/team | Valid | Blocked → /xvi-fc/verify |
+| Directly type any XVI-FC URL | Valid | Blocked → /xvi-fc/verify |
+| Refresh the page | Valid | Back to /xvi-fc/verify |
+| Browser back/forward button | Valid | Guard intercepts → /xvi-fc/verify |
+| JWT expires (inactive >15 min) | Expired | Blocked → /login |
+| Any navigation after JWT expired | Expired | Blocked → /login |
+
+### What Happens on the Verification Page After OTP Was Sent but Not Entered
+
+```
+User navigates away or refreshes while OTP entry screen is showing
+         ↓
+Guard: isXVIFCProfileVerified: false → /xvi-fc/verify
+         ↓
+Verification page loads — shows contact list view (not OTP entry)
+Backend detects: pending account exists for this ulb/state
+         ↓
+Page shows resume banner:
+
+  ┌────────────────────────────────────────────────────────────┐
+  │  ⚠ You have a pending verification                        │
+  │  An OTP was sent to +91 94077 XXXXX                       │
+  │  [Enter OTP]     [Resend OTP]     [Start over]            │
+  └────────────────────────────────────────────────────────────┘
+```
+
+### Inactivity Behaviour
+
+| Time since OTP was sent | JWT status | OTP status | What user sees on return |
+|---|---|---|---|
+| < 10 minutes | Valid | Valid | OTP entry screen (resume option) |
+| 10–15 minutes | Valid | Expired | Verification page + "Resend OTP" |
+| > 15 minutes | Expired | Expired | Login page (JWT gate fails first) |
+
+After re-login with expired JWT: `isXVIFCProfileVerified: false` → verification page → pending account detected → "Resend OTP" shown.
+
+---
+
+## 20. OTP Abandon, Resume and Pending State Machine
+
+### The Pending Account State Machine
+
+```
+                     [Invite sent / PATH B account created]
+                                      │
+                                      ▼
+                                  PENDING
+                              (isActive: false,
+                               status: PENDING)
+                              /                \
+               OTP verified                  48 hours pass
+               + password set                without any action
+               (within 10 min OTP window)          │
+                      │                            ▼
+                   ACTIVE                       EXPIRED
+               (isActive: true,             (status: EXPIRED)
+                isXVIFCProfileVerified:      shown in team list
+                true)                        as ⚠ Invite Expired
+                                            /              \
+                                     [Reinvite]          [Remove]
+                                          │                  │
+                                       PENDING           SOFT DELETED
+                                    (clock reset)      (isDeleted: true)
+```
+
+### Case A — Profile Verification Page PATH B (Self-Creation Abandoned)
+
+```
+State when abandoned:
+  Pending account:    exists (isActive: false, status: PENDING)
+  OTP in Redis:       expires after 10 minutes from generation
+  Old JWT:            still valid until its 15-minute window
+  isXVIFCProfileVerified on old account: false
+
+On next login or return to verification page:
+  Backend detects pending account for this ulb/state
+  Verification page shows resume banner (see Section 19)
+
+Options shown:
+  [Enter OTP]    — if OTP still valid (<10 min)
+  [Resend OTP]   — if OTP expired (generates fresh OTP, sends SMS again)
+  [Start over]   — soft-deletes pending account, returns to contact list
+                   allows entering different mobile number
+```
+
+### Case B — Overview Page Invite Abandoned (Team Member Not Activating)
+
+```
+State:
+  Pending account in team list with status: PENDING
+  OTP expires after 10 minutes
+  Submitter sees on overview:
+
+  U K Ramteke · Editor · ◑ Pending · Invited: 2 hours ago
+  [Change Role ▾]  [Resend Invite]  [Remove]
+
+After 48 hours with no action:
+  status: PENDING → status: EXPIRED
+  Overview shows:
+  U K Ramteke · Editor · ⚠ Invite Expired
+  [Reinvite]  [Remove]
+
+[Resend Invite] / [Reinvite]:
+  Generates new 6-digit OTP
+  Sends fresh SMS to mobile
+  Resets 48-hour expiry clock
+  status back to PENDING
+
+[Remove]:
+  Soft-deletes the pending account
+  Mobile number is freed (can be used for a fresh invite)
+```
+
+### OTP Rules Summary
+
+| OTP event | TTL | Result |
+|---|---|---|
+| Generated on invite / PATH B | 10 minutes | After 10 min → expired, must resend |
+| Resend triggered | 10 minutes (fresh) | Old OTP invalidated, new OTP active |
+| 3 wrong attempts | — | Account locked for 10 minutes |
+| Pending account not activated | 48 hours | status → EXPIRED, shown in team list |
+| Pending account expired | Until removed | Submitter must [Reinvite] or [Remove] |
+
+---
+
+## 21. Transfer Ownership — Force Logout Behaviour
+
+### Why Force Logout
+
+After ownership transfer:
+- Old submitter's `xviFcRole` changes: `submitter` → `editor`
+- Their JWT still carries `role: ULB` or `role: STATE` (role field unchanged)
+- Without force logout, they would still see the submitter UI until the JWT expires
+- Force logout provides a clear signal and ensures a clean state on next login
+- Backend invalidates their refresh token so they cannot silently extend the session
+
+### The Full Sequence
+
+```
+Old submitter clicks [Transfer Ownership to Anjali]
+         ↓
+Confirmation modal shown:
+  "Are you sure? You will be demoted to Editor.
+   Anjali Singh will become the new Submitter."
+  [Cancel]  [Yes, Transfer]
+         ↓
+[Yes, Transfer] clicked
+         ↓
+Backend (atomic MongoDB transaction):
+  1. Old submitter: xviFcRole: submitter → editor
+  2. New submitter: xviFcRole: editor/viewer → submitter
+                    + permissionOverrides.allow updated (if new submitter is managed user)
+  3. Old submitter: refreshTokenHash → null  (refresh token invalidated)
+         ↓
+Backend response: { success: true }
+         ↓
+Frontend shows full-screen overlay for 2 seconds:
+
+  ┌──────────────────────────────────────────────────────────┐
+  │                                                          │
+  │  ✅  Ownership transferred successfully                 │
+  │                                                          │
+  │  Anjali Singh is now the Submitter.                     │
+  │  Your role has changed to Editor.                       │
+  │                                                          │
+  │  Logging you out in 2 seconds...                        │
+  │                                                          │
+  └──────────────────────────────────────────────────────────┘
+
+         ↓  (after 2 seconds)
+Frontend:
+  1. Clear JWT from localStorage / sessionStorage
+  2. Clear refresh token cookie
+  3. Redirect to /login
+         ↓
+Old submitter logs in again with their credentials
+→ Fresh JWT issued
+→ isXVIFCProfileVerified: true → goes to overview
+→ Sees themselves as Editor (not Submitter)
+```
+
+### What Happens to the New Submitter (Anjali)
+
+Do NOT force logout the new submitter. It would be jarring — her screen would unexpectedly redirect to login with no explanation.
+
+Instead:
+- If Anjali is currently logged in on another device: her existing JWT remains valid
+- On her next API call or page refresh: her updated profile is returned (xviFcRole: submitter)
+- She sees a notification: "You have been made the Submitter for [entity]. Refresh to see your updated permissions."
+- On her next login: her JWT reflects the new xviFcRole
+
+### Zero Submitter Protection
+
+Transfer ownership is an atomic swap — there is never a moment with zero submitters.
+
+Additional guard in `softDeleteUser`:
+- Check: is this the only active submitter for the ULB/state?
+  - YES → block with 400: "Cannot remove the only Submitter. Transfer ownership first."
+  - NO  → proceed with soft delete
 
 ---
 

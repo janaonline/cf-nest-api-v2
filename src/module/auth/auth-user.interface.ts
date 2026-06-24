@@ -18,4 +18,11 @@ export interface AuthUser {
     allow: Permission[];
     deny: Permission[];
   };
+  /**
+   * Portal-level designation — fetched fresh from DB on every request by JwtStrategy.
+   * Acts as a cap on permissions: a legacy STATE user with subRole 'editor' is capped
+   * at STATE-EDITOR permissions even though their role field is STATE.
+   * Never stored in the JWT payload itself.
+   */
+  subRole?: 'submitter' | 'editor' | 'viewer' | null;
 }

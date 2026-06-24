@@ -100,7 +100,7 @@ export function resolveAdminScopeTarget(
   // ── STATE admin branch ────────────────────────────────────────────────────
   if (creator.role === UserRole.STATE) {
     if (!stateManagedRoles.includes(targetRole)) {
-      throw new ForbiddenException('STATE admin can only assign STATE, STATE-EDITOR or STATE-VIEWER role');
+      throw new ForbiddenException('STATE admin can only assign STATE-EDITOR or STATE-VIEWER roles to managed users');
     }
     if (!creatorStateId || !Types.ObjectId.isValid(creatorStateId)) {
       throw new ForbiddenException('Logged-in STATE admin is not mapped to any valid state');

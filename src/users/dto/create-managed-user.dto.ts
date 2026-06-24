@@ -1,7 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import { IsEmail, IsIn, IsMongoId, IsNotEmpty, IsOptional, IsString, Matches, MaxLength, ValidateIf } from 'class-validator';
-import { Role } from 'src/module/auth/enum/role.enum';
+import { MANAGED_ROLES } from 'src/module/auth/enum/roles-xvi-fc.enum';
+import type { ManagedRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
 
 export class CreateManagedUserDto {
   @ApiProperty({ example: 'Kinjal Banugariya' })
@@ -28,9 +29,16 @@ export class CreateManagedUserDto {
   @Matches(/^\d{10}$/, { message: 'mobile must be a 10-digit number' })
   mobile!: string;
 
-  @ApiProperty({ enum: Object.values(Role) })
-  @IsIn(Object.values(Role))
-  role!: Role;
+  @ApiProperty({
+    enum: MANAGED_ROLES,
+    description:
+      'Role to assign to the new user. Only managed (non-submitter) roles are accepted: ' +
+      MANAGED_ROLES.join(', '),
+  })
+  @IsIn([...MANAGED_ROLES], {
+    message: `role must be one of: ${MANAGED_ROLES.join(', ')}`,
+  })
+  role!: ManagedRole;
 
   @ApiPropertyOptional({ example: 'Accountant' })
   @IsOptional()

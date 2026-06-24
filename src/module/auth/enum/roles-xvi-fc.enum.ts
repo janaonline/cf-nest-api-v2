@@ -12,6 +12,22 @@ export enum UserRole {
   ADMIN = 'ADMIN',
 }
 
+/**
+ * The only roles that may be assigned to a managed (non-submitter) user.
+ * Submitter-level roles (STATE, ULB) are granted only via profile-verification
+ * or transfer-ownership — never through a direct role-assignment endpoint.
+ *
+ * This is the single source of truth referenced by DTOs, services, and helpers.
+ */
+export const MANAGED_ROLES = [
+  UserRole.ULB_EDITOR,
+  UserRole.ULB_VIEWER,
+  UserRole.STATE_EDITOR,
+  UserRole.STATE_VIEWER,
+] as const;
+
+export type ManagedRole = (typeof MANAGED_ROLES)[number];
+
 export enum Scope {
   ULB = 'ULB',
   STATE = 'STATE',
