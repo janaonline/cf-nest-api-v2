@@ -5,6 +5,7 @@ import { Types } from 'mongoose';
 import {
   EulbPostSubmissionUpdateService,
   buildEligibleRowCondition,
+  buildPostSubmissionEligibleRowsFilter,
 } from './elected-urban-local-bodies-post-submission-update.service';
 import { ElectedUrbanLocalBodiesValidator } from './elected-urban-local-bodies.validator';
 import { ElectedUrbanLocalBodiesForm } from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
@@ -16,6 +17,11 @@ import {
   POST_SUBMISSION_UPDATE_ALLOWED_STATUSES,
   canViewPostSubmissionUpdate,
 } from '../../common/utils/xvi-fc-form-status-access.util';
+import type {
+  EulbPostSubmissionUpdateDocumentDto,
+  SubmitEulbPostSubmissionUpdateDto,
+  SubmitEulbPostSubmissionUpdateRowDto,
+} from './dto/submit-eulb-post-submission-update.dto';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -70,12 +76,103 @@ const TODAY = (() => {
   return d;
 })();
 
-function makeRow(overrides: Record<string, unknown> = {}) {
+interface TestEulbRowError {
+  field: string;
+  code: string;
+  message: string;
+  value?: unknown;
+}
+
+interface TestEulbRow {
+  _id: Types.ObjectId;
+  form: Types.ObjectId;
+  state: Types.ObjectId;
+  year: Types.ObjectId;
+  rowNumber: number;
+  censusCode: string | null;
+  ulbName: string;
+  electedBodyStatus: string;
+  dateOfConstitution: Date | string | null;
+  dateOfExpiry: Date | string | null;
+  remarks: string | null;
+  rowType: 'DB_ULB' | 'EXTRA_ULB';
+  datasetVersion: number;
+  validationStatus: 'VALID' | 'INVALID';
+  errors: TestEulbRowError[];
+  isActive: boolean;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function objectIdEquals(actual: Types.ObjectId, expected: unknown): boolean {
+  return expected instanceof Types.ObjectId && actual.equals(expected);
+}
+
+function getAndConditions(filter: Record<string, unknown>): Record<string, unknown>[] {
+  const andConditions = filter['$and'];
+  return Array.isArray(andConditions) ? andConditions.filter(isRecord) : [];
+}
+
+function getOrClauses(condition: Record<string, unknown>): Record<string, unknown>[] {
+  const orClauses = condition['$or'];
+  return Array.isArray(orClauses) ? orClauses.filter(isRecord) : [];
+}
+
+function dateValue(value: Date | string | null): Date | null {
+  if (value instanceof Date) return value;
+  if (typeof value === 'string') return new Date(value);
+  return null;
+}
+
+function matchesCondition(row: TestEulbRow, condition: Record<string, unknown>): boolean {
+  const orClauses = getOrClauses(condition);
+  if (orClauses.length > 0) return orClauses.some((clause) => matchesCondition(row, clause));
+
+  const censusCode = condition['censusCode'];
+  if (censusCode instanceof RegExp) return censusCode.test(row.censusCode ?? '');
+
+  const ulbName = condition['ulbName'];
+  if (ulbName instanceof RegExp) return ulbName.test(row.ulbName);
+
+  const electedBodyStatus = condition['electedBodyStatus'];
+  if (electedBodyStatus === 'Not Constituted') return row.electedBodyStatus === 'Not Constituted';
+
+  if (electedBodyStatus === 'Constituted') {
+    const expiryCondition = condition['dateOfExpiry'];
+    const expiry = dateValue(row.dateOfExpiry);
+    if (!expiry || !isRecord(expiryCondition) || !(expiryCondition['$lt'] instanceof Date)) return false;
+    return row.electedBodyStatus === 'Constituted' && expiry.getTime() < expiryCondition['$lt'].getTime();
+  }
+
+  return true;
+}
+
+function rowMatchesFilter(row: TestEulbRow, filter: Record<string, unknown>): boolean {
+  if (!objectIdEquals(row.form, filter['form'])) return false;
+  if (!objectIdEquals(row.state, filter['state'])) return false;
+  if (!objectIdEquals(row.year, filter['year'])) return false;
+  if (filter['datasetVersion'] !== row.datasetVersion) return false;
+  if (filter['isActive'] !== row.isActive) return false;
+
+  const validationStatus = filter['validationStatus'];
+  if (typeof validationStatus === 'string' && validationStatus !== row.validationStatus) return false;
+
+  const electedBodyStatus = filter['electedBodyStatus'];
+  if (typeof electedBodyStatus === 'string' && electedBodyStatus !== row.electedBodyStatus) return false;
+
+  return getAndConditions(filter).every((condition) => matchesCondition(row, condition));
+}
+
+function makeRow(overrides: Partial<TestEulbRow> = {}): TestEulbRow {
   const futureExpiry = new Date(TODAY);
   futureExpiry.setDate(futureExpiry.getDate() + 30);
   return {
     _id: new Types.ObjectId(),
     form: formOid,
+    state: stateOid,
+    year: yearOid,
     rowNumber: 1,
     censusCode: '1234567',
     ulbName: 'Test City',
@@ -118,28 +215,40 @@ describe('canViewPostSubmissionUpdate', () => {
 // ─── buildEligibleRowCondition ────────────────────────────────────────────────
 
 describe('buildEligibleRowCondition', () => {
+  it('returns the exact candidate-row condition used by the post-submission update page', () => {
+    expect(buildEligibleRowCondition(TODAY)).toEqual({
+      $or: [
+        { electedBodyStatus: 'Not Constituted' },
+        {
+          electedBodyStatus: 'Constituted',
+          dateOfExpiry: { $lt: TODAY },
+        },
+      ],
+    });
+  });
+
   it('includes Not Constituted rows without a date check', () => {
     const condition = buildEligibleRowCondition(TODAY);
     const orClauses = condition['$or'] as Array<Record<string, unknown>>;
     expect(orClauses).toContainEqual({ electedBodyStatus: 'Not Constituted' });
   });
 
-  it('includes Constituted rows with dateOfExpiry strictly after today', () => {
+  it('includes Constituted rows with dateOfExpiry strictly before today', () => {
     const condition = buildEligibleRowCondition(TODAY);
     const orClauses = condition['$or'] as Array<Record<string, unknown>>;
     expect(orClauses).toContainEqual({
       electedBodyStatus: 'Constituted',
-      dateOfExpiry: { $gt: TODAY },
+      dateOfExpiry: { $lt: TODAY },
     });
   });
 
-  it('uses $gt (strict greater-than) so rows expiring exactly today are excluded', () => {
+  it('uses $lt (strict less-than) so rows expiring exactly today or in the future are excluded', () => {
     const condition = buildEligibleRowCondition(TODAY);
     const orClauses = condition['$or'] as Array<Record<string, unknown>>;
-    const constitutedClause = orClauses.find(
-      (c) => c['electedBodyStatus'] === 'Constituted',
-    ) as Record<string, unknown> | undefined;
-    expect(constitutedClause?.['dateOfExpiry']).toEqual({ $gt: TODAY });
+    const constitutedClause = orClauses.find((c) => c['electedBodyStatus'] === 'Constituted') as
+      | Record<string, unknown>
+      | undefined;
+    expect(constitutedClause?.['dateOfExpiry']).toEqual({ $lt: TODAY });
   });
 
   it('does not include Exempt rows', () => {
@@ -158,6 +267,19 @@ describe('buildEligibleRowCondition', () => {
 });
 
 // ─── EulbPostSubmissionUpdateService ─────────────────────────────────────────
+
+describe('buildPostSubmissionEligibleRowsFilter', () => {
+  it('builds the mandatory base filter for post-submission candidate rows', () => {
+    expect(buildPostSubmissionEligibleRowsFilter(formOid, stateOid.toString(), yearOid.toString(), 1, TODAY)).toEqual({
+      form: formOid,
+      state: stateOid,
+      year: yearOid,
+      datasetVersion: 1,
+      isActive: true,
+      $and: [buildEligibleRowCondition(TODAY)],
+    });
+  });
+});
 
 function makeFormSummary(overrides: Record<string, unknown> = {}) {
   return {
@@ -265,17 +387,51 @@ describe('EulbPostSubmissionUpdateService', () => {
       expect(rowModel['countDocuments']).not.toHaveBeenCalled();
     });
 
+    it('counts only rows matching the same mandatory post-submission eligibility filter', async () => {
+      const pastExpiry = new Date(TODAY);
+      pastExpiry.setDate(pastExpiry.getDate() - 1);
+      const futureExpiry = new Date(TODAY);
+      futureExpiry.setDate(futureExpiry.getDate() + 1);
+      const rows = [
+        makeRow({ rowNumber: 1, electedBodyStatus: 'Not Constituted' }),
+        makeRow({ rowNumber: 2, electedBodyStatus: 'Constituted', dateOfExpiry: pastExpiry }),
+        makeRow({ rowNumber: 3, electedBodyStatus: 'Constituted', dateOfExpiry: TODAY }),
+        makeRow({ rowNumber: 4, electedBodyStatus: 'Constituted', dateOfExpiry: futureExpiry }),
+        makeRow({ rowNumber: 5, electedBodyStatus: 'Exempt' }),
+        makeRow({ rowNumber: 6, electedBodyStatus: 'Not Constituted', isActive: false }),
+      ];
+      rowModel['countDocuments'] = jest.fn((filter: Record<string, unknown>) =>
+        q(rows.filter((row) => rowMatchesFilter(row, filter)).length),
+      );
+
+      const result = await service.getMetadata(stateOid.toString(), yearOid.toString(), adminUser);
+
+      expect(result.data!.summary.eligibleRowCount).toBe(2);
+      expect(rowModel['countDocuments']).toHaveBeenCalledWith(
+        buildPostSubmissionEligibleRowsFilter(formOid, stateOid.toString(), yearOid.toString(), 1, expect.any(Date)),
+      );
+    });
+
     it('throws ForbiddenException for a state user accessing a different state', async () => {
       const wrongStateUser = stateUser(new Types.ObjectId());
-      await expect(
-        service.getMetadata(stateOid.toString(), yearOid.toString(), wrongStateUser),
-      ).rejects.toThrow(ForbiddenException);
+      await expect(service.getMetadata(stateOid.toString(), yearOid.toString(), wrongStateUser)).rejects.toThrow(
+        ForbiddenException,
+      );
     });
   });
 
   // ─── getEligibleRows ───────────────────────────────────────────────────────
 
   describe('getEligibleRows', () => {
+    function installFilteredRows(rows: TestEulbRow[]): void {
+      rowModel['find'] = jest.fn((filter: Record<string, unknown>) =>
+        q(rows.filter((row) => rowMatchesFilter(row, filter))),
+      );
+      rowModel['countDocuments'] = jest.fn((filter: Record<string, unknown>) =>
+        q(rows.filter((row) => rowMatchesFilter(row, filter)).length),
+      );
+    }
+
     it('throws ForbiddenException for a state user accessing a different state', async () => {
       const wrongStateUser = stateUser(new Types.ObjectId());
       await expect(
@@ -285,16 +441,16 @@ describe('EulbPostSubmissionUpdateService', () => {
 
     it('throws NotFoundException when no form exists', async () => {
       formModel['findOne'] = jest.fn().mockReturnValue(q(null));
-      await expect(
-        service.getEligibleRows(stateOid.toString(), yearOid.toString(), {}, adminUser),
-      ).rejects.toThrow(NotFoundException);
+      await expect(service.getEligibleRows(stateOid.toString(), yearOid.toString(), {}, adminUser)).rejects.toThrow(
+        NotFoundException,
+      );
     });
 
     it('throws ForbiddenException when form status is not in the allowed set', async () => {
       formModel['findOne'] = jest.fn().mockReturnValue(q(makeForm(FORM_STATUS.IN_PROGRESS)));
-      await expect(
-        service.getEligibleRows(stateOid.toString(), yearOid.toString(), {}, adminUser),
-      ).rejects.toThrow(ForbiddenException);
+      await expect(service.getEligibleRows(stateOid.toString(), yearOid.toString(), {}, adminUser)).rejects.toThrow(
+        ForbiddenException,
+      );
     });
 
     it('returns success:true with rows, total, pagination, and eligibleRule when status is 5', async () => {
@@ -378,9 +534,151 @@ describe('EulbPostSubmissionUpdateService', () => {
       await service.getEligibleRows(stateOid.toString(), yearOid.toString(), {}, adminUser);
 
       const findFilter = rowModel['find'].mock.calls[0][0] as Record<string, unknown>;
-      expect(Array.isArray(findFilter['$and'])).toBe(true);
-      const firstAnd = (findFilter['$and'] as Array<Record<string, unknown>>)[0];
-      expect(firstAnd['$or']).toBeDefined();
+      expect(findFilter).toMatchObject({
+        form: formOid,
+        state: stateOid,
+        year: yearOid,
+        datasetVersion: 1,
+        isActive: true,
+      });
+      expect(getAndConditions(findFilter)[0]).toEqual(buildEligibleRowCondition(expect.any(Date)));
+    });
+
+    it('returns only Not Constituted and past-expiry Constituted candidate rows when no filters are provided', async () => {
+      const pastExpiry = new Date(TODAY);
+      pastExpiry.setDate(pastExpiry.getDate() - 1);
+      const futureExpiry = new Date(TODAY);
+      futureExpiry.setDate(futureExpiry.getDate() + 1);
+      installFilteredRows([
+        makeRow({ rowNumber: 1, electedBodyStatus: 'Not Constituted', dateOfExpiry: null }),
+        makeRow({ rowNumber: 2, electedBodyStatus: 'Constituted', dateOfExpiry: pastExpiry }),
+        makeRow({ rowNumber: 3, electedBodyStatus: 'Constituted', dateOfExpiry: TODAY }),
+        makeRow({ rowNumber: 4, electedBodyStatus: 'Constituted', dateOfExpiry: futureExpiry }),
+        makeRow({ rowNumber: 5, electedBodyStatus: 'Constituted', dateOfExpiry: null }),
+        makeRow({ rowNumber: 6, electedBodyStatus: 'Exempt' }),
+        makeRow({ rowNumber: 7, electedBodyStatus: 'Not Constituted', isActive: false }),
+        makeRow({ rowNumber: 8, electedBodyStatus: 'Not Constituted', datasetVersion: 2 }),
+        makeRow({ rowNumber: 9, electedBodyStatus: 'Not Constituted', form: new Types.ObjectId() }),
+      ]);
+
+      const result = await service.getEligibleRows(stateOid.toString(), yearOid.toString(), {}, adminUser);
+
+      expect(result.data!.rows.map((row) => row.rowNumber)).toEqual([1, 2]);
+      expect(result.data!.total).toBe(2);
+    });
+
+    it('keeps the mandatory candidate condition when search is provided', async () => {
+      const pastExpiry = new Date(TODAY);
+      pastExpiry.setDate(pastExpiry.getDate() - 1);
+      const futureExpiry = new Date(TODAY);
+      futureExpiry.setDate(futureExpiry.getDate() + 1);
+      installFilteredRows([
+        makeRow({ rowNumber: 1, ulbName: 'Alpha City', electedBodyStatus: 'Not Constituted' }),
+        makeRow({ rowNumber: 2, ulbName: 'Alpha Exempt', electedBodyStatus: 'Exempt' }),
+        makeRow({
+          rowNumber: 3,
+          ulbName: 'Alpha Future',
+          electedBodyStatus: 'Constituted',
+          dateOfExpiry: futureExpiry,
+        }),
+        makeRow({ rowNumber: 4, ulbName: 'Alpha Past', electedBodyStatus: 'Constituted', dateOfExpiry: pastExpiry }),
+        makeRow({ rowNumber: 5, ulbName: 'Beta City', electedBodyStatus: 'Constituted', dateOfExpiry: pastExpiry }),
+      ]);
+
+      const result = await service.getEligibleRows(
+        stateOid.toString(),
+        yearOid.toString(),
+        { search: 'Alpha' },
+        adminUser,
+      );
+
+      expect(result.data!.rows.map((row) => row.rowNumber)).toEqual([1, 4]);
+      const findFilter = rowModel['find'].mock.calls[0][0] as Record<string, unknown>;
+      expect(getAndConditions(findFilter)).toHaveLength(2);
+      expect(getAndConditions(findFilter)[0]).toEqual(buildEligibleRowCondition(expect.any(Date)));
+      expect(getOrClauses(getAndConditions(findFilter)[1])).toHaveLength(2);
+    });
+
+    it('filters Constituted rows to return only past-expiry constituted rows', async () => {
+      const pastExpiry = new Date(TODAY);
+      pastExpiry.setDate(pastExpiry.getDate() - 1);
+      const futureExpiry = new Date(TODAY);
+      futureExpiry.setDate(futureExpiry.getDate() + 1);
+      installFilteredRows([
+        makeRow({ rowNumber: 1, electedBodyStatus: 'Constituted', dateOfExpiry: pastExpiry }),
+        makeRow({ rowNumber: 2, electedBodyStatus: 'Constituted', dateOfExpiry: TODAY }),
+        makeRow({ rowNumber: 3, electedBodyStatus: 'Constituted', dateOfExpiry: futureExpiry }),
+        makeRow({ rowNumber: 4, electedBodyStatus: 'Not Constituted' }),
+      ]);
+
+      const result = await service.getEligibleRows(
+        stateOid.toString(),
+        yearOid.toString(),
+        { electedBodyStatus: 'Constituted' },
+        adminUser,
+      );
+
+      expect(result.data!.rows.map((row) => row.rowNumber)).toEqual([1]);
+      expect(result.data!.total).toBe(1);
+    });
+
+    it('filters Not Constituted rows without broadening the candidate rule', async () => {
+      const pastExpiry = new Date(TODAY);
+      pastExpiry.setDate(pastExpiry.getDate() - 1);
+      installFilteredRows([
+        makeRow({ rowNumber: 1, electedBodyStatus: 'Not Constituted' }),
+        makeRow({ rowNumber: 2, electedBodyStatus: 'Constituted', dateOfExpiry: pastExpiry }),
+        makeRow({ rowNumber: 3, electedBodyStatus: 'Exempt' }),
+      ]);
+
+      const result = await service.getEligibleRows(
+        stateOid.toString(),
+        yearOid.toString(),
+        { electedBodyStatus: 'Not Constituted' },
+        adminUser,
+      );
+
+      expect(result.data!.rows.map((row) => row.rowNumber)).toEqual([1]);
+      expect(result.data!.total).toBe(1);
+    });
+
+    it('returns empty for Exempt filter because Exempt is not a post-submission candidate row', async () => {
+      installFilteredRows([
+        makeRow({ rowNumber: 1, electedBodyStatus: 'Not Constituted' }),
+        makeRow({ rowNumber: 2, electedBodyStatus: 'Exempt' }),
+      ]);
+
+      const result = await service.getEligibleRows(
+        stateOid.toString(),
+        yearOid.toString(),
+        { electedBodyStatus: 'Exempt' },
+        adminUser,
+      );
+
+      expect(result.data!.rows).toEqual([]);
+      expect(result.data!.total).toBe(0);
+    });
+
+    it('uses the same mandatory candidate filter for pagination total', async () => {
+      const pastExpiry = new Date(TODAY);
+      pastExpiry.setDate(pastExpiry.getDate() - 1);
+      installFilteredRows([
+        makeRow({ rowNumber: 1, electedBodyStatus: 'Not Constituted' }),
+        makeRow({ rowNumber: 2, electedBodyStatus: 'Constituted', dateOfExpiry: pastExpiry }),
+        makeRow({ rowNumber: 3, electedBodyStatus: 'Exempt' }),
+      ]);
+
+      const result = await service.getEligibleRows(
+        stateOid.toString(),
+        yearOid.toString(),
+        { page: 1, limit: 1 },
+        adminUser,
+      );
+      const findFilter = rowModel['find'].mock.calls[0][0];
+      const countFilter = rowModel['countDocuments'].mock.calls[0][0];
+
+      expect(result.data!.total).toBe(2);
+      expect(countFilter).toEqual(findFilter);
     });
 
     it('respects page and limit query params', async () => {
@@ -401,12 +699,7 @@ describe('EulbPostSubmissionUpdateService', () => {
       rowModel['find'] = jest.fn().mockReturnValue(q([]));
       rowModel['countDocuments'] = jest.fn().mockReturnValue(q(0));
 
-      const result = await service.getEligibleRows(
-        stateOid.toString(),
-        yearOid.toString(),
-        { limit: 9999 },
-        adminUser,
-      );
+      const result = await service.getEligibleRows(stateOid.toString(), yearOid.toString(), { limit: 9999 }, adminUser);
       expect(result.data!.limit).toBe(200);
     });
 
@@ -439,7 +732,7 @@ describe('EulbPostSubmissionUpdateService', () => {
   describe('validateBatch', () => {
     const rowOid = new Types.ObjectId();
 
-    function makeEligibleRow(overrides: Record<string, unknown> = {}) {
+    function makeEligibleRow(overrides: Partial<TestEulbRow> = {}) {
       return makeRow({ _id: rowOid, electedBodyStatus: 'Not Constituted', ...overrides });
     }
 
@@ -605,7 +898,12 @@ describe('EulbPostSubmissionUpdateService', () => {
         service.validateBatch(
           stateOid.toString(),
           yearOid.toString(),
-          { rows: [{ rowId: id, electedBodyStatus: 'Not Constituted' }, { rowId: id, electedBodyStatus: 'Not Constituted' }] },
+          {
+            rows: [
+              { rowId: id, electedBodyStatus: 'Not Constituted' },
+              { rowId: id, electedBodyStatus: 'Not Constituted' },
+            ],
+          },
           adminUser,
         ),
       ).rejects.toThrow(BadRequestException);
@@ -638,18 +936,20 @@ describe('EulbPostSubmissionUpdateService', () => {
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('throws BadRequestException when Constituted row has expired dateOfExpiry (not eligible)', async () => {
-      const expiredRow = makeEligibleRow({
+    it('throws BadRequestException when Constituted row has future dateOfExpiry (not yet expired, not eligible for update)', async () => {
+      const futureExpiry = new Date(TODAY);
+      futureExpiry.setFullYear(futureExpiry.getFullYear() + 5);
+      const futureRow = makeEligibleRow({
         electedBodyStatus: 'Constituted',
-        dateOfExpiry: new Date('2020-01-01'),
+        dateOfExpiry: futureExpiry,
       });
-      rowModel['find'] = jest.fn().mockReturnValue(q([expiredRow]));
+      rowModel['find'] = jest.fn().mockReturnValue(q([futureRow]));
 
       await expect(
         service.validateBatch(
           stateOid.toString(),
           yearOid.toString(),
-          { rows: [{ rowId: rowOid.toString(), electedBodyStatus: 'Constituted', dateOfConstitution: '2022-01-01', dateOfExpiry: '2027-01-01' }] },
+          { rows: [{ rowId: rowOid.toString(), electedBodyStatus: 'Not Constituted' }] },
           adminUser,
         ),
       ).rejects.toThrow(BadRequestException);
@@ -717,7 +1017,7 @@ describe('EulbPostSubmissionUpdateService', () => {
   describe('submitBatch', () => {
     const rowOid = new Types.ObjectId();
 
-    function eligibleRow(overrides: Record<string, unknown> = {}) {
+    function eligibleRow(overrides: Partial<TestEulbRow> = {}) {
       return makeRow({ _id: rowOid, electedBodyStatus: 'Not Constituted', ...overrides });
     }
 
@@ -729,9 +1029,9 @@ describe('EulbPostSubmissionUpdateService', () => {
     };
 
     function makeDto(
-      docOverride: Record<string, unknown> = {},
-      rowsOverride?: Array<{ rowId: string; electedBodyStatus: string }>,
-    ) {
+      docOverride: Partial<EulbPostSubmissionUpdateDocumentDto> = {},
+      rowsOverride?: SubmitEulbPostSubmissionUpdateRowDto[],
+    ): SubmitEulbPostSubmissionUpdateDto {
       return {
         rows: rowsOverride ?? [{ rowId: rowOid.toString(), electedBodyStatus: 'Not Constituted' }],
         document: { ...validDocument, ...docOverride },
@@ -752,7 +1052,12 @@ describe('EulbPostSubmissionUpdateService', () => {
 
     it('throws BadRequestException when mimeType is omitted and fileName does not end in .pdf', async () => {
       await expect(
-        service.submitBatch(stateOid.toString(), yearOid.toString(), makeDto({ fileName: 'report.docx', mimeType: undefined }), adminUser),
+        service.submitBatch(
+          stateOid.toString(),
+          yearOid.toString(),
+          makeDto({ fileName: 'report.docx', mimeType: undefined }),
+          adminUser,
+        ),
       ).rejects.toThrow(BadRequestException);
     });
 
@@ -773,7 +1078,12 @@ describe('EulbPostSubmissionUpdateService', () => {
 
     it('throws BadRequestException when fileSize exceeds 20 MB', async () => {
       await expect(
-        service.submitBatch(stateOid.toString(), yearOid.toString(), makeDto({ fileSize: 21 * 1024 * 1024 }), adminUser),
+        service.submitBatch(
+          stateOid.toString(),
+          yearOid.toString(),
+          makeDto({ fileSize: 21 * 1024 * 1024 }),
+          adminUser,
+        ),
       ).rejects.toThrow(BadRequestException);
     });
 
@@ -799,23 +1109,23 @@ describe('EulbPostSubmissionUpdateService', () => {
 
     it('throws ForbiddenException for a state user accessing a different state', async () => {
       const wrongUser = stateUser(new Types.ObjectId());
-      await expect(
-        service.submitBatch(stateOid.toString(), yearOid.toString(), makeDto(), wrongUser),
-      ).rejects.toThrow(ForbiddenException);
+      await expect(service.submitBatch(stateOid.toString(), yearOid.toString(), makeDto(), wrongUser)).rejects.toThrow(
+        ForbiddenException,
+      );
     });
 
     it('throws NotFoundException when the form does not exist', async () => {
       (formModel['findOne'] as jest.Mock).mockReturnValue(q(null));
-      await expect(
-        service.submitBatch(stateOid.toString(), yearOid.toString(), makeDto(), adminUser),
-      ).rejects.toThrow(NotFoundException);
+      await expect(service.submitBatch(stateOid.toString(), yearOid.toString(), makeDto(), adminUser)).rejects.toThrow(
+        NotFoundException,
+      );
     });
 
     it('throws ForbiddenException when form status is not in the allowed set', async () => {
       (formModel['findOne'] as jest.Mock).mockReturnValue(q(makeForm(FORM_STATUS.IN_PROGRESS)));
-      await expect(
-        service.submitBatch(stateOid.toString(), yearOid.toString(), makeDto(), adminUser),
-      ).rejects.toThrow(ForbiddenException);
+      await expect(service.submitBatch(stateOid.toString(), yearOid.toString(), makeDto(), adminUser)).rejects.toThrow(
+        ForbiddenException,
+      );
     });
 
     it('throws BadRequestException for duplicate rowIds', async () => {
@@ -835,16 +1145,16 @@ describe('EulbPostSubmissionUpdateService', () => {
 
     it('throws BadRequestException when row IDs are not found in the DB', async () => {
       rowModel['find'] = jest.fn().mockReturnValue(q([]));
-      await expect(
-        service.submitBatch(stateOid.toString(), yearOid.toString(), makeDto(), adminUser),
-      ).rejects.toThrow(BadRequestException);
+      await expect(service.submitBatch(stateOid.toString(), yearOid.toString(), makeDto(), adminUser)).rejects.toThrow(
+        BadRequestException,
+      );
     });
 
     it('throws BadRequestException when a row is not eligible (Exempt)', async () => {
       rowModel['find'] = jest.fn().mockReturnValue(q([eligibleRow({ electedBodyStatus: 'Exempt' })]));
-      await expect(
-        service.submitBatch(stateOid.toString(), yearOid.toString(), makeDto(), adminUser),
-      ).rejects.toThrow(BadRequestException);
+      await expect(service.submitBatch(stateOid.toString(), yearOid.toString(), makeDto(), adminUser)).rejects.toThrow(
+        BadRequestException,
+      );
     });
 
     it('throws BadRequestException with rowErrors when Constituted row is missing required dates', async () => {
@@ -942,9 +1252,9 @@ describe('EulbPostSubmissionUpdateService', () => {
         exec: jest.fn().mockRejectedValue(dbError),
       });
 
-      await expect(
-        service.submitBatch(stateOid.toString(), yearOid.toString(), makeDto(), adminUser),
-      ).rejects.toThrow('DB write failed');
+      await expect(service.submitBatch(stateOid.toString(), yearOid.toString(), makeDto(), adminUser)).rejects.toThrow(
+        'DB write failed',
+      );
 
       expect(mockSession['abortTransaction']).toHaveBeenCalled();
       expect(mockSession['commitTransaction']).not.toHaveBeenCalled();

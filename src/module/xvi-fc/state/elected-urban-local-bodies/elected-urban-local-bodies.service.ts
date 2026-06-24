@@ -5,7 +5,7 @@ import { Buffer } from 'exceljs';
 import ms, { type StringValue } from 'ms';
 import { Model, Types } from 'mongoose';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
-import { ExcelService, RowHeader } from 'src/services/excel/excel.service';
+import { ExcelColumnValidation, ExcelService, RowHeader } from 'src/services/excel/excel.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
@@ -23,6 +23,7 @@ import { FileUrlNormalizerService } from '../../common/services/file-url-normali
 import type { FormData } from '../../common/dynamic-form-validation/dynamic-form-validation.types';
 import type {
   FieldSupportingContent,
+  FormFieldOption,
   HydratedFieldConfig,
   UploadedFileValue,
 } from '../../common/types/field-config.type';
@@ -38,6 +39,10 @@ import {
   EulbFormDocument,
   EulbValidationStatus,
 } from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
+import {
+  ElectedUrbanLocalBodiesRow,
+  EulbRowDocument,
+} from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
 import { Ulb, UlbDocument } from '../../../../schemas/ulb.schema';
 import {
   EULB_ACTION_DOWNLOAD_ERROR_SHEET,
@@ -58,11 +63,39 @@ import type {
   EulbValidationSummary,
 } from './elected-urban-local-bodies.types';
 
+/** Converts a date validator value ('2021-05-31' or 'TODAY') to an Excel formula expression. */
+function toExcelDateExpr(dateVal: string): string {
+  if (dateVal === 'TODAY') return 'TODAY()';
+  const d = new Date(dateVal);
+  return `DATE(${d.getUTCFullYear()},${d.getUTCMonth() + 1},${d.getUTCDate()})`;
+}
+
+/** Converts a stored date (Date object or ISO string) to a Date for ExcelJS to serialize as a date
+ *  serial, or '' for empty/invalid values. Returning a Date keeps ISNUMBER() checks in the
+ *  validation formula satisfied; returning '' leaves the cell blank. */
+function dateToTemplateValue(val: Date | string | undefined | null): Date | string {
+  if (!val) return '';
+  if (val instanceof Date) return isNaN(val.getTime()) ? '' : val;
+  const d = new Date(val);
+  return isNaN(d.getTime()) ? '' : d;
+}
+
+type EulbTemplateRow = {
+  censusCode: string;
+  ulbName: string;
+  electedBodyStatus: string;
+  dateOfConstitution: Date | string;
+  dateOfExpiry: Date | string;
+  remarks: string;
+};
+
 @Injectable()
 export class ElectedUrbanLocalBodiesService {
   constructor(
     @InjectModel(ElectedUrbanLocalBodiesForm.name)
     private readonly model: Model<EulbFormDocument>,
+    @InjectModel(ElectedUrbanLocalBodiesRow.name)
+    private readonly rowModel: Model<EulbRowDocument>,
     @InjectModel(Ulb.name)
     private readonly ulbModel: Model<UlbDocument>,
     private readonly validator: DynamicFormValidationService,
@@ -153,34 +186,97 @@ export class ElectedUrbanLocalBodiesService {
   }
 
   /**
-   * Generates an Excel template pre-filled with active DB ULBs for the given state.
-   * Returns an ExcelJS buffer ready to stream as a downloadable .xlsx file.
+   * Generates an Excel template for the EULB data collection.
    *
-   * @param stateId - ObjectId string of the state whose ULBs populate the template.
-   * @param yearId  - Unused in query but required for future year-scoped filtering.
-   * @param user    - Authenticated user; scope-checked against stateId.
+   * If an active dataset exists for the state/year, the template is pre-filled with the
+   * saved row values (electedBodyStatus, dateOfConstitution, dateOfExpiry, remarks) so
+   * that re-downloads include previously entered data.  EXTRA_ULB rows added by the user
+   * are preserved.  If no active dataset exists the template falls back to the current
+   * behaviour: one blank row per active ULB from the master data.
+   *
+   * In both cases the row array is padded with blank rows up to maxAllowedExcelRows
+   * (dbUlbCount × 2) so that Excel data-validations cover every row a user may fill in.
    */
   async getTemplate(stateId: string, yearId: string, user: AuthUser): Promise<Buffer> {
     this.assertStateAccess(user, stateId);
 
-    // TODO: Add date of constitution/ createdAt condition.
-    const ulbs = await this.ulbModel
-      .find({ state: new Types.ObjectId(stateId), isActive: true })
-      .select('_id name censusCode sbCode')
-      .sort({ name: 1 })
-      .lean()
+    const formDoc = await this.model
+      .findOne({
+        state: new Types.ObjectId(stateId),
+        year: new Types.ObjectId(yearId),
+        formType: EULB_FORM_TYPE,
+        isDeleted: false,
+      })
+      .lean<EulbFormLeanDoc>()
       .exec();
 
-    const rows = ulbs.map((u: Record<string, unknown>) => ({
-      censusCode: (u['censusCode'] as string | null) || (u['sbCode'] as string | null) || '',
-      ulbName: u['name'] as string,
+    const activeVersion = formDoc?.activeDatasetVersion ?? 0;
+
+    let rows: EulbTemplateRow[];
+    let dbUlbCount: number;
+
+    if (activeVersion > 0 && formDoc) {
+      const savedRows = await this.rowModel
+        .find({ form: formDoc._id as Types.ObjectId, datasetVersion: activeVersion, isActive: true })
+        .select('censusCode ulbName electedBodyStatus dateOfConstitution dateOfExpiry remarks')
+        .sort({ rowNumber: 1 })
+        .lean()
+        .exec();
+
+      rows = savedRows.map((r) => ({
+        censusCode: r.censusCode ?? '',
+        ulbName: r.ulbName,
+        electedBodyStatus: r.electedBodyStatus ?? '',
+        dateOfConstitution: dateToTemplateValue(r.dateOfConstitution),
+        dateOfExpiry: dateToTemplateValue(r.dateOfExpiry),
+        remarks: r.remarks ?? '',
+      }));
+
+      dbUlbCount = formDoc.dbUlbCount ?? rows.length;
+    } else {
+      // TODO: Add date of constitution / createdAt condition.
+      const ulbs = await this.ulbModel
+        .find({ state: new Types.ObjectId(stateId), isActive: true })
+        .select('_id name censusCode sbCode')
+        .sort({ name: 1 })
+        .lean()
+        .exec();
+
+      rows = ulbs.map((u: Record<string, unknown>) => ({
+        censusCode: (u['censusCode'] as string | null) || (u['sbCode'] as string | null) || '',
+        ulbName: u['name'] as string,
+        electedBodyStatus: '',
+        dateOfConstitution: '',
+        dateOfExpiry: '',
+        remarks: '',
+      }));
+
+      dbUlbCount = ulbs.length;
+    }
+
+    // Pad with blank rows up to maxAllowedExcelRows so data-validations cover every row a
+    // user is permitted to fill in, not only pre-populated rows.
+    const maxAllowedExcelRows = dbUlbCount * 2;
+    const blankRow: EulbTemplateRow = {
+      censusCode: '',
+      ulbName: '',
       electedBodyStatus: '',
       dateOfConstitution: '',
       dateOfExpiry: '',
       remarks: '',
-    }));
+    };
+    const templateRows = [
+      ...rows,
+      ...Array.from({ length: Math.max(0, maxAllowedExcelRows - rows.length) }, () => ({ ...blankRow })),
+    ];
 
-    return this.excelService.generateExcel(TEMPLATE_HEADERS as RowHeader[], rows, 'Elected Bodies Template');
+    const validations = this.buildTemplateValidations(maxAllowedExcelRows);
+    return this.excelService.generateExcel(
+      TEMPLATE_HEADERS as RowHeader[],
+      templateRows,
+      'Elected Bodies Template',
+      validations,
+    );
   }
 
   /**
@@ -668,6 +764,114 @@ export class ElectedUrbanLocalBodiesService {
     });
     const baseUrl = this.config.get<string>('BASE_URL', '');
     return `${baseUrl}file/download?signature=${token}`;
+  }
+
+  /**
+   * Builds ExcelJS data validations for the EULB template, derived entirely from EULB_ROW_EDIT_FIELDS.
+   * Returns an empty array when rowCount is 0 so generateExcel skips validation application.
+   */
+  private buildTemplateValidations(rowCount: number): ExcelColumnValidation[] {
+    if (rowCount === 0) return [];
+
+    const statusField = EULB_ROW_EDIT_FIELDS.find((f) => f.key === 'electedBodyStatus')!;
+    const constitutionField = EULB_ROW_EDIT_FIELDS.find((f) => f.key === 'dateOfConstitution')!;
+    const expiryField = EULB_ROW_EDIT_FIELDS.find((f) => f.key === 'dateOfExpiry')!;
+    const remarksField = EULB_ROW_EDIT_FIELDS.find((f) => f.key === 'remarks')!;
+
+    const statusOptions = (statusField.options as FormFieldOption[]).map((o) => o.id).join(',');
+
+    const constitutionMinVal = constitutionField.validations?.find((v) => v.name === 'minDate')?.validator as string;
+    const constitutionMaxVal = constitutionField.maxDate!;
+
+    const expiryMinVal = expiryField.minDate!;
+    const expiryMaxVal = expiryField.validations?.find((v) => v.name === 'maxDate')?.validator as string;
+
+    const maxLength = remarksField.validations?.find((v) => v.name === 'maxlength')?.validator as number;
+
+    const constitutionMin = toExcelDateExpr(constitutionMinVal);
+    const constitutionMax = toExcelDateExpr(constitutionMaxVal);
+    const expiryMin = toExcelDateExpr(expiryMinVal);
+    const expiryMax = toExcelDateExpr(expiryMaxVal);
+
+    return [
+      {
+        key: 'electedBodyStatus',
+        mode: 'static',
+        validation: {
+          type: 'list',
+          allowBlank: false,
+          formulae: [`"${statusOptions}"`],
+          showInputMessage: true,
+          promptTitle: 'Elected Body Status',
+          prompt: 'Select a value from the dropdown.',
+          showErrorMessage: true,
+          errorStyle: 'error',
+          errorTitle: 'Invalid Status',
+          error: 'Select a valid elected body status.',
+        },
+      },
+      {
+        key: 'dateOfConstitution',
+        mode: 'perRow',
+        buildValidation: (row, keyToLetter) => {
+          const statusLetter = keyToLetter.get('electedBodyStatus')!;
+          const constitutionLetter = keyToLetter.get('dateOfConstitution')!;
+          return {
+            type: 'custom',
+            allowBlank: false,
+            formulae: [
+              `OR(AND($${statusLetter}${row}<>"Constituted",${constitutionLetter}${row}=""),AND($${statusLetter}${row}="Constituted",ISNUMBER(${constitutionLetter}${row}),${constitutionLetter}${row}>=${constitutionMin},${constitutionLetter}${row}<=${constitutionMax}))`,
+            ],
+            showInputMessage: true,
+            promptTitle: 'Date of Constitution',
+            prompt: 'Required when status is Constituted. Must be between 31 May 2021 and today.',
+            showErrorMessage: true,
+            errorStyle: 'error',
+            errorTitle: 'Date of Constitution',
+            error: 'Required for Constituted status and must be within the allowed date range.',
+          };
+        },
+      },
+      {
+        key: 'dateOfExpiry',
+        mode: 'perRow',
+        buildValidation: (row, keyToLetter) => {
+          const statusLetter = keyToLetter.get('electedBodyStatus')!;
+          const expiryLetter = keyToLetter.get('dateOfExpiry')!;
+          return {
+            type: 'custom',
+            allowBlank: false,
+            formulae: [
+              `OR(AND($${statusLetter}${row}<>"Constituted",${expiryLetter}${row}=""),AND($${statusLetter}${row}="Constituted",ISNUMBER(${expiryLetter}${row}),${expiryLetter}${row}>=${expiryMin},${expiryLetter}${row}<=${expiryMax}))`,
+            ],
+            showInputMessage: true,
+            promptTitle: 'Date of Expiry',
+            prompt: `Required when status is Constituted. Must be between today and 31 March 2030.`,
+            showErrorMessage: true,
+            errorStyle: 'error',
+            errorTitle: 'Date of Expiry',
+            error: 'Required for Constituted status and must be within the allowed date range.',
+          };
+        },
+      },
+      {
+        key: 'remarks',
+        mode: 'static',
+        validation: {
+          type: 'textLength',
+          operator: 'lessThanOrEqual',
+          allowBlank: true,
+          formulae: [maxLength],
+          showInputMessage: true,
+          promptTitle: 'Remarks',
+          prompt: `Maximum ${maxLength} characters.`,
+          showErrorMessage: true,
+          errorStyle: 'error',
+          errorTitle: 'Remarks Too Long',
+          error: 'Remarks cannot exceed the configured maximum length.',
+        },
+      },
+    ];
   }
 
   /**
