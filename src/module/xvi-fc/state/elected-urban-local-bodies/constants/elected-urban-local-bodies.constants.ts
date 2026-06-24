@@ -48,6 +48,20 @@ export const EULB_ACTION_VIEW_UPLOADED_DATA = 'view-uploaded-data';
 export const EULB_ACTION_DOWNLOAD_ERROR_SHEET = 'download-error-sheet';
 export const EULB_ACTION_REVALIDATE_EXCEL = 'revalidate-excel';
 
+export const POST_SUBMIT_UPDATE_FIELDS: FieldConfig[] = [
+  {
+    formFieldType: 'file',
+    label: 'Proof of Election',
+    key: 'proofOfElection',
+    allowedFileTypes: ['pdf'],
+    maxFileSize: 20,
+    folderPath: 'state/2026-27/elected-body/post-update',
+    value: { fileName: '', fileUrl: '', fileSize: null, mimeType: '' },
+    validations: [{ name: 'required', validator: null, message: 'This field is required.' }],
+    appearance: { color: 'success', variant: 'soft' },
+  },
+];
+
 /** Static field config for editable uploaded-row fields.
  *  Returned as `rowEditFields` in the GET form response for frontend row-edit dialog rendering. */
 export const EULB_ROW_EDIT_FIELDS: FieldConfig[] = [

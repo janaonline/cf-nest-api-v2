@@ -64,3 +64,28 @@ export function assertCanStateFinalSubmitForm(status: number): void {
     throw new ForbiddenException(`Form cannot be final submitted when status is ${getFormStatusLabel(status)}.`);
   }
 }
+
+/** Statuses in which the post-submission update page is available. */
+export const POST_SUBMISSION_UPDATE_ALLOWED_STATUSES: readonly number[] = [
+  FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+  FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+];
+
+const POST_SUBMISSION_UPDATE_STATUS_SET = new Set(POST_SUBMISSION_UPDATE_ALLOWED_STATUSES);
+
+/** Returns true if the post-submission update page is accessible for the given form status. */
+export function canViewPostSubmissionUpdate(status: number): boolean {
+  return POST_SUBMISSION_UPDATE_STATUS_SET.has(status);
+}
+
+/**
+ * Throws ForbiddenException if the form status does not allow post-submission updates.
+ * @param status - Current `currentFormStatus` value from the form document.
+ */
+export function assertCanViewPostSubmissionUpdate(status: number): void {
+  if (!canViewPostSubmissionUpdate(status)) {
+    throw new ForbiddenException(
+      `Post-submission update is not available when form status is ${getFormStatusLabel(status)}.`,
+    );
+  }
+}

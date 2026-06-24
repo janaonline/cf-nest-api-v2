@@ -23,12 +23,16 @@ import { getTimeStamp } from 'src/shared/utils/date.utils';
 import { ElectedUrbanLocalBodiesService } from './elected-urban-local-bodies.service';
 import { ElectedUrbanLocalBodiesExcelService } from './elected-urban-local-bodies-excel.service';
 import { ElectedUrbanLocalBodiesRowService } from './elected-urban-local-bodies-row.service';
+import { EulbPostSubmissionUpdateService } from './elected-urban-local-bodies-post-submission-update.service';
 import { SaveElectedUrbanLocalBodiesDraftDto } from './dto/save-elected-urban-local-bodies-draft.dto';
 import { FinalSubmitElectedUrbanLocalBodiesDto } from './dto/final-submit-elected-urban-local-bodies.dto';
 import { ValidateElectedUrbanLocalBodiesExcelDto } from './dto/validate-elected-urban-local-bodies-excel.dto';
 import { UpdateElectedUrbanLocalBodiesRowDto } from './dto/update-elected-urban-local-bodies-row.dto';
 import { GetElectedUrbanLocalBodiesRowsQueryDto } from './dto/get-elected-urban-local-bodies-rows-query.dto';
 import { RevalidateEulbExcelDto } from './dto/revalidate-eulb-excel.dto';
+import { GetEulbPostSubmissionUpdateRowsQueryDto } from './dto/get-eulb-post-submission-update-rows-query.dto';
+import { ValidateEulbPostSubmissionUpdateDto } from './dto/validate-eulb-post-submission-update.dto';
+import { SubmitEulbPostSubmissionUpdateDto } from './dto/submit-eulb-post-submission-update.dto';
 
 @ApiTags('XVI-FC - State Forms - Elected Urban Local Bodies')
 @ApiBearerAuth()
@@ -38,6 +42,7 @@ export class ElectedUrbanLocalBodiesController {
     private readonly eulbService: ElectedUrbanLocalBodiesService,
     private readonly eulbExcelService: ElectedUrbanLocalBodiesExcelService,
     private readonly eulbRowService: ElectedUrbanLocalBodiesRowService,
+    private readonly eulbPostSubmissionUpdateService: EulbPostSubmissionUpdateService,
   ) {}
 
   @ApiOperation({
@@ -171,6 +176,26 @@ export class ElectedUrbanLocalBodiesController {
   }
 
   @ApiOperation({
+    summary: 'Download Elected Body Data dump',
+    description:
+      'Generates an Excel dump of only the latest active EULB row dataset for the given state and year. Excludes row histories, post-submission update history, inactive rows, and older dataset versions.',
+  })
+  @Get(':stateId/:yearId/dump')
+  @UseGuards(PermissionGuard)
+  @RequirePermissions(Permission.VIEW_STATE_FORMS)
+  async dump(
+    @Param('stateId', ParseObjectIdPipe) stateId: string,
+    @Param('yearId', ParseObjectIdPipe) yearId: string,
+    @CurrentUser() user: AuthUser,
+  ): Promise<StreamableFile> {
+    const buffer = await this.eulbService.dumpToExcel(stateId, yearId, user);
+    return new StreamableFile(new Uint8Array(buffer as ArrayBuffer), {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      disposition: `attachment; filename="elected-body-data-dump_${getTimeStamp(false)}.xlsx"`,
+    });
+  }
+
+  @ApiOperation({
     summary: 'Delete uploaded Elected Bodies Excel',
     description:
       'Hard-deletes all current EULB row data and clears the uploaded file reference. Resets validation summary to NOT_VALIDATED. Blocked when the form status does not allow editing.',
@@ -202,6 +227,90 @@ export class ElectedUrbanLocalBodiesController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.eulbExcelService.revalidateExcel(stateId, yearId, dto, user);
+  }
+
+  @ApiOperation({
+    summary: 'Get post-submission update page metadata',
+    description:
+      'Returns metadata for the EULB post-submission update page: form status, canUpdate flag, permissions, eligible row count, and row edit field config. Available only when form status is UNDER_REVIEW_BY_MOHUA (5) or SUBMISSION_ACKNOWLEDGED_BY_MOHUA (7); returns canUpdate:false otherwise.',
+  })
+  @Get(':stateId/:yearId/post-submission-update')
+  @UseGuards(PermissionGuard)
+  @RequirePermissions(Permission.VIEW_STATE_FORMS)
+  getPostSubmissionUpdateMetadata(
+    @Param('stateId', ParseObjectIdPipe) stateId: string,
+    @Param('yearId', ParseObjectIdPipe) yearId: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.eulbPostSubmissionUpdateService.getMetadata(stateId, yearId, user);
+  }
+
+  @ApiOperation({
+    summary: 'Get eligible rows for post-submission update (paginated)',
+    description:
+      'Returns rows eligible for post-submission update: rows with electedBodyStatus Not Constituted, or Constituted rows whose dateOfExpiry is after today. Blocked when form status is not 5 or 7.',
+  })
+  @ApiQuery({ name: 'page', required: false, description: 'Page number (default: 1)' })
+  @ApiQuery({ name: 'limit', required: false, description: 'Rows per page (default: 50, max: 200)' })
+  @ApiQuery({ name: 'search', required: false, description: 'Search by censusCode or ulbName' })
+  @ApiQuery({
+    name: 'electedBodyStatus',
+    required: false,
+    enum: ['Constituted', 'Not Constituted', 'Exempt'],
+    description: 'Filter by elected body status',
+  })
+  @ApiQuery({
+    name: 'validationStatus',
+    required: false,
+    enum: ['VALID', 'INVALID'],
+    description: 'Filter by row validation status',
+  })
+  @Get(':stateId/:yearId/post-submission-update/rows')
+  @UseGuards(PermissionGuard)
+  @RequirePermissions(Permission.VIEW_STATE_FORMS)
+  getPostSubmissionUpdateRows(
+    @Param('stateId', ParseObjectIdPipe) stateId: string,
+    @Param('yearId', ParseObjectIdPipe) yearId: string,
+    @Query() query: GetEulbPostSubmissionUpdateRowsQueryDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.eulbPostSubmissionUpdateService.getEligibleRows(stateId, yearId, query, user);
+  }
+
+  @ApiOperation({
+    summary: 'Validate proposed row changes for post-submission update',
+    description:
+      'Validates a batch of proposed row field changes without persisting anything. Returns per-row validation results and an overall VALID/INVALID status. Business-invalid rows yield success:true with row-level errors; structural or permission failures yield success:false.',
+  })
+  @ApiBody({ type: ValidateEulbPostSubmissionUpdateDto })
+  @Post(':stateId/:yearId/post-submission-update/validate')
+  @UseGuards(PermissionGuard)
+  @RequirePermissions(Permission.VIEW_STATE_FORMS)
+  validatePostSubmissionUpdateBatch(
+    @Param('stateId', ParseObjectIdPipe) stateId: string,
+    @Param('yearId', ParseObjectIdPipe) yearId: string,
+    @Body() dto: ValidateEulbPostSubmissionUpdateDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.eulbPostSubmissionUpdateService.validateBatch(stateId, yearId, dto, user);
+  }
+
+  @ApiOperation({
+    summary: 'Submit post-submission update batch with pre-uploaded document',
+    description:
+      'Accepts a JSON body containing row changes and metadata of a PDF already uploaded by the client. Validates all rows, then applies all changes in a single MongoDB transaction. Stores the document reference once on the form batch. Any business-invalid row causes success:false — no partial writes.',
+  })
+  @ApiBody({ type: SubmitEulbPostSubmissionUpdateDto })
+  @Post(':stateId/:yearId/post-submission-update/submit')
+  @UseGuards(PermissionGuard)
+  @RequirePermissions(Permission.VIEW_STATE_FORMS)
+  submitPostSubmissionUpdateBatch(
+    @Param('stateId', ParseObjectIdPipe) stateId: string,
+    @Param('yearId', ParseObjectIdPipe) yearId: string,
+    @Body() dto: SubmitEulbPostSubmissionUpdateDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.eulbPostSubmissionUpdateService.submitBatch(stateId, yearId, dto, user);
   }
 
   @ApiOperation({
