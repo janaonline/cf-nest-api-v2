@@ -6,8 +6,8 @@ import ms, { type StringValue } from 'ms';
 import { Model, Types } from 'mongoose';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { ExcelColumnValidation, ExcelService, RowHeader } from 'src/services/excel/excel.service';
-import { EulbFormJsonConfigService } from './elected-urban-local-bodies-form-json.service';
-import { getFieldsByType } from './elected-urban-local-bodies-form-json.helpers';
+import { EulbFormJsonConfigService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/form-json/elected-urban-local-bodies-form-json.service';
+import { getFieldsByType } from 'src/module/xvi-fc/state/elected-urban-local-bodies/helpers/elected-urban-local-bodies-form-json.helpers';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
@@ -17,36 +17,36 @@ import {
   assertCanStateFinalSubmitForm,
   canStateEditForm,
   canStateFinalSubmitForm,
-} from '../../common/utils/xvi-fc-form-status-access.util';
+} from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
 import { toObjectIdString } from 'src/users/user-scope.helpers';
-import { DynamicFormValidationService } from '../../common/dynamic-form-validation/dynamic-form-validation.service';
-import { XvifcFormActorsService } from '../../common/services/xvifc-form-actors.service';
-import { FileUrlNormalizerService } from '../../common/services/file-url-normalizer.service';
-import type { FormData } from '../../common/dynamic-form-validation/dynamic-form-validation.types';
+import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
+import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
+import { FileUrlNormalizerService } from 'src/module/xvi-fc/common/services/file-url-normalizer.service';
+import type { FormData } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.types';
 import type {
   FieldConfig,
   FieldSupportingContent,
   FormFieldOption,
   HydratedFieldConfig,
   UploadedFileValue,
-} from '../../common/types/field-config.type';
-import type { XviFcApiResponse } from '../../common/response/xvi-fc-api-response';
+} from 'src/module/xvi-fc/common/types/field-config.type';
+import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import {
   throwXviFcValidationError,
   throwXviFcValidationErrorWithData,
   xviFcSuccess,
-} from '../../common/response/xvi-fc-response.util';
+} from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
 import {
   EULB_FORM_TYPE,
   ElectedUrbanLocalBodiesForm,
   EulbFormDocument,
   EulbValidationStatus,
-} from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
+} from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
 import {
   ElectedUrbanLocalBodiesRow,
   EulbRowDocument,
-} from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
-import { Ulb, UlbDocument } from '../../../../schemas/ulb.schema';
+} from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
+import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import {
   EULB_ACTION_DOWNLOAD_ERROR_SHEET,
   EULB_ACTION_DOWNLOAD_TEMPLATE,
@@ -54,9 +54,9 @@ import {
   EULB_ACTION_VIEW_UPLOADED_DATA,
   EULB_FORM_NAME,
   TEMPLATE_HEADERS,
-} from './constants/elected-urban-local-bodies.constants';
-import type { SaveElectedUrbanLocalBodiesDraftDto } from './dto/save-elected-urban-local-bodies-draft.dto';
-import type { FinalSubmitElectedUrbanLocalBodiesDto } from './dto/final-submit-elected-urban-local-bodies.dto';
+} from 'src/module/xvi-fc/state/elected-urban-local-bodies/constants/elected-urban-local-bodies.constants';
+import type { SaveElectedUrbanLocalBodiesDraftDto } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/save-elected-urban-local-bodies-draft.dto';
+import type { FinalSubmitElectedUrbanLocalBodiesDto } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/final-submit-elected-urban-local-bodies.dto';
 import type {
   EulbFormGetResponseData,
   EulbFormLeanDoc,
@@ -65,7 +65,7 @@ import type {
   EulbDumpRow,
   EulbDumpRowRecord,
   EulbValidationSummary,
-} from './elected-urban-local-bodies.types';
+} from 'src/module/xvi-fc/state/elected-urban-local-bodies/types/elected-urban-local-bodies.types';
 
 /** Converts a date validator value ('2021-05-31' or 'TODAY') to an Excel formula expression. */
 function toExcelDateExpr(dateVal: string): string {

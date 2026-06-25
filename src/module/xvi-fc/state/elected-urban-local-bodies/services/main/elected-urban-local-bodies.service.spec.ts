@@ -2,23 +2,23 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
 import { Types } from 'mongoose';
 import ExcelJS from 'exceljs';
-import { ElectedUrbanLocalBodiesService } from './elected-urban-local-bodies.service';
-import { ElectedUrbanLocalBodiesForm } from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
-import { ElectedUrbanLocalBodiesRow } from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
-import { Ulb } from '../../../../schemas/ulb.schema';
+import { ElectedUrbanLocalBodiesService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/main/elected-urban-local-bodies.service';
+import { ElectedUrbanLocalBodiesForm } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
+import { ElectedUrbanLocalBodiesRow } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
+import { Ulb } from 'src/schemas/ulb.schema';
 import { ExcelService } from 'src/services/excel/excel.service';
-import { DynamicFormValidationService } from '../../common/dynamic-form-validation/dynamic-form-validation.service';
-import { XvifcFormActorsService } from '../../common/services/xvifc-form-actors.service';
-import { FileUrlNormalizerService } from '../../common/services/file-url-normalizer.service';
+import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
+import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
+import { FileUrlNormalizerService } from 'src/module/xvi-fc/common/services/file-url-normalizer.service';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { ConfigService } from '@nestjs/config';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { AccessLevel, Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
-import { ELECTED_BODY_STATUSES } from './constants/elected-urban-local-bodies.constants';
-import { EulbFormJsonConfigService } from './elected-urban-local-bodies-form-json.service';
-import type { EulbTypedFieldConfig } from './elected-urban-local-bodies-form-json.helpers';
-import type { FormFieldOption } from '../../common/types/field-config.type';
-import type { EulbDumpRowRecord } from './elected-urban-local-bodies.types';
+import { ELECTED_BODY_STATUSES } from 'src/module/xvi-fc/state/elected-urban-local-bodies/constants/elected-urban-local-bodies.constants';
+import { EulbFormJsonConfigService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/form-json/elected-urban-local-bodies-form-json.service';
+import type { EulbTypedFieldConfig } from 'src/module/xvi-fc/state/elected-urban-local-bodies/helpers/elected-urban-local-bodies-form-json.helpers';
+import type { FormFieldOption } from 'src/module/xvi-fc/common/types/field-config.type';
+import type { EulbDumpRowRecord } from 'src/module/xvi-fc/state/elected-urban-local-bodies/types/elected-urban-local-bodies.types';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 

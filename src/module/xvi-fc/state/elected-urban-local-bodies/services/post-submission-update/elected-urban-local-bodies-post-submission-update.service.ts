@@ -10,30 +10,30 @@ import {
   POST_SUBMISSION_UPDATE_ALLOWED_STATUSES,
   assertCanViewPostSubmissionUpdate,
   canViewPostSubmissionUpdate,
-} from '../../common/utils/xvi-fc-form-status-access.util';
+} from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
 import {
   throwXviFcValidationError,
   throwXviFcValidationErrorWithData,
   xviFcSuccess,
-} from '../../common/response/xvi-fc-response.util';
-import type { XviFcApiResponse } from '../../common/response/xvi-fc-api-response';
+} from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
+import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import {
   EULB_FORM_TYPE,
   ElectedUrbanLocalBodiesForm,
   EulbFormDocument,
-} from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
+} from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
 import {
   ElectedUrbanLocalBodiesRow,
   EulbRowDocument,
-} from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
-import { ELECTED_BODY_STATUSES } from './constants/elected-urban-local-bodies.constants';
-import { EulbFormJsonConfigService } from './elected-urban-local-bodies-form-json.service';
-import { getFieldsByType } from './elected-urban-local-bodies-form-json.helpers';
-import { extractDateConfig } from './elected-urban-local-bodies.validator';
-import type { GetEulbPostSubmissionUpdateRowsQueryDto } from './dto/get-eulb-post-submission-update-rows-query.dto';
-import type { ValidateEulbPostSubmissionUpdateDto } from './dto/validate-eulb-post-submission-update.dto';
-import type { SubmitEulbPostSubmissionUpdateDto } from './dto/submit-eulb-post-submission-update.dto';
-import { ElectedUrbanLocalBodiesValidator } from './elected-urban-local-bodies.validator';
+} from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
+import { ELECTED_BODY_STATUSES } from 'src/module/xvi-fc/state/elected-urban-local-bodies/constants/elected-urban-local-bodies.constants';
+import { EulbFormJsonConfigService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/form-json/elected-urban-local-bodies-form-json.service';
+import { getFieldsByType } from 'src/module/xvi-fc/state/elected-urban-local-bodies/helpers/elected-urban-local-bodies-form-json.helpers';
+import { extractDateConfig } from 'src/module/xvi-fc/state/elected-urban-local-bodies/validators/elected-urban-local-bodies.validator';
+import type { GetEulbPostSubmissionUpdateRowsQueryDto } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/get-eulb-post-submission-update-rows-query.dto';
+import type { ValidateEulbPostSubmissionUpdateDto } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/validate-eulb-post-submission-update.dto';
+import type { SubmitEulbPostSubmissionUpdateDto } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/submit-eulb-post-submission-update.dto';
+import { ElectedUrbanLocalBodiesValidator } from 'src/module/xvi-fc/state/elected-urban-local-bodies/validators/elected-urban-local-bodies.validator';
 import type {
   EulbBatchDocumentRef,
   EulbPostSubmissionSubmitRowError,
@@ -46,7 +46,7 @@ import type {
   EulbPostSubmissionUpdateValidateRow,
   EulbStatusSummary,
   EulbValidationSummary,
-} from './elected-urban-local-bodies.types';
+} from 'src/module/xvi-fc/state/elected-urban-local-bodies/types/elected-urban-local-bodies.types';
 
 /**
  * Builds the eligibility `$or` condition: 'Not Constituted' always qualifies; 'Constituted' qualifies only when expired.

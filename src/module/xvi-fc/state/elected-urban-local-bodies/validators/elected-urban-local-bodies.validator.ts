@@ -3,9 +3,9 @@ import {
   ELECTED_BODY_STATUSES,
   EULB_CENSUS_CODE_MAX_LENGTH,
   EULB_ULB_NAME_MAX_LENGTH,
-} from './constants/elected-urban-local-bodies.constants';
-import type { EulbRowError } from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
-import type { FieldConfig } from '../../common/types/field-config.type';
+} from 'src/module/xvi-fc/state/elected-urban-local-bodies/constants/elected-urban-local-bodies.constants';
+import type { EulbRowError } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
+import type { FieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
 
 export interface EulbDateValidationConfig {
   /** Static minDate for dateOfConstitution, parsed as UTC start-of-day. */

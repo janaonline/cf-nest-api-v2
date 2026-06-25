@@ -20,19 +20,19 @@ import { CurrentUser } from 'src/module/auth/decorators/current-user.decorator';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { ParseObjectIdPipe } from 'src/common/pipes/parse-object-id.pipe';
 import { getTimeStamp } from 'src/shared/utils/date.utils';
-import { ElectedUrbanLocalBodiesService } from './elected-urban-local-bodies.service';
-import { ElectedUrbanLocalBodiesExcelService } from './elected-urban-local-bodies-excel.service';
-import { ElectedUrbanLocalBodiesRowService } from './elected-urban-local-bodies-row.service';
-import { EulbPostSubmissionUpdateService } from './elected-urban-local-bodies-post-submission-update.service';
-import { SaveElectedUrbanLocalBodiesDraftDto } from './dto/save-elected-urban-local-bodies-draft.dto';
-import { FinalSubmitElectedUrbanLocalBodiesDto } from './dto/final-submit-elected-urban-local-bodies.dto';
-import { ValidateElectedUrbanLocalBodiesExcelDto } from './dto/validate-elected-urban-local-bodies-excel.dto';
-import { UpdateElectedUrbanLocalBodiesRowDto } from './dto/update-elected-urban-local-bodies-row.dto';
-import { GetElectedUrbanLocalBodiesRowsQueryDto } from './dto/get-elected-urban-local-bodies-rows-query.dto';
-import { RevalidateEulbExcelDto } from './dto/revalidate-eulb-excel.dto';
-import { GetEulbPostSubmissionUpdateRowsQueryDto } from './dto/get-eulb-post-submission-update-rows-query.dto';
-import { ValidateEulbPostSubmissionUpdateDto } from './dto/validate-eulb-post-submission-update.dto';
-import { SubmitEulbPostSubmissionUpdateDto } from './dto/submit-eulb-post-submission-update.dto';
+import { ElectedUrbanLocalBodiesService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/main/elected-urban-local-bodies.service';
+import { ElectedUrbanLocalBodiesExcelService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/excel/elected-urban-local-bodies-excel.service';
+import { ElectedUrbanLocalBodiesRowService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/row/elected-urban-local-bodies-row.service';
+import { EulbPostSubmissionUpdateService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/post-submission-update/elected-urban-local-bodies-post-submission-update.service';
+import { SaveElectedUrbanLocalBodiesDraftDto } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/save-elected-urban-local-bodies-draft.dto';
+import { FinalSubmitElectedUrbanLocalBodiesDto } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/final-submit-elected-urban-local-bodies.dto';
+import { ValidateElectedUrbanLocalBodiesExcelDto } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/validate-elected-urban-local-bodies-excel.dto';
+import { UpdateElectedUrbanLocalBodiesRowDto } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/update-elected-urban-local-bodies-row.dto';
+import { GetElectedUrbanLocalBodiesRowsQueryDto } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/get-elected-urban-local-bodies-rows-query.dto';
+import { RevalidateEulbExcelDto } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/revalidate-eulb-excel.dto';
+import { GetEulbPostSubmissionUpdateRowsQueryDto } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/get-eulb-post-submission-update-rows-query.dto';
+import { ValidateEulbPostSubmissionUpdateDto } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/validate-eulb-post-submission-update.dto';
+import { SubmitEulbPostSubmissionUpdateDto } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/submit-eulb-post-submission-update.dto';
 
 @ApiTags('XVI-FC - State Forms - Elected Urban Local Bodies')
 @ApiBearerAuth()

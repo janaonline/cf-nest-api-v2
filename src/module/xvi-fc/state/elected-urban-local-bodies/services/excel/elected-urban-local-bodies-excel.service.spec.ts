@@ -3,20 +3,20 @@ import { getModelToken } from '@nestjs/mongoose';
 import { ConfigService } from '@nestjs/config';
 import { Types } from 'mongoose';
 import * as XLSX from 'xlsx';
-import { ElectedUrbanLocalBodiesExcelService } from './elected-urban-local-bodies-excel.service';
-import { ElectedUrbanLocalBodiesForm } from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
-import { ElectedUrbanLocalBodiesRow } from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
-import { Ulb } from '../../../../schemas/ulb.schema';
+import { ElectedUrbanLocalBodiesExcelService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/excel/elected-urban-local-bodies-excel.service';
+import { ElectedUrbanLocalBodiesForm } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
+import { ElectedUrbanLocalBodiesRow } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
+import { Ulb } from 'src/schemas/ulb.schema';
 import { S3Service } from 'src/core/s3/s3.service';
 import { ExcelService } from 'src/services/excel/excel.service';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
-import { ElectedUrbanLocalBodiesValidator } from './elected-urban-local-bodies.validator';
-import { EulbFormJsonConfigService } from './elected-urban-local-bodies-form-json.service';
-import type { EulbTypedFieldConfig } from './elected-urban-local-bodies-form-json.helpers';
+import { ElectedUrbanLocalBodiesValidator } from 'src/module/xvi-fc/state/elected-urban-local-bodies/validators/elected-urban-local-bodies.validator';
+import { EulbFormJsonConfigService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/form-json/elected-urban-local-bodies-form-json.service';
+import type { EulbTypedFieldConfig } from 'src/module/xvi-fc/state/elected-urban-local-bodies/helpers/elected-urban-local-bodies-form-json.helpers';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
-import type { ValidateElectedUrbanLocalBodiesExcelDto } from './dto/validate-elected-urban-local-bodies-excel.dto';
-import type { EulbValidateExcelResponseData } from './elected-urban-local-bodies.types';
+import type { ValidateElectedUrbanLocalBodiesExcelDto } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/validate-elected-urban-local-bodies-excel.dto';
+import type { EulbValidateExcelResponseData } from 'src/module/xvi-fc/state/elected-urban-local-bodies/types/elected-urban-local-bodies.types';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -44,6 +44,7 @@ function makeXlsxBuffer(dataRows: Record<string, unknown>[]): Buffer {
 
 const stateOid = new Types.ObjectId();
 const yearOid = new Types.ObjectId();
+const formOid = new Types.ObjectId();
 const userOid = new Types.ObjectId();
 
 const adminUser: AuthUser = {
@@ -107,7 +108,7 @@ function makeDto(ulbCount = 1): ValidateElectedUrbanLocalBodiesExcelDto {
 
 describe('ElectedUrbanLocalBodiesExcelService — validateExcel blank-field normalization', () => {
   let service: ElectedUrbanLocalBodiesExcelService;
-  let rowModel: { insertMany: jest.Mock; deleteMany: jest.Mock };
+  let rowModel: { insertMany: jest.Mock; deleteMany: jest.Mock; updateMany: jest.Mock };
   let formModel: { findOne: jest.Mock; create: jest.Mock; findByIdAndUpdate: jest.Mock };
   let s3Service: { getBuffer: jest.Mock; uploadPublic: jest.Mock };
 
@@ -115,6 +116,7 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel blank-field norm
     rowModel = {
       insertMany: jest.fn().mockResolvedValue([]),
       deleteMany: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue({ deletedCount: 0 }) }),
+      updateMany: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue({ modifiedCount: 0 }) }),
     };
 
     formModel = {
@@ -375,6 +377,125 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel blank-field norm
       const [docs] = rowModel.insertMany.mock.calls[0] as [Record<string, unknown>[]];
       const stored = docs[0]['dateOfConstitution'] as Date;
       expect(stored.toISOString()).toBe('2026-06-24T00:00:00.000Z');
+    });
+  });
+
+  // ─── intra-batch EXTRA_ULB census code duplicate detection ───────────────
+
+  describe('intra-batch duplicate EULB census code', () => {
+    it('marks the second occurrence as INVALID with a duplicate error and stores censusCode as empty string', async () => {
+      s3Service.getBuffer = jest.fn().mockResolvedValue(
+        makeXlsxBuffer([
+          {
+            censusCode: 'DUP001',
+            ulbName: 'First City',
+            electedBodyStatus: 'Not Constituted',
+            dateOfConstitution: '',
+            dateOfExpiry: '',
+            remarks: '',
+          },
+          {
+            censusCode: 'DUP001',
+            ulbName: 'Second City',
+            electedBodyStatus: 'Not Constituted',
+            dateOfConstitution: '',
+            dateOfExpiry: '',
+            remarks: '',
+          },
+        ]),
+      );
+
+      const dto = { ...makeDto(), ulbCount: 2 };
+      const result = await service.validateExcel(dto, adminUser);
+
+      expect(rowModel.insertMany).toHaveBeenCalledTimes(1);
+      const [docs] = rowModel.insertMany.mock.calls[0] as [Record<string, unknown>[]];
+
+      // First occurrence is unaffected.
+      expect(docs[0]).toMatchObject({ censusCode: 'DUP001', validationStatus: 'VALID' });
+      // Second occurrence: censusCode cleared to '' so the unique index is not violated.
+      expect(docs[1]).toMatchObject({ censusCode: '', validationStatus: 'INVALID' });
+
+      // The duplicate error appears in the response errors list.
+      const errors = (result.data as EulbValidateExcelResponseData).errors;
+      const dupError = errors.find((e) => e.field === 'censusCode' && e.code === 'duplicate');
+      expect(dupError).toBeDefined();
+      expect(dupError!.rowNumber).toBe(2);
+    });
+
+    it('leaves two rows with different census codes both VALID', async () => {
+      s3Service.getBuffer = jest.fn().mockResolvedValue(
+        makeXlsxBuffer([
+          { censusCode: 'UNIQ_A', ulbName: 'City A', electedBodyStatus: 'Not Constituted', dateOfConstitution: '', dateOfExpiry: '', remarks: '' },
+          { censusCode: 'UNIQ_B', ulbName: 'City B', electedBodyStatus: 'Not Constituted', dateOfConstitution: '', dateOfExpiry: '', remarks: '' },
+        ]),
+      );
+
+      await service.validateExcel(makeDto(2), adminUser);
+
+      const [docs] = rowModel.insertMany.mock.calls[0] as [Record<string, unknown>[]];
+      expect(docs[0]).toMatchObject({ censusCode: 'UNIQ_A', validationStatus: 'VALID' });
+      expect(docs[1]).toMatchObject({ censusCode: 'UNIQ_B', validationStatus: 'VALID' });
+    });
+
+    it('marks the second DB ULB census-code occurrence invalid and clears ulbId before insert', async () => {
+      s3Service.getBuffer = jest.fn().mockResolvedValue(
+        makeXlsxBuffer([
+          {
+            censusCode: 'DBCODE1',
+            ulbName: 'DB City',
+            electedBodyStatus: 'Not Constituted',
+            dateOfConstitution: '',
+            dateOfExpiry: '',
+            remarks: '',
+          },
+          {
+            censusCode: 'DBCODE1',
+            ulbName: 'DB City',
+            electedBodyStatus: 'Not Constituted',
+            dateOfConstitution: '',
+            dateOfExpiry: '',
+            remarks: '',
+          },
+        ]),
+      );
+
+      await service.validateExcel({ ...makeDto(), ulbCount: 2 }, adminUser);
+
+      const [docs] = rowModel.insertMany.mock.calls[0] as [Record<string, unknown>[]];
+      expect(docs[0]).toMatchObject({ censusCode: 'DBCODE1', validationStatus: 'VALID', rowType: 'DB_ULB' });
+      expect(docs[1]).toMatchObject({ censusCode: '', validationStatus: 'INVALID', rowType: 'DB_ULB' });
+      expect(docs[1]['ulbId']).toBeUndefined();
+    });
+  });
+
+  describe('existing dataset replacement', () => {
+    it('deactivates previous active rows before inserting the new active dataset', async () => {
+      formModel.findOne = jest.fn().mockReturnValue({
+        lean: () => ({ exec: () => Promise.resolve({ _id: formOid, activeDatasetVersion: 3 }) }),
+      });
+      s3Service.getBuffer = jest.fn().mockResolvedValue(
+        makeXlsxBuffer([
+          {
+            censusCode: 'UNIQ_EXISTING_REUPLOAD',
+            ulbName: 'Reloaded City',
+            electedBodyStatus: 'Not Constituted',
+            dateOfConstitution: '',
+            dateOfExpiry: '',
+            remarks: '',
+          },
+        ]),
+      );
+
+      await service.validateExcel(makeDto(), adminUser);
+
+      expect(rowModel.updateMany).toHaveBeenCalledWith(
+        { form: formOid, datasetVersion: 3 },
+        { $set: { isActive: false } },
+      );
+      expect(rowModel.updateMany.mock.invocationCallOrder[0]).toBeLessThan(
+        rowModel.insertMany.mock.invocationCallOrder[0],
+      );
     });
   });
 });

@@ -156,3 +156,14 @@ ElectedUrbanLocalBodiesRowSchema.index(
     partialFilterExpression: { rowType: 'DB_ULB', ulbId: { $exists: true, $ne: null } },
   },
 );
+
+// Partial unique index: prevents duplicate active EULB census codes within the same design year.
+// Blank census codes are excluded so INVALID rows with empty identity fields can coexist.
+ElectedUrbanLocalBodiesRowSchema.index(
+  { year: 1, censusCode: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { isActive: true, censusCode: { $exists: true, $ne: '' } },
+    name: 'uniq_active_eulb_census_code_year',
+  },
+);

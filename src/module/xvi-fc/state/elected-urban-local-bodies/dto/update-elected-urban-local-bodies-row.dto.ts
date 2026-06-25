@@ -2,7 +2,7 @@ import { IsOptional, IsString, MaxLength } from 'class-validator';
 import {
   EULB_CENSUS_CODE_MAX_LENGTH,
   EULB_ULB_NAME_MAX_LENGTH,
-} from '../constants/elected-urban-local-bodies.constants';
+} from 'src/module/xvi-fc/state/elected-urban-local-bodies/constants/elected-urban-local-bodies.constants';
 
 export class UpdateElectedUrbanLocalBodiesRowDto {
   @IsOptional()

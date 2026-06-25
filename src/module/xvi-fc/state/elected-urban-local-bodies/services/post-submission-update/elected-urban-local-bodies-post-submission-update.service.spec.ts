@@ -6,24 +6,24 @@ import {
   EulbPostSubmissionUpdateService,
   buildEligibleRowCondition,
   buildPostSubmissionEligibleRowsFilter,
-} from './elected-urban-local-bodies-post-submission-update.service';
-import { ElectedUrbanLocalBodiesValidator } from './elected-urban-local-bodies.validator';
-import { EulbFormJsonConfigService } from './elected-urban-local-bodies-form-json.service';
-import type { EulbTypedFieldConfig } from './elected-urban-local-bodies-form-json.helpers';
-import { ElectedUrbanLocalBodiesForm } from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
-import { ElectedUrbanLocalBodiesRow } from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
+} from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/post-submission-update/elected-urban-local-bodies-post-submission-update.service';
+import { ElectedUrbanLocalBodiesValidator } from 'src/module/xvi-fc/state/elected-urban-local-bodies/validators/elected-urban-local-bodies.validator';
+import { EulbFormJsonConfigService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/form-json/elected-urban-local-bodies-form-json.service';
+import type { EulbTypedFieldConfig } from 'src/module/xvi-fc/state/elected-urban-local-bodies/helpers/elected-urban-local-bodies-form-json.helpers';
+import { ElectedUrbanLocalBodiesForm } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
+import { ElectedUrbanLocalBodiesRow } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import {
   POST_SUBMISSION_UPDATE_ALLOWED_STATUSES,
   canViewPostSubmissionUpdate,
-} from '../../common/utils/xvi-fc-form-status-access.util';
+} from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
 import type {
   EulbPostSubmissionUpdateDocumentDto,
   SubmitEulbPostSubmissionUpdateDto,
   SubmitEulbPostSubmissionUpdateRowDto,
-} from './dto/submit-eulb-post-submission-update.dto';
+} from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/submit-eulb-post-submission-update.dto';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 

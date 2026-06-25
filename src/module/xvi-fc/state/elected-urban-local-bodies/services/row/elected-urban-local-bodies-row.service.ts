@@ -1,37 +1,57 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  InternalServerErrorException,
+  NotFoundException,
+  Logger,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model, Types } from 'mongoose';
 import { ExcelService, RowHeader } from 'src/services/excel/excel.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { toObjectIdString } from 'src/users/user-scope.helpers';
-import { assertCanStateEditForm } from '../../common/utils/xvi-fc-form-status-access.util';
-import { throwXviFcValidationErrorWithData, xviFcSuccess } from '../../common/response/xvi-fc-response.util';
-import type { XviFcApiResponse, XviFcValidationErrorMap } from '../../common/response/xvi-fc-api-response';
+import { assertCanStateEditForm } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
+import { throwXviFcValidationErrorWithData, xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
+import type { XviFcApiResponse, XviFcValidationErrorMap } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import {
   EULB_FORM_TYPE,
   ElectedUrbanLocalBodiesForm,
   EulbFormDocument,
-} from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
+} from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
 import {
   ElectedUrbanLocalBodiesRow,
   EulbRowDocument,
-} from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
-import { Ulb, UlbDocument } from '../../../../schemas/ulb.schema';
-import { ERROR_EXCEL_HEADERS } from './constants/elected-urban-local-bodies.constants';
-import type { GetElectedUrbanLocalBodiesRowsQueryDto } from './dto/get-elected-urban-local-bodies-rows-query.dto';
-import type { UpdateElectedUrbanLocalBodiesRowDto } from './dto/update-elected-urban-local-bodies-row.dto';
-import { ElectedUrbanLocalBodiesValidator, extractDateConfig } from './elected-urban-local-bodies.validator';
-import { EulbFormJsonConfigService } from './elected-urban-local-bodies-form-json.service';
-import { getFieldsByType } from './elected-urban-local-bodies-form-json.helpers';
-import type { EulbValidationSummary } from './elected-urban-local-bodies.types';
-import type { EulbValidationStatus } from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
+} from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
+import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
+import { ERROR_EXCEL_HEADERS } from 'src/module/xvi-fc/state/elected-urban-local-bodies/constants/elected-urban-local-bodies.constants';
+import type { GetElectedUrbanLocalBodiesRowsQueryDto } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/get-elected-urban-local-bodies-rows-query.dto';
+import type { UpdateElectedUrbanLocalBodiesRowDto } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/update-elected-urban-local-bodies-row.dto';
+import { ElectedUrbanLocalBodiesValidator, extractDateConfig } from 'src/module/xvi-fc/state/elected-urban-local-bodies/validators/elected-urban-local-bodies.validator';
+import { EulbFormJsonConfigService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/form-json/elected-urban-local-bodies-form-json.service';
+import { getFieldsByType } from 'src/module/xvi-fc/state/elected-urban-local-bodies/helpers/elected-urban-local-bodies-form-json.helpers';
+import type { EulbValidationSummary } from 'src/module/xvi-fc/state/elected-urban-local-bodies/types/elected-urban-local-bodies.types';
+import type { EulbValidationStatus } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
 
 interface UlbLean {
   _id: Types.ObjectId;
   name: string;
   censusCode?: string | null;
   sbCode?: string | null;
+}
+
+const DUPLICATE_CENSUS_CODE_MESSAGE = 'A ULB with this census code already exists for the selected design year.';
+
+function normalizeCensusCode(censusCode: string | number | null | undefined): string | null | undefined {
+  if (typeof censusCode === 'string' || typeof censusCode === 'number') {
+    return String(censusCode).trim();
+  }
+  return censusCode;
+}
+
+function isMongoDuplicateKeyError(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && Reflect.get(err, 'code') === 11000;
 }
 
 @Injectable()
@@ -109,6 +129,40 @@ export class ElectedUrbanLocalBodiesRowService {
 
     if (!row) {
       throw new NotFoundException('Row not found in the active dataset.');
+    }
+
+    const yearOid = new Types.ObjectId(yearId);
+
+    // Normalize censusCode early so the duplicate check and all downstream logic use the same value.
+    if (row.rowType === 'EXTRA_ULB' && dto.censusCode !== undefined) {
+      dto = { ...dto, censusCode: normalizeCensusCode(dto.censusCode) ?? undefined };
+    }
+
+    // Reject portal census-code changes that would create a duplicate active EULB row in this design year.
+    if (row.rowType === 'EXTRA_ULB' && dto.censusCode !== undefined && dto.censusCode !== '') {
+      const duplicate = await this.rowModel
+        .findOne({
+          year: yearOid,
+          censusCode: dto.censusCode,
+          isActive: true,
+          _id: { $ne: row._id },
+        })
+        .lean()
+        .exec();
+      if (duplicate) {
+        throwXviFcValidationErrorWithData(
+          {
+            censusCode: [
+              {
+                field: 'censusCode',
+                code: 'duplicate',
+                message: DUPLICATE_CENSUS_CODE_MESSAGE,
+              },
+            ],
+          },
+          { rowId: String(row._id), rowNumber: row.rowNumber, censusCode: dto.censusCode, ulbName: row.ulbName },
+        );
+      }
     }
 
     const today = new Date();
@@ -192,10 +246,31 @@ export class ElectedUrbanLocalBodiesRowService {
     updateFields['validationStatus'] = newErrors.length === 0 ? 'VALID' : 'INVALID';
     updateFields['errors'] = newErrors;
 
-    const updatedRow = await this.rowModel
-      .findByIdAndUpdate(row._id, { $set: updateFields }, { new: true })
-      .lean()
-      .exec();
+    let updatedRow: typeof row | null;
+    try {
+      updatedRow = await this.rowModel.findByIdAndUpdate(row._id, { $set: updateFields }, { new: true }).lean().exec();
+    } catch (err: unknown) {
+      if (isMongoDuplicateKeyError(err)) {
+        throwXviFcValidationErrorWithData(
+          {
+            censusCode: [
+              {
+                field: 'censusCode',
+                code: 'duplicate',
+                message: DUPLICATE_CENSUS_CODE_MESSAGE,
+              },
+            ],
+          },
+          {
+            rowId: String(row._id),
+            rowNumber: row.rowNumber,
+            censusCode: dto.censusCode ?? row.censusCode,
+            ulbName: row.ulbName,
+          },
+        );
+      }
+      throw new InternalServerErrorException('Failed to update row.');
+    }
 
     // Recalculate form validation summary and include it in the response
     const validationSummary = await this.recalculateFormSummary(formDoc._id, activeVersion);

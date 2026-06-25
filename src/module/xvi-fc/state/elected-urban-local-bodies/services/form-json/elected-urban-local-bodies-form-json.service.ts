@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { FormJsonService } from 'src/form-json/form-json.service';
-import { EULB_FORM_ID, EULB_FORM_JSON_TYPE } from './constants/elected-urban-local-bodies.constants';
-import { EulbTypedFieldConfig, validateEulbFormJsonData } from './elected-urban-local-bodies-form-json.helpers';
+import { EULB_FORM_ID, EULB_FORM_JSON_TYPE } from 'src/module/xvi-fc/state/elected-urban-local-bodies/constants/elected-urban-local-bodies.constants';
+import { EulbTypedFieldConfig, validateEulbFormJsonData } from 'src/module/xvi-fc/state/elected-urban-local-bodies/helpers/elected-urban-local-bodies-form-json.helpers';
 
 @Injectable()
 export class EulbFormJsonConfigService {

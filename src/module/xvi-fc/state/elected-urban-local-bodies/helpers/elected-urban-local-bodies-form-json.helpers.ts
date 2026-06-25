@@ -1,6 +1,6 @@
 import { InternalServerErrorException } from '@nestjs/common';
-import type { FieldConfig } from '../../common/types/field-config.type';
-import type { EulbFormJsonFieldType } from './constants/elected-urban-local-bodies.constants';
+import type { FieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
+import type { EulbFormJsonFieldType } from 'src/module/xvi-fc/state/elected-urban-local-bodies/constants/elected-urban-local-bodies.constants';
 
 export type EulbTypedFieldConfig = FieldConfig & { fieldTypes: EulbFormJsonFieldType[] };
 

@@ -1,9 +1,9 @@
-import { ElectedUrbanLocalBodiesValidator } from './elected-urban-local-bodies.validator';
-import type { EulbDateValidationConfig } from './elected-urban-local-bodies.validator';
+import { ElectedUrbanLocalBodiesValidator } from 'src/module/xvi-fc/state/elected-urban-local-bodies/validators/elected-urban-local-bodies.validator';
+import type { EulbDateValidationConfig } from 'src/module/xvi-fc/state/elected-urban-local-bodies/validators/elected-urban-local-bodies.validator';
 import {
   EULB_CENSUS_CODE_MAX_LENGTH,
   EULB_ULB_NAME_MAX_LENGTH,
-} from './constants/elected-urban-local-bodies.constants';
+} from 'src/module/xvi-fc/state/elected-urban-local-bodies/constants/elected-urban-local-bodies.constants';
 
 const TODAY = new Date('2025-01-15');
 const VALID_CENSUS_CODE = 'ABC12345'; // 8 chars — within limit

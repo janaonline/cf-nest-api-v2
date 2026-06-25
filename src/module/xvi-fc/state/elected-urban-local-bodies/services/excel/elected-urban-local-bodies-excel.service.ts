@@ -11,42 +11,45 @@ import { Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import { toObjectIdString } from 'src/users/user-scope.helpers';
-import { assertCanStateEditForm } from '../../common/utils/xvi-fc-form-status-access.util';
+import { assertCanStateEditForm } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
 import {
   throwXviFcValidationError,
   throwXviFcValidationErrorWithData,
   xviFcSuccess,
-} from '../../common/response/xvi-fc-response.util';
-import type { XviFcApiResponse } from '../../common/response/xvi-fc-api-response';
+} from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
+import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import {
   EULB_FORM_TYPE,
   ElectedUrbanLocalBodiesForm,
   EulbFormDocument,
   EulbValidationStatus,
-} from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
+} from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
 import {
   ElectedUrbanLocalBodiesRow,
   EulbRowDocument,
   EulbRowError,
   EulbRowValidationStatus,
-} from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
-import { Ulb, UlbDocument } from '../../../../schemas/ulb.schema';
-import { EXCEL_HEADER_MAP, ERROR_EXCEL_HEADERS } from './constants/elected-urban-local-bodies.constants';
-import type { ValidateElectedUrbanLocalBodiesExcelDto } from './dto/validate-elected-urban-local-bodies-excel.dto';
+} from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
+import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
+import {
+  EXCEL_HEADER_MAP,
+  ERROR_EXCEL_HEADERS,
+} from 'src/module/xvi-fc/state/elected-urban-local-bodies/constants/elected-urban-local-bodies.constants';
+import type { ValidateElectedUrbanLocalBodiesExcelDto } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/validate-elected-urban-local-bodies-excel.dto';
 import {
   ElectedUrbanLocalBodiesValidator,
   ParsedExcelRow,
   extractDateConfig,
-} from './elected-urban-local-bodies.validator';
-import { EulbFormJsonConfigService } from './elected-urban-local-bodies-form-json.service';
-import { getFieldsByType } from './elected-urban-local-bodies-form-json.helpers';
+} from 'src/module/xvi-fc/state/elected-urban-local-bodies/validators/elected-urban-local-bodies.validator';
+import { EulbFormJsonConfigService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/form-json/elected-urban-local-bodies-form-json.service';
+import { getFieldsByType } from 'src/module/xvi-fc/state/elected-urban-local-bodies/helpers/elected-urban-local-bodies-form-json.helpers';
 import type {
   EulbFileRefData,
   EulbRevalidateExcelResponseData,
   EulbRowValidationError,
   EulbValidateExcelResponseData,
   EulbValidationSummary,
-} from './elected-urban-local-bodies.types';
+} from 'src/module/xvi-fc/state/elected-urban-local-bodies/types/elected-urban-local-bodies.types';
 
 interface UlbLean {
   _id: Types.ObjectId;
@@ -62,6 +65,16 @@ interface ProcessedRow extends ParsedExcelRow {
   dbUlbName?: string;
   validationRowStatus: 'VALID' | 'INVALID';
   rowErrors: Array<{ field: string; code: string; message: string; value?: unknown }>;
+}
+
+const DUPLICATE_CENSUS_CODE_MESSAGE = 'A ULB with this census code already exists for the selected design year.';
+
+function hasDuplicateCensusCodeError(row: ProcessedRow): boolean {
+  return row.rowErrors.some((e) => e.code === 'duplicate' && e.field === 'censusCode');
+}
+
+function isMongoDuplicateKeyError(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && Reflect.get(err, 'code') === 11000;
 }
 
 @Injectable()
@@ -217,6 +230,11 @@ export class ElectedUrbanLocalBodiesExcelService {
       });
     }
 
+    // 9a. Intra-batch duplicate EULB census code check.
+    // The second (and later) occurrences are flagged INVALID and stored with censusCode:'' so
+    // the active year+censusCode unique index is not violated at insertMany time.
+    this.flagIntraBatchEulbCensusCodeDuplicates(processedRows);
+
     // 10. Compute summary
     const matchedDbUlbCount = matchedUlbCodes.size;
     const missingDbUlbCount = dbUlbCount - matchedDbUlbCount;
@@ -252,7 +270,8 @@ export class ElectedUrbanLocalBodiesExcelService {
         datasetVersion: newVersion,
         rowNumber: r.rowNumber,
         ulbId: r.ulbId,
-        censusCode: r.censusCode ?? '',
+        // Trim and clear duplicate rows so the unique partial index is not violated.
+        censusCode: hasDuplicateCensusCodeError(r) ? '' : (r.censusCode ?? '').trim(),
         ulbName: r.ulbName,
         dbCensusCode: r.dbCensusCode,
         dbUlbName: r.dbUlbName,
@@ -271,53 +290,64 @@ export class ElectedUrbanLocalBodiesExcelService {
       };
     });
 
-    await this.rowModel.insertMany(rowDocs, { lean: true });
-
-    // Step B: Upsert form with all summary fields, normalized file, and new activeDatasetVersion.
-    const formSummaryFields = {
-      ulbCount: dto.ulbCount,
-      electedBodyExcelFile: normalizedFile,
-      dbUlbCount,
-      maxAllowedExcelRows,
-      excelRowCount,
-      matchedDbUlbCount,
-      missingDbUlbCount,
-      extraExcelRowCount,
-      errorRowCount,
-      validationStatus: formValidationStatus,
-      activeDatasetVersion: newVersion,
-      lastExcelUploadedAt: new Date(),
-      lastExcelUploadedBy: userOid,
-      updatedBy: userOid,
-    };
-
-    if (existing) {
-      await this.formModel.findByIdAndUpdate(existing._id, { $set: formSummaryFields }).lean().exec();
-    } else {
-      await this.formModel.create({
-        _id: formId,
-        state: stateOid,
-        year: yearOid,
-        formType: EULB_FORM_TYPE,
-        currentFormStatus: FORM_STATUS.NOT_STARTED,
-        isDraft: true,
-        isActive: true,
-        isDeleted: false,
-        createdBy: userOid,
-        ...formSummaryFields,
-      });
-    }
-
-    // Step C: Hard-delete old rows only after new rows and form summary are saved.
-    if (currentVersion > 0) {
-      try {
-        await this.rowModel.deleteMany({ form: formId, datasetVersion: currentVersion }).exec();
-      } catch (err: unknown) {
-        this.logger.error(
-          `EULB old row cleanup failed [form=${formId.toString()} version=${currentVersion}]`,
-          err instanceof Error ? err.stack : String(err),
-        );
+    let previousRowsDeactivated = false;
+    try {
+      if (currentVersion > 0) {
+        await this.rowModel
+          .updateMany({ form: formId, datasetVersion: currentVersion }, { $set: { isActive: false } })
+          .exec();
+        previousRowsDeactivated = true;
       }
+
+      await this.rowModel.insertMany(rowDocs, { lean: true });
+
+      // Step B: Upsert form with all summary fields, normalized file, and new activeDatasetVersion.
+      const formSummaryFields = {
+        ulbCount: dto.ulbCount,
+        electedBodyExcelFile: normalizedFile,
+        dbUlbCount,
+        maxAllowedExcelRows,
+        excelRowCount,
+        matchedDbUlbCount,
+        missingDbUlbCount,
+        extraExcelRowCount,
+        errorRowCount,
+        validationStatus: formValidationStatus,
+        activeDatasetVersion: newVersion,
+        lastExcelUploadedAt: new Date(),
+        lastExcelUploadedBy: userOid,
+        updatedBy: userOid,
+      };
+
+      if (existing) {
+        await this.formModel.findByIdAndUpdate(existing._id, { $set: formSummaryFields }).lean().exec();
+      } else {
+        await this.formModel.create({
+          _id: formId,
+          state: stateOid,
+          year: yearOid,
+          formType: EULB_FORM_TYPE,
+          currentFormStatus: FORM_STATUS.NOT_STARTED,
+          isDraft: true,
+          isActive: true,
+          isDeleted: false,
+          createdBy: userOid,
+          ...formSummaryFields,
+        });
+      }
+
+      // Step C: Hard-delete old rows only after new rows and form summary are saved.
+      if (currentVersion > 0) {
+        await this.deletePreviousDatasetRows(formId, currentVersion);
+      }
+    } catch (err: unknown) {
+      if (previousRowsDeactivated) {
+        await this.rollbackDatasetReplacement(formId, currentVersion, newVersion);
+      }
+      if (isMongoDuplicateKeyError(err)) {
+        this.throwDuplicateCensusCodeValidationError();
+      }
+      throw err;
     }
 
     // 12. Generate error Excel if there are row errors
@@ -714,6 +744,9 @@ export class ElectedUrbanLocalBodiesExcelService {
       });
     }
 
+    // Intra-batch duplicate EULB census code check (same logic as validateExcel).
+    this.flagIntraBatchEulbCensusCodeDuplicates(processedRows);
+
     const matchedDbUlbCount = matchedUlbCodes.size;
     const missingDbUlbCount = dbUlbCount - matchedDbUlbCount;
     const extraExcelRowCount = processedRows.filter((r) => r.rowType === 'EXTRA_ULB').length;
@@ -735,7 +768,7 @@ export class ElectedUrbanLocalBodiesExcelService {
         datasetVersion: newVersion,
         rowNumber: r.rowNumber,
         ulbId: r.ulbId,
-        censusCode: r.censusCode ?? '',
+        censusCode: hasDuplicateCensusCodeError(r) ? '' : (r.censusCode ?? '').trim(),
         ulbName: r.ulbName,
         dbCensusCode: r.dbCensusCode,
         dbUlbName: r.dbUlbName,
@@ -754,35 +787,46 @@ export class ElectedUrbanLocalBodiesExcelService {
       };
     });
 
-    await this.rowModel.insertMany(rowDocs, { lean: true });
-
-    await this.formModel
-      .findByIdAndUpdate(formId, {
-        $set: {
-          dbUlbCount,
-          maxAllowedExcelRows,
-          excelRowCount,
-          matchedDbUlbCount,
-          missingDbUlbCount,
-          extraExcelRowCount,
-          errorRowCount,
-          validationStatus,
-          activeDatasetVersion: newVersion,
-          updatedBy: userOid,
-        },
-      })
-      .lean()
-      .exec();
-
-    if (currentVersion > 0) {
-      try {
-        await this.rowModel.deleteMany({ form: formId, datasetVersion: currentVersion }).exec();
-      } catch (err: unknown) {
-        this.logger.error(
-          `EULB old row cleanup failed [form=${formId.toString()} version=${currentVersion}]`,
-          err instanceof Error ? err.stack : String(err),
-        );
+    let previousRowsDeactivated = false;
+    try {
+      if (currentVersion > 0) {
+        await this.rowModel
+          .updateMany({ form: formId, datasetVersion: currentVersion }, { $set: { isActive: false } })
+          .exec();
+        previousRowsDeactivated = true;
       }
+
+      await this.rowModel.insertMany(rowDocs, { lean: true });
+
+      await this.formModel
+        .findByIdAndUpdate(formId, {
+          $set: {
+            dbUlbCount,
+            maxAllowedExcelRows,
+            excelRowCount,
+            matchedDbUlbCount,
+            missingDbUlbCount,
+            extraExcelRowCount,
+            errorRowCount,
+            validationStatus,
+            activeDatasetVersion: newVersion,
+            updatedBy: userOid,
+          },
+        })
+        .lean()
+        .exec();
+
+      if (currentVersion > 0) {
+        await this.deletePreviousDatasetRows(formId, currentVersion);
+      }
+    } catch (err: unknown) {
+      if (previousRowsDeactivated) {
+        await this.rollbackDatasetReplacement(formId, currentVersion, newVersion);
+      }
+      if (isMongoDuplicateKeyError(err)) {
+        this.throwDuplicateCensusCodeValidationError();
+      }
+      throw err;
     }
 
     const flatErrors: EulbRowValidationError[] = processedRows
@@ -1016,5 +1060,80 @@ export class ElectedUrbanLocalBodiesExcelService {
     if (!perms.has(Permission.EDIT_STATE_FORMS)) {
       throw new ForbiddenException('You do not have permission to validate Excel files.');
     }
+  }
+
+  /**
+   * Marks duplicate census codes within a single batch as INVALID.
+   * The second (and later) occurrence of each non-empty census code gets a `duplicate` error
+   * added to its `rowErrors` array and has `validationRowStatus` flipped to INVALID.
+   * The caller stores those rows with censusCode:'' to satisfy the unique partial index.
+   */
+  private flagIntraBatchEulbCensusCodeDuplicates(rows: ProcessedRow[]): void {
+    const seen = new Set<string>();
+    for (const row of rows) {
+      const cc = row.censusCode ? row.censusCode.trim().toLowerCase() : '';
+      if (!cc) continue;
+      if (seen.has(cc)) {
+        row.rowErrors.push({
+          field: 'censusCode',
+          code: 'duplicate',
+          message: DUPLICATE_CENSUS_CODE_MESSAGE,
+        });
+        row.validationRowStatus = 'INVALID';
+        row.ulbId = undefined;
+      } else {
+        seen.add(cc);
+      }
+    }
+  }
+
+  private async deletePreviousDatasetRows(formId: Types.ObjectId, datasetVersion: number): Promise<void> {
+    try {
+      await this.rowModel.deleteMany({ form: formId, datasetVersion }).exec();
+    } catch (deleteErr: unknown) {
+      this.logger.error(
+        `EULB old row cleanup failed [form=${formId.toString()} version=${datasetVersion}]`,
+        deleteErr instanceof Error ? deleteErr.stack : String(deleteErr),
+      );
+    }
+  }
+
+  private async rollbackDatasetReplacement(
+    formId: Types.ObjectId,
+    previousDatasetVersion: number,
+    newDatasetVersion: number,
+  ): Promise<void> {
+    try {
+      await this.rowModel.deleteMany({ form: formId, datasetVersion: newDatasetVersion }).exec();
+    } catch (deleteErr: unknown) {
+      this.logger.error(
+        `EULB new row rollback failed [form=${formId.toString()} version=${newDatasetVersion}]`,
+        deleteErr instanceof Error ? deleteErr.stack : String(deleteErr),
+      );
+    }
+    await this.restorePreviousDatasetRows(formId, previousDatasetVersion);
+  }
+
+  private async restorePreviousDatasetRows(formId: Types.ObjectId, datasetVersion: number): Promise<void> {
+    try {
+      await this.rowModel.updateMany({ form: formId, datasetVersion }, { $set: { isActive: true } }).exec();
+    } catch (restoreErr: unknown) {
+      this.logger.error(
+        `EULB previous row reactivation failed [form=${formId.toString()} version=${datasetVersion}]`,
+        restoreErr instanceof Error ? restoreErr.stack : String(restoreErr),
+      );
+    }
+  }
+
+  private throwDuplicateCensusCodeValidationError(): never {
+    throwXviFcValidationError({
+      censusCode: [
+        {
+          field: 'censusCode',
+          code: 'duplicate',
+          message: DUPLICATE_CENSUS_CODE_MESSAGE,
+        },
+      ],
+    });
   }
 }
