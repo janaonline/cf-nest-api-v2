@@ -30,6 +30,12 @@ import type {
   HydratedFieldConfig,
   UploadedFileValue,
 } from 'src/module/xvi-fc/common/types/field-config.type';
+import {
+  buildXviFcFolderPath,
+  type XviFcFolderPathContext,
+} from 'src/module/xvi-fc/common/folder-paths/xvi-fc-folder-path.resolver';
+import type { XviFcFolderPathKey } from 'src/module/xvi-fc/common/folder-paths/xvi-fc-folder-path.constants';
+import { YearIdToLabel } from 'src/core/constants/years';
 import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import {
   throwXviFcValidationError,
@@ -176,6 +182,10 @@ export class ElectedUrbanLocalBodiesService {
     this.assertStateAccess(user, stateId);
 
     const fields = await this.eulbFormJsonConfig.loadFields(yearId);
+    const designYear = YearIdToLabel[yearId];
+    if (!designYear) throw new NotFoundException(`Design year not found for yearId: ${yearId}`);
+    const folderPathContext: XviFcFolderPathContext = { _id: stateId, designYear, role: 'state' };
+
     const mainFormFields = getFieldsByType(fields, 'EULB_MAIN_FORM_FIELDS');
     const rowEditFields = getFieldsByType(fields, 'EULB_ROW_EDIT_FIELDS');
     const extraUlbEditFields = getFieldsByType(fields, 'EULB_EXTRA_ULB_PORTAL_FIELDS');
@@ -213,7 +223,14 @@ export class ElectedUrbanLocalBodiesService {
     }
 
     const permissions = this.buildFormPermissions(user, stateId, currentFormStatus);
-    const questions = this.hydrateQuestions(mainFormFields, savedData, jwtExpiresMs, doc, permissions);
+    const questions = this.hydrateQuestions(
+      mainFormFields,
+      savedData,
+      jwtExpiresMs,
+      doc,
+      permissions,
+      folderPathContext,
+    );
     const { actors, stateName } = this.xvifcFormActorsService.buildActorsAndStateName(doc);
     const validationSummary = this.buildValidationSummary(doc);
 
@@ -726,6 +743,7 @@ export class ElectedUrbanLocalBodiesService {
     jwtExpiresMs: number,
     doc: EulbFormLeanDoc | null,
     permissions: EulbFormPermissions,
+    folderPathContext?: XviFcFolderPathContext,
   ): HydratedFieldConfig[] {
     return questions.map((question) => {
       const rawValue = Object.prototype.hasOwnProperty.call(savedData, question.key)
@@ -734,11 +752,26 @@ export class ElectedUrbanLocalBodiesService {
 
       let value = rawValue;
       if (question.formFieldType === 'file') {
+        const resolvedFolderPath =
+          question.folderPathKey && folderPathContext
+            ? buildXviFcFolderPath(question.folderPathKey as XviFcFolderPathKey, folderPathContext)
+            : question.folderPath;
+
         const fileVal = rawValue as UploadedFileValue | null | undefined;
         if (fileVal?.fileUrl) {
           const signedUrl = this.signStorageFileUrl(fileVal.fileUrl, jwtExpiresMs);
           value = { ...fileVal, fileUrl: signedUrl };
         }
+
+        if (question.key === 'electedBodyExcelFile') {
+          return {
+            ...question,
+            folderPath: resolvedFolderPath,
+            value,
+            supportingContent: this.buildElectedBodyFileSupportingContent(doc, permissions),
+          };
+        }
+        return { ...question, folderPath: resolvedFolderPath, value };
       }
 
       if (question.key === 'electedBodyExcelFile') {

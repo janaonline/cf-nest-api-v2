@@ -41,6 +41,12 @@ import type {
 import { XviFcApiResponse } from '../../common/response/xvi-fc-api-response';
 import { throwXviFcValidationError, xviFcSuccess } from '../../common/response/xvi-fc-response.util';
 import type { FormFieldOption, UploadedFileValue } from '../../common/types/field-config.type';
+import {
+  buildXviFcFolderPath,
+  type XviFcFolderPathContext,
+} from '../../common/folder-paths/xvi-fc-folder-path.resolver';
+import type { XviFcFolderPathKey } from '../../common/folder-paths/xvi-fc-folder-path.constants';
+import { YearIdToLabel } from 'src/core/constants/years';
 import { SaveSfcStatusDto } from './dto/save-sfc-status.dto';
 import type { SfcFormGetResponseData, SfcFormPermissions } from './sfc-status.types';
 import type { SfcHistoryEntryInput } from './types/sfc-status-history.types';
@@ -157,6 +163,9 @@ export class SfcStatusService {
       .exec();
 
     const formQuestions = await this.loadFormQuestions(yearId);
+    const designYear = YearIdToLabel[yearId];
+    if (!designYear) throw new NotFoundException(`Design year not found for yearId: ${yearId}`);
+
     const formJson: FormJson = {
       design_year: yearId,
       formId: SFC_FORM_ID,
@@ -169,7 +178,8 @@ export class SfcStatusService {
     const savedData: FormData = (doc?.data ?? {}) as FormData;
     const jwtExpiresIn = (this.config.get<string>('JWT_EXPIRES_IN') ?? '24h') as StringValue;
     const jwtExpiresMs = ms(jwtExpiresIn) ?? 24 * 60 * 60 * 1000;
-    const questions = this.hydrateQuestions(savedData, formJson, jwtExpiresMs);
+    const folderPathContext: XviFcFolderPathContext = { _id: stateId, designYear, role: 'state' };
+    const questions = this.hydrateQuestions(savedData, formJson, jwtExpiresMs, folderPathContext);
     const permissions = this.buildFormPermissions(user, stateId, currentFormStatus);
     const { actors, stateName } = this.xvifcFormActorsService.buildActorsAndStateName(doc);
 
@@ -418,18 +428,29 @@ export class SfcStatusService {
    * @param formJson     - Form template carrying the question config array.
    * @param jwtExpiresMs - Token lifetime in milliseconds used to sign file URLs.
    */
-  private hydrateQuestions(savedData: FormData, formJson: FormJson, jwtExpiresMs: number): HydratedFieldConfig[] {
+  private hydrateQuestions(
+    savedData: FormData,
+    formJson: FormJson,
+    jwtExpiresMs: number,
+    folderPathContext?: XviFcFolderPathContext,
+  ): HydratedFieldConfig[] {
     return formJson.data.map((question) => {
       const value = Object.prototype.hasOwnProperty.call(savedData, question.key)
         ? savedData[question.key]
         : question.value;
 
       if (question.formFieldType === 'file') {
+        const resolvedFolderPath =
+          question.folderPathKey && folderPathContext
+            ? buildXviFcFolderPath(question.folderPathKey as XviFcFolderPathKey, folderPathContext)
+            : question.folderPath;
+
         const fileVal = value as UploadedFileValue | null | undefined;
         if (fileVal?.fileUrl) {
           const signedUrl = this.signStorageFileUrl(fileVal.fileUrl, jwtExpiresMs);
-          return { ...question, value: { ...fileVal, fileUrl: signedUrl } };
+          return { ...question, folderPath: resolvedFolderPath, value: { ...fileVal, fileUrl: signedUrl } };
         }
+        return { ...question, folderPath: resolvedFolderPath, value };
       }
 
       return { ...question, value };

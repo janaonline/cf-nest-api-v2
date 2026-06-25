@@ -29,6 +29,11 @@ import {
 import { ELECTED_BODY_STATUSES } from 'src/module/xvi-fc/state/elected-urban-local-bodies/constants/elected-urban-local-bodies.constants';
 import { EulbFormJsonConfigService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/form-json/elected-urban-local-bodies-form-json.service';
 import { getFieldsByType } from 'src/module/xvi-fc/state/elected-urban-local-bodies/helpers/elected-urban-local-bodies-form-json.helpers';
+import {
+  resolveXviFcFolderPathsInFormJson,
+  type XviFcFolderPathContext,
+} from 'src/module/xvi-fc/common/folder-paths/xvi-fc-folder-path.resolver';
+import { YearIdToLabel } from 'src/core/constants/years';
 import { extractDateConfig } from 'src/module/xvi-fc/state/elected-urban-local-bodies/validators/elected-urban-local-bodies.validator';
 import type { GetEulbPostSubmissionUpdateRowsQueryDto } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/get-eulb-post-submission-update-rows-query.dto';
 import type { ValidateEulbPostSubmissionUpdateDto } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/validate-eulb-post-submission-update.dto';
@@ -126,10 +131,15 @@ export class EulbPostSubmissionUpdateService {
 
     const formJsonFields = await this.eulbFormJsonConfig.loadFields(yearId);
     const rowEditFields = getFieldsByType(formJsonFields, 'EULB_ROW_EDIT_FIELDS');
-    const questions = getFieldsByType(formJsonFields, 'EULB_POST_SUBMIT_UPDATE_FIELDS');
+    const rawQuestions = getFieldsByType(formJsonFields, 'EULB_POST_SUBMIT_UPDATE_FIELDS');
     if (rowEditFields.length === 0) {
       throw new InternalServerErrorException('EULB_ROW_EDIT_FIELDS group is empty in form configuration.');
     }
+
+    const designYear = YearIdToLabel[yearId];
+    if (!designYear) throw new NotFoundException(`Design year not found for yearId: ${yearId}`);
+    const folderPathContext: XviFcFolderPathContext = { _id: stateId, designYear, role: 'state' };
+    const questions = resolveXviFcFolderPathsInFormJson(rawQuestions, folderPathContext);
 
     const data: EulbPostSubmissionUpdateMetaData = {
       stateId,

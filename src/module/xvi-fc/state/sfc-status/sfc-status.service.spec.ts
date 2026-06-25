@@ -25,8 +25,7 @@ function q<T>(value: T) {
     chain[m] = jest.fn().mockReturnValue(chain);
   }
   chain['exec'] = jest.fn().mockResolvedValue(value);
-  chain['then'] = (ful: (v: T) => unknown, rej?: (e: unknown) => unknown) =>
-    Promise.resolve(value).then(ful, rej);
+  chain['then'] = (ful: (v: T) => unknown, rej?: (e: unknown) => unknown) => Promise.resolve(value).then(ful, rej);
   chain['catch'] = (rej: (e: unknown) => unknown) => Promise.resolve(value).catch(rej);
   chain['finally'] = (fin: () => void) => Promise.resolve(value).finally(fin);
   return chain;
@@ -35,7 +34,7 @@ function q<T>(value: T) {
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 
 const stateOid = new Types.ObjectId();
-const yearOid = new Types.ObjectId();
+const yearOid = new Types.ObjectId('67d7d136d3d038946a5239e9'); // 2026-27
 const docOid = new Types.ObjectId();
 
 const adminUser: AuthUser = {
@@ -57,7 +56,13 @@ const mockFormDoc = {
   year: yearOid,
   currentFormStatus: FORM_STATUS.IN_PROGRESS,
   data: {},
-  toObject: () => ({ _id: docOid, state: stateOid, year: yearOid, currentFormStatus: FORM_STATUS.IN_PROGRESS, data: {} }),
+  toObject: () => ({
+    _id: docOid,
+    state: stateOid,
+    year: yearOid,
+    currentFormStatus: FORM_STATUS.IN_PROGRESS,
+    data: {},
+  }),
 };
 
 const mockFormQuestions = [{ key: 'sfcStatus', formFieldType: 'radio', label: 'SFC Status', value: '' }];
@@ -110,7 +115,10 @@ describe('SfcStatusService', () => {
         { provide: getModelToken(XviFcSfcStatusHistory.name), useValue: historyModel },
         { provide: FormJsonService, useValue: formJsonService },
         { provide: DynamicFormValidationService, useValue: validator },
-        { provide: XvifcFormActorsService, useValue: { buildActorsAndStateName: jest.fn().mockReturnValue({ actors: [], stateName: 'Test State' }) } },
+        {
+          provide: XvifcFormActorsService,
+          useValue: { buildActorsAndStateName: jest.fn().mockReturnValue({ actors: [], stateName: 'Test State' }) },
+        },
         { provide: ExcelService, useValue: { generateExcel: jest.fn() } },
         { provide: FileTokenService, useValue: { signFileUrl: jest.fn().mockReturnValue('https://signed-url') } },
         { provide: ConfigService, useValue: { get: jest.fn().mockReturnValue('24h') } },
@@ -165,9 +173,7 @@ describe('SfcStatusService', () => {
 
     it('throws ForbiddenException when state user accesses a different state', async () => {
       const wrongState = stateUser(new Types.ObjectId());
-      await expect(service.saveDraft(validDto, wrongState, '127.0.0.1', 'jest')).rejects.toThrow(
-        ForbiddenException,
-      );
+      await expect(service.saveDraft(validDto, wrongState, '127.0.0.1', 'jest')).rejects.toThrow(ForbiddenException);
     });
 
     it('successful response does not include errors field', async () => {
