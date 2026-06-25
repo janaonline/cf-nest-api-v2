@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, InternalServerErrorException, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model, Types } from 'mongoose';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
@@ -10,27 +10,30 @@ import {
   POST_SUBMISSION_UPDATE_ALLOWED_STATUSES,
   assertCanViewPostSubmissionUpdate,
   canViewPostSubmissionUpdate,
-} from '../../common/utils/xvi-fc-form-status-access.util';
+} from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
 import {
   throwXviFcValidationError,
   throwXviFcValidationErrorWithData,
   xviFcSuccess,
-} from '../../common/response/xvi-fc-response.util';
-import type { XviFcApiResponse } from '../../common/response/xvi-fc-api-response';
+} from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
+import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import {
   EULB_FORM_TYPE,
   ElectedUrbanLocalBodiesForm,
   EulbFormDocument,
-} from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
+} from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
 import {
   ElectedUrbanLocalBodiesRow,
   EulbRowDocument,
-} from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
-import { EULB_ROW_EDIT_FIELDS, POST_SUBMIT_UPDATE_FIELDS } from './constants/elected-urban-local-bodies.constants';
-import type { GetEulbPostSubmissionUpdateRowsQueryDto } from './dto/get-eulb-post-submission-update-rows-query.dto';
-import type { ValidateEulbPostSubmissionUpdateDto } from './dto/validate-eulb-post-submission-update.dto';
-import type { SubmitEulbPostSubmissionUpdateDto } from './dto/submit-eulb-post-submission-update.dto';
-import { ElectedUrbanLocalBodiesValidator } from './elected-urban-local-bodies.validator';
+} from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
+import { ELECTED_BODY_STATUSES } from 'src/module/xvi-fc/state/elected-urban-local-bodies/constants/elected-urban-local-bodies.constants';
+import { EulbFormJsonConfigService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/form-json/elected-urban-local-bodies-form-json.service';
+import { getFieldsByType } from 'src/module/xvi-fc/state/elected-urban-local-bodies/helpers/elected-urban-local-bodies-form-json.helpers';
+import { extractDateConfig } from 'src/module/xvi-fc/state/elected-urban-local-bodies/validators/elected-urban-local-bodies.validator';
+import type { GetEulbPostSubmissionUpdateRowsQueryDto } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/get-eulb-post-submission-update-rows-query.dto';
+import type { ValidateEulbPostSubmissionUpdateDto } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/validate-eulb-post-submission-update.dto';
+import type { SubmitEulbPostSubmissionUpdateDto } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/submit-eulb-post-submission-update.dto';
+import { ElectedUrbanLocalBodiesValidator } from 'src/module/xvi-fc/state/elected-urban-local-bodies/validators/elected-urban-local-bodies.validator';
 import type {
   EulbBatchDocumentRef,
   EulbPostSubmissionSubmitRowError,
@@ -41,8 +44,9 @@ import type {
   EulbPostSubmissionUpdateSubmitData,
   EulbPostSubmissionUpdateValidateData,
   EulbPostSubmissionUpdateValidateRow,
+  EulbStatusSummary,
   EulbValidationSummary,
-} from './elected-urban-local-bodies.types';
+} from 'src/module/xvi-fc/state/elected-urban-local-bodies/types/elected-urban-local-bodies.types';
 
 /**
  * Builds the eligibility `$or` condition: 'Not Constituted' always qualifies; 'Constituted' qualifies only when expired.
@@ -89,6 +93,7 @@ export class EulbPostSubmissionUpdateService {
     @InjectModel(ElectedUrbanLocalBodiesRow.name)
     private readonly rowModel: Model<EulbRowDocument>,
     private readonly validator: ElectedUrbanLocalBodiesValidator,
+    private readonly eulbFormJsonConfig: EulbFormJsonConfigService,
   ) {}
 
   /**
@@ -119,14 +124,21 @@ export class EulbPostSubmissionUpdateService {
         .exec();
     }
 
+    const formJsonFields = await this.eulbFormJsonConfig.loadFields(yearId);
+    const rowEditFields = getFieldsByType(formJsonFields, 'EULB_ROW_EDIT_FIELDS');
+    const questions = getFieldsByType(formJsonFields, 'EULB_POST_SUBMIT_UPDATE_FIELDS');
+    if (rowEditFields.length === 0) {
+      throw new InternalServerErrorException('EULB_ROW_EDIT_FIELDS group is empty in form configuration.');
+    }
+
     const data: EulbPostSubmissionUpdateMetaData = {
       stateId,
       formStatus,
       canUpdate,
       permissions,
       summary: { eligibleRowCount },
-      rowEditFields: EULB_ROW_EDIT_FIELDS,
-      questions: POST_SUBMIT_UPDATE_FIELDS,
+      rowEditFields,
+      questions,
     };
 
     return xviFcSuccess('Post-submission update metadata fetched.', data);
@@ -171,9 +183,10 @@ export class EulbPostSubmissionUpdateService {
       filter['$and'] = [...(filter['$and'] ?? []), { $or: [{ censusCode: regex }, { ulbName: regex }] }];
     }
 
-    const [rawRows, total] = await Promise.all([
+    const [rawRows, total, statusSummary] = await Promise.all([
       this.rowModel.find(filter).sort({ rowNumber: 1 }).skip(skip).limit(limit).lean().exec(),
       this.rowModel.countDocuments(filter).exec(),
+      this.getStatusSummary(formDoc._id, stateId, yearId, activeVersion),
     ]);
 
     const rows: EulbPostSubmissionUpdateRow[] = rawRows.map((r) => ({
@@ -208,6 +221,7 @@ export class EulbPostSubmissionUpdateService {
         allowedFormStatuses: [...POST_SUBMISSION_UPDATE_ALLOWED_STATUSES],
         today: today.toISOString().split('T')[0],
       },
+      statusSummary,
     };
 
     return xviFcSuccess('Eligible rows for post-submission update fetched.', data);
@@ -280,6 +294,10 @@ export class EulbPostSubmissionUpdateService {
     const today = this.startOfToday();
     const activeVersion = formDoc.activeDatasetVersion ?? 0;
 
+    const submitFormJsonFields = await this.eulbFormJsonConfig.loadFields(yearId);
+    const submitRowEditFields = getFieldsByType(submitFormJsonFields, 'EULB_ROW_EDIT_FIELDS');
+    const submitDateConfig = extractDateConfig(submitRowEditFields);
+
     const dbRows = await this.rowModel
       .find({
         _id: { $in: rowIds.map((id) => new Types.ObjectId(id)) },
@@ -319,6 +337,7 @@ export class EulbPostSubmissionUpdateService {
           remarks: proposed.remarks,
         },
         today,
+        submitDateConfig,
       );
       if (errors.length > 0) {
         rowErrors.push({
@@ -519,6 +538,10 @@ export class EulbPostSubmissionUpdateService {
     const today = this.startOfToday();
     const activeVersion = formDoc.activeDatasetVersion ?? 0;
 
+    const validateFormJsonFields = await this.eulbFormJsonConfig.loadFields(yearId);
+    const validateRowEditFields = getFieldsByType(validateFormJsonFields, 'EULB_ROW_EDIT_FIELDS');
+    const validateDateConfig = extractDateConfig(validateRowEditFields);
+
     const dbRows = await this.rowModel
       .find({
         _id: { $in: rowIds.map((id) => new Types.ObjectId(id)) },
@@ -554,6 +577,7 @@ export class EulbPostSubmissionUpdateService {
           remarks: proposed.remarks,
         },
         today,
+        validateDateConfig,
       );
       return {
         rowId: proposed.rowId,
@@ -639,6 +663,49 @@ export class EulbPostSubmissionUpdateService {
       return !!expiry && expiry.getTime() < today.getTime();
     }
     return false;
+  }
+
+  /**
+   * Returns status counts for all active rows in the active dataset, unaffected by eligibility,
+   * search, or pagination. Uses a single aggregation: groups by electedBodyStatus and sums counts.
+   * Unknown/null statuses are included in totalUlbCount but not in the named status counts.
+   */
+  private async getStatusSummary(
+    formId: Types.ObjectId,
+    stateId: string,
+    yearId: string,
+    activeVersion: number,
+  ): Promise<EulbStatusSummary> {
+    const [constituted, notConstituted, exempt] = ELECTED_BODY_STATUSES;
+
+    const groups = await this.rowModel
+      .aggregate<{ _id: string | null; count: number }>([
+        {
+          $match: {
+            form: formId,
+            state: new Types.ObjectId(stateId),
+            year: new Types.ObjectId(yearId),
+            datasetVersion: activeVersion,
+            isActive: true,
+          },
+        },
+        { $group: { _id: '$electedBodyStatus', count: { $sum: 1 } } },
+      ])
+      .exec();
+
+    let totalUlbCount = 0;
+    let constitutedCount = 0;
+    let notConstitutedCount = 0;
+    let exemptCount = 0;
+
+    for (const g of groups) {
+      totalUlbCount += g.count;
+      if (g._id === constituted) constitutedCount = g.count;
+      else if (g._id === notConstituted) notConstitutedCount = g.count;
+      else if (g._id === exempt) exemptCount = g.count;
+    }
+
+    return { totalUlbCount, constitutedCount, notConstitutedCount, exemptCount };
   }
 
   /** Returns midnight of the current local day — used as the reference point for all eligibility date comparisons. */

@@ -2,21 +2,23 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
 import { Types } from 'mongoose';
 import ExcelJS from 'exceljs';
-import { ElectedUrbanLocalBodiesService } from './elected-urban-local-bodies.service';
-import { ElectedUrbanLocalBodiesForm } from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
-import { ElectedUrbanLocalBodiesRow } from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
-import { Ulb } from '../../../../schemas/ulb.schema';
+import { ElectedUrbanLocalBodiesService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/main/elected-urban-local-bodies.service';
+import { ElectedUrbanLocalBodiesForm } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
+import { ElectedUrbanLocalBodiesRow } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
+import { Ulb } from 'src/schemas/ulb.schema';
 import { ExcelService } from 'src/services/excel/excel.service';
-import { DynamicFormValidationService } from '../../common/dynamic-form-validation/dynamic-form-validation.service';
-import { XvifcFormActorsService } from '../../common/services/xvifc-form-actors.service';
-import { FileUrlNormalizerService } from '../../common/services/file-url-normalizer.service';
+import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
+import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
+import { FileUrlNormalizerService } from 'src/module/xvi-fc/common/services/file-url-normalizer.service';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { ConfigService } from '@nestjs/config';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { AccessLevel, Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
-import { EULB_ROW_EDIT_FIELDS } from './constants/elected-urban-local-bodies.constants';
-import type { FormFieldOption } from '../../common/types/field-config.type';
-import type { EulbDumpRowRecord } from './elected-urban-local-bodies.types';
+import { ELECTED_BODY_STATUSES } from 'src/module/xvi-fc/state/elected-urban-local-bodies/constants/elected-urban-local-bodies.constants';
+import { EulbFormJsonConfigService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/form-json/elected-urban-local-bodies-form-json.service';
+import type { EulbTypedFieldConfig } from 'src/module/xvi-fc/state/elected-urban-local-bodies/helpers/elected-urban-local-bodies-form-json.helpers';
+import type { FormFieldOption } from 'src/module/xvi-fc/common/types/field-config.type';
+import type { EulbDumpRowRecord } from 'src/module/xvi-fc/state/elected-urban-local-bodies/types/elected-urban-local-bodies.types';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -193,6 +195,80 @@ const dumpRows: DumpRowFixture[] = [
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
 
+const MOCK_TYPED_ROW_EDIT_FIELDS: EulbTypedFieldConfig[] = [
+  {
+    key: 'ulbCount',
+    label: 'Total ULBs',
+    formFieldType: 'number',
+    fieldTypes: ['EULB_MAIN_FORM_FIELDS'],
+  },
+  {
+    key: 'censusCode',
+    label: 'Census Code',
+    formFieldType: 'text',
+    fieldTypes: ['EULB_EXTRA_ULB_PORTAL_FIELDS'],
+    validations: [
+      { name: 'required', validator: null, message: 'Census Code is required.' },
+    ],
+  },
+  {
+    key: 'ulbName',
+    label: 'ULB Name',
+    formFieldType: 'text',
+    fieldTypes: ['EULB_EXTRA_ULB_PORTAL_FIELDS'],
+    validations: [
+      { name: 'required', validator: null, message: 'ULB Name is required.' },
+    ],
+  },
+  {
+    key: 'electedBodyStatus',
+    label: 'Elected Body Status',
+    formFieldType: 'select',
+    fieldTypes: ['EULB_ROW_EDIT_FIELDS'],
+    options: ELECTED_BODY_STATUSES.map((s) => ({ id: s, label: s })) as FormFieldOption[],
+    validations: [
+      { name: 'required', validator: null, message: 'Elected Body Status is required.' },
+    ],
+  },
+  {
+    key: 'dateOfConstitution',
+    label: 'Date of Constitution',
+    formFieldType: 'date',
+    fieldTypes: ['EULB_ROW_EDIT_FIELDS'],
+    minDate: '2021-05-31',
+    maxDate: 'TODAY',
+    validations: [
+      { name: 'minDate', validator: '2021-05-31', message: 'Date of Constitution cannot be before 31 May 2021.' },
+      { name: 'maxDate', validator: 'TODAY', message: 'Date of Constitution cannot be a future date.' },
+    ],
+  },
+  {
+    key: 'dateOfExpiry',
+    label: 'Date of Expiry',
+    formFieldType: 'date',
+    fieldTypes: ['EULB_ROW_EDIT_FIELDS'],
+    minDate: 'TODAY',
+    maxDate: '2030-03-31',
+    validations: [
+      { name: 'minDate', validator: 'TODAY', message: 'Date of Expiry cannot be before today.' },
+      { name: 'maxDate', validator: '2030-03-31', message: 'Date of Expiry cannot be after 31 March 2030.' },
+    ],
+  },
+  {
+    key: 'remarks',
+    label: 'Remarks',
+    formFieldType: 'text',
+    fieldTypes: ['EULB_ROW_EDIT_FIELDS'],
+    validations: [
+      { name: 'maxlength', validator: 250, message: 'Remarks must not exceed 250 characters.' },
+    ],
+  },
+];
+
+const mockEulbFormJsonConfigService = {
+  loadFields: jest.fn().mockResolvedValue(MOCK_TYPED_ROW_EDIT_FIELDS),
+};
+
 const mockFormModel = { findOne: jest.fn() };
 const mockRowModel = { find: jest.fn() };
 const mockUlbModel = { find: jest.fn() };
@@ -205,6 +281,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
 
     beforeEach(async () => {
       jest.clearAllMocks();
+      mockEulbFormJsonConfigService.loadFields.mockResolvedValue(MOCK_TYPED_ROW_EDIT_FIELDS);
 
       // Default: no form found → blank template from ULB master.
       mockFormModel.findOne.mockReturnValue(q(null));
@@ -225,6 +302,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           { provide: FileTokenService, useValue: null },
           { provide: ConfigService, useValue: null },
           { provide: FileUrlNormalizerService, useValue: null },
+          { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
         ],
       }).compile();
 
@@ -238,10 +316,10 @@ describe('ElectedUrbanLocalBodiesService', () => {
 
     // ── No active dataset (fallback path) ────────────────────────────────────
 
-    it('generates a workbook with electedBodyStatus dropdown derived from EULB_ROW_EDIT_FIELDS', async () => {
+    it('generates a workbook with electedBodyStatus dropdown derived from MOCK_TYPED_ROW_EDIT_FIELDS', async () => {
       const sheet = await generateAndLoad();
 
-      const statusField = EULB_ROW_EDIT_FIELDS.find((f) => f.key === 'electedBodyStatus')!;
+      const statusField = MOCK_TYPED_ROW_EDIT_FIELDS.find((f) => f.key === 'electedBodyStatus')!;
       const expectedOpts = (statusField.options as FormFieldOption[]).map((o) => o.id).join(',');
 
       const dvValues = Object.values(sheet.dataValidations.model);
@@ -255,7 +333,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
       // so blank date cells may pass client-side validation. Backend upload validation is authoritative.
       const sheet = await generateAndLoad();
 
-      const constitutionMin = EULB_ROW_EDIT_FIELDS.find((f) => f.key === 'dateOfConstitution')!.validations?.find(
+      const constitutionMin = MOCK_TYPED_ROW_EDIT_FIELDS.find((f) => f.key === 'dateOfConstitution')!.validations?.find(
         (v) => v.name === 'minDate',
       )?.validator as string;
 
@@ -292,7 +370,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
     it('generates dateOfExpiry custom formula with config-derived dates and correct per-row references', async () => {
       const sheet = await generateAndLoad();
 
-      const expiryMax = EULB_ROW_EDIT_FIELDS.find((f) => f.key === 'dateOfExpiry')!.validations?.find(
+      const expiryMax = MOCK_TYPED_ROW_EDIT_FIELDS.find((f) => f.key === 'dateOfExpiry')!.validations?.find(
         (v) => v.name === 'maxDate',
       )?.validator as string;
 
@@ -344,10 +422,10 @@ describe('ElectedUrbanLocalBodiesService', () => {
       expect(sheet.dataValidations.model['D6']).toBeUndefined();
     });
 
-    it('generates remarks textLength validation with max length from EULB_ROW_EDIT_FIELDS', async () => {
+    it('generates remarks textLength validation with max length from MOCK_TYPED_ROW_EDIT_FIELDS', async () => {
       const sheet = await generateAndLoad();
 
-      const maxLength = EULB_ROW_EDIT_FIELDS.find((f) => f.key === 'remarks')!.validations?.find(
+      const maxLength = MOCK_TYPED_ROW_EDIT_FIELDS.find((f) => f.key === 'remarks')!.validations?.find(
         (v) => v.name === 'maxlength',
       )?.validator as number;
 
@@ -441,6 +519,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
 
     beforeEach(async () => {
       jest.clearAllMocks();
+      mockEulbFormJsonConfigService.loadFields.mockResolvedValue(MOCK_TYPED_ROW_EDIT_FIELDS);
 
       mockFormModel.findOne.mockReturnValue(
         q({
@@ -477,6 +556,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           { provide: FileTokenService, useValue: null },
           { provide: ConfigService, useValue: null },
           { provide: FileUrlNormalizerService, useValue: null },
+          { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
         ],
       }).compile();
 
@@ -570,6 +650,62 @@ describe('ElectedUrbanLocalBodiesService', () => {
         'Updated At',
       ]);
       expect(sheet.actualRowCount).toBe(1);
+    });
+  });
+
+  // ─── getForm ─────────────────────────────────────────────────────────────────
+
+  describe('getForm', () => {
+    let service: ElectedUrbanLocalBodiesService;
+
+    const mockActorsService = {
+      buildActorsAndStateName: jest.fn().mockReturnValue({ actors: [], stateName: 'Test State' }),
+    };
+    const mockDynamicFormValidator = { validateForm: jest.fn() };
+    const mockFileTokenService = { signUrl: jest.fn((url: string) => url) };
+    const mockConfig = { get: jest.fn().mockReturnValue('24h') };
+    const mockFileUrlNormalizer = { normalizeFileUrl: jest.fn((v: unknown) => v) };
+
+    beforeEach(async () => {
+      jest.clearAllMocks();
+      mockEulbFormJsonConfigService.loadFields.mockResolvedValue(MOCK_TYPED_ROW_EDIT_FIELDS);
+      mockFormModel.findOne.mockReturnValue(q(null)); // no saved form → default NOT_STARTED response
+
+      const module: TestingModule = await Test.createTestingModule({
+        providers: [
+          ElectedUrbanLocalBodiesService,
+          ExcelService,
+          { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: mockFormModel },
+          { provide: getModelToken(ElectedUrbanLocalBodiesRow.name), useValue: mockRowModel },
+          { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+          { provide: DynamicFormValidationService, useValue: mockDynamicFormValidator },
+          { provide: XvifcFormActorsService, useValue: mockActorsService },
+          { provide: FileTokenService, useValue: mockFileTokenService },
+          { provide: ConfigService, useValue: mockConfig },
+          { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
+          { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
+        ],
+      }).compile();
+
+      service = module.get<ElectedUrbanLocalBodiesService>(ElectedUrbanLocalBodiesService);
+    });
+
+    it('includes extraUlbEditFields in the response with censusCode and ulbName entries', async () => {
+      const result = await service.getForm(stateOid.toString(), yearOid.toString(), adminUser);
+      const data = result.data as Record<string, unknown>;
+      expect(Array.isArray(data['extraUlbEditFields'])).toBe(true);
+      const fields = data['extraUlbEditFields'] as Array<{ key: string }>;
+      expect(fields.some((f) => f.key === 'censusCode')).toBe(true);
+      expect(fields.some((f) => f.key === 'ulbName')).toBe(true);
+    });
+
+    it('leaves rowEditFields unchanged — does not include censusCode or ulbName', async () => {
+      const result = await service.getForm(stateOid.toString(), yearOid.toString(), adminUser);
+      const data = result.data as Record<string, unknown>;
+      const fields = data['rowEditFields'] as Array<{ key: string }>;
+      expect(Array.isArray(fields)).toBe(true);
+      expect(fields.some((f) => f.key === 'censusCode')).toBe(false);
+      expect(fields.some((f) => f.key === 'ulbName')).toBe(false);
     });
   });
 });

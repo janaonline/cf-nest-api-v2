@@ -3,11 +3,11 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { Types } from 'mongoose';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { AccessLevel, Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
-import { ElectedUrbanLocalBodiesController } from './elected-urban-local-bodies.controller';
-import { ElectedUrbanLocalBodiesExcelService } from './elected-urban-local-bodies-excel.service';
-import { EulbPostSubmissionUpdateService } from './elected-urban-local-bodies-post-submission-update.service';
-import { ElectedUrbanLocalBodiesRowService } from './elected-urban-local-bodies-row.service';
-import { ElectedUrbanLocalBodiesService } from './elected-urban-local-bodies.service';
+import { ElectedUrbanLocalBodiesController } from 'src/module/xvi-fc/state/elected-urban-local-bodies/controllers/elected-urban-local-bodies.controller';
+import { ElectedUrbanLocalBodiesExcelService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/excel/elected-urban-local-bodies-excel.service';
+import { EulbPostSubmissionUpdateService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/post-submission-update/elected-urban-local-bodies-post-submission-update.service';
+import { ElectedUrbanLocalBodiesRowService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/row/elected-urban-local-bodies-row.service';
+import { ElectedUrbanLocalBodiesService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/main/elected-urban-local-bodies.service';
 
 describe('ElectedUrbanLocalBodiesController', () => {
   const stateId = new Types.ObjectId().toString();

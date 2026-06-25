@@ -11,7 +11,7 @@ import {
   IsString,
   ValidateNested,
 } from 'class-validator';
-import { ELECTED_BODY_STATUSES } from '../constants/elected-urban-local-bodies.constants';
+import { ELECTED_BODY_STATUSES } from 'src/module/xvi-fc/state/elected-urban-local-bodies/constants/elected-urban-local-bodies.constants';
 
 export class SubmitEulbPostSubmissionUpdateRowDto {
   @IsMongoId()

@@ -1,10 +1,71 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import {
-  DATE_OF_CONSTITUTION_MIN,
-  DATE_OF_EXPIRY_MAX,
   ELECTED_BODY_STATUSES,
-} from './constants/elected-urban-local-bodies.constants';
-import type { EulbRowError } from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
+  EULB_CENSUS_CODE_MAX_LENGTH,
+  EULB_ULB_NAME_MAX_LENGTH,
+} from 'src/module/xvi-fc/state/elected-urban-local-bodies/constants/elected-urban-local-bodies.constants';
+import type { EulbRowError } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
+import type { FieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
+
+export interface EulbDateValidationConfig {
+  /** Static minDate for dateOfConstitution, parsed as UTC start-of-day. */
+  constitutionMin: Date;
+  constitutionMinMessage: string;
+  /** Message for the TODAY upper-bound on dateOfConstitution (enforced via `today` param). */
+  constitutionMaxMessage: string;
+  /** Static maxDate for dateOfExpiry, parsed as UTC end-of-day. */
+  expiryMax: Date;
+  expiryMaxMessage: string;
+  /** Message for the TODAY lower-bound on dateOfExpiry (enforced via `today` param). */
+  expiryMinMessage: string;
+  remarksMaxLength: number;
+  remarksMaxLengthMessage: string;
+}
+
+function parseDateBoundary(iso: string, mode: 'min' | 'max'): Date {
+  const parts = iso.split('-').map(Number);
+  const [y, m, d] = parts;
+  return mode === 'min'
+    ? new Date(Date.UTC(y, m - 1, d, 0, 0, 0, 0))
+    : new Date(Date.UTC(y, m - 1, d, 23, 59, 59, 999));
+}
+
+/** Derives EulbDateValidationConfig from the DB-backed ROW_EDIT_FIELDS group. */
+export function extractDateConfig(rowEditFields: FieldConfig[]): EulbDateValidationConfig {
+  const cField = rowEditFields.find((f) => f.key === 'dateOfConstitution');
+  const eField = rowEditFields.find((f) => f.key === 'dateOfExpiry');
+  const rField = rowEditFields.find((f) => f.key === 'remarks');
+  if (!cField || !eField || !rField) {
+    throw new InternalServerErrorException('EULB ROW_EDIT_FIELDS is missing required date/remarks fields.');
+  }
+  const cMinV = cField.validations?.find((v) => v.name === 'minDate');
+  const cMaxV = cField.validations?.find((v) => v.name === 'maxDate');
+  const eMaxV = eField.validations?.find((v) => v.name === 'maxDate');
+  const eMinV = eField.validations?.find((v) => v.name === 'minDate');
+  const rMaxV = rField.validations?.find((v) => v.name === 'maxlength');
+  if (!cMinV?.validator || !cMaxV || !eMaxV?.validator || !eMinV || !rMaxV?.validator) {
+    throw new InternalServerErrorException('EULB ROW_EDIT_FIELDS date/remarks validations are incomplete.');
+  }
+  if (typeof cMinV.validator !== 'string' || typeof eMaxV.validator !== 'string') {
+    throw new InternalServerErrorException('EULB ROW_EDIT_FIELDS date validators must be ISO date strings.');
+  }
+  if (typeof rMaxV.validator !== 'number') {
+    throw new InternalServerErrorException('EULB ROW_EDIT_FIELDS maxlength validator must be a number.');
+  }
+  const cMinIso: string = cMinV.validator;
+  const eMaxIso: string = eMaxV.validator;
+  const remarksMax: number = rMaxV.validator;
+  return {
+    constitutionMin: parseDateBoundary(cMinIso, 'min'),
+    constitutionMinMessage: cMinV.message,
+    constitutionMaxMessage: cMaxV.message,
+    expiryMax: parseDateBoundary(eMaxIso, 'max'),
+    expiryMaxMessage: eMaxV.message,
+    expiryMinMessage: eMinV.message,
+    remarksMaxLength: remarksMax,
+    remarksMaxLengthMessage: rMaxV.message,
+  };
+}
 
 export interface ParsedExcelRow {
   censusCode?: string;
@@ -26,7 +87,12 @@ export interface DbUlbEntry {
 
 @Injectable()
 export class ElectedUrbanLocalBodiesValidator {
-  validateDbUlbRow(row: ParsedExcelRow, dbUlb: DbUlbEntry, today: Date): EulbRowError[] {
+  validateDbUlbRow(
+    row: ParsedExcelRow,
+    dbUlb: DbUlbEntry,
+    today: Date,
+    dateConfig: EulbDateValidationConfig,
+  ): EulbRowError[] {
     const errors: EulbRowError[] = [];
     const dbCode = String(dbUlb.censusCode ?? dbUlb.sbCode ?? '').trim();
 
@@ -54,29 +120,38 @@ export class ElectedUrbanLocalBodiesValidator {
       });
     }
 
-    errors.push(...this.validateCommonFields(row, today));
+    errors.push(...this.validateCommonFields(row, today, dateConfig));
     return errors;
   }
 
-  validateExtraUlbRow(row: ParsedExcelRow, today: Date): EulbRowError[] {
+  validateExtraUlbRow(row: ParsedExcelRow, today: Date, dateConfig: EulbDateValidationConfig): EulbRowError[] {
     const errors: EulbRowError[] = [];
 
-    // censusCode optional, but max 10 chars if provided
-    if (row.censusCode && row.censusCode.trim().length > 10) {
+    // censusCode required for EXTRA_ULB rows
+    if (!row.censusCode || row.censusCode.trim() === '') {
+      errors.push({ field: 'censusCode', code: 'required', message: 'Census code is required.' });
+    } else if (row.censusCode.trim().length > EULB_CENSUS_CODE_MAX_LENGTH) {
       errors.push({
         field: 'censusCode',
         code: 'maxlength',
-        message: 'Census code must not exceed 10 characters.',
+        message: `Census code must not exceed ${EULB_CENSUS_CODE_MAX_LENGTH} characters.`,
         value: row.censusCode,
       });
     }
 
-    // ulbName required
+    // ulbName required, max length enforced
     if (!row.ulbName || row.ulbName.trim() === '') {
       errors.push({ field: 'ulbName', code: 'required', message: 'ULB name is required.' });
+    } else if (row.ulbName.trim().length > EULB_ULB_NAME_MAX_LENGTH) {
+      errors.push({
+        field: 'ulbName',
+        code: 'maxlength',
+        message: `ULB name must not exceed ${EULB_ULB_NAME_MAX_LENGTH} characters.`,
+        value: row.ulbName,
+      });
     }
 
-    errors.push(...this.validateCommonFields(row, today));
+    errors.push(...this.validateCommonFields(row, today, dateConfig));
     return errors;
   }
 
@@ -86,10 +161,44 @@ export class ElectedUrbanLocalBodiesValidator {
    * All fields are optional — only provided fields are validated.
    */
   validatePortalUpdateFields(
-    dto: { electedBodyStatus?: string; dateOfConstitution?: string; dateOfExpiry?: string; remarks?: string },
+    dto: {
+      censusCode?: string;
+      ulbName?: string;
+      electedBodyStatus?: string;
+      dateOfConstitution?: string;
+      dateOfExpiry?: string;
+      remarks?: string;
+    },
     today: Date,
+    dateConfig: EulbDateValidationConfig,
   ): EulbRowError[] {
     const errors: EulbRowError[] = [];
+
+    if (dto.censusCode !== undefined) {
+      if (!dto.censusCode || dto.censusCode.trim() === '') {
+        errors.push({ field: 'censusCode', code: 'required', message: 'Census code is required.' });
+      } else if (dto.censusCode.trim().length > EULB_CENSUS_CODE_MAX_LENGTH) {
+        errors.push({
+          field: 'censusCode',
+          code: 'maxlength',
+          message: `Census code must not exceed ${EULB_CENSUS_CODE_MAX_LENGTH} characters.`,
+          value: dto.censusCode,
+        });
+      }
+    }
+
+    if (dto.ulbName !== undefined) {
+      if (!dto.ulbName || dto.ulbName.trim() === '') {
+        errors.push({ field: 'ulbName', code: 'required', message: 'ULB name is required.' });
+      } else if (dto.ulbName.trim().length > EULB_ULB_NAME_MAX_LENGTH) {
+        errors.push({
+          field: 'ulbName',
+          code: 'maxlength',
+          message: `ULB name must not exceed ${EULB_ULB_NAME_MAX_LENGTH} characters.`,
+          value: dto.ulbName,
+        });
+      }
+    }
 
     if (dto.electedBodyStatus !== undefined) {
       if (dto.electedBodyStatus.trim() === '') {
@@ -115,18 +224,18 @@ export class ElectedUrbanLocalBodiesValidator {
         });
       } else {
         const docNorm = this.normalizeDate(doc);
-        if (docNorm < this.normalizeDate(DATE_OF_CONSTITUTION_MIN)) {
+        if (docNorm < this.normalizeDate(dateConfig.constitutionMin)) {
           errors.push({
             field: 'dateOfConstitution',
             code: 'minDate',
-            message: 'Date of constitution cannot be before 31 May 2021.',
+            message: dateConfig.constitutionMinMessage,
             value: doc.toISOString(),
           });
         } else if (docNorm > this.normalizeDate(today)) {
           errors.push({
             field: 'dateOfConstitution',
             code: 'maxDate',
-            message: 'Date of constitution cannot be in the future.',
+            message: dateConfig.constitutionMaxMessage,
             value: doc.toISOString(),
           });
         }
@@ -148,25 +257,25 @@ export class ElectedUrbanLocalBodiesValidator {
           errors.push({
             field: 'dateOfExpiry',
             code: 'minDate',
-            message: 'Date of expiry cannot be in the past.',
+            message: dateConfig.expiryMinMessage,
             value: doe.toISOString(),
           });
-        } else if (doeNorm > this.normalizeDate(DATE_OF_EXPIRY_MAX)) {
+        } else if (doeNorm > this.normalizeDate(dateConfig.expiryMax)) {
           errors.push({
             field: 'dateOfExpiry',
             code: 'maxDate',
-            message: 'Date of expiry cannot be after 31 March 2030.',
+            message: dateConfig.expiryMaxMessage,
             value: doe.toISOString(),
           });
         }
       }
     }
 
-    if (dto.remarks !== undefined && dto.remarks.trim().length > 250) {
+    if (dto.remarks !== undefined && dto.remarks.trim().length > dateConfig.remarksMaxLength) {
       errors.push({
         field: 'remarks',
         code: 'maxlength',
-        message: 'Remarks must not exceed 250 characters.',
+        message: dateConfig.remarksMaxLengthMessage,
         value: dto.remarks,
       });
     }
@@ -188,6 +297,7 @@ export class ElectedUrbanLocalBodiesValidator {
       remarks?: string | null;
     },
     today: Date,
+    dateConfig: EulbDateValidationConfig,
   ): EulbRowError[] {
     return this.validateCommonFields(
       {
@@ -199,6 +309,7 @@ export class ElectedUrbanLocalBodiesValidator {
         remarks: dto.remarks ?? undefined,
       },
       today,
+      dateConfig,
     );
   }
 
@@ -207,15 +318,16 @@ export class ElectedUrbanLocalBodiesValidator {
     row: ParsedExcelRow & { rowType: 'DB_ULB' | 'EXTRA_ULB' },
     dbUlb: DbUlbEntry | null,
     today: Date,
+    dateConfig: EulbDateValidationConfig,
   ): EulbRowError[] {
     if (row.rowType === 'DB_ULB' && dbUlb) {
-      return this.validateDbUlbRow(row, dbUlb, today);
+      return this.validateDbUlbRow(row, dbUlb, today, dateConfig);
     }
-    return this.validateExtraUlbRow(row, today);
+    return this.validateExtraUlbRow(row, today, dateConfig);
   }
 
   /** Shared validation rules for both DB_ULB and EXTRA_ULB rows. */
-  private validateCommonFields(row: ParsedExcelRow, today: Date): EulbRowError[] {
+  private validateCommonFields(row: ParsedExcelRow, today: Date, dateConfig: EulbDateValidationConfig): EulbRowError[] {
     const errors: EulbRowError[] = [];
 
     // electedBodyStatus required and enum — invalid value is persisted; validation error carries the raw value
@@ -234,7 +346,7 @@ export class ElectedUrbanLocalBodiesValidator {
     const isConstituted = row.electedBodyStatus?.trim() === 'Constituted';
 
     if (isConstituted) {
-      // dateOfConstitution required, valid date, min=2021-05-31, max=today
+      // dateOfConstitution required, valid date, min from config, max=today
       if (!row.dateOfConstitution) {
         errors.push({ field: 'dateOfConstitution', code: 'required', message: 'Date of constitution is required.' });
       } else {
@@ -249,25 +361,25 @@ export class ElectedUrbanLocalBodiesValidator {
           });
         } else {
           const docNorm = this.normalizeDate(doc);
-          if (docNorm < this.normalizeDate(DATE_OF_CONSTITUTION_MIN)) {
+          if (docNorm < this.normalizeDate(dateConfig.constitutionMin)) {
             errors.push({
               field: 'dateOfConstitution',
               code: 'minDate',
-              message: 'Date of constitution cannot be before 31 May 2021.',
+              message: dateConfig.constitutionMinMessage,
               value: doc.toISOString(),
             });
           } else if (docNorm > this.normalizeDate(today)) {
             errors.push({
               field: 'dateOfConstitution',
               code: 'maxDate',
-              message: 'Date of constitution cannot be in the future.',
+              message: dateConfig.constitutionMaxMessage,
               value: doc.toISOString(),
             });
           }
         }
       }
 
-      // dateOfExpiry required, valid date, min=today, max=2030-03-31
+      // dateOfExpiry required, valid date, min=today, max from config
       if (!row.dateOfExpiry) {
         errors.push({ field: 'dateOfExpiry', code: 'required', message: 'Date of expiry is required.' });
       } else {
@@ -285,14 +397,14 @@ export class ElectedUrbanLocalBodiesValidator {
             errors.push({
               field: 'dateOfExpiry',
               code: 'minDate',
-              message: 'Date of expiry cannot be in the past.',
+              message: dateConfig.expiryMinMessage,
               value: doe.toISOString(),
             });
-          } else if (doeNorm > this.normalizeDate(DATE_OF_EXPIRY_MAX)) {
+          } else if (doeNorm > this.normalizeDate(dateConfig.expiryMax)) {
             errors.push({
               field: 'dateOfExpiry',
               code: 'maxDate',
-              message: 'Date of expiry cannot be after 31 March 2030.',
+              message: dateConfig.expiryMaxMessage,
               value: doe.toISOString(),
             });
           }
@@ -300,14 +412,14 @@ export class ElectedUrbanLocalBodiesValidator {
       }
     }
 
-    // remarks optional, max 250 chars if provided
+    // remarks optional, max length from config
     if (row.remarks && row.remarks.trim() !== '') {
       const len = row.remarks.trim().length;
-      if (len > 250) {
+      if (len > dateConfig.remarksMaxLength) {
         errors.push({
           field: 'remarks',
           code: 'maxlength',
-          message: 'Remarks must not exceed 250 characters.',
+          message: dateConfig.remarksMaxLengthMessage,
           value: row.remarks,
         });
       }

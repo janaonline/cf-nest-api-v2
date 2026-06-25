@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, InternalServerErrorException, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { ConfigService } from '@nestjs/config';
 import { Buffer } from 'exceljs';
@@ -6,6 +6,8 @@ import ms, { type StringValue } from 'ms';
 import { Model, Types } from 'mongoose';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { ExcelColumnValidation, ExcelService, RowHeader } from 'src/services/excel/excel.service';
+import { EulbFormJsonConfigService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/form-json/elected-urban-local-bodies-form-json.service';
+import { getFieldsByType } from 'src/module/xvi-fc/state/elected-urban-local-bodies/helpers/elected-urban-local-bodies-form-json.helpers';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
@@ -15,47 +17,46 @@ import {
   assertCanStateFinalSubmitForm,
   canStateEditForm,
   canStateFinalSubmitForm,
-} from '../../common/utils/xvi-fc-form-status-access.util';
+} from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
 import { toObjectIdString } from 'src/users/user-scope.helpers';
-import { DynamicFormValidationService } from '../../common/dynamic-form-validation/dynamic-form-validation.service';
-import { XvifcFormActorsService } from '../../common/services/xvifc-form-actors.service';
-import { FileUrlNormalizerService } from '../../common/services/file-url-normalizer.service';
-import type { FormData } from '../../common/dynamic-form-validation/dynamic-form-validation.types';
+import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
+import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
+import { FileUrlNormalizerService } from 'src/module/xvi-fc/common/services/file-url-normalizer.service';
+import type { FormData } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.types';
 import type {
+  FieldConfig,
   FieldSupportingContent,
   FormFieldOption,
   HydratedFieldConfig,
   UploadedFileValue,
-} from '../../common/types/field-config.type';
-import type { XviFcApiResponse } from '../../common/response/xvi-fc-api-response';
+} from 'src/module/xvi-fc/common/types/field-config.type';
+import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import {
   throwXviFcValidationError,
   throwXviFcValidationErrorWithData,
   xviFcSuccess,
-} from '../../common/response/xvi-fc-response.util';
+} from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
 import {
   EULB_FORM_TYPE,
   ElectedUrbanLocalBodiesForm,
   EulbFormDocument,
   EulbValidationStatus,
-} from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
+} from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
 import {
   ElectedUrbanLocalBodiesRow,
   EulbRowDocument,
-} from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
-import { Ulb, UlbDocument } from '../../../../schemas/ulb.schema';
+} from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
+import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import {
   EULB_ACTION_DOWNLOAD_ERROR_SHEET,
   EULB_ACTION_DOWNLOAD_TEMPLATE,
   EULB_ACTION_REVALIDATE_EXCEL,
   EULB_ACTION_VIEW_UPLOADED_DATA,
   EULB_FORM_NAME,
-  EULB_ROW_EDIT_FIELDS,
   TEMPLATE_HEADERS,
-  TEMP_QUESTIONS,
-} from './constants/elected-urban-local-bodies.constants';
-import type { SaveElectedUrbanLocalBodiesDraftDto } from './dto/save-elected-urban-local-bodies-draft.dto';
-import type { FinalSubmitElectedUrbanLocalBodiesDto } from './dto/final-submit-elected-urban-local-bodies.dto';
+} from 'src/module/xvi-fc/state/elected-urban-local-bodies/constants/elected-urban-local-bodies.constants';
+import type { SaveElectedUrbanLocalBodiesDraftDto } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/save-elected-urban-local-bodies-draft.dto';
+import type { FinalSubmitElectedUrbanLocalBodiesDto } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/final-submit-elected-urban-local-bodies.dto';
 import type {
   EulbFormGetResponseData,
   EulbFormLeanDoc,
@@ -64,7 +65,7 @@ import type {
   EulbDumpRow,
   EulbDumpRowRecord,
   EulbValidationSummary,
-} from './elected-urban-local-bodies.types';
+} from 'src/module/xvi-fc/state/elected-urban-local-bodies/types/elected-urban-local-bodies.types';
 
 /** Converts a date validator value ('2021-05-31' or 'TODAY') to an Excel formula expression. */
 function toExcelDateExpr(dateVal: string): string {
@@ -138,16 +139,22 @@ export class ElectedUrbanLocalBodiesService {
     private readonly fileTokenService: FileTokenService,
     private readonly config: ConfigService,
     private readonly fileUrlNormalizer: FileUrlNormalizerService,
+    private readonly eulbFormJsonConfig: EulbFormJsonConfigService,
   ) {}
 
   /**
    * Returns the Elected Urban Local Bodies question config for frontend rendering.
-   * Reads directly from TEMP_QUESTIONS — no DB call required.
+   * Loads EULB_MAIN_FORM_FIELDS from the DB-backed form config (Redis-cached).
    * The electedBodyExcelFile question receives default (no-form) supporting actions.
    */
-  getQuestions(): XviFcApiResponse<HydratedFieldConfig[]> {
+  async getQuestions(): Promise<XviFcApiResponse<HydratedFieldConfig[]>> {
+    const fields = await this.eulbFormJsonConfig.loadFields();
+    const mainFormFields = getFieldsByType(fields, 'EULB_MAIN_FORM_FIELDS');
+    if (mainFormFields.length === 0) {
+      throw new InternalServerErrorException('EULB_MAIN_FORM_FIELDS group is empty in form configuration.');
+    }
     const noPermissions: EulbFormPermissions = { canView: false, canEdit: false, canFinalSubmit: false };
-    const questions = TEMP_QUESTIONS.map((q) => {
+    const questions = mainFormFields.map((q) => {
       if (q.key === 'electedBodyExcelFile') {
         return { ...q, supportingContent: this.buildElectedBodyFileSupportingContent(null, noPermissions) };
       }
@@ -167,6 +174,17 @@ export class ElectedUrbanLocalBodiesService {
    */
   async getForm(stateId: string, yearId: string, user: AuthUser): Promise<XviFcApiResponse<EulbFormGetResponseData>> {
     this.assertStateAccess(user, stateId);
+
+    const fields = await this.eulbFormJsonConfig.loadFields(yearId);
+    const mainFormFields = getFieldsByType(fields, 'EULB_MAIN_FORM_FIELDS');
+    const rowEditFields = getFieldsByType(fields, 'EULB_ROW_EDIT_FIELDS');
+    const extraUlbEditFields = getFieldsByType(fields, 'EULB_EXTRA_ULB_PORTAL_FIELDS');
+    if (mainFormFields.length === 0) {
+      throw new InternalServerErrorException('EULB_MAIN_FORM_FIELDS group is empty in form configuration.');
+    }
+    if (rowEditFields.length === 0) {
+      throw new InternalServerErrorException('EULB_ROW_EDIT_FIELDS group is empty in form configuration.');
+    }
 
     const doc = await this.model
       .findOne({
@@ -195,7 +213,7 @@ export class ElectedUrbanLocalBodiesService {
     }
 
     const permissions = this.buildFormPermissions(user, stateId, currentFormStatus);
-    const questions = this.hydrateQuestions(savedData, jwtExpiresMs, doc, permissions);
+    const questions = this.hydrateQuestions(mainFormFields, savedData, jwtExpiresMs, doc, permissions);
     const { actors, stateName } = this.xvifcFormActorsService.buildActorsAndStateName(doc);
     const validationSummary = this.buildValidationSummary(doc);
 
@@ -208,7 +226,8 @@ export class ElectedUrbanLocalBodiesService {
       currentFormStatus,
       currentFormStatusLabel: getFormStatusLabel(currentFormStatus),
       questions,
-      rowEditFields: EULB_ROW_EDIT_FIELDS,
+      rowEditFields,
+      extraUlbEditFields,
       permissions,
       actors,
       validationSummary,
@@ -233,6 +252,12 @@ export class ElectedUrbanLocalBodiesService {
    */
   async getTemplate(stateId: string, yearId: string, user: AuthUser): Promise<Buffer> {
     this.assertStateAccess(user, stateId);
+
+    const fields = await this.eulbFormJsonConfig.loadFields(yearId);
+    const rowEditFields = getFieldsByType(fields, 'EULB_ROW_EDIT_FIELDS');
+    if (rowEditFields.length === 0) {
+      throw new InternalServerErrorException('EULB_ROW_EDIT_FIELDS group is empty in form configuration.');
+    }
 
     const formDoc = await this.model
       .findOne({
@@ -304,7 +329,7 @@ export class ElectedUrbanLocalBodiesService {
       ...Array.from({ length: Math.max(0, maxAllowedExcelRows - rows.length) }, () => ({ ...blankRow })),
     ];
 
-    const validations = this.buildTemplateValidations(maxAllowedExcelRows);
+    const validations = this.buildTemplateValidations(rowEditFields, maxAllowedExcelRows);
     return this.excelService.generateExcel(
       TEMPLATE_HEADERS as RowHeader[],
       templateRows,
@@ -386,6 +411,12 @@ export class ElectedUrbanLocalBodiesService {
   ): Promise<XviFcApiResponse> {
     this.assertStateAccess(user, dto.stateId);
 
+    const fields = await this.eulbFormJsonConfig.loadFields(dto.yearId);
+    const mainFormFields = getFieldsByType(fields, 'EULB_MAIN_FORM_FIELDS');
+    if (mainFormFields.length === 0) {
+      throw new InternalServerErrorException('EULB_MAIN_FORM_FIELDS group is empty in form configuration.');
+    }
+
     const rawExcelFile = dto.data.electedBodyExcelFile;
     const normalizedExcelFile = rawExcelFile?.fileUrl
       ? { ...rawExcelFile, fileUrl: this.fileUrlNormalizer.toRawStoragePath(rawExcelFile.fileUrl) }
@@ -397,7 +428,7 @@ export class ElectedUrbanLocalBodiesService {
       checkboxConfirmation: dto.data.checkboxConfirmation,
     };
 
-    const result = this.validator.validateDraftAndBuildPayload(TEMP_QUESTIONS, formData);
+    const result = this.validator.validateDraftAndBuildPayload(mainFormFields, formData);
     if (!result.isValid) throwXviFcValidationError(result.errors);
 
     const stateOid = new Types.ObjectId(dto.stateId);
@@ -478,6 +509,12 @@ export class ElectedUrbanLocalBodiesService {
   ): Promise<XviFcApiResponse> {
     this.assertStateAccess(user, dto.stateId);
 
+    const fields = await this.eulbFormJsonConfig.loadFields(dto.yearId);
+    const mainFormFields = getFieldsByType(fields, 'EULB_MAIN_FORM_FIELDS');
+    if (mainFormFields.length === 0) {
+      throw new InternalServerErrorException('EULB_MAIN_FORM_FIELDS group is empty in form configuration.');
+    }
+
     const stateOid = new Types.ObjectId(dto.stateId);
     const yearOid = new Types.ObjectId(dto.yearId);
     const userOid = new Types.ObjectId(user._id);
@@ -514,7 +551,7 @@ export class ElectedUrbanLocalBodiesService {
       electedBodyExcelFile: normalizedExcelFile,
       checkboxConfirmation: dto.data.checkboxConfirmation,
     };
-    const validation = this.validator.validateFinalSubmitAndBuildPayload(TEMP_QUESTIONS, formData);
+    const validation = this.validator.validateFinalSubmitAndBuildPayload(mainFormFields, formData);
     if (!validation.isValid) throwXviFcValidationError(validation.errors);
 
     // Excel/row validation checks
@@ -684,12 +721,13 @@ export class ElectedUrbanLocalBodiesService {
    * @param doc          - Lean form document used to compute supporting action/badge visibility.
    */
   private hydrateQuestions(
+    questions: FieldConfig[],
     savedData: FormData,
     jwtExpiresMs: number,
     doc: EulbFormLeanDoc | null,
     permissions: EulbFormPermissions,
   ): HydratedFieldConfig[] {
-    return TEMP_QUESTIONS.map((question) => {
+    return questions.map((question) => {
       const rawValue = Object.prototype.hasOwnProperty.call(savedData, question.key)
         ? savedData[question.key]
         : question.value;
@@ -859,13 +897,13 @@ export class ElectedUrbanLocalBodiesService {
    * Builds ExcelJS data validations for the EULB template, derived entirely from EULB_ROW_EDIT_FIELDS.
    * Returns an empty array when rowCount is 0 so generateExcel skips validation application.
    */
-  private buildTemplateValidations(rowCount: number): ExcelColumnValidation[] {
+  private buildTemplateValidations(rowEditFields: FieldConfig[], rowCount: number): ExcelColumnValidation[] {
     if (rowCount === 0) return [];
 
-    const statusField = EULB_ROW_EDIT_FIELDS.find((f) => f.key === 'electedBodyStatus')!;
-    const constitutionField = EULB_ROW_EDIT_FIELDS.find((f) => f.key === 'dateOfConstitution')!;
-    const expiryField = EULB_ROW_EDIT_FIELDS.find((f) => f.key === 'dateOfExpiry')!;
-    const remarksField = EULB_ROW_EDIT_FIELDS.find((f) => f.key === 'remarks')!;
+    const statusField = rowEditFields.find((f) => f.key === 'electedBodyStatus')!;
+    const constitutionField = rowEditFields.find((f) => f.key === 'dateOfConstitution')!;
+    const expiryField = rowEditFields.find((f) => f.key === 'dateOfExpiry')!;
+    const remarksField = rowEditFields.find((f) => f.key === 'remarks')!;
 
     const statusOptions = (statusField.options as FormFieldOption[]).map((o) => o.id).join(',');
 

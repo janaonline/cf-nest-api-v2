@@ -6,22 +6,24 @@ import {
   EulbPostSubmissionUpdateService,
   buildEligibleRowCondition,
   buildPostSubmissionEligibleRowsFilter,
-} from './elected-urban-local-bodies-post-submission-update.service';
-import { ElectedUrbanLocalBodiesValidator } from './elected-urban-local-bodies.validator';
-import { ElectedUrbanLocalBodiesForm } from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
-import { ElectedUrbanLocalBodiesRow } from '../../../../schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
+} from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/post-submission-update/elected-urban-local-bodies-post-submission-update.service';
+import { ElectedUrbanLocalBodiesValidator } from 'src/module/xvi-fc/state/elected-urban-local-bodies/validators/elected-urban-local-bodies.validator';
+import { EulbFormJsonConfigService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/form-json/elected-urban-local-bodies-form-json.service';
+import type { EulbTypedFieldConfig } from 'src/module/xvi-fc/state/elected-urban-local-bodies/helpers/elected-urban-local-bodies-form-json.helpers';
+import { ElectedUrbanLocalBodiesForm } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
+import { ElectedUrbanLocalBodiesRow } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import {
   POST_SUBMISSION_UPDATE_ALLOWED_STATUSES,
   canViewPostSubmissionUpdate,
-} from '../../common/utils/xvi-fc-form-status-access.util';
+} from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
 import type {
   EulbPostSubmissionUpdateDocumentDto,
   SubmitEulbPostSubmissionUpdateDto,
   SubmitEulbPostSubmissionUpdateRowDto,
-} from './dto/submit-eulb-post-submission-update.dto';
+} from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/submit-eulb-post-submission-update.dto';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -281,6 +283,40 @@ describe('buildPostSubmissionEligibleRowsFilter', () => {
   });
 });
 
+const mockPostSubmitTypedFields: EulbTypedFieldConfig[] = [
+  {
+    key: 'dateOfConstitution',
+    label: 'Date of Constitution',
+    formFieldType: 'date',
+    fieldTypes: ['EULB_ROW_EDIT_FIELDS', 'EULB_POST_SUBMIT_UPDATE_FIELDS'],
+    validations: [
+      { name: 'minDate', validator: '2021-05-31', message: 'Date of Constitution cannot be before 31 May 2021.' },
+      { name: 'maxDate', validator: 'TODAY', message: 'Date of Constitution cannot be a future date.' },
+    ],
+  },
+  {
+    key: 'dateOfExpiry',
+    label: 'Date of Expiry',
+    formFieldType: 'date',
+    fieldTypes: ['EULB_ROW_EDIT_FIELDS', 'EULB_POST_SUBMIT_UPDATE_FIELDS'],
+    validations: [
+      { name: 'minDate', validator: 'TODAY', message: 'Date of Expiry cannot be before today.' },
+      { name: 'maxDate', validator: '2030-03-31', message: 'Date of Expiry cannot be after 31 March 2030.' },
+    ],
+  },
+  {
+    key: 'remarks',
+    label: 'Remarks',
+    formFieldType: 'text',
+    fieldTypes: ['EULB_ROW_EDIT_FIELDS', 'EULB_POST_SUBMIT_UPDATE_FIELDS'],
+    validations: [{ name: 'maxlength', validator: 250, message: 'Remarks must not exceed 250 characters.' }],
+  },
+];
+
+const mockEulbFormJsonConfigService = {
+  loadFields: jest.fn().mockResolvedValue(mockPostSubmitTypedFields),
+};
+
 function makeFormSummary(overrides: Record<string, unknown> = {}) {
   return {
     _id: formOid,
@@ -320,6 +356,7 @@ describe('EulbPostSubmissionUpdateService', () => {
       find: jest.fn().mockReturnValue(q([])),
       countDocuments: jest.fn().mockReturnValue(q(0)),
       findByIdAndUpdate: jest.fn().mockReturnValue(q(null)),
+      aggregate: jest.fn().mockReturnValue(q([])), // default: empty summary (all counts 0)
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -328,6 +365,7 @@ describe('EulbPostSubmissionUpdateService', () => {
         ElectedUrbanLocalBodiesValidator,
         { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: formModel },
         { provide: getModelToken(ElectedUrbanLocalBodiesRow.name), useValue: rowModel },
+        { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
       ],
     }).compile();
 
@@ -724,6 +762,158 @@ describe('EulbPostSubmissionUpdateService', () => {
       expect(result.data!.rows[0].errors).toEqual([
         { field: 'dateOfExpiry', code: 'required', message: 'Date of Expiry is required.' },
       ]);
+    });
+
+    // ─── statusSummary ────────────────────────────────────────────────────────
+
+    describe('statusSummary', () => {
+      function installSummaryGroups(groups: Array<{ _id: string | null; count: number }>): void {
+        rowModel['aggregate'] = jest.fn().mockReturnValue(q(groups));
+      }
+
+      it('response includes statusSummary with the four expected keys', async () => {
+        const result = await service.getEligibleRows(stateOid.toString(), yearOid.toString(), {}, adminUser);
+        expect(result.data!.statusSummary).toMatchObject({
+          totalUlbCount: expect.any(Number),
+          constitutedCount: expect.any(Number),
+          notConstitutedCount: expect.any(Number),
+          exemptCount: expect.any(Number),
+        });
+      });
+
+      it('totalUlbCount is the sum of all group counts including unknown statuses', async () => {
+        installSummaryGroups([
+          { _id: 'Constituted', count: 50 },
+          { _id: 'Not Constituted', count: 60 },
+          { _id: 'Exempt', count: 13 },
+          { _id: null, count: 3 }, // unknown/null status rows
+        ]);
+
+        const result = await service.getEligibleRows(stateOid.toString(), yearOid.toString(), {}, adminUser);
+        expect(result.data!.statusSummary.totalUlbCount).toBe(126); // 50+60+13+3
+      });
+
+      it('constitutedCount counts only electedBodyStatus === Constituted', async () => {
+        installSummaryGroups([
+          { _id: 'Constituted', count: 117 },
+          { _id: 'Not Constituted', count: 4 },
+          { _id: 'Exempt', count: 2 },
+        ]);
+
+        const result = await service.getEligibleRows(stateOid.toString(), yearOid.toString(), {}, adminUser);
+        expect(result.data!.statusSummary.constitutedCount).toBe(117);
+      });
+
+      it('notConstitutedCount counts only electedBodyStatus === Not Constituted', async () => {
+        installSummaryGroups([
+          { _id: 'Constituted', count: 117 },
+          { _id: 'Not Constituted', count: 4 },
+          { _id: 'Exempt', count: 2 },
+        ]);
+
+        const result = await service.getEligibleRows(stateOid.toString(), yearOid.toString(), {}, adminUser);
+        expect(result.data!.statusSummary.notConstitutedCount).toBe(4);
+      });
+
+      it('exemptCount counts only electedBodyStatus === Exempt', async () => {
+        installSummaryGroups([
+          { _id: 'Constituted', count: 117 },
+          { _id: 'Not Constituted', count: 4 },
+          { _id: 'Exempt', count: 2 },
+        ]);
+
+        const result = await service.getEligibleRows(stateOid.toString(), yearOid.toString(), {}, adminUser);
+        expect(result.data!.statusSummary.exemptCount).toBe(2);
+      });
+
+      it('aggregate match uses isActive:true and the active datasetVersion so inactive and stale-version rows are excluded', async () => {
+        installSummaryGroups([{ _id: 'Constituted', count: 5 }]);
+
+        await service.getEligibleRows(stateOid.toString(), yearOid.toString(), {}, adminUser);
+
+        const pipeline = (rowModel['aggregate'] as jest.Mock).mock.calls[0][0] as Array<Record<string, unknown>>;
+        const matchStage = pipeline[0]['$match'] as Record<string, unknown>;
+        expect(matchStage).toMatchObject({ isActive: true, datasetVersion: 1 });
+      });
+
+      it('aggregate is NOT called with search, electedBodyStatus, validationStatus, or eligibility conditions', async () => {
+        installSummaryGroups([
+          { _id: 'Constituted', count: 50 },
+          { _id: 'Not Constituted', count: 60 },
+          { _id: 'Exempt', count: 13 },
+        ]);
+
+        await service.getEligibleRows(
+          stateOid.toString(),
+          yearOid.toString(),
+          { search: 'Alpha', electedBodyStatus: 'Constituted', validationStatus: 'VALID', page: 2, limit: 5 },
+          adminUser,
+        );
+
+        const pipeline = (rowModel['aggregate'] as jest.Mock).mock.calls[0][0] as Array<Record<string, unknown>>;
+        const matchStage = pipeline[0]['$match'] as Record<string, unknown>;
+        expect(matchStage).not.toHaveProperty('$and');
+        expect(matchStage).not.toHaveProperty('$or');
+        expect(matchStage).not.toHaveProperty('validationStatus');
+        expect(matchStage).not.toHaveProperty('electedBodyStatus');
+      });
+
+      it('statusSummary counts reflect the full dataset regardless of search/filter/pagination on rows', async () => {
+        installSummaryGroups([
+          { _id: 'Constituted', count: 50 },
+          { _id: 'Not Constituted', count: 60 },
+          { _id: 'Exempt', count: 13 },
+        ]);
+        rowModel['find'] = jest.fn().mockReturnValue(q([]));
+        rowModel['countDocuments'] = jest.fn().mockReturnValue(q(0)); // eligible rows = 0 after filter
+
+        const result = await service.getEligibleRows(
+          stateOid.toString(),
+          yearOid.toString(),
+          { electedBodyStatus: 'Exempt' }, // Exempt never shows in eligible rows
+          adminUser,
+        );
+
+        expect(result.data!.rows).toHaveLength(0);
+        expect(result.data!.total).toBe(0);
+        // Summary is still the full dataset
+        expect(result.data!.statusSummary).toEqual({
+          totalUlbCount: 123,
+          constitutedCount: 50,
+          notConstitutedCount: 60,
+          exemptCount: 13,
+        });
+      });
+
+      it('zero-row dataset returns all statusSummary counts as 0', async () => {
+        installSummaryGroups([]); // no active rows at all
+
+        const result = await service.getEligibleRows(stateOid.toString(), yearOid.toString(), {}, adminUser);
+        expect(result.data!.statusSummary).toEqual({
+          totalUlbCount: 0,
+          constitutedCount: 0,
+          notConstitutedCount: 0,
+          exemptCount: 0,
+        });
+      });
+
+      it('existing eligible rows response is unchanged by the addition of statusSummary', async () => {
+        const pastExpiry = new Date(TODAY);
+        pastExpiry.setDate(pastExpiry.getDate() - 1);
+        installFilteredRows([
+          makeRow({ rowNumber: 1, electedBodyStatus: 'Not Constituted' }),
+          makeRow({ rowNumber: 2, electedBodyStatus: 'Constituted', dateOfExpiry: pastExpiry }),
+          makeRow({ rowNumber: 3, electedBodyStatus: 'Exempt' }),
+        ]);
+
+        const result = await service.getEligibleRows(stateOid.toString(), yearOid.toString(), {}, adminUser);
+
+        expect(result.data!.rows.map((r) => r.rowNumber)).toEqual([1, 2]);
+        expect(result.data!.total).toBe(2);
+        expect(result.data!.page).toBe(1);
+        expect(result.data!.limit).toBe(50);
+        expect(result.data!.eligibleRule.allowedFormStatuses).toBeDefined();
+      });
     });
   });
 
