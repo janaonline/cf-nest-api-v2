@@ -9,6 +9,20 @@ const SPECIAL_CHARS = /[`^*?"&'@{},$=!#+<>]/;
 const WEB_EXECUTABLES = /\.(aspx|asp|css|swf|xhtml|rhtml|shtml|jsp|js|pl|php|cgi|zip|exe)$/i;
 const UPLOAD_EXPIRES_IN = 60 * 60 * 60; // 60 hours
 
+/**
+ * Guards against path-traversal and structurally invalid folder values.
+ * Does not enforce an xvi-fc-specific prefix because this endpoint is shared across modules.
+ * A per-module prefix whitelist can be added once all module upload paths are audited.
+ */
+function assertSafeFolderPath(folder: string): void {
+  if (folder.startsWith('/')) throw new BadRequestException('Folder path must not start with /');
+  if (folder.includes('..')) throw new BadRequestException('Folder path must not contain ..');
+  if (folder.includes('//')) throw new BadRequestException('Folder path must not contain //');
+  if (folder.split('/').some((segment) => segment === '')) {
+    throw new BadRequestException('Folder path must not contain empty segments');
+  }
+}
+
 @Injectable()
 export class S3UploadService {
   constructor(private readonly s3: S3Service) {}
@@ -30,6 +44,8 @@ export class S3UploadService {
         'aspx, asp, css, swf, xhtml, rhtml, shtml, jsp, js, pl, php, cgi, zip, exe file types not allowed',
       );
     }
+
+    if (item.folder) assertSafeFolderPath(item.folder);
 
     const fileAlias = `${nameWithoutExt}_${randomUUID()}${ext}`;
     const key = item.folder ? `${item.folder}/${fileAlias}` : fileAlias;

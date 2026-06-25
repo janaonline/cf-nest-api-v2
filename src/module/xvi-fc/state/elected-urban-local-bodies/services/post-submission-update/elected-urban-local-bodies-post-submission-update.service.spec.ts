@@ -44,7 +44,7 @@ function q<T>(value: T) {
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
 const stateOid = new Types.ObjectId();
-const yearOid = new Types.ObjectId();
+const yearOid = new Types.ObjectId('67d7d136d3d038946a5239e9'); // 2026-27
 const formOid = new Types.ObjectId();
 const userOid = new Types.ObjectId();
 

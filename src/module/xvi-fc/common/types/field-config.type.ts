@@ -119,6 +119,8 @@ export interface UploadedFileValue {
 export type FieldType = 'radio' | 'text' | 'file' | 'date' | 'checkbox' | 'textarea' | 'number' | 'select';
 
 export interface FieldConfig {
+  /** Centralized key used by the backend resolver to derive a runtime-contextual folderPath. */
+  folderPathKey?: string;
   formFieldType: FieldType;
   key: string;
   label: string;

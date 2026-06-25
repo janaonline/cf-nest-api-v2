@@ -50,7 +50,7 @@ function getRowStringValues(row: ExcelJS.Row): string[] {
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 
 const stateOid = new Types.ObjectId();
-const yearOid = new Types.ObjectId();
+const yearOid = new Types.ObjectId('67d7d136d3d038946a5239e9'); // 2026-27
 const formOid = new Types.ObjectId();
 const submittedByUser = { _id: new Types.ObjectId(), name: 'Submitter User' };
 const createdByUser = { _id: new Types.ObjectId(), name: 'Creator User' };
@@ -207,18 +207,14 @@ const MOCK_TYPED_ROW_EDIT_FIELDS: EulbTypedFieldConfig[] = [
     label: 'Census Code',
     formFieldType: 'text',
     fieldTypes: ['EULB_EXTRA_ULB_PORTAL_FIELDS'],
-    validations: [
-      { name: 'required', validator: null, message: 'Census Code is required.' },
-    ],
+    validations: [{ name: 'required', validator: null, message: 'Census Code is required.' }],
   },
   {
     key: 'ulbName',
     label: 'ULB Name',
     formFieldType: 'text',
     fieldTypes: ['EULB_EXTRA_ULB_PORTAL_FIELDS'],
-    validations: [
-      { name: 'required', validator: null, message: 'ULB Name is required.' },
-    ],
+    validations: [{ name: 'required', validator: null, message: 'ULB Name is required.' }],
   },
   {
     key: 'electedBodyStatus',
@@ -226,9 +222,7 @@ const MOCK_TYPED_ROW_EDIT_FIELDS: EulbTypedFieldConfig[] = [
     formFieldType: 'select',
     fieldTypes: ['EULB_ROW_EDIT_FIELDS'],
     options: ELECTED_BODY_STATUSES.map((s) => ({ id: s, label: s })) as FormFieldOption[],
-    validations: [
-      { name: 'required', validator: null, message: 'Elected Body Status is required.' },
-    ],
+    validations: [{ name: 'required', validator: null, message: 'Elected Body Status is required.' }],
   },
   {
     key: 'dateOfConstitution',
@@ -259,9 +253,7 @@ const MOCK_TYPED_ROW_EDIT_FIELDS: EulbTypedFieldConfig[] = [
     label: 'Remarks',
     formFieldType: 'text',
     fieldTypes: ['EULB_ROW_EDIT_FIELDS'],
-    validations: [
-      { name: 'maxlength', validator: 250, message: 'Remarks must not exceed 250 characters.' },
-    ],
+    validations: [{ name: 'maxlength', validator: 250, message: 'Remarks must not exceed 250 characters.' }],
   },
 ];
 

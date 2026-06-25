@@ -1120,6 +1120,7 @@ Safe replace order enforced in `validateExcel` (`POST validate-excel`):
 2. Insert new rows with `datasetVersion = activeDatasetVersion + 1` (new rows exist before form points to them).
 3. Update form document: set all summary fields and `activeDatasetVersion = newVersion`.
 4. Delete old rows (`datasetVersion = currentVersion`) only after steps 2 and 3 succeed.
+
 - If row insert or form update fails, the old active dataset remains untouched.
 - If old-row deletion fails, it is logged and silently skipped — old rows are invisible because the rows API queries by `activeDatasetVersion`.
 - Validation with row errors is still a successful replace: invalid rows are stored alongside their `errors[]`.
@@ -1253,3 +1254,57 @@ Safe replace order enforced in `validateExcel` (`POST validate-excel`):
 - `updateRow` (PATCH rows/:rowId) now calls `assertCanStateEditForm(formDoc.currentFormStatus)` before processing. Returns 403 when form status does not allow editing; controller-level `EDIT_STATE_FORMS` guard blocks view-only users.
 - All other mutating endpoints (`save-draft`, `validate-excel`, `revalidate-excel`, `delete-uploaded-excel`) already required `EDIT_STATE_FORMS` at controller level and `assertCanStateEditForm` in service — unchanged.
 - Read endpoints (`GET form`, `GET rows`, `GET error-sheet`) continue to require `VIEW_STATE_FORMS` — accessible to view-only users.
+
+---
+
+### Centralized XVI-FC Folder Path Resolver
+
+**Problem**: `folderPath` was stored as a static string in MongoDB `formjsons` (e.g. `xvi-fc/state/2026-27/sfc-status/sfc-report`). It did not include `stateId`, so all states uploaded to the same S3 prefix. Year label was hardcoded instead of derived at runtime.
+
+**Solution**: A centralized resolver in `src/module/xvi-fc/common/folder-paths/` resolves `folderPath` at the backend GET response boundary using runtime context (`role` + `_id` + `designYear`). The frontend continues to consume `folderPath` unchanged.
+
+**New files** (`src/module/xvi-fc/common/folder-paths/`):
+
+- `xvi-fc-folder-path.constants.ts` — `XVI_FC_FOLDER_PATH_KEYS` const object, `XviFcFolderPathKey` union type, `XVI_FC_FOLDER_PATH_MAP` (key → relative subpath)
+- `xvi-fc-folder-path.resolver.ts` — two pure functions:
+  - `buildXviFcFolderPath(key, context)` — builds `xvi-fc/{role}/{_id}/{designYear}/{subpath}`; appends `/{batchId}/document` for `EULB_POST_SUBMISSION_PROOF` when `batchId` is present; throws on empty `_id`/`designYear` or unknown key
+  - `resolveXviFcFolderPathsInFormJson<T extends FieldConfig>(fields, context)` — maps over a field array; for each `formFieldType === 'file'` field: resolves `folderPath` from `folderPathKey` if present, otherwise preserves existing static `folderPath`; returns a new array without mutating the input
+- `xvi-fc-folder-path.resolver.spec.ts` — 17 unit tests covering all keys, dynamic role/id paths, batchId variant, empty context guards, unknown key throw, mutation safety, backward-compat (static path preserved)
+
+**Key → subpath mapping**:
+
+| Key                          | Subpath                               |
+| ---------------------------- | ------------------------------------- |
+| `SFC_EXTENSION_ORDER`        | `sfc-status/extension-order`          |
+| `SFC_REPORT`                 | `sfc-status/sfc-report`               |
+| `SFC_ATR_REPORT`             | `sfc-status/atr-report`               |
+| `SFC_GAZETTE_NOTIFICATION`   | `sfc-status/gazette-notification`     |
+| `EULB_EXCEL`                 | `elected-body/elected-bodies-list`    |
+| `EULB_POST_SUBMISSION_PROOF` | `elected-body/post-submission-update` |
+
+**Modified files**:
+
+- `src/module/xvi-fc/common/types/field-config.type.ts` — added `folderPathKey?: string` to `FieldConfig`
+- `src/module/xvi-fc/state/sfc-status/sfc-status.service.ts` — `getForm()` derives `designYear` via `YearIdToLabel[yearId]`; throws `NotFoundException` for unknown yearId; `hydrateQuestions()` gains optional `folderPathContext`; resolves `folderPath` inside the existing `formFieldType === 'file'` branch (no second loop)
+- `src/module/xvi-fc/state/elected-urban-local-bodies/services/main/elected-urban-local-bodies.service.ts` — same pattern: `getForm()` derives `designYear`, `hydrateQuestions()` gains optional `folderPathContext`
+- `src/module/xvi-fc/state/elected-urban-local-bodies/services/post-submission-update/elected-urban-local-bodies-post-submission-update.service.ts` — `getMetadata()` derives `designYear` and calls `resolveXviFcFolderPathsInFormJson` on `EULB_POST_SUBMIT_UPDATE_FIELDS` questions before returning
+- `src/s3-upload/s3-upload.service.ts` — added `assertSafeFolderPath()` private function; blocks path traversal (`..`), leading `/`, double `//`, and empty segments; called before constructing S3 key; does not enforce xvi-fc prefix (shared endpoint — audit other module usages first)
+- `src/module/xvi-fc/xvifc-payload.json` — all 6 file fields migrated from static `folderPath` to `folderPathKey`
+
+**DB payload convention going forward**:
+
+```json
+{ "formFieldType": "file", "key": "sfcReport", "folderPathKey": "SFC_REPORT" }
+```
+
+Backend injects resolved `folderPath` at GET time. Old records with only a static `folderPath` continue to work (backward compatible — resolver preserves them).
+
+**Year label derivation**: `YearIdToLabel[yearId]` from `src/core/constants/years.ts`. Throws `NotFoundException` for unrecognised yearIds — all test specs updated to use `new Types.ObjectId('67d7d136d3d038946a5239e9')` (2026-27).
+
+**Runtime path format**: `xvi-fc/{role}/{_id}/{designYear}/{subpath}`
+
+Example: `xvi-fc/state/5dcf9d7416a06aed41c748f0/2026-27/sfc-status/sfc-report`
+
+**Resolution is single-pass**: folded into the existing `hydrateQuestions` file-field branch — no extra loop over the field array.
+
+**S3 upload security note**: Full xvi-fc prefix whitelisting (`xvi-fc/{role}/` only) is deferred — `POST /s3/signed-url` is shared across modules. Current validation covers path traversal only. Prefix enforcement can be added once all module upload paths are audited.
