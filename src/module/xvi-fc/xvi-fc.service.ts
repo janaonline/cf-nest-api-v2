@@ -95,21 +95,22 @@ export class XviFcService {
       return { message: `FormJson cache cleared for designYearId: ${opts.designYearId}, formId: ${opts.formId}` };
     }
 
-    const redisPattern = opts.pattern
-      ? `${XVIFC_CACHE_KEY_PREFIX}:${opts.pattern}`
-      : `${XVIFC_CACHE_KEY_PREFIX}:*`;
+    const redisPattern = opts.pattern ? `${XVIFC_CACHE_KEY_PREFIX}:${opts.pattern}` : `${XVIFC_CACHE_KEY_PREFIX}:*`;
     await this.cache.deleteByPattern(redisPattern);
     return { message: `Cache cleared for ${opts.pattern ? `pattern: ${opts.pattern}` : 'all XVI-FC cache'}` };
   }
 
-  private buildMenuTree(docs: XviFcSideMenu[]): SideMenuResponseDto {
+  private buildMenuTree(docs: Array<XviFcSideMenu & { _id: Types.ObjectId }>): SideMenuResponseDto {
     return {
       topModel: this.buildSection(docs, 'top'),
       bottomModel: this.buildSection(docs, 'bottom'),
     };
   }
 
-  private buildSection(docs: XviFcSideMenu[], section: 'top' | 'bottom'): SideMenuItemDto[] {
+  private buildSection(
+    docs: Array<XviFcSideMenu & { _id: Types.ObjectId }>,
+    section: 'top' | 'bottom',
+  ): SideMenuItemDto[] {
     const sectionDocs = docs.filter((d) => d.section === section);
     const topLevel = sectionDocs.filter((d) => !d.parentId).sort((a, b) => a.sequence - b.sequence);
     const children = sectionDocs.filter((d) => d.parentId);
@@ -126,7 +127,7 @@ export class XviFcService {
 
       if (doc.type === 'group') {
         item.items = children
-          .filter((c) => c.parentId.toString() === doc._id.toString())
+          .filter((c) => c.parentId!.toString() === doc._id.toString())
           .sort((a, b) => a.sequence - b.sequence)
           .map((c) => {
             const child: SideMenuItemDto = { label: c.label };
@@ -168,24 +169,22 @@ export class XviFcService {
   }
 
   async getFormStatus(ulbId: string, designYearId: string) {
-    const ulb        = new Types.ObjectId(ulbId);
+    const ulb = new Types.ObjectId(ulbId);
     const designYear = new Types.ObjectId(designYearId);
 
     const [annualAccount, disclosure] = await Promise.all([
       this.annualAccountModel
         .findOne({ ulb, design_year: designYear })
-        .select('auditedData.form_status auditedData.form_status_id unauditedData.form_status unauditedData.form_status_id')
+        .select(
+          'auditedData.form_status auditedData.form_status_id unauditedData.form_status unauditedData.form_status_id',
+        )
         .lean()
         .exec(),
-      this.disclosureModel
-        .findOne({ ulb, designYear })
-        .select('formStatus')
-        .lean()
-        .exec(),
+      this.disclosureModel.findOne({ ulb, designYear }).select('formStatus').lean().exec(),
     ]);
 
     const sectionStatus = (section: Record<string, unknown> | undefined | null) => ({
-      form_status:    (section?.['form_status']    ?? AnnualAccountFormStatus.NOT_STARTED) as AnnualAccountFormStatus,
+      form_status: (section?.['form_status'] ?? AnnualAccountFormStatus.NOT_STARTED) as AnnualAccountFormStatus,
       form_status_id: (section?.['form_status_id'] ?? FORM_STATUS_ID[AnnualAccountFormStatus.NOT_STARTED]) as number,
     });
 
@@ -193,10 +192,14 @@ export class XviFcService {
 
     return {
       annualAccountId: (annualAccount as Record<string, unknown> | null)?.['_id']?.toString() ?? null,
-      auditedData:     sectionStatus((annualAccount as Record<string, unknown> | null)?.['auditedData'] as Record<string, unknown>),
-      unauditedData:   sectionStatus((annualAccount as Record<string, unknown> | null)?.['unauditedData'] as Record<string, unknown>),
+      auditedData: sectionStatus(
+        (annualAccount as Record<string, unknown> | null)?.['auditedData'] as Record<string, unknown>,
+      ),
+      unauditedData: sectionStatus(
+        (annualAccount as Record<string, unknown> | null)?.['unauditedData'] as Record<string, unknown>,
+      ),
       unspentBalanceDisclosure: {
-        form_status:    isSubmitted ? 'SUBMITTED' : 'NOT_STARTED',
+        form_status: isSubmitted ? 'SUBMITTED' : 'NOT_STARTED',
         form_status_id: null,
       },
     };
@@ -226,11 +229,9 @@ export class XviFcService {
       return d;
     });
 
-    const formatLong = (d: Date) =>
-      `Thursday, ${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+    const formatLong = (d: Date) => `Thursday, ${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
 
-    const formatShort = (d: Date) =>
-      `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+    const formatShort = (d: Date) => `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
 
     const NEXT_DETAILS =
       'Open Q&A session for ULB teams. Bring your questions about audited financial statements, submissions, or validation errors.';

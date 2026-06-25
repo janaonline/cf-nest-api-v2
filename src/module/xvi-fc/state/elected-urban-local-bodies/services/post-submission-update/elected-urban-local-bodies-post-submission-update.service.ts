@@ -184,7 +184,7 @@ export class EulbPostSubmissionUpdateService {
     }
 
     const [rawRows, total, statusSummary] = await Promise.all([
-      this.rowModel.find(filter).sort({ rowNumber: 1 }).skip(skip).limit(limit).lean().exec(),
+      this.rowModel.find(filter).sort({ validationStatus: 1, rowNumber: 1 }).skip(skip).limit(limit).lean().exec(),
       this.rowModel.countDocuments(filter).exec(),
       this.getStatusSummary(formDoc._id, stateId, yearId, activeVersion),
     ]);

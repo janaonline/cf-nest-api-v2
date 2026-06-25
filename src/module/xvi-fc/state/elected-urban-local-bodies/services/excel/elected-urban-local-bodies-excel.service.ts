@@ -116,15 +116,19 @@ export class ElectedUrbanLocalBodiesExcelService {
     // 2. File metadata validation
     this.validateFileMetadata(normalizedFile);
 
-    // 3. Load active DB ULBs for state
-    const dbUlbs = (await this.ulbModel
-      .find({ state: stateOid, isActive: true })
-      .select('_id name censusCode sbCode')
-      .lean()
-      .exec()) as UlbLean[];
+    // 3. Load active DB ULBs + check for existing form in parallel (no mutual dependency)
+    const formFilter = { state: stateOid, year: yearOid, formType: EULB_FORM_TYPE };
+    const [dbUlbsRaw, existing] = await Promise.all([
+      this.ulbModel.find({ state: stateOid, isActive: true }).select('_id name censusCode sbCode').lean().exec(),
+      this.formModel.findOne(formFilter, { _id: 1, currentFormStatus: 1, activeDatasetVersion: 1 }).lean().exec(),
+    ]);
+    const dbUlbs = dbUlbsRaw as UlbLean[];
 
     const dbUlbCount = dbUlbs.length;
     const maxAllowedExcelRows = dbUlbCount * 2;
+    const currentVersion = existing?.activeDatasetVersion ?? 0;
+    const newVersion = currentVersion + 1;
+    const formId: Types.ObjectId = existing ? existing._id : new Types.ObjectId();
 
     // 4. Read and parse Excel from S3 (use normalized path)
     const buffer = await this.s3Service.getBuffer(normalizedFile.fileUrl);
@@ -235,32 +239,10 @@ export class ElectedUrbanLocalBodiesExcelService {
     // the active year+censusCode unique index is not violated at insertMany time.
     this.flagIntraBatchEulbCensusCodeDuplicates(processedRows);
 
-    // 10. Compute summary
-    const matchedDbUlbCount = matchedUlbCodes.size;
-    const missingDbUlbCount = dbUlbCount - matchedDbUlbCount;
-    const extraExcelRowCount = processedRows.filter((r) => r.rowType === 'EXTRA_ULB').length;
-    const errorRowCount = processedRows.filter((r) => r.validationRowStatus === 'INVALID').length;
-    const ulbCountMismatch = dto.ulbCount !== excelRowCount;
-
-    // Form-level validation status: INVALID if row errors, missing ULBs, or ulbCount mismatch
-    const formValidationStatus: EulbValidationStatus =
-      errorRowCount === 0 && missingDbUlbCount === 0 && !ulbCountMismatch ? 'VALID' : 'INVALID';
-
-    // 11. Safe replace: insert new rows → upsert form → delete old rows
-    const filter = { state: stateOid, year: yearOid, formType: EULB_FORM_TYPE };
-    const existing = await this.formModel
-      .findOne(filter, { _id: 1, currentFormStatus: 1, activeDatasetVersion: 1 })
-      .lean()
-      .exec();
-
-    const currentVersion = existing?.activeDatasetVersion ?? 0;
-    const newVersion = currentVersion + 1;
-    const formId: Types.ObjectId = existing ? existing._id : new Types.ObjectId();
-
-    // Step A: Insert new rows BEFORE updating form's activeDatasetVersion.
-    // censusCode/ulbName are normalized to '' so required-String schema fields never receive
-    // undefined/null. lean:true bypasses Mongoose document validation — rows are pre-validated
-    // at application level and may intentionally have blank identity fields (stored as INVALID).
+    // 9b. Build row documents for DB insert (formId and newVersion known since step 3).
+    // lean:true bypasses Mongoose document validation — rows are pre-validated at application
+    // level and may intentionally have blank identity fields (stored as INVALID).
+    // rawExcelData is only kept for INVALID rows where it may be needed for error display.
     const rowDocs = processedRows.map((r) => {
       const constituted = r.electedBodyStatus?.trim() === 'Constituted';
       return {
@@ -283,13 +265,25 @@ export class ElectedUrbanLocalBodiesExcelService {
         lastUpdatedSource: 'EXCEL' as const,
         validationStatus: r.validationRowStatus,
         errors: r.rowErrors,
-        rawExcelData: r.rawExcelData,
+        rawExcelData: r.validationRowStatus === 'INVALID' ? r.rawExcelData : undefined,
         createdBy: userOid,
         updatedBy: userOid,
         isActive: true,
       };
     });
 
+    // 10. Compute summary
+    const matchedDbUlbCount = matchedUlbCodes.size;
+    const missingDbUlbCount = dbUlbCount - matchedDbUlbCount;
+    const extraExcelRowCount = processedRows.filter((r) => r.rowType === 'EXTRA_ULB').length;
+    const errorRowCount = processedRows.filter((r) => r.validationRowStatus === 'INVALID').length;
+    const ulbCountMismatch = dto.ulbCount !== excelRowCount;
+
+    // Form-level validation status: INVALID if row errors, missing ULBs, or ulbCount mismatch
+    const formValidationStatus: EulbValidationStatus =
+      errorRowCount === 0 && missingDbUlbCount === 0 && !ulbCountMismatch ? 'VALID' : 'INVALID';
+
+    // 11. Safe replace: deactivate old rows → insert new rows → upsert form → delete old rows
     let previousRowsDeactivated = false;
     try {
       if (currentVersion > 0) {
@@ -299,7 +293,9 @@ export class ElectedUrbanLocalBodiesExcelService {
         previousRowsDeactivated = true;
       }
 
-      await this.rowModel.insertMany(rowDocs, { lean: true });
+      // Step A: ordered:false lets MongoDB parallelise BTree index updates internally.
+      // Safe because 9a already guarantees no duplicate censusCode values in rowDocs.
+      await this.rowModel.insertMany(rowDocs, { lean: true, ordered: false });
 
       // Step B: Upsert form with all summary fields, normalized file, and new activeDatasetVersion.
       const formSummaryFields = {
@@ -336,9 +332,9 @@ export class ElectedUrbanLocalBodiesExcelService {
         });
       }
 
-      // Step C: Hard-delete old rows only after new rows and form summary are saved.
+      // Step C: fire-and-forget — old rows already inactive, cleanup runs async
       if (currentVersion > 0) {
-        await this.deletePreviousDatasetRows(formId, currentVersion);
+        void this.deletePreviousDatasetRows(formId, currentVersion);
       }
     } catch (err: unknown) {
       if (previousRowsDeactivated) {
