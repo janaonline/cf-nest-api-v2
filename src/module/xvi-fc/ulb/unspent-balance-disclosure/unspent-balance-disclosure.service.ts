@@ -40,7 +40,6 @@ export class UnspentBalanceDisclosureService {
     const payload = {
       ulb:         ulbId,
       designYear,
-      mode:        dto.mode,
       fc14:        dto.fc14,
       fc15:        dto.fc15,
       formStatus:  'SUBMITTED',
@@ -82,7 +81,6 @@ export class UnspentBalanceDisclosureService {
     }
 
     const $set: Record<string, unknown> = {};
-    if (dto.mode !== undefined) $set['mode'] = dto.mode;
     if (dto.fc14 !== undefined) $set['fc14'] = dto.fc14;
     if (dto.fc15 !== undefined) $set['fc15'] = dto.fc15;
 
@@ -104,9 +102,11 @@ export class UnspentBalanceDisclosureService {
     }
 
     const allPaths = [
-      ...(disclosure.fc14?.documents ?? []),
-      ...(disclosure.fc15?.documents ?? []),
-    ].map((d) => d.filepath);
+      ...(disclosure.fc14?.manual?.bankAccounts ?? []),
+      ...(disclosure.fc15?.manual?.bankAccounts ?? []),
+    ]
+      .flatMap((acct) => acct.documents ?? [])
+      .map((d) => d.filepath);
 
     if (!allPaths.includes(filepath)) {
       throw new ForbiddenException('The requested file does not belong to this disclosure.');

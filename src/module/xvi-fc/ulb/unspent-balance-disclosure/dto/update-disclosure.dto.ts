@@ -1,47 +1,15 @@
 import { Type } from 'class-transformer';
-import {
-  ArrayMinSize,
-  IsArray,
-  IsIn,
-  IsNumber,
-  IsOptional,
-  IsString,
-  Matches,
-  ValidateNested,
-} from 'class-validator';
-import { DisclosureDocDto } from './submit-disclosure.dto';
-
-export class UpdateFcPeriodDto {
-  @IsNumber()
-  @IsOptional()
-  unspentBalance?: number;
-
-  @IsString()
-  @IsOptional()
-  @Matches(/^\d{9,18}$/, { message: 'Bank account number must contain 9–18 digits only.' })
-  bankAccountNumber?: string;
-
-  @IsArray()
-  @IsOptional()
-  @ArrayMinSize(1, { message: 'At least one supporting document is required.' })
-  @ValidateNested({ each: true })
-  @Type(() => DisclosureDocDto)
-  documents?: DisclosureDocDto[];
-}
+import { IsOptional, ValidateNested } from 'class-validator';
+import { FcPeriodDto } from './submit-disclosure.dto';
 
 export class UpdateDisclosureDto {
-  @IsString()
-  @IsIn(['manual', 'document-assisted'])
+  @ValidateNested()
+  @Type(() => FcPeriodDto)
   @IsOptional()
-  mode?: string;
+  fc14?: FcPeriodDto;
 
   @ValidateNested()
-  @Type(() => UpdateFcPeriodDto)
+  @Type(() => FcPeriodDto)
   @IsOptional()
-  fc14?: UpdateFcPeriodDto;
-
-  @ValidateNested()
-  @Type(() => UpdateFcPeriodDto)
-  @IsOptional()
-  fc15?: UpdateFcPeriodDto;
+  fc15?: FcPeriodDto;
 }
