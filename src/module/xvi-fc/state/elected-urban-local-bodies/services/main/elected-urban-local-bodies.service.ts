@@ -615,6 +615,17 @@ export class ElectedUrbanLocalBodiesService {
         { validationSummary: dbValidationSummary },
       );
     }
+    if (dto.data.ulbCount !== excelRowCount) {
+      throwXviFcValidationError({
+        ulbCount: [
+          {
+            field: 'ulbCount',
+            code: 'mismatch',
+            message: `ULB count entered (${dto.data.ulbCount}) does not match the number of ULBs/ rows in the Excel file (${excelRowCount}).`,
+          },
+        ],
+      });
+    }
     if (storedValidationStatus !== 'VALID') {
       throwXviFcValidationErrorWithData(
         {
@@ -671,17 +682,6 @@ export class ElectedUrbanLocalBodiesService {
         },
         { validationSummary: dbValidationSummary },
       );
-    }
-    if (dto.data.ulbCount !== excelRowCount) {
-      throwXviFcValidationError({
-        ulbCount: [
-          {
-            field: 'ulbCount',
-            code: 'mismatch',
-            message: `ULB count entered (${dto.data.ulbCount}) does not match the number of ULBs/ rows in the Excel file (${excelRowCount}).`,
-          },
-        ],
-      });
     }
 
     const toStatus = FORM_STATUS.UNDER_REVIEW_BY_MOHUA;
