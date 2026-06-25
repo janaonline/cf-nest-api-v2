@@ -5,10 +5,10 @@ import {
   IsInt,
   IsMongoId,
   IsNotEmpty,
-  IsNumber,
   IsOptional,
   IsString,
   Matches,
+  Max,
   Min,
   ValidateNested,
 } from 'class-validator';
@@ -42,7 +42,9 @@ export class BankAccountEntryDto {
   @Matches(/^\d{9,18}$/, { message: 'Account number must contain 9–18 digits only.' })
   accountNumber: string;
 
-  @IsNumber()
+  @IsInt({ message: 'Unspent balance must be a whole number.' })
+  @Min(-9_999_999_999, { message: 'Unspent balance cannot be less than −9,999,999,999.' })
+  @Max(9_999_999_999,  { message: 'Unspent balance cannot exceed 9,999,999,999.' })
   unspentBalance: number;
 
   @IsArray()
