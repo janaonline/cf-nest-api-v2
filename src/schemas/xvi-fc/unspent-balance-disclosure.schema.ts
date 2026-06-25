@@ -21,15 +21,29 @@ class DisclosureDoc {
 const DisclosureDocSchema = SchemaFactory.createForClass(DisclosureDoc);
 
 @Schema({ _id: false, versionKey: false })
-class FcPeriodData {
+class BankAccountEntry {
+  @Prop({ required: true })
+  accountNumber: string;
+
   @Prop({ required: true, type: Number })
   unspentBalance: number;
 
-  @Prop({ required: true })
-  bankAccountNumber: string;
-
   @Prop({ type: [DisclosureDocSchema], default: [] })
   documents: DisclosureDoc[];
+}
+const BankAccountEntrySchema = SchemaFactory.createForClass(BankAccountEntry);
+
+@Schema({ _id: false, versionKey: false })
+class FcPeriodManual {
+  @Prop({ type: [BankAccountEntrySchema], default: [] })
+  bankAccounts: BankAccountEntry[];
+}
+const FcPeriodManualSchema = SchemaFactory.createForClass(FcPeriodManual);
+
+@Schema({ _id: false, versionKey: false })
+class FcPeriodData {
+  @Prop({ type: FcPeriodManualSchema, required: true })
+  manual: FcPeriodManual;
 }
 const FcPeriodDataSchema = SchemaFactory.createForClass(FcPeriodData);
 
@@ -42,9 +56,6 @@ export class XviFcUnspentBalanceDisclosure {
 
   @Prop({ type: Types.ObjectId, ref: 'Year', required: true })
   designYear: Types.ObjectId;
-
-  @Prop({ required: true, enum: ['manual', 'document-assisted'] })
-  mode: string;
 
   @Prop({ type: FcPeriodDataSchema, required: true })
   fc14: FcPeriodData;
