@@ -2,7 +2,6 @@ import { Type } from 'class-transformer';
 import {
   ArrayMinSize,
   IsArray,
-  IsIn,
   IsInt,
   IsMongoId,
   IsNotEmpty,
@@ -38,28 +37,38 @@ export class DisclosureDocDto {
   pages?: number;
 }
 
-export class FcPeriodDto {
+export class BankAccountEntryDto {
+  @IsString()
+  @Matches(/^\d{9,18}$/, { message: 'Account number must contain 9–18 digits only.' })
+  accountNumber: string;
+
   @IsNumber()
   unspentBalance: number;
 
-  @IsString()
-  @Matches(/^\d{9,18}$/, { message: 'Bank account number must contain 9–18 digits only.' })
-  bankAccountNumber: string;
-
   @IsArray()
-  @ArrayMinSize(1, { message: 'At least one supporting document is required.' })
+  @ArrayMinSize(1, { message: 'At least one supporting document is required per account.' })
   @ValidateNested({ each: true })
   @Type(() => DisclosureDocDto)
   documents: DisclosureDocDto[];
 }
 
+export class FcPeriodManualDto {
+  @IsArray()
+  @ArrayMinSize(1, { message: 'At least one bank account entry is required.' })
+  @ValidateNested({ each: true })
+  @Type(() => BankAccountEntryDto)
+  bankAccounts: BankAccountEntryDto[];
+}
+
+export class FcPeriodDto {
+  @ValidateNested()
+  @Type(() => FcPeriodManualDto)
+  manual: FcPeriodManualDto;
+}
+
 export class SubmitDisclosureDto {
   @IsMongoId()
   designYearId: string;
-
-  @IsString()
-  @IsIn(['manual', 'document-assisted'])
-  mode: string;
 
   @ValidateNested()
   @Type(() => FcPeriodDto)
