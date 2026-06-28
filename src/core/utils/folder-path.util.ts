@@ -1,8 +1,3 @@
-export interface ModuleFolderPathContext {
-  stateId: string;
-  designYear: string;
-}
-
 interface FormFieldWithPath {
   formFieldType: string;
   folderPathKey?: string;
@@ -10,28 +5,27 @@ interface FormFieldWithPath {
 }
 
 /**
- * Builds an S3 folder path for any module using the pattern:
- *   {basePrefix}/{stateId}/{designYear}/{subPath}
+ * Assembles a module S3 folder path from a DB-stored subpath.
+ * Format: {basePrefix}/{entityId}/{designYear}/{subPath}
  *
- * Each module owns its key map and base prefix; this utility handles
- * validated path assembly so the pattern is not re-implemented per module.
+ * subPath comes directly from the DB folderPathKey field (e.g. "sfc-status/sfc-report"),
+ * making path changes a DB-only update without a code deploy.
  */
-export function buildModuleFolderPath<K extends string>(
-  key: K,
-  pathMap: Record<K, string>,
+export function buildModuleFolderPath(
+  subPath: string,
   basePrefix: string,
-  context: ModuleFolderPathContext,
+  entityId: string,
+  designYear: string,
 ): string {
-  if (!context.stateId) throw new Error('stateId is required to build folder path');
-  if (!context.designYear) throw new Error('designYear is required to build folder path');
-  const subPath = pathMap[key];
-  if (subPath === undefined) throw new Error(`Unknown folder path key: "${key}"`);
-  return `${basePrefix}/${context.stateId}/${context.designYear}/${subPath}`;
+  if (!entityId) throw new Error('entityId is required to build folder path');
+  if (!designYear) throw new Error('designYear is required to build folder path');
+  if (!subPath) throw new Error('subPath is required to build folder path');
+  return `${basePrefix}/${entityId}/${designYear}/${subPath}`;
 }
 
 /**
  * Resolves folderPath for every file field that carries a folderPathKey.
- * The caller provides a buildFn closure that binds module-specific context.
+ * Caller provides a buildFn closure that binds module prefix + context.
  *
  * - File fields with folderPathKey  → folderPath set/overridden via buildFn
  * - File fields without folderPathKey → existing folderPath preserved (backward compat)
@@ -41,7 +35,7 @@ export function buildModuleFolderPath<K extends string>(
  */
 export function resolveFormJsonFolderPaths<T extends FormFieldWithPath>(
   fields: T[],
-  buildFn: (key: string) => string,
+  buildFn: (subPath: string) => string,
 ): T[] {
   return fields.map((field) => {
     if (field.formFieldType !== 'file' || !field.folderPathKey) return { ...field };
