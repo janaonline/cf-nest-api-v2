@@ -16,17 +16,21 @@ import { SideMenuModule } from './side-menu/side-menu.module';
 import { FormJsonModule } from '../../form-json/form-json.module';
 import { UnspentBalanceDisclosureModule } from './ulb/unspent-balance-disclosure/unspent-balance-disclosure.module';
 import { XviFcAnnualAccount, XviFcAnnualAccountSchema } from '../../schemas/xvi-fc/annual-account.schema';
-import { XviFcUnspentBalanceDisclosure, XviFcUnspentBalanceDisclosureSchema } from '../../schemas/xvi-fc/unspent-balance-disclosure.schema';
+import {
+  XviFcUnspentBalanceDisclosure,
+  XviFcUnspentBalanceDisclosureSchema,
+} from '../../schemas/xvi-fc/unspent-balance-disclosure.schema';
+import { DevolutionFormulaModule } from './state/devolution-formula/devolution-formula.module';
 
 @Module({
   imports: [
     MongooseModule.forFeature([
-      { name: GrantAllocation.name,              schema: GrantAllocationSchema },
-      { name: State.name,                        schema: StateSchema },
-      { name: Year.name,                         schema: YearSchema },
-      { name: Ulb.name,                          schema: UlbSchema },
-      { name: XviFcSideMenu.name,                schema: XviFcSideMenuSchema },
-      { name: XviFcAnnualAccount.name,           schema: XviFcAnnualAccountSchema },
+      { name: GrantAllocation.name, schema: GrantAllocationSchema },
+      { name: State.name, schema: StateSchema },
+      { name: Year.name, schema: YearSchema },
+      { name: Ulb.name, schema: UlbSchema },
+      { name: XviFcSideMenu.name, schema: XviFcSideMenuSchema },
+      { name: XviFcAnnualAccount.name, schema: XviFcAnnualAccountSchema },
       { name: XviFcUnspentBalanceDisclosure.name, schema: XviFcUnspentBalanceDisclosureSchema },
     ]),
     AnnualAccountsModule,
@@ -35,6 +39,7 @@ import { XviFcUnspentBalanceDisclosure, XviFcUnspentBalanceDisclosureSchema } fr
     SideMenuModule,
     FormJsonModule,
     UnspentBalanceDisclosureModule,
+    DevolutionFormulaModule,
   ],
   controllers: [XviFcController],
   providers: [XviFcService, XviFcCacheService, XviFcCacheInterceptor],

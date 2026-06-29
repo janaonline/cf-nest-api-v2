@@ -188,7 +188,7 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel blank-field norm
 
       expect(rowModel.insertMany).toHaveBeenCalledTimes(1);
       const [docs, opts] = rowModel.insertMany.mock.calls[0] as [Record<string, unknown>[], unknown];
-      expect(opts).toEqual({ lean: true });
+      expect(opts).toEqual({ lean: true, ordered: false });
       expect(docs[0]).toMatchObject({ ulbName: '', validationStatus: 'INVALID' });
     });
 
@@ -257,7 +257,7 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel blank-field norm
       expect(errors).toHaveLength(0);
       expect(rowModel.insertMany).toHaveBeenCalledWith(
         expect.arrayContaining([expect.objectContaining({ validationStatus: 'VALID' })]),
-        { lean: true },
+        { lean: true, ordered: false },
       );
     });
   });
@@ -426,8 +426,22 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel blank-field norm
     it('leaves two rows with different census codes both VALID', async () => {
       s3Service.getBuffer = jest.fn().mockResolvedValue(
         makeXlsxBuffer([
-          { censusCode: 'UNIQ_A', ulbName: 'City A', electedBodyStatus: 'Not Constituted', dateOfConstitution: '', dateOfExpiry: '', remarks: '' },
-          { censusCode: 'UNIQ_B', ulbName: 'City B', electedBodyStatus: 'Not Constituted', dateOfConstitution: '', dateOfExpiry: '', remarks: '' },
+          {
+            censusCode: 'UNIQ_A',
+            ulbName: 'City A',
+            electedBodyStatus: 'Not Constituted',
+            dateOfConstitution: '',
+            dateOfExpiry: '',
+            remarks: '',
+          },
+          {
+            censusCode: 'UNIQ_B',
+            ulbName: 'City B',
+            electedBodyStatus: 'Not Constituted',
+            dateOfConstitution: '',
+            dateOfExpiry: '',
+            remarks: '',
+          },
         ]),
       );
 
