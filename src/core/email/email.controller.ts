@@ -84,6 +84,21 @@ export class EmailController {
     return await this.emailService.verifyOtp(body);
   }
 
+  @Post('sendProfileOtp')
+  @ApiOperation({ summary: 'Send profile-verification OTP — always sends regardless of email verification status' })
+  @ApiResponse({ status: 200, description: 'OTP sent' })
+  @ApiResponse({ status: 429, description: 'Rate limit exceeded' })
+  async sendProfileOtp(@Body('email') email: string) {
+    return await this.emailService.sendProfileOtp(email);
+  }
+
+  @Post('verifyProfileOtp')
+  @ApiOperation({ summary: 'Verify profile-verification OTP' })
+  @ApiResponse({ status: 200, description: 'OTP result' })
+  async verifyProfileOtp(@Body('email') email: string, @Body('otp') otp: string) {
+    return await this.emailService.verifyProfileOtp(email, otp);
+  }
+
   // @Post('verify')
   // async verifyOtp(@Body() body: { email: string; otp: string }) {
   //   const { email, otp } = body;

@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import type { Response } from 'express';
 import axios from 'axios';
-import { SESMailService } from 'src/core/aws-ses/ses.service';
+import { EmailQueueService } from 'src/core/queue/email-queue/email-queue.service';
 import { RedisService } from 'src/core/services/redis/redis.service';
 import { UsersRepository } from 'src/users/users.repository';
 import { AuthService } from './auth.service';
@@ -28,9 +28,9 @@ export class OtpService {
     private readonly usersRepository: UsersRepository,
     private readonly authService: AuthService,
     private readonly configService: ConfigService,
-    private readonly sesMailService: SESMailService,
+    private readonly emailQueueService: EmailQueueService,
     private readonly redisService: RedisService,
-  ) { }
+  ) {}
 
   // ─── Public API ────────────────────────────────────────────────────────────
 
@@ -43,7 +43,6 @@ export class OtpService {
     const purpose = dto.purpose ?? 'login';
     const id = normalizeIdentifier(dto.identifier);
     const cfg = getOtpConfig(this.configService);
-    console.log('OTP request for', purpose, id);
 
     // mobile-verify: no DB lookup — send OTP to any valid mobile for contact ownership check
     if (purpose === 'mobile-verify') {
@@ -58,7 +57,6 @@ export class OtpService {
     await this.assertCooldownClear(purpose, id);
 
     const existingState = await this.readOtpState(purpose, id);
-    console.log('Existing OTP state:', existingState); // Debug existing state
     const resendCount = existingState?.resendCount ?? 0;
 
     if (resendCount >= cfg.maxResendAttempts) {
@@ -89,7 +87,6 @@ export class OtpService {
     if (!cfg.isProduction) {
       this.logger.debug(`[DEV] OTP for ${id}: ${otp}`);
     }
-    console.log('OTP sent successfully', user, cfg); // Log OTP dispatch success
     return {
       success: true,
       message: 'OTP sent successfully',
@@ -368,16 +365,12 @@ export class OtpService {
   }
 
   private async sendOtpEmail(to: string, otp: string): Promise<void> {
-    const from = this.configService.get<string>('EMAIL') ?? 'updates@cityfinance.in';
-    const prodHost = this.configService.get<string>('PROD_HOST') ?? 'cityfinance.in';
-    const msg = `Your OTP to login into CityFinance.in is ${otp}. Do not share this code. If not requested, contact us at contact@${prodHost} - City Finance`;
     try {
-      await this.sesMailService.sendEmail({
+      await this.emailQueueService.addEmailJob({
         to,
         subject: 'Authentication Mail',
-        html: `<p>${msg}</p>`,
-        from,
         templateName: 'otp',
+        mailData: { otp },
       });
     } catch (err) {
       this.logger.error('Email OTP send failed', err);
