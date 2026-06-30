@@ -132,6 +132,7 @@ const mockRowModel = {
   updateMany: jest.fn(),
   deleteMany: jest.fn(),
   countDocuments: jest.fn(),
+  bulkWrite: jest.fn(),
 };
 
 const mockUlbModel = { find: jest.fn() };
@@ -281,6 +282,7 @@ describe('DevolutionFormulaExcelService — revalidateExcel', () => {
     mockDfService.resolveGrantAllocation.mockResolvedValue(mockGrantAlloc);
     mockUlbModel.find.mockReturnValue(q(mockDbUlbs));
     mockRowModel.findByIdAndUpdate.mockReturnValue(q(null));
+    mockRowModel.bulkWrite.mockResolvedValue({ modifiedCount: 0 });
     mockFormModel.findByIdAndUpdate.mockReturnValue(q(null));
 
     const module: TestingModule = await Test.createTestingModule({

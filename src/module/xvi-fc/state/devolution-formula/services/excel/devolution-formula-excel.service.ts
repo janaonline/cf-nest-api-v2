@@ -1,6 +1,6 @@
 import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model, Types } from 'mongoose';
+import { AnyBulkWriteOperation, Model, Types } from 'mongoose';
 import type ExcelJS from 'exceljs';
 import * as XLSX from 'xlsx';
 import { S3Service } from 'src/core/s3/s3.service';
@@ -77,11 +77,6 @@ interface ProcessedRow {
 
 function isMongoDuplicateKeyError(err: unknown): boolean {
   return typeof err === 'object' && err !== null && Reflect.get(err, 'code') === 11000;
-}
-
-function normalizeIdentifier(val: string | number | null | undefined): string {
-  if (val === null || val === undefined) return '';
-  return String(val).trim();
 }
 
 @Injectable()
@@ -303,15 +298,24 @@ export class DevolutionFormulaExcelService {
     let previousRowsDeactivated = false;
     let newRowsInserted = false;
     try {
-      if (currentVersion > 0) {
-        await this.rowModel
-          .updateMany({ form: formId, datasetVersion: currentVersion }, { $set: { isActive: false } })
-          .exec();
-        previousRowsDeactivated = true;
-      }
+      const [deactivateResult, insertResult] = await Promise.allSettled([
+        currentVersion > 0
+          ? this.rowModel
+              .updateMany({ form: formId, datasetVersion: currentVersion }, { $set: { isActive: false } })
+              .exec()
+          : Promise.resolve(null),
+        this.rowModel.insertMany(rowDocs, { lean: true, ordered: false }),
+      ]);
 
-      await this.rowModel.insertMany(rowDocs, { lean: true, ordered: false });
-      newRowsInserted = true;
+      previousRowsDeactivated = currentVersion > 0 && deactivateResult.status === 'fulfilled';
+      newRowsInserted = insertResult.status === 'fulfilled';
+
+      if (insertResult.status === 'rejected') {
+        throw insertResult.reason;
+      }
+      if (deactivateResult.status === 'rejected') {
+        throw deactivateResult.reason;
+      }
 
       const formSummaryFields: Record<string, unknown> = {
         excelFile: normalizedFile,
@@ -523,16 +527,13 @@ export class DevolutionFormulaExcelService {
         });
       }
 
-      await Promise.all(
-        rowUpdates.map((r) =>
-          this.rowModel
-            .findByIdAndUpdate(r.id, {
-              $set: { errors: r.errors, validationStatus: r.validationStatus, updatedBy: userOid },
-            })
-            .lean()
-            .exec(),
-        ),
-      );
+      const bulkOps = rowUpdates.map((r) => ({
+        updateOne: {
+          filter: { _id: r.id },
+          update: { $set: { errors: r.errors, validationStatus: r.validationStatus, updatedBy: userOid } },
+        },
+      })) as unknown as AnyBulkWriteOperation<DevolutionFormulaRowDocument>[];
+      await this.rowModel.bulkWrite(bulkOps, { ordered: false });
 
       const missingUlbCount = dbUlbs.filter((u) => !matchedUlbIds.has(String(u._id))).length;
       const allocationBalanced = Math.abs(totalAllocatedSum - totalMoHUAAllocation) <= 0.001;
@@ -743,11 +744,11 @@ export class DevolutionFormulaExcelService {
       'Devolution Formula Errors',
     )) as unknown as Buffer;
 
-    // await this.s3Service.uploadPublic(
-    //   s3Key,
-    //   buffer,
-    //   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    // );
+    await this.s3Service.uploadPublic(
+      s3Key,
+      buffer,
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
 
     const fileRef: DfFileRefData = {
       fileName: `devolution-formula-errors-${String(formId)}.xlsx`,

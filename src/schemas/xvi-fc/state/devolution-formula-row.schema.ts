@@ -102,3 +102,4 @@ DevolutionFormulaRowSchema.index(
   { form: 1, datasetVersion: 1, ulbId: 1 },
   { unique: true, partialFilterExpression: { ulbId: { $type: 'objectId' } } },
 );
+DevolutionFormulaRowSchema.index({ form: 1, datasetVersion: 1, isActive: 1, rowNumber: 1 });

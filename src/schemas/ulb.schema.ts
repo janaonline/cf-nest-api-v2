@@ -160,3 +160,5 @@ export class Ulb {
 
 export type UlbDocument = Ulb & Document;
 export const UlbSchema = SchemaFactory.createForClass(Ulb);
+
+UlbSchema.index({ state: 1, isActive: 1 });

@@ -1311,63 +1311,43 @@ Example: `xvi-fc/state/5dcf9d7416a06aed41c748f0/2026-27/sfc-status/sfc-report`
 
 ---
 
-### Side Menu — Generic Nav Contract (Register ULB Item) + Devolution URL Fix
+### Devolution Formula — Register ULB Action URL Fix
 
-**Context**: A future placeholder frontend route `/xvifc/:yearId/register-ulb` needs a sidebar entry and a Devolution Formula supporting-content action pointing at it. Backend must send app-relative routes (e.g. `/xvifc/67d7d136d3d038946a5239e9/register-ulb`), never an absolute frontend host and never the existing typo route `/resigter-ulb`. ULB Registration itself is not built yet — this only exposes navigation metadata for the future route. Backend/API only; no frontend changes.
+**Context**: The Devolution Formula `supportingContent` action for Register ULB pointed at the typo route `/resigter-ulb` (root-only, not app-relative to the future `/xvifc/:yearId/register-ulb` placeholder route). Fixed to build the correct app-relative URL from the runtime `yearId`. Backend/API only; no frontend changes. ULB Registration itself is not built yet — this only fixes the navigation URL for the future placeholder route.
 
-**Schema** (`src/schemas/xvi-fc/xvi-fc-side-menu.schema.ts`):
+**Note**: An earlier pass at this task also added a generic `{ type: 'internal' | 'external', url, openInNewTab?, confirmation? }` nav contract to the Side Menu schema/DTO/service layer, intended to support a Register ULB sidebar entry. That work was reverted — the internal/external link-type contract was scoped incorrectly; it belongs (if/when implemented) to Devolution Formula `supportingContent` actions, not the Side Menu. The Side Menu module is unchanged from its prior state.
 
-- Added 4 new optional `@Prop()` fields on `XviFcSideMenu`: `linkType` (`'internal' | 'external'`), `url`, `openInNewTab`, `confirmation` (`{ required, title?, message, confirmText?, cancelText? }`).
-- New `MenuLinkType` type and `XviFcSideMenuConfirmation` interface exported from the schema file.
-- Named `linkType` (not `type`) at the persistence layer to avoid colliding with the existing structural `type` field (`header|separator|item|group`); mapped to the response key `type` during tree-building.
-
-**Response DTO** (`src/module/xvi-fc/dto/side-menu.dto.ts`):
-
-- `SideMenuItemDto` gains `type?`, `url?`, `openInNewTab?`, `confirmation?` (new `SideMenuItemConfirmationDto`).
-
-**Create/Update DTO** (`src/module/xvi-fc/side-menu/dto/create-side-menu.dto.ts`):
-
-- New `MenuLinkType` enum, `SideMenuConfirmationDto` (nested, validated via `@ValidateNested()` + `@Type()`).
-- New custom validator `IsUrlMatchingLinkType()` (single `registerDecorator`-based check, branches on sibling `linkType`): internal `url` must start with `/`; external `url` must start with `https://`. Replaces an earlier, abandoned attempt at stacking two `@ValidateIf` decorators on the same property.
-- `CreateSideMenuDto` gains `linkType?`, `url?`, `openInNewTab?`, `confirmation?`. `UpdateSideMenuDto` (`PartialType`) inherits automatically — no edit needed.
-- `side-menu.service.ts` `create()`/`bulkCreate()` already spread `...dto` — no change needed.
-
-**Service** (`src/module/xvi-fc/xvi-fc.service.ts`):
-
-- `buildSection()` now calls a new private `applyGenericNavFields(item, doc)` helper for both top-level and child items, mapping `linkType → type`, `url`, `openInNewTab`, and a normalized `confirmation` (drops `null` optional sub-fields rather than passing them through, since the schema interface allows `string | null` but the DTO only allows `string | undefined`).
-
-**Generic menu item contract** (capability, not hardcoded seed data — this collection has no seed/migration script, items are created via the existing admin `POST /xvi-fc/side-menu` / `/bulk` API):
-
-```ts
-{
-  label: 'Register ULB',
-  icon: 'bi bi-person-check',
-  type: 'internal',
-  url: `/xvifc/${yearId}/register-ulb`,
-  confirmation: {
-    required: true,
-    title: 'Redirect to Register ULB',
-    message: 'Please save your document before continuing. You will be redirected to the Register ULB page.',
-    confirmText: 'Continue',
-    cancelText: 'Stay on this page',
-  },
-}
-```
-
-Intended placement: `TEAMS & ROLES` group, after `Unified view`.
-
-**Devolution Formula URL fix** (`src/module/xvi-fc/state/devolution-formula/`):
+**Modified files** (`src/module/xvi-fc/state/devolution-formula/`):
 
 - `constants/devolution-formula.constants.ts` — removed the static, buggy `DF_REGISTER_ULB_URL = '/resigter-ulb'`; added `buildDfRegisterUlbUrl(yearId: string)` returning `` `/xvifc/${yearId}/register-ulb` ``.
 - `services/main/devolution-formula.service.ts` — threaded `yearId` through `hydrateQuestions()` and `buildExcelFileSupportingContent()`; the `register-ulb` action's `url` now calls `buildDfRegisterUlbUrl(yearId)` instead of the static constant.
 - All other fields on that action (`id: 'register-ulb'`, `label: 'Register ULB'`, `icon: 'bi bi-person-check'`, `tone: 'success'`, `variant: 'link'`, `visible: canEdit && newUlbCount > 0`) and its position inside the same `supportingContent.actions` block are unchanged.
 
-**New/updated tests**:
+**Tests**: `devolution-formula.service.spec.ts` — replaced the typo-URL assertion with tests for the corrected `/xvifc/:yearId/register-ulb` URL, a typo-regression check, and a relative-URL check.
 
-- `register-ulb-menu-contract.spec.ts` (new) — constructs `XviFcService` directly (bypassing Nest DI, since `xvi-fc.service.spec.ts`'s `TestingModule` predates this service's current constructor and is broken independently of this change) with only `sideMenuModel` mocked; verifies Register ULB placement/ordering under Teams & Roles, full `{label, icon, type, url, confirmation}` shape match, relative URL containing the runtime `yearId`, no host/domain, and that items without generic nav fields don't gain them.
-- `create-side-menu.dto.spec.ts` (new) — `class-validator` tests for internal/external URL safety and nested `confirmation` validation.
-- `devolution-formula.service.spec.ts` — replaced the typo-URL assertion with tests for the corrected `/xvifc/:yearId/register-ulb` URL, a typo-regression check, and a relative-URL check.
+**Non-changes**: no frontend code; no Register ULB registration form/business logic/API; no EULB/SFC behaviour changes; no Devolution validation-logic changes; no hardcoded yearId or frontend domain; Devolution visibility logic (`canEdit && newUlbCount > 0`) and other supportingContent actions/badges untouched; Side Menu schema/DTO/service untouched.
 
-**Non-changes**: no frontend code; no Register ULB registration form/business logic/API; no EULB/SFC behaviour changes; no Devolution validation-logic changes; no hardcoded yearId or frontend domain; Devolution visibility logic (`canEdit && newUlbCount > 0`) and other supportingContent actions/badges untouched.
+**Verification**: `devolution-formula.service.spec.ts` and `devolution-formula-excel.service.spec.ts` passing; `tsc -p tsconfig.build.json` clean.
 
-**Verification**: 129/129 tests passing (`create-side-menu.dto.spec.ts`, `register-ulb-menu-contract.spec.ts`, `devolution-formula-excel.service.spec.ts`, `devolution-formula.service.spec.ts`); `tsc -p tsconfig.build.json` clean; ESLint clean on all touched/new files.
+---
+
+### Devolution Formula — Excel Validate/Revalidate Performance Fixes
+
+**Context**: Profiling `validateExcel()` and `revalidateExcel()` in the Devolution Formula Excel service showed ~3.3s and ~7.9s respectively, dominated by sequential DB round trips. Fixed without changing any business logic, response shape, or error-handling contract.
+
+**Modified files**:
+
+- `src/module/xvi-fc/state/devolution-formula/services/excel/devolution-formula-excel.service.ts`
+  - `validateExcel()` — the dataset-replacement `updateMany` (deactivate old rows) and `insertMany` (new rows) now run concurrently via `Promise.allSettled` instead of sequentially; rollback/duplicate-key handling unchanged.
+  - `revalidateExcel()` Case A — replaced N per-row `findByIdAndUpdate` calls with a single `rowModel.bulkWrite(...)`; required an `as unknown as AnyBulkWriteOperation<DevolutionFormulaRowDocument>[]` cast due to the `errors` field name colliding with Mongoose's reserved `Document.errors` typing.
+- `src/schemas/ulb.schema.ts` — added `{state: 1, isActive: 1}` index (was previously unindexed; only `code` and `slug` had indexes).
+- `src/schemas/xvi-fc/state/devolution-formula-row.schema.ts` — added `{form: 1, datasetVersion: 1, isActive: 1, rowNumber: 1}` index covering the active-rows filter+sort query.
+- `src/module/xvi-fc/state/devolution-formula/services/excel/devolution-formula-excel.service.spec.ts` — added `bulkWrite` to `mockRowModel`.
+
+**Key behaviours**:
+
+- No API contract change — same request/response shapes, same error semantics, same rollback behaviour on partial failure.
+- `revalidateExcel()`'s per-row update step was the dominant cost (~5s of ~7.9s); collapsing to one `bulkWrite` call removes N-1 round trips.
+- Both new indexes are created automatically via Mongoose's default `autoIndex` on next app startup — no manual migration needed.
+
+**Verification**: `devolution-formula-excel.service.spec.ts` (22 tests) passing; `tsc --noEmit` clean.
