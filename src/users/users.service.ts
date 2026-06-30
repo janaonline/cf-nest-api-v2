@@ -15,6 +15,7 @@ import { AuthUser } from 'src/module/auth/auth-user.interface';
 import { assertAdminSameScope, assertManageableTarget, resolveAdminScopeTarget } from './user-scope.helpers';
 import { UpdateUserRoleDto } from './dto/update-user-role.dto';
 import { TransferOwnershipDto } from './dto/transfer-ownership.dto';
+import { StateMemberResponseDto } from './dto/state-member-response.dto';
 
 // ─── Permission-matrix display types ────────────────────────────────────────
 
@@ -80,21 +81,21 @@ const STATE_MATRIX: PermissionMatrixRow[] = [
     label: 'Approve ULB submissions',
     permissionKey: Permission.APPROVE_ULB_SUBMISSIONS,
     submitter: true,
-    editor: false,
+    editor: true,
     viewer: false,
   },
   {
     label: 'Prepare grant letters',
     permissionKey: Permission.PREPARE_GRANT_LETTERS,
     submitter: true,
-    editor: false,
+    editor: true,
     viewer: false,
   },
   {
     label: 'Recommend exemptions',
     permissionKey: Permission.RECOMMEND_EXEMPTIONS,
     submitter: true,
-    editor: false,
+    editor: true,
     viewer: false,
   },
   {
@@ -431,6 +432,40 @@ export class UsersService {
   }
   // ── END NEW
 
+  // ─── xviFcSubrole → frontend subRole mapping ──────────────────────────────
+  // xviFcSubrole is the single source of truth for state-scope sub-classification.
+  // DB role is just 'STATE' for everyone; admin/reviewer/viewer live in this field.
+  private static readonly XVIFC_TO_SUB_ROLE: Record<string, 'SUBMITTER' | 'EDITOR' | 'VIEWER'> = {
+    admin:    'SUBMITTER',
+    reviewer: 'EDITOR',
+    viewer:   'VIEWER',
+  };
+
+  async getStateMembers(stateId: string): Promise<StateMemberResponseDto[]> {
+    if (!Types.ObjectId.isValid(stateId)) throw new BadRequestException('Invalid state ID');
+
+    const users = await this.userModel
+      .find({
+        state: new Types.ObjectId(stateId),
+        role: UserRole.STATE,
+        isDeleted: false,
+      })
+      .select('_id name mobile email designation xviFcSubrole isActive lastLoginAt')
+      .lean()
+      .exec();
+
+    return users.map((u) => ({
+      _id: String(u._id),
+      name: u.name,
+      mobile: u.mobile ?? '',
+      ...(u.email ? { email: u.email } : {}),
+      designation: u.designation ?? '',
+      subRole: UsersService.XVIFC_TO_SUB_ROLE[u.xviFcSubrole as string] ?? 'VIEWER',
+      isActive: u.isActive ?? false,
+      lastActive: u.lastLoginAt ? (u.lastLoginAt as Date).toISOString() : null,
+    }));
+  }
+
   /**
    * Returns the permission matrix rows for the requester's scope.
    * Used only for UI display — not a security decision.
@@ -464,23 +499,25 @@ export class UsersService {
           const ulbTypeDoc = await this.userModel.db
             .collection('ulbtypes')
             .findOne({ _id: ulb['ulbType'] }, { projection: { name: 1 } });
-          ulbTypeName = (ulbTypeDoc as Record<string, unknown> | null)?.['name'] as string ?? '';
-        } catch { /* collection unavailable — leave blank */ }
+          ulbTypeName = ((ulbTypeDoc as Record<string, unknown> | null)?.['name'] as string) ?? '';
+        } catch {
+          /* collection unavailable — leave blank */
+        }
       }
     }
 
-    const stateName = (ulb?.['state'] as Record<string, unknown> | null)?.['name'] as string ?? '';
+    const stateName = ((ulb?.['state'] as Record<string, unknown> | null)?.['name'] as string) ?? '';
 
     const ulbDetails = ulb
-      ? { name: ulb['name'] as string ?? '', code: ulb['code'] as string ?? '', stateName }
+      ? { name: (ulb['name'] as string) ?? '', code: (ulb['code'] as string) ?? '', stateName }
       : null;
 
     const registeredMunicipalInfo = ulb
       ? {
           stateName,
           ulbType: ulbTypeName,
-          censusCode: ulb['censusCode'] as string ?? '',
-          ulbCode: ulb['code'] as string ?? '',
+          censusCode: (ulb['censusCode'] as string) ?? '',
+          ulbCode: (ulb['code'] as string) ?? '',
           area: (ulb['area'] as number) ?? 0,
           population: (ulb['population'] as number) ?? 0,
           wards: (ulb['wards'] as number) ?? 0,

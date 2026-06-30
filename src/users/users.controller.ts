@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, HttpCode, HttpStatus, ForbiddenException } from '@nestjs/common';
 import { ApiBearerAuth, ApiOkResponse, ApiOperation } from '@nestjs/swagger';
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
@@ -8,6 +8,7 @@ import { CreateManagedUserDto } from './dto/create-managed-user.dto';
 import { UpdatePermissionOverridesDto } from './dto/update-permission-overrides.dto';
 import { UpdateUserRoleDto } from './dto/update-user-role.dto';
 import { TransferOwnershipDto } from './dto/transfer-ownership.dto';
+import { StateMemberResponseDto } from './dto/state-member-response.dto';
 import { CurrentUser } from 'src/module/auth/decorators/current-user.decorator';
 import { PermissionGuard } from 'src/module/auth/permission.guard';
 import { JwtAuthGuard } from 'src/module/auth/guards/jwt-auth.guard';
@@ -42,6 +43,24 @@ export class UsersController {
   @ApiOperation({ summary: 'Get permission matrix rows for the current user scope (ULB or STATE)' })
   getPermissionMatrix(@CurrentUser() user: AuthUser) {
     return this.usersService.getPermissionMatrix(user);
+  }
+
+  /**
+   * Returns all STATE users for the requester's own state,
+   * mapped to the frontend StateMember shape (subRole: SUBMITTER | EDITOR | VIEWER).
+   * stateId is read from the JWT claim — the client never sends it.
+   * Declared before :id to avoid route ambiguity.
+   */
+  @ApiBearerAuth()
+  @Get('state-members')
+  @UseGuards(PermissionGuard)
+  @RequirePermissions(Permission.VIEW_MANAGED_USERS)
+  @ApiOperation({ summary: 'List all team members for the requester\'s state (scope derived from JWT)' })
+  @ApiOkResponse({ type: [StateMemberResponseDto] })
+  getStateMembers(@CurrentUser() user: AuthUser): Promise<StateMemberResponseDto[]> {
+    const stateId = user.state?.toString();
+    if (!stateId) throw new ForbiddenException('No state scope on this account');
+    return this.usersService.getStateMembers(stateId);
   }
 
   @ApiBearerAuth()
