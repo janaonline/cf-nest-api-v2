@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiBearerAuth, ApiOkResponse, ApiOperation } from '@nestjs/swagger';
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
@@ -42,6 +42,14 @@ export class UsersController {
   @ApiOperation({ summary: 'Get permission matrix rows for the current user scope (ULB or STATE)' })
   getPermissionMatrix(@CurrentUser() user: AuthUser) {
     return this.usersService.getPermissionMatrix(user);
+  }
+
+  @ApiBearerAuth()
+  @Post(':id/issue-profile-save-token')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Issue a short-lived save token after OTP verification (state/MoHUA self-update)' })
+  issueProfileSaveToken(@Param('id') id: string) {
+    return this.usersService.issueProfileSaveToken(id);
   }
 
   @ApiBearerAuth()

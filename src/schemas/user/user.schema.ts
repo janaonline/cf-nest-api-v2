@@ -151,6 +151,9 @@ export class User extends Document {
   @Prop({ type: Boolean, default: false })
   isXVIFCProfileVerified!: boolean;
 
+  @Prop({ type: String, enum: ['admin', 'reviewer'], default: null })
+  xviFcSubrole!: string | null;
+
   /**
    * Per-user permission overrides.
    * Default permissions come from ROLE_PERMISSIONS in permissions.map.ts.

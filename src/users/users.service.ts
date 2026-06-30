@@ -1,8 +1,11 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, HttpException, Injectable, NotFoundException } from '@nestjs/common';
+import { randomBytes } from 'crypto';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import { RedisService } from 'src/core/services/redis/redis.service';
 import { User } from 'src/schemas/user/user.schema';
 import { Permission, Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
+import { Role } from 'src/module/auth/enum/role.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
 import { UpdateProfileContactsDto } from './dto/update-profile-contacts.dto';
 import { ProfileContactsResponseDto } from './dto/profile-contacts-response.dto';
@@ -108,7 +111,22 @@ const STATE_MATRIX: PermissionMatrixRow[] = [
 
 @Injectable()
 export class UsersService {
-  constructor(@InjectModel(User.name) private userModel: Model<User>) {}
+  private static readonly SAVE_TOKEN_TTL = 120; // 2 minutes — consumed on first use
+  private saveTokenKey = (userId: string) => `profile_save_token:${userId}`;
+
+  constructor(
+    @InjectModel(User.name) private userModel: Model<User>,
+    private readonly redisService: RedisService,
+  ) {}
+
+  async issueProfileSaveToken(userId: string): Promise<{ token: string }> {
+    if (!Types.ObjectId.isValid(userId)) throw new BadRequestException('Invalid user ID');
+    const user = await this.userModel.findById(userId).select('_id').lean().exec();
+    if (!user) throw new NotFoundException('User not found');
+    const token = randomBytes(32).toString('hex');
+    await this.redisService.set(this.saveTokenKey(userId), token, UsersService.SAVE_TOKEN_TTL);
+    return { token };
+  }
 
   async create(data: Partial<User>): Promise<User> {
     const user = new this.userModel(data);
@@ -343,23 +361,77 @@ export class UsersService {
       .exec();
     if (!targetUser) throw new NotFoundException('User not found');
 
-    // Users may always update their own profile; scope check only applies to cross-user updates
     const isSelfUpdate = requester._id.toString() === userId;
+    const isUlbScope = requester.scope === Scope.ULB;
+
     if (!isSelfUpdate) {
       assertAdminSameScope(requester, targetUser);
+    } else if (!isUlbScope) {
+      // State / MoHUA self-updates require a valid one-time save token (issued post-OTP)
+      const { saveToken } = dto;
+      if (!saveToken) throw new BadRequestException('A verified save token is required to update your profile');
+      const stored = await this.redisService.get(this.saveTokenKey(userId));
+      if (!stored || stored !== saveToken) {
+        throw new HttpException('Save token is invalid or expired. Please verify your email again.', 422);
+      }
+      await this.redisService.del(this.saveTokenKey(userId));
     }
 
-    const unknown = Object.keys(dto).filter((k) => !UsersService.UPDATABLE_FIELDS.has(k));
+    // Strip saveToken — it is not a DB field
+    const { saveToken: _t, ...rest } = dto;
+    const unknown = Object.keys(rest).filter((k) => !UsersService.UPDATABLE_FIELDS.has(k));
     if (unknown.length) throw new BadRequestException(`Field(s) not updatable: ${unknown.join(', ')}`);
 
     const update: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(dto)) {
+    for (const [key, value] of Object.entries(rest)) {
       if (value !== undefined) update[key] = value;
     }
     if (!Object.keys(update).length) throw new BadRequestException('No fields provided to update');
 
     await this.userModel.findByIdAndUpdate(userId, { $set: update }).exec();
+
+    // After a state/MoHUA user verifies their profile, assign xviFcSubroles for their state
+    if (isSelfUpdate && !isUlbScope && update['isXVIFCProfileVerified'] === true && targetUser.state) {
+      await this.assignXviFcStateSubroles(targetUser.state);
+    }
+
     return { message: 'Profile contacts updated successfully', updatedFields: update };
+  }
+
+  // ─── XVI-FC Subrole assignment ───────────────────────────────────────────────
+
+  private static readonly STATE_ROLES = [
+    Role.STATE,
+    Role.XVIFC_STATE,
+    UserRole.STATE_EDITOR,
+    UserRole.STATE_VIEWER,
+  ] as string[];
+
+  /**
+   * After a state user completes profile verification, assign xviFcSubrole to all
+   * users in that state:
+   *   isNodalOfficer: true  → 'admin'
+   *   everyone else         → 'reviewer'
+   *
+   * Two targeted updateMany calls — no full collection scan.
+   */
+  private async assignXviFcStateSubroles(stateId: Types.ObjectId): Promise<void> {
+    const baseFilter = {
+      state: stateId,
+      isDeleted: false,
+      role: { $in: UsersService.STATE_ROLES },
+    };
+
+    await Promise.all([
+      this.userModel.updateMany(
+        { ...baseFilter, isNodalOfficer: true },
+        { $set: { xviFcSubrole: 'admin' } },
+      ).exec(),
+      this.userModel.updateMany(
+        { ...baseFilter, isNodalOfficer: { $ne: true } },
+        { $set: { xviFcSubrole: 'reviewer' } },
+      ).exec(),
+    ]);
   }
 
   /**

@@ -225,6 +225,37 @@ export class EmailService {
     }
   }
 
+  // ── Profile verification OTP (bypasses EmailList — always sends) ────────────
+
+  async sendProfileOtp(email: string): Promise<{ isOtpSent: boolean; message: string }> {
+    // Reuse existing rate-limit key so the same 429 logic applies
+    await this.rateLimit.checkLimit(`otp:${email}:send`);
+
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    await this.redis.set(`profile_otp:${email}`, otp, 600); // 10 min TTL
+
+    await this.mailQueue.addEmailJob({
+      to: email,
+      subject: 'CityFinance - Profile Verification OTP',
+      templateName: 'otp',
+      mailData: { otp },
+    });
+
+    this.logger.log(`[profile-otp] Sent to ${email}`);
+    return { isOtpSent: true, message: 'OTP sent successfully' };
+  }
+
+  async verifyProfileOtp(email: string, otp: string): Promise<{ isOtpVerified: boolean; message: string }> {
+    await this.rateLimit.checkLimit(`otp:${email}:verify`);
+
+    const stored = await this.redis.get(`profile_otp:${email}`);
+    if (!stored) return { isOtpVerified: false, message: 'OTP expired or not found' };
+    if (stored !== otp) return { isOtpVerified: false, message: 'Invalid OTP' };
+
+    await this.redis.del(`profile_otp:${email}`);
+    return { isOtpVerified: true, message: 'OTP verified successfully' };
+  }
+
   // Create uniform response strucute
   private createResponseStructure(
     message: string,
