@@ -443,12 +443,49 @@ export class UsersService {
     const user = await this.userModel
       .findById(id)
       .select(
-        'commissionerName commissionerEmail commissionerConatactNumber accountantName accountantEmail accountantConatactNumber',
+        'commissionerName commissionerEmail commissionerConatactNumber accountantName accountantEmail accountantConatactNumber ulb',
       )
+      .populate({
+        path: 'ulb',
+        select: 'name code censusCode population area wards ulbType state',
+        populate: { path: 'state', select: 'name' },
+      })
       .lean()
       .exec();
 
     if (!user) throw new NotFoundException('User not found');
+
+    // ulbType has no NestJS schema — query its collection directly via the connection
+    let ulbTypeName = '';
+    const ulb = user.ulb as unknown as Record<string, unknown> | null;
+    if (ulb && typeof ulb === 'object') {
+      if (ulb['ulbType']) {
+        try {
+          const ulbTypeDoc = await this.userModel.db
+            .collection('ulbtypes')
+            .findOne({ _id: ulb['ulbType'] }, { projection: { name: 1 } });
+          ulbTypeName = (ulbTypeDoc as Record<string, unknown> | null)?.['name'] as string ?? '';
+        } catch { /* collection unavailable — leave blank */ }
+      }
+    }
+
+    const stateName = (ulb?.['state'] as Record<string, unknown> | null)?.['name'] as string ?? '';
+
+    const ulbDetails = ulb
+      ? { name: ulb['name'] as string ?? '', code: ulb['code'] as string ?? '', stateName }
+      : null;
+
+    const registeredMunicipalInfo = ulb
+      ? {
+          stateName,
+          ulbType: ulbTypeName,
+          censusCode: ulb['censusCode'] as string ?? '',
+          ulbCode: ulb['code'] as string ?? '',
+          area: (ulb['area'] as number) ?? 0,
+          population: (ulb['population'] as number) ?? 0,
+          wards: (ulb['wards'] as number) ?? 0,
+        }
+      : null;
 
     return {
       commissionerName: user.commissionerName ?? '',
@@ -457,6 +494,8 @@ export class UsersService {
       accountantName: user.accountantName ?? '',
       accountantEmail: user.accountantEmail ?? '',
       accountantConatactNumber: user.accountantConatactNumber ?? '',
+      ulbDetails,
+      registeredMunicipalInfo,
     };
   }
 }
