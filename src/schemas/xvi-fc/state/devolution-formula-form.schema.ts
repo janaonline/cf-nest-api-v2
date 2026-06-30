@@ -86,6 +86,9 @@ export class DevolutionFormulaForm {
   errorRowCount!: number;
 
   @Prop({ type: Number, default: 0 })
+  newUlbCount!: number;
+
+  @Prop({ type: Number, default: 0 })
   activeDatasetVersion!: number;
 
   @Prop({ type: Date })
@@ -109,6 +112,9 @@ export class DevolutionFormulaForm {
   updatedBy!: Types.ObjectId;
 
   // Form fields
+  @Prop({ type: Number, default: 0 })
+  ulbCount!: number;
+
   @Prop({ type: Boolean, default: false })
   checkboxConfirmation!: boolean;
 

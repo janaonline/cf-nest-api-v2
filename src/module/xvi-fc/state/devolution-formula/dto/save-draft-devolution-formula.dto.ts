@@ -44,6 +44,10 @@ class DfSaveDraftDataDto {
   @IsOptional()
   @IsBoolean()
   checkboxConfirmation?: boolean;
+
+  @IsOptional()
+  @IsNumber()
+  ulbCount?: number;
 }
 
 export class SaveDraftDevolutionFormulaDto {

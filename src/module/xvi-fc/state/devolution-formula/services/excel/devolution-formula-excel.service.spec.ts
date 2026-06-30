@@ -33,7 +33,6 @@ function q<T>(value: T) {
 
 const EXCEL_HEADERS = [
   'Census Code',
-  'SB Code',
   'ULB Name',
   'Total Grant Allocation',
   'Installment 1 Amount',
@@ -182,7 +181,7 @@ describe('DevolutionFormulaExcelService — safe dataset replace', () => {
     mockRowModel.insertMany.mockRejectedValue(insertError);
     mockRowModel.deleteMany.mockReturnValue(q(null));
 
-    const buffer = makeXlsxBuffer([['C001', '', 'Alpha City', 500_000, 300_000, 200_000, 'population']]);
+    const buffer = makeXlsxBuffer([['C001', 'Alpha City', 500_000, 300_000, 200_000, 'population']]);
     mockS3Service.getBuffer.mockResolvedValue(buffer);
 
     await expect(
@@ -220,7 +219,7 @@ describe('DevolutionFormulaExcelService — safe dataset replace', () => {
     mockFormModel.create.mockRejectedValue(new Error('DB write failed'));
     mockRowModel.deleteMany.mockReturnValue(q(null));
 
-    const buffer = makeXlsxBuffer([['C001', '', 'Alpha City', 500_000, 300_000, 200_000, 'population']]);
+    const buffer = makeXlsxBuffer([['C001', 'Alpha City', 500_000, 300_000, 200_000, 'population']]);
     mockS3Service.getBuffer.mockResolvedValue(buffer);
 
     await expect(
@@ -249,7 +248,7 @@ describe('DevolutionFormulaExcelService — safe dataset replace', () => {
     mockFormModel.findByIdAndUpdate.mockReturnValue(q(null));
     mockRowModel.deleteMany.mockReturnValue(q(null));
 
-    const buffer = makeXlsxBuffer([['C001', '', 'Alpha City', 500_000, 300_000, 200_000, 'population']]);
+    const buffer = makeXlsxBuffer([['C001', 'Alpha City', 500_000, 300_000, 200_000, 'population']]);
     mockS3Service.getBuffer.mockResolvedValue(buffer);
 
     await service.validateExcel(
@@ -345,5 +344,346 @@ describe('DevolutionFormulaExcelService — revalidateExcel', () => {
     const allArgs = formUpdateCalls.map((c) => c[1] as Record<string, unknown>);
     const hasUnset = allArgs.some((a) => a['$unset'] !== undefined);
     expect(hasUnset).toBe(false);
+  });
+});
+
+// ─── 3 · Template generation ─────────────────────────────────────────────────
+
+describe('DevolutionFormulaExcelService — generateTemplate', () => {
+  let service: DevolutionFormulaExcelService;
+
+  beforeEach(async () => {
+    jest.clearAllMocks();
+
+    mockUlbModel.find.mockReturnValue(q(mockDbUlbs));
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        DevolutionFormulaExcelService,
+        DevolutionFormulaValidator,
+        { provide: getModelToken(DevolutionFormulaForm.name), useValue: mockFormModel },
+        { provide: getModelToken(DevolutionFormulaRow.name), useValue: mockRowModel },
+        { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+        { provide: S3Service, useValue: mockS3Service },
+        { provide: ExcelService, useValue: mockExcelService },
+        { provide: FileTokenService, useValue: mockFileTokenService },
+        { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
+        { provide: DevolutionFormulaService, useValue: mockDfService },
+      ],
+    }).compile();
+
+    service = module.get<DevolutionFormulaExcelService>(DevolutionFormulaExcelService);
+  });
+
+  it('queries active ULBs scoped to the requesting state with isActive: true', async () => {
+    await service.generateTemplate(stateOid.toString(), YEAR_ID, 1, adminUser);
+
+    expect(mockUlbModel.find).toHaveBeenCalledWith({ state: stateOid, isActive: true });
+  });
+
+  it('builds template rows from the registry ulbName and censusCode (not user-suppliable values)', async () => {
+    await service.generateTemplate(stateOid.toString(), YEAR_ID, 1, adminUser);
+
+    const calls = mockExcelService.generateExcel.mock.calls as unknown[][];
+    const rows = calls[0][1] as Array<{ censusCode: string; ulbName: string }>;
+    expect(rows).toEqual([expect.objectContaining({ censusCode: 'C001', ulbName: 'Alpha City' })]);
+  });
+});
+
+// ─── 4 · Upload ULB identity validation ──────────────────────────────────────
+
+describe('DevolutionFormulaExcelService — validateExcel ULB identity guard', () => {
+  let service: DevolutionFormulaExcelService;
+
+  beforeEach(async () => {
+    jest.clearAllMocks();
+
+    mockDfService.resolveGrantAllocation.mockResolvedValue(mockGrantAlloc);
+    mockUlbModel.find.mockReturnValue(q(mockDbUlbs));
+    mockFormModel.findOne.mockReturnValue(q(null));
+    mockFormModel.create.mockResolvedValue({ _id: formOid });
+    mockFormModel.findByIdAndUpdate.mockReturnValue(q(null));
+    mockRowModel.insertMany.mockResolvedValue([]);
+    mockRowModel.deleteMany.mockReturnValue(q(null));
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        DevolutionFormulaExcelService,
+        DevolutionFormulaValidator,
+        { provide: getModelToken(DevolutionFormulaForm.name), useValue: mockFormModel },
+        { provide: getModelToken(DevolutionFormulaRow.name), useValue: mockRowModel },
+        { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+        { provide: S3Service, useValue: mockS3Service },
+        { provide: ExcelService, useValue: mockExcelService },
+        { provide: FileTokenService, useValue: mockFileTokenService },
+        { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
+        { provide: DevolutionFormulaService, useValue: mockDfService },
+      ],
+    }).compile();
+
+    service = module.get<DevolutionFormulaExcelService>(DevolutionFormulaExcelService);
+  });
+
+  it('passes when uploaded censusCode and ulbName match the active registry/template values', async () => {
+    const buffer = makeXlsxBuffer([['C001', 'Alpha City', 500_000, 300_000, 200_000, 'population']]);
+    mockS3Service.getBuffer.mockResolvedValue(buffer);
+
+    const result = await service.validateExcel(
+      {
+        stateId: stateOid.toString(),
+        yearId: YEAR_ID,
+        installment: 1,
+        excelFile: { fileName: 'test.xlsx', fileUrl: 'state/path/test.xlsx', fileSize: 1024 },
+      },
+      adminUser,
+    );
+
+    expect(result.data?.rowErrors).toEqual([]);
+  });
+
+  it('returns a row error keyed to ulbName when the uploaded name diverges from the registry value, and skips business validation for that row', async () => {
+    // Installment amounts intentionally do not sum to totalGrantAllocation — if business
+    // validation ran, an additional allocation-mismatch error would also be present.
+    const buffer = makeXlsxBuffer([['C001', 'Alpha City Renamed', 500_000, 100_000, 100_000, 'population']]);
+    mockS3Service.getBuffer.mockResolvedValue(buffer);
+
+    const result = await service.validateExcel(
+      {
+        stateId: stateOid.toString(),
+        yearId: YEAR_ID,
+        installment: 1,
+        excelFile: { fileName: 'test.xlsx', fileUrl: 'state/path/test.xlsx', fileSize: 1024 },
+      },
+      adminUser,
+    );
+
+    expect(result.data?.rowErrors).toEqual([expect.objectContaining({ field: 'ulbName', code: 'identityModified' })]);
+  });
+
+  it('still detects an unknown/unregistered censusCode via the existing registry-first row error, now escalated to a blocking excelFile control error, with no register-link content added', async () => {
+    const buffer = makeXlsxBuffer([['ZZZZ', 'New Town', 500_000, 300_000, 200_000, 'population']]);
+    mockS3Service.getBuffer.mockResolvedValue(buffer);
+
+    let caught: unknown;
+    try {
+      await service.validateExcel(
+        {
+          stateId: stateOid.toString(),
+          yearId: YEAR_ID,
+          installment: 1,
+          excelFile: { fileName: 'test.xlsx', fileUrl: 'state/path/test.xlsx', fileSize: 1024 },
+        },
+        adminUser,
+      );
+    } catch (e) {
+      caught = e;
+    }
+
+    const response = (caught as { response: { errors: Record<string, unknown>; data: Record<string, unknown> } })
+      .response;
+    expect(response.errors['excelFile']).toEqual([expect.objectContaining({ code: 'newUlbsAdded' })]);
+    expect(response.data['rowErrors']).toEqual([expect.objectContaining({ field: 'censusCode', code: 'unknownUlb' })]);
+
+    const serialized = JSON.stringify(response);
+    expect(serialized.toLowerCase()).not.toContain('register-ulb');
+    expect(serialized.toLowerCase()).not.toContain('supportingaction');
+  });
+
+  it('still enforces file-level allocation-sum validation unchanged', async () => {
+    // Row totalGrantAllocation (400,000) does not match totalMoHUAAllocation (500,000)
+    const buffer = makeXlsxBuffer([['C001', 'Alpha City', 400_000, 300_000, 100_000, 'population']]);
+    mockS3Service.getBuffer.mockResolvedValue(buffer);
+
+    await expect(
+      service.validateExcel(
+        {
+          stateId: stateOid.toString(),
+          yearId: YEAR_ID,
+          installment: 1,
+          excelFile: { fileName: 'test.xlsx', fileUrl: 'state/path/test.xlsx', fileSize: 1024 },
+        },
+        adminUser,
+      ),
+    ).rejects.toMatchObject({
+      response: { errors: { excelFile: [expect.objectContaining({ code: 'allocationMismatch' })] } },
+    });
+  });
+});
+
+// ─── 5 · New/extra ULB detection (Phase 4) ───────────────────────────────────
+
+describe('DevolutionFormulaExcelService — validateExcel new/extra ULB detection', () => {
+  let service: DevolutionFormulaExcelService;
+
+  beforeEach(async () => {
+    jest.clearAllMocks();
+
+    mockDfService.resolveGrantAllocation.mockResolvedValue(mockGrantAlloc);
+    mockUlbModel.find.mockReturnValue(q(mockDbUlbs));
+    mockFormModel.findOne.mockReturnValue(q(null));
+    mockFormModel.create.mockResolvedValue({ _id: formOid });
+    mockFormModel.findByIdAndUpdate.mockReturnValue(q(null));
+    mockRowModel.insertMany.mockResolvedValue([]);
+    mockRowModel.deleteMany.mockReturnValue(q(null));
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        DevolutionFormulaExcelService,
+        DevolutionFormulaValidator,
+        { provide: getModelToken(DevolutionFormulaForm.name), useValue: mockFormModel },
+        { provide: getModelToken(DevolutionFormulaRow.name), useValue: mockRowModel },
+        { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+        { provide: S3Service, useValue: mockS3Service },
+        { provide: ExcelService, useValue: mockExcelService },
+        { provide: FileTokenService, useValue: mockFileTokenService },
+        { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
+        { provide: DevolutionFormulaService, useValue: mockDfService },
+      ],
+    }).compile();
+
+    service = module.get<DevolutionFormulaExcelService>(DevolutionFormulaExcelService);
+  });
+
+  async function expectRejection(buffer: Buffer) {
+    mockS3Service.getBuffer.mockResolvedValue(buffer);
+    let caught: unknown;
+    try {
+      await service.validateExcel(
+        {
+          stateId: stateOid.toString(),
+          yearId: YEAR_ID,
+          installment: 1,
+          excelFile: { fileName: 'test.xlsx', fileUrl: 'state/path/test.xlsx', fileSize: 1024 },
+        },
+        adminUser,
+      );
+    } catch (e) {
+      caught = e;
+    }
+    return caught as { response: { errors: Record<string, unknown[]>; data: Record<string, unknown> } };
+  }
+
+  it('creates the existing row-level unknownUlb error and also a file-level newUlbsAdded error for an unregistered row', async () => {
+    const buffer = makeXlsxBuffer([['ZZZZ', 'New Town', 500_000, 300_000, 200_000, 'population']]);
+    const caught = await expectRejection(buffer);
+
+    expect(caught.response.data['rowErrors']).toEqual([
+      expect.objectContaining({ field: 'censusCode', code: 'unknownUlb' }),
+    ]);
+    expect(caught.response.errors['excelFile']).toEqual([expect.objectContaining({ code: 'newUlbsAdded' })]);
+  });
+
+  it('message reports the correct count for a single new ULB', async () => {
+    const buffer = makeXlsxBuffer([['ZZZZ', 'New Town', 500_000, 300_000, 200_000, 'population']]);
+    const caught = await expectRejection(buffer);
+
+    const error = caught.response.errors['excelFile'][0] as { message: string };
+    expect(error.message).toBe('You have added 1 ULB(s). Please register before proceeding.');
+  });
+
+  it('message reports the correct count for multiple new ULBs', async () => {
+    const buffer = makeXlsxBuffer([
+      ['ZZZZ1', 'New Town 1', 500_000, 300_000, 200_000, 'population'],
+      ['ZZZZ2', 'New Town 2', 500_000, 300_000, 200_000, 'population'],
+    ]);
+    const caught = await expectRejection(buffer);
+
+    const error = caught.response.errors['excelFile'][0] as { message: string; code: string };
+    expect(error.code).toBe('newUlbsAdded');
+    expect(error.message).toBe('You have added 2 ULB(s). Please register before proceeding.');
+  });
+
+  it('skips required/type/business row validation for unknown ULB rows (no extra row error beyond unknownUlb)', async () => {
+    // Installment amounts deliberately do not sum to totalGrantAllocation — if business
+    // validation ran for this row, an additional row-level error would also appear.
+    const buffer = makeXlsxBuffer([['ZZZZ', 'New Town', 500_000, 100_000, 100_000, 'population']]);
+    const caught = await expectRejection(buffer);
+
+    expect(caught.response.data['rowErrors']).toEqual([
+      expect.objectContaining({ field: 'censusCode', code: 'unknownUlb' }),
+    ]);
+  });
+
+  it('merges newUlbsAdded with allocationMismatch in errors.excelFile rather than overwriting', async () => {
+    // One valid, registered row whose totalGrantAllocation (300,000) does not equal
+    // totalMoHUAAllocation (500,000), plus one unregistered row.
+    const buffer = makeXlsxBuffer([
+      ['C001', 'Alpha City', 300_000, 200_000, 100_000, 'population'],
+      ['ZZZZ', 'New Town', 200_000, 100_000, 100_000, 'population'],
+    ]);
+    const caught = await expectRejection(buffer);
+
+    expect(caught.response.errors['excelFile']).toEqual([
+      expect.objectContaining({ code: 'newUlbsAdded' }),
+      expect.objectContaining({ code: 'allocationMismatch' }),
+    ]);
+  });
+
+  it('persists newUlbCount on the form document for GET-time Register ULB supporting content (Phase 5)', async () => {
+    const buffer = makeXlsxBuffer([['ZZZZ', 'New Town', 500_000, 300_000, 200_000, 'population']]);
+    await expectRejection(buffer);
+
+    const createCallArg = (mockFormModel.create.mock.calls as unknown[][])[0][0] as { newUlbCount: number };
+    expect(createCallArg.newUlbCount).toBe(1);
+  });
+
+  it('does not include any register-link or supporting-content payload in the validateExcel response itself', async () => {
+    const buffer = makeXlsxBuffer([['ZZZZ', 'New Town', 500_000, 300_000, 200_000, 'population']]);
+    const caught = await expectRejection(buffer);
+
+    const serialized = JSON.stringify(caught.response).toLowerCase();
+    expect(serialized).not.toContain('register-ulb');
+    expect(serialized).not.toContain('supportingaction');
+    expect(serialized).not.toContain('actionlink');
+  });
+
+  // ─── validationSummary.newUlbCount (Phase 6) ─────────────────────────────
+
+  it('includes data.validationSummary.newUlbCount on the failed-validation response when new ULBs are detected', async () => {
+    const buffer = makeXlsxBuffer([['ZZZZ', 'New Town', 500_000, 300_000, 200_000, 'population']]);
+    const caught = await expectRejection(buffer);
+
+    const validationSummary = caught.response.data['validationSummary'] as { newUlbCount: number };
+    expect(validationSummary.newUlbCount).toBe(1);
+  });
+
+  it('summary.newUlbCount is 0 on a clean upload with no new ULBs', async () => {
+    const buffer = makeXlsxBuffer([['C001', 'Alpha City', 500_000, 300_000, 200_000, 'population']]);
+    mockS3Service.getBuffer.mockResolvedValue(buffer);
+
+    const result = await service.validateExcel(
+      {
+        stateId: stateOid.toString(),
+        yearId: YEAR_ID,
+        installment: 1,
+        excelFile: { fileName: 'test.xlsx', fileUrl: 'state/path/test.xlsx', fileSize: 1024 },
+      },
+      adminUser,
+    );
+
+    expect(result.data?.summary.newUlbCount).toBe(0);
+  });
+
+  it('resets persisted newUlbCount to 0 on a clean re-upload after a previous invalid upload had added new ULBs', async () => {
+    mockFormModel.findOne.mockReturnValue(
+      q({ _id: formOid, currentFormStatus: FORM_STATUS.IN_PROGRESS, activeDatasetVersion: 1, newUlbCount: 2 }),
+    );
+    const buffer = makeXlsxBuffer([['C001', 'Alpha City', 500_000, 300_000, 200_000, 'population']]);
+    mockS3Service.getBuffer.mockResolvedValue(buffer);
+
+    await service.validateExcel(
+      {
+        stateId: stateOid.toString(),
+        yearId: YEAR_ID,
+        installment: 1,
+        excelFile: { fileName: 'test.xlsx', fileUrl: 'state/path/test.xlsx', fileSize: 1024 },
+      },
+      adminUser,
+    );
+
+    const updateCallArg = (mockFormModel.findByIdAndUpdate.mock.calls as unknown[][])[0][1] as {
+      $set: { newUlbCount: number };
+    };
+    expect(updateCallArg.$set.newUlbCount).toBe(0);
   });
 });

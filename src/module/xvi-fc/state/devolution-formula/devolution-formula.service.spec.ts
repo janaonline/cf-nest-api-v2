@@ -20,7 +20,7 @@ import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import { Scope, UserRole, AccessLevel } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { SaveDraftDevolutionFormulaDto } from './dto/save-draft-devolution-formula.dto';
-import { DF_FORM_QUESTIONS, DF_TEMPLATE_HEADERS } from './constants/devolution-formula.constants';
+import { DF_FORM_QUESTIONS, DF_ROW_EDIT_FIELDS, DF_TEMPLATE_HEADERS } from './constants/devolution-formula.constants';
 import type { HydratedFieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
 
 // ─── Chainable Mongoose query mock ──────────────────────────────────────────
@@ -118,10 +118,10 @@ const mockEulbModel = { findOne: jest.fn() };
 // ─── 1 · Constants ───────────────────────────────────────────────────────────
 
 describe('Devolution Formula — constants', () => {
-  it('DF_TEMPLATE_HEADERS includes Census Code and SB Code column labels', () => {
+  it('DF_TEMPLATE_HEADERS includes Census Code and does not include SB Code (mirrors EULB)', () => {
     const labels = DF_TEMPLATE_HEADERS.map((h) => h.label);
     expect(labels).toContain('Census Code');
-    expect(labels).toContain('SB Code');
+    expect(labels).not.toContain('SB Code');
   });
 
   it('DF_FORM_QUESTIONS contains excelFile (file) and checkboxConfirmation (checkbox)', () => {
@@ -142,6 +142,41 @@ describe('Devolution Formula — constants', () => {
   });
 });
 
+// ─── 1b · DF_FORM_QUESTIONS ulbCount question ────────────────────────────────
+
+describe('Devolution Formula — DF_FORM_QUESTIONS ulbCount question', () => {
+  it('question order is ulbCount, excelFile, checkboxConfirmation', () => {
+    const keys = DF_FORM_QUESTIONS.map((q) => q.key);
+    expect(keys).toEqual(['ulbCount', 'excelFile', 'checkboxConfirmation']);
+  });
+
+  it('ulbCount is a number field with default value 0', () => {
+    const field = DF_FORM_QUESTIONS.find((q) => q.key === 'ulbCount');
+    expect(field).toBeDefined();
+    expect(field?.formFieldType).toBe('number');
+    expect(field?.value).toBe(0);
+  });
+
+  it('ulbCount has required, min(10), and max(1000) validations', () => {
+    const field = DF_FORM_QUESTIONS.find((q) => q.key === 'ulbCount');
+    const names = field?.validations?.map((v) => v.name) ?? [];
+    expect(names).toContain('required');
+    expect(names).toContain('min');
+    expect(names).toContain('max');
+    expect(field?.validations?.find((v) => v.name === 'min')?.validator).toBe(10);
+    expect(field?.validations?.find((v) => v.name === 'max')?.validator).toBe(1000);
+  });
+
+  it('excelFile and checkboxConfirmation questions are unchanged', () => {
+    const fileQ = DF_FORM_QUESTIONS.find((q) => q.key === 'excelFile');
+    expect(fileQ?.formFieldType).toBe('file');
+
+    const cbQ = DF_FORM_QUESTIONS.find((q) => q.key === 'checkboxConfirmation');
+    expect(cbQ?.formFieldType).toBe('checkbox');
+    expect(cbQ?.validations?.some((v) => v.name === 'requiredTrue')).toBe(true);
+  });
+});
+
 // ─── 2 · DevolutionFormulaValidator ──────────────────────────────────────────
 
 describe('DevolutionFormulaValidator', () => {
@@ -150,7 +185,6 @@ describe('DevolutionFormulaValidator', () => {
   const baseRow = (): DfParsedExcelRow => ({
     rowNumber: 1,
     censusCode: 'C001',
-    sbCode: '',
     ulbName: 'Alpha City',
     totalGrantAllocation: 500_000,
     installment1Amount: 300_000,
@@ -303,6 +337,7 @@ describe('DevolutionFormulaService', () => {
 
     mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
     mockEulbModel.findOne.mockReturnValue(q(null));
+    mockRowModel.findOne.mockReturnValue(q(null));
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -399,6 +434,50 @@ describe('DevolutionFormulaService', () => {
     ).rejects.toMatchObject({ response: { message: 'Validation failed.' } });
   });
 
+  // saveDraft persistence: ulbCount is written to the update payload when provided
+  it('saveDraft persists provided ulbCount', async () => {
+    mockFormModel.findOne.mockReturnValue(q(null));
+    mockFormModel.findOneAndUpdate.mockReturnValue(q({ _id: formOid }));
+
+    await service.saveDraft(
+      {
+        stateId: stateOid.toString(),
+        yearId: YEAR_ID,
+        installment: 1,
+        data: { checkboxConfirmation: true, ulbCount: 25 },
+      },
+      adminUser,
+    );
+
+    const updatePayload = (mockFormModel.findOneAndUpdate.mock.calls as unknown[][][])[0][1] as {
+      $set: { ulbCount?: number };
+    };
+    expect(updatePayload.$set.ulbCount).toBe(25);
+  });
+
+  // saveDraft relaxation: ulbCount is a normal `required` field, so draft mode allows it absent
+  it('saveDraft allows missing ulbCount and does not write it to the update payload', async () => {
+    mockFormModel.findOne.mockReturnValue(q(null));
+    mockFormModel.findOneAndUpdate.mockReturnValue(q({ _id: formOid }));
+
+    await expect(
+      service.saveDraft(
+        {
+          stateId: stateOid.toString(),
+          yearId: YEAR_ID,
+          installment: 1,
+          data: { checkboxConfirmation: true },
+        },
+        adminUser,
+      ),
+    ).resolves.not.toThrow();
+
+    const updatePayload = (mockFormModel.findOneAndUpdate.mock.calls as unknown[][][])[0][1] as {
+      $set: Record<string, unknown>;
+    };
+    expect(updatePayload.$set).not.toHaveProperty('ulbCount');
+  });
+
   // Test 13: GET form signs raw paths and returns questions array
   it('getForm returns a questions array with excelFile signed URL and folderPath set', async () => {
     const rawUrl = 'state/devolution-formula/excels/file.xlsx';
@@ -423,6 +502,86 @@ describe('DevolutionFormulaService', () => {
     expect(fileQ?.folderPath).toContain('devolution-formula/excels');
   });
 
+  // GET form: ulbCount question is first, alongside excelFile/checkboxConfirmation
+  it('getForm questions[0] is ulbCount, with excelFile and checkboxConfirmation still present', async () => {
+    mockFormModel.findOne.mockReturnValue(q(mockFormInProgress));
+    mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
+
+    const result = await service.getForm(stateOid.toString(), YEAR_ID, 1, adminUser);
+    const data = result.data as { questions: HydratedFieldConfig[] };
+
+    expect(data.questions[0]?.key).toBe('ulbCount');
+    expect(data.questions.map((q) => q.key)).toContain('excelFile');
+    expect(data.questions.map((q) => q.key)).toContain('checkboxConfirmation');
+  });
+
+  // GET form: ulbCount hydrates from the saved document
+  it('getForm hydrates ulbCount value from the saved document', async () => {
+    mockFormModel.findOne.mockReturnValue(q({ ...mockFormInProgress, ulbCount: 42 }));
+    mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
+
+    const result = await service.getForm(stateOid.toString(), YEAR_ID, 1, adminUser);
+    const data = result.data as { questions: HydratedFieldConfig[] };
+
+    const ulbCountQ = data.questions.find((q) => q.key === 'ulbCount');
+    expect(ulbCountQ?.value).toBe(42);
+  });
+
+  // ─── GET form: installmentAccess ───────────────────────────────────────────
+
+  describe('getForm installmentAccess', () => {
+    it('response includes installmentAccess', async () => {
+      mockFormModel.findOne.mockReturnValue(q(mockFormInProgress));
+      mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
+
+      const result = await service.getForm(stateOid.toString(), YEAR_ID, 1, adminUser);
+      const data = result.data as { installmentAccess?: unknown };
+
+      expect(data.installmentAccess).toBeDefined();
+    });
+
+    it('installment1 is always selectable and unlocked', async () => {
+      mockFormModel.findOne.mockReturnValue(q(mockFormInProgress));
+      mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
+
+      const result = await service.getForm(stateOid.toString(), YEAR_ID, 1, adminUser);
+      const data = result.data as {
+        installmentAccess: { installment1: { canSelect: boolean; locked: boolean; lockReason: string | null } };
+      };
+
+      expect(data.installmentAccess.installment1).toEqual({
+        canSelect: true,
+        locked: false,
+        lockReason: null,
+      });
+    });
+
+    it('installment2 is locked when no acknowledged Installment 1 claim batch exists', async () => {
+      mockFormModel.findOne.mockReturnValue(q(mockFormInProgress));
+      mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
+
+      const result = await service.getForm(stateOid.toString(), YEAR_ID, 1, adminUser);
+      const data = result.data as {
+        installmentAccess: { installment2: { canSelect: boolean; locked: boolean; lockReason: string | null } };
+      };
+
+      expect(data.installmentAccess.installment2.canSelect).toBe(false);
+      expect(data.installmentAccess.installment2.locked).toBe(true);
+    });
+
+    it('installment2 lockReason matches the required message', async () => {
+      mockFormModel.findOne.mockReturnValue(q(mockFormInProgress));
+      mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
+
+      const result = await service.getForm(stateOid.toString(), YEAR_ID, 1, adminUser);
+      const data = result.data as { installmentAccess: { installment2: { lockReason: string | null } } };
+
+      expect(data.installmentAccess.installment2.lockReason).toBe(
+        'Installment 2 is locked until at least one Installment 1 claim batch is acknowledged by MoHUA.',
+      );
+    });
+  });
+
   // GET form: excelFile supportingContent contains action ids
   it('getForm excelFile question has supportingContent with action ids for download, view, revalidate', async () => {
     mockFormModel.findOne.mockReturnValue(q({ ...mockFormInProgress, activeDatasetVersion: 1 }));
@@ -439,6 +598,375 @@ describe('DevolutionFormulaService', () => {
     expect(ids).toContain('revalidate-excel');
   });
 
+  // ─── excelFile supportingContent — badges ──────────────────────────────────
+
+  describe('excelFile supportingContent — badges', () => {
+    const docWithErrors = { ...mockFormInProgress, errorRowCount: 3, validationStatus: 'INVALID' as const };
+    const docUnbalanced = { ...mockFormInProgress, totalAllocatedSum: 400_000 };
+    const docNoDataset = { ...mockFormInProgress, activeDatasetVersion: 0 };
+
+    async function getBadges(doc: object) {
+      mockFormModel.findOne.mockReturnValue(q(doc));
+      mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
+      const result = await service.getForm(stateOid.toString(), YEAR_ID, 1, adminUser);
+      const data = result.data as { questions: HydratedFieldConfig[] };
+      const fileQ = data.questions.find((q) => q.key === 'excelFile');
+      return fileQ?.supportingContent?.[0]?.badges ?? [];
+    }
+
+    it('badges array exists on excelFile supportingContent', async () => {
+      const badges = await getBadges(mockFormInProgress);
+      expect(Array.isArray(badges)).toBe(true);
+      expect(badges.length).toBeGreaterThan(0);
+    });
+
+    it('Total rows badge is visible with correct label when activeDatasetVersion > 0', async () => {
+      const badges = await getBadges(mockFormInProgress);
+      const badge = badges.find((b) => b.label?.startsWith('Total rows'));
+      expect(badge).toBeDefined();
+      expect(badge?.visible).toBe(true);
+      expect(badge?.label).toBe('Total rows: 2');
+    });
+
+    it('Total rows badge is not visible when no active dataset', async () => {
+      const badges = await getBadges(docNoDataset);
+      const badge = badges.find((b) => b.label?.startsWith('Total rows'));
+      expect(badge?.visible).toBe(false);
+    });
+
+    it('Error badge is not visible when errorRowCount is 0', async () => {
+      const badges = await getBadges(mockFormInProgress);
+      const badge = badges.find((b) => b.label?.includes('error(s)'));
+      expect(badge?.visible).toBe(false);
+    });
+
+    it('Error badge is visible with correct label when errorRowCount > 0', async () => {
+      const badges = await getBadges(docWithErrors);
+      const badge = badges.find((b) => b.label?.includes('error(s)'));
+      expect(badge).toBeDefined();
+      expect(badge?.visible).toBe(true);
+      expect(badge?.label).toBe('3 error(s)');
+    });
+
+    it('Allocated amount badge label uses INR format with Cr. suffix', async () => {
+      const badges = await getBadges(mockFormInProgress);
+      const badge = badges.find((b) => b.label?.startsWith('Allocated amount'));
+      expect(badge?.label).toBe('Allocated amount: ₹5,00,000 Cr.');
+    });
+
+    it('Allocated sum badge tone is success when allocation is balanced', async () => {
+      const badges = await getBadges(mockFormInProgress);
+      const badge = badges.find((b) => b.label?.startsWith('Allocated sum'));
+      expect(badge?.tone).toBe('success');
+    });
+
+    it('Allocated sum badge tone is danger when allocation is unbalanced', async () => {
+      const badges = await getBadges(docUnbalanced);
+      const badge = badges.find((b) => b.label?.startsWith('Allocated sum'));
+      expect(badge?.tone).toBe('danger');
+    });
+
+    it('Remaining badge label shows formatted difference with Cr. suffix', async () => {
+      const badges = await getBadges(docUnbalanced);
+      const badge = badges.find((b) => b.label?.startsWith('Remaining'));
+      expect(badge?.label).toBe('Remaining: ₹1,00,000 Cr.');
+    });
+
+    it('All valid badge is visible when validationStatus is VALID', async () => {
+      const badges = await getBadges(mockFormInProgress);
+      const badge = badges.find((b) => b.label === 'All valid');
+      expect(badge).toBeDefined();
+      expect(badge?.visible).toBe(true);
+    });
+  });
+
+  // ─── excelFile supportingContent — Register ULB action (Phase 5) ──────────
+
+  describe('excelFile supportingContent — Register ULB action', () => {
+    const docWithNewUlbs = {
+      ...mockFormInProgress,
+      newUlbCount: 2,
+      errorRowCount: 2,
+      validationStatus: 'INVALID' as const,
+    };
+    const docAllocationMismatchOnly = {
+      ...mockFormInProgress,
+      newUlbCount: 0,
+      totalAllocatedSum: 400_000,
+      validationStatus: 'INVALID' as const,
+    };
+
+    async function getSupportingContent(doc: object) {
+      mockFormModel.findOne.mockReturnValue(q(doc));
+      mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
+      const result = await service.getForm(stateOid.toString(), YEAR_ID, 1, adminUser);
+      const data = result.data as { questions: HydratedFieldConfig[] };
+      const fileQ = data.questions.find((q) => q.key === 'excelFile');
+      return fileQ?.supportingContent ?? [];
+    }
+
+    function findRegisterUlbAction(supportingContent: Array<{ actions?: Array<Record<string, unknown>> }>) {
+      for (const block of supportingContent) {
+        const action = block.actions?.find((a) => a['id'] === 'register-ulb');
+        if (action) return action;
+      }
+      return undefined;
+    }
+
+    it('is visible when newUlbCount > 0', async () => {
+      const supportingContent = await getSupportingContent(docWithNewUlbs);
+      const action = findRegisterUlbAction(supportingContent);
+      expect(action).toBeDefined();
+      expect(action?.['visible']).toBe(true);
+    });
+
+    it('uses label "Register ULB"', async () => {
+      const supportingContent = await getSupportingContent(docWithNewUlbs);
+      const action = findRegisterUlbAction(supportingContent);
+      expect(action?.['label']).toBe('Register ULB');
+    });
+
+    it('uses target "/xvifc/:yearId/register-ulb" built from the runtime yearId', async () => {
+      const supportingContent = await getSupportingContent(docWithNewUlbs);
+      const action = findRegisterUlbAction(supportingContent);
+      expect(action?.['url']).toBe(`/xvifc/${YEAR_ID}/register-ulb`);
+    });
+
+    it('does not use the "/resigter-ulb" typo route', async () => {
+      const supportingContent = await getSupportingContent(docWithNewUlbs);
+      const action = findRegisterUlbAction(supportingContent);
+      expect(action?.['url']).not.toContain('resigter-ulb');
+    });
+
+    it('does not include a frontend host/domain in the url', async () => {
+      const supportingContent = await getSupportingContent(docWithNewUlbs);
+      const action = findRegisterUlbAction(supportingContent);
+      expect(action?.['url']).toMatch(/^\//);
+      expect(action?.['url']).not.toMatch(/^https?:\/\//);
+    });
+
+    it('uses a green/success tone', async () => {
+      const supportingContent = await getSupportingContent(docWithNewUlbs);
+      const action = findRegisterUlbAction(supportingContent);
+      expect(action?.['tone']).toBe('success');
+    });
+
+    it('uses icon "bi bi-person-check"', async () => {
+      const supportingContent = await getSupportingContent(docWithNewUlbs);
+      const action = findRegisterUlbAction(supportingContent);
+      expect(action?.['icon']).toBe('bi bi-person-check');
+    });
+
+    it('is included in the same first supportingContent block as download-template (no separate block)', async () => {
+      const supportingContent = await getSupportingContent(docWithNewUlbs);
+      expect(supportingContent.length).toBe(1);
+      const ids = (supportingContent[0]?.actions ?? []).map((a) => (a as { id: string }).id);
+      expect(ids).toContain('download-template');
+      expect(ids).toContain('register-ulb');
+    });
+
+    it('is not visible when newUlbCount is 0', async () => {
+      const supportingContent = await getSupportingContent(mockFormInProgress);
+      const action = findRegisterUlbAction(supportingContent);
+      expect(action?.['visible']).toBe(false);
+    });
+
+    it('does not create a second supportingContent block when newUlbCount is 0', async () => {
+      const supportingContent = await getSupportingContent(mockFormInProgress);
+      expect(supportingContent.length).toBe(1);
+    });
+
+    it('is not visible for an allocation-mismatch-only failure (no new ULBs)', async () => {
+      const supportingContent = await getSupportingContent(docAllocationMismatchOnly);
+      const action = findRegisterUlbAction(supportingContent);
+      expect(action?.['visible']).toBe(false);
+    });
+
+    it('preserves existing download-template/view-uploaded-data/error-sheet/revalidate actions when newUlbCount > 0', async () => {
+      const supportingContent = await getSupportingContent(docWithNewUlbs);
+      const ids = (supportingContent[0]?.actions ?? []).map((a) => (a as { id: string }).id);
+      expect(ids).toContain('download-template');
+      expect(ids).toContain('view-uploaded-data');
+      expect(ids).toContain('download-error-sheet');
+      expect(ids).toContain('revalidate-excel');
+    });
+  });
+
+  // ─── validationSummary.newUlbCount (Phase 6) ───────────────────────────────
+
+  describe('GET form validationSummary — newUlbCount', () => {
+    it('includes newUlbCount on the validationSummary', async () => {
+      mockFormModel.findOne.mockReturnValue(q({ ...mockFormInProgress, newUlbCount: 3 }));
+      mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
+
+      const result = await service.getForm(stateOid.toString(), YEAR_ID, 1, adminUser);
+      const data = result.data as { validationSummary: { newUlbCount: number } };
+
+      expect(data.validationSummary).toHaveProperty('newUlbCount');
+    });
+
+    it('defaults newUlbCount to 0 when the form has no persisted newUlbCount', async () => {
+      mockFormModel.findOne.mockReturnValue(q(mockFormInProgress));
+      mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
+
+      const result = await service.getForm(stateOid.toString(), YEAR_ID, 1, adminUser);
+      const data = result.data as { validationSummary: { newUlbCount: number } };
+
+      expect(data.validationSummary.newUlbCount).toBe(0);
+    });
+
+    it('returns the persisted newUlbCount when greater than 0', async () => {
+      mockFormModel.findOne.mockReturnValue(q({ ...mockFormInProgress, newUlbCount: 4 }));
+      mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
+
+      const result = await service.getForm(stateOid.toString(), YEAR_ID, 1, adminUser);
+      const data = result.data as { validationSummary: { newUlbCount: number } };
+
+      expect(data.validationSummary.newUlbCount).toBe(4);
+    });
+  });
+
+  // ─── finalSubmit blocking gates — newUlbCount / identityModified (Phase 7) ─
+
+  describe('finalSubmit — new ULB / identity-modified blocking gates', () => {
+    it('rejects when persisted newUlbCount > 0, error keyed to excelFile with code newUlbsAdded', async () => {
+      mockFormModel.findOne.mockReturnValue(q({ ...mockFormInProgress, newUlbCount: 3 }));
+      mockEulbModel.findOne.mockReturnValue(q({ _id: new Types.ObjectId() }));
+
+      await expect(
+        service.finalSubmit(
+          {
+            stateId: stateOid.toString(),
+            yearId: YEAR_ID,
+            installment: 1,
+            data: {
+              excelFile: { fileName: 'f.xlsx', fileUrl: 'path/f.xlsx', fileSize: 1024 },
+              checkboxConfirmation: true,
+              ulbCount: 50,
+            },
+          },
+          adminUser,
+        ),
+      ).rejects.toMatchObject({
+        response: {
+          message: 'Validation failed.',
+          errors: { excelFile: [{ field: 'excelFile', code: 'newUlbsAdded' }] },
+        },
+      });
+    });
+
+    it('newUlbsAdded message includes the persisted count', async () => {
+      mockFormModel.findOne.mockReturnValue(q({ ...mockFormInProgress, newUlbCount: 3 }));
+      mockEulbModel.findOne.mockReturnValue(q({ _id: new Types.ObjectId() }));
+
+      await expect(
+        service.finalSubmit(
+          {
+            stateId: stateOid.toString(),
+            yearId: YEAR_ID,
+            installment: 1,
+            data: {
+              excelFile: { fileName: 'f.xlsx', fileUrl: 'path/f.xlsx', fileSize: 1024 },
+              checkboxConfirmation: true,
+              ulbCount: 50,
+            },
+          },
+          adminUser,
+        ),
+      ).rejects.toMatchObject({
+        response: {
+          errors: {
+            excelFile: [{ message: 'You have added 3 ULB(s). Please register before proceeding.' }],
+          },
+        },
+      });
+    });
+
+    it('rejects when the active dataset has a row error with code identityModified, error keyed to excelFile', async () => {
+      mockFormModel.findOne.mockReturnValue(q(mockFormInProgress));
+      mockEulbModel.findOne.mockReturnValue(q({ _id: new Types.ObjectId() }));
+      mockRowModel.findOne.mockReturnValue(q({ _id: rowOid }));
+
+      await expect(
+        service.finalSubmit(
+          {
+            stateId: stateOid.toString(),
+            yearId: YEAR_ID,
+            installment: 1,
+            data: {
+              excelFile: { fileName: 'f.xlsx', fileUrl: 'path/f.xlsx', fileSize: 1024 },
+              checkboxConfirmation: true,
+              ulbCount: 50,
+            },
+          },
+          adminUser,
+        ),
+      ).rejects.toMatchObject({
+        response: {
+          message: 'Validation failed.',
+          errors: { excelFile: [{ field: 'excelFile', code: 'identityModified' }] },
+        },
+      });
+    });
+
+    it('returns both newUlbsAdded and identityModified under errors.excelFile when both conditions exist', async () => {
+      mockFormModel.findOne.mockReturnValue(q({ ...mockFormInProgress, newUlbCount: 2 }));
+      mockEulbModel.findOne.mockReturnValue(q({ _id: new Types.ObjectId() }));
+      mockRowModel.findOne.mockReturnValue(q({ _id: rowOid }));
+
+      await expect(
+        service.finalSubmit(
+          {
+            stateId: stateOid.toString(),
+            yearId: YEAR_ID,
+            installment: 1,
+            data: {
+              excelFile: { fileName: 'f.xlsx', fileUrl: 'path/f.xlsx', fileSize: 1024 },
+              checkboxConfirmation: true,
+              ulbCount: 50,
+            },
+          },
+          adminUser,
+        ),
+      ).rejects.toMatchObject({
+        response: {
+          message: 'Validation failed.',
+          errors: {
+            excelFile: [
+              { field: 'excelFile', code: 'newUlbsAdded' },
+              { field: 'excelFile', code: 'identityModified' },
+            ],
+          },
+        },
+      });
+    });
+
+    it('happy path: finalSubmit succeeds when newUlbCount is 0, no identityModified rows, validationStatus VALID, and ulbCount matches excelRowCount', async () => {
+      mockFormModel.findOne.mockReturnValue(q({ ...mockFormInProgress, excelRowCount: 50, newUlbCount: 0 }));
+      mockEulbModel.findOne.mockReturnValue(
+        q({ _id: new Types.ObjectId(), currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }),
+      );
+      mockRowModel.findOne.mockReturnValue(q(null));
+      mockFormModel.findOneAndUpdate.mockReturnValue(q({ _id: formOid }));
+
+      await expect(
+        service.finalSubmit(
+          {
+            stateId: stateOid.toString(),
+            yearId: YEAR_ID,
+            installment: 1,
+            data: {
+              excelFile: { fileName: 'f.xlsx', fileUrl: 'path/f.xlsx', fileSize: 1024 },
+              checkboxConfirmation: true,
+              ulbCount: 50,
+            },
+          },
+          adminUser,
+        ),
+      ).resolves.not.toThrow();
+    });
+  });
+
   // Test 11: final-submit blocked when form not valid — error keyed to excelFile
   it('finalSubmit throws when validationStatus is INVALID, error keyed to excelFile', async () => {
     mockFormModel.findOne.mockReturnValue(q({ ...mockFormInProgress, validationStatus: 'INVALID' }));
@@ -453,6 +981,7 @@ describe('DevolutionFormulaService', () => {
           data: {
             excelFile: { fileName: 'f.xlsx', fileUrl: 'path/f.xlsx', fileSize: 1024 },
             checkboxConfirmation: true,
+            ulbCount: 50,
           },
         },
         adminUser,
@@ -476,11 +1005,128 @@ describe('DevolutionFormulaService', () => {
           yearId: YEAR_ID,
           installment: 1,
           // @ts-expect-error intentionally omitting excelFile
-          data: { checkboxConfirmation: true },
+          data: { checkboxConfirmation: true, ulbCount: 50 },
         },
         adminUser,
       ),
     ).rejects.toMatchObject({ response: { message: 'Validation failed.' } });
+  });
+
+  // finalSubmit dynamic validation: ulbCount out of range rejected, error keyed to ulbCount
+  it('finalSubmit throws when ulbCount is below the minimum, error keyed to ulbCount', async () => {
+    mockFormModel.findOne.mockReturnValue(q(mockFormInProgress));
+
+    await expect(
+      service.finalSubmit(
+        {
+          stateId: stateOid.toString(),
+          yearId: YEAR_ID,
+          installment: 1,
+          data: {
+            excelFile: { fileName: 'f.xlsx', fileUrl: 'path/f.xlsx', fileSize: 1024 },
+            checkboxConfirmation: true,
+            ulbCount: 5,
+          },
+        },
+        adminUser,
+      ),
+    ).rejects.toMatchObject({
+      response: {
+        message: 'Validation failed.',
+        errors: { ulbCount: [{ field: 'ulbCount', code: 'min' }] },
+      },
+    });
+  });
+
+  // finalSubmit dynamic validation: ulbCount above the maximum rejected, error keyed to ulbCount
+  it('finalSubmit throws when ulbCount is above the maximum, error keyed to ulbCount', async () => {
+    mockFormModel.findOne.mockReturnValue(q(mockFormInProgress));
+
+    await expect(
+      service.finalSubmit(
+        {
+          stateId: stateOid.toString(),
+          yearId: YEAR_ID,
+          installment: 1,
+          data: {
+            excelFile: { fileName: 'f.xlsx', fileUrl: 'path/f.xlsx', fileSize: 1024 },
+            checkboxConfirmation: true,
+            ulbCount: 5000,
+          },
+        },
+        adminUser,
+      ),
+    ).rejects.toMatchObject({
+      response: {
+        message: 'Validation failed.',
+        errors: { ulbCount: [{ field: 'ulbCount', code: 'max' }] },
+      },
+    });
+  });
+
+  // finalSubmit dynamic validation: ulbCount required on full submit, error keyed to ulbCount
+  it('finalSubmit throws when ulbCount is missing from data (dynamic required validation)', async () => {
+    mockFormModel.findOne.mockReturnValue(q(mockFormInProgress));
+
+    await expect(
+      service.finalSubmit(
+        {
+          stateId: stateOid.toString(),
+          yearId: YEAR_ID,
+          installment: 1,
+          // @ts-expect-error intentionally omitting ulbCount
+          data: {
+            excelFile: { fileName: 'f.xlsx', fileUrl: 'path/f.xlsx', fileSize: 1024 },
+            checkboxConfirmation: true,
+          },
+        },
+        adminUser,
+      ),
+    ).rejects.toMatchObject({
+      response: {
+        message: 'Validation failed.',
+        errors: { ulbCount: [{ field: 'ulbCount', code: 'required' }] },
+      },
+    });
+  });
+
+  // finalSubmit Excel dataset consistency: ulbCount must match the validated excelRowCount
+  it('finalSubmit throws when ulbCount does not match excelRowCount, error keyed to ulbCount', async () => {
+    mockFormModel.findOne.mockReturnValue(q(mockFormInProgress)); // excelRowCount: 2
+    mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
+    mockEulbModel.findOne.mockReturnValue(
+      q({ _id: new Types.ObjectId(), currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }),
+    );
+
+    await expect(
+      service.finalSubmit(
+        {
+          stateId: stateOid.toString(),
+          yearId: YEAR_ID,
+          installment: 1,
+          data: {
+            excelFile: { fileName: 'f.xlsx', fileUrl: 'path/f.xlsx', fileSize: 1024 },
+            checkboxConfirmation: true,
+            ulbCount: 50, // mismatches mockFormInProgress.excelRowCount (2)
+          },
+        },
+        adminUser,
+      ),
+    ).rejects.toMatchObject({
+      response: {
+        message: 'Validation failed.',
+        errors: {
+          ulbCount: [
+            {
+              field: 'ulbCount',
+              code: 'mismatch',
+              message:
+                'ULB count entered (50) does not match the number of rows in the uploaded Devolution Formula Excel (2).',
+            },
+          ],
+        },
+      },
+    });
   });
 
   // Test 5: installment 2 always locked — error keyed to installment
@@ -496,6 +1142,7 @@ describe('DevolutionFormulaService', () => {
           data: {
             excelFile: { fileName: 'f.xlsx', fileUrl: 'path/f.xlsx', fileSize: 1024 },
             checkboxConfirmation: true,
+            ulbCount: 50,
           },
         },
         adminUser,
@@ -522,6 +1169,7 @@ describe('DevolutionFormulaService', () => {
           data: {
             excelFile: { fileName: 'f.xlsx', fileUrl: 'path/f.xlsx', fileSize: 1024 },
             checkboxConfirmation: true,
+            ulbCount: 50,
           },
         },
         adminUser,
@@ -552,6 +1200,7 @@ describe('DevolutionFormulaService', () => {
           data: {
             excelFile: { fileName: 'f.xlsx', fileUrl: 'path/f.xlsx', fileSize: 1024 },
             checkboxConfirmation: true,
+            ulbCount: 50,
           },
         },
         adminUser,
@@ -564,11 +1213,11 @@ describe('DevolutionFormulaService', () => {
     });
   });
 
-  // installment 1 prerequisite not met — error keyed to installment
+  // installment 1 prerequisite not met — EULB not yet under review by MoHUA
   it('finalSubmit throws when installment 1 EULB prerequisite is not met, error keyed to installment', async () => {
     mockFormModel.findOne.mockReturnValue(q(mockFormInProgress)); // validationStatus: VALID, excelRowCount: 2
     mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
-    mockEulbModel.findOne.mockReturnValue(q(null)); // EULB not yet acknowledged
+    mockEulbModel.findOne.mockReturnValue(q(null)); // EULB not yet under review
 
     await expect(
       service.finalSubmit(
@@ -579,6 +1228,7 @@ describe('DevolutionFormulaService', () => {
           data: {
             excelFile: { fileName: 'f.xlsx', fileUrl: 'path/f.xlsx', fileSize: 1024 },
             checkboxConfirmation: true,
+            ulbCount: 50,
           },
         },
         adminUser,
@@ -589,6 +1239,37 @@ describe('DevolutionFormulaService', () => {
         errors: { installment: [{ field: 'installment', code: 'prerequisiteNotMet' }] },
       },
     });
+  });
+
+  // installment 1 prerequisite met — EULB is UNDER_REVIEW_BY_MOHUA
+  it('finalSubmit installment 1 prerequisite passes when EULB currentFormStatus is UNDER_REVIEW_BY_MOHUA', async () => {
+    mockFormModel.findOne.mockReturnValue(q({ ...mockFormInProgress, excelRowCount: 50 }));
+    mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
+    mockEulbModel.findOne.mockReturnValue(
+      q({ _id: new Types.ObjectId(), currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }),
+    );
+    mockFormModel.findOneAndUpdate.mockReturnValue(q({ _id: formOid }));
+
+    await expect(
+      service.finalSubmit(
+        {
+          stateId: stateOid.toString(),
+          yearId: YEAR_ID,
+          installment: 1,
+          data: {
+            excelFile: { fileName: 'f.xlsx', fileUrl: 'path/f.xlsx', fileSize: 1024 },
+            checkboxConfirmation: true,
+            ulbCount: 50,
+          },
+        },
+        adminUser,
+      ),
+    ).resolves.not.toThrow();
+
+    const updatePayload = (mockFormModel.findOneAndUpdate.mock.calls as unknown[][][])[0][1] as {
+      $set: { ulbCount?: number };
+    };
+    expect(updatePayload.$set.ulbCount).toBe(50);
   });
 
   // GET response: no old flat fields exposed at top level
@@ -706,5 +1387,229 @@ describe('DevolutionFormulaRowService', () => {
         adminUser,
       ),
     ).rejects.toThrow();
+  });
+});
+
+// ─── 6 · ULB identifier consolidation (mirrors EULB) ─────────────────────────
+
+describe('Devolution Formula — ULB identifier consolidation', () => {
+  it('template row uses censusCode when censusCode is present on ULB', () => {
+    const ulb = { censusCode: 'C001', sbCode: '' };
+    const identifier = ulb.censusCode || ulb.sbCode || '';
+    expect(identifier).toBe('C001');
+  });
+
+  it('template row falls back to sbCode when censusCode is absent or empty', () => {
+    const ulb = { censusCode: '', sbCode: 'SB001' };
+    const identifier = ulb.censusCode || ulb.sbCode || '';
+    expect(identifier).toBe('SB001');
+  });
+
+  it('template row returns empty string when both censusCode and sbCode are absent', () => {
+    const ulb = { censusCode: '', sbCode: '' };
+    const identifier = ulb.censusCode || ulb.sbCode || '';
+    expect(identifier).toBe('');
+  });
+
+  it('DF_TEMPLATE_HEADERS has exactly one identifier column (Census Code)', () => {
+    const identifierCols = DF_TEMPLATE_HEADERS.filter((h) => h.key === 'censusCode' || h.key === 'sbCode');
+    expect(identifierCols).toHaveLength(1);
+    expect(identifierCols[0].key).toBe('censusCode');
+    expect(identifierCols[0].label).toBe('Census Code');
+  });
+
+  it('ulb lookup map uses censusCode when present, sbCode as fallback (uses || to handle empty strings)', () => {
+    type FakeUlb = { _id: string; censusCode?: string | null; sbCode?: string | null };
+    const dbUlbs: FakeUlb[] = [
+      { _id: 'u1', censusCode: 'C001', sbCode: null }, // census code only
+      { _id: 'u2', censusCode: null, sbCode: 'SB002' }, // null censusCode → sbCode
+      { _id: 'u3', censusCode: '', sbCode: 'SB003' }, // empty censusCode → sbCode
+    ];
+    const ulbByCode = new Map<string, FakeUlb>();
+    for (const ulb of dbUlbs) {
+      const code = String(ulb.censusCode || ulb.sbCode || '')
+        .trim()
+        .toLowerCase();
+      if (code) ulbByCode.set(code, ulb);
+    }
+    expect(ulbByCode.get('c001')?._id).toBe('u1');
+    expect(ulbByCode.get('sb002')?._id).toBe('u2');
+    expect(ulbByCode.get('sb003')?._id).toBe('u3');
+  });
+
+  it('registry: identifierMissing error is keyed to censusCode field', () => {
+    const missingIdentifierError = {
+      field: 'censusCode',
+      code: 'identifierMissing',
+      message: 'Census Code is required.',
+    };
+    expect(missingIdentifierError.field).toBe('censusCode');
+    expect(missingIdentifierError.code).toBe('identifierMissing');
+  });
+
+  it('registry: unknownUlb error is keyed to censusCode field', () => {
+    const unknownError = {
+      field: 'censusCode',
+      code: 'unknownUlb',
+      message: 'Census Code "X999" does not match any active onboarded ULB for this state.',
+    };
+    expect(unknownError.field).toBe('censusCode');
+    expect(unknownError.code).toBe('unknownUlb');
+  });
+});
+
+// ─── 7 · DF_ROW_EDIT_FIELDS constant ─────────────────────────────────────────
+
+describe('Devolution Formula — DF_ROW_EDIT_FIELDS constant', () => {
+  it('has exactly 4 fields', () => {
+    expect(DF_ROW_EDIT_FIELDS).toHaveLength(4);
+  });
+
+  it('totalGrantAllocation has required and min validations', () => {
+    const field = DF_ROW_EDIT_FIELDS.find((f) => f.key === 'totalGrantAllocation');
+    expect(field).toBeDefined();
+    expect(field?.formFieldType).toBe('number');
+    const names = field?.validations?.map((v) => v.name) ?? [];
+    expect(names).toContain('required');
+    expect(names).toContain('min');
+    const minV = field?.validations?.find((v) => v.name === 'min');
+    expect(minV?.validator).toBe(0);
+  });
+
+  it('installment1Amount has required and min validations', () => {
+    const field = DF_ROW_EDIT_FIELDS.find((f) => f.key === 'installment1Amount');
+    expect(field).toBeDefined();
+    expect(field?.formFieldType).toBe('number');
+    const names = field?.validations?.map((v) => v.name) ?? [];
+    expect(names).toContain('required');
+    expect(names).toContain('min');
+  });
+
+  it('installment2Amount has required and min validations', () => {
+    const field = DF_ROW_EDIT_FIELDS.find((f) => f.key === 'installment2Amount');
+    expect(field).toBeDefined();
+    expect(field?.formFieldType).toBe('number');
+    const names = field?.validations?.map((v) => v.name) ?? [];
+    expect(names).toContain('required');
+    expect(names).toContain('min');
+  });
+
+  it('devolutionFormula has required and maxLength 250 validations', () => {
+    const field = DF_ROW_EDIT_FIELDS.find((f) => f.key === 'devolutionFormula');
+    expect(field).toBeDefined();
+    expect(field?.formFieldType).toBe('text');
+    const names = field?.validations?.map((v) => v.name) ?? [];
+    expect(names).toContain('required');
+    expect(names).toContain('maxLength');
+    const maxLenV = field?.validations?.find((v) => v.name === 'maxLength');
+    expect(maxLenV?.validator).toBe(250);
+  });
+
+  it('no field has a fieldTypes property (clean FieldConfig, no internal metadata exposed)', () => {
+    for (const field of DF_ROW_EDIT_FIELDS) {
+      expect(field).not.toHaveProperty('fieldTypes');
+    }
+  });
+});
+
+// ─── 8 · getForm includes rowEditFields ───────────────────────────────────────
+
+describe('Devolution Formula — getForm rowEditFields', () => {
+  let service: DevolutionFormulaService;
+
+  const mockActorsService = {
+    buildActorsAndStateName: jest.fn().mockReturnValue({ actors: [], stateName: 'Test State' }),
+  };
+  const mockFileTokenService = { signFileUrl: jest.fn((url: string) => `signed::${url}`) };
+  const mockFileUrlNormalizer = { toRawStoragePath: jest.fn((url: string) => url) };
+
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        DevolutionFormulaService,
+        DevolutionFormulaValidator,
+        ExcelService,
+        DynamicFormValidationService,
+        { provide: getModelToken(DevolutionFormulaForm.name), useValue: mockFormModel },
+        { provide: getModelToken(DevolutionFormulaRow.name), useValue: mockRowModel },
+        { provide: getModelToken(GrantAllocation.name), useValue: mockGrantAllocationModel },
+        { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: mockEulbModel },
+        { provide: XvifcFormActorsService, useValue: mockActorsService },
+        { provide: FileTokenService, useValue: mockFileTokenService },
+        { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
+      ],
+    }).compile();
+
+    service = module.get<DevolutionFormulaService>(DevolutionFormulaService);
+  });
+
+  it('getForm includes rowEditFields in response with 4 entries', async () => {
+    mockFormModel.findOne.mockReturnValue(q(mockFormInProgress));
+
+    const result = await service.getForm(stateOid.toString(), YEAR_ID, 1, adminUser);
+    const data = result.data as Record<string, unknown>;
+
+    expect(data).toHaveProperty('rowEditFields');
+    expect(Array.isArray(data['rowEditFields'])).toBe(true);
+    expect((data['rowEditFields'] as unknown[]).length).toBe(4);
+  });
+
+  it('getForm rowEditFields entries do not expose fieldTypes', async () => {
+    mockFormModel.findOne.mockReturnValue(q(mockFormInProgress));
+
+    const result = await service.getForm(stateOid.toString(), YEAR_ID, 1, adminUser);
+    const fields = (result.data as Record<string, unknown>)['rowEditFields'] as Record<string, unknown>[];
+
+    for (const field of fields) {
+      expect(field).not.toHaveProperty('fieldTypes');
+    }
+  });
+
+  it('getForm rowEditFields totalGrantAllocation has required and min validations', async () => {
+    mockFormModel.findOne.mockReturnValue(q(mockFormInProgress));
+
+    const result = await service.getForm(stateOid.toString(), YEAR_ID, 1, adminUser);
+    const fields = (result.data as Record<string, unknown>)['rowEditFields'] as Array<{
+      key: string;
+      validations?: Array<{ name: string; validator: unknown }>;
+    }>;
+
+    const field = fields.find((f) => f.key === 'totalGrantAllocation');
+    expect(field).toBeDefined();
+    const names = field?.validations?.map((v) => v.name) ?? [];
+    expect(names).toContain('required');
+    expect(names).toContain('min');
+  });
+
+  it('getForm rowEditFields devolutionFormula has required and maxLength 250', async () => {
+    mockFormModel.findOne.mockReturnValue(q(mockFormInProgress));
+
+    const result = await service.getForm(stateOid.toString(), YEAR_ID, 1, adminUser);
+    const fields = (result.data as Record<string, unknown>)['rowEditFields'] as Array<{
+      key: string;
+      validations?: Array<{ name: string; validator: unknown }>;
+    }>;
+
+    const field = fields.find((f) => f.key === 'devolutionFormula');
+    expect(field).toBeDefined();
+    const names = field?.validations?.map((v) => v.name) ?? [];
+    expect(names).toContain('required');
+    const maxLenV = field?.validations?.find((v) => v.name === 'maxLength');
+    expect(maxLenV?.validator).toBe(250);
+  });
+
+  it('getForm preserves existing questions and validationSummary alongside rowEditFields', async () => {
+    mockFormModel.findOne.mockReturnValue(q(mockFormInProgress));
+
+    const result = await service.getForm(stateOid.toString(), YEAR_ID, 1, adminUser);
+    const data = result.data as Record<string, unknown>;
+
+    expect(data).toHaveProperty('questions');
+    expect(data).toHaveProperty('validationSummary');
+    expect(data).toHaveProperty('rowEditFields');
+    expect(Array.isArray(data['questions'])).toBe(true);
   });
 });

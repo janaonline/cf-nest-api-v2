@@ -76,7 +76,7 @@ export class DevolutionFormulaRowService {
         .sort({ rowNumber: 1 })
         .skip(skip)
         .limit(limit)
-        .select('-rawExcelData -__v')
+        .select('-rawExcelData -sbCode -__v')
         .lean()
         .exec(),
       this.rowModel.countDocuments(filter).exec(),
@@ -98,6 +98,7 @@ export class DevolutionFormulaRowService {
       validRowCount: validCount,
       errorRowCount: errorCount,
       missingUlbCount: 0,
+      newUlbCount: (formDoc['newUlbCount'] as number) ?? 0,
       totalMoHUAAllocation: (formDoc['totalMoHUAAllocation'] as number) ?? 0,
       totalAllocatedSum: (formDoc['totalAllocatedSum'] as number) ?? 0,
       activeDatasetVersion: activeVersion,
@@ -175,7 +176,6 @@ export class DevolutionFormulaRowService {
     const parsed: DfParsedExcelRow = {
       rowNumber: row.rowNumber,
       censusCode: row.censusCode ?? '',
-      sbCode: row.sbCode ?? '',
       ulbName: row.ulbName,
       ...mergedValues,
     };
@@ -232,6 +232,7 @@ export class DevolutionFormulaRowService {
       validRowCount: validCountUpdated,
       errorRowCount: totalRowCount - validCountUpdated,
       missingUlbCount: 0,
+      newUlbCount: updatedForm?.newUlbCount ?? 0,
       totalMoHUAAllocation: updatedForm?.totalMoHUAAllocation ?? 0,
       totalAllocatedSum: updatedForm?.totalAllocatedSum ?? 0,
       activeDatasetVersion: updatedForm?.activeDatasetVersion ?? (formDoc['activeDatasetVersion'] as number),
@@ -316,7 +317,6 @@ export class DevolutionFormulaRowService {
 
     const errorRows = rows.map((r) => ({
       censusCode: r.censusCode ?? '',
-      sbCode: r.sbCode ?? '',
       ulbName: r.ulbName,
       totalGrantAllocation: r.totalGrantAllocation,
       installment1Amount: r.installment1Amount,

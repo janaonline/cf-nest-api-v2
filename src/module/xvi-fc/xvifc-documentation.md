@@ -1308,3 +1308,66 @@ Example: `xvi-fc/state/5dcf9d7416a06aed41c748f0/2026-27/sfc-status/sfc-report`
 **Resolution is single-pass**: folded into the existing `hydrateQuestions` file-field branch — no extra loop over the field array.
 
 **S3 upload security note**: Full xvi-fc prefix whitelisting (`xvi-fc/{role}/` only) is deferred — `POST /s3/signed-url` is shared across modules. Current validation covers path traversal only. Prefix enforcement can be added once all module upload paths are audited.
+
+---
+
+### Side Menu — Generic Nav Contract (Register ULB Item) + Devolution URL Fix
+
+**Context**: A future placeholder frontend route `/xvifc/:yearId/register-ulb` needs a sidebar entry and a Devolution Formula supporting-content action pointing at it. Backend must send app-relative routes (e.g. `/xvifc/67d7d136d3d038946a5239e9/register-ulb`), never an absolute frontend host and never the existing typo route `/resigter-ulb`. ULB Registration itself is not built yet — this only exposes navigation metadata for the future route. Backend/API only; no frontend changes.
+
+**Schema** (`src/schemas/xvi-fc/xvi-fc-side-menu.schema.ts`):
+
+- Added 4 new optional `@Prop()` fields on `XviFcSideMenu`: `linkType` (`'internal' | 'external'`), `url`, `openInNewTab`, `confirmation` (`{ required, title?, message, confirmText?, cancelText? }`).
+- New `MenuLinkType` type and `XviFcSideMenuConfirmation` interface exported from the schema file.
+- Named `linkType` (not `type`) at the persistence layer to avoid colliding with the existing structural `type` field (`header|separator|item|group`); mapped to the response key `type` during tree-building.
+
+**Response DTO** (`src/module/xvi-fc/dto/side-menu.dto.ts`):
+
+- `SideMenuItemDto` gains `type?`, `url?`, `openInNewTab?`, `confirmation?` (new `SideMenuItemConfirmationDto`).
+
+**Create/Update DTO** (`src/module/xvi-fc/side-menu/dto/create-side-menu.dto.ts`):
+
+- New `MenuLinkType` enum, `SideMenuConfirmationDto` (nested, validated via `@ValidateNested()` + `@Type()`).
+- New custom validator `IsUrlMatchingLinkType()` (single `registerDecorator`-based check, branches on sibling `linkType`): internal `url` must start with `/`; external `url` must start with `https://`. Replaces an earlier, abandoned attempt at stacking two `@ValidateIf` decorators on the same property.
+- `CreateSideMenuDto` gains `linkType?`, `url?`, `openInNewTab?`, `confirmation?`. `UpdateSideMenuDto` (`PartialType`) inherits automatically — no edit needed.
+- `side-menu.service.ts` `create()`/`bulkCreate()` already spread `...dto` — no change needed.
+
+**Service** (`src/module/xvi-fc/xvi-fc.service.ts`):
+
+- `buildSection()` now calls a new private `applyGenericNavFields(item, doc)` helper for both top-level and child items, mapping `linkType → type`, `url`, `openInNewTab`, and a normalized `confirmation` (drops `null` optional sub-fields rather than passing them through, since the schema interface allows `string | null` but the DTO only allows `string | undefined`).
+
+**Generic menu item contract** (capability, not hardcoded seed data — this collection has no seed/migration script, items are created via the existing admin `POST /xvi-fc/side-menu` / `/bulk` API):
+
+```ts
+{
+  label: 'Register ULB',
+  icon: 'bi bi-person-check',
+  type: 'internal',
+  url: `/xvifc/${yearId}/register-ulb`,
+  confirmation: {
+    required: true,
+    title: 'Redirect to Register ULB',
+    message: 'Please save your document before continuing. You will be redirected to the Register ULB page.',
+    confirmText: 'Continue',
+    cancelText: 'Stay on this page',
+  },
+}
+```
+
+Intended placement: `TEAMS & ROLES` group, after `Unified view`.
+
+**Devolution Formula URL fix** (`src/module/xvi-fc/state/devolution-formula/`):
+
+- `constants/devolution-formula.constants.ts` — removed the static, buggy `DF_REGISTER_ULB_URL = '/resigter-ulb'`; added `buildDfRegisterUlbUrl(yearId: string)` returning `` `/xvifc/${yearId}/register-ulb` ``.
+- `services/main/devolution-formula.service.ts` — threaded `yearId` through `hydrateQuestions()` and `buildExcelFileSupportingContent()`; the `register-ulb` action's `url` now calls `buildDfRegisterUlbUrl(yearId)` instead of the static constant.
+- All other fields on that action (`id: 'register-ulb'`, `label: 'Register ULB'`, `icon: 'bi bi-person-check'`, `tone: 'success'`, `variant: 'link'`, `visible: canEdit && newUlbCount > 0`) and its position inside the same `supportingContent.actions` block are unchanged.
+
+**New/updated tests**:
+
+- `register-ulb-menu-contract.spec.ts` (new) — constructs `XviFcService` directly (bypassing Nest DI, since `xvi-fc.service.spec.ts`'s `TestingModule` predates this service's current constructor and is broken independently of this change) with only `sideMenuModel` mocked; verifies Register ULB placement/ordering under Teams & Roles, full `{label, icon, type, url, confirmation}` shape match, relative URL containing the runtime `yearId`, no host/domain, and that items without generic nav fields don't gain them.
+- `create-side-menu.dto.spec.ts` (new) — `class-validator` tests for internal/external URL safety and nested `confirmation` validation.
+- `devolution-formula.service.spec.ts` — replaced the typo-URL assertion with tests for the corrected `/xvifc/:yearId/register-ulb` URL, a typo-regression check, and a relative-URL check.
+
+**Non-changes**: no frontend code; no Register ULB registration form/business logic/API; no EULB/SFC behaviour changes; no Devolution validation-logic changes; no hardcoded yearId or frontend domain; Devolution visibility logic (`canEdit && newUlbCount > 0`) and other supportingContent actions/badges untouched.
+
+**Verification**: 129/129 tests passing (`create-side-menu.dto.spec.ts`, `register-ulb-menu-contract.spec.ts`, `devolution-formula-excel.service.spec.ts`, `devolution-formula.service.spec.ts`); `tsc -p tsconfig.build.json` clean; ESLint clean on all touched/new files.

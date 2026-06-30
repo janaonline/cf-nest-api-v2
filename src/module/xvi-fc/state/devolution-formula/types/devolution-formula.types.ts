@@ -1,5 +1,5 @@
 import type { Types } from 'mongoose';
-import type { HydratedFieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
+import type { FieldConfig, HydratedFieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
 import type { DfInstallment, DfValidationStatus } from '../constants/devolution-formula.constants';
 
 export interface DfFormPermissions {
@@ -21,6 +21,7 @@ export interface DfValidationSummary {
   validRowCount: number;
   errorRowCount: number;
   missingUlbCount: number;
+  newUlbCount: number;
   totalMoHUAAllocation: number;
   totalAllocatedSum: number;
   allUlbsCovered: boolean;
@@ -42,6 +43,17 @@ export interface DfSupportingAction {
   enabled: boolean;
 }
 
+export interface DfInstallmentAccessItem {
+  canSelect: boolean;
+  locked: boolean;
+  lockReason: string | null;
+}
+
+export interface DfInstallmentAccess {
+  installment1: DfInstallmentAccessItem;
+  installment2: DfInstallmentAccessItem;
+}
+
 export interface DfFormGetResponseData {
   _id: string | null;
   formName: string;
@@ -56,6 +68,8 @@ export interface DfFormGetResponseData {
   validationSummary: DfValidationSummary;
   grantAllocationSummary: DfGrantAllocationSummary | null;
   questions: HydratedFieldConfig[];
+  rowEditFields: FieldConfig[];
+  installmentAccess: DfInstallmentAccess;
   meta: { version: number };
 }
 
@@ -69,7 +83,6 @@ export interface DfRowError {
 export interface DfRowValidationError {
   rowNumber: number;
   censusCode?: string;
-  sbCode?: string;
   ulbName?: string;
   field: string;
   code: string;
@@ -105,12 +118,14 @@ export interface DfFormLeanDoc {
   activeDatasetVersion?: number;
   excelRowCount?: number;
   errorRowCount?: number;
+  newUlbCount?: number;
   totalMoHUAAllocation?: number;
   totalAllocatedSum?: number;
   grantAllocationRef?: Types.ObjectId;
   excelFile?: DfFileRefData;
   errorExcelFile?: DfFileRefData;
   checkboxConfirmation?: boolean;
+  ulbCount?: number;
   mohuaRemarks?: string | null;
 }
 

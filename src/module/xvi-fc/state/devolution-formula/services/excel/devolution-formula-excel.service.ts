@@ -64,7 +64,6 @@ interface UlbLean {
 interface ProcessedRow {
   rowNumber: number;
   censusCode: string;
-  sbCode: string;
   ulbName: string;
   totalGrantAllocation: unknown;
   installment1Amount: unknown;
@@ -182,51 +181,47 @@ export class DevolutionFormulaExcelService {
     const dataRows = rawRows.slice(1).filter((row) => !this.isEmptyRow(row));
     const excelRowCount = dataRows.length;
 
-    // 7. Build ULB lookup maps (both identifiers, lower-cased)
-    const ulbByCensusCode = new Map<string, UlbLean>();
-    const ulbBySbCode = new Map<string, UlbLean>();
+    // 7. Build ULB lookup map (censusCode preferred, sbCode fallback — mirrors EULB)
+    const ulbByCode = new Map<string, UlbLean>();
     for (const ulb of dbUlbs) {
-      const cc = normalizeIdentifier(ulb.censusCode).toLowerCase();
-      const sb = normalizeIdentifier(ulb.sbCode).toLowerCase();
-      if (cc) ulbByCensusCode.set(cc, ulb);
-      if (sb) ulbBySbCode.set(sb, ulb);
+      const code = String(ulb.censusCode || ulb.sbCode || '')
+        .trim()
+        .toLowerCase();
+      if (code) ulbByCode.set(code, ulb);
     }
 
     // 8. Classify and validate each row
     const processedRows: ProcessedRow[] = [];
     const matchedUlbIds = new Set<string>();
+    let newUlbCount = 0;
 
     for (let i = 0; i < dataRows.length; i++) {
       const raw = dataRows[i];
       const parsed = this.parseDataRow(raw, colIndexMap, i + 1);
 
-      const ccNorm = parsed.censusCode.toLowerCase();
-      const sbNorm = parsed.sbCode.toLowerCase();
-      const hasCensusCode = ccNorm.length > 0;
-      const hasSbCode = sbNorm.length > 0;
+      const identifierNorm = parsed.censusCode.toLowerCase();
+      const hasIdentifier = identifierNorm.length > 0;
 
       let rowErrors: DfRowError[] = [];
       let resolvedUlbId: Types.ObjectId | null = null;
 
-      // Step 1: Registry check — must have exactly one usable identifier
-      if (!hasCensusCode && !hasSbCode) {
+      // Step 1: Registry check — Census Code column is the single consolidated identifier
+      if (!hasIdentifier) {
         rowErrors.push({
           field: 'censusCode',
           code: 'identifierMissing',
-          message: 'Each row must have either a Census Code or an SB Code.',
+          message: 'Census Code is required.',
         });
       } else {
-        const dbUlb = hasCensusCode
-          ? (ulbByCensusCode.get(ccNorm) ?? (hasSbCode ? ulbBySbCode.get(sbNorm) : undefined))
-          : ulbBySbCode.get(sbNorm);
+        const dbUlb = ulbByCode.get(identifierNorm);
 
         if (!dbUlb) {
-          const identifierDesc = hasCensusCode ? `Census Code "${parsed.censusCode}"` : `SB Code "${parsed.sbCode}"`;
+          newUlbCount++;
           rowErrors.push({
-            field: hasCensusCode ? 'censusCode' : 'sbCode',
+            field: 'censusCode',
             code: 'unknownUlb',
-            message: `${identifierDesc} does not match any active onboarded ULB for this state. Unknown ULBs cannot be added to Devolution Formula.`,
-            value: hasCensusCode ? parsed.censusCode : parsed.sbCode,
+            message: `Census Code "${parsed.censusCode}" does not match any active onboarded ULB for this state. Unknown ULBs cannot be added to Devolution Formula.`,
+            value: parsed.censusCode,
           });
         } else {
           resolvedUlbId = dbUlb._id;
@@ -235,14 +230,27 @@ export class DevolutionFormulaExcelService {
             // Duplicate ULB — mark as invalid but null out the ulbId so partial unique index is not violated
             resolvedUlbId = null;
             rowErrors.push({
-              field: hasCensusCode ? 'censusCode' : 'sbCode',
+              field: 'censusCode',
               code: 'duplicate',
               message: 'This ULB appears more than once in the uploaded Excel file.',
             });
           } else {
             matchedUlbIds.add(idKey);
-            // Steps 2–4: required → type → business
-            rowErrors = this.dfValidator.validateRow(parsed, dto.installment);
+
+            // Identity guard — registry ULB name must not be altered from the downloaded template
+            const registryName = String(dbUlb.name ?? '').trim();
+            const uploadedName = parsed.ulbName.trim();
+            if (registryName && uploadedName.toLowerCase() !== registryName.toLowerCase()) {
+              rowErrors.push({
+                field: 'ulbName',
+                code: 'identityModified',
+                message: 'ULB name must not be modified from the downloaded template.',
+                value: parsed.ulbName,
+              });
+            } else {
+              // Steps 2–4: required → type → business
+              rowErrors = this.dfValidator.validateRow(parsed, dto.installment);
+            }
           }
         }
       }
@@ -277,7 +285,7 @@ export class DevolutionFormulaExcelService {
       rowNumber: r.rowNumber,
       ulbId: r.ulbId,
       censusCode: r.censusCode,
-      sbCode: r.sbCode,
+      sbCode: '',
       ulbName: r.ulbName,
       totalGrantAllocation: Number(r.totalGrantAllocation) || 0,
       installment1Amount: Number(r.installment1Amount) || 0,
@@ -309,6 +317,7 @@ export class DevolutionFormulaExcelService {
         excelFile: normalizedFile,
         excelRowCount,
         errorRowCount,
+        newUlbCount,
         totalAllocatedSum,
         totalMoHUAAllocation,
         grantAllocationRef: grantAlloc._id,
@@ -366,6 +375,7 @@ export class DevolutionFormulaExcelService {
       validRowCount: validRows.length,
       errorRowCount,
       missingUlbCount,
+      newUlbCount,
       totalMoHUAAllocation,
       totalAllocatedSum,
       activeDatasetVersion: newVersion,
@@ -377,7 +387,6 @@ export class DevolutionFormulaExcelService {
         r.rowErrors.map((e) => ({
           rowNumber: r.rowNumber,
           censusCode: r.censusCode,
-          sbCode: r.sbCode,
           ulbName: r.ulbName,
           field: e.field,
           code: e.code,
@@ -386,19 +395,32 @@ export class DevolutionFormulaExcelService {
         })),
       );
 
-    // Allocation mismatch with no other errors: surface as file-level error with partial data
-    if (errorRowCount === 0 && missingUlbCount === 0 && !allocationBalanced) {
+    // File-control errors: new/unregistered ULB rows and (if no other unrelated row errors) allocation
+    // mismatch are surfaced together as excelFile errors — additive, never overwriting one another.
+    const excelFileErrors: DfRowError[] = [];
+
+    if (newUlbCount > 0) {
+      excelFileErrors.push({
+        field: 'excelFile',
+        code: 'newUlbsAdded',
+        message: `You have added ${newUlbCount} ULB(s). Please register before proceeding.`,
+      });
+    }
+
+    // Allocation mismatch with no other row errors beyond the new/unknown ULB rows already
+    // accounted for above: surface alongside any newUlbsAdded error rather than suppressing it.
+    if (errorRowCount === newUlbCount && missingUlbCount === 0 && !allocationBalanced) {
+      excelFileErrors.push({
+        field: 'excelFile',
+        code: 'allocationMismatch',
+        message: `Sum of ULB allocations (${totalAllocatedSum.toFixed(2)}) does not equal Total MoHUA Allocation (${totalMoHUAAllocation.toFixed(2)}).`,
+      });
+    }
+
+    if (excelFileErrors.length > 0) {
       throwXviFcValidationErrorWithData(
-        {
-          excelFile: [
-            {
-              field: 'excelFile',
-              code: 'allocationMismatch',
-              message: `Sum of ULB allocations (${totalAllocatedSum.toFixed(2)}) does not equal Total MoHUA Allocation (${totalMoHUAAllocation.toFixed(2)}).`,
-            },
-          ],
-        },
-        { validationSummary: summary },
+        { excelFile: excelFileErrors },
+        { validationSummary: summary, newUlbCount, rowErrors },
       );
     }
 
@@ -469,7 +491,6 @@ export class DevolutionFormulaExcelService {
         const parsed: DfParsedExcelRow = {
           rowNumber: row.rowNumber,
           censusCode: row.censusCode ?? '',
-          sbCode: row.sbCode ?? '',
           ulbName: row.ulbName,
           totalGrantAllocation: row.totalGrantAllocation,
           installment1Amount: row.installment1Amount,
@@ -536,6 +557,7 @@ export class DevolutionFormulaExcelService {
         validRowCount: activeRows.length - errorRowCount,
         errorRowCount,
         missingUlbCount,
+        newUlbCount: form.newUlbCount ?? 0,
         totalMoHUAAllocation,
         totalAllocatedSum,
         activeDatasetVersion: form.activeDatasetVersion ?? 0,
@@ -593,8 +615,7 @@ export class DevolutionFormulaExcelService {
       .exec();
 
     const rows = ulbs.map((u: Record<string, unknown>) => ({
-      censusCode: u['censusCode'] ? (u['censusCode'] as string) : '',
-      sbCode: u['sbCode'] ? (u['sbCode'] as string) : '',
+      censusCode: (u['censusCode'] as string | null) || (u['sbCode'] as string | null) || '',
       ulbName: (u['name'] as string | undefined) ?? '',
       totalGrantAllocation: '',
       installment1Amount: '',
@@ -652,8 +673,8 @@ export class DevolutionFormulaExcelService {
 
   private findMissingRequiredHeaders(headerRow: string[]): string[] {
     const presentKeys = new Set(headerRow.map((h) => DF_EXCEL_HEADER_MAP[h]).filter(Boolean));
-    const hasCensusOrSb = presentKeys.has('censusCode') || presentKeys.has('sbCode');
     const requiredDataCols: Array<[string, string]> = [
+      ['censusCode', 'Census Code'],
       ['ulbName', 'ULB Name'],
       ['totalGrantAllocation', 'Total Grant Allocation'],
       ['installment1Amount', 'Installment 1 Amount'],
@@ -661,7 +682,6 @@ export class DevolutionFormulaExcelService {
       ['devolutionFormula', 'Devolution Formula'],
     ];
     const missing: string[] = [];
-    if (!hasCensusOrSb) missing.push('Census Code or SB Code');
     for (const [key, label] of requiredDataCols) {
       if (!presentKeys.has(key)) missing.push(label);
     }
@@ -680,7 +700,6 @@ export class DevolutionFormulaExcelService {
     return {
       rowNumber,
       censusCode: String((get('censusCode') ?? '') as string | number | boolean).trim(),
-      sbCode: String((get('sbCode') ?? '') as string | number | boolean).trim(),
       ulbName: String((get('ulbName') ?? '') as string | number | boolean).trim(),
       totalGrantAllocation: get('totalGrantAllocation'),
       installment1Amount: get('installment1Amount'),
@@ -706,7 +725,6 @@ export class DevolutionFormulaExcelService {
   ): Promise<DfFileRefData> {
     const errorRows = rows.map((r) => ({
       censusCode: r.censusCode,
-      sbCode: r.sbCode,
       ulbName: r.ulbName,
       totalGrantAllocation: r.totalGrantAllocation,
       installment1Amount: r.installment1Amount,
@@ -725,11 +743,11 @@ export class DevolutionFormulaExcelService {
       'Devolution Formula Errors',
     )) as unknown as Buffer;
 
-    await this.s3Service.uploadPublic(
-      s3Key,
-      buffer,
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    );
+    // await this.s3Service.uploadPublic(
+    //   s3Key,
+    //   buffer,
+    //   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    // );
 
     const fileRef: DfFileRefData = {
       fileName: `devolution-formula-errors-${String(formId)}.xlsx`,

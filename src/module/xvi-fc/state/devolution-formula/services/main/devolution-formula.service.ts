@@ -23,6 +23,7 @@ import type {
   FieldConfig,
   FieldSupportingContent,
   HydratedFieldConfig,
+  SupportingContentTone,
   UploadedFileValue,
 } from 'src/module/xvi-fc/common/types/field-config.type';
 import {
@@ -49,11 +50,14 @@ import {
 import {
   DF_ACTION_DOWNLOAD_ERROR_SHEET,
   DF_ACTION_DOWNLOAD_TEMPLATE,
+  DF_ACTION_REGISTER_ULB,
   DF_ACTION_REVALIDATE_EXCEL,
   DF_ACTION_VIEW_UPLOADED_DATA,
   DF_DUMP_HEADERS,
   DF_FORM_NAME,
   DF_FORM_QUESTIONS,
+  DF_ROW_EDIT_FIELDS,
+  buildDfRegisterUlbUrl,
 } from '../../constants/devolution-formula.constants';
 import type { SaveDraftDevolutionFormulaDto } from '../../dto/save-draft-devolution-formula.dto';
 import type { FinalSubmitDevolutionFormulaDto } from '../../dto/final-submit-devolution-formula.dto';
@@ -64,12 +68,27 @@ import type {
   DfFormPermissions,
   DfGrantAllocationSummary,
   DfDumpRow,
+  DfRowError,
+  DfInstallmentAccess,
 } from '../../types/devolution-formula.types';
 import { DevolutionFormulaValidator } from '../../validators/devolution-formula.validator';
+
+function formatINR(amount: number): string {
+  const rounded = Math.round(amount);
+  const s = String(Math.abs(rounded));
+  const prefix = rounded < 0 ? '-' : '';
+  if (s.length <= 3) return `${prefix}${s}`;
+  const last3 = s.slice(-3);
+  const rest = s.slice(0, -3);
+  return `${prefix}${rest.replace(/\B(?=(\d{2})+(?!\d))/g, ',')},${last3}`;
+}
 
 @Injectable()
 export class DevolutionFormulaService {
   private readonly logger = new Logger(DevolutionFormulaService.name);
+
+  private static readonly INSTALLMENT_2_LOCK_REASON =
+    'Installment 2 is locked until at least one Installment 1 claim batch is acknowledged by MoHUA.';
 
   constructor(
     @InjectModel(DevolutionFormulaForm.name)
@@ -124,8 +143,18 @@ export class DevolutionFormulaService {
     const savedData: FormData = {};
     if (doc?.excelFile) savedData['excelFile'] = doc.excelFile;
     if (doc?.checkboxConfirmation !== undefined) savedData['checkboxConfirmation'] = doc.checkboxConfirmation;
+    if (doc?.ulbCount !== undefined) savedData['ulbCount'] = doc.ulbCount;
 
-    const questions = this.hydrateQuestions(this.loadFormQuestions(), savedData, doc, permissions, folderPathContext);
+    const questions = this.hydrateQuestions(
+      this.loadFormQuestions(),
+      savedData,
+      doc,
+      permissions,
+      folderPathContext,
+      yearId,
+    );
+    const rowEditFields = this.loadRowEditFields();
+    const installmentAccess = this.buildInstallmentAccess();
 
     const responseData: DfFormGetResponseData = {
       _id: doc ? String(doc._id) : null,
@@ -141,6 +170,8 @@ export class DevolutionFormulaService {
       validationSummary,
       grantAllocationSummary,
       questions,
+      rowEditFields,
+      installmentAccess,
       meta: { version: 1 },
     };
 
@@ -173,6 +204,7 @@ export class DevolutionFormulaService {
     const formData: FormData = {};
     if (normalizedFile !== undefined) formData['excelFile'] = normalizedFile;
     if (dto.data?.checkboxConfirmation !== undefined) formData['checkboxConfirmation'] = dto.data.checkboxConfirmation;
+    if (dto.data?.ulbCount !== undefined) formData['ulbCount'] = dto.data.ulbCount;
 
     const validation = this.dynamicFormValidator.validateDraftAndBuildPayload(this.loadFormQuestions(), formData);
     if (!validation.isValid) throwXviFcValidationError(validation.errors);
@@ -191,6 +223,9 @@ export class DevolutionFormulaService {
     if (normalizedFile !== undefined) update['excelFile'] = normalizedFile;
     if (validation.sanitizedPayload['checkboxConfirmation'] !== undefined) {
       update['checkboxConfirmation'] = validation.sanitizedPayload['checkboxConfirmation'];
+    }
+    if (validation.sanitizedPayload['ulbCount'] !== undefined) {
+      update['ulbCount'] = validation.sanitizedPayload['ulbCount'];
     }
 
     const result = await this.model
@@ -235,6 +270,7 @@ export class DevolutionFormulaService {
     const formData: FormData = {
       excelFile: normalizedFile,
       checkboxConfirmation: dto.data.checkboxConfirmation,
+      ulbCount: dto.data.ulbCount,
     };
 
     const validation = this.dynamicFormValidator.validateFinalSubmitAndBuildPayload(this.loadFormQuestions(), formData);
@@ -280,6 +316,45 @@ export class DevolutionFormulaService {
       });
     }
 
+    // Specific, actionable gates — checked before the generic notValid gate below so the
+    // user is shown precisely what to fix rather than a generic "not valid" message.
+    const excelFileBlockingErrors: DfRowError[] = [];
+
+    const persistedNewUlbCount = form.newUlbCount ?? 0;
+    if (persistedNewUlbCount > 0) {
+      excelFileBlockingErrors.push({
+        field: 'excelFile',
+        code: 'newUlbsAdded',
+        message: `You have added ${persistedNewUlbCount} ULB(s). Please register before proceeding.`,
+      });
+    }
+
+    const activeVersion = form.activeDatasetVersion ?? 0;
+    if (activeVersion > 0) {
+      const identityModifiedRow = await this.rowModel
+        .findOne({
+          form: form._id as Types.ObjectId,
+          datasetVersion: activeVersion,
+          isActive: true,
+          'errors.code': 'identityModified',
+        })
+        .select('_id')
+        .lean()
+        .exec();
+
+      if (identityModifiedRow) {
+        excelFileBlockingErrors.push({
+          field: 'excelFile',
+          code: 'identityModified',
+          message: 'Some ULB identity fields were modified. Please correct the uploaded data before proceeding.',
+        });
+      }
+    }
+
+    if (excelFileBlockingErrors.length > 0) {
+      throwXviFcValidationError({ excelFile: excelFileBlockingErrors });
+    }
+
     if (!form.validationStatus || form.validationStatus !== 'VALID') {
       throwXviFcValidationError({
         excelFile: [
@@ -288,6 +363,18 @@ export class DevolutionFormulaService {
             code: 'notValid',
             message:
               'Excel validation must pass (all ULBs covered, no row errors, allocation balanced) before final submit.',
+          },
+        ],
+      });
+    }
+
+    if ((form.excelRowCount ?? 0) > 0 && dto.data.ulbCount !== form.excelRowCount) {
+      throwXviFcValidationError({
+        ulbCount: [
+          {
+            field: 'ulbCount',
+            code: 'mismatch',
+            message: `ULB count entered (${dto.data.ulbCount}) does not match the number of rows in the uploaded Devolution Formula Excel (${form.excelRowCount}).`,
           },
         ],
       });
@@ -305,6 +392,7 @@ export class DevolutionFormulaService {
             updatedBy: userOid,
             excelFile: normalizedFile,
             checkboxConfirmation: dto.data.checkboxConfirmation,
+            ulbCount: dto.data.ulbCount,
           },
         },
       )
@@ -396,12 +484,17 @@ export class DevolutionFormulaService {
     return DF_FORM_QUESTIONS.map((q) => ({ ...q }));
   }
 
+  private loadRowEditFields(): FieldConfig[] {
+    return DF_ROW_EDIT_FIELDS.map((f) => ({ ...f }));
+  }
+
   private hydrateQuestions(
     questions: FieldConfig[],
     savedData: FormData,
     doc: DfFormLeanDoc | null,
     permissions: DfFormPermissions,
     folderPathContext: XviFcFolderPathContext,
+    yearId: string,
   ): HydratedFieldConfig[] {
     return questions.map((question) => {
       const rawValue = Object.prototype.hasOwnProperty.call(savedData, question.key)
@@ -429,7 +522,7 @@ export class DevolutionFormulaService {
             ...question,
             folderPath: resolvedFolderPath,
             value,
-            supportingContent: this.buildExcelFileSupportingContent(doc, permissions),
+            supportingContent: this.buildExcelFileSupportingContent(doc, permissions, yearId),
           };
         }
 
@@ -443,10 +536,18 @@ export class DevolutionFormulaService {
   private buildExcelFileSupportingContent(
     doc: DfFormLeanDoc | null,
     permissions: DfFormPermissions,
+    yearId: string,
   ): FieldSupportingContent[] {
     const { canView, canEdit } = permissions;
     const hasDataset = (doc?.activeDatasetVersion ?? 0) > 0;
-    const hasErrorSheet = !!doc?.errorExcelFile?.fileUrl;
+    const hasUploadedExcel = !!doc?.excelFile?.fileUrl;
+    const errorRowCount = doc?.errorRowCount ?? 0;
+    const excelRowCount = doc?.excelRowCount ?? 0;
+    const totalMoHUAAllocation = doc?.totalMoHUAAllocation ?? 0;
+    const totalAllocatedSum = doc?.totalAllocatedSum ?? 0;
+    const allocationBalanced = Math.abs(totalAllocatedSum - totalMoHUAAllocation) <= 0.001;
+    const validationStatus = doc?.validationStatus;
+    const newUlbCount = doc?.newUlbCount ?? 0;
 
     return [
       {
@@ -454,19 +555,22 @@ export class DevolutionFormulaService {
         position: 'before',
         layout: 'inline',
         separator: 'dot',
+        description: canEdit
+          ? 'Download the template, upload the completed Excel file, review and resolve any validation errors, register newly added ULBs where required, and revalidate before final submission.'
+          : '',
         actions: [
           {
             id: DF_ACTION_DOWNLOAD_TEMPLATE,
             label: 'Download Template',
             icon: 'bi bi-file-earmark-arrow-down',
             tone: 'primary' as const,
-            visible: canView,
+            visible: canEdit,
           },
           {
             id: DF_ACTION_VIEW_UPLOADED_DATA,
             label: 'View Uploaded Data',
             icon: 'bi bi-table',
-            tone: 'primary' as const,
+            tone: (errorRowCount > 0 ? 'danger' : 'primary') as SupportingContentTone,
             visible: canView && hasDataset,
           },
           {
@@ -474,14 +578,56 @@ export class DevolutionFormulaService {
             label: 'Download Error Sheet',
             icon: 'bi bi-file-earmark-excel',
             tone: 'danger' as const,
-            visible: canView && hasErrorSheet,
+            visible: canView && errorRowCount > 0,
           },
           {
             id: DF_ACTION_REVALIDATE_EXCEL,
             label: 'Revalidate Excel',
             icon: 'bi bi-arrow-repeat',
             tone: 'primary' as const,
+            visible: canEdit && hasUploadedExcel && validationStatus !== 'VALID',
+          },
+          {
+            id: DF_ACTION_REGISTER_ULB,
+            label: 'Register ULB',
+            icon: 'bi bi-person-check',
+            url: buildDfRegisterUlbUrl(yearId),
+            tone: 'success' as const,
+            variant: 'link' as const,
+            visible: canEdit && newUlbCount > 0,
+          },
+        ],
+        badges: [
+          {
+            label: `Total rows: ${excelRowCount}`,
+            tone: 'secondary' as const,
             visible: canEdit && hasDataset,
+          },
+          {
+            label: `${errorRowCount} error(s)`,
+            tone: 'danger' as const,
+            visible: canEdit && errorRowCount > 0,
+          },
+          {
+            label: `Allocated amount: ₹${formatINR(totalMoHUAAllocation)} Cr.`,
+            tone: 'secondary' as const,
+            visible: canEdit && hasDataset,
+          },
+          {
+            label: `Allocated sum: ₹${formatINR(totalAllocatedSum)} Cr.`,
+            tone: (allocationBalanced ? 'success' : 'danger') as SupportingContentTone,
+            visible: canEdit && hasDataset,
+          },
+          {
+            label: `Remaining: ₹${formatINR(totalMoHUAAllocation - totalAllocatedSum)} Cr.`,
+            tone: (allocationBalanced ? 'success' : 'danger') as SupportingContentTone,
+            visible: canEdit && hasDataset,
+          },
+          {
+            label: 'All valid',
+            icon: 'bi bi-check-circle-fill',
+            tone: 'success' as const,
+            visible: canEdit && validationStatus === 'VALID',
           },
         ],
       },
@@ -513,6 +659,7 @@ export class DevolutionFormulaService {
         validRowCount: 0,
         errorRowCount: 0,
         missingUlbCount: 0,
+        newUlbCount: 0,
         totalMoHUAAllocation,
         totalAllocatedSum: 0,
         activeDatasetVersion: 0,
@@ -525,6 +672,7 @@ export class DevolutionFormulaService {
       validRowCount: excelRowCount - errorRowCount,
       errorRowCount,
       missingUlbCount: 0,
+      newUlbCount: doc.newUlbCount ?? 0,
       totalMoHUAAllocation: doc.totalMoHUAAllocation ?? totalMoHUAAllocation,
       totalAllocatedSum: doc.totalAllocatedSum ?? 0,
       activeDatasetVersion: doc.activeDatasetVersion ?? 0,
@@ -566,44 +714,62 @@ export class DevolutionFormulaService {
   }
 
   private async checkInstallment1Prereq(stateOid: Types.ObjectId, yearOid: Types.ObjectId): Promise<void> {
-    const eulbAcknowledged = await this.eulbModel
+    const eulbUnderReview = await this.eulbModel
       .findOne({
         state: stateOid,
         year: yearOid,
         formType: EULB_FORM_TYPE,
-        currentFormStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+        currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
       })
       .lean()
       .exec();
 
-    if (!eulbAcknowledged) {
+    if (!eulbUnderReview) {
       throwXviFcValidationError({
         installment: [
           {
             field: 'installment',
             code: 'prerequisiteNotMet',
             message:
-              'Installment 1 cannot be submitted until the Elected Urban Local Bodies form has been acknowledged by MoHUA.',
+              'Elected Body form must be submitted and under review by MoHUA before submitting Devolution Formula.',
           },
         ],
       });
     }
   }
 
-  /**
-   * TODO: Unlock when the Claim Batch model is implemented.
-   * Until then Installment 2 is always locked.
-   */
   private checkInstallment2Prereq(): void {
+    if (this.isInstallment2Unlocked()) return;
+
     throwXviFcValidationError({
       installment: [
         {
           field: 'installment',
           code: 'installment2Locked',
-          message:
-            'Installment 2 is locked until at least one Installment 1 claim batch has been acknowledged by MoHUA. (TODO: implement claim batch model)',
+          message: DevolutionFormulaService.INSTALLMENT_2_LOCK_REASON,
         },
       ],
     });
+  }
+
+  /**
+   * TODO: Unlock when the Claim Batch model is implemented — query for at least one
+   * Installment 1 claim batch acknowledged by MoHUA. Until then Installment 2 stays locked.
+   */
+  private isInstallment2Unlocked(): boolean {
+    return false;
+  }
+
+  private buildInstallmentAccess(): DfInstallmentAccess {
+    const installment2Unlocked = this.isInstallment2Unlocked();
+
+    return {
+      installment1: { canSelect: true, locked: false, lockReason: null },
+      installment2: {
+        canSelect: installment2Unlocked,
+        locked: !installment2Unlocked,
+        lockReason: installment2Unlocked ? null : DevolutionFormulaService.INSTALLMENT_2_LOCK_REASON,
+      },
+    };
   }
 }

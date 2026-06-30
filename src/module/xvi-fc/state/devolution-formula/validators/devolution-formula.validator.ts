@@ -5,7 +5,6 @@ import type { DfRowError, DfValidationSummary } from '../types/devolution-formul
 export interface DfParsedExcelRow {
   rowNumber: number;
   censusCode: string;
-  sbCode: string;
   ulbName: string;
   totalGrantAllocation: unknown;
   installment1Amount: unknown;
@@ -197,6 +196,7 @@ export class DevolutionFormulaValidator {
     validRowCount: number;
     errorRowCount: number;
     missingUlbCount: number;
+    newUlbCount?: number;
     totalMoHUAAllocation: number;
     totalAllocatedSum: number;
     activeDatasetVersion: number;
@@ -206,6 +206,7 @@ export class DevolutionFormulaValidator {
       validRowCount,
       errorRowCount,
       missingUlbCount,
+      newUlbCount = 0,
       totalMoHUAAllocation,
       totalAllocatedSum,
       activeDatasetVersion,
@@ -219,6 +220,7 @@ export class DevolutionFormulaValidator {
       validRowCount,
       errorRowCount,
       missingUlbCount,
+      newUlbCount,
       totalMoHUAAllocation,
       totalAllocatedSum,
       allUlbsCovered,

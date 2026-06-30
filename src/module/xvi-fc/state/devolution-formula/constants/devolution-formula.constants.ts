@@ -13,8 +13,6 @@ export type DfInstallment = (typeof DF_INSTALLMENTS)[number];
 export const DF_EXCEL_HEADER_MAP: Record<string, string> = {
   'Census Code': 'censusCode',
   censusCode: 'censusCode',
-  'SB Code': 'sbCode',
-  sbCode: 'sbCode',
   'ULB Name': 'ulbName',
   ulbName: 'ulbName',
   'Total Grant Allocation': 'totalGrantAllocation',
@@ -39,7 +37,6 @@ export const DF_REQUIRED_EXCEL_KEYS = [
 
 export const DF_TEMPLATE_HEADERS: RowHeader[] = [
   { label: 'Census Code', key: 'censusCode', width: 15 },
-  { label: 'SB Code', key: 'sbCode', width: 15 },
   { label: 'ULB Name', key: 'ulbName', width: 35 },
   { label: 'Total Grant Allocation', key: 'totalGrantAllocation', width: 24 },
   { label: 'Installment 1 Amount', key: 'installment1Amount', width: 22 },
@@ -92,6 +89,11 @@ export const DF_ACTION_DOWNLOAD_TEMPLATE = 'download-template';
 export const DF_ACTION_VIEW_UPLOADED_DATA = 'view-uploaded-data';
 export const DF_ACTION_DOWNLOAD_ERROR_SHEET = 'download-error-sheet';
 export const DF_ACTION_REVALIDATE_EXCEL = 'revalidate-excel';
+export const DF_ACTION_REGISTER_ULB = 'register-ulb';
+
+export function buildDfRegisterUlbUrl(yearId: string): string {
+  return `/xvifc/${yearId}/register-ulb`;
+}
 
 // ─── Pagination defaults ─────────────────────────────────────────────────────
 
@@ -117,6 +119,47 @@ export const DF_ROW_VALIDATION_STATUS = {
 } as const;
 
 export type DfRowValidationStatus = (typeof DF_ROW_VALIDATION_STATUS)[keyof typeof DF_ROW_VALIDATION_STATUS];
+
+// ─── Row edit field definitions (constant-backed; replace with formJson DB call when seeded) ──────
+
+export const DF_ROW_EDIT_FIELDS: FieldConfig[] = [
+  {
+    key: 'totalGrantAllocation',
+    formFieldType: 'number',
+    label: 'Total Grant Allocation',
+    validations: [
+      { name: 'required', validator: null, message: 'Total Grant Allocation is required.' },
+      { name: 'min', validator: 0, message: 'Total Grant Allocation cannot be negative.' },
+    ],
+  },
+  {
+    key: 'installment1Amount',
+    formFieldType: 'number',
+    label: 'Installment 1 Amount',
+    validations: [
+      { name: 'required', validator: null, message: 'Installment 1 Amount is required.' },
+      { name: 'min', validator: 0, message: 'Installment 1 Amount cannot be negative.' },
+    ],
+  },
+  {
+    key: 'installment2Amount',
+    formFieldType: 'number',
+    label: 'Installment 2 Amount',
+    validations: [
+      { name: 'required', validator: null, message: 'Installment 2 Amount is required.' },
+      { name: 'min', validator: 0, message: 'Installment 2 Amount cannot be negative.' },
+    ],
+  },
+  {
+    key: 'devolutionFormula',
+    formFieldType: 'text',
+    label: 'Devolution Formula',
+    validations: [
+      { name: 'required', validator: null, message: 'Devolution Formula is required.' },
+      { name: 'maxLength', validator: 250, message: 'Devolution Formula cannot exceed 250 characters.' },
+    ],
+  },
+];
 
 // ─── Constant-backed form field definitions ───────────────────────────────────
 
