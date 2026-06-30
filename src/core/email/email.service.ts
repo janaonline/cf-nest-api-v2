@@ -227,21 +227,34 @@ export class EmailService {
 
   // ── Profile verification OTP (bypasses EmailList — always sends) ────────────
 
+  private get isProduction(): boolean {
+    return this.configService.get<string>('NODE_ENV') === 'production';
+  }
+
   async sendProfileOtp(email: string): Promise<{ isOtpSent: boolean; message: string }> {
-    // Reuse existing rate-limit key so the same 429 logic applies
     await this.rateLimit.checkLimit(`otp:${email}:send`);
 
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    // In dev / staging use a fixed OTP so engineers can test without email delivery.
+    // In production a random 4-digit OTP is generated and emailed.
+    const otp = this.isProduction
+      ? Math.floor(1000 + Math.random() * 9000).toString() // 4-digit random
+      : '111111'; // fixed dev OTP
+
     await this.redis.set(`profile_otp:${email}`, otp, 600); // 10 min TTL
 
-    await this.mailQueue.addEmailJob({
-      to: email,
-      subject: 'CityFinance - Profile Verification OTP',
-      templateName: 'otp',
-      mailData: { otp },
-    });
+    if (this.isProduction) {
+      // Only hit the mail queue in production — no emails in dev/staging
+      await this.mailQueue.addEmailJob({
+        to: email,
+        subject: 'CityFinance - Profile Verification OTP',
+        templateName: 'otp',
+        mailData: { otp },
+      });
+      this.logger.log(`[profile-otp] Email sent to ${email}`);
+    } else {
+      this.logger.debug(`[profile-otp][DEV] OTP for ${email}: ${otp}`);
+    }
 
-    this.logger.log(`[profile-otp] Sent to ${email}`);
     return { isOtpSent: true, message: 'OTP sent successfully' };
   }
 

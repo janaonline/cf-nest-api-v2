@@ -390,49 +390,46 @@ export class UsersService {
 
     await this.userModel.findByIdAndUpdate(userId, { $set: update }).exec();
 
-    // After a state/MoHUA user verifies their profile, assign xviFcSubroles for their state
+    // ── NEW: after a state user's OTP-verified profile save, assign xviFcSubrole across the whole state
     if (isSelfUpdate && !isUlbScope && update['isXVIFCProfileVerified'] === true && targetUser.state) {
-      await this.assignXviFcStateSubroles(targetUser.state);
+      await this.assignXviFcSubrolesByState(targetUser.state);
     }
+    // ── END NEW
 
     return { message: 'Profile contacts updated successfully', updatedFields: update };
   }
 
-  // ─── XVI-FC Subrole assignment ───────────────────────────────────────────────
+  // ── NEW: XVI-FC sub-role assignment block (state workflow only) ───────────────
 
-  private static readonly STATE_ROLES = [
-    Role.STATE,
-    Role.XVIFC_STATE,
-    UserRole.STATE_EDITOR,
-    UserRole.STATE_VIEWER,
-  ] as string[];
+  // Roles considered "state scope" for the XVI-FC module
+  private static readonly XVIFC_STATE_ROLES: string[] = [
+    Role.STATE, // primary state admin
+    // Role.XVIFC_STATE,  // state user in XVI-FC portal
+    // Role.STATE_EDITOR, // state editor
+    // Role.STATE_VIEWER, // state viewer
+  ];
 
-  /**
-   * After a state user completes profile verification, assign xviFcSubrole to all
-   * users in that state:
-   *   isNodalOfficer: true  → 'admin'
-   *   everyone else         → 'reviewer'
-   *
-   * Two targeted updateMany calls — no full collection scan.
-   */
-  private async assignXviFcStateSubroles(stateId: Types.ObjectId): Promise<void> {
-    const baseFilter = {
+  // Triggered once per state after OTP verification:
+  //   isNodalOfficer: true  → xviFcSubrole: 'admin'
+  //   isNodalOfficer: false → xviFcSubrole: 'reviewer'
+  // Runs two parallel updateMany calls — no full collection scan.
+  private async assignXviFcSubrolesByState(stateId: Types.ObjectId): Promise<void> {
+    const scope = {
       state: stateId,
       isDeleted: false,
-      role: { $in: UsersService.STATE_ROLES },
+      role: { $in: UsersService.XVIFC_STATE_ROLES },
+      // $ne: true catches false, null, and undefined (legacy docs that predate the field)
+      isXVIFCProfileVerified: { $ne: true },
     };
 
     await Promise.all([
-      this.userModel.updateMany(
-        { ...baseFilter, isNodalOfficer: true },
-        { $set: { xviFcSubrole: 'admin' } },
-      ).exec(),
-      this.userModel.updateMany(
-        { ...baseFilter, isNodalOfficer: { $ne: true } },
-        { $set: { xviFcSubrole: 'reviewer' } },
-      ).exec(),
+      this.userModel.updateMany({ ...scope, isNodalOfficer: true }, { $set: { xviFcSubrole: 'admin' } }).exec(),
+      this.userModel
+        .updateMany({ ...scope, isNodalOfficer: { $ne: true } }, { $set: { xviFcSubrole: 'reviewer' } })
+        .exec(),
     ]);
   }
+  // ── END NEW
 
   /**
    * Returns the permission matrix rows for the requester's scope.

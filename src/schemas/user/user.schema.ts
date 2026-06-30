@@ -151,8 +151,12 @@ export class User extends Document {
   @Prop({ type: Boolean, default: false })
   isXVIFCProfileVerified!: boolean;
 
-  @Prop({ type: String, enum: ['admin', 'reviewer'], default: null })
-  xviFcSubrole!: string | null;
+  // ── NEW: XVI-FC sub-role — assigned automatically when a state user verifies their profile via OTP
+  // admin   → user with isNodalOfficer: true in that state
+  // reviewer → all other state users in that state
+  @Prop({ type: String, enum: ['admin', 'reviewer', 'viewer'], default: null, index: true })
+  xviFcSubrole!: 'admin' | 'reviewer' | 'viewer' | null;
+  // ── END NEW
 
   /**
    * Per-user permission overrides.
