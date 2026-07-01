@@ -13,18 +13,15 @@ export function parseUserRole(
   xviFcSubrole?: string | null,
 ): { scope: Scope; accessLevel: AccessLevel } | null {
   switch (role) {
-    case UserRole.ULB:
-      return { scope: Scope.ULB, accessLevel: AccessLevel.ADMIN };
-
-    case UserRole.ULB_EDITOR:
-      return { scope: Scope.ULB, accessLevel: AccessLevel.EDITOR };
-
-    case UserRole.ULB_VIEWER:
-      return { scope: Scope.ULB, accessLevel: AccessLevel.VIEWER };
-
     case UserRole.STATE:
       return {
         scope: Scope.STATE,
+        accessLevel: SUBROLE_TO_ACCESS_LEVEL[xviFcSubrole ?? ''] ?? AccessLevel.VIEWER,
+      };
+
+    case UserRole.MoHUA:
+      return {
+        scope: Scope.MOHUA,
         accessLevel: SUBROLE_TO_ACCESS_LEVEL[xviFcSubrole ?? ''] ?? AccessLevel.VIEWER,
       };
 
@@ -32,7 +29,7 @@ export function parseUserRole(
       return { scope: Scope.ADMIN, accessLevel: AccessLevel.ADMIN };
 
     default:
-      // Non-XVI-FC role (e.g. MoHUA, PMU, USER, XVIFC) — skip scope mapping.
+      // Non-XVI-FC role (e.g. PMU, USER, XVIFC) — skip scope mapping.
       return null;
   }
 }

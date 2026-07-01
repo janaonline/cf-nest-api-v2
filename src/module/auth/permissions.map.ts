@@ -47,13 +47,45 @@ export const XVIFC_STATE_PERMISSIONS: Record<XviFcSubrole, Permission[]> = {
   ],
 };
 
+// ─── XVI-FC MoHUA subrole permissions ─────────────────────────────────────────
+
+export const XVIFC_MOHUA_PERMISSIONS: Record<XviFcSubrole, Permission[]> = {
+  admin: [
+    Permission.VIEW_STATUS_REPORTS,
+    Permission.VIEW_DASHBOARDS,
+    Permission.REVIEW_STATE_SUBMISSIONS,
+    Permission.SEND_REMINDERS_TO_STATES,
+    Permission.REQUEST_INFO_FROM_STATES,
+    Permission.APPROVE_STATE_SUBMISSIONS,
+    Permission.ISSUE_OFFICE_MEMORANDUM,
+    Permission.FINAL_SUBMIT_TO_DOE,
+    Permission.MANAGE_USERS,
+    Permission.VIEW_MANAGED_USERS,
+    Permission.CREATE_MANAGED_USER,
+    Permission.UPDATE_MANAGED_USER,
+    Permission.DELETE_MANAGED_USER,
+  ],
+  reviewer: [
+    Permission.VIEW_STATUS_REPORTS,
+    Permission.VIEW_DASHBOARDS,
+    Permission.REVIEW_STATE_SUBMISSIONS,
+    Permission.SEND_REMINDERS_TO_STATES,
+    Permission.REQUEST_INFO_FROM_STATES,
+  ],
+  viewer: [
+    Permission.VIEW_STATUS_REPORTS,
+    Permission.VIEW_DASHBOARDS,
+  ],
+};
+
 /**
  * Derives the effective permission set for a user:
- * 1. ADMIN role       → all permissions.
- * 2. STATE role       → XVIFC_STATE_PERMISSIONS[xviFcSubrole] (defaults to 'viewer' when unset).
- * 3. ULB role         → pending; returns [] until XVIFC_ULB_PERMISSIONS is implemented.
- * 4. Any other role   → no permissions (guard blocks the request).
- * 5. Union permissionOverrides.allow, subtract permissionOverrides.deny.
+ * 1. ADMIN role  → all permissions.
+ * 2. STATE role  → XVIFC_STATE_PERMISSIONS[xviFcSubrole] (defaults to 'viewer' when unset).
+ * 3. MoHUA role  → XVIFC_MOHUA_PERMISSIONS[xviFcSubrole] (defaults to 'viewer' when unset).
+ * 4. ULB role    → pending; returns [] until XVIFC_ULB_PERMISSIONS is implemented.
+ * 5. Other roles → no permissions (guard blocks the request).
+ * 6. Union permissionOverrides.allow, subtract permissionOverrides.deny.
  */
 export function getEffectivePermissions(user: {
   role: UserRole | string;
@@ -72,6 +104,8 @@ export function getEffectivePermissions(user: {
     base = Object.values(Permission);
   } else if (user.role === UserRole.STATE || user.scope === Scope.STATE) {
     base = XVIFC_STATE_PERMISSIONS[subrole] ?? XVIFC_STATE_PERMISSIONS.viewer;
+  } else if (user.role === UserRole.MoHUA || user.scope === Scope.MOHUA) {
+    base = XVIFC_MOHUA_PERMISSIONS[subrole] ?? XVIFC_MOHUA_PERMISSIONS.viewer;
   } else {
     // ULB permission matrix is not yet implemented — ULB users carry no permissions until added.
     base = [];
