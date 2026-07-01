@@ -22,6 +22,9 @@ export class StateMemberResponseDto {
   @ApiProperty()
   isActive!: boolean;
 
+  @ApiProperty()
+  isXVIFCProfileVerified!: boolean;
+
   @ApiProperty({ type: String, nullable: true })
   lastActive!: string | null;
 }

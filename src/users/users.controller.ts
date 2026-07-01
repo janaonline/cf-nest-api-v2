@@ -17,6 +17,7 @@ import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateProfileContactsDto } from './dto/update-profile-contacts.dto';
 import { ProfileContactsResponseDto } from './dto/profile-contacts-response.dto';
 import { CreateManagedUserDto } from './dto/create-managed-user.dto';
+import { InviteStateMemberDto } from './dto/invite-state-member.dto';
 import { UpdatePermissionOverridesDto } from './dto/update-permission-overrides.dto';
 import { UpdateUserRoleDto } from './dto/update-user-role.dto';
 import { StateMemberResponseDto } from './dto/state-member-response.dto';
@@ -44,6 +45,17 @@ export class UsersController {
   // @RequirePermissions(Permission.CREATE_MANAGED_USER)
   createManagedUser(@Body() dto: CreateManagedUserDto, @CurrentUser() user: AuthUser) {
     return this.usersService.createManagedUser(dto, user);
+  }
+
+  @ApiBearerAuth()
+  @Post('invite-state-member')
+  @UseGuards(PermissionGuard)
+  // @RequirePermissions(Permission.CREATE_MANAGED_USER)
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Invite a new STATE member (reviewer or viewer) to the requester\'s state team' })
+  @ApiOkResponse({ type: StateMemberResponseDto })
+  inviteStateMember(@Body() dto: InviteStateMemberDto, @CurrentUser() user: AuthUser): Promise<StateMemberResponseDto> {
+    return this.usersService.inviteStateMember(dto, user);
   }
 
   /**
@@ -82,6 +94,14 @@ export class UsersController {
   @ApiOperation({ summary: 'Issue a short-lived save token after OTP verification (state/MoHUA self-update)' })
   issueProfileSaveToken(@Param('id') id: string) {
     return this.usersService.issueProfileSaveToken(id);
+  }
+
+  @ApiBearerAuth()
+  @Get('mohua-members')
+  @ApiOperation({ summary: 'List all MoHUA team members' })
+  @ApiOkResponse({ type: [StateMemberResponseDto] })
+  getMohuaMembers(): Promise<StateMemberResponseDto[]> {
+    return this.usersService.getMohuaMembers();
   }
 
   @ApiBearerAuth()

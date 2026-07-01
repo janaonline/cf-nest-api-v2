@@ -151,6 +151,11 @@ export class User extends Document {
   @Prop({ type: Boolean, default: false })
   isXVIFCProfileVerified!: boolean;
 
+  // Stores the original email when a user is soft-deleted (email is scrambled at delete time).
+  // Used to detect previously registered emails on invite and to restore the original email on reactivation.
+  @Prop({ type: String, default: null, index: true, sparse: true })
+  originalEmail!: string | null;
+
   // ── NEW: XVI-FC sub-role — assigned automatically when a state user verifies their profile via OTP
   // admin   → user with isNodalOfficer: true in that state
   // reviewer → all other state users in that state

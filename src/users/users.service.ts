@@ -1,15 +1,19 @@
-import { BadRequestException, ForbiddenException, HttpException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, HttpException, HttpStatus, Injectable, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { randomBytes } from 'crypto';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { RedisService } from 'src/core/services/redis/redis.service';
+import { EmailQueueService } from 'src/core/queue/email-queue/email-queue.service';
 import { User } from 'src/schemas/user/user.schema';
+import { State, StateDocument } from 'src/schemas/state.schema';
 import { Permission, Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { Role } from 'src/module/auth/enum/role.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
 import { UpdateProfileContactsDto } from './dto/update-profile-contacts.dto';
 import { ProfileContactsResponseDto } from './dto/profile-contacts-response.dto';
 import { CreateManagedUserDto } from './dto/create-managed-user.dto';
+import { InviteStateMemberDto } from './dto/invite-state-member.dto';
 import { UpdatePermissionOverridesDto } from './dto/update-permission-overrides.dto';
 import { AuthUser } from 'src/module/auth/auth-user.interface';
 import { UpdateUserRoleDto } from './dto/update-user-role.dto';
@@ -91,7 +95,10 @@ export class UsersService {
 
   constructor(
     @InjectModel(User.name) private userModel: Model<User>,
+    @InjectModel(State.name) private stateModel: Model<StateDocument>,
     private readonly redisService: RedisService,
+    private readonly emailQueueService: EmailQueueService,
+    private readonly configService: ConfigService,
   ) {}
 
   async issueProfileSaveToken(userId: string): Promise<{ token: string }> {
@@ -132,6 +139,185 @@ export class UsersService {
     delete obj.password;
     delete obj.refreshTokenHash;
     return obj;
+  }
+
+  async inviteStateMember(dto: InviteStateMemberDto, requester: AuthUser): Promise<StateMemberResponseDto> {
+    if (!requester.state) throw new ForbiddenException('No state scope on this account');
+
+    const action = dto.action ?? 'invite';
+    const stateId = new Types.ObjectId(String(requester.state));
+    const xviFcSubrole: 'reviewer' | 'viewer' = dto.subRole === 'EDITOR' ? 'reviewer' : 'viewer';
+
+    // Always guard against an active user first — applies to all action paths
+    const activeUser = await this.userModel.findOne({ email: dto.email, isDeleted: false }).select('_id').lean().exec();
+    if (activeUser) {
+      throw new HttpException(
+        { code: 'EMAIL_ALREADY_ACTIVE', message: 'Email address is already registered' },
+        HttpStatus.CONFLICT,
+      );
+    }
+
+    if (action === 'invite') {
+      // Email is scrambled at delete time, so deleted records never hold the original email.
+      // Use originalEmail field to detect previously registered accounts.
+      const deletedUser = await this.userModel
+        .findOne({ originalEmail: dto.email, isDeleted: true })
+        .select('name designation')
+        .lean()
+        .exec();
+
+      if (deletedUser) {
+        throw new HttpException(
+          {
+            code: 'EMAIL_PREVIOUSLY_REGISTERED',
+            message: `This email was previously registered under ${deletedUser.name}.`,
+            deletedUser: { name: deletedUser.name, designation: deletedUser.designation ?? '' },
+          },
+          HttpStatus.CONFLICT,
+        );
+      }
+
+      return this.createFreshStateMember(dto, stateId, xviFcSubrole, requester);
+    }
+
+    if (action === 'restore') {
+      const toRestore = await this.userModel
+        .findOne({ originalEmail: dto.email, isDeleted: true })
+        .lean()
+        .exec();
+
+      if (!toRestore) {
+        // Race condition: already restored by another process — create fresh instead
+        return this.createFreshStateMember(dto, stateId, xviFcSubrole, requester);
+      }
+
+      // No updateMany needed — email was already scrambled individually at delete time
+      const restored = await this.userModel.findByIdAndUpdate(
+        toRestore._id,
+        {
+          $set: {
+            name: dto.name,
+            email: dto.email,
+            mobile: dto.mobile,
+            designation: dto.designation,
+            role: Role.STATE,
+            xviFcSubrole,
+            state: stateId,
+            ulb: null,
+            originalEmail: null,
+            createdBy: new Types.ObjectId(String(requester._id)),
+            isDeleted: false,
+            isActive: true,
+            status: 'PENDING',
+            isXVIFCProfileVerified: false,
+            isEmailVerified: false,
+            isRegistered: false,
+            password: 'UNSET',
+            refreshTokenHash: null,
+            loginAttempts: 0,
+            isLocked: false,
+          },
+        },
+        { new: true },
+      ).lean().exec();
+
+      if (!restored) throw new NotFoundException('User to restore could not be found');
+
+      // Narrow race-condition guard: another active user with this email appeared during the restore window
+      const raceConflict = await this.userModel.exists({
+        email: dto.email,
+        isDeleted: false,
+        _id: { $ne: restored._id },
+      });
+      if (raceConflict) {
+        await this.userModel.findByIdAndUpdate(restored._id, {
+          $set: { isDeleted: true, email: `__deleted__${Date.now()}__${dto.email}`, originalEmail: dto.email },
+        });
+        throw new HttpException(
+          { code: 'EMAIL_ALREADY_ACTIVE', message: 'Email address is already registered' },
+          HttpStatus.CONFLICT,
+        );
+      }
+
+      await this.queueInviteEmail(dto, stateId, requester);
+      return this.toStateMemberDto(restored, dto);
+    }
+
+    if (action === 'force-new') {
+      // Deleted records already have scrambled emails — email is free, create directly.
+      // No tombstone or re-check needed.
+      return this.createFreshStateMember(dto, stateId, xviFcSubrole, requester);
+    }
+
+    throw new BadRequestException('Invalid action');
+  }
+
+  private async createFreshStateMember(
+    dto: InviteStateMemberDto,
+    stateId: Types.ObjectId,
+    xviFcSubrole: 'reviewer' | 'viewer',
+    requester: AuthUser,
+  ): Promise<StateMemberResponseDto> {
+    const created = await this.userModel.create({
+      name: dto.name,
+      email: dto.email,
+      mobile: dto.mobile,
+      designation: dto.designation,
+      role: Role.STATE,
+      xviFcSubrole,
+      state: stateId,
+      createdBy: new Types.ObjectId(String(requester._id)),
+      status: 'PENDING',
+      isXVIFCProfileVerified: false,
+      isEmailVerified: false,
+      isActive: true,
+      isDeleted: false,
+      isLocked: false,
+      loginAttempts: 0,
+      password: 'UNSET',
+      isRegistered: false,
+      isVerified2223: false,
+      isNodalOfficer: false,
+    });
+
+    await this.queueInviteEmail(dto, stateId, requester);
+    return this.toStateMemberDto(created, dto);
+  }
+
+  private async queueInviteEmail(dto: InviteStateMemberDto, stateId: Types.ObjectId, requester: AuthUser): Promise<void> {
+    const stateDoc = await this.stateModel.findById(stateId).select('name').lean().exec();
+    const loginUrl = `${this.configService.get<string>('CLIENT_URL', 'https://cityfinance.in')}/xvifc`;
+    this.emailQueueService
+      .addEmailJob({
+        to: dto.email,
+        subject: 'You have been invited to the XVI Finance Commission Portal',
+        templateName: './state-member-invite',
+        mailData: {
+          name: dto.name,
+          mobile: dto.mobile,
+          role: dto.subRole === 'EDITOR' ? 'Reviewer' : 'Viewer',
+          stateName: stateDoc?.name ?? 'your state',
+          invitedBy: 'State Administrator',
+          loginUrl,
+        },
+      })
+      .catch(() => {
+        // Email failure must never roll back user creation
+      });
+  }
+
+  private toStateMemberDto(user: { _id: unknown }, dto: InviteStateMemberDto): StateMemberResponseDto {
+    return {
+      _id: String(user._id),
+      name: dto.name,
+      mobile: dto.mobile,
+      email: dto.email,
+      designation: dto.designation,
+      subRole: dto.subRole,
+      isActive: true,
+      isXVIFCProfileVerified: false,
+      lastActive: null,
+    };
   }
 
   /**
@@ -200,13 +386,24 @@ export class UsersService {
 
     const targetUser = await this.userModel
       .findOne({ _id: targetUserId, isDeleted: false })
-      .select('role ulb state xviFcSubrole')
+      .select('role ulb state xviFcSubrole email')
       .lean()
       .exec();
 
     if (!targetUser) throw new NotFoundException('User not found');
 
-    await this.userModel.findByIdAndUpdate(targetUserId, { $set: { isDeleted: true } }).exec();
+    const originalEmail = targetUser.email ?? null;
+    const tombstonedEmail = originalEmail
+      ? `__deleted__${Date.now()}__${originalEmail}`
+      : undefined;
+
+    await this.userModel.findByIdAndUpdate(targetUserId, {
+      $set: {
+        isDeleted: true,
+        ...(tombstonedEmail && { email: tombstonedEmail }),
+        ...(originalEmail && { originalEmail }),
+      },
+    }).exec();
 
     return { message: 'User deleted successfully' };
   }
@@ -271,7 +468,7 @@ export class UsersService {
 
     const newOwner = await this.userModel
       .findOne({ _id: dto.toUserId, isDeleted: false })
-      .select('role state xviFcSubrole')
+      .select('role state xviFcSubrole isXVIFCProfileVerified')
       .lean()
       .exec();
 
@@ -282,6 +479,9 @@ export class UsersService {
     if (newOwner.xviFcSubrole === 'admin') {
       throw new BadRequestException('Target is already the STATE admin');
     }
+    if (!(newOwner as Record<string, unknown>)['isXVIFCProfileVerified']) {
+      throw new BadRequestException('Ownership can only be transferred to an active member who has completed profile verification');
+    }
 
     // Must belong to the same state
     const requesterStateId = requester.state?.toString();
@@ -290,15 +490,22 @@ export class UsersService {
       throw new ForbiddenException('You can only transfer ownership within your own state');
     }
 
-    // Atomic swap: new owner becomes admin, current requester becomes reviewer
-    const session = await this.userModel.db.startSession();
+    // Promote new owner first, then demote current admin.
+    // On failure of the second update, roll back the first to preserve consistency.
+    await this.userModel
+      .findByIdAndUpdate(dto.toUserId, { $set: { xviFcSubrole: 'admin' } })
+      .exec();
+
     try {
-      await session.withTransaction(async () => {
-        await this.userModel.findByIdAndUpdate(dto.toUserId, { $set: { xviFcSubrole: 'admin' } }, { session });
-        await this.userModel.findByIdAndUpdate(requester._id, { $set: { xviFcSubrole: 'reviewer' } }, { session });
-      });
-    } finally {
-      await session.endSession();
+      await this.userModel
+        .findByIdAndUpdate(requester._id, { $set: { xviFcSubrole: 'reviewer' } })
+        .exec();
+    } catch (err) {
+      // Rollback: restore the promoted user to their previous sub-role
+      await this.userModel
+        .findByIdAndUpdate(dto.toUserId, { $set: { xviFcSubrole: newOwner.xviFcSubrole } })
+        .exec();
+      throw err;
     }
 
     return { message: 'Ownership transferred successfully. You are now a Reviewer.' };
@@ -426,7 +633,7 @@ export class UsersService {
         role: UserRole.STATE,
         isDeleted: false,
       })
-      .select('_id name mobile email designation xviFcSubrole isActive lastLoginAt')
+      .select('_id name mobile email designation xviFcSubrole isActive isXVIFCProfileVerified lastLoginAt')
       .lean()
       .exec();
 
@@ -438,6 +645,27 @@ export class UsersService {
       designation: u.designation ?? '',
       subRole: UsersService.XVIFC_TO_SUB_ROLE[u.xviFcSubrole as string] ?? 'VIEWER',
       isActive: u.isActive ?? false,
+      isXVIFCProfileVerified: (u as Record<string, unknown>).isXVIFCProfileVerified === true,
+      lastActive: u.lastLoginAt ? (u.lastLoginAt as Date).toISOString() : null,
+    }));
+  }
+
+  async getMohuaMembers(): Promise<StateMemberResponseDto[]> {
+    const users = await this.userModel
+      .find({ role: Role.MoHUA, isDeleted: false })
+      .select('_id name mobile email designation isActive lastLoginAt')
+      .lean()
+      .exec();
+
+    return users.map((u) => ({
+      _id: String(u._id),
+      name: u.name,
+      mobile: u.mobile ?? '',
+      ...(u.email ? { email: u.email } : {}),
+      designation: u.designation ?? '',
+      subRole: 'VIEWER' as const,
+      isActive: u.isActive ?? false,
+      isXVIFCProfileVerified: true,
       lastActive: u.lastLoginAt ? (u.lastLoginAt as Date).toISOString() : null,
     }));
   }
