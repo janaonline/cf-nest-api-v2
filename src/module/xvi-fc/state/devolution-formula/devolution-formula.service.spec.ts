@@ -20,7 +20,8 @@ import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import { Scope, UserRole, AccessLevel } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { SaveDraftDevolutionFormulaDto } from './dto/save-draft-devolution-formula.dto';
-import { DF_FORM_QUESTIONS, DF_ROW_EDIT_FIELDS, DF_TEMPLATE_HEADERS } from './constants/devolution-formula.constants';
+import { DF_TEMPLATE_HEADERS } from './constants/devolution-formula.constants';
+import { DfFormJsonConfigService } from './services/form-json/devolution-formula-form-json.service';
 import type { HydratedFieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
 
 // ─── Chainable Mongoose query mock ──────────────────────────────────────────
@@ -115,6 +116,85 @@ const mockRowModel = {
 const mockGrantAllocationModel = { findOne: jest.fn() };
 const mockEulbModel = { findOne: jest.fn() };
 
+const mockDfFormJsonConfig = { loadFields: jest.fn() };
+
+const mockDfTypedFields = [
+  {
+    fieldTypes: ['DF_MAIN_FORM_FIELDS'],
+    formFieldType: 'number',
+    key: 'ulbCount',
+    label: 'How many ULBs are there in the state as of March 31, 2026?',
+    value: 0,
+    placeholder: '',
+    validations: [
+      { name: 'required', validator: null, message: 'This field is required.' },
+      { name: 'min', validator: 2, message: 'ULB count cannot be less than 2.' },
+      { name: 'max', validator: 1000, message: 'ULB count cannot exceed 1000.' },
+    ],
+    layout: { variant: 'inline', labelWidth: 'lg' },
+  },
+  {
+    fieldTypes: ['DF_MAIN_FORM_FIELDS'],
+    formFieldType: 'file',
+    key: 'excelFile',
+    label: 'Upload Devolution Formula Excel',
+    allowedFileTypes: ['xlsx', 'xls'],
+    maxFileSize: 20,
+    folderPathKey: 'devolution-formula/excels',
+    validations: [{ name: 'required', validator: null, message: 'Excel file is required.' }],
+    appearance: { color: 'success', variant: 'soft' },
+    value: { fileName: '', fileUrl: '', fileSize: null, mimeType: '' },
+  },
+  {
+    fieldTypes: ['DF_MAIN_FORM_FIELDS'],
+    formFieldType: 'checkbox',
+    key: 'checkboxConfirmation',
+    label: 'I understand...',
+    value: false,
+    validations: [{ name: 'requiredTrue', validator: null, message: 'Please confirm before submitting.' }],
+  },
+  {
+    fieldTypes: ['DF_ROW_EDIT_FIELDS'],
+    formFieldType: 'number',
+    key: 'totalGrantAllocation',
+    label: 'Total Grant Allocation',
+    validations: [
+      { name: 'required', validator: null, message: 'Total Grant Allocation is required.' },
+      { name: 'min', validator: 0, message: 'Total Grant Allocation cannot be negative.' },
+    ],
+  },
+  {
+    fieldTypes: ['DF_ROW_EDIT_FIELDS'],
+    formFieldType: 'number',
+    key: 'installment1Amount',
+    label: 'Installment 1 Amount',
+    validations: [
+      { name: 'required', validator: null, message: 'Installment 1 Amount is required.' },
+      { name: 'min', validator: 0, message: 'Installment 1 Amount cannot be negative.' },
+    ],
+  },
+  {
+    fieldTypes: ['DF_ROW_EDIT_FIELDS'],
+    formFieldType: 'number',
+    key: 'installment2Amount',
+    label: 'Installment 2 Amount',
+    validations: [
+      { name: 'required', validator: null, message: 'Installment 2 Amount is required.' },
+      { name: 'min', validator: 0, message: 'Installment 2 Amount cannot be negative.' },
+    ],
+  },
+  {
+    fieldTypes: ['DF_ROW_EDIT_FIELDS'],
+    formFieldType: 'text',
+    key: 'devolutionFormula',
+    label: 'Devolution Formula',
+    validations: [
+      { name: 'required', validator: null, message: 'Devolution Formula is required.' },
+      { name: 'maxLength', validator: 250, message: 'Devolution Formula cannot exceed 250 characters.' },
+    ],
+  },
+];
+
 // ─── 1 · Constants ───────────────────────────────────────────────────────────
 
 describe('Devolution Formula — constants', () => {
@@ -122,58 +202,6 @@ describe('Devolution Formula — constants', () => {
     const labels = DF_TEMPLATE_HEADERS.map((h) => h.label);
     expect(labels).toContain('Census Code');
     expect(labels).not.toContain('SB Code');
-  });
-
-  it('DF_FORM_QUESTIONS contains excelFile (file) and checkboxConfirmation (checkbox)', () => {
-    const keys = DF_FORM_QUESTIONS.map((q) => q.key);
-    expect(keys).toContain('excelFile');
-    expect(keys).toContain('checkboxConfirmation');
-
-    const fileQ = DF_FORM_QUESTIONS.find((q) => q.key === 'excelFile');
-    expect(fileQ?.formFieldType).toBe('file');
-    expect(fileQ?.allowedFileTypes).toContain('xlsx');
-    expect(fileQ?.allowedFileTypes).toContain('xls');
-    expect(fileQ?.maxFileSize).toBe(20);
-    expect(fileQ?.folderPathKey).toBe('devolution-formula/excels');
-
-    const cbQ = DF_FORM_QUESTIONS.find((q) => q.key === 'checkboxConfirmation');
-    expect(cbQ?.formFieldType).toBe('checkbox');
-    expect(cbQ?.validations?.some((v) => v.name === 'requiredTrue')).toBe(true);
-  });
-});
-
-// ─── 1b · DF_FORM_QUESTIONS ulbCount question ────────────────────────────────
-
-describe('Devolution Formula — DF_FORM_QUESTIONS ulbCount question', () => {
-  it('question order is ulbCount, excelFile, checkboxConfirmation', () => {
-    const keys = DF_FORM_QUESTIONS.map((q) => q.key);
-    expect(keys).toEqual(['ulbCount', 'excelFile', 'checkboxConfirmation']);
-  });
-
-  it('ulbCount is a number field with default value 0', () => {
-    const field = DF_FORM_QUESTIONS.find((q) => q.key === 'ulbCount');
-    expect(field).toBeDefined();
-    expect(field?.formFieldType).toBe('number');
-    expect(field?.value).toBe(0);
-  });
-
-  it('ulbCount has required, min(10), and max(1000) validations', () => {
-    const field = DF_FORM_QUESTIONS.find((q) => q.key === 'ulbCount');
-    const names = field?.validations?.map((v) => v.name) ?? [];
-    expect(names).toContain('required');
-    expect(names).toContain('min');
-    expect(names).toContain('max');
-    expect(field?.validations?.find((v) => v.name === 'min')?.validator).toBe(10);
-    expect(field?.validations?.find((v) => v.name === 'max')?.validator).toBe(1000);
-  });
-
-  it('excelFile and checkboxConfirmation questions are unchanged', () => {
-    const fileQ = DF_FORM_QUESTIONS.find((q) => q.key === 'excelFile');
-    expect(fileQ?.formFieldType).toBe('file');
-
-    const cbQ = DF_FORM_QUESTIONS.find((q) => q.key === 'checkboxConfirmation');
-    expect(cbQ?.formFieldType).toBe('checkbox');
-    expect(cbQ?.validations?.some((v) => v.name === 'requiredTrue')).toBe(true);
   });
 });
 
@@ -338,6 +366,7 @@ describe('DevolutionFormulaService', () => {
     mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
     mockEulbModel.findOne.mockReturnValue(q(null));
     mockRowModel.findOne.mockReturnValue(q(null));
+    mockDfFormJsonConfig.loadFields.mockResolvedValue(mockDfTypedFields);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -352,6 +381,7 @@ describe('DevolutionFormulaService', () => {
         { provide: XvifcFormActorsService, useValue: mockActorsService },
         { provide: FileTokenService, useValue: mockFileTokenService },
         { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
+        { provide: DfFormJsonConfigService, useValue: mockDfFormJsonConfig },
       ],
     }).compile();
 
@@ -1025,7 +1055,7 @@ describe('DevolutionFormulaService', () => {
           data: {
             excelFile: { fileName: 'f.xlsx', fileUrl: 'path/f.xlsx', fileSize: 1024 },
             checkboxConfirmation: true,
-            ulbCount: 5,
+            ulbCount: 1, // min is 2, so 1 fails
           },
         },
         adminUser,
@@ -1458,60 +1488,6 @@ describe('Devolution Formula — ULB identifier consolidation', () => {
   });
 });
 
-// ─── 7 · DF_ROW_EDIT_FIELDS constant ─────────────────────────────────────────
-
-describe('Devolution Formula — DF_ROW_EDIT_FIELDS constant', () => {
-  it('has exactly 4 fields', () => {
-    expect(DF_ROW_EDIT_FIELDS).toHaveLength(4);
-  });
-
-  it('totalGrantAllocation has required and min validations', () => {
-    const field = DF_ROW_EDIT_FIELDS.find((f) => f.key === 'totalGrantAllocation');
-    expect(field).toBeDefined();
-    expect(field?.formFieldType).toBe('number');
-    const names = field?.validations?.map((v) => v.name) ?? [];
-    expect(names).toContain('required');
-    expect(names).toContain('min');
-    const minV = field?.validations?.find((v) => v.name === 'min');
-    expect(minV?.validator).toBe(0);
-  });
-
-  it('installment1Amount has required and min validations', () => {
-    const field = DF_ROW_EDIT_FIELDS.find((f) => f.key === 'installment1Amount');
-    expect(field).toBeDefined();
-    expect(field?.formFieldType).toBe('number');
-    const names = field?.validations?.map((v) => v.name) ?? [];
-    expect(names).toContain('required');
-    expect(names).toContain('min');
-  });
-
-  it('installment2Amount has required and min validations', () => {
-    const field = DF_ROW_EDIT_FIELDS.find((f) => f.key === 'installment2Amount');
-    expect(field).toBeDefined();
-    expect(field?.formFieldType).toBe('number');
-    const names = field?.validations?.map((v) => v.name) ?? [];
-    expect(names).toContain('required');
-    expect(names).toContain('min');
-  });
-
-  it('devolutionFormula has required and maxLength 250 validations', () => {
-    const field = DF_ROW_EDIT_FIELDS.find((f) => f.key === 'devolutionFormula');
-    expect(field).toBeDefined();
-    expect(field?.formFieldType).toBe('text');
-    const names = field?.validations?.map((v) => v.name) ?? [];
-    expect(names).toContain('required');
-    expect(names).toContain('maxLength');
-    const maxLenV = field?.validations?.find((v) => v.name === 'maxLength');
-    expect(maxLenV?.validator).toBe(250);
-  });
-
-  it('no field has a fieldTypes property (clean FieldConfig, no internal metadata exposed)', () => {
-    for (const field of DF_ROW_EDIT_FIELDS) {
-      expect(field).not.toHaveProperty('fieldTypes');
-    }
-  });
-});
-
 // ─── 8 · getForm includes rowEditFields ───────────────────────────────────────
 
 describe('Devolution Formula — getForm rowEditFields', () => {
@@ -1526,6 +1502,7 @@ describe('Devolution Formula — getForm rowEditFields', () => {
   beforeEach(async () => {
     jest.clearAllMocks();
     mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
+    mockDfFormJsonConfig.loadFields.mockResolvedValue(mockDfTypedFields);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -1540,6 +1517,7 @@ describe('Devolution Formula — getForm rowEditFields', () => {
         { provide: XvifcFormActorsService, useValue: mockActorsService },
         { provide: FileTokenService, useValue: mockFileTokenService },
         { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
+        { provide: DfFormJsonConfigService, useValue: mockDfFormJsonConfig },
       ],
     }).compile();
 

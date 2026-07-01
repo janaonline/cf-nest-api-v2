@@ -1,8 +1,8 @@
 import type { RowHeader } from 'src/services/excel/excel.service';
-import type { FieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
 
 export const DF_FORM_NAME = 'Devolution Formula';
 export const DF_FORM_TYPE = 'DEVOLUTION_FORMULA';
+export const DF_FORM_ID = 24;
 export const DF_ROUTE_BASE = 'xvi-fc/state/devolution-formula';
 
 export const DF_INSTALLMENTS = [1, 2] as const;
@@ -120,114 +120,3 @@ export const DF_ROW_VALIDATION_STATUS = {
 } as const;
 
 export type DfRowValidationStatus = (typeof DF_ROW_VALIDATION_STATUS)[keyof typeof DF_ROW_VALIDATION_STATUS];
-
-// ─── Row edit field definitions (constant-backed; replace with formJson DB call when seeded) ──────
-
-export const DF_ROW_EDIT_FIELDS: FieldConfig[] = [
-  {
-    key: 'totalGrantAllocation',
-    formFieldType: 'number',
-    label: 'Total Grant Allocation',
-    validations: [
-      { name: 'required', validator: null, message: 'Total Grant Allocation is required.' },
-      { name: 'min', validator: 0, message: 'Total Grant Allocation cannot be negative.' },
-    ],
-  },
-  {
-    key: 'installment1Amount',
-    formFieldType: 'number',
-    label: 'Installment 1 Amount',
-    validations: [
-      { name: 'required', validator: null, message: 'Installment 1 Amount is required.' },
-      { name: 'min', validator: 0, message: 'Installment 1 Amount cannot be negative.' },
-    ],
-  },
-  {
-    key: 'installment2Amount',
-    formFieldType: 'number',
-    label: 'Installment 2 Amount',
-    validations: [
-      { name: 'required', validator: null, message: 'Installment 2 Amount is required.' },
-      { name: 'min', validator: 0, message: 'Installment 2 Amount cannot be negative.' },
-    ],
-  },
-  {
-    key: 'devolutionFormula',
-    formFieldType: 'text',
-    label: 'Devolution Formula',
-    validations: [
-      { name: 'required', validator: null, message: 'Devolution Formula is required.' },
-      {
-        name: 'maxLength',
-        validator: DF_MAX_FORMULA_LENGTH,
-        message: `Devolution Formula cannot exceed ${DF_MAX_FORMULA_LENGTH} characters.`,
-      },
-    ],
-  },
-];
-
-// ─── Constant-backed form field definitions ───────────────────────────────────
-
-export const DF_FORM_QUESTIONS: FieldConfig[] = [
-  {
-    formFieldType: 'number',
-    label: 'How many ULBs are there in the state as of March 31, 2026?',
-    key: 'ulbCount',
-    value: 0,
-    placeholder: '',
-    validations: [
-      {
-        name: 'required',
-        validator: null,
-        message: 'This field is required.',
-      },
-      {
-        name: 'min',
-        validator: 2,
-        message: 'ULB count cannot be less than 2.',
-      },
-      {
-        name: 'max',
-        validator: 1000,
-        message: 'ULB count cannot exceed 1000.',
-      },
-    ],
-    layout: {
-      variant: 'inline',
-      labelWidth: 'lg',
-    },
-  },
-  {
-    formFieldType: 'file',
-    key: 'excelFile',
-    label: 'Upload Devolution Formula Excel',
-    allowedFileTypes: ['xlsx', 'xls'],
-    maxFileSize: DF_MAX_FILE_SIZE_MB,
-    folderPathKey: DF_FOLDER_PATH_EXCELS,
-    validations: [{ name: 'required', validator: null, message: 'Excel file is required.' }],
-    appearance: {
-      color: 'success',
-      variant: 'soft',
-    },
-    value: {
-      fileName: '',
-      fileUrl: '',
-      fileSize: null,
-      mimeType: '',
-    },
-  },
-  {
-    formFieldType: 'checkbox',
-    key: 'checkboxConfirmation',
-    label:
-      'I understand that this submission may contain information entered or modified by other users. I have reviewed the final submission and confirm that the information being submitted is complete and accurate to the best of my knowledge.',
-    value: false,
-    validations: [
-      {
-        name: 'requiredTrue',
-        validator: null,
-        message: 'Please confirm before submitting.',
-      },
-    ],
-  },
-];

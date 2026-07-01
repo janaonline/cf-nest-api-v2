@@ -2,7 +2,9 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ExcelService } from 'src/services/excel/excel.service';
 import { S3Service } from 'src/core/s3/s3.service';
+import { FormJsonModule } from 'src/form-json/form-json.module';
 import { XviFcCommonModule } from 'src/module/xvi-fc/common/xvi-fc-common.module';
+import { DfFormJsonConfigService } from './services/form-json/devolution-formula-form-json.service';
 import {
   DevolutionFormulaForm,
   DevolutionFormulaFormSchema,
@@ -34,6 +36,7 @@ import { DevolutionFormulaValidator } from './validators/devolution-formula.vali
       { name: ElectedUrbanLocalBodiesForm.name, schema: ElectedUrbanLocalBodiesFormSchema },
     ]),
     XviFcCommonModule,
+    FormJsonModule,
   ],
   controllers: [DevolutionFormulaController],
   providers: [
@@ -41,6 +44,7 @@ import { DevolutionFormulaValidator } from './validators/devolution-formula.vali
     DevolutionFormulaExcelService,
     DevolutionFormulaRowService,
     DevolutionFormulaValidator,
+    DfFormJsonConfigService,
     ExcelService,
     S3Service,
   ],

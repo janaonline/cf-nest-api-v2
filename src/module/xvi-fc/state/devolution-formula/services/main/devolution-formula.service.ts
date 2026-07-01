@@ -55,10 +55,10 @@ import {
   DF_ACTION_VIEW_UPLOADED_DATA,
   DF_DUMP_HEADERS,
   DF_FORM_NAME,
-  DF_FORM_QUESTIONS,
-  DF_ROW_EDIT_FIELDS,
   buildDfRegisterUlbUrl,
 } from '../../constants/devolution-formula.constants';
+import { DfFormJsonConfigService } from '../form-json/devolution-formula-form-json.service';
+import { getDfFieldsByType } from '../../helpers/devolution-formula-form-json.helpers';
 import type { SaveDraftDevolutionFormulaDto } from '../../dto/save-draft-devolution-formula.dto';
 import type { FinalSubmitDevolutionFormulaDto } from '../../dto/final-submit-devolution-formula.dto';
 import type { DumpDevolutionFormulaQueryDto } from '../../dto/dump-devolution-formula-query.dto';
@@ -105,6 +105,7 @@ export class DevolutionFormulaService {
     private readonly fileTokenService: FileTokenService,
     private readonly fileUrlNormalizer: FileUrlNormalizerService,
     private readonly dynamicFormValidator: DynamicFormValidationService,
+    private readonly dfFormJsonConfig: DfFormJsonConfigService,
   ) {}
 
   async getForm(
@@ -113,6 +114,7 @@ export class DevolutionFormulaService {
     installment: number,
     user: AuthUser,
   ): Promise<XviFcApiResponse<DfFormGetResponseData>> {
+    // TODO_NS: reuse existing functions - check what is happening in elected body and sfc.
     this.assertStateAccess(user, stateId);
 
     const stateOid = new Types.ObjectId(stateId);
@@ -132,6 +134,7 @@ export class DevolutionFormulaService {
       .exec();
 
     const currentFormStatus = doc?.currentFormStatus ?? FORM_STATUS.NOT_STARTED;
+    // TODO_NS: user common function? see what is happening in elected body and sfc.
     const permissions = this.buildFormPermissions(user, stateId, currentFormStatus);
     const { actors, stateName } = this.xvifcFormActorsService.buildActorsAndStateName(
       doc as unknown as Parameters<typeof this.xvifcFormActorsService.buildActorsAndStateName>[0],
@@ -145,15 +148,31 @@ export class DevolutionFormulaService {
     if (doc?.checkboxConfirmation !== undefined) savedData['checkboxConfirmation'] = doc.checkboxConfirmation;
     if (doc?.ulbCount !== undefined) savedData['ulbCount'] = doc.ulbCount;
 
+    const fields = await this.dfFormJsonConfig.loadFields(yearId);
     const questions = this.hydrateQuestions(
-      this.loadFormQuestions(),
+      getDfFieldsByType(fields, 'DF_MAIN_FORM_FIELDS'),
       savedData,
       doc,
       permissions,
       folderPathContext,
       yearId,
     );
-    const rowEditFields = this.loadRowEditFields();
+    const grantMax = grantAllocationSummary?.total ?? null;
+    const rowEditFields = getDfFieldsByType(fields, 'DF_ROW_EDIT_FIELDS').map((field) => {
+      if (
+        grantMax !== null &&
+        ['totalGrantAllocation', 'installment1Amount', 'installment2Amount'].includes(field.key)
+      ) {
+        return {
+          ...field,
+          validations: [
+            ...(field.validations ?? []),
+            { name: 'max', validator: grantMax, message: `Cannot exceed the MoHUA grant allocation (${grantMax}Cr.).` },
+          ],
+        };
+      }
+      return field;
+    });
     const installmentAccess = this.buildInstallmentAccess();
 
     const responseData: DfFormGetResponseData = {
@@ -206,7 +225,11 @@ export class DevolutionFormulaService {
     if (dto.data?.checkboxConfirmation !== undefined) formData['checkboxConfirmation'] = dto.data.checkboxConfirmation;
     if (dto.data?.ulbCount !== undefined) formData['ulbCount'] = dto.data.ulbCount;
 
-    const validation = this.dynamicFormValidator.validateDraftAndBuildPayload(this.loadFormQuestions(), formData);
+    const dfFields = await this.dfFormJsonConfig.loadFields(dto.yearId);
+    const validation = this.dynamicFormValidator.validateDraftAndBuildPayload(
+      getDfFieldsByType(dfFields, 'DF_MAIN_FORM_FIELDS'),
+      formData,
+    );
     if (!validation.isValid) throwXviFcValidationError(validation.errors);
 
     const update: Record<string, unknown> = {
@@ -273,7 +296,11 @@ export class DevolutionFormulaService {
       ulbCount: dto.data.ulbCount,
     };
 
-    const validation = this.dynamicFormValidator.validateFinalSubmitAndBuildPayload(this.loadFormQuestions(), formData);
+    const dfFields = await this.dfFormJsonConfig.loadFields(dto.yearId);
+    const validation = this.dynamicFormValidator.validateFinalSubmitAndBuildPayload(
+      getDfFieldsByType(dfFields, 'DF_MAIN_FORM_FIELDS'),
+      formData,
+    );
     if (!validation.isValid) throwXviFcValidationError(validation.errors);
 
     // Prerequisite gate for installment 1
@@ -479,14 +506,6 @@ export class DevolutionFormulaService {
   }
 
   // ─── Private helpers ──────────────────────────────────────────────────────
-
-  private loadFormQuestions(): FieldConfig[] {
-    return DF_FORM_QUESTIONS.map((q) => ({ ...q }));
-  }
-
-  private loadRowEditFields(): FieldConfig[] {
-    return DF_ROW_EDIT_FIELDS.map((f) => ({ ...f }));
-  }
 
   private hydrateQuestions(
     questions: FieldConfig[],
