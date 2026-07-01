@@ -357,6 +357,7 @@ describe('DevolutionFormulaExcelService — generateTemplate', () => {
   beforeEach(async () => {
     jest.clearAllMocks();
 
+    mockFormModel.findOne.mockReturnValue(q(null)); // no saved form → fallback to master ULBs
     mockUlbModel.find.mockReturnValue(q(mockDbUlbs));
 
     const module: TestingModule = await Test.createTestingModule({
@@ -389,6 +390,58 @@ describe('DevolutionFormulaExcelService — generateTemplate', () => {
     const calls = mockExcelService.generateExcel.mock.calls as unknown[][];
     const rows = calls[0][1] as Array<{ censusCode: string; ulbName: string }>;
     expect(rows).toEqual([expect.objectContaining({ censusCode: 'C001', ulbName: 'Alpha City' })]);
+  });
+
+  it('passes 4 column validations covering the 3 amount fields and devolutionFormula', async () => {
+    await service.generateTemplate(stateOid.toString(), YEAR_ID, 1, adminUser);
+
+    const calls = mockExcelService.generateExcel.mock.calls as unknown[][];
+    const columnValidations = calls[0][3] as Array<{ key: string; mode: string }>;
+    expect(columnValidations).toHaveLength(4);
+    expect(columnValidations.map((v) => v.key)).toEqual([
+      'totalGrantAllocation',
+      'installment1Amount',
+      'installment2Amount',
+      'devolutionFormula',
+    ]);
+    expect(columnValidations[0].mode).toBe('perRow');
+    expect(columnValidations[1].mode).toBe('static');
+    expect(columnValidations[2].mode).toBe('static');
+    expect(columnValidations[3].mode).toBe('static');
+  });
+
+  it('pre-fills rows from the active dataset when form.activeDatasetVersion > 0', async () => {
+    const savedRow = {
+      _id: new Types.ObjectId(),
+      rowNumber: 1,
+      censusCode: 'C001',
+      ulbName: 'Alpha City',
+      totalGrantAllocation: 500_000,
+      installment1Amount: 300_000,
+      installment2Amount: 200_000,
+      devolutionFormula: 'Population-based',
+      isActive: true,
+    };
+    mockFormModel.findOne.mockReturnValue(q({ _id: formOid, activeDatasetVersion: 1 }));
+    mockRowModel.find.mockReturnValue(q([savedRow]));
+
+    await service.generateTemplate(stateOid.toString(), YEAR_ID, 1, adminUser);
+
+    expect(mockRowModel.find).toHaveBeenCalledWith({ form: formOid, datasetVersion: 1, isActive: true });
+    expect(mockUlbModel.find).not.toHaveBeenCalled();
+
+    const calls = mockExcelService.generateExcel.mock.calls as unknown[][];
+    const rows = calls[0][1] as Array<Record<string, unknown>>;
+    expect(rows).toEqual([
+      expect.objectContaining({
+        censusCode: 'C001',
+        ulbName: 'Alpha City',
+        totalGrantAllocation: 500_000,
+        installment1Amount: 300_000,
+        installment2Amount: 200_000,
+        devolutionFormula: 'Population-based',
+      }),
+    ]);
   });
 });
 

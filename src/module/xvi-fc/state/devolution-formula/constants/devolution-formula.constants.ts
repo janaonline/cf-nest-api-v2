@@ -38,9 +38,9 @@ export const DF_REQUIRED_EXCEL_KEYS = [
 export const DF_TEMPLATE_HEADERS: RowHeader[] = [
   { label: 'Census Code', key: 'censusCode', width: 15 },
   { label: 'ULB Name', key: 'ulbName', width: 35 },
-  { label: 'Total Grant Allocation', key: 'totalGrantAllocation', width: 24 },
-  { label: 'Installment 1 Amount', key: 'installment1Amount', width: 22 },
-  { label: 'Installment 2 Amount', key: 'installment2Amount', width: 22 },
+  { label: 'Total Grant Allocation (Cr.)', key: 'totalGrantAllocation', width: 24 },
+  { label: 'Installment 1 Amount (Cr.)', key: 'installment1Amount', width: 22 },
+  { label: 'Installment 2 Amount (Cr.)', key: 'installment2Amount', width: 22 },
   { label: 'Devolution Formula', key: 'devolutionFormula', width: 30 },
 ];
 
@@ -59,9 +59,9 @@ export const DF_DUMP_HEADERS: RowHeader[] = [
   { label: 'Census Code', key: 'censusCode', width: 15 },
   { label: 'SB Code', key: 'sbCode', width: 15 },
   { label: 'ULB Name', key: 'ulbName', width: 35 },
-  { label: 'Total Grant Allocation', key: 'totalGrantAllocation', width: 24 },
-  { label: 'Installment 1 Amount', key: 'installment1Amount', width: 22 },
-  { label: 'Installment 2 Amount', key: 'installment2Amount', width: 22 },
+  { label: 'Total Grant Allocation (Cr.)', key: 'totalGrantAllocation', width: 24 },
+  { label: 'Installment 1 Amount (Cr.)', key: 'installment1Amount', width: 22 },
+  { label: 'Installment 2 Amount (Cr.)', key: 'installment2Amount', width: 22 },
   { label: 'Devolution Formula', key: 'devolutionFormula', width: 30 },
   { label: 'Dataset Version', key: 'datasetVersion', width: 18 },
   { label: 'Created At', key: 'createdAt', width: 24 },
@@ -77,6 +77,7 @@ export const DF_FOLDER_PATH_ERROR_SHEETS = 'devolution-formula/error-sheets';
 
 export const DF_MAX_FILE_SIZE_MB = 20;
 export const DF_MAX_FILE_SIZE_BYTES = DF_MAX_FILE_SIZE_MB * 1024 * 1024;
+export const DF_MAX_FORMULA_LENGTH = 250;
 export const DF_ALLOWED_MIME_TYPES = [
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   'application/vnd.ms-excel',
@@ -156,7 +157,11 @@ export const DF_ROW_EDIT_FIELDS: FieldConfig[] = [
     label: 'Devolution Formula',
     validations: [
       { name: 'required', validator: null, message: 'Devolution Formula is required.' },
-      { name: 'maxLength', validator: 250, message: 'Devolution Formula cannot exceed 250 characters.' },
+      {
+        name: 'maxLength',
+        validator: DF_MAX_FORMULA_LENGTH,
+        message: `Devolution Formula cannot exceed ${DF_MAX_FORMULA_LENGTH} characters.`,
+      },
     ],
   },
 ];

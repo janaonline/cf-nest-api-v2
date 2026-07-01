@@ -5,7 +5,7 @@ import type ExcelJS from 'exceljs';
 import * as XLSX from 'xlsx';
 import { S3Service } from 'src/core/s3/s3.service';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
-import { ExcelService } from 'src/services/excel/excel.service';
+import { ExcelColumnValidation, ExcelService } from 'src/services/excel/excel.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
@@ -34,6 +34,7 @@ import {
   DF_EXCEL_HEADER_MAP,
   DF_FOLDER_PATH_ERROR_SHEETS,
   DF_MAX_FILE_SIZE_BYTES,
+  DF_MAX_FORMULA_LENGTH,
   DF_TEMPLATE_HEADERS,
   type DfInstallment,
 } from '../../constants/devolution-formula.constants';
@@ -601,13 +602,46 @@ export class DevolutionFormulaExcelService {
 
   async generateTemplate(
     stateId: string,
-    _yearId: string,
-    _installment: DfInstallment,
+    yearId: string,
+    installment: DfInstallment,
     user: AuthUser,
   ): Promise<ExcelJS.Buffer> {
     this.assertStateAccess(user, stateId);
 
     const stateOid = new Types.ObjectId(stateId);
+    const yearOid = new Types.ObjectId(yearId);
+
+    const form = await this.formModel
+      .findOne({ state: stateOid, year: yearOid, installment })
+      .lean<DfFormLeanDoc>()
+      .exec();
+
+    const activeVersion = form?.activeDatasetVersion ?? 0;
+
+    if (form && activeVersion > 0) {
+      const savedRows = await this.rowModel
+        .find({ form: form._id as Types.ObjectId, datasetVersion: activeVersion, isActive: true })
+        .sort({ rowNumber: 1 })
+        .lean()
+        .exec();
+
+      const rows = savedRows.map((r) => ({
+        censusCode: r.censusCode ?? '',
+        ulbName: r.ulbName,
+        totalGrantAllocation: r.totalGrantAllocation,
+        installment1Amount: r.installment1Amount,
+        installment2Amount: r.installment2Amount,
+        devolutionFormula: r.devolutionFormula,
+      }));
+
+      return this.excelService.generateExcel(
+        DF_TEMPLATE_HEADERS,
+        rows,
+        'Devolution Formula',
+        this.buildDfTemplateValidations(),
+      );
+    }
+
     const ulbs = await this.ulbModel
       .find({ state: stateOid, isActive: true })
       .select('_id name censusCode sbCode')
@@ -624,10 +658,79 @@ export class DevolutionFormulaExcelService {
       devolutionFormula: '',
     }));
 
-    return this.excelService.generateExcel(DF_TEMPLATE_HEADERS, rows, 'Devolution Formula');
+    return this.excelService.generateExcel(
+      DF_TEMPLATE_HEADERS,
+      rows,
+      'Devolution Formula',
+      this.buildDfTemplateValidations(),
+    );
   }
 
   // ─── Private helpers ─────────────────────────────────────────────────────
+
+  private buildDfTemplateValidations(): ExcelColumnValidation[] {
+    const numericValidation = (title: string): ExcelJS.DataValidation => ({
+      type: 'decimal',
+      operator: 'greaterThanOrEqual',
+      allowBlank: true,
+      formulae: [0],
+      showInputMessage: true,
+      promptTitle: title,
+      prompt: 'Enter a number (0 or greater).',
+      showErrorMessage: true,
+      errorStyle: 'error',
+      errorTitle: `Invalid ${title}`,
+      error: `${title} must be a number ≥ 0.`,
+    });
+
+    return [
+      {
+        key: 'totalGrantAllocation',
+        mode: 'perRow',
+        buildValidation: (row, keyToLetter) => {
+          const totalLetter = keyToLetter.get('totalGrantAllocation')!;
+          const inst1Letter = keyToLetter.get('installment1Amount')!;
+          const inst2Letter = keyToLetter.get('installment2Amount')!;
+          return {
+            type: 'custom',
+            allowBlank: true,
+            formulae: [
+              `OR(${totalLetter}${row}="",AND(ISNUMBER(${totalLetter}${row}),${totalLetter}${row}>=0,ISNUMBER(${inst1Letter}${row}),ISNUMBER(${inst2Letter}${row}),ABS(${totalLetter}${row}-(${inst1Letter}${row}+${inst2Letter}${row}))<0.001))`,
+            ],
+            showErrorMessage: true,
+            errorStyle: 'warning',
+            errorTitle: 'Allocation Mismatch',
+            error:
+              'Total Grant Allocation must be ≥ 0 and must equal the sum of Installment 1 and Installment 2 amounts.',
+          };
+        },
+      },
+      {
+        key: 'installment1Amount',
+        mode: 'static',
+        validation: numericValidation('Installment 1 Amount'),
+      },
+      {
+        key: 'installment2Amount',
+        mode: 'static',
+        validation: numericValidation('Installment 2 Amount'),
+      },
+      {
+        key: 'devolutionFormula',
+        mode: 'static',
+        validation: {
+          type: 'textLength',
+          operator: 'lessThanOrEqual',
+          allowBlank: true,
+          formulae: [DF_MAX_FORMULA_LENGTH],
+          showErrorMessage: true,
+          errorStyle: 'warning',
+          errorTitle: 'Devolution Formula Too Long',
+          error: `Devolution Formula must not exceed ${DF_MAX_FORMULA_LENGTH} characters.`,
+        },
+      },
+    ];
+  }
 
   private assertStateAccess(user: AuthUser, stateId: string): void {
     if (user.scope === Scope.ADMIN) return;
