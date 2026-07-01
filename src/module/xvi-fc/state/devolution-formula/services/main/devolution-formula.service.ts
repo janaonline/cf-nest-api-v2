@@ -436,90 +436,118 @@ export class DevolutionFormulaService {
   }
 
   async dumpToExcel(query: DumpDevolutionFormulaQueryDto, user: AuthUser): Promise<ExcelJS.Buffer> {
-    const filter: Record<string, unknown> = {};
+    const rowMatch = this.buildDumpRowMatch(query);
+    const formMatch = this.buildDumpFormMatch(query, user);
 
-    if (user.scope === Scope.STATE) {
-      const userStateId = toObjectIdString(user.state);
-      if (!userStateId) throw new ForbiddenException('Your account is not mapped to any state.');
-      filter['state'] = new Types.ObjectId(userStateId);
-    } else if (user.scope === Scope.ADMIN) {
-      if (query.stateId) filter['state'] = new Types.ObjectId(query.stateId);
-    } else {
-      throw new ForbiddenException('Insufficient permissions for dump.');
-    }
+    const pipeline = [
+      { $match: rowMatch },
+      {
+        $lookup: {
+          from: 'xvi_fc_devolution_formula_forms',
+          localField: 'form',
+          foreignField: '_id',
+          as: 'formDoc',
+        },
+      },
+      { $unwind: '$formDoc' },
+      { $match: { ...formMatch, $expr: { $eq: ['$datasetVersion', '$formDoc.activeDatasetVersion'] } } },
+      { $lookup: { from: 'states', localField: 'formDoc.state', foreignField: '_id', as: 'stateDoc' } },
+      { $unwind: { path: '$stateDoc', preserveNullAndEmptyArrays: true } },
+      { $lookup: { from: 'users', localField: 'formDoc.submittedBy', foreignField: '_id', as: 'submittedByDoc' } },
+      { $unwind: { path: '$submittedByDoc', preserveNullAndEmptyArrays: true } },
+      { $lookup: { from: 'users', localField: 'createdBy', foreignField: '_id', as: 'createdByDoc' } },
+      { $unwind: { path: '$createdByDoc', preserveNullAndEmptyArrays: true } },
+      { $lookup: { from: 'users', localField: 'updatedBy', foreignField: '_id', as: 'updatedByDoc' } },
+      { $unwind: { path: '$updatedByDoc', preserveNullAndEmptyArrays: true } },
+      { $sort: { 'stateDoc.name': 1, 'formDoc.year': 1, 'formDoc.installment': 1, rowNumber: 1 } },
+      {
+        $project: {
+          rowNumber: 1,
+          censusCode: 1,
+          ulbName: 1,
+          totalGrantAllocation: 1,
+          installment1Amount: 1,
+          installment2Amount: 1,
+          devolutionFormula: 1,
+          datasetVersion: 1,
+          createdAt: 1,
+          updatedAt: 1,
+          'formDoc.year': 1,
+          'formDoc.installment': 1,
+          'formDoc.currentFormStatus': 1,
+          'formDoc.validationStatus': 1,
+          'formDoc.submittedAt': 1,
+          'stateDoc.name': 1,
+          'submittedByDoc.name': 1,
+          'createdByDoc.name': 1,
+          'updatedByDoc.name': 1,
+        },
+      },
+    ];
 
-    if (query.yearId) filter['year'] = new Types.ObjectId(query.yearId);
-    if (query.installment) filter['installment'] = query.installment;
-    if (query.validationStatus) filter['validationStatus'] = query.validationStatus;
-
-    const forms = await this.model
-      .find(filter)
-      .select(
-        '_id state year installment currentFormStatus validationStatus activeDatasetVersion submittedBy submittedAt',
-      )
-      .populate<{ state: { _id: Types.ObjectId; name: string } }>('state', 'name')
-      .populate<{ submittedBy: { name: string } | null }>('submittedBy', 'name')
-      .lean()
-      .exec();
-
-    const dumpRows: DfDumpRow[] = [];
-
-    for (const form of forms) {
-      const activeVersion = ((form as Record<string, unknown>)['activeDatasetVersion'] as number) ?? 0;
-      if (activeVersion === 0) continue;
-
-      const state = (form as Record<string, unknown>)['state'] as { name: string } | null;
-      const yearId = String((form as Record<string, unknown>)['year']);
-      const yearLabel = YearIdToLabel[yearId] ?? yearId;
-      const formStatus = getFormStatusLabel(((form as Record<string, unknown>)['currentFormStatus'] as number) ?? 0);
-      const validationStatus = ((form as Record<string, unknown>)['validationStatus'] as string | undefined) ?? '';
-      const installment = (form as Record<string, unknown>)['installment'] as number;
-
-      const rows = await this.rowModel
-        .find({ form: form._id, datasetVersion: activeVersion, isActive: true })
-        .select(
-          'rowNumber censusCode ulbName totalGrantAllocation installment1Amount installment2Amount devolutionFormula validationStatus datasetVersion createdBy updatedBy createdAt updatedAt',
-        )
-        .populate<{ createdBy: { name: string } | null }>('createdBy', 'name')
-        .populate<{ updatedBy: { name: string } | null }>('updatedBy', 'name')
-        .lean()
-        .exec();
-
-      const formRecord = form as unknown as { submittedBy?: { name?: string } | null; submittedAt?: Date | null };
-
-      for (const row of rows) {
-        const rowRecord = row as unknown as {
-          createdBy?: { name?: string } | null;
-          updatedBy?: { name?: string } | null;
-        };
-        dumpRows.push({
-          rowNumber: row.rowNumber,
-          stateName: state?.name ?? '',
-          yearLabel,
-          installment,
-          formStatus,
-          validationStatus,
-          censusCode: row.censusCode ?? '',
-          ulbName: row.ulbName,
-          totalGrantAllocation: row.totalGrantAllocation,
-          installment1Amount: row.installment1Amount,
-          installment2Amount: row.installment2Amount,
-          devolutionFormula: row.devolutionFormula,
-          datasetVersion: row.datasetVersion,
-          submittedBy: formRecord.submittedBy?.name ?? '',
-          submittedAt: formRecord.submittedAt ? new Date(formRecord.submittedAt).toISOString() : '',
-          createdBy: rowRecord.createdBy?.name ?? '',
-          updatedBy: rowRecord.updatedBy?.name ?? '',
-          createdAt: row.createdAt ? new Date(row.createdAt).toISOString() : '',
-          updatedAt: row.updatedAt ? new Date(row.updatedAt).toISOString() : '',
-        });
-      }
-    }
+    const aggRows = (await this.rowModel.aggregate(pipeline).exec()) as Record<string, unknown>[];
+    const dumpRows: DfDumpRow[] = aggRows.map((row) => this.mapDumpAggregationRow(row));
 
     return this.excelService.generateExcel(DF_DUMP_HEADERS, dumpRows, 'Devolution Formula Dump');
   }
 
   // ─── Private helpers ──────────────────────────────────────────────────────
+
+  private buildDumpRowMatch(query: DumpDevolutionFormulaQueryDto): Record<string, unknown> {
+    return { isActive: query.isActive ?? true };
+  }
+
+  private buildDumpFormMatch(query: DumpDevolutionFormulaQueryDto, user: AuthUser): Record<string, unknown> {
+    const match: Record<string, unknown> = {};
+
+    if (user.scope === Scope.STATE) {
+      const userStateId = toObjectIdString(user.state);
+      if (!userStateId) throw new ForbiddenException('Your account is not mapped to any state.');
+      match['formDoc.state'] = new Types.ObjectId(userStateId);
+    } else if (user.scope === Scope.ADMIN) {
+      if (query.stateId) match['formDoc.state'] = new Types.ObjectId(query.stateId);
+    } else {
+      throw new ForbiddenException('Insufficient permissions for dump.');
+    }
+
+    if (query.yearId) match['formDoc.year'] = new Types.ObjectId(query.yearId);
+    if (query.installment) match['formDoc.installment'] = query.installment;
+    if (query.validationStatus) match['formDoc.validationStatus'] = query.validationStatus;
+
+    return match;
+  }
+
+  private mapDumpAggregationRow(row: Record<string, unknown>): DfDumpRow {
+    const formDoc = row['formDoc'] as Record<string, unknown> | undefined;
+    const stateDoc = row['stateDoc'] as { name?: string } | undefined;
+    const submittedByDoc = row['submittedByDoc'] as { name?: string } | undefined;
+    const createdByDoc = row['createdByDoc'] as { name?: string } | undefined;
+    const updatedByDoc = row['updatedByDoc'] as { name?: string } | undefined;
+    const yearRaw = formDoc?.['year'] as Types.ObjectId | string | null | undefined;
+    const yearId = yearRaw != null ? String(yearRaw) : '';
+
+    return {
+      rowNumber: row['rowNumber'] as number,
+      stateName: stateDoc?.name ?? '',
+      yearLabel: YearIdToLabel[yearId] ?? yearId,
+      installment: (formDoc?.['installment'] as number) ?? 0,
+      formStatus: getFormStatusLabel((formDoc?.['currentFormStatus'] as number) ?? 0),
+      validationStatus: (formDoc?.['validationStatus'] as string | undefined) ?? '',
+      censusCode: (row['censusCode'] as string | undefined) ?? '',
+      ulbName: row['ulbName'] as string,
+      totalGrantAllocation: row['totalGrantAllocation'] as number,
+      installment1Amount: row['installment1Amount'] as number,
+      installment2Amount: row['installment2Amount'] as number,
+      devolutionFormula: row['devolutionFormula'] as string,
+      datasetVersion: row['datasetVersion'] as number,
+      submittedBy: submittedByDoc?.name ?? '',
+      submittedAt: formDoc?.['submittedAt'] ? new Date(formDoc['submittedAt'] as Date).toISOString() : '',
+      createdBy: createdByDoc?.name ?? '',
+      updatedBy: updatedByDoc?.name ?? '',
+      createdAt: row['createdAt'] ? new Date(row['createdAt'] as Date).toISOString() : '',
+      updatedAt: row['updatedAt'] ? new Date(row['updatedAt'] as Date).toISOString() : '',
+    };
+  }
 
   private hydrateQuestions(
     questions: FieldConfig[],
