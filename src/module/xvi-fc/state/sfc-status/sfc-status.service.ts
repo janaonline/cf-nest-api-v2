@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+﻿import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { FormJsonService } from 'src/form-json/form-json.service';
 import { ConfigService } from '@nestjs/config';
@@ -17,7 +17,7 @@ import {
   canStateEditForm,
   canStateFinalSubmitForm,
 } from '../../common/utils/xvi-fc-form-status-access.util';
-import { toObjectIdString } from 'src/users/user-scope.helpers';
+import { toObjectIdString } from 'src/common/utils/objectid.util';
 import {
   SFC_FORM_ID,
   SFC_STATUS_FORM_TYPE,

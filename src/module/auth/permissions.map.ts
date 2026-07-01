@@ -49,10 +49,10 @@ export const XVIFC_STATE_PERMISSIONS: Record<XviFcSubrole, Permission[]> = {
 
 /**
  * Derives the effective permission set for a user:
- * 1. ADMIN role           → all permissions.
- * 2. STATE scope/role     → XVIFC_STATE_PERMISSIONS[xviFcSubrole] (defaults to 'viewer').
- * 3. ULB scope/role       → XVIFC_ULB_PERMISSIONS[xviFcSubrole]   (defaults to 'viewer').
- * 4. Any other role       → no permissions (guard blocks the request).
+ * 1. ADMIN role       → all permissions.
+ * 2. STATE role       → XVIFC_STATE_PERMISSIONS[xviFcSubrole] (defaults to 'viewer' when unset).
+ * 3. ULB role         → pending; returns [] until XVIFC_ULB_PERMISSIONS is implemented.
+ * 4. Any other role   → no permissions (guard blocks the request).
  * 5. Union permissionOverrides.allow, subtract permissionOverrides.deny.
  */
 export function getEffectivePermissions(user: {
@@ -73,6 +73,7 @@ export function getEffectivePermissions(user: {
   } else if (user.role === UserRole.STATE || user.scope === Scope.STATE) {
     base = XVIFC_STATE_PERMISSIONS[subrole] ?? XVIFC_STATE_PERMISSIONS.viewer;
   } else {
+    // ULB permission matrix is not yet implemented — ULB users carry no permissions until added.
     base = [];
   }
 

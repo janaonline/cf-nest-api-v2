@@ -79,6 +79,34 @@ const STATE_MATRIX: PermissionMatrixRow[] = [
     reviewer: false,
     viewer: false,
   },
+  {
+    label: 'View state forms',
+    permissionKey: Permission.VIEW_STATE_FORMS,
+    admin: true,
+    reviewer: true,
+    viewer: true,
+  },
+  {
+    label: 'Edit state forms',
+    permissionKey: Permission.EDIT_STATE_FORMS,
+    admin: true,
+    reviewer: true,
+    viewer: false,
+  },
+  {
+    label: 'Final submit state forms',
+    permissionKey: Permission.FINAL_SUBMIT_STATE_FORMS,
+    admin: true,
+    reviewer: false,
+    viewer: false,
+  },
+  {
+    label: 'View managed users',
+    permissionKey: Permission.VIEW_MANAGED_USERS,
+    admin: true,
+    reviewer: true,
+    viewer: true,
+  },
   { label: 'Manage users', permissionKey: Permission.MANAGE_USERS, admin: true, reviewer: false, viewer: false },
 ];
 
