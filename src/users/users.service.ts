@@ -12,100 +12,74 @@ import { ProfileContactsResponseDto } from './dto/profile-contacts-response.dto'
 import { CreateManagedUserDto } from './dto/create-managed-user.dto';
 import { UpdatePermissionOverridesDto } from './dto/update-permission-overrides.dto';
 import { AuthUser } from 'src/module/auth/auth-user.interface';
-import { assertAdminSameScope, assertManageableTarget, resolveAdminScopeTarget } from './user-scope.helpers';
 import { UpdateUserRoleDto } from './dto/update-user-role.dto';
-import { TransferOwnershipDto } from './dto/transfer-ownership.dto';
 import { StateMemberResponseDto } from './dto/state-member-response.dto';
+import { UpdateXviFcSubroleDto } from './dto/update-xvi-fc-subrole.dto';
+import { TransferSubmitterDto } from './dto/transfer-submitter.dto';
 
 // ─── Permission-matrix display types ────────────────────────────────────────
 
 export interface PermissionMatrixRow {
   label: string;
   permissionKey: Permission;
-  submitter: boolean;
-  editor: boolean;
+  admin: boolean;
+  reviewer: boolean;
   viewer: boolean;
 }
 
-// Static matrix definitions (for UI display only — not security)
-const ULB_MATRIX: PermissionMatrixRow[] = [
-  {
-    label: 'View status and reports',
-    permissionKey: Permission.VIEW_STATUS_REPORTS,
-    submitter: true,
-    editor: true,
-    viewer: true,
-  },
-  {
-    label: 'Upload documents',
-    permissionKey: Permission.UPLOAD_DOCUMENTS,
-    submitter: true,
-    editor: true,
-    viewer: false,
-  },
-  { label: 'Message users', permissionKey: Permission.MESSAGE_USERS, submitter: true, editor: true, viewer: false },
-  {
-    label: 'Final submit to State DMA',
-    permissionKey: Permission.FINAL_SUBMIT_TO_STATE_DMA,
-    submitter: true,
-    editor: false,
-    viewer: false,
-  },
-  { label: 'Manage users', permissionKey: Permission.MANAGE_USERS, submitter: true, editor: false, viewer: false },
-];
 const STATE_MATRIX: PermissionMatrixRow[] = [
   {
     label: 'View status and reports',
     permissionKey: Permission.VIEW_STATUS_REPORTS,
-    submitter: true,
-    editor: true,
+    admin: true,
+    reviewer: true,
     viewer: true,
   },
-  { label: 'View dashboards', permissionKey: Permission.VIEW_DASHBOARDS, submitter: true, editor: true, viewer: true },
+  { label: 'View dashboards', permissionKey: Permission.VIEW_DASHBOARDS, admin: true, reviewer: true, viewer: true },
   {
     label: 'Upload state-level documents',
     permissionKey: Permission.UPLOAD_STATE_LEVEL_DOCUMENTS,
-    submitter: true,
-    editor: true,
+    admin: true,
+    reviewer: true,
     viewer: false,
   },
   {
     label: 'Review ULB submissions',
     permissionKey: Permission.REVIEW_ULB_SUBMISSIONS,
-    submitter: true,
-    editor: true,
+    admin: true,
+    reviewer: true,
     viewer: false,
   },
-  { label: 'Message users', permissionKey: Permission.MESSAGE_USERS, submitter: true, editor: true, viewer: false },
+  { label: 'Message users', permissionKey: Permission.MESSAGE_USERS, admin: true, reviewer: true, viewer: false },
   {
     label: 'Approve ULB submissions',
     permissionKey: Permission.APPROVE_ULB_SUBMISSIONS,
-    submitter: true,
-    editor: true,
+    admin: true,
+    reviewer: true,
     viewer: false,
   },
   {
     label: 'Prepare grant letters',
     permissionKey: Permission.PREPARE_GRANT_LETTERS,
-    submitter: true,
-    editor: true,
+    admin: true,
+    reviewer: true,
     viewer: false,
   },
   {
     label: 'Recommend exemptions',
     permissionKey: Permission.RECOMMEND_EXEMPTIONS,
-    submitter: true,
-    editor: true,
+    admin: true,
+    reviewer: true,
     viewer: false,
   },
   {
     label: 'Final submit to MoHUA',
     permissionKey: Permission.FINAL_SUBMIT_TO_MOHUA,
-    submitter: true,
-    editor: false,
+    admin: true,
+    reviewer: false,
     viewer: false,
   },
-  { label: 'Manage users', permissionKey: Permission.MANAGE_USERS, submitter: true, editor: false, viewer: false },
+  { label: 'Manage users', permissionKey: Permission.MANAGE_USERS, admin: true, reviewer: false, viewer: false },
 ];
 
 // ─── Service ─────────────────────────────────────────────────────────────────
@@ -135,11 +109,6 @@ export class UsersService {
   }
 
   async createManagedUser(dto: CreateManagedUserDto, creator: AuthUser): Promise<Record<string, unknown>> {
-    const { creatorId, targetStateId, targetUlbId } = resolveAdminScopeTarget(creator, dto.role, {
-      ulbId: dto.ulbId,
-      stateId: dto.stateId,
-    });
-
     const mobileExists = await this.userModel.exists({ mobile: dto.mobile, isDeleted: false });
     if (mobileExists) {
       throw new BadRequestException('Mobile number already registered');
@@ -156,9 +125,6 @@ export class UsersService {
       password: 'UNSET',
       isActive: false,
       isXVIFCProfileVerified: false,
-      createdBy: new Types.ObjectId(creatorId),
-      ...(targetStateId && { state: new Types.ObjectId(targetStateId) }),
-      ...(targetUlbId && { ulb: new Types.ObjectId(targetUlbId) }),
     };
 
     const user = await this.userModel.create(createPayload);
@@ -195,13 +161,11 @@ export class UsersService {
 
     const targetUser = await this.userModel
       .findOne({ _id: targetUserId, isDeleted: false })
-      .select('role ulb state')
+      .select('role ulb state xviFcSubrole')
       .lean()
       .exec();
 
     if (!targetUser) throw new NotFoundException('User not found');
-
-    assertAdminSameScope(requester, targetUser);
 
     const allow = dto.allow ?? [];
     const deny = dto.deny ?? [];
@@ -220,6 +184,7 @@ export class UsersService {
 
     const effectivePermissions = getEffectivePermissions({
       role: targetUser.role as unknown as UserRole,
+      xviFcSubrole: (targetUser as unknown as Record<string, unknown>)['xviFcSubrole'] as string | null,
       permissionOverrides: { allow, deny },
     });
 
@@ -235,13 +200,11 @@ export class UsersService {
 
     const targetUser = await this.userModel
       .findOne({ _id: targetUserId, isDeleted: false })
-      .select('role ulb state')
+      .select('role ulb state xviFcSubrole')
       .lean()
       .exec();
 
     if (!targetUser) throw new NotFoundException('User not found');
-
-    assertManageableTarget(requester, targetUser);
 
     await this.userModel.findByIdAndUpdate(targetUserId, { $set: { isDeleted: true } }).exec();
 
@@ -257,73 +220,88 @@ export class UsersService {
 
     const targetUser = await this.userModel
       .findOne({ _id: targetUserId, isDeleted: false })
-      .select('role ulb state')
+      .select('role ulb state xviFcSubrole')
       .lean()
       .exec();
 
     if (!targetUser) throw new NotFoundException('User not found');
-
-    assertManageableTarget(requester, targetUser);
 
     await this.userModel.findByIdAndUpdate(targetUserId, { $set: { role: dto.role } }).exec();
 
     return { message: 'User role updated successfully' };
   }
 
-  async transferOwnership(dto: TransferOwnershipDto, requester: AuthUser): Promise<{ message: string }> {
-    if (!Types.ObjectId.isValid(dto.newOwnerId)) throw new BadRequestException('Invalid newOwnerId');
+  // ── Maps frontend display values to DB xviFcSubrole values ────────────────
+  private static readonly DISPLAY_TO_XVIFC_SUBROLE: Record<string, 'reviewer' | 'viewer'> = {
+    EDITOR: 'reviewer',
+    VIEWER: 'viewer',
+  };
 
-    // requester must be a ULB or STATE admin (or platform ADMIN)
-    const ownerRoles = [UserRole.ULB, UserRole.STATE] as string[];
-    if (requester.role !== UserRole.ADMIN && !ownerRoles.includes(requester.role)) {
-      throw new ForbiddenException('Only ULB or STATE admin can transfer ownership');
-    }
+  async updateXviFcSubrole(
+    targetUserId: string,
+    dto: UpdateXviFcSubroleDto,
+    requester: AuthUser,
+  ): Promise<{ message: string }> {
+    if (!Types.ObjectId.isValid(targetUserId)) throw new BadRequestException('Invalid user ID');
 
-    const newOwner = await this.userModel
-      .findOne({ _id: dto.newOwnerId, isDeleted: false })
-      .select('role ulb state')
+    const targetUser = await this.userModel
+      .findOne({ _id: targetUserId, isDeleted: false })
+      .select('role ulb state xviFcSubrole')
       .lean()
       .exec();
 
-    if (!newOwner) throw new NotFoundException('New owner user not found');
+    if (!targetUser) throw new NotFoundException('User not found');
 
-    // new owner must be in the same ULB/state as the requester
-    assertAdminSameScope(requester, newOwner);
-
-    // new owner must currently be an editor or viewer — not already an admin
-    const eligibleRoles = [
-      UserRole.ULB_EDITOR,
-      UserRole.ULB_VIEWER,
-      UserRole.STATE_EDITOR,
-      UserRole.STATE_VIEWER,
-    ] as string[];
-    if (!eligibleRoles.includes(newOwner.role as string)) {
-      throw new BadRequestException('New owner must currently be an EDITOR or VIEWER role');
+    if ((targetUser.role as string) !== UserRole.STATE) {
+      throw new BadRequestException('Sub-role updates are only supported for STATE users');
     }
 
-    // demoteTo must match the requester's scope
-    const ulbDemotionRoles = [UserRole.ULB_EDITOR, UserRole.ULB_VIEWER] as string[];
-    const stateDemotionRoles = [UserRole.STATE_EDITOR, UserRole.STATE_VIEWER] as string[];
+    const newSubrole = UsersService.DISPLAY_TO_XVIFC_SUBROLE[dto.subRole];
+    await this.userModel.findByIdAndUpdate(targetUserId, { $set: { xviFcSubrole: newSubrole } }).exec();
 
-    if (requester.role === UserRole.ULB && !ulbDemotionRoles.includes(dto.demoteTo)) {
-      throw new BadRequestException('ULB admin can only demote to ULB-EDITOR or ULB-VIEWER');
-    }
-    if (requester.role === UserRole.STATE && !stateDemotionRoles.includes(dto.demoteTo)) {
-      throw new BadRequestException('STATE admin can only demote to STATE-EDITOR or STATE-VIEWER');
+    return { message: 'Sub-role updated successfully' };
+  }
+
+  async transferSubmitter(dto: TransferSubmitterDto, requester: AuthUser): Promise<{ message: string }> {
+    if (!Types.ObjectId.isValid(dto.toUserId)) throw new BadRequestException('Invalid toUserId');
+
+    if (requester.role !== UserRole.STATE || requester.xviFcSubrole !== 'admin') {
+      throw new ForbiddenException('Only the STATE admin (submitter) can transfer ownership');
     }
 
-    // atomic swap inside a MongoDB session
+    const newOwner = await this.userModel
+      .findOne({ _id: dto.toUserId, isDeleted: false })
+      .select('role state xviFcSubrole')
+      .lean()
+      .exec();
+
+    if (!newOwner) throw new NotFoundException('Target user not found');
+    if ((newOwner.role as string) !== UserRole.STATE) {
+      throw new BadRequestException('Target must be a STATE user');
+    }
+    if (newOwner.xviFcSubrole === 'admin') {
+      throw new BadRequestException('Target is already the STATE admin');
+    }
+
+    // Must belong to the same state
+    const requesterStateId = requester.state?.toString();
+    const targetStateId = newOwner.state?.toString();
+    if (!requesterStateId || requesterStateId !== targetStateId) {
+      throw new ForbiddenException('You can only transfer ownership within your own state');
+    }
+
+    // Atomic swap: new owner becomes admin, current requester becomes reviewer
     const session = await this.userModel.db.startSession();
     try {
       await session.withTransaction(async () => {
-        await this.userModel.findByIdAndUpdate(dto.newOwnerId, { $set: { role: requester.role } }, { session });
-        await this.userModel.findByIdAndUpdate(requester._id, { $set: { role: dto.demoteTo } }, { session });
+        await this.userModel.findByIdAndUpdate(dto.toUserId, { $set: { xviFcSubrole: 'admin' } }, { session });
+        await this.userModel.findByIdAndUpdate(requester._id, { $set: { xviFcSubrole: 'reviewer' } }, { session });
       });
     } finally {
       await session.endSession();
     }
 
-    return { message: 'Ownership transferred successfully' };
+    return { message: 'Ownership transferred successfully. You are now a Reviewer.' };
   }
 
   private static readonly UPDATABLE_FIELDS = new Set<string>([
@@ -365,9 +343,7 @@ export class UsersService {
     const isSelfUpdate = requester._id.toString() === userId;
     const isUlbScope = requester.scope === Scope.ULB;
 
-    if (!isSelfUpdate) {
-      assertAdminSameScope(requester, targetUser);
-    } else if (!isUlbScope) {
+    if (isSelfUpdate && !isUlbScope) {
       // State / MoHUA self-updates require a valid one-time save token (issued post-OTP)
       const { saveToken } = dto;
       if (!saveToken) throw new BadRequestException('A verified save token is required to update your profile');
@@ -436,9 +412,9 @@ export class UsersService {
   // xviFcSubrole is the single source of truth for state-scope sub-classification.
   // DB role is just 'STATE' for everyone; admin/reviewer/viewer live in this field.
   private static readonly XVIFC_TO_SUB_ROLE: Record<string, 'SUBMITTER' | 'EDITOR' | 'VIEWER'> = {
-    admin:    'SUBMITTER',
+    admin: 'SUBMITTER',
     reviewer: 'EDITOR',
-    viewer:   'VIEWER',
+    viewer: 'VIEWER',
   };
 
   async getStateMembers(stateId: string): Promise<StateMemberResponseDto[]> {
@@ -470,8 +446,8 @@ export class UsersService {
    * Returns the permission matrix rows for the requester's scope.
    * Used only for UI display — not a security decision.
    */
-  getPermissionMatrix(requester: AuthUser): PermissionMatrixRow[] {
-    return requester.scope === Scope.STATE ? STATE_MATRIX : ULB_MATRIX;
+  getPermissionMatrix(): PermissionMatrixRow[] {
+    return STATE_MATRIX;
   }
 
   async getProfileContacts(id: string): Promise<ProfileContactsResponseDto> {
@@ -535,4 +511,6 @@ export class UsersService {
       registeredMunicipalInfo,
     };
   }
+
+
 }

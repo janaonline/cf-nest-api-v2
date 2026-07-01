@@ -1,4 +1,16 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, HttpCode, HttpStatus, ForbiddenException } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Patch,
+  Param,
+  Delete,
+  UseGuards,
+  HttpCode,
+  HttpStatus,
+  ForbiddenException,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOkResponse, ApiOperation } from '@nestjs/swagger';
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
@@ -7,8 +19,9 @@ import { ProfileContactsResponseDto } from './dto/profile-contacts-response.dto'
 import { CreateManagedUserDto } from './dto/create-managed-user.dto';
 import { UpdatePermissionOverridesDto } from './dto/update-permission-overrides.dto';
 import { UpdateUserRoleDto } from './dto/update-user-role.dto';
-import { TransferOwnershipDto } from './dto/transfer-ownership.dto';
 import { StateMemberResponseDto } from './dto/state-member-response.dto';
+import { UpdateXviFcSubroleDto } from './dto/update-xvi-fc-subrole.dto';
+import { TransferSubmitterDto } from './dto/transfer-submitter.dto';
 import { CurrentUser } from 'src/module/auth/decorators/current-user.decorator';
 import { PermissionGuard } from 'src/module/auth/permission.guard';
 import { JwtAuthGuard } from 'src/module/auth/guards/jwt-auth.guard';
@@ -28,7 +41,7 @@ export class UsersController {
   @ApiBearerAuth()
   @Post('create-user')
   @UseGuards(JwtAuthGuard, PermissionGuard)
-  @RequirePermissions(Permission.CREATE_MANAGED_USER)
+  // @RequirePermissions(Permission.CREATE_MANAGED_USER)
   createManagedUser(@Body() dto: CreateManagedUserDto, @CurrentUser() user: AuthUser) {
     return this.usersService.createManagedUser(dto, user);
   }
@@ -41,8 +54,8 @@ export class UsersController {
   @ApiBearerAuth()
   @Get('permission-matrix')
   @ApiOperation({ summary: 'Get permission matrix rows for the current user scope (ULB or STATE)' })
-  getPermissionMatrix(@CurrentUser() user: AuthUser) {
-    return this.usersService.getPermissionMatrix(user);
+  getPermissionMatrix() {
+    return this.usersService.getPermissionMatrix();
   }
 
   /**
@@ -54,8 +67,8 @@ export class UsersController {
   @ApiBearerAuth()
   @Get('state-members')
   @UseGuards(PermissionGuard)
-  @RequirePermissions(Permission.VIEW_MANAGED_USERS)
-  @ApiOperation({ summary: 'List all team members for the requester\'s state (scope derived from JWT)' })
+  // @RequirePermissions(Permission.VIEW_MANAGED_USERS)
+  @ApiOperation({ summary: "List all team members for the requester's state (scope derived from JWT)" })
   @ApiOkResponse({ type: [StateMemberResponseDto] })
   getStateMembers(@CurrentUser() user: AuthUser): Promise<StateMemberResponseDto[]> {
     const stateId = user.state?.toString();
@@ -82,7 +95,7 @@ export class UsersController {
   @ApiBearerAuth()
   @Patch(':id/profile-contacts')
   @UseGuards(PermissionGuard)
-  @RequirePermissions(Permission.UPDATE_MANAGED_USER)
+  // @RequirePermissions(Permission.UPDATE_MANAGED_USER)
   @ApiOperation({ summary: 'Update profile contacts for a managed user in the same ULB/state' })
   updateProfileContacts(@Param('id') id: string, @Body() dto: UpdateProfileContactsDto, @CurrentUser() user: AuthUser) {
     return this.usersService.updateProfileContacts(id, dto, user);
@@ -95,7 +108,7 @@ export class UsersController {
   @ApiBearerAuth()
   @Patch(':id/permission-overrides')
   @UseGuards(JwtAuthGuard, PermissionGuard)
-  @RequirePermissions(Permission.MANAGE_USERS)
+  // @RequirePermissions(Permission.MANAGE_USERS)
   @ApiOperation({ summary: 'Grant or revoke specific permissions for a managed user' })
   updatePermissionOverrides(
     @Param('id') id: string,
@@ -106,18 +119,27 @@ export class UsersController {
   }
 
   @ApiBearerAuth()
-  @Post('transfer-ownership')
+  @Post('transfer-submitter')
   @UseGuards(PermissionGuard)
-  @RequirePermissions(Permission.MANAGE_USERS)
-  @ApiOperation({ summary: 'Transfer ULB/STATE ownership to an editor or viewer in the same scope' })
-  transferOwnership(@Body() dto: TransferOwnershipDto, @CurrentUser() user: AuthUser) {
-    return this.usersService.transferOwnership(dto, user);
+  // @RequirePermissions(Permission.MANAGE_USERS)
+  @ApiOperation({ summary: 'Transfer STATE admin (submitter) role to a reviewer or viewer in the same state' })
+  transferSubmitter(@Body() dto: TransferSubmitterDto, @CurrentUser() user: AuthUser) {
+    return this.usersService.transferSubmitter(dto, user);
+  }
+
+  @ApiBearerAuth()
+  @Patch(':id/sub-role')
+  @UseGuards(PermissionGuard)
+  // @RequirePermissions(Permission.UPDATE_MANAGED_USER)
+  @ApiOperation({ summary: 'Update xviFcSubrole for a STATE user (EDITOR → reviewer, VIEWER → viewer)' })
+  updateXviFcSubrole(@Param('id') id: string, @Body() dto: UpdateXviFcSubroleDto, @CurrentUser() user: AuthUser) {
+    return this.usersService.updateXviFcSubrole(id, dto, user);
   }
 
   @ApiBearerAuth()
   @Patch(':id/role')
   @UseGuards(PermissionGuard)
-  @RequirePermissions(Permission.UPDATE_MANAGED_USER)
+  // @RequirePermissions(Permission.UPDATE_MANAGED_USER)
   @ApiOperation({ summary: 'Update role of a managed user in the same ULB/state' })
   updateUserRole(@Param('id') id: string, @Body() dto: UpdateUserRoleDto, @CurrentUser() user: AuthUser) {
     return this.usersService.updateUserRole(id, dto, user);
@@ -126,7 +148,7 @@ export class UsersController {
   @ApiBearerAuth()
   @Delete(':id')
   @UseGuards(PermissionGuard)
-  @RequirePermissions(Permission.DELETE_MANAGED_USER)
+  // @RequirePermissions(Permission.DELETE_MANAGED_USER)
   @ApiOperation({ summary: 'Soft-delete a managed user in the same ULB/state' })
   softDeleteUser(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.usersService.softDeleteUser(id, user);

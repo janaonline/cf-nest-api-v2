@@ -172,8 +172,10 @@ export class LoginService {
     this.authService.setRefreshCookie(res, tokens.refreshToken);
 
     const allYears = await this.getActiveYears();
-    const parsedRole = parseUserRole(user.role as unknown as any);
-    console.log('Parsed user role for response:', parsedRole);
+    const parsedRole = parseUserRole(
+      user.role as unknown as Parameters<typeof parseUserRole>[0],
+      user.xviFcSubrole as string | null | undefined,
+    );
     return {
       token: tokens.accessToken,
       user: {
@@ -183,10 +185,7 @@ export class LoginService {
         mobile: user.mobile,
         isActive: user.isActive,
         role: user.role,
-        ...(parsedRole && {
-          scope: parsedRole.scope,
-          accessLevel: parsedRole.accessLevel,
-        }),
+        ...(parsedRole && { accessLevel: parsedRole.accessLevel }),
         isXVIFCProfileVerified: user.isXVIFCProfileVerified ?? false,
         state: user.state,
         stateName: state?.name ?? null,
