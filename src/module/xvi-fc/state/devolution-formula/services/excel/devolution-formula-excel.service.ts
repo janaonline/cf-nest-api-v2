@@ -863,7 +863,7 @@ export class DevolutionFormulaExcelService {
       'Devolution Formula Errors',
     )) as unknown as Buffer;
 
-    await this.s3Service.uploadPublic(
+    await this.s3Service.uploadPrivate(
       s3Key,
       buffer,
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
