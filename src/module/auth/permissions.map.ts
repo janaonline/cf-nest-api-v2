@@ -37,13 +37,10 @@ export const XVIFC_STATE_PERMISSIONS: Record<XviFcSubrole, Permission[]> = {
     Permission.RECOMMEND_EXEMPTIONS,
     Permission.VIEW_STATE_FORMS,
     Permission.EDIT_STATE_FORMS,
-    Permission.VIEW_MANAGED_USERS,
   ],
   viewer: [
     Permission.VIEW_STATUS_REPORTS,
     Permission.VIEW_DASHBOARDS,
-    Permission.VIEW_STATE_FORMS,
-    Permission.VIEW_MANAGED_USERS,
   ],
 };
 
