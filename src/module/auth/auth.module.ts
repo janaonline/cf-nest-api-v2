@@ -4,7 +4,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
 import { MongooseModule } from '@nestjs/mongoose';
 import { PassportModule } from '@nestjs/passport';
-import { SESMailService } from 'src/core/aws-ses/ses.service';
+import { EmailQueueModule } from 'src/core/queue/email-queue/email-queue.module';
 import { RedisModule } from 'src/core/services/redis/redis.module';
 import { State, StateSchema } from 'src/schemas/state.schema';
 import { Ulb, UlbSchema } from 'src/schemas/ulb.schema';
@@ -28,6 +28,7 @@ import { JwtRefreshStrategy } from './strategies/jwt-refresh.strategy';
   imports: [
     UsersModule,
     RedisModule,
+    EmailQueueModule,
     PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.registerAsync({
       imports: [ConfigModule],
@@ -52,7 +53,6 @@ import { JwtRefreshStrategy } from './strategies/jwt-refresh.strategy';
     LoginService,
     OtpService,
     VisitSessionService,
-    SESMailService,
     RolesGuard,
     JwtAuthGuard,
     JwtRefreshGuard,

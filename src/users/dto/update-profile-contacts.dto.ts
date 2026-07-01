@@ -111,4 +111,9 @@ export class UpdateProfileContactsDto {
   @Transform(({ value }) => value === true || value === 'true')
   @IsBoolean()
   isXVIFCProfileVerified?: boolean;
+
+  @ApiPropertyOptional({ description: 'One-time save token issued after OTP verification — required for state/MoHUA self-updates' })
+  @IsOptional()
+  @IsString()
+  saveToken?: string;
 }

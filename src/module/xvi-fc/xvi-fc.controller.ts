@@ -43,7 +43,7 @@ export class XviFcController {
   @ApiBearerAuth()
   @Get('years')
   @UseGuards(PermissionGuard)
-  @RequirePermissions(Permission.VIEW_STATUS_REPORTS)
+  // @RequirePermissions(Permission.VIEW_STATUS_REPORTS)
   async getYears(): Promise<{ _id: string; year: string }[]> {
     return this.xviFcService.getYears();
   }

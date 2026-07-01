@@ -1,11 +1,9 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, Query, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
+import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, HttpCode, HttpStatus } from '@nestjs/common';
+import { ApiBearerAuth, ApiOkResponse, ApiOperation } from '@nestjs/swagger';
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
-import { UpdateUserDto } from './dto/update-user.dto';
 import { UpdateProfileContactsDto } from './dto/update-profile-contacts.dto';
-import { ListUsersQueryDto } from './dto/list-users-query.dto';
-import { ListTeamMembersQueryDto } from './dto/list-team-members-query.dto';
+import { ProfileContactsResponseDto } from './dto/profile-contacts-response.dto';
 import { CreateManagedUserDto } from './dto/create-managed-user.dto';
 import { UpdatePermissionOverridesDto } from './dto/update-permission-overrides.dto';
 import { UpdateUserRoleDto } from './dto/update-user-role.dto';
@@ -34,12 +32,6 @@ export class UsersController {
     return this.usersService.createManagedUser(dto, user);
   }
 
-  @ApiBearerAuth()
-  @Get()
-  findAll() {
-    return this.usersService.findAll();
-  }
-
   /**
    * Returns the role-permission matrix rows for the requesting user's scope.
    * For UI display only — not a security boundary.
@@ -53,32 +45,19 @@ export class UsersController {
   }
 
   @ApiBearerAuth()
-  @Get('list')
-  @UseGuards(JwtAuthGuard, PermissionGuard)
-  @RequirePermissions(Permission.VIEW_MANAGED_USERS)
-  listUsers(@Query() query: ListUsersQueryDto, @CurrentUser() user: AuthUser) {
-    return this.usersService.listUsers(query, user);
+  @Post(':id/issue-profile-save-token')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Issue a short-lived save token after OTP verification (state/MoHUA self-update)' })
+  issueProfileSaveToken(@Param('id') id: string) {
+    return this.usersService.issueProfileSaveToken(id);
   }
 
   @ApiBearerAuth()
-  @Get('team-members')
-  @UseGuards(JwtAuthGuard, PermissionGuard)
-  @RequirePermissions(Permission.VIEW_MANAGED_USERS)
-  @ApiOperation({ summary: 'List real team members for a ULB or State — no legacy contacts' })
-  listTeamMembers(@Query() query: ListTeamMembersQueryDto, @CurrentUser() user: AuthUser) {
-    return this.usersService.listTeamMembers(query, user);
-  }
-
-  @ApiBearerAuth()
-  @Get('contacts/:id')
-  findUserContacts(@Param('id') id: string) {
-    return this.usersService.findUserContacts(id);
-  }
-
-  @ApiBearerAuth()
-  @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.usersService.findOne(id);
+  @Get(':id/profile-contacts')
+  @ApiOperation({ summary: 'Get commissioner and nodal officer contact fields for a ULB user' })
+  @ApiOkResponse({ type: ProfileContactsResponseDto })
+  getProfileContacts(@Param('id') id: string) {
+    return this.usersService.getProfileContacts(id);
   }
 
   @ApiBearerAuth()
@@ -132,11 +111,5 @@ export class UsersController {
   @ApiOperation({ summary: 'Soft-delete a managed user in the same ULB/state' })
   softDeleteUser(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.usersService.softDeleteUser(id, user);
-  }
-
-  @ApiBearerAuth()
-  @Patch(':id')
-  update(@Param('id') id: string, @Body() updateUserDto: UpdateUserDto) {
-    return this.usersService.update(id, updateUserDto);
   }
 }
