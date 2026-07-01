@@ -19,8 +19,10 @@ import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-f
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import { Scope, UserRole, AccessLevel } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
+import { ForbiddenException } from '@nestjs/common';
 import { SaveDraftDevolutionFormulaDto } from './dto/save-draft-devolution-formula.dto';
-import { DF_TEMPLATE_HEADERS } from './constants/devolution-formula.constants';
+import { DumpDevolutionFormulaQueryDto } from './dto/dump-devolution-formula-query.dto';
+import { DF_DUMP_HEADERS, DF_TEMPLATE_HEADERS } from './constants/devolution-formula.constants';
 import { DfFormJsonConfigService } from './services/form-json/devolution-formula-form-json.service';
 import type { HydratedFieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
 
@@ -111,6 +113,7 @@ const mockRowModel = {
   find: jest.fn(),
   findByIdAndUpdate: jest.fn(),
   countDocuments: jest.fn(),
+  aggregate: jest.fn(),
 };
 
 const mockGrantAllocationModel = { findOne: jest.fn() };
@@ -1589,5 +1592,221 @@ describe('Devolution Formula — getForm rowEditFields', () => {
     expect(data).toHaveProperty('validationSummary');
     expect(data).toHaveProperty('rowEditFields');
     expect(Array.isArray(data['questions'])).toBe(true);
+  });
+
+  // ─── dumpToExcel ──────────────────────────────────────────────────────────
+
+  describe('dumpToExcel', () => {
+    const stateUserNoState: AuthUser = {
+      _id: new Types.ObjectId().toString(),
+      role: UserRole.ADMIN,
+      scope: Scope.STATE,
+      accessLevel: AccessLevel.ADMIN,
+      state: null,
+    };
+
+    const stateUserWithState: AuthUser = {
+      _id: new Types.ObjectId().toString(),
+      role: UserRole.ADMIN,
+      scope: Scope.STATE,
+      accessLevel: AccessLevel.ADMIN,
+      state: stateOid,
+    };
+
+    const otherUser: AuthUser = {
+      _id: new Types.ObjectId().toString(),
+      role: UserRole.ADMIN,
+      scope: 'MoHUA' as Scope,
+      accessLevel: AccessLevel.ADMIN,
+      state: null,
+    };
+
+    beforeEach(() => {
+      mockRowModel.aggregate.mockReturnValue({ exec: jest.fn().mockResolvedValue([]) });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access
+      jest.spyOn((service as any).excelService, 'generateExcel').mockResolvedValue(Buffer.from(''));
+    });
+
+    it('throws ForbiddenException for STATE user with no state mapping', async () => {
+      await expect(service.dumpToExcel({} as DumpDevolutionFormulaQueryDto, stateUserNoState)).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+
+    it('throws ForbiddenException for non-STATE/non-ADMIN scope', async () => {
+      await expect(service.dumpToExcel({} as DumpDevolutionFormulaQueryDto, otherUser)).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+
+    it('calls rowModel.aggregate exactly once', async () => {
+      await service.dumpToExcel({} as DumpDevolutionFormulaQueryDto, adminUser);
+      expect(mockRowModel.aggregate).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not call rowModel.find', async () => {
+      await service.dumpToExcel({} as DumpDevolutionFormulaQueryDto, adminUser);
+      expect(mockRowModel.find).not.toHaveBeenCalled();
+    });
+
+    it('default row match includes isActive: true', async () => {
+      await service.dumpToExcel({} as DumpDevolutionFormulaQueryDto, adminUser);
+      const [pipeline] = mockRowModel.aggregate.mock.calls[0] as [Record<string, unknown>[]];
+      const rowMatchStage = pipeline.find(
+        (s) => '$match' in s && 'isActive' in ((s as Record<string, unknown>)['$match'] as object),
+      ) as { $match: Record<string, unknown> } | undefined;
+      expect(rowMatchStage?.['$match']?.['isActive']).toBe(true);
+    });
+
+    it('explicit isActive: false sets rowMatch.isActive = false', async () => {
+      await service.dumpToExcel({ isActive: false } as DumpDevolutionFormulaQueryDto, adminUser);
+      const [pipeline] = mockRowModel.aggregate.mock.calls[0] as [Record<string, unknown>[]];
+      const rowMatchStage = pipeline.find(
+        (s) => '$match' in s && 'isActive' in ((s as Record<string, unknown>)['$match'] as object),
+      ) as { $match: Record<string, unknown> } | undefined;
+      expect(rowMatchStage?.['$match']?.['isActive']).toBe(false);
+    });
+
+    it('STATE scope sets formDoc.state to user state ObjectId', async () => {
+      await service.dumpToExcel({} as DumpDevolutionFormulaQueryDto, stateUserWithState);
+      const [pipeline] = mockRowModel.aggregate.mock.calls[0] as [Record<string, unknown>[]];
+      const formMatchStage = pipeline.find(
+        (s) => '$match' in s && '$expr' in ((s as Record<string, unknown>)['$match'] as object),
+      ) as { $match: Record<string, unknown> } | undefined;
+      const stateFilter = formMatchStage?.['$match']?.['formDoc.state'];
+      expect(stateFilter?.toString()).toBe(stateOid.toString());
+    });
+
+    it('ADMIN with stateId sets formDoc.state to query stateId', async () => {
+      const queryStateId = new Types.ObjectId();
+      await service.dumpToExcel({ stateId: queryStateId.toString() } as DumpDevolutionFormulaQueryDto, adminUser);
+      const [pipeline] = mockRowModel.aggregate.mock.calls[0] as [Record<string, unknown>[]];
+      const formMatchStage = pipeline.find(
+        (s) => '$match' in s && '$expr' in ((s as Record<string, unknown>)['$match'] as object),
+      ) as { $match: Record<string, unknown> } | undefined;
+      const stateFilter = formMatchStage?.['$match']?.['formDoc.state'];
+      expect(stateFilter?.toString()).toBe(queryStateId.toString());
+    });
+
+    it('ADMIN without stateId does not include formDoc.state in match', async () => {
+      await service.dumpToExcel({} as DumpDevolutionFormulaQueryDto, adminUser);
+      const [pipeline] = mockRowModel.aggregate.mock.calls[0] as [Record<string, unknown>[]];
+      const formMatchStage = pipeline.find(
+        (s) => '$match' in s && '$expr' in ((s as Record<string, unknown>)['$match'] as object),
+      ) as { $match: Record<string, unknown> } | undefined;
+      expect(formMatchStage?.['$match']).not.toHaveProperty('formDoc.state');
+    });
+
+    it('yearId filter sets formDoc.year in form match', async () => {
+      await service.dumpToExcel({ yearId: YEAR_ID } as DumpDevolutionFormulaQueryDto, adminUser);
+      const [pipeline] = mockRowModel.aggregate.mock.calls[0] as [Record<string, unknown>[]];
+      const formMatchStage = pipeline.find(
+        (s) => '$match' in s && '$expr' in ((s as Record<string, unknown>)['$match'] as object),
+      ) as { $match: Record<string, unknown> } | undefined;
+      const yearFilter = formMatchStage?.['$match']?.['formDoc.year'];
+      expect(yearFilter?.toString()).toBe(YEAR_ID);
+    });
+
+    it('installment filter sets formDoc.installment in form match', async () => {
+      await service.dumpToExcel({ installment: 1 } as DumpDevolutionFormulaQueryDto, adminUser);
+      const [pipeline] = mockRowModel.aggregate.mock.calls[0] as [Record<string, unknown>[]];
+      const formMatchStage = pipeline.find(
+        (s) => '$match' in s && '$expr' in ((s as Record<string, unknown>)['$match'] as object),
+      ) as { $match: Record<string, unknown> } | undefined;
+      expect(formMatchStage?.['$match']?.['formDoc.installment']).toBe(1);
+    });
+
+    it('validationStatus filter sets formDoc.validationStatus in form match', async () => {
+      await service.dumpToExcel({ validationStatus: 'VALID' } as DumpDevolutionFormulaQueryDto, adminUser);
+      const [pipeline] = mockRowModel.aggregate.mock.calls[0] as [Record<string, unknown>[]];
+      const formMatchStage = pipeline.find(
+        (s) => '$match' in s && '$expr' in ((s as Record<string, unknown>)['$match'] as object),
+      ) as { $match: Record<string, unknown> } | undefined;
+      expect(formMatchStage?.['$match']?.['formDoc.validationStatus']).toBe('VALID');
+    });
+
+    it('formStatus filter sets formDoc.currentFormStatus in form match', async () => {
+      await service.dumpToExcel({ formStatus: 5 } as DumpDevolutionFormulaQueryDto, adminUser);
+      const [pipeline] = mockRowModel.aggregate.mock.calls[0] as [Record<string, unknown>[]];
+      const formMatchStage = pipeline.find(
+        (s) => '$match' in s && '$expr' in ((s as Record<string, unknown>)['$match'] as object),
+      ) as { $match: Record<string, unknown> } | undefined;
+      expect(formMatchStage?.['$match']?.['formDoc.currentFormStatus']).toBe(5);
+    });
+
+    it('pipeline form match includes $expr active dataset version guard', async () => {
+      await service.dumpToExcel({} as DumpDevolutionFormulaQueryDto, adminUser);
+      const [pipeline] = mockRowModel.aggregate.mock.calls[0] as [Record<string, unknown>[]];
+      const formMatchStage = pipeline.find(
+        (s) => '$match' in s && '$expr' in ((s as Record<string, unknown>)['$match'] as object),
+      ) as { $match: Record<string, unknown> } | undefined;
+      expect(formMatchStage?.['$match']?.['$expr']).toEqual({
+        $eq: ['$datasetVersion', '$formDoc.activeDatasetVersion'],
+      });
+    });
+
+    it('empty aggregate result calls generateExcel with empty rows', async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access
+      const generateExcelSpy = jest
+        .spyOn((service as any).excelService, 'generateExcel')
+        .mockResolvedValue(Buffer.from(''));
+      await service.dumpToExcel({} as DumpDevolutionFormulaQueryDto, adminUser);
+      expect(generateExcelSpy).toHaveBeenCalledWith(DF_DUMP_HEADERS, [], 'Devolution Formula Dump');
+    });
+
+    it('maps aggregation row to DfDumpRow shape with correct field values', async () => {
+      const submittedAt = new Date('2024-01-15T10:00:00.000Z');
+      const createdAt = new Date('2024-01-10T08:00:00.000Z');
+      const updatedAt = new Date('2024-01-12T09:00:00.000Z');
+
+      const aggRow = {
+        rowNumber: 5,
+        censusCode: 'C999',
+        ulbName: 'Test City',
+        totalGrantAllocation: 1_000_000,
+        installment1Amount: 600_000,
+        installment2Amount: 400_000,
+        devolutionFormula: 'population',
+        datasetVersion: 2,
+        createdAt,
+        updatedAt,
+        formDoc: {
+          year: new Types.ObjectId(YEAR_ID),
+          installment: 1,
+          currentFormStatus: 4,
+          validationStatus: 'VALID',
+          submittedAt,
+        },
+        stateDoc: { name: 'Maharashtra' },
+        submittedByDoc: { name: 'Submitter Name' },
+        createdByDoc: { name: 'Creator Name' },
+        updatedByDoc: { name: 'Updater Name' },
+      };
+
+      mockRowModel.aggregate.mockReturnValue({ exec: jest.fn().mockResolvedValue([aggRow]) });
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access
+      const generateExcelSpy = jest
+        .spyOn((service as any).excelService, 'generateExcel')
+        .mockResolvedValue(Buffer.from(''));
+
+      await service.dumpToExcel({} as DumpDevolutionFormulaQueryDto, adminUser);
+
+      const [, rows] = generateExcelSpy.mock.calls[0] as [unknown, Record<string, unknown>[]];
+      const row = rows[0];
+
+      expect(row['rowNumber']).toBe(5);
+      expect(row['stateName']).toBe('Maharashtra');
+      expect(row['yearLabel']).toBe('2023-24');
+      expect(row['installment']).toBe(1);
+      expect(row['censusCode']).toBe('C999');
+      expect(row['ulbName']).toBe('Test City');
+      expect(row['submittedBy']).toBe('Submitter Name');
+      expect(row['submittedAt']).toBe(submittedAt.toISOString());
+      expect(row['createdBy']).toBe('Creator Name');
+      expect(row['updatedBy']).toBe('Updater Name');
+      expect(row['createdAt']).toBe(createdAt.toISOString());
+      expect(row['updatedAt']).toBe(updatedAt.toISOString());
+    });
   });
 });

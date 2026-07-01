@@ -305,7 +305,7 @@ export class DevolutionFormulaExcelService {
               .updateMany({ form: formId, datasetVersion: currentVersion }, { $set: { isActive: false } })
               .exec()
           : Promise.resolve(null),
-        this.rowModel.insertMany(rowDocs, { lean: true, ordered: false }),
+        this.rowModel.insertMany(rowDocs, { ordered: false }),
       ]);
 
       previousRowsDeactivated = currentVersion > 0 && deactivateResult.status === 'fulfilled';
@@ -863,7 +863,7 @@ export class DevolutionFormulaExcelService {
       'Devolution Formula Errors',
     )) as unknown as Buffer;
 
-    await this.s3Service.uploadPublic(
+    await this.s3Service.uploadPrivate(
       s3Key,
       buffer,
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

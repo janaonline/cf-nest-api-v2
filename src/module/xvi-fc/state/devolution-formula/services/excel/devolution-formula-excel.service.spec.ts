@@ -139,7 +139,7 @@ const mockUlbModel = { find: jest.fn() };
 
 // ─── Service mocks ────────────────────────────────────────────────────────────
 
-const mockS3Service = { getBuffer: jest.fn(), uploadPublic: jest.fn() };
+const mockS3Service = { getBuffer: jest.fn(), uploadPublic: jest.fn(), uploadPrivate: jest.fn() };
 const mockExcelService = { generateExcel: jest.fn().mockResolvedValue(Buffer.from('')) };
 const mockFileTokenService = { signFileUrl: jest.fn((url: string) => `signed::${url}`) };
 const mockFileUrlNormalizer = { toRawStoragePath: jest.fn((url: string) => url) };

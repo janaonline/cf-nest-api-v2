@@ -34,6 +34,12 @@ export class DevolutionFormulaController {
   @ApiQuery({ name: 'yearId', required: false })
   @ApiQuery({ name: 'installment', required: false, enum: [...DF_INSTALLMENTS] })
   @ApiQuery({ name: 'validationStatus', required: false, enum: ['NOT_VALIDATED', 'VALID', 'INVALID'] })
+  @ApiQuery({
+    name: 'formStatus',
+    required: false,
+    description: 'Filter by numeric form status (0-7). Admin/MoHUA only.',
+  })
+  @ApiQuery({ name: 'isActive', required: false, description: 'Filter rows by active status (default: true)' })
   @Get('dump')
   @UseGuards(PermissionGuard)
   @RequirePermissions(Permission.VIEW_STATUS_REPORTS)
