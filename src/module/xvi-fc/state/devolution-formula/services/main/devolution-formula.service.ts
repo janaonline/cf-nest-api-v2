@@ -454,8 +454,11 @@ export class DevolutionFormulaService {
 
     const forms = await this.model
       .find(filter)
-      .select('_id state year installment currentFormStatus validationStatus activeDatasetVersion')
+      .select(
+        '_id state year installment currentFormStatus validationStatus activeDatasetVersion submittedBy submittedAt',
+      )
       .populate<{ state: { _id: Types.ObjectId; name: string } }>('state', 'name')
+      .populate<{ submittedBy: { name: string } | null }>('submittedBy', 'name')
       .lean()
       .exec();
 
@@ -475,12 +478,20 @@ export class DevolutionFormulaService {
       const rows = await this.rowModel
         .find({ form: form._id, datasetVersion: activeVersion, isActive: true })
         .select(
-          'rowNumber censusCode sbCode ulbName totalGrantAllocation installment1Amount installment2Amount devolutionFormula validationStatus datasetVersion createdAt updatedAt',
+          'rowNumber censusCode ulbName totalGrantAllocation installment1Amount installment2Amount devolutionFormula validationStatus datasetVersion createdBy updatedBy createdAt updatedAt',
         )
+        .populate<{ createdBy: { name: string } | null }>('createdBy', 'name')
+        .populate<{ updatedBy: { name: string } | null }>('updatedBy', 'name')
         .lean()
         .exec();
 
+      const formRecord = form as unknown as { submittedBy?: { name?: string } | null; submittedAt?: Date | null };
+
       for (const row of rows) {
+        const rowRecord = row as unknown as {
+          createdBy?: { name?: string } | null;
+          updatedBy?: { name?: string } | null;
+        };
         dumpRows.push({
           rowNumber: row.rowNumber,
           stateName: state?.name ?? '',
@@ -489,13 +500,16 @@ export class DevolutionFormulaService {
           formStatus,
           validationStatus,
           censusCode: row.censusCode ?? '',
-          sbCode: row.sbCode ?? '',
           ulbName: row.ulbName,
           totalGrantAllocation: row.totalGrantAllocation,
           installment1Amount: row.installment1Amount,
           installment2Amount: row.installment2Amount,
           devolutionFormula: row.devolutionFormula,
           datasetVersion: row.datasetVersion,
+          submittedBy: formRecord.submittedBy?.name ?? '',
+          submittedAt: formRecord.submittedAt ? new Date(formRecord.submittedAt).toISOString() : '',
+          createdBy: rowRecord.createdBy?.name ?? '',
+          updatedBy: rowRecord.updatedBy?.name ?? '',
           createdAt: row.createdAt ? new Date(row.createdAt).toISOString() : '',
           updatedAt: row.updatedAt ? new Date(row.updatedAt).toISOString() : '',
         });

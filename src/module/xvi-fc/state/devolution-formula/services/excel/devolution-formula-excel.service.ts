@@ -305,7 +305,7 @@ export class DevolutionFormulaExcelService {
               .updateMany({ form: formId, datasetVersion: currentVersion }, { $set: { isActive: false } })
               .exec()
           : Promise.resolve(null),
-        this.rowModel.insertMany(rowDocs, { lean: true, ordered: false }),
+        this.rowModel.insertMany(rowDocs, { ordered: false }),
       ]);
 
       previousRowsDeactivated = currentVersion > 0 && deactivateResult.status === 'fulfilled';

@@ -1,3 +1,4 @@
+import { Type } from 'class-transformer';
 import { IsIn, IsMongoId, IsOptional } from 'class-validator';
 import { DF_INSTALLMENTS, type DfInstallment } from '../constants/devolution-formula.constants';
 
@@ -11,6 +12,7 @@ export class DumpDevolutionFormulaQueryDto {
   yearId?: string;
 
   @IsOptional()
+  @Type(() => Number)
   @IsIn(DF_INSTALLMENTS)
   installment?: DfInstallment;
 

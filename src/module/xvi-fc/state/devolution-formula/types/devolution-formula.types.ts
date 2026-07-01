@@ -137,13 +137,16 @@ export interface DfDumpRow {
   formStatus: string;
   validationStatus: string;
   censusCode: string;
-  sbCode: string;
   ulbName: string;
   totalGrantAllocation: number | string;
   installment1Amount: number | string;
   installment2Amount: number | string;
   devolutionFormula: string;
   datasetVersion: number;
+  submittedBy: string;
+  submittedAt: string;
+  createdBy: string;
+  updatedBy: string;
   createdAt: string;
   updatedAt: string;
 }
