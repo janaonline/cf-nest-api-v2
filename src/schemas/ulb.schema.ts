@@ -164,3 +164,5 @@ export const UlbSchema = SchemaFactory.createForClass(Ulb);
 // Non-unique indexes
 UlbSchema.index({ censusCode: 1 });
 UlbSchema.index({ sbCode: 1 });
+
+UlbSchema.index({ state: 1, isActive: 1 });

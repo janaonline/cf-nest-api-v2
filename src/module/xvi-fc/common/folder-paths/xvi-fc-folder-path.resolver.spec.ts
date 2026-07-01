@@ -1,5 +1,4 @@
 import type { FieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
-import { XVI_FC_FOLDER_PATH_KEYS } from './xvi-fc-folder-path.constants';
 import {
   buildXviFcFolderPath,
   resolveXviFcFolderPathsInFormJson,
@@ -16,71 +15,67 @@ const BASE_CONTEXT: XviFcFolderPathContext = {
 
 describe('buildXviFcFolderPath', () => {
   it('builds SFC extension order path', () => {
-    expect(buildXviFcFolderPath(XVI_FC_FOLDER_PATH_KEYS.SFC_EXTENSION_ORDER, BASE_CONTEXT)).toBe(
+    expect(buildXviFcFolderPath('sfc-status/extension-order', BASE_CONTEXT)).toBe(
       'xvi-fc/state/5dcf9d7416a06aed41c748f0/2026-27/sfc-status/extension-order',
     );
   });
 
   it('builds SFC report path', () => {
-    expect(buildXviFcFolderPath(XVI_FC_FOLDER_PATH_KEYS.SFC_REPORT, BASE_CONTEXT)).toBe(
+    expect(buildXviFcFolderPath('sfc-status/sfc-report', BASE_CONTEXT)).toBe(
       'xvi-fc/state/5dcf9d7416a06aed41c748f0/2026-27/sfc-status/sfc-report',
     );
   });
 
   it('builds SFC ATR report path', () => {
-    expect(buildXviFcFolderPath(XVI_FC_FOLDER_PATH_KEYS.SFC_ATR_REPORT, BASE_CONTEXT)).toBe(
+    expect(buildXviFcFolderPath('sfc-status/atr-report', BASE_CONTEXT)).toBe(
       'xvi-fc/state/5dcf9d7416a06aed41c748f0/2026-27/sfc-status/atr-report',
     );
   });
 
   it('builds SFC gazette notification path', () => {
-    expect(buildXviFcFolderPath(XVI_FC_FOLDER_PATH_KEYS.SFC_GAZETTE_NOTIFICATION, BASE_CONTEXT)).toBe(
+    expect(buildXviFcFolderPath('sfc-status/gazette-notification', BASE_CONTEXT)).toBe(
       'xvi-fc/state/5dcf9d7416a06aed41c748f0/2026-27/sfc-status/gazette-notification',
     );
   });
 
-  it('builds EULB Excel path as elected-body/elected-bodies-list (not elected-body-excels)', () => {
-    const result = buildXviFcFolderPath(XVI_FC_FOLDER_PATH_KEYS.EULB_EXCEL, BASE_CONTEXT);
-    expect(result).toBe('xvi-fc/state/5dcf9d7416a06aed41c748f0/2026-27/elected-body/elected-bodies-list');
-    expect(result).not.toContain('elected-body-excels');
+  it('builds EULB Excel path', () => {
+    expect(buildXviFcFolderPath('elected-body/excels', BASE_CONTEXT)).toBe(
+      'xvi-fc/state/5dcf9d7416a06aed41c748f0/2026-27/elected-body/excels',
+    );
   });
 
   it('builds EULB post-submission proof path without batchId', () => {
-    expect(buildXviFcFolderPath(XVI_FC_FOLDER_PATH_KEYS.EULB_POST_SUBMISSION_PROOF, BASE_CONTEXT)).toBe(
+    expect(buildXviFcFolderPath('elected-body/post-submission-update', BASE_CONTEXT)).toBe(
       'xvi-fc/state/5dcf9d7416a06aed41c748f0/2026-27/elected-body/post-submission-update',
     );
   });
 
-  it('builds EULB post-submission proof path with batchId', () => {
+  it('appends batchId/document suffix when batchId is in context', () => {
     const ctx: XviFcFolderPathContext = { ...BASE_CONTEXT, batchId: 'batch-abc-123' };
-    expect(buildXviFcFolderPath(XVI_FC_FOLDER_PATH_KEYS.EULB_POST_SUBMISSION_PROOF, ctx)).toBe(
+    expect(buildXviFcFolderPath('elected-body/post-submission-update', ctx)).toBe(
       'xvi-fc/state/5dcf9d7416a06aed41c748f0/2026-27/elected-body/post-submission-update/batch-abc-123/document',
     );
   });
 
-  it('builds path with dynamic role and id', () => {
+  it('builds path with dynamic role in basePrefix', () => {
     const ctx: XviFcFolderPathContext = { ...BASE_CONTEXT, _id: 'ulb-123', role: 'ulb' };
-    expect(buildXviFcFolderPath(XVI_FC_FOLDER_PATH_KEYS.SFC_REPORT, ctx)).toBe(
-      'xvi-fc/ulb/ulb-123/2026-27/sfc-status/sfc-report',
-    );
+    expect(buildXviFcFolderPath('sfc-status/sfc-report', ctx)).toBe('xvi-fc/ulb/ulb-123/2026-27/sfc-status/sfc-report');
   });
 
   it('throws for empty _id', () => {
-    expect(() => buildXviFcFolderPath(XVI_FC_FOLDER_PATH_KEYS.SFC_REPORT, { ...BASE_CONTEXT, _id: '' })).toThrow(
-      'id is required',
+    expect(() => buildXviFcFolderPath('sfc-status/sfc-report', { ...BASE_CONTEXT, _id: '' })).toThrow(
+      'entityId is required',
     );
   });
 
   it('throws for empty designYear', () => {
-    expect(() => buildXviFcFolderPath(XVI_FC_FOLDER_PATH_KEYS.SFC_REPORT, { ...BASE_CONTEXT, designYear: '' })).toThrow(
+    expect(() => buildXviFcFolderPath('sfc-status/sfc-report', { ...BASE_CONTEXT, designYear: '' })).toThrow(
       'designYear is required',
     );
   });
 
-  it('throws for an unsupported folderPathKey', () => {
-    expect(() => buildXviFcFolderPath('UNKNOWN_KEY' as never, BASE_CONTEXT)).toThrow(
-      'Unsupported XVI-FC folder path key',
-    );
+  it('throws for empty subPath', () => {
+    expect(() => buildXviFcFolderPath('', BASE_CONTEXT)).toThrow('subPath is required');
   });
 });
 
@@ -91,7 +86,7 @@ describe('resolveXviFcFolderPathsInFormJson', () => {
     formFieldType: 'file',
     key: 'sfcReport',
     label: 'SFC Report',
-    folderPathKey: XVI_FC_FOLDER_PATH_KEYS.SFC_REPORT,
+    folderPathKey: 'sfc-status/sfc-report',
     folderPath: 'xvi-fc/state/2026-27/sfc-status/sfc-report',
   };
 
@@ -139,7 +134,7 @@ describe('resolveXviFcFolderPathsInFormJson', () => {
     const resolvedFile = result[1];
     expect(resolvedFile.key).toBe('sfcReport');
     expect(resolvedFile.label).toBe('SFC Report');
-    expect(resolvedFile.folderPathKey).toBe(XVI_FC_FOLDER_PATH_KEYS.SFC_REPORT);
+    expect(resolvedFile.folderPathKey).toBe('sfc-status/sfc-report');
   });
 
   it('does not mutate the input fields array', () => {
@@ -149,23 +144,32 @@ describe('resolveXviFcFolderPathsInFormJson', () => {
     expect(fields[0].folderPath).toBe(originalFolderPath);
   });
 
-  it('returns correct resolved paths for all six keys in a mixed array', () => {
-    const allFileFields: FieldConfig[] = Object.values(XVI_FC_FOLDER_PATH_KEYS).map((k) => ({
+  it('returns correct resolved paths for all six subpaths in a mixed array', () => {
+    const subPaths = [
+      'sfc-status/extension-order',
+      'sfc-status/sfc-report',
+      'sfc-status/atr-report',
+      'sfc-status/gazette-notification',
+      'elected-body/excels',
+      'elected-body/post-submission-update',
+    ];
+
+    const allFileFields: FieldConfig[] = subPaths.map((subPath) => ({
       formFieldType: 'file' as const,
-      key: k,
-      label: k,
-      folderPathKey: k,
+      key: subPath,
+      label: subPath,
+      folderPathKey: subPath,
     }));
 
     const result = resolveXviFcFolderPathsInFormJson(allFileFields, BASE_CONTEXT);
 
-    expect(result.find((f) => f.key === 'SFC_EXTENSION_ORDER')?.folderPath).toBe(
+    expect(result.find((f) => f.key === 'sfc-status/extension-order')?.folderPath).toBe(
       'xvi-fc/state/5dcf9d7416a06aed41c748f0/2026-27/sfc-status/extension-order',
     );
-    expect(result.find((f) => f.key === 'EULB_EXCEL')?.folderPath).toBe(
-      'xvi-fc/state/5dcf9d7416a06aed41c748f0/2026-27/elected-body/elected-bodies-list',
+    expect(result.find((f) => f.key === 'elected-body/excels')?.folderPath).toBe(
+      'xvi-fc/state/5dcf9d7416a06aed41c748f0/2026-27/elected-body/excels',
     );
-    expect(result.find((f) => f.key === 'EULB_POST_SUBMISSION_PROOF')?.folderPath).toBe(
+    expect(result.find((f) => f.key === 'elected-body/post-submission-update')?.folderPath).toBe(
       'xvi-fc/state/5dcf9d7416a06aed41c748f0/2026-27/elected-body/post-submission-update',
     );
   });

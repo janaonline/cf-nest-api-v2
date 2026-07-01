@@ -45,7 +45,6 @@ import {
   buildXviFcFolderPath,
   type XviFcFolderPathContext,
 } from '../../common/folder-paths/xvi-fc-folder-path.resolver';
-import type { XviFcFolderPathKey } from '../../common/folder-paths/xvi-fc-folder-path.constants';
 import { YearIdToLabel } from 'src/core/constants/years';
 import { SaveSfcStatusDto } from './dto/save-sfc-status.dto';
 import type { SfcFormGetResponseData, SfcFormPermissions } from './sfc-status.types';
@@ -442,7 +441,7 @@ export class SfcStatusService {
       if (question.formFieldType === 'file') {
         const resolvedFolderPath =
           question.folderPathKey && folderPathContext
-            ? buildXviFcFolderPath(question.folderPathKey as XviFcFolderPathKey, folderPathContext)
+            ? buildXviFcFolderPath(question.folderPathKey, folderPathContext)
             : question.folderPath;
 
         const fileVal = value as UploadedFileValue | null | undefined;
