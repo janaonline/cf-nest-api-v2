@@ -1725,6 +1725,15 @@ describe('Devolution Formula — getForm rowEditFields', () => {
       expect(formMatchStage?.['$match']?.['formDoc.validationStatus']).toBe('VALID');
     });
 
+    it('formStatus filter sets formDoc.currentFormStatus in form match', async () => {
+      await service.dumpToExcel({ formStatus: 5 } as DumpDevolutionFormulaQueryDto, adminUser);
+      const [pipeline] = mockRowModel.aggregate.mock.calls[0] as [Record<string, unknown>[]];
+      const formMatchStage = pipeline.find(
+        (s) => '$match' in s && '$expr' in ((s as Record<string, unknown>)['$match'] as object),
+      ) as { $match: Record<string, unknown> } | undefined;
+      expect(formMatchStage?.['$match']?.['formDoc.currentFormStatus']).toBe(5);
+    });
+
     it('pipeline form match includes $expr active dataset version guard', async () => {
       await service.dumpToExcel({} as DumpDevolutionFormulaQueryDto, adminUser);
       const [pipeline] = mockRowModel.aggregate.mock.calls[0] as [Record<string, unknown>[]];

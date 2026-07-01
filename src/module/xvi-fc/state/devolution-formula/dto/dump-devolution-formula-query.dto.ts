@@ -1,5 +1,5 @@
 import { Transform, Type } from 'class-transformer';
-import { IsBoolean, IsIn, IsMongoId, IsOptional } from 'class-validator';
+import { IsBoolean, IsIn, IsInt, IsMongoId, IsOptional } from 'class-validator';
 import { DF_INSTALLMENTS, type DfInstallment } from '../constants/devolution-formula.constants';
 
 export class DumpDevolutionFormulaQueryDto {
@@ -28,4 +28,9 @@ export class DumpDevolutionFormulaQueryDto {
   })
   @IsBoolean()
   isActive?: boolean;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  formStatus?: number;
 }

@@ -1,6 +1,6 @@
 import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model, Types } from 'mongoose';
+import { type PipelineStage, Model, Types } from 'mongoose';
 import type ExcelJS from 'exceljs';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { ExcelService } from 'src/services/excel/excel.service';
@@ -439,7 +439,7 @@ export class DevolutionFormulaService {
     const rowMatch = this.buildDumpRowMatch(query);
     const formMatch = this.buildDumpFormMatch(query, user);
 
-    const pipeline = [
+    const pipeline: PipelineStage[] = [
       { $match: rowMatch },
       {
         $lookup: {
@@ -513,6 +513,7 @@ export class DevolutionFormulaService {
     if (query.yearId) match['formDoc.year'] = new Types.ObjectId(query.yearId);
     if (query.installment) match['formDoc.installment'] = query.installment;
     if (query.validationStatus) match['formDoc.validationStatus'] = query.validationStatus;
+    if (query.formStatus !== undefined) match['formDoc.currentFormStatus'] = query.formStatus;
 
     return match;
   }
