@@ -1,6 +1,15 @@
-import { BadRequestException, ConflictException, ForbiddenException, HttpException, HttpStatus, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  HttpException,
+  HttpStatus,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomBytes } from 'crypto';
+import * as bcrypt from 'bcrypt';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { RedisService } from 'src/core/services/redis/redis.service';
@@ -181,45 +190,51 @@ export class UsersService {
     }
 
     if (action === 'restore') {
-      const toRestore = await this.userModel
-        .findOne({ originalEmail: dto.email, isDeleted: true })
-        .lean()
-        .exec();
+      const toRestore = await this.userModel.findOne({ originalEmail: dto.email, isDeleted: true }).lean().exec();
 
       if (!toRestore) {
         // Race condition: already restored by another process — create fresh instead
         return this.createFreshStateMember(dto, stateId, xviFcSubrole, requester);
       }
 
+      const tempPassword = this.generateTempPassword();
+      const hashedPassword = await bcrypt.hash(tempPassword, 12);
+      const tempPasswordExpiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000);
+
       // No updateMany needed — email was already scrambled individually at delete time
-      const restored = await this.userModel.findByIdAndUpdate(
-        toRestore._id,
-        {
-          $set: {
-            name: dto.name,
-            email: dto.email,
-            mobile: dto.mobile,
-            designation: dto.designation,
-            role: Role.STATE,
-            xviFcSubrole,
-            state: stateId,
-            ulb: null,
-            originalEmail: null,
-            createdBy: new Types.ObjectId(String(requester._id)),
-            isDeleted: false,
-            isActive: true,
-            status: 'PENDING',
-            isXVIFCProfileVerified: false,
-            isEmailVerified: false,
-            isRegistered: false,
-            password: 'UNSET',
-            refreshTokenHash: null,
-            loginAttempts: 0,
-            isLocked: false,
+      const restored = await this.userModel
+        .findByIdAndUpdate(
+          toRestore._id,
+          {
+            $set: {
+              name: dto.name,
+              email: dto.email,
+              mobile: dto.mobile,
+              designation: dto.designation,
+              role: Role.STATE,
+              xviFcSubrole,
+              state: stateId,
+              ulb: null,
+              originalEmail: null,
+              createdBy: new Types.ObjectId(String(requester._id)),
+              isDeleted: false,
+              isActive: true,
+              status: 'APPROVED',
+              isXVIFCProfileVerified: false,
+              isEmailVerified: true,
+              isRegistered: false,
+              password: hashedPassword,
+              isNewUser: true,
+              tempPasswordExpiresAt,
+              refreshTokenHash: null,
+              loginAttempts: 0,
+              isLocked: false,
+            },
           },
-        },
-        { new: true },
-      ).lean().exec();
+          { new: true },
+        )
+        .lean()
+        .exec();
 
       if (!restored) throw new NotFoundException('User to restore could not be found');
 
@@ -239,7 +254,7 @@ export class UsersService {
         );
       }
 
-      await this.queueInviteEmail(dto, stateId, requester);
+      await this.queueInviteEmail(dto, stateId, requester, tempPassword);
       return this.toStateMemberDto(restored, dto);
     }
 
@@ -252,12 +267,38 @@ export class UsersService {
     throw new BadRequestException('Invalid action');
   }
 
+  private generateTempPassword(): string {
+    const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+    const lower = 'abcdefghjkmnpqrstuvwxyz';
+    const digits = '23456789';
+    const symbols = '@#$%^&*!';
+    const all = upper + lower + digits + symbols;
+    const pick = (set: string) => set[randomBytes(1)[0] % set.length];
+    const chars = [
+      pick(upper), pick(upper),
+      pick(lower), pick(lower),
+      pick(digits), pick(digits),
+      pick(symbols),
+      ...Array.from({ length: 5 }, () => pick(all)),
+    ];
+    // Crypto Fisher-Yates shuffle
+    for (let i = chars.length - 1; i > 0; i--) {
+      const j = randomBytes(1)[0] % (i + 1);
+      [chars[i], chars[j]] = [chars[j], chars[i]];
+    }
+    return chars.join('');
+  }
+
   private async createFreshStateMember(
     dto: InviteStateMemberDto,
     stateId: Types.ObjectId,
     xviFcSubrole: 'reviewer' | 'viewer',
     requester: AuthUser,
   ): Promise<StateMemberResponseDto> {
+    const tempPassword = this.generateTempPassword();
+    const hashedPassword = await bcrypt.hash(tempPassword, 12);
+    const tempPasswordExpiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000);
+
     const created = await this.userModel.create({
       name: dto.name,
       email: dto.email,
@@ -267,24 +308,31 @@ export class UsersService {
       xviFcSubrole,
       state: stateId,
       createdBy: new Types.ObjectId(String(requester._id)),
-      status: 'PENDING',
+      status: 'APPROVED',
       isXVIFCProfileVerified: false,
-      isEmailVerified: false,
+      isEmailVerified: true,
       isActive: true,
       isDeleted: false,
       isLocked: false,
       loginAttempts: 0,
-      password: 'UNSET',
+      password: hashedPassword,
+      isNewUser: true,
+      tempPasswordExpiresAt,
       isRegistered: false,
       isVerified2223: false,
       isNodalOfficer: false,
     });
 
-    await this.queueInviteEmail(dto, stateId, requester);
+    await this.queueInviteEmail(dto, stateId, requester, tempPassword);
     return this.toStateMemberDto(created, dto);
   }
 
-  private async queueInviteEmail(dto: InviteStateMemberDto, stateId: Types.ObjectId, requester: AuthUser): Promise<void> {
+  private async queueInviteEmail(
+    dto: InviteStateMemberDto,
+    stateId: Types.ObjectId,
+    requester: AuthUser,
+    tempPassword?: string,
+  ): Promise<void> {
     const stateDoc = await this.stateModel.findById(stateId).select('name').lean().exec();
     const loginUrl = `${this.configService.get<string>('CLIENT_URL', 'https://cityfinance.in')}/xvifc`;
     this.emailQueueService
@@ -294,11 +342,13 @@ export class UsersService {
         templateName: './state-member-invite',
         mailData: {
           name: dto.name,
+          email: dto.email,
           mobile: dto.mobile,
           role: dto.subRole === 'EDITOR' ? 'Reviewer' : 'Viewer',
           stateName: stateDoc?.name ?? 'your state',
           invitedBy: 'State Administrator',
           loginUrl,
+          tempPassword: tempPassword ?? null,
         },
       })
       .catch(() => {
@@ -393,17 +443,17 @@ export class UsersService {
     if (!targetUser) throw new NotFoundException('User not found');
 
     const originalEmail = targetUser.email ?? null;
-    const tombstonedEmail = originalEmail
-      ? `__deleted__${Date.now()}__${originalEmail}`
-      : undefined;
+    const tombstonedEmail = originalEmail ? `__deleted__${Date.now()}__${originalEmail}` : undefined;
 
-    await this.userModel.findByIdAndUpdate(targetUserId, {
-      $set: {
-        isDeleted: true,
-        ...(tombstonedEmail && { email: tombstonedEmail }),
-        ...(originalEmail && { originalEmail }),
-      },
-    }).exec();
+    await this.userModel
+      .findByIdAndUpdate(targetUserId, {
+        $set: {
+          isDeleted: true,
+          ...(tombstonedEmail && { email: tombstonedEmail }),
+          ...(originalEmail && { originalEmail }),
+        },
+      })
+      .exec();
 
     return { message: 'User deleted successfully' };
   }
@@ -480,7 +530,9 @@ export class UsersService {
       throw new BadRequestException('Target is already the STATE admin');
     }
     if (!(newOwner as Record<string, unknown>)['isXVIFCProfileVerified']) {
-      throw new BadRequestException('Ownership can only be transferred to an active member who has completed profile verification');
+      throw new BadRequestException(
+        'Ownership can only be transferred to an active member who has completed profile verification',
+      );
     }
 
     // Must belong to the same state
@@ -492,19 +544,13 @@ export class UsersService {
 
     // Promote new owner first, then demote current admin.
     // On failure of the second update, roll back the first to preserve consistency.
-    await this.userModel
-      .findByIdAndUpdate(dto.toUserId, { $set: { xviFcSubrole: 'admin' } })
-      .exec();
+    await this.userModel.findByIdAndUpdate(dto.toUserId, { $set: { xviFcSubrole: 'admin' } }).exec();
 
     try {
-      await this.userModel
-        .findByIdAndUpdate(requester._id, { $set: { xviFcSubrole: 'reviewer' } })
-        .exec();
+      await this.userModel.findByIdAndUpdate(requester._id, { $set: { xviFcSubrole: 'reviewer' } }).exec();
     } catch (err) {
       // Rollback: restore the promoted user to their previous sub-role
-      await this.userModel
-        .findByIdAndUpdate(dto.toUserId, { $set: { xviFcSubrole: newOwner.xviFcSubrole } })
-        .exec();
+      await this.userModel.findByIdAndUpdate(dto.toUserId, { $set: { xviFcSubrole: newOwner.xviFcSubrole } }).exec();
       throw err;
     }
 
@@ -652,7 +698,7 @@ export class UsersService {
 
   async getMohuaMembers(): Promise<StateMemberResponseDto[]> {
     const users = await this.userModel
-      .find({ role: Role.MoHUA, isDeleted: false })
+      .find({ role: Role.MoHUA, isXviFcdeleted: false })
       .select('_id name mobile email designation isActive lastLoginAt')
       .lean()
       .exec();
@@ -739,6 +785,4 @@ export class UsersService {
       registeredMunicipalInfo,
     };
   }
-
-
 }
