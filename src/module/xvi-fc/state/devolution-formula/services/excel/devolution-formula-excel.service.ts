@@ -245,7 +245,7 @@ export class DevolutionFormulaExcelService {
               });
             } else {
               // Steps 2–4: required → type → business
-              rowErrors = this.dfValidator.validateRow(parsed, dto.installment);
+              rowErrors = this.dfValidator.validateRow(parsed, dto.installment, { totalMoHUAAllocation });
             }
           }
         }
@@ -510,7 +510,7 @@ export class DevolutionFormulaExcelService {
             rowErrors.push({ field: 'censusCode', code: 'duplicate', message: 'Duplicate ULB in dataset.' });
           } else {
             matchedUlbIds.add(ulbIdStr);
-            rowErrors = this.dfValidator.validateRow(parsed, installment);
+            rowErrors = this.dfValidator.validateRow(parsed, installment, { totalMoHUAAllocation });
           }
         } else {
           rowErrors.push({ field: 'censusCode', code: 'unknownUlb', message: 'ULB not found in registry.' });
@@ -611,11 +611,12 @@ export class DevolutionFormulaExcelService {
     const stateOid = new Types.ObjectId(stateId);
     const yearOid = new Types.ObjectId(yearId);
 
-    const form = await this.formModel
-      .findOne({ state: stateOid, year: yearOid, installment })
-      .lean<DfFormLeanDoc>()
-      .exec();
+    const [form, grantAlloc] = await Promise.all([
+      this.formModel.findOne({ state: stateOid, year: yearOid, installment }).lean<DfFormLeanDoc>().exec(),
+      this.dfService.resolveGrantAllocation(stateOid, yearOid).catch(() => null),
+    ]);
 
+    const maxGrantAllocation = grantAlloc ? grantAlloc.basic + grantAlloc.performance : undefined;
     const activeVersion = form?.activeDatasetVersion ?? 0;
 
     if (form && activeVersion > 0) {
@@ -638,7 +639,7 @@ export class DevolutionFormulaExcelService {
         DF_TEMPLATE_HEADERS,
         rows,
         'Devolution Formula',
-        this.buildDfTemplateValidations(),
+        this.buildDfTemplateValidations(maxGrantAllocation),
       );
     }
 
@@ -662,27 +663,13 @@ export class DevolutionFormulaExcelService {
       DF_TEMPLATE_HEADERS,
       rows,
       'Devolution Formula',
-      this.buildDfTemplateValidations(),
+      this.buildDfTemplateValidations(maxGrantAllocation),
     );
   }
 
   // ─── Private helpers ─────────────────────────────────────────────────────
 
-  private buildDfTemplateValidations(): ExcelColumnValidation[] {
-    const numericValidation = (title: string): ExcelJS.DataValidation => ({
-      type: 'decimal',
-      operator: 'greaterThanOrEqual',
-      allowBlank: true,
-      formulae: [0],
-      showInputMessage: true,
-      promptTitle: title,
-      prompt: 'Enter a number (0 or greater).',
-      showErrorMessage: true,
-      errorStyle: 'error',
-      errorTitle: `Invalid ${title}`,
-      error: `${title} must be a number ≥ 0.`,
-    });
-
+  private buildDfTemplateValidations(totalMoHUAAllocation?: number): ExcelColumnValidation[] {
     return [
       {
         key: 'totalGrantAllocation',
@@ -691,11 +678,12 @@ export class DevolutionFormulaExcelService {
           const totalLetter = keyToLetter.get('totalGrantAllocation')!;
           const inst1Letter = keyToLetter.get('installment1Amount')!;
           const inst2Letter = keyToLetter.get('installment2Amount')!;
+          const maxClause = totalMoHUAAllocation !== undefined ? `,${totalLetter}${row}<=${totalMoHUAAllocation}` : '';
           return {
             type: 'custom',
             allowBlank: true,
             formulae: [
-              `OR(${totalLetter}${row}="",AND(ISNUMBER(${totalLetter}${row}),${totalLetter}${row}>=0,ISNUMBER(${inst1Letter}${row}),ISNUMBER(${inst2Letter}${row}),ABS(${totalLetter}${row}-(${inst1Letter}${row}+${inst2Letter}${row}))<0.001))`,
+              `OR(${totalLetter}${row}="",AND(ISNUMBER(${totalLetter}${row}),${totalLetter}${row}>=0${maxClause},ISNUMBER(${inst1Letter}${row}),ISNUMBER(${inst2Letter}${row}),ABS(${totalLetter}${row}-(${inst1Letter}${row}+${inst2Letter}${row}))<0.001))`,
             ],
             showErrorMessage: true,
             errorStyle: 'warning',
@@ -707,13 +695,41 @@ export class DevolutionFormulaExcelService {
       },
       {
         key: 'installment1Amount',
-        mode: 'static',
-        validation: numericValidation('Installment 1 Amount'),
+        mode: 'perRow',
+        buildValidation: (row, keyToLetter) => {
+          const inst1Letter = keyToLetter.get('installment1Amount')!;
+          const totalLetter = keyToLetter.get('totalGrantAllocation')!;
+          return {
+            type: 'custom',
+            allowBlank: true,
+            formulae: [
+              `OR(${inst1Letter}${row}="",AND(ISNUMBER(${inst1Letter}${row}),${inst1Letter}${row}>=0,OR(${totalLetter}${row}="",${inst1Letter}${row}<=${totalLetter}${row})))`,
+            ],
+            showErrorMessage: true,
+            errorStyle: 'error',
+            errorTitle: 'Invalid Installment 1 Amount',
+            error: `Installment 1 Amount must be ≥ 0 and cannot exceed Total Grant Allocation (${totalMoHUAAllocation}Cr.).`,
+          };
+        },
       },
       {
         key: 'installment2Amount',
-        mode: 'static',
-        validation: numericValidation('Installment 2 Amount'),
+        mode: 'perRow',
+        buildValidation: (row, keyToLetter) => {
+          const inst2Letter = keyToLetter.get('installment2Amount')!;
+          const totalLetter = keyToLetter.get('totalGrantAllocation')!;
+          return {
+            type: 'custom',
+            allowBlank: true,
+            formulae: [
+              `OR(${inst2Letter}${row}="",AND(ISNUMBER(${inst2Letter}${row}),${inst2Letter}${row}>=0,OR(${totalLetter}${row}="",${inst2Letter}${row}<=${totalLetter}${row})))`,
+            ],
+            showErrorMessage: true,
+            errorStyle: 'error',
+            errorTitle: 'Invalid Installment 2 Amount',
+            error: `Installment 2 Amount must be ≥ 0 and cannot exceed Total Grant Allocation (${totalMoHUAAllocation}).`,
+          };
+        },
       },
       {
         key: 'devolutionFormula',

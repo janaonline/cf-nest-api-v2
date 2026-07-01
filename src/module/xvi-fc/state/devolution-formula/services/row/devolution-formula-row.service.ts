@@ -145,7 +145,9 @@ export class DevolutionFormulaRowService {
     this.assertNoActiveClaimLockForUlb(row.ulbId ? new Types.ObjectId(String(row.ulbId)) : null, yearId, installment);
 
     // Validate the editable fields
-    const fieldErrors = this.dfValidator.validatePortalRowEdit(dto, installment);
+    const fieldErrors = this.dfValidator.validatePortalRowEdit(dto, installment, {
+      totalMoHUAAllocation: (formDoc['totalMoHUAAllocation'] as number | undefined) ?? undefined,
+    });
     if (fieldErrors.length > 0) {
       const errorMap = Object.fromEntries(fieldErrors.map((e) => [e.field, [e]]));
       throwXviFcValidationError(errorMap);
@@ -184,7 +186,9 @@ export class DevolutionFormulaRowService {
     if (!row.ulbId) {
       rowErrors.push({ field: 'censusCode', code: 'unknownUlb', message: 'ULB not found in registry.' });
     } else {
-      rowErrors = this.dfValidator.validateRow(parsed, installment);
+      rowErrors = this.dfValidator.validateRow(parsed, installment, {
+        totalMoHUAAllocation: (formDoc['totalMoHUAAllocation'] as number | undefined) ?? undefined,
+      });
     }
 
     const rowValidationStatus: 'VALID' | 'INVALID' = rowErrors.length === 0 ? 'VALID' : 'INVALID';

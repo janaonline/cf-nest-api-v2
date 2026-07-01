@@ -183,8 +183,8 @@ export const DF_FORM_QUESTIONS: FieldConfig[] = [
       },
       {
         name: 'min',
-        validator: 10,
-        message: 'ULB count cannot be less than 10.',
+        validator: 2,
+        message: 'ULB count cannot be less than 2.',
       },
       {
         name: 'max',

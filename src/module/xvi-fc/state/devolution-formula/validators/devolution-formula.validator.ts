@@ -26,7 +26,11 @@ export class DevolutionFormulaValidator {
    * Unknown ULBs (dbUlb === null because no identifier matched) should produce
    * a registry error before this is called.
    */
-  validateRow(parsed: DfParsedExcelRow, installment: DfInstallment): DfRowError[] {
+  validateRow(
+    parsed: DfParsedExcelRow,
+    installment: DfInstallment,
+    context?: { totalMoHUAAllocation?: number },
+  ): DfRowError[] {
     const errors: DfRowError[] = [];
 
     // 1. Required field checks
@@ -79,6 +83,13 @@ export class DevolutionFormulaValidator {
         message: 'Total Grant Allocation must be ≥ 0.',
         value: total,
       });
+    } else if (context?.totalMoHUAAllocation !== undefined && total > context.totalMoHUAAllocation) {
+      errors.push({
+        field: 'totalGrantAllocation',
+        code: 'max',
+        message: `Total Grant Allocation (${total}Cr.) cannot exceed the MoHUA grant allocation (${context.totalMoHUAAllocation}Cr.).`,
+        value: total,
+      });
     }
 
     if (!isFiniteNumber(inst1)) {
@@ -95,6 +106,13 @@ export class DevolutionFormulaValidator {
         message: 'Installment 1 Amount must be ≥ 0.',
         value: inst1,
       });
+    } else if (isFiniteNumber(total) && inst1 > total) {
+      errors.push({
+        field: 'installment1Amount',
+        code: 'max',
+        message: `Installment 1 Amount (${inst1}) cannot exceed Total Grant Allocation (${total}).`,
+        value: inst1,
+      });
     }
 
     if (!isFiniteNumber(inst2)) {
@@ -109,6 +127,13 @@ export class DevolutionFormulaValidator {
         field: 'installment2Amount',
         code: 'min',
         message: 'Installment 2 Amount must be ≥ 0.',
+        value: inst2,
+      });
+    } else if (isFiniteNumber(total) && inst2 > total) {
+      errors.push({
+        field: 'installment2Amount',
+        code: 'max',
+        message: `Installment 2 Amount (${inst2}) cannot exceed Total Grant Allocation (${total}).`,
         value: inst2,
       });
     }
@@ -152,6 +177,7 @@ export class DevolutionFormulaValidator {
       devolutionFormula?: string;
     },
     _installment: DfInstallment,
+    context?: { totalMoHUAAllocation?: number },
   ): DfRowError[] {
     const errors: DfRowError[] = [];
 
@@ -168,6 +194,17 @@ export class DevolutionFormulaValidator {
         field: 'totalGrantAllocation',
         code: 'number',
         message: 'Total Grant Allocation must be a finite number ≥ 0.',
+      });
+    } else if (
+      hasTotal &&
+      isFiniteNumber(dto.totalGrantAllocation) &&
+      context?.totalMoHUAAllocation !== undefined &&
+      dto.totalGrantAllocation > context.totalMoHUAAllocation
+    ) {
+      errors.push({
+        field: 'totalGrantAllocation',
+        code: 'max',
+        message: `Total Grant Allocation cannot exceed the MoHUA grant allocation (${context.totalMoHUAAllocation}Cr.).`,
       });
     }
     if (hasInst1 && (!isFiniteNumber(dto.installment1Amount) || dto.installment1Amount < 0)) {

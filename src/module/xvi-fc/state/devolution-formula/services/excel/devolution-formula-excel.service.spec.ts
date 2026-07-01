@@ -359,6 +359,7 @@ describe('DevolutionFormulaExcelService — generateTemplate', () => {
 
     mockFormModel.findOne.mockReturnValue(q(null)); // no saved form → fallback to master ULBs
     mockUlbModel.find.mockReturnValue(q(mockDbUlbs));
+    mockDfService.resolveGrantAllocation.mockResolvedValue(mockGrantAlloc);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -405,8 +406,8 @@ describe('DevolutionFormulaExcelService — generateTemplate', () => {
       'devolutionFormula',
     ]);
     expect(columnValidations[0].mode).toBe('perRow');
-    expect(columnValidations[1].mode).toBe('static');
-    expect(columnValidations[2].mode).toBe('static');
+    expect(columnValidations[1].mode).toBe('perRow');
+    expect(columnValidations[2].mode).toBe('perRow');
     expect(columnValidations[3].mode).toBe('static');
   });
 
