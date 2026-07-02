@@ -34,7 +34,6 @@ import {
   buildXviFcFolderPath,
   type XviFcFolderPathContext,
 } from 'src/module/xvi-fc/common/folder-paths/xvi-fc-folder-path.resolver';
-import type { XviFcFolderPathKey } from 'src/module/xvi-fc/common/folder-paths/xvi-fc-folder-path.constants';
 import { YearIdToLabel } from 'src/core/constants/years';
 import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import {
@@ -754,7 +753,7 @@ export class ElectedUrbanLocalBodiesService {
       if (question.formFieldType === 'file') {
         const resolvedFolderPath =
           question.folderPathKey && folderPathContext
-            ? buildXviFcFolderPath(question.folderPathKey as XviFcFolderPathKey, folderPathContext)
+            ? buildXviFcFolderPath(question.folderPathKey, folderPathContext)
             : question.folderPath;
 
         const fileVal = rawValue as UploadedFileValue | null | undefined;

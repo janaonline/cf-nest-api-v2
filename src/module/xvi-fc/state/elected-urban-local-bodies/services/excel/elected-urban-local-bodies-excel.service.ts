@@ -1010,7 +1010,7 @@ export class ElectedUrbanLocalBodiesExcelService {
       const storageUrl = this.config.get<string>('AWS_STORAGE_URL', '');
       const fileUrl = storageUrl ? `${storageUrl}${s3Key}` : s3Key;
 
-      await this.s3Service.uploadPublic(
+      await this.s3Service.uploadPrivate(
         s3Key,
         Buffer.from(buffer as ArrayBuffer),
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
