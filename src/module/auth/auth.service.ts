@@ -106,6 +106,26 @@ export class AuthService {
     return { message: 'Password updated successfully' };
   }
 
+  async setNewPassword(userId: string, newPassword: string, saveToken: string): Promise<{ ok: boolean }> {
+    // Verify the save token issued by /users/:id/issue-profile-save-token (requires prior OTP verification)
+    const tokenKey = `profile_save_token:${userId}`;
+    const stored = await this.redisService.get(tokenKey);
+    if (!stored || stored !== saveToken) {
+      throw new UnauthorizedException('Invalid or expired verification token. Please verify your email again.');
+    }
+    await this.redisService.del(tokenKey);
+
+    const hash = await bcrypt.hash(newPassword, 12);
+    await this.usersRepository.updatePassword(userId, hash);
+    await this.usersRepository.updateProfile(userId, {
+      isNewUser: false,
+      tempPasswordExpiresAt: null,
+      isXVIFCProfileVerified: true,
+      isXviFcdeleted: false,
+    });
+    return { ok: true };
+  }
+
   async validateCaptcha(token: string): Promise<{ success: boolean; message: string }> {
     const secret = this.configService.get<string>('RECAPTCHA_SECRET_KEY');
     try {
