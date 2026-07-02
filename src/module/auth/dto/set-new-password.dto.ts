@@ -1,4 +1,4 @@
-import { IsString, MinLength, Matches } from 'class-validator';
+import { IsOptional, IsString, MaxLength, MinLength, Matches } from 'class-validator';
 
 export class SetNewPasswordDto {
   @IsString()
@@ -10,4 +10,19 @@ export class SetNewPasswordDto {
 
   @IsString()
   saveToken!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  name?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  mobile?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  designation?: string;
 }
