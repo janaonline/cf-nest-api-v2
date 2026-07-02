@@ -5,6 +5,7 @@ import {
   HttpException,
   HttpStatus,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -153,6 +154,7 @@ const MOHUA_MATRIX: PermissionMatrixRow[] = [
 
 @Injectable()
 export class UsersService {
+  private readonly logger = new Logger(UsersService.name);
   private static readonly SAVE_TOKEN_TTL = 120; // 2 minutes — consumed on first use
   private saveTokenKey = (userId: string) => `profile_save_token:${userId}`;
 
@@ -382,8 +384,8 @@ export class UsersService {
           tempPassword: tempPassword ?? null,
         },
       })
-      .catch(() => {
-        // Email failure must never roll back user creation
+      .catch((err: unknown) => {
+        this.logger.error(`Failed to queue state member invite email to ${dto.email}:`, err);
       });
   }
 
@@ -913,8 +915,8 @@ export class UsersService {
           tempPassword: tempPassword ?? null,
         },
       })
-      .catch(() => {
-        // Email failure must never roll back user creation
+      .catch((err: unknown) => {
+        this.logger.error(`Failed to queue MoHUA member invite email to ${dto.email}:`, err);
       });
   }
 
