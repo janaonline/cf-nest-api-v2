@@ -31,11 +31,13 @@ export class NodeMailerService {
       await this.mailerService.sendMail({
         to,
         subject,
-        template: templateName, //'./welcome', // matches templates/welcome.hbs
+        template: templateName,
         context: mailData,
       });
+      this.logger.log(`Email sent successfully to: ${to}`);
     } catch (error) {
-      this.logger.error('Error sending email:', error);
+      this.logger.error(`Failed to send email to ${to} (template: ${templateName}):`, error);
+      throw error;
     }
   }
 
