@@ -106,6 +106,53 @@ export class AuthService {
     return { message: 'Password updated successfully' };
   }
 
+  async setNewPassword(
+    userId: string,
+    newPassword: string,
+    saveToken: string,
+    profile?: { name?: string; mobile?: string; designation?: string },
+  ): Promise<{ ok: boolean }> {
+    const tokenKey = `profile_save_token:${userId}`;
+    const stored = await this.redisService.get(tokenKey);
+    if (!stored || stored !== saveToken) {
+      throw new UnauthorizedException('Invalid or expired verification token. Please verify your email again.');
+    }
+    await this.redisService.del(tokenKey);
+
+    const hash = await bcrypt.hash(newPassword, 12);
+    await this.usersRepository.updatePassword(userId, hash);
+
+    const user = await this.usersRepository.findByIdSelect<{
+      state?: unknown;
+      isNodalOfficer?: boolean;
+      role?: string;
+    }>(userId, 'state isNodalOfficer role');
+
+    const profileUpdate: Record<string, unknown> = {
+      isNewUser: false,
+      tempPasswordExpiresAt: null,
+      isXVIFCProfileVerified: true,
+      isXviFcdeleted: false,
+      ...(profile?.name && { name: profile.name }),
+      ...(profile?.mobile && { mobile: profile.mobile }),
+      ...(profile?.designation && { designation: profile.designation }),
+    };
+
+    // For STATE new users: derive and stamp their xviFcSubrole in the same write
+    if (user?.role === 'STATE' && user.state) {
+      profileUpdate['xviFcSubrole'] = user.isNodalOfficer ? 'admin' : 'reviewer';
+    }
+
+    await this.usersRepository.updateProfile(userId, profileUpdate);
+
+    // Assign subroles for other unverified STATE users in the same state
+    if (user?.role === 'STATE' && user.state) {
+      await this.usersRepository.assignStateSubroles(user.state as never);
+    }
+
+    return { ok: true };
+  }
+
   async validateCaptcha(token: string): Promise<{ success: boolean; message: string }> {
     const secret = this.configService.get<string>('RECAPTCHA_SECRET_KEY');
     try {

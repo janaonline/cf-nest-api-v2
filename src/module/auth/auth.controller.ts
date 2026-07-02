@@ -24,6 +24,7 @@ import { CheckUserDto } from './dto/check-user.dto';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { SetPasswordDto } from './dto/set-password.dto';
+import { SetNewPasswordDto } from './dto/set-new-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { SendOtpDto } from './dto/send-otp.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
@@ -174,6 +175,20 @@ export class AuthController {
   @ApiResponse({ status: 404, description: 'User not found' })
   setPassword(@Body() dto: SetPasswordDto) {
     return this.authService.setPassword(dto);
+  }
+
+  @Patch('set-new-password')
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth()
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @ApiOperation({ summary: 'Set a new permanent password (called during first-login onboarding flow)' })
+  @ApiResponse({ status: 200, description: 'Password updated successfully' })
+  setNewPassword(@CurrentUser() user: { _id: string }, @Body() dto: SetNewPasswordDto) {
+    return this.authService.setNewPassword(user._id, dto.newPassword, dto.saveToken, {
+      name: dto.name,
+      mobile: dto.mobile,
+      designation: dto.designation,
+    });
   }
 
   @Public()

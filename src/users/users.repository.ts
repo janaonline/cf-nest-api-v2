@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { User, UserDocument } from 'src/schemas/user/user.schema';
 
 @Injectable()
@@ -143,5 +143,22 @@ export class UsersRepository {
 
   async updateProfile(id: string, data: Record<string, unknown>): Promise<UserDocument | null> {
     return this.userModel.findByIdAndUpdate(id, { $set: data }, { new: true, runValidators: true }).exec();
+  }
+
+  async findByIdSelect<T = Record<string, unknown>>(id: string, fields: string): Promise<T | null> {
+    return this.userModel.findById(id).select(fields).lean().exec() as Promise<T | null>;
+  }
+
+  async assignStateSubroles(stateId: Types.ObjectId | string): Promise<void> {
+    const scope = {
+      state: new Types.ObjectId(String(stateId)),
+      isDeleted: false,
+      role: { $in: ['STATE'] },
+      isXVIFCProfileVerified: { $ne: true },
+    };
+    await Promise.all([
+      this.userModel.updateMany({ ...scope, isNodalOfficer: true }, { $set: { xviFcSubrole: 'admin' } }).exec(),
+      this.userModel.updateMany({ ...scope, isNodalOfficer: { $ne: true } }, { $set: { xviFcSubrole: 'reviewer' } }).exec(),
+    ]);
   }
 }
