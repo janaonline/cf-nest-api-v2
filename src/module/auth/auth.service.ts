@@ -120,6 +120,8 @@ export class AuthService {
     await this.usersRepository.updateProfile(userId, {
       isNewUser: false,
       tempPasswordExpiresAt: null,
+      isXVIFCProfileVerified: true,
+      isXviFcdeleted: false,
     });
     return { ok: true };
   }

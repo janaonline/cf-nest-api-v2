@@ -23,6 +23,7 @@ import { UpdateProfileContactsDto } from './dto/update-profile-contacts.dto';
 import { ProfileContactsResponseDto } from './dto/profile-contacts-response.dto';
 import { CreateManagedUserDto } from './dto/create-managed-user.dto';
 import { InviteStateMemberDto } from './dto/invite-state-member.dto';
+import { InviteMohuaMemberDto } from './dto/invite-mohua-member.dto';
 import { UpdatePermissionOverridesDto } from './dto/update-permission-overrides.dto';
 import { AuthUser } from 'src/module/auth/auth-user.interface';
 import { UpdateUserRoleDto } from './dto/update-user-role.dto';
@@ -93,6 +94,60 @@ const STATE_MATRIX: PermissionMatrixRow[] = [
     viewer: false,
   },
   { label: 'Manage users', permissionKey: Permission.MANAGE_USERS, admin: true, reviewer: false, viewer: false },
+];
+
+const MOHUA_MATRIX: PermissionMatrixRow[] = [
+  {
+    label: 'View status and reports',
+    permissionKey: Permission.VIEW_STATUS_REPORTS,
+    admin: true,
+    reviewer: true,
+    viewer: true,
+  },
+  { label: 'View dashboards', permissionKey: Permission.VIEW_DASHBOARDS, admin: true, reviewer: true, viewer: true },
+  {
+    label: 'Review state submissions',
+    permissionKey: Permission.REVIEW_ULB_SUBMISSIONS,
+    admin: true,
+    reviewer: true,
+    viewer: false,
+  },
+  {
+    label: 'Send reminders to states',
+    permissionKey: Permission.MESSAGE_USERS,
+    admin: true,
+    reviewer: true,
+    viewer: false,
+  },
+  {
+    label: 'Request information from states',
+    permissionKey: Permission.MESSAGE_USERS,
+    admin: true,
+    reviewer: true,
+    viewer: false,
+  },
+  {
+    label: 'Approve / Reject submissions',
+    permissionKey: Permission.APPROVE_ULB_SUBMISSIONS,
+    admin: true,
+    reviewer: false,
+    viewer: false,
+  },
+  {
+    label: 'Issue Office Memorandum (OM)',
+    permissionKey: Permission.PREPARE_GRANT_LETTERS,
+    admin: true,
+    reviewer: false,
+    viewer: false,
+  },
+  {
+    label: 'Final submit to DoE',
+    permissionKey: Permission.FINAL_SUBMIT_TO_MOHUA,
+    admin: true,
+    reviewer: false,
+    viewer: false,
+  },
+  { label: 'Manage team', permissionKey: Permission.MANAGE_USERS, admin: true, reviewer: false, viewer: false },
 ];
 
 // ─── Service ─────────────────────────────────────────────────────────────────
@@ -275,9 +330,12 @@ export class UsersService {
     const all = upper + lower + digits + symbols;
     const pick = (set: string) => set[randomBytes(1)[0] % set.length];
     const chars = [
-      pick(upper), pick(upper),
-      pick(lower), pick(lower),
-      pick(digits), pick(digits),
+      pick(upper),
+      pick(upper),
+      pick(lower),
+      pick(lower),
+      pick(digits),
+      pick(digits),
       pick(symbols),
       ...Array.from({ length: 5 }, () => pick(all)),
     ];
@@ -577,6 +635,7 @@ export class UsersService {
     'status',
     'isNodalOfficer',
     'isXVIFCProfileVerified',
+    'isXviFcdeleted',
   ]);
 
   async updateProfileContacts(
@@ -699,21 +758,346 @@ export class UsersService {
   async getMohuaMembers(): Promise<StateMemberResponseDto[]> {
     const users = await this.userModel
       .find({ role: Role.MoHUA, isXviFcdeleted: false })
-      .select('_id name mobile email designation isActive lastLoginAt')
+      .select('_id name mobile email designation xviFcSubrole isActive isXVIFCProfileVerified lastLoginAt')
       .lean()
       .exec();
-
+    console.log('users', users);
     return users.map((u) => ({
       _id: String(u._id),
       name: u.name,
       mobile: u.mobile ?? '',
       ...(u.email ? { email: u.email } : {}),
       designation: u.designation ?? '',
-      subRole: 'VIEWER' as const,
+      subRole: UsersService.XVIFC_TO_SUB_ROLE[u.xviFcSubrole as string] ?? 'VIEWER',
       isActive: u.isActive ?? false,
-      isXVIFCProfileVerified: true,
+      isXVIFCProfileVerified: (u as Record<string, unknown>).isXVIFCProfileVerified === true,
       lastActive: u.lastLoginAt ? (u.lastLoginAt as Date).toISOString() : null,
     }));
+  }
+
+  async inviteMohuaMember(dto: InviteMohuaMemberDto, requester: AuthUser): Promise<StateMemberResponseDto> {
+    const action = dto.action ?? 'invite';
+    const xviFcSubrole: 'reviewer' | 'viewer' = dto.subRole === 'EDITOR' ? 'reviewer' : 'viewer';
+
+    const activeUser = await this.userModel.findOne({ email: dto.email, isDeleted: false }).select('_id').lean().exec();
+    if (activeUser) {
+      throw new HttpException(
+        { code: 'EMAIL_ALREADY_ACTIVE', message: 'Email address is already registered' },
+        HttpStatus.CONFLICT,
+      );
+    }
+
+    if (action === 'invite') {
+      const deletedUser = await this.userModel
+        .findOne({ originalEmail: dto.email, isDeleted: true })
+        .select('name designation')
+        .lean()
+        .exec();
+
+      if (deletedUser) {
+        throw new HttpException(
+          {
+            code: 'EMAIL_PREVIOUSLY_REGISTERED',
+            message: `This email was previously registered under ${deletedUser.name}.`,
+            deletedUser: { name: deletedUser.name, designation: deletedUser.designation ?? '' },
+          },
+          HttpStatus.CONFLICT,
+        );
+      }
+
+      return this.createFreshMohuaMember(dto, xviFcSubrole, requester);
+    }
+
+    if (action === 'restore') {
+      const toRestore = await this.userModel.findOne({ originalEmail: dto.email, isDeleted: true }).lean().exec();
+
+      if (!toRestore) {
+        return this.createFreshMohuaMember(dto, xviFcSubrole, requester);
+      }
+
+      const tempPassword = this.generateTempPassword();
+      const hashedPassword = await bcrypt.hash(tempPassword, 12);
+      const tempPasswordExpiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000);
+
+      const restored = await this.userModel
+        .findByIdAndUpdate(
+          toRestore._id,
+          {
+            $set: {
+              name: dto.name,
+              email: dto.email,
+              mobile: dto.mobile,
+              designation: dto.designation,
+              role: Role.MoHUA,
+              xviFcSubrole,
+              originalEmail: null,
+              createdBy: new Types.ObjectId(String(requester._id)),
+              isDeleted: false,
+              isActive: true,
+              status: 'APPROVED',
+              isXVIFCProfileVerified: false,
+              isEmailVerified: true,
+              password: hashedPassword,
+              isNewUser: true,
+              tempPasswordExpiresAt,
+              refreshTokenHash: null,
+              loginAttempts: 0,
+              isLocked: false,
+            },
+          },
+          { new: true },
+        )
+        .lean()
+        .exec();
+
+      if (!restored) throw new NotFoundException('User to restore could not be found');
+
+      const raceConflict = await this.userModel.exists({
+        email: dto.email,
+        isDeleted: false,
+        _id: { $ne: restored._id },
+      });
+      if (raceConflict) {
+        await this.userModel.findByIdAndUpdate(restored._id, {
+          $set: { isDeleted: true, email: `__deleted__${Date.now()}__${dto.email}`, originalEmail: dto.email },
+        });
+        throw new HttpException(
+          { code: 'EMAIL_ALREADY_ACTIVE', message: 'Email address is already registered' },
+          HttpStatus.CONFLICT,
+        );
+      }
+
+      await this.queueMohuaInviteEmail(dto, requester, tempPassword);
+      return this.toMohuaMemberDto(restored, dto);
+    }
+
+    if (action === 'force-new') {
+      return this.createFreshMohuaMember(dto, xviFcSubrole, requester);
+    }
+
+    throw new BadRequestException('Invalid action');
+  }
+
+  private async createFreshMohuaMember(
+    dto: InviteMohuaMemberDto,
+    xviFcSubrole: 'reviewer' | 'viewer',
+    requester: AuthUser,
+  ): Promise<StateMemberResponseDto> {
+    const tempPassword = this.generateTempPassword();
+    const hashedPassword = await bcrypt.hash(tempPassword, 12);
+    const tempPasswordExpiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000);
+
+    const created = await this.userModel.create({
+      name: dto.name,
+      email: dto.email,
+      mobile: dto.mobile,
+      designation: dto.designation,
+      role: Role.MoHUA,
+      xviFcSubrole,
+      createdBy: new Types.ObjectId(String(requester._id)),
+      status: 'APPROVED',
+      isXVIFCProfileVerified: false,
+      isEmailVerified: true,
+      isActive: true,
+      isDeleted: false,
+      isLocked: false,
+      loginAttempts: 0,
+      password: hashedPassword,
+      isNewUser: true,
+      tempPasswordExpiresAt,
+    });
+
+    await this.queueMohuaInviteEmail(dto, requester, tempPassword);
+    return this.toMohuaMemberDto(created, dto);
+  }
+
+  private async queueMohuaInviteEmail(
+    dto: InviteMohuaMemberDto,
+    requester: AuthUser,
+    tempPassword?: string,
+  ): Promise<void> {
+    const loginUrl = `${this.configService.get<string>('CLIENT_URL', 'https://cityfinance.in')}/xvifc`;
+    this.emailQueueService
+      .addEmailJob({
+        to: dto.email,
+        subject: 'You have been invited to the XVI Finance Commission Portal (MoHUA)',
+        templateName: './mohua-member-invite',
+        mailData: {
+          name: dto.name,
+          email: dto.email,
+          mobile: dto.mobile,
+          role: dto.subRole === 'EDITOR' ? 'Editor' : 'Viewer',
+          invitedBy: String(requester['name'] ?? 'MoHUA Submitter'),
+          loginUrl,
+          tempPassword: tempPassword ?? null,
+        },
+      })
+      .catch(() => {
+        // Email failure must never roll back user creation
+      });
+  }
+
+  private toMohuaMemberDto(user: { _id: unknown }, dto: InviteMohuaMemberDto): StateMemberResponseDto {
+    return {
+      _id: String(user._id),
+      name: dto.name,
+      mobile: dto.mobile,
+      email: dto.email,
+      designation: dto.designation,
+      subRole: dto.subRole,
+      isActive: true,
+      isXVIFCProfileVerified: false,
+      lastActive: null,
+    };
+  }
+
+  async updateMohuaMemberSubrole(
+    targetUserId: string,
+    dto: UpdateXviFcSubroleDto,
+    requester: AuthUser,
+  ): Promise<{ message: string }> {
+    if (!Types.ObjectId.isValid(targetUserId)) throw new BadRequestException('Invalid user ID');
+
+    if ((requester.role as string) !== Role.MoHUA || requester.xviFcSubrole !== 'admin') {
+      throw new ForbiddenException('Only the MoHUA Submitter can change member roles');
+    }
+
+    const targetUser = await this.userModel
+      .findOne({ _id: targetUserId, isDeleted: false })
+      .select('role xviFcSubrole')
+      .lean()
+      .exec();
+
+    if (!targetUser) throw new NotFoundException('User not found');
+    if ((targetUser.role as string) !== Role.MoHUA) {
+      throw new BadRequestException('Sub-role updates are only supported for MoHUA users');
+    }
+    if (targetUser.xviFcSubrole === 'admin') {
+      throw new BadRequestException(
+        "Cannot change the Submitter's role via this endpoint. Use transfer ownership instead.",
+      );
+    }
+
+    const newSubrole = UsersService.DISPLAY_TO_XVIFC_SUBROLE[dto.subRole];
+    await this.userModel.findByIdAndUpdate(targetUserId, { $set: { xviFcSubrole: newSubrole } }).exec();
+
+    return { message: 'Sub-role updated successfully' };
+  }
+
+  async transferMohuaSubmitter(dto: TransferSubmitterDto, requester: AuthUser): Promise<{ message: string }> {
+    if (!Types.ObjectId.isValid(dto.toUserId)) throw new BadRequestException('Invalid toUserId');
+
+    if ((requester.role as string) !== Role.MoHUA || requester.xviFcSubrole !== 'admin') {
+      throw new ForbiddenException('Only the MoHUA Submitter can transfer ownership');
+    }
+
+    const newOwner = await this.userModel
+      .findOne({ _id: dto.toUserId, isDeleted: false })
+      .select('role xviFcSubrole isXVIFCProfileVerified')
+      .lean()
+      .exec();
+
+    if (!newOwner) throw new NotFoundException('Target user not found');
+    if ((newOwner.role as string) !== Role.MoHUA) {
+      throw new BadRequestException('Target must be a MoHUA user');
+    }
+    if (newOwner.xviFcSubrole === 'admin') {
+      throw new BadRequestException('Target is already the MoHUA Submitter');
+    }
+    if (!(newOwner as Record<string, unknown>)['isXVIFCProfileVerified']) {
+      throw new BadRequestException(
+        'Ownership can only be transferred to an active member who has completed profile verification',
+      );
+    }
+
+    await this.userModel.findByIdAndUpdate(dto.toUserId, { $set: { xviFcSubrole: 'admin' } }).exec();
+
+    try {
+      await this.userModel.findByIdAndUpdate(requester._id, { $set: { xviFcSubrole: 'reviewer' } }).exec();
+    } catch (err) {
+      await this.userModel.findByIdAndUpdate(dto.toUserId, { $set: { xviFcSubrole: newOwner.xviFcSubrole } }).exec();
+      throw err;
+    }
+
+    return { message: 'Ownership transferred successfully. You are now an Editor.' };
+  }
+
+  async softDeleteMohuaMember(targetUserId: string, requester: AuthUser): Promise<{ message: string }> {
+    if (!Types.ObjectId.isValid(targetUserId)) throw new BadRequestException('Invalid user ID');
+
+    if ((requester.role as string) !== Role.MoHUA || requester.xviFcSubrole !== 'admin') {
+      throw new ForbiddenException('Only the MoHUA Submitter can remove members');
+    }
+
+    if (targetUserId === String(requester._id)) {
+      throw new BadRequestException('You cannot remove yourself from the team');
+    }
+
+    const targetUser = await this.userModel
+      .findOne({ _id: targetUserId, isDeleted: false })
+      .select('role xviFcSubrole email')
+      .lean()
+      .exec();
+
+    if (!targetUser) throw new NotFoundException('User not found');
+    if ((targetUser.role as string) !== Role.MoHUA) {
+      throw new BadRequestException('Can only remove MoHUA team members');
+    }
+    if (targetUser.xviFcSubrole === 'admin') {
+      throw new BadRequestException('Cannot remove the Submitter. Transfer ownership first.');
+    }
+
+    const originalEmail = targetUser.email ?? null;
+    const tombstonedEmail = originalEmail ? `__deleted__${Date.now()}__${originalEmail}` : undefined;
+
+    await this.userModel
+      .findByIdAndUpdate(targetUserId, {
+        $set: {
+          isDeleted: true,
+          ...(tombstonedEmail && { email: tombstonedEmail }),
+          ...(originalEmail && { originalEmail }),
+        },
+      })
+      .exec();
+
+    return { message: 'Member removed successfully' };
+  }
+
+  /** Patch role + xviFcSubrole on the two existing core MoHUA accounts. ADMIN scope only. */
+  async patchMohuaCoreSubroles(requester: AuthUser): Promise<{ updated: string[]; notFound: string[] }> {
+    if (requester.scope !== Scope.ADMIN) {
+      throw new ForbiddenException('Only platform admins can patch core MoHUA sub-roles');
+    }
+
+    const targets: Array<{ email: string; xviFcSubrole: 'admin' | 'reviewer' }> = [
+      { email: 'mohua@cityfinance.in', xviFcSubrole: 'admin' },
+      { email: 'gsdhillon.ofb@ofb.gov.in', xviFcSubrole: 'reviewer' },
+    ];
+
+    const updated: string[] = [];
+    const notFound: string[] = [];
+
+    for (const target of targets) {
+      const result = await this.userModel
+        .findOneAndUpdate(
+          { email: target.email, isDeleted: false },
+          { $set: { role: Role.MoHUA, xviFcSubrole: target.xviFcSubrole } },
+        )
+        .lean()
+        .exec();
+
+      if (result) {
+        updated.push(target.email);
+      } else {
+        notFound.push(target.email);
+      }
+    }
+
+    return { updated, notFound };
+  }
+
+  getMohuaPermissionMatrix(): PermissionMatrixRow[] {
+    return MOHUA_MATRIX;
   }
 
   /**

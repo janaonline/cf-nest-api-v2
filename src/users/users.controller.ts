@@ -18,6 +18,7 @@ import { UpdateProfileContactsDto } from './dto/update-profile-contacts.dto';
 import { ProfileContactsResponseDto } from './dto/profile-contacts-response.dto';
 import { CreateManagedUserDto } from './dto/create-managed-user.dto';
 import { InviteStateMemberDto } from './dto/invite-state-member.dto';
+import { InviteMohuaMemberDto } from './dto/invite-mohua-member.dto';
 import { UpdatePermissionOverridesDto } from './dto/update-permission-overrides.dto';
 import { UpdateUserRoleDto } from './dto/update-user-role.dto';
 import { StateMemberResponseDto } from './dto/state-member-response.dto';
@@ -97,11 +98,56 @@ export class UsersController {
   }
 
   @ApiBearerAuth()
+  @Get('mohua-permission-matrix')
+  @ApiOperation({ summary: 'Get permission matrix rows for the MoHUA scope' })
+  getMohuaPermissionMatrix() {
+    return this.usersService.getMohuaPermissionMatrix();
+  }
+
+  @ApiBearerAuth()
   @Get('mohua-members')
   @ApiOperation({ summary: 'List all MoHUA team members' })
   @ApiOkResponse({ type: [StateMemberResponseDto] })
   getMohuaMembers(): Promise<StateMemberResponseDto[]> {
     return this.usersService.getMohuaMembers();
+  }
+
+  @ApiBearerAuth()
+  @Post('patch-mohua-core-subroles')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Patch role + xviFcSubrole on the two core MoHUA accounts (admin only)' })
+  patchMohuaCoreSubroles(@CurrentUser() user: AuthUser) {
+    return this.usersService.patchMohuaCoreSubroles(user);
+  }
+
+  @ApiBearerAuth()
+  @Post('invite-mohua-member')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Invite a new MoHUA member (editor or viewer) to the MoHUA team' })
+  @ApiOkResponse({ type: StateMemberResponseDto })
+  inviteMohuaMember(@Body() dto: InviteMohuaMemberDto, @CurrentUser() user: AuthUser): Promise<StateMemberResponseDto> {
+    return this.usersService.inviteMohuaMember(dto, user);
+  }
+
+  @ApiBearerAuth()
+  @Post('mohua-members/transfer-submitter')
+  @ApiOperation({ summary: 'Transfer MoHUA Submitter role to an editor or viewer in the MoHUA team' })
+  transferMohuaSubmitter(@Body() dto: TransferSubmitterDto, @CurrentUser() user: AuthUser) {
+    return this.usersService.transferMohuaSubmitter(dto, user);
+  }
+
+  @ApiBearerAuth()
+  @Patch('mohua-members/:id/sub-role')
+  @ApiOperation({ summary: 'Update xviFcSubrole for a MoHUA user (EDITOR → reviewer, VIEWER → viewer)' })
+  updateMohuaMemberSubrole(@Param('id') id: string, @Body() dto: UpdateXviFcSubroleDto, @CurrentUser() user: AuthUser) {
+    return this.usersService.updateMohuaMemberSubrole(id, dto, user);
+  }
+
+  @ApiBearerAuth()
+  @Delete('mohua-members/:id')
+  @ApiOperation({ summary: 'Remove a MoHUA team member (Submitter only; cannot remove self or other Submitter)' })
+  softDeleteMohuaMember(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.usersService.softDeleteMohuaMember(id, user);
   }
 
   @ApiBearerAuth()
