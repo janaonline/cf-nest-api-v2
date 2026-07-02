@@ -184,7 +184,11 @@ export class AuthController {
   @ApiOperation({ summary: 'Set a new permanent password (called during first-login onboarding flow)' })
   @ApiResponse({ status: 200, description: 'Password updated successfully' })
   setNewPassword(@CurrentUser() user: { _id: string }, @Body() dto: SetNewPasswordDto) {
-    return this.authService.setNewPassword(user._id, dto.newPassword, dto.saveToken);
+    return this.authService.setNewPassword(user._id, dto.newPassword, dto.saveToken, {
+      name: dto.name,
+      mobile: dto.mobile,
+      designation: dto.designation,
+    });
   }
 
   @Public()
