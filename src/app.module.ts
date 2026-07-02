@@ -59,7 +59,7 @@ function getQueryCaller(): string {
         if (!redisUrl) throw new Error('REDIS_URL missing');
         return {
           connection: { url: redisUrl }, // supports redis:// and rediss://
-          prefix: 'appq', // optional key prefix
+          prefix: cfg.get<string>('BULL_QUEUE_PREFIX') ?? 'appq',
         };
       },
     }),
