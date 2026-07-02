@@ -28,13 +28,16 @@ export class Ulb {
   @Prop({ required: true, unique: true, index: true })
   code: string;
 
-  @Prop({ required: true })
+  @Prop({ required: true, unique: true, index: true })
   name: string;
 
   @Prop({ unique: true, index: true })
   slug: string;
 
-  @Prop({ default: null })
+  // No `default: null` — a sparse unique index only excludes documents where the
+  // field is entirely absent; an explicit `null` still counts as a value and would
+  // collide across every ULB missing a census code.
+  @Prop({ unique: true, sparse: true, index: true })
   censusCode: string;
 
   @Prop({ default: null })

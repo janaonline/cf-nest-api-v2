@@ -5,7 +5,9 @@
       "Bash(npx tsc *)",
       "Bash(npx jest *)",
       "Bash(node -e \"const b = require\\('bcrypt'\\); console.log\\(Object.getOwnPropertyDescriptor\\(b, 'compare'\\)?.configurable\\)\")",
-      "Bash(dir \"e:\\\\Cityfinance\\\\cf-nest-api-v2\\\\src\\\\module\\\\auth\\\\strategies\")"
+      "Bash(dir \"e:\\\\Cityfinance\\\\cf-nest-api-v2\\\\src\\\\module\\\\auth\\\\strategies\")",
+      "Bash(npm run *)",
+      "Bash(npx eslint *)"
     ]
   }
 }
