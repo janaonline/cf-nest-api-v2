@@ -18,6 +18,7 @@
   - Sidebar/menu APIs.
   - Year/support-info APIs.
   - ULB annual account upload/read APIs.
+  - ULB XVI-FC bank account form APIs.
   - State SFC Status form APIs (save draft, get, final submit, questions).
 - Upcoming/backend pending area:
   - Remaining state-level forms (Requirements, Elected Body Status, Devolution Formula).
@@ -34,6 +35,7 @@
   - Handles state-level/read APIs.
 - Nested sub-modules:
   - `ulb/annual_accounts` — ULB annual account upload/read.
+  - `ulb/bank-account` — ULB XVI-FC PFMS bank account read/submit + proof signed-url wrapper.
   - `state/sfc-status` — State SFC Status form CRUD + final submit.
   - `side-menu/` — Admin CRUD for side menu items (DB-driven).
 - Cache layer:
@@ -42,6 +44,7 @@
 - Shared schemas:
   - Located outside module under `src/schemas/xvi-fc/`.
   - State form schemas under `src/schemas/xvi-fc/state/`.
+  - ULB form schemas under `src/schemas/xvi-fc/ulb/`.
   - `src/schemas/xvi-fc/xvi-fc-side-menu.schema.ts` — side menu items schema.
 - Auth/RBAC:
   - No local guards/decorators inside `xvi-fc`.
@@ -81,6 +84,8 @@
 - Current active route usage:
   - Read/status/sidebar APIs use `VIEW_STATUS_REPORTS`.
   - Annual account POST/GET currently use `UPLOAD_DOCUMENTS`.
+  - Bank account GET uses `VIEW_STATUS_REPORTS`.
+  - Bank account submit and proof signed-url use `UPLOAD_DOCUMENTS`.
   - SFC Status GET and questions use `VIEW_STATE_FORMS`.
   - SFC Status save draft uses `EDIT_STATE_FORMS`.
   - SFC Status final submit uses `FINAL_SUBMIT_STATE_FORMS`.
@@ -201,6 +206,194 @@ All write operations (create/bulk-create/update/toggle/delete) invalidate the Re
 - `GET /xvi-fc/annual-account/:id/documents/:uploadId/signed-url`
   - Permission: `UPLOAD_DOCUMENTS`
   - Returns a pre-signed S3 URL for file preview.
+
+### XVI-FC Bank Account APIs
+
+Module path:
+
+- `src/module/xvi-fc/ulb/bank-account/`
+
+Schema:
+
+- Path: `src/schemas/xvi-fc/ulb/xvi-fc-bank-account.schema.ts`
+- Collection: `xvi_fc_bank_accounts`
+- Unique index: `{ ulb: 1, designYear: 1 }`
+
+Routes:
+
+- `GET /xvi-fc/bank-account?yearId={designYearId}&ulbId={ulbId}`
+  - Permission: `Permission.VIEW_STATUS_REPORTS`
+  - Returns the safe bank-account response or `null`.
+  - `ulbId` may be omitted by ULB-scope users; service resolves it from the authenticated user.
+
+- `POST /xvi-fc/bank-account`
+  - Permission: `Permission.UPLOAD_DOCUMENTS`
+  - Upserts by `{ ulb, designYear }`.
+  - Final ULB submit transition: `FORM_STATUS.UNDER_REVIEW_BY_STATE`.
+  - Stores `submittedBy` and `submittedAt`.
+
+- `POST /xvi-fc/bank-account/proof/signed-url`
+  - Permission: `Permission.UPLOAD_DOCUMENTS`
+  - Generates a bank-account-proof S3 PUT signed URL using the server-side XVI-FC folder resolver.
+
+Scope rules:
+
+- `ULB` / `ULB_EDITOR`
+  - Can read and submit only own ULB.
+  - Can generate proof signed URL only for own ULB.
+- `ULB_VIEWER`
+  - Can read own ULB when effective permissions allow.
+  - Cannot submit.
+  - Cannot generate proof signed URL.
+- `STATE` / `STATE_EDITOR` / `STATE_VIEWER`
+  - Can read only ULBs belonging to own state when read is enabled.
+  - Cannot submit bank-account form.
+  - Cannot generate proof signed URL.
+- `ADMIN`
+  - Can read, submit, and generate proof signed URL for an explicit requested ULB.
+- Unsupported scope
+  - Rejected.
+
+POST request payload:
+
+```ts
+{
+  ulbId: string;
+  designYearId: string;
+  ifscCode: string;
+  accountNumber: string;
+  confirmAccountNumber: string;
+  bankDetails: {
+    name: string;
+    branch: string;
+    address: string;
+    city: string;
+    state?: string;
+    micr: string | null;
+  };
+  proof: {
+    fileName: string;
+    fileUrl: string;
+    fileSize: number | null;
+    mimeType: string;
+  };
+}
+```
+
+Proof object rule:
+
+- Use only SFC-style file objects:
+
+```ts
+{
+  fileName: string;
+  fileUrl: string;
+  fileSize: number | null;
+  mimeType: string;
+}
+```
+
+- Do not use `filepath`, `originalName`, or `sizeKb`.
+- `fileUrl` is the uploaded S3 URL.
+
+Proof signed-url flow:
+
+- Endpoint: `POST /xvi-fc/bank-account/proof/signed-url`
+- Folder key: `XVI_FC_BANK_ACCOUNT_PROOF`
+- Final folder pattern: `xvi-fc/ulb/{ulbId}/{designYearId}/bank-account/proof`
+- Allowed MIME types:
+  - `application/pdf`
+  - `image/jpeg`
+  - `image/png`
+- Max file size: `5 * 1024 * 1024` bytes.
+
+Status handling:
+
+- Do not use or document `formStatus: 'SUBMITTED'` for this form.
+- Use `currentFormStatus: FormStatusType`.
+- No bank-account record in GET/form-status: `FORM_STATUS.NOT_STARTED`.
+- POST submit transition: `FORM_STATUS.UNDER_REVIEW_BY_STATE`.
+
+Sensitive account-number handling:
+
+- Stored fields:
+  - `accountNumberEncrypted`
+  - `accountNumberHash`
+  - `accountNumberMasked`
+  - `accountNumberLast4`
+- Returned fields:
+  - `accountNumberMasked`
+  - `accountNumberLast4`
+- Never returned:
+  - `accountNumber`
+  - `confirmAccountNumber`
+  - `accountNumberEncrypted`
+  - `accountNumberHash`
+- Never store the raw account number directly.
+
+Security helper file:
+
+- `src/module/xvi-fc/ulb/bank-account/utils/bank-account-security.util.ts`
+- Helpers:
+  - `encryptAccountNumber`
+  - `decryptAccountNumber`
+  - `hashAccountNumber`
+  - `maskAccountNumber`
+  - `getAccountNumberLast4`
+  - `buildSafeBankAccountResponse`
+- Required env vars:
+  - `BANK_ACCOUNT_ENCRYPTION_KEY`
+  - `BANK_ACCOUNT_HASH_SECRET`
+
+Form-status integration:
+
+- Existing route: `GET /xvi-fc/form-status/:ulbId/:designYearId`
+- Added block:
+
+```ts
+xviFcBankAccount: {
+  currentFormStatus: FormStatusType;
+  currentFormStatusLabel: string;
+  form_status_id: null;
+}
+```
+
+- No bank-account record: `FORM_STATUS.NOT_STARTED`.
+- Existing bank-account record: `record.currentFormStatus`.
+- `currentFormStatusLabel` comes from the shared form-status label helper.
+- No string-only `SUBMITTED` status is returned for bank account.
+
+IFSC verification status:
+
+- Angular performs IFSC lookup through the backend proxy route `GET /xvi-fc/bank-account/ifsc/:ifscCode`.
+- The backend proxy calls Razorpay server-side to avoid browser CORS/preflight failures.
+- Bank-account submit still includes an explicit `verifyIfscCode()` placeholder.
+- TODO: wire backend verification to the approved internal IFSC master or Razorpay backend verification source.
+- Do not treat full submit-time backend IFSC verification as complete yet.
+
+Tests added/updated:
+
+- Backend:
+  - `src/module/xvi-fc/ulb/bank-account/bank-account.service.spec.ts`
+  - `src/module/xvi-fc/ulb/bank-account/utils/bank-account-security.util.spec.ts`
+  - `src/module/xvi-fc/common/folder-paths/xvi-fc-folder-path.resolver.spec.ts`
+  - `src/module/xvi-fc/xvi-fc.service.spec.ts`
+  - `src/module/xvi-fc/ulb/bank-account/dto/submit-xvi-fc-bank-account.dto.spec.ts`
+- Frontend:
+  - `xvi-fc-bank-account.service.spec.ts`
+  - `xvi-fc-bank-account.component.spec.ts`
+
+Known test limitations:
+
+- Backend full `npm run test` is blocked by unrelated existing failing suites:
+  - `users.service.spec.ts`
+  - `otp.service.spec.ts`
+  - `auth.controller.spec.ts`
+  - annual-account specs
+- Frontend `npm run test` is blocked by unrelated existing auth specs:
+  - `forgot-password.component.spec.ts`
+  - `login.component.spec.ts`
+- Targeted bank-account/backend-related tests passed during Phase 10.
 
 ### SFC Status APIs
 
@@ -1281,6 +1474,7 @@ Safe replace order enforced in `validateExcel` (`POST validate-excel`):
 | `SFC_GAZETTE_NOTIFICATION`   | `sfc-status/gazette-notification`     |
 | `EULB_EXCEL`                 | `elected-body/elected-bodies-list`    |
 | `EULB_POST_SUBMISSION_PROOF` | `elected-body/post-submission-update` |
+| `XVI_FC_BANK_ACCOUNT_PROOF`  | `bank-account/proof`                  |
 
 **Modified files**:
 
@@ -1308,3 +1502,65 @@ Example: `xvi-fc/state/5dcf9d7416a06aed41c748f0/2026-27/sfc-status/sfc-report`
 **Resolution is single-pass**: folded into the existing `hydrateQuestions` file-field branch — no extra loop over the field array.
 
 **S3 upload security note**: Full xvi-fc prefix whitelisting (`xvi-fc/{role}/` only) is deferred — `POST /s3/signed-url` is shared across modules. Current validation covers path traversal only. Prefix enforcement can be added once all module upload paths are audited.
+
+---
+
+### XVI-FC Bank Account API
+
+**New module**:
+
+- `src/module/xvi-fc/ulb/bank-account/`
+- Registers controller, service, DTOs, types, proof signed-url wrapper, and security helpers.
+
+**New schema**:
+
+- `src/schemas/xvi-fc/ulb/xvi-fc-bank-account.schema.ts`
+- Collection: `xvi_fc_bank_accounts`
+- Unique index: `{ ulb: 1, designYear: 1 }`
+
+**New routes**:
+
+- `GET /xvi-fc/bank-account?yearId={designYearId}&ulbId={ulbId}` — `Permission.VIEW_STATUS_REPORTS`
+- `POST /xvi-fc/bank-account` — `Permission.UPLOAD_DOCUMENTS`
+- `POST /xvi-fc/bank-account/proof/signed-url` — `Permission.UPLOAD_DOCUMENTS`
+
+**Signed-url wrapper**:
+
+- Uses folder key `XVI_FC_BANK_ACCOUNT_PROOF`.
+- Final folder: `xvi-fc/ulb/{ulbId}/{designYearId}/bank-account/proof`.
+- Allows PDF, JPEG, PNG up to 5 MB.
+
+**Proof object convention**:
+
+- Uses SFC-style proof object only: `{ fileName, fileUrl, fileSize, mimeType }`.
+- Does not use `filepath`, `originalName`, or `sizeKb`.
+
+**Status and form-status integration**:
+
+- POST submit transitions to `FORM_STATUS.UNDER_REVIEW_BY_STATE`.
+- GET/form-status no-record default is `FORM_STATUS.NOT_STARTED`.
+- `GET /xvi-fc/form-status/:ulbId/:designYearId` now includes `xviFcBankAccount`.
+- No `formStatus: 'SUBMITTED'` is used for bank account.
+
+**Security helpers**:
+
+- `src/module/xvi-fc/ulb/bank-account/utils/bank-account-security.util.ts`
+- Encrypts, hashes, masks, extracts last 4 digits, and builds safe responses.
+- Requires `BANK_ACCOUNT_ENCRYPTION_KEY` and `BANK_ACCOUNT_HASH_SECRET`.
+- Safe responses exclude raw account number, confirmation number, encrypted value, and hash.
+
+**Frontend integration**:
+
+- Angular standalone form at `src/app/features/xvi-fc-module/ulb-module/ulb-forms/xvi-fc-bank-account/`.
+- Loads existing record, displays masked account number only, uploads proof via signed URL, submits metadata only, and gates editing by `currentFormStatus`.
+
+**Tests added/updated**:
+
+- Backend: `bank-account.service.spec.ts`, `bank-account-security.util.spec.ts`, `xvi-fc-folder-path.resolver.spec.ts`, `xvi-fc.service.spec.ts`, `submit-xvi-fc-bank-account.dto.spec.ts`.
+- Frontend: `xvi-fc-bank-account.service.spec.ts`, `xvi-fc-bank-account.component.spec.ts`.
+
+**Known TODO / blockers**:
+
+- Backend IFSC verification is still a placeholder; wire to internal IFSC master or Razorpay backend verification when approved.
+- Backend full `npm run test` is blocked by unrelated existing failures in `users.service.spec.ts`, `otp.service.spec.ts`, `auth.controller.spec.ts`, and annual-account specs.
+- Frontend `npm run test` is blocked by unrelated existing auth spec failures in `forgot-password.component.spec.ts` and `login.component.spec.ts`.

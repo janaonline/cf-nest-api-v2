@@ -3,6 +3,7 @@ import { ForbiddenException, Injectable, NotFoundException, BadRequestException 
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 
+import { FORM_STATUS, getFormStatusLabel, type FormStatusType } from 'src/common/constants/form-status.constants';
 import { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { toObjectIdString } from 'src/users/user-scope.helpers';
@@ -17,6 +18,10 @@ import {
   XviFcUnspentBalanceDisclosure,
   XviFcUnspentBalanceDisclosureDocument,
 } from '../../schemas/xvi-fc/unspent-balance-disclosure.schema';
+import {
+  XviFcBankAccount,
+  XviFcBankAccountDocument,
+} from '../../schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
 import { StateWiseResponseDto } from './dto/state-wise-response.dto';
 import { buildGetStateWiseDataPipeline } from './queries/get-state-wise-data.query';
 import { SideMenuItemDto, SideMenuResponseDto } from './dto/side-menu.dto';
@@ -44,6 +49,8 @@ export class XviFcService {
     private readonly annualAccountModel: Model<XviFcAnnualAccountDocument>,
     @InjectModel(XviFcUnspentBalanceDisclosure.name)
     private readonly disclosureModel: Model<XviFcUnspentBalanceDisclosureDocument>,
+    @InjectModel(XviFcBankAccount.name)
+    private readonly bankAccountModel: Model<XviFcBankAccountDocument>,
     private readonly cache: XviFcCacheService,
     private readonly formJsonService: FormJsonService,
   ) {}
@@ -172,7 +179,7 @@ export class XviFcService {
     const ulb = new Types.ObjectId(ulbId);
     const designYear = new Types.ObjectId(designYearId);
 
-    const [annualAccount, disclosure] = await Promise.all([
+    const [annualAccount, disclosure, bankAccount] = await Promise.all([
       this.annualAccountModel
         .findOne({ ulb, design_year: designYear })
         .select(
@@ -181,6 +188,7 @@ export class XviFcService {
         .lean()
         .exec(),
       this.disclosureModel.findOne({ ulb, designYear }).select('formStatus').lean().exec(),
+      this.bankAccountModel.findOne({ ulb, designYear }).select('currentFormStatus').lean().exec(),
     ]);
 
     const sectionStatus = (section: Record<string, unknown> | undefined | null) => ({
@@ -189,6 +197,9 @@ export class XviFcService {
     });
 
     const isSubmitted = (disclosure as Record<string, unknown> | null)?.['formStatus'] === 'SUBMITTED';
+    const bankAccountStatus =
+      ((bankAccount as Record<string, unknown> | null)?.['currentFormStatus'] as FormStatusType | undefined) ??
+      FORM_STATUS.NOT_STARTED;
 
     return {
       annualAccountId: (annualAccount as Record<string, unknown> | null)?.['_id']?.toString() ?? null,
@@ -200,6 +211,11 @@ export class XviFcService {
       ),
       unspentBalanceDisclosure: {
         form_status: isSubmitted ? 'SUBMITTED' : 'NOT_STARTED',
+        form_status_id: null,
+      },
+      xviFcBankAccount: {
+        currentFormStatus: bankAccountStatus,
+        currentFormStatusLabel: getFormStatusLabel(bankAccountStatus),
         form_status_id: null,
       },
     };
