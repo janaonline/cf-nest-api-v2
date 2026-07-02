@@ -2,15 +2,8 @@
 // roles for xvi financial commission module
 export enum UserRole {
   ULB = 'ULB',
-  ULB_EDITOR = 'ULB-EDITOR',
-  ULB_VIEWER = 'ULB-VIEWER',
-
   STATE = 'STATE',
-  STATE_EDITOR = 'STATE-EDITOR',
-  STATE_VIEWER = 'STATE-VIEWER',
-
   MoHUA = 'MoHUA',
-
   ADMIN = 'ADMIN',
 }
 

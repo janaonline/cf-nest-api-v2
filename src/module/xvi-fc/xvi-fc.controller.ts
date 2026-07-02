@@ -1,4 +1,4 @@
-import { Controller, Delete, Get, Param, Query, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Controller, Delete, Get, Param, ParseIntPipe, Query, UseGuards, UseInterceptors } from '@nestjs/common';
 import { ApiQuery } from '@nestjs/swagger';
 
 import { XviFcService } from './xvi-fc.service';
@@ -84,46 +84,30 @@ export class XviFcController {
   }
 
   @ApiBearerAuth()
-  @ApiOperation({
-    summary: 'Clear XVI-FC cache (Admin only)',
-    description:
-      'Clears cached data from Redis.\n\n' +
-      '**XVI-FC page cache**: Pass `pattern` (URL pattern, e.g. `/xvi-fc/sidebar/*`) or omit to clear all XVI-FC cache.\n\n' +
-      '**FormJson config cache**: Pass `scope=formJson&designYearId=<id>&formId=<30|31>` to clear a specific formJson cache entry.',
-  })
-  @ApiQuery({
-    name: 'pattern',
-    required: false,
-    description: 'URL pattern to clear, e.g. /xvi-fc/sidebar/*. Omit to clear all XVI-FC cache.',
-  })
-  @ApiQuery({
-    name: 'scope',
-    required: false,
-    enum: ['formJson'],
-    description: 'Set to "formJson" to clear a FormJson config cache entry.',
-  })
-  @ApiQuery({
-    name: 'designYearId',
-    required: false,
-    description: 'MongoDB ObjectId of the design year (required when scope=formJson).',
-  })
-  @ApiQuery({
-    name: 'formId',
-    required: false,
-    description: 'Form ID (30 = audited, 31 = provisional; required when scope=formJson).',
-  })
+  @ApiOperation({ summary: 'Clear XVI-FC page cache (Admin only)' })
+  @ApiQuery({ name: 'pattern', required: false, description: 'Redis key pattern, e.g. /xvi-fc/sidebar/*. Omit to clear all XVI-FC cache.' })
   @ApiResponse({ status: 200, description: 'Cache cleared successfully' })
   @ApiResponse({ status: 403, description: 'Forbidden — admin scope required' })
   @Delete('admin/cache')
   @UseGuards(PermissionGuard)
-  // @RequirePermissions(Permission.MANAGE_USERS)
-  clearCache(
+  clearPageCache(
     @CurrentUser() user: AuthUser,
     @Query('pattern') pattern?: string,
-    @Query('scope') scope?: string,
-    @Query('designYearId') designYearId?: string,
-    @Query('formId') formId?: string,
   ): Promise<{ message: string }> {
-    return this.xviFcService.clearCacheAdmin({ user, pattern, scope, designYearId, formId });
+    return this.xviFcService.clearPageCache(user, pattern);
+  }
+
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Clear FormJson config cache entry (Admin only)' })
+  @ApiResponse({ status: 200, description: 'Cache cleared successfully' })
+  @ApiResponse({ status: 403, description: 'Forbidden — admin scope required' })
+  @Delete('admin/cache/form-json/:designYearId/:formId')
+  @UseGuards(PermissionGuard)
+  clearFormJsonCache(
+    @CurrentUser() user: AuthUser,
+    @Param('designYearId') designYearId: string,
+    @Param('formId', ParseIntPipe) formId: number,
+  ): Promise<{ message: string }> {
+    return this.xviFcService.clearFormJsonCache(user, designYearId, formId);
   }
 }

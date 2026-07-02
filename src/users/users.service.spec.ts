@@ -18,8 +18,6 @@ import {
   makeStateAdmin,
   makeStateEditor,
   makeStateViewer,
-  makeCreateUlbEditorDto,
-  makeCreateStateEditorDto,
   makeOverridesDto,
   makeUserDoc,
   ULB_ID,
@@ -55,128 +53,6 @@ describe('UsersService', () => {
   });
 
   afterEach(() => jest.clearAllMocks());
-
-  // ─── createManagedUser() ───────────────────────────────────────────────
-
-  describe('createManagedUser()', () => {
-
-    describe('ULB admin creating users', () => {
-      const creator = makeUlbAdmin();
-
-      it('creates ULB-EDITOR in the same ULB', async () => {
-        const dto = makeCreateUlbEditorDto();
-        const doc = makeUserDoc({ role: Role.ULB_EDITOR });
-
-        mockUserModel.exists.mockResolvedValue(null);
-        mockUserModel.create.mockResolvedValue(doc);
-
-        const result = await service.createManagedUser(dto as any, creator);
-        expect(result).toBeDefined();
-        expect(mockUserModel.create).toHaveBeenCalledTimes(1);
-      });
-
-      it('creates ULB-VIEWER in the same ULB', async () => {
-        const dto = makeCreateUlbEditorDto({ role: Role.ULB_VIEWER, mobile: '9000000099' });
-        const doc = makeUserDoc({ role: Role.ULB_VIEWER });
-
-        mockUserModel.exists.mockResolvedValue(null);
-        mockUserModel.create.mockResolvedValue(doc);
-
-        await expect(service.createManagedUser(dto as any, creator)).resolves.toBeDefined();
-      });
-
-      it('throws 403 when trying to create another ULB admin (ULB role)', async () => {
-        const dto = makeCreateUlbEditorDto({ role: Role.ULB });
-        await expect(service.createManagedUser(dto as any, creator))
-          .rejects.toThrow(ForbiddenException);
-      });
-
-      it('throws 403 when trying to create a STATE-EDITOR (wrong scope)', async () => {
-        const dto = makeCreateUlbEditorDto({ role: Role.STATE_EDITOR });
-        await expect(service.createManagedUser(dto as any, creator))
-          .rejects.toThrow(ForbiddenException);
-      });
-
-      it('throws 403 when dto.ulbId does not match admin ULB', async () => {
-        const dto = makeCreateUlbEditorDto({ ulbId: ULB_ID_2 });
-        await expect(service.createManagedUser(dto as any, creator))
-          .rejects.toThrow(ForbiddenException);
-      });
-
-      it('allows dto.ulbId that matches admin ULB (frontend hint)', async () => {
-        const dto = makeCreateUlbEditorDto({ ulbId: ULB_ID });
-        const doc = makeUserDoc();
-
-        mockUserModel.exists.mockResolvedValue(null);
-        mockUserModel.create.mockResolvedValue(doc);
-
-        await expect(service.createManagedUser(dto as any, creator)).resolves.toBeDefined();
-      });
-
-      it('throws 400 when mobile already registered', async () => {
-        const dto = makeCreateUlbEditorDto();
-        mockUserModel.exists.mockResolvedValue({ _id: new Types.ObjectId() });
-
-        await expect(service.createManagedUser(dto as any, creator))
-          .rejects.toThrow(BadRequestException);
-      });
-    });
-
-    describe('STATE admin creating users', () => {
-      const creator = makeStateAdmin();
-
-      it('creates STATE-EDITOR in the same state', async () => {
-        const dto = makeCreateStateEditorDto();
-        const doc = makeUserDoc({ role: Role.STATE_EDITOR, ulb: undefined });
-
-        mockUserModel.exists.mockResolvedValue(null);
-        mockUserModel.create.mockResolvedValue(doc);
-
-        await expect(service.createManagedUser(dto as any, creator)).resolves.toBeDefined();
-      });
-
-      it('creates STATE-VIEWER in the same state', async () => {
-        const dto = makeCreateStateEditorDto({ role: Role.STATE_VIEWER, mobile: '9000000099' });
-        const doc = makeUserDoc({ role: Role.STATE_VIEWER, ulb: undefined });
-
-        mockUserModel.exists.mockResolvedValue(null);
-        mockUserModel.create.mockResolvedValue(doc);
-
-        await expect(service.createManagedUser(dto as any, creator)).resolves.toBeDefined();
-      });
-
-      it('throws 403 when trying to create another STATE admin (STATE role)', async () => {
-        const dto = makeCreateStateEditorDto({ role: Role.STATE });
-        await expect(service.createManagedUser(dto as any, creator))
-          .rejects.toThrow(ForbiddenException);
-      });
-
-      it('throws 403 when dto.stateId does not match admin state', async () => {
-        const dto = makeCreateStateEditorDto({ stateId: STATE_ID_2 });
-        await expect(service.createManagedUser(dto as any, creator))
-          .rejects.toThrow(ForbiddenException);
-      });
-
-      it('throws 403 when dto contains ulbId (STATE admin should not assign ULB)', async () => {
-        const dto = makeCreateStateEditorDto({ ulbId: ULB_ID });
-        await expect(service.createManagedUser(dto as any, creator))
-          .rejects.toThrow(ForbiddenException);
-      });
-    });
-
-    describe('non-admin roles cannot create users', () => {
-      it.each([
-        ['ULB-EDITOR',   makeUlbEditor()],
-        ['ULB-VIEWER',   makeUlbViewer()],
-        ['STATE-EDITOR', makeStateEditor()],
-        ['STATE-VIEWER', makeStateViewer()],
-      ])('throws 403 for %s', async (_label, creator) => {
-        const dto = makeCreateUlbEditorDto();
-        await expect(service.createManagedUser(dto as any, creator))
-          .rejects.toThrow(ForbiddenException);
-      });
-    });
-  });
 
   // ─── updatePermissionOverrides() ───────────────────────────────────────
 

@@ -21,7 +21,6 @@ import { Role } from 'src/module/auth/enum/role.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
 import { UpdateProfileContactsDto } from './dto/update-profile-contacts.dto';
 import { ProfileContactsResponseDto } from './dto/profile-contacts-response.dto';
-import { CreateManagedUserDto } from './dto/create-managed-user.dto';
 import { InviteStateMemberDto } from './dto/invite-state-member.dto';
 import { InviteMohuaMemberDto } from './dto/invite-mohua-member.dto';
 import { UpdatePermissionOverridesDto } from './dto/update-permission-overrides.dto';
@@ -177,32 +176,6 @@ export class UsersService {
   async create(data: Partial<User>): Promise<User> {
     const user = new this.userModel(data);
     return user.save();
-  }
-
-  async createManagedUser(dto: CreateManagedUserDto, creator: AuthUser): Promise<Record<string, unknown>> {
-    const mobileExists = await this.userModel.exists({ mobile: dto.mobile, isDeleted: false });
-    if (mobileExists) {
-      throw new BadRequestException('Mobile number already registered');
-    }
-
-    const createPayload: Record<string, unknown> = {
-      name: dto.name,
-      username: dto.username,
-      ...(dto.email && { email: dto.email }),
-      mobile: dto.mobile,
-      role: dto.role,
-      designation: dto.designation ?? '',
-      status: dto.status ?? 'PENDING',
-      password: 'UNSET',
-      isActive: false,
-      isXVIFCProfileVerified: false,
-    };
-
-    const user = await this.userModel.create(createPayload);
-    const obj = user.toObject() as unknown as Record<string, unknown>;
-    delete obj.password;
-    delete obj.refreshTokenHash;
-    return obj;
   }
 
   async inviteStateMember(dto: InviteStateMemberDto, requester: AuthUser): Promise<StateMemberResponseDto> {

@@ -16,7 +16,6 @@ import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateProfileContactsDto } from './dto/update-profile-contacts.dto';
 import { ProfileContactsResponseDto } from './dto/profile-contacts-response.dto';
-import { CreateManagedUserDto } from './dto/create-managed-user.dto';
 import { InviteStateMemberDto } from './dto/invite-state-member.dto';
 import { InviteMohuaMemberDto } from './dto/invite-mohua-member.dto';
 import { UpdatePermissionOverridesDto } from './dto/update-permission-overrides.dto';
@@ -38,14 +37,6 @@ export class UsersController {
   @Post()
   create(@Body() createUserDto: CreateUserDto) {
     return this.usersService.create(createUserDto);
-  }
-
-  @ApiBearerAuth()
-  @Post('create-user')
-  @UseGuards(JwtAuthGuard, PermissionGuard)
-  // @RequirePermissions(Permission.CREATE_MANAGED_USER)
-  createManagedUser(@Body() dto: CreateManagedUserDto, @CurrentUser() user: AuthUser) {
-    return this.usersService.createManagedUser(dto, user);
   }
 
   @ApiBearerAuth()
