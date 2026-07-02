@@ -1,14 +1,16 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ParseObjectIdPipe } from 'src/common/pipes/parse-object-id.pipe';
+import { CurrentUser } from 'src/module/auth/decorators/current-user.decorator';
 import { Roles } from 'src/module/auth/decorators/roles.decorator';
 import { RolesGuard } from 'src/module/auth/guards/roles.guard';
 import { Role } from 'src/module/auth/enum/role.enum';
+import type { IAuthUser } from 'src/common/interfaces/auth-user.interface';
 import { CreateUlbDto } from './dto/create-ulb.dto';
 import { QueryUlbDto } from './dto/query-ulb.dto';
+import { RejectUlbDto } from './dto/reject-ulb.dto';
 import { UpdateUlbDto } from './dto/update-ulb.dto';
 import { UlbService } from './ulb.service';
-import { Public } from 'src/module/auth/decorators/public.decorator';
 
 @ApiTags('Master - ULB')
 @ApiBearerAuth()
@@ -17,18 +19,29 @@ import { Public } from 'src/module/auth/decorators/public.decorator';
 export class UlbController {
   constructor(private readonly ulbService: UlbService) {}
 
-  @Public()
   @Post()
-  // @Roles([Role.ADMIN])
-  @ApiOperation({ summary: 'Create a ULB (ADMIN only). Fields validated against the ULB_MASTER form-json config.' })
-  create(@Body() createUlbDto: CreateUlbDto) {
-    return this.ulbService.create(createUlbDto);
+  @Roles([Role.ADMIN, Role.STATE])
+  @ApiOperation({
+    summary:
+      'Create a ULB (ADMIN or STATE). ADMIN submissions are auto-approved; STATE submissions are scoped to ' +
+      "the requester's own state and start PENDING until an ADMIN approves them.",
+  })
+  create(@Body() createUlbDto: CreateUlbDto, @CurrentUser() user: IAuthUser) {
+    return this.ulbService.create(createUlbDto, user);
   }
 
   @Get()
-  @ApiOperation({ summary: 'List ULBs with search, filters, and pagination' })
-  findAll(@Query() query: QueryUlbDto) {
-    return this.ulbService.findAll(query);
+  @ApiOperation({
+    summary: 'List ULBs with search, filters, and pagination. STATE users are always scoped to their own state.',
+  })
+  findAll(@Query() query: QueryUlbDto, @CurrentUser() user: IAuthUser) {
+    return this.ulbService.findAll(query, user);
+  }
+
+  @Get('types')
+  @ApiOperation({ summary: 'List ULB types (id + name) for populating a ULB Type select' })
+  findTypes() {
+    return this.ulbService.findTypes();
   }
 
   @Get(':id')
@@ -42,6 +55,20 @@ export class UlbController {
   @ApiOperation({ summary: 'Update a ULB (ADMIN only). Only provided fields are validated and updated.' })
   update(@Param('id', ParseObjectIdPipe) id: string, @Body() updateUlbDto: UpdateUlbDto) {
     return this.ulbService.update(id, updateUlbDto);
+  }
+
+  @Patch(':id/approve')
+  @Roles([Role.ADMIN])
+  @ApiOperation({ summary: 'Approve a PENDING ULB submission (ADMIN only).' })
+  approve(@Param('id', ParseObjectIdPipe) id: string, @CurrentUser() user: IAuthUser) {
+    return this.ulbService.approve(id, user);
+  }
+
+  @Patch(':id/reject')
+  @Roles([Role.ADMIN])
+  @ApiOperation({ summary: 'Reject a PENDING ULB submission (ADMIN only).' })
+  reject(@Param('id', ParseObjectIdPipe) id: string, @Body() dto: RejectUlbDto, @CurrentUser() user: IAuthUser) {
+    return this.ulbService.reject(id, dto, user);
   }
 
   @Delete(':id')

@@ -1,7 +1,9 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { MongoServerError } from 'mongodb';
 import { FilterQuery, Model, Types } from 'mongoose';
+import type { IAuthUser } from 'src/common/interfaces/auth-user.interface';
+import { Role } from 'src/module/auth/enum/role.enum';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
 import type { XviFcValidationErrorMap } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import type { FieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
@@ -10,6 +12,7 @@ import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { DEFAULT_ULB_FIELDS, ULB_FORM_JSON_TYPE } from './constants/ulb-form.constants';
 import { CreateUlbDto } from './dto/create-ulb.dto';
 import { QueryUlbDto } from './dto/query-ulb.dto';
+import { RejectUlbDto } from './dto/reject-ulb.dto';
 import { UpdateUlbDto } from './dto/update-ulb.dto';
 
 const OBJECT_ID_FIELDS = new Set(['state', 'ulbType', 'UA']);
@@ -63,7 +66,20 @@ export class UlbService {
     return `A ULB with this ${fields.join(', ')} already exists.`;
   }
 
-  async create(dto: CreateUlbDto): Promise<Ulb> {
+  /**
+   * Fills in a default `approval` block for documents created before this field existed.
+   * `.lean()` reads bypass Mongoose's schema-default application, so legacy ULBs come back
+   * with `approval: undefined` — treat them as pre-approved master data.
+   */
+  private withApprovalDefaults<T extends Ulb>(ulb: T): T {
+    if (ulb.approval) return ulb;
+    return {
+      ...ulb,
+      approval: { status: 'APPROVED', submittedBy: null, reviewedBy: null, reviewedAt: null, rejectReason: '' },
+    };
+  }
+
+  async create(dto: CreateUlbDto, user: IAuthUser): Promise<Ulb> {
     const fields = await this.loadFields();
     const { isValid, errors, sanitizedPayload } = this.dynamicFormValidation.validateFinalSubmitAndBuildPayload(
       fields,
@@ -74,6 +90,16 @@ export class UlbService {
     const patch = this.toMongoPatch(sanitizedPayload);
     const name = String(patch.name);
     patch.slug = this.buildSlug(name);
+
+    if (user.role === Role.STATE) {
+      // A STATE user can only submit ULBs for their own state; the submitted state (if any) is ignored.
+      if (!user.state) throw new ForbiddenException('Your account has no state assigned.');
+      patch.state = new Types.ObjectId(String(user.state));
+      patch.approval = { status: 'PENDING', submittedBy: new Types.ObjectId(user._id) };
+    } else {
+      // ADMIN (or other privileged callers) create pre-approved master records.
+      patch.approval = { status: 'APPROVED', reviewedBy: new Types.ObjectId(user._id), reviewedAt: new Date() };
+    }
 
     try {
       const created = await this.ulbModel.create(patch);
@@ -88,7 +114,10 @@ export class UlbService {
     }
   }
 
-  async findAll(query: QueryUlbDto): Promise<{
+  async findAll(
+    query: QueryUlbDto,
+    user: IAuthUser,
+  ): Promise<{
     data: Ulb[];
     page: number;
     limit: number;
@@ -101,8 +130,16 @@ export class UlbService {
 
     const filter: FilterQuery<UlbDocument> = {};
     if (query.isActive !== undefined) filter.isActive = query.isActive;
-    if (query.state) filter.state = new Types.ObjectId(query.state);
+    if (query.approvalStatus) filter['approval.status'] = query.approvalStatus;
     if (query.ulbType) filter.ulbType = new Types.ObjectId(query.ulbType);
+
+    if (user.role === Role.STATE) {
+      // STATE users only ever see ULBs (of any approval status) that belong to their own state.
+      if (!user.state) throw new ForbiddenException('Your account has no state assigned.');
+      filter.state = new Types.ObjectId(String(user.state));
+    } else if (query.state) {
+      filter.state = new Types.ObjectId(query.state);
+    }
 
     const search = query.search?.trim();
     if (search) {
@@ -123,14 +160,20 @@ export class UlbService {
       this.ulbModel.countDocuments(filter),
     ]);
 
-    return { data, page, limit, total, pages: Math.ceil(total / limit) };
+    return {
+      data: data.map((ulb) => this.withApprovalDefaults(ulb)),
+      page,
+      limit,
+      total,
+      pages: Math.ceil(total / limit),
+    };
   }
 
   async findOne(id: string): Promise<Ulb> {
     if (!Types.ObjectId.isValid(id)) throw new BadRequestException('Invalid ULB id');
     const ulb = await this.ulbModel.findById(id).lean<Ulb>();
     if (!ulb) throw new NotFoundException('ULB not found');
-    return ulb;
+    return this.withApprovalDefaults(ulb);
   }
 
   async update(id: string, dto: UpdateUlbDto): Promise<Ulb> {
@@ -155,7 +198,7 @@ export class UlbService {
         .findByIdAndUpdate(id, { $set: patch }, { new: true, runValidators: true })
         .lean<Ulb>();
       if (!updated) throw new NotFoundException('ULB not found');
-      return updated;
+      return this.withApprovalDefaults(updated);
     } catch (error: unknown) {
       if (error instanceof MongoServerError && error.code === 11000) {
         throw new BadRequestException(this.duplicateKeyMessage(error));
@@ -169,5 +212,61 @@ export class UlbService {
     const deactivated = await this.ulbModel.findByIdAndUpdate(id, { $set: { isActive: false } }).lean();
     if (!deactivated) throw new NotFoundException('ULB not found');
     return { message: 'ULB deactivated successfully' };
+  }
+
+  /** Approves a PENDING ULB submission (ADMIN only — enforced by RolesGuard at the controller). */
+  async approve(id: string, user: IAuthUser): Promise<Ulb> {
+    if (!Types.ObjectId.isValid(id)) throw new BadRequestException('Invalid ULB id');
+
+    const updated = await this.ulbModel
+      .findByIdAndUpdate(
+        id,
+        {
+          $set: {
+            'approval.status': 'APPROVED',
+            'approval.reviewedBy': new Types.ObjectId(user._id),
+            'approval.reviewedAt': new Date(),
+            'approval.rejectReason': '',
+          },
+        },
+        { new: true },
+      )
+      .lean<Ulb>();
+    if (!updated) throw new NotFoundException('ULB not found');
+    return updated;
+  }
+
+  /** Rejects a PENDING ULB submission (ADMIN only — enforced by RolesGuard at the controller). */
+  async reject(id: string, dto: RejectUlbDto, user: IAuthUser): Promise<Ulb> {
+    if (!Types.ObjectId.isValid(id)) throw new BadRequestException('Invalid ULB id');
+
+    const updated = await this.ulbModel
+      .findByIdAndUpdate(
+        id,
+        {
+          $set: {
+            'approval.status': 'REJECTED',
+            'approval.reviewedBy': new Types.ObjectId(user._id),
+            'approval.reviewedAt': new Date(),
+            'approval.rejectReason': dto.reason,
+          },
+        },
+        { new: true },
+      )
+      .lean<Ulb>();
+    if (!updated) throw new NotFoundException('ULB not found');
+    return updated;
+  }
+
+  /**
+   * Lists ULB types for populating a select. `ulbtypes` has no Mongoose model in this codebase
+   * (see UsersService.getProfileContacts) — queried directly via the raw collection.
+   */
+  async findTypes(): Promise<{ _id: Types.ObjectId; name: string }[]> {
+    return this.ulbModel.db
+      .collection('ulbtypes')
+      .find({}, { projection: { name: 1 } })
+      .sort({ name: 1 })
+      .toArray() as unknown as Promise<{ _id: Types.ObjectId; name: string }[]>;
   }
 }

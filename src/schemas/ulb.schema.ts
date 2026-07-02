@@ -23,6 +23,28 @@ export class DulyElected {
 
 export const DulyElectedSchema = SchemaFactory.createForClass(DulyElected);
 
+@Schema({ _id: false })
+export class Approval {
+  // ULBs created by ADMIN are auto-approved (service sets 'APPROVED' at create time).
+  // ULBs created by a STATE user start 'PENDING' until an ADMIN approves/rejects them.
+  @Prop({ type: String, enum: ['PENDING', 'APPROVED', 'REJECTED'], default: 'APPROVED', index: true })
+  status: 'PENDING' | 'APPROVED' | 'REJECTED';
+
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  submittedBy: Types.ObjectId | null;
+
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  reviewedBy: Types.ObjectId | null;
+
+  @Prop({ type: Date, default: null })
+  reviewedAt: Date | null;
+
+  @Prop({ default: '' })
+  rejectReason: string;
+}
+
+export const ApprovalSchema = SchemaFactory.createForClass(Approval);
+
 @Schema({ timestamps: { createdAt: 'createdAt', updatedAt: 'modifiedAt' } })
 export class Ulb {
   @Prop({ required: true, unique: true, index: true })
@@ -139,6 +161,10 @@ export class Ulb {
   @Prop({ default: '' })
   regionalName: string;
 
+  // ── Approval workflow ──────────────────────────────────────────────────────
+  @Prop({ type: ApprovalSchema, default: () => ({}) })
+  approval: Approval;
+
   @Prop({
     type: {
       '2023-24': GSDPEligibilitySchema,
@@ -165,3 +191,4 @@ export type UlbDocument = Ulb & Document;
 export const UlbSchema = SchemaFactory.createForClass(Ulb);
 
 UlbSchema.index({ state: 1, isActive: 1 });
+UlbSchema.index({ state: 1, 'approval.status': 1 });

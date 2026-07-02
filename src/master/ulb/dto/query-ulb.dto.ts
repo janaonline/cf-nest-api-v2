@@ -24,6 +24,14 @@ export class QueryUlbDto {
   @IsBoolean()
   isActive?: boolean;
 
+  @ApiPropertyOptional({
+    description:
+      'Filter by approval status. STATE users are always scoped to PENDING+APPROVED+REJECTED within their own state.',
+  })
+  @IsOptional()
+  @IsIn(['PENDING', 'APPROVED', 'REJECTED'])
+  approvalStatus?: 'PENDING' | 'APPROVED' | 'REJECTED';
+
   @ApiPropertyOptional({ example: 'name' })
   @IsOptional()
   @IsIn(['name', 'code', 'createdAt'])

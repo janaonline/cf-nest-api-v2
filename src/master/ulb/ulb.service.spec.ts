@@ -1,9 +1,11 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { Types } from 'mongoose';
 import { FormJsonService } from 'src/form-json/form-json.service';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
+import type { IAuthUser } from 'src/common/interfaces/auth-user.interface';
+import { Role } from 'src/module/auth/enum/role.enum';
 import { Ulb } from 'src/schemas/ulb.schema';
 import { UlbService } from './ulb.service';
 
@@ -21,6 +23,16 @@ describe('UlbService', () => {
 
   const stateId = new Types.ObjectId().toString();
   const ulbTypeId = new Types.ObjectId().toString();
+
+  const adminUser: IAuthUser = {
+    _id: new Types.ObjectId().toString(),
+    role: Role.ADMIN,
+  };
+  const stateUser: IAuthUser = {
+    _id: new Types.ObjectId().toString(),
+    role: Role.STATE,
+    state: stateId,
+  };
 
   beforeEach(async () => {
     ulbModel = {
@@ -60,11 +72,11 @@ describe('UlbService', () => {
         sanitizedPayload: {},
       });
 
-      await expect(service.create({ data: {} })).rejects.toThrow(BadRequestException);
+      await expect(service.create({ data: {} }, adminUser)).rejects.toThrow(BadRequestException);
       expect(ulbModel.create).not.toHaveBeenCalled();
     });
 
-    it('creates a ULB with a generated slug and ObjectId-coerced refs', async () => {
+    it('auto-approves ULBs created by ADMIN', async () => {
       dynamicFormValidation.validateFinalSubmitAndBuildPayload.mockReturnValue({
         isValid: true,
         errors: {},
@@ -78,7 +90,7 @@ describe('UlbService', () => {
       const created = { toObject: () => ({ code: 'AP001', name: 'Vizianagaram Municipal Corporation' }) };
       ulbModel.create.mockResolvedValue(created);
 
-      const result = await service.create({ data: {} });
+      const result = await service.create({ data: {} }, adminUser);
 
       const [patch] = ulbModel.create.mock.calls[0] as [Record<string, unknown>];
       expect(patch.code).toBe('AP001');
@@ -86,7 +98,72 @@ describe('UlbService', () => {
       expect(patch.slug).toBe('vizianagaram-municipal-corporation');
       expect(patch.state).toBeInstanceOf(Types.ObjectId);
       expect(patch.ulbType).toBeInstanceOf(Types.ObjectId);
+      const approval = patch.approval as { status: string; reviewedBy: Types.ObjectId };
+      expect(approval.status).toBe('APPROVED');
+      expect(approval.reviewedBy).toBeInstanceOf(Types.ObjectId);
       expect(result).toEqual({ code: 'AP001', name: 'Vizianagaram Municipal Corporation' });
+    });
+
+    it('scopes STATE-submitted ULBs to the requester state and marks them PENDING', async () => {
+      const otherStateId = new Types.ObjectId().toString();
+      dynamicFormValidation.validateFinalSubmitAndBuildPayload.mockReturnValue({
+        isValid: true,
+        errors: {},
+        sanitizedPayload: {
+          code: 'AP002',
+          name: 'Vizag Municipal Corporation',
+          state: otherStateId,
+          ulbType: ulbTypeId,
+        },
+      });
+      const created = { toObject: () => ({ code: 'AP002' }) };
+      ulbModel.create.mockResolvedValue(created);
+
+      await service.create({ data: {} }, stateUser);
+
+      const [patch] = ulbModel.create.mock.calls[0] as [Record<string, unknown>];
+      expect((patch.state as Types.ObjectId).toString()).toBe(stateId);
+      const approval = patch.approval as { status: string; submittedBy: Types.ObjectId };
+      expect(approval.status).toBe('PENDING');
+      expect(approval.submittedBy).toBeInstanceOf(Types.ObjectId);
+    });
+
+    it('throws ForbiddenException when a STATE user has no state assigned', async () => {
+      dynamicFormValidation.validateFinalSubmitAndBuildPayload.mockReturnValue({
+        isValid: true,
+        errors: {},
+        sanitizedPayload: { code: 'AP003', name: 'No State ULB' },
+      });
+
+      await expect(service.create({ data: {} }, { ...stateUser, state: undefined })).rejects.toThrow(
+        ForbiddenException,
+      );
+      expect(ulbModel.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('findAll', () => {
+    it('forces the state filter for STATE users regardless of the query', async () => {
+      const find = jest.fn().mockReturnValue({
+        sort: jest.fn().mockReturnThis(),
+        skip: jest.fn().mockReturnThis(),
+        limit: jest.fn().mockReturnThis(),
+        lean: jest.fn().mockResolvedValue([]),
+      });
+      ulbModel.find = find;
+      ulbModel.countDocuments.mockResolvedValue(0);
+
+      const otherStateId = new Types.ObjectId().toString();
+      await service.findAll({ state: otherStateId, page: 1, limit: 10 }, stateUser);
+
+      const [filter] = find.mock.calls[0] as [{ state: Types.ObjectId }];
+      expect(filter.state.toString()).toBe(stateId);
+    });
+
+    it('throws ForbiddenException when a STATE user has no state assigned', async () => {
+      await expect(service.findAll({ page: 1, limit: 10 }, { ...stateUser, state: undefined })).rejects.toThrow(
+        ForbiddenException,
+      );
     });
   });
 
@@ -127,6 +204,42 @@ describe('UlbService', () => {
 
       expect(ulbModel.findByIdAndUpdate).toHaveBeenCalledWith(id, { $set: { isActive: false } });
       expect(result).toEqual({ message: 'ULB deactivated successfully' });
+    });
+  });
+
+  describe('approve', () => {
+    it('marks a ULB APPROVED and records the reviewer', async () => {
+      ulbModel.findByIdAndUpdate.mockReturnValue({
+        lean: jest.fn().mockResolvedValue({ _id: 'x', approval: { status: 'APPROVED' } }),
+      });
+      const id = new Types.ObjectId().toString();
+
+      const result = await service.approve(id, adminUser);
+
+      const [, updateArg] = ulbModel.findByIdAndUpdate.mock.calls[0] as [string, { $set: Record<string, unknown> }];
+      expect(updateArg.$set['approval.status']).toBe('APPROVED');
+      expect(updateArg.$set['approval.reviewedBy']).toBeInstanceOf(Types.ObjectId);
+      expect(result).toEqual({ _id: 'x', approval: { status: 'APPROVED' } });
+    });
+
+    it('throws NotFoundException when the ULB does not exist', async () => {
+      ulbModel.findByIdAndUpdate.mockReturnValue({ lean: jest.fn().mockResolvedValue(null) });
+      await expect(service.approve(new Types.ObjectId().toString(), adminUser)).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('reject', () => {
+    it('marks a ULB REJECTED with the given reason', async () => {
+      ulbModel.findByIdAndUpdate.mockReturnValue({
+        lean: jest.fn().mockResolvedValue({ _id: 'x', approval: { status: 'REJECTED' } }),
+      });
+      const id = new Types.ObjectId().toString();
+
+      await service.reject(id, { reason: 'Duplicate code' }, adminUser);
+
+      const [, updateArg] = ulbModel.findByIdAndUpdate.mock.calls[0] as [string, { $set: Record<string, unknown> }];
+      expect(updateArg.$set['approval.status']).toBe('REJECTED');
+      expect(updateArg.$set['approval.rejectReason']).toBe('Duplicate code');
     });
   });
 });
