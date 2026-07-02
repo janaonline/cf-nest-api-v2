@@ -1,11 +1,11 @@
-import { ForbiddenException, Injectable, InternalServerErrorException, NotFoundException } from '@nestjs/common';
+﻿import { ForbiddenException, Injectable, InternalServerErrorException, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model, Types } from 'mongoose';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
-import { toObjectIdString } from 'src/users/user-scope.helpers';
+import { toObjectIdString } from 'src/common/utils/objectid.util';
 import {
   POST_SUBMISSION_UPDATE_ALLOWED_STATUSES,
   assertCanViewPostSubmissionUpdate,

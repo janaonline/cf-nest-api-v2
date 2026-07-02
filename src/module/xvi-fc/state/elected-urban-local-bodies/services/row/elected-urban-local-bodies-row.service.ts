@@ -1,4 +1,4 @@
-import {
+﻿import {
   BadRequestException,
   ForbiddenException,
   Injectable,
@@ -11,7 +11,7 @@ import { FilterQuery, Model, Types } from 'mongoose';
 import { ExcelService, RowHeader } from 'src/services/excel/excel.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
-import { toObjectIdString } from 'src/users/user-scope.helpers';
+import { toObjectIdString } from 'src/common/utils/objectid.util';
 import { assertCanStateEditForm } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
 import {
   throwXviFcValidationErrorWithData,
