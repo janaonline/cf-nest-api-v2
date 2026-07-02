@@ -620,7 +620,7 @@ export class UsersService {
 
     const targetUser = await this.userModel
       .findOne({ _id: userId, isDeleted: false })
-      .select('ulb state')
+      .select('ulb state isNodalOfficer')
       .lean()
       .exec();
     if (!targetUser) throw new NotFoundException('User not found');
@@ -650,13 +650,21 @@ export class UsersService {
     }
     if (!Object.keys(update).length) throw new BadRequestException('No fields provided to update');
 
+    // When a STATE user verifies their profile, derive and stamp their own xviFcSubrole
+    // in the same write — assignXviFcSubrolesByState skips already-verified users so
+    // without this the verifying user's subrole would never be set.
+    const isStateProfileVerify =
+      isSelfUpdate && !isUlbScope && update['isXVIFCProfileVerified'] === true && targetUser.state;
+
+    if (isStateProfileVerify) {
+      update['xviFcSubrole'] = targetUser.isNodalOfficer ? 'admin' : 'reviewer';
+    }
+
     await this.userModel.findByIdAndUpdate(userId, { $set: update }).exec();
 
-    // ── NEW: after a state user's OTP-verified profile save, assign xviFcSubrole across the whole state
-    if (isSelfUpdate && !isUlbScope && update['isXVIFCProfileVerified'] === true && targetUser.state) {
-      await this.assignXviFcSubrolesByState(targetUser.state);
+    if (isStateProfileVerify) {
+      await this.assignXviFcSubrolesByState(targetUser.state!);
     }
-    // ── END NEW
 
     return { message: 'Profile contacts updated successfully', updatedFields: update };
   }
