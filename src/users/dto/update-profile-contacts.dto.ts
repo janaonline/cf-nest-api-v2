@@ -10,6 +10,7 @@ export class UpdateProfileContactsDto {
   name?: string;
 
   @ApiPropertyOptional({ example: 'np_mmiyana@yahoo.co.in' })
+  @Transform(({ value }) => (value === '' ? undefined : value))
   @IsOptional()
   @IsEmail()
   email?: string;
@@ -57,6 +58,7 @@ export class UpdateProfileContactsDto {
   departmentContactNumber?: string;
 
   @ApiPropertyOptional({ example: 'finance@ulb.gov.in' })
+  @Transform(({ value }) => (value === '' ? undefined : value))
   @IsOptional()
   @IsEmail()
   departmentEmail?: string;
@@ -68,6 +70,7 @@ export class UpdateProfileContactsDto {
   commissionerName?: string;
 
   @ApiPropertyOptional({ example: 'commissioner@ulb.gov.in' })
+  @Transform(({ value }) => (value === '' ? undefined : value))
   @IsOptional()
   @IsEmail()
   commissionerEmail?: string;
@@ -85,6 +88,7 @@ export class UpdateProfileContactsDto {
   accountantName?: string;
 
   @ApiPropertyOptional({ example: 'accounts@ulb.gov.in' })
+  @Transform(({ value }) => (value === '' ? undefined : value))
   @IsOptional()
   @IsEmail()
   accountantEmail?: string;

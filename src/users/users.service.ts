@@ -187,8 +187,12 @@ export class UsersService {
     const stateId = new Types.ObjectId(String(requester.state));
     const xviFcSubrole: 'reviewer' | 'viewer' = dto.subRole === 'EDITOR' ? 'reviewer' : 'viewer';
 
-    // Always guard against an active user first — applies to all action paths
-    const activeUser = await this.userModel.findOne({ email: dto.email, isDeleted: false }).select('_id').lean().exec();
+    // Guard: email belongs to a fully active XVI-FC member (not XVI-FC removed)
+    const activeUser = await this.userModel
+      .findOne({ email: dto.email, isDeleted: false, isXviFcdeleted: { $ne: true } })
+      .select('_id')
+      .lean()
+      .exec();
     if (activeUser) {
       throw new HttpException(
         { code: 'EMAIL_ALREADY_ACTIVE', message: 'Email address is already registered' },
@@ -197,20 +201,20 @@ export class UsersService {
     }
 
     if (action === 'invite') {
-      // Email is scrambled at delete time, so deleted records never hold the original email.
-      // Use originalEmail field to detect previously registered accounts.
-      const deletedUser = await this.userModel
-        .findOne({ originalEmail: dto.email, isDeleted: true })
+      // Check if this email belongs to a member that was XVI-FC removed (isXviFcdeleted: true).
+      // Email is never scrambled in the new flow, so we match directly on the email field.
+      const removedUser = await this.userModel
+        .findOne({ email: dto.email, isDeleted: false, isXviFcdeleted: true })
         .select('name designation')
         .lean()
         .exec();
 
-      if (deletedUser) {
+      if (removedUser) {
         throw new HttpException(
           {
-            code: 'EMAIL_PREVIOUSLY_REGISTERED',
-            message: `This email was previously registered under ${deletedUser.name}.`,
-            deletedUser: { name: deletedUser.name, designation: deletedUser.designation ?? '' },
+            code: 'EMAIL_XVIFC_REMOVED',
+            message: `This email belongs to ${removedUser.name} who was previously removed from the team.`,
+            removedUser: { name: removedUser.name, designation: removedUser.designation ?? '' },
           },
           HttpStatus.CONFLICT,
         );
@@ -220,10 +224,13 @@ export class UsersService {
     }
 
     if (action === 'restore') {
-      const toRestore = await this.userModel.findOne({ originalEmail: dto.email, isDeleted: true }).lean().exec();
+      const toRestore = await this.userModel
+        .findOne({ email: dto.email, isDeleted: false, isXviFcdeleted: true })
+        .lean()
+        .exec();
 
       if (!toRestore) {
-        // Race condition: already restored by another process — create fresh instead
+        // Already restored by another request — create fresh
         return this.createFreshStateMember(dto, stateId, xviFcSubrole, requester);
       }
 
@@ -231,28 +238,20 @@ export class UsersService {
       const hashedPassword = await bcrypt.hash(tempPassword, 12);
       const tempPasswordExpiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000);
 
-      // No updateMany needed — email was already scrambled individually at delete time
       const restored = await this.userModel
         .findByIdAndUpdate(
           toRestore._id,
           {
             $set: {
               name: dto.name,
-              email: dto.email,
               mobile: dto.mobile,
               designation: dto.designation,
-              role: Role.STATE,
               xviFcSubrole,
               state: stateId,
-              ulb: null,
-              originalEmail: null,
+              isXviFcdeleted: false,
               createdBy: new Types.ObjectId(String(requester._id)),
-              isDeleted: false,
               isActive: true,
-              status: 'APPROVED',
               isXVIFCProfileVerified: false,
-              isEmailVerified: true,
-              isRegistered: false,
               password: hashedPassword,
               isNewUser: true,
               tempPasswordExpiresAt,
@@ -268,16 +267,15 @@ export class UsersService {
 
       if (!restored) throw new NotFoundException('User to restore could not be found');
 
-      // Narrow race-condition guard: another active user with this email appeared during the restore window
+      // Race-condition guard: another active member with this email appeared during the restore window
       const raceConflict = await this.userModel.exists({
         email: dto.email,
         isDeleted: false,
+        isXviFcdeleted: { $ne: true },
         _id: { $ne: restored._id },
       });
       if (raceConflict) {
-        await this.userModel.findByIdAndUpdate(restored._id, {
-          $set: { isDeleted: true, email: `__deleted__${Date.now()}__${dto.email}`, originalEmail: dto.email },
-        });
+        await this.userModel.findByIdAndUpdate(restored._id, { $set: { isXviFcdeleted: true } });
         throw new HttpException(
           { code: 'EMAIL_ALREADY_ACTIVE', message: 'Email address is already registered' },
           HttpStatus.CONFLICT,
@@ -286,12 +284,6 @@ export class UsersService {
 
       await this.queueInviteEmail(dto, stateId, requester, tempPassword);
       return this.toStateMemberDto(restored, dto);
-    }
-
-    if (action === 'force-new') {
-      // Deleted records already have scrambled emails — email is free, create directly.
-      // No tombstone or re-check needed.
-      return this.createFreshStateMember(dto, stateId, xviFcSubrole, requester);
     }
 
     throw new BadRequestException('Invalid action');
@@ -464,7 +456,7 @@ export class UsersService {
     };
   }
 
-  async softDeleteUser(targetUserId: string, requester: AuthUser): Promise<{ message: string }> {
+  async softDeleteStateUser(targetUserId: string, requester: AuthUser): Promise<{ message: string }> {
     if (!Types.ObjectId.isValid(targetUserId)) throw new BadRequestException('Invalid user ID');
 
     const targetUser = await this.userModel
@@ -475,6 +467,22 @@ export class UsersService {
 
     if (!targetUser) throw new NotFoundException('User not found');
 
+    // STATE users are removed from the XVI-FC portal only — isDeleted is left unchanged
+    // so 15th FC data is not affected. Email is preserved so the user can be restored later.
+    if ((targetUser.role as string) === UserRole.STATE) {
+      if ((targetUser as Record<string, unknown>)['xviFcSubrole'] === 'admin') {
+        throw new BadRequestException('Cannot remove the Admin. Transfer ownership first.');
+      }
+      if (targetUserId === String(requester._id)) {
+        throw new BadRequestException('You cannot remove yourself from the team');
+      }
+      await this.userModel
+        .findByIdAndUpdate(targetUserId, { $set: { isXviFcdeleted: true } })
+        .exec();
+      return { message: 'Member removed from the XVI-FC portal' };
+    }
+
+    // Non-STATE users (ULB managed users etc.) — full hard soft-delete with tombstoning
     const originalEmail = targetUser.email ?? null;
     const tombstonedEmail = originalEmail ? `__deleted__${Date.now()}__${originalEmail}` : undefined;
 
@@ -720,6 +728,7 @@ export class UsersService {
         state: new Types.ObjectId(stateId),
         role: UserRole.STATE,
         isDeleted: false,
+        isXviFcdeleted: { $ne: true },
       })
       .select('_id name mobile email designation xviFcSubrole isActive isXVIFCProfileVerified lastLoginAt')
       .lean()
@@ -740,7 +749,7 @@ export class UsersService {
 
   async getMohuaMembers(): Promise<StateMemberResponseDto[]> {
     const users = await this.userModel
-      .find({ role: Role.MoHUA, isXviFcdeleted: false, isDeleted: false })
+      .find({ role: Role.MoHUA, isXviFcdeleted: { $ne: true }, isDeleted: false })
       .select('_id name mobile email designation xviFcSubrole isActive isXVIFCProfileVerified lastLoginAt')
       .lean()
       .exec();
@@ -762,7 +771,12 @@ export class UsersService {
     const action = dto.action ?? 'invite';
     const xviFcSubrole: 'reviewer' | 'viewer' = dto.subRole === 'EDITOR' ? 'reviewer' : 'viewer';
 
-    const activeUser = await this.userModel.findOne({ email: dto.email, isDeleted: false }).select('_id').lean().exec();
+    // Guard: email belongs to a fully active XVI-FC member (not XVI-FC removed)
+    const activeUser = await this.userModel
+      .findOne({ email: dto.email, isDeleted: false, isXviFcdeleted: { $ne: true } })
+      .select('_id')
+      .lean()
+      .exec();
     if (activeUser) {
       throw new HttpException(
         { code: 'EMAIL_ALREADY_ACTIVE', message: 'Email address is already registered' },
@@ -771,18 +785,18 @@ export class UsersService {
     }
 
     if (action === 'invite') {
-      const deletedUser = await this.userModel
-        .findOne({ originalEmail: dto.email, isDeleted: true })
+      const removedUser = await this.userModel
+        .findOne({ email: dto.email, isDeleted: false, isXviFcdeleted: true })
         .select('name designation')
         .lean()
         .exec();
 
-      if (deletedUser) {
+      if (removedUser) {
         throw new HttpException(
           {
-            code: 'EMAIL_PREVIOUSLY_REGISTERED',
-            message: `This email was previously registered under ${deletedUser.name}.`,
-            deletedUser: { name: deletedUser.name, designation: deletedUser.designation ?? '' },
+            code: 'EMAIL_XVIFC_REMOVED',
+            message: `This email belongs to ${removedUser.name} who was previously removed from the team.`,
+            removedUser: { name: removedUser.name, designation: removedUser.designation ?? '' },
           },
           HttpStatus.CONFLICT,
         );
@@ -792,9 +806,13 @@ export class UsersService {
     }
 
     if (action === 'restore') {
-      const toRestore = await this.userModel.findOne({ originalEmail: dto.email, isDeleted: true }).lean().exec();
+      const toRestore = await this.userModel
+        .findOne({ email: dto.email, isDeleted: false, isXviFcdeleted: true })
+        .lean()
+        .exec();
 
       if (!toRestore) {
+        // Already restored by another request — create fresh
         return this.createFreshMohuaMember(dto, xviFcSubrole, requester);
       }
 
@@ -808,18 +826,13 @@ export class UsersService {
           {
             $set: {
               name: dto.name,
-              email: dto.email,
               mobile: dto.mobile,
               designation: dto.designation,
-              role: Role.MoHUA,
               xviFcSubrole,
-              originalEmail: null,
+              isXviFcdeleted: false,
               createdBy: new Types.ObjectId(String(requester._id)),
-              isDeleted: false,
               isActive: true,
-              status: 'APPROVED',
               isXVIFCProfileVerified: false,
-              isEmailVerified: true,
               password: hashedPassword,
               isNewUser: true,
               tempPasswordExpiresAt,
@@ -835,15 +848,15 @@ export class UsersService {
 
       if (!restored) throw new NotFoundException('User to restore could not be found');
 
+      // Race-condition guard: another active member with this email appeared during the restore window
       const raceConflict = await this.userModel.exists({
         email: dto.email,
         isDeleted: false,
+        isXviFcdeleted: { $ne: true },
         _id: { $ne: restored._id },
       });
       if (raceConflict) {
-        await this.userModel.findByIdAndUpdate(restored._id, {
-          $set: { isDeleted: true, email: `__deleted__${Date.now()}__${dto.email}`, originalEmail: dto.email },
-        });
+        await this.userModel.findByIdAndUpdate(restored._id, { $set: { isXviFcdeleted: true } });
         throw new HttpException(
           { code: 'EMAIL_ALREADY_ACTIVE', message: 'Email address is already registered' },
           HttpStatus.CONFLICT,
@@ -852,10 +865,6 @@ export class UsersService {
 
       await this.queueMohuaInviteEmail(dto, requester, tempPassword);
       return this.toMohuaMemberDto(restored, dto);
-    }
-
-    if (action === 'force-new') {
-      return this.createFreshMohuaMember(dto, xviFcSubrole, requester);
     }
 
     throw new BadRequestException('Invalid action');
@@ -1030,17 +1039,8 @@ export class UsersService {
       throw new BadRequestException('Cannot remove the Submitter. Transfer ownership first.');
     }
 
-    const originalEmail = targetUser.email ?? null;
-    const tombstonedEmail = originalEmail ? `__deleted__${Date.now()}__${originalEmail}` : undefined;
-
     await this.userModel
-      .findByIdAndUpdate(targetUserId, {
-        $set: {
-          isDeleted: true,
-          ...(tombstonedEmail && { email: tombstonedEmail }),
-          ...(originalEmail && { originalEmail }),
-        },
-      })
+      .findByIdAndUpdate(targetUserId, { $set: { isXviFcdeleted: true } })
       .exec();
 
     return { message: 'Member removed successfully' };

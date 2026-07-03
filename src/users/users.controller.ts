@@ -206,8 +206,8 @@ export class UsersController {
   @Delete(':id')
   @UseGuards(PermissionGuard)
   // @RequirePermissions(Permission.DELETE_MANAGED_USER)
-  @ApiOperation({ summary: 'Soft-delete a managed user in the same ULB/state' })
-  softDeleteUser(@Param('id') id: string, @CurrentUser() user: AuthUser) {
-    return this.usersService.softDeleteUser(id, user);
+  @ApiOperation({ summary: 'Remove a STATE team member from the XVI-FC portal (sets isXviFcdeleted; does not touch isDeleted)' })
+  softDeleteStateUser(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.usersService.softDeleteStateUser(id, user);
   }
 }
