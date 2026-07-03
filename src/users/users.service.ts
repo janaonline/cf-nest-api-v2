@@ -740,7 +740,7 @@ export class UsersService {
 
   async getMohuaMembers(): Promise<StateMemberResponseDto[]> {
     const users = await this.userModel
-      .find({ role: Role.MoHUA, isXviFcdeleted: false })
+      .find({ role: Role.MoHUA, isXviFcdeleted: false, isDeleted: false })
       .select('_id name mobile email designation xviFcSubrole isActive isXVIFCProfileVerified lastLoginAt')
       .lean()
       .exec();
