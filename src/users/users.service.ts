@@ -918,7 +918,7 @@ export class UsersService {
           name: dto.name,
           email: dto.email,
           mobile: dto.mobile,
-          role: dto.subRole === 'EDITOR' ? 'Editor' : 'Viewer',
+          role: dto.subRole === 'EDITOR' ? 'Reviewer' : 'Viewer',
           invitedBy: String(requester['name'] ?? 'MoHUA Submitter'),
           loginUrl,
           tempPassword: tempPassword ?? null,
@@ -1099,7 +1099,7 @@ export class UsersService {
       )
       .populate({
         path: 'ulb',
-        select: 'name code censusCode population area wards ulbType state',
+        select: 'name code censusCode sbCode population area wards ulbType state',
         populate: { path: 'state', select: 'name' },
       })
       .lean()
@@ -1133,7 +1133,7 @@ export class UsersService {
       ? {
           stateName,
           ulbType: ulbTypeName,
-          censusCode: (ulb['censusCode'] as string) ?? '',
+          censusCode: ((ulb['censusCode'] as string) || (ulb['sbCode'] as string)) ?? '',
           ulbCode: (ulb['code'] as string) ?? '',
           area: (ulb['area'] as number) ?? 0,
           population: (ulb['population'] as number) ?? 0,

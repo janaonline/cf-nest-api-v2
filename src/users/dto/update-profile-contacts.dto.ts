@@ -70,10 +70,10 @@ export class UpdateProfileContactsDto {
   commissionerName?: string;
 
   @ApiPropertyOptional({ example: 'commissioner@ulb.gov.in' })
-  @Transform(({ value }) => (value === '' ? undefined : value))
+  @Transform(({ value }) => (value === '' ? null : value))
   @IsOptional()
   @IsEmail()
-  commissionerEmail?: string;
+  commissionerEmail?: string | null;
 
   @ApiPropertyOptional({ example: '9123456780' })
   @IsOptional()
