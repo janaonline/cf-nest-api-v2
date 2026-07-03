@@ -39,11 +39,11 @@ export class InviteStateMemberDto {
   subRole!: StateSubRoleDisplay;
 
   @ApiProperty({
-    enum: ['invite', 'restore', 'force-new'],
+    enum: ['invite', 'restore'],
     required: false,
-    description: 'invite (default) — normal flow; restore — reactivate soft-deleted user; force-new — tombstone deleted records and create fresh',
+    description: 'invite (default) — normal flow; restore — reactivate XVI-FC removed user',
   })
   @IsOptional()
-  @IsIn(['invite', 'restore', 'force-new'])
-  action?: 'invite' | 'restore' | 'force-new';
+  @IsIn(['invite', 'restore'])
+  action?: 'invite' | 'restore';
 }
