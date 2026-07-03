@@ -6,6 +6,7 @@ import { FormJsonService } from 'src/form-json/form-json.service';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
 import type { IAuthUser } from 'src/common/interfaces/auth-user.interface';
 import { Role } from 'src/module/auth/enum/role.enum';
+import { State } from 'src/schemas/state.schema';
 import { Ulb } from 'src/schemas/ulb.schema';
 import { UlbService } from './ulb.service';
 
@@ -17,7 +18,9 @@ describe('UlbService', () => {
     countDocuments: jest.Mock;
     findById: jest.Mock;
     findByIdAndUpdate: jest.Mock;
+    exists: jest.Mock;
   };
+  let stateModel: { findById: jest.Mock };
   let formJsonService: { findByType: jest.Mock };
   let dynamicFormValidation: { validateFinalSubmitAndBuildPayload: jest.Mock; validateDraftAndBuildPayload: jest.Mock };
 
@@ -41,7 +44,9 @@ describe('UlbService', () => {
       countDocuments: jest.fn(),
       findById: jest.fn(),
       findByIdAndUpdate: jest.fn(),
+      exists: jest.fn(),
     };
+    stateModel = { findById: jest.fn() };
     formJsonService = { findByType: jest.fn().mockRejectedValue(new NotFoundException()) };
     dynamicFormValidation = {
       validateFinalSubmitAndBuildPayload: jest.fn(),
@@ -52,6 +57,7 @@ describe('UlbService', () => {
       providers: [
         UlbService,
         { provide: getModelToken(Ulb.name), useValue: ulbModel },
+        { provide: getModelToken(State.name), useValue: stateModel },
         { provide: FormJsonService, useValue: formJsonService },
         { provide: DynamicFormValidationService, useValue: dynamicFormValidation },
       ],
@@ -139,6 +145,44 @@ describe('UlbService', () => {
         ForbiddenException,
       );
       expect(ulbModel.create).not.toHaveBeenCalled();
+    });
+
+    it('auto-generates a ULB code from the state when the submitted data omits one', async () => {
+      stateModel.findById.mockReturnValue({ lean: jest.fn().mockResolvedValue({ code: 'AP' }) });
+      ulbModel.countDocuments.mockResolvedValue(3);
+      ulbModel.exists.mockResolvedValue(null);
+      dynamicFormValidation.validateFinalSubmitAndBuildPayload.mockReturnValue({
+        isValid: true,
+        errors: {},
+        sanitizedPayload: { code: 'AP004', name: 'New ULB', state: stateId, ulbType: ulbTypeId },
+      });
+      const created = { toObject: () => ({ code: 'AP004' }) };
+      ulbModel.create.mockResolvedValue(created);
+
+      await service.create({ data: { name: 'New ULB', state: stateId, ulbType: ulbTypeId } }, stateUser);
+
+      expect(dynamicFormValidation.validateFinalSubmitAndBuildPayload).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ code: 'AP004' }),
+      );
+    });
+
+    it('does not override a code that was already submitted', async () => {
+      dynamicFormValidation.validateFinalSubmitAndBuildPayload.mockReturnValue({
+        isValid: true,
+        errors: {},
+        sanitizedPayload: { code: 'AP009', name: 'Existing Code ULB', state: stateId, ulbType: ulbTypeId },
+      });
+      const created = { toObject: () => ({ code: 'AP009' }) };
+      ulbModel.create.mockResolvedValue(created);
+
+      await service.create({ data: { code: 'AP009', name: 'Existing Code ULB', state: stateId } }, stateUser);
+
+      expect(stateModel.findById).not.toHaveBeenCalled();
+      expect(dynamicFormValidation.validateFinalSubmitAndBuildPayload).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ code: 'AP009' }),
+      );
     });
   });
 

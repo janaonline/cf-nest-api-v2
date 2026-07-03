@@ -125,6 +125,26 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
     formFieldType: 'text',
     validations: [],
   },
+  {
+    key: 'dateOfConstitution',
+    label: 'Date of Constitution',
+    formFieldType: 'date',
+    validations: [{ name: 'required', validator: null, message: 'Date of constitution is required.' }],
+  },
+  {
+    key: 'gazetteNotificationNumber',
+    label: 'Gazette Notification Number',
+    formFieldType: 'text',
+    validations: [{ name: 'maxlength', validator: 100, message: 'Must not exceed 100 characters.' }],
+  },
+  {
+    key: 'gazetteNotificationFile',
+    label: 'Gazette Notification',
+    formFieldType: 'file',
+    allowedFileTypes: ['pdf'],
+    maxFileSize: 5,
+    validations: [{ name: 'required', validator: null, message: 'Gazette notification PDF is required.' }],
+  },
 ];
 
 /** `data` keys that map directly onto typed fields on the `Ulb` mongoose schema. */

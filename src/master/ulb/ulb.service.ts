@@ -8,6 +8,7 @@ import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-f
 import type { XviFcValidationErrorMap } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import type { FieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
 import { FormJsonService } from 'src/form-json/form-json.service';
+import { State, StateDocument } from 'src/schemas/state.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { DEFAULT_ULB_FIELDS, ULB_FORM_JSON_TYPE } from './constants/ulb-form.constants';
 import { CreateUlbDto } from './dto/create-ulb.dto';
@@ -23,6 +24,7 @@ export class UlbService {
 
   constructor(
     @InjectModel(Ulb.name) private readonly ulbModel: Model<UlbDocument>,
+    @InjectModel(State.name) private readonly stateModel: Model<StateDocument>,
     private readonly formJsonService: FormJsonService,
     private readonly dynamicFormValidation: DynamicFormValidationService,
   ) {}
@@ -49,6 +51,21 @@ export class UlbService {
       patch[key] = OBJECT_ID_FIELDS.has(key) && typeof value === 'string' ? new Types.ObjectId(value) : value;
     }
     return patch;
+  }
+
+  /** Generates a `<STATE_CODE><sequence>` ULB code (e.g. "AP004"), retrying past any collisions. */
+  private async generateUlbCode(stateId: string): Promise<string> {
+    const state = await this.stateModel.findById(stateId).lean<{ code?: string }>();
+    const prefix = (state?.code || 'ULB').toUpperCase();
+    const existingCount = await this.ulbModel.countDocuments({ state: new Types.ObjectId(stateId) });
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const candidate = `${prefix}${String(existingCount + 1 + attempt).padStart(3, '0')}`;
+      const exists = await this.ulbModel.exists({ code: candidate });
+      if (!exists) return candidate;
+    }
+
+    return `${prefix}${Date.now()}`;
   }
 
   private buildSlug(name: string): string {
@@ -81,9 +98,17 @@ export class UlbService {
 
   async create(dto: CreateUlbDto, user: IAuthUser): Promise<Ulb> {
     const fields = await this.loadFields();
+    const data = { ...dto.data };
+
+    // The simplified Register-ULB page doesn't collect a code — generate one from the
+    // submitted state so `code` still satisfies the required field-config validation below.
+    if (!data.code && typeof data.state === 'string' && Types.ObjectId.isValid(data.state)) {
+      data.code = await this.generateUlbCode(data.state);
+    }
+
     const { isValid, errors, sanitizedPayload } = this.dynamicFormValidation.validateFinalSubmitAndBuildPayload(
       fields,
-      dto.data,
+      data,
     );
     if (!isValid) this.throwValidationError(errors);
 

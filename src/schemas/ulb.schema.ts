@@ -45,6 +45,26 @@ export class Approval {
 
 export const ApprovalSchema = SchemaFactory.createForClass(Approval);
 
+@Schema({ _id: false })
+export class GazetteNotificationFile {
+  @Prop({ type: String, default: '' })
+  fileName: string;
+
+  @Prop({ type: String, default: '' })
+  fileUrl: string;
+
+  @Prop({ type: Number, default: null })
+  fileSize: number | null;
+
+  @Prop({ type: String })
+  mimeType?: string;
+
+  @Prop({ type: Number, default: null })
+  noOfPage: number | null;
+}
+
+export const GazetteNotificationFileSchema = SchemaFactory.createForClass(GazetteNotificationFile);
+
 @Schema({ timestamps: { createdAt: 'createdAt', updatedAt: 'modifiedAt' } })
 export class Ulb {
   @Prop({ required: true, unique: true, index: true })
@@ -160,6 +180,16 @@ export class Ulb {
 
   @Prop({ default: '' })
   regionalName: string;
+
+  // ── Constitution & legal basis ─────────────────────────────────────────────
+  @Prop({ type: Date, default: null })
+  dateOfConstitution: Date | null;
+
+  @Prop({ default: '' })
+  gazetteNotificationNumber: string;
+
+  @Prop({ type: GazetteNotificationFileSchema, default: null })
+  gazetteNotificationFile: GazetteNotificationFile | null;
 
   // ── Approval workflow ──────────────────────────────────────────────────────
   @Prop({ type: ApprovalSchema, default: () => ({}) })
