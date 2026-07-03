@@ -164,7 +164,7 @@ export class User extends Document {
   // reviewer → all other state users in that state
   @Prop({ type: String, enum: ['admin', 'reviewer', 'viewer'], default: null, index: true })
   xviFcSubrole!: 'admin' | 'reviewer' | 'viewer' | null;
-  // ── END NEW
+  // ── END NEW test
 
   @Prop({ type: Boolean, default: false })
   isNewUser!: boolean;
