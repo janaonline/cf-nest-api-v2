@@ -476,9 +476,7 @@ export class UsersService {
       if (targetUserId === String(requester._id)) {
         throw new BadRequestException('You cannot remove yourself from the team');
       }
-      await this.userModel
-        .findByIdAndUpdate(targetUserId, { $set: { isXviFcdeleted: true } })
-        .exec();
+      await this.userModel.findByIdAndUpdate(targetUserId, { $set: { isXviFcdeleted: true } }).exec();
       return { message: 'Member removed from the XVI-FC portal' };
     }
 
@@ -499,25 +497,25 @@ export class UsersService {
     return { message: 'User deleted successfully' };
   }
 
-  async updateUserRole(
-    targetUserId: string,
-    dto: UpdateUserRoleDto,
-    requester: AuthUser,
-  ): Promise<{ message: string }> {
-    if (!Types.ObjectId.isValid(targetUserId)) throw new BadRequestException('Invalid user ID');
+  // async updateUserRole(
+  //   targetUserId: string,
+  //   dto: UpdateUserRoleDto,
+  //   requester: AuthUser,
+  // ): Promise<{ message: string }> {
+  //   if (!Types.ObjectId.isValid(targetUserId)) throw new BadRequestException('Invalid user ID');
 
-    const targetUser = await this.userModel
-      .findOne({ _id: targetUserId, isDeleted: false })
-      .select('role ulb state xviFcSubrole')
-      .lean()
-      .exec();
+  //   const targetUser = await this.userModel
+  //     .findOne({ _id: targetUserId, isDeleted: false })
+  //     .select('role ulb state xviFcSubrole')
+  //     .lean()
+  //     .exec();
 
-    if (!targetUser) throw new NotFoundException('User not found');
+  //   if (!targetUser) throw new NotFoundException('User not found');
 
-    await this.userModel.findByIdAndUpdate(targetUserId, { $set: { role: dto.role } }).exec();
+  //   await this.userModel.findByIdAndUpdate(targetUserId, { $set: { role: dto.role } }).exec();
 
-    return { message: 'User role updated successfully' };
-  }
+  //   return { message: 'User role updated successfully' };
+  // }
 
   // ── Maps frontend display values to DB xviFcSubrole values ────────────────
   private static readonly DISPLAY_TO_XVIFC_SUBROLE: Record<string, 'reviewer' | 'viewer'> = {
@@ -1039,9 +1037,7 @@ export class UsersService {
       throw new BadRequestException('Cannot remove the Submitter. Transfer ownership first.');
     }
 
-    await this.userModel
-      .findByIdAndUpdate(targetUserId, { $set: { isXviFcdeleted: true } })
-      .exec();
+    await this.userModel.findByIdAndUpdate(targetUserId, { $set: { isXviFcdeleted: true } }).exec();
 
     return { message: 'Member removed successfully' };
   }
