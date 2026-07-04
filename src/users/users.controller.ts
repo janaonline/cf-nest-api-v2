@@ -44,7 +44,7 @@ export class UsersController {
   @UseGuards(PermissionGuard)
   // @RequirePermissions(Permission.CREATE_MANAGED_USER)
   @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Invite a new STATE member (reviewer or viewer) to the requester\'s state team' })
+  @ApiOperation({ summary: "Invite a new STATE member (reviewer or viewer) to the requester's state team" })
   @ApiOkResponse({ type: StateMemberResponseDto })
   inviteStateMember(@Body() dto: InviteStateMemberDto, @CurrentUser() user: AuthUser): Promise<StateMemberResponseDto> {
     return this.usersService.inviteStateMember(dto, user);
@@ -193,21 +193,23 @@ export class UsersController {
     return this.usersService.updateXviFcSubrole(id, dto, user);
   }
 
-  @ApiBearerAuth()
-  @Patch(':id/role')
-  @UseGuards(PermissionGuard)
-  // @RequirePermissions(Permission.UPDATE_MANAGED_USER)
-  @ApiOperation({ summary: 'Update role of a managed user in the same ULB/state' })
-  updateUserRole(@Param('id') id: string, @Body() dto: UpdateUserRoleDto, @CurrentUser() user: AuthUser) {
-    return this.usersService.updateUserRole(id, dto, user);
-  }
+  // @ApiBearerAuth()
+  // @Patch(':id/role')
+  // @UseGuards(PermissionGuard)
+  // // @RequirePermissions(Permission.UPDATE_MANAGED_USER)
+  // @ApiOperation({ summary: 'Update role of a managed user in the same ULB/state' })
+  // updateUserRole(@Param('id') id: string, @Body() dto: UpdateUserRoleDto, @CurrentUser() user: AuthUser) {
+  //   return this.usersService.updateUserRole(id, dto, user);
+  // }
 
   @ApiBearerAuth()
   @Delete(':id')
   @UseGuards(PermissionGuard)
   // @RequirePermissions(Permission.DELETE_MANAGED_USER)
-  @ApiOperation({ summary: 'Soft-delete a managed user in the same ULB/state' })
-  softDeleteUser(@Param('id') id: string, @CurrentUser() user: AuthUser) {
-    return this.usersService.softDeleteUser(id, user);
+  @ApiOperation({
+    summary: 'Remove a STATE team member from the XVI-FC portal (sets isXviFcdeleted; does not touch isDeleted)',
+  })
+  softDeleteStateUser(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.usersService.softDeleteStateUser(id, user);
   }
 }
