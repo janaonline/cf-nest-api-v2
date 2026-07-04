@@ -22,6 +22,8 @@ import { DOC_TYPE_MAP } from './constants/doc-type-map.constant';
 import { UploadDocumentDto } from './dto/upload-document.dto';
 import type { AnnualAccountOcrJobData } from './dto/annual-account-ocr-job.dto';
 import type { AuthUser } from '../../../auth/auth-user.interface';
+import { Scope, Permission } from '../../../auth/enum/roles-xvi-fc.enum';
+import { getEffectivePermissions } from '../../../auth/permissions.map';
 import { ANNUAL_ACCOUNT_PROCESSING_QUEUE } from '../../../../core/constants/queues';
 
 @Injectable()
@@ -404,7 +406,7 @@ export class AnnualAccountsService implements OnModuleInit {
   async submitSection(id: string, section: 'auditedData' | 'unauditedData', user: AuthUser) {
     const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
     if (!doc) throw new NotFoundException('Annual account not found');
-    this.validateViewAccess(doc, user);
+    this.validateSubmitAccess(doc, user);
 
     const sectionData = (doc as any)[section];
     if (!sectionData?.documents?.length) {
@@ -597,6 +599,19 @@ export class AnnualAccountsService implements OnModuleInit {
       if (doc.ulb?.toString() !== user.ulb?.toString()) {
         throw new ForbiddenException('Access denied');
       }
+    }
+  }
+
+  private validateSubmitAccess(doc: any, user: AuthUser) {
+    if (user.scope !== Scope.ULB) {
+      throw new ForbiddenException('Only ULB users can submit annual accounts');
+    }
+    if (doc.ulb?.toString() !== user.ulb?.toString()) {
+      throw new ForbiddenException('Access denied');
+    }
+    const perms = getEffectivePermissions(user);
+    if (!perms.includes(Permission.FINAL_SUBMIT_TO_STATE_DMA)) {
+      throw new ForbiddenException('You do not have permission to submit annual accounts');
     }
   }
 
