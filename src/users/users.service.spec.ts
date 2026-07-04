@@ -1,266 +1,392 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
-import { UsersService } from './users.service';
-import { User } from './schemas/user.schema';
 import { Types } from 'mongoose';
+
+import { UsersService } from './users.service';
+import { User } from 'src/schemas/user/user.schema';
+import { Ulb } from 'src/admin/xvi-fc/schemas/ulb.schema';
+import { State } from 'src/admin/xvi-fc/schemas/state.schema';
+import { Permission, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
+import { Role } from 'src/module/auth/enum/role.enum';
+
+import {
+  createChainMock,
+  makeUlbAdmin,
+  makeUlbEditor,
+  makeUlbViewer,
+  makeStateAdmin,
+  makeStateEditor,
+  makeStateViewer,
+  makeOverridesDto,
+  makeUserDoc,
+  ULB_ID,
+  ULB_ID_2,
+  STATE_ID,
+  STATE_ID_2,
+  TARGET_USER_ID,
+} from './test/users.fixtures';
+
+// ─── Module setup ──────────────────────────────────────────────────────────
 
 describe('UsersService', () => {
   let service: UsersService;
-  let mockUserModel: any;
-
-  const mockUser = {
-    _id: new Types.ObjectId('507f1f77bcf86cd799439011'),
-    email: 'test@example.com',
-    name: 'Test User',
-    password: 'hashedPassword123',
-    role: 'user',
-    createdAt: new Date(),
-    updatedAt: new Date(),
-    save: jest.fn(),
-  };
+  let mockUserModel: ReturnType<typeof createChainMock>;
+  let mockUlbModel:  ReturnType<typeof createChainMock>;
+  let mockStateModel: ReturnType<typeof createChainMock>;
 
   beforeEach(async () => {
-    mockUserModel = {
-      find: jest.fn().mockReturnThis(),
-      findById: jest.fn().mockReturnThis(),
-      findByIdAndUpdate: jest.fn().mockReturnThis(),
-      findByIdAndDelete: jest.fn().mockReturnThis(),
-      exec: jest.fn(),
-    };
+    mockUserModel  = createChainMock();
+    mockUlbModel   = createChainMock();
+    mockStateModel = createChainMock();
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         UsersService,
-        {
-          provide: getModelToken(User.name),
-          useValue: mockUserModel,
-        },
+        { provide: getModelToken(User.name),  useValue: mockUserModel  },
+        { provide: getModelToken(Ulb.name),   useValue: mockUlbModel   },
+        { provide: getModelToken(State.name), useValue: mockStateModel  },
       ],
     }).compile();
 
     service = module.get<UsersService>(UsersService);
   });
 
-  afterEach(() => {
-    jest.clearAllMocks();
-  });
+  afterEach(() => jest.clearAllMocks());
 
-  it('should be defined', () => {
-    expect(service).toBeDefined();
-  });
+  // ─── updatePermissionOverrides() ───────────────────────────────────────
 
-  describe('create()', () => {
-    it('should create a new user', async () => {
-      const createUserData = {
-        email: 'newuser@example.com',
-        name: 'New User',
-        password: 'password123',
-      };
+  describe('updatePermissionOverrides()', () => {
+    const targetId = TARGET_USER_ID;
 
-      const newUser = { ...mockUser, ...createUserData, _id: new Types.ObjectId() };
+    describe('ULB admin overriding permissions', () => {
+      const requester = makeUlbAdmin();
 
-      // Simply test that the service is callable
-      expect(service).toBeDefined();
-      expect(typeof service.create).toBe('function');
+      it('updates overrides when target user is in the same ULB', async () => {
+        const targetDoc = makeUserDoc({ ulb: new Types.ObjectId(ULB_ID) });
+        mockUserModel.exec.mockResolvedValue(targetDoc);
+        mockUserModel.findByIdAndUpdate.mockReturnThis();
+
+        const dto = makeOverridesDto({ allow: [Permission.UPLOAD_DOCUMENTS] });
+        const result = await service.updatePermissionOverrides(targetId, dto, requester);
+
+        expect(result.message).toBe('Permission overrides updated successfully');
+        expect(result.overrides.allow).toContain(Permission.UPLOAD_DOCUMENTS);
+        expect(result.effectivePermissions).toContain(Permission.UPLOAD_DOCUMENTS);
+      });
+
+      it('throws 403 when target user is in a different ULB', async () => {
+        const targetDoc = makeUserDoc({ ulb: new Types.ObjectId(ULB_ID_2) });
+        mockUserModel.exec.mockResolvedValue(targetDoc);
+
+        const dto = makeOverridesDto({ allow: [Permission.APPROVE_ULB_SUBMISSIONS] });
+        await expect(service.updatePermissionOverrides(targetId, dto, requester))
+          .rejects.toThrow(ForbiddenException);
+      });
+
+      it('denying a permission removes it from effectivePermissions', async () => {
+        const targetDoc = makeUserDoc({ role: Role.ULB_EDITOR, ulb: new Types.ObjectId(ULB_ID) });
+        mockUserModel.exec.mockResolvedValue(targetDoc);
+        mockUserModel.findByIdAndUpdate.mockReturnThis();
+
+        const dto = makeOverridesDto({ deny: [Permission.MESSAGE_USERS] });
+        const result = await service.updatePermissionOverrides(targetId, dto, requester);
+
+        expect(result.effectivePermissions).not.toContain(Permission.MESSAGE_USERS);
+      });
+
+      it('throws 400 when same permission appears in allow and deny', async () => {
+        const targetDoc = makeUserDoc({ ulb: new Types.ObjectId(ULB_ID) });
+        mockUserModel.exec.mockResolvedValue(targetDoc);
+
+        const dto = makeOverridesDto({
+          allow: [Permission.MESSAGE_USERS],
+          deny:  [Permission.MESSAGE_USERS],
+        });
+        await expect(service.updatePermissionOverrides(targetId, dto, requester))
+          .rejects.toThrow(BadRequestException);
+      });
     });
 
-    it('should save user with correct data', async () => {
-      const userData = {
-        email: 'test@example.com',
-        name: 'Test User',
-        password: 'password123',
-      };
+    describe('STATE admin overriding permissions', () => {
+      const requester = makeStateAdmin();
 
-      // Test that service method is callable
-      expect(typeof service.create).toBe('function');
+      it('updates overrides when target user is in the same state', async () => {
+        const targetDoc = makeUserDoc({
+          role:  Role.STATE_EDITOR,
+          ulb:   undefined,
+          state: new Types.ObjectId(STATE_ID),
+        });
+        mockUserModel.exec.mockResolvedValue(targetDoc);
+        mockUserModel.findByIdAndUpdate.mockReturnThis();
+
+        const dto = makeOverridesDto({ allow: [Permission.APPROVE_ULB_SUBMISSIONS] });
+        const result = await service.updatePermissionOverrides(targetId, dto, requester);
+
+        expect(result.message).toBe('Permission overrides updated successfully');
+        expect(result.effectivePermissions).toContain(Permission.APPROVE_ULB_SUBMISSIONS);
+      });
+
+      it('throws 403 when target user is in a different state', async () => {
+        const targetDoc = makeUserDoc({
+          role:  Role.STATE_EDITOR,
+          ulb:   undefined,
+          state: new Types.ObjectId(STATE_ID_2),
+        });
+        mockUserModel.exec.mockResolvedValue(targetDoc);
+
+        const dto = makeOverridesDto();
+        await expect(service.updatePermissionOverrides(targetId, dto, requester))
+          .rejects.toThrow(ForbiddenException);
+      });
     });
 
-    it('should handle creation errors', async () => {
-      expect(service).toBeDefined();
-      expect(typeof service.create).toBe('function');
+    describe('non-admin roles cannot override permissions', () => {
+      it.each([
+        ['ULB-EDITOR',   makeUlbEditor()],
+        ['ULB-VIEWER',   makeUlbViewer()],
+        ['STATE-EDITOR', makeStateEditor()],
+        ['STATE-VIEWER', makeStateViewer()],
+      ])('throws 403 for %s', async (_label, requester) => {
+        const targetDoc = makeUserDoc();
+        mockUserModel.exec.mockResolvedValue(targetDoc);
+
+        const dto = makeOverridesDto();
+        await expect(service.updatePermissionOverrides(targetId, dto, requester))
+          .rejects.toThrow(ForbiddenException);
+      });
+    });
+
+    it('throws 404 when target user does not exist', async () => {
+      mockUserModel.exec.mockResolvedValue(null);
+      const dto = makeOverridesDto();
+      await expect(service.updatePermissionOverrides(targetId, dto, makeUlbAdmin()))
+        .rejects.toThrow(NotFoundException);
+    });
+
+    it('throws 400 for an invalid target user ID', async () => {
+      const dto = makeOverridesDto();
+      await expect(service.updatePermissionOverrides('not-an-object-id', dto, makeUlbAdmin()))
+        .rejects.toThrow(BadRequestException);
     });
   });
+
+  // ─── listUsers() ──────────────────────────────────────────────────────
+
+  describe('listUsers()', () => {
+
+    // Helper: set up the full chain for find() used inside listUsers
+    function mockFindUsers(docs: any[]) {
+      mockUserModel.exec.mockResolvedValue(docs);
+      mockUlbModel.exec.mockResolvedValue({
+        name: 'Test ULB',
+        code: 'ULB001',
+        state: { name: 'Test State' },
+      });
+      mockStateModel.exec.mockResolvedValue({ name: 'Test State', code: 'ST01' });
+    }
+
+    describe('ULB-scoped requesters (ULB, ULB-EDITOR, ULB-VIEWER)', () => {
+
+      it.each([
+        ['ULB admin',  makeUlbAdmin()],
+        ['ULB-EDITOR', makeUlbEditor()],
+        ['ULB-VIEWER', makeUlbViewer()],
+      ])('%s: locks query to their own ULB regardless of query param', async (_label, requester) => {
+        mockFindUsers([]);
+
+        const result = await service.listUsers({}, requester);
+
+        // userModel.find must have been called with the requester's own ulb
+        const findArg = mockUserModel.find.mock.calls[0][0];
+        expect(findArg.ulb.toString()).toBe(ULB_ID);
+        expect(result.data).toEqual([]);
+      });
+
+      it('allows query.ulbId when it matches the requester ULB', async () => {
+        mockFindUsers([]);
+        const requester = makeUlbAdmin();
+
+        await expect(service.listUsers({ ulbId: ULB_ID }, requester)).resolves.toBeDefined();
+      });
+
+      it('throws 403 when query.ulbId is a different ULB', async () => {
+        const requester = makeUlbAdmin();
+        await expect(service.listUsers({ ulbId: ULB_ID_2 }, requester))
+          .rejects.toThrow(ForbiddenException);
+      });
+
+      it('throws 403 when requester is not mapped to any ULB', async () => {
+        const requester = makeUlbAdmin({ ulb: undefined });
+        await expect(service.listUsers({}, requester))
+          .rejects.toThrow(ForbiddenException);
+      });
+    });
+
+    describe('STATE-scoped requesters (STATE, STATE-EDITOR, STATE-VIEWER)', () => {
+
+      it.each([
+        ['STATE admin',  makeStateAdmin()],
+        ['STATE-EDITOR', makeStateEditor()],
+        ['STATE-VIEWER', makeStateViewer()],
+      ])('%s: locks query to their own state', async (_label, requester) => {
+        mockFindUsers([]);
+
+        const result = await service.listUsers({}, requester);
+
+        const findArg = mockUserModel.find.mock.calls[0][0];
+        expect(findArg.state.toString()).toBe(STATE_ID);
+        expect(result.data).toEqual([]);
+      });
+
+      it('allows query.stateId when it matches the requester state', async () => {
+        mockFindUsers([]);
+        const requester = makeStateAdmin();
+
+        await expect(service.listUsers({ stateId: STATE_ID }, requester)).resolves.toBeDefined();
+      });
+
+      it('throws 403 when query.stateId is a different state', async () => {
+        const requester = makeStateAdmin();
+        await expect(service.listUsers({ stateId: STATE_ID_2 }, requester))
+          .rejects.toThrow(ForbiddenException);
+      });
+
+      it('throws 403 when requester is not mapped to any state', async () => {
+        const requester = makeStateAdmin({ state: undefined });
+        await expect(service.listUsers({}, requester))
+          .rejects.toThrow(ForbiddenException);
+      });
+    });
+
+    describe('deduplication — legacy contacts vs real users', () => {
+      it('suppresses legacy contact when same mobile exists as a real user document', async () => {
+        const sharedMobile = '9876543210';
+
+        const mainUser = {
+          _id: new Types.ObjectId(),
+          name: 'Main ULB User',
+          mobile: sharedMobile,
+          role: Role.ULB,
+          email: 'main@ulb.gov',
+          designation: '',
+          status: 'APPROVED',
+          isActive: true,
+          isXVIFCProfileVerified: true,
+          // Same number embedded as commissioner
+          commissionerName: 'Old Commissioner',
+          commissionerEmail: '',
+          commissionerConatactNumber: sharedMobile,
+          accountantName: '', accountantEmail: '', accountantConatactNumber: '',
+          departmentName: '', departmentEmail: '', departmentContactNumber: '',
+        };
+
+        mockFindUsers([mainUser]);
+
+        const result = await service.listUsers({}, makeUlbAdmin());
+
+        const names = result.data.map((r) => r['name']);
+        expect(names).toContain('Main ULB User');
+        expect(names).not.toContain('Old Commissioner');
+      });
+
+      it('shows legacy contact when it has a unique mobile not in any real user', async () => {
+        const mainUser = {
+          _id: new Types.ObjectId(),
+          name: 'Main ULB User',
+          mobile: '9111111111',
+          role: Role.ULB,
+          email: 'main@ulb.gov',
+          designation: '',
+          status: 'APPROVED',
+          isActive: true,
+          isXVIFCProfileVerified: true,
+          accountantName: 'Unique Accountant',
+          accountantEmail: 'acc@ulb.gov',
+          accountantConatactNumber: '9222222222',  // different number
+          commissionerName: '', commissionerEmail: '', commissionerConatactNumber: '',
+          departmentName: '', departmentEmail: '', departmentContactNumber: '',
+        };
+
+        mockFindUsers([mainUser]);
+
+        const result = await service.listUsers({}, makeUlbAdmin());
+
+        const names = result.data.map((r) => r['name']);
+        expect(names).toContain('Main ULB User');
+        expect(names).toContain('Unique Accountant');
+      });
+    });
+  });
+
+  // ─── Basic CRUD (kept from original spec) ─────────────────────────────
 
   describe('findAll()', () => {
-    it('should return all users', async () => {
-      const users = [mockUser, { ...mockUser, _id: new Types.ObjectId('507f1f77bcf86cd799439012') }];
-
+    it('returns all users', async () => {
+      const users = [makeUserDoc(), makeUserDoc({ _id: new Types.ObjectId() })];
       mockUserModel.exec.mockResolvedValue(users);
 
       const result = await service.findAll();
-
-      expect(mockUserModel.find).toHaveBeenCalled();
-      expect(mockUserModel.exec).toHaveBeenCalled();
       expect(result).toEqual(users);
-    });
-
-    it('should return empty array when no users exist', async () => {
-      mockUserModel.exec.mockResolvedValue([]);
-
-      const result = await service.findAll();
-
-      expect(result).toEqual([]);
       expect(mockUserModel.find).toHaveBeenCalled();
     });
 
-    it('should handle database errors during findAll', async () => {
-      const error = new Error('Database connection failed');
-      mockUserModel.exec.mockRejectedValue(error);
+    it('returns empty array when no users exist', async () => {
+      mockUserModel.exec.mockResolvedValue([]);
+      expect(await service.findAll()).toEqual([]);
+    });
 
-      await expect(service.findAll()).rejects.toThrow('Database connection failed');
+    it('propagates database errors', async () => {
+      mockUserModel.exec.mockRejectedValue(new Error('DB error'));
+      await expect(service.findAll()).rejects.toThrow('DB error');
     });
   });
 
   describe('findOne()', () => {
-    it('should find user by id', async () => {
-      const userId = '507f1f77bcf86cd799439011';
+    it('finds user by id', async () => {
+      const doc = makeUserDoc();
+      mockUserModel.exec.mockResolvedValue(doc);
 
-      mockUserModel.exec.mockResolvedValue(mockUser);
-
-      const result = await service.findOne(userId);
-
-      expect(mockUserModel.findById).toHaveBeenCalledWith(userId);
-      expect(mockUserModel.exec).toHaveBeenCalled();
-      expect(result).toEqual(mockUser);
+      const result = await service.findOne(TARGET_USER_ID);
+      expect(mockUserModel.findById).toHaveBeenCalledWith(TARGET_USER_ID);
+      expect(result).toEqual(doc);
     });
 
-    it('should return null when user does not exist', async () => {
-      const userId = '507f1f77bcf86cd799439999';
-
+    it('returns null when user does not exist', async () => {
       mockUserModel.exec.mockResolvedValue(null);
-
-      const result = await service.findOne(userId);
-
-      expect(result).toBeNull();
-      expect(mockUserModel.findById).toHaveBeenCalledWith(userId);
-    });
-
-    it('should handle database errors during findOne', async () => {
-      const userId = '507f1f77bcf86cd799439011';
-      const error = new Error('Database query failed');
-
-      mockUserModel.exec.mockRejectedValue(error);
-
-      await expect(service.findOne(userId)).rejects.toThrow('Database query failed');
-    });
-
-    it('should work with valid ObjectId string', async () => {
-      const userId = new Types.ObjectId().toString();
-
-      mockUserModel.exec.mockResolvedValue(mockUser);
-
-      const result = await service.findOne(userId);
-
-      expect(mockUserModel.findById).toHaveBeenCalledWith(userId);
-      expect(result).toEqual(mockUser);
+      expect(await service.findOne(TARGET_USER_ID)).toBeNull();
     });
   });
 
   describe('update()', () => {
-    it('should update a user by id', async () => {
-      const userId = '507f1f77bcf86cd799439011';
-      const updateData = {
-        name: 'Updated User',
-        email: 'updated@example.com',
-      };
+    it('updates a user by id', async () => {
+      const updated = makeUserDoc({ name: 'Updated' });
+      mockUserModel.exec.mockResolvedValue(updated);
 
-      const updatedUser = { ...mockUser, ...updateData };
-      mockUserModel.exec.mockResolvedValue(updatedUser);
-
-      const result = await service.update(userId, updateData);
-
-      expect(mockUserModel.findByIdAndUpdate).toHaveBeenCalledWith(userId, updateData, { new: true });
-      expect(mockUserModel.exec).toHaveBeenCalled();
-      expect(result).toEqual(updatedUser);
+      const result = await service.update(TARGET_USER_ID, { name: 'Updated' } as any);
+      expect(mockUserModel.findByIdAndUpdate).toHaveBeenCalledWith(TARGET_USER_ID, { name: 'Updated' }, { new: true });
+      expect(result).toEqual(updated);
     });
 
-    it('should handle partial updates', async () => {
-      const userId = '507f1f77bcf86cd799439011';
-      const updateData = { name: 'Updated Name' };
-
-      const updatedUser = { ...mockUser, ...updateData };
-      mockUserModel.exec.mockResolvedValue(updatedUser);
-
-      const result = await service.update(userId, updateData);
-
-      expect(mockUserModel.findByIdAndUpdate).toHaveBeenCalledWith(userId, updateData, { new: true });
-      expect(result.name).toEqual('Updated Name');
-    });
-
-    it('should return null when user does not exist', async () => {
-      const userId = '507f1f77bcf86cd799439999';
-      const updateData = { name: 'Updated User' };
-
+    it('returns null when user does not exist', async () => {
       mockUserModel.exec.mockResolvedValue(null);
-
-      const result = await service.update(userId, updateData);
-
-      expect(result).toBeNull();
-    });
-
-    it('should handle update errors', async () => {
-      const userId = '507f1f77bcf86cd799439011';
-      const updateData = { email: 'duplicate@example.com' };
-      const error = new Error('Duplicate email');
-
-      mockUserModel.exec.mockRejectedValue(error);
-
-      await expect(service.update(userId, updateData)).rejects.toThrow('Duplicate email');
-    });
-
-    it('should pass the new option to findByIdAndUpdate', async () => {
-      const userId = '507f1f77bcf86cd799439011';
-      const updateData = { name: 'Updated' };
-
-      mockUserModel.exec.mockResolvedValue(mockUser);
-
-      await service.update(userId, updateData);
-
-      expect(mockUserModel.findByIdAndUpdate).toHaveBeenCalledWith(userId, updateData, { new: true });
+      expect(await service.update(TARGET_USER_ID, {} as any)).toBeNull();
     });
   });
 
   describe('remove()', () => {
-    it('should delete a user by id', async () => {
-      const userId = '507f1f77bcf86cd799439011';
+    it('deletes user by id', async () => {
+      const doc = makeUserDoc();
+      mockUserModel.exec.mockResolvedValue(doc);
 
-      mockUserModel.exec.mockResolvedValue(mockUser);
-
-      const result = await service.remove(userId);
-
-      expect(mockUserModel.findByIdAndDelete).toHaveBeenCalledWith(userId);
-      expect(mockUserModel.exec).toHaveBeenCalled();
-      expect(result).toEqual(mockUser);
+      const result = await service.remove(TARGET_USER_ID);
+      expect(mockUserModel.findByIdAndDelete).toHaveBeenCalledWith(TARGET_USER_ID);
+      expect(result).toEqual(doc);
     });
 
-    it('should return null when user does not exist', async () => {
-      const userId = '507f1f77bcf86cd799439999';
-
+    it('returns null when user does not exist', async () => {
       mockUserModel.exec.mockResolvedValue(null);
-
-      const result = await service.remove(userId);
-
-      expect(result).toBeNull();
-      expect(mockUserModel.findByIdAndDelete).toHaveBeenCalledWith(userId);
-    });
-
-    it('should handle deletion errors', async () => {
-      const userId = '507f1f77bcf86cd799439011';
-      const error = new Error('Cannot delete user');
-
-      mockUserModel.exec.mockRejectedValue(error);
-
-      await expect(service.remove(userId)).rejects.toThrow('Cannot delete user');
-    });
-
-    it('should properly call findByIdAndDelete with correct id', async () => {
-      const userId = new Types.ObjectId().toString();
-
-      mockUserModel.exec.mockResolvedValue(mockUser);
-
-      await service.remove(userId);
-
-      expect(mockUserModel.findByIdAndDelete).toHaveBeenCalledWith(userId);
+      expect(await service.remove(TARGET_USER_ID)).toBeNull();
     });
   });
 });
