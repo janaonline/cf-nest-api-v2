@@ -149,3 +149,57 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
 
 /** `data` keys that map directly onto typed fields on the `Ulb` mongoose schema. */
 export const ULB_DATA_KEYS = DEFAULT_ULB_FIELDS.map((f) => f.key);
+
+/** `type` key under which the Register-ULB page's section/grid layout is stored in the formjsons collection. */
+export const ULB_REGISTER_SECTIONS_FORM_JSON_TYPE = 'ULB_REGISTER_SECTIONS';
+
+/** One field's placement within a `RegisterUlbSectionLayout` — layout only; label/validations live on DEFAULT_ULB_FIELDS. */
+export interface RegisterUlbFieldLayout {
+  key: string;
+  grid: string;
+  labelHint?: string;
+  hintText?: string;
+}
+
+/** One card-sectioned group of fields on the Register ULB page. */
+export interface RegisterUlbSectionLayout {
+  title: string;
+  icon: string;
+  fields: RegisterUlbFieldLayout[];
+}
+
+/**
+ * Fallback layout used when no admin-configured FormJson document exists yet for
+ * ULB_REGISTER_SECTIONS_FORM_JSON_TYPE. Admins can override this via the generic /form-json
+ * CRUD endpoints (create a document with type: 'ULB_REGISTER_SECTIONS') without a code change.
+ */
+export const DEFAULT_ULB_REGISTER_SECTIONS: RegisterUlbSectionLayout[] = [
+  {
+    title: 'ULB Identity',
+    icon: 'bi-bank',
+    fields: [
+      { key: 'name', grid: 'col-12' },
+      { key: 'ulbType', grid: 'col-md-6' },
+      { key: 'district', grid: 'col-md-6' },
+      {
+        key: 'censusCode',
+        grid: 'col-md-6',
+        labelHint: '(if available)',
+        hintText: 'Not available? Enter 999999 as a 6-digit placeholder.',
+      },
+    ],
+  },
+  {
+    title: 'Constitution & Legal Basis',
+    icon: 'bi-journal-text',
+    fields: [
+      { key: 'dateOfConstitution', grid: 'col-md-6' },
+      { key: 'gazetteNotificationNumber', grid: 'col-md-6', labelHint: '(if available)' },
+      {
+        key: 'gazetteNotificationFile',
+        grid: 'col-12',
+        labelHint: '— upload the PDF of the gazette notifying constitution',
+      },
+    ],
+  },
+];

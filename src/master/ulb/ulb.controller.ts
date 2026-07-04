@@ -44,6 +44,12 @@ export class UlbController {
     return this.ulbService.findTypes();
   }
 
+  @Get('register-sections')
+  @ApiOperation({ summary: 'Section/grid layout config for the Register ULB page.' })
+  findRegisterSections() {
+    return this.ulbService.getRegisterSections();
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Get a ULB by id' })
   findOne(@Param('id', ParseObjectIdPipe) id: string) {

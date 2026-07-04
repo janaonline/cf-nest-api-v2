@@ -211,6 +211,22 @@ describe('UlbService', () => {
     });
   });
 
+  describe('getRegisterSections', () => {
+    it('falls back to the built-in defaults when no FormJson override exists', async () => {
+      const sections = await service.getRegisterSections();
+      expect(sections.length).toBeGreaterThan(0);
+      expect(sections[0].fields.length).toBeGreaterThan(0);
+    });
+
+    it('uses the admin-configured layout when a FormJson override exists', async () => {
+      const customSections = [{ title: 'Custom', icon: 'bi-star', fields: [{ key: 'name', grid: 'col-12' }] }];
+      formJsonService.findByType = jest.fn().mockResolvedValue({ data: customSections });
+
+      const sections = await service.getRegisterSections();
+      expect(sections).toEqual(customSections);
+    });
+  });
+
   describe('findOne', () => {
     it('throws BadRequestException for an invalid id', async () => {
       await expect(service.findOne('not-an-id')).rejects.toThrow(BadRequestException);

@@ -10,7 +10,13 @@ import type { FieldConfig } from 'src/module/xvi-fc/common/types/field-config.ty
 import { FormJsonService } from 'src/form-json/form-json.service';
 import { State, StateDocument } from 'src/schemas/state.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
-import { DEFAULT_ULB_FIELDS, ULB_FORM_JSON_TYPE } from './constants/ulb-form.constants';
+import {
+  DEFAULT_ULB_FIELDS,
+  DEFAULT_ULB_REGISTER_SECTIONS,
+  RegisterUlbSectionLayout,
+  ULB_FORM_JSON_TYPE,
+  ULB_REGISTER_SECTIONS_FORM_JSON_TYPE,
+} from './constants/ulb-form.constants';
 import { CreateUlbDto } from './dto/create-ulb.dto';
 import { QueryUlbDto } from './dto/query-ulb.dto';
 import { RejectUlbDto } from './dto/reject-ulb.dto';
@@ -36,6 +42,18 @@ export class UlbService {
       return formJson.data?.length ? formJson.data : DEFAULT_ULB_FIELDS;
     } catch {
       return DEFAULT_ULB_FIELDS;
+    }
+  }
+
+  /** Layout (sections + per-field grid width/hints) for the Register ULB page, falling back to built-in defaults. */
+  async getRegisterSections(): Promise<RegisterUlbSectionLayout[]> {
+    try {
+      const formJson = await this.formJsonService.findByType(ULB_REGISTER_SECTIONS_FORM_JSON_TYPE);
+      return formJson.data?.length
+        ? (formJson.data as unknown as RegisterUlbSectionLayout[])
+        : DEFAULT_ULB_REGISTER_SECTIONS;
+    } catch {
+      return DEFAULT_ULB_REGISTER_SECTIONS;
     }
   }
 

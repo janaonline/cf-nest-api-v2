@@ -14,6 +14,7 @@ describe('UlbController', () => {
     remove: jest.Mock;
     approve: jest.Mock;
     reject: jest.Mock;
+    getRegisterSections: jest.Mock;
   };
 
   const adminUser: IAuthUser = { _id: '507f1f77bcf86cd799439011', role: Role.ADMIN };
@@ -27,6 +28,7 @@ describe('UlbController', () => {
       remove: jest.fn(),
       approve: jest.fn(),
       reject: jest.fn(),
+      getRegisterSections: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -72,5 +74,10 @@ describe('UlbController', () => {
   it('delegates remove to the service', () => {
     void controller.remove('123');
     expect(ulbService.remove).toHaveBeenCalledWith('123');
+  });
+
+  it('delegates findRegisterSections to the service', () => {
+    void controller.findRegisterSections();
+    expect(ulbService.getRegisterSections).toHaveBeenCalled();
   });
 });
