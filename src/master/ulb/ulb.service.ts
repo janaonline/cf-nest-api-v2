@@ -6,14 +6,16 @@ import type { IAuthUser } from 'src/common/interfaces/auth-user.interface';
 import { Role } from 'src/module/auth/enum/role.enum';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
 import type { XviFcValidationErrorMap } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
-import type { FieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
+import type { FieldConfig, ResolvedSection } from 'src/module/xvi-fc/common/types/field-config.type';
 import { FormJsonService } from 'src/form-json/form-json.service';
 import { State, StateDocument } from 'src/schemas/state.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import {
+  DEFAULT_ULB_EDIT_SECTIONS,
   DEFAULT_ULB_FIELDS,
   DEFAULT_ULB_REGISTER_SECTIONS,
   RegisterUlbSectionLayout,
+  ULB_EDIT_SECTIONS_FORM_JSON_TYPE,
   ULB_FORM_JSON_TYPE,
   ULB_REGISTER_SECTIONS_FORM_JSON_TYPE,
 } from './constants/ulb-form.constants';
@@ -45,8 +47,8 @@ export class UlbService {
     }
   }
 
-  /** Layout (sections + per-field grid width/hints) for the Register ULB page, falling back to built-in defaults. */
-  async getRegisterSections(): Promise<RegisterUlbSectionLayout[]> {
+  /** Loads the admin-configurable section/grid skeleton for the Register ULB page, falling back to built-in defaults. */
+  private async loadRegisterSectionsLayout(): Promise<RegisterUlbSectionLayout[]> {
     try {
       const formJson = await this.formJsonService.findByType(ULB_REGISTER_SECTIONS_FORM_JSON_TYPE);
       return formJson.data?.length
@@ -55,6 +57,92 @@ export class UlbService {
     } catch {
       return DEFAULT_ULB_REGISTER_SECTIONS;
     }
+  }
+
+  /** Loads the admin-configurable section/grid skeleton for the Edit ULB dialog, falling back to built-in defaults. */
+  private async loadEditSectionsLayout(): Promise<RegisterUlbSectionLayout[]> {
+    try {
+      const formJson = await this.formJsonService.findByType(ULB_EDIT_SECTIONS_FORM_JSON_TYPE);
+      return formJson.data?.length
+        ? (formJson.data as unknown as RegisterUlbSectionLayout[])
+        : DEFAULT_ULB_EDIT_SECTIONS;
+    } catch {
+      return DEFAULT_ULB_EDIT_SECTIONS;
+    }
+  }
+
+  /**
+   * Real field definitions keyed by `key`, with `ulbType` and `state` replaced by live selects
+   * (options populated from the ulbtypes/states collections). Shared by both the Register and
+   * Edit section endpoints — which fields actually surface depends on which layout is merged in.
+   */
+  private async buildResolvedFieldsByKey(): Promise<Map<string, FieldConfig>> {
+    const [fields, ulbTypes, states] = await Promise.all([this.loadFields(), this.findTypes(), this.findStates()]);
+
+    const fieldsByKey = new Map(fields.map((field) => [field.key, field]));
+    fieldsByKey.set('ulbType', {
+      key: 'ulbType',
+      label: 'ULB Type',
+      formFieldType: 'select',
+      required: true,
+      placeholder: 'Select type...',
+      options: ulbTypes.map((type) => ({ id: String(type._id), label: type.name })),
+      validations: [{ name: 'required', validator: null, message: 'ULB type is required.' }],
+    });
+    fieldsByKey.set('state', {
+      key: 'state',
+      label: 'State',
+      formFieldType: 'select',
+      required: true,
+      placeholder: 'Select a state...',
+      options: states.map((state) => ({ id: String(state._id), label: state.name })),
+      validations: [{ name: 'required', validator: null, message: 'State is required.' }],
+    });
+
+    return fieldsByKey;
+  }
+
+  /** Merges a section/grid layout skeleton with resolved field definitions, dropping (and logging)
+   *  any layout entry whose key has no matching field — keeps a bad admin edit from breaking the page. */
+  private mergeLayoutWithFields(
+    layout: RegisterUlbSectionLayout[],
+    fieldsByKey: Map<string, FieldConfig>,
+  ): ResolvedSection[] {
+    return layout.map((section) => ({
+      title: section.title,
+      icon: section.icon,
+      fields: section.fields
+        .map((fieldLayout) => {
+          const field = fieldsByKey.get(fieldLayout.key);
+          if (!field) {
+            this.logger.warn(`ULB section layout references unknown field key "${fieldLayout.key}"`);
+            return null;
+          }
+          return { ...field, grid: fieldLayout.grid, labelHint: fieldLayout.labelHint, hintText: fieldLayout.hintText };
+        })
+        .filter((field): field is NonNullable<typeof field> => field !== null),
+    }));
+  }
+
+  /**
+   * Fully resolved section/field config for the Register ULB page: merges the section layout
+   * (grid width, hints) with each field's real definition (label, formFieldType, validations, ...)
+   * from ULB_MASTER, plus a live `ulbType` select populated from the ulbtypes collection. The
+   * frontend renders this response directly — no client-side lookup or merging required.
+   */
+  async getRegisterSections(): Promise<ResolvedSection[]> {
+    const [fieldsByKey, layout] = await Promise.all([this.buildResolvedFieldsByKey(), this.loadRegisterSectionsLayout()]);
+    return this.mergeLayoutWithFields(layout, fieldsByKey);
+  }
+
+  /**
+   * Fully resolved section/field config for the ADMIN-only Edit ULB dialog — same merge as
+   * `getRegisterSections()`, but against the edit layout, which covers every ULB field (including
+   * `code` and a live `state` select) rather than just the Register page's subset.
+   */
+  async getEditSections(): Promise<ResolvedSection[]> {
+    const [fieldsByKey, layout] = await Promise.all([this.buildResolvedFieldsByKey(), this.loadEditSectionsLayout()]);
+    return this.mergeLayoutWithFields(layout, fieldsByKey);
   }
 
   private throwValidationError(errors: XviFcValidationErrorMap): never {
@@ -311,5 +399,13 @@ export class UlbService {
       .find({}, { projection: { name: 1 } })
       .sort({ name: 1 })
       .toArray() as unknown as Promise<{ _id: Types.ObjectId; name: string }[]>;
+  }
+
+  /** Lists active states for populating a select (e.g. the Edit dialog's live `state` field). */
+  private async findStates(): Promise<{ _id: Types.ObjectId; name: string }[]> {
+    return this.stateModel
+      .find({ isActive: true }, { name: 1 })
+      .sort({ name: 1 })
+      .lean<{ _id: Types.ObjectId; name: string }[]>();
   }
 }

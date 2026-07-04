@@ -50,6 +50,13 @@ export class UlbController {
     return this.ulbService.getRegisterSections();
   }
 
+  @Get('edit-sections')
+  @Roles([Role.ADMIN])
+  @ApiOperation({ summary: 'Section/grid layout config for the Edit ULB dialog (ADMIN only).' })
+  findEditSections() {
+    return this.ulbService.getEditSections();
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Get a ULB by id' })
   findOne(@Param('id', ParseObjectIdPipe) id: string) {

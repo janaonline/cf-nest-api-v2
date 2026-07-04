@@ -8,7 +8,26 @@ import type { IAuthUser } from 'src/common/interfaces/auth-user.interface';
 import { Role } from 'src/module/auth/enum/role.enum';
 import { State } from 'src/schemas/state.schema';
 import { Ulb } from 'src/schemas/ulb.schema';
+import { ULB_EDIT_SECTIONS_FORM_JSON_TYPE, ULB_REGISTER_SECTIONS_FORM_JSON_TYPE } from './constants/ulb-form.constants';
 import { UlbService } from './ulb.service';
+
+/** Mocks `ulbModel.db.collection('ulbtypes').find().sort().toArray()`, used by `findTypes()`. */
+function mockUlbTypes(ulbModel: { db?: unknown }, types: { _id: string; name: string }[]): void {
+  ulbModel.db = {
+    collection: jest.fn().mockReturnValue({
+      find: jest.fn().mockReturnValue({
+        sort: jest.fn().mockReturnValue({ toArray: jest.fn().mockResolvedValue(types) }),
+      }),
+    }),
+  };
+}
+
+/** Mocks `stateModel.find().sort().lean()`, used by `findStates()`. */
+function mockStates(stateModel: { find: jest.Mock }, states: { _id: string; name: string }[]): void {
+  stateModel.find = jest.fn().mockReturnValue({
+    sort: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(states) }),
+  });
+}
 
 describe('UlbService', () => {
   let service: UlbService;
@@ -19,8 +38,9 @@ describe('UlbService', () => {
     findById: jest.Mock;
     findByIdAndUpdate: jest.Mock;
     exists: jest.Mock;
+    db?: unknown;
   };
-  let stateModel: { findById: jest.Mock };
+  let stateModel: { findById: jest.Mock; find: jest.Mock };
   let formJsonService: { findByType: jest.Mock };
   let dynamicFormValidation: { validateFinalSubmitAndBuildPayload: jest.Mock; validateDraftAndBuildPayload: jest.Mock };
 
@@ -46,7 +66,8 @@ describe('UlbService', () => {
       findByIdAndUpdate: jest.fn(),
       exists: jest.fn(),
     };
-    stateModel = { findById: jest.fn() };
+    stateModel = { findById: jest.fn(), find: jest.fn() };
+    mockStates(stateModel, []);
     formJsonService = { findByType: jest.fn().mockRejectedValue(new NotFoundException()) };
     dynamicFormValidation = {
       validateFinalSubmitAndBuildPayload: jest.fn(),
@@ -212,18 +233,99 @@ describe('UlbService', () => {
   });
 
   describe('getRegisterSections', () => {
-    it('falls back to the built-in defaults when no FormJson override exists', async () => {
+    it('falls back to the built-in layout and fields when no FormJson override exists', async () => {
+      mockUlbTypes(ulbModel, []);
+
       const sections = await service.getRegisterSections();
+
       expect(sections.length).toBeGreaterThan(0);
       expect(sections[0].fields.length).toBeGreaterThan(0);
+      // Merged from DEFAULT_ULB_FIELDS, not just the layout skeleton's {key, grid}.
+      const nameField = sections[0].fields.find((f) => f.key === 'name');
+      expect(nameField?.label).toBe('ULB Name');
     });
 
-    it('uses the admin-configured layout when a FormJson override exists', async () => {
-      const customSections = [{ title: 'Custom', icon: 'bi-star', fields: [{ key: 'name', grid: 'col-12' }] }];
-      formJsonService.findByType = jest.fn().mockResolvedValue({ data: customSections });
+    it('merges an admin-configured layout skeleton with real field definitions and live ULB types', async () => {
+      mockUlbTypes(ulbModel, [{ _id: ulbTypeId, name: 'Municipal Corporation' }]);
+      const customLayout = [
+        {
+          title: 'Custom',
+          icon: 'bi-star',
+          fields: [
+            { key: 'name', grid: 'col-12' },
+            { key: 'ulbType', grid: 'col-md-6' },
+          ],
+        },
+      ];
+      formJsonService.findByType = jest.fn().mockImplementation((type: string) =>
+        type === ULB_REGISTER_SECTIONS_FORM_JSON_TYPE
+          ? Promise.resolve({ data: customLayout })
+          : Promise.reject(new NotFoundException()),
+      );
 
       const sections = await service.getRegisterSections();
-      expect(sections).toEqual(customSections);
+
+      expect(sections).toHaveLength(1);
+      expect(sections[0].title).toBe('Custom');
+      const [nameField, ulbTypeField] = sections[0].fields;
+      expect(nameField).toMatchObject({ key: 'name', label: 'ULB Name', grid: 'col-12' });
+      expect(ulbTypeField).toMatchObject({
+        key: 'ulbType',
+        grid: 'col-md-6',
+        options: [{ id: ulbTypeId, label: 'Municipal Corporation' }],
+      });
+    });
+
+    it('drops layout entries whose field key has no matching field definition', async () => {
+      mockUlbTypes(ulbModel, []);
+      formJsonService.findByType = jest.fn().mockImplementation((type: string) =>
+        type === ULB_REGISTER_SECTIONS_FORM_JSON_TYPE
+          ? Promise.resolve({ data: [{ title: 'Custom', icon: 'bi-star', fields: [{ key: 'doesNotExist', grid: 'col-12' }] }] })
+          : Promise.reject(new NotFoundException()),
+      );
+
+      const sections = await service.getRegisterSections();
+
+      expect(sections[0].fields).toHaveLength(0);
+    });
+  });
+
+  describe('getEditSections', () => {
+    it('falls back to the built-in edit layout, covering fields the Register page omits (e.g. code)', async () => {
+      mockUlbTypes(ulbModel, []);
+
+      const sections = await service.getEditSections();
+      const allFields = sections.flatMap((s) => s.fields);
+
+      expect(allFields.find((f) => f.key === 'code')).toBeTruthy();
+      expect(allFields.find((f) => f.key === 'sbCode')).toBeTruthy();
+    });
+
+    it('embeds live states into the `state` field, in addition to live ULB types', async () => {
+      mockUlbTypes(ulbModel, [{ _id: ulbTypeId, name: 'Municipal Corporation' }]);
+      mockStates(stateModel, [{ _id: stateId, name: 'Andhra Pradesh' }]);
+      formJsonService.findByType = jest.fn().mockImplementation((type: string) =>
+        type === ULB_EDIT_SECTIONS_FORM_JSON_TYPE
+          ? Promise.resolve({
+              data: [
+                {
+                  title: 'Identity',
+                  icon: 'bi-bank',
+                  fields: [
+                    { key: 'state', grid: 'col-md-6' },
+                    { key: 'ulbType', grid: 'col-md-6' },
+                  ],
+                },
+              ],
+            })
+          : Promise.reject(new NotFoundException()),
+      );
+
+      const sections = await service.getEditSections();
+
+      const [stateField, ulbTypeField] = sections[0].fields;
+      expect(stateField).toMatchObject({ key: 'state', options: [{ id: stateId, label: 'Andhra Pradesh' }] });
+      expect(ulbTypeField).toMatchObject({ key: 'ulbType', options: [{ id: ulbTypeId, label: 'Municipal Corporation' }] });
     });
   });
 

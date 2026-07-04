@@ -1,4 +1,4 @@
-import type { FieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
+import type { FieldConfig, SectionFieldPlacement } from 'src/module/xvi-fc/common/types/field-config.type';
 
 /** `type` key under which the ULB master form definition is stored in the formjsons collection. */
 export const ULB_FORM_JSON_TYPE = 'ULB_MASTER';
@@ -16,6 +16,7 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
     key: 'code',
     label: 'ULB Code',
     formFieldType: 'text',
+    required: true,
     validations: [
       { name: 'required', validator: null, message: 'ULB code is required.' },
       { name: 'maxlength', validator: 20, message: 'ULB code must be at most 20 characters.' },
@@ -25,6 +26,7 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
     key: 'name',
     label: 'ULB Name',
     formFieldType: 'text',
+    required: true,
     validations: [
       { name: 'required', validator: null, message: 'ULB name is required.' },
       { name: 'maxlength', validator: 200, message: 'ULB name must be at most 200 characters.' },
@@ -34,6 +36,7 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
     key: 'state',
     label: 'State',
     formFieldType: 'select',
+    required: true,
     validations: [
       { name: 'required', validator: null, message: 'State is required.' },
       { name: 'pattern', validator: OBJECT_ID_PATTERN, message: 'State must be a valid id.' },
@@ -43,6 +46,7 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
     key: 'ulbType',
     label: 'ULB Type',
     formFieldType: 'select',
+    required: true,
     validations: [
       { name: 'required', validator: null, message: 'ULB type is required.' },
       { name: 'pattern', validator: OBJECT_ID_PATTERN, message: 'ULB type must be a valid id.' },
@@ -52,6 +56,7 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
     key: 'district',
     label: 'District',
     formFieldType: 'text',
+    required: true,
     validations: [
       { name: 'required', validator: null, message: 'District is required.' },
       { name: 'maxlength', validator: 100, message: 'District must be at most 100 characters.' },
@@ -129,6 +134,7 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
     key: 'dateOfConstitution',
     label: 'Date of Constitution',
     formFieldType: 'date',
+    required: true,
     validations: [{ name: 'required', validator: null, message: 'Date of constitution is required.' }],
   },
   {
@@ -141,6 +147,7 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
     key: 'gazetteNotificationFile',
     label: 'Gazette Notification',
     formFieldType: 'file',
+    required: true,
     allowedFileTypes: ['pdf'],
     maxFileSize: 5,
     validations: [{ name: 'required', validator: null, message: 'Gazette notification PDF is required.' }],
@@ -154,11 +161,8 @@ export const ULB_DATA_KEYS = DEFAULT_ULB_FIELDS.map((f) => f.key);
 export const ULB_REGISTER_SECTIONS_FORM_JSON_TYPE = 'ULB_REGISTER_SECTIONS';
 
 /** One field's placement within a `RegisterUlbSectionLayout` — layout only; label/validations live on DEFAULT_ULB_FIELDS. */
-export interface RegisterUlbFieldLayout {
+export interface RegisterUlbFieldLayout extends SectionFieldPlacement {
   key: string;
-  grid: string;
-  labelHint?: string;
-  hintText?: string;
 }
 
 /** One card-sectioned group of fields on the Register ULB page. */
@@ -200,6 +204,54 @@ export const DEFAULT_ULB_REGISTER_SECTIONS: RegisterUlbSectionLayout[] = [
         grid: 'col-12',
         labelHint: '— upload the PDF of the gazette notifying constitution',
       },
+    ],
+  },
+];
+
+/** `type` key under which the Edit-ULB dialog's section/grid layout is stored in the formjsons collection. */
+export const ULB_EDIT_SECTIONS_FORM_JSON_TYPE = 'ULB_EDIT_SECTIONS';
+
+/**
+ * Fallback layout for the ADMIN-only Edit ULB dialog — covers every field on DEFAULT_ULB_FIELDS
+ * (unlike the Register page's subset). Falls back to this when no admin-configured FormJson
+ * document exists yet for ULB_EDIT_SECTIONS_FORM_JSON_TYPE; overridable the same way.
+ */
+export const DEFAULT_ULB_EDIT_SECTIONS: RegisterUlbSectionLayout[] = [
+  {
+    title: 'ULB Identity',
+    icon: 'bi-bank',
+    fields: [
+      { key: 'code', grid: 'col-md-6' },
+      { key: 'name', grid: 'col-md-6' },
+      { key: 'state', grid: 'col-md-6' },
+      { key: 'ulbType', grid: 'col-md-6' },
+      { key: 'district', grid: 'col-md-6' },
+      { key: 'censusCode', grid: 'col-md-6' },
+    ],
+  },
+  {
+    title: 'Additional Details',
+    icon: 'bi-list-ul',
+    fields: [
+      { key: 'sbCode', grid: 'col-md-6' },
+      { key: 'population', grid: 'col-md-4' },
+      { key: 'area', grid: 'col-md-4' },
+      { key: 'wards', grid: 'col-md-4' },
+      { key: 'natureOfUlb', grid: 'col-md-6' },
+      { key: 'isUA', grid: 'col-md-4' },
+      { key: 'isMillionPlus', grid: 'col-md-4' },
+      { key: 'amrut', grid: 'col-md-4' },
+      { key: 'lgdCode', grid: 'col-md-6' },
+      { key: 'regionalName', grid: 'col-md-6' },
+    ],
+  },
+  {
+    title: 'Constitution & Legal Basis',
+    icon: 'bi-journal-text',
+    fields: [
+      { key: 'dateOfConstitution', grid: 'col-md-6' },
+      { key: 'gazetteNotificationNumber', grid: 'col-md-6' },
+      { key: 'gazetteNotificationFile', grid: 'col-12' },
     ],
   },
 ];
