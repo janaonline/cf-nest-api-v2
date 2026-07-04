@@ -105,16 +105,17 @@ export class AuthController {
     return this.authService.refreshTokens(user._id, user.refreshToken, res);
   }
 
-  @Public()
-  @Post('register')
-  @HttpCode(HttpStatus.CREATED)
-  @Throttle({ default: { limit: 5, ttl: 60000 } })
-  @ApiOperation({ summary: 'Register a new user account' })
-  @ApiResponse({ status: 201, description: 'User registered successfully' })
-  @ApiResponse({ status: 409, description: 'Email already registered' })
-  register(@Body() dto: RegisterDto) {
-    return this.authService.register(dto);
-  }
+  // TODO: to be removed
+  // @Public()
+  // @Post('register')
+  // @HttpCode(HttpStatus.CREATED)
+  // @Throttle({ default: { limit: 5, ttl: 60000 } })
+  // @ApiOperation({ summary: 'Register a new user account' })
+  // @ApiResponse({ status: 201, description: 'User registered successfully' })
+  // @ApiResponse({ status: 409, description: 'Email already registered' })
+  // register(@Body() dto: RegisterDto) {
+  //   return this.authService.register(dto);
+  // }
 
   @Public()
   @Post('captcha_validate')
