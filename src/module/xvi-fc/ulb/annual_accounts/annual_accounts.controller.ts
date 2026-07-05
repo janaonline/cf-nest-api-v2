@@ -14,14 +14,14 @@ import { SubmitSectionDto } from './dto/submit-section.dto';
 export class AnnualAccountsController {
   constructor(private readonly annualAccountsService: AnnualAccountsService) {}
 
-  @Get('presign-upload')
-  @ApiOperation({ summary: 'Generate a presigned S3 PUT URL for direct browser-to-S3 upload' })
-  presignUpload(
-    @Query() dto: PresignUploadDto,
-    @CurrentUser() user: AuthUser,
-  ) {
-    return this.annualAccountsService.presignUpload(dto, user);
-  }
+  // @Get('presign-upload')
+  // @ApiOperation({ summary: 'Generate a presigned S3 PUT URL for direct browser-to-S3 upload' })
+  // presignUpload(
+  //   @Query() dto: PresignUploadDto,
+  //   @CurrentUser() user: AuthUser,
+  // ) {
+  //   return this.annualAccountsService.presignUpload(dto, user);
+  // }
 
   @Post('confirm-upload')
   @HttpCode(200)

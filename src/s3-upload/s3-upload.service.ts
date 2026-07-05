@@ -47,7 +47,9 @@ export class S3UploadService {
 
     if (item.folder) assertSafeFolderPath(item.folder);
 
-    const fileAlias = `${nameWithoutExt}_${randomUUID()}${ext}`;
+    // Use caller-supplied uploadId as the filename when provided (e.g. annual accounts
+    // needs the UUID to match what it stores in MongoDB). Otherwise generate a random one.
+    const fileAlias = item.uploadId ? `${item.uploadId}${ext}` : `${nameWithoutExt}_${randomUUID()}${ext}`;
     const key = item.folder ? `${item.folder}/${fileAlias}` : fileAlias;
 
     // ContentType and Metadata are intentionally omitted here.
@@ -60,7 +62,8 @@ export class S3UploadService {
       Key: key,
     });
 
-    const url = await getSignedUrl(this.s3.client, command, { expiresIn: UPLOAD_EXPIRES_IN });
+    const expiresIn = item.expiresIn ?? UPLOAD_EXPIRES_IN;
+    const url = await getSignedUrl(this.s3.client, command, { expiresIn });
     const fileUrl = url.split('?')[0];
     const path = this.s3.getKeyFromS3Url(fileUrl);
 

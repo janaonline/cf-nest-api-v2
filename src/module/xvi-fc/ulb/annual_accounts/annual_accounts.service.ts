@@ -7,6 +7,7 @@ import { Queue } from 'bullmq';
 import { Model, Types } from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 import { S3Service } from '../../../../core/s3/s3.service';
+import { S3UploadService } from '../../../../s3-upload/s3-upload.service';
 import {
   AnnualAccountFormStatus,
   FORM_STATUS_ID,
@@ -43,6 +44,8 @@ export class AnnualAccountsService implements OnModuleInit {
     private readonly ulbModel: Model<UlbDocument>,
 
     private readonly s3Service: S3Service,
+
+    private readonly s3UploadService: S3UploadService,
 
     @InjectQueue(ANNUAL_ACCOUNT_PROCESSING_QUEUE)
     private readonly ocrQueue: Queue<AnnualAccountOcrJobData>,
@@ -82,14 +85,20 @@ export class AnnualAccountsService implements OnModuleInit {
     }
 
     const uploadId = uuidv4();
-    const s3Key = `xvi-fc/annual-accounts/${dto.ulbId}/${dto.designYearId}/${dto.section}/${dto.docId}/${uploadId}.pdf`;
+    const folder = `xvi-fc/annual-accounts/${dto.ulbId}/${dto.designYearId}/${dto.section}/${dto.docId}`;
     const expiresIn = 300;
 
-    const presignedUrl = await this.s3Service.presignPut(s3Key, 'application/pdf', expiresIn);
+    const result = await this.s3UploadService.generatePutSignedUrl({
+      fileName: dto.fileName,
+      folder,
+      mimeType: 'application/pdf',
+      uploadId,
+      expiresIn,
+    });
 
     this.logger.log(`Presign URL generated — uploadId=${uploadId} docId=${dto.docId}`);
 
-    return { uploadId, presignedUrl, s3Key, expiresIn };
+    return { uploadId, presignedUrl: result.url, s3Key: result.path, expiresIn };
   }
 
   // ─── Confirm upload (presigned URL flow) ─────────────────────────────────────

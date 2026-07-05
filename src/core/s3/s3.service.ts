@@ -68,14 +68,6 @@ export class S3Service {
     return getSignedUrl(this.client, new GetObjectCommand({ Bucket: this.bucket, Key }), { expiresIn: this.presign });
   }
 
-  async presignPut(Key: string, ContentType: string, expiresIn = 300): Promise<string> {
-    return getSignedUrl(
-      this.client,
-      new PutObjectCommand({ Bucket: this.bucket, Key, ContentType }),
-      { expiresIn },
-    );
-  }
-
   async uploadPrivate(Key: string, Body: Buffer | string, ContentType = 'application/pdf'): Promise<string> {
     await this.client.send(
       new PutObjectCommand({
