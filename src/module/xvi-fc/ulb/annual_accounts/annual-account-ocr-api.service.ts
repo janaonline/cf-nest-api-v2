@@ -78,6 +78,7 @@ export class AnnualAccountOcrApiService {
     form.append('upload_id', uploadId);
     form.append('financial_year', financialYear);
 
+    this.logger.log(`API URL for OCR job submission: ${this.ocrJobApiUrl}`);
     this.logger.log(`Submitting OCR job — uploadId=${uploadId} docType=${docType}`);
 
     return firstValueFrom(
