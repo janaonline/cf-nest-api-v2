@@ -105,8 +105,15 @@ export class AnnualAccountStatusSyncService {
         console.log(`[StatusSync] ⏳ Still running — status=${statusNorm}`);
       }
     } catch (err: any) {
-      this.logger.error(`Failed to sync OCR job ${pythonJobId} (uploadId=${uploadId})`, err?.message);
-      console.error(`[StatusSync] ❌ syncOne error:`, err?.message);
+      const status = err?.response?.status ?? err?.status;
+      if (status === 404) {
+        // OCR job no longer exists on the Python server — mark as FAILED so cron stops retrying
+        this.logger.warn(`OCR job ${pythonJobId} not found (404) — marking uploadId=${uploadId} as FAILED`);
+        await this.handleFailed(historyDoc, 'OCR job not found on processing server (404)');
+      } else {
+        this.logger.error(`Failed to sync OCR job ${pythonJobId} (uploadId=${uploadId})`, err?.message);
+        console.error(`[StatusSync] ❌ syncOne error:`, err?.message);
+      }
     }
   }
 
