@@ -178,6 +178,8 @@ export type ResolvedField = FieldConfig & SectionFieldPlacement;
 export interface ResolvedSection {
   title: string;
   icon: string;
+  /** Muted text rendered inline next to the section title, e.g. "— will be the first login for this ULB". */
+  subtitle?: string;
   fields: ResolvedField[];
 }
 

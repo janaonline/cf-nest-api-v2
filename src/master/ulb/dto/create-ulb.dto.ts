@@ -13,6 +13,10 @@ export class CreateUlbDto {
       ulbType: '64f0c8b1e1b1c2a1b8a1a222',
       district: 'Vizianagaram',
       censusCode: '802542',
+      primaryContactName: 'K. Suresh Babu',
+      primaryContactDesignation: 'Commissioner',
+      primaryContactEmail: 'commissioner@ulb.gov.in',
+      primaryContactMobile: '9849001234',
     },
   })
   @IsObject()

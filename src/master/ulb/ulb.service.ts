@@ -1,8 +1,12 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
+import * as bcrypt from 'bcrypt';
+import { randomBytes } from 'crypto';
 import { MongoServerError } from 'mongodb';
 import { FilterQuery, Model, Types } from 'mongoose';
 import type { IAuthUser } from 'src/common/interfaces/auth-user.interface';
+import { EmailQueueService } from 'src/core/queue/email-queue/email-queue.service';
 import { Role } from 'src/module/auth/enum/role.enum';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
 import type { XviFcValidationErrorMap } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
@@ -10,6 +14,7 @@ import type { FieldConfig, ResolvedSection } from 'src/module/xvi-fc/common/type
 import { FormJsonService } from 'src/form-json/form-json.service';
 import { State, StateDocument } from 'src/schemas/state.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
+import { User, UserDocument } from 'src/schemas/user/user.schema';
 import {
   DEFAULT_ULB_EDIT_SECTIONS,
   DEFAULT_ULB_FIELDS,
@@ -17,6 +22,7 @@ import {
   RegisterUlbSectionLayout,
   ULB_EDIT_SECTIONS_FORM_JSON_TYPE,
   ULB_FORM_JSON_TYPE,
+  ULB_PRIMARY_CONTACT_FIELD_KEYS,
   ULB_REGISTER_SECTIONS_FORM_JSON_TYPE,
 } from './constants/ulb-form.constants';
 import { CreateUlbDto } from './dto/create-ulb.dto';
@@ -25,6 +31,7 @@ import { RejectUlbDto } from './dto/reject-ulb.dto';
 import { UpdateUlbDto } from './dto/update-ulb.dto';
 
 const OBJECT_ID_FIELDS = new Set(['state', 'ulbType', 'UA']);
+const TEMP_PASSWORD_TTL_MS = 72 * 60 * 60 * 1000;
 
 @Injectable()
 export class UlbService {
@@ -33,8 +40,11 @@ export class UlbService {
   constructor(
     @InjectModel(Ulb.name) private readonly ulbModel: Model<UlbDocument>,
     @InjectModel(State.name) private readonly stateModel: Model<StateDocument>,
+    @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
     private readonly formJsonService: FormJsonService,
     private readonly dynamicFormValidation: DynamicFormValidationService,
+    private readonly emailQueueService: EmailQueueService,
+    private readonly configService: ConfigService,
   ) {}
 
   /** Loads the admin-configurable ULB field definition, falling back to the built-in defaults. */
@@ -111,6 +121,7 @@ export class UlbService {
     return layout.map((section) => ({
       title: section.title,
       icon: section.icon,
+      subtitle: section.subtitle,
       fields: section.fields
         .map((fieldLayout) => {
           const field = fieldsByKey.get(fieldLayout.key);
@@ -218,23 +229,38 @@ export class UlbService {
     );
     if (!isValid) this.throwValidationError(errors);
 
+    const primaryContact = this.extractPrimaryContact(sanitizedPayload);
+    if (primaryContact.email) await this.ensureContactNotRegistered(primaryContact.email, primaryContact.mobile);
+
     const patch = this.toMongoPatch(sanitizedPayload);
     const name = String(patch.name);
     patch.slug = this.buildSlug(name);
 
+    let stateId: Types.ObjectId;
     if (user.role === Role.STATE) {
       // A STATE user can only submit ULBs for their own state; the submitted state (if any) is ignored.
       if (!user.state) throw new ForbiddenException('Your account has no state assigned.');
-      patch.state = new Types.ObjectId(String(user.state));
+      stateId = new Types.ObjectId(String(user.state));
+      patch.state = stateId;
       patch.approval = { status: 'PENDING', submittedBy: new Types.ObjectId(user._id) };
     } else {
       // ADMIN (or other privileged callers) create pre-approved master records.
+      stateId = patch.state as Types.ObjectId;
       patch.approval = { status: 'APPROVED', reviewedBy: new Types.ObjectId(user._id), reviewedAt: new Date() };
     }
 
+    const created = await this.persistUlb(patch);
+
+    if (primaryContact.email) {
+      await this.createPrimaryContactUser(primaryContact, created._id, stateId, name, user);
+    }
+
+    return created.toObject();
+  }
+
+  private async persistUlb(patch: Record<string, unknown>) {
     try {
-      const created = await this.ulbModel.create(patch);
-      return created.toObject();
+      return await this.ulbModel.create(patch);
     } catch (error: unknown) {
       if (error instanceof MongoServerError && error.code === 11000) {
         this.logger.warn(`Duplicate ULB detected: ${JSON.stringify(error.keyValue)}`);
@@ -243,6 +269,111 @@ export class UlbService {
       this.logger.error('Failed to create ULB', error);
       throw new BadRequestException('Failed to create ULB');
     }
+  }
+
+  /** Pulls the Register page's primary-contact fields out of the sanitized payload — these
+   *  describe the ULB's first login and are never persisted onto the `Ulb` document itself. */
+  private extractPrimaryContact(sanitizedPayload: Record<string, unknown>): {
+    name?: string;
+    designation?: string;
+    email?: string;
+    mobile?: string;
+  } {
+    const [nameKey, designationKey, emailKey, mobileKey] = ULB_PRIMARY_CONTACT_FIELD_KEYS;
+    const contact = {
+      name: sanitizedPayload[nameKey] as string | undefined,
+      designation: sanitizedPayload[designationKey] as string | undefined,
+      email: sanitizedPayload[emailKey] as string | undefined,
+      mobile: sanitizedPayload[mobileKey] as string | undefined,
+    };
+    for (const key of ULB_PRIMARY_CONTACT_FIELD_KEYS) delete sanitizedPayload[key];
+    return contact;
+  }
+
+  /** Guards against creating a login for an email/mobile that's already an active account —
+   *  checked before the ULB itself is created so we never end up with an orphaned ULB record. */
+  private async ensureContactNotRegistered(email: string, mobile?: string): Promise<void> {
+    const or: FilterQuery<UserDocument>[] = [{ email }];
+    if (mobile) or.push({ mobile });
+    const existing = await this.userModel.findOne({ isDeleted: false, $or: or }).select('_id').lean().exec();
+    if (existing) {
+      throw new BadRequestException('This email or mobile number is already registered to another account.');
+    }
+  }
+
+  /** Provisions the ULB's first login: a `Role.ULB` account with a temporary password, emailed
+   *  to the primary contact — mirrors the STATE/MoHUA member-invite flow in `UsersService`. */
+  private async createPrimaryContactUser(
+    contact: { name?: string; designation?: string; email?: string; mobile?: string },
+    ulbId: Types.ObjectId,
+    stateId: Types.ObjectId,
+    ulbName: string,
+    requester: IAuthUser,
+  ): Promise<void> {
+    const tempPassword = this.generateTempPassword();
+    const hashedPassword = await bcrypt.hash(tempPassword, 12);
+
+    await this.userModel.create({
+      name: contact.name,
+      email: contact.email,
+      mobile: contact.mobile || undefined,
+      designation: contact.designation || '',
+      role: Role.ULB,
+      ulb: ulbId,
+      state: stateId,
+      createdBy: new Types.ObjectId(requester._id),
+      status: 'APPROVED',
+      isActive: true,
+      isEmailVerified: true,
+      isDeleted: false,
+      password: hashedPassword,
+      isNewUser: true,
+      tempPasswordExpiresAt: new Date(Date.now() + TEMP_PASSWORD_TTL_MS),
+    });
+
+    const loginUrl = `${this.configService.get<string>('CLIENT_URL', 'https://cityfinance.in')}/login`;
+    this.emailQueueService
+      .addEmailJob({
+        to: contact.email as string,
+        subject: 'You have been invited to the CityFinance Portal',
+        templateName: './ulb-member-invite',
+        mailData: {
+          name: contact.name,
+          email: contact.email,
+          mobile: contact.mobile ?? '',
+          ulbName,
+          loginUrl,
+          tempPassword,
+        },
+      })
+      .catch((err: unknown) => {
+        this.logger.error(`Failed to queue ULB primary contact invite email to ${contact.email}:`, err);
+      });
+  }
+
+  /** Generates a random temporary password for a newly-provisioned login (mirrors `UsersService`). */
+  private generateTempPassword(): string {
+    const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+    const lower = 'abcdefghjkmnpqrstuvwxyz';
+    const digits = '23456789';
+    const symbols = '@#$%^&*!';
+    const all = upper + lower + digits + symbols;
+    const pick = (set: string) => set[randomBytes(1)[0] % set.length];
+    const chars = [
+      pick(upper),
+      pick(upper),
+      pick(lower),
+      pick(lower),
+      pick(digits),
+      pick(digits),
+      pick(symbols),
+      ...Array.from({ length: 5 }, () => pick(all)),
+    ];
+    for (let i = chars.length - 1; i > 0; i--) {
+      const j = randomBytes(1)[0] % (i + 1);
+      [chars[i], chars[j]] = [chars[j], chars[i]];
+    }
+    return chars.join('');
   }
 
   async findAll(

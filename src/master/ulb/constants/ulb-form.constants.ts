@@ -4,6 +4,7 @@ import type { FieldConfig, SectionFieldPlacement } from 'src/module/xvi-fc/commo
 export const ULB_FORM_JSON_TYPE = 'ULB_MASTER';
 
 const OBJECT_ID_PATTERN = '^[0-9a-fA-F]{24}$';
+const MOBILE_PATTERN = '^[6-9]\\d{9}$';
 
 /**
  * Fallback field definition used when no admin-configured FormJson document
@@ -152,10 +153,61 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
     maxFileSize: 5,
     validations: [{ name: 'required', validator: null, message: 'Gazette notification PDF is required.' }],
   },
+  {
+    key: 'primaryContactName',
+    label: 'Full Name',
+    formFieldType: 'text',
+    required: true,
+    validations: [
+      { name: 'required', validator: null, message: 'Primary contact name is required.' },
+      { name: 'maxlength', validator: 200, message: 'Name must be at most 200 characters.' },
+    ],
+  },
+  {
+    key: 'primaryContactDesignation',
+    label: 'Designation',
+    formFieldType: 'text',
+    validations: [{ name: 'maxlength', validator: 100, message: 'Designation must be at most 100 characters.' }],
+  },
+  {
+    key: 'primaryContactEmail',
+    label: 'Email Address',
+    formFieldType: 'text',
+    required: true,
+    validations: [
+      { name: 'required', validator: null, message: 'Primary contact email is required.' },
+      { name: 'email', validator: null, message: 'Enter a valid email address.' },
+    ],
+  },
+  {
+    // Required (unlike the other optional fields here) because this becomes the ULB login's
+    // `mobile`, which carries a non-sparse unique index — a missing value would collide with
+    // any other user account that also has no mobile on file.
+    key: 'primaryContactMobile',
+    label: 'Mobile Number',
+    formFieldType: 'text',
+    required: true,
+    validations: [
+      { name: 'required', validator: null, message: 'Primary contact mobile number is required.' },
+      { name: 'pattern', validator: MOBILE_PATTERN, message: 'Enter a valid 10-digit mobile number.' },
+    ],
+  },
 ];
 
 /** `data` keys that map directly onto typed fields on the `Ulb` mongoose schema. */
 export const ULB_DATA_KEYS = DEFAULT_ULB_FIELDS.map((f) => f.key);
+
+/**
+ * Primary-contact field keys collected on the Register ULB page. These describe the person who
+ * becomes the ULB's first login — they are used to provision a `User` account and are never
+ * persisted onto the `Ulb` document itself, so `UlbService.create()` strips them before the patch.
+ */
+export const ULB_PRIMARY_CONTACT_FIELD_KEYS = [
+  'primaryContactName',
+  'primaryContactDesignation',
+  'primaryContactEmail',
+  'primaryContactMobile',
+] as const;
 
 /** `type` key under which the Register-ULB page's section/grid layout is stored in the formjsons collection. */
 export const ULB_REGISTER_SECTIONS_FORM_JSON_TYPE = 'ULB_REGISTER_SECTIONS';
@@ -169,6 +221,8 @@ export interface RegisterUlbFieldLayout extends SectionFieldPlacement {
 export interface RegisterUlbSectionLayout {
   title: string;
   icon: string;
+  /** Muted text rendered inline next to the section title, e.g. "— will be the first login for this ULB". */
+  subtitle?: string;
   fields: RegisterUlbFieldLayout[];
 }
 
@@ -204,6 +258,17 @@ export const DEFAULT_ULB_REGISTER_SECTIONS: RegisterUlbSectionLayout[] = [
         grid: 'col-12',
         labelHint: '— upload the PDF of the gazette notifying constitution',
       },
+    ],
+  },
+  {
+    title: 'Primary Contact at ULB',
+    icon: 'bi-person',
+    subtitle: '— will be the first login for this ULB',
+    fields: [
+      { key: 'primaryContactName', grid: 'col-md-6' },
+      { key: 'primaryContactDesignation', grid: 'col-md-6' },
+      { key: 'primaryContactEmail', grid: 'col-md-6' },
+      { key: 'primaryContactMobile', grid: 'col-md-6' },
     ],
   },
 ];
