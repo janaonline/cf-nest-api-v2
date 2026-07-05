@@ -20,7 +20,7 @@ export class RecaptchaMiddleware implements NestMiddleware {
     const nodeEnv = this.configService.get<string>('NODE_ENV');
     const skipDev = this.configService.get<string>('RECAPTCHA_SKIP_DEV');
 
-    if (nodeEnv === 'development' && skipDev === 'true') {
+    if (skipDev === 'true') {
       return next();
     }
 
@@ -33,11 +33,9 @@ export class RecaptchaMiddleware implements NestMiddleware {
     const minScore = parseFloat(this.configService.get<string>('RECAPTCHA_MIN_SCORE') ?? '0.5');
 
     try {
-      const { data } = await axios.post<RecaptchaResponse>(
-        'https://www.google.com/recaptcha/api/siteverify',
-        null,
-        { params: { secret, response: token, remoteip: req.ip } },
-      );
+      const { data } = await axios.post<RecaptchaResponse>('https://www.google.com/recaptcha/api/siteverify', null, {
+        params: { secret, response: token, remoteip: req.ip },
+      });
 
       if (!data.success) {
         this.logger.warn('reCAPTCHA failed', data['error-codes']);
