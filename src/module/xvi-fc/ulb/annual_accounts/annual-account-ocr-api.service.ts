@@ -60,7 +60,11 @@ export class AnnualAccountOcrApiService {
     private readonly http: HttpService,
     private readonly config: ConfigService,
   ) {
-    const baseUrl = this.config.get<string | undefined>('DIGITIZATION_API_URL') || '';
+    // Derive the OCR API host from the current app's own BASE_URL
+    // (e.g. BASE_URL=https://dev.cityfinance.in/api/v2/ -> https://dev.cityfinance.in/api/v3/)
+    const configuredBaseUrl = this.config.get<string>('BASE_URL', '');
+    const origin = configuredBaseUrl ? new URL(configuredBaseUrl).origin : '';
+    const baseUrl = `${origin}/api/v3/`;
     this.ocrJobApiUrl = `${baseUrl}ocr-validation/jobs`;
   }
 
