@@ -130,7 +130,7 @@ export class AnnualAccountsService implements OnModuleInit {
     const pdfBuffer = await this.s3Service.getPdfBufferFromS3(dto.s3Key);
     const sha256 = createHash('sha256').update(pdfBuffer).digest('hex');
     const sizeKb = Math.round((dto.fileSize / 1024) * 100) / 100;
-    const pages = this.s3Service.getPdfPageCountFromBuffer(pdfBuffer);
+    const pages = await this.s3Service.getPdfPageCountFromBuffer(pdfBuffer);
 
     const annualAccountId = await this.findOrInitialize(dto.ulbId, dto.designYearId, user);
 
