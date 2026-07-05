@@ -89,7 +89,9 @@ export class AnnualAccountOcrApiService {
   }
 
   async getJobStatus(jobId: string): Promise<OcrStatusResponse> {
-    return firstValueFrom(this.http.get<OcrStatusResponse>(`${this.ocrJobApiUrl}/${jobId}`).pipe(map((r) => r.data)));
+    return firstValueFrom(
+      this.http.get<OcrStatusResponse>(`${this.ocrJobApiUrl}/${jobId}/status`).pipe(map((r) => r.data)),
+    );
   }
 
   async getJobResult(jobId: string): Promise<OcrResultResponse> {
