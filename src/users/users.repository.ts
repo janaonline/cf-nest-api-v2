@@ -155,6 +155,8 @@ export class UsersRepository {
       isDeleted: false,
       role: { $in: ['STATE'] },
       isXVIFCProfileVerified: { $ne: true },
+      // Only initialise subrole for users who don't have one yet — never overwrite manual assignments
+      xviFcSubrole: { $in: [null, ''] },
     };
     await Promise.all([
       this.userModel.updateMany({ ...scope, isNodalOfficer: true }, { $set: { xviFcSubrole: 'admin' } }).exec(),
