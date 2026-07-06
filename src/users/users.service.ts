@@ -628,7 +628,7 @@ export class UsersService {
 
     const targetUser = await this.userModel
       .findOne({ _id: userId, isDeleted: false })
-      .select('ulb state isNodalOfficer')
+      .select('ulb state isNodalOfficer xviFcSubrole')
       .lean()
       .exec();
     if (!targetUser) throw new NotFoundException('User not found');
@@ -664,7 +664,8 @@ export class UsersService {
     const isStateProfileVerify =
       isSelfUpdate && !isUlbScope && update['isXVIFCProfileVerified'] === true && targetUser.state;
 
-    if (isStateProfileVerify) {
+    // Only derive subrole if one has not been manually assigned already
+    if (isStateProfileVerify && !(targetUser as Record<string, unknown>)['xviFcSubrole']) {
       update['xviFcSubrole'] = targetUser.isNodalOfficer ? 'admin' : 'reviewer';
     }
 
@@ -698,6 +699,8 @@ export class UsersService {
       role: { $in: UsersService.XVIFC_STATE_ROLES },
       // $ne: true catches false, null, and undefined (legacy docs that predate the field)
       isXVIFCProfileVerified: { $ne: true },
+      // Only initialise subrole for users who don't have one yet — never overwrite manual assignments
+      xviFcSubrole: { $in: [null, ''] },
     };
 
     await Promise.all([
