@@ -38,10 +38,7 @@ export const XVIFC_STATE_PERMISSIONS: Record<XviFcSubrole, Permission[]> = {
     Permission.VIEW_STATE_FORMS,
     Permission.EDIT_STATE_FORMS,
   ],
-  viewer: [
-    Permission.VIEW_STATUS_REPORTS,
-    Permission.VIEW_DASHBOARDS,
-  ],
+  viewer: [Permission.VIEW_STATUS_REPORTS, Permission.VIEW_DASHBOARDS, Permission.VIEW_STATE_FORMS],
 };
 
 // ─── XVI-FC MoHUA subrole permissions ─────────────────────────────────────────
@@ -69,10 +66,7 @@ export const XVIFC_MOHUA_PERMISSIONS: Record<XviFcSubrole, Permission[]> = {
     Permission.SEND_REMINDERS_TO_STATES,
     Permission.REQUEST_INFO_FROM_STATES,
   ],
-  viewer: [
-    Permission.VIEW_STATUS_REPORTS,
-    Permission.VIEW_DASHBOARDS,
-  ],
+  viewer: [Permission.VIEW_STATUS_REPORTS, Permission.VIEW_DASHBOARDS],
 };
 
 /**
