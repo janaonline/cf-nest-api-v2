@@ -160,6 +160,9 @@ export interface FieldConfig {
   radioLayout?: 'vertical' | 'horizontal' | 'inline';
   hideLabel?: boolean;
   displayInlineLabel?: boolean;
+  showAsterisk?: boolean;
+  decimal?: number;
+  warning?: Validator[];
 }
 
 // ─── Sectioned / resolved form config ──────────────────────────────────────────
