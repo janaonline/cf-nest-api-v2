@@ -87,27 +87,17 @@ export class UlbService {
    * Edit section endpoints — which fields actually surface depends on which layout is merged in.
    */
   private async buildResolvedFieldsByKey(): Promise<Map<string, FieldConfig>> {
-    const [fields, ulbTypes, states] = await Promise.all([this.loadFields(), this.findTypes(), this.findStates()]);
-
+    const [fields, ulbTypes] = await Promise.all([
+      this.loadFields(),
+      this.findTypes(),
+      //  this.findStates()
+    ]);
     const fieldsByKey = new Map(fields.map((field) => [field.key, field]));
-    fieldsByKey.set('ulbType', {
-      key: 'ulbType',
-      label: 'ULB Type',
-      formFieldType: 'select',
-      required: true,
-      placeholder: 'Select type...',
-      options: ulbTypes.map((type) => ({ id: String(type._id), label: type.name })),
-      validations: [{ name: 'required', validator: null, message: 'ULB type is required.' }],
-    });
-    fieldsByKey.set('state', {
-      key: 'state',
-      label: 'State',
-      formFieldType: 'select',
-      required: true,
-      placeholder: 'Select a state...',
-      options: states.map((state) => ({ id: String(state._id), label: state.name })),
-      validations: [{ name: 'required', validator: null, message: 'State is required.' }],
-    });
+
+    const ulbTypeField = fieldsByKey.get('ulbType');
+    if (ulbTypeField) {
+      ulbTypeField.options = ulbTypes.map((type) => ({ id: String(type._id), label: type.name }));
+    }
 
     return fieldsByKey;
   }
@@ -142,7 +132,10 @@ export class UlbService {
    * frontend renders this response directly — no client-side lookup or merging required.
    */
   async getRegisterSections(): Promise<ResolvedSection[]> {
-    const [fieldsByKey, layout] = await Promise.all([this.buildResolvedFieldsByKey(), this.loadRegisterSectionsLayout()]);
+    const [fieldsByKey, layout] = await Promise.all([
+      this.buildResolvedFieldsByKey(),
+      this.loadRegisterSectionsLayout(),
+    ]);
     return this.mergeLayoutWithFields(layout, fieldsByKey);
   }
 

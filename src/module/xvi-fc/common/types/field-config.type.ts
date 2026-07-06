@@ -158,6 +158,8 @@ export interface FieldConfig {
   appearance?: FieldAppearanceConfig;
   supportingContent?: FieldSupportingContent[];
   radioLayout?: 'vertical' | 'horizontal' | 'inline';
+  hideLabel?: boolean;
+  displayInlineLabel?: boolean;
 }
 
 // ─── Sectioned / resolved form config ──────────────────────────────────────────

@@ -13,19 +13,22 @@ const MOBILE_PATTERN = '^[6-9]\\d{9}$';
  * (create a document with type: 'ULB_MASTER') without a code change.
  */
 export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
-  {
-    key: 'code',
-    label: 'ULB Code',
-    formFieldType: 'text',
-    required: true,
-    validations: [
-      { name: 'required', validator: null, message: 'ULB code is required.' },
-      { name: 'maxlength', validator: 20, message: 'ULB code must be at most 20 characters.' },
-    ],
-  },
+  // {
+  //   key: 'code',
+  //   label: 'ULB Code',
+  //   formFieldType: 'text',
+  //   required: true,
+  //   displayInlineLabel: true,
+  //   validations: [
+  //     { name: 'required', validator: null, message: 'ULB code is required.' },
+  //     { name: 'maxlength', validator: 20, message: 'ULB code must be at most 20 characters.' },
+  //   ],
+  // },
   {
     key: 'name',
-    label: 'ULB Name',
+    label: 'ULB Name1',
+    displayInlineLabel: true,
+    hideLabel: true,
     formFieldType: 'text',
     required: true,
     validations: [
@@ -33,21 +36,25 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
       { name: 'maxlength', validator: 200, message: 'ULB name must be at most 200 characters.' },
     ],
   },
-  {
-    key: 'state',
-    label: 'State',
-    formFieldType: 'select',
-    required: true,
-    validations: [
-      { name: 'required', validator: null, message: 'State is required.' },
-      { name: 'pattern', validator: OBJECT_ID_PATTERN, message: 'State must be a valid id.' },
-    ],
-  },
+  // {
+  //   key: 'state',
+  //   label: 'State',
+  //   formFieldType: 'select',
+  //   displayInlineLabel: true,
+  //   required: true,
+  //   validations: [
+  //     { name: 'required', validator: null, message: 'State is required.' },
+  //     { name: 'pattern', validator: OBJECT_ID_PATTERN, message: 'State must be a valid id.' },
+  //   ],
+  // },
   {
     key: 'ulbType',
     label: 'ULB Type',
     formFieldType: 'select',
+    displayInlineLabel: true,
+    placeholder: 'Select type...',
     required: true,
+    options: [], // populated dynamically in UlbService.buildResolvedFieldsByKey()
     validations: [
       { name: 'required', validator: null, message: 'ULB type is required.' },
       { name: 'pattern', validator: OBJECT_ID_PATTERN, message: 'ULB type must be a valid id.' },
@@ -57,6 +64,7 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
     key: 'district',
     label: 'District',
     formFieldType: 'text',
+    displayInlineLabel: true,
     required: true,
     validations: [
       { name: 'required', validator: null, message: 'District is required.' },
@@ -66,74 +74,78 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
   {
     key: 'censusCode',
     label: '2011 Census Code',
+    displayInlineLabel: true,
     formFieldType: 'text',
     validations: [{ name: 'maxlength', validator: 20, message: 'Census code must be at most 20 characters.' }],
   },
-  {
-    key: 'sbCode',
-    label: 'SB Code',
-    formFieldType: 'text',
-    validations: [],
-  },
-  {
-    key: 'population',
-    label: 'Population',
-    formFieldType: 'number',
-    validations: [{ name: 'min', validator: 0, message: 'Population must be ≥ 0.' }],
-  },
-  {
-    key: 'area',
-    label: 'Area',
-    formFieldType: 'number',
-    validations: [{ name: 'min', validator: 0, message: 'Area must be ≥ 0.' }],
-  },
-  {
-    key: 'wards',
-    label: 'Wards',
-    formFieldType: 'number',
-    validations: [{ name: 'min', validator: 0, message: 'Wards must be ≥ 0.' }],
-  },
-  {
-    key: 'natureOfUlb',
-    label: 'Nature of ULB',
-    formFieldType: 'text',
-    validations: [],
-  },
-  {
-    key: 'isUA',
-    label: 'Is Urban Agglomeration',
-    formFieldType: 'select',
-    options: ['YES', 'No'],
-    validations: [],
-  },
-  {
-    key: 'isMillionPlus',
-    label: 'Is Million Plus',
-    formFieldType: 'select',
-    options: ['YES', 'No'],
-    validations: [],
-  },
-  {
-    key: 'amrut',
-    label: 'AMRUT',
-    formFieldType: 'text',
-    validations: [],
-  },
-  {
-    key: 'lgdCode',
-    label: 'LGD Code',
-    formFieldType: 'text',
-    validations: [],
-  },
-  {
-    key: 'regionalName',
-    label: 'Regional Name',
-    formFieldType: 'text',
-    validations: [],
-  },
+  // {
+  //   key: 'sbCode',
+  //   label: 'SB Code',
+  //   formFieldType: 'text',
+  //   displayInlineLabel: true,
+  //   validations: [],
+  // },
+  // {
+  //   key: 'population',
+  //   label: 'Population',
+  //   formFieldType: 'number',
+  //   validations: [{ name: 'min', validator: 0, message: 'Population must be ≥ 0.' }],
+  // },
+  // {
+  //   key: 'area',
+  //   label: 'Area',
+  //   formFieldType: 'number',
+  //   validations: [{ name: 'min', validator: 0, message: 'Area must be ≥ 0.' }],
+  // },
+  // {
+  //   key: 'wards',
+  //   label: 'Wards',
+  //   formFieldType: 'number',
+  //   validations: [{ name: 'min', validator: 0, message: 'Wards must be ≥ 0.' }],
+  // },
+  // {
+  //   key: 'natureOfUlb',
+  //   label: 'Nature of ULB',
+  //   formFieldType: 'text',
+  //   validations: [],
+  // },
+  // {
+  //   key: 'isUA',
+  //   label: 'Is Urban Agglomeration',
+  //   formFieldType: 'select',
+  //   options: ['YES', 'No'],
+  //   validations: [],
+  // },
+  // {
+  //   key: 'isMillionPlus',
+  //   label: 'Is Million Plus',
+  //   formFieldType: 'select',
+  //   options: ['YES', 'No'],
+  //   validations: [],
+  // },
+  // {
+  //   key: 'amrut',
+  //   label: 'AMRUT',
+  //   formFieldType: 'text',
+  //   validations: [],
+  // },
+  // {
+  //   key: 'lgdCode',
+  //   label: 'LGD Code',
+  //   formFieldType: 'text',
+  //   displayInlineLabel: true,
+  //   validations: [],
+  // },
+  // {
+  //   key: 'regionalName',
+  //   label: 'Regional Name',
+  //   formFieldType: 'text',
+  //   validations: [],
+  // },
   {
     key: 'dateOfConstitution',
     label: 'Date of Constitution',
+    displayInlineLabel: true,
     formFieldType: 'date',
     required: true,
     validations: [{ name: 'required', validator: null, message: 'Date of constitution is required.' }],
@@ -141,12 +153,14 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
   {
     key: 'gazetteNotificationNumber',
     label: 'Gazette Notification Number',
+    displayInlineLabel: true,
     formFieldType: 'text',
     validations: [{ name: 'maxlength', validator: 100, message: 'Must not exceed 100 characters.' }],
   },
   {
     key: 'gazetteNotificationFile',
     label: 'Gazette Notification',
+    displayInlineLabel: true,
     formFieldType: 'file',
     required: true,
     allowedFileTypes: ['pdf'],
@@ -156,6 +170,7 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
   {
     key: 'primaryContactName',
     label: 'Full Name',
+    displayInlineLabel: true,
     formFieldType: 'text',
     required: true,
     validations: [
@@ -166,12 +181,14 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
   {
     key: 'primaryContactDesignation',
     label: 'Designation',
+    displayInlineLabel: true,
     formFieldType: 'text',
     validations: [{ name: 'maxlength', validator: 100, message: 'Designation must be at most 100 characters.' }],
   },
   {
     key: 'primaryContactEmail',
     label: 'Email Address',
+    displayInlineLabel: true,
     formFieldType: 'text',
     required: true,
     validations: [
@@ -185,6 +202,7 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
     // any other user account that also has no mobile on file.
     key: 'primaryContactMobile',
     label: 'Mobile Number',
+    displayInlineLabel: true,
     formFieldType: 'text',
     required: true,
     validations: [
