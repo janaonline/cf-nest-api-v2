@@ -124,6 +124,9 @@ export interface FieldConfig {
   formFieldType: FieldType;
   key: string;
   label: string;
+  /** Cosmetic flag consumed by section/grid renderers to show a required asterisk next to the label.
+   *  Independent of `validations` — a 'required' validator is what's actually enforced. */
+  required?: boolean;
   /** Default or current field value; hydrated from saved data on GET responses */
   value?: unknown;
   /** false → field is never rendered by the frontend */
@@ -155,6 +158,34 @@ export interface FieldConfig {
   appearance?: FieldAppearanceConfig;
   supportingContent?: FieldSupportingContent[];
   radioLayout?: 'vertical' | 'horizontal' | 'inline';
+  hideLabel?: boolean;
+  displayInlineLabel?: boolean;
+  showAsterisk?: boolean;
+  decimal?: number;
+  warning?: Validator[];
+}
+
+// ─── Sectioned / resolved form config ──────────────────────────────────────────
+
+/** Grid width and inline hints for one field's placement within a section. */
+export interface SectionFieldPlacement {
+  grid: string;
+  labelHint?: string;
+  hintText?: string;
+}
+
+/** A field fully resolved for rendering: its real definition merged with its section placement. */
+export type ResolvedField = FieldConfig & SectionFieldPlacement;
+
+/** One card-sectioned group of fully-resolved fields — a client can render this directly, with
+ *  no further lookup or merging required. Reusable by any module that serves a sectioned,
+ *  admin-configurable form (see `src/master/ulb` for the first consumer). */
+export interface ResolvedSection {
+  title: string;
+  icon: string;
+  /** Muted text rendered inline next to the section title, e.g. "— will be the first login for this ULB". */
+  subtitle?: string;
+  fields: ResolvedField[];
 }
 
 /** FieldConfig with a guaranteed non-optional `value` after GET hydration */

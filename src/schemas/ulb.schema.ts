@@ -23,18 +23,63 @@ export class DulyElected {
 
 export const DulyElectedSchema = SchemaFactory.createForClass(DulyElected);
 
+@Schema({ _id: false })
+export class Approval {
+  // ULBs created by ADMIN are auto-approved (service sets 'APPROVED' at create time).
+  // ULBs created by a STATE user start 'PENDING' until an ADMIN approves/rejects them.
+  @Prop({ type: String, enum: ['PENDING', 'APPROVED', 'REJECTED'], default: 'APPROVED', index: true })
+  status: 'PENDING' | 'APPROVED' | 'REJECTED';
+
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  submittedBy: Types.ObjectId | null;
+
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  reviewedBy: Types.ObjectId | null;
+
+  @Prop({ type: Date, default: null })
+  reviewedAt: Date | null;
+
+  @Prop({ default: '' })
+  rejectReason: string;
+}
+
+export const ApprovalSchema = SchemaFactory.createForClass(Approval);
+
+@Schema({ _id: false })
+export class GazetteNotificationFile {
+  @Prop({ type: String, default: '' })
+  fileName: string;
+
+  @Prop({ type: String, default: '' })
+  fileUrl: string;
+
+  @Prop({ type: Number, default: null })
+  fileSize: number | null;
+
+  @Prop({ type: String })
+  mimeType?: string;
+
+  @Prop({ type: Number, default: null })
+  noOfPage: number | null;
+}
+
+export const GazetteNotificationFileSchema = SchemaFactory.createForClass(GazetteNotificationFile);
+
 @Schema({ timestamps: { createdAt: 'createdAt', updatedAt: 'modifiedAt' } })
 export class Ulb {
   @Prop({ required: true, unique: true, index: true })
   code: string;
 
-  @Prop({ required: true })
+  @Prop({ required: true, unique: true, index: true })
   name: string;
 
   @Prop({ unique: true, index: true })
   slug: string;
 
-  @Prop({ default: null })
+  // No `default: null` — a sparse unique index only excludes documents where the
+  // field is entirely absent; an explicit `null` still counts as a value and would
+  // collide across every ULB missing a census code.
+  @Prop({ unique: true, sparse: true, index: true })
   censusCode: string;
 
   @Prop({ default: null })
@@ -136,6 +181,20 @@ export class Ulb {
   @Prop({ default: '' })
   regionalName: string;
 
+  // ── Constitution & legal basis ─────────────────────────────────────────────
+  @Prop({ type: Date, default: null })
+  dateOfConstitution: Date | null;
+
+  @Prop({ default: '' })
+  gazetteNotificationNumber: string;
+
+  @Prop({ type: GazetteNotificationFileSchema, default: null })
+  gazetteNotificationFile: GazetteNotificationFile | null;
+
+  // ── Approval workflow ──────────────────────────────────────────────────────
+  @Prop({ type: ApprovalSchema, default: () => ({}) })
+  approval: Approval;
+
   @Prop({
     type: {
       '2023-24': GSDPEligibilitySchema,
@@ -162,3 +221,4 @@ export type UlbDocument = Ulb & Document;
 export const UlbSchema = SchemaFactory.createForClass(Ulb);
 
 UlbSchema.index({ state: 1, isActive: 1 });
+UlbSchema.index({ state: 1, 'approval.status': 1 });
