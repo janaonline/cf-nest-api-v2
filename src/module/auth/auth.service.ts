@@ -130,7 +130,8 @@ export class AuthService {
       state?: unknown;
       isNodalOfficer?: boolean;
       role?: string;
-    }>(userId, 'state isNodalOfficer role');
+      xviFcSubrole?: string | null;
+    }>(userId, 'state isNodalOfficer role xviFcSubrole');
 
     const profileUpdate: Record<string, unknown> = {
       isNewUser: false,
@@ -142,8 +143,8 @@ export class AuthService {
       ...(profile?.designation && { designation: profile.designation }),
     };
 
-    // For STATE new users: derive and stamp their xviFcSubrole in the same write
-    if (user?.role === 'STATE' && user.state) {
+    // Only derive subrole if one has not been manually assigned already
+    if (user?.role === 'STATE' && user.state && !user.xviFcSubrole) {
       profileUpdate['xviFcSubrole'] = user.isNodalOfficer ? 'admin' : 'reviewer';
     }
 
