@@ -3,7 +3,7 @@ import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/commo
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 
-import { FORM_STATUS, getFormStatusLabel, type FormStatusType } from 'src/common/constants/form-status.constants';
+import { FORM_STATUS, type FormStatusType } from 'src/common/constants/form-status.constants';
 import { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { toObjectIdString } from 'src/common/utils/objectid.util';
@@ -203,8 +203,7 @@ export class XviFcService {
         form_status_id: null,
       },
       xviFcBankAccount: {
-        currentFormStatus: bankAccountStatus,
-        currentFormStatusLabel: getFormStatusLabel(bankAccountStatus),
+        form_status: bankAccountStatus,
         form_status_id: null,
       },
     };
