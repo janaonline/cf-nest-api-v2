@@ -17,21 +17,18 @@ export class BankAccountController {
 
   @Get('ifsc/:ifscCode')
   @UseGuards(PermissionGuard)
-  @RequirePermissions(Permission.VIEW_STATUS_REPORTS)
   lookupIfsc(@Param('ifscCode') ifscCode: string) {
     return this.bankAccountService.lookupIfsc(ifscCode);
   }
 
   @Get()
   @UseGuards(PermissionGuard)
-  @RequirePermissions(Permission.VIEW_STATUS_REPORTS)
   getBankAccount(@Query() query: GetXviFcBankAccountQueryDto, @CurrentUser() user: AuthUser) {
     return this.bankAccountService.getBankAccount(query, user);
   }
 
   @Post()
   @UseGuards(PermissionGuard)
-  @RequirePermissions(Permission.UPLOAD_DOCUMENTS)
   submitBankAccount(@Body() dto: SubmitXviFcBankAccountDto, @CurrentUser() user: AuthUser) {
     return this.bankAccountService.submitBankAccount(dto, user);
   }
