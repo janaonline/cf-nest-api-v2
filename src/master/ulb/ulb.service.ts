@@ -373,7 +373,7 @@ export class UlbService {
     query: QueryUlbDto,
     user: IAuthUser,
   ): Promise<{
-    data: Ulb[];
+    data: (Ulb & { stateName: string; ulbTypeName: string })[];
     page: number;
     limit: number;
     total: number;
@@ -416,12 +416,46 @@ export class UlbService {
     ]);
 
     return {
-      data: data.map((ulb) => this.withApprovalDefaults(ulb)),
+      data: await this.attachLookupNames(data.map((ulb) => this.withApprovalDefaults(ulb))),
       page,
       limit,
       total,
       pages: Math.ceil(total / limit),
     };
+  }
+
+  /** Resolves `state`/`ulbType` ids on a page of ULBs to their display names, so the list page
+   *  can render them directly without a separate client-side lookup call. */
+  private async attachLookupNames<T extends Ulb>(ulbs: T[]): Promise<(T & { stateName: string; ulbTypeName: string })[]> {
+    if (ulbs.length === 0) return [];
+
+    const stateIds = [...new Set(ulbs.map((ulb) => String(ulb.state)).filter(Boolean))];
+    const ulbTypeIds = [...new Set(ulbs.map((ulb) => String(ulb.ulbType)).filter(Boolean))];
+
+    type LookupDoc = { _id: Types.ObjectId; name: string };
+
+    const [states, ulbTypes] = await Promise.all([
+      stateIds.length
+        ? this.stateModel
+            .find({ _id: { $in: stateIds.map((id) => new Types.ObjectId(id)) } }, { name: 1 })
+            .lean<LookupDoc[]>()
+        : Promise.resolve<LookupDoc[]>([]),
+      ulbTypeIds.length
+        ? (this.ulbModel.db
+            .collection('ulbtypes')
+            .find({ _id: { $in: ulbTypeIds.map((id) => new Types.ObjectId(id)) } }, { projection: { name: 1 } })
+            .toArray() as unknown as Promise<LookupDoc[]>)
+        : Promise.resolve<LookupDoc[]>([]),
+    ]);
+
+    const stateNameById = new Map(states.map((s) => [String(s._id), s.name]));
+    const ulbTypeNameById = new Map(ulbTypes.map((t) => [String(t._id), t.name]));
+
+    return ulbs.map((ulb) => ({
+      ...ulb,
+      stateName: stateNameById.get(String(ulb.state)) ?? '',
+      ulbTypeName: ulbTypeNameById.get(String(ulb.ulbType)) ?? '',
+    }));
   }
 
   async findOne(id: string): Promise<Ulb> {

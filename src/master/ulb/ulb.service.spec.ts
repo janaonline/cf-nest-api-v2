@@ -317,6 +317,32 @@ describe('UlbService', () => {
         ForbiddenException,
       );
     });
+
+    it('attaches stateName and ulbTypeName resolved from the ids on each row', async () => {
+      const ulbRow = { _id: new Types.ObjectId(), name: 'Vizag', state: new Types.ObjectId(stateId), ulbType: new Types.ObjectId(ulbTypeId) };
+      ulbModel.find = jest.fn().mockReturnValue({
+        sort: jest.fn().mockReturnThis(),
+        skip: jest.fn().mockReturnThis(),
+        limit: jest.fn().mockReturnThis(),
+        lean: jest.fn().mockResolvedValue([ulbRow]),
+      });
+      ulbModel.countDocuments.mockResolvedValue(1);
+      stateModel.find = jest.fn().mockReturnValue({
+        lean: jest.fn().mockResolvedValue([{ _id: stateId, name: 'Andhra Pradesh' }]),
+      });
+      ulbModel.db = {
+        collection: jest.fn().mockReturnValue({
+          find: jest.fn().mockReturnValue({
+            toArray: jest.fn().mockResolvedValue([{ _id: ulbTypeId, name: 'Municipal Corporation' }]),
+          }),
+        }),
+      };
+
+      const result = await service.findAll({ page: 1, limit: 10 }, adminUser);
+
+      expect(result.data[0].stateName).toBe('Andhra Pradesh');
+      expect(result.data[0].ulbTypeName).toBe('Municipal Corporation');
+    });
   });
 
   describe('getRegisterSections', () => {
