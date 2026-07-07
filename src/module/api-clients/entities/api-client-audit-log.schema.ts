@@ -25,6 +25,7 @@ export class ApiClientAuditLog {
   clientId?: string;
 
   @Prop({
+    type: String,
     required: true,
     enum: [
       'API_CLIENT_CREATED',
