@@ -1,8 +1,8 @@
 import { createCipheriv, createDecipheriv, createHmac, randomBytes } from 'crypto';
 import { getFormStatusLabel, type FormStatusType } from 'src/common/constants/form-status.constants';
 import {
-  DEFAULT_XVI_FC_BANK_ACCOUNT_PROOF,
-  type XviFcBankAccountProof,
+  DEFAULT_XVI_FC_BANK_ACCOUNT_PROOF_FILE,
+  type XviFcBankAccountProofFile,
   type XviFcBankAccountResponse,
   type XviFcBankDetails,
 } from '../bank-account.types';
@@ -88,9 +88,9 @@ export function buildSafeBankAccountResponse(record: BankAccountRecordLike): Xvi
       ? record.toObject()
       : (record as Record<string, unknown>);
   const currentFormStatus = source.currentFormStatus as FormStatusType;
-  const proof = {
-    ...DEFAULT_XVI_FC_BANK_ACCOUNT_PROOF,
-    ...((source.proof as Partial<XviFcBankAccountProof> | undefined) ?? {}),
+  const proofFile = {
+    ...DEFAULT_XVI_FC_BANK_ACCOUNT_PROOF_FILE,
+    ...((source.proofFile as Partial<XviFcBankAccountProofFile> | undefined) ?? {}),
   };
 
   return {
@@ -101,7 +101,7 @@ export function buildSafeBankAccountResponse(record: BankAccountRecordLike): Xvi
     bankDetails: normalizeBankDetails(source.bankDetails),
     accountNumberMasked: (source.accountNumberMasked as string | undefined) ?? '',
     accountNumberLast4: (source.accountNumberLast4 as string | undefined) ?? '',
-    proof,
+    proofFile,
     currentFormStatus,
     currentFormStatusLabel: getFormStatusLabel(currentFormStatus),
     submittedBy: toOptionalResponseString(source.submittedBy),

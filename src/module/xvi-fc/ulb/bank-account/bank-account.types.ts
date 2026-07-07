@@ -1,11 +1,15 @@
 import type { Types } from 'mongoose';
 import type { FormStatusType } from 'src/common/constants/form-status.constants';
 
-export interface XviFcBankAccountProof {
-  fileName: string;
-  fileUrl: string;
-  fileSize: number | null;
-  mimeType: string;
+export type XviFcBankAccountProofMimeType = 'application/pdf' | 'image/jpeg' | 'image/png';
+
+export interface XviFcBankAccountProofFile {
+  originalName: string;
+  mimeType: XviFcBankAccountProofMimeType;
+  pages: number | null;
+  sizeKb: number;
+  s3Key: string;
+  sha256: string;
 }
 
 export interface XviFcBankDetails {
@@ -17,11 +21,13 @@ export interface XviFcBankDetails {
   micr: string | null;
 }
 
-export const DEFAULT_XVI_FC_BANK_ACCOUNT_PROOF: XviFcBankAccountProof = {
-  fileName: '',
-  fileUrl: '',
-  fileSize: null,
-  mimeType: '',
+export const DEFAULT_XVI_FC_BANK_ACCOUNT_PROOF_FILE: XviFcBankAccountProofFile = {
+  originalName: '',
+  mimeType: 'application/pdf',
+  pages: null,
+  sizeKb: 0,
+  s3Key: '',
+  sha256: '',
 };
 
 export interface XviFcBankAccountRecord {
@@ -33,7 +39,7 @@ export interface XviFcBankAccountRecord {
   accountNumberHash: string;
   accountNumberMasked: string;
   accountNumberLast4: string;
-  proof: XviFcBankAccountProof;
+  proofFile: XviFcBankAccountProofFile;
   currentFormStatus: FormStatusType;
   submittedBy?: Types.ObjectId;
   submittedAt?: Date;
@@ -49,7 +55,7 @@ export interface XviFcBankAccountResponse {
   bankDetails: XviFcBankDetails;
   accountNumberMasked: string;
   accountNumberLast4: string;
-  proof: XviFcBankAccountProof;
+  proofFile: XviFcBankAccountProofFile;
   currentFormStatus: FormStatusType;
   currentFormStatusLabel: string;
   submittedBy?: string;

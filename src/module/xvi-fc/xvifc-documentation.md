@@ -35,7 +35,7 @@
   - Handles state-level/read APIs.
 - Nested sub-modules:
   - `ulb/annual_accounts` — ULB annual account upload/read.
-  - `ulb/bank-account` — ULB XVI-FC PFMS bank account read/submit + proof signed-url wrapper.
+  - `ulb/bank-account` — ULB XVI-FC PFMS bank account read/submit.
   - `state/sfc-status` — State SFC Status form CRUD + final submit.
   - `side-menu/` — Admin CRUD for side menu items (DB-driven).
 - Cache layer:
@@ -85,7 +85,7 @@
   - Read/status/sidebar APIs use `VIEW_STATUS_REPORTS`.
   - Annual account POST/GET currently use `UPLOAD_DOCUMENTS`.
   - Bank account GET uses `VIEW_STATUS_REPORTS`.
-  - Bank account submit and proof signed-url use `UPLOAD_DOCUMENTS`.
+  - Bank account submit uses `UPLOAD_DOCUMENTS`.
   - SFC Status GET and questions use `VIEW_STATE_FORMS`.
   - SFC Status save draft uses `EDIT_STATE_FORMS`.
   - SFC Status final submit uses `FINAL_SUBMIT_STATE_FORMS`.
@@ -232,25 +232,18 @@ Routes:
   - Final ULB submit transition: `FORM_STATUS.UNDER_REVIEW_BY_STATE`.
   - Stores `submittedBy` and `submittedAt`.
 
-- `POST /xvi-fc/bank-account/proof/signed-url`
-  - Permission: `Permission.UPLOAD_DOCUMENTS`
-  - Generates a bank-account-proof S3 PUT signed URL using the server-side XVI-FC folder resolver.
-
 Scope rules:
 
 - `ULB` / `ULB_EDITOR`
   - Can read and submit only own ULB.
-  - Can generate proof signed URL only for own ULB.
 - `ULB_VIEWER`
   - Can read own ULB when effective permissions allow.
   - Cannot submit.
-  - Cannot generate proof signed URL.
 - `STATE` / `STATE_EDITOR` / `STATE_VIEWER`
   - Can read only ULBs belonging to own state when read is enabled.
   - Cannot submit bank-account form.
-  - Cannot generate proof signed URL.
 - `ADMIN`
-  - Can read, submit, and generate proof signed URL for an explicit requested ULB.
+  - Can read and submit for an explicit requested ULB.
 - Unsupported scope
   - Rejected.
 
@@ -271,36 +264,58 @@ POST request payload:
     state?: string;
     micr: string | null;
   };
-  proof: {
-    fileName: string;
-    fileUrl: string;
-    fileSize: number | null;
-    mimeType: string;
+  proofFile: {
+    originalName: string;
+    mimeType: 'application/pdf' | 'image/jpeg' | 'image/png';
+    pages: number | null;
+    sizeKb: number;
+    s3Key: string;
+    sha256: string;
   };
 }
 ```
 
-Proof object rule:
+Proof file object rule:
 
-- Use only SFC-style file objects:
+- Use only annual-account style file metadata:
 
 ```ts
-{
-  fileName: string;
-  fileUrl: string;
-  fileSize: number | null;
-  mimeType: string;
+proofFile: {
+  originalName: string;
+  mimeType: 'application/pdf' | 'image/jpeg' | 'image/png';
+  pages: number | null;
+  sizeKb: number;
+  s3Key: string;
+  sha256: string;
 }
 ```
 
-- Do not use `filepath`, `originalName`, or `sizeKb`.
-- `fileUrl` is the uploaded S3 URL.
+- Do not submit the deprecated `proof` object.
+- `s3Key` stores the S3 object key only, not a full URL or signed URL.
+- `sha256` is computed client-side before submit.
+- `pages` is required for PDFs and `null` for images.
+- `sizeKb` is stored in KB.
 
-Proof signed-url flow:
+Proof upload flow:
 
-- Endpoint: `POST /xvi-fc/bank-account/proof/signed-url`
-- Folder key: `XVI_FC_BANK_ACCOUNT_PROOF`
-- Final folder pattern: `xvi-fc/ulb/{ulbId}/{designYearId}/bank-account/proof`
+- Use the shared endpoint: `POST /s3/signed-url`
+- Request body is an array:
+
+```json
+[
+  {
+    "fileName": "proof.pdf",
+    "folder": "xvi-fc/bank-account/{ulbId}/{designYearId}/proof",
+    "mimeType": "application/pdf",
+    "uploadId": "uuid",
+    "expiresIn": 300
+  }
+]
+```
+
+- PUT the file to the returned signed `url`.
+- Store the returned `path` in `proofFile.s3Key`, not the signed URL with query params or the full S3 `fileUrl`.
+- Final folder pattern: `xvi-fc/bank-account/{ulbId}/{designYearId}/proof`
 - Allowed MIME types:
   - `application/pdf`
   - `image/jpeg`
@@ -1474,7 +1489,6 @@ Safe replace order enforced in `validateExcel` (`POST validate-excel`):
 | `SFC_GAZETTE_NOTIFICATION`   | `sfc-status/gazette-notification`     |
 | `EULB_EXCEL`                 | `elected-body/elected-bodies-list`    |
 | `EULB_POST_SUBMISSION_PROOF` | `elected-body/post-submission-update` |
-| `XVI_FC_BANK_ACCOUNT_PROOF`  | `bank-account/proof`                  |
 
 **Modified files**:
 
@@ -1510,7 +1524,7 @@ Example: `xvi-fc/state/5dcf9d7416a06aed41c748f0/2026-27/sfc-status/sfc-report`
 **New module**:
 
 - `src/module/xvi-fc/ulb/bank-account/`
-- Registers controller, service, DTOs, types, proof signed-url wrapper, and security helpers.
+- Registers controller, service, DTOs, types, and security helpers.
 
 **New schema**:
 
@@ -1522,18 +1536,18 @@ Example: `xvi-fc/state/5dcf9d7416a06aed41c748f0/2026-27/sfc-status/sfc-report`
 
 - `GET /xvi-fc/bank-account?yearId={designYearId}&ulbId={ulbId}` — `Permission.VIEW_STATUS_REPORTS`
 - `POST /xvi-fc/bank-account` — `Permission.UPLOAD_DOCUMENTS`
-- `POST /xvi-fc/bank-account/proof/signed-url` — `Permission.UPLOAD_DOCUMENTS`
 
-**Signed-url wrapper**:
+**Proof upload**:
 
-- Uses folder key `XVI_FC_BANK_ACCOUNT_PROOF`.
-- Final folder: `xvi-fc/ulb/{ulbId}/{designYearId}/bank-account/proof`.
+- Uses the shared `POST /s3/signed-url` endpoint with an array payload.
+- Final folder: `xvi-fc/bank-account/{ulbId}/{designYearId}/proof`.
 - Allows PDF, JPEG, PNG up to 5 MB.
 
 **Proof object convention**:
 
-- Uses SFC-style proof object only: `{ fileName, fileUrl, fileSize, mimeType }`.
-- Does not use `filepath`, `originalName`, or `sizeKb`.
+- Uses annual-account style `proofFile` only: `{ originalName, mimeType, pages, sizeKb, s3Key, sha256 }`.
+- Does not submit deprecated `proof`, `filepath`, `fileUrl`, or signed URLs.
+- `proofFile.s3Key` is the S3 object key under `xvi-fc/bank-account/{ulbId}/{designYearId}/proof`.
 
 **Status and form-status integration**:
 

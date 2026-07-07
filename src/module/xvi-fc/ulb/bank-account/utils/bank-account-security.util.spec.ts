@@ -67,11 +67,13 @@ describe('bank-account-security.util', () => {
       accountNumberHash: 'hash-value',
       accountNumberMasked: '********9012',
       accountNumberLast4: '9012',
-      proof: {
-        fileName: 'proof.pdf',
-        fileUrl: 's3://bucket/proof.pdf',
-        fileSize: 1024,
+      proofFile: {
+        originalName: 'proof.pdf',
         mimeType: 'application/pdf',
+        pages: 2,
+        sizeKb: 1,
+        s3Key: 'xvi-fc/bank-account/66/67/proof/proof.pdf',
+        sha256: 'a'.repeat(64),
       },
       currentFormStatus: FORM_STATUS.IN_PROGRESS,
       submittedBy: 'user-id',
@@ -85,9 +87,18 @@ describe('bank-account-security.util', () => {
       accountNumberLast4: '9012',
       currentFormStatus: FORM_STATUS.IN_PROGRESS,
       currentFormStatusLabel: 'In Progress',
+      proofFile: {
+        originalName: 'proof.pdf',
+        mimeType: 'application/pdf',
+        pages: 2,
+        sizeKb: 1,
+        s3Key: 'xvi-fc/bank-account/66/67/proof/proof.pdf',
+        sha256: 'a'.repeat(64),
+      },
     });
     expect(response).not.toHaveProperty('accountNumber');
     expect(response).not.toHaveProperty('accountNumberEncrypted');
     expect(response).not.toHaveProperty('accountNumberHash');
+    expect(response).not.toHaveProperty('proof');
   });
 });

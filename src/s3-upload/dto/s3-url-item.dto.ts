@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsNumber, IsOptional, IsString, Min } from 'class-validator';
+import { IsInt, IsNotEmpty, IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
 
 export class S3UrlItemDto {
   @IsString()
@@ -25,6 +25,16 @@ export class S3UrlItemDto {
   @IsString()
   @IsOptional()
   folder?: string;
+
+  @IsString()
+  @IsOptional()
+  uploadId?: string;
+
+  @IsInt()
+  @Min(1)
+  @Max(604800)
+  @IsOptional()
+  expiresIn?: number;
 }
 
 export interface S3UrlResult {
@@ -34,4 +44,5 @@ export interface S3UrlResult {
   path: string;
   fileSize: number | null | undefined;
   pages: number | undefined;
+  uploadId?: string;
 }

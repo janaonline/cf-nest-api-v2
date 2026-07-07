@@ -6,7 +6,6 @@ import { Permission } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { PermissionGuard } from 'src/module/auth/permission.guard';
 import { RequirePermissions } from 'src/module/auth/require-permissions.decorator';
 import { GetXviFcBankAccountQueryDto } from './dto/get-xvi-fc-bank-account-query.dto';
-import { GetBankAccountProofSignedUrlDto } from './dto/get-bank-account-proof-signed-url.dto';
 import { SubmitXviFcBankAccountDto } from './dto/submit-xvi-fc-bank-account.dto';
 import { BankAccountService } from './bank-account.service';
 
@@ -35,12 +34,5 @@ export class BankAccountController {
   @RequirePermissions(Permission.UPLOAD_DOCUMENTS)
   submitBankAccount(@Body() dto: SubmitXviFcBankAccountDto, @CurrentUser() user: AuthUser) {
     return this.bankAccountService.submitBankAccount(dto, user);
-  }
-
-  @Post('proof/signed-url')
-  @UseGuards(PermissionGuard)
-  @RequirePermissions(Permission.UPLOAD_DOCUMENTS)
-  getProofSignedUrl(@Body() dto: GetBankAccountProofSignedUrlDto, @CurrentUser() user: AuthUser) {
-    return this.bankAccountService.getProofSignedUrl(dto, user);
   }
 }

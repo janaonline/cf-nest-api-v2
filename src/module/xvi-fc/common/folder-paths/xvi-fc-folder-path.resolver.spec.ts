@@ -149,7 +149,7 @@ describe('resolveXviFcFolderPathsInFormJson', () => {
     expect(fields[0].folderPath).toBe(originalFolderPath);
   });
 
-  it('returns correct resolved paths for all six keys in a mixed array', () => {
+  it('returns correct resolved paths for all configured keys in a mixed array', () => {
     const allFileFields: FieldConfig[] = Object.values(XVI_FC_FOLDER_PATH_KEYS).map((k) => ({
       formFieldType: 'file' as const,
       key: k,
@@ -168,18 +168,5 @@ describe('resolveXviFcFolderPathsInFormJson', () => {
     expect(result.find((f) => f.key === 'EULB_POST_SUBMISSION_PROOF')?.folderPath).toBe(
       'xvi-fc/state/5dcf9d7416a06aed41c748f0/2026-27/elected-body/post-submission-update',
     );
-    expect(result.find((f) => f.key === 'XVI_FC_BANK_ACCOUNT_PROOF')?.folderPath).toBe(
-      'xvi-fc/state/5dcf9d7416a06aed41c748f0/2026-27/bank-account/proof',
-    );
-  });
-
-  it('builds XVI-FC bank account proof path scoped by ULB and design year', () => {
-    expect(
-      buildXviFcFolderPath(XVI_FC_FOLDER_PATH_KEYS.XVI_FC_BANK_ACCOUNT_PROOF, {
-        _id: 'ulb-123',
-        role: 'ulb',
-        designYear: '2026-27',
-      }),
-    ).toBe('xvi-fc/ulb/ulb-123/2026-27/bank-account/proof');
   });
 });

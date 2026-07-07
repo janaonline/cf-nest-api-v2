@@ -5,21 +5,27 @@ import { FORM_STATUS, type FormStatusType } from 'src/common/constants/form-stat
 export type XviFcBankAccountDocument = HydratedDocument<XviFcBankAccount>;
 
 @Schema({ _id: false, versionKey: false })
-export class XviFcBankAccountProof {
-  @Prop({ type: String, default: '' })
-  fileName!: string;
+export class XviFcBankAccountProofFile {
+  @Prop({ type: String, required: true })
+  originalName!: string;
 
-  @Prop({ type: String, default: '' })
-  fileUrl!: string;
+  @Prop({ type: String, required: true })
+  mimeType!: string;
 
   @Prop({ type: Number, default: null })
-  fileSize!: number | null;
+  pages!: number | null;
 
-  @Prop({ type: String, default: '' })
-  mimeType!: string;
+  @Prop({ type: Number, required: true })
+  sizeKb!: number;
+
+  @Prop({ type: String, required: true })
+  s3Key!: string;
+
+  @Prop({ type: String, required: true, match: /^[a-fA-F0-9]{64}$/ })
+  sha256!: string;
 }
 
-export const XviFcBankAccountProofSchema = SchemaFactory.createForClass(XviFcBankAccountProof);
+export const XviFcBankAccountProofFileSchema = SchemaFactory.createForClass(XviFcBankAccountProofFile);
 
 @Schema({
   collection: 'xvi_fc_bank_accounts',
@@ -52,15 +58,10 @@ export class XviFcBankAccount {
   accountNumberLast4!: string;
 
   @Prop({
-    type: XviFcBankAccountProofSchema,
-    default: () => ({
-      fileName: '',
-      fileUrl: '',
-      fileSize: null,
-      mimeType: '',
-    }),
+    type: XviFcBankAccountProofFileSchema,
+    required: true,
   })
-  proof!: XviFcBankAccountProof;
+  proofFile!: XviFcBankAccountProofFile;
 
   @Prop({
     type: Number,

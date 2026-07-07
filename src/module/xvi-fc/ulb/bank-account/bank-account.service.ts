@@ -14,18 +14,13 @@ import { AccessLevel, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import { xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
-import { buildXviFcFolderPath } from 'src/module/xvi-fc/common/folder-paths/xvi-fc-folder-path.resolver';
-import { XVI_FC_FOLDER_PATH_KEYS } from 'src/module/xvi-fc/common/folder-paths/xvi-fc-folder-path.constants';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import {
   XviFcBankAccount,
   XviFcBankAccountDocument,
 } from 'src/schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
 import { toObjectIdString } from 'src/users/user-scope.helpers';
-import { S3UploadService } from 'src/s3-upload/s3-upload.service';
-import type { S3UrlResult } from 'src/s3-upload/dto/s3-url-item.dto';
 import type { GetXviFcBankAccountQueryDto } from './dto/get-xvi-fc-bank-account-query.dto';
-import type { GetBankAccountProofSignedUrlDto } from './dto/get-bank-account-proof-signed-url.dto';
 import { IFSC_REGEX } from './dto/submit-xvi-fc-bank-account.dto';
 import type { SubmitXviFcBankAccountDto } from './dto/submit-xvi-fc-bank-account.dto';
 import type { VerifiedIfscDetails, XviFcBankAccountResponse, XviFcIfscLookupResponse } from './bank-account.types';
@@ -57,7 +52,6 @@ export class BankAccountService {
     private readonly bankAccountModel: Model<XviFcBankAccountDocument>,
     @InjectModel(Ulb.name)
     private readonly ulbModel: Model<UlbDocument>,
-    private readonly s3UploadService: S3UploadService,
   ) {}
 
   async getBankAccount(
@@ -94,6 +88,8 @@ export class BankAccountService {
 
     const submittedBy = this.getAuthenticatedUserObjectId(user);
     const secureAccountFields = this.buildSecureAccountFields(dto.accountNumber);
+    const proofFileS3Key = this.normalizeS3Key(dto.proofFile.s3Key);
+    this.assertProofFileS3Key(proofFileS3Key, ulbId, dto.designYearId);
 
     const payload = {
       ulb: ulbObjectId,
@@ -108,11 +104,13 @@ export class BankAccountService {
         micr: dto.bankDetails.micr ?? null,
       },
       ...secureAccountFields,
-      proof: {
-        fileName: dto.proof.fileName,
-        fileUrl: dto.proof.fileUrl,
-        fileSize: dto.proof.fileSize,
-        mimeType: dto.proof.mimeType,
+      proofFile: {
+        originalName: dto.proofFile.originalName,
+        mimeType: dto.proofFile.mimeType,
+        pages: dto.proofFile.mimeType === 'application/pdf' ? dto.proofFile.pages : null,
+        sizeKb: dto.proofFile.sizeKb,
+        s3Key: proofFileS3Key,
+        sha256: dto.proofFile.sha256,
       },
       currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_STATE,
       submittedBy,
@@ -129,24 +127,6 @@ export class BankAccountService {
       .exec();
 
     return xviFcSuccess('Bank account form submitted.', buildSafeBankAccountResponse(record));
-  }
-
-  async getProofSignedUrl(
-    dto: GetBankAccountProofSignedUrlDto,
-    user: AuthUser,
-  ): Promise<XviFcApiResponse<S3UrlResult>> {
-    const ulbId = await this.resolveEffectiveUlbId(user, dto.ulbId);
-    await this.assertCanSubmitBankAccount(user, ulbId);
-
-    const folder = this.buildProofFolderPath(ulbId, dto.designYearId);
-    const signedUrl = await this.s3UploadService.generatePutSignedUrl({
-      fileName: dto.fileName,
-      fileSize: dto.fileSize,
-      mimeType: dto.mimeType,
-      folder,
-    });
-
-    return xviFcSuccess('Bank account proof signed URL generated.', signedUrl);
   }
 
   async lookupIfsc(ifscCode: string): Promise<XviFcApiResponse<XviFcIfscLookupResponse>> {
@@ -317,12 +297,38 @@ export class BankAccountService {
     }
   }
 
-  private buildProofFolderPath(ulbId: string, designYearId: string): string {
-    return buildXviFcFolderPath(XVI_FC_FOLDER_PATH_KEYS.XVI_FC_BANK_ACCOUNT_PROOF, {
-      _id: ulbId,
-      role: 'ulb',
-      designYear: designYearId,
-    });
+  private normalizeS3Key(value: string): string {
+    const trimmedValue = value.trim();
+    if (!trimmedValue) return trimmedValue;
+
+    if (/^https?:\/\//i.test(trimmedValue)) {
+      try {
+        return new URL(trimmedValue).pathname.replace(/^\/+/, '');
+      } catch {
+        return this.stripUrlQuery(trimmedValue).replace(/^\/+/, '');
+      }
+    }
+
+    if (/^s3:\/\//i.test(trimmedValue)) {
+      try {
+        return new URL(trimmedValue).pathname.replace(/^\/+/, '');
+      } catch {
+        return this.stripUrlQuery(trimmedValue).replace(/^s3:\/\/[^/]+\/?/i, '');
+      }
+    }
+
+    return this.stripUrlQuery(trimmedValue).replace(/^\/+/, '');
+  }
+
+  private assertProofFileS3Key(s3Key: string, ulbId: string, designYearId: string): void {
+    const expectedPrefix = `xvi-fc/bank-account/${ulbId}/${designYearId}/proof/`;
+    if (!s3Key.startsWith(expectedPrefix)) {
+      throw new BadRequestException('proofFile.s3Key must be a bank-account proof object key for this ULB and design year.');
+    }
+  }
+
+  private stripUrlQuery(fileUrl: string): string {
+    return fileUrl.split('?')[0];
   }
 
   private async verifyIfscCode(ifscCode: string): Promise<VerifiedIfscDetails | null> {

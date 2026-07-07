@@ -60,10 +60,10 @@ export class S3UploadService {
       Key: key,
     });
 
-    const url = await getSignedUrl(this.s3.client, command, { expiresIn: UPLOAD_EXPIRES_IN });
+    const url = await getSignedUrl(this.s3.client, command, { expiresIn: item.expiresIn ?? UPLOAD_EXPIRES_IN });
     const fileUrl = url.split('?')[0];
     const path = this.s3.getKeyFromS3Url(fileUrl);
 
-    return { url, fileAlias, fileUrl, path, fileSize: item.fileSize, pages: item.pages };
+    return { url, fileAlias, fileUrl, path, fileSize: item.fileSize, pages: item.pages, uploadId: item.uploadId };
   }
 }

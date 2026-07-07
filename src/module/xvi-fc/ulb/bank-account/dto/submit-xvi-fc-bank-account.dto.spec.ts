@@ -3,11 +3,15 @@ import { plainToInstance } from 'class-transformer';
 import { validateSync } from 'class-validator';
 import { Types } from 'mongoose';
 import {
-  MAX_BANK_ACCOUNT_PROOF_FILE_SIZE_BYTES,
+  MAX_BANK_ACCOUNT_PROOF_FILE_SIZE_KB,
   SubmitXviFcBankAccountDto,
 } from './submit-xvi-fc-bank-account.dto';
 
-const validPayload = () => ({
+const validSha256 = 'a'.repeat(64);
+
+type TestPayload = Record<string, any>;
+
+const validPayload = (): TestPayload => ({
   ulbId: new Types.ObjectId().toString(),
   designYearId: new Types.ObjectId().toString(),
   ifscCode: 'SBIN0123456',
@@ -21,11 +25,13 @@ const validPayload = () => ({
     state: 'Madhya Pradesh',
     micr: null,
   },
-  proof: {
-    fileName: 'cancelled-cheque.pdf',
-    fileUrl: 'https://bucket.s3.amazonaws.com/proof/cancelled-cheque.pdf',
-    fileSize: 1024,
+  proofFile: {
+    originalName: 'cancelled-cheque.pdf',
     mimeType: 'application/pdf',
+    pages: 2,
+    sizeKb: 12.25,
+    s3Key: 'xvi-fc/bank-account/66/67/proof/cancelled-cheque.pdf',
+    sha256: validSha256,
   },
 });
 
@@ -37,10 +43,21 @@ const validatePayload = (payload: Record<string, unknown>) => {
 const errorProperties = (payload: Record<string, unknown>) => validatePayload(payload).map((error) => error.property);
 
 describe('SubmitXviFcBankAccountDto', () => {
-  it('passes for a valid payload with SFC-style proof object', () => {
-    const errors = validatePayload(validPayload());
+  it('passes for a valid PDF proofFile with pages', () => {
+    expect(validatePayload(validPayload())).toHaveLength(0);
+  });
 
-    expect(errors).toHaveLength(0);
+  it('passes for a valid image proofFile with null pages', () => {
+    const payload = validPayload();
+    payload.proofFile = {
+      ...payload.proofFile,
+      originalName: 'cancelled-cheque.jpeg',
+      mimeType: 'image/jpeg',
+      pages: null,
+      s3Key: 'xvi-fc/bank-account/66/67/proof/cancelled-cheque.jpeg',
+    };
+
+    expect(validatePayload(payload)).toHaveLength(0);
   });
 
   it('fails for an invalid ulbId', () => {
@@ -96,38 +113,81 @@ describe('SubmitXviFcBankAccountDto', () => {
     expect(errorProperties(payload)).toContain('bankDetails');
   });
 
-  it('fails when proof is missing', () => {
+  it('fails when proofFile is missing', () => {
     const payload = validPayload();
-    delete (payload as Partial<ReturnType<typeof validPayload>>).proof;
+    delete (payload as Partial<ReturnType<typeof validPayload>>).proofFile;
 
-    expect(errorProperties(payload)).toContain('proof');
+    expect(errorProperties(payload)).toContain('proofFile');
   });
 
-  it('fails for unsupported proof MIME type', () => {
-    const payload = validPayload();
-    payload.proof.mimeType = 'image/gif';
-
-    expect(errorProperties(payload)).toContain('proof');
-  });
-
-  it('fails when proof is over 5 MB', () => {
-    const payload = validPayload();
-    payload.proof.fileSize = MAX_BANK_ACCOUNT_PROOF_FILE_SIZE_BYTES + 1;
-
-    expect(errorProperties(payload)).toContain('proof');
-  });
-
-  it('rejects legacy proof fields', () => {
+  it('rejects legacy proof object', () => {
     const payload = {
       ...validPayload(),
       proof: {
-        filepath: 'xvi-fc/legacy.pdf',
-        originalName: 'legacy.pdf',
-        sizeKb: 12,
+        fileName: 'proof.pdf',
+        fileUrl: 'xvi-fc/bank-account/66/67/proof/proof.pdf',
+        fileSize: 1024,
         mimeType: 'application/pdf',
       },
     };
 
     expect(errorProperties(payload)).toContain('proof');
+  });
+
+  it('fails when originalName is missing', () => {
+    const payload = validPayload();
+    delete (payload.proofFile as Partial<typeof payload.proofFile>).originalName;
+
+    expect(errorProperties(payload)).toContain('proofFile');
+  });
+
+  it('fails for unsupported proofFile MIME type', () => {
+    const payload = validPayload();
+    payload.proofFile.mimeType = 'image/gif';
+
+    expect(errorProperties(payload)).toContain('proofFile');
+  });
+
+  it('fails when PDF pages is null', () => {
+    const payload = validPayload();
+    payload.proofFile.pages = null;
+
+    expect(errorProperties(payload)).toContain('proofFile');
+  });
+
+  it('fails when image pages is not null', () => {
+    const payload = validPayload();
+    payload.proofFile.mimeType = 'image/png';
+    payload.proofFile.pages = 1;
+
+    expect(errorProperties(payload)).toContain('proofFile');
+  });
+
+  it('fails when proofFile is over 5120 KB', () => {
+    const payload = validPayload();
+    payload.proofFile.sizeKb = MAX_BANK_ACCOUNT_PROOF_FILE_SIZE_KB + 0.01;
+
+    expect(errorProperties(payload)).toContain('proofFile');
+  });
+
+  it('fails for invalid sha256', () => {
+    const payload = validPayload();
+    payload.proofFile.sha256 = 'not-a-sha';
+
+    expect(errorProperties(payload)).toContain('proofFile');
+  });
+
+  it('fails for a full URL in s3Key', () => {
+    const payload = validPayload();
+    payload.proofFile.s3Key = 'https://bucket.s3.amazonaws.com/xvi-fc/bank-account/66/67/proof/proof.pdf';
+
+    expect(errorProperties(payload)).toContain('proofFile');
+  });
+
+  it('fails for a signed URL query string in s3Key', () => {
+    const payload = validPayload();
+    payload.proofFile.s3Key = 'xvi-fc/bank-account/66/67/proof/proof.pdf?X-Amz-Signature=secret';
+
+    expect(errorProperties(payload)).toContain('proofFile');
   });
 });

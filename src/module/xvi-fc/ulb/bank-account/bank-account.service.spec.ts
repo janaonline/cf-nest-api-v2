@@ -1,17 +1,10 @@
 import { BadRequestException, ForbiddenException, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
-import { plainToInstance } from 'class-transformer';
-import { validateSync } from 'class-validator';
 import axios from 'axios';
 import { Types } from 'mongoose';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { AccessLevel, Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { BankAccountService } from './bank-account.service';
-import { GetBankAccountProofSignedUrlDto } from './dto/get-bank-account-proof-signed-url.dto';
-import {
-  ALLOWED_BANK_ACCOUNT_PROOF_MIME_TYPES,
-  MAX_BANK_ACCOUNT_PROOF_FILE_SIZE_BYTES,
-} from './dto/submit-xvi-fc-bank-account.dto';
 import type { SubmitXviFcBankAccountDto } from './dto/submit-xvi-fc-bank-account.dto';
 import { decryptAccountNumber } from './utils/bank-account-security.util';
 
@@ -26,7 +19,6 @@ describe('BankAccountService scope enforcement', () => {
   let service: BankAccountService;
   let bankAccountModel: { findOne: jest.Mock; findOneAndUpdate: jest.Mock };
   let ulbModel: { findById: jest.Mock };
-  let s3UploadService: { generatePutSignedUrl: jest.Mock };
   const originalEncryptionKey = process.env.BANK_ACCOUNT_ENCRYPTION_KEY;
   const originalHashSecret = process.env.BANK_ACCOUNT_HASH_SECRET;
 
@@ -34,6 +26,7 @@ describe('BankAccountService scope enforcement', () => {
   const otherUlbId = new Types.ObjectId();
   const stateId = new Types.ObjectId();
   const otherStateId = new Types.ObjectId();
+  const validSha256 = 'a'.repeat(64);
 
   const makeUser = (overrides: Partial<AuthUser>): AuthUser =>
     ({
@@ -46,10 +39,13 @@ describe('BankAccountService scope enforcement', () => {
       ...overrides,
     }) as AuthUser;
 
-  const makeSubmitDto = (overrides: Partial<SubmitXviFcBankAccountDto> = {}): SubmitXviFcBankAccountDto =>
-    ({
-      ulbId: ulbId.toString(),
-      designYearId: new Types.ObjectId().toString(),
+  const makeSubmitDto = (overrides: Partial<SubmitXviFcBankAccountDto> = {}): SubmitXviFcBankAccountDto => {
+    const dtoUlbId = overrides.ulbId ?? ulbId.toString();
+    const designYearId = overrides.designYearId ?? new Types.ObjectId().toString();
+
+    return {
+      ulbId: dtoUlbId,
+      designYearId,
       ifscCode: 'SBIN0123456',
       accountNumber: '123456789012',
       confirmAccountNumber: '123456789012',
@@ -61,14 +57,17 @@ describe('BankAccountService scope enforcement', () => {
         state: 'Madhya Pradesh',
         micr: null,
       },
-      proof: {
-        fileName: 'proof.pdf',
-        fileUrl: 's3://bucket/proof.pdf',
-        fileSize: 1024,
+      proofFile: {
+        originalName: 'proof.pdf',
         mimeType: 'application/pdf',
+        pages: 2,
+        sizeKb: 1,
+        s3Key: `xvi-fc/bank-account/${dtoUlbId}/${designYearId}/proof/proof.pdf`,
+        sha256: validSha256,
       },
       ...overrides,
-    }) as SubmitXviFcBankAccountDto;
+    } as SubmitXviFcBankAccountDto;
+  };
 
   beforeEach(() => {
     process.env.BANK_ACCOUNT_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString('base64');
@@ -81,18 +80,7 @@ describe('BankAccountService scope enforcement', () => {
     ulbModel = {
       findById: jest.fn(),
     };
-    s3UploadService = {
-      generatePutSignedUrl: jest.fn().mockResolvedValue({
-        url: 'https://bucket.s3.amazonaws.com/xvi-fc/ulb/signed.pdf?signature=abc',
-        fileAlias: 'proof_alias.pdf',
-        fileUrl: 'https://bucket.s3.amazonaws.com/xvi-fc/ulb/signed.pdf',
-        path: 'xvi-fc/ulb/signed.pdf',
-        fileSize: 1024,
-        pages: undefined,
-      }),
-    };
-
-    service = new BankAccountService(bankAccountModel as never, ulbModel as never, s3UploadService as never);
+    service = new BankAccountService(bankAccountModel as never, ulbModel as never);
   });
 
   afterAll(() => {
@@ -269,11 +257,13 @@ describe('BankAccountService scope enforcement', () => {
         accountNumberHash: 'hashed-account-number',
         accountNumberMasked: '********9012',
         accountNumberLast4: '9012',
-        proof: {
-          fileName: 'proof.pdf',
-          fileUrl: 's3://bucket/proof.pdf',
-          fileSize: 1024,
+        proofFile: {
+          originalName: 'proof.pdf',
           mimeType: 'application/pdf',
+          pages: 2,
+          sizeKb: 1,
+          s3Key: `xvi-fc/bank-account/${ulbId.toString()}/${yearId.toString()}/proof/proof.pdf`,
+          sha256: validSha256,
         },
         currentFormStatus: FORM_STATUS.IN_PROGRESS,
         submittedBy,
@@ -297,13 +287,16 @@ describe('BankAccountService scope enforcement', () => {
       submittedAt: '2026-01-01T00:00:00.000Z',
       createdAt: '2026-01-02T00:00:00.000Z',
       updatedAt: '2026-01-03T00:00:00.000Z',
-      proof: {
-        fileName: 'proof.pdf',
-        fileUrl: 's3://bucket/proof.pdf',
-        fileSize: 1024,
+      proofFile: {
+        originalName: 'proof.pdf',
         mimeType: 'application/pdf',
+        pages: 2,
+        sizeKb: 1,
+        s3Key: `xvi-fc/bank-account/${ulbId.toString()}/${yearId.toString()}/proof/proof.pdf`,
+        sha256: validSha256,
       },
     });
+    expect(result.data).not.toHaveProperty('proof');
   });
 
   it('GET does not expose encrypted, hash, or full account-number fields', async () => {
@@ -325,7 +318,14 @@ describe('BankAccountService scope enforcement', () => {
         accountNumberHash: 'hashed-account-number',
         accountNumberMasked: '********9012',
         accountNumberLast4: '9012',
-        proof: {},
+        proofFile: {
+          originalName: 'proof.pdf',
+          mimeType: 'application/pdf',
+          pages: 1,
+          sizeKb: 1,
+          s3Key: `xvi-fc/bank-account/${ulbId.toString()}/${yearId.toString()}/proof/proof.pdf`,
+          sha256: validSha256,
+        },
         currentFormStatus: FORM_STATUS.IN_PROGRESS,
       }),
     );
@@ -421,8 +421,9 @@ describe('BankAccountService scope enforcement', () => {
       accountNumberLast4: '9012',
       currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_STATE,
       currentFormStatusLabel: 'Under Review by State',
-      proof: dto.proof,
+      proofFile: dto.proofFile,
     });
+    expect(result.data).not.toHaveProperty('proof');
   });
 
   it('POST throws a controlled error when BANK_ACCOUNT_ENCRYPTION_KEY is missing', async () => {
@@ -523,7 +524,7 @@ describe('BankAccountService scope enforcement', () => {
     expect(options).toMatchObject({ upsert: true, new: true, runValidators: true });
   });
 
-  it('POST stores status, submit metadata, secure account fields, and SFC-style proof', async () => {
+  it('POST stores status, submit metadata, secure account fields, and proofFile only', async () => {
     const dto = makeSubmitDto();
     const user = makeUser({
       role: UserRole.ULB,
@@ -547,26 +548,19 @@ describe('BankAccountService scope enforcement', () => {
     expect(update.$set.accountNumberLast4).toBe('9012');
     expect(update.$set).not.toHaveProperty('accountNumber');
     expect(update.$set).not.toHaveProperty('confirmAccountNumber');
-    expect(update.$set.proof).toEqual({
-      fileName: dto.proof.fileName,
-      fileUrl: dto.proof.fileUrl,
-      fileSize: dto.proof.fileSize,
-      mimeType: dto.proof.mimeType,
+    expect(update.$set).not.toHaveProperty('proof');
+    expect(update.$set.proofFile).toEqual({
+      originalName: dto.proofFile.originalName,
+      mimeType: dto.proofFile.mimeType,
+      pages: dto.proofFile.pages,
+      sizeKb: dto.proofFile.sizeKb,
+      s3Key: dto.proofFile.s3Key,
+      sha256: dto.proofFile.sha256,
     });
-    expect(update.$set.proof).not.toHaveProperty('filepath');
-    expect(update.$set.proof).not.toHaveProperty('originalName');
-    expect(update.$set.proof).not.toHaveProperty('sizeKb');
   });
 
-  it('POST accepts a clean proof.fileUrl from the signed-url flow', async () => {
-    const dto = makeSubmitDto({
-      proof: {
-        fileName: 'proof.pdf',
-        fileUrl: 'https://bucket.s3.amazonaws.com/xvi-fc/ulb/proof.pdf',
-        fileSize: 1024,
-        mimeType: 'application/pdf',
-      },
-    });
+  it('POST accepts a proofFile.s3Key path and stores it unchanged', async () => {
+    const dto = makeSubmitDto();
     const user = makeUser({
       role: UserRole.ADMIN,
       scope: Scope.ADMIN,
@@ -577,8 +571,121 @@ describe('BankAccountService scope enforcement', () => {
     await service.submitBankAccount(dto, user);
 
     const [, update] = bankAccountModel.findOneAndUpdate.mock.calls[0];
-    expect(update.$set.proof.fileUrl).toBe(dto.proof.fileUrl);
-    expect(update.$set.proof.fileUrl).not.toContain('?');
+    expect(update.$set.proofFile.s3Key).toBe(dto.proofFile.s3Key);
+  });
+
+  it('POST converts a full S3 proofFile.s3Key URL to an object key', async () => {
+    const dto = makeSubmitDto();
+    const path = dto.proofFile.s3Key;
+    dto.proofFile = {
+      ...dto.proofFile,
+      s3Key: `https://jana-cityfinance-stg.s3.ap-south-1.amazonaws.com/${path}`,
+    };
+    const user = makeUser({
+      role: UserRole.ADMIN,
+      scope: Scope.ADMIN,
+      accessLevel: AccessLevel.ADMIN,
+    });
+    bankAccountModel.findOneAndUpdate.mockImplementation((_filter, update) => q({ _id: new Types.ObjectId(), ...update.$set }));
+
+    await service.submitBankAccount(dto, user);
+
+    const [, update] = bankAccountModel.findOneAndUpdate.mock.calls[0];
+    expect(update.$set.proofFile.s3Key).toBe(path);
+    expect(update.$set.proofFile.s3Key).not.toMatch(/^https?:\/\//);
+  });
+
+  it('POST strips query params from a signed proofFile.s3Key URL before storing', async () => {
+    const dto = makeSubmitDto();
+    const path = dto.proofFile.s3Key;
+    dto.proofFile = {
+      ...dto.proofFile,
+      s3Key: `https://jana-cityfinance-stg.s3.ap-south-1.amazonaws.com/${path}?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=secret`,
+    };
+    const user = makeUser({
+      role: UserRole.ADMIN,
+      scope: Scope.ADMIN,
+      accessLevel: AccessLevel.ADMIN,
+    });
+    bankAccountModel.findOneAndUpdate.mockImplementation((_filter, update) => q({ _id: new Types.ObjectId(), ...update.$set }));
+
+    await service.submitBankAccount(dto, user);
+
+    const [, update] = bankAccountModel.findOneAndUpdate.mock.calls[0];
+    expect(update.$set.proofFile.s3Key).toBe(path);
+    expect(update.$set.proofFile.s3Key).not.toContain('?');
+  });
+
+  it('POST converts an s3:// proofFile.s3Key URL to an object key', async () => {
+    const dto = makeSubmitDto();
+    const path = dto.proofFile.s3Key;
+    dto.proofFile = {
+      ...dto.proofFile,
+      s3Key: `s3://jana-cityfinance-stg/${path}?temporary=true`,
+    };
+    const user = makeUser({
+      role: UserRole.ADMIN,
+      scope: Scope.ADMIN,
+      accessLevel: AccessLevel.ADMIN,
+    });
+    bankAccountModel.findOneAndUpdate.mockImplementation((_filter, update) => q({ _id: new Types.ObjectId(), ...update.$set }));
+
+    await service.submitBankAccount(dto, user);
+
+    const [, update] = bankAccountModel.findOneAndUpdate.mock.calls[0];
+    expect(update.$set.proofFile.s3Key).toBe(path);
+  });
+
+  it('POST stores PDF pages value', async () => {
+    const dto = makeSubmitDto();
+    dto.proofFile = { ...dto.proofFile, mimeType: 'application/pdf', pages: 6 };
+    const user = makeUser({
+      role: UserRole.ADMIN,
+      scope: Scope.ADMIN,
+      accessLevel: AccessLevel.ADMIN,
+    });
+    bankAccountModel.findOneAndUpdate.mockImplementation((_filter, update) => q({ _id: new Types.ObjectId(), ...update.$set }));
+
+    await service.submitBankAccount(dto, user);
+
+    const [, update] = bankAccountModel.findOneAndUpdate.mock.calls[0];
+    expect(update.$set.proofFile.pages).toBe(6);
+  });
+
+  it('POST stores image pages as null', async () => {
+    const dto = makeSubmitDto();
+    dto.proofFile = { ...dto.proofFile, originalName: 'proof.png', mimeType: 'image/png', pages: 3 };
+    const user = makeUser({
+      role: UserRole.ADMIN,
+      scope: Scope.ADMIN,
+      accessLevel: AccessLevel.ADMIN,
+    });
+    bankAccountModel.findOneAndUpdate.mockImplementation((_filter, update) => q({ _id: new Types.ObjectId(), ...update.$set }));
+
+    await service.submitBankAccount(dto, user);
+
+    const [, update] = bankAccountModel.findOneAndUpdate.mock.calls[0];
+    expect(update.$set.proofFile.pages).toBeNull();
+  });
+
+  it('POST response returns proofFile.s3Key as the stored object key', async () => {
+    const dto = makeSubmitDto();
+    const path = dto.proofFile.s3Key;
+    dto.proofFile = {
+      ...dto.proofFile,
+      s3Key: `https://jana-cityfinance-stg.s3.ap-south-1.amazonaws.com/${path}?X-Amz-Algorithm=AWS4-HMAC-SHA256`,
+    };
+    const user = makeUser({
+      role: UserRole.ADMIN,
+      scope: Scope.ADMIN,
+      accessLevel: AccessLevel.ADMIN,
+    });
+    bankAccountModel.findOneAndUpdate.mockImplementation((_filter, update) => q({ _id: new Types.ObjectId(), ...update.$set }));
+
+    const result = await service.submitBankAccount(dto, user);
+
+    expect(result.data.proofFile.s3Key).toBe(path);
+    expect(result.data).not.toHaveProperty('proof');
   });
 
   it('POST accepts bankDetails.micr as null', async () => {
@@ -659,157 +766,6 @@ describe('BankAccountService scope enforcement', () => {
       success: true,
       message: 'Bank account form submitted.',
     });
-  });
-
-  it('bank-account proof signed-url builds a scoped folder path', async () => {
-    const yearId = new Types.ObjectId().toString();
-    const user = makeUser({
-      role: UserRole.ULB,
-      scope: Scope.ULB,
-      accessLevel: AccessLevel.ADMIN,
-      ulb: ulbId,
-    });
-
-    await service.getProofSignedUrl(
-      {
-        designYearId: yearId,
-        fileName: 'proof.pdf',
-        fileSize: 1024,
-        mimeType: 'application/pdf',
-      },
-      user,
-    );
-
-    expect(s3UploadService.generatePutSignedUrl).toHaveBeenCalledWith(
-      expect.objectContaining({
-        fileName: 'proof.pdf',
-        fileSize: 1024,
-        mimeType: 'application/pdf',
-        folder: `xvi-fc/ulb/${ulbId.toString()}/${yearId}/bank-account/proof`,
-      }),
-    );
-    const folder = s3UploadService.generatePutSignedUrl.mock.calls[0][0].folder as string;
-    expect(folder.split('/')).toEqual([
-      'xvi-fc',
-      'ulb',
-      ulbId.toString(),
-      yearId,
-      'bank-account',
-      'proof',
-    ]);
-  });
-
-  it.each(['application/pdf', 'image/jpeg', 'image/png'])(
-    'bank-account proof signed-url accepts %s',
-    async (mimeType) => {
-      const user = makeUser({
-        role: UserRole.ADMIN,
-        scope: Scope.ADMIN,
-        accessLevel: AccessLevel.ADMIN,
-      });
-
-      await expect(
-        service.getProofSignedUrl(
-          {
-            ulbId: ulbId.toString(),
-            designYearId: new Types.ObjectId().toString(),
-            fileName: 'proof',
-            fileSize: 1024,
-            mimeType,
-          },
-          user,
-        ),
-      ).resolves.toMatchObject({ success: true });
-
-      expect(s3UploadService.generatePutSignedUrl).toHaveBeenLastCalledWith(
-        expect.objectContaining({ mimeType }),
-      );
-    },
-  );
-
-  it('bank-account proof signed-url rejects another ULB for ULB users', async () => {
-    const user = makeUser({
-      role: UserRole.ULB,
-      scope: Scope.ULB,
-      accessLevel: AccessLevel.ADMIN,
-      ulb: ulbId,
-    });
-
-    await expect(
-      service.getProofSignedUrl(
-        {
-          ulbId: otherUlbId.toString(),
-          designYearId: new Types.ObjectId().toString(),
-          fileName: 'proof.pdf',
-          fileSize: 1024,
-          mimeType: 'application/pdf',
-        },
-        user,
-      ),
-    ).rejects.toThrow(ForbiddenException);
-    expect(s3UploadService.generatePutSignedUrl).not.toHaveBeenCalled();
-  });
-
-  it('bank-account proof signed-url rejects STATE users', async () => {
-    const user = makeUser({
-      role: UserRole.STATE,
-      scope: Scope.STATE,
-      accessLevel: AccessLevel.ADMIN,
-      state: stateId,
-    });
-
-    await expect(
-      service.getProofSignedUrl(
-        {
-          ulbId: ulbId.toString(),
-          designYearId: new Types.ObjectId().toString(),
-          fileName: 'proof.pdf',
-          fileSize: 1024,
-          mimeType: 'application/pdf',
-        },
-        user,
-      ),
-    ).rejects.toThrow(ForbiddenException);
-  });
-
-  it('bank-account proof signed-url allows ADMIN with requested ulbId', async () => {
-    const user = makeUser({
-      role: UserRole.ADMIN,
-      scope: Scope.ADMIN,
-      accessLevel: AccessLevel.ADMIN,
-    });
-
-    await expect(
-      service.getProofSignedUrl(
-        {
-          ulbId: ulbId.toString(),
-          designYearId: new Types.ObjectId().toString(),
-          fileName: 'proof.png',
-          fileSize: 1024,
-          mimeType: 'image/png',
-        },
-        user,
-      ),
-    ).resolves.toMatchObject({
-      success: true,
-      message: 'Bank account proof signed URL generated.',
-    });
-  });
-
-  it('bank-account proof signed-url DTO allows only configured MIME types and max 5 MB', () => {
-    expect(ALLOWED_BANK_ACCOUNT_PROOF_MIME_TYPES).toEqual(['application/pdf', 'image/jpeg', 'image/png']);
-    expect(MAX_BANK_ACCOUNT_PROOF_FILE_SIZE_BYTES).toBe(5 * 1024 * 1024);
-
-    const invalidDto = plainToInstance(GetBankAccountProofSignedUrlDto, {
-      ulbId: ulbId.toString(),
-      designYearId: new Types.ObjectId().toString(),
-      fileName: 'proof.gif',
-      fileSize: MAX_BANK_ACCOUNT_PROOF_FILE_SIZE_BYTES + 1,
-      mimeType: 'image/gif',
-    });
-
-    const errors = validateSync(invalidDto);
-    expect(errors.map((error) => error.property)).toEqual(expect.arrayContaining(['fileSize', 'mimeType']));
   });
 
   it('valid IFSC lookup maps Razorpay response to bankDetails shape', async () => {
