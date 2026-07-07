@@ -37,7 +37,7 @@ async function bootstrap() {
   // app.useGlobalInterceptors(new ResponseTransformInterceptor());
 
   // Tell Nest where views are stored
-  app.setBaseViewsDir(join(__dirname, '..', 'src/views'));
+  app.setBaseViewsDir(join(__dirname, 'views'));
   app.setViewEngine('hbs');
 
   // Optional: partials/helpers
