@@ -80,8 +80,12 @@ export class AnnualAccountsController {
     @Param('id', ParseObjectIdPipe) id: string,
     @Body() dto: SubmitSectionDto,
     @CurrentUser() user: AuthUser,
+    @Req() req: Request,
   ) {
-    return this.annualAccountsService.submitSection(id, dto.section, user);
+    const ipAddress =
+      (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ?? req.socket?.remoteAddress ?? null;
+    const userAgent = (req.headers['user-agent'] as string) ?? null;
+    return this.annualAccountsService.submitSection(id, dto.section, user, ipAddress, userAgent);
   }
 
   @Post(':id/documents/:uploadId/retry')
