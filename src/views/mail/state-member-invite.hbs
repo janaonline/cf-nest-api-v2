@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>You have been invited</title>
+  <style>
+    body { margin: 0; padding: 0; background-color: #f4f6f9; font-family: Arial, sans-serif; }
+    .wrapper { max-width: 600px; margin: 40px auto; background: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    .header { background-color: #0f4c81; padding: 28px 32px; text-align: center; }
+    .header img { height: 36px; }
+    .header-title { color: #ffffff; font-size: 18px; font-weight: bold; margin-top: 12px; }
+    .body { padding: 32px; color: #333333; font-size: 15px; line-height: 1.6; }
+    .body h2 { font-size: 20px; color: #0f4c81; margin-bottom: 8px; }
+    .info-box { background: #f0f5ff; border-left: 4px solid #0f4c81; border-radius: 4px; padding: 14px 18px; margin: 20px 0; font-size: 14px; }
+    .info-box p { margin: 4px 0; }
+    .info-box strong { color: #0f4c81; }
+    .cta { text-align: center; margin: 28px 0; }
+    .cta a { background-color: #0f4c81; color: #ffffff; text-decoration: none; padding: 13px 32px; border-radius: 6px; font-size: 15px; font-weight: bold; display: inline-block; }
+    .note { font-size: 13px; color: #777777; margin-top: 24px; background: #fff8e1; border-radius: 4px; padding: 12px 16px; }
+    .footer { background: #f4f6f9; text-align: center; padding: 18px 32px; font-size: 12px; color: #999999; }
+    .divider { border: none; border-top: 1px solid #eeeeee; margin: 24px 0; }
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    <div class="header">
+      <div class="header-title">XVI Finance Commission — CityFinance Portal</div>
+    </div>
+
+    <div class="body">
+      <h2>You have been invited to join your state team</h2>
+      <p>Hello <strong>{{name}}</strong>,</p>
+      <p>
+        <strong>{{invitedBy}}</strong> from <strong>{{stateName}}</strong> has added you as a team member
+        on the XVI Finance Commission portal.
+      </p>
+
+      <div class="info-box">
+        <p><strong>Name:</strong> {{name}}</p>
+        <p><strong>Mobile:</strong> {{mobile}}</p>
+        <p><strong>Role:</strong> {{role}}</p>
+        <p><strong>State:</strong> {{stateName}}</p>
+      </div>
+
+      {{#if tempPassword}}
+      <p>
+        Your account has been created with a temporary password. Use your email address and the password
+        below to log in for the first time. You will be prompted to set a new password after verifying your email.
+      </p>
+      <div class="info-box" style="background:#fff3cd;border-left-color:#f0ad4e;">
+        <p style="margin:0 0 6px;font-size:13px;color:#856404;"><strong>Login Email:</strong> {{email}}</p>
+        <p style="margin:0;font-size:16px;letter-spacing:2px;font-family:monospace;color:#333;"><strong>Temporary Password:</strong> <span style="background:#fff;padding:2px 8px;border-radius:3px;border:1px solid #f0ad4e;">{{tempPassword}}</span></p>
+      </div>
+      <p style="font-size:13px;color:#cc0000;"><strong>&#9888; This temporary password expires in 72 hours.</strong> Please log in and set a new password as soon as possible.</p>
+      {{else}}
+      <p>
+        To get started, click the button below to log in using your registered email address.
+        You will be prompted to complete your profile verification on first login.
+      </p>
+      {{/if}}
+
+      <div class="cta">
+        <a href="{{loginUrl}}" target="_blank">Access CityFinance Portal</a>
+      </div>
+
+      <hr class="divider" />
+
+      <div class="note">
+        <strong>Note:</strong> If you did not expect this invitation or believe it was sent in error,
+        please ignore this email or contact your state administrator.
+        Do not share this link with anyone.
+      </div>
+    </div>
+
+    <div class="footer">
+      &copy; CityFinance &mdash; Ministry of Housing and Urban Affairs, Government of India<br />
+      This is an automated message. Please do not reply to this email.
+    </div>
+  </div>
+</body>
+</html>

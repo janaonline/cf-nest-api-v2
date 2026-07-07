@@ -1,122 +1,169 @@
-import { BadRequestException, ForbiddenException, HttpException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  HttpException,
+  HttpStatus,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { randomBytes } from 'crypto';
+import * as bcrypt from 'bcrypt';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { RedisService } from 'src/core/services/redis/redis.service';
+import { EmailQueueService } from 'src/core/queue/email-queue/email-queue.service';
 import { User } from 'src/schemas/user/user.schema';
+import { State, StateDocument } from 'src/schemas/state.schema';
 import { Permission, Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { Role } from 'src/module/auth/enum/role.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
 import { UpdateProfileContactsDto } from './dto/update-profile-contacts.dto';
 import { ProfileContactsResponseDto } from './dto/profile-contacts-response.dto';
-import { CreateManagedUserDto } from './dto/create-managed-user.dto';
+import { InviteStateMemberDto } from './dto/invite-state-member.dto';
+import { InviteMohuaMemberDto } from './dto/invite-mohua-member.dto';
 import { UpdatePermissionOverridesDto } from './dto/update-permission-overrides.dto';
 import { AuthUser } from 'src/module/auth/auth-user.interface';
-import { assertAdminSameScope, assertManageableTarget, resolveAdminScopeTarget } from './user-scope.helpers';
 import { UpdateUserRoleDto } from './dto/update-user-role.dto';
-import { TransferOwnershipDto } from './dto/transfer-ownership.dto';
+import { StateMemberResponseDto } from './dto/state-member-response.dto';
+import { UpdateXviFcSubroleDto } from './dto/update-xvi-fc-subrole.dto';
+import { TransferSubmitterDto } from './dto/transfer-submitter.dto';
 
 // ─── Permission-matrix display types ────────────────────────────────────────
 
 export interface PermissionMatrixRow {
   label: string;
   permissionKey: Permission;
-  submitter: boolean;
-  editor: boolean;
+  admin: boolean;
+  reviewer: boolean;
   viewer: boolean;
 }
 
-// Static matrix definitions (for UI display only — not security)
-const ULB_MATRIX: PermissionMatrixRow[] = [
-  {
-    label: 'View status and reports',
-    permissionKey: Permission.VIEW_STATUS_REPORTS,
-    submitter: true,
-    editor: true,
-    viewer: true,
-  },
-  {
-    label: 'Upload documents',
-    permissionKey: Permission.UPLOAD_DOCUMENTS,
-    submitter: true,
-    editor: true,
-    viewer: false,
-  },
-  { label: 'Message users', permissionKey: Permission.MESSAGE_USERS, submitter: true, editor: true, viewer: false },
-  {
-    label: 'Final submit to State DMA',
-    permissionKey: Permission.FINAL_SUBMIT_TO_STATE_DMA,
-    submitter: true,
-    editor: false,
-    viewer: false,
-  },
-  { label: 'Manage users', permissionKey: Permission.MANAGE_USERS, submitter: true, editor: false, viewer: false },
-];
 const STATE_MATRIX: PermissionMatrixRow[] = [
   {
     label: 'View status and reports',
     permissionKey: Permission.VIEW_STATUS_REPORTS,
-    submitter: true,
-    editor: true,
+    admin: true,
+    reviewer: true,
     viewer: true,
   },
-  { label: 'View dashboards', permissionKey: Permission.VIEW_DASHBOARDS, submitter: true, editor: true, viewer: true },
+  { label: 'View dashboards', permissionKey: Permission.VIEW_DASHBOARDS, admin: true, reviewer: true, viewer: true },
   {
     label: 'Upload state-level documents',
     permissionKey: Permission.UPLOAD_STATE_LEVEL_DOCUMENTS,
-    submitter: true,
-    editor: true,
+    admin: true,
+    reviewer: true,
     viewer: false,
   },
   {
     label: 'Review ULB submissions',
     permissionKey: Permission.REVIEW_ULB_SUBMISSIONS,
-    submitter: true,
-    editor: true,
+    admin: true,
+    reviewer: true,
     viewer: false,
   },
-  { label: 'Message users', permissionKey: Permission.MESSAGE_USERS, submitter: true, editor: true, viewer: false },
+  { label: 'Message users', permissionKey: Permission.MESSAGE_USERS, admin: true, reviewer: true, viewer: false },
   {
     label: 'Approve ULB submissions',
     permissionKey: Permission.APPROVE_ULB_SUBMISSIONS,
-    submitter: true,
-    editor: false,
+    admin: true,
+    reviewer: true,
     viewer: false,
   },
   {
     label: 'Prepare grant letters',
     permissionKey: Permission.PREPARE_GRANT_LETTERS,
-    submitter: true,
-    editor: false,
+    admin: true,
+    reviewer: true,
     viewer: false,
   },
   {
     label: 'Recommend exemptions',
     permissionKey: Permission.RECOMMEND_EXEMPTIONS,
-    submitter: true,
-    editor: false,
+    admin: true,
+    reviewer: true,
     viewer: false,
   },
   {
     label: 'Final submit to MoHUA',
     permissionKey: Permission.FINAL_SUBMIT_TO_MOHUA,
-    submitter: true,
-    editor: false,
+    admin: true,
+    reviewer: false,
     viewer: false,
   },
-  { label: 'Manage users', permissionKey: Permission.MANAGE_USERS, submitter: true, editor: false, viewer: false },
+  { label: 'Manage users', permissionKey: Permission.MANAGE_USERS, admin: true, reviewer: false, viewer: false },
+];
+
+const MOHUA_MATRIX: PermissionMatrixRow[] = [
+  {
+    label: 'View status and reports',
+    permissionKey: Permission.VIEW_STATUS_REPORTS,
+    admin: true,
+    reviewer: true,
+    viewer: true,
+  },
+  { label: 'View dashboards', permissionKey: Permission.VIEW_DASHBOARDS, admin: true, reviewer: true, viewer: true },
+  {
+    label: 'Review state submissions',
+    permissionKey: Permission.REVIEW_ULB_SUBMISSIONS,
+    admin: true,
+    reviewer: true,
+    viewer: false,
+  },
+  {
+    label: 'Send reminders to states',
+    permissionKey: Permission.MESSAGE_USERS,
+    admin: true,
+    reviewer: true,
+    viewer: false,
+  },
+  {
+    label: 'Request information from states',
+    permissionKey: Permission.MESSAGE_USERS,
+    admin: true,
+    reviewer: true,
+    viewer: false,
+  },
+  {
+    label: 'Approve / Reject submissions',
+    permissionKey: Permission.APPROVE_ULB_SUBMISSIONS,
+    admin: true,
+    reviewer: false,
+    viewer: false,
+  },
+  {
+    label: 'Issue Office Memorandum (OM)',
+    permissionKey: Permission.PREPARE_GRANT_LETTERS,
+    admin: true,
+    reviewer: false,
+    viewer: false,
+  },
+  {
+    label: 'Final submit to DoE',
+    permissionKey: Permission.FINAL_SUBMIT_TO_MOHUA,
+    admin: true,
+    reviewer: false,
+    viewer: false,
+  },
+  { label: 'Manage team', permissionKey: Permission.MANAGE_USERS, admin: true, reviewer: false, viewer: false },
 ];
 
 // ─── Service ─────────────────────────────────────────────────────────────────
 
 @Injectable()
 export class UsersService {
+  private readonly logger = new Logger(UsersService.name);
   private static readonly SAVE_TOKEN_TTL = 120; // 2 minutes — consumed on first use
   private saveTokenKey = (userId: string) => `profile_save_token:${userId}`;
 
   constructor(
     @InjectModel(User.name) private userModel: Model<User>,
+    @InjectModel(State.name) private stateModel: Model<StateDocument>,
     private readonly redisService: RedisService,
+    private readonly emailQueueService: EmailQueueService,
+    private readonly configService: ConfigService,
   ) {}
 
   async issueProfileSaveToken(userId: string): Promise<{ token: string }> {
@@ -133,38 +180,219 @@ export class UsersService {
     return user.save();
   }
 
-  async createManagedUser(dto: CreateManagedUserDto, creator: AuthUser): Promise<Record<string, unknown>> {
-    const { creatorId, targetStateId, targetUlbId } = resolveAdminScopeTarget(creator, dto.role, {
-      ulbId: dto.ulbId,
-      stateId: dto.stateId,
-    });
+  async inviteStateMember(dto: InviteStateMemberDto, requester: AuthUser): Promise<StateMemberResponseDto> {
+    if (!requester.state) throw new ForbiddenException('No state scope on this account');
 
-    const mobileExists = await this.userModel.exists({ mobile: dto.mobile, isDeleted: false });
-    if (mobileExists) {
-      throw new BadRequestException('Mobile number already registered');
+    const action = dto.action ?? 'invite';
+    const stateId = new Types.ObjectId(String(requester.state));
+    const xviFcSubrole: 'reviewer' | 'viewer' = dto.subRole === 'EDITOR' ? 'reviewer' : 'viewer';
+
+    // Guard: email belongs to a fully active XVI-FC member (not XVI-FC removed)
+    const activeUser = await this.userModel
+      .findOne({ email: dto.email, isDeleted: false, isXviFcdeleted: { $ne: true } })
+      .select('_id')
+      .lean()
+      .exec();
+    if (activeUser) {
+      throw new HttpException(
+        { code: 'EMAIL_ALREADY_ACTIVE', message: 'Email address is already registered' },
+        HttpStatus.CONFLICT,
+      );
     }
 
-    const createPayload: Record<string, unknown> = {
-      name: dto.name,
-      username: dto.username,
-      ...(dto.email && { email: dto.email }),
-      mobile: dto.mobile,
-      role: dto.role,
-      designation: dto.designation ?? '',
-      status: dto.status ?? 'PENDING',
-      password: 'UNSET',
-      isActive: false,
-      isXVIFCProfileVerified: false,
-      createdBy: new Types.ObjectId(creatorId),
-      ...(targetStateId && { state: new Types.ObjectId(targetStateId) }),
-      ...(targetUlbId && { ulb: new Types.ObjectId(targetUlbId) }),
-    };
+    if (action === 'invite') {
+      // Check if this email belongs to a member that was XVI-FC removed (isXviFcdeleted: true).
+      // Email is never scrambled in the new flow, so we match directly on the email field.
+      const removedUser = await this.userModel
+        .findOne({ email: dto.email, isDeleted: false, isXviFcdeleted: true })
+        .select('name designation')
+        .lean()
+        .exec();
 
-    const user = await this.userModel.create(createPayload);
-    const obj = user.toObject() as unknown as Record<string, unknown>;
-    delete obj.password;
-    delete obj.refreshTokenHash;
-    return obj;
+      if (removedUser) {
+        throw new HttpException(
+          {
+            code: 'EMAIL_XVIFC_REMOVED',
+            message: `This email belongs to ${removedUser.name} who was previously removed from the team.`,
+            removedUser: { name: removedUser.name, designation: removedUser.designation ?? '' },
+          },
+          HttpStatus.CONFLICT,
+        );
+      }
+
+      return this.createFreshStateMember(dto, stateId, xviFcSubrole, requester);
+    }
+
+    if (action === 'restore') {
+      const toRestore = await this.userModel
+        .findOne({ email: dto.email, isDeleted: false, isXviFcdeleted: true })
+        .lean()
+        .exec();
+
+      if (!toRestore) {
+        // Already restored by another request — create fresh
+        return this.createFreshStateMember(dto, stateId, xviFcSubrole, requester);
+      }
+
+      const tempPassword = this.generateTempPassword();
+      const hashedPassword = await bcrypt.hash(tempPassword, 12);
+      const tempPasswordExpiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000);
+
+      const restored = await this.userModel
+        .findByIdAndUpdate(
+          toRestore._id,
+          {
+            $set: {
+              name: dto.name,
+              mobile: dto.mobile,
+              designation: dto.designation,
+              xviFcSubrole,
+              state: stateId,
+              isXviFcdeleted: false,
+              createdBy: new Types.ObjectId(String(requester._id)),
+              isActive: true,
+              isXVIFCProfileVerified: false,
+              password: hashedPassword,
+              isNewUser: true,
+              tempPasswordExpiresAt,
+              refreshTokenHash: null,
+              loginAttempts: 0,
+              isLocked: false,
+            },
+          },
+          { new: true },
+        )
+        .lean()
+        .exec();
+
+      if (!restored) throw new NotFoundException('User to restore could not be found');
+
+      // Race-condition guard: another active member with this email appeared during the restore window
+      const raceConflict = await this.userModel.exists({
+        email: dto.email,
+        isDeleted: false,
+        isXviFcdeleted: { $ne: true },
+        _id: { $ne: restored._id },
+      });
+      if (raceConflict) {
+        await this.userModel.findByIdAndUpdate(restored._id, { $set: { isXviFcdeleted: true } });
+        throw new HttpException(
+          { code: 'EMAIL_ALREADY_ACTIVE', message: 'Email address is already registered' },
+          HttpStatus.CONFLICT,
+        );
+      }
+
+      await this.queueInviteEmail(dto, stateId, requester, tempPassword);
+      return this.toStateMemberDto(restored, dto);
+    }
+
+    throw new BadRequestException('Invalid action');
+  }
+
+  private generateTempPassword(): string {
+    const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+    const lower = 'abcdefghjkmnpqrstuvwxyz';
+    const digits = '23456789';
+    const symbols = '@#$%^&*!';
+    const all = upper + lower + digits + symbols;
+    const pick = (set: string) => set[randomBytes(1)[0] % set.length];
+    const chars = [
+      pick(upper),
+      pick(upper),
+      pick(lower),
+      pick(lower),
+      pick(digits),
+      pick(digits),
+      pick(symbols),
+      ...Array.from({ length: 5 }, () => pick(all)),
+    ];
+    // Crypto Fisher-Yates shuffle
+    for (let i = chars.length - 1; i > 0; i--) {
+      const j = randomBytes(1)[0] % (i + 1);
+      [chars[i], chars[j]] = [chars[j], chars[i]];
+    }
+    return chars.join('');
+  }
+
+  private async createFreshStateMember(
+    dto: InviteStateMemberDto,
+    stateId: Types.ObjectId,
+    xviFcSubrole: 'reviewer' | 'viewer',
+    requester: AuthUser,
+  ): Promise<StateMemberResponseDto> {
+    const tempPassword = this.generateTempPassword();
+    const hashedPassword = await bcrypt.hash(tempPassword, 12);
+    const tempPasswordExpiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000);
+
+    const created = await this.userModel.create({
+      name: dto.name,
+      email: dto.email,
+      mobile: dto.mobile,
+      designation: dto.designation,
+      role: Role.STATE,
+      xviFcSubrole,
+      state: stateId,
+      createdBy: new Types.ObjectId(String(requester._id)),
+      status: 'APPROVED',
+      isXVIFCProfileVerified: false,
+      isEmailVerified: true,
+      isActive: true,
+      isDeleted: false,
+      isLocked: false,
+      loginAttempts: 0,
+      password: hashedPassword,
+      isNewUser: true,
+      tempPasswordExpiresAt,
+      isRegistered: false,
+      isVerified2223: false,
+      isNodalOfficer: false,
+    });
+
+    await this.queueInviteEmail(dto, stateId, requester, tempPassword);
+    return this.toStateMemberDto(created, dto);
+  }
+
+  private async queueInviteEmail(
+    dto: InviteStateMemberDto,
+    stateId: Types.ObjectId,
+    requester: AuthUser,
+    tempPassword?: string,
+  ): Promise<void> {
+    const stateDoc = await this.stateModel.findById(stateId).select('name').lean().exec();
+    const loginUrl = `${this.configService.get<string>('CLIENT_URL', 'https://cityfinance.in')}/xvifc`;
+    this.emailQueueService
+      .addEmailJob({
+        to: dto.email,
+        subject: 'You have been invited to the XVI Finance Commission Portal',
+        templateName: './state-member-invite',
+        mailData: {
+          name: dto.name,
+          email: dto.email,
+          mobile: dto.mobile,
+          role: dto.subRole === 'EDITOR' ? 'Reviewer' : 'Viewer',
+          stateName: stateDoc?.name ?? 'your state',
+          invitedBy: 'State Administrator',
+          loginUrl,
+          tempPassword: tempPassword ?? null,
+        },
+      })
+      .catch((err: unknown) => {
+        this.logger.error(`Failed to queue state member invite email to ${dto.email}:`, err);
+      });
+  }
+
+  private toStateMemberDto(user: { _id: unknown }, dto: InviteStateMemberDto): StateMemberResponseDto {
+    return {
+      _id: String(user._id),
+      name: dto.name,
+      mobile: dto.mobile,
+      email: dto.email,
+      designation: dto.designation,
+      subRole: dto.subRole,
+      isActive: true,
+      isXVIFCProfileVerified: false,
+      lastActive: null,
+    };
   }
 
   /**
@@ -194,13 +422,11 @@ export class UsersService {
 
     const targetUser = await this.userModel
       .findOne({ _id: targetUserId, isDeleted: false })
-      .select('role ulb state')
+      .select('role ulb state xviFcSubrole')
       .lean()
       .exec();
 
     if (!targetUser) throw new NotFoundException('User not found');
-
-    assertAdminSameScope(requester, targetUser);
 
     const allow = dto.allow ?? [];
     const deny = dto.deny ?? [];
@@ -219,6 +445,7 @@ export class UsersService {
 
     const effectivePermissions = getEffectivePermissions({
       role: targetUser.role as unknown as UserRole,
+      xviFcSubrole: (targetUser as unknown as Record<string, unknown>)['xviFcSubrole'] as string | null,
       permissionOverrides: { allow, deny },
     });
 
@@ -229,100 +456,144 @@ export class UsersService {
     };
   }
 
-  async softDeleteUser(targetUserId: string, requester: AuthUser): Promise<{ message: string }> {
+  async softDeleteStateUser(targetUserId: string, requester: AuthUser): Promise<{ message: string }> {
     if (!Types.ObjectId.isValid(targetUserId)) throw new BadRequestException('Invalid user ID');
 
     const targetUser = await this.userModel
       .findOne({ _id: targetUserId, isDeleted: false })
-      .select('role ulb state')
+      .select('role ulb state xviFcSubrole email')
       .lean()
       .exec();
 
     if (!targetUser) throw new NotFoundException('User not found');
 
-    assertManageableTarget(requester, targetUser);
+    // STATE users are removed from the XVI-FC portal only — isDeleted is left unchanged
+    // so 15th FC data is not affected. Email is preserved so the user can be restored later.
+    if ((targetUser.role as string) === UserRole.STATE) {
+      if ((targetUser as Record<string, unknown>)['xviFcSubrole'] === 'admin') {
+        throw new BadRequestException('Cannot remove the Admin. Transfer ownership first.');
+      }
+      if (targetUserId === String(requester._id)) {
+        throw new BadRequestException('You cannot remove yourself from the team');
+      }
+      await this.userModel.findByIdAndUpdate(targetUserId, { $set: { isXviFcdeleted: true } }).exec();
+      return { message: 'Member removed from the XVI-FC portal' };
+    }
 
-    await this.userModel.findByIdAndUpdate(targetUserId, { $set: { isDeleted: true } }).exec();
+    // Non-STATE users (ULB managed users etc.) — full hard soft-delete with tombstoning
+    const originalEmail = targetUser.email ?? null;
+    const tombstonedEmail = originalEmail ? `__deleted__${Date.now()}__${originalEmail}` : undefined;
+
+    await this.userModel
+      .findByIdAndUpdate(targetUserId, {
+        $set: {
+          isDeleted: true,
+          ...(tombstonedEmail && { email: tombstonedEmail }),
+          ...(originalEmail && { originalEmail }),
+        },
+      })
+      .exec();
 
     return { message: 'User deleted successfully' };
   }
 
-  async updateUserRole(
+  // async updateUserRole(
+  //   targetUserId: string,
+  //   dto: UpdateUserRoleDto,
+  //   requester: AuthUser,
+  // ): Promise<{ message: string }> {
+  //   if (!Types.ObjectId.isValid(targetUserId)) throw new BadRequestException('Invalid user ID');
+
+  //   const targetUser = await this.userModel
+  //     .findOne({ _id: targetUserId, isDeleted: false })
+  //     .select('role ulb state xviFcSubrole')
+  //     .lean()
+  //     .exec();
+
+  //   if (!targetUser) throw new NotFoundException('User not found');
+
+  //   await this.userModel.findByIdAndUpdate(targetUserId, { $set: { role: dto.role } }).exec();
+
+  //   return { message: 'User role updated successfully' };
+  // }
+
+  // ── Maps frontend display values to DB xviFcSubrole values ────────────────
+  private static readonly DISPLAY_TO_XVIFC_SUBROLE: Record<string, 'reviewer' | 'viewer'> = {
+    EDITOR: 'reviewer',
+    VIEWER: 'viewer',
+  };
+
+  async updateXviFcSubrole(
     targetUserId: string,
-    dto: UpdateUserRoleDto,
+    dto: UpdateXviFcSubroleDto,
     requester: AuthUser,
   ): Promise<{ message: string }> {
     if (!Types.ObjectId.isValid(targetUserId)) throw new BadRequestException('Invalid user ID');
 
     const targetUser = await this.userModel
       .findOne({ _id: targetUserId, isDeleted: false })
-      .select('role ulb state')
+      .select('role ulb state xviFcSubrole')
       .lean()
       .exec();
 
     if (!targetUser) throw new NotFoundException('User not found');
 
-    assertManageableTarget(requester, targetUser);
+    if ((targetUser.role as string) !== UserRole.STATE) {
+      throw new BadRequestException('Sub-role updates are only supported for STATE users');
+    }
 
-    await this.userModel.findByIdAndUpdate(targetUserId, { $set: { role: dto.role } }).exec();
+    const newSubrole = UsersService.DISPLAY_TO_XVIFC_SUBROLE[dto.subRole];
+    await this.userModel.findByIdAndUpdate(targetUserId, { $set: { xviFcSubrole: newSubrole } }).exec();
 
-    return { message: 'User role updated successfully' };
+    return { message: 'Sub-role updated successfully' };
   }
 
-  async transferOwnership(dto: TransferOwnershipDto, requester: AuthUser): Promise<{ message: string }> {
-    if (!Types.ObjectId.isValid(dto.newOwnerId)) throw new BadRequestException('Invalid newOwnerId');
+  async transferSubmitter(dto: TransferSubmitterDto, requester: AuthUser): Promise<{ message: string }> {
+    if (!Types.ObjectId.isValid(dto.toUserId)) throw new BadRequestException('Invalid toUserId');
 
-    // requester must be a ULB or STATE admin (or platform ADMIN)
-    const ownerRoles = [UserRole.ULB, UserRole.STATE] as string[];
-    if (requester.role !== UserRole.ADMIN && !ownerRoles.includes(requester.role)) {
-      throw new ForbiddenException('Only ULB or STATE admin can transfer ownership');
+    if (requester.role !== UserRole.STATE || requester.xviFcSubrole !== 'admin') {
+      throw new ForbiddenException('Only the STATE admin (submitter) can transfer ownership');
     }
 
     const newOwner = await this.userModel
-      .findOne({ _id: dto.newOwnerId, isDeleted: false })
-      .select('role ulb state')
+      .findOne({ _id: dto.toUserId, isDeleted: false })
+      .select('role state xviFcSubrole isXVIFCProfileVerified')
       .lean()
       .exec();
 
-    if (!newOwner) throw new NotFoundException('New owner user not found');
-
-    // new owner must be in the same ULB/state as the requester
-    assertAdminSameScope(requester, newOwner);
-
-    // new owner must currently be an editor or viewer — not already an admin
-    const eligibleRoles = [
-      UserRole.ULB_EDITOR,
-      UserRole.ULB_VIEWER,
-      UserRole.STATE_EDITOR,
-      UserRole.STATE_VIEWER,
-    ] as string[];
-    if (!eligibleRoles.includes(newOwner.role as string)) {
-      throw new BadRequestException('New owner must currently be an EDITOR or VIEWER role');
+    if (!newOwner) throw new NotFoundException('Target user not found');
+    if ((newOwner.role as string) !== UserRole.STATE) {
+      throw new BadRequestException('Target must be a STATE user');
+    }
+    if (newOwner.xviFcSubrole === 'admin') {
+      throw new BadRequestException('Target is already the STATE admin');
+    }
+    if (!(newOwner as Record<string, unknown>)['isXVIFCProfileVerified']) {
+      throw new BadRequestException(
+        'Ownership can only be transferred to an active member who has completed profile verification',
+      );
     }
 
-    // demoteTo must match the requester's scope
-    const ulbDemotionRoles = [UserRole.ULB_EDITOR, UserRole.ULB_VIEWER] as string[];
-    const stateDemotionRoles = [UserRole.STATE_EDITOR, UserRole.STATE_VIEWER] as string[];
-
-    if (requester.role === UserRole.ULB && !ulbDemotionRoles.includes(dto.demoteTo)) {
-      throw new BadRequestException('ULB admin can only demote to ULB-EDITOR or ULB-VIEWER');
-    }
-    if (requester.role === UserRole.STATE && !stateDemotionRoles.includes(dto.demoteTo)) {
-      throw new BadRequestException('STATE admin can only demote to STATE-EDITOR or STATE-VIEWER');
+    // Must belong to the same state
+    const requesterStateId = requester.state?.toString();
+    const targetStateId = newOwner.state?.toString();
+    if (!requesterStateId || requesterStateId !== targetStateId) {
+      throw new ForbiddenException('You can only transfer ownership within your own state');
     }
 
-    // atomic swap inside a MongoDB session
-    const session = await this.userModel.db.startSession();
+    // Promote new owner first, then demote current admin.
+    // On failure of the second update, roll back the first to preserve consistency.
+    await this.userModel.findByIdAndUpdate(dto.toUserId, { $set: { xviFcSubrole: 'admin' } }).exec();
+
     try {
-      await session.withTransaction(async () => {
-        await this.userModel.findByIdAndUpdate(dto.newOwnerId, { $set: { role: requester.role } }, { session });
-        await this.userModel.findByIdAndUpdate(requester._id, { $set: { role: dto.demoteTo } }, { session });
-      });
-    } finally {
-      await session.endSession();
+      await this.userModel.findByIdAndUpdate(requester._id, { $set: { xviFcSubrole: 'reviewer' } }).exec();
+    } catch (err) {
+      // Rollback: restore the promoted user to their previous sub-role
+      await this.userModel.findByIdAndUpdate(dto.toUserId, { $set: { xviFcSubrole: newOwner.xviFcSubrole } }).exec();
+      throw err;
     }
 
-    return { message: 'Ownership transferred successfully' };
+    return { message: 'Ownership transferred successfully. You are now a Reviewer.' };
   }
 
   private static readonly UPDATABLE_FIELDS = new Set<string>([
@@ -345,6 +616,7 @@ export class UsersService {
     'status',
     'isNodalOfficer',
     'isXVIFCProfileVerified',
+    'isXviFcdeleted',
   ]);
 
   async updateProfileContacts(
@@ -356,7 +628,7 @@ export class UsersService {
 
     const targetUser = await this.userModel
       .findOne({ _id: userId, isDeleted: false })
-      .select('ulb state')
+      .select('ulb state isNodalOfficer xviFcSubrole')
       .lean()
       .exec();
     if (!targetUser) throw new NotFoundException('User not found');
@@ -364,9 +636,7 @@ export class UsersService {
     const isSelfUpdate = requester._id.toString() === userId;
     const isUlbScope = requester.scope === Scope.ULB;
 
-    if (!isSelfUpdate) {
-      assertAdminSameScope(requester, targetUser);
-    } else if (!isUlbScope) {
+    if (isSelfUpdate && !isUlbScope) {
       // State / MoHUA self-updates require a valid one-time save token (issued post-OTP)
       const { saveToken } = dto;
       if (!saveToken) throw new BadRequestException('A verified save token is required to update your profile');
@@ -388,13 +658,22 @@ export class UsersService {
     }
     if (!Object.keys(update).length) throw new BadRequestException('No fields provided to update');
 
+    // When a STATE user verifies their profile, derive and stamp their own xviFcSubrole
+    // in the same write — assignXviFcSubrolesByState skips already-verified users so
+    // without this the verifying user's subrole would never be set.
+    const isStateProfileVerify =
+      isSelfUpdate && !isUlbScope && update['isXVIFCProfileVerified'] === true && targetUser.state;
+
+    // Only derive subrole if one has not been manually assigned already
+    if (isStateProfileVerify && !(targetUser as Record<string, unknown>)['xviFcSubrole']) {
+      update['xviFcSubrole'] = targetUser.isNodalOfficer ? 'admin' : 'reviewer';
+    }
+
     await this.userModel.findByIdAndUpdate(userId, { $set: update }).exec();
 
-    // ── NEW: after a state user's OTP-verified profile save, assign xviFcSubrole across the whole state
-    if (isSelfUpdate && !isUlbScope && update['isXVIFCProfileVerified'] === true && targetUser.state) {
-      await this.assignXviFcSubrolesByState(targetUser.state);
+    if (isStateProfileVerify) {
+      await this.assignXviFcSubrolesByState(targetUser.state!);
     }
-    // ── END NEW
 
     return { message: 'Profile contacts updated successfully', updatedFields: update };
   }
@@ -420,6 +699,8 @@ export class UsersService {
       role: { $in: UsersService.XVIFC_STATE_ROLES },
       // $ne: true catches false, null, and undefined (legacy docs that predate the field)
       isXVIFCProfileVerified: { $ne: true },
+      // Only initialise subrole for users who don't have one yet — never overwrite manual assignments
+      xviFcSubrole: { $in: [null, ''] },
     };
 
     await Promise.all([
@@ -431,24 +712,433 @@ export class UsersService {
   }
   // ── END NEW
 
+  // ─── xviFcSubrole → frontend subRole mapping ──────────────────────────────
+  // xviFcSubrole is the single source of truth for state-scope sub-classification.
+  // DB role is just 'STATE' for everyone; admin/reviewer/viewer live in this field.
+  private static readonly XVIFC_TO_SUB_ROLE: Record<string, 'SUBMITTER' | 'EDITOR' | 'VIEWER'> = {
+    admin: 'SUBMITTER',
+    reviewer: 'EDITOR',
+    viewer: 'VIEWER',
+  };
+
+  async getStateMembers(stateId: string): Promise<StateMemberResponseDto[]> {
+    if (!Types.ObjectId.isValid(stateId)) throw new BadRequestException('Invalid state ID');
+
+    const users = await this.userModel
+      .find({
+        state: new Types.ObjectId(stateId),
+        role: UserRole.STATE,
+        isDeleted: false,
+        isXviFcdeleted: { $ne: true },
+      })
+      .select('_id name mobile email designation xviFcSubrole isActive isXVIFCProfileVerified lastLoginAt')
+      .lean()
+      .exec();
+
+    return users.map((u) => ({
+      _id: String(u._id),
+      name: u.name,
+      mobile: u.mobile ?? '',
+      ...(u.email ? { email: u.email } : {}),
+      designation: u.designation ?? '',
+      subRole: UsersService.XVIFC_TO_SUB_ROLE[u.xviFcSubrole as string] ?? 'VIEWER',
+      isActive: u.isActive ?? false,
+      isXVIFCProfileVerified: (u as Record<string, unknown>).isXVIFCProfileVerified === true,
+      lastActive: u.lastLoginAt ? (u.lastLoginAt as Date).toISOString() : null,
+    }));
+  }
+
+  async getMohuaMembers(): Promise<StateMemberResponseDto[]> {
+    const users = await this.userModel
+      .find({ role: Role.MoHUA, isXviFcdeleted: { $ne: true }, isDeleted: false })
+      .select('_id name mobile email designation xviFcSubrole isActive isXVIFCProfileVerified lastLoginAt')
+      .lean()
+      .exec();
+    console.log('users', users);
+    return users.map((u) => ({
+      _id: String(u._id),
+      name: u.name,
+      mobile: u.mobile ?? '',
+      ...(u.email ? { email: u.email } : {}),
+      designation: u.designation ?? '',
+      subRole: UsersService.XVIFC_TO_SUB_ROLE[u.xviFcSubrole as string] ?? 'VIEWER',
+      isActive: u.isActive ?? false,
+      isXVIFCProfileVerified: (u as Record<string, unknown>).isXVIFCProfileVerified === true,
+      lastActive: u.lastLoginAt ? (u.lastLoginAt as Date).toISOString() : null,
+    }));
+  }
+
+  async inviteMohuaMember(dto: InviteMohuaMemberDto, requester: AuthUser): Promise<StateMemberResponseDto> {
+    const action = dto.action ?? 'invite';
+    const xviFcSubrole: 'reviewer' | 'viewer' = dto.subRole === 'EDITOR' ? 'reviewer' : 'viewer';
+
+    // Guard: email belongs to a fully active XVI-FC member (not XVI-FC removed)
+    const activeUser = await this.userModel
+      .findOne({ email: dto.email, isDeleted: false, isXviFcdeleted: { $ne: true } })
+      .select('_id')
+      .lean()
+      .exec();
+    if (activeUser) {
+      throw new HttpException(
+        { code: 'EMAIL_ALREADY_ACTIVE', message: 'Email address is already registered' },
+        HttpStatus.CONFLICT,
+      );
+    }
+
+    if (action === 'invite') {
+      const removedUser = await this.userModel
+        .findOne({ email: dto.email, isDeleted: false, isXviFcdeleted: true })
+        .select('name designation')
+        .lean()
+        .exec();
+
+      if (removedUser) {
+        throw new HttpException(
+          {
+            code: 'EMAIL_XVIFC_REMOVED',
+            message: `This email belongs to ${removedUser.name} who was previously removed from the team.`,
+            removedUser: { name: removedUser.name, designation: removedUser.designation ?? '' },
+          },
+          HttpStatus.CONFLICT,
+        );
+      }
+
+      return this.createFreshMohuaMember(dto, xviFcSubrole, requester);
+    }
+
+    if (action === 'restore') {
+      const toRestore = await this.userModel
+        .findOne({ email: dto.email, isDeleted: false, isXviFcdeleted: true })
+        .lean()
+        .exec();
+
+      if (!toRestore) {
+        // Already restored by another request — create fresh
+        return this.createFreshMohuaMember(dto, xviFcSubrole, requester);
+      }
+
+      const tempPassword = this.generateTempPassword();
+      const hashedPassword = await bcrypt.hash(tempPassword, 12);
+      const tempPasswordExpiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000);
+
+      const restored = await this.userModel
+        .findByIdAndUpdate(
+          toRestore._id,
+          {
+            $set: {
+              name: dto.name,
+              mobile: dto.mobile,
+              designation: dto.designation,
+              xviFcSubrole,
+              isXviFcdeleted: false,
+              createdBy: new Types.ObjectId(String(requester._id)),
+              isActive: true,
+              isXVIFCProfileVerified: false,
+              password: hashedPassword,
+              isNewUser: true,
+              tempPasswordExpiresAt,
+              refreshTokenHash: null,
+              loginAttempts: 0,
+              isLocked: false,
+            },
+          },
+          { new: true },
+        )
+        .lean()
+        .exec();
+
+      if (!restored) throw new NotFoundException('User to restore could not be found');
+
+      // Race-condition guard: another active member with this email appeared during the restore window
+      const raceConflict = await this.userModel.exists({
+        email: dto.email,
+        isDeleted: false,
+        isXviFcdeleted: { $ne: true },
+        _id: { $ne: restored._id },
+      });
+      if (raceConflict) {
+        await this.userModel.findByIdAndUpdate(restored._id, { $set: { isXviFcdeleted: true } });
+        throw new HttpException(
+          { code: 'EMAIL_ALREADY_ACTIVE', message: 'Email address is already registered' },
+          HttpStatus.CONFLICT,
+        );
+      }
+
+      await this.queueMohuaInviteEmail(dto, requester, tempPassword);
+      return this.toMohuaMemberDto(restored, dto);
+    }
+
+    throw new BadRequestException('Invalid action');
+  }
+
+  private async createFreshMohuaMember(
+    dto: InviteMohuaMemberDto,
+    xviFcSubrole: 'reviewer' | 'viewer',
+    requester: AuthUser,
+  ): Promise<StateMemberResponseDto> {
+    const tempPassword = this.generateTempPassword();
+    const hashedPassword = await bcrypt.hash(tempPassword, 12);
+    const tempPasswordExpiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000);
+
+    const created = await this.userModel.create({
+      name: dto.name,
+      email: dto.email,
+      mobile: dto.mobile,
+      designation: dto.designation,
+      role: Role.MoHUA,
+      xviFcSubrole,
+      createdBy: new Types.ObjectId(String(requester._id)),
+      status: 'APPROVED',
+      isXVIFCProfileVerified: false,
+      isEmailVerified: true,
+      isActive: true,
+      isDeleted: false,
+      isLocked: false,
+      loginAttempts: 0,
+      password: hashedPassword,
+      isNewUser: true,
+      tempPasswordExpiresAt,
+    });
+
+    await this.queueMohuaInviteEmail(dto, requester, tempPassword);
+    return this.toMohuaMemberDto(created, dto);
+  }
+
+  private async queueMohuaInviteEmail(
+    dto: InviteMohuaMemberDto,
+    requester: AuthUser,
+    tempPassword?: string,
+  ): Promise<void> {
+    const loginUrl = `${this.configService.get<string>('CLIENT_URL', 'https://cityfinance.in')}/xvifc`;
+    this.emailQueueService
+      .addEmailJob({
+        to: dto.email,
+        subject: 'You have been invited to the XVI Finance Commission Portal (MoHUA)',
+        templateName: './mohua-member-invite',
+        mailData: {
+          name: dto.name,
+          email: dto.email,
+          mobile: dto.mobile,
+          role: dto.subRole === 'EDITOR' ? 'Reviewer' : 'Viewer',
+          invitedBy: String(requester['name'] ?? 'MoHUA Submitter'),
+          loginUrl,
+          tempPassword: tempPassword ?? null,
+        },
+      })
+      .catch((err: unknown) => {
+        this.logger.error(`Failed to queue MoHUA member invite email to ${dto.email}:`, err);
+      });
+  }
+
+  private toMohuaMemberDto(user: { _id: unknown }, dto: InviteMohuaMemberDto): StateMemberResponseDto {
+    return {
+      _id: String(user._id),
+      name: dto.name,
+      mobile: dto.mobile,
+      email: dto.email,
+      designation: dto.designation,
+      subRole: dto.subRole,
+      isActive: true,
+      isXVIFCProfileVerified: false,
+      lastActive: null,
+    };
+  }
+
+  async updateMohuaMemberSubrole(
+    targetUserId: string,
+    dto: UpdateXviFcSubroleDto,
+    requester: AuthUser,
+  ): Promise<{ message: string }> {
+    if (!Types.ObjectId.isValid(targetUserId)) throw new BadRequestException('Invalid user ID');
+
+    if ((requester.role as string) !== Role.MoHUA || requester.xviFcSubrole !== 'admin') {
+      throw new ForbiddenException('Only the MoHUA Submitter can change member roles');
+    }
+
+    const targetUser = await this.userModel
+      .findOne({ _id: targetUserId, isDeleted: false })
+      .select('role xviFcSubrole')
+      .lean()
+      .exec();
+
+    if (!targetUser) throw new NotFoundException('User not found');
+    if ((targetUser.role as string) !== Role.MoHUA) {
+      throw new BadRequestException('Sub-role updates are only supported for MoHUA users');
+    }
+    if (targetUser.xviFcSubrole === 'admin') {
+      throw new BadRequestException(
+        "Cannot change the Submitter's role via this endpoint. Use transfer ownership instead.",
+      );
+    }
+
+    const newSubrole = UsersService.DISPLAY_TO_XVIFC_SUBROLE[dto.subRole];
+    await this.userModel.findByIdAndUpdate(targetUserId, { $set: { xviFcSubrole: newSubrole } }).exec();
+
+    return { message: 'Sub-role updated successfully' };
+  }
+
+  async transferMohuaSubmitter(dto: TransferSubmitterDto, requester: AuthUser): Promise<{ message: string }> {
+    if (!Types.ObjectId.isValid(dto.toUserId)) throw new BadRequestException('Invalid toUserId');
+
+    if ((requester.role as string) !== Role.MoHUA || requester.xviFcSubrole !== 'admin') {
+      throw new ForbiddenException('Only the MoHUA Submitter can transfer ownership');
+    }
+
+    const newOwner = await this.userModel
+      .findOne({ _id: dto.toUserId, isDeleted: false })
+      .select('role xviFcSubrole isXVIFCProfileVerified')
+      .lean()
+      .exec();
+
+    if (!newOwner) throw new NotFoundException('Target user not found');
+    if ((newOwner.role as string) !== Role.MoHUA) {
+      throw new BadRequestException('Target must be a MoHUA user');
+    }
+    if (newOwner.xviFcSubrole === 'admin') {
+      throw new BadRequestException('Target is already the MoHUA Submitter');
+    }
+    if (!(newOwner as Record<string, unknown>)['isXVIFCProfileVerified']) {
+      throw new BadRequestException(
+        'Ownership can only be transferred to an active member who has completed profile verification',
+      );
+    }
+
+    await this.userModel.findByIdAndUpdate(dto.toUserId, { $set: { xviFcSubrole: 'admin' } }).exec();
+
+    try {
+      await this.userModel.findByIdAndUpdate(requester._id, { $set: { xviFcSubrole: 'reviewer' } }).exec();
+    } catch (err) {
+      await this.userModel.findByIdAndUpdate(dto.toUserId, { $set: { xviFcSubrole: newOwner.xviFcSubrole } }).exec();
+      throw err;
+    }
+
+    return { message: 'Ownership transferred successfully. You are now an Editor.' };
+  }
+
+  async softDeleteMohuaMember(targetUserId: string, requester: AuthUser): Promise<{ message: string }> {
+    if (!Types.ObjectId.isValid(targetUserId)) throw new BadRequestException('Invalid user ID');
+
+    if ((requester.role as string) !== Role.MoHUA || requester.xviFcSubrole !== 'admin') {
+      throw new ForbiddenException('Only the MoHUA Submitter can remove members');
+    }
+
+    if (targetUserId === String(requester._id)) {
+      throw new BadRequestException('You cannot remove yourself from the team');
+    }
+
+    const targetUser = await this.userModel
+      .findOne({ _id: targetUserId, isDeleted: false })
+      .select('role xviFcSubrole email')
+      .lean()
+      .exec();
+
+    if (!targetUser) throw new NotFoundException('User not found');
+    if ((targetUser.role as string) !== Role.MoHUA) {
+      throw new BadRequestException('Can only remove MoHUA team members');
+    }
+    if (targetUser.xviFcSubrole === 'admin') {
+      throw new BadRequestException('Cannot remove the Submitter. Transfer ownership first.');
+    }
+
+    await this.userModel.findByIdAndUpdate(targetUserId, { $set: { isXviFcdeleted: true } }).exec();
+
+    return { message: 'Member removed successfully' };
+  }
+
+  /** Patch role + xviFcSubrole on the two existing core MoHUA accounts. ADMIN scope only. */
+  async patchMohuaCoreSubroles(requester: AuthUser): Promise<{ updated: string[]; notFound: string[] }> {
+    if (requester.scope !== Scope.ADMIN) {
+      throw new ForbiddenException('Only platform admins can patch core MoHUA sub-roles');
+    }
+
+    const targets: Array<{ email: string; xviFcSubrole: 'admin' | 'reviewer' }> = [
+      { email: 'mohua@cityfinance.in', xviFcSubrole: 'admin' },
+      { email: 'gsdhillon.ofb@ofb.gov.in', xviFcSubrole: 'reviewer' },
+    ];
+
+    const updated: string[] = [];
+    const notFound: string[] = [];
+
+    for (const target of targets) {
+      const result = await this.userModel
+        .findOneAndUpdate(
+          { email: target.email, isDeleted: false },
+          { $set: { role: Role.MoHUA, xviFcSubrole: target.xviFcSubrole } },
+        )
+        .lean()
+        .exec();
+
+      if (result) {
+        updated.push(target.email);
+      } else {
+        notFound.push(target.email);
+      }
+    }
+
+    return { updated, notFound };
+  }
+
+  getMohuaPermissionMatrix(): PermissionMatrixRow[] {
+    return MOHUA_MATRIX;
+  }
+
   /**
    * Returns the permission matrix rows for the requester's scope.
    * Used only for UI display — not a security decision.
    */
-  getPermissionMatrix(requester: AuthUser): PermissionMatrixRow[] {
-    return requester.scope === Scope.STATE ? STATE_MATRIX : ULB_MATRIX;
+  getPermissionMatrix(): PermissionMatrixRow[] {
+    return STATE_MATRIX;
   }
 
   async getProfileContacts(id: string): Promise<ProfileContactsResponseDto> {
     const user = await this.userModel
       .findById(id)
       .select(
-        'commissionerName commissionerEmail commissionerConatactNumber accountantName accountantEmail accountantConatactNumber',
+        'commissionerName commissionerEmail commissionerConatactNumber accountantName accountantEmail accountantConatactNumber ulb',
       )
+      .populate({
+        path: 'ulb',
+        select: 'name code censusCode sbCode population area wards ulbType state',
+        populate: { path: 'state', select: 'name' },
+      })
       .lean()
       .exec();
 
     if (!user) throw new NotFoundException('User not found');
+
+    // ulbType has no NestJS schema — query its collection directly via the connection
+    let ulbTypeName = '';
+    const ulb = user.ulb as unknown as Record<string, unknown> | null;
+    if (ulb && typeof ulb === 'object') {
+      if (ulb['ulbType']) {
+        try {
+          const ulbTypeDoc = await this.userModel.db
+            .collection('ulbtypes')
+            .findOne({ _id: ulb['ulbType'] }, { projection: { name: 1 } });
+          ulbTypeName = ((ulbTypeDoc as Record<string, unknown> | null)?.['name'] as string) ?? '';
+        } catch {
+          /* collection unavailable — leave blank */
+        }
+      }
+    }
+
+    const stateName = ((ulb?.['state'] as Record<string, unknown> | null)?.['name'] as string) ?? '';
+
+    const ulbDetails = ulb
+      ? { name: (ulb['name'] as string) ?? '', code: (ulb['code'] as string) ?? '', stateName }
+      : null;
+
+    const registeredMunicipalInfo = ulb
+      ? {
+          stateName,
+          ulbType: ulbTypeName,
+          censusCode: ((ulb['censusCode'] as string) || (ulb['sbCode'] as string)) ?? '',
+          ulbCode: (ulb['code'] as string) ?? '',
+          area: (ulb['area'] as number) ?? 0,
+          population: (ulb['population'] as number) ?? 0,
+          wards: (ulb['wards'] as number) ?? 0,
+        }
+      : null;
 
     return {
       commissionerName: user.commissionerName ?? '',
@@ -457,6 +1147,8 @@ export class UsersService {
       accountantName: user.accountantName ?? '',
       accountantEmail: user.accountantEmail ?? '',
       accountantConatactNumber: user.accountantConatactNumber ?? '',
+      ulbDetails,
+      registeredMunicipalInfo,
     };
   }
 }

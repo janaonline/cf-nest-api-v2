@@ -15,11 +15,8 @@ import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import { xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
-import {
-  XviFcBankAccount,
-  XviFcBankAccountDocument,
-} from 'src/schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
-import { toObjectIdString } from 'src/users/user-scope.helpers';
+import { XviFcBankAccount, XviFcBankAccountDocument } from 'src/schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
+import { toObjectIdString } from 'src/common/utils/objectid.util';
 import type { GetXviFcBankAccountQueryDto } from './dto/get-xvi-fc-bank-account-query.dto';
 import { IFSC_REGEX } from './dto/submit-xvi-fc-bank-account.dto';
 import type { SubmitXviFcBankAccountDto } from './dto/submit-xvi-fc-bank-account.dto';
@@ -290,7 +287,9 @@ export class BankAccountService {
     } catch (error) {
       if (error instanceof Error && error.message.startsWith('BANK_ACCOUNT_')) {
         this.logger.error(error.message);
-        throw new ServiceUnavailableException('Bank account security configuration is invalid. Please contact support.');
+        throw new ServiceUnavailableException(
+          'Bank account security configuration is invalid. Please contact support.',
+        );
       }
 
       throw error;
@@ -323,7 +322,9 @@ export class BankAccountService {
   private assertProofFileS3Key(s3Key: string, ulbId: string, designYearId: string): void {
     const expectedPrefix = `xvi-fc/bank-account/${ulbId}/${designYearId}/proof/`;
     if (!s3Key.startsWith(expectedPrefix)) {
-      throw new BadRequestException('proofFile.s3Key must be a bank-account proof object key for this ULB and design year.');
+      throw new BadRequestException(
+        'proofFile.s3Key must be a bank-account proof object key for this ULB and design year.',
+      );
     }
   }
 
@@ -355,7 +356,11 @@ export class BankAccountService {
 
     const mismatch = comparisons.find(([, submitted, verified]) => {
       if (verified === undefined || verified === null || verified === '') return false;
-      return String(submitted ?? '').trim().toUpperCase() !== String(verified).trim().toUpperCase();
+      return (
+        String(submitted ?? '')
+          .trim()
+          .toUpperCase() !== String(verified).trim().toUpperCase()
+      );
     });
 
     if (mismatch) {

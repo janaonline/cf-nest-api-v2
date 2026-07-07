@@ -163,6 +163,15 @@ export class AnnualAccountSection {
 
   @Prop({ type: [DocumentItemSchema], default: [] })
   documents!: DocumentItem[];
+
+  @Prop({ type: Boolean, default: false })
+  selfDeclared!: boolean;
+
+  @Prop({ type: UserInfoSchema, default: null })
+  declaredBy: UserInfo | null;
+
+  @Prop({ type: Date, default: null })
+  declaredAt: Date | null;
 }
 
 export const AnnualAccountSectionSchema = SchemaFactory.createForClass(AnnualAccountSection);

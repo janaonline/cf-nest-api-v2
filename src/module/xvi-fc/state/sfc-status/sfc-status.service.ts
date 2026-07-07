@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+﻿import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { FormJsonService } from 'src/form-json/form-json.service';
 import { ConfigService } from '@nestjs/config';
@@ -17,7 +17,7 @@ import {
   canStateEditForm,
   canStateFinalSubmitForm,
 } from '../../common/utils/xvi-fc-form-status-access.util';
-import { toObjectIdString } from 'src/users/user-scope.helpers';
+import { toObjectIdString } from 'src/common/utils/objectid.util';
 import {
   SFC_FORM_ID,
   SFC_STATUS_FORM_TYPE,
@@ -45,7 +45,6 @@ import {
   buildXviFcFolderPath,
   type XviFcFolderPathContext,
 } from '../../common/folder-paths/xvi-fc-folder-path.resolver';
-import type { XviFcFolderPathKey } from '../../common/folder-paths/xvi-fc-folder-path.constants';
 import { YearIdToLabel } from 'src/core/constants/years';
 import { SaveSfcStatusDto } from './dto/save-sfc-status.dto';
 import type { SfcFormGetResponseData, SfcFormPermissions } from './sfc-status.types';
@@ -442,7 +441,7 @@ export class SfcStatusService {
       if (question.formFieldType === 'file') {
         const resolvedFolderPath =
           question.folderPathKey && folderPathContext
-            ? buildXviFcFolderPath(question.folderPathKey as XviFcFolderPathKey, folderPathContext)
+            ? buildXviFcFolderPath(question.folderPathKey, folderPathContext)
             : question.folderPath;
 
         const fileVal = value as UploadedFileValue | null | undefined;

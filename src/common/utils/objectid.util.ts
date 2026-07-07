@@ -2,6 +2,23 @@ import { BadRequestException } from '@nestjs/common';
 import { Types } from 'mongoose';
 
 /**
+ * Normalises any ObjectId-like value — ObjectId instance, plain hex string,
+ * or a populated sub-document { _id: ObjectId } — into a hex string.
+ * Returns null when the value is absent or unrecognised.
+ */
+export function toObjectIdString(value: unknown): string | null {
+  if (!value) return null;
+  if (value instanceof Types.ObjectId) return value.toString();
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object' && '_id' in (value as object)) {
+    const id = (value as { _id?: unknown })._id;
+    if (id instanceof Types.ObjectId) return id.toString();
+    if (typeof id === 'string') return id;
+  }
+  return null;
+}
+
+/**
  * Converts a string or existing ObjectId to Types.ObjectId with format validation.
  * @param value Input to convert.
  * @param fieldName Field name used in the error message.

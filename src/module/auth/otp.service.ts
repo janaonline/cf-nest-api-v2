@@ -351,13 +351,14 @@ export class OtpService {
   private async sendSms(mobile: string, otp: string): Promise<void> {
     const authKey = this.configService.get<string>('MSG91_AUTH_KEY');
     const templateId = this.configService.get<string>('TEMPLATE_ID');
+    const senderId = this.configService.get<string>('MSG91_SENDER_ID');
     if (!authKey) {
       this.logger.warn('MSG91_AUTH_KEY not configured — skipping SMS');
       return;
     }
     try {
       await axios.get('https://api.msg91.com/api/v5/otp', {
-        params: { template_id: templateId, mobile: `91${mobile}`, authkey: authKey, otp },
+        params: { template_id: templateId, mobile: `91${mobile}`, authkey: authKey, otp, sender: senderId },
       });
     } catch (err) {
       this.logger.error('SMS OTP send failed', err);

@@ -1,4 +1,4 @@
-import { IsInt, IsNotEmpty, IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsNotEmpty, IsNumber, IsOptional, IsString, IsUUID, Min } from 'class-validator';
 
 export class S3UrlItemDto {
   @IsString()
@@ -26,13 +26,12 @@ export class S3UrlItemDto {
   @IsOptional()
   folder?: string;
 
-  @IsString()
+  @IsUUID()
   @IsOptional()
   uploadId?: string;
 
-  @IsInt()
+  @IsNumber()
   @Min(1)
-  @Max(604800)
   @IsOptional()
   expiresIn?: number;
 }

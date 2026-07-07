@@ -1,13 +1,28 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards, HttpCode, HttpStatus } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Patch,
+  Param,
+  Delete,
+  UseGuards,
+  HttpCode,
+  HttpStatus,
+  ForbiddenException,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOkResponse, ApiOperation } from '@nestjs/swagger';
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateProfileContactsDto } from './dto/update-profile-contacts.dto';
 import { ProfileContactsResponseDto } from './dto/profile-contacts-response.dto';
-import { CreateManagedUserDto } from './dto/create-managed-user.dto';
+import { InviteStateMemberDto } from './dto/invite-state-member.dto';
+import { InviteMohuaMemberDto } from './dto/invite-mohua-member.dto';
 import { UpdatePermissionOverridesDto } from './dto/update-permission-overrides.dto';
 import { UpdateUserRoleDto } from './dto/update-user-role.dto';
-import { TransferOwnershipDto } from './dto/transfer-ownership.dto';
+import { StateMemberResponseDto } from './dto/state-member-response.dto';
+import { UpdateXviFcSubroleDto } from './dto/update-xvi-fc-subrole.dto';
+import { TransferSubmitterDto } from './dto/transfer-submitter.dto';
 import { CurrentUser } from 'src/module/auth/decorators/current-user.decorator';
 import { PermissionGuard } from 'src/module/auth/permission.guard';
 import { JwtAuthGuard } from 'src/module/auth/guards/jwt-auth.guard';
@@ -25,11 +40,14 @@ export class UsersController {
   }
 
   @ApiBearerAuth()
-  @Post('create-user')
-  @UseGuards(JwtAuthGuard, PermissionGuard)
-  @RequirePermissions(Permission.CREATE_MANAGED_USER)
-  createManagedUser(@Body() dto: CreateManagedUserDto, @CurrentUser() user: AuthUser) {
-    return this.usersService.createManagedUser(dto, user);
+  @Post('invite-state-member')
+  @UseGuards(PermissionGuard)
+  // @RequirePermissions(Permission.CREATE_MANAGED_USER)
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: "Invite a new STATE member (reviewer or viewer) to the requester's state team" })
+  @ApiOkResponse({ type: StateMemberResponseDto })
+  inviteStateMember(@Body() dto: InviteStateMemberDto, @CurrentUser() user: AuthUser): Promise<StateMemberResponseDto> {
+    return this.usersService.inviteStateMember(dto, user);
   }
 
   /**
@@ -40,8 +58,26 @@ export class UsersController {
   @ApiBearerAuth()
   @Get('permission-matrix')
   @ApiOperation({ summary: 'Get permission matrix rows for the current user scope (ULB or STATE)' })
-  getPermissionMatrix(@CurrentUser() user: AuthUser) {
-    return this.usersService.getPermissionMatrix(user);
+  getPermissionMatrix() {
+    return this.usersService.getPermissionMatrix();
+  }
+
+  /**
+   * Returns all STATE users for the requester's own state,
+   * mapped to the frontend StateMember shape (subRole: SUBMITTER | EDITOR | VIEWER).
+   * stateId is read from the JWT claim — the client never sends it.
+   * Declared before :id to avoid route ambiguity.
+   */
+  @ApiBearerAuth()
+  @Get('state-members')
+  @UseGuards(PermissionGuard)
+  // @RequirePermissions(Permission.VIEW_MANAGED_USERS)
+  @ApiOperation({ summary: "List all team members for the requester's state (scope derived from JWT)" })
+  @ApiOkResponse({ type: [StateMemberResponseDto] })
+  getStateMembers(@CurrentUser() user: AuthUser): Promise<StateMemberResponseDto[]> {
+    const stateId = user.state?.toString();
+    if (!stateId) throw new ForbiddenException('No state scope on this account');
+    return this.usersService.getStateMembers(stateId);
   }
 
   @ApiBearerAuth()
@@ -50,6 +86,59 @@ export class UsersController {
   @ApiOperation({ summary: 'Issue a short-lived save token after OTP verification (state/MoHUA self-update)' })
   issueProfileSaveToken(@Param('id') id: string) {
     return this.usersService.issueProfileSaveToken(id);
+  }
+
+  @ApiBearerAuth()
+  @Get('mohua-permission-matrix')
+  @ApiOperation({ summary: 'Get permission matrix rows for the MoHUA scope' })
+  getMohuaPermissionMatrix() {
+    return this.usersService.getMohuaPermissionMatrix();
+  }
+
+  @ApiBearerAuth()
+  @Get('mohua-members')
+  @ApiOperation({ summary: 'List all MoHUA team members' })
+  @ApiOkResponse({ type: [StateMemberResponseDto] })
+  getMohuaMembers(): Promise<StateMemberResponseDto[]> {
+    return this.usersService.getMohuaMembers();
+  }
+
+  @ApiBearerAuth()
+  @Post('patch-mohua-core-subroles')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Patch role + xviFcSubrole on the two core MoHUA accounts (admin only)' })
+  patchMohuaCoreSubroles(@CurrentUser() user: AuthUser) {
+    return this.usersService.patchMohuaCoreSubroles(user);
+  }
+
+  @ApiBearerAuth()
+  @Post('invite-mohua-member')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Invite a new MoHUA member (editor or viewer) to the MoHUA team' })
+  @ApiOkResponse({ type: StateMemberResponseDto })
+  inviteMohuaMember(@Body() dto: InviteMohuaMemberDto, @CurrentUser() user: AuthUser): Promise<StateMemberResponseDto> {
+    return this.usersService.inviteMohuaMember(dto, user);
+  }
+
+  @ApiBearerAuth()
+  @Post('mohua-members/transfer-submitter')
+  @ApiOperation({ summary: 'Transfer MoHUA Submitter role to an editor or viewer in the MoHUA team' })
+  transferMohuaSubmitter(@Body() dto: TransferSubmitterDto, @CurrentUser() user: AuthUser) {
+    return this.usersService.transferMohuaSubmitter(dto, user);
+  }
+
+  @ApiBearerAuth()
+  @Patch('mohua-members/:id/sub-role')
+  @ApiOperation({ summary: 'Update xviFcSubrole for a MoHUA user (EDITOR → reviewer, VIEWER → viewer)' })
+  updateMohuaMemberSubrole(@Param('id') id: string, @Body() dto: UpdateXviFcSubroleDto, @CurrentUser() user: AuthUser) {
+    return this.usersService.updateMohuaMemberSubrole(id, dto, user);
+  }
+
+  @ApiBearerAuth()
+  @Delete('mohua-members/:id')
+  @ApiOperation({ summary: 'Remove a MoHUA team member (Submitter only; cannot remove self or other Submitter)' })
+  softDeleteMohuaMember(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.usersService.softDeleteMohuaMember(id, user);
   }
 
   @ApiBearerAuth()
@@ -63,7 +152,7 @@ export class UsersController {
   @ApiBearerAuth()
   @Patch(':id/profile-contacts')
   @UseGuards(PermissionGuard)
-  @RequirePermissions(Permission.UPDATE_MANAGED_USER)
+  // @RequirePermissions(Permission.UPDATE_MANAGED_USER)
   @ApiOperation({ summary: 'Update profile contacts for a managed user in the same ULB/state' })
   updateProfileContacts(@Param('id') id: string, @Body() dto: UpdateProfileContactsDto, @CurrentUser() user: AuthUser) {
     return this.usersService.updateProfileContacts(id, dto, user);
@@ -76,7 +165,7 @@ export class UsersController {
   @ApiBearerAuth()
   @Patch(':id/permission-overrides')
   @UseGuards(JwtAuthGuard, PermissionGuard)
-  @RequirePermissions(Permission.MANAGE_USERS)
+  // @RequirePermissions(Permission.MANAGE_USERS)
   @ApiOperation({ summary: 'Grant or revoke specific permissions for a managed user' })
   updatePermissionOverrides(
     @Param('id') id: string,
@@ -87,29 +176,40 @@ export class UsersController {
   }
 
   @ApiBearerAuth()
-  @Post('transfer-ownership')
+  @Post('transfer-submitter')
   @UseGuards(PermissionGuard)
-  @RequirePermissions(Permission.MANAGE_USERS)
-  @ApiOperation({ summary: 'Transfer ULB/STATE ownership to an editor or viewer in the same scope' })
-  transferOwnership(@Body() dto: TransferOwnershipDto, @CurrentUser() user: AuthUser) {
-    return this.usersService.transferOwnership(dto, user);
+  // @RequirePermissions(Permission.MANAGE_USERS)
+  @ApiOperation({ summary: 'Transfer STATE admin (submitter) role to a reviewer or viewer in the same state' })
+  transferSubmitter(@Body() dto: TransferSubmitterDto, @CurrentUser() user: AuthUser) {
+    return this.usersService.transferSubmitter(dto, user);
   }
 
   @ApiBearerAuth()
-  @Patch(':id/role')
+  @Patch(':id/sub-role')
   @UseGuards(PermissionGuard)
-  @RequirePermissions(Permission.UPDATE_MANAGED_USER)
-  @ApiOperation({ summary: 'Update role of a managed user in the same ULB/state' })
-  updateUserRole(@Param('id') id: string, @Body() dto: UpdateUserRoleDto, @CurrentUser() user: AuthUser) {
-    return this.usersService.updateUserRole(id, dto, user);
+  // @RequirePermissions(Permission.UPDATE_MANAGED_USER)
+  @ApiOperation({ summary: 'Update xviFcSubrole for a STATE user (EDITOR → reviewer, VIEWER → viewer)' })
+  updateXviFcSubrole(@Param('id') id: string, @Body() dto: UpdateXviFcSubroleDto, @CurrentUser() user: AuthUser) {
+    return this.usersService.updateXviFcSubrole(id, dto, user);
   }
+
+  // @ApiBearerAuth()
+  // @Patch(':id/role')
+  // @UseGuards(PermissionGuard)
+  // // @RequirePermissions(Permission.UPDATE_MANAGED_USER)
+  // @ApiOperation({ summary: 'Update role of a managed user in the same ULB/state' })
+  // updateUserRole(@Param('id') id: string, @Body() dto: UpdateUserRoleDto, @CurrentUser() user: AuthUser) {
+  //   return this.usersService.updateUserRole(id, dto, user);
+  // }
 
   @ApiBearerAuth()
   @Delete(':id')
   @UseGuards(PermissionGuard)
-  @RequirePermissions(Permission.DELETE_MANAGED_USER)
-  @ApiOperation({ summary: 'Soft-delete a managed user in the same ULB/state' })
-  softDeleteUser(@Param('id') id: string, @CurrentUser() user: AuthUser) {
-    return this.usersService.softDeleteUser(id, user);
+  // @RequirePermissions(Permission.DELETE_MANAGED_USER)
+  @ApiOperation({
+    summary: 'Remove a STATE team member from the XVI-FC portal (sets isXviFcdeleted; does not touch isDeleted)',
+  })
+  softDeleteStateUser(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.usersService.softDeleteStateUser(id, user);
   }
 }

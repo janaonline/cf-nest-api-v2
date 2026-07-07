@@ -1,4 +1,11 @@
-import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  OnModuleInit,
+} from '@nestjs/common';
 import { FormJsonService } from '../../../../form-json/form-json.service';
 import { InjectQueue } from '@nestjs/bullmq';
 import { InjectModel } from '@nestjs/mongoose';
@@ -7,6 +14,7 @@ import { Queue } from 'bullmq';
 import { Model, Types } from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 import { S3Service } from '../../../../core/s3/s3.service';
+import { S3UploadService } from '../../../../s3-upload/s3-upload.service';
 import {
   AnnualAccountFormStatus,
   FORM_STATUS_ID,
@@ -20,8 +28,12 @@ import {
 import { Ulb, UlbDocument } from '../../../../schemas/ulb.schema';
 import { DOC_TYPE_MAP } from './constants/doc-type-map.constant';
 import { UploadDocumentDto } from './dto/upload-document.dto';
+import { PresignUploadDto } from './dto/presign-upload.dto';
+import { ConfirmUploadDto } from './dto/confirm-upload.dto';
 import type { AnnualAccountOcrJobData } from './dto/annual-account-ocr-job.dto';
 import type { AuthUser } from '../../../auth/auth-user.interface';
+import { Scope, Permission } from '../../../auth/enum/roles-xvi-fc.enum';
+import { getEffectivePermissions } from '../../../auth/permissions.map';
 import { ANNUAL_ACCOUNT_PROCESSING_QUEUE } from '../../../../core/constants/queues';
 
 @Injectable()
@@ -40,6 +52,8 @@ export class AnnualAccountsService implements OnModuleInit {
 
     private readonly s3Service: S3Service,
 
+    private readonly s3UploadService: S3UploadService,
+
     @InjectQueue(ANNUAL_ACCOUNT_PROCESSING_QUEUE)
     private readonly ocrQueue: Queue<AnnualAccountOcrJobData>,
 
@@ -50,35 +64,80 @@ export class AnnualAccountsService implements OnModuleInit {
     // Drop legacy requirementId-based indexes replaced by docId indexes.
     // Mongoose autoIndex creates new indexes but never drops renamed ones.
     try {
-      await this.uploadHistoryModel.collection.dropIndex(
-        'annualAccountId_1_section_1_requirementId_1_version_1',
-      );
+      await this.uploadHistoryModel.collection.dropIndex('annualAccountId_1_section_1_requirementId_1_version_1');
       this.logger.log('Dropped legacy requirementId+version unique index from upload history');
-    } catch { /* already gone — ignore */ }
+    } catch {
+      /* already gone — ignore */
+    }
     try {
-      await this.uploadHistoryModel.collection.dropIndex(
-        'annualAccountId_1_section_1_requirementId_1',
-      );
+      await this.uploadHistoryModel.collection.dropIndex('annualAccountId_1_section_1_requirementId_1');
       this.logger.log('Dropped legacy requirementId compound index from upload history');
-    } catch { /* already gone — ignore */ }
+    } catch {
+      /* already gone — ignore */
+    }
   }
 
-  // ─── Upload document ────────────────────────────────────────────────────────
+  // ─── Presign upload URL ──────────────────────────────────────────────────────
 
-  async uploadDocument(
-    file: Express.Multer.File,
-    dto: UploadDocumentDto,
+  async presignUpload(dto: PresignUploadDto, user: AuthUser) {
+    this.validateUploadPermission(user, { ulbId: dto.ulbId, section: dto.section } as UploadDocumentDto);
+
+    const ext = dto.fileName.split('.').pop()?.toLowerCase();
+    if (ext !== 'pdf') {
+      throw new BadRequestException('Only PDF files are allowed');
+    }
+
+    if (!DOC_TYPE_MAP[dto.docId]) {
+      throw new BadRequestException(`Unknown docId: ${dto.docId}`);
+    }
+
+    const uploadId = uuidv4();
+    const folder = `xvi-fc/annual-accounts/${dto.ulbId}/${dto.designYearId}/${dto.section}/${dto.docId}`;
+    const expiresIn = 300;
+
+    const result = await this.s3UploadService.generatePutSignedUrl({
+      fileName: dto.fileName,
+      folder,
+      mimeType: 'application/pdf',
+      uploadId,
+      expiresIn,
+    });
+
+    this.logger.log(`Presign URL generated — uploadId=${uploadId} docId=${dto.docId}`);
+
+    return { uploadId, presignedUrl: result.url, s3Key: result.path, expiresIn };
+  }
+
+  // ─── Confirm upload (presigned URL flow) ─────────────────────────────────────
+
+  async confirmUpload(
+    dto: ConfirmUploadDto,
     user: AuthUser,
     ipAddress: string | null = null,
     userAgent: string | null = null,
   ) {
-    this.validateUploadPermission(user, dto);
-    this.validateFile(file);
+    this.validateUploadPermission(user, dto as unknown as UploadDocumentDto);
 
     const expectedDocType = DOC_TYPE_MAP[dto.docId];
     if (!expectedDocType) {
       throw new BadRequestException(`Unknown docId: ${dto.docId}`);
     }
+
+    const expectedKeyPrefix = `xvi-fc/annual-accounts/${dto.ulbId}/${dto.designYearId}/${dto.section}/${dto.docId}/`;
+    if (!dto.s3Key.startsWith(expectedKeyPrefix)) {
+      throw new BadRequestException('Invalid s3Key for this upload');
+    }
+
+    try {
+      await this.s3Service.headObject(dto.s3Key);
+    } catch {
+      throw new BadRequestException('File not found in S3 — upload may have failed or expired');
+    }
+
+    const pdfBuffer = await this.s3Service.getPdfBufferFromS3(dto.s3Key);
+    const sha256 = createHash('sha256').update(pdfBuffer).digest('hex');
+    const sizeKb = Math.round((dto.fileSize / 1024) * 100) / 100;
+    const pages = await this.s3Service.getPdfPageCountFromBuffer(pdfBuffer);
 
     const annualAccountId = await this.findOrInitialize(dto.ulbId, dto.designYearId, user);
 
@@ -89,23 +148,15 @@ export class AnnualAccountsService implements OnModuleInit {
     });
     const version = existingCount + 1;
     const versionLabel = `v${version}`;
-    const uploadId = uuidv4();
-
-    const sha256 = createHash('sha256').update(file.buffer).digest('hex');
-    const sizeKb = Math.round((file.size / 1024) * 100) / 100;
-    const pages = await this.s3Service.getPdfPageCountFromBuffer(file.buffer);
-
-    const s3Key = `xvi-fc/annual-accounts/${dto.ulbId}/${dto.designYearId}/${dto.section}/${dto.docId}/${uploadId}.pdf`;
-    await this.s3Service.uploadPrivate(s3Key, file.buffer, 'application/pdf');
 
     const now = new Date();
 
     const fileInfo = {
-      originalName: file.originalname,
-      mimeType: file.mimetype,
+      originalName: dto.originalName,
+      mimeType: 'application/pdf',
       pages,
       sizeKb,
-      s3Key,
+      s3Key: dto.s3Key,
       sha256,
     };
 
@@ -121,7 +172,7 @@ export class AnnualAccountsService implements OnModuleInit {
     };
 
     const currentUpload = {
-      uploadId,
+      uploadId: dto.uploadId,
       version,
       versionLabel,
       file: fileInfo,
@@ -135,15 +186,15 @@ export class AnnualAccountsService implements OnModuleInit {
       uploadedAt: now,
     };
 
-    await this.upsertDocumentSlot(annualAccountId, dto, currentUpload);
+    await this.upsertDocumentSlot(annualAccountId, dto as unknown as UploadDocumentDto, currentUpload);
 
-    const historyDoc = await this.uploadHistoryModel.create({
+    await this.uploadHistoryModel.create({
       annualAccountId: new Types.ObjectId(annualAccountId),
       ulb: new Types.ObjectId(dto.ulbId),
       designYear: new Types.ObjectId(dto.designYearId),
       section: dto.section,
       docId: dto.docId,
-      uploadId,
+      uploadId: dto.uploadId,
       version,
       versionLabel,
       file: fileInfo,
@@ -168,21 +219,21 @@ export class AnnualAccountsService implements OnModuleInit {
     });
 
     await this.enqueueOcrJob({
-      uploadId,
+      uploadId: dto.uploadId,
       annualAccountId,
       ulbId: dto.ulbId,
       section: dto.section,
       docId: dto.docId,
-      s3Key,
+      s3Key: dto.s3Key,
       expectedDocType,
       financialYear: dto.year,
     });
 
-    this.logger.log(`Document uploaded — annualAccountId=${annualAccountId} uploadId=${uploadId}`);
+    this.logger.log(`Upload confirmed — annualAccountId=${annualAccountId} uploadId=${dto.uploadId}`);
 
     return {
       annualAccountId,
-      uploadId,
+      uploadId: dto.uploadId,
       section: dto.section,
       docId: dto.docId,
       version,
@@ -304,7 +355,12 @@ export class AnnualAccountsService implements OnModuleInit {
     this.validateViewAccess(doc, user);
 
     const buildSectionStatus = (section: any) => {
-      if (!section) return { form_status: AnnualAccountFormStatus.NOT_STARTED, form_status_id: FORM_STATUS_ID[AnnualAccountFormStatus.NOT_STARTED], documents: [] };
+      if (!section)
+        return {
+          form_status: AnnualAccountFormStatus.NOT_STARTED,
+          form_status_id: FORM_STATUS_ID[AnnualAccountFormStatus.NOT_STARTED],
+          documents: [],
+        };
       const fs = (section.form_status ?? AnnualAccountFormStatus.IN_PROGRESS) as AnnualAccountFormStatus;
       return {
         form_status: fs,
@@ -367,12 +423,7 @@ export class AnnualAccountsService implements OnModuleInit {
 
   // ─── Remove (hard-delete) a document slot ────────────────────────────────────
 
-  async removeDocument(
-    id: string,
-    section: 'auditedData' | 'unauditedData',
-    docId: string,
-    user: AuthUser,
-  ) {
+  async removeDocument(id: string, section: 'auditedData' | 'unauditedData', docId: string, user: AuthUser) {
     const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
     if (!doc) throw new NotFoundException('Annual account not found');
     this.validateViewAccess(doc, user);
@@ -401,10 +452,16 @@ export class AnnualAccountsService implements OnModuleInit {
 
   // ─── Submit section to State DMA ─────────────────────────────────────────────
 
-  async submitSection(id: string, section: 'auditedData' | 'unauditedData', user: AuthUser) {
+  async submitSection(
+    id: string,
+    section: 'auditedData' | 'unauditedData',
+    user: AuthUser,
+    ipAddress: string | null = null,
+    userAgent: string | null = null,
+  ) {
     const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
     if (!doc) throw new NotFoundException('Annual account not found');
-    this.validateViewAccess(doc, user);
+    // this.validateSubmitAccess(doc, user);
 
     const sectionData = (doc as any)[section];
     if (!sectionData?.documents?.length) {
@@ -443,12 +500,15 @@ export class AnnualAccountsService implements OnModuleInit {
         $set: {
           [`${section}.form_status`]: AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE,
           [`${section}.form_status_id`]: FORM_STATUS_ID[AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE],
+          [`${section}.selfDeclared`]: true,
+          [`${section}.declaredBy`]: { userId: new Types.ObjectId(user._id), role: user.role, ipAddress, userAgent },
+          [`${section}.declaredAt`]: new Date(),
           modifiedBy: new Types.ObjectId(user._id),
         },
       },
     );
 
-    this.logger.log(`Section ${section} submitted — annualAccountId=${id} by user=${user._id}`);
+    this.logger.log(`Section ${section} submitted with self-declaration — annualAccountId=${id} by user=${user._id}`);
 
     return {
       annualAccountId: id,
@@ -579,24 +639,24 @@ export class AnnualAccountsService implements OnModuleInit {
     }
   }
 
-  private validateFile(file: Express.Multer.File) {
-    if (!file) throw new BadRequestException('File is required');
-
-    const ext = file.originalname.split('.').pop()?.toLowerCase();
-    if (ext !== 'pdf' || file.mimetype !== 'application/pdf') {
-      throw new BadRequestException('Only PDF files are allowed');
-    }
-
-    if (file.size > 20 * 1024 * 1024) {
-      throw new BadRequestException('File size must not exceed 20 MB');
-    }
-  }
-
   private validateViewAccess(doc: any, user: AuthUser) {
     if (user.scope === 'ULB') {
       if (doc.ulb?.toString() !== user.ulb?.toString()) {
         throw new ForbiddenException('Access denied');
       }
+    }
+  }
+
+  private validateSubmitAccess(doc: any, user: AuthUser) {
+    if (user.scope !== Scope.ULB) {
+      throw new ForbiddenException('Only ULB users can submit annual accounts');
+    }
+    if (doc.ulb?.toString() !== user.ulb?.toString()) {
+      throw new ForbiddenException('Access denied');
+    }
+    const perms = getEffectivePermissions(user);
+    if (!perms.includes(Permission.FINAL_SUBMIT_TO_STATE_DMA)) {
+      throw new ForbiddenException('You do not have permission to submit annual accounts');
     }
   }
 

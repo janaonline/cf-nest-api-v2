@@ -17,20 +17,24 @@ import { FormJsonModule } from '../../form-json/form-json.module';
 import { UnspentBalanceDisclosureModule } from './ulb/unspent-balance-disclosure/unspent-balance-disclosure.module';
 import { BankAccountModule } from './ulb/bank-account/bank-account.module';
 import { XviFcAnnualAccount, XviFcAnnualAccountSchema } from '../../schemas/xvi-fc/annual-account.schema';
-import { XviFcUnspentBalanceDisclosure, XviFcUnspentBalanceDisclosureSchema } from '../../schemas/xvi-fc/unspent-balance-disclosure.schema';
+import {
+  XviFcUnspentBalanceDisclosure,
+  XviFcUnspentBalanceDisclosureSchema,
+} from '../../schemas/xvi-fc/unspent-balance-disclosure.schema';
+import { DevolutionFormulaModule } from './state/devolution-formula/devolution-formula.module';
 import { XviFcBankAccount, XviFcBankAccountSchema } from '../../schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
 
 @Module({
   imports: [
     MongooseModule.forFeature([
-      { name: GrantAllocation.name,              schema: GrantAllocationSchema },
-      { name: State.name,                        schema: StateSchema },
-      { name: Year.name,                         schema: YearSchema },
-      { name: Ulb.name,                          schema: UlbSchema },
-      { name: XviFcSideMenu.name,                schema: XviFcSideMenuSchema },
-      { name: XviFcAnnualAccount.name,           schema: XviFcAnnualAccountSchema },
+      { name: GrantAllocation.name, schema: GrantAllocationSchema },
+      { name: State.name, schema: StateSchema },
+      { name: Year.name, schema: YearSchema },
+      { name: Ulb.name, schema: UlbSchema },
+      { name: XviFcSideMenu.name, schema: XviFcSideMenuSchema },
+      { name: XviFcAnnualAccount.name, schema: XviFcAnnualAccountSchema },
       { name: XviFcUnspentBalanceDisclosure.name, schema: XviFcUnspentBalanceDisclosureSchema },
-      { name: XviFcBankAccount.name,             schema: XviFcBankAccountSchema },
+      { name: XviFcBankAccount.name, schema: XviFcBankAccountSchema },
     ]),
     AnnualAccountsModule,
     SfcStatusModule,
@@ -39,6 +43,7 @@ import { XviFcBankAccount, XviFcBankAccountSchema } from '../../schemas/xvi-fc/u
     FormJsonModule,
     UnspentBalanceDisclosureModule,
     BankAccountModule,
+    DevolutionFormulaModule,
   ],
   controllers: [XviFcController],
   providers: [XviFcService, XviFcCacheService, XviFcCacheInterceptor],
