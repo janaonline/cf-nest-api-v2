@@ -452,7 +452,13 @@ export class AnnualAccountsService implements OnModuleInit {
 
   // ─── Submit section to State DMA ─────────────────────────────────────────────
 
-  async submitSection(id: string, section: 'auditedData' | 'unauditedData', user: AuthUser) {
+  async submitSection(
+    id: string,
+    section: 'auditedData' | 'unauditedData',
+    user: AuthUser,
+    ipAddress: string | null = null,
+    userAgent: string | null = null,
+  ) {
     const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
     if (!doc) throw new NotFoundException('Annual account not found');
     // this.validateSubmitAccess(doc, user);
@@ -494,12 +500,15 @@ export class AnnualAccountsService implements OnModuleInit {
         $set: {
           [`${section}.form_status`]: AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE,
           [`${section}.form_status_id`]: FORM_STATUS_ID[AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE],
+          [`${section}.selfDeclared`]: true,
+          [`${section}.declaredBy`]: { userId: new Types.ObjectId(user._id), role: user.role, ipAddress, userAgent },
+          [`${section}.declaredAt`]: new Date(),
           modifiedBy: new Types.ObjectId(user._id),
         },
       },
     );
 
-    this.logger.log(`Section ${section} submitted — annualAccountId=${id} by user=${user._id}`);
+    this.logger.log(`Section ${section} submitted with self-declaration — annualAccountId=${id} by user=${user._id}`);
 
     return {
       annualAccountId: id,
