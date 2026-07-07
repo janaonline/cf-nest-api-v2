@@ -30,6 +30,7 @@ import { FormsModule } from './forms/forms.module';
 import { FormJsonModule } from './form-json/form-json.module';
 import { CommunicationModule } from './communication/communication.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { UlbModule } from './master/ulb/ulb.module';
 function getQueryCaller(): string {
   const stack = new Error().stack?.split('\n') ?? [];
   const frame = stack.find(
@@ -111,6 +112,7 @@ function getQueryCaller(): string {
     FormJsonModule,
     CommunicationModule,
     NotificationsModule,
+    UlbModule,
   ],
   controllers: [AppController],
   providers: [
