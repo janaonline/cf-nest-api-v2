@@ -31,7 +31,7 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
     hideLabel: true,
     formFieldType: 'text',
     required: true,
-    showAsterisk: true,
+
     validations: [
       { name: 'required', validator: null, message: 'ULB name is required.' },
       { name: 'maxlength', validator: 200, message: 'ULB name must be at most 200 characters.' },
@@ -55,7 +55,6 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
     displayInlineLabel: true,
     placeholder: 'Select type...',
     required: true,
-    showAsterisk: true,
     options: [], // populated dynamically in UlbService.buildResolvedFieldsByKey()
     validations: [
       { name: 'required', validator: null, message: 'ULB type is required.' },
@@ -68,7 +67,7 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
     formFieldType: 'text',
     displayInlineLabel: true,
     required: true,
-    showAsterisk: true,
+
     validations: [
       { name: 'required', validator: null, message: 'District is required.' },
       { name: 'maxlength', validator: 100, message: 'District must be at most 100 characters.' },
@@ -79,7 +78,6 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
     label: '2011 Census Code',
     displayInlineLabel: true,
     formFieldType: 'text',
-    showAsterisk: true,
     validations: [{ name: 'maxlength', validator: 20, message: 'Census code must be at most 20 characters.' }],
   },
   // {
@@ -152,7 +150,7 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
     displayInlineLabel: true,
     formFieldType: 'date',
     required: true,
-    showAsterisk: true,
+
     validations: [{ name: 'required', validator: null, message: 'Date of constitution is required.' }],
   },
   {
@@ -168,7 +166,7 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
     displayInlineLabel: true,
     formFieldType: 'file',
     required: true,
-    showAsterisk: true,
+
     allowedFileTypes: ['pdf'],
     maxFileSize: 5,
     validations: [{ name: 'required', validator: null, message: 'Gazette notification PDF is required.' }],
@@ -179,7 +177,7 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
     displayInlineLabel: true,
     formFieldType: 'text',
     required: true,
-    showAsterisk: true,
+
     validations: [
       { name: 'required', validator: null, message: 'Primary contact name is required.' },
       { name: 'maxlength', validator: 200, message: 'Name must be at most 200 characters.' },
@@ -198,7 +196,7 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
     displayInlineLabel: true,
     formFieldType: 'text',
     required: true,
-    showAsterisk: true,
+
     validations: [
       { name: 'required', validator: null, message: 'Primary contact email is required.' },
       { name: 'email', validator: null, message: 'Enter a valid email address.' },
@@ -213,7 +211,7 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
     displayInlineLabel: true,
     formFieldType: 'text',
     required: true,
-    showAsterisk: true,
+
     validations: [
       { name: 'required', validator: null, message: 'Primary contact mobile number is required.' },
       { name: 'pattern', validator: MOBILE_PATTERN, message: 'Enter a valid 10-digit mobile number.' },
