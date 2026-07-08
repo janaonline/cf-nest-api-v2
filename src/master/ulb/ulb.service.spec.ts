@@ -496,6 +496,32 @@ describe('UlbService', () => {
       );
     });
 
+    it('strips primary-contact fields from the update patch and never provisions/touches a user', async () => {
+      ulbModel.findById.mockReturnValue({ lean: jest.fn().mockResolvedValue({ _id: 'x', name: 'Old Name' }) });
+      dynamicFormValidation.validateDraftAndBuildPayload.mockReturnValue({
+        isValid: true,
+        errors: {},
+        sanitizedPayload: {
+          district: 'New District',
+          primaryContactName: 'Someone',
+          primaryContactDesignation: 'Commissioner',
+          primaryContactEmail: 'someone@ulb.gov.in',
+          primaryContactMobile: '9849001234',
+        },
+      });
+      ulbModel.findByIdAndUpdate.mockReturnValue({ lean: jest.fn().mockResolvedValue({ _id: 'x' }) });
+
+      await service.update(new Types.ObjectId().toString(), { data: {} }, adminUser);
+
+      const [, updateArg] = ulbModel.findByIdAndUpdate.mock.calls[0] as [string, { $set: Record<string, unknown> }];
+      expect(updateArg.$set).not.toHaveProperty('primaryContactName');
+      expect(updateArg.$set).not.toHaveProperty('primaryContactDesignation');
+      expect(updateArg.$set).not.toHaveProperty('primaryContactEmail');
+      expect(updateArg.$set).not.toHaveProperty('primaryContactMobile');
+      expect(updateArg.$set.district).toBe('New District');
+      expect(userModel.create).not.toHaveBeenCalled();
+    });
+
     it('throws BadRequestException when renaming to a name already used by another ULB', async () => {
       ulbModel.findById.mockReturnValue({ lean: jest.fn().mockResolvedValue({ _id: 'x' }) });
       ulbModel.exists.mockResolvedValue({ _id: new Types.ObjectId() });

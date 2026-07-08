@@ -537,6 +537,10 @@ export class UlbService {
     );
     if (!isValid) this.throwValidationError(errors);
 
+    // Primary-contact fields only make sense at registration time (they provision the ULB's
+    // first login) — never persisted onto the Ulb document, so they're irrelevant to an update.
+    this.extractPrimaryContact(sanitizedPayload);
+
     const patch = this.toMongoPatch(sanitizedPayload);
     if (Object.keys(patch).length === 0) throw new BadRequestException('No fields provided to update.');
     if (typeof patch.name === 'string') {
