@@ -150,24 +150,22 @@ describe('XviFcService', () => {
     const ulbId = new Types.ObjectId().toString();
     const designYearId = new Types.ObjectId().toString();
 
-    it('returns xviFcBankAccount as NOT_STARTED when no bank-account record exists', async () => {
+    it('returns xviFcBankAccount as NOT_STARTED using form-status field names when no bank-account record exists', async () => {
       const result = await service.getFormStatus(ulbId, designYearId);
 
       expect(result.xviFcBankAccount).toEqual({
-        currentFormStatus: FORM_STATUS.NOT_STARTED,
-        currentFormStatusLabel: 'Not Started',
+        form_status: FORM_STATUS.NOT_STARTED,
         form_status_id: null,
       });
     });
 
-    it('returns xviFcBankAccount with stored currentFormStatus when record exists', async () => {
+    it('returns xviFcBankAccount with stored status using form-status field names when record exists', async () => {
       mockBankAccountModel.findOne.mockReturnValue(q({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_STATE }));
 
       const result = await service.getFormStatus(ulbId, designYearId);
 
       expect(result.xviFcBankAccount).toEqual({
-        currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_STATE,
-        currentFormStatusLabel: 'Under Review by State',
+        form_status: FORM_STATUS.UNDER_REVIEW_BY_STATE,
         form_status_id: null,
       });
     });
@@ -206,7 +204,7 @@ describe('XviFcService', () => {
           form_status_id: null,
         },
       });
-      expect(result.xviFcBankAccount.currentFormStatus).not.toBe('SUBMITTED');
+      expect(result.xviFcBankAccount.form_status).not.toBe('SUBMITTED');
     });
 
     it('queries bank-account status by ulb and designYear and selects only currentFormStatus', async () => {
