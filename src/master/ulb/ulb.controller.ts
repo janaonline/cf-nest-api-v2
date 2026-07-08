@@ -64,10 +64,18 @@ export class UlbController {
   }
 
   @Patch(':id')
-  @Roles([Role.ADMIN])
-  @ApiOperation({ summary: 'Update a ULB (ADMIN only). Only provided fields are validated and updated.' })
-  update(@Param('id', ParseObjectIdPipe) id: string, @Body() updateUlbDto: UpdateUlbDto) {
-    return this.ulbService.update(id, updateUlbDto);
+  @Roles([Role.ADMIN, Role.STATE])
+  @ApiOperation({
+    summary:
+      "Update a ULB. ADMIN may edit any ULB. STATE may only edit their own state's REJECTED ULB, " +
+      'which resets it back to PENDING for re-review.',
+  })
+  update(
+    @Param('id', ParseObjectIdPipe) id: string,
+    @Body() updateUlbDto: UpdateUlbDto,
+    @CurrentUser() user: IAuthUser,
+  ) {
+    return this.ulbService.update(id, updateUlbDto, user);
   }
 
   @Patch(':id/approve')

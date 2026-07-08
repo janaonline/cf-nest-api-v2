@@ -509,11 +509,26 @@ export class UlbService {
     return this.withSignedGazetteFile(this.withApprovalDefaults(ulb));
   }
 
-  async update(id: string, dto: UpdateUlbDto): Promise<Ulb> {
+  /**
+   * Updates a ULB. ADMIN may edit any ULB at any time. A STATE user may only edit their own
+   * state's ULB, and only while it's REJECTED — this is the "fix and resubmit" path for a
+   * submission an ADMIN sent back, not a general edit capability. A STATE resubmission always
+   * resets `approval` back to PENDING so the ADMIN reviews the corrected data.
+   */
+  async update(id: string, dto: UpdateUlbDto, user: IAuthUser): Promise<Ulb> {
     if (!Types.ObjectId.isValid(id)) throw new BadRequestException('Invalid ULB id');
 
     const existing = await this.ulbModel.findById(id).lean<UlbDocument>();
     if (!existing) throw new NotFoundException('ULB not found');
+
+    if (user.role === Role.STATE) {
+      if (!user.state || String(existing.state) !== String(user.state)) {
+        throw new ForbiddenException('You can only edit ULBs in your own state.');
+      }
+      if (existing.approval?.status !== 'REJECTED') {
+        throw new ForbiddenException('You can only edit a rejected ULB submission.');
+      }
+    }
 
     const fields = await this.loadFields();
     const { isValid, errors, sanitizedPayload } = this.dynamicFormValidation.validateDraftAndBuildPayload(
@@ -525,8 +540,13 @@ export class UlbService {
     const patch = this.toMongoPatch(sanitizedPayload);
     if (Object.keys(patch).length === 0) throw new BadRequestException('No fields provided to update.');
     if (typeof patch.name === 'string') {
-      await this.ensureNameNotTaken(patch.name, id);
+      const nameChanged = patch.name.trim().toLowerCase() !== existing.name?.trim().toLowerCase();
+      if (nameChanged) await this.ensureNameNotTaken(patch.name, id);
       patch.slug = this.buildSlug(patch.name);
+    }
+
+    if (user.role === Role.STATE) {
+      patch.approval = { status: 'PENDING', submittedBy: new Types.ObjectId(user._id) };
     }
 
     try {

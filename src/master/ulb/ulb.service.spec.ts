@@ -479,7 +479,9 @@ describe('UlbService', () => {
   describe('update', () => {
     it('throws NotFoundException when the ULB does not exist', async () => {
       ulbModel.findById.mockReturnValue({ lean: jest.fn().mockResolvedValue(null) });
-      await expect(service.update(new Types.ObjectId().toString(), { data: {} })).rejects.toThrow(NotFoundException);
+      await expect(service.update(new Types.ObjectId().toString(), { data: {} }, adminUser)).rejects.toThrow(
+        NotFoundException,
+      );
     });
 
     it('throws BadRequestException when no fields are provided', async () => {
@@ -489,7 +491,9 @@ describe('UlbService', () => {
         errors: {},
         sanitizedPayload: {},
       });
-      await expect(service.update(new Types.ObjectId().toString(), { data: {} })).rejects.toThrow(BadRequestException);
+      await expect(service.update(new Types.ObjectId().toString(), { data: {} }, adminUser)).rejects.toThrow(
+        BadRequestException,
+      );
     });
 
     it('throws BadRequestException when renaming to a name already used by another ULB', async () => {
@@ -501,8 +505,70 @@ describe('UlbService', () => {
         sanitizedPayload: { name: 'Existing Name' },
       });
 
-      await expect(service.update(new Types.ObjectId().toString(), { data: {} })).rejects.toThrow(BadRequestException);
+      await expect(service.update(new Types.ObjectId().toString(), { data: {} }, adminUser)).rejects.toThrow(
+        BadRequestException,
+      );
       expect(ulbModel.findByIdAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('does not check name uniqueness when the name is unchanged (case/whitespace-insensitive)', async () => {
+      ulbModel.findById.mockReturnValue({
+        lean: jest.fn().mockResolvedValue({ _id: 'x', name: 'Vizag Municipal Corporation' }),
+      });
+      dynamicFormValidation.validateDraftAndBuildPayload.mockReturnValue({
+        isValid: true,
+        errors: {},
+        sanitizedPayload: { name: '  vizag municipal corporation  ' },
+      });
+      ulbModel.findByIdAndUpdate.mockReturnValue({ lean: jest.fn().mockResolvedValue({ _id: 'x' }) });
+
+      await service.update(new Types.ObjectId().toString(), { data: {} }, adminUser);
+
+      expect(ulbModel.exists).not.toHaveBeenCalled();
+      expect(ulbModel.findByIdAndUpdate).toHaveBeenCalled();
+    });
+
+    it("throws ForbiddenException when a STATE user edits another state's ULB", async () => {
+      const otherStateId = new Types.ObjectId().toString();
+      ulbModel.findById.mockReturnValue({
+        lean: jest.fn().mockResolvedValue({ _id: 'x', state: otherStateId, approval: { status: 'REJECTED' } }),
+      });
+
+      await expect(service.update(new Types.ObjectId().toString(), { data: {} }, stateUser)).rejects.toThrow(
+        ForbiddenException,
+      );
+      expect(dynamicFormValidation.validateDraftAndBuildPayload).not.toHaveBeenCalled();
+    });
+
+    it('throws ForbiddenException when a STATE user edits a ULB that is not REJECTED', async () => {
+      ulbModel.findById.mockReturnValue({
+        lean: jest.fn().mockResolvedValue({ _id: 'x', state: stateId, approval: { status: 'PENDING' } }),
+      });
+
+      await expect(service.update(new Types.ObjectId().toString(), { data: {} }, stateUser)).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+
+    it('resets a STATE resubmission back to PENDING', async () => {
+      ulbModel.findById.mockReturnValue({
+        lean: jest.fn().mockResolvedValue({ _id: 'x', state: stateId, approval: { status: 'REJECTED' } }),
+      });
+      dynamicFormValidation.validateDraftAndBuildPayload.mockReturnValue({
+        isValid: true,
+        errors: {},
+        sanitizedPayload: { name: 'Fixed Name' },
+      });
+      ulbModel.findByIdAndUpdate.mockReturnValue({
+        lean: jest.fn().mockResolvedValue({ _id: 'x', name: 'Fixed Name', approval: { status: 'PENDING' } }),
+      });
+
+      await service.update(new Types.ObjectId().toString(), { data: {} }, stateUser);
+
+      const [, updateArg] = ulbModel.findByIdAndUpdate.mock.calls[0] as [string, { $set: Record<string, unknown> }];
+      const approval = updateArg.$set.approval as { status: string; submittedBy: Types.ObjectId };
+      expect(approval.status).toBe('PENDING');
+      expect(approval.submittedBy).toBeInstanceOf(Types.ObjectId);
     });
   });
 

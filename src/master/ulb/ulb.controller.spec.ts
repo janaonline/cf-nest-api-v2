@@ -62,6 +62,12 @@ describe('UlbController', () => {
     expect(ulbService.findOne).toHaveBeenCalledWith('123');
   });
 
+  it('delegates update to the service with the current user', () => {
+    const dto = { data: { name: 'Renamed ULB' } };
+    void controller.update('123', dto, adminUser);
+    expect(ulbService.update).toHaveBeenCalledWith('123', dto, adminUser);
+  });
+
   it('delegates approve to the service with the current user', () => {
     void controller.approve('123', adminUser);
     expect(ulbService.approve).toHaveBeenCalledWith('123', adminUser);
