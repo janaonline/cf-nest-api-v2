@@ -229,6 +229,18 @@ describe('UlbService', () => {
       );
     });
 
+    it('throws BadRequestException when another ULB already has this name (case-insensitive)', async () => {
+      ulbModel.exists.mockResolvedValue({ _id: new Types.ObjectId() });
+      dynamicFormValidation.validateFinalSubmitAndBuildPayload.mockReturnValue({
+        isValid: true,
+        errors: {},
+        sanitizedPayload: { code: 'AP011', name: 'vizag municipal corporation', state: stateId, ulbType: ulbTypeId },
+      });
+
+      await expect(service.create({ data: {} }, adminUser)).rejects.toThrow(BadRequestException);
+      expect(ulbModel.create).not.toHaveBeenCalled();
+    });
+
     it('provisions a Role.ULB login for the submitted primary contact and strips those fields from the ULB patch', async () => {
       const ulbId = new Types.ObjectId();
       dynamicFormValidation.validateFinalSubmitAndBuildPayload.mockReturnValue({
@@ -478,6 +490,19 @@ describe('UlbService', () => {
         sanitizedPayload: {},
       });
       await expect(service.update(new Types.ObjectId().toString(), { data: {} })).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws BadRequestException when renaming to a name already used by another ULB', async () => {
+      ulbModel.findById.mockReturnValue({ lean: jest.fn().mockResolvedValue({ _id: 'x' }) });
+      ulbModel.exists.mockResolvedValue({ _id: new Types.ObjectId() });
+      dynamicFormValidation.validateDraftAndBuildPayload.mockReturnValue({
+        isValid: true,
+        errors: {},
+        sanitizedPayload: { name: 'Existing Name' },
+      });
+
+      await expect(service.update(new Types.ObjectId().toString(), { data: {} })).rejects.toThrow(BadRequestException);
+      expect(ulbModel.findByIdAndUpdate).not.toHaveBeenCalled();
     });
   });
 

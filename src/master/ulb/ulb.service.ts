@@ -254,6 +254,7 @@ export class UlbService {
 
     const patch = this.toMongoPatch(sanitizedPayload);
     const name = String(patch.name);
+    await this.ensureNameNotTaken(name);
     patch.slug = this.buildSlug(name);
 
     let stateId: Types.ObjectId;
@@ -276,6 +277,20 @@ export class UlbService {
     }
 
     return created.toObject();
+  }
+
+  /**
+   * Case-insensitive uniqueness guard for ULB name, checked ahead of the write so callers get a
+   * clean 400 instead of relying solely on the schema's unique index (which is exact-match and
+   * whose duplicate-key error only surfaces after the write is attempted).
+   */
+  private async ensureNameNotTaken(name: string, excludeId?: string): Promise<void> {
+    const escaped = name.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const filter: FilterQuery<UlbDocument> = { name: { $regex: `^${escaped}$`, $options: 'i' } };
+    if (excludeId) filter._id = { $ne: new Types.ObjectId(excludeId) };
+
+    const existing = await this.ulbModel.exists(filter);
+    if (existing) throw new BadRequestException('A ULB with this name already exists.');
   }
 
   private async persistUlb(patch: Record<string, unknown>) {
@@ -509,7 +524,10 @@ export class UlbService {
 
     const patch = this.toMongoPatch(sanitizedPayload);
     if (Object.keys(patch).length === 0) throw new BadRequestException('No fields provided to update.');
-    if (typeof patch.name === 'string') patch.slug = this.buildSlug(patch.name);
+    if (typeof patch.name === 'string') {
+      await this.ensureNameNotTaken(patch.name, id);
+      patch.slug = this.buildSlug(patch.name);
+    }
 
     try {
       const updated = await this.ulbModel
