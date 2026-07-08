@@ -163,15 +163,18 @@ export interface FieldConfig {
   showAsterisk?: boolean;
   decimal?: number;
   warning?: Validator[];
+  fileViewType?: 'button' | 'dropzone' | 'list';
+  labelHint?: string;
+  hintText?: string;
+  grid?: string;
 }
 
 // ─── Sectioned / resolved form config ──────────────────────────────────────────
 
 /** Grid width and inline hints for one field's placement within a section. */
 export interface SectionFieldPlacement {
+  key: string;
   grid: string;
-  labelHint?: string;
-  hintText?: string;
 }
 
 /** A field fully resolved for rendering: its real definition merged with its section placement. */
@@ -190,3 +193,12 @@ export interface ResolvedSection {
 
 /** FieldConfig with a guaranteed non-optional `value` after GET hydration */
 export type HydratedFieldConfig = FieldConfig & { value: unknown };
+
+/** One card-sectioned group of fields on the Register ULB page. */
+export interface SectionLayout {
+  title: string;
+  icon: string;
+  /** Muted text rendered inline next to the section title, e.g. "— will be the first login for this ULB". */
+  subtitle?: string;
+  fields: SectionFieldPlacement[];
+}

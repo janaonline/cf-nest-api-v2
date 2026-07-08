@@ -10,7 +10,7 @@ import { EmailQueueService } from 'src/core/queue/email-queue/email-queue.servic
 import { Role } from 'src/module/auth/enum/role.enum';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
 import type { XviFcValidationErrorMap } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
-import type { FieldConfig, ResolvedSection } from 'src/module/xvi-fc/common/types/field-config.type';
+import type { FieldConfig, SectionLayout } from 'src/module/xvi-fc/common/types/field-config.type';
 import { FormJsonService } from 'src/form-json/form-json.service';
 import { State, StateDocument } from 'src/schemas/state.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
@@ -19,7 +19,7 @@ import {
   DEFAULT_ULB_EDIT_SECTIONS,
   DEFAULT_ULB_FIELDS,
   DEFAULT_ULB_REGISTER_SECTIONS,
-  RegisterUlbSectionLayout,
+  // RegisterUlbSectionLayout,
   ULB_EDIT_SECTIONS_FORM_JSON_TYPE,
   ULB_FORM_JSON_TYPE,
   ULB_PRIMARY_CONTACT_FIELD_KEYS,
@@ -58,24 +58,20 @@ export class UlbService {
   }
 
   /** Loads the admin-configurable section/grid skeleton for the Register ULB page, falling back to built-in defaults. */
-  private async loadRegisterSectionsLayout(): Promise<RegisterUlbSectionLayout[]> {
+  private async loadRegisterSectionsLayout(): Promise<SectionLayout[]> {
     try {
       const formJson = await this.formJsonService.findByType(ULB_REGISTER_SECTIONS_FORM_JSON_TYPE);
-      return formJson.data?.length
-        ? (formJson.data as unknown as RegisterUlbSectionLayout[])
-        : DEFAULT_ULB_REGISTER_SECTIONS;
+      return formJson.data?.length ? (formJson.data as unknown as SectionLayout[]) : DEFAULT_ULB_REGISTER_SECTIONS;
     } catch {
       return DEFAULT_ULB_REGISTER_SECTIONS;
     }
   }
 
   /** Loads the admin-configurable section/grid skeleton for the Edit ULB dialog, falling back to built-in defaults. */
-  private async loadEditSectionsLayout(): Promise<RegisterUlbSectionLayout[]> {
+  private async loadEditSectionsLayout(): Promise<SectionLayout[]> {
     try {
       const formJson = await this.formJsonService.findByType(ULB_EDIT_SECTIONS_FORM_JSON_TYPE);
-      return formJson.data?.length
-        ? (formJson.data as unknown as RegisterUlbSectionLayout[])
-        : DEFAULT_ULB_EDIT_SECTIONS;
+      return formJson.data?.length ? (formJson.data as unknown as SectionLayout[]) : DEFAULT_ULB_EDIT_SECTIONS;
     } catch {
       return DEFAULT_ULB_EDIT_SECTIONS;
     }
@@ -104,10 +100,7 @@ export class UlbService {
 
   /** Merges a section/grid layout skeleton with resolved field definitions, dropping (and logging)
    *  any layout entry whose key has no matching field — keeps a bad admin edit from breaking the page. */
-  private mergeLayoutWithFields(
-    layout: RegisterUlbSectionLayout[],
-    fieldsByKey: Map<string, FieldConfig>,
-  ): ResolvedSection[] {
+  private mergeLayoutWithFields(layout: SectionLayout[], fieldsByKey: Map<string, FieldConfig>): SectionLayout[] {
     return layout.map((section) => ({
       title: section.title,
       icon: section.icon,
@@ -131,7 +124,7 @@ export class UlbService {
    * from ULB_MASTER, plus a live `ulbType` select populated from the ulbtypes collection. The
    * frontend renders this response directly — no client-side lookup or merging required.
    */
-  async getRegisterSections(): Promise<ResolvedSection[]> {
+  async getRegisterSections(): Promise<SectionLayout[]> {
     const [fieldsByKey, layout] = await Promise.all([
       this.buildResolvedFieldsByKey(),
       this.loadRegisterSectionsLayout(),
@@ -144,7 +137,7 @@ export class UlbService {
    * `getRegisterSections()`, but against the edit layout, which covers every ULB field (including
    * `code` and a live `state` select) rather than just the Register page's subset.
    */
-  async getEditSections(): Promise<ResolvedSection[]> {
+  async getEditSections(): Promise<SectionLayout[]> {
     const [fieldsByKey, layout] = await Promise.all([this.buildResolvedFieldsByKey(), this.loadEditSectionsLayout()]);
     return this.mergeLayoutWithFields(layout, fieldsByKey);
   }
@@ -426,7 +419,9 @@ export class UlbService {
 
   /** Resolves `state`/`ulbType` ids on a page of ULBs to their display names, so the list page
    *  can render them directly without a separate client-side lookup call. */
-  private async attachLookupNames<T extends Ulb>(ulbs: T[]): Promise<(T & { stateName: string; ulbTypeName: string })[]> {
+  private async attachLookupNames<T extends Ulb>(
+    ulbs: T[],
+  ): Promise<(T & { stateName: string; ulbTypeName: string })[]> {
     if (ulbs.length === 0) return [];
 
     const stateIds = [...new Set(ulbs.map((ulb) => String(ulb.state)).filter(Boolean))];

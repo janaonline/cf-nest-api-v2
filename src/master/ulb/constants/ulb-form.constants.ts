@@ -1,4 +1,8 @@
-import type { FieldConfig, SectionFieldPlacement } from 'src/module/xvi-fc/common/types/field-config.type';
+import type {
+  FieldConfig,
+  SectionFieldPlacement,
+  SectionLayout,
+} from 'src/module/xvi-fc/common/types/field-config.type';
 
 /** `type` key under which the ULB master form definition is stored in the formjsons collection. */
 export const ULB_FORM_JSON_TYPE = 'ULB_MASTER';
@@ -31,7 +35,6 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
     hideLabel: true,
     formFieldType: 'text',
     required: true,
-
     validations: [
       { name: 'required', validator: null, message: 'ULB name is required.' },
       { name: 'maxlength', validator: 200, message: 'ULB name must be at most 200 characters.' },
@@ -79,6 +82,8 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
     displayInlineLabel: true,
     formFieldType: 'text',
     validations: [{ name: 'maxlength', validator: 20, message: 'Census code must be at most 20 characters.' }],
+    labelHint: '(if available)',
+    hintText: 'Not available? Enter 999999 as a 6-digit placeholder.',
   },
   // {
   //   key: 'sbCode',
@@ -159,6 +164,7 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
     displayInlineLabel: true,
     formFieldType: 'text',
     validations: [{ name: 'maxlength', validator: 100, message: 'Must not exceed 100 characters.' }],
+    labelHint: '(if available)',
   },
   {
     key: 'gazetteNotificationFile',
@@ -166,10 +172,16 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
     displayInlineLabel: true,
     formFieldType: 'file',
     required: true,
-
+    fileViewType: 'dropzone',
+    folderPath: 'ulb/gazette-notifications',
     allowedFileTypes: ['pdf'],
+    appearance: {
+      color: 'success',
+      variant: 'soft',
+    },
     maxFileSize: 5,
     validations: [{ name: 'required', validator: null, message: 'Gazette notification PDF is required.' }],
+    labelHint: '— upload the PDF of the gazette notifying constitution',
   },
   {
     key: 'primaryContactName',
@@ -177,7 +189,6 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
     displayInlineLabel: true,
     formFieldType: 'text',
     required: true,
-
     validations: [
       { name: 'required', validator: null, message: 'Primary contact name is required.' },
       { name: 'maxlength', validator: 200, message: 'Name must be at most 200 characters.' },
@@ -196,7 +207,6 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
     displayInlineLabel: true,
     formFieldType: 'text',
     required: true,
-
     validations: [
       { name: 'required', validator: null, message: 'Primary contact email is required.' },
       { name: 'email', validator: null, message: 'Enter a valid email address.' },
@@ -210,8 +220,7 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
     label: 'Mobile Number',
     displayInlineLabel: true,
     formFieldType: 'text',
-    required: true,
-
+    // required: true,
     validations: [
       { name: 'required', validator: null, message: 'Primary contact mobile number is required.' },
       { name: 'pattern', validator: MOBILE_PATTERN, message: 'Enter a valid 10-digit mobile number.' },
@@ -238,25 +247,16 @@ export const ULB_PRIMARY_CONTACT_FIELD_KEYS = [
 export const ULB_REGISTER_SECTIONS_FORM_JSON_TYPE = 'ULB_REGISTER_SECTIONS';
 
 /** One field's placement within a `RegisterUlbSectionLayout` — layout only; label/validations live on DEFAULT_ULB_FIELDS. */
-export interface RegisterUlbFieldLayout extends SectionFieldPlacement {
-  key: string;
-}
-
-/** One card-sectioned group of fields on the Register ULB page. */
-export interface RegisterUlbSectionLayout {
-  title: string;
-  icon: string;
-  /** Muted text rendered inline next to the section title, e.g. "— will be the first login for this ULB". */
-  subtitle?: string;
-  fields: RegisterUlbFieldLayout[];
-}
+// export interface RegisterUlbFieldLayout extends SectionFieldPlacement {
+//   key: string;
+// }
 
 /**
  * Fallback layout used when no admin-configured FormJson document exists yet for
  * ULB_REGISTER_SECTIONS_FORM_JSON_TYPE. Admins can override this via the generic /form-json
  * CRUD endpoints (create a document with type: 'ULB_REGISTER_SECTIONS') without a code change.
  */
-export const DEFAULT_ULB_REGISTER_SECTIONS: RegisterUlbSectionLayout[] = [
+export const DEFAULT_ULB_REGISTER_SECTIONS: SectionLayout[] = [
   {
     title: 'ULB Identity',
     icon: 'bi-bank',
@@ -267,8 +267,6 @@ export const DEFAULT_ULB_REGISTER_SECTIONS: RegisterUlbSectionLayout[] = [
       {
         key: 'censusCode',
         grid: 'col-md-6',
-        labelHint: '(if available)',
-        hintText: 'Not available? Enter 999999 as a 6-digit placeholder.',
       },
     ],
   },
@@ -277,11 +275,10 @@ export const DEFAULT_ULB_REGISTER_SECTIONS: RegisterUlbSectionLayout[] = [
     icon: 'bi-journal-text',
     fields: [
       { key: 'dateOfConstitution', grid: 'col-md-6' },
-      { key: 'gazetteNotificationNumber', grid: 'col-md-6', labelHint: '(if available)' },
+      { key: 'gazetteNotificationNumber', grid: 'col-md-6' },
       {
         key: 'gazetteNotificationFile',
         grid: 'col-12',
-        labelHint: '— upload the PDF of the gazette notifying constitution',
       },
     ],
   },
@@ -306,7 +303,7 @@ export const ULB_EDIT_SECTIONS_FORM_JSON_TYPE = 'ULB_EDIT_SECTIONS';
  * (unlike the Register page's subset). Falls back to this when no admin-configured FormJson
  * document exists yet for ULB_EDIT_SECTIONS_FORM_JSON_TYPE; overridable the same way.
  */
-export const DEFAULT_ULB_EDIT_SECTIONS: RegisterUlbSectionLayout[] = [
+export const DEFAULT_ULB_EDIT_SECTIONS: SectionLayout[] = [
   {
     title: 'ULB Identity',
     icon: 'bi-bank',
