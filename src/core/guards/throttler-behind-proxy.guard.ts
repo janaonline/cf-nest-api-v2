@@ -8,7 +8,7 @@ export class ThrottlerBehindProxyGuard extends ThrottlerGuard {
   protected async getTracker(req: Record<string, any>): Promise<string> {
     const forwarded = req.headers['x-forwarded-for'] as string | undefined;
     const clientIp = forwarded ? forwarded.split(',')[0].trim() : req.ip;
-    this.logger.debug(`req.ip=${req.ip} | x-forwarded-for=${forwarded ?? 'none'} | tracker=${clientIp}`);
+    // this.logger.debug(`req.ip=${req.ip} | x-forwarded-for=${forwarded ?? 'none'} | tracker=${clientIp}`);
     return clientIp;
   }
 
