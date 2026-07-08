@@ -6,12 +6,14 @@ import { randomBytes } from 'crypto';
 import { MongoServerError } from 'mongodb';
 import { FilterQuery, Model, Types } from 'mongoose';
 import type { IAuthUser } from 'src/common/interfaces/auth-user.interface';
+import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { EmailQueueService } from 'src/core/queue/email-queue/email-queue.service';
 import { Role } from 'src/module/auth/enum/role.enum';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
 import type { XviFcValidationErrorMap } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import type { FieldConfig, SectionLayout } from 'src/module/xvi-fc/common/types/field-config.type';
 import { FormJsonService } from 'src/form-json/form-json.service';
+import type { CommonFile } from 'src/schemas/common/file.schema';
 import { State, StateDocument } from 'src/schemas/state.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { User, UserDocument } from 'src/schemas/user/user.schema';
@@ -45,6 +47,7 @@ export class UlbService {
     private readonly dynamicFormValidation: DynamicFormValidationService,
     private readonly emailQueueService: EmailQueueService,
     private readonly configService: ConfigService,
+    private readonly fileTokenService: FileTokenService,
   ) {}
 
   /** Loads the admin-configurable ULB field definition, falling back to the built-in defaults. */
@@ -202,6 +205,32 @@ export class UlbService {
       ...ulb,
       approval: { status: 'APPROVED', submittedBy: null, reviewedBy: null, reviewedAt: null, rejectReason: '' },
     };
+  }
+
+  /**
+   * Normalizes `gazetteNotificationFile` for API responses and signs it into an openable URL.
+   * Documents created before the CommonFile migration (see a2ed410) store
+   * `{ fileName, fileUrl, fileSize, mimeType, noOfPage }`; the current schema stores
+   * `{ originalName, path, sizeKb, extension, pageCount }`. Both are read here so old and new
+   * records render the same way; the raw storage path alone isn't a URL a browser can open.
+   */
+  private withSignedGazetteFile<T extends Ulb>(ulb: T): T {
+    const file = ulb.gazetteNotificationFile as
+      | (CommonFile & { fileName?: string; fileUrl?: string; fileSize?: number | null; noOfPage?: number | null })
+      | null;
+    const rawPath = file?.fileUrl || file?.path;
+    if (!file || !rawPath) return ulb;
+
+    return {
+      ...ulb,
+      gazetteNotificationFile: {
+        fileName: file.fileName ?? file.originalName ?? '',
+        fileUrl: this.fileTokenService.signFileUrl(rawPath),
+        fileSize: file.fileSize ?? (typeof file.sizeKb === 'number' ? Math.round(file.sizeKb * 1024) : null),
+        mimeType: file.mimeType,
+        noOfPage: file.noOfPage ?? file.pageCount ?? null,
+      },
+    } as T;
   }
 
   async create(dto: CreateUlbDto, user: IAuthUser): Promise<Ulb> {
@@ -414,7 +443,7 @@ export class UlbService {
     ]);
 
     return {
-      data: await this.attachLookupNames(data.map((ulb) => this.withApprovalDefaults(ulb))),
+      data: await this.attachLookupNames(data.map((ulb) => this.withSignedGazetteFile(this.withApprovalDefaults(ulb)))),
       page,
       limit,
       total,
@@ -462,7 +491,7 @@ export class UlbService {
     if (!Types.ObjectId.isValid(id)) throw new BadRequestException('Invalid ULB id');
     const ulb = await this.ulbModel.findById(id).lean<Ulb>();
     if (!ulb) throw new NotFoundException('ULB not found');
-    return this.withApprovalDefaults(ulb);
+    return this.withSignedGazetteFile(this.withApprovalDefaults(ulb));
   }
 
   async update(id: string, dto: UpdateUlbDto): Promise<Ulb> {

@@ -3,6 +3,7 @@ import { getModelToken } from '@nestjs/mongoose';
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Types } from 'mongoose';
+import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { EmailQueueService } from 'src/core/queue/email-queue/email-queue.service';
 import { FormJsonService } from 'src/form-json/form-json.service';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
@@ -49,6 +50,7 @@ describe('UlbService', () => {
   let dynamicFormValidation: { validateFinalSubmitAndBuildPayload: jest.Mock; validateDraftAndBuildPayload: jest.Mock };
   let emailQueueService: { addEmailJob: jest.Mock };
   let configService: { get: jest.Mock };
+  let fileTokenService: { signFileUrl: jest.Mock };
 
   const stateId = new Types.ObjectId().toString();
   const ulbTypeId = new Types.ObjectId().toString();
@@ -89,6 +91,7 @@ describe('UlbService', () => {
     };
     emailQueueService = { addEmailJob: jest.fn().mockResolvedValue(undefined) };
     configService = { get: jest.fn().mockReturnValue('https://cityfinance.in') };
+    fileTokenService = { signFileUrl: jest.fn((url: string) => `signed::${url}`) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -100,6 +103,7 @@ describe('UlbService', () => {
         { provide: DynamicFormValidationService, useValue: dynamicFormValidation },
         { provide: EmailQueueService, useValue: emailQueueService },
         { provide: ConfigService, useValue: configService },
+        { provide: FileTokenService, useValue: fileTokenService },
       ],
     }).compile();
 
