@@ -222,7 +222,7 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
     formFieldType: 'text',
     // required: true,
     validations: [
-      { name: 'required', validator: null, message: 'Primary contact mobile number is required.' },
+      // { name: 'required', validator: null, message: 'Primary contact mobile number is required.' },
       { name: 'pattern', validator: MOBILE_PATTERN, message: 'Enter a valid 10-digit mobile number.' },
     ],
   },

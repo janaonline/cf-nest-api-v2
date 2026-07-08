@@ -175,6 +175,10 @@ export interface FieldConfig {
 export interface SectionFieldPlacement {
   key: string;
   grid: string;
+  /** Per-placement override of the field's own `labelHint`; falls back to the field definition when unset. */
+  labelHint?: string;
+  /** Per-placement override of the field's own `hintText`; falls back to the field definition when unset. */
+  hintText?: string;
 }
 
 /** A field fully resolved for rendering: its real definition merged with its section placement. */

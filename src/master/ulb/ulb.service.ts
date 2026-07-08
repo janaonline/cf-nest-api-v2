@@ -112,7 +112,12 @@ export class UlbService {
             this.logger.warn(`ULB section layout references unknown field key "${fieldLayout.key}"`);
             return null;
           }
-          return { ...field, grid: fieldLayout.grid, labelHint: fieldLayout.labelHint, hintText: fieldLayout.hintText };
+          return {
+            ...field,
+            grid: fieldLayout.grid,
+            labelHint: fieldLayout.labelHint ?? field.labelHint,
+            hintText: fieldLayout.hintText ?? field.hintText,
+          };
         })
         .filter((field): field is NonNullable<typeof field> => field !== null),
     }));
