@@ -17,17 +17,17 @@ const MOBILE_PATTERN = '^[6-9]\\d{9}$';
  * (create a document with type: 'ULB_MASTER') without a code change.
  */
 export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
-  // {
-  //   key: 'code',
-  //   label: 'ULB Code',
-  //   formFieldType: 'text',
-  //   required: true,
-  //   displayInlineLabel: true,
-  //   validations: [
-  //     { name: 'required', validator: null, message: 'ULB code is required.' },
-  //     { name: 'maxlength', validator: 20, message: 'ULB code must be at most 20 characters.' },
-  //   ],
-  // },
+  {
+    key: 'code',
+    label: 'ULB Code',
+    formFieldType: 'text',
+    required: true,
+    displayInlineLabel: true,
+    validations: [
+      { name: 'required', validator: null, message: 'ULB code is required.' },
+      { name: 'maxlength', validator: 20, message: 'ULB code must be at most 20 characters.' },
+    ],
+  },
   {
     key: 'name',
     label: 'ULB Name',
