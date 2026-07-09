@@ -10,6 +10,7 @@ export class UpdateProfileContactsDto {
   name?: string;
 
   @ApiPropertyOptional({ example: 'np_mmiyana@yahoo.co.in' })
+  @Transform(({ value }) => (value === '' ? undefined : value))
   @IsOptional()
   @IsEmail()
   email?: string;
@@ -57,6 +58,7 @@ export class UpdateProfileContactsDto {
   departmentContactNumber?: string;
 
   @ApiPropertyOptional({ example: 'finance@ulb.gov.in' })
+  @Transform(({ value }) => (value === '' ? undefined : value))
   @IsOptional()
   @IsEmail()
   departmentEmail?: string;
@@ -68,9 +70,10 @@ export class UpdateProfileContactsDto {
   commissionerName?: string;
 
   @ApiPropertyOptional({ example: 'commissioner@ulb.gov.in' })
+  @Transform(({ value }) => (value === '' ? null : value))
   @IsOptional()
   @IsEmail()
-  commissionerEmail?: string;
+  commissionerEmail?: string | null;
 
   @ApiPropertyOptional({ example: '9123456780' })
   @IsOptional()
@@ -85,6 +88,7 @@ export class UpdateProfileContactsDto {
   accountantName?: string;
 
   @ApiPropertyOptional({ example: 'accounts@ulb.gov.in' })
+  @Transform(({ value }) => (value === '' ? undefined : value))
   @IsOptional()
   @IsEmail()
   accountantEmail?: string;
@@ -111,6 +115,12 @@ export class UpdateProfileContactsDto {
   @Transform(({ value }) => value === true || value === 'true')
   @IsBoolean()
   isXVIFCProfileVerified?: boolean;
+
+  @ApiPropertyOptional({ description: 'Mark false when a MoHUA user verifies their profile to un-flag any soft-removal' })
+  @IsOptional()
+  @Transform(({ value }) => value === false || value === 'false' ? false : value === true || value === 'true' ? true : undefined)
+  @IsBoolean()
+  isXviFcdeleted?: boolean;
 
   @ApiPropertyOptional({ description: 'One-time save token issued after OTP verification — required for state/MoHUA self-updates' })
   @IsOptional()

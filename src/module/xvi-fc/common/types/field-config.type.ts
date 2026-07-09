@@ -124,6 +124,9 @@ export interface FieldConfig {
   formFieldType: FieldType;
   key: string;
   label: string;
+  /** Cosmetic flag consumed by section/grid renderers to show a required asterisk next to the label.
+   *  Independent of `validations` — a 'required' validator is what's actually enforced. */
+  required?: boolean;
   /** Default or current field value; hydrated from saved data on GET responses */
   value?: unknown;
   /** false → field is never rendered by the frontend */
@@ -156,7 +159,37 @@ export interface FieldConfig {
   appearance?: FieldAppearanceConfig;
   supportingContent?: FieldSupportingContent[];
   radioLayout?: 'vertical' | 'horizontal' | 'inline';
+  hideLabel?: boolean;
+  displayInlineLabel?: boolean;
+  showAsterisk?: boolean;
+  decimal?: number;
+  warning?: Validator[];
+  fileViewType?: 'button' | 'dropzone' | 'list';
+  labelHint?: string;
+  hintText?: string;
+  grid?: string;
+}
+
+// ─── Sectioned / resolved form config ──────────────────────────────────────────
+
+/** Grid width and inline hints for one field's placement within a section. */
+export interface SectionFieldPlacement {
+  key: string;
+  grid: string;
+  /** Per-placement override of the field's own `labelHint`; falls back to the field definition when unset. */
+  labelHint?: string;
+  /** Per-placement override of the field's own `hintText`; falls back to the field definition when unset. */
+  hintText?: string;
 }
 
 /** FieldConfig with a guaranteed non-optional `value` after GET hydration */
 export type HydratedFieldConfig = FieldConfig & { value: unknown };
+
+/** One card-sectioned group of fields on the Register ULB page. */
+export interface SectionLayout {
+  title: string;
+  icon: string;
+  /** Muted text rendered inline next to the section title, e.g. "— will be the first login for this ULB". */
+  subtitle?: string;
+  fields: SectionFieldPlacement[];
+}

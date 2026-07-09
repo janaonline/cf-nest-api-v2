@@ -101,6 +101,9 @@ export class LoginService {
     if (user.status === 'PENDING') throw new ForbiddenException('Waiting for admin action on request.');
     if (user.status === 'REJECTED')
       throw new ForbiddenException(`Your request has been rejected. Reason: ${user.rejectReason}`);
+    if (dto.type === '16thFC' && user.isXviFcdeleted) {
+      throw new ForbiddenException('Invalid email or password');
+    }
     if (!user.isEmailVerified) {
       const url = `${this.configService.get<string>('HOSTNAME')}/account-reactivate`;
       throw new ForbiddenException(
@@ -166,14 +169,22 @@ export class LoginService {
       await this.usersRepository.resetLoginAttempts(userId);
     }
 
+    if (user.isNewUser && user.tempPasswordExpiresAt && user.tempPasswordExpiresAt < new Date()) {
+      throw new ForbiddenException(
+        'Your temporary password has expired. Please contact your administrator to resend the invitation.',
+      );
+    }
+
     const tokens = await this.authService.generateTokens(userId, dto.type ?? 'WEB');
     await this.authService.saveRefreshToken(userId, tokens.refreshToken);
     await this.usersRepository.updateLastLogin(userId);
     this.authService.setRefreshCookie(res, tokens.refreshToken);
 
     const allYears = await this.getActiveYears();
-    const parsedRole = parseUserRole(user.role as unknown as any);
-    console.log('Parsed user role for response:', parsedRole);
+    const parsedRole = parseUserRole(
+      user.role as unknown as Parameters<typeof parseUserRole>[0],
+      user.xviFcSubrole as string | null | undefined,
+    );
     return {
       token: tokens.accessToken,
       user: {
@@ -183,11 +194,9 @@ export class LoginService {
         mobile: user.mobile,
         isActive: user.isActive,
         role: user.role,
-        ...(parsedRole && {
-          scope: parsedRole.scope,
-          accessLevel: parsedRole.accessLevel,
-        }),
+        ...(parsedRole && { accessLevel: parsedRole.accessLevel }),
         isXVIFCProfileVerified: user.isXVIFCProfileVerified ?? false,
+        isNewUser: user.isNewUser ?? false,
         state: user.state,
         stateName: state?.name ?? null,
         designation: user.designation,

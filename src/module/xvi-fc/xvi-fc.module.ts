@@ -15,12 +15,14 @@ import { XviFcCacheInterceptor } from './cache/xvi-fc-cache.interceptor';
 import { SideMenuModule } from './side-menu/side-menu.module';
 import { FormJsonModule } from '../../form-json/form-json.module';
 import { UnspentBalanceDisclosureModule } from './ulb/unspent-balance-disclosure/unspent-balance-disclosure.module';
+import { BankAccountModule } from './ulb/bank-account/bank-account.module';
 import { XviFcAnnualAccount, XviFcAnnualAccountSchema } from '../../schemas/xvi-fc/annual-account.schema';
 import {
   XviFcUnspentBalanceDisclosure,
   XviFcUnspentBalanceDisclosureSchema,
 } from '../../schemas/xvi-fc/unspent-balance-disclosure.schema';
 import { DevolutionFormulaModule } from './state/devolution-formula/devolution-formula.module';
+import { XviFcBankAccount, XviFcBankAccountSchema } from '../../schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
 
 @Module({
   imports: [
@@ -32,6 +34,7 @@ import { DevolutionFormulaModule } from './state/devolution-formula/devolution-f
       { name: XviFcSideMenu.name, schema: XviFcSideMenuSchema },
       { name: XviFcAnnualAccount.name, schema: XviFcAnnualAccountSchema },
       { name: XviFcUnspentBalanceDisclosure.name, schema: XviFcUnspentBalanceDisclosureSchema },
+      { name: XviFcBankAccount.name, schema: XviFcBankAccountSchema },
     ]),
     AnnualAccountsModule,
     SfcStatusModule,
@@ -39,6 +42,7 @@ import { DevolutionFormulaModule } from './state/devolution-formula/devolution-f
     SideMenuModule,
     FormJsonModule,
     UnspentBalanceDisclosureModule,
+    BankAccountModule,
     DevolutionFormulaModule,
   ],
   controllers: [XviFcController],

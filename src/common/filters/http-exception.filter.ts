@@ -14,6 +14,8 @@ export class HttpExceptionFilter implements ExceptionFilter {
     let message = 'Internal server error';
     let errors: unknown = undefined;
     let data: unknown = undefined;
+    let code: unknown = undefined;
+    let deletedUser: unknown = undefined;
 
     if (exception instanceof HttpException) {
       statusCode = exception.getStatus();
@@ -26,6 +28,8 @@ export class HttpExceptionFilter implements ExceptionFilter {
         message = (resp['message'] as string) ?? message;
         if (resp['errors']) errors = resp['errors'];
         if (resp['data'] !== undefined) data = resp['data'];
+        if (resp['code'] !== undefined) code = resp['code'];
+        if (resp['deletedUser'] !== undefined) deletedUser = resp['deletedUser'];
       }
     } else if (exception instanceof Error) {
       if (exception.name === 'TokenExpiredError') {
@@ -59,6 +63,8 @@ export class HttpExceptionFilter implements ExceptionFilter {
     };
     if (errors !== undefined) body['errors'] = errors;
     if (data !== undefined) body['data'] = data;
+    if (code !== undefined) body['code'] = code;
+    if (deletedUser !== undefined) body['deletedUser'] = deletedUser;
 
     response.status(statusCode).json(body);
   }

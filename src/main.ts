@@ -25,7 +25,7 @@ async function bootstrap() {
   app.useGlobalInterceptors(new ResponseTransformInterceptor());
 
   // Tell Nest where views are stored
-  app.setBaseViewsDir(join(__dirname, '..', 'src/views'));
+  app.setBaseViewsDir(join(__dirname, 'views'));
   app.setViewEngine('hbs');
 
   // Optional: partials/helpers
@@ -119,7 +119,8 @@ async function bootstrap() {
    * -------------------------------------------------------
    * Reads port from environment configuration; defaults to 3000
    */
-
+  // Trust the proxy to get the correct client IP (important for rate limiting and logging)
+  app.set('trust proxy', 1);
   app.setGlobalPrefix('api/v2');
   const port = configService.get<number>('PORT') || 3000;
   await app.listen(port);

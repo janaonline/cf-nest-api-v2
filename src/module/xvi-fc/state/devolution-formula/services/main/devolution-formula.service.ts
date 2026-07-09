@@ -14,7 +14,7 @@ import {
   canStateEditForm,
   canStateFinalSubmitForm,
 } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
-import { toObjectIdString } from 'src/users/user-scope.helpers';
+import { toObjectIdString } from 'src/common/utils/objectid.util';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
 import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
 import { FileUrlNormalizerService } from 'src/module/xvi-fc/common/services/file-url-normalizer.service';

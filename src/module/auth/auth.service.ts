@@ -26,7 +26,7 @@ export class AuthService {
     private readonly configService: ConfigService,
     private readonly redisService: RedisService,
     @InjectModel(LoginHistory.name) private readonly loginHistoryModel: Model<LoginHistory>,
-  ) { }
+  ) {}
 
   async getUserById(id: string) {
     const u = await this.usersRepository.findById(id);
@@ -46,7 +46,7 @@ export class AuthService {
   }
 
   async refreshTokens(userId: string, refreshToken: string, res: Response): Promise<AuthResponse> {
-    console.log('Refreshing tokens for user:', userId, 'with refresh, token:', refreshToken);
+    // console.log('Refreshing tokens for user:', userId, 'with refresh, token:', refreshToken);
     const user = await this.usersRepository.findByIdWithRefreshToken(userId);
     if (!user?.refreshTokenHash) throw new HttpException('Session expired', 440);
 
@@ -61,15 +61,15 @@ export class AuthService {
     this.setRefreshCookie(res, tokens.refreshToken);
     return { token: tokens.accessToken, user: this.sanitizeUser(user) };
   }
+  // TODO: to be removed
+  // async register(dto: RegisterDto): Promise<Record<string, unknown>> {
+  //   const exists = await this.usersRepository.exists(dto.email);
+  //   if (exists) throw new ConflictException('Email already registered');
 
-  async register(dto: RegisterDto): Promise<Record<string, unknown>> {
-    const exists = await this.usersRepository.exists(dto.email);
-    if (exists) throw new ConflictException('Email already registered');
-
-    const hash = await bcrypt.hash(dto.password, 12);
-    const user = await this.usersRepository.create({ name: dto.name, email: dto.email, password: hash });
-    return this.sanitizeUser(user);
-  }
+  //   const hash = await bcrypt.hash(dto.password, 12);
+  //   const user = await this.usersRepository.create({ name: dto.name, email: dto.email, password: hash });
+  //   return this.sanitizeUser(user);
+  // }
 
   async validateRefreshToken(userId: string, token: string): Promise<UserDocument | null> {
     const user = await this.usersRepository.findByIdWithRefreshToken(userId);
@@ -101,9 +101,61 @@ export class AuthService {
     const hash = await bcrypt.hash(dto.newPassword, 12);
     const userId = (user._id as { toString(): string }).toString();
     await this.usersRepository.updatePassword(userId, hash);
-    await this.usersRepository.updateProfile(userId, { isActive: true, status: 'APPROVED', isXVIFCProfileVerified: true });
+    await this.usersRepository.updateProfile(userId, {
+      isActive: true,
+      status: 'APPROVED',
+      isXVIFCProfileVerified: true,
+    });
 
     return { message: 'Password updated successfully' };
+  }
+
+  async setNewPassword(
+    userId: string,
+    newPassword: string,
+    saveToken: string,
+    profile?: { name?: string; mobile?: string; designation?: string },
+  ): Promise<{ ok: boolean }> {
+    const tokenKey = `profile_save_token:${userId}`;
+    const stored = await this.redisService.get(tokenKey);
+    if (!stored || stored !== saveToken) {
+      throw new UnauthorizedException('Invalid or expired verification token. Please verify your email again.');
+    }
+    await this.redisService.del(tokenKey);
+
+    const hash = await bcrypt.hash(newPassword, 12);
+    await this.usersRepository.updatePassword(userId, hash);
+
+    const user = await this.usersRepository.findByIdSelect<{
+      state?: unknown;
+      isNodalOfficer?: boolean;
+      role?: string;
+      xviFcSubrole?: string | null;
+    }>(userId, 'state isNodalOfficer role xviFcSubrole');
+
+    const profileUpdate: Record<string, unknown> = {
+      isNewUser: false,
+      tempPasswordExpiresAt: null,
+      isXVIFCProfileVerified: true,
+      isXviFcdeleted: false,
+      ...(profile?.name && { name: profile.name }),
+      ...(profile?.mobile && { mobile: profile.mobile }),
+      ...(profile?.designation && { designation: profile.designation }),
+    };
+
+    // Only derive subrole if one has not been manually assigned already
+    if (user?.role === 'STATE' && user.state && !user.xviFcSubrole) {
+      profileUpdate['xviFcSubrole'] = user.isNodalOfficer ? 'admin' : 'reviewer';
+    }
+
+    await this.usersRepository.updateProfile(userId, profileUpdate);
+
+    // Assign subroles for other unverified STATE users in the same state
+    if (user?.role === 'STATE' && user.state) {
+      await this.usersRepository.assignStateSubroles(user.state as never);
+    }
+
+    return { ok: true };
   }
 
   async validateCaptcha(token: string): Promise<{ success: boolean; message: string }> {
@@ -165,34 +217,30 @@ export class AuthService {
     });
   }
   private toObjectIdString(value: unknown): string | null {
-  if (!value) return null;
+    if (!value) return null;
 
-  if (value instanceof Types.ObjectId) {
-    return value.toString();
-  }
-
-  if (typeof value === 'string') {
-    return value;
-  }
-
-  if (
-    typeof value === 'object' &&
-    value !== null &&
-    '_id' in value
-  ) {
-    const id = (value as { _id?: unknown })._id;
-
-    if (id instanceof Types.ObjectId) {
-      return id.toString();
+    if (value instanceof Types.ObjectId) {
+      return value.toString();
     }
 
-    if (typeof id === 'string') {
-      return id;
+    if (typeof value === 'string') {
+      return value;
     }
-  }
 
-  return null;
-}
+    if (typeof value === 'object' && value !== null && '_id' in value) {
+      const id = (value as { _id?: unknown })._id;
+
+      if (id instanceof Types.ObjectId) {
+        return id.toString();
+      }
+
+      if (typeof id === 'string') {
+        return id;
+      }
+    }
+
+    return null;
+  }
   private clearRefreshCookie(res: Response): void {
     const cookieName = this.configService.get<string>('REFRESH_COOKIE_NAME') ?? 'refresh_token';
     res.cookie(cookieName, '', { httpOnly: true, maxAge: 0, path: '/' });

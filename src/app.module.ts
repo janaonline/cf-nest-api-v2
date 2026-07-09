@@ -6,7 +6,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ScheduleModule } from '@nestjs/schedule';
 import { seconds, ThrottlerModule } from '@nestjs/throttler';
-import { CustomThrottlerGuard } from './common/guards/throttler.guard';
+import { ThrottlerBehindProxyGuard } from './core/guards/throttler-behind-proxy.guard';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { EmailModule } from './core/email/email.module';
@@ -29,6 +29,8 @@ import { FormsModule } from './forms/forms.module';
 import { FormJsonModule } from './form-json/form-json.module';
 import { CommunicationModule } from './communication/communication.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { UlbModule } from './master/ulb/ulb.module';
+import { StateModule } from './master/state/state.module';
 function getQueryCaller(): string {
   const stack = new Error().stack?.split('\n') ?? [];
   const frame = stack.find(
@@ -58,7 +60,7 @@ function getQueryCaller(): string {
         if (!redisUrl) throw new Error('REDIS_URL missing');
         return {
           connection: { url: redisUrl }, // supports redis:// and rediss://
-          prefix: 'appq', // optional key prefix
+          prefix: cfg.get<string>('BULL_QUEUE_PREFIX') ?? 'appq',
         };
       },
     }),
@@ -109,13 +111,15 @@ function getQueryCaller(): string {
     FormJsonModule,
     CommunicationModule,
     NotificationsModule,
+    UlbModule,
+    StateModule,
   ],
   controllers: [AppController],
   providers: [
     AppService,
     {
       provide: APP_GUARD,
-      useClass: CustomThrottlerGuard,
+      useClass: ThrottlerBehindProxyGuard,
     },
   ],
 })

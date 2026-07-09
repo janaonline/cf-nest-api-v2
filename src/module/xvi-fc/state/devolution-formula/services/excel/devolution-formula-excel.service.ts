@@ -10,7 +10,7 @@ import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import { assertCanStateEditForm } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
-import { toObjectIdString } from 'src/users/user-scope.helpers';
+import { toObjectIdString } from 'src/common/utils/objectid.util';
 import { FileUrlNormalizerService } from 'src/module/xvi-fc/common/services/file-url-normalizer.service';
 import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import {

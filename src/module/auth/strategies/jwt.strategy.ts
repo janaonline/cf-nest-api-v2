@@ -43,13 +43,18 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     if (!user || !user.isActive) {
       throw new UnauthorizedException('User not found or inactive');
     }
-    // scope/accessLevel derived fresh from DB role — never from the JWT payload
-    const parsedRole = parseUserRole(user.role as unknown as Parameters<typeof parseUserRole>[0]);
+    // scope/accessLevel derived fresh from DB — never from the JWT payload
+    const parsedRole = parseUserRole(
+      user.role as unknown as Parameters<typeof parseUserRole>[0],
+      user.xviFcSubrole as string | null | undefined,
+    );
     return {
       _id: payload._id,
       role: user.role,
       scope: parsedRole?.scope ?? null,
       accessLevel: parsedRole?.accessLevel ?? null,
+      // xviFcSubrole drives permission granularity for STATE-scope users
+      xviFcSubrole: user.xviFcSubrole ?? null,
       ulb: user.ulb,
       state: user.state,
       isActive: user.isActive,

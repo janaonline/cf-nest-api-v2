@@ -51,7 +51,7 @@ export class EmailRemindersController {
 
   @Get('preview-recipients')
   @ApiOperation({ summary: 'Preview recipient emails for a category — no emails sent' })
-  @ApiQuery({ name: 'category', enum: RecipientCategory })
+  @ApiQuery({ name: 'category', type: String, enum: RecipientCategory })
   previewRecipients(@Query('category') category: RecipientCategory) {
     return this.service.previewRecipients(category);
   }
@@ -66,7 +66,8 @@ export class EmailRemindersController {
   @Patch(':id')
   @ApiOperation({
     summary: 'Update a reminder',
-    description: 'If deadlineDate or reminderDaysBefore changes, reminderDate is recalculated and status resets to PENDING.',
+    description:
+      'If deadlineDate or reminderDaysBefore changes, reminderDate is recalculated and status resets to PENDING.',
   })
   update(@Param('id', ParseObjectIdPipe) id: string, @Body() dto: UpdateEmailReminderDto) {
     return this.service.update(id, dto);

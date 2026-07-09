@@ -1,11 +1,12 @@
-/* eslint-disable prettier/prettier */
-import { ForbiddenException, Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+﻿/* eslint-disable prettier/prettier */
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 
+import { FORM_STATUS, type FormStatusType } from 'src/common/constants/form-status.constants';
 import { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
-import { toObjectIdString } from 'src/users/user-scope.helpers';
+import { toObjectIdString } from 'src/common/utils/objectid.util';
 import { GrantAllocation, GrantAllocationDocument } from '../../schemas/xvi-fc/grant-allocation.schema';
 import {
   XviFcAnnualAccount,
@@ -17,6 +18,10 @@ import {
   XviFcUnspentBalanceDisclosure,
   XviFcUnspentBalanceDisclosureDocument,
 } from '../../schemas/xvi-fc/unspent-balance-disclosure.schema';
+import {
+  XviFcBankAccount,
+  XviFcBankAccountDocument,
+} from '../../schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
 import { StateWiseResponseDto } from './dto/state-wise-response.dto';
 import { buildGetStateWiseDataPipeline } from './queries/get-state-wise-data.query';
 import { SideMenuItemDto, SideMenuResponseDto } from './dto/side-menu.dto';
@@ -44,6 +49,8 @@ export class XviFcService {
     private readonly annualAccountModel: Model<XviFcAnnualAccountDocument>,
     @InjectModel(XviFcUnspentBalanceDisclosure.name)
     private readonly disclosureModel: Model<XviFcUnspentBalanceDisclosureDocument>,
+    @InjectModel(XviFcBankAccount.name)
+    private readonly bankAccountModel: Model<XviFcBankAccountDocument>,
     private readonly cache: XviFcCacheService,
     private readonly formJsonService: FormJsonService,
   ) {}
@@ -76,28 +83,17 @@ export class XviFcService {
     return this.buildMenuTree(docs);
   }
 
-  async clearCacheAdmin(opts: {
-    user: AuthUser;
-    pattern?: string;
-    scope?: string;
-    designYearId?: string;
-    formId?: string;
-  }): Promise<{ message: string }> {
-    if (opts.user.scope !== Scope.ADMIN) {
-      throw new ForbiddenException('Only admins can clear the cache.');
-    }
-
-    if (opts.scope === 'formJson') {
-      if (!opts.designYearId || !opts.formId) {
-        throw new BadRequestException('designYearId and formId are required when scope=formJson.');
-      }
-      await this.formJsonService.clearCache(opts.designYearId, Number(opts.formId));
-      return { message: `FormJson cache cleared for designYearId: ${opts.designYearId}, formId: ${opts.formId}` };
-    }
-
-    const redisPattern = opts.pattern ? `${XVIFC_CACHE_KEY_PREFIX}:${opts.pattern}` : `${XVIFC_CACHE_KEY_PREFIX}:*`;
+  async clearPageCache(user: AuthUser, pattern?: string): Promise<{ message: string }> {
+    if (user.scope !== Scope.ADMIN) throw new ForbiddenException('Only admins can clear the cache.');
+    const redisPattern = pattern ? `${XVIFC_CACHE_KEY_PREFIX}:${pattern}` : `${XVIFC_CACHE_KEY_PREFIX}:*`;
     await this.cache.deleteByPattern(redisPattern);
-    return { message: `Cache cleared for ${opts.pattern ? `pattern: ${opts.pattern}` : 'all XVI-FC cache'}` };
+    return { message: `Cache cleared for ${pattern ? `pattern: ${pattern}` : 'all XVI-FC cache'}` };
+  }
+
+  async clearFormJsonCache(user: AuthUser, designYearId: string, formId: number): Promise<{ message: string }> {
+    if (user.scope !== Scope.ADMIN) throw new ForbiddenException('Only admins can clear the cache.');
+    await this.formJsonService.clearCache(designYearId, formId);
+    return { message: `FormJson cache cleared for designYearId: ${designYearId}, formId: ${formId}` };
   }
 
   private buildMenuTree(docs: Array<XviFcSideMenu & { _id: Types.ObjectId }>): SideMenuResponseDto {
@@ -172,7 +168,7 @@ export class XviFcService {
     const ulb = new Types.ObjectId(ulbId);
     const designYear = new Types.ObjectId(designYearId);
 
-    const [annualAccount, disclosure] = await Promise.all([
+    const [annualAccount, disclosure, bankAccount] = await Promise.all([
       this.annualAccountModel
         .findOne({ ulb, design_year: designYear })
         .select(
@@ -181,6 +177,7 @@ export class XviFcService {
         .lean()
         .exec(),
       this.disclosureModel.findOne({ ulb, designYear }).select('formStatus').lean().exec(),
+      this.bankAccountModel.findOne({ ulb, designYear }).select('currentFormStatus').lean().exec(),
     ]);
 
     const sectionStatus = (section: Record<string, unknown> | undefined | null) => ({
@@ -189,6 +186,9 @@ export class XviFcService {
     });
 
     const isSubmitted = (disclosure as Record<string, unknown> | null)?.['formStatus'] === 'SUBMITTED';
+    const bankAccountStatus =
+      ((bankAccount as Record<string, unknown> | null)?.['currentFormStatus'] as FormStatusType | undefined) ??
+      FORM_STATUS.NOT_STARTED;
 
     return {
       annualAccountId: (annualAccount as Record<string, unknown> | null)?.['_id']?.toString() ?? null,
@@ -200,6 +200,10 @@ export class XviFcService {
       ),
       unspentBalanceDisclosure: {
         form_status: isSubmitted ? 'SUBMITTED' : 'NOT_STARTED',
+        form_status_id: null,
+      },
+      xviFcBankAccount: {
+        form_status: bankAccountStatus,
         form_status_id: null,
       },
     };
