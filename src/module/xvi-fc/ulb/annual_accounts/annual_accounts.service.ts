@@ -154,9 +154,10 @@ export class AnnualAccountsService implements OnModuleInit {
     const fileInfo = {
       originalName: dto.originalName,
       mimeType: 'application/pdf',
-      pages,
+      extension: 'pdf',
+      pageCount: pages,
       sizeKb,
-      s3Key: dto.s3Key,
+      path: dto.s3Key,
       sha256,
     };
 
@@ -314,7 +315,7 @@ export class AnnualAccountsService implements OnModuleInit {
       ulbId: doc.ulb.toString(),
       section: historyDoc.section,
       docId: historyDoc.docId,
-      s3Key: historyDoc.file.s3Key,
+      s3Key: historyDoc.file.path,
       expectedDocType,
       financialYear: sectionData?.year ?? '',
     });
@@ -410,8 +411,8 @@ export class AnnualAccountsService implements OnModuleInit {
       const section = doc[sectionKey];
       if (!section?.documents) continue;
       const found = section.documents.find((d: any) => d.currentUpload?.uploadId === uploadId);
-      if (found?.currentUpload?.file?.s3Key) {
-        s3Key = found.currentUpload.file.s3Key;
+      if (found?.currentUpload?.file?.path) {
+        s3Key = found.currentUpload.file.path;
         break;
       }
     }

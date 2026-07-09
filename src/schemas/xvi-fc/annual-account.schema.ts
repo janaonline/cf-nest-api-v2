@@ -1,5 +1,8 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
+import { FileInfo, FileInfoSchema } from '../common/file.schema';
+
+export { FileInfo, FileInfoSchema };
 
 export enum AnnualAccountFormStatus {
   NOT_STARTED = 'NOT_STARTED',
@@ -16,29 +19,6 @@ export const FORM_STATUS_ID: Record<AnnualAccountFormStatus, number> = {
 export type XviFcAnnualAccountDocument = HydratedDocument<XviFcAnnualAccount>;
 
 // ─── Shared sub-schemas ───────────────────────────────────────────────────────
-
-@Schema({ _id: false, versionKey: false })
-export class FileInfo {
-  @Prop({ required: true })
-  originalName: string;
-
-  @Prop({ required: true })
-  mimeType: string;
-
-  @Prop({ default: 0 })
-  pages: number;
-
-  @Prop({ default: 0 })
-  sizeKb: number;
-
-  @Prop({ required: true })
-  s3Key: string;
-
-  @Prop({ default: '' })
-  sha256: string;
-}
-
-export const FileInfoSchema = SchemaFactory.createForClass(FileInfo);
 
 @Schema({ _id: false, versionKey: false })
 export class OCRInfo {
