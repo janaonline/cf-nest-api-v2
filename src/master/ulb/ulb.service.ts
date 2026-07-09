@@ -6,12 +6,14 @@ import { randomBytes } from 'crypto';
 import { MongoServerError } from 'mongodb';
 import { FilterQuery, Model, Types } from 'mongoose';
 import type { IAuthUser } from 'src/common/interfaces/auth-user.interface';
+import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { EmailQueueService } from 'src/core/queue/email-queue/email-queue.service';
 import { Role } from 'src/module/auth/enum/role.enum';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
 import type { XviFcValidationErrorMap } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
-import type { FieldConfig, ResolvedSection } from 'src/module/xvi-fc/common/types/field-config.type';
+import type { FieldConfig, SectionLayout } from 'src/module/xvi-fc/common/types/field-config.type';
 import { FormJsonService } from 'src/form-json/form-json.service';
+import type { CommonFile } from 'src/schemas/common/file.schema';
 import { State, StateDocument } from 'src/schemas/state.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { User, UserDocument } from 'src/schemas/user/user.schema';
@@ -19,7 +21,7 @@ import {
   DEFAULT_ULB_EDIT_SECTIONS,
   DEFAULT_ULB_FIELDS,
   DEFAULT_ULB_REGISTER_SECTIONS,
-  RegisterUlbSectionLayout,
+  // RegisterUlbSectionLayout,
   ULB_EDIT_SECTIONS_FORM_JSON_TYPE,
   ULB_FORM_JSON_TYPE,
   ULB_PRIMARY_CONTACT_FIELD_KEYS,
@@ -45,6 +47,7 @@ export class UlbService {
     private readonly dynamicFormValidation: DynamicFormValidationService,
     private readonly emailQueueService: EmailQueueService,
     private readonly configService: ConfigService,
+    private readonly fileTokenService: FileTokenService,
   ) {}
 
   /** Loads the admin-configurable ULB field definition, falling back to the built-in defaults. */
@@ -58,24 +61,20 @@ export class UlbService {
   }
 
   /** Loads the admin-configurable section/grid skeleton for the Register ULB page, falling back to built-in defaults. */
-  private async loadRegisterSectionsLayout(): Promise<RegisterUlbSectionLayout[]> {
+  private async loadRegisterSectionsLayout(): Promise<SectionLayout[]> {
     try {
       const formJson = await this.formJsonService.findByType(ULB_REGISTER_SECTIONS_FORM_JSON_TYPE);
-      return formJson.data?.length
-        ? (formJson.data as unknown as RegisterUlbSectionLayout[])
-        : DEFAULT_ULB_REGISTER_SECTIONS;
+      return formJson.data?.length ? (formJson.data as unknown as SectionLayout[]) : DEFAULT_ULB_REGISTER_SECTIONS;
     } catch {
       return DEFAULT_ULB_REGISTER_SECTIONS;
     }
   }
 
   /** Loads the admin-configurable section/grid skeleton for the Edit ULB dialog, falling back to built-in defaults. */
-  private async loadEditSectionsLayout(): Promise<RegisterUlbSectionLayout[]> {
+  private async loadEditSectionsLayout(): Promise<SectionLayout[]> {
     try {
       const formJson = await this.formJsonService.findByType(ULB_EDIT_SECTIONS_FORM_JSON_TYPE);
-      return formJson.data?.length
-        ? (formJson.data as unknown as RegisterUlbSectionLayout[])
-        : DEFAULT_ULB_EDIT_SECTIONS;
+      return formJson.data?.length ? (formJson.data as unknown as SectionLayout[]) : DEFAULT_ULB_EDIT_SECTIONS;
     } catch {
       return DEFAULT_ULB_EDIT_SECTIONS;
     }
@@ -104,10 +103,7 @@ export class UlbService {
 
   /** Merges a section/grid layout skeleton with resolved field definitions, dropping (and logging)
    *  any layout entry whose key has no matching field — keeps a bad admin edit from breaking the page. */
-  private mergeLayoutWithFields(
-    layout: RegisterUlbSectionLayout[],
-    fieldsByKey: Map<string, FieldConfig>,
-  ): ResolvedSection[] {
+  private mergeLayoutWithFields(layout: SectionLayout[], fieldsByKey: Map<string, FieldConfig>): SectionLayout[] {
     return layout.map((section) => ({
       title: section.title,
       icon: section.icon,
@@ -119,7 +115,12 @@ export class UlbService {
             this.logger.warn(`ULB section layout references unknown field key "${fieldLayout.key}"`);
             return null;
           }
-          return { ...field, grid: fieldLayout.grid, labelHint: fieldLayout.labelHint, hintText: fieldLayout.hintText };
+          return {
+            ...field,
+            grid: fieldLayout.grid,
+            labelHint: fieldLayout.labelHint ?? field.labelHint,
+            hintText: fieldLayout.hintText ?? field.hintText,
+          };
         })
         .filter((field): field is NonNullable<typeof field> => field !== null),
     }));
@@ -131,7 +132,7 @@ export class UlbService {
    * from ULB_MASTER, plus a live `ulbType` select populated from the ulbtypes collection. The
    * frontend renders this response directly — no client-side lookup or merging required.
    */
-  async getRegisterSections(): Promise<ResolvedSection[]> {
+  async getRegisterSections(): Promise<SectionLayout[]> {
     const [fieldsByKey, layout] = await Promise.all([
       this.buildResolvedFieldsByKey(),
       this.loadRegisterSectionsLayout(),
@@ -144,7 +145,7 @@ export class UlbService {
    * `getRegisterSections()`, but against the edit layout, which covers every ULB field (including
    * `code` and a live `state` select) rather than just the Register page's subset.
    */
-  async getEditSections(): Promise<ResolvedSection[]> {
+  async getEditSections(): Promise<SectionLayout[]> {
     const [fieldsByKey, layout] = await Promise.all([this.buildResolvedFieldsByKey(), this.loadEditSectionsLayout()]);
     return this.mergeLayoutWithFields(layout, fieldsByKey);
   }
@@ -206,6 +207,32 @@ export class UlbService {
     };
   }
 
+  /**
+   * Normalizes `gazetteNotificationFile` for API responses and signs it into an openable URL.
+   * Documents created before the CommonFile migration (see a2ed410) store
+   * `{ fileName, fileUrl, fileSize, mimeType, noOfPage }`; the current schema stores
+   * `{ originalName, path, sizeKb, extension, pageCount }`. Both are read here so old and new
+   * records render the same way; the raw storage path alone isn't a URL a browser can open.
+   */
+  private withSignedGazetteFile<T extends Ulb>(ulb: T): T {
+    const file = ulb.gazetteNotificationFile as
+      | (CommonFile & { fileName?: string; fileUrl?: string; fileSize?: number | null; noOfPage?: number | null })
+      | null;
+    const rawPath = file?.fileUrl || file?.path;
+    if (!file || !rawPath) return ulb;
+
+    return {
+      ...ulb,
+      gazetteNotificationFile: {
+        fileName: file.fileName ?? file.originalName ?? '',
+        fileUrl: this.fileTokenService.signFileUrl(rawPath),
+        fileSize: file.fileSize ?? (typeof file.sizeKb === 'number' ? Math.round(file.sizeKb * 1024) : null),
+        mimeType: file.mimeType,
+        noOfPage: file.noOfPage ?? file.pageCount ?? null,
+      },
+    } as T;
+  }
+
   async create(dto: CreateUlbDto, user: IAuthUser): Promise<Ulb> {
     const fields = await this.loadFields();
     const data = { ...dto.data };
@@ -227,6 +254,7 @@ export class UlbService {
 
     const patch = this.toMongoPatch(sanitizedPayload);
     const name = String(patch.name);
+    await this.ensureNameNotTaken(name);
     patch.slug = this.buildSlug(name);
 
     let stateId: Types.ObjectId;
@@ -249,6 +277,20 @@ export class UlbService {
     }
 
     return created.toObject();
+  }
+
+  /**
+   * Case-insensitive uniqueness guard for ULB name, checked ahead of the write so callers get a
+   * clean 400 instead of relying solely on the schema's unique index (which is exact-match and
+   * whose duplicate-key error only surfaces after the write is attempted).
+   */
+  private async ensureNameNotTaken(name: string, excludeId?: string): Promise<void> {
+    const escaped = name.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const filter: FilterQuery<UlbDocument> = { name: { $regex: `^${escaped}$`, $options: 'i' } };
+    if (excludeId) filter._id = { $ne: new Types.ObjectId(excludeId) };
+
+    const existing = await this.ulbModel.exists(filter);
+    if (existing) throw new BadRequestException('A ULB with this name already exists.');
   }
 
   private async persistUlb(patch: Record<string, unknown>) {
@@ -416,7 +458,7 @@ export class UlbService {
     ]);
 
     return {
-      data: await this.attachLookupNames(data.map((ulb) => this.withApprovalDefaults(ulb))),
+      data: await this.attachLookupNames(data.map((ulb) => this.withSignedGazetteFile(this.withApprovalDefaults(ulb)))),
       page,
       limit,
       total,
@@ -426,7 +468,9 @@ export class UlbService {
 
   /** Resolves `state`/`ulbType` ids on a page of ULBs to their display names, so the list page
    *  can render them directly without a separate client-side lookup call. */
-  private async attachLookupNames<T extends Ulb>(ulbs: T[]): Promise<(T & { stateName: string; ulbTypeName: string })[]> {
+  private async attachLookupNames<T extends Ulb>(
+    ulbs: T[],
+  ): Promise<(T & { stateName: string; ulbTypeName: string })[]> {
     if (ulbs.length === 0) return [];
 
     const stateIds = [...new Set(ulbs.map((ulb) => String(ulb.state)).filter(Boolean))];
@@ -462,14 +506,29 @@ export class UlbService {
     if (!Types.ObjectId.isValid(id)) throw new BadRequestException('Invalid ULB id');
     const ulb = await this.ulbModel.findById(id).lean<Ulb>();
     if (!ulb) throw new NotFoundException('ULB not found');
-    return this.withApprovalDefaults(ulb);
+    return this.withSignedGazetteFile(this.withApprovalDefaults(ulb));
   }
 
-  async update(id: string, dto: UpdateUlbDto): Promise<Ulb> {
+  /**
+   * Updates a ULB. ADMIN may edit any ULB at any time. A STATE user may only edit their own
+   * state's ULB, and only while it's REJECTED — this is the "fix and resubmit" path for a
+   * submission an ADMIN sent back, not a general edit capability. A STATE resubmission always
+   * resets `approval` back to PENDING so the ADMIN reviews the corrected data.
+   */
+  async update(id: string, dto: UpdateUlbDto, user: IAuthUser): Promise<Ulb> {
     if (!Types.ObjectId.isValid(id)) throw new BadRequestException('Invalid ULB id');
 
     const existing = await this.ulbModel.findById(id).lean<UlbDocument>();
     if (!existing) throw new NotFoundException('ULB not found');
+
+    if (user.role === Role.STATE) {
+      if (!user.state || String(existing.state) !== String(user.state)) {
+        throw new ForbiddenException('You can only edit ULBs in your own state.');
+      }
+      if (existing.approval?.status !== 'REJECTED') {
+        throw new ForbiddenException('You can only edit a rejected ULB submission.');
+      }
+    }
 
     const fields = await this.loadFields();
     const { isValid, errors, sanitizedPayload } = this.dynamicFormValidation.validateDraftAndBuildPayload(
@@ -478,9 +537,21 @@ export class UlbService {
     );
     if (!isValid) this.throwValidationError(errors);
 
+    // Primary-contact fields only make sense at registration time (they provision the ULB's
+    // first login) — never persisted onto the Ulb document, so they're irrelevant to an update.
+    this.extractPrimaryContact(sanitizedPayload);
+
     const patch = this.toMongoPatch(sanitizedPayload);
     if (Object.keys(patch).length === 0) throw new BadRequestException('No fields provided to update.');
-    if (typeof patch.name === 'string') patch.slug = this.buildSlug(patch.name);
+    if (typeof patch.name === 'string') {
+      const nameChanged = patch.name.trim().toLowerCase() !== existing.name?.trim().toLowerCase();
+      if (nameChanged) await this.ensureNameNotTaken(patch.name, id);
+      patch.slug = this.buildSlug(patch.name);
+    }
+
+    if (user.role === Role.STATE) {
+      patch.approval = { status: 'PENDING', submittedBy: new Types.ObjectId(user._id) };
+    }
 
     try {
       const updated = await this.ulbModel

@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
+import { CommonFile, CommonFileSchema } from 'src/schemas/common/file.schema';
 
 @Schema()
 export class GSDPEligibility {
@@ -44,26 +45,6 @@ export class Approval {
 }
 
 export const ApprovalSchema = SchemaFactory.createForClass(Approval);
-
-@Schema({ _id: false })
-export class GazetteNotificationFile {
-  @Prop({ type: String, default: '' })
-  fileName: string;
-
-  @Prop({ type: String, default: '' })
-  fileUrl: string;
-
-  @Prop({ type: Number, default: null })
-  fileSize: number | null;
-
-  @Prop({ type: String })
-  mimeType?: string;
-
-  @Prop({ type: Number, default: null })
-  noOfPage: number | null;
-}
-
-export const GazetteNotificationFileSchema = SchemaFactory.createForClass(GazetteNotificationFile);
 
 @Schema({ timestamps: { createdAt: 'createdAt', updatedAt: 'modifiedAt' } })
 export class Ulb {
@@ -188,8 +169,8 @@ export class Ulb {
   @Prop({ default: '' })
   gazetteNotificationNumber: string;
 
-  @Prop({ type: GazetteNotificationFileSchema, default: null })
-  gazetteNotificationFile: GazetteNotificationFile | null;
+  @Prop({ type: CommonFileSchema, default: null })
+  gazetteNotificationFile: CommonFile | null;
 
   // ── Approval workflow ──────────────────────────────────────────────────────
   @Prop({ type: ApprovalSchema, default: () => ({}) })

@@ -1,9 +1,4 @@
-import {
-  BadRequestException,
-  Injectable,
-  Logger,
-  NotFoundException,
-} from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { InjectModel } from '@nestjs/mongoose';
 import { ConfigService } from '@nestjs/config';
@@ -60,7 +55,7 @@ export class EmailRemindersService {
   async handleDailyCron(): Promise<void> {
     const due = await this.findDueReminders();
     if (!due.length) {
-      this.logger.log('No reminders due today');
+      // this.logger.log('No reminders due today');
       return;
     }
     this.logger.log(`Found ${due.length} reminder(s) due today`);
