@@ -1,7 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 
 @Schema({ _id: false, versionKey: false })
-export class CommonFile {
+export class FileInfo {
   @Prop({ type: String, required: true })
   originalName: string;
 
@@ -20,8 +20,14 @@ export class CommonFile {
   @Prop({ type: Number, default: null })
   pageCount: number | null;
 
+  @Prop({ type: String, default: '' })
+  sha256!: string;
+
   @Prop({ type: Date, default: () => new Date() })
   uploadedAt: Date;
 }
 
-export const CommonFileSchema = SchemaFactory.createForClass(CommonFile);
+export const FileInfoSchema = SchemaFactory.createForClass(FileInfo);
+
+// Back-compat alias for existing consumers (e.g. ulb.schema.ts) that still import the old name.
+export { FileInfo as CommonFile, FileInfoSchema as CommonFileSchema };
