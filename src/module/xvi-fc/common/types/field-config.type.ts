@@ -167,6 +167,7 @@ export interface FieldConfig {
   labelHint?: string;
   hintText?: string;
   grid?: string;
+  maxLength?: number;
 }
 
 // ─── Sectioned / resolved form config ──────────────────────────────────────────
