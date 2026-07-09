@@ -490,6 +490,7 @@ export class DevolutionFormulaExcelService {
         totalGrantAllocation: number;
       }> = [];
       let errorRowCount = 0;
+      let newUlbCount = 0;
       let totalAllocatedSum = 0;
 
       for (const row of activeRows) {
@@ -513,6 +514,7 @@ export class DevolutionFormulaExcelService {
             rowErrors = this.dfValidator.validateRow(parsed, installment, { totalMoHUAAllocation });
           }
         } else {
+          newUlbCount++;
           rowErrors.push({ field: 'censusCode', code: 'unknownUlb', message: 'ULB not found in registry.' });
         }
 
@@ -547,6 +549,7 @@ export class DevolutionFormulaExcelService {
             totalAllocatedSum,
             totalMoHUAAllocation,
             errorRowCount,
+            newUlbCount,
             validationStatus: formValidationStatus,
             updatedBy: userOid,
           },
@@ -559,7 +562,7 @@ export class DevolutionFormulaExcelService {
         validRowCount: activeRows.length - errorRowCount,
         errorRowCount,
         missingUlbCount,
-        newUlbCount: form.newUlbCount ?? 0,
+        newUlbCount,
         totalMoHUAAllocation,
         totalAllocatedSum,
         activeDatasetVersion: form.activeDatasetVersion ?? 0,
@@ -576,6 +579,21 @@ export class DevolutionFormulaExcelService {
             value: e.value,
           })),
         );
+
+      if (newUlbCount > 0) {
+        throwXviFcValidationErrorWithData(
+          {
+            excelFile: [
+              {
+                field: 'excelFile',
+                code: 'newUlbsAdded',
+                message: `You have added ${newUlbCount} ULB(s). Please register before proceeding.`,
+              },
+            ],
+          },
+          { validationSummary: summary, rowErrors },
+        );
+      }
 
       return xviFcSuccess('Revalidation complete.', { validationSummary: summary, rowErrors });
     }
@@ -611,29 +629,46 @@ export class DevolutionFormulaExcelService {
     const stateOid = new Types.ObjectId(stateId);
     const yearOid = new Types.ObjectId(yearId);
 
-    const [form, grantAlloc] = await Promise.all([
+    // Always load active registry alongside form and grant alloc — needed in both branches.
+    const [form, grantAlloc, activeUlbsRaw] = await Promise.all([
       this.formModel.findOne({ state: stateOid, year: yearOid, installment }).lean<DfFormLeanDoc>().exec(),
       this.dfService.resolveGrantAllocation(stateOid, yearOid).catch(() => null),
+      this.ulbModel
+        .find({ state: stateOid, isActive: true })
+        .select('_id name censusCode sbCode')
+        .sort({ name: 1 })
+        .lean()
+        .exec(),
     ]);
 
     const maxGrantAllocation = grantAlloc ? grantAlloc.basic + grantAlloc.performance : undefined;
     const activeVersion = form?.activeDatasetVersion ?? 0;
 
     if (form && activeVersion > 0) {
+      // Load only saved rows that matched a registry ULB — exclude unknown-ULB rows.
       const savedRows = await this.rowModel
-        .find({ form: form._id as Types.ObjectId, datasetVersion: activeVersion, isActive: true })
-        .sort({ rowNumber: 1 })
+        .find({ form: form._id as Types.ObjectId, datasetVersion: activeVersion, isActive: true, ulbId: { $ne: null } })
         .lean()
         .exec();
 
-      const rows = savedRows.map((r) => ({
-        censusCode: r.censusCode ?? '',
-        ulbName: r.ulbName,
-        totalGrantAllocation: r.totalGrantAllocation,
-        installment1Amount: r.installment1Amount,
-        installment2Amount: r.installment2Amount,
-        devolutionFormula: r.devolutionFormula,
-      }));
+      // Build overlay map: ulbId string → saved row.
+      const savedByUlbId = new Map<string, (typeof savedRows)[0]>();
+      for (const row of savedRows) {
+        if (row.ulbId) savedByUlbId.set(String(row.ulbId), row);
+      }
+
+      // Iterate active registry in name order; overlay saved values where available.
+      const rows = (activeUlbsRaw as Record<string, unknown>[]).map((u) => {
+        const saved = savedByUlbId.get(String(u['_id']));
+        return {
+          censusCode: String((u['censusCode'] as string | null) || (u['sbCode'] as string | null) || ''),
+          ulbName: (u['name'] as string | undefined) ?? '',
+          totalGrantAllocation: saved?.totalGrantAllocation ?? '',
+          installment1Amount: saved?.installment1Amount ?? '',
+          installment2Amount: saved?.installment2Amount ?? '',
+          devolutionFormula: saved?.devolutionFormula ?? '',
+        };
+      });
 
       return this.excelService.generateExcel(
         DF_TEMPLATE_HEADERS,
@@ -643,15 +678,9 @@ export class DevolutionFormulaExcelService {
       );
     }
 
-    const ulbs = await this.ulbModel
-      .find({ state: stateOid, isActive: true })
-      .select('_id name censusCode sbCode')
-      .sort({ name: 1 })
-      .lean()
-      .exec();
-
-    const rows = ulbs.map((u: Record<string, unknown>) => ({
-      censusCode: (u['censusCode'] as string | null) || (u['sbCode'] as string | null) || '',
+    // No active dataset — blank editable rows from active registry.
+    const rows = (activeUlbsRaw as Record<string, unknown>[]).map((u) => ({
+      censusCode: String((u['censusCode'] as string | null) || (u['sbCode'] as string | null) || ''),
       ulbName: (u['name'] as string | undefined) ?? '',
       totalGrantAllocation: '',
       installment1Amount: '',

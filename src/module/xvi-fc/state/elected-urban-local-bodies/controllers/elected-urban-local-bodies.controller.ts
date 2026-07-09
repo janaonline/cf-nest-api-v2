@@ -223,10 +223,10 @@ export class ElectedUrbanLocalBodiesController {
   revalidateExcel(
     @Param('stateId', ParseObjectIdPipe) stateId: string,
     @Param('yearId', ParseObjectIdPipe) yearId: string,
-    @Body() dto: RevalidateEulbExcelDto,
+    @Body() _dto: RevalidateEulbExcelDto,
     @CurrentUser() user: AuthUser,
   ) {
-    return this.eulbExcelService.revalidateExcel(stateId, yearId, dto, user);
+    return this.eulbExcelService.revalidateExcel(stateId, yearId, user);
   }
 
   @ApiOperation({

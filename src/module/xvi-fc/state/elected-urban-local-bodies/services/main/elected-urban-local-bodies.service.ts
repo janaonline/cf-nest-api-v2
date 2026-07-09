@@ -55,10 +55,12 @@ import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import {
   EULB_ACTION_DOWNLOAD_ERROR_SHEET,
   EULB_ACTION_DOWNLOAD_TEMPLATE,
+  EULB_ACTION_REGISTER_ULB,
   EULB_ACTION_REVALIDATE_EXCEL,
   EULB_ACTION_VIEW_UPLOADED_DATA,
   EULB_FORM_NAME,
   TEMPLATE_HEADERS,
+  buildEulbRegisterUlbUrl,
 } from 'src/module/xvi-fc/state/elected-urban-local-bodies/constants/elected-urban-local-bodies.constants';
 import type { SaveElectedUrbanLocalBodiesDraftDto } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/save-elected-urban-local-bodies-draft.dto';
 import type { FinalSubmitElectedUrbanLocalBodiesDto } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/final-submit-elected-urban-local-bodies.dto';
@@ -161,7 +163,7 @@ export class ElectedUrbanLocalBodiesService {
     const noPermissions: EulbFormPermissions = { canView: false, canEdit: false, canFinalSubmit: false };
     const questions = mainFormFields.map((q) => {
       if (q.key === 'electedBodyExcelFile') {
-        return { ...q, supportingContent: this.buildElectedBodyFileSupportingContent(null, noPermissions) };
+        return { ...q, supportingContent: this.buildElectedBodyFileSupportingContent(null, noPermissions, '') };
       }
       return q;
     });
@@ -172,6 +174,9 @@ export class ElectedUrbanLocalBodiesService {
    * Returns the hydrated EULB form for a given state and year.
    * Merges saved field values with TEMP_QUESTIONS defaults. Signs file URLs.
    * Returns a default Not Started form when no record exists yet.
+   *
+   * `ulbCount` is hydrated as a read-only, backend-owned field computed from the active
+   * ULB registry. The client-provided value is ignored.
    *
    * @param stateId - ObjectId string of the target state.
    * @param yearId  - ObjectId string of the target year.
@@ -195,28 +200,32 @@ export class ElectedUrbanLocalBodiesService {
       throw new InternalServerErrorException('EULB_ROW_EDIT_FIELDS group is empty in form configuration.');
     }
 
-    const doc = await this.model
-      .findOne({
-        state: new Types.ObjectId(stateId),
-        year: new Types.ObjectId(yearId),
-        formType: EULB_FORM_TYPE,
-        isDeleted: false,
-      })
-      .populate('state', 'name')
-      .populate('createdBy', 'name')
-      .populate('updatedBy', 'name')
-      .populate('submittedBy', 'name')
-      .lean<EulbFormLeanDoc>()
-      .exec();
+    const stateOid = new Types.ObjectId(stateId);
+
+    const [doc, computedActiveUlbCount] = await Promise.all([
+      this.model
+        .findOne({
+          state: stateOid,
+          year: new Types.ObjectId(yearId),
+          formType: EULB_FORM_TYPE,
+          isDeleted: false,
+        })
+        .populate('state', 'name')
+        .populate('createdBy', 'name')
+        .populate('updatedBy', 'name')
+        .populate('submittedBy', 'name')
+        .lean<EulbFormLeanDoc>()
+        .exec(),
+      this.ulbModel.countDocuments({ state: stateOid, isActive: true }),
+    ]);
 
     const currentFormStatus = doc?.currentFormStatus ?? FORM_STATUS.NOT_STARTED;
     const jwtExpiresIn = (this.config.get<string>('JWT_EXPIRES_IN') ?? '24h') as StringValue;
     const jwtExpiresMs = ms(jwtExpiresIn) ?? 24 * 60 * 60 * 1000;
 
-    // Build savedData from top-level form fields
+    // Build savedData from top-level form fields (ulbCount is not included — it is backend-owned)
     const savedData: FormData = {};
     if (doc) {
-      if (doc.ulbCount !== undefined) savedData['ulbCount'] = doc.ulbCount;
       if (doc.checkboxConfirmation !== undefined) savedData['checkboxConfirmation'] = doc.checkboxConfirmation;
       if (doc.electedBodyExcelFile !== undefined) savedData['electedBodyExcelFile'] = doc.electedBodyExcelFile;
     }
@@ -228,6 +237,8 @@ export class ElectedUrbanLocalBodiesService {
       jwtExpiresMs,
       doc,
       permissions,
+      yearId,
+      computedActiveUlbCount,
       folderPathContext,
     );
     const { actors, stateName } = this.xvifcFormActorsService.buildActorsAndStateName(doc);
@@ -257,14 +268,10 @@ export class ElectedUrbanLocalBodiesService {
   /**
    * Generates an Excel template for the EULB data collection.
    *
-   * If an active dataset exists for the state/year, the template is pre-filled with the
-   * saved row values (electedBodyStatus, dateOfConstitution, dateOfExpiry, remarks) so
-   * that re-downloads include previously entered data.  EXTRA_ULB rows added by the user
-   * are preserved.  If no active dataset exists the template falls back to the current
-   * behaviour: one blank row per active ULB from the master data.
-   *
-   * In both cases the row array is padded with blank rows up to maxAllowedExcelRows
-   * (dbUlbCount × 2) so that Excel data-validations cover every row a user may fill in.
+   * The template always represents the current active ULB registry for the state.
+   * When an active dataset exists, saved row values are overlaid only for rows that still
+   * match an active registry ULB (DB_ULB rows). EXTRA_ULB rows are excluded.
+   * No blank padding rows are added beyond the active registry count.
    */
   async getTemplate(stateId: string, yearId: string, user: AuthUser): Promise<Buffer> {
     this.assertStateAccess(user, stateId);
@@ -275,9 +282,22 @@ export class ElectedUrbanLocalBodiesService {
       throw new InternalServerErrorException('EULB_ROW_EDIT_FIELDS group is empty in form configuration.');
     }
 
+    const stateOid = new Types.ObjectId(stateId);
+
+    // Always load the active registry — needed in both branches to determine template rows.
+    // TODO: Add date of constitution check.
+    const activeUlbs = await this.ulbModel
+      .find({ state: stateOid, isActive: true })
+      .select('_id name censusCode sbCode')
+      .sort({ name: 1 })
+      .lean()
+      .exec();
+
+    const computedActiveUlbCount = activeUlbs.length;
+
     const formDoc = await this.model
       .findOne({
-        state: new Types.ObjectId(stateId),
+        state: stateOid,
         year: new Types.ObjectId(yearId),
         formType: EULB_FORM_TYPE,
         isDeleted: false,
@@ -288,36 +308,42 @@ export class ElectedUrbanLocalBodiesService {
     const activeVersion = formDoc?.activeDatasetVersion ?? 0;
 
     let rows: EulbTemplateRow[];
-    let dbUlbCount: number;
 
     if (activeVersion > 0 && formDoc) {
-      const savedRows = await this.rowModel
-        .find({ form: formDoc._id as Types.ObjectId, datasetVersion: activeVersion, isActive: true })
-        .select('censusCode ulbName electedBodyStatus dateOfConstitution dateOfExpiry remarks')
-        .sort({ rowNumber: 1 })
+      // Load only DB_ULB saved rows for the active dataset version.
+      const savedDbRows = await this.rowModel
+        .find({
+          form: formDoc._id as Types.ObjectId,
+          datasetVersion: activeVersion,
+          isActive: true,
+          rowType: 'DB_ULB',
+        })
+        .select('ulbId censusCode ulbName electedBodyStatus dateOfConstitution dateOfExpiry remarks')
         .lean()
         .exec();
 
-      rows = savedRows.map((r) => ({
-        censusCode: r.censusCode ?? '',
-        ulbName: r.ulbName,
-        electedBodyStatus: r.electedBodyStatus ?? '',
-        dateOfConstitution: dateToTemplateValue(r.dateOfConstitution),
-        dateOfExpiry: dateToTemplateValue(r.dateOfExpiry),
-        remarks: r.remarks ?? '',
-      }));
+      // Build overlay map keyed by ulbId string for O(1) lookup.
+      const savedRowByUlbId = new Map<string, (typeof savedDbRows)[number]>();
+      for (const r of savedDbRows) {
+        if (r.ulbId) savedRowByUlbId.set(r.ulbId.toString(), r);
+      }
 
-      dbUlbCount = formDoc.dbUlbCount ?? rows.length;
+      // Iterate active registry; overlay saved values when a match exists.
+      rows = activeUlbs.map((u) => {
+        const saved = savedRowByUlbId.get(u._id.toString());
+        const censusCode = String(u['censusCode'] ?? u['sbCode'] ?? '');
+        return {
+          censusCode,
+          ulbName: u['name'],
+          electedBodyStatus: saved?.electedBodyStatus ?? '',
+          dateOfConstitution: saved ? dateToTemplateValue(saved.dateOfConstitution) : '',
+          dateOfExpiry: saved ? dateToTemplateValue(saved.dateOfExpiry) : '',
+          remarks: saved?.remarks ?? '',
+        };
+      });
     } else {
-      // TODO: Add date of constitution / createdAt condition.
-      const ulbs = await this.ulbModel
-        .find({ state: new Types.ObjectId(stateId), isActive: true })
-        .select('_id name censusCode sbCode')
-        .sort({ name: 1 })
-        .lean()
-        .exec();
-
-      rows = ulbs.map((u: Record<string, unknown>) => ({
+      // No active dataset — one blank row per active registry ULB.
+      rows = activeUlbs.map((u: Record<string, unknown>) => ({
         censusCode: (u['censusCode'] as string | null) || (u['sbCode'] as string | null) || '',
         ulbName: u['name'] as string,
         electedBodyStatus: '',
@@ -325,30 +351,12 @@ export class ElectedUrbanLocalBodiesService {
         dateOfExpiry: '',
         remarks: '',
       }));
-
-      dbUlbCount = ulbs.length;
     }
 
-    // Pad with blank rows up to maxAllowedExcelRows so data-validations cover every row a
-    // user is permitted to fill in, not only pre-populated rows.
-    const maxAllowedExcelRows = dbUlbCount * 2;
-    const blankRow: EulbTemplateRow = {
-      censusCode: '',
-      ulbName: '',
-      electedBodyStatus: '',
-      dateOfConstitution: '',
-      dateOfExpiry: '',
-      remarks: '',
-    };
-    const templateRows = [
-      ...rows,
-      ...Array.from({ length: Math.max(0, maxAllowedExcelRows - rows.length) }, () => ({ ...blankRow })),
-    ];
-
-    const validations = this.buildTemplateValidations(rowEditFields, maxAllowedExcelRows);
+    const validations = this.buildTemplateValidations(rowEditFields, computedActiveUlbCount);
     return this.excelService.generateExcel(
       TEMPLATE_HEADERS as RowHeader[],
-      templateRows,
+      rows,
       'Elected Bodies Template',
       validations,
     );
@@ -411,12 +419,13 @@ export class ElectedUrbanLocalBodiesService {
 
   /**
    * Saves the EULB form as a draft.
-   * Runs partial validation — absent required fields are allowed (except requiredTrue checkboxes).
-   * Upserts the main form document's top-level fields. Sets status to IN_PROGRESS. Does not touch rows.
+   * `ulbCount` is computed server-side from the active ULB registry — the client-submitted
+   * value is ignored. Partial validation runs; absent required fields are allowed (except
+   * requiredTrue checkboxes). Upserts the main form document. Does not touch rows.
    *
    * @param dto       - Payload with stateId, yearId, and partial form data.
    * @param user      - Authenticated user; must have EDIT_STATE_FORMS permission.
-   * @param ip        - Client IP (passed through; reserved for future audit trail).
+   * @param ip        - Client IP (reserved for future audit trail).
    * @param userAgent - User-Agent header (reserved for future audit trail).
    */
   async saveDraft(
@@ -433,13 +442,21 @@ export class ElectedUrbanLocalBodiesService {
       throw new InternalServerErrorException('EULB_MAIN_FORM_FIELDS group is empty in form configuration.');
     }
 
+    const stateOid = new Types.ObjectId(dto.stateId);
+    const yearOid = new Types.ObjectId(dto.yearId);
+    const userOid = new Types.ObjectId(user._id);
+    const filter = { state: stateOid, year: yearOid, formType: EULB_FORM_TYPE };
+
+    // Compute active ULB count server-side; the client-submitted ulbCount is ignored.
+    const activeUlbCount = await this.ulbModel.countDocuments({ state: stateOid, isActive: true });
+
     const rawExcelFile = dto.data.electedBodyExcelFile;
     const normalizedExcelFile = rawExcelFile?.fileUrl
       ? { ...rawExcelFile, fileUrl: this.fileUrlNormalizer.toRawStoragePath(rawExcelFile.fileUrl) }
       : rawExcelFile;
 
     const formData: FormData = {
-      ulbCount: dto.data.ulbCount,
+      ulbCount: activeUlbCount,
       electedBodyExcelFile: normalizedExcelFile,
       checkboxConfirmation: dto.data.checkboxConfirmation,
     };
@@ -447,32 +464,13 @@ export class ElectedUrbanLocalBodiesService {
     const result = this.validator.validateDraftAndBuildPayload(mainFormFields, formData);
     if (!result.isValid) throwXviFcValidationError(result.errors);
 
-    const stateOid = new Types.ObjectId(dto.stateId);
-    const yearOid = new Types.ObjectId(dto.yearId);
-    const userOid = new Types.ObjectId(user._id);
-    const filter = { state: stateOid, year: yearOid, formType: EULB_FORM_TYPE };
-
-    const existing = await this.model.findOne(filter, { _id: 1, currentFormStatus: 1, excelRowCount: 1 }).lean().exec();
-
-    const savedExcelRowCount = existing?.excelRowCount ?? 0;
-    if (dto.data.ulbCount !== undefined && savedExcelRowCount > 0 && dto.data.ulbCount !== savedExcelRowCount) {
-      throwXviFcValidationError({
-        ulbCount: [
-          {
-            field: 'ulbCount',
-            code: 'mismatch',
-            message: `ULB count entered (${dto.data.ulbCount}) does not match the number of ULBs/ rows in the Excel file (${savedExcelRowCount}).`,
-          },
-        ],
-      });
-    }
+    const existing = await this.model.findOne(filter, { _id: 1, currentFormStatus: 1 }).lean().exec();
 
     const fieldUpdates: Record<string, unknown> = {
       currentFormStatus: FORM_STATUS.IN_PROGRESS,
       updatedBy: userOid,
+      ulbCount: activeUlbCount,
     };
-    if (result.sanitizedPayload['ulbCount'] !== undefined)
-      fieldUpdates['ulbCount'] = result.sanitizedPayload['ulbCount'];
     if (normalizedExcelFile !== undefined) fieldUpdates['electedBodyExcelFile'] = normalizedExcelFile;
     if (result.sanitizedPayload['checkboxConfirmation'] !== undefined)
       fieldUpdates['checkboxConfirmation'] = result.sanitizedPayload['checkboxConfirmation'];
@@ -508,13 +506,15 @@ export class ElectedUrbanLocalBodiesService {
 
   /**
    * Final-submits the EULB form.
-   * Runs full form-level validation then enforces all Excel row-level pre-conditions
-   * (validationStatus VALID, zero errors, zero missing DB ULBs, ulbCount match).
-   * Transitions status to UNDER_REVIEW_BY_MOHUA. Blocked by status gate.
+   * `ulbCount` is computed server-side; the client-submitted value is ignored.
+   * Runs full form-level validation then enforces all Excel row-level pre-conditions:
+   * validationStatus VALID, zero errors, zero missing DB ULBs, zero extra ULB rows,
+   * and Excel row count matching the computed active ULB count.
+   * Transitions status to UNDER_REVIEW_BY_MOHUA.
    *
    * @param dto       - Payload with stateId, yearId, and complete form data.
    * @param user      - Authenticated user; must have FINAL_SUBMIT_STATE_FORMS permission.
-   * @param ip        - Client IP (passed through; reserved for future audit trail).
+   * @param ip        - Client IP (reserved for future audit trail).
    * @param userAgent - User-Agent header (reserved for future audit trail).
    */
   async finalSubmit(
@@ -535,6 +535,9 @@ export class ElectedUrbanLocalBodiesService {
     const yearOid = new Types.ObjectId(dto.yearId);
     const userOid = new Types.ObjectId(user._id);
     const filter = { state: stateOid, year: yearOid, formType: EULB_FORM_TYPE };
+
+    // Compute active ULB count server-side; the client-submitted ulbCount is ignored.
+    const activeUlbCount = await this.ulbModel.countDocuments({ state: stateOid, isActive: true });
 
     const existing = await this.model
       .findOne(filter, {
@@ -561,9 +564,9 @@ export class ElectedUrbanLocalBodiesService {
       fileUrl: this.fileUrlNormalizer.toRawStoragePath(dto.data.electedBodyExcelFile.fileUrl),
     };
 
-    // Full form-level validation
+    // Full form-level validation using the computed active ULB count.
     const formData: FormData = {
-      ulbCount: dto.data.ulbCount,
+      ulbCount: activeUlbCount,
       electedBodyExcelFile: normalizedExcelFile,
       checkboxConfirmation: dto.data.checkboxConfirmation,
     };
@@ -631,17 +634,39 @@ export class ElectedUrbanLocalBodiesService {
         { validationSummary: dbValidationSummary },
       );
     }
-    if (dto.data.ulbCount !== excelRowCount) {
-      throwXviFcValidationError({
-        ulbCount: [
-          {
-            field: 'ulbCount',
-            code: 'mismatch',
-            message: `ULB count entered (${dto.data.ulbCount}) does not match the number of ULBs/ rows in the Excel file (${excelRowCount}).`,
-          },
-        ],
-      });
+
+    // Extra ULB rows indicate unregistered ULBs — report this specifically before generic checks.
+    if (extraExcelRowCount > 0) {
+      throwXviFcValidationErrorWithData(
+        {
+          electedBodyExcelFile: [
+            {
+              field: 'electedBodyExcelFile',
+              code: 'newUlbsAdded',
+              message: `${extraExcelRowCount} ULB(s) in the uploaded Excel are not registered in City Finance. Please register them before submitting.`,
+            },
+          ],
+        },
+        { validationSummary: dbValidationSummary },
+      );
     }
+
+    // Compare stored Excel row count against computed active ULB count (not client-submitted ulbCount).
+    if (excelRowCount !== activeUlbCount) {
+      throwXviFcValidationErrorWithData(
+        {
+          electedBodyExcelFile: [
+            {
+              field: 'electedBodyExcelFile',
+              code: 'excelInvalid',
+              message: `Excel row count (${excelRowCount}) does not match the number of active ULBs registered in City Finance (${activeUlbCount}).`,
+            },
+          ],
+        },
+        { validationSummary: dbValidationSummary },
+      );
+    }
+
     if (storedValidationStatus !== 'VALID') {
       throwXviFcValidationErrorWithData(
         {
@@ -685,20 +710,6 @@ export class ElectedUrbanLocalBodiesService {
         { validationSummary: dbValidationSummary },
       );
     }
-    if (excelRowCount > dbUlbCount * 2) {
-      throwXviFcValidationErrorWithData(
-        {
-          electedBodyExcelFile: [
-            {
-              field: 'electedBodyExcelFile',
-              code: 'excelInvalid',
-              message: `Excel row count (${excelRowCount}) exceeds the maximum allowed (${dbUlbCount * 2}).`,
-            },
-          ],
-        },
-        { validationSummary: dbValidationSummary },
-      );
-    }
 
     const toStatus = FORM_STATUS.UNDER_REVIEW_BY_MOHUA;
     const now = new Date();
@@ -709,7 +720,7 @@ export class ElectedUrbanLocalBodiesService {
       submittedAt: now,
       updatedBy: userOid,
       isDraft: false,
-      ulbCount: dto.data.ulbCount,
+      ulbCount: activeUlbCount,
       electedBodyExcelFile: normalizedExcelFile,
       checkboxConfirmation: dto.data.checkboxConfirmation,
     };
@@ -731,10 +742,13 @@ export class ElectedUrbanLocalBodiesService {
    * Merges saved form data onto TEMP_QUESTIONS in one O(n) pass.
    * File-type questions have their fileUrl signed with a JWT-lifetime token.
    * The electedBodyExcelFile question receives backend-driven supporting actions based on the form doc.
+   * The ulbCount question is overridden with the backend-computed active ULB count (read-only).
    *
-   * @param savedData    - Key-value pairs extracted from the stored form document's top-level fields.
-   * @param jwtExpiresMs - Token lifetime in milliseconds used when signing file URLs.
-   * @param doc          - Lean form document used to compute supporting action/badge visibility.
+   * @param savedData              - Key-value pairs extracted from the stored form document's top-level fields.
+   * @param jwtExpiresMs           - Token lifetime in milliseconds used when signing file URLs.
+   * @param doc                    - Lean form document used to compute supporting action/badge visibility.
+   * @param yearId                 - Design year ObjectId string (for building Register ULB URL).
+   * @param computedActiveUlbCount - Active ULB count from the registry (server-side authoritative value).
    */
   private hydrateQuestions(
     questions: FieldConfig[],
@@ -742,9 +756,15 @@ export class ElectedUrbanLocalBodiesService {
     jwtExpiresMs: number,
     doc: EulbFormLeanDoc | null,
     permissions: EulbFormPermissions,
+    yearId: string,
+    computedActiveUlbCount: number,
     folderPathContext?: XviFcFolderPathContext,
   ): HydratedFieldConfig[] {
     return questions.map((question) => {
+      if (question.key === 'ulbCount') {
+        return { ...question, value: computedActiveUlbCount } as HydratedFieldConfig;
+      }
+
       const rawValue = Object.prototype.hasOwnProperty.call(savedData, question.key)
         ? savedData[question.key]
         : question.value;
@@ -767,14 +787,18 @@ export class ElectedUrbanLocalBodiesService {
             ...question,
             folderPath: resolvedFolderPath,
             value,
-            supportingContent: this.buildElectedBodyFileSupportingContent(doc, permissions),
+            supportingContent: this.buildElectedBodyFileSupportingContent(doc, permissions, yearId),
           };
         }
         return { ...question, folderPath: resolvedFolderPath, value };
       }
 
       if (question.key === 'electedBodyExcelFile') {
-        return { ...question, value, supportingContent: this.buildElectedBodyFileSupportingContent(doc, permissions) };
+        return {
+          ...question,
+          value,
+          supportingContent: this.buildElectedBodyFileSupportingContent(doc, permissions, yearId),
+        };
       }
 
       return { ...question, value };
@@ -785,18 +809,22 @@ export class ElectedUrbanLocalBodiesService {
    * Builds the backend-driven `actions` supporting content item for the electedBodyExcelFile question.
    * Action and badge visibility is derived from the current form document state.
    * When doc is null (no form record yet), only the download-template action is visible.
+   * The Register ULB action is shown when the user can edit and extra ULB rows exist.
    *
-   * @param doc - Lean form document; null when no record exists yet.
+   * @param doc     - Lean form document; null when no record exists yet.
+   * @param yearId  - Design year ObjectId string; used to build the Register ULB URL.
    */
   private buildElectedBodyFileSupportingContent(
     doc: EulbFormLeanDoc | null,
     permissions: EulbFormPermissions,
+    yearId: string,
   ): FieldSupportingContent[] {
     const { canView, canEdit } = permissions;
     const activeDatasetVersion = doc?.activeDatasetVersion ?? 0;
     const excelRowCount = doc?.excelRowCount ?? 0;
     const errorRowCount = doc?.errorRowCount ?? 0;
     const missingDbUlbCount = doc?.missingDbUlbCount ?? 0;
+    const extraExcelRowCount = doc?.extraExcelRowCount ?? 0;
     const validationStatus = doc?.validationStatus ?? 'NOT_VALIDATED';
 
     const hasActiveDataset = activeDatasetVersion > 0 && excelRowCount > 0;
@@ -839,6 +867,15 @@ export class ElectedUrbanLocalBodiesService {
             icon: 'bi bi-arrow-repeat',
             tone: 'primary',
             visible: canEdit && hasUploadedExcel && validationStatus !== 'VALID',
+          },
+          {
+            id: EULB_ACTION_REGISTER_ULB,
+            label: 'Register ULB',
+            icon: 'bi bi-person-check',
+            url: buildEulbRegisterUlbUrl(yearId),
+            tone: 'success' as const,
+            variant: 'link' as const,
+            visible: canEdit && extraExcelRowCount > 0,
           },
         ],
         badges: [

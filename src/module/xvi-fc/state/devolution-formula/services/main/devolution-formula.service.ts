@@ -42,6 +42,7 @@ import {
   DevolutionFormulaRowDocument,
 } from 'src/schemas/xvi-fc/state/devolution-formula-row.schema';
 import { GrantAllocation, GrantAllocationDocument } from 'src/schemas/xvi-fc/grant-allocation.schema';
+import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import {
   EULB_FORM_TYPE,
   ElectedUrbanLocalBodiesForm,
@@ -99,6 +100,8 @@ export class DevolutionFormulaService {
     private readonly grantAllocationModel: Model<GrantAllocationDocument>,
     @InjectModel(ElectedUrbanLocalBodiesForm.name)
     private readonly eulbModel: Model<EulbFormDocument>,
+    @InjectModel(Ulb.name)
+    private readonly ulbModel: Model<UlbDocument>,
     private readonly dfValidator: DevolutionFormulaValidator,
     private readonly xvifcFormActorsService: XvifcFormActorsService,
     private readonly excelService: ExcelService,
@@ -140,13 +143,15 @@ export class DevolutionFormulaService {
       doc as unknown as Parameters<typeof this.xvifcFormActorsService.buildActorsAndStateName>[0],
     );
 
-    const grantAllocationSummary = await this.resolveGrantAllocationSummary(stateOid, yearOid);
+    const [grantAllocationSummary, computedActiveUlbCount] = await Promise.all([
+      this.resolveGrantAllocationSummary(stateOid, yearOid),
+      this.ulbModel.countDocuments({ state: stateOid, isActive: true }),
+    ]);
     const validationSummary = this.buildValidationSummary(doc, grantAllocationSummary?.total ?? 0);
 
     const savedData: FormData = {};
     if (doc?.excelFile) savedData['excelFile'] = doc.excelFile;
     if (doc?.checkboxConfirmation !== undefined) savedData['checkboxConfirmation'] = doc.checkboxConfirmation;
-    if (doc?.ulbCount !== undefined) savedData['ulbCount'] = doc.ulbCount;
 
     const fields = await this.dfFormJsonConfig.loadFields(yearId);
     const questions = this.hydrateQuestions(
@@ -156,6 +161,7 @@ export class DevolutionFormulaService {
       permissions,
       folderPathContext,
       yearId,
+      computedActiveUlbCount,
     );
     const grantMax = grantAllocationSummary?.total ?? null;
     const rowEditFields = getDfFieldsByType(fields, 'DF_ROW_EDIT_FIELDS').map((field) => {
@@ -213,7 +219,10 @@ export class DevolutionFormulaService {
       assertCanStateEditForm(existing.currentFormStatus ?? FORM_STATUS.NOT_STARTED);
     }
 
-    const grantAlloc = await this.resolveGrantAllocation(stateOid, yearOid);
+    const [grantAlloc, computedActiveUlbCount] = await Promise.all([
+      this.resolveGrantAllocation(stateOid, yearOid),
+      this.ulbModel.countDocuments({ state: stateOid, isActive: true }),
+    ]);
 
     const rawFile = dto.data?.excelFile;
     const normalizedFile = rawFile?.fileUrl
@@ -223,7 +232,6 @@ export class DevolutionFormulaService {
     const formData: FormData = {};
     if (normalizedFile !== undefined) formData['excelFile'] = normalizedFile;
     if (dto.data?.checkboxConfirmation !== undefined) formData['checkboxConfirmation'] = dto.data.checkboxConfirmation;
-    if (dto.data?.ulbCount !== undefined) formData['ulbCount'] = dto.data.ulbCount;
 
     const dfFields = await this.dfFormJsonConfig.loadFields(dto.yearId);
     const validation = this.dynamicFormValidator.validateDraftAndBuildPayload(
@@ -241,14 +249,12 @@ export class DevolutionFormulaService {
       totalMoHUAAllocation: grantAlloc.basic + grantAlloc.performance,
       grantAllocationRef: grantAlloc._id,
       updatedBy: userOid,
+      ulbCount: computedActiveUlbCount,
     };
 
     if (normalizedFile !== undefined) update['excelFile'] = normalizedFile;
     if (validation.sanitizedPayload['checkboxConfirmation'] !== undefined) {
       update['checkboxConfirmation'] = validation.sanitizedPayload['checkboxConfirmation'];
-    }
-    if (validation.sanitizedPayload['ulbCount'] !== undefined) {
-      update['ulbCount'] = validation.sanitizedPayload['ulbCount'];
     }
 
     const result = await this.model
@@ -293,7 +299,6 @@ export class DevolutionFormulaService {
     const formData: FormData = {
       excelFile: normalizedFile,
       checkboxConfirmation: dto.data.checkboxConfirmation,
-      ulbCount: dto.data.ulbCount,
     };
 
     const dfFields = await this.dfFormJsonConfig.loadFields(dto.yearId);
@@ -313,8 +318,12 @@ export class DevolutionFormulaService {
       this.checkInstallment2Prereq();
     }
 
-    // Grant allocation must still exist, and its total must match what was validated
-    const currentAlloc = await this.resolveGrantAllocation(stateOid, yearOid);
+    // Grant allocation must still exist, and its total must match what was validated.
+    // Also compute the current active ULB count to validate row count consistency.
+    const [currentAlloc, computedActiveUlbCount] = await Promise.all([
+      this.resolveGrantAllocation(stateOid, yearOid),
+      this.ulbModel.countDocuments({ state: stateOid, isActive: true }),
+    ]);
     const currentTotal = currentAlloc.basic + currentAlloc.performance;
 
     if (!form.excelRowCount || form.excelRowCount === 0) {
@@ -395,13 +404,13 @@ export class DevolutionFormulaService {
       });
     }
 
-    if ((form.excelRowCount ?? 0) > 0 && dto.data.ulbCount !== form.excelRowCount) {
+    if ((form.excelRowCount ?? 0) > 0 && form.excelRowCount !== computedActiveUlbCount) {
       throwXviFcValidationError({
-        ulbCount: [
+        excelFile: [
           {
-            field: 'ulbCount',
-            code: 'mismatch',
-            message: `ULB count entered (${dto.data.ulbCount}) does not match the number of rows in the uploaded Devolution Formula Excel (${form.excelRowCount}).`,
+            field: 'excelFile',
+            code: 'excelInvalid',
+            message: `The uploaded Excel has ${form.excelRowCount} row(s) but there are ${computedActiveUlbCount} active ULB(s) registered. Please re-upload with all active ULBs.`,
           },
         ],
       });
@@ -419,7 +428,7 @@ export class DevolutionFormulaService {
             updatedBy: userOid,
             excelFile: normalizedFile,
             checkboxConfirmation: dto.data.checkboxConfirmation,
-            ulbCount: dto.data.ulbCount,
+            ulbCount: computedActiveUlbCount,
           },
         },
       )
@@ -557,8 +566,13 @@ export class DevolutionFormulaService {
     permissions: DfFormPermissions,
     folderPathContext: XviFcFolderPathContext,
     yearId: string,
+    computedActiveUlbCount: number,
   ): HydratedFieldConfig[] {
     return questions.map((question) => {
+      if (question.key === 'ulbCount') {
+        return { ...question, value: computedActiveUlbCount };
+      }
+
       const rawValue = Object.prototype.hasOwnProperty.call(savedData, question.key)
         ? savedData[question.key]
         : question.value;

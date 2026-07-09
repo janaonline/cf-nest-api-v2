@@ -32,8 +32,9 @@ export class ValidateElectedUrbanLocalBodiesExcelDto {
   @IsNotEmpty()
   yearId!: string;
 
+  @IsOptional()
   @IsNumber()
-  ulbCount!: number;
+  ulbCount?: number;
 
   @IsObject()
   @ValidateNested()

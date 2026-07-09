@@ -43,8 +43,9 @@ class DfFinalSubmitDataDto {
   @IsBoolean()
   checkboxConfirmation!: boolean;
 
+  @IsOptional()
   @IsNumber()
-  ulbCount!: number;
+  ulbCount?: number;
 }
 
 export class FinalSubmitDevolutionFormulaDto {

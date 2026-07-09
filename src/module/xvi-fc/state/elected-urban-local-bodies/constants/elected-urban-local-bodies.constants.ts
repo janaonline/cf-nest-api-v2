@@ -51,6 +51,11 @@ export const EULB_ACTION_DOWNLOAD_TEMPLATE = 'download-template';
 export const EULB_ACTION_VIEW_UPLOADED_DATA = 'view-uploaded-data';
 export const EULB_ACTION_DOWNLOAD_ERROR_SHEET = 'download-error-sheet';
 export const EULB_ACTION_REVALIDATE_EXCEL = 'revalidate-excel';
+export const EULB_ACTION_REGISTER_ULB = 'register-ulb';
+
+export function buildEulbRegisterUlbUrl(yearId: string): string {
+  return `/xvifc/${yearId}/register-ulb`;
+}
 
 export const EULB_CENSUS_CODE_MAX_LENGTH = 10;
 export const EULB_ULB_NAME_MAX_LENGTH = 250;
