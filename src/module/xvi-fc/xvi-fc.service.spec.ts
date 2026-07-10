@@ -2,8 +2,18 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
 import { NotFoundException } from '@nestjs/common';
 import { Types } from 'mongoose';
+import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import { XviFcService } from './xvi-fc.service';
 import { GrantAllocation } from '../../schemas/xvi-fc/grant-allocation.schema';
+import { Year } from '../../schemas/year.schema';
+import { Ulb } from '../../schemas/ulb.schema';
+import { State } from '../../schemas/state.schema';
+import { XviFcSideMenu } from '../../schemas/xvi-fc/xvi-fc-side-menu.schema';
+import { XviFcAnnualAccount, AnnualAccountFormStatus, FORM_STATUS_ID } from '../../schemas/xvi-fc/annual-account.schema';
+import { XviFcUnspentBalanceDisclosure } from '../../schemas/xvi-fc/unspent-balance-disclosure.schema';
+import { XviFcBankAccount } from '../../schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
+import { XviFcCacheService } from './cache/xvi-fc-cache.service';
+import { FormJsonService } from '../../form-json/form-json.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 
 const mockUser: AuthUser = {
@@ -16,11 +26,35 @@ const mockUser: AuthUser = {
 describe('XviFcService', () => {
   let service: XviFcService;
   let mockGrantAllocationModel: { aggregate: jest.Mock };
+  let mockYearModel: { find: jest.Mock };
+  let mockUlbModel: { findById: jest.Mock };
+  let mockStateModel: { findById: jest.Mock };
+  let mockSideMenuModel: { find: jest.Mock };
+  let mockAnnualAccountModel: { findOne: jest.Mock };
+  let mockDisclosureModel: { findOne: jest.Mock };
+  let mockBankAccountModel: { findOne: jest.Mock };
+
+  function q<T>(value: T) {
+    return {
+      select: jest.fn().mockReturnThis(),
+      populate: jest.fn().mockReturnThis(),
+      sort: jest.fn().mockReturnThis(),
+      lean: jest.fn().mockReturnThis(),
+      exec: jest.fn().mockResolvedValue(value),
+    };
+  }
 
   beforeEach(async () => {
     mockGrantAllocationModel = {
       aggregate: jest.fn(),
     };
+    mockYearModel = { find: jest.fn().mockReturnValue(q([])) };
+    mockUlbModel = { findById: jest.fn().mockReturnValue(q(null)) };
+    mockStateModel = { findById: jest.fn().mockReturnValue(q(null)) };
+    mockSideMenuModel = { find: jest.fn().mockReturnValue(q([])) };
+    mockAnnualAccountModel = { findOne: jest.fn().mockReturnValue(q(null)) };
+    mockDisclosureModel = { findOne: jest.fn().mockReturnValue(q(null)) };
+    mockBankAccountModel = { findOne: jest.fn().mockReturnValue(q(null)) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -29,6 +63,15 @@ describe('XviFcService', () => {
           provide: getModelToken(GrantAllocation.name),
           useValue: mockGrantAllocationModel,
         },
+        { provide: getModelToken(Year.name), useValue: mockYearModel },
+        { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+        { provide: getModelToken(State.name), useValue: mockStateModel },
+        { provide: getModelToken(XviFcSideMenu.name), useValue: mockSideMenuModel },
+        { provide: getModelToken(XviFcAnnualAccount.name), useValue: mockAnnualAccountModel },
+        { provide: getModelToken(XviFcUnspentBalanceDisclosure.name), useValue: mockDisclosureModel },
+        { provide: getModelToken(XviFcBankAccount.name), useValue: mockBankAccountModel },
+        { provide: XviFcCacheService, useValue: { deleteByPattern: jest.fn() } },
+        { provide: FormJsonService, useValue: { clearCache: jest.fn() } },
       ],
     }).compile();
 
@@ -69,31 +112,112 @@ describe('XviFcService', () => {
   });
 
   describe('getSideMenu', () => {
+    const yearId = new Types.ObjectId().toString();
+
     it('should return ULB side menu', async () => {
-      const result = await service.getSideMenu('ULB', 'year1');
+      mockSideMenuModel.find.mockReturnValue(q([{ _id: new Types.ObjectId(), label: 'Overview', section: 'top', type: 'item', sequence: 1 }]));
+      const result = await service.getSideMenu('ULB', yearId);
       expect(result).toHaveProperty('topModel');
       expect(result).toHaveProperty('bottomModel');
       expect(Array.isArray(result.topModel)).toBe(true);
     });
 
     it('should return STATE side menu', async () => {
-      const result = await service.getSideMenu('STATE', 'year1');
+      mockSideMenuModel.find.mockReturnValue(q([{ _id: new Types.ObjectId(), label: 'Overview', section: 'top', type: 'item', sequence: 1 }]));
+      const result = await service.getSideMenu('STATE', yearId);
       expect(result).toHaveProperty('topModel');
       expect(Array.isArray(result.topModel)).toBe(true);
     });
 
     it('should return MOHUA side menu', async () => {
-      const result = await service.getSideMenu('MOHUA', 'year1');
+      mockSideMenuModel.find.mockReturnValue(q([{ _id: new Types.ObjectId(), label: 'Overview', section: 'top', type: 'item', sequence: 1 }]));
+      const result = await service.getSideMenu('MOHUA', yearId);
       expect(result).toHaveProperty('topModel');
     });
 
     it('should return DOE side menu', async () => {
-      const result = await service.getSideMenu('DOE', 'year1');
+      mockSideMenuModel.find.mockReturnValue(q([{ _id: new Types.ObjectId(), label: 'Overview', section: 'top', type: 'item', sequence: 1 }]));
+      const result = await service.getSideMenu('DOE', yearId);
       expect(result).toHaveProperty('topModel');
     });
 
     it('should throw NotFoundException for unknown role', async () => {
-      await expect(service.getSideMenu('UNKNOWN' as any, 'year1')).rejects.toThrow(NotFoundException);
+      await expect(service.getSideMenu('UNKNOWN' as any, yearId)).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('getFormStatus', () => {
+    const ulbId = new Types.ObjectId().toString();
+    const designYearId = new Types.ObjectId().toString();
+
+    it('returns xviFcBankAccount as NOT_STARTED using form-status field names when no bank-account record exists', async () => {
+      const result = await service.getFormStatus(ulbId, designYearId);
+
+      expect(result.xviFcBankAccount).toEqual({
+        form_status: FORM_STATUS.NOT_STARTED,
+        form_status_id: null,
+      });
+    });
+
+    it('returns xviFcBankAccount with stored status using form-status field names when record exists', async () => {
+      mockBankAccountModel.findOne.mockReturnValue(q({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_STATE }));
+
+      const result = await service.getFormStatus(ulbId, designYearId);
+
+      expect(result.xviFcBankAccount).toEqual({
+        form_status: FORM_STATUS.UNDER_REVIEW_BY_STATE,
+        form_status_id: null,
+      });
+    });
+
+    it('preserves existing form-status response fields', async () => {
+      const annualAccountId = new Types.ObjectId();
+      mockAnnualAccountModel.findOne.mockReturnValue(
+        q({
+          _id: annualAccountId,
+          auditedData: {
+            form_status: AnnualAccountFormStatus.IN_PROGRESS,
+            form_status_id: FORM_STATUS_ID[AnnualAccountFormStatus.IN_PROGRESS],
+          },
+          unauditedData: {
+            form_status: AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE,
+            form_status_id: FORM_STATUS_ID[AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE],
+          },
+        }),
+      );
+      mockDisclosureModel.findOne.mockReturnValue(q({ formStatus: 'SUBMITTED' }));
+
+      const result = await service.getFormStatus(ulbId, designYearId);
+
+      expect(result).toMatchObject({
+        annualAccountId: annualAccountId.toString(),
+        auditedData: {
+          form_status: AnnualAccountFormStatus.IN_PROGRESS,
+          form_status_id: FORM_STATUS_ID[AnnualAccountFormStatus.IN_PROGRESS],
+        },
+        unauditedData: {
+          form_status: AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE,
+          form_status_id: FORM_STATUS_ID[AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE],
+        },
+        unspentBalanceDisclosure: {
+          form_status: 'SUBMITTED',
+          form_status_id: null,
+        },
+      });
+      expect(result.xviFcBankAccount.form_status).not.toBe('SUBMITTED');
+    });
+
+    it('queries bank-account status by ulb and designYear and selects only currentFormStatus', async () => {
+      const chain = q(null);
+      mockBankAccountModel.findOne.mockReturnValue(chain);
+
+      await service.getFormStatus(ulbId, designYearId);
+
+      expect(mockBankAccountModel.findOne).toHaveBeenCalledWith({
+        ulb: new Types.ObjectId(ulbId),
+        designYear: new Types.ObjectId(designYearId),
+      });
+      expect(chain.select).toHaveBeenCalledWith('currentFormStatus');
     });
   });
 

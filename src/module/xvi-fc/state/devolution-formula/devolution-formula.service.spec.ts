@@ -11,6 +11,7 @@ import { DevolutionFormulaForm } from 'src/schemas/xvi-fc/state/devolution-formu
 import { DevolutionFormulaRow } from 'src/schemas/xvi-fc/state/devolution-formula-row.schema';
 import { GrantAllocation } from 'src/schemas/xvi-fc/grant-allocation.schema';
 import { ElectedUrbanLocalBodiesForm } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
+import { Ulb } from 'src/schemas/ulb.schema';
 import { ExcelService } from 'src/services/excel/excel.service';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { FileUrlNormalizerService } from 'src/module/xvi-fc/common/services/file-url-normalizer.service';
@@ -118,6 +119,7 @@ const mockRowModel = {
 
 const mockGrantAllocationModel = { findOne: jest.fn() };
 const mockEulbModel = { findOne: jest.fn() };
+const mockUlbModel = { countDocuments: jest.fn() };
 
 const mockDfFormJsonConfig = { loadFields: jest.fn() };
 
@@ -126,14 +128,13 @@ const mockDfTypedFields = [
     fieldTypes: ['DF_MAIN_FORM_FIELDS'],
     formFieldType: 'number',
     key: 'ulbCount',
-    label: 'How many ULBs are there in the state as of March 31, 2026?',
+    label: 'Active ULBs Registered on City Finance as of March 31, 2026',
     value: 0,
     placeholder: '',
-    validations: [
-      { name: 'required', validator: null, message: 'This field is required.' },
-      { name: 'min', validator: 2, message: 'ULB count cannot be less than 2.' },
-      { name: 'max', validator: 1000, message: 'ULB count cannot exceed 1000.' },
-    ],
+    disabled: true,
+    disabledReason: 'This value is automatically computed from City Finance registered active ULBs.',
+    includeInPayload: false,
+    validations: [],
     layout: { variant: 'inline', labelWidth: 'lg' },
   },
   {
@@ -370,6 +371,7 @@ describe('DevolutionFormulaService', () => {
     mockEulbModel.findOne.mockReturnValue(q(null));
     mockRowModel.findOne.mockReturnValue(q(null));
     mockDfFormJsonConfig.loadFields.mockResolvedValue(mockDfTypedFields);
+    mockUlbModel.countDocuments.mockResolvedValue(2);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -381,6 +383,7 @@ describe('DevolutionFormulaService', () => {
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: mockRowModel },
         { provide: getModelToken(GrantAllocation.name), useValue: mockGrantAllocationModel },
         { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: mockEulbModel },
+        { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
         { provide: XvifcFormActorsService, useValue: mockActorsService },
         { provide: FileTokenService, useValue: mockFileTokenService },
         { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
@@ -467,8 +470,9 @@ describe('DevolutionFormulaService', () => {
     ).rejects.toMatchObject({ response: { message: 'Validation failed.' } });
   });
 
-  // saveDraft persistence: ulbCount is written to the update payload when provided
-  it('saveDraft persists provided ulbCount', async () => {
+  // saveDraft: ulbCount is now server-computed — dto.data.ulbCount is ignored
+  it('saveDraft persists server-computed ulbCount, ignores dto.data.ulbCount', async () => {
+    mockUlbModel.countDocuments.mockResolvedValue(37);
     mockFormModel.findOne.mockReturnValue(q(null));
     mockFormModel.findOneAndUpdate.mockReturnValue(q({ _id: formOid }));
 
@@ -477,7 +481,7 @@ describe('DevolutionFormulaService', () => {
         stateId: stateOid.toString(),
         yearId: YEAR_ID,
         installment: 1,
-        data: { checkboxConfirmation: true, ulbCount: 25 },
+        data: { checkboxConfirmation: true, ulbCount: 999 }, // client value must be ignored
       },
       adminUser,
     );
@@ -485,30 +489,39 @@ describe('DevolutionFormulaService', () => {
     const updatePayload = (mockFormModel.findOneAndUpdate.mock.calls as unknown[][][])[0][1] as {
       $set: { ulbCount?: number };
     };
-    expect(updatePayload.$set.ulbCount).toBe(25);
+    expect(updatePayload.$set.ulbCount).toBe(37); // computed, not 999
   });
 
-  // saveDraft relaxation: ulbCount is a normal `required` field, so draft mode allows it absent
-  it('saveDraft allows missing ulbCount and does not write it to the update payload', async () => {
+  // saveDraft: computed ulbCount always written even when dto.data.ulbCount is absent
+  it('saveDraft always writes computed ulbCount to the update payload even when dto.data.ulbCount is absent', async () => {
+    mockUlbModel.countDocuments.mockResolvedValue(10);
     mockFormModel.findOne.mockReturnValue(q(null));
     mockFormModel.findOneAndUpdate.mockReturnValue(q({ _id: formOid }));
 
-    await expect(
-      service.saveDraft(
-        {
-          stateId: stateOid.toString(),
-          yearId: YEAR_ID,
-          installment: 1,
-          data: { checkboxConfirmation: true },
-        },
-        adminUser,
-      ),
-    ).resolves.not.toThrow();
+    await service.saveDraft(
+      { stateId: stateOid.toString(), yearId: YEAR_ID, installment: 1, data: { checkboxConfirmation: true } },
+      adminUser,
+    );
 
     const updatePayload = (mockFormModel.findOneAndUpdate.mock.calls as unknown[][][])[0][1] as {
       $set: Record<string, unknown>;
     };
-    expect(updatePayload.$set).not.toHaveProperty('ulbCount');
+    expect(updatePayload.$set['ulbCount']).toBe(10);
+  });
+
+  // saveDraft: countDocuments called with correct filter
+  it('saveDraft calls ulbModel.countDocuments with { state: stateOid, isActive: true }', async () => {
+    mockFormModel.findOne.mockReturnValue(q(null));
+    mockFormModel.findOneAndUpdate.mockReturnValue(q({ _id: formOid }));
+
+    await service.saveDraft(
+      { stateId: stateOid.toString(), yearId: YEAR_ID, installment: 1, data: { checkboxConfirmation: true } },
+      adminUser,
+    );
+
+    expect(mockUlbModel.countDocuments).toHaveBeenCalledWith(
+      expect.objectContaining({ state: expect.any(Types.ObjectId), isActive: true }),
+    );
   });
 
   // Test 13: GET form signs raw paths and returns questions array
@@ -548,16 +561,41 @@ describe('DevolutionFormulaService', () => {
     expect(data.questions.map((q) => q.key)).toContain('checkboxConfirmation');
   });
 
-  // GET form: ulbCount hydrates from the saved document
-  it('getForm hydrates ulbCount value from the saved document', async () => {
-    mockFormModel.findOne.mockReturnValue(q({ ...mockFormInProgress, ulbCount: 42 }));
+  // GET form: ulbCount is now server-computed, not read from doc
+  it('getForm hydrates ulbCount from ulbModel.countDocuments, ignoring doc.ulbCount', async () => {
+    mockUlbModel.countDocuments.mockResolvedValue(57);
+    mockFormModel.findOne.mockReturnValue(q({ ...mockFormInProgress, ulbCount: 42 })); // doc has 42
     mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
 
     const result = await service.getForm(stateOid.toString(), YEAR_ID, 1, adminUser);
     const data = result.data as { questions: HydratedFieldConfig[] };
 
     const ulbCountQ = data.questions.find((q) => q.key === 'ulbCount');
-    expect(ulbCountQ?.value).toBe(42);
+    expect(ulbCountQ?.value).toBe(57); // computed, not 42 from doc
+  });
+
+  it('getForm ulbCount question has disabled: true, disabledReason set, and includeInPayload: false', async () => {
+    mockFormModel.findOne.mockReturnValue(q(mockFormInProgress));
+    mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
+
+    const result = await service.getForm(stateOid.toString(), YEAR_ID, 1, adminUser);
+    const data = result.data as { questions: HydratedFieldConfig[] };
+
+    const ulbCountQ = data.questions.find((q) => q.key === 'ulbCount') as Record<string, unknown> | undefined;
+    expect(ulbCountQ?.['disabled']).toBe(true);
+    expect(ulbCountQ?.['disabledReason']).toBeTruthy();
+    expect(ulbCountQ?.['includeInPayload']).toBe(false);
+  });
+
+  it('getForm calls ulbModel.countDocuments with { state: stateOid, isActive: true }', async () => {
+    mockFormModel.findOne.mockReturnValue(q(null));
+    mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
+
+    await service.getForm(stateOid.toString(), YEAR_ID, 1, adminUser);
+
+    expect(mockUlbModel.countDocuments).toHaveBeenCalledWith(
+      expect.objectContaining({ state: expect.any(Types.ObjectId), isActive: true }),
+    );
   });
 
   // ─── GET form: installmentAccess ───────────────────────────────────────────
@@ -974,7 +1012,8 @@ describe('DevolutionFormulaService', () => {
       });
     });
 
-    it('happy path: finalSubmit succeeds when newUlbCount is 0, no identityModified rows, validationStatus VALID, and ulbCount matches excelRowCount', async () => {
+    it('happy path: finalSubmit succeeds when newUlbCount is 0, no identityModified rows, validationStatus VALID, and excelRowCount matches computed active ULB count', async () => {
+      mockUlbModel.countDocuments.mockResolvedValue(50);
       mockFormModel.findOne.mockReturnValue(q({ ...mockFormInProgress, excelRowCount: 50, newUlbCount: 0 }));
       mockEulbModel.findOne.mockReturnValue(
         q({ _id: new Types.ObjectId(), currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }),
@@ -991,7 +1030,6 @@ describe('DevolutionFormulaService', () => {
             data: {
               excelFile: { fileName: 'f.xlsx', fileUrl: 'path/f.xlsx', fileSize: 1024 },
               checkboxConfirmation: true,
-              ulbCount: 50,
             },
           },
           adminUser,
@@ -1045,91 +1083,14 @@ describe('DevolutionFormulaService', () => {
     ).rejects.toMatchObject({ response: { message: 'Validation failed.' } });
   });
 
-  // finalSubmit dynamic validation: ulbCount out of range rejected, error keyed to ulbCount
-  it('finalSubmit throws when ulbCount is below the minimum, error keyed to ulbCount', async () => {
-    mockFormModel.findOne.mockReturnValue(q(mockFormInProgress));
-
-    await expect(
-      service.finalSubmit(
-        {
-          stateId: stateOid.toString(),
-          yearId: YEAR_ID,
-          installment: 1,
-          data: {
-            excelFile: { fileName: 'f.xlsx', fileUrl: 'path/f.xlsx', fileSize: 1024 },
-            checkboxConfirmation: true,
-            ulbCount: 1, // min is 2, so 1 fails
-          },
-        },
-        adminUser,
-      ),
-    ).rejects.toMatchObject({
-      response: {
-        message: 'Validation failed.',
-        errors: { ulbCount: [{ field: 'ulbCount', code: 'min' }] },
-      },
-    });
-  });
-
-  // finalSubmit dynamic validation: ulbCount above the maximum rejected, error keyed to ulbCount
-  it('finalSubmit throws when ulbCount is above the maximum, error keyed to ulbCount', async () => {
-    mockFormModel.findOne.mockReturnValue(q(mockFormInProgress));
-
-    await expect(
-      service.finalSubmit(
-        {
-          stateId: stateOid.toString(),
-          yearId: YEAR_ID,
-          installment: 1,
-          data: {
-            excelFile: { fileName: 'f.xlsx', fileUrl: 'path/f.xlsx', fileSize: 1024 },
-            checkboxConfirmation: true,
-            ulbCount: 5000,
-          },
-        },
-        adminUser,
-      ),
-    ).rejects.toMatchObject({
-      response: {
-        message: 'Validation failed.',
-        errors: { ulbCount: [{ field: 'ulbCount', code: 'max' }] },
-      },
-    });
-  });
-
-  // finalSubmit dynamic validation: ulbCount required on full submit, error keyed to ulbCount
-  it('finalSubmit throws when ulbCount is missing from data (dynamic required validation)', async () => {
-    mockFormModel.findOne.mockReturnValue(q(mockFormInProgress));
-
-    await expect(
-      service.finalSubmit(
-        {
-          stateId: stateOid.toString(),
-          yearId: YEAR_ID,
-          installment: 1,
-          // @ts-expect-error intentionally omitting ulbCount
-          data: {
-            excelFile: { fileName: 'f.xlsx', fileUrl: 'path/f.xlsx', fileSize: 1024 },
-            checkboxConfirmation: true,
-          },
-        },
-        adminUser,
-      ),
-    ).rejects.toMatchObject({
-      response: {
-        message: 'Validation failed.',
-        errors: { ulbCount: [{ field: 'ulbCount', code: 'required' }] },
-      },
-    });
-  });
-
-  // finalSubmit Excel dataset consistency: ulbCount must match the validated excelRowCount
-  it('finalSubmit throws when ulbCount does not match excelRowCount, error keyed to ulbCount', async () => {
+  // finalSubmit: ulbCount is now server-computed — missing dto.data.ulbCount no longer blocks
+  it('finalSubmit does not require ulbCount in dto.data (it is server-computed)', async () => {
+    mockUlbModel.countDocuments.mockResolvedValue(2);
     mockFormModel.findOne.mockReturnValue(q(mockFormInProgress)); // excelRowCount: 2
     mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
-    mockEulbModel.findOne.mockReturnValue(
-      q({ _id: new Types.ObjectId(), currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }),
-    );
+    mockEulbModel.findOne.mockReturnValue(q({ _id: new Types.ObjectId() }));
+    mockRowModel.findOne.mockReturnValue(q(null));
+    mockFormModel.findOneAndUpdate.mockReturnValue(q({ _id: formOid }));
 
     await expect(
       service.finalSubmit(
@@ -1140,7 +1101,31 @@ describe('DevolutionFormulaService', () => {
           data: {
             excelFile: { fileName: 'f.xlsx', fileUrl: 'path/f.xlsx', fileSize: 1024 },
             checkboxConfirmation: true,
-            ulbCount: 50, // mismatches mockFormInProgress.excelRowCount (2)
+            // ulbCount intentionally omitted
+          },
+        },
+        adminUser,
+      ),
+    ).resolves.not.toThrow();
+  });
+
+  // finalSubmit: excelRowCount !== computed active ULB count → excelFile.excelInvalid
+  it('finalSubmit blocks when form.excelRowCount does not match computed active ULB count, error keyed to excelFile with code excelInvalid', async () => {
+    mockUlbModel.countDocuments.mockResolvedValue(5); // registry has 5 active ULBs
+    mockFormModel.findOne.mockReturnValue(q(mockFormInProgress)); // excelRowCount: 2
+    mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
+    mockEulbModel.findOne.mockReturnValue(q({ _id: new Types.ObjectId() }));
+    mockRowModel.findOne.mockReturnValue(q(null));
+
+    await expect(
+      service.finalSubmit(
+        {
+          stateId: stateOid.toString(),
+          yearId: YEAR_ID,
+          installment: 1,
+          data: {
+            excelFile: { fileName: 'f.xlsx', fileUrl: 'path/f.xlsx', fileSize: 1024 },
+            checkboxConfirmation: true,
           },
         },
         adminUser,
@@ -1148,18 +1133,37 @@ describe('DevolutionFormulaService', () => {
     ).rejects.toMatchObject({
       response: {
         message: 'Validation failed.',
-        errors: {
-          ulbCount: [
-            {
-              field: 'ulbCount',
-              code: 'mismatch',
-              message:
-                'ULB count entered (50) does not match the number of rows in the uploaded Devolution Formula Excel (2).',
-            },
-          ],
-        },
+        errors: { excelFile: [{ field: 'excelFile', code: 'excelInvalid' }] },
       },
     });
+  });
+
+  // finalSubmit: computed count is persisted as ulbCount on successful submit
+  it('finalSubmit persists computedActiveUlbCount as ulbCount in the final update', async () => {
+    mockUlbModel.countDocuments.mockResolvedValue(2);
+    mockFormModel.findOne.mockReturnValue(q(mockFormInProgress)); // excelRowCount: 2
+    mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
+    mockEulbModel.findOne.mockReturnValue(q({ _id: new Types.ObjectId() }));
+    mockRowModel.findOne.mockReturnValue(q(null));
+    mockFormModel.findOneAndUpdate.mockReturnValue(q({ _id: formOid }));
+
+    await service.finalSubmit(
+      {
+        stateId: stateOid.toString(),
+        yearId: YEAR_ID,
+        installment: 1,
+        data: {
+          excelFile: { fileName: 'f.xlsx', fileUrl: 'path/f.xlsx', fileSize: 1024 },
+          checkboxConfirmation: true,
+        },
+      },
+      adminUser,
+    );
+
+    const updatePayload = (mockFormModel.findOneAndUpdate.mock.calls as unknown[][][])[0][1] as {
+      $set: { ulbCount?: number };
+    };
+    expect(updatePayload.$set.ulbCount).toBe(2); // server-computed, not from dto
   });
 
   // Test 5: installment 2 always locked — error keyed to installment
@@ -1276,11 +1280,13 @@ describe('DevolutionFormulaService', () => {
 
   // installment 1 prerequisite met — EULB is UNDER_REVIEW_BY_MOHUA
   it('finalSubmit installment 1 prerequisite passes when EULB currentFormStatus is UNDER_REVIEW_BY_MOHUA', async () => {
-    mockFormModel.findOne.mockReturnValue(q({ ...mockFormInProgress, excelRowCount: 50 }));
+    mockUlbModel.countDocuments.mockResolvedValue(50); // must match excelRowCount below
+    mockFormModel.findOne.mockReturnValue(q({ ...mockFormInProgress, excelRowCount: 50, newUlbCount: 0 }));
     mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
     mockEulbModel.findOne.mockReturnValue(
       q({ _id: new Types.ObjectId(), currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }),
     );
+    mockRowModel.findOne.mockReturnValue(q(null)); // no identityModified rows
     mockFormModel.findOneAndUpdate.mockReturnValue(q({ _id: formOid }));
 
     await expect(
@@ -1506,6 +1512,7 @@ describe('Devolution Formula — getForm rowEditFields', () => {
     jest.clearAllMocks();
     mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
     mockDfFormJsonConfig.loadFields.mockResolvedValue(mockDfTypedFields);
+    mockUlbModel.countDocuments.mockResolvedValue(2);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -1517,6 +1524,7 @@ describe('Devolution Formula — getForm rowEditFields', () => {
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: mockRowModel },
         { provide: getModelToken(GrantAllocation.name), useValue: mockGrantAllocationModel },
         { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: mockEulbModel },
+        { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
         { provide: XvifcFormActorsService, useValue: mockActorsService },
         { provide: FileTokenService, useValue: mockFileTokenService },
         { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },

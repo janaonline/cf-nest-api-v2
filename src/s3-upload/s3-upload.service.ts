@@ -67,6 +67,6 @@ export class S3UploadService {
     const fileUrl = url.split('?')[0];
     const path = this.s3.getKeyFromS3Url(fileUrl);
 
-    return { url, fileAlias, fileUrl, path, fileSize: item.fileSize, pages: item.pages };
+    return { url, fileAlias, fileUrl, path, fileSize: item.fileSize, pages: item.pages, uploadId: item.uploadId };
   }
 }

@@ -43,4 +43,5 @@ export interface S3UrlResult {
   path: string;
   fileSize: number | null | undefined;
   pages: number | undefined;
+  uploadId?: string;
 }

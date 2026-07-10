@@ -79,9 +79,15 @@ export class DynamicFormValidationService {
   // ─── File normalization ────────────────────────────────────────────────────
 
   private normalizeFileForPayload(value: unknown): unknown {
-    const file = value as UploadedFileValue | null | undefined;
-    if (!file?.fileUrl) return value;
-    return { ...file, fileUrl: this.fileUrlNormalizer.toRawStoragePath(file.fileUrl) };
+    const file = value as (UploadedFileValue & { path?: string }) | null | undefined;
+    if (file?.fileUrl) {
+      return { ...file, fileUrl: this.fileUrlNormalizer.toRawStoragePath(file.fileUrl) };
+    }
+    // CommonFile shape (e.g. ULB's gazetteNotificationFile) stores the storage path as `path`.
+    if (file?.path) {
+      return { ...file, path: this.fileUrlNormalizer.toRawStoragePath(file.path) };
+    }
+    return value;
   }
 
   // ─── Condition evaluation ──────────────────────────────────────────────────
@@ -252,18 +258,23 @@ export class DynamicFormValidationService {
     }
 
     const file = value as Record<string, unknown>;
+    // File values arrive in one of two shapes: the standalone `{ fileName, fileUrl }` contract
+    // (most xvi-fc file fields) or the `CommonFile` contract `{ originalName, path }` (e.g.
+    // ULB's gazetteNotificationFile). Accept either so this shared validator works for both.
+    const fileNameValue = file['fileName'] ?? file['originalName'];
+    const fileUrlValue = file['fileUrl'] ?? file['path'];
 
     if (isFull) {
-      if (!file['fileName']) {
+      if (!fileNameValue) {
         errors.push({ field: key, message: reqMsg, code: 'missingFileName' });
       }
-      if (!file['fileUrl']) {
+      if (!fileUrlValue) {
         errors.push({ field: key, message: reqMsg, code: 'missingFileUrl' });
       }
     }
 
     if (allowedFileTypes && allowedFileTypes.length > 0) {
-      const fileName = typeof file['fileName'] === 'string' ? file['fileName'].toLowerCase() : '';
+      const fileName = typeof fileNameValue === 'string' ? fileNameValue.toLowerCase() : '';
       const mimeType = typeof file['mimeType'] === 'string' ? file['mimeType'].toLowerCase() : '';
       const allowed = allowedFileTypes.some(
         (ft) =>
@@ -281,9 +292,14 @@ export class DynamicFormValidationService {
       }
     }
 
-    if (maxFileSize !== undefined && typeof file['fileSize'] === 'number') {
-      const sizeMb = file['fileSize'] / (1024 * 1024);
-      if (sizeMb > maxFileSize) {
+    if (maxFileSize !== undefined) {
+      const sizeMb =
+        typeof file['fileSize'] === 'number'
+          ? file['fileSize'] / (1024 * 1024)
+          : typeof file['sizeKb'] === 'number'
+            ? file['sizeKb'] / 1024
+            : undefined;
+      if (sizeMb !== undefined && sizeMb > maxFileSize) {
         errors.push({ field: key, message: `File must not exceed ${maxFileSize} MB.`, code: 'maxFileSize' });
       }
     }
