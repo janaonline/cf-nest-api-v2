@@ -9,6 +9,7 @@ export const ULB_FORM_JSON_TYPE = 'ULB_MASTER';
 
 const OBJECT_ID_PATTERN = '^[0-9a-fA-F]{24}$';
 const MOBILE_PATTERN = '^[6-9]\\d{9}$';
+const CENSUS_CODE_PATTERN = '^\\d{6}$';
 
 /**
  * Fallback field definition used when no admin-configured FormJson document
@@ -81,9 +82,13 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
     label: '2011 Census Code',
     displayInlineLabel: true,
     formFieldType: 'text',
-    validations: [{ name: 'maxlength', validator: 20, message: 'Census code must be at most 20 characters.' }],
+    maxLength: 6,
+    validations: [
+      { name: 'maxlength', validator: 6, message: 'Census code must be at most 6 characters.' },
+      { name: 'pattern', validator: CENSUS_CODE_PATTERN, message: 'Census code must be a 6-digit number.' },
+    ],
     labelHint: '(if available)',
-    hintText: 'Not available? Enter 999999 as a 6-digit placeholder.',
+    hintText: 'Not available? Leave blank; it can be added later.',
   },
   // {
   //   key: 'sbCode',

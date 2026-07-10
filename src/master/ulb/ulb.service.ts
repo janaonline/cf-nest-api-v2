@@ -256,6 +256,9 @@ export class UlbService {
     const name = String(patch.name);
     await this.ensureNameNotTaken(name);
     patch.slug = this.buildSlug(name);
+    if (typeof patch.censusCode === 'string' && patch.censusCode.trim()) {
+      await this.ensureCensusCodeNotTaken(patch.censusCode);
+    }
 
     let stateId: Types.ObjectId;
     if (user.role === Role.STATE) {
@@ -291,6 +294,21 @@ export class UlbService {
 
     const existing = await this.ulbModel.exists(filter);
     if (existing) throw new BadRequestException('A ULB with this name already exists.');
+  }
+
+  /**
+   * Uniqueness guard for censusCode, checked ahead of the write so callers get a clean 400
+   * instead of relying solely on the schema's unique index (whose duplicate-key error only
+   * surfaces after the write is attempted). censusCode is optional — callers must skip this
+   * check entirely for an absent/blank value, matching the schema's sparse index which allows
+   * any number of documents with no censusCode.
+   */
+  private async ensureCensusCodeNotTaken(censusCode: string, excludeId?: string): Promise<void> {
+    const filter: FilterQuery<UlbDocument> = { censusCode: censusCode.trim() };
+    if (excludeId) filter._id = { $ne: new Types.ObjectId(excludeId) };
+
+    const existing = await this.ulbModel.exists(filter);
+    if (existing) throw new BadRequestException('A ULB with this census code already exists.');
   }
 
   private async persistUlb(patch: Record<string, unknown>) {
@@ -547,6 +565,10 @@ export class UlbService {
       const nameChanged = patch.name.trim().toLowerCase() !== existing.name?.trim().toLowerCase();
       if (nameChanged) await this.ensureNameNotTaken(patch.name, id);
       patch.slug = this.buildSlug(patch.name);
+    }
+    if (typeof patch.censusCode === 'string' && patch.censusCode.trim()) {
+      const censusCodeChanged = patch.censusCode.trim() !== (existing.censusCode ?? '').trim();
+      if (censusCodeChanged) await this.ensureCensusCodeNotTaken(patch.censusCode, id);
     }
 
     if (user.role === Role.STATE) {
