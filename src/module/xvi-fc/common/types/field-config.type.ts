@@ -140,6 +140,7 @@ export interface FieldConfig {
   validateWhen?: VisibleWhen;
   /** Clears/ignores the field value when enabledWhen evaluates false */
   clearValueWhenDisabled?: boolean;
+  disabled?: boolean;
   /** Optional UI hint for disabled state */
   disabledReason?: string;
   /** Array of validators matching the frontend Angular validator contract */

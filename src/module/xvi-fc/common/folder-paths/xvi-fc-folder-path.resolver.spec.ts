@@ -45,15 +45,15 @@ describe('buildXviFcFolderPath', () => {
   });
 
   it('builds EULB post-submission proof path without batchId', () => {
-    expect(buildXviFcFolderPath('elected-body/post-submission-update', BASE_CONTEXT)).toBe(
-      'xvi-fc/state/5dcf9d7416a06aed41c748f0/2026-27/elected-body/post-submission-update',
+    expect(buildXviFcFolderPath('elected-body/proof-of-election', BASE_CONTEXT)).toBe(
+      'xvi-fc/state/5dcf9d7416a06aed41c748f0/2026-27/elected-body/proof-of-election',
     );
   });
 
   it('appends batchId/document suffix when batchId is in context', () => {
     const ctx: XviFcFolderPathContext = { ...BASE_CONTEXT, batchId: 'batch-abc-123' };
-    expect(buildXviFcFolderPath('elected-body/post-submission-update', ctx)).toBe(
-      'xvi-fc/state/5dcf9d7416a06aed41c748f0/2026-27/elected-body/post-submission-update/batch-abc-123/document',
+    expect(buildXviFcFolderPath('elected-body/proof-of-election', ctx)).toBe(
+      'xvi-fc/state/5dcf9d7416a06aed41c748f0/2026-27/elected-body/proof-of-election/batch-abc-123/document',
     );
   });
 
@@ -151,7 +151,7 @@ describe('resolveXviFcFolderPathsInFormJson', () => {
       'sfc-status/atr-report',
       'sfc-status/gazette-notification',
       'elected-body/excels',
-      'elected-body/post-submission-update',
+      'elected-body/proof-of-election',
     ];
 
     const allFileFields: FieldConfig[] = subPaths.map((subPath) => ({
@@ -169,8 +169,8 @@ describe('resolveXviFcFolderPathsInFormJson', () => {
     expect(result.find((f) => f.key === 'elected-body/excels')?.folderPath).toBe(
       'xvi-fc/state/5dcf9d7416a06aed41c748f0/2026-27/elected-body/excels',
     );
-    expect(result.find((f) => f.key === 'elected-body/post-submission-update')?.folderPath).toBe(
-      'xvi-fc/state/5dcf9d7416a06aed41c748f0/2026-27/elected-body/post-submission-update',
+    expect(result.find((f) => f.key === 'elected-body/proof-of-election')?.folderPath).toBe(
+      'xvi-fc/state/5dcf9d7416a06aed41c748f0/2026-27/elected-body/proof-of-election',
     );
   });
 });

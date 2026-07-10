@@ -33,8 +33,9 @@ class EulbFileRefDto {
 }
 
 class FinalSubmitEulbDataDto {
+  @IsOptional()
   @IsNumber()
-  ulbCount!: number;
+  ulbCount?: number;
 
   @IsObject()
   @ValidateNested()

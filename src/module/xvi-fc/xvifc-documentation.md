@@ -1488,7 +1488,7 @@ Safe replace order enforced in `validateExcel` (`POST validate-excel`):
 | `SFC_ATR_REPORT`             | `sfc-status/atr-report`               |
 | `SFC_GAZETTE_NOTIFICATION`   | `sfc-status/gazette-notification`     |
 | `EULB_EXCEL`                 | `elected-body/elected-bodies-list`    |
-| `EULB_POST_SUBMISSION_PROOF` | `elected-body/post-submission-update` |
+| `EULB_POST_SUBMISSION_PROOF` | `elected-body/proof-of-election` |
 
 **Modified files**:
 
