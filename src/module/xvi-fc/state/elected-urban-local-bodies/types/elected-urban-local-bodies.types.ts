@@ -62,6 +62,7 @@ export interface EulbFileRefData {
   fileSize: number | null;
   mimeType?: string;
   s3Key?: string;
+  pageCount?: number | null;
 }
 
 /** Shape of the `data` field returned by POST validate-excel. */
@@ -217,6 +218,7 @@ export interface EulbBatchDocumentRef {
   fileSize: number;
   mimeType: string;
   s3Key?: string;
+  pageCount?: number | null;
 }
 
 export interface EulbPostSubmissionSubmitRowError {

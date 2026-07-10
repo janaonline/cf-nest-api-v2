@@ -120,7 +120,13 @@ describe('SfcStatusService', () => {
           useValue: { buildActorsAndStateName: jest.fn().mockReturnValue({ actors: [], stateName: 'Test State' }) },
         },
         { provide: ExcelService, useValue: { generateExcel: jest.fn() } },
-        { provide: FileTokenService, useValue: { signFileUrl: jest.fn().mockReturnValue('https://signed-url') } },
+        {
+          provide: FileTokenService,
+          useValue: {
+            signFileUrl: jest.fn().mockReturnValue('https://signed-url'),
+            createToken: jest.fn().mockReturnValue('mock-token'),
+          },
+        },
         { provide: ConfigService, useValue: { get: jest.fn().mockReturnValue('24h') } },
       ],
     }).compile();
@@ -179,6 +185,46 @@ describe('SfcStatusService', () => {
     it('successful response does not include errors field', async () => {
       const result = await service.saveDraft(validDto, adminUser, '127.0.0.1', 'jest');
       expect(result).not.toHaveProperty('errors');
+    });
+
+    it('persists file metadata with pageCount from the sanitized payload', async () => {
+      (validator.validateDraftAndBuildPayload as jest.Mock).mockReturnValue({
+        isValid: true,
+        errors: {},
+        sanitizedPayload: {
+          sfcReport: {
+            fileName: 'sfc-report.pdf',
+            fileUrl: 'state/sfc/sfc-report.pdf',
+            fileSize: 2048,
+            mimeType: 'application/pdf',
+            pageCount: 4,
+          },
+        },
+      });
+
+      await service.saveDraft(
+        {
+          stateId: stateOid.toString(),
+          yearId: yearOid.toString(),
+          data: {
+            sfcReport: {
+              fileName: 'sfc-report.pdf',
+              fileUrl: 'state/sfc/sfc-report.pdf',
+              fileSize: 2048,
+              mimeType: 'application/pdf',
+              pageCount: 4,
+            },
+          },
+        },
+        adminUser,
+        '127.0.0.1',
+        'jest',
+      );
+
+      // No existing doc → create path; the sanitized payload lands in `data` untouched
+      const createArg = (formModel['create'].mock.calls as unknown[][])[0][0] as Record<string, unknown>;
+      const savedFile = (createArg['data'] as Record<string, unknown>)['sfcReport'] as { pageCount?: number | null };
+      expect(savedFile.pageCount).toBe(4);
     });
   });
 
@@ -255,6 +301,35 @@ describe('SfcStatusService', () => {
       await expect(service.getForm(stateOid.toString(), yearOid.toString(), wrongState)).rejects.toThrow(
         ForbiddenException,
       );
+    });
+
+    it('returns the saved pageCount on hydrated file values alongside the signed URL', async () => {
+      const fileQuestion = { key: 'sfcReport', formFieldType: 'file', label: 'SFC Report', value: null };
+      (formJsonService.findActiveByDesignYearAndFormId as jest.Mock).mockResolvedValue({ data: [fileQuestion] });
+      (formJsonService.findByType as jest.Mock).mockResolvedValue({ data: [fileQuestion] });
+
+      formModel['findOne'] = jest.fn().mockReturnValue(
+        q({
+          ...mockFormDoc,
+          data: {
+            sfcReport: {
+              fileName: 'sfc-report.pdf',
+              fileUrl: 'state/sfc/sfc-report.pdf',
+              fileSize: 2048,
+              mimeType: 'application/pdf',
+              pageCount: 7,
+            },
+          },
+        }),
+      );
+
+      const result = await service.getForm(stateOid.toString(), yearOid.toString(), adminUser);
+      const questions = (result.data as Record<string, unknown>)['questions'] as Array<Record<string, unknown>>;
+      const fileQ = questions.find((question) => question['key'] === 'sfcReport');
+
+      const fileValue = fileQ!['value'] as { fileUrl: string; pageCount?: number | null };
+      expect(fileValue.pageCount).toBe(7);
+      expect(fileValue.fileUrl).not.toBe('state/sfc/sfc-report.pdf'); // re-signed, not the raw path
     });
   });
 });

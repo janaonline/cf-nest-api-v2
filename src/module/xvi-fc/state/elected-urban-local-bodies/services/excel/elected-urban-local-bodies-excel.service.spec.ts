@@ -259,6 +259,29 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
       expect(data.summary?.dbUlbCount).toBe(1);
       expect(data.validationStatus).toBe('VALID');
     });
+
+    it('accepts electedBodyExcelFile.pageCount: null and persists it on the form', async () => {
+      s3Service.getBuffer = jest.fn().mockResolvedValue(
+        makeXlsxBuffer([
+          {
+            censusCode: 'DBCODE1',
+            ulbName: 'DB City One',
+            electedBodyStatus: 'Not Constituted',
+            dateOfConstitution: '',
+            dateOfExpiry: '',
+            remarks: '',
+          },
+        ]),
+      );
+
+      const dto = makeDto();
+      dto.electedBodyExcelFile.pageCount = null;
+      await service.validateExcel(dto, adminUser);
+
+      // New form path (findOne → null): form is created with the normalized file metadata
+      const createArg = (formModel.create.mock.calls as unknown[][])[0][0] as Record<string, unknown>;
+      expect((createArg['electedBodyExcelFile'] as { pageCount?: number | null }).pageCount).toBeNull();
+    });
   });
 
   // ─── Count mismatch (DB_ULB row, fewer rows than registry) ───────────────
@@ -371,11 +394,35 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
 
       expect(rowModel.insertMany).toHaveBeenCalledTimes(1);
       const [docs] = rowModel.insertMany.mock.calls[0] as [Record<string, unknown>[]];
-      const rowDoc = docs[0] as Record<string, unknown>;
+      const rowDoc = docs[0];
 
       expect(rowDoc['validationStatus']).toBe('INVALID');
       expect(rowDoc['rowType']).toBe('EXTRA_ULB');
       expect((rowDoc['errors'] as Array<{ code: string }>).some((e) => e.code === 'unknownUlb')).toBe(true);
+    });
+
+    it('generated errorExcelFile metadata has pageCount: null', async () => {
+      s3Service.getBuffer = jest.fn().mockResolvedValue(
+        makeXlsxBuffer([
+          {
+            censusCode: 'NOT_IN_DB',
+            ulbName: 'Some New City',
+            electedBodyStatus: 'Not Constituted',
+            dateOfConstitution: '',
+            dateOfExpiry: '',
+            remarks: '',
+          },
+        ]),
+      );
+
+      await catchBadRequest(() => service.validateExcel(makeDto(), adminUser));
+
+      const updateCalls = formModel.findByIdAndUpdate.mock.calls as unknown[][];
+      const errorFileSet = updateCalls
+        .map((c) => (c[1] as Record<string, unknown>)?.['$set'] as Record<string, unknown> | undefined)
+        .find((s) => s?.['errorExcelFile'] !== undefined);
+      expect(errorFileSet).toBeDefined();
+      expect((errorFileSet?.['errorExcelFile'] as { pageCount?: number | null }).pageCount).toBeNull();
     });
 
     it('insertMany is still called before throwing newUlbsAdded (rows are written to DB)', async () => {
@@ -927,9 +974,7 @@ describe('ElectedUrbanLocalBodiesExcelService — revalidateExcel', () => {
         },
       ]);
 
-      await catchBadRequest(() =>
-        service.revalidateExcel(stateOid.toString(), yearOid.toString(), adminUser),
-      );
+      await catchBadRequest(() => service.revalidateExcel(stateOid.toString(), yearOid.toString(), adminUser));
 
       expect(rowModel.bulkWrite).toHaveBeenCalledTimes(1);
     });

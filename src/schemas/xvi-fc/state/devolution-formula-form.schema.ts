@@ -28,6 +28,9 @@ class DfFileRef {
 
   @Prop({ type: String })
   s3Key?: string;
+
+  @Prop({ type: Number, default: null })
+  pageCount?: number | null;
 }
 
 const DfFileRefSchema = SchemaFactory.createForClass(DfFileRef);

@@ -3,12 +3,14 @@ import {
   ArrayMinSize,
   IsArray,
   IsIn,
+  IsInt,
   IsMongoId,
   IsNotEmpty,
   IsNumber,
   IsOptional,
   IsPositive,
   IsString,
+  Min,
   ValidateNested,
 } from 'class-validator';
 import { ELECTED_BODY_STATUSES } from 'src/module/xvi-fc/state/elected-urban-local-bodies/constants/elected-urban-local-bodies.constants';
@@ -55,6 +57,11 @@ export class EulbPostSubmissionUpdateDocumentDto {
   @IsOptional()
   @IsString()
   s3Key?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  pageCount?: number | null;
 }
 
 export class SubmitEulbPostSubmissionUpdateDto {

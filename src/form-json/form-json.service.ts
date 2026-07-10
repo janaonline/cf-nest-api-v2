@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model, Types } from 'mongoose';
 import { FormJson, FormJsonDocument } from './schemas/form-json.schema';
@@ -10,20 +11,26 @@ import { RedisService } from 'src/core/services/redis/redis.service';
 
 @Injectable()
 export class FormJsonService {
+  /** Namespaces cache keys per environment; dev and stg share the same Redis instance. */
+  private readonly env: string;
+
   constructor(
     @InjectModel(FormJson.name)
     private readonly model: Model<FormJsonDocument>,
     private readonly redis: RedisService,
-  ) {}
+    private readonly config: ConfigService,
+  ) {
+    this.env = this.config.get<string>('NODE_ENV') ?? 'production';
+  }
 
   private getFormJsonCacheKey(designYearId: string, formId: number): string {
-    return `formJson:${designYearId}:${formId}`;
+    return `formJson:${this.env}:${designYearId}:${formId}`;
   }
 
   /**
    * Fetches the active FormJson for a specific design year and formId.
    * Returns the cached value from Redis when available (No TTL).
-   * Cache key format: `formJson:<designYearId>:<formId>`.
+   * Cache key format: `formJson:<env>:<designYearId>:<formId>`.
    */
   async findActiveByDesignYearAndFormId(designYearId: string, formId: number): Promise<IFormJson> {
     const key = this.getFormJsonCacheKey(designYearId, formId);
