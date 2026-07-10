@@ -1,12 +1,14 @@
 import { Type } from 'class-transformer';
 import {
   IsBoolean,
+  IsInt,
   IsMongoId,
   IsNotEmpty,
   IsNumber,
   IsObject,
   IsOptional,
   IsString,
+  Min,
   ValidateNested,
 } from 'class-validator';
 
@@ -30,6 +32,11 @@ class EulbFileRefDto {
   @IsOptional()
   @IsString()
   s3Key?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  pageCount?: number | null;
 }
 
 class SaveEulbDraftDataDto {

@@ -1056,6 +1056,7 @@ export class ElectedUrbanLocalBodiesExcelService {
         fileSize: (buffer as ArrayBuffer).byteLength,
         mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         s3Key,
+        pageCount: null,
       };
 
       await this.formModel.findByIdAndUpdate(formId, { $set: { errorExcelFile: fileRef, updatedBy } });

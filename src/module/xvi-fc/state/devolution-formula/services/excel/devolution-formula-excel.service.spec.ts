@@ -269,6 +269,64 @@ describe('DevolutionFormulaExcelService — safe dataset replace', () => {
     );
     expect(oldVersionDelete).toBeDefined();
   });
+
+  it('accepts excelFile.pageCount: null and persists it on the form excelFile', async () => {
+    mockFormModel.findOne.mockReturnValue(q(mockExistingForm));
+    mockRowModel.updateMany.mockReturnValue(q({ modifiedCount: 2 }));
+    mockRowModel.insertMany.mockResolvedValue([]);
+    mockFormModel.findByIdAndUpdate.mockReturnValue(q(null));
+    mockRowModel.deleteMany.mockReturnValue(q(null));
+
+    const buffer = makeXlsxBuffer([['C001', 'Alpha City', 500_000, 300_000, 200_000, 'population']]);
+    mockS3Service.getBuffer.mockResolvedValue(buffer);
+
+    await service.validateExcel(
+      {
+        stateId: stateOid.toString(),
+        yearId: YEAR_ID,
+        installment: 1,
+        excelFile: { fileName: 'test.xlsx', fileUrl: 'state/path/test.xlsx', fileSize: 1024, pageCount: null },
+      },
+      adminUser,
+    );
+
+    // The form update must carry the excelFile metadata with pageCount preserved
+    const updateCalls = mockFormModel.findByIdAndUpdate.mock.calls as unknown[][][];
+    const setWithExcelFile = updateCalls
+      .map((c) => (c[1] as Record<string, unknown>)?.['$set'] as Record<string, unknown> | undefined)
+      .find((s) => s?.['excelFile'] !== undefined);
+    expect(setWithExcelFile).toBeDefined();
+    expect((setWithExcelFile?.['excelFile'] as { pageCount?: number | null }).pageCount).toBeNull();
+  });
+
+  it('generated errorExcelFile metadata has pageCount: null', async () => {
+    mockFormModel.findOne.mockReturnValue(q(mockExistingForm));
+    mockRowModel.updateMany.mockReturnValue(q({ modifiedCount: 2 }));
+    mockRowModel.insertMany.mockResolvedValue([]);
+    mockFormModel.findByIdAndUpdate.mockReturnValue(q(null));
+    mockRowModel.deleteMany.mockReturnValue(q(null));
+
+    // Known-registry ULB with a negative installment amount → row error → error sheet generated
+    const buffer = makeXlsxBuffer([['C001', 'Alpha City', 500_000, -300_000, 200_000, 'population']]);
+    mockS3Service.getBuffer.mockResolvedValue(buffer);
+
+    await service.validateExcel(
+      {
+        stateId: stateOid.toString(),
+        yearId: YEAR_ID,
+        installment: 1,
+        excelFile: { fileName: 'test.xlsx', fileUrl: 'state/path/test.xlsx', fileSize: 1024, pageCount: null },
+      },
+      adminUser,
+    );
+
+    const updateCalls = mockFormModel.findByIdAndUpdate.mock.calls as unknown[][][];
+    const errorFileSet = updateCalls
+      .map((c) => (c[1] as Record<string, unknown>)?.['$set'] as Record<string, unknown> | undefined)
+      .find((s) => s?.['errorExcelFile'] !== undefined);
+    expect(errorFileSet).toBeDefined();
+    expect((errorFileSet?.['errorExcelFile'] as { pageCount?: number | null }).pageCount).toBeNull();
+  });
 });
 
 // ─── 2 · Revalidate behavior ─────────────────────────────────────────────────

@@ -112,6 +112,7 @@ export interface UploadedFileValue {
   fileUrl: string;
   fileSize: number | null;
   mimeType: string;
+  pageCount?: number | null;
 }
 
 // ─── Field config ─────────────────────────────────────────────────────────────

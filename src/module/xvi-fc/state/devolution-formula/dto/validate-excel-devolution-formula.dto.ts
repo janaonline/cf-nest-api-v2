@@ -1,5 +1,16 @@
 import { Type } from 'class-transformer';
-import { IsIn, IsMongoId, IsNotEmpty, IsNumber, IsObject, IsOptional, IsString, ValidateNested } from 'class-validator';
+import {
+  IsIn,
+  IsInt,
+  IsMongoId,
+  IsNotEmpty,
+  IsNumber,
+  IsObject,
+  IsOptional,
+  IsString,
+  Min,
+  ValidateNested,
+} from 'class-validator';
 import { DF_INSTALLMENTS, type DfInstallment } from '../constants/devolution-formula.constants';
 
 class DfExcelFileRefDto {
@@ -22,6 +33,11 @@ class DfExcelFileRefDto {
   @IsOptional()
   @IsString()
   s3Key?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  pageCount?: number | null;
 }
 
 export class ValidateExcelDevolutionFormulaDto {

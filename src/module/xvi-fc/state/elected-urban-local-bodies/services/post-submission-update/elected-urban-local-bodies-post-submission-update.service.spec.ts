@@ -247,9 +247,7 @@ describe('buildEligibleRowCondition', () => {
   it('uses $lt (strict less-than) so rows expiring exactly today or in the future are excluded', () => {
     const condition = buildEligibleRowCondition(TODAY);
     const orClauses = condition['$or'] as Array<Record<string, unknown>>;
-    const constitutedClause = orClauses.find((c) => c['electedBodyStatus'] === 'Constituted') as
-      | Record<string, unknown>
-      | undefined;
+    const constitutedClause = orClauses.find((c) => c['electedBodyStatus'] === 'Constituted');
     expect(constitutedClause?.['dateOfExpiry']).toEqual({ $lt: TODAY });
   });
 
@@ -831,7 +829,7 @@ describe('EulbPostSubmissionUpdateService', () => {
 
         await service.getEligibleRows(stateOid.toString(), yearOid.toString(), {}, adminUser);
 
-        const pipeline = (rowModel['aggregate'] as jest.Mock).mock.calls[0][0] as Array<Record<string, unknown>>;
+        const pipeline = rowModel['aggregate'].mock.calls[0][0] as Array<Record<string, unknown>>;
         const matchStage = pipeline[0]['$match'] as Record<string, unknown>;
         expect(matchStage).toMatchObject({ isActive: true, datasetVersion: 1 });
       });
@@ -850,7 +848,7 @@ describe('EulbPostSubmissionUpdateService', () => {
           adminUser,
         );
 
-        const pipeline = (rowModel['aggregate'] as jest.Mock).mock.calls[0][0] as Array<Record<string, unknown>>;
+        const pipeline = rowModel['aggregate'].mock.calls[0][0] as Array<Record<string, unknown>>;
         const matchStage = pipeline[0]['$match'] as Record<string, unknown>;
         expect(matchStage).not.toHaveProperty('$and');
         expect(matchStage).not.toHaveProperty('$or');
@@ -1423,6 +1421,26 @@ describe('EulbPostSubmissionUpdateService', () => {
       expect(doc['mimeType']).toBe('application/pdf');
     });
 
+    it('stores document.pageCount in the batch when the frontend sends a PDF page count', async () => {
+      await service.submitBatch(stateOid.toString(), yearOid.toString(), makeDto({ pageCount: 12 }), adminUser);
+
+      const updateCall = (formModel['findByIdAndUpdate'] as jest.Mock).mock.calls[0];
+      const push = (updateCall[1] as Record<string, unknown>)['$push'] as Record<string, unknown>;
+      const batch = push['postSubmissionUpdates'] as Record<string, unknown>;
+      const doc = batch['document'] as Record<string, unknown>;
+      expect(doc['pageCount']).toBe(12);
+    });
+
+    it('defaults document.pageCount to null in the stored batch when omitted (backward compatible)', async () => {
+      await service.submitBatch(stateOid.toString(), yearOid.toString(), makeDto(), adminUser);
+
+      const updateCall = (formModel['findByIdAndUpdate'] as jest.Mock).mock.calls[0];
+      const push = (updateCall[1] as Record<string, unknown>)['$push'] as Record<string, unknown>;
+      const batch = push['postSubmissionUpdates'] as Record<string, unknown>;
+      const doc = batch['document'] as Record<string, unknown>;
+      expect(doc['pageCount']).toBeNull();
+    });
+
     it('commits the MongoDB transaction on success', async () => {
       await service.submitBatch(stateOid.toString(), yearOid.toString(), makeDto(), adminUser);
       expect(mockSession['commitTransaction']).toHaveBeenCalled();
@@ -1468,7 +1486,7 @@ describe('EulbPostSubmissionUpdateService', () => {
     it('does not store document reference on row updates (only batchId reference)', async () => {
       await service.submitBatch(stateOid.toString(), yearOid.toString(), makeDto(), adminUser);
 
-      const rowUpdateCall = (rowModel['findByIdAndUpdate'] as jest.Mock).mock.calls[0];
+      const rowUpdateCall = rowModel['findByIdAndUpdate'].mock.calls[0];
       const rowSet = (rowUpdateCall[1] as Record<string, unknown>)['$set'] as Record<string, unknown>;
       expect(rowSet).not.toHaveProperty('document');
       expect(rowSet).toHaveProperty('lastUpdateBatchId');
@@ -1478,7 +1496,7 @@ describe('EulbPostSubmissionUpdateService', () => {
     it('pushes an updateHistory entry on each affected row', async () => {
       await service.submitBatch(stateOid.toString(), yearOid.toString(), makeDto(), adminUser);
 
-      const rowUpdateCall = (rowModel['findByIdAndUpdate'] as jest.Mock).mock.calls[0];
+      const rowUpdateCall = rowModel['findByIdAndUpdate'].mock.calls[0];
       const rowPush = (rowUpdateCall[1] as Record<string, unknown>)['$push'] as Record<string, unknown>;
       const entry = rowPush['updateHistory'] as Record<string, unknown>;
       expect(entry['source']).toBe('POST_SUBMISSION_UPDATE');

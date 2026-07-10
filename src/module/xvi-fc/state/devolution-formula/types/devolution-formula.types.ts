@@ -14,6 +14,7 @@ export interface DfFileRefData {
   fileSize: number | null;
   mimeType?: string;
   s3Key?: string;
+  pageCount?: number | null;
 }
 
 export interface DfValidationSummary {

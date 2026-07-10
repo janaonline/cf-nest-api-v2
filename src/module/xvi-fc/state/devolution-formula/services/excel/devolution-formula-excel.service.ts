@@ -904,6 +904,7 @@ export class DevolutionFormulaExcelService {
       fileSize: buffer.length,
       mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       s3Key,
+      pageCount: null,
     };
 
     await this.formModel

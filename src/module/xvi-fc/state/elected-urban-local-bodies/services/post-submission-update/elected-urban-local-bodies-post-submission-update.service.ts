@@ -380,6 +380,7 @@ export class EulbPostSubmissionUpdateService {
       fileSize: documentInput.fileSize,
       mimeType: documentInput.mimeType ?? 'application/pdf',
       s3Key: documentInput.s3Key,
+      pageCount: documentInput.pageCount ?? null,
     };
 
     const session = await this.formModel.db.startSession();

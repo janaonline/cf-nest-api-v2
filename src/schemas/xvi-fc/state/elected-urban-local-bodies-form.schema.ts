@@ -30,6 +30,9 @@ class EulbFileRef {
 
   @Prop({ type: String })
   s3Key?: string;
+
+  @Prop({ type: Number, default: null })
+  pageCount?: number | null;
 }
 
 const EulbFileRefSchema = SchemaFactory.createForClass(EulbFileRef);
@@ -41,6 +44,7 @@ class EulbPostSubmissionBatchDocument {
   @Prop({ type: Number, required: true }) fileSize!: number;
   @Prop({ type: String, required: true }) mimeType!: string;
   @Prop({ type: String }) s3Key?: string;
+  @Prop({ type: Number, default: null }) pageCount?: number | null;
 }
 const EulbPostSubmissionBatchDocumentSchema = SchemaFactory.createForClass(EulbPostSubmissionBatchDocument);
 
