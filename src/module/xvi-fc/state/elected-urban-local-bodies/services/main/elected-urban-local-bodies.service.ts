@@ -21,14 +21,14 @@ import {
 import { toObjectIdString } from 'src/common/utils/objectid.util';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
 import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
-import { FileUrlNormalizerService } from 'src/module/xvi-fc/common/services/file-url-normalizer.service';
+import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
+import type { FileInfo } from 'src/schemas/common/file.schema';
 import type { FormData } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.types';
 import type {
   FieldConfig,
   FieldSupportingContent,
   FormFieldOption,
   HydratedFieldConfig,
-  UploadedFileValue,
 } from 'src/module/xvi-fc/common/types/field-config.type';
 import {
   buildXviFcFolderPath,
@@ -58,6 +58,9 @@ import {
   EULB_ACTION_REGISTER_ULB,
   EULB_ACTION_REVALIDATE_EXCEL,
   EULB_ACTION_VIEW_UPLOADED_DATA,
+  EULB_EXCEL_ALLOWED_FILE_EXTENSIONS,
+  EULB_EXCEL_ALLOWED_MIME_TYPES,
+  EULB_EXCEL_MAX_FILE_SIZE_BYTES,
   EULB_FORM_NAME,
   TEMPLATE_HEADERS,
   buildEulbRegisterUlbUrl,
@@ -145,7 +148,7 @@ export class ElectedUrbanLocalBodiesService {
     private readonly excelService: ExcelService,
     private readonly fileTokenService: FileTokenService,
     private readonly config: ConfigService,
-    private readonly fileUrlNormalizer: FileUrlNormalizerService,
+    private readonly fileInfoNormalizer: FileInfoNormalizerService,
     private readonly eulbFormJsonConfig: EulbFormJsonConfigService,
   ) {}
 
@@ -448,12 +451,29 @@ export class ElectedUrbanLocalBodiesService {
     const filter = { state: stateOid, year: yearOid, formType: EULB_FORM_TYPE };
 
     // Compute active ULB count server-side; the client-submitted ulbCount is ignored.
-    const activeUlbCount = await this.ulbModel.countDocuments({ state: stateOid, isActive: true });
+    const [activeUlbCount, existing] = await Promise.all([
+      this.ulbModel.countDocuments({ state: stateOid, isActive: true }),
+      this.model
+        .findOne(filter, { _id: 1, currentFormStatus: 1, electedBodyExcelFile: 1 })
+        .lean<Pick<EulbFormLeanDoc, '_id' | 'currentFormStatus' | 'electedBodyExcelFile'>>()
+        .exec(),
+    ]);
 
-    const rawExcelFile = dto.data.electedBodyExcelFile;
-    const normalizedExcelFile = rawExcelFile?.fileUrl
-      ? { ...rawExcelFile, fileUrl: this.fileUrlNormalizer.toRawStoragePath(rawExcelFile.fileUrl) }
-      : rawExcelFile;
+    let normalizedExcelFile: FileInfo | null | undefined;
+    if (dto.data.electedBodyExcelFile !== undefined) {
+      const { file, errors: fileErrors } = this.fileInfoNormalizer.normalizeInboundFileInfo(
+        dto.data.electedBodyExcelFile as unknown as Record<string, unknown>,
+        existing?.electedBodyExcelFile,
+        {
+          fieldKey: 'electedBodyExcelFile',
+          allowedExtensions: [...EULB_EXCEL_ALLOWED_FILE_EXTENSIONS],
+          allowedMimeTypes: [...EULB_EXCEL_ALLOWED_MIME_TYPES],
+          maxSizeKb: EULB_EXCEL_MAX_FILE_SIZE_BYTES / 1024,
+        },
+      );
+      if (fileErrors.length > 0) throwXviFcValidationError({ electedBodyExcelFile: fileErrors });
+      normalizedExcelFile = file;
+    }
 
     const formData: FormData = {
       ulbCount: activeUlbCount,
@@ -463,8 +483,6 @@ export class ElectedUrbanLocalBodiesService {
 
     const result = this.validator.validateDraftAndBuildPayload(mainFormFields, formData);
     if (!result.isValid) throwXviFcValidationError(result.errors);
-
-    const existing = await this.model.findOne(filter, { _id: 1, currentFormStatus: 1 }).lean().exec();
 
     const fieldUpdates: Record<string, unknown> = {
       currentFormStatus: FORM_STATUS.IN_PROGRESS,
@@ -476,7 +494,7 @@ export class ElectedUrbanLocalBodiesService {
       fieldUpdates['checkboxConfirmation'] = result.sanitizedPayload['checkboxConfirmation'];
 
     if (existing) {
-      assertCanStateEditForm(existing.currentFormStatus);
+      assertCanStateEditForm(existing.currentFormStatus ?? FORM_STATUS.NOT_STARTED);
 
       const updated = await this.model.findOneAndUpdate(filter, { $set: fieldUpdates }, { new: true }).lean().exec();
 
@@ -552,6 +570,7 @@ export class ElectedUrbanLocalBodiesService {
         matchedDbUlbCount: 1,
         extraExcelRowCount: 1,
         activeDatasetVersion: 1,
+        electedBodyExcelFile: 1,
       })
       .lean()
       .exec();
@@ -559,15 +578,24 @@ export class ElectedUrbanLocalBodiesService {
     const fromStatus = existing?.currentFormStatus ?? FORM_STATUS.NOT_STARTED;
     assertCanStateFinalSubmitForm(fromStatus);
 
-    const normalizedExcelFile = {
-      ...dto.data.electedBodyExcelFile,
-      fileUrl: this.fileUrlNormalizer.toRawStoragePath(dto.data.electedBodyExcelFile.fileUrl),
-    };
+    const { file: normalizedExcelFile, errors: excelFileErrors } = this.fileInfoNormalizer.normalizeInboundFileInfo(
+      dto.data.electedBodyExcelFile as unknown as Record<string, unknown>,
+      existing?.electedBodyExcelFile as FileInfo | undefined,
+      {
+        fieldKey: 'electedBodyExcelFile',
+        allowedExtensions: [...EULB_EXCEL_ALLOWED_FILE_EXTENSIONS],
+        allowedMimeTypes: [...EULB_EXCEL_ALLOWED_MIME_TYPES],
+        maxSizeKb: EULB_EXCEL_MAX_FILE_SIZE_BYTES / 1024,
+      },
+    );
+    if (excelFileErrors.length > 0) throwXviFcValidationError({ electedBodyExcelFile: excelFileErrors });
 
-    // Full form-level validation using the computed active ULB count.
+    // `normalizedExcelFile` is `undefined` when the file is unchanged from what's already
+    // stored — fall back to the existing file so the required-field validator below still
+    // sees it as present (the raw, possibly-undefined value is used for the $set below).
     const formData: FormData = {
       ulbCount: activeUlbCount,
-      electedBodyExcelFile: normalizedExcelFile,
+      electedBodyExcelFile: normalizedExcelFile !== undefined ? normalizedExcelFile : existing?.electedBodyExcelFile,
       checkboxConfirmation: dto.data.checkboxConfirmation,
     };
     const validation = this.validator.validateFinalSubmitAndBuildPayload(mainFormFields, formData);
@@ -714,16 +742,18 @@ export class ElectedUrbanLocalBodiesService {
     const toStatus = FORM_STATUS.UNDER_REVIEW_BY_MOHUA;
     const now = new Date();
 
-    const fieldUpdates = {
+    const fieldUpdates: Record<string, unknown> = {
       currentFormStatus: toStatus,
       submittedBy: userOid,
       submittedAt: now,
       updatedBy: userOid,
       isDraft: false,
       ulbCount: activeUlbCount,
-      electedBodyExcelFile: normalizedExcelFile,
       checkboxConfirmation: dto.data.checkboxConfirmation,
     };
+    // Omit when unchanged (rather than `electedBodyExcelFile: undefined`) so Mongoose's
+    // FileInfo `timestamps` option doesn't re-stamp the stored subdocument.
+    if (normalizedExcelFile !== undefined) fieldUpdates['electedBodyExcelFile'] = normalizedExcelFile;
 
     const updated = await this.model
       .findOneAndUpdate({ _id: existing._id }, { $set: fieldUpdates }, { new: true })
@@ -776,11 +806,11 @@ export class ElectedUrbanLocalBodiesService {
             ? buildXviFcFolderPath(question.folderPathKey, folderPathContext)
             : question.folderPath;
 
-        const fileVal = rawValue as UploadedFileValue | null | undefined;
-        if (fileVal?.fileUrl) {
-          const signedUrl = this.signStorageFileUrl(fileVal.fileUrl, jwtExpiresMs);
-          value = { ...fileVal, fileUrl: signedUrl };
-        }
+        const fileVal = rawValue as FileInfo | null | undefined;
+        const hydrated = this.fileInfoNormalizer.hydrateFileInfoForResponse(fileVal ?? null, (p) =>
+          this.signStorageFileUrl(p, jwtExpiresMs),
+        );
+        if (hydrated) value = hydrated;
 
         if (question.key === 'electedBodyExcelFile') {
           return {
@@ -828,7 +858,7 @@ export class ElectedUrbanLocalBodiesService {
     const validationStatus = doc?.validationStatus ?? 'NOT_VALIDATED';
 
     const hasActiveDataset = activeDatasetVersion > 0 && excelRowCount > 0;
-    const hasUploadedExcel = !!(doc?.electedBodyExcelFile?.fileName || doc?.electedBodyExcelFile?.fileUrl);
+    const hasUploadedExcel = !!doc?.electedBodyExcelFile?.path;
 
     return [
       {

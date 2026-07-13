@@ -1,44 +1,7 @@
 import { Type } from 'class-transformer';
-import {
-  IsIn,
-  IsInt,
-  IsMongoId,
-  IsNotEmpty,
-  IsNumber,
-  IsObject,
-  IsOptional,
-  IsString,
-  Min,
-  ValidateNested,
-} from 'class-validator';
+import { IsIn, IsMongoId, IsNotEmpty, IsObject, ValidateNested } from 'class-validator';
+import { XviFcFileRefDto } from 'src/module/xvi-fc/common/dto/xvi-fc-file-ref.dto';
 import { DF_INSTALLMENTS, type DfInstallment } from '../constants/devolution-formula.constants';
-
-class DfExcelFileRefDto {
-  @IsString()
-  @IsNotEmpty()
-  fileName!: string;
-
-  @IsString()
-  @IsNotEmpty()
-  fileUrl!: string;
-
-  @IsOptional()
-  @IsNumber()
-  fileSize!: number | null;
-
-  @IsOptional()
-  @IsString()
-  mimeType?: string;
-
-  @IsOptional()
-  @IsString()
-  s3Key?: string;
-
-  @IsOptional()
-  @IsInt()
-  @Min(0)
-  pageCount?: number | null;
-}
 
 export class ValidateExcelDevolutionFormulaDto {
   @IsMongoId()
@@ -54,6 +17,6 @@ export class ValidateExcelDevolutionFormulaDto {
 
   @IsObject()
   @ValidateNested()
-  @Type(() => DfExcelFileRefDto)
-  excelFile!: DfExcelFileRefDto;
+  @Type(() => XviFcFileRefDto)
+  excelFile!: XviFcFileRefDto;
 }

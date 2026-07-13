@@ -11,6 +11,8 @@ import { DynamicFormValidationService } from '../../common/dynamic-form-validati
 import { XvifcFormActorsService } from '../../common/services/xvifc-form-actors.service';
 import { ExcelService } from 'src/services/excel/excel.service';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
+import { FileUrlNormalizerService } from '../../common/services/file-url-normalizer.service';
+import { FileInfoNormalizerService } from '../../common/services/file-info-normalizer.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
@@ -128,6 +130,8 @@ describe('SfcStatusService', () => {
           },
         },
         { provide: ConfigService, useValue: { get: jest.fn().mockReturnValue('24h') } },
+        { provide: FileUrlNormalizerService, useValue: { toRawStoragePath: jest.fn((v: string) => v) } },
+        FileInfoNormalizerService,
       ],
     }).compile();
 
@@ -313,10 +317,12 @@ describe('SfcStatusService', () => {
           ...mockFormDoc,
           data: {
             sfcReport: {
-              fileName: 'sfc-report.pdf',
-              fileUrl: 'state/sfc/sfc-report.pdf',
-              fileSize: 2048,
+              originalName: 'sfc-report.pdf',
+              path: 'state/sfc/sfc-report.pdf',
               mimeType: 'application/pdf',
+              sizeKb: 2,
+              createdAt: new Date('2026-01-01T00:00:00.000Z'),
+              updatedAt: new Date('2026-01-01T00:00:00.000Z'),
               pageCount: 7,
             },
           },
@@ -327,9 +333,9 @@ describe('SfcStatusService', () => {
       const questions = (result.data as Record<string, unknown>)['questions'] as Array<Record<string, unknown>>;
       const fileQ = questions.find((question) => question['key'] === 'sfcReport');
 
-      const fileValue = fileQ!['value'] as { fileUrl: string; pageCount?: number | null };
+      const fileValue = fileQ!['value'] as { path: string; pageCount?: number | null };
       expect(fileValue.pageCount).toBe(7);
-      expect(fileValue.fileUrl).not.toBe('state/sfc/sfc-report.pdf'); // re-signed, not the raw path
+      expect(fileValue.path).not.toBe('state/sfc/sfc-report.pdf'); // re-signed, not the raw path
     });
   });
 });
