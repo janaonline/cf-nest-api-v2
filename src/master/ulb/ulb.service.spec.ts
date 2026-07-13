@@ -45,7 +45,7 @@ describe('UlbService', () => {
     db?: unknown;
   };
   let stateModel: { findById: jest.Mock; find: jest.Mock };
-  let userModel: { create: jest.Mock; findOne: jest.Mock };
+  let userModel: { create: jest.Mock; findOne: jest.Mock; updateMany: jest.Mock };
   let formJsonService: { findByType: jest.Mock };
   let dynamicFormValidation: { validateFinalSubmitAndBuildPayload: jest.Mock; validateDraftAndBuildPayload: jest.Mock };
   let emailQueueService: { addEmailJob: jest.Mock };
@@ -83,6 +83,7 @@ describe('UlbService', () => {
         lean: jest.fn().mockReturnThis(),
         exec: jest.fn().mockResolvedValue(null),
       }),
+      updateMany: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue({ acknowledged: true }) }),
     };
     formJsonService = { findByType: jest.fn().mockRejectedValue(new NotFoundException()) };
     dynamicFormValidation = {
@@ -283,6 +284,50 @@ describe('UlbService', () => {
       expect(emailQueueService.addEmailJob).toHaveBeenCalledWith(
         expect.objectContaining({ to: 'commissioner@ulb.gov.in', templateName: './ulb-member-invite' }),
       );
+    });
+
+    it('creates the primary contact login inactive for a STATE (PENDING) submission', async () => {
+      const ulbId = new Types.ObjectId();
+      dynamicFormValidation.validateFinalSubmitAndBuildPayload.mockReturnValue({
+        isValid: true,
+        errors: {},
+        sanitizedPayload: {
+          code: 'AP012',
+          name: 'Pending ULB',
+          state: stateId,
+          ulbType: ulbTypeId,
+          primaryContactName: 'K. Suresh Babu',
+          primaryContactEmail: 'pending-contact@ulb.gov.in',
+          primaryContactMobile: '9849001236',
+        },
+      });
+      ulbModel.create.mockResolvedValue({ _id: ulbId, toObject: () => ({ _id: ulbId, code: 'AP012' }) });
+
+      await service.create({ data: {} }, stateUser);
+
+      expect(userModel.create).toHaveBeenCalledWith(expect.objectContaining({ isActive: false, status: 'APPROVED' }));
+    });
+
+    it('creates the primary contact login active for an ADMIN (auto-approved) submission', async () => {
+      const ulbId = new Types.ObjectId();
+      dynamicFormValidation.validateFinalSubmitAndBuildPayload.mockReturnValue({
+        isValid: true,
+        errors: {},
+        sanitizedPayload: {
+          code: 'AP013',
+          name: 'Approved ULB',
+          state: stateId,
+          ulbType: ulbTypeId,
+          primaryContactName: 'K. Suresh Babu',
+          primaryContactEmail: 'approved-contact@ulb.gov.in',
+          primaryContactMobile: '9849001237',
+        },
+      });
+      ulbModel.create.mockResolvedValue({ _id: ulbId, toObject: () => ({ _id: ulbId, code: 'AP013' }) });
+
+      await service.create({ data: {} }, adminUser);
+
+      expect(userModel.create).toHaveBeenCalledWith(expect.objectContaining({ isActive: true, status: 'APPROVED' }));
     });
 
     it('rejects when the primary contact email/mobile is already registered to an active account', async () => {
@@ -623,6 +668,10 @@ describe('UlbService', () => {
       expect(updateArg.$set['approval.status']).toBe('APPROVED');
       expect(updateArg.$set['approval.reviewedBy']).toBeInstanceOf(Types.ObjectId);
       expect(result).toEqual({ _id: 'x', approval: { status: 'APPROVED' } });
+      expect(userModel.updateMany).toHaveBeenCalledWith(
+        { ulb: id, isDeleted: false },
+        { $set: { isActive: true } },
+      );
     });
 
     it('throws NotFoundException when the ULB does not exist', async () => {
