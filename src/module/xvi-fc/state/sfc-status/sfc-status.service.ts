@@ -665,19 +665,21 @@ export class SfcStatusService {
   }
 
   /**
-   * Signs a relative S3 file path into an encrypted download token URL.
-   * Prepends AWS_STORAGE_URL to form the full path, encrypts with FileTokenService,
-   * and returns the app download endpoint URL with the token as a query param.
+   * Signs a relative S3 file path into an encrypted download token URL, and
+   * returns the app download endpoint URL with the token as a query param.
+   * Signs the bare relative key directly (no AWS_STORAGE_URL reconstruction) —
+   * the download handler's `S3Service.getKeyFromS3Url` already accepts a bare
+   * key as-is, and naively concatenating AWS_STORAGE_URL + relativePath without
+   * a separator previously corrupted the resulting "S3 key" whenever
+   * AWS_STORAGE_URL had no trailing slash.
    *
    * @param relativePath - S3 key as stored in the DB.
    * @param expMs        - Token lifetime in milliseconds from now.
    */
   private signStorageFileUrl(relativePath: string, expMs: number): string {
     if (!relativePath) return '';
-    const storageUrl = this.config.get<string>('AWS_STORAGE_URL', '');
-    const fullPath = storageUrl ? `${storageUrl}${relativePath}` : relativePath;
     const token = this.fileTokenService.createToken({
-      path: fullPath,
+      path: relativePath,
       disposition: 'inline',
       exp: Date.now() + expMs,
     });
