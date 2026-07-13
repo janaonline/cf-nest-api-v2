@@ -1,4 +1,6 @@
 import type { Types } from 'mongoose';
+import type { FileInfo } from 'src/schemas/common/file.schema';
+import type { HydratedFileInfoResponse } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
 import type { FieldConfig, HydratedFieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
 import type { DfInstallment, DfValidationStatus } from '../constants/devolution-formula.constants';
 
@@ -6,15 +8,6 @@ export interface DfFormPermissions {
   canView: boolean;
   canEdit: boolean;
   canFinalSubmit: boolean;
-}
-
-export interface DfFileRefData {
-  fileName: string;
-  fileUrl: string;
-  fileSize: number | null;
-  mimeType?: string;
-  s3Key?: string;
-  pageCount?: number | null;
 }
 
 export interface DfValidationSummary {
@@ -94,7 +87,7 @@ export interface DfRowValidationError {
 export interface DfValidateExcelResponseData {
   validationStatus: DfValidationStatus;
   summary: DfValidationSummary;
-  errorExcelFile?: DfFileRefData;
+  errorExcelFile?: HydratedFileInfoResponse;
   rowErrors: DfRowValidationError[];
 }
 
@@ -123,8 +116,8 @@ export interface DfFormLeanDoc {
   totalMoHUAAllocation?: number;
   totalAllocatedSum?: number;
   grantAllocationRef?: Types.ObjectId;
-  excelFile?: DfFileRefData;
-  errorExcelFile?: DfFileRefData;
+  excelFile?: FileInfo;
+  errorExcelFile?: FileInfo;
   checkboxConfirmation?: boolean;
   ulbCount?: number;
   mohuaRemarks?: string | null;

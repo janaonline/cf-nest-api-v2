@@ -1,6 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
+import { FileInfo, FileInfoSchema } from 'src/schemas/common/file.schema';
 
 export const EULB_FORM_TYPE = 'ELECTED_URBAN_LOCAL_BODIES';
 
@@ -15,44 +16,10 @@ export type EulbValidationStatus = 'NOT_VALIDATED' | 'VALID' | 'INVALID';
 export type EulbFormDocument = HydratedDocument<ElectedUrbanLocalBodiesForm>;
 
 @Schema({ _id: false })
-class EulbFileRef {
-  @Prop({ type: String, default: '' })
-  fileName!: string;
-
-  @Prop({ type: String, default: '' })
-  fileUrl!: string;
-
-  @Prop({ type: Number, default: null })
-  fileSize!: number | null;
-
-  @Prop({ type: String })
-  mimeType?: string;
-
-  @Prop({ type: String })
-  s3Key?: string;
-
-  @Prop({ type: Number, default: null })
-  pageCount?: number | null;
-}
-
-const EulbFileRefSchema = SchemaFactory.createForClass(EulbFileRef);
-
-@Schema({ _id: false })
-class EulbPostSubmissionBatchDocument {
-  @Prop({ type: String, required: true }) fileName!: string;
-  @Prop({ type: String, required: true }) fileUrl!: string;
-  @Prop({ type: Number, required: true }) fileSize!: number;
-  @Prop({ type: String, required: true }) mimeType!: string;
-  @Prop({ type: String }) s3Key?: string;
-  @Prop({ type: Number, default: null }) pageCount?: number | null;
-}
-const EulbPostSubmissionBatchDocumentSchema = SchemaFactory.createForClass(EulbPostSubmissionBatchDocument);
-
-@Schema({ _id: false })
 class EulbPostSubmissionUpdateBatch {
   @Prop({ type: MongooseSchema.Types.ObjectId, required: true }) batchId!: Types.ObjectId;
   @Prop({ type: String, enum: ['APPLIED'], required: true }) status!: string;
-  @Prop({ type: EulbPostSubmissionBatchDocumentSchema, required: true }) document!: EulbPostSubmissionBatchDocument;
+  @Prop({ type: FileInfoSchema, required: true }) document!: FileInfo;
   @Prop({ type: [{ type: MongooseSchema.Types.ObjectId, ref: 'ElectedUrbanLocalBodiesRow' }] })
   rowIds!: Types.ObjectId[];
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true }) submittedBy!: Types.ObjectId;
@@ -79,11 +46,11 @@ export class ElectedUrbanLocalBodiesForm {
   @Prop({ type: Number })
   ulbCount?: number;
 
-  @Prop({ type: EulbFileRefSchema })
-  electedBodyExcelFile?: EulbFileRef;
+  @Prop({ type: FileInfoSchema })
+  electedBodyExcelFile?: FileInfo;
 
-  @Prop({ type: EulbFileRefSchema })
-  errorExcelFile?: EulbFileRef;
+  @Prop({ type: FileInfoSchema })
+  errorExcelFile?: FileInfo;
 
   @Prop({ type: Boolean })
   checkboxConfirmation?: boolean;

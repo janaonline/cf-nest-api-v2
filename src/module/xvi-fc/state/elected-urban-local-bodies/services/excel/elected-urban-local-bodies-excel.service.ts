@@ -34,6 +34,9 @@ import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import {
   EXCEL_HEADER_MAP,
   ERROR_EXCEL_HEADERS,
+  EULB_EXCEL_ALLOWED_FILE_EXTENSIONS,
+  EULB_EXCEL_ALLOWED_MIME_TYPES,
+  EULB_EXCEL_MAX_FILE_SIZE_BYTES,
 } from 'src/module/xvi-fc/state/elected-urban-local-bodies/constants/elected-urban-local-bodies.constants';
 import type { ValidateElectedUrbanLocalBodiesExcelDto } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/validate-elected-urban-local-bodies-excel.dto';
 import {
@@ -44,12 +47,16 @@ import {
 import { EulbFormJsonConfigService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/form-json/elected-urban-local-bodies-form-json.service';
 import { getFieldsByType } from 'src/module/xvi-fc/state/elected-urban-local-bodies/helpers/elected-urban-local-bodies-form-json.helpers';
 import type {
-  EulbFileRefData,
   EulbRevalidateExcelResponseData,
   EulbRowValidationError,
   EulbValidateExcelResponseData,
   EulbValidationSummary,
 } from 'src/module/xvi-fc/state/elected-urban-local-bodies/types/elected-urban-local-bodies.types';
+import {
+  FileInfoNormalizerService,
+  type HydratedFileInfoResponse,
+} from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
+import type { FileInfo } from 'src/schemas/common/file.schema';
 
 interface UlbLean {
   _id: Types.ObjectId;
@@ -95,6 +102,7 @@ export class ElectedUrbanLocalBodiesExcelService {
     private readonly config: ConfigService,
     private readonly fileTokenService: FileTokenService,
     private readonly eulbFormJsonConfig: EulbFormJsonConfigService,
+    private readonly fileInfoNormalizer: FileInfoNormalizerService,
   ) {}
 
   async validateExcel(
@@ -108,22 +116,41 @@ export class ElectedUrbanLocalBodiesExcelService {
     const yearOid = new Types.ObjectId(dto.yearId);
     const userOid = new Types.ObjectId(user._id);
 
-    // 1. Normalize file URL to permanent S3 path (FE may echo back a signed URL)
-    const normalizedFile = {
-      ...dto.electedBodyExcelFile,
-      fileUrl: this.toRawStoragePath(dto.electedBodyExcelFile.fileUrl),
-    };
-
-    // 2. File metadata validation
-    this.validateFileMetadata(normalizedFile);
-
-    // 3. Load active DB ULBs + check for existing form in parallel (no mutual dependency)
+    // 1. Load active DB ULBs + check for existing form in parallel (no mutual dependency)
     const formFilter = { state: stateOid, year: yearOid, formType: EULB_FORM_TYPE };
     const [dbUlbsRaw, existing] = await Promise.all([
       this.ulbModel.find({ state: stateOid, isActive: true }).select('_id name censusCode sbCode').lean().exec(),
-      this.formModel.findOne(formFilter, { _id: 1, currentFormStatus: 1, activeDatasetVersion: 1 }).lean().exec(),
+      this.formModel
+        .findOne(formFilter, { _id: 1, currentFormStatus: 1, activeDatasetVersion: 1, electedBodyExcelFile: 1 })
+        .lean()
+        .exec(),
     ]);
     const dbUlbs = dbUlbsRaw as UlbLean[];
+
+    // 2. Normalize + validate the inbound canonical file object (path, extension/MIME, size)
+    const { file: normalizedFile, errors: fileErrors } = this.fileInfoNormalizer.normalizeInboundFileInfo(
+      dto.electedBodyExcelFile as unknown as Record<string, unknown>,
+      existing?.electedBodyExcelFile,
+      {
+        fieldKey: 'electedBodyExcelFile',
+        allowedExtensions: [...EULB_EXCEL_ALLOWED_FILE_EXTENSIONS],
+        allowedMimeTypes: [...EULB_EXCEL_ALLOWED_MIME_TYPES],
+        maxSizeKb: EULB_EXCEL_MAX_FILE_SIZE_BYTES / 1024,
+      },
+    );
+    if (fileErrors.length > 0) throwXviFcValidationError({ electedBodyExcelFile: fileErrors });
+    // `normalizedFile` is `undefined` when the incoming path matches the already-stored
+    // file — fall back to the existing stored file for reads below; only the raw
+    // `normalizedFile` is written to $set later, so an unchanged file's Mongoose-managed
+    // timestamps aren't disturbed.
+    const effectiveFile = normalizedFile !== undefined ? normalizedFile : existing?.electedBodyExcelFile;
+    if (!effectiveFile) {
+      throwXviFcValidationError({
+        electedBodyExcelFile: [
+          { field: 'electedBodyExcelFile', code: 'required', message: 'electedBodyExcelFile is required.' },
+        ],
+      });
+    }
 
     // Derive count from already-loaded list — no extra query.
     const computedActiveUlbCount = dbUlbs.length;
@@ -132,8 +159,8 @@ export class ElectedUrbanLocalBodiesExcelService {
     const newVersion = currentVersion + 1;
     const formId: Types.ObjectId = existing ? existing._id : new Types.ObjectId();
 
-    // 4. Read and parse Excel from S3 (use normalized path)
-    const buffer = await this.s3Service.getBuffer(normalizedFile.fileUrl);
+    // 3. Read and parse Excel from S3 (use normalized path)
+    const buffer = await this.s3Service.getBuffer(effectiveFile.path);
     // cellDates:false (the default) keeps date cells as their raw Excel serial numbers.
     // We convert serials to UTC midnight directly via excelSerialToUtcDate(), which avoids
     // the timezone-shift that cellDates:true introduces when creating JS Date objects.
@@ -311,8 +338,7 @@ export class ElectedUrbanLocalBodiesExcelService {
 
       // Step B: Upsert form with all summary fields, normalized file, and new activeDatasetVersion.
       // ulbCount is NOT persisted from the client — it is managed via the active ULB registry.
-      const formSummaryFields = {
-        electedBodyExcelFile: normalizedFile,
+      const formSummaryFields: Record<string, unknown> = {
         dbUlbCount: computedActiveUlbCount,
         maxAllowedExcelRows,
         excelRowCount,
@@ -326,6 +352,9 @@ export class ElectedUrbanLocalBodiesExcelService {
         lastExcelUploadedBy: userOid,
         updatedBy: userOid,
       };
+      // Omit when unchanged (rather than `electedBodyExcelFile: undefined`) so Mongoose's
+      // FileInfo `timestamps` option doesn't re-stamp the stored subdocument.
+      if (normalizedFile !== undefined) formSummaryFields['electedBodyExcelFile'] = normalizedFile;
 
       if (existing) {
         await this.formModel.findByIdAndUpdate(existing._id, { $set: formSummaryFields }).lean().exec();
@@ -359,7 +388,7 @@ export class ElectedUrbanLocalBodiesExcelService {
     }
 
     // 12. Generate error Excel if there are row errors
-    let errorExcelFile: EulbFileRefData | undefined;
+    let errorExcelFile: FileInfo | undefined;
     if (errorRowCount > 0) {
       errorExcelFile = await this.generateAndStoreErrorExcel(processedRows, formId, userOid);
     }
@@ -411,7 +440,7 @@ export class ElectedUrbanLocalBodiesExcelService {
     const responseData: EulbValidateExcelResponseData = {
       validationStatus: formValidationStatus,
       summary,
-      errorExcelFile,
+      errorExcelFile: this.hydrateErrorExcelFile(errorExcelFile),
       errors: rowErrors,
     };
 
@@ -642,12 +671,12 @@ export class ElectedUrbanLocalBodiesExcelService {
     }
 
     // Case B: no active rows, but uploaded file exists — re-parse and create rows
-    const storedFileUrl = (form.electedBodyExcelFile as { fileUrl?: string } | undefined)?.fileUrl;
-    if (!storedFileUrl) {
+    const storedFilePath = form.electedBodyExcelFile?.path;
+    if (!storedFilePath) {
       throw new BadRequestException('No uploaded Excel data found to revalidate.');
     }
 
-    return this.revalidateFromStoredFile(form, storedFileUrl, userOid, stateOid, yearOid, yearId);
+    return this.revalidateFromStoredFile(form, storedFilePath, userOid, stateOid, yearOid, yearId);
   }
 
   // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -889,25 +918,6 @@ export class ElectedUrbanLocalBodiesExcelService {
     return xviFcSuccess(message, { validationSummary, errors: flatErrors });
   }
 
-  private validateFileMetadata(file: { fileName: string; fileSize: number | null; mimeType?: string }): void {
-    const name = file.fileName.toLowerCase();
-    const isValidType = name.endsWith('.xlsx') || name.endsWith('.xls');
-    if (!isValidType) {
-      throwXviFcValidationError({
-        electedBodyExcelFile: [
-          { field: 'electedBodyExcelFile', code: 'invalidFileType', message: 'Only xlsx and xls files are allowed.' },
-        ],
-      });
-    }
-    if (file.fileSize !== null && file.fileSize / (1024 * 1024) > 20) {
-      throwXviFcValidationError({
-        electedBodyExcelFile: [
-          { field: 'electedBodyExcelFile', code: 'maxFileSize', message: 'File must not exceed 20 MB.' },
-        ],
-      });
-    }
-  }
-
   /** Builds a map from normalized camelCase key → column index. */
   private buildColIndexMap(headerRow: string[]): Map<string, number> {
     const map = new Map<string, number>();
@@ -994,35 +1004,16 @@ export class ElectedUrbanLocalBodiesExcelService {
   }
 
   /**
-   * If `fileUrl` is a signed download URL echoed back by the FE, decodes the token to recover
-   * the original S3-relative path. Passes through raw S3 paths unchanged.
-   */
-  private toRawStoragePath(fileUrl: string): string {
-    if (!fileUrl) return fileUrl;
-    const baseUrl = this.config.get<string>('BASE_URL', '');
-    const signedPrefix = `${baseUrl}file/download?signature=`;
-    if (!fileUrl.startsWith(signedPrefix)) return fileUrl;
-    const token = fileUrl.slice(signedPrefix.length);
-    let decoded: { path: string };
-    try {
-      decoded = this.fileTokenService.parseToken(token);
-    } catch {
-      throw new BadRequestException('The file URL has expired. Please reload the page and try again.');
-    }
-    const storageUrl = this.config.get<string>('AWS_STORAGE_URL', '');
-    return storageUrl && decoded.path.startsWith(storageUrl) ? decoded.path.slice(storageUrl.length) : decoded.path;
-  }
-
-  /**
    * Generates an error Excel with an extra "Errors" column and uploads to S3.
    * Stores the resulting file metadata on the form document as `errorExcelFile`.
+   * Backend-generated file: bypasses the client DTO/normalizer, owns both timestamps.
    * Returns the file metadata on success, undefined if generation fails.
    */
   private async generateAndStoreErrorExcel(
     rows: ProcessedRow[],
     formId: Types.ObjectId,
     updatedBy: Types.ObjectId,
-  ): Promise<EulbFileRefData | undefined> {
+  ): Promise<FileInfo | undefined> {
     try {
       const excelRows = rows.map((r) => ({
         censusCode: r.censusCode ?? '',
@@ -1041,8 +1032,6 @@ export class ElectedUrbanLocalBodiesExcelService {
       const buffer = await this.excelService.generateExcel(ERROR_EXCEL_HEADERS, excelRows, 'Validation Errors');
 
       const s3Key = `state/elected-body-error-excels/${formId.toString()}-errors.xlsx`;
-      const storageUrl = this.config.get<string>('AWS_STORAGE_URL', '');
-      const fileUrl = storageUrl ? `${storageUrl}${s3Key}` : s3Key;
 
       await this.s3Service.uploadPrivate(
         s3Key,
@@ -1050,13 +1039,18 @@ export class ElectedUrbanLocalBodiesExcelService {
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       );
 
-      const fileRef: EulbFileRefData = {
-        fileName: `elected-body-errors-${formId.toString()}.xlsx`,
-        fileUrl,
-        fileSize: (buffer as ArrayBuffer).byteLength,
+      const now = new Date();
+      const fileRef: FileInfo = {
+        originalName: `elected-body-errors-${formId.toString()}.xlsx`,
+        name: '',
+        path: s3Key,
         mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        s3Key,
+        extension: 'xlsx',
+        sizeKb: (buffer as ArrayBuffer).byteLength / 1024,
         pageCount: null,
+        sha256: '',
+        createdAt: now,
+        updatedAt: now,
       };
 
       await this.formModel.findByIdAndUpdate(formId, { $set: { errorExcelFile: fileRef, updatedBy } });
@@ -1065,6 +1059,18 @@ export class ElectedUrbanLocalBodiesExcelService {
     } catch {
       return undefined;
     }
+  }
+
+  private hydrateErrorExcelFile(file: FileInfo | null | undefined): HydratedFileInfoResponse | undefined {
+    return (
+      this.fileInfoNormalizer.hydrateFileInfoForResponse(file ?? null, (p) => {
+        try {
+          return this.fileTokenService.signFileUrl(p);
+        } catch {
+          return p;
+        }
+      }) ?? undefined
+    );
   }
 
   // ─── Scope enforcement ────────────────────────────────────────────────────────

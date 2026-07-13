@@ -11,6 +11,7 @@ import { ExcelService } from 'src/services/excel/excel.service';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
 import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
 import { FileUrlNormalizerService } from 'src/module/xvi-fc/common/services/file-url-normalizer.service';
+import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { ConfigService } from '@nestjs/config';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
@@ -316,6 +317,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           { provide: FileTokenService, useValue: null },
           { provide: ConfigService, useValue: null },
           { provide: FileUrlNormalizerService, useValue: null },
+          { provide: FileInfoNormalizerService, useValue: null },
           { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
         ],
       }).compile();
@@ -564,6 +566,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           { provide: FileTokenService, useValue: null },
           { provide: ConfigService, useValue: null },
           { provide: FileUrlNormalizerService, useValue: null },
+          { provide: FileInfoNormalizerService, useValue: null },
           { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
         ],
       }).compile();
@@ -699,6 +702,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           { provide: FileTokenService, useValue: mockFileTokenService },
           { provide: ConfigService, useValue: mockConfig },
           { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
+          FileInfoNormalizerService,
           { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
         ],
       }).compile();
@@ -785,7 +789,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           errorRowCount: 1,
           extraExcelRowCount: 2,
           validationStatus: 'INVALID',
-          electedBodyExcelFile: { fileName: 'test.xlsx', fileUrl: 'state/test.xlsx' },
+          electedBodyExcelFile: { originalName: 'test.xlsx', path: 'state/test.xlsx' },
         }),
       );
       // adminUser has ADMIN scope so canEdit depends on form status (IN_PROGRESS → can edit)
@@ -814,7 +818,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           errorRowCount: 0,
           extraExcelRowCount: 0,
           validationStatus: 'VALID',
-          electedBodyExcelFile: { fileName: 'test.xlsx', fileUrl: 'state/test.xlsx' },
+          electedBodyExcelFile: { originalName: 'test.xlsx', path: 'state/test.xlsx' },
         }),
       );
       const result = await service.getForm(stateOid.toString(), yearOid.toString(), adminUser);
@@ -857,7 +861,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           errorRowCount: 1,
           extraExcelRowCount: 1,
           validationStatus: 'INVALID',
-          electedBodyExcelFile: { fileName: 'test.xlsx', fileUrl: 'state/test.xlsx' },
+          electedBodyExcelFile: { originalName: 'test.xlsx', path: 'state/test.xlsx' },
         }),
       );
       const result = await service.getForm(stateOid.toString(), yearOid.toString(), adminUser);
@@ -886,7 +890,14 @@ describe('ElectedUrbanLocalBodiesService', () => {
           errorRowCount: 0,
           extraExcelRowCount: 0,
           validationStatus: 'VALID',
-          electedBodyExcelFile: { fileName: 'test.xlsx', fileUrl: 'state/test.xlsx', fileSize: 1024, pageCount: null },
+          electedBodyExcelFile: {
+            originalName: 'test.xlsx',
+            path: 'state/test.xlsx',
+            mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            sizeKb: 1,
+            createdAt: '2026-01-01T00:00:00.000Z',
+            pageCount: null,
+          },
         }),
       );
 
@@ -933,6 +944,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           { provide: FileTokenService, useValue: null },
           { provide: ConfigService, useValue: null },
           { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
+          FileInfoNormalizerService,
           { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
         ],
       }).compile();
@@ -982,9 +994,11 @@ describe('ElectedUrbanLocalBodiesService', () => {
           yearId: yearOid.toString(),
           data: {
             electedBodyExcelFile: {
-              fileName: 'test.xlsx',
-              fileUrl: 'state/test.xlsx',
-              fileSize: 1024,
+              originalName: 'test.xlsx',
+              path: 'state/test.xlsx',
+              mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+              sizeKb: 1,
+              createdAt: '2026-01-01T00:00:00.000Z',
               pageCount: null,
             },
             checkboxConfirmation: true,
@@ -1051,7 +1065,13 @@ describe('ElectedUrbanLocalBodiesService', () => {
       yearId: yearOid.toString(),
       data: {
         ulbCount: 999, // client sends tampered value — should be ignored
-        electedBodyExcelFile: { fileName: 'test.xlsx', fileUrl: 'state/test.xlsx', fileSize: 1000 },
+        electedBodyExcelFile: {
+          originalName: 'test.xlsx',
+          path: 'state/test.xlsx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          sizeKb: 0.9765625,
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
         checkboxConfirmation: true,
       },
     };
@@ -1075,6 +1095,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           { provide: FileTokenService, useValue: null },
           { provide: ConfigService, useValue: null },
           { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
+          FileInfoNormalizerService,
           { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
         ],
       }).compile();
@@ -1104,9 +1125,11 @@ describe('ElectedUrbanLocalBodiesService', () => {
           data: {
             ...baseDto.data,
             electedBodyExcelFile: {
-              fileName: 'test.xlsx',
-              fileUrl: 'state/test.xlsx',
-              fileSize: 1000,
+              originalName: 'test.xlsx',
+              path: 'state/test.xlsx',
+              mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+              sizeKb: 1,
+              createdAt: '2026-01-01T00:00:00.000Z',
               pageCount: null,
             },
           },

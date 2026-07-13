@@ -1,4 +1,6 @@
 import type { Types } from 'mongoose';
+import type { FileInfo } from 'src/schemas/common/file.schema';
+import type { HydratedFileInfoResponse } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
 import type { FieldConfig, HydratedFieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
 import type { EulbValidationStatus } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
 import type {
@@ -55,21 +57,11 @@ export interface EulbRowValidationError {
   value?: unknown;
 }
 
-/** File reference shape used for electedBodyExcelFile and errorExcelFile. */
-export interface EulbFileRefData {
-  fileName: string;
-  fileUrl: string;
-  fileSize: number | null;
-  mimeType?: string;
-  s3Key?: string;
-  pageCount?: number | null;
-}
-
 /** Shape of the `data` field returned by POST validate-excel. */
 export interface EulbValidateExcelResponseData {
   validationStatus: EulbValidationStatus;
   summary: EulbValidationSummary;
-  errorExcelFile?: EulbFileRefData;
+  errorExcelFile?: HydratedFileInfoResponse;
   errors: EulbRowValidationError[];
 }
 
@@ -212,15 +204,6 @@ export interface EulbPostSubmissionUpdateValidateData {
   totalRowCount: number;
 }
 
-export interface EulbBatchDocumentRef {
-  fileName: string;
-  fileUrl: string;
-  fileSize: number;
-  mimeType: string;
-  s3Key?: string;
-  pageCount?: number | null;
-}
-
 export interface EulbPostSubmissionSubmitRowError {
   rowId: string;
   rowNumber: number;
@@ -232,7 +215,7 @@ export interface EulbPostSubmissionSubmitRowError {
 export interface EulbPostSubmissionUpdateSubmitData {
   batchId: string;
   updatedRowCount: number;
-  document: EulbBatchDocumentRef;
+  document: HydratedFileInfoResponse;
   validationSummary: EulbValidationSummary;
 }
 
@@ -248,13 +231,8 @@ export interface EulbFormLeanDoc {
   submittedAt?: Date;
   currentFormStatus?: number;
   ulbCount?: number;
-  electedBodyExcelFile?: {
-    fileName: string;
-    fileUrl: string;
-    fileSize: number | null;
-    mimeType?: string;
-    s3Key?: string;
-  };
+  electedBodyExcelFile?: FileInfo;
+  errorExcelFile?: FileInfo;
   checkboxConfirmation?: boolean;
   dbUlbCount?: number;
   maxAllowedExcelRows?: number;

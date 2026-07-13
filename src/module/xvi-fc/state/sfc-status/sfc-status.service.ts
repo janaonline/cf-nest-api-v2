@@ -31,6 +31,8 @@ import {
 } from '../../../../schemas/xvi-fc/state/sfc-status-history.schema';
 import { DynamicFormValidationService } from '../../common/dynamic-form-validation/dynamic-form-validation.service';
 import { XvifcFormActorsService } from '../../common/services/xvifc-form-actors.service';
+import { FileInfoNormalizerService } from '../../common/services/file-info-normalizer.service';
+import { FileInfo } from '../../../../schemas/common/file.schema';
 
 import type {
   FieldConfig,
@@ -38,9 +40,9 @@ import type {
   FormJson,
   HydratedFieldConfig,
 } from '../../common/dynamic-form-validation/dynamic-form-validation.types';
-import { XviFcApiResponse } from '../../common/response/xvi-fc-api-response';
+import { XviFcApiResponse, XviFcValidationErrorMap } from '../../common/response/xvi-fc-api-response';
 import { throwXviFcValidationError, xviFcSuccess } from '../../common/response/xvi-fc-response.util';
-import type { FormFieldOption, UploadedFileValue } from '../../common/types/field-config.type';
+import type { FormFieldOption } from '../../common/types/field-config.type';
 import {
   buildXviFcFolderPath,
   type XviFcFolderPathContext,
@@ -122,6 +124,7 @@ export class SfcStatusService {
     private readonly formJsonService: FormJsonService,
     private readonly validator: DynamicFormValidationService,
     private readonly xvifcFormActorsService: XvifcFormActorsService,
+    private readonly fileInfoNormalizer: FileInfoNormalizerService,
     private readonly excelService: ExcelService,
     private readonly fileTokenService: FileTokenService,
     private readonly config: ConfigService,
@@ -219,14 +222,17 @@ export class SfcStatusService {
     const result = this.validator.validateDraftAndBuildPayload(formQuestions, dto.data as FormData);
     if (!result.isValid) throwXviFcValidationError(result.errors);
 
-    const sanitizedPayload = result.sanitizedPayload;
-
     const stateOid = new Types.ObjectId(dto.stateId);
     const yearOid = new Types.ObjectId(dto.yearId);
     const userOid = new Types.ObjectId(user._id);
     const filter = { state: stateOid, year: yearOid, formType: SFC_STATUS_FORM_TYPE };
 
-    const existing = await this.model.findOne(filter, { _id: 1, currentFormStatus: 1 }).lean().exec();
+    const existing = await this.model
+      .findOne(filter, { _id: 1, currentFormStatus: 1, data: 1 })
+      .lean<{ _id: Types.ObjectId; currentFormStatus: number; data?: FormData }>()
+      .exec();
+
+    const sanitizedPayload = this.normalizeFileFields(result.sanitizedPayload, formQuestions, existing?.data ?? {});
 
     if (existing) {
       assertCanStateEditForm(existing.currentFormStatus);
@@ -309,7 +315,10 @@ export class SfcStatusService {
     const userOid = new Types.ObjectId(user._id);
     const filter = { state: stateOid, year: yearOid, formType: SFC_STATUS_FORM_TYPE };
 
-    const existing = await this.model.findOne(filter, { _id: 1, currentFormStatus: 1 }).lean().exec();
+    const existing = await this.model
+      .findOne(filter, { _id: 1, currentFormStatus: 1, data: 1 })
+      .lean<{ _id: Types.ObjectId; currentFormStatus: number; data?: FormData }>()
+      .exec();
     const fromStatus = existing?.currentFormStatus ?? FORM_STATUS.NOT_STARTED;
 
     assertCanStateFinalSubmitForm(fromStatus);
@@ -317,7 +326,7 @@ export class SfcStatusService {
     const validation = this.validator.validateFinalSubmitAndBuildPayload(formQuestions, dto.data as FormData);
     if (!validation.isValid) throwXviFcValidationError(validation.errors);
 
-    const sanitizedPayload = validation.sanitizedPayload;
+    const sanitizedPayload = this.normalizeFileFields(validation.sanitizedPayload, formQuestions, existing?.data ?? {});
     const toStatus = FORM_STATUS.UNDER_REVIEW_BY_MOHUA;
     const now = new Date();
 
@@ -418,6 +427,48 @@ export class SfcStatusService {
   // ─── Helpers ─────────────────────────────────────────────────────────────────
 
   /**
+   * Rebuilds every file-type field in a validated payload into the canonical FileInfo
+   * shape, discarding any client-supplied `updatedAt` and any other stray keys. When
+   * the normalized incoming path matches the existing stored path, the stored FileInfo
+   * (both timestamps) is preserved unchanged. Throws a field-keyed XviFc validation
+   * error if any file field fails normalization (bad ISO date, size, or type).
+   */
+  private normalizeFileFields(payload: FormData, formQuestions: FieldConfig[], existingData: FormData): FormData {
+    const errors: XviFcValidationErrorMap = {};
+    const normalized: FormData = { ...payload };
+    const now = new Date();
+
+    for (const field of formQuestions) {
+      if (field.formFieldType !== 'file') continue;
+      if (!Object.prototype.hasOwnProperty.call(payload, field.key)) continue;
+
+      const raw = payload[field.key];
+      if (raw === null || raw === undefined) {
+        normalized[field.key] = null;
+        continue;
+      }
+
+      const existingFile = existingData[field.key] as FileInfo | undefined;
+      const maxSizeKb = field.maxFileSize !== undefined ? field.maxFileSize * 1024 : undefined;
+      const { file, errors: fieldErrors } = this.fileInfoNormalizer.normalizeInboundFileInfo(
+        raw as Record<string, unknown>,
+        existingFile,
+        { fieldKey: field.key, allowedExtensions: field.allowedFileTypes, maxSizeKb },
+      );
+
+      if (fieldErrors.length > 0) {
+        errors[field.key] = fieldErrors;
+        continue;
+      }
+
+      normalized[field.key] = file !== undefined ? { ...file, createdAt: now, updatedAt: now } : existingFile;
+    }
+
+    if (Object.keys(errors).length > 0) throwXviFcValidationError(errors);
+    return normalized;
+  }
+
+  /**
    * Merges saved form data onto the question template in one O(n) pass.
    * For each question: uses saved value if the key exists in savedData,
    * otherwise keeps the template default. File-type questions additionally
@@ -444,12 +495,11 @@ export class SfcStatusService {
             ? buildXviFcFolderPath(question.folderPathKey, folderPathContext)
             : question.folderPath;
 
-        const fileVal = value as UploadedFileValue | null | undefined;
-        if (fileVal?.fileUrl) {
-          const signedUrl = this.signStorageFileUrl(fileVal.fileUrl, jwtExpiresMs);
-          return { ...question, folderPath: resolvedFolderPath, value: { ...fileVal, fileUrl: signedUrl } };
-        }
-        return { ...question, folderPath: resolvedFolderPath, value };
+        const fileVal = value as FileInfo | null | undefined;
+        const hydrated = this.fileInfoNormalizer.hydrateFileInfoForResponse(fileVal ?? null, (p) =>
+          this.signStorageFileUrl(p, jwtExpiresMs),
+        );
+        return { ...question, folderPath: resolvedFolderPath, value: hydrated ?? value };
       }
 
       return { ...question, value };
@@ -588,9 +638,11 @@ export class SfcStatusService {
   }
 
   /**
-   * Extracts the four file sub-fields from an uploaded-file value.
-   * The fileUrl is signed with a 1-week expiry via FileTokenService.
-   * Returns empty strings for absent or malformed values.
+   * Extracts the four file sub-fields from a canonical FileInfo value.
+   * The path is signed into a download URL with a 1-week expiry via FileTokenService.
+   * Column keys/labels/units are unchanged from the legacy dump contract; only the
+   * source fields read (canonical FileInfo instead of the old fileName/fileUrl/fileSize
+   * shape) have changed. Returns empty strings for absent or malformed values.
    */
   private extractFileColumns(value: unknown): {
     fileName: string;
@@ -602,13 +654,13 @@ export class SfcStatusService {
       return { fileName: '', fileUrl: '', fileSize: '', mimeType: '' };
     }
 
-    const f = value as Record<string, unknown>;
-    const rawUrl = typeof f['fileUrl'] === 'string' ? f['fileUrl'] : '';
+    const f = value as Partial<FileInfo>;
+    const rawPath = typeof f.path === 'string' ? f.path : '';
     return {
-      fileName: typeof f['fileName'] === 'string' ? f['fileName'] : '',
-      fileUrl: this.signStorageFileUrl(rawUrl, 7 * 24 * 60 * 60 * 1000),
-      fileSize: typeof f['fileSize'] === 'number' ? (f['fileSize'] / 1024 / 1024).toFixed(2) + ' MB' : '',
-      mimeType: typeof f['mimeType'] === 'string' ? f['mimeType'] : '',
+      fileName: typeof f.originalName === 'string' ? f.originalName : '',
+      fileUrl: this.signStorageFileUrl(rawPath, 7 * 24 * 60 * 60 * 1000),
+      fileSize: typeof f.sizeKb === 'number' ? (f.sizeKb / 1024).toFixed(2) + ' MB' : '',
+      mimeType: typeof f.mimeType === 'string' ? f.mimeType : '',
     };
   }
 
