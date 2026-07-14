@@ -32,6 +32,26 @@ export function canUlbSubmitForm(status: number): boolean {
 }
 
 /**
+ * Throws ForbiddenException if the current form status does not allow a ULB user to save/edit.
+ * @param status - Current `currentFormStatus` value from the form document.
+ */
+export function assertCanUlbEditForm(status: number): void {
+  if (!canUlbEditForm(status)) {
+    throw new ForbiddenException(`Form cannot be edited when status is ${getFormStatusLabel(status)}.`);
+  }
+}
+
+/**
+ * Throws ForbiddenException if the current form status does not allow a ULB user to submit.
+ * @param status - Current `currentFormStatus` value from the form document.
+ */
+export function assertCanUlbSubmitForm(status: number): void {
+  if (!canUlbSubmitForm(status)) {
+    throw new ForbiddenException(`Form cannot be submitted when status is ${getFormStatusLabel(status)}.`);
+  }
+}
+
+/**
  * Returns true if a STATE user may save or edit a state form in the given status.
  */
 export function canStateEditForm(status: number): boolean {

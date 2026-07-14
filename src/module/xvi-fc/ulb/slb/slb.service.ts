@@ -1,4 +1,419 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model, Types } from 'mongoose';
+import type { AuthUser } from 'src/module/auth/auth-user.interface';
+import { AccessLevel, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
+import { FORM_STATUS, getFormStatusLabel } from 'src/common/constants/form-status.constants';
+import {
+  assertCanUlbEditForm,
+  assertCanUlbSubmitForm,
+  canUlbEditForm,
+  canUlbSubmitForm,
+} from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
+import { toObjectIdString } from 'src/common/utils/objectid.util';
+import { FileTokenService } from 'src/core/file-token/file-token.service';
+import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
+import type { FieldConfig, FormData, HydratedFieldConfig } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.types';
+import type { UploadedFileValue } from 'src/module/xvi-fc/common/types/field-config.type';
+import type { XvifcFormActor } from 'src/module/xvi-fc/common/types/xvifc-form-actors.type';
+import {
+  buildXviFcFolderPath,
+  type XviFcFolderPathContext,
+} from 'src/module/xvi-fc/common/folder-paths/xvi-fc-folder-path.resolver';
+import { YearIdToLabel } from 'src/core/constants/years';
+import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
+import { throwXviFcValidationError, xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
+import { SLB_FORM_ID, SLB_FORM_TYPE, SlbForm, SlbFormDocument } from 'src/schemas/xvi-fc/ulb/slb-form.schema';
+import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
+import { SlbFormJsonConfigService } from './services/slb-form-json.service';
+import { getSlbFieldsByType } from './helpers/slb-form-json.helpers';
+import type { SaveSlbDto } from './dto/save-slb.dto';
+import type { SlbFormGetResponseData, SlbFormPermissions } from './slb.types';
+
+type PopulatedNameRef = { _id?: Types.ObjectId; name?: string };
+
+type SlbFormLeanDoc = {
+  _id: Types.ObjectId;
+  ulb?: Types.ObjectId | PopulatedNameRef;
+  createdBy?: Types.ObjectId | PopulatedNameRef;
+  updatedBy?: Types.ObjectId | PopulatedNameRef;
+  submittedBy?: Types.ObjectId | PopulatedNameRef;
+  createdAt?: Date;
+  updatedAt?: Date;
+  submittedAt?: Date;
+  currentFormStatus?: number;
+  data?: unknown;
+};
 
 @Injectable()
-export class SlbService {}
+export class SlbService {
+  constructor(
+    @InjectModel(SlbForm.name)
+    private readonly model: Model<SlbFormDocument>,
+    @InjectModel(Ulb.name)
+    private readonly ulbModel: Model<UlbDocument>,
+    private readonly validator: DynamicFormValidationService,
+    private readonly fileTokenService: FileTokenService,
+    private readonly slbFormJsonConfig: SlbFormJsonConfigService,
+  ) {}
+
+  /** Returns the SLB question config array from the DB for frontend rendering. */
+  async getQuestions(): Promise<XviFcApiResponse<FieldConfig[]>> {
+    const fields = await this.slbFormJsonConfig.loadFields();
+    return xviFcSuccess('SLB questions fetched.', getSlbFieldsByType(fields, 'SLB_MAIN_FORM_FIELDS'));
+  }
+
+  /**
+   * Returns the hydrated SLB form for a given ULB and year.
+   * ULB users may only fetch their own ULB's form; STATE users may fetch any ULB within
+   * their own state (read-only); ADMIN may fetch any ULB.
+   */
+  async getForm(ulbId: string, yearId: string, user: AuthUser): Promise<XviFcApiResponse<SlbFormGetResponseData>> {
+    const effectiveUlbId = await this.resolveEffectiveUlbId(user, ulbId);
+    await this.assertCanReadSlb(user, effectiveUlbId);
+
+    const ulbOid = new Types.ObjectId(effectiveUlbId);
+    const yearOid = new Types.ObjectId(yearId);
+    const designYear = YearIdToLabel[yearId];
+    if (!designYear) throw new NotFoundException(`Design year not found for yearId: ${yearId}`);
+
+    const doc = await this.model
+      .findOne({ ulb: ulbOid, year: yearOid, formType: SLB_FORM_TYPE, isDeleted: false })
+      .populate('ulb', 'name')
+      .populate('createdBy', 'name')
+      .populate('updatedBy', 'name')
+      .populate('submittedBy', 'name')
+      .lean<SlbFormLeanDoc>()
+      .exec();
+
+    const fields = await this.slbFormJsonConfig.loadFields(yearId);
+    const mainFields = getSlbFieldsByType(fields, 'SLB_MAIN_FORM_FIELDS');
+
+    const currentFormStatus = doc?.currentFormStatus ?? FORM_STATUS.NOT_STARTED;
+    const savedData: FormData = (doc?.data ?? {}) as FormData;
+    const folderPathContext: XviFcFolderPathContext = { _id: effectiveUlbId, designYear, role: 'ulb' };
+    const questions = this.hydrateQuestions(mainFields, savedData, folderPathContext);
+    const permissions = this.buildFormPermissions(user, effectiveUlbId, currentFormStatus);
+    const { actors, ulbName } = this.buildActorsAndUlbName(doc);
+
+    const responseData: SlbFormGetResponseData = {
+      _id: doc ? String(doc._id) : null,
+      formName: SLB_FORM_TYPE,
+      formId: SLB_FORM_ID,
+      ulbName,
+      ulbId: effectiveUlbId,
+      yearId,
+      currentFormStatus,
+      currentFormStatusLabel: getFormStatusLabel(currentFormStatus),
+      questions,
+      permissions,
+      actors,
+      meta: { version: 1 },
+    };
+
+    return xviFcSuccess('SLB form fetched.', responseData);
+  }
+
+  /**
+   * Saves the SLB form as a draft.
+   * Runs partial validation — absent required fields are allowed; requiredTrue and all
+   * format validators are still enforced on any provided value.
+   * Upserts by ulb + year + formType. Sets status to IN_PROGRESS.
+   */
+  async saveDraft(dto: SaveSlbDto, user: AuthUser): Promise<XviFcApiResponse> {
+    const effectiveUlbId = await this.resolveEffectiveUlbId(user, dto.ulbId);
+    await this.assertCanSubmitSlb(user, effectiveUlbId);
+
+    const fields = await this.slbFormJsonConfig.loadFields(dto.yearId);
+    const mainFields = getSlbFieldsByType(fields, 'SLB_MAIN_FORM_FIELDS');
+    const result = this.validator.validateDraftAndBuildPayload(mainFields, dto.data as FormData);
+    if (!result.isValid) throwXviFcValidationError(result.errors);
+
+    const sanitizedPayload = result.sanitizedPayload;
+
+    const ulbOid = new Types.ObjectId(effectiveUlbId);
+    const yearOid = new Types.ObjectId(dto.yearId);
+    const userOid = new Types.ObjectId(user._id);
+    const filter = { ulb: ulbOid, year: yearOid, formType: SLB_FORM_TYPE };
+
+    const existing = await this.model.findOne(filter, { _id: 1, currentFormStatus: 1 }).lean().exec();
+
+    if (existing) {
+      assertCanUlbEditForm(existing.currentFormStatus);
+
+      const updated = await this.model
+        .findOneAndUpdate(
+          filter,
+          { $set: { data: sanitizedPayload, currentFormStatus: FORM_STATUS.IN_PROGRESS, updatedBy: userOid } },
+          { new: true },
+        )
+        .lean()
+        .exec();
+
+      return xviFcSuccess('SLB form saved as draft.', {
+        ...updated,
+        currentFormStatusLabel: getFormStatusLabel(FORM_STATUS.IN_PROGRESS),
+      });
+    }
+
+    const created = await this.model.create({
+      ulb: ulbOid,
+      year: yearOid,
+      formType: SLB_FORM_TYPE,
+      data: sanitizedPayload,
+      currentFormStatus: FORM_STATUS.IN_PROGRESS,
+      createdBy: userOid,
+      updatedBy: userOid,
+      isActive: true,
+      isDeleted: false,
+    });
+
+    return xviFcSuccess('SLB form saved as draft.', {
+      ...created.toObject(),
+      currentFormStatusLabel: getFormStatusLabel(FORM_STATUS.IN_PROGRESS),
+    });
+  }
+
+  /**
+   * Final-submits the SLB form for a given ULB and year to the State DMA.
+   * Supports one-shot submit: creates the record if none exists yet.
+   * Runs full validation — all visible required fields must be present and valid.
+   * Transitions status to UNDER_REVIEW_BY_STATE.
+   */
+  async finalSubmit(dto: SaveSlbDto, user: AuthUser): Promise<XviFcApiResponse> {
+    const effectiveUlbId = await this.resolveEffectiveUlbId(user, dto.ulbId);
+    await this.assertCanSubmitSlb(user, effectiveUlbId);
+
+    const fields = await this.slbFormJsonConfig.loadFields(dto.yearId);
+    const mainFields = getSlbFieldsByType(fields, 'SLB_MAIN_FORM_FIELDS');
+
+    const ulbOid = new Types.ObjectId(effectiveUlbId);
+    const yearOid = new Types.ObjectId(dto.yearId);
+    const userOid = new Types.ObjectId(user._id);
+    const filter = { ulb: ulbOid, year: yearOid, formType: SLB_FORM_TYPE };
+
+    const existing = await this.model.findOne(filter, { _id: 1, currentFormStatus: 1 }).lean().exec();
+    const fromStatus = existing?.currentFormStatus ?? FORM_STATUS.NOT_STARTED;
+
+    assertCanUlbSubmitForm(fromStatus);
+
+    const validation = this.validator.validateFinalSubmitAndBuildPayload(mainFields, dto.data as FormData);
+    if (!validation.isValid) throwXviFcValidationError(validation.errors);
+
+    const sanitizedPayload = validation.sanitizedPayload;
+    const toStatus = FORM_STATUS.UNDER_REVIEW_BY_STATE;
+    const now = new Date();
+
+    let result: Record<string, unknown>;
+
+    if (existing) {
+      const updated = await this.model
+        .findOneAndUpdate(
+          { _id: existing._id },
+          {
+            $set: {
+              data: sanitizedPayload,
+              currentFormStatus: toStatus,
+              submittedBy: userOid,
+              submittedAt: now,
+              updatedBy: userOid,
+            },
+          },
+          { new: true },
+        )
+        .lean()
+        .exec();
+
+      result = (updated ?? {}) as Record<string, unknown>;
+    } else {
+      const created = await this.model.create({
+        ulb: ulbOid,
+        year: yearOid,
+        formType: SLB_FORM_TYPE,
+        data: sanitizedPayload,
+        currentFormStatus: toStatus,
+        submittedBy: userOid,
+        submittedAt: now,
+        createdBy: userOid,
+        updatedBy: userOid,
+        isActive: true,
+        isDeleted: false,
+      });
+
+      result = created.toObject() as unknown as Record<string, unknown>;
+    }
+
+    return xviFcSuccess('SLB form submitted to State DMA successfully.', {
+      ...result,
+      currentFormStatusLabel: getFormStatusLabel(toStatus),
+    });
+  }
+
+  // ─── Hydration helpers ─────────────────────────────────────────────────────
+
+  private hydrateQuestions(
+    questions: FieldConfig[],
+    savedData: FormData,
+    folderPathContext: XviFcFolderPathContext,
+  ): HydratedFieldConfig[] {
+    return questions.map((question) => {
+      const value = Object.prototype.hasOwnProperty.call(savedData, question.key)
+        ? savedData[question.key]
+        : question.value;
+
+      if (question.formFieldType === 'file') {
+        const resolvedFolderPath = question.folderPathKey
+          ? buildXviFcFolderPath(question.folderPathKey, folderPathContext)
+          : question.folderPath;
+
+        const fileVal = value as UploadedFileValue | null | undefined;
+        if (fileVal?.fileUrl) {
+          try {
+            const signedUrl = this.fileTokenService.signFileUrl(fileVal.fileUrl);
+            return { ...question, folderPath: resolvedFolderPath, value: { ...fileVal, fileUrl: signedUrl } };
+          } catch {
+            // keep raw if signing fails
+          }
+        }
+        return { ...question, folderPath: resolvedFolderPath, value };
+      }
+
+      return { ...question, value };
+    });
+  }
+
+  /** Builds the audit-actor timeline and resolves the ULB name from a lean populated form document. */
+  private buildActorsAndUlbName(doc: SlbFormLeanDoc | null): { actors: XvifcFormActor[]; ulbName: string } {
+    const getPopulatedName = (value: unknown): string | undefined => {
+      if (value === null || value === undefined || typeof value !== 'object') return undefined;
+      const name = (value as Record<string, unknown>)['name'];
+      return typeof name === 'string' ? name : undefined;
+    };
+    const toIsoStringOrNull = (value: unknown): string | null => {
+      if (!(value instanceof Date)) return null;
+      return Number.isNaN(value.getTime()) ? null : value.toISOString();
+    };
+
+    const ulbName = getPopulatedName(doc?.ulb) ?? '';
+    const actors: XvifcFormActor[] = [
+      { action: 'Created by', designation: 'ULB Officer', by: getPopulatedName(doc?.createdBy) ?? null, date: toIsoStringOrNull(doc?.createdAt) },
+      { action: 'Updated by', designation: 'ULB Officer', by: getPopulatedName(doc?.updatedBy) ?? null, date: toIsoStringOrNull(doc?.updatedAt) },
+      { action: 'Submitted by', designation: 'ULB Officer', by: getPopulatedName(doc?.submittedBy) ?? null, date: toIsoStringOrNull(doc?.submittedAt) },
+    ];
+    return { actors, ulbName };
+  }
+
+  private buildFormPermissions(user: AuthUser, ulbId: string, status: number): SlbFormPermissions {
+    const hasAccess = this.hasReadAccess(user, ulbId);
+    const canSubmit = user.scope === Scope.ADMIN || (user.scope === Scope.ULB && this.isOwnUlb(user, ulbId));
+    const isViewerOnly = user.scope === Scope.ULB && user.accessLevel === AccessLevel.VIEWER;
+    return {
+      canView: hasAccess,
+      canEdit: canSubmit && !isViewerOnly && canUlbEditForm(status),
+      canFinalSubmit: canSubmit && !isViewerOnly && canUlbSubmitForm(status),
+    };
+  }
+
+  // ─── Scope enforcement ────────────────────────────────────────────────────
+
+  private isOwnUlb(user: AuthUser, ulbId: string): boolean {
+    const userUlbId = toObjectIdString(user.ulb);
+    return !!userUlbId && userUlbId === ulbId;
+  }
+
+  /**
+   * Resolves which ULB a request should operate on.
+   * ULB users always operate on their own ULB (an explicit different ulbId is rejected).
+   * STATE/ADMIN users must supply ulbId explicitly.
+   */
+  async resolveEffectiveUlbId(user: AuthUser, requestedUlbId?: string): Promise<string> {
+    const normalizedRequestedUlbId = requestedUlbId?.trim();
+    if (normalizedRequestedUlbId && !Types.ObjectId.isValid(normalizedRequestedUlbId)) {
+      throw new BadRequestException('Invalid ulbId.');
+    }
+
+    if (user.scope === Scope.ULB) {
+      const userUlbId = toObjectIdString(user.ulb);
+      if (!userUlbId || !Types.ObjectId.isValid(userUlbId)) {
+        throw new ForbiddenException('Your account is not mapped to any ULB.');
+      }
+      if (normalizedRequestedUlbId && normalizedRequestedUlbId !== userUlbId) {
+        throw new ForbiddenException('You can only access your own ULB SLB form.');
+      }
+      return userUlbId;
+    }
+
+    if (user.scope === Scope.STATE || user.scope === Scope.ADMIN) {
+      if (!normalizedRequestedUlbId) {
+        throw new BadRequestException('ulbId is required.');
+      }
+      return normalizedRequestedUlbId;
+    }
+
+    throw new ForbiddenException('Access denied.');
+  }
+
+  private hasReadAccess(user: AuthUser, ulbId: string): boolean {
+    if (user.scope === Scope.ADMIN) return true;
+    if (user.scope === Scope.ULB) return this.isOwnUlb(user, ulbId);
+    // STATE access is verified asynchronously in assertCanReadSlb; assume checked by caller.
+    return user.scope === Scope.STATE;
+  }
+
+  async assertCanReadSlb(user: AuthUser, ulbId: string): Promise<void> {
+    this.assertValidUlbId(ulbId);
+
+    if (user.scope === Scope.ADMIN) return;
+
+    if (user.scope === Scope.ULB) {
+      if (!this.isOwnUlb(user, ulbId)) {
+        throw new ForbiddenException('You can only access your own ULB SLB form.');
+      }
+      return;
+    }
+
+    if (user.scope === Scope.STATE) {
+      const userStateId = toObjectIdString(user.state);
+      if (!userStateId || !Types.ObjectId.isValid(userStateId)) {
+        throw new ForbiddenException('Your account is not mapped to any state.');
+      }
+
+      const ulb = await this.ulbModel.findById(ulbId, 'state').lean().exec();
+      const ulbStateId = toObjectIdString(ulb?.state);
+      if (!ulbStateId || ulbStateId !== userStateId) {
+        throw new ForbiddenException('You can only access ULB SLB forms within your own state.');
+      }
+      return;
+    }
+
+    throw new ForbiddenException('Access denied.');
+  }
+
+  async assertCanSubmitSlb(user: AuthUser, ulbId: string): Promise<void> {
+    this.assertValidUlbId(ulbId);
+
+    if (user.scope === Scope.ADMIN) return;
+
+    if (user.scope === Scope.ULB) {
+      if (user.accessLevel === AccessLevel.VIEWER) {
+        throw new ForbiddenException('Viewers cannot submit SLB forms.');
+      }
+      if (!this.isOwnUlb(user, ulbId)) {
+        throw new ForbiddenException('You can only submit your own ULB SLB form.');
+      }
+      return;
+    }
+
+    if (user.scope === Scope.STATE) {
+      throw new ForbiddenException('STATE users cannot submit ULB SLB forms.');
+    }
+
+    throw new ForbiddenException('Access denied.');
+  }
+
+  private assertValidUlbId(ulbId: string): void {
+    if (!ulbId || !Types.ObjectId.isValid(ulbId)) {
+      throw new BadRequestException('Invalid ulbId.');
+    }
+  }
+}

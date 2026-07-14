@@ -1619,3 +1619,37 @@ Example: `xvi-fc/state/5dcf9d7416a06aed41c748f0/2026-27/sfc-status/sfc-report`
 - Both new indexes are created automatically via Mongoose's default `autoIndex` on next app startup — no manual migration needed.
 
 **Verification**: `devolution-formula-excel.service.spec.ts` (22 tests) passing; `tsc --noEmit` clean.
+
+---
+
+### SLB (Service Level Benchmarks) — New ULB Dynamic Form
+
+**Context**: First ULB-role form built on the FieldConfig/FormJson dynamic-form pattern (previously only used by STATE forms — SFC Status, EULB, Devolution Formula). ULB fills in 28 Service Level Benchmark indicators (Actual vs Target) plus a self-declaration block (name, designation, supporting document, confirmation checkbox) and submits to the State DMA for review. Replaces the empty Nest-CLI stub at `src/module/xvi-fc/ulb/slb/`.
+
+**New schema** (`src/schemas/xvi-fc/ulb/slb-form.schema.ts`):
+
+- Collection: `xvi_fc_slb_forms`
+- Unique index: `{ ulb, year, formType }`
+- `data: Mixed` — generic bag holding the full sanitized FieldConfig payload (mirrors `sfc-status.schema.ts`'s approach rather than one typed prop per field, since SLB has ~60 flat scalar fields and no row/bulk-Excel data).
+- `formType: 'SLB'` (`SLB_FORM_TYPE`), FormJson `formId: 32` (`SLB_FORM_ID` — next free id after SFC=22, EULB=23, DF=24, upload-config=30/31).
+
+**New module** (`src/module/xvi-fc/ulb/slb/`):
+
+- `slb.module.ts` — registers schema + own `Ulb` binding, imports `XviFcCommonModule` + `FormJsonModule`
+- `slb.service.ts` — `getQuestions`, `getForm`, `saveDraft`, `finalSubmit`; ULB-scope resolution (`resolveEffectiveUlbId`, `assertCanReadSlb`, `assertCanSubmitSlb`) copied from `ulb/bank-account/bank-account.service.ts`'s pattern rather than the STATE `assertStateAccess` pattern
+- `slb.controller.ts` — 4 routes under `xvi-fc/ulb/slb`: `GET questions`, `GET :ulbId/:yearId`, `POST save-draft`, `POST final-submit`
+- `services/slb-form-json.service.ts` + `helpers/slb-form-json.helpers.ts` — `loadFields()`/`getSlbFieldsByType()`, same shape as `DfFormJsonConfigService`; throws if the FormJson doc is unseeded (no hardcoded fallback — matches SFC/EULB/DF, not the ULB-master `DEFAULT_ULB_FIELDS` pattern)
+- Registered in `xvi-fc.module.ts`'s `imports` array
+
+**No `@RequirePermissions(...)` on any SLB route** — `getEffectivePermissions()` in `permissions.map.ts` returns `[]` for ULB-role users today (comment: "ULB permission matrix is not yet implemented"), so gating behind a permission would lock out every ULB submitter. `@UseGuards(PermissionGuard)` alone is a pass-through when no permissions are required; authorization is enforced entirely by the manual scope checks in `SlbService`, matching the existing `bank-account`/`unspent-balance-disclosure` ULB modules.
+
+**Workflow**: `NOT_STARTED` → (save-draft) → `IN_PROGRESS` → (final-submit) → `UNDER_REVIEW_BY_STATE`. Added `assertCanUlbEditForm`/`assertCanUlbSubmitForm` throwing wrappers to `xvi-fc-form-status-access.util.ts` (the boolean `canUlbEditForm`/`canUlbSubmitForm` already existed but had no STATE-equivalent throwing helper).
+
+**Seed data**: 28 indicators (Water Supply, Sewerage & Waste Water, Solid Waste Management, Storm Water Drainage sectors) × Actual/Target = 56 `number` fields with unit `suffixText` (lpcd/%/Hours per day/Non. per year), plus `declarantName`/`declarantDesignation`/`supportingDocument`/`checkboxConfirmation` — all tagged `fieldTypes: ['SLB_MAIN_FORM_FIELDS']`. JSON payload at `scripts/seed-data/slb-form-json.json`; POST it to `/form-json` with a real `design_year` ObjectId before the form is usable for that design year (currently a placeholder value).
+
+**Known gaps / follow-ups** (explicitly out of scope for v1):
+
+- No STATE-side review/approve/return screen for SLB yet (STATE reviewers currently have no way to act on `UNDER_REVIEW_BY_STATE` SLB submissions).
+- No Excel dump/export endpoint, no post-submission-update flow, no separate history collection (consistent with `bank-account`/`unspent-balance-disclosure`, which also have none).
+
+**Verification**: `slb.service.spec.ts` + `slb.controller.spec.ts` (19 tests) passing; `tsc --noEmit` clean.
