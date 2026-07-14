@@ -33,6 +33,7 @@ export const DEFAULT_XVI_FC_BANK_ACCOUNT_PROOF_FILE: XviFcBankAccountProofFile =
 export interface XviFcBankAccountRecord {
   ulb: Types.ObjectId;
   designYear: Types.ObjectId;
+  state: Types.ObjectId;
   ifscCode: string;
   bankDetails: Record<string, unknown>;
   accountNumberEncrypted: string;
@@ -50,6 +51,7 @@ export interface XviFcBankAccountRecord {
 export interface XviFcBankAccountResponse {
   _id: string;
   ulb: string;
+  state: string;
   designYear: string;
   ifscCode: string;
   bankDetails: XviFcBankDetails;
