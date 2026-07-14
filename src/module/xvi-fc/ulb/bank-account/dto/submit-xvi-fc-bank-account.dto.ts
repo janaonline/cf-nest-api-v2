@@ -142,6 +142,10 @@ export class SubmitXviFcBankAccountDto {
 
   @IsMongoId()
   @IsNotEmpty()
+  stateId!: string;
+
+  @IsMongoId()
+  @IsNotEmpty()
   designYearId!: string;
 
   @Transform(trimUppercaseString)

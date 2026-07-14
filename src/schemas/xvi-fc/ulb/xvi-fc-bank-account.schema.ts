@@ -39,6 +39,9 @@ export class XviFcBankAccount {
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Year', required: true })
   designYear!: Types.ObjectId;
 
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'State', required: true })
+  state!: Types.ObjectId;
+
   @Prop({ type: String, default: '' })
   ifscCode!: string;
 

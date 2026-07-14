@@ -96,6 +96,7 @@ export function buildSafeBankAccountResponse(record: BankAccountRecordLike): Xvi
   return {
     _id: toResponseString(source._id),
     ulb: toResponseString(source.ulb),
+    state: toResponseString(source.state),
     designYear: toResponseString(source.designYear),
     ifscCode: (source.ifscCode as string | undefined) ?? '',
     bankDetails: normalizeBankDetails(source.bankDetails),
