@@ -11,6 +11,7 @@ import { S3Service } from 'src/core/s3/s3.service';
 import { ExcelService } from 'src/services/excel/excel.service';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { FileUrlNormalizerService } from 'src/module/xvi-fc/common/services/file-url-normalizer.service';
+import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
 import { DevolutionFormulaService } from '../main/devolution-formula.service';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import { Scope, UserRole, AccessLevel } from 'src/module/auth/enum/roles-xvi-fc.enum';
@@ -79,8 +80,20 @@ const mockExistingForm = {
   errorRowCount: 1,
   totalMoHUAAllocation: 500_000,
   totalAllocatedSum: 300_000,
-  excelFile: { fileName: 'test.xlsx', fileUrl: 'state/path/test.xlsx', fileSize: 1024 },
-  errorExcelFile: { fileName: 'errors.xlsx', fileUrl: 'state/path/errors.xlsx', fileSize: 512 },
+  excelFile: {
+    originalName: 'test.xlsx',
+    path: 'state/path/test.xlsx',
+    mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    sizeKb: 1,
+    createdAt: '2026-01-01T00:00:00.000Z',
+  },
+  errorExcelFile: {
+    originalName: 'errors.xlsx',
+    path: 'state/path/errors.xlsx',
+    mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    sizeKb: 0.5,
+    createdAt: '2026-01-01T00:00:00.000Z',
+  },
 };
 
 const mockActiveRows = [
@@ -168,6 +181,7 @@ describe('DevolutionFormulaExcelService — safe dataset replace', () => {
         { provide: ExcelService, useValue: mockExcelService },
         { provide: FileTokenService, useValue: mockFileTokenService },
         { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
+        FileInfoNormalizerService,
         { provide: DevolutionFormulaService, useValue: mockDfService },
       ],
     }).compile();
@@ -191,7 +205,13 @@ describe('DevolutionFormulaExcelService — safe dataset replace', () => {
           stateId: stateOid.toString(),
           yearId: YEAR_ID,
           installment: 1,
-          excelFile: { fileName: 'test.xlsx', fileUrl: 'state/path/test.xlsx', fileSize: 1024 },
+          excelFile: {
+            originalName: 'test.xlsx',
+            path: 'state/path/test.xlsx',
+            mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            sizeKb: 1,
+            createdAt: '2026-01-01T00:00:00.000Z',
+          },
         },
         adminUser,
       ),
@@ -229,7 +249,13 @@ describe('DevolutionFormulaExcelService — safe dataset replace', () => {
           stateId: stateOid.toString(),
           yearId: YEAR_ID,
           installment: 1,
-          excelFile: { fileName: 'test.xlsx', fileUrl: 'state/path/test.xlsx', fileSize: 1024 },
+          excelFile: {
+            originalName: 'test.xlsx',
+            path: 'state/path/test.xlsx',
+            mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            sizeKb: 1,
+            createdAt: '2026-01-01T00:00:00.000Z',
+          },
         },
         adminUser,
       ),
@@ -257,7 +283,13 @@ describe('DevolutionFormulaExcelService — safe dataset replace', () => {
         stateId: stateOid.toString(),
         yearId: YEAR_ID,
         installment: 1,
-        excelFile: { fileName: 'test.xlsx', fileUrl: 'state/path/test.xlsx', fileSize: 1024 },
+        excelFile: {
+          originalName: 'test.xlsx',
+          path: 'state/path/test.xlsx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          sizeKb: 1,
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
       },
       adminUser,
     );
@@ -268,6 +300,80 @@ describe('DevolutionFormulaExcelService — safe dataset replace', () => {
       (c) => (c[0] as Record<string, unknown>)?.['datasetVersion'] === mockExistingForm.activeDatasetVersion,
     );
     expect(oldVersionDelete).toBeDefined();
+  });
+
+  it('accepts excelFile.pageCount: null and persists it on the form excelFile', async () => {
+    mockFormModel.findOne.mockReturnValue(q(mockExistingForm));
+    mockRowModel.updateMany.mockReturnValue(q({ modifiedCount: 2 }));
+    mockRowModel.insertMany.mockResolvedValue([]);
+    mockFormModel.findByIdAndUpdate.mockReturnValue(q(null));
+    mockRowModel.deleteMany.mockReturnValue(q(null));
+
+    const buffer = makeXlsxBuffer([['C001', 'Alpha City', 500_000, 300_000, 200_000, 'population']]);
+    mockS3Service.getBuffer.mockResolvedValue(buffer);
+
+    // Different path than mockExistingForm.excelFile — a replacement upload, so the
+    // incoming pageCount is used rather than the (unset) pageCount on the existing file.
+    await service.validateExcel(
+      {
+        stateId: stateOid.toString(),
+        yearId: YEAR_ID,
+        installment: 1,
+        excelFile: {
+          originalName: 'test2.xlsx',
+          path: 'state/path/test2.xlsx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          sizeKb: 1,
+          createdAt: '2026-01-01T00:00:00.000Z',
+          pageCount: null,
+        },
+      },
+      adminUser,
+    );
+
+    // The form update must carry the excelFile metadata with pageCount preserved
+    const updateCalls = mockFormModel.findByIdAndUpdate.mock.calls as unknown[][][];
+    const setWithExcelFile = updateCalls
+      .map((c) => (c[1] as Record<string, unknown>)?.['$set'] as Record<string, unknown> | undefined)
+      .find((s) => s?.['excelFile'] !== undefined);
+    expect(setWithExcelFile).toBeDefined();
+    expect((setWithExcelFile?.['excelFile'] as { pageCount?: number | null }).pageCount).toBeNull();
+  });
+
+  it('generated errorExcelFile metadata has pageCount: null', async () => {
+    mockFormModel.findOne.mockReturnValue(q(mockExistingForm));
+    mockRowModel.updateMany.mockReturnValue(q({ modifiedCount: 2 }));
+    mockRowModel.insertMany.mockResolvedValue([]);
+    mockFormModel.findByIdAndUpdate.mockReturnValue(q(null));
+    mockRowModel.deleteMany.mockReturnValue(q(null));
+
+    // Known-registry ULB with a negative installment amount → row error → error sheet generated
+    const buffer = makeXlsxBuffer([['C001', 'Alpha City', 500_000, -300_000, 200_000, 'population']]);
+    mockS3Service.getBuffer.mockResolvedValue(buffer);
+
+    await service.validateExcel(
+      {
+        stateId: stateOid.toString(),
+        yearId: YEAR_ID,
+        installment: 1,
+        excelFile: {
+          originalName: 'test.xlsx',
+          path: 'state/path/test.xlsx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          sizeKb: 1,
+          createdAt: '2026-01-01T00:00:00.000Z',
+          pageCount: null,
+        },
+      },
+      adminUser,
+    );
+
+    const updateCalls = mockFormModel.findByIdAndUpdate.mock.calls as unknown[][][];
+    const errorFileSet = updateCalls
+      .map((c) => (c[1] as Record<string, unknown>)?.['$set'] as Record<string, unknown> | undefined)
+      .find((s) => s?.['errorExcelFile'] !== undefined);
+    expect(errorFileSet).toBeDefined();
+    expect((errorFileSet?.['errorExcelFile'] as { pageCount?: number | null }).pageCount).toBeNull();
   });
 });
 
@@ -296,6 +402,7 @@ describe('DevolutionFormulaExcelService — revalidateExcel', () => {
         { provide: ExcelService, useValue: mockExcelService },
         { provide: FileTokenService, useValue: mockFileTokenService },
         { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
+        FileInfoNormalizerService,
         { provide: DevolutionFormulaService, useValue: mockDfService },
       ],
     }).compile();
@@ -305,7 +412,7 @@ describe('DevolutionFormulaExcelService — revalidateExcel', () => {
 
   it('does NOT increment activeDatasetVersion when revalidating active rows (Case A)', async () => {
     mockFormModel.findOne.mockReturnValue(q(mockExistingForm));
-    mockRowModel.find.mockReturnValue(q(mockActiveRows));
+    mockRowModel.find.mockReturnValue(q([mockActiveRows[0]])); // single known-registry row; no null-ulbId row to avoid newUlbsAdded throw
 
     await service.revalidateExcel(stateOid.toString(), YEAR_ID, 1, adminUser);
 
@@ -335,10 +442,11 @@ describe('DevolutionFormulaExcelService — revalidateExcel', () => {
     expect(hasUnset).toBe(true);
   });
 
-  it('does NOT unset errorExcelFile when revalidation still has row errors (Case A)', async () => {
-    // Both rows present including the unknown one → errorRowCount stays > 0
+  it('does NOT unset errorExcelFile when revalidation has allocation imbalance (Case A)', async () => {
+    // Single known-registry row whose totalAllocatedSum (300_000) ≠ totalMoHUAAllocation (500_000)
+    // → formValidationStatus stays INVALID → no $unset
     mockFormModel.findOne.mockReturnValue(q(mockExistingForm));
-    mockRowModel.find.mockReturnValue(q(mockActiveRows));
+    mockRowModel.find.mockReturnValue(q([mockActiveRows[0]]));
 
     await service.revalidateExcel(stateOid.toString(), YEAR_ID, 1, adminUser);
 
@@ -346,6 +454,85 @@ describe('DevolutionFormulaExcelService — revalidateExcel', () => {
     const allArgs = formUpdateCalls.map((c) => c[1] as Record<string, unknown>);
     const hasUnset = allArgs.some((a) => a['$unset'] !== undefined);
     expect(hasUnset).toBe(false);
+  });
+
+  it('throws excelFile.newUlbsAdded when stored rows include rows without ulbId (Case A)', async () => {
+    mockFormModel.findOne.mockReturnValue(q(mockExistingForm));
+    mockRowModel.find.mockReturnValue(q(mockActiveRows)); // includes null-ulbId row
+
+    let caught: unknown;
+    try {
+      await service.revalidateExcel(stateOid.toString(), YEAR_ID, 1, adminUser);
+    } catch (e) {
+      caught = e;
+    }
+
+    const response = (caught as { response: { errors: Record<string, unknown> } }).response;
+    expect(response.errors['excelFile']).toEqual([expect.objectContaining({ code: 'newUlbsAdded' })]);
+  });
+
+  it('includes newUlbCount in the findByIdAndUpdate $set when unknown rows are present (Case A)', async () => {
+    mockFormModel.findOne.mockReturnValue(q(mockExistingForm));
+    mockRowModel.find.mockReturnValue(q(mockActiveRows)); // 1 null-ulbId row → newUlbCount = 1
+
+    try {
+      await service.revalidateExcel(stateOid.toString(), YEAR_ID, 1, adminUser);
+    } catch {
+      // expected throw
+    }
+
+    const formUpdateCalls = mockFormModel.findByIdAndUpdate.mock.calls as unknown[][][];
+    const updateArg = formUpdateCalls[0][1] as { $set: Record<string, unknown> };
+    expect(updateArg.$set['newUlbCount']).toBe(1);
+  });
+
+  it('newUlbsAdded message reports the correct count (Case A)', async () => {
+    mockFormModel.findOne.mockReturnValue(q(mockExistingForm));
+    mockRowModel.find.mockReturnValue(q(mockActiveRows));
+
+    let caught: unknown;
+    try {
+      await service.revalidateExcel(stateOid.toString(), YEAR_ID, 1, adminUser);
+    } catch (e) {
+      caught = e;
+    }
+
+    const response = (caught as { response: { errors: Record<string, unknown> } }).response;
+    const error = (response.errors['excelFile'] as Array<{ message: string }>)[0];
+    expect(error.message).toBe('You have added 1 ULB(s). Please register before proceeding.');
+  });
+
+  it('validationSummary.newUlbCount in the throw data uses the freshly computed count, not the stale form value (Case A)', async () => {
+    mockFormModel.findOne.mockReturnValue(q({ ...mockExistingForm, newUlbCount: 99 })); // stale value on form
+    mockRowModel.find.mockReturnValue(q(mockActiveRows)); // 1 null-ulbId row → actual count = 1
+
+    let caught: unknown;
+    try {
+      await service.revalidateExcel(stateOid.toString(), YEAR_ID, 1, adminUser);
+    } catch (e) {
+      caught = e;
+    }
+
+    const response = (caught as { response: { data: Record<string, unknown> } }).response;
+    const summary = response.data['validationSummary'] as { newUlbCount: number };
+    expect(summary.newUlbCount).toBe(1); // freshly computed, not 99
+  });
+
+  it('returns success without throwing when all stored rows have ulbId and allocation balances (Case A)', async () => {
+    const balancedRow = {
+      ...mockActiveRows[0],
+      totalGrantAllocation: 500_000,
+      installment1Amount: 300_000,
+      installment2Amount: 200_000,
+    };
+    mockFormModel.findOne.mockReturnValue(q({ ...mockExistingForm }));
+    mockRowModel.find.mockReturnValue(q([balancedRow]));
+
+    const result = await service.revalidateExcel(stateOid.toString(), YEAR_ID, 1, adminUser);
+
+    expect(result).toBeDefined();
+    const summary = result.data?.validationSummary as { newUlbCount: number };
+    expect(summary.newUlbCount).toBe(0);
   });
 });
 
@@ -372,6 +559,7 @@ describe('DevolutionFormulaExcelService — generateTemplate', () => {
         { provide: ExcelService, useValue: mockExcelService },
         { provide: FileTokenService, useValue: mockFileTokenService },
         { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
+        FileInfoNormalizerService,
         { provide: DevolutionFormulaService, useValue: mockDfService },
       ],
     }).compile();
@@ -415,6 +603,7 @@ describe('DevolutionFormulaExcelService — generateTemplate', () => {
     const savedRow = {
       _id: new Types.ObjectId(),
       rowNumber: 1,
+      ulbId: ulbOid, // matched registry ULB — overlay pattern uses this to join
       censusCode: 'C001',
       ulbName: 'Alpha City',
       totalGrantAllocation: 500_000,
@@ -428,8 +617,15 @@ describe('DevolutionFormulaExcelService — generateTemplate', () => {
 
     await service.generateTemplate(stateOid.toString(), YEAR_ID, 1, adminUser);
 
-    expect(mockRowModel.find).toHaveBeenCalledWith({ form: formOid, datasetVersion: 1, isActive: true });
-    expect(mockUlbModel.find).not.toHaveBeenCalled();
+    // registry is always loaded (even with a dataset) so unknown rows are excluded and new ULBs appear
+    expect(mockUlbModel.find).toHaveBeenCalledWith({ state: stateOid, isActive: true });
+    // only registry-matched rows fetched — ulbId: { $ne: null } excludes unknown-ULB rows
+    expect(mockRowModel.find).toHaveBeenCalledWith({
+      form: formOid,
+      datasetVersion: 1,
+      isActive: true,
+      ulbId: { $ne: null },
+    });
 
     const calls = mockExcelService.generateExcel.mock.calls as unknown[][];
     const rows = calls[0][1] as Array<Record<string, unknown>>;
@@ -473,6 +669,7 @@ describe('DevolutionFormulaExcelService — validateExcel ULB identity guard', (
         { provide: ExcelService, useValue: mockExcelService },
         { provide: FileTokenService, useValue: mockFileTokenService },
         { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
+        FileInfoNormalizerService,
         { provide: DevolutionFormulaService, useValue: mockDfService },
       ],
     }).compile();
@@ -489,7 +686,13 @@ describe('DevolutionFormulaExcelService — validateExcel ULB identity guard', (
         stateId: stateOid.toString(),
         yearId: YEAR_ID,
         installment: 1,
-        excelFile: { fileName: 'test.xlsx', fileUrl: 'state/path/test.xlsx', fileSize: 1024 },
+        excelFile: {
+          originalName: 'test.xlsx',
+          path: 'state/path/test.xlsx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          sizeKb: 1,
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
       },
       adminUser,
     );
@@ -508,7 +711,13 @@ describe('DevolutionFormulaExcelService — validateExcel ULB identity guard', (
         stateId: stateOid.toString(),
         yearId: YEAR_ID,
         installment: 1,
-        excelFile: { fileName: 'test.xlsx', fileUrl: 'state/path/test.xlsx', fileSize: 1024 },
+        excelFile: {
+          originalName: 'test.xlsx',
+          path: 'state/path/test.xlsx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          sizeKb: 1,
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
       },
       adminUser,
     );
@@ -527,7 +736,13 @@ describe('DevolutionFormulaExcelService — validateExcel ULB identity guard', (
           stateId: stateOid.toString(),
           yearId: YEAR_ID,
           installment: 1,
-          excelFile: { fileName: 'test.xlsx', fileUrl: 'state/path/test.xlsx', fileSize: 1024 },
+          excelFile: {
+            originalName: 'test.xlsx',
+            path: 'state/path/test.xlsx',
+            mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            sizeKb: 1,
+            createdAt: '2026-01-01T00:00:00.000Z',
+          },
         },
         adminUser,
       );
@@ -556,7 +771,13 @@ describe('DevolutionFormulaExcelService — validateExcel ULB identity guard', (
           stateId: stateOid.toString(),
           yearId: YEAR_ID,
           installment: 1,
-          excelFile: { fileName: 'test.xlsx', fileUrl: 'state/path/test.xlsx', fileSize: 1024 },
+          excelFile: {
+            originalName: 'test.xlsx',
+            path: 'state/path/test.xlsx',
+            mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            sizeKb: 1,
+            createdAt: '2026-01-01T00:00:00.000Z',
+          },
         },
         adminUser,
       ),
@@ -593,6 +814,7 @@ describe('DevolutionFormulaExcelService — validateExcel new/extra ULB detectio
         { provide: ExcelService, useValue: mockExcelService },
         { provide: FileTokenService, useValue: mockFileTokenService },
         { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
+        FileInfoNormalizerService,
         { provide: DevolutionFormulaService, useValue: mockDfService },
       ],
     }).compile();
@@ -609,7 +831,13 @@ describe('DevolutionFormulaExcelService — validateExcel new/extra ULB detectio
           stateId: stateOid.toString(),
           yearId: YEAR_ID,
           installment: 1,
-          excelFile: { fileName: 'test.xlsx', fileUrl: 'state/path/test.xlsx', fileSize: 1024 },
+          excelFile: {
+            originalName: 'test.xlsx',
+            path: 'state/path/test.xlsx',
+            mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            sizeKb: 1,
+            createdAt: '2026-01-01T00:00:00.000Z',
+          },
         },
         adminUser,
       );
@@ -712,7 +940,13 @@ describe('DevolutionFormulaExcelService — validateExcel new/extra ULB detectio
         stateId: stateOid.toString(),
         yearId: YEAR_ID,
         installment: 1,
-        excelFile: { fileName: 'test.xlsx', fileUrl: 'state/path/test.xlsx', fileSize: 1024 },
+        excelFile: {
+          originalName: 'test.xlsx',
+          path: 'state/path/test.xlsx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          sizeKb: 1,
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
       },
       adminUser,
     );
@@ -732,7 +966,13 @@ describe('DevolutionFormulaExcelService — validateExcel new/extra ULB detectio
         stateId: stateOid.toString(),
         yearId: YEAR_ID,
         installment: 1,
-        excelFile: { fileName: 'test.xlsx', fileUrl: 'state/path/test.xlsx', fileSize: 1024 },
+        excelFile: {
+          originalName: 'test.xlsx',
+          path: 'state/path/test.xlsx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          sizeKb: 1,
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
       },
       adminUser,
     );

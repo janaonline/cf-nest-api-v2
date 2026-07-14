@@ -2,11 +2,12 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Types } from 'mongoose';
+import mongoose, { Types } from 'mongoose';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { EmailQueueService } from 'src/core/queue/email-queue/email-queue.service';
 import { FormJsonService } from 'src/form-json/form-json.service';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
+import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
 import type { IAuthUser } from 'src/common/interfaces/auth-user.interface';
 import { Role } from 'src/module/auth/enum/role.enum';
 import { State } from 'src/schemas/state.schema';
@@ -45,12 +46,13 @@ describe('UlbService', () => {
     db?: unknown;
   };
   let stateModel: { findById: jest.Mock; find: jest.Mock };
-  let userModel: { create: jest.Mock; findOne: jest.Mock };
+  let userModel: { create: jest.Mock; findOne: jest.Mock; updateMany: jest.Mock };
   let formJsonService: { findByType: jest.Mock };
   let dynamicFormValidation: { validateFinalSubmitAndBuildPayload: jest.Mock; validateDraftAndBuildPayload: jest.Mock };
   let emailQueueService: { addEmailJob: jest.Mock };
   let configService: { get: jest.Mock };
   let fileTokenService: { signFileUrl: jest.Mock };
+  let fileInfoNormalizer: { normalizeInboundFileInfo: jest.Mock };
 
   const stateId = new Types.ObjectId().toString();
   const ulbTypeId = new Types.ObjectId().toString();
@@ -83,6 +85,7 @@ describe('UlbService', () => {
         lean: jest.fn().mockReturnThis(),
         exec: jest.fn().mockResolvedValue(null),
       }),
+      updateMany: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue({ acknowledged: true }) }),
     };
     formJsonService = { findByType: jest.fn().mockRejectedValue(new NotFoundException()) };
     dynamicFormValidation = {
@@ -92,6 +95,7 @@ describe('UlbService', () => {
     emailQueueService = { addEmailJob: jest.fn().mockResolvedValue(undefined) };
     configService = { get: jest.fn().mockReturnValue('https://cityfinance.in') };
     fileTokenService = { signFileUrl: jest.fn((url: string) => `signed::${url}`) };
+    fileInfoNormalizer = { normalizeInboundFileInfo: jest.fn().mockReturnValue({ file: undefined, errors: [] }) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -104,6 +108,7 @@ describe('UlbService', () => {
         { provide: EmailQueueService, useValue: emailQueueService },
         { provide: ConfigService, useValue: configService },
         { provide: FileTokenService, useValue: fileTokenService },
+        { provide: FileInfoNormalizerService, useValue: fileInfoNormalizer },
       ],
     }).compile();
 
@@ -285,6 +290,50 @@ describe('UlbService', () => {
       );
     });
 
+    it('creates the primary contact login inactive for a STATE (PENDING) submission', async () => {
+      const ulbId = new Types.ObjectId();
+      dynamicFormValidation.validateFinalSubmitAndBuildPayload.mockReturnValue({
+        isValid: true,
+        errors: {},
+        sanitizedPayload: {
+          code: 'AP012',
+          name: 'Pending ULB',
+          state: stateId,
+          ulbType: ulbTypeId,
+          primaryContactName: 'K. Suresh Babu',
+          primaryContactEmail: 'pending-contact@ulb.gov.in',
+          primaryContactMobile: '9849001236',
+        },
+      });
+      ulbModel.create.mockResolvedValue({ _id: ulbId, toObject: () => ({ _id: ulbId, code: 'AP012' }) });
+
+      await service.create({ data: {} }, stateUser);
+
+      expect(userModel.create).toHaveBeenCalledWith(expect.objectContaining({ isActive: false, status: 'APPROVED' }));
+    });
+
+    it('creates the primary contact login active for an ADMIN (auto-approved) submission', async () => {
+      const ulbId = new Types.ObjectId();
+      dynamicFormValidation.validateFinalSubmitAndBuildPayload.mockReturnValue({
+        isValid: true,
+        errors: {},
+        sanitizedPayload: {
+          code: 'AP013',
+          name: 'Approved ULB',
+          state: stateId,
+          ulbType: ulbTypeId,
+          primaryContactName: 'K. Suresh Babu',
+          primaryContactEmail: 'approved-contact@ulb.gov.in',
+          primaryContactMobile: '9849001237',
+        },
+      });
+      ulbModel.create.mockResolvedValue({ _id: ulbId, toObject: () => ({ _id: ulbId, code: 'AP013' }) });
+
+      await service.create({ data: {} }, adminUser);
+
+      expect(userModel.create).toHaveBeenCalledWith(expect.objectContaining({ isActive: true, status: 'APPROVED' }));
+    });
+
     it('rejects when the primary contact email/mobile is already registered to an active account', async () => {
       userModel.findOne.mockReturnValue({
         select: jest.fn().mockReturnThis(),
@@ -307,6 +356,91 @@ describe('UlbService', () => {
 
       await expect(service.create({ data: {} }, stateUser)).rejects.toThrow(BadRequestException);
       expect(ulbModel.create).not.toHaveBeenCalled();
+    });
+
+    it('normalizes gazetteNotificationFile through FileInfoNormalizerService — new file, existing=null', async () => {
+      const rawFile = { fileName: 'gazette.pdf', fileUrl: 'ulb/gazette-notifications/gazette.pdf' };
+      const derivedFile = {
+        originalName: 'gazette.pdf',
+        name: '',
+        path: 'ulb/gazette-notifications/gazette.pdf',
+        mimeType: 'application/pdf',
+        extension: 'pdf',
+        sizeKb: 120,
+        pageCount: null,
+        sha256: '',
+      };
+      fileInfoNormalizer.normalizeInboundFileInfo.mockReturnValue({ file: derivedFile, errors: [] });
+      dynamicFormValidation.validateFinalSubmitAndBuildPayload.mockReturnValue({
+        isValid: true,
+        errors: {},
+        sanitizedPayload: {
+          code: 'AP014',
+          name: 'Gazette ULB',
+          state: stateId,
+          ulbType: ulbTypeId,
+          gazetteNotificationFile: rawFile,
+        },
+      });
+      ulbModel.create.mockResolvedValue({ toObject: () => ({ code: 'AP014' }) });
+
+      await service.create({ data: {} }, adminUser);
+
+      expect(fileInfoNormalizer.normalizeInboundFileInfo).toHaveBeenCalledWith(
+        rawFile,
+        null,
+        expect.objectContaining({
+          fieldKey: 'gazetteNotificationFile',
+          allowedExtensions: ['pdf'],
+          allowedMimeTypes: ['application/pdf'],
+        }),
+      );
+      const [patch] = ulbModel.create.mock.calls[0] as [Record<string, unknown>];
+      expect(patch.gazetteNotificationFile).toBe(derivedFile);
+    });
+
+    it('rejects a legacy-shaped gazetteNotificationFile with a field-keyed 400 instead of an opaque Mongoose failure', async () => {
+      fileInfoNormalizer.normalizeInboundFileInfo.mockReturnValue({
+        file: null,
+        errors: [{ field: 'gazetteNotificationFile', code: 'required', message: 'path is required.' }],
+      });
+      dynamicFormValidation.validateFinalSubmitAndBuildPayload.mockReturnValue({
+        isValid: true,
+        errors: {},
+        sanitizedPayload: {
+          code: 'AP015',
+          name: 'Legacy Shape ULB',
+          state: stateId,
+          ulbType: ulbTypeId,
+          gazetteNotificationFile: { fileName: 'gazette.pdf', fileUrl: 'x', fileSize: 1000 },
+        },
+      });
+
+      await expect(service.create({ data: {} }, adminUser)).rejects.toThrow(BadRequestException);
+      expect(ulbModel.create).not.toHaveBeenCalled();
+    });
+
+    it('maps a Mongoose ValidationError from ulbModel.create into a field-keyed 400', async () => {
+      dynamicFormValidation.validateFinalSubmitAndBuildPayload.mockReturnValue({
+        isValid: true,
+        errors: {},
+        sanitizedPayload: { code: 'AP016', name: 'Schema Fail ULB', state: stateId, ulbType: ulbTypeId },
+      });
+      const validationError = new mongoose.Error.ValidationError();
+      validationError.errors = {
+        'gazetteNotificationFile.path': {
+          message: 'Path `path` is required.',
+        } as unknown as mongoose.Error.ValidatorError,
+      };
+      ulbModel.create.mockRejectedValue(validationError);
+
+      await expect(service.create({ data: {} }, adminUser)).rejects.toThrow(BadRequestException);
+      try {
+        await service.create({ data: {} }, adminUser);
+      } catch (err) {
+        const response = (err as BadRequestException).getResponse() as { errors: Record<string, unknown> };
+        expect(response.errors).toHaveProperty('gazetteNotificationFile');
+      }
     });
   });
 
@@ -335,7 +469,12 @@ describe('UlbService', () => {
     });
 
     it('attaches stateName and ulbTypeName resolved from the ids on each row', async () => {
-      const ulbRow = { _id: new Types.ObjectId(), name: 'Vizag', state: new Types.ObjectId(stateId), ulbType: new Types.ObjectId(ulbTypeId) };
+      const ulbRow = {
+        _id: new Types.ObjectId(),
+        name: 'Vizag',
+        state: new Types.ObjectId(stateId),
+        ulbType: new Types.ObjectId(ulbTypeId),
+      };
       ulbModel.find = jest.fn().mockReturnValue({
         sort: jest.fn().mockReturnThis(),
         skip: jest.fn().mockReturnThis(),
@@ -596,6 +735,53 @@ describe('UlbService', () => {
       expect(approval.status).toBe('PENDING');
       expect(approval.submittedBy).toBeInstanceOf(Types.ObjectId);
     });
+
+    it('omits gazetteNotificationFile from $set when unchanged, so Mongoose does not re-stamp its timestamps', async () => {
+      const existingFile = { path: 'ulb/gazette-notifications/gazette.pdf', mimeType: 'application/pdf' };
+      ulbModel.findById.mockReturnValue({
+        lean: jest.fn().mockResolvedValue({ _id: 'x', gazetteNotificationFile: existingFile }),
+      });
+      fileInfoNormalizer.normalizeInboundFileInfo.mockReturnValue({ file: undefined, errors: [] });
+      dynamicFormValidation.validateDraftAndBuildPayload.mockReturnValue({
+        isValid: true,
+        errors: {},
+        sanitizedPayload: {
+          district: 'New District',
+          gazetteNotificationFile: { originalName: 'gazette.pdf', path: 'ulb/gazette-notifications/gazette.pdf' },
+        },
+      });
+      ulbModel.findByIdAndUpdate.mockReturnValue({ lean: jest.fn().mockResolvedValue({ _id: 'x' }) });
+
+      await service.update(new Types.ObjectId().toString(), { data: {} }, adminUser);
+
+      expect(fileInfoNormalizer.normalizeInboundFileInfo).toHaveBeenCalledWith(
+        expect.objectContaining({ path: 'ulb/gazette-notifications/gazette.pdf' }),
+        existingFile,
+        expect.anything(),
+      );
+      const [, updateArg] = ulbModel.findByIdAndUpdate.mock.calls[0] as [string, { $set: Record<string, unknown> }];
+      expect(updateArg.$set).not.toHaveProperty('gazetteNotificationFile');
+      expect(updateArg.$set.district).toBe('New District');
+    });
+
+    it('replaces gazetteNotificationFile in $set with the normalized value when it changed', async () => {
+      const derivedFile = { path: 'ulb/gazette-notifications/new-gazette.pdf', extension: 'pdf' };
+      ulbModel.findById.mockReturnValue({
+        lean: jest.fn().mockResolvedValue({ _id: 'x', gazetteNotificationFile: { path: 'old.pdf' } }),
+      });
+      fileInfoNormalizer.normalizeInboundFileInfo.mockReturnValue({ file: derivedFile, errors: [] });
+      dynamicFormValidation.validateDraftAndBuildPayload.mockReturnValue({
+        isValid: true,
+        errors: {},
+        sanitizedPayload: { gazetteNotificationFile: { originalName: 'new-gazette.pdf', path: 'new-gazette.pdf' } },
+      });
+      ulbModel.findByIdAndUpdate.mockReturnValue({ lean: jest.fn().mockResolvedValue({ _id: 'x' }) });
+
+      await service.update(new Types.ObjectId().toString(), { data: {} }, adminUser);
+
+      const [, updateArg] = ulbModel.findByIdAndUpdate.mock.calls[0] as [string, { $set: Record<string, unknown> }];
+      expect(updateArg.$set.gazetteNotificationFile).toBe(derivedFile);
+    });
   });
 
   describe('remove', () => {
@@ -623,6 +809,7 @@ describe('UlbService', () => {
       expect(updateArg.$set['approval.status']).toBe('APPROVED');
       expect(updateArg.$set['approval.reviewedBy']).toBeInstanceOf(Types.ObjectId);
       expect(result).toEqual({ _id: 'x', approval: { status: 'APPROVED' } });
+      expect(userModel.updateMany).toHaveBeenCalledWith({ ulb: id, isDeleted: false }, { $set: { isActive: true } });
     });
 
     it('throws NotFoundException when the ULB does not exist', async () => {

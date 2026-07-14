@@ -51,6 +51,26 @@ export const EULB_ACTION_DOWNLOAD_TEMPLATE = 'download-template';
 export const EULB_ACTION_VIEW_UPLOADED_DATA = 'view-uploaded-data';
 export const EULB_ACTION_DOWNLOAD_ERROR_SHEET = 'download-error-sheet';
 export const EULB_ACTION_REVALIDATE_EXCEL = 'revalidate-excel';
+export const EULB_ACTION_REGISTER_ULB = 'register-ulb';
+
+export function buildEulbRegisterUlbUrl(yearId: string): string {
+  return `/xvifc/${yearId}/register-ulb`;
+}
 
 export const EULB_CENSUS_CODE_MAX_LENGTH = 10;
+
+// ─── File upload constraints ─────────────────────────────────────────────────
+
+export const EULB_EXCEL_MAX_FILE_SIZE_MB = 20;
+export const EULB_EXCEL_MAX_FILE_SIZE_BYTES = EULB_EXCEL_MAX_FILE_SIZE_MB * 1024 * 1024;
+export const EULB_EXCEL_ALLOWED_MIME_TYPES = [
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-excel',
+] as const;
+export const EULB_EXCEL_ALLOWED_FILE_EXTENSIONS = ['.xlsx', '.xls'] as const;
+
+export const EULB_DOCUMENT_MAX_FILE_SIZE_MB = 20;
+export const EULB_DOCUMENT_MAX_FILE_SIZE_BYTES = EULB_DOCUMENT_MAX_FILE_SIZE_MB * 1024 * 1024;
+export const EULB_DOCUMENT_ALLOWED_MIME_TYPES = ['application/pdf'] as const;
+export const EULB_DOCUMENT_ALLOWED_FILE_EXTENSIONS = ['.pdf'] as const;
 export const EULB_ULB_NAME_MAX_LENGTH = 250;

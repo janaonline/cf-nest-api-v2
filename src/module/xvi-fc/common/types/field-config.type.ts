@@ -112,6 +112,7 @@ export interface UploadedFileValue {
   fileUrl: string;
   fileSize: number | null;
   mimeType: string;
+  pageCount?: number | null;
 }
 
 // ─── Field config ─────────────────────────────────────────────────────────────
@@ -140,6 +141,7 @@ export interface FieldConfig {
   validateWhen?: VisibleWhen;
   /** Clears/ignores the field value when enabledWhen evaluates false */
   clearValueWhenDisabled?: boolean;
+  disabled?: boolean;
   /** Optional UI hint for disabled state */
   disabledReason?: string;
   /** Array of validators matching the frontend Angular validator contract */

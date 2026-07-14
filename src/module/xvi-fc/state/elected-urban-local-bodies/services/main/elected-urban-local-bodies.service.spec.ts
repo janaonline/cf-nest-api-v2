@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { BadRequestException } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
 import { Types } from 'mongoose';
 import ExcelJS from 'exceljs';
@@ -10,6 +11,7 @@ import { ExcelService } from 'src/services/excel/excel.service';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
 import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
 import { FileUrlNormalizerService } from 'src/module/xvi-fc/common/services/file-url-normalizer.service';
+import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { ConfigService } from '@nestjs/config';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
@@ -19,6 +21,7 @@ import { EulbFormJsonConfigService } from 'src/module/xvi-fc/state/elected-urban
 import type { EulbTypedFieldConfig } from 'src/module/xvi-fc/state/elected-urban-local-bodies/helpers/elected-urban-local-bodies-form-json.helpers';
 import type { FormFieldOption } from 'src/module/xvi-fc/common/types/field-config.type';
 import type { EulbDumpRowRecord } from 'src/module/xvi-fc/state/elected-urban-local-bodies/types/elected-urban-local-bodies.types';
+import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -64,22 +67,26 @@ const adminUser: AuthUser = {
   state: null,
 };
 
-/** Two ULBs used by the fallback (no-active-dataset) path. */
+/** Two active registry ULBs (used by both the fallback and overlay paths). */
 const mockUlbs = [
   { _id: new Types.ObjectId(), name: 'Alpha City', censusCode: 'C001' },
   { _id: new Types.ObjectId(), name: 'Beta Town', censusCode: 'C002' },
 ];
 
-/** Form doc with an active dataset (dbUlbCount = 2 → maxAllowedExcelRows = 4). */
+/** Form doc with an active dataset. */
 const mockFormWithDataset = {
   _id: formOid,
   activeDatasetVersion: 1,
   dbUlbCount: 2,
 };
 
-/** Saved rows for the active dataset: 2 DB_ULB rows + 1 EXTRA_ULB row. */
-const mockSavedRows = [
+/**
+ * Saved DB_ULB rows for the overlay path.
+ * ulbId fields correspond to mockUlbs so the service overlay map matches.
+ */
+const mockSavedDbRows = [
   {
+    ulbId: mockUlbs[0]._id,
     rowNumber: 1,
     censusCode: 'C001',
     ulbName: 'Alpha City',
@@ -91,6 +98,7 @@ const mockSavedRows = [
     isActive: true,
   },
   {
+    ulbId: mockUlbs[1]._id,
     rowNumber: 2,
     censusCode: 'C002',
     ulbName: 'Beta Town',
@@ -101,18 +109,21 @@ const mockSavedRows = [
     rowType: 'DB_ULB',
     isActive: true,
   },
-  {
-    rowNumber: 3,
-    censusCode: 'EX01',
-    ulbName: 'Extra ULB One',
-    electedBodyStatus: 'Exempt',
-    dateOfConstitution: undefined,
-    dateOfExpiry: undefined,
-    remarks: 'User added',
-    rowType: 'EXTRA_ULB',
-    isActive: true,
-  },
 ];
+
+/** EXTRA_ULB row that should never appear in a newly generated template. */
+const mockExtraUlbRow = {
+  ulbId: undefined,
+  rowNumber: 3,
+  censusCode: 'EX01',
+  ulbName: 'Extra ULB One',
+  electedBodyStatus: 'Exempt',
+  dateOfConstitution: undefined,
+  dateOfExpiry: undefined,
+  remarks: 'User added',
+  rowType: 'EXTRA_ULB',
+  isActive: true,
+};
 
 type DumpRowFixture = EulbDumpRowRecord & {
   isActive: boolean;
@@ -198,9 +209,21 @@ const dumpRows: DumpRowFixture[] = [
 const MOCK_TYPED_ROW_EDIT_FIELDS: EulbTypedFieldConfig[] = [
   {
     key: 'ulbCount',
-    label: 'Total ULBs',
+    label: 'Active ULBs Registered on City Finance as of March 31, 2026',
     formFieldType: 'number',
     fieldTypes: ['EULB_MAIN_FORM_FIELDS'],
+    disabled: true,
+    disabledReason: 'This value is automatically computed from City Finance registered active ULBs.',
+    includeInPayload: false,
+    validations: [],
+  },
+  {
+    key: 'electedBodyExcelFile',
+    label: 'Upload Elected Bodies Excel',
+    formFieldType: 'file',
+    fieldTypes: ['EULB_MAIN_FORM_FIELDS'],
+    folderPath: 'state/test/',
+    validations: [],
   },
   {
     key: 'censusCode',
@@ -261,9 +284,9 @@ const mockEulbFormJsonConfigService = {
   loadFields: jest.fn().mockResolvedValue(MOCK_TYPED_ROW_EDIT_FIELDS),
 };
 
-const mockFormModel = { findOne: jest.fn() };
+const mockFormModel = { findOne: jest.fn(), findOneAndUpdate: jest.fn(), create: jest.fn() };
 const mockRowModel = { find: jest.fn() };
-const mockUlbModel = { find: jest.fn() };
+const mockUlbModel = { find: jest.fn(), countDocuments: jest.fn() };
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
@@ -277,9 +300,9 @@ describe('ElectedUrbanLocalBodiesService', () => {
 
       // Default: no form found → blank template from ULB master.
       mockFormModel.findOne.mockReturnValue(q(null));
-      // Default: 2 ULBs in master for the fallback path.
+      // Default: 2 ULBs in active registry (always loaded in the new implementation).
       mockUlbModel.find.mockReturnValue(q(mockUlbs));
-      // Default: no rows (unused in the fallback path, but avoids unresolved promises).
+      // Default: no rows (unused in the fallback path).
       mockRowModel.find.mockReturnValue(q([]));
 
       const module: TestingModule = await Test.createTestingModule({
@@ -294,6 +317,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           { provide: FileTokenService, useValue: null },
           { provide: ConfigService, useValue: null },
           { provide: FileUrlNormalizerService, useValue: null },
+          { provide: FileInfoNormalizerService, useValue: null },
           { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
         ],
       }).compile();
@@ -321,8 +345,6 @@ describe('ElectedUrbanLocalBodiesService', () => {
     });
 
     it('generates dateOfConstitution custom formula with config-derived dates and correct per-row references', async () => {
-      // NOTE: ExcelJS 4.x does not serialize allowBlank: false — Excel defaults allowBlank to 1,
-      // so blank date cells may pass client-side validation. Backend upload validation is authoritative.
       const sheet = await generateAndLoad();
 
       const constitutionMin = MOCK_TYPED_ROW_EDIT_FIELDS.find((f) => f.key === 'dateOfConstitution')!.validations?.find(
@@ -334,14 +356,9 @@ describe('ElectedUrbanLocalBodiesService', () => {
 
       expect(dvRow2).toBeDefined();
       expect(dvRow2!.type).toBe('custom');
-
-      // Formula must NOT start with '=' — OOXML <formula1> expects the expression body only.
       expect(dvRow2!.formulae?.[0]).not.toMatch(/^=/);
       expect(dvRow2!.formulae?.[0]).toContain('$C2');
-
-      // When status is not Constituted, date cell must be blank.
       expect(dvRow2!.formulae?.[0]).toContain('$C2<>"Constituted",D2=""');
-      // When status is Constituted, cell must be a valid date in the configured range.
       expect(dvRow2!.formulae?.[0]).toContain('$C2="Constituted"');
       expect(dvRow2!.formulae?.[0]).toContain('ISNUMBER(D2)');
 
@@ -371,14 +388,11 @@ describe('ElectedUrbanLocalBodiesService', () => {
 
       expect(dvRow2).toBeDefined();
       expect(dvRow2!.type).toBe('custom');
-
       expect(dvRow2!.formulae?.[0]).not.toMatch(/^=/);
       expect(dvRow2!.formulae?.[0]).toContain('$C2');
-
       expect(dvRow2!.formulae?.[0]).toContain('$C2<>"Constituted",E2=""');
       expect(dvRow2!.formulae?.[0]).toContain('$C2="Constituted"');
       expect(dvRow2!.formulae?.[0]).toContain('ISNUMBER(E2)');
-
       expect(dvRow2!.formulae?.[0]).toContain('TODAY()');
       const [maxYear, maxMonth, maxDay] = expiryMax.split('-').map(Number);
       expect(dvRow2!.formulae?.[0]).toContain(`DATE(${maxYear},${maxMonth},${maxDay})`);
@@ -393,25 +407,13 @@ describe('ElectedUrbanLocalBodiesService', () => {
       expect(dvRow3!.formulae?.[0]).not.toContain('E2');
     });
 
-    it('extends validations to blank rows up to maxAllowedExcelRows (dbUlbCount × 2)', async () => {
-      // mockUlbs has 2 ULBs → maxAllowedExcelRows = 4 → validations on rows 2–5; row 6 absent.
+    it('generates validations covering exactly the active registry rows, with no blank padding', async () => {
+      // 2 active ULBs → validations on data rows 2 and 3 only; row 4 absent (no blank padding).
       const sheet = await generateAndLoad();
 
-      const dvRow4D = sheet.dataValidations.model['D4'];
-      expect(dvRow4D).toBeDefined();
-      expect(dvRow4D!.type).toBe('custom');
-      expect(dvRow4D!.formulae?.[0]).not.toMatch(/^=/);
-      expect(dvRow4D!.formulae?.[0]).toContain('$C4');
-      expect(dvRow4D!.formulae?.[0]).toContain('D4');
-
-      const dvRow4E = sheet.dataValidations.model['E4'];
-      expect(dvRow4E).toBeDefined();
-      expect(dvRow4E!.type).toBe('custom');
-      expect(dvRow4E!.formulae?.[0]).toContain('$C4');
-      expect(dvRow4E!.formulae?.[0]).toContain('E4');
-
-      expect(sheet.dataValidations.model['D5']).toBeDefined();
-      expect(sheet.dataValidations.model['D6']).toBeUndefined();
+      expect(sheet.dataValidations.model['D2']).toBeDefined();
+      expect(sheet.dataValidations.model['D3']).toBeDefined();
+      expect(sheet.dataValidations.model['D4']).toBeUndefined();
     });
 
     it('generates remarks textLength validation with max length from MOCK_TYPED_ROW_EDIT_FIELDS', async () => {
@@ -437,67 +439,83 @@ describe('ElectedUrbanLocalBodiesService', () => {
       expect(Object.keys(sheet.dataValidations.model)).toHaveLength(0);
     });
 
-    // ── Active dataset (prefill path) ────────────────────────────────────────
+    // ── Active dataset (prefill / overlay path) ──────────────────────────────
 
-    it('prefills electedBodyStatus from saved rows when an active dataset exists', async () => {
+    it('overlays saved row values for active registry ULBs when an active dataset exists', async () => {
       mockFormModel.findOne.mockReturnValueOnce(q(mockFormWithDataset));
-      mockRowModel.find.mockReturnValueOnce(q(mockSavedRows));
+      mockRowModel.find.mockReturnValueOnce(q(mockSavedDbRows));
       const sheet = await generateAndLoad();
 
-      // Column 3 = electedBodyStatus (C); rows sorted by rowNumber from mock.
-      expect(sheet.getRow(2).getCell(3).value).toBe('Constituted'); // rowNumber 1
-      expect(sheet.getRow(3).getCell(3).value).toBe('Not Constituted'); // rowNumber 2
-      expect(sheet.getRow(4).getCell(3).value).toBe('Exempt'); // rowNumber 3 (EXTRA_ULB)
+      // Active ULBs sorted by name: Alpha City (row 2), Beta Town (row 3).
+      expect(sheet.getRow(2).getCell(3).value).toBe('Constituted'); // electedBodyStatus
+      expect(sheet.getRow(3).getCell(3).value).toBe('Not Constituted');
     });
 
-    it('prefills dateOfConstitution and dateOfExpiry as Date objects for Constituted rows', async () => {
+    it('prefills dateOfConstitution and dateOfExpiry as Date objects for Constituted rows in overlay path', async () => {
       mockFormModel.findOne.mockReturnValueOnce(q(mockFormWithDataset));
-      mockRowModel.find.mockReturnValueOnce(q(mockSavedRows));
+      mockRowModel.find.mockReturnValueOnce(q(mockSavedDbRows));
       const sheet = await generateAndLoad();
 
-      // Row 2 = Alpha City (Constituted) → date cells must be Date instances.
+      // Alpha City (Constituted) → date cells must be Date instances.
       expect(sheet.getRow(2).getCell(4).value).toBeInstanceOf(Date); // dateOfConstitution
       expect(sheet.getRow(2).getCell(5).value).toBeInstanceOf(Date); // dateOfExpiry
 
-      // Row 3 = Beta Town (Not Constituted) → date cells must be empty.
+      // Beta Town (Not Constituted) → date cells must be empty.
       expect(sheet.getRow(3).getCell(4).value).toBeFalsy();
       expect(sheet.getRow(3).getCell(5).value).toBeFalsy();
     });
 
-    it('includes EXTRA_ULB rows from the active dataset in the template', async () => {
+    it('excludes EXTRA_ULB rows from the template when an active dataset exists', async () => {
       mockFormModel.findOne.mockReturnValueOnce(q(mockFormWithDataset));
-      mockRowModel.find.mockReturnValueOnce(q(mockSavedRows));
+      // The service queries with rowType: DB_ULB; include the EXTRA_ULB in the mock
+      // to verify the service itself filters it out via the ulbId overlay mechanism.
+      mockRowModel.find.mockReturnValueOnce(q([...mockSavedDbRows, mockExtraUlbRow]));
       const sheet = await generateAndLoad();
 
-      // Row 4 = Extra ULB One (rowNumber 3, EXTRA_ULB).
-      expect(sheet.getRow(4).getCell(2).value).toBe('Extra ULB One'); // ulbName column B
-      expect(sheet.getRow(4).getCell(1).value).toBe('EX01'); // censusCode column A
+      // Template should have exactly 2 rows (one per active ULB).
+      // Row 4 should be empty (no EXTRA_ULB).
+      const row4Name = sheet.getRow(4).getCell(2).value;
+      expect(row4Name).toBeFalsy();
+
+      // EXTRA_ULB census code should not appear.
+      const allCodes = [
+        sheet.getRow(2).getCell(1).value,
+        sheet.getRow(3).getCell(1).value,
+        sheet.getRow(4).getCell(1).value,
+      ];
+      expect(allCodes).not.toContain('EX01');
     });
 
-    it('applies validations to data rows and blank extra rows when active dataset exists', async () => {
-      // mockFormWithDataset.dbUlbCount = 2 → maxAllowedExcelRows = 4.
-      // mockSavedRows has 3 rows → 1 blank padding row → templateRows = 4.
-      // Validations cover rows 2–5; row 6 absent.
+    it('applies validations only to the active registry rows when an active dataset exists (no blank padding)', async () => {
       mockFormModel.findOne.mockReturnValueOnce(q(mockFormWithDataset));
-      mockRowModel.find.mockReturnValueOnce(q(mockSavedRows));
+      mockRowModel.find.mockReturnValueOnce(q(mockSavedDbRows));
       const sheet = await generateAndLoad();
 
-      expect(sheet.dataValidations.model['D2']).toBeDefined(); // first data row
-      expect(sheet.dataValidations.model['D5']).toBeDefined(); // last row (row 4 + 1)
-      expect(sheet.dataValidations.model['D6']).toBeUndefined(); // beyond max
+      // 2 active ULBs → validations on rows 2, 3 only.
+      expect(sheet.dataValidations.model['D2']).toBeDefined();
+      expect(sheet.dataValidations.model['D3']).toBeDefined();
+      expect(sheet.dataValidations.model['D4']).toBeUndefined();
     });
 
     it('falls back to ULB master with blank editable fields when no form record exists', async () => {
       // Default mock: formModel.findOne returns null → fallback path.
       const sheet = await generateAndLoad();
 
-      // Column 2 = ulbName (B); sorted by name from mockUlbs.
+      // Active ULBs sorted by name → Alpha City (row 2), Beta Town (row 3).
       expect(sheet.getRow(2).getCell(2).value).toBe('Alpha City');
       expect(sheet.getRow(3).getCell(2).value).toBe('Beta Town');
 
       // Editable fields are blank in the fallback path.
       expect(sheet.getRow(2).getCell(3).value).toBe(''); // electedBodyStatus
       expect(sheet.getRow(2).getCell(4).value).toBe(''); // dateOfConstitution
+    });
+
+    it('loads active ULBs scoped to the request state with { state: stateOid, isActive: true }', async () => {
+      await generateAndLoad();
+
+      expect(mockUlbModel.find).toHaveBeenCalledWith(
+        expect.objectContaining({ state: expect.any(Types.ObjectId), isActive: true }),
+      );
     });
   });
 
@@ -548,6 +566,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           { provide: FileTokenService, useValue: null },
           { provide: ConfigService, useValue: null },
           { provide: FileUrlNormalizerService, useValue: null },
+          { provide: FileInfoNormalizerService, useValue: null },
           { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
         ],
       }).compile();
@@ -654,14 +673,22 @@ describe('ElectedUrbanLocalBodiesService', () => {
       buildActorsAndStateName: jest.fn().mockReturnValue({ actors: [], stateName: 'Test State' }),
     };
     const mockDynamicFormValidator = { validateForm: jest.fn() };
-    const mockFileTokenService = { signUrl: jest.fn((url: string) => url) };
-    const mockConfig = { get: jest.fn().mockReturnValue('24h') };
+    const mockFileTokenService = { createToken: jest.fn().mockReturnValue('mock-token') };
+    const mockConfig = {
+      get: jest.fn().mockImplementation((key: string, def: unknown) => {
+        if (key === 'JWT_EXPIRES_IN') return '24h';
+        if (key === 'AWS_STORAGE_URL') return '';
+        if (key === 'BASE_URL') return '';
+        return def ?? '';
+      }),
+    };
     const mockFileUrlNormalizer = { normalizeFileUrl: jest.fn((v: unknown) => v) };
 
     beforeEach(async () => {
       jest.clearAllMocks();
       mockEulbFormJsonConfigService.loadFields.mockResolvedValue(MOCK_TYPED_ROW_EDIT_FIELDS);
-      mockFormModel.findOne.mockReturnValue(q(null)); // no saved form → default NOT_STARTED response
+      mockFormModel.findOne.mockReturnValue(q(null));
+      mockUlbModel.countDocuments.mockResolvedValue(5); // computed active ULB count
 
       const module: TestingModule = await Test.createTestingModule({
         providers: [
@@ -675,6 +702,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           { provide: FileTokenService, useValue: mockFileTokenService },
           { provide: ConfigService, useValue: mockConfig },
           { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
+          FileInfoNormalizerService,
           { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
         ],
       }).compile();
@@ -698,6 +726,522 @@ describe('ElectedUrbanLocalBodiesService', () => {
       expect(Array.isArray(fields)).toBe(true);
       expect(fields.some((f) => f.key === 'censusCode')).toBe(false);
       expect(fields.some((f) => f.key === 'ulbName')).toBe(false);
+    });
+
+    // ─── ulbCount hydration (backend-owned, read-only) ───────────────────────
+
+    it('hydrates ulbCount with the computed active registry count from countDocuments', async () => {
+      mockUlbModel.countDocuments.mockResolvedValueOnce(7);
+
+      const result = await service.getForm(stateOid.toString(), yearOid.toString(), adminUser);
+      const data = result.data as Record<string, unknown>;
+      const questions = data['questions'] as Array<Record<string, unknown>>;
+      const ulbCountQ = questions.find((q) => q['key'] === 'ulbCount');
+
+      expect(ulbCountQ).toBeDefined();
+      expect(ulbCountQ!['value']).toBe(7);
+    });
+
+    it('sets the correct updated label on the hydrated ulbCount field', async () => {
+      const result = await service.getForm(stateOid.toString(), yearOid.toString(), adminUser);
+      const data = result.data as Record<string, unknown>;
+      const questions = data['questions'] as Array<Record<string, unknown>>;
+      const ulbCountQ = questions.find((q) => q['key'] === 'ulbCount');
+
+      expect(ulbCountQ!['label']).toBe('Active ULBs Registered on City Finance as of March 31, 2026');
+    });
+
+    it('marks ulbCount as disabled with a disabledReason', async () => {
+      const result = await service.getForm(stateOid.toString(), yearOid.toString(), adminUser);
+      const data = result.data as Record<string, unknown>;
+      const questions = data['questions'] as Array<Record<string, unknown>>;
+      const ulbCountQ = questions.find((q) => q['key'] === 'ulbCount');
+
+      expect(ulbCountQ!['disabled']).toBe(true);
+      expect(typeof ulbCountQ!['disabledReason']).toBe('string');
+      expect((ulbCountQ!['disabledReason'] as string).length).toBeGreaterThan(0);
+    });
+
+    it('sets includeInPayload to false on the ulbCount field', async () => {
+      const result = await service.getForm(stateOid.toString(), yearOid.toString(), adminUser);
+      const data = result.data as Record<string, unknown>;
+      const questions = data['questions'] as Array<Record<string, unknown>>;
+      const ulbCountQ = questions.find((q) => q['key'] === 'ulbCount');
+
+      expect(ulbCountQ!['includeInPayload']).toBe(false);
+    });
+
+    it('queries countDocuments with { state: stateOid, isActive: true }', async () => {
+      await service.getForm(stateOid.toString(), yearOid.toString(), adminUser);
+
+      expect(mockUlbModel.countDocuments).toHaveBeenCalledWith(expect.objectContaining({ isActive: true }));
+    });
+
+    // ─── Register ULB supporting action ─────────────────────────────────────
+
+    it('exposes the Register ULB action when the user can edit and extraExcelRowCount > 0', async () => {
+      mockFormModel.findOne.mockReturnValueOnce(
+        q({
+          _id: formOid,
+          currentFormStatus: FORM_STATUS.IN_PROGRESS,
+          activeDatasetVersion: 1,
+          excelRowCount: 3,
+          errorRowCount: 1,
+          extraExcelRowCount: 2,
+          validationStatus: 'INVALID',
+          electedBodyExcelFile: { originalName: 'test.xlsx', path: 'state/test.xlsx' },
+        }),
+      );
+      // adminUser has ADMIN scope so canEdit depends on form status (IN_PROGRESS → can edit)
+      const result = await service.getForm(stateOid.toString(), yearOid.toString(), adminUser);
+      const data = result.data as Record<string, unknown>;
+      const questions = data['questions'] as Array<Record<string, unknown>>;
+      const excelQ = questions.find((q) => q['key'] === 'electedBodyExcelFile');
+
+      const supportingContent = excelQ!['supportingContent'] as Array<{
+        actions?: Array<{ id: string; visible: boolean }>;
+      }>;
+      const block = supportingContent[0];
+      const registerUlbAction = block?.actions?.find((a) => a.id === 'register-ulb');
+
+      expect(registerUlbAction).toBeDefined();
+      expect(registerUlbAction!.visible).toBe(true);
+    });
+
+    it('hides the Register ULB action when extraExcelRowCount is 0', async () => {
+      mockFormModel.findOne.mockReturnValueOnce(
+        q({
+          _id: formOid,
+          currentFormStatus: FORM_STATUS.IN_PROGRESS,
+          activeDatasetVersion: 1,
+          excelRowCount: 2,
+          errorRowCount: 0,
+          extraExcelRowCount: 0,
+          validationStatus: 'VALID',
+          electedBodyExcelFile: { originalName: 'test.xlsx', path: 'state/test.xlsx' },
+        }),
+      );
+      const result = await service.getForm(stateOid.toString(), yearOid.toString(), adminUser);
+      const data = result.data as Record<string, unknown>;
+      const questions = data['questions'] as Array<Record<string, unknown>>;
+      const excelQ = questions.find((q) => q['key'] === 'electedBodyExcelFile');
+
+      const supportingContent = excelQ!['supportingContent'] as Array<{
+        actions?: Array<{ id: string; visible: boolean }>;
+      }>;
+      const block = supportingContent[0];
+      const registerUlbAction = block?.actions?.find((a) => a.id === 'register-ulb');
+
+      expect(registerUlbAction?.visible).toBe(false);
+    });
+
+    it('hides the Register ULB action when the form has no saved record', async () => {
+      // formModel.findOne returns null (no form yet)
+      const result = await service.getForm(stateOid.toString(), yearOid.toString(), adminUser);
+      const data = result.data as Record<string, unknown>;
+      const questions = data['questions'] as Array<Record<string, unknown>>;
+      const excelQ = questions.find((q) => q['key'] === 'electedBodyExcelFile');
+
+      const supportingContent = excelQ!['supportingContent'] as Array<{
+        actions?: Array<{ id: string; visible: boolean }>;
+      }>;
+      const block = supportingContent[0];
+      const registerUlbAction = block?.actions?.find((a) => a.id === 'register-ulb');
+
+      expect(registerUlbAction?.visible).toBe(false);
+    });
+
+    it('includes the correct /xvifc/:yearId/register-ulb URL on the Register ULB action', async () => {
+      mockFormModel.findOne.mockReturnValueOnce(
+        q({
+          _id: formOid,
+          currentFormStatus: FORM_STATUS.IN_PROGRESS,
+          activeDatasetVersion: 1,
+          excelRowCount: 3,
+          errorRowCount: 1,
+          extraExcelRowCount: 1,
+          validationStatus: 'INVALID',
+          electedBodyExcelFile: { originalName: 'test.xlsx', path: 'state/test.xlsx' },
+        }),
+      );
+      const result = await service.getForm(stateOid.toString(), yearOid.toString(), adminUser);
+      const data = result.data as Record<string, unknown>;
+      const questions = data['questions'] as Array<Record<string, unknown>>;
+      const excelQ = questions.find((q) => q['key'] === 'electedBodyExcelFile');
+
+      const supportingContent = excelQ!['supportingContent'] as Array<{
+        actions?: Array<{ id: string; url?: string }>;
+      }>;
+      const block = supportingContent[0];
+      const registerUlbAction = block?.actions?.find((a) => a.id === 'register-ulb');
+
+      expect(registerUlbAction?.url).toBe(`/xvifc/${yearOid.toString()}/register-ulb`);
+    });
+
+    // ─── pageCount hydration ─────────────────────────────────────────────────
+
+    it('returns the saved electedBodyExcelFile.pageCount on the hydrated file value', async () => {
+      mockFormModel.findOne.mockReturnValueOnce(
+        q({
+          _id: formOid,
+          currentFormStatus: FORM_STATUS.IN_PROGRESS,
+          activeDatasetVersion: 1,
+          excelRowCount: 2,
+          errorRowCount: 0,
+          extraExcelRowCount: 0,
+          validationStatus: 'VALID',
+          electedBodyExcelFile: {
+            originalName: 'test.xlsx',
+            path: 'state/test.xlsx',
+            mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            sizeKb: 1,
+            createdAt: '2026-01-01T00:00:00.000Z',
+            pageCount: null,
+          },
+        }),
+      );
+
+      const result = await service.getForm(stateOid.toString(), yearOid.toString(), adminUser);
+      const data = result.data as Record<string, unknown>;
+      const questions = data['questions'] as Array<Record<string, unknown>>;
+      const excelQ = questions.find((q) => q['key'] === 'electedBodyExcelFile');
+
+      const fileValue = excelQ!['value'] as { pageCount?: number | null };
+      expect(fileValue.pageCount).toBeNull();
+    });
+  });
+
+  // ─── saveDraft ───────────────────────────────────────────────────────────────
+
+  describe('saveDraft', () => {
+    let service: ElectedUrbanLocalBodiesService;
+
+    const mockValidator = {
+      validateDraftAndBuildPayload: jest.fn().mockReturnValue({
+        isValid: true,
+        errors: {},
+        sanitizedPayload: { checkboxConfirmation: true },
+      }),
+    };
+    const mockFileUrlNormalizer = { toRawStoragePath: jest.fn((v: string) => v) };
+
+    beforeEach(async () => {
+      jest.clearAllMocks();
+      mockEulbFormJsonConfigService.loadFields.mockResolvedValue(MOCK_TYPED_ROW_EDIT_FIELDS);
+      mockUlbModel.countDocuments.mockResolvedValue(3);
+      mockFormModel.findOne.mockReturnValue(q(null)); // no existing form → create path
+      mockFormModel.create.mockResolvedValue({ toObject: () => ({ _id: formOid, ulbCount: 3 }) });
+
+      const module: TestingModule = await Test.createTestingModule({
+        providers: [
+          ElectedUrbanLocalBodiesService,
+          ExcelService,
+          { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: mockFormModel },
+          { provide: getModelToken(ElectedUrbanLocalBodiesRow.name), useValue: mockRowModel },
+          { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+          { provide: DynamicFormValidationService, useValue: mockValidator },
+          { provide: XvifcFormActorsService, useValue: { buildActorsAndStateName: jest.fn() } },
+          { provide: FileTokenService, useValue: null },
+          { provide: ConfigService, useValue: null },
+          { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
+          FileInfoNormalizerService,
+          { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
+        ],
+      }).compile();
+
+      service = module.get<ElectedUrbanLocalBodiesService>(ElectedUrbanLocalBodiesService);
+    });
+
+    it('ignores the client-submitted ulbCount and uses the server-computed active ULB count', async () => {
+      mockUlbModel.countDocuments.mockResolvedValueOnce(4);
+
+      await service.saveDraft(
+        { stateId: stateOid.toString(), yearId: yearOid.toString(), data: { ulbCount: 999 } },
+        adminUser,
+        '',
+        '',
+      );
+
+      const createArg = (mockFormModel.create.mock.calls as unknown[][])[0][0] as Record<string, unknown>;
+      expect(createArg['ulbCount']).toBe(4);
+    });
+
+    it('persists the computed ulbCount even when the client sends a tampered value', async () => {
+      mockUlbModel.countDocuments.mockResolvedValueOnce(2);
+
+      await service.saveDraft(
+        { stateId: stateOid.toString(), yearId: yearOid.toString(), data: { ulbCount: 50 } },
+        adminUser,
+        '',
+        '',
+      );
+
+      const createArg = (mockFormModel.create.mock.calls as unknown[][])[0][0] as Record<string, unknown>;
+      expect(createArg['ulbCount']).toBe(2);
+      expect(createArg['ulbCount']).not.toBe(50);
+    });
+
+    it('still saves draft successfully when no ulbCount is provided by the client', async () => {
+      await expect(
+        service.saveDraft({ stateId: stateOid.toString(), yearId: yearOid.toString(), data: {} }, adminUser, '', ''),
+      ).resolves.toBeDefined();
+    });
+
+    it('accepts and persists data.electedBodyExcelFile.pageCount (null for Excel uploads)', async () => {
+      await service.saveDraft(
+        {
+          stateId: stateOid.toString(),
+          yearId: yearOid.toString(),
+          data: {
+            electedBodyExcelFile: {
+              originalName: 'test.xlsx',
+              path: 'state/test.xlsx',
+              mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+              sizeKb: 1,
+              createdAt: '2026-01-01T00:00:00.000Z',
+              pageCount: null,
+            },
+            checkboxConfirmation: true,
+          },
+        },
+        adminUser,
+        '',
+        '',
+      );
+
+      const createArg = (mockFormModel.create.mock.calls as unknown[][])[0][0] as Record<string, unknown>;
+      expect((createArg['electedBodyExcelFile'] as { pageCount?: number | null }).pageCount).toBeNull();
+    });
+
+    it('does not throw a mismatch error when client ulbCount differs from saved excelRowCount', async () => {
+      // Prior behavior: mismatch between ulbCount and excelRowCount was a 400.
+      // New behavior: ulbCount is backend-owned, so no mismatch check exists.
+      mockFormModel.findOne.mockReturnValueOnce(
+        q({ _id: formOid, currentFormStatus: FORM_STATUS.IN_PROGRESS, excelRowCount: 10 }),
+      );
+      mockFormModel.findOneAndUpdate.mockReturnValue(q({ _id: formOid, ulbCount: 3 }));
+
+      await expect(
+        service.saveDraft(
+          { stateId: stateOid.toString(), yearId: yearOid.toString(), data: { ulbCount: 999 } },
+          adminUser,
+          '',
+          '',
+        ),
+      ).resolves.toBeDefined();
+    });
+  });
+
+  // ─── finalSubmit ─────────────────────────────────────────────────────────────
+
+  describe('finalSubmit', () => {
+    let service: ElectedUrbanLocalBodiesService;
+
+    const mockValidator = {
+      validateFinalSubmitAndBuildPayload: jest.fn().mockReturnValue({
+        isValid: true,
+        errors: {},
+        sanitizedPayload: { checkboxConfirmation: true, electedBodyExcelFile: {} },
+      }),
+    };
+    const mockFileUrlNormalizer = { toRawStoragePath: jest.fn((v: string) => v) };
+
+    const baseFormDoc = {
+      _id: formOid,
+      currentFormStatus: FORM_STATUS.IN_PROGRESS,
+      validationStatus: 'VALID',
+      errorRowCount: 0,
+      missingDbUlbCount: 0,
+      excelRowCount: 3,
+      dbUlbCount: 3,
+      maxAllowedExcelRows: 6,
+      matchedDbUlbCount: 3,
+      extraExcelRowCount: 0,
+      activeDatasetVersion: 1,
+    };
+
+    const baseDto = {
+      stateId: stateOid.toString(),
+      yearId: yearOid.toString(),
+      data: {
+        ulbCount: 999, // client sends tampered value — should be ignored
+        electedBodyExcelFile: {
+          originalName: 'test.xlsx',
+          path: 'state/test.xlsx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          sizeKb: 0.9765625,
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
+        checkboxConfirmation: true,
+      },
+    };
+
+    beforeEach(async () => {
+      jest.clearAllMocks();
+      mockEulbFormJsonConfigService.loadFields.mockResolvedValue(MOCK_TYPED_ROW_EDIT_FIELDS);
+      mockUlbModel.countDocuments.mockResolvedValue(3); // computed active ULB count
+      mockFormModel.findOne.mockReturnValue(q(baseFormDoc));
+      mockFormModel.findOneAndUpdate.mockReturnValue(q({ ...baseFormDoc, currentFormStatus: 3 }));
+
+      const module: TestingModule = await Test.createTestingModule({
+        providers: [
+          ElectedUrbanLocalBodiesService,
+          ExcelService,
+          { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: mockFormModel },
+          { provide: getModelToken(ElectedUrbanLocalBodiesRow.name), useValue: mockRowModel },
+          { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+          { provide: DynamicFormValidationService, useValue: mockValidator },
+          { provide: XvifcFormActorsService, useValue: { buildActorsAndStateName: jest.fn() } },
+          { provide: FileTokenService, useValue: null },
+          { provide: ConfigService, useValue: null },
+          { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
+          FileInfoNormalizerService,
+          { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
+        ],
+      }).compile();
+
+      service = module.get<ElectedUrbanLocalBodiesService>(ElectedUrbanLocalBodiesService);
+    });
+
+    it('succeeds (happy path) when all checks pass and extraExcelRowCount is 0', async () => {
+      await expect(service.finalSubmit(baseDto, adminUser, '', '')).resolves.toBeDefined();
+    });
+
+    it('ignores client ulbCount and persists the server-computed active ULB count', async () => {
+      mockUlbModel.countDocuments.mockResolvedValueOnce(3);
+      await service.finalSubmit(baseDto, adminUser, '', '');
+
+      const updateArg = (mockFormModel.findOneAndUpdate.mock.calls as unknown[][])[0][1] as {
+        $set: Record<string, unknown>;
+      };
+      expect(updateArg.$set['ulbCount']).toBe(3);
+      expect(updateArg.$set['ulbCount']).not.toBe(999);
+    });
+
+    it('preserves data.electedBodyExcelFile.pageCount in the persisted final-submit update', async () => {
+      await service.finalSubmit(
+        {
+          ...baseDto,
+          data: {
+            ...baseDto.data,
+            electedBodyExcelFile: {
+              originalName: 'test.xlsx',
+              path: 'state/test.xlsx',
+              mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+              sizeKb: 1,
+              createdAt: '2026-01-01T00:00:00.000Z',
+              pageCount: null,
+            },
+          },
+        },
+        adminUser,
+        '',
+        '',
+      );
+
+      const updateArg = (mockFormModel.findOneAndUpdate.mock.calls as unknown[][])[0][1] as {
+        $set: Record<string, unknown>;
+      };
+      expect((updateArg.$set['electedBodyExcelFile'] as { pageCount?: number | null }).pageCount).toBeNull();
+    });
+
+    it('blocks with electedBodyExcelFile.newUlbsAdded when extraExcelRowCount > 0', async () => {
+      mockFormModel.findOne.mockReturnValueOnce(
+        q({ ...baseFormDoc, extraExcelRowCount: 2, errorRowCount: 2, validationStatus: 'INVALID' }),
+      );
+
+      let caught: BadRequestException | undefined;
+      try {
+        await service.finalSubmit(baseDto, adminUser, '', '');
+      } catch (e) {
+        caught = e as BadRequestException;
+      }
+
+      expect(caught).toBeDefined();
+      const response = caught!.getResponse() as { errors: Record<string, Array<{ code: string }>> };
+      expect(response.errors['electedBodyExcelFile']).toEqual(
+        expect.arrayContaining([expect.objectContaining({ code: 'newUlbsAdded' })]),
+      );
+    });
+
+    it('blocks with electedBodyExcelFile.excelInvalid when excelRowCount !== computedActiveUlbCount', async () => {
+      mockUlbModel.countDocuments.mockResolvedValueOnce(5); // registry says 5
+      mockFormModel.findOne.mockReturnValueOnce(
+        q({ ...baseFormDoc, excelRowCount: 3, validationStatus: 'INVALID' }), // Excel has 3 rows
+      );
+
+      let caught: BadRequestException | undefined;
+      try {
+        await service.finalSubmit(baseDto, adminUser, '', '');
+      } catch (e) {
+        caught = e as BadRequestException;
+      }
+
+      expect(caught).toBeDefined();
+      const response = caught!.getResponse() as { errors: Record<string, Array<{ code: string }>> };
+      expect(response.errors['electedBodyExcelFile']).toEqual(
+        expect.arrayContaining([expect.objectContaining({ code: 'excelInvalid' })]),
+      );
+    });
+
+    it('blocks with excelNotValidated when no form record exists', async () => {
+      mockFormModel.findOne.mockReturnValueOnce(q(null));
+
+      let caught: BadRequestException | undefined;
+      try {
+        await service.finalSubmit(baseDto, adminUser, '', '');
+      } catch (e) {
+        caught = e as BadRequestException;
+      }
+
+      expect(caught).toBeDefined();
+      const response = caught!.getResponse() as { errors: Record<string, Array<{ code: string }>> };
+      expect(response.errors['electedBodyExcelFile']).toEqual(
+        expect.arrayContaining([expect.objectContaining({ code: 'excelNotValidated' })]),
+      );
+    });
+
+    it('blocks when validationStatus is INVALID (not VALID)', async () => {
+      mockFormModel.findOne.mockReturnValueOnce(q({ ...baseFormDoc, validationStatus: 'INVALID' }));
+
+      let caught: BadRequestException | undefined;
+      try {
+        await service.finalSubmit(baseDto, adminUser, '', '');
+      } catch (e) {
+        caught = e as BadRequestException;
+      }
+
+      expect(caught).toBeDefined();
+    });
+
+    it('blocks when errorRowCount > 0', async () => {
+      mockFormModel.findOne.mockReturnValueOnce(q({ ...baseFormDoc, errorRowCount: 3, validationStatus: 'INVALID' }));
+
+      let caught: BadRequestException | undefined;
+      try {
+        await service.finalSubmit(baseDto, adminUser, '', '');
+      } catch (e) {
+        caught = e as BadRequestException;
+      }
+
+      expect(caught).toBeDefined();
+      const response = caught!.getResponse() as { errors: Record<string, Array<{ code: string }>> };
+      expect(response.errors['electedBodyExcelFile']).toBeDefined();
+    });
+
+    it('blocks when missingDbUlbCount > 0', async () => {
+      mockFormModel.findOne.mockReturnValueOnce(
+        q({ ...baseFormDoc, missingDbUlbCount: 1, validationStatus: 'INVALID' }),
+      );
+
+      let caught: BadRequestException | undefined;
+      try {
+        await service.finalSubmit(baseDto, adminUser, '', '');
+      } catch (e) {
+        caught = e as BadRequestException;
+      }
+
+      expect(caught).toBeDefined();
     });
   });
 });

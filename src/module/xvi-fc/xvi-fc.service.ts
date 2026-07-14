@@ -146,16 +146,16 @@ export class XviFcService {
     return results.map((r) => ({ _id: r._id.toString(), year: r.year }));
   }
 
-  async getUlbById(ulbId: string): Promise<{ ulbName: string; stateName: string }> {
+  async getUlbById(ulbId: string): Promise<{ ulbName: string; stateId: string; stateName: string }> {
     const ulb = await this.ulbModel
       .findById(ulbId)
       .select('name state')
-      .populate<{ state: { name: string } }>('state', 'name')
+      .populate<{ state: { _id: Types.ObjectId; name: string } }>('state', 'name')
       .lean()
       .exec();
 
     if (!ulb) throw new NotFoundException('ULB not found');
-    return { ulbName: ulb.name, stateName: ulb.state?.name ?? '' };
+    return { ulbName: ulb.name, stateId: ulb.state?._id?.toString() ?? '', stateName: ulb.state?.name ?? '' };
   }
 
   async getStateById(stateId: string): Promise<{ stateName: string }> {

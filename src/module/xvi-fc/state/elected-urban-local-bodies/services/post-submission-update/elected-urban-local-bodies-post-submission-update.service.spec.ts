@@ -20,10 +20,13 @@ import {
   canViewPostSubmissionUpdate,
 } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
 import type {
-  EulbPostSubmissionUpdateDocumentDto,
   SubmitEulbPostSubmissionUpdateDto,
   SubmitEulbPostSubmissionUpdateRowDto,
 } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/submit-eulb-post-submission-update.dto';
+import { XviFcFileRefDto } from 'src/module/xvi-fc/common/dto/xvi-fc-file-ref.dto';
+import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
+import { FileUrlNormalizerService } from 'src/module/xvi-fc/common/services/file-url-normalizer.service';
+import { FileTokenService } from 'src/core/file-token/file-token.service';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -247,9 +250,7 @@ describe('buildEligibleRowCondition', () => {
   it('uses $lt (strict less-than) so rows expiring exactly today or in the future are excluded', () => {
     const condition = buildEligibleRowCondition(TODAY);
     const orClauses = condition['$or'] as Array<Record<string, unknown>>;
-    const constitutedClause = orClauses.find((c) => c['electedBodyStatus'] === 'Constituted') as
-      | Record<string, unknown>
-      | undefined;
+    const constitutedClause = orClauses.find((c) => c['electedBodyStatus'] === 'Constituted');
     expect(constitutedClause?.['dateOfExpiry']).toEqual({ $lt: TODAY });
   });
 
@@ -366,6 +367,9 @@ describe('EulbPostSubmissionUpdateService', () => {
         { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: formModel },
         { provide: getModelToken(ElectedUrbanLocalBodiesRow.name), useValue: rowModel },
         { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
+        FileInfoNormalizerService,
+        { provide: FileUrlNormalizerService, useValue: { toRawStoragePath: jest.fn((v: string) => v) } },
+        { provide: FileTokenService, useValue: { signFileUrl: jest.fn((p: string) => `signed::${p}`) } },
       ],
     }).compile();
 
@@ -831,7 +835,7 @@ describe('EulbPostSubmissionUpdateService', () => {
 
         await service.getEligibleRows(stateOid.toString(), yearOid.toString(), {}, adminUser);
 
-        const pipeline = (rowModel['aggregate'] as jest.Mock).mock.calls[0][0] as Array<Record<string, unknown>>;
+        const pipeline = rowModel['aggregate'].mock.calls[0][0] as Array<Record<string, unknown>>;
         const matchStage = pipeline[0]['$match'] as Record<string, unknown>;
         expect(matchStage).toMatchObject({ isActive: true, datasetVersion: 1 });
       });
@@ -850,7 +854,7 @@ describe('EulbPostSubmissionUpdateService', () => {
           adminUser,
         );
 
-        const pipeline = (rowModel['aggregate'] as jest.Mock).mock.calls[0][0] as Array<Record<string, unknown>>;
+        const pipeline = rowModel['aggregate'].mock.calls[0][0] as Array<Record<string, unknown>>;
         const matchStage = pipeline[0]['$match'] as Record<string, unknown>;
         expect(matchStage).not.toHaveProperty('$and');
         expect(matchStage).not.toHaveProperty('$or');
@@ -1212,19 +1216,20 @@ describe('EulbPostSubmissionUpdateService', () => {
     }
 
     const validDocument = {
-      fileName: 'combined.pdf',
-      fileUrl: 'https://bucket.s3.example.com/combined.pdf',
-      fileSize: 1024,
+      originalName: 'combined.pdf',
+      path: 'https://bucket.s3.example.com/combined.pdf',
+      sizeKb: 1,
       mimeType: 'application/pdf',
+      createdAt: '2026-01-01T00:00:00.000Z',
     };
 
     function makeDto(
-      docOverride: Partial<EulbPostSubmissionUpdateDocumentDto> = {},
+      docOverride: Partial<XviFcFileRefDto> = {},
       rowsOverride?: SubmitEulbPostSubmissionUpdateRowDto[],
     ): SubmitEulbPostSubmissionUpdateDto {
       return {
         rows: rowsOverride ?? [{ rowId: rowOid.toString(), electedBodyStatus: 'Not Constituted' }],
-        document: { ...validDocument, ...docOverride },
+        document: { ...validDocument, ...docOverride } as XviFcFileRefDto,
       };
     }
 
@@ -1240,12 +1245,14 @@ describe('EulbPostSubmissionUpdateService', () => {
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('throws BadRequestException when mimeType is omitted and fileName does not end in .pdf', async () => {
+    // Canonical contract requires mimeType always (no more filename-extension fallback for a
+    // missing mimeType) — omitting it now fails on the required-field check instead.
+    it('throws BadRequestException when mimeType is omitted', async () => {
       await expect(
         service.submitBatch(
           stateOid.toString(),
           yearOid.toString(),
-          makeDto({ fileName: 'report.docx', mimeType: undefined }),
+          makeDto({ originalName: 'report.docx', mimeType: undefined }),
           adminUser,
         ),
       ).rejects.toThrow(BadRequestException);
@@ -1256,42 +1263,29 @@ describe('EulbPostSubmissionUpdateService', () => {
       expect(result.success).toBe(true);
     });
 
-    it('accepts PDF by fileName extension when mimeType is omitted', async () => {
-      const result = await service.submitBatch(
-        stateOid.toString(),
-        yearOid.toString(),
-        makeDto({ fileName: 'report.pdf', mimeType: undefined }),
-        adminUser,
-      );
-      expect(result.success).toBe(true);
-    });
-
-    it('throws BadRequestException when fileSize exceeds 20 MB', async () => {
+    it('throws BadRequestException when sizeKb exceeds 20 MB', async () => {
       await expect(
-        service.submitBatch(
-          stateOid.toString(),
-          yearOid.toString(),
-          makeDto({ fileSize: 21 * 1024 * 1024 }),
-          adminUser,
-        ),
+        service.submitBatch(stateOid.toString(), yearOid.toString(), makeDto({ sizeKb: 21 * 1024 }), adminUser),
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('throws BadRequestException when fileSize is zero', async () => {
+    // Canonical contract allows sizeKb: 0 (non-negative) — the old ">0" business rule is
+    // superseded; a negative size is what is now rejected.
+    it('throws BadRequestException when sizeKb is negative', async () => {
       await expect(
-        service.submitBatch(stateOid.toString(), yearOid.toString(), makeDto({ fileSize: 0 }), adminUser),
+        service.submitBatch(stateOid.toString(), yearOid.toString(), makeDto({ sizeKb: -1 }), adminUser),
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('throws BadRequestException when fileName is empty', async () => {
+    it('throws BadRequestException when originalName is empty', async () => {
       await expect(
-        service.submitBatch(stateOid.toString(), yearOid.toString(), makeDto({ fileName: '  ' }), adminUser),
+        service.submitBatch(stateOid.toString(), yearOid.toString(), makeDto({ originalName: '  ' }), adminUser),
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('throws BadRequestException when fileUrl is empty', async () => {
+    it('throws BadRequestException when path is empty', async () => {
       await expect(
-        service.submitBatch(stateOid.toString(), yearOid.toString(), makeDto({ fileUrl: '' }), adminUser),
+        service.submitBatch(stateOid.toString(), yearOid.toString(), makeDto({ path: '' }), adminUser),
       ).rejects.toThrow(BadRequestException);
     });
 
@@ -1389,38 +1383,52 @@ describe('EulbPostSubmissionUpdateService', () => {
         batchId: expect.any(String),
         updatedRowCount: 1,
         document: expect.objectContaining({
-          fileName: 'combined.pdf',
-          fileUrl: 'https://bucket.s3.example.com/combined.pdf',
+          originalName: 'combined.pdf',
           mimeType: 'application/pdf',
         }),
         validationSummary: expect.objectContaining({ validationStatus: expect.any(String) }),
       });
     });
 
-    it('document.fileUrl in response matches dto.document.fileUrl exactly without presigned regeneration', async () => {
-      const customUrl = 'https://custom.cdn.example.com/upload/batch.pdf';
+    // The persisted DB path is the client's normalized raw path verbatim; the RESPONSE path is
+    // always signed (never the raw path) per the canonical GET/response contract.
+    it('persists the normalized raw path but signs document.path in the response', async () => {
+      const customPath = 'https://custom.cdn.example.com/upload/batch.pdf';
       const result = await service.submitBatch(
         stateOid.toString(),
         yearOid.toString(),
-        makeDto({ fileUrl: customUrl }),
-        adminUser,
-      );
-      expect(result.data!.document.fileUrl).toBe(customUrl);
-    });
-
-    it('defaults document.mimeType to application/pdf in stored batch when omitted', async () => {
-      await service.submitBatch(
-        stateOid.toString(),
-        yearOid.toString(),
-        makeDto({ fileName: 'report.pdf', mimeType: undefined }),
+        makeDto({ path: customPath }),
         adminUser,
       );
 
       const updateCall = (formModel['findByIdAndUpdate'] as jest.Mock).mock.calls[0];
       const push = (updateCall[1] as Record<string, unknown>)['$push'] as Record<string, unknown>;
       const batch = push['postSubmissionUpdates'] as Record<string, unknown>;
+      const storedDoc = batch['document'] as Record<string, unknown>;
+      expect(storedDoc['path']).toBe(customPath);
+
+      expect(result.data!.document.path).not.toBe(customPath);
+      expect(result.data!.document.path).toContain('signed::');
+    });
+
+    it('stores document.pageCount in the batch when the frontend sends a PDF page count', async () => {
+      await service.submitBatch(stateOid.toString(), yearOid.toString(), makeDto({ pageCount: 12 }), adminUser);
+
+      const updateCall = (formModel['findByIdAndUpdate'] as jest.Mock).mock.calls[0];
+      const push = (updateCall[1] as Record<string, unknown>)['$push'] as Record<string, unknown>;
+      const batch = push['postSubmissionUpdates'] as Record<string, unknown>;
       const doc = batch['document'] as Record<string, unknown>;
-      expect(doc['mimeType']).toBe('application/pdf');
+      expect(doc['pageCount']).toBe(12);
+    });
+
+    it('defaults document.pageCount to null in the stored batch when omitted (backward compatible)', async () => {
+      await service.submitBatch(stateOid.toString(), yearOid.toString(), makeDto(), adminUser);
+
+      const updateCall = (formModel['findByIdAndUpdate'] as jest.Mock).mock.calls[0];
+      const push = (updateCall[1] as Record<string, unknown>)['$push'] as Record<string, unknown>;
+      const batch = push['postSubmissionUpdates'] as Record<string, unknown>;
+      const doc = batch['document'] as Record<string, unknown>;
+      expect(doc['pageCount']).toBeNull();
     });
 
     it('commits the MongoDB transaction on success', async () => {
@@ -1461,14 +1469,14 @@ describe('EulbPostSubmissionUpdateService', () => {
       expect(batch['status']).toBe('APPLIED');
       expect(batch['rowIds']).toHaveLength(1);
       const doc = batch['document'] as Record<string, unknown>;
-      expect(doc['fileName']).toBe('combined.pdf');
-      expect(doc['fileUrl']).toBe('https://bucket.s3.example.com/combined.pdf');
+      expect(doc['originalName']).toBe('combined.pdf');
+      expect(doc['path']).toBe('https://bucket.s3.example.com/combined.pdf');
     });
 
     it('does not store document reference on row updates (only batchId reference)', async () => {
       await service.submitBatch(stateOid.toString(), yearOid.toString(), makeDto(), adminUser);
 
-      const rowUpdateCall = (rowModel['findByIdAndUpdate'] as jest.Mock).mock.calls[0];
+      const rowUpdateCall = rowModel['findByIdAndUpdate'].mock.calls[0];
       const rowSet = (rowUpdateCall[1] as Record<string, unknown>)['$set'] as Record<string, unknown>;
       expect(rowSet).not.toHaveProperty('document');
       expect(rowSet).toHaveProperty('lastUpdateBatchId');
@@ -1478,7 +1486,7 @@ describe('EulbPostSubmissionUpdateService', () => {
     it('pushes an updateHistory entry on each affected row', async () => {
       await service.submitBatch(stateOid.toString(), yearOid.toString(), makeDto(), adminUser);
 
-      const rowUpdateCall = (rowModel['findByIdAndUpdate'] as jest.Mock).mock.calls[0];
+      const rowUpdateCall = rowModel['findByIdAndUpdate'].mock.calls[0];
       const rowPush = (rowUpdateCall[1] as Record<string, unknown>)['$push'] as Record<string, unknown>;
       const entry = rowPush['updateHistory'] as Record<string, unknown>;
       expect(entry['source']).toBe('POST_SUBMISSION_UPDATE');

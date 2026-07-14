@@ -17,14 +17,14 @@ import {
 import { toObjectIdString } from 'src/common/utils/objectid.util';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
 import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
-import { FileUrlNormalizerService } from 'src/module/xvi-fc/common/services/file-url-normalizer.service';
+import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
+import type { FileInfo } from 'src/schemas/common/file.schema';
 import type { FormData } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.types';
 import type {
   FieldConfig,
   FieldSupportingContent,
   HydratedFieldConfig,
   SupportingContentTone,
-  UploadedFileValue,
 } from 'src/module/xvi-fc/common/types/field-config.type';
 import {
   buildXviFcFolderPath,
@@ -42,6 +42,7 @@ import {
   DevolutionFormulaRowDocument,
 } from 'src/schemas/xvi-fc/state/devolution-formula-row.schema';
 import { GrantAllocation, GrantAllocationDocument } from 'src/schemas/xvi-fc/grant-allocation.schema';
+import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import {
   EULB_FORM_TYPE,
   ElectedUrbanLocalBodiesForm,
@@ -53,8 +54,11 @@ import {
   DF_ACTION_REGISTER_ULB,
   DF_ACTION_REVALIDATE_EXCEL,
   DF_ACTION_VIEW_UPLOADED_DATA,
+  DF_ALLOWED_FILE_EXTENSIONS,
+  DF_ALLOWED_MIME_TYPES,
   DF_DUMP_HEADERS,
   DF_FORM_NAME,
+  DF_MAX_FILE_SIZE_BYTES,
   buildDfRegisterUlbUrl,
 } from '../../constants/devolution-formula.constants';
 import { DfFormJsonConfigService } from '../form-json/devolution-formula-form-json.service';
@@ -99,11 +103,13 @@ export class DevolutionFormulaService {
     private readonly grantAllocationModel: Model<GrantAllocationDocument>,
     @InjectModel(ElectedUrbanLocalBodiesForm.name)
     private readonly eulbModel: Model<EulbFormDocument>,
+    @InjectModel(Ulb.name)
+    private readonly ulbModel: Model<UlbDocument>,
     private readonly dfValidator: DevolutionFormulaValidator,
     private readonly xvifcFormActorsService: XvifcFormActorsService,
     private readonly excelService: ExcelService,
     private readonly fileTokenService: FileTokenService,
-    private readonly fileUrlNormalizer: FileUrlNormalizerService,
+    private readonly fileInfoNormalizer: FileInfoNormalizerService,
     private readonly dynamicFormValidator: DynamicFormValidationService,
     private readonly dfFormJsonConfig: DfFormJsonConfigService,
   ) {}
@@ -140,13 +146,15 @@ export class DevolutionFormulaService {
       doc as unknown as Parameters<typeof this.xvifcFormActorsService.buildActorsAndStateName>[0],
     );
 
-    const grantAllocationSummary = await this.resolveGrantAllocationSummary(stateOid, yearOid);
+    const [grantAllocationSummary, computedActiveUlbCount] = await Promise.all([
+      this.resolveGrantAllocationSummary(stateOid, yearOid),
+      this.ulbModel.countDocuments({ state: stateOid, isActive: true }),
+    ]);
     const validationSummary = this.buildValidationSummary(doc, grantAllocationSummary?.total ?? 0);
 
     const savedData: FormData = {};
     if (doc?.excelFile) savedData['excelFile'] = doc.excelFile;
     if (doc?.checkboxConfirmation !== undefined) savedData['checkboxConfirmation'] = doc.checkboxConfirmation;
-    if (doc?.ulbCount !== undefined) savedData['ulbCount'] = doc.ulbCount;
 
     const fields = await this.dfFormJsonConfig.loadFields(yearId);
     const questions = this.hydrateQuestions(
@@ -156,6 +164,7 @@ export class DevolutionFormulaService {
       permissions,
       folderPathContext,
       yearId,
+      computedActiveUlbCount,
     );
     const grantMax = grantAllocationSummary?.total ?? null;
     const rowEditFields = getDfFieldsByType(fields, 'DF_ROW_EDIT_FIELDS').map((field) => {
@@ -206,24 +215,37 @@ export class DevolutionFormulaService {
 
     const existing = await this.model
       .findOne({ state: stateOid, year: yearOid, installment: dto.installment })
-      .lean<Pick<DfFormLeanDoc, '_id' | 'currentFormStatus'>>()
+      .lean<Pick<DfFormLeanDoc, '_id' | 'currentFormStatus' | 'excelFile'>>()
       .exec();
 
     if (existing) {
       assertCanStateEditForm(existing.currentFormStatus ?? FORM_STATUS.NOT_STARTED);
     }
 
-    const grantAlloc = await this.resolveGrantAllocation(stateOid, yearOid);
+    const [grantAlloc, computedActiveUlbCount] = await Promise.all([
+      this.resolveGrantAllocation(stateOid, yearOid),
+      this.ulbModel.countDocuments({ state: stateOid, isActive: true }),
+    ]);
 
-    const rawFile = dto.data?.excelFile;
-    const normalizedFile = rawFile?.fileUrl
-      ? { ...rawFile, fileUrl: this.fileUrlNormalizer.toRawStoragePath(rawFile.fileUrl) }
-      : rawFile;
+    let normalizedFile: FileInfo | null | undefined;
+    if (dto.data?.excelFile !== undefined) {
+      const { file, errors: fileErrors } = this.fileInfoNormalizer.normalizeInboundFileInfo(
+        dto.data.excelFile as unknown as Record<string, unknown>,
+        existing?.excelFile,
+        {
+          fieldKey: 'excelFile',
+          allowedExtensions: [...DF_ALLOWED_FILE_EXTENSIONS],
+          allowedMimeTypes: [...DF_ALLOWED_MIME_TYPES],
+          maxSizeKb: DF_MAX_FILE_SIZE_BYTES / 1024,
+        },
+      );
+      if (fileErrors.length > 0) throwXviFcValidationError({ excelFile: fileErrors });
+      normalizedFile = file;
+    }
 
     const formData: FormData = {};
     if (normalizedFile !== undefined) formData['excelFile'] = normalizedFile;
     if (dto.data?.checkboxConfirmation !== undefined) formData['checkboxConfirmation'] = dto.data.checkboxConfirmation;
-    if (dto.data?.ulbCount !== undefined) formData['ulbCount'] = dto.data.ulbCount;
 
     const dfFields = await this.dfFormJsonConfig.loadFields(dto.yearId);
     const validation = this.dynamicFormValidator.validateDraftAndBuildPayload(
@@ -241,14 +263,12 @@ export class DevolutionFormulaService {
       totalMoHUAAllocation: grantAlloc.basic + grantAlloc.performance,
       grantAllocationRef: grantAlloc._id,
       updatedBy: userOid,
+      ulbCount: computedActiveUlbCount,
     };
 
     if (normalizedFile !== undefined) update['excelFile'] = normalizedFile;
     if (validation.sanitizedPayload['checkboxConfirmation'] !== undefined) {
       update['checkboxConfirmation'] = validation.sanitizedPayload['checkboxConfirmation'];
-    }
-    if (validation.sanitizedPayload['ulbCount'] !== undefined) {
-      update['ulbCount'] = validation.sanitizedPayload['ulbCount'];
     }
 
     const result = await this.model
@@ -286,14 +306,25 @@ export class DevolutionFormulaService {
 
     assertCanStateFinalSubmitForm(form.currentFormStatus ?? FORM_STATUS.NOT_STARTED);
 
-    const normalizedFile = dto.data.excelFile?.fileUrl
-      ? { ...dto.data.excelFile, fileUrl: this.fileUrlNormalizer.toRawStoragePath(dto.data.excelFile.fileUrl) }
-      : dto.data.excelFile;
+    const { file: normalizedFile, errors: fileErrors } = this.fileInfoNormalizer.normalizeInboundFileInfo(
+      dto.data.excelFile as unknown as Record<string, unknown>,
+      form.excelFile,
+      {
+        fieldKey: 'excelFile',
+        allowedExtensions: [...DF_ALLOWED_FILE_EXTENSIONS],
+        allowedMimeTypes: [...DF_ALLOWED_MIME_TYPES],
+        maxSizeKb: DF_MAX_FILE_SIZE_BYTES / 1024,
+      },
+    );
+    if (fileErrors.length > 0) throwXviFcValidationError({ excelFile: fileErrors });
 
+    // `normalizedFile` is `undefined` when the excel file is unchanged from what's already
+    // stored (see FileInfoNormalizerService) — that must stay out of the Mongo $set (below)
+    // so Mongoose doesn't re-stamp the stored file's timestamps, but the required-field
+    // validator below still needs to see the (unchanged) file as present.
     const formData: FormData = {
-      excelFile: normalizedFile,
+      excelFile: normalizedFile !== undefined ? normalizedFile : form.excelFile,
       checkboxConfirmation: dto.data.checkboxConfirmation,
-      ulbCount: dto.data.ulbCount,
     };
 
     const dfFields = await this.dfFormJsonConfig.loadFields(dto.yearId);
@@ -313,8 +344,12 @@ export class DevolutionFormulaService {
       this.checkInstallment2Prereq();
     }
 
-    // Grant allocation must still exist, and its total must match what was validated
-    const currentAlloc = await this.resolveGrantAllocation(stateOid, yearOid);
+    // Grant allocation must still exist, and its total must match what was validated.
+    // Also compute the current active ULB count to validate row count consistency.
+    const [currentAlloc, computedActiveUlbCount] = await Promise.all([
+      this.resolveGrantAllocation(stateOid, yearOid),
+      this.ulbModel.countDocuments({ state: stateOid, isActive: true }),
+    ]);
     const currentTotal = currentAlloc.basic + currentAlloc.performance;
 
     if (!form.excelRowCount || form.excelRowCount === 0) {
@@ -395,34 +430,33 @@ export class DevolutionFormulaService {
       });
     }
 
-    if ((form.excelRowCount ?? 0) > 0 && dto.data.ulbCount !== form.excelRowCount) {
+    if ((form.excelRowCount ?? 0) > 0 && form.excelRowCount !== computedActiveUlbCount) {
       throwXviFcValidationError({
-        ulbCount: [
+        excelFile: [
           {
-            field: 'ulbCount',
-            code: 'mismatch',
-            message: `ULB count entered (${dto.data.ulbCount}) does not match the number of rows in the uploaded Devolution Formula Excel (${form.excelRowCount}).`,
+            field: 'excelFile',
+            code: 'excelInvalid',
+            message: `The uploaded Excel has ${form.excelRowCount} row(s) but there are ${computedActiveUlbCount} active ULB(s) registered. Please re-upload with all active ULBs.`,
           },
         ],
       });
     }
 
+    const finalSubmitSet: Record<string, unknown> = {
+      currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+      isDraft: false,
+      submittedAt: new Date(),
+      submittedBy: userOid,
+      updatedBy: userOid,
+      checkboxConfirmation: dto.data.checkboxConfirmation,
+      ulbCount: computedActiveUlbCount,
+    };
+    // Omit excelFile entirely when unchanged (rather than `excelFile: undefined`) so
+    // Mongoose's FileInfo `timestamps` option doesn't stamp the stored subdocument.
+    if (normalizedFile !== undefined) finalSubmitSet['excelFile'] = normalizedFile;
+
     await this.model
-      .findOneAndUpdate(
-        { state: stateOid, year: yearOid, installment: dto.installment },
-        {
-          $set: {
-            currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
-            isDraft: false,
-            submittedAt: new Date(),
-            submittedBy: userOid,
-            updatedBy: userOid,
-            excelFile: normalizedFile,
-            checkboxConfirmation: dto.data.checkboxConfirmation,
-            ulbCount: dto.data.ulbCount,
-          },
-        },
-      )
+      .findOneAndUpdate({ state: stateOid, year: yearOid, installment: dto.installment }, { $set: finalSubmitSet })
       .exec();
 
     this.logger.log(
@@ -557,8 +591,13 @@ export class DevolutionFormulaService {
     permissions: DfFormPermissions,
     folderPathContext: XviFcFolderPathContext,
     yearId: string,
+    computedActiveUlbCount: number,
   ): HydratedFieldConfig[] {
     return questions.map((question) => {
+      if (question.key === 'ulbCount') {
+        return { ...question, value: computedActiveUlbCount };
+      }
+
       const rawValue = Object.prototype.hasOwnProperty.call(savedData, question.key)
         ? savedData[question.key]
         : question.value;
@@ -568,16 +607,15 @@ export class DevolutionFormulaService {
           ? buildXviFcFolderPath(question.folderPathKey, folderPathContext)
           : question.folderPath;
 
-        let value = rawValue;
-        const fileVal = rawValue as UploadedFileValue | null | undefined;
-        if (fileVal?.fileUrl) {
+        const fileVal = rawValue as FileInfo | null | undefined;
+        const hydrated = this.fileInfoNormalizer.hydrateFileInfoForResponse(fileVal ?? null, (p) => {
           try {
-            const signedUrl = this.fileTokenService.signFileUrl(fileVal.fileUrl);
-            value = { ...fileVal, fileUrl: signedUrl };
+            return this.fileTokenService.signFileUrl(p);
           } catch {
-            // keep raw if signing fails
+            return p;
           }
-        }
+        });
+        const value = hydrated ?? rawValue;
 
         if (question.key === 'excelFile') {
           return {
@@ -602,7 +640,7 @@ export class DevolutionFormulaService {
   ): FieldSupportingContent[] {
     const { canView, canEdit } = permissions;
     const hasDataset = (doc?.activeDatasetVersion ?? 0) > 0;
-    const hasUploadedExcel = !!doc?.excelFile?.fileUrl;
+    const hasUploadedExcel = !!doc?.excelFile?.path;
     const errorRowCount = doc?.errorRowCount ?? 0;
     const excelRowCount = doc?.excelRowCount ?? 0;
     const totalMoHUAAllocation = doc?.totalMoHUAAllocation ?? 0;
