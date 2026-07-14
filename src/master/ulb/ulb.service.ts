@@ -276,7 +276,8 @@ export class UlbService {
     const created = await this.persistUlb(patch);
 
     if (primaryContact.email) {
-      await this.createPrimaryContactUser(primaryContact, created._id, stateId, name, user);
+      const isApproved = user.role !== Role.STATE;
+      await this.createPrimaryContactUser(primaryContact, created._id, stateId, name, user, isApproved);
     }
 
     return created.toObject();
@@ -355,13 +356,17 @@ export class UlbService {
   }
 
   /** Provisions the ULB's first login: a `Role.ULB` account with a temporary password, emailed
-   *  to the primary contact — mirrors the STATE/MoHUA member-invite flow in `UsersService`. */
+   *  to the primary contact — mirrors the STATE/MoHUA member-invite flow in `UsersService`.
+   *  `isApproved` mirrors the owning ULB's approval status: ADMIN-created ULBs are auto-approved
+   *  so the login is active immediately; STATE-submitted ULBs start PENDING, so the login stays
+   *  inactive until an ADMIN approves the ULB (see `approve()`). */
   private async createPrimaryContactUser(
     contact: { name?: string; designation?: string; email?: string; mobile?: string },
     ulbId: Types.ObjectId,
     stateId: Types.ObjectId,
     ulbName: string,
     requester: IAuthUser,
+    isApproved: boolean,
   ): Promise<void> {
     const tempPassword = this.generateTempPassword();
     const hashedPassword = await bcrypt.hash(tempPassword, 12);
@@ -376,7 +381,7 @@ export class UlbService {
       state: stateId,
       createdBy: new Types.ObjectId(requester._id),
       status: 'APPROVED',
-      isActive: true,
+      isActive: isApproved,
       isEmailVerified: true,
       isDeleted: false,
       password: hashedPassword,
@@ -615,6 +620,10 @@ export class UlbService {
       )
       .lean<Ulb>();
     if (!updated) throw new NotFoundException('ULB not found');
+
+    // Activate the ULB's primary-contact login now that the ULB itself is approved.
+    await this.userModel.updateMany({ ulb: id, isDeleted: false }, { $set: { isActive: true } }).exec();
+
     return updated;
   }
 

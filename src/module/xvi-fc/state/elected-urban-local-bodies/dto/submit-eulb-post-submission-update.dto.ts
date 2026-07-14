@@ -5,13 +5,13 @@ import {
   IsIn,
   IsMongoId,
   IsNotEmpty,
-  IsNumber,
+  IsObject,
   IsOptional,
-  IsPositive,
   IsString,
   ValidateNested,
 } from 'class-validator';
 import { ELECTED_BODY_STATUSES } from 'src/module/xvi-fc/state/elected-urban-local-bodies/constants/elected-urban-local-bodies.constants';
+import { XviFcFileRefDto } from 'src/module/xvi-fc/common/dto/xvi-fc-file-ref.dto';
 
 export class SubmitEulbPostSubmissionUpdateRowDto {
   @IsMongoId()
@@ -35,28 +35,6 @@ export class SubmitEulbPostSubmissionUpdateRowDto {
   remarks?: string;
 }
 
-export class EulbPostSubmissionUpdateDocumentDto {
-  @IsString()
-  @IsNotEmpty()
-  fileName!: string;
-
-  @IsString()
-  @IsNotEmpty()
-  fileUrl!: string;
-
-  @IsNumber()
-  @IsPositive()
-  fileSize!: number;
-
-  @IsOptional()
-  @IsString()
-  mimeType?: string;
-
-  @IsOptional()
-  @IsString()
-  s3Key?: string;
-}
-
 export class SubmitEulbPostSubmissionUpdateDto {
   @IsArray()
   @ArrayMinSize(1)
@@ -64,7 +42,8 @@ export class SubmitEulbPostSubmissionUpdateDto {
   @Type(() => SubmitEulbPostSubmissionUpdateRowDto)
   rows!: SubmitEulbPostSubmissionUpdateRowDto[];
 
+  @IsObject()
   @ValidateNested()
-  @Type(() => EulbPostSubmissionUpdateDocumentDto)
-  document!: EulbPostSubmissionUpdateDocumentDto;
+  @Type(() => XviFcFileRefDto)
+  document!: XviFcFileRefDto;
 }

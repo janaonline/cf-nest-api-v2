@@ -11,6 +11,7 @@ import { S3Service } from 'src/core/s3/s3.service';
 import { ExcelService } from 'src/services/excel/excel.service';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { FileUrlNormalizerService } from 'src/module/xvi-fc/common/services/file-url-normalizer.service';
+import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
 import { DevolutionFormulaService } from '../main/devolution-formula.service';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import { Scope, UserRole, AccessLevel } from 'src/module/auth/enum/roles-xvi-fc.enum';
@@ -79,8 +80,20 @@ const mockExistingForm = {
   errorRowCount: 1,
   totalMoHUAAllocation: 500_000,
   totalAllocatedSum: 300_000,
-  excelFile: { fileName: 'test.xlsx', fileUrl: 'state/path/test.xlsx', fileSize: 1024 },
-  errorExcelFile: { fileName: 'errors.xlsx', fileUrl: 'state/path/errors.xlsx', fileSize: 512 },
+  excelFile: {
+    originalName: 'test.xlsx',
+    path: 'state/path/test.xlsx',
+    mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    sizeKb: 1,
+    createdAt: '2026-01-01T00:00:00.000Z',
+  },
+  errorExcelFile: {
+    originalName: 'errors.xlsx',
+    path: 'state/path/errors.xlsx',
+    mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    sizeKb: 0.5,
+    createdAt: '2026-01-01T00:00:00.000Z',
+  },
 };
 
 const mockActiveRows = [
@@ -168,6 +181,7 @@ describe('DevolutionFormulaExcelService — safe dataset replace', () => {
         { provide: ExcelService, useValue: mockExcelService },
         { provide: FileTokenService, useValue: mockFileTokenService },
         { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
+        FileInfoNormalizerService,
         { provide: DevolutionFormulaService, useValue: mockDfService },
       ],
     }).compile();
@@ -191,7 +205,13 @@ describe('DevolutionFormulaExcelService — safe dataset replace', () => {
           stateId: stateOid.toString(),
           yearId: YEAR_ID,
           installment: 1,
-          excelFile: { fileName: 'test.xlsx', fileUrl: 'state/path/test.xlsx', fileSize: 1024 },
+          excelFile: {
+            originalName: 'test.xlsx',
+            path: 'state/path/test.xlsx',
+            mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            sizeKb: 1,
+            createdAt: '2026-01-01T00:00:00.000Z',
+          },
         },
         adminUser,
       ),
@@ -229,7 +249,13 @@ describe('DevolutionFormulaExcelService — safe dataset replace', () => {
           stateId: stateOid.toString(),
           yearId: YEAR_ID,
           installment: 1,
-          excelFile: { fileName: 'test.xlsx', fileUrl: 'state/path/test.xlsx', fileSize: 1024 },
+          excelFile: {
+            originalName: 'test.xlsx',
+            path: 'state/path/test.xlsx',
+            mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            sizeKb: 1,
+            createdAt: '2026-01-01T00:00:00.000Z',
+          },
         },
         adminUser,
       ),
@@ -257,7 +283,13 @@ describe('DevolutionFormulaExcelService — safe dataset replace', () => {
         stateId: stateOid.toString(),
         yearId: YEAR_ID,
         installment: 1,
-        excelFile: { fileName: 'test.xlsx', fileUrl: 'state/path/test.xlsx', fileSize: 1024 },
+        excelFile: {
+          originalName: 'test.xlsx',
+          path: 'state/path/test.xlsx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          sizeKb: 1,
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
       },
       adminUser,
     );
@@ -268,6 +300,80 @@ describe('DevolutionFormulaExcelService — safe dataset replace', () => {
       (c) => (c[0] as Record<string, unknown>)?.['datasetVersion'] === mockExistingForm.activeDatasetVersion,
     );
     expect(oldVersionDelete).toBeDefined();
+  });
+
+  it('accepts excelFile.pageCount: null and persists it on the form excelFile', async () => {
+    mockFormModel.findOne.mockReturnValue(q(mockExistingForm));
+    mockRowModel.updateMany.mockReturnValue(q({ modifiedCount: 2 }));
+    mockRowModel.insertMany.mockResolvedValue([]);
+    mockFormModel.findByIdAndUpdate.mockReturnValue(q(null));
+    mockRowModel.deleteMany.mockReturnValue(q(null));
+
+    const buffer = makeXlsxBuffer([['C001', 'Alpha City', 500_000, 300_000, 200_000, 'population']]);
+    mockS3Service.getBuffer.mockResolvedValue(buffer);
+
+    // Different path than mockExistingForm.excelFile — a replacement upload, so the
+    // incoming pageCount is used rather than the (unset) pageCount on the existing file.
+    await service.validateExcel(
+      {
+        stateId: stateOid.toString(),
+        yearId: YEAR_ID,
+        installment: 1,
+        excelFile: {
+          originalName: 'test2.xlsx',
+          path: 'state/path/test2.xlsx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          sizeKb: 1,
+          createdAt: '2026-01-01T00:00:00.000Z',
+          pageCount: null,
+        },
+      },
+      adminUser,
+    );
+
+    // The form update must carry the excelFile metadata with pageCount preserved
+    const updateCalls = mockFormModel.findByIdAndUpdate.mock.calls as unknown[][][];
+    const setWithExcelFile = updateCalls
+      .map((c) => (c[1] as Record<string, unknown>)?.['$set'] as Record<string, unknown> | undefined)
+      .find((s) => s?.['excelFile'] !== undefined);
+    expect(setWithExcelFile).toBeDefined();
+    expect((setWithExcelFile?.['excelFile'] as { pageCount?: number | null }).pageCount).toBeNull();
+  });
+
+  it('generated errorExcelFile metadata has pageCount: null', async () => {
+    mockFormModel.findOne.mockReturnValue(q(mockExistingForm));
+    mockRowModel.updateMany.mockReturnValue(q({ modifiedCount: 2 }));
+    mockRowModel.insertMany.mockResolvedValue([]);
+    mockFormModel.findByIdAndUpdate.mockReturnValue(q(null));
+    mockRowModel.deleteMany.mockReturnValue(q(null));
+
+    // Known-registry ULB with a negative installment amount → row error → error sheet generated
+    const buffer = makeXlsxBuffer([['C001', 'Alpha City', 500_000, -300_000, 200_000, 'population']]);
+    mockS3Service.getBuffer.mockResolvedValue(buffer);
+
+    await service.validateExcel(
+      {
+        stateId: stateOid.toString(),
+        yearId: YEAR_ID,
+        installment: 1,
+        excelFile: {
+          originalName: 'test.xlsx',
+          path: 'state/path/test.xlsx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          sizeKb: 1,
+          createdAt: '2026-01-01T00:00:00.000Z',
+          pageCount: null,
+        },
+      },
+      adminUser,
+    );
+
+    const updateCalls = mockFormModel.findByIdAndUpdate.mock.calls as unknown[][][];
+    const errorFileSet = updateCalls
+      .map((c) => (c[1] as Record<string, unknown>)?.['$set'] as Record<string, unknown> | undefined)
+      .find((s) => s?.['errorExcelFile'] !== undefined);
+    expect(errorFileSet).toBeDefined();
+    expect((errorFileSet?.['errorExcelFile'] as { pageCount?: number | null }).pageCount).toBeNull();
   });
 });
 
@@ -296,6 +402,7 @@ describe('DevolutionFormulaExcelService — revalidateExcel', () => {
         { provide: ExcelService, useValue: mockExcelService },
         { provide: FileTokenService, useValue: mockFileTokenService },
         { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
+        FileInfoNormalizerService,
         { provide: DevolutionFormulaService, useValue: mockDfService },
       ],
     }).compile();
@@ -452,6 +559,7 @@ describe('DevolutionFormulaExcelService — generateTemplate', () => {
         { provide: ExcelService, useValue: mockExcelService },
         { provide: FileTokenService, useValue: mockFileTokenService },
         { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
+        FileInfoNormalizerService,
         { provide: DevolutionFormulaService, useValue: mockDfService },
       ],
     }).compile();
@@ -561,6 +669,7 @@ describe('DevolutionFormulaExcelService — validateExcel ULB identity guard', (
         { provide: ExcelService, useValue: mockExcelService },
         { provide: FileTokenService, useValue: mockFileTokenService },
         { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
+        FileInfoNormalizerService,
         { provide: DevolutionFormulaService, useValue: mockDfService },
       ],
     }).compile();
@@ -577,7 +686,13 @@ describe('DevolutionFormulaExcelService — validateExcel ULB identity guard', (
         stateId: stateOid.toString(),
         yearId: YEAR_ID,
         installment: 1,
-        excelFile: { fileName: 'test.xlsx', fileUrl: 'state/path/test.xlsx', fileSize: 1024 },
+        excelFile: {
+          originalName: 'test.xlsx',
+          path: 'state/path/test.xlsx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          sizeKb: 1,
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
       },
       adminUser,
     );
@@ -596,7 +711,13 @@ describe('DevolutionFormulaExcelService — validateExcel ULB identity guard', (
         stateId: stateOid.toString(),
         yearId: YEAR_ID,
         installment: 1,
-        excelFile: { fileName: 'test.xlsx', fileUrl: 'state/path/test.xlsx', fileSize: 1024 },
+        excelFile: {
+          originalName: 'test.xlsx',
+          path: 'state/path/test.xlsx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          sizeKb: 1,
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
       },
       adminUser,
     );
@@ -615,7 +736,13 @@ describe('DevolutionFormulaExcelService — validateExcel ULB identity guard', (
           stateId: stateOid.toString(),
           yearId: YEAR_ID,
           installment: 1,
-          excelFile: { fileName: 'test.xlsx', fileUrl: 'state/path/test.xlsx', fileSize: 1024 },
+          excelFile: {
+            originalName: 'test.xlsx',
+            path: 'state/path/test.xlsx',
+            mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            sizeKb: 1,
+            createdAt: '2026-01-01T00:00:00.000Z',
+          },
         },
         adminUser,
       );
@@ -644,7 +771,13 @@ describe('DevolutionFormulaExcelService — validateExcel ULB identity guard', (
           stateId: stateOid.toString(),
           yearId: YEAR_ID,
           installment: 1,
-          excelFile: { fileName: 'test.xlsx', fileUrl: 'state/path/test.xlsx', fileSize: 1024 },
+          excelFile: {
+            originalName: 'test.xlsx',
+            path: 'state/path/test.xlsx',
+            mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            sizeKb: 1,
+            createdAt: '2026-01-01T00:00:00.000Z',
+          },
         },
         adminUser,
       ),
@@ -681,6 +814,7 @@ describe('DevolutionFormulaExcelService — validateExcel new/extra ULB detectio
         { provide: ExcelService, useValue: mockExcelService },
         { provide: FileTokenService, useValue: mockFileTokenService },
         { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
+        FileInfoNormalizerService,
         { provide: DevolutionFormulaService, useValue: mockDfService },
       ],
     }).compile();
@@ -697,7 +831,13 @@ describe('DevolutionFormulaExcelService — validateExcel new/extra ULB detectio
           stateId: stateOid.toString(),
           yearId: YEAR_ID,
           installment: 1,
-          excelFile: { fileName: 'test.xlsx', fileUrl: 'state/path/test.xlsx', fileSize: 1024 },
+          excelFile: {
+            originalName: 'test.xlsx',
+            path: 'state/path/test.xlsx',
+            mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            sizeKb: 1,
+            createdAt: '2026-01-01T00:00:00.000Z',
+          },
         },
         adminUser,
       );
@@ -800,7 +940,13 @@ describe('DevolutionFormulaExcelService — validateExcel new/extra ULB detectio
         stateId: stateOid.toString(),
         yearId: YEAR_ID,
         installment: 1,
-        excelFile: { fileName: 'test.xlsx', fileUrl: 'state/path/test.xlsx', fileSize: 1024 },
+        excelFile: {
+          originalName: 'test.xlsx',
+          path: 'state/path/test.xlsx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          sizeKb: 1,
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
       },
       adminUser,
     );
@@ -820,7 +966,13 @@ describe('DevolutionFormulaExcelService — validateExcel new/extra ULB detectio
         stateId: stateOid.toString(),
         yearId: YEAR_ID,
         installment: 1,
-        excelFile: { fileName: 'test.xlsx', fileUrl: 'state/path/test.xlsx', fileSize: 1024 },
+        excelFile: {
+          originalName: 'test.xlsx',
+          path: 'state/path/test.xlsx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          sizeKb: 1,
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
       },
       adminUser,
     );

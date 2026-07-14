@@ -11,6 +11,7 @@ import { ExcelService } from 'src/services/excel/excel.service';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
 import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
 import { FileUrlNormalizerService } from 'src/module/xvi-fc/common/services/file-url-normalizer.service';
+import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { ConfigService } from '@nestjs/config';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
@@ -316,6 +317,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           { provide: FileTokenService, useValue: null },
           { provide: ConfigService, useValue: null },
           { provide: FileUrlNormalizerService, useValue: null },
+          { provide: FileInfoNormalizerService, useValue: null },
           { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
         ],
       }).compile();
@@ -445,7 +447,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
       const sheet = await generateAndLoad();
 
       // Active ULBs sorted by name: Alpha City (row 2), Beta Town (row 3).
-      expect(sheet.getRow(2).getCell(3).value).toBe('Constituted');   // electedBodyStatus
+      expect(sheet.getRow(2).getCell(3).value).toBe('Constituted'); // electedBodyStatus
       expect(sheet.getRow(3).getCell(3).value).toBe('Not Constituted');
     });
 
@@ -564,6 +566,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           { provide: FileTokenService, useValue: null },
           { provide: ConfigService, useValue: null },
           { provide: FileUrlNormalizerService, useValue: null },
+          { provide: FileInfoNormalizerService, useValue: null },
           { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
         ],
       }).compile();
@@ -699,6 +702,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           { provide: FileTokenService, useValue: mockFileTokenService },
           { provide: ConfigService, useValue: mockConfig },
           { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
+          FileInfoNormalizerService,
           { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
         ],
       }).compile();
@@ -770,9 +774,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
     it('queries countDocuments with { state: stateOid, isActive: true }', async () => {
       await service.getForm(stateOid.toString(), yearOid.toString(), adminUser);
 
-      expect(mockUlbModel.countDocuments).toHaveBeenCalledWith(
-        expect.objectContaining({ isActive: true }),
-      );
+      expect(mockUlbModel.countDocuments).toHaveBeenCalledWith(expect.objectContaining({ isActive: true }));
     });
 
     // ─── Register ULB supporting action ─────────────────────────────────────
@@ -787,7 +789,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           errorRowCount: 1,
           extraExcelRowCount: 2,
           validationStatus: 'INVALID',
-          electedBodyExcelFile: { fileName: 'test.xlsx', fileUrl: 'state/test.xlsx' },
+          electedBodyExcelFile: { originalName: 'test.xlsx', path: 'state/test.xlsx' },
         }),
       );
       // adminUser has ADMIN scope so canEdit depends on form status (IN_PROGRESS → can edit)
@@ -796,7 +798,9 @@ describe('ElectedUrbanLocalBodiesService', () => {
       const questions = data['questions'] as Array<Record<string, unknown>>;
       const excelQ = questions.find((q) => q['key'] === 'electedBodyExcelFile');
 
-      const supportingContent = excelQ!['supportingContent'] as Array<{ actions?: Array<{ id: string; visible: boolean }> }>;
+      const supportingContent = excelQ!['supportingContent'] as Array<{
+        actions?: Array<{ id: string; visible: boolean }>;
+      }>;
       const block = supportingContent[0];
       const registerUlbAction = block?.actions?.find((a) => a.id === 'register-ulb');
 
@@ -814,7 +818,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           errorRowCount: 0,
           extraExcelRowCount: 0,
           validationStatus: 'VALID',
-          electedBodyExcelFile: { fileName: 'test.xlsx', fileUrl: 'state/test.xlsx' },
+          electedBodyExcelFile: { originalName: 'test.xlsx', path: 'state/test.xlsx' },
         }),
       );
       const result = await service.getForm(stateOid.toString(), yearOid.toString(), adminUser);
@@ -822,7 +826,9 @@ describe('ElectedUrbanLocalBodiesService', () => {
       const questions = data['questions'] as Array<Record<string, unknown>>;
       const excelQ = questions.find((q) => q['key'] === 'electedBodyExcelFile');
 
-      const supportingContent = excelQ!['supportingContent'] as Array<{ actions?: Array<{ id: string; visible: boolean }> }>;
+      const supportingContent = excelQ!['supportingContent'] as Array<{
+        actions?: Array<{ id: string; visible: boolean }>;
+      }>;
       const block = supportingContent[0];
       const registerUlbAction = block?.actions?.find((a) => a.id === 'register-ulb');
 
@@ -836,7 +842,9 @@ describe('ElectedUrbanLocalBodiesService', () => {
       const questions = data['questions'] as Array<Record<string, unknown>>;
       const excelQ = questions.find((q) => q['key'] === 'electedBodyExcelFile');
 
-      const supportingContent = excelQ!['supportingContent'] as Array<{ actions?: Array<{ id: string; visible: boolean }> }>;
+      const supportingContent = excelQ!['supportingContent'] as Array<{
+        actions?: Array<{ id: string; visible: boolean }>;
+      }>;
       const block = supportingContent[0];
       const registerUlbAction = block?.actions?.find((a) => a.id === 'register-ulb');
 
@@ -853,7 +861,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           errorRowCount: 1,
           extraExcelRowCount: 1,
           validationStatus: 'INVALID',
-          electedBodyExcelFile: { fileName: 'test.xlsx', fileUrl: 'state/test.xlsx' },
+          electedBodyExcelFile: { originalName: 'test.xlsx', path: 'state/test.xlsx' },
         }),
       );
       const result = await service.getForm(stateOid.toString(), yearOid.toString(), adminUser);
@@ -861,11 +869,45 @@ describe('ElectedUrbanLocalBodiesService', () => {
       const questions = data['questions'] as Array<Record<string, unknown>>;
       const excelQ = questions.find((q) => q['key'] === 'electedBodyExcelFile');
 
-      const supportingContent = excelQ!['supportingContent'] as Array<{ actions?: Array<{ id: string; url?: string }> }>;
+      const supportingContent = excelQ!['supportingContent'] as Array<{
+        actions?: Array<{ id: string; url?: string }>;
+      }>;
       const block = supportingContent[0];
       const registerUlbAction = block?.actions?.find((a) => a.id === 'register-ulb');
 
       expect(registerUlbAction?.url).toBe(`/xvifc/${yearOid.toString()}/register-ulb`);
+    });
+
+    // ─── pageCount hydration ─────────────────────────────────────────────────
+
+    it('returns the saved electedBodyExcelFile.pageCount on the hydrated file value', async () => {
+      mockFormModel.findOne.mockReturnValueOnce(
+        q({
+          _id: formOid,
+          currentFormStatus: FORM_STATUS.IN_PROGRESS,
+          activeDatasetVersion: 1,
+          excelRowCount: 2,
+          errorRowCount: 0,
+          extraExcelRowCount: 0,
+          validationStatus: 'VALID',
+          electedBodyExcelFile: {
+            originalName: 'test.xlsx',
+            path: 'state/test.xlsx',
+            mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            sizeKb: 1,
+            createdAt: '2026-01-01T00:00:00.000Z',
+            pageCount: null,
+          },
+        }),
+      );
+
+      const result = await service.getForm(stateOid.toString(), yearOid.toString(), adminUser);
+      const data = result.data as Record<string, unknown>;
+      const questions = data['questions'] as Array<Record<string, unknown>>;
+      const excelQ = questions.find((q) => q['key'] === 'electedBodyExcelFile');
+
+      const fileValue = excelQ!['value'] as { pageCount?: number | null };
+      expect(fileValue.pageCount).toBeNull();
     });
   });
 
@@ -902,6 +944,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           { provide: FileTokenService, useValue: null },
           { provide: ConfigService, useValue: null },
           { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
+          FileInfoNormalizerService,
           { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
         ],
       }).compile();
@@ -940,13 +983,34 @@ describe('ElectedUrbanLocalBodiesService', () => {
 
     it('still saves draft successfully when no ulbCount is provided by the client', async () => {
       await expect(
-        service.saveDraft(
-          { stateId: stateOid.toString(), yearId: yearOid.toString(), data: {} },
-          adminUser,
-          '',
-          '',
-        ),
+        service.saveDraft({ stateId: stateOid.toString(), yearId: yearOid.toString(), data: {} }, adminUser, '', ''),
       ).resolves.toBeDefined();
+    });
+
+    it('accepts and persists data.electedBodyExcelFile.pageCount (null for Excel uploads)', async () => {
+      await service.saveDraft(
+        {
+          stateId: stateOid.toString(),
+          yearId: yearOid.toString(),
+          data: {
+            electedBodyExcelFile: {
+              originalName: 'test.xlsx',
+              path: 'state/test.xlsx',
+              mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+              sizeKb: 1,
+              createdAt: '2026-01-01T00:00:00.000Z',
+              pageCount: null,
+            },
+            checkboxConfirmation: true,
+          },
+        },
+        adminUser,
+        '',
+        '',
+      );
+
+      const createArg = (mockFormModel.create.mock.calls as unknown[][])[0][0] as Record<string, unknown>;
+      expect((createArg['electedBodyExcelFile'] as { pageCount?: number | null }).pageCount).toBeNull();
     });
 
     it('does not throw a mismatch error when client ulbCount differs from saved excelRowCount', async () => {
@@ -1001,7 +1065,13 @@ describe('ElectedUrbanLocalBodiesService', () => {
       yearId: yearOid.toString(),
       data: {
         ulbCount: 999, // client sends tampered value — should be ignored
-        electedBodyExcelFile: { fileName: 'test.xlsx', fileUrl: 'state/test.xlsx', fileSize: 1000 },
+        electedBodyExcelFile: {
+          originalName: 'test.xlsx',
+          path: 'state/test.xlsx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          sizeKb: 0.9765625,
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
         checkboxConfirmation: true,
       },
     };
@@ -1025,6 +1095,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           { provide: FileTokenService, useValue: null },
           { provide: ConfigService, useValue: null },
           { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
+          FileInfoNormalizerService,
           { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
         ],
       }).compile();
@@ -1045,6 +1116,33 @@ describe('ElectedUrbanLocalBodiesService', () => {
       };
       expect(updateArg.$set['ulbCount']).toBe(3);
       expect(updateArg.$set['ulbCount']).not.toBe(999);
+    });
+
+    it('preserves data.electedBodyExcelFile.pageCount in the persisted final-submit update', async () => {
+      await service.finalSubmit(
+        {
+          ...baseDto,
+          data: {
+            ...baseDto.data,
+            electedBodyExcelFile: {
+              originalName: 'test.xlsx',
+              path: 'state/test.xlsx',
+              mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+              sizeKb: 1,
+              createdAt: '2026-01-01T00:00:00.000Z',
+              pageCount: null,
+            },
+          },
+        },
+        adminUser,
+        '',
+        '',
+      );
+
+      const updateArg = (mockFormModel.findOneAndUpdate.mock.calls as unknown[][])[0][1] as {
+        $set: Record<string, unknown>;
+      };
+      expect((updateArg.$set['electedBodyExcelFile'] as { pageCount?: number | null }).pageCount).toBeNull();
     });
 
     it('blocks with electedBodyExcelFile.newUlbsAdded when extraExcelRowCount > 0', async () => {

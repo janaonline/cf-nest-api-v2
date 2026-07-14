@@ -6,6 +6,12 @@ import { Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import { toObjectIdString } from 'src/common/utils/objectid.util';
+import { FileTokenService } from 'src/core/file-token/file-token.service';
+import {
+  FileInfoNormalizerService,
+  type HydratedFileInfoResponse,
+} from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
+import type { FileInfo } from 'src/schemas/common/file.schema';
 import {
   POST_SUBMISSION_UPDATE_ALLOWED_STATUSES,
   assertCanViewPostSubmissionUpdate,
@@ -26,7 +32,12 @@ import {
   ElectedUrbanLocalBodiesRow,
   EulbRowDocument,
 } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
-import { ELECTED_BODY_STATUSES } from 'src/module/xvi-fc/state/elected-urban-local-bodies/constants/elected-urban-local-bodies.constants';
+import {
+  ELECTED_BODY_STATUSES,
+  EULB_DOCUMENT_ALLOWED_FILE_EXTENSIONS,
+  EULB_DOCUMENT_ALLOWED_MIME_TYPES,
+  EULB_DOCUMENT_MAX_FILE_SIZE_BYTES,
+} from 'src/module/xvi-fc/state/elected-urban-local-bodies/constants/elected-urban-local-bodies.constants';
 import { EulbFormJsonConfigService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/form-json/elected-urban-local-bodies-form-json.service';
 import { getFieldsByType } from 'src/module/xvi-fc/state/elected-urban-local-bodies/helpers/elected-urban-local-bodies-form-json.helpers';
 import {
@@ -40,7 +51,6 @@ import type { ValidateEulbPostSubmissionUpdateDto } from 'src/module/xvi-fc/stat
 import type { SubmitEulbPostSubmissionUpdateDto } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/submit-eulb-post-submission-update.dto';
 import { ElectedUrbanLocalBodiesValidator } from 'src/module/xvi-fc/state/elected-urban-local-bodies/validators/elected-urban-local-bodies.validator';
 import type {
-  EulbBatchDocumentRef,
   EulbPostSubmissionSubmitRowError,
   EulbPostSubmissionUpdateMetaData,
   EulbPostSubmissionUpdatePermissions,
@@ -88,8 +98,6 @@ export function buildPostSubmissionEligibleRowsFilter(
   };
 }
 
-const MAX_DOCUMENT_BYTES = 20 * 1024 * 1024;
-
 @Injectable()
 export class EulbPostSubmissionUpdateService {
   constructor(
@@ -99,6 +107,8 @@ export class EulbPostSubmissionUpdateService {
     private readonly rowModel: Model<EulbRowDocument>,
     private readonly validator: ElectedUrbanLocalBodiesValidator,
     private readonly eulbFormJsonConfig: EulbFormJsonConfigService,
+    private readonly fileInfoNormalizer: FileInfoNormalizerService,
+    private readonly fileTokenService: FileTokenService,
   ) {}
 
   /**
@@ -253,36 +263,24 @@ export class EulbPostSubmissionUpdateService {
     this.assertStateAccess(user, stateId);
 
     // ─── Document validation ───────────────────────────────────────────────────
+    // Backend-generated documents never flow through this path — `document` always
+    // originates from the client DTO here, so `existing` is always null (no prior
+    // stored document to preserve/compare against for a new post-submission batch).
 
-    const { document: documentInput } = dto;
-    if (!documentInput.fileName.trim()) {
-      throwXviFcValidationError({ document: [{ code: 'required', message: 'Document fileName is required.' }] });
-    }
-    if (!documentInput.fileUrl.trim()) {
-      throwXviFcValidationError({ document: [{ code: 'required', message: 'Document fileUrl is required.' }] });
-    }
-    if (documentInput.fileSize <= 0) {
+    const { file: documentFile, errors: documentErrors } = this.fileInfoNormalizer.normalizeInboundFileInfo(
+      dto.document as unknown as Record<string, unknown>,
+      null,
+      {
+        fieldKey: 'document',
+        allowedExtensions: [...EULB_DOCUMENT_ALLOWED_FILE_EXTENSIONS],
+        allowedMimeTypes: [...EULB_DOCUMENT_ALLOWED_MIME_TYPES],
+        maxSizeKb: EULB_DOCUMENT_MAX_FILE_SIZE_BYTES / 1024,
+      },
+    );
+    if (documentErrors.length > 0) throwXviFcValidationError({ document: documentErrors });
+    if (!documentFile) {
       throwXviFcValidationError({
-        document: [{ code: 'invalid', message: 'Document fileSize must be greater than 0.' }],
-      });
-    }
-    if (documentInput.fileSize > MAX_DOCUMENT_BYTES) {
-      throwXviFcValidationError({
-        document: [{ code: 'tooLarge', message: 'Document file size must not exceed 20 MB.' }],
-      });
-    }
-    if (documentInput.mimeType) {
-      if (documentInput.mimeType !== 'application/pdf') {
-        throwXviFcValidationError({ document: [{ code: 'invalidType', message: 'Only PDF files are accepted.' }] });
-      }
-    } else if (!documentInput.fileName.toLowerCase().endsWith('.pdf')) {
-      throwXviFcValidationError({
-        document: [
-          {
-            code: 'invalidType',
-            message: 'File must be a PDF. Provide a valid mimeType or ensure the fileName ends in .pdf.',
-          },
-        ],
+        document: [{ field: 'document', code: 'required', message: 'document is required.' }],
       });
     }
 
@@ -374,19 +372,16 @@ export class EulbPostSubmissionUpdateService {
     // ─── MongoDB transaction ───────────────────────────────────────────────────
 
     const batchId = new Types.ObjectId();
-    const documentRef: EulbBatchDocumentRef = {
-      fileName: documentInput.fileName,
-      fileUrl: documentInput.fileUrl,
-      fileSize: documentInput.fileSize,
-      mimeType: documentInput.mimeType ?? 'application/pdf',
-      s3Key: documentInput.s3Key,
-    };
+    const now = new Date();
+    // Stamped explicitly (rather than left to Mongoose's automatic FileInfo timestamps)
+    // because `documentRef` is echoed back in the response below without a DB re-read —
+    // always a new document here (existing is always null for this call site).
+    const documentRef: FileInfo = { ...documentFile, createdAt: now, updatedAt: now };
 
     const session = await this.formModel.db.startSession();
     try {
       session.startTransaction();
 
-      const now = new Date();
       const userOid = new Types.ObjectId(user._id);
 
       await this.formModel
@@ -505,10 +500,18 @@ export class EulbPostSubmissionUpdateService {
         activeDatasetVersion: formForSummary?.activeDatasetVersion ?? 0,
       };
 
+      const hydratedDocument = this.fileInfoNormalizer.hydrateFileInfoForResponse(documentRef, (p) => {
+        try {
+          return this.fileTokenService.signFileUrl(p);
+        } catch {
+          return p;
+        }
+      });
+
       return xviFcSuccess('Elected Urban Local Bodies update submitted successfully.', {
         batchId: batchId.toString(),
         updatedRowCount: dto.rows.length,
-        document: documentRef,
+        document: hydratedDocument as HydratedFileInfoResponse,
         validationSummary,
       });
     } catch (err) {

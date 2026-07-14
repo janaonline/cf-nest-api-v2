@@ -1,34 +1,37 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 
-@Schema({ _id: false, versionKey: false })
+@Schema({ _id: false, versionKey: false, timestamps: true })
 export class FileInfo {
   // TODO: remove later
   @Prop({ type: String })
-  originalName: string;
+  originalName!: string;
   // TODO: add required validation for the file name to avoid invalid characters and ensure proper formatting
   @Prop({ type: String })
-  name: string;
+  name?: string;
 
   @Prop({ type: String, required: true })
-  path: string;
+  path!: string;
 
   @Prop({ type: String, required: true })
-  mimeType: string;
+  mimeType!: string;
 
   @Prop({ type: String, required: true })
-  extension: string;
+  extension!: string;
 
   @Prop({ type: Number, required: true })
-  sizeKb: number;
+  sizeKb!: number;
 
   @Prop({ type: Number, default: null })
-  pageCount: number | null;
+  pageCount!: number | null;
 
   @Prop({ type: String, default: '' })
   sha256!: string;
 
-  @Prop({ type: Date, default: () => new Date() })
-  uploadedAt: Date;
+  // Managed automatically by Mongoose via the `timestamps` schema option above —
+  // never assigned manually, even on findOneAndUpdate/$set (Mongoose stamps both
+  // whenever this subdocument's path is present in the update payload).
+  createdAt?: Date;
+  updatedAt?: Date;
 }
 
 export const FileInfoSchema = SchemaFactory.createForClass(FileInfo);

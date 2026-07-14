@@ -1,36 +1,6 @@
 import { Type } from 'class-transformer';
-import {
-  IsBoolean,
-  IsMongoId,
-  IsNotEmpty,
-  IsNumber,
-  IsObject,
-  IsOptional,
-  IsString,
-  ValidateNested,
-} from 'class-validator';
-
-class EulbFileRefDto {
-  @IsString()
-  @IsNotEmpty()
-  fileName!: string;
-
-  @IsString()
-  @IsNotEmpty()
-  fileUrl!: string;
-
-  @IsOptional()
-  @IsNumber()
-  fileSize!: number | null;
-
-  @IsOptional()
-  @IsString()
-  mimeType?: string;
-
-  @IsOptional()
-  @IsString()
-  s3Key?: string;
-}
+import { IsBoolean, IsMongoId, IsNotEmpty, IsNumber, IsObject, IsOptional, ValidateNested } from 'class-validator';
+import { XviFcFileRefDto } from 'src/module/xvi-fc/common/dto/xvi-fc-file-ref.dto';
 
 class SaveEulbDraftDataDto {
   @IsOptional()
@@ -40,8 +10,8 @@ class SaveEulbDraftDataDto {
   @IsOptional()
   @IsObject()
   @ValidateNested()
-  @Type(() => EulbFileRefDto)
-  electedBodyExcelFile?: EulbFileRefDto;
+  @Type(() => XviFcFileRefDto)
+  electedBodyExcelFile?: XviFcFileRefDto;
 
   @IsOptional()
   @IsBoolean()

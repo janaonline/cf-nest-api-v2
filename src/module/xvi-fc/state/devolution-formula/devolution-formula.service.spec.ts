@@ -15,6 +15,7 @@ import { Ulb } from 'src/schemas/ulb.schema';
 import { ExcelService } from 'src/services/excel/excel.service';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { FileUrlNormalizerService } from 'src/module/xvi-fc/common/services/file-url-normalizer.service';
+import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
 import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
@@ -147,7 +148,7 @@ const mockDfTypedFields = [
     folderPathKey: 'devolution-formula/excels',
     validations: [{ name: 'required', validator: null, message: 'Excel file is required.' }],
     appearance: { color: 'success', variant: 'soft' },
-    value: { fileName: '', fileUrl: '', fileSize: null, mimeType: '' },
+    value: { originalName: '', path: '', mimeType: '', sizeKb: 0, pageCount: null },
   },
   {
     fieldTypes: ['DF_MAIN_FORM_FIELDS'],
@@ -340,7 +341,13 @@ describe('SaveDraftDevolutionFormulaDto', () => {
       yearId: YEAR_ID,
       installment: 1,
       data: {
-        excelFile: { fileName: 'test.xlsx', fileUrl: 'some/path.xlsx', fileSize: 1024 },
+        excelFile: {
+          originalName: 'test.xlsx',
+          path: 'some/path.xlsx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          sizeKb: 1,
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
         checkboxConfirmation: true,
       },
     });
@@ -387,6 +394,7 @@ describe('DevolutionFormulaService', () => {
         { provide: XvifcFormActorsService, useValue: mockActorsService },
         { provide: FileTokenService, useValue: mockFileTokenService },
         { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
+        FileInfoNormalizerService,
         { provide: DfFormJsonConfigService, useValue: mockDfFormJsonConfig },
       ],
     }).compile();
@@ -432,6 +440,8 @@ describe('DevolutionFormulaService', () => {
   // Test 12: URL normalization before save
   it('saveDraft normalizes a signed file URL to a raw storage path before persisting', async () => {
     const signedUrl = 'https://cdn.example.com/signed-file.xlsx?token=abc';
+    const rawPath = 'state/devolution-formula/excels/signed-file.xlsx';
+    mockFileUrlNormalizer.toRawStoragePath.mockReturnValueOnce(rawPath);
     mockFormModel.findOne.mockReturnValue(q(null));
     mockFormModel.findOneAndUpdate.mockReturnValue(q({ _id: formOid }));
 
@@ -440,7 +450,16 @@ describe('DevolutionFormulaService', () => {
         stateId: stateOid.toString(),
         yearId: YEAR_ID,
         installment: 1,
-        data: { excelFile: { fileName: 'test.xlsx', fileUrl: signedUrl, fileSize: 1024 }, checkboxConfirmation: true },
+        data: {
+          excelFile: {
+            originalName: 'test.xlsx',
+            path: signedUrl,
+            mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            sizeKb: 1,
+            createdAt: '2026-01-01T00:00:00.000Z',
+          },
+          checkboxConfirmation: true,
+        },
       },
       adminUser,
     );
@@ -448,9 +467,40 @@ describe('DevolutionFormulaService', () => {
     expect(mockFileUrlNormalizer.toRawStoragePath).toHaveBeenCalledWith(signedUrl);
 
     const saveCallArg = (mockFormModel.findOneAndUpdate.mock.calls as unknown[][][])[0][1] as {
-      $set: { excelFile: { fileUrl: string } };
+      $set: { excelFile: { path: string } };
     };
-    expect(saveCallArg.$set.excelFile.fileUrl).toBe(`raw::${signedUrl}`);
+    expect(saveCallArg.$set.excelFile.path).toBe(rawPath);
+  });
+
+  // saveDraft: pageCount from the shared file-upload component is persisted alongside the normalized URL
+  it('saveDraft persists excelFile.pageCount (null for Excel uploads)', async () => {
+    mockFormModel.findOne.mockReturnValue(q(null));
+    mockFormModel.findOneAndUpdate.mockReturnValue(q({ _id: formOid }));
+
+    await service.saveDraft(
+      {
+        stateId: stateOid.toString(),
+        yearId: YEAR_ID,
+        installment: 1,
+        data: {
+          excelFile: {
+            originalName: 'test.xlsx',
+            path: 'path/test.xlsx',
+            mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            sizeKb: 1,
+            createdAt: '2026-01-01T00:00:00.000Z',
+            pageCount: null,
+          },
+          checkboxConfirmation: true,
+        },
+      },
+      adminUser,
+    );
+
+    const saveCallArg = (mockFormModel.findOneAndUpdate.mock.calls as unknown[][][])[0][1] as {
+      $set: { excelFile: { pageCount?: number | null } };
+    };
+    expect(saveCallArg.$set.excelFile.pageCount).toBeNull();
   });
 
   // saveDraft dynamic validation: checkboxConfirmation requiredTrue enforced in draft
@@ -530,7 +580,13 @@ describe('DevolutionFormulaService', () => {
     mockFormModel.findOne.mockReturnValue(
       q({
         ...mockFormInProgress,
-        excelFile: { fileName: 'file.xlsx', fileUrl: rawUrl, fileSize: 2048 },
+        excelFile: {
+          originalName: 'file.xlsx',
+          path: rawUrl,
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          sizeKb: 2,
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
       }),
     );
     mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
@@ -543,9 +599,36 @@ describe('DevolutionFormulaService', () => {
     const fileQ = data.questions.find((q) => q.key === 'excelFile');
     expect(fileQ).toBeDefined();
     expect(mockFileTokenService.signFileUrl).toHaveBeenCalledWith(rawUrl);
-    const fileValue = fileQ?.value as { fileUrl: string } | undefined;
-    expect(fileValue?.fileUrl).toBe(`signed::${rawUrl}`);
+    const fileValue = fileQ?.value as { path: string } | undefined;
+    expect(fileValue?.path).toBe(`signed::${rawUrl}`);
     expect(fileQ?.folderPath).toContain('devolution-formula/excels');
+  });
+
+  // GET form: saved pageCount is returned on the hydrated excelFile value
+  it('getForm returns the saved excelFile.pageCount alongside the signed URL', async () => {
+    const rawUrl = 'state/devolution-formula/excels/file.xlsx';
+    mockFormModel.findOne.mockReturnValue(
+      q({
+        ...mockFormInProgress,
+        excelFile: {
+          originalName: 'file.xlsx',
+          path: rawUrl,
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          sizeKb: 2,
+          createdAt: '2026-01-01T00:00:00.000Z',
+          pageCount: null,
+        },
+      }),
+    );
+    mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
+
+    const result = await service.getForm(stateOid.toString(), YEAR_ID, 1, adminUser);
+    const data = result.data as { questions: HydratedFieldConfig[] };
+
+    const fileQ = data.questions.find((q) => q.key === 'excelFile');
+    const fileValue = fileQ?.value as { path: string; pageCount?: number | null } | undefined;
+    expect(fileValue?.path).toBe(`signed::${rawUrl}`);
+    expect(fileValue?.pageCount).toBeNull();
   });
 
   // GET form: ulbCount question is first, alongside excelFile/checkboxConfirmation
@@ -911,7 +994,13 @@ describe('DevolutionFormulaService', () => {
             yearId: YEAR_ID,
             installment: 1,
             data: {
-              excelFile: { fileName: 'f.xlsx', fileUrl: 'path/f.xlsx', fileSize: 1024 },
+              excelFile: {
+                originalName: 'f.xlsx',
+                path: 'path/f.xlsx',
+                mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                sizeKb: 1,
+                createdAt: '2026-01-01T00:00:00.000Z',
+              },
               checkboxConfirmation: true,
               ulbCount: 50,
             },
@@ -937,7 +1026,13 @@ describe('DevolutionFormulaService', () => {
             yearId: YEAR_ID,
             installment: 1,
             data: {
-              excelFile: { fileName: 'f.xlsx', fileUrl: 'path/f.xlsx', fileSize: 1024 },
+              excelFile: {
+                originalName: 'f.xlsx',
+                path: 'path/f.xlsx',
+                mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                sizeKb: 1,
+                createdAt: '2026-01-01T00:00:00.000Z',
+              },
               checkboxConfirmation: true,
               ulbCount: 50,
             },
@@ -965,7 +1060,13 @@ describe('DevolutionFormulaService', () => {
             yearId: YEAR_ID,
             installment: 1,
             data: {
-              excelFile: { fileName: 'f.xlsx', fileUrl: 'path/f.xlsx', fileSize: 1024 },
+              excelFile: {
+                originalName: 'f.xlsx',
+                path: 'path/f.xlsx',
+                mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                sizeKb: 1,
+                createdAt: '2026-01-01T00:00:00.000Z',
+              },
               checkboxConfirmation: true,
               ulbCount: 50,
             },
@@ -992,7 +1093,13 @@ describe('DevolutionFormulaService', () => {
             yearId: YEAR_ID,
             installment: 1,
             data: {
-              excelFile: { fileName: 'f.xlsx', fileUrl: 'path/f.xlsx', fileSize: 1024 },
+              excelFile: {
+                originalName: 'f.xlsx',
+                path: 'path/f.xlsx',
+                mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                sizeKb: 1,
+                createdAt: '2026-01-01T00:00:00.000Z',
+              },
               checkboxConfirmation: true,
               ulbCount: 50,
             },
@@ -1028,13 +1135,54 @@ describe('DevolutionFormulaService', () => {
             yearId: YEAR_ID,
             installment: 1,
             data: {
-              excelFile: { fileName: 'f.xlsx', fileUrl: 'path/f.xlsx', fileSize: 1024 },
+              excelFile: {
+                originalName: 'f.xlsx',
+                path: 'path/f.xlsx',
+                mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                sizeKb: 1,
+                createdAt: '2026-01-01T00:00:00.000Z',
+              },
               checkboxConfirmation: true,
             },
           },
           adminUser,
         ),
       ).resolves.not.toThrow();
+    });
+
+    it('finalSubmit preserves data.excelFile.pageCount in the persisted update', async () => {
+      mockUlbModel.countDocuments.mockResolvedValue(50);
+      mockFormModel.findOne.mockReturnValue(q({ ...mockFormInProgress, excelRowCount: 50, newUlbCount: 0 }));
+      mockEulbModel.findOne.mockReturnValue(
+        q({ _id: new Types.ObjectId(), currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }),
+      );
+      mockRowModel.findOne.mockReturnValue(q(null));
+      mockFormModel.findOneAndUpdate.mockReturnValue(q({ _id: formOid }));
+
+      await service.finalSubmit(
+        {
+          stateId: stateOid.toString(),
+          yearId: YEAR_ID,
+          installment: 1,
+          data: {
+            excelFile: {
+              originalName: 'f.xlsx',
+              path: 'path/f.xlsx',
+              mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+              sizeKb: 1,
+              createdAt: '2026-01-01T00:00:00.000Z',
+              pageCount: null,
+            },
+            checkboxConfirmation: true,
+          },
+        },
+        adminUser,
+      );
+
+      const updatePayload = (mockFormModel.findOneAndUpdate.mock.calls as unknown[][][])[0][1] as {
+        $set: { excelFile: { pageCount?: number | null } };
+      };
+      expect(updatePayload.$set.excelFile.pageCount).toBeNull();
     });
   });
 
@@ -1050,7 +1198,13 @@ describe('DevolutionFormulaService', () => {
           yearId: YEAR_ID,
           installment: 1,
           data: {
-            excelFile: { fileName: 'f.xlsx', fileUrl: 'path/f.xlsx', fileSize: 1024 },
+            excelFile: {
+              originalName: 'f.xlsx',
+              path: 'path/f.xlsx',
+              mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+              sizeKb: 1,
+              createdAt: '2026-01-01T00:00:00.000Z',
+            },
             checkboxConfirmation: true,
             ulbCount: 50,
           },
@@ -1099,7 +1253,13 @@ describe('DevolutionFormulaService', () => {
           yearId: YEAR_ID,
           installment: 1,
           data: {
-            excelFile: { fileName: 'f.xlsx', fileUrl: 'path/f.xlsx', fileSize: 1024 },
+            excelFile: {
+              originalName: 'f.xlsx',
+              path: 'path/f.xlsx',
+              mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+              sizeKb: 1,
+              createdAt: '2026-01-01T00:00:00.000Z',
+            },
             checkboxConfirmation: true,
             // ulbCount intentionally omitted
           },
@@ -1124,7 +1284,13 @@ describe('DevolutionFormulaService', () => {
           yearId: YEAR_ID,
           installment: 1,
           data: {
-            excelFile: { fileName: 'f.xlsx', fileUrl: 'path/f.xlsx', fileSize: 1024 },
+            excelFile: {
+              originalName: 'f.xlsx',
+              path: 'path/f.xlsx',
+              mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+              sizeKb: 1,
+              createdAt: '2026-01-01T00:00:00.000Z',
+            },
             checkboxConfirmation: true,
           },
         },
@@ -1153,7 +1319,13 @@ describe('DevolutionFormulaService', () => {
         yearId: YEAR_ID,
         installment: 1,
         data: {
-          excelFile: { fileName: 'f.xlsx', fileUrl: 'path/f.xlsx', fileSize: 1024 },
+          excelFile: {
+            originalName: 'f.xlsx',
+            path: 'path/f.xlsx',
+            mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            sizeKb: 1,
+            createdAt: '2026-01-01T00:00:00.000Z',
+          },
           checkboxConfirmation: true,
         },
       },
@@ -1177,7 +1349,13 @@ describe('DevolutionFormulaService', () => {
           yearId: YEAR_ID,
           installment: 2,
           data: {
-            excelFile: { fileName: 'f.xlsx', fileUrl: 'path/f.xlsx', fileSize: 1024 },
+            excelFile: {
+              originalName: 'f.xlsx',
+              path: 'path/f.xlsx',
+              mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+              sizeKb: 1,
+              createdAt: '2026-01-01T00:00:00.000Z',
+            },
             checkboxConfirmation: true,
             ulbCount: 50,
           },
@@ -1204,7 +1382,13 @@ describe('DevolutionFormulaService', () => {
           yearId: YEAR_ID,
           installment: 1,
           data: {
-            excelFile: { fileName: 'f.xlsx', fileUrl: 'path/f.xlsx', fileSize: 1024 },
+            excelFile: {
+              originalName: 'f.xlsx',
+              path: 'path/f.xlsx',
+              mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+              sizeKb: 1,
+              createdAt: '2026-01-01T00:00:00.000Z',
+            },
             checkboxConfirmation: true,
             ulbCount: 50,
           },
@@ -1235,7 +1419,13 @@ describe('DevolutionFormulaService', () => {
           yearId: YEAR_ID,
           installment: 1,
           data: {
-            excelFile: { fileName: 'f.xlsx', fileUrl: 'path/f.xlsx', fileSize: 1024 },
+            excelFile: {
+              originalName: 'f.xlsx',
+              path: 'path/f.xlsx',
+              mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+              sizeKb: 1,
+              createdAt: '2026-01-01T00:00:00.000Z',
+            },
             checkboxConfirmation: true,
             ulbCount: 50,
           },
@@ -1263,7 +1453,13 @@ describe('DevolutionFormulaService', () => {
           yearId: YEAR_ID,
           installment: 1,
           data: {
-            excelFile: { fileName: 'f.xlsx', fileUrl: 'path/f.xlsx', fileSize: 1024 },
+            excelFile: {
+              originalName: 'f.xlsx',
+              path: 'path/f.xlsx',
+              mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+              sizeKb: 1,
+              createdAt: '2026-01-01T00:00:00.000Z',
+            },
             checkboxConfirmation: true,
             ulbCount: 50,
           },
@@ -1296,7 +1492,13 @@ describe('DevolutionFormulaService', () => {
           yearId: YEAR_ID,
           installment: 1,
           data: {
-            excelFile: { fileName: 'f.xlsx', fileUrl: 'path/f.xlsx', fileSize: 1024 },
+            excelFile: {
+              originalName: 'f.xlsx',
+              path: 'path/f.xlsx',
+              mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+              sizeKb: 1,
+              createdAt: '2026-01-01T00:00:00.000Z',
+            },
             checkboxConfirmation: true,
             ulbCount: 50,
           },
@@ -1528,6 +1730,7 @@ describe('Devolution Formula — getForm rowEditFields', () => {
         { provide: XvifcFormActorsService, useValue: mockActorsService },
         { provide: FileTokenService, useValue: mockFileTokenService },
         { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
+        FileInfoNormalizerService,
         { provide: DfFormJsonConfigService, useValue: mockDfFormJsonConfig },
       ],
     }).compile();
@@ -1631,7 +1834,7 @@ describe('Devolution Formula — getForm rowEditFields', () => {
 
     beforeEach(() => {
       mockRowModel.aggregate.mockReturnValue({ exec: jest.fn().mockResolvedValue([]) });
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
       jest.spyOn((service as any).excelService, 'generateExcel').mockResolvedValue(Buffer.from(''));
     });
 
@@ -1660,27 +1863,27 @@ describe('Devolution Formula — getForm rowEditFields', () => {
     it('default row match includes isActive: true', async () => {
       await service.dumpToExcel({} as DumpDevolutionFormulaQueryDto, adminUser);
       const [pipeline] = mockRowModel.aggregate.mock.calls[0] as [Record<string, unknown>[]];
-      const rowMatchStage = pipeline.find(
-        (s) => '$match' in s && 'isActive' in ((s as Record<string, unknown>)['$match'] as object),
-      ) as { $match: Record<string, unknown> } | undefined;
+      const rowMatchStage = pipeline.find((s) => '$match' in s && 'isActive' in (s['$match'] as object)) as
+        | { $match: Record<string, unknown> }
+        | undefined;
       expect(rowMatchStage?.['$match']?.['isActive']).toBe(true);
     });
 
     it('explicit isActive: false sets rowMatch.isActive = false', async () => {
       await service.dumpToExcel({ isActive: false } as DumpDevolutionFormulaQueryDto, adminUser);
       const [pipeline] = mockRowModel.aggregate.mock.calls[0] as [Record<string, unknown>[]];
-      const rowMatchStage = pipeline.find(
-        (s) => '$match' in s && 'isActive' in ((s as Record<string, unknown>)['$match'] as object),
-      ) as { $match: Record<string, unknown> } | undefined;
+      const rowMatchStage = pipeline.find((s) => '$match' in s && 'isActive' in (s['$match'] as object)) as
+        | { $match: Record<string, unknown> }
+        | undefined;
       expect(rowMatchStage?.['$match']?.['isActive']).toBe(false);
     });
 
     it('STATE scope sets formDoc.state to user state ObjectId', async () => {
       await service.dumpToExcel({} as DumpDevolutionFormulaQueryDto, stateUserWithState);
       const [pipeline] = mockRowModel.aggregate.mock.calls[0] as [Record<string, unknown>[]];
-      const formMatchStage = pipeline.find(
-        (s) => '$match' in s && '$expr' in ((s as Record<string, unknown>)['$match'] as object),
-      ) as { $match: Record<string, unknown> } | undefined;
+      const formMatchStage = pipeline.find((s) => '$match' in s && '$expr' in (s['$match'] as object)) as
+        | { $match: Record<string, unknown> }
+        | undefined;
       const stateFilter = formMatchStage?.['$match']?.['formDoc.state'];
       expect(stateFilter?.toString()).toBe(stateOid.toString());
     });
@@ -1689,9 +1892,9 @@ describe('Devolution Formula — getForm rowEditFields', () => {
       const queryStateId = new Types.ObjectId();
       await service.dumpToExcel({ stateId: queryStateId.toString() } as DumpDevolutionFormulaQueryDto, adminUser);
       const [pipeline] = mockRowModel.aggregate.mock.calls[0] as [Record<string, unknown>[]];
-      const formMatchStage = pipeline.find(
-        (s) => '$match' in s && '$expr' in ((s as Record<string, unknown>)['$match'] as object),
-      ) as { $match: Record<string, unknown> } | undefined;
+      const formMatchStage = pipeline.find((s) => '$match' in s && '$expr' in (s['$match'] as object)) as
+        | { $match: Record<string, unknown> }
+        | undefined;
       const stateFilter = formMatchStage?.['$match']?.['formDoc.state'];
       expect(stateFilter?.toString()).toBe(queryStateId.toString());
     });
@@ -1699,18 +1902,18 @@ describe('Devolution Formula — getForm rowEditFields', () => {
     it('ADMIN without stateId does not include formDoc.state in match', async () => {
       await service.dumpToExcel({} as DumpDevolutionFormulaQueryDto, adminUser);
       const [pipeline] = mockRowModel.aggregate.mock.calls[0] as [Record<string, unknown>[]];
-      const formMatchStage = pipeline.find(
-        (s) => '$match' in s && '$expr' in ((s as Record<string, unknown>)['$match'] as object),
-      ) as { $match: Record<string, unknown> } | undefined;
+      const formMatchStage = pipeline.find((s) => '$match' in s && '$expr' in (s['$match'] as object)) as
+        | { $match: Record<string, unknown> }
+        | undefined;
       expect(formMatchStage?.['$match']).not.toHaveProperty('formDoc.state');
     });
 
     it('yearId filter sets formDoc.year in form match', async () => {
       await service.dumpToExcel({ yearId: YEAR_ID } as DumpDevolutionFormulaQueryDto, adminUser);
       const [pipeline] = mockRowModel.aggregate.mock.calls[0] as [Record<string, unknown>[]];
-      const formMatchStage = pipeline.find(
-        (s) => '$match' in s && '$expr' in ((s as Record<string, unknown>)['$match'] as object),
-      ) as { $match: Record<string, unknown> } | undefined;
+      const formMatchStage = pipeline.find((s) => '$match' in s && '$expr' in (s['$match'] as object)) as
+        | { $match: Record<string, unknown> }
+        | undefined;
       const yearFilter = formMatchStage?.['$match']?.['formDoc.year'];
       expect(yearFilter?.toString()).toBe(YEAR_ID);
     });
@@ -1718,43 +1921,42 @@ describe('Devolution Formula — getForm rowEditFields', () => {
     it('installment filter sets formDoc.installment in form match', async () => {
       await service.dumpToExcel({ installment: 1 } as DumpDevolutionFormulaQueryDto, adminUser);
       const [pipeline] = mockRowModel.aggregate.mock.calls[0] as [Record<string, unknown>[]];
-      const formMatchStage = pipeline.find(
-        (s) => '$match' in s && '$expr' in ((s as Record<string, unknown>)['$match'] as object),
-      ) as { $match: Record<string, unknown> } | undefined;
+      const formMatchStage = pipeline.find((s) => '$match' in s && '$expr' in (s['$match'] as object)) as
+        | { $match: Record<string, unknown> }
+        | undefined;
       expect(formMatchStage?.['$match']?.['formDoc.installment']).toBe(1);
     });
 
     it('validationStatus filter sets formDoc.validationStatus in form match', async () => {
       await service.dumpToExcel({ validationStatus: 'VALID' } as DumpDevolutionFormulaQueryDto, adminUser);
       const [pipeline] = mockRowModel.aggregate.mock.calls[0] as [Record<string, unknown>[]];
-      const formMatchStage = pipeline.find(
-        (s) => '$match' in s && '$expr' in ((s as Record<string, unknown>)['$match'] as object),
-      ) as { $match: Record<string, unknown> } | undefined;
+      const formMatchStage = pipeline.find((s) => '$match' in s && '$expr' in (s['$match'] as object)) as
+        | { $match: Record<string, unknown> }
+        | undefined;
       expect(formMatchStage?.['$match']?.['formDoc.validationStatus']).toBe('VALID');
     });
 
     it('formStatus filter sets formDoc.currentFormStatus in form match', async () => {
       await service.dumpToExcel({ formStatus: 5 } as DumpDevolutionFormulaQueryDto, adminUser);
       const [pipeline] = mockRowModel.aggregate.mock.calls[0] as [Record<string, unknown>[]];
-      const formMatchStage = pipeline.find(
-        (s) => '$match' in s && '$expr' in ((s as Record<string, unknown>)['$match'] as object),
-      ) as { $match: Record<string, unknown> } | undefined;
+      const formMatchStage = pipeline.find((s) => '$match' in s && '$expr' in (s['$match'] as object)) as
+        | { $match: Record<string, unknown> }
+        | undefined;
       expect(formMatchStage?.['$match']?.['formDoc.currentFormStatus']).toBe(5);
     });
 
     it('pipeline form match includes $expr active dataset version guard', async () => {
       await service.dumpToExcel({} as DumpDevolutionFormulaQueryDto, adminUser);
       const [pipeline] = mockRowModel.aggregate.mock.calls[0] as [Record<string, unknown>[]];
-      const formMatchStage = pipeline.find(
-        (s) => '$match' in s && '$expr' in ((s as Record<string, unknown>)['$match'] as object),
-      ) as { $match: Record<string, unknown> } | undefined;
+      const formMatchStage = pipeline.find((s) => '$match' in s && '$expr' in (s['$match'] as object)) as
+        | { $match: Record<string, unknown> }
+        | undefined;
       expect(formMatchStage?.['$match']?.['$expr']).toEqual({
         $eq: ['$datasetVersion', '$formDoc.activeDatasetVersion'],
       });
     });
 
     it('empty aggregate result calls generateExcel with empty rows', async () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access
       const generateExcelSpy = jest
         .spyOn((service as any).excelService, 'generateExcel')
         .mockResolvedValue(Buffer.from(''));
@@ -1793,7 +1995,6 @@ describe('Devolution Formula — getForm rowEditFields', () => {
 
       mockRowModel.aggregate.mockReturnValue({ exec: jest.fn().mockResolvedValue([aggRow]) });
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access
       const generateExcelSpy = jest
         .spyOn((service as any).excelService, 'generateExcel')
         .mockResolvedValue(Buffer.from(''));

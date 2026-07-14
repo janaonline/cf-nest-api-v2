@@ -1,27 +1,6 @@
 import { Type } from 'class-transformer';
-import { IsMongoId, IsNotEmpty, IsNumber, IsObject, IsOptional, IsString, ValidateNested } from 'class-validator';
-
-class EulbValidateFileRefDto {
-  @IsString()
-  @IsNotEmpty()
-  fileName!: string;
-
-  @IsString()
-  @IsNotEmpty()
-  fileUrl!: string;
-
-  @IsOptional()
-  @IsNumber()
-  fileSize!: number | null;
-
-  @IsOptional()
-  @IsString()
-  mimeType?: string;
-
-  @IsOptional()
-  @IsString()
-  s3Key?: string;
-}
+import { IsMongoId, IsNotEmpty, IsNumber, IsObject, IsOptional, ValidateNested } from 'class-validator';
+import { XviFcFileRefDto } from 'src/module/xvi-fc/common/dto/xvi-fc-file-ref.dto';
 
 export class ValidateElectedUrbanLocalBodiesExcelDto {
   @IsMongoId()
@@ -38,6 +17,6 @@ export class ValidateElectedUrbanLocalBodiesExcelDto {
 
   @IsObject()
   @ValidateNested()
-  @Type(() => EulbValidateFileRefDto)
-  electedBodyExcelFile!: EulbValidateFileRefDto;
+  @Type(() => XviFcFileRefDto)
+  electedBodyExcelFile!: XviFcFileRefDto;
 }
