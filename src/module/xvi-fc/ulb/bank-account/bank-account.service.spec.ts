@@ -45,6 +45,7 @@ describe('BankAccountService scope enforcement', () => {
 
     return {
       ulbId: dtoUlbId,
+      stateId: stateId.toString(),
       designYearId,
       ifscCode: 'SBIN0123456',
       accountNumber: '123456789012',
@@ -78,7 +79,7 @@ describe('BankAccountService scope enforcement', () => {
       findOneAndUpdate: jest.fn(),
     };
     ulbModel = {
-      findById: jest.fn(),
+      findById: jest.fn().mockReturnValue(q({ state: stateId })),
     };
     service = new BankAccountService(bankAccountModel as never, ulbModel as never);
   });
