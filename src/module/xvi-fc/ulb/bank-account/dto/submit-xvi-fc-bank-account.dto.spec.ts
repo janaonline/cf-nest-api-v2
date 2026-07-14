@@ -13,6 +13,7 @@ type TestPayload = Record<string, any>;
 
 const validPayload = (): TestPayload => ({
   ulbId: new Types.ObjectId().toString(),
+  stateId: new Types.ObjectId().toString(),
   designYearId: new Types.ObjectId().toString(),
   ifscCode: 'SBIN0123456',
   accountNumber: '123456789012',

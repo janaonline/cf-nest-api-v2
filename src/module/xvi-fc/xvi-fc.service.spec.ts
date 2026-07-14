@@ -8,8 +8,12 @@ import { GrantAllocation } from '../../schemas/xvi-fc/grant-allocation.schema';
 import { Year } from '../../schemas/year.schema';
 import { Ulb } from '../../schemas/ulb.schema';
 import { State } from '../../schemas/state.schema';
-import { XviFcSideMenu } from '../../schemas/xvi-fc/xvi-fc-side-menu.schema';
-import { XviFcAnnualAccount, AnnualAccountFormStatus, FORM_STATUS_ID } from '../../schemas/xvi-fc/annual-account.schema';
+import { SideMenu } from '../../schemas/side-menu.schema';
+import {
+  XviFcAnnualAccount,
+  AnnualAccountFormStatus,
+  FORM_STATUS_ID,
+} from '../../schemas/xvi-fc/annual-account.schema';
 import { XviFcUnspentBalanceDisclosure } from '../../schemas/xvi-fc/unspent-balance-disclosure.schema';
 import { XviFcBankAccount } from '../../schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
 import { XviFcCacheService } from './cache/xvi-fc-cache.service';
@@ -66,7 +70,7 @@ describe('XviFcService', () => {
         { provide: getModelToken(Year.name), useValue: mockYearModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
         { provide: getModelToken(State.name), useValue: mockStateModel },
-        { provide: getModelToken(XviFcSideMenu.name), useValue: mockSideMenuModel },
+        { provide: getModelToken(SideMenu.name), useValue: mockSideMenuModel },
         { provide: getModelToken(XviFcAnnualAccount.name), useValue: mockAnnualAccountModel },
         { provide: getModelToken(XviFcUnspentBalanceDisclosure.name), useValue: mockDisclosureModel },
         { provide: getModelToken(XviFcBankAccount.name), useValue: mockBankAccountModel },
@@ -115,7 +119,9 @@ describe('XviFcService', () => {
     const yearId = new Types.ObjectId().toString();
 
     it('should return ULB side menu', async () => {
-      mockSideMenuModel.find.mockReturnValue(q([{ _id: new Types.ObjectId(), label: 'Overview', section: 'top', type: 'item', sequence: 1 }]));
+      mockSideMenuModel.find.mockReturnValue(
+        q([{ _id: new Types.ObjectId(), name: 'Overview', section: 'top', type: 'item', sequence: 1 }]),
+      );
       const result = await service.getSideMenu('ULB', yearId);
       expect(result).toHaveProperty('topModel');
       expect(result).toHaveProperty('bottomModel');
@@ -123,20 +129,26 @@ describe('XviFcService', () => {
     });
 
     it('should return STATE side menu', async () => {
-      mockSideMenuModel.find.mockReturnValue(q([{ _id: new Types.ObjectId(), label: 'Overview', section: 'top', type: 'item', sequence: 1 }]));
+      mockSideMenuModel.find.mockReturnValue(
+        q([{ _id: new Types.ObjectId(), name: 'Overview', section: 'top', type: 'item', sequence: 1 }]),
+      );
       const result = await service.getSideMenu('STATE', yearId);
       expect(result).toHaveProperty('topModel');
       expect(Array.isArray(result.topModel)).toBe(true);
     });
 
     it('should return MOHUA side menu', async () => {
-      mockSideMenuModel.find.mockReturnValue(q([{ _id: new Types.ObjectId(), label: 'Overview', section: 'top', type: 'item', sequence: 1 }]));
+      mockSideMenuModel.find.mockReturnValue(
+        q([{ _id: new Types.ObjectId(), name: 'Overview', section: 'top', type: 'item', sequence: 1 }]),
+      );
       const result = await service.getSideMenu('MOHUA', yearId);
       expect(result).toHaveProperty('topModel');
     });
 
     it('should return DOE side menu', async () => {
-      mockSideMenuModel.find.mockReturnValue(q([{ _id: new Types.ObjectId(), label: 'Overview', section: 'top', type: 'item', sequence: 1 }]));
+      mockSideMenuModel.find.mockReturnValue(
+        q([{ _id: new Types.ObjectId(), name: 'Overview', section: 'top', type: 'item', sequence: 1 }]),
+      );
       const result = await service.getSideMenu('DOE', yearId);
       expect(result).toHaveProperty('topModel');
     });
