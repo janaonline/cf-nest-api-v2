@@ -28,7 +28,7 @@ import { SideMenuItemDto, SideMenuResponseDto } from './dto/side-menu.dto';
 import { Year, YearDocument } from '../../schemas/year.schema';
 import { Ulb, UlbDocument } from '../../schemas/ulb.schema';
 import { State, StateDocument } from '../../schemas/state.schema';
-import { XviFcSideMenu, XviFcSideMenuDocument, MenuRole } from '../../schemas/xvi-fc/xvi-fc-side-menu.schema';
+import { SideMenu, SideMenuDocument, MenuRole } from '../../schemas/side-menu.schema';
 import { XviFcCacheService, XVIFC_CACHE_KEY_PREFIX } from './cache/xvi-fc-cache.service';
 import { FormJsonService } from '../../form-json/form-json.service';
 
@@ -43,8 +43,8 @@ export class XviFcService {
     private readonly ulbModel: Model<UlbDocument>,
     @InjectModel(State.name)
     private readonly stateModel: Model<StateDocument>,
-    @InjectModel(XviFcSideMenu.name)
-    private readonly sideMenuModel: Model<XviFcSideMenuDocument>,
+    @InjectModel(SideMenu.name)
+    private readonly sideMenuModel: Model<SideMenuDocument>,
     @InjectModel(XviFcAnnualAccount.name)
     private readonly annualAccountModel: Model<XviFcAnnualAccountDocument>,
     @InjectModel(XviFcUnspentBalanceDisclosure.name)
@@ -96,7 +96,7 @@ export class XviFcService {
     return { message: `FormJson cache cleared for designYearId: ${designYearId}, formId: ${formId}` };
   }
 
-  private buildMenuTree(docs: Array<XviFcSideMenu & { _id: Types.ObjectId }>): SideMenuResponseDto {
+  private buildMenuTree(docs: Array<SideMenu & { _id: Types.ObjectId }>): SideMenuResponseDto {
     return {
       topModel: this.buildSection(docs, 'top'),
       bottomModel: this.buildSection(docs, 'bottom'),
@@ -104,11 +104,11 @@ export class XviFcService {
   }
 
   private buildSection(
-    docs: Array<XviFcSideMenu & { _id: Types.ObjectId }>,
+    docs: Array<SideMenu & { _id: Types.ObjectId }>,
     section: 'top' | 'bottom',
   ): SideMenuItemDto[] {
     const sectionDocs = docs.filter((d) => d.section === section);
-    const topLevel = sectionDocs.filter((d) => !d.parentId).sort((a, b) => a.sequence - b.sequence);
+    const topLevel = sectionDocs.filter((d) => !d.parentId).sort((a, b) => a.sequence! - b.sequence!);
     const children = sectionDocs.filter((d) => d.parentId);
 
     return topLevel.map((doc) => {
@@ -116,7 +116,7 @@ export class XviFcService {
         return { label: '_', separator: true };
       }
 
-      const item: SideMenuItemDto = { label: doc.label };
+      const item: SideMenuItemDto = { label: doc.name };
       if (doc.icon) item.icon = doc.icon;
       if (doc.routerLink?.length) item.routerLink = doc.routerLink;
       if (doc.featureKey) item.featureKey = doc.featureKey;
@@ -124,9 +124,9 @@ export class XviFcService {
       if (doc.type === 'group') {
         item.items = children
           .filter((c) => c.parentId!.toString() === doc._id.toString())
-          .sort((a, b) => a.sequence - b.sequence)
+          .sort((a, b) => a.sequence! - b.sequence!)
           .map((c) => {
-            const child: SideMenuItemDto = { label: c.label };
+            const child: SideMenuItemDto = { label: c.name };
             if (c.icon) child.icon = c.icon;
             if (c.featureKey) child.featureKey = c.featureKey;
             return child;

@@ -9,7 +9,7 @@ import { GrantAllocation, GrantAllocationSchema } from '../../schemas/xvi-fc/gra
 import { State, StateSchema } from '../../schemas/state.schema';
 import { Year, YearSchema } from '../../schemas/year.schema';
 import { Ulb, UlbSchema } from '../../schemas/ulb.schema';
-import { XviFcSideMenu, XviFcSideMenuSchema } from '../../schemas/xvi-fc/xvi-fc-side-menu.schema';
+import { SideMenu, SideMenuSchema } from '../../schemas/side-menu.schema';
 import { XviFcCacheService } from './cache/xvi-fc-cache.service';
 import { XviFcCacheInterceptor } from './cache/xvi-fc-cache.interceptor';
 import { SideMenuModule } from './side-menu/side-menu.module';
@@ -31,7 +31,7 @@ import { XviFcBankAccount, XviFcBankAccountSchema } from '../../schemas/xvi-fc/u
       { name: State.name, schema: StateSchema },
       { name: Year.name, schema: YearSchema },
       { name: Ulb.name, schema: UlbSchema },
-      { name: XviFcSideMenu.name, schema: XviFcSideMenuSchema },
+      { name: SideMenu.name, schema: SideMenuSchema },
       { name: XviFcAnnualAccount.name, schema: XviFcAnnualAccountSchema },
       { name: XviFcUnspentBalanceDisclosure.name, schema: XviFcUnspentBalanceDisclosureSchema },
       { name: XviFcBankAccount.name, schema: XviFcBankAccountSchema },
