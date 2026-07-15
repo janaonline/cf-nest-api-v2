@@ -80,6 +80,16 @@ export class BankAccountService {
     this.assertBankDetailsMatchVerifiedIfsc(dto.bankDetails, verifiedIfscDetails);
 
     const ulbObjectId = new Types.ObjectId(ulbId);
+    const ulb = await this.ulbModel.findById(ulbId, 'state').lean().exec();
+    const ulbStateId = toObjectIdString(ulb?.state);
+    if (!ulbStateId) {
+      throw new BadRequestException('ULB is not mapped to any state.');
+    }
+    if (ulbStateId !== dto.stateId) {
+      throw new ForbiddenException('stateId does not match the ULB state.');
+    }
+
+    const stateObjectId = new Types.ObjectId(ulbStateId);
     const designYearObjectId = new Types.ObjectId(dto.designYearId);
     const now = new Date();
 
@@ -90,6 +100,7 @@ export class BankAccountService {
 
     const payload = {
       ulb: ulbObjectId,
+      state: stateObjectId,
       designYear: designYearObjectId,
       ifscCode: dto.ifscCode,
       bankDetails: {

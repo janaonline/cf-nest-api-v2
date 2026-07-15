@@ -11,6 +11,8 @@ import { Ulb } from 'src/schemas/ulb.schema';
 import { S3Service } from 'src/core/s3/s3.service';
 import { ExcelService } from 'src/services/excel/excel.service';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
+import { FileUrlNormalizerService } from 'src/module/xvi-fc/common/services/file-url-normalizer.service';
+import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
 import { ElectedUrbanLocalBodiesValidator } from 'src/module/xvi-fc/state/elected-urban-local-bodies/validators/elected-urban-local-bodies.validator';
 import { EulbFormJsonConfigService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/form-json/elected-urban-local-bodies-form-json.service';
 import type { EulbTypedFieldConfig } from 'src/module/xvi-fc/state/elected-urban-local-bodies/helpers/elected-urban-local-bodies-form-json.helpers';
@@ -116,9 +118,11 @@ function makeDto(): ValidateElectedUrbanLocalBodiesExcelDto {
     stateId: stateOid.toString(),
     yearId: yearOid.toString(),
     electedBodyExcelFile: {
-      fileName: 'test.xlsx',
-      fileUrl: 'state/test.xlsx',
-      fileSize: 1024,
+      originalName: 'test.xlsx',
+      path: 'state/test.xlsx',
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      sizeKb: 1,
+      createdAt: '2026-01-01T00:00:00.000Z',
     },
   } as ValidateElectedUrbanLocalBodiesExcelDto;
 }
@@ -184,8 +188,13 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
         { provide: getModelToken(Ulb.name), useValue: ulbModel },
         { provide: S3Service, useValue: s3Service },
         { provide: ExcelService, useValue: { generateExcel: jest.fn().mockResolvedValue(new ArrayBuffer(8)) } },
-        { provide: FileTokenService, useValue: { parseToken: jest.fn() } },
+        {
+          provide: FileTokenService,
+          useValue: { parseToken: jest.fn(), signFileUrl: jest.fn((p: string) => `signed::${p}`) },
+        },
         { provide: ConfigService, useValue: { get: jest.fn().mockReturnValue('') } },
+        { provide: FileUrlNormalizerService, useValue: { toRawStoragePath: jest.fn((v: string) => v) } },
+        FileInfoNormalizerService,
         { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
       ],
     }).compile();
@@ -837,8 +846,13 @@ describe('ElectedUrbanLocalBodiesExcelService — revalidateExcel', () => {
         { provide: getModelToken(Ulb.name), useValue: ulbModel },
         { provide: S3Service, useValue: s3Service },
         { provide: ExcelService, useValue: { generateExcel: jest.fn().mockResolvedValue(new ArrayBuffer(8)) } },
-        { provide: FileTokenService, useValue: { parseToken: jest.fn() } },
+        {
+          provide: FileTokenService,
+          useValue: { parseToken: jest.fn(), signFileUrl: jest.fn((p: string) => `signed::${p}`) },
+        },
         { provide: ConfigService, useValue: { get: jest.fn().mockReturnValue('') } },
+        { provide: FileUrlNormalizerService, useValue: { toRawStoragePath: jest.fn((v: string) => v) } },
+        FileInfoNormalizerService,
         { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
       ],
     }).compile();
@@ -850,7 +864,13 @@ describe('ElectedUrbanLocalBodiesExcelService — revalidateExcel', () => {
     _id: formOid,
     currentFormStatus: 1, // IN_PROGRESS
     activeDatasetVersion: 1,
-    electedBodyExcelFile: { fileUrl: 'state/test.xlsx', fileName: 'test.xlsx' },
+    electedBodyExcelFile: {
+      originalName: 'test.xlsx',
+      path: 'state/test.xlsx',
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      sizeKb: 1,
+      createdAt: '2026-01-01T00:00:00.000Z',
+    },
   };
 
   // ─── Case A: active rows exist — in-place revalidation ───────────────────

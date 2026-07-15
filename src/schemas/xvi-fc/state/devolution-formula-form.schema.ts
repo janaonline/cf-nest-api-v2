@@ -1,6 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
+import { FileInfo, FileInfoSchema } from 'src/schemas/common/file.schema';
 import {
   DF_FORM_TYPE,
   DF_VALIDATION_STATUS,
@@ -11,29 +12,6 @@ import {
 export { DF_FORM_TYPE as DEVOLUTION_FORMULA_FORM_TYPE };
 
 export type DevolutionFormulaFormDocument = HydratedDocument<DevolutionFormulaForm>;
-
-@Schema({ _id: false })
-class DfFileRef {
-  @Prop({ type: String, default: '' })
-  fileName!: string;
-
-  @Prop({ type: String, default: '' })
-  fileUrl!: string;
-
-  @Prop({ type: Number, default: null })
-  fileSize!: number | null;
-
-  @Prop({ type: String })
-  mimeType?: string;
-
-  @Prop({ type: String })
-  s3Key?: string;
-
-  @Prop({ type: Number, default: null })
-  pageCount?: number | null;
-}
-
-const DfFileRefSchema = SchemaFactory.createForClass(DfFileRef);
 
 @Schema({
   collection: 'xvi_fc_devolution_formula_forms',
@@ -76,11 +54,11 @@ export class DevolutionFormulaForm {
   totalAllocatedSum!: number;
 
   // Excel tracking
-  @Prop({ type: DfFileRefSchema })
-  excelFile?: DfFileRef;
+  @Prop({ type: FileInfoSchema })
+  excelFile?: FileInfo;
 
-  @Prop({ type: DfFileRefSchema })
-  errorExcelFile?: DfFileRef;
+  @Prop({ type: FileInfoSchema })
+  errorExcelFile?: FileInfo;
 
   @Prop({ type: Number, default: 0 })
   excelRowCount!: number;

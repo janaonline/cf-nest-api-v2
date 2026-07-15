@@ -11,7 +11,11 @@ import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import { assertCanStateEditForm } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
 import { toObjectIdString } from 'src/common/utils/objectid.util';
-import { FileUrlNormalizerService } from 'src/module/xvi-fc/common/services/file-url-normalizer.service';
+import {
+  FileInfoNormalizerService,
+  type HydratedFileInfoResponse,
+} from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
+import type { FileInfo } from 'src/schemas/common/file.schema';
 import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import {
   throwXviFcValidationError,
@@ -40,7 +44,6 @@ import {
 } from '../../constants/devolution-formula.constants';
 import type { ValidateExcelDevolutionFormulaDto } from '../../dto/validate-excel-devolution-formula.dto';
 import type {
-  DfFileRefData,
   DfFormLeanDoc,
   DfRevalidateExcelResponseData,
   DfRowError,
@@ -96,7 +99,7 @@ export class DevolutionFormulaExcelService {
     private readonly dfValidator: DevolutionFormulaValidator,
     private readonly dfService: DevolutionFormulaService,
     private readonly fileTokenService: FileTokenService,
-    private readonly fileUrlNormalizer: FileUrlNormalizerService,
+    private readonly fileInfoNormalizer: FileInfoNormalizerService,
   ) {}
 
   async validateExcel(
@@ -109,38 +112,55 @@ export class DevolutionFormulaExcelService {
     const yearOid = new Types.ObjectId(dto.yearId);
     const userOid = new Types.ObjectId(user._id);
 
-    // 1. Normalize file URL → raw S3 path
-    const normalizedFile: DfFileRefData = {
-      ...dto.excelFile,
-      fileUrl: this.fileUrlNormalizer.toRawStoragePath(dto.excelFile.fileUrl),
-    };
-
-    // 2. File metadata validation
-    this.validateFileMetadata(normalizedFile);
-
-    // 3. Load grant allocation, existing form, and DB ULBs in parallel
+    // 1. Load grant allocation, existing form (incl. current excelFile for unchanged-file detection), and DB ULBs
     const formFilter = { state: stateOid, year: yearOid, installment: dto.installment };
     const [grantAlloc, dbUlbsRaw, existing] = await Promise.all([
       this.dfService.resolveGrantAllocation(stateOid, yearOid),
       this.ulbModel.find({ state: stateOid, isActive: true }).select('_id name censusCode sbCode').lean().exec(),
-      this.formModel.findOne(formFilter, { _id: 1, currentFormStatus: 1, activeDatasetVersion: 1 }).lean().exec(),
+      this.formModel
+        .findOne(formFilter, { _id: 1, currentFormStatus: 1, activeDatasetVersion: 1, excelFile: 1 })
+        .lean<Pick<DfFormLeanDoc, '_id' | 'currentFormStatus' | 'activeDatasetVersion' | 'excelFile'>>()
+        .exec(),
     ]);
 
-    const existingDoc = existing as (Record<string, unknown> & { _id: Types.ObjectId }) | null;
+    const existingDoc = existing;
 
     if (existingDoc) {
-      assertCanStateEditForm((existingDoc['currentFormStatus'] as number | undefined) ?? FORM_STATUS.NOT_STARTED);
+      assertCanStateEditForm(existingDoc.currentFormStatus ?? FORM_STATUS.NOT_STARTED);
+    }
+
+    // 2. Normalize + validate the inbound canonical file object (path, extension/MIME, size)
+    const { file: normalizedFile, errors: fileErrors } = this.fileInfoNormalizer.normalizeInboundFileInfo(
+      dto.excelFile as unknown as Record<string, unknown>,
+      existingDoc?.excelFile,
+      {
+        fieldKey: 'excelFile',
+        allowedExtensions: [...DF_ALLOWED_FILE_EXTENSIONS],
+        allowedMimeTypes: [...DF_ALLOWED_MIME_TYPES],
+        maxSizeKb: DF_MAX_FILE_SIZE_BYTES / 1024,
+      },
+    );
+    if (fileErrors.length > 0) throwXviFcValidationError({ excelFile: fileErrors });
+    // `normalizedFile` is `undefined` when the incoming path matches the already-stored
+    // file (e.g. revalidateExcel Case B re-submits the stored path) — fall back to the
+    // existing stored file for reads below; only the raw `normalizedFile` is written to
+    // $set later, so an unchanged file's Mongoose-managed timestamps aren't disturbed.
+    const effectiveFile = normalizedFile !== undefined ? normalizedFile : existingDoc?.excelFile;
+    if (!effectiveFile) {
+      throwXviFcValidationError({
+        excelFile: [{ field: 'excelFile', code: 'required', message: 'excelFile is required.' }],
+      });
     }
 
     const dbUlbs = dbUlbsRaw as UlbLean[];
     const totalMoHUAAllocation = grantAlloc.basic + grantAlloc.performance;
 
-    const currentVersion = (existingDoc?.['activeDatasetVersion'] as number | undefined) ?? 0;
+    const currentVersion = existingDoc?.activeDatasetVersion ?? 0;
     const newVersion = currentVersion + 1;
-    const formId: Types.ObjectId = existingDoc ? existingDoc._id : new Types.ObjectId();
+    const formId: Types.ObjectId = existingDoc ? (existingDoc._id as Types.ObjectId) : new Types.ObjectId();
 
-    // 4. Read and parse Excel from S3
-    const buffer = await this.s3Service.getBuffer(normalizedFile.fileUrl);
+    // 3. Read and parse Excel from S3
+    const buffer = await this.s3Service.getBuffer(effectiveFile.path);
     const workbook = XLSX.read(buffer, { type: 'buffer' });
     const sheetName = workbook.SheetNames[0];
     if (!sheetName) {
@@ -368,7 +388,7 @@ export class DevolutionFormulaExcelService {
     }
 
     // Generate error Excel if row errors exist
-    let errorExcelFile: DfFileRefData | undefined;
+    let errorExcelFile: FileInfo | undefined;
     if (errorRowCount > 0) {
       errorExcelFile = await this.generateAndStoreErrorExcel(processedRows, formId, dto.stateId, dto.yearId, userOid);
     } else {
@@ -432,7 +452,7 @@ export class DevolutionFormulaExcelService {
     const responseData: DfValidateExcelResponseData = {
       validationStatus: formValidationStatus,
       summary,
-      errorExcelFile: errorExcelFile ? this.signFileRef(errorExcelFile) : undefined,
+      errorExcelFile: this.hydrateErrorExcelFile(errorExcelFile),
       rowErrors,
     };
 
@@ -599,8 +619,23 @@ export class DevolutionFormulaExcelService {
     }
 
     // Case B: no active rows but stored Excel exists — re-parse from S3
-    if (form.excelFile?.fileUrl) {
-      const result = await this.validateExcel({ stateId, yearId, installment, excelFile: form.excelFile }, user);
+    if (form.excelFile?.path) {
+      const storedFile = form.excelFile;
+      const result = await this.validateExcel(
+        {
+          stateId,
+          yearId,
+          installment,
+          excelFile: {
+            originalName: storedFile.originalName,
+            path: storedFile.path,
+            mimeType: storedFile.mimeType,
+            sizeKb: storedFile.sizeKb,
+            pageCount: storedFile.pageCount,
+          },
+        },
+        user,
+      );
       return xviFcSuccess('Revalidation complete.', {
         validationSummary: result.data!.summary,
         rowErrors: result.data!.rowErrors,
@@ -786,31 +821,6 @@ export class DevolutionFormulaExcelService {
     throw new ForbiddenException("You do not have access to this state's data.");
   }
 
-  private validateFileMetadata(file: DfFileRefData): void {
-    const fileName = file.fileName ?? '';
-    const ext = fileName.includes('.') ? fileName.split('.').pop()?.toLowerCase() : '';
-    const extOk = DF_ALLOWED_FILE_EXTENSIONS.some((e) => e.slice(1) === ext);
-    const mimeOk =
-      !file.mimeType || DF_ALLOWED_MIME_TYPES.includes(file.mimeType as (typeof DF_ALLOWED_MIME_TYPES)[number]);
-
-    if (!extOk && !mimeOk) {
-      throwXviFcValidationError({
-        excelFile: [{ field: 'excelFile', code: 'invalidType', message: 'Only .xlsx and .xls files are supported.' }],
-      });
-    }
-    if (file.fileSize !== null && file.fileSize !== undefined && file.fileSize > DF_MAX_FILE_SIZE_BYTES) {
-      throwXviFcValidationError({
-        excelFile: [
-          {
-            field: 'excelFile',
-            code: 'tooLarge',
-            message: `File size must not exceed ${DF_MAX_FILE_SIZE_BYTES / 1024 / 1024}MB.`,
-          },
-        ],
-      });
-    }
-  }
-
   private buildColIndexMap(headerRow: string[]): Map<string, number> {
     const map = new Map<string, number>();
     for (let i = 0; i < headerRow.length; i++) {
@@ -871,7 +881,7 @@ export class DevolutionFormulaExcelService {
     stateId: string,
     yearId: string,
     userOid: Types.ObjectId,
-  ): Promise<DfFileRefData> {
+  ): Promise<FileInfo> {
     const errorRows = rows.map((r) => ({
       censusCode: r.censusCode,
       ulbName: r.ulbName,
@@ -898,13 +908,19 @@ export class DevolutionFormulaExcelService {
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     );
 
-    const fileRef: DfFileRefData = {
-      fileName: `devolution-formula-errors-${String(formId)}.xlsx`,
-      fileUrl: s3Key,
-      fileSize: buffer.length,
+    // Backend-generated file: bypasses the client DTO/normalizer entirely, owns both timestamps.
+    const now = new Date();
+    const fileRef: FileInfo = {
+      originalName: `devolution-formula-errors-${String(formId)}.xlsx`,
+      name: '',
+      path: s3Key,
       mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      s3Key,
+      extension: 'xlsx',
+      sizeKb: buffer.length / 1024,
       pageCount: null,
+      sha256: '',
+      createdAt: now,
+      updatedAt: now,
     };
 
     await this.formModel
@@ -944,12 +960,15 @@ export class DevolutionFormulaExcelService {
     }
   }
 
-  private signFileRef(ref: DfFileRefData): DfFileRefData {
-    if (!ref?.fileUrl) return ref;
-    try {
-      return { ...ref, fileUrl: this.fileTokenService.signFileUrl(ref.fileUrl) };
-    } catch {
-      return ref;
-    }
+  private hydrateErrorExcelFile(file: FileInfo | null | undefined): HydratedFileInfoResponse | undefined {
+    return (
+      this.fileInfoNormalizer.hydrateFileInfoForResponse(file ?? null, (p) => {
+        try {
+          return this.fileTokenService.signFileUrl(p);
+        } catch {
+          return p;
+        }
+      }) ?? undefined
+    );
   }
 }
