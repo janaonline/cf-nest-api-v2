@@ -150,6 +150,13 @@ Known note:
   - Permission: `VIEW_STATUS_REPORTS`
   - Returns next support-hour slots.
 
+### State Dashboard API
+
+- `GET /xvi-fc/state/:stateId/:yearId/dashboard`
+  - Read-only aggregated XVI-FC State Dashboard endpoint.
+  - Permission: `VIEW_STATUS_REPORTS`; State scope is restricted to the assigned State, while ADMIN may request an explicit active State.
+  - Full source mappings, status rules, fallbacks, query bounds, response contracts, and tests: [`state/dashboard/README.md`](state/dashboard/README.md).
+
 ### Side Menu Admin APIs (`/xvi-fc/side-menu`)
 
 All require `MANAGE_USERS` permission. Swagger tag: `XVI-FC Side Menu (Admin)`.
