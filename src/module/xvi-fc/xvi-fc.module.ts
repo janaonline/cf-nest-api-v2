@@ -25,6 +25,7 @@ import { DevolutionFormulaModule } from './state/devolution-formula/devolution-f
 import { XviFcBankAccount, XviFcBankAccountSchema } from '../../schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
 import { FcUnspentDeclarationModule } from './state/fc-unspent-declaration/fc-unspent-declaration.module';
 import { FcUnspentMohuaReviewModule } from './mohua/fc-unspent-declaration/fc-unspent-mohua-review.module';
+import { StateDashboardModule } from './state/dashboard/state-dashboard.module';
 
 @Module({
   imports: [
@@ -48,6 +49,7 @@ import { FcUnspentMohuaReviewModule } from './mohua/fc-unspent-declaration/fc-un
     DevolutionFormulaModule,
     FcUnspentDeclarationModule,
     FcUnspentMohuaReviewModule,
+    StateDashboardModule,
   ],
   controllers: [XviFcController],
   providers: [XviFcService, XviFcCacheService, XviFcCacheInterceptor],
