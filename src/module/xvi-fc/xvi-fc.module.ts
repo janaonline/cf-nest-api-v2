@@ -23,6 +23,7 @@ import {
 } from '../../schemas/xvi-fc/unspent-balance-disclosure.schema';
 import { DevolutionFormulaModule } from './state/devolution-formula/devolution-formula.module';
 import { XviFcBankAccount, XviFcBankAccountSchema } from '../../schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
+import { StateDashboardModule } from './state/dashboard/state-dashboard.module';
 
 @Module({
   imports: [
@@ -44,6 +45,7 @@ import { XviFcBankAccount, XviFcBankAccountSchema } from '../../schemas/xvi-fc/u
     UnspentBalanceDisclosureModule,
     BankAccountModule,
     DevolutionFormulaModule,
+    StateDashboardModule,
   ],
   controllers: [XviFcController],
   providers: [XviFcService, XviFcCacheService, XviFcCacheInterceptor],
