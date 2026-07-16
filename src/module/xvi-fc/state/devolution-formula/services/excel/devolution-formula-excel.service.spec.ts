@@ -3,6 +3,7 @@ import { getModelToken } from '@nestjs/mongoose';
 import { Types } from 'mongoose';
 import * as XLSX from 'xlsx';
 import { DevolutionFormulaExcelService } from './devolution-formula-excel.service';
+import { DF_TEMPLATE_HEADERS } from '../../constants/devolution-formula.constants';
 import { DevolutionFormulaValidator } from '../../validators/devolution-formula.validator';
 import { DevolutionFormulaForm } from 'src/schemas/xvi-fc/state/devolution-formula-form.schema';
 import { DevolutionFormulaRow } from 'src/schemas/xvi-fc/state/devolution-formula-row.schema';
@@ -42,8 +43,12 @@ const EXCEL_HEADERS = [
 ];
 
 function makeXlsxBuffer(dataRows: unknown[][]): Buffer {
+  return makeXlsxBufferWithHeaders(EXCEL_HEADERS, dataRows);
+}
+
+function makeXlsxBufferWithHeaders(headers: string[], dataRows: unknown[][]): Buffer {
   const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.aoa_to_sheet([EXCEL_HEADERS, ...dataRows]);
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...dataRows]);
   XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
   return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
 }
@@ -679,6 +684,35 @@ describe('DevolutionFormulaExcelService — validateExcel ULB identity guard', (
 
   it('passes when uploaded censusCode and ulbName match the active registry/template values', async () => {
     const buffer = makeXlsxBuffer([['C001', 'Alpha City', 500_000, 300_000, 200_000, 'population']]);
+    mockS3Service.getBuffer.mockResolvedValue(buffer);
+
+    const result = await service.validateExcel(
+      {
+        stateId: stateOid.toString(),
+        yearId: YEAR_ID,
+        installment: 1,
+        excelFile: {
+          originalName: 'test.xlsx',
+          path: 'state/path/test.xlsx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          sizeKb: 1,
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
+      },
+      adminUser,
+    );
+
+    expect(result.data?.rowErrors).toEqual([]);
+  });
+
+  it('accepts the headers exactly as produced by the downloadable template (with the "(Cr.)" unit suffix)', async () => {
+    // Regression test: DF_TEMPLATE_HEADERS' labels ("Total Grant Allocation (Cr.)", etc.)
+    // must resolve via DF_EXCEL_HEADER_MAP the same way the un-suffixed labels do, or every
+    // unmodified template re-upload falsely fails with "Missing required columns".
+    const templateHeaderLabels = DF_TEMPLATE_HEADERS.map((h) => h.label);
+    const buffer = makeXlsxBufferWithHeaders(templateHeaderLabels, [
+      ['C001', 'Alpha City', 500_000, 300_000, 200_000, 'population'],
+    ]);
     mockS3Service.getBuffer.mockResolvedValue(buffer);
 
     const result = await service.validateExcel(
