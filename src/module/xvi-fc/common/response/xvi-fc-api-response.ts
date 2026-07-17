@@ -14,4 +14,5 @@ export interface XviFcApiResponse<T = unknown> {
   errors?: XviFcValidationErrorMap;
   meta?: Record<string, unknown>;
   timestamp?: string;
+  requestId?: string;
 }
