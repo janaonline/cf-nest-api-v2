@@ -28,7 +28,7 @@ import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { SlbFormJsonConfigService } from './services/slb-form-json.service';
 import { getSlbFieldsByType } from './helpers/slb-form-json.helpers';
 import type { SaveSlbDto } from './dto/save-slb.dto';
-import type { SlbFormGetResponseData, SlbFormPermissions } from './slb.types';
+import { SLB_TABLE_LAYOUT_META, type SlbFormGetResponseData, type SlbFormPermissions } from './slb.types';
 
 type PopulatedNameRef = { _id?: Types.ObjectId; name?: string };
 
@@ -60,7 +60,9 @@ export class SlbService {
   /** Returns the SLB question config array from the DB for frontend rendering. */
   async getQuestions(): Promise<XviFcApiResponse<FieldConfig[]>> {
     const fields = await this.slbFormJsonConfig.loadFields();
-    return xviFcSuccess('SLB questions fetched.', getSlbFieldsByType(fields, 'SLB_MAIN_FORM_FIELDS'));
+    return xviFcSuccess('SLB questions fetched.', getSlbFieldsByType(fields, 'SLB_MAIN_FORM_FIELDS'), {
+      layout: SLB_TABLE_LAYOUT_META,
+    });
   }
 
   /**
@@ -108,7 +110,7 @@ export class SlbService {
       questions,
       permissions,
       actors,
-      meta: { version: 1 },
+      meta: { version: 1, layout: SLB_TABLE_LAYOUT_META },
     };
 
     return xviFcSuccess('SLB form fetched.', responseData);

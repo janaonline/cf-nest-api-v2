@@ -164,6 +164,10 @@ export interface FieldConfig {
   displayInlineLabel?: boolean;
   showAsterisk?: boolean;
   decimal?: number;
+  /** Unit rendered as an input suffix, e.g. %, lpcd, or Hours/day. */
+  suffixText?: string;
+  /** Module-specific rendering metadata (for example SLB table row/column data). */
+  meta?: Record<string, unknown>;
   warning?: Validator[];
   fileViewType?: 'button' | 'dropzone' | 'list';
   labelHint?: string;
