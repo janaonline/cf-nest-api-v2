@@ -60,3 +60,44 @@ describe('DynamicFormValidationService — file payload normalization', () => {
     expect(sanitized['fileUrl']).toBe('raw::state/path/legacy.pdf');
   });
 });
+
+describe('DynamicFormValidationService — requiredTrue', () => {
+  const mockNormalizer = { toRawStoragePath: jest.fn((url: string) => url) };
+  const service = new DynamicFormValidationService(mockNormalizer as unknown as FileUrlNormalizerService);
+
+  const checkboxField = {
+    key: 'checkboxConfirmation',
+    formFieldType: 'checkbox',
+    label: 'Confirm',
+    validations: [{ name: 'requiredTrue', validator: null, message: 'Please confirm before submitting.' }],
+  } as unknown as FieldConfig;
+
+  it('draft: succeeds when the requiredTrue field is entirely absent (mandatory-on-draft disabled)', () => {
+    const result = service.validateDraftAndBuildPayload([checkboxField], {});
+    expect(result.isValid).toBe(true);
+    expect(result.errors['checkboxConfirmation']).toBeUndefined();
+  });
+
+  it('draft: succeeds when the requiredTrue field is present but false (mandatory-on-draft disabled)', () => {
+    const result = service.validateDraftAndBuildPayload([checkboxField], { checkboxConfirmation: false });
+    expect(result.isValid).toBe(true);
+    expect(result.errors['checkboxConfirmation']).toBeUndefined();
+  });
+
+  it('final submit: still fails with code "required" when the requiredTrue field is absent', () => {
+    const result = service.validateFinalSubmitAndBuildPayload([checkboxField], {});
+    expect(result.isValid).toBe(false);
+    expect(result.errors['checkboxConfirmation']?.[0]).toMatchObject({ code: 'required' });
+  });
+
+  it('final submit: still fails with code "requiredTrue" when the field is present but false', () => {
+    const result = service.validateFinalSubmitAndBuildPayload([checkboxField], { checkboxConfirmation: false });
+    expect(result.isValid).toBe(false);
+    expect(result.errors['checkboxConfirmation']?.[0]).toMatchObject({ code: 'requiredTrue' });
+  });
+
+  it('final submit: succeeds when the field is true', () => {
+    const result = service.validateFinalSubmitAndBuildPayload([checkboxField], { checkboxConfirmation: true });
+    expect(result.isValid).toBe(true);
+  });
+});

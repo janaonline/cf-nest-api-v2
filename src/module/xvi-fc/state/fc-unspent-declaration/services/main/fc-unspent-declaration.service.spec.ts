@@ -377,10 +377,10 @@ describe('FcUnspentDeclarationService', () => {
     });
 
     it('resolves partial Yes-branch rows via the row service and applies them in draft mode (rowStatus untouched)', async () => {
-      // checkboxConfirmation carries a requiredTrue validator, which the shared
-      // DynamicFormValidationService enforces even in draft mode whenever the field
-      // is visible (isFcUnspent === true) — per the task brief's own rule ("requiredTrue
-      // remains strict where visible"), matching every other XVI-FC state form.
+      // checkboxConfirmation carries a requiredTrue validator. Draft-mode enforcement of
+      // requiredTrue is temporarily disabled (see DynamicFormValidationService), so this
+      // draft would now succeed even without checkboxConfirmation — it's set to true here
+      // regardless, since that's the realistic payload the frontend sends.
       rowService['resolveAndValidateRows'].mockResolvedValueOnce({ rows: [sampleResolvedRow], errors: {} });
       const dto = baseDto({
         isFcUnspent: true,
@@ -404,6 +404,15 @@ describe('FcUnspentDeclarationService', () => {
         undefined, // draft mode — never forces rowStatus
         mockSession,
       );
+    });
+
+    it('succeeds on a Yes-branch draft without checkboxConfirmation (requiredTrue mandatory-on-draft is temporarily disabled)', async () => {
+      rowService['resolveAndValidateRows'].mockResolvedValueOnce({ rows: [sampleResolvedRow], errors: {} });
+      const dto = baseDto({
+        isFcUnspent: true,
+        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5 }],
+      });
+      await expect(service.saveDraft(dto, stateUser())).resolves.toBeDefined();
     });
 
     it('propagates row-service validation errors (e.g. missing/non-positive allocation) as a 400', async () => {
