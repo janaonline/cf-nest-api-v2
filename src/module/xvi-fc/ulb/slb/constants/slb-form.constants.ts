@@ -10,7 +10,7 @@ import type { SlbTypedFieldConfig } from '../helpers/slb-form-json.helpers';
  */
 export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
   {
-    key: 'ind1',
+    key: 'perCapitaWaterSupply',
     label: 'Per capita supply of water',
     position: 1,
     formFieldType: 'actualTarget',
@@ -45,7 +45,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     },
   },
   {
-    key: 'ind2',
+    key: 'waterMeteringExtent',
     label: 'Extent of metering of water connections',
     position: 2,
     formFieldType: 'actualTarget',
@@ -80,7 +80,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     },
   },
   {
-    key: 'ind3',
+    key: 'waterComplaintRedressal',
     label: 'Efficiency in redressal of customer complaints (Water Supply)',
     position: 3,
     formFieldType: 'actualTarget',
@@ -115,7 +115,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     },
   },
   {
-    key: 'ind4',
+    key: 'waterQuality',
     label: 'Quality of water supplied',
     position: 4,
     formFieldType: 'actualTarget',
@@ -150,7 +150,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     },
   },
   {
-    key: 'ind5',
+    key: 'waterCostRecovery',
     label: 'Cost recovery in water supply services',
     position: 5,
     formFieldType: 'actualTarget',
@@ -185,7 +185,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     },
   },
   {
-    key: 'ind6',
+    key: 'waterSupplyCoverage',
     label: 'Coverage of water supply connections',
     position: 6,
     formFieldType: 'actualTarget',
@@ -220,7 +220,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     },
   },
   {
-    key: 'ind7',
+    key: 'nonRevenueWater',
     label: 'Extent of non-revenue water (NRW)',
     position: 7,
     formFieldType: 'actualTarget',
@@ -255,7 +255,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     },
   },
   {
-    key: 'ind8',
+    key: 'waterSupplyContinuity',
     label: 'Continuity of water supply',
     position: 8,
     formFieldType: 'actualTarget',
@@ -290,7 +290,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     },
   },
   {
-    key: 'ind9',
+    key: 'waterChargeCollection',
     label: 'Efficiency in collection of water supply-related charges',
     position: 9,
     formFieldType: 'actualTarget',
@@ -325,7 +325,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     },
   },
   {
-    key: 'ind10',
+    key: 'wasteWaterTreatmentCapacity',
     label: 'Adequacy of waste water treatment capacity',
     position: 10,
     formFieldType: 'actualTarget',
@@ -360,7 +360,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     },
   },
   {
-    key: 'ind11',
+    key: 'wasteWaterTreatmentQuality',
     label: 'Quality of waste water treatment',
     position: 11,
     formFieldType: 'actualTarget',
@@ -395,7 +395,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     },
   },
   {
-    key: 'ind12',
+    key: 'wasteWaterComplaintRedressal',
     label: 'Efficiency in redressal of customer complaints (Waste Water)',
     position: 12,
     formFieldType: 'actualTarget',
@@ -430,7 +430,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     },
   },
   {
-    key: 'ind13',
+    key: 'wasteWaterCollectionEfficiency',
     label: 'Collection efficiency of waste water network',
     position: 13,
     formFieldType: 'actualTarget',
@@ -465,7 +465,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     },
   },
   {
-    key: 'ind14',
+    key: 'toiletCoverage',
     label: 'Coverage of toilets',
     position: 14,
     formFieldType: 'actualTarget',
@@ -500,7 +500,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     },
   },
   {
-    key: 'ind15',
+    key: 'wasteWaterNetworkCoverage',
     label: 'Coverage of waste water network services',
     position: 15,
     formFieldType: 'actualTarget',
@@ -535,7 +535,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     },
   },
   {
-    key: 'ind16',
+    key: 'wasteWaterReuseExtent',
     label: 'Extent of reuse and recycling of waste water',
     position: 16,
     formFieldType: 'actualTarget',
@@ -570,7 +570,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     },
   },
   {
-    key: 'ind17',
+    key: 'wasteWaterCostRecovery',
     label: 'Extent of cost recovery in waste water',
     position: 17,
     formFieldType: 'actualTarget',
@@ -605,7 +605,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     },
   },
   {
-    key: 'ind18',
+    key: 'wasteWaterChargeCollection',
     label: 'Efficiency in collection of waste water charges',
     position: 18,
     formFieldType: 'actualTarget',
@@ -640,7 +640,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     },
   },
   {
-    key: 'ind19',
+    key: 'swmCostRecovery',
     label: 'Extent of cost recovery in SWM services',
     position: 19,
     formFieldType: 'actualTarget',
@@ -675,7 +675,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     },
   },
   {
-    key: 'ind20',
+    key: 'swmComplaintRedressal',
     label: 'Efficiency in redressal of customer complaints (SWM)',
     position: 20,
     formFieldType: 'actualTarget',
@@ -710,7 +710,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     },
   },
   {
-    key: 'ind21',
+    key: 'swmChargeCollection',
     label: 'Efficiency in collection of SWM related user charges',
     position: 21,
     formFieldType: 'actualTarget',
@@ -745,7 +745,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     },
   },
   {
-    key: 'ind22',
+    key: 'mswCollectionEfficiency',
     label: 'Efficiency of collection of municipal solid waste',
     position: 22,
     formFieldType: 'actualTarget',
@@ -780,7 +780,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     },
   },
   {
-    key: 'ind23',
+    key: 'mswSegregationExtent',
     label: 'Extent of segregation of municipal solid waste',
     position: 23,
     formFieldType: 'actualTarget',
@@ -815,7 +815,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     },
   },
   {
-    key: 'ind24',
+    key: 'mswRecoveryExtent',
     label: 'Extent of municipal solid waste recovered',
     position: 24,
     formFieldType: 'actualTarget',
@@ -850,7 +850,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     },
   },
   {
-    key: 'ind25',
+    key: 'mswScientificDisposal',
     label: 'Extent of scientific disposal of municipal solid waste',
     position: 25,
     formFieldType: 'actualTarget',
@@ -885,7 +885,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     },
   },
   {
-    key: 'ind26',
+    key: 'swmHouseholdCoverage',
     label: 'Household level coverage of solid waste management services',
     position: 26,
     formFieldType: 'actualTarget',
@@ -920,7 +920,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     },
   },
   {
-    key: 'ind27',
+    key: 'stormWaterDrainageCoverage',
     label: 'Coverage of storm water drainage network',
     position: 27,
     formFieldType: 'actualTarget',
@@ -955,7 +955,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     },
   },
   {
-    key: 'ind28',
+    key: 'waterLoggingIncidence',
     label: 'Incidence of water logging',
     position: 28,
     formFieldType: 'actualTarget',
