@@ -5,18 +5,21 @@
   "isActive": true,
   "data": [
     {
-      "key": "ind1_actual",
-      "label": "1. Per capita supply of water — Actual (FY 2026-27)",
-      "formFieldType": "number",
+      "key": "ind1",
+      "label": "Per capita supply of water",
+      "position": 1,
+      "formFieldType": "actualTarget",
       "required": true,
       "decimal": 2,
-      "suffixText": "lpcd",
+      "inputCardConfig": {
+        "suffixText": "lpcd"
+      },
       "placeholder": "0-1000",
       "validations": [
         {
           "name": "required",
           "validator": null,
-          "message": "Actual value for indicator 1 is required."
+          "message": "Both actual and target values for indicator 1 are required."
         },
         {
           "name": "min",
@@ -39,52 +42,21 @@
       }
     },
     {
-      "key": "ind1_target",
-      "label": "1. Per capita supply of water — Target (FY 2026-27)",
-      "formFieldType": "number",
+      "key": "ind2",
+      "label": "Extent of metering of water connections",
+      "position": 2,
+      "formFieldType": "actualTarget",
       "required": true,
       "decimal": 2,
-      "suffixText": "lpcd",
-      "placeholder": "0-1000",
-      "validations": [
-        {
-          "name": "required",
-          "validator": null,
-          "message": "Target value for indicator 1 is required."
-        },
-        {
-          "name": "min",
-          "validator": 0,
-          "message": "Value cannot be negative."
-        },
-        {
-          "name": "max",
-          "validator": 1000,
-          "message": "Value cannot exceed 1000 lpcd."
-        }
-      ],
-      "fieldTypes": [
-        "SLB_MAIN_FORM_FIELDS"
-      ],
-      "meta": {
-        "sector": "Water Supply",
-        "indicatorNumber": 1,
-        "unit": "lpcd"
-      }
-    },
-    {
-      "key": "ind2_actual",
-      "label": "2. Extent of metering of water connections — Actual (FY 2026-27)",
-      "formFieldType": "number",
-      "required": true,
-      "decimal": 2,
-      "suffixText": "%",
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
       "placeholder": "0-100",
       "validations": [
         {
           "name": "required",
           "validator": null,
-          "message": "Actual value for indicator 2 is required."
+          "message": "Both actual and target values for indicator 2 are required."
         },
         {
           "name": "min",
@@ -107,52 +79,21 @@
       }
     },
     {
-      "key": "ind2_target",
-      "label": "2. Extent of metering of water connections — Target (FY 2026-27)",
-      "formFieldType": "number",
+      "key": "ind3",
+      "label": "Efficiency in redressal of customer complaints (Water Supply)",
+      "position": 3,
+      "formFieldType": "actualTarget",
       "required": true,
       "decimal": 2,
-      "suffixText": "%",
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
       "placeholder": "0-100",
       "validations": [
         {
           "name": "required",
           "validator": null,
-          "message": "Target value for indicator 2 is required."
-        },
-        {
-          "name": "min",
-          "validator": 0,
-          "message": "Value cannot be negative."
-        },
-        {
-          "name": "max",
-          "validator": 100,
-          "message": "Value cannot exceed 100%."
-        }
-      ],
-      "fieldTypes": [
-        "SLB_MAIN_FORM_FIELDS"
-      ],
-      "meta": {
-        "sector": "Water Supply",
-        "indicatorNumber": 2,
-        "unit": "%"
-      }
-    },
-    {
-      "key": "ind3_actual",
-      "label": "3. Efficiency in redressal of customer complaints (Water Supply) — Actual (FY 2026-27)",
-      "formFieldType": "number",
-      "required": true,
-      "decimal": 2,
-      "suffixText": "%",
-      "placeholder": "0-100",
-      "validations": [
-        {
-          "name": "required",
-          "validator": null,
-          "message": "Actual value for indicator 3 is required."
+          "message": "Both actual and target values for indicator 3 are required."
         },
         {
           "name": "min",
@@ -175,52 +116,21 @@
       }
     },
     {
-      "key": "ind3_target",
-      "label": "3. Efficiency in redressal of customer complaints (Water Supply) — Target (FY 2026-27)",
-      "formFieldType": "number",
+      "key": "ind4",
+      "label": "Quality of water supplied",
+      "position": 4,
+      "formFieldType": "actualTarget",
       "required": true,
       "decimal": 2,
-      "suffixText": "%",
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
       "placeholder": "0-100",
       "validations": [
         {
           "name": "required",
           "validator": null,
-          "message": "Target value for indicator 3 is required."
-        },
-        {
-          "name": "min",
-          "validator": 0,
-          "message": "Value cannot be negative."
-        },
-        {
-          "name": "max",
-          "validator": 100,
-          "message": "Value cannot exceed 100%."
-        }
-      ],
-      "fieldTypes": [
-        "SLB_MAIN_FORM_FIELDS"
-      ],
-      "meta": {
-        "sector": "Water Supply",
-        "indicatorNumber": 3,
-        "unit": "%"
-      }
-    },
-    {
-      "key": "ind4_actual",
-      "label": "4. Quality of water supplied — Actual (FY 2026-27)",
-      "formFieldType": "number",
-      "required": true,
-      "decimal": 2,
-      "suffixText": "%",
-      "placeholder": "0-100",
-      "validations": [
-        {
-          "name": "required",
-          "validator": null,
-          "message": "Actual value for indicator 4 is required."
+          "message": "Both actual and target values for indicator 4 are required."
         },
         {
           "name": "min",
@@ -243,52 +153,21 @@
       }
     },
     {
-      "key": "ind4_target",
-      "label": "4. Quality of water supplied — Target (FY 2026-27)",
-      "formFieldType": "number",
+      "key": "ind5",
+      "label": "Cost recovery in water supply services",
+      "position": 5,
+      "formFieldType": "actualTarget",
       "required": true,
       "decimal": 2,
-      "suffixText": "%",
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
       "placeholder": "0-100",
       "validations": [
         {
           "name": "required",
           "validator": null,
-          "message": "Target value for indicator 4 is required."
-        },
-        {
-          "name": "min",
-          "validator": 0,
-          "message": "Value cannot be negative."
-        },
-        {
-          "name": "max",
-          "validator": 100,
-          "message": "Value cannot exceed 100%."
-        }
-      ],
-      "fieldTypes": [
-        "SLB_MAIN_FORM_FIELDS"
-      ],
-      "meta": {
-        "sector": "Water Supply",
-        "indicatorNumber": 4,
-        "unit": "%"
-      }
-    },
-    {
-      "key": "ind5_actual",
-      "label": "5. Cost recovery in water supply services — Actual (FY 2026-27)",
-      "formFieldType": "number",
-      "required": true,
-      "decimal": 2,
-      "suffixText": "%",
-      "placeholder": "0-100",
-      "validations": [
-        {
-          "name": "required",
-          "validator": null,
-          "message": "Actual value for indicator 5 is required."
+          "message": "Both actual and target values for indicator 5 are required."
         },
         {
           "name": "min",
@@ -311,52 +190,21 @@
       }
     },
     {
-      "key": "ind5_target",
-      "label": "5. Cost recovery in water supply services — Target (FY 2026-27)",
-      "formFieldType": "number",
+      "key": "ind6",
+      "label": "Coverage of water supply connections",
+      "position": 6,
+      "formFieldType": "actualTarget",
       "required": true,
       "decimal": 2,
-      "suffixText": "%",
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
       "placeholder": "0-100",
       "validations": [
         {
           "name": "required",
           "validator": null,
-          "message": "Target value for indicator 5 is required."
-        },
-        {
-          "name": "min",
-          "validator": 0,
-          "message": "Value cannot be negative."
-        },
-        {
-          "name": "max",
-          "validator": 100,
-          "message": "Value cannot exceed 100%."
-        }
-      ],
-      "fieldTypes": [
-        "SLB_MAIN_FORM_FIELDS"
-      ],
-      "meta": {
-        "sector": "Water Supply",
-        "indicatorNumber": 5,
-        "unit": "%"
-      }
-    },
-    {
-      "key": "ind6_actual",
-      "label": "6. Coverage of water supply connections — Actual (FY 2026-27)",
-      "formFieldType": "number",
-      "required": true,
-      "decimal": 2,
-      "suffixText": "%",
-      "placeholder": "0-100",
-      "validations": [
-        {
-          "name": "required",
-          "validator": null,
-          "message": "Actual value for indicator 6 is required."
+          "message": "Both actual and target values for indicator 6 are required."
         },
         {
           "name": "min",
@@ -379,52 +227,21 @@
       }
     },
     {
-      "key": "ind6_target",
-      "label": "6. Coverage of water supply connections — Target (FY 2026-27)",
-      "formFieldType": "number",
+      "key": "ind7",
+      "label": "Extent of non-revenue water (NRW)",
+      "position": 7,
+      "formFieldType": "actualTarget",
       "required": true,
       "decimal": 2,
-      "suffixText": "%",
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
       "placeholder": "0-100",
       "validations": [
         {
           "name": "required",
           "validator": null,
-          "message": "Target value for indicator 6 is required."
-        },
-        {
-          "name": "min",
-          "validator": 0,
-          "message": "Value cannot be negative."
-        },
-        {
-          "name": "max",
-          "validator": 100,
-          "message": "Value cannot exceed 100%."
-        }
-      ],
-      "fieldTypes": [
-        "SLB_MAIN_FORM_FIELDS"
-      ],
-      "meta": {
-        "sector": "Water Supply",
-        "indicatorNumber": 6,
-        "unit": "%"
-      }
-    },
-    {
-      "key": "ind7_actual",
-      "label": "7. Extent of non-revenue water (NRW) — Actual (FY 2026-27)",
-      "formFieldType": "number",
-      "required": true,
-      "decimal": 2,
-      "suffixText": "%",
-      "placeholder": "0-100",
-      "validations": [
-        {
-          "name": "required",
-          "validator": null,
-          "message": "Actual value for indicator 7 is required."
+          "message": "Both actual and target values for indicator 7 are required."
         },
         {
           "name": "min",
@@ -447,52 +264,21 @@
       }
     },
     {
-      "key": "ind7_target",
-      "label": "7. Extent of non-revenue water (NRW) — Target (FY 2026-27)",
-      "formFieldType": "number",
+      "key": "ind8",
+      "label": "Continuity of water supply",
+      "position": 8,
+      "formFieldType": "actualTarget",
       "required": true,
       "decimal": 2,
-      "suffixText": "%",
-      "placeholder": "0-100",
-      "validations": [
-        {
-          "name": "required",
-          "validator": null,
-          "message": "Target value for indicator 7 is required."
-        },
-        {
-          "name": "min",
-          "validator": 0,
-          "message": "Value cannot be negative."
-        },
-        {
-          "name": "max",
-          "validator": 100,
-          "message": "Value cannot exceed 100%."
-        }
-      ],
-      "fieldTypes": [
-        "SLB_MAIN_FORM_FIELDS"
-      ],
-      "meta": {
-        "sector": "Water Supply",
-        "indicatorNumber": 7,
-        "unit": "%"
-      }
-    },
-    {
-      "key": "ind8_actual",
-      "label": "8. Continuity of water supply — Actual (FY 2026-27)",
-      "formFieldType": "number",
-      "required": true,
-      "decimal": 2,
-      "suffixText": "Hours/day",
+      "inputCardConfig": {
+        "suffixText": "Hours/day"
+      },
       "placeholder": "0-24",
       "validations": [
         {
           "name": "required",
           "validator": null,
-          "message": "Actual value for indicator 8 is required."
+          "message": "Both actual and target values for indicator 8 are required."
         },
         {
           "name": "min",
@@ -515,52 +301,21 @@
       }
     },
     {
-      "key": "ind8_target",
-      "label": "8. Continuity of water supply — Target (FY 2026-27)",
-      "formFieldType": "number",
+      "key": "ind9",
+      "label": "Efficiency in collection of water supply-related charges",
+      "position": 9,
+      "formFieldType": "actualTarget",
       "required": true,
       "decimal": 2,
-      "suffixText": "Hours/day",
-      "placeholder": "0-24",
-      "validations": [
-        {
-          "name": "required",
-          "validator": null,
-          "message": "Target value for indicator 8 is required."
-        },
-        {
-          "name": "min",
-          "validator": 0,
-          "message": "Value cannot be negative."
-        },
-        {
-          "name": "max",
-          "validator": 24,
-          "message": "Value cannot exceed 24 Hours/day."
-        }
-      ],
-      "fieldTypes": [
-        "SLB_MAIN_FORM_FIELDS"
-      ],
-      "meta": {
-        "sector": "Water Supply",
-        "indicatorNumber": 8,
-        "unit": "Hours/day"
-      }
-    },
-    {
-      "key": "ind9_actual",
-      "label": "9. Efficiency in collection of water supply-related charges — Actual (FY 2026-27)",
-      "formFieldType": "number",
-      "required": true,
-      "decimal": 2,
-      "suffixText": "%",
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
       "placeholder": "0-100",
       "validations": [
         {
           "name": "required",
           "validator": null,
-          "message": "Actual value for indicator 9 is required."
+          "message": "Both actual and target values for indicator 9 are required."
         },
         {
           "name": "min",
@@ -583,52 +338,21 @@
       }
     },
     {
-      "key": "ind9_target",
-      "label": "9. Efficiency in collection of water supply-related charges — Target (FY 2026-27)",
-      "formFieldType": "number",
+      "key": "ind10",
+      "label": "Adequacy of waste water treatment capacity",
+      "position": 10,
+      "formFieldType": "actualTarget",
       "required": true,
       "decimal": 2,
-      "suffixText": "%",
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
       "placeholder": "0-100",
       "validations": [
         {
           "name": "required",
           "validator": null,
-          "message": "Target value for indicator 9 is required."
-        },
-        {
-          "name": "min",
-          "validator": 0,
-          "message": "Value cannot be negative."
-        },
-        {
-          "name": "max",
-          "validator": 100,
-          "message": "Value cannot exceed 100%."
-        }
-      ],
-      "fieldTypes": [
-        "SLB_MAIN_FORM_FIELDS"
-      ],
-      "meta": {
-        "sector": "Water Supply",
-        "indicatorNumber": 9,
-        "unit": "%"
-      }
-    },
-    {
-      "key": "ind10_actual",
-      "label": "10. Adequacy of waste water treatment capacity — Actual (FY 2026-27)",
-      "formFieldType": "number",
-      "required": true,
-      "decimal": 2,
-      "suffixText": "%",
-      "placeholder": "0-100",
-      "validations": [
-        {
-          "name": "required",
-          "validator": null,
-          "message": "Actual value for indicator 10 is required."
+          "message": "Both actual and target values for indicator 10 are required."
         },
         {
           "name": "min",
@@ -651,52 +375,21 @@
       }
     },
     {
-      "key": "ind10_target",
-      "label": "10. Adequacy of waste water treatment capacity — Target (FY 2026-27)",
-      "formFieldType": "number",
+      "key": "ind11",
+      "label": "Quality of waste water treatment",
+      "position": 11,
+      "formFieldType": "actualTarget",
       "required": true,
       "decimal": 2,
-      "suffixText": "%",
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
       "placeholder": "0-100",
       "validations": [
         {
           "name": "required",
           "validator": null,
-          "message": "Target value for indicator 10 is required."
-        },
-        {
-          "name": "min",
-          "validator": 0,
-          "message": "Value cannot be negative."
-        },
-        {
-          "name": "max",
-          "validator": 100,
-          "message": "Value cannot exceed 100%."
-        }
-      ],
-      "fieldTypes": [
-        "SLB_MAIN_FORM_FIELDS"
-      ],
-      "meta": {
-        "sector": "Sewerage & Waste Water",
-        "indicatorNumber": 10,
-        "unit": "%"
-      }
-    },
-    {
-      "key": "ind11_actual",
-      "label": "11. Quality of waste water treatment — Actual (FY 2026-27)",
-      "formFieldType": "number",
-      "required": true,
-      "decimal": 2,
-      "suffixText": "%",
-      "placeholder": "0-100",
-      "validations": [
-        {
-          "name": "required",
-          "validator": null,
-          "message": "Actual value for indicator 11 is required."
+          "message": "Both actual and target values for indicator 11 are required."
         },
         {
           "name": "min",
@@ -719,52 +412,21 @@
       }
     },
     {
-      "key": "ind11_target",
-      "label": "11. Quality of waste water treatment — Target (FY 2026-27)",
-      "formFieldType": "number",
+      "key": "ind12",
+      "label": "Efficiency in redressal of customer complaints (Waste Water)",
+      "position": 12,
+      "formFieldType": "actualTarget",
       "required": true,
       "decimal": 2,
-      "suffixText": "%",
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
       "placeholder": "0-100",
       "validations": [
         {
           "name": "required",
           "validator": null,
-          "message": "Target value for indicator 11 is required."
-        },
-        {
-          "name": "min",
-          "validator": 0,
-          "message": "Value cannot be negative."
-        },
-        {
-          "name": "max",
-          "validator": 100,
-          "message": "Value cannot exceed 100%."
-        }
-      ],
-      "fieldTypes": [
-        "SLB_MAIN_FORM_FIELDS"
-      ],
-      "meta": {
-        "sector": "Sewerage & Waste Water",
-        "indicatorNumber": 11,
-        "unit": "%"
-      }
-    },
-    {
-      "key": "ind12_actual",
-      "label": "12. Efficiency in redressal of customer complaints (Waste Water) — Actual (FY 2026-27)",
-      "formFieldType": "number",
-      "required": true,
-      "decimal": 2,
-      "suffixText": "%",
-      "placeholder": "0-100",
-      "validations": [
-        {
-          "name": "required",
-          "validator": null,
-          "message": "Actual value for indicator 12 is required."
+          "message": "Both actual and target values for indicator 12 are required."
         },
         {
           "name": "min",
@@ -787,52 +449,21 @@
       }
     },
     {
-      "key": "ind12_target",
-      "label": "12. Efficiency in redressal of customer complaints (Waste Water) — Target (FY 2026-27)",
-      "formFieldType": "number",
+      "key": "ind13",
+      "label": "Collection efficiency of waste water network",
+      "position": 13,
+      "formFieldType": "actualTarget",
       "required": true,
       "decimal": 2,
-      "suffixText": "%",
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
       "placeholder": "0-100",
       "validations": [
         {
           "name": "required",
           "validator": null,
-          "message": "Target value for indicator 12 is required."
-        },
-        {
-          "name": "min",
-          "validator": 0,
-          "message": "Value cannot be negative."
-        },
-        {
-          "name": "max",
-          "validator": 100,
-          "message": "Value cannot exceed 100%."
-        }
-      ],
-      "fieldTypes": [
-        "SLB_MAIN_FORM_FIELDS"
-      ],
-      "meta": {
-        "sector": "Sewerage & Waste Water",
-        "indicatorNumber": 12,
-        "unit": "%"
-      }
-    },
-    {
-      "key": "ind13_actual",
-      "label": "13. Collection efficiency of waste water network — Actual (FY 2026-27)",
-      "formFieldType": "number",
-      "required": true,
-      "decimal": 2,
-      "suffixText": "%",
-      "placeholder": "0-100",
-      "validations": [
-        {
-          "name": "required",
-          "validator": null,
-          "message": "Actual value for indicator 13 is required."
+          "message": "Both actual and target values for indicator 13 are required."
         },
         {
           "name": "min",
@@ -855,52 +486,21 @@
       }
     },
     {
-      "key": "ind13_target",
-      "label": "13. Collection efficiency of waste water network — Target (FY 2026-27)",
-      "formFieldType": "number",
+      "key": "ind14",
+      "label": "Coverage of toilets",
+      "position": 14,
+      "formFieldType": "actualTarget",
       "required": true,
       "decimal": 2,
-      "suffixText": "%",
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
       "placeholder": "0-100",
       "validations": [
         {
           "name": "required",
           "validator": null,
-          "message": "Target value for indicator 13 is required."
-        },
-        {
-          "name": "min",
-          "validator": 0,
-          "message": "Value cannot be negative."
-        },
-        {
-          "name": "max",
-          "validator": 100,
-          "message": "Value cannot exceed 100%."
-        }
-      ],
-      "fieldTypes": [
-        "SLB_MAIN_FORM_FIELDS"
-      ],
-      "meta": {
-        "sector": "Sewerage & Waste Water",
-        "indicatorNumber": 13,
-        "unit": "%"
-      }
-    },
-    {
-      "key": "ind14_actual",
-      "label": "14. Coverage of toilets — Actual (FY 2026-27)",
-      "formFieldType": "number",
-      "required": true,
-      "decimal": 2,
-      "suffixText": "%",
-      "placeholder": "0-100",
-      "validations": [
-        {
-          "name": "required",
-          "validator": null,
-          "message": "Actual value for indicator 14 is required."
+          "message": "Both actual and target values for indicator 14 are required."
         },
         {
           "name": "min",
@@ -923,52 +523,21 @@
       }
     },
     {
-      "key": "ind14_target",
-      "label": "14. Coverage of toilets — Target (FY 2026-27)",
-      "formFieldType": "number",
+      "key": "ind15",
+      "label": "Coverage of waste water network services",
+      "position": 15,
+      "formFieldType": "actualTarget",
       "required": true,
       "decimal": 2,
-      "suffixText": "%",
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
       "placeholder": "0-100",
       "validations": [
         {
           "name": "required",
           "validator": null,
-          "message": "Target value for indicator 14 is required."
-        },
-        {
-          "name": "min",
-          "validator": 0,
-          "message": "Value cannot be negative."
-        },
-        {
-          "name": "max",
-          "validator": 100,
-          "message": "Value cannot exceed 100%."
-        }
-      ],
-      "fieldTypes": [
-        "SLB_MAIN_FORM_FIELDS"
-      ],
-      "meta": {
-        "sector": "Sewerage & Waste Water",
-        "indicatorNumber": 14,
-        "unit": "%"
-      }
-    },
-    {
-      "key": "ind15_actual",
-      "label": "15. Coverage of waste water network services — Actual (FY 2026-27)",
-      "formFieldType": "number",
-      "required": true,
-      "decimal": 2,
-      "suffixText": "%",
-      "placeholder": "0-100",
-      "validations": [
-        {
-          "name": "required",
-          "validator": null,
-          "message": "Actual value for indicator 15 is required."
+          "message": "Both actual and target values for indicator 15 are required."
         },
         {
           "name": "min",
@@ -991,52 +560,21 @@
       }
     },
     {
-      "key": "ind15_target",
-      "label": "15. Coverage of waste water network services — Target (FY 2026-27)",
-      "formFieldType": "number",
+      "key": "ind16",
+      "label": "Extent of reuse and recycling of waste water",
+      "position": 16,
+      "formFieldType": "actualTarget",
       "required": true,
       "decimal": 2,
-      "suffixText": "%",
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
       "placeholder": "0-100",
       "validations": [
         {
           "name": "required",
           "validator": null,
-          "message": "Target value for indicator 15 is required."
-        },
-        {
-          "name": "min",
-          "validator": 0,
-          "message": "Value cannot be negative."
-        },
-        {
-          "name": "max",
-          "validator": 100,
-          "message": "Value cannot exceed 100%."
-        }
-      ],
-      "fieldTypes": [
-        "SLB_MAIN_FORM_FIELDS"
-      ],
-      "meta": {
-        "sector": "Sewerage & Waste Water",
-        "indicatorNumber": 15,
-        "unit": "%"
-      }
-    },
-    {
-      "key": "ind16_actual",
-      "label": "16. Extent of reuse and recycling of waste water — Actual (FY 2026-27)",
-      "formFieldType": "number",
-      "required": true,
-      "decimal": 2,
-      "suffixText": "%",
-      "placeholder": "0-100",
-      "validations": [
-        {
-          "name": "required",
-          "validator": null,
-          "message": "Actual value for indicator 16 is required."
+          "message": "Both actual and target values for indicator 16 are required."
         },
         {
           "name": "min",
@@ -1059,52 +597,21 @@
       }
     },
     {
-      "key": "ind16_target",
-      "label": "16. Extent of reuse and recycling of waste water — Target (FY 2026-27)",
-      "formFieldType": "number",
+      "key": "ind17",
+      "label": "Extent of cost recovery in waste water",
+      "position": 17,
+      "formFieldType": "actualTarget",
       "required": true,
       "decimal": 2,
-      "suffixText": "%",
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
       "placeholder": "0-100",
       "validations": [
         {
           "name": "required",
           "validator": null,
-          "message": "Target value for indicator 16 is required."
-        },
-        {
-          "name": "min",
-          "validator": 0,
-          "message": "Value cannot be negative."
-        },
-        {
-          "name": "max",
-          "validator": 100,
-          "message": "Value cannot exceed 100%."
-        }
-      ],
-      "fieldTypes": [
-        "SLB_MAIN_FORM_FIELDS"
-      ],
-      "meta": {
-        "sector": "Sewerage & Waste Water",
-        "indicatorNumber": 16,
-        "unit": "%"
-      }
-    },
-    {
-      "key": "ind17_actual",
-      "label": "17. Extent of cost recovery in waste water — Actual (FY 2026-27)",
-      "formFieldType": "number",
-      "required": true,
-      "decimal": 2,
-      "suffixText": "%",
-      "placeholder": "0-100",
-      "validations": [
-        {
-          "name": "required",
-          "validator": null,
-          "message": "Actual value for indicator 17 is required."
+          "message": "Both actual and target values for indicator 17 are required."
         },
         {
           "name": "min",
@@ -1127,52 +634,21 @@
       }
     },
     {
-      "key": "ind17_target",
-      "label": "17. Extent of cost recovery in waste water — Target (FY 2026-27)",
-      "formFieldType": "number",
+      "key": "ind18",
+      "label": "Efficiency in collection of waste water charges",
+      "position": 18,
+      "formFieldType": "actualTarget",
       "required": true,
       "decimal": 2,
-      "suffixText": "%",
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
       "placeholder": "0-100",
       "validations": [
         {
           "name": "required",
           "validator": null,
-          "message": "Target value for indicator 17 is required."
-        },
-        {
-          "name": "min",
-          "validator": 0,
-          "message": "Value cannot be negative."
-        },
-        {
-          "name": "max",
-          "validator": 100,
-          "message": "Value cannot exceed 100%."
-        }
-      ],
-      "fieldTypes": [
-        "SLB_MAIN_FORM_FIELDS"
-      ],
-      "meta": {
-        "sector": "Sewerage & Waste Water",
-        "indicatorNumber": 17,
-        "unit": "%"
-      }
-    },
-    {
-      "key": "ind18_actual",
-      "label": "18. Efficiency in collection of waste water charges — Actual (FY 2026-27)",
-      "formFieldType": "number",
-      "required": true,
-      "decimal": 2,
-      "suffixText": "%",
-      "placeholder": "0-100",
-      "validations": [
-        {
-          "name": "required",
-          "validator": null,
-          "message": "Actual value for indicator 18 is required."
+          "message": "Both actual and target values for indicator 18 are required."
         },
         {
           "name": "min",
@@ -1195,52 +671,21 @@
       }
     },
     {
-      "key": "ind18_target",
-      "label": "18. Efficiency in collection of waste water charges — Target (FY 2026-27)",
-      "formFieldType": "number",
+      "key": "ind19",
+      "label": "Extent of cost recovery in SWM services",
+      "position": 19,
+      "formFieldType": "actualTarget",
       "required": true,
       "decimal": 2,
-      "suffixText": "%",
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
       "placeholder": "0-100",
       "validations": [
         {
           "name": "required",
           "validator": null,
-          "message": "Target value for indicator 18 is required."
-        },
-        {
-          "name": "min",
-          "validator": 0,
-          "message": "Value cannot be negative."
-        },
-        {
-          "name": "max",
-          "validator": 100,
-          "message": "Value cannot exceed 100%."
-        }
-      ],
-      "fieldTypes": [
-        "SLB_MAIN_FORM_FIELDS"
-      ],
-      "meta": {
-        "sector": "Sewerage & Waste Water",
-        "indicatorNumber": 18,
-        "unit": "%"
-      }
-    },
-    {
-      "key": "ind19_actual",
-      "label": "19. Extent of cost recovery in SWM services — Actual (FY 2026-27)",
-      "formFieldType": "number",
-      "required": true,
-      "decimal": 2,
-      "suffixText": "%",
-      "placeholder": "0-100",
-      "validations": [
-        {
-          "name": "required",
-          "validator": null,
-          "message": "Actual value for indicator 19 is required."
+          "message": "Both actual and target values for indicator 19 are required."
         },
         {
           "name": "min",
@@ -1263,52 +708,21 @@
       }
     },
     {
-      "key": "ind19_target",
-      "label": "19. Extent of cost recovery in SWM services — Target (FY 2026-27)",
-      "formFieldType": "number",
+      "key": "ind20",
+      "label": "Efficiency in redressal of customer complaints (SWM)",
+      "position": 20,
+      "formFieldType": "actualTarget",
       "required": true,
       "decimal": 2,
-      "suffixText": "%",
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
       "placeholder": "0-100",
       "validations": [
         {
           "name": "required",
           "validator": null,
-          "message": "Target value for indicator 19 is required."
-        },
-        {
-          "name": "min",
-          "validator": 0,
-          "message": "Value cannot be negative."
-        },
-        {
-          "name": "max",
-          "validator": 100,
-          "message": "Value cannot exceed 100%."
-        }
-      ],
-      "fieldTypes": [
-        "SLB_MAIN_FORM_FIELDS"
-      ],
-      "meta": {
-        "sector": "Solid Waste Management",
-        "indicatorNumber": 19,
-        "unit": "%"
-      }
-    },
-    {
-      "key": "ind20_actual",
-      "label": "20. Efficiency in redressal of customer complaints (SWM) — Actual (FY 2026-27)",
-      "formFieldType": "number",
-      "required": true,
-      "decimal": 2,
-      "suffixText": "%",
-      "placeholder": "0-100",
-      "validations": [
-        {
-          "name": "required",
-          "validator": null,
-          "message": "Actual value for indicator 20 is required."
+          "message": "Both actual and target values for indicator 20 are required."
         },
         {
           "name": "min",
@@ -1331,52 +745,21 @@
       }
     },
     {
-      "key": "ind20_target",
-      "label": "20. Efficiency in redressal of customer complaints (SWM) — Target (FY 2026-27)",
-      "formFieldType": "number",
+      "key": "ind21",
+      "label": "Efficiency in collection of SWM related user charges",
+      "position": 21,
+      "formFieldType": "actualTarget",
       "required": true,
       "decimal": 2,
-      "suffixText": "%",
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
       "placeholder": "0-100",
       "validations": [
         {
           "name": "required",
           "validator": null,
-          "message": "Target value for indicator 20 is required."
-        },
-        {
-          "name": "min",
-          "validator": 0,
-          "message": "Value cannot be negative."
-        },
-        {
-          "name": "max",
-          "validator": 100,
-          "message": "Value cannot exceed 100%."
-        }
-      ],
-      "fieldTypes": [
-        "SLB_MAIN_FORM_FIELDS"
-      ],
-      "meta": {
-        "sector": "Solid Waste Management",
-        "indicatorNumber": 20,
-        "unit": "%"
-      }
-    },
-    {
-      "key": "ind21_actual",
-      "label": "21. Efficiency in collection of SWM related user charges — Actual (FY 2026-27)",
-      "formFieldType": "number",
-      "required": true,
-      "decimal": 2,
-      "suffixText": "%",
-      "placeholder": "0-100",
-      "validations": [
-        {
-          "name": "required",
-          "validator": null,
-          "message": "Actual value for indicator 21 is required."
+          "message": "Both actual and target values for indicator 21 are required."
         },
         {
           "name": "min",
@@ -1399,52 +782,21 @@
       }
     },
     {
-      "key": "ind21_target",
-      "label": "21. Efficiency in collection of SWM related user charges — Target (FY 2026-27)",
-      "formFieldType": "number",
+      "key": "ind22",
+      "label": "Efficiency of collection of municipal solid waste",
+      "position": 22,
+      "formFieldType": "actualTarget",
       "required": true,
       "decimal": 2,
-      "suffixText": "%",
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
       "placeholder": "0-100",
       "validations": [
         {
           "name": "required",
           "validator": null,
-          "message": "Target value for indicator 21 is required."
-        },
-        {
-          "name": "min",
-          "validator": 0,
-          "message": "Value cannot be negative."
-        },
-        {
-          "name": "max",
-          "validator": 100,
-          "message": "Value cannot exceed 100%."
-        }
-      ],
-      "fieldTypes": [
-        "SLB_MAIN_FORM_FIELDS"
-      ],
-      "meta": {
-        "sector": "Solid Waste Management",
-        "indicatorNumber": 21,
-        "unit": "%"
-      }
-    },
-    {
-      "key": "ind22_actual",
-      "label": "22. Efficiency of collection of municipal solid waste — Actual (FY 2026-27)",
-      "formFieldType": "number",
-      "required": true,
-      "decimal": 2,
-      "suffixText": "%",
-      "placeholder": "0-100",
-      "validations": [
-        {
-          "name": "required",
-          "validator": null,
-          "message": "Actual value for indicator 22 is required."
+          "message": "Both actual and target values for indicator 22 are required."
         },
         {
           "name": "min",
@@ -1467,52 +819,21 @@
       }
     },
     {
-      "key": "ind22_target",
-      "label": "22. Efficiency of collection of municipal solid waste — Target (FY 2026-27)",
-      "formFieldType": "number",
+      "key": "ind23",
+      "label": "Extent of segregation of municipal solid waste",
+      "position": 23,
+      "formFieldType": "actualTarget",
       "required": true,
       "decimal": 2,
-      "suffixText": "%",
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
       "placeholder": "0-100",
       "validations": [
         {
           "name": "required",
           "validator": null,
-          "message": "Target value for indicator 22 is required."
-        },
-        {
-          "name": "min",
-          "validator": 0,
-          "message": "Value cannot be negative."
-        },
-        {
-          "name": "max",
-          "validator": 100,
-          "message": "Value cannot exceed 100%."
-        }
-      ],
-      "fieldTypes": [
-        "SLB_MAIN_FORM_FIELDS"
-      ],
-      "meta": {
-        "sector": "Solid Waste Management",
-        "indicatorNumber": 22,
-        "unit": "%"
-      }
-    },
-    {
-      "key": "ind23_actual",
-      "label": "23. Extent of segregation of municipal solid waste — Actual (FY 2026-27)",
-      "formFieldType": "number",
-      "required": true,
-      "decimal": 2,
-      "suffixText": "%",
-      "placeholder": "0-100",
-      "validations": [
-        {
-          "name": "required",
-          "validator": null,
-          "message": "Actual value for indicator 23 is required."
+          "message": "Both actual and target values for indicator 23 are required."
         },
         {
           "name": "min",
@@ -1535,52 +856,21 @@
       }
     },
     {
-      "key": "ind23_target",
-      "label": "23. Extent of segregation of municipal solid waste — Target (FY 2026-27)",
-      "formFieldType": "number",
+      "key": "ind24",
+      "label": "Extent of municipal solid waste recovered",
+      "position": 24,
+      "formFieldType": "actualTarget",
       "required": true,
       "decimal": 2,
-      "suffixText": "%",
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
       "placeholder": "0-100",
       "validations": [
         {
           "name": "required",
           "validator": null,
-          "message": "Target value for indicator 23 is required."
-        },
-        {
-          "name": "min",
-          "validator": 0,
-          "message": "Value cannot be negative."
-        },
-        {
-          "name": "max",
-          "validator": 100,
-          "message": "Value cannot exceed 100%."
-        }
-      ],
-      "fieldTypes": [
-        "SLB_MAIN_FORM_FIELDS"
-      ],
-      "meta": {
-        "sector": "Solid Waste Management",
-        "indicatorNumber": 23,
-        "unit": "%"
-      }
-    },
-    {
-      "key": "ind24_actual",
-      "label": "24. Extent of municipal solid waste recovered — Actual (FY 2026-27)",
-      "formFieldType": "number",
-      "required": true,
-      "decimal": 2,
-      "suffixText": "%",
-      "placeholder": "0-100",
-      "validations": [
-        {
-          "name": "required",
-          "validator": null,
-          "message": "Actual value for indicator 24 is required."
+          "message": "Both actual and target values for indicator 24 are required."
         },
         {
           "name": "min",
@@ -1603,52 +893,21 @@
       }
     },
     {
-      "key": "ind24_target",
-      "label": "24. Extent of municipal solid waste recovered — Target (FY 2026-27)",
-      "formFieldType": "number",
+      "key": "ind25",
+      "label": "Extent of scientific disposal of municipal solid waste",
+      "position": 25,
+      "formFieldType": "actualTarget",
       "required": true,
       "decimal": 2,
-      "suffixText": "%",
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
       "placeholder": "0-100",
       "validations": [
         {
           "name": "required",
           "validator": null,
-          "message": "Target value for indicator 24 is required."
-        },
-        {
-          "name": "min",
-          "validator": 0,
-          "message": "Value cannot be negative."
-        },
-        {
-          "name": "max",
-          "validator": 100,
-          "message": "Value cannot exceed 100%."
-        }
-      ],
-      "fieldTypes": [
-        "SLB_MAIN_FORM_FIELDS"
-      ],
-      "meta": {
-        "sector": "Solid Waste Management",
-        "indicatorNumber": 24,
-        "unit": "%"
-      }
-    },
-    {
-      "key": "ind25_actual",
-      "label": "25. Extent of scientific disposal of municipal solid waste — Actual (FY 2026-27)",
-      "formFieldType": "number",
-      "required": true,
-      "decimal": 2,
-      "suffixText": "%",
-      "placeholder": "0-100",
-      "validations": [
-        {
-          "name": "required",
-          "validator": null,
-          "message": "Actual value for indicator 25 is required."
+          "message": "Both actual and target values for indicator 25 are required."
         },
         {
           "name": "min",
@@ -1671,52 +930,21 @@
       }
     },
     {
-      "key": "ind25_target",
-      "label": "25. Extent of scientific disposal of municipal solid waste — Target (FY 2026-27)",
-      "formFieldType": "number",
+      "key": "ind26",
+      "label": "Household level coverage of solid waste management services",
+      "position": 26,
+      "formFieldType": "actualTarget",
       "required": true,
       "decimal": 2,
-      "suffixText": "%",
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
       "placeholder": "0-100",
       "validations": [
         {
           "name": "required",
           "validator": null,
-          "message": "Target value for indicator 25 is required."
-        },
-        {
-          "name": "min",
-          "validator": 0,
-          "message": "Value cannot be negative."
-        },
-        {
-          "name": "max",
-          "validator": 100,
-          "message": "Value cannot exceed 100%."
-        }
-      ],
-      "fieldTypes": [
-        "SLB_MAIN_FORM_FIELDS"
-      ],
-      "meta": {
-        "sector": "Solid Waste Management",
-        "indicatorNumber": 25,
-        "unit": "%"
-      }
-    },
-    {
-      "key": "ind26_actual",
-      "label": "26. Household level coverage of solid waste management services — Actual (FY 2026-27)",
-      "formFieldType": "number",
-      "required": true,
-      "decimal": 2,
-      "suffixText": "%",
-      "placeholder": "0-100",
-      "validations": [
-        {
-          "name": "required",
-          "validator": null,
-          "message": "Actual value for indicator 26 is required."
+          "message": "Both actual and target values for indicator 26 are required."
         },
         {
           "name": "min",
@@ -1739,52 +967,21 @@
       }
     },
     {
-      "key": "ind26_target",
-      "label": "26. Household level coverage of solid waste management services — Target (FY 2026-27)",
-      "formFieldType": "number",
+      "key": "ind27",
+      "label": "Coverage of storm water drainage network",
+      "position": 27,
+      "formFieldType": "actualTarget",
       "required": true,
       "decimal": 2,
-      "suffixText": "%",
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
       "placeholder": "0-100",
       "validations": [
         {
           "name": "required",
           "validator": null,
-          "message": "Target value for indicator 26 is required."
-        },
-        {
-          "name": "min",
-          "validator": 0,
-          "message": "Value cannot be negative."
-        },
-        {
-          "name": "max",
-          "validator": 100,
-          "message": "Value cannot exceed 100%."
-        }
-      ],
-      "fieldTypes": [
-        "SLB_MAIN_FORM_FIELDS"
-      ],
-      "meta": {
-        "sector": "Solid Waste Management",
-        "indicatorNumber": 26,
-        "unit": "%"
-      }
-    },
-    {
-      "key": "ind27_actual",
-      "label": "27. Coverage of storm water drainage network — Actual (FY 2026-27)",
-      "formFieldType": "number",
-      "required": true,
-      "decimal": 2,
-      "suffixText": "%",
-      "placeholder": "0-100",
-      "validations": [
-        {
-          "name": "required",
-          "validator": null,
-          "message": "Actual value for indicator 27 is required."
+          "message": "Both actual and target values for indicator 27 are required."
         },
         {
           "name": "min",
@@ -1807,86 +1004,21 @@
       }
     },
     {
-      "key": "ind27_target",
-      "label": "27. Coverage of storm water drainage network — Target (FY 2026-27)",
-      "formFieldType": "number",
+      "key": "ind28",
+      "label": "Incidence of water logging",
+      "position": 28,
+      "formFieldType": "actualTarget",
       "required": true,
       "decimal": 2,
-      "suffixText": "%",
-      "placeholder": "0-100",
-      "validations": [
-        {
-          "name": "required",
-          "validator": null,
-          "message": "Target value for indicator 27 is required."
-        },
-        {
-          "name": "min",
-          "validator": 0,
-          "message": "Value cannot be negative."
-        },
-        {
-          "name": "max",
-          "validator": 100,
-          "message": "Value cannot exceed 100%."
-        }
-      ],
-      "fieldTypes": [
-        "SLB_MAIN_FORM_FIELDS"
-      ],
-      "meta": {
-        "sector": "Storm Water Drainage",
-        "indicatorNumber": 27,
-        "unit": "%"
-      }
-    },
-    {
-      "key": "ind28_actual",
-      "label": "28. Incidence of water logging — Actual (FY 2026-27)",
-      "formFieldType": "number",
-      "required": true,
-      "decimal": 2,
-      "suffixText": "Non./Year",
+      "inputCardConfig": {
+        "suffixText": "Non./Year"
+      },
       "placeholder": "0-999",
       "validations": [
         {
           "name": "required",
           "validator": null,
-          "message": "Actual value for indicator 28 is required."
-        },
-        {
-          "name": "min",
-          "validator": 0,
-          "message": "Value cannot be negative."
-        },
-        {
-          "name": "max",
-          "validator": 999,
-          "message": "Value cannot exceed 999 Non./Year."
-        }
-      ],
-      "fieldTypes": [
-        "SLB_MAIN_FORM_FIELDS"
-      ],
-      "meta": {
-        "sector": "Storm Water Drainage",
-        "indicatorNumber": 28,
-        "unit": "Non./Year"
-      }
-    },
-    {
-      "key": "ind28_target",
-      "label": "28. Incidence of water logging — Target (FY 2026-27)",
-      "formFieldType": "number",
-      "required": true,
-      "decimal": 2,
-      "suffixText": "Non./Year",
-      "placeholder": "0-999",
-      "validations": [
-        {
-          "name": "required",
-          "validator": null,
-          "message": "Target value for indicator 28 is required."
+          "message": "Both actual and target values for indicator 28 are required."
         },
         {
           "name": "min",

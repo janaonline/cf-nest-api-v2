@@ -1653,3 +1653,24 @@ Example: `xvi-fc/state/5dcf9d7416a06aed41c748f0/2026-27/sfc-status/sfc-report`
 - No Excel dump/export endpoint, no post-submission-update flow, no separate history collection (consistent with `bank-account`/`unspent-balance-disclosure`, which also have none).
 
 **Verification**: `slb.service.spec.ts` + `slb.controller.spec.ts` (19 tests) passing; `tsc --noEmit` clean.
+
+---
+
+### SLB — Single Actual/Target Question Per Indicator (new `actualTarget` field type)
+
+**Context**: The 28 SLB indicators were initially modeled as 56 separate `number` FieldConfig entries (`ind1_actual`/`ind1_target`, ...). Changed to one question per indicator that renders both values together.
+
+**New shared field type** (`FieldType` union, backend `src/module/xvi-fc/common/types/field-config.type.ts` and frontend `src/app/shared/dynamic-form/field.interface.ts`): `'actualTarget'`. Value shape `{ actual: number | null; target: number | null }`. Unit label reuses the existing `inputCardConfig.suffixText` (no new top-level field — see fragility note below).
+
+**Backend** (`dynamic-form-validation.service.ts`): `validateField` dispatches `actualTarget` to a new `validateActualTargetField` before the generic scalar `isEmptyValue` check (an object value is never "empty" by that check). Applies the field's single `validations` array — required/min/max — independently to `actual` and `target`, producing errors keyed `<key>.actual` / `<key>.target`.
+
+**Frontend**:
+- `DynamicFormService.createContorl` builds a nested `FormGroup` (`{ actual, target }` sub-`FormControl`s, both validated from the same `field.validations`) instead of a flat `FormControl` when `formFieldType === 'actualTarget'`. Angular's dot-path `form.get('key.actual')` resolves the sub-control directly, matching the backend's error keys, and `.value` naturally serializes to `{ actual, target }` — no changes needed to `getVisiblePayload`/`serializeFieldValue`.
+- New `ActualTargetComponent` (`app-actual-target`, `shared/dynamic-form/components/actual-target/`) renders two number inputs (Actual/Target) bound to the nested sub-group, wired into `DynamicFormComponent`'s switch.
+- `DynamicFieldViewComponent` (readonly mode) got a matching `'actualTarget'` case.
+
+**Fragility found and worked around**: giving `DynamicFormService.createContorl` an *inferred* return type (previously implicitly `FormControl`, now a `FormControl | FormGroup` union) caused spurious `TS2554: Expected 0 arguments` compile errors in unrelated files (`devolution-formula-rows-dialog.component.ts`, `eulb-rows-dialog.component.ts`, `eulb-post-update.component.ts`) on their `.pipe(takeUntil(...), takeUntilDestroyed(...))` calls — reproduced deterministically via bisection, fixed by adding an explicit `createContorl(...): AbstractControl` return type annotation. Also confirmed (again via bisection) that adding a new top-level `suffixText` prop directly to the shared `FieldConfig` interface reproduced the same class of error, independent of the return-type issue — this is why the unit suffix reuses `inputCardConfig.suffixText` instead of a new field. Root cause not fully understood (looks like a whole-program TS/esbuild type-instantiation budget issue triggered by widening a foundational, widely-imported interface/return type) — worth keeping in mind before adding new properties to `FieldConfig` or changing `DynamicFormService`'s public method signatures.
+
+**Seed data**: `scripts/seed-data/slb-form-json.json` updated from 60 fields (56 indicator + 4 declaration) to 32 (28 indicator `actualTarget` questions + 4 declaration fields).
+
+**Verification**: backend — `dynamic-form-validation.service.spec.ts` actualTarget suite (6 tests) passing. Frontend — `dynamic-form.service.spec.ts`, `actual-target.component.spec.ts`, `dynamic-field-view.component.spec.ts` new suites passing; full `ng build` clean.

@@ -117,7 +117,18 @@ export interface UploadedFileValue {
 
 // ─── Field config ─────────────────────────────────────────────────────────────
 
-export type FieldType = 'radio' | 'text' | 'file' | 'date' | 'checkbox' | 'textarea' | 'number' | 'select';
+export type FieldType =
+  | 'radio'
+  | 'text'
+  | 'file'
+  | 'date'
+  | 'checkbox'
+  | 'textarea'
+  | 'number'
+  | 'select'
+  /** Single question rendering two related numeric inputs (Actual/Target) sharing one set of
+   *  validators. Value shape: `{ actual: number | null; target: number | null }`. */
+  | 'actualTarget';
 
 export interface FieldConfig {
   /** Centralized key used by the backend resolver to derive a runtime-contextual folderPath. */
@@ -170,6 +181,9 @@ export interface FieldConfig {
   hintText?: string;
   grid?: string;
   maxLength?: number;
+  /** Card-style rendering hints (prefix/suffix text, description) also reused by 'actualTarget'
+   *  fields for the shared unit suffix (e.g. '%', 'lpcd', 'Hours/day'). */
+  inputCardConfig?: { title?: string; description?: string; prefixText?: string; suffixText?: string };
 }
 
 // ─── Sectioned / resolved form config ──────────────────────────────────────────
