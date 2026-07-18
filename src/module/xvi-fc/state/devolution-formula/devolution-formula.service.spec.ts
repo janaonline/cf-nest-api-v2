@@ -503,8 +503,10 @@ describe('DevolutionFormulaService', () => {
     expect(saveCallArg.$set.excelFile.pageCount).toBeNull();
   });
 
-  // saveDraft dynamic validation: checkboxConfirmation requiredTrue enforced in draft
-  it('saveDraft throws when checkboxConfirmation is present but false (requiredTrue)', async () => {
+  // saveDraft dynamic validation: checkboxConfirmation requiredTrue mandatory-on-draft
+  // enforcement is temporarily disabled (see DynamicFormValidationService) — draft now
+  // succeeds even with checkboxConfirmation false.
+  it('saveDraft succeeds when checkboxConfirmation is present but false (requiredTrue mandatory-on-draft disabled)', async () => {
     mockFormModel.findOne.mockReturnValue(q(null));
 
     await expect(
@@ -517,7 +519,7 @@ describe('DevolutionFormulaService', () => {
         },
         adminUser,
       ),
-    ).rejects.toMatchObject({ response: { message: 'Validation failed.' } });
+    ).resolves.toBeDefined();
   });
 
   // saveDraft: ulbCount is now server-computed — dto.data.ulbCount is ignored
