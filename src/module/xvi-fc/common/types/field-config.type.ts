@@ -136,6 +136,8 @@ export interface FieldConfig {
   formFieldType: FieldType;
   key: string;
   label: string;
+  /** 1-based display order, e.g. the row number shown in a numbered question list/table. */
+  position?: number;
   /** Cosmetic flag consumed by section/grid renderers to show a required asterisk next to the label.
    *  Independent of `validations` — a 'required' validator is what's actually enforced. */
   required?: boolean;
@@ -184,6 +186,8 @@ export interface FieldConfig {
   /** Card-style rendering hints (prefix/suffix text, description) also reused by 'actualTarget'
    *  fields for the shared unit suffix (e.g. '%', 'lpcd', 'Hours/day'). */
   inputCardConfig?: { title?: string; description?: string; prefixText?: string; suffixText?: string };
+  /** Free-form, non-functional annotations (e.g. grouping/reporting metadata) — never read by validation or rendering logic. */
+  meta?: Record<string, unknown>;
 }
 
 // ─── Sectioned / resolved form config ──────────────────────────────────────────

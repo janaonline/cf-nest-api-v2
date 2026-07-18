@@ -1011,9 +1011,9 @@
       "required": true,
       "decimal": 2,
       "inputCardConfig": {
-        "suffixText": "Non./Year"
+        "suffixText": "Nos./Year"
       },
-      "placeholder": "0-999",
+      "placeholder": "0-9999",
       "validations": [
         {
           "name": "required",
@@ -1027,8 +1027,8 @@
         },
         {
           "name": "max",
-          "validator": 999,
-          "message": "Value cannot exceed 999 Non./Year."
+          "validator": 9999,
+          "message": "Value cannot exceed 9999 Nos./Year."
         }
       ],
       "fieldTypes": [
@@ -1037,7 +1037,7 @@
       "meta": {
         "sector": "Storm Water Drainage",
         "indicatorNumber": 28,
-        "unit": "Non./Year"
+        "unit": "Nos./Year"
       }
     },
     {

@@ -1665,6 +1665,7 @@ Example: `xvi-fc/state/5dcf9d7416a06aed41c748f0/2026-27/sfc-status/sfc-report`
 **Backend** (`dynamic-form-validation.service.ts`): `validateField` dispatches `actualTarget` to a new `validateActualTargetField` before the generic scalar `isEmptyValue` check (an object value is never "empty" by that check). Applies the field's single `validations` array — required/min/max — independently to `actual` and `target`, producing errors keyed `<key>.actual` / `<key>.target`.
 
 **Frontend**:
+
 - `DynamicFormService.createContorl` builds a nested `FormGroup` (`{ actual, target }` sub-`FormControl`s, both validated from the same `field.validations`) instead of a flat `FormControl` when `formFieldType === 'actualTarget'`. Angular's dot-path `form.get('key.actual')` resolves the sub-control directly, matching the backend's error keys, and `.value` naturally serializes to `{ actual, target }` — no changes needed to `getVisiblePayload`/`serializeFieldValue`.
 - New `ActualTargetComponent` (`app-actual-target`, `shared/dynamic-form/components/actual-target/`) renders two number inputs (Actual/Target) bound to the nested sub-group, wired into `DynamicFormComponent`'s switch.
 - `DynamicFieldViewComponent` (readonly mode) got a matching `'actualTarget'` case.
@@ -1674,3 +1675,17 @@ Example: `xvi-fc/state/5dcf9d7416a06aed41c748f0/2026-27/sfc-status/sfc-report`
 **Seed data**: `scripts/seed-data/slb-form-json.json` updated from 60 fields (56 indicator + 4 declaration) to 32 (28 indicator `actualTarget` questions + 4 declaration fields).
 
 **Verification**: backend — `dynamic-form-validation.service.spec.ts` actualTarget suite (6 tests) passing. Frontend — `dynamic-form.service.spec.ts`, `actual-target.component.spec.ts`, `dynamic-field-view.component.spec.ts` new suites passing; full `ng build` clean.
+
+---
+
+### SLB — Bundled Default Fields (switched from "throw if unseeded" to fallback pattern)
+
+**Context**: `SlbFormJsonConfigService.loadFields()` previously threw if no admin had POSTed a FormJson document for `type: 'SLB'` yet (matching EULB/DF/SFC's "assume pre-seeded" convention, documented in the earlier SLB changelog entry above). Changed to the ULB-master pattern instead — bundle the 28-indicator + self-declaration question set as TypeScript defaults so the form works immediately after deploy, with the DB-configured version taking over automatically once an admin creates it.
+
+**New file** (`src/module/xvi-fc/ulb/slb/constants/slb-form.constants.ts`): `DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[]` — generated from the same source data as `scripts/seed-data/slb-form-json.json` (kept in sync; the JSON remains the reference payload for an admin who wants to `POST /form-json` an explicit override).
+
+**`SlbFormJsonConfigService.loadFields()`**: now wraps the `FormJsonService` lookup in try/catch and falls back to `DEFAULT_SLB_FIELDS` — both when the lookup throws (`NotFoundException`, unseeded) and when it resolves but `data` is empty. Once a real `formjsons` document exists for `type: 'SLB'` / `formId: 32`, it's returned directly and the bundled defaults are no longer consulted for that design year.
+
+**`FieldConfig` type additions** (`src/module/xvi-fc/common/types/field-config.type.ts`, backend-only — the frontend's `field.interface.ts` already had `position`): `position?: number` (1-based display order, used by the SLB indicator table's `#` column) and `meta?: Record<string, unknown>` (free-form annotations, e.g. sector grouping — not read by any validation/rendering logic today).
+
+**Verification**: new `slb-form-json.service.spec.ts` (4 tests: unseeded → defaults, empty data → defaults, seeded → DB data used, no-yearId path → defaults) passing; `slb.service.spec.ts`/`slb.controller.spec.ts` unaffected (they mock `SlbFormJsonConfigService` directly); `tsc --noEmit` error count unchanged from the pre-existing baseline (165, all in unrelated files).
