@@ -23,6 +23,7 @@ import type {
 import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
 import type { XvifcActorSourceDocument } from 'src/module/xvi-fc/common/types/xvifc-form-actors.type';
 import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
+import { applyActionVisibility } from 'src/module/xvi-fc/common/utils/xvi-fc-supporting-content-visibility.util';
 import type { FileInfo } from 'src/schemas/common/file.schema';
 import {
   buildXviFcFolderPath,
@@ -781,24 +782,20 @@ export class FcUnspentDeclarationService {
 
   /**
    * Toggles the `download-template` supporting action's `visible` flag on the
-   * `fcDeclaration` question. Never mutates formJson — this is a per-response
+   * `fcDeclaration` question, keeping its paired `description` ("Download the
+   * official template...") in sync via the shared applyActionVisibility helper —
+   * that description only makes sense alongside the action, so it must not linger
+   * once the action is hidden. Never mutates formJson — this is a per-response
    * hydration derived from `canEdit` and whether the design year has a configured
    * template; it is never written back to the DB.
    */
   private hydrateDeclarationTemplateAction(question: HydratedFieldConfig, visible: boolean): HydratedFieldConfig {
-    if (!question.supportingContent) return question;
-
-    const supportingContent = question.supportingContent.map((block) => {
-      if (block.type !== 'actions' || !block.actions) return block;
-      return {
-        ...block,
-        actions: block.actions.map((action) =>
-          action.id === FC_UNSPENT_DECLARATION_TEMPLATE_ACTION_ID ? { ...action, visible } : action,
-        ),
-      };
-    });
-
-    return { ...question, supportingContent };
+    return {
+      ...question,
+      supportingContent: applyActionVisibility(question.supportingContent, {
+        [FC_UNSPENT_DECLARATION_TEMPLATE_ACTION_ID]: visible,
+      }),
+    };
   }
 
   /**

@@ -1,28 +1,25 @@
-import { Test, TestingModule } from '@nestjs/testing';
-import { getModelToken } from '@nestjs/mongoose';
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
-import { Types } from 'mongoose';
+import { getModelToken } from '@nestjs/mongoose';
+import { Test, TestingModule } from '@nestjs/testing';
 import { readFileSync } from 'fs';
+import { Types } from 'mongoose';
 import { join } from 'path';
-import { FcUnspentDeclarationService } from './fc-unspent-declaration.service';
-import { FcUnspentDeclarationRowService } from '../rows/fc-unspent-declaration-row.service';
-import { FcUnspentDeclarationFormJsonService } from '../form-json/fc-unspent-declaration-form-json.service';
-import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
-import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
-import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
-import { FileUrlNormalizerService } from 'src/module/xvi-fc/common/services/file-url-normalizer.service';
+import { FORM_STATUS } from 'src/common/constants/form-status.constants';
+import { ROW_STATUS } from 'src/common/constants/row-status.constants';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { S3Service } from 'src/core/s3/s3.service';
+import type { AuthUser } from 'src/module/auth/auth-user.interface';
+import { Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
+import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
+import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
+import { FileUrlNormalizerService } from 'src/module/xvi-fc/common/services/file-url-normalizer.service';
+import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
+import { DevolutionFormulaForm } from 'src/schemas/xvi-fc/state/devolution-formula-form.schema';
+import { XviFcUnspentStateFormHistory } from 'src/schemas/xvi-fc/state/fc-unspent-state-form-history.schema';
 import {
   XviFcUnspentStateForm,
   XviFcUnspentStateFormSchema,
 } from 'src/schemas/xvi-fc/state/fc-unspent-state-form.schema';
-import { XviFcUnspentStateFormHistory } from 'src/schemas/xvi-fc/state/fc-unspent-state-form-history.schema';
-import { DevolutionFormulaForm } from 'src/schemas/xvi-fc/state/devolution-formula-form.schema';
-import type { AuthUser } from 'src/module/auth/auth-user.interface';
-import { Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
-import { FORM_STATUS } from 'src/common/constants/form-status.constants';
-import { ROW_STATUS } from 'src/common/constants/row-status.constants';
 import {
   FC_UNSPENT_APPLICABLE_FC_BY_YEAR_LABEL,
   FC_UNSPENT_DECLARATION_TEMPLATE_ACTION_ID,
@@ -31,6 +28,9 @@ import {
 import { FC_UNSPENT_STATE_FORM_JSON } from '../../constants/fc-unspent-declaration.form-json.constant';
 import type { SaveFcUnspentDeclarationDto } from '../../dto/save-fc-unspent-declaration.dto';
 import type { FcUnspentResolvedRow } from '../../types/fc-unspent-declaration.types';
+import { FcUnspentDeclarationFormJsonService } from '../form-json/fc-unspent-declaration-form-json.service';
+import { FcUnspentDeclarationRowService } from '../rows/fc-unspent-declaration-row.service';
+import { FcUnspentDeclarationService } from './fc-unspent-declaration.service';
 
 // ─── Test helpers ─────────────────────────────────────────────────────────────
 
@@ -979,6 +979,24 @@ describe('FcUnspentDeclarationService', () => {
       const actionsBlock = fcDeclaration.supportingContent!.find((b) => b.type === 'actions')!;
       const action = actionsBlock.actions!.find((a) => a.id === FC_UNSPENT_DECLARATION_TEMPLATE_ACTION_ID)!;
       expect(action.visible).toBe(false);
+    });
+
+    it('shows the actions block description alongside the action when canEdit is true', async () => {
+      model['findOne'] = jest.fn().mockReturnValue(q({ currentFormStatus: FORM_STATUS.IN_PROGRESS }));
+      const result = await service.getForm(stateOid.toString(), yearOid.toString(), stateUser());
+      const fcDeclaration = result.data!.questions.find((q) => q.key === 'fcDeclaration')!;
+      const actionsBlock = fcDeclaration.supportingContent!.find((b) => b.type === 'actions')!;
+      expect(actionsBlock.description).toBe(
+        'Download the official template, have it signed by the authorized State DMA officer, and upload the signed declaration. Declarations on unofficial letterhead will not be accepted.',
+      );
+    });
+
+    it('clears the actions block description when the form is read-only (canEdit false), not just the action', async () => {
+      model['findOne'] = jest.fn().mockReturnValue(q({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }));
+      const result = await service.getForm(stateOid.toString(), yearOid.toString(), stateUser());
+      const fcDeclaration = result.data!.questions.find((q) => q.key === 'fcDeclaration')!;
+      const actionsBlock = fcDeclaration.supportingContent!.find((b) => b.type === 'actions')!;
+      expect(actionsBlock.description).toBeUndefined();
     });
 
     it('is hidden when the design year has no configured template, even though canEdit is true', () => {
