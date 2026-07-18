@@ -816,10 +816,16 @@ export class FcUnspentDeclarationService {
     return { ...question, supportingContent: supportingContent.length > 0 ? supportingContent : undefined };
   }
 
-  /** Never persisted — GET-only signed URL for the stored raw S3-relative path. */
+  /**
+   * Never persisted — GET-only signed URL for the stored raw S3-relative path. Signed
+   * `inline` so the uploaded declaration opens in a new tab (matches sfc-status and
+   * other "view your uploaded file" links) rather than force-downloading — unlike
+   * getDeclarationTemplate's blank-template link, which is a genuine download and
+   * stays on signFileUrl's default `attachment`.
+   */
   private signStorageFileUrl(path: string): string {
     try {
-      return this.fileTokenService.signFileUrl(path);
+      return this.fileTokenService.signFileUrl(path, 'inline');
     } catch {
       return path;
     }

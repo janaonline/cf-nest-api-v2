@@ -748,6 +748,29 @@ describe('FcUnspentDeclarationService', () => {
     expect(model['findOneAndUpdate']).not.toHaveBeenCalled();
   });
 
+  it('signs the uploaded declaration file inline so it opens in a new tab instead of force-downloading', async () => {
+    const storedPath = 'xvi-fc/state/x/2026-27/fc-unspent-declaration/fc-declaration/declaration.pdf';
+    model['findOne'] = jest.fn().mockReturnValue(
+      q({
+        _id: parentOid,
+        currentFormStatus: FORM_STATUS.IN_PROGRESS,
+        isFcUnspent: false,
+        fcDeclaration: {
+          originalName: 'declaration.pdf',
+          path: storedPath,
+          mimeType: 'application/pdf',
+          extension: 'pdf',
+          sizeKb: 100,
+        },
+      }),
+    );
+    const fileTokenService: { signFileUrl: jest.Mock } = (service as unknown as { fileTokenService: unknown })[
+      'fileTokenService'
+    ] as never;
+    await service.getForm(stateOid.toString(), yearOid.toString(), stateUser());
+    expect(fileTokenService.signFileUrl).toHaveBeenCalledWith(storedPath, 'inline');
+  });
+
   // ─── DB-backed formJson loading ─────────────────────────────────────────────
 
   describe('DB-backed formJson loading', () => {
