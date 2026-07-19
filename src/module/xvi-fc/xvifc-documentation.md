@@ -1628,7 +1628,7 @@ Example: `xvi-fc/state/5dcf9d7416a06aed41c748f0/2026-27/sfc-status/sfc-report`
 
 **New schema** (`src/schemas/xvi-fc/ulb/slb-form.schema.ts`):
 
-- Collection: `xvi_fc_slb_forms`
+- Collection: `xvifc_slb_forms`
 - Unique index: `{ ulb, year, formType }`
 - `data: Mixed` — generic bag holding the full sanitized FieldConfig payload (mirrors `sfc-status.schema.ts`'s approach rather than one typed prop per field, since SLB has ~60 flat scalar fields and no row/bulk-Excel data).
 - `formType: 'SLB'` (`SLB_FORM_TYPE`), FormJson `formId: 32` (`SLB_FORM_ID` — next free id after SFC=22, EULB=23, DF=24, upload-config=30/31).

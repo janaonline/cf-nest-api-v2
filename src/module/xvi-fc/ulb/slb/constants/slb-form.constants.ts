@@ -1022,7 +1022,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
   },
   {
-    key: 'supportingDocument',
+    key: 'supportingDocumentFile',
     label: 'Supporting Document',
     formFieldType: 'file',
     required: true,

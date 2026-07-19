@@ -8,7 +8,7 @@ export const SLB_FORM_ID = 32;
 export type SlbFormDocument = HydratedDocument<SlbForm>;
 
 @Schema({
-  collection: 'xvi_fc_slb_forms',
+  collection: 'xvifc_slb_forms',
   timestamps: true,
   versionKey: false,
 })
