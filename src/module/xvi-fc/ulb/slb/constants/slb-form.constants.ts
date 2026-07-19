@@ -409,7 +409,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
       {
         name: 'required',
         validator: null,
-        message: 'Both actual and target values for indicator 12 are required.',
+        message: 'This field is required.',
       },
       {
         name: 'min',
