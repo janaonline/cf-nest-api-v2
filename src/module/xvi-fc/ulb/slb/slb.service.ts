@@ -117,8 +117,11 @@ export class SlbService {
 
   /**
    * Saves the SLB form as a draft.
-   * Runs partial validation — absent required fields are allowed; requiredTrue and all
-   * format validators are still enforced on any provided value.
+   * Runs partial validation — absent required fields are allowed. Unlike
+   * `DynamicFormValidationService`'s default (which still enforces `requiredTrue`, e.g. a
+   * confirmation checkbox, even in draft mode), SLB drafts allow the self-declaration
+   * checkbox to stay unchecked too — a draft is work in progress, not a certification.
+   * All other format validators are still enforced on any provided value.
    * Upserts by ulb + year + formType. Sets status to IN_PROGRESS.
    */
   async saveDraft(dto: SaveSlbDto, user: AuthUser): Promise<XviFcApiResponse> {
@@ -127,7 +130,8 @@ export class SlbService {
 
     const fields = await this.slbFormJsonConfig.loadFields(dto.yearId);
     const mainFields = getSlbFieldsByType(fields, 'SLB_MAIN_FORM_FIELDS');
-    const result = this.validator.validateDraftAndBuildPayload(mainFields, dto.data as FormData);
+    const draftFields = this.withoutRequiredTrue(mainFields);
+    const result = this.validator.validateDraftAndBuildPayload(draftFields, dto.data as FormData);
     if (!result.isValid) throwXviFcValidationError(result.errors);
 
     const sanitizedPayload = result.sanitizedPayload;
@@ -248,6 +252,17 @@ export class SlbService {
       ...result,
       currentFormStatusLabel: getFormStatusLabel(toStatus),
     });
+  }
+
+  // ─── Draft validation helpers ──────────────────────────────────────────────
+
+  /** Strips `requiredTrue` validations so `saveDraft` never blocks on an unchecked confirmation checkbox. */
+  private withoutRequiredTrue(fields: FieldConfig[]): FieldConfig[] {
+    return fields.map((field) =>
+      field.validations?.some((v) => v.name === 'requiredTrue')
+        ? { ...field, validations: field.validations.filter((v) => v.name !== 'requiredTrue') }
+        : field,
+    );
   }
 
   // ─── Hydration helpers ─────────────────────────────────────────────────────

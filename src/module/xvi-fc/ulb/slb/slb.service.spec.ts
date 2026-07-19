@@ -70,7 +70,16 @@ const mockFormDoc = {
   }),
 };
 
-const mockSlbFields = [{ key: 'ind1_actual', formFieldType: 'number', label: 'Indicator 1 Actual', fieldTypes: ['SLB_MAIN_FORM_FIELDS'] }];
+const mockSlbFields = [
+  { key: 'ind1_actual', formFieldType: 'number', label: 'Indicator 1 Actual', fieldTypes: ['SLB_MAIN_FORM_FIELDS'] },
+  {
+    key: 'checkboxConfirmation',
+    formFieldType: 'checkbox',
+    label: 'Confirmation',
+    fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
+    validations: [{ name: 'requiredTrue', validator: null, message: 'You must confirm.' }],
+  },
+];
 
 const validDto: SaveSlbDto = {
   ulbId: ulbOid.toString(),
@@ -205,6 +214,14 @@ describe('SlbService', () => {
         ForbiddenException,
       );
     });
+
+    it('strips the requiredTrue validator before validating, so an unchecked confirmation checkbox does not block a draft', async () => {
+      await service.saveDraft(validDto, ulbUser(ulbOid));
+
+      const fieldsPassed = (validator.validateDraftAndBuildPayload as jest.Mock).mock.calls[0][0];
+      const checkboxField = fieldsPassed.find((f: { key: string }) => f.key === 'checkboxConfirmation');
+      expect(checkboxField.validations).toEqual([]);
+    });
   });
 
   describe('finalSubmit', () => {
@@ -223,6 +240,14 @@ describe('SlbService', () => {
       );
 
       await expect(service.finalSubmit(validDto, ulbUser(ulbOid))).rejects.toThrow(ForbiddenException);
+    });
+
+    it('keeps the requiredTrue validator intact — final submit still enforces the confirmation checkbox', async () => {
+      await service.finalSubmit(validDto, ulbUser(ulbOid));
+
+      const fieldsPassed = (validator.validateFinalSubmitAndBuildPayload as jest.Mock).mock.calls[0][0];
+      const checkboxField = fieldsPassed.find((f: { key: string }) => f.key === 'checkboxConfirmation');
+      expect(checkboxField.validations).toEqual([{ name: 'requiredTrue', validator: null, message: 'You must confirm.' }]);
     });
   });
 });
