@@ -169,6 +169,47 @@ describe('SlbService', () => {
     });
   });
 
+  describe('getForm', () => {
+    it('signs a CommonFile-shaped stored value (path) into a downloadable fileUrl', async () => {
+      (slbFormJsonConfig.loadFields as jest.Mock).mockResolvedValue([
+        {
+          key: 'supportingDocumentFile',
+          formFieldType: 'file',
+          label: 'Supporting Document',
+          fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
+        },
+      ]);
+
+      const storedPath =
+        'xvi-fc/ulb/681dd165c11cf21bf1cfd06a/2026-27/slb/supporting-document/income-statement-schedules.pdf';
+      formModel.findOne.mockReturnValue(
+        q({
+          _id: docOid,
+          currentFormStatus: FORM_STATUS.IN_PROGRESS,
+          data: {
+            supportingDocumentFile: {
+              originalName: 'income-statement-schedules.pdf',
+              path: storedPath,
+              mimeType: 'application/pdf',
+              extension: 'pdf',
+              sizeKb: 964.44,
+              pageCount: 6,
+            },
+          },
+        }),
+      );
+
+      const result = await service.getForm(ulbOid.toString(), yearOid.toString(), ulbUser(ulbOid));
+
+      const questions = (result.data as { questions: Array<{ key: string; value?: Record<string, unknown> }> })
+        .questions;
+      const fileQuestion = questions.find((q) => q.key === 'supportingDocumentFile');
+
+      expect(fileQuestion?.value?.['fileUrl']).toBe(`signed::${storedPath}`);
+      expect(fileQuestion?.value?.['path']).toBe(storedPath);
+    });
+  });
+
   describe('assertCanSubmitSlb', () => {
     it('rejects a ULB viewer from submitting', async () => {
       await expect(

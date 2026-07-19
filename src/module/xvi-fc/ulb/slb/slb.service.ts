@@ -282,10 +282,14 @@ export class SlbService {
           ? buildXviFcFolderPath(question.folderPathKey, folderPathContext)
           : question.folderPath;
 
-        const fileVal = value as UploadedFileValue | null | undefined;
-        if (fileVal?.fileUrl) {
+        // Accepts both the `UploadedFileValue` contract (`fileUrl`) and the `CommonFile`
+        // contract (`path`, e.g. supportingDocumentFile) — see normalizeFileForPayload/
+        // validateFileField, which already read both shapes for the same field.
+        const fileVal = value as (UploadedFileValue & { path?: string }) | null | undefined;
+        const rawUrl = fileVal?.fileUrl ?? fileVal?.path;
+        if (rawUrl) {
           try {
-            const signedUrl = this.fileTokenService.signFileUrl(fileVal.fileUrl);
+            const signedUrl = this.fileTokenService.signFileUrl(rawUrl);
             return { ...question, folderPath: resolvedFolderPath, value: { ...fileVal, fileUrl: signedUrl } };
           } catch {
             // keep raw if signing fails
