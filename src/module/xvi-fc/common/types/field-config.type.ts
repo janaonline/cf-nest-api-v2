@@ -123,7 +123,18 @@ export interface UploadedFileValue {
 
 // ─── Field config ─────────────────────────────────────────────────────────────
 
-export type FieldType = 'radio' | 'text' | 'file' | 'date' | 'checkbox' | 'textarea' | 'number' | 'select';
+export type FieldType =
+  | 'radio'
+  | 'text'
+  | 'file'
+  | 'date'
+  | 'checkbox'
+  | 'textarea'
+  | 'number'
+  | 'select'
+  /** Single question rendering two related numeric inputs (Actual/Target) sharing one set of
+   *  validators. Value shape: `{ actual: number | null; target: number | null }`. */
+  | 'actualTarget';
 
 export interface FieldConfig {
   /** Centralized key used by the backend resolver to derive a runtime-contextual folderPath. */
@@ -131,6 +142,8 @@ export interface FieldConfig {
   formFieldType: FieldType;
   key: string;
   label: string;
+  /** 1-based display order, e.g. the row number shown in a numbered question list/table. */
+  position?: number;
   /** Cosmetic flag consumed by section/grid renderers to show a required asterisk next to the label.
    *  Independent of `validations` — a 'required' validator is what's actually enforced. */
   required?: boolean;
@@ -176,6 +189,11 @@ export interface FieldConfig {
   hintText?: string;
   grid?: string;
   maxLength?: number;
+  /** Card-style rendering hints (prefix/suffix text, description) also reused by 'actualTarget'
+   *  fields for the shared unit suffix (e.g. '%', 'lpcd', 'Hours/day'). */
+  inputCardConfig?: { title?: string; description?: string; prefixText?: string; suffixText?: string };
+  /** Free-form, non-functional annotations (e.g. grouping/reporting metadata) — never read by validation or rendering logic. */
+  meta?: Record<string, unknown>;
 }
 
 // ─── Sectioned / resolved form config ──────────────────────────────────────────
