@@ -14,6 +14,9 @@ export interface SlbFormGetResponseData {
   ulbName: string;
   ulbId: string;
   yearId: string;
+  /** Design year label (e.g. "2026-27"), resolved server-side via YearIdToLabel — the
+   *  authoritative source for the "Actual/Target Indicator <year>" table headers. */
+  designYear: string;
   currentFormStatus: number;
   currentFormStatusLabel: string;
   questions: HydratedFieldConfig[];

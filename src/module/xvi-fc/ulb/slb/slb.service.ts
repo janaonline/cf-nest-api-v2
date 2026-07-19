@@ -103,6 +103,7 @@ export class SlbService {
       ulbName,
       ulbId: effectiveUlbId,
       yearId,
+      designYear,
       currentFormStatus,
       currentFormStatusLabel: getFormStatusLabel(currentFormStatus),
       questions,
