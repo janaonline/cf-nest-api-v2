@@ -1,8 +1,6 @@
 import type { ApplicableFc } from 'src/schemas/xvi-fc/state/fc-unspent-state-form.schema';
 
-export const FC_UNSPENT_FORM_NAME = 'FC Unspent Declaration';
 export const FC_UNSPENT_FORM_ID = 25;
-export const FC_UNSPENT_ROUTE_BASE = 'xvi-fc/state/fc-unspent-declaration';
 
 /** Single declaration point — never duplicate this literal elsewhere. */
 export const FC_UNSPENT_ELIGIBILITY_THRESHOLD_PERCENT = 10;
@@ -11,8 +9,6 @@ export const FC_UNSPENT_DECLARATION_ALLOWED_FILE_EXTENSIONS = ['pdf'] as const;
 export const FC_UNSPENT_DECLARATION_ALLOWED_MIME_TYPES = ['application/pdf'] as const;
 export const FC_UNSPENT_DECLARATION_MAX_FILE_SIZE_MB = 5;
 export const FC_UNSPENT_DECLARATION_MAX_FILE_SIZE_BYTES = FC_UNSPENT_DECLARATION_MAX_FILE_SIZE_MB * 1024 * 1024;
-
-export const FC_UNSPENT_DECLARATION_FOLDER_PATH_KEY = 'fc-unspent/fc-declaration';
 
 export const FC_UNSPENT_PAGINATION_DEFAULT_PAGE = 1;
 export const FC_UNSPENT_PAGINATION_DEFAULT_LIMIT = 20;
@@ -42,7 +38,7 @@ export const FC_UNSPENT_BLOCKING_MESSAGE_DEVOLUTION_NOT_READY =
   'Devolution Formula (Installment 1) must be under review by MoHUA before FC Unspent Declaration can be finalized.';
 
 /** One per-design-year declaration-template asset. Raw S3-relative `path` — never a signed URL. */
-export interface FcUnspentDeclarationTemplateConfig {
+interface FcUnspentDeclarationTemplateConfig {
   path: string;
   fileName: string;
   mimeType: string;

@@ -25,12 +25,14 @@ import {
   FC_UNSPENT_DECLARATION_TEMPLATE_ACTION_ID,
   FC_UNSPENT_DECLARATION_TEMPLATE_BY_YEAR,
 } from '../../constants/fc-unspent-declaration.constants';
-import { FC_UNSPENT_STATE_FORM_JSON } from '../../constants/fc-unspent-declaration.form-json.constant';
+import { loadFcUnspentSeedDocument } from '../../constants/fc-unspent-declaration-seed.fixture';
 import type { SaveFcUnspentDeclarationDto } from '../../dto/save-fc-unspent-declaration.dto';
 import type { FcUnspentResolvedRow } from '../../types/fc-unspent-declaration.types';
 import { FcUnspentDeclarationFormJsonService } from '../form-json/fc-unspent-declaration-form-json.service';
 import { FcUnspentDeclarationRowService } from '../rows/fc-unspent-declaration-row.service';
 import { FcUnspentDeclarationService } from './fc-unspent-declaration.service';
+
+const FC_UNSPENT_STATE_FORM_JSON = loadFcUnspentSeedDocument();
 
 // ─── Test helpers ─────────────────────────────────────────────────────────────
 

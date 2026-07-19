@@ -428,7 +428,7 @@ Known test limitations:
 
 - `GET /xvi-fc/state/sfc-status/questions`
   - Permission: `VIEW_STATE_FORMS`
-  - Returns `SFC_STATUS_QUESTIONS` config array for frontend form rendering.
+  - Returns the DB-loaded question config array (via `FormJsonService.findByType('SFC')`) for frontend form rendering.
 
 - `GET /xvi-fc/state/sfc-status/:stateId/:yearId`
   - Permission: `VIEW_STATE_FORMS`
@@ -468,7 +468,7 @@ Known test limitations:
 
 ### Hydration rule
 
-- **No record / Not Started:** Return `SFC_STATUS_QUESTIONS` as-is. Each question's `value` is the template default defined in the questions config.
+- **No record / Not Started:** Return the DB-loaded question config as-is. Each question's `value` is the template default defined in that config.
 - **Record exists:** Shallow-copy each question; replace `value` only when `record.data` has that key (checked via `Object.prototype.hasOwnProperty.call`). Missing keys keep their template default.
 - O(n) — one pass over questions, no extra DB calls.
 
@@ -567,7 +567,7 @@ Source: `buildFormPermissions` in `sfc-status.service.ts`, using `canStateEditFo
 
 ## SFC Status Submit Validation
 
-Validation is driven by `SFC_STATUS_QUESTIONS` (field config array) via `DynamicFormValidationService`.
+Validation is driven by the DB-loaded question config (field config array) via `DynamicFormValidationService`.
 Both save-draft and final-submit evaluate **visible fields only** — hidden fields never block validation or reach the DB.
 
 ### Visibility evaluation
@@ -976,7 +976,7 @@ Before every code push involving XVI-FC backend changes:
 
 **Follow-ups**:
 
-- `sfc-status.constants.ts` (award period hardcoded ranges) is now superseded by the `yearRange` config in questions. Can be removed in a cleanup pass.
+- `sfc-status.constants.ts` (award period hardcoded ranges) was superseded by the `yearRange` config in questions and has been removed.
 - Other state forms (Elected Body Status, Devolution Formula) will reuse `XviFcCommonModule` and the same `FormFieldConfig` pattern.
 
 ---

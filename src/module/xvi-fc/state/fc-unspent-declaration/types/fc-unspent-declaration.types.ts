@@ -75,10 +75,6 @@ export interface FcUnspentUlbOption {
   allocationAmount: number;
 }
 
-export interface FcUnspentResolvedAllocation {
-  allocationAmount: number;
-}
-
 /** A server-validated, server-computed row ready to be upserted into the row collection. */
 export interface FcUnspentResolvedRow {
   ulbId: Types.ObjectId;

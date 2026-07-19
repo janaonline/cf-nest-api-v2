@@ -3,7 +3,6 @@ import type { RowHeader } from 'src/services/excel/excel.service';
 export const DF_FORM_NAME = 'Devolution Formula';
 export const DF_FORM_TYPE = 'DEVOLUTION_FORMULA';
 export const DF_FORM_ID = 24;
-export const DF_ROUTE_BASE = 'xvi-fc/state/devolution-formula';
 
 export const DF_INSTALLMENTS = [1, 2] as const;
 export type DfInstallment = (typeof DF_INSTALLMENTS)[number];

@@ -1,10 +1,12 @@
 import { InternalServerErrorException } from '@nestjs/common';
-import { FC_UNSPENT_STATE_FORM_JSON } from '../constants/fc-unspent-declaration.form-json.constant';
+import { loadFcUnspentSeedDocument } from '../constants/fc-unspent-declaration-seed.fixture';
 import {
   FcUnspentTypedFieldConfig,
   getFcUnspentFieldsByType,
   validateFcUnspentFormJsonData,
 } from './fc-unspent-declaration-form-json.helpers';
+
+const FC_UNSPENT_STATE_FORM_JSON = loadFcUnspentSeedDocument();
 
 describe('getFcUnspentFieldsByType', () => {
   it('filters fields by group and strips fieldTypes from the result', () => {

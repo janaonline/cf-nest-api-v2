@@ -10,7 +10,6 @@ export type EulbFormJsonFieldType =
   | 'EULB_POST_SUBMIT_UPDATE_FIELDS';
 
 export const ELECTED_BODY_STATUSES = ['Constituted', 'Not Constituted', 'Exempt'] as const;
-export type ElectedBodyStatus = (typeof ELECTED_BODY_STATUSES)[number];
 
 export const EXCEL_HEADER_MAP: Record<string, string> = {
   censusCode: 'censusCode',
