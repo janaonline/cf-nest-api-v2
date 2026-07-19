@@ -139,7 +139,7 @@ export class SfcStatusService {
   /**
    * Returns the hydrated SFC Status form for a given state and year.
    * Questions are merged with saved data: answered fields use saved values,
-   * unanswered fields use template defaults from SFC_STATUS_QUESTIONS.
+   * unanswered fields use the `value` default from the DB-loaded question config.
    * Returns a fully hydrated Not Started form when no record exists.
    * One DB query + one O(n) pass — no extra queries.
    *

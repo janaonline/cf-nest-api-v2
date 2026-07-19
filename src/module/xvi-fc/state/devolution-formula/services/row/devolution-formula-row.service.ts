@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, InternalServerErrorException, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model, Types } from 'mongoose';
 import type ExcelJS from 'exceljs';
@@ -29,6 +29,13 @@ import type { RowsQueryDevolutionFormulaDto } from '../../dto/rows-query-devolut
 import type { UpdateRowDevolutionFormulaDto } from '../../dto/update-row-devolution-formula.dto';
 import type { DfFormLeanDoc, DfRowError } from '../../types/devolution-formula.types';
 import { DevolutionFormulaValidator, type DfParsedExcelRow } from '../../validators/devolution-formula.validator';
+import { DfFormJsonConfigService } from '../form-json/devolution-formula-form-json.service';
+import { getDfFieldsByType } from '../../helpers/devolution-formula-form-json.helpers';
+import {
+  keyByFieldKey,
+  requireField,
+  getValidatorValue,
+} from 'src/module/xvi-fc/common/utils/xvi-fc-field-lookup.util';
 
 @Injectable()
 export class DevolutionFormulaRowService {
@@ -39,7 +46,26 @@ export class DevolutionFormulaRowService {
     private readonly rowModel: Model<DevolutionFormulaRowDocument>,
     private readonly dfValidator: DevolutionFormulaValidator,
     private readonly excelService: ExcelService,
+    private readonly dfFormJsonConfig: DfFormJsonConfigService,
   ) {}
+
+  /** DB-driven `devolutionFormula` max length — single source of truth is the DF_ROW_EDIT_FIELDS group. */
+  private async resolveMaxFormulaLength(yearId: string): Promise<number> {
+    const dfFields = await this.dfFormJsonConfig.loadFields(yearId);
+    const rowFields = getDfFieldsByType(dfFields, 'DF_ROW_EDIT_FIELDS');
+    const devolutionFormulaField = requireField(
+      keyByFieldKey(rowFields),
+      'devolutionFormula',
+      'DevolutionFormulaRowService',
+    );
+    const maxLength = getValidatorValue<number>(devolutionFormulaField, 'maxlength');
+    if (maxLength === undefined) {
+      throw new InternalServerErrorException(
+        "DevolutionFormulaRowService: 'devolutionFormula' field is missing a maxlength validator.",
+      );
+    }
+    return maxLength;
+  }
 
   async getRows(
     stateId: string,
@@ -144,8 +170,10 @@ export class DevolutionFormulaRowService {
 
     this.assertNoActiveClaimLockForUlb(row.ulbId ? new Types.ObjectId(String(row.ulbId)) : null, yearId, installment);
 
+    const maxFormulaLength = await this.resolveMaxFormulaLength(yearId);
+
     // Validate the editable fields
-    const fieldErrors = this.dfValidator.validatePortalRowEdit(dto, installment, {
+    const fieldErrors = this.dfValidator.validatePortalRowEdit(dto, installment, maxFormulaLength, {
       totalMoHUAAllocation: (formDoc['totalMoHUAAllocation'] as number | undefined) ?? undefined,
     });
     if (fieldErrors.length > 0) {
@@ -186,7 +214,7 @@ export class DevolutionFormulaRowService {
     if (!row.ulbId) {
       rowErrors.push({ field: 'censusCode', code: 'unknownUlb', message: 'ULB not found in registry.' });
     } else {
-      rowErrors = this.dfValidator.validateRow(parsed, installment, {
+      rowErrors = this.dfValidator.validateRow(parsed, installment, maxFormulaLength, {
         totalMoHUAAllocation: (formDoc['totalMoHUAAllocation'] as number | undefined) ?? undefined,
       });
     }

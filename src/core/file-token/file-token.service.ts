@@ -26,9 +26,9 @@ export class FileTokenService {
     this.baseUrl = cfg.get<string>('BASE_URL', '');
   }
 
-  signFileUrl(url: string): string {
+  signFileUrl(url: string, disposition: 'inline' | 'attachment' = 'attachment'): string {
     if (!url) return url;
-    const token = this.createToken({ path: url, disposition: 'attachment' });
+    const token = this.createToken({ path: url, disposition });
     return `${this.baseUrl}file/download?signature=${token}`;
   }
 

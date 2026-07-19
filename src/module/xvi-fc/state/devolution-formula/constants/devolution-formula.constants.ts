@@ -3,7 +3,6 @@ import type { RowHeader } from 'src/services/excel/excel.service';
 export const DF_FORM_NAME = 'Devolution Formula';
 export const DF_FORM_TYPE = 'DEVOLUTION_FORMULA';
 export const DF_FORM_ID = 24;
-export const DF_ROUTE_BASE = 'xvi-fc/state/devolution-formula';
 
 export const DF_INSTALLMENTS = [1, 2] as const;
 export type DfInstallment = (typeof DF_INSTALLMENTS)[number];
@@ -16,10 +15,13 @@ export const DF_EXCEL_HEADER_MAP: Record<string, string> = {
   'ULB Name': 'ulbName',
   ulbName: 'ulbName',
   'Total Grant Allocation': 'totalGrantAllocation',
+  'Total Grant Allocation (Cr.)': 'totalGrantAllocation',
   totalGrantAllocation: 'totalGrantAllocation',
   'Installment 1 Amount': 'installment1Amount',
+  'Installment 1 Amount (Cr.)': 'installment1Amount',
   installment1Amount: 'installment1Amount',
   'Installment 2 Amount': 'installment2Amount',
+  'Installment 2 Amount (Cr.)': 'installment2Amount',
   installment2Amount: 'installment2Amount',
   'Devolution Formula': 'devolutionFormula',
   devolutionFormula: 'devolutionFormula',
@@ -75,17 +77,6 @@ export const DF_DUMP_HEADERS: RowHeader[] = [
 
 export const DF_FOLDER_PATH_EXCELS = 'devolution-formula/excels';
 export const DF_FOLDER_PATH_ERROR_SHEETS = 'devolution-formula/error-sheets';
-
-// ─── File upload constraints ─────────────────────────────────────────────────
-
-export const DF_MAX_FILE_SIZE_MB = 20;
-export const DF_MAX_FILE_SIZE_BYTES = DF_MAX_FILE_SIZE_MB * 1024 * 1024;
-export const DF_MAX_FORMULA_LENGTH = 250;
-export const DF_ALLOWED_MIME_TYPES = [
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  'application/vnd.ms-excel',
-] as const;
-export const DF_ALLOWED_FILE_EXTENSIONS = ['.xlsx', '.xls'] as const;
 
 // ─── Supporting action keys ──────────────────────────────────────────────────
 

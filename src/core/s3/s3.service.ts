@@ -4,6 +4,7 @@ import {
   S3Client,
   GetObjectCommand,
   HeadObjectCommand,
+  HeadObjectCommandOutput,
   GetObjectCommandOutput,
   PutObjectCommand,
   CopyObjectCommand,
@@ -32,8 +33,8 @@ export class S3Service {
     });
   }
 
-  async headObject(Key: string) {
-    await this.client.send(new HeadObjectCommand({ Bucket: this.bucket, Key }));
+  async headObject(Key: string): Promise<HeadObjectCommandOutput> {
+    return this.client.send(new HeadObjectCommand({ Bucket: this.bucket, Key }));
   }
 
   async getObjectStream(Key: string): Promise<Readable> {

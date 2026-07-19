@@ -1,5 +1,6 @@
 import { ArgumentsHost, Catch, ExceptionFilter, HttpException, HttpStatus, Logger } from '@nestjs/common';
 import { Request, Response } from 'express';
+import { getOrCreateRequestId } from '../utils/request-id.util';
 
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
@@ -9,6 +10,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
     const request = ctx.getRequest<Request>();
+    const requestId = getOrCreateRequestId(request);
 
     let statusCode: number = HttpStatus.INTERNAL_SERVER_ERROR;
     let message = 'Internal server error';
@@ -59,6 +61,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
       statusCode,
       message,
       timestamp: new Date().toISOString(),
+      requestId,
       path: request.url,
     };
     if (errors !== undefined) body['errors'] = errors;

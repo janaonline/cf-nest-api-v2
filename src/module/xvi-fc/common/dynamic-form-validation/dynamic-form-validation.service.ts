@@ -61,8 +61,9 @@ export class DynamicFormValidationService {
       if (validationEnabled) {
         if (isFull) {
           this.accumulateErrors(errors, this.validateField(field, value, true));
-        } else if (!this.isEmptyValue(value) || this.hasRequiredTrue(field)) {
-          // Draft: skip absent fields unless requiredTrue is present
+        } else if (!this.isEmptyValue(value) /* || this.hasRequiredTrue(field) */) {
+          // Draft: skip absent fields. requiredTrue mandatory-on-draft enforcement is
+          // temporarily disabled for now — see the reqTrueV block in validateField below.
           this.accumulateErrors(errors, this.validateField(field, value, false));
         }
       }
@@ -148,10 +149,10 @@ export class DynamicFormValidationService {
 
     const isEmpty = this.isEmptyValue(value);
 
-    // requiredTrue (checkbox) — always enforced: absent = fail, present but not true = fail.
-    // This is intentionally stricter than plain `required` in draft mode.
+    // requiredTrue (checkbox) — mandatory-on-draft enforcement temporarily disabled for now
+    // (was: enforced in both draft and final submit). Still enforced on final submit.
     const reqTrueV = findV('requiredTrue');
-    if (reqTrueV) {
+    if (reqTrueV && isFull) {
       if (isEmpty) {
         return [{ field: key, message: reqTrueV.message, code: 'required' }];
       }

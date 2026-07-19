@@ -22,6 +22,8 @@ import { toObjectIdString } from 'src/common/utils/objectid.util';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
 import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
 import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
+import { keyByFieldKey, requireField } from 'src/module/xvi-fc/common/utils/xvi-fc-field-lookup.util';
+import { deriveFileValidationOptions } from 'src/module/xvi-fc/common/utils/xvi-fc-file-constraint.util';
 import type { FileInfo } from 'src/schemas/common/file.schema';
 import type { FormData } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.types';
 import type {
@@ -58,9 +60,6 @@ import {
   EULB_ACTION_REGISTER_ULB,
   EULB_ACTION_REVALIDATE_EXCEL,
   EULB_ACTION_VIEW_UPLOADED_DATA,
-  EULB_EXCEL_ALLOWED_FILE_EXTENSIONS,
-  EULB_EXCEL_ALLOWED_MIME_TYPES,
-  EULB_EXCEL_MAX_FILE_SIZE_BYTES,
   EULB_FORM_NAME,
   TEMPLATE_HEADERS,
   buildEulbRegisterUlbUrl,
@@ -461,15 +460,15 @@ export class ElectedUrbanLocalBodiesService {
 
     let normalizedExcelFile: FileInfo | null | undefined;
     if (dto.data.electedBodyExcelFile !== undefined) {
+      const excelFileField = requireField(
+        keyByFieldKey(mainFormFields),
+        'electedBodyExcelFile',
+        'ElectedUrbanLocalBodiesService.saveDraft',
+      );
       const { file, errors: fileErrors } = this.fileInfoNormalizer.normalizeInboundFileInfo(
         dto.data.electedBodyExcelFile as unknown as Record<string, unknown>,
         existing?.electedBodyExcelFile,
-        {
-          fieldKey: 'electedBodyExcelFile',
-          allowedExtensions: [...EULB_EXCEL_ALLOWED_FILE_EXTENSIONS],
-          allowedMimeTypes: [...EULB_EXCEL_ALLOWED_MIME_TYPES],
-          maxSizeKb: EULB_EXCEL_MAX_FILE_SIZE_BYTES / 1024,
-        },
+        deriveFileValidationOptions(excelFileField, 'electedBodyExcelFile'),
       );
       if (fileErrors.length > 0) throwXviFcValidationError({ electedBodyExcelFile: fileErrors });
       normalizedExcelFile = file;
@@ -578,15 +577,15 @@ export class ElectedUrbanLocalBodiesService {
     const fromStatus = existing?.currentFormStatus ?? FORM_STATUS.NOT_STARTED;
     assertCanStateFinalSubmitForm(fromStatus);
 
+    const excelFileFieldFinal = requireField(
+      keyByFieldKey(mainFormFields),
+      'electedBodyExcelFile',
+      'ElectedUrbanLocalBodiesService.finalSubmit',
+    );
     const { file: normalizedExcelFile, errors: excelFileErrors } = this.fileInfoNormalizer.normalizeInboundFileInfo(
       dto.data.electedBodyExcelFile as unknown as Record<string, unknown>,
       existing?.electedBodyExcelFile as FileInfo | undefined,
-      {
-        fieldKey: 'electedBodyExcelFile',
-        allowedExtensions: [...EULB_EXCEL_ALLOWED_FILE_EXTENSIONS],
-        allowedMimeTypes: [...EULB_EXCEL_ALLOWED_MIME_TYPES],
-        maxSizeKb: EULB_EXCEL_MAX_FILE_SIZE_BYTES / 1024,
-      },
+      deriveFileValidationOptions(excelFileFieldFinal, 'electedBodyExcelFile'),
     );
     if (excelFileErrors.length > 0) throwXviFcValidationError({ electedBodyExcelFile: excelFileErrors });
 
