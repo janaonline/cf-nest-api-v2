@@ -757,6 +757,64 @@ describe('FcUnspentDeclarationService', () => {
     expect(model['findOneAndUpdate']).not.toHaveBeenCalled();
   });
 
+  // ─── DB-driven rowEditFields (ULB row-table column metadata) ────────────────
+
+  describe('getForm rowEditFields', () => {
+    it('includes rowEditFields in the response with all 8 ULB row-table columns', async () => {
+      const result = await service.getForm(stateOid.toString(), yearOid.toString(), stateUser());
+      expect(result.data!.rowEditFields.map((f) => f.key)).toEqual([
+        'ulbId',
+        'unspentAmount',
+        'censusCode',
+        'sbCode',
+        'ulbName',
+        'allocationAmount',
+        'allocationPerc',
+        'eligibility',
+      ]);
+    });
+
+    it('rowEditFields entries do not expose fieldTypes', async () => {
+      const result = await service.getForm(stateOid.toString(), yearOid.toString(), stateUser());
+      expect(result.data!.rowEditFields.every((f) => !('fieldTypes' in f))).toBe(true);
+    });
+
+    it('questions contains exactly the 3 main fields — row-edit-tagged entries are excluded', async () => {
+      const result = await service.getForm(stateOid.toString(), yearOid.toString(), stateUser());
+      expect(result.data!.questions.map((q) => q.key)).toEqual([
+        'isFcUnspent',
+        'fcDeclaration',
+        'checkboxConfirmation',
+      ]);
+    });
+
+    it('throws InternalServerErrorException when the FC_UNSPENT_ROW_EDIT_FIELDS group is empty', async () => {
+      formJsonConfigService['loadFields'] = jest
+        .fn()
+        .mockResolvedValue(
+          FC_UNSPENT_STATE_FORM_JSON.data.filter((f) => f.fieldTypes[0] !== 'FC_UNSPENT_ROW_EDIT_FIELDS'),
+        );
+      await expect(service.getForm(stateOid.toString(), yearOid.toString(), stateUser())).rejects.toThrow(
+        'FC_UNSPENT_ROW_EDIT_FIELDS group is empty in form configuration.',
+      );
+    });
+
+    it('saveDraft still succeeds when formJson.data includes the 8 row-tagged fields (they must not reach the dynamic validator)', async () => {
+      const dto = baseDto({ isFcUnspent: false });
+      await expect(service.saveDraft(dto, stateUser())).resolves.toBeDefined();
+    });
+
+    it('finalSubmit still succeeds when formJson.data includes the 8 row-tagged fields (they must not reach the dynamic validator)', async () => {
+      rowService['resolveAndValidateRows'].mockResolvedValueOnce({ rows: [sampleResolvedRow], errors: {} });
+      const dto = baseDto({
+        isFcUnspent: true,
+        checkboxConfirmation: true,
+        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5 }],
+      });
+      await expect(service.finalSubmit(dto, stateUser(), '127.0.0.1', 'jest-agent')).resolves.toBeDefined();
+    });
+  });
+
   it('signs the uploaded declaration file inline so it opens in a new tab instead of force-downloading', async () => {
     const storedPath = 'xvi-fc/state/x/2026-27/fc-unspent-declaration/fc-declaration/declaration.pdf';
     model['findOne'] = jest.fn().mockReturnValue(

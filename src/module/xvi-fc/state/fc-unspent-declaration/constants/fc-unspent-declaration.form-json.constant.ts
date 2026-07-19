@@ -1,5 +1,5 @@
-import type { FieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
 import { FC_UNSPENT_STATE_FORM_TYPE } from 'src/schemas/xvi-fc/state/fc-unspent-state-form.schema';
+import type { FcUnspentTypedFieldConfig } from '../helpers/fc-unspent-declaration-form-json.helpers';
 import {
   FC_UNSPENT_DECLARATION_ALLOWED_FILE_EXTENSIONS,
   FC_UNSPENT_DECLARATION_FOLDER_PATH_KEY,
@@ -17,13 +17,19 @@ import {
  * sibling state form (SFC Status/Devolution Formula/Elected Urban Local Bodies).
  * Use this object verbatim as the body of `POST /form-json` (see CreateFormJsonDto,
  * ADMIN-only) to seed the real DB-backed document for a given design year.
+ *
+ * `FC_UNSPENT_MAIN_FORM_FIELDS` — the 3 top-level questions, hydrated into `questions`.
+ * `FC_UNSPENT_ROW_EDIT_FIELDS` — metadata for the 8 ULB row-table columns, exposed as
+ * `rowEditFields` (mirrors DF_ROW_EDIT_FIELDS/EULB_ROW_EDIT_FIELDS). Metadata only: the
+ * ULB options list stays on the separate /ulb-options endpoint, and row validation
+ * (ULB-must-be-active, allocation lookups) stays in FcUnspentDeclarationRowService.
  */
 export const FC_UNSPENT_STATE_FORM_JSON: {
   design_year: string;
   formId: number;
   type: string;
   isActive: boolean;
-  data: FieldConfig[];
+  data: FcUnspentTypedFieldConfig[];
 } = {
   design_year: '67d7d136d3d038946a5239e9', // 2026-27
   formId: FC_UNSPENT_FORM_ID,
@@ -31,6 +37,7 @@ export const FC_UNSPENT_STATE_FORM_JSON: {
   isActive: true,
   data: [
     {
+      fieldTypes: ['FC_UNSPENT_MAIN_FORM_FIELDS'],
       formFieldType: 'radio',
       label: 'Do any ULBs in the state have unspent 14th FC balance to report?',
       key: 'isFcUnspent',
@@ -51,6 +58,7 @@ export const FC_UNSPENT_STATE_FORM_JSON: {
       ],
     },
     {
+      fieldTypes: ['FC_UNSPENT_MAIN_FORM_FIELDS'],
       formFieldType: 'file',
       label: 'State-Level Declaration - 14th Finance Commission',
       key: 'fcDeclaration',
@@ -88,6 +96,7 @@ export const FC_UNSPENT_STATE_FORM_JSON: {
       ],
     },
     {
+      fieldTypes: ['FC_UNSPENT_MAIN_FORM_FIELDS'],
       formFieldType: 'checkbox',
       key: 'checkboxConfirmation',
       label:
@@ -96,6 +105,85 @@ export const FC_UNSPENT_STATE_FORM_JSON: {
       validations: [{ name: 'requiredTrue', validator: null, message: 'Please confirm before submitting.' }],
       visibleWhen: { mode: 'all', conditions: [{ key: 'isFcUnspent', operator: 'equals', value: 'yes' }] },
       clearValueWhenDisabled: true,
+    },
+    // ─── FC_UNSPENT_ROW_EDIT_FIELDS — ULB row-table column metadata ─────────────
+    // Never validated by DynamicFormValidationService (see fc-unspent-declaration.service.ts's
+    // three loadFields call sites, all filtered to FC_UNSPENT_MAIN_FORM_FIELDS before use).
+    {
+      fieldTypes: ['FC_UNSPENT_ROW_EDIT_FIELDS'],
+      formFieldType: 'select',
+      key: 'ulbId',
+      label: 'ULB',
+      // No static `options` — the selectable ULB list is resolved dynamically per state/year
+      // via GET :stateId/:yearId/ulb-options (FcUnspentUlbOptionsService), unchanged by this.
+      validations: [{ name: 'required', validator: null, message: 'ULB selection is required.' }],
+    },
+    {
+      fieldTypes: ['FC_UNSPENT_ROW_EDIT_FIELDS'],
+      formFieldType: 'number',
+      key: 'unspentAmount',
+      label: 'Unspent Amount',
+      validations: [
+        { name: 'required', validator: null, message: 'Unspent amount is required.' },
+        // `min` is inclusive (0 would pass) — Number.MIN_VALUE is the smallest positive
+        // double, so this is effectively "> 0" while still using the standard min validator.
+        { name: 'min', validator: Number.MIN_VALUE, message: 'Unspent amount must be greater than zero.' },
+        { name: 'max', validator: 1000, message: 'Unspent amount cannot exceed 1000.' },
+      ],
+    },
+    {
+      fieldTypes: ['FC_UNSPENT_ROW_EDIT_FIELDS'],
+      formFieldType: 'text',
+      key: 'censusCode',
+      label: 'Census Code',
+      disabled: true,
+      includeInPayload: false,
+      validations: [],
+    },
+    {
+      fieldTypes: ['FC_UNSPENT_ROW_EDIT_FIELDS'],
+      formFieldType: 'text',
+      key: 'sbCode',
+      label: 'SB Code',
+      disabled: true,
+      includeInPayload: false,
+      validations: [],
+    },
+    {
+      fieldTypes: ['FC_UNSPENT_ROW_EDIT_FIELDS'],
+      formFieldType: 'text',
+      key: 'ulbName',
+      label: 'ULB Name',
+      disabled: true,
+      includeInPayload: false,
+      validations: [],
+    },
+    {
+      fieldTypes: ['FC_UNSPENT_ROW_EDIT_FIELDS'],
+      formFieldType: 'number',
+      key: 'allocationAmount',
+      label: 'Devolution Allocation Amount',
+      disabled: true,
+      includeInPayload: false,
+      validations: [],
+    },
+    {
+      fieldTypes: ['FC_UNSPENT_ROW_EDIT_FIELDS'],
+      formFieldType: 'number',
+      key: 'allocationPerc',
+      label: 'Allocation %',
+      disabled: true,
+      includeInPayload: false,
+      validations: [],
+    },
+    {
+      fieldTypes: ['FC_UNSPENT_ROW_EDIT_FIELDS'],
+      formFieldType: 'text',
+      key: 'eligibility',
+      label: 'Eligible',
+      disabled: true,
+      includeInPayload: false,
+      validations: [],
     },
   ],
 };

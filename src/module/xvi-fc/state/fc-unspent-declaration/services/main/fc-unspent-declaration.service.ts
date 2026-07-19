@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, InternalServerErrorException, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
@@ -71,6 +71,7 @@ import type {
 import { SaveFcUnspentDeclarationDto } from '../../dto/save-fc-unspent-declaration.dto';
 import { FcUnspentDeclarationRowService } from '../rows/fc-unspent-declaration-row.service';
 import { FcUnspentDeclarationFormJsonService } from '../form-json/fc-unspent-declaration-form-json.service';
+import { getFcUnspentFieldsByType } from '../../helpers/fc-unspent-declaration-form-json.helpers';
 import { S3Service } from 'src/core/s3/s3.service';
 
 type PopulatedNameRef = { _id?: Types.ObjectId; name?: string };
@@ -142,7 +143,12 @@ export class FcUnspentDeclarationService {
     const permissions = this.buildFormPermissions(user, stateId, currentFormStatus, gates);
     const { actors, stateName } = this.xvifcFormActorsService.buildActorsAndStateName(doc);
 
-    const questionsConfig = await this.formJsonConfigService.loadFields(yearId);
+    const allFields = await this.formJsonConfigService.loadFields(yearId);
+    const questionsConfig = getFcUnspentFieldsByType(allFields, 'FC_UNSPENT_MAIN_FORM_FIELDS');
+    const rowEditFields = getFcUnspentFieldsByType(allFields, 'FC_UNSPENT_ROW_EDIT_FIELDS');
+    if (rowEditFields.length === 0) {
+      throw new InternalServerErrorException('FC_UNSPENT_ROW_EDIT_FIELDS group is empty in form configuration.');
+    }
     const savedData: FormData = {};
     // Stored/validated as a strict boolean (see save DTO), but the radio control and its
     // visibleWhen conditions operate in the 'yes'/'no' string domain — convert for display only.
@@ -173,6 +179,7 @@ export class FcUnspentDeclarationService {
       dependency: gates.dependency,
       actors,
       questions,
+      rowEditFields,
       unspentUlbData,
     };
 
@@ -215,7 +222,8 @@ export class FcUnspentDeclarationService {
       });
     }
 
-    const questions = await this.formJsonConfigService.loadFields(dto.yearId);
+    const allFields = await this.formJsonConfigService.loadFields(dto.yearId);
+    const questions = getFcUnspentFieldsByType(allFields, 'FC_UNSPENT_MAIN_FORM_FIELDS');
     const validatorData: FormData = {
       isFcUnspent: dto.data.isFcUnspent ?? null,
       fcDeclaration: dto.data.fcDeclaration ?? null,
@@ -367,7 +375,8 @@ export class FcUnspentDeclarationService {
       });
     }
 
-    const questions = await this.formJsonConfigService.loadFields(dto.yearId);
+    const allFields = await this.formJsonConfigService.loadFields(dto.yearId);
+    const questions = getFcUnspentFieldsByType(allFields, 'FC_UNSPENT_MAIN_FORM_FIELDS');
     const validatorData: FormData = {
       isFcUnspent: dto.data.isFcUnspent ?? null,
       fcDeclaration: dto.data.fcDeclaration ?? existing?.fcDeclaration ?? null,
