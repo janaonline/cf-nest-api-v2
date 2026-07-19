@@ -1481,14 +1481,14 @@ Safe replace order enforced in `validateExcel` (`POST validate-excel`):
 
 **Key → subpath mapping**:
 
-| Key                          | Subpath                               |
-| ---------------------------- | ------------------------------------- |
-| `SFC_EXTENSION_ORDER`        | `sfc-status/extension-order`          |
-| `SFC_REPORT`                 | `sfc-status/sfc-report`               |
-| `SFC_ATR_REPORT`             | `sfc-status/atr-report`               |
-| `SFC_GAZETTE_NOTIFICATION`   | `sfc-status/gazette-notification`     |
-| `EULB_EXCEL`                 | `elected-body/elected-bodies-list`    |
-| `EULB_POST_SUBMISSION_PROOF` | `elected-body/proof-of-election` |
+| Key                          | Subpath                            |
+| ---------------------------- | ---------------------------------- |
+| `SFC_EXTENSION_ORDER`        | `sfc-status/extension-order`       |
+| `SFC_REPORT`                 | `sfc-status/sfc-report`            |
+| `SFC_ATR_REPORT`             | `sfc-status/atr-report`            |
+| `SFC_GAZETTE_NOTIFICATION`   | `sfc-status/gazette-notification`  |
+| `EULB_EXCEL`                 | `elected-body/elected-bodies-list` |
+| `EULB_POST_SUBMISSION_PROOF` | `elected-body/proof-of-election`   |
 
 **Modified files**:
 
@@ -1645,7 +1645,7 @@ Example: `xvi-fc/state/5dcf9d7416a06aed41c748f0/2026-27/sfc-status/sfc-report`
 
 **Workflow**: `NOT_STARTED` → (save-draft) → `IN_PROGRESS` → (final-submit) → `UNDER_REVIEW_BY_STATE`. Added `assertCanUlbEditForm`/`assertCanUlbSubmitForm` throwing wrappers to `xvi-fc-form-status-access.util.ts` (the boolean `canUlbEditForm`/`canUlbSubmitForm` already existed but had no STATE-equivalent throwing helper).
 
-**Seed data**: 28 indicators (Water Supply, Sewerage & Waste Water, Solid Waste Management, Storm Water Drainage sectors) × Actual/Target = 56 `number` fields with unit `suffixText` (lpcd/%/Hours per day/Non. per year), plus `declarantName`/`declarantDesignation`/`supportingDocument`/`checkboxConfirmation` — all tagged `fieldTypes: ['SLB_MAIN_FORM_FIELDS']`. JSON payload at `scripts/seed-data/slb-form-json.json`; POST it to `/form-json` with a real `design_year` ObjectId before the form is usable for that design year (currently a placeholder value).
+**Seed data**: 28 indicators (Water Supply, Sewerage & Waste Water, Solid Waste Management, Storm Water Drainage sectors) × Actual/Target = 56 `number` fields with unit `suffixText` (lpcd/%/Hours per day/Non. per year), plus `declarantName`/`declarantDesignation`/`supportingDocumentFile`/`checkboxConfirmation` — all tagged `fieldTypes: ['SLB_MAIN_FORM_FIELDS']`. JSON payload at `scripts/seed-data/slb-form-json.json`; POST it to `/form-json` with a real `design_year` ObjectId before the form is usable for that design year (currently a placeholder value).
 
 **Known gaps / follow-ups** (explicitly out of scope for v1):
 
@@ -1670,7 +1670,7 @@ Example: `xvi-fc/state/5dcf9d7416a06aed41c748f0/2026-27/sfc-status/sfc-report`
 - New `ActualTargetComponent` (`app-actual-target`, `shared/dynamic-form/components/actual-target/`) renders two number inputs (Actual/Target) bound to the nested sub-group, wired into `DynamicFormComponent`'s switch.
 - `DynamicFieldViewComponent` (readonly mode) got a matching `'actualTarget'` case.
 
-**Fragility found and worked around**: giving `DynamicFormService.createContorl` an *inferred* return type (previously implicitly `FormControl`, now a `FormControl | FormGroup` union) caused spurious `TS2554: Expected 0 arguments` compile errors in unrelated files (`devolution-formula-rows-dialog.component.ts`, `eulb-rows-dialog.component.ts`, `eulb-post-update.component.ts`) on their `.pipe(takeUntil(...), takeUntilDestroyed(...))` calls — reproduced deterministically via bisection, fixed by adding an explicit `createContorl(...): AbstractControl` return type annotation. Also confirmed (again via bisection) that adding a new top-level `suffixText` prop directly to the shared `FieldConfig` interface reproduced the same class of error, independent of the return-type issue — this is why the unit suffix reuses `inputCardConfig.suffixText` instead of a new field. Root cause not fully understood (looks like a whole-program TS/esbuild type-instantiation budget issue triggered by widening a foundational, widely-imported interface/return type) — worth keeping in mind before adding new properties to `FieldConfig` or changing `DynamicFormService`'s public method signatures.
+**Fragility found and worked around**: giving `DynamicFormService.createContorl` an _inferred_ return type (previously implicitly `FormControl`, now a `FormControl | FormGroup` union) caused spurious `TS2554: Expected 0 arguments` compile errors in unrelated files (`devolution-formula-rows-dialog.component.ts`, `eulb-rows-dialog.component.ts`, `eulb-post-update.component.ts`) on their `.pipe(takeUntil(...), takeUntilDestroyed(...))` calls — reproduced deterministically via bisection, fixed by adding an explicit `createContorl(...): AbstractControl` return type annotation. Also confirmed (again via bisection) that adding a new top-level `suffixText` prop directly to the shared `FieldConfig` interface reproduced the same class of error, independent of the return-type issue — this is why the unit suffix reuses `inputCardConfig.suffixText` instead of a new field. Root cause not fully understood (looks like a whole-program TS/esbuild type-instantiation budget issue triggered by widening a foundational, widely-imported interface/return type) — worth keeping in mind before adding new properties to `FieldConfig` or changing `DynamicFormService`'s public method signatures.
 
 **Seed data**: `scripts/seed-data/slb-form-json.json` updated from 60 fields (56 indicator + 4 declaration) to 32 (28 indicator `actualTarget` questions + 4 declaration fields).
 

@@ -1077,7 +1077,7 @@
       ]
     },
     {
-      "key": "supportingDocument",
+      "key": "supportingDocumentFile",
       "label": "Supporting Document",
       "formFieldType": "file",
       "required": true,
