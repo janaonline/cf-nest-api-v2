@@ -23,7 +23,13 @@ import type {
 import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
 import type { XvifcActorSourceDocument } from 'src/module/xvi-fc/common/types/xvifc-form-actors.type';
 import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
-import { applyActionVisibility } from 'src/module/xvi-fc/common/utils/xvi-fc-supporting-content-visibility.util';
+import {
+  applyActionVisibility,
+  findSupportingAction,
+  stripSupportingContentMeta,
+} from 'src/module/xvi-fc/common/utils/xvi-fc-supporting-content-visibility.util';
+import { keyByFieldKey, requireField } from 'src/module/xvi-fc/common/utils/xvi-fc-field-lookup.util';
+import { deriveFileValidationOptions } from 'src/module/xvi-fc/common/utils/xvi-fc-file-constraint.util';
 import type { FileInfo } from 'src/schemas/common/file.schema';
 import {
   buildXviFcFolderPath,
@@ -48,11 +54,7 @@ import {
 } from 'src/schemas/xvi-fc/state/devolution-formula-form.schema';
 import {
   FC_UNSPENT_APPLICABLE_FC_BY_YEAR_LABEL,
-  FC_UNSPENT_DECLARATION_ALLOWED_FILE_EXTENSIONS,
-  FC_UNSPENT_DECLARATION_ALLOWED_MIME_TYPES,
-  FC_UNSPENT_DECLARATION_MAX_FILE_SIZE_BYTES,
   FC_UNSPENT_DECLARATION_TEMPLATE_ACTION_ID,
-  FC_UNSPENT_DECLARATION_TEMPLATE_BY_YEAR,
   FC_UNSPENT_DEVOLUTION_INSTALLMENT,
   FC_UNSPENT_ELIGIBILITY_THRESHOLD_PERCENT,
   FC_UNSPENT_BLOCKING_MESSAGE_MISSING_DEVOLUTION,
@@ -159,13 +161,7 @@ export class FcUnspentDeclarationService {
     if (doc?.checkboxConfirmation !== undefined) savedData['checkboxConfirmation'] = doc.checkboxConfirmation;
 
     const folderPathContext: XviFcFolderPathContext = { _id: stateId, role: 'state', designYear };
-    const questions = this.hydrateQuestions(
-      questionsConfig,
-      savedData,
-      folderPathContext,
-      permissions.canEdit,
-      designYear,
-    );
+    const questions = this.hydrateQuestions(questionsConfig, savedData, folderPathContext, permissions.canEdit);
 
     const activeRows = doc ? await this.rowService.getActiveRows(doc._id) : [];
     const unspentUlbData = activeRows.map((row) => this.mapRowToResponse(row));
@@ -253,15 +249,15 @@ export class FcUnspentDeclarationService {
         });
       }
       if (dto.data.fcDeclaration !== undefined) {
+        const fcDeclarationField = requireField(
+          keyByFieldKey(questions),
+          'fcDeclaration',
+          'FcUnspentDeclarationService.saveDraft',
+        );
         const { file, errors } = this.fileInfoNormalizer.normalizeInboundFileInfo(
           dto.data.fcDeclaration as unknown as Record<string, unknown>,
           existing?.fcDeclaration,
-          {
-            fieldKey: 'fcDeclaration',
-            allowedExtensions: [...FC_UNSPENT_DECLARATION_ALLOWED_FILE_EXTENSIONS],
-            allowedMimeTypes: [...FC_UNSPENT_DECLARATION_ALLOWED_MIME_TYPES],
-            maxSizeKb: FC_UNSPENT_DECLARATION_MAX_FILE_SIZE_BYTES / 1024,
-          },
+          deriveFileValidationOptions(fcDeclarationField, 'fcDeclaration'),
         );
         if (errors.length > 0) throwXviFcValidationError({ fcDeclaration: errors });
         fcDeclaration = file;
@@ -418,15 +414,15 @@ export class FcUnspentDeclarationService {
           fcDeclaration: [{ field: 'fcDeclaration', code: 'required', message: 'Signed declaration is required.' }],
         });
       }
+      const fcDeclarationField = requireField(
+        keyByFieldKey(questions),
+        'fcDeclaration',
+        'FcUnspentDeclarationService.finalSubmit',
+      );
       const { file, errors } = this.fileInfoNormalizer.normalizeInboundFileInfo(
         dto.data.fcDeclaration as unknown as Record<string, unknown>,
         existing?.fcDeclaration,
-        {
-          fieldKey: 'fcDeclaration',
-          allowedExtensions: [...FC_UNSPENT_DECLARATION_ALLOWED_FILE_EXTENSIONS],
-          allowedMimeTypes: [...FC_UNSPENT_DECLARATION_ALLOWED_MIME_TYPES],
-          maxSizeKb: FC_UNSPENT_DECLARATION_MAX_FILE_SIZE_BYTES / 1024,
-        },
+        deriveFileValidationOptions(fcDeclarationField, 'fcDeclaration'),
       );
       if (errors.length > 0) throwXviFcValidationError({ fcDeclaration: errors });
       finalFcDeclaration = file;
@@ -562,8 +558,6 @@ export class FcUnspentDeclarationService {
 
     const stateOid = new Types.ObjectId(stateId);
     const yearOid = new Types.ObjectId(yearId);
-    const designYear = YearIdToLabel[yearId];
-    if (!designYear) throw new NotFoundException(`Design year not found for yearId: ${yearId}`);
 
     const doc = await this.model
       .findOne({ state: stateOid, year: yearOid, formType: FC_UNSPENT_STATE_FORM_TYPE, isDeleted: false })
@@ -579,7 +573,14 @@ export class FcUnspentDeclarationService {
       throw new ForbiddenException(`Form cannot be edited when status is ${getFormStatusLabel(currentFormStatus)}.`);
     }
 
-    const template = FC_UNSPENT_DECLARATION_TEMPLATE_BY_YEAR[designYear];
+    const allFields = await this.formJsonConfigService.loadFields(yearId);
+    const mainFields = getFcUnspentFieldsByType(allFields, 'FC_UNSPENT_MAIN_FORM_FIELDS');
+    const fcDeclarationField = requireField(
+      keyByFieldKey(mainFields),
+      'fcDeclaration',
+      'FcUnspentDeclarationService.getDeclarationTemplate',
+    );
+    const template = this.resolveDeclarationTemplateMeta(fcDeclarationField);
     if (!template) {
       throwXviFcValidationError({
         fcDeclaration: [
@@ -613,6 +614,37 @@ export class FcUnspentDeclarationService {
       mimeType: template.mimeType,
       url,
     });
+  }
+
+  /**
+   * Reads the design-year-specific declaration template asset (S3 path/fileName/mimeType) off
+   * the `fcDeclaration` field's `download-template` supporting action `meta` — DB-driven, single
+   * source of truth. Returns `undefined` (not a thrown error) when the action or a well-formed
+   * `meta` is absent — that's an expected, legitimate state for a design year whose template
+   * hasn't been approved/uploaded yet, not a malformed-config bug.
+   */
+  private resolveDeclarationTemplateMeta(
+    fcDeclarationField: FieldConfig,
+  ): { path: string; fileName: string; mimeType: string } | undefined {
+    const action = findSupportingAction(
+      fcDeclarationField.supportingContent,
+      FC_UNSPENT_DECLARATION_TEMPLATE_ACTION_ID,
+    );
+    const meta = action?.meta;
+    const path = meta?.['path'];
+    const fileName = meta?.['fileName'];
+    const mimeType = meta?.['mimeType'];
+    if (
+      typeof path !== 'string' ||
+      !path ||
+      typeof fileName !== 'string' ||
+      !fileName ||
+      typeof mimeType !== 'string' ||
+      !mimeType
+    ) {
+      return undefined;
+    }
+    return { path, fileName, mimeType };
   }
 
   // ─── Devolution dependency ──────────────────────────────────────────────────
@@ -754,9 +786,13 @@ export class FcUnspentDeclarationService {
     savedData: FormData,
     folderPathContext: XviFcFolderPathContext,
     canEdit: boolean,
-    designYear: string,
   ): HydratedFieldConfig[] {
-    const templateConfigured = !!FC_UNSPENT_DECLARATION_TEMPLATE_BY_YEAR[designYear];
+    // `meta` is a backend-only extension point (see SupportingContentAction.meta) — every
+    // question returned from this function must have it stripped before it reaches the client.
+    const finalize = (q: HydratedFieldConfig): HydratedFieldConfig => ({
+      ...q,
+      supportingContent: stripSupportingContentMeta(q.supportingContent),
+    });
 
     return questions.map((question) => {
       const value = Object.prototype.hasOwnProperty.call(savedData, question.key)
@@ -777,15 +813,17 @@ export class FcUnspentDeclarationService {
           folderPath: resolvedFolderPath,
           value: hydrated ?? value,
         };
-        return question.key === 'fcDeclaration'
-          ? this.hydrateDeclarationTemplateAction(hydratedQuestion, canEdit && templateConfigured)
-          : hydratedQuestion;
+        if (question.key === 'fcDeclaration') {
+          const templateConfigured = !!this.resolveDeclarationTemplateMeta(question);
+          return finalize(this.hydrateDeclarationTemplateAction(hydratedQuestion, canEdit && templateConfigured));
+        }
+        return finalize(hydratedQuestion);
       }
 
       const hydratedQuestion: HydratedFieldConfig = { ...question, value };
       return question.key === 'isFcUnspent'
-        ? this.hydrateIsFcUnspentSupportingContent(hydratedQuestion, canEdit)
-        : hydratedQuestion;
+        ? finalize(this.hydrateIsFcUnspentSupportingContent(hydratedQuestion, canEdit))
+        : finalize(hydratedQuestion);
     });
   }
 

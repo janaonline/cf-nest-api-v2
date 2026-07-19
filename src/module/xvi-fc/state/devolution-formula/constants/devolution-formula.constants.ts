@@ -78,17 +78,6 @@ export const DF_DUMP_HEADERS: RowHeader[] = [
 export const DF_FOLDER_PATH_EXCELS = 'devolution-formula/excels';
 export const DF_FOLDER_PATH_ERROR_SHEETS = 'devolution-formula/error-sheets';
 
-// ─── File upload constraints ─────────────────────────────────────────────────
-
-export const DF_MAX_FILE_SIZE_MB = 20;
-export const DF_MAX_FILE_SIZE_BYTES = DF_MAX_FILE_SIZE_MB * 1024 * 1024;
-export const DF_MAX_FORMULA_LENGTH = 250;
-export const DF_ALLOWED_MIME_TYPES = [
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  'application/vnd.ms-excel',
-] as const;
-export const DF_ALLOWED_FILE_EXTENSIONS = ['.xlsx', '.xls'] as const;
-
 // ─── Supporting action keys ──────────────────────────────────────────────────
 
 export const DF_ACTION_DOWNLOAD_TEMPLATE = 'download-template';

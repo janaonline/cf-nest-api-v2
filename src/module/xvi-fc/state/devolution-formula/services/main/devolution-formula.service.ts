@@ -18,6 +18,8 @@ import { toObjectIdString } from 'src/common/utils/objectid.util';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
 import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
 import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
+import { keyByFieldKey, requireField } from 'src/module/xvi-fc/common/utils/xvi-fc-field-lookup.util';
+import { deriveFileValidationOptions } from 'src/module/xvi-fc/common/utils/xvi-fc-file-constraint.util';
 import type { FileInfo } from 'src/schemas/common/file.schema';
 import type { FormData } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.types';
 import type {
@@ -54,11 +56,8 @@ import {
   DF_ACTION_REGISTER_ULB,
   DF_ACTION_REVALIDATE_EXCEL,
   DF_ACTION_VIEW_UPLOADED_DATA,
-  DF_ALLOWED_FILE_EXTENSIONS,
-  DF_ALLOWED_MIME_TYPES,
   DF_DUMP_HEADERS,
   DF_FORM_NAME,
-  DF_MAX_FILE_SIZE_BYTES,
   buildDfRegisterUlbUrl,
 } from '../../constants/devolution-formula.constants';
 import { DfFormJsonConfigService } from '../form-json/devolution-formula-form-json.service';
@@ -227,17 +226,20 @@ export class DevolutionFormulaService {
       this.ulbModel.countDocuments({ state: stateOid, isActive: true }),
     ]);
 
+    const dfFields = await this.dfFormJsonConfig.loadFields(dto.yearId);
+    const dfMainFields = getDfFieldsByType(dfFields, 'DF_MAIN_FORM_FIELDS');
+
     let normalizedFile: FileInfo | null | undefined;
     if (dto.data?.excelFile !== undefined) {
+      const excelFileField = requireField(
+        keyByFieldKey(dfMainFields),
+        'excelFile',
+        'DevolutionFormulaService.saveDraft',
+      );
       const { file, errors: fileErrors } = this.fileInfoNormalizer.normalizeInboundFileInfo(
         dto.data.excelFile as unknown as Record<string, unknown>,
         existing?.excelFile,
-        {
-          fieldKey: 'excelFile',
-          allowedExtensions: [...DF_ALLOWED_FILE_EXTENSIONS],
-          allowedMimeTypes: [...DF_ALLOWED_MIME_TYPES],
-          maxSizeKb: DF_MAX_FILE_SIZE_BYTES / 1024,
-        },
+        deriveFileValidationOptions(excelFileField, 'excelFile'),
       );
       if (fileErrors.length > 0) throwXviFcValidationError({ excelFile: fileErrors });
       normalizedFile = file;
@@ -247,11 +249,7 @@ export class DevolutionFormulaService {
     if (normalizedFile !== undefined) formData['excelFile'] = normalizedFile;
     if (dto.data?.checkboxConfirmation !== undefined) formData['checkboxConfirmation'] = dto.data.checkboxConfirmation;
 
-    const dfFields = await this.dfFormJsonConfig.loadFields(dto.yearId);
-    const validation = this.dynamicFormValidator.validateDraftAndBuildPayload(
-      getDfFieldsByType(dfFields, 'DF_MAIN_FORM_FIELDS'),
-      formData,
-    );
+    const validation = this.dynamicFormValidator.validateDraftAndBuildPayload(dfMainFields, formData);
     if (!validation.isValid) throwXviFcValidationError(validation.errors);
 
     const update: Record<string, unknown> = {
@@ -306,15 +304,18 @@ export class DevolutionFormulaService {
 
     assertCanStateFinalSubmitForm(form.currentFormStatus ?? FORM_STATUS.NOT_STARTED);
 
+    const dfFields = await this.dfFormJsonConfig.loadFields(dto.yearId);
+    const dfMainFields = getDfFieldsByType(dfFields, 'DF_MAIN_FORM_FIELDS');
+    const excelFileField = requireField(
+      keyByFieldKey(dfMainFields),
+      'excelFile',
+      'DevolutionFormulaService.finalSubmit',
+    );
+
     const { file: normalizedFile, errors: fileErrors } = this.fileInfoNormalizer.normalizeInboundFileInfo(
       dto.data.excelFile as unknown as Record<string, unknown>,
       form.excelFile,
-      {
-        fieldKey: 'excelFile',
-        allowedExtensions: [...DF_ALLOWED_FILE_EXTENSIONS],
-        allowedMimeTypes: [...DF_ALLOWED_MIME_TYPES],
-        maxSizeKb: DF_MAX_FILE_SIZE_BYTES / 1024,
-      },
+      deriveFileValidationOptions(excelFileField, 'excelFile'),
     );
     if (fileErrors.length > 0) throwXviFcValidationError({ excelFile: fileErrors });
 
@@ -327,11 +328,7 @@ export class DevolutionFormulaService {
       checkboxConfirmation: dto.data.checkboxConfirmation,
     };
 
-    const dfFields = await this.dfFormJsonConfig.loadFields(dto.yearId);
-    const validation = this.dynamicFormValidator.validateFinalSubmitAndBuildPayload(
-      getDfFieldsByType(dfFields, 'DF_MAIN_FORM_FIELDS'),
-      formData,
-    );
+    const validation = this.dynamicFormValidator.validateFinalSubmitAndBuildPayload(dfMainFields, formData);
     if (!validation.isValid) throwXviFcValidationError(validation.errors);
 
     // Prerequisite gate for installment 1

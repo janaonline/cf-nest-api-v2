@@ -72,6 +72,11 @@ export function loadFcUnspentSeedDocument(): {
                 icon: 'bi bi-file-earmark-word',
                 tone: 'primary',
                 visible: true,
+                meta: {
+                  path: 'xvi-fc/state/common/2026-27/fc-unspent/fc-declaration-template/FC-Unspent-Declaration_9ef58a73-82ef-43b7-991f-02257fcde890.docx',
+                  fileName: 'FC-Unspent-Declaration-2026-27.docx',
+                  mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                },
               },
             ],
             badges: [],

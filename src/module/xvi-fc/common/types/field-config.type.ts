@@ -79,6 +79,12 @@ export interface SupportingContentAction {
   disabled?: boolean;
   loading?: boolean;
   loadingLabel?: string;
+  /**
+   * Backend-only extension data (e.g. a raw S3 path backing a template-download
+   * action) — never send this to the client as-is. Strip it via
+   * `stripSupportingContentMeta()` (`common/utils/xvi-fc-supporting-content-visibility.util.ts`)
+   * before any field reaches an API response.
+   */
   meta?: Record<string, unknown>;
 }
 

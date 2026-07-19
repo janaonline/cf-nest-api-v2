@@ -312,6 +312,47 @@ const mockPostSubmitTypedFields: EulbTypedFieldConfig[] = [
     fieldTypes: ['EULB_ROW_EDIT_FIELDS', 'EULB_POST_SUBMIT_UPDATE_FIELDS'],
     validations: [{ name: 'maxlength', validator: 250, message: 'Remarks must not exceed 250 characters.' }],
   },
+  {
+    key: 'electedBodyStatus',
+    label: 'Elected Body Status',
+    formFieldType: 'select',
+    fieldTypes: ['EULB_ROW_EDIT_FIELDS'],
+    options: [
+      { id: 'Constituted', label: 'Constituted' },
+      { id: 'Not Constituted', label: 'Not Constituted' },
+      { id: 'Exempt', label: 'Exempt' },
+    ],
+    validations: [{ name: 'required', validator: null, message: 'Elected Body Status is required.' }],
+  },
+  {
+    key: 'censusCode',
+    label: 'Census Code',
+    formFieldType: 'text',
+    fieldTypes: ['EULB_EXTRA_ULB_PORTAL_FIELDS'],
+    validations: [
+      { name: 'required', validator: null, message: 'Census code is required.' },
+      { name: 'maxlength', validator: 10, message: 'Census code must not exceed 10 characters.' },
+    ],
+  },
+  {
+    key: 'ulbName',
+    label: 'ULB Name',
+    formFieldType: 'text',
+    fieldTypes: ['EULB_EXTRA_ULB_PORTAL_FIELDS'],
+    validations: [
+      { name: 'required', validator: null, message: 'ULB name is required.' },
+      { name: 'maxlength', validator: 250, message: 'ULB name must not exceed 250 characters.' },
+    ],
+  },
+  {
+    key: 'proofOfElection',
+    label: 'Proof of Election',
+    formFieldType: 'file',
+    fieldTypes: ['EULB_POST_SUBMIT_UPDATE_FIELDS'],
+    allowedFileTypes: ['pdf'],
+    maxFileSize: 20,
+    validations: [{ name: 'required', validator: null, message: 'This field is required.' }],
+  },
 ];
 
 const mockEulbFormJsonConfigService = {
