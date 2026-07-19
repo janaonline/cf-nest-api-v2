@@ -16,7 +16,6 @@ import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { ConfigService } from '@nestjs/config';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { AccessLevel, Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
-import { ELECTED_BODY_STATUSES } from 'src/module/xvi-fc/state/elected-urban-local-bodies/constants/elected-urban-local-bodies.constants';
 import { EulbFormJsonConfigService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/form-json/elected-urban-local-bodies-form-json.service';
 import type { EulbTypedFieldConfig } from 'src/module/xvi-fc/state/elected-urban-local-bodies/helpers/elected-urban-local-bodies-form-json.helpers';
 import type { FormFieldOption } from 'src/module/xvi-fc/common/types/field-config.type';
@@ -223,6 +222,8 @@ const MOCK_TYPED_ROW_EDIT_FIELDS: EulbTypedFieldConfig[] = [
     formFieldType: 'file',
     fieldTypes: ['EULB_MAIN_FORM_FIELDS'],
     folderPath: 'state/test/',
+    allowedFileTypes: ['xlsx', 'xls'],
+    maxFileSize: 20,
     validations: [],
   },
   {
@@ -244,7 +245,7 @@ const MOCK_TYPED_ROW_EDIT_FIELDS: EulbTypedFieldConfig[] = [
     label: 'Elected Body Status',
     formFieldType: 'select',
     fieldTypes: ['EULB_ROW_EDIT_FIELDS'],
-    options: ELECTED_BODY_STATUSES.map((s) => ({ id: s, label: s })) as FormFieldOption[],
+    options: ['Constituted', 'Not Constituted', 'Exempt'].map((s) => ({ id: s, label: s })) as FormFieldOption[],
     validations: [{ name: 'required', validator: null, message: 'Elected Body Status is required.' }],
   },
   {

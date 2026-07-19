@@ -1,11 +1,7 @@
 import { Injectable, InternalServerErrorException } from '@nestjs/common';
-import {
-  ELECTED_BODY_STATUSES,
-  EULB_CENSUS_CODE_MAX_LENGTH,
-  EULB_ULB_NAME_MAX_LENGTH,
-} from 'src/module/xvi-fc/state/elected-urban-local-bodies/constants/elected-urban-local-bodies.constants';
 import type { EulbRowError } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
-import type { FieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
+import type { FieldConfig, FormFieldOption } from 'src/module/xvi-fc/common/types/field-config.type';
+import { getValidatorValue } from 'src/module/xvi-fc/common/utils/xvi-fc-field-lookup.util';
 
 export interface EulbDateValidationConfig {
   /** Static minDate for dateOfConstitution, parsed as UTC start-of-day. */
@@ -20,6 +16,12 @@ export interface EulbDateValidationConfig {
   expiryMinMessage: string;
   remarksMaxLength: number;
   remarksMaxLengthMessage: string;
+  /** DB-driven — single source of truth for censusCode/ulbName length and the electedBodyStatus enum. */
+  censusCodeMaxLength: number;
+  censusCodeMaxLengthMessage: string;
+  ulbNameMaxLength: number;
+  ulbNameMaxLengthMessage: string;
+  electedBodyStatuses: string[];
 }
 
 function parseDateBoundary(iso: string, mode: 'min' | 'max'): Date {
@@ -30,13 +32,26 @@ function parseDateBoundary(iso: string, mode: 'min' | 'max'): Date {
     : new Date(Date.UTC(y, m - 1, d, 23, 59, 59, 999));
 }
 
-/** Derives EulbDateValidationConfig from the DB-backed ROW_EDIT_FIELDS group. */
-export function extractDateConfig(rowEditFields: FieldConfig[]): EulbDateValidationConfig {
+/**
+ * Derives EulbDateValidationConfig from the DB-backed ROW_EDIT_FIELDS group (dates, remarks,
+ * electedBodyStatus enum) and EXTRA_ULB_PORTAL_FIELDS group (censusCode/ulbName max length —
+ * these two keys aren't tagged ROW_EDIT_FIELDS in the DB document). Single source of truth for
+ * every limit here; nothing in this function is hardcoded.
+ */
+export function extractDateConfig(
+  rowEditFields: FieldConfig[],
+  extraUlbPortalFields: FieldConfig[],
+): EulbDateValidationConfig {
   const cField = rowEditFields.find((f) => f.key === 'dateOfConstitution');
   const eField = rowEditFields.find((f) => f.key === 'dateOfExpiry');
   const rField = rowEditFields.find((f) => f.key === 'remarks');
-  if (!cField || !eField || !rField) {
-    throw new InternalServerErrorException('EULB ROW_EDIT_FIELDS is missing required date/remarks fields.');
+  const statusField = rowEditFields.find((f) => f.key === 'electedBodyStatus');
+  const censusCodeField = extraUlbPortalFields.find((f) => f.key === 'censusCode');
+  const ulbNameField = extraUlbPortalFields.find((f) => f.key === 'ulbName');
+  if (!cField || !eField || !rField || !statusField || !censusCodeField || !ulbNameField) {
+    throw new InternalServerErrorException(
+      'EULB ROW_EDIT_FIELDS/EXTRA_ULB_PORTAL_FIELDS is missing required date/remarks/status/census/ulbName fields.',
+    );
   }
   const cMinV = cField.validations?.find((v) => v.name === 'minDate');
   const cMaxV = cField.validations?.find((v) => v.name === 'maxDate');
@@ -52,6 +67,23 @@ export function extractDateConfig(rowEditFields: FieldConfig[]): EulbDateValidat
   if (typeof rMaxV.validator !== 'number') {
     throw new InternalServerErrorException('EULB ROW_EDIT_FIELDS maxlength validator must be a number.');
   }
+
+  const censusMaxV = getValidatorValue<number>(censusCodeField, 'maxlength');
+  const censusMaxMessage = censusCodeField.validations?.find((v) => v.name.toLowerCase() === 'maxlength')?.message;
+  const ulbNameMaxV = getValidatorValue<number>(ulbNameField, 'maxlength');
+  const ulbNameMaxMessage = ulbNameField.validations?.find((v) => v.name.toLowerCase() === 'maxlength')?.message;
+  if (censusMaxV === undefined || !censusMaxMessage || ulbNameMaxV === undefined || !ulbNameMaxMessage) {
+    throw new InternalServerErrorException(
+      'EULB EXTRA_ULB_PORTAL_FIELDS censusCode/ulbName maxlength validations are incomplete.',
+    );
+  }
+
+  const statusOptions = statusField.options;
+  if (!statusOptions || statusOptions.length === 0) {
+    throw new InternalServerErrorException('EULB ROW_EDIT_FIELDS electedBodyStatus is missing its options list.');
+  }
+  const electedBodyStatuses = statusOptions.map((o) => (typeof o === 'string' ? o : (o as FormFieldOption).id));
+
   const cMinIso: string = cMinV.validator;
   const eMaxIso: string = eMaxV.validator;
   const remarksMax: number = rMaxV.validator;
@@ -64,6 +96,11 @@ export function extractDateConfig(rowEditFields: FieldConfig[]): EulbDateValidat
     expiryMinMessage: eMinV.message,
     remarksMaxLength: remarksMax,
     remarksMaxLengthMessage: rMaxV.message,
+    censusCodeMaxLength: censusMaxV,
+    censusCodeMaxLengthMessage: censusMaxMessage,
+    ulbNameMaxLength: ulbNameMaxV,
+    ulbNameMaxLengthMessage: ulbNameMaxMessage,
+    electedBodyStatuses,
   };
 }
 
@@ -130,11 +167,11 @@ export class ElectedUrbanLocalBodiesValidator {
     // censusCode required for EXTRA_ULB rows
     if (!row.censusCode || row.censusCode.trim() === '') {
       errors.push({ field: 'censusCode', code: 'required', message: 'Census code is required.' });
-    } else if (row.censusCode.trim().length > EULB_CENSUS_CODE_MAX_LENGTH) {
+    } else if (row.censusCode.trim().length > dateConfig.censusCodeMaxLength) {
       errors.push({
         field: 'censusCode',
         code: 'maxlength',
-        message: `Census code must not exceed ${EULB_CENSUS_CODE_MAX_LENGTH} characters.`,
+        message: dateConfig.censusCodeMaxLengthMessage,
         value: row.censusCode,
       });
     }
@@ -142,11 +179,11 @@ export class ElectedUrbanLocalBodiesValidator {
     // ulbName required, max length enforced
     if (!row.ulbName || row.ulbName.trim() === '') {
       errors.push({ field: 'ulbName', code: 'required', message: 'ULB name is required.' });
-    } else if (row.ulbName.trim().length > EULB_ULB_NAME_MAX_LENGTH) {
+    } else if (row.ulbName.trim().length > dateConfig.ulbNameMaxLength) {
       errors.push({
         field: 'ulbName',
         code: 'maxlength',
-        message: `ULB name must not exceed ${EULB_ULB_NAME_MAX_LENGTH} characters.`,
+        message: dateConfig.ulbNameMaxLengthMessage,
         value: row.ulbName,
       });
     }
@@ -177,11 +214,11 @@ export class ElectedUrbanLocalBodiesValidator {
     if (dto.censusCode !== undefined) {
       if (!dto.censusCode || dto.censusCode.trim() === '') {
         errors.push({ field: 'censusCode', code: 'required', message: 'Census code is required.' });
-      } else if (dto.censusCode.trim().length > EULB_CENSUS_CODE_MAX_LENGTH) {
+      } else if (dto.censusCode.trim().length > dateConfig.censusCodeMaxLength) {
         errors.push({
           field: 'censusCode',
           code: 'maxlength',
-          message: `Census code must not exceed ${EULB_CENSUS_CODE_MAX_LENGTH} characters.`,
+          message: dateConfig.censusCodeMaxLengthMessage,
           value: dto.censusCode,
         });
       }
@@ -190,11 +227,11 @@ export class ElectedUrbanLocalBodiesValidator {
     if (dto.ulbName !== undefined) {
       if (!dto.ulbName || dto.ulbName.trim() === '') {
         errors.push({ field: 'ulbName', code: 'required', message: 'ULB name is required.' });
-      } else if (dto.ulbName.trim().length > EULB_ULB_NAME_MAX_LENGTH) {
+      } else if (dto.ulbName.trim().length > dateConfig.ulbNameMaxLength) {
         errors.push({
           field: 'ulbName',
           code: 'maxlength',
-          message: `ULB name must not exceed ${EULB_ULB_NAME_MAX_LENGTH} characters.`,
+          message: dateConfig.ulbNameMaxLengthMessage,
           value: dto.ulbName,
         });
       }
@@ -203,11 +240,11 @@ export class ElectedUrbanLocalBodiesValidator {
     if (dto.electedBodyStatus !== undefined) {
       if (dto.electedBodyStatus.trim() === '') {
         errors.push({ field: 'electedBodyStatus', code: 'required', message: 'Elected body status is required.' });
-      } else if (!(ELECTED_BODY_STATUSES as readonly string[]).includes(dto.electedBodyStatus.trim())) {
+      } else if (!dateConfig.electedBodyStatuses.includes(dto.electedBodyStatus.trim())) {
         errors.push({
           field: 'electedBodyStatus',
           code: 'invalid_enum',
-          message: `Elected Body Status must be one of: ${ELECTED_BODY_STATUSES.join(', ')}.`,
+          message: `Elected Body Status must be one of: ${dateConfig.electedBodyStatuses.join(', ')}.`,
           value: dto.electedBodyStatus,
         });
       }
@@ -333,11 +370,11 @@ export class ElectedUrbanLocalBodiesValidator {
     // electedBodyStatus required and enum — invalid value is persisted; validation error carries the raw value
     if (!row.electedBodyStatus || row.electedBodyStatus.trim() === '') {
       errors.push({ field: 'electedBodyStatus', code: 'required', message: 'Elected body status is required.' });
-    } else if (!(ELECTED_BODY_STATUSES as readonly string[]).includes(row.electedBodyStatus.trim())) {
+    } else if (!dateConfig.electedBodyStatuses.includes(row.electedBodyStatus.trim())) {
       errors.push({
         field: 'electedBodyStatus',
         code: 'invalidValue',
-        message: `Elected body status must be one of: ${ELECTED_BODY_STATUSES.join(', ')}.`,
+        message: `Elected body status must be one of: ${dateConfig.electedBodyStatuses.join(', ')}.`,
         value: row.electedBodyStatus,
       });
     }

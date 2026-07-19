@@ -1,4 +1,4 @@
-import type { FieldSupportingContent } from '../types/field-config.type';
+import type { FieldSupportingContent, SupportingContentAction } from '../types/field-config.type';
 
 /**
  * Toggles the `visible` flag on named actions within `actions`-type supportingContent
@@ -24,4 +24,33 @@ export function applyActionVisibility(
 
     return { ...block, description: anyVisible ? block.description : undefined, actions };
   });
+}
+
+/** Finds one action by id within a field's supportingContent blocks. */
+export function findSupportingAction(
+  supportingContent: FieldSupportingContent[] | undefined,
+  actionId: string,
+): SupportingContentAction | undefined {
+  for (const block of supportingContent ?? []) {
+    const found = block.actions?.find((action) => action.id === actionId);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+/**
+ * Strips `meta` from every supportingContent action before a field reaches an API
+ * response. `meta` is a backend-only extension point (e.g. a raw S3 path backing a
+ * template-download action) — it must never leak to the client un-stripped. Never
+ * mutates the input.
+ */
+export function stripSupportingContentMeta(
+  supportingContent: FieldSupportingContent[] | undefined,
+): FieldSupportingContent[] | undefined {
+  if (!supportingContent) return supportingContent;
+
+  return supportingContent.map((block) => ({
+    ...block,
+    actions: block.actions?.map(({ meta: _meta, ...rest }) => rest),
+  }));
 }

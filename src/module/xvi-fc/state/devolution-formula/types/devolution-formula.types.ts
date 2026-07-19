@@ -31,12 +31,6 @@ export interface DfGrantAllocationSummary {
   total: number;
 }
 
-export interface DfSupportingAction {
-  key: string;
-  label: string;
-  enabled: boolean;
-}
-
 export interface DfInstallmentAccessItem {
   canSelect: boolean;
   locked: boolean;

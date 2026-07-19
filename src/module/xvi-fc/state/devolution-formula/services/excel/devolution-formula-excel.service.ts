@@ -1,4 +1,10 @@
-import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { AnyBulkWriteOperation, Model, Types } from 'mongoose';
 import type ExcelJS from 'exceljs';
@@ -32,13 +38,9 @@ import {
 } from 'src/schemas/xvi-fc/state/devolution-formula-row.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import {
-  DF_ALLOWED_FILE_EXTENSIONS,
-  DF_ALLOWED_MIME_TYPES,
   DF_ERROR_EXCEL_HEADERS,
   DF_EXCEL_HEADER_MAP,
   DF_FOLDER_PATH_ERROR_SHEETS,
-  DF_MAX_FILE_SIZE_BYTES,
-  DF_MAX_FORMULA_LENGTH,
   DF_TEMPLATE_HEADERS,
   type DfInstallment,
 } from '../../constants/devolution-formula.constants';
@@ -52,6 +54,14 @@ import type {
 } from '../../types/devolution-formula.types';
 import { DevolutionFormulaValidator, type DfParsedExcelRow } from '../../validators/devolution-formula.validator';
 import { DevolutionFormulaService } from '../main/devolution-formula.service';
+import { DfFormJsonConfigService } from '../form-json/devolution-formula-form-json.service';
+import { getDfFieldsByType } from '../../helpers/devolution-formula-form-json.helpers';
+import {
+  keyByFieldKey,
+  requireField,
+  getValidatorValue,
+} from 'src/module/xvi-fc/common/utils/xvi-fc-field-lookup.util';
+import { deriveFileValidationOptions } from 'src/module/xvi-fc/common/utils/xvi-fc-file-constraint.util';
 import {
   buildXviFcFolderPath,
   type XviFcFolderPathContext,
@@ -100,7 +110,39 @@ export class DevolutionFormulaExcelService {
     private readonly dfService: DevolutionFormulaService,
     private readonly fileTokenService: FileTokenService,
     private readonly fileInfoNormalizer: FileInfoNormalizerService,
+    private readonly dfFormJsonConfig: DfFormJsonConfigService,
   ) {}
+
+  /**
+   * Loads the DB-driven `excelFile` file constraints and `devolutionFormula` max length once
+   * per request — single source of truth for both, replacing the old hardcoded `DF_*` constants.
+   */
+  private async resolveDfValidationConfig(yearId: string): Promise<{
+    fileValidationOptions: ReturnType<typeof deriveFileValidationOptions>;
+    maxFormulaLength: number;
+  }> {
+    const dfFields = await this.dfFormJsonConfig.loadFields(yearId);
+    const mainFields = getDfFieldsByType(dfFields, 'DF_MAIN_FORM_FIELDS');
+    const rowFields = getDfFieldsByType(dfFields, 'DF_ROW_EDIT_FIELDS');
+
+    const excelFileField = requireField(keyByFieldKey(mainFields), 'excelFile', 'DevolutionFormulaExcelService');
+    const devolutionFormulaField = requireField(
+      keyByFieldKey(rowFields),
+      'devolutionFormula',
+      'DevolutionFormulaExcelService',
+    );
+    const maxFormulaLength = getValidatorValue<number>(devolutionFormulaField, 'maxlength');
+    if (maxFormulaLength === undefined) {
+      throw new InternalServerErrorException(
+        "DevolutionFormulaExcelService: 'devolutionFormula' field is missing a maxlength validator.",
+      );
+    }
+
+    return {
+      fileValidationOptions: deriveFileValidationOptions(excelFileField, 'excelFile'),
+      maxFormulaLength,
+    };
+  }
 
   async validateExcel(
     dto: ValidateExcelDevolutionFormulaDto,
@@ -130,15 +172,11 @@ export class DevolutionFormulaExcelService {
     }
 
     // 2. Normalize + validate the inbound canonical file object (path, extension/MIME, size)
+    const { fileValidationOptions, maxFormulaLength } = await this.resolveDfValidationConfig(dto.yearId);
     const { file: normalizedFile, errors: fileErrors } = this.fileInfoNormalizer.normalizeInboundFileInfo(
       dto.excelFile as unknown as Record<string, unknown>,
       existingDoc?.excelFile,
-      {
-        fieldKey: 'excelFile',
-        allowedExtensions: [...DF_ALLOWED_FILE_EXTENSIONS],
-        allowedMimeTypes: [...DF_ALLOWED_MIME_TYPES],
-        maxSizeKb: DF_MAX_FILE_SIZE_BYTES / 1024,
-      },
+      fileValidationOptions,
     );
     if (fileErrors.length > 0) throwXviFcValidationError({ excelFile: fileErrors });
     // `normalizedFile` is `undefined` when the incoming path matches the already-stored
@@ -265,7 +303,9 @@ export class DevolutionFormulaExcelService {
               });
             } else {
               // Steps 2–4: required → type → business
-              rowErrors = this.dfValidator.validateRow(parsed, dto.installment, { totalMoHUAAllocation });
+              rowErrors = this.dfValidator.validateRow(parsed, dto.installment, maxFormulaLength, {
+                totalMoHUAAllocation,
+              });
             }
           }
         }
@@ -486,6 +526,7 @@ export class DevolutionFormulaExcelService {
 
     const grantAlloc = await this.dfService.resolveGrantAllocation(stateOid, yearOid);
     const totalMoHUAAllocation = grantAlloc.basic + grantAlloc.performance;
+    const { maxFormulaLength } = await this.resolveDfValidationConfig(yearId);
 
     const [dbUlbsRaw, activeRows] = await Promise.all([
       this.ulbModel.find({ state: stateOid, isActive: true }).select('_id name censusCode sbCode').lean().exec(),
@@ -531,7 +572,7 @@ export class DevolutionFormulaExcelService {
             rowErrors.push({ field: 'censusCode', code: 'duplicate', message: 'Duplicate ULB in dataset.' });
           } else {
             matchedUlbIds.add(ulbIdStr);
-            rowErrors = this.dfValidator.validateRow(parsed, installment, { totalMoHUAAllocation });
+            rowErrors = this.dfValidator.validateRow(parsed, installment, maxFormulaLength, { totalMoHUAAllocation });
           }
         } else {
           newUlbCount++;
@@ -678,6 +719,7 @@ export class DevolutionFormulaExcelService {
 
     const maxGrantAllocation = grantAlloc ? grantAlloc.basic + grantAlloc.performance : undefined;
     const activeVersion = form?.activeDatasetVersion ?? 0;
+    const { maxFormulaLength } = await this.resolveDfValidationConfig(yearId);
 
     if (form && activeVersion > 0) {
       // Load only saved rows that matched a registry ULB — exclude unknown-ULB rows.
@@ -709,7 +751,7 @@ export class DevolutionFormulaExcelService {
         DF_TEMPLATE_HEADERS,
         rows,
         'Devolution Formula',
-        this.buildDfTemplateValidations(maxGrantAllocation),
+        this.buildDfTemplateValidations(maxFormulaLength, maxGrantAllocation),
       );
     }
 
@@ -727,13 +769,13 @@ export class DevolutionFormulaExcelService {
       DF_TEMPLATE_HEADERS,
       rows,
       'Devolution Formula',
-      this.buildDfTemplateValidations(maxGrantAllocation),
+      this.buildDfTemplateValidations(maxFormulaLength, maxGrantAllocation),
     );
   }
 
   // ─── Private helpers ─────────────────────────────────────────────────────
 
-  private buildDfTemplateValidations(totalMoHUAAllocation?: number): ExcelColumnValidation[] {
+  private buildDfTemplateValidations(maxFormulaLength: number, totalMoHUAAllocation?: number): ExcelColumnValidation[] {
     return [
       {
         key: 'totalGrantAllocation',
@@ -802,11 +844,11 @@ export class DevolutionFormulaExcelService {
           type: 'textLength',
           operator: 'lessThanOrEqual',
           allowBlank: true,
-          formulae: [DF_MAX_FORMULA_LENGTH],
+          formulae: [maxFormulaLength],
           showErrorMessage: true,
           errorStyle: 'warning',
           errorTitle: 'Devolution Formula Too Long',
-          error: `Devolution Formula must not exceed ${DF_MAX_FORMULA_LENGTH} characters.`,
+          error: `Devolution Formula must not exceed ${maxFormulaLength} characters.`,
         },
       },
     ];
