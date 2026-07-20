@@ -1031,7 +1031,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     required: true,
     folderPathKey: 'slb/supporting-document',
     allowedFileTypes: ['pdf', 'jpg', 'jpeg', 'png'],
-    maxFileSize: 20971520,
+    maxFileSize: 20,
     fileViewType: 'button',
     validations: [
       {

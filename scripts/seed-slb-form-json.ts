@@ -1,7 +1,10 @@
 /**
- * Seeds (or updates) the SLB FormJson document in the `formjsons` collection from
- * scripts/seed-data/slb-form-json.json. Upserts on the {design_year, formId} unique index,
- * so it's safe to re-run after editing the seed file.
+ * Seeds (or updates) the SLB FormJson document in the `formjsons` collection.
+ * Run metadata (design_year, formId, type, isActive) comes from
+ * scripts/seed-data/slb-form-json.json; the field data comes from DEFAULT_SLB_FIELDS,
+ * the single source of truth for SLB field config, so the two can't drift apart.
+ * Upserts on the {design_year, formId} unique index, so it's safe to re-run after
+ * editing the seed file or DEFAULT_SLB_FIELDS.
  *
  * Usage:
  *   npm run seed:slb-form-json
@@ -10,26 +13,27 @@ import 'dotenv/config';
 import * as fs from 'fs';
 import * as path from 'path';
 import mongoose, { Types } from 'mongoose';
+import { DEFAULT_SLB_FIELDS } from '../src/module/xvi-fc/ulb/slb/constants/slb-form.constants';
 
 const COLLECTION = 'formjsons';
 const SEED_FILE = path.join(process.cwd(), 'scripts', 'seed-data', 'slb-form-json.json');
 
-interface SlbFormJsonSeed {
+interface SlbFormJsonSeedMeta {
   design_year: string;
   formId: number;
   type: string;
   isActive: boolean;
-  data: unknown[];
 }
 
 async function main() {
   const uri = process.env.MONGO_URI;
   if (!uri) throw new Error('MONGO_URI is not set');
 
-  const seed: SlbFormJsonSeed = JSON.parse(fs.readFileSync(SEED_FILE, 'utf8'));
-  if (!seed.design_year || seed.formId === undefined) {
+  const meta: SlbFormJsonSeedMeta = JSON.parse(fs.readFileSync(SEED_FILE, 'utf8'));
+  if (!meta.design_year || meta.formId === undefined) {
     throw new Error('Seed file is missing design_year or formId');
   }
+  const seed = { ...meta, data: DEFAULT_SLB_FIELDS };
 
   await mongoose.connect(uri);
   const collection = mongoose.connection.db!.collection(COLLECTION);
