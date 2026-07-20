@@ -304,6 +304,7 @@ export class UlbService {
       stateId = new Types.ObjectId(String(user.state));
       patch.state = stateId;
       patch.approval = { status: 'PENDING', submittedBy: new Types.ObjectId(user._id) };
+      patch.isActive = false;
     } else {
       // ADMIN (or other privileged callers) create pre-approved master records.
       stateId = patch.state as Types.ObjectId;
@@ -674,6 +675,7 @@ export class UlbService {
             'approval.reviewedBy': new Types.ObjectId(user._id),
             'approval.reviewedAt': new Date(),
             'approval.rejectReason': '',
+            isActive: true,
           },
         },
         { new: true },
