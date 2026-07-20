@@ -13,7 +13,7 @@ import 'dotenv/config';
 import * as fs from 'fs';
 import * as path from 'path';
 import mongoose, { Types } from 'mongoose';
-import { DEFAULT_SLB_FIELDS } from '../src/module/xvi-fc/ulb/slb/constants/slb-form.constants';
+import { DEFAULT_SLB_FIELDS } from 'src/module/xvi-fc/ulb/slb/constants/slb-form.constants';
 
 const COLLECTION = 'formjsons';
 const SEED_FILE = path.join(process.cwd(), 'scripts', 'seed-data', 'slb-form-json.json');
