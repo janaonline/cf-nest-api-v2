@@ -215,6 +215,35 @@ export class UlbService {
     return `${prefix}${Date.now()}`;
   }
 
+  /** First generated `sbCode` when no ULB has one yet — reserves the 9xxxxx range so a synthetic
+   *  sbCode can never collide with a real 6-digit 2011 census code. */
+  private static readonly SB_CODE_SEED = 900001;
+
+  /**
+   * Generates the next 6-digit `sbCode` (e.g. "900099") for a ULB registered without a 2011
+   * census code — `sbCode` is the fallback identifier used throughout xvi-fc wherever `censusCode`
+   * is blank (see e.g. `devolution-formula-excel.service.ts`). The sequence is global (not
+   * per-state) and derived from the highest existing 9xxxxx `sbCode`, so it keeps incrementing even
+   * if earlier ULBs are later given a real census code.
+   */
+  private async generateSbCode(): Promise<string> {
+    const [last] = await this.ulbModel.aggregate<{ num: number }>([
+      { $match: { sbCode: { $regex: '^9\\d{5}$' } } },
+      { $project: { num: { $toInt: '$sbCode' } } },
+      { $sort: { num: -1 } },
+      { $limit: 1 },
+    ]);
+    const nextNum = last?.num ? last.num + 1 : UlbService.SB_CODE_SEED;
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const candidate = String(nextNum + attempt);
+      const exists = await this.ulbModel.exists({ sbCode: candidate });
+      if (!exists) return candidate;
+    }
+
+    return String(Date.now()).slice(-6);
+  }
+
   private buildSlug(name: string): string {
     return name
       .trim()
@@ -295,6 +324,8 @@ export class UlbService {
     patch.slug = this.buildSlug(name);
     if (typeof patch.censusCode === 'string' && patch.censusCode.trim()) {
       await this.ensureCensusCodeNotTaken(patch.censusCode);
+    } else {
+      patch.sbCode = await this.generateSbCode();
     }
 
     let stateId: Types.ObjectId;

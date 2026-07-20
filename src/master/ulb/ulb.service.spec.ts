@@ -43,6 +43,7 @@ describe('UlbService', () => {
     findById: jest.Mock;
     findByIdAndUpdate: jest.Mock;
     exists: jest.Mock;
+    aggregate: jest.Mock;
     db?: unknown;
   };
   let stateModel: { findById: jest.Mock; find: jest.Mock };
@@ -75,6 +76,7 @@ describe('UlbService', () => {
       findById: jest.fn(),
       findByIdAndUpdate: jest.fn(),
       exists: jest.fn(),
+      aggregate: jest.fn().mockResolvedValue([]),
     };
     stateModel = { findById: jest.fn(), find: jest.fn() };
     mockStates(stateModel, []);
@@ -214,6 +216,59 @@ describe('UlbService', () => {
         expect.anything(),
         expect.objectContaining({ code: 'AP004' }),
       );
+    });
+
+    it('auto-generates the next sbCode when censusCode is omitted', async () => {
+      ulbModel.aggregate.mockResolvedValue([{ num: 900098 }]);
+      dynamicFormValidation.validateFinalSubmitAndBuildPayload.mockReturnValue({
+        isValid: true,
+        errors: {},
+        sanitizedPayload: { code: 'AP014', name: 'No Census ULB', state: stateId, ulbType: ulbTypeId },
+      });
+      const created = { toObject: () => ({ code: 'AP014' }) };
+      ulbModel.create.mockResolvedValue(created);
+
+      await service.create({ data: {} }, stateUser);
+
+      const [patch] = ulbModel.create.mock.calls[0] as [Record<string, unknown>];
+      expect(patch.sbCode).toBe('900099');
+    });
+
+    it('seeds sbCode at 900001 when no ULB has one yet', async () => {
+      dynamicFormValidation.validateFinalSubmitAndBuildPayload.mockReturnValue({
+        isValid: true,
+        errors: {},
+        sanitizedPayload: { code: 'AP016', name: 'First Synthetic Code ULB', state: stateId, ulbType: ulbTypeId },
+      });
+      const created = { toObject: () => ({ code: 'AP016' }) };
+      ulbModel.create.mockResolvedValue(created);
+
+      await service.create({ data: {} }, stateUser);
+
+      const [patch] = ulbModel.create.mock.calls[0] as [Record<string, unknown>];
+      expect(patch.sbCode).toBe('900001');
+    });
+
+    it('does not generate an sbCode when censusCode is submitted', async () => {
+      dynamicFormValidation.validateFinalSubmitAndBuildPayload.mockReturnValue({
+        isValid: true,
+        errors: {},
+        sanitizedPayload: {
+          code: 'AP015',
+          name: 'Has Census ULB',
+          state: stateId,
+          ulbType: ulbTypeId,
+          censusCode: '800011',
+        },
+      });
+      const created = { toObject: () => ({ code: 'AP015' }) };
+      ulbModel.create.mockResolvedValue(created);
+
+      await service.create({ data: {} }, stateUser);
+
+      expect(ulbModel.aggregate).not.toHaveBeenCalled();
+      const [patch] = ulbModel.create.mock.calls[0] as [Record<string, unknown>];
+      expect(patch).not.toHaveProperty('sbCode');
     });
 
     it('does not override a code that was already submitted', async () => {
