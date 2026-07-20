@@ -233,7 +233,29 @@ describe('UlbService', () => {
       const [pipeline] = ulbModel.aggregate.mock.calls[0] as [{ $match?: Record<string, unknown> }[]];
       const match = pipeline[0].$match as { state: Types.ObjectId; code: { $regex: string } };
       expect(match.state.toString()).toBe(stateId);
-      expect(match.code.$regex).toBe('^AP\\d+$');
+      expect(match.code.$regex).toBe('^AP\\d{1,6}$');
+    });
+
+    it('ignores a legacy Date.now()-fallback code (long numeric suffix) when computing the next code', async () => {
+      // Regression test: a prior collision-retry fallback (`${prefix}${Date.now()}`) can leave a
+      // code like "AP1784539349047" in the DB. $match must exclude a suffix that long — matching
+      // it would overflow $toInt (32-bit) and crash the real aggregation with a MongoServerError.
+      stateModel.findById.mockReturnValue({ lean: jest.fn().mockResolvedValue({ code: 'AP' }) });
+      ulbModel.aggregate.mockResolvedValueOnce([]); // simulates Mongo's $match excluding the 13-digit suffix
+      ulbModel.exists.mockResolvedValue(null);
+      dynamicFormValidation.validateFinalSubmitAndBuildPayload.mockReturnValue({
+        isValid: true,
+        errors: {},
+        sanitizedPayload: { name: 'New ULB', state: stateId, ulbType: ulbTypeId },
+      });
+      ulbModel.create.mockResolvedValue({ toObject: () => ({ code: 'AP001' }) });
+
+      await service.create({ data: { name: 'New ULB', state: stateId, ulbType: ulbTypeId } }, stateUser);
+
+      expect(dynamicFormValidation.validateFinalSubmitAndBuildPayload).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ code: 'AP001' }),
+      );
     });
 
     it('auto-generates the next sbCode when censusCode is omitted', async () => {

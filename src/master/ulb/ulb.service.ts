@@ -211,8 +211,12 @@ export class UlbService {
     const prefix = (state?.code || 'ULB').toUpperCase();
     const escapedPrefix = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+    // Suffix capped at 6 digits (not `\d+`): the collision-retry fallback below can persist a code
+    // suffixed with Date.now() (13 digits) when every padded candidate collides. A suffix that long
+    // isn't a real sequence number — matching it would both overflow $toInt (32-bit) and, worse,
+    // "poison" every future code for this state into inheriting a 13-digit suffix forever.
     const [last] = await this.ulbModel.aggregate<{ num: number }>([
-      { $match: { state: new Types.ObjectId(stateId), code: { $regex: `^${escapedPrefix}\\d+$` } } },
+      { $match: { state: new Types.ObjectId(stateId), code: { $regex: `^${escapedPrefix}\\d{1,6}$` } } },
       { $project: { num: { $toInt: { $substrCP: ['$code', prefix.length, { $strLenCP: '$code' }] } } } },
       { $sort: { num: -1 } },
       { $limit: 1 },

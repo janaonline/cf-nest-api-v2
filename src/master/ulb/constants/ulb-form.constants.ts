@@ -10,6 +10,7 @@ export const ULB_FORM_JSON_TYPE = 'ULB_MASTER';
 const OBJECT_ID_PATTERN = '^[0-9a-fA-F]{24}$';
 const MOBILE_PATTERN = '^[6-9]\\d{9}$';
 const CENSUS_CODE_PATTERN = '^\\d{6}$';
+const EMAIL_PATTERN = '^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$';
 
 /**
  * Fallback field definition used when no admin-configured FormJson document
@@ -38,7 +39,7 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
     required: true,
     validations: [
       { name: 'required', validator: null, message: 'ULB name is required.' },
-      { name: 'maxlength', validator: 200, message: 'ULB name must be at most 200 characters.' },
+      { name: 'maxlength', validator: 50, message: 'ULB name must be at most 50 characters.' },
     ],
   },
   // {
@@ -74,7 +75,7 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
 
     validations: [
       { name: 'required', validator: null, message: 'District is required.' },
-      { name: 'maxlength', validator: 100, message: 'District must be at most 100 characters.' },
+      { name: 'maxlength', validator: 50, message: 'District must be at most 50 characters.' },
     ],
   },
   {
@@ -90,77 +91,12 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
     labelHint: '(if available)',
     hintText: 'Not available? Leave blank; it can be added later.',
   },
-  // {
-  //   key: 'sbCode',
-  //   label: 'SB Code',
-  //   formFieldType: 'text',
-  //   displayInlineLabel: true,
-  //   validations: [],
-  // },
-  // {
-  //   key: 'population',
-  //   label: 'Population',
-  //   formFieldType: 'number',
-  //   validations: [{ name: 'min', validator: 0, message: 'Population must be ≥ 0.' }],
-  // },
-  // {
-  //   key: 'area',
-  //   label: 'Area',
-  //   formFieldType: 'number',
-  //   validations: [{ name: 'min', validator: 0, message: 'Area must be ≥ 0.' }],
-  // },
-  // {
-  //   key: 'wards',
-  //   label: 'Wards',
-  //   formFieldType: 'number',
-  //   validations: [{ name: 'min', validator: 0, message: 'Wards must be ≥ 0.' }],
-  // },
-  // {
-  //   key: 'natureOfUlb',
-  //   label: 'Nature of ULB',
-  //   formFieldType: 'text',
-  //   validations: [],
-  // },
-  // {
-  //   key: 'isUA',
-  //   label: 'Is Urban Agglomeration',
-  //   formFieldType: 'select',
-  //   options: ['YES', 'No'],
-  //   validations: [],
-  // },
-  // {
-  //   key: 'isMillionPlus',
-  //   label: 'Is Million Plus',
-  //   formFieldType: 'select',
-  //   options: ['YES', 'No'],
-  //   validations: [],
-  // },
-  // {
-  //   key: 'amrut',
-  //   label: 'AMRUT',
-  //   formFieldType: 'text',
-  //   validations: [],
-  // },
-  // {
-  //   key: 'lgdCode',
-  //   label: 'LGD Code',
-  //   formFieldType: 'text',
-  //   displayInlineLabel: true,
-  //   validations: [],
-  // },
-  // {
-  //   key: 'regionalName',
-  //   label: 'Regional Name',
-  //   formFieldType: 'text',
-  //   validations: [],
-  // },
   {
     key: 'dateOfConstitution',
     label: 'Date of Constitution',
     displayInlineLabel: true,
     formFieldType: 'date',
     required: true,
-
     validations: [{ name: 'required', validator: null, message: 'Date of constitution is required.' }],
   },
   {
@@ -168,7 +104,7 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
     label: 'Gazette Notification Number',
     displayInlineLabel: true,
     formFieldType: 'text',
-    validations: [{ name: 'maxlength', validator: 100, message: 'Must not exceed 100 characters.' }],
+    validations: [{ name: 'maxlength', validator: 40, message: 'Must not exceed 40 characters.' }],
     labelHint: '(if available)',
   },
   {
@@ -196,7 +132,7 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
     required: true,
     validations: [
       { name: 'required', validator: null, message: 'Primary contact name is required.' },
-      { name: 'maxlength', validator: 200, message: 'Name must be at most 200 characters.' },
+      { name: 'maxlength', validator: 50, message: 'Name must be at most 50 characters.' },
     ],
   },
   {
@@ -204,7 +140,7 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
     label: 'Designation',
     displayInlineLabel: true,
     formFieldType: 'text',
-    validations: [{ name: 'maxlength', validator: 100, message: 'Designation must be at most 100 characters.' }],
+    validations: [{ name: 'maxlength', validator: 50, message: 'Designation must be at most 50 characters.' }],
   },
   {
     key: 'primaryContactEmail',
@@ -214,7 +150,9 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
     required: true,
     validations: [
       { name: 'required', validator: null, message: 'Primary contact email is required.' },
-      { name: 'email', validator: null, message: 'Enter a valid email address.' },
+      // { name: 'email', validator: null, message: 'Enter a valid email address.' },
+      { name: 'pattern', validator: EMAIL_PATTERN, message: 'Enter a valid email address.' },
+      { name: 'maxlength', validator: 50, message: 'Email must be at most 50 characters.' },
     ],
   },
   {
