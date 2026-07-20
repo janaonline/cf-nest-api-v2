@@ -43,6 +43,7 @@ describe('UlbService', () => {
     findById: jest.Mock;
     findByIdAndUpdate: jest.Mock;
     exists: jest.Mock;
+    aggregate: jest.Mock;
     db?: unknown;
   };
   let stateModel: { findById: jest.Mock; find: jest.Mock };
@@ -75,6 +76,7 @@ describe('UlbService', () => {
       findById: jest.fn(),
       findByIdAndUpdate: jest.fn(),
       exists: jest.fn(),
+      aggregate: jest.fn().mockResolvedValue([]),
     };
     stateModel = { findById: jest.fn(), find: jest.fn() };
     mockStates(stateModel, []);
@@ -198,7 +200,7 @@ describe('UlbService', () => {
 
     it('auto-generates a ULB code from the state when the submitted data omits one', async () => {
       stateModel.findById.mockReturnValue({ lean: jest.fn().mockResolvedValue({ code: 'AP' }) });
-      ulbModel.countDocuments.mockResolvedValue(3);
+      ulbModel.aggregate.mockResolvedValueOnce([{ num: 3 }]);
       ulbModel.exists.mockResolvedValue(null);
       dynamicFormValidation.validateFinalSubmitAndBuildPayload.mockReturnValue({
         isValid: true,
@@ -214,6 +216,99 @@ describe('UlbService', () => {
         expect.anything(),
         expect.objectContaining({ code: 'AP004' }),
       );
+    });
+
+    it('scopes the auto-generated code lookup to the same state, matching only that state prefix', async () => {
+      stateModel.findById.mockReturnValue({ lean: jest.fn().mockResolvedValue({ code: 'AP' }) });
+      ulbModel.exists.mockResolvedValue(null);
+      dynamicFormValidation.validateFinalSubmitAndBuildPayload.mockReturnValue({
+        isValid: true,
+        errors: {},
+        sanitizedPayload: { name: 'New ULB', state: stateId, ulbType: ulbTypeId },
+      });
+      ulbModel.create.mockResolvedValue({ toObject: () => ({ code: 'AP001' }) });
+
+      await service.create({ data: { name: 'New ULB', state: stateId, ulbType: ulbTypeId } }, stateUser);
+
+      const [pipeline] = ulbModel.aggregate.mock.calls[0] as [{ $match?: Record<string, unknown> }[]];
+      const match = pipeline[0].$match as { state: Types.ObjectId; code: { $regex: string } };
+      expect(match.state.toString()).toBe(stateId);
+      expect(match.code.$regex).toBe('^AP\\d{1,6}$');
+    });
+
+    it('ignores a legacy Date.now()-fallback code (long numeric suffix) when computing the next code', async () => {
+      // Regression test: a prior collision-retry fallback (`${prefix}${Date.now()}`) can leave a
+      // code like "AP1784539349047" in the DB. $match must exclude a suffix that long — matching
+      // it would overflow $toInt (32-bit) and crash the real aggregation with a MongoServerError.
+      stateModel.findById.mockReturnValue({ lean: jest.fn().mockResolvedValue({ code: 'AP' }) });
+      ulbModel.aggregate.mockResolvedValueOnce([]); // simulates Mongo's $match excluding the 13-digit suffix
+      ulbModel.exists.mockResolvedValue(null);
+      dynamicFormValidation.validateFinalSubmitAndBuildPayload.mockReturnValue({
+        isValid: true,
+        errors: {},
+        sanitizedPayload: { name: 'New ULB', state: stateId, ulbType: ulbTypeId },
+      });
+      ulbModel.create.mockResolvedValue({ toObject: () => ({ code: 'AP001' }) });
+
+      await service.create({ data: { name: 'New ULB', state: stateId, ulbType: ulbTypeId } }, stateUser);
+
+      expect(dynamicFormValidation.validateFinalSubmitAndBuildPayload).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ code: 'AP001' }),
+      );
+    });
+
+    it('auto-generates the next sbCode when censusCode is omitted', async () => {
+      ulbModel.aggregate.mockResolvedValue([{ num: 900098 }]);
+      dynamicFormValidation.validateFinalSubmitAndBuildPayload.mockReturnValue({
+        isValid: true,
+        errors: {},
+        sanitizedPayload: { code: 'AP014', name: 'No Census ULB', state: stateId, ulbType: ulbTypeId },
+      });
+      const created = { toObject: () => ({ code: 'AP014' }) };
+      ulbModel.create.mockResolvedValue(created);
+
+      await service.create({ data: {} }, stateUser);
+
+      const [patch] = ulbModel.create.mock.calls[0] as [Record<string, unknown>];
+      expect(patch.sbCode).toBe('900099');
+    });
+
+    it('seeds sbCode at 900001 when no ULB has one yet', async () => {
+      dynamicFormValidation.validateFinalSubmitAndBuildPayload.mockReturnValue({
+        isValid: true,
+        errors: {},
+        sanitizedPayload: { code: 'AP016', name: 'First Synthetic Code ULB', state: stateId, ulbType: ulbTypeId },
+      });
+      const created = { toObject: () => ({ code: 'AP016' }) };
+      ulbModel.create.mockResolvedValue(created);
+
+      await service.create({ data: {} }, stateUser);
+
+      const [patch] = ulbModel.create.mock.calls[0] as [Record<string, unknown>];
+      expect(patch.sbCode).toBe('900001');
+    });
+
+    it('does not generate an sbCode when censusCode is submitted', async () => {
+      dynamicFormValidation.validateFinalSubmitAndBuildPayload.mockReturnValue({
+        isValid: true,
+        errors: {},
+        sanitizedPayload: {
+          code: 'AP015',
+          name: 'Has Census ULB',
+          state: stateId,
+          ulbType: ulbTypeId,
+          censusCode: '800011',
+        },
+      });
+      const created = { toObject: () => ({ code: 'AP015' }) };
+      ulbModel.create.mockResolvedValue(created);
+
+      await service.create({ data: {} }, stateUser);
+
+      expect(ulbModel.aggregate).not.toHaveBeenCalled();
+      const [patch] = ulbModel.create.mock.calls[0] as [Record<string, unknown>];
+      expect(patch).not.toHaveProperty('sbCode');
     });
 
     it('does not override a code that was already submitted', async () => {
@@ -288,6 +383,56 @@ describe('UlbService', () => {
       expect(emailQueueService.addEmailJob).toHaveBeenCalledWith(
         expect.objectContaining({ to: 'commissioner@ulb.gov.in', templateName: './ulb-member-invite' }),
       );
+    });
+
+    it('copies the auto-generated sbCode onto the primary-contact login and invite email (no censusCode submitted)', async () => {
+      const ulbId = new Types.ObjectId();
+      ulbModel.aggregate.mockResolvedValueOnce([]); // no prior sbCode -> seeds at 900001
+      dynamicFormValidation.validateFinalSubmitAndBuildPayload.mockReturnValue({
+        isValid: true,
+        errors: {},
+        sanitizedPayload: {
+          code: 'AP017',
+          name: 'No Census Contact ULB',
+          state: stateId,
+          ulbType: ulbTypeId,
+          primaryContactName: 'K. Suresh Babu',
+          primaryContactEmail: 'sbcode-contact@ulb.gov.in',
+          primaryContactMobile: '9849001238',
+        },
+      });
+      ulbModel.create.mockResolvedValue({ _id: ulbId, toObject: () => ({ _id: ulbId, code: 'AP017' }) });
+
+      await service.create({ data: {} }, stateUser);
+
+      expect(userModel.create).toHaveBeenCalledWith(expect.objectContaining({ censusCode: null, sbCode: '900001' }));
+      const [emailJob] = emailQueueService.addEmailJob.mock.calls[0] as [{ mailData: Record<string, unknown> }];
+      expect(emailJob.mailData).toMatchObject({ loginCode: '900001', loginCodeLabel: 'Login ID' });
+    });
+
+    it('copies a submitted censusCode onto the primary-contact login and invite email', async () => {
+      const ulbId = new Types.ObjectId();
+      dynamicFormValidation.validateFinalSubmitAndBuildPayload.mockReturnValue({
+        isValid: true,
+        errors: {},
+        sanitizedPayload: {
+          code: 'AP018',
+          name: 'Has Census Contact ULB',
+          state: stateId,
+          ulbType: ulbTypeId,
+          censusCode: '800011',
+          primaryContactName: 'K. Suresh Babu',
+          primaryContactEmail: 'census-contact@ulb.gov.in',
+          primaryContactMobile: '9849001239',
+        },
+      });
+      ulbModel.create.mockResolvedValue({ _id: ulbId, toObject: () => ({ _id: ulbId, code: 'AP018' }) });
+
+      await service.create({ data: {} }, stateUser);
+
+      expect(userModel.create).toHaveBeenCalledWith(expect.objectContaining({ censusCode: '800011', sbCode: null }));
+      const [emailJob] = emailQueueService.addEmailJob.mock.calls[0] as [{ mailData: Record<string, unknown> }];
+      expect(emailJob.mailData).toMatchObject({ loginCode: '800011', loginCodeLabel: 'Login ID' });
     });
 
     it('creates the primary contact login inactive for a STATE (PENDING) submission', async () => {

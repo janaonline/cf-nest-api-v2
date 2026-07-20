@@ -403,13 +403,37 @@ export class DynamicFormValidationService {
 
   // ─── Date resolution ───────────────────────────────────────────────────────
 
+  /**
+   * Mirrors the frontend's `date-constraint-resolver.ts` — same `TODAY±ND` / `±NM` / `±NY` grammar,
+   * kept in sync so a `minDate`/`maxDate` config resolves identically on both sides.
+   *
+   * Built in UTC, not via `setHours(0,0,0,0)` on a local `Date`: the frontend's
+   * `toUtcIsoDateString()` reinterprets the picked LOCAL calendar day-number as if it were UTC
+   * (e.g. picking 21 Jul submits `2026-07-21T00:00:00.000Z` regardless of browser timezone) rather
+   * than doing a real timezone conversion. `setHours` on a server running ahead of UTC (e.g. IST,
+   * UTC+5:30) would instead compute local midnight as a real instant — 5.5 hours *earlier* than
+   * the frontend's value — so a same-day submission would spuriously fail maxDate. Reinterpreting
+   * the server's own local Y/M/D as UTC here matches the frontend's trick instead of correcting it.
+   */
   private resolveDate(dateStr: string): Date {
-    const rel = /^TODAY([+-]\d+)D$/i.exec(dateStr);
+    const rel = /^TODAY(?:([+-])(\d+)([DMY]))?$/i.exec(dateStr);
     if (rel) {
-      const offset = parseInt(rel[1], 10);
-      const d = new Date();
-      d.setHours(0, 0, 0, 0);
-      d.setDate(d.getDate() + offset);
+      const now = new Date();
+      const d = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+      if (rel[1]) {
+        const amount = parseInt(rel[2], 10) * (rel[1] === '-' ? -1 : 1);
+        switch (rel[3].toUpperCase()) {
+          case 'D':
+            d.setUTCDate(d.getUTCDate() + amount);
+            break;
+          case 'M':
+            d.setUTCMonth(d.getUTCMonth() + amount);
+            break;
+          case 'Y':
+            d.setUTCFullYear(d.getUTCFullYear() + amount);
+            break;
+        }
+      }
       return d;
     }
     return new Date(dateStr);
