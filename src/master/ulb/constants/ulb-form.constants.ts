@@ -10,7 +10,7 @@ export const ULB_FORM_JSON_TYPE = 'ULB_MASTER';
 const OBJECT_ID_PATTERN = '^[0-9a-fA-F]{24}$';
 const MOBILE_PATTERN = '^[6-9]\\d{9}$';
 const CENSUS_CODE_PATTERN = '^\\d{6}$';
-const EMAIL_PATTERN = '^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$';
+const EMAIL_PATTERN = '^[^\\s@]+@[^\\s@]+\\.[a-zA-Z]{2,}$';
 
 /**
  * Fallback field definition used when no admin-configured FormJson document
