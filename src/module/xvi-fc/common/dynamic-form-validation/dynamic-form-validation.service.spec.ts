@@ -138,6 +138,18 @@ describe('DynamicFormValidationService — minDate/maxDate with TODAY±N[DMY]', 
     expect(result.errors['dateOfConstitution']?.[0]).toMatchObject({ code: 'maxDate' });
   });
 
+  it('accepts today submitted the way the frontend actually encodes it (regression: server timezones ahead of UTC, e.g. IST, must not reject same-day submissions)', () => {
+    // Mirrors the frontend's toUtcIsoDateString(): reinterprets the picked LOCAL calendar
+    // day-number as UTC midnight, rather than doing a real timezone conversion.
+    const now = new Date();
+    const submittedToday = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())).toISOString();
+
+    const result = service.validateDraftAndBuildPayload([dateField], { dateOfConstitution: submittedToday });
+
+    expect(result.isValid).toBe(true);
+    expect(result.errors['dateOfConstitution']).toBeUndefined();
+  });
+
   it('accepts a date within the last 50 years and not in the future', () => {
     const tenYearsAgo = new Date();
     tenYearsAgo.setFullYear(tenYearsAgo.getFullYear() - 10);
