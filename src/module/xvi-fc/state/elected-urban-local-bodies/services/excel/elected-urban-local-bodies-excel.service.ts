@@ -34,9 +34,6 @@ import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import {
   EXCEL_HEADER_MAP,
   ERROR_EXCEL_HEADERS,
-  EULB_EXCEL_ALLOWED_FILE_EXTENSIONS,
-  EULB_EXCEL_ALLOWED_MIME_TYPES,
-  EULB_EXCEL_MAX_FILE_SIZE_BYTES,
 } from 'src/module/xvi-fc/state/elected-urban-local-bodies/constants/elected-urban-local-bodies.constants';
 import type { ValidateElectedUrbanLocalBodiesExcelDto } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/validate-elected-urban-local-bodies-excel.dto';
 import {
@@ -56,6 +53,8 @@ import {
   FileInfoNormalizerService,
   type HydratedFileInfoResponse,
 } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
+import { keyByFieldKey, requireField } from 'src/module/xvi-fc/common/utils/xvi-fc-field-lookup.util';
+import { deriveFileValidationOptions } from 'src/module/xvi-fc/common/utils/xvi-fc-file-constraint.util';
 import type { FileInfo } from 'src/schemas/common/file.schema';
 
 interface UlbLean {
@@ -127,16 +126,22 @@ export class ElectedUrbanLocalBodiesExcelService {
     ]);
     const dbUlbs = dbUlbsRaw as UlbLean[];
 
+    const excelFormJsonFields = await this.eulbFormJsonConfig.loadFields(dto.yearId);
+    const excelMainFields = getFieldsByType(excelFormJsonFields, 'EULB_MAIN_FORM_FIELDS');
+    const excelRowEditFields = getFieldsByType(excelFormJsonFields, 'EULB_ROW_EDIT_FIELDS');
+    const excelExtraUlbPortalFields = getFieldsByType(excelFormJsonFields, 'EULB_EXTRA_ULB_PORTAL_FIELDS');
+    const excelDateConfig = extractDateConfig(excelRowEditFields, excelExtraUlbPortalFields);
+
     // 2. Normalize + validate the inbound canonical file object (path, extension/MIME, size)
+    const excelFileField = requireField(
+      keyByFieldKey(excelMainFields),
+      'electedBodyExcelFile',
+      'ElectedUrbanLocalBodiesExcelService.validateExcel',
+    );
     const { file: normalizedFile, errors: fileErrors } = this.fileInfoNormalizer.normalizeInboundFileInfo(
       dto.electedBodyExcelFile as unknown as Record<string, unknown>,
       existing?.electedBodyExcelFile,
-      {
-        fieldKey: 'electedBodyExcelFile',
-        allowedExtensions: [...EULB_EXCEL_ALLOWED_FILE_EXTENSIONS],
-        allowedMimeTypes: [...EULB_EXCEL_ALLOWED_MIME_TYPES],
-        maxSizeKb: EULB_EXCEL_MAX_FILE_SIZE_BYTES / 1024,
-      },
+      deriveFileValidationOptions(excelFileField, 'electedBodyExcelFile'),
     );
     if (fileErrors.length > 0) throwXviFcValidationError({ electedBodyExcelFile: fileErrors });
     // `normalizedFile` is `undefined` when the incoming path matches the already-stored
@@ -222,10 +227,6 @@ export class ElectedUrbanLocalBodiesExcelService {
     // 8. Build DB ULB lookup by censusCode/sbCode (safe normalization — values may be numbers)
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-
-    const excelFormJsonFields = await this.eulbFormJsonConfig.loadFields(dto.yearId);
-    const excelRowEditFields = getFieldsByType(excelFormJsonFields, 'EULB_ROW_EDIT_FIELDS');
-    const excelDateConfig = extractDateConfig(excelRowEditFields);
 
     const dbUlbByCode = new Map<string, UlbLean>();
     for (const ulb of dbUlbs) {
@@ -501,7 +502,8 @@ export class ElectedUrbanLocalBodiesExcelService {
 
         const revalFormJsonFields = await this.eulbFormJsonConfig.loadFields(yearId);
         const revalRowEditFields = getFieldsByType(revalFormJsonFields, 'EULB_ROW_EDIT_FIELDS');
-        const revalDateConfig = extractDateConfig(revalRowEditFields);
+        const revalExtraUlbPortalFields = getFieldsByType(revalFormJsonFields, 'EULB_EXTRA_ULB_PORTAL_FIELDS');
+        const revalDateConfig = extractDateConfig(revalRowEditFields, revalExtraUlbPortalFields);
 
         let errorRowCount = 0;
         let extraExcelRowCount = 0;
@@ -740,7 +742,8 @@ export class ElectedUrbanLocalBodiesExcelService {
 
     const storedFileFormJsonFields = await this.eulbFormJsonConfig.loadFields(yearId);
     const storedFileRowEditFields = getFieldsByType(storedFileFormJsonFields, 'EULB_ROW_EDIT_FIELDS');
-    const storedFileDateConfig = extractDateConfig(storedFileRowEditFields);
+    const storedFileExtraUlbPortalFields = getFieldsByType(storedFileFormJsonFields, 'EULB_EXTRA_ULB_PORTAL_FIELDS');
+    const storedFileDateConfig = extractDateConfig(storedFileRowEditFields, storedFileExtraUlbPortalFields);
 
     const dbUlbByCode = new Map<string, UlbLean>();
     for (const ulb of dbUlbs) {

@@ -1,18 +1,22 @@
 import { IsOptional, IsString, MaxLength } from 'class-validator';
-import {
-  EULB_CENSUS_CODE_MAX_LENGTH,
-  EULB_ULB_NAME_MAX_LENGTH,
-} from 'src/module/xvi-fc/state/elected-urban-local-bodies/constants/elected-urban-local-bodies.constants';
+
+/**
+ * `@MaxLength` here is a payload-size safety cap only, not the business limit — class-validator
+ * decorators run at request-validation time and can't read the DB-driven limit. The real
+ * censusCode (10)/ulbName (250) length rules are enforced DB-drivenly downstream in
+ * `ElectedUrbanLocalBodiesValidator` (via `extractDateConfig`'s censusCodeMaxLength/ulbNameMaxLength).
+ */
+const PAYLOAD_SAFETY_MAX_LENGTH = 500;
 
 export class UpdateElectedUrbanLocalBodiesRowDto {
   @IsOptional()
   @IsString()
-  @MaxLength(EULB_CENSUS_CODE_MAX_LENGTH)
+  @MaxLength(PAYLOAD_SAFETY_MAX_LENGTH)
   censusCode?: string;
 
   @IsOptional()
   @IsString()
-  @MaxLength(EULB_ULB_NAME_MAX_LENGTH)
+  @MaxLength(PAYLOAD_SAFETY_MAX_LENGTH)
   ulbName?: string;
 
   @IsOptional()

@@ -1,36 +1,63 @@
-import { Test, TestingModule } from '@nestjs/testing';
-import { getModelToken } from '@nestjs/mongoose';
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
-import { Types } from 'mongoose';
+import { getModelToken } from '@nestjs/mongoose';
+import { Test, TestingModule } from '@nestjs/testing';
 import { readFileSync } from 'fs';
+import { Types } from 'mongoose';
 import { join } from 'path';
-import { FcUnspentDeclarationService } from './fc-unspent-declaration.service';
-import { FcUnspentDeclarationRowService } from '../rows/fc-unspent-declaration-row.service';
-import { FcUnspentDeclarationFormJsonService } from '../form-json/fc-unspent-declaration-form-json.service';
-import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
-import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
-import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
-import { FileUrlNormalizerService } from 'src/module/xvi-fc/common/services/file-url-normalizer.service';
+import { FORM_STATUS } from 'src/common/constants/form-status.constants';
+import { ROW_STATUS } from 'src/common/constants/row-status.constants';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { S3Service } from 'src/core/s3/s3.service';
+import type { AuthUser } from 'src/module/auth/auth-user.interface';
+import { Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
+import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
+import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
+import { FileUrlNormalizerService } from 'src/module/xvi-fc/common/services/file-url-normalizer.service';
+import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
+import { DevolutionFormulaForm } from 'src/schemas/xvi-fc/state/devolution-formula-form.schema';
+import { XviFcUnspentStateFormHistory } from 'src/schemas/xvi-fc/state/fc-unspent-state-form-history.schema';
 import {
   XviFcUnspentStateForm,
   XviFcUnspentStateFormSchema,
 } from 'src/schemas/xvi-fc/state/fc-unspent-state-form.schema';
-import { XviFcUnspentStateFormHistory } from 'src/schemas/xvi-fc/state/fc-unspent-state-form-history.schema';
-import { DevolutionFormulaForm } from 'src/schemas/xvi-fc/state/devolution-formula-form.schema';
-import type { AuthUser } from 'src/module/auth/auth-user.interface';
-import { Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
-import { FORM_STATUS } from 'src/common/constants/form-status.constants';
-import { ROW_STATUS } from 'src/common/constants/row-status.constants';
 import {
   FC_UNSPENT_APPLICABLE_FC_BY_YEAR_LABEL,
   FC_UNSPENT_DECLARATION_TEMPLATE_ACTION_ID,
-  FC_UNSPENT_DECLARATION_TEMPLATE_BY_YEAR,
 } from '../../constants/fc-unspent-declaration.constants';
-import { FC_UNSPENT_STATE_FORM_JSON } from '../../constants/fc-unspent-declaration.form-json.constant';
+import { loadFcUnspentSeedDocument } from '../../constants/fc-unspent-declaration-seed.fixture';
 import type { SaveFcUnspentDeclarationDto } from '../../dto/save-fc-unspent-declaration.dto';
 import type { FcUnspentResolvedRow } from '../../types/fc-unspent-declaration.types';
+import { FcUnspentDeclarationFormJsonService } from '../form-json/fc-unspent-declaration-form-json.service';
+import { FcUnspentDeclarationRowService } from '../rows/fc-unspent-declaration-row.service';
+import { FcUnspentDeclarationService } from './fc-unspent-declaration.service';
+
+const FC_UNSPENT_STATE_FORM_JSON = loadFcUnspentSeedDocument();
+
+// Mirrors the `meta` the seed fixture attaches to the `fcDeclaration` field's `download-template`
+// supporting action — the DB-driven single source of truth this service now reads from, replacing
+// the old hardcoded FC_UNSPENT_DECLARATION_TEMPLATE_BY_YEAR map.
+const FC_UNSPENT_DECLARATION_TEMPLATE_META = {
+  path: 'xvi-fc/state/common/2026-27/fc-unspent/fc-declaration-template/FC-Unspent-Declaration_9ef58a73-82ef-43b7-991f-02257fcde890.docx',
+  fileName: 'FC-Unspent-Declaration-2026-27.docx',
+  mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+};
+
+/** Returns a copy of the fixture data with the fcDeclaration download-template action's `meta` removed. */
+function fcUnspentFieldsWithoutTemplateMeta() {
+  return FC_UNSPENT_STATE_FORM_JSON.data.map((field) =>
+    field.key === 'fcDeclaration'
+      ? {
+          ...field,
+          supportingContent: field.supportingContent?.map((block) => ({
+            ...block,
+            actions: block.actions?.map((action) =>
+              action.id === FC_UNSPENT_DECLARATION_TEMPLATE_ACTION_ID ? { ...action, meta: undefined } : action,
+            ),
+          })),
+        }
+      : field,
+  );
+}
 
 // ─── Test helpers ─────────────────────────────────────────────────────────────
 
@@ -377,10 +404,10 @@ describe('FcUnspentDeclarationService', () => {
     });
 
     it('resolves partial Yes-branch rows via the row service and applies them in draft mode (rowStatus untouched)', async () => {
-      // checkboxConfirmation carries a requiredTrue validator, which the shared
-      // DynamicFormValidationService enforces even in draft mode whenever the field
-      // is visible (isFcUnspent === true) — per the task brief's own rule ("requiredTrue
-      // remains strict where visible"), matching every other XVI-FC state form.
+      // checkboxConfirmation carries a requiredTrue validator. Draft-mode enforcement of
+      // requiredTrue is temporarily disabled (see DynamicFormValidationService), so this
+      // draft would now succeed even without checkboxConfirmation — it's set to true here
+      // regardless, since that's the realistic payload the frontend sends.
       rowService['resolveAndValidateRows'].mockResolvedValueOnce({ rows: [sampleResolvedRow], errors: {} });
       const dto = baseDto({
         isFcUnspent: true,
@@ -404,6 +431,15 @@ describe('FcUnspentDeclarationService', () => {
         undefined, // draft mode — never forces rowStatus
         mockSession,
       );
+    });
+
+    it('succeeds on a Yes-branch draft without checkboxConfirmation (requiredTrue mandatory-on-draft is temporarily disabled)', async () => {
+      rowService['resolveAndValidateRows'].mockResolvedValueOnce({ rows: [sampleResolvedRow], errors: {} });
+      const dto = baseDto({
+        isFcUnspent: true,
+        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5 }],
+      });
+      await expect(service.saveDraft(dto, stateUser())).resolves.toBeDefined();
     });
 
     it('propagates row-service validation errors (e.g. missing/non-positive allocation) as a 400', async () => {
@@ -748,6 +784,87 @@ describe('FcUnspentDeclarationService', () => {
     expect(model['findOneAndUpdate']).not.toHaveBeenCalled();
   });
 
+  // ─── DB-driven rowEditFields (ULB row-table column metadata) ────────────────
+
+  describe('getForm rowEditFields', () => {
+    it('includes rowEditFields in the response with all 8 ULB row-table columns', async () => {
+      const result = await service.getForm(stateOid.toString(), yearOid.toString(), stateUser());
+      expect(result.data!.rowEditFields.map((f) => f.key)).toEqual([
+        'ulbId',
+        'unspentAmount',
+        'censusCode',
+        'sbCode',
+        'ulbName',
+        'allocationAmount',
+        'allocationPerc',
+        'eligibility',
+      ]);
+    });
+
+    it('rowEditFields entries do not expose fieldTypes', async () => {
+      const result = await service.getForm(stateOid.toString(), yearOid.toString(), stateUser());
+      expect(result.data!.rowEditFields.every((f) => !('fieldTypes' in f))).toBe(true);
+    });
+
+    it('questions contains exactly the 3 main fields — row-edit-tagged entries are excluded', async () => {
+      const result = await service.getForm(stateOid.toString(), yearOid.toString(), stateUser());
+      expect(result.data!.questions.map((q) => q.key)).toEqual([
+        'isFcUnspent',
+        'fcDeclaration',
+        'checkboxConfirmation',
+      ]);
+    });
+
+    it('throws InternalServerErrorException when the FC_UNSPENT_ROW_EDIT_FIELDS group is empty', async () => {
+      formJsonConfigService['loadFields'] = jest
+        .fn()
+        .mockResolvedValue(
+          FC_UNSPENT_STATE_FORM_JSON.data.filter((f) => f.fieldTypes[0] !== 'FC_UNSPENT_ROW_EDIT_FIELDS'),
+        );
+      await expect(service.getForm(stateOid.toString(), yearOid.toString(), stateUser())).rejects.toThrow(
+        'FC_UNSPENT_ROW_EDIT_FIELDS group is empty in form configuration.',
+      );
+    });
+
+    it('saveDraft still succeeds when formJson.data includes the 8 row-tagged fields (they must not reach the dynamic validator)', async () => {
+      const dto = baseDto({ isFcUnspent: false });
+      await expect(service.saveDraft(dto, stateUser())).resolves.toBeDefined();
+    });
+
+    it('finalSubmit still succeeds when formJson.data includes the 8 row-tagged fields (they must not reach the dynamic validator)', async () => {
+      rowService['resolveAndValidateRows'].mockResolvedValueOnce({ rows: [sampleResolvedRow], errors: {} });
+      const dto = baseDto({
+        isFcUnspent: true,
+        checkboxConfirmation: true,
+        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5 }],
+      });
+      await expect(service.finalSubmit(dto, stateUser(), '127.0.0.1', 'jest-agent')).resolves.toBeDefined();
+    });
+  });
+
+  it('signs the uploaded declaration file inline so it opens in a new tab instead of force-downloading', async () => {
+    const storedPath = 'xvi-fc/state/x/2026-27/fc-unspent-declaration/fc-declaration/declaration.pdf';
+    model['findOne'] = jest.fn().mockReturnValue(
+      q({
+        _id: parentOid,
+        currentFormStatus: FORM_STATUS.IN_PROGRESS,
+        isFcUnspent: false,
+        fcDeclaration: {
+          originalName: 'declaration.pdf',
+          path: storedPath,
+          mimeType: 'application/pdf',
+          extension: 'pdf',
+          sizeKb: 100,
+        },
+      }),
+    );
+    const fileTokenService: { signFileUrl: jest.Mock } = (service as unknown as { fileTokenService: unknown })[
+      'fileTokenService'
+    ] as never;
+    await service.getForm(stateOid.toString(), yearOid.toString(), stateUser());
+    expect(fileTokenService.signFileUrl).toHaveBeenCalledWith(storedPath, 'inline');
+  });
+
   // ─── DB-backed formJson loading ─────────────────────────────────────────────
 
   describe('DB-backed formJson loading', () => {
@@ -796,17 +913,11 @@ describe('FcUnspentDeclarationService', () => {
   // ─── Declaration-template download ──────────────────────────────────────────
 
   describe('getDeclarationTemplate — configuration', () => {
-    it('2026-27 resolves the exact approved template', () => {
-      expect(FC_UNSPENT_DECLARATION_TEMPLATE_BY_YEAR['2026-27']).toEqual({
-        path: 'xvi-fc/state/common/2026-27/fc-unspent/fc-declaration-template/FC-Unspent-Declaration_9ef58a73-82ef-43b7-991f-02257fcde890.docx',
-        fileName: 'FC-Unspent-Declaration-2026-27.docx',
-        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      });
-    });
-
-    it('does not fall back to the 2026-27 template for an unsupported design year', () => {
-      expect(FC_UNSPENT_DECLARATION_TEMPLATE_BY_YEAR['2027-28']).toBeUndefined();
-      expect(FC_UNSPENT_DECLARATION_TEMPLATE_BY_YEAR['not-a-year']).toBeUndefined();
+    it('the seed fixture carries the expected DB-driven template meta for 2026-27', () => {
+      const fcDeclaration = FC_UNSPENT_STATE_FORM_JSON.data.find((f) => f.key === 'fcDeclaration')!;
+      const actionsBlock = fcDeclaration.supportingContent!.find((b) => b.type === 'actions')!;
+      const action = actionsBlock.actions!.find((a) => a.id === FC_UNSPENT_DECLARATION_TEMPLATE_ACTION_ID)!;
+      expect(action.meta).toEqual(FC_UNSPENT_DECLARATION_TEMPLATE_META);
     });
 
     it('never returns the raw S3 path, only the signed url/fileName/mimeType', async () => {
@@ -814,7 +925,7 @@ describe('FcUnspentDeclarationService', () => {
       expect(result.data).toEqual({
         fileName: 'FC-Unspent-Declaration-2026-27.docx',
         mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        url: `signed::${FC_UNSPENT_DECLARATION_TEMPLATE_BY_YEAR['2026-27'].path}`,
+        url: `signed::${FC_UNSPENT_DECLARATION_TEMPLATE_META.path}`,
       });
       // No extra keys (no raw `path`/`bucket`/token payload) beyond the 3 documented fields.
       expect(Object.keys(result.data!).sort()).toEqual(['fileName', 'mimeType', 'url']);
@@ -840,10 +951,11 @@ describe('FcUnspentDeclarationService', () => {
       ).resolves.toBeDefined();
     });
 
-    it('404s for a yearId that has no design-year label', async () => {
+    it('404s for a yearId with no active formJson document', async () => {
+      formJsonConfigService['loadFields'] = jest.fn().mockRejectedValue(new NotFoundException('FormJson not found'));
       const unknownYearId = new Types.ObjectId().toString();
       await expect(service.getDeclarationTemplate(stateOid.toString(), unknownYearId, stateUser())).rejects.toThrow(
-        'Design year not found',
+        NotFoundException,
       );
     });
   });
@@ -900,14 +1012,12 @@ describe('FcUnspentDeclarationService', () => {
         'fileTokenService'
       ] as never;
       await service.getDeclarationTemplate(stateOid.toString(), yearOid.toString(), stateUser());
-      expect(fileTokenService.signFileUrl).toHaveBeenCalledWith(
-        FC_UNSPENT_DECLARATION_TEMPLATE_BY_YEAR['2026-27'].path,
-      );
+      expect(fileTokenService.signFileUrl).toHaveBeenCalledWith(FC_UNSPENT_DECLARATION_TEMPLATE_META.path);
     });
 
     it('verifies the S3 object exists via the shared S3Service.headObject before signing', async () => {
       await service.getDeclarationTemplate(stateOid.toString(), yearOid.toString(), stateUser());
-      expect(s3Service['headObject']).toHaveBeenCalledWith(FC_UNSPENT_DECLARATION_TEMPLATE_BY_YEAR['2026-27'].path);
+      expect(s3Service['headObject']).toHaveBeenCalledWith(FC_UNSPENT_DECLARATION_TEMPLATE_META.path);
     });
 
     it('fails without leaking the raw S3 error/key when headObject rejects (object missing)', async () => {
@@ -918,7 +1028,7 @@ describe('FcUnspentDeclarationService', () => {
       );
       expect(message).toBe('The declaration template could not be generated. Please contact support.');
       expect(message).not.toContain('NoSuchKey');
-      expect(message).not.toContain(FC_UNSPENT_DECLARATION_TEMPLATE_BY_YEAR['2026-27'].path);
+      expect(message).not.toContain(FC_UNSPENT_DECLARATION_TEMPLATE_META.path);
     });
 
     it('fails when the object metadata reports an empty file', async () => {
@@ -931,19 +1041,14 @@ describe('FcUnspentDeclarationService', () => {
     });
 
     it("returns a controlled field error (not another year's file) when the design year has no configured template", async () => {
-      // 2026-27 is the only configured year in this environment; simulate an unconfigured design
-      // year by temporarily removing its mapping entry.
-      const originalEntry = FC_UNSPENT_DECLARATION_TEMPLATE_BY_YEAR['2026-27'];
-      delete (FC_UNSPENT_DECLARATION_TEMPLATE_BY_YEAR as Record<string, unknown>)['2026-27'];
-      try {
-        const message = await getValidationErrorMessage(
-          service.getDeclarationTemplate(stateOid.toString(), yearOid.toString(), stateUser()),
-          'fcDeclaration',
-        );
-        expect(message).toBe('The declaration template is not configured for the selected design year.');
-      } finally {
-        FC_UNSPENT_DECLARATION_TEMPLATE_BY_YEAR['2026-27'] = originalEntry;
-      }
+      // Simulate an unconfigured design year: the DB doc exists, but its `fcDeclaration`
+      // download-template action carries no `meta` (never approved/uploaded yet).
+      formJsonConfigService['loadFields'] = jest.fn().mockResolvedValue(fcUnspentFieldsWithoutTemplateMeta());
+      const message = await getValidationErrorMessage(
+        service.getDeclarationTemplate(stateOid.toString(), yearOid.toString(), stateUser()),
+        'fcDeclaration',
+      );
+      expect(message).toBe('The declaration template is not configured for the selected design year.');
     });
 
     it('does not write to the database (no parent update, no history, no row mutation)', async () => {
@@ -981,6 +1086,24 @@ describe('FcUnspentDeclarationService', () => {
       expect(action.visible).toBe(false);
     });
 
+    it('shows the actions block description alongside the action when canEdit is true', async () => {
+      model['findOne'] = jest.fn().mockReturnValue(q({ currentFormStatus: FORM_STATUS.IN_PROGRESS }));
+      const result = await service.getForm(stateOid.toString(), yearOid.toString(), stateUser());
+      const fcDeclaration = result.data!.questions.find((q) => q.key === 'fcDeclaration')!;
+      const actionsBlock = fcDeclaration.supportingContent!.find((b) => b.type === 'actions')!;
+      expect(actionsBlock.description).toBe(
+        'Download the official template, have it signed by the authorized State DMA officer, and upload the signed declaration. Declarations on unofficial letterhead will not be accepted.',
+      );
+    });
+
+    it('clears the actions block description when the form is read-only (canEdit false), not just the action', async () => {
+      model['findOne'] = jest.fn().mockReturnValue(q({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }));
+      const result = await service.getForm(stateOid.toString(), yearOid.toString(), stateUser());
+      const fcDeclaration = result.data!.questions.find((q) => q.key === 'fcDeclaration')!;
+      const actionsBlock = fcDeclaration.supportingContent!.find((b) => b.type === 'actions')!;
+      expect(actionsBlock.description).toBeUndefined();
+    });
+
     it('is hidden when the design year has no configured template, even though canEdit is true', () => {
       const hydrated = (
         service as unknown as {
@@ -989,23 +1112,30 @@ describe('FcUnspentDeclarationService', () => {
             savedData: Record<string, unknown>,
             ctx: unknown,
             canEdit: boolean,
-            designYear: string,
           ) => Array<{
             key: string;
             supportingContent?: Array<{ type: string; actions?: Array<{ id: string; visible?: boolean }> }>;
           }>;
         }
       )['hydrateQuestions'](
-        FC_UNSPENT_STATE_FORM_JSON.data,
+        fcUnspentFieldsWithoutTemplateMeta(),
         {},
         { _id: stateOid.toString(), role: 'state', designYear: '2026-27' },
         true,
-        'unconfigured-design-year',
       );
       const fcDeclaration = hydrated.find((q) => q.key === 'fcDeclaration')!;
       const actionsBlock = fcDeclaration.supportingContent!.find((b) => b.type === 'actions')!;
       const action = actionsBlock.actions!.find((a) => a.id === FC_UNSPENT_DECLARATION_TEMPLATE_ACTION_ID)!;
       expect(action.visible).toBe(false);
+    });
+
+    it('strips meta from the download-template action before it reaches the GET-form response', async () => {
+      model['findOne'] = jest.fn().mockReturnValue(q({ currentFormStatus: FORM_STATUS.IN_PROGRESS }));
+      const result = await service.getForm(stateOid.toString(), yearOid.toString(), stateUser());
+      const fcDeclaration = result.data!.questions.find((q) => q.key === 'fcDeclaration')!;
+      const actionsBlock = fcDeclaration.supportingContent!.find((b) => b.type === 'actions')!;
+      const action = actionsBlock.actions!.find((a) => a.id === FC_UNSPENT_DECLARATION_TEMPLATE_ACTION_ID)!;
+      expect(action).not.toHaveProperty('meta');
     });
 
     it('never persists a signed URL into formJson — GET never writes to the database', async () => {

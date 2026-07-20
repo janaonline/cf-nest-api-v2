@@ -29,6 +29,7 @@ export class DevolutionFormulaValidator {
   validateRow(
     parsed: DfParsedExcelRow,
     installment: DfInstallment,
+    maxFormulaLength: number,
     context?: { totalMoHUAAllocation?: number },
   ): DfRowError[] {
     const errors: DfRowError[] = [];
@@ -60,6 +61,13 @@ export class DevolutionFormulaValidator {
     }
     if (!parsed.devolutionFormula || !String(parsed.devolutionFormula).trim()) {
       errors.push({ field: 'devolutionFormula', code: 'required', message: 'Devolution Formula is required.' });
+    } else if (String(parsed.devolutionFormula).trim().length > maxFormulaLength) {
+      errors.push({
+        field: 'devolutionFormula',
+        code: 'maxlength',
+        message: `Devolution Formula cannot exceed ${maxFormulaLength} characters.`,
+        value: parsed.devolutionFormula,
+      });
     }
 
     if (errors.length > 0) return errors;
@@ -177,12 +185,22 @@ export class DevolutionFormulaValidator {
       devolutionFormula?: string;
     },
     _installment: DfInstallment,
+    maxFormulaLength: number,
     context?: { totalMoHUAAllocation?: number },
   ): DfRowError[] {
     const errors: DfRowError[] = [];
 
-    if (dto.devolutionFormula !== undefined && !String(dto.devolutionFormula).trim()) {
-      errors.push({ field: 'devolutionFormula', code: 'required', message: 'Devolution Formula cannot be empty.' });
+    if (dto.devolutionFormula !== undefined) {
+      if (!String(dto.devolutionFormula).trim()) {
+        errors.push({ field: 'devolutionFormula', code: 'required', message: 'Devolution Formula cannot be empty.' });
+      } else if (String(dto.devolutionFormula).trim().length > maxFormulaLength) {
+        errors.push({
+          field: 'devolutionFormula',
+          code: 'maxlength',
+          message: `Devolution Formula cannot exceed ${maxFormulaLength} characters.`,
+          value: dto.devolutionFormula,
+        });
+      }
     }
 
     const hasTotal = dto.totalGrantAllocation !== undefined;

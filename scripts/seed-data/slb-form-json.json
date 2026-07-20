@@ -1,0 +1,1121 @@
+{
+  "design_year": "REPLACE_WITH_YEAR_OBJECT_ID",
+  "formId": 32,
+  "type": "SLB",
+  "isActive": true,
+  "data": [
+    {
+      "key": "ind1",
+      "label": "Per capita supply of water",
+      "position": 1,
+      "formFieldType": "actualTarget",
+      "required": true,
+      "decimal": 2,
+      "inputCardConfig": {
+        "suffixText": "lpcd"
+      },
+      "placeholder": "0-1000",
+      "validations": [
+        {
+          "name": "required",
+          "validator": null,
+          "message": "Both actual and target values for indicator 1 are required."
+        },
+        {
+          "name": "min",
+          "validator": 0,
+          "message": "Value cannot be negative."
+        },
+        {
+          "name": "max",
+          "validator": 1000,
+          "message": "Value cannot exceed 1000 lpcd."
+        }
+      ],
+      "fieldTypes": [
+        "SLB_MAIN_FORM_FIELDS"
+      ],
+      "meta": {
+        "sector": "Water Supply",
+        "indicatorNumber": 1,
+        "unit": "lpcd"
+      }
+    },
+    {
+      "key": "ind2",
+      "label": "Extent of metering of water connections",
+      "position": 2,
+      "formFieldType": "actualTarget",
+      "required": true,
+      "decimal": 2,
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
+      "placeholder": "0-100",
+      "validations": [
+        {
+          "name": "required",
+          "validator": null,
+          "message": "Both actual and target values for indicator 2 are required."
+        },
+        {
+          "name": "min",
+          "validator": 0,
+          "message": "Value cannot be negative."
+        },
+        {
+          "name": "max",
+          "validator": 100,
+          "message": "Value cannot exceed 100%."
+        }
+      ],
+      "fieldTypes": [
+        "SLB_MAIN_FORM_FIELDS"
+      ],
+      "meta": {
+        "sector": "Water Supply",
+        "indicatorNumber": 2,
+        "unit": "%"
+      }
+    },
+    {
+      "key": "ind3",
+      "label": "Efficiency in redressal of customer complaints (Water Supply)",
+      "position": 3,
+      "formFieldType": "actualTarget",
+      "required": true,
+      "decimal": 2,
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
+      "placeholder": "0-100",
+      "validations": [
+        {
+          "name": "required",
+          "validator": null,
+          "message": "Both actual and target values for indicator 3 are required."
+        },
+        {
+          "name": "min",
+          "validator": 0,
+          "message": "Value cannot be negative."
+        },
+        {
+          "name": "max",
+          "validator": 100,
+          "message": "Value cannot exceed 100%."
+        }
+      ],
+      "fieldTypes": [
+        "SLB_MAIN_FORM_FIELDS"
+      ],
+      "meta": {
+        "sector": "Water Supply",
+        "indicatorNumber": 3,
+        "unit": "%"
+      }
+    },
+    {
+      "key": "ind4",
+      "label": "Quality of water supplied",
+      "position": 4,
+      "formFieldType": "actualTarget",
+      "required": true,
+      "decimal": 2,
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
+      "placeholder": "0-100",
+      "validations": [
+        {
+          "name": "required",
+          "validator": null,
+          "message": "Both actual and target values for indicator 4 are required."
+        },
+        {
+          "name": "min",
+          "validator": 0,
+          "message": "Value cannot be negative."
+        },
+        {
+          "name": "max",
+          "validator": 100,
+          "message": "Value cannot exceed 100%."
+        }
+      ],
+      "fieldTypes": [
+        "SLB_MAIN_FORM_FIELDS"
+      ],
+      "meta": {
+        "sector": "Water Supply",
+        "indicatorNumber": 4,
+        "unit": "%"
+      }
+    },
+    {
+      "key": "ind5",
+      "label": "Cost recovery in water supply services",
+      "position": 5,
+      "formFieldType": "actualTarget",
+      "required": true,
+      "decimal": 2,
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
+      "placeholder": "0-100",
+      "validations": [
+        {
+          "name": "required",
+          "validator": null,
+          "message": "Both actual and target values for indicator 5 are required."
+        },
+        {
+          "name": "min",
+          "validator": 0,
+          "message": "Value cannot be negative."
+        },
+        {
+          "name": "max",
+          "validator": 100,
+          "message": "Value cannot exceed 100%."
+        }
+      ],
+      "fieldTypes": [
+        "SLB_MAIN_FORM_FIELDS"
+      ],
+      "meta": {
+        "sector": "Water Supply",
+        "indicatorNumber": 5,
+        "unit": "%"
+      }
+    },
+    {
+      "key": "ind6",
+      "label": "Coverage of water supply connections",
+      "position": 6,
+      "formFieldType": "actualTarget",
+      "required": true,
+      "decimal": 2,
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
+      "placeholder": "0-100",
+      "validations": [
+        {
+          "name": "required",
+          "validator": null,
+          "message": "Both actual and target values for indicator 6 are required."
+        },
+        {
+          "name": "min",
+          "validator": 0,
+          "message": "Value cannot be negative."
+        },
+        {
+          "name": "max",
+          "validator": 100,
+          "message": "Value cannot exceed 100%."
+        }
+      ],
+      "fieldTypes": [
+        "SLB_MAIN_FORM_FIELDS"
+      ],
+      "meta": {
+        "sector": "Water Supply",
+        "indicatorNumber": 6,
+        "unit": "%"
+      }
+    },
+    {
+      "key": "ind7",
+      "label": "Extent of non-revenue water (NRW)",
+      "position": 7,
+      "formFieldType": "actualTarget",
+      "required": true,
+      "decimal": 2,
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
+      "placeholder": "0-100",
+      "validations": [
+        {
+          "name": "required",
+          "validator": null,
+          "message": "Both actual and target values for indicator 7 are required."
+        },
+        {
+          "name": "min",
+          "validator": 0,
+          "message": "Value cannot be negative."
+        },
+        {
+          "name": "max",
+          "validator": 100,
+          "message": "Value cannot exceed 100%."
+        }
+      ],
+      "fieldTypes": [
+        "SLB_MAIN_FORM_FIELDS"
+      ],
+      "meta": {
+        "sector": "Water Supply",
+        "indicatorNumber": 7,
+        "unit": "%"
+      }
+    },
+    {
+      "key": "ind8",
+      "label": "Continuity of water supply",
+      "position": 8,
+      "formFieldType": "actualTarget",
+      "required": true,
+      "decimal": 2,
+      "inputCardConfig": {
+        "suffixText": "Hours/day"
+      },
+      "placeholder": "0-24",
+      "validations": [
+        {
+          "name": "required",
+          "validator": null,
+          "message": "Both actual and target values for indicator 8 are required."
+        },
+        {
+          "name": "min",
+          "validator": 0,
+          "message": "Value cannot be negative."
+        },
+        {
+          "name": "max",
+          "validator": 24,
+          "message": "Value cannot exceed 24 Hours/day."
+        }
+      ],
+      "fieldTypes": [
+        "SLB_MAIN_FORM_FIELDS"
+      ],
+      "meta": {
+        "sector": "Water Supply",
+        "indicatorNumber": 8,
+        "unit": "Hours/day"
+      }
+    },
+    {
+      "key": "ind9",
+      "label": "Efficiency in collection of water supply-related charges",
+      "position": 9,
+      "formFieldType": "actualTarget",
+      "required": true,
+      "decimal": 2,
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
+      "placeholder": "0-100",
+      "validations": [
+        {
+          "name": "required",
+          "validator": null,
+          "message": "Both actual and target values for indicator 9 are required."
+        },
+        {
+          "name": "min",
+          "validator": 0,
+          "message": "Value cannot be negative."
+        },
+        {
+          "name": "max",
+          "validator": 100,
+          "message": "Value cannot exceed 100%."
+        }
+      ],
+      "fieldTypes": [
+        "SLB_MAIN_FORM_FIELDS"
+      ],
+      "meta": {
+        "sector": "Water Supply",
+        "indicatorNumber": 9,
+        "unit": "%"
+      }
+    },
+    {
+      "key": "ind10",
+      "label": "Adequacy of waste water treatment capacity",
+      "position": 10,
+      "formFieldType": "actualTarget",
+      "required": true,
+      "decimal": 2,
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
+      "placeholder": "0-100",
+      "validations": [
+        {
+          "name": "required",
+          "validator": null,
+          "message": "Both actual and target values for indicator 10 are required."
+        },
+        {
+          "name": "min",
+          "validator": 0,
+          "message": "Value cannot be negative."
+        },
+        {
+          "name": "max",
+          "validator": 100,
+          "message": "Value cannot exceed 100%."
+        }
+      ],
+      "fieldTypes": [
+        "SLB_MAIN_FORM_FIELDS"
+      ],
+      "meta": {
+        "sector": "Sewerage & Waste Water",
+        "indicatorNumber": 10,
+        "unit": "%"
+      }
+    },
+    {
+      "key": "ind11",
+      "label": "Quality of waste water treatment",
+      "position": 11,
+      "formFieldType": "actualTarget",
+      "required": true,
+      "decimal": 2,
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
+      "placeholder": "0-100",
+      "validations": [
+        {
+          "name": "required",
+          "validator": null,
+          "message": "Both actual and target values for indicator 11 are required."
+        },
+        {
+          "name": "min",
+          "validator": 0,
+          "message": "Value cannot be negative."
+        },
+        {
+          "name": "max",
+          "validator": 100,
+          "message": "Value cannot exceed 100%."
+        }
+      ],
+      "fieldTypes": [
+        "SLB_MAIN_FORM_FIELDS"
+      ],
+      "meta": {
+        "sector": "Sewerage & Waste Water",
+        "indicatorNumber": 11,
+        "unit": "%"
+      }
+    },
+    {
+      "key": "ind12",
+      "label": "Efficiency in redressal of customer complaints (Waste Water)",
+      "position": 12,
+      "formFieldType": "actualTarget",
+      "required": true,
+      "decimal": 2,
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
+      "placeholder": "0-100",
+      "validations": [
+        {
+          "name": "required",
+          "validator": null,
+          "message": "Both actual and target values for indicator 12 are required."
+        },
+        {
+          "name": "min",
+          "validator": 0,
+          "message": "Value cannot be negative."
+        },
+        {
+          "name": "max",
+          "validator": 100,
+          "message": "Value cannot exceed 100%."
+        }
+      ],
+      "fieldTypes": [
+        "SLB_MAIN_FORM_FIELDS"
+      ],
+      "meta": {
+        "sector": "Sewerage & Waste Water",
+        "indicatorNumber": 12,
+        "unit": "%"
+      }
+    },
+    {
+      "key": "ind13",
+      "label": "Collection efficiency of waste water network",
+      "position": 13,
+      "formFieldType": "actualTarget",
+      "required": true,
+      "decimal": 2,
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
+      "placeholder": "0-100",
+      "validations": [
+        {
+          "name": "required",
+          "validator": null,
+          "message": "Both actual and target values for indicator 13 are required."
+        },
+        {
+          "name": "min",
+          "validator": 0,
+          "message": "Value cannot be negative."
+        },
+        {
+          "name": "max",
+          "validator": 100,
+          "message": "Value cannot exceed 100%."
+        }
+      ],
+      "fieldTypes": [
+        "SLB_MAIN_FORM_FIELDS"
+      ],
+      "meta": {
+        "sector": "Sewerage & Waste Water",
+        "indicatorNumber": 13,
+        "unit": "%"
+      }
+    },
+    {
+      "key": "ind14",
+      "label": "Coverage of toilets",
+      "position": 14,
+      "formFieldType": "actualTarget",
+      "required": true,
+      "decimal": 2,
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
+      "placeholder": "0-100",
+      "validations": [
+        {
+          "name": "required",
+          "validator": null,
+          "message": "Both actual and target values for indicator 14 are required."
+        },
+        {
+          "name": "min",
+          "validator": 0,
+          "message": "Value cannot be negative."
+        },
+        {
+          "name": "max",
+          "validator": 100,
+          "message": "Value cannot exceed 100%."
+        }
+      ],
+      "fieldTypes": [
+        "SLB_MAIN_FORM_FIELDS"
+      ],
+      "meta": {
+        "sector": "Sewerage & Waste Water",
+        "indicatorNumber": 14,
+        "unit": "%"
+      }
+    },
+    {
+      "key": "ind15",
+      "label": "Coverage of waste water network services",
+      "position": 15,
+      "formFieldType": "actualTarget",
+      "required": true,
+      "decimal": 2,
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
+      "placeholder": "0-100",
+      "validations": [
+        {
+          "name": "required",
+          "validator": null,
+          "message": "Both actual and target values for indicator 15 are required."
+        },
+        {
+          "name": "min",
+          "validator": 0,
+          "message": "Value cannot be negative."
+        },
+        {
+          "name": "max",
+          "validator": 100,
+          "message": "Value cannot exceed 100%."
+        }
+      ],
+      "fieldTypes": [
+        "SLB_MAIN_FORM_FIELDS"
+      ],
+      "meta": {
+        "sector": "Sewerage & Waste Water",
+        "indicatorNumber": 15,
+        "unit": "%"
+      }
+    },
+    {
+      "key": "ind16",
+      "label": "Extent of reuse and recycling of waste water",
+      "position": 16,
+      "formFieldType": "actualTarget",
+      "required": true,
+      "decimal": 2,
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
+      "placeholder": "0-100",
+      "validations": [
+        {
+          "name": "required",
+          "validator": null,
+          "message": "Both actual and target values for indicator 16 are required."
+        },
+        {
+          "name": "min",
+          "validator": 0,
+          "message": "Value cannot be negative."
+        },
+        {
+          "name": "max",
+          "validator": 100,
+          "message": "Value cannot exceed 100%."
+        }
+      ],
+      "fieldTypes": [
+        "SLB_MAIN_FORM_FIELDS"
+      ],
+      "meta": {
+        "sector": "Sewerage & Waste Water",
+        "indicatorNumber": 16,
+        "unit": "%"
+      }
+    },
+    {
+      "key": "ind17",
+      "label": "Extent of cost recovery in waste water",
+      "position": 17,
+      "formFieldType": "actualTarget",
+      "required": true,
+      "decimal": 2,
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
+      "placeholder": "0-100",
+      "validations": [
+        {
+          "name": "required",
+          "validator": null,
+          "message": "Both actual and target values for indicator 17 are required."
+        },
+        {
+          "name": "min",
+          "validator": 0,
+          "message": "Value cannot be negative."
+        },
+        {
+          "name": "max",
+          "validator": 100,
+          "message": "Value cannot exceed 100%."
+        }
+      ],
+      "fieldTypes": [
+        "SLB_MAIN_FORM_FIELDS"
+      ],
+      "meta": {
+        "sector": "Sewerage & Waste Water",
+        "indicatorNumber": 17,
+        "unit": "%"
+      }
+    },
+    {
+      "key": "ind18",
+      "label": "Efficiency in collection of waste water charges",
+      "position": 18,
+      "formFieldType": "actualTarget",
+      "required": true,
+      "decimal": 2,
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
+      "placeholder": "0-100",
+      "validations": [
+        {
+          "name": "required",
+          "validator": null,
+          "message": "Both actual and target values for indicator 18 are required."
+        },
+        {
+          "name": "min",
+          "validator": 0,
+          "message": "Value cannot be negative."
+        },
+        {
+          "name": "max",
+          "validator": 100,
+          "message": "Value cannot exceed 100%."
+        }
+      ],
+      "fieldTypes": [
+        "SLB_MAIN_FORM_FIELDS"
+      ],
+      "meta": {
+        "sector": "Sewerage & Waste Water",
+        "indicatorNumber": 18,
+        "unit": "%"
+      }
+    },
+    {
+      "key": "ind19",
+      "label": "Extent of cost recovery in SWM services",
+      "position": 19,
+      "formFieldType": "actualTarget",
+      "required": true,
+      "decimal": 2,
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
+      "placeholder": "0-100",
+      "validations": [
+        {
+          "name": "required",
+          "validator": null,
+          "message": "Both actual and target values for indicator 19 are required."
+        },
+        {
+          "name": "min",
+          "validator": 0,
+          "message": "Value cannot be negative."
+        },
+        {
+          "name": "max",
+          "validator": 100,
+          "message": "Value cannot exceed 100%."
+        }
+      ],
+      "fieldTypes": [
+        "SLB_MAIN_FORM_FIELDS"
+      ],
+      "meta": {
+        "sector": "Solid Waste Management",
+        "indicatorNumber": 19,
+        "unit": "%"
+      }
+    },
+    {
+      "key": "ind20",
+      "label": "Efficiency in redressal of customer complaints (SWM)",
+      "position": 20,
+      "formFieldType": "actualTarget",
+      "required": true,
+      "decimal": 2,
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
+      "placeholder": "0-100",
+      "validations": [
+        {
+          "name": "required",
+          "validator": null,
+          "message": "Both actual and target values for indicator 20 are required."
+        },
+        {
+          "name": "min",
+          "validator": 0,
+          "message": "Value cannot be negative."
+        },
+        {
+          "name": "max",
+          "validator": 100,
+          "message": "Value cannot exceed 100%."
+        }
+      ],
+      "fieldTypes": [
+        "SLB_MAIN_FORM_FIELDS"
+      ],
+      "meta": {
+        "sector": "Solid Waste Management",
+        "indicatorNumber": 20,
+        "unit": "%"
+      }
+    },
+    {
+      "key": "ind21",
+      "label": "Efficiency in collection of SWM related user charges",
+      "position": 21,
+      "formFieldType": "actualTarget",
+      "required": true,
+      "decimal": 2,
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
+      "placeholder": "0-100",
+      "validations": [
+        {
+          "name": "required",
+          "validator": null,
+          "message": "Both actual and target values for indicator 21 are required."
+        },
+        {
+          "name": "min",
+          "validator": 0,
+          "message": "Value cannot be negative."
+        },
+        {
+          "name": "max",
+          "validator": 100,
+          "message": "Value cannot exceed 100%."
+        }
+      ],
+      "fieldTypes": [
+        "SLB_MAIN_FORM_FIELDS"
+      ],
+      "meta": {
+        "sector": "Solid Waste Management",
+        "indicatorNumber": 21,
+        "unit": "%"
+      }
+    },
+    {
+      "key": "ind22",
+      "label": "Efficiency of collection of municipal solid waste",
+      "position": 22,
+      "formFieldType": "actualTarget",
+      "required": true,
+      "decimal": 2,
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
+      "placeholder": "0-100",
+      "validations": [
+        {
+          "name": "required",
+          "validator": null,
+          "message": "Both actual and target values for indicator 22 are required."
+        },
+        {
+          "name": "min",
+          "validator": 0,
+          "message": "Value cannot be negative."
+        },
+        {
+          "name": "max",
+          "validator": 100,
+          "message": "Value cannot exceed 100%."
+        }
+      ],
+      "fieldTypes": [
+        "SLB_MAIN_FORM_FIELDS"
+      ],
+      "meta": {
+        "sector": "Solid Waste Management",
+        "indicatorNumber": 22,
+        "unit": "%"
+      }
+    },
+    {
+      "key": "ind23",
+      "label": "Extent of segregation of municipal solid waste",
+      "position": 23,
+      "formFieldType": "actualTarget",
+      "required": true,
+      "decimal": 2,
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
+      "placeholder": "0-100",
+      "validations": [
+        {
+          "name": "required",
+          "validator": null,
+          "message": "Both actual and target values for indicator 23 are required."
+        },
+        {
+          "name": "min",
+          "validator": 0,
+          "message": "Value cannot be negative."
+        },
+        {
+          "name": "max",
+          "validator": 100,
+          "message": "Value cannot exceed 100%."
+        }
+      ],
+      "fieldTypes": [
+        "SLB_MAIN_FORM_FIELDS"
+      ],
+      "meta": {
+        "sector": "Solid Waste Management",
+        "indicatorNumber": 23,
+        "unit": "%"
+      }
+    },
+    {
+      "key": "ind24",
+      "label": "Extent of municipal solid waste recovered",
+      "position": 24,
+      "formFieldType": "actualTarget",
+      "required": true,
+      "decimal": 2,
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
+      "placeholder": "0-100",
+      "validations": [
+        {
+          "name": "required",
+          "validator": null,
+          "message": "Both actual and target values for indicator 24 are required."
+        },
+        {
+          "name": "min",
+          "validator": 0,
+          "message": "Value cannot be negative."
+        },
+        {
+          "name": "max",
+          "validator": 100,
+          "message": "Value cannot exceed 100%."
+        }
+      ],
+      "fieldTypes": [
+        "SLB_MAIN_FORM_FIELDS"
+      ],
+      "meta": {
+        "sector": "Solid Waste Management",
+        "indicatorNumber": 24,
+        "unit": "%"
+      }
+    },
+    {
+      "key": "ind25",
+      "label": "Extent of scientific disposal of municipal solid waste",
+      "position": 25,
+      "formFieldType": "actualTarget",
+      "required": true,
+      "decimal": 2,
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
+      "placeholder": "0-100",
+      "validations": [
+        {
+          "name": "required",
+          "validator": null,
+          "message": "Both actual and target values for indicator 25 are required."
+        },
+        {
+          "name": "min",
+          "validator": 0,
+          "message": "Value cannot be negative."
+        },
+        {
+          "name": "max",
+          "validator": 100,
+          "message": "Value cannot exceed 100%."
+        }
+      ],
+      "fieldTypes": [
+        "SLB_MAIN_FORM_FIELDS"
+      ],
+      "meta": {
+        "sector": "Solid Waste Management",
+        "indicatorNumber": 25,
+        "unit": "%"
+      }
+    },
+    {
+      "key": "ind26",
+      "label": "Household level coverage of solid waste management services",
+      "position": 26,
+      "formFieldType": "actualTarget",
+      "required": true,
+      "decimal": 2,
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
+      "placeholder": "0-100",
+      "validations": [
+        {
+          "name": "required",
+          "validator": null,
+          "message": "Both actual and target values for indicator 26 are required."
+        },
+        {
+          "name": "min",
+          "validator": 0,
+          "message": "Value cannot be negative."
+        },
+        {
+          "name": "max",
+          "validator": 100,
+          "message": "Value cannot exceed 100%."
+        }
+      ],
+      "fieldTypes": [
+        "SLB_MAIN_FORM_FIELDS"
+      ],
+      "meta": {
+        "sector": "Solid Waste Management",
+        "indicatorNumber": 26,
+        "unit": "%"
+      }
+    },
+    {
+      "key": "ind27",
+      "label": "Coverage of storm water drainage network",
+      "position": 27,
+      "formFieldType": "actualTarget",
+      "required": true,
+      "decimal": 2,
+      "inputCardConfig": {
+        "suffixText": "%"
+      },
+      "placeholder": "0-100",
+      "validations": [
+        {
+          "name": "required",
+          "validator": null,
+          "message": "Both actual and target values for indicator 27 are required."
+        },
+        {
+          "name": "min",
+          "validator": 0,
+          "message": "Value cannot be negative."
+        },
+        {
+          "name": "max",
+          "validator": 100,
+          "message": "Value cannot exceed 100%."
+        }
+      ],
+      "fieldTypes": [
+        "SLB_MAIN_FORM_FIELDS"
+      ],
+      "meta": {
+        "sector": "Storm Water Drainage",
+        "indicatorNumber": 27,
+        "unit": "%"
+      }
+    },
+    {
+      "key": "ind28",
+      "label": "Incidence of water logging",
+      "position": 28,
+      "formFieldType": "actualTarget",
+      "required": true,
+      "decimal": 2,
+      "inputCardConfig": {
+        "suffixText": "Nos./Year"
+      },
+      "placeholder": "0-9999",
+      "validations": [
+        {
+          "name": "required",
+          "validator": null,
+          "message": "Both actual and target values for indicator 28 are required."
+        },
+        {
+          "name": "min",
+          "validator": 0,
+          "message": "Value cannot be negative."
+        },
+        {
+          "name": "max",
+          "validator": 9999,
+          "message": "Value cannot exceed 9999 Nos./Year."
+        }
+      ],
+      "fieldTypes": [
+        "SLB_MAIN_FORM_FIELDS"
+      ],
+      "meta": {
+        "sector": "Storm Water Drainage",
+        "indicatorNumber": 28,
+        "unit": "Nos./Year"
+      }
+    },
+    {
+      "key": "declarantName",
+      "label": "Name",
+      "formFieldType": "text",
+      "required": true,
+      "placeholder": "Full name",
+      "maxLength": 100,
+      "validations": [
+        {
+          "name": "required",
+          "validator": null,
+          "message": "Name is required."
+        }
+      ],
+      "fieldTypes": [
+        "SLB_MAIN_FORM_FIELDS"
+      ]
+    },
+    {
+      "key": "declarantDesignation",
+      "label": "Designation",
+      "formFieldType": "text",
+      "required": true,
+      "placeholder": "e.g. Municipal Engineer",
+      "maxLength": 100,
+      "validations": [
+        {
+          "name": "required",
+          "validator": null,
+          "message": "Designation is required."
+        }
+      ],
+      "fieldTypes": [
+        "SLB_MAIN_FORM_FIELDS"
+      ]
+    },
+    {
+      "key": "supportingDocumentFile",
+      "label": "Supporting Document",
+      "formFieldType": "file",
+      "required": true,
+      "folderPathKey": "slb/supporting-document",
+      "allowedFileTypes": [
+        "pdf",
+        "jpg",
+        "jpeg",
+        "png"
+      ],
+      "maxFileSize": 20971520,
+      "fileViewType": "button",
+      "validations": [
+        {
+          "name": "required",
+          "validator": null,
+          "message": "A supporting document is required."
+        }
+      ],
+      "fieldTypes": [
+        "SLB_MAIN_FORM_FIELDS"
+      ]
+    },
+    {
+      "key": "checkboxConfirmation",
+      "label": "I certify that the information above is complete and accurate to the best of my knowledge.",
+      "formFieldType": "checkbox",
+      "required": true,
+      "validations": [
+        {
+          "name": "requiredTrue",
+          "validator": null,
+          "message": "You must confirm this declaration before submitting."
+        }
+      ],
+      "fieldTypes": [
+        "SLB_MAIN_FORM_FIELDS"
+      ]
+    }
+  ]
+}

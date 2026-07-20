@@ -227,13 +227,13 @@ describe('DevolutionFormulaValidator', () => {
 
   it('validateRow returns allocationMismatch error when inst1 + inst2 ≠ totalGrantAllocation', () => {
     const row = { ...baseRow(), installment1Amount: 300_000, installment2Amount: 100_000 };
-    const errors = validator.validateRow(row, 1);
+    const errors = validator.validateRow(row, 1, 250);
     expect(errors.some((e) => e.code === 'allocationMismatch')).toBe(true);
   });
 
   it('validateRow returns required error when ulbName is blank', () => {
     const row = { ...baseRow(), ulbName: '   ' };
-    const errors = validator.validateRow(row, 1);
+    const errors = validator.validateRow(row, 1, 250);
     expect(errors.some((e) => e.field === 'ulbName' && e.code === 'required')).toBe(true);
     // Required phase fails early — no type or business errors should be appended
     expect(errors.every((e) => e.code === 'required')).toBe(true);
@@ -246,7 +246,7 @@ describe('DevolutionFormulaValidator', () => {
       installment1Amount: undefined as unknown as number,
       installment2Amount: null as unknown as number,
     };
-    const errors = validator.validateRow(row, 1);
+    const errors = validator.validateRow(row, 1, 250);
     const codes = errors.map((e) => e.field);
     expect(codes).toContain('totalGrantAllocation');
     expect(codes).toContain('installment1Amount');
@@ -255,18 +255,30 @@ describe('DevolutionFormulaValidator', () => {
 
   it('validateRow returns number error when totalGrantAllocation is a non-numeric string', () => {
     const row = { ...baseRow(), totalGrantAllocation: 'abc' };
-    const errors = validator.validateRow(row, 1);
+    const errors = validator.validateRow(row, 1, 250);
     expect(errors.some((e) => e.field === 'totalGrantAllocation' && e.code === 'number')).toBe(true);
   });
 
   it('validateRow returns min error when installment1Amount is negative', () => {
     const row = { ...baseRow(), installment1Amount: -500, installment2Amount: 700_000 };
-    const errors = validator.validateRow(row, 1);
+    const errors = validator.validateRow(row, 1, 250);
     expect(errors.some((e) => e.field === 'installment1Amount' && e.code === 'min')).toBe(true);
   });
 
   it('validateRow returns 0 errors for a fully valid row', () => {
-    const errors = validator.validateRow(baseRow(), 1);
+    const errors = validator.validateRow(baseRow(), 1, 250);
+    expect(errors).toHaveLength(0);
+  });
+
+  it('validateRow returns maxlength error when devolutionFormula exceeds the DB-driven limit', () => {
+    const row = { ...baseRow(), devolutionFormula: 'x'.repeat(251) };
+    const errors = validator.validateRow(row, 1, 250);
+    expect(errors.some((e) => e.field === 'devolutionFormula' && e.code === 'maxlength')).toBe(true);
+  });
+
+  it('validateRow accepts a devolutionFormula at exactly the DB-driven limit', () => {
+    const row = { ...baseRow(), devolutionFormula: 'x'.repeat(250) };
+    const errors = validator.validateRow(row, 1, 250);
     expect(errors).toHaveLength(0);
   });
 
@@ -503,8 +515,10 @@ describe('DevolutionFormulaService', () => {
     expect(saveCallArg.$set.excelFile.pageCount).toBeNull();
   });
 
-  // saveDraft dynamic validation: checkboxConfirmation requiredTrue enforced in draft
-  it('saveDraft throws when checkboxConfirmation is present but false (requiredTrue)', async () => {
+  // saveDraft dynamic validation: checkboxConfirmation requiredTrue mandatory-on-draft
+  // enforcement is temporarily disabled (see DynamicFormValidationService) — draft now
+  // succeeds even with checkboxConfirmation false.
+  it('saveDraft succeeds when checkboxConfirmation is present but false (requiredTrue mandatory-on-draft disabled)', async () => {
     mockFormModel.findOne.mockReturnValue(q(null));
 
     await expect(
@@ -517,7 +531,7 @@ describe('DevolutionFormulaService', () => {
         },
         adminUser,
       ),
-    ).rejects.toMatchObject({ response: { message: 'Validation failed.' } });
+    ).resolves.toBeDefined();
   });
 
   // saveDraft: ulbCount is now server-computed — dto.data.ulbCount is ignored
@@ -1535,6 +1549,7 @@ describe('DevolutionFormulaRowService', () => {
 
   beforeEach(async () => {
     jest.clearAllMocks();
+    mockDfFormJsonConfig.loadFields.mockResolvedValue(mockDfTypedFields);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -1543,6 +1558,7 @@ describe('DevolutionFormulaRowService', () => {
         { provide: getModelToken(DevolutionFormulaForm.name), useValue: mockFormModel },
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: mockRowModel },
         { provide: ExcelService, useValue: { generateExcel: jest.fn() } },
+        { provide: DfFormJsonConfigService, useValue: mockDfFormJsonConfig },
       ],
     }).compile();
 

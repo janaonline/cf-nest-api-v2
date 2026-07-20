@@ -18,9 +18,10 @@ export class GetEulbPostSubmissionUpdateRowsQueryDto {
   @IsString()
   search?: string;
 
+  // Not `@IsIn([...])` — that list is DB-driven. An unrecognized value here just yields zero
+  // matching rows (a query filter, not a business-rule boundary), so `@IsString()` is sufficient.
   @IsOptional()
   @IsString()
-  @IsIn(['Constituted', 'Not Constituted', 'Exempt'])
   electedBodyStatus?: string;
 
   @IsOptional()

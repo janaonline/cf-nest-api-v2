@@ -9,7 +9,11 @@
       "Bash(npm run *)",
       "Bash(npx eslint *)",
       "Bash(npx ng *)",
-      "Bash(grep -B2 -A8 \"ulb-list\\\\|ulb-master\\\\|core\\\\\\\\\\\\\\\\models\\\\\\\\\\\\\\\\ulb-master\")"
+      "Bash(grep -B2 -A8 \"ulb-list\\\\|ulb-master\\\\|core\\\\\\\\\\\\\\\\models\\\\\\\\\\\\\\\\ulb-master\")",
+      "Edit(/.claude/skills/xvifc-backend-scope-a-feature/**)",
+      "Edit(/.claude/skills/xvifc-backend-verify-and-update-docs/**)",
+      "Bash(npm test *)",
+      "Bash(awk '{print $1}')"
     ]
   }
 }

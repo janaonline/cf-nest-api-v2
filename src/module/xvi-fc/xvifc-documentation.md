@@ -428,7 +428,7 @@ Known test limitations:
 
 - `GET /xvi-fc/state/sfc-status/questions`
   - Permission: `VIEW_STATE_FORMS`
-  - Returns `SFC_STATUS_QUESTIONS` config array for frontend form rendering.
+  - Returns the DB-loaded question config array (via `FormJsonService.findByType('SFC')`) for frontend form rendering.
 
 - `GET /xvi-fc/state/sfc-status/:stateId/:yearId`
   - Permission: `VIEW_STATE_FORMS`
@@ -468,7 +468,7 @@ Known test limitations:
 
 ### Hydration rule
 
-- **No record / Not Started:** Return `SFC_STATUS_QUESTIONS` as-is. Each question's `value` is the template default defined in the questions config.
+- **No record / Not Started:** Return the DB-loaded question config as-is. Each question's `value` is the template default defined in that config.
 - **Record exists:** Shallow-copy each question; replace `value` only when `record.data` has that key (checked via `Object.prototype.hasOwnProperty.call`). Missing keys keep their template default.
 - O(n) — one pass over questions, no extra DB calls.
 
@@ -567,7 +567,7 @@ Source: `buildFormPermissions` in `sfc-status.service.ts`, using `canStateEditFo
 
 ## SFC Status Submit Validation
 
-Validation is driven by `SFC_STATUS_QUESTIONS` (field config array) via `DynamicFormValidationService`.
+Validation is driven by the DB-loaded question config (field config array) via `DynamicFormValidationService`.
 Both save-draft and final-submit evaluate **visible fields only** — hidden fields never block validation or reach the DB.
 
 ### Visibility evaluation
@@ -976,7 +976,7 @@ Before every code push involving XVI-FC backend changes:
 
 **Follow-ups**:
 
-- `sfc-status.constants.ts` (award period hardcoded ranges) is now superseded by the `yearRange` config in questions. Can be removed in a cleanup pass.
+- `sfc-status.constants.ts` (award period hardcoded ranges) was superseded by the `yearRange` config in questions and has been removed.
 - Other state forms (Elected Body Status, Devolution Formula) will reuse `XviFcCommonModule` and the same `FormFieldConfig` pattern.
 
 ---
@@ -1488,14 +1488,14 @@ Safe replace order enforced in `validateExcel` (`POST validate-excel`):
 
 **Key → subpath mapping**:
 
-| Key                          | Subpath                               |
-| ---------------------------- | ------------------------------------- |
-| `SFC_EXTENSION_ORDER`        | `sfc-status/extension-order`          |
-| `SFC_REPORT`                 | `sfc-status/sfc-report`               |
-| `SFC_ATR_REPORT`             | `sfc-status/atr-report`               |
-| `SFC_GAZETTE_NOTIFICATION`   | `sfc-status/gazette-notification`     |
-| `EULB_EXCEL`                 | `elected-body/elected-bodies-list`    |
-| `EULB_POST_SUBMISSION_PROOF` | `elected-body/proof-of-election` |
+| Key                          | Subpath                            |
+| ---------------------------- | ---------------------------------- |
+| `SFC_EXTENSION_ORDER`        | `sfc-status/extension-order`       |
+| `SFC_REPORT`                 | `sfc-status/sfc-report`            |
+| `SFC_ATR_REPORT`             | `sfc-status/atr-report`            |
+| `SFC_GAZETTE_NOTIFICATION`   | `sfc-status/gazette-notification`  |
+| `EULB_EXCEL`                 | `elected-body/elected-bodies-list` |
+| `EULB_POST_SUBMISSION_PROOF` | `elected-body/proof-of-election`   |
 
 **Modified files**:
 
@@ -1626,3 +1626,73 @@ Example: `xvi-fc/state/5dcf9d7416a06aed41c748f0/2026-27/sfc-status/sfc-report`
 - Both new indexes are created automatically via Mongoose's default `autoIndex` on next app startup — no manual migration needed.
 
 **Verification**: `devolution-formula-excel.service.spec.ts` (22 tests) passing; `tsc --noEmit` clean.
+
+---
+
+### SLB (Service Level Benchmarks) — New ULB Dynamic Form
+
+**Context**: First ULB-role form built on the FieldConfig/FormJson dynamic-form pattern (previously only used by STATE forms — SFC Status, EULB, Devolution Formula). ULB fills in 28 Service Level Benchmark indicators (Actual vs Target) plus a self-declaration block (name, designation, supporting document, confirmation checkbox) and submits to the State DMA for review. Replaces the empty Nest-CLI stub at `src/module/xvi-fc/ulb/slb/`.
+
+**New schema** (`src/schemas/xvi-fc/ulb/slb-form.schema.ts`):
+
+- Collection: `xvifc_slb_forms`
+- Unique index: `{ ulb, year, formType }`
+- `data: Mixed` — generic bag holding the full sanitized FieldConfig payload (mirrors `sfc-status.schema.ts`'s approach rather than one typed prop per field, since SLB has ~60 flat scalar fields and no row/bulk-Excel data).
+- `formType: 'SLB'` (`SLB_FORM_TYPE`), FormJson `formId: 32` (`SLB_FORM_ID` — next free id after SFC=22, EULB=23, DF=24, upload-config=30/31).
+
+**New module** (`src/module/xvi-fc/ulb/slb/`):
+
+- `slb.module.ts` — registers schema + own `Ulb` binding, imports `XviFcCommonModule` + `FormJsonModule`
+- `slb.service.ts` — `getQuestions`, `getForm`, `saveDraft`, `finalSubmit`; ULB-scope resolution (`resolveEffectiveUlbId`, `assertCanReadSlb`, `assertCanSubmitSlb`) copied from `ulb/bank-account/bank-account.service.ts`'s pattern rather than the STATE `assertStateAccess` pattern
+- `slb.controller.ts` — 4 routes under `xvi-fc/ulb/slb`: `GET questions`, `GET :ulbId/:yearId`, `POST save-draft`, `POST final-submit`
+- `services/slb-form-json.service.ts` + `helpers/slb-form-json.helpers.ts` — `loadFields()`/`getSlbFieldsByType()`, same shape as `DfFormJsonConfigService`; throws if the FormJson doc is unseeded (no hardcoded fallback — matches SFC/EULB/DF, not the ULB-master `DEFAULT_ULB_FIELDS` pattern)
+- Registered in `xvi-fc.module.ts`'s `imports` array
+
+**No `@RequirePermissions(...)` on any SLB route** — `getEffectivePermissions()` in `permissions.map.ts` returns `[]` for ULB-role users today (comment: "ULB permission matrix is not yet implemented"), so gating behind a permission would lock out every ULB submitter. `@UseGuards(PermissionGuard)` alone is a pass-through when no permissions are required; authorization is enforced entirely by the manual scope checks in `SlbService`, matching the existing `bank-account`/`unspent-balance-disclosure` ULB modules.
+
+**Workflow**: `NOT_STARTED` → (save-draft) → `IN_PROGRESS` → (final-submit) → `UNDER_REVIEW_BY_STATE`. Added `assertCanUlbEditForm`/`assertCanUlbSubmitForm` throwing wrappers to `xvi-fc-form-status-access.util.ts` (the boolean `canUlbEditForm`/`canUlbSubmitForm` already existed but had no STATE-equivalent throwing helper).
+
+**Seed data**: 28 indicators (Water Supply, Sewerage & Waste Water, Solid Waste Management, Storm Water Drainage sectors) × Actual/Target = 56 `number` fields with unit `suffixText` (lpcd/%/Hours per day/Non. per year), plus `declarantName`/`declarantDesignation`/`supportingDocumentFile`/`checkboxConfirmation` — all tagged `fieldTypes: ['SLB_MAIN_FORM_FIELDS']`. JSON payload at `scripts/seed-data/slb-form-json.json`; POST it to `/form-json` with a real `design_year` ObjectId before the form is usable for that design year (currently a placeholder value).
+
+**Known gaps / follow-ups** (explicitly out of scope for v1):
+
+- No STATE-side review/approve/return screen for SLB yet (STATE reviewers currently have no way to act on `UNDER_REVIEW_BY_STATE` SLB submissions).
+- No Excel dump/export endpoint, no post-submission-update flow, no separate history collection (consistent with `bank-account`/`unspent-balance-disclosure`, which also have none).
+
+**Verification**: `slb.service.spec.ts` + `slb.controller.spec.ts` (19 tests) passing; `tsc --noEmit` clean.
+
+---
+
+### SLB — Single Actual/Target Question Per Indicator (new `actualTarget` field type)
+
+**Context**: The 28 SLB indicators were initially modeled as 56 separate `number` FieldConfig entries (`ind1_actual`/`ind1_target`, ...). Changed to one question per indicator that renders both values together.
+
+**New shared field type** (`FieldType` union, backend `src/module/xvi-fc/common/types/field-config.type.ts` and frontend `src/app/shared/dynamic-form/field.interface.ts`): `'actualTarget'`. Value shape `{ actual: number | null; target: number | null }`. Unit label reuses the existing `inputCardConfig.suffixText` (no new top-level field — see fragility note below).
+
+**Backend** (`dynamic-form-validation.service.ts`): `validateField` dispatches `actualTarget` to a new `validateActualTargetField` before the generic scalar `isEmptyValue` check (an object value is never "empty" by that check). Applies the field's single `validations` array — required/min/max — independently to `actual` and `target`, producing errors keyed `<key>.actual` / `<key>.target`.
+
+**Frontend**:
+
+- `DynamicFormService.createContorl` builds a nested `FormGroup` (`{ actual, target }` sub-`FormControl`s, both validated from the same `field.validations`) instead of a flat `FormControl` when `formFieldType === 'actualTarget'`. Angular's dot-path `form.get('key.actual')` resolves the sub-control directly, matching the backend's error keys, and `.value` naturally serializes to `{ actual, target }` — no changes needed to `getVisiblePayload`/`serializeFieldValue`.
+- New `ActualTargetComponent` (`app-actual-target`, `shared/dynamic-form/components/actual-target/`) renders two number inputs (Actual/Target) bound to the nested sub-group, wired into `DynamicFormComponent`'s switch.
+- `DynamicFieldViewComponent` (readonly mode) got a matching `'actualTarget'` case.
+
+**Fragility found and worked around**: giving `DynamicFormService.createContorl` an _inferred_ return type (previously implicitly `FormControl`, now a `FormControl | FormGroup` union) caused spurious `TS2554: Expected 0 arguments` compile errors in unrelated files (`devolution-formula-rows-dialog.component.ts`, `eulb-rows-dialog.component.ts`, `eulb-post-update.component.ts`) on their `.pipe(takeUntil(...), takeUntilDestroyed(...))` calls — reproduced deterministically via bisection, fixed by adding an explicit `createContorl(...): AbstractControl` return type annotation. Also confirmed (again via bisection) that adding a new top-level `suffixText` prop directly to the shared `FieldConfig` interface reproduced the same class of error, independent of the return-type issue — this is why the unit suffix reuses `inputCardConfig.suffixText` instead of a new field. Root cause not fully understood (looks like a whole-program TS/esbuild type-instantiation budget issue triggered by widening a foundational, widely-imported interface/return type) — worth keeping in mind before adding new properties to `FieldConfig` or changing `DynamicFormService`'s public method signatures.
+
+**Seed data**: `scripts/seed-data/slb-form-json.json` updated from 60 fields (56 indicator + 4 declaration) to 32 (28 indicator `actualTarget` questions + 4 declaration fields).
+
+**Verification**: backend — `dynamic-form-validation.service.spec.ts` actualTarget suite (6 tests) passing. Frontend — `dynamic-form.service.spec.ts`, `actual-target.component.spec.ts`, `dynamic-field-view.component.spec.ts` new suites passing; full `ng build` clean.
+
+---
+
+### SLB — Bundled Default Fields (switched from "throw if unseeded" to fallback pattern)
+
+**Context**: `SlbFormJsonConfigService.loadFields()` previously threw if no admin had POSTed a FormJson document for `type: 'SLB'` yet (matching EULB/DF/SFC's "assume pre-seeded" convention, documented in the earlier SLB changelog entry above). Changed to the ULB-master pattern instead — bundle the 28-indicator + self-declaration question set as TypeScript defaults so the form works immediately after deploy, with the DB-configured version taking over automatically once an admin creates it.
+
+**New file** (`src/module/xvi-fc/ulb/slb/constants/slb-form.constants.ts`): `DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[]` — generated from the same source data as `scripts/seed-data/slb-form-json.json` (kept in sync; the JSON remains the reference payload for an admin who wants to `POST /form-json` an explicit override).
+
+**`SlbFormJsonConfigService.loadFields()`**: now wraps the `FormJsonService` lookup in try/catch and falls back to `DEFAULT_SLB_FIELDS` — both when the lookup throws (`NotFoundException`, unseeded) and when it resolves but `data` is empty. Once a real `formjsons` document exists for `type: 'SLB'` / `formId: 32`, it's returned directly and the bundled defaults are no longer consulted for that design year.
+
+**`FieldConfig` type additions** (`src/module/xvi-fc/common/types/field-config.type.ts`, backend-only — the frontend's `field.interface.ts` already had `position`): `position?: number` (1-based display order, used by the SLB indicator table's `#` column) and `meta?: Record<string, unknown>` (free-form annotations, e.g. sector grouping — not read by any validation/rendering logic today).
+
+**Verification**: new `slb-form-json.service.spec.ts` (4 tests: unseeded → defaults, empty data → defaults, seeded → DB data used, no-yearId path → defaults) passing; `slb.service.spec.ts`/`slb.controller.spec.ts` unaffected (they mock `SlbFormJsonConfigService` directly); `tsc --noEmit` error count unchanged from the pre-existing baseline (165, all in unrelated files).

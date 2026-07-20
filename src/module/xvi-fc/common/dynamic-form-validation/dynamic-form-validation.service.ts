@@ -61,8 +61,9 @@ export class DynamicFormValidationService {
       if (validationEnabled) {
         if (isFull) {
           this.accumulateErrors(errors, this.validateField(field, value, true));
-        } else if (!this.isEmptyValue(value) || this.hasRequiredTrue(field)) {
-          // Draft: skip absent fields unless requiredTrue is present
+        } else if (!this.isEmptyValue(value) /* || this.hasRequiredTrue(field) */) {
+          // Draft: skip absent fields. requiredTrue mandatory-on-draft enforcement is
+          // temporarily disabled for now — see the reqTrueV block in validateField below.
           this.accumulateErrors(errors, this.validateField(field, value, false));
         }
       }
@@ -140,12 +141,18 @@ export class DynamicFormValidationService {
 
     if (findV('nullValidator')) return errors;
 
+    // actualTarget carries an object value ({actual, target}) — never itself "empty" by the
+    // generic scalar isEmptyValue check, so it must be dispatched before that check runs.
+    if (formFieldType === 'actualTarget') {
+      return this.validateActualTargetField(field, value, isFull, findV);
+    }
+
     const isEmpty = this.isEmptyValue(value);
 
-    // requiredTrue (checkbox) — always enforced: absent = fail, present but not true = fail.
-    // This is intentionally stricter than plain `required` in draft mode.
+    // requiredTrue (checkbox) — mandatory-on-draft enforcement temporarily disabled for now
+    // (was: enforced in both draft and final submit). Still enforced on final submit.
     const reqTrueV = findV('requiredTrue');
-    if (reqTrueV) {
+    if (reqTrueV && isFull) {
       if (isEmpty) {
         return [{ field: key, message: reqTrueV.message, code: 'required' }];
       }
@@ -301,6 +308,54 @@ export class DynamicFormValidationService {
             : undefined;
       if (sizeMb !== undefined && sizeMb > maxFileSize) {
         errors.push({ field: key, message: `File must not exceed ${maxFileSize} MB.`, code: 'maxFileSize' });
+      }
+    }
+
+    return errors;
+  }
+
+  // ─── Actual/Target validation ──────────────────────────────────────────────
+
+  /**
+   * Validates a `formFieldType: 'actualTarget'` field's `{ actual, target }` value.
+   * The same `validations` array (required/min/max) is applied independently to both
+   * sub-values, producing errors keyed `<key>.actual` / `<key>.target` so the frontend's
+   * Angular dot-path `form.get('key.actual')` resolves directly to the nested sub-control.
+   */
+  private validateActualTargetField(
+    field: FieldConfig,
+    value: unknown,
+    isFull: boolean,
+    findV: (name: string) => Validator | undefined,
+  ): XviFcValidationError[] {
+    const { key } = field;
+    const pair = (typeof value === 'object' && value !== null ? value : {}) as {
+      actual?: unknown;
+      target?: unknown;
+    };
+    const errors: XviFcValidationError[] = [];
+    const reqV = findV('required');
+    const minV = findV('min');
+    const maxV = findV('max');
+
+    for (const sub of ['actual', 'target'] as const) {
+      const subValue = pair[sub];
+      const subKey = `${key}.${sub}`;
+      const subIsEmpty = this.isEmptyValue(subValue);
+
+      if (isFull && reqV && subIsEmpty) {
+        errors.push({ field: subKey, message: reqV.message, code: 'required' });
+        continue;
+      }
+      if (subIsEmpty) continue;
+
+      if (typeof subValue === 'number') {
+        if (minV && subValue < (minV.validator as number)) {
+          errors.push({ field: subKey, message: minV.message, code: 'min' });
+        }
+        if (maxV && subValue > (maxV.validator as number)) {
+          errors.push({ field: subKey, message: maxV.message, code: 'max' });
+        }
       }
     }
 

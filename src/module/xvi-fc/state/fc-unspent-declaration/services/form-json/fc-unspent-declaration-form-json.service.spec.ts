@@ -7,7 +7,9 @@ import {
   FC_UNSPENT_DECLARATION_TEMPLATE_ACTION_ID,
   FC_UNSPENT_FORM_ID,
 } from '../../constants/fc-unspent-declaration.constants';
-import { FC_UNSPENT_STATE_FORM_JSON } from '../../constants/fc-unspent-declaration.form-json.constant';
+import { loadFcUnspentSeedDocument } from '../../constants/fc-unspent-declaration-seed.fixture';
+
+const FC_UNSPENT_STATE_FORM_JSON = loadFcUnspentSeedDocument();
 
 describe('FcUnspentDeclarationFormJsonService', () => {
   let service: FcUnspentDeclarationFormJsonService;

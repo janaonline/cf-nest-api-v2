@@ -1,5 +1,6 @@
 import type { Types } from 'mongoose';
 import type { HydratedFieldConfig } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.types';
+import type { FieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
 import type { XvifcFormActor } from 'src/module/xvi-fc/common/types/xvifc-form-actors.type';
 import type { ApplicableFc } from 'src/schemas/xvi-fc/state/fc-unspent-state-form.schema';
 import type { RowStatusType } from 'src/common/constants/row-status.constants';
@@ -61,6 +62,8 @@ export interface FcUnspentDeclarationGetResponseData {
   dependency: FcUnspentDependency;
   actors: XvifcFormActor[];
   questions: HydratedFieldConfig[];
+  /** DB-driven metadata for the 8 ULB row-table columns (ulbId, unspentAmount, censusCode, sbCode, ulbName, allocationAmount, allocationPerc, eligibility). Metadata only — does not replace FcUnspentDeclarationRowService's own row validation. */
+  rowEditFields: FieldConfig[];
   unspentUlbData: FcUnspentUlbRowResponse[];
 }
 
@@ -69,10 +72,6 @@ export interface FcUnspentUlbOption {
   censusCode: string | null;
   sbCode: string | null;
   ulbName: string;
-  allocationAmount: number;
-}
-
-export interface FcUnspentResolvedAllocation {
   allocationAmount: number;
 }
 
