@@ -200,7 +200,7 @@ describe('UlbService', () => {
 
     it('auto-generates a ULB code from the state when the submitted data omits one', async () => {
       stateModel.findById.mockReturnValue({ lean: jest.fn().mockResolvedValue({ code: 'AP' }) });
-      ulbModel.countDocuments.mockResolvedValue(3);
+      ulbModel.aggregate.mockResolvedValueOnce([{ num: 3 }]);
       ulbModel.exists.mockResolvedValue(null);
       dynamicFormValidation.validateFinalSubmitAndBuildPayload.mockReturnValue({
         isValid: true,
@@ -216,6 +216,24 @@ describe('UlbService', () => {
         expect.anything(),
         expect.objectContaining({ code: 'AP004' }),
       );
+    });
+
+    it('scopes the auto-generated code lookup to the same state, matching only that state prefix', async () => {
+      stateModel.findById.mockReturnValue({ lean: jest.fn().mockResolvedValue({ code: 'AP' }) });
+      ulbModel.exists.mockResolvedValue(null);
+      dynamicFormValidation.validateFinalSubmitAndBuildPayload.mockReturnValue({
+        isValid: true,
+        errors: {},
+        sanitizedPayload: { name: 'New ULB', state: stateId, ulbType: ulbTypeId },
+      });
+      ulbModel.create.mockResolvedValue({ toObject: () => ({ code: 'AP001' }) });
+
+      await service.create({ data: { name: 'New ULB', state: stateId, ulbType: ulbTypeId } }, stateUser);
+
+      const [pipeline] = ulbModel.aggregate.mock.calls[0] as [{ $match?: Record<string, unknown> }[]];
+      const match = pipeline[0].$match as { state: Types.ObjectId; code: { $regex: string } };
+      expect(match.state.toString()).toBe(stateId);
+      expect(match.code.$regex).toBe('^AP\\d+$');
     });
 
     it('auto-generates the next sbCode when censusCode is omitted', async () => {

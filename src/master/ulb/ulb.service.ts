@@ -200,14 +200,27 @@ export class UlbService {
     return patch;
   }
 
-  /** Generates a `<STATE_CODE><sequence>` ULB code (e.g. "AP004"), retrying past any collisions. */
+  /**
+   * Generates a `<STATE_CODE><sequence>` ULB code (e.g. "AP004") by incrementing the highest
+   * existing `<prefix><n>` code already used within that state — not a count of documents, which
+   * would collide/reuse a number whenever a ULB in the state has a gap-causing or non-standard
+   * code (deleted record, manually assigned code, etc). Retries past any collisions.
+   */
   private async generateUlbCode(stateId: string): Promise<string> {
     const state = await this.stateModel.findById(stateId).lean<{ code?: string }>();
     const prefix = (state?.code || 'ULB').toUpperCase();
-    const existingCount = await this.ulbModel.countDocuments({ state: new Types.ObjectId(stateId) });
+    const escapedPrefix = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    const [last] = await this.ulbModel.aggregate<{ num: number }>([
+      { $match: { state: new Types.ObjectId(stateId), code: { $regex: `^${escapedPrefix}\\d+$` } } },
+      { $project: { num: { $toInt: { $substrCP: ['$code', prefix.length, { $strLenCP: '$code' }] } } } },
+      { $sort: { num: -1 } },
+      { $limit: 1 },
+    ]);
+    const nextNum = (last?.num ?? 0) + 1;
 
     for (let attempt = 0; attempt < 5; attempt++) {
-      const candidate = `${prefix}${String(existingCount + 1 + attempt).padStart(3, '0')}`;
+      const candidate = `${prefix}${String(nextNum + attempt).padStart(3, '0')}`;
       const exists = await this.ulbModel.exists({ code: candidate });
       if (!exists) return candidate;
     }
