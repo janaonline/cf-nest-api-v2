@@ -403,13 +403,27 @@ export class DynamicFormValidationService {
 
   // ─── Date resolution ───────────────────────────────────────────────────────
 
+  /** Mirrors the frontend's `date-constraint-resolver.ts` — same `TODAY±ND` / `±NM` / `±NY` grammar,
+   *  kept in sync so a `minDate`/`maxDate` config resolves identically on both sides. */
   private resolveDate(dateStr: string): Date {
-    const rel = /^TODAY([+-]\d+)D$/i.exec(dateStr);
+    const rel = /^TODAY(?:([+-])(\d+)([DMY]))?$/i.exec(dateStr);
     if (rel) {
-      const offset = parseInt(rel[1], 10);
       const d = new Date();
       d.setHours(0, 0, 0, 0);
-      d.setDate(d.getDate() + offset);
+      if (rel[1]) {
+        const amount = parseInt(rel[2], 10) * (rel[1] === '-' ? -1 : 1);
+        switch (rel[3].toUpperCase()) {
+          case 'D':
+            d.setDate(d.getDate() + amount);
+            break;
+          case 'M':
+            d.setMonth(d.getMonth() + amount);
+            break;
+          case 'Y':
+            d.setFullYear(d.getFullYear() + amount);
+            break;
+        }
+      }
       return d;
     }
     return new Date(dateStr);

@@ -97,7 +97,13 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
     displayInlineLabel: true,
     formFieldType: 'date',
     required: true,
-    validations: [{ name: 'required', validator: null, message: 'Date of constitution is required.' }],
+    minDate: 'TODAY-50Y',
+    maxDate: 'TODAY+0D',
+    validations: [
+      { name: 'required', validator: null, message: 'Date of constitution is required.' },
+      { name: 'minDate', validator: 'TODAY-25Y', message: 'Date of constitution cannot be more than 25 years ago.' },
+      { name: 'maxDate', validator: 'TODAY+0D', message: 'Date of constitution cannot be a future date.' },
+    ],
   },
   {
     key: 'gazetteNotificationNumber',

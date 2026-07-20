@@ -102,6 +102,55 @@ describe('DynamicFormValidationService — requiredTrue', () => {
   });
 });
 
+describe('DynamicFormValidationService — minDate/maxDate with TODAY±N[DMY]', () => {
+  const mockNormalizer = { toRawStoragePath: jest.fn((url: string) => url) };
+  const service = new DynamicFormValidationService(mockNormalizer as unknown as FileUrlNormalizerService);
+
+  const dateField = {
+    key: 'dateOfConstitution',
+    formFieldType: 'date',
+    label: 'Date of Constitution',
+    validations: [
+      { name: 'minDate', validator: 'TODAY-50Y', message: 'Date of constitution cannot be more than 50 years ago.' },
+      { name: 'maxDate', validator: 'TODAY+0D', message: 'Date of constitution cannot be a future date.' },
+    ],
+  } as unknown as FieldConfig;
+
+  it('rejects a date more than 50 years in the past', () => {
+    const fiftyOneYearsAgo = new Date();
+    fiftyOneYearsAgo.setFullYear(fiftyOneYearsAgo.getFullYear() - 51);
+
+    const result = service.validateDraftAndBuildPayload([dateField], {
+      dateOfConstitution: fiftyOneYearsAgo.toISOString(),
+    });
+
+    expect(result.isValid).toBe(false);
+    expect(result.errors['dateOfConstitution']?.[0]).toMatchObject({ code: 'minDate' });
+  });
+
+  it('rejects a future date', () => {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    const result = service.validateDraftAndBuildPayload([dateField], { dateOfConstitution: tomorrow.toISOString() });
+
+    expect(result.isValid).toBe(false);
+    expect(result.errors['dateOfConstitution']?.[0]).toMatchObject({ code: 'maxDate' });
+  });
+
+  it('accepts a date within the last 50 years and not in the future', () => {
+    const tenYearsAgo = new Date();
+    tenYearsAgo.setFullYear(tenYearsAgo.getFullYear() - 10);
+
+    const result = service.validateDraftAndBuildPayload([dateField], {
+      dateOfConstitution: tenYearsAgo.toISOString(),
+    });
+
+    expect(result.isValid).toBe(true);
+    expect(result.errors['dateOfConstitution']).toBeUndefined();
+  });
+});
+
 describe('DynamicFormValidationService — actualTarget field', () => {
   const mockNormalizer = { toRawStoragePath: jest.fn((url: string) => url) };
   const service = new DynamicFormValidationService(mockNormalizer as unknown as FileUrlNormalizerService);
