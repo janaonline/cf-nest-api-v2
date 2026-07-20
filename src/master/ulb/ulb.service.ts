@@ -363,7 +363,16 @@ export class UlbService {
 
     if (primaryContact.email) {
       const isApproved = user.role !== Role.STATE;
-      await this.createPrimaryContactUser(primaryContact, created._id, stateId, name, user, isApproved);
+      await this.createPrimaryContactUser(
+        primaryContact,
+        created._id,
+        stateId,
+        name,
+        user,
+        isApproved,
+        typeof patch.censusCode === 'string' ? patch.censusCode : undefined,
+        typeof patch.sbCode === 'string' ? patch.sbCode : undefined,
+      );
     }
 
     return created.toObject();
@@ -463,7 +472,11 @@ export class UlbService {
    *  to the primary contact — mirrors the STATE/MoHUA member-invite flow in `UsersService`.
    *  `isApproved` mirrors the owning ULB's approval status: ADMIN-created ULBs are auto-approved
    *  so the login is active immediately; STATE-submitted ULBs start PENDING, so the login stays
-   *  inactive until an ADMIN approves the ULB (see `approve()`). */
+   *  inactive until an ADMIN approves the ULB (see `approve()`).
+   *  `censusCode`/`sbCode` are copied onto the `User` document (not just left on the `Ulb`) because
+   *  ULB logins authenticate by census/SB code, not email — `UsersRepository.resolveByIdentifier()`
+   *  looks up `User.censusCode`/`User.sbCode`, so without this copy the code the invite email tells
+   *  them to log in with would never match any account. */
   private async createPrimaryContactUser(
     contact: { name?: string; designation?: string; email?: string; mobile?: string },
     ulbId: Types.ObjectId,
@@ -471,9 +484,12 @@ export class UlbService {
     ulbName: string,
     requester: IAuthUser,
     isApproved: boolean,
+    censusCode?: string,
+    sbCode?: string,
   ): Promise<void> {
     const tempPassword = this.generateTempPassword();
     const hashedPassword = await bcrypt.hash(tempPassword, 12);
+    const loginCode = censusCode || sbCode || '';
 
     await this.userModel.create({
       name: contact.name,
@@ -483,6 +499,8 @@ export class UlbService {
       role: Role.ULB,
       ulb: ulbId,
       state: stateId,
+      censusCode: censusCode || null,
+      sbCode: sbCode || null,
       createdBy: new Types.ObjectId(requester._id),
       status: 'APPROVED',
       isActive: isApproved,
@@ -501,7 +519,8 @@ export class UlbService {
         templateName: './ulb-member-invite',
         mailData: {
           name: contact.name,
-          email: contact.email,
+          loginCode,
+          loginCodeLabel: 'Login ID',
           mobile: contact.mobile ?? '',
           ulbName,
           loginUrl,

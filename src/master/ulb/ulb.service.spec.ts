@@ -385,6 +385,56 @@ describe('UlbService', () => {
       );
     });
 
+    it('copies the auto-generated sbCode onto the primary-contact login and invite email (no censusCode submitted)', async () => {
+      const ulbId = new Types.ObjectId();
+      ulbModel.aggregate.mockResolvedValueOnce([]); // no prior sbCode -> seeds at 900001
+      dynamicFormValidation.validateFinalSubmitAndBuildPayload.mockReturnValue({
+        isValid: true,
+        errors: {},
+        sanitizedPayload: {
+          code: 'AP017',
+          name: 'No Census Contact ULB',
+          state: stateId,
+          ulbType: ulbTypeId,
+          primaryContactName: 'K. Suresh Babu',
+          primaryContactEmail: 'sbcode-contact@ulb.gov.in',
+          primaryContactMobile: '9849001238',
+        },
+      });
+      ulbModel.create.mockResolvedValue({ _id: ulbId, toObject: () => ({ _id: ulbId, code: 'AP017' }) });
+
+      await service.create({ data: {} }, stateUser);
+
+      expect(userModel.create).toHaveBeenCalledWith(expect.objectContaining({ censusCode: null, sbCode: '900001' }));
+      const [emailJob] = emailQueueService.addEmailJob.mock.calls[0] as [{ mailData: Record<string, unknown> }];
+      expect(emailJob.mailData).toMatchObject({ loginCode: '900001', loginCodeLabel: 'Login ID' });
+    });
+
+    it('copies a submitted censusCode onto the primary-contact login and invite email', async () => {
+      const ulbId = new Types.ObjectId();
+      dynamicFormValidation.validateFinalSubmitAndBuildPayload.mockReturnValue({
+        isValid: true,
+        errors: {},
+        sanitizedPayload: {
+          code: 'AP018',
+          name: 'Has Census Contact ULB',
+          state: stateId,
+          ulbType: ulbTypeId,
+          censusCode: '800011',
+          primaryContactName: 'K. Suresh Babu',
+          primaryContactEmail: 'census-contact@ulb.gov.in',
+          primaryContactMobile: '9849001239',
+        },
+      });
+      ulbModel.create.mockResolvedValue({ _id: ulbId, toObject: () => ({ _id: ulbId, code: 'AP018' }) });
+
+      await service.create({ data: {} }, stateUser);
+
+      expect(userModel.create).toHaveBeenCalledWith(expect.objectContaining({ censusCode: '800011', sbCode: null }));
+      const [emailJob] = emailQueueService.addEmailJob.mock.calls[0] as [{ mailData: Record<string, unknown> }];
+      expect(emailJob.mailData).toMatchObject({ loginCode: '800011', loginCodeLabel: 'Login ID' });
+    });
+
     it('creates the primary contact login inactive for a STATE (PENDING) submission', async () => {
       const ulbId = new Types.ObjectId();
       dynamicFormValidation.validateFinalSubmitAndBuildPayload.mockReturnValue({
