@@ -259,26 +259,9 @@ export const DEFAULT_ULB_EDIT_SECTIONS: SectionLayout[] = [
     fields: [
       { key: 'code', grid: 'col-md-6' },
       { key: 'name', grid: 'col-md-6' },
-      { key: 'state', grid: 'col-md-6' },
       { key: 'ulbType', grid: 'col-md-6' },
       { key: 'district', grid: 'col-md-6' },
       { key: 'censusCode', grid: 'col-md-6' },
-    ],
-  },
-  {
-    title: 'Additional Details',
-    icon: 'bi-list-ul',
-    fields: [
-      { key: 'sbCode', grid: 'col-md-6' },
-      { key: 'population', grid: 'col-md-4' },
-      { key: 'area', grid: 'col-md-4' },
-      { key: 'wards', grid: 'col-md-4' },
-      { key: 'natureOfUlb', grid: 'col-md-6' },
-      { key: 'isUA', grid: 'col-md-4' },
-      { key: 'isMillionPlus', grid: 'col-md-4' },
-      { key: 'amrut', grid: 'col-md-4' },
-      { key: 'lgdCode', grid: 'col-md-6' },
-      { key: 'regionalName', grid: 'col-md-6' },
     ],
   },
   {
