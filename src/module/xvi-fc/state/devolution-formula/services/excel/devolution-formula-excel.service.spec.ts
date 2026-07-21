@@ -604,6 +604,17 @@ describe('DevolutionFormulaExcelService — generateTemplate', () => {
     service = module.get<DevolutionFormulaExcelService>(DevolutionFormulaExcelService);
   });
 
+  it('orders template columns as Census Code, ULB Name, Installment 1, Installment 2, Total Grant Allocation, Devolution Formula', () => {
+    expect(DF_TEMPLATE_HEADERS.map((h) => h.key)).toEqual([
+      'censusCode',
+      'ulbName',
+      'installment1Amount',
+      'installment2Amount',
+      'totalGrantAllocation',
+      'devolutionFormula',
+    ]);
+  });
+
   it('queries active ULBs scoped to the requesting state with isActive: true', async () => {
     await service.generateTemplate(stateOid.toString(), YEAR_ID, 1, adminUser);
 
@@ -633,7 +644,28 @@ describe('DevolutionFormulaExcelService — generateTemplate', () => {
     expect(columnValidations[0].mode).toBe('perRow');
     expect(columnValidations[1].mode).toBe('perRow');
     expect(columnValidations[2].mode).toBe('perRow');
-    expect(columnValidations[3].mode).toBe('static');
+    // devolutionFormula is now perRow/custom with allowBlank:false so Excel blocks a blank cell
+    // (a static textLength rule with allowBlank:true, as before, never flags an empty cell).
+    expect(columnValidations[3].mode).toBe('perRow');
+  });
+
+  it('builds a required, non-blank-blocking validation formula for devolutionFormula', async () => {
+    await service.generateTemplate(stateOid.toString(), YEAR_ID, 1, adminUser);
+
+    const calls = mockExcelService.generateExcel.mock.calls as unknown[][];
+    const columnValidations = calls[0][3] as Array<{
+      key: string;
+      mode: string;
+      buildValidation: (row: number, keyToLetter: Map<string, string>) => Record<string, unknown>;
+    }>;
+    const devolutionFormulaValidation = columnValidations.find((v) => v.key === 'devolutionFormula')!;
+    const keyToLetter = new Map([['devolutionFormula', 'F']]);
+    const built = devolutionFormulaValidation.buildValidation(2, keyToLetter);
+
+    expect(built['type']).toBe('custom');
+    expect(built['allowBlank']).toBe(false);
+    expect(built['formulae']).toEqual([expect.stringContaining('F2<>""')]);
+    expect(built['formulae']).toEqual([expect.stringContaining('LEN(F2)<=')]);
   });
 
   it('pre-fills rows from the active dataset when form.activeDatasetVersion > 0', async () => {
@@ -743,9 +775,12 @@ describe('DevolutionFormulaExcelService — validateExcel ULB identity guard', (
     // Regression test: DF_TEMPLATE_HEADERS' labels ("Total Grant Allocation (Cr.)", etc.)
     // must resolve via DF_EXCEL_HEADER_MAP the same way the un-suffixed labels do, or every
     // unmodified template re-upload falsely fails with "Missing required columns".
+    // Row values are positioned to match DF_TEMPLATE_HEADERS' current column order
+    // (Census Code, ULB Name, Installment 1, Installment 2, Total Grant Allocation, Devolution
+    // Formula) — total (500,000) must equal installment1 + installment2 and totalMoHUAAllocation.
     const templateHeaderLabels = DF_TEMPLATE_HEADERS.map((h) => h.label);
     const buffer = makeXlsxBufferWithHeaders(templateHeaderLabels, [
-      ['C001', 'Alpha City', 500_000, 300_000, 200_000, 'population'],
+      ['C001', 'Alpha City', 300_000, 200_000, 500_000, 'population'],
     ]);
     mockS3Service.getBuffer.mockResolvedValue(buffer);
 

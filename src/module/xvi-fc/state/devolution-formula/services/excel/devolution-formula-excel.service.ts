@@ -839,16 +839,18 @@ export class DevolutionFormulaExcelService {
       },
       {
         key: 'devolutionFormula',
-        mode: 'static',
-        validation: {
-          type: 'textLength',
-          operator: 'lessThanOrEqual',
-          allowBlank: true,
-          formulae: [maxFormulaLength],
-          showErrorMessage: true,
-          errorStyle: 'warning',
-          errorTitle: 'Devolution Formula Too Long',
-          error: `Devolution Formula must not exceed ${maxFormulaLength} characters.`,
+        mode: 'perRow',
+        buildValidation: (row, keyToLetter) => {
+          const cellLetter = keyToLetter.get('devolutionFormula')!;
+          return {
+            type: 'custom',
+            allowBlank: false,
+            formulae: [`AND(${cellLetter}${row}<>"",LEN(${cellLetter}${row})<=${maxFormulaLength})`],
+            showErrorMessage: true,
+            errorStyle: 'error',
+            errorTitle: 'Devolution Formula Required',
+            error: `Devolution Formula is required and must not exceed ${maxFormulaLength} characters.`,
+          };
         },
       },
     ];
