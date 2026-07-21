@@ -1,5 +1,6 @@
 import type { Types } from 'mongoose';
 import type { FormStatusType } from 'src/common/constants/form-status.constants';
+import type { DecisionInfo } from 'src/schemas/xvi-fc/annual-account.schema';
 
 export type XviFcBankAccountProofMimeType = 'application/pdf' | 'image/jpeg' | 'image/png';
 
@@ -42,6 +43,8 @@ export interface XviFcBankAccountRecord {
   accountNumberLast4: string;
   proofFile: XviFcBankAccountProofFile;
   currentFormStatus: FormStatusType;
+  stateDecision: DecisionInfo | null;
+  mohuaDecision: DecisionInfo | null;
   submittedBy?: Types.ObjectId;
   submittedAt?: Date;
   createdAt?: Date;
@@ -60,6 +63,8 @@ export interface XviFcBankAccountResponse {
   proofFile: XviFcBankAccountProofFile;
   currentFormStatus: FormStatusType;
   currentFormStatusLabel: string;
+  stateDecision: DecisionInfo | null;
+  mohuaDecision: DecisionInfo | null;
   submittedBy?: string;
   submittedAt?: string;
   createdAt?: string;
