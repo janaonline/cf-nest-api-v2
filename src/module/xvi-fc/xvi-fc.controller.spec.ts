@@ -1,9 +1,11 @@
 /* eslint-disable prettier/prettier */
 import { Test, TestingModule } from '@nestjs/testing';
 import { NotFoundException } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
 import { Types } from 'mongoose';
 import { XviFcController } from './xvi-fc.controller';
 import { XviFcService } from './xvi-fc.service';
+import { XviFcCacheService } from './cache/xvi-fc-cache.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 
 const mockUser: AuthUser = {
@@ -36,10 +38,19 @@ describe('XviFcController', () => {
       getSupportHours: jest.fn(),
     };
 
+    const mockXviFcCacheService = {
+      get: jest.fn(),
+      set: jest.fn(),
+      delete: jest.fn(),
+      deleteByPattern: jest.fn(),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       controllers: [XviFcController],
       providers: [
         { provide: XviFcService, useValue: mockXviFcService },
+        { provide: XviFcCacheService, useValue: mockXviFcCacheService },
+        Reflector,
       ],
     }).compile();
 
@@ -59,7 +70,7 @@ describe('XviFcController', () => {
     it('should call service with stateId and return result', async () => {
       service.getStateWiseData.mockResolvedValue(mockStateWiseData as any);
       const result = await controller.getStateWiseData(stateId, mockUser);
-      expect(service.getStateWiseData).toHaveBeenCalledWith(stateId);
+      expect(service.getStateWiseData).toHaveBeenCalledWith(stateId, mockUser);
       expect(result).toEqual(mockStateWiseData);
     });
 

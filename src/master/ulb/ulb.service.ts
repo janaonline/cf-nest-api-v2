@@ -145,7 +145,7 @@ export class UlbService {
   /**
    * Fully resolved section/field config for the ADMIN-only Edit ULB dialog — same merge as
    * `getRegisterSections()`, but against the edit layout, which covers every ULB field (including
-   * `code` and a live `state` select) rather than just the Register page's subset.
+   * `code`) rather than just the Register page's subset.
    */
   async getEditSections(): Promise<SectionLayout[]> {
     const [fieldsByKey, layout] = await Promise.all([this.buildResolvedFieldsByKey(), this.loadEditSectionsLayout()]);
@@ -200,19 +200,65 @@ export class UlbService {
     return patch;
   }
 
-  /** Generates a `<STATE_CODE><sequence>` ULB code (e.g. "AP004"), retrying past any collisions. */
+  /**
+   * Generates a `<STATE_CODE><sequence>` ULB code (e.g. "AP004") by incrementing the highest
+   * existing `<prefix><n>` code already used within that state — not a count of documents, which
+   * would collide/reuse a number whenever a ULB in the state has a gap-causing or non-standard
+   * code (deleted record, manually assigned code, etc). Retries past any collisions.
+   */
   private async generateUlbCode(stateId: string): Promise<string> {
     const state = await this.stateModel.findById(stateId).lean<{ code?: string }>();
     const prefix = (state?.code || 'ULB').toUpperCase();
-    const existingCount = await this.ulbModel.countDocuments({ state: new Types.ObjectId(stateId) });
+    const escapedPrefix = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    // Suffix capped at 6 digits (not `\d+`): the collision-retry fallback below can persist a code
+    // suffixed with Date.now() (13 digits) when every padded candidate collides. A suffix that long
+    // isn't a real sequence number — matching it would both overflow $toInt (32-bit) and, worse,
+    // "poison" every future code for this state into inheriting a 13-digit suffix forever.
+    const [last] = await this.ulbModel.aggregate<{ num: number }>([
+      { $match: { state: new Types.ObjectId(stateId), code: { $regex: `^${escapedPrefix}\\d{1,6}$` } } },
+      { $project: { num: { $toInt: { $substrCP: ['$code', prefix.length, { $strLenCP: '$code' }] } } } },
+      { $sort: { num: -1 } },
+      { $limit: 1 },
+    ]);
+    const nextNum = (last?.num ?? 0) + 1;
 
     for (let attempt = 0; attempt < 5; attempt++) {
-      const candidate = `${prefix}${String(existingCount + 1 + attempt).padStart(3, '0')}`;
+      const candidate = `${prefix}${String(nextNum + attempt).padStart(3, '0')}`;
       const exists = await this.ulbModel.exists({ code: candidate });
       if (!exists) return candidate;
     }
 
     return `${prefix}${Date.now()}`;
+  }
+
+  /** First generated `sbCode` when no ULB has one yet — reserves the 9xxxxx range so a synthetic
+   *  sbCode can never collide with a real 6-digit 2011 census code. */
+  private static readonly SB_CODE_SEED = 900001;
+
+  /**
+   * Generates the next 6-digit `sbCode` (e.g. "900099") for a ULB registered without a 2011
+   * census code — `sbCode` is the fallback identifier used throughout xvi-fc wherever `censusCode`
+   * is blank (see e.g. `devolution-formula-excel.service.ts`). The sequence is global (not
+   * per-state) and derived from the highest existing 9xxxxx `sbCode`, so it keeps incrementing even
+   * if earlier ULBs are later given a real census code.
+   */
+  private async generateSbCode(): Promise<string> {
+    const [last] = await this.ulbModel.aggregate<{ num: number }>([
+      { $match: { sbCode: { $regex: '^9\\d{5}$' } } },
+      { $project: { num: { $toInt: '$sbCode' } } },
+      { $sort: { num: -1 } },
+      { $limit: 1 },
+    ]);
+    const nextNum = last?.num ? last.num + 1 : UlbService.SB_CODE_SEED;
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const candidate = String(nextNum + attempt);
+      const exists = await this.ulbModel.exists({ sbCode: candidate });
+      if (!exists) return candidate;
+    }
+
+    return String(Date.now()).slice(-6);
   }
 
   private buildSlug(name: string): string {
@@ -295,6 +341,8 @@ export class UlbService {
     patch.slug = this.buildSlug(name);
     if (typeof patch.censusCode === 'string' && patch.censusCode.trim()) {
       await this.ensureCensusCodeNotTaken(patch.censusCode);
+    } else {
+      patch.sbCode = await this.generateSbCode();
     }
 
     let stateId: Types.ObjectId;
@@ -304,6 +352,7 @@ export class UlbService {
       stateId = new Types.ObjectId(String(user.state));
       patch.state = stateId;
       patch.approval = { status: 'PENDING', submittedBy: new Types.ObjectId(user._id) };
+      patch.isActive = false;
     } else {
       // ADMIN (or other privileged callers) create pre-approved master records.
       stateId = patch.state as Types.ObjectId;
@@ -314,7 +363,16 @@ export class UlbService {
 
     if (primaryContact.email) {
       const isApproved = user.role !== Role.STATE;
-      await this.createPrimaryContactUser(primaryContact, created._id, stateId, name, user, isApproved);
+      await this.createPrimaryContactUser(
+        primaryContact,
+        created._id,
+        stateId,
+        name,
+        user,
+        isApproved,
+        typeof patch.censusCode === 'string' ? patch.censusCode : undefined,
+        typeof patch.sbCode === 'string' ? patch.sbCode : undefined,
+      );
     }
 
     return created.toObject();
@@ -414,7 +472,11 @@ export class UlbService {
    *  to the primary contact — mirrors the STATE/MoHUA member-invite flow in `UsersService`.
    *  `isApproved` mirrors the owning ULB's approval status: ADMIN-created ULBs are auto-approved
    *  so the login is active immediately; STATE-submitted ULBs start PENDING, so the login stays
-   *  inactive until an ADMIN approves the ULB (see `approve()`). */
+   *  inactive until an ADMIN approves the ULB (see `approve()`).
+   *  `censusCode`/`sbCode` are copied onto the `User` document (not just left on the `Ulb`) because
+   *  ULB logins authenticate by census/SB code, not email — `UsersRepository.resolveByIdentifier()`
+   *  looks up `User.censusCode`/`User.sbCode`, so without this copy the code the invite email tells
+   *  them to log in with would never match any account. */
   private async createPrimaryContactUser(
     contact: { name?: string; designation?: string; email?: string; mobile?: string },
     ulbId: Types.ObjectId,
@@ -422,9 +484,12 @@ export class UlbService {
     ulbName: string,
     requester: IAuthUser,
     isApproved: boolean,
+    censusCode?: string,
+    sbCode?: string,
   ): Promise<void> {
     const tempPassword = this.generateTempPassword();
     const hashedPassword = await bcrypt.hash(tempPassword, 12);
+    const loginCode = censusCode || sbCode || '';
 
     await this.userModel.create({
       name: contact.name,
@@ -434,6 +499,8 @@ export class UlbService {
       role: Role.ULB,
       ulb: ulbId,
       state: stateId,
+      censusCode: censusCode || null,
+      sbCode: sbCode || null,
       createdBy: new Types.ObjectId(requester._id),
       status: 'APPROVED',
       isActive: isApproved,
@@ -452,7 +519,8 @@ export class UlbService {
         templateName: './ulb-member-invite',
         mailData: {
           name: contact.name,
-          email: contact.email,
+          loginCode,
+          loginCodeLabel: 'Login ID',
           mobile: contact.mobile ?? '',
           ulbName,
           loginUrl,
@@ -674,6 +742,7 @@ export class UlbService {
             'approval.reviewedBy': new Types.ObjectId(user._id),
             'approval.reviewedAt': new Date(),
             'approval.rejectReason': '',
+            isActive: true,
           },
         },
         { new: true },

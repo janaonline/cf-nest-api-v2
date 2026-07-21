@@ -105,6 +105,8 @@ export function buildSafeBankAccountResponse(record: BankAccountRecordLike): Xvi
     proofFile,
     currentFormStatus,
     currentFormStatusLabel: getFormStatusLabel(currentFormStatus),
+    stateDecision: (source.stateDecision as XviFcBankAccountResponse['stateDecision']) ?? null,
+    mohuaDecision: (source.mohuaDecision as XviFcBankAccountResponse['mohuaDecision']) ?? null,
     submittedBy: toOptionalResponseString(source.submittedBy),
     submittedAt: toOptionalDateString(source.submittedAt),
     createdAt: toOptionalDateString(source.createdAt),

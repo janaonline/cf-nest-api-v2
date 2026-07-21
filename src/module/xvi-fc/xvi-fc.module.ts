@@ -26,6 +26,7 @@ import { XviFcBankAccount, XviFcBankAccountSchema } from '../../schemas/xvi-fc/u
 import { FcUnspentDeclarationModule } from './state/fc-unspent-declaration/fc-unspent-declaration.module';
 import { FcUnspentMohuaReviewModule } from './mohua/fc-unspent-declaration/fc-unspent-mohua-review.module';
 import { StateDashboardModule } from './state/dashboard/state-dashboard.module';
+import { SlbModule } from './ulb/slb/slb.module';
 
 @Module({
   imports: [
@@ -50,6 +51,7 @@ import { StateDashboardModule } from './state/dashboard/state-dashboard.module';
     FcUnspentDeclarationModule,
     FcUnspentMohuaReviewModule,
     StateDashboardModule,
+    SlbModule,
   ],
   controllers: [XviFcController],
   providers: [XviFcService, XviFcCacheService, XviFcCacheInterceptor],
