@@ -1,6 +1,7 @@
 ﻿import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { ConfigService } from '@nestjs/config';
+import { MongoServerError } from 'mongodb';
 import { Model, Types } from 'mongoose';
 import * as XLSX from 'xlsx';
 import { S3Service } from 'src/core/s3/s3.service';
@@ -9,7 +10,6 @@ import { FileTokenService } from 'src/core/file-token/file-token.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
-import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import { toObjectIdString } from 'src/common/utils/objectid.util';
 import { assertCanStateEditForm } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
 import {
@@ -75,13 +75,10 @@ interface ProcessedRow extends ParsedExcelRow {
 
 const DUPLICATE_CENSUS_CODE_MESSAGE = 'A ULB with this census code already exists for the selected design year.';
 const UNKNOWN_ULB_MESSAGE = 'This ULB is not registered in City Finance. Please register the ULB before uploading.';
+const FORM_CONFLICT_MESSAGE = 'This form was just updated by another request. Please refresh and try again.';
 
 function hasDuplicateCensusCodeError(row: ProcessedRow): boolean {
   return row.rowErrors.some((e) => e.code === 'duplicate' && e.field === 'censusCode');
-}
-
-function isMongoDuplicateKeyError(err: unknown): boolean {
-  return typeof err === 'object' && err !== null && Reflect.get(err, 'code') === 11000;
 }
 
 @Injectable()
@@ -160,9 +157,6 @@ export class ElectedUrbanLocalBodiesExcelService {
     // Derive count from already-loaded list — no extra query.
     const computedActiveUlbCount = dbUlbs.length;
     const maxAllowedExcelRows = computedActiveUlbCount * 2; // catastrophic safety-net only
-    const currentVersion = existing?.activeDatasetVersion ?? 0;
-    const newVersion = currentVersion + 1;
-    const formId: Types.ObjectId = existing ? existing._id : new Types.ObjectId();
 
     // 3. Read and parse Excel from S3 (use normalized path)
     const buffer = await this.s3Service.getBuffer(effectiveFile.path);
@@ -274,39 +268,6 @@ export class ElectedUrbanLocalBodiesExcelService {
     // the active year+censusCode unique index is not violated at insertMany time.
     this.flagIntraBatchEulbCensusCodeDuplicates(processedRows);
 
-    // 9b. Build row documents for DB insert (formId and newVersion known since step 3).
-    // lean:true bypasses Mongoose document validation — rows are pre-validated at application
-    // level and may intentionally have blank identity fields (stored as INVALID).
-    // rawExcelData is only kept for INVALID rows where it may be needed for error display.
-    const rowDocs = processedRows.map((r) => {
-      const constituted = r.electedBodyStatus?.trim() === 'Constituted';
-      return {
-        form: formId,
-        state: stateOid,
-        year: yearOid,
-        datasetVersion: newVersion,
-        rowNumber: r.rowNumber,
-        ulbId: r.ulbId,
-        // Trim and clear duplicate rows so the unique partial index is not violated.
-        censusCode: hasDuplicateCensusCodeError(r) ? '' : (r.censusCode ?? '').trim(),
-        ulbName: r.ulbName,
-        dbCensusCode: r.dbCensusCode,
-        dbUlbName: r.dbUlbName,
-        electedBodyStatus: r.electedBodyStatus,
-        dateOfConstitution: constituted && r.dateOfConstitution ? this.toDate(r.dateOfConstitution) : null,
-        dateOfExpiry: constituted && r.dateOfExpiry ? this.toDate(r.dateOfExpiry) : null,
-        remarks: r.remarks,
-        rowType: r.rowType,
-        lastUpdatedSource: 'EXCEL' as const,
-        validationStatus: r.validationRowStatus,
-        errors: r.rowErrors,
-        rawExcelData: r.validationRowStatus === 'INVALID' ? r.rawExcelData : undefined,
-        createdBy: userOid,
-        updatedBy: userOid,
-        isActive: true,
-      };
-    });
-
     // 10. Compute summary
     const matchedDbUlbCount = matchedUlbCodes.size;
     const missingDbUlbCount = computedActiveUlbCount - matchedDbUlbCount;
@@ -323,69 +284,106 @@ export class ElectedUrbanLocalBodiesExcelService {
         ? 'VALID'
         : 'INVALID';
 
-    // 11. Safe replace: deactivate old rows → insert new rows → upsert form → delete old rows
-    let previousRowsDeactivated = false;
+    // 11. Atomic version allocation + safe dataset replacement, all inside one Mongo transaction.
+    // Replaces a prior read-then-increment (`currentVersion = existing.activeDatasetVersion ?? 0;
+    // newVersion = currentVersion + 1`) that let two concurrent uploads for the same form compute
+    // the identical datasetVersion and corrupt each other's rows. The $inc below is atomic — two
+    // concurrent requests can never be handed the same datasetVersion — and wrapping every write
+    // in one transaction means an abort undoes all of them, so no manual rollback is needed.
+    // ulbCount is NOT persisted from the client — it is managed via the active ULB registry.
+    const formSummaryFieldsBase: Record<string, unknown> = {
+      dbUlbCount: computedActiveUlbCount,
+      maxAllowedExcelRows,
+      excelRowCount,
+      matchedDbUlbCount,
+      missingDbUlbCount,
+      extraExcelRowCount,
+      errorRowCount,
+      validationStatus: formValidationStatus,
+      lastExcelUploadedAt: new Date(),
+      lastExcelUploadedBy: userOid,
+      updatedBy: userOid,
+    };
+    // Omit when unchanged (rather than `electedBodyExcelFile: undefined`) so Mongoose's
+    // FileInfo `timestamps` option doesn't re-stamp the stored subdocument.
+    if (normalizedFile !== undefined) formSummaryFieldsBase['electedBodyExcelFile'] = normalizedFile;
+
+    const session = await this.formModel.db.startSession();
+    let formId!: Types.ObjectId;
+    let newVersion!: number;
     try {
-      if (currentVersion > 0) {
-        await this.rowModel
-          .updateMany({ form: formId, datasetVersion: currentVersion }, { $set: { isActive: false } })
-          .exec();
-        previousRowsDeactivated = true;
-      }
+      session.startTransaction();
 
-      // Step A: ordered:false lets MongoDB parallelise BTree index updates internally.
-      // Safe because 9a already guarantees no duplicate censusCode values in rowDocs.
-      await this.rowModel.insertMany(rowDocs, { lean: true, ordered: false });
+      const updatedForm = await this.formModel
+        .findOneAndUpdate(
+          formFilter,
+          {
+            $inc: { activeDatasetVersion: 1 },
+            $set: formSummaryFieldsBase,
+            $setOnInsert: { createdBy: userOid },
+          },
+          { upsert: true, new: true, session, setDefaultsOnInsert: true },
+        )
+        .exec();
 
-      // Step B: Upsert form with all summary fields, normalized file, and new activeDatasetVersion.
-      // ulbCount is NOT persisted from the client — it is managed via the active ULB registry.
-      const formSummaryFields: Record<string, unknown> = {
-        dbUlbCount: computedActiveUlbCount,
-        maxAllowedExcelRows,
-        excelRowCount,
-        matchedDbUlbCount,
-        missingDbUlbCount,
-        extraExcelRowCount,
-        errorRowCount,
-        validationStatus: formValidationStatus,
-        activeDatasetVersion: newVersion,
-        lastExcelUploadedAt: new Date(),
-        lastExcelUploadedBy: userOid,
-        updatedBy: userOid,
-      };
-      // Omit when unchanged (rather than `electedBodyExcelFile: undefined`) so Mongoose's
-      // FileInfo `timestamps` option doesn't re-stamp the stored subdocument.
-      if (normalizedFile !== undefined) formSummaryFields['electedBodyExcelFile'] = normalizedFile;
+      newVersion = updatedForm.activeDatasetVersion;
+      const currentVersion = newVersion - 1;
+      formId = updatedForm._id;
 
-      if (existing) {
-        await this.formModel.findByIdAndUpdate(existing._id, { $set: formSummaryFields }).lean().exec();
-      } else {
-        await this.formModel.create({
-          _id: formId,
+      // Build row documents for DB insert (formId and newVersion known since the $inc above).
+      // lean:true bypasses Mongoose document validation — rows are pre-validated at application
+      // level and may intentionally have blank identity fields (stored as INVALID).
+      // rawExcelData is only kept for INVALID rows where it may be needed for error display.
+      const rowDocs = processedRows.map((r) => {
+        const constituted = r.electedBodyStatus?.trim() === 'Constituted';
+        return {
+          form: formId,
           state: stateOid,
           year: yearOid,
-          formType: EULB_FORM_TYPE,
-          currentFormStatus: FORM_STATUS.NOT_STARTED,
-          isDraft: true,
-          isActive: true,
-          isDeleted: false,
+          datasetVersion: newVersion,
+          rowNumber: r.rowNumber,
+          ulbId: r.ulbId,
+          // Trim and clear duplicate rows so the unique partial index is not violated.
+          censusCode: hasDuplicateCensusCodeError(r) ? '' : (r.censusCode ?? '').trim(),
+          ulbName: r.ulbName,
+          dbCensusCode: r.dbCensusCode,
+          dbUlbName: r.dbUlbName,
+          electedBodyStatus: r.electedBodyStatus,
+          dateOfConstitution: constituted && r.dateOfConstitution ? this.toDate(r.dateOfConstitution) : null,
+          dateOfExpiry: constituted && r.dateOfExpiry ? this.toDate(r.dateOfExpiry) : null,
+          remarks: r.remarks,
+          rowType: r.rowType,
+          lastUpdatedSource: 'EXCEL' as const,
+          validationStatus: r.validationRowStatus,
+          errors: r.rowErrors,
+          rawExcelData: r.validationRowStatus === 'INVALID' ? r.rawExcelData : undefined,
           createdBy: userOid,
-          ...formSummaryFields,
-        });
+          updatedBy: userOid,
+          isActive: true,
+        };
+      });
+
+      if (currentVersion > 0) {
+        await this.rowModel
+          .updateMany({ form: formId, datasetVersion: currentVersion }, { $set: { isActive: false } }, { session })
+          .exec();
       }
 
-      // Step C: fire-and-forget — old rows already inactive, cleanup runs async
+      // ordered:false lets MongoDB parallelise BTree index updates internally.
+      // Safe because 9a already guarantees no duplicate censusCode values in rowDocs.
+      await this.rowModel.insertMany(rowDocs, { lean: true, ordered: false, session });
+
       if (currentVersion > 0) {
-        void this.deletePreviousDatasetRows(formId, currentVersion);
+        await this.rowModel.deleteMany({ form: formId, datasetVersion: currentVersion }, { session }).exec();
       }
+
+      await session.commitTransaction();
     } catch (err: unknown) {
-      if (previousRowsDeactivated) {
-        await this.rollbackDatasetReplacement(formId, currentVersion, newVersion);
-      }
-      if (isMongoDuplicateKeyError(err)) {
-        this.throwDuplicateCensusCodeValidationError();
-      }
+      await session.abortTransaction();
+      this.classifyAndThrowMongoWriteConflict(err, Object.keys(formFilter));
       throw err;
+    } finally {
+      await session.endSession();
     }
 
     // 12. Generate error Excel if there are row errors
@@ -799,80 +797,93 @@ export class ElectedUrbanLocalBodiesExcelService {
         ? 'VALID'
         : 'INVALID';
 
-    const currentVersion = form.activeDatasetVersion ?? 0;
-    const newVersion = currentVersion + 1;
-    const formId = form._id;
-
-    // Same normalization as validateExcel: lean:true bypasses Mongoose required-String check
-    // for '' so INVALID rows with blank identity fields are stored without throwing.
-    const rowDocs = processedRows.map((r) => {
-      const constituted = r.electedBodyStatus?.trim() === 'Constituted';
-      return {
-        form: formId,
-        state: stateOid,
-        year: yearOid,
-        datasetVersion: newVersion,
-        rowNumber: r.rowNumber,
-        ulbId: r.ulbId,
-        censusCode: hasDuplicateCensusCodeError(r) ? '' : (r.censusCode ?? '').trim(),
-        ulbName: r.ulbName,
-        dbCensusCode: r.dbCensusCode,
-        dbUlbName: r.dbUlbName,
-        electedBodyStatus: r.electedBodyStatus,
-        dateOfConstitution: constituted && r.dateOfConstitution ? this.toDate(r.dateOfConstitution) : null,
-        dateOfExpiry: constituted && r.dateOfExpiry ? this.toDate(r.dateOfExpiry) : null,
-        remarks: r.remarks,
-        rowType: r.rowType,
-        lastUpdatedSource: 'EXCEL' as const,
-        validationStatus: r.validationRowStatus,
-        errors: r.rowErrors,
-        rawExcelData: r.rawExcelData,
-        createdBy: userOid,
-        updatedBy: userOid,
-        isActive: true,
-      };
-    });
-
-    let previousRowsDeactivated = false;
+    // Atomic version allocation + safe dataset replacement inside one Mongo transaction — same
+    // fix as validateExcel. This path only ever runs against an already-existing form (the sole
+    // caller, revalidateExcel, throws NotFoundException first if none exists), so no upsert is
+    // needed here — only the $inc for the version counter.
+    const session = await this.formModel.db.startSession();
+    let newVersion!: number;
     try {
-      if (currentVersion > 0) {
-        await this.rowModel
-          .updateMany({ form: formId, datasetVersion: currentVersion }, { $set: { isActive: false } })
-          .exec();
-        previousRowsDeactivated = true;
-      }
+      session.startTransaction();
 
-      await this.rowModel.insertMany(rowDocs, { lean: true });
-
-      await this.formModel
-        .findByIdAndUpdate(formId, {
-          $set: {
-            dbUlbCount: computedActiveUlbCount,
-            maxAllowedExcelRows,
-            excelRowCount,
-            matchedDbUlbCount,
-            missingDbUlbCount,
-            extraExcelRowCount,
-            errorRowCount,
-            validationStatus,
-            activeDatasetVersion: newVersion,
-            updatedBy: userOid,
+      const updatedForm = await this.formModel
+        .findOneAndUpdate(
+          { _id: form._id },
+          {
+            $inc: { activeDatasetVersion: 1 },
+            $set: {
+              dbUlbCount: computedActiveUlbCount,
+              maxAllowedExcelRows,
+              excelRowCount,
+              matchedDbUlbCount,
+              missingDbUlbCount,
+              extraExcelRowCount,
+              errorRowCount,
+              validationStatus,
+              updatedBy: userOid,
+            },
           },
-        })
-        .lean()
+          { new: true, session },
+        )
         .exec();
 
+      if (!updatedForm) {
+        throw new NotFoundException('Elected Urban Local Bodies form not found for this state and year.');
+      }
+
+      newVersion = updatedForm.activeDatasetVersion;
+      const currentVersion = newVersion - 1;
+      const formId = updatedForm._id;
+
+      // Same normalization as validateExcel: lean:true bypasses Mongoose required-String check
+      // for '' so INVALID rows with blank identity fields are stored without throwing.
+      const rowDocs = processedRows.map((r) => {
+        const constituted = r.electedBodyStatus?.trim() === 'Constituted';
+        return {
+          form: formId,
+          state: stateOid,
+          year: yearOid,
+          datasetVersion: newVersion,
+          rowNumber: r.rowNumber,
+          ulbId: r.ulbId,
+          censusCode: hasDuplicateCensusCodeError(r) ? '' : (r.censusCode ?? '').trim(),
+          ulbName: r.ulbName,
+          dbCensusCode: r.dbCensusCode,
+          dbUlbName: r.dbUlbName,
+          electedBodyStatus: r.electedBodyStatus,
+          dateOfConstitution: constituted && r.dateOfConstitution ? this.toDate(r.dateOfConstitution) : null,
+          dateOfExpiry: constituted && r.dateOfExpiry ? this.toDate(r.dateOfExpiry) : null,
+          remarks: r.remarks,
+          rowType: r.rowType,
+          lastUpdatedSource: 'EXCEL' as const,
+          validationStatus: r.validationRowStatus,
+          errors: r.rowErrors,
+          rawExcelData: r.rawExcelData,
+          createdBy: userOid,
+          updatedBy: userOid,
+          isActive: true,
+        };
+      });
+
       if (currentVersion > 0) {
-        await this.deletePreviousDatasetRows(formId, currentVersion);
+        await this.rowModel
+          .updateMany({ form: formId, datasetVersion: currentVersion }, { $set: { isActive: false } }, { session })
+          .exec();
       }
+
+      await this.rowModel.insertMany(rowDocs, { lean: true, session });
+
+      if (currentVersion > 0) {
+        await this.rowModel.deleteMany({ form: formId, datasetVersion: currentVersion }, { session }).exec();
+      }
+
+      await session.commitTransaction();
     } catch (err: unknown) {
-      if (previousRowsDeactivated) {
-        await this.rollbackDatasetReplacement(formId, currentVersion, newVersion);
-      }
-      if (isMongoDuplicateKeyError(err)) {
-        this.throwDuplicateCensusCodeValidationError();
-      }
+      await session.abortTransaction();
+      this.classifyAndThrowMongoWriteConflict(err, ['_id']);
       throw err;
+    } finally {
+      await session.endSession();
     }
 
     const flatErrors: EulbRowValidationError[] = processedRows
@@ -1127,41 +1138,28 @@ export class ElectedUrbanLocalBodiesExcelService {
     }
   }
 
-  private async deletePreviousDatasetRows(formId: Types.ObjectId, datasetVersion: number): Promise<void> {
-    try {
-      await this.rowModel.deleteMany({ form: formId, datasetVersion }).exec();
-    } catch (deleteErr: unknown) {
-      this.logger.error(
-        `EULB old row cleanup failed [form=${formId.toString()} version=${datasetVersion}]`,
-        deleteErr instanceof Error ? deleteErr.stack : String(deleteErr),
-      );
+  /**
+   * On transaction abort, distinguishes a genuine row-level business duplicate (the same census
+   * code appearing twice in one upload) from a form-level conflict (two requests racing on the
+   * same state+year(+formType) form doc, or a transaction write-conflict) — these need different,
+   * honest messages. Falls through without throwing for anything else, so the caller's `throw err`
+   * still applies.
+   */
+  private classifyAndThrowMongoWriteConflict(err: unknown, formFilterKeys: string[]): void {
+    if (err instanceof MongoServerError && err.code === 11000) {
+      const conflictKeys = Object.keys((err.keyValue as Record<string, unknown>) ?? {});
+      const isFormLevelConflict = conflictKeys.length > 0 && conflictKeys.every((k) => formFilterKeys.includes(k));
+      if (isFormLevelConflict) {
+        throwXviFcValidationError({
+          electedBodyExcelFile: [{ field: 'electedBodyExcelFile', code: 'conflict', message: FORM_CONFLICT_MESSAGE }],
+        });
+      }
+      this.throwDuplicateCensusCodeValidationError();
     }
-  }
-
-  private async rollbackDatasetReplacement(
-    formId: Types.ObjectId,
-    previousDatasetVersion: number,
-    newDatasetVersion: number,
-  ): Promise<void> {
-    try {
-      await this.rowModel.deleteMany({ form: formId, datasetVersion: newDatasetVersion }).exec();
-    } catch (deleteErr: unknown) {
-      this.logger.error(
-        `EULB new row rollback failed [form=${formId.toString()} version=${newDatasetVersion}]`,
-        deleteErr instanceof Error ? deleteErr.stack : String(deleteErr),
-      );
-    }
-    await this.restorePreviousDatasetRows(formId, previousDatasetVersion);
-  }
-
-  private async restorePreviousDatasetRows(formId: Types.ObjectId, datasetVersion: number): Promise<void> {
-    try {
-      await this.rowModel.updateMany({ form: formId, datasetVersion }, { $set: { isActive: true } }).exec();
-    } catch (restoreErr: unknown) {
-      this.logger.error(
-        `EULB previous row reactivation failed [form=${formId.toString()} version=${datasetVersion}]`,
-        restoreErr instanceof Error ? restoreErr.stack : String(restoreErr),
-      );
+    if (err instanceof MongoServerError && err.hasErrorLabel('TransientTransactionError')) {
+      throwXviFcValidationError({
+        electedBodyExcelFile: [{ field: 'electedBodyExcelFile', code: 'conflict', message: FORM_CONFLICT_MESSAGE }],
+      });
     }
   }
 

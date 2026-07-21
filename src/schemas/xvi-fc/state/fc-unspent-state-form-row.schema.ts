@@ -5,6 +5,31 @@ import { ROW_STATUS, RowStatusType } from 'src/common/constants/row-status.const
 export type XviFcUnspentStateFormRowDocument = HydratedDocument<XviFcUnspentStateFormRow>;
 
 /**
+ * Preserves the exact Devolution Formula source used to compute a row's `allocationAmount`,
+ * so a later Devolution rejection/reconciliation can identify affected rows by exact reference
+ * rather than only by state/year (business brain §10.10).
+ */
+@Schema({ _id: false })
+export class FcUnspentAllocationSource {
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'DevolutionFormulaForm', required: true })
+  devolutionFormId!: Types.ObjectId;
+
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'DevolutionFormulaRow', required: true })
+  devolutionRowId!: Types.ObjectId;
+
+  @Prop({ type: Number, required: true })
+  datasetVersion!: number;
+
+  @Prop({ type: Number, enum: [1, 2], required: true })
+  installment!: 1 | 2;
+
+  @Prop({ type: Number, required: true })
+  allocationAmount!: number;
+}
+
+export const FcUnspentAllocationSourceSchema = SchemaFactory.createForClass(FcUnspentAllocationSource);
+
+/**
  * Reusable "row content" shape — the ULB/allocation/eligibility fields shared by the
  * live row document and every snapshot that embeds a point-in-time copy of it
  * (row-history's `snapshot`, parent-history's `unspentUlbData[]`). Defined once here
@@ -44,6 +69,9 @@ export class FcUnspentUlbRowSnapshot {
 
   @Prop({ type: String, default: null })
   rejectionRemark!: string | null;
+
+  @Prop({ type: FcUnspentAllocationSourceSchema, default: null })
+  allocationSource!: FcUnspentAllocationSource | null;
 }
 
 export const FcUnspentUlbRowSnapshotSchema = SchemaFactory.createForClass(FcUnspentUlbRowSnapshot);
@@ -107,6 +135,9 @@ export class XviFcUnspentStateFormRow {
    */
   @Prop({ type: String, default: null })
   rejectionRemark!: string | null;
+
+  @Prop({ type: FcUnspentAllocationSourceSchema, default: null })
+  allocationSource!: FcUnspentAllocationSource | null;
 
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
   createdBy!: Types.ObjectId;

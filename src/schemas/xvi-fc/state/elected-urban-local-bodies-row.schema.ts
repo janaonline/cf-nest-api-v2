@@ -81,7 +81,7 @@ export class ElectedUrbanLocalBodiesRow {
   @Prop({ type: String })
   censusCode?: string;
 
-  @Prop({ type: String, required: true })
+  @Prop({ type: String, default: '' })
   ulbName!: string;
 
   @Prop({ type: String })

@@ -285,7 +285,7 @@ export class ElectedUrbanLocalBodiesController {
   @ApiBody({ type: ValidateEulbPostSubmissionUpdateDto })
   @Post(':stateId/:yearId/post-submission-update/validate')
   @UseGuards(PermissionGuard)
-  @RequirePermissions(Permission.VIEW_STATE_FORMS)
+  @RequirePermissions(Permission.EDIT_STATE_FORMS)
   validatePostSubmissionUpdateBatch(
     @Param('stateId', ParseObjectIdPipe) stateId: string,
     @Param('yearId', ParseObjectIdPipe) yearId: string,
@@ -303,7 +303,7 @@ export class ElectedUrbanLocalBodiesController {
   @ApiBody({ type: SubmitEulbPostSubmissionUpdateDto })
   @Post(':stateId/:yearId/post-submission-update/submit')
   @UseGuards(PermissionGuard)
-  @RequirePermissions(Permission.VIEW_STATE_FORMS)
+  @RequirePermissions(Permission.FINAL_SUBMIT_STATE_FORMS)
   submitPostSubmissionUpdateBatch(
     @Param('stateId', ParseObjectIdPipe) stateId: string,
     @Param('yearId', ParseObjectIdPipe) yearId: string,

@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
+import { MongoServerError } from 'mongodb';
 import { Types } from 'mongoose';
 import * as XLSX from 'xlsx';
 import { DevolutionFormulaExcelService } from './devolution-formula-excel.service';
@@ -159,13 +160,31 @@ const mockDfTypedFields = [
   },
 ];
 
+// ─── Transaction session mock ────────────────────────────────────────────────
+// commitTransaction/abortTransaction/endSession resolve permanently at creation time —
+// jest.clearAllMocks() only clears call history, it does not remove mockResolvedValue.
+
+const mockSession = {
+  startTransaction: jest.fn(),
+  commitTransaction: jest.fn().mockResolvedValue(undefined),
+  abortTransaction: jest.fn().mockResolvedValue(undefined),
+  endSession: jest.fn().mockResolvedValue(undefined),
+};
+
+/** Builds the `findOneAndUpdate` upsert result for the atomic version-allocation call. */
+function mockUpsertedForm(overrides: { _id?: Types.ObjectId; activeDatasetVersion: number }) {
+  return q({ _id: overrides._id ?? formOid, activeDatasetVersion: overrides.activeDatasetVersion });
+}
+
 // ─── Model mocks ──────────────────────────────────────────────────────────────
 
 const mockFormModel = {
   findOne: jest.fn(),
   findById: jest.fn(),
   findByIdAndUpdate: jest.fn(),
+  findOneAndUpdate: jest.fn(),
   create: jest.fn(),
+  db: { startSession: jest.fn().mockResolvedValue(mockSession) },
 };
 
 const mockRowModel = {
@@ -201,6 +220,7 @@ describe('DevolutionFormulaExcelService — safe dataset replace', () => {
     mockDfService.resolveGrantAllocation.mockResolvedValue(mockGrantAlloc);
     mockUlbModel.find.mockReturnValue(q(mockDbUlbs));
     mockFormModel.findByIdAndUpdate.mockReturnValue(q(null));
+    mockFormModel.findOneAndUpdate.mockReturnValue(mockUpsertedForm({ activeDatasetVersion: 2 }));
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -222,9 +242,10 @@ describe('DevolutionFormulaExcelService — safe dataset replace', () => {
     service = module.get<DevolutionFormulaExcelService>(DevolutionFormulaExcelService);
   });
 
-  it('rolls back (reactivates old rows, deletes new rows) when insertMany fails on an existing form', async () => {
+  it('aborts the transaction (no commit, no manual reactivation) when insertMany fails on an existing form', async () => {
     const insertError = new Error('insertMany failed');
     mockFormModel.findOne.mockReturnValue(q(mockExistingForm));
+    mockFormModel.findOneAndUpdate.mockReturnValue(mockUpsertedForm({ activeDatasetVersion: 2 }));
     mockRowModel.updateMany.mockReturnValue(q({ modifiedCount: 2 }));
     mockRowModel.insertMany.mockRejectedValue(insertError);
     mockRowModel.deleteMany.mockReturnValue(q(null));
@@ -250,27 +271,27 @@ describe('DevolutionFormulaExcelService — safe dataset replace', () => {
       ),
     ).rejects.toThrow();
 
-    // Deactivation must have been called (old rows set isActive: false)
+    // Deactivation must have been attempted inside the transaction (old rows set isActive: false)
     const deactivateCalls = mockRowModel.updateMany.mock.calls as unknown[][][];
     expect(deactivateCalls.some((c) => (c[1] as Record<string, unknown>)?.['$set'] !== undefined)).toBe(true);
 
-    // Reactivation must follow (rollback sets isActive: true)
+    // Transaction abort replaces the old manual rollback — no reactivation call is issued.
     const reactivateCalls = deactivateCalls.filter(
       (c) => ((c[1] as Record<string, unknown>)?.['$set'] as Record<string, unknown>)?.['isActive'] === true,
     );
-    expect(reactivateCalls.length).toBeGreaterThan(0);
+    expect(reactivateCalls.length).toBe(0);
+    expect(mockRowModel.deleteMany).not.toHaveBeenCalled();
 
-    // New version rows must be deleted as part of rollback
-    expect(mockRowModel.deleteMany).toHaveBeenCalledWith(
-      expect.objectContaining({ datasetVersion: mockExistingForm.activeDatasetVersion + 1 }),
-    );
+    expect(mockSession.abortTransaction).toHaveBeenCalled();
+    expect(mockSession.commitTransaction).not.toHaveBeenCalled();
+    expect(mockSession.endSession).toHaveBeenCalled();
   });
 
-  it('cleans up orphan new rows when form.create fails on a brand-new form', async () => {
+  it('aborts the transaction (no orphan cleanup needed) when insertMany fails on a brand-new form', async () => {
     // No existing form doc
     mockFormModel.findOne.mockReturnValue(q(null));
-    mockRowModel.insertMany.mockResolvedValue([]);
-    mockFormModel.create.mockRejectedValue(new Error('DB write failed'));
+    mockFormModel.findOneAndUpdate.mockReturnValue(mockUpsertedForm({ activeDatasetVersion: 1 }));
+    mockRowModel.insertMany.mockRejectedValue(new Error('DB write failed'));
     mockRowModel.deleteMany.mockReturnValue(q(null));
 
     const buffer = makeXlsxBuffer([['C001', 'Alpha City', 500_000, 300_000, 200_000, 'population']]);
@@ -294,15 +315,18 @@ describe('DevolutionFormulaExcelService — safe dataset replace', () => {
       ),
     ).rejects.toThrow();
 
-    // updateMany for deactivation must NOT have been called (no existing version)
+    // No prior version to deactivate on a brand-new form
     expect(mockRowModel.updateMany).not.toHaveBeenCalled();
+    // No manual orphan cleanup — transaction abort undoes the upsert + insert atomically
+    expect(mockRowModel.deleteMany).not.toHaveBeenCalled();
 
-    // Orphan rows must be cleaned up (deleteMany for the new version)
-    expect(mockRowModel.deleteMany).toHaveBeenCalled();
+    expect(mockSession.abortTransaction).toHaveBeenCalled();
+    expect(mockSession.commitTransaction).not.toHaveBeenCalled();
   });
 
-  it('fires async deletion of old-version rows only after a successful replacement', async () => {
+  it('deletes old-version rows inside the transaction, before commit, on a successful replacement', async () => {
     mockFormModel.findOne.mockReturnValue(q(mockExistingForm));
+    mockFormModel.findOneAndUpdate.mockReturnValue(mockUpsertedForm({ activeDatasetVersion: 2 }));
     mockRowModel.updateMany.mockReturnValue(q({ modifiedCount: 2 }));
     mockRowModel.insertMany.mockResolvedValue([]);
     mockFormModel.findByIdAndUpdate.mockReturnValue(q(null));
@@ -327,16 +351,22 @@ describe('DevolutionFormulaExcelService — safe dataset replace', () => {
       adminUser,
     );
 
-    // After success, deleteMany for the old version (currentVersion = 1) must have been called
+    // deleteMany for the old version (currentVersion = 1) must have been called
     const deleteCalls = mockRowModel.deleteMany.mock.calls as unknown[][][];
     const oldVersionDelete = deleteCalls.find(
       (c) => (c[0] as Record<string, unknown>)?.['datasetVersion'] === mockExistingForm.activeDatasetVersion,
     );
     expect(oldVersionDelete).toBeDefined();
+
+    // ...and it must have happened before the transaction committed, not fire-and-forget after.
+    const deleteOrder = mockRowModel.deleteMany.mock.invocationCallOrder[0];
+    const commitOrder = mockSession.commitTransaction.mock.invocationCallOrder[0];
+    expect(deleteOrder).toBeLessThan(commitOrder);
   });
 
   it('accepts excelFile.pageCount: null and persists it on the form excelFile', async () => {
     mockFormModel.findOne.mockReturnValue(q(mockExistingForm));
+    mockFormModel.findOneAndUpdate.mockReturnValue(mockUpsertedForm({ activeDatasetVersion: 2 }));
     mockRowModel.updateMany.mockReturnValue(q({ modifiedCount: 2 }));
     mockRowModel.insertMany.mockResolvedValue([]);
     mockFormModel.findByIdAndUpdate.mockReturnValue(q(null));
@@ -364,8 +394,8 @@ describe('DevolutionFormulaExcelService — safe dataset replace', () => {
       adminUser,
     );
 
-    // The form update must carry the excelFile metadata with pageCount preserved
-    const updateCalls = mockFormModel.findByIdAndUpdate.mock.calls as unknown[][][];
+    // The atomic version-allocation call must carry the excelFile metadata with pageCount preserved
+    const updateCalls = mockFormModel.findOneAndUpdate.mock.calls as unknown[][][];
     const setWithExcelFile = updateCalls
       .map((c) => (c[1] as Record<string, unknown>)?.['$set'] as Record<string, unknown> | undefined)
       .find((s) => s?.['excelFile'] !== undefined);
@@ -521,6 +551,28 @@ describe('DevolutionFormulaExcelService — revalidateExcel', () => {
     expect(updateArg.$set['newUlbCount']).toBe(1);
   });
 
+  it('attributes the correct rowNumber to an error when a valid row precedes it (Case A)', async () => {
+    // Regression test: rowErrors used to be built by filtering rowUpdates down to only the
+    // invalid rows FIRST, then indexing back into the full (unfiltered) activeRows array using
+    // the filtered array's position — misattributing rowNumber whenever a valid row preceded an
+    // invalid one. mockActiveRows[0] is VALID (rowNumber 1), mockActiveRows[1] is INVALID
+    // (rowNumber 2) — the old bug would have reported rowNumber 1 (the valid row) instead of 2.
+    mockFormModel.findOne.mockReturnValue(q(mockExistingForm));
+    mockRowModel.find.mockReturnValue(q(mockActiveRows));
+
+    let caught: unknown;
+    try {
+      await service.revalidateExcel(stateOid.toString(), YEAR_ID, 1, adminUser);
+    } catch (e) {
+      caught = e;
+    }
+
+    const response = (caught as { response: { data: Record<string, unknown> } }).response;
+    const rowErrors = response.data['rowErrors'] as Array<{ rowNumber: number; code: string }>;
+    const unknownUlbError = rowErrors.find((r) => r.code === 'unknownUlb');
+    expect(unknownUlbError?.rowNumber).toBe(2);
+  });
+
   it('newUlbsAdded message reports the correct count (Case A)', async () => {
     mockFormModel.findOne.mockReturnValue(q(mockExistingForm));
     mockRowModel.find.mockReturnValue(q(mockActiveRows));
@@ -604,6 +656,17 @@ describe('DevolutionFormulaExcelService — generateTemplate', () => {
     service = module.get<DevolutionFormulaExcelService>(DevolutionFormulaExcelService);
   });
 
+  it('orders template columns as Census Code, ULB Name, Installment 1, Installment 2, Total Grant Allocation, Devolution Formula', () => {
+    expect(DF_TEMPLATE_HEADERS.map((h) => h.key)).toEqual([
+      'censusCode',
+      'ulbName',
+      'installment1Amount',
+      'installment2Amount',
+      'totalGrantAllocation',
+      'devolutionFormula',
+    ]);
+  });
+
   it('queries active ULBs scoped to the requesting state with isActive: true', async () => {
     await service.generateTemplate(stateOid.toString(), YEAR_ID, 1, adminUser);
 
@@ -633,7 +696,28 @@ describe('DevolutionFormulaExcelService — generateTemplate', () => {
     expect(columnValidations[0].mode).toBe('perRow');
     expect(columnValidations[1].mode).toBe('perRow');
     expect(columnValidations[2].mode).toBe('perRow');
-    expect(columnValidations[3].mode).toBe('static');
+    // devolutionFormula is now perRow/custom with allowBlank:false so Excel blocks a blank cell
+    // (a static textLength rule with allowBlank:true, as before, never flags an empty cell).
+    expect(columnValidations[3].mode).toBe('perRow');
+  });
+
+  it('builds a required, non-blank-blocking validation formula for devolutionFormula', async () => {
+    await service.generateTemplate(stateOid.toString(), YEAR_ID, 1, adminUser);
+
+    const calls = mockExcelService.generateExcel.mock.calls as unknown[][];
+    const columnValidations = calls[0][3] as Array<{
+      key: string;
+      mode: string;
+      buildValidation: (row: number, keyToLetter: Map<string, string>) => Record<string, unknown>;
+    }>;
+    const devolutionFormulaValidation = columnValidations.find((v) => v.key === 'devolutionFormula')!;
+    const keyToLetter = new Map([['devolutionFormula', 'F']]);
+    const built = devolutionFormulaValidation.buildValidation(2, keyToLetter);
+
+    expect(built['type']).toBe('custom');
+    expect(built['allowBlank']).toBe(false);
+    expect(built['formulae']).toEqual([expect.stringContaining('F2<>""')]);
+    expect(built['formulae']).toEqual([expect.stringContaining('LEN(F2)<=')]);
   });
 
   it('pre-fills rows from the active dataset when form.activeDatasetVersion > 0', async () => {
@@ -691,7 +775,7 @@ describe('DevolutionFormulaExcelService — validateExcel ULB identity guard', (
     mockDfService.resolveGrantAllocation.mockResolvedValue(mockGrantAlloc);
     mockUlbModel.find.mockReturnValue(q(mockDbUlbs));
     mockFormModel.findOne.mockReturnValue(q(null));
-    mockFormModel.create.mockResolvedValue({ _id: formOid });
+    mockFormModel.findOneAndUpdate.mockReturnValue(mockUpsertedForm({ activeDatasetVersion: 1 }));
     mockFormModel.findByIdAndUpdate.mockReturnValue(q(null));
     mockRowModel.insertMany.mockResolvedValue([]);
     mockRowModel.deleteMany.mockReturnValue(q(null));
@@ -743,9 +827,12 @@ describe('DevolutionFormulaExcelService — validateExcel ULB identity guard', (
     // Regression test: DF_TEMPLATE_HEADERS' labels ("Total Grant Allocation (Cr.)", etc.)
     // must resolve via DF_EXCEL_HEADER_MAP the same way the un-suffixed labels do, or every
     // unmodified template re-upload falsely fails with "Missing required columns".
+    // Row values are positioned to match DF_TEMPLATE_HEADERS' current column order
+    // (Census Code, ULB Name, Installment 1, Installment 2, Total Grant Allocation, Devolution
+    // Formula) — total (500,000) must equal installment1 + installment2 and totalMoHUAAllocation.
     const templateHeaderLabels = DF_TEMPLATE_HEADERS.map((h) => h.label);
     const buffer = makeXlsxBufferWithHeaders(templateHeaderLabels, [
-      ['C001', 'Alpha City', 500_000, 300_000, 200_000, 'population'],
+      ['C001', 'Alpha City', 300_000, 200_000, 500_000, 'population'],
     ]);
     mockS3Service.getBuffer.mockResolvedValue(buffer);
 
@@ -867,7 +954,7 @@ describe('DevolutionFormulaExcelService — validateExcel new/extra ULB detectio
     mockDfService.resolveGrantAllocation.mockResolvedValue(mockGrantAlloc);
     mockUlbModel.find.mockReturnValue(q(mockDbUlbs));
     mockFormModel.findOne.mockReturnValue(q(null));
-    mockFormModel.create.mockResolvedValue({ _id: formOid });
+    mockFormModel.findOneAndUpdate.mockReturnValue(mockUpsertedForm({ activeDatasetVersion: 1 }));
     mockFormModel.findByIdAndUpdate.mockReturnValue(q(null));
     mockRowModel.insertMany.mockResolvedValue([]);
     mockRowModel.deleteMany.mockReturnValue(q(null));
@@ -977,8 +1064,10 @@ describe('DevolutionFormulaExcelService — validateExcel new/extra ULB detectio
     const buffer = makeXlsxBuffer([['ZZZZ', 'New Town', 500_000, 300_000, 200_000, 'population']]);
     await expectRejection(buffer);
 
-    const createCallArg = (mockFormModel.create.mock.calls as unknown[][])[0][0] as { newUlbCount: number };
-    expect(createCallArg.newUlbCount).toBe(1);
+    const updateCallArg = (mockFormModel.findOneAndUpdate.mock.calls as unknown[][])[0][1] as {
+      $set: { newUlbCount: number };
+    };
+    expect(updateCallArg.$set.newUlbCount).toBe(1);
   });
 
   it('does not include any register-link or supporting-content payload in the validateExcel response itself', async () => {
@@ -1047,9 +1136,162 @@ describe('DevolutionFormulaExcelService — validateExcel new/extra ULB detectio
       adminUser,
     );
 
-    const updateCallArg = (mockFormModel.findByIdAndUpdate.mock.calls as unknown[][])[0][1] as {
+    const updateCallArg = (mockFormModel.findOneAndUpdate.mock.calls as unknown[][])[0][1] as {
       $set: { newUlbCount: number };
     };
     expect(updateCallArg.$set.newUlbCount).toBe(0);
+  });
+});
+
+// ─── 6 · Atomic version allocation & write-conflict classification ──────────
+
+describe('DevolutionFormulaExcelService — atomic version allocation & write-conflict classification', () => {
+  let service: DevolutionFormulaExcelService;
+
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    mockDfFormJsonConfig.loadFields.mockResolvedValue(mockDfTypedFields);
+
+    mockDfService.resolveGrantAllocation.mockResolvedValue(mockGrantAlloc);
+    mockUlbModel.find.mockReturnValue(q(mockDbUlbs));
+    mockFormModel.findOne.mockReturnValue(q(null));
+    mockFormModel.findByIdAndUpdate.mockReturnValue(q(null));
+    mockRowModel.insertMany.mockResolvedValue([]);
+    mockRowModel.updateMany.mockReturnValue(q({ modifiedCount: 0 }));
+    mockRowModel.deleteMany.mockReturnValue(q(null));
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        DevolutionFormulaExcelService,
+        DevolutionFormulaValidator,
+        { provide: getModelToken(DevolutionFormulaForm.name), useValue: mockFormModel },
+        { provide: getModelToken(DevolutionFormulaRow.name), useValue: mockRowModel },
+        { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+        { provide: S3Service, useValue: mockS3Service },
+        { provide: ExcelService, useValue: mockExcelService },
+        { provide: FileTokenService, useValue: mockFileTokenService },
+        { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
+        FileInfoNormalizerService,
+        { provide: DevolutionFormulaService, useValue: mockDfService },
+        { provide: DfFormJsonConfigService, useValue: mockDfFormJsonConfig },
+      ],
+    }).compile();
+
+    service = module.get<DevolutionFormulaExcelService>(DevolutionFormulaExcelService);
+  });
+
+  function buildRequest() {
+    return {
+      stateId: stateOid.toString(),
+      yearId: YEAR_ID,
+      installment: 1 as const,
+      excelFile: {
+        originalName: 'test.xlsx',
+        path: 'state/path/test.xlsx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        sizeKb: 1,
+        createdAt: '2026-01-01T00:00:00.000Z',
+      },
+    };
+  }
+
+  it('hands two concurrent uploads distinct, monotonically increasing dataset versions (simulated real $inc semantics)', async () => {
+    // A shared counter stands in for MongoDB's real atomic $inc: every call to the mocked
+    // findOneAndUpdate increments it exactly once, so two "concurrent" callers can never observe
+    // (or be handed) the same activeDatasetVersion — the exact race the old read-then-increment
+    // code was vulnerable to.
+    let sharedVersionCounter = 0;
+    mockFormModel.findOneAndUpdate.mockImplementation(() => {
+      sharedVersionCounter += 1;
+      return q({ _id: formOid, activeDatasetVersion: sharedVersionCounter });
+    });
+
+    const buffer = makeXlsxBuffer([['C001', 'Alpha City', 500_000, 300_000, 200_000, 'population']]);
+    mockS3Service.getBuffer.mockResolvedValue(buffer);
+
+    const [first, second] = await Promise.all([
+      service.validateExcel(buildRequest(), adminUser),
+      service.validateExcel(buildRequest(), adminUser),
+    ]);
+
+    const firstVersion = first.data?.summary.activeDatasetVersion;
+    const secondVersion = second.data?.summary.activeDatasetVersion;
+    expect(firstVersion).not.toBe(secondVersion);
+    expect([firstVersion, secondVersion].sort()).toEqual([1, 2]);
+  });
+
+  it('surfaces a row-level duplicate-key conflict with the existing "Duplicate ULB entries" message', async () => {
+    mockFormModel.findOneAndUpdate.mockReturnValue(mockUpsertedForm({ activeDatasetVersion: 1 }));
+    mockRowModel.insertMany.mockRejectedValue(
+      new MongoServerError({
+        message: 'E11000 duplicate key error',
+        code: 11000,
+        keyValue: { form: formOid, datasetVersion: 1, ulbId: ulbOid },
+      }),
+    );
+
+    const buffer = makeXlsxBuffer([['C001', 'Alpha City', 500_000, 300_000, 200_000, 'population']]);
+    mockS3Service.getBuffer.mockResolvedValue(buffer);
+
+    await expect(service.validateExcel(buildRequest(), adminUser)).rejects.toMatchObject({
+      response: {
+        errors: {
+          excelFile: [expect.objectContaining({ code: 'duplicate', message: 'Duplicate ULB entries detected.' })],
+        },
+      },
+    });
+  });
+
+  it('surfaces a form-level duplicate-key conflict (two requests racing to create the same form) with an honest refresh message', async () => {
+    mockFormModel.findOneAndUpdate.mockReturnValue({
+      exec: jest.fn().mockRejectedValue(
+        new MongoServerError({
+          message: 'E11000 duplicate key error',
+          code: 11000,
+          keyValue: { state: stateOid, year: yearOid, installment: 1 },
+        }),
+      ),
+    });
+
+    const buffer = makeXlsxBuffer([['C001', 'Alpha City', 500_000, 300_000, 200_000, 'population']]);
+    mockS3Service.getBuffer.mockResolvedValue(buffer);
+
+    await expect(service.validateExcel(buildRequest(), adminUser)).rejects.toMatchObject({
+      response: {
+        errors: {
+          excelFile: [
+            expect.objectContaining({
+              code: 'conflict',
+              message: 'This form was just updated by another request. Please refresh and try again.',
+            }),
+          ],
+        },
+      },
+    });
+
+    expect(mockSession.abortTransaction).toHaveBeenCalled();
+  });
+
+  it('surfaces a transaction write-conflict (TransientTransactionError) with the same honest refresh message', async () => {
+    mockFormModel.findOneAndUpdate.mockReturnValue(mockUpsertedForm({ activeDatasetVersion: 1 }));
+    mockRowModel.insertMany.mockRejectedValue(
+      new MongoServerError({ message: 'WriteConflict', code: 112, errorLabels: ['TransientTransactionError'] }),
+    );
+
+    const buffer = makeXlsxBuffer([['C001', 'Alpha City', 500_000, 300_000, 200_000, 'population']]);
+    mockS3Service.getBuffer.mockResolvedValue(buffer);
+
+    await expect(service.validateExcel(buildRequest(), adminUser)).rejects.toMatchObject({
+      response: {
+        errors: {
+          excelFile: [
+            expect.objectContaining({
+              code: 'conflict',
+              message: 'This form was just updated by another request. Please refresh and try again.',
+            }),
+          ],
+        },
+      },
+    });
   });
 });
