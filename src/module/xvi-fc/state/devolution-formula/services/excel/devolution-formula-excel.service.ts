@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
+import { MongoServerError } from 'mongodb';
 import { AnyBulkWriteOperation, Model, Types } from 'mongoose';
 import type ExcelJS from 'exceljs';
 import * as XLSX from 'xlsx';
@@ -89,8 +90,33 @@ interface ProcessedRow {
   rawExcelData: Record<string, unknown>;
 }
 
-function isMongoDuplicateKeyError(err: unknown): boolean {
-  return typeof err === 'object' && err !== null && Reflect.get(err, 'code') === 11000;
+/**
+ * On transaction abort, distinguishes a genuine row-level business duplicate (the same ULB
+ * appearing twice in one upload) from a form-level conflict (two requests racing on the same
+ * state+year+installment form doc, or a transaction write-conflict) — these need different,
+ * honest messages. Falls through without throwing for anything else, so the caller's `throw err`
+ * still applies.
+ */
+function classifyAndThrowMongoWriteConflict(err: unknown, formFilterKeys: string[]): void {
+  const conflictMessage = 'This form was just updated by another request. Please refresh and try again.';
+
+  if (err instanceof MongoServerError && err.code === 11000) {
+    const conflictKeys = Object.keys((err.keyValue as Record<string, unknown>) ?? {});
+    const isFormLevelConflict = conflictKeys.length > 0 && conflictKeys.every((k) => formFilterKeys.includes(k));
+    if (isFormLevelConflict) {
+      throwXviFcValidationError({
+        excelFile: [{ field: 'excelFile', code: 'conflict', message: conflictMessage }],
+      });
+    }
+    throwXviFcValidationError({
+      excelFile: [{ field: 'excelFile', code: 'duplicate', message: 'Duplicate ULB entries detected.' }],
+    });
+  }
+  if (err instanceof MongoServerError && err.hasErrorLabel('TransientTransactionError')) {
+    throwXviFcValidationError({
+      excelFile: [{ field: 'excelFile', code: 'conflict', message: conflictMessage }],
+    });
+  }
 }
 
 @Injectable()
@@ -192,10 +218,6 @@ export class DevolutionFormulaExcelService {
 
     const dbUlbs = dbUlbsRaw as UlbLean[];
     const totalMoHUAAllocation = grantAlloc.basic + grantAlloc.performance;
-
-    const currentVersion = existingDoc?.activeDatasetVersion ?? 0;
-    const newVersion = currentVersion + 1;
-    const formId: Types.ObjectId = existingDoc ? (existingDoc._id as Types.ObjectId) : new Types.ObjectId();
 
     // 3. Read and parse Excel from S3
     const buffer = await this.s3Service.getBuffer(effectiveFile.path);
@@ -331,100 +353,92 @@ export class DevolutionFormulaExcelService {
     const formValidationStatus =
       errorRowCount === 0 && missingUlbCount === 0 && allocationBalanced ? 'VALID' : 'INVALID';
 
-    // Build row documents for DB insert
-    const rowDocs = processedRows.map((r) => ({
-      form: formId,
-      state: stateOid,
-      year: yearOid,
-      installment: dto.installment,
-      datasetVersion: newVersion,
-      rowNumber: r.rowNumber,
-      ulbId: r.ulbId,
-      censusCode: r.censusCode,
-      sbCode: '',
-      ulbName: r.ulbName,
-      totalGrantAllocation: Number(r.totalGrantAllocation) || 0,
-      installment1Amount: Number(r.installment1Amount) || 0,
-      installment2Amount: Number(r.installment2Amount) || 0,
-      devolutionFormula: r.devolutionFormula,
-      validationStatus: r.validationRowStatus,
-      errors: r.rowErrors,
-      rawExcelData: r.validationRowStatus === 'INVALID' ? r.rawExcelData : undefined,
-      isActive: true,
-      createdBy: userOid,
+    // Atomic version allocation + safe dataset replacement, all inside one Mongo transaction.
+    // Replaces a prior read-then-increment (`currentVersion = existingDoc.activeDatasetVersion ?? 0;
+    // newVersion = currentVersion + 1`) that let two concurrent uploads for the same form compute
+    // the identical datasetVersion and corrupt each other's rows via the {form,datasetVersion,ulbId}
+    // unique index and a manual, version-number-keyed rollback. The $inc below is atomic — two
+    // concurrent requests can never be handed the same datasetVersion — and wrapping every write in
+    // one transaction means an abort undoes all of them, so no manual rollback/cleanup is needed.
+    const formSummaryFieldsBase: Record<string, unknown> = {
+      excelFile: normalizedFile,
+      excelRowCount,
+      errorRowCount,
+      newUlbCount,
+      totalAllocatedSum,
+      totalMoHUAAllocation,
+      grantAllocationRef: grantAlloc._id,
+      validationStatus: formValidationStatus,
+      lastExcelUploadedAt: new Date(),
+      lastExcelUploadedBy: userOid,
       updatedBy: userOid,
-    }));
+      currentFormStatus: FORM_STATUS.IN_PROGRESS,
+    };
 
-    // Safe dataset replacement: deactivate → insert → upsert form → delete old async
-    let previousRowsDeactivated = false;
-    let newRowsInserted = false;
+    const session = await this.formModel.db.startSession();
+    let formId!: Types.ObjectId;
+    let newVersion!: number;
     try {
-      const [deactivateResult, insertResult] = await Promise.allSettled([
-        currentVersion > 0
-          ? this.rowModel
-              .updateMany({ form: formId, datasetVersion: currentVersion }, { $set: { isActive: false } })
-              .exec()
-          : Promise.resolve(null),
-        this.rowModel.insertMany(rowDocs, { ordered: false }),
-      ]);
+      session.startTransaction();
 
-      previousRowsDeactivated = currentVersion > 0 && deactivateResult.status === 'fulfilled';
-      newRowsInserted = insertResult.status === 'fulfilled';
+      const updatedForm = await this.formModel
+        .findOneAndUpdate(
+          formFilter,
+          {
+            $inc: { activeDatasetVersion: 1 },
+            $set: formSummaryFieldsBase,
+            $setOnInsert: { createdBy: userOid },
+          },
+          { upsert: true, new: true, session, setDefaultsOnInsert: true },
+        )
+        .exec();
 
-      if (insertResult.status === 'rejected') {
-        throw insertResult.reason;
-      }
-      if (deactivateResult.status === 'rejected') {
-        throw deactivateResult.reason;
-      }
+      newVersion = updatedForm.activeDatasetVersion;
+      const currentVersion = newVersion - 1;
+      formId = updatedForm._id;
 
-      const formSummaryFields: Record<string, unknown> = {
-        excelFile: normalizedFile,
-        excelRowCount,
-        errorRowCount,
-        newUlbCount,
-        totalAllocatedSum,
-        totalMoHUAAllocation,
-        grantAllocationRef: grantAlloc._id,
-        validationStatus: formValidationStatus,
-        activeDatasetVersion: newVersion,
-        lastExcelUploadedAt: new Date(),
-        lastExcelUploadedBy: userOid,
+      const rowDocs = processedRows.map((r) => ({
+        form: formId,
+        state: stateOid,
+        year: yearOid,
+        installment: dto.installment,
+        datasetVersion: newVersion,
+        rowNumber: r.rowNumber,
+        ulbId: r.ulbId,
+        censusCode: r.censusCode,
+        sbCode: '',
+        ulbName: r.ulbName,
+        totalGrantAllocation: Number(r.totalGrantAllocation) || 0,
+        installment1Amount: Number(r.installment1Amount) || 0,
+        installment2Amount: Number(r.installment2Amount) || 0,
+        devolutionFormula: r.devolutionFormula,
+        validationStatus: r.validationRowStatus,
+        errors: r.rowErrors,
+        rawExcelData: r.validationRowStatus === 'INVALID' ? r.rawExcelData : undefined,
+        isActive: true,
+        createdBy: userOid,
         updatedBy: userOid,
-        currentFormStatus: FORM_STATUS.IN_PROGRESS,
-      };
-
-      if (existingDoc) {
-        await this.formModel.findByIdAndUpdate(formId, { $set: formSummaryFields }).lean().exec();
-      } else {
-        await this.formModel.create({
-          _id: formId,
-          state: stateOid,
-          year: yearOid,
-          installment: dto.installment,
-          isDraft: true,
-          isActive: true,
-          createdBy: userOid,
-          ...formSummaryFields,
-        });
-      }
+      }));
 
       if (currentVersion > 0) {
-        void this.deletePreviousDatasetRows(formId, currentVersion);
+        await this.rowModel
+          .updateMany({ form: formId, datasetVersion: currentVersion }, { $set: { isActive: false } }, { session })
+          .exec();
       }
+
+      await this.rowModel.insertMany(rowDocs, { ordered: false, session });
+
+      if (currentVersion > 0) {
+        await this.rowModel.deleteMany({ form: formId, datasetVersion: currentVersion }, { session }).exec();
+      }
+
+      await session.commitTransaction();
     } catch (err: unknown) {
-      if (previousRowsDeactivated) {
-        await this.rollbackDatasetReplacement(formId, currentVersion, newVersion);
-      } else if (newRowsInserted) {
-        // New form: rows written but form.create failed — delete orphan rows
-        await this.cleanupOrphanRows(formId, newVersion);
-      }
-      if (isMongoDuplicateKeyError(err)) {
-        throwXviFcValidationError({
-          excelFile: [{ field: 'excelFile', code: 'duplicate', message: 'Duplicate ULB entries detected.' }],
-        });
-      }
+      await session.abortTransaction();
+      classifyAndThrowMongoWriteConflict(err, Object.keys(formFilter));
       throw err;
+    } finally {
+      await session.endSession();
     }
 
     // Generate error Excel if row errors exist
@@ -973,35 +987,6 @@ export class DevolutionFormulaExcelService {
       .exec();
 
     return fileRef;
-  }
-
-  private async deletePreviousDatasetRows(formId: Types.ObjectId, version: number): Promise<void> {
-    try {
-      await this.rowModel.deleteMany({ form: formId, datasetVersion: version }).exec();
-    } catch (err) {
-      this.logger.error(`Failed to delete old dataset rows [form=${formId.toString()} version=${version}]`, err);
-    }
-  }
-
-  private async rollbackDatasetReplacement(
-    formId: Types.ObjectId,
-    oldVersion: number,
-    newVersion: number,
-  ): Promise<void> {
-    try {
-      await this.rowModel.updateMany({ form: formId, datasetVersion: oldVersion }, { $set: { isActive: true } }).exec();
-      await this.rowModel.deleteMany({ form: formId, datasetVersion: newVersion }).exec();
-    } catch (rollbackErr) {
-      this.logger.error(`Rollback failed [form=${formId.toString()}]`, rollbackErr);
-    }
-  }
-
-  private async cleanupOrphanRows(formId: Types.ObjectId, version: number): Promise<void> {
-    try {
-      await this.rowModel.deleteMany({ form: formId, datasetVersion: version }).exec();
-    } catch (err) {
-      this.logger.error(`Failed to clean up orphan rows [form=${formId.toString()} version=${version}]`, err);
-    }
   }
 
   private hydrateErrorExcelFile(file: FileInfo | null | undefined): HydratedFileInfoResponse | undefined {
