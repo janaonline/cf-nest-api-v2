@@ -8,6 +8,11 @@ import { AnnualAccountsService } from './annual_accounts.service';
 import { PresignUploadDto } from './dto/presign-upload.dto';
 import { ConfirmUploadDto } from './dto/confirm-upload.dto';
 import { SubmitSectionDto } from './dto/submit-section.dto';
+import { DocumentDecisionDto } from './dto/document-decision.dto';
+import { SectionDecisionDto } from './dto/section-decision.dto';
+// import { BulkSectionDecisionDto } from './dto/bulk-section-decision.dto'; // only used by the commented-out bulk-decision endpoint below
+import { UlbSubmissionsQueryDto } from './dto/ulb-submissions-query.dto';
+import { extractIpAndUserAgent } from 'src/module/xvi-fc/common/utils/xvi-fc-request-meta.util';
 
 @ApiBearerAuth()
 @Controller('xvi-fc/annual-account')
@@ -26,23 +31,14 @@ export class AnnualAccountsController {
   @Post('confirm-upload')
   @HttpCode(200)
   @ApiOperation({ summary: 'Confirm a direct S3 upload and trigger OCR processing' })
-  confirmUpload(
-    @Body() dto: ConfirmUploadDto,
-    @CurrentUser() user: AuthUser,
-    @Req() req: Request,
-  ) {
-    const ipAddress =
-      (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ?? req.socket?.remoteAddress ?? null;
-    const userAgent = (req.headers['user-agent'] as string) ?? null;
+  confirmUpload(@Body() dto: ConfirmUploadDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    const { ipAddress, userAgent } = extractIpAndUserAgent(req);
     return this.annualAccountsService.confirmUpload(dto, user, ipAddress, userAgent);
   }
 
   @Get('upload-config/:type')
   @ApiOperation({ summary: 'Get document upload config (audited or provisional) for a given design year' })
-  getUploadConfig(
-    @Param('type') type: string,
-    @Query('yearId') yearId: string,
-  ) {
+  getUploadConfig(@Param('type') type: string, @Query('yearId') yearId: string) {
     return this.annualAccountsService.getUploadConfig(type as 'audited' | 'provisional', yearId);
   }
 
@@ -53,6 +49,14 @@ export class AnnualAccountsController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.annualAccountsService.findByUlbAndYear(ulbId, designYearId, user);
+  }
+
+  @Get('state/ulb-submissions')
+  @ApiOperation({
+    summary: "STATE reviewer's paginated list of ULBs and their Annual Account status for a design year",
+  })
+  listUlbSubmissions(@Query() dto: UlbSubmissionsQueryDto, @CurrentUser() user: AuthUser) {
+    return this.annualAccountsService.listUlbSubmissions(dto, user);
   }
 
   @Get(':id')
@@ -82,9 +86,7 @@ export class AnnualAccountsController {
     @CurrentUser() user: AuthUser,
     @Req() req: Request,
   ) {
-    const ipAddress =
-      (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ?? req.socket?.remoteAddress ?? null;
-    const userAgent = (req.headers['user-agent'] as string) ?? null;
+    const { ipAddress, userAgent } = extractIpAndUserAgent(req);
     return this.annualAccountsService.submitSection(id, dto.section, user, ipAddress, userAgent);
   }
 
@@ -100,7 +102,9 @@ export class AnnualAccountsController {
 
   @Delete(':id/documents/:docId')
   @HttpCode(200)
-  @ApiOperation({ summary: 'Remove a document from an annual account section (clears currentUpload and resets status)' })
+  @ApiOperation({
+    summary: 'Remove a document from an annual account section (clears currentUpload and resets status)',
+  })
   removeDocument(
     @Param('id', ParseObjectIdPipe) id: string,
     @Param('docId') docId: string,
@@ -112,4 +116,60 @@ export class AnnualAccountsController {
     }
     return this.annualAccountsService.removeDocument(id, section, docId, user);
   }
+
+  @Post(':id/documents/:docId/decision')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'State reviewer approves or returns a single document (informational only)' })
+  decideDocument(
+    @Param('id', ParseObjectIdPipe) id: string,
+    @Param('docId') docId: string,
+    @Body() dto: DocumentDecisionDto,
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    const { ipAddress, userAgent } = extractIpAndUserAgent(req);
+    return this.annualAccountsService.decideDocument(id, docId, dto, user, ipAddress, userAgent);
+  }
+
+  @Post(':id/decision')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'State reviewer approves or returns a whole section, transitioning its status' })
+  decideSection(
+    @Param('id', ParseObjectIdPipe) id: string,
+    @Body() dto: SectionDecisionDto,
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    const { ipAddress, userAgent } = extractIpAndUserAgent(req);
+    return this.annualAccountsService.decideSection(id, dto, user, ipAddress, userAgent);
+  }
+
+  // @Post('bulk-decision')
+  // @HttpCode(200)
+  // @ApiOperation({ summary: 'State reviewer bulk approves or returns a section across many ULB submissions' })
+  // bulkDecideSection(
+  //   @Body() dto: BulkSectionDecisionDto,
+  //   @CurrentUser() user: AuthUser,
+  //   @Req() req: Request,
+  // ) {
+  //   const ipAddress =
+  //     (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ?? req.socket?.remoteAddress ?? null;
+  //   const userAgent = (req.headers['user-agent'] as string) ?? null;
+  //   return this.annualAccountsService.bulkDecideSection(dto, user, ipAddress, userAgent);
+  // }
+
+  // @Post(':id/mohua-decision')
+  // @HttpCode(200)
+  // @ApiOperation({ summary: 'MOHUA approves or returns a whole section handed off by state, transitioning its status' })
+  // decideMohuaSection(
+  //   @Param('id', ParseObjectIdPipe) id: string,
+  //   @Body() dto: SectionDecisionDto,
+  //   @CurrentUser() user: AuthUser,
+  //   @Req() req: Request,
+  // ) {
+  //   const ipAddress =
+  //     (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ?? req.socket?.remoteAddress ?? null;
+  //   const userAgent = (req.headers['user-agent'] as string) ?? null;
+  //   return this.annualAccountsService.decideMohuaSection(id, dto, user, ipAddress, userAgent);
+  // }
 }

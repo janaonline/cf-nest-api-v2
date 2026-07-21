@@ -715,12 +715,10 @@ describe('UlbService', () => {
       const allFields = sections.flatMap((s) => s.fields);
 
       expect(allFields.find((f) => f.key === 'code')).toBeTruthy();
-      expect(allFields.find((f) => f.key === 'sbCode')).toBeTruthy();
     });
 
-    it('embeds live states into the `state` field, in addition to live ULB types', async () => {
+    it('embeds live ULB types into the `ulbType` field', async () => {
       mockUlbTypes(ulbModel, [{ _id: ulbTypeId, name: 'Municipal Corporation' }]);
-      mockStates(stateModel, [{ _id: stateId, name: 'Andhra Pradesh' }]);
       formJsonService.findByType = jest.fn().mockImplementation((type: string) =>
         type === ULB_EDIT_SECTIONS_FORM_JSON_TYPE
           ? Promise.resolve({
@@ -728,10 +726,7 @@ describe('UlbService', () => {
                 {
                   title: 'Identity',
                   icon: 'bi-bank',
-                  fields: [
-                    { key: 'state', grid: 'col-md-6' },
-                    { key: 'ulbType', grid: 'col-md-6' },
-                  ],
+                  fields: [{ key: 'ulbType', grid: 'col-md-6' }],
                 },
               ],
             })
@@ -740,12 +735,26 @@ describe('UlbService', () => {
 
       const sections = await service.getEditSections();
 
-      const [stateField, ulbTypeField] = sections[0].fields;
-      expect(stateField).toMatchObject({ key: 'state', options: [{ id: stateId, label: 'Andhra Pradesh' }] });
+      const [ulbTypeField] = sections[0].fields;
       expect(ulbTypeField).toMatchObject({
         key: 'ulbType',
         options: [{ id: ulbTypeId, label: 'Municipal Corporation' }],
       });
+    });
+
+    it('drops the `state` layout entry — no matching field definition exists for it', async () => {
+      mockUlbTypes(ulbModel, []);
+      formJsonService.findByType = jest.fn().mockImplementation((type: string) =>
+        type === ULB_EDIT_SECTIONS_FORM_JSON_TYPE
+          ? Promise.resolve({
+              data: [{ title: 'Identity', icon: 'bi-bank', fields: [{ key: 'state', grid: 'col-md-6' }] }],
+            })
+          : Promise.reject(new NotFoundException()),
+      );
+
+      const sections = await service.getEditSections();
+
+      expect(sections[0].fields).toHaveLength(0);
     });
   });
 

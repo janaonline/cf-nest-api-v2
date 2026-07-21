@@ -24,8 +24,7 @@ export class SlbFormJsonConfigService {
       const formJson = yearId
         ? await this.formJsonService.findActiveByDesignYearAndFormId(yearId, SLB_FORM_ID)
         : await this.formJsonService.findByType(SLB_FORM_TYPE);
-      // return formJson.data?.length ? validateSlbFormJsonData(formJson.data) : DEFAULT_SLB_FIELDS;
-      return DEFAULT_SLB_FIELDS;
+      return formJson.data?.length ? validateSlbFormJsonData(formJson.data) : DEFAULT_SLB_FIELDS;
     } catch (error) {
       this.logger.debug(`No SLB FormJson configured yet (yearId=${yearId ?? 'none'}); using bundled defaults.`, error);
       return DEFAULT_SLB_FIELDS;

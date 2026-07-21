@@ -3,6 +3,7 @@ import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { LoginService } from './login.service';
 import { OtpService } from './otp.service';
+import { VisitSessionService } from './visit-session.service';
 
 describe('AuthController', () => {
   let controller: AuthController;
@@ -10,7 +11,6 @@ describe('AuthController', () => {
   const mockAuthService = {
     logout: jest.fn(),
     refreshTokens: jest.fn(),
-    register: jest.fn(),
     validateCaptcha: jest.fn(),
   };
 
@@ -24,6 +24,12 @@ describe('AuthController', () => {
     forgotPasswordReset: jest.fn(),
   };
 
+  const mockVisitSessionService = {
+    startSession: jest.fn(),
+    endSession: jest.fn(),
+    visitCount: jest.fn(),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [AuthController],
@@ -31,6 +37,7 @@ describe('AuthController', () => {
         { provide: AuthService, useValue: mockAuthService },
         { provide: LoginService, useValue: mockLoginService },
         { provide: OtpService, useValue: mockOtpService },
+        { provide: VisitSessionService, useValue: mockVisitSessionService },
       ],
     }).compile();
 

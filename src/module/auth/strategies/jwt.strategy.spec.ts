@@ -49,7 +49,7 @@ describe('JwtStrategy', () => {
   });
 
   describe('validate', () => {
-    const payload = { sub: 'user1', jti: 'jti-abc', exp: 9999999999 };
+    const payload = { _id: 'user1', lh_id: 'lh-1', sessionId: 'session-abc', purpose: 'WEB', exp: 9999999999 };
 
     it('should return user data for valid payload', async () => {
       redisService.get.mockResolvedValue(null);
@@ -60,7 +60,7 @@ describe('JwtStrategy', () => {
         _id: 'user1',
         role: 'ADMIN',
         isActive: true,
-        jti: 'jti-abc',
+        sessionId: 'session-abc',
       });
     });
 
@@ -81,10 +81,10 @@ describe('JwtStrategy', () => {
       await expect(strategy.validate(payload)).rejects.toThrow(UnauthorizedException);
     });
 
-    it('should not check redis blacklist when jti is missing', async () => {
-      const payloadNoJti = { sub: 'user1', exp: 9999999999 } as any;
+    it('should not check redis blacklist when sessionId is missing', async () => {
+      const payloadNoSessionId = { _id: 'user1', lh_id: 'lh-1', purpose: 'WEB', exp: 9999999999 } as any;
       usersRepository.findById.mockResolvedValue(activeUser as any);
-      await strategy.validate(payloadNoJti);
+      await strategy.validate(payloadNoSessionId);
       expect(redisService.get).not.toHaveBeenCalled();
     });
   });

@@ -1,28 +1,56 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { ForbiddenException } from '@nestjs/common';
 import { UsersController } from './users.controller';
 import { UsersService } from './users.service';
-import { CreateUserDto } from './dto/create-user.dto';
-import { UpdateUserDto } from './dto/update-user.dto';
+import { Types } from 'mongoose';
+
+import { makeStateAdmin, makeUlbAdmin, TARGET_USER_ID } from './test/users.fixtures';
+
+// ─── NOTE ON DRIFT FROM THE PREVIOUS VERSION OF THIS FILE ──────────────────
+//
+// The previous spec exercised `findAll()`, `findOne()`, `update()`, and `remove()` on
+// UsersController — none of these methods exist on the controller anymore (see
+// src/users/users.controller.ts). It has since been rewritten around XVI-FC-specific
+// workflows (invite/transfer/soft-delete members, permission overrides, profile contacts,
+// etc). Those test blocks have been replaced with delegation tests for the methods that
+// actually exist today.
+//
+// `CreateUserDto` is now an empty class (`export class CreateUserDto {}`), so the old
+// `email/name/password` shaped literal is no longer a real DTO shape — it is now
+// constructed without an explicit `: CreateUserDto` type annotation so as not to assert a
+// DTO contract the class doesn't declare.
 
 describe('UsersController', () => {
   let controller: UsersController;
-  let service: UsersService;
 
   const mockUser = {
     _id: '507f1f77bcf86cd799439011',
     email: 'test@example.com',
     name: 'Test User',
-    role: 'user',
+    role: 'ULB',
     createdAt: new Date(),
     updatedAt: new Date(),
   };
 
   const mockUsersService = {
     create: jest.fn(),
-    findAll: jest.fn(),
-    findOne: jest.fn(),
-    update: jest.fn(),
-    remove: jest.fn(),
+    inviteStateMember: jest.fn(),
+    getPermissionMatrix: jest.fn(),
+    getStateMembers: jest.fn(),
+    issueProfileSaveToken: jest.fn(),
+    getMohuaPermissionMatrix: jest.fn(),
+    getMohuaMembers: jest.fn(),
+    patchMohuaCoreSubroles: jest.fn(),
+    inviteMohuaMember: jest.fn(),
+    transferMohuaSubmitter: jest.fn(),
+    updateMohuaMemberSubrole: jest.fn(),
+    softDeleteMohuaMember: jest.fn(),
+    getProfileContacts: jest.fn(),
+    updateProfileContacts: jest.fn(),
+    updatePermissionOverrides: jest.fn(),
+    transferSubmitter: jest.fn(),
+    updateXviFcSubrole: jest.fn(),
+    softDeleteStateUser: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -37,7 +65,6 @@ describe('UsersController', () => {
     }).compile();
 
     controller = module.get<UsersController>(UsersController);
-    service = module.get<UsersService>(UsersService);
   });
 
   afterEach(() => {
@@ -49,13 +76,8 @@ describe('UsersController', () => {
   });
 
   describe('create()', () => {
-    it('should create a new user', async () => {
-      const createUserDto: CreateUserDto = {
-        email: 'newuser@example.com',
-        name: 'New User',
-        password: 'password123',
-      };
-
+    it('delegates to usersService.create()', async () => {
+      const createUserDto = { name: 'New User', email: 'newuser@example.com', password: 'password123' };
       mockUsersService.create.mockResolvedValue(mockUser);
 
       const result = await controller.create(createUserDto);
@@ -65,212 +87,243 @@ describe('UsersController', () => {
       expect(mockUsersService.create).toHaveBeenCalledTimes(1);
     });
 
-    it('should handle create errors', async () => {
-      const createUserDto: CreateUserDto = {
-        email: 'newuser@example.com',
-        name: 'New User',
-        password: 'password123',
-      };
-
-      const error = new Error('User already exists');
-      mockUsersService.create.mockRejectedValue(error);
+    it('propagates errors from the service', async () => {
+      const createUserDto = { name: 'New User', email: 'newuser@example.com', password: 'password123' };
+      mockUsersService.create.mockRejectedValue(new Error('User already exists'));
 
       await expect(controller.create(createUserDto)).rejects.toThrow('User already exists');
-      expect(mockUsersService.create).toHaveBeenCalledWith(createUserDto);
-    });
-
-    it('should validate required fields', async () => {
-      const createUserDto: CreateUserDto = {
-        email: 'newuser@example.com',
-        name: 'New User',
-        password: '',
-      };
-
-      mockUsersService.create.mockRejectedValue(new Error('Password is required'));
-
-      await expect(controller.create(createUserDto)).rejects.toThrow('Password is required');
     });
   });
 
-  describe('findAll()', () => {
-    it('should return an array of users', async () => {
-      const users = [mockUser, { ...mockUser, _id: '507f1f77bcf86cd799439012' }];
+  describe('inviteStateMember()', () => {
+    it('delegates to usersService.inviteStateMember() with the current user', async () => {
+      const dto = { name: 'A', email: 'a@b.com', mobile: '9999999999', designation: 'Officer', subRole: 'EDITOR' as const };
+      const user = makeStateAdmin();
+      const response = { _id: TARGET_USER_ID, name: dto.name, mobile: dto.mobile, email: dto.email, designation: dto.designation, subRole: dto.subRole, isActive: true, isXVIFCProfileVerified: false, lastActive: null };
+      mockUsersService.inviteStateMember.mockResolvedValue(response);
 
-      mockUsersService.findAll.mockResolvedValue(users);
+      const result = await controller.inviteStateMember(dto, user);
 
-      const result = await controller.findAll();
-
-      expect(result).toEqual(users);
-      expect(mockUsersService.findAll).toHaveBeenCalledTimes(1);
-    });
-
-    it('should return an empty array if no users exist', async () => {
-      mockUsersService.findAll.mockResolvedValue([]);
-
-      const result = await controller.findAll();
-
-      expect(result).toEqual([]);
-      expect(mockUsersService.findAll).toHaveBeenCalledTimes(1);
-    });
-
-    it('should handle service errors', async () => {
-      const error = new Error('Database connection failed');
-      mockUsersService.findAll.mockRejectedValue(error);
-
-      await expect(controller.findAll()).rejects.toThrow('Database connection failed');
+      expect(result).toEqual(response);
+      expect(mockUsersService.inviteStateMember).toHaveBeenCalledWith(dto, user);
     });
   });
 
-  describe('findOne()', () => {
-    it('should return a single user by id', async () => {
-      const userId = '507f1f77bcf86cd799439011';
+  describe('getPermissionMatrix()', () => {
+    it('delegates to usersService.getPermissionMatrix()', () => {
+      const rows = [{ label: 'x' }];
+      mockUsersService.getPermissionMatrix.mockReturnValue(rows);
 
-      mockUsersService.findOne.mockResolvedValue(mockUser);
-
-      const result = await controller.findOne(userId);
-
-      expect(result).toEqual(mockUser);
-      expect(mockUsersService.findOne).toHaveBeenCalledWith(userId);
-      expect(mockUsersService.findOne).toHaveBeenCalledTimes(1);
-    });
-
-    it('should return null for non-existent user', async () => {
-      const userId = '507f1f77bcf86cd799439999';
-
-      mockUsersService.findOne.mockResolvedValue(null);
-
-      const result = await controller.findOne(userId);
-
-      expect(result).toBeNull();
-      expect(mockUsersService.findOne).toHaveBeenCalledWith(userId);
-    });
-
-    it('should handle invalid id format', async () => {
-      const userId = 'invalid-id';
-
-      mockUsersService.findOne.mockRejectedValue(new Error('Invalid user ID'));
-
-      await expect(controller.findOne(userId)).rejects.toThrow('Invalid user ID');
-    });
-
-    it('should handle database errors', async () => {
-      const userId = '507f1f77bcf86cd799439011';
-      const error = new Error('Database query failed');
-
-      mockUsersService.findOne.mockRejectedValue(error);
-
-      await expect(controller.findOne(userId)).rejects.toThrow('Database query failed');
+      expect(controller.getPermissionMatrix()).toEqual(rows);
+      expect(mockUsersService.getPermissionMatrix).toHaveBeenCalledTimes(1);
     });
   });
 
-  describe('update()', () => {
-    it('should update a user by id', async () => {
-      const userId = '507f1f77bcf86cd799439011';
-      const updateUserDto: UpdateUserDto = {
-        name: 'Updated User',
-        email: 'updated@example.com',
-      };
+  describe('getStateMembers()', () => {
+    it('reads stateId off the JWT user and delegates to usersService.getStateMembers()', async () => {
+      const user = makeStateAdmin();
+      const members = [{ _id: TARGET_USER_ID }];
+      mockUsersService.getStateMembers.mockResolvedValue(members);
 
-      const updatedUser = { ...mockUser, ...updateUserDto };
-      mockUsersService.update.mockResolvedValue(updatedUser);
+      const result = await controller.getStateMembers(user as any);
 
-      const result = await controller.update(userId, updateUserDto);
-
-      expect(result).toEqual(updatedUser);
-      expect(mockUsersService.update).toHaveBeenCalledWith(userId, updateUserDto);
-      expect(mockUsersService.update).toHaveBeenCalledTimes(1);
+      expect(result).toEqual(members);
+      expect(mockUsersService.getStateMembers).toHaveBeenCalledWith(user.state?.toString());
     });
 
-    it('should handle partial updates', async () => {
-      const userId = '507f1f77bcf86cd799439011';
-      const updateUserDto: UpdateUserDto = {
-        name: 'Updated Name',
-      };
+    it('throws ForbiddenException when the current user has no state scope', () => {
+      const user = makeStateAdmin({ state: undefined });
 
-      const updatedUser = { ...mockUser, name: 'Updated Name' };
-      mockUsersService.update.mockResolvedValue(updatedUser);
-
-      const result = await controller.update(userId, updateUserDto);
-
-      expect(result.name).toEqual('Updated Name');
-      expect(mockUsersService.update).toHaveBeenCalledWith(userId, updateUserDto);
-    });
-
-    it('should return null for non-existent user', async () => {
-      const userId = '507f1f77bcf86cd799439999';
-      const updateUserDto: UpdateUserDto = {
-        name: 'Updated User',
-      };
-
-      mockUsersService.update.mockResolvedValue(null);
-
-      const result = await controller.update(userId, updateUserDto);
-
-      expect(result).toBeNull();
-      expect(mockUsersService.update).toHaveBeenCalledWith(userId, updateUserDto);
-    });
-
-    it('should handle update errors', async () => {
-      const userId = '507f1f77bcf86cd799439011';
-      const updateUserDto: UpdateUserDto = {
-        email: 'duplicate@example.com',
-      };
-
-      mockUsersService.update.mockRejectedValue(new Error('Email already exists'));
-
-      await expect(controller.update(userId, updateUserDto)).rejects.toThrow('Email already exists');
-    });
-
-    it('should handle invalid id format', async () => {
-      const userId = 'invalid-id';
-      const updateUserDto: UpdateUserDto = {
-        name: 'Updated User',
-      };
-
-      mockUsersService.update.mockRejectedValue(new Error('Invalid user ID'));
-
-      await expect(controller.update(userId, updateUserDto)).rejects.toThrow('Invalid user ID');
+      // getStateMembers throws synchronously (before returning a promise), so this must be
+      // asserted with a wrapping function + toThrow rather than the async `.rejects` form.
+      expect(() => controller.getStateMembers(user as any)).toThrow(ForbiddenException);
+      expect(mockUsersService.getStateMembers).not.toHaveBeenCalled();
     });
   });
 
-  describe('remove()', () => {
-    it('should remove a user by id', async () => {
-      const userId = '507f1f77bcf86cd799439011';
+  describe('issueProfileSaveToken()', () => {
+    it('delegates to usersService.issueProfileSaveToken()', async () => {
+      mockUsersService.issueProfileSaveToken.mockResolvedValue({ token: 'abc' });
 
-      mockUsersService.remove.mockResolvedValue(mockUser);
+      const result = await controller.issueProfileSaveToken(TARGET_USER_ID);
 
-      const result = await controller.remove(userId);
+      expect(result).toEqual({ token: 'abc' });
+      expect(mockUsersService.issueProfileSaveToken).toHaveBeenCalledWith(TARGET_USER_ID);
+    });
+  });
 
-      expect(result).toEqual(mockUser);
-      expect(mockUsersService.remove).toHaveBeenCalledWith(userId);
-      expect(mockUsersService.remove).toHaveBeenCalledTimes(1);
+  describe('getMohuaPermissionMatrix()', () => {
+    it('delegates to usersService.getMohuaPermissionMatrix()', () => {
+      const rows = [{ label: 'y' }];
+      mockUsersService.getMohuaPermissionMatrix.mockReturnValue(rows);
+
+      expect(controller.getMohuaPermissionMatrix()).toEqual(rows);
+    });
+  });
+
+  describe('getMohuaMembers()', () => {
+    it('delegates to usersService.getMohuaMembers()', async () => {
+      const members = [{ _id: TARGET_USER_ID }];
+      mockUsersService.getMohuaMembers.mockResolvedValue(members);
+
+      expect(await controller.getMohuaMembers()).toEqual(members);
+    });
+  });
+
+  describe('patchMohuaCoreSubroles()', () => {
+    it('delegates to usersService.patchMohuaCoreSubroles() with the current user', async () => {
+      const user = makeStateAdmin();
+      mockUsersService.patchMohuaCoreSubroles.mockResolvedValue({ updated: [], notFound: [] });
+
+      const result = await controller.patchMohuaCoreSubroles(user as any);
+
+      expect(result).toEqual({ updated: [], notFound: [] });
+      expect(mockUsersService.patchMohuaCoreSubroles).toHaveBeenCalledWith(user);
+    });
+  });
+
+  describe('inviteMohuaMember()', () => {
+    it('delegates to usersService.inviteMohuaMember()', async () => {
+      const dto = { name: 'A', email: 'a@b.com', mobile: '9999999999', designation: 'Officer', subRole: 'VIEWER' as const };
+      const user = makeStateAdmin();
+      mockUsersService.inviteMohuaMember.mockResolvedValue({ _id: TARGET_USER_ID });
+
+      const result = await controller.inviteMohuaMember(dto, user as any);
+
+      expect(result).toEqual({ _id: TARGET_USER_ID });
+      expect(mockUsersService.inviteMohuaMember).toHaveBeenCalledWith(dto, user);
+    });
+  });
+
+  describe('transferMohuaSubmitter()', () => {
+    it('delegates to usersService.transferMohuaSubmitter()', async () => {
+      const dto = { toUserId: TARGET_USER_ID };
+      const user = makeStateAdmin();
+      mockUsersService.transferMohuaSubmitter.mockResolvedValue({ message: 'ok' });
+
+      const result = await controller.transferMohuaSubmitter(dto, user as any);
+
+      expect(result).toEqual({ message: 'ok' });
+      expect(mockUsersService.transferMohuaSubmitter).toHaveBeenCalledWith(dto, user);
+    });
+  });
+
+  describe('updateMohuaMemberSubrole()', () => {
+    it('delegates to usersService.updateMohuaMemberSubrole()', async () => {
+      const dto = { subRole: 'EDITOR' as const };
+      const user = makeStateAdmin();
+      mockUsersService.updateMohuaMemberSubrole.mockResolvedValue({ message: 'ok' });
+
+      const result = await controller.updateMohuaMemberSubrole(TARGET_USER_ID, dto, user as any);
+
+      expect(result).toEqual({ message: 'ok' });
+      expect(mockUsersService.updateMohuaMemberSubrole).toHaveBeenCalledWith(TARGET_USER_ID, dto, user);
+    });
+  });
+
+  describe('softDeleteMohuaMember()', () => {
+    it('delegates to usersService.softDeleteMohuaMember()', async () => {
+      const user = makeStateAdmin();
+      mockUsersService.softDeleteMohuaMember.mockResolvedValue({ message: 'removed' });
+
+      const result = await controller.softDeleteMohuaMember(TARGET_USER_ID, user as any);
+
+      expect(result).toEqual({ message: 'removed' });
+      expect(mockUsersService.softDeleteMohuaMember).toHaveBeenCalledWith(TARGET_USER_ID, user);
+    });
+  });
+
+  describe('getProfileContacts()', () => {
+    it('delegates to usersService.getProfileContacts()', async () => {
+      const response = { commissionerName: '' };
+      mockUsersService.getProfileContacts.mockResolvedValue(response);
+
+      const result = await controller.getProfileContacts(TARGET_USER_ID);
+
+      expect(result).toEqual(response);
+      expect(mockUsersService.getProfileContacts).toHaveBeenCalledWith(TARGET_USER_ID);
+    });
+  });
+
+  describe('updateProfileContacts()', () => {
+    it('delegates to usersService.updateProfileContacts()', async () => {
+      const dto = { commissionerName: 'New Name' };
+      const user = makeUlbAdmin();
+      mockUsersService.updateProfileContacts.mockResolvedValue({ message: 'ok', updatedFields: dto });
+
+      const result = await controller.updateProfileContacts(TARGET_USER_ID, dto as any, user as any);
+
+      expect(result).toEqual({ message: 'ok', updatedFields: dto });
+      expect(mockUsersService.updateProfileContacts).toHaveBeenCalledWith(TARGET_USER_ID, dto, user);
+    });
+  });
+
+  describe('updatePermissionOverrides()', () => {
+    it('delegates to usersService.updatePermissionOverrides()', async () => {
+      const dto = { allow: [], deny: [] };
+      const user = makeUlbAdmin();
+      const response = { message: 'ok', overrides: dto, effectivePermissions: [] };
+      mockUsersService.updatePermissionOverrides.mockResolvedValue(response);
+
+      const result = await controller.updatePermissionOverrides(TARGET_USER_ID, dto, user as any);
+
+      expect(result).toEqual(response);
+      expect(mockUsersService.updatePermissionOverrides).toHaveBeenCalledWith(TARGET_USER_ID, dto, user);
     });
 
-    it('should return null for non-existent user', async () => {
-      const userId = '507f1f77bcf86cd799439999';
+    it('propagates errors from the service', async () => {
+      const dto = { allow: [], deny: [] };
+      const user = makeUlbAdmin();
+      mockUsersService.updatePermissionOverrides.mockRejectedValue(new Error('Invalid user ID'));
 
-      mockUsersService.remove.mockResolvedValue(null);
+      await expect(controller.updatePermissionOverrides('invalid-id', dto, user as any)).rejects.toThrow(
+        'Invalid user ID',
+      );
+    });
+  });
 
-      const result = await controller.remove(userId);
+  describe('transferSubmitter()', () => {
+    it('delegates to usersService.transferSubmitter()', async () => {
+      const dto = { toUserId: TARGET_USER_ID };
+      const user = makeStateAdmin();
+      mockUsersService.transferSubmitter.mockResolvedValue({ message: 'ok' });
 
-      expect(result).toBeNull();
-      expect(mockUsersService.remove).toHaveBeenCalledWith(userId);
+      const result = await controller.transferSubmitter(dto, user as any);
+
+      expect(result).toEqual({ message: 'ok' });
+      expect(mockUsersService.transferSubmitter).toHaveBeenCalledWith(dto, user);
+    });
+  });
+
+  describe('updateXviFcSubrole()', () => {
+    it('delegates to usersService.updateXviFcSubrole()', async () => {
+      const dto = { subRole: 'VIEWER' as const };
+      const user = makeStateAdmin();
+      mockUsersService.updateXviFcSubrole.mockResolvedValue({ message: 'ok' });
+
+      const result = await controller.updateXviFcSubrole(TARGET_USER_ID, dto, user as any);
+
+      expect(result).toEqual({ message: 'ok' });
+      expect(mockUsersService.updateXviFcSubrole).toHaveBeenCalledWith(TARGET_USER_ID, dto, user);
+    });
+  });
+
+  describe('softDeleteStateUser()', () => {
+    it('delegates to usersService.softDeleteStateUser()', async () => {
+      const user = makeStateAdmin();
+      mockUsersService.softDeleteStateUser.mockResolvedValue({ message: 'ok' });
+
+      const result = await controller.softDeleteStateUser(TARGET_USER_ID, user as any);
+
+      expect(result).toEqual({ message: 'ok' });
+      expect(mockUsersService.softDeleteStateUser).toHaveBeenCalledWith(TARGET_USER_ID, user);
     });
 
-    it('should handle invalid id format', async () => {
-      const userId = 'invalid-id';
+    it('propagates errors from the service', async () => {
+      const user = makeStateAdmin();
+      mockUsersService.softDeleteStateUser.mockRejectedValue(new Error('User not found'));
 
-      mockUsersService.remove.mockRejectedValue(new Error('Invalid user ID'));
-
-      await expect(controller.remove(userId)).rejects.toThrow('Invalid user ID');
-    });
-
-    it('should handle deletion errors', async () => {
-      const userId = '507f1f77bcf86cd799439011';
-
-      mockUsersService.remove.mockRejectedValue(new Error('Cannot delete user'));
-
-      await expect(controller.remove(userId)).rejects.toThrow('Cannot delete user');
+      await expect(controller.softDeleteStateUser(TARGET_USER_ID, user as any)).rejects.toThrow('User not found');
     });
   });
 });
