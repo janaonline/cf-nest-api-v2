@@ -111,6 +111,13 @@ const sampleResolvedRow: FcUnspentResolvedRow = {
   unspentAmount: 5,
   allocationPerc: 5,
   eligibility: true,
+  allocationSource: {
+    devolutionFormId: new Types.ObjectId(),
+    devolutionRowId: new Types.ObjectId(),
+    datasetVersion: 1,
+    installment: 1,
+    allocationAmount: 100,
+  },
 };
 
 interface TestSetArg {

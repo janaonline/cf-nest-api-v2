@@ -663,7 +663,8 @@ export class EulbPostSubmissionUpdateService {
     const hasAccess = this.hasStateAccess(user, stateId);
     const canUpdate = canViewPostSubmissionUpdate(formStatus);
     const canView = perms.has(Permission.VIEW_STATE_FORMS) && hasAccess && canUpdate;
-    return { canView, canSubmitUpdate: canView };
+    const canSubmitUpdate = perms.has(Permission.FINAL_SUBMIT_STATE_FORMS) && hasAccess && canUpdate;
+    return { canView, canSubmitUpdate };
   }
 
   /**

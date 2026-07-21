@@ -13,7 +13,7 @@ import type { EulbTypedFieldConfig } from 'src/module/xvi-fc/state/elected-urban
 import { ElectedUrbanLocalBodiesForm } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
 import { ElectedUrbanLocalBodiesRow } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
-import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
+import { Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import {
   POST_SUBMISSION_UPDATE_ALLOWED_STATUSES,
@@ -62,6 +62,19 @@ const stateUser = (state: Types.ObjectId): AuthUser =>
     _id: userOid.toString(),
     scope: Scope.STATE,
     state,
+  }) as unknown as AuthUser;
+
+// Fixtures with `role` explicitly set so `getEffectivePermissions` resolves a real subrole
+// permission set (the plain `stateUser`/`adminUser` fixtures above omit `role`, so they
+// resolve to no permissions at all under `getEffectivePermissions` — fine for tests that only
+// exercise `hasStateAccess`, but not for asserting on `permissions.canView`/`canSubmitUpdate`).
+const stateUserWithSubrole = (state: Types.ObjectId, xviFcSubrole: 'admin' | 'reviewer' | 'viewer'): AuthUser =>
+  ({
+    _id: userOid.toString(),
+    role: UserRole.STATE,
+    scope: Scope.STATE,
+    state,
+    xviFcSubrole,
   }) as unknown as AuthUser;
 
 function makeForm(status: number) {
@@ -500,6 +513,39 @@ describe('EulbPostSubmissionUpdateService', () => {
       await expect(service.getMetadata(stateOid.toString(), yearOid.toString(), wrongStateUser)).rejects.toThrow(
         ForbiddenException,
       );
+    });
+
+    it('returns canSubmitUpdate:false for a view-only state subrole even though canView is true (viewer holds VIEW_STATE_FORMS but not FINAL_SUBMIT_STATE_FORMS)', async () => {
+      formModel['findOne'] = jest.fn().mockReturnValue(q(makeForm(FORM_STATUS.UNDER_REVIEW_BY_MOHUA)));
+      const result = await service.getMetadata(
+        stateOid.toString(),
+        yearOid.toString(),
+        stateUserWithSubrole(stateOid, 'viewer'),
+      );
+      expect(result.data!.permissions.canView).toBe(true);
+      expect(result.data!.permissions.canSubmitUpdate).toBe(false);
+    });
+
+    it('returns canSubmitUpdate:true for a state admin subrole (holds FINAL_SUBMIT_STATE_FORMS)', async () => {
+      formModel['findOne'] = jest.fn().mockReturnValue(q(makeForm(FORM_STATUS.UNDER_REVIEW_BY_MOHUA)));
+      const result = await service.getMetadata(
+        stateOid.toString(),
+        yearOid.toString(),
+        stateUserWithSubrole(stateOid, 'admin'),
+      );
+      expect(result.data!.permissions.canView).toBe(true);
+      expect(result.data!.permissions.canSubmitUpdate).toBe(true);
+    });
+
+    it('returns canSubmitUpdate:false for a reviewer subrole (holds EDIT_STATE_FORMS but not FINAL_SUBMIT_STATE_FORMS)', async () => {
+      formModel['findOne'] = jest.fn().mockReturnValue(q(makeForm(FORM_STATUS.UNDER_REVIEW_BY_MOHUA)));
+      const result = await service.getMetadata(
+        stateOid.toString(),
+        yearOid.toString(),
+        stateUserWithSubrole(stateOid, 'reviewer'),
+      );
+      expect(result.data!.permissions.canView).toBe(true);
+      expect(result.data!.permissions.canSubmitUpdate).toBe(false);
     });
   });
 
