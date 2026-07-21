@@ -551,6 +551,28 @@ describe('DevolutionFormulaExcelService — revalidateExcel', () => {
     expect(updateArg.$set['newUlbCount']).toBe(1);
   });
 
+  it('attributes the correct rowNumber to an error when a valid row precedes it (Case A)', async () => {
+    // Regression test: rowErrors used to be built by filtering rowUpdates down to only the
+    // invalid rows FIRST, then indexing back into the full (unfiltered) activeRows array using
+    // the filtered array's position — misattributing rowNumber whenever a valid row preceded an
+    // invalid one. mockActiveRows[0] is VALID (rowNumber 1), mockActiveRows[1] is INVALID
+    // (rowNumber 2) — the old bug would have reported rowNumber 1 (the valid row) instead of 2.
+    mockFormModel.findOne.mockReturnValue(q(mockExistingForm));
+    mockRowModel.find.mockReturnValue(q(mockActiveRows));
+
+    let caught: unknown;
+    try {
+      await service.revalidateExcel(stateOid.toString(), YEAR_ID, 1, adminUser);
+    } catch (e) {
+      caught = e;
+    }
+
+    const response = (caught as { response: { data: Record<string, unknown> } }).response;
+    const rowErrors = response.data['rowErrors'] as Array<{ rowNumber: number; code: string }>;
+    const unknownUlbError = rowErrors.find((r) => r.code === 'unknownUlb');
+    expect(unknownUlbError?.rowNumber).toBe(2);
+  });
+
   it('newUlbsAdded message reports the correct count (Case A)', async () => {
     mockFormModel.findOne.mockReturnValue(q(mockExistingForm));
     mockRowModel.find.mockReturnValue(q(mockActiveRows));

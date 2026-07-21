@@ -643,17 +643,18 @@ export class DevolutionFormulaExcelService {
         activeDatasetVersion: form.activeDatasetVersion ?? 0,
       });
 
-      const rowErrors: DfRowValidationError[] = rowUpdates
-        .filter((r) => r.errors.length > 0)
-        .flatMap((r, i) =>
-          r.errors.map((e) => ({
-            rowNumber: activeRows[i]?.rowNumber ?? i + 1,
-            field: e.field,
-            code: e.code,
-            message: e.message,
-            value: e.value,
-          })),
-        );
+      // Map over the full, unfiltered rowUpdates so index `i` stays aligned with activeRows[i] —
+      // filtering first (to only the invalid rows) would shift `i` and misattribute rowNumber to
+      // the wrong row for every invalid row after the first gap of valid rows.
+      const rowErrors: DfRowValidationError[] = rowUpdates.flatMap((r, i) =>
+        r.errors.map((e) => ({
+          rowNumber: activeRows[i]?.rowNumber ?? i + 1,
+          field: e.field,
+          code: e.code,
+          message: e.message,
+          value: e.value,
+        })),
+      );
 
       if (newUlbCount > 0) {
         throwXviFcValidationErrorWithData(
