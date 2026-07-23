@@ -31,6 +31,19 @@ export function getFormStatusLabel(status: number): string {
   return (FORM_STATUS_LABELS as Record<number, string>)[status] ?? 'Unknown';
 }
 
+const FORM_STATUS_KEYS: Readonly<Record<number, string>> = Object.fromEntries(
+  Object.entries(FORM_STATUS).map(([key, value]) => [value, key]),
+);
+
+/**
+ * Returns the enum-key form of a form status code (e.g. 'UNDER_REVIEW_BY_MOHUA').
+ * @param status Numeric form status value.
+ * @returns The matching FORM_STATUS key, or 'NOT_STARTED' if not recognised.
+ */
+export function getFormStatusKey(status: number): string {
+  return FORM_STATUS_KEYS[status] ?? 'NOT_STARTED';
+}
+
 /**
  * Checks whether a status represents a terminal (no further transitions) state.
  * @param status Numeric form status value.

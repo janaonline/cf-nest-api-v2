@@ -9,6 +9,7 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import axios from 'axios';
 import { Model, PipelineStage, Types } from 'mongoose';
+import { S3Service } from 'src/core/s3/s3.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { AccessLevel, Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
@@ -17,6 +18,10 @@ import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-
 import { xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { XviFcBankAccount, XviFcBankAccountDocument } from 'src/schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
+import {
+  XviFcBankAccountFormLog,
+  XviFcBankAccountFormLogDocument,
+} from 'src/schemas/xvi-fc/ulb/xvi-fc-bank-account-form-log.schema';
 import { toObjectIdString } from 'src/common/utils/objectid.util';
 import { escapeRegex } from 'src/common/utils/regex.util';
 import { resolveStateScopeFilter } from 'src/module/xvi-fc/common/utils/xvi-fc-scope-filter.util';
@@ -31,7 +36,12 @@ import type { SubmitXviFcBankAccountDto } from './dto/submit-xvi-fc-bank-account
 import type { BankAccountDecisionDto } from './dto/bank-account-decision.dto';
 import type { BulkBankAccountDecisionDto } from './dto/bulk-bank-account-decision.dto';
 import type { BankAccountUlbSubmissionsQueryDto } from './dto/bank-account-ulb-submissions-query.dto';
-import type { VerifiedIfscDetails, XviFcBankAccountResponse, XviFcIfscLookupResponse } from './bank-account.types';
+import type {
+  BankAccountFormLogEntry,
+  VerifiedIfscDetails,
+  XviFcBankAccountResponse,
+  XviFcIfscLookupResponse,
+} from './bank-account.types';
 import {
   buildSafeBankAccountResponse,
   encryptAccountNumber,
@@ -78,8 +88,11 @@ export class BankAccountService {
   constructor(
     @InjectModel(XviFcBankAccount.name)
     private readonly bankAccountModel: Model<XviFcBankAccountDocument>,
+    @InjectModel(XviFcBankAccountFormLog.name)
+    private readonly formLogModel: Model<XviFcBankAccountFormLogDocument>,
     @InjectModel(Ulb.name)
     private readonly ulbModel: Model<UlbDocument>,
+    private readonly s3Service: S3Service,
   ) {}
 
   async getBankAccount(
@@ -106,6 +119,25 @@ export class BankAccountService {
     );
   }
 
+  /** Mirrors Annual Accounts' getSignedUrl — generates a presigned S3 GET URL directly, no external service dependency. */
+  async getProofSignedUrl(id: string, user: AuthUser): Promise<XviFcApiResponse<{ url: string }>> {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new BadRequestException('Invalid bank account id.');
+    }
+
+    const record = await this.bankAccountModel.findById(id, 'ulb proofFile').lean().exec();
+    if (!record) throw new NotFoundException('Bank account form not found');
+
+    const ulbId = toObjectIdString(record.ulb);
+    if (!ulbId) throw new NotFoundException('Bank account form not found');
+    await this.assertCanReadBankAccount(user, ulbId);
+
+    if (!record.proofFile?.s3Key) throw new NotFoundException('Proof document not found');
+
+    const url = await this.s3Service.presignGet(record.proofFile.s3Key);
+    return xviFcSuccess('Signed URL fetched.', { url });
+  }
+
   /** Mirrors Annual Accounts' buildAnnualAccountPermissions — status-aware capability flags for the STATE reviewer UI. */
   private buildBankAccountPermissions(user: AuthUser, status: FormStatusType): BankAccountPermissions {
     // assertCanReadBankAccount already confirmed state-match for STATE scope by the time this runs.
@@ -122,6 +154,8 @@ export class BankAccountService {
   async submitBankAccount(
     dto: SubmitXviFcBankAccountDto,
     user: AuthUser,
+    ipAddress: string | null = null,
+    userAgent: string | null = null,
   ): Promise<XviFcApiResponse<XviFcBankAccountResponse>> {
     const ulbId = await this.resolveEffectiveUlbId(user, dto.ulbId);
     await this.assertCanSubmitBankAccount(user, ulbId);
@@ -171,6 +205,7 @@ export class BankAccountService {
         sha256: dto.proofFile.sha256,
       },
       currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_STATE,
+      currentFormStatusLabel: getFormStatusLabel(FORM_STATUS.UNDER_REVIEW_BY_STATE),
       submittedBy,
       submittedAt: now,
     };
@@ -183,6 +218,20 @@ export class BankAccountService {
       )
       .lean()
       .exec();
+
+    await this.formLogModel.create({
+      bankAccountId: record._id,
+      ulb: ulbObjectId,
+      designYear: designYearObjectId,
+      action: 'SUBMITTED',
+      toStatus: FORM_STATUS.UNDER_REVIEW_BY_STATE,
+      toStatusLabel: getFormStatusLabel(FORM_STATUS.UNDER_REVIEW_BY_STATE),
+      actorStage: 'ULB',
+      userInfo: { userId: new Types.ObjectId(user._id), role: user.role, ipAddress, userAgent },
+      note: null,
+      filePath: proofFileS3Key,
+      batchId: null,
+    });
 
     return xviFcSuccess('Bank account form submitted.', buildSafeBankAccountResponse(record));
   }
@@ -200,7 +249,6 @@ export class BankAccountService {
     const record = await this.bankAccountModel.findById(new Types.ObjectId(id)).lean().exec();
     if (!record) throw new NotFoundException('Bank account form not found');
     await this.assertCanStateDecideBankAccount(user, record);
-    void batchId; // no audit-log collection exists yet for bank accounts to correlate against
 
     const newStatus =
       dto.decision === 'APPROVED' ? FORM_STATUS.UNDER_REVIEW_BY_MOHUA : FORM_STATUS.RETURNED_BY_STATE;
@@ -208,9 +256,33 @@ export class BankAccountService {
     const decision = buildDecisionRecord(dto.decision, dto.note, user, ipAddress, userAgent);
 
     const updated = await this.bankAccountModel
-      .findByIdAndUpdate(id, { $set: { currentFormStatus: newStatus, stateDecision: decision } }, { new: true })
+      .findByIdAndUpdate(
+        id,
+        {
+          $set: {
+            currentFormStatus: newStatus,
+            currentFormStatusLabel: getFormStatusLabel(newStatus),
+            stateDecision: decision,
+          },
+        },
+        { new: true },
+      )
       .lean()
       .exec();
+
+    await this.formLogModel.create({
+      bankAccountId: new Types.ObjectId(id),
+      ulb: record.ulb,
+      designYear: record.designYear,
+      action: dto.decision,
+      toStatus: newStatus,
+      toStatusLabel: getFormStatusLabel(newStatus),
+      actorStage: 'STATE',
+      userInfo: { userId: new Types.ObjectId(user._id), role: user.role, ipAddress, userAgent },
+      note: dto.note ?? null,
+      filePath: record.proofFile?.s3Key ?? null,
+      batchId,
+    });
 
     this.logger.log(`Bank account ${dto.decision.toLowerCase()} by STATE — id=${id} by user=${user._id}`);
     return xviFcSuccess('Bank account decision recorded.', buildSafeBankAccountResponse(updated!));
@@ -235,12 +307,98 @@ export class BankAccountService {
     const decision = buildDecisionRecord(dto.decision, dto.note, user, ipAddress, userAgent);
 
     const updated = await this.bankAccountModel
-      .findByIdAndUpdate(id, { $set: { currentFormStatus: newStatus, mohuaDecision: decision } }, { new: true })
+      .findByIdAndUpdate(
+        id,
+        {
+          $set: {
+            currentFormStatus: newStatus,
+            currentFormStatusLabel: getFormStatusLabel(newStatus),
+            mohuaDecision: decision,
+          },
+        },
+        { new: true },
+      )
       .lean()
       .exec();
 
+    await this.formLogModel.create({
+      bankAccountId: new Types.ObjectId(id),
+      ulb: record.ulb,
+      designYear: record.designYear,
+      action: dto.decision,
+      toStatus: newStatus,
+      toStatusLabel: getFormStatusLabel(newStatus),
+      actorStage: 'MOHUA',
+      userInfo: { userId: new Types.ObjectId(user._id), role: user.role, ipAddress, userAgent },
+      note: dto.note ?? null,
+      filePath: record.proofFile?.s3Key ?? null,
+      batchId: null,
+    });
+
     this.logger.log(`Bank account ${dto.decision.toLowerCase()} by MoHUA — id=${id} by user=${user._id}`);
     return xviFcSuccess('Bank account decision recorded.', buildSafeBankAccountResponse(updated!));
+  }
+
+  // ─── Form status audit log ────────────────────────────────────────────────────
+
+  async getBankAccountFormLogs(id: string, user: AuthUser): Promise<XviFcApiResponse<BankAccountFormLogEntry[]>> {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new BadRequestException('Invalid bank account id.');
+    }
+
+    const record = await this.bankAccountModel.findById(id, 'ulb').lean().exec();
+    if (!record) throw new NotFoundException('Bank account form not found');
+    await this.assertCanViewBankAccountFormLogs(user, record);
+
+    const logs = await this.formLogModel
+      .find({ bankAccountId: new Types.ObjectId(id) })
+      .sort({ createdAt: -1 })
+      .lean()
+      .exec();
+
+    return xviFcSuccess(
+      'Bank account form log fetched.',
+      logs.map((log) => ({
+        action: log.action,
+        toStatus: log.toStatus,
+        toStatusLabel: log.toStatusLabel,
+        actorStage: log.actorStage,
+        actorRole: log.userInfo.role,
+        note: log.note,
+        filePath: log.filePath,
+        batchId: log.batchId,
+        createdAt: (log as unknown as { createdAt: Date }).createdAt,
+      })),
+    );
+  }
+
+  /** Read-only history view — STATE/MOHUA/ADMIN reviewers only, no form-status gating (unlike decide). */
+  private async assertCanViewBankAccountFormLogs(user: AuthUser, record: { ulb: Types.ObjectId }): Promise<void> {
+    if (user.scope === Scope.ADMIN) return;
+
+    const perms = getEffectivePermissions(user);
+
+    if (user.scope === Scope.STATE) {
+      if (!perms.includes(Permission.REVIEW_ULB_SUBMISSIONS)) {
+        throw new ForbiddenException('You do not have permission to review ULB submissions');
+      }
+      const userStateId = toObjectIdString(user.state);
+      const ulb = await this.ulbModel.findById(record.ulb, 'state').lean().exec();
+      const ulbStateId = toObjectIdString(ulb?.state);
+      if (!userStateId || !ulbStateId || userStateId !== ulbStateId) {
+        throw new ForbiddenException('You can only view bank account forms within your own state');
+      }
+      return;
+    }
+
+    if (user.scope === Scope.MOHUA) {
+      if (!perms.includes(Permission.REVIEW_STATE_SUBMISSIONS)) {
+        throw new ForbiddenException('You do not have permission to review state submissions');
+      }
+      return;
+    }
+
+    throw new ForbiddenException('Access denied.');
   }
 
   // ─── Bulk STATE review decision ───────────────────────────────────────────────
@@ -312,7 +470,7 @@ export class BankAccountService {
       { $match: matchStage },
       {
         $lookup: {
-          from: 'xvi_fc_bank_accounts',
+          from: 'xvifc_bankaccounts',
           let: { ulbId: '$_id' },
           pipeline: [
             {
