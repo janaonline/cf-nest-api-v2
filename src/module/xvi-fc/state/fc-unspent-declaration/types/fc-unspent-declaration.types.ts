@@ -75,6 +75,19 @@ export interface FcUnspentUlbOption {
   allocationAmount: number;
 }
 
+/**
+ * Preserves the exact Devolution Formula row a row's `allocationAmount` was resolved from, so a
+ * later Devolution rejection/reconciliation can identify affected rows by exact reference rather
+ * than only by state/year (business brain §10.10).
+ */
+export interface FcUnspentAllocationSourceInput {
+  devolutionFormId: Types.ObjectId;
+  devolutionRowId: Types.ObjectId;
+  datasetVersion: number;
+  installment: 1 | 2;
+  allocationAmount: number;
+}
+
 /** A server-validated, server-computed row ready to be upserted into the row collection. */
 export interface FcUnspentResolvedRow {
   ulbId: Types.ObjectId;
@@ -85,6 +98,7 @@ export interface FcUnspentResolvedRow {
   unspentAmount: number;
   allocationPerc: number;
   eligibility: boolean;
+  allocationSource: FcUnspentAllocationSourceInput;
 }
 
 /** Lean projection of an active row document, used to build both the GET response and history snapshots. */
@@ -106,6 +120,7 @@ export interface FcUnspentActiveRowLean {
    * `row.rejectionRemark ?? null` defensively rather than assuming it's always present.
    */
   rejectionRemark?: string | null;
+  allocationSource?: FcUnspentAllocationSourceInput | null;
 }
 
 /** One row whose rowStatus actually changed during applyRows — the input to row-history insertion. */

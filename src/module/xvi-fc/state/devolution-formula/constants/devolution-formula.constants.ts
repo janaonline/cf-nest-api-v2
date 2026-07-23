@@ -40,9 +40,9 @@ export const DF_REQUIRED_EXCEL_KEYS = [
 export const DF_TEMPLATE_HEADERS: RowHeader[] = [
   { label: 'Census Code', key: 'censusCode', width: 15 },
   { label: 'ULB Name', key: 'ulbName', width: 35 },
-  { label: 'Total Grant Allocation (Cr.)', key: 'totalGrantAllocation', width: 24 },
   { label: 'Installment 1 Amount (Cr.)', key: 'installment1Amount', width: 22 },
   { label: 'Installment 2 Amount (Cr.)', key: 'installment2Amount', width: 22 },
+  { label: 'Total Grant Allocation (Cr.)', key: 'totalGrantAllocation', width: 24 },
   { label: 'Devolution Formula', key: 'devolutionFormula', width: 30 },
 ];
 

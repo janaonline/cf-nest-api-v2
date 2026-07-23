@@ -776,6 +776,7 @@ export class FcUnspentDeclarationService {
       eligibility: row.eligibility,
       rowStatus: row.rowStatus,
       rejectionRemark: row.rejectionRemark ?? null,
+      allocationSource: row.allocationSource ?? null,
     };
   }
 
