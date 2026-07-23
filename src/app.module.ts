@@ -119,10 +119,10 @@ function getQueryCaller(): string {
   controllers: [AppController],
   providers: [
     AppService,
-    {
-      provide: APP_GUARD,
-      useClass: ThrottlerBehindProxyGuard,
-    },
+    // {
+    //   provide: APP_GUARD,
+    //   useClass: ThrottlerBehindProxyGuard,
+    // },
   ],
 })
 export class AppModule implements NestModule {
