@@ -166,8 +166,8 @@ describe('XviFcService', () => {
       const result = await service.getFormStatus(ulbId, designYearId);
 
       expect(result.xviFcBankAccount).toEqual({
-        form_status: FORM_STATUS.NOT_STARTED,
-        form_status_id: null,
+        form_status: 'NOT_STARTED',
+        form_status_id: FORM_STATUS.NOT_STARTED,
       });
     });
 
@@ -177,8 +177,8 @@ describe('XviFcService', () => {
       const result = await service.getFormStatus(ulbId, designYearId);
 
       expect(result.xviFcBankAccount).toEqual({
-        form_status: FORM_STATUS.UNDER_REVIEW_BY_STATE,
-        form_status_id: null,
+        form_status: 'UNDER_REVIEW_BY_STATE',
+        form_status_id: FORM_STATUS.UNDER_REVIEW_BY_STATE,
       });
     });
 

@@ -1,5 +1,8 @@
 import type { SlbTypedFieldConfig } from '../helpers/slb-form-json.helpers';
-
+/**
+ * Real configuration is loaded from the FormJson collection in the database,
+ * but this default is used as a fallback if no FormJson document exists yet for type 'SLB'.
+ */
 /**
  * Bundled default SLB question set — 28 Service Level Benchmark indicators (Actual/Target)
  * grouped by sector, plus the self-declaration fields. Used as the fallback when no
@@ -1028,7 +1031,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     required: true,
     folderPathKey: 'slb/supporting-document',
     allowedFileTypes: ['pdf', 'jpg', 'jpeg', 'png'],
-    maxFileSize: 20971520,
+    maxFileSize: 20,
     fileViewType: 'button',
     validations: [
       {

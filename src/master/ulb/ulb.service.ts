@@ -145,7 +145,7 @@ export class UlbService {
   /**
    * Fully resolved section/field config for the ADMIN-only Edit ULB dialog — same merge as
    * `getRegisterSections()`, but against the edit layout, which covers every ULB field (including
-   * `code` and a live `state` select) rather than just the Register page's subset.
+   * `code`) rather than just the Register page's subset.
    */
   async getEditSections(): Promise<SectionLayout[]> {
     const [fieldsByKey, layout] = await Promise.all([this.buildResolvedFieldsByKey(), this.loadEditSectionsLayout()]);

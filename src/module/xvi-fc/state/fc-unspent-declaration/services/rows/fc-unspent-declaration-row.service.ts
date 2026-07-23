@@ -20,14 +20,17 @@ import type { XviFcValidationErrorMap } from 'src/module/xvi-fc/common/response/
 import type { FcUnspentUlbRowInputDto } from '../../dto/fc-unspent-ulb-row.dto';
 import type {
   FcUnspentActiveRowLean,
+  FcUnspentAllocationSourceInput,
   FcUnspentDevolutionFormLean,
   FcUnspentResolvedRow,
   FcUnspentRowStatusTransition,
 } from '../../types/fc-unspent-declaration.types';
 
 type FcUnspentDevolutionRowLean = {
+  _id: Types.ObjectId;
   ulbId: Types.ObjectId;
   totalGrantAllocation: number;
+  installment: 1 | 2;
 };
 
 type FcUnspentExistingRowLean = {
@@ -101,7 +104,7 @@ export class FcUnspentDeclarationRowService {
         .exec(),
       devolutionForm
         ? this.resolveAllocationsForUlbIds(devolutionForm._id, devolutionForm.activeDatasetVersion, ulbOids)
-        : Promise.resolve(new Map<string, number>()),
+        : Promise.resolve(new Map<string, FcUnspentAllocationSourceInput>()),
     ]);
     const ulbDocById = new Map(ulbDocs.map((u) => [String(u._id), u]));
 
@@ -116,8 +119,9 @@ export class FcUnspentDeclarationRowService {
         return;
       }
 
-      const allocationAmount = allocationMap.get(row.ulbId) ?? 0;
-      if (allocationAmount <= 0) {
+      const allocationSource = allocationMap.get(row.ulbId);
+      const allocationAmount = allocationSource?.allocationAmount ?? 0;
+      if (!allocationSource || allocationAmount <= 0) {
         errors[`${path}.ulbId`] = [
           {
             field: `${path}.ulbId`,
@@ -151,6 +155,7 @@ export class FcUnspentDeclarationRowService {
         unspentAmount: row.unspentAmount,
         allocationPerc,
         eligibility,
+        allocationSource,
       });
     });
 
@@ -206,6 +211,7 @@ export class FcUnspentDeclarationRowService {
           unspentAmount: row.unspentAmount,
           allocationPerc: row.allocationPerc,
           eligibility: row.eligibility,
+          allocationSource: row.allocationSource,
           isActive: true,
           updatedBy: userOid,
         };
@@ -290,6 +296,7 @@ export class FcUnspentDeclarationRowService {
           unspentAmount: t.row.unspentAmount,
           allocationPerc: t.row.allocationPerc,
           eligibility: t.row.eligibility,
+          allocationSource: t.row.allocationSource,
         },
         createdBy: userOid,
         updatedBy: userOid,
@@ -311,7 +318,7 @@ export class FcUnspentDeclarationRowService {
       .find({ form: formId, isActive: true })
       .sort({ rowNumber: 1, _id: 1 })
       .select(
-        'rowNumber ulbId censusCode sbCode ulbName allocationAmount unspentAmount allocationPerc eligibility rowStatus rejectionRemark',
+        'rowNumber ulbId censusCode sbCode ulbName allocationAmount unspentAmount allocationPerc eligibility rowStatus rejectionRemark allocationSource',
       );
     if (session) query.session(session);
     return query.lean<FcUnspentActiveRowLean[]>().exec();
@@ -336,12 +343,23 @@ export class FcUnspentDeclarationRowService {
     devolutionFormId: Types.ObjectId,
     activeDatasetVersion: number,
     ulbIds: Types.ObjectId[],
-  ): Promise<Map<string, number>> {
+  ): Promise<Map<string, FcUnspentAllocationSourceInput>> {
     const rows = await this.devolutionRowModel
       .find({ form: devolutionFormId, datasetVersion: activeDatasetVersion, isActive: true, ulbId: { $in: ulbIds } })
-      .select('ulbId totalGrantAllocation')
+      .select('ulbId totalGrantAllocation installment')
       .lean<FcUnspentDevolutionRowLean[]>()
       .exec();
-    return new Map(rows.map((r) => [String(r.ulbId), r.totalGrantAllocation]));
+    return new Map(
+      rows.map((r) => [
+        String(r.ulbId),
+        {
+          devolutionFormId,
+          devolutionRowId: r._id,
+          datasetVersion: activeDatasetVersion,
+          installment: r.installment,
+          allocationAmount: r.totalGrantAllocation,
+        },
+      ]),
+    );
   }
 }

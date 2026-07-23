@@ -8,7 +8,7 @@ import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as bcrypt from 'bcrypt';
 import type { Response } from 'express';
-import { SESMailService } from 'src/core/aws-ses/ses.service';
+import { EmailQueueService } from 'src/core/queue/email-queue/email-queue.service';
 import { RedisService } from 'src/core/services/redis/redis.service';
 import { UsersRepository } from 'src/users/users.repository';
 import { AuthService } from './auth.service';
@@ -52,6 +52,8 @@ const mockUsersRepository = {
   findByIdentifier: jest.fn(),
   updateRefreshToken: jest.fn(),
   updatePassword: jest.fn(),
+  updateProfile: jest.fn(),
+  updateLastLogin: jest.fn(),
 };
 
 const mockAuthService = {
@@ -87,8 +89,8 @@ const mockRedisService = {
   del: jest.fn(),
 };
 
-const mockSesMailService = {
-  sendEmail: jest.fn().mockResolvedValue(undefined),
+const mockEmailQueueService = {
+  addEmailJob: jest.fn().mockResolvedValue(undefined),
 };
 
 const mockRes = { cookie: jest.fn() } as unknown as Response;
@@ -105,7 +107,7 @@ describe('OtpService', () => {
         { provide: UsersRepository, useValue: mockUsersRepository },
         { provide: AuthService, useValue: mockAuthService },
         { provide: ConfigService, useValue: mockConfigService },
-        { provide: SESMailService, useValue: mockSesMailService },
+        { provide: EmailQueueService, useValue: mockEmailQueueService },
         { provide: RedisService, useValue: mockRedisService },
       ],
     }).compile();
@@ -123,6 +125,8 @@ describe('OtpService', () => {
     mockAuthService.setRefreshCookie.mockImplementation(() => undefined);
     mockUsersRepository.updateRefreshToken.mockResolvedValue(undefined);
     mockUsersRepository.updatePassword.mockResolvedValue(undefined);
+    mockUsersRepository.updateProfile.mockResolvedValue(undefined);
+    mockUsersRepository.updateLastLogin.mockResolvedValue(undefined);
   });
 
   it('should be defined', () => {

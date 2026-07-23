@@ -56,7 +56,7 @@ export class DevolutionFormulaRow {
   @Prop({ type: String, default: '' })
   sbCode!: string;
 
-  @Prop({ type: String, required: true })
+  @Prop({ type: String, default: '' })
   ulbName!: string;
 
   @Prop({ type: Number, required: true })
@@ -68,7 +68,7 @@ export class DevolutionFormulaRow {
   @Prop({ type: Number, required: true })
   installment2Amount!: number;
 
-  @Prop({ type: String, required: true })
+  @Prop({ type: String, default: '' })
   devolutionFormula!: string;
 
   @Prop({ type: String, enum: ['VALID', 'INVALID'], default: 'INVALID' })

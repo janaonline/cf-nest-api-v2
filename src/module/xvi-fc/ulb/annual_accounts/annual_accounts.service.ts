@@ -11,7 +11,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { InjectModel } from '@nestjs/mongoose';
 import { createHash } from 'crypto';
 import { Queue } from 'bullmq';
-import { Model, Types } from 'mongoose';
+import { Model, PipelineStage, Types } from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 import { S3Service } from '../../../../core/s3/s3.service';
 import { S3UploadService } from '../../../../s3-upload/s3-upload.service';
@@ -25,16 +25,60 @@ import {
   XviFcAnnualAccountUploadHistory,
   XviFcAnnualAccountUploadHistoryDocument,
 } from '../../../../schemas/xvi-fc/annual-account-upload-history.schema';
+import {
+  FormLogDocumentEntry,
+  XviFcAnnualAccountFormLog,
+  XviFcAnnualAccountFormLogDocument,
+} from '../../../../schemas/xvi-fc/annual-account-form-log.schema';
 import { Ulb, UlbDocument } from '../../../../schemas/ulb.schema';
 import { DOC_TYPE_MAP } from './constants/doc-type-map.constant';
 import { UploadDocumentDto } from './dto/upload-document.dto';
 import { PresignUploadDto } from './dto/presign-upload.dto';
 import { ConfirmUploadDto } from './dto/confirm-upload.dto';
+import { DocumentDecisionDto } from './dto/document-decision.dto';
+import { SectionDecisionDto } from './dto/section-decision.dto';
+import { BulkSectionDecisionDto } from './dto/bulk-section-decision.dto';
+import { UlbSubmissionsQueryDto } from './dto/ulb-submissions-query.dto';
 import type { AnnualAccountOcrJobData } from './dto/annual-account-ocr-job.dto';
 import type { AuthUser } from '../../../auth/auth-user.interface';
 import { Scope, Permission } from '../../../auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from '../../../auth/permissions.map';
 import { ANNUAL_ACCOUNT_PROCESSING_QUEUE } from '../../../../core/constants/queues';
+import { canUlbEditForm, canUlbSubmitForm } from '../../common/utils/xvi-fc-form-status-access.util';
+import { escapeRegex } from 'src/common/utils/regex.util';
+import { resolveStateScopeFilter } from 'src/module/xvi-fc/common/utils/xvi-fc-scope-filter.util';
+import {
+  buildDecisionRecord,
+  runBulkDecision,
+  type BulkDecisionResult,
+} from 'src/module/xvi-fc/common/utils/xvi-fc-decision.util';
+import {
+  AnnualAccountPermissions,
+  canMohuaDecideAnnualAccount,
+  canMohuaReviewAnnualAccount,
+  canStateDecideAnnualAccount,
+  canStateReviewAnnualAccount,
+  canUlbReuploadDocument,
+} from './annual-account-status-access.util';
+
+/** formId for each section, per the active upload-config formjson documents (30 = audited, 31 = provisional). */
+const SECTION_FORM_IDS: Record<'auditedData' | 'unauditedData', number> = { auditedData: 30, unauditedData: 31 };
+
+interface UlbSubmissionRow {
+  ulbId: Types.ObjectId;
+  ulbCode: string;
+  ulbName: string;
+  formStatus: AnnualAccountFormStatus;
+  formStatusId: number;
+  lastUpdatedAt: Date | null;
+  annualAccountId: Types.ObjectId | null;
+}
+
+interface UlbSubmissionsFacetResult {
+  data: UlbSubmissionRow[];
+  totalCount: Array<{ count: number }>;
+  counts: Array<{ _id: AnnualAccountFormStatus; count: number }>;
+}
 
 @Injectable()
 export class AnnualAccountsService implements OnModuleInit {
@@ -46,6 +90,9 @@ export class AnnualAccountsService implements OnModuleInit {
 
     @InjectModel(XviFcAnnualAccountUploadHistory.name)
     private readonly uploadHistoryModel: Model<XviFcAnnualAccountUploadHistoryDocument>,
+
+    @InjectModel(XviFcAnnualAccountFormLog.name)
+    private readonly formLogModel: Model<XviFcAnnualAccountFormLogDocument>,
 
     @InjectModel(Ulb.name)
     private readonly ulbModel: Model<UlbDocument>,
@@ -117,6 +164,12 @@ export class AnnualAccountsService implements OnModuleInit {
     userAgent: string | null = null,
   ) {
     this.validateUploadPermission(user, dto as unknown as UploadDocumentDto);
+    await this.assertCanUlbUpload(
+      dto.ulbId,
+      dto.designYearId,
+      dto.section as 'auditedData' | 'unauditedData',
+      dto.docId,
+    );
 
     const expectedDocType = DOC_TYPE_MAP[dto.docId];
     if (!expectedDocType) {
@@ -139,7 +192,7 @@ export class AnnualAccountsService implements OnModuleInit {
     const sizeKb = Math.round((dto.fileSize / 1024) * 100) / 100;
     const pages = await this.s3Service.getPdfPageCountFromBuffer(pdfBuffer);
 
-    const annualAccountId = await this.findOrInitialize(dto.ulbId, dto.designYearId, user);
+    const annualAccountId = await this.findOrInitialize(dto.ulbId, dto.stateId, dto.designYearId, user);
 
     const existingCount = await this.uploadHistoryModel.countDocuments({
       annualAccountId: new Types.ObjectId(annualAccountId),
@@ -249,7 +302,7 @@ export class AnnualAccountsService implements OnModuleInit {
   async retryUpload(id: string, uploadId: string, user: AuthUser) {
     const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
     if (!doc) throw new NotFoundException('Annual account not found');
-    this.validateViewAccess(doc, user);
+    await this.validateViewAccess(doc, user);
 
     const historyDoc = await this.uploadHistoryModel
       .findOne({ annualAccountId: new Types.ObjectId(id), uploadId })
@@ -335,16 +388,125 @@ export class AnnualAccountsService implements OnModuleInit {
       .exec();
 
     if (!doc) return null;
-    this.validateViewAccess(doc, user);
+    await this.validateViewAccess(doc, user);
     return this.getProcessingStatus(doc._id.toString(), user);
   }
 
+  // ─── State-scoped ULB submissions list ───────────────────────────────────────
+
+  /**
+   * Paginated list of every ULB in the requester's state for a given design year,
+   * joined against that ULB's Annual Account status for the requested section.
+   * ULB is the primary collection (left-joined to the account doc) so ULBs that
+   * haven't started at all still appear, reported as NOT_STARTED.
+   */
+  async listUlbSubmissions(dto: UlbSubmissionsQueryDto, user: AuthUser) {
+    if (user.scope !== Scope.STATE && user.scope !== Scope.ADMIN) {
+      throw new ForbiddenException('Only STATE or ADMIN users may list ULB submissions');
+    }
+    const perms = getEffectivePermissions(user);
+    if (!perms.includes(Permission.REVIEW_ULB_SUBMISSIONS)) {
+      throw new ForbiddenException('You do not have permission to review ULB submissions');
+    }
+
+    const stateId = resolveStateScopeFilter(user, dto.stateId);
+
+    const matchStage: Record<string, unknown> = { isActive: true };
+    if (stateId) matchStage.state = stateId;
+    if (dto.search?.trim()) {
+      const regex = new RegExp(escapeRegex(dto.search.trim()), 'i');
+      matchStage.$or = [{ name: regex }, { code: regex }];
+    }
+
+    const sortField = dto.sortField ?? 'ulbName';
+    const sortDirection = dto.sortDirection === 'desc' ? -1 : 1;
+    const sortStage: Record<string, 1 | -1> =
+      sortField === 'formStatus' ? { formStatusId: sortDirection } : { name: sortDirection };
+
+    const page = dto.page ?? 1;
+    const pageSize = dto.pageSize ?? 20;
+    const notStarted = AnnualAccountFormStatus.NOT_STARTED;
+
+    const pipeline: PipelineStage[] = [
+      { $match: matchStage },
+      {
+        $lookup: {
+          from: 'xvifc_annualaccounts',
+          let: { ulbId: '$_id' },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [{ $eq: ['$ulb', '$$ulbId'] }, { $eq: ['$design_year', new Types.ObjectId(dto.designYearId)] }],
+                },
+              },
+            },
+          ],
+          as: 'account',
+        },
+      },
+      { $addFields: { account: { $arrayElemAt: ['$account', 0] } } },
+      {
+        $addFields: {
+          formStatus: { $ifNull: [`$account.${dto.section}.form_status`, notStarted] },
+          formStatusId: { $ifNull: [`$account.${dto.section}.form_status_id`, FORM_STATUS_ID[notStarted]] },
+          lastUpdatedAt: { $ifNull: ['$account.updatedAt', null] },
+        },
+      },
+    ];
+
+    const statusMatch: PipelineStage.FacetPipelineStage[] = dto.status?.length
+      ? [{ $match: { formStatus: { $in: dto.status } } }]
+      : [];
+
+    pipeline.push({
+      $facet: {
+        data: [
+          ...statusMatch,
+          { $sort: sortStage },
+          { $skip: (page - 1) * pageSize },
+          { $limit: pageSize },
+          {
+            $project: {
+              _id: 0,
+              ulbId: '$_id',
+              ulbCode: '$code',
+              ulbName: '$name',
+              formStatus: 1,
+              formStatusId: 1,
+              lastUpdatedAt: 1,
+              annualAccountId: { $ifNull: ['$account._id', null] },
+            },
+          },
+        ],
+        totalCount: [...statusMatch, { $count: 'count' }],
+        // Counts every status bucket regardless of the status filter above, so stat-card
+        // totals stay stable no matter which card/bucket is currently selected.
+        counts: [{ $group: { _id: '$formStatus', count: { $sum: 1 } } }],
+      },
+    });
+
+    const [result] = await this.ulbModel.aggregate<UlbSubmissionsFacetResult>(pipeline).exec();
+    const rows = result?.data ?? [];
+    const total = result?.totalCount?.[0]?.count ?? 0;
+
+    const counts = Object.fromEntries(
+      Object.values(AnnualAccountFormStatus).map((status) => [
+        status,
+        result?.counts.find((c) => c._id === status)?.count ?? 0,
+      ]),
+    ) as Record<AnnualAccountFormStatus, number>;
+
+    return { total, page, pageSize, rows, counts };
+  }
+
+  /** STATE users are always scoped to their own state; ADMIN may optionally pass one, else sees all. */
   // ─── Get full details ────────────────────────────────────────────────────────
 
   async getDetails(id: string, user: AuthUser) {
     const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
     if (!doc) throw new NotFoundException('Annual account not found');
-    this.validateViewAccess(doc, user);
+    await this.validateViewAccess(doc, user);
     return this.stripS3Keys(doc);
   }
 
@@ -353,21 +515,43 @@ export class AnnualAccountsService implements OnModuleInit {
   async getProcessingStatus(id: string, user: AuthUser) {
     const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
     if (!doc) throw new NotFoundException('Annual account not found');
-    this.validateViewAccess(doc, user);
+    await this.validateViewAccess(doc, user);
+
+    const hasStateAccess = await this.hasStateAccessToUlb(user, doc.ulb);
 
     const buildSectionStatus = (section: any) => {
-      if (!section)
+      if (!section) {
+        const status = AnnualAccountFormStatus.NOT_STARTED;
         return {
-          form_status: AnnualAccountFormStatus.NOT_STARTED,
-          form_status_id: FORM_STATUS_ID[AnnualAccountFormStatus.NOT_STARTED],
+          form_status: status,
+          form_status_id: FORM_STATUS_ID[status],
           documents: [],
+          permissions: this.buildAnnualAccountPermissions(user, hasStateAccess, status),
+          stateDecision: null,
+          mohuaDecision: null,
         };
+      }
       const fs = (section.form_status ?? AnnualAccountFormStatus.IN_PROGRESS) as AnnualAccountFormStatus;
       return {
         form_status: fs,
         form_status_id: FORM_STATUS_ID[fs] ?? 2,
         yearId: section.yearId,
         year: section.year,
+        permissions: this.buildAnnualAccountPermissions(user, hasStateAccess, fs),
+        stateDecision: section.stateDecision
+          ? {
+              status: section.stateDecision.status,
+              note: section.stateDecision.note,
+              decidedAt: section.stateDecision.decidedAt,
+            }
+          : null,
+        mohuaDecision: section.mohuaDecision
+          ? {
+              status: section.mohuaDecision.status,
+              note: section.mohuaDecision.note,
+              decidedAt: section.mohuaDecision.decidedAt,
+            }
+          : null,
         documents: (section.documents ?? []).map((d: any) => ({
           docId: d.docId,
           uploadStatus: d.uploadStatus,
@@ -388,12 +572,21 @@ export class AnnualAccountsService implements OnModuleInit {
                 uploadedAt: d.currentUpload.uploadedAt,
               }
             : null,
+          stateDecision: (d.stateDecision ?? []).map((sd: any) => ({
+            status: sd.status,
+            note: sd.note,
+            decidedAt: sd.decidedAt,
+          })),
         })),
       };
     };
 
+    const ulb = await this.ulbModel.findById(doc.ulb).select('name code').lean().exec();
+
     return {
       annualAccountId: doc._id,
+      ulbName: ulb?.name ?? null,
+      ulbCode: ulb?.code ?? null,
       auditedData: buildSectionStatus(doc.auditedData),
       unauditedData: buildSectionStatus(doc.unauditedData),
     };
@@ -404,7 +597,7 @@ export class AnnualAccountsService implements OnModuleInit {
   async getSignedUrl(id: string, uploadId: string, user: AuthUser) {
     const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
     if (!doc) throw new NotFoundException('Annual account not found');
-    this.validateViewAccess(doc, user);
+    await this.validateViewAccess(doc, user);
 
     let s3Key: string | null = null;
     for (const sectionKey of ['auditedData', 'unauditedData'] as const) {
@@ -422,18 +615,47 @@ export class AnnualAccountsService implements OnModuleInit {
     return { url };
   }
 
+  // ─── Form status audit log ────────────────────────────────────────────────────
+
+  async getFormLogs(id: string, section: 'auditedData' | 'unauditedData' | undefined, user: AuthUser) {
+    const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
+    if (!doc) throw new NotFoundException('Annual account not found');
+    await this.validateViewAccess(doc, user);
+
+    const filter: Record<string, unknown> = { annualAccountId: new Types.ObjectId(id) };
+    if (section) filter.section = section;
+
+    const logs = await this.formLogModel.find(filter).sort({ createdAt: -1 }).lean().exec();
+
+    return logs.map((log) => ({
+      section: log.section,
+      action: log.action,
+      toStatus: log.toStatus,
+      actorStage: log.actorStage,
+      actorRole: log.userInfo.role,
+      note: log.note,
+      batchId: log.batchId,
+      documents: log.documents,
+      createdAt: (log as unknown as { createdAt: Date }).createdAt,
+    }));
+  }
+
   // ─── Remove (hard-delete) a document slot ────────────────────────────────────
 
   async removeDocument(id: string, section: 'auditedData' | 'unauditedData', docId: string, user: AuthUser) {
     const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
     if (!doc) throw new NotFoundException('Annual account not found');
-    this.validateViewAccess(doc, user);
+    await this.validateViewAccess(doc, user);
 
     const sectionData = (doc as any)[section];
     if (!sectionData) throw new NotFoundException('Section not found');
 
     const docSlot = (sectionData.documents ?? []).find((d: any) => d.docId === docId);
     if (!docSlot) throw new NotFoundException('Document not found in this section');
+
+    if (!canUlbReuploadDocument(sectionData.form_status_id, docSlot.stateDecision)) {
+      throw new ForbiddenException('This document has already been approved and cannot be removed.');
+    }
 
     await this.annualAccountModel.updateOne(
       { _id: new Types.ObjectId(id), [`${section}.documents.docId`]: docId },
@@ -469,14 +691,20 @@ export class AnnualAccountsService implements OnModuleInit {
       throw new BadRequestException('No documents found in this section');
     }
 
+    if (!canUlbSubmitForm(sectionData.form_status_id)) {
+      throw new ForbiddenException(`This section cannot be submitted while its status is ${sectionData.form_status}.`);
+    }
+
     // Resolve which docIds are currently required by the active upload config.
     // This means documents that were previously uploaded but are now hidden in the
     // config (e.g. receipts-payments while temporarily hidden) are not blocking.
-    const FORM_IDS: Record<string, number> = { auditedData: 30, unauditedData: 31 };
     const designYearId = doc.design_year?.toString();
     let requiredDocIds: string[] | null = null;
     try {
-      const formJson = await this.formJsonService.findActiveByDesignYearAndFormId(designYearId, FORM_IDS[section]);
+      const formJson = await this.formJsonService.findActiveByDesignYearAndFormId(
+        designYearId,
+        SECTION_FORM_IDS[section],
+      );
       requiredDocIds = ((formJson.data ?? []) as Array<{ key: string }>).map((f) => f.key);
     } catch {
       // Formjson not found — fall back to checking all uploaded docs
@@ -495,6 +723,17 @@ export class AnnualAccountsService implements OnModuleInit {
       throw new BadRequestException('All documents must pass verification before submitting');
     }
 
+    // A document the state returned stays blocking until the ULB re-uploads a corrected file —
+    // OCR passing again doesn't clear a live RETURNED decision on its own.
+    const stillReturned = docsToCheck
+      .filter((d: any) => this.resolveEffectiveDecision(d)?.status === 'RETURNED')
+      .map((d: any) => d.docId as string);
+    if (stillReturned.length > 0) {
+      throw new BadRequestException(
+        `Cannot submit — these documents were returned by the state and must be re-uploaded first: ${stillReturned.join(', ')}`,
+      );
+    }
+
     await this.annualAccountModel.updateOne(
       { _id: new Types.ObjectId(id) },
       {
@@ -509,6 +748,21 @@ export class AnnualAccountsService implements OnModuleInit {
       },
     );
 
+    await this.formLogModel.create({
+      annualAccountId: new Types.ObjectId(id),
+      ulb: doc.ulb,
+      designYear: doc.design_year,
+      section,
+      formId: SECTION_FORM_IDS[section],
+      action: 'SUBMITTED',
+      toStatus: AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE,
+      actorStage: 'ULB',
+      userInfo: { userId: new Types.ObjectId(user._id), role: user.role, ipAddress, userAgent },
+      note: null,
+      batchId: null,
+      documents: docsToCheck.map((d: any) => ({ docId: d.docId, decision: null, comment: null })),
+    });
+
     this.logger.log(`Section ${section} submitted with self-declaration — annualAccountId=${id} by user=${user._id}`);
 
     return {
@@ -517,6 +771,306 @@ export class AnnualAccountsService implements OnModuleInit {
       form_status: AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE,
       form_status_id: FORM_STATUS_ID[AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE],
     };
+  }
+
+  // ─── State review decisions ───────────────────────────────────────────────────
+
+  /** Per-document approve/return. Informational only — does not change the section's overall status. */
+  async decideDocument(
+    id: string,
+    docId: string,
+    dto: DocumentDecisionDto,
+    user: AuthUser,
+    ipAddress: string | null = null,
+    userAgent: string | null = null,
+  ) {
+    const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
+    if (!doc) throw new NotFoundException('Annual account not found');
+
+    const sectionData = (doc as any)[dto.section];
+    if (!sectionData) throw new NotFoundException('Section not found');
+    await this.assertCanDecide(doc, user, sectionData.form_status);
+
+    const docSlot = (sectionData.documents ?? []).find((d: any) => d.docId === docId);
+    if (!docSlot) throw new NotFoundException('Document not found in this section');
+
+    const decision = buildDecisionRecord(dto.decision, dto.note, user, ipAddress, userAgent);
+
+    // Per-document decisions are informational only — the section's form_status and the
+    // form-log audit trail only change on the explicit final "Approve Section"/"Return Section"
+    // action (decideSection), not the moment any one document is approved or returned.
+    await this.annualAccountModel.updateOne(
+      { _id: new Types.ObjectId(id), [`${dto.section}.documents.docId`]: docId },
+      { $push: { [`${dto.section}.documents.$.stateDecision`]: decision }, $set: { updatedAt: new Date() } },
+    );
+
+    this.logger.log(
+      `Document ${dto.decision.toLowerCase()} — annualAccountId=${id} section=${dto.section} docId=${docId} by user=${user._id}`,
+    );
+
+    return this.getProcessingStatus(id, user);
+  }
+
+  /**
+   * State's final call on a section.
+   *
+   * APPROVED: legal any time no document currently has a live RETURNED decision. Any
+   * document that hasn't been individually decided yet (or whose decision has gone stale
+   * because the ULB re-uploaded since) is auto-approved as part of this action, getting its
+   * own proper APPROVED entry in stateDecision — the same as if STATE had approved it by hand.
+   * Already-approved documents are left untouched.
+   *
+   * RETURNED: always legal. Only documents with no live decision yet are auto-marked
+   * RETURNED (using this same reason) — already-APPROVED documents stay approved and locked
+   * (an approved document is never undone by a section-level return), and documents already
+   * individually RETURNED keep their own original reason rather than being overwritten.
+   */
+  async decideSection(
+    id: string,
+    dto: SectionDecisionDto,
+    user: AuthUser,
+    ipAddress: string | null = null,
+    userAgent: string | null = null,
+    batchId: string | null = null,
+  ) {
+    const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
+    if (!doc) throw new NotFoundException('Annual account not found');
+
+    const sectionData = (doc as any)[dto.section];
+    if (!sectionData) throw new NotFoundException('Section not found');
+    await this.assertCanDecide(doc, user, sectionData.form_status);
+
+    const documents: any[] = sectionData.documents ?? [];
+    const effectiveByDoc = documents.map((d) => ({
+      docId: d.docId as string,
+      effective: this.resolveEffectiveDecision(d),
+      filePath: (d.currentUpload?.file?.path as string | undefined) ?? null,
+    }));
+
+    if (dto.decision === 'APPROVED') {
+      const stillReturned = effectiveByDoc.filter((d) => d.effective?.status === 'RETURNED').map((d) => d.docId);
+      if (stillReturned.length > 0) {
+        throw new BadRequestException(
+          `Cannot approve — these documents are currently returned and must be resolved first: ${stillReturned.join(', ')}`,
+        );
+      }
+    }
+
+    // State approval hands the section to MOHUA for their review — it does not close out the workflow.
+    const newStatus =
+      dto.decision === 'APPROVED'
+        ? AnnualAccountFormStatus.UNDER_REVIEW_BY_MOHUA
+        : AnnualAccountFormStatus.RETURNED_BY_STATE;
+
+    const decision = buildDecisionRecord(dto.decision, dto.note, user, ipAddress, userAgent);
+
+    // Only documents with no live decision (never decided, or stale after a re-upload) are
+    // swept into this bulk action — already-decided documents are left exactly as they are.
+    const toBulkDecide = effectiveByDoc.filter((d) => d.effective === null).map((d) => d.docId);
+
+    await this.annualAccountModel.updateOne(
+      { _id: new Types.ObjectId(id) },
+      {
+        $set: {
+          [`${dto.section}.form_status`]: newStatus,
+          [`${dto.section}.form_status_id`]: FORM_STATUS_ID[newStatus],
+          [`${dto.section}.stateDecision`]: decision,
+          modifiedBy: new Types.ObjectId(user._id),
+        },
+        ...(toBulkDecide.length > 0 && {
+          $push: { [`${dto.section}.documents.$[elem].stateDecision`]: decision },
+        }),
+      },
+      toBulkDecide.length > 0 ? { arrayFilters: [{ 'elem.docId': { $in: toBulkDecide } }] } : undefined,
+    );
+
+    const documentsBreakdown: FormLogDocumentEntry[] = effectiveByDoc.map((d) => ({
+      docId: d.docId,
+      decision: toBulkDecide.includes(d.docId) ? dto.decision : (d.effective?.status ?? null),
+      comment: toBulkDecide.includes(d.docId) ? (dto.note ?? null) : (d.effective?.note ?? null),
+      filePath: d.filePath,
+    }));
+
+    await this.formLogModel.create({
+      annualAccountId: new Types.ObjectId(id),
+      ulb: doc.ulb,
+      designYear: doc.design_year,
+      section: dto.section,
+      formId: SECTION_FORM_IDS[dto.section],
+      action: dto.decision,
+      toStatus: newStatus,
+      actorStage: 'STATE',
+      userInfo: { userId: new Types.ObjectId(user._id), role: user.role, ipAddress, userAgent },
+      note: dto.note ?? null,
+      batchId,
+      documents: documentsBreakdown,
+    });
+
+    this.logger.log(
+      `Section ${dto.decision.toLowerCase()} — annualAccountId=${id} section=${dto.section} by user=${user._id}` +
+        (toBulkDecide.length > 0 ? ` — bulk-decided ${toBulkDecide.length} document(s)` : ''),
+    );
+
+    return this.getProcessingStatus(id, user);
+  }
+
+  /**
+   * A document's latest decision only counts against the file it was made on. If the ULB
+   * re-uploaded a corrected file after that decision, the old verdict is stale — the document
+   * is effectively undecided again until STATE reviews the new file. Mirrors the identical
+   * staleness rule the frontend applies when rendering each document's status.
+   */
+  private resolveEffectiveDecision(docSlot: any): { status: 'APPROVED' | 'RETURNED'; note: string | null } | null {
+    const history = docSlot.stateDecision ?? [];
+    const latest = history[history.length - 1] ?? null;
+    if (!latest) return null;
+
+    const uploadedAt = docSlot.currentUpload?.uploadedAt ? new Date(docSlot.currentUpload.uploadedAt).getTime() : null;
+    const decidedAt = new Date(latest.decidedAt).getTime();
+    if (uploadedAt !== null && uploadedAt > decidedAt) return null;
+
+    return { status: latest.status, note: latest.note };
+  }
+
+  /**
+   * Gmail-style bulk approve/return across many ULB submissions in one action.
+   * Reuses decideSection per id (same permission + all-or-nothing document check applies
+   * to each one individually) rather than a blind bulkWrite — an APPROVED decision still
+   * depends on that specific document's own state, which can't be collapsed into one query.
+   * Every row succeeds or fails independently; a shared batchId correlates the resulting
+   * log entries. Runs sequentially, not queued — fine at the ids cap of 500; revisit only
+   * if bulk batches grow large enough to matter.
+   */
+  async bulkDecideSection(
+    dto: BulkSectionDecisionDto,
+    user: AuthUser,
+    ipAddress: string | null = null,
+    userAgent: string | null = null,
+  ): Promise<BulkDecisionResult> {
+    const result = await runBulkDecision(dto.ids, (id, batchId) =>
+      this.decideSection(
+        id,
+        { section: dto.section, decision: dto.decision, note: dto.note },
+        user,
+        ipAddress,
+        userAgent,
+        batchId,
+      ),
+    );
+
+    this.logger.log(
+      `Bulk section decision — batchId=${result.batchId} section=${dto.section} decision=${dto.decision} succeeded=${result.succeeded}/${dto.ids.length} by user=${user._id}`,
+    );
+
+    return result;
+  }
+
+  /**
+   * Guards both decision endpoints: requester must have state access to the ULB,
+   * hold APPROVE_ULB_SUBMISSIONS, and the section must currently be under review.
+   */
+  private async assertCanDecide(doc: any, user: AuthUser, sectionStatus: AnnualAccountFormStatus): Promise<void> {
+    const hasAccess = await this.hasStateAccessToUlb(user, doc.ulb);
+    if (!hasAccess) {
+      throw new ForbiddenException('Access denied');
+    }
+    const perms = getEffectivePermissions(user);
+    if (!perms.includes(Permission.APPROVE_ULB_SUBMISSIONS)) {
+      throw new ForbiddenException('You do not have permission to approve ULB submissions');
+    }
+    if (!canStateDecideAnnualAccount(sectionStatus)) {
+      throw new ForbiddenException(`This section cannot be decided while its status is ${sectionStatus}.`);
+    }
+  }
+
+  // ─── MOHUA review decisions ───────────────────────────────────────────────────
+
+  /**
+   * MOHUA's final call on a section state has already approved and handed off.
+   * MOHUA decides on the section as a whole — there is no per-document MOHUA
+   * decision layer, since every document is already individually STATE-approved
+   * by the time a section reaches UNDER_REVIEW_BY_MOHUA.
+   */
+  async decideMohuaSection(
+    id: string,
+    dto: SectionDecisionDto,
+    user: AuthUser,
+    ipAddress: string | null = null,
+    userAgent: string | null = null,
+  ) {
+    const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
+    if (!doc) throw new NotFoundException('Annual account not found');
+
+    const sectionData = (doc as any)[dto.section];
+    if (!sectionData) throw new NotFoundException('Section not found');
+    this.assertCanMohuaDecide(user, sectionData.form_status);
+
+    const newStatus =
+      dto.decision === 'APPROVED'
+        ? AnnualAccountFormStatus.SUBMISSION_ACKNOWLEDGED_BY_MOHUA
+        : AnnualAccountFormStatus.RETURNED_BY_MOHUA;
+
+    const decision = buildDecisionRecord(dto.decision, dto.note, user, ipAddress, userAgent);
+
+    await this.annualAccountModel.updateOne(
+      { _id: new Types.ObjectId(id) },
+      {
+        $set: {
+          [`${dto.section}.form_status`]: newStatus,
+          [`${dto.section}.form_status_id`]: FORM_STATUS_ID[newStatus],
+          [`${dto.section}.mohuaDecision`]: decision,
+          modifiedBy: new Types.ObjectId(user._id),
+        },
+      },
+    );
+
+    const documents: any[] = sectionData.documents ?? [];
+    const documentsBreakdown: FormLogDocumentEntry[] = documents.map((d) => {
+      const history = d.stateDecision ?? [];
+      const latest = history[history.length - 1] ?? null;
+      const filePath = (d.currentUpload?.file?.path as string | undefined) ?? null;
+      return { docId: d.docId as string, decision: latest?.status ?? null, comment: latest?.note ?? null, filePath };
+    });
+
+    await this.formLogModel.create({
+      annualAccountId: new Types.ObjectId(id),
+      ulb: doc.ulb,
+      designYear: doc.design_year,
+      section: dto.section,
+      formId: SECTION_FORM_IDS[dto.section],
+      action: dto.decision,
+      toStatus: newStatus,
+      actorStage: 'MOHUA',
+      userInfo: { userId: new Types.ObjectId(user._id), role: user.role, ipAddress, userAgent },
+      note: dto.note ?? null,
+      batchId: null,
+      documents: documentsBreakdown,
+    });
+
+    this.logger.log(
+      `Section ${dto.decision.toLowerCase()} by MOHUA — annualAccountId=${id} section=${dto.section} by user=${user._id}`,
+    );
+
+    return this.getProcessingStatus(id, user);
+  }
+
+  /** Guards the MOHUA decision endpoint: requester must hold MOHUA/ADMIN scope and APPROVE_STATE_SUBMISSIONS. */
+  private assertCanMohuaDecide(user: AuthUser, sectionStatus: AnnualAccountFormStatus): void {
+    if (!this.hasMohuaAccess(user)) {
+      throw new ForbiddenException('Access denied');
+    }
+    const perms = getEffectivePermissions(user);
+    if (!perms.includes(Permission.APPROVE_STATE_SUBMISSIONS)) {
+      throw new ForbiddenException('You do not have permission to review state submissions');
+    }
+    if (!canMohuaDecideAnnualAccount(sectionStatus)) {
+      throw new ForbiddenException(`This section cannot be decided while its status is ${sectionStatus}.`);
+    }
+  }
+
+  /** MOHUA is a central role — unlike STATE, access isn't scoped to a matching state. */
+  private hasMohuaAccess(user: AuthUser): boolean {
+    return user.scope === Scope.MOHUA || user.scope === Scope.ADMIN;
   }
 
   // ─── Private helpers ─────────────────────────────────────────────────────────
@@ -532,7 +1086,18 @@ export class AnnualAccountsService implements OnModuleInit {
     );
   }
 
-  private async findOrInitialize(ulbId: string, designYearId: string, user: AuthUser): Promise<string> {
+  private async findOrInitialize(
+    ulbId: string,
+    stateId: string,
+    designYearId: string,
+    user: AuthUser,
+  ): Promise<string> {
+    const ulb = await this.ulbModel.findById(new Types.ObjectId(ulbId)).select('state').lean().exec();
+    if (!ulb) throw new NotFoundException('ULB not found');
+    if (ulb.state?.toString() !== stateId) {
+      throw new BadRequestException("stateId does not match this ULB's state");
+    }
+
     const filter = {
       ulb: new Types.ObjectId(ulbId),
       design_year: new Types.ObjectId(designYearId),
@@ -545,6 +1110,7 @@ export class AnnualAccountsService implements OnModuleInit {
         filter,
         {
           $setOnInsert: {
+            state: new Types.ObjectId(stateId),
             auditedData: null,
             unauditedData: null,
             createdBy: new Types.ObjectId(user._id),
@@ -640,12 +1206,89 @@ export class AnnualAccountsService implements OnModuleInit {
     }
   }
 
-  private validateViewAccess(doc: any, user: AuthUser) {
-    if (user.scope === 'ULB') {
+  /**
+   * Two-layer upload gate: the section must be ULB-editable (shared FORM_STATUS gate), and
+   * this specific document must not already be individually APPROVED by STATE.
+   */
+  private async assertCanUlbUpload(
+    ulbId: string,
+    designYearId: string,
+    section: 'auditedData' | 'unauditedData',
+    docId: string,
+  ): Promise<void> {
+    const doc = await this.annualAccountModel
+      .findOne({ ulb: new Types.ObjectId(ulbId), design_year: new Types.ObjectId(designYearId) })
+      .lean()
+      .exec();
+    if (!doc) return;
+
+    const sectionData = doc[section];
+    if (!sectionData) return;
+
+    if (!canUlbEditForm(sectionData.form_status_id)) {
+      throw new ForbiddenException(`This section cannot be edited while its status is ${sectionData.form_status}.`);
+    }
+
+    const docSlot = sectionData.documents.find((d) => d.docId === docId);
+    if (!canUlbReuploadDocument(sectionData.form_status_id, docSlot?.stateDecision)) {
+      throw new ForbiddenException('This document has already been approved and cannot be re-uploaded.');
+    }
+  }
+
+  /**
+   * ULB users may only view their own ULB's account. STATE users may only view ULBs
+   * belonging to their own state. ADMIN and MOHUA are unrestricted, matching prior behavior.
+   */
+  private async validateViewAccess(doc: any, user: AuthUser): Promise<void> {
+    if (user.scope === Scope.ULB) {
       if (doc.ulb?.toString() !== user.ulb?.toString()) {
         throw new ForbiddenException('Access denied');
       }
+      return;
     }
+    if (user.scope === Scope.STATE) {
+      const hasAccess = await this.hasStateAccessToUlb(user, doc.ulb);
+      if (!hasAccess) {
+        throw new ForbiddenException('Access denied');
+      }
+    }
+  }
+
+  /** Returns true when the given STATE (or ADMIN) user may act on the ULB's account. */
+  private async hasStateAccessToUlb(user: AuthUser, ulbId: unknown): Promise<boolean> {
+    if (user.scope === Scope.ADMIN) return true;
+    if (user.scope !== Scope.STATE) return false;
+    const ulb = await this.ulbModel
+      .findById(ulbId as Types.ObjectId)
+      .select('state')
+      .lean()
+      .exec();
+    return !!ulb && ulb.state?.toString() === user.state?.toString();
+  }
+
+  /**
+   * Derives status-aware capability flags for one section (auditedData/unauditedData).
+   * canReview/canApprove are false whenever the section status does not allow it,
+   * regardless of the user's role — mirrors SfcStatusService.buildFormPermissions.
+   */
+  private buildAnnualAccountPermissions(
+    user: AuthUser,
+    hasStateAccess: boolean,
+    status: AnnualAccountFormStatus,
+  ): AnnualAccountPermissions {
+    const perms = new Set(getEffectivePermissions(user));
+    const hasMohuaAccess = this.hasMohuaAccess(user);
+    return {
+      canView: perms.has(Permission.VIEW_STATUS_REPORTS),
+      canUpload: user.scope === Scope.ULB && perms.has(Permission.UPLOAD_DOCUMENTS),
+      canReview: hasStateAccess && perms.has(Permission.REVIEW_ULB_SUBMISSIONS) && canStateReviewAnnualAccount(status),
+      canApprove:
+        hasStateAccess && perms.has(Permission.APPROVE_ULB_SUBMISSIONS) && canStateDecideAnnualAccount(status),
+      canMohuaReview:
+        hasMohuaAccess && perms.has(Permission.REVIEW_STATE_SUBMISSIONS) && canMohuaReviewAnnualAccount(status),
+      canMohuaApprove:
+        hasMohuaAccess && perms.has(Permission.APPROVE_STATE_SUBMISSIONS) && canMohuaDecideAnnualAccount(status),
+    };
   }
 
   private validateSubmitAccess(doc: any, user: AuthUser) {
