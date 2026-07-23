@@ -43,12 +43,12 @@ function getQueryCaller(): string {
 
 @Module({
   imports: [
-    ThrottlerModule.forRoot([
-      {
-        ttl: seconds(60), // time window in seconds
-        limit: 600, // max requests per window
-      },
-    ]),
+    // ThrottlerModule.forRoot([
+    //   {
+    //     ttl: seconds(60), // time window in seconds
+    //     limit: 600, // max requests per window
+    //   },
+    // ]),
     ConfigModule.forRoot({ isGlobal: true }),
     ScheduleModule.forRoot(),
     CacheModule.register({ isGlobal: true, ttl: 300000 }),
