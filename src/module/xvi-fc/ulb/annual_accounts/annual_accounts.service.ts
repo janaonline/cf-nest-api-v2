@@ -431,7 +431,7 @@ export class AnnualAccountsService implements OnModuleInit {
       { $match: matchStage },
       {
         $lookup: {
-          from: 'xvifc_annualaccount_datas',
+          from: 'xvifc_annualaccounts',
           let: { ulbId: '$_id' },
           pipeline: [
             {
@@ -613,6 +613,31 @@ export class AnnualAccountsService implements OnModuleInit {
     if (!s3Key) throw new NotFoundException('Upload not found');
     const url = await this.s3Service.presignGet(s3Key);
     return { url };
+  }
+
+  // ─── Form status audit log ────────────────────────────────────────────────────
+
+  async getFormLogs(id: string, section: 'auditedData' | 'unauditedData' | undefined, user: AuthUser) {
+    const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
+    if (!doc) throw new NotFoundException('Annual account not found');
+    await this.validateViewAccess(doc, user);
+
+    const filter: Record<string, unknown> = { annualAccountId: new Types.ObjectId(id) };
+    if (section) filter.section = section;
+
+    const logs = await this.formLogModel.find(filter).sort({ createdAt: -1 }).lean().exec();
+
+    return logs.map((log) => ({
+      section: log.section,
+      action: log.action,
+      toStatus: log.toStatus,
+      actorStage: log.actorStage,
+      actorRole: log.userInfo.role,
+      note: log.note,
+      batchId: log.batchId,
+      documents: log.documents,
+      createdAt: (log as unknown as { createdAt: Date }).createdAt,
+    }));
   }
 
   // ─── Remove (hard-delete) a document slot ────────────────────────────────────

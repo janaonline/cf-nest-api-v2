@@ -209,7 +209,7 @@ export const AnnualAccountSectionSchema = SchemaFactory.createForClass(AnnualAcc
 // ─── Root document ────────────────────────────────────────────────────────────
 
 @Schema({
-  collection: 'xvifc_annualaccount_datas',
+  collection: 'xvifc_annualaccounts',
   timestamps: true,
   versionKey: false,
 })
