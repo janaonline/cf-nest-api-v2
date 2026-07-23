@@ -78,6 +78,18 @@ export class AnnualAccountsController {
     return this.annualAccountsService.getSignedUrl(id, uploadId, user);
   }
 
+  @Get(':id/logs')
+  getFormLogs(
+    @Param('id', ParseObjectIdPipe) id: string,
+    @Query('section') section: string | undefined,
+    @CurrentUser() user: AuthUser,
+  ) {
+    if (section !== undefined && section !== 'auditedData' && section !== 'unauditedData') {
+      throw new BadRequestException('section must be "auditedData" or "unauditedData"');
+    }
+    return this.annualAccountsService.getFormLogs(id, section, user);
+  }
+
   @Post(':id/submit')
   @HttpCode(200)
   submitSection(

@@ -43,6 +43,7 @@ export interface XviFcBankAccountRecord {
   accountNumberLast4: string;
   proofFile: XviFcBankAccountProofFile;
   currentFormStatus: FormStatusType;
+  currentFormStatusLabel: string;
   stateDecision: DecisionInfo | null;
   mohuaDecision: DecisionInfo | null;
   submittedBy?: Types.ObjectId;
@@ -69,6 +70,18 @@ export interface XviFcBankAccountResponse {
   submittedAt?: string;
   createdAt?: string;
   updatedAt?: string;
+}
+
+export interface BankAccountFormLogEntry {
+  action: 'SUBMITTED' | 'APPROVED' | 'RETURNED';
+  toStatus: FormStatusType;
+  toStatusLabel: string;
+  actorStage: 'ULB' | 'STATE' | 'MOHUA';
+  actorRole: string;
+  note: string | null;
+  filePath: string | null;
+  batchId: string | null;
+  createdAt: Date;
 }
 
 export interface XviFcIfscLookupResponse {

@@ -1,6 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
-import { FORM_STATUS, type FormStatusType } from 'src/common/constants/form-status.constants';
+import { FORM_STATUS, getFormStatusLabel, type FormStatusType } from 'src/common/constants/form-status.constants';
 import { DecisionInfo, DecisionInfoSchema } from 'src/schemas/xvi-fc/annual-account.schema';
 
 export type XviFcBankAccountDocument = HydratedDocument<XviFcBankAccount>;
@@ -29,7 +29,7 @@ export class XviFcBankAccountProofFile {
 export const XviFcBankAccountProofFileSchema = SchemaFactory.createForClass(XviFcBankAccountProofFile);
 
 @Schema({
-  collection: 'xvi_fc_bank_accounts',
+  collection: 'xvifc_bankaccounts',
   timestamps: true,
   versionKey: false,
 })
@@ -81,6 +81,10 @@ export class XviFcBankAccount {
     default: FORM_STATUS.NOT_STARTED,
   })
   currentFormStatus!: FormStatusType;
+
+  /** Human-readable label mirroring currentFormStatus — persisted so the status is readable directly from Mongo. */
+  @Prop({ type: String, default: getFormStatusLabel(FORM_STATUS.NOT_STARTED) })
+  currentFormStatusLabel!: string;
 
   /** Current/latest STATE decision — null until a state user makes a final call. */
   @Prop({ type: DecisionInfoSchema, default: null })
