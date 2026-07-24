@@ -6,12 +6,13 @@ const config: Config = {
   rootDir: '.',
   testRegex: '.*\\.spec\\.ts$',
   transform: {
-    '^.+\\.ts$': 'ts-jest',
+    '^.+\\.ts$': ['ts-jest', { tsconfig: 'tsconfig.spec.json' }],
   },
   moduleNameMapper: {
     '^src/(.*)$': '<rootDir>/src/$1',
   },
   testEnvironment: 'node',
+  setupFiles: ['reflect-metadata'],
 };
 
 export default config;
