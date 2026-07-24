@@ -88,7 +88,10 @@ export class XviFcController {
   @ApiQuery({
     name: 'pattern',
     required: false,
-    description: 'Redis key pattern, e.g. /xvi-fc/sidebar/*. Omit to clear all XVI-FC cache.',
+    description:
+      'Substring to match against cached request URLs, e.g. "sidebar" or "xvi-fc/sidebar". ' +
+      'Matches anywhere in the URL (no need to include the app route prefix or add wildcards). ' +
+      'Omit to clear all XVI-FC cache.',
   })
   @ApiResponse({ status: 200, description: 'Cache cleared successfully' })
   @ApiResponse({ status: 403, description: 'Forbidden — admin scope required' })

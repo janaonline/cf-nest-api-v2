@@ -85,7 +85,14 @@ export class XviFcService {
 
   async clearPageCache(user: AuthUser, pattern?: string): Promise<{ message: string }> {
     if (user.scope !== Scope.ADMIN) throw new ForbiddenException('Only admins can clear the cache.');
-    const redisPattern = pattern ? `${XVIFC_CACHE_KEY_PREFIX}:${pattern}` : `${XVIFC_CACHE_KEY_PREFIX}:*`;
+    // Cache keys are `xvifc:cache:<full request URL>`, which includes the app's global
+    // route prefix (e.g. /api/v2/xvi-fc/sidebar/STATE?yearId=...) — a caller passing just
+    // "/xvi-fc/sidebar" has no way to know that prefix. Wrap the pattern as a "contains"
+    // glob match instead of an anchored one, so it matches regardless of the prefix or
+    // whether the caller already added their own wildcards.
+    const redisPattern = pattern
+      ? `${XVIFC_CACHE_KEY_PREFIX}:*${pattern.replace(/^\/+|\*+/g, '')}*`
+      : `${XVIFC_CACHE_KEY_PREFIX}:*`;
     await this.cache.deleteByPattern(redisPattern);
     return { message: `Cache cleared for ${pattern ? `pattern: ${pattern}` : 'all XVI-FC cache'}` };
   }

@@ -16,9 +16,10 @@ import {
 } from '../../schemas/xvi-fc/annual-account.schema';
 import { XviFcUnspentBalanceDisclosure } from '../../schemas/xvi-fc/unspent-balance-disclosure.schema';
 import { XviFcBankAccount } from '../../schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
-import { XviFcCacheService } from './cache/xvi-fc-cache.service';
+import { XviFcCacheService, XVIFC_CACHE_KEY_PREFIX } from './cache/xvi-fc-cache.service';
 import { FormJsonService } from '../../form-json/form-json.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
+import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 
 const mockUser: AuthUser = {
   _id: new Types.ObjectId().toHexString(),
@@ -37,6 +38,7 @@ describe('XviFcService', () => {
   let mockAnnualAccountModel: { findOne: jest.Mock };
   let mockDisclosureModel: { findOne: jest.Mock };
   let mockBankAccountModel: { findOne: jest.Mock };
+  let mockCacheService: { deleteByPattern: jest.Mock };
 
   function q<T>(value: T) {
     return {
@@ -59,6 +61,7 @@ describe('XviFcService', () => {
     mockAnnualAccountModel = { findOne: jest.fn().mockReturnValue(q(null)) };
     mockDisclosureModel = { findOne: jest.fn().mockReturnValue(q(null)) };
     mockBankAccountModel = { findOne: jest.fn().mockReturnValue(q(null)) };
+    mockCacheService = { deleteByPattern: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -74,7 +77,7 @@ describe('XviFcService', () => {
         { provide: getModelToken(XviFcAnnualAccount.name), useValue: mockAnnualAccountModel },
         { provide: getModelToken(XviFcUnspentBalanceDisclosure.name), useValue: mockDisclosureModel },
         { provide: getModelToken(XviFcBankAccount.name), useValue: mockBankAccountModel },
-        { provide: XviFcCacheService, useValue: { deleteByPattern: jest.fn() } },
+        { provide: XviFcCacheService, useValue: mockCacheService },
         { provide: FormJsonService, useValue: { clearCache: jest.fn() } },
       ],
     }).compile();
@@ -230,6 +233,37 @@ describe('XviFcService', () => {
         designYear: new Types.ObjectId(designYearId),
       });
       expect(chain.select).toHaveBeenCalledWith('currentFormStatus');
+    });
+  });
+
+  describe('clearPageCache', () => {
+    const adminUser: AuthUser = { ...mockUser, scope: Scope.ADMIN };
+
+    it('rejects non-admin users', async () => {
+      await expect(service.clearPageCache({ ...mockUser, scope: Scope.STATE })).rejects.toThrow();
+    });
+
+    it('clears everything when no pattern is given', async () => {
+      await service.clearPageCache(adminUser);
+      expect(mockCacheService.deleteByPattern).toHaveBeenCalledWith(`${XVIFC_CACHE_KEY_PREFIX}:*`);
+    });
+
+    it('matches the real cache key even when the pattern omits the app route prefix', async () => {
+      // Real keys look like `xvifc:cache:/api/v2/xvi-fc/sidebar/STATE?yearId=...` — a caller
+      // has no way to know about the /api/v2 prefix, so the pattern must still match it.
+      await service.clearPageCache(adminUser, '/xvi-fc/sidebar');
+
+      const [calledPattern] = mockCacheService.deleteByPattern.mock.calls[0] as [string];
+      const realKey = `${XVIFC_CACHE_KEY_PREFIX}:/api/v2/xvi-fc/sidebar/STATE?yearId=abc`;
+      expect(new RegExp(`^${calledPattern.replace(/\*/g, '.*')}$`).test(realKey)).toBe(true);
+    });
+
+    it('ignores extra slashes and wildcards the caller adds themselves', async () => {
+      await service.clearPageCache(adminUser, '/xvi-fc/sidebar/*');
+
+      const [calledPattern] = mockCacheService.deleteByPattern.mock.calls[0] as [string];
+      const realKey = `${XVIFC_CACHE_KEY_PREFIX}:/api/v2/xvi-fc/sidebar/STATE?yearId=abc`;
+      expect(new RegExp(`^${calledPattern.replace(/\*/g, '.*')}$`).test(realKey)).toBe(true);
     });
   });
 
