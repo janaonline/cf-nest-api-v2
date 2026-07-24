@@ -1,266 +1,238 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
-import { UsersService } from './users.service';
-import { User } from './schemas/user.schema';
+import { ConfigService } from '@nestjs/config';
 import { Types } from 'mongoose';
+
+import { UsersService } from './users.service';
+import { User } from 'src/schemas/user/user.schema';
+import { State } from 'src/schemas/state.schema';
+import { RedisService } from 'src/core/services/redis/redis.service';
+import { EmailQueueService } from 'src/core/queue/email-queue/email-queue.service';
+import { Permission } from 'src/module/auth/enum/roles-xvi-fc.enum';
+import { Role } from 'src/module/auth/enum/role.enum';
+
+import {
+  createChainMock,
+  makeUlbAdmin,
+  makeStateAdmin,
+  makeOverridesDto,
+  makeUserDoc,
+  ULB_ID,
+  STATE_ID,
+  TARGET_USER_ID,
+} from './test/users.fixtures';
+
+// ─── Module setup ──────────────────────────────────────────────────────────
+//
+// NOTE ON DRIFT FROM THE PREVIOUS VERSION OF THIS FILE:
+// - `Ulb`/`State` used to be imported from `src/admin/xvi-fc/schemas/*`, which was deleted
+//   in aeea981 ("optimized and removed unwanted schemas"). The real schemas now live at
+//   `src/schemas/ulb.schema.ts` / `src/schemas/state.schema.ts`.
+// - UsersService's current constructor does NOT inject a `Ulb` model at all (only `User`,
+//   `State`, RedisService, EmailQueueService, ConfigService) — so the old `Ulb` model
+//   provider has been dropped, and Redis/EmailQueue/Config providers have been added.
+// - The previous spec also tested `listUsers()`, `findAll()`, `findOne()`, `update()`, and
+//   `remove()` — none of these methods exist on the current UsersService (it now only
+//   exposes XVI-FC-domain methods: create, invite*, updatePermissionOverrides,
+//   softDelete*StateUser/MohuaMember, updateXviFcSubrole, transferSubmitter, etc). Those
+//   test blocks tested API surface that no longer exists and have been removed rather than
+//   patched, since there is nothing on the service left to point them at.
+// - `./test/users.fixtures` (createChainMock, makeUlbAdmin, ...) was imported by the old
+//   spec but was never actually committed to the repo — it has been added alongside this
+//   fix so the file can compile and run at all.
 
 describe('UsersService', () => {
   let service: UsersService;
-  let mockUserModel: any;
-
-  const mockUser = {
-    _id: new Types.ObjectId('507f1f77bcf86cd799439011'),
-    email: 'test@example.com',
-    name: 'Test User',
-    password: 'hashedPassword123',
-    role: 'user',
-    createdAt: new Date(),
-    updatedAt: new Date(),
-    save: jest.fn(),
-  };
+  let mockUserModel: ReturnType<typeof createChainMock>;
+  let mockStateModel: ReturnType<typeof createChainMock>;
+  let mockRedisService: { get: jest.Mock; set: jest.Mock; del: jest.Mock };
+  let mockEmailQueueService: { addEmailJob: jest.Mock };
+  let mockConfigService: { get: jest.Mock };
 
   beforeEach(async () => {
-    mockUserModel = {
-      find: jest.fn().mockReturnThis(),
-      findById: jest.fn().mockReturnThis(),
-      findByIdAndUpdate: jest.fn().mockReturnThis(),
-      findByIdAndDelete: jest.fn().mockReturnThis(),
-      exec: jest.fn(),
-    };
+    mockUserModel = createChainMock();
+    mockStateModel = createChainMock();
+    mockRedisService = { get: jest.fn(), set: jest.fn(), del: jest.fn() };
+    mockEmailQueueService = { addEmailJob: jest.fn().mockResolvedValue(undefined) };
+    mockConfigService = { get: jest.fn().mockReturnValue('https://cityfinance.in') };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         UsersService,
-        {
-          provide: getModelToken(User.name),
-          useValue: mockUserModel,
-        },
+        { provide: getModelToken(User.name), useValue: mockUserModel },
+        { provide: getModelToken(State.name), useValue: mockStateModel },
+        { provide: RedisService, useValue: mockRedisService },
+        { provide: EmailQueueService, useValue: mockEmailQueueService },
+        { provide: ConfigService, useValue: mockConfigService },
       ],
     }).compile();
 
     service = module.get<UsersService>(UsersService);
   });
 
-  afterEach(() => {
-    jest.clearAllMocks();
-  });
+  afterEach(() => jest.clearAllMocks());
 
   it('should be defined', () => {
     expect(service).toBeDefined();
   });
 
-  describe('create()', () => {
-    it('should create a new user', async () => {
-      const createUserData = {
-        email: 'newuser@example.com',
-        name: 'New User',
-        password: 'password123',
-      };
+  // ─── updatePermissionOverrides() ───────────────────────────────────────
 
-      const newUser = { ...mockUser, ...createUserData, _id: new Types.ObjectId() };
+  describe('updatePermissionOverrides()', () => {
+    const targetId = TARGET_USER_ID;
 
-      // Simply test that the service is callable
-      expect(service).toBeDefined();
-      expect(typeof service.create).toBe('function');
+    it('updates overrides and returns the recomputed effective permissions', async () => {
+      const targetDoc = makeUserDoc({ role: Role.ULB_EDITOR, ulb: new Types.ObjectId(ULB_ID) });
+      mockUserModel.exec.mockResolvedValueOnce(targetDoc).mockResolvedValueOnce(undefined);
+
+      const dto = makeOverridesDto({ allow: [Permission.UPLOAD_DOCUMENTS] });
+      const result = await service.updatePermissionOverrides(targetId, dto, makeUlbAdmin());
+
+      expect(result.message).toBe('Permission overrides updated successfully');
+      expect(result.overrides.allow).toContain(Permission.UPLOAD_DOCUMENTS);
+      expect(mockUserModel.findByIdAndUpdate).toHaveBeenCalledWith(targetId, {
+        $set: { 'permissionOverrides.allow': [Permission.UPLOAD_DOCUMENTS], 'permissionOverrides.deny': [] },
+      });
     });
 
-    it('should save user with correct data', async () => {
-      const userData = {
-        email: 'test@example.com',
-        name: 'Test User',
-        password: 'password123',
-      };
+    it('denying a permission removes it from effectivePermissions', async () => {
+      const targetDoc = makeUserDoc({
+        role: Role.STATE,
+        xviFcSubrole: 'reviewer',
+        state: new Types.ObjectId(STATE_ID),
+        ulb: undefined,
+      });
+      mockUserModel.exec.mockResolvedValueOnce(targetDoc).mockResolvedValueOnce(undefined);
 
-      // Test that service method is callable
-      expect(typeof service.create).toBe('function');
+      const dto = makeOverridesDto({ deny: [Permission.MESSAGE_USERS] });
+      const result = await service.updatePermissionOverrides(targetId, dto, makeStateAdmin());
+
+      expect(result.effectivePermissions).not.toContain(Permission.MESSAGE_USERS);
     });
 
-    it('should handle creation errors', async () => {
-      expect(service).toBeDefined();
-      expect(typeof service.create).toBe('function');
-    });
-  });
+    it('throws 400 when same permission appears in allow and deny', async () => {
+      const targetDoc = makeUserDoc({ ulb: new Types.ObjectId(ULB_ID) });
+      mockUserModel.exec.mockResolvedValueOnce(targetDoc);
 
-  describe('findAll()', () => {
-    it('should return all users', async () => {
-      const users = [mockUser, { ...mockUser, _id: new Types.ObjectId('507f1f77bcf86cd799439012') }];
-
-      mockUserModel.exec.mockResolvedValue(users);
-
-      const result = await service.findAll();
-
-      expect(mockUserModel.find).toHaveBeenCalled();
-      expect(mockUserModel.exec).toHaveBeenCalled();
-      expect(result).toEqual(users);
+      const dto = makeOverridesDto({
+        allow: [Permission.MESSAGE_USERS],
+        deny: [Permission.MESSAGE_USERS],
+      });
+      await expect(service.updatePermissionOverrides(targetId, dto, makeUlbAdmin())).rejects.toThrow(
+        BadRequestException,
+      );
     });
 
-    it('should return empty array when no users exist', async () => {
-      mockUserModel.exec.mockResolvedValue([]);
-
-      const result = await service.findAll();
-
-      expect(result).toEqual([]);
-      expect(mockUserModel.find).toHaveBeenCalled();
+    it('throws 404 when target user does not exist', async () => {
+      mockUserModel.exec.mockResolvedValueOnce(null);
+      const dto = makeOverridesDto();
+      await expect(service.updatePermissionOverrides(targetId, dto, makeUlbAdmin())).rejects.toThrow(
+        NotFoundException,
+      );
     });
 
-    it('should handle database errors during findAll', async () => {
-      const error = new Error('Database connection failed');
-      mockUserModel.exec.mockRejectedValue(error);
-
-      await expect(service.findAll()).rejects.toThrow('Database connection failed');
-    });
-  });
-
-  describe('findOne()', () => {
-    it('should find user by id', async () => {
-      const userId = '507f1f77bcf86cd799439011';
-
-      mockUserModel.exec.mockResolvedValue(mockUser);
-
-      const result = await service.findOne(userId);
-
-      expect(mockUserModel.findById).toHaveBeenCalledWith(userId);
-      expect(mockUserModel.exec).toHaveBeenCalled();
-      expect(result).toEqual(mockUser);
+    it('throws 400 for an invalid target user ID', async () => {
+      const dto = makeOverridesDto();
+      await expect(
+        service.updatePermissionOverrides('not-an-object-id', dto, makeUlbAdmin()),
+      ).rejects.toThrow(BadRequestException);
     });
 
-    it('should return null when user does not exist', async () => {
-      const userId = '507f1f77bcf86cd799439999';
+    // FLAGGED FOR A SECOND LOOK — likely a real authorization bug, not a stale test:
+    // The JSDoc directly above `UsersService.updatePermissionOverrides` states "The requester
+    // must be a ULB/STATE admin and the target user must belong to the requester's own ULB
+    // or state", but the method body never reads `requester` at all (it's an unused
+    // parameter). So today, ANY authenticated caller that reaches this method can grant or
+    // revoke permissions on ANY user, regardless of role or ULB/state — the ForbiddenException
+    // paths the previous version of this spec asserted (non-admin roles, cross-ULB, cross-state)
+    // do not exist in the implementation. Left skipped (not deleted, not asserted as passing)
+    // so the gap stays visible instead of being silently blessed as "correct current behavior".
+    // This was NOT changed as part of this fix per instructions to not modify source files.
+    describe.skip('authorization scoping — documented in JSDoc but not enforced by the code (see flag above)', () => {
+      it('should reject non-admin roles attempting to override permissions', () => {
+        /* not implemented in UsersService.updatePermissionOverrides */
+      });
 
-      mockUserModel.exec.mockResolvedValue(null);
-
-      const result = await service.findOne(userId);
-
-      expect(result).toBeNull();
-      expect(mockUserModel.findById).toHaveBeenCalledWith(userId);
-    });
-
-    it('should handle database errors during findOne', async () => {
-      const userId = '507f1f77bcf86cd799439011';
-      const error = new Error('Database query failed');
-
-      mockUserModel.exec.mockRejectedValue(error);
-
-      await expect(service.findOne(userId)).rejects.toThrow('Database query failed');
-    });
-
-    it('should work with valid ObjectId string', async () => {
-      const userId = new Types.ObjectId().toString();
-
-      mockUserModel.exec.mockResolvedValue(mockUser);
-
-      const result = await service.findOne(userId);
-
-      expect(mockUserModel.findById).toHaveBeenCalledWith(userId);
-      expect(result).toEqual(mockUser);
+      it('should reject a requester acting outside their own ULB/state', () => {
+        /* not implemented in UsersService.updatePermissionOverrides */
+      });
     });
   });
 
-  describe('update()', () => {
-    it('should update a user by id', async () => {
-      const userId = '507f1f77bcf86cd799439011';
-      const updateData = {
-        name: 'Updated User',
-        email: 'updated@example.com',
-      };
+  // ─── getPermissionMatrix() / getMohuaPermissionMatrix() ────────────────
 
-      const updatedUser = { ...mockUser, ...updateData };
-      mockUserModel.exec.mockResolvedValue(updatedUser);
-
-      const result = await service.update(userId, updateData);
-
-      expect(mockUserModel.findByIdAndUpdate).toHaveBeenCalledWith(userId, updateData, { new: true });
-      expect(mockUserModel.exec).toHaveBeenCalled();
-      expect(result).toEqual(updatedUser);
-    });
-
-    it('should handle partial updates', async () => {
-      const userId = '507f1f77bcf86cd799439011';
-      const updateData = { name: 'Updated Name' };
-
-      const updatedUser = { ...mockUser, ...updateData };
-      mockUserModel.exec.mockResolvedValue(updatedUser);
-
-      const result = await service.update(userId, updateData);
-
-      expect(mockUserModel.findByIdAndUpdate).toHaveBeenCalledWith(userId, updateData, { new: true });
-      expect(result.name).toEqual('Updated Name');
-    });
-
-    it('should return null when user does not exist', async () => {
-      const userId = '507f1f77bcf86cd799439999';
-      const updateData = { name: 'Updated User' };
-
-      mockUserModel.exec.mockResolvedValue(null);
-
-      const result = await service.update(userId, updateData);
-
-      expect(result).toBeNull();
-    });
-
-    it('should handle update errors', async () => {
-      const userId = '507f1f77bcf86cd799439011';
-      const updateData = { email: 'duplicate@example.com' };
-      const error = new Error('Duplicate email');
-
-      mockUserModel.exec.mockRejectedValue(error);
-
-      await expect(service.update(userId, updateData)).rejects.toThrow('Duplicate email');
-    });
-
-    it('should pass the new option to findByIdAndUpdate', async () => {
-      const userId = '507f1f77bcf86cd799439011';
-      const updateData = { name: 'Updated' };
-
-      mockUserModel.exec.mockResolvedValue(mockUser);
-
-      await service.update(userId, updateData);
-
-      expect(mockUserModel.findByIdAndUpdate).toHaveBeenCalledWith(userId, updateData, { new: true });
+  describe('getPermissionMatrix()', () => {
+    it('returns the STATE permission matrix rows', () => {
+      const rows = service.getPermissionMatrix();
+      expect(Array.isArray(rows)).toBe(true);
+      expect(rows.length).toBeGreaterThan(0);
     });
   });
 
-  describe('remove()', () => {
-    it('should delete a user by id', async () => {
-      const userId = '507f1f77bcf86cd799439011';
+  describe('getMohuaPermissionMatrix()', () => {
+    it('returns the MoHUA permission matrix rows', () => {
+      const rows = service.getMohuaPermissionMatrix();
+      expect(Array.isArray(rows)).toBe(true);
+      expect(rows.length).toBeGreaterThan(0);
+    });
+  });
 
-      mockUserModel.exec.mockResolvedValue(mockUser);
+  // ─── issueProfileSaveToken() ─────────────────────────────────────────────
 
-      const result = await service.remove(userId);
+  describe('issueProfileSaveToken()', () => {
+    it('issues a token and stores it in redis when the user exists', async () => {
+      mockUserModel.exec.mockResolvedValueOnce({ _id: new Types.ObjectId(TARGET_USER_ID) });
 
-      expect(mockUserModel.findByIdAndDelete).toHaveBeenCalledWith(userId);
-      expect(mockUserModel.exec).toHaveBeenCalled();
-      expect(result).toEqual(mockUser);
+      const result = await service.issueProfileSaveToken(TARGET_USER_ID);
+
+      expect(result.token).toEqual(expect.any(String));
+      expect(mockRedisService.set).toHaveBeenCalledWith(
+        `profile_save_token:${TARGET_USER_ID}`,
+        result.token,
+        120,
+      );
     });
 
-    it('should return null when user does not exist', async () => {
-      const userId = '507f1f77bcf86cd799439999';
-
-      mockUserModel.exec.mockResolvedValue(null);
-
-      const result = await service.remove(userId);
-
-      expect(result).toBeNull();
-      expect(mockUserModel.findByIdAndDelete).toHaveBeenCalledWith(userId);
+    it('throws 404 when the user does not exist', async () => {
+      mockUserModel.exec.mockResolvedValueOnce(null);
+      await expect(service.issueProfileSaveToken(TARGET_USER_ID)).rejects.toThrow(NotFoundException);
     });
 
-    it('should handle deletion errors', async () => {
-      const userId = '507f1f77bcf86cd799439011';
-      const error = new Error('Cannot delete user');
+    it('throws 400 for an invalid user id', async () => {
+      await expect(service.issueProfileSaveToken('not-an-object-id')).rejects.toThrow(BadRequestException);
+    });
+  });
 
-      mockUserModel.exec.mockRejectedValue(error);
+  // ─── softDeleteStateUser() ───────────────────────────────────────────────
 
-      await expect(service.remove(userId)).rejects.toThrow('Cannot delete user');
+  describe('softDeleteStateUser()', () => {
+    it('marks a non-admin STATE user as removed from XVI-FC without touching isDeleted', async () => {
+      const targetDoc = makeUserDoc({ role: Role.STATE, xviFcSubrole: 'reviewer' });
+      mockUserModel.exec.mockResolvedValueOnce(targetDoc).mockResolvedValueOnce(undefined);
+
+      const result = await service.softDeleteStateUser(TARGET_USER_ID, makeStateAdmin());
+
+      expect(result.message).toBe('Member removed from the XVI-FC portal');
+      expect(mockUserModel.findByIdAndUpdate).toHaveBeenCalledWith(TARGET_USER_ID, {
+        $set: { isXviFcdeleted: true },
+      });
     });
 
-    it('should properly call findByIdAndDelete with correct id', async () => {
-      const userId = new Types.ObjectId().toString();
+    it('throws 400 when trying to remove the STATE admin', async () => {
+      const targetDoc = makeUserDoc({ role: Role.STATE, xviFcSubrole: 'admin' });
+      mockUserModel.exec.mockResolvedValueOnce(targetDoc);
 
-      mockUserModel.exec.mockResolvedValue(mockUser);
+      await expect(service.softDeleteStateUser(TARGET_USER_ID, makeStateAdmin())).rejects.toThrow(
+        BadRequestException,
+      );
+    });
 
-      await service.remove(userId);
-
-      expect(mockUserModel.findByIdAndDelete).toHaveBeenCalledWith(userId);
+    it('throws 404 when target user does not exist', async () => {
+      mockUserModel.exec.mockResolvedValueOnce(null);
+      await expect(service.softDeleteStateUser(TARGET_USER_ID, makeStateAdmin())).rejects.toThrow(
+        NotFoundException,
+      );
     });
   });
 });

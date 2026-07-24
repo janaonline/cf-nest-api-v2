@@ -9,6 +9,7 @@ import { AnnualAccountData } from 'src/schemas/annual-account-data.schema';
 import { DigitizationLog } from 'src/schemas/digitization-log.schema';
 import { Buffer } from 'buffer';
 import { Types } from 'mongoose';
+import { FileTokenService } from 'src/core/file-token/file-token.service';
 
 describe('AfsDumpService', () => {
   let service: AfsDumpService;
@@ -85,6 +86,12 @@ describe('AfsDumpService', () => {
         {
           provide: getModelToken(DigitizationLog.name, 'digitization_db'),
           useValue: mockDigitizationModel,
+        },
+        {
+          provide: FileTokenService,
+          useValue: {
+            signFileUrl: jest.fn((url: string) => `signed-${url}`),
+          },
         },
       ],
     }).compile();

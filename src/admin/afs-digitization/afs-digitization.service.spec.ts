@@ -8,8 +8,12 @@ import { Year } from 'src/schemas/year.schema';
 import { AnnualAccountData } from 'src/schemas/annual-account-data.schema';
 import { AfsExcelFile } from 'src/schemas/afs/afs-excel-file.schema';
 import { AfsMetric } from 'src/schemas/afs/afs-metrics.schema';
+import { AfsAuditorsReport } from 'src/schemas/afs/afs-auditors-report.schema';
 import { DigitizationLog } from 'src/schemas/digitization-log.schema';
 import { Types } from 'mongoose';
+import * as XLSX from 'xlsx';
+import { FileTokenService } from 'src/core/file-token/file-token.service';
+import { ConfigService } from '@nestjs/config';
 
 describe('AfsDigitizationService', () => {
   let service: AfsDigitizationService;
@@ -19,6 +23,7 @@ describe('AfsDigitizationService', () => {
   let mockAnnualAccountModel: any;
   let mockAfsExcelFileModel: any;
   let mockAfsMetricModel: any;
+  let mockAfsAuditorsReportModel: any;
   let mockDigitizationModel: any;
   let mockQueue: any;
 
@@ -32,6 +37,11 @@ describe('AfsDigitizationService', () => {
       find: jest.fn().mockReturnThis(),
       sort: jest.fn().mockReturnThis(),
       limit: jest.fn().mockResolvedValue([{ _id: 'ulb1', name: 'ULB 1', population: 50000 }]),
+      lean: jest.fn().mockResolvedValue([
+        { _id: new Types.ObjectId('65a7dd50b0c7e600128b5678'), name: 'Aamdi Nagar Panchayat', keywords: 'Old' },
+        { _id: new Types.ObjectId('65a7dd50b0c7e600128b5679'), name: 'Achhalda Town Panchayat', keywords: '' },
+      ]),
+      bulkWrite: jest.fn().mockResolvedValue({ modifiedCount: 2 }),
     };
 
     mockYearModel = {
@@ -60,6 +70,16 @@ describe('AfsDigitizationService', () => {
         failedFiles: 5,
         failedPages: 10,
         queuedFiles: 2,
+      }),
+    };
+
+    mockAfsAuditorsReportModel = {
+      aggregate: jest.fn().mockReturnValue({
+        exec: jest.fn().mockResolvedValue([]),
+      }),
+      findById: jest.fn().mockResolvedValue(null),
+      findByIdAndUpdate: jest.fn().mockReturnValue({
+        exec: jest.fn().mockResolvedValue(null),
       }),
     };
 
@@ -100,12 +120,28 @@ describe('AfsDigitizationService', () => {
           useValue: mockAfsMetricModel,
         },
         {
+          provide: getModelToken(AfsAuditorsReport.name),
+          useValue: mockAfsAuditorsReportModel,
+        },
+        {
           provide: getModelToken(DigitizationLog.name, 'digitization_db'),
           useValue: mockDigitizationModel,
         },
         {
           provide: getQueueToken('afsDigitization'),
           useValue: mockQueue,
+        },
+        {
+          provide: FileTokenService,
+          useValue: {
+            signFileUrl: jest.fn((url: string) => `signed-${url}`),
+          },
+        },
+        {
+          provide: ConfigService,
+          useValue: {
+            get: jest.fn(),
+          },
         },
       ],
     }).compile();
@@ -274,6 +310,49 @@ describe('AfsDigitizationService', () => {
       mockAfsExcelFileModel.findById.mockRejectedValue(error);
 
       await expect(service.getFile('file-id')).rejects.toThrow('Database connection failed');
+    });
+  });
+
+  describe('uploadUlbKeywords', () => {
+    it('should append uploaded keywords to matching ULBs', async () => {
+      const workbook = XLSX.utils.book_new();
+      const worksheet = XLSX.utils.json_to_sheet([
+        { expected_ulb_name: 'Aamdi Nagar Panchayat', Keywords: 'Amadi' },
+        { expected_ulb_name: 'Achhalda Town Panchayat', Keywords: 'Achalda' },
+      ]);
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'Sheet1');
+      const file = {
+        buffer: XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }),
+        originalname: 'keywords.xlsx',
+      } as Express.Multer.File;
+
+      const result = await service.uploadUlbKeywords(file);
+
+      expect(result).toEqual({
+        totalRows: 2,
+        updated: 2,
+        skipped: 0,
+        notFoundCount: 0,
+        notFound: [],
+      });
+      expect(mockUlbModel.bulkWrite).toHaveBeenCalledWith([
+        {
+          updateOne: {
+            filter: { _id: new Types.ObjectId('65a7dd50b0c7e600128b5678') },
+            update: { $set: { keywords: 'Old, Amadi' } },
+          },
+        },
+        {
+          updateOne: {
+            filter: { _id: new Types.ObjectId('65a7dd50b0c7e600128b5679') },
+            update: { $set: { keywords: 'Achalda' } },
+          },
+        },
+      ]);
+    });
+
+    it('should reject missing files', async () => {
+      await expect(service.uploadUlbKeywords(undefined as any)).rejects.toThrow('Excel file is required.');
     });
   });
 

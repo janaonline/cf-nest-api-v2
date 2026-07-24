@@ -7,7 +7,7 @@ import { EmailList } from 'src/schemas/email-list';
 import { EmailQueueService } from '../queue/email-queue/email-queue.service';
 import { RateLimitService } from '../services/rate-limit/rate-limit.service';
 import { RedisService } from '../services/redis/redis.service';
-import { SendOtpDto, VerifyOtpDto } from './dto/otp.dto';
+import { SendEmailOtpDto, VerifyEmailOtpDto } from './dto/otp.dto';
 import { UnsubscribePayload } from './interface';
 
 @Injectable()
@@ -109,7 +109,7 @@ export class EmailService {
    *        - if No: Send OTP.
    *    - No: Add email to EmailList collection and send OTP.
    */
-  async sendOtp(body: SendOtpDto) {
+  async sendOtp(body: SendEmailOtpDto) {
     try {
       const { email } = body;
 
@@ -176,7 +176,7 @@ export class EmailService {
    *        - if No: throw error.
    *    - No: throw error.
    */
-  async verifyOtp(body: VerifyOtpDto) {
+  async verifyOtp(body: VerifyEmailOtpDto) {
     const { email, otp } = body;
 
     // 🔒 Rate limit verification attempts
@@ -223,6 +223,50 @@ export class EmailService {
         );
       }
     }
+  }
+
+  // ── Profile verification OTP (bypasses EmailList — always sends) ────────────
+
+  private get isProduction(): boolean {
+    return this.configService.get<string>('NODE_ENV') === 'production';
+  }
+
+  async sendProfileOtp(email: string): Promise<{ isOtpSent: boolean; message: string }> {
+    await this.rateLimit.checkLimit(`otp:${email}:send`);
+
+    // In dev / staging use a fixed OTP so engineers can test without email delivery.
+    // In production a random 4-digit OTP is generated and emailed.
+    const otp = this.isProduction
+      ? Math.floor(1000 + Math.random() * 9000).toString() // 4-digit random
+      : '111111'; // fixed dev OTP
+
+    await this.redis.set(`profile_otp:${email}`, otp, 600); // 10 min TTL
+
+    if (this.isProduction) {
+      // Only hit the mail queue in production — no emails in dev/staging
+      await this.mailQueue.addEmailJob({
+        to: email,
+        subject: 'CityFinance - Profile Verification OTP',
+        templateName: 'otp',
+        mailData: { otp },
+      });
+      this.logger.log(`[profile-otp] Email sent to ${email}`);
+    } else {
+      this.logger.debug(`[profile-otp][DEV] OTP for ${email}: ${otp}`);
+    }
+
+    return { isOtpSent: true, message: 'OTP sent successfully' };
+  }
+
+  async verifyProfileOtp(email: string, otp: string): Promise<{ isOtpVerified: boolean; message: string }> {
+    await this.rateLimit.checkLimit(`otp:${email}:verify`);
+
+    const stored = await this.redis.get(`profile_otp:${email}`);
+    if (!stored) return { isOtpVerified: false, message: 'OTP expired or not found' };
+    if (stored !== otp) return { isOtpVerified: false, message: 'Invalid OTP' };
+
+    await this.redis.del(`profile_otp:${email}`);
+    return { isOtpVerified: true, message: 'OTP verified successfully' };
   }
 
   // Create uniform response strucute

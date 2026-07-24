@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
+import { CommonFile, CommonFileSchema } from 'src/schemas/common/file.schema';
 
 @Schema()
 export class GSDPEligibility {
@@ -23,18 +24,43 @@ export class DulyElected {
 
 export const DulyElectedSchema = SchemaFactory.createForClass(DulyElected);
 
+@Schema({ _id: false })
+export class Approval {
+  // ULBs created by ADMIN are auto-approved (service sets 'APPROVED' at create time).
+  // ULBs created by a STATE user start 'PENDING' until an ADMIN approves/rejects them.
+  @Prop({ type: String, enum: ['PENDING', 'APPROVED', 'REJECTED'], default: 'APPROVED', index: true })
+  status: 'PENDING' | 'APPROVED' | 'REJECTED';
+
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  submittedBy: Types.ObjectId | null;
+
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  reviewedBy: Types.ObjectId | null;
+
+  @Prop({ type: Date, default: null })
+  reviewedAt: Date | null;
+
+  @Prop({ default: '' })
+  rejectReason: string;
+}
+
+export const ApprovalSchema = SchemaFactory.createForClass(Approval);
+
 @Schema({ timestamps: { createdAt: 'createdAt', updatedAt: 'modifiedAt' } })
 export class Ulb {
   @Prop({ required: true, unique: true, index: true })
   code: string;
 
-  @Prop({ required: true })
+  @Prop({ required: true, unique: true, index: true })
   name: string;
 
   @Prop({ unique: true, index: true })
   slug: string;
 
-  @Prop({ default: null })
+  // No `default: null` — a sparse unique index only excludes documents where the
+  // field is entirely absent; an explicit `null` still counts as a value and would
+  // collide across every ULB missing a census code.
+  @Prop({ unique: true, sparse: true, index: true })
   censusCode: string;
 
   @Prop({ default: null })
@@ -136,6 +162,20 @@ export class Ulb {
   @Prop({ default: '' })
   regionalName: string;
 
+  // ── Constitution & legal basis ─────────────────────────────────────────────
+  @Prop({ type: Date, default: null })
+  dateOfConstitution: Date | null;
+
+  @Prop({ default: '' })
+  gazetteNotificationNumber: string;
+
+  @Prop({ type: CommonFileSchema, default: null })
+  gazetteNotificationFile: CommonFile | null;
+
+  // ── Approval workflow ──────────────────────────────────────────────────────
+  @Prop({ type: ApprovalSchema, default: () => ({}) })
+  approval: Approval;
+
   @Prop({
     type: {
       '2023-24': GSDPEligibilitySchema,
@@ -164,3 +204,6 @@ export const UlbSchema = SchemaFactory.createForClass(Ulb);
 // Non-unique indexes
 UlbSchema.index({ censusCode: 1 });
 UlbSchema.index({ sbCode: 1 });
+
+UlbSchema.index({ state: 1, isActive: 1 });
+UlbSchema.index({ state: 1, 'approval.status': 1 });

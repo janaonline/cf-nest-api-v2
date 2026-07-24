@@ -1,3 +1,4 @@
+/* eslint-disable prettier/prettier */
 export enum Role {
   ADMIN = 'ADMIN',
   MoHUA = 'MoHUA',
@@ -9,6 +10,12 @@ export enum Role {
   STATE_DASHBOARD = 'STATE_DASHBOARD',
   AFS_ADMIN = 'AFS_ADMIN',
   XVIFC = 'XVIFC',
+  PMU = 'PMU',
+  AAINA = 'AAINA',
+  ULB_EDITOR = 'ULB-EDITOR',
+  ULB_VIEWER = 'ULB-VIEWER',
+  STATE_EDITOR = 'STATE-EDITOR',
+  STATE_VIEWER = 'STATE-VIEWER',
 }
 
 type UserRole =

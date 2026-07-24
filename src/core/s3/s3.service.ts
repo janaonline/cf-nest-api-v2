@@ -4,6 +4,7 @@ import {
   S3Client,
   GetObjectCommand,
   HeadObjectCommand,
+  HeadObjectCommandOutput,
   GetObjectCommandOutput,
   PutObjectCommand,
   CopyObjectCommand,
@@ -25,11 +26,15 @@ export class S3Service {
     this.region = cfg.get<string>('AWS_REGION', 'ap-south-1');
     this.bucket = cfg.get<string>('AWS_BUCKET_NAME', '');
     this.presign = Number(cfg.get<string>('PRESIGN_EXPIRES', '604800')); // 7 days
-    this.client = new S3Client({ region: this.region });
+    this.client = new S3Client({
+      region: this.region,
+      requestChecksumCalculation: 'WHEN_REQUIRED',
+      responseChecksumValidation: 'WHEN_REQUIRED',
+    });
   }
 
-  async headObject(Key: string) {
-    await this.client.send(new HeadObjectCommand({ Bucket: this.bucket, Key }));
+  async headObject(Key: string): Promise<HeadObjectCommandOutput> {
+    return this.client.send(new HeadObjectCommand({ Bucket: this.bucket, Key }));
   }
 
   async getObjectStream(Key: string): Promise<Readable> {
@@ -62,6 +67,18 @@ export class S3Service {
 
   async presignGet(Key: string) {
     return getSignedUrl(this.client, new GetObjectCommand({ Bucket: this.bucket, Key }), { expiresIn: this.presign });
+  }
+
+  async uploadPrivate(Key: string, Body: Buffer | string, ContentType = 'application/pdf'): Promise<string> {
+    await this.client.send(
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key,
+        Body,
+        ContentType,
+      }),
+    );
+    return Key;
   }
 
   // Permanent public upload
