@@ -33,7 +33,7 @@ const mockUlbModel = { exists: jest.fn() };
 const mockAuditLogService = {
   logClientCreated: jest.fn().mockResolvedValue(undefined),
   logClientUpdated: jest.fn().mockResolvedValue(undefined),
-  logSecretRotated: jest.fn().mockResolvedValue(undefined),
+  logSecretRotated: jest.fn(),
   logStatusUpdated: jest.fn().mockResolvedValue(undefined),
   logTokenCreated: jest.fn(),
   logTokenFailed: jest.fn(),
@@ -456,7 +456,7 @@ describe('ApiClientService', () => {
     const snap = { _id: new Types.ObjectId(), status: 'ACTIVE' as const };
 
     beforeEach(() => {
-      mockAuditLogService.logSecretRotated.mockResolvedValue(undefined);
+      mockAuditLogService.logSecretRotated.mockReset();
       model.findOne.mockReturnValue({ select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(snap) }) });
       model.updateOne.mockReturnValue({ exec: jest.fn().mockResolvedValue({}) });
     });
@@ -498,6 +498,11 @@ describe('ApiClientService', () => {
       expect(arg).not.toHaveProperty('clientSecret');
       expect(arg).not.toHaveProperty('secretHash');
       expect(arg['reason']).toBe('scheduled');
+    });
+    it('resolves with the new clientSecret even if the audit log call never settles (fire-and-forget)', async () => {
+      mockAuditLogService.logSecretRotated.mockReturnValue(new Promise(() => {}));
+      const result = await service.rotateSecret('cf_state_abc');
+      expect(result.clientSecret.length).toBeGreaterThanOrEqual(64);
     });
   });
 

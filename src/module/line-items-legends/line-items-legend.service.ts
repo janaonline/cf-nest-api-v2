@@ -445,11 +445,12 @@ export class LineItemsLegendService {
 
     const errors: string[] = [];
 
-    // Normal codes already in this batch (non-computed)
+    // Normal, active codes already in this batch (non-computed)
     const batchNormalCodes = new Set<string>();
     for (const item of items) {
       const code = item['nmamCode'];
-      if (typeof code === 'string' && !code.startsWith('computed.')) {
+      const isActive = item['isActive'] === false ? false : true;
+      if (typeof code === 'string' && !code.startsWith('computed.') && isActive) {
         batchNormalCodes.add(code);
       }
     }

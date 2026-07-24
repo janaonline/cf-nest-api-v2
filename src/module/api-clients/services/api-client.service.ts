@@ -361,7 +361,7 @@ export class ApiClientService {
       )
       .exec();
 
-    await this.auditLogService.logSecretRotated({
+    this.auditLogService.logSecretRotated({
       apiClientId: existing._id,
       clientId,
       performedBy: adminObjId,
