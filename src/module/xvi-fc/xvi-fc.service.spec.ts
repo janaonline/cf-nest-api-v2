@@ -39,6 +39,7 @@ describe('XviFcService', () => {
   let mockDisclosureModel: { findOne: jest.Mock };
   let mockBankAccountModel: { findOne: jest.Mock };
   let mockCacheService: { deleteByPattern: jest.Mock };
+  let mockFormJsonService: { clearCache: jest.Mock };
 
   function q<T>(value: T) {
     return {
@@ -61,7 +62,8 @@ describe('XviFcService', () => {
     mockAnnualAccountModel = { findOne: jest.fn().mockReturnValue(q(null)) };
     mockDisclosureModel = { findOne: jest.fn().mockReturnValue(q(null)) };
     mockBankAccountModel = { findOne: jest.fn().mockReturnValue(q(null)) };
-    mockCacheService = { deleteByPattern: jest.fn() };
+    mockCacheService = { deleteByPattern: jest.fn().mockResolvedValue(0) };
+    mockFormJsonService = { clearCache: jest.fn().mockResolvedValue(0) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -78,7 +80,7 @@ describe('XviFcService', () => {
         { provide: getModelToken(XviFcUnspentBalanceDisclosure.name), useValue: mockDisclosureModel },
         { provide: getModelToken(XviFcBankAccount.name), useValue: mockBankAccountModel },
         { provide: XviFcCacheService, useValue: mockCacheService },
-        { provide: FormJsonService, useValue: { clearCache: jest.fn() } },
+        { provide: FormJsonService, useValue: mockFormJsonService },
       ],
     }).compile();
 
@@ -264,6 +266,49 @@ describe('XviFcService', () => {
       const [calledPattern] = mockCacheService.deleteByPattern.mock.calls[0] as [string];
       const realKey = `${XVIFC_CACHE_KEY_PREFIX}:/api/v2/xvi-fc/sidebar/STATE?yearId=abc`;
       expect(new RegExp(`^${calledPattern.replace(/\*/g, '.*')}$`).test(realKey)).toBe(true);
+    });
+
+    it('reports how many entries were actually cleared', async () => {
+      mockCacheService.deleteByPattern.mockResolvedValue(3);
+      const result = await service.clearPageCache(adminUser, 'sidebar');
+      expect(result.message).toContain('Cleared 3');
+    });
+
+    it('says nothing was cleared when the pattern matches no cached entries', async () => {
+      mockCacheService.deleteByPattern.mockResolvedValue(0);
+      const result = await service.clearPageCache(adminUser, 'nonexistent');
+      expect(result.message).toContain('nothing was cleared');
+    });
+  });
+
+  describe('clearFormJsonCache', () => {
+    const adminUser: AuthUser = { ...mockUser, scope: Scope.ADMIN };
+    const designYearId = new Types.ObjectId().toHexString();
+
+    it('rejects non-admin users', async () => {
+      await expect(service.clearFormJsonCache({ ...mockUser, scope: Scope.STATE })).rejects.toThrow();
+    });
+
+    it('clears everything when both designYearId and formId are omitted', async () => {
+      await service.clearFormJsonCache(adminUser);
+      expect(mockFormJsonService.clearCache).toHaveBeenCalledWith(undefined, undefined);
+    });
+
+    it('passes designYearId and formId through unchanged', async () => {
+      await service.clearFormJsonCache(adminUser, designYearId, 25);
+      expect(mockFormJsonService.clearCache).toHaveBeenCalledWith(designYearId, 25);
+    });
+
+    it('reports how many entries were actually cleared', async () => {
+      mockFormJsonService.clearCache.mockResolvedValue(2);
+      const result = await service.clearFormJsonCache(adminUser, designYearId, 25);
+      expect(result.message).toContain('Cleared 2');
+    });
+
+    it('says nothing was cleared when nothing matched', async () => {
+      mockFormJsonService.clearCache.mockResolvedValue(0);
+      const result = await service.clearFormJsonCache(adminUser, designYearId, 25);
+      expect(result.message).toContain('nothing was cleared');
     });
   });
 
