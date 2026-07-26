@@ -119,6 +119,38 @@ const mockRowTypedFields: EulbTypedFieldConfig[] = [
     fieldTypes: ['EULB_ROW_EDIT_FIELDS'],
     validations: [{ name: 'maxlength', validator: 250, message: 'Remarks must not exceed 250 characters.' }],
   },
+  {
+    key: 'electedBodyStatus',
+    label: 'Elected Body Status',
+    formFieldType: 'select',
+    fieldTypes: ['EULB_ROW_EDIT_FIELDS'],
+    options: [
+      { id: 'Constituted', label: 'Constituted' },
+      { id: 'Not Constituted', label: 'Not Constituted' },
+      { id: 'Exempt', label: 'Exempt' },
+    ],
+    validations: [{ name: 'required', validator: null, message: 'Elected Body Status is required.' }],
+  },
+  {
+    key: 'censusCode',
+    label: 'Census Code',
+    formFieldType: 'text',
+    fieldTypes: ['EULB_EXTRA_ULB_PORTAL_FIELDS'],
+    validations: [
+      { name: 'required', validator: null, message: 'Census code is required.' },
+      { name: 'maxlength', validator: 10, message: 'Census code must not exceed 10 characters.' },
+    ],
+  },
+  {
+    key: 'ulbName',
+    label: 'ULB Name',
+    formFieldType: 'text',
+    fieldTypes: ['EULB_EXTRA_ULB_PORTAL_FIELDS'],
+    validations: [
+      { name: 'required', validator: null, message: 'ULB name is required.' },
+      { name: 'maxlength', validator: 250, message: 'ULB name must not exceed 250 characters.' },
+    ],
+  },
 ];
 
 const mockEulbFormJsonConfigService = {
@@ -271,9 +303,7 @@ describe('ElectedUrbanLocalBodiesRowService', () => {
     });
 
     it('updates censusCode and ulbName in updateFields for EXTRA_ULB rows', async () => {
-      rowModel['findOne'] = jest.fn()
-        .mockReturnValueOnce(q(mockRow))
-        .mockReturnValueOnce(q(null));
+      rowModel['findOne'] = jest.fn().mockReturnValueOnce(q(mockRow)).mockReturnValueOnce(q(null));
 
       await service.updateRow(
         stateOid.toString(),
@@ -282,7 +312,7 @@ describe('ElectedUrbanLocalBodiesRowService', () => {
         { censusCode: 'NEW_CODE', ulbName: 'New City' },
         adminUser,
       );
-      const setArg = (rowModel['findByIdAndUpdate'] as jest.Mock).mock.calls[0][1].$set as Record<string, unknown>;
+      const setArg = rowModel['findByIdAndUpdate'].mock.calls[0][1].$set as Record<string, unknown>;
       expect(setArg['censusCode']).toBe('NEW_CODE');
       expect(setArg['ulbName']).toBe('New City');
     });
@@ -299,7 +329,7 @@ describe('ElectedUrbanLocalBodiesRowService', () => {
         { censusCode: 'IGNORED', ulbName: 'Ignored Name', electedBodyStatus: 'Not Constituted' },
         adminUser,
       );
-      const setArg = (rowModel['findByIdAndUpdate'] as jest.Mock).mock.calls[0][1].$set as Record<string, unknown>;
+      const setArg = rowModel['findByIdAndUpdate'].mock.calls[0][1].$set as Record<string, unknown>;
       expect(setArg).not.toHaveProperty('censusCode');
       expect(setArg).not.toHaveProperty('ulbName');
     });
@@ -327,13 +357,17 @@ describe('ElectedUrbanLocalBodiesRowService', () => {
 
     it('rejects a censusCode update that duplicates an existing active row in the same design year', async () => {
       const existingDuplicate = { ...mockRow, _id: new Types.ObjectId(), censusCode: 'DUP_CODE' };
-      rowModel['findOne'] = jest.fn()
-        .mockReturnValueOnce(q(mockRow))
-        .mockReturnValueOnce(q(existingDuplicate));
+      rowModel['findOne'] = jest.fn().mockReturnValueOnce(q(mockRow)).mockReturnValueOnce(q(existingDuplicate));
 
       let caught: unknown;
       try {
-        await service.updateRow(stateOid.toString(), yearOid.toString(), rowOid.toString(), { censusCode: 'DUP_CODE' }, adminUser);
+        await service.updateRow(
+          stateOid.toString(),
+          yearOid.toString(),
+          rowOid.toString(),
+          { censusCode: 'DUP_CODE' },
+          adminUser,
+        );
       } catch (e) {
         caught = e;
       }
@@ -353,19 +387,20 @@ describe('ElectedUrbanLocalBodiesRowService', () => {
           _id: { $ne: rowOid },
         }),
       );
-      const duplicateQuery = (rowModel['findOne'] as jest.Mock).mock.calls[1][0] as Record<string, unknown>;
+      const duplicateQuery = rowModel['findOne'].mock.calls[1][0] as Record<string, unknown>;
       expect(duplicateQuery).not.toHaveProperty('datasetVersion');
       expect(duplicateQuery).not.toHaveProperty('rowType');
     });
 
     it('allows updating censusCode when no other active row in the same design year matches', async () => {
-      rowModel['findOne'] = jest.fn()
-        .mockReturnValueOnce(q(mockRow))
-        .mockReturnValueOnce(q(null));
+      rowModel['findOne'] = jest.fn().mockReturnValueOnce(q(mockRow)).mockReturnValueOnce(q(null));
 
       const result = await service.updateRow(
-        stateOid.toString(), yearOid.toString(), rowOid.toString(),
-        { censusCode: mockRow.censusCode ?? 'SAME_CODE' }, adminUser,
+        stateOid.toString(),
+        yearOid.toString(),
+        rowOid.toString(),
+        { censusCode: mockRow.censusCode ?? 'SAME_CODE' },
+        adminUser,
       );
       expect(result).toMatchObject({ success: true });
       expect(rowModel['findOne']).toHaveBeenNthCalledWith(
@@ -380,9 +415,7 @@ describe('ElectedUrbanLocalBodiesRowService', () => {
     });
 
     it('trims censusCode before duplicate validation and persistence', async () => {
-      rowModel['findOne'] = jest.fn()
-        .mockReturnValueOnce(q(mockRow))
-        .mockReturnValueOnce(q(null));
+      rowModel['findOne'] = jest.fn().mockReturnValueOnce(q(mockRow)).mockReturnValueOnce(q(null));
 
       await service.updateRow(
         stateOid.toString(),
@@ -392,19 +425,14 @@ describe('ElectedUrbanLocalBodiesRowService', () => {
         adminUser,
       );
 
-      expect(rowModel['findOne']).toHaveBeenNthCalledWith(
-        2,
-        expect.objectContaining({ censusCode: 'TRIMMED_CODE' }),
-      );
-      const setArg = (rowModel['findByIdAndUpdate'] as jest.Mock).mock.calls[0][1].$set as Record<string, unknown>;
+      expect(rowModel['findOne']).toHaveBeenNthCalledWith(2, expect.objectContaining({ censusCode: 'TRIMMED_CODE' }));
+      const setArg = rowModel['findByIdAndUpdate'].mock.calls[0][1].$set as Record<string, unknown>;
       expect(setArg['censusCode']).toBe('TRIMMED_CODE');
     });
 
     it('converts a Mongo 11000 duplicate-key error to a clean censusCode validation error', async () => {
       // Duplicate check passes (no pre-existing row), but DB fires 11000 at write time.
-      rowModel['findOne'] = jest.fn()
-        .mockReturnValueOnce(q(mockRow))
-        .mockReturnValueOnce(q(null));
+      rowModel['findOne'] = jest.fn().mockReturnValueOnce(q(mockRow)).mockReturnValueOnce(q(null));
       rowModel['findByIdAndUpdate'] = jest.fn().mockReturnValue({
         lean: () => ({
           exec: () => Promise.reject(Object.assign(new Error('E11000'), { code: 11000 })),
@@ -413,7 +441,13 @@ describe('ElectedUrbanLocalBodiesRowService', () => {
 
       let caught: unknown;
       try {
-        await service.updateRow(stateOid.toString(), yearOid.toString(), rowOid.toString(), { censusCode: 'RACE_CODE' }, adminUser);
+        await service.updateRow(
+          stateOid.toString(),
+          yearOid.toString(),
+          rowOid.toString(),
+          { censusCode: 'RACE_CODE' },
+          adminUser,
+        );
       } catch (e) {
         caught = e;
       }

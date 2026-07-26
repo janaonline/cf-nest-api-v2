@@ -96,6 +96,7 @@ export function buildSafeBankAccountResponse(record: BankAccountRecordLike): Xvi
   return {
     _id: toResponseString(source._id),
     ulb: toResponseString(source.ulb),
+    state: toResponseString(source.state),
     designYear: toResponseString(source.designYear),
     ifscCode: (source.ifscCode as string | undefined) ?? '',
     bankDetails: normalizeBankDetails(source.bankDetails),
@@ -103,7 +104,10 @@ export function buildSafeBankAccountResponse(record: BankAccountRecordLike): Xvi
     accountNumberLast4: (source.accountNumberLast4 as string | undefined) ?? '',
     proofFile,
     currentFormStatus,
-    currentFormStatusLabel: getFormStatusLabel(currentFormStatus),
+    // Existing records predating this field won't have it stored — fall back to computing it.
+    currentFormStatusLabel: (source.currentFormStatusLabel as string | undefined) ?? getFormStatusLabel(currentFormStatus),
+    stateDecision: (source.stateDecision as XviFcBankAccountResponse['stateDecision']) ?? null,
+    mohuaDecision: (source.mohuaDecision as XviFcBankAccountResponse['mohuaDecision']) ?? null,
     submittedBy: toOptionalResponseString(source.submittedBy),
     submittedAt: toOptionalDateString(source.submittedAt),
     createdAt: toOptionalDateString(source.createdAt),

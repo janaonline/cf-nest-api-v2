@@ -13,17 +13,20 @@ import type { EulbTypedFieldConfig } from 'src/module/xvi-fc/state/elected-urban
 import { ElectedUrbanLocalBodiesForm } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
 import { ElectedUrbanLocalBodiesRow } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
-import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
+import { Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import {
   POST_SUBMISSION_UPDATE_ALLOWED_STATUSES,
   canViewPostSubmissionUpdate,
 } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
 import type {
-  EulbPostSubmissionUpdateDocumentDto,
   SubmitEulbPostSubmissionUpdateDto,
   SubmitEulbPostSubmissionUpdateRowDto,
 } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/submit-eulb-post-submission-update.dto';
+import { XviFcFileRefDto } from 'src/module/xvi-fc/common/dto/xvi-fc-file-ref.dto';
+import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
+import { FileUrlNormalizerService } from 'src/module/xvi-fc/common/services/file-url-normalizer.service';
+import { FileTokenService } from 'src/core/file-token/file-token.service';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -59,6 +62,19 @@ const stateUser = (state: Types.ObjectId): AuthUser =>
     _id: userOid.toString(),
     scope: Scope.STATE,
     state,
+  }) as unknown as AuthUser;
+
+// Fixtures with `role` explicitly set so `getEffectivePermissions` resolves a real subrole
+// permission set (the plain `stateUser`/`adminUser` fixtures above omit `role`, so they
+// resolve to no permissions at all under `getEffectivePermissions` — fine for tests that only
+// exercise `hasStateAccess`, but not for asserting on `permissions.canView`/`canSubmitUpdate`).
+const stateUserWithSubrole = (state: Types.ObjectId, xviFcSubrole: 'admin' | 'reviewer' | 'viewer'): AuthUser =>
+  ({
+    _id: userOid.toString(),
+    role: UserRole.STATE,
+    scope: Scope.STATE,
+    state,
+    xviFcSubrole,
   }) as unknown as AuthUser;
 
 function makeForm(status: number) {
@@ -309,6 +325,47 @@ const mockPostSubmitTypedFields: EulbTypedFieldConfig[] = [
     fieldTypes: ['EULB_ROW_EDIT_FIELDS', 'EULB_POST_SUBMIT_UPDATE_FIELDS'],
     validations: [{ name: 'maxlength', validator: 250, message: 'Remarks must not exceed 250 characters.' }],
   },
+  {
+    key: 'electedBodyStatus',
+    label: 'Elected Body Status',
+    formFieldType: 'select',
+    fieldTypes: ['EULB_ROW_EDIT_FIELDS'],
+    options: [
+      { id: 'Constituted', label: 'Constituted' },
+      { id: 'Not Constituted', label: 'Not Constituted' },
+      { id: 'Exempt', label: 'Exempt' },
+    ],
+    validations: [{ name: 'required', validator: null, message: 'Elected Body Status is required.' }],
+  },
+  {
+    key: 'censusCode',
+    label: 'Census Code',
+    formFieldType: 'text',
+    fieldTypes: ['EULB_EXTRA_ULB_PORTAL_FIELDS'],
+    validations: [
+      { name: 'required', validator: null, message: 'Census code is required.' },
+      { name: 'maxlength', validator: 10, message: 'Census code must not exceed 10 characters.' },
+    ],
+  },
+  {
+    key: 'ulbName',
+    label: 'ULB Name',
+    formFieldType: 'text',
+    fieldTypes: ['EULB_EXTRA_ULB_PORTAL_FIELDS'],
+    validations: [
+      { name: 'required', validator: null, message: 'ULB name is required.' },
+      { name: 'maxlength', validator: 250, message: 'ULB name must not exceed 250 characters.' },
+    ],
+  },
+  {
+    key: 'proofOfElection',
+    label: 'Proof of Election',
+    formFieldType: 'file',
+    fieldTypes: ['EULB_POST_SUBMIT_UPDATE_FIELDS'],
+    allowedFileTypes: ['pdf'],
+    maxFileSize: 20,
+    validations: [{ name: 'required', validator: null, message: 'This field is required.' }],
+  },
 ];
 
 const mockEulbFormJsonConfigService = {
@@ -364,6 +421,9 @@ describe('EulbPostSubmissionUpdateService', () => {
         { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: formModel },
         { provide: getModelToken(ElectedUrbanLocalBodiesRow.name), useValue: rowModel },
         { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
+        FileInfoNormalizerService,
+        { provide: FileUrlNormalizerService, useValue: { toRawStoragePath: jest.fn((v: string) => v) } },
+        { provide: FileTokenService, useValue: { signFileUrl: jest.fn((p: string) => `signed::${p}`) } },
       ],
     }).compile();
 
@@ -453,6 +513,39 @@ describe('EulbPostSubmissionUpdateService', () => {
       await expect(service.getMetadata(stateOid.toString(), yearOid.toString(), wrongStateUser)).rejects.toThrow(
         ForbiddenException,
       );
+    });
+
+    it('returns canSubmitUpdate:false for a view-only state subrole even though canView is true (viewer holds VIEW_STATE_FORMS but not FINAL_SUBMIT_STATE_FORMS)', async () => {
+      formModel['findOne'] = jest.fn().mockReturnValue(q(makeForm(FORM_STATUS.UNDER_REVIEW_BY_MOHUA)));
+      const result = await service.getMetadata(
+        stateOid.toString(),
+        yearOid.toString(),
+        stateUserWithSubrole(stateOid, 'viewer'),
+      );
+      expect(result.data!.permissions.canView).toBe(true);
+      expect(result.data!.permissions.canSubmitUpdate).toBe(false);
+    });
+
+    it('returns canSubmitUpdate:true for a state admin subrole (holds FINAL_SUBMIT_STATE_FORMS)', async () => {
+      formModel['findOne'] = jest.fn().mockReturnValue(q(makeForm(FORM_STATUS.UNDER_REVIEW_BY_MOHUA)));
+      const result = await service.getMetadata(
+        stateOid.toString(),
+        yearOid.toString(),
+        stateUserWithSubrole(stateOid, 'admin'),
+      );
+      expect(result.data!.permissions.canView).toBe(true);
+      expect(result.data!.permissions.canSubmitUpdate).toBe(true);
+    });
+
+    it('returns canSubmitUpdate:false for a reviewer subrole (holds EDIT_STATE_FORMS but not FINAL_SUBMIT_STATE_FORMS)', async () => {
+      formModel['findOne'] = jest.fn().mockReturnValue(q(makeForm(FORM_STATUS.UNDER_REVIEW_BY_MOHUA)));
+      const result = await service.getMetadata(
+        stateOid.toString(),
+        yearOid.toString(),
+        stateUserWithSubrole(stateOid, 'reviewer'),
+      );
+      expect(result.data!.permissions.canView).toBe(true);
+      expect(result.data!.permissions.canSubmitUpdate).toBe(false);
     });
   });
 
@@ -1210,19 +1303,20 @@ describe('EulbPostSubmissionUpdateService', () => {
     }
 
     const validDocument = {
-      fileName: 'combined.pdf',
-      fileUrl: 'https://bucket.s3.example.com/combined.pdf',
-      fileSize: 1024,
+      originalName: 'combined.pdf',
+      path: 'https://bucket.s3.example.com/combined.pdf',
+      sizeKb: 1,
       mimeType: 'application/pdf',
+      createdAt: '2026-01-01T00:00:00.000Z',
     };
 
     function makeDto(
-      docOverride: Partial<EulbPostSubmissionUpdateDocumentDto> = {},
+      docOverride: Partial<XviFcFileRefDto> = {},
       rowsOverride?: SubmitEulbPostSubmissionUpdateRowDto[],
     ): SubmitEulbPostSubmissionUpdateDto {
       return {
         rows: rowsOverride ?? [{ rowId: rowOid.toString(), electedBodyStatus: 'Not Constituted' }],
-        document: { ...validDocument, ...docOverride },
+        document: { ...validDocument, ...docOverride } as XviFcFileRefDto,
       };
     }
 
@@ -1238,12 +1332,14 @@ describe('EulbPostSubmissionUpdateService', () => {
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('throws BadRequestException when mimeType is omitted and fileName does not end in .pdf', async () => {
+    // Canonical contract requires mimeType always (no more filename-extension fallback for a
+    // missing mimeType) — omitting it now fails on the required-field check instead.
+    it('throws BadRequestException when mimeType is omitted', async () => {
       await expect(
         service.submitBatch(
           stateOid.toString(),
           yearOid.toString(),
-          makeDto({ fileName: 'report.docx', mimeType: undefined }),
+          makeDto({ originalName: 'report.docx', mimeType: undefined }),
           adminUser,
         ),
       ).rejects.toThrow(BadRequestException);
@@ -1254,42 +1350,29 @@ describe('EulbPostSubmissionUpdateService', () => {
       expect(result.success).toBe(true);
     });
 
-    it('accepts PDF by fileName extension when mimeType is omitted', async () => {
-      const result = await service.submitBatch(
-        stateOid.toString(),
-        yearOid.toString(),
-        makeDto({ fileName: 'report.pdf', mimeType: undefined }),
-        adminUser,
-      );
-      expect(result.success).toBe(true);
-    });
-
-    it('throws BadRequestException when fileSize exceeds 20 MB', async () => {
+    it('throws BadRequestException when sizeKb exceeds 20 MB', async () => {
       await expect(
-        service.submitBatch(
-          stateOid.toString(),
-          yearOid.toString(),
-          makeDto({ fileSize: 21 * 1024 * 1024 }),
-          adminUser,
-        ),
+        service.submitBatch(stateOid.toString(), yearOid.toString(), makeDto({ sizeKb: 21 * 1024 }), adminUser),
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('throws BadRequestException when fileSize is zero', async () => {
+    // Canonical contract allows sizeKb: 0 (non-negative) — the old ">0" business rule is
+    // superseded; a negative size is what is now rejected.
+    it('throws BadRequestException when sizeKb is negative', async () => {
       await expect(
-        service.submitBatch(stateOid.toString(), yearOid.toString(), makeDto({ fileSize: 0 }), adminUser),
+        service.submitBatch(stateOid.toString(), yearOid.toString(), makeDto({ sizeKb: -1 }), adminUser),
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('throws BadRequestException when fileName is empty', async () => {
+    it('throws BadRequestException when originalName is empty', async () => {
       await expect(
-        service.submitBatch(stateOid.toString(), yearOid.toString(), makeDto({ fileName: '  ' }), adminUser),
+        service.submitBatch(stateOid.toString(), yearOid.toString(), makeDto({ originalName: '  ' }), adminUser),
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('throws BadRequestException when fileUrl is empty', async () => {
+    it('throws BadRequestException when path is empty', async () => {
       await expect(
-        service.submitBatch(stateOid.toString(), yearOid.toString(), makeDto({ fileUrl: '' }), adminUser),
+        service.submitBatch(stateOid.toString(), yearOid.toString(), makeDto({ path: '' }), adminUser),
       ).rejects.toThrow(BadRequestException);
     });
 
@@ -1387,38 +1470,32 @@ describe('EulbPostSubmissionUpdateService', () => {
         batchId: expect.any(String),
         updatedRowCount: 1,
         document: expect.objectContaining({
-          fileName: 'combined.pdf',
-          fileUrl: 'https://bucket.s3.example.com/combined.pdf',
+          originalName: 'combined.pdf',
           mimeType: 'application/pdf',
         }),
         validationSummary: expect.objectContaining({ validationStatus: expect.any(String) }),
       });
     });
 
-    it('document.fileUrl in response matches dto.document.fileUrl exactly without presigned regeneration', async () => {
-      const customUrl = 'https://custom.cdn.example.com/upload/batch.pdf';
+    // The persisted DB path is the client's normalized raw path verbatim; the RESPONSE path is
+    // always signed (never the raw path) per the canonical GET/response contract.
+    it('persists the normalized raw path but signs document.path in the response', async () => {
+      const customPath = 'https://custom.cdn.example.com/upload/batch.pdf';
       const result = await service.submitBatch(
         stateOid.toString(),
         yearOid.toString(),
-        makeDto({ fileUrl: customUrl }),
-        adminUser,
-      );
-      expect(result.data!.document.fileUrl).toBe(customUrl);
-    });
-
-    it('defaults document.mimeType to application/pdf in stored batch when omitted', async () => {
-      await service.submitBatch(
-        stateOid.toString(),
-        yearOid.toString(),
-        makeDto({ fileName: 'report.pdf', mimeType: undefined }),
+        makeDto({ path: customPath }),
         adminUser,
       );
 
       const updateCall = (formModel['findByIdAndUpdate'] as jest.Mock).mock.calls[0];
       const push = (updateCall[1] as Record<string, unknown>)['$push'] as Record<string, unknown>;
       const batch = push['postSubmissionUpdates'] as Record<string, unknown>;
-      const doc = batch['document'] as Record<string, unknown>;
-      expect(doc['mimeType']).toBe('application/pdf');
+      const storedDoc = batch['document'] as Record<string, unknown>;
+      expect(storedDoc['path']).toBe(customPath);
+
+      expect(result.data!.document.path).not.toBe(customPath);
+      expect(result.data!.document.path).toContain('signed::');
     });
 
     it('stores document.pageCount in the batch when the frontend sends a PDF page count', async () => {
@@ -1479,8 +1556,8 @@ describe('EulbPostSubmissionUpdateService', () => {
       expect(batch['status']).toBe('APPLIED');
       expect(batch['rowIds']).toHaveLength(1);
       const doc = batch['document'] as Record<string, unknown>;
-      expect(doc['fileName']).toBe('combined.pdf');
-      expect(doc['fileUrl']).toBe('https://bucket.s3.example.com/combined.pdf');
+      expect(doc['originalName']).toBe('combined.pdf');
+      expect(doc['path']).toBe('https://bucket.s3.example.com/combined.pdf');
     });
 
     it('does not store document reference on row updates (only batchId reference)', async () => {

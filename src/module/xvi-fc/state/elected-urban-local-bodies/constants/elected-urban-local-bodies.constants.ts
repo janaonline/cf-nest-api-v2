@@ -9,9 +9,6 @@ export type EulbFormJsonFieldType =
   | 'EULB_EXTRA_ULB_PORTAL_FIELDS'
   | 'EULB_POST_SUBMIT_UPDATE_FIELDS';
 
-export const ELECTED_BODY_STATUSES = ['Constituted', 'Not Constituted', 'Exempt'] as const;
-export type ElectedBodyStatus = (typeof ELECTED_BODY_STATUSES)[number];
-
 export const EXCEL_HEADER_MAP: Record<string, string> = {
   censusCode: 'censusCode',
   'Census Code': 'censusCode',
@@ -56,6 +53,3 @@ export const EULB_ACTION_REGISTER_ULB = 'register-ulb';
 export function buildEulbRegisterUlbUrl(yearId: string): string {
   return `/xvifc/${yearId}/register-ulb`;
 }
-
-export const EULB_CENSUS_CODE_MAX_LENGTH = 10;
-export const EULB_ULB_NAME_MAX_LENGTH = 250;

@@ -3,7 +3,7 @@ import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/commo
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 
-import { FORM_STATUS, type FormStatusType } from 'src/common/constants/form-status.constants';
+import { FORM_STATUS, getFormStatusKey, type FormStatusType } from 'src/common/constants/form-status.constants';
 import { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { toObjectIdString } from 'src/common/utils/objectid.util';
@@ -28,7 +28,7 @@ import { SideMenuItemDto, SideMenuResponseDto } from './dto/side-menu.dto';
 import { Year, YearDocument } from '../../schemas/year.schema';
 import { Ulb, UlbDocument } from '../../schemas/ulb.schema';
 import { State, StateDocument } from '../../schemas/state.schema';
-import { XviFcSideMenu, XviFcSideMenuDocument, MenuRole } from '../../schemas/xvi-fc/xvi-fc-side-menu.schema';
+import { SideMenu, SideMenuDocument, MenuRole } from '../../schemas/side-menu.schema';
 import { XviFcCacheService, XVIFC_CACHE_KEY_PREFIX } from './cache/xvi-fc-cache.service';
 import { FormJsonService } from '../../form-json/form-json.service';
 
@@ -43,8 +43,8 @@ export class XviFcService {
     private readonly ulbModel: Model<UlbDocument>,
     @InjectModel(State.name)
     private readonly stateModel: Model<StateDocument>,
-    @InjectModel(XviFcSideMenu.name)
-    private readonly sideMenuModel: Model<XviFcSideMenuDocument>,
+    @InjectModel(SideMenu.name)
+    private readonly sideMenuModel: Model<SideMenuDocument>,
     @InjectModel(XviFcAnnualAccount.name)
     private readonly annualAccountModel: Model<XviFcAnnualAccountDocument>,
     @InjectModel(XviFcUnspentBalanceDisclosure.name)
@@ -96,7 +96,7 @@ export class XviFcService {
     return { message: `FormJson cache cleared for designYearId: ${designYearId}, formId: ${formId}` };
   }
 
-  private buildMenuTree(docs: Array<XviFcSideMenu & { _id: Types.ObjectId }>): SideMenuResponseDto {
+  private buildMenuTree(docs: Array<SideMenu & { _id: Types.ObjectId }>): SideMenuResponseDto {
     return {
       topModel: this.buildSection(docs, 'top'),
       bottomModel: this.buildSection(docs, 'bottom'),
@@ -104,11 +104,11 @@ export class XviFcService {
   }
 
   private buildSection(
-    docs: Array<XviFcSideMenu & { _id: Types.ObjectId }>,
+    docs: Array<SideMenu & { _id: Types.ObjectId }>,
     section: 'top' | 'bottom',
   ): SideMenuItemDto[] {
     const sectionDocs = docs.filter((d) => d.section === section);
-    const topLevel = sectionDocs.filter((d) => !d.parentId).sort((a, b) => a.sequence - b.sequence);
+    const topLevel = sectionDocs.filter((d) => !d.parentId).sort((a, b) => a.sequence! - b.sequence!);
     const children = sectionDocs.filter((d) => d.parentId);
 
     return topLevel.map((doc) => {
@@ -116,7 +116,7 @@ export class XviFcService {
         return { label: '_', separator: true };
       }
 
-      const item: SideMenuItemDto = { label: doc.label };
+      const item: SideMenuItemDto = { label: doc.name };
       if (doc.icon) item.icon = doc.icon;
       if (doc.routerLink?.length) item.routerLink = doc.routerLink;
       if (doc.featureKey) item.featureKey = doc.featureKey;
@@ -124,9 +124,9 @@ export class XviFcService {
       if (doc.type === 'group') {
         item.items = children
           .filter((c) => c.parentId!.toString() === doc._id.toString())
-          .sort((a, b) => a.sequence - b.sequence)
+          .sort((a, b) => a.sequence! - b.sequence!)
           .map((c) => {
-            const child: SideMenuItemDto = { label: c.label };
+            const child: SideMenuItemDto = { label: c.name };
             if (c.icon) child.icon = c.icon;
             if (c.featureKey) child.featureKey = c.featureKey;
             return child;
@@ -146,16 +146,16 @@ export class XviFcService {
     return results.map((r) => ({ _id: r._id.toString(), year: r.year }));
   }
 
-  async getUlbById(ulbId: string): Promise<{ ulbName: string; stateName: string }> {
+  async getUlbById(ulbId: string): Promise<{ ulbName: string; stateId: string; stateName: string }> {
     const ulb = await this.ulbModel
       .findById(ulbId)
       .select('name state')
-      .populate<{ state: { name: string } }>('state', 'name')
+      .populate<{ state: { _id: Types.ObjectId; name: string } }>('state', 'name')
       .lean()
       .exec();
 
     if (!ulb) throw new NotFoundException('ULB not found');
-    return { ulbName: ulb.name, stateName: ulb.state?.name ?? '' };
+    return { ulbName: ulb.name, stateId: ulb.state?._id?.toString() ?? '', stateName: ulb.state?.name ?? '' };
   }
 
   async getStateById(stateId: string): Promise<{ stateName: string }> {
@@ -203,8 +203,8 @@ export class XviFcService {
         form_status_id: null,
       },
       xviFcBankAccount: {
-        form_status: bankAccountStatus,
-        form_status_id: null,
+        form_status: getFormStatusKey(bankAccountStatus),
+        form_status_id: bankAccountStatus,
       },
     };
   }

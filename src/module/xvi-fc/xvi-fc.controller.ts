@@ -5,7 +5,7 @@ import { XviFcService } from './xvi-fc.service';
 import { StateWiseResponseDto } from './dto/state-wise-response.dto';
 import { SideMenuResponseDto } from './dto/side-menu.dto';
 import { ParseObjectIdPipe } from '../../common/pipes/parse-object-id.pipe';
-import type { MenuRole } from '../../schemas/xvi-fc/xvi-fc-side-menu.schema';
+import type { MenuRole } from '../../schemas/side-menu.schema';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger/dist/decorators';
 import { RequirePermissions } from 'src/module/auth/require-permissions.decorator';
 import { PermissionGuard } from 'src/module/auth/permission.guard';
@@ -85,15 +85,16 @@ export class XviFcController {
 
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Clear XVI-FC page cache (Admin only)' })
-  @ApiQuery({ name: 'pattern', required: false, description: 'Redis key pattern, e.g. /xvi-fc/sidebar/*. Omit to clear all XVI-FC cache.' })
+  @ApiQuery({
+    name: 'pattern',
+    required: false,
+    description: 'Redis key pattern, e.g. /xvi-fc/sidebar/*. Omit to clear all XVI-FC cache.',
+  })
   @ApiResponse({ status: 200, description: 'Cache cleared successfully' })
   @ApiResponse({ status: 403, description: 'Forbidden — admin scope required' })
   @Delete('admin/cache')
   @UseGuards(PermissionGuard)
-  clearPageCache(
-    @CurrentUser() user: AuthUser,
-    @Query('pattern') pattern?: string,
-  ): Promise<{ message: string }> {
+  clearPageCache(@CurrentUser() user: AuthUser, @Query('pattern') pattern?: string): Promise<{ message: string }> {
     return this.xviFcService.clearPageCache(user, pattern);
   }
 

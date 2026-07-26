@@ -4,7 +4,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import * as bcrypt from 'bcrypt';
 import { randomBytes } from 'crypto';
 import { MongoServerError } from 'mongodb';
-import { FilterQuery, Model, Types } from 'mongoose';
+import mongoose, { FilterQuery, Model, Types } from 'mongoose';
 import type { IAuthUser } from 'src/common/interfaces/auth-user.interface';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { EmailQueueService } from 'src/core/queue/email-queue/email-queue.service';
@@ -12,8 +12,9 @@ import { Role } from 'src/module/auth/enum/role.enum';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
 import type { XviFcValidationErrorMap } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import type { FieldConfig, SectionLayout } from 'src/module/xvi-fc/common/types/field-config.type';
+import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
 import { FormJsonService } from 'src/form-json/form-json.service';
-import type { CommonFile } from 'src/schemas/common/file.schema';
+import type { CommonFile, FileInfo } from 'src/schemas/common/file.schema';
 import { State, StateDocument } from 'src/schemas/state.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { User, UserDocument } from 'src/schemas/user/user.schema';
@@ -48,6 +49,7 @@ export class UlbService {
     private readonly emailQueueService: EmailQueueService,
     private readonly configService: ConfigService,
     private readonly fileTokenService: FileTokenService,
+    private readonly fileInfoNormalizer: FileInfoNormalizerService,
   ) {}
 
   /** Loads the admin-configurable ULB field definition, falling back to the built-in defaults. */
@@ -143,7 +145,7 @@ export class UlbService {
   /**
    * Fully resolved section/field config for the ADMIN-only Edit ULB dialog — same merge as
    * `getRegisterSections()`, but against the edit layout, which covers every ULB field (including
-   * `code` and a live `state` select) rather than just the Register page's subset.
+   * `code`) rather than just the Register page's subset.
    */
   async getEditSections(): Promise<SectionLayout[]> {
     const [fieldsByKey, layout] = await Promise.all([this.buildResolvedFieldsByKey(), this.loadEditSectionsLayout()]);
@@ -152,6 +154,40 @@ export class UlbService {
 
   private throwValidationError(errors: XviFcValidationErrorMap): never {
     throw new BadRequestException({ message: 'Validation failed', errors });
+  }
+
+  /**
+   * Normalizes `patch.gazetteNotificationFile` in place into the canonical `FileInfo` shape
+   * (deriving `path`/`extension`/`sizeKb` and validating `mimeType` — the generic
+   * `DynamicFormValidationService.normalizeFileForPayload()` path does none of this, it
+   * just spreads whatever the client sent). Mirrors the pattern used by the SFC/Devolution
+   * Formula/EULB state-form services via `FileInfoNormalizerService`.
+   *
+   * When the field is absent from `patch` (not being changed), this is a no-op. When the
+   * normalized file is unchanged from `existing` (same stored path), the key is deleted from
+   * `patch` entirely — rather than re-included — so Mongoose's `FileInfo.timestamps` option
+   * doesn't re-stamp `createdAt`/`updatedAt` on an unrelated save.
+   */
+  private normalizeGazetteFile(patch: Record<string, unknown>, existing: FileInfo | null | undefined): void {
+    if (patch.gazetteNotificationFile === undefined) return;
+
+    const { file, errors } = this.fileInfoNormalizer.normalizeInboundFileInfo(
+      patch.gazetteNotificationFile as Record<string, unknown> | null,
+      existing,
+      {
+        fieldKey: 'gazetteNotificationFile',
+        allowedExtensions: ['pdf'],
+        allowedMimeTypes: ['application/pdf'],
+        maxSizeKb: 5 * 1024, // matches DEFAULT_ULB_FIELDS' gazetteNotificationFile maxFileSize: 5 (MB)
+      },
+    );
+    if (errors.length > 0) this.throwValidationError({ gazetteNotificationFile: errors });
+
+    if (file === undefined) {
+      delete patch.gazetteNotificationFile;
+    } else {
+      patch.gazetteNotificationFile = file;
+    }
   }
 
   /** Converts a sanitized dynamic-form payload into a typed Mongo patch (ObjectId coercion for ref fields). */
@@ -164,19 +200,65 @@ export class UlbService {
     return patch;
   }
 
-  /** Generates a `<STATE_CODE><sequence>` ULB code (e.g. "AP004"), retrying past any collisions. */
+  /**
+   * Generates a `<STATE_CODE><sequence>` ULB code (e.g. "AP004") by incrementing the highest
+   * existing `<prefix><n>` code already used within that state — not a count of documents, which
+   * would collide/reuse a number whenever a ULB in the state has a gap-causing or non-standard
+   * code (deleted record, manually assigned code, etc). Retries past any collisions.
+   */
   private async generateUlbCode(stateId: string): Promise<string> {
     const state = await this.stateModel.findById(stateId).lean<{ code?: string }>();
     const prefix = (state?.code || 'ULB').toUpperCase();
-    const existingCount = await this.ulbModel.countDocuments({ state: new Types.ObjectId(stateId) });
+    const escapedPrefix = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    // Suffix capped at 6 digits (not `\d+`): the collision-retry fallback below can persist a code
+    // suffixed with Date.now() (13 digits) when every padded candidate collides. A suffix that long
+    // isn't a real sequence number — matching it would both overflow $toInt (32-bit) and, worse,
+    // "poison" every future code for this state into inheriting a 13-digit suffix forever.
+    const [last] = await this.ulbModel.aggregate<{ num: number }>([
+      { $match: { state: new Types.ObjectId(stateId), code: { $regex: `^${escapedPrefix}\\d{1,6}$` } } },
+      { $project: { num: { $toInt: { $substrCP: ['$code', prefix.length, { $strLenCP: '$code' }] } } } },
+      { $sort: { num: -1 } },
+      { $limit: 1 },
+    ]);
+    const nextNum = (last?.num ?? 0) + 1;
 
     for (let attempt = 0; attempt < 5; attempt++) {
-      const candidate = `${prefix}${String(existingCount + 1 + attempt).padStart(3, '0')}`;
+      const candidate = `${prefix}${String(nextNum + attempt).padStart(3, '0')}`;
       const exists = await this.ulbModel.exists({ code: candidate });
       if (!exists) return candidate;
     }
 
     return `${prefix}${Date.now()}`;
+  }
+
+  /** First generated `sbCode` when no ULB has one yet — reserves the 9xxxxx range so a synthetic
+   *  sbCode can never collide with a real 6-digit 2011 census code. */
+  private static readonly SB_CODE_SEED = 900001;
+
+  /**
+   * Generates the next 6-digit `sbCode` (e.g. "900099") for a ULB registered without a 2011
+   * census code — `sbCode` is the fallback identifier used throughout xvi-fc wherever `censusCode`
+   * is blank (see e.g. `devolution-formula-excel.service.ts`). The sequence is global (not
+   * per-state) and derived from the highest existing 9xxxxx `sbCode`, so it keeps incrementing even
+   * if earlier ULBs are later given a real census code.
+   */
+  private async generateSbCode(): Promise<string> {
+    const [last] = await this.ulbModel.aggregate<{ num: number }>([
+      { $match: { sbCode: { $regex: '^9\\d{5}$' } } },
+      { $project: { num: { $toInt: '$sbCode' } } },
+      { $sort: { num: -1 } },
+      { $limit: 1 },
+    ]);
+    const nextNum = last?.num ? last.num + 1 : UlbService.SB_CODE_SEED;
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const candidate = String(nextNum + attempt);
+      const exists = await this.ulbModel.exists({ sbCode: candidate });
+      if (!exists) return candidate;
+    }
+
+    return String(Date.now()).slice(-6);
   }
 
   private buildSlug(name: string): string {
@@ -253,11 +335,14 @@ export class UlbService {
     if (primaryContact.email) await this.ensureContactNotRegistered(primaryContact.email, primaryContact.mobile);
 
     const patch = this.toMongoPatch(sanitizedPayload);
+    this.normalizeGazetteFile(patch, null); // create() never has a prior stored file to compare against
     const name = String(patch.name);
     await this.ensureNameNotTaken(name);
     patch.slug = this.buildSlug(name);
     if (typeof patch.censusCode === 'string' && patch.censusCode.trim()) {
       await this.ensureCensusCodeNotTaken(patch.censusCode);
+    } else {
+      patch.sbCode = await this.generateSbCode();
     }
 
     let stateId: Types.ObjectId;
@@ -267,6 +352,7 @@ export class UlbService {
       stateId = new Types.ObjectId(String(user.state));
       patch.state = stateId;
       patch.approval = { status: 'PENDING', submittedBy: new Types.ObjectId(user._id) };
+      patch.isActive = false;
     } else {
       // ADMIN (or other privileged callers) create pre-approved master records.
       stateId = patch.state as Types.ObjectId;
@@ -276,7 +362,17 @@ export class UlbService {
     const created = await this.persistUlb(patch);
 
     if (primaryContact.email) {
-      await this.createPrimaryContactUser(primaryContact, created._id, stateId, name, user);
+      const isApproved = user.role !== Role.STATE;
+      await this.createPrimaryContactUser(
+        primaryContact,
+        created._id,
+        stateId,
+        name,
+        user,
+        isApproved,
+        typeof patch.censusCode === 'string' ? patch.censusCode : undefined,
+        typeof patch.sbCode === 'string' ? patch.sbCode : undefined,
+      );
     }
 
     return created.toObject();
@@ -311,6 +407,20 @@ export class UlbService {
     if (existing) throw new BadRequestException('A ULB with this census code already exists.');
   }
 
+  /**
+   * Maps a Mongoose `ValidationError` (e.g. a `FileInfo` subdocument missing a required
+   * field) into the same field-keyed shape `throwValidationError` expects, so schema-level
+   * failures surface as an actionable 400 instead of collapsing into a generic message.
+   */
+  private mapMongooseValidationErrors(error: mongoose.Error.ValidationError): XviFcValidationErrorMap {
+    const map: XviFcValidationErrorMap = {};
+    for (const [path, err] of Object.entries(error.errors)) {
+      const fieldKey = path.split('.')[0];
+      (map[fieldKey] ??= []).push({ field: path, code: 'invalid', message: err.message });
+    }
+    return map;
+  }
+
   private async persistUlb(patch: Record<string, unknown>) {
     try {
       return await this.ulbModel.create(patch);
@@ -318,6 +428,10 @@ export class UlbService {
       if (error instanceof MongoServerError && error.code === 11000) {
         this.logger.warn(`Duplicate ULB detected: ${JSON.stringify(error.keyValue)}`);
         throw new BadRequestException(this.duplicateKeyMessage(error));
+      }
+      if (error instanceof mongoose.Error.ValidationError) {
+        this.logger.warn(`ULB schema validation failed: ${error.message}`);
+        this.throwValidationError(this.mapMongooseValidationErrors(error));
       }
       this.logger.error('Failed to create ULB', error);
       throw new BadRequestException('Failed to create ULB');
@@ -355,16 +469,27 @@ export class UlbService {
   }
 
   /** Provisions the ULB's first login: a `Role.ULB` account with a temporary password, emailed
-   *  to the primary contact — mirrors the STATE/MoHUA member-invite flow in `UsersService`. */
+   *  to the primary contact — mirrors the STATE/MoHUA member-invite flow in `UsersService`.
+   *  `isApproved` mirrors the owning ULB's approval status: ADMIN-created ULBs are auto-approved
+   *  so the login is active immediately; STATE-submitted ULBs start PENDING, so the login stays
+   *  inactive until an ADMIN approves the ULB (see `approve()`).
+   *  `censusCode`/`sbCode` are copied onto the `User` document (not just left on the `Ulb`) because
+   *  ULB logins authenticate by census/SB code, not email — `UsersRepository.resolveByIdentifier()`
+   *  looks up `User.censusCode`/`User.sbCode`, so without this copy the code the invite email tells
+   *  them to log in with would never match any account. */
   private async createPrimaryContactUser(
     contact: { name?: string; designation?: string; email?: string; mobile?: string },
     ulbId: Types.ObjectId,
     stateId: Types.ObjectId,
     ulbName: string,
     requester: IAuthUser,
+    isApproved: boolean,
+    censusCode?: string,
+    sbCode?: string,
   ): Promise<void> {
     const tempPassword = this.generateTempPassword();
     const hashedPassword = await bcrypt.hash(tempPassword, 12);
+    const loginCode = censusCode || sbCode || '';
 
     await this.userModel.create({
       name: contact.name,
@@ -374,9 +499,11 @@ export class UlbService {
       role: Role.ULB,
       ulb: ulbId,
       state: stateId,
+      censusCode: censusCode || null,
+      sbCode: sbCode || null,
       createdBy: new Types.ObjectId(requester._id),
       status: 'APPROVED',
-      isActive: true,
+      isActive: isApproved,
       isEmailVerified: true,
       isDeleted: false,
       password: hashedPassword,
@@ -392,7 +519,8 @@ export class UlbService {
         templateName: './ulb-member-invite',
         mailData: {
           name: contact.name,
-          email: contact.email,
+          loginCode,
+          loginCodeLabel: 'Login ID',
           mobile: contact.mobile ?? '',
           ulbName,
           loginUrl,
@@ -560,6 +688,7 @@ export class UlbService {
     this.extractPrimaryContact(sanitizedPayload);
 
     const patch = this.toMongoPatch(sanitizedPayload);
+    this.normalizeGazetteFile(patch, existing.gazetteNotificationFile as FileInfo | null | undefined);
     if (Object.keys(patch).length === 0) throw new BadRequestException('No fields provided to update.');
     if (typeof patch.name === 'string') {
       const nameChanged = patch.name.trim().toLowerCase() !== existing.name?.trim().toLowerCase();
@@ -585,6 +714,10 @@ export class UlbService {
       if (error instanceof MongoServerError && error.code === 11000) {
         throw new BadRequestException(this.duplicateKeyMessage(error));
       }
+      if (error instanceof mongoose.Error.ValidationError) {
+        this.logger.warn(`ULB schema validation failed: ${error.message}`);
+        this.throwValidationError(this.mapMongooseValidationErrors(error));
+      }
       throw error;
     }
   }
@@ -609,12 +742,17 @@ export class UlbService {
             'approval.reviewedBy': new Types.ObjectId(user._id),
             'approval.reviewedAt': new Date(),
             'approval.rejectReason': '',
+            isActive: true,
           },
         },
         { new: true },
       )
       .lean<Ulb>();
     if (!updated) throw new NotFoundException('ULB not found');
+
+    // Activate the ULB's primary-contact login now that the ULB itself is approved.
+    await this.userModel.updateMany({ ulb: id, isDeleted: false }, { $set: { isActive: true } }).exec();
+
     return updated;
   }
 

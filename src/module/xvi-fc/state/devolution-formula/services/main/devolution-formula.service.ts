@@ -17,14 +17,16 @@ import {
 import { toObjectIdString } from 'src/common/utils/objectid.util';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
 import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
-import { FileUrlNormalizerService } from 'src/module/xvi-fc/common/services/file-url-normalizer.service';
+import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
+import { keyByFieldKey, requireField } from 'src/module/xvi-fc/common/utils/xvi-fc-field-lookup.util';
+import { deriveFileValidationOptions } from 'src/module/xvi-fc/common/utils/xvi-fc-file-constraint.util';
+import type { FileInfo } from 'src/schemas/common/file.schema';
 import type { FormData } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.types';
 import type {
   FieldConfig,
   FieldSupportingContent,
   HydratedFieldConfig,
   SupportingContentTone,
-  UploadedFileValue,
 } from 'src/module/xvi-fc/common/types/field-config.type';
 import {
   buildXviFcFolderPath,
@@ -106,7 +108,7 @@ export class DevolutionFormulaService {
     private readonly xvifcFormActorsService: XvifcFormActorsService,
     private readonly excelService: ExcelService,
     private readonly fileTokenService: FileTokenService,
-    private readonly fileUrlNormalizer: FileUrlNormalizerService,
+    private readonly fileInfoNormalizer: FileInfoNormalizerService,
     private readonly dynamicFormValidator: DynamicFormValidationService,
     private readonly dfFormJsonConfig: DfFormJsonConfigService,
   ) {}
@@ -212,7 +214,7 @@ export class DevolutionFormulaService {
 
     const existing = await this.model
       .findOne({ state: stateOid, year: yearOid, installment: dto.installment })
-      .lean<Pick<DfFormLeanDoc, '_id' | 'currentFormStatus'>>()
+      .lean<Pick<DfFormLeanDoc, '_id' | 'currentFormStatus' | 'excelFile'>>()
       .exec();
 
     if (existing) {
@@ -224,20 +226,30 @@ export class DevolutionFormulaService {
       this.ulbModel.countDocuments({ state: stateOid, isActive: true }),
     ]);
 
-    const rawFile = dto.data?.excelFile;
-    const normalizedFile = rawFile?.fileUrl
-      ? { ...rawFile, fileUrl: this.fileUrlNormalizer.toRawStoragePath(rawFile.fileUrl) }
-      : rawFile;
+    const dfFields = await this.dfFormJsonConfig.loadFields(dto.yearId);
+    const dfMainFields = getDfFieldsByType(dfFields, 'DF_MAIN_FORM_FIELDS');
+
+    let normalizedFile: FileInfo | null | undefined;
+    if (dto.data?.excelFile !== undefined) {
+      const excelFileField = requireField(
+        keyByFieldKey(dfMainFields),
+        'excelFile',
+        'DevolutionFormulaService.saveDraft',
+      );
+      const { file, errors: fileErrors } = this.fileInfoNormalizer.normalizeInboundFileInfo(
+        dto.data.excelFile as unknown as Record<string, unknown>,
+        existing?.excelFile,
+        deriveFileValidationOptions(excelFileField, 'excelFile'),
+      );
+      if (fileErrors.length > 0) throwXviFcValidationError({ excelFile: fileErrors });
+      normalizedFile = file;
+    }
 
     const formData: FormData = {};
     if (normalizedFile !== undefined) formData['excelFile'] = normalizedFile;
     if (dto.data?.checkboxConfirmation !== undefined) formData['checkboxConfirmation'] = dto.data.checkboxConfirmation;
 
-    const dfFields = await this.dfFormJsonConfig.loadFields(dto.yearId);
-    const validation = this.dynamicFormValidator.validateDraftAndBuildPayload(
-      getDfFieldsByType(dfFields, 'DF_MAIN_FORM_FIELDS'),
-      formData,
-    );
+    const validation = this.dynamicFormValidator.validateDraftAndBuildPayload(dfMainFields, formData);
     if (!validation.isValid) throwXviFcValidationError(validation.errors);
 
     const update: Record<string, unknown> = {
@@ -292,20 +304,31 @@ export class DevolutionFormulaService {
 
     assertCanStateFinalSubmitForm(form.currentFormStatus ?? FORM_STATUS.NOT_STARTED);
 
-    const normalizedFile = dto.data.excelFile?.fileUrl
-      ? { ...dto.data.excelFile, fileUrl: this.fileUrlNormalizer.toRawStoragePath(dto.data.excelFile.fileUrl) }
-      : dto.data.excelFile;
+    const dfFields = await this.dfFormJsonConfig.loadFields(dto.yearId);
+    const dfMainFields = getDfFieldsByType(dfFields, 'DF_MAIN_FORM_FIELDS');
+    const excelFileField = requireField(
+      keyByFieldKey(dfMainFields),
+      'excelFile',
+      'DevolutionFormulaService.finalSubmit',
+    );
 
+    const { file: normalizedFile, errors: fileErrors } = this.fileInfoNormalizer.normalizeInboundFileInfo(
+      dto.data.excelFile as unknown as Record<string, unknown>,
+      form.excelFile,
+      deriveFileValidationOptions(excelFileField, 'excelFile'),
+    );
+    if (fileErrors.length > 0) throwXviFcValidationError({ excelFile: fileErrors });
+
+    // `normalizedFile` is `undefined` when the excel file is unchanged from what's already
+    // stored (see FileInfoNormalizerService) — that must stay out of the Mongo $set (below)
+    // so Mongoose doesn't re-stamp the stored file's timestamps, but the required-field
+    // validator below still needs to see the (unchanged) file as present.
     const formData: FormData = {
-      excelFile: normalizedFile,
+      excelFile: normalizedFile !== undefined ? normalizedFile : form.excelFile,
       checkboxConfirmation: dto.data.checkboxConfirmation,
     };
 
-    const dfFields = await this.dfFormJsonConfig.loadFields(dto.yearId);
-    const validation = this.dynamicFormValidator.validateFinalSubmitAndBuildPayload(
-      getDfFieldsByType(dfFields, 'DF_MAIN_FORM_FIELDS'),
-      formData,
-    );
+    const validation = this.dynamicFormValidator.validateFinalSubmitAndBuildPayload(dfMainFields, formData);
     if (!validation.isValid) throwXviFcValidationError(validation.errors);
 
     // Prerequisite gate for installment 1
@@ -416,22 +439,21 @@ export class DevolutionFormulaService {
       });
     }
 
+    const finalSubmitSet: Record<string, unknown> = {
+      currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+      isDraft: false,
+      submittedAt: new Date(),
+      submittedBy: userOid,
+      updatedBy: userOid,
+      checkboxConfirmation: dto.data.checkboxConfirmation,
+      ulbCount: computedActiveUlbCount,
+    };
+    // Omit excelFile entirely when unchanged (rather than `excelFile: undefined`) so
+    // Mongoose's FileInfo `timestamps` option doesn't stamp the stored subdocument.
+    if (normalizedFile !== undefined) finalSubmitSet['excelFile'] = normalizedFile;
+
     await this.model
-      .findOneAndUpdate(
-        { state: stateOid, year: yearOid, installment: dto.installment },
-        {
-          $set: {
-            currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
-            isDraft: false,
-            submittedAt: new Date(),
-            submittedBy: userOid,
-            updatedBy: userOid,
-            excelFile: normalizedFile,
-            checkboxConfirmation: dto.data.checkboxConfirmation,
-            ulbCount: computedActiveUlbCount,
-          },
-        },
-      )
+      .findOneAndUpdate({ state: stateOid, year: yearOid, installment: dto.installment }, { $set: finalSubmitSet })
       .exec();
 
     this.logger.log(
@@ -582,16 +604,15 @@ export class DevolutionFormulaService {
           ? buildXviFcFolderPath(question.folderPathKey, folderPathContext)
           : question.folderPath;
 
-        let value = rawValue;
-        const fileVal = rawValue as UploadedFileValue | null | undefined;
-        if (fileVal?.fileUrl) {
+        const fileVal = rawValue as FileInfo | null | undefined;
+        const hydrated = this.fileInfoNormalizer.hydrateFileInfoForResponse(fileVal ?? null, (p) => {
           try {
-            const signedUrl = this.fileTokenService.signFileUrl(fileVal.fileUrl);
-            value = { ...fileVal, fileUrl: signedUrl };
+            return this.fileTokenService.signFileUrl(p);
           } catch {
-            // keep raw if signing fails
+            return p;
           }
-        }
+        });
+        const value = hydrated ?? rawValue;
 
         if (question.key === 'excelFile') {
           return {
@@ -616,7 +637,7 @@ export class DevolutionFormulaService {
   ): FieldSupportingContent[] {
     const { canView, canEdit } = permissions;
     const hasDataset = (doc?.activeDatasetVersion ?? 0) > 0;
-    const hasUploadedExcel = !!doc?.excelFile?.fileUrl;
+    const hasUploadedExcel = !!doc?.excelFile?.path;
     const errorRowCount = doc?.errorRowCount ?? 0;
     const excelRowCount = doc?.excelRowCount ?? 0;
     const totalMoHUAAllocation = doc?.totalMoHUAAllocation ?? 0;

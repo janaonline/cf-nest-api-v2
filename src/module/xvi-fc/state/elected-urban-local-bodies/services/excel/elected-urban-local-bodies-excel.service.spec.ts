@@ -2,6 +2,7 @@ import { BadRequestException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
 import { ConfigService } from '@nestjs/config';
+import { MongoServerError } from 'mongodb';
 import { Types } from 'mongoose';
 import * as XLSX from 'xlsx';
 import { ElectedUrbanLocalBodiesExcelService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/excel/elected-urban-local-bodies-excel.service';
@@ -11,6 +12,8 @@ import { Ulb } from 'src/schemas/ulb.schema';
 import { S3Service } from 'src/core/s3/s3.service';
 import { ExcelService } from 'src/services/excel/excel.service';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
+import { FileUrlNormalizerService } from 'src/module/xvi-fc/common/services/file-url-normalizer.service';
+import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
 import { ElectedUrbanLocalBodiesValidator } from 'src/module/xvi-fc/state/elected-urban-local-bodies/validators/elected-urban-local-bodies.validator';
 import { EulbFormJsonConfigService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/form-json/elected-urban-local-bodies-form-json.service';
 import type { EulbTypedFieldConfig } from 'src/module/xvi-fc/state/elected-urban-local-bodies/helpers/elected-urban-local-bodies-form-json.helpers';
@@ -21,7 +24,6 @@ import type {
   EulbRevalidateExcelResponseData,
   EulbRowValidationError,
   EulbValidateExcelResponseData,
-  EulbValidationSummary,
 } from 'src/module/xvi-fc/state/elected-urban-local-bodies/types/elected-urban-local-bodies.types';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -43,6 +45,16 @@ function makeXlsxBuffer(dataRows: Record<string, unknown>[]): Buffer {
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, sheet, 'Sheet1');
   return Buffer.from(XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as ArrayBuffer);
+}
+
+/** Fresh transaction session mock — each describe block gets its own via a new beforeEach call. */
+function buildMockSession() {
+  return {
+    startTransaction: jest.fn(),
+    commitTransaction: jest.fn().mockResolvedValue(undefined),
+    abortTransaction: jest.fn().mockResolvedValue(undefined),
+    endSession: jest.fn().mockResolvedValue(undefined),
+  };
 }
 
 /** Catches a BadRequestException thrown by the service; rethrows any other type. */
@@ -74,6 +86,15 @@ const adminUser: AuthUser = {
 
 const mockExcelTypedFields: EulbTypedFieldConfig[] = [
   {
+    key: 'electedBodyExcelFile',
+    label: 'Upload elected bodies list',
+    formFieldType: 'file',
+    fieldTypes: ['EULB_MAIN_FORM_FIELDS'],
+    allowedFileTypes: ['xlsx', 'xls'],
+    maxFileSize: 20,
+    validations: [{ name: 'required', validator: null, message: 'This field is required.' }],
+  },
+  {
     key: 'dateOfConstitution',
     label: 'Date of Constitution',
     formFieldType: 'date',
@@ -100,6 +121,38 @@ const mockExcelTypedFields: EulbTypedFieldConfig[] = [
     fieldTypes: ['EULB_ROW_EDIT_FIELDS'],
     validations: [{ name: 'maxlength', validator: 250, message: 'Remarks must not exceed 250 characters.' }],
   },
+  {
+    key: 'electedBodyStatus',
+    label: 'Elected Body Status',
+    formFieldType: 'select',
+    fieldTypes: ['EULB_ROW_EDIT_FIELDS'],
+    options: [
+      { id: 'Constituted', label: 'Constituted' },
+      { id: 'Not Constituted', label: 'Not Constituted' },
+      { id: 'Exempt', label: 'Exempt' },
+    ],
+    validations: [{ name: 'required', validator: null, message: 'Elected Body Status is required.' }],
+  },
+  {
+    key: 'censusCode',
+    label: 'Census Code',
+    formFieldType: 'text',
+    fieldTypes: ['EULB_EXTRA_ULB_PORTAL_FIELDS'],
+    validations: [
+      { name: 'required', validator: null, message: 'Census code is required.' },
+      { name: 'maxlength', validator: 10, message: 'Census code must not exceed 10 characters.' },
+    ],
+  },
+  {
+    key: 'ulbName',
+    label: 'ULB Name',
+    formFieldType: 'text',
+    fieldTypes: ['EULB_EXTRA_ULB_PORTAL_FIELDS'],
+    validations: [
+      { name: 'required', validator: null, message: 'ULB name is required.' },
+      { name: 'maxlength', validator: 250, message: 'ULB name must not exceed 250 characters.' },
+    ],
+  },
 ];
 
 const mockEulbFormJsonConfigService = {
@@ -116,9 +169,11 @@ function makeDto(): ValidateElectedUrbanLocalBodiesExcelDto {
     stateId: stateOid.toString(),
     yearId: yearOid.toString(),
     electedBodyExcelFile: {
-      fileName: 'test.xlsx',
-      fileUrl: 'state/test.xlsx',
-      fileSize: 1024,
+      originalName: 'test.xlsx',
+      path: 'state/test.xlsx',
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      sizeKb: 1,
+      createdAt: '2026-01-01T00:00:00.000Z',
     },
   } as ValidateElectedUrbanLocalBodiesExcelDto;
 }
@@ -134,9 +189,16 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
     find: jest.Mock;
     bulkWrite: jest.Mock;
   };
-  let formModel: { findOne: jest.Mock; create: jest.Mock; findByIdAndUpdate: jest.Mock };
+  let formModel: {
+    findOne: jest.Mock;
+    create: jest.Mock;
+    findByIdAndUpdate: jest.Mock;
+    findOneAndUpdate: jest.Mock;
+    db: { startSession: jest.Mock };
+  };
   let ulbModel: { find: jest.Mock };
   let s3Service: { getBuffer: jest.Mock; uploadPrivate: jest.Mock };
+  let mockSession: ReturnType<typeof buildMockSession>;
 
   function buildUlbFindMock(ulbs: unknown[]) {
     return jest.fn().mockReturnValue({
@@ -144,6 +206,11 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
         lean: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue(ulbs) }),
       }),
     });
+  }
+
+  /** Builds the `findOneAndUpdate` upsert result for the atomic version-allocation call. */
+  function mockUpsertedForm(activeDatasetVersion: number) {
+    return { exec: jest.fn().mockResolvedValue({ _id: formOid, activeDatasetVersion }) };
   }
 
   beforeEach(async () => {
@@ -157,6 +224,8 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
       bulkWrite: jest.fn().mockResolvedValue({}),
     };
 
+    mockSession = buildMockSession();
+
     formModel = {
       findOne: jest.fn().mockReturnValue({
         lean: () => ({ exec: () => Promise.resolve(null) }),
@@ -165,6 +234,8 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
       findByIdAndUpdate: jest.fn().mockReturnValue({
         lean: () => ({ exec: () => Promise.resolve({}) }),
       }),
+      findOneAndUpdate: jest.fn().mockReturnValue(mockUpsertedForm(1)),
+      db: { startSession: jest.fn().mockResolvedValue(mockSession) },
     };
 
     // Default: 1 registry ULB (DBCODE1).
@@ -184,8 +255,13 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
         { provide: getModelToken(Ulb.name), useValue: ulbModel },
         { provide: S3Service, useValue: s3Service },
         { provide: ExcelService, useValue: { generateExcel: jest.fn().mockResolvedValue(new ArrayBuffer(8)) } },
-        { provide: FileTokenService, useValue: { parseToken: jest.fn() } },
+        {
+          provide: FileTokenService,
+          useValue: { parseToken: jest.fn(), signFileUrl: jest.fn((p: string) => `signed::${p}`) },
+        },
         { provide: ConfigService, useValue: { get: jest.fn().mockReturnValue('') } },
+        { provide: FileUrlNormalizerService, useValue: { toRawStoragePath: jest.fn((v: string) => v) } },
+        FileInfoNormalizerService,
         { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
       ],
     }).compile();
@@ -278,9 +354,11 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
       dto.electedBodyExcelFile.pageCount = null;
       await service.validateExcel(dto, adminUser);
 
-      // New form path (findOne → null): form is created with the normalized file metadata
-      const createArg = (formModel.create.mock.calls as unknown[][])[0][0] as Record<string, unknown>;
-      expect((createArg['electedBodyExcelFile'] as { pageCount?: number | null }).pageCount).toBeNull();
+      // New form path (findOne → null): atomic version-alloc call carries the normalized file metadata
+      const updateArg = (formModel.findOneAndUpdate.mock.calls as unknown[][])[0][1] as {
+        $set: Record<string, unknown>;
+      };
+      expect((updateArg.$set['electedBodyExcelFile'] as { pageCount?: number | null }).pageCount).toBeNull();
     });
   });
 
@@ -476,7 +554,7 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
 
       expect(rowModel.insertMany).toHaveBeenCalledTimes(1);
       const [docs, opts] = rowModel.insertMany.mock.calls[0] as [Record<string, unknown>[], unknown];
-      expect(opts).toEqual({ lean: true, ordered: false });
+      expect(opts).toMatchObject({ lean: true, ordered: false });
       expect(docs[0]).toMatchObject({ ulbName: '', validationStatus: 'INVALID' });
     });
 
@@ -749,6 +827,7 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
       formModel.findOne = jest.fn().mockReturnValue({
         lean: () => ({ exec: () => Promise.resolve({ _id: formOid, activeDatasetVersion: 3, currentFormStatus: 1 }) }),
       });
+      formModel.findOneAndUpdate = jest.fn().mockReturnValue(mockUpsertedForm(4));
       s3Service.getBuffer = jest.fn().mockResolvedValue(
         makeXlsxBuffer([
           {
@@ -767,10 +846,223 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
       expect(rowModel.updateMany).toHaveBeenCalledWith(
         { form: formOid, datasetVersion: 3 },
         { $set: { isActive: false } },
+        { session: mockSession },
       );
       expect(rowModel.updateMany.mock.invocationCallOrder[0]).toBeLessThan(
         rowModel.insertMany.mock.invocationCallOrder[0],
       );
+    });
+
+    it('deletes old-version rows inside the transaction, before commit, on a successful replacement', async () => {
+      formModel.findOne = jest.fn().mockReturnValue({
+        lean: () => ({ exec: () => Promise.resolve({ _id: formOid, activeDatasetVersion: 3, currentFormStatus: 1 }) }),
+      });
+      formModel.findOneAndUpdate = jest.fn().mockReturnValue(mockUpsertedForm(4));
+      s3Service.getBuffer = jest.fn().mockResolvedValue(
+        makeXlsxBuffer([
+          {
+            censusCode: 'DBCODE1',
+            ulbName: 'DB City One',
+            electedBodyStatus: 'Not Constituted',
+            dateOfConstitution: '',
+            dateOfExpiry: '',
+            remarks: '',
+          },
+        ]),
+      );
+
+      await service.validateExcel(makeDto(), adminUser);
+
+      expect(rowModel.deleteMany).toHaveBeenCalledWith({ form: formOid, datasetVersion: 3 }, { session: mockSession });
+      const deleteOrder = rowModel.deleteMany.mock.invocationCallOrder[0];
+      const commitOrder = mockSession.commitTransaction.mock.invocationCallOrder[0];
+      expect(deleteOrder).toBeLessThan(commitOrder);
+    });
+
+    it('aborts the transaction (no manual reactivation) when insertMany fails on an existing form', async () => {
+      formModel.findOne = jest.fn().mockReturnValue({
+        lean: () => ({ exec: () => Promise.resolve({ _id: formOid, activeDatasetVersion: 3, currentFormStatus: 1 }) }),
+      });
+      formModel.findOneAndUpdate = jest.fn().mockReturnValue(mockUpsertedForm(4));
+      rowModel.insertMany = jest.fn().mockRejectedValue(new Error('insertMany failed'));
+      s3Service.getBuffer = jest.fn().mockResolvedValue(
+        makeXlsxBuffer([
+          {
+            censusCode: 'DBCODE1',
+            ulbName: 'DB City One',
+            electedBodyStatus: 'Not Constituted',
+            dateOfConstitution: '',
+            dateOfExpiry: '',
+            remarks: '',
+          },
+        ]),
+      );
+
+      await expect(service.validateExcel(makeDto(), adminUser)).rejects.toThrow();
+
+      // Deactivation must have been attempted inside the transaction.
+      expect(rowModel.updateMany).toHaveBeenCalled();
+      // Transaction abort replaces the old manual rollback — no reactivation/delete calls follow.
+      const reactivateCalls = (rowModel.updateMany.mock.calls as unknown[][]).filter(
+        (c) => ((c[1] as Record<string, unknown>)?.['$set'] as Record<string, unknown>)?.['isActive'] === true,
+      );
+      expect(reactivateCalls.length).toBe(0);
+      expect(rowModel.deleteMany).not.toHaveBeenCalled();
+
+      expect(mockSession.abortTransaction).toHaveBeenCalled();
+      expect(mockSession.commitTransaction).not.toHaveBeenCalled();
+      expect(mockSession.endSession).toHaveBeenCalled();
+    });
+
+    it('aborts the transaction (no orphan cleanup needed) when insertMany fails on a brand-new form', async () => {
+      // formModel.findOne default (from beforeEach) already returns null — brand-new form.
+      formModel.findOneAndUpdate = jest.fn().mockReturnValue(mockUpsertedForm(1));
+      rowModel.insertMany = jest.fn().mockRejectedValue(new Error('insertMany failed'));
+      s3Service.getBuffer = jest.fn().mockResolvedValue(
+        makeXlsxBuffer([
+          {
+            censusCode: 'DBCODE1',
+            ulbName: 'DB City One',
+            electedBodyStatus: 'Not Constituted',
+            dateOfConstitution: '',
+            dateOfExpiry: '',
+            remarks: '',
+          },
+        ]),
+      );
+
+      await expect(service.validateExcel(makeDto(), adminUser)).rejects.toThrow();
+
+      expect(rowModel.updateMany).not.toHaveBeenCalled();
+      expect(rowModel.deleteMany).not.toHaveBeenCalled();
+      expect(mockSession.abortTransaction).toHaveBeenCalled();
+      expect(mockSession.commitTransaction).not.toHaveBeenCalled();
+    });
+
+    it('surfaces a row-level duplicate-key conflict with the existing "Duplicate census code" message', async () => {
+      formModel.findOneAndUpdate = jest.fn().mockReturnValue(mockUpsertedForm(1));
+      rowModel.insertMany = jest.fn().mockRejectedValue(
+        new MongoServerError({
+          message: 'E11000 duplicate key error',
+          code: 11000,
+          keyValue: { year: yearOid, censusCode: 'DBCODE1' },
+        }),
+      );
+      s3Service.getBuffer = jest.fn().mockResolvedValue(
+        makeXlsxBuffer([
+          {
+            censusCode: 'DBCODE1',
+            ulbName: 'DB City One',
+            electedBodyStatus: 'Not Constituted',
+            dateOfConstitution: '',
+            dateOfExpiry: '',
+            remarks: '',
+          },
+        ]),
+      );
+
+      const { response } = await catchBadRequest(() => service.validateExcel(makeDto(), adminUser));
+      expect(response.errors?.['censusCode']).toEqual([
+        expect.objectContaining({
+          code: 'duplicate',
+          message: 'A ULB with this census code already exists for the selected design year.',
+        }),
+      ]);
+    });
+
+    it('surfaces a form-level duplicate-key conflict (two requests racing to create the same form) with an honest refresh message', async () => {
+      formModel.findOneAndUpdate = jest.fn().mockReturnValue({
+        exec: jest.fn().mockRejectedValue(
+          new MongoServerError({
+            message: 'E11000 duplicate key error',
+            code: 11000,
+            keyValue: { state: stateOid, year: yearOid, formType: 'ELECTED_URBAN_LOCAL_BODIES' },
+          }),
+        ),
+      });
+      s3Service.getBuffer = jest.fn().mockResolvedValue(
+        makeXlsxBuffer([
+          {
+            censusCode: 'DBCODE1',
+            ulbName: 'DB City One',
+            electedBodyStatus: 'Not Constituted',
+            dateOfConstitution: '',
+            dateOfExpiry: '',
+            remarks: '',
+          },
+        ]),
+      );
+
+      const { response } = await catchBadRequest(() => service.validateExcel(makeDto(), adminUser));
+      expect(response.errors?.['electedBodyExcelFile']).toEqual([
+        expect.objectContaining({
+          code: 'conflict',
+          message: 'This form was just updated by another request. Please refresh and try again.',
+        }),
+      ]);
+      expect(mockSession.abortTransaction).toHaveBeenCalled();
+    });
+
+    it('surfaces a transaction write-conflict (TransientTransactionError) with the same honest refresh message', async () => {
+      formModel.findOneAndUpdate = jest.fn().mockReturnValue(mockUpsertedForm(1));
+      rowModel.insertMany = jest
+        .fn()
+        .mockRejectedValue(
+          new MongoServerError({ message: 'WriteConflict', code: 112, errorLabels: ['TransientTransactionError'] }),
+        );
+      s3Service.getBuffer = jest.fn().mockResolvedValue(
+        makeXlsxBuffer([
+          {
+            censusCode: 'DBCODE1',
+            ulbName: 'DB City One',
+            electedBodyStatus: 'Not Constituted',
+            dateOfConstitution: '',
+            dateOfExpiry: '',
+            remarks: '',
+          },
+        ]),
+      );
+
+      const { response } = await catchBadRequest(() => service.validateExcel(makeDto(), adminUser));
+      expect(response.errors?.['electedBodyExcelFile']).toEqual([
+        expect.objectContaining({
+          code: 'conflict',
+          message: 'This form was just updated by another request. Please refresh and try again.',
+        }),
+      ]);
+    });
+
+    it('hands two concurrent uploads distinct, monotonically increasing dataset versions (simulated real $inc semantics)', async () => {
+      // A shared counter stands in for MongoDB's real atomic $inc: every call to the mocked
+      // findOneAndUpdate increments it exactly once, so two "concurrent" callers can never
+      // observe (or be handed) the same activeDatasetVersion.
+      let sharedVersionCounter = 0;
+      formModel.findOneAndUpdate = jest.fn().mockImplementation(() => {
+        sharedVersionCounter += 1;
+        return { exec: jest.fn().mockResolvedValue({ _id: formOid, activeDatasetVersion: sharedVersionCounter }) };
+      });
+      s3Service.getBuffer = jest.fn().mockResolvedValue(
+        makeXlsxBuffer([
+          {
+            censusCode: 'DBCODE1',
+            ulbName: 'DB City One',
+            electedBodyStatus: 'Not Constituted',
+            dateOfConstitution: '',
+            dateOfExpiry: '',
+            remarks: '',
+          },
+        ]),
+      );
+
+      const [first, second] = await Promise.all([
+        service.validateExcel(makeDto(), adminUser),
+        service.validateExcel(makeDto(), adminUser),
+      ]);
+
+      const firstVersion = (first.data as EulbValidateExcelResponseData).summary?.activeDatasetVersion;
+      const secondVersion = (second.data as EulbValidateExcelResponseData).summary?.activeDatasetVersion;
+      expect(firstVersion).not.toBe(secondVersion);
+      expect([firstVersion, secondVersion].sort()).toEqual([1, 2]);
     });
   });
 });
@@ -786,9 +1078,16 @@ describe('ElectedUrbanLocalBodiesExcelService — revalidateExcel', () => {
     deleteMany: jest.Mock;
     updateMany: jest.Mock;
   };
-  let formModel: { findOne: jest.Mock; findByIdAndUpdate: jest.Mock; create: jest.Mock };
+  let formModel: {
+    findOne: jest.Mock;
+    findByIdAndUpdate: jest.Mock;
+    create: jest.Mock;
+    findOneAndUpdate: jest.Mock;
+    db: { startSession: jest.Mock };
+  };
   let ulbModel: { find: jest.Mock };
   let s3Service: { getBuffer: jest.Mock; uploadPrivate: jest.Mock };
+  let mockSession: ReturnType<typeof buildMockSession>;
 
   function buildUlbFindMock(ulbs: unknown[]) {
     return jest.fn().mockReturnValue({
@@ -806,6 +1105,11 @@ describe('ElectedUrbanLocalBodiesExcelService — revalidateExcel', () => {
     });
   }
 
+  /** Builds the `findOneAndUpdate` result for the atomic version-allocation call. */
+  function mockUpsertedForm(activeDatasetVersion: number) {
+    return { exec: jest.fn().mockResolvedValue({ _id: formOid, activeDatasetVersion }) };
+  }
+
   beforeEach(async () => {
     rowModel = {
       find: buildRowFindMock([]),
@@ -815,10 +1119,14 @@ describe('ElectedUrbanLocalBodiesExcelService — revalidateExcel', () => {
       updateMany: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue({ modifiedCount: 0 }) }),
     };
 
+    mockSession = buildMockSession();
+
     formModel = {
       findOne: jest.fn().mockReturnValue({ lean: () => ({ exec: () => Promise.resolve(null) }) }),
       findByIdAndUpdate: jest.fn().mockReturnValue({ lean: () => ({ exec: () => Promise.resolve({}) }) }),
       create: jest.fn().mockResolvedValue({}),
+      findOneAndUpdate: jest.fn().mockReturnValue(mockUpsertedForm(1)),
+      db: { startSession: jest.fn().mockResolvedValue(mockSession) },
     };
 
     ulbModel = { find: buildUlbFindMock([DB_ULB_1]) };
@@ -837,8 +1145,13 @@ describe('ElectedUrbanLocalBodiesExcelService — revalidateExcel', () => {
         { provide: getModelToken(Ulb.name), useValue: ulbModel },
         { provide: S3Service, useValue: s3Service },
         { provide: ExcelService, useValue: { generateExcel: jest.fn().mockResolvedValue(new ArrayBuffer(8)) } },
-        { provide: FileTokenService, useValue: { parseToken: jest.fn() } },
+        {
+          provide: FileTokenService,
+          useValue: { parseToken: jest.fn(), signFileUrl: jest.fn((p: string) => `signed::${p}`) },
+        },
         { provide: ConfigService, useValue: { get: jest.fn().mockReturnValue('') } },
+        { provide: FileUrlNormalizerService, useValue: { toRawStoragePath: jest.fn((v: string) => v) } },
+        FileInfoNormalizerService,
         { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
       ],
     }).compile();
@@ -850,7 +1163,13 @@ describe('ElectedUrbanLocalBodiesExcelService — revalidateExcel', () => {
     _id: formOid,
     currentFormStatus: 1, // IN_PROGRESS
     activeDatasetVersion: 1,
-    electedBodyExcelFile: { fileUrl: 'state/test.xlsx', fileName: 'test.xlsx' },
+    electedBodyExcelFile: {
+      originalName: 'test.xlsx',
+      path: 'state/test.xlsx',
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      sizeKb: 1,
+      createdAt: '2026-01-01T00:00:00.000Z',
+    },
   };
 
   // ─── Case A: active rows exist — in-place revalidation ───────────────────
@@ -1005,6 +1324,105 @@ describe('ElectedUrbanLocalBodiesExcelService — revalidateExcel', () => {
 
       expect(data.validationSummary?.validationStatus).toBe('INVALID');
       expect(data.errors.length).toBeGreaterThan(0);
+    });
+  });
+
+  // ─── Case B: no active rows — re-parse from stored Excel (revalidateFromStoredFile) ──
+
+  describe('Case B — no active rows, re-parse from stored Excel', () => {
+    const storedFileFormDoc = {
+      _id: formOid,
+      currentFormStatus: 1,
+      activeDatasetVersion: 0,
+      electedBodyExcelFile: {
+        originalName: 'test.xlsx',
+        path: 'state/test.xlsx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        sizeKb: 1,
+        createdAt: '2026-01-01T00:00:00.000Z',
+      },
+    };
+
+    beforeEach(() => {
+      formModel.findOne = jest.fn().mockReturnValue({
+        lean: () => ({ exec: () => Promise.resolve(storedFileFormDoc) }),
+      });
+      s3Service.getBuffer = jest.fn().mockResolvedValue(
+        makeXlsxBuffer([
+          {
+            censusCode: 'DBCODE1',
+            ulbName: 'DB City One',
+            electedBodyStatus: 'Not Constituted',
+            dateOfConstitution: '',
+            dateOfExpiry: '',
+            remarks: '',
+          },
+        ]),
+      );
+    });
+
+    it('re-parses the stored file and inserts a fresh dataset when there is no prior version', async () => {
+      formModel.findOneAndUpdate = jest.fn().mockReturnValue(mockUpsertedForm(1));
+
+      const result = await service.revalidateExcel(stateOid.toString(), yearOid.toString(), adminUser);
+      const data = result.data as EulbRevalidateExcelResponseData;
+
+      expect(rowModel.insertMany).toHaveBeenCalledTimes(1);
+      expect(data.validationSummary?.activeDatasetVersion).toBe(1);
+      // No prior version to deactivate/delete.
+      expect(rowModel.updateMany).not.toHaveBeenCalled();
+      expect(rowModel.deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('deletes old-version rows inside the transaction, before commit, when replacing an existing dataset', async () => {
+      // The version-allocation $inc returns 3 (i.e. currentVersion=2) regardless of the stale
+      // activeDatasetVersion on the initially-read form doc — this path never upserts.
+      formModel.findOneAndUpdate = jest.fn().mockReturnValue(mockUpsertedForm(3));
+
+      await service.revalidateExcel(stateOid.toString(), yearOid.toString(), adminUser);
+
+      expect(rowModel.updateMany).toHaveBeenCalledWith(
+        { form: formOid, datasetVersion: 2 },
+        { $set: { isActive: false } },
+        { session: mockSession },
+      );
+      expect(rowModel.deleteMany).toHaveBeenCalledWith({ form: formOid, datasetVersion: 2 }, { session: mockSession });
+
+      const deleteOrder = rowModel.deleteMany.mock.invocationCallOrder[0];
+      const commitOrder = mockSession.commitTransaction.mock.invocationCallOrder[0];
+      expect(deleteOrder).toBeLessThan(commitOrder);
+    });
+
+    it('aborts the transaction (no manual reactivation) when insertMany fails', async () => {
+      formModel.findOneAndUpdate = jest.fn().mockReturnValue(mockUpsertedForm(1));
+      rowModel.insertMany = jest.fn().mockRejectedValue(new Error('insertMany failed'));
+
+      await expect(service.revalidateExcel(stateOid.toString(), yearOid.toString(), adminUser)).rejects.toThrow();
+
+      expect(mockSession.abortTransaction).toHaveBeenCalled();
+      expect(mockSession.commitTransaction).not.toHaveBeenCalled();
+      expect(mockSession.endSession).toHaveBeenCalled();
+    });
+
+    it('surfaces a transaction write-conflict (TransientTransactionError) with an honest refresh message', async () => {
+      formModel.findOneAndUpdate = jest.fn().mockReturnValue({
+        exec: jest
+          .fn()
+          .mockRejectedValue(
+            new MongoServerError({ message: 'WriteConflict', code: 112, errorLabels: ['TransientTransactionError'] }),
+          ),
+      });
+
+      const { response } = await catchBadRequest(() =>
+        service.revalidateExcel(stateOid.toString(), yearOid.toString(), adminUser),
+      );
+      expect(response.errors?.['electedBodyExcelFile']).toEqual([
+        expect.objectContaining({
+          code: 'conflict',
+          message: 'This form was just updated by another request. Please refresh and try again.',
+        }),
+      ]);
+      expect(mockSession.abortTransaction).toHaveBeenCalled();
     });
   });
 });

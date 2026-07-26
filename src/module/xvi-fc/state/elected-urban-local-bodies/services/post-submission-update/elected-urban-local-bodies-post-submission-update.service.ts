@@ -6,6 +6,14 @@ import { Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import { toObjectIdString } from 'src/common/utils/objectid.util';
+import { FileTokenService } from 'src/core/file-token/file-token.service';
+import {
+  FileInfoNormalizerService,
+  type HydratedFileInfoResponse,
+} from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
+import { keyByFieldKey, requireField } from 'src/module/xvi-fc/common/utils/xvi-fc-field-lookup.util';
+import { deriveFileValidationOptions } from 'src/module/xvi-fc/common/utils/xvi-fc-file-constraint.util';
+import type { FileInfo } from 'src/schemas/common/file.schema';
 import {
   POST_SUBMISSION_UPDATE_ALLOWED_STATUSES,
   assertCanViewPostSubmissionUpdate,
@@ -26,7 +34,6 @@ import {
   ElectedUrbanLocalBodiesRow,
   EulbRowDocument,
 } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
-import { ELECTED_BODY_STATUSES } from 'src/module/xvi-fc/state/elected-urban-local-bodies/constants/elected-urban-local-bodies.constants';
 import { EulbFormJsonConfigService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/form-json/elected-urban-local-bodies-form-json.service';
 import { getFieldsByType } from 'src/module/xvi-fc/state/elected-urban-local-bodies/helpers/elected-urban-local-bodies-form-json.helpers';
 import {
@@ -40,7 +47,6 @@ import type { ValidateEulbPostSubmissionUpdateDto } from 'src/module/xvi-fc/stat
 import type { SubmitEulbPostSubmissionUpdateDto } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/submit-eulb-post-submission-update.dto';
 import { ElectedUrbanLocalBodiesValidator } from 'src/module/xvi-fc/state/elected-urban-local-bodies/validators/elected-urban-local-bodies.validator';
 import type {
-  EulbBatchDocumentRef,
   EulbPostSubmissionSubmitRowError,
   EulbPostSubmissionUpdateMetaData,
   EulbPostSubmissionUpdatePermissions,
@@ -88,8 +94,6 @@ export function buildPostSubmissionEligibleRowsFilter(
   };
 }
 
-const MAX_DOCUMENT_BYTES = 20 * 1024 * 1024;
-
 @Injectable()
 export class EulbPostSubmissionUpdateService {
   constructor(
@@ -99,6 +103,8 @@ export class EulbPostSubmissionUpdateService {
     private readonly rowModel: Model<EulbRowDocument>,
     private readonly validator: ElectedUrbanLocalBodiesValidator,
     private readonly eulbFormJsonConfig: EulbFormJsonConfigService,
+    private readonly fileInfoNormalizer: FileInfoNormalizerService,
+    private readonly fileTokenService: FileTokenService,
   ) {}
 
   /**
@@ -193,10 +199,18 @@ export class EulbPostSubmissionUpdateService {
       filter['$and'] = [...(filter['$and'] ?? []), { $or: [{ censusCode: regex }, { ulbName: regex }] }];
     }
 
+    const eligibleRowsFormJsonFields = await this.eulbFormJsonConfig.loadFields(yearId);
+    const eligibleRowsRowEditFields = getFieldsByType(eligibleRowsFormJsonFields, 'EULB_ROW_EDIT_FIELDS');
+    const eligibleRowsExtraUlbPortalFields = getFieldsByType(
+      eligibleRowsFormJsonFields,
+      'EULB_EXTRA_ULB_PORTAL_FIELDS',
+    );
+    const { electedBodyStatuses } = extractDateConfig(eligibleRowsRowEditFields, eligibleRowsExtraUlbPortalFields);
+
     const [rawRows, total, statusSummary] = await Promise.all([
       this.rowModel.find(filter).sort({ validationStatus: 1, rowNumber: 1 }).skip(skip).limit(limit).lean().exec(),
       this.rowModel.countDocuments(filter).exec(),
-      this.getStatusSummary(formDoc._id, stateId, yearId, activeVersion),
+      this.getStatusSummary(formDoc._id, stateId, yearId, activeVersion, electedBodyStatuses),
     ]);
 
     const rows: EulbPostSubmissionUpdateRow[] = rawRows.map((r) => ({
@@ -253,36 +267,29 @@ export class EulbPostSubmissionUpdateService {
     this.assertStateAccess(user, stateId);
 
     // ─── Document validation ───────────────────────────────────────────────────
+    // Backend-generated documents never flow through this path — `document` always
+    // originates from the client DTO here, so `existing` is always null (no prior
+    // stored document to preserve/compare against for a new post-submission batch).
+    // The DTO/API field is named `document`; the DB form-json key for this same field is
+    // `proofOfElection` (EULB_POST_SUBMIT_UPDATE_FIELDS group) — single source of truth for
+    // its allowed types/size, just addressed by a different key than the wire field name.
 
-    const { document: documentInput } = dto;
-    if (!documentInput.fileName.trim()) {
-      throwXviFcValidationError({ document: [{ code: 'required', message: 'Document fileName is required.' }] });
-    }
-    if (!documentInput.fileUrl.trim()) {
-      throwXviFcValidationError({ document: [{ code: 'required', message: 'Document fileUrl is required.' }] });
-    }
-    if (documentInput.fileSize <= 0) {
+    const documentFormJsonFields = await this.eulbFormJsonConfig.loadFields(yearId);
+    const postSubmitUpdateFields = getFieldsByType(documentFormJsonFields, 'EULB_POST_SUBMIT_UPDATE_FIELDS');
+    const documentField = requireField(
+      keyByFieldKey(postSubmitUpdateFields),
+      'proofOfElection',
+      'ElectedUrbanLocalBodiesPostSubmissionUpdateService.submitBatch',
+    );
+    const { file: documentFile, errors: documentErrors } = this.fileInfoNormalizer.normalizeInboundFileInfo(
+      dto.document as unknown as Record<string, unknown>,
+      null,
+      deriveFileValidationOptions(documentField, 'document'),
+    );
+    if (documentErrors.length > 0) throwXviFcValidationError({ document: documentErrors });
+    if (!documentFile) {
       throwXviFcValidationError({
-        document: [{ code: 'invalid', message: 'Document fileSize must be greater than 0.' }],
-      });
-    }
-    if (documentInput.fileSize > MAX_DOCUMENT_BYTES) {
-      throwXviFcValidationError({
-        document: [{ code: 'tooLarge', message: 'Document file size must not exceed 20 MB.' }],
-      });
-    }
-    if (documentInput.mimeType) {
-      if (documentInput.mimeType !== 'application/pdf') {
-        throwXviFcValidationError({ document: [{ code: 'invalidType', message: 'Only PDF files are accepted.' }] });
-      }
-    } else if (!documentInput.fileName.toLowerCase().endsWith('.pdf')) {
-      throwXviFcValidationError({
-        document: [
-          {
-            code: 'invalidType',
-            message: 'File must be a PDF. Provide a valid mimeType or ensure the fileName ends in .pdf.',
-          },
-        ],
+        document: [{ field: 'document', code: 'required', message: 'document is required.' }],
       });
     }
 
@@ -304,9 +311,9 @@ export class EulbPostSubmissionUpdateService {
     const today = this.startOfToday();
     const activeVersion = formDoc.activeDatasetVersion ?? 0;
 
-    const submitFormJsonFields = await this.eulbFormJsonConfig.loadFields(yearId);
-    const submitRowEditFields = getFieldsByType(submitFormJsonFields, 'EULB_ROW_EDIT_FIELDS');
-    const submitDateConfig = extractDateConfig(submitRowEditFields);
+    const submitRowEditFields = getFieldsByType(documentFormJsonFields, 'EULB_ROW_EDIT_FIELDS');
+    const submitExtraUlbPortalFields = getFieldsByType(documentFormJsonFields, 'EULB_EXTRA_ULB_PORTAL_FIELDS');
+    const submitDateConfig = extractDateConfig(submitRowEditFields, submitExtraUlbPortalFields);
 
     const dbRows = await this.rowModel
       .find({
@@ -374,20 +381,16 @@ export class EulbPostSubmissionUpdateService {
     // ─── MongoDB transaction ───────────────────────────────────────────────────
 
     const batchId = new Types.ObjectId();
-    const documentRef: EulbBatchDocumentRef = {
-      fileName: documentInput.fileName,
-      fileUrl: documentInput.fileUrl,
-      fileSize: documentInput.fileSize,
-      mimeType: documentInput.mimeType ?? 'application/pdf',
-      s3Key: documentInput.s3Key,
-      pageCount: documentInput.pageCount ?? null,
-    };
+    const now = new Date();
+    // Stamped explicitly (rather than left to Mongoose's automatic FileInfo timestamps)
+    // because `documentRef` is echoed back in the response below without a DB re-read —
+    // always a new document here (existing is always null for this call site).
+    const documentRef: FileInfo = { ...documentFile, createdAt: now, updatedAt: now };
 
     const session = await this.formModel.db.startSession();
     try {
       session.startTransaction();
 
-      const now = new Date();
       const userOid = new Types.ObjectId(user._id);
 
       await this.formModel
@@ -506,10 +509,18 @@ export class EulbPostSubmissionUpdateService {
         activeDatasetVersion: formForSummary?.activeDatasetVersion ?? 0,
       };
 
+      const hydratedDocument = this.fileInfoNormalizer.hydrateFileInfoForResponse(documentRef, (p) => {
+        try {
+          return this.fileTokenService.signFileUrl(p);
+        } catch {
+          return p;
+        }
+      });
+
       return xviFcSuccess('Elected Urban Local Bodies update submitted successfully.', {
         batchId: batchId.toString(),
         updatedRowCount: dto.rows.length,
-        document: documentRef,
+        document: hydratedDocument as HydratedFileInfoResponse,
         validationSummary,
       });
     } catch (err) {
@@ -551,7 +562,8 @@ export class EulbPostSubmissionUpdateService {
 
     const validateFormJsonFields = await this.eulbFormJsonConfig.loadFields(yearId);
     const validateRowEditFields = getFieldsByType(validateFormJsonFields, 'EULB_ROW_EDIT_FIELDS');
-    const validateDateConfig = extractDateConfig(validateRowEditFields);
+    const validateExtraUlbPortalFields = getFieldsByType(validateFormJsonFields, 'EULB_EXTRA_ULB_PORTAL_FIELDS');
+    const validateDateConfig = extractDateConfig(validateRowEditFields, validateExtraUlbPortalFields);
 
     const dbRows = await this.rowModel
       .find({
@@ -651,7 +663,8 @@ export class EulbPostSubmissionUpdateService {
     const hasAccess = this.hasStateAccess(user, stateId);
     const canUpdate = canViewPostSubmissionUpdate(formStatus);
     const canView = perms.has(Permission.VIEW_STATE_FORMS) && hasAccess && canUpdate;
-    return { canView, canSubmitUpdate: canView };
+    const canSubmitUpdate = perms.has(Permission.FINAL_SUBMIT_STATE_FORMS) && hasAccess && canUpdate;
+    return { canView, canSubmitUpdate };
   }
 
   /**
@@ -686,8 +699,9 @@ export class EulbPostSubmissionUpdateService {
     stateId: string,
     yearId: string,
     activeVersion: number,
+    electedBodyStatuses: string[],
   ): Promise<EulbStatusSummary> {
-    const [constituted, notConstituted, exempt] = ELECTED_BODY_STATUSES;
+    const [constituted, notConstituted, exempt] = electedBodyStatuses;
 
     const groups = await this.rowModel
       .aggregate<{ _id: string | null; count: number }>([

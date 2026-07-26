@@ -8,19 +8,40 @@ import {
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import axios from 'axios';
-import { Model, Types } from 'mongoose';
+import { Model, PipelineStage, Types } from 'mongoose';
+import { S3Service } from 'src/core/s3/s3.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
-import { AccessLevel, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
-import { FORM_STATUS } from 'src/common/constants/form-status.constants';
+import { AccessLevel, Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
+import { getEffectivePermissions } from 'src/module/auth/permissions.map';
+import { FORM_STATUS, getFormStatusLabel, type FormStatusType } from 'src/common/constants/form-status.constants';
 import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import { xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { XviFcBankAccount, XviFcBankAccountDocument } from 'src/schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
+import {
+  XviFcBankAccountFormLog,
+  XviFcBankAccountFormLogDocument,
+} from 'src/schemas/xvi-fc/ulb/xvi-fc-bank-account-form-log.schema';
 import { toObjectIdString } from 'src/common/utils/objectid.util';
+import { escapeRegex } from 'src/common/utils/regex.util';
+import { resolveStateScopeFilter } from 'src/module/xvi-fc/common/utils/xvi-fc-scope-filter.util';
+import {
+  buildDecisionRecord,
+  runBulkDecision,
+  type BulkDecisionResult,
+} from 'src/module/xvi-fc/common/utils/xvi-fc-decision.util';
 import type { GetXviFcBankAccountQueryDto } from './dto/get-xvi-fc-bank-account-query.dto';
 import { IFSC_REGEX } from './dto/submit-xvi-fc-bank-account.dto';
 import type { SubmitXviFcBankAccountDto } from './dto/submit-xvi-fc-bank-account.dto';
-import type { VerifiedIfscDetails, XviFcBankAccountResponse, XviFcIfscLookupResponse } from './bank-account.types';
+import type { BankAccountDecisionDto } from './dto/bank-account-decision.dto';
+import type { BulkBankAccountDecisionDto } from './dto/bulk-bank-account-decision.dto';
+import type { BankAccountUlbSubmissionsQueryDto } from './dto/bank-account-ulb-submissions-query.dto';
+import type {
+  BankAccountFormLogEntry,
+  VerifiedIfscDetails,
+  XviFcBankAccountResponse,
+  XviFcIfscLookupResponse,
+} from './bank-account.types';
 import {
   buildSafeBankAccountResponse,
   encryptAccountNumber,
@@ -29,6 +50,26 @@ import {
   maskAccountNumber,
   type SafeBankAccountResponse,
 } from './utils/bank-account-security.util';
+
+export interface BankAccountPermissions {
+  canReview: boolean;
+  canApprove: boolean;
+}
+
+interface BankAccountSubmissionRow {
+  ulbId: Types.ObjectId;
+  ulbCode: string;
+  ulbName: string;
+  formStatus: FormStatusType;
+  lastUpdatedAt: Date | null;
+  bankAccountId: Types.ObjectId | null;
+}
+
+interface BankAccountSubmissionsFacetResult {
+  data: BankAccountSubmissionRow[];
+  totalCount: Array<{ count: number }>;
+  counts: Array<{ _id: FormStatusType; count: number }>;
+}
 
 interface RazorpayIfscResponse {
   BANK?: string;
@@ -47,14 +88,17 @@ export class BankAccountService {
   constructor(
     @InjectModel(XviFcBankAccount.name)
     private readonly bankAccountModel: Model<XviFcBankAccountDocument>,
+    @InjectModel(XviFcBankAccountFormLog.name)
+    private readonly formLogModel: Model<XviFcBankAccountFormLogDocument>,
     @InjectModel(Ulb.name)
     private readonly ulbModel: Model<UlbDocument>,
+    private readonly s3Service: S3Service,
   ) {}
 
   async getBankAccount(
     query: GetXviFcBankAccountQueryDto,
     user: AuthUser,
-  ): Promise<XviFcApiResponse<XviFcBankAccountResponse | null>> {
+  ): Promise<XviFcApiResponse<(XviFcBankAccountResponse & { permissions: BankAccountPermissions }) | null>> {
     const ulbId = await this.resolveEffectiveUlbId(user, query.ulbId);
     await this.assertCanReadBankAccount(user, ulbId);
 
@@ -66,12 +110,52 @@ export class BankAccountService {
       .lean()
       .exec();
 
-    return xviFcSuccess('Bank account form fetched.', record ? buildSafeBankAccountResponse(record) : null);
+    const status = record?.currentFormStatus ?? FORM_STATUS.NOT_STARTED;
+    const permissions = this.buildBankAccountPermissions(user, status);
+
+    return xviFcSuccess(
+      'Bank account form fetched.',
+      record ? { ...buildSafeBankAccountResponse(record), permissions } : null,
+    );
+  }
+
+  /** Mirrors Annual Accounts' getSignedUrl — generates a presigned S3 GET URL directly, no external service dependency. */
+  async getProofSignedUrl(id: string, user: AuthUser): Promise<XviFcApiResponse<{ url: string }>> {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new BadRequestException('Invalid bank account id.');
+    }
+
+    const record = await this.bankAccountModel.findById(id, 'ulb proofFile').lean().exec();
+    if (!record) throw new NotFoundException('Bank account form not found');
+
+    const ulbId = toObjectIdString(record.ulb);
+    if (!ulbId) throw new NotFoundException('Bank account form not found');
+    await this.assertCanReadBankAccount(user, ulbId);
+
+    if (!record.proofFile?.s3Key) throw new NotFoundException('Proof document not found');
+
+    const url = await this.s3Service.presignGet(record.proofFile.s3Key);
+    return xviFcSuccess('Signed URL fetched.', { url });
+  }
+
+  /** Mirrors Annual Accounts' buildAnnualAccountPermissions — status-aware capability flags for the STATE reviewer UI. */
+  private buildBankAccountPermissions(user: AuthUser, status: FormStatusType): BankAccountPermissions {
+    // assertCanReadBankAccount already confirmed state-match for STATE scope by the time this runs.
+    const hasStateAccess = user.scope === Scope.STATE || user.scope === Scope.ADMIN;
+    const perms = getEffectivePermissions(user);
+    const reviewable = status === FORM_STATUS.UNDER_REVIEW_BY_STATE;
+
+    return {
+      canReview: hasStateAccess && perms.includes(Permission.REVIEW_ULB_SUBMISSIONS) && reviewable,
+      canApprove: hasStateAccess && perms.includes(Permission.APPROVE_ULB_SUBMISSIONS) && reviewable,
+    };
   }
 
   async submitBankAccount(
     dto: SubmitXviFcBankAccountDto,
     user: AuthUser,
+    ipAddress: string | null = null,
+    userAgent: string | null = null,
   ): Promise<XviFcApiResponse<XviFcBankAccountResponse>> {
     const ulbId = await this.resolveEffectiveUlbId(user, dto.ulbId);
     await this.assertCanSubmitBankAccount(user, ulbId);
@@ -80,6 +164,16 @@ export class BankAccountService {
     this.assertBankDetailsMatchVerifiedIfsc(dto.bankDetails, verifiedIfscDetails);
 
     const ulbObjectId = new Types.ObjectId(ulbId);
+    const ulb = await this.ulbModel.findById(ulbId, 'state').lean().exec();
+    const ulbStateId = toObjectIdString(ulb?.state);
+    if (!ulbStateId) {
+      throw new BadRequestException('ULB is not mapped to any state.');
+    }
+    if (ulbStateId !== dto.stateId) {
+      throw new ForbiddenException('stateId does not match the ULB state.');
+    }
+
+    const stateObjectId = new Types.ObjectId(ulbStateId);
     const designYearObjectId = new Types.ObjectId(dto.designYearId);
     const now = new Date();
 
@@ -90,6 +184,7 @@ export class BankAccountService {
 
     const payload = {
       ulb: ulbObjectId,
+      state: stateObjectId,
       designYear: designYearObjectId,
       ifscCode: dto.ifscCode,
       bankDetails: {
@@ -110,6 +205,7 @@ export class BankAccountService {
         sha256: dto.proofFile.sha256,
       },
       currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_STATE,
+      currentFormStatusLabel: getFormStatusLabel(FORM_STATUS.UNDER_REVIEW_BY_STATE),
       submittedBy,
       submittedAt: now,
     };
@@ -123,7 +219,363 @@ export class BankAccountService {
       .lean()
       .exec();
 
+    await this.formLogModel.create({
+      bankAccountId: record._id,
+      ulb: ulbObjectId,
+      designYear: designYearObjectId,
+      action: 'SUBMITTED',
+      toStatus: FORM_STATUS.UNDER_REVIEW_BY_STATE,
+      toStatusLabel: getFormStatusLabel(FORM_STATUS.UNDER_REVIEW_BY_STATE),
+      actorStage: 'ULB',
+      userInfo: { userId: new Types.ObjectId(user._id), role: user.role, ipAddress, userAgent },
+      note: null,
+      filePath: proofFileS3Key,
+      batchId: null,
+    });
+
     return xviFcSuccess('Bank account form submitted.', buildSafeBankAccountResponse(record));
+  }
+
+  // ─── STATE review decision ───────────────────────────────────────────────────
+
+  async decideBankAccount(
+    id: string,
+    dto: BankAccountDecisionDto,
+    user: AuthUser,
+    ipAddress: string | null = null,
+    userAgent: string | null = null,
+    batchId: string | null = null,
+  ): Promise<XviFcApiResponse<XviFcBankAccountResponse>> {
+    const record = await this.bankAccountModel.findById(new Types.ObjectId(id)).lean().exec();
+    if (!record) throw new NotFoundException('Bank account form not found');
+    await this.assertCanStateDecideBankAccount(user, record);
+
+    const newStatus =
+      dto.decision === 'APPROVED' ? FORM_STATUS.UNDER_REVIEW_BY_MOHUA : FORM_STATUS.RETURNED_BY_STATE;
+
+    const decision = buildDecisionRecord(dto.decision, dto.note, user, ipAddress, userAgent);
+
+    const updated = await this.bankAccountModel
+      .findByIdAndUpdate(
+        id,
+        {
+          $set: {
+            currentFormStatus: newStatus,
+            currentFormStatusLabel: getFormStatusLabel(newStatus),
+            stateDecision: decision,
+          },
+        },
+        { new: true },
+      )
+      .lean()
+      .exec();
+
+    await this.formLogModel.create({
+      bankAccountId: new Types.ObjectId(id),
+      ulb: record.ulb,
+      designYear: record.designYear,
+      action: dto.decision,
+      toStatus: newStatus,
+      toStatusLabel: getFormStatusLabel(newStatus),
+      actorStage: 'STATE',
+      userInfo: { userId: new Types.ObjectId(user._id), role: user.role, ipAddress, userAgent },
+      note: dto.note ?? null,
+      filePath: record.proofFile?.s3Key ?? null,
+      batchId,
+    });
+
+    this.logger.log(`Bank account ${dto.decision.toLowerCase()} by STATE — id=${id} by user=${user._id}`);
+    return xviFcSuccess('Bank account decision recorded.', buildSafeBankAccountResponse(updated!));
+  }
+
+  // ─── MoHUA review decision ────────────────────────────────────────────────────
+
+  async decideMohuaBankAccount(
+    id: string,
+    dto: BankAccountDecisionDto,
+    user: AuthUser,
+    ipAddress: string | null = null,
+    userAgent: string | null = null,
+  ): Promise<XviFcApiResponse<XviFcBankAccountResponse>> {
+    const record = await this.bankAccountModel.findById(new Types.ObjectId(id)).lean().exec();
+    if (!record) throw new NotFoundException('Bank account form not found');
+    this.assertCanMohuaDecideBankAccount(user, record);
+
+    const newStatus =
+      dto.decision === 'APPROVED' ? FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA : FORM_STATUS.RETURNED_BY_MOHUA;
+
+    const decision = buildDecisionRecord(dto.decision, dto.note, user, ipAddress, userAgent);
+
+    const updated = await this.bankAccountModel
+      .findByIdAndUpdate(
+        id,
+        {
+          $set: {
+            currentFormStatus: newStatus,
+            currentFormStatusLabel: getFormStatusLabel(newStatus),
+            mohuaDecision: decision,
+          },
+        },
+        { new: true },
+      )
+      .lean()
+      .exec();
+
+    await this.formLogModel.create({
+      bankAccountId: new Types.ObjectId(id),
+      ulb: record.ulb,
+      designYear: record.designYear,
+      action: dto.decision,
+      toStatus: newStatus,
+      toStatusLabel: getFormStatusLabel(newStatus),
+      actorStage: 'MOHUA',
+      userInfo: { userId: new Types.ObjectId(user._id), role: user.role, ipAddress, userAgent },
+      note: dto.note ?? null,
+      filePath: record.proofFile?.s3Key ?? null,
+      batchId: null,
+    });
+
+    this.logger.log(`Bank account ${dto.decision.toLowerCase()} by MoHUA — id=${id} by user=${user._id}`);
+    return xviFcSuccess('Bank account decision recorded.', buildSafeBankAccountResponse(updated!));
+  }
+
+  // ─── Form status audit log ────────────────────────────────────────────────────
+
+  async getBankAccountFormLogs(id: string, user: AuthUser): Promise<XviFcApiResponse<BankAccountFormLogEntry[]>> {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new BadRequestException('Invalid bank account id.');
+    }
+
+    const record = await this.bankAccountModel.findById(id, 'ulb').lean().exec();
+    if (!record) throw new NotFoundException('Bank account form not found');
+    await this.assertCanViewBankAccountFormLogs(user, record);
+
+    const logs = await this.formLogModel
+      .find({ bankAccountId: new Types.ObjectId(id) })
+      .sort({ createdAt: -1 })
+      .lean()
+      .exec();
+
+    return xviFcSuccess(
+      'Bank account form log fetched.',
+      logs.map((log) => ({
+        action: log.action,
+        toStatus: log.toStatus,
+        toStatusLabel: log.toStatusLabel,
+        actorStage: log.actorStage,
+        actorRole: log.userInfo.role,
+        note: log.note,
+        filePath: log.filePath,
+        batchId: log.batchId,
+        createdAt: (log as unknown as { createdAt: Date }).createdAt,
+      })),
+    );
+  }
+
+  /** Read-only history view — STATE/MOHUA/ADMIN reviewers only, no form-status gating (unlike decide). */
+  private async assertCanViewBankAccountFormLogs(user: AuthUser, record: { ulb: Types.ObjectId }): Promise<void> {
+    if (user.scope === Scope.ADMIN) return;
+
+    const perms = getEffectivePermissions(user);
+
+    if (user.scope === Scope.STATE) {
+      if (!perms.includes(Permission.REVIEW_ULB_SUBMISSIONS)) {
+        throw new ForbiddenException('You do not have permission to review ULB submissions');
+      }
+      const userStateId = toObjectIdString(user.state);
+      const ulb = await this.ulbModel.findById(record.ulb, 'state').lean().exec();
+      const ulbStateId = toObjectIdString(ulb?.state);
+      if (!userStateId || !ulbStateId || userStateId !== ulbStateId) {
+        throw new ForbiddenException('You can only view bank account forms within your own state');
+      }
+      return;
+    }
+
+    if (user.scope === Scope.MOHUA) {
+      if (!perms.includes(Permission.REVIEW_STATE_SUBMISSIONS)) {
+        throw new ForbiddenException('You do not have permission to review state submissions');
+      }
+      return;
+    }
+
+    throw new ForbiddenException('Access denied.');
+  }
+
+  // ─── Bulk STATE review decision ───────────────────────────────────────────────
+
+  async bulkDecideBankAccount(
+    dto: BulkBankAccountDecisionDto,
+    user: AuthUser,
+    ipAddress: string | null = null,
+    userAgent: string | null = null,
+  ): Promise<XviFcApiResponse<BulkDecisionResult>> {
+    const result = await runBulkDecision(dto.ids, (id, batchId) =>
+      this.decideBankAccount(id, { decision: dto.decision, note: dto.note }, user, ipAddress, userAgent, batchId),
+    );
+
+    this.logger.log(
+      `Bulk bank account decision — batchId=${result.batchId} decision=${dto.decision} succeeded=${result.succeeded}/${dto.ids.length} by user=${user._id}`,
+    );
+
+    return xviFcSuccess('Bulk decision processed.', result);
+  }
+
+  // ─── State-scoped ULB submissions list ───────────────────────────────────────
+
+  /**
+   * Paginated list of every ULB in the requester's state for a given design year,
+   * joined against that ULB's bank account status. ULB is the primary collection
+   * (left-joined to the bank account doc) so ULBs that haven't started still appear,
+   * reported as NOT_STARTED.
+   */
+  async listUlbBankAccounts(
+    dto: BankAccountUlbSubmissionsQueryDto,
+    user: AuthUser,
+  ): Promise<
+    XviFcApiResponse<{
+      total: number;
+      page: number;
+      pageSize: number;
+      rows: BankAccountSubmissionRow[];
+      counts: Record<FormStatusType, number>;
+    }>
+  > {
+    if (user.scope !== Scope.STATE && user.scope !== Scope.ADMIN) {
+      throw new ForbiddenException('Only STATE or ADMIN users may list ULB submissions');
+    }
+    const perms = getEffectivePermissions(user);
+    if (!perms.includes(Permission.REVIEW_ULB_SUBMISSIONS)) {
+      throw new ForbiddenException('You do not have permission to review ULB submissions');
+    }
+
+    const stateId = resolveStateScopeFilter(user, dto.stateId);
+
+    const matchStage: Record<string, unknown> = { isActive: true };
+    if (stateId) matchStage.state = stateId;
+    if (dto.search?.trim()) {
+      const regex = new RegExp(escapeRegex(dto.search.trim()), 'i');
+      matchStage.$or = [{ name: regex }, { code: regex }];
+    }
+
+    const sortField = dto.sortField ?? 'ulbName';
+    const sortDirection = dto.sortDirection === 'desc' ? -1 : 1;
+    const sortStage: Record<string, 1 | -1> =
+      sortField === 'formStatus' ? { formStatus: sortDirection } : { name: sortDirection };
+
+    const page = dto.page ?? 1;
+    const pageSize = dto.pageSize ?? 20;
+    const designYearObjectId = new Types.ObjectId(dto.designYearId);
+
+    const pipeline: PipelineStage[] = [
+      { $match: matchStage },
+      {
+        $lookup: {
+          from: 'xvifc_bankaccounts',
+          let: { ulbId: '$_id' },
+          pipeline: [
+            {
+              $match: {
+                $expr: { $and: [{ $eq: ['$ulb', '$$ulbId'] }, { $eq: ['$designYear', designYearObjectId] }] },
+              },
+            },
+          ],
+          as: 'bankAccount',
+        },
+      },
+      { $addFields: { bankAccount: { $arrayElemAt: ['$bankAccount', 0] } } },
+      {
+        $addFields: {
+          formStatus: { $ifNull: ['$bankAccount.currentFormStatus', FORM_STATUS.NOT_STARTED] },
+          lastUpdatedAt: { $ifNull: ['$bankAccount.updatedAt', null] },
+        },
+      },
+    ];
+
+    const statusMatch: PipelineStage.FacetPipelineStage[] =
+      dto.status?.length ? [{ $match: { formStatus: { $in: dto.status } } }] : [];
+
+    pipeline.push({
+      $facet: {
+        data: [
+          ...statusMatch,
+          { $sort: sortStage },
+          { $skip: (page - 1) * pageSize },
+          { $limit: pageSize },
+          {
+            $project: {
+              _id: 0,
+              ulbId: '$_id',
+              ulbCode: '$code',
+              ulbName: '$name',
+              formStatus: 1,
+              lastUpdatedAt: 1,
+              bankAccountId: { $ifNull: ['$bankAccount._id', null] },
+            },
+          },
+        ],
+        totalCount: [...statusMatch, { $count: 'count' }],
+        counts: [{ $group: { _id: '$formStatus', count: { $sum: 1 } } }],
+      },
+    });
+
+    const [result] = await this.ulbModel.aggregate<BankAccountSubmissionsFacetResult>(pipeline).exec();
+    const rows = result?.data ?? [];
+    const total = result?.totalCount?.[0]?.count ?? 0;
+
+    const counts = Object.fromEntries(
+      Object.values(FORM_STATUS)
+        .filter((status): status is FormStatusType => status !== FORM_STATUS.NO_STATUS)
+        .map((status) => [status, result?.counts.find((c) => c._id === status)?.count ?? 0]),
+    ) as Record<FormStatusType, number>;
+
+    return xviFcSuccess('ULB bank account submissions fetched.', { total, page, pageSize, rows, counts });
+  }
+
+  /**
+   * STATE users are always scoped to their own state; ADMIN may optionally pass one, else sees all.
+   * Checks the ULB's current state live (same pattern as assertCanReadBankAccount) rather than the
+   * `state` snapshot stored on the bank account record itself — that snapshot is captured once at
+   * submission time and goes stale if the ULB's state mapping is corrected afterward.
+   */
+  private async assertCanStateDecideBankAccount(
+    user: AuthUser,
+    record: { ulb: Types.ObjectId; currentFormStatus: FormStatusType },
+  ): Promise<void> {
+    if (user.scope !== Scope.STATE && user.scope !== Scope.ADMIN) {
+      throw new ForbiddenException('Only STATE or ADMIN users may decide bank account forms');
+    }
+    if (user.scope === Scope.STATE) {
+      const userStateId = toObjectIdString(user.state);
+      const ulb = await this.ulbModel.findById(record.ulb, 'state').lean().exec();
+      const ulbStateId = toObjectIdString(ulb?.state);
+      if (!userStateId || !ulbStateId || userStateId !== ulbStateId) {
+        throw new ForbiddenException('You can only decide bank account forms within your own state');
+      }
+    }
+    const perms = getEffectivePermissions(user);
+    if (!perms.includes(Permission.APPROVE_ULB_SUBMISSIONS)) {
+      throw new ForbiddenException('You do not have permission to review ULB submissions');
+    }
+    if (record.currentFormStatus !== FORM_STATUS.UNDER_REVIEW_BY_STATE) {
+      throw new ForbiddenException(
+        `This form cannot be decided while its status is ${getFormStatusLabel(record.currentFormStatus)}.`,
+      );
+    }
+  }
+
+  private assertCanMohuaDecideBankAccount(user: AuthUser, record: { currentFormStatus: FormStatusType }): void {
+    if (user.scope !== Scope.MOHUA && user.scope !== Scope.ADMIN) {
+      throw new ForbiddenException('Only MOHUA or ADMIN users may decide bank account forms');
+    }
+    const perms = getEffectivePermissions(user);
+    if (!perms.includes(Permission.APPROVE_STATE_SUBMISSIONS)) {
+      throw new ForbiddenException('You do not have permission to review state submissions');
+    }
+    if (record.currentFormStatus !== FORM_STATUS.UNDER_REVIEW_BY_MOHUA) {
+      throw new ForbiddenException(
+        `This form cannot be decided while its status is ${getFormStatusLabel(record.currentFormStatus)}.`,
+      );
+    }
   }
 
   async lookupIfsc(ifscCode: string): Promise<XviFcApiResponse<XviFcIfscLookupResponse>> {

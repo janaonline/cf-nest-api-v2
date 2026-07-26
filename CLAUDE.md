@@ -21,6 +21,10 @@ npx jest src/module/auth/auth.service.spec.ts
 # Code quality
 npm run lint             # ESLint with auto-fix
 npm run format           # Prettier format
+
+# xvi-fc one-off scripts
+npm run seed:mohua-side-menu       # Seed MoHUA side-menu entries (scripts/seed-mohua-side-menu.ts)
+npm run migrate:xvifc-side-menu    # Migrate xvi-fc side-menu data (scripts/migrate-xvifc-sidemenu.ts)
 ```
 
 ## Architecture
@@ -30,6 +34,12 @@ npm run format           # Prettier format
 ```
 src/
 ├── module/auth/         # JWT auth, OTP, login, refresh token rotation
+├── module/xvi-fc/       # 16th Finance Commission forms (state/ULB/MoHUA roles)
+│   ├── ulb/             # annual_accounts (OCR via ANNUAL_ACCOUNT_PROCESSING_QUEUE), bank-account, unspent-balance-disclosure
+│   ├── state/           # sfc-status, elected-urban-local-bodies, devolution-formula, fc-unspent-declaration, dashboard
+│   ├── mohua/           # fc-unspent-declaration review workflow
+│   ├── side-menu/, cache/, common/ # XviFcCacheService/Interceptor, form-actors, form-status-access helpers shared across sub-features
+│   └── xvi-fc.module.ts # composition root importing the feature modules above
 ├── users/               # User CRUD with repository pattern
 ├── admin/
 │   └── afs-digitization/ # AFS file processing with BullMQ queues
@@ -37,7 +47,7 @@ src/
 │   └── resources-section/ # Resource downloads + async ZIP generation
 ├── common/              # Global filter (HttpExceptionFilter), interceptor (ResponseTransformInterceptor)
 ├── core/                # Redis, S3, SES, email queue, nodemailer
-├── schemas/             # All Mongoose schemas (14 total)
+├── schemas/             # All Mongoose schemas (38 total, incl. schemas/xvi-fc/ for the xvi-fc module)
 ├── middleware/          # LoggerMiddleware, RecaptchaMiddleware
 └── views/mail/          # Handlebars email templates
 ```
@@ -61,7 +71,7 @@ When defining models that belong to the digitization DB, use `MongooseModule.for
 
 ### Authorization
 
-13 roles defined in `src/module/auth/enum/role.enum.ts`. Protect routes with:
+16 roles defined in `src/module/auth/enum/role.enum.ts`, including `xvi-fc`-specific ones (`PMU`, `AAINA`, `ULB-EDITOR`/`ULB-VIEWER`, `STATE-EDITOR`/`STATE-VIEWER`). Protect routes with:
 ```ts
 @Roles(Role.ADMIN, Role.STATE)   // applied at controller or handler level
 @UseGuards(RolesGuard)
@@ -90,11 +100,12 @@ Custom status codes in use: `440` (session expired), `422` (invalid OTP), `409` 
 
 ### BullMQ Queues
 
-Queue name constants are in `src/core/constants/queues.ts`. There are four queues:
+Queue name constants are in `src/core/constants/queues.ts`. There are five queues:
 - `EMAIL_QUEUE` — async email sending via Nodemailer
 - `AFS_DIGITIZATION_QUEUE` — AFS file processing
 - `AUDITORS_REPORT_OCR_QUEUE` — OCR for audit documents
 - `ZIP_RESOURCES_QUEUE` — async ZIP generation
+- `ANNUAL_ACCOUNT_PROCESSING_QUEUE` — OCR validation for `xvi-fc` ULB annual account uploads (processed in `module/xvi-fc/ulb/annual_accounts/annual-account-ocr.processor.ts`)
 
 BullBoard admin UI is at `/admin/queues` (HTTP basic auth via `ADMIN_USER`/`ADMIN_PASSWORD`).
 
@@ -134,3 +145,4 @@ Required variables (see `.env` for dev defaults):
 | `RECAPTCHA_SECRET_KEY` | reCAPTCHA v3 (set `RECAPTCHA_SKIP_DEV=true` locally) |
 | `OTP_TTL_SECONDS` | OTP expiry in Redis |
 | `CLIENT_URL` / `WHITELISTED_DOMAINS` | CORS origins |
+| `BANK_ACCOUNT_ENCRYPTION_KEY` / `BANK_ACCOUNT_HASH_SECRET` | `xvi-fc` ULB bank-account encryption/hashing (`module/xvi-fc/ulb/bank-account`) |

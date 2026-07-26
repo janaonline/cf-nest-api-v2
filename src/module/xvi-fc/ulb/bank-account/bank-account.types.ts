@@ -1,5 +1,6 @@
 import type { Types } from 'mongoose';
 import type { FormStatusType } from 'src/common/constants/form-status.constants';
+import type { DecisionInfo } from 'src/schemas/xvi-fc/annual-account.schema';
 
 export type XviFcBankAccountProofMimeType = 'application/pdf' | 'image/jpeg' | 'image/png';
 
@@ -33,6 +34,7 @@ export const DEFAULT_XVI_FC_BANK_ACCOUNT_PROOF_FILE: XviFcBankAccountProofFile =
 export interface XviFcBankAccountRecord {
   ulb: Types.ObjectId;
   designYear: Types.ObjectId;
+  state: Types.ObjectId;
   ifscCode: string;
   bankDetails: Record<string, unknown>;
   accountNumberEncrypted: string;
@@ -41,6 +43,9 @@ export interface XviFcBankAccountRecord {
   accountNumberLast4: string;
   proofFile: XviFcBankAccountProofFile;
   currentFormStatus: FormStatusType;
+  currentFormStatusLabel: string;
+  stateDecision: DecisionInfo | null;
+  mohuaDecision: DecisionInfo | null;
   submittedBy?: Types.ObjectId;
   submittedAt?: Date;
   createdAt?: Date;
@@ -50,6 +55,7 @@ export interface XviFcBankAccountRecord {
 export interface XviFcBankAccountResponse {
   _id: string;
   ulb: string;
+  state: string;
   designYear: string;
   ifscCode: string;
   bankDetails: XviFcBankDetails;
@@ -58,10 +64,24 @@ export interface XviFcBankAccountResponse {
   proofFile: XviFcBankAccountProofFile;
   currentFormStatus: FormStatusType;
   currentFormStatusLabel: string;
+  stateDecision: DecisionInfo | null;
+  mohuaDecision: DecisionInfo | null;
   submittedBy?: string;
   submittedAt?: string;
   createdAt?: string;
   updatedAt?: string;
+}
+
+export interface BankAccountFormLogEntry {
+  action: 'SUBMITTED' | 'APPROVED' | 'RETURNED';
+  toStatus: FormStatusType;
+  toStatusLabel: string;
+  actorStage: 'ULB' | 'STATE' | 'MOHUA';
+  actorRole: string;
+  note: string | null;
+  filePath: string | null;
+  batchId: string | null;
+  createdAt: Date;
 }
 
 export interface XviFcIfscLookupResponse {

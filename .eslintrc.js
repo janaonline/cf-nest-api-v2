@@ -2,26 +2,25 @@ module.exports = {
   root: true,
   parser: '@typescript-eslint/parser',
   parserOptions: {
-    project: './tsconfig.json',
+    project: ['./tsconfig.json', './tsconfig.spec.json'],
     tsconfigRootDir: __dirname,
     sourceType: 'module',
   },
-  plugins: ['@typescript-eslint', 'prettier'],
+  plugins: ['@typescript-eslint'],
   extends: [
     'eslint:recommended',
     'plugin:@typescript-eslint/recommended',
-    'plugin:prettier/recommended', // Integrates Prettier
+    'prettier', // eslint-config-prettier: disables formatting rules that conflict with Prettier
   ],
   rules: {
-    'prettier/prettier': ['error', { endOfLine: 'lf', printWidth: 120 }],
     'max-len': [
-      'error',
+      'warn',
       {
         code: 120,
         ignoreUrls: true,
         ignoreStrings: true,
         ignoreTemplateLiterals: true,
-        ignoreComments: false,
+        ignoreComments: true,
       },
     ],
   },

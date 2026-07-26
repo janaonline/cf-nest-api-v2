@@ -2,16 +2,21 @@ import type { ArgumentsHost } from '@nestjs/common';
 import { BadRequestException, ForbiddenException, HttpException, NotFoundException } from '@nestjs/common';
 import { HttpExceptionFilter } from './http-exception.filter';
 
-function buildHost(url = '/test'): { host: ArgumentsHost; json: jest.Mock } {
+function buildHost(url = '/test', headers: Record<string, string> = {}): { host: ArgumentsHost; json: jest.Mock } {
   const json = jest.fn();
   const status = jest.fn().mockReturnValue({ json });
   const host = {
     switchToHttp: () => ({
       getResponse: () => ({ status }),
-      getRequest: () => ({ method: 'GET', url }),
+      getRequest: () => ({ method: 'GET', url, headers }),
     }),
   } as unknown as ArgumentsHost;
   return { host, json };
+}
+
+function getJsonBody(json: jest.Mock): Record<string, unknown> {
+  const calls = json.mock.calls as unknown[][];
+  return calls[0][0] as Record<string, unknown>;
 }
 
 describe('HttpExceptionFilter', () => {
@@ -53,7 +58,7 @@ describe('HttpExceptionFilter', () => {
     const { host, json } = buildHost();
     const errors = { fieldName: [{ field: 'fieldName', message: 'required', code: 'required' }] };
     filter.catch(new BadRequestException({ message: 'Validation failed.', errors }), host);
-    const body = json.mock.calls[0][0] as Record<string, unknown>;
+    const body = getJsonBody(json);
     expect(body['success']).toBe(false);
     expect(body['message']).toBe('Validation failed.');
     expect(body['errors']).toEqual(errors);
@@ -62,7 +67,7 @@ describe('HttpExceptionFilter', () => {
   it('includes timestamp (ISO string) and path in every error response', () => {
     const { host, json } = buildHost('/xvi-fc/state/sfc-status/save-draft');
     filter.catch(new HttpException('Error', 400), host);
-    const body = json.mock.calls[0][0] as Record<string, unknown>;
+    const body = getJsonBody(json);
     expect(typeof body['timestamp']).toBe('string');
     expect(new Date(body['timestamp'] as string).toISOString()).toBe(body['timestamp']);
     expect(body['path']).toBe('/xvi-fc/state/sfc-status/save-draft');
@@ -73,14 +78,14 @@ describe('HttpExceptionFilter', () => {
     const errors = { ulbCount: [{ field: 'ulbCount', message: 'Mismatch', code: 'mismatch' }] };
     const data = { validationSummary: { excelRowCount: 12 } };
     filter.catch(new BadRequestException({ message: 'Validation failed.', errors, data }), host);
-    const body = json.mock.calls[0][0] as Record<string, unknown>;
+    const body = getJsonBody(json);
     expect(body['data']).toEqual(data);
   });
 
   it('message is always a non-empty string', () => {
     const { host, json } = buildHost();
     filter.catch(new BadRequestException('Must not be empty'), host);
-    const body = json.mock.calls[0][0] as Record<string, unknown>;
+    const body = getJsonBody(json);
     expect(typeof body['message']).toBe('string');
     expect((body['message'] as string).length).toBeGreaterThan(0);
   });
@@ -88,7 +93,23 @@ describe('HttpExceptionFilter', () => {
   it('does not include success:true in error responses', () => {
     const { host, json } = buildHost();
     filter.catch(new BadRequestException('err'), host);
-    const body = json.mock.calls[0][0] as Record<string, unknown>;
+    const body = getJsonBody(json);
     expect(body['success']).not.toBe(true);
+  });
+
+  it('adds one generated request ID to error responses', () => {
+    const { host, json } = buildHost();
+    filter.catch(new Error('Database details must stay private'), host);
+    const body = getJsonBody(json);
+    expect(typeof body['requestId']).toBe('string');
+    expect(body['requestId']).toMatch(/^req-/);
+    expect(body['message']).toBe('Internal server error');
+  });
+
+  it('reuses a safe incoming request ID', () => {
+    const { host, json } = buildHost('/test', { 'x-request-id': 'req-client-123' });
+    filter.catch(new BadRequestException('Bad input'), host);
+    const body = getJsonBody(json);
+    expect(body['requestId']).toBe('req-client-123');
   });
 });

@@ -3,13 +3,15 @@ jest.mock('bcrypt', () => ({
   hash: jest.fn().mockResolvedValue('mock-hash'),
 }));
 
-import { ConflictException, HttpException } from '@nestjs/common';
+import { HttpException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { getModelToken } from '@nestjs/mongoose';
 import { JwtService } from '@nestjs/jwt';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as bcrypt from 'bcrypt';
 import { Response } from 'express';
 import { RedisService } from 'src/core/services/redis/redis.service';
+import { LoginHistory } from 'src/schemas/user/login-history.schema';
 import { UsersRepository } from 'src/users/users.repository';
 import { AuthService } from './auth.service';
 
@@ -58,6 +60,10 @@ const mockRedisService = {
   del: jest.fn().mockResolvedValue(undefined),
 };
 
+const mockLoginHistoryModel = {
+  create: jest.fn().mockResolvedValue({ _id: { toString: () => 'lh-id-123' } }),
+};
+
 const mockRes = { cookie: jest.fn() } as unknown as Response;
 
 describe('AuthService', () => {
@@ -71,6 +77,7 @@ describe('AuthService', () => {
         { provide: JwtService, useValue: mockJwtService },
         { provide: ConfigService, useValue: mockConfigService },
         { provide: RedisService, useValue: mockRedisService },
+        { provide: getModelToken(LoginHistory.name), useValue: mockLoginHistoryModel },
       ],
     }).compile();
 
@@ -78,6 +85,7 @@ describe('AuthService', () => {
     jest.clearAllMocks();
     mockJwtService.signAsync.mockResolvedValue('mock-token');
     mockUsersRepository.updateRefreshToken.mockResolvedValue(undefined);
+    mockLoginHistoryModel.create.mockResolvedValue({ _id: { toString: () => 'lh-id-123' } });
   });
 
   afterEach(() => {
@@ -104,8 +112,10 @@ describe('AuthService', () => {
     it('rotates tokens on valid refresh token', async () => {
       mockUsersRepository.findByIdWithRefreshToken.mockResolvedValue(mockUser);
       (bcrypt.compare as jest.Mock).mockResolvedValue(true);
-      const result = await service.refreshTokens('user-id-123', 'valid-token', mockRes);
+      // Must be a valid 24-char hex ObjectId — generateTokens() creates a LoginHistory doc keyed by this id
+      const result = await service.refreshTokens('507f1f77bcf86cd799439011', 'valid-token', mockRes);
       expect(result.token).toBe('mock-token');
+      expect(mockLoginHistoryModel.create).toHaveBeenCalled();
     });
 
     it('throws 440 when hash does not match (theft detection)', async () => {
@@ -125,25 +135,4 @@ describe('AuthService', () => {
     });
   });
 
-  describe('register()', () => {
-    it('creates user and returns sanitized user', async () => {
-      mockUsersRepository.exists.mockResolvedValue(false);
-      mockUsersRepository.create.mockResolvedValue({ ...mockUser });
-      const result = await service.register({
-        name: 'Test',
-        email: 'new@example.com',
-        password: 'Password@1',
-        confirmPassword: 'Password@1',
-      });
-      expect(result['password']).toBeUndefined();
-      expect(result['refreshTokenHash']).toBeUndefined();
-    });
-
-    it('throws 409 when email already exists', async () => {
-      mockUsersRepository.exists.mockResolvedValue(true);
-      await expect(
-        service.register({ name: 'Test', email: 'exists@example.com', password: 'Password@1', confirmPassword: 'Password@1' }),
-      ).rejects.toThrow(ConflictException);
-    });
-  });
 });

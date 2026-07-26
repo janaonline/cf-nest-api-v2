@@ -176,7 +176,8 @@ export class ElectedUrbanLocalBodiesRowService {
 
     const rowFormJsonFields = await this.eulbFormJsonConfig.loadFields(yearId);
     const rowEditFields = getFieldsByType(rowFormJsonFields, 'EULB_ROW_EDIT_FIELDS');
-    const rowDateConfig = extractDateConfig(rowEditFields);
+    const rowExtraUlbPortalFields = getFieldsByType(rowFormJsonFields, 'EULB_EXTRA_ULB_PORTAL_FIELDS');
+    const rowDateConfig = extractDateConfig(rowEditFields, rowExtraUlbPortalFields);
 
     const effectiveStatus = dto.electedBodyStatus ?? row.electedBodyStatus ?? undefined;
     const isConstituted = effectiveStatus === 'Constituted';

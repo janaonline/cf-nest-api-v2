@@ -1,13 +1,19 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import type { Request } from 'express';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { CurrentUser } from 'src/module/auth/decorators/current-user.decorator';
 import { Permission } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { PermissionGuard } from 'src/module/auth/permission.guard';
 import { RequirePermissions } from 'src/module/auth/require-permissions.decorator';
+import { ParseObjectIdPipe } from 'src/common/pipes/parse-object-id.pipe';
 import { GetXviFcBankAccountQueryDto } from './dto/get-xvi-fc-bank-account-query.dto';
 import { SubmitXviFcBankAccountDto } from './dto/submit-xvi-fc-bank-account.dto';
+import { BankAccountDecisionDto } from './dto/bank-account-decision.dto';
+// import { BulkBankAccountDecisionDto } from './dto/bulk-bank-account-decision.dto'; // only used by the commented-out bulk-decision endpoint below
+import { BankAccountUlbSubmissionsQueryDto } from './dto/bank-account-ulb-submissions-query.dto';
 import { BankAccountService } from './bank-account.service';
+import { extractIpAndUserAgent } from 'src/module/xvi-fc/common/utils/xvi-fc-request-meta.util';
 
 @ApiTags('XVI-FC')
 @ApiBearerAuth()
@@ -21,6 +27,13 @@ export class BankAccountController {
     return this.bankAccountService.lookupIfsc(ifscCode);
   }
 
+  @Get('state/ulb-submissions')
+  @UseGuards(PermissionGuard)
+  @RequirePermissions(Permission.REVIEW_ULB_SUBMISSIONS)
+  listUlbSubmissions(@Query() dto: BankAccountUlbSubmissionsQueryDto, @CurrentUser() user: AuthUser) {
+    return this.bankAccountService.listUlbBankAccounts(dto, user);
+  }
+
   @Get()
   @UseGuards(PermissionGuard)
   getBankAccount(@Query() query: GetXviFcBankAccountQueryDto, @CurrentUser() user: AuthUser) {
@@ -29,7 +42,54 @@ export class BankAccountController {
 
   @Post()
   @UseGuards(PermissionGuard)
-  submitBankAccount(@Body() dto: SubmitXviFcBankAccountDto, @CurrentUser() user: AuthUser) {
-    return this.bankAccountService.submitBankAccount(dto, user);
+  submitBankAccount(@Body() dto: SubmitXviFcBankAccountDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    const { ipAddress, userAgent } = extractIpAndUserAgent(req);
+    return this.bankAccountService.submitBankAccount(dto, user, ipAddress, userAgent);
   }
+
+  // @Post('bulk-decision')
+  // @UseGuards(PermissionGuard)
+  // @RequirePermissions(Permission.APPROVE_ULB_SUBMISSIONS)
+  // bulkDecide(@Body() dto: BulkBankAccountDecisionDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
+  //   const { ipAddress, userAgent } = extractIpAndUserAgent(req);
+  //   return this.bankAccountService.bulkDecideBankAccount(dto, user, ipAddress, userAgent);
+  // }
+
+  @Get(':id/logs')
+  @UseGuards(PermissionGuard)
+  getFormLogs(@Param('id', ParseObjectIdPipe) id: string, @CurrentUser() user: AuthUser) {
+    return this.bankAccountService.getBankAccountFormLogs(id, user);
+  }
+
+  @Get(':id/proof-signed-url')
+  @UseGuards(PermissionGuard)
+  getProofSignedUrl(@Param('id', ParseObjectIdPipe) id: string, @CurrentUser() user: AuthUser) {
+    return this.bankAccountService.getProofSignedUrl(id, user);
+  }
+
+  @Post(':id/decision')
+  @UseGuards(PermissionGuard)
+  @RequirePermissions(Permission.APPROVE_ULB_SUBMISSIONS)
+  decide(
+    @Param('id', ParseObjectIdPipe) id: string,
+    @Body() dto: BankAccountDecisionDto,
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    const { ipAddress, userAgent } = extractIpAndUserAgent(req);
+    return this.bankAccountService.decideBankAccount(id, dto, user, ipAddress, userAgent);
+  }
+
+  // @Post(':id/mohua-decision')
+  // @UseGuards(PermissionGuard)
+  // @RequirePermissions(Permission.APPROVE_STATE_SUBMISSIONS)
+  // decideMohua(
+  //   @Param('id', ParseObjectIdPipe) id: string,
+  //   @Body() dto: BankAccountDecisionDto,
+  //   @CurrentUser() user: AuthUser,
+  //   @Req() req: Request,
+  // ) {
+  //   const { ipAddress, userAgent } = extractIpAndUserAgent(req);
+  //   return this.bankAccountService.decideMohuaBankAccount(id, dto, user, ipAddress, userAgent);
+  // }
 }

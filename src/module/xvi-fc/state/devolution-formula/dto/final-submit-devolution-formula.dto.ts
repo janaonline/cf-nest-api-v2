@@ -2,50 +2,21 @@ import { Type } from 'class-transformer';
 import {
   IsBoolean,
   IsIn,
-  IsInt,
   IsMongoId,
   IsNotEmpty,
   IsNumber,
   IsObject,
   IsOptional,
-  IsString,
-  Min,
   ValidateNested,
 } from 'class-validator';
+import { XviFcFileRefDto } from 'src/module/xvi-fc/common/dto/xvi-fc-file-ref.dto';
 import { DF_INSTALLMENTS, type DfInstallment } from '../constants/devolution-formula.constants';
-
-class DfFileRefDto {
-  @IsString()
-  @IsNotEmpty()
-  fileName!: string;
-
-  @IsString()
-  @IsNotEmpty()
-  fileUrl!: string;
-
-  @IsOptional()
-  @IsNumber()
-  fileSize?: number | null;
-
-  @IsOptional()
-  @IsString()
-  mimeType?: string;
-
-  @IsOptional()
-  @IsString()
-  s3Key?: string;
-
-  @IsOptional()
-  @IsInt()
-  @Min(0)
-  pageCount?: number | null;
-}
 
 class DfFinalSubmitDataDto {
   @IsObject()
   @ValidateNested()
-  @Type(() => DfFileRefDto)
-  excelFile!: DfFileRefDto;
+  @Type(() => XviFcFileRefDto)
+  excelFile!: XviFcFileRefDto;
 
   @IsBoolean()
   checkboxConfirmation!: boolean;

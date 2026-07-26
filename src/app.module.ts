@@ -14,6 +14,7 @@ import { NodeMailerModule } from './core/node-mailer/node-mailer.module';
 import { RedisModule } from './core/services/redis/redis.module';
 import { LoggerMiddleware } from './middleware/logger-middleware';
 import { AuthModule } from './module/auth/auth.module';
+import { DataCollectionModule } from './module/data-collection/data-collection.module';
 import { UsersModule } from './users/users.module';
 import { AfsDigitizationModule } from './admin/afs-digitization/afs-digitization.module';
 import { ReportAnIssueModule } from './web/report-an-issue/report-an-issue.module';
@@ -44,12 +45,12 @@ function getQueryCaller(): string {
 
 @Module({
   imports: [
-    ThrottlerModule.forRoot([
-      {
-        ttl: seconds(60), // time window in seconds
-        limit: 60, // max requests per window
-      },
-    ]),
+    // ThrottlerModule.forRoot([
+    //   {
+    //     ttl: seconds(60), // time window in seconds
+    //     limit: 600, // max requests per window
+    //   },
+    // ]),
     ConfigModule.forRoot({ isGlobal: true }),
     ScheduleModule.forRoot(),
     CacheModule.register({ isGlobal: true, ttl: 300000 }),
@@ -105,6 +106,7 @@ function getQueryCaller(): string {
     FileDownloadModule,
     AfsDigitizationModule,
     EventsModule,
+    DataCollectionModule,
     XviFcModule,
     EmailTemplatesModule,
     EmailRemindersModule,
@@ -121,10 +123,10 @@ function getQueryCaller(): string {
   controllers: [AppController],
   providers: [
     AppService,
-    {
-      provide: APP_GUARD,
-      useClass: ThrottlerBehindProxyGuard,
-    },
+    // {
+    //   provide: APP_GUARD,
+    //   useClass: ThrottlerBehindProxyGuard,
+    // },
   ],
 })
 export class AppModule implements NestModule {

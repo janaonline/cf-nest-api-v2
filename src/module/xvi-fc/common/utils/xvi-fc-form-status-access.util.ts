@@ -32,6 +32,26 @@ export function canUlbSubmitForm(status: number): boolean {
 }
 
 /**
+ * Throws ForbiddenException if the current form status does not allow a ULB user to save/edit.
+ * @param status - Current `currentFormStatus` value from the form document.
+ */
+export function assertCanUlbEditForm(status: number): void {
+  if (!canUlbEditForm(status)) {
+    throw new ForbiddenException(`Form cannot be edited when status is ${getFormStatusLabel(status)}.`);
+  }
+}
+
+/**
+ * Throws ForbiddenException if the current form status does not allow a ULB user to submit.
+ * @param status - Current `currentFormStatus` value from the form document.
+ */
+export function assertCanUlbSubmitForm(status: number): void {
+  if (!canUlbSubmitForm(status)) {
+    throw new ForbiddenException(`Form cannot be submitted when status is ${getFormStatusLabel(status)}.`);
+  }
+}
+
+/**
  * Returns true if a STATE user may save or edit a state form in the given status.
  */
 export function canStateEditForm(status: number): boolean {
@@ -62,6 +82,38 @@ export function assertCanStateEditForm(status: number): void {
 export function assertCanStateFinalSubmitForm(status: number): void {
   if (!canStateFinalSubmitForm(status)) {
     throw new ForbiddenException(`Form cannot be final submitted when status is ${getFormStatusLabel(status)}.`);
+  }
+}
+
+/** Statuses in which a MoHUA user may view a form's review page (read-only once acknowledged). */
+export const MOHUA_REVIEWABLE_STATUSES: readonly number[] = [
+  FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+  FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+];
+
+const MOHUA_REVIEWABLE_STATUS_SET = new Set(MOHUA_REVIEWABLE_STATUSES);
+
+/** Returns true if a MoHUA user may view the review page for a form in the given status. */
+export function canMohuaViewForm(status: number): boolean {
+  return MOHUA_REVIEWABLE_STATUS_SET.has(status);
+}
+
+/**
+ * Returns true if a MoHUA user may mutate a form (row-level or complete-form decisions) in the
+ * given status. Only `UNDER_REVIEW_BY_MOHUA` is mutable — once acknowledged, the form is terminal.
+ */
+export function canMohuaMutateForm(status: number): boolean {
+  return status === FORM_STATUS.UNDER_REVIEW_BY_MOHUA;
+}
+
+/**
+ * Throws ForbiddenException if the current form status does not allow a MoHUA user to mutate it
+ * (row-level review decisions or a complete-form approve/reject).
+ * @param status - Current `currentFormStatus` value from the form document.
+ */
+export function assertCanMohuaMutateForm(status: number): void {
+  if (!canMohuaMutateForm(status)) {
+    throw new ForbiddenException(`Form cannot be reviewed when status is ${getFormStatusLabel(status)}.`);
   }
 }
 

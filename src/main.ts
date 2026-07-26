@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import * as express from 'express';
 import { join } from 'path';
 import { AppModule } from './app.module';
 import basicAuth from 'express-basic-auth';
@@ -17,6 +18,17 @@ async function bootstrap() {
     logger: process.env.NODE_ENV === 'production' ? ['error', 'warn'] : ['log', 'error', 'warn', 'debug', 'verbose'],
     // logger: false, // disable default logger
   });
+
+  /**
+   * -------------------------------------------------------
+   * Body Parser Limit
+   * -------------------------------------------------------
+   * Overrides Express's default 100kb body size limit.
+   * Set to 200kb to accommodate large import payloads
+   */
+  app.use(express.json({ limit: '200kb' }));
+  app.use(express.urlencoded({ extended: true, limit: '200kb' }));
+
   const configService = app.get(ConfigService);
   const logger = new Logger('MAIN');
 
@@ -90,7 +102,7 @@ async function bootstrap() {
    * - methods: allowed HTTP methods
    * - preflightContinue: whether OPTIONS requests should pass to routes
    * - optionsSuccessStatus: HTTP status for successful OPTIONS response
-   * - Note: Comma seperate the domains in .env eg: WHITELISTED_DOMAINS="http://localhost:4200,http://localhost:4100"
+   * - Note: Comma seperate the domains in .env eg: WHITELISTED_DOMAINS="url1,url2"
    */
   let WHITELISTED_DOMAINS: string[] = [];
   const DOMAINS = configService.get<string>('WHITELISTED_DOMAINS');

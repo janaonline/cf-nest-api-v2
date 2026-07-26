@@ -2,7 +2,8 @@ import { StreamableFile } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Types } from 'mongoose';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
-import { AccessLevel, Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
+import { AccessLevel, Permission, Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
+import { REQUIRED_PERMISSIONS_KEY } from 'src/module/auth/require-permissions.decorator';
 import { ElectedUrbanLocalBodiesController } from 'src/module/xvi-fc/state/elected-urban-local-bodies/controllers/elected-urban-local-bodies.controller';
 import { ElectedUrbanLocalBodiesExcelService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/excel/elected-urban-local-bodies-excel.service';
 import { EulbPostSubmissionUpdateService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/post-submission-update/elected-urban-local-bodies-post-submission-update.service';
@@ -50,5 +51,29 @@ describe('ElectedUrbanLocalBodiesController', () => {
     expect(headers.type).toBe('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     expect(headers.disposition).toMatch(/^attachment; filename="elected-body-data-dump_/);
     expect(headers.disposition).toMatch(/\.xlsx"$/);
+  });
+
+  describe('post-submission-update permission gates', () => {
+    // Regression guard for a real authorization gap: these two routes previously required
+    // only VIEW_STATE_FORMS, which let a view-only state user mutate row data via
+    // post-submission-update (see also EulbPostSubmissionUpdateService.buildPermissions).
+    it('requires EDIT_STATE_FORMS on the validate route', () => {
+      const perms = Reflect.getMetadata(REQUIRED_PERMISSIONS_KEY, controller.validatePostSubmissionUpdateBatch);
+      expect(perms).toEqual([Permission.EDIT_STATE_FORMS]);
+    });
+
+    it('requires FINAL_SUBMIT_STATE_FORMS on the submit route', () => {
+      const perms = Reflect.getMetadata(REQUIRED_PERMISSIONS_KEY, controller.submitPostSubmissionUpdateBatch);
+      expect(perms).toEqual([Permission.FINAL_SUBMIT_STATE_FORMS]);
+    });
+
+    it('leaves the read-only metadata and rows routes on VIEW_STATE_FORMS', () => {
+      expect(Reflect.getMetadata(REQUIRED_PERMISSIONS_KEY, controller.getPostSubmissionUpdateMetadata)).toEqual([
+        Permission.VIEW_STATE_FORMS,
+      ]);
+      expect(Reflect.getMetadata(REQUIRED_PERMISSIONS_KEY, controller.getPostSubmissionUpdateRows)).toEqual([
+        Permission.VIEW_STATE_FORMS,
+      ]);
+    });
   });
 });

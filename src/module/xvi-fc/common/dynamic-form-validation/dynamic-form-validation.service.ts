@@ -61,8 +61,9 @@ export class DynamicFormValidationService {
       if (validationEnabled) {
         if (isFull) {
           this.accumulateErrors(errors, this.validateField(field, value, true));
-        } else if (!this.isEmptyValue(value) || this.hasRequiredTrue(field)) {
-          // Draft: skip absent fields unless requiredTrue is present
+        } else if (!this.isEmptyValue(value) /* || this.hasRequiredTrue(field) */) {
+          // Draft: skip absent fields. requiredTrue mandatory-on-draft enforcement is
+          // temporarily disabled for now — see the reqTrueV block in validateField below.
           this.accumulateErrors(errors, this.validateField(field, value, false));
         }
       }
@@ -140,12 +141,18 @@ export class DynamicFormValidationService {
 
     if (findV('nullValidator')) return errors;
 
+    // actualTarget carries an object value ({actual, target}) — never itself "empty" by the
+    // generic scalar isEmptyValue check, so it must be dispatched before that check runs.
+    if (formFieldType === 'actualTarget') {
+      return this.validateActualTargetField(field, value, isFull, findV);
+    }
+
     const isEmpty = this.isEmptyValue(value);
 
-    // requiredTrue (checkbox) — always enforced: absent = fail, present but not true = fail.
-    // This is intentionally stricter than plain `required` in draft mode.
+    // requiredTrue (checkbox) — mandatory-on-draft enforcement temporarily disabled for now
+    // (was: enforced in both draft and final submit). Still enforced on final submit.
     const reqTrueV = findV('requiredTrue');
-    if (reqTrueV) {
+    if (reqTrueV && isFull) {
       if (isEmpty) {
         return [{ field: key, message: reqTrueV.message, code: 'required' }];
       }
@@ -307,6 +314,54 @@ export class DynamicFormValidationService {
     return errors;
   }
 
+  // ─── Actual/Target validation ──────────────────────────────────────────────
+
+  /**
+   * Validates a `formFieldType: 'actualTarget'` field's `{ actual, target }` value.
+   * The same `validations` array (required/min/max) is applied independently to both
+   * sub-values, producing errors keyed `<key>.actual` / `<key>.target` so the frontend's
+   * Angular dot-path `form.get('key.actual')` resolves directly to the nested sub-control.
+   */
+  private validateActualTargetField(
+    field: FieldConfig,
+    value: unknown,
+    isFull: boolean,
+    findV: (name: string) => Validator | undefined,
+  ): XviFcValidationError[] {
+    const { key } = field;
+    const pair = (typeof value === 'object' && value !== null ? value : {}) as {
+      actual?: unknown;
+      target?: unknown;
+    };
+    const errors: XviFcValidationError[] = [];
+    const reqV = findV('required');
+    const minV = findV('min');
+    const maxV = findV('max');
+
+    for (const sub of ['actual', 'target'] as const) {
+      const subValue = pair[sub];
+      const subKey = `${key}.${sub}`;
+      const subIsEmpty = this.isEmptyValue(subValue);
+
+      if (isFull && reqV && subIsEmpty) {
+        errors.push({ field: subKey, message: reqV.message, code: 'required' });
+        continue;
+      }
+      if (subIsEmpty) continue;
+
+      if (typeof subValue === 'number') {
+        if (minV && subValue < (minV.validator as number)) {
+          errors.push({ field: subKey, message: minV.message, code: 'min' });
+        }
+        if (maxV && subValue > (maxV.validator as number)) {
+          errors.push({ field: subKey, message: maxV.message, code: 'max' });
+        }
+      }
+    }
+
+    return errors;
+  }
+
   // ─── Year range validation ─────────────────────────────────────────────────
 
   private validateYearRange(
@@ -348,13 +403,37 @@ export class DynamicFormValidationService {
 
   // ─── Date resolution ───────────────────────────────────────────────────────
 
+  /**
+   * Mirrors the frontend's `date-constraint-resolver.ts` — same `TODAY±ND` / `±NM` / `±NY` grammar,
+   * kept in sync so a `minDate`/`maxDate` config resolves identically on both sides.
+   *
+   * Built in UTC, not via `setHours(0,0,0,0)` on a local `Date`: the frontend's
+   * `toUtcIsoDateString()` reinterprets the picked LOCAL calendar day-number as if it were UTC
+   * (e.g. picking 21 Jul submits `2026-07-21T00:00:00.000Z` regardless of browser timezone) rather
+   * than doing a real timezone conversion. `setHours` on a server running ahead of UTC (e.g. IST,
+   * UTC+5:30) would instead compute local midnight as a real instant — 5.5 hours *earlier* than
+   * the frontend's value — so a same-day submission would spuriously fail maxDate. Reinterpreting
+   * the server's own local Y/M/D as UTC here matches the frontend's trick instead of correcting it.
+   */
   private resolveDate(dateStr: string): Date {
-    const rel = /^TODAY([+-]\d+)D$/i.exec(dateStr);
+    const rel = /^TODAY(?:([+-])(\d+)([DMY]))?$/i.exec(dateStr);
     if (rel) {
-      const offset = parseInt(rel[1], 10);
-      const d = new Date();
-      d.setHours(0, 0, 0, 0);
-      d.setDate(d.getDate() + offset);
+      const now = new Date();
+      const d = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+      if (rel[1]) {
+        const amount = parseInt(rel[2], 10) * (rel[1] === '-' ? -1 : 1);
+        switch (rel[3].toUpperCase()) {
+          case 'D':
+            d.setUTCDate(d.getUTCDate() + amount);
+            break;
+          case 'M':
+            d.setUTCMonth(d.getUTCMonth() + amount);
+            break;
+          case 'Y':
+            d.setUTCFullYear(d.getUTCFullYear() + amount);
+            break;
+        }
+      }
       return d;
     }
     return new Date(dateStr);

@@ -13,6 +13,9 @@ export class ConfirmUploadDto {
   ulbId: string;
 
   @IsMongoId()
+  stateId: string;
+
+  @IsMongoId()
   designYearId: string;
 
   @IsIn(['auditedData', 'unauditedData'])
