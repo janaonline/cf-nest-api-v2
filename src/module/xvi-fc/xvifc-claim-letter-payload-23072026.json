@@ -1,0 +1,136 @@
+{
+	"devolutionFormula": {
+		"design_year": "67d7d136d3d038946a5239e9",
+		"formId": 24,
+		"type": "DEVOLUTION_FORMULA",
+		"isActive": true,
+		"data": [
+			{
+				"fieldTypes": ["DF_MAIN_FORM_FIELDS"],
+				"formFieldType": "number",
+				"label": "Active ULBs Registered on City Finance as of March 31, 2026",
+				"key": "ulbCount",
+				"value": 0,
+				"placeholder": "",
+				"disabled": true,
+				"disabledReason": "This value is automatically computed from City Finance registered active ULBs.",
+				"includeInPayload": false,
+				"validations": [],
+				"layout": { "variant": "inline", "labelWidth": "lg" }
+			},
+			{
+				"fieldTypes": ["DF_MAIN_FORM_FIELDS"],
+				"formFieldType": "file",
+				"key": "excelFile",
+				"label": "Upload Devolution Formula Excel",
+				"allowedFileTypes": ["xlsx", "xls"],
+				"maxFileSize": 20,
+				"folderPathKey": "devolution-formula/excels",
+				"validations": [{ "name": "required", "validator": null, "message": "Excel file is required." }],
+				"appearance": { "color": "success", "variant": "soft" },
+				"value": { "originalName": "", "path": "", "mimeType": "", "sizeKb": null, "pageCount": null }
+			},
+			{
+				"fieldTypes": ["DF_MAIN_FORM_FIELDS"],
+				"formFieldType": "checkbox",
+				"key": "checkboxConfirmation",
+				"label": "I understand that this submission may contain information entered or modified by other users. I have reviewed the final submission and confirm that the information being submitted is complete and accurate to the best of my knowledge.",
+				"value": false,
+				"validations": [
+					{ "name": "requiredTrue", "validator": null, "message": "Please confirm before submitting." }
+				]
+			},
+			{
+				"fieldTypes": ["DF_ROW_EDIT_FIELDS"],
+				"key": "totalGrantAllocation",
+				"formFieldType": "number",
+				"label": "Total Grant Allocation",
+				"validations": [
+					{ "name": "required", "validator": null, "message": "Total Grant Allocation is required." },
+					{ "name": "min", "validator": 0, "message": "Total Grant Allocation cannot be negative." }
+				]
+			},
+			{
+				"fieldTypes": ["DF_ROW_EDIT_FIELDS"],
+				"key": "installment1Amount",
+				"formFieldType": "number",
+				"label": "Installment 1 Amount",
+				"validations": [
+					{ "name": "required", "validator": null, "message": "Installment 1 Amount is required." },
+					{ "name": "min", "validator": 0, "message": "Installment 1 Amount cannot be negative." }
+				]
+			},
+			{
+				"fieldTypes": ["DF_ROW_EDIT_FIELDS"],
+				"key": "installment2Amount",
+				"formFieldType": "number",
+				"label": "Installment 2 Amount",
+				"validations": [
+					{ "name": "required", "validator": null, "message": "Installment 2 Amount is required." },
+					{ "name": "min", "validator": 0, "message": "Installment 2 Amount cannot be negative." }
+				]
+			},
+			{
+				"fieldTypes": ["DF_ROW_EDIT_FIELDS"],
+				"key": "devolutionFormula",
+				"formFieldType": "text",
+				"label": "Devolution Formula",
+				"validations": [
+					{ "name": "required", "validator": null, "message": "Devolution Formula is required." },
+					{
+						"name": "maxLength",
+						"validator": 250,
+						"message": "Devolution Formula cannot exceed 250 characters."
+					}
+				]
+			}
+		],
+		"claimEligibility": {
+			"enabled": true,
+			"ruleVersion": 1,
+			"ownerLevel": "STATE",
+			"evaluationLevel": "FORM",
+			"yearScope": "CURRENT_DESIGN_YEAR",
+			"applicableInstallments": [1],
+			"acceptedFormStatuses": [5, 7],
+			"source": {
+				"collection": "xvi_fc_devolution_formula_forms",
+				"fields": {
+					"designYear": "year",
+					"state": "state",
+					"currentFormStatus": "currentFormStatus",
+					"isActive": "isActive"
+				}
+			},
+			"evaluator": {
+				"type": "FORM_STATUS",
+				"config": { "installmentField": "installment" }
+			},
+			"exemption": { "allowed": false },
+			"approval": { "action": "NO_ACTION" },
+			"rejection": { "action": "NO_ACTION" }
+		}
+	},
+
+	"claimLetter": {
+		"design_year": "67d7d136d3d038946a5239e9",
+		"formId": 26,
+		"type": "CLAIM_LETTER",
+		"isActive": true,
+		"data": [
+			{
+				"formFieldType": "file",
+				"key": "signedClaimFile",
+				"label": "Upload Signed Claim Letter",
+				"allowedFileTypes": ["pdf"],
+				"maxFileSize": 20,
+				"folderPathKey": "claim-letter/signed-file",
+				"value": { "originalName": "", "path": "", "mimeType": "", "sizeKb": null, "pageCount": null },
+				"validations": [
+					{ "name": "required", "validator": null, "message": "A signed claim letter file is required." }
+				],
+				"appearance": { "color": "success", "variant": "soft" }
+			}
+		]
+	}
+}

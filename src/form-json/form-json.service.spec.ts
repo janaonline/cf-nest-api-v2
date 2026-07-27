@@ -184,9 +184,16 @@ describe('FormJsonService', () => {
 
       await service.create({ design_year: designYearId } as any);
 
-      expect(model.create).toHaveBeenCalledWith(
-        expect.objectContaining({ isActive: true, data: [] }),
-      );
+      expect(model.create).toHaveBeenCalledWith(expect.objectContaining({ isActive: true, data: [] }));
+    });
+
+    it('passes claimEligibility through to the model on create', async () => {
+      model.create.mockResolvedValue({ toObject: () => ({ _id: 'new' }) });
+      const claimEligibility = { enabled: true, ruleVersion: 1 };
+
+      await service.create({ design_year: designYearId, claimEligibility } as any);
+
+      expect(model.create).toHaveBeenCalledWith(expect.objectContaining({ claimEligibility }));
     });
   });
 
@@ -235,6 +242,39 @@ describe('FormJsonService', () => {
       await service.update('x', { type: 'y' } as any);
 
       expect(redis.del).not.toHaveBeenCalled();
+    });
+
+    it('includes claimEligibility in the sparse patch when provided', async () => {
+      model.findById.mockReturnValue(q({ _id: 'x', design_year: designYearId }));
+      model.findByIdAndUpdate.mockReturnValue(q({ _id: 'x', design_year: designYearId }));
+      const claimEligibility = { enabled: false, ruleVersion: 2 };
+
+      await service.update('x', { claimEligibility } as any);
+
+      const [, updateArg] = model.findByIdAndUpdate.mock.calls[0] as [string, { $set: Record<string, unknown> }];
+      expect(updateArg.$set).toEqual({ claimEligibility });
+    });
+  });
+
+  describe('findEnabledClaimEligibilitySources', () => {
+    it('queries for isActive + claimEligibility.enabled scoped to the design year', async () => {
+      model.find.mockReturnValue(q([]));
+
+      await service.findEnabledClaimEligibilitySources(designYearId);
+
+      const [filter] = model.find.mock.calls[0] as [Record<string, unknown>];
+      expect((filter['design_year'] as Types.ObjectId).toString()).toBe(designYearId);
+      expect(filter['isActive']).toBe(true);
+      expect(filter['claimEligibility.enabled']).toBe(true);
+    });
+
+    it('returns every matching formJson document', async () => {
+      const docs = [{ _id: 'a', formId: 24 }];
+      model.find.mockReturnValue(q(docs));
+
+      const result = await service.findEnabledClaimEligibilitySources(designYearId);
+
+      expect(result).toEqual(docs);
     });
   });
 

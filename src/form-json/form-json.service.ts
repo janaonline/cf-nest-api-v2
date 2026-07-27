@@ -56,6 +56,24 @@ export class FormJsonService {
     return this.model.find(filter).lean().exec() as unknown as Promise<IFormJson[]>;
   }
 
+  /**
+   * Bulk lookup of every enabled claim-eligibility source for a design year (plan §2) — generic
+   * and reusable by any future claim-participating form, not claim-letter-specific. Small
+   * multi-document query (today: length 1, Devolution's entry), so unlike
+   * `findActiveByDesignYearAndFormId` this deliberately skips the Redis single-doc cache path.
+   */
+  findEnabledClaimEligibilitySources(designYearId: string): Promise<IFormJson[]> {
+    // TODO: Add to cache.
+    return this.model
+      .find({
+        design_year: new Types.ObjectId(designYearId),
+        isActive: true,
+        'claimEligibility.enabled': true,
+      })
+      .lean()
+      .exec() as unknown as Promise<IFormJson[]>;
+  }
+
   /** Fetches one document by _id; throws 404 when absent. O(1). */
   async findById(id: string): Promise<IFormJson> {
     const doc = (await this.model.findById(id).lean().exec()) as unknown as IFormJson | null;
@@ -81,6 +99,7 @@ export class FormJsonService {
       type: dto.type,
       data: dto.data ?? [],
       meta: dto.meta,
+      claimEligibility: dto.claimEligibility,
       isActive: dto.isActive ?? true,
     });
     const doc = created.toObject() as unknown as IFormJson;
@@ -107,6 +126,7 @@ export class FormJsonService {
     if (dto.type !== undefined) patch['type'] = dto.type;
     if (dto.data !== undefined) patch['data'] = dto.data;
     if (dto.meta !== undefined) patch['meta'] = dto.meta;
+    if (dto.claimEligibility !== undefined) patch['claimEligibility'] = dto.claimEligibility;
     if (dto.isActive !== undefined) patch['isActive'] = dto.isActive;
 
     const updated = (await this.model
