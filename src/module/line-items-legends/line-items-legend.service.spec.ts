@@ -642,6 +642,26 @@ describe('LineItemsLegendService', () => {
       await expect(service.importFromJson({ lineItems: [normalItem, computedItem] })).resolves.not.toThrow();
     });
 
+    it('rejects computed legend whose operand is present in the batch but marked isActive: false', async () => {
+      const inactiveNormalItem = { ...validRawItem, nmamCode: '110', codePath: ['110'], isActive: false };
+      const computedItem = {
+        ...validRawItem,
+        nmamCode: 'computed.totIncome',
+        codePath: ['computed.totIncome'],
+        accountHead: 'COMPUTED',
+        isComputed: true,
+        rules: [{ type: 'formula', operation: 'sum', operands: ['110'] }],
+      };
+      // '110' must not be treated as batch-covered, so the DB lookup runs and finds nothing active.
+      mockLegendModel.find.mockReturnValue({
+        select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue([]) }),
+      });
+      const err = await service.importFromJson({ lineItems: [inactiveNormalItem, computedItem] }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BadRequestException);
+      const body = (err as BadRequestException).getResponse() as { errors: string[] };
+      expect(body.errors.some((e) => e.includes('110'))).toBe(true);
+    });
+
     it('accepts computed legend when operand is found in DB (not in batch)', async () => {
       const computedItem = {
         ...validRawItem,

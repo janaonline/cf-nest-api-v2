@@ -311,11 +311,7 @@ export class DataCollectionService {
     const lineItemCount = this.getLineItemCount(payloadLineItems);
     const apiClientId = this.getApiClientObjectId(client);
 
-    const legendsTemplateVersion = payload.templateVersion ?? DEFAULT_TEMPLATE_VERSION;
-    const [existing, legends] = await Promise.all([
-      this.dataCollectionModel.findOne({ ulbId, yearId, isActive: true, status: 'ACTIVE' }),
-      this.lineItemsLegendService.getActiveLegendsForValidation(legendsTemplateVersion),
-    ]);
+    const existing = await this.dataCollectionModel.findOne({ ulbId, yearId, isActive: true, status: 'ACTIVE' });
 
     if (!existing) {
       await this.auditLogService.logModifyNotFound({
@@ -323,7 +319,7 @@ export class DataCollectionService {
         stateId,
         ulbId,
         yearId,
-        templateVersion: legendsTemplateVersion,
+        templateVersion: payload.templateVersion ?? DEFAULT_TEMPLATE_VERSION,
         lineItemCount,
         ip: meta.ip,
         userAgent: meta.userAgent,
@@ -338,6 +334,8 @@ export class DataCollectionService {
       throw new BadRequestException('templateVersion cannot be changed for an existing data collection record.');
     }
     const templateVersion = existingTemplateVersion;
+
+    const legends = await this.lineItemsLegendService.getActiveLegendsForValidation(templateVersion);
 
     const changedLineItemCodes = this.getChangedLineItemCodes(existing.lineItems, payloadLineItems);
 

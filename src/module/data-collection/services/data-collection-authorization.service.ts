@@ -24,6 +24,10 @@ export class DataCollectionAuthorizationService {
       if (client.ulbId !== ulbId) {
         throw new ForbiddenException('Client is not allowed to access this ULB.');
       }
+      const isUlbActive = await this.ulbModel.exists({ _id: new Types.ObjectId(ulbId), isActive: true });
+      if (!isUlbActive) {
+        throw new ForbiddenException('Client is not allowed to access this ULB.');
+      }
       return;
     }
 

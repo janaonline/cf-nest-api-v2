@@ -60,21 +60,27 @@ export class ApiClientAuditLogService {
   }
 
   /**
-   * Logs secret rotation by an admin user.
+   * Logs secret rotation by an admin user. Fire-and-forget — does not block the
+   * secret-rotation response, since the new secret is one-time and unrecoverable
+   * once the rotation has already committed.
    * @param data Audit data for the rotation event.
    */
-  async logSecretRotated(data: LogSecretRotatedData): Promise<void> {
-    await this.auditLogModel.create({
-      apiClientId: data.apiClientId,
-      clientId: data.clientId,
-      action: 'API_CLIENT_SECRET_ROTATED',
-      performedBy: data.performedBy,
-      reason: data.reason,
-      ip: data.ip,
-      userAgent: data.userAgent,
-      success: true,
-      createdAt: new Date(),
-    });
+  logSecretRotated(data: LogSecretRotatedData): void {
+    void this.auditLogModel
+      .create({
+        apiClientId: data.apiClientId,
+        clientId: data.clientId,
+        action: 'API_CLIENT_SECRET_ROTATED',
+        performedBy: data.performedBy,
+        reason: data.reason,
+        ip: data.ip,
+        userAgent: data.userAgent,
+        success: true,
+        createdAt: new Date(),
+      })
+      .catch((error: unknown) => {
+        this.logger.warn('Failed to log secret rotation', error);
+      });
   }
 
   /**
