@@ -68,27 +68,33 @@ export class ClaimLetterService {
     this.assertStateAccess(user, stateId);
     assertInstallmentSupported(installment);
 
-    const [expectedUlbs, gate, batchSlotsUsed, financialOverview] = await Promise.all([
+    const [expectedUlbs, gate, usedBatches, financialOverview] = await Promise.all([
       this.expectedUlbSetService.resolve(stateId, yearId),
       // TODO: what happens to ULB forms?
       this.eligibilityService.evaluateStateLevelGate(stateId, yearId, installment),
       this.batchModel
-        .countDocuments({
+        .find({
           state: new Types.ObjectId(stateId),
           year: new Types.ObjectId(yearId),
           installment,
           isAbandoned: false,
         })
+        .select('batchNumber')
+        .lean<{ batchNumber: 1 | 2 | 3 }[]>()
         .exec(),
       this.eligibilityService.getFinancialOverview(stateId, yearId, installment as 1 | 2),
     ]);
+
+    const usedBatchNumbers = new Set(usedBatches.map((b) => b.batchNumber));
+    const nextBatchNumber = ([1, 2, 3] as const).find((n) => !usedBatchNumbers.has(n)) ?? null;
 
     const summary: ClaimLetterEligibilitySummary = {
       installment: installment as 1,
       stateLevelGate: { passed: gate.passed, sources: gate.sources },
       expectedUlbCount: expectedUlbs.length,
-      batchSlotsUsed,
+      batchSlotsUsed: usedBatchNumbers.size,
       batchSlotsMax: CLAIM_LETTER_MAX_BATCH_NUMBER,
+      nextBatchNumber,
       financialOverview,
     };
 

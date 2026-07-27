@@ -48,6 +48,10 @@ export interface ClaimLetterEligibilitySummary {
   expectedUlbCount: number;
   batchSlotsUsed: number;
   batchSlotsMax: number;
+  /** The batch-slot number that would be allocated if a draft were created right now (the same
+   *  first-free-slot rule as `ClaimLetterAssemblyService.allocateBatchNumber()`) — `null` once all
+   *  `batchSlotsMax` slots are occupied by a non-abandoned batch. */
+  nextBatchNumber: ClaimLetterBatchNumber | null;
   /** State-wide financial context, independent of any one batch — see `ClaimLetterFinancialOverview`
    *  on `ClaimLetterEligibilityService`. Available even before the state has ever created a claim
    *  letter, unlike `ClaimLetterFinancialSummaryDisplay` which only exists on a real batch. */

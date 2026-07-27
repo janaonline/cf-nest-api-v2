@@ -14,7 +14,7 @@ import type { AuthUser } from 'src/module/auth/auth-user.interface';
 
 function q<T>(value: T) {
   const chain: Record<string, jest.Mock> = {};
-  for (const m of ['sort', 'skip', 'limit', 'lean']) {
+  for (const m of ['sort', 'skip', 'limit', 'select', 'lean']) {
     chain[m] = jest.fn().mockReturnValue(chain);
   }
   chain['exec'] = jest.fn().mockResolvedValue(value);
@@ -98,7 +98,7 @@ describe('ClaimLetterService', () => {
     connection = { startSession: jest.fn().mockResolvedValue(session) };
     batchModel = {
       findOne: jest.fn(),
-      find: jest.fn(),
+      find: jest.fn().mockReturnValue(q([])),
       countDocuments: jest.fn().mockReturnValue(countQ(0)),
       findOneAndUpdate: jest.fn(),
       findById: jest.fn(),
@@ -141,7 +141,7 @@ describe('ClaimLetterService', () => {
         totalInstallmentAllocation: 25,
         totalAlreadyAcknowledged: 5,
       });
-      batchModel.countDocuments.mockReturnValue(countQ(2));
+      batchModel.find.mockReturnValue(q([{ batchNumber: 1 }, { batchNumber: 3 }]));
 
       const result = await service.getEligibilitySummary(stateId.toString(), yearId.toString(), 1, stateUser);
 
@@ -151,17 +151,29 @@ describe('ClaimLetterService', () => {
         expectedUlbCount: 2,
         batchSlotsUsed: 2,
         batchSlotsMax: 3,
+        nextBatchNumber: 2,
         financialOverview: { totalInstallmentAllocation: 25, totalAlreadyAcknowledged: 5 },
       });
     });
 
-    it('scopes the batch-slot count query to non-abandoned drafts only', async () => {
+    it('reports nextBatchNumber as null once all 3 slots are occupied', async () => {
+      expectedUlbSetService.resolve.mockResolvedValue([]);
+      eligibilityService.evaluateStateLevelGate.mockResolvedValue({ sources: [], passed: true });
+      batchModel.find.mockReturnValue(q([{ batchNumber: 1 }, { batchNumber: 2 }, { batchNumber: 3 }]));
+
+      const result = await service.getEligibilitySummary(stateId.toString(), yearId.toString(), 1, stateUser);
+
+      expect(result.data?.nextBatchNumber).toBeNull();
+      expect(result.data?.batchSlotsUsed).toBe(3);
+    });
+
+    it('scopes the batch-slot lookup to non-abandoned drafts only', async () => {
       expectedUlbSetService.resolve.mockResolvedValue([]);
       eligibilityService.evaluateStateLevelGate.mockResolvedValue({ sources: [], passed: true });
 
       await service.getEligibilitySummary(stateId.toString(), yearId.toString(), 1, stateUser);
 
-      const [filter] = batchModel.countDocuments.mock.calls[0] as [Record<string, unknown>];
+      const [filter] = batchModel.find.mock.calls[0] as [Record<string, unknown>];
       expect(filter['isAbandoned']).toBe(false);
     });
   });

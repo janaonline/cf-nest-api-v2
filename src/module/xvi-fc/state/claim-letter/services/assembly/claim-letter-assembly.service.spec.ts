@@ -658,7 +658,7 @@ describe('ClaimLetterAssemblyService', () => {
         session,
       );
       expect(session.commitTransaction).toHaveBeenCalled();
-      expect(result).toMatchObject({ isAbandoned: true });
+      expect(result).toMatchObject({ isAbandoned: true, currentFormStatusLabel: 'Abandoned' });
     });
 
     it('treats a concurrent race (findOneAndUpdate returns null) as idempotent if the doc is already abandoned', async () => {

@@ -11,16 +11,19 @@ import type { ClaimLetterBatchSummary, ClaimLetterFinancialSummaryDisplay } from
  */
 export function mapClaimLetterBatchDocToSummary(doc: Record<string, unknown>): ClaimLetterBatchSummary {
   const currentFormStatus = doc['currentFormStatus'] as number;
+  const isAbandoned = doc['isAbandoned'] as boolean;
   return {
     claimLetterId: String(doc['_id']),
     installment: doc['installment'] as 1 | 2,
     batchNumber: doc['batchNumber'] as 1 | 2 | 3,
     version: doc['version'] as number,
     currentFormStatus,
-    currentFormStatusLabel: getFormStatusLabel(currentFormStatus),
+    // Abandonment never transitions `currentFormStatus` itself (it's an orthogonal "this draft is
+    // dead" flag, not a workflow state) — override the label here so it doesn't read as still-active.
+    currentFormStatusLabel: isAbandoned ? 'Abandoned' : getFormStatusLabel(currentFormStatus),
     assemblyStatus: doc['assemblyStatus'] as 'BUILDING' | 'READY',
     ulbCount: doc['ulbCount'] as number,
-    isAbandoned: doc['isAbandoned'] as boolean,
+    isAbandoned,
     hasSignedFile: !!doc['signedClaimFile'],
     // Already Crore-denominated in storage — a direct passthrough, no unit conversion needed.
     financialSummary: doc['financialSummary'] as ClaimLetterFinancialSummaryDisplay,
