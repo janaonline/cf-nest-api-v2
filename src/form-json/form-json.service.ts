@@ -27,6 +27,11 @@ export class FormJsonService {
     return `formJson:${this.env}:${designYearId}:${formId}`;
   }
 
+  /** Same shape as getFormJsonCacheKey, but `*` for either part clearCache leaves unspecified. */
+  private getFormJsonCachePattern(designYearId?: string, formId?: number): string {
+    return `formJson:${this.env}:${designYearId ?? '*'}:${formId ?? '*'}`;
+  }
+
   /**
    * Fetches the active FormJson for a specific design year and formId.
    * Returns the cached value from Redis when available (No TTL).
@@ -131,11 +136,13 @@ export class FormJsonService {
   }
 
   /**
-   * Deletes the Redis cache entry for a specific formJson by designYearId + formId.
-   * Useful for admin cache-clear endpoints.
+   * Deletes FormJson cache entries matching designYearId and/or formId — omit either to clear
+   * more broadly (e.g. every form for a year, or one form across every year). Pattern-based
+   * (not an exact single-key delete) so it still works when a caller under- or over-specifies;
+   * returns the number of keys actually deleted so a caller can tell a real clear from a no-op.
    */
-  async clearCache(designYearId: string, formId: number): Promise<void> {
-    await this.redis.del(this.getFormJsonCacheKey(designYearId, formId));
+  async clearCache(designYearId?: string, formId?: number): Promise<number> {
+    return this.redis.delByPattern(this.getFormJsonCachePattern(designYearId, formId));
   }
 
   /**
