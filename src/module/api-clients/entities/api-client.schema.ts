@@ -16,7 +16,7 @@ export class ApiClient {
   @Prop({ required: true, select: false })
   secretHash!: string;
 
-  @Prop({ required: true, enum: ['STATE', 'ULB'] })
+  @Prop({ type: String, required: true, enum: ['STATE', 'ULB'] })
   actorType!: ActorType;
 
   @Prop({ type: Types.ObjectId, ref: 'State', required: true })
@@ -31,7 +31,7 @@ export class ApiClient {
   @Prop({ type: [String], default: [] })
   allowedIps!: string[];
 
-  @Prop({ required: true, enum: ['ACTIVE', 'INACTIVE', 'REVOKED'], default: 'ACTIVE' })
+  @Prop({ type: String, required: true, enum: ['ACTIVE', 'INACTIVE', 'REVOKED'], default: 'ACTIVE' })
   status!: ClientStatus;
 
   @Prop({ type: String, trim: true, maxlength: 255 })
