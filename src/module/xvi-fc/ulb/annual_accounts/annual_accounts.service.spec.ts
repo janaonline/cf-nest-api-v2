@@ -5,6 +5,7 @@ import { AnnualAccountsService } from './annual_accounts.service';
 import { XviFcAnnualAccount } from '../../../../schemas/xvi-fc/annual-account.schema';
 import { XviFcAnnualAccountUploadHistory } from '../../../../schemas/xvi-fc/annual-account-upload-history.schema';
 import { XviFcAnnualAccountFormLog } from '../../../../schemas/xvi-fc/annual-account-form-log.schema';
+import { XviFcDocumentActionGate } from '../../../../schemas/xvi-fc/document-action-gate.schema';
 import { Ulb } from '../../../../schemas/ulb.schema';
 import { S3Service } from '../../../../core/s3/s3.service';
 import { S3UploadService } from '../../../../s3-upload/s3-upload.service';
@@ -37,6 +38,7 @@ describe('AnnualAccountsService', () => {
   let mockOcrQueue: { add: jest.Mock };
   let mockFormJsonService: { findActiveByDesignYearAndFormId: jest.Mock };
   let mockS3Service: Record<string, jest.Mock>;
+  let mockActionGateModel: { find: jest.Mock };
 
   beforeEach(async () => {
     mockAnnualAccountModel = {
@@ -75,6 +77,9 @@ describe('AnnualAccountsService', () => {
     mockFormJsonService = {
       findActiveByDesignYearAndFormId: jest.fn(),
     };
+    mockActionGateModel = {
+      find: jest.fn().mockReturnValue(mockQuery([])),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -83,6 +88,7 @@ describe('AnnualAccountsService', () => {
         { provide: getModelToken(XviFcAnnualAccountUploadHistory.name), useValue: mockUploadHistoryModel },
         { provide: getModelToken(XviFcAnnualAccountFormLog.name), useValue: mockFormLogModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+        { provide: getModelToken(XviFcDocumentActionGate.name), useValue: mockActionGateModel },
         { provide: S3Service, useValue: mockS3Service },
         { provide: S3UploadService, useValue: mockS3UploadService },
         { provide: getQueueToken(ANNUAL_ACCOUNT_PROCESSING_QUEUE), useValue: mockOcrQueue },
@@ -271,6 +277,46 @@ describe('AnnualAccountsService', () => {
       await expect(
         service.undoDocumentDecision(ACCOUNT_ID, 'auditedData', 'auditors-report', adminUser),
       ).rejects.toThrow(/cannot be decided/i);
+    });
+  });
+
+  describe('getUploadConfig — folds action gates into the formjson response', () => {
+    beforeEach(() => {
+      mockFormJsonService.findActiveByDesignYearAndFormId.mockResolvedValue({
+        meta: { uploadType: 'audited' },
+        data: [{ key: 'auditors-report', label: 'Auditor Report' }],
+      });
+    });
+
+    it('queries gates scoped to this form (or the module-wide wildcard) and returns them alongside formjson data', async () => {
+      const gateDocs = [
+        { docKey: null, scope: 'document', role: 'ULB', action: 'upload', statusIds: [1, 2, 4, 6] },
+        { docKey: null, scope: 'section', role: 'STATE', action: 'approveSection', statusIds: [3] },
+      ];
+      mockActionGateModel.find.mockReturnValue(mockQuery(gateDocs));
+
+      const result = await service.getUploadConfig('audited', 'year-1');
+
+      expect(mockActionGateModel.find).toHaveBeenCalledWith({
+        module: 'XVI-FC',
+        formId: { $in: [null, 30] },
+        isActive: true,
+      });
+      expect(result.data).toEqual([{ key: 'auditors-report', label: 'Auditor Report' }]);
+      expect(result.actionGates).toEqual(gateDocs.map((g) => ({ ...g })));
+    });
+
+    it('returns an empty actionGates array when no gates are configured', async () => {
+      mockActionGateModel.find.mockReturnValue(mockQuery([]));
+
+      const result = await service.getUploadConfig('provisional', 'year-1');
+
+      expect(mockActionGateModel.find).toHaveBeenCalledWith({
+        module: 'XVI-FC',
+        formId: { $in: [null, 31] },
+        isActive: true,
+      });
+      expect(result.actionGates).toEqual([]);
     });
   });
 });

@@ -31,6 +31,10 @@ import {
   XviFcAnnualAccountFormLogDocument,
 } from '../../../../schemas/xvi-fc/annual-account-form-log.schema';
 import { Ulb, UlbDocument } from '../../../../schemas/ulb.schema';
+import {
+  DocumentActionGateDocument,
+  XviFcDocumentActionGate,
+} from '../../../../schemas/xvi-fc/document-action-gate.schema';
 import { DOC_TYPE_MAP, NO_OCR_DOC_IDS } from './constants/doc-type-map.constant';
 import { UploadDocumentDto } from './dto/upload-document.dto';
 import { PresignUploadDto } from './dto/presign-upload.dto';
@@ -96,6 +100,9 @@ export class AnnualAccountsService implements OnModuleInit {
 
     @InjectModel(Ulb.name)
     private readonly ulbModel: Model<UlbDocument>,
+
+    @InjectModel(XviFcDocumentActionGate.name)
+    private readonly actionGateModel: Model<DocumentActionGateDocument>,
 
     private readonly s3Service: S3Service,
 
@@ -1398,7 +1405,31 @@ export class AnnualAccountsService implements OnModuleInit {
     const FORM_IDS: Record<string, number> = { audited: 30, provisional: 31 };
     const formId = FORM_IDS[type];
     if (!formId) throw new NotFoundException(`Unknown upload config type: ${type}`);
-    const formJson = await this.formJsonService.findActiveByDesignYearAndFormId(yearId, formId);
-    return { meta: formJson.meta ?? {}, data: formJson.data ?? [] };
+    const [formJson, actionGates] = await Promise.all([
+      this.formJsonService.findActiveByDesignYearAndFormId(yearId, formId),
+      this.getActionGates(formId),
+    ]);
+    return { meta: formJson.meta ?? {}, data: formJson.data ?? [], actionGates };
+  }
+
+  /**
+   * UI-visibility gates for document/section action buttons — which (role, action) pairs are
+   * reachable, and in which section statuses. Not an authorization check; see
+   * XviFcDocumentActionGate for why. Returns every active gate scoped to this form (or the
+   * module-wide wildcard), across all roles — the caller filters by the viewing user's role.
+   */
+  private async getActionGates(formId: number) {
+    const gates = await this.actionGateModel
+      .find({ module: 'XVI-FC', formId: { $in: [null, formId] }, isActive: true })
+      .lean()
+      .exec();
+
+    return gates.map((g) => ({
+      docKey: g.docKey,
+      scope: g.scope,
+      role: g.role,
+      action: g.action,
+      statusIds: g.statusIds,
+    }));
   }
 }

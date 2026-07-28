@@ -6,6 +6,7 @@ import { AnnualAccountsService } from './annual_accounts.service';
 import { XviFcAnnualAccount } from '../../../../schemas/xvi-fc/annual-account.schema';
 import { XviFcAnnualAccountUploadHistory } from '../../../../schemas/xvi-fc/annual-account-upload-history.schema';
 import { XviFcAnnualAccountFormLog } from '../../../../schemas/xvi-fc/annual-account-form-log.schema';
+import { XviFcDocumentActionGate } from '../../../../schemas/xvi-fc/document-action-gate.schema';
 import { Ulb } from '../../../../schemas/ulb.schema';
 import { S3Service } from '../../../../core/s3/s3.service';
 import { S3UploadService } from '../../../../s3-upload/s3-upload.service';
@@ -38,6 +39,9 @@ describe('AnnualAccountsController', () => {
     const mockUlbModel = {
       findById: jest.fn(),
     };
+    const mockActionGateModel = {
+      find: jest.fn().mockReturnValue({ lean: () => ({ exec: () => Promise.resolve([]) }) }),
+    };
     const mockS3Service = {
       headObject: jest.fn(),
       getPdfBufferFromS3: jest.fn(),
@@ -62,6 +66,7 @@ describe('AnnualAccountsController', () => {
         { provide: getModelToken(XviFcAnnualAccountUploadHistory.name), useValue: mockUploadHistoryModel },
         { provide: getModelToken(XviFcAnnualAccountFormLog.name), useValue: mockFormLogModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+        { provide: getModelToken(XviFcDocumentActionGate.name), useValue: mockActionGateModel },
         { provide: S3Service, useValue: mockS3Service },
         { provide: S3UploadService, useValue: mockS3UploadService },
         { provide: getQueueToken(ANNUAL_ACCOUNT_PROCESSING_QUEUE), useValue: mockOcrQueue },
