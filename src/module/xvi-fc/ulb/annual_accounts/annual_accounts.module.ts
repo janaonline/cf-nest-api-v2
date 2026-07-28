@@ -16,6 +16,10 @@ import {
   XviFcAnnualAccountFormLog,
   XviFcAnnualAccountFormLogSchema,
 } from '../../../../schemas/xvi-fc/annual-account-form-log.schema';
+import {
+  XviFcDocumentActionGate,
+  XviFcDocumentActionGateSchema,
+} from '../../../../schemas/xvi-fc/document-action-gate.schema';
 import { AnnualAccountsController } from './annual_accounts.controller';
 import { AnnualAccountsService } from './annual_accounts.service';
 import { AnnualAccountOcrApiService } from './annual-account-ocr-api.service';
@@ -34,6 +38,7 @@ import { FormJsonModule } from '../../../../form-json/form-json.module';
       { name: XviFcAnnualAccount.name, schema: XviFcAnnualAccountSchema },
       { name: XviFcAnnualAccountUploadHistory.name, schema: XviFcAnnualAccountUploadHistorySchema },
       { name: XviFcAnnualAccountFormLog.name, schema: XviFcAnnualAccountFormLogSchema },
+      { name: XviFcDocumentActionGate.name, schema: XviFcDocumentActionGateSchema },
       { name: Ulb.name, schema: UlbSchema },
     ]),
   ],
