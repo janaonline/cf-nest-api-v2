@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Headers, Ip, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { SkipThrottle } from '@nestjs/throttler';
 import { ApiEnvelope } from 'src/common/decorators/api-envelope.decorator';
 import { CurrentApiClient } from 'src/module/auth/decorators/current-api-client.decorator';
 import { Public } from 'src/module/auth/decorators/public.decorator';
@@ -68,6 +69,7 @@ export class DataCollectionController {
     description: 'Creates a new data collection record for a ULB and financial year.',
   })
   @Scopes(DATA_COLLECTION_SCOPES.FINANCIAL_DATA_SUBMIT)
+  @SkipThrottle()
   create(
     @Body() payload: DataCollectionDto,
     @CurrentApiClient() client: ApiClientContext,
@@ -83,6 +85,7 @@ export class DataCollectionController {
     description: 'Updates an existing data collection record by merging new line item values.',
   })
   @Scopes(DATA_COLLECTION_SCOPES.FINANCIAL_DATA_MODIFY)
+  @SkipThrottle()
   update(
     @Body() payload: DataCollectionDto,
     @CurrentApiClient() client: ApiClientContext,
