@@ -49,14 +49,13 @@ export function canMohuaDecideAnnualAccount(status: AnnualAccountFormStatus): bo
  *
  * @param sectionFormStatusId - The section's `form_status_id` (shares numbering with the
  *   shared FORM_STATUS constants, so the shared gate can be reused directly).
- * @param documentStateDecision - That document's `stateDecision` array; only the last
- *   (current) entry matters.
+ * @param documentStateDecision - That document's current `stateDecision`, or null/undefined
+ *   if undecided.
  */
 export function canUlbReuploadDocument(
   sectionFormStatusId: number,
-  documentStateDecision: readonly DecisionInfo[] | undefined,
+  documentStateDecision: DecisionInfo | null | undefined,
 ): boolean {
   if (!canUlbEditForm(sectionFormStatusId)) return false;
-  const current = documentStateDecision?.[documentStateDecision.length - 1];
-  return current?.status !== 'APPROVED';
+  return documentStateDecision?.status !== 'APPROVED';
 }
