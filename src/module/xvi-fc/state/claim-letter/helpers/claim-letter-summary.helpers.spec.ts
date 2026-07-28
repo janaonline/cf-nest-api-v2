@@ -4,6 +4,9 @@ import { mapClaimLetterBatchDocToSummary } from './claim-letter-summary.helpers'
 const zeroFinancialSummary = {
   totalInstallmentAllocation: 0,
   totalAlreadyAcknowledged: 0,
+  totalClaimInProgress: 0,
+  totalClaimInDraft: 0,
+  availableToClaim: 0,
   selectedAllocation: 0,
   currentSelectedClaim: 0,
   remainingIfAcknowledged: 0,
@@ -45,5 +48,23 @@ describe('mapClaimLetterBatchDocToSummary', () => {
   it('labels an abandoned draft "Abandoned" regardless of which currentFormStatus it was abandoned from', () => {
     const summary = mapClaimLetterBatchDocToSummary(batchDoc({ currentFormStatus: 5, isAbandoned: true }));
     expect(summary.currentFormStatusLabel).toBe('Abandoned');
+  });
+
+  it('defaults totalClaimInProgress/totalClaimInDraft/availableToClaim to 0 for a pre-existing document that predates these fields', () => {
+    const legacyFinancialSummary = {
+      totalInstallmentAllocation: 100,
+      totalAlreadyAcknowledged: 20,
+      selectedAllocation: 10,
+      currentSelectedClaim: 10,
+      remainingIfAcknowledged: 70,
+      // totalClaimInProgress/totalClaimInDraft/availableToClaim intentionally absent, as a `.lean()`
+      // read of a document saved before these fields were added would return it.
+    };
+    const summary = mapClaimLetterBatchDocToSummary(batchDoc({ financialSummary: legacyFinancialSummary }));
+
+    expect(summary.financialSummary.totalClaimInProgress).toBe(0);
+    expect(summary.financialSummary.totalClaimInDraft).toBe(0);
+    expect(summary.financialSummary.availableToClaim).toBe(0);
+    expect(summary.financialSummary.totalInstallmentAllocation).toBe(100);
   });
 });

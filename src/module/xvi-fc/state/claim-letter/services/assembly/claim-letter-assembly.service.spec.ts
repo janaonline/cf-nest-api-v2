@@ -32,6 +32,9 @@ function duplicateKeyError(): Error & { code: number } {
 const zeroFinancialSummary = {
   totalInstallmentAllocation: 0,
   totalAlreadyAcknowledged: 0,
+  totalClaimInProgress: 0,
+  totalClaimInDraft: 0,
+  availableToClaim: 0,
   selectedAllocation: 0,
   currentSelectedClaim: 0,
   remainingIfAcknowledged: 0,
@@ -80,6 +83,7 @@ describe('ClaimLetterAssemblyService', () => {
     evaluateStateLevelGate: jest.Mock;
     resolveDevolutionAllocations: jest.Mock;
     computeTotalAlreadyAcknowledged: jest.Mock;
+    getClaimStatusBreakdown: jest.Mock;
   };
   let historyService: { recordTransition: jest.Mock };
 
@@ -193,6 +197,12 @@ describe('ClaimLetterAssemblyService', () => {
       evaluateStateLevelGate: jest.fn().mockResolvedValue({ sources: [], passed: true }),
       resolveDevolutionAllocations: jest.fn().mockResolvedValue(new Map([[ulbAId.toString(), allocation]])),
       computeTotalAlreadyAcknowledged: jest.fn().mockResolvedValue(0),
+      getClaimStatusBreakdown: jest.fn().mockResolvedValue({
+        totalAlreadyAcknowledged: 0,
+        totalClaimInProgress: 0,
+        totalClaimInDraft: 0,
+        availableToClaim: 100,
+      }),
     };
     historyService = { recordTransition: jest.fn().mockResolvedValue(undefined) };
 
@@ -355,6 +365,17 @@ describe('ClaimLetterAssemblyService', () => {
       service.createDraft(baseInput({ ulbSelections: [{ ulbId: ulbAId.toString(), claimedAmount: 200 }] })),
     ).rejects.toThrow(BadRequestException);
     expect(batchModel.deleteOne).toHaveBeenCalled();
+  });
+
+  it('identifies an invalid ULB by censusCode in the error message, not its raw Mongo id', async () => {
+    let thrown: BadRequestException | undefined;
+    try {
+      await service.createDraft(baseInput({ ulbSelections: [{ ulbId: ulbAId.toString(), claimedAmount: 200 }] }));
+    } catch (err) {
+      thrown = err as BadRequestException;
+    }
+    expect(thrown?.message).toContain('111');
+    expect(thrown?.message).not.toContain(ulbAId.toString());
   });
 
   it('inserts children in chunks, never one giant array (chunk-boundary correctness)', async () => {

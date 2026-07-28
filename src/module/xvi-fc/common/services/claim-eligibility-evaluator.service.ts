@@ -82,6 +82,8 @@ export class ClaimEligibilityEvaluatorService {
       formJsonId: String(sourceFormJson._id),
       ruleVersion: config.ruleVersion,
       formType: sourceFormJson.type ?? '',
+      displayLabel: config.displayLabel,
+      displayDescription: config.displayDescription,
       ownerLevel: config.ownerLevel,
       evaluationLevel: config.evaluationLevel,
     };

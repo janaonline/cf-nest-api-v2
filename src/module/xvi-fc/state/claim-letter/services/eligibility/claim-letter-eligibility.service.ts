@@ -38,6 +38,21 @@ export interface ClaimLetterFinancialOverview {
   totalInstallmentAllocation: number;
   /** Sum already claimed across this state/year/installment's other MoHUA-acknowledged batches. */
   totalAlreadyAcknowledged: number;
+  /** Sum claimed across other batches currently UNDER_REVIEW_BY_MOHUA (excludes the batch named by
+   *  `excludeClaimLetterId`, if any, so a batch never nets against its own claim twice). */
+  totalClaimInProgress: number;
+  /** Sum claimed across other non-abandoned, READY batches still IN_PROGRESS (draft) — same
+   *  self-exclusion as `totalClaimInProgress`. */
+  totalClaimInDraft: number;
+  /** totalInstallmentAllocation − totalAlreadyAcknowledged − totalClaimInProgress − totalClaimInDraft. */
+  availableToClaim: number;
+}
+
+export interface ClaimLetterClaimStatusBreakdown {
+  totalAlreadyAcknowledged: number;
+  totalClaimInProgress: number;
+  totalClaimInDraft: number;
+  availableToClaim: number;
 }
 
 /**
@@ -106,21 +121,27 @@ export class ClaimLetterEligibilityService {
     const result = new Map<string, DevolutionAllocation>();
     if (!form) return result;
 
+    // Which row-level field holds this installment's amount — resolved dynamically so this stays
+    // correct once Installment 2 claims are enabled, rather than always reading installment1Amount.
+    const installmentAmountField = installment === 1 ? 'installment1Amount' : 'installment2Amount';
+
     const rows = await this.devolutionRowModel
       .find({
         form: form._id,
         datasetVersion: form.activeDatasetVersion,
         isActive: true,
         ulbId: { $ne: null },
-        installment1Amount: { $gt: 0 },
+        [installmentAmountField]: { $gt: 0 },
       })
-      .select('ulbId installment1Amount')
-      .lean<{ _id: Types.ObjectId; ulbId: Types.ObjectId; installment1Amount: number }[]>()
+      .select(`ulbId ${installmentAmountField}`)
+      .lean<
+        { _id: Types.ObjectId; ulbId: Types.ObjectId; installment1Amount?: number; installment2Amount?: number }[]
+      >()
       .exec();
 
     for (const row of rows) {
       result.set(String(row.ulbId), {
-        allocatedAmount: row.installment1Amount,
+        allocatedAmount: row[installmentAmountField] as number,
         formDocumentId: String(form._id),
         rowDocumentId: String(row._id),
         datasetVersion: form.activeDatasetVersion,
@@ -131,33 +152,47 @@ export class ClaimLetterEligibilityService {
   }
 
   /**
-   * Sum of `claimedAmount` across every ULB-child of this state/year/installment's OTHER
-   * claim-letter batches that have already reached `SUBMISSION_ACKNOWLEDGED_BY_MOHUA` — moved here
-   * (out of `ClaimLetterAssemblyService`) so both the build pipeline and the read-only
-   * eligibility-summary endpoint share one query instead of risking drift between two copies.
+   * Sum of `claimedAmount` across every ULB-child of this state/year/installment's batches whose
+   * `currentFormStatus` is in `statuses` — generalized from the original acknowledged-only query so
+   * "already claimed" (status 7), "claim in progress" (status 5), and "claim in draft" (status 2)
+   * can all share one implementation instead of three drifting copies. `excludeClaimLetterId` omits
+   * one specific batch from the sum — used when a specific batch is in view, so it never nets
+   * against its own claim twice (once via this bucket, once via its own `currentSelectedClaim`).
+   * `isAbandoned`/`assemblyStatus` filters matter here in a way they didn't for the old
+   * acknowledged-only query: a status-7 batch is never abandoned or mid-build in practice, but
+   * status 2/5 batches genuinely can be either, and must be excluded to stay correct.
    */
-  async computeTotalAlreadyAcknowledged(stateId: string, designYearId: string, installment: number): Promise<number> {
+  async computeClaimedAmountByStatuses(
+    stateId: string,
+    designYearId: string,
+    installment: number,
+    statuses: number[],
+    excludeClaimLetterId?: string,
+  ): Promise<number> {
     const stateOid = new Types.ObjectId(stateId);
     const yearOid = new Types.ObjectId(designYearId);
 
-    const acknowledgedParents = await this.batchModel
+    const matchingParents = await this.batchModel
       .find({
         state: stateOid,
         year: yearOid,
         installment,
-        currentFormStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+        currentFormStatus: { $in: statuses },
+        isAbandoned: false,
+        assemblyStatus: 'READY',
+        ...(excludeClaimLetterId ? { _id: { $ne: new Types.ObjectId(excludeClaimLetterId) } } : {}),
       })
       .select('_id')
       .lean<{ _id: Types.ObjectId }[]>()
       .exec();
-    if (acknowledgedParents.length === 0) return 0;
+    if (matchingParents.length === 0) return 0;
 
     const result = await this.batchUlbModel
       .aggregate<{
         _id: null;
         total: number;
       }>([
-        { $match: { claimLetter: { $in: acknowledgedParents.map((p) => p._id) } } },
+        { $match: { claimLetter: { $in: matchingParents.map((p) => p._id) } } },
         { $group: { _id: null, total: { $sum: '$claimedAmount' } } },
       ])
       .exec();
@@ -165,25 +200,92 @@ export class ClaimLetterEligibilityService {
   }
 
   /**
-   * State-wide financial context, independent of any one batch — the only two `financialSummary`
-   * fields that mean anything before a specific batch exists (plan: claim-letter summary
-   * placement). Used by the "Generate Claim Letter" list page and the "New Claim Letter" create
-   * page, both of which call this via `eligibility-summary` rather than reading a batch's own
-   * (possibly stale, or entirely absent) embedded snapshot.
+   * Sum of `claimedAmount` across every ULB-child of this state/year/installment's OTHER
+   * claim-letter batches that have already reached `SUBMISSION_ACKNOWLEDGED_BY_MOHUA` — moved here
+   * (out of `ClaimLetterAssemblyService`) so both the build pipeline and the read-only
+   * eligibility-summary endpoint share one query instead of risking drift between two copies.
+   */
+  async computeTotalAlreadyAcknowledged(stateId: string, designYearId: string, installment: number): Promise<number> {
+    return this.computeClaimedAmountByStatuses(stateId, designYearId, installment, [
+      FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+    ]);
+  }
+
+  /**
+   * The four claimed/available fields of `ClaimLetterFinancialOverview`, given an already-resolved
+   * `totalInstallmentAllocation` (callers already have it from `resolveDevolutionAllocations`, so it
+   * isn't re-derived here). `excludeClaimLetterId` is threaded through to all three status buckets —
+   * see `computeClaimedAmountByStatuses` for why that matters when a specific batch is in view.
+   */
+  async getClaimStatusBreakdown(
+    stateId: string,
+    designYearId: string,
+    installment: number,
+    totalInstallmentAllocation: number,
+    excludeClaimLetterId?: string,
+  ): Promise<ClaimLetterClaimStatusBreakdown> {
+    const [totalAlreadyAcknowledged, totalClaimInProgress, totalClaimInDraft] = await Promise.all([
+      this.computeClaimedAmountByStatuses(
+        stateId,
+        designYearId,
+        installment,
+        [FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA],
+        excludeClaimLetterId,
+      ),
+      this.computeClaimedAmountByStatuses(
+        stateId,
+        designYearId,
+        installment,
+        [FORM_STATUS.UNDER_REVIEW_BY_MOHUA],
+        excludeClaimLetterId,
+      ),
+      this.computeClaimedAmountByStatuses(
+        stateId,
+        designYearId,
+        installment,
+        [FORM_STATUS.IN_PROGRESS],
+        excludeClaimLetterId,
+      ),
+    ]);
+
+    return {
+      totalAlreadyAcknowledged,
+      totalClaimInProgress,
+      totalClaimInDraft,
+      availableToClaim: sumAmountsExactly([
+        totalInstallmentAllocation,
+        -totalAlreadyAcknowledged,
+        -totalClaimInProgress,
+        -totalClaimInDraft,
+      ]),
+    };
+  }
+
+  /**
+   * State-wide financial context, independent of any one batch — the full picture of where this
+   * state/year/installment's claimable pool stands (plan: claim-letter summary placement). Used by
+   * the "Generate Claim Letter" list page and the "New Claim Letter" create page, both of which call
+   * this via `eligibility-summary` rather than reading a batch's own (possibly stale, or entirely
+   * absent) embedded snapshot. `excludeClaimLetterId` is only passed by `buildChildren()`, which
+   * already has a parent `_id` to exclude itself with; the two read-only pages above call this
+   * without it, since there's no "self" to exclude yet.
    */
   async getFinancialOverview(
     stateId: string,
     designYearId: string,
     installment: 1 | 2,
+    excludeClaimLetterId?: string,
   ): Promise<ClaimLetterFinancialOverview> {
-    const [allocationByUlbId, totalAlreadyAcknowledged] = await Promise.all([
-      this.resolveDevolutionAllocations(stateId, designYearId, installment),
-      this.computeTotalAlreadyAcknowledged(stateId, designYearId, installment),
-    ]);
+    const allocationByUlbId = await this.resolveDevolutionAllocations(stateId, designYearId, installment);
+    const totalInstallmentAllocation = sumAmountsExactly([...allocationByUlbId.values()].map((a) => a.allocatedAmount));
+    const breakdown = await this.getClaimStatusBreakdown(
+      stateId,
+      designYearId,
+      installment,
+      totalInstallmentAllocation,
+      excludeClaimLetterId,
+    );
 
-    return {
-      totalInstallmentAllocation: sumAmountsExactly([...allocationByUlbId.values()].map((a) => a.allocatedAmount)),
-      totalAlreadyAcknowledged,
-    };
+    return { totalInstallmentAllocation, ...breakdown };
   }
 }

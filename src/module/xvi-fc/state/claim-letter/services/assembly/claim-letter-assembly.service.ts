@@ -324,13 +324,16 @@ export class ClaimLetterAssemblyService {
     for (const selection of selections) {
       const ulb = ulbSnapshotById.get(selection.ulbId);
       const allocation = allocationByUlbId.get(selection.ulbId);
+      // Prefer a human-meaningful identifier for error reporting over the raw Mongo id — falls
+      // back to the submitted ulbId only when no snapshot resolved at all (unknown/inactive ULB).
+      const identifier = ulb?.censusCode ?? ulb?.sbCode ?? selection.ulbId;
       if (!ulb || !allocation) {
-        invalid.push(selection.ulbId);
+        invalid.push(identifier);
         continue;
       }
       const claimedAmount = selection.claimedAmount;
       if (!isClaimedAmountWithinVariance(allocation.allocatedAmount, claimedAmount)) {
-        invalid.push(selection.ulbId);
+        invalid.push(identifier);
         continue;
       }
 
@@ -365,11 +368,18 @@ export class ClaimLetterAssemblyService {
     }
 
     const totalInstallmentAllocation = sumAmountsExactly([...allocationByUlbId.values()].map((a) => a.allocatedAmount));
-    const totalAlreadyAcknowledged = await this.eligibilityService.computeTotalAlreadyAcknowledged(
-      String(stateOid),
-      String(yearOid),
-      installment,
-    );
+    // Self-excludes `parent._id` so this batch's own claim (still counted separately below via
+    // `currentSelectedClaim`) never nets out of totalClaimInProgress/totalClaimInDraft twice —
+    // correct regardless of whether `parent` is currently a fresh draft or an existing one being
+    // re-saved (it's always excluded from whichever status bucket it currently occupies).
+    const { totalAlreadyAcknowledged, totalClaimInProgress, totalClaimInDraft, availableToClaim } =
+      await this.eligibilityService.getClaimStatusBreakdown(
+        String(stateOid),
+        String(yearOid),
+        installment,
+        totalInstallmentAllocation,
+        String(parent._id),
+      );
     const selectedAllocation = sumAmountsExactly(children.map((c) => c.document['allocatedAmount'] as number));
     const currentSelectedClaim = sumAmountsExactly(children.map((c) => c.document['claimedAmount'] as number));
 
@@ -383,13 +393,14 @@ export class ClaimLetterAssemblyService {
       financialSummary: {
         totalInstallmentAllocation,
         totalAlreadyAcknowledged,
+        totalClaimInProgress,
+        totalClaimInDraft,
+        availableToClaim,
         selectedAllocation,
         currentSelectedClaim,
-        remainingIfAcknowledged: sumAmountsExactly([
-          totalInstallmentAllocation,
-          -totalAlreadyAcknowledged,
-          -currentSelectedClaim,
-        ]),
+        // = availableToClaim − currentSelectedClaim — accounts for other concurrent batches
+        // (draft/under-review), not just this state's already-acknowledged claims.
+        remainingIfAcknowledged: sumAmountsExactly([availableToClaim, -currentSelectedClaim]),
       },
     };
   }

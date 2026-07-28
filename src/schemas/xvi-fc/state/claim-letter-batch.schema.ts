@@ -28,12 +28,28 @@ export class ClaimLetterFinancialSummary {
   @Prop({ type: Number, default: 0 })
   totalAlreadyAcknowledged!: number;
 
+  // Sum claimed across this state/year/installment's OTHER batches at UNDER_REVIEW_BY_MOHUA /
+  // IN_PROGRESS respectively, self-excluding this batch — persisted (not just computed transiently)
+  // so the frontend can live-recompute `remainingIfAcknowledged`-equivalent values as the user edits
+  // claim amounts, without needing a fresh server round-trip on every keystroke.
+  @Prop({ type: Number, default: 0 })
+  totalClaimInProgress!: number;
+
+  @Prop({ type: Number, default: 0 })
+  totalClaimInDraft!: number;
+
+  // totalInstallmentAllocation − totalAlreadyAcknowledged − totalClaimInProgress − totalClaimInDraft.
+  @Prop({ type: Number, default: 0 })
+  availableToClaim!: number;
+
   @Prop({ type: Number, default: 0 })
   selectedAllocation!: number;
 
   @Prop({ type: Number, default: 0 })
   currentSelectedClaim!: number;
 
+  // = availableToClaim − currentSelectedClaim (i.e. also accounts for other concurrent batches, not
+  // just this state's already-acknowledged claims — see claim-letter-assembly.service.ts).
   @Prop({ type: Number, default: 0 })
   remainingIfAcknowledged!: number;
 }

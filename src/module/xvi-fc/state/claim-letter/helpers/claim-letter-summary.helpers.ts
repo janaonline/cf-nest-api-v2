@@ -26,7 +26,16 @@ export function mapClaimLetterBatchDocToSummary(doc: Record<string, unknown>): C
     isAbandoned,
     hasSignedFile: !!doc['signedClaimFile'],
     // Already Crore-denominated in storage — a direct passthrough, no unit conversion needed.
-    financialSummary: doc['financialSummary'] as ClaimLetterFinancialSummaryDisplay,
+    // `totalClaimInProgress`/`totalClaimInDraft`/`availableToClaim` are defaulted defensively:
+    // reads here go through `.lean()`, which skips Mongoose schema defaults, so a batch saved
+    // before these fields existed would otherwise come back with them `undefined` (not `0`) until
+    // it's next saved via createDraft/updateDraft.
+    financialSummary: {
+      ...(doc['financialSummary'] as ClaimLetterFinancialSummaryDisplay),
+      totalClaimInProgress: (doc['financialSummary'] as ClaimLetterFinancialSummaryDisplay)?.totalClaimInProgress ?? 0,
+      totalClaimInDraft: (doc['financialSummary'] as ClaimLetterFinancialSummaryDisplay)?.totalClaimInDraft ?? 0,
+      availableToClaim: (doc['financialSummary'] as ClaimLetterFinancialSummaryDisplay)?.availableToClaim ?? 0,
+    },
     revision: doc['revision'] as number,
     submittedAt: (doc['submittedAt'] as Date | null) ?? null,
     resolvedAt: (doc['resolvedAt'] as Date | null) ?? null,

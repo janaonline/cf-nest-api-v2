@@ -34,6 +34,9 @@ export interface ClaimLetterUlbRow {
 export interface ClaimLetterFinancialSummaryDisplay {
   totalInstallmentAllocation: number;
   totalAlreadyAcknowledged: number;
+  totalClaimInProgress: number;
+  totalClaimInDraft: number;
+  availableToClaim: number;
   selectedAllocation: number;
   currentSelectedClaim: number;
   remainingIfAcknowledged: number;
@@ -58,6 +61,9 @@ export interface ClaimLetterEligibilitySummary {
   financialOverview: {
     totalInstallmentAllocation: number;
     totalAlreadyAcknowledged: number;
+    totalClaimInProgress: number;
+    totalClaimInDraft: number;
+    availableToClaim: number;
   };
 }
 

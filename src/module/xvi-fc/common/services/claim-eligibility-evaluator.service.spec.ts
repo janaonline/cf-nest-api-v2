@@ -124,6 +124,35 @@ describe('ClaimEligibilityEvaluatorService', () => {
     expect(result.evidence).toMatchObject({ resolvedFormStatus: null, sourceFormDocumentId: null });
   });
 
+  it('copies displayLabel/displayDescription from the config onto both PASSED and not-found results', async () => {
+    const withDisplayCopy = sourceFormJson({
+      claimEligibility: {
+        ...devolutionConfig,
+        displayLabel: 'Devolution Formula',
+        displayDescription: 'Devolution Formula must be submitted by the state.',
+      },
+    });
+
+    findOne.mockResolvedValue({ _id: new Types.ObjectId(), currentFormStatus: 5 });
+    const passed = await service.evaluate(withDisplayCopy, { stateId, designYearId, installment: 1 });
+    expect(passed.displayLabel).toBe('Devolution Formula');
+    expect(passed.displayDescription).toBe('Devolution Formula must be submitted by the state.');
+
+    findOne.mockResolvedValue(null);
+    const notFound = await service.evaluate(withDisplayCopy, { stateId, designYearId, installment: 1 });
+    expect(notFound.displayLabel).toBe('Devolution Formula');
+    expect(notFound.displayDescription).toBe('Devolution Formula must be submitted by the state.');
+  });
+
+  it('leaves displayLabel/displayDescription undefined when the config has neither', async () => {
+    findOne.mockResolvedValue({ _id: new Types.ObjectId(), currentFormStatus: 5 });
+
+    const result = await service.evaluate(sourceFormJson(), { stateId, designYearId, installment: 1 });
+
+    expect(result.displayLabel).toBeUndefined();
+    expect(result.displayDescription).toBeUndefined();
+  });
+
   it('never branches on a hardcoded formId anywhere in its evaluation logic', () => {
     // Structural guard against reintroducing `if (formId === 24)`-style special-casing (brain
     // §3.1) — the evaluator must stay driven entirely by the passed-in config.

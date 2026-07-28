@@ -97,6 +97,20 @@ describe('ClaimEligibilityConfigDto', () => {
     expect(errors.length).toBeGreaterThan(0);
   });
 
+  it('accepts and preserves displayLabel/displayDescription under whitelist mode', async () => {
+    const dto = build({
+      displayLabel: 'Devolution Formula',
+      displayDescription: 'Devolution Formula must be submitted by the state.',
+    });
+    expect(await validate(dto, PIPE_OPTIONS)).toHaveLength(0);
+    expect(dto.displayLabel).toBe('Devolution Formula');
+    expect(dto.displayDescription).toBe('Devolution Formula must be submitted by the state.');
+  });
+
+  it('validates cleanly with displayLabel/displayDescription omitted (both optional)', async () => {
+    expect(await validate(build(), PIPE_OPTIONS)).toHaveLength(0);
+  });
+
   it('accepts optional dependentActions when provided as a valid array', async () => {
     const errors = await validate(
       build({ dependentActions: [{ action: 'MARK_DEPENDENT_ROWS_NEEDS_UPDATE' }] }),

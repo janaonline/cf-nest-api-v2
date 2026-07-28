@@ -72,6 +72,15 @@ export interface ClaimEligibilityConfig {
   enabled: boolean;
   ruleVersion: number;
 
+  /** Short human-readable name for this criterion (e.g. "Devolution Formula"), shown in the claim
+   *  letter eligibility checklist. Optional — the frontend falls back to a humanized `formType`
+   *  when absent, so an unconfigured source never renders blank. */
+  displayLabel?: string;
+  /** One-line requirement statement (e.g. "Devolution Formula must be submitted by the state."),
+   *  shown alongside the pass/fail indicator regardless of current result — same wording whether
+   *  passing or failing, only the tick/cross changes. */
+  displayDescription?: string;
+
   ownerLevel: ClaimEligibilityOwnerLevel;
   evaluationLevel: ClaimEligibilityEvaluationLevel;
   yearScope: ClaimEligibilityYearScope;
@@ -126,6 +135,11 @@ export interface EligibilityEvaluationResult {
   formJsonId: string;
   ruleVersion: number;
   formType: string;
+
+  /** Copied from `ClaimEligibilityConfig.displayLabel`/`displayDescription` at evaluation time —
+   *  see there for what these mean. Absent when the source config didn't set them. */
+  displayLabel?: string;
+  displayDescription?: string;
 
   ownerLevel: ClaimEligibilityOwnerLevel;
   evaluationLevel: ClaimEligibilityEvaluationLevel;
