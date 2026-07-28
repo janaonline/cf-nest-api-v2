@@ -76,6 +76,7 @@ interface UlbSubmissionRow {
   formStatusId: number;
   lastUpdatedAt: Date | null;
   annualAccountId: Types.ObjectId | null;
+  hasManualReviewRequests: boolean;
 }
 
 interface UlbSubmissionsFacetResult {
@@ -350,6 +351,7 @@ export class AnnualAccountsService implements OnModuleInit {
             'ocrInfo.validationStatus': null,
             'ocrInfo.validationDetails': null,
             'ocrInfo.failedChecks': [],
+            'ocrInfo.isManualReviewRequested': false,
             'queue.bullJobId': null,
             'queue.status': 'waiting',
             'queue.attempts': (historyDoc.queue?.attempts ?? 0) + 1,
@@ -373,6 +375,7 @@ export class AnnualAccountsService implements OnModuleInit {
             [`${historyDoc.section}.documents.$.currentUpload.ocrInfo.validationStatus`]: null,
             [`${historyDoc.section}.documents.$.currentUpload.ocrInfo.validationDetails`]: null,
             [`${historyDoc.section}.documents.$.currentUpload.ocrInfo.failedChecks`]: [],
+            [`${historyDoc.section}.documents.$.currentUpload.ocrInfo.isManualReviewRequested`]: false,
           },
         },
       ),
@@ -468,6 +471,15 @@ export class AnnualAccountsService implements OnModuleInit {
           formStatus: { $ifNull: [`$account.${dto.section}.form_status`, notStarted] },
           formStatusId: { $ifNull: [`$account.${dto.section}.form_status_id`, FORM_STATUS_ID[notStarted]] },
           lastUpdatedAt: { $ifNull: ['$account.updatedAt', null] },
+          hasManualReviewRequests: {
+            $anyElementTrue: {
+              $map: {
+                input: { $ifNull: [`$account.${dto.section}.documents`, []] },
+                as: 'd',
+                in: { $ifNull: ['$$d.currentUpload.ocrInfo.isManualReviewRequested', false] },
+              },
+            },
+          },
         },
       },
     ];
@@ -493,6 +505,7 @@ export class AnnualAccountsService implements OnModuleInit {
               formStatusId: 1,
               lastUpdatedAt: 1,
               annualAccountId: { $ifNull: ['$account._id', null] },
+              hasManualReviewRequests: 1,
             },
           },
         ],
@@ -686,6 +699,47 @@ export class AnnualAccountsService implements OnModuleInit {
 
     this.logger.log(`Document removed — annualAccountId=${id} section=${section} docId=${docId} by user=${user._id}`);
     return { annualAccountId: id, section, docId, message: 'Document removed successfully' };
+  }
+
+  // ─── ULB requests manual review of a failed OCR validation ───────────────────
+
+  async requestManualReview(id: string, section: 'auditedData' | 'unauditedData', docId: string, user: AuthUser) {
+    if (user.scope !== Scope.ULB) {
+      throw new ForbiddenException('Only ULB users may request manual review');
+    }
+
+    const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
+    if (!doc) throw new NotFoundException('Annual account not found');
+    await this.validateViewAccess(doc, user);
+
+    const sectionData = (doc as any)[section];
+    if (!sectionData) throw new NotFoundException('Section not found');
+
+    const docSlot = (sectionData.documents ?? []).find((d: any) => d.docId === docId);
+    if (!docSlot?.currentUpload) throw new NotFoundException('Document not found in this section');
+
+    if (docSlot.currentUpload.ocrInfo?.validationStatus !== 'FAIL') {
+      throw new BadRequestException('Manual review can only be requested for a failed OCR validation.');
+    }
+    if (docSlot.currentUpload.ocrInfo?.isManualReviewRequested) {
+      throw new BadRequestException('Manual review has already been requested for this document.');
+    }
+
+    await Promise.all([
+      this.annualAccountModel.updateOne(
+        { _id: new Types.ObjectId(id), [`${section}.documents.docId`]: docId },
+        { $set: { [`${section}.documents.$.currentUpload.ocrInfo.isManualReviewRequested`]: true } },
+      ),
+      this.uploadHistoryModel.updateOne(
+        { uploadId: docSlot.currentUpload.uploadId },
+        { $set: { 'ocrInfo.isManualReviewRequested': true } },
+      ),
+    ]);
+
+    this.logger.log(
+      `Manual review requested — annualAccountId=${id} section=${section} docId=${docId} by user=${user._id}`,
+    );
+    return this.getProcessingStatus(id, user);
   }
 
   // ─── Submit section to State DMA ─────────────────────────────────────────────
