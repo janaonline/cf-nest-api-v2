@@ -42,8 +42,9 @@ export class BankAccountController {
 
   @Post()
   @UseGuards(PermissionGuard)
-  submitBankAccount(@Body() dto: SubmitXviFcBankAccountDto, @CurrentUser() user: AuthUser) {
-    return this.bankAccountService.submitBankAccount(dto, user);
+  submitBankAccount(@Body() dto: SubmitXviFcBankAccountDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    const { ipAddress, userAgent } = extractIpAndUserAgent(req);
+    return this.bankAccountService.submitBankAccount(dto, user, ipAddress, userAgent);
   }
 
   // @Post('bulk-decision')
@@ -53,6 +54,18 @@ export class BankAccountController {
   //   const { ipAddress, userAgent } = extractIpAndUserAgent(req);
   //   return this.bankAccountService.bulkDecideBankAccount(dto, user, ipAddress, userAgent);
   // }
+
+  @Get(':id/logs')
+  @UseGuards(PermissionGuard)
+  getFormLogs(@Param('id', ParseObjectIdPipe) id: string, @CurrentUser() user: AuthUser) {
+    return this.bankAccountService.getBankAccountFormLogs(id, user);
+  }
+
+  @Get(':id/proof-signed-url')
+  @UseGuards(PermissionGuard)
+  getProofSignedUrl(@Param('id', ParseObjectIdPipe) id: string, @CurrentUser() user: AuthUser) {
+    return this.bankAccountService.getProofSignedUrl(id, user);
+  }
 
   @Post(':id/decision')
   @UseGuards(PermissionGuard)

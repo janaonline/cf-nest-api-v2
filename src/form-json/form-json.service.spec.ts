@@ -26,7 +26,7 @@ describe('FormJsonService', () => {
     findByIdAndUpdate: jest.Mock;
     create: jest.Mock;
   };
-  let redis: { get: jest.Mock; set: jest.Mock; del: jest.Mock };
+  let redis: { get: jest.Mock; set: jest.Mock; del: jest.Mock; delByPattern: jest.Mock };
   let configService: { get: jest.Mock };
 
   const designYearId = new Types.ObjectId().toString();
@@ -39,7 +39,7 @@ describe('FormJsonService', () => {
       findByIdAndUpdate: jest.fn(),
       create: jest.fn(),
     };
-    redis = { get: jest.fn(), set: jest.fn(), del: jest.fn() };
+    redis = { get: jest.fn(), set: jest.fn(), del: jest.fn(), delByPattern: jest.fn().mockResolvedValue(1) };
     configService = { get: jest.fn().mockReturnValue('test') };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -281,7 +281,27 @@ describe('FormJsonService', () => {
   describe('clearCache', () => {
     it('deletes the cache entry for the given designYearId/formId', async () => {
       await service.clearCache(designYearId, 25);
-      expect(redis.del).toHaveBeenCalledWith(`formJson:test:${designYearId}:25`);
+      expect(redis.delByPattern).toHaveBeenCalledWith(`formJson:test:${designYearId}:25`);
+    });
+
+    it('matches every formId for a year when formId is omitted', async () => {
+      await service.clearCache(designYearId);
+      expect(redis.delByPattern).toHaveBeenCalledWith(`formJson:test:${designYearId}:*`);
+    });
+
+    it('matches every year for a formId when designYearId is omitted', async () => {
+      await service.clearCache(undefined, 25);
+      expect(redis.delByPattern).toHaveBeenCalledWith(`formJson:test:*:25`);
+    });
+
+    it('matches everything when both are omitted', async () => {
+      await service.clearCache();
+      expect(redis.delByPattern).toHaveBeenCalledWith(`formJson:test:*:*`);
+    });
+
+    it('returns the number of keys actually deleted', async () => {
+      redis.delByPattern.mockResolvedValue(3);
+      await expect(service.clearCache(designYearId, 25)).resolves.toBe(3);
     });
   });
 

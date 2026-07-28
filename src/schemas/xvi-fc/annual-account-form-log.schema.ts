@@ -35,7 +35,7 @@ export const FormLogDocumentEntrySchema = SchemaFactory.createForClass(FormLogDo
  * that shouldn't require scanning every ULB's document individually.
  */
 @Schema({
-  collection: 'xvifc_annualaccount_datas_form_logs',
+  collection: 'xvifc_annualaccount_form_logs',
   timestamps: true,
   versionKey: false,
 })
