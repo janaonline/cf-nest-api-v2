@@ -5,7 +5,7 @@ import { Types } from 'mongoose';
 import { NotificationService } from './notification.service';
 import { Notification } from '../schemas/notification.schema';
 import { NotificationAudienceResolver } from './notification-audience.resolver';
-import { INotifyAudienceOptions } from '../../common/types/workflow.types';
+import { INotifyAudienceOptions } from '../../../common/types/workflow.types';
 
 describe('NotificationService', () => {
   let service: NotificationService;

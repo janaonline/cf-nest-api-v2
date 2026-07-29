@@ -7,7 +7,7 @@ import { FormSubmission } from '../schemas/form-submission.schema';
 import { FormSubmissionStatusService } from './form-submission-status.service';
 import { MessageThreadService } from '../../module/communication/services/message-thread.service';
 import { MessageService } from '../../module/communication/services/message.service';
-import { NotificationService } from '../../notifications/services/notification.service';
+import { NotificationService } from '../../module/notifications/services/notification.service';
 import { FormWorkflowPermissions } from '../../common/services/form-workflow.permissions';
 import { FORM_STATUS } from '../../common/constants/form-status.constants';
 import type { IAuthUser } from '../../common/interfaces/auth-user.interface';

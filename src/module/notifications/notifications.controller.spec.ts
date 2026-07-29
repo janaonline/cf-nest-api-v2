@@ -2,8 +2,8 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { Types } from 'mongoose';
 import { NotificationsController } from './notifications.controller';
 import { NotificationService } from './services/notification.service';
-import type { IAuthUser } from '../common/interfaces/auth-user.interface';
-import { Role } from '../module/auth/enum/role.enum';
+import type { IAuthUser } from '../../common/interfaces/auth-user.interface';
+import { Role } from '../auth/enum/role.enum';
 import type { INotification } from './interfaces/notification.interface';
 
 describe('NotificationsController', () => {

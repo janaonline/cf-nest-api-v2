@@ -1,8 +1,8 @@
 import { Controller, Get, HttpCode, HttpStatus, Param, Patch, Query } from '@nestjs/common';
 import { ApiOperation } from '@nestjs/swagger';
-import type { IAuthUser } from '../common/interfaces/auth-user.interface';
-import { ParseObjectIdPipe } from '../common/pipes/parse-object-id.pipe';
-import { CurrentUser } from '../module/auth/decorators/current-user.decorator';
+import type { IAuthUser } from '../../common/interfaces/auth-user.interface';
+import { ParseObjectIdPipe } from '../../common/pipes/parse-object-id.pipe';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { INotification } from './interfaces/notification.interface';
 import { NotificationService } from './services/notification.service';
 

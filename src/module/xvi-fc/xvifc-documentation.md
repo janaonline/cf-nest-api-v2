@@ -747,7 +747,7 @@ Three new top-level modules were merged in:
 
 - `FormsModule` (`src/forms/`) — generic ULB→State→MoHUA form workflow engine
 - `CommunicationModule` (`src/module/communication/`) — message threads between org tiers
-- `NotificationsModule` (`src/notifications/`) — in-app notification delivery
+- `NotificationsModule` (`src/module/notifications/`) — in-app notification delivery
 
 **None of these touch `src/module/xvi-fc`.** They are currently independent.
 

@@ -1,8 +1,8 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { ClientSession, Model, Types } from 'mongoose';
-import { toObjectId } from '../../common/utils/objectid.util';
-import { INotifyAudienceOptions } from '../../common/types/workflow.types';
+import { toObjectId } from '../../../common/utils/objectid.util';
+import { INotifyAudienceOptions } from '../../../common/types/workflow.types';
 import { INotification } from '../interfaces/notification.interface';
 import { Notification, NotificationDocument } from '../schemas/notification.schema';
 import { NotificationAudienceResolver } from './notification-audience.resolver';

@@ -1,8 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { INotificationAudience } from '../../common/types/workflow.types';
-import { User } from '../../schemas/user/user.schema';
+import { INotificationAudience } from '../../../common/types/workflow.types';
+import { User } from '../../../schemas/user/user.schema';
 
 @Injectable()
 export class NotificationAudienceResolver {

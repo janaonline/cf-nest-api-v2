@@ -8,7 +8,7 @@ import { IAuthUser } from '../../common/interfaces/auth-user.interface';
 import { FormWorkflowPermissions } from '../../common/services/form-workflow.permissions';
 import { MessageThreadService } from '../../module/communication/services/message-thread.service';
 import { MessageService } from '../../module/communication/services/message.service';
-import { NotificationService } from '../../notifications/services/notification.service';
+import { NotificationService } from '../../module/notifications/services/notification.service';
 import { AcknowledgeFormDto } from '../dto/acknowledge-form.dto';
 import { ApproveFormDto } from '../dto/approve-form.dto';
 import { ReturnFormDto } from '../dto/return-form.dto';

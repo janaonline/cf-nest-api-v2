@@ -29,7 +29,7 @@ import { S3UploadModule } from './s3-upload/s3-upload.module';
 import { FormsModule } from './forms/forms.module';
 import { FormJsonModule } from './master/form-json/form-json.module';
 import { CommunicationModule } from './module/communication/communication.module';
-import { NotificationsModule } from './notifications/notifications.module';
+import { NotificationsModule } from './module/notifications/notifications.module';
 import { UlbModule } from './master/ulb/ulb.module';
 import { StateModule } from './master/state/state.module';
 function getQueryCaller(): string {
