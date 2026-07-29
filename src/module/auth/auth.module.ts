@@ -11,7 +11,7 @@ import { Ulb, UlbSchema } from 'src/schemas/ulb.schema';
 import { Year, YearSchema } from 'src/schemas/year.schema';
 import { VisitSession, VisitSessionSchema } from 'src/schemas/visit-session.schema';
 import { LoginHistory, LoginHistorySchema } from 'src/schemas/user/login-history.schema';
-import { UsersModule } from 'src/users/users.module';
+import { UsersModule } from 'src/module/users/users.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { LoginService } from './login.service';

@@ -9,8 +9,8 @@ import { XviFcAnnualAccountFormLog } from '../../../../schemas/xvi-fc/annual-acc
 import { XviFcDocumentActionGate } from '../../../../schemas/xvi-fc/document-action-gate.schema';
 import { Ulb } from '../../../../schemas/ulb.schema';
 import { S3Service } from '../../../../core/s3/s3.service';
-import { S3UploadService } from '../../../../s3-upload/s3-upload.service';
-import { FormJsonService } from '../../../../form-json/form-json.service';
+import { S3UploadService } from '../../../file/s3-upload.service';
+import { FormJsonService } from '../../../../master/form-json/form-json.service';
 import { ANNUAL_ACCOUNT_PROCESSING_QUEUE } from '../../../../core/constants/queues';
 import type { AuthUser } from '../../../auth/auth-user.interface';
 
@@ -93,10 +93,34 @@ describe('AnnualAccountsController', () => {
     const spy = jest
       .spyOn(controller['annualAccountsService'], 'undoDocumentDecision')
       .mockImplementation(
-        () => Promise.resolve({ annualAccountId: 'id-1' }) as unknown as ReturnType<AnnualAccountsService['undoDocumentDecision']>,
+        () =>
+          Promise.resolve({ annualAccountId: 'id-1' }) as unknown as ReturnType<
+            AnnualAccountsService['undoDocumentDecision']
+          >,
       );
 
     await controller.undoDocumentDecision('id-1', 'doc-1', 'auditedData', testUser);
+
+    expect(spy).toHaveBeenCalledWith('id-1', 'auditedData', 'doc-1', testUser);
+  });
+
+  it('requestManualReview rejects a section other than auditedData/unauditedData', () => {
+    expect(() => controller.requestManualReview('id-1', 'doc-1', 'somethingElse', testUser)).toThrow(
+      'section must be "auditedData" or "unauditedData"',
+    );
+  });
+
+  it('requestManualReview delegates to the service for a valid section', async () => {
+    const spy = jest
+      .spyOn(controller['annualAccountsService'], 'requestManualReview')
+      .mockImplementation(
+        () =>
+          Promise.resolve({ annualAccountId: 'id-1' }) as unknown as ReturnType<
+            AnnualAccountsService['requestManualReview']
+          >,
+      );
+
+    await controller.requestManualReview('id-1', 'doc-1', 'auditedData', testUser);
 
     expect(spy).toHaveBeenCalledWith('id-1', 'auditedData', 'doc-1', testUser);
   });

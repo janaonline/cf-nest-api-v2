@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { FormJsonService } from 'src/form-json/form-json.service';
+import { FormJsonService } from 'src/master/form-json/form-json.service';
 import { DF_FORM_ID, DF_FORM_TYPE } from '../../constants/devolution-formula.constants';
 import { DfTypedFieldConfig, validateDfFormJsonData } from '../../helpers/devolution-formula-form-json.helpers';
 

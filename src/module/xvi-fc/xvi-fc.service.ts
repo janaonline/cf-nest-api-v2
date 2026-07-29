@@ -30,7 +30,7 @@ import { Ulb, UlbDocument } from '../../schemas/ulb.schema';
 import { State, StateDocument } from '../../schemas/state.schema';
 import { SideMenu, SideMenuDocument, MenuRole } from '../../schemas/side-menu.schema';
 import { XviFcCacheService, XVIFC_CACHE_KEY_PREFIX } from './cache/xvi-fc-cache.service';
-import { FormJsonService } from '../../form-json/form-json.service';
+import { FormJsonService } from '../../master/form-json/form-json.service';
 
 @Injectable()
 export class XviFcService {

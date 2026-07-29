@@ -55,6 +55,10 @@ export class OCRInfo {
 
   @Prop({ type: [String], default: [] })
   failedChecks!: string[];
+
+  /** ULB has asked a human reviewer to look at this failed OCR result. Set once, cleared on retry/re-upload. */
+  @Prop({ type: Boolean, default: false })
+  isManualReviewRequested!: boolean;
 }
 
 export const OCRInfoSchema = SchemaFactory.createForClass(OCRInfo);

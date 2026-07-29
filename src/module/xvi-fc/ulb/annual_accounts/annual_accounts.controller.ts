@@ -112,6 +112,21 @@ export class AnnualAccountsController {
     return this.annualAccountsService.retryUpload(id, uploadId, user);
   }
 
+  @Post(':id/documents/:docId/manual-review')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'ULB requests manual review of a document whose OCR validation failed' })
+  requestManualReview(
+    @Param('id', ParseObjectIdPipe) id: string,
+    @Param('docId') docId: string,
+    @Query('section') section: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    if (section !== 'auditedData' && section !== 'unauditedData') {
+      throw new BadRequestException('section must be "auditedData" or "unauditedData"');
+    }
+    return this.annualAccountsService.requestManualReview(id, section, docId, user);
+  }
+
   @Delete(':id/documents/:docId')
   @HttpCode(200)
   @ApiOperation({

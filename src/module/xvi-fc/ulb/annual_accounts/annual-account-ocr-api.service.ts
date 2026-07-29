@@ -54,18 +54,29 @@ export interface OcrResultResponse {
 @Injectable()
 export class AnnualAccountOcrApiService {
   private readonly logger = new Logger(AnnualAccountOcrApiService.name);
-  private readonly ocrJobApiUrl: string;
+  private ocrJobApiUrl!: string;
 
   constructor(
     private readonly http: HttpService,
     private readonly config: ConfigService,
   ) {
-    // Derive the OCR API host from the current app's own BASE_URL
-    // (e.g. BASE_URL=https://dev.cityfinance.in/api/v2/ -> https://dev.cityfinance.in/api/v3/)
-    const configuredBaseUrl = this.config.get<string>('BASE_URL', '');
-    const origin = configuredBaseUrl ? new URL(configuredBaseUrl).origin : '';
-    const baseUrl = `${origin}/api/v3/`;
-    this.ocrJobApiUrl = `${baseUrl}ocr-validation/jobs`;
+    this.setOcrJobApiUrl();
+  }
+
+  // Derive the OCR API host from the current app's own BASE_URL
+  // (e.g. BASE_URL=https://dev.cityfinance.in/api/v2/ -> https://dev.cityfinance.in/api/v3/)
+  setOcrJobApiUrl() {
+    let ocrBaseUrl = '';
+    // If API_BASE_URL_V3 is set in the config, use that. Otherwise, derive it from BASE_URL.
+    if (this.config.get<string>('API_BASE_URL_V3')) {
+      ocrBaseUrl = this.config.get<string>('API_BASE_URL_V3', '');
+    } else {
+      const configuredBaseUrl = this.config.get<string>('BASE_URL', '');
+      const origin = configuredBaseUrl ? new URL(configuredBaseUrl).origin : '';
+      ocrBaseUrl = `${origin}/api/v3/`;
+    }
+    this.logger.log(`OCR API base URL set to: ${ocrBaseUrl}`);
+    this.ocrJobApiUrl = `${ocrBaseUrl}ocr-validation/jobs`;
   }
 
   async submitJob(dto: OcrSubmitJobDto): Promise<OcrSubmitResponse> {

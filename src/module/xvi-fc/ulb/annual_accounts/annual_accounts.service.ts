@@ -6,7 +6,7 @@ import {
   NotFoundException,
   OnModuleInit,
 } from '@nestjs/common';
-import { FormJsonService } from '../../../../form-json/form-json.service';
+import { FormJsonService } from '../../../../master/form-json/form-json.service';
 import { InjectQueue } from '@nestjs/bullmq';
 import { InjectModel } from '@nestjs/mongoose';
 import { createHash } from 'crypto';
@@ -14,7 +14,7 @@ import { Queue } from 'bullmq';
 import { Model, PipelineStage, Types } from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 import { S3Service } from '../../../../core/s3/s3.service';
-import { S3UploadService } from '../../../../s3-upload/s3-upload.service';
+import { S3UploadService } from '../../../file/s3-upload.service';
 import {
   AnnualAccountFormStatus,
   FORM_STATUS_ID,
@@ -27,6 +27,7 @@ import {
 } from '../../../../schemas/xvi-fc/annual-account-upload-history.schema';
 import {
   FormLogDocumentEntry,
+  buildFormLogDocumentEntry,
   XviFcAnnualAccountFormLog,
   XviFcAnnualAccountFormLogDocument,
 } from '../../../../schemas/xvi-fc/annual-account-form-log.schema';
@@ -76,6 +77,7 @@ interface UlbSubmissionRow {
   formStatusId: number;
   lastUpdatedAt: Date | null;
   annualAccountId: Types.ObjectId | null;
+  hasManualReviewRequests: boolean;
 }
 
 interface UlbSubmissionsFacetResult {
@@ -350,6 +352,7 @@ export class AnnualAccountsService implements OnModuleInit {
             'ocrInfo.validationStatus': null,
             'ocrInfo.validationDetails': null,
             'ocrInfo.failedChecks': [],
+            'ocrInfo.isManualReviewRequested': false,
             'queue.bullJobId': null,
             'queue.status': 'waiting',
             'queue.attempts': (historyDoc.queue?.attempts ?? 0) + 1,
@@ -373,6 +376,7 @@ export class AnnualAccountsService implements OnModuleInit {
             [`${historyDoc.section}.documents.$.currentUpload.ocrInfo.validationStatus`]: null,
             [`${historyDoc.section}.documents.$.currentUpload.ocrInfo.validationDetails`]: null,
             [`${historyDoc.section}.documents.$.currentUpload.ocrInfo.failedChecks`]: [],
+            [`${historyDoc.section}.documents.$.currentUpload.ocrInfo.isManualReviewRequested`]: false,
           },
         },
       ),
@@ -468,6 +472,15 @@ export class AnnualAccountsService implements OnModuleInit {
           formStatus: { $ifNull: [`$account.${dto.section}.form_status`, notStarted] },
           formStatusId: { $ifNull: [`$account.${dto.section}.form_status_id`, FORM_STATUS_ID[notStarted]] },
           lastUpdatedAt: { $ifNull: ['$account.updatedAt', null] },
+          hasManualReviewRequests: {
+            $anyElementTrue: {
+              $map: {
+                input: { $ifNull: [`$account.${dto.section}.documents`, []] },
+                as: 'd',
+                in: { $ifNull: ['$$d.currentUpload.ocrInfo.isManualReviewRequested', false] },
+              },
+            },
+          },
         },
       },
     ];
@@ -493,6 +506,7 @@ export class AnnualAccountsService implements OnModuleInit {
               formStatusId: 1,
               lastUpdatedAt: 1,
               annualAccountId: { $ifNull: ['$account._id', null] },
+              hasManualReviewRequests: 1,
             },
           },
         ],
@@ -648,9 +662,9 @@ export class AnnualAccountsService implements OnModuleInit {
       toStatus: log.toStatus,
       actorStage: log.actorStage,
       actorRole: log.userInfo.role,
-      note: log.note,
-      batchId: log.batchId,
-      documents: log.documents,
+      note: log.note ?? null,
+      batchId: log.batchId ?? null,
+      documents: log.documents ?? [],
       createdAt: (log as unknown as { createdAt: Date }).createdAt,
     }));
   }
@@ -686,6 +700,47 @@ export class AnnualAccountsService implements OnModuleInit {
 
     this.logger.log(`Document removed — annualAccountId=${id} section=${section} docId=${docId} by user=${user._id}`);
     return { annualAccountId: id, section, docId, message: 'Document removed successfully' };
+  }
+
+  // ─── ULB requests manual review of a failed OCR validation ───────────────────
+
+  async requestManualReview(id: string, section: 'auditedData' | 'unauditedData', docId: string, user: AuthUser) {
+    if (user.scope !== Scope.ULB) {
+      throw new ForbiddenException('Only ULB users may request manual review');
+    }
+
+    const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
+    if (!doc) throw new NotFoundException('Annual account not found');
+    await this.validateViewAccess(doc, user);
+
+    const sectionData = (doc as any)[section];
+    if (!sectionData) throw new NotFoundException('Section not found');
+
+    const docSlot = (sectionData.documents ?? []).find((d: any) => d.docId === docId);
+    if (!docSlot?.currentUpload) throw new NotFoundException('Document not found in this section');
+
+    if (docSlot.currentUpload.ocrInfo?.validationStatus !== 'FAIL') {
+      throw new BadRequestException('Manual review can only be requested for a failed OCR validation.');
+    }
+    if (docSlot.currentUpload.ocrInfo?.isManualReviewRequested) {
+      throw new BadRequestException('Manual review has already been requested for this document.');
+    }
+
+    await Promise.all([
+      this.annualAccountModel.updateOne(
+        { _id: new Types.ObjectId(id), [`${section}.documents.docId`]: docId },
+        { $set: { [`${section}.documents.$.currentUpload.ocrInfo.isManualReviewRequested`]: true } },
+      ),
+      this.uploadHistoryModel.updateOne(
+        { uploadId: docSlot.currentUpload.uploadId },
+        { $set: { 'ocrInfo.isManualReviewRequested': true } },
+      ),
+    ]);
+
+    this.logger.log(
+      `Manual review requested — annualAccountId=${id} section=${section} docId=${docId} by user=${user._id}`,
+    );
+    return this.getProcessingStatus(id, user);
   }
 
   // ─── Submit section to State DMA ─────────────────────────────────────────────
@@ -763,9 +818,8 @@ export class AnnualAccountsService implements OnModuleInit {
       toStatus: AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE,
       actorStage: 'ULB',
       userInfo: { userId: new Types.ObjectId(user._id), role: user.role, ipAddress, userAgent },
-      note: null,
-      batchId: null,
-      documents: docsToCheck.map((d: any) => ({ docId: d.docId, decision: null, comment: null })),
+      // No note, no batch, and no decisions exist yet at submission — the upload-history
+      // collection already covers "what documents existed at this point in time".
     });
 
     this.logger.log(`Section ${section} submitted with self-declaration — annualAccountId=${id} by user=${user._id}`);
@@ -934,12 +988,20 @@ export class AnnualAccountsService implements OnModuleInit {
       toBulkDecide.length > 0 ? { arrayFilters: [{ 'elem.docId': { $in: toBulkDecide } }] } : undefined,
     );
 
-    const documentsBreakdown: FormLogDocumentEntry[] = effectiveByDoc.map((d) => ({
-      docId: d.docId,
-      decision: toBulkDecide.includes(d.docId) ? dto.decision : (d.effective?.status ?? null),
-      comment: toBulkDecide.includes(d.docId) ? (dto.note ?? null) : (d.effective?.note ?? null),
-      filePath: d.filePath,
-    }));
+    // Only a RETURNED event can end up with genuinely mixed per-document outcomes (some still
+    // individually APPROVED, others RETURNED) — an APPROVED event always has every document
+    // APPROVED (enforced by the stillReturned guard above), so the breakdown is omitted there.
+    const documentsBreakdown: FormLogDocumentEntry[] | undefined =
+      dto.decision === 'RETURNED'
+        ? effectiveByDoc.map((d) =>
+            buildFormLogDocumentEntry(
+              d.docId,
+              toBulkDecide.includes(d.docId) ? dto.decision : (d.effective?.status ?? null),
+              toBulkDecide.includes(d.docId) ? (dto.note ?? null) : (d.effective?.note ?? null),
+              d.filePath,
+            ),
+          )
+        : undefined;
 
     await this.formLogModel.create({
       annualAccountId: new Types.ObjectId(id),
@@ -951,9 +1013,9 @@ export class AnnualAccountsService implements OnModuleInit {
       toStatus: newStatus,
       actorStage: 'STATE',
       userInfo: { userId: new Types.ObjectId(user._id), role: user.role, ipAddress, userAgent },
-      note: dto.note ?? null,
-      batchId,
-      documents: documentsBreakdown,
+      ...(dto.note != null && { note: dto.note }),
+      ...(batchId != null && { batchId }),
+      ...(documentsBreakdown && { documents: documentsBreakdown }),
     });
 
     this.logger.log(
@@ -1097,13 +1159,9 @@ export class AnnualAccountsService implements OnModuleInit {
       },
     );
 
-    const documents: any[] = sectionData.documents ?? [];
-    const documentsBreakdown: FormLogDocumentEntry[] = documents.map((d) => {
-      const latest = d.stateDecision ?? null;
-      const filePath = (d.currentUpload?.file?.path as string | undefined) ?? null;
-      return { docId: d.docId as string, decision: latest?.status ?? null, comment: latest?.note ?? null, filePath };
-    });
-
+    // MOHUA has no per-document decision layer — every document is already individually
+    // STATE-approved by this point, regardless of MOHUA's own APPROVED/RETURNED verdict here —
+    // so there's no per-document breakdown worth recording for either outcome.
     await this.formLogModel.create({
       annualAccountId: new Types.ObjectId(id),
       ulb: doc.ulb,
@@ -1114,9 +1172,7 @@ export class AnnualAccountsService implements OnModuleInit {
       toStatus: newStatus,
       actorStage: 'MOHUA',
       userInfo: { userId: new Types.ObjectId(user._id), role: user.role, ipAddress, userAgent },
-      note: dto.note ?? null,
-      batchId: null,
-      documents: documentsBreakdown,
+      ...(dto.note != null && { note: dto.note }),
     });
 
     this.logger.log(
