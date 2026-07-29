@@ -1,11 +1,11 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { HttpException, HttpStatus } from '@nestjs/common';
-import { FileDownloadService } from './file-download.service';
+import { FileService } from './file.service';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { S3Service } from 'src/core/s3/s3.service';
 
-describe('FileDownloadService', () => {
-  let service: FileDownloadService;
+describe('FileService', () => {
+  let service: FileService;
   let fileTokenService: { parseToken: jest.Mock };
   let s3Service: { getKeyFromS3Url: jest.Mock; getObjectStream: jest.Mock };
 
@@ -15,13 +15,13 @@ describe('FileDownloadService', () => {
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
-        FileDownloadService,
+        FileService,
         { provide: FileTokenService, useValue: fileTokenService },
         { provide: S3Service, useValue: s3Service },
       ],
     }).compile();
 
-    service = module.get<FileDownloadService>(FileDownloadService);
+    service = module.get<FileService>(FileService);
   });
 
   it('should be defined', () => {

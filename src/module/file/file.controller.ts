@@ -3,21 +3,21 @@ import { ApiQuery } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { Public } from 'src/module/auth/decorators/public.decorator';
-import { FileDownloadService } from './file-download.service';
+import { FileService } from './file.service';
 import { getErrorMessage, isS3NotFoundError } from './file-response.util';
 
 @Controller('file')
-export class FileDownloadController {
-  private readonly logger = new Logger(FileDownloadController.name);
+export class FileController {
+  private readonly logger = new Logger(FileController.name);
 
-  constructor(private readonly fileDownloadService: FileDownloadService) {}
+  constructor(private readonly fileService: FileService) {}
 
   @Public()
   @SkipThrottle()
   @Get('download')
   @ApiQuery({ name: 'signature', required: true, type: String })
   async download(@Query('signature') signature: string, @Res() res: Response) {
-    const { key, stream, headers } = await this.fileDownloadService.prepareDownload(signature);
+    const { key, stream, headers } = await this.fileService.prepareDownload(signature);
 
     stream.on('error', (err: unknown) => {
       this.logger.error(`S3 stream error for key "${key}": ${getErrorMessage(err)}`);

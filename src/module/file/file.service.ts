@@ -27,8 +27,8 @@ export interface PreparedDownload {
 }
 
 @Injectable()
-export class FileDownloadService {
-  private readonly logger = new Logger(FileDownloadService.name);
+export class FileService {
+  private readonly logger = new Logger(FileService.name);
 
   constructor(
     private readonly fileTokenService: FileTokenService,

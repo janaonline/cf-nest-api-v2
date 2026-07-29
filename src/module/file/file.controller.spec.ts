@@ -1,8 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { HttpStatus } from '@nestjs/common';
 import type { Response } from 'express';
-import { FileDownloadController } from './file-download.controller';
-import { FileDownloadService } from './file-download.service';
+import { FileController } from './file.controller';
+import { FileService } from './file.service';
 
 /** Minimal Readable-stream stand-in that records the registered 'error' handler for manual triggering. */
 function createMockStream() {
@@ -36,19 +36,19 @@ function createMockResponse(): Partial<Response> & {
   return res;
 }
 
-describe('FileDownloadController', () => {
-  let controller: FileDownloadController;
-  let fileDownloadService: { prepareDownload: jest.Mock };
+describe('FileController', () => {
+  let controller: FileController;
+  let fileService: { prepareDownload: jest.Mock };
 
   beforeEach(async () => {
-    fileDownloadService = { prepareDownload: jest.fn() };
+    fileService = { prepareDownload: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
-      controllers: [FileDownloadController],
-      providers: [{ provide: FileDownloadService, useValue: fileDownloadService }],
+      controllers: [FileController],
+      providers: [{ provide: FileService, useValue: fileService }],
     }).compile();
 
-    controller = module.get<FileDownloadController>(FileDownloadController);
+    controller = module.get<FileController>(FileController);
   });
 
   it('should be defined', () => {
@@ -57,7 +57,7 @@ describe('FileDownloadController', () => {
 
   it('sets response headers from the prepared download and pipes the stream', async () => {
     const stream = createMockStream();
-    fileDownloadService.prepareDownload.mockResolvedValue({
+    fileService.prepareDownload.mockResolvedValue({
       key: 'reports/file.pdf',
       stream,
       headers: { contentType: 'application/pdf', contentDisposition: 'inline; filename="file.pdf"' },
@@ -66,7 +66,7 @@ describe('FileDownloadController', () => {
 
     await controller.download('sig', res as unknown as Response);
 
-    expect(fileDownloadService.prepareDownload).toHaveBeenCalledWith('sig');
+    expect(fileService.prepareDownload).toHaveBeenCalledWith('sig');
     expect(res.setHeader).toHaveBeenCalledWith('Content-Type', 'application/pdf');
     expect(res.setHeader).toHaveBeenCalledWith('Content-Disposition', 'inline; filename="file.pdf"');
     expect(res.setHeader).toHaveBeenCalledWith('X-Content-Type-Options', 'nosniff');
@@ -76,7 +76,7 @@ describe('FileDownloadController', () => {
 
   it('responds 404 on a stream error caused by a missing S3 object, when headers were not yet sent', async () => {
     const stream = createMockStream();
-    fileDownloadService.prepareDownload.mockResolvedValue({
+    fileService.prepareDownload.mockResolvedValue({
       key: 'reports/missing.pdf',
       stream,
       headers: { contentType: 'application/pdf', contentDisposition: 'inline; filename="missing.pdf"' },
@@ -92,7 +92,7 @@ describe('FileDownloadController', () => {
 
   it('responds 500 on a generic stream error, when headers were not yet sent', async () => {
     const stream = createMockStream();
-    fileDownloadService.prepareDownload.mockResolvedValue({
+    fileService.prepareDownload.mockResolvedValue({
       key: 'reports/file.pdf',
       stream,
       headers: { contentType: 'application/pdf', contentDisposition: 'inline; filename="file.pdf"' },
@@ -108,7 +108,7 @@ describe('FileDownloadController', () => {
 
   it('destroys the response instead of writing a JSON body when headers were already sent', async () => {
     const stream = createMockStream();
-    fileDownloadService.prepareDownload.mockResolvedValue({
+    fileService.prepareDownload.mockResolvedValue({
       key: 'reports/file.pdf',
       stream,
       headers: { contentType: 'application/pdf', contentDisposition: 'inline; filename="file.pdf"' },
