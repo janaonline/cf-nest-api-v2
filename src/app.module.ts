@@ -27,7 +27,7 @@ import { FileTokenModule } from './core/file-token/file-token.module';
 import { FileDownloadModule } from './file-download/file-download.module';
 import { S3UploadModule } from './s3-upload/s3-upload.module';
 import { FormsModule } from './forms/forms.module';
-import { FormJsonModule } from './form-json/form-json.module';
+import { FormJsonModule } from './master/form-json/form-json.module';
 import { CommunicationModule } from './communication/communication.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { UlbModule } from './master/ulb/ulb.module';

@@ -1132,7 +1132,7 @@ curl -H "Authorization: Bearer <token>" \
 
 **Modified files**:
 
-- `src/form-json/form-json.service.ts`
+- `src/master/form-json/form-json.service.ts`
   - `RedisService` injected via constructor (globally available, no module import needed).
   - `getFormJsonCacheKey(designYearId, formId): string` — private helper; returns `formJson:<designYearId>:<formId>`.
   - `findActiveByDesignYearAndFormId(designYearId, formId): Promise<IFormJson>` — new public method; checks Redis first (TTL 1 h), queries `{ design_year, formId, isActive: true }` on miss, writes result to Redis, returns `IFormJson`.

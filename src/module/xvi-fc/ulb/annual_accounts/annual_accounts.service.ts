@@ -6,7 +6,7 @@ import {
   NotFoundException,
   OnModuleInit,
 } from '@nestjs/common';
-import { FormJsonService } from '../../../../form-json/form-json.service';
+import { FormJsonService } from '../../../../master/form-json/form-json.service';
 import { InjectQueue } from '@nestjs/bullmq';
 import { InjectModel } from '@nestjs/mongoose';
 import { createHash } from 'crypto';

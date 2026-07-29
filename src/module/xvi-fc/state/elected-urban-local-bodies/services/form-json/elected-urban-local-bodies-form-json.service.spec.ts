@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { InternalServerErrorException, NotFoundException } from '@nestjs/common';
-import { FormJsonService } from 'src/form-json/form-json.service';
+import { FormJsonService } from 'src/master/form-json/form-json.service';
 import { EulbFormJsonConfigService } from './elected-urban-local-bodies-form-json.service';
 import { EULB_FORM_ID, EULB_FORM_JSON_TYPE } from '../../constants/elected-urban-local-bodies.constants';
 
