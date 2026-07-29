@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { S3Service } from '../../../core/s3/s3.service';
-import { S3UploadModule } from '../../../s3-upload/s3-upload.module';
+import { FileModule } from '../../../module/file/file.module';
 import { PropertyTaxOpMapper, PropertyTaxOpMapperSchema } from '../../../schemas/property-tax-op-mapper.schema';
 import { State, StateSchema } from '../../../schemas/state.schema';
 import { Ulb, UlbSchema } from '../../../schemas/ulb.schema';
@@ -12,7 +12,7 @@ import { PtaxReviewService } from './ptax-review.service';
 
 @Module({
   imports: [
-    S3UploadModule,
+    FileModule,
     MongooseModule.forFeature([
       { name: XvFcPtaxReview.name, schema: XvFcPtaxReviewSchema },
       { name: PropertyTaxOpMapper.name, schema: PropertyTaxOpMapperSchema },
