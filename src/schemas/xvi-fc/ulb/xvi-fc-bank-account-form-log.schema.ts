@@ -57,17 +57,17 @@ export class XviFcBankAccountFormLog {
   @Prop({ type: UserInfoSchema, required: true })
   userInfo!: UserInfo;
 
-  /** The decision note — visible to the ULB. Null for a plain SUBMITTED event. */
-  @Prop({ type: String, default: null })
-  note!: string | null;
+  /** The decision note — visible to the ULB. Omitted (not stored as null) when there's no note. */
+  @Prop({ type: String })
+  note?: string;
 
-  /** S3 object key of the proof document in place at the time of this event. */
-  @Prop({ type: String, default: null })
-  filePath!: string | null;
+  /** S3 object key of the proof document in place at the time of this event, when known. */
+  @Prop({ type: String })
+  filePath?: string;
 
-  /** Correlates every row written by one bulk-decide request. Null outside bulk actions. */
-  @Prop({ type: String, default: null })
-  batchId!: string | null;
+  /** Correlates every row written by one bulk-decide request. Omitted outside bulk actions. */
+  @Prop({ type: String })
+  batchId?: string;
 }
 
 export const XviFcBankAccountFormLogSchema = SchemaFactory.createForClass(XviFcBankAccountFormLog);

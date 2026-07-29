@@ -27,6 +27,7 @@ import {
 } from '../../../../schemas/xvi-fc/annual-account-upload-history.schema';
 import {
   FormLogDocumentEntry,
+  buildFormLogDocumentEntry,
   XviFcAnnualAccountFormLog,
   XviFcAnnualAccountFormLogDocument,
 } from '../../../../schemas/xvi-fc/annual-account-form-log.schema';
@@ -661,9 +662,9 @@ export class AnnualAccountsService implements OnModuleInit {
       toStatus: log.toStatus,
       actorStage: log.actorStage,
       actorRole: log.userInfo.role,
-      note: log.note,
-      batchId: log.batchId,
-      documents: log.documents,
+      note: log.note ?? null,
+      batchId: log.batchId ?? null,
+      documents: log.documents ?? [],
       createdAt: (log as unknown as { createdAt: Date }).createdAt,
     }));
   }
@@ -817,9 +818,8 @@ export class AnnualAccountsService implements OnModuleInit {
       toStatus: AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE,
       actorStage: 'ULB',
       userInfo: { userId: new Types.ObjectId(user._id), role: user.role, ipAddress, userAgent },
-      note: null,
-      batchId: null,
-      documents: docsToCheck.map((d: any) => ({ docId: d.docId, decision: null, comment: null })),
+      // No note, no batch, and no decisions exist yet at submission — the upload-history
+      // collection already covers "what documents existed at this point in time".
     });
 
     this.logger.log(`Section ${section} submitted with self-declaration — annualAccountId=${id} by user=${user._id}`);
@@ -988,12 +988,20 @@ export class AnnualAccountsService implements OnModuleInit {
       toBulkDecide.length > 0 ? { arrayFilters: [{ 'elem.docId': { $in: toBulkDecide } }] } : undefined,
     );
 
-    const documentsBreakdown: FormLogDocumentEntry[] = effectiveByDoc.map((d) => ({
-      docId: d.docId,
-      decision: toBulkDecide.includes(d.docId) ? dto.decision : (d.effective?.status ?? null),
-      comment: toBulkDecide.includes(d.docId) ? (dto.note ?? null) : (d.effective?.note ?? null),
-      filePath: d.filePath,
-    }));
+    // Only a RETURNED event can end up with genuinely mixed per-document outcomes (some still
+    // individually APPROVED, others RETURNED) — an APPROVED event always has every document
+    // APPROVED (enforced by the stillReturned guard above), so the breakdown is omitted there.
+    const documentsBreakdown: FormLogDocumentEntry[] | undefined =
+      dto.decision === 'RETURNED'
+        ? effectiveByDoc.map((d) =>
+            buildFormLogDocumentEntry(
+              d.docId,
+              toBulkDecide.includes(d.docId) ? dto.decision : (d.effective?.status ?? null),
+              toBulkDecide.includes(d.docId) ? (dto.note ?? null) : (d.effective?.note ?? null),
+              d.filePath,
+            ),
+          )
+        : undefined;
 
     await this.formLogModel.create({
       annualAccountId: new Types.ObjectId(id),
@@ -1005,9 +1013,9 @@ export class AnnualAccountsService implements OnModuleInit {
       toStatus: newStatus,
       actorStage: 'STATE',
       userInfo: { userId: new Types.ObjectId(user._id), role: user.role, ipAddress, userAgent },
-      note: dto.note ?? null,
-      batchId,
-      documents: documentsBreakdown,
+      ...(dto.note != null && { note: dto.note }),
+      ...(batchId != null && { batchId }),
+      ...(documentsBreakdown && { documents: documentsBreakdown }),
     });
 
     this.logger.log(
@@ -1151,13 +1159,9 @@ export class AnnualAccountsService implements OnModuleInit {
       },
     );
 
-    const documents: any[] = sectionData.documents ?? [];
-    const documentsBreakdown: FormLogDocumentEntry[] = documents.map((d) => {
-      const latest = d.stateDecision ?? null;
-      const filePath = (d.currentUpload?.file?.path as string | undefined) ?? null;
-      return { docId: d.docId as string, decision: latest?.status ?? null, comment: latest?.note ?? null, filePath };
-    });
-
+    // MOHUA has no per-document decision layer — every document is already individually
+    // STATE-approved by this point, regardless of MOHUA's own APPROVED/RETURNED verdict here —
+    // so there's no per-document breakdown worth recording for either outcome.
     await this.formLogModel.create({
       annualAccountId: new Types.ObjectId(id),
       ulb: doc.ulb,
@@ -1168,9 +1172,7 @@ export class AnnualAccountsService implements OnModuleInit {
       toStatus: newStatus,
       actorStage: 'MOHUA',
       userInfo: { userId: new Types.ObjectId(user._id), role: user.role, ipAddress, userAgent },
-      note: dto.note ?? null,
-      batchId: null,
-      documents: documentsBreakdown,
+      ...(dto.note != null && { note: dto.note }),
     });
 
     this.logger.log(
