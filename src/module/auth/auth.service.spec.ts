@@ -12,7 +12,7 @@ import * as bcrypt from 'bcrypt';
 import { Response } from 'express';
 import { RedisService } from 'src/core/services/redis/redis.service';
 import { LoginHistory } from 'src/schemas/user/login-history.schema';
-import { UsersRepository } from 'src/users/users.repository';
+import { UsersRepository } from 'src/module/users/users.repository';
 import { AuthService } from './auth.service';
 
 const mockUser = {

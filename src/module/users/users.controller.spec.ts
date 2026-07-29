@@ -10,7 +10,7 @@ import { makeStateAdmin, makeUlbAdmin, TARGET_USER_ID } from './test/users.fixtu
 //
 // The previous spec exercised `findAll()`, `findOne()`, `update()`, and `remove()` on
 // UsersController — none of these methods exist on the controller anymore (see
-// src/users/users.controller.ts). It has since been rewritten around XVI-FC-specific
+// src/module/users/users.controller.ts). It has since been rewritten around XVI-FC-specific
 // workflows (invite/transfer/soft-delete members, permission overrides, profile contacts,
 // etc). Those test blocks have been replaced with delegation tests for the methods that
 // actually exist today.

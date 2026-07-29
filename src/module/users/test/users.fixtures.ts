@@ -1,5 +1,5 @@
 /**
- * Shared test doubles / builders for src/users/*.spec.ts.
+ * Shared test doubles / builders for src/module/users/*.spec.ts.
  *
  * This file did not exist previously — users.service.spec.ts imported it but it had
  * never been committed, which (along with stale schema import paths) was one of the

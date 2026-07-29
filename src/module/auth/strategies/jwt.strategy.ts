@@ -4,7 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy, StrategyOptionsWithoutRequest } from 'passport-jwt';
 import { RedisService } from 'src/core/services/redis/redis.service';
-import { UsersRepository } from 'src/users/users.repository';
+import { UsersRepository } from 'src/module/users/users.repository';
 import { JwtPayload } from '../types/jwt-payload.type';
 import { parseUserRole } from '../roles-xvi-fc.helper';
 

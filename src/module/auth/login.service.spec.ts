@@ -13,7 +13,7 @@ import { Response } from 'express';
 import { State } from 'src/schemas/state.schema';
 import { Ulb } from 'src/schemas/ulb.schema';
 import { Year } from 'src/schemas/year.schema';
-import { UsersRepository } from 'src/users/users.repository';
+import { UsersRepository } from 'src/module/users/users.repository';
 import { AuthService } from './auth.service';
 import { LoginService } from './login.service';
 
