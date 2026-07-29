@@ -1,6 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
-import { CONTEXT_TYPE, THREAD_PURPOSE, THREAD_STATUS } from '../../common/constants/communication.constants';
+import { CONTEXT_TYPE, THREAD_PURPOSE, THREAD_STATUS } from '../../../common/constants/communication.constants';
 
 export type MessageThreadDocument = MessageThread & Document;
 

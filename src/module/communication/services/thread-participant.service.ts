@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { ClientSession, Model, Types } from 'mongoose';
-import { THREAD_PERMISSION } from '../../common/constants/communication.constants';
+import { THREAD_PERMISSION } from '../../../common/constants/communication.constants';
 import { IThreadParticipant } from '../interfaces/thread-participant.interface';
 import { ThreadParticipant, ThreadParticipantDocument } from '../schemas/thread-participant.schema';
 

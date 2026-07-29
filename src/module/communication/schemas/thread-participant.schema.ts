@@ -1,6 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
-import { THREAD_PERMISSION } from '../../common/constants/communication.constants';
+import { THREAD_PERMISSION } from '../../../common/constants/communication.constants';
 
 export type ThreadParticipantDocument = ThreadParticipant & Document;
 

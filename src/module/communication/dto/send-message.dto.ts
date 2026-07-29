@@ -1,5 +1,5 @@
 import { IsArray, IsEnum, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
-import { MESSAGE_VISIBILITY } from '../../common/constants/communication.constants';
+import { MESSAGE_VISIBILITY } from '../../../common/constants/communication.constants';
 
 export class SendMessageDto {
   @IsString()

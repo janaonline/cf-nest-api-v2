@@ -1,11 +1,11 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { ClientSession, Model, Types } from 'mongoose';
-import { MESSAGE_VISIBILITY } from '../../common/constants/communication.constants';
-import { IAuthUser } from '../../common/interfaces/auth-user.interface';
-import { CommunicationPermissions } from '../../common/services/communication.permissions';
-import { ISendMessageOptions } from '../../common/types/workflow.types';
-import { Role } from '../../module/auth/enum/role.enum';
+import { MESSAGE_VISIBILITY } from '../../../common/constants/communication.constants';
+import { IAuthUser } from '../../../common/interfaces/auth-user.interface';
+import { CommunicationPermissions } from '../../../common/services/communication.permissions';
+import { ISendMessageOptions } from '../../../common/types/workflow.types';
+import { Role } from '../../auth/enum/role.enum';
 import { IMessage } from '../interfaces/message.interface';
 import { IThreadReadState } from '../interfaces/thread-read-state.interface';
 import { Message, MessageDocument } from '../schemas/message.schema';

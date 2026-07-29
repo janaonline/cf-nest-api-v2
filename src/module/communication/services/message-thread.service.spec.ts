@@ -7,11 +7,11 @@ import {
   THREAD_PERMISSION,
   THREAD_PURPOSE,
   THREAD_STATUS,
-} from '../../common/constants/communication.constants';
-import { CommunicationPermissions } from '../../common/services/communication.permissions';
-import { IAuthUser } from '../../common/interfaces/auth-user.interface';
-import { IFormSubmission } from '../../forms/interfaces/form-submission.interface';
-import { Role } from '../../module/auth/enum/role.enum';
+} from '../../../common/constants/communication.constants';
+import { CommunicationPermissions } from '../../../common/services/communication.permissions';
+import { IAuthUser } from '../../../common/interfaces/auth-user.interface';
+import { IFormSubmission } from '../../../forms/interfaces/form-submission.interface';
+import { Role } from '../../auth/enum/role.enum';
 import { MessageThread } from '../schemas/message-thread.schema';
 import { MessageThreadService } from './message-thread.service';
 import { ThreadParticipantService } from './thread-participant.service';

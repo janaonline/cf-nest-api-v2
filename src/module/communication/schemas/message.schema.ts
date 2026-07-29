@@ -1,6 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
-import { CONTEXT_TYPE, MESSAGE_VISIBILITY } from '../../common/constants/communication.constants';
+import { CONTEXT_TYPE, MESSAGE_VISIBILITY } from '../../../common/constants/communication.constants';
 
 export type MessageDocument = Message & Document;
 

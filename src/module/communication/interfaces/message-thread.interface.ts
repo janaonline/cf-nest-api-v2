@@ -1,5 +1,5 @@
 import { Types } from 'mongoose';
-import { THREAD_STATUS } from '../../common/constants/communication.constants';
+import { THREAD_STATUS } from '../../../common/constants/communication.constants';
 
 /** Plain-object shape returned by .lean() queries on message_threads. */
 export interface IMessageThread {

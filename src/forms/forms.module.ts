@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { FormWorkflowPermissions } from '../common/services/form-workflow.permissions';
-import { CommunicationModule } from '../communication/communication.module';
+import { CommunicationModule } from '../module/communication/communication.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { FormsController } from './forms.controller';
 import { FormStatusHistory, FormStatusHistorySchema } from './schemas/form-status-history.schema';

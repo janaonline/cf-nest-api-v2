@@ -1,5 +1,5 @@
 import { Types } from 'mongoose';
-import { MESSAGE_VISIBILITY } from '../../common/constants/communication.constants';
+import { MESSAGE_VISIBILITY } from '../../../common/constants/communication.constants';
 
 /** Plain-object shape returned by .lean() queries on messages. */
 export interface IMessage {

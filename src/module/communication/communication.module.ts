@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
-import { CommunicationPermissions } from '../common/services/communication.permissions';
+import { CommunicationPermissions } from '../../common/services/communication.permissions';
 import { CommunicationController } from './communication.controller';
 import { MessageThread, MessageThreadSchema } from './schemas/message-thread.schema';
 import { Message, MessageSchema } from './schemas/message.schema';

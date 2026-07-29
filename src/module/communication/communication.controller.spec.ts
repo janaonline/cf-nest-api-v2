@@ -1,9 +1,9 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { NotFoundException } from '@nestjs/common';
 import { Types } from 'mongoose';
-import { CONTEXT_TYPE, THREAD_PURPOSE } from '../common/constants/communication.constants';
-import { IAuthUser } from '../common/interfaces/auth-user.interface';
-import { Role } from '../module/auth/enum/role.enum';
+import { CONTEXT_TYPE, THREAD_PURPOSE } from '../../common/constants/communication.constants';
+import { IAuthUser } from '../../common/interfaces/auth-user.interface';
+import { Role } from '../auth/enum/role.enum';
 import { CommunicationController } from './communication.controller';
 import { GetThreadsDto } from './dto/get-threads.dto';
 import { SendMessageDto } from './dto/send-message.dto';

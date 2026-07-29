@@ -11,10 +11,10 @@ import {
   Query,
 } from '@nestjs/common';
 import { ApiOperation } from '@nestjs/swagger';
-import { CONTEXT_TYPE, THREAD_PURPOSE } from '../common/constants/communication.constants';
-import type { IAuthUser } from '../common/interfaces/auth-user.interface';
-import { ParseObjectIdPipe } from '../common/pipes/parse-object-id.pipe';
-import { CurrentUser } from '../module/auth/decorators/current-user.decorator';
+import { CONTEXT_TYPE, THREAD_PURPOSE } from '../../common/constants/communication.constants';
+import type { IAuthUser } from '../../common/interfaces/auth-user.interface';
+import { ParseObjectIdPipe } from '../../common/pipes/parse-object-id.pipe';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { GetThreadsDto } from './dto/get-threads.dto';
 import { SendFormMessageDto } from './dto/send-form-message.dto';
 import { SendMessageDto } from './dto/send-message.dto';

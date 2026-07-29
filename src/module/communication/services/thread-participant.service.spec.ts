@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
 import { Types } from 'mongoose';
-import { THREAD_PERMISSION } from '../../common/constants/communication.constants';
+import { THREAD_PERMISSION } from '../../../common/constants/communication.constants';
 import { ThreadParticipant } from '../schemas/thread-participant.schema';
 import { ThreadParticipantService } from './thread-participant.service';
 
