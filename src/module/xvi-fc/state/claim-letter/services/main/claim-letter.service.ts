@@ -18,7 +18,6 @@ import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-
 import { XviFcFileRefDto } from 'src/module/xvi-fc/common/dto/xvi-fc-file-ref.dto';
 import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
 import { ExpectedUlbSetService } from 'src/module/xvi-fc/common/services/expected-ulb-set.service';
-import { FormJsonService } from 'src/form-json/form-json.service';
 import type { FieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
 import { ClaimLetterBatch, ClaimLetterBatchDocument } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
 import {
@@ -34,6 +33,7 @@ import { ClaimLetterEligibilityService } from '../eligibility/claim-letter-eligi
 import { ClaimLetterHistoryService } from '../history/claim-letter-history.service';
 import type { GetClaimLetterHistoryQueryDto } from '../../dto/get-claim-letter-history-query.dto';
 import type { ClaimLetterBatchSummary, ClaimLetterEligibilitySummary } from '../../types/claim-letter.types';
+import { FormJsonService } from 'src/master/form-json/form-json.service';
 
 /** Loose shape for .lean() query results — real field-level typing lives on the schema itself. */
 type LeanClaimLetterBatch = Record<string, unknown>;

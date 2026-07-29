@@ -7,10 +7,10 @@ import { ClaimLetterEligibilityService } from '../eligibility/claim-letter-eligi
 import { ClaimLetterHistoryService } from '../history/claim-letter-history.service';
 import { ExpectedUlbSetService } from 'src/module/xvi-fc/common/services/expected-ulb-set.service';
 import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
-import { FormJsonService } from 'src/form-json/form-json.service';
 import { ClaimLetterBatch } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
+import { FormJsonService } from 'src/master/form-json/form-json.service';
 
 function q<T>(value: T) {
   const chain: Record<string, jest.Mock> = {};

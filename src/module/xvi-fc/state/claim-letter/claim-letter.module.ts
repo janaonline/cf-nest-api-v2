@@ -1,6 +1,5 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
-import { FormJsonModule } from 'src/form-json/form-json.module';
 import { XviFcCommonModule } from 'src/module/xvi-fc/common/xvi-fc-common.module';
 import { ClaimLetterBatch, ClaimLetterBatchSchema } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
 import { ClaimLetterBatchUlb, ClaimLetterBatchUlbSchema } from 'src/schemas/xvi-fc/state/claim-letter-batch-ulb.schema';
@@ -29,6 +28,7 @@ import { ClaimLetterUlbRowsService } from './services/ulb-rows/claim-letter-ulb-
 import { ClaimLetterAssemblyService } from './services/assembly/claim-letter-assembly.service';
 import { ClaimLetterHistoryService } from './services/history/claim-letter-history.service';
 import { ClaimLetterRecoveryService } from './services/recovery/claim-letter-recovery.service';
+import { FormJsonModule } from 'src/master/form-json/form-json.module';
 
 @Module({
   imports: [

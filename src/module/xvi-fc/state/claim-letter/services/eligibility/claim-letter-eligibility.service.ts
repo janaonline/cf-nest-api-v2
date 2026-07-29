@@ -1,7 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model, Types } from 'mongoose';
-import { FormJsonService } from 'src/form-json/form-json.service';
 import { ClaimEligibilityEvaluatorService } from 'src/module/xvi-fc/common/services/claim-eligibility-evaluator.service';
 import type {
   EligibilityEvaluationResult,
@@ -23,6 +22,7 @@ import {
   DevolutionFormulaRowDocument,
 } from 'src/schemas/xvi-fc/state/devolution-formula-row.schema';
 import { sumAmountsExactly } from '../../helpers/claim-letter-financial.helpers';
+import { FormJsonService } from 'src/master/form-json/form-json.service';
 
 export interface ClaimLetterStateLevelGate {
   sources: EligibilityEvaluationResult[];

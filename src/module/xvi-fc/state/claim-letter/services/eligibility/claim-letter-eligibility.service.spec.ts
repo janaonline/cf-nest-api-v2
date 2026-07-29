@@ -2,7 +2,6 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
 import { Types } from 'mongoose';
 import { ClaimLetterEligibilityService } from './claim-letter-eligibility.service';
-import { FormJsonService } from 'src/form-json/form-json.service';
 import { ClaimEligibilityEvaluatorService } from 'src/module/xvi-fc/common/services/claim-eligibility-evaluator.service';
 import { ClaimLetterBatch } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
 import { ClaimLetterBatchUlb } from 'src/schemas/xvi-fc/state/claim-letter-batch-ulb.schema';
@@ -10,8 +9,9 @@ import { ClaimLetterUlbLock } from 'src/schemas/xvi-fc/state/claim-letter-ulb-lo
 import { DevolutionFormulaForm } from 'src/schemas/xvi-fc/state/devolution-formula-form.schema';
 import { DevolutionFormulaRow } from 'src/schemas/xvi-fc/state/devolution-formula-row.schema';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
-import type { IFormJson } from 'src/form-json/interfaces/form-json.interface';
 import type { EligibilityEvaluationResult } from 'src/module/xvi-fc/common/types/claim-eligibility.type';
+import { IFormJson } from 'src/master/form-json/interfaces/form-json.interface';
+import { FormJsonService } from 'src/master/form-json/form-json.service';
 
 /** Chainable Mongoose Query-like mock resolving to `value` once `.exec()` is called. */
 function q<T>(value: T) {
