@@ -1,28 +1,22 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
-import { getModelToken } from '@nestjs/mongoose';
 import { Types } from 'mongoose';
 import { ClaimLetterUlbOptionsService } from './claim-letter-ulb-options.service';
 import { ExpectedUlbSetService } from 'src/module/xvi-fc/common/services/expected-ulb-set.service';
 import { ClaimLetterEligibilityService } from '../eligibility/claim-letter-eligibility.service';
-import { ClaimLetterUlbLock } from 'src/schemas/xvi-fc/state/claim-letter-ulb-lock.schema';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import type { EligibilityEvaluationResult } from 'src/module/xvi-fc/common/types/claim-eligibility.type';
 
-function q<T>(value: T) {
-  const chain: Record<string, jest.Mock> = {};
-  chain['select'] = jest.fn().mockReturnValue(chain);
-  chain['lean'] = jest.fn().mockReturnValue(chain);
-  chain['exec'] = jest.fn().mockResolvedValue(value);
-  return chain;
-}
-
 describe('ClaimLetterUlbOptionsService', () => {
   let service: ClaimLetterUlbOptionsService;
   let expectedUlbSetService: { resolve: jest.Mock };
-  let eligibilityService: { evaluateStateLevelGate: jest.Mock; resolveDevolutionAllocations: jest.Mock };
-  let lockModel: { find: jest.Mock };
+  let eligibilityService: {
+    evaluateStateLevelGate: jest.Mock;
+    resolveDevolutionAllocations: jest.Mock;
+    resolveUlbLevelEligibility: jest.Mock;
+    resolveClaimedUlbIds: jest.Mock;
+  };
 
   const stateId = new Types.ObjectId().toString();
   const yearId = new Types.ObjectId().toString();
@@ -37,15 +31,20 @@ describe('ClaimLetterUlbOptionsService', () => {
 
   beforeEach(async () => {
     expectedUlbSetService = { resolve: jest.fn() };
-    eligibilityService = { evaluateStateLevelGate: jest.fn(), resolveDevolutionAllocations: jest.fn() };
-    lockModel = { find: jest.fn().mockReturnValue(q([])) };
+    eligibilityService = {
+      evaluateStateLevelGate: jest.fn(),
+      resolveDevolutionAllocations: jest.fn(),
+      resolveUlbLevelEligibility: jest
+        .fn()
+        .mockResolvedValue({ perUlbEligible: new Map(), perUlbFailedCriteria: new Map() }),
+      resolveClaimedUlbIds: jest.fn().mockResolvedValue(new Set()),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ClaimLetterUlbOptionsService,
         { provide: ExpectedUlbSetService, useValue: expectedUlbSetService },
         { provide: ClaimLetterEligibilityService, useValue: eligibilityService },
-        { provide: getModelToken(ClaimLetterUlbLock.name), useValue: lockModel },
       ],
     }).compile();
 
@@ -104,11 +103,77 @@ describe('ClaimLetterUlbOptionsService', () => {
     eligibilityService.resolveDevolutionAllocations.mockResolvedValue(
       new Map([[ulbA.ulbId, { allocatedAmount: 1, formDocumentId: 'f', rowDocumentId: 'r', datasetVersion: 1 }]]),
     );
-    lockModel.find.mockReturnValue(q([{ ulbId: new Types.ObjectId(ulbA.ulbId) }]));
+    eligibilityService.resolveClaimedUlbIds.mockResolvedValue(new Set([ulbA.ulbId]));
 
     const result = await service.getOptions(stateId, yearId, 1, {}, stateUser);
 
     expect(result.data![0]).toMatchObject({ eligible: false, ineligibleReasonCode: 'ALREADY_LOCKED_IN_ANOTHER_CLAIM' });
+  });
+
+  it('marks an otherwise-eligible ULB ineligible when it fails a new ULB-level criterion (SLB, Annual Accounts, etc.)', async () => {
+    expectedUlbSetService.resolve.mockResolvedValue([ulbA]);
+    eligibilityService.evaluateStateLevelGate.mockResolvedValue(passedGate());
+    eligibilityService.resolveDevolutionAllocations.mockResolvedValue(
+      new Map([[ulbA.ulbId, { allocatedAmount: 1, formDocumentId: 'f', rowDocumentId: 'r', datasetVersion: 1 }]]),
+    );
+    eligibilityService.resolveUlbLevelEligibility.mockResolvedValue({
+      perUlbEligible: new Map([[ulbA.ulbId, false]]),
+      perUlbFailedCriteria: new Map(),
+    });
+
+    const result = await service.getOptions(stateId, yearId, 1, {}, stateUser);
+
+    expect(result.data![0]).toMatchObject({
+      eligible: false,
+      ineligibleReasonCode: 'ULB_LEVEL_ELIGIBILITY_CRITERIA_NOT_MET',
+    });
+  });
+
+  it('names the specific failing form(s) in ineligibleReasonDetail when a ULB fails ULB-level criteria', async () => {
+    expectedUlbSetService.resolve.mockResolvedValue([ulbA]);
+    eligibilityService.evaluateStateLevelGate.mockResolvedValue(passedGate());
+    eligibilityService.resolveDevolutionAllocations.mockResolvedValue(
+      new Map([[ulbA.ulbId, { allocatedAmount: 1, formDocumentId: 'f', rowDocumentId: 'r', datasetVersion: 1 }]]),
+    );
+    eligibilityService.resolveUlbLevelEligibility.mockResolvedValue({
+      perUlbEligible: new Map([[ulbA.ulbId, false]]),
+      perUlbFailedCriteria: new Map([[ulbA.ulbId, ['Service Level Benchmarks (SLB)', 'Audited Accounts']]]),
+    });
+
+    const result = await service.getOptions(stateId, yearId, 1, {}, stateUser);
+
+    expect(result.data![0]).toMatchObject({
+      eligible: false,
+      ineligibleReasonCode: 'ULB_LEVEL_ELIGIBILITY_CRITERIA_NOT_MET',
+      ineligibleReasonDetail: 'Service Level Benchmarks (SLB), Audited Accounts eligibility criteria not met',
+    });
+  });
+
+  it('leaves ineligibleReasonDetail null for non-ULB-level ineligibility reasons', async () => {
+    expectedUlbSetService.resolve.mockResolvedValue([ulbA]);
+    eligibilityService.evaluateStateLevelGate.mockResolvedValue(passedGate());
+    eligibilityService.resolveDevolutionAllocations.mockResolvedValue(new Map());
+
+    const result = await service.getOptions(stateId, yearId, 1, {}, stateUser);
+
+    expect(result.data![0]).toMatchObject({
+      eligible: false,
+      ineligibleReasonCode: 'NO_DEVOLUTION_ALLOCATION',
+      ineligibleReasonDetail: null,
+    });
+  });
+
+  it('passes expectedUlbIds (not a re-derived list) through to resolveUlbLevelEligibility', async () => {
+    expectedUlbSetService.resolve.mockResolvedValue([ulbA, ulbB]);
+    eligibilityService.evaluateStateLevelGate.mockResolvedValue(passedGate());
+    eligibilityService.resolveDevolutionAllocations.mockResolvedValue(new Map());
+
+    await service.getOptions(stateId, yearId, 1, {}, stateUser);
+
+    expect(eligibilityService.resolveUlbLevelEligibility).toHaveBeenCalledWith(stateId, yearId, 1, [
+      ulbA.ulbId,
+      ulbB.ulbId,
+    ]);
   });
 
   it('excludes the current draft claim from the "locked elsewhere" check via claimLetterId', async () => {
@@ -119,8 +184,7 @@ describe('ClaimLetterUlbOptionsService', () => {
 
     await service.getOptions(stateId, yearId, 1, { claimLetterId }, stateUser);
 
-    const [filter] = lockModel.find.mock.calls[0] as [Record<string, unknown>];
-    expect((filter['claimLetter'] as { $ne: Types.ObjectId }).$ne.toString()).toBe(claimLetterId);
+    expect(eligibilityService.resolveClaimedUlbIds).toHaveBeenCalledWith(stateId, yearId, 1, claimLetterId);
   });
 
   it('sorts eligible ULBs before ineligible ones, alphabetically within each group', async () => {

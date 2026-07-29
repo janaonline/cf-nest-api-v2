@@ -53,6 +53,43 @@ export interface ClaimEligibilitySource {
   rowFields?: Record<string, string>;
 }
 
+// ─── Per-ULB bulk evaluation (ownerLevel: 'ULB') ────────────────────────────────
+
+export type UlbEligibilityBucket = 'ELIGIBLE' | 'INELIGIBLE' | 'EXEMPTED';
+
+export interface UlbEligibilityTally {
+  eligible: number;
+  ineligible: number;
+  exempted: number;
+  total: number;
+}
+
+/**
+ * Config shape for the 'ROW_STATUS_AND_FIELDS' evaluator, read out of the free-form
+ * `evaluator.config` bag (same convention already used for Devolution's `installmentField`) —
+ * kept as a documented interface here rather than untyped `Record<string, unknown>` reads
+ * scattered through the evaluator, given how many fields this one needs.
+ */
+export interface ClaimEligibilityRowMatchConfig {
+  rowStatusField: string;
+  rowEligibleValues: unknown[];
+  /** Not consulted at runtime (matches `acceptedFormStatuses`'s existing accept-list-only
+   *  convention — anything not eligible/exempted defaults to ineligible) — documentation only,
+   *  so a config reader can see every value the field can hold without checking the schema. */
+  rowIneligibleValues?: unknown[];
+  /** Omitted/empty when a source has no exemption-shaped value (e.g. FC Unspent's boolean). */
+  rowExemptedValues?: unknown[];
+  /** What to conclude about a ULB with no active/current row at all — explicit per-source, no
+   *  silent default. E.g. FC Unspent: 'ELIGIBLE', since "no unspent balance to report" isn't a
+   *  problem; a source where every ULB is expected to always have a row would use 'INELIGIBLE'. */
+  defaultWhenNoRow: 'ELIGIBLE' | 'INELIGIBLE';
+  /** Forward-compatible, optional second AND-condition — unset until row-level documents gain a
+   *  real FORM_STATUS-constant field (confirmed future work, not built yet). When set, a row must
+   *  satisfy both this and the value mapping above to count as eligible. */
+  rowFormStatusField?: string;
+  rowAcceptedFormStatuses?: number[];
+}
+
 export interface ClaimEligibilityEvaluatorConfig {
   type: ClaimEvaluationType;
   /**
@@ -159,6 +196,12 @@ export interface EligibilityEvaluationResult {
   reasonCode: string;
 
   evidence: ClaimEligibilityEvidence;
+
+  /** Populated only for `evaluationLevel: 'FORM_AND_ROW'` sources (Elected Body, FC Unspent) —
+   *  the per-ULB tally behind this same requirement, supplementary to `result` above (which stays
+   *  driven purely by the state's own form-submission status). `undefined` for pure-form sources
+   *  (SFC, Devolution), so their existing rendering is untouched. */
+  ulbBreakdown?: UlbEligibilityTally;
 }
 
 // ─── Frozen claim snapshot (brain §14.3) ────────────────────────────────────────

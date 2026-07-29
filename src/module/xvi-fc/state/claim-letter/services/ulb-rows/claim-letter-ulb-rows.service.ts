@@ -84,6 +84,18 @@ export class ClaimLetterUlbRowsService {
       this.eligibilityService.evaluateStateLevelGate(String(parent.state), String(parent.year), parent.installment),
     ]);
 
+    // Same re-verification, extended to the per-ULB criteria (SLB, Annual Accounts, Elected
+    // Body/FC Unspent rows) — this endpoint previously only rechecked the state gate, unlike
+    // getOptions()/buildChildren(), which already checked per-ULB data. Only needs a verdict for
+    // the ULBs on this page, not the full state's expected set.
+    const rowUlbIds = rows.map((r) => String(r.ulbId));
+    const ulbLevelEligibility = await this.eligibilityService.resolveUlbLevelEligibility(
+      String(parent.state),
+      String(parent.year),
+      parent.installment,
+      rowUlbIds,
+    );
+
     const data: ClaimLetterUlbRow[] = rows.map((r) => ({
       ulbId: String(r.ulbId),
       ulbName: r.ulbSnapshot.name,
@@ -92,7 +104,7 @@ export class ClaimLetterUlbRowsService {
       allocationAmount: r.allocatedAmount,
       claimAmount: r.claimedAmount,
       differencePercentage: r.differencePercentageBasisPoints / 100,
-      eligible: gate.passed,
+      eligible: gate.passed && (ulbLevelEligibility.perUlbEligible.get(String(r.ulbId)) ?? true),
     }));
 
     return xviFcSuccess('Claim letter ULBs fetched.', data, {

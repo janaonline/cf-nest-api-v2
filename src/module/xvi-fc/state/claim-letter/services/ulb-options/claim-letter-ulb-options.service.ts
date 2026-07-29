@@ -1,13 +1,10 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
-import { InjectModel } from '@nestjs/mongoose';
-import { FilterQuery, Model, Types } from 'mongoose';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { toObjectIdString } from 'src/common/utils/objectid.util';
 import { xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
 import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import { ExpectedUlbSetService } from 'src/module/xvi-fc/common/services/expected-ulb-set.service';
-import { ClaimLetterUlbLock, ClaimLetterUlbLockDocument } from 'src/schemas/xvi-fc/state/claim-letter-ulb-lock.schema';
 import {
   CLAIM_LETTER_PAGINATION_DEFAULT_LIMIT,
   CLAIM_LETTER_PAGINATION_DEFAULT_PAGE,
@@ -29,8 +26,6 @@ export class ClaimLetterUlbOptionsService {
   constructor(
     private readonly expectedUlbSetService: ExpectedUlbSetService,
     private readonly eligibilityService: ClaimLetterEligibilityService,
-    @InjectModel(ClaimLetterUlbLock.name)
-    private readonly lockModel: Model<ClaimLetterUlbLockDocument>,
   ) {}
 
   async getOptions(
@@ -43,11 +38,14 @@ export class ClaimLetterUlbOptionsService {
     this.assertStateAccess(user, stateId);
     assertInstallmentSupported(installment);
 
-    const [expectedUlbs, gate, allocationByUlbId, lockedElsewhereUlbIds] = await Promise.all([
-      this.expectedUlbSetService.resolve(stateId, yearId),
+    const expectedUlbs = await this.expectedUlbSetService.resolve(stateId, yearId);
+    const expectedUlbIds = expectedUlbs.map((u) => u.ulbId);
+
+    const [gate, allocationByUlbId, lockedElsewhereUlbIds, ulbLevelEligibility] = await Promise.all([
       this.eligibilityService.evaluateStateLevelGate(stateId, yearId, installment),
       this.eligibilityService.resolveDevolutionAllocations(stateId, yearId, installment),
       this.resolveLockedElsewhereUlbIds(stateId, yearId, installment, query.claimLetterId),
+      this.eligibilityService.resolveUlbLevelEligibility(stateId, yearId, installment as 1 | 2, expectedUlbIds),
     ]);
 
     const stateGateFailureReason = gate.sources.find((s) => s.result === 'FAILED')?.reasonCode ?? 'STATE_GATE_FAILED';
@@ -55,11 +53,18 @@ export class ClaimLetterUlbOptionsService {
     let options: ClaimLetterUlbOption[] = expectedUlbs.map((ulb) => {
       const allocation = allocationByUlbId.get(ulb.ulbId);
       const alreadyLocked = lockedElsewhereUlbIds.has(ulb.ulbId);
+      const passesUlbLevelCriteria = ulbLevelEligibility.perUlbEligible.get(ulb.ulbId) ?? true;
 
       let ineligibleReasonCode: string | null = null;
+      let ineligibleReasonDetail: string | null = null;
       if (!gate.passed) ineligibleReasonCode = stateGateFailureReason;
       else if (!allocation) ineligibleReasonCode = 'NO_DEVOLUTION_ALLOCATION';
       else if (alreadyLocked) ineligibleReasonCode = 'ALREADY_LOCKED_IN_ANOTHER_CLAIM';
+      else if (!passesUlbLevelCriteria) {
+        ineligibleReasonCode = 'ULB_LEVEL_ELIGIBILITY_CRITERIA_NOT_MET';
+        const failedCriteria = ulbLevelEligibility.perUlbFailedCriteria.get(ulb.ulbId) ?? [];
+        if (failedCriteria.length) ineligibleReasonDetail = `${failedCriteria.join(', ')} eligibility criteria not met`;
+      }
 
       return {
         ulbId: ulb.ulbId,
@@ -69,6 +74,7 @@ export class ClaimLetterUlbOptionsService {
         allocationAmount: allocation ? allocation.allocatedAmount : null,
         eligible: ineligibleReasonCode === null,
         ineligibleReasonCode,
+        ineligibleReasonDetail,
       };
     });
 
@@ -98,22 +104,13 @@ export class ClaimLetterUlbOptionsService {
     return xviFcSuccess('ULB options fetched.', paged, { page, limit, total });
   }
 
-  private async resolveLockedElsewhereUlbIds(
+  private resolveLockedElsewhereUlbIds(
     stateId: string,
     yearId: string,
     installment: number,
     excludeClaimLetterId?: string,
   ): Promise<Set<string>> {
-    const filter: FilterQuery<ClaimLetterUlbLockDocument> = {
-      state: new Types.ObjectId(stateId),
-      year: new Types.ObjectId(yearId),
-      installment,
-      lockState: { $in: ['ACTIVE', 'ACKNOWLEDGED'] },
-    };
-    if (excludeClaimLetterId) filter.claimLetter = { $ne: new Types.ObjectId(excludeClaimLetterId) };
-
-    const locks = await this.lockModel.find(filter).select('ulbId').lean<{ ulbId: Types.ObjectId }[]>().exec();
-    return new Set(locks.map((l) => String(l.ulbId)));
+    return this.eligibilityService.resolveClaimedUlbIds(stateId, yearId, installment, excludeClaimLetterId);
   }
 
   private escapeRegExp(value: string): string {

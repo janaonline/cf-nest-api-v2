@@ -1,15 +1,19 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model, Types } from 'mongoose';
+import { FilterQuery, Model, Types } from 'mongoose';
 import { FormJsonService } from 'src/form-json/form-json.service';
 import { ClaimEligibilityEvaluatorService } from 'src/module/xvi-fc/common/services/claim-eligibility-evaluator.service';
-import type { EligibilityEvaluationResult } from 'src/module/xvi-fc/common/types/claim-eligibility.type';
+import type {
+  EligibilityEvaluationResult,
+  UlbEligibilityTally,
+} from 'src/module/xvi-fc/common/types/claim-eligibility.type';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import { ClaimLetterBatch, ClaimLetterBatchDocument } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
 import {
   ClaimLetterBatchUlb,
   ClaimLetterBatchUlbDocument,
 } from 'src/schemas/xvi-fc/state/claim-letter-batch-ulb.schema';
+import { ClaimLetterUlbLock, ClaimLetterUlbLockDocument } from 'src/schemas/xvi-fc/state/claim-letter-ulb-lock.schema';
 import {
   DevolutionFormulaForm,
   DevolutionFormulaFormDocument,
@@ -55,6 +59,32 @@ export interface ClaimLetterClaimStatusBreakdown {
   availableToClaim: number;
 }
 
+export interface UlbCriterionSummary {
+  displayLabel?: string;
+  displayDescription?: string;
+  tally: UlbEligibilityTally;
+}
+
+export interface ClaimLetterUlbLevelEligibility {
+  /** Merged verdict across every ULB-bulk-evaluable criterion (SLB, Annual Accounts x2, Elected
+   *  Body row, FC Unspent row) — a ULB must be ELIGIBLE or EXEMPTED on every one, not INELIGIBLE
+   *  on any, to end up `true` here. Consumed by the picker/getUlbs/buildChildren (plan Part C). */
+  perUlbEligible: Map<string, boolean>;
+  /** Tallies for criteria with no state-level checklist line of their own (SLB, Provisional,
+   *  Audited) — there's no state action to gate on, so these surface as a separate informational
+   *  block rather than a pass/fail line (plan's architecture decision). */
+  standaloneCriteria: UlbCriterionSummary[];
+  /** Tallies for criteria that DO already have a state-level line (Elected Body, FC Unspent),
+   *  keyed by `formId` so the caller can merge each into that line's own `ulbBreakdown` rather
+   *  than rendering a second, separate entry for the same requirement. */
+  rowTalliesByFormId: Map<number, UlbEligibilityTally>;
+  /** Display labels of every ULB-bulk criterion a ULB was bucketed INELIGIBLE on — e.g. `['Service
+   *  Level Benchmarks (SLB)']` — so callers (the ULB-options picker) can tell the State specifically
+   *  *which* form is blocking a given ULB instead of a single generic reason code. A ULB with no
+   *  entry here (or an empty array) failed no ULB-bulk criterion. */
+  perUlbFailedCriteria: Map<string, string[]>;
+}
+
 /**
  * Evaluates the State-level claim eligibility gate and resolves Devolution allocation amounts —
  * kept as two deliberately separate methods (plan §4): the gate answers "can this State claim at
@@ -75,6 +105,8 @@ export class ClaimLetterEligibilityService {
     private readonly batchModel: Model<ClaimLetterBatchDocument>,
     @InjectModel(ClaimLetterBatchUlb.name)
     private readonly batchUlbModel: Model<ClaimLetterBatchUlbDocument>,
+    @InjectModel(ClaimLetterUlbLock.name)
+    private readonly ulbLockModel: Model<ClaimLetterUlbLockDocument>,
   ) {}
 
   async evaluateStateLevelGate(
@@ -95,6 +127,115 @@ export class ClaimLetterEligibilityService {
     );
 
     return { sources, passed: sources.every((s) => s.result !== 'FAILED') };
+  }
+
+  /**
+   * Runs every enabled ULB-bulk-evaluable source for this design year/installment (SLB, Annual
+   * Accounts x2, Elected Body row, FC Unspent row) and merges the results into one per-ULB
+   * verdict, plus two differently-shaped tally lists depending on whether the criterion already
+   * has a state-level checklist line to attach to (plan's architecture decision — see
+   * `ClaimLetterUlbLevelEligibility`'s own field docs). `expectedUlbIds` is a parameter, not
+   * re-derived here, since callers (`getEligibilitySummary`, the ULB-options/rows services)
+   * already resolve `ExpectedUlbSetService` themselves for other reasons — avoids a duplicate query.
+   *
+   * A source qualifies for ULB-bulk evaluation when either `ownerLevel === 'ULB'` (SLB, Annual
+   * Accounts — no state action to gate on at all) or `evaluationLevel === 'FORM_AND_ROW'` (Elected
+   * Body, FC Unspent — state-owned for the pass/fail line, but still carries a row-level tally).
+   */
+  async resolveUlbLevelEligibility(
+    stateId: string,
+    designYearId: string,
+    installment: 1 | 2,
+    expectedUlbIds: string[],
+  ): Promise<ClaimLetterUlbLevelEligibility> {
+    const enabledSources = await this.formJsonService.findEnabledClaimEligibilitySources(designYearId);
+    const ulbBulkSources = enabledSources.filter(
+      (doc) =>
+        doc.claimEligibility?.applicableInstallments.includes(installment) &&
+        (doc.claimEligibility.ownerLevel === 'ULB' || doc.claimEligibility.evaluationLevel === 'FORM_AND_ROW'),
+    );
+
+    const stateOid = new Types.ObjectId(stateId);
+    const results = await Promise.all(
+      ulbBulkSources.map(async (doc) => ({
+        doc,
+        ...(await this.evaluator.evaluateUlbBulk(doc, { stateId: stateOid, designYearId, expectedUlbIds })),
+      })),
+    );
+
+    const perUlbEligible = new Map<string, boolean>(expectedUlbIds.map((id) => [id, true]));
+    const perUlbFailedCriteria = new Map<string, string[]>();
+    const standaloneCriteria: UlbCriterionSummary[] = [];
+    const rowTalliesByFormId = new Map<number, UlbEligibilityTally>();
+
+    for (const { doc, perUlb, tally } of results) {
+      const config = doc.claimEligibility!;
+      const label = config.displayLabel ?? doc.type ?? 'Form';
+
+      for (const [ulbId, bucket] of perUlb) {
+        if (bucket !== 'INELIGIBLE') continue;
+        perUlbEligible.set(ulbId, false);
+        const failed = perUlbFailedCriteria.get(ulbId);
+        if (failed) failed.push(label);
+        else perUlbFailedCriteria.set(ulbId, [label]);
+      }
+
+      if (config.ownerLevel === 'ULB') {
+        standaloneCriteria.push({
+          displayLabel: config.displayLabel,
+          displayDescription: config.displayDescription,
+          tally,
+        });
+      } else {
+        rowTalliesByFormId.set(doc.formId ?? 0, tally);
+      }
+    }
+
+    return { perUlbEligible, standaloneCriteria, rowTalliesByFormId, perUlbFailedCriteria };
+  }
+
+  /**
+   * Every ULB currently locked (`ACTIVE` or `ACKNOWLEDGED`) into *some* claim-letter batch for this
+   * state/year/installment — the authoritative "already claimed" set, shared by the ULB-options
+   * picker (which excludes a specific batch via `excludeClaimLetterId` so that batch's own picks
+   * still read as normal, pickable rows) and the final-batch completeness check (which omits
+   * `excludeClaimLetterId` entirely, so a batch's own already-drafted ULBs correctly count as
+   * claimed rather than remaining).
+   */
+  async resolveClaimedUlbIds(
+    stateId: string,
+    designYearId: string,
+    installment: number,
+    excludeClaimLetterId?: string,
+  ): Promise<Set<string>> {
+    const filter: FilterQuery<ClaimLetterUlbLockDocument> = {
+      state: new Types.ObjectId(stateId),
+      year: new Types.ObjectId(designYearId),
+      installment,
+      lockState: { $in: ['ACTIVE', 'ACKNOWLEDGED'] },
+    };
+    if (excludeClaimLetterId) filter.claimLetter = { $ne: new Types.ObjectId(excludeClaimLetterId) };
+
+    const locks = await this.ulbLockModel.find(filter).select('ulbId').lean<{ ulbId: Types.ObjectId }[]>().exec();
+    return new Set(locks.map((l) => String(l.ulbId)));
+  }
+
+  /**
+   * Expected ULBs not yet locked into any batch — deliberately does NOT filter by current
+   * eligibility (`perUlbEligible`): an ULB that's ineligible right now (e.g. hasn't submitted SLB
+   * yet) could still become eligible later, and if the final batch submits while it sits
+   * unresolved it's stranded for the rest of the installment. So "remaining" here means "not yet
+   * claimed," full stop — used to block submission of the final batch (`ClaimLetterService.submit`)
+   * and to drive the FE's proactive "N ULBs must be in your final batch" warning.
+   */
+  async resolveRemainingUlbIds(
+    stateId: string,
+    designYearId: string,
+    installment: number,
+    expectedUlbIds: string[],
+  ): Promise<string[]> {
+    const claimedUlbIds = await this.resolveClaimedUlbIds(stateId, designYearId, installment);
+    return expectedUlbIds.filter((id) => !claimedUlbIds.has(id));
   }
 
   /**

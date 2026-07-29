@@ -3,7 +3,10 @@ import type {
   ClaimLetterBatchNumber,
   ClaimLetterInstallment,
 } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
-import type { EligibilityEvaluationResult } from 'src/module/xvi-fc/common/types/claim-eligibility.type';
+import type {
+  EligibilityEvaluationResult,
+  UlbEligibilityTally,
+} from 'src/module/xvi-fc/common/types/claim-eligibility.type';
 import type { FieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
 
 /** Display-ready ULB-options picker row (matches the FC Unspent picker-dialog UX — plan §6.1). */
@@ -16,6 +19,10 @@ export interface ClaimLetterUlbOption {
   allocationAmount: number | null;
   eligible: boolean;
   ineligibleReasonCode: string | null;
+  /** Specific, human-readable reason naming the failing form(s) (e.g. "SLB eligibility criteria not
+   *  met") — populated only for `ULB_LEVEL_ELIGIBILITY_CRITERIA_NOT_MET`, so the picker can show
+   *  something more useful than the generic humanized code. `null` for every other reason/when eligible. */
+  ineligibleReasonDetail: string | null;
 }
 
 /** Display-ready selected-ULB table row (matches the FC Unspent Yes-branch table — plan §6.2). */
@@ -65,6 +72,28 @@ export interface ClaimLetterEligibilitySummary {
     totalClaimInDraft: number;
     availableToClaim: number;
   };
+  /** Tallies for ULB-level criteria with no state action to gate on (SLB, Provisional/Audited
+   *  Annual Accounts) — never blocks `stateLevelGate.passed`; purely informational, shown
+   *  separately from the checklist above (see `ClaimLetterUlbLevelEligibility`'s doc comment). */
+  ulbLevelCriteria: {
+    displayLabel?: string;
+    displayDescription?: string;
+    tally: UlbEligibilityTally;
+  }[];
+  /** How many of `expectedUlbCount` ULBs are ELIGIBLE/EXEMPTED on *every* ULB-bulk criterion (SLB,
+   *  Provisional/Audited Accounts, Elected Body row, FC Unspent row) — the true intersection across
+   *  all of them, not derivable from any single criterion's own tally. Deliberately scoped to just
+   *  those criteria: it does NOT factor in Devolution allocation or "locked in another claim," so
+   *  it is not the same as "how many ULBs are pickable in the picker" (that remains
+   *  `ulb-options`-only) — it answers "how many ULBs meet every requirement shown in this
+   *  checklist," which is what the summary panel needed to stop implying "7/7 met" when the
+   *  ULB-level rows show near-total failure. */
+  ulbReadiness: { eligible: number; total: number };
+  /** `expectedUlbCount` minus every ULB currently locked into *any* batch (draft or acknowledged,
+   *  regardless of current eligibility) — how many ULBs still have no home in any batch at all.
+   *  Drives the FE's proactive "must all be in your final batch" warning, and is the same figure
+   *  `ClaimLetterService.submit()` refuses to let the final batch close out on top of. */
+  remainingUlbCount: number;
 }
 
 export interface ClaimLetterBatchSummary {

@@ -82,6 +82,7 @@ describe('ClaimLetterAssemblyService', () => {
   let eligibilityService: {
     evaluateStateLevelGate: jest.Mock;
     resolveDevolutionAllocations: jest.Mock;
+    resolveUlbLevelEligibility: jest.Mock;
     computeTotalAlreadyAcknowledged: jest.Mock;
     getClaimStatusBreakdown: jest.Mock;
   };
@@ -196,6 +197,7 @@ describe('ClaimLetterAssemblyService', () => {
     eligibilityService = {
       evaluateStateLevelGate: jest.fn().mockResolvedValue({ sources: [], passed: true }),
       resolveDevolutionAllocations: jest.fn().mockResolvedValue(new Map([[ulbAId.toString(), allocation]])),
+      resolveUlbLevelEligibility: jest.fn().mockResolvedValue({ perUlbEligible: new Map() }),
       computeTotalAlreadyAcknowledged: jest.fn().mockResolvedValue(0),
       getClaimStatusBreakdown: jest.fn().mockResolvedValue({
         totalAlreadyAcknowledged: 0,
@@ -355,6 +357,15 @@ describe('ClaimLetterAssemblyService', () => {
 
   it('throws BadRequestException and rolls back when a selected ULB has no Devolution allocation', async () => {
     eligibilityService.resolveDevolutionAllocations.mockResolvedValue(new Map());
+
+    await expect(service.createDraft(baseInput())).rejects.toThrow(BadRequestException);
+    expect(batchModel.deleteOne).toHaveBeenCalled();
+  });
+
+  it('throws BadRequestException and rolls back when a selected ULB fails a new per-ULB criterion (SLB, Annual Accounts, etc.)', async () => {
+    eligibilityService.resolveUlbLevelEligibility.mockResolvedValue({
+      perUlbEligible: new Map([[ulbAId.toString(), false]]),
+    });
 
     await expect(service.createDraft(baseInput())).rejects.toThrow(BadRequestException);
     expect(batchModel.deleteOne).toHaveBeenCalled();

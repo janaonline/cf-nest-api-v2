@@ -80,6 +80,9 @@ interface BuildResult {
   financialSummary: {
     totalInstallmentAllocation: number;
     totalAlreadyAcknowledged: number;
+    totalClaimInProgress: number;
+    totalClaimInDraft: number;
+    availableToClaim: number;
     selectedAllocation: number;
     currentSelectedClaim: number;
     remainingIfAcknowledged: number;
@@ -303,9 +306,17 @@ export class ClaimLetterAssemblyService {
     yearOid: Types.ObjectId,
     installment: number,
   ): Promise<BuildResult> {
-    const [gate, allocationByUlbId] = await Promise.all([
+    const [gate, allocationByUlbId, ulbLevelEligibility] = await Promise.all([
       this.eligibilityService.evaluateStateLevelGate(String(stateOid), String(yearOid), installment as 1 | 2),
       this.eligibilityService.resolveDevolutionAllocations(String(stateOid), String(yearOid), installment as 1 | 2),
+      // Re-verified here too, not just at picker time (plan §7.3) — a ULB's SLB/Annual Accounts/
+      // Elected Body/FC Unspent status can change between being picked and the draft being saved.
+      this.eligibilityService.resolveUlbLevelEligibility(
+        String(stateOid),
+        String(yearOid),
+        installment as 1 | 2,
+        selections.map((s) => s.ulbId),
+      ),
     ]);
 
     if (!gate.passed) {
@@ -328,6 +339,10 @@ export class ClaimLetterAssemblyService {
       // back to the submitted ulbId only when no snapshot resolved at all (unknown/inactive ULB).
       const identifier = ulb?.censusCode ?? ulb?.sbCode ?? selection.ulbId;
       if (!ulb || !allocation) {
+        invalid.push(identifier);
+        continue;
+      }
+      if (!(ulbLevelEligibility.perUlbEligible.get(selection.ulbId) ?? true)) {
         invalid.push(identifier);
         continue;
       }

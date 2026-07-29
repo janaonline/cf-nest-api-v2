@@ -35,7 +35,12 @@ const financialSummary = {
 
 describe('ClaimLetterService', () => {
   let service: ClaimLetterService;
-  let eligibilityService: { evaluateStateLevelGate: jest.Mock; getFinancialOverview: jest.Mock };
+  let eligibilityService: {
+    evaluateStateLevelGate: jest.Mock;
+    getFinancialOverview: jest.Mock;
+    resolveUlbLevelEligibility: jest.Mock;
+    resolveRemainingUlbIds: jest.Mock;
+  };
   let expectedUlbSetService: { resolve: jest.Mock };
   let historyService: { recordTransition: jest.Mock };
   let fileInfoNormalizer: { normalizeInboundFileInfo: jest.Mock };
@@ -69,6 +74,10 @@ describe('ClaimLetterService', () => {
     eligibilityService = {
       evaluateStateLevelGate: jest.fn(),
       getFinancialOverview: jest.fn().mockResolvedValue({ totalInstallmentAllocation: 0, totalAlreadyAcknowledged: 0 }),
+      resolveUlbLevelEligibility: jest
+        .fn()
+        .mockResolvedValue({ perUlbEligible: new Map(), standaloneCriteria: [], rowTalliesByFormId: new Map() }),
+      resolveRemainingUlbIds: jest.fn().mockResolvedValue([]),
     };
     expectedUlbSetService = { resolve: jest.fn() };
     historyService = { recordTransition: jest.fn().mockResolvedValue(undefined) };
@@ -153,7 +162,97 @@ describe('ClaimLetterService', () => {
         batchSlotsMax: 3,
         nextBatchNumber: 2,
         financialOverview: { totalInstallmentAllocation: 25, totalAlreadyAcknowledged: 5 },
+        ulbLevelCriteria: [],
+        ulbReadiness: { eligible: 2, total: 2 },
+        remainingUlbCount: 0,
       });
+    });
+
+    it('reports remainingUlbCount from resolveRemainingUlbIds, independent of ulbReadiness', async () => {
+      expectedUlbSetService.resolve.mockResolvedValue([{ ulbId: '1' }, { ulbId: '2' }, { ulbId: '3' }]);
+      eligibilityService.evaluateStateLevelGate.mockResolvedValue({ sources: [], passed: true });
+      eligibilityService.resolveRemainingUlbIds.mockResolvedValue(['3']);
+
+      const result = await service.getEligibilitySummary(stateId.toString(), yearId.toString(), 1, stateUser);
+
+      expect(result.data?.remainingUlbCount).toBe(1);
+      expect(eligibilityService.resolveRemainingUlbIds).toHaveBeenCalledWith(stateId.toString(), yearId.toString(), 1, [
+        '1',
+        '2',
+        '3',
+      ]);
+    });
+
+    it('passes expectedUlbIds through to resolveUlbLevelEligibility, not a fresh lookup', async () => {
+      expectedUlbSetService.resolve.mockResolvedValue([{ ulbId: 'ulb-1' }, { ulbId: 'ulb-2' }]);
+      eligibilityService.evaluateStateLevelGate.mockResolvedValue({ sources: [], passed: true });
+
+      await service.getEligibilitySummary(stateId.toString(), yearId.toString(), 1, stateUser);
+
+      expect(eligibilityService.resolveUlbLevelEligibility).toHaveBeenCalledWith(
+        stateId.toString(),
+        yearId.toString(),
+        1,
+        ['ulb-1', 'ulb-2'],
+      );
+    });
+
+    it('surfaces standaloneCriteria (SLB, Annual Accounts) as ulbLevelCriteria on the summary', async () => {
+      expectedUlbSetService.resolve.mockResolvedValue([]);
+      eligibilityService.evaluateStateLevelGate.mockResolvedValue({ sources: [], passed: true });
+      const tally = { eligible: 5, ineligible: 2, exempted: 0, total: 7 };
+      eligibilityService.resolveUlbLevelEligibility.mockResolvedValue({
+        perUlbEligible: new Map(),
+        standaloneCriteria: [{ displayLabel: 'SLB', displayDescription: 'SLB...', tally }],
+        rowTalliesByFormId: new Map(),
+      });
+
+      const result = await service.getEligibilitySummary(stateId.toString(), yearId.toString(), 1, stateUser);
+
+      expect(result.data?.ulbLevelCriteria).toEqual([{ displayLabel: 'SLB', displayDescription: 'SLB...', tally }]);
+    });
+
+    it('computes ulbReadiness as the true intersection, not derivable from any single criterion tally', async () => {
+      // 3 expected ULBs; only ulb-2 passes every ULB-bulk criterion — ulb-1 and ulb-3 each fail a
+      // *different* criterion, so no single criterion's own tally would reveal this 1/3 result.
+      expectedUlbSetService.resolve.mockResolvedValue([{ ulbId: 'ulb-1' }, { ulbId: 'ulb-2' }, { ulbId: 'ulb-3' }]);
+      eligibilityService.evaluateStateLevelGate.mockResolvedValue({ sources: [], passed: true });
+      eligibilityService.resolveUlbLevelEligibility.mockResolvedValue({
+        perUlbEligible: new Map([
+          ['ulb-1', false],
+          ['ulb-2', true],
+          ['ulb-3', false],
+        ]),
+        standaloneCriteria: [],
+        rowTalliesByFormId: new Map(),
+      });
+
+      const result = await service.getEligibilitySummary(stateId.toString(), yearId.toString(), 1, stateUser);
+
+      expect(result.data?.ulbReadiness).toEqual({ eligible: 1, total: 3 });
+    });
+
+    it('merges rowTalliesByFormId into the matching stateLevelGate source as ulbBreakdown, by formId', async () => {
+      expectedUlbSetService.resolve.mockResolvedValue([]);
+      const electedBodySource = { formId: 23, formType: 'ELECTED_BODY', result: 'PASSED' };
+      const sfcSource = { formId: 22, formType: 'SFC', result: 'PASSED' };
+      eligibilityService.evaluateStateLevelGate.mockResolvedValue({
+        sources: [electedBodySource, sfcSource],
+        passed: true,
+      });
+      const eulbTally = { eligible: 10, ineligible: 3, exempted: 1, total: 14 };
+      eligibilityService.resolveUlbLevelEligibility.mockResolvedValue({
+        perUlbEligible: new Map(),
+        standaloneCriteria: [],
+        rowTalliesByFormId: new Map([[23, eulbTally]]),
+      });
+
+      const result = await service.getEligibilitySummary(stateId.toString(), yearId.toString(), 1, stateUser);
+
+      expect(result.data?.stateLevelGate.sources).toEqual([
+        { ...electedBodySource, ulbBreakdown: eulbTally },
+        sfcSource, // no matching formId in rowTalliesByFormId -> unchanged, no ulbBreakdown added
+      ]);
     });
 
     it('reports nextBatchNumber as null once all 3 slots are occupied', async () => {
@@ -602,6 +701,45 @@ describe('ClaimLetterService', () => {
       batchModel.findById.mockReturnValue(q({ ...readyParent, currentFormStatus: 6 }));
 
       await expect(service.submit('x', stateUser)).rejects.toThrow(ConflictException);
+    });
+
+    describe('final-batch completeness (batchNumber === CLAIM_LETTER_MAX_BATCH_NUMBER)', () => {
+      const finalBatchParent = { ...readyParent, batchNumber: 3 };
+
+      it('rejects submission with a BadRequestException naming the still-unclaimed ULBs', async () => {
+        batchModel.findOne.mockReturnValue(q(finalBatchParent));
+        expectedUlbSetService.resolve.mockResolvedValue([
+          { ulbId: 'ulb-1', name: 'Alpha ULB' },
+          { ulbId: 'ulb-2', name: 'Beta ULB' },
+        ]);
+        eligibilityService.resolveRemainingUlbIds.mockResolvedValue(['ulb-2']);
+
+        await expect(service.submit('x', stateUser)).rejects.toThrow(BadRequestException);
+        await expect(service.submit('x', stateUser)).rejects.toThrow(/Beta ULB/);
+        expect(connection.startSession).not.toHaveBeenCalled();
+      });
+
+      it('allows submission once no ULBs remain unclaimed', async () => {
+        batchModel.findOne.mockReturnValue(q(finalBatchParent));
+        batchModel.findOneAndUpdate.mockReturnValue(q({ ...finalBatchParent, currentFormStatus: 5 }));
+        expectedUlbSetService.resolve.mockResolvedValue([{ ulbId: 'ulb-1', name: 'Alpha ULB' }]);
+        eligibilityService.resolveRemainingUlbIds.mockResolvedValue([]);
+
+        const result = await service.submit('x', stateUser);
+
+        expect(result.data?.currentFormStatus).toBe(5);
+      });
+
+      it('does not run the completeness check for a non-final batch (batchNumber 2)', async () => {
+        batchModel.findOne.mockReturnValue(q({ ...readyParent, batchNumber: 2 }));
+        batchModel.findOneAndUpdate.mockReturnValue(q({ ...readyParent, batchNumber: 2, currentFormStatus: 5 }));
+
+        const result = await service.submit('x', stateUser);
+
+        expect(result.data?.currentFormStatus).toBe(5);
+        expect(expectedUlbSetService.resolve).not.toHaveBeenCalled();
+        expect(eligibilityService.resolveRemainingUlbIds).not.toHaveBeenCalled();
+      });
     });
   });
 });

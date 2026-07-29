@@ -68,10 +68,12 @@ export class ClaimLetterService {
     this.assertStateAccess(user, stateId);
     assertInstallmentSupported(installment);
 
-    const [expectedUlbs, gate, usedBatches, financialOverview] = await Promise.all([
-      this.expectedUlbSetService.resolve(stateId, yearId),
-      // TODO: what happens to ULB forms?
+    const expectedUlbs = await this.expectedUlbSetService.resolve(stateId, yearId);
+    const expectedUlbIds = expectedUlbs.map((u) => u.ulbId);
+
+    const [gate, ulbLevelEligibility, usedBatches, financialOverview, remainingUlbIds] = await Promise.all([
       this.eligibilityService.evaluateStateLevelGate(stateId, yearId, installment),
+      this.eligibilityService.resolveUlbLevelEligibility(stateId, yearId, installment as 1 | 2, expectedUlbIds),
       this.batchModel
         .find({
           state: new Types.ObjectId(stateId),
@@ -83,19 +85,35 @@ export class ClaimLetterService {
         .lean<{ batchNumber: 1 | 2 | 3 }[]>()
         .exec(),
       this.eligibilityService.getFinancialOverview(stateId, yearId, installment as 1 | 2),
+      this.eligibilityService.resolveRemainingUlbIds(stateId, yearId, installment, expectedUlbIds),
     ]);
 
     const usedBatchNumbers = new Set(usedBatches.map((b) => b.batchNumber));
     const nextBatchNumber = ([1, 2, 3] as const).find((n) => !usedBatchNumbers.has(n)) ?? null;
 
+    // Elected Body / FC Unspent: fold their row-level tally into the same checklist line as the
+    // state's own form-submission status, rather than a second, separate entry for one requirement.
+    const sourcesWithUlbBreakdown = gate.sources.map((source) => {
+      const ulbBreakdown = ulbLevelEligibility.rowTalliesByFormId.get(source.formId);
+      return ulbBreakdown ? { ...source, ulbBreakdown } : source;
+    });
+
+    const ulbReadiness = {
+      eligible: expectedUlbIds.filter((id) => ulbLevelEligibility.perUlbEligible.get(id) ?? true).length,
+      total: expectedUlbIds.length,
+    };
+
     const summary: ClaimLetterEligibilitySummary = {
       installment: installment as 1,
-      stateLevelGate: { passed: gate.passed, sources: gate.sources },
+      stateLevelGate: { passed: gate.passed, sources: sourcesWithUlbBreakdown },
       expectedUlbCount: expectedUlbs.length,
       batchSlotsUsed: usedBatchNumbers.size,
       batchSlotsMax: CLAIM_LETTER_MAX_BATCH_NUMBER,
       nextBatchNumber,
       financialOverview,
+      ulbLevelCriteria: ulbLevelEligibility.standaloneCriteria,
+      ulbReadiness,
+      remainingUlbCount: remainingUlbIds.length,
     };
 
     return xviFcSuccess('Claim letter eligibility summary fetched.', summary);
@@ -176,6 +194,14 @@ export class ClaimLetterService {
       throw new BadRequestException('A signed claim letter file must be uploaded before submitting.');
     }
 
+    if (parent['batchNumber'] === CLAIM_LETTER_MAX_BATCH_NUMBER) {
+      await this.assertFinalBatchIsComplete(
+        toObjectIdString(parent['state']) ?? '',
+        toObjectIdString(parent['year']) ?? '',
+        parent['installment'] as number,
+      );
+    }
+
     const userOid = new Types.ObjectId(user._id);
     const session = await this.connection.startSession();
     let updated: LeanClaimLetterBatch | null = null;
@@ -235,6 +261,36 @@ export class ClaimLetterService {
       return xviFcSuccess('Claim letter already submitted to MoHUA.', mapClaimLetterBatchDocToSummary(current));
     }
     throw new ConflictException('Claim letter status changed. Please retry.');
+  }
+
+  /**
+   * Batch `CLAIM_LETTER_MAX_BATCH_NUMBER` is the state's last chance to claim any ULB for this
+   * installment — nothing else stops an ULB left out of every batch from being permanently
+   * stranded once it submits. Deliberately checked against every expected ULB not yet locked into
+   * *any* batch (`resolveRemainingUlbIds`), not just the ones currently eligible: an ineligible ULB
+   * could still resolve its eligibility later, and this rejection is what keeps that possibility
+   * open by refusing to close out the claim cycle while it's still unresolved.
+   */
+  private async assertFinalBatchIsComplete(stateId: string, yearId: string, installment: number): Promise<void> {
+    const expectedUlbs = await this.expectedUlbSetService.resolve(stateId, yearId);
+    const remainingUlbIds = await this.eligibilityService.resolveRemainingUlbIds(
+      stateId,
+      yearId,
+      installment,
+      expectedUlbs.map((u) => u.ulbId),
+    );
+    if (remainingUlbIds.length === 0) return;
+
+    const remainingUlbIdSet = new Set(remainingUlbIds);
+    const remainingNames = expectedUlbs.filter((u) => remainingUlbIdSet.has(u.ulbId)).map((u) => u.name);
+    const shown = remainingNames.slice(0, 10);
+    const suffix = remainingNames.length > shown.length ? ` and ${remainingNames.length - shown.length} more` : '';
+
+    throw new BadRequestException(
+      `This is the final claim batch (Batch ${CLAIM_LETTER_MAX_BATCH_NUMBER} of ${CLAIM_LETTER_MAX_BATCH_NUMBER}) — ` +
+        `${remainingNames.length} ULB(s) are not yet included in any batch and must be added before this batch can ` +
+        `be submitted: ${shown.join(', ')}${suffix}.`,
+    );
   }
 
   async getDetail(claimLetterId: string, user: AuthUser): Promise<XviFcApiResponse<ClaimLetterBatchSummary>> {

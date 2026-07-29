@@ -20,7 +20,7 @@ function q<T>(value: T) {
 
 describe('ClaimLetterUlbRowsService', () => {
   let service: ClaimLetterUlbRowsService;
-  let eligibilityService: { evaluateStateLevelGate: jest.Mock };
+  let eligibilityService: { evaluateStateLevelGate: jest.Mock; resolveUlbLevelEligibility: jest.Mock };
   let batchModel: { findOne: jest.Mock };
   let batchUlbModel: { find: jest.Mock; countDocuments: jest.Mock };
 
@@ -44,7 +44,10 @@ describe('ClaimLetterUlbRowsService', () => {
   };
 
   beforeEach(async () => {
-    eligibilityService = { evaluateStateLevelGate: jest.fn().mockResolvedValue({ sources: [], passed: true }) };
+    eligibilityService = {
+      evaluateStateLevelGate: jest.fn().mockResolvedValue({ sources: [], passed: true }),
+      resolveUlbLevelEligibility: jest.fn().mockResolvedValue({ perUlbEligible: new Map() }),
+    };
     batchModel = { findOne: jest.fn() };
     batchUlbModel = {
       find: jest.fn(),
@@ -150,6 +153,34 @@ describe('ClaimLetterUlbRowsService', () => {
     const result = await service.getUlbs(claimLetterId, {}, stateUser);
 
     expect(result.data![0].eligible).toBe(false);
+  });
+
+  it('reflects a failed per-ULB criterion (SLB, Annual Accounts, etc.) as eligible: false even when the state gate passes', async () => {
+    batchModel.findOne.mockReturnValue(
+      q({ _id: claimLetterId, state: stateId, year: yearId, installment: 1, financialSummary }),
+    );
+    const ulbId = new Types.ObjectId();
+    batchUlbModel.find.mockReturnValue(
+      q([
+        {
+          ulbId,
+          ulbSnapshot: { name: 'Test ULB', censusCode: '111', sbCode: null },
+          allocatedAmount: 1,
+          claimedAmount: 1,
+          differencePercentageBasisPoints: 0,
+        },
+      ]),
+    );
+    eligibilityService.resolveUlbLevelEligibility.mockResolvedValue({
+      perUlbEligible: new Map([[String(ulbId), false]]),
+    });
+
+    const result = await service.getUlbs(claimLetterId, {}, stateUser);
+
+    expect(result.data![0].eligible).toBe(false);
+    expect(eligibilityService.resolveUlbLevelEligibility).toHaveBeenCalledWith(String(stateId), String(yearId), 1, [
+      String(ulbId),
+    ]);
   });
 
   it('returns the display-converted financialSummary in meta', async () => {

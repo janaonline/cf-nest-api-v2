@@ -6,6 +6,7 @@ import { FormJsonService } from 'src/form-json/form-json.service';
 import { ClaimEligibilityEvaluatorService } from 'src/module/xvi-fc/common/services/claim-eligibility-evaluator.service';
 import { ClaimLetterBatch } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
 import { ClaimLetterBatchUlb } from 'src/schemas/xvi-fc/state/claim-letter-batch-ulb.schema';
+import { ClaimLetterUlbLock } from 'src/schemas/xvi-fc/state/claim-letter-ulb-lock.schema';
 import { DevolutionFormulaForm } from 'src/schemas/xvi-fc/state/devolution-formula-form.schema';
 import { DevolutionFormulaRow } from 'src/schemas/xvi-fc/state/devolution-formula-row.schema';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
@@ -25,11 +26,12 @@ function q<T>(value: T) {
 describe('ClaimLetterEligibilityService', () => {
   let service: ClaimLetterEligibilityService;
   let formJsonService: { findEnabledClaimEligibilitySources: jest.Mock };
-  let evaluatorService: { evaluate: jest.Mock };
+  let evaluatorService: { evaluate: jest.Mock; evaluateUlbBulk: jest.Mock };
   let devolutionFormModel: { findOne: jest.Mock };
   let devolutionRowModel: { find: jest.Mock };
   let batchModel: { find: jest.Mock };
   let batchUlbModel: { aggregate: jest.Mock };
+  let ulbLockModel: { find: jest.Mock };
 
   const stateId = new Types.ObjectId().toString();
   const designYearId = new Types.ObjectId().toString();
@@ -89,11 +91,12 @@ describe('ClaimLetterEligibilityService', () => {
 
   beforeEach(async () => {
     formJsonService = { findEnabledClaimEligibilitySources: jest.fn() };
-    evaluatorService = { evaluate: jest.fn() };
+    evaluatorService = { evaluate: jest.fn(), evaluateUlbBulk: jest.fn() };
     devolutionFormModel = { findOne: jest.fn() };
     devolutionRowModel = { find: jest.fn() };
     batchModel = { find: jest.fn().mockReturnValue(q([])) };
     batchUlbModel = { aggregate: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue([]) }) };
+    ulbLockModel = { find: jest.fn().mockReturnValue(q([])) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -104,6 +107,7 @@ describe('ClaimLetterEligibilityService', () => {
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: devolutionRowModel },
         { provide: getModelToken(ClaimLetterBatch.name), useValue: batchModel },
         { provide: getModelToken(ClaimLetterBatchUlb.name), useValue: batchUlbModel },
+        { provide: getModelToken(ClaimLetterUlbLock.name), useValue: ulbLockModel },
       ],
     }).compile();
 
@@ -163,6 +167,145 @@ describe('ClaimLetterEligibilityService', () => {
       expect(gate.passed).toBe(true);
       expect(gate.sources).toEqual([]);
       expect(evaluatorService.evaluate).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('resolveUlbLevelEligibility', () => {
+    const ulbA = new Types.ObjectId().toString();
+    const ulbB = new Types.ObjectId().toString();
+    const ulbC = new Types.ObjectId().toString();
+
+    function ulbOwnedSource(overrides: Partial<IFormJson> = {}): IFormJson {
+      return devolutionSource({
+        formId: 32,
+        type: 'SLB',
+        claimEligibility: {
+          ...devolutionSource().claimEligibility!,
+          ownerLevel: 'ULB',
+          displayLabel: 'SLB',
+          displayDescription: 'SLB status must be submitted by the ULB.',
+        },
+        ...overrides,
+      });
+    }
+
+    function formAndRowSource(overrides: Partial<IFormJson> = {}): IFormJson {
+      return devolutionSource({
+        formId: 23,
+        type: 'ELECTED_BODY',
+        claimEligibility: {
+          ...devolutionSource().claimEligibility!,
+          ownerLevel: 'STATE',
+          evaluationLevel: 'FORM_AND_ROW',
+        },
+        ...overrides,
+      });
+    }
+
+    it('filters to ULB-owned and FORM_AND_ROW sources applicable to the installment, ignoring plain STATE/FORM ones', async () => {
+      const stateOnly = devolutionSource(); // ownerLevel STATE, evaluationLevel FORM — excluded
+      const wrongInstallment = ulbOwnedSource({
+        claimEligibility: { ...ulbOwnedSource().claimEligibility!, applicableInstallments: [2] },
+      });
+      formJsonService.findEnabledClaimEligibilitySources.mockResolvedValue([
+        stateOnly,
+        ulbOwnedSource(),
+        formAndRowSource(),
+        wrongInstallment,
+      ]);
+      evaluatorService.evaluateUlbBulk.mockResolvedValue({
+        perUlb: new Map([[ulbA, 'ELIGIBLE']]),
+        tally: { eligible: 1, ineligible: 0, exempted: 0, total: 1 },
+      });
+
+      await service.resolveUlbLevelEligibility(stateId, designYearId, 1, [ulbA]);
+
+      expect(evaluatorService.evaluateUlbBulk).toHaveBeenCalledTimes(2);
+    });
+
+    it('a ULB stays eligible only if it is not INELIGIBLE on any qualifying source', async () => {
+      formJsonService.findEnabledClaimEligibilitySources.mockResolvedValue([ulbOwnedSource(), formAndRowSource()]);
+      evaluatorService.evaluateUlbBulk
+        .mockResolvedValueOnce({
+          perUlb: new Map([
+            [ulbA, 'ELIGIBLE'],
+            [ulbB, 'INELIGIBLE'],
+          ]),
+          tally: { eligible: 1, ineligible: 1, exempted: 0, total: 2 },
+        })
+        .mockResolvedValueOnce({
+          perUlb: new Map([
+            [ulbA, 'EXEMPTED'],
+            [ulbB, 'ELIGIBLE'],
+          ]),
+          tally: { eligible: 1, ineligible: 0, exempted: 1, total: 2 },
+        });
+
+      const result = await service.resolveUlbLevelEligibility(stateId, designYearId, 1, [ulbA, ulbB]);
+
+      // ulbA: ELIGIBLE + EXEMPTED -> still eligible overall.
+      expect(result.perUlbEligible.get(ulbA)).toBe(true);
+      // ulbB: INELIGIBLE on the first source alone is enough to fail overall, despite passing the second.
+      expect(result.perUlbEligible.get(ulbB)).toBe(false);
+    });
+
+    it('tracks which criterion(s) failed per ULB, falling back to the source type when displayLabel is unset', async () => {
+      formJsonService.findEnabledClaimEligibilitySources.mockResolvedValue([ulbOwnedSource(), formAndRowSource()]);
+      evaluatorService.evaluateUlbBulk
+        .mockResolvedValueOnce({
+          // ulbOwnedSource (SLB) — ulbA and ulbC fail this one.
+          perUlb: new Map([
+            [ulbA, 'INELIGIBLE'],
+            [ulbB, 'ELIGIBLE'],
+            [ulbC, 'INELIGIBLE'],
+          ]),
+          tally: { eligible: 1, ineligible: 2, exempted: 0, total: 3 },
+        })
+        .mockResolvedValueOnce({
+          // formAndRowSource (ELECTED_BODY, no displayLabel set) — only ulbB fails this one.
+          perUlb: new Map([
+            [ulbA, 'ELIGIBLE'],
+            [ulbB, 'INELIGIBLE'],
+            [ulbC, 'INELIGIBLE'],
+          ]),
+          tally: { eligible: 1, ineligible: 2, exempted: 0, total: 3 },
+        });
+
+      const result = await service.resolveUlbLevelEligibility(stateId, designYearId, 1, [ulbA, ulbB, ulbC]);
+
+      expect(result.perUlbFailedCriteria.get(ulbA)).toEqual(['SLB']);
+      expect(result.perUlbFailedCriteria.get(ulbB)).toEqual(['ELECTED_BODY']);
+      expect(result.perUlbFailedCriteria.get(ulbC)).toEqual(['SLB', 'ELECTED_BODY']);
+    });
+
+    it('routes ownerLevel: ULB sources into standaloneCriteria and FORM_AND_ROW sources into rowTalliesByFormId, keyed by formId', async () => {
+      formJsonService.findEnabledClaimEligibilitySources.mockResolvedValue([ulbOwnedSource(), formAndRowSource()]);
+      const slbTally = { eligible: 5, ineligible: 2, exempted: 0, total: 7 };
+      const eulbTally = { eligible: 10, ineligible: 3, exempted: 1, total: 14 };
+      evaluatorService.evaluateUlbBulk
+        .mockResolvedValueOnce({ perUlb: new Map(), tally: slbTally })
+        .mockResolvedValueOnce({ perUlb: new Map(), tally: eulbTally });
+
+      const result = await service.resolveUlbLevelEligibility(stateId, designYearId, 1, [ulbA]);
+
+      expect(result.standaloneCriteria).toEqual([
+        { displayLabel: 'SLB', displayDescription: 'SLB status must be submitted by the ULB.', tally: slbTally },
+      ]);
+      expect(result.rowTalliesByFormId.get(23)).toEqual(eulbTally);
+    });
+
+    it('every expected ULB defaults to eligible when there are no qualifying sources at all', async () => {
+      formJsonService.findEnabledClaimEligibilitySources.mockResolvedValue([devolutionSource()]); // STATE/FORM only
+
+      const result = await service.resolveUlbLevelEligibility(stateId, designYearId, 1, [ulbA, ulbB]);
+
+      expect(result.perUlbEligible).toEqual(
+        new Map([
+          [ulbA, true],
+          [ulbB, true],
+        ]),
+      );
+      expect(evaluatorService.evaluateUlbBulk).not.toHaveBeenCalled();
     });
   });
 
@@ -369,6 +512,67 @@ describe('ClaimLetterEligibilityService', () => {
         const [filter] = call as [Record<string, unknown>];
         expect(filter['_id']).toEqual({ $ne: new Types.ObjectId(excludeId) });
       }
+    });
+  });
+
+  describe('resolveClaimedUlbIds', () => {
+    it('returns the ULB ids of every ACTIVE/ACKNOWLEDGED lock for this state/year/installment', async () => {
+      const ulbA = new Types.ObjectId();
+      const ulbB = new Types.ObjectId();
+      ulbLockModel.find.mockReturnValue(q([{ ulbId: ulbA }, { ulbId: ulbB }]));
+
+      const result = await service.resolveClaimedUlbIds(stateId, designYearId, 1);
+
+      expect(result).toEqual(new Set([String(ulbA), String(ulbB)]));
+      const [filter] = ulbLockModel.find.mock.calls[0] as [Record<string, unknown>];
+      expect(filter['state']).toEqual(new Types.ObjectId(stateId));
+      expect(filter['year']).toEqual(new Types.ObjectId(designYearId));
+      expect(filter['installment']).toBe(1);
+      expect(filter['lockState']).toEqual({ $in: ['ACTIVE', 'ACKNOWLEDGED'] });
+      expect(filter['claimLetter']).toBeUndefined();
+    });
+
+    it('excludes the given claim letter id when provided', async () => {
+      ulbLockModel.find.mockReturnValue(q([]));
+      const excludeId = new Types.ObjectId().toString();
+
+      await service.resolveClaimedUlbIds(stateId, designYearId, 1, excludeId);
+
+      const [filter] = ulbLockModel.find.mock.calls[0] as [Record<string, unknown>];
+      expect(filter['claimLetter']).toEqual({ $ne: new Types.ObjectId(excludeId) });
+    });
+  });
+
+  describe('resolveRemainingUlbIds', () => {
+    it('returns expected ULBs that have no ACTIVE/ACKNOWLEDGED lock yet, regardless of eligibility', async () => {
+      const claimed = new Types.ObjectId();
+      const remaining = new Types.ObjectId();
+      ulbLockModel.find.mockReturnValue(q([{ ulbId: claimed }]));
+
+      const result = await service.resolveRemainingUlbIds(stateId, designYearId, 1, [
+        String(claimed),
+        String(remaining),
+      ]);
+
+      expect(result).toEqual([String(remaining)]);
+    });
+
+    it("does not exclude any claim letter — a batch's own already-drafted ULBs count as claimed", async () => {
+      ulbLockModel.find.mockReturnValue(q([]));
+
+      await service.resolveRemainingUlbIds(stateId, designYearId, 1, []);
+
+      const [filter] = ulbLockModel.find.mock.calls[0] as [Record<string, unknown>];
+      expect(filter['claimLetter']).toBeUndefined();
+    });
+
+    it('returns an empty array once every expected ULB is claimed', async () => {
+      const ulbA = new Types.ObjectId();
+      ulbLockModel.find.mockReturnValue(q([{ ulbId: ulbA }]));
+
+      const result = await service.resolveRemainingUlbIds(stateId, designYearId, 1, [String(ulbA)]);
+
+      expect(result).toEqual([]);
     });
   });
 });

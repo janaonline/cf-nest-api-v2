@@ -1,2943 +1,3283 @@
 {
-	"sfc": {
-		"design_year": "67d7d136d3d038946a5239e9",
-		"formId": 22,
-		"type": "SFC",
-		"isActive": true,
-		"data": [
-			{
-				"formFieldType": "radio",
-				"label": "Is the state currently in an active SFC award period?",
-				"key": "isActiveSfc",
-				"value": "yes",
-				"options": [
-					{
-						"label": "Yes",
-						"id": "yes"
-					},
-					{
-						"label": "No",
-						"id": "no"
-					}
-				],
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "This field is required."
-					}
-				],
-				"layout": {
-					"variant": "inline",
-					"labelWidth": "lg"
-				}
-			},
-			{
-				"formFieldType": "text",
-				"label": "What is the active award period?",
-				"key": "awardPeriod",
-				"placeholder": "e.g., 2026-2031",
-				"visibleWhen": {
-					"mode": "all",
-					"conditions": [
-						{
-							"key": "isActiveSfc",
-							"operator": "equals",
-							"value": "yes"
-						}
-					]
-				},
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "This field is required."
-					},
-					{
-						"name": "yearRange",
-						"validator": {
-							"startYearMin": 2020,
-							"startYearMax": 2026,
-							"endYearMin": 2025,
-							"endYearMax": 2032,
-							"requireEndGreaterThanStart": true,
-							"allowedDurations": [1, 5, 6],
-							"requiredIncludedYear": 2026
-						},
-						"message": "Enter a valid period in YYYY-YYYY format. The period must include 2026 and span 1, 5, or 6 years."
-					}
-				],
-				"layout": {
-					"variant": "inline",
-					"labelWidth": "lg"
-				}
-			},
-			{
-				"formFieldType": "number",
-				"key": "awardPeriodDuration",
-				"label": "Award Period Duration",
-				"render": false,
-				"includeInPayload": false
-			},
-			{
-				"formFieldType": "radio",
-				"label": "Was the SFC constituted for an interim period?",
-				"key": "sfcConstitutedForInterim",
-				"options": [
-					{
-						"label": "Yes",
-						"id": "yes"
-					},
-					{
-						"label": "No",
-						"id": "no"
-					}
-				],
-				"layout": {
-					"variant": "inline",
-					"labelWidth": "lg"
-				},
-				"visibleWhen": {
-					"mode": "all",
-					"conditions": [
-						{
-							"key": "awardPeriodDuration",
-							"operator": "equals",
-							"value": 1
-						}
-					]
-				},
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "This field is required."
-					}
-				]
-			},
-			{
-				"formFieldType": "radio",
-				"label": "Has the SFC award period been extended?",
-				"key": "sfcAwardPeriodExtended",
-				"options": [
-					{
-						"label": "Yes",
-						"id": "yes"
-					},
-					{
-						"label": "No",
-						"id": "no"
-					}
-				],
-				"layout": {
-					"variant": "inline",
-					"labelWidth": "lg"
-				},
-				"visibleWhen": {
-					"mode": "all",
-					"conditions": [
-						{
-							"key": "awardPeriodDuration",
-							"operator": "equals",
-							"value": 6
-						}
-					]
-				},
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "This field is required."
-					}
-				],
-				"supportingContent": [
-					{
-						"type": "info",
-						"position": "after",
-						"title": "",
-						"description": "This award period exceeds the standard 5 years. Without an extension order, this submission will be flagged for manual review by the PMU team."
-					}
-				]
-			},
-			{
-				"formFieldType": "file",
-				"label": "Upload Extension Order",
-				"key": "extensionOrder",
-				"allowedFileTypes": ["pdf"],
-				"maxFileSize": 20,
-				"folderPathKey": "sfc-status/extension-order",
-				"value": {
-					"originalName": "",
-					"path": "",
-					"mimeType": "",
-					"sizeKb": null,
-					"pageCount": null
-				},
-				"visibleWhen": {
-					"mode": "all",
-					"conditions": [
-						{
-							"key": "sfcAwardPeriodExtended",
-							"operator": "equals",
-							"value": "yes"
-						}
-					]
-				},
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "This field is required."
-					}
-				],
-				"appearance": {
-					"color": "success",
-					"variant": "soft"
-				},
-				"layout": {
-					"variant": "inline",
-					"labelWidth": "lg"
-				}
-			},
-			{
-				"formFieldType": "select",
-				"label": "For this award period, which SFC is applicable?",
-				"key": "whichAwardPeriod",
-				"options": ["8th SFC", "7th SFC", "6th SFC", "5th SFC", "4th SFC", "3rd SFC", "2nd SFC", "1st SFC"],
-				"visibleWhen": {
-					"mode": "all",
-					"conditions": [
-						{
-							"key": "isActiveSfc",
-							"operator": "equals",
-							"value": "yes"
-						}
-					]
-				},
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "This field is required."
-					}
-				],
-				"layout": {
-					"variant": "inline",
-					"labelWidth": "lg"
-				}
-			},
-			{
-				"formFieldType": "radio",
-				"label": "What is the status of the SFC report?",
-				"key": "sfcReportStatus",
-				"options": [
-					{
-						"label": "To be submitted",
-						"id": "toBeSubmitted"
-					},
-					{
-						"label": "Report submitted - ATR not yet tabled",
-						"id": "reportSubmittedAtrNotYetTabled"
-					},
-					{
-						"label": "Report submitted - ATR tabled",
-						"id": "reportSubmittedAtrTabled"
-					}
-				],
-				"radioLayout": "vertical",
-				"visibleWhen": {
-					"mode": "all",
-					"conditions": [
-						{
-							"key": "isActiveSfc",
-							"operator": "equals",
-							"value": "yes"
-						}
-					]
-				},
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "This field is required."
-					}
-				],
-				"layout": {
-					"variant": "inline",
-					"labelWidth": "lg"
-				}
-			},
-			{
-				"formFieldType": "date",
-				"label": "Expected Report Submission Date",
-				"key": "reportSubmissionDate",
-				"visibleWhen": {
-					"mode": "all",
-					"conditions": [
-						{
-							"key": "isActiveSfc",
-							"operator": "equals",
-							"value": "yes"
-						},
-						{
-							"key": "sfcReportStatus",
-							"operator": "equals",
-							"value": "toBeSubmitted"
-						}
-					]
-				},
-				"validations": [
-					{
-						"name": "minDate",
-						"validator": "TODAY+0D",
-						"message": "Date cannot be earlier than today."
-					},
-					{
-						"name": "maxDate",
-						"validator": "2028-03-31",
-						"message": "Date cannot be beyond 31 March 2028."
-					}
-				],
-				"layout": {
-					"variant": "inline",
-					"labelWidth": "lg"
-				}
-			},
-			{
-				"formFieldType": "file",
-				"label": "Upload SFC Report",
-				"key": "sfcReport",
-				"allowedFileTypes": ["pdf"],
-				"maxFileSize": 20,
-				"folderPathKey": "sfc-status/sfc-report",
-				"value": {
-					"originalName": "",
-					"path": "",
-					"mimeType": "",
-					"sizeKb": null,
-					"pageCount": null
-				},
-				"visibleWhen": {
-					"mode": "all",
-					"conditions": [
-						{
-							"key": "isActiveSfc",
-							"operator": "equals",
-							"value": "yes"
-						},
-						{
-							"key": "sfcReportStatus",
-							"operator": "in",
-							"value": ["reportSubmittedAtrNotYetTabled", "reportSubmittedAtrTabled"]
-						}
-					]
-				},
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "This field is required."
-					}
-				],
-				"appearance": {
-					"color": "success",
-					"variant": "soft"
-				},
-				"layout": {
-					"variant": "inline",
-					"labelWidth": "lg"
-				}
-			},
-			{
-				"formFieldType": "file",
-				"label": "Upload ATR",
-				"key": "atrReport",
-				"allowedFileTypes": ["pdf"],
-				"maxFileSize": 20,
-				"folderPathKey": "sfc-status/atr-report",
-				"value": {
-					"originalName": "",
-					"path": "",
-					"mimeType": "",
-					"sizeKb": null,
-					"pageCount": null
-				},
-				"visibleWhen": {
-					"mode": "all",
-					"conditions": [
-						{
-							"key": "isActiveSfc",
-							"operator": "equals",
-							"value": "yes"
-						},
-						{
-							"key": "sfcReportStatus",
-							"operator": "equals",
-							"value": "reportSubmittedAtrTabled"
-						}
-					]
-				},
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "This field is required."
-					}
-				],
-				"appearance": {
-					"color": "success",
-					"variant": "soft"
-				},
-				"layout": {
-					"variant": "inline",
-					"labelWidth": "lg"
-				}
-			},
-			{
-				"formFieldType": "radio",
-				"label": "Has a new SFC been constituted for the next award period?",
-				"key": "isNewSfcConstituted",
-				"options": [
-					{
-						"label": "Yes",
-						"id": "yes"
-					},
-					{
-						"label": "No",
-						"id": "no"
-					},
-					{
-						"label": "Not applicable / current award period still active",
-						"id": "notApplicable"
-					}
-				],
-				"radioLayout": "vertical",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "This field is required."
-					}
-				],
-				"layout": {
-					"variant": "inline",
-					"labelWidth": "lg"
-				}
-			},
-			{
-				"formFieldType": "file",
-				"label": "Gazette Notification / Order for new SFC constitution",
-				"key": "gazetteNotification",
-				"allowedFileTypes": ["pdf"],
-				"maxFileSize": 20,
-				"folderPathKey": "sfc-status/gazette-notification",
-				"value": {
-					"originalName": "",
-					"path": "",
-					"mimeType": "",
-					"sizeKb": null,
-					"pageCount": null
-				},
-				"visibleWhen": {
-					"mode": "all",
-					"conditions": [
-						{
-							"key": "isNewSfcConstituted",
-							"operator": "equals",
-							"value": "yes"
-						}
-					]
-				},
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "This field is required."
-					}
-				],
-				"appearance": {
-					"color": "success",
-					"variant": "soft"
-				},
-				"layout": {
-					"variant": "inline",
-					"labelWidth": "lg"
-				}
-			},
-			{
-				"formFieldType": "textarea",
-				"label": "Raise an issue / clarification for the PMU team.",
-				"key": "raiseAnIssue",
-				"placeholder": "Describe the issue or clarification required...",
-				"validations": [
-					{
-						"name": "maxlength",
-						"validator": 500,
-						"message": "Maximum 500 characters allowed."
-					}
-				],
-				"layout": {
-					"variant": "inline",
-					"labelWidth": "lg"
-				}
-			},
-			{
-				"formFieldType": "checkbox",
-				"key": "checkboxConfirmation",
-				"label": "I understand that this submission may contain information entered or modified by other users. I have reviewed the final submission and confirm that the information being submitted is complete and accurate to the best of my knowledge.",
-				"value": false,
-				"validations": [
-					{
-						"name": "requiredTrue",
-						"validator": null,
-						"message": "Please confirm before submitting."
-					}
-				]
-			}
-		]
-	},
+  "sfc": {
+    "design_year": "67d7d136d3d038946a5239e9",
+    "formId": 22,
+    "type": "SFC",
+    "isActive": true,
+    "data": [
+      {
+        "formFieldType": "radio",
+        "label": "Is the state currently in an active SFC award period?",
+        "key": "isActiveSfc",
+        "value": "yes",
+        "options": [
+          {
+            "label": "Yes",
+            "id": "yes"
+          },
+          {
+            "label": "No",
+            "id": "no"
+          }
+        ],
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "This field is required."
+          }
+        ],
+        "layout": {
+          "variant": "inline",
+          "labelWidth": "lg"
+        }
+      },
+      {
+        "formFieldType": "text",
+        "label": "What is the active award period?",
+        "key": "awardPeriod",
+        "placeholder": "e.g., 2026-2031",
+        "visibleWhen": {
+          "mode": "all",
+          "conditions": [
+            {
+              "key": "isActiveSfc",
+              "operator": "equals",
+              "value": "yes"
+            }
+          ]
+        },
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "This field is required."
+          },
+          {
+            "name": "yearRange",
+            "validator": {
+              "startYearMin": 2020,
+              "startYearMax": 2026,
+              "endYearMin": 2025,
+              "endYearMax": 2032,
+              "requireEndGreaterThanStart": true,
+              "allowedDurations": [1, 5, 6],
+              "requiredIncludedYear": 2026
+            },
+            "message": "Enter a valid period in YYYY-YYYY format. The period must include 2026 and span 1, 5, or 6 years."
+          }
+        ],
+        "layout": {
+          "variant": "inline",
+          "labelWidth": "lg"
+        }
+      },
+      {
+        "formFieldType": "number",
+        "key": "awardPeriodDuration",
+        "label": "Award Period Duration",
+        "render": false,
+        "includeInPayload": false
+      },
+      {
+        "formFieldType": "radio",
+        "label": "Was the SFC constituted for an interim period?",
+        "key": "sfcConstitutedForInterim",
+        "options": [
+          {
+            "label": "Yes",
+            "id": "yes"
+          },
+          {
+            "label": "No",
+            "id": "no"
+          }
+        ],
+        "layout": {
+          "variant": "inline",
+          "labelWidth": "lg"
+        },
+        "visibleWhen": {
+          "mode": "all",
+          "conditions": [
+            {
+              "key": "awardPeriodDuration",
+              "operator": "equals",
+              "value": 1
+            }
+          ]
+        },
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "This field is required."
+          }
+        ]
+      },
+      {
+        "formFieldType": "radio",
+        "label": "Has the SFC award period been extended?",
+        "key": "sfcAwardPeriodExtended",
+        "options": [
+          {
+            "label": "Yes",
+            "id": "yes"
+          },
+          {
+            "label": "No",
+            "id": "no"
+          }
+        ],
+        "layout": {
+          "variant": "inline",
+          "labelWidth": "lg"
+        },
+        "visibleWhen": {
+          "mode": "all",
+          "conditions": [
+            {
+              "key": "awardPeriodDuration",
+              "operator": "equals",
+              "value": 6
+            }
+          ]
+        },
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "This field is required."
+          }
+        ],
+        "supportingContent": [
+          {
+            "type": "info",
+            "position": "after",
+            "title": "",
+            "description": "This award period exceeds the standard 5 years. Without an extension order, this submission will be flagged for manual review by the PMU team."
+          }
+        ]
+      },
+      {
+        "formFieldType": "file",
+        "label": "Upload Extension Order",
+        "key": "extensionOrder",
+        "allowedFileTypes": ["pdf"],
+        "maxFileSize": 20,
+        "folderPathKey": "sfc-status/extension-order",
+        "value": {
+          "originalName": "",
+          "path": "",
+          "mimeType": "",
+          "sizeKb": null,
+          "pageCount": null
+        },
+        "visibleWhen": {
+          "mode": "all",
+          "conditions": [
+            {
+              "key": "sfcAwardPeriodExtended",
+              "operator": "equals",
+              "value": "yes"
+            }
+          ]
+        },
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "This field is required."
+          }
+        ],
+        "appearance": {
+          "color": "success",
+          "variant": "soft"
+        },
+        "layout": {
+          "variant": "inline",
+          "labelWidth": "lg"
+        }
+      },
+      {
+        "formFieldType": "select",
+        "label": "For this award period, which SFC is applicable?",
+        "key": "whichAwardPeriod",
+        "options": ["8th SFC", "7th SFC", "6th SFC", "5th SFC", "4th SFC", "3rd SFC", "2nd SFC", "1st SFC"],
+        "visibleWhen": {
+          "mode": "all",
+          "conditions": [
+            {
+              "key": "isActiveSfc",
+              "operator": "equals",
+              "value": "yes"
+            }
+          ]
+        },
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "This field is required."
+          }
+        ],
+        "layout": {
+          "variant": "inline",
+          "labelWidth": "lg"
+        }
+      },
+      {
+        "formFieldType": "radio",
+        "label": "What is the status of the SFC report?",
+        "key": "sfcReportStatus",
+        "options": [
+          {
+            "label": "To be submitted",
+            "id": "toBeSubmitted"
+          },
+          {
+            "label": "Report submitted - ATR not yet tabled",
+            "id": "reportSubmittedAtrNotYetTabled"
+          },
+          {
+            "label": "Report submitted - ATR tabled",
+            "id": "reportSubmittedAtrTabled"
+          }
+        ],
+        "radioLayout": "vertical",
+        "visibleWhen": {
+          "mode": "all",
+          "conditions": [
+            {
+              "key": "isActiveSfc",
+              "operator": "equals",
+              "value": "yes"
+            }
+          ]
+        },
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "This field is required."
+          }
+        ],
+        "layout": {
+          "variant": "inline",
+          "labelWidth": "lg"
+        }
+      },
+      {
+        "formFieldType": "date",
+        "label": "Expected Report Submission Date",
+        "key": "reportSubmissionDate",
+        "visibleWhen": {
+          "mode": "all",
+          "conditions": [
+            {
+              "key": "isActiveSfc",
+              "operator": "equals",
+              "value": "yes"
+            },
+            {
+              "key": "sfcReportStatus",
+              "operator": "equals",
+              "value": "toBeSubmitted"
+            }
+          ]
+        },
+        "validations": [
+          {
+            "name": "minDate",
+            "validator": "TODAY+0D",
+            "message": "Date cannot be earlier than today."
+          },
+          {
+            "name": "maxDate",
+            "validator": "2028-03-31",
+            "message": "Date cannot be beyond 31 March 2028."
+          }
+        ],
+        "layout": {
+          "variant": "inline",
+          "labelWidth": "lg"
+        }
+      },
+      {
+        "formFieldType": "file",
+        "label": "Upload SFC Report",
+        "key": "sfcReport",
+        "allowedFileTypes": ["pdf"],
+        "maxFileSize": 20,
+        "folderPathKey": "sfc-status/sfc-report",
+        "value": {
+          "originalName": "",
+          "path": "",
+          "mimeType": "",
+          "sizeKb": null,
+          "pageCount": null
+        },
+        "visibleWhen": {
+          "mode": "all",
+          "conditions": [
+            {
+              "key": "isActiveSfc",
+              "operator": "equals",
+              "value": "yes"
+            },
+            {
+              "key": "sfcReportStatus",
+              "operator": "in",
+              "value": ["reportSubmittedAtrNotYetTabled", "reportSubmittedAtrTabled"]
+            }
+          ]
+        },
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "This field is required."
+          }
+        ],
+        "appearance": {
+          "color": "success",
+          "variant": "soft"
+        },
+        "layout": {
+          "variant": "inline",
+          "labelWidth": "lg"
+        }
+      },
+      {
+        "formFieldType": "file",
+        "label": "Upload ATR",
+        "key": "atrReport",
+        "allowedFileTypes": ["pdf"],
+        "maxFileSize": 20,
+        "folderPathKey": "sfc-status/atr-report",
+        "value": {
+          "originalName": "",
+          "path": "",
+          "mimeType": "",
+          "sizeKb": null,
+          "pageCount": null
+        },
+        "visibleWhen": {
+          "mode": "all",
+          "conditions": [
+            {
+              "key": "isActiveSfc",
+              "operator": "equals",
+              "value": "yes"
+            },
+            {
+              "key": "sfcReportStatus",
+              "operator": "equals",
+              "value": "reportSubmittedAtrTabled"
+            }
+          ]
+        },
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "This field is required."
+          }
+        ],
+        "appearance": {
+          "color": "success",
+          "variant": "soft"
+        },
+        "layout": {
+          "variant": "inline",
+          "labelWidth": "lg"
+        }
+      },
+      {
+        "formFieldType": "radio",
+        "label": "Has a new SFC been constituted for the next award period?",
+        "key": "isNewSfcConstituted",
+        "options": [
+          {
+            "label": "Yes",
+            "id": "yes"
+          },
+          {
+            "label": "No",
+            "id": "no"
+          },
+          {
+            "label": "Not applicable / current award period still active",
+            "id": "notApplicable"
+          }
+        ],
+        "radioLayout": "vertical",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "This field is required."
+          }
+        ],
+        "layout": {
+          "variant": "inline",
+          "labelWidth": "lg"
+        }
+      },
+      {
+        "formFieldType": "file",
+        "label": "Gazette Notification / Order for new SFC constitution",
+        "key": "gazetteNotification",
+        "allowedFileTypes": ["pdf"],
+        "maxFileSize": 20,
+        "folderPathKey": "sfc-status/gazette-notification",
+        "value": {
+          "originalName": "",
+          "path": "",
+          "mimeType": "",
+          "sizeKb": null,
+          "pageCount": null
+        },
+        "visibleWhen": {
+          "mode": "all",
+          "conditions": [
+            {
+              "key": "isNewSfcConstituted",
+              "operator": "equals",
+              "value": "yes"
+            }
+          ]
+        },
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "This field is required."
+          }
+        ],
+        "appearance": {
+          "color": "success",
+          "variant": "soft"
+        },
+        "layout": {
+          "variant": "inline",
+          "labelWidth": "lg"
+        }
+      },
+      {
+        "formFieldType": "textarea",
+        "label": "Raise an issue / clarification for the PMU team.",
+        "key": "raiseAnIssue",
+        "placeholder": "Describe the issue or clarification required...",
+        "validations": [
+          {
+            "name": "maxlength",
+            "validator": 500,
+            "message": "Maximum 500 characters allowed."
+          }
+        ],
+        "layout": {
+          "variant": "inline",
+          "labelWidth": "lg"
+        }
+      },
+      {
+        "formFieldType": "checkbox",
+        "key": "checkboxConfirmation",
+        "label": "I understand that this submission may contain information entered or modified by other users. I have reviewed the final submission and confirm that the information being submitted is complete and accurate to the best of my knowledge.",
+        "value": false,
+        "validations": [
+          {
+            "name": "requiredTrue",
+            "validator": null,
+            "message": "Please confirm before submitting."
+          }
+        ]
+      }
+    ]
+  },
 
-	"devolutionFormula": {
-		"design_year": "67d7d136d3d038946a5239e9",
-		"formId": 24,
-		"type": "DEVOLUTION_FORMULA",
-		"isActive": true,
-		"data": [
-			{
-				"fieldTypes": ["DF_MAIN_FORM_FIELDS"],
-				"formFieldType": "number",
-				"label": "Active ULBs Registered on City Finance as of March 31, 2026",
-				"key": "ulbCount",
-				"value": 0,
-				"placeholder": "",
-				"disabled": true,
-				"disabledReason": "This value is automatically computed from City Finance registered active ULBs.",
-				"includeInPayload": false,
-				"validations": [],
-				"layout": { "variant": "inline", "labelWidth": "lg" }
-			},
-			{
-				"fieldTypes": ["DF_MAIN_FORM_FIELDS"],
-				"formFieldType": "file",
-				"key": "excelFile",
-				"label": "Upload Devolution Formula Excel",
-				"allowedFileTypes": ["xlsx", "xls"],
-				"maxFileSize": 20,
-				"folderPathKey": "devolution-formula/excels",
-				"validations": [{ "name": "required", "validator": null, "message": "Excel file is required." }],
-				"appearance": { "color": "success", "variant": "soft" },
-				"value": { "originalName": "", "path": "", "mimeType": "", "sizeKb": null, "pageCount": null }
-			},
-			{
-				"fieldTypes": ["DF_MAIN_FORM_FIELDS"],
-				"formFieldType": "checkbox",
-				"key": "checkboxConfirmation",
-				"label": "I understand that this submission may contain information entered or modified by other users. I have reviewed the final submission and confirm that the information being submitted is complete and accurate to the best of my knowledge.",
-				"value": false,
-				"validations": [
-					{ "name": "requiredTrue", "validator": null, "message": "Please confirm before submitting." }
-				]
-			},
-			{
-				"fieldTypes": ["DF_ROW_EDIT_FIELDS"],
-				"key": "totalGrantAllocation",
-				"formFieldType": "number",
-				"label": "Total Grant Allocation",
-				"validations": [
-					{ "name": "required", "validator": null, "message": "Total Grant Allocation is required." },
-					{ "name": "min", "validator": 0, "message": "Total Grant Allocation cannot be negative." }
-				]
-			},
-			{
-				"fieldTypes": ["DF_ROW_EDIT_FIELDS"],
-				"key": "installment1Amount",
-				"formFieldType": "number",
-				"label": "Installment 1 Amount",
-				"validations": [
-					{ "name": "required", "validator": null, "message": "Installment 1 Amount is required." },
-					{ "name": "min", "validator": 0, "message": "Installment 1 Amount cannot be negative." }
-				]
-			},
-			{
-				"fieldTypes": ["DF_ROW_EDIT_FIELDS"],
-				"key": "installment2Amount",
-				"formFieldType": "number",
-				"label": "Installment 2 Amount",
-				"validations": [
-					{ "name": "required", "validator": null, "message": "Installment 2 Amount is required." },
-					{ "name": "min", "validator": 0, "message": "Installment 2 Amount cannot be negative." }
-				]
-			},
-			{
-				"fieldTypes": ["DF_ROW_EDIT_FIELDS"],
-				"key": "devolutionFormula",
-				"formFieldType": "text",
-				"label": "Devolution Formula",
-				"validations": [
-					{ "name": "required", "validator": null, "message": "Devolution Formula is required." },
-					{
-						"name": "maxLength",
-						"validator": 250,
-						"message": "Devolution Formula cannot exceed 250 characters."
-					}
-				]
-			}
-		]
-	},
+  "devolutionFormula": {
+    "design_year": "67d7d136d3d038946a5239e9",
+    "formId": 24,
+    "type": "DEVOLUTION_FORMULA",
+    "isActive": true,
+    "data": [
+      {
+        "fieldTypes": ["DF_MAIN_FORM_FIELDS"],
+        "formFieldType": "number",
+        "label": "Active ULBs Registered on City Finance as of March 31, 2026",
+        "key": "ulbCount",
+        "value": 0,
+        "placeholder": "",
+        "disabled": true,
+        "disabledReason": "This value is automatically computed from City Finance registered active ULBs.",
+        "includeInPayload": false,
+        "validations": [],
+        "layout": { "variant": "inline", "labelWidth": "lg" }
+      },
+      {
+        "fieldTypes": ["DF_MAIN_FORM_FIELDS"],
+        "formFieldType": "file",
+        "key": "excelFile",
+        "label": "Upload Devolution Formula Excel",
+        "allowedFileTypes": ["xlsx", "xls"],
+        "maxFileSize": 20,
+        "folderPathKey": "devolution-formula/excels",
+        "validations": [{ "name": "required", "validator": null, "message": "Excel file is required." }],
+        "appearance": { "color": "success", "variant": "soft" },
+        "value": { "originalName": "", "path": "", "mimeType": "", "sizeKb": null, "pageCount": null }
+      },
+      {
+        "fieldTypes": ["DF_MAIN_FORM_FIELDS"],
+        "formFieldType": "checkbox",
+        "key": "checkboxConfirmation",
+        "label": "I understand that this submission may contain information entered or modified by other users. I have reviewed the final submission and confirm that the information being submitted is complete and accurate to the best of my knowledge.",
+        "value": false,
+        "validations": [{ "name": "requiredTrue", "validator": null, "message": "Please confirm before submitting." }]
+      },
+      {
+        "fieldTypes": ["DF_ROW_EDIT_FIELDS"],
+        "key": "totalGrantAllocation",
+        "formFieldType": "number",
+        "label": "Total Grant Allocation",
+        "validations": [
+          { "name": "required", "validator": null, "message": "Total Grant Allocation is required." },
+          { "name": "min", "validator": 0, "message": "Total Grant Allocation cannot be negative." }
+        ]
+      },
+      {
+        "fieldTypes": ["DF_ROW_EDIT_FIELDS"],
+        "key": "installment1Amount",
+        "formFieldType": "number",
+        "label": "Installment 1 Amount",
+        "validations": [
+          { "name": "required", "validator": null, "message": "Installment 1 Amount is required." },
+          { "name": "min", "validator": 0, "message": "Installment 1 Amount cannot be negative." }
+        ]
+      },
+      {
+        "fieldTypes": ["DF_ROW_EDIT_FIELDS"],
+        "key": "installment2Amount",
+        "formFieldType": "number",
+        "label": "Installment 2 Amount",
+        "validations": [
+          { "name": "required", "validator": null, "message": "Installment 2 Amount is required." },
+          { "name": "min", "validator": 0, "message": "Installment 2 Amount cannot be negative." }
+        ]
+      },
+      {
+        "fieldTypes": ["DF_ROW_EDIT_FIELDS"],
+        "key": "devolutionFormula",
+        "formFieldType": "text",
+        "label": "Devolution Formula",
+        "validations": [
+          { "name": "required", "validator": null, "message": "Devolution Formula is required." },
+          {
+            "name": "maxLength",
+            "validator": 250,
+            "message": "Devolution Formula cannot exceed 250 characters."
+          }
+        ]
+      }
+    ]
+  },
 
-	"electedBody": {
-		"design_year": "67d7d136d3d038946a5239e9",
-		"formId": 23,
-		"type": "ELECTED_BODY",
-		"isActive": true,
-		"data": [
-			{
-				"fieldTypes": ["EULB_MAIN_FORM_FIELDS"],
-				"formFieldType": "number",
-				"label": "Active ULBs Registered on City Finance as of March 31, 2026",
-				"key": "ulbCount",
-				"value": 0,
-				"placeholder": "",
-				"disabled": true,
-				"disabledReason": "This value is automatically computed from City Finance registered active ULBs.",
-				"includeInPayload": false,
-				"validations": [],
-				"layout": {
-					"variant": "inline",
-					"labelWidth": "lg"
-				}
-			},
-			{
-				"fieldTypes": ["EULB_MAIN_FORM_FIELDS"],
-				"formFieldType": "file",
-				"label": "Upload elected bodies list",
-				"key": "electedBodyExcelFile",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "This field is required."
-					}
-				],
-				"value": {
-					"originalName": "",
-					"path": "",
-					"mimeType": "",
-					"sizeKb": null,
-					"pageCount": null
-				},
-				"folderPathKey": "elected-body/excels",
-				"maxFileSize": 20,
-				"allowedFileTypes": ["xlsx", "xls"],
-				"appearance": {
-					"color": "success",
-					"variant": "soft"
-				}
-			},
-			{
-				"fieldTypes": ["EULB_MAIN_FORM_FIELDS"],
-				"formFieldType": "checkbox",
-				"label": "I understand that this submission may contain information entered or modified by other users. I have reviewed the final submission and confirm that the information being submitted is complete and accurate to the best of my knowledge.",
-				"key": "checkboxConfirmation",
-				"value": false,
-				"validations": [
-					{
-						"name": "requiredTrue",
-						"validator": null,
-						"message": "Please confirm before submitting."
-					}
-				]
-			},
-			{
-				"fieldTypes": ["EULB_POST_SUBMIT_UPDATE_FIELDS"],
-				"formFieldType": "file",
-				"label": "Proof of Election",
-				"key": "proofOfElection",
-				"allowedFileTypes": ["pdf"],
-				"maxFileSize": 20,
-				"folderPathKey": "elected-body/proof-of-election",
-				"value": {
-					"originalName": "",
-					"path": "",
-					"mimeType": "",
-					"sizeKb": null,
-					"pageCount": null
-				},
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "This field is required."
-					}
-				],
-				"appearance": {
-					"color": "success",
-					"variant": "soft"
-				}
-			},
-			{
-				"fieldTypes": ["EULB_EXTRA_ULB_PORTAL_FIELDS"],
-				"key": "censusCode",
-				"formFieldType": "text",
-				"label": "Census Code",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Census code is required."
-					},
-					{
-						"name": "maxlength",
-						"validator": 10,
-						"message": "Census code must not exceed 10 characters."
-					}
-				]
-			},
-			{
-				"fieldTypes": ["EULB_EXTRA_ULB_PORTAL_FIELDS"],
-				"key": "ulbName",
-				"formFieldType": "text",
-				"label": "ULB Name",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "ULB name is required."
-					},
-					{
-						"name": "maxlength",
-						"validator": 250,
-						"message": "ULB name must not exceed 250 characters."
-					}
-				]
-			},
-			{
-				"fieldTypes": ["EULB_ROW_EDIT_FIELDS", "EULB_EXTRA_ULB_PORTAL_FIELDS"],
-				"key": "electedBodyStatus",
-				"formFieldType": "select",
-				"label": "Elected Body Status",
-				"options": [
-					{
-						"id": "Constituted",
-						"label": "Constituted"
-					},
-					{
-						"id": "Not Constituted",
-						"label": "Not Constituted"
-					},
-					{
-						"id": "Exempt",
-						"label": "Exempt"
-					}
-				],
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Elected Body Status is required."
-					}
-				]
-			},
-			{
-				"fieldTypes": ["EULB_ROW_EDIT_FIELDS", "EULB_EXTRA_ULB_PORTAL_FIELDS"],
-				"key": "dateOfConstitution",
-				"formFieldType": "date",
-				"label": "Date of Constitution",
-				"minDate": "2021-05-31",
-				"maxDate": "TODAY",
-				"enabledWhen": {
-					"mode": "all",
-					"conditions": [
-						{
-							"key": "electedBodyStatus",
-							"operator": "equals",
-							"value": "Constituted"
-						}
-					]
-				},
-				"validateWhen": {
-					"mode": "all",
-					"conditions": [
-						{
-							"key": "electedBodyStatus",
-							"operator": "equals",
-							"value": "Constituted"
-						}
-					]
-				},
-				"clearValueWhenDisabled": true,
-				"disabledReason": "Not applicable unless Elected Body Status is Constituted.",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Date of Constitution is required."
-					},
-					{
-						"name": "minDate",
-						"validator": "2021-05-31",
-						"message": "Date of Constitution cannot be before 31 May 2021."
-					},
-					{
-						"name": "maxDate",
-						"validator": "TODAY",
-						"message": "Date of Constitution cannot be a future date."
-					}
-				]
-			},
-			{
-				"fieldTypes": ["EULB_ROW_EDIT_FIELDS", "EULB_EXTRA_ULB_PORTAL_FIELDS"],
-				"key": "dateOfExpiry",
-				"formFieldType": "date",
-				"label": "Date of Expiry",
-				"minDate": "TODAY",
-				"maxDate": "2030-03-31",
-				"enabledWhen": {
-					"mode": "all",
-					"conditions": [
-						{
-							"key": "electedBodyStatus",
-							"operator": "equals",
-							"value": "Constituted"
-						}
-					]
-				},
-				"validateWhen": {
-					"mode": "all",
-					"conditions": [
-						{
-							"key": "electedBodyStatus",
-							"operator": "equals",
-							"value": "Constituted"
-						}
-					]
-				},
-				"clearValueWhenDisabled": true,
-				"disabledReason": "Not applicable unless Elected Body Status is Constituted.",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Date of Expiry is required."
-					},
-					{
-						"name": "minDate",
-						"validator": "TODAY",
-						"message": "Date of Expiry cannot be before today."
-					},
-					{
-						"name": "maxDate",
-						"validator": "2030-03-31",
-						"message": "Date of Expiry cannot be after 31 March 2030."
-					}
-				]
-			},
-			{
-				"fieldTypes": ["EULB_ROW_EDIT_FIELDS", "EULB_EXTRA_ULB_PORTAL_FIELDS"],
-				"key": "remarks",
-				"formFieldType": "text",
-				"label": "Remarks",
-				"validations": [
-					{
-						"name": "maxlength",
-						"validator": 250,
-						"message": "Remarks cannot exceed 250 characters."
-					}
-				]
-			}
-		]
-	},
+  "electedBody": {
+    "design_year": "67d7d136d3d038946a5239e9",
+    "formId": 23,
+    "type": "ELECTED_BODY",
+    "isActive": true,
+    "data": [
+      {
+        "fieldTypes": ["EULB_MAIN_FORM_FIELDS"],
+        "formFieldType": "number",
+        "label": "Active ULBs Registered on City Finance as of March 31, 2026",
+        "key": "ulbCount",
+        "value": 0,
+        "placeholder": "",
+        "disabled": true,
+        "disabledReason": "This value is automatically computed from City Finance registered active ULBs.",
+        "includeInPayload": false,
+        "validations": [],
+        "layout": {
+          "variant": "inline",
+          "labelWidth": "lg"
+        }
+      },
+      {
+        "fieldTypes": ["EULB_MAIN_FORM_FIELDS"],
+        "formFieldType": "file",
+        "label": "Upload elected bodies list",
+        "key": "electedBodyExcelFile",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "This field is required."
+          }
+        ],
+        "value": {
+          "originalName": "",
+          "path": "",
+          "mimeType": "",
+          "sizeKb": null,
+          "pageCount": null
+        },
+        "folderPathKey": "elected-body/excels",
+        "maxFileSize": 20,
+        "allowedFileTypes": ["xlsx", "xls"],
+        "appearance": {
+          "color": "success",
+          "variant": "soft"
+        }
+      },
+      {
+        "fieldTypes": ["EULB_MAIN_FORM_FIELDS"],
+        "formFieldType": "checkbox",
+        "label": "I understand that this submission may contain information entered or modified by other users. I have reviewed the final submission and confirm that the information being submitted is complete and accurate to the best of my knowledge.",
+        "key": "checkboxConfirmation",
+        "value": false,
+        "validations": [
+          {
+            "name": "requiredTrue",
+            "validator": null,
+            "message": "Please confirm before submitting."
+          }
+        ]
+      },
+      {
+        "fieldTypes": ["EULB_POST_SUBMIT_UPDATE_FIELDS"],
+        "formFieldType": "file",
+        "label": "Proof of Election",
+        "key": "proofOfElection",
+        "allowedFileTypes": ["pdf"],
+        "maxFileSize": 20,
+        "folderPathKey": "elected-body/proof-of-election",
+        "value": {
+          "originalName": "",
+          "path": "",
+          "mimeType": "",
+          "sizeKb": null,
+          "pageCount": null
+        },
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "This field is required."
+          }
+        ],
+        "appearance": {
+          "color": "success",
+          "variant": "soft"
+        }
+      },
+      {
+        "fieldTypes": ["EULB_EXTRA_ULB_PORTAL_FIELDS"],
+        "key": "censusCode",
+        "formFieldType": "text",
+        "label": "Census Code",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Census code is required."
+          },
+          {
+            "name": "maxlength",
+            "validator": 10,
+            "message": "Census code must not exceed 10 characters."
+          }
+        ]
+      },
+      {
+        "fieldTypes": ["EULB_EXTRA_ULB_PORTAL_FIELDS"],
+        "key": "ulbName",
+        "formFieldType": "text",
+        "label": "ULB Name",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "ULB name is required."
+          },
+          {
+            "name": "maxlength",
+            "validator": 250,
+            "message": "ULB name must not exceed 250 characters."
+          }
+        ]
+      },
+      {
+        "fieldTypes": ["EULB_ROW_EDIT_FIELDS", "EULB_EXTRA_ULB_PORTAL_FIELDS"],
+        "key": "electedBodyStatus",
+        "formFieldType": "select",
+        "label": "Elected Body Status",
+        "options": [
+          {
+            "id": "Constituted",
+            "label": "Constituted"
+          },
+          {
+            "id": "Not Constituted",
+            "label": "Not Constituted"
+          },
+          {
+            "id": "Exempt",
+            "label": "Exempt"
+          }
+        ],
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Elected Body Status is required."
+          }
+        ]
+      },
+      {
+        "fieldTypes": ["EULB_ROW_EDIT_FIELDS", "EULB_EXTRA_ULB_PORTAL_FIELDS"],
+        "key": "dateOfConstitution",
+        "formFieldType": "date",
+        "label": "Date of Constitution",
+        "minDate": "2021-05-31",
+        "maxDate": "TODAY",
+        "enabledWhen": {
+          "mode": "all",
+          "conditions": [
+            {
+              "key": "electedBodyStatus",
+              "operator": "equals",
+              "value": "Constituted"
+            }
+          ]
+        },
+        "validateWhen": {
+          "mode": "all",
+          "conditions": [
+            {
+              "key": "electedBodyStatus",
+              "operator": "equals",
+              "value": "Constituted"
+            }
+          ]
+        },
+        "clearValueWhenDisabled": true,
+        "disabledReason": "Not applicable unless Elected Body Status is Constituted.",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Date of Constitution is required."
+          },
+          {
+            "name": "minDate",
+            "validator": "2021-05-31",
+            "message": "Date of Constitution cannot be before 31 May 2021."
+          },
+          {
+            "name": "maxDate",
+            "validator": "TODAY",
+            "message": "Date of Constitution cannot be a future date."
+          }
+        ]
+      },
+      {
+        "fieldTypes": ["EULB_ROW_EDIT_FIELDS", "EULB_EXTRA_ULB_PORTAL_FIELDS"],
+        "key": "dateOfExpiry",
+        "formFieldType": "date",
+        "label": "Date of Expiry",
+        "minDate": "TODAY",
+        "maxDate": "2030-03-31",
+        "enabledWhen": {
+          "mode": "all",
+          "conditions": [
+            {
+              "key": "electedBodyStatus",
+              "operator": "equals",
+              "value": "Constituted"
+            }
+          ]
+        },
+        "validateWhen": {
+          "mode": "all",
+          "conditions": [
+            {
+              "key": "electedBodyStatus",
+              "operator": "equals",
+              "value": "Constituted"
+            }
+          ]
+        },
+        "clearValueWhenDisabled": true,
+        "disabledReason": "Not applicable unless Elected Body Status is Constituted.",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Date of Expiry is required."
+          },
+          {
+            "name": "minDate",
+            "validator": "TODAY",
+            "message": "Date of Expiry cannot be before today."
+          },
+          {
+            "name": "maxDate",
+            "validator": "2030-03-31",
+            "message": "Date of Expiry cannot be after 31 March 2030."
+          }
+        ]
+      },
+      {
+        "fieldTypes": ["EULB_ROW_EDIT_FIELDS", "EULB_EXTRA_ULB_PORTAL_FIELDS"],
+        "key": "remarks",
+        "formFieldType": "text",
+        "label": "Remarks",
+        "validations": [
+          {
+            "name": "maxlength",
+            "validator": 250,
+            "message": "Remarks cannot exceed 250 characters."
+          }
+        ]
+      }
+    ]
+  },
 
-	"fcUnspent": {
-		"design_year": "67d7d136d3d038946a5239e9",
-		"formId": 25,
-		"type": "FC_UNSPENT_STATE",
-		"isActive": true,
-		"data": [
-			{
-				"fieldTypes": ["FC_UNSPENT_MAIN_FORM_FIELDS"],
-				"formFieldType": "radio",
-				"label": "Do any ULBs in the state have unspent 14th FC balance to report?",
-				"key": "isFcUnspent",
-				"value": "no",
-				"options": [
-					{
-						"label": "No (no ULB in the state has unspent 14th FC balance to report)",
-						"id": "no"
-					},
-					{
-						"label": "Yes (one or more ULBs have unspent 14th FC balance to report)",
-						"id": "yes"
-					}
-				],
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "This field is required."
-					}
-				],
-				"radioLayout": "vertical",
-				"supportingContent": [
-					{
-						"type": "info",
-						"position": "after",
-						"description": "Select No if your state has confirmed that none of its ULBs hold any unspent 14th Finance Commission balance. Select Yes if one or more ULBs need to report a balance."
-					}
-				]
-			},
-			{
-				"fieldTypes": ["FC_UNSPENT_MAIN_FORM_FIELDS"],
-				"formFieldType": "file",
-				"label": "State-Level Declaration - 14th Finance Commission",
-				"key": "fcDeclaration",
-				"value": null,
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "This field is required."
-					}
-				],
-				"folderPathKey": "fc-unspent/fc-declaration",
-				"maxFileSize": 5,
-				"allowedFileTypes": ["pdf"],
-				"appearance": {
-					"color": "success",
-					"variant": "soft"
-				},
-				"visibleWhen": {
-					"mode": "all",
-					"conditions": [
-						{
-							"key": "isFcUnspent",
-							"operator": "equals",
-							"value": "no"
-						}
-					]
-				},
-				"clearValueWhenDisabled": true,
-				"layout": {
-					"variant": "inline",
-					"labelWidth": "lg"
-				},
-				"supportingContent": [
-					{
-						"type": "actions",
-						"position": "before",
-						"layout": "inline",
-						"separator": "dot",
-						"description": "Download the official template, have it signed by the authorized State DMA officer, and upload the signed declaration. Declarations on unofficial letterhead will not be accepted.",
-						"actions": [
-							{
-								"id": "download-template",
-								"label": "Download the official template",
-								"icon": "bi bi-file-earmark-word",
-								"tone": "primary",
-								"visible": true,
-								"meta": {
-									"path": "xvi-fc/state/common/2026-27/fc-unspent/fc-declaration-template/FC-Unspent-Declaration_9ef58a73-82ef-43b7-991f-02257fcde890.docx",
-									"fileName": "FC-Unspent-Declaration-2026-27.docx",
-									"mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-								}
-							}
-						],
-						"badges": []
-					}
-				]
-			},
-			{
-				"fieldTypes": ["FC_UNSPENT_MAIN_FORM_FIELDS"],
-				"formFieldType": "checkbox",
-				"key": "checkboxConfirmation",
-				"label": "I certify that the 14th FC unspent balances entered above have been compiled from figures reported by each ULB, and are accurate to the best of my knowledge.",
-				"value": false,
-				"validations": [
-					{
-						"name": "requiredTrue",
-						"validator": null,
-						"message": "Please confirm before submitting."
-					}
-				],
-				"visibleWhen": {
-					"mode": "all",
-					"conditions": [
-						{
-							"key": "isFcUnspent",
-							"operator": "equals",
-							"value": "yes"
-						}
-					]
-				},
-				"clearValueWhenDisabled": true
-			},
-			{
-				"fieldTypes": ["FC_UNSPENT_ROW_EDIT_FIELDS"],
-				"formFieldType": "select",
-				"key": "ulbId",
-				"label": "ULB",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "ULB selection is required."
-					}
-				]
-			},
-			{
-				"fieldTypes": ["FC_UNSPENT_ROW_EDIT_FIELDS"],
-				"formFieldType": "number",
-				"key": "unspentAmount",
-				"label": "Unspent Amount",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Unspent amount is required."
-					},
-					{
-						"name": "min",
-						"validator": 5e-324,
-						"message": "Unspent amount must be greater than zero."
-					},
-					{
-						"name": "max",
-						"validator": 1000,
-						"message": "Unspent amount cannot exceed 1000."
-					}
-				]
-			},
-			{
-				"fieldTypes": ["FC_UNSPENT_ROW_EDIT_FIELDS"],
-				"formFieldType": "text",
-				"key": "censusCode",
-				"label": "Census Code",
-				"disabled": true,
-				"includeInPayload": false,
-				"validations": []
-			},
-			{
-				"fieldTypes": ["FC_UNSPENT_ROW_EDIT_FIELDS"],
-				"formFieldType": "text",
-				"key": "sbCode",
-				"label": "SB Code",
-				"disabled": true,
-				"includeInPayload": false,
-				"validations": []
-			},
-			{
-				"fieldTypes": ["FC_UNSPENT_ROW_EDIT_FIELDS"],
-				"formFieldType": "text",
-				"key": "ulbName",
-				"label": "ULB Name",
-				"disabled": true,
-				"includeInPayload": false,
-				"validations": []
-			},
-			{
-				"fieldTypes": ["FC_UNSPENT_ROW_EDIT_FIELDS"],
-				"formFieldType": "number",
-				"key": "allocationAmount",
-				"label": "Devolution Allocation Amount",
-				"disabled": true,
-				"includeInPayload": false,
-				"validations": []
-			},
-			{
-				"fieldTypes": ["FC_UNSPENT_ROW_EDIT_FIELDS"],
-				"formFieldType": "number",
-				"key": "allocationPerc",
-				"label": "Allocation %",
-				"disabled": true,
-				"includeInPayload": false,
-				"validations": []
-			},
-			{
-				"fieldTypes": ["FC_UNSPENT_ROW_EDIT_FIELDS"],
-				"formFieldType": "text",
-				"key": "eligibility",
-				"label": "Eligible",
-				"disabled": true,
-				"includeInPayload": false,
-				"validations": []
-			}
-		]
-	},
+  "fcUnspent": {
+    "design_year": "67d7d136d3d038946a5239e9",
+    "formId": 25,
+    "type": "FC_UNSPENT_STATE",
+    "isActive": true,
+    "data": [
+      {
+        "fieldTypes": ["FC_UNSPENT_MAIN_FORM_FIELDS"],
+        "formFieldType": "radio",
+        "label": "Do any ULBs in the state have unspent 14th FC balance to report?",
+        "key": "isFcUnspent",
+        "value": "no",
+        "options": [
+          {
+            "label": "No (no ULB in the state has unspent 14th FC balance to report)",
+            "id": "no"
+          },
+          {
+            "label": "Yes (one or more ULBs have unspent 14th FC balance to report)",
+            "id": "yes"
+          }
+        ],
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "This field is required."
+          }
+        ],
+        "radioLayout": "vertical",
+        "supportingContent": [
+          {
+            "type": "info",
+            "position": "after",
+            "description": "Select No if your state has confirmed that none of its ULBs hold any unspent 14th Finance Commission balance. Select Yes if one or more ULBs need to report a balance."
+          }
+        ]
+      },
+      {
+        "fieldTypes": ["FC_UNSPENT_MAIN_FORM_FIELDS"],
+        "formFieldType": "file",
+        "label": "State-Level Declaration - 14th Finance Commission",
+        "key": "fcDeclaration",
+        "value": null,
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "This field is required."
+          }
+        ],
+        "folderPathKey": "fc-unspent/fc-declaration",
+        "maxFileSize": 5,
+        "allowedFileTypes": ["pdf"],
+        "appearance": {
+          "color": "success",
+          "variant": "soft"
+        },
+        "visibleWhen": {
+          "mode": "all",
+          "conditions": [
+            {
+              "key": "isFcUnspent",
+              "operator": "equals",
+              "value": "no"
+            }
+          ]
+        },
+        "clearValueWhenDisabled": true,
+        "layout": {
+          "variant": "inline",
+          "labelWidth": "lg"
+        },
+        "supportingContent": [
+          {
+            "type": "actions",
+            "position": "before",
+            "layout": "inline",
+            "separator": "dot",
+            "description": "Download the official template, have it signed by the authorized State DMA officer, and upload the signed declaration. Declarations on unofficial letterhead will not be accepted.",
+            "actions": [
+              {
+                "id": "download-template",
+                "label": "Download the official template",
+                "icon": "bi bi-file-earmark-word",
+                "tone": "primary",
+                "visible": true,
+                "meta": {
+                  "path": "xvi-fc/state/common/2026-27/fc-unspent/fc-declaration-template/FC-Unspent-Declaration_9ef58a73-82ef-43b7-991f-02257fcde890.docx",
+                  "fileName": "FC-Unspent-Declaration-2026-27.docx",
+                  "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                }
+              }
+            ],
+            "badges": []
+          }
+        ]
+      },
+      {
+        "fieldTypes": ["FC_UNSPENT_MAIN_FORM_FIELDS"],
+        "formFieldType": "checkbox",
+        "key": "checkboxConfirmation",
+        "label": "I certify that the 14th FC unspent balances entered above have been compiled from figures reported by each ULB, and are accurate to the best of my knowledge.",
+        "value": false,
+        "validations": [
+          {
+            "name": "requiredTrue",
+            "validator": null,
+            "message": "Please confirm before submitting."
+          }
+        ],
+        "visibleWhen": {
+          "mode": "all",
+          "conditions": [
+            {
+              "key": "isFcUnspent",
+              "operator": "equals",
+              "value": "yes"
+            }
+          ]
+        },
+        "clearValueWhenDisabled": true
+      },
+      {
+        "fieldTypes": ["FC_UNSPENT_ROW_EDIT_FIELDS"],
+        "formFieldType": "select",
+        "key": "ulbId",
+        "label": "ULB",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "ULB selection is required."
+          }
+        ]
+      },
+      {
+        "fieldTypes": ["FC_UNSPENT_ROW_EDIT_FIELDS"],
+        "formFieldType": "number",
+        "key": "unspentAmount",
+        "label": "Unspent Amount",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Unspent amount is required."
+          },
+          {
+            "name": "min",
+            "validator": 5e-324,
+            "message": "Unspent amount must be greater than zero."
+          },
+          {
+            "name": "max",
+            "validator": 1000,
+            "message": "Unspent amount cannot exceed 1000."
+          }
+        ]
+      },
+      {
+        "fieldTypes": ["FC_UNSPENT_ROW_EDIT_FIELDS"],
+        "formFieldType": "text",
+        "key": "censusCode",
+        "label": "Census Code",
+        "disabled": true,
+        "includeInPayload": false,
+        "validations": []
+      },
+      {
+        "fieldTypes": ["FC_UNSPENT_ROW_EDIT_FIELDS"],
+        "formFieldType": "text",
+        "key": "sbCode",
+        "label": "SB Code",
+        "disabled": true,
+        "includeInPayload": false,
+        "validations": []
+      },
+      {
+        "fieldTypes": ["FC_UNSPENT_ROW_EDIT_FIELDS"],
+        "formFieldType": "text",
+        "key": "ulbName",
+        "label": "ULB Name",
+        "disabled": true,
+        "includeInPayload": false,
+        "validations": []
+      },
+      {
+        "fieldTypes": ["FC_UNSPENT_ROW_EDIT_FIELDS"],
+        "formFieldType": "number",
+        "key": "allocationAmount",
+        "label": "Devolution Allocation Amount",
+        "disabled": true,
+        "includeInPayload": false,
+        "validations": []
+      },
+      {
+        "fieldTypes": ["FC_UNSPENT_ROW_EDIT_FIELDS"],
+        "formFieldType": "number",
+        "key": "allocationPerc",
+        "label": "Allocation %",
+        "disabled": true,
+        "includeInPayload": false,
+        "validations": []
+      },
+      {
+        "fieldTypes": ["FC_UNSPENT_ROW_EDIT_FIELDS"],
+        "formFieldType": "text",
+        "key": "eligibility",
+        "label": "Eligible",
+        "disabled": true,
+        "includeInPayload": false,
+        "validations": []
+      }
+    ]
+  },
 
-	"fcUnspent-download-template": {
-		"url": "https://dev.cityfinance.in/api/v1/getS3Url",
-		"method": "POST",
-		"payload": [
-			{
-				"folder": "xvi-fc/state/common/2026-27/fc-unspent/fc-declaration-template",
-				"file_name": "FC-Unspent-Declaration.docx",
-				"mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-			}
-		]
-	},
+  "fcUnspent-download-template": {
+    "url": "https://dev.cityfinance.in/api/v1/getS3Url",
+    "method": "POST",
+    "payload": [
+      {
+        "folder": "xvi-fc/state/common/2026-27/fc-unspent/fc-declaration-template",
+        "file_name": "FC-Unspent-Declaration.docx",
+        "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      }
+    ]
+  },
 
-	"28Slb": {
-		"design_year": "67d7d136d3d038946a5239e9",
-		"formId": 32,
-		"type": "SLB",
-		"isActive": true,
-		"data": [
-			{
-				"key": "ind1_actual",
-				"label": "1. Per capita supply of water — Actual (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "lpcd",
-				"placeholder": "0-1000",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Actual value for indicator 1 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 1000,
-						"message": "Value cannot exceed 1000 lpcd."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Water Supply",
-					"indicatorNumber": 1,
-					"unit": "lpcd"
-				}
-			},
-			{
-				"key": "ind1_target",
-				"label": "1. Per capita supply of water — Target (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "lpcd",
-				"placeholder": "0-1000",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Target value for indicator 1 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 1000,
-						"message": "Value cannot exceed 1000 lpcd."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Water Supply",
-					"indicatorNumber": 1,
-					"unit": "lpcd"
-				}
-			},
-			{
-				"key": "ind2_actual",
-				"label": "2. Extent of metering of water connections — Actual (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Actual value for indicator 2 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Water Supply",
-					"indicatorNumber": 2,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind2_target",
-				"label": "2. Extent of metering of water connections — Target (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Target value for indicator 2 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Water Supply",
-					"indicatorNumber": 2,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind3_actual",
-				"label": "3. Efficiency in redressal of customer complaints (Water Supply) — Actual (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Actual value for indicator 3 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Water Supply",
-					"indicatorNumber": 3,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind3_target",
-				"label": "3. Efficiency in redressal of customer complaints (Water Supply) — Target (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Target value for indicator 3 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Water Supply",
-					"indicatorNumber": 3,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind4_actual",
-				"label": "4. Quality of water supplied — Actual (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Actual value for indicator 4 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Water Supply",
-					"indicatorNumber": 4,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind4_target",
-				"label": "4. Quality of water supplied — Target (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Target value for indicator 4 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Water Supply",
-					"indicatorNumber": 4,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind5_actual",
-				"label": "5. Cost recovery in water supply services — Actual (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Actual value for indicator 5 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Water Supply",
-					"indicatorNumber": 5,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind5_target",
-				"label": "5. Cost recovery in water supply services — Target (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Target value for indicator 5 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Water Supply",
-					"indicatorNumber": 5,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind6_actual",
-				"label": "6. Coverage of water supply connections — Actual (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Actual value for indicator 6 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Water Supply",
-					"indicatorNumber": 6,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind6_target",
-				"label": "6. Coverage of water supply connections — Target (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Target value for indicator 6 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Water Supply",
-					"indicatorNumber": 6,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind7_actual",
-				"label": "7. Extent of non-revenue water (NRW) — Actual (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Actual value for indicator 7 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Water Supply",
-					"indicatorNumber": 7,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind7_target",
-				"label": "7. Extent of non-revenue water (NRW) — Target (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Target value for indicator 7 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Water Supply",
-					"indicatorNumber": 7,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind8_actual",
-				"label": "8. Continuity of water supply — Actual (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "Hours/day",
-				"placeholder": "0-24",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Actual value for indicator 8 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 24,
-						"message": "Value cannot exceed 24 Hours/day."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Water Supply",
-					"indicatorNumber": 8,
-					"unit": "Hours/day"
-				}
-			},
-			{
-				"key": "ind8_target",
-				"label": "8. Continuity of water supply — Target (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "Hours/day",
-				"placeholder": "0-24",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Target value for indicator 8 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 24,
-						"message": "Value cannot exceed 24 Hours/day."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Water Supply",
-					"indicatorNumber": 8,
-					"unit": "Hours/day"
-				}
-			},
-			{
-				"key": "ind9_actual",
-				"label": "9. Efficiency in collection of water supply-related charges — Actual (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Actual value for indicator 9 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Water Supply",
-					"indicatorNumber": 9,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind9_target",
-				"label": "9. Efficiency in collection of water supply-related charges — Target (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Target value for indicator 9 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Water Supply",
-					"indicatorNumber": 9,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind10_actual",
-				"label": "10. Adequacy of waste water treatment capacity — Actual (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Actual value for indicator 10 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Sewerage & Waste Water",
-					"indicatorNumber": 10,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind10_target",
-				"label": "10. Adequacy of waste water treatment capacity — Target (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Target value for indicator 10 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Sewerage & Waste Water",
-					"indicatorNumber": 10,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind11_actual",
-				"label": "11. Quality of waste water treatment — Actual (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Actual value for indicator 11 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Sewerage & Waste Water",
-					"indicatorNumber": 11,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind11_target",
-				"label": "11. Quality of waste water treatment — Target (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Target value for indicator 11 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Sewerage & Waste Water",
-					"indicatorNumber": 11,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind12_actual",
-				"label": "12. Efficiency in redressal of customer complaints (Waste Water) — Actual (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Actual value for indicator 12 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Sewerage & Waste Water",
-					"indicatorNumber": 12,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind12_target",
-				"label": "12. Efficiency in redressal of customer complaints (Waste Water) — Target (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Target value for indicator 12 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Sewerage & Waste Water",
-					"indicatorNumber": 12,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind13_actual",
-				"label": "13. Collection efficiency of waste water network — Actual (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Actual value for indicator 13 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Sewerage & Waste Water",
-					"indicatorNumber": 13,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind13_target",
-				"label": "13. Collection efficiency of waste water network — Target (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Target value for indicator 13 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Sewerage & Waste Water",
-					"indicatorNumber": 13,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind14_actual",
-				"label": "14. Coverage of toilets — Actual (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Actual value for indicator 14 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Sewerage & Waste Water",
-					"indicatorNumber": 14,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind14_target",
-				"label": "14. Coverage of toilets — Target (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Target value for indicator 14 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Sewerage & Waste Water",
-					"indicatorNumber": 14,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind15_actual",
-				"label": "15. Coverage of waste water network services — Actual (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Actual value for indicator 15 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Sewerage & Waste Water",
-					"indicatorNumber": 15,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind15_target",
-				"label": "15. Coverage of waste water network services — Target (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Target value for indicator 15 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Sewerage & Waste Water",
-					"indicatorNumber": 15,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind16_actual",
-				"label": "16. Extent of reuse and recycling of waste water — Actual (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Actual value for indicator 16 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Sewerage & Waste Water",
-					"indicatorNumber": 16,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind16_target",
-				"label": "16. Extent of reuse and recycling of waste water — Target (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Target value for indicator 16 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Sewerage & Waste Water",
-					"indicatorNumber": 16,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind17_actual",
-				"label": "17. Extent of cost recovery in waste water — Actual (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Actual value for indicator 17 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Sewerage & Waste Water",
-					"indicatorNumber": 17,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind17_target",
-				"label": "17. Extent of cost recovery in waste water — Target (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Target value for indicator 17 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Sewerage & Waste Water",
-					"indicatorNumber": 17,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind18_actual",
-				"label": "18. Efficiency in collection of waste water charges — Actual (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Actual value for indicator 18 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Sewerage & Waste Water",
-					"indicatorNumber": 18,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind18_target",
-				"label": "18. Efficiency in collection of waste water charges — Target (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Target value for indicator 18 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Sewerage & Waste Water",
-					"indicatorNumber": 18,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind19_actual",
-				"label": "19. Extent of cost recovery in SWM services — Actual (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Actual value for indicator 19 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Solid Waste Management",
-					"indicatorNumber": 19,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind19_target",
-				"label": "19. Extent of cost recovery in SWM services — Target (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Target value for indicator 19 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Solid Waste Management",
-					"indicatorNumber": 19,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind20_actual",
-				"label": "20. Efficiency in redressal of customer complaints (SWM) — Actual (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Actual value for indicator 20 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Solid Waste Management",
-					"indicatorNumber": 20,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind20_target",
-				"label": "20. Efficiency in redressal of customer complaints (SWM) — Target (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Target value for indicator 20 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Solid Waste Management",
-					"indicatorNumber": 20,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind21_actual",
-				"label": "21. Efficiency in collection of SWM related user charges — Actual (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Actual value for indicator 21 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Solid Waste Management",
-					"indicatorNumber": 21,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind21_target",
-				"label": "21. Efficiency in collection of SWM related user charges — Target (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Target value for indicator 21 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Solid Waste Management",
-					"indicatorNumber": 21,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind22_actual",
-				"label": "22. Efficiency of collection of municipal solid waste — Actual (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Actual value for indicator 22 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Solid Waste Management",
-					"indicatorNumber": 22,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind22_target",
-				"label": "22. Efficiency of collection of municipal solid waste — Target (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Target value for indicator 22 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Solid Waste Management",
-					"indicatorNumber": 22,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind23_actual",
-				"label": "23. Extent of segregation of municipal solid waste — Actual (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Actual value for indicator 23 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Solid Waste Management",
-					"indicatorNumber": 23,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind23_target",
-				"label": "23. Extent of segregation of municipal solid waste — Target (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Target value for indicator 23 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Solid Waste Management",
-					"indicatorNumber": 23,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind24_actual",
-				"label": "24. Extent of municipal solid waste recovered — Actual (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Actual value for indicator 24 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Solid Waste Management",
-					"indicatorNumber": 24,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind24_target",
-				"label": "24. Extent of municipal solid waste recovered — Target (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Target value for indicator 24 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Solid Waste Management",
-					"indicatorNumber": 24,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind25_actual",
-				"label": "25. Extent of scientific disposal of municipal solid waste — Actual (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Actual value for indicator 25 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Solid Waste Management",
-					"indicatorNumber": 25,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind25_target",
-				"label": "25. Extent of scientific disposal of municipal solid waste — Target (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Target value for indicator 25 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Solid Waste Management",
-					"indicatorNumber": 25,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind26_actual",
-				"label": "26. Household level coverage of solid waste management services — Actual (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Actual value for indicator 26 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Solid Waste Management",
-					"indicatorNumber": 26,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind26_target",
-				"label": "26. Household level coverage of solid waste management services — Target (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Target value for indicator 26 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Solid Waste Management",
-					"indicatorNumber": 26,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind27_actual",
-				"label": "27. Coverage of storm water drainage network — Actual (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Actual value for indicator 27 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Storm Water Drainage",
-					"indicatorNumber": 27,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind27_target",
-				"label": "27. Coverage of storm water drainage network — Target (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "%",
-				"placeholder": "0-100",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Target value for indicator 27 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 100,
-						"message": "Value cannot exceed 100%."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Storm Water Drainage",
-					"indicatorNumber": 27,
-					"unit": "%"
-				}
-			},
-			{
-				"key": "ind28_actual",
-				"label": "28. Incidence of water logging — Actual (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "Non./Year",
-				"placeholder": "0-999",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Actual value for indicator 28 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 999,
-						"message": "Value cannot exceed 999 Non./Year."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Storm Water Drainage",
-					"indicatorNumber": 28,
-					"unit": "Non./Year"
-				}
-			},
-			{
-				"key": "ind28_target",
-				"label": "28. Incidence of water logging — Target (FY 2026-27)",
-				"formFieldType": "number",
-				"required": true,
-				"decimal": 2,
-				"suffixText": "Non./Year",
-				"placeholder": "0-999",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Target value for indicator 28 is required."
-					},
-					{
-						"name": "min",
-						"validator": 0,
-						"message": "Value cannot be negative."
-					},
-					{
-						"name": "max",
-						"validator": 999,
-						"message": "Value cannot exceed 999 Non./Year."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
-				"meta": {
-					"sector": "Storm Water Drainage",
-					"indicatorNumber": 28,
-					"unit": "Non./Year"
-				}
-			},
-			{
-				"key": "declarantName",
-				"label": "Name",
-				"formFieldType": "text",
-				"required": true,
-				"placeholder": "Full name",
-				"maxLength": 100,
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Name is required."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"]
-			},
-			{
-				"key": "declarantDesignation",
-				"label": "Designation",
-				"formFieldType": "text",
-				"required": true,
-				"placeholder": "e.g. Municipal Engineer",
-				"maxLength": 100,
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "Designation is required."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"]
-			},
-			{
-				"key": "supportingDocument",
-				"label": "Supporting Document",
-				"formFieldType": "file",
-				"required": true,
-				"folderPathKey": "slb/supporting-document",
-				"allowedFileTypes": ["pdf", "jpg", "jpeg", "png"],
-				"maxFileSize": 20971520,
-				"fileViewType": "button",
-				"validations": [
-					{
-						"name": "required",
-						"validator": null,
-						"message": "A supporting document is required."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"]
-			},
-			{
-				"key": "checkboxConfirmation",
-				"label": "I certify that the information above is complete and accurate to the best of my knowledge.",
-				"formFieldType": "checkbox",
-				"required": true,
-				"validations": [
-					{
-						"name": "requiredTrue",
-						"validator": null,
-						"message": "You must confirm this declaration before submitting."
-					}
-				],
-				"fieldTypes": ["SLB_MAIN_FORM_FIELDS"]
-			}
-		]
-	}
+  "28Slb": {
+    "design_year": "67d7d136d3d038946a5239e9",
+    "formId": 32,
+    "type": "SLB",
+    "isActive": true,
+    "data": [
+      {
+        "key": "ind1_actual",
+        "label": "1. Per capita supply of water — Actual (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "lpcd",
+        "placeholder": "0-1000",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Actual value for indicator 1 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 1000,
+            "message": "Value cannot exceed 1000 lpcd."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Water Supply",
+          "indicatorNumber": 1,
+          "unit": "lpcd"
+        }
+      },
+      {
+        "key": "ind1_target",
+        "label": "1. Per capita supply of water — Target (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "lpcd",
+        "placeholder": "0-1000",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Target value for indicator 1 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 1000,
+            "message": "Value cannot exceed 1000 lpcd."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Water Supply",
+          "indicatorNumber": 1,
+          "unit": "lpcd"
+        }
+      },
+      {
+        "key": "ind2_actual",
+        "label": "2. Extent of metering of water connections — Actual (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Actual value for indicator 2 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Water Supply",
+          "indicatorNumber": 2,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind2_target",
+        "label": "2. Extent of metering of water connections — Target (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Target value for indicator 2 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Water Supply",
+          "indicatorNumber": 2,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind3_actual",
+        "label": "3. Efficiency in redressal of customer complaints (Water Supply) — Actual (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Actual value for indicator 3 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Water Supply",
+          "indicatorNumber": 3,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind3_target",
+        "label": "3. Efficiency in redressal of customer complaints (Water Supply) — Target (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Target value for indicator 3 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Water Supply",
+          "indicatorNumber": 3,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind4_actual",
+        "label": "4. Quality of water supplied — Actual (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Actual value for indicator 4 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Water Supply",
+          "indicatorNumber": 4,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind4_target",
+        "label": "4. Quality of water supplied — Target (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Target value for indicator 4 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Water Supply",
+          "indicatorNumber": 4,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind5_actual",
+        "label": "5. Cost recovery in water supply services — Actual (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Actual value for indicator 5 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Water Supply",
+          "indicatorNumber": 5,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind5_target",
+        "label": "5. Cost recovery in water supply services — Target (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Target value for indicator 5 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Water Supply",
+          "indicatorNumber": 5,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind6_actual",
+        "label": "6. Coverage of water supply connections — Actual (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Actual value for indicator 6 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Water Supply",
+          "indicatorNumber": 6,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind6_target",
+        "label": "6. Coverage of water supply connections — Target (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Target value for indicator 6 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Water Supply",
+          "indicatorNumber": 6,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind7_actual",
+        "label": "7. Extent of non-revenue water (NRW) — Actual (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Actual value for indicator 7 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Water Supply",
+          "indicatorNumber": 7,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind7_target",
+        "label": "7. Extent of non-revenue water (NRW) — Target (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Target value for indicator 7 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Water Supply",
+          "indicatorNumber": 7,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind8_actual",
+        "label": "8. Continuity of water supply — Actual (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "Hours/day",
+        "placeholder": "0-24",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Actual value for indicator 8 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 24,
+            "message": "Value cannot exceed 24 Hours/day."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Water Supply",
+          "indicatorNumber": 8,
+          "unit": "Hours/day"
+        }
+      },
+      {
+        "key": "ind8_target",
+        "label": "8. Continuity of water supply — Target (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "Hours/day",
+        "placeholder": "0-24",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Target value for indicator 8 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 24,
+            "message": "Value cannot exceed 24 Hours/day."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Water Supply",
+          "indicatorNumber": 8,
+          "unit": "Hours/day"
+        }
+      },
+      {
+        "key": "ind9_actual",
+        "label": "9. Efficiency in collection of water supply-related charges — Actual (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Actual value for indicator 9 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Water Supply",
+          "indicatorNumber": 9,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind9_target",
+        "label": "9. Efficiency in collection of water supply-related charges — Target (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Target value for indicator 9 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Water Supply",
+          "indicatorNumber": 9,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind10_actual",
+        "label": "10. Adequacy of waste water treatment capacity — Actual (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Actual value for indicator 10 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Sewerage & Waste Water",
+          "indicatorNumber": 10,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind10_target",
+        "label": "10. Adequacy of waste water treatment capacity — Target (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Target value for indicator 10 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Sewerage & Waste Water",
+          "indicatorNumber": 10,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind11_actual",
+        "label": "11. Quality of waste water treatment — Actual (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Actual value for indicator 11 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Sewerage & Waste Water",
+          "indicatorNumber": 11,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind11_target",
+        "label": "11. Quality of waste water treatment — Target (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Target value for indicator 11 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Sewerage & Waste Water",
+          "indicatorNumber": 11,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind12_actual",
+        "label": "12. Efficiency in redressal of customer complaints (Waste Water) — Actual (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Actual value for indicator 12 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Sewerage & Waste Water",
+          "indicatorNumber": 12,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind12_target",
+        "label": "12. Efficiency in redressal of customer complaints (Waste Water) — Target (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Target value for indicator 12 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Sewerage & Waste Water",
+          "indicatorNumber": 12,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind13_actual",
+        "label": "13. Collection efficiency of waste water network — Actual (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Actual value for indicator 13 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Sewerage & Waste Water",
+          "indicatorNumber": 13,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind13_target",
+        "label": "13. Collection efficiency of waste water network — Target (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Target value for indicator 13 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Sewerage & Waste Water",
+          "indicatorNumber": 13,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind14_actual",
+        "label": "14. Coverage of toilets — Actual (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Actual value for indicator 14 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Sewerage & Waste Water",
+          "indicatorNumber": 14,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind14_target",
+        "label": "14. Coverage of toilets — Target (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Target value for indicator 14 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Sewerage & Waste Water",
+          "indicatorNumber": 14,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind15_actual",
+        "label": "15. Coverage of waste water network services — Actual (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Actual value for indicator 15 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Sewerage & Waste Water",
+          "indicatorNumber": 15,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind15_target",
+        "label": "15. Coverage of waste water network services — Target (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Target value for indicator 15 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Sewerage & Waste Water",
+          "indicatorNumber": 15,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind16_actual",
+        "label": "16. Extent of reuse and recycling of waste water — Actual (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Actual value for indicator 16 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Sewerage & Waste Water",
+          "indicatorNumber": 16,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind16_target",
+        "label": "16. Extent of reuse and recycling of waste water — Target (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Target value for indicator 16 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Sewerage & Waste Water",
+          "indicatorNumber": 16,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind17_actual",
+        "label": "17. Extent of cost recovery in waste water — Actual (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Actual value for indicator 17 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Sewerage & Waste Water",
+          "indicatorNumber": 17,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind17_target",
+        "label": "17. Extent of cost recovery in waste water — Target (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Target value for indicator 17 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Sewerage & Waste Water",
+          "indicatorNumber": 17,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind18_actual",
+        "label": "18. Efficiency in collection of waste water charges — Actual (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Actual value for indicator 18 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Sewerage & Waste Water",
+          "indicatorNumber": 18,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind18_target",
+        "label": "18. Efficiency in collection of waste water charges — Target (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Target value for indicator 18 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Sewerage & Waste Water",
+          "indicatorNumber": 18,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind19_actual",
+        "label": "19. Extent of cost recovery in SWM services — Actual (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Actual value for indicator 19 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Solid Waste Management",
+          "indicatorNumber": 19,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind19_target",
+        "label": "19. Extent of cost recovery in SWM services — Target (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Target value for indicator 19 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Solid Waste Management",
+          "indicatorNumber": 19,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind20_actual",
+        "label": "20. Efficiency in redressal of customer complaints (SWM) — Actual (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Actual value for indicator 20 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Solid Waste Management",
+          "indicatorNumber": 20,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind20_target",
+        "label": "20. Efficiency in redressal of customer complaints (SWM) — Target (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Target value for indicator 20 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Solid Waste Management",
+          "indicatorNumber": 20,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind21_actual",
+        "label": "21. Efficiency in collection of SWM related user charges — Actual (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Actual value for indicator 21 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Solid Waste Management",
+          "indicatorNumber": 21,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind21_target",
+        "label": "21. Efficiency in collection of SWM related user charges — Target (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Target value for indicator 21 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Solid Waste Management",
+          "indicatorNumber": 21,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind22_actual",
+        "label": "22. Efficiency of collection of municipal solid waste — Actual (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Actual value for indicator 22 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Solid Waste Management",
+          "indicatorNumber": 22,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind22_target",
+        "label": "22. Efficiency of collection of municipal solid waste — Target (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Target value for indicator 22 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Solid Waste Management",
+          "indicatorNumber": 22,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind23_actual",
+        "label": "23. Extent of segregation of municipal solid waste — Actual (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Actual value for indicator 23 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Solid Waste Management",
+          "indicatorNumber": 23,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind23_target",
+        "label": "23. Extent of segregation of municipal solid waste — Target (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Target value for indicator 23 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Solid Waste Management",
+          "indicatorNumber": 23,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind24_actual",
+        "label": "24. Extent of municipal solid waste recovered — Actual (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Actual value for indicator 24 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Solid Waste Management",
+          "indicatorNumber": 24,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind24_target",
+        "label": "24. Extent of municipal solid waste recovered — Target (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Target value for indicator 24 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Solid Waste Management",
+          "indicatorNumber": 24,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind25_actual",
+        "label": "25. Extent of scientific disposal of municipal solid waste — Actual (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Actual value for indicator 25 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Solid Waste Management",
+          "indicatorNumber": 25,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind25_target",
+        "label": "25. Extent of scientific disposal of municipal solid waste — Target (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Target value for indicator 25 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Solid Waste Management",
+          "indicatorNumber": 25,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind26_actual",
+        "label": "26. Household level coverage of solid waste management services — Actual (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Actual value for indicator 26 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Solid Waste Management",
+          "indicatorNumber": 26,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind26_target",
+        "label": "26. Household level coverage of solid waste management services — Target (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Target value for indicator 26 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Solid Waste Management",
+          "indicatorNumber": 26,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind27_actual",
+        "label": "27. Coverage of storm water drainage network — Actual (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Actual value for indicator 27 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Storm Water Drainage",
+          "indicatorNumber": 27,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind27_target",
+        "label": "27. Coverage of storm water drainage network — Target (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "%",
+        "placeholder": "0-100",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Target value for indicator 27 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 100,
+            "message": "Value cannot exceed 100%."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Storm Water Drainage",
+          "indicatorNumber": 27,
+          "unit": "%"
+        }
+      },
+      {
+        "key": "ind28_actual",
+        "label": "28. Incidence of water logging — Actual (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "Non./Year",
+        "placeholder": "0-999",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Actual value for indicator 28 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 999,
+            "message": "Value cannot exceed 999 Non./Year."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Storm Water Drainage",
+          "indicatorNumber": 28,
+          "unit": "Non./Year"
+        }
+      },
+      {
+        "key": "ind28_target",
+        "label": "28. Incidence of water logging — Target (FY 2026-27)",
+        "formFieldType": "number",
+        "required": true,
+        "decimal": 2,
+        "suffixText": "Non./Year",
+        "placeholder": "0-999",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Target value for indicator 28 is required."
+          },
+          {
+            "name": "min",
+            "validator": 0,
+            "message": "Value cannot be negative."
+          },
+          {
+            "name": "max",
+            "validator": 999,
+            "message": "Value cannot exceed 999 Non./Year."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"],
+        "meta": {
+          "sector": "Storm Water Drainage",
+          "indicatorNumber": 28,
+          "unit": "Non./Year"
+        }
+      },
+      {
+        "key": "declarantName",
+        "label": "Name",
+        "formFieldType": "text",
+        "required": true,
+        "placeholder": "Full name",
+        "maxLength": 100,
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Name is required."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"]
+      },
+      {
+        "key": "declarantDesignation",
+        "label": "Designation",
+        "formFieldType": "text",
+        "required": true,
+        "placeholder": "e.g. Municipal Engineer",
+        "maxLength": 100,
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Designation is required."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"]
+      },
+      {
+        "key": "supportingDocument",
+        "label": "Supporting Document",
+        "formFieldType": "file",
+        "required": true,
+        "folderPathKey": "slb/supporting-document",
+        "allowedFileTypes": ["pdf", "jpg", "jpeg", "png"],
+        "maxFileSize": 20971520,
+        "fileViewType": "button",
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "A supporting document is required."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"]
+      },
+      {
+        "key": "checkboxConfirmation",
+        "label": "I certify that the information above is complete and accurate to the best of my knowledge.",
+        "formFieldType": "checkbox",
+        "required": true,
+        "validations": [
+          {
+            "name": "requiredTrue",
+            "validator": null,
+            "message": "You must confirm this declaration before submitting."
+          }
+        ],
+        "fieldTypes": ["SLB_MAIN_FORM_FIELDS"]
+      }
+    ]
+  },
+
+  "provisional": {
+    "_id": "6a3271eb2ad86a0f691caafe",
+    "design_year": "67d7d136d3d038946a5239e9",
+    "formId": 31,
+    "data": [
+      {
+        "formFieldType": "file",
+        "key": "receipts-and-payments-statement",
+        "label": "Receipts and Payments Statement",
+        "placeholder": "PDF only",
+        "allowedFileTypes": ["pdf"],
+        "maxFileSize": 50,
+        "value": {
+          "fileName": "",
+          "fileUrl": "",
+          "fileSize": null,
+          "mimeType": ""
+        },
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Receipts and Payments Statement is required"
+          }
+        ]
+      },
+      {
+        "formFieldType": "file",
+        "key": "balance-sheet",
+        "label": "Balance Sheet",
+        "placeholder": "FY 2024-25 · PDF only",
+        "allowedFileTypes": ["pdf"],
+        "maxFileSize": 50,
+        "value": {
+          "fileName": "",
+          "fileUrl": "",
+          "fileSize": null,
+          "mimeType": ""
+        },
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Balance Sheet is required"
+          }
+        ]
+      },
+      {
+        "formFieldType": "file",
+        "key": "balance-sheet-schedules",
+        "label": "Balance Sheet Schedules",
+        "placeholder": "FY 2024-25 · PDF only",
+        "allowedFileTypes": ["pdf"],
+        "maxFileSize": 50,
+        "value": {
+          "fileName": "",
+          "fileUrl": "",
+          "fileSize": null,
+          "mimeType": ""
+        },
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Balance Sheet Schedules is required"
+          }
+        ]
+      },
+      {
+        "formFieldType": "file",
+        "key": "income-expenditure",
+        "label": "Income and Expenditure Statement",
+        "placeholder": "FY 2024-25 · PDF only",
+        "allowedFileTypes": ["pdf"],
+        "maxFileSize": 50,
+        "value": {
+          "fileName": "",
+          "fileUrl": "",
+          "fileSize": null,
+          "mimeType": ""
+        },
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Income and Expenditure Statement is required"
+          }
+        ]
+      },
+      {
+        "formFieldType": "file",
+        "key": "income-statement-schedules",
+        "label": "Income Statement Schedules",
+        "placeholder": "FY 2024-25 · PDF only",
+        "allowedFileTypes": ["pdf"],
+        "maxFileSize": 50,
+        "value": {
+          "fileName": "",
+          "fileUrl": "",
+          "fileSize": null,
+          "mimeType": ""
+        },
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Income Statement Schedules is required"
+          }
+        ]
+      },
+      {
+        "formFieldType": "file",
+        "key": "cash-flow",
+        "label": "Cash Flow Statement",
+        "placeholder": "FY 2024-25 · PDF only",
+        "allowedFileTypes": ["pdf"],
+        "maxFileSize": 50,
+        "value": {
+          "fileName": "",
+          "fileUrl": "",
+          "fileSize": null,
+          "mimeType": ""
+        },
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Cash Flow Statement is required"
+          }
+        ]
+      },
+      {
+        "formFieldType": "file",
+        "key": "notes-to-accounts",
+        "label": "Notes to Account and Significant Accounting Policies",
+        "placeholder": "Optional · FY 2024-25 · PDF only",
+        "required": false,
+        "allowedFileTypes": ["pdf"],
+        "maxFileSize": 50,
+        "value": {
+          "fileName": "",
+          "fileUrl": "",
+          "fileSize": null,
+          "mimeType": ""
+        }
+      }
+    ],
+    "isActive": true,
+    "meta": {
+      "uploadType": "provisional",
+      "description": "Upload your provisional financial statement for FY 2024-25. You may upload documents in any order. The system will automatically verify that each document is readable and meets the required checks.",
+      "confirmLabel": "Submit to State DMA",
+      "documentYearId": "606aafcf4dff55e6c075d424",
+      "documentYear": "2024-25"
+    },
+    "type": "UPLOAD_CONFIG_PROVISIONAL"
+  },
+
+  "audited": {
+    "_id": "6a3271eb2ad86a0f691caaf4",
+    "formId": 30,
+    "design_year": "67d7d136d3d038946a5239e9",
+    "data": [
+      {
+        "formFieldType": "file",
+        "key": "receipts-and-payments-statement",
+        "label": "Receipts and Payments Statement",
+        "placeholder": "PDF only",
+        "allowedFileTypes": ["pdf"],
+        "maxFileSize": 50,
+        "value": {
+          "fileName": "",
+          "fileUrl": "",
+          "fileSize": null,
+          "mimeType": ""
+        },
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Receipts and Payments Statement is required"
+          }
+        ]
+      },
+      {
+        "formFieldType": "file",
+        "key": "balance-sheet",
+        "label": "Balance Sheet",
+        "placeholder": "FY 2023-24 · PDF only",
+        "allowedFileTypes": ["pdf"],
+        "maxFileSize": 50,
+        "value": {
+          "fileName": "",
+          "fileUrl": "",
+          "fileSize": null,
+          "mimeType": ""
+        },
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Balance Sheet is required"
+          }
+        ]
+      },
+      {
+        "formFieldType": "file",
+        "key": "balance-sheet-schedules",
+        "label": "Balance Sheet Schedules",
+        "placeholder": "FY 2023-24 · PDF only",
+        "allowedFileTypes": ["pdf"],
+        "maxFileSize": 50,
+        "value": {
+          "fileName": "",
+          "fileUrl": "",
+          "fileSize": null,
+          "mimeType": ""
+        },
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Balance Sheet Schedules is required"
+          }
+        ]
+      },
+      {
+        "formFieldType": "file",
+        "key": "income-expenditure",
+        "label": "Income and Expenditure Statement",
+        "placeholder": "FY 2023-24 · PDF only",
+        "allowedFileTypes": ["pdf"],
+        "maxFileSize": 50,
+        "value": {
+          "fileName": "",
+          "fileUrl": "",
+          "fileSize": null,
+          "mimeType": ""
+        },
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Income and Expenditure Statement is required"
+          }
+        ]
+      },
+      {
+        "formFieldType": "file",
+        "key": "income-statement-schedules",
+        "label": "Income Statement Schedules",
+        "placeholder": "FY 2023-24 · PDF only",
+        "allowedFileTypes": ["pdf"],
+        "maxFileSize": 50,
+        "value": {
+          "fileName": "",
+          "fileUrl": "",
+          "fileSize": null,
+          "mimeType": ""
+        },
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Income Statement Schedules is required"
+          }
+        ]
+      },
+      {
+        "formFieldType": "file",
+        "key": "cash-flow",
+        "label": "Cash Flow Statement",
+        "placeholder": "FY 2023-24 · PDF only",
+        "allowedFileTypes": ["pdf"],
+        "maxFileSize": 50,
+        "value": {
+          "fileName": "",
+          "fileUrl": "",
+          "fileSize": null,
+          "mimeType": ""
+        },
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Cash Flow Statement is required"
+          }
+        ]
+      },
+      {
+        "formFieldType": "file",
+        "key": "auditors-report",
+        "label": "Complete Auditor’s Report",
+        "placeholder": "Auditor’s report including certificate, findings, qualified opinion, etc.\nPDF only · CA-certified",
+        "allowedFileTypes": ["pdf"],
+        "maxFileSize": 50,
+        "value": {
+          "fileName": "",
+          "fileUrl": "",
+          "fileSize": null,
+          "mimeType": ""
+        },
+        "validations": [
+          {
+            "name": "required",
+            "validator": null,
+            "message": "Auditor's Report is required"
+          },
+          {
+            "name": "minPages",
+            "validator": 2,
+            "message": "A valid Auditor's Report must contain more than one page."
+          }
+        ]
+      },
+      {
+        "formFieldType": "file",
+        "key": "notes-to-accounts",
+        "label": "Notes to Account and Significant Accounting Policies",
+        "placeholder": "Optional · FY 2024-25 · PDF only",
+        "required": false,
+        "allowedFileTypes": ["pdf"],
+        "maxFileSize": 50,
+        "value": {
+          "fileName": "",
+          "fileUrl": "",
+          "fileSize": null,
+          "mimeType": ""
+        }
+      }
+    ],
+    "isActive": true,
+    "meta": {
+      "uploadType": "audited",
+      "description": "Upload your audited financial statement for FY 2023-24. You may upload documents in any order. The system will automatically verify that each document is readable and meets the required checks.",
+      "confirmLabel": "Submit to State DMA",
+      "documentYearId": "606aafc14dff55e6c075d3ec",
+      "documentYear": "2023-24"
+    },
+    "type": "UPLOAD_CONFIG_AUDITED"
+  }
 }
