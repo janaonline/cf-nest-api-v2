@@ -228,9 +228,7 @@ export class BankAccountService {
       toStatusLabel: getFormStatusLabel(FORM_STATUS.UNDER_REVIEW_BY_STATE),
       actorStage: 'ULB',
       userInfo: { userId: new Types.ObjectId(user._id), role: user.role, ipAddress, userAgent },
-      note: null,
       filePath: proofFileS3Key,
-      batchId: null,
     });
 
     return xviFcSuccess('Bank account form submitted.', buildSafeBankAccountResponse(record));
@@ -279,9 +277,9 @@ export class BankAccountService {
       toStatusLabel: getFormStatusLabel(newStatus),
       actorStage: 'STATE',
       userInfo: { userId: new Types.ObjectId(user._id), role: user.role, ipAddress, userAgent },
-      note: dto.note ?? null,
-      filePath: record.proofFile?.s3Key ?? null,
-      batchId,
+      ...(dto.note != null && { note: dto.note }),
+      ...(record.proofFile?.s3Key != null && { filePath: record.proofFile.s3Key }),
+      ...(batchId != null && { batchId }),
     });
 
     this.logger.log(`Bank account ${dto.decision.toLowerCase()} by STATE — id=${id} by user=${user._id}`);
@@ -330,9 +328,8 @@ export class BankAccountService {
       toStatusLabel: getFormStatusLabel(newStatus),
       actorStage: 'MOHUA',
       userInfo: { userId: new Types.ObjectId(user._id), role: user.role, ipAddress, userAgent },
-      note: dto.note ?? null,
-      filePath: record.proofFile?.s3Key ?? null,
-      batchId: null,
+      ...(dto.note != null && { note: dto.note }),
+      ...(record.proofFile?.s3Key != null && { filePath: record.proofFile.s3Key }),
     });
 
     this.logger.log(`Bank account ${dto.decision.toLowerCase()} by MoHUA — id=${id} by user=${user._id}`);
@@ -364,9 +361,9 @@ export class BankAccountService {
         toStatusLabel: log.toStatusLabel,
         actorStage: log.actorStage,
         actorRole: log.userInfo.role,
-        note: log.note,
-        filePath: log.filePath,
-        batchId: log.batchId,
+        note: log.note ?? null,
+        filePath: log.filePath ?? null,
+        batchId: log.batchId ?? null,
         createdAt: (log as unknown as { createdAt: Date }).createdAt,
       })),
     );
