@@ -25,7 +25,6 @@ import { EmailTemplatesModule } from './admin/email-templates/email-templates.mo
 import { EmailRemindersModule } from './admin/email-reminders/email-reminders.module';
 import { FileTokenModule } from './core/file-token/file-token.module';
 import { FileModule } from './module/file/file.module';
-import { S3UploadModule } from './s3-upload/s3-upload.module';
 import { FormsModule } from './forms/forms.module';
 import { FormJsonModule } from './master/form-json/form-json.module';
 import { CommunicationModule } from './module/communication/communication.module';
@@ -107,7 +106,6 @@ function getQueryCaller(): string {
     XviFcModule,
     EmailTemplatesModule,
     EmailRemindersModule,
-    S3UploadModule,
     FormsModule,
     FormJsonModule,
     CommunicationModule,

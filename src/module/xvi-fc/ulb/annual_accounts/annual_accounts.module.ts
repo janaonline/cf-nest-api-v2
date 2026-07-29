@@ -4,7 +4,7 @@ import { BullModule } from '@nestjs/bullmq';
 import { MongooseModule } from '@nestjs/mongoose';
 import { S3Module } from '../../../../core/s3/s3.module';
 import { S3Service } from '../../../../core/s3/s3.service';
-import { S3UploadModule } from '../../../../s3-upload/s3-upload.module';
+import { FileModule } from '../../../file/file.module';
 import { ANNUAL_ACCOUNT_PROCESSING_QUEUE } from '../../../../core/constants/queues';
 import { Ulb, UlbSchema } from '../../../../schemas/ulb.schema';
 import { XviFcAnnualAccount, XviFcAnnualAccountSchema } from '../../../../schemas/xvi-fc/annual-account.schema';
@@ -31,7 +31,7 @@ import { FormJsonModule } from '../../../../master/form-json/form-json.module';
   imports: [
     HttpModule,
     S3Module,
-    S3UploadModule,
+    FileModule,
     FormJsonModule,
     BullModule.registerQueue({ name: ANNUAL_ACCOUNT_PROCESSING_QUEUE }),
     MongooseModule.forFeature([

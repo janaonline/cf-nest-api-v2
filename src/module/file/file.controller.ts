@@ -1,16 +1,27 @@
-import { Controller, Get, HttpStatus, Logger, Query, Res } from '@nestjs/common';
-import { ApiQuery } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
+import { Body, Controller, Get, HttpStatus, Logger, ParseArrayPipe, Post, Query, Res } from '@nestjs/common';
 import { SkipThrottle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { Public } from 'src/module/auth/decorators/public.decorator';
 import { FileService } from './file.service';
 import { getErrorMessage, isS3NotFoundError } from './file-response.util';
+import { S3UploadService } from './s3-upload.service';
+import { S3UrlItemDto } from './dto/s3-url-item.dto';
 
 @Controller('file')
 export class FileController {
   private readonly logger = new Logger(FileController.name);
 
-  constructor(private readonly fileService: FileService) {}
+  constructor(
+    private readonly fileService: FileService,
+    private readonly s3UploadService: S3UploadService,
+  ) {}
+
+  @ApiBearerAuth()
+  @Post('signed-url')
+  async getSignedUrls(@Body(new ParseArrayPipe({ items: S3UrlItemDto })) items: S3UrlItemDto[]) {
+    return Promise.all(items.map((item) => this.s3UploadService.generatePutSignedUrl(item)));
+  }
 
   @Public()
   @SkipThrottle()
