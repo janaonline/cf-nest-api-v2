@@ -2,7 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model, Types } from 'mongoose';
-import { FormJson, FormJsonDocument } from './schemas/form-json.schema';
+import { FormJson, FormJsonDocument } from '../../schemas/form-json.schema';
 import type { IFormJson } from './interfaces/form-json.interface';
 import type { CreateFormJsonDto } from './dto/create-form-json.dto';
 import type { UpdateFormJsonDto } from './dto/update-form-json.dto';

@@ -4,7 +4,7 @@ import { getModelToken } from '@nestjs/mongoose';
 import { ConfigService } from '@nestjs/config';
 import { Types } from 'mongoose';
 import { FormJsonService } from './form-json.service';
-import { FormJson } from './schemas/form-json.schema';
+import { FormJson } from '../../schemas/form-json.schema';
 import { RedisService } from 'src/core/services/redis/redis.service';
 
 /** Chainable Mongoose Query-like mock resolving to `value` once `.exec()` is called. */
@@ -184,9 +184,7 @@ describe('FormJsonService', () => {
 
       await service.create({ design_year: designYearId } as any);
 
-      expect(model.create).toHaveBeenCalledWith(
-        expect.objectContaining({ isActive: true, data: [] }),
-      );
+      expect(model.create).toHaveBeenCalledWith(expect.objectContaining({ isActive: true, data: [] }));
     });
   });
 
