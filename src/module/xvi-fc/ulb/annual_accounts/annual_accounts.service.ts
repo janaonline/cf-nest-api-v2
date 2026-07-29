@@ -31,7 +31,11 @@ import {
   XviFcAnnualAccountFormLogDocument,
 } from '../../../../schemas/xvi-fc/annual-account-form-log.schema';
 import { Ulb, UlbDocument } from '../../../../schemas/ulb.schema';
-import { DOC_TYPE_MAP } from './constants/doc-type-map.constant';
+import {
+  DocumentActionGateDocument,
+  XviFcDocumentActionGate,
+} from '../../../../schemas/xvi-fc/document-action-gate.schema';
+import { DOC_TYPE_MAP, NO_OCR_DOC_IDS } from './constants/doc-type-map.constant';
 import { UploadDocumentDto } from './dto/upload-document.dto';
 import { PresignUploadDto } from './dto/presign-upload.dto';
 import { ConfirmUploadDto } from './dto/confirm-upload.dto';
@@ -72,6 +76,7 @@ interface UlbSubmissionRow {
   formStatusId: number;
   lastUpdatedAt: Date | null;
   annualAccountId: Types.ObjectId | null;
+  hasManualReviewRequests: boolean;
 }
 
 interface UlbSubmissionsFacetResult {
@@ -96,6 +101,9 @@ export class AnnualAccountsService implements OnModuleInit {
 
     @InjectModel(Ulb.name)
     private readonly ulbModel: Model<UlbDocument>,
+
+    @InjectModel(XviFcDocumentActionGate.name)
+    private readonly actionGateModel: Model<DocumentActionGateDocument>,
 
     private readonly s3Service: S3Service,
 
@@ -134,7 +142,7 @@ export class AnnualAccountsService implements OnModuleInit {
       throw new BadRequestException('Only PDF files are allowed');
     }
 
-    if (!DOC_TYPE_MAP[dto.docId]) {
+    if (!DOC_TYPE_MAP[dto.docId] && !NO_OCR_DOC_IDS.has(dto.docId)) {
       throw new BadRequestException(`Unknown docId: ${dto.docId}`);
     }
 
@@ -171,8 +179,9 @@ export class AnnualAccountsService implements OnModuleInit {
       dto.docId,
     );
 
-    const expectedDocType = DOC_TYPE_MAP[dto.docId];
-    if (!expectedDocType) {
+    const isNoOcrDoc = NO_OCR_DOC_IDS.has(dto.docId);
+    const expectedDocType = isNoOcrDoc ? null : DOC_TYPE_MAP[dto.docId];
+    if (!isNoOcrDoc && !expectedDocType) {
       throw new BadRequestException(`Unknown docId: ${dto.docId}`);
     }
 
@@ -240,7 +249,14 @@ export class AnnualAccountsService implements OnModuleInit {
       uploadedAt: now,
     };
 
-    await this.upsertDocumentSlot(annualAccountId, dto as unknown as UploadDocumentDto, currentUpload);
+    const initialProcessingStatus = isNoOcrDoc ? 'PASSED' : 'PROCESSING';
+
+    await this.upsertDocumentSlot(
+      annualAccountId,
+      dto as unknown as UploadDocumentDto,
+      currentUpload,
+      initialProcessingStatus,
+    );
 
     await this.uploadHistoryModel.create({
       annualAccountId: new Types.ObjectId(annualAccountId),
@@ -252,12 +268,12 @@ export class AnnualAccountsService implements OnModuleInit {
       version,
       versionLabel,
       file: fileInfo,
-      processingStatus: 'PROCESSING',
+      processingStatus: initialProcessingStatus,
       ocrInfo: ocrInfoInit,
       queue: {
         name: ANNUAL_ACCOUNT_PROCESSING_QUEUE,
         bullJobId: null,
-        status: 'waiting',
+        status: isNoOcrDoc ? 'skipped' : 'waiting',
         attempts: 0,
         maxAttempts: 3,
       },
@@ -272,16 +288,18 @@ export class AnnualAccountsService implements OnModuleInit {
       uploadedAt: now,
     });
 
-    await this.enqueueOcrJob({
-      uploadId: dto.uploadId,
-      annualAccountId,
-      ulbId: dto.ulbId,
-      section: dto.section,
-      docId: dto.docId,
-      s3Key: dto.s3Key,
-      expectedDocType,
-      financialYear: dto.year,
-    });
+    if (!isNoOcrDoc) {
+      await this.enqueueOcrJob({
+        uploadId: dto.uploadId,
+        annualAccountId,
+        ulbId: dto.ulbId,
+        section: dto.section,
+        docId: dto.docId,
+        s3Key: dto.s3Key,
+        expectedDocType: expectedDocType!,
+        financialYear: dto.year,
+      });
+    }
 
     this.logger.log(`Upload confirmed — annualAccountId=${annualAccountId} uploadId=${dto.uploadId}`);
 
@@ -292,7 +310,7 @@ export class AnnualAccountsService implements OnModuleInit {
       docId: dto.docId,
       version,
       versionLabel,
-      processingStatus: 'PROCESSING',
+      processingStatus: initialProcessingStatus,
       uploadedAt: now,
     };
   }
@@ -333,6 +351,7 @@ export class AnnualAccountsService implements OnModuleInit {
             'ocrInfo.validationStatus': null,
             'ocrInfo.validationDetails': null,
             'ocrInfo.failedChecks': [],
+            'ocrInfo.isManualReviewRequested': false,
             'queue.bullJobId': null,
             'queue.status': 'waiting',
             'queue.attempts': (historyDoc.queue?.attempts ?? 0) + 1,
@@ -356,6 +375,7 @@ export class AnnualAccountsService implements OnModuleInit {
             [`${historyDoc.section}.documents.$.currentUpload.ocrInfo.validationStatus`]: null,
             [`${historyDoc.section}.documents.$.currentUpload.ocrInfo.validationDetails`]: null,
             [`${historyDoc.section}.documents.$.currentUpload.ocrInfo.failedChecks`]: [],
+            [`${historyDoc.section}.documents.$.currentUpload.ocrInfo.isManualReviewRequested`]: false,
           },
         },
       ),
@@ -451,6 +471,15 @@ export class AnnualAccountsService implements OnModuleInit {
           formStatus: { $ifNull: [`$account.${dto.section}.form_status`, notStarted] },
           formStatusId: { $ifNull: [`$account.${dto.section}.form_status_id`, FORM_STATUS_ID[notStarted]] },
           lastUpdatedAt: { $ifNull: ['$account.updatedAt', null] },
+          hasManualReviewRequests: {
+            $anyElementTrue: {
+              $map: {
+                input: { $ifNull: [`$account.${dto.section}.documents`, []] },
+                as: 'd',
+                in: { $ifNull: ['$$d.currentUpload.ocrInfo.isManualReviewRequested', false] },
+              },
+            },
+          },
         },
       },
     ];
@@ -476,6 +505,7 @@ export class AnnualAccountsService implements OnModuleInit {
               formStatusId: 1,
               lastUpdatedAt: 1,
               annualAccountId: { $ifNull: ['$account._id', null] },
+              hasManualReviewRequests: 1,
             },
           },
         ],
@@ -572,11 +602,9 @@ export class AnnualAccountsService implements OnModuleInit {
                 uploadedAt: d.currentUpload.uploadedAt,
               }
             : null,
-          stateDecision: (d.stateDecision ?? []).map((sd: any) => ({
-            status: sd.status,
-            note: sd.note,
-            decidedAt: sd.decidedAt,
-          })),
+          stateDecision: d.stateDecision
+            ? { status: d.stateDecision.status, note: d.stateDecision.note, decidedAt: d.stateDecision.decidedAt }
+            : null,
         })),
       };
     };
@@ -673,6 +701,47 @@ export class AnnualAccountsService implements OnModuleInit {
     return { annualAccountId: id, section, docId, message: 'Document removed successfully' };
   }
 
+  // ─── ULB requests manual review of a failed OCR validation ───────────────────
+
+  async requestManualReview(id: string, section: 'auditedData' | 'unauditedData', docId: string, user: AuthUser) {
+    if (user.scope !== Scope.ULB) {
+      throw new ForbiddenException('Only ULB users may request manual review');
+    }
+
+    const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
+    if (!doc) throw new NotFoundException('Annual account not found');
+    await this.validateViewAccess(doc, user);
+
+    const sectionData = (doc as any)[section];
+    if (!sectionData) throw new NotFoundException('Section not found');
+
+    const docSlot = (sectionData.documents ?? []).find((d: any) => d.docId === docId);
+    if (!docSlot?.currentUpload) throw new NotFoundException('Document not found in this section');
+
+    if (docSlot.currentUpload.ocrInfo?.validationStatus !== 'FAIL') {
+      throw new BadRequestException('Manual review can only be requested for a failed OCR validation.');
+    }
+    if (docSlot.currentUpload.ocrInfo?.isManualReviewRequested) {
+      throw new BadRequestException('Manual review has already been requested for this document.');
+    }
+
+    await Promise.all([
+      this.annualAccountModel.updateOne(
+        { _id: new Types.ObjectId(id), [`${section}.documents.docId`]: docId },
+        { $set: { [`${section}.documents.$.currentUpload.ocrInfo.isManualReviewRequested`]: true } },
+      ),
+      this.uploadHistoryModel.updateOne(
+        { uploadId: docSlot.currentUpload.uploadId },
+        { $set: { 'ocrInfo.isManualReviewRequested': true } },
+      ),
+    ]);
+
+    this.logger.log(
+      `Manual review requested — annualAccountId=${id} section=${section} docId=${docId} by user=${user._id}`,
+    );
+    return this.getProcessingStatus(id, user);
+  }
+
   // ─── Submit section to State DMA ─────────────────────────────────────────────
 
   async submitSection(
@@ -698,17 +767,7 @@ export class AnnualAccountsService implements OnModuleInit {
     // Resolve which docIds are currently required by the active upload config.
     // This means documents that were previously uploaded but are now hidden in the
     // config (e.g. receipts-payments while temporarily hidden) are not blocking.
-    const designYearId = doc.design_year?.toString();
-    let requiredDocIds: string[] | null = null;
-    try {
-      const formJson = await this.formJsonService.findActiveByDesignYearAndFormId(
-        designYearId,
-        SECTION_FORM_IDS[section],
-      );
-      requiredDocIds = ((formJson.data ?? []) as Array<{ key: string }>).map((f) => f.key);
-    } catch {
-      // Formjson not found — fall back to checking all uploaded docs
-    }
+    const requiredDocIds = await this.resolveRequiredDocIds(doc.design_year?.toString(), section);
 
     const docsToCheck = requiredDocIds
       ? sectionData.documents.filter((d: any) => requiredDocIds!.includes(d.docId))
@@ -794,19 +853,59 @@ export class AnnualAccountsService implements OnModuleInit {
     const docSlot = (sectionData.documents ?? []).find((d: any) => d.docId === docId);
     if (!docSlot) throw new NotFoundException('Document not found in this section');
 
+    const requiredDocIds = await this.resolveRequiredDocIds(doc.design_year?.toString(), dto.section);
+    if (requiredDocIds && !requiredDocIds.includes(docId)) {
+      throw new BadRequestException('This document is optional and cannot be approved or returned.');
+    }
+
     const decision = buildDecisionRecord(dto.decision, dto.note, user, ipAddress, userAgent);
 
     // Per-document decisions are informational only — the section's form_status and the
     // form-log audit trail only change on the explicit final "Approve Section"/"Return Section"
     // action (decideSection), not the moment any one document is approved or returned.
+    // Provisional until then — STATE can undo it (see undoDocumentDecision) any time before.
     await this.annualAccountModel.updateOne(
       { _id: new Types.ObjectId(id), [`${dto.section}.documents.docId`]: docId },
-      { $push: { [`${dto.section}.documents.$.stateDecision`]: decision }, $set: { updatedAt: new Date() } },
+      { $set: { [`${dto.section}.documents.$.stateDecision`]: decision, updatedAt: new Date() } },
     );
 
     this.logger.log(
       `Document ${dto.decision.toLowerCase()} — annualAccountId=${id} section=${dto.section} docId=${docId} by user=${user._id}`,
     );
+
+    return this.getProcessingStatus(id, user);
+  }
+
+  /**
+   * Reverts a single document's decision back to undecided. Reuses the exact same gate as
+   * decideDocument (assertCanDecide) — so once the section itself is finalized (Approve
+   * Section/Return Section moves it past UNDER_REVIEW_BY_STATE), undo is no longer possible,
+   * same as making a new decision wouldn't be either. No form-log entry — per-document
+   * decisions are provisional until the section is finalized, so undoing one isn't an
+   * audit-worthy event on its own.
+   */
+  async undoDocumentDecision(
+    id: string,
+    section: 'auditedData' | 'unauditedData',
+    docId: string,
+    user: AuthUser,
+  ) {
+    const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
+    if (!doc) throw new NotFoundException('Annual account not found');
+
+    const sectionData = (doc as any)[section];
+    if (!sectionData) throw new NotFoundException('Section not found');
+    await this.assertCanDecide(doc, user, sectionData.form_status);
+
+    const docSlot = (sectionData.documents ?? []).find((d: any) => d.docId === docId);
+    if (!docSlot) throw new NotFoundException('Document not found in this section');
+
+    await this.annualAccountModel.updateOne(
+      { _id: new Types.ObjectId(id), [`${section}.documents.docId`]: docId },
+      { $set: { [`${section}.documents.$.stateDecision`]: null, updatedAt: new Date() } },
+    );
+
+    this.logger.log(`Document decision undone — annualAccountId=${id} section=${section} docId=${docId} by user=${user._id}`);
 
     return this.getProcessingStatus(id, user);
   }
@@ -840,7 +939,12 @@ export class AnnualAccountsService implements OnModuleInit {
     if (!sectionData) throw new NotFoundException('Section not found');
     await this.assertCanDecide(doc, user, sectionData.form_status);
 
-    const documents: any[] = sectionData.documents ?? [];
+    // Optional documents (e.g. notes-to-accounts) are never approved/returned — individually
+    // or via this section-wide sweep — so exclude them from every check below.
+    const requiredDocIds = await this.resolveRequiredDocIds(doc.design_year?.toString(), dto.section);
+    const isRequired = (docId: string) => !requiredDocIds || requiredDocIds.includes(docId);
+
+    const documents: any[] = (sectionData.documents ?? []).filter((d: any) => isRequired(d.docId as string));
     const effectiveByDoc = documents.map((d) => ({
       docId: d.docId as string,
       effective: this.resolveEffectiveDecision(d),
@@ -876,10 +980,10 @@ export class AnnualAccountsService implements OnModuleInit {
           [`${dto.section}.form_status_id`]: FORM_STATUS_ID[newStatus],
           [`${dto.section}.stateDecision`]: decision,
           modifiedBy: new Types.ObjectId(user._id),
+          ...(toBulkDecide.length > 0 && {
+            [`${dto.section}.documents.$[elem].stateDecision`]: decision,
+          }),
         },
-        ...(toBulkDecide.length > 0 && {
-          $push: { [`${dto.section}.documents.$[elem].stateDecision`]: decision },
-        }),
       },
       toBulkDecide.length > 0 ? { arrayFilters: [{ 'elem.docId': { $in: toBulkDecide } }] } : undefined,
     );
@@ -921,8 +1025,7 @@ export class AnnualAccountsService implements OnModuleInit {
    * staleness rule the frontend applies when rendering each document's status.
    */
   private resolveEffectiveDecision(docSlot: any): { status: 'APPROVED' | 'RETURNED'; note: string | null } | null {
-    const history = docSlot.stateDecision ?? [];
-    const latest = history[history.length - 1] ?? null;
+    const latest = docSlot.stateDecision ?? null;
     if (!latest) return null;
 
     const uploadedAt = docSlot.currentUpload?.uploadedAt ? new Date(docSlot.currentUpload.uploadedAt).getTime() : null;
@@ -930,6 +1033,30 @@ export class AnnualAccountsService implements OnModuleInit {
     if (uploadedAt !== null && uploadedAt > decidedAt) return null;
 
     return { status: latest.status, note: latest.note };
+  }
+
+  /**
+   * docIds currently marked required (`required !== false`) in the active upload config for
+   * this section, or null if the formjson lookup fails — callers should then treat every
+   * document as required (existing safe default). Optional docs (e.g. notes-to-accounts) are
+   * excluded so they never block submission, get swept into a bulk section decision, or
+   * count against a state reviewer's approve/return gate.
+   */
+  private async resolveRequiredDocIds(
+    designYearId: string | undefined,
+    section: 'auditedData' | 'unauditedData',
+  ): Promise<string[] | null> {
+    try {
+      const formJson = await this.formJsonService.findActiveByDesignYearAndFormId(
+        designYearId,
+        SECTION_FORM_IDS[section],
+      );
+      return ((formJson.data ?? []) as Array<{ key: string; required?: boolean }>)
+        .filter((f) => f.required !== false)
+        .map((f) => f.key);
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -1026,8 +1153,7 @@ export class AnnualAccountsService implements OnModuleInit {
 
     const documents: any[] = sectionData.documents ?? [];
     const documentsBreakdown: FormLogDocumentEntry[] = documents.map((d) => {
-      const history = d.stateDecision ?? [];
-      const latest = history[history.length - 1] ?? null;
+      const latest = d.stateDecision ?? null;
       const filePath = (d.currentUpload?.file?.path as string | undefined) ?? null;
       return { docId: d.docId as string, decision: latest?.status ?? null, comment: latest?.note ?? null, filePath };
     });
@@ -1130,6 +1256,7 @@ export class AnnualAccountsService implements OnModuleInit {
     annualAccountId: string,
     dto: UploadDocumentDto,
     currentUpload: Record<string, unknown>,
+    processingStatus: string = 'PROCESSING',
   ) {
     const { section, docId, yearId, year } = dto;
     const annAccountObjId = new Types.ObjectId(annualAccountId);
@@ -1169,7 +1296,7 @@ export class AnnualAccountsService implements OnModuleInit {
         $set: {
           [`${section}.documents.$.currentUpload`]: currentUpload,
           [`${section}.documents.$.uploadStatus`]: 'UPLOADED',
-          [`${section}.documents.$.processingStatus`]: 'PROCESSING',
+          [`${section}.documents.$.processingStatus`]: processingStatus,
           updatedAt: new Date(),
         },
       },
@@ -1183,7 +1310,7 @@ export class AnnualAccountsService implements OnModuleInit {
             [`${section}.documents`]: {
               docId,
               uploadStatus: 'UPLOADED',
-              processingStatus: 'PROCESSING',
+              processingStatus,
               currentUpload,
             },
           },
@@ -1332,7 +1459,31 @@ export class AnnualAccountsService implements OnModuleInit {
     const FORM_IDS: Record<string, number> = { audited: 30, provisional: 31 };
     const formId = FORM_IDS[type];
     if (!formId) throw new NotFoundException(`Unknown upload config type: ${type}`);
-    const formJson = await this.formJsonService.findActiveByDesignYearAndFormId(yearId, formId);
-    return { meta: formJson.meta ?? {}, data: formJson.data ?? [] };
+    const [formJson, actionGates] = await Promise.all([
+      this.formJsonService.findActiveByDesignYearAndFormId(yearId, formId),
+      this.getActionGates(formId),
+    ]);
+    return { meta: formJson.meta ?? {}, data: formJson.data ?? [], actionGates };
+  }
+
+  /**
+   * UI-visibility gates for document/section action buttons — which (role, action) pairs are
+   * reachable, and in which section statuses. Not an authorization check; see
+   * XviFcDocumentActionGate for why. Returns every active gate scoped to this form (or the
+   * module-wide wildcard), across all roles — the caller filters by the viewing user's role.
+   */
+  private async getActionGates(formId: number) {
+    const gates = await this.actionGateModel
+      .find({ module: 'XVI-FC', formId: { $in: [null, formId] }, isActive: true })
+      .lean()
+      .exec();
+
+    return gates.map((g) => ({
+      docKey: g.docKey,
+      scope: g.scope,
+      role: g.role,
+      action: g.action,
+      statusIds: g.statusIds,
+    }));
   }
 }
