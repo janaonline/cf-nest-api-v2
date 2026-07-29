@@ -21,7 +21,8 @@ export class XviFcCacheService {
     await this.redisService.del(key);
   }
 
-  async deleteByPattern(pattern: string): Promise<void> {
-    await this.redisService.delByPattern(pattern);
+  /** Returns how many cache keys were actually deleted, so callers can tell a real clear from a no-op. */
+  async deleteByPattern(pattern: string): Promise<number> {
+    return this.redisService.delByPattern(pattern);
   }
 }

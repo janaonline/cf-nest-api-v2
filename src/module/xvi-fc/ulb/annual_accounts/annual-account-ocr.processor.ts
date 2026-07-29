@@ -11,7 +11,12 @@ import {
   XviFcAnnualAccountUploadHistoryDocument,
 } from '../../../../schemas/xvi-fc/annual-account-upload-history.schema';
 import { Ulb, UlbDocument } from '../../../../schemas/ulb.schema';
-import { AnnualAccountOcrApiService, OcrResultResponse, OcrSubmitJobDto, OcrBasicValidation } from './annual-account-ocr-api.service';
+import {
+  AnnualAccountOcrApiService,
+  OcrResultResponse,
+  OcrSubmitJobDto,
+  OcrBasicValidation,
+} from './annual-account-ocr-api.service';
 import type { AnnualAccountOcrJobData } from './dto/annual-account-ocr-job.dto';
 
 const POLL_INTERVAL_MS = 5_000;
@@ -24,7 +29,7 @@ interface OcrCtx {
   docId: string;
 }
 
-@Processor(ANNUAL_ACCOUNT_PROCESSING_QUEUE, { concurrency: 2 })
+@Processor(ANNUAL_ACCOUNT_PROCESSING_QUEUE, { concurrency: 14 })
 export class AnnualAccountOcrProcessor extends WorkerHost {
   private readonly logger = new Logger(AnnualAccountOcrProcessor.name);
 
@@ -140,7 +145,9 @@ export class AnnualAccountOcrProcessor extends WorkerHost {
     }
 
     if (!settled) {
-      this.logger.warn(`OCR not settled after ${MAX_POLLS} polls — cron fallback will pick it up — uploadId=${uploadId}`);
+      this.logger.warn(
+        `OCR not settled after ${MAX_POLLS} polls — cron fallback will pick it up — uploadId=${uploadId}`,
+      );
     }
 
     console.log(`[OCR Processor] ✅ DONE — uploadId=${uploadId} settled=${settled}`);
@@ -156,7 +163,9 @@ export class AnnualAccountOcrProcessor extends WorkerHost {
     const validationStatus = bv?.validation_status ?? null;
     const processingStatus = validationStatus?.toUpperCase() === 'PASS' ? 'PASSED' : 'FAILED';
 
-    console.log(`[OCR Processor] ✔ writeCompleted — processingStatus=${processingStatus} validationStatus=${validationStatus}`);
+    console.log(
+      `[OCR Processor] ✔ writeCompleted — processingStatus=${processingStatus} validationStatus=${validationStatus}`,
+    );
     console.log(`[OCR Processor] basic_validation =`, JSON.stringify(bv));
 
     await Promise.all([

@@ -1332,6 +1332,20 @@ describe('DataCollectionService', () => {
       await expect(service.update(payload as never, stateClient)).rejects.toThrow(BadRequestException);
     });
 
+    it('loads legends for the existing record templateVersion, not DEFAULT_TEMPLATE_VERSION, when payload omits templateVersion', async () => {
+      const existingDoc = {
+        templateVersion: '2025.2',
+        lineItems: new Map<string, number>([['110', 1000]]),
+        save: jest.fn().mockResolvedValue(makeDocSaveResult({ templateVersion: '2025.2' })),
+      };
+      dcModel.findOne.mockReturnValue(existingDoc);
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce([makeLegend('110')]);
+
+      await service.update(basePayload as never, stateClient).catch(() => {});
+
+      expect(mockLineItemsLegendService.getActiveLegendsForValidation).toHaveBeenCalledWith('2025.2');
+    });
+
     it('does not silently ignore null in incoming line items', async () => {
       const existingDoc = {
         templateVersion: '2026.1',

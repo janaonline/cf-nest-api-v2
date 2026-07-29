@@ -4,7 +4,7 @@ import { BullModule } from '@nestjs/bullmq';
 import { MongooseModule } from '@nestjs/mongoose';
 import { S3Module } from '../../../../core/s3/s3.module';
 import { S3Service } from '../../../../core/s3/s3.service';
-import { S3UploadModule } from '../../../../s3-upload/s3-upload.module';
+import { FileModule } from '../../../file/file.module';
 import { ANNUAL_ACCOUNT_PROCESSING_QUEUE } from '../../../../core/constants/queues';
 import { Ulb, UlbSchema } from '../../../../schemas/ulb.schema';
 import { XviFcAnnualAccount, XviFcAnnualAccountSchema } from '../../../../schemas/xvi-fc/annual-account.schema';
@@ -16,24 +16,29 @@ import {
   XviFcAnnualAccountFormLog,
   XviFcAnnualAccountFormLogSchema,
 } from '../../../../schemas/xvi-fc/annual-account-form-log.schema';
+import {
+  XviFcDocumentActionGate,
+  XviFcDocumentActionGateSchema,
+} from '../../../../schemas/xvi-fc/document-action-gate.schema';
 import { AnnualAccountsController } from './annual_accounts.controller';
 import { AnnualAccountsService } from './annual_accounts.service';
 import { AnnualAccountOcrApiService } from './annual-account-ocr-api.service';
 import { AnnualAccountOcrProcessor } from './annual-account-ocr.processor';
 import { AnnualAccountStatusSyncService } from './annual-account-status-sync.service';
-import { FormJsonModule } from '../../../../form-json/form-json.module';
+import { FormJsonModule } from '../../../../master/form-json/form-json.module';
 
 @Module({
   imports: [
     HttpModule,
     S3Module,
-    S3UploadModule,
+    FileModule,
     FormJsonModule,
     BullModule.registerQueue({ name: ANNUAL_ACCOUNT_PROCESSING_QUEUE }),
     MongooseModule.forFeature([
       { name: XviFcAnnualAccount.name, schema: XviFcAnnualAccountSchema },
       { name: XviFcAnnualAccountUploadHistory.name, schema: XviFcAnnualAccountUploadHistorySchema },
       { name: XviFcAnnualAccountFormLog.name, schema: XviFcAnnualAccountFormLogSchema },
+      { name: XviFcDocumentActionGate.name, schema: XviFcDocumentActionGateSchema },
       { name: Ulb.name, schema: UlbSchema },
     ]),
   ],

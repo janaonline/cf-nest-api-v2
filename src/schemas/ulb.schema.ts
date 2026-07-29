@@ -63,7 +63,7 @@ export class Ulb {
   @Prop({ unique: true, sparse: true, index: true })
   censusCode: string;
 
-  @Prop({ default: null })
+  @Prop({ default: null, index: true })
   sbCode: string;
 
   @Prop({ default: 0 })
@@ -200,10 +200,6 @@ export class Ulb {
 
 export type UlbDocument = Ulb & Document;
 export const UlbSchema = SchemaFactory.createForClass(Ulb);
-
-// Non-unique indexes
-UlbSchema.index({ censusCode: 1 });
-UlbSchema.index({ sbCode: 1 });
 
 UlbSchema.index({ state: 1, isActive: 1 });
 UlbSchema.index({ state: 1, 'approval.status': 1 });

@@ -10,7 +10,7 @@ import { ParseObjectIdPipe } from 'src/common/pipes/parse-object-id.pipe';
 import { GetXviFcBankAccountQueryDto } from './dto/get-xvi-fc-bank-account-query.dto';
 import { SubmitXviFcBankAccountDto } from './dto/submit-xvi-fc-bank-account.dto';
 import { BankAccountDecisionDto } from './dto/bank-account-decision.dto';
-// import { BulkBankAccountDecisionDto } from './dto/bulk-bank-account-decision.dto'; // only used by the commented-out bulk-decision endpoint below
+import { BulkBankAccountDecisionDto } from './dto/bulk-bank-account-decision.dto';
 import { BankAccountUlbSubmissionsQueryDto } from './dto/bank-account-ulb-submissions-query.dto';
 import { BankAccountService } from './bank-account.service';
 import { extractIpAndUserAgent } from 'src/module/xvi-fc/common/utils/xvi-fc-request-meta.util';
@@ -47,13 +47,13 @@ export class BankAccountController {
     return this.bankAccountService.submitBankAccount(dto, user, ipAddress, userAgent);
   }
 
-  // @Post('bulk-decision')
-  // @UseGuards(PermissionGuard)
-  // @RequirePermissions(Permission.APPROVE_ULB_SUBMISSIONS)
-  // bulkDecide(@Body() dto: BulkBankAccountDecisionDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
-  //   const { ipAddress, userAgent } = extractIpAndUserAgent(req);
-  //   return this.bankAccountService.bulkDecideBankAccount(dto, user, ipAddress, userAgent);
-  // }
+  @Post('bulk-decision')
+  @UseGuards(PermissionGuard)
+  @RequirePermissions(Permission.APPROVE_ULB_SUBMISSIONS)
+  bulkDecide(@Body() dto: BulkBankAccountDecisionDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    const { ipAddress, userAgent } = extractIpAndUserAgent(req);
+    return this.bankAccountService.bulkDecideBankAccount(dto, user, ipAddress, userAgent);
+  }
 
   @Get(':id/logs')
   @UseGuards(PermissionGuard)

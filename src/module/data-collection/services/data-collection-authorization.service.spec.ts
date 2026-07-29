@@ -38,7 +38,8 @@ describe('DataCollectionAuthorizationService', () => {
   it('should be defined', () => expect(service).toBeDefined());
 
   describe('validateCanAccessUlb — ULB client', () => {
-    it('allows ULB client to access their own ULB', async () => {
+    it('allows ULB client to access their own ULB when it is active', async () => {
+      mockUlbModel.exists.mockResolvedValue({ _id: 'someId' });
       await expect(service.validateCanAccessUlb(ulbClient, ulbClient.ulbId!)).resolves.toBeUndefined();
     });
 
@@ -46,9 +47,22 @@ describe('DataCollectionAuthorizationService', () => {
       await expect(service.validateCanAccessUlb(ulbClient, 'other-ulb-id')).rejects.toThrow(ForbiddenException);
     });
 
-    it('does not call DB for ULB client ownership check', async () => {
-      await service.validateCanAccessUlb(ulbClient, ulbClient.ulbId!).catch(() => {});
+    it('throws ForbiddenException when ULB client accesses different ULB without calling the DB', async () => {
+      await service.validateCanAccessUlb(ulbClient, 'other-ulb-id').catch(() => {});
       expect(mockUlbModel.exists).not.toHaveBeenCalled();
+    });
+
+    it("throws ForbiddenException when the ULB client's own ULB has been deactivated", async () => {
+      mockUlbModel.exists.mockResolvedValue(null);
+      await expect(service.validateCanAccessUlb(ulbClient, ulbClient.ulbId!)).rejects.toThrow(ForbiddenException);
+    });
+
+    it("checks isActive for the ULB client's own ULB", async () => {
+      mockUlbModel.exists.mockResolvedValue({ _id: 'someId' });
+      await service.validateCanAccessUlb(ulbClient, ulbClient.ulbId!);
+      const existsArg = (mockUlbModel.exists.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(existsArg).toMatchObject({ isActive: true });
+      expect(JSON.stringify(existsArg)).toContain(ulbClient.ulbId);
     });
   });
 

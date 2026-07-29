@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { NotFoundException } from '@nestjs/common';
-import { FormJsonService } from 'src/form-json/form-json.service';
+import { FormJsonService } from 'src/master/form-json/form-json.service';
 import { SlbFormJsonConfigService } from './slb-form-json.service';
 import { DEFAULT_SLB_FIELDS } from '../constants/slb-form.constants';
 
