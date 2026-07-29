@@ -10,7 +10,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 import { S3Service } from '../../../core/s3/s3.service';
-import { S3UploadService } from '../../../s3-upload/s3-upload.service';
+import { S3UploadService } from '../../../module/file/s3-upload.service';
 import type { AuthUser } from '../../../module/auth/auth-user.interface';
 import { PropertyTaxOpMapper, PropertyTaxOpMapperDocument } from '../../../schemas/property-tax-op-mapper.schema';
 import { State, StateDocument } from '../../../schemas/state.schema';

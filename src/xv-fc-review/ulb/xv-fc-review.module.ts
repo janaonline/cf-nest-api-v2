@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { S3Service } from '../../core/s3/s3.service';
-import { S3UploadModule } from '../../s3-upload/s3-upload.module';
+import { FileModule } from '../../module/file/file.module';
 import { AnnualAccountData, AnnualAccountDataSchema } from '../../schemas/annual-account-data.schema';
 import { LedgerLog, LedgerLogSchema } from '../../schemas/ledger-log.schema';
 import { LineItem, LineItemSchema } from '../../schemas/line-item.schema';
@@ -13,7 +13,7 @@ import { XvFcReviewService } from './xv-fc-review.service';
 
 @Module({
   imports: [
-    S3UploadModule,
+    FileModule,
     PtaxReviewModule,
     MongooseModule.forFeature([
       { name: LedgerLog.name, schema: LedgerLogSchema },
