@@ -124,9 +124,7 @@ describe('AnnualAccountsService', () => {
     };
 
     beforeEach(() => {
-      mockAnnualAccountModel.findOneAndUpdate.mockReturnValue(
-        mockQuery({ _id: { toString: () => ACCOUNT_ID } }),
-      );
+      mockAnnualAccountModel.findOneAndUpdate.mockReturnValue(mockQuery({ _id: { toString: () => ACCOUNT_ID } }));
       mockAnnualAccountModel.findOne.mockReturnValue(mockQuery(null));
       mockUlbModel.findById.mockReturnValue(mockQuery({ state: { toString: () => STATE_ID } }));
     });
@@ -142,7 +140,7 @@ describe('AnnualAccountsService', () => {
 
       expect(result.processingStatus).toBe('PASSED');
       expect(mockOcrQueue.add).not.toHaveBeenCalled();
-      expect((mockUploadHistoryModel.create as jest.Mock)).toHaveBeenCalledWith(
+      expect(mockUploadHistoryModel.create as jest.Mock).toHaveBeenCalledWith(
         expect.objectContaining({ processingStatus: 'PASSED' }),
       );
     });
@@ -277,6 +275,83 @@ describe('AnnualAccountsService', () => {
       await expect(
         service.undoDocumentDecision(ACCOUNT_ID, 'auditedData', 'auditors-report', adminUser),
       ).rejects.toThrow(/cannot be decided/i);
+    });
+  });
+
+  describe('requestManualReview', () => {
+    const ULB_ID = '507f1f77bcf86cd799439011';
+    const ACCOUNT_ID = '507f1f77bcf86cd799439014';
+    const ulbUser: AuthUser = { _id: 'user-1', role: 'ULB-EDITOR', scope: 'ULB', ulb: ULB_ID } as AuthUser;
+
+    const docWithOcr = (ocrInfo: Record<string, unknown>) =>
+      mockQuery({
+        _id: ACCOUNT_ID,
+        ulb: ULB_ID,
+        auditedData: {
+          form_status: 'IN_PROGRESS',
+          documents: [
+            {
+              docId: 'auditors-report',
+              processingStatus: 'FAILED',
+              currentUpload: { uploadId: 'upload-1', ocrInfo },
+              stateDecision: null,
+            },
+          ],
+        },
+        unauditedData: null,
+      });
+
+    it('rejects non-ULB users', async () => {
+      const stateUser: AuthUser = { _id: 'user-2', role: 'STATE', scope: 'STATE' } as AuthUser;
+
+      await expect(
+        service.requestManualReview(ACCOUNT_ID, 'auditedData', 'auditors-report', stateUser),
+      ).rejects.toThrow('Only ULB users may request manual review');
+    });
+
+    it("rejects a ULB user acting on another ULB's account", async () => {
+      mockAnnualAccountModel.findById.mockReturnValue(docWithOcr({ validationStatus: 'FAIL' }));
+      const otherUlbUser: AuthUser = { _id: 'user-3', role: 'ULB-EDITOR', scope: 'ULB', ulb: 'other-ulb' } as AuthUser;
+
+      await expect(
+        service.requestManualReview(ACCOUNT_ID, 'auditedData', 'auditors-report', otherUlbUser),
+      ).rejects.toThrow('Access denied');
+    });
+
+    it('rejects when OCR validation has not failed', async () => {
+      mockAnnualAccountModel.findById.mockReturnValue(docWithOcr({ validationStatus: 'PASS' }));
+
+      await expect(service.requestManualReview(ACCOUNT_ID, 'auditedData', 'auditors-report', ulbUser)).rejects.toThrow(
+        'Manual review can only be requested for a failed OCR validation.',
+      );
+    });
+
+    it('rejects when manual review was already requested', async () => {
+      mockAnnualAccountModel.findById.mockReturnValue(
+        docWithOcr({ validationStatus: 'FAIL', isManualReviewRequested: true }),
+      );
+
+      await expect(service.requestManualReview(ACCOUNT_ID, 'auditedData', 'auditors-report', ulbUser)).rejects.toThrow(
+        'Manual review has already been requested for this document.',
+      );
+    });
+
+    it('sets isManualReviewRequested on both the account and upload-history records', async () => {
+      mockAnnualAccountModel.findById.mockReturnValue(docWithOcr({ validationStatus: 'FAIL' }));
+      mockUploadHistoryModel.updateOne = jest.fn().mockResolvedValue({ modifiedCount: 1 });
+
+      await service.requestManualReview(ACCOUNT_ID, 'auditedData', 'auditors-report', ulbUser);
+
+      const [filter, update] = mockAnnualAccountModel.updateOne.mock.calls[0] as [
+        Record<string, unknown>,
+        MongoUpdateCall,
+      ];
+      expect(filter).toMatchObject({ 'auditedData.documents.docId': 'auditors-report' });
+      expect(update.$set?.['auditedData.documents.$.currentUpload.ocrInfo.isManualReviewRequested']).toBe(true);
+      expect(mockUploadHistoryModel.updateOne).toHaveBeenCalledWith(
+        { uploadId: 'upload-1' },
+        { $set: { 'ocrInfo.isManualReviewRequested': true } },
+      );
     });
   });
 
