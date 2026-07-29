@@ -746,8 +746,8 @@ On save/final-submit routes, status is re-checked server-side (`assertCanStateEd
 Three new top-level modules were merged in:
 
 - `FormsModule` (`src/forms/`) — generic ULB→State→MoHUA form workflow engine
-- `CommunicationModule` (`src/communication/`) — message threads between org tiers
-- `NotificationsModule` (`src/notifications/`) — in-app notification delivery
+- `CommunicationModule` (`src/module/communication/`) — message threads between org tiers
+- `NotificationsModule` (`src/module/notifications/`) — in-app notification delivery
 
 **None of these touch `src/module/xvi-fc`.** They are currently independent.
 
@@ -1132,7 +1132,7 @@ curl -H "Authorization: Bearer <token>" \
 
 **Modified files**:
 
-- `src/form-json/form-json.service.ts`
+- `src/master/form-json/form-json.service.ts`
   - `RedisService` injected via constructor (globally available, no module import needed).
   - `getFormJsonCacheKey(designYearId, formId): string` — private helper; returns `formJson:<designYearId>:<formId>`.
   - `findActiveByDesignYearAndFormId(designYearId, formId): Promise<IFormJson>` — new public method; checks Redis first (TTL 1 h), queries `{ design_year, formId, isActive: true }` on miss, writes result to Redis, returns `IFormJson`.
@@ -1503,7 +1503,7 @@ Safe replace order enforced in `validateExcel` (`POST validate-excel`):
 - `src/module/xvi-fc/state/sfc-status/sfc-status.service.ts` — `getForm()` derives `designYear` via `YearIdToLabel[yearId]`; throws `NotFoundException` for unknown yearId; `hydrateQuestions()` gains optional `folderPathContext`; resolves `folderPath` inside the existing `formFieldType === 'file'` branch (no second loop)
 - `src/module/xvi-fc/state/elected-urban-local-bodies/services/main/elected-urban-local-bodies.service.ts` — same pattern: `getForm()` derives `designYear`, `hydrateQuestions()` gains optional `folderPathContext`
 - `src/module/xvi-fc/state/elected-urban-local-bodies/services/post-submission-update/elected-urban-local-bodies-post-submission-update.service.ts` — `getMetadata()` derives `designYear` and calls `resolveXviFcFolderPathsInFormJson` on `EULB_POST_SUBMIT_UPDATE_FIELDS` questions before returning
-- `src/s3-upload/s3-upload.service.ts` — added `assertSafeFolderPath()` private function; blocks path traversal (`..`), leading `/`, double `//`, and empty segments; called before constructing S3 key; does not enforce xvi-fc prefix (shared endpoint — audit other module usages first)
+- `src/module/file/s3-upload.service.ts` — added `assertSafeFolderPath()` private function; blocks path traversal (`..`), leading `/`, double `//`, and empty segments; called before constructing S3 key; does not enforce xvi-fc prefix (shared endpoint — audit other module usages first)
 - `src/module/xvi-fc/xvifc-payload.json` — all 6 file fields migrated from static `folderPath` to `folderPathKey`
 
 **DB payload convention going forward**:

@@ -13,7 +13,7 @@ import { SideMenu, SideMenuSchema } from '../../schemas/side-menu.schema';
 import { XviFcCacheService } from './cache/xvi-fc-cache.service';
 import { XviFcCacheInterceptor } from './cache/xvi-fc-cache.interceptor';
 import { SideMenuModule } from './side-menu/side-menu.module';
-import { FormJsonModule } from '../../form-json/form-json.module';
+import { FormJsonModule } from '../../master/form-json/form-json.module';
 import { UnspentBalanceDisclosureModule } from './ulb/unspent-balance-disclosure/unspent-balance-disclosure.module';
 import { BankAccountModule } from './ulb/bank-account/bank-account.module';
 import { XviFcAnnualAccount, XviFcAnnualAccountSchema } from '../../schemas/xvi-fc/annual-account.schema';

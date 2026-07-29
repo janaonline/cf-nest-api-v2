@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { FormJsonService } from 'src/form-json/form-json.service';
+import { FormJsonService } from 'src/master/form-json/form-json.service';
 import { FC_UNSPENT_FORM_ID } from '../../constants/fc-unspent-declaration.constants';
 import {
   FcUnspentTypedFieldConfig,

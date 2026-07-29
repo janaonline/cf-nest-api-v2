@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ExcelService } from 'src/services/excel/excel.service';
-import { FormJsonModule } from 'src/form-json/form-json.module';
+import { FormJsonModule } from 'src/master/form-json/form-json.module';
 import { XviFcSfcStatus, XviFcSfcStatusSchema } from '../../../../schemas/xvi-fc/state/sfc-status.schema';
 import {
   XviFcSfcStatusHistory,

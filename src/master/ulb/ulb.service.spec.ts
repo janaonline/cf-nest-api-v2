@@ -5,7 +5,7 @@ import { ConfigService } from '@nestjs/config';
 import mongoose, { Types } from 'mongoose';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { EmailQueueService } from 'src/core/queue/email-queue/email-queue.service';
-import { FormJsonService } from 'src/form-json/form-json.service';
+import { FormJsonService } from 'src/master/form-json/form-json.service';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
 import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
 import type { IAuthUser } from 'src/common/interfaces/auth-user.interface';

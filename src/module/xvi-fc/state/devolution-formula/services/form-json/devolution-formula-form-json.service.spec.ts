@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { InternalServerErrorException, NotFoundException } from '@nestjs/common';
-import { FormJsonService } from 'src/form-json/form-json.service';
+import { FormJsonService } from 'src/master/form-json/form-json.service';
 import { DfFormJsonConfigService } from './devolution-formula-form-json.service';
 import { DF_FORM_ID, DF_FORM_TYPE } from '../../constants/devolution-formula.constants';
 

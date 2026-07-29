@@ -9,7 +9,7 @@ import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { Year, YearDocument } from 'src/schemas/year.schema';
 import { Role } from './enum/role.enum';
 import { UserDocument } from 'src/schemas/user/user.schema';
-import { UsersRepository } from 'src/users/users.repository';
+import { UsersRepository } from 'src/module/users/users.repository';
 import { AuthService } from './auth.service';
 import { CheckUserDto } from './dto/check-user.dto';
 import { LoginDto } from './dto/login.dto';

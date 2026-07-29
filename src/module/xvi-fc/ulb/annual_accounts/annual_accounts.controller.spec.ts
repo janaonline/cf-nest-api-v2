@@ -9,8 +9,8 @@ import { XviFcAnnualAccountFormLog } from '../../../../schemas/xvi-fc/annual-acc
 import { XviFcDocumentActionGate } from '../../../../schemas/xvi-fc/document-action-gate.schema';
 import { Ulb } from '../../../../schemas/ulb.schema';
 import { S3Service } from '../../../../core/s3/s3.service';
-import { S3UploadService } from '../../../../s3-upload/s3-upload.service';
-import { FormJsonService } from '../../../../form-json/form-json.service';
+import { S3UploadService } from '../../../file/s3-upload.service';
+import { FormJsonService } from '../../../../master/form-json/form-json.service';
 import { ANNUAL_ACCOUNT_PROCESSING_QUEUE } from '../../../../core/constants/queues';
 import type { AuthUser } from '../../../auth/auth-user.interface';
 

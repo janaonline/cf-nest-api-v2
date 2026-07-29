@@ -12,7 +12,7 @@ import { Model, Types } from 'mongoose';
 import { RedisService } from 'src/core/services/redis/redis.service';
 import { UserDocument } from 'src/schemas/user/user.schema';
 import { LoginHistory } from 'src/schemas/user/login-history.schema';
-import { UsersRepository } from 'src/users/users.repository';
+import { UsersRepository } from 'src/module/users/users.repository';
 import { RegisterDto } from './dto/register.dto';
 import { SetPasswordDto } from './dto/set-password.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';

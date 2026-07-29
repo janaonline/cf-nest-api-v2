@@ -6,7 +6,7 @@ import {
   NotFoundException,
   OnModuleInit,
 } from '@nestjs/common';
-import { FormJsonService } from '../../../../form-json/form-json.service';
+import { FormJsonService } from '../../../../master/form-json/form-json.service';
 import { InjectQueue } from '@nestjs/bullmq';
 import { InjectModel } from '@nestjs/mongoose';
 import { createHash } from 'crypto';
@@ -14,7 +14,7 @@ import { Queue } from 'bullmq';
 import { Model, PipelineStage, Types } from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 import { S3Service } from '../../../../core/s3/s3.service';
-import { S3UploadService } from '../../../../s3-upload/s3-upload.service';
+import { S3UploadService } from '../../../file/s3-upload.service';
 import {
   AnnualAccountFormStatus,
   FORM_STATUS_ID,
