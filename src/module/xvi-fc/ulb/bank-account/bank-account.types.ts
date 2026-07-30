@@ -22,6 +22,11 @@ export interface XviFcBankDetails {
   micr: string | null;
 }
 
+/** proofFile shape returned to clients — adds a signed, short-lived download URL computed at response time. */
+export interface XviFcBankAccountProofFileResponse extends XviFcBankAccountProofFile {
+  fileUrl: string | null;
+}
+
 export const DEFAULT_XVI_FC_BANK_ACCOUNT_PROOF_FILE: XviFcBankAccountProofFile = {
   originalName: '',
   mimeType: 'application/pdf',
@@ -61,7 +66,7 @@ export interface XviFcBankAccountResponse {
   bankDetails: XviFcBankDetails;
   accountNumberMasked: string;
   accountNumberLast4: string;
-  proofFile: XviFcBankAccountProofFile;
+  proofFile: XviFcBankAccountProofFileResponse;
   currentFormStatus: FormStatusType;
   currentFormStatusLabel: string;
   stateDecision: DecisionInfo | null;

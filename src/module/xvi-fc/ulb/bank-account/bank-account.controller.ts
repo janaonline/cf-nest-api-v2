@@ -61,12 +61,6 @@ export class BankAccountController {
     return this.bankAccountService.getBankAccountFormLogs(id, user);
   }
 
-  @Get(':id/proof-signed-url')
-  @UseGuards(PermissionGuard)
-  getProofSignedUrl(@Param('id', ParseObjectIdPipe) id: string, @CurrentUser() user: AuthUser) {
-    return this.bankAccountService.getProofSignedUrl(id, user);
-  }
-
   @Post(':id/decision')
   @UseGuards(PermissionGuard)
   @RequirePermissions(Permission.APPROVE_ULB_SUBMISSIONS)
