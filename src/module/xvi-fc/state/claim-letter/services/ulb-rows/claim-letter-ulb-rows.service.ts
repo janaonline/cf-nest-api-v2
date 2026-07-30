@@ -17,7 +17,7 @@ import {
 } from '../../constants/claim-letter.constants';
 import { ClaimLetterEligibilityService } from '../eligibility/claim-letter-eligibility.service';
 import type { GetClaimLetterUlbRowsQueryDto } from '../../dto/get-claim-letter-ulb-rows-query.dto';
-import type { ClaimLetterFinancialSummaryDisplay, ClaimLetterUlbRow } from '../../types/claim-letter.types';
+import type { ClaimLetterUlbRow } from '../../types/claim-letter.types';
 
 /** Selected-ULBs table for a claim (plan §6.2) — mirrors the FC Unspent Yes-branch table shape. */
 @Injectable()
@@ -37,12 +37,12 @@ export class ClaimLetterUlbRowsService {
   ): Promise<XviFcApiResponse<ClaimLetterUlbRow[]>> {
     const parent = await this.batchModel
       .findOne({ _id: claimLetterId, assemblyStatus: 'READY' })
+      .select('state year installment')
       .lean<{
         _id: Types.ObjectId;
         state: Types.ObjectId;
         year: Types.ObjectId;
         installment: 1 | 2;
-        financialSummary: ClaimLetterFinancialSummaryDisplay;
       }>()
       .exec();
     if (!parent) throw new NotFoundException(`Claim letter ${claimLetterId} not found`);
@@ -114,12 +114,7 @@ export class ClaimLetterUlbRowsService {
       eligible: gate.passed && (ulbLevelEligibility.perUlbEligible.get(String(r.ulbId)) ?? true),
     }));
 
-    return xviFcSuccess('Claim letter ULBs fetched.', data, {
-      page,
-      limit,
-      total,
-      financialSummary: parent.financialSummary,
-    });
+    return xviFcSuccess('Claim letter ULBs fetched.', data, { page, limit, total });
   }
 
   private escapeRegExp(value: string): string {

@@ -11,7 +11,7 @@ import type { AuthUser } from 'src/module/auth/auth-user.interface';
 
 function q<T>(value: T) {
   const chain: Record<string, jest.Mock> = {};
-  for (const m of ['sort', 'skip', 'limit', 'lean']) {
+  for (const m of ['select', 'sort', 'skip', 'limit', 'lean']) {
     chain[m] = jest.fn().mockReturnValue(chain);
   }
   chain['exec'] = jest.fn().mockResolvedValue(value);
@@ -184,23 +184,6 @@ describe('ClaimLetterUlbRowsService', () => {
     expect(eligibilityService.resolveUlbLevelEligibilityForDisplay).toHaveBeenCalledWith(String(stateId), String(yearId), 1, [
       String(ulbId),
     ]);
-  });
-
-  it('returns the display-converted financialSummary in meta', async () => {
-    batchModel.findOne.mockReturnValue(
-      q({
-        _id: claimLetterId,
-        state: stateId,
-        year: yearId,
-        installment: 1,
-        financialSummary: { ...financialSummary, selectedAllocation: 2 },
-      }),
-    );
-    batchUlbModel.find.mockReturnValue(q([]));
-
-    const result = await service.getUlbs(claimLetterId, {}, stateUser);
-
-    expect((result.meta!['financialSummary'] as { selectedAllocation: number }).selectedAllocation).toBe(2);
   });
 
   it('builds a name/censusCode/sbCode search filter when search is provided', async () => {
