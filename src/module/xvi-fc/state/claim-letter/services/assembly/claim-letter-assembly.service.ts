@@ -4,7 +4,6 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
-  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectConnection, InjectModel } from '@nestjs/mongoose';
@@ -89,6 +88,17 @@ interface BuildResult {
   };
 }
 
+/** The in-memory, not-yet-persisted result of `prepareChildren` — every business-rule check
+ *  (gate, per-ULB eligibility, variance) has already passed by the time this exists, so a caller
+ *  holding one of these knows nothing destructive needs to happen for validation to fail. */
+interface PreparedChildren {
+  requestedUlbIds: string[];
+  children: BuiltChild[];
+  gatePassed: boolean;
+  stateEligibilitySources: Record<string, unknown>[];
+  allocationByUlbId: Map<string, DevolutionAllocation>;
+}
+
 /**
  * The claim-letter creation pipeline (plan §7) — the most concurrency-sensitive piece of this
  * feature, since a State's legally binding grant claim must never let two drafts double-claim the
@@ -101,8 +111,6 @@ interface BuildResult {
  */
 @Injectable()
 export class ClaimLetterAssemblyService {
-  private readonly logger = new Logger(ClaimLetterAssemblyService.name);
-
   constructor(
     @InjectConnection() private readonly connection: Connection,
     @InjectModel(ClaimLetterBatch.name)
@@ -306,6 +314,22 @@ export class ClaimLetterAssemblyService {
     yearOid: Types.ObjectId,
     installment: number,
   ): Promise<BuildResult> {
+    const prepared = await this.prepareChildren(parent, selections, userOid, stateOid, yearOid, installment);
+    await this.persistChildren(prepared.children);
+    return this.finishBuildResult(parent, prepared, stateOid, yearOid, installment);
+  }
+
+  /** Fetches sources, validates every selection, and builds the child documents in memory —
+   *  throws before anything is written, so a business-rule rejection (ineligible ULB, variance
+   *  violation, state gate failure) never has a destructive side effect. */
+  private async prepareChildren(
+    parent: ClaimLetterBatchDocument,
+    selections: ClaimLetterUlbSelectionInput[],
+    userOid: Types.ObjectId,
+    stateOid: Types.ObjectId,
+    yearOid: Types.ObjectId,
+    installment: number,
+  ): Promise<PreparedChildren> {
     const [gate, allocationByUlbId, ulbLevelEligibility] = await Promise.all([
       this.eligibilityService.evaluateStateLevelGate(String(stateOid), String(yearOid), installment as 1 | 2),
       this.eligibilityService.resolveDevolutionAllocations(String(stateOid), String(yearOid), installment as 1 | 2),
@@ -374,6 +398,21 @@ export class ClaimLetterAssemblyService {
       );
     }
 
+    return {
+      requestedUlbIds: selections.map((s) => s.ulbId),
+      children,
+      gatePassed: gate.passed,
+      stateEligibilitySources: gate.sources
+        .filter((s) => s.result === 'PASSED' || s.result === 'EXEMPTED')
+        .map((s) => this.toEligibilitySourceSnapshot(s)),
+      allocationByUlbId,
+    };
+  }
+
+  /** Chunked, non-transactional insert (scales to 700+ ULBs without one giant transaction) —
+   *  everything that could reject the selection on business grounds has already happened in
+   *  `prepareChildren`, so a failure here is an infra-level write failure, not a validation one. */
+  private async persistChildren(children: BuiltChild[]): Promise<void> {
     for (let i = 0; i < children.length; i += CLAIM_LETTER_CHILD_INSERT_CHUNK_SIZE) {
       const chunk = children.slice(i, i + CLAIM_LETTER_CHILD_INSERT_CHUNK_SIZE);
       await this.batchUlbModel.bulkWrite(
@@ -381,7 +420,29 @@ export class ClaimLetterAssemblyService {
         { ordered: false },
       );
     }
+  }
 
+  /** Re-inserts a previously deleted snapshot verbatim (same `_id`s and all other fields) — the
+   *  safety net `updateDraftRaw` falls back on when persisting or verifying the new child set
+   *  fails after the old set has already been deleted. */
+  private async restoreChildren(snapshot: Record<string, unknown>[]): Promise<void> {
+    for (let i = 0; i < snapshot.length; i += CLAIM_LETTER_CHILD_INSERT_CHUNK_SIZE) {
+      const chunk = snapshot.slice(i, i + CLAIM_LETTER_CHILD_INSERT_CHUNK_SIZE);
+      await this.batchUlbModel.bulkWrite(
+        chunk.map((document) => ({ insertOne: { document } })),
+        { ordered: false },
+      );
+    }
+  }
+
+  private async finishBuildResult(
+    parent: ClaimLetterBatchDocument,
+    prepared: PreparedChildren,
+    stateOid: Types.ObjectId,
+    yearOid: Types.ObjectId,
+    installment: number,
+  ): Promise<BuildResult> {
+    const { children, allocationByUlbId } = prepared;
     const totalInstallmentAllocation = sumAmountsExactly([...allocationByUlbId.values()].map((a) => a.allocatedAmount));
     // Self-excludes `parent._id` so this batch's own claim (still counted separately below via
     // `currentSelectedClaim`) never nets out of totalClaimInProgress/totalClaimInDraft twice —
@@ -399,12 +460,10 @@ export class ClaimLetterAssemblyService {
     const currentSelectedClaim = sumAmountsExactly(children.map((c) => c.document['claimedAmount'] as number));
 
     return {
-      requestedUlbIds: selections.map((s) => s.ulbId),
+      requestedUlbIds: prepared.requestedUlbIds,
       children,
-      gatePassed: gate.passed,
-      stateEligibilitySources: gate.sources
-        .filter((s) => s.result === 'PASSED' || s.result === 'EXEMPTED')
-        .map((s) => this.toEligibilitySourceSnapshot(s)),
+      gatePassed: prepared.gatePassed,
+      stateEligibilitySources: prepared.stateEligibilitySources,
       financialSummary: {
         totalInstallmentAllocation,
         totalAlreadyAcknowledged,
@@ -528,14 +587,6 @@ export class ClaimLetterAssemblyService {
       .find({ claimLetter: parent._id })
       .lean<Record<string, unknown>[]>()
       .exec();
-
-    // TEMPORARY DIAGNOSTIC — remove once the "Child assembly is incomplete" 409 is root-caused.
-    this.logger.debug(
-      `[DIAG] verifyPersistedChildren: parent=${String(parent._id)} ` +
-        `requestedUlbIds=${JSON.stringify(built.requestedUlbIds)} ` +
-        `persistedCount=${persistedChildren.length} ` +
-        `persistedUlbIds=${JSON.stringify(persistedChildren.map((c) => String(c['ulbId'])))}`,
-    );
 
     this.assertChildrenComplete(built.requestedUlbIds, persistedChildren);
     this.assertChildrenMatchParentIdentity(persistedChildren, parent, stateOid, yearOid, installment);
@@ -778,12 +829,14 @@ export class ClaimLetterAssemblyService {
     const installment = parent.installment;
     const userOid = new Types.ObjectId(user._id);
 
+    // Snapshotted in FULL (not just ulbId) — this is what gets restored, verbatim, if anything
+    // below fails after the destructive delete, so the draft never ends up with fewer children
+    // than either the old or new valid set.
     const currentChildren = await this.batchUlbModel
       .find({ claimLetter: parent._id })
-      .select('ulbId')
-      .lean<{ ulbId: Types.ObjectId }[]>()
+      .lean<Record<string, unknown>[]>()
       .exec();
-    const currentUlbIdSet = new Set(currentChildren.map((c) => String(c.ulbId)));
+    const currentUlbIdSet = new Set(currentChildren.map((c) => String(c['ulbId'])));
     const requestedUlbIdSet = new Set(ulbIds);
     const addedUlbIds = ulbIds.filter((id) => !currentUlbIdSet.has(id));
     const removedUlbIds = [...currentUlbIdSet].filter((id) => !requestedUlbIdSet.has(id));
@@ -795,9 +848,33 @@ export class ClaimLetterAssemblyService {
       // claim *versions* are immutable, per plan §7.7) — delete-and-rebuild the full set is
       // simpler and safer than a true per-field diff, and also sidesteps a duplicate-key
       // collision that reusing a retained ULB's existing child document would otherwise risk.
+      //
+      // Validate the full new child set in memory FIRST — a business-rule rejection (ineligible
+      // ULB, variance violation, state gate failure) throws here, before anything destructive
+      // happens, so the existing rows are never touched.
+      const prepared = await this.prepareChildren(parent, selections, userOid, stateOid, yearOid, installment);
+
       await this.batchUlbModel.deleteMany({ claimLetter: parent._id });
-      const built = await this.buildChildren(parent, selections, userOid, stateOid, yearOid, installment);
-      return await this.verifyAndFinalizeUpdate(parent, built, stateOid, yearOid, installment, expectedRevision);
+      try {
+        await this.persistChildren(prepared.children);
+      } catch (err) {
+        // The new set failed to persist after the old one was already deleted — restore the old
+        // set rather than leaving the draft with fewer children than either valid set.
+        await this.restoreChildren(currentChildren);
+        throw err;
+      }
+
+      const built = await this.finishBuildResult(parent, prepared, stateOid, yearOid, installment);
+
+      try {
+        return await this.verifyAndFinalizeUpdate(parent, built, stateOid, yearOid, installment, expectedRevision);
+      } catch (err) {
+        // The new set is persisted but unconfirmed (drift/mismatch/revision race) — wipe it and
+        // restore the previous, still-valid set rather than leaving the unconfirmed one in place.
+        await this.batchUlbModel.deleteMany({ claimLetter: parent._id });
+        await this.restoreChildren(currentChildren);
+        throw err;
+      }
     } catch (err) {
       await this.compensateUpdateFailure(
         parent._id,

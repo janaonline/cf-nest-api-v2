@@ -633,6 +633,65 @@ describe('ClaimLetterAssemblyService', () => {
       expect(update.$inc).toEqual({ revision: 1 });
       expect(historyService.recordTransition).not.toHaveBeenCalled();
     });
+
+    // ─── Data-loss/false-conflict regression coverage ───────────────────────
+    // updateDraftRaw used to delete the existing children before validating the new selection,
+    // so a business-rule rejection or a post-persist verification failure would permanently wipe
+    // a previously valid draft with nothing to restore it. These tests cover the fix.
+
+    it('does not delete existing children when the new selection fails validation', async () => {
+      batchModel.findOne.mockReturnValue(q(parentDoc()));
+      batchUlbModel.find.mockReturnValue(q([persistedChild({ ulbId: ulbAId })]));
+      lockModel.find.mockReturnValue(q([{ ulbId: ulbAId }]));
+      eligibilityService.resolveUlbLevelEligibility.mockResolvedValue({
+        perUlbEligible: new Map([[ulbAId.toString(), false]]),
+      });
+
+      await expect(
+        service.updateDraft(parentId.toString(), [{ ulbId: ulbAId.toString(), claimedAmount: 100 }], 0, stateUser),
+      ).rejects.toThrow(BadRequestException);
+
+      expect(batchUlbModel.deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('restores the previous children when persisting the new set fails after the old set was deleted', async () => {
+      batchModel.findOne.mockReturnValue(q(parentDoc()));
+      const oldChild = persistedChild({ ulbId: ulbAId });
+      batchUlbModel.find.mockReturnValue(q([oldChild]));
+      ulbModel.find.mockReturnValue(q([{ _id: ulbBId, name: 'Beta ULB', censusCode: '222', sbCode: null }]));
+      eligibilityService.resolveDevolutionAllocations.mockResolvedValue(new Map([[ulbBId.toString(), allocation]]));
+      batchUlbModel.bulkWrite.mockRejectedValueOnce(new Error('insert failed')).mockResolvedValue({});
+
+      await expect(
+        service.updateDraft(parentId.toString(), [{ ulbId: ulbBId.toString(), claimedAmount: 100 }], 0, stateUser),
+      ).rejects.toThrow('insert failed');
+
+      expect(batchUlbModel.deleteMany).toHaveBeenCalledWith({ claimLetter: parentId });
+      expect(batchUlbModel.bulkWrite).toHaveBeenCalledTimes(2);
+      const [restoreOps] = batchUlbModel.bulkWrite.mock.calls[1] as [
+        Array<{ insertOne: { document: Record<string, unknown> } }>,
+      ];
+      expect(String(restoreOps[0].insertOne.document['ulbId'])).toBe(ulbAId.toString());
+    });
+
+    it('restores the previous children when post-persist verification fails', async () => {
+      batchModel.findOne.mockReturnValue(q(parentDoc()));
+      const oldChild = persistedChild({ ulbId: ulbAId });
+      batchUlbModel.find
+        .mockReturnValueOnce(q([oldChild])) // currentChildren, before the edit
+        .mockReturnValueOnce(q([])); // persistedChildren re-fetch inside verify — nothing there
+
+      await expect(
+        service.updateDraft(parentId.toString(), [{ ulbId: ulbAId.toString(), claimedAmount: 100 }], 0, stateUser),
+      ).rejects.toThrow(ConflictException);
+
+      expect(batchUlbModel.deleteMany).toHaveBeenCalledTimes(2);
+      expect(batchUlbModel.bulkWrite).toHaveBeenCalledTimes(2);
+      const [restoreOps] = batchUlbModel.bulkWrite.mock.calls[1] as [
+        Array<{ insertOne: { document: Record<string, unknown> } }>,
+      ];
+      expect(String(restoreOps[0].insertOne.document['ulbId'])).toBe(ulbAId.toString());
+    });
   });
 
   // ─── abandonDraft ────────────────────────────────────────────────────────────
