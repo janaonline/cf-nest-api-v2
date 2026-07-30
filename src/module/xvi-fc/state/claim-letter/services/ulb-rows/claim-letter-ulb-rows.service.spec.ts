@@ -20,7 +20,10 @@ function q<T>(value: T) {
 
 describe('ClaimLetterUlbRowsService', () => {
   let service: ClaimLetterUlbRowsService;
-  let eligibilityService: { evaluateStateLevelGate: jest.Mock; resolveUlbLevelEligibility: jest.Mock };
+  let eligibilityService: {
+    evaluateStateLevelGateForDisplay: jest.Mock;
+    resolveUlbLevelEligibilityForDisplay: jest.Mock;
+  };
   let batchModel: { findOne: jest.Mock };
   let batchUlbModel: { find: jest.Mock; countDocuments: jest.Mock };
 
@@ -45,8 +48,8 @@ describe('ClaimLetterUlbRowsService', () => {
 
   beforeEach(async () => {
     eligibilityService = {
-      evaluateStateLevelGate: jest.fn().mockResolvedValue({ sources: [], passed: true }),
-      resolveUlbLevelEligibility: jest.fn().mockResolvedValue({ perUlbEligible: new Map() }),
+      evaluateStateLevelGateForDisplay: jest.fn().mockResolvedValue({ sources: [], passed: true }),
+      resolveUlbLevelEligibilityForDisplay: jest.fn().mockResolvedValue({ perUlbEligible: new Map() }),
     };
     batchModel = { findOne: jest.fn() };
     batchUlbModel = {
@@ -148,7 +151,7 @@ describe('ClaimLetterUlbRowsService', () => {
         },
       ]),
     );
-    eligibilityService.evaluateStateLevelGate.mockResolvedValue({ sources: [], passed: false });
+    eligibilityService.evaluateStateLevelGateForDisplay.mockResolvedValue({ sources: [], passed: false });
 
     const result = await service.getUlbs(claimLetterId, {}, stateUser);
 
@@ -171,14 +174,14 @@ describe('ClaimLetterUlbRowsService', () => {
         },
       ]),
     );
-    eligibilityService.resolveUlbLevelEligibility.mockResolvedValue({
+    eligibilityService.resolveUlbLevelEligibilityForDisplay.mockResolvedValue({
       perUlbEligible: new Map([[String(ulbId), false]]),
     });
 
     const result = await service.getUlbs(claimLetterId, {}, stateUser);
 
     expect(result.data![0].eligible).toBe(false);
-    expect(eligibilityService.resolveUlbLevelEligibility).toHaveBeenCalledWith(String(stateId), String(yearId), 1, [
+    expect(eligibilityService.resolveUlbLevelEligibilityForDisplay).toHaveBeenCalledWith(String(stateId), String(yearId), 1, [
       String(ulbId),
     ]);
   });

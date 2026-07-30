@@ -12,9 +12,9 @@ describe('ClaimLetterUlbOptionsService', () => {
   let service: ClaimLetterUlbOptionsService;
   let expectedUlbSetService: { resolve: jest.Mock };
   let eligibilityService: {
-    evaluateStateLevelGate: jest.Mock;
+    evaluateStateLevelGateForDisplay: jest.Mock;
     resolveDevolutionAllocations: jest.Mock;
-    resolveUlbLevelEligibility: jest.Mock;
+    resolveUlbLevelEligibilityForDisplay: jest.Mock;
     resolveClaimedUlbIds: jest.Mock;
   };
 
@@ -32,9 +32,9 @@ describe('ClaimLetterUlbOptionsService', () => {
   beforeEach(async () => {
     expectedUlbSetService = { resolve: jest.fn() };
     eligibilityService = {
-      evaluateStateLevelGate: jest.fn(),
+      evaluateStateLevelGateForDisplay: jest.fn(),
       resolveDevolutionAllocations: jest.fn(),
-      resolveUlbLevelEligibility: jest
+      resolveUlbLevelEligibilityForDisplay: jest
         .fn()
         .mockResolvedValue({ perUlbEligible: new Map(), perUlbFailedCriteria: new Map() }),
       resolveClaimedUlbIds: jest.fn().mockResolvedValue(new Set()),
@@ -62,7 +62,7 @@ describe('ClaimLetterUlbOptionsService', () => {
 
   it('marks every ULB ineligible with the gate failure reason when the state-level gate fails', async () => {
     expectedUlbSetService.resolve.mockResolvedValue([ulbA]);
-    eligibilityService.evaluateStateLevelGate.mockResolvedValue({
+    eligibilityService.evaluateStateLevelGateForDisplay.mockResolvedValue({
       sources: [{ result: 'FAILED', reasonCode: 'FORM_STATUS_2_NOT_ACCEPTED' } as EligibilityEvaluationResult],
       passed: false,
     });
@@ -76,7 +76,7 @@ describe('ClaimLetterUlbOptionsService', () => {
 
   it('marks a ULB ineligible with NO_DEVOLUTION_ALLOCATION when the gate passes but no allocation exists', async () => {
     expectedUlbSetService.resolve.mockResolvedValue([ulbA]);
-    eligibilityService.evaluateStateLevelGate.mockResolvedValue(passedGate());
+    eligibilityService.evaluateStateLevelGateForDisplay.mockResolvedValue(passedGate());
     eligibilityService.resolveDevolutionAllocations.mockResolvedValue(new Map());
 
     const result = await service.getOptions(stateId, yearId, 1, {}, stateUser);
@@ -87,7 +87,7 @@ describe('ClaimLetterUlbOptionsService', () => {
 
   it('marks a ULB eligible when the gate passes and it has a valid allocation', async () => {
     expectedUlbSetService.resolve.mockResolvedValue([ulbA]);
-    eligibilityService.evaluateStateLevelGate.mockResolvedValue(passedGate());
+    eligibilityService.evaluateStateLevelGateForDisplay.mockResolvedValue(passedGate());
     eligibilityService.resolveDevolutionAllocations.mockResolvedValue(
       new Map([[ulbA.ulbId, { allocatedAmount: 1, formDocumentId: 'f', rowDocumentId: 'r', datasetVersion: 1 }]]),
     );
@@ -99,7 +99,7 @@ describe('ClaimLetterUlbOptionsService', () => {
 
   it('marks an otherwise-eligible ULB ineligible when locked by a different claim', async () => {
     expectedUlbSetService.resolve.mockResolvedValue([ulbA]);
-    eligibilityService.evaluateStateLevelGate.mockResolvedValue(passedGate());
+    eligibilityService.evaluateStateLevelGateForDisplay.mockResolvedValue(passedGate());
     eligibilityService.resolveDevolutionAllocations.mockResolvedValue(
       new Map([[ulbA.ulbId, { allocatedAmount: 1, formDocumentId: 'f', rowDocumentId: 'r', datasetVersion: 1 }]]),
     );
@@ -112,11 +112,11 @@ describe('ClaimLetterUlbOptionsService', () => {
 
   it('marks an otherwise-eligible ULB ineligible when it fails a new ULB-level criterion (SLB, Annual Accounts, etc.)', async () => {
     expectedUlbSetService.resolve.mockResolvedValue([ulbA]);
-    eligibilityService.evaluateStateLevelGate.mockResolvedValue(passedGate());
+    eligibilityService.evaluateStateLevelGateForDisplay.mockResolvedValue(passedGate());
     eligibilityService.resolveDevolutionAllocations.mockResolvedValue(
       new Map([[ulbA.ulbId, { allocatedAmount: 1, formDocumentId: 'f', rowDocumentId: 'r', datasetVersion: 1 }]]),
     );
-    eligibilityService.resolveUlbLevelEligibility.mockResolvedValue({
+    eligibilityService.resolveUlbLevelEligibilityForDisplay.mockResolvedValue({
       perUlbEligible: new Map([[ulbA.ulbId, false]]),
       perUlbFailedCriteria: new Map(),
     });
@@ -131,11 +131,11 @@ describe('ClaimLetterUlbOptionsService', () => {
 
   it('names the specific failing form(s) in ineligibleReasonDetail when a ULB fails ULB-level criteria', async () => {
     expectedUlbSetService.resolve.mockResolvedValue([ulbA]);
-    eligibilityService.evaluateStateLevelGate.mockResolvedValue(passedGate());
+    eligibilityService.evaluateStateLevelGateForDisplay.mockResolvedValue(passedGate());
     eligibilityService.resolveDevolutionAllocations.mockResolvedValue(
       new Map([[ulbA.ulbId, { allocatedAmount: 1, formDocumentId: 'f', rowDocumentId: 'r', datasetVersion: 1 }]]),
     );
-    eligibilityService.resolveUlbLevelEligibility.mockResolvedValue({
+    eligibilityService.resolveUlbLevelEligibilityForDisplay.mockResolvedValue({
       perUlbEligible: new Map([[ulbA.ulbId, false]]),
       perUlbFailedCriteria: new Map([[ulbA.ulbId, ['Service Level Benchmarks (SLB)', 'Audited Accounts']]]),
     });
@@ -151,7 +151,7 @@ describe('ClaimLetterUlbOptionsService', () => {
 
   it('leaves ineligibleReasonDetail null for non-ULB-level ineligibility reasons', async () => {
     expectedUlbSetService.resolve.mockResolvedValue([ulbA]);
-    eligibilityService.evaluateStateLevelGate.mockResolvedValue(passedGate());
+    eligibilityService.evaluateStateLevelGateForDisplay.mockResolvedValue(passedGate());
     eligibilityService.resolveDevolutionAllocations.mockResolvedValue(new Map());
 
     const result = await service.getOptions(stateId, yearId, 1, {}, stateUser);
@@ -163,14 +163,14 @@ describe('ClaimLetterUlbOptionsService', () => {
     });
   });
 
-  it('passes expectedUlbIds (not a re-derived list) through to resolveUlbLevelEligibility', async () => {
+  it('passes expectedUlbIds (not a re-derived list) through to resolveUlbLevelEligibilityForDisplay', async () => {
     expectedUlbSetService.resolve.mockResolvedValue([ulbA, ulbB]);
-    eligibilityService.evaluateStateLevelGate.mockResolvedValue(passedGate());
+    eligibilityService.evaluateStateLevelGateForDisplay.mockResolvedValue(passedGate());
     eligibilityService.resolveDevolutionAllocations.mockResolvedValue(new Map());
 
     await service.getOptions(stateId, yearId, 1, {}, stateUser);
 
-    expect(eligibilityService.resolveUlbLevelEligibility).toHaveBeenCalledWith(stateId, yearId, 1, [
+    expect(eligibilityService.resolveUlbLevelEligibilityForDisplay).toHaveBeenCalledWith(stateId, yearId, 1, [
       ulbA.ulbId,
       ulbB.ulbId,
     ]);
@@ -178,7 +178,7 @@ describe('ClaimLetterUlbOptionsService', () => {
 
   it('excludes the current draft claim from the "locked elsewhere" check via claimLetterId', async () => {
     expectedUlbSetService.resolve.mockResolvedValue([ulbA]);
-    eligibilityService.evaluateStateLevelGate.mockResolvedValue(passedGate());
+    eligibilityService.evaluateStateLevelGateForDisplay.mockResolvedValue(passedGate());
     eligibilityService.resolveDevolutionAllocations.mockResolvedValue(new Map());
     const claimLetterId = new Types.ObjectId().toString();
 
@@ -190,7 +190,7 @@ describe('ClaimLetterUlbOptionsService', () => {
   it('sorts eligible ULBs before ineligible ones, alphabetically within each group', async () => {
     const ulbC = { ulbId: new Types.ObjectId().toString(), name: 'Charlie ULB', censusCode: '333', sbCode: null };
     expectedUlbSetService.resolve.mockResolvedValue([ulbC, ulbB, ulbA]);
-    eligibilityService.evaluateStateLevelGate.mockResolvedValue(passedGate());
+    eligibilityService.evaluateStateLevelGateForDisplay.mockResolvedValue(passedGate());
     eligibilityService.resolveDevolutionAllocations.mockResolvedValue(
       new Map([[ulbB.ulbId, { allocatedAmount: 1, formDocumentId: 'f', rowDocumentId: 'r', datasetVersion: 1 }]]),
     );
@@ -202,7 +202,7 @@ describe('ClaimLetterUlbOptionsService', () => {
 
   it('filters by search across ULB name and census code', async () => {
     expectedUlbSetService.resolve.mockResolvedValue([ulbA, ulbB]);
-    eligibilityService.evaluateStateLevelGate.mockResolvedValue(passedGate());
+    eligibilityService.evaluateStateLevelGateForDisplay.mockResolvedValue(passedGate());
     eligibilityService.resolveDevolutionAllocations.mockResolvedValue(new Map());
 
     const result = await service.getOptions(stateId, yearId, 1, { search: 'alpha' }, stateUser);
@@ -219,7 +219,7 @@ describe('ClaimLetterUlbOptionsService', () => {
       sbCode: 'SB-99',
     };
     expectedUlbSetService.resolve.mockResolvedValue([ulbA, ulbWithSbCode]);
-    eligibilityService.evaluateStateLevelGate.mockResolvedValue(passedGate());
+    eligibilityService.evaluateStateLevelGateForDisplay.mockResolvedValue(passedGate());
     eligibilityService.resolveDevolutionAllocations.mockResolvedValue(new Map());
 
     const result = await service.getOptions(stateId, yearId, 1, { search: 'SB-99' }, stateUser);
@@ -230,7 +230,7 @@ describe('ClaimLetterUlbOptionsService', () => {
 
   it('filters by eligibilityFilter=ELIGIBLE / INELIGIBLE', async () => {
     expectedUlbSetService.resolve.mockResolvedValue([ulbA, ulbB]);
-    eligibilityService.evaluateStateLevelGate.mockResolvedValue(passedGate());
+    eligibilityService.evaluateStateLevelGateForDisplay.mockResolvedValue(passedGate());
     eligibilityService.resolveDevolutionAllocations.mockResolvedValue(
       new Map([[ulbA.ulbId, { allocatedAmount: 1, formDocumentId: 'f', rowDocumentId: 'r', datasetVersion: 1 }]]),
     );
@@ -244,7 +244,7 @@ describe('ClaimLetterUlbOptionsService', () => {
 
   it('paginates the combined, sorted, filtered list', async () => {
     expectedUlbSetService.resolve.mockResolvedValue([ulbA, ulbB]);
-    eligibilityService.evaluateStateLevelGate.mockResolvedValue(passedGate());
+    eligibilityService.evaluateStateLevelGateForDisplay.mockResolvedValue(passedGate());
     eligibilityService.resolveDevolutionAllocations.mockResolvedValue(new Map());
 
     const result = await service.getOptions(stateId, yearId, 1, { page: 1, limit: 1 }, stateUser);

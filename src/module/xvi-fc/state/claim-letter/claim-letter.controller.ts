@@ -43,6 +43,23 @@ export class ClaimLetterController {
     return this.claimLetterService.getEligibilitySummary(stateId, yearId, inst, user);
   }
 
+  @ApiOperation({
+    summary:
+      'Get lightweight claim context (financial overview, batch-slot/ULB counts) for the create/edit page — no eligibility checklist evaluation',
+  })
+  @Get(':stateId/:yearId/:installment/claim-context')
+  @UseGuards(PermissionGuard)
+  @RequirePermissions(Permission.VIEW_STATE_FORMS)
+  getClaimContext(
+    @Param('stateId', ParseObjectIdPipe) stateId: string,
+    @Param('yearId', ParseObjectIdPipe) yearId: string,
+    @Param('installment') installment: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    const inst = this.parseInstallment(installment);
+    return this.claimLetterService.getClaimContext(stateId, yearId, inst, user);
+  }
+
   @ApiOperation({ summary: 'Get paginated/searchable ULB options for the claim-letter select dialog' })
   @ApiQuery({ name: 'search', required: false })
   @ApiQuery({ name: 'eligibilityFilter', required: false, enum: ['ELIGIBLE', 'INELIGIBLE'] })

@@ -41,11 +41,18 @@ export class ClaimLetterUlbOptionsService {
     const expectedUlbs = await this.expectedUlbSetService.resolve(stateId, yearId);
     const expectedUlbIds = expectedUlbs.map((u) => u.ulbId);
 
+    // Display-only read (this dialog never authorizes a build) — cached, so repeated searches/
+    // filters/page-flips within one picker session don't each recompute eligibility from scratch.
     const [gate, allocationByUlbId, lockedElsewhereUlbIds, ulbLevelEligibility] = await Promise.all([
-      this.eligibilityService.evaluateStateLevelGate(stateId, yearId, installment),
+      this.eligibilityService.evaluateStateLevelGateForDisplay(stateId, yearId, installment),
       this.eligibilityService.resolveDevolutionAllocations(stateId, yearId, installment),
       this.resolveLockedElsewhereUlbIds(stateId, yearId, installment, query.claimLetterId),
-      this.eligibilityService.resolveUlbLevelEligibility(stateId, yearId, installment as 1 | 2, expectedUlbIds),
+      this.eligibilityService.resolveUlbLevelEligibilityForDisplay(
+        stateId,
+        yearId,
+        installment as 1 | 2,
+        expectedUlbIds,
+      ),
     ]);
 
     const stateGateFailureReason = gate.sources.find((s) => s.result === 'FAILED')?.reasonCode ?? 'STATE_GATE_FAILED';

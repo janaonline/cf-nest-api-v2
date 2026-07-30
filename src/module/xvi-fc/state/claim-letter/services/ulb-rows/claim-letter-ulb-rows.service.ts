@@ -80,8 +80,15 @@ export class ClaimLetterUlbRowsService {
         .exec(),
       this.batchUlbModel.countDocuments(filter).exec(),
       // Re-verified at read time (plan §6.2), not trusted from the frozen snapshot alone — a
-      // ULB's Devolution status may have changed after being added but before final submit.
-      this.eligibilityService.evaluateStateLevelGate(String(parent.state), String(parent.year), parent.installment),
+      // ULB's Devolution status may have changed after being added but before final submit. This
+      // is a display-only read (the `eligible` flag only drives a client-side warning badge —
+      // actual save/submit authorization is independently, always-freshly re-verified server-side
+      // in ClaimLetterAssemblyService), so the cached variant is safe here.
+      this.eligibilityService.evaluateStateLevelGateForDisplay(
+        String(parent.state),
+        String(parent.year),
+        parent.installment,
+      ),
     ]);
 
     // Same re-verification, extended to the per-ULB criteria (SLB, Annual Accounts, Elected
@@ -89,7 +96,7 @@ export class ClaimLetterUlbRowsService {
     // getOptions()/buildChildren(), which already checked per-ULB data. Only needs a verdict for
     // the ULBs on this page, not the full state's expected set.
     const rowUlbIds = rows.map((r) => String(r.ulbId));
-    const ulbLevelEligibility = await this.eligibilityService.resolveUlbLevelEligibility(
+    const ulbLevelEligibility = await this.eligibilityService.resolveUlbLevelEligibilityForDisplay(
       String(parent.state),
       String(parent.year),
       parent.installment,

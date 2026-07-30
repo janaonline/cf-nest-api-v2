@@ -36,9 +36,9 @@ const financialSummary = {
 describe('ClaimLetterService', () => {
   let service: ClaimLetterService;
   let eligibilityService: {
-    evaluateStateLevelGate: jest.Mock;
+    evaluateStateLevelGateForDisplay: jest.Mock;
     getFinancialOverview: jest.Mock;
-    resolveUlbLevelEligibility: jest.Mock;
+    resolveUlbLevelEligibilityForDisplay: jest.Mock;
     resolveRemainingUlbIds: jest.Mock;
   };
   let expectedUlbSetService: { resolve: jest.Mock };
@@ -72,9 +72,9 @@ describe('ClaimLetterService', () => {
 
   beforeEach(async () => {
     eligibilityService = {
-      evaluateStateLevelGate: jest.fn(),
+      evaluateStateLevelGateForDisplay: jest.fn(),
       getFinancialOverview: jest.fn().mockResolvedValue({ totalInstallmentAllocation: 0, totalAlreadyAcknowledged: 0 }),
-      resolveUlbLevelEligibility: jest
+      resolveUlbLevelEligibilityForDisplay: jest
         .fn()
         .mockResolvedValue({ perUlbEligible: new Map(), standaloneCriteria: [], rowTalliesByFormId: new Map() }),
       resolveRemainingUlbIds: jest.fn().mockResolvedValue([]),
@@ -145,7 +145,7 @@ describe('ClaimLetterService', () => {
 
     it('returns expectedUlbCount, the gate result, and batch-slot usage capped at 3', async () => {
       expectedUlbSetService.resolve.mockResolvedValue([{ ulbId: '1' }, { ulbId: '2' }]);
-      eligibilityService.evaluateStateLevelGate.mockResolvedValue({ sources: [], passed: true });
+      eligibilityService.evaluateStateLevelGateForDisplay.mockResolvedValue({ sources: [], passed: true });
       eligibilityService.getFinancialOverview.mockResolvedValue({
         totalInstallmentAllocation: 25,
         totalAlreadyAcknowledged: 5,
@@ -170,7 +170,7 @@ describe('ClaimLetterService', () => {
 
     it('reports remainingUlbCount from resolveRemainingUlbIds, independent of ulbReadiness', async () => {
       expectedUlbSetService.resolve.mockResolvedValue([{ ulbId: '1' }, { ulbId: '2' }, { ulbId: '3' }]);
-      eligibilityService.evaluateStateLevelGate.mockResolvedValue({ sources: [], passed: true });
+      eligibilityService.evaluateStateLevelGateForDisplay.mockResolvedValue({ sources: [], passed: true });
       eligibilityService.resolveRemainingUlbIds.mockResolvedValue(['3']);
 
       const result = await service.getEligibilitySummary(stateId.toString(), yearId.toString(), 1, stateUser);
@@ -183,13 +183,13 @@ describe('ClaimLetterService', () => {
       ]);
     });
 
-    it('passes expectedUlbIds through to resolveUlbLevelEligibility, not a fresh lookup', async () => {
+    it('passes expectedUlbIds through to resolveUlbLevelEligibilityForDisplay, not a fresh lookup', async () => {
       expectedUlbSetService.resolve.mockResolvedValue([{ ulbId: 'ulb-1' }, { ulbId: 'ulb-2' }]);
-      eligibilityService.evaluateStateLevelGate.mockResolvedValue({ sources: [], passed: true });
+      eligibilityService.evaluateStateLevelGateForDisplay.mockResolvedValue({ sources: [], passed: true });
 
       await service.getEligibilitySummary(stateId.toString(), yearId.toString(), 1, stateUser);
 
-      expect(eligibilityService.resolveUlbLevelEligibility).toHaveBeenCalledWith(
+      expect(eligibilityService.resolveUlbLevelEligibilityForDisplay).toHaveBeenCalledWith(
         stateId.toString(),
         yearId.toString(),
         1,
@@ -199,9 +199,9 @@ describe('ClaimLetterService', () => {
 
     it('surfaces standaloneCriteria (SLB, Annual Accounts) as ulbLevelCriteria on the summary', async () => {
       expectedUlbSetService.resolve.mockResolvedValue([]);
-      eligibilityService.evaluateStateLevelGate.mockResolvedValue({ sources: [], passed: true });
+      eligibilityService.evaluateStateLevelGateForDisplay.mockResolvedValue({ sources: [], passed: true });
       const tally = { eligible: 5, ineligible: 2, exempted: 0, total: 7 };
-      eligibilityService.resolveUlbLevelEligibility.mockResolvedValue({
+      eligibilityService.resolveUlbLevelEligibilityForDisplay.mockResolvedValue({
         perUlbEligible: new Map(),
         standaloneCriteria: [{ displayLabel: 'SLB', displayDescription: 'SLB...', tally }],
         rowTalliesByFormId: new Map(),
@@ -216,8 +216,8 @@ describe('ClaimLetterService', () => {
       // 3 expected ULBs; only ulb-2 passes every ULB-bulk criterion — ulb-1 and ulb-3 each fail a
       // *different* criterion, so no single criterion's own tally would reveal this 1/3 result.
       expectedUlbSetService.resolve.mockResolvedValue([{ ulbId: 'ulb-1' }, { ulbId: 'ulb-2' }, { ulbId: 'ulb-3' }]);
-      eligibilityService.evaluateStateLevelGate.mockResolvedValue({ sources: [], passed: true });
-      eligibilityService.resolveUlbLevelEligibility.mockResolvedValue({
+      eligibilityService.evaluateStateLevelGateForDisplay.mockResolvedValue({ sources: [], passed: true });
+      eligibilityService.resolveUlbLevelEligibilityForDisplay.mockResolvedValue({
         perUlbEligible: new Map([
           ['ulb-1', false],
           ['ulb-2', true],
@@ -236,12 +236,12 @@ describe('ClaimLetterService', () => {
       expectedUlbSetService.resolve.mockResolvedValue([]);
       const electedBodySource = { formId: 23, formType: 'ELECTED_BODY', result: 'PASSED' };
       const sfcSource = { formId: 22, formType: 'SFC', result: 'PASSED' };
-      eligibilityService.evaluateStateLevelGate.mockResolvedValue({
+      eligibilityService.evaluateStateLevelGateForDisplay.mockResolvedValue({
         sources: [electedBodySource, sfcSource],
         passed: true,
       });
       const eulbTally = { eligible: 10, ineligible: 3, exempted: 1, total: 14 };
-      eligibilityService.resolveUlbLevelEligibility.mockResolvedValue({
+      eligibilityService.resolveUlbLevelEligibilityForDisplay.mockResolvedValue({
         perUlbEligible: new Map(),
         standaloneCriteria: [],
         rowTalliesByFormId: new Map([[23, eulbTally]]),
@@ -257,7 +257,7 @@ describe('ClaimLetterService', () => {
 
     it('reports nextBatchNumber as null once all 3 slots are occupied', async () => {
       expectedUlbSetService.resolve.mockResolvedValue([]);
-      eligibilityService.evaluateStateLevelGate.mockResolvedValue({ sources: [], passed: true });
+      eligibilityService.evaluateStateLevelGateForDisplay.mockResolvedValue({ sources: [], passed: true });
       batchModel.find.mockReturnValue(q([{ batchNumber: 1 }, { batchNumber: 2 }, { batchNumber: 3 }]));
 
       const result = await service.getEligibilitySummary(stateId.toString(), yearId.toString(), 1, stateUser);
@@ -268,12 +268,66 @@ describe('ClaimLetterService', () => {
 
     it('scopes the batch-slot lookup to non-abandoned drafts only', async () => {
       expectedUlbSetService.resolve.mockResolvedValue([]);
-      eligibilityService.evaluateStateLevelGate.mockResolvedValue({ sources: [], passed: true });
+      eligibilityService.evaluateStateLevelGateForDisplay.mockResolvedValue({ sources: [], passed: true });
 
       await service.getEligibilitySummary(stateId.toString(), yearId.toString(), 1, stateUser);
 
       const [filter] = batchModel.find.mock.calls[0] as [Record<string, unknown>];
       expect(filter['isAbandoned']).toBe(false);
+    });
+  });
+
+  describe('getClaimContext', () => {
+    it('throws ForbiddenException for a STATE user requesting a different state', async () => {
+      const otherStateUser: AuthUser = { ...stateUser, state: new Types.ObjectId().toString() };
+      await expect(
+        service.getClaimContext(stateId.toString(), yearId.toString(), 1, otherStateUser),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('throws BadRequestException for installment 2', async () => {
+      await expect(service.getClaimContext(stateId.toString(), yearId.toString(), 2, stateUser)).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('returns expectedUlbCount, batch-slot info, financialOverview, and remainingUlbCount', async () => {
+      expectedUlbSetService.resolve.mockResolvedValue([{ ulbId: '1' }, { ulbId: '2' }]);
+      eligibilityService.getFinancialOverview.mockResolvedValue({
+        totalInstallmentAllocation: 25,
+        totalAlreadyAcknowledged: 5,
+        totalClaimInProgress: 0,
+        totalClaimInDraft: 0,
+        availableToClaim: 20,
+      });
+      eligibilityService.resolveRemainingUlbIds.mockResolvedValue(['1']);
+      batchModel.find.mockReturnValue(q([{ batchNumber: 1 }]));
+
+      const result = await service.getClaimContext(stateId.toString(), yearId.toString(), 1, stateUser);
+
+      expect(result.data).toEqual({
+        expectedUlbCount: 2,
+        batchSlotsUsed: 1,
+        batchSlotsMax: 3,
+        nextBatchNumber: 2,
+        financialOverview: {
+          totalInstallmentAllocation: 25,
+          totalAlreadyAcknowledged: 5,
+          totalClaimInProgress: 0,
+          totalClaimInDraft: 0,
+          availableToClaim: 20,
+        },
+        remainingUlbCount: 1,
+      });
+    });
+
+    it('never evaluates the eligibility checklist — the whole point of this lean endpoint', async () => {
+      expectedUlbSetService.resolve.mockResolvedValue([]);
+
+      await service.getClaimContext(stateId.toString(), yearId.toString(), 1, stateUser);
+
+      expect(eligibilityService.evaluateStateLevelGateForDisplay).not.toHaveBeenCalled();
+      expect(eligibilityService.resolveUlbLevelEligibilityForDisplay).not.toHaveBeenCalled();
     });
   });
 

@@ -19,7 +19,11 @@ import { XviFcFileRefDto } from 'src/module/xvi-fc/common/dto/xvi-fc-file-ref.dt
 import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
 import { ExpectedUlbSetService } from 'src/module/xvi-fc/common/services/expected-ulb-set.service';
 import type { FieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
-import { ClaimLetterBatch, ClaimLetterBatchDocument } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
+import {
+  ClaimLetterBatch,
+  ClaimLetterBatchDocument,
+  ClaimLetterBatchNumber,
+} from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
 import {
   CLAIM_LETTER_FORM_ID,
   CLAIM_LETTER_MAX_BATCH_NUMBER,
@@ -32,7 +36,11 @@ import { mapClaimLetterBatchDocToSummary } from '../../helpers/claim-letter-summ
 import { ClaimLetterEligibilityService } from '../eligibility/claim-letter-eligibility.service';
 import { ClaimLetterHistoryService } from '../history/claim-letter-history.service';
 import type { GetClaimLetterHistoryQueryDto } from '../../dto/get-claim-letter-history-query.dto';
-import type { ClaimLetterBatchSummary, ClaimLetterEligibilitySummary } from '../../types/claim-letter.types';
+import type {
+  ClaimLetterBatchSummary,
+  ClaimLetterClaimContext,
+  ClaimLetterEligibilitySummary,
+} from '../../types/claim-letter.types';
 import { FormJsonService } from 'src/master/form-json/form-json.service';
 
 /** Loose shape for .lean() query results — real field-level typing lives on the schema itself. */
@@ -71,25 +79,20 @@ export class ClaimLetterService {
     const expectedUlbs = await this.expectedUlbSetService.resolve(stateId, yearId);
     const expectedUlbIds = expectedUlbs.map((u) => u.ulbId);
 
-    const [gate, ulbLevelEligibility, usedBatches, financialOverview, remainingUlbIds] = await Promise.all([
-      this.eligibilityService.evaluateStateLevelGate(stateId, yearId, installment),
-      this.eligibilityService.resolveUlbLevelEligibility(stateId, yearId, installment as 1 | 2, expectedUlbIds),
-      this.batchModel
-        .find({
-          state: new Types.ObjectId(stateId),
-          year: new Types.ObjectId(yearId),
-          installment,
-          isAbandoned: false,
-        })
-        .select('batchNumber')
-        .lean<{ batchNumber: 1 | 2 | 3 }[]>()
-        .exec(),
+    const [gate, ulbLevelEligibility, batchSlotInfo, financialOverview, remainingUlbIds] = await Promise.all([
+      this.eligibilityService.evaluateStateLevelGateForDisplay(stateId, yearId, installment),
+      this.eligibilityService.resolveUlbLevelEligibilityForDisplay(
+        stateId,
+        yearId,
+        installment as 1 | 2,
+        expectedUlbIds,
+      ),
+      this.resolveBatchSlotInfo(stateId, yearId, installment),
       this.eligibilityService.getFinancialOverview(stateId, yearId, installment as 1 | 2),
       this.eligibilityService.resolveRemainingUlbIds(stateId, yearId, installment, expectedUlbIds),
     ]);
 
-    const usedBatchNumbers = new Set(usedBatches.map((b) => b.batchNumber));
-    const nextBatchNumber = ([1, 2, 3] as const).find((n) => !usedBatchNumbers.has(n)) ?? null;
+    const { batchSlotsUsed, nextBatchNumber } = batchSlotInfo;
 
     // Elected Body / FC Unspent: fold their row-level tally into the same checklist line as the
     // state's own form-submission status, rather than a second, separate entry for one requirement.
@@ -107,7 +110,7 @@ export class ClaimLetterService {
       installment: installment as 1,
       stateLevelGate: { passed: gate.passed, sources: sourcesWithUlbBreakdown },
       expectedUlbCount: expectedUlbs.length,
-      batchSlotsUsed: usedBatchNumbers.size,
+      batchSlotsUsed,
       batchSlotsMax: CLAIM_LETTER_MAX_BATCH_NUMBER,
       nextBatchNumber,
       financialOverview,
@@ -117,6 +120,71 @@ export class ClaimLetterService {
     };
 
     return xviFcSuccess('Claim letter eligibility summary fetched.', summary);
+  }
+
+  /**
+   * Lean sibling of `getEligibilitySummary` for the create/edit claim-letter page — that page only
+   * ever reads `financialOverview`/`nextBatchNumber`/`batchSlotsMax`/`batchSlotsUsed`/
+   * `expectedUlbCount`/`remainingUlbCount` (never `stateLevelGate`/`ulbLevelCriteria`/
+   * `ulbReadiness`), so this skips `evaluateStateLevelGate`/`resolveUlbLevelEligibility` entirely
+   * rather than computing and discarding them on every create/edit page load.
+   */
+  async getClaimContext(
+    stateId: string,
+    yearId: string,
+    installment: number,
+    user: AuthUser,
+  ): Promise<XviFcApiResponse<ClaimLetterClaimContext>> {
+    this.assertStateAccess(user, stateId);
+    assertInstallmentSupported(installment);
+
+    const [expectedUlbs, batchSlotInfo, financialOverview] = await Promise.all([
+      this.expectedUlbSetService.resolve(stateId, yearId),
+      this.resolveBatchSlotInfo(stateId, yearId, installment),
+      this.eligibilityService.getFinancialOverview(stateId, yearId, installment as 1 | 2),
+    ]);
+
+    const expectedUlbIds = expectedUlbs.map((u) => u.ulbId);
+    const remainingUlbIds = await this.eligibilityService.resolveRemainingUlbIds(
+      stateId,
+      yearId,
+      installment,
+      expectedUlbIds,
+    );
+
+    const context: ClaimLetterClaimContext = {
+      expectedUlbCount: expectedUlbs.length,
+      batchSlotsUsed: batchSlotInfo.batchSlotsUsed,
+      batchSlotsMax: CLAIM_LETTER_MAX_BATCH_NUMBER,
+      nextBatchNumber: batchSlotInfo.nextBatchNumber,
+      financialOverview,
+      remainingUlbCount: remainingUlbIds.length,
+    };
+
+    return xviFcSuccess('Claim letter context fetched.', context);
+  }
+
+  /** Shared by `getEligibilitySummary` and `getClaimContext` — how many of this state/year/
+   *  installment's 3 batch slots are already used, and which slot a new draft would occupy next. */
+  private async resolveBatchSlotInfo(
+    stateId: string,
+    yearId: string,
+    installment: number,
+  ): Promise<{ batchSlotsUsed: number; nextBatchNumber: ClaimLetterBatchNumber | null }> {
+    const usedBatches = await this.batchModel
+      .find({
+        state: new Types.ObjectId(stateId),
+        year: new Types.ObjectId(yearId),
+        installment,
+        isAbandoned: false,
+      })
+      .select('batchNumber')
+      .lean<{ batchNumber: 1 | 2 | 3 }[]>()
+      .exec();
+
+    const usedBatchNumbers = new Set(usedBatches.map((b) => b.batchNumber));
+    const nextBatchNumber = ([1, 2, 3] as const).find((n) => !usedBatchNumbers.has(n)) ?? null;
+    return { batchSlotsUsed: usedBatchNumbers.size, nextBatchNumber };
   }
 
   /** Persists `signedClaimFile` — writable only while IN_PROGRESS (plan §1), no history write. */

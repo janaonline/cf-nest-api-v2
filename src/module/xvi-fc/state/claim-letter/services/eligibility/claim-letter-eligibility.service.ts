@@ -1,12 +1,15 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
+import { ConfigService } from '@nestjs/config';
 import { FilterQuery, Model, Types } from 'mongoose';
 import { ClaimEligibilityEvaluatorService } from 'src/module/xvi-fc/common/services/claim-eligibility-evaluator.service';
+import { ExpectedUlbSetService } from 'src/module/xvi-fc/common/services/expected-ulb-set.service';
 import type {
   EligibilityEvaluationResult,
   UlbEligibilityTally,
 } from 'src/module/xvi-fc/common/types/claim-eligibility.type';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
+import { RedisService } from 'src/core/services/redis/redis.service';
 import { ClaimLetterBatch, ClaimLetterBatchDocument } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
 import {
   ClaimLetterBatchUlb,
@@ -94,9 +97,19 @@ export interface ClaimLetterUlbLevelEligibility {
  */
 @Injectable()
 export class ClaimLetterEligibilityService {
+  /** How long `*ForDisplay` results may be served stale — long enough to cover a typical ULB-picker
+   *  search/filter/page session, short enough that real eligibility drift surfaces promptly. */
+  private static readonly DISPLAY_CACHE_TTL_SECONDS = 30;
+
+  /** Namespaces cache keys per environment; dev and stg share the same Redis instance. */
+  private readonly env: string;
+
   constructor(
     private readonly formJsonService: FormJsonService,
     private readonly evaluator: ClaimEligibilityEvaluatorService,
+    private readonly expectedUlbSetService: ExpectedUlbSetService,
+    private readonly redis: RedisService,
+    config: ConfigService,
     @InjectModel(DevolutionFormulaForm.name)
     private readonly devolutionFormModel: Model<DevolutionFormulaFormDocument>,
     @InjectModel(DevolutionFormulaRow.name)
@@ -107,7 +120,112 @@ export class ClaimLetterEligibilityService {
     private readonly batchUlbModel: Model<ClaimLetterBatchUlbDocument>,
     @InjectModel(ClaimLetterUlbLock.name)
     private readonly ulbLockModel: Model<ClaimLetterUlbLockDocument>,
-  ) {}
+  ) {
+    this.env = config.get<string>('NODE_ENV') ?? 'production';
+  }
+
+  private getStateGateCacheKey(stateId: string, designYearId: string, installment: number): string {
+    return `claimLetterEligibility:${this.env}:stateGate:${stateId}:${designYearId}:${installment}`;
+  }
+
+  private getUlbLevelCacheKey(stateId: string, designYearId: string, installment: number): string {
+    return `claimLetterEligibility:${this.env}:ulbLevel:${stateId}:${designYearId}:${installment}`;
+  }
+
+  /**
+   * Cached, up to `DISPLAY_CACHE_TTL_SECONDS` stale — for read-only DISPLAY consumers only
+   * (`eligibility-summary`, the ULB picker, the ULB-rows table). The claim-letter build/finalize
+   * pipeline (`ClaimLetterAssemblyService`) is an authorization decision, not a display, and must
+   * never read this cache — it calls `evaluateStateLevelGate` directly instead, so a state can
+   * never build a claim against stale eligibility and `assertNoDrift`'s re-check stays meaningful.
+   */
+  async evaluateStateLevelGateForDisplay(
+    stateId: string,
+    designYearId: string,
+    installment: 1 | 2,
+  ): Promise<ClaimLetterStateLevelGate> {
+    const key = this.getStateGateCacheKey(stateId, designYearId, installment);
+    const cached = await this.redis.get(key);
+    if (cached !== null) return JSON.parse(cached) as ClaimLetterStateLevelGate;
+
+    const result = await this.evaluateStateLevelGate(stateId, designYearId, installment);
+    await this.redis.set(key, JSON.stringify(result), ClaimLetterEligibilityService.DISPLAY_CACHE_TTL_SECONDS);
+    return result;
+  }
+
+  /**
+   * Same display-only caveat as `evaluateStateLevelGateForDisplay` — never call from the
+   * build/finalize pipeline. Always evaluates (and caches) the FULL expected-ULB-set result for
+   * `{stateId, designYearId, installment}` regardless of how many ULBs the caller asked about, then
+   * narrows it down to `expectedUlbIds` — lets every read-only caller share one cached computation,
+   * whether it wants the whole state (the picker, `eligibility-summary`) or a page/selection subset
+   * (the ULB-rows table). `standaloneCriteria`/`rowTalliesByFormId` are state-wide tallies and are
+   * returned unnarrowed — no caller reads them for a subset today.
+   */
+  async resolveUlbLevelEligibilityForDisplay(
+    stateId: string,
+    designYearId: string,
+    installment: 1 | 2,
+    expectedUlbIds: string[],
+  ): Promise<ClaimLetterUlbLevelEligibility> {
+    const key = this.getUlbLevelCacheKey(stateId, designYearId, installment);
+    const cached = await this.redis.get(key);
+    if (cached !== null) {
+      return this.narrowUlbLevelEligibility(this.deserializeUlbLevelEligibility(cached), expectedUlbIds);
+    }
+
+    const allExpectedUlbs = await this.expectedUlbSetService.resolve(stateId, designYearId);
+    const full = await this.resolveUlbLevelEligibility(
+      stateId,
+      designYearId,
+      installment,
+      allExpectedUlbs.map((u) => u.ulbId),
+    );
+    await this.redis.set(
+      key,
+      this.serializeUlbLevelEligibility(full),
+      ClaimLetterEligibilityService.DISPLAY_CACHE_TTL_SECONDS,
+    );
+    return this.narrowUlbLevelEligibility(full, expectedUlbIds);
+  }
+
+  private narrowUlbLevelEligibility(
+    full: ClaimLetterUlbLevelEligibility,
+    expectedUlbIds: string[],
+  ): ClaimLetterUlbLevelEligibility {
+    const subset = new Set(expectedUlbIds);
+    return {
+      perUlbEligible: new Map([...full.perUlbEligible].filter(([id]) => subset.has(id))),
+      standaloneCriteria: full.standaloneCriteria,
+      rowTalliesByFormId: full.rowTalliesByFormId,
+      perUlbFailedCriteria: new Map([...full.perUlbFailedCriteria].filter(([id]) => subset.has(id))),
+    };
+  }
+
+  /** Maps aren't JSON-serializable directly — round-tripped as arrays of entries instead. */
+  private serializeUlbLevelEligibility(value: ClaimLetterUlbLevelEligibility): string {
+    return JSON.stringify({
+      perUlbEligible: [...value.perUlbEligible.entries()],
+      standaloneCriteria: value.standaloneCriteria,
+      rowTalliesByFormId: [...value.rowTalliesByFormId.entries()],
+      perUlbFailedCriteria: [...value.perUlbFailedCriteria.entries()],
+    });
+  }
+
+  private deserializeUlbLevelEligibility(raw: string): ClaimLetterUlbLevelEligibility {
+    const parsed = JSON.parse(raw) as {
+      perUlbEligible: [string, boolean][];
+      standaloneCriteria: UlbCriterionSummary[];
+      rowTalliesByFormId: [number, UlbEligibilityTally][];
+      perUlbFailedCriteria: [string, string[]][];
+    };
+    return {
+      perUlbEligible: new Map(parsed.perUlbEligible),
+      standaloneCriteria: parsed.standaloneCriteria,
+      rowTalliesByFormId: new Map(parsed.rowTalliesByFormId),
+      perUlbFailedCriteria: new Map(parsed.perUlbFailedCriteria),
+    };
+  }
 
   async evaluateStateLevelGate(
     stateId: string,

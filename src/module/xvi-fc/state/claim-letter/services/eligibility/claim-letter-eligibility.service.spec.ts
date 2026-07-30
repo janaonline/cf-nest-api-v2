@@ -1,8 +1,11 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
+import { ConfigService } from '@nestjs/config';
 import { Types } from 'mongoose';
 import { ClaimLetterEligibilityService } from './claim-letter-eligibility.service';
 import { ClaimEligibilityEvaluatorService } from 'src/module/xvi-fc/common/services/claim-eligibility-evaluator.service';
+import { ExpectedUlbSetService } from 'src/module/xvi-fc/common/services/expected-ulb-set.service';
+import { RedisService } from 'src/core/services/redis/redis.service';
 import { ClaimLetterBatch } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
 import { ClaimLetterBatchUlb } from 'src/schemas/xvi-fc/state/claim-letter-batch-ulb.schema';
 import { ClaimLetterUlbLock } from 'src/schemas/xvi-fc/state/claim-letter-ulb-lock.schema';
@@ -27,6 +30,8 @@ describe('ClaimLetterEligibilityService', () => {
   let service: ClaimLetterEligibilityService;
   let formJsonService: { findEnabledClaimEligibilitySources: jest.Mock };
   let evaluatorService: { evaluate: jest.Mock; evaluateUlbBulk: jest.Mock };
+  let expectedUlbSetService: { resolve: jest.Mock };
+  let redis: { get: jest.Mock; set: jest.Mock; del: jest.Mock };
   let devolutionFormModel: { findOne: jest.Mock };
   let devolutionRowModel: { find: jest.Mock };
   let batchModel: { find: jest.Mock };
@@ -92,6 +97,8 @@ describe('ClaimLetterEligibilityService', () => {
   beforeEach(async () => {
     formJsonService = { findEnabledClaimEligibilitySources: jest.fn() };
     evaluatorService = { evaluate: jest.fn(), evaluateUlbBulk: jest.fn() };
+    expectedUlbSetService = { resolve: jest.fn().mockResolvedValue([]) };
+    redis = { get: jest.fn().mockResolvedValue(null), set: jest.fn(), del: jest.fn() };
     devolutionFormModel = { findOne: jest.fn() };
     devolutionRowModel = { find: jest.fn() };
     batchModel = { find: jest.fn().mockReturnValue(q([])) };
@@ -103,6 +110,9 @@ describe('ClaimLetterEligibilityService', () => {
         ClaimLetterEligibilityService,
         { provide: FormJsonService, useValue: formJsonService },
         { provide: ClaimEligibilityEvaluatorService, useValue: evaluatorService },
+        { provide: ExpectedUlbSetService, useValue: expectedUlbSetService },
+        { provide: RedisService, useValue: redis },
+        { provide: ConfigService, useValue: { get: jest.fn().mockReturnValue('test') } },
         { provide: getModelToken(DevolutionFormulaForm.name), useValue: devolutionFormModel },
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: devolutionRowModel },
         { provide: getModelToken(ClaimLetterBatch.name), useValue: batchModel },
@@ -306,6 +316,84 @@ describe('ClaimLetterEligibilityService', () => {
         ]),
       );
       expect(evaluatorService.evaluateUlbBulk).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('evaluateStateLevelGateForDisplay', () => {
+    it('returns the cached value without recomputing when present in Redis', async () => {
+      const cachedGate = { passed: true, sources: [evaluationResult()] };
+      redis.get.mockResolvedValue(JSON.stringify(cachedGate));
+
+      const result = await service.evaluateStateLevelGateForDisplay(stateId, designYearId, 1);
+
+      expect(result).toEqual(cachedGate);
+      expect(formJsonService.findEnabledClaimEligibilitySources).not.toHaveBeenCalled();
+    });
+
+    it('computes and caches the result on a cache miss', async () => {
+      redis.get.mockResolvedValue(null);
+      formJsonService.findEnabledClaimEligibilitySources.mockResolvedValue([devolutionSource()]);
+      evaluatorService.evaluate.mockResolvedValue(evaluationResult());
+
+      const result = await service.evaluateStateLevelGateForDisplay(stateId, designYearId, 1);
+
+      expect(result.passed).toBe(true);
+      expect(redis.set).toHaveBeenCalledWith(expect.stringContaining('stateGate'), JSON.stringify(result), 30);
+    });
+  });
+
+  describe('resolveUlbLevelEligibilityForDisplay', () => {
+    const ulbA = new Types.ObjectId().toString();
+    const ulbB = new Types.ObjectId().toString();
+
+    it('narrows a cached full-state result to the requested subset without recomputing', async () => {
+      const cached = {
+        perUlbEligible: [
+          [ulbA, true],
+          [ulbB, false],
+        ],
+        standaloneCriteria: [],
+        rowTalliesByFormId: [],
+        perUlbFailedCriteria: [[ulbB, ['SLB']]],
+      };
+      redis.get.mockResolvedValue(JSON.stringify(cached));
+
+      const result = await service.resolveUlbLevelEligibilityForDisplay(stateId, designYearId, 1, [ulbA]);
+
+      expect(result.perUlbEligible).toEqual(new Map([[ulbA, true]]));
+      expect(result.perUlbFailedCriteria.size).toBe(0);
+      expect(expectedUlbSetService.resolve).not.toHaveBeenCalled();
+      expect(formJsonService.findEnabledClaimEligibilitySources).not.toHaveBeenCalled();
+    });
+
+    it('computes and caches the FULL expected-ULB-set result on a cache miss, then narrows to the caller-requested subset', async () => {
+      redis.get.mockResolvedValue(null);
+      expectedUlbSetService.resolve.mockResolvedValue([
+        { ulbId: ulbA, name: 'A', censusCode: null, sbCode: null },
+        { ulbId: ulbB, name: 'B', censusCode: null, sbCode: null },
+      ]);
+      const ulbOwnedSource = devolutionSource({
+        formId: 32,
+        type: 'SLB',
+        claimEligibility: { ...devolutionSource().claimEligibility!, ownerLevel: 'ULB' },
+      });
+      formJsonService.findEnabledClaimEligibilitySources.mockResolvedValue([ulbOwnedSource]);
+      evaluatorService.evaluateUlbBulk.mockResolvedValue({
+        perUlb: new Map([
+          [ulbA, 'ELIGIBLE'],
+          [ulbB, 'INELIGIBLE'],
+        ]),
+        tally: { eligible: 1, ineligible: 1, exempted: 0, total: 2 },
+      });
+
+      const result = await service.resolveUlbLevelEligibilityForDisplay(stateId, designYearId, 1, [ulbA]);
+
+      // Computed over the FULL expected set (both ULBs) regardless of the caller only asking about ulbA.
+      const [, ctxArg] = evaluatorService.evaluateUlbBulk.mock.calls[0] as [unknown, { expectedUlbIds: string[] }];
+      expect(ctxArg.expectedUlbIds).toEqual([ulbA, ulbB]);
+      // The returned result is narrowed down to just what this caller asked about.
+      expect(result.perUlbEligible).toEqual(new Map([[ulbA, true]]));
+      expect(redis.set).toHaveBeenCalled();
     });
   });
 

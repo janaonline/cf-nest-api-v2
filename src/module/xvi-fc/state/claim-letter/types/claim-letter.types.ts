@@ -8,6 +8,7 @@ import type {
   UlbEligibilityTally,
 } from 'src/module/xvi-fc/common/types/claim-eligibility.type';
 import type { FieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
+import type { ClaimLetterFinancialOverview } from '../services/eligibility/claim-letter-eligibility.service';
 
 /** Display-ready ULB-options picker row (matches the FC Unspent picker-dialog UX — plan §6.1). */
 export interface ClaimLetterUlbOption {
@@ -93,6 +94,21 @@ export interface ClaimLetterEligibilitySummary {
    *  regardless of current eligibility) — how many ULBs still have no home in any batch at all.
    *  Drives the FE's proactive "must all be in your final batch" warning, and is the same figure
    *  `ClaimLetterService.submit()` refuses to let the final batch close out on top of. */
+  remainingUlbCount: number;
+}
+
+/**
+ * Lean sibling of `ClaimLetterEligibilitySummary` for the create/edit claim-letter page — exactly
+ * the subset of fields that page reads (financial/batch-slot/ULB-count context), with none of the
+ * `stateLevelGate`/`ulbLevelCriteria`/`ulbReadiness` fields that page never displays. See
+ * `ClaimLetterService.getClaimContext()`.
+ */
+export interface ClaimLetterClaimContext {
+  expectedUlbCount: number;
+  batchSlotsUsed: number;
+  batchSlotsMax: number;
+  nextBatchNumber: ClaimLetterBatchNumber | null;
+  financialOverview: ClaimLetterFinancialOverview;
   remainingUlbCount: number;
 }
 

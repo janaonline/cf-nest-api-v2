@@ -848,4 +848,17 @@ describe('ClaimLetterAssemblyService', () => {
       );
     });
   });
+
+  // ─── Structural guard: never read the display-only eligibility cache ────────
+
+  it('never calls the cached *ForDisplay eligibility variants — this pipeline authorizes builds and must always read live data', () => {
+    // buildChildren()'s eligibility check and assertNoDrift()'s re-check exist specifically to
+    // catch eligibility changing during/around the chunked, non-transactional child-insertion
+    // window (plan §7.3/§7.5) — reading from ClaimLetterEligibilityService's cached
+    // evaluateStateLevelGateForDisplay/resolveUlbLevelEligibilityForDisplay here would let a state
+    // build a claim against stale eligibility and would silently defeat assertNoDrift's entire
+    // purpose (see claim-letter-eligibility.service.ts's doc comments on those two methods).
+    const serviceSource = ClaimLetterAssemblyService.toString();
+    expect(serviceSource).not.toMatch(/ForDisplay/);
+  });
 });
