@@ -341,6 +341,69 @@ export class ClaimLetterEligibilityService {
   }
 
   /**
+   * Same three totals `getClaimStatusBreakdown` needs (acknowledged/in-review/in-draft), but in one
+   * `find` + one `aggregate` instead of three of each — the three `computeClaimedAmountByStatuses`
+   * calls it used to make differ only in which status they match and which parent IDs they sum
+   * over, so both collapse into a single query apiece once results are bucketed by status in JS.
+   */
+  private async computeClaimedAmountsByStatusBuckets(
+    stateId: string,
+    designYearId: string,
+    installment: number,
+    excludeClaimLetterId?: string,
+  ): Promise<{ totalAlreadyAcknowledged: number; totalClaimInProgress: number; totalClaimInDraft: number }> {
+    const stateOid = new Types.ObjectId(stateId);
+    const yearOid = new Types.ObjectId(designYearId);
+
+    type Bucket = 'totalAlreadyAcknowledged' | 'totalClaimInProgress' | 'totalClaimInDraft';
+    const statusToBucket: Record<number, Bucket> = {
+      [FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA]: 'totalAlreadyAcknowledged',
+      [FORM_STATUS.UNDER_REVIEW_BY_MOHUA]: 'totalClaimInProgress',
+      [FORM_STATUS.IN_PROGRESS]: 'totalClaimInDraft',
+    };
+
+    const result = { totalAlreadyAcknowledged: 0, totalClaimInProgress: 0, totalClaimInDraft: 0 };
+
+    const matchingParents = await this.batchModel
+      .find({
+        state: stateOid,
+        year: yearOid,
+        installment,
+        currentFormStatus: { $in: Object.keys(statusToBucket).map(Number) },
+        isAbandoned: false,
+        assemblyStatus: 'READY',
+        ...(excludeClaimLetterId ? { _id: { $ne: new Types.ObjectId(excludeClaimLetterId) } } : {}),
+      })
+      .select('_id currentFormStatus')
+      .lean<{ _id: Types.ObjectId; currentFormStatus: number }[]>()
+      .exec();
+    if (matchingParents.length === 0) return result;
+
+    const bucketByParentId = new Map<string, Bucket>();
+    for (const parent of matchingParents) {
+      const bucket = statusToBucket[parent.currentFormStatus];
+      if (bucket) bucketByParentId.set(String(parent._id), bucket);
+    }
+
+    const totals = await this.batchUlbModel
+      .aggregate<{
+        _id: Types.ObjectId;
+        total: number;
+      }>([
+        { $match: { claimLetter: { $in: matchingParents.map((p) => p._id) } } },
+        { $group: { _id: '$claimLetter', total: { $sum: '$claimedAmount' } } },
+      ])
+      .exec();
+
+    for (const { _id, total } of totals) {
+      const bucket = bucketByParentId.get(String(_id));
+      if (bucket) result[bucket] += total;
+    }
+
+    return result;
+  }
+
+  /**
    * Sum of `claimedAmount` across every ULB-child of this state/year/installment's OTHER
    * claim-letter batches that have already reached `SUBMISSION_ACKNOWLEDGED_BY_MOHUA` — moved here
    * (out of `ClaimLetterAssemblyService`) so both the build pipeline and the read-only
@@ -365,29 +428,8 @@ export class ClaimLetterEligibilityService {
     totalInstallmentAllocation: number,
     excludeClaimLetterId?: string,
   ): Promise<ClaimLetterClaimStatusBreakdown> {
-    const [totalAlreadyAcknowledged, totalClaimInProgress, totalClaimInDraft] = await Promise.all([
-      this.computeClaimedAmountByStatuses(
-        stateId,
-        designYearId,
-        installment,
-        [FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA],
-        excludeClaimLetterId,
-      ),
-      this.computeClaimedAmountByStatuses(
-        stateId,
-        designYearId,
-        installment,
-        [FORM_STATUS.UNDER_REVIEW_BY_MOHUA],
-        excludeClaimLetterId,
-      ),
-      this.computeClaimedAmountByStatuses(
-        stateId,
-        designYearId,
-        installment,
-        [FORM_STATUS.IN_PROGRESS],
-        excludeClaimLetterId,
-      ),
-    ]);
+    const { totalAlreadyAcknowledged, totalClaimInProgress, totalClaimInDraft } =
+      await this.computeClaimedAmountsByStatusBuckets(stateId, designYearId, installment, excludeClaimLetterId);
 
     return {
       totalAlreadyAcknowledged,

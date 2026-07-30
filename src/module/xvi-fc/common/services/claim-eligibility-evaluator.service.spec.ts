@@ -220,6 +220,17 @@ describe('ClaimEligibilityEvaluatorService', () => {
       expect(tally).toEqual({ eligible: 1, ineligible: 2, exempted: 0, total: 3 });
     });
 
+    it('FORM_STATUS bulk: bounds the query to expectedUlbIds via $in (SLB has no state field to filter by)', async () => {
+      mockCollection('xvifc_slb_forms', []);
+      const doc = sourceFormJson({ formId: 32, type: 'SLB', claimEligibility: slbConfig });
+
+      await service.evaluateUlbBulk(doc, { stateId, designYearId, expectedUlbIds });
+
+      const [query] = byCollection['xvifc_slb_forms'].find.mock.calls[0] as [Record<string, unknown>];
+      const ulbFilter = query['ulb'] as { $in: Types.ObjectId[] };
+      expect(ulbFilter.$in.map((id) => id.toString())).toEqual(expectedUlbIds);
+    });
+
     it('FORM_STATUS bulk: resolves a dotted currentFormStatus path (Annual Accounts style)', async () => {
       mockCollection('xvifc_annualaccounts', [
         { ulb: new Types.ObjectId(ulbA), auditedData: { form_status_id: 5 } },

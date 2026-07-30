@@ -2,7 +2,7 @@ import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import { InjectConnection } from '@nestjs/mongoose';
 import { Connection, Types } from 'mongoose';
 import type { FormStatusType } from 'src/common/constants/form-status.constants';
-import type { IFormJson } from 'src/form-json/interfaces/form-json.interface';
+import { IFormJson } from 'src/master/form-json/interfaces/form-json.interface';
 import {
   CLAIM_ELIGIBILITY_EVIDENCE_MAX_SERIALIZED_BYTES,
   type ClaimEligibilityRowMatchConfig,
@@ -209,6 +209,10 @@ export class ClaimEligibilityEvaluatorService {
 
     const query: Record<string, unknown> = {
       [source.fields.designYear]: new Types.ObjectId(ctx.designYearId),
+      // Bounds the read to exactly the ULBs this evaluation cares about — the only narrowing
+      // available at all for sources with no `source.fields.state` mapping (e.g. SLB, whose
+      // schema has no state field), and a further narrowing on top of `state` for the rest.
+      [source.fields.ulb]: { $in: ctx.expectedUlbIds.map((id) => new Types.ObjectId(id)) },
     };
     if (source.fields.state) query[source.fields.state] = ctx.stateId;
 
@@ -284,7 +288,10 @@ export class ClaimEligibilityEvaluatorService {
       if (activeDatasetVersion !== undefined) query[rowFields['datasetVersion']] = activeDatasetVersion;
     }
 
-    const rows = await this.connection.collection(source.rowCollection).find(query).toArray();
+    const rows = await this.connection
+      .collection(source.rowCollection)
+      .find(query, { projection: { [rowFields['ulb']]: 1, [rowMatch.rowStatusField]: 1 } })
+      .toArray();
 
     const valueByUlbId = new Map<string, unknown>();
     for (const row of rows) {

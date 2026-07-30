@@ -32,6 +32,11 @@ export class FormJsonService {
     return `formJson:${this.env}:${designYearId ?? '*'}:${formId ?? '*'}`;
   }
 
+  /** Fixed literal suffix instead of a formId, so this can never collide with a per-form cache key. */
+  private getClaimEligibilitySourcesCacheKey(designYearId: string): string {
+    return `formJson:${this.env}:${designYearId}:claimEligibilitySources`;
+  }
+
   /**
    * Fetches the active FormJson for a specific design year and formId.
    * Returns the cached value from Redis when available (No TTL).
@@ -63,20 +68,27 @@ export class FormJsonService {
 
   /**
    * Bulk lookup of every enabled claim-eligibility source for a design year (plan §2) — generic
-   * and reusable by any future claim-participating form, not claim-letter-specific. Small
-   * multi-document query (today: length 1, Devolution's entry), so unlike
-   * `findActiveByDesignYearAndFormId` this deliberately skips the Redis single-doc cache path.
+   * and reusable by any future claim-participating form, not claim-letter-specific. Cached the
+   * same way as `findActiveByDesignYearAndFormId` (Redis, no TTL, invalidated on write below) —
+   * this is called twice concurrently, with identical arguments, from every eligibility-summary-
+   * style read (`evaluateStateLevelGate` + `resolveUlbLevelEligibility` both call it), so caching
+   * turns the second call into a Redis hit instead of a duplicate Mongo round trip.
    */
-  findEnabledClaimEligibilitySources(designYearId: string): Promise<IFormJson[]> {
-    // TODO: Add to cache.
-    return this.model
+  async findEnabledClaimEligibilitySources(designYearId: string): Promise<IFormJson[]> {
+    const key = this.getClaimEligibilitySourcesCacheKey(designYearId);
+    const cached = await this.redis.get(key);
+    if (cached !== null) return JSON.parse(cached) as IFormJson[];
+
+    const result = (await this.model
       .find({
         design_year: new Types.ObjectId(designYearId),
         isActive: true,
         'claimEligibility.enabled': true,
       })
       .lean()
-      .exec() as unknown as Promise<IFormJson[]>;
+      .exec()) as unknown as IFormJson[];
+    await this.redis.set(key, JSON.stringify(result));
+    return result;
   }
 
   /** Fetches one document by _id; throws 404 when absent. O(1). */
@@ -113,6 +125,11 @@ export class FormJsonService {
       const key = this.getFormJsonCacheKey(String(doc.design_year), doc.formId);
       await this.redis.set(key, JSON.stringify(doc));
     }
+
+    // A new document can add itself to (or, if claimEligibility.enabled, change) that design
+    // year's enabled-sources list — the cached list from `findEnabledClaimEligibilitySources` is
+    // now stale and must be dropped so the next read repopulates it.
+    await this.redis.del(this.getClaimEligibilitySourcesCacheKey(String(doc.design_year)));
 
     return doc;
   }
@@ -152,6 +169,14 @@ export class FormJsonService {
       }
     }
 
+    // `claimEligibility`, `isActive`, or `design_year` may have changed — any of those can change
+    // whether this document belongs in either design year's enabled-sources list, so both the old
+    // and new year's cached list (if different) must be dropped.
+    await this.redis.del(this.getClaimEligibilitySourcesCacheKey(String(updated.design_year)));
+    if (existing && String(existing.design_year) !== String(updated.design_year)) {
+      await this.redis.del(this.getClaimEligibilitySourcesCacheKey(String(existing.design_year)));
+    }
+
     return updated;
   }
 
@@ -180,5 +205,9 @@ export class FormJsonService {
     if (existing.formId !== undefined) {
       await this.redis.del(this.getFormJsonCacheKey(String(existing.design_year), existing.formId));
     }
+
+    // Soft-deleting (isActive:false) removes this document from its design year's enabled-sources
+    // list — drop the cached list so the next read reflects that.
+    await this.redis.del(this.getClaimEligibilitySourcesCacheKey(String(existing.design_year)));
   }
 }

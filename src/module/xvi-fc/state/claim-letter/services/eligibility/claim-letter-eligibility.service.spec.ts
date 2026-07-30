@@ -440,24 +440,48 @@ describe('ClaimLetterEligibilityService', () => {
   });
 
   describe('getClaimStatusBreakdown', () => {
-    it('computes all four fields from three independent status-scoped sums', async () => {
-      // Sequenced per the Promise.all([acknowledged, inProgress, draft]) call order.
-      batchModel.find
-        .mockReturnValueOnce(q([{ _id: new Types.ObjectId() }])) // acknowledged (status 7)
-        .mockReturnValueOnce(q([{ _id: new Types.ObjectId() }])) // in progress (status 5)
-        .mockReturnValueOnce(q([{ _id: new Types.ObjectId() }])); // draft (status 2)
-      batchUlbModel.aggregate
-        .mockReturnValueOnce({ exec: jest.fn().mockResolvedValue([{ _id: null, total: 3 }]) })
-        .mockReturnValueOnce({ exec: jest.fn().mockResolvedValue([{ _id: null, total: 4 }]) })
-        .mockReturnValueOnce({ exec: jest.fn().mockResolvedValue([{ _id: null, total: 2 }]) });
+    it('computes all four fields from one find + one aggregate, bucketed by status', async () => {
+      const ackId = new Types.ObjectId();
+      const reviewId = new Types.ObjectId();
+      const draftId = new Types.ObjectId();
+      batchModel.find.mockReturnValue(
+        q([
+          { _id: ackId, currentFormStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA },
+          { _id: reviewId, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA },
+          { _id: draftId, currentFormStatus: FORM_STATUS.IN_PROGRESS },
+        ]),
+      );
+      batchUlbModel.aggregate.mockReturnValue({
+        exec: jest.fn().mockResolvedValue([
+          { _id: ackId, total: 3 },
+          { _id: reviewId, total: 4 },
+          { _id: draftId, total: 2 },
+        ]),
+      });
 
       const breakdown = await service.getClaimStatusBreakdown(stateId, designYearId, 1, 100);
 
+      expect(batchModel.find).toHaveBeenCalledTimes(1);
+      expect(batchUlbModel.aggregate).toHaveBeenCalledTimes(1);
       expect(breakdown).toEqual({
         totalAlreadyAcknowledged: 3,
         totalClaimInProgress: 4,
         totalClaimInDraft: 2,
         availableToClaim: 91,
+      });
+    });
+
+    it('returns all zeros when no batches match any of the three statuses', async () => {
+      batchModel.find.mockReturnValue(q([]));
+
+      const breakdown = await service.getClaimStatusBreakdown(stateId, designYearId, 1, 100);
+
+      expect(batchUlbModel.aggregate).not.toHaveBeenCalled();
+      expect(breakdown).toEqual({
+        totalAlreadyAcknowledged: 0,
+        totalClaimInProgress: 0,
+        totalClaimInDraft: 0,
+        availableToClaim: 100,
       });
     });
   });
@@ -471,9 +495,23 @@ describe('ClaimLetterEligibilityService', () => {
           { _id: new Types.ObjectId(), ulbId: new Types.ObjectId(), installment1Amount: 15 },
         ]),
       );
-      // Shared mock return value across all three status-scoped calls inside getClaimStatusBreakdown.
-      batchModel.find.mockReturnValue(q([{ _id: new Types.ObjectId() }]));
-      batchUlbModel.aggregate.mockReturnValue({ exec: jest.fn().mockResolvedValue([{ _id: null, total: 5 }]) });
+      const ackId = new Types.ObjectId();
+      const reviewId = new Types.ObjectId();
+      const draftId = new Types.ObjectId();
+      batchModel.find.mockReturnValue(
+        q([
+          { _id: ackId, currentFormStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA },
+          { _id: reviewId, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA },
+          { _id: draftId, currentFormStatus: FORM_STATUS.IN_PROGRESS },
+        ]),
+      );
+      batchUlbModel.aggregate.mockReturnValue({
+        exec: jest.fn().mockResolvedValue([
+          { _id: ackId, total: 5 },
+          { _id: reviewId, total: 5 },
+          { _id: draftId, total: 5 },
+        ]),
+      });
 
       const overview = await service.getFinancialOverview(stateId, designYearId, 1);
 
