@@ -73,6 +73,7 @@ const SECTION_FORM_IDS: Record<'auditedData' | 'unauditedData', number> = { audi
 interface UlbSubmissionRow {
   ulbId: Types.ObjectId;
   ulbCode: string;
+  censusCode: string;
   ulbName: string;
   formStatus: AnnualAccountFormStatus;
   formStatusId: number;
@@ -504,6 +505,7 @@ export class AnnualAccountsService implements OnModuleInit {
               _id: 0,
               ulbId: '$_id',
               ulbCode: '$code',
+              censusCode: { $ifNull: ['$censusCode', '$sbCode'] },
               ulbName: '$name',
               formStatus: 1,
               formStatusId: 1,

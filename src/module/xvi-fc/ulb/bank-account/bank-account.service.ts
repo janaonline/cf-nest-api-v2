@@ -59,6 +59,7 @@ export interface BankAccountPermissions {
 interface BankAccountSubmissionRow {
   ulbId: Types.ObjectId;
   ulbCode: string;
+  censusCode: string;
   ulbName: string;
   formStatus: FormStatusType;
   lastUpdatedAt: Date | null;
@@ -498,6 +499,7 @@ export class BankAccountService {
               _id: 0,
               ulbId: '$_id',
               ulbCode: '$code',
+              censusCode: { $ifNull: ['$censusCode', '$sbCode'] },
               ulbName: '$name',
               formStatus: 1,
               lastUpdatedAt: 1,
