@@ -15,6 +15,7 @@ import { Model, PipelineStage, Types } from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 import { S3Service } from '../../../../core/s3/s3.service';
 import { S3UploadService } from '../../../file/s3-upload.service';
+import { FileTokenService } from '../../../../core/file-token/file-token.service';
 import {
   AnnualAccountFormStatus,
   FORM_STATUS_ID,
@@ -72,6 +73,7 @@ const SECTION_FORM_IDS: Record<'auditedData' | 'unauditedData', number> = { audi
 interface UlbSubmissionRow {
   ulbId: Types.ObjectId;
   ulbCode: string;
+  censusCode: string;
   ulbName: string;
   formStatus: AnnualAccountFormStatus;
   formStatusId: number;
@@ -114,6 +116,8 @@ export class AnnualAccountsService implements OnModuleInit {
     private readonly ocrQueue: Queue<AnnualAccountOcrJobData>,
 
     private readonly formJsonService: FormJsonService,
+
+    private readonly fileTokenService: FileTokenService,
   ) {}
 
   async onModuleInit() {
@@ -501,6 +505,7 @@ export class AnnualAccountsService implements OnModuleInit {
               _id: 0,
               ulbId: '$_id',
               ulbCode: '$code',
+              censusCode: { $ifNull: ['$censusCode', '$sbCode'] },
               ulbName: '$name',
               formStatus: 1,
               formStatusId: 1,
@@ -597,6 +602,9 @@ export class AnnualAccountsService implements OnModuleInit {
                   mimeType: d.currentUpload.file?.mimeType,
                   pages: d.currentUpload.file?.pages,
                   sizeKb: d.currentUpload.file?.sizeKb,
+                  fileUrl: d.currentUpload.file?.path
+                    ? this.fileTokenService.signFileUrl(d.currentUpload.file.path, 'inline')
+                    : null,
                 },
                 ocrInfo: d.currentUpload.ocrInfo,
                 userInfo: d.currentUpload.userInfo,
@@ -619,29 +627,6 @@ export class AnnualAccountsService implements OnModuleInit {
       auditedData: buildSectionStatus(doc.auditedData),
       unauditedData: buildSectionStatus(doc.unauditedData),
     };
-  }
-
-  // ─── Signed URL for file viewing ─────────────────────────────────────────────
-
-  async getSignedUrl(id: string, uploadId: string, user: AuthUser) {
-    const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
-    if (!doc) throw new NotFoundException('Annual account not found');
-    await this.validateViewAccess(doc, user);
-
-    let s3Key: string | null = null;
-    for (const sectionKey of ['auditedData', 'unauditedData'] as const) {
-      const section = doc[sectionKey];
-      if (!section?.documents) continue;
-      const found = section.documents.find((d: any) => d.currentUpload?.uploadId === uploadId);
-      if (found?.currentUpload?.file?.path) {
-        s3Key = found.currentUpload.file.path;
-        break;
-      }
-    }
-
-    if (!s3Key) throw new NotFoundException('Upload not found');
-    const url = await this.s3Service.presignGet(s3Key);
-    return { url };
   }
 
   // ─── Form status audit log ────────────────────────────────────────────────────

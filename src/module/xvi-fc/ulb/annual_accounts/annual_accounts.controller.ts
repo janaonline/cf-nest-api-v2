@@ -69,15 +69,6 @@ export class AnnualAccountsController {
     return this.annualAccountsService.getProcessingStatus(id, user);
   }
 
-  @Get(':id/documents/:uploadId/signed-url')
-  getSignedUrl(
-    @Param('id', ParseObjectIdPipe) id: string,
-    @Param('uploadId') uploadId: string,
-    @CurrentUser() user: AuthUser,
-  ) {
-    return this.annualAccountsService.getSignedUrl(id, uploadId, user);
-  }
-
   @Get(':id/logs')
   getFormLogs(
     @Param('id', ParseObjectIdPipe) id: string,

@@ -9,7 +9,7 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import axios from 'axios';
 import { Model, PipelineStage, Types } from 'mongoose';
-import { S3Service } from 'src/core/s3/s3.service';
+import { FileTokenService } from 'src/core/file-token/file-token.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { AccessLevel, Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
@@ -59,6 +59,7 @@ export interface BankAccountPermissions {
 interface BankAccountSubmissionRow {
   ulbId: Types.ObjectId;
   ulbCode: string;
+  censusCode: string;
   ulbName: string;
   formStatus: FormStatusType;
   lastUpdatedAt: Date | null;
@@ -92,8 +93,13 @@ export class BankAccountService {
     private readonly formLogModel: Model<XviFcBankAccountFormLogDocument>,
     @InjectModel(Ulb.name)
     private readonly ulbModel: Model<UlbDocument>,
-    private readonly s3Service: S3Service,
+    private readonly fileTokenService: FileTokenService,
   ) {}
+
+  /** Signs a proof-file S3 key into a short-lived, inline-viewable download URL. */
+  private signProofFileUrl(s3Key: string): string | null {
+    return s3Key ? this.fileTokenService.signFileUrl(s3Key, 'inline') : null;
+  }
 
   async getBankAccount(
     query: GetXviFcBankAccountQueryDto,
@@ -115,27 +121,8 @@ export class BankAccountService {
 
     return xviFcSuccess(
       'Bank account form fetched.',
-      record ? { ...buildSafeBankAccountResponse(record), permissions } : null,
+      record ? { ...buildSafeBankAccountResponse(record, this.signProofFileUrl.bind(this)), permissions } : null,
     );
-  }
-
-  /** Mirrors Annual Accounts' getSignedUrl — generates a presigned S3 GET URL directly, no external service dependency. */
-  async getProofSignedUrl(id: string, user: AuthUser): Promise<XviFcApiResponse<{ url: string }>> {
-    if (!Types.ObjectId.isValid(id)) {
-      throw new BadRequestException('Invalid bank account id.');
-    }
-
-    const record = await this.bankAccountModel.findById(id, 'ulb proofFile').lean().exec();
-    if (!record) throw new NotFoundException('Bank account form not found');
-
-    const ulbId = toObjectIdString(record.ulb);
-    if (!ulbId) throw new NotFoundException('Bank account form not found');
-    await this.assertCanReadBankAccount(user, ulbId);
-
-    if (!record.proofFile?.s3Key) throw new NotFoundException('Proof document not found');
-
-    const url = await this.s3Service.presignGet(record.proofFile.s3Key);
-    return xviFcSuccess('Signed URL fetched.', { url });
   }
 
   /** Mirrors Annual Accounts' buildAnnualAccountPermissions — status-aware capability flags for the STATE reviewer UI. */
@@ -231,7 +218,10 @@ export class BankAccountService {
       filePath: proofFileS3Key,
     });
 
-    return xviFcSuccess('Bank account form submitted.', buildSafeBankAccountResponse(record));
+    return xviFcSuccess(
+      'Bank account form submitted.',
+      buildSafeBankAccountResponse(record, this.signProofFileUrl.bind(this)),
+    );
   }
 
   // ─── STATE review decision ───────────────────────────────────────────────────
@@ -283,7 +273,10 @@ export class BankAccountService {
     });
 
     this.logger.log(`Bank account ${dto.decision.toLowerCase()} by STATE — id=${id} by user=${user._id}`);
-    return xviFcSuccess('Bank account decision recorded.', buildSafeBankAccountResponse(updated!));
+    return xviFcSuccess(
+      'Bank account decision recorded.',
+      buildSafeBankAccountResponse(updated!, this.signProofFileUrl.bind(this)),
+    );
   }
 
   // ─── MoHUA review decision ────────────────────────────────────────────────────
@@ -333,7 +326,10 @@ export class BankAccountService {
     });
 
     this.logger.log(`Bank account ${dto.decision.toLowerCase()} by MoHUA — id=${id} by user=${user._id}`);
-    return xviFcSuccess('Bank account decision recorded.', buildSafeBankAccountResponse(updated!));
+    return xviFcSuccess(
+      'Bank account decision recorded.',
+      buildSafeBankAccountResponse(updated!, this.signProofFileUrl.bind(this)),
+    );
   }
 
   // ─── Form status audit log ────────────────────────────────────────────────────
@@ -503,6 +499,7 @@ export class BankAccountService {
               _id: 0,
               ulbId: '$_id',
               ulbCode: '$code',
+              censusCode: { $ifNull: ['$censusCode', '$sbCode'] },
               ulbName: '$name',
               formStatus: 1,
               lastUpdatedAt: 1,
@@ -703,7 +700,7 @@ export class BankAccountService {
   }
 
   private toSafeResponse(record: XviFcBankAccountDocument): SafeBankAccountResponse {
-    return buildSafeBankAccountResponse(record);
+    return buildSafeBankAccountResponse(record, this.signProofFileUrl.bind(this));
   }
 
   private assertValidUlbId(ulbId: string): void {
