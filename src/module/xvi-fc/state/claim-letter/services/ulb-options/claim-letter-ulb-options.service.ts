@@ -38,21 +38,28 @@ export class ClaimLetterUlbOptionsService {
     this.assertStateAccess(user, stateId);
     assertInstallmentSupported(installment);
 
-    const expectedUlbs = await this.expectedUlbSetService.resolve(stateId, yearId);
-    const expectedUlbIds = expectedUlbs.map((u) => u.ulbId);
-
     // Display-only read (this dialog never authorizes a build) — cached, so repeated searches/
     // filters/page-flips within one picker session don't each recompute eligibility from scratch.
-    const [gate, allocationByUlbId, lockedElsewhereUlbIds, ulbLevelEligibility] = await Promise.all([
+    // expectedUlbSetService.resolve() runs concurrently with the other independent branches
+    // (none of them need expectedUlbIds); resolveUlbLevelEligibilityForDisplay chains off it
+    // instead of the whole request waiting on it first, and reuses the result instead of letting
+    // that method re-resolve the same full set internally on a cache miss.
+    const expectedUlbsPromise = this.expectedUlbSetService.resolve(stateId, yearId);
+    const [expectedUlbs, gate, allocationByUlbId, lockedElsewhereUlbIds, ulbLevelEligibility] = await Promise.all([
+      expectedUlbsPromise,
       this.eligibilityService.evaluateStateLevelGateForDisplay(stateId, yearId, installment),
       this.eligibilityService.resolveDevolutionAllocations(stateId, yearId, installment),
       this.resolveLockedElsewhereUlbIds(stateId, yearId, installment, query.claimLetterId),
-      this.eligibilityService.resolveUlbLevelEligibilityForDisplay(
-        stateId,
-        yearId,
-        installment as 1 | 2,
-        expectedUlbIds,
-      ),
+      expectedUlbsPromise.then((ulbs) => {
+        const ids = ulbs.map((u) => u.ulbId);
+        return this.eligibilityService.resolveUlbLevelEligibilityForDisplay(
+          stateId,
+          yearId,
+          installment as 1 | 2,
+          ids,
+          ids,
+        );
+      }),
     ]);
 
     const stateGateFailureReason = gate.sources.find((s) => s.result === 'FAILED')?.reasonCode ?? 'STATE_GATE_FAILED';

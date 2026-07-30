@@ -167,6 +167,12 @@ export class ClaimLetterEligibilityService {
     designYearId: string,
     installment: 1 | 2,
     expectedUlbIds: string[],
+    /** Pass only when the caller has already resolved the FULL state-wide expected-ULB set (not a
+     *  subset) via ExpectedUlbSetService this request — skips the redundant re-fetch below on a
+     *  cache miss. Omit when the caller only holds a subset (e.g. one page of ULB-rows); this then
+     *  resolves the true full set itself so the shared cache always reflects the complete state,
+     *  never a partial view. */
+    fullExpectedUlbIds?: string[],
   ): Promise<ClaimLetterUlbLevelEligibility> {
     const key = this.getUlbLevelCacheKey(stateId, designYearId, installment);
     const cached = await this.redis.get(key);
@@ -174,13 +180,9 @@ export class ClaimLetterEligibilityService {
       return this.narrowUlbLevelEligibility(this.deserializeUlbLevelEligibility(cached), expectedUlbIds);
     }
 
-    const allExpectedUlbs = await this.expectedUlbSetService.resolve(stateId, designYearId);
-    const full = await this.resolveUlbLevelEligibility(
-      stateId,
-      designYearId,
-      installment,
-      allExpectedUlbs.map((u) => u.ulbId),
-    );
+    const allExpectedUlbIds =
+      fullExpectedUlbIds ?? (await this.expectedUlbSetService.resolve(stateId, designYearId)).map((u) => u.ulbId);
+    const full = await this.resolveUlbLevelEligibility(stateId, designYearId, installment, allExpectedUlbIds);
     await this.redis.set(
       key,
       this.serializeUlbLevelEligibility(full),

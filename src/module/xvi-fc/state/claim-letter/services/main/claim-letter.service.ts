@@ -76,22 +76,39 @@ export class ClaimLetterService {
     this.assertStateAccess(user, stateId);
     assertInstallmentSupported(installment);
 
-    const expectedUlbs = await this.expectedUlbSetService.resolve(stateId, yearId);
+    // expectedUlbSetService.resolve() runs concurrently with the other independent branches below
+    // (only ulbLevelEligibility/remainingUlbIds need its result); each chains off it via .then()
+    // instead of the whole request waiting on it first, and reuses the result instead of letting
+    // resolveUlbLevelEligibilityForDisplay re-resolve the same full set internally on a cache miss.
+    const expectedUlbsPromise = this.expectedUlbSetService.resolve(stateId, yearId);
+
+    const [expectedUlbs, gate, ulbLevelEligibility, batchSlotInfo, financialOverview, remainingUlbIds] =
+      await Promise.all([
+        expectedUlbsPromise,
+        this.eligibilityService.evaluateStateLevelGateForDisplay(stateId, yearId, installment),
+        expectedUlbsPromise.then((ulbs) => {
+          const ids = ulbs.map((u) => u.ulbId);
+          return this.eligibilityService.resolveUlbLevelEligibilityForDisplay(
+            stateId,
+            yearId,
+            installment as 1 | 2,
+            ids,
+            ids,
+          );
+        }),
+        this.resolveBatchSlotInfo(stateId, yearId, installment),
+        this.eligibilityService.getFinancialOverview(stateId, yearId, installment as 1 | 2),
+        expectedUlbsPromise.then((ulbs) =>
+          this.eligibilityService.resolveRemainingUlbIds(
+            stateId,
+            yearId,
+            installment,
+            ulbs.map((u) => u.ulbId),
+          ),
+        ),
+      ]);
+
     const expectedUlbIds = expectedUlbs.map((u) => u.ulbId);
-
-    const [gate, ulbLevelEligibility, batchSlotInfo, financialOverview, remainingUlbIds] = await Promise.all([
-      this.eligibilityService.evaluateStateLevelGateForDisplay(stateId, yearId, installment),
-      this.eligibilityService.resolveUlbLevelEligibilityForDisplay(
-        stateId,
-        yearId,
-        installment as 1 | 2,
-        expectedUlbIds,
-      ),
-      this.resolveBatchSlotInfo(stateId, yearId, installment),
-      this.eligibilityService.getFinancialOverview(stateId, yearId, installment as 1 | 2),
-      this.eligibilityService.resolveRemainingUlbIds(stateId, yearId, installment, expectedUlbIds),
-    ]);
-
     const { batchSlotsUsed, nextBatchNumber } = batchSlotInfo;
 
     // Elected Body / FC Unspent: fold their row-level tally into the same checklist line as the

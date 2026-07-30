@@ -194,6 +194,7 @@ describe('ClaimLetterService', () => {
         yearId.toString(),
         1,
         ['ulb-1', 'ulb-2'],
+        ['ulb-1', 'ulb-2'],
       );
     });
 

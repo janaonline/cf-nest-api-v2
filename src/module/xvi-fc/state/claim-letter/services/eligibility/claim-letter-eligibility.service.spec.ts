@@ -395,6 +395,36 @@ describe('ClaimLetterEligibilityService', () => {
       expect(result.perUlbEligible).toEqual(new Map([[ulbA, true]]));
       expect(redis.set).toHaveBeenCalled();
     });
+
+    it('uses the caller-supplied fullExpectedUlbIds on a cache miss instead of re-resolving the full set', async () => {
+      redis.get.mockResolvedValue(null);
+      const ulbOwnedSource = devolutionSource({
+        formId: 32,
+        type: 'SLB',
+        claimEligibility: { ...devolutionSource().claimEligibility!, ownerLevel: 'ULB' },
+      });
+      formJsonService.findEnabledClaimEligibilitySources.mockResolvedValue([ulbOwnedSource]);
+      evaluatorService.evaluateUlbBulk.mockResolvedValue({
+        perUlb: new Map([
+          [ulbA, 'ELIGIBLE'],
+          [ulbB, 'INELIGIBLE'],
+        ]),
+        tally: { eligible: 1, ineligible: 1, exempted: 0, total: 2 },
+      });
+
+      const result = await service.resolveUlbLevelEligibilityForDisplay(
+        stateId,
+        designYearId,
+        1,
+        [ulbA],
+        [ulbA, ulbB],
+      );
+
+      expect(expectedUlbSetService.resolve).not.toHaveBeenCalled();
+      const [, ctxArg] = evaluatorService.evaluateUlbBulk.mock.calls[0] as [unknown, { expectedUlbIds: string[] }];
+      expect(ctxArg.expectedUlbIds).toEqual([ulbA, ulbB]);
+      expect(result.perUlbEligible).toEqual(new Map([[ulbA, true]]));
+    });
   });
 
   describe('resolveDevolutionAllocations', () => {

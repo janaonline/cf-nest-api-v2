@@ -170,10 +170,13 @@ describe('ClaimLetterUlbOptionsService', () => {
 
     await service.getOptions(stateId, yearId, 1, {}, stateUser);
 
-    expect(eligibilityService.resolveUlbLevelEligibilityForDisplay).toHaveBeenCalledWith(stateId, yearId, 1, [
-      ulbA.ulbId,
-      ulbB.ulbId,
-    ]);
+    expect(eligibilityService.resolveUlbLevelEligibilityForDisplay).toHaveBeenCalledWith(
+      stateId,
+      yearId,
+      1,
+      [ulbA.ulbId, ulbB.ulbId],
+      [ulbA.ulbId, ulbB.ulbId],
+    );
   });
 
   it('excludes the current draft claim from the "locked elsewhere" check via claimLetterId', async () => {
