@@ -25,6 +25,7 @@ import {
   ClaimLetterBatchNumber,
 } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
 import {
+  CLAIM_LETTER_EDIT_LOCK_LEASE_MINUTES,
   CLAIM_LETTER_FORM_ID,
   CLAIM_LETTER_MAX_BATCH_NUMBER,
   CLAIM_LETTER_PAGINATION_DEFAULT_LIMIT,
@@ -295,7 +296,13 @@ export class ClaimLetterService {
 
       updated = await this.batchModel
         .findOneAndUpdate(
-          { _id: claimLetterId, currentFormStatus: FORM_STATUS.IN_PROGRESS },
+          {
+            _id: claimLetterId,
+            currentFormStatus: FORM_STATUS.IN_PROGRESS,
+            // Self-expiring lease, same as ClaimLetterAssemblyService's updateDraftRaw/abandonDraftRaw
+            // — a stale lock (crash mid-update, never cleared) never permanently blocks submit either.
+            $or: [{ editLockToken: null }, { editLockAcquiredAt: { $lt: this.editLockStaleBefore() } }],
+          },
           {
             $set: {
               currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
@@ -340,10 +347,14 @@ export class ClaimLetterService {
 
     if (updated) return xviFcSuccess('Claim letter submitted to MoHUA.', mapClaimLetterBatchDocToSummary(updated));
 
-    // Concurrent status change between our initial read and the guarded update.
+    // Concurrent status change (or an in-flight `updateDraft`) between our initial read and the
+    // guarded update.
     const current = await this.batchModel.findById(claimLetterId).lean<LeanClaimLetterBatch | null>().exec();
     if (current?.['currentFormStatus'] === FORM_STATUS.UNDER_REVIEW_BY_MOHUA) {
       return xviFcSuccess('Claim letter already submitted to MoHUA.', mapClaimLetterBatchDocToSummary(current));
+    }
+    if (current?.['editLockToken'] && this.isEditLockActive(current['editLockAcquiredAt'])) {
+      throw new ConflictException('Claim letter is currently being edited. Please retry in a moment.');
     }
     throw new ConflictException('Claim letter status changed. Please retry.');
   }
@@ -473,6 +484,18 @@ export class ClaimLetterService {
       docs.map((d) => mapClaimLetterBatchDocToSummary(d)),
       { page, limit, total },
     );
+  }
+
+  /** Self-expiring lease check for `editLockToken` — mirrors
+   *  `ClaimLetterAssemblyService.editLockStaleBefore`/`isEditLockActive` (duplicated rather than
+   *  shared, matching this file's existing `hasStateAccess`/`assertStateAccess` precedent). */
+  private editLockStaleBefore(): Date {
+    return new Date(Date.now() - CLAIM_LETTER_EDIT_LOCK_LEASE_MINUTES * 60_000);
+  }
+
+  private isEditLockActive(acquiredAt: unknown): boolean {
+    if (!acquiredAt) return false;
+    return new Date(acquiredAt as string | Date) >= this.editLockStaleBefore();
   }
 
   private hasStateAccess(user: AuthUser, stateId: string): boolean {

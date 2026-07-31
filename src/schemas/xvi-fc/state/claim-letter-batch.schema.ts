@@ -161,6 +161,18 @@ export class ClaimLetterBatch {
   @Prop({ type: Number, default: 0 })
   revision!: number;
 
+  // Non-null while an `updateDraft` call is mid-rebuild — claimed atomically alongside the
+  // `revision`/`currentFormStatus` check so a second concurrent edit can never interleave its
+  // delete/insert with this one's, and cleared back to `null` on both the success and every
+  // compensating-failure path. `abandonDraft`/`submit` also require this to be `null` (or expired)
+  // before they may act, so neither can land while children are mid-rebuild. Self-expiring lease —
+  // see CLAIM_LETTER_EDIT_LOCK_LEASE_MINUTES; no cron/cleanup counterpart, unlike the BUILDING case.
+  @Prop({ type: String, default: null })
+  editLockToken!: string | null;
+
+  @Prop({ type: Date, default: null })
+  editLockAcquiredAt!: Date | null;
+
   // Not in brain §14.2 — added to support the abandon endpoint (plan §1) without violating
   // immutability: an abandoned draft is preserved forever, never deleted.
   @Prop({ type: Boolean, default: false })
