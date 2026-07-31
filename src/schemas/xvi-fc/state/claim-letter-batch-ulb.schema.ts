@@ -52,12 +52,12 @@ export const ClaimLetterDevolutionSourceSchema = SchemaFactory.createForClass(Cl
  * percentage is integer basis points (plan §8).
  */
 @Schema({
-  collection: 'xvi_fc_claim_letter_batch_ulbs',
+  collection: 'xvifc_claim_letter_batch_ulbs',
   timestamps: true,
   versionKey: false,
 })
 export class ClaimLetterBatchUlb {
-  // Immutable foreign-key style reference to xvi_fc_claim_letter_batches._id.
+  // Immutable foreign-key style reference to xvifc_claim_letter_batches._id.
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'ClaimLetterBatch', required: true, immutable: true })
   claimLetter!: Types.ObjectId;
 

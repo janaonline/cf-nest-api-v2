@@ -29,7 +29,7 @@ class EulbPostSubmissionUpdateBatch {
 const EulbPostSubmissionUpdateBatchSchema = SchemaFactory.createForClass(EulbPostSubmissionUpdateBatch);
 
 @Schema({
-  collection: 'xvi_fc_elected_urban_local_bodies_forms',
+  collection: 'xvifc_elected_ulb_forms',
   timestamps: true,
   versionKey: false,
 })
