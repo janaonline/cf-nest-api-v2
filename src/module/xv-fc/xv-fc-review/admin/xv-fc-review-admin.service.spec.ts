@@ -144,6 +144,22 @@ describe('XvFcReviewAdminService', () => {
         comment: 'looks low',
       });
     });
+
+    it('sorts the OTHERS sub-section (31001/31002) to the end, after every other code including numerically larger ones', async () => {
+      ledgerLogModel.findOne.mockReturnValue(
+        q(baseDoc({ lineItems: { '460': 1, '33104': 2, '31001': 3, '31002': 4 } })),
+      );
+      lineItemModel.find.mockReturnValue(
+        q([
+          { code: '460', name: 'Loans, Advances and Deposits', headOfAccount: 'Asset' },
+          { code: '33104', name: 'Bonds and Other Debt Instruments', headOfAccount: 'Debt' },
+          { code: '31001', name: 'Municipal (General) Fund', headOfAccount: 'Tax' },
+          { code: '31002', name: 'Rounding off differences', headOfAccount: 'Tax' },
+        ]),
+      );
+      const result = await service.getDetail(ulbOid.toString(), yearOid.toString());
+      expect(result.lineItems.map((li: { code: string }) => li.code)).toEqual(['460', '33104', '31001', '31002']);
+    });
   });
 
   // ─── decideLineItem ──────────────────────────────────────────────────────

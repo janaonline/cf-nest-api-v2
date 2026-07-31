@@ -138,7 +138,12 @@ export class XvFcReviewService {
           adminDecision: review?.adminDecision ?? null,
         };
       })
-      .sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true }));
+      .sort((a, b) => {
+        const aIsOthers = a.subSection === 'OTHERS' ? 1 : 0;
+        const bIsOthers = b.subSection === 'OTHERS' ? 1 : 0;
+        if (aIsOthers !== bIsOthers) return aIsOthers - bIsOthers;
+        return a.code.localeCompare(b.code, undefined, { numeric: true });
+      });
 
     const originalDocuments = await this.resolveOriginalDocuments(ulbId, financialYear);
 

@@ -360,9 +360,8 @@ export class PtaxReviewService {
     if (missingProposedValue) {
       throw new BadRequestException(`Metric ${fromMetricKey(missingProposedValue[0])} requires a proposed value`);
     }
-    if (!doc.supportingDocument) {
-      throw new BadRequestException('A supporting document must be uploaded before submitting with comments');
-    }
+    // Unlike the main AFS review, a supporting document is optional here —
+    // the declaration alone is sufficient to submit with comments.
 
     const setOps: Record<string, unknown> = {
       status: 'SUBMITTED',

@@ -405,7 +405,7 @@ describe('PtaxReviewService', () => {
       ).rejects.toThrow(/requires a proposed value/);
     });
 
-    it('rejects SUBMIT_WITH_COMMENTS when the shared supporting document is missing', async () => {
+    it('allows SUBMIT_WITH_COMMENTS when the shared supporting document is missing — optional for Ptax', async () => {
       reviewModel.findOne.mockReturnValue(
         q(
           freshReviewDoc({
@@ -417,7 +417,7 @@ describe('PtaxReviewService', () => {
       );
       await expect(
         service.submit(ulbOid.toString(), yearOid.toString(), { finalAction: 'SUBMIT_WITH_COMMENTS' }, ulbUser),
-      ).rejects.toThrow(/supporting document/);
+      ).resolves.toBeDefined();
     });
 
     it('resets a previously-REJECTED metric back to PENDING on resubmit, leaves ACCEPTED ones untouched', async () => {
