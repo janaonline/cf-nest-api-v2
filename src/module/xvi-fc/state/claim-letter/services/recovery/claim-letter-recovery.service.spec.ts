@@ -94,7 +94,10 @@ describe('ClaimLetterRecoveryService', () => {
       endSession: jest.fn().mockResolvedValue(undefined),
     };
     connection = { startSession: jest.fn().mockResolvedValue(session) };
-    batchModel = { find: jest.fn().mockReturnValue(q([])), deleteOne: jest.fn().mockResolvedValue(undefined) };
+    batchModel = {
+      find: jest.fn().mockReturnValue(q([])),
+      deleteOne: jest.fn().mockResolvedValue(undefined),
+    };
     batchUlbModel = {
       find: jest.fn().mockReturnValue(q([])),
       aggregate: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue([]) }),
@@ -159,6 +162,24 @@ describe('ClaimLetterRecoveryService', () => {
     });
   });
 
+  describe('runScheduledStaleBuildCleanup', () => {
+    it('calls cleanupStaleBuilds and never throws, even when a stale build is cleaned', async () => {
+      const staleId = new Types.ObjectId();
+      batchModel.find.mockReturnValue(q([{ _id: staleId, buildRequestId: 'req-1' }]));
+
+      await expect(service.runScheduledStaleBuildCleanup()).resolves.toBeUndefined();
+      expect(batchModel.deleteOne).toHaveBeenCalledWith({ _id: staleId, assemblyStatus: 'BUILDING' }, expect.anything());
+    });
+
+    it('swallows errors from cleanupStaleBuilds instead of letting them escape the cron tick', async () => {
+      batchModel.find.mockImplementation(() => {
+        throw new Error('db unavailable');
+      });
+
+      await expect(service.runScheduledStaleBuildCleanup()).resolves.toBeUndefined();
+    });
+  });
+
   describe('detectAnomalies', () => {
     it('returns an entirely empty report against an empty database', async () => {
       const report = await service.detectAnomalies(30);
@@ -170,7 +191,43 @@ describe('ClaimLetterRecoveryService', () => {
         financialMismatches: [],
         supersessionLinkMismatches: [],
         missingSignedFiles: [],
+        staleEditLocksWithChildCountMismatch: [],
       });
+    });
+
+    it('flags a stale edit lock only when the persisted child count does not match ulbCount', async () => {
+      const mismatchedId = new Types.ObjectId();
+      const healthyId = new Types.ObjectId();
+      const acquiredAt = new Date(Date.now() - 60 * 60_000);
+      // find() is reused across every detectAnomalies sub-query in this service; this spec's
+      // fixture-based tests below drive it via a shared applyBatchFilter dispatcher, but this
+      // isolated test only needs the one filter shape cleanupStaleEditLocks/this finder use.
+      batchModel.find.mockImplementation((filter: Record<string, unknown>) => {
+        if (filter['editLockToken']) {
+          return q([
+            { _id: mismatchedId, ulbCount: 3, editLockAcquiredAt: acquiredAt },
+            { _id: healthyId, ulbCount: 2, editLockAcquiredAt: acquiredAt },
+          ]);
+        }
+        return q([]);
+      });
+      batchUlbModel.aggregate.mockReturnValue({
+        exec: jest.fn().mockResolvedValue([
+          { _id: mismatchedId, count: 1 },
+          { _id: healthyId, count: 2 },
+        ]),
+      });
+
+      const report = await service.detectAnomalies(30);
+
+      expect(report.staleEditLocksWithChildCountMismatch).toEqual([
+        {
+          claimLetterId: String(mismatchedId),
+          editLockAcquiredAt: acquiredAt,
+          expectedUlbCount: 3,
+          actualChildCount: 1,
+        },
+      ]);
     });
 
     it('detects exactly the seeded anomalies and reports zero false positives for the healthy control claims in the same dataset', async () => {

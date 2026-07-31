@@ -25,3 +25,14 @@ export const CLAIM_LETTER_SIGNED_FILE_MAX_SIZE_KB = 20 * 1024;
 /** Plan §7.9: generous default so no legitimate synchronous build is ever mistaken for stale —
  *  real value should reflect observed p99 build latency once there's production traffic. */
 export const CLAIM_LETTER_STALE_BUILD_THRESHOLD_MINUTES = 30;
+
+/**
+ * Self-expiring lease duration for `updateDraft`'s `editLockToken` (hardening pass) — once a claim
+ * on this lock is older than this, every guard that checks it (`updateDraft`'s own re-claim,
+ * `abandonDraft`, `submit`) treats it as unclaimed, inline, with no separate cleanup job. Much
+ * tighter than `CLAIM_LETTER_STALE_BUILD_THRESHOLD_MINUTES` on purpose: this only ever needs to
+ * cover one delete+insert child rebuild (normally sub-second), not the full multi-stage assembly
+ * pipeline that threshold was sized for. Only matters if the process crashes mid-request — has no
+ * relationship to how long a draft may sit unsubmitted, which is unbounded by design.
+ */
+export const CLAIM_LETTER_EDIT_LOCK_LEASE_MINUTES = 5;

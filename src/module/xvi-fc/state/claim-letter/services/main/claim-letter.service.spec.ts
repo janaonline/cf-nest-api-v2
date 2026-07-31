@@ -737,6 +737,12 @@ describe('ClaimLetterService', () => {
         session,
       );
       expect(session.commitTransaction).toHaveBeenCalled();
+
+      const [filter] = batchModel.findOneAndUpdate.mock.calls[0] as [Record<string, unknown>];
+      expect(filter['$or']).toEqual([
+        { editLockToken: null },
+        { editLockAcquiredAt: { $lt: expect.any(Date) } },
+      ]);
     });
 
     it('treats a concurrent race as idempotent if the doc is already UNDER_REVIEW_BY_MOHUA', async () => {
@@ -756,6 +762,32 @@ describe('ClaimLetterService', () => {
       batchModel.findById.mockReturnValue(q({ ...readyParent, currentFormStatus: 6 }));
 
       await expect(service.submit('x', stateUser)).rejects.toThrow(ConflictException);
+    });
+
+    it('throws a specific ConflictException when an updateDraft call is currently mid-rebuild', async () => {
+      batchModel.findOne.mockReturnValue(q(readyParent));
+      // The atomic submit guard now also requires the edit lock to be absent/expired — simulate a
+      // real DB rejecting the match because an update currently holds a *fresh* (unexpired) lock.
+      batchModel.findOneAndUpdate.mockReturnValue(q(null));
+      batchModel.findById.mockReturnValue(
+        q({ ...readyParent, editLockToken: 'some-update-token', editLockAcquiredAt: new Date() }),
+      );
+
+      await expect(service.submit('x', stateUser)).rejects.toThrow(/currently being edited/i);
+    });
+
+    it('treats an expired edit lock as unclaimed and falls through to the generic conflict message', async () => {
+      batchModel.findOne.mockReturnValue(q(readyParent));
+      batchModel.findOneAndUpdate.mockReturnValue(q(null));
+      batchModel.findById.mockReturnValue(
+        q({
+          ...readyParent,
+          editLockToken: 'some-stale-token',
+          editLockAcquiredAt: new Date(Date.now() - 60 * 60_000),
+        }),
+      );
+
+      await expect(service.submit('x', stateUser)).rejects.toThrow('Claim letter status changed. Please retry.');
     });
 
     describe('final-batch completeness (batchNumber === CLAIM_LETTER_MAX_BATCH_NUMBER)', () => {

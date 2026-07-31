@@ -268,6 +268,22 @@ describe('ClaimLetterAssemblyService', () => {
 
     expect(result.claimLetterId).toBe(String(parentId));
     expect(connection.startSession).not.toHaveBeenCalled();
+    expect(batchModel.findOne).toHaveBeenCalledWith({ buildRequestId: 'key-1', state: stateId });
+  });
+
+  it("scopes the idempotent-retry lookup to the requesting state, never returning another state's batch", async () => {
+    // A buildRequestId collision belonging to a DIFFERENT state must never resolve — the query
+    // itself is state-scoped, so a real (non-mocked) DB would simply find nothing here.
+    batchModel.findOne.mockReturnValue(q(null));
+
+    await service.createDraft(baseInput({ buildRequestId: 'key-shared-across-states' }));
+
+    expect(batchModel.findOne).toHaveBeenCalledWith({
+      buildRequestId: 'key-shared-across-states',
+      state: stateId,
+    });
+    // Falls through to the normal reservation path since no doc matched this state.
+    expect(connection.startSession).toHaveBeenCalled();
   });
 
   it('throws ConflictException when retried with a buildRequestId whose build is still in progress or failed', async () => {
@@ -283,28 +299,145 @@ describe('ClaimLetterAssemblyService', () => {
 
   // ─── Step 1-2: batch-number allocation + lock acquisition ──────────────────
 
-  it('throws ConflictException when all 3 batch slots are in use', async () => {
-    batchModel.find.mockReturnValue(q([{ batchNumber: 1 }, { batchNumber: 2 }, { batchNumber: 3 }]));
+  it('throws ConflictException when all 3 batch slots are genuinely live (nothing to reclaim)', async () => {
+    batchModel.find
+      .mockReturnValueOnce(q([{ batchNumber: 1 }, { batchNumber: 2 }, { batchNumber: 3 }])) // allocateBatchNumber
+      .mockReturnValue(q([])); // reclaim scan's own slot-occupancy check finds nothing BUILDING
+    lockModel.find.mockReturnValue(q([])); // no lock conflict in play for this scenario
 
     await expect(service.createDraft(baseInput())).rejects.toThrow(ConflictException);
     expect(session.abortTransaction).toHaveBeenCalled();
     expect(session.commitTransaction).not.toHaveBeenCalled();
+    // Nothing reclaimable -> no cleanup, no wasted second attempt.
+    expect(batchUlbModel.deleteMany).not.toHaveBeenCalled();
+    expect(batchModel.create).not.toHaveBeenCalled();
   });
 
-  it('surfaces a clear conflict when a concurrent request already took this batch slot', async () => {
+  it('reclaims a stale BUILDING parent occupying a batch slot and succeeds on retry', async () => {
+    const staleOwnerId = new Types.ObjectId();
+    let reclaimed = false;
+    batchModel.find.mockImplementation((filter: Record<string, unknown>) => {
+      if (filter['_id']) {
+        // reclaimBlockingStaleBuilds's staleCandidates query, keyed by the candidate _id set.
+        reclaimed = true;
+        return q([{ _id: staleOwnerId, buildRequestId: 'stale-build-req' }]);
+      }
+      if (filter['assemblyStatus'] === 'BUILDING') {
+        // reclaimBlockingStaleBuilds's own slot-occupancy scan.
+        return q(reclaimed ? [] : [{ _id: staleOwnerId }]);
+      }
+      // allocateBatchNumber: 1st attempt sees all 3 slots "used" (one is the stale row); 2nd
+      // attempt (after reclaim removed it) sees only 2 genuinely-live slots and picks the 3rd.
+      return q(
+        reclaimed
+          ? [{ batchNumber: 1 }, { batchNumber: 2 }]
+          : [{ batchNumber: 1 }, { batchNumber: 2 }, { batchNumber: 3 }],
+      );
+    });
+    lockModel.find.mockImplementation((filter: Record<string, unknown>) =>
+      // assertLocksPresent's later verification call (claimLetter-scoped) still needs the real
+      // lock; only the reclaim scan's lockOwners query (ulbId-scoped) sees no contention here.
+      filter['claimLetter'] ? q([{ ulbId: ulbAId }]) : q([]),
+    );
+
+    const result = await service.createDraft(baseInput());
+
+    expect(result.claimLetterId).toBe(String(parentId));
+    expect(batchModel.deleteOne).toHaveBeenCalledWith(
+      { _id: staleOwnerId, assemblyStatus: 'BUILDING' },
+      expect.anything(),
+    );
+  });
+
+  it('surfaces a clear conflict when a concurrent request already took this batch slot (never retried)', async () => {
     batchModel.create.mockRejectedValue(duplicateKeyError());
 
     await expect(service.createDraft(baseInput())).rejects.toThrow(/batch slot/i);
     expect(session.abortTransaction).toHaveBeenCalled();
     expect(session.commitTransaction).not.toHaveBeenCalled();
+    // Proven always-fresh-contention (never a stale row) -> no reclaim scan is ever entered, and
+    // no retry is attempted, for this specific conflict.
+    expect(batchModel.create).toHaveBeenCalledTimes(1);
+    expect(batchModel.find).toHaveBeenCalledTimes(1);
   });
 
-  it('surfaces a clear conflict — and rolls back the parent — when a selected ULB is already locked elsewhere', async () => {
+  it('surfaces a clear conflict — and rolls back the parent — when a selected ULB is locked by a live (non-stale) claim', async () => {
+    const liveOwnerId = new Types.ObjectId();
     lockModel.insertMany.mockRejectedValue(duplicateKeyError());
+    lockModel.find.mockReturnValue(q([{ ulbId: ulbAId, claimLetter: liveOwnerId }]));
 
     await expect(service.createDraft(baseInput())).rejects.toThrow(/already locked/i);
     expect(session.abortTransaction).toHaveBeenCalled();
     expect(session.commitTransaction).not.toHaveBeenCalled();
+    // A lock owner was found, but batchModel.find's default (empty) means it isn't a stale
+    // BUILDING row -> nothing reclaimed, no wasted second attempt.
+    expect(batchUlbModel.deleteMany).not.toHaveBeenCalled();
+    expect(lockModel.insertMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('reclaims a stale lock owner and succeeds on retry', async () => {
+    const staleOwnerId = new Types.ObjectId();
+    lockModel.insertMany.mockRejectedValueOnce(duplicateKeyError()); // 1st attempt conflicts; retry succeeds
+    lockModel.find.mockReturnValue(q([{ ulbId: ulbAId, claimLetter: staleOwnerId }]));
+    batchModel.find.mockImplementation((filter: Record<string, unknown>) => {
+      if (filter['assemblyStatus'] === 'BUILDING' && filter['createdAt']) {
+        return q([{ _id: staleOwnerId, buildRequestId: 'stale-build-req' }]);
+      }
+      return q([]); // allocateBatchNumber (both attempts) and the slot-occupancy scan
+    });
+
+    const result = await service.createDraft(baseInput());
+
+    expect(result.claimLetterId).toBe(String(parentId));
+    expect(batchUlbModel.deleteMany).toHaveBeenCalledWith({ claimLetter: staleOwnerId }, expect.anything());
+    expect(lockModel.deleteMany).toHaveBeenCalledWith(
+      { claimLetter: staleOwnerId, buildRequestId: 'stale-build-req' },
+      expect.anything(),
+    );
+    expect(batchModel.deleteOne).toHaveBeenCalledWith(
+      { _id: staleOwnerId, assemblyStatus: 'BUILDING' },
+      expect.anything(),
+    );
+    expect(lockModel.insertMany).toHaveBeenCalledTimes(2);
+  });
+
+  it('reclaims a stale lock owner but still fails when another requested ULB is genuinely locked by a live claim', async () => {
+    const staleOwnerId = new Types.ObjectId();
+    const liveOwnerId = new Types.ObjectId();
+    lockModel.insertMany.mockRejectedValue(duplicateKeyError()); // every attempt still conflicts (ulbBId is live)
+    lockModel.find.mockReturnValue(
+      q([
+        { ulbId: ulbAId, claimLetter: staleOwnerId },
+        { ulbId: ulbBId, claimLetter: liveOwnerId },
+      ]),
+    );
+    batchModel.find.mockImplementation((filter: Record<string, unknown>) => {
+      if (filter['assemblyStatus'] === 'BUILDING' && filter['createdAt']) {
+        return q([{ _id: staleOwnerId, buildRequestId: 'stale-build-req' }]);
+      }
+      return q([]);
+    });
+
+    await expect(
+      service.createDraft(
+        baseInput({
+          ulbSelections: [
+            { ulbId: ulbAId.toString(), claimedAmount: 100 },
+            { ulbId: ulbBId.toString(), claimedAmount: 100 },
+          ],
+        }),
+      ),
+    ).rejects.toThrow(/already locked/i);
+
+    // The stale owner's artifacts were cleaned up even though the request overall still failed —
+    // reclaim isn't all-or-nothing.
+    expect(batchUlbModel.deleteMany).toHaveBeenCalledWith({ claimLetter: staleOwnerId }, expect.anything());
+    expect(batchModel.deleteOne).toHaveBeenCalledWith(
+      { _id: staleOwnerId, assemblyStatus: 'BUILDING' },
+      expect.anything(),
+    );
+    // Exactly one retry — the initial attempt plus one retry, never a loop.
+    expect(lockModel.insertMany).toHaveBeenCalledTimes(2);
   });
 
   it('acquires locks in deterministic (sorted) order regardless of request order', async () => {
@@ -539,6 +672,11 @@ describe('ClaimLetterAssemblyService', () => {
 
     it('throws ConflictException when the draft is not IN_PROGRESS', async () => {
       batchModel.findOne.mockReturnValue(q(parentDoc({ currentFormStatus: 5 })));
+      // The atomic edit-lock claim's filter requires currentFormStatus: IN_PROGRESS, so a real DB
+      // wouldn't match this doc — simulate that by having the claim miss, then the differentiated
+      // re-fetch see the same non-IN_PROGRESS state.
+      batchModel.findOneAndUpdate.mockReturnValueOnce(q(null));
+      batchModel.findById.mockReturnValue(q(parentDoc({ currentFormStatus: 5 })));
       await expect(
         service.updateDraft(parentId.toString(), [{ ulbId: ulbAId.toString(), claimedAmount: 100 }], 0, stateUser),
       ).rejects.toThrow(ConflictException);
@@ -546,9 +684,60 @@ describe('ClaimLetterAssemblyService', () => {
 
     it('throws ConflictException on a stale revision', async () => {
       batchModel.findOne.mockReturnValue(q(parentDoc({ revision: 3 })));
+      batchModel.findOneAndUpdate.mockReturnValueOnce(q(null));
+      batchModel.findById.mockReturnValue(q(parentDoc({ revision: 3 })));
       await expect(
         service.updateDraft(parentId.toString(), [{ ulbId: ulbAId.toString(), claimedAmount: 100 }], 0, stateUser),
       ).rejects.toThrow(ConflictException);
+    });
+
+    it('throws a specific ConflictException when another update is already in flight', async () => {
+      batchModel.findOne.mockReturnValue(q(parentDoc()));
+      batchModel.findOneAndUpdate.mockReturnValueOnce(q(null));
+      // A *fresh* (unexpired) lock — this is the "someone else is actively editing" case.
+      batchModel.findById.mockReturnValue(
+        q(parentDoc({ editLockToken: 'some-other-token', editLockAcquiredAt: new Date() })),
+      );
+      await expect(
+        service.updateDraft(parentId.toString(), [{ ulbId: ulbAId.toString(), claimedAmount: 100 }], 0, stateUser),
+      ).rejects.toThrow(/currently being edited/i);
+    });
+
+    it('treats an expired edit lock as unclaimed rather than "currently being edited"', async () => {
+      batchModel.findOne.mockReturnValue(q(parentDoc()));
+      batchModel.findOneAndUpdate.mockReturnValueOnce(q(null));
+      // A lock acquired an hour ago is well past the 5-minute lease — the claim query itself would
+      // have matched a real DB in this state, so this failure must be attributed to something else
+      // (here, nothing else is wrong, so it falls through to the generic conflict message).
+      batchModel.findById.mockReturnValue(
+        q(parentDoc({ editLockToken: 'some-stale-token', editLockAcquiredAt: new Date(Date.now() - 60 * 60_000) })),
+      );
+      await expect(
+        service.updateDraft(parentId.toString(), [{ ulbId: ulbAId.toString(), claimedAmount: 100 }], 0, stateUser),
+      ).rejects.not.toThrow(/currently being edited/i);
+    });
+
+    it('claims the edit lock atomically before touching any child rows', async () => {
+      batchModel.findOne.mockReturnValue(q(parentDoc()));
+      batchModel.findOneAndUpdate.mockReturnValueOnce(q(parentDoc()));
+      batchUlbModel.find.mockReturnValue(q([persistedChild({ ulbId: ulbAId })]));
+      lockModel.find.mockReturnValue(q([{ ulbId: ulbAId }]));
+
+      await service.updateDraft(parentId.toString(), [{ ulbId: ulbAId.toString(), claimedAmount: 100 }], 0, stateUser);
+
+      const [claimFilter, claimUpdate] = batchModel.findOneAndUpdate.mock.calls[0] as [
+        Record<string, unknown>,
+        { $set: Record<string, unknown> },
+      ];
+      expect(claimFilter).toMatchObject({
+        _id: parentId.toString(),
+        assemblyStatus: 'READY',
+        currentFormStatus: 2,
+        revision: 0,
+      });
+      // Self-expiring lease, not a bare null check — a stale claim must be reclaimable inline.
+      expect(claimFilter['$or']).toEqual([{ editLockToken: null }, { editLockAcquiredAt: { $lt: expect.any(Date) } }]);
+      expect(typeof claimUpdate.$set['editLockToken']).toBe('string');
     });
 
     it('rejects an empty selection before touching locks', async () => {
@@ -575,6 +764,7 @@ describe('ClaimLetterAssemblyService', () => {
 
     it('diffs locks correctly: releases removed ULBs, acquires added ULBs, leaves retained ULBs untouched', async () => {
       batchModel.findOne.mockReturnValue(q(parentDoc()));
+      batchModel.findOneAndUpdate.mockReturnValueOnce(q(parentDoc()));
       // First call (currentChildren, before the diff) sees the pre-update set: ulbA only.
       // Second call (persistedChildren, in verify) sees the post-rebuild set: ulbB only —
       // matching the new selection (a pure replace: drop ulbA, add ulbB).
@@ -597,6 +787,7 @@ describe('ClaimLetterAssemblyService', () => {
 
     it('rejects and rolls back the lock diff when an added ULB is already locked elsewhere', async () => {
       batchModel.findOne.mockReturnValue(q(parentDoc()));
+      batchModel.findOneAndUpdate.mockReturnValueOnce(q(parentDoc()));
       batchUlbModel.find.mockReturnValue(q([{ ulbId: ulbAId }]));
       lockModel.insertMany.mockRejectedValue(duplicateKeyError());
 
@@ -605,17 +796,25 @@ describe('ClaimLetterAssemblyService', () => {
       ).rejects.toThrow(/already locked/i);
       expect(session.abortTransaction).toHaveBeenCalled();
       expect(batchUlbModel.deleteMany).not.toHaveBeenCalled();
+      // diffLocks itself failed (its own transaction already rolled back) — the edit-lock claim
+      // still must be released so this draft isn't permanently un-editable.
+      expect(batchModel.updateOne).toHaveBeenCalledWith(
+        { _id: parentId, editLockToken: expect.any(String) },
+        { $set: { editLockToken: null, editLockAcquiredAt: null } },
+      );
     });
 
     it('increments revision and updates financialSummary/contentHash on success', async () => {
       batchModel.findOne.mockReturnValue(q(parentDoc()));
+      batchModel.findOneAndUpdate
+        .mockReturnValueOnce(q(parentDoc())) // the upfront edit-lock claim
+        .mockReturnValueOnce(
+          q({ _id: parentId, revision: 1, currentFormStatus: 2, financialSummary: zeroFinancialSummary }),
+        ); // the finalize
       // Both the currentChildren lookup and the persistedChildren verify use the full shape —
       // the selection is unchanged (ulbA only), so no lock diff and the same set persists.
       batchUlbModel.find.mockReturnValue(q([persistedChild({ ulbId: ulbAId })]));
       lockModel.find.mockReturnValue(q([{ ulbId: ulbAId }]));
-      batchModel.findOneAndUpdate.mockReturnValue(
-        q({ _id: parentId, revision: 1, currentFormStatus: 2, financialSummary: zeroFinancialSummary }),
-      );
 
       const result = await service.updateDraft(
         parentId.toString(),
@@ -625,12 +824,14 @@ describe('ClaimLetterAssemblyService', () => {
       );
 
       expect(result).toMatchObject({ claimLetterId: String(parentId), revision: 1, currentFormStatus: 2 });
-      const [filter, update] = batchModel.findOneAndUpdate.mock.calls[0] as [
+      const [finalizeFilter, finalizeUpdate] = batchModel.findOneAndUpdate.mock.calls[1] as [
         Record<string, unknown>,
         { $set: Record<string, unknown>; $inc: Record<string, unknown> },
       ];
-      expect(filter).toMatchObject({ _id: parentId, currentFormStatus: 2, revision: 0 });
-      expect(update.$inc).toEqual({ revision: 1 });
+      expect(finalizeFilter).toMatchObject({ _id: parentId, currentFormStatus: 2 });
+      expect(typeof finalizeFilter['editLockToken']).toBe('string');
+      expect(finalizeUpdate.$set).toMatchObject({ editLockToken: null, editLockAcquiredAt: null });
+      expect(finalizeUpdate.$inc).toEqual({ revision: 1 });
       expect(historyService.recordTransition).not.toHaveBeenCalled();
     });
 
@@ -641,6 +842,7 @@ describe('ClaimLetterAssemblyService', () => {
 
     it('does not delete existing children when the new selection fails validation', async () => {
       batchModel.findOne.mockReturnValue(q(parentDoc()));
+      batchModel.findOneAndUpdate.mockReturnValueOnce(q(parentDoc()));
       batchUlbModel.find.mockReturnValue(q([persistedChild({ ulbId: ulbAId })]));
       lockModel.find.mockReturnValue(q([{ ulbId: ulbAId }]));
       eligibilityService.resolveUlbLevelEligibility.mockResolvedValue({
@@ -656,6 +858,7 @@ describe('ClaimLetterAssemblyService', () => {
 
     it('restores the previous children when persisting the new set fails after the old set was deleted', async () => {
       batchModel.findOne.mockReturnValue(q(parentDoc()));
+      batchModel.findOneAndUpdate.mockReturnValueOnce(q(parentDoc()));
       const oldChild = persistedChild({ ulbId: ulbAId });
       batchUlbModel.find.mockReturnValue(q([oldChild]));
       ulbModel.find.mockReturnValue(q([{ _id: ulbBId, name: 'Beta ULB', censusCode: '222', sbCode: null }]));
@@ -676,6 +879,7 @@ describe('ClaimLetterAssemblyService', () => {
 
     it('restores the previous children when post-persist verification fails', async () => {
       batchModel.findOne.mockReturnValue(q(parentDoc()));
+      batchModel.findOneAndUpdate.mockReturnValueOnce(q(parentDoc()));
       const oldChild = persistedChild({ ulbId: ulbAId });
       batchUlbModel.find
         .mockReturnValueOnce(q([oldChild])) // currentChildren, before the edit
@@ -770,6 +974,40 @@ describe('ClaimLetterAssemblyService', () => {
       batchModel.findById.mockReturnValue(q(parentDoc({ isAbandoned: false })));
 
       await expect(service.abandonDraft(parentId.toString(), stateUser)).rejects.toThrow(ConflictException);
+    });
+
+    it('throws a specific ConflictException when an updateDraft call is currently mid-rebuild', async () => {
+      batchModel.findOne.mockReturnValue(q(parentDoc()));
+      // The atomic abandon guard now also requires the edit lock to be absent/expired — simulate a
+      // real DB rejecting the match because an update currently holds a *fresh* (unexpired) lock.
+      batchModel.findOneAndUpdate.mockReturnValue(q(null));
+      batchModel.findById.mockReturnValue(
+        q(parentDoc({ editLockToken: 'some-update-token', editLockAcquiredAt: new Date() })),
+      );
+
+      await expect(service.abandonDraft(parentId.toString(), stateUser)).rejects.toThrow(/currently being edited/i);
+    });
+
+    it('treats an expired edit lock as unclaimed and abandons successfully', async () => {
+      batchModel.findOne.mockReturnValue(q(parentDoc()));
+      batchModel.findOneAndUpdate.mockReturnValue(
+        q({
+          _id: parentId,
+          state: stateId,
+          year: yearId,
+          installment: 1,
+          batchNumber: 1,
+          version: 1,
+          isAbandoned: true,
+          financialSummary: zeroFinancialSummary,
+        }),
+      );
+
+      const result = await service.abandonDraft(parentId.toString(), stateUser);
+
+      expect(result).toMatchObject({ isAbandoned: true });
+      const [filter] = batchModel.findOneAndUpdate.mock.calls[0] as [Record<string, unknown>];
+      expect(filter['$or']).toEqual([{ editLockToken: null }, { editLockAcquiredAt: { $lt: expect.any(Date) } }]);
     });
   });
 
