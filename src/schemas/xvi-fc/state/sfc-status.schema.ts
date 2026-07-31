@@ -14,7 +14,7 @@ export enum SfcStatusAction {
 export type XviFcSfcStatusDocument = HydratedDocument<XviFcSfcStatus>;
 
 @Schema({
-  collection: 'xvifc_sfc_forms',
+  collection: 'xvifc_sfc',
   timestamps: true,
   versionKey: false,
 })

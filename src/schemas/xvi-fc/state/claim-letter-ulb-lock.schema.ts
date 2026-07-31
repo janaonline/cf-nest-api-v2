@@ -14,7 +14,7 @@ export type ClaimLetterUlbLockDocument = HydratedDocument<ClaimLetterUlbLock>;
  * `buildRequestId`, never by the bare `{state,year,installment,ulbId}` business key alone.
  */
 @Schema({
-  collection: 'xvi_fc_claim_letter_ulb_locks',
+  collection: 'xvifc_claim_letter_ulb_locks',
   timestamps: true,
   versionKey: false,
 })

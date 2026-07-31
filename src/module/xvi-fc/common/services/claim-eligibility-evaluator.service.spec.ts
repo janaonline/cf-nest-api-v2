@@ -24,7 +24,7 @@ describe('ClaimEligibilityEvaluatorService', () => {
     applicableInstallments: [1],
     acceptedFormStatuses: [5, 7],
     source: {
-      collection: 'xvi_fc_devolution_formula_forms',
+      collection: 'xvifc_devolution_forms',
       fields: { designYear: 'year', state: 'state', currentFormStatus: 'currentFormStatus' },
     },
     evaluator: { type: 'FORM_STATUS', config: { installmentField: 'installment' } },
@@ -80,7 +80,7 @@ describe('ClaimEligibilityEvaluatorService', () => {
 
     await service.evaluate(sourceFormJson(), { stateId, designYearId, installment: 1 });
 
-    expect(collection).toHaveBeenCalledWith('xvi_fc_devolution_formula_forms');
+    expect(collection).toHaveBeenCalledWith('xvifc_devolution_forms');
     const [query] = findOne.mock.calls[0] as [Record<string, unknown>];
     expect((query['year'] as Types.ObjectId).toString()).toBe(designYearId);
     expect(query['state']).toBe(stateId);
@@ -266,7 +266,7 @@ describe('ClaimEligibilityEvaluatorService', () => {
       applicableInstallments: [1],
       acceptedFormStatuses: [],
       source: {
-        rowCollection: 'xvi_fc_elected_urban_local_bodies_rows',
+        rowCollection: 'xvifc_elected_ulb_rows',
         rowFields: {
           ulb: 'ulbId',
           designYear: 'year',
@@ -274,7 +274,7 @@ describe('ClaimEligibilityEvaluatorService', () => {
           isActive: 'isActive',
           datasetVersion: 'datasetVersion',
         },
-        parentCollection: 'xvi_fc_elected_urban_local_bodies_forms',
+        parentCollection: 'xvifc_elected_ulb_forms',
         parentFields: { designYear: 'year', state: 'state', activeDatasetVersion: 'activeDatasetVersion' },
       },
       evaluator: {
@@ -294,8 +294,8 @@ describe('ClaimEligibilityEvaluatorService', () => {
 
     it('ROW_STATUS_AND_FIELDS bulk: buckets Constituted/Not Constituted/Exempt into eligible/ineligible/exempted', async () => {
       const ulbC = new Types.ObjectId().toString();
-      mockCollection('xvi_fc_elected_urban_local_bodies_forms', [{ activeDatasetVersion: 2 }]);
-      mockCollection('xvi_fc_elected_urban_local_bodies_rows', [
+      mockCollection('xvifc_elected_ulb_forms', [{ activeDatasetVersion: 2 }]);
+      mockCollection('xvifc_elected_ulb_rows', [
         { ulbId: new Types.ObjectId(ulbA), electedBodyStatus: 'Constituted' },
         { ulbId: new Types.ObjectId(ulbB), electedBodyStatus: 'Not Constituted' },
         { ulbId: new Types.ObjectId(ulbC), electedBodyStatus: 'Exempt' },
@@ -316,9 +316,9 @@ describe('ClaimEligibilityEvaluatorService', () => {
 
     it('ROW_STATUS_AND_FIELDS bulk: resolves the parent form’s activeDatasetVersion and filters rows by it', async () => {
       const formFindOne = jest.fn().mockResolvedValue({ activeDatasetVersion: 4 });
-      byCollection['xvi_fc_elected_urban_local_bodies_forms'] = { findOne: formFindOne, find: jest.fn() };
+      byCollection['xvifc_elected_ulb_forms'] = { findOne: formFindOne, find: jest.fn() };
       const rowFind = jest.fn().mockReturnValue({ toArray: jest.fn().mockResolvedValue([]) });
-      byCollection['xvi_fc_elected_urban_local_bodies_rows'] = { findOne: jest.fn(), find: rowFind };
+      byCollection['xvifc_elected_ulb_rows'] = { findOne: jest.fn(), find: rowFind };
       const doc = sourceFormJson({ formId: 23, type: 'ELECTED_BODY', claimEligibility: electedBodyRowConfig });
 
       await service.evaluateUlbBulk(doc, { stateId, designYearId, expectedUlbIds });
@@ -329,8 +329,8 @@ describe('ClaimEligibilityEvaluatorService', () => {
     });
 
     it('defaults a ULB with no row to defaultWhenNoRow, per source', async () => {
-      mockCollection('xvi_fc_elected_urban_local_bodies_forms', [{ activeDatasetVersion: 1 }]);
-      mockCollection('xvi_fc_elected_urban_local_bodies_rows', []); // no rows for anyone
+      mockCollection('xvifc_elected_ulb_forms', [{ activeDatasetVersion: 1 }]);
+      mockCollection('xvifc_elected_ulb_rows', []); // no rows for anyone
       const doc = sourceFormJson({ formId: 23, type: 'ELECTED_BODY', claimEligibility: electedBodyRowConfig });
 
       const { perUlb } = await service.evaluateUlbBulk(doc, { stateId, designYearId, expectedUlbIds: [ulbA] });
@@ -342,7 +342,7 @@ describe('ClaimEligibilityEvaluatorService', () => {
       const fcUnspentRowConfig: ClaimEligibilityConfig = {
         ...electedBodyRowConfig,
         source: {
-          rowCollection: 'xvi_fc_unspent_state_form_rows',
+          rowCollection: 'xvifc_unspent_state_form_rows',
           rowFields: { ulb: 'ulbId', designYear: 'year', state: 'state', isActive: 'isActive' },
         },
         evaluator: {
@@ -351,8 +351,8 @@ describe('ClaimEligibilityEvaluatorService', () => {
         },
       };
       const parentFindOne = jest.fn();
-      byCollection['xvi_fc_unspent_state_forms'] = { findOne: parentFindOne, find: jest.fn() };
-      mockCollection('xvi_fc_unspent_state_form_rows', [{ ulbId: new Types.ObjectId(ulbA), eligibility: false }]);
+      byCollection['xvifc_unspent_state_forms'] = { findOne: parentFindOne, find: jest.fn() };
+      mockCollection('xvifc_unspent_state_form_rows', [{ ulbId: new Types.ObjectId(ulbA), eligibility: false }]);
       const doc = sourceFormJson({ formId: 25, type: 'FC_UNSPENT_STATE', claimEligibility: fcUnspentRowConfig });
 
       const { perUlb } = await service.evaluateUlbBulk(doc, { stateId, designYearId, expectedUlbIds });
@@ -366,8 +366,8 @@ describe('ClaimEligibilityEvaluatorService', () => {
       // Mirrors Elected Body's real config: evaluator.type stays 'FORM_STATUS' (used by the
       // single-result evaluate() path for the state-level pass/fail line), but this method must
       // still route to row logic based on source.rowCollection being present.
-      mockCollection('xvi_fc_elected_urban_local_bodies_forms', [{ activeDatasetVersion: 1 }]);
-      mockCollection('xvi_fc_elected_urban_local_bodies_rows', [
+      mockCollection('xvifc_elected_ulb_forms', [{ activeDatasetVersion: 1 }]);
+      mockCollection('xvifc_elected_ulb_rows', [
         { ulbId: new Types.ObjectId(ulbA), electedBodyStatus: 'Constituted' },
       ]);
       const combinedConfig: ClaimEligibilityConfig = {

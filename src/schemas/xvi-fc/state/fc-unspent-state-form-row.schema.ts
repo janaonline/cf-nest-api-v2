@@ -84,7 +84,7 @@ export const FcUnspentUlbRowSnapshotSchema = SchemaFactory.createForClass(FcUnsp
  * toggling `isActive` never implies a `rowStatus` change.
  */
 @Schema({
-  collection: 'xvi_fc_unspent_state_form_rows',
+  collection: 'xvifc_unspent_state_form_rows',
   timestamps: true,
   versionKey: false,
 })

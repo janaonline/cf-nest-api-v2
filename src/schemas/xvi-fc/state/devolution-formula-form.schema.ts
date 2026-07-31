@@ -14,7 +14,7 @@ export { DF_FORM_TYPE as DEVOLUTION_FORMULA_FORM_TYPE };
 export type DevolutionFormulaFormDocument = HydratedDocument<DevolutionFormulaForm>;
 
 @Schema({
-  collection: 'xvi_fc_devolution_formula_forms',
+  collection: 'xvifc_devolution_forms',
   timestamps: true,
   versionKey: false,
 })

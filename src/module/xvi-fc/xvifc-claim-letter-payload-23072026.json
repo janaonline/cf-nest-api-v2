@@ -146,7 +146,7 @@
       "applicableInstallments": [1],
       "acceptedFormStatuses": [5, 7],
       "source": {
-        "collection": "xvi_fc_devolution_formula_forms",
+        "collection": "xvifc_devolution_forms",
         "fields": {
           "designYear": "year",
           "state": "state",
@@ -679,7 +679,7 @@
       "applicableInstallments": [1, 2],
       "acceptedFormStatuses": [5, 7],
       "source": {
-        "collection": "xvifc_sfc_forms",
+        "collection": "xvifc_sfc",
         "fields": {
           "designYear": "year",
           "state": "state",
@@ -974,14 +974,14 @@
       "applicableInstallments": [1, 2],
       "acceptedFormStatuses": [5, 7],
       "source": {
-        "collection": "xvi_fc_elected_urban_local_bodies_forms",
+        "collection": "xvifc_elected_ulb_forms",
         "fields": {
           "designYear": "year",
           "state": "state",
           "currentFormStatus": "currentFormStatus",
           "isActive": "isActive"
         },
-        "rowCollection": "xvi_fc_elected_urban_local_bodies_rows",
+        "rowCollection": "xvifc_elected_ulb_rows",
         "rowFields": {
           "ulb": "ulbId",
           "designYear": "year",
@@ -989,7 +989,7 @@
           "isActive": "isActive",
           "datasetVersion": "datasetVersion"
         },
-        "parentCollection": "xvi_fc_elected_urban_local_bodies_forms",
+        "parentCollection": "xvifc_elected_ulb_forms",
         "parentFields": {
           "designYear": "year",
           "state": "state",
@@ -1243,14 +1243,14 @@
       "applicableInstallments": [1, 2],
       "acceptedFormStatuses": [5, 7],
       "source": {
-        "collection": "xvi_fc_unspent_state_forms",
+        "collection": "xvifc_unspent_state_forms",
         "fields": {
           "designYear": "year",
           "state": "state",
           "currentFormStatus": "currentFormStatus",
           "isActive": "isActive"
         },
-        "rowCollection": "xvi_fc_unspent_state_form_rows",
+        "rowCollection": "xvifc_unspent_state_form_rows",
         "rowFields": {
           "ulb": "ulbId",
           "designYear": "year",
