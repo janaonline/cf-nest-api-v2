@@ -420,13 +420,13 @@ export class DevolutionFormulaRowService {
       .exec();
   }
 
-  // TODO: implement when ClaimLetter model is available.
-  // Throws if the ULB has an active claim letter locked for this year+installment.
+  // TODO: wire up to claim-letter's ClaimLetterUlbLock model (exists now, just not read here) —
+  // should throw if the ULB has an active claim letter lock for this year+installment.
   private assertNoActiveClaimLockForUlb(
     _ulbId: Types.ObjectId | null,
     _yearId: string,
     _installment: DfInstallment,
   ): void {
-    // stub — no-op until claim letter model is implemented
+    // Still a no-op — see TODO above.
   }
 }

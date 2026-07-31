@@ -654,6 +654,8 @@ export class FcUnspentDeclarationService {
    * derives the dependency block + permission gates. Called identically by GET,
    * save-draft, and final-submit so the three never diverge.
    */
+  // Reads devolution-formula's activeDatasetVersion invariant from outside that module — see
+  // devolution-formula/docs/adr/0001-dataset-versioning.md before changing either side of this.
   private async resolveDevolutionDependency(
     stateOid: Types.ObjectId,
     yearOid: Types.ObjectId,

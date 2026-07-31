@@ -360,6 +360,8 @@ export class DevolutionFormulaExcelService {
     // unique index and a manual, version-number-keyed rollback. The $inc below is atomic — two
     // concurrent requests can never be handed the same datasetVersion — and wrapping every write in
     // one transaction means an abort undoes all of them, so no manual rollback/cleanup is needed.
+    // Full design + list of everything that depends on activeDatasetVersion (including claim-letter,
+    // outside this module): docs/adr/0001-dataset-versioning.md.
     const formSummaryFieldsBase: Record<string, unknown> = {
       excelFile: normalizedFile,
       excelRowCount,

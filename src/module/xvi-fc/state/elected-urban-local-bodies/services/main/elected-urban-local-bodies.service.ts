@@ -287,7 +287,8 @@ export class ElectedUrbanLocalBodiesService {
     const stateOid = new Types.ObjectId(stateId);
 
     // Always load the active registry — needed in both branches to determine template rows.
-    // TODO: Add date of constitution check.
+    // TODO: dateOfConstitution has no validation rule defined/implemented yet — same gap as
+    // elected-urban-local-bodies-excel.service.ts's revalidateExcel (identical TODO, not yet scoped).
     const activeUlbs = await this.ulbModel
       .find({ state: stateOid, isActive: true })
       .select('_id name censusCode sbCode')
@@ -527,7 +528,9 @@ export class ElectedUrbanLocalBodiesService {
    * Runs full form-level validation then enforces all Excel row-level pre-conditions:
    * validationStatus VALID, zero errors, zero missing DB ULBs, zero extra ULB rows,
    * and Excel row count matching the computed active ULB count.
-   * Transitions status to UNDER_REVIEW_BY_MOHUA.
+   * Transitions status to UNDER_REVIEW_BY_MOHUA. devolution-formula's Installment-1 gate reads
+   * this status from outside this module (see devolution-formula/CLAUDE.md) — changing when/how
+   * this transition happens has a blast radius there too.
    *
    * @param dto       - Payload with stateId, yearId, and complete form data.
    * @param user      - Authenticated user; must have FINAL_SUBMIT_STATE_FORMS permission.

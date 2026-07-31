@@ -78,7 +78,7 @@ export interface FcUnspentUlbOption {
 /**
  * Preserves the exact Devolution Formula row a row's `allocationAmount` was resolved from, so a
  * later Devolution rejection/reconciliation can identify affected rows by exact reference rather
- * than only by state/year (business brain §10.10).
+ * than only by state/year.
  */
 export interface FcUnspentAllocationSourceInput {
   devolutionFormId: Types.ObjectId;

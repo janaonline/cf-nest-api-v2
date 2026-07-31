@@ -290,6 +290,7 @@ export class ElectedUrbanLocalBodiesExcelService {
     // the identical datasetVersion and corrupt each other's rows. The $inc below is atomic — two
     // concurrent requests can never be handed the same datasetVersion — and wrapping every write
     // in one transaction means an abort undoes all of them, so no manual rollback is needed.
+    // Full design + the other call site implementing this same pattern: docs/adr/0001-dataset-versioning.md.
     // ulbCount is NOT persisted from the client — it is managed via the active ULB registry.
     const formSummaryFieldsBase: Record<string, unknown> = {
       dbUlbCount: computedActiveUlbCount,
@@ -481,7 +482,8 @@ export class ElectedUrbanLocalBodiesExcelService {
 
       if (rows.length > 0) {
         // Load active registry ULBs for revalidation; derive count from the find result.
-        // TODO: Add date of constitution check.
+        // TODO: dateOfConstitution has no validation rule defined/implemented yet — same gap as
+        // elected-urban-local-bodies.service.ts's getTemplate (identical TODO, not yet scoped).
         const dbUlbs = (await this.ulbModel
           .find({ state: stateOid, isActive: true })
           .select('_id name censusCode sbCode')
@@ -798,9 +800,9 @@ export class ElectedUrbanLocalBodiesExcelService {
         : 'INVALID';
 
     // Atomic version allocation + safe dataset replacement inside one Mongo transaction — same
-    // fix as validateExcel. This path only ever runs against an already-existing form (the sole
-    // caller, revalidateExcel, throws NotFoundException first if none exists), so no upsert is
-    // needed here — only the $inc for the version counter.
+    // fix as validateExcel (docs/adr/0001-dataset-versioning.md). This path only ever runs against
+    // an already-existing form (the sole caller, revalidateExcel, throws NotFoundException first
+    // if none exists), so no upsert is needed here — only the $inc for the version counter.
     const session = await this.formModel.db.startSession();
     let newVersion!: number;
     try {

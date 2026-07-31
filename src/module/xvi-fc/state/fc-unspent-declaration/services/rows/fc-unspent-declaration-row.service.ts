@@ -339,6 +339,8 @@ export class FcUnspentDeclarationRowService {
       .exec();
   }
 
+  // Reads devolution-formula's activeDatasetVersion invariant from outside that module — see
+  // devolution-formula/docs/adr/0001-dataset-versioning.md before changing either side of this.
   private async resolveAllocationsForUlbIds(
     devolutionFormId: Types.ObjectId,
     activeDatasetVersion: number,

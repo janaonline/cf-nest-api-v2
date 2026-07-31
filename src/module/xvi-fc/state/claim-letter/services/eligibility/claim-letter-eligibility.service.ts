@@ -365,6 +365,11 @@ export class ClaimLetterEligibilityService {
    * this State/year/installment regardless of its current status (the eligibility *gate* above is
    * what decides whether that status is acceptable) so the picker can still show last-known
    * figures even while Devolution is temporarily returned.
+   *
+   * Depends on devolution-formula's dataset-versioning invariant — filters rows by
+   * `datasetVersion: form.activeDatasetVersion` below, so this is only correct as long as that
+   * invariant holds. See `devolution-formula/docs/adr/0001-dataset-versioning.md` (this method is
+   * listed there as an external consumer) before changing anything on either side of this read.
    */
   async resolveDevolutionAllocations(
     stateId: string,

@@ -215,8 +215,7 @@ export class ClaimLetterAssemblyService {
     );
   }
 
-  // ─── Steps 1-2: one transaction — allocate batch number + acquire all locks ─────────────────
-  // ─── (docs/adr/0002-batching-and-locks.md) ───────────────────────────────────
+  // ─── Steps 1-2: allocate batch number + acquire all locks (docs/adr/0002-batching-and-locks.md) ───
 
   /** Thin orchestrator around a single reservation attempt — gives a stale `BUILDING` row exactly
    *  one chance to be reclaimed inline before surfacing the standard conflict to the caller,
@@ -442,8 +441,7 @@ export class ClaimLetterAssemblyService {
     }
   }
 
-  // ─── Step 3: resolve sources + build children, chunked, not transactional ───────────────────
-  // ─── (docs/adr/0002-batching-and-locks.md) ───────────────────────────────────
+  // ─── Step 3: resolve sources + build children, chunked, not transactional (docs/adr/0002-batching-and-locks.md) ───
 
   private async buildChildren(
     parent: ClaimLetterBatchDocument,
@@ -972,8 +970,7 @@ export class ClaimLetterAssemblyService {
     }
   }
 
-  // ─── PATCH .../draft: diff-based update, reusing the create machinery ───────────────
-  // ─── (docs/adr/0002-batching-and-locks.md) ───────────────────────────────────
+  // ─── PATCH .../draft: diff-based update, reusing the create machinery (docs/adr/0002-batching-and-locks.md) ───
 
   async updateDraft(
     claimLetterId: string,
@@ -1389,8 +1386,7 @@ export class ClaimLetterAssemblyService {
     throw new ConflictException('Draft could not be abandoned. Please retry.');
   }
 
-  // ─── Version regeneration — mechanism only, no State-facing endpoint in V1 ──────────────────
-  // ─── (docs/adr/0003-workflow-transitions.md) ─────────────────────────────────
+  // ─── Version regeneration — mechanism only, no State-facing endpoint in V1 (docs/adr/0003-workflow-transitions.md) ───
 
   /**
    * Built ahead of the future MoHUA-rejection flow (out of scope for V1) that will call this.
@@ -1642,8 +1638,7 @@ export class ClaimLetterAssemblyService {
     }
   }
 
-  // ─── Acknowledgement lock transition — mechanism only, no caller in V1 ──────────────
-  // ─── (docs/adr/0003-workflow-transitions.md) ─────────────────────────────────
+  // ─── Acknowledgement lock transition — mechanism only, no caller in V1 (docs/adr/0003-workflow-transitions.md) ───
 
   /** Permanent database-level guarantee against a second acknowledged claim for the same
    *  State/year/installment/ULB — scoped by `claimLetter`, never the bare business key. */

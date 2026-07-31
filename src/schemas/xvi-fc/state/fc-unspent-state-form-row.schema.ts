@@ -7,7 +7,7 @@ export type XviFcUnspentStateFormRowDocument = HydratedDocument<XviFcUnspentStat
 /**
  * Preserves the exact Devolution Formula source used to compute a row's `allocationAmount`,
  * so a later Devolution rejection/reconciliation can identify affected rows by exact reference
- * rather than only by state/year (business brain §10.10).
+ * rather than only by state/year.
  */
 @Schema({ _id: false })
 export class FcUnspentAllocationSource {
