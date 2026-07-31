@@ -55,6 +55,10 @@ export class OCRInfo {
 
   @Prop({ type: [String], default: [] })
   failedChecks!: string[];
+
+  /** ULB has asked a human reviewer to look at this failed OCR result. Set once, cleared on retry/re-upload. */
+  @Prop({ type: Boolean, default: false })
+  isManualReviewRequested!: boolean;
 }
 
 export const OCRInfoSchema = SchemaFactory.createForClass(OCRInfo);
@@ -148,13 +152,14 @@ export class DocumentItem {
   currentUpload: CurrentUpload | null;
 
   /**
-   * Every decision recorded against THIS document, oldest first. The last entry is "current" —
-   * when its status is APPROVED the document is locked from re-upload; RETURNED unlocks it.
-   * Never cleared on re-upload — the prior entry stays as history, a new one is pushed once
-   * the resubmitted document is decided again.
+   * STATE's current decision on THIS document, or null if undecided. When APPROVED the document
+   * is locked from re-upload; RETURNED or null leaves it open. Provisional until the section
+   * itself is finalized (Approve Section/Return Section) — STATE can undo it (reset to null)
+   * any time before then. The full history of who decided what lives in
+   * XviFcAnnualAccountFormLog, not here, so this only ever holds the current verdict.
    */
-  @Prop({ type: [DecisionInfoSchema], default: [] })
-  stateDecision!: DecisionInfo[];
+  @Prop({ type: DecisionInfoSchema, default: null })
+  stateDecision!: DecisionInfo | null;
 }
 
 export const DocumentItemSchema = SchemaFactory.createForClass(DocumentItem);

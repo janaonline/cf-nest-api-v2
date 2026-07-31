@@ -30,7 +30,7 @@ import { Ulb, UlbDocument } from '../../schemas/ulb.schema';
 import { State, StateDocument } from '../../schemas/state.schema';
 import { SideMenu, SideMenuDocument, MenuRole } from '../../schemas/side-menu.schema';
 import { XviFcCacheService, XVIFC_CACHE_KEY_PREFIX } from './cache/xvi-fc-cache.service';
-import { FormJsonService } from '../../form-json/form-json.service';
+import { FormJsonService } from '../../master/form-json/form-json.service';
 
 @Injectable()
 export class XviFcService {
@@ -85,15 +85,39 @@ export class XviFcService {
 
   async clearPageCache(user: AuthUser, pattern?: string): Promise<{ message: string }> {
     if (user.scope !== Scope.ADMIN) throw new ForbiddenException('Only admins can clear the cache.');
-    const redisPattern = pattern ? `${XVIFC_CACHE_KEY_PREFIX}:${pattern}` : `${XVIFC_CACHE_KEY_PREFIX}:*`;
-    await this.cache.deleteByPattern(redisPattern);
-    return { message: `Cache cleared for ${pattern ? `pattern: ${pattern}` : 'all XVI-FC cache'}` };
+    // Cache keys are `xvifc:cache:<full request URL>`, which includes the app's global
+    // route prefix (e.g. /api/v2/xvi-fc/sidebar/STATE?yearId=...) — a caller passing just
+    // "/xvi-fc/sidebar" has no way to know that prefix. Wrap the pattern as a "contains"
+    // glob match instead of an anchored one, so it matches regardless of the prefix or
+    // whether the caller already added their own wildcards.
+    const redisPattern = pattern
+      ? `${XVIFC_CACHE_KEY_PREFIX}:*${pattern.replace(/^\/+|\*+/g, '')}*`
+      : `${XVIFC_CACHE_KEY_PREFIX}:*`;
+    const deletedCount = await this.cache.deleteByPattern(redisPattern);
+    return {
+      message:
+        deletedCount > 0
+          ? `Cleared ${deletedCount} cache ${deletedCount === 1 ? 'entry' : 'entries'}${pattern ? ` for pattern: ${pattern}` : ''}.`
+          : `No cached entries matched${pattern ? ` pattern: ${pattern}` : ''} — nothing was cleared.`,
+    };
   }
 
-  async clearFormJsonCache(user: AuthUser, designYearId: string, formId: number): Promise<{ message: string }> {
+  async clearFormJsonCache(
+    user: AuthUser,
+    designYearId?: string,
+    formId?: number,
+  ): Promise<{ message: string }> {
     if (user.scope !== Scope.ADMIN) throw new ForbiddenException('Only admins can clear the cache.');
-    await this.formJsonService.clearCache(designYearId, formId);
-    return { message: `FormJson cache cleared for designYearId: ${designYearId}, formId: ${formId}` };
+    const deletedCount = await this.formJsonService.clearCache(designYearId, formId);
+    const scope = [designYearId ? `designYearId: ${designYearId}` : null, formId ? `formId: ${formId}` : null]
+      .filter(Boolean)
+      .join(', ');
+    return {
+      message:
+        deletedCount > 0
+          ? `Cleared ${deletedCount} FormJson cache ${deletedCount === 1 ? 'entry' : 'entries'}${scope ? ` for ${scope}` : ''}.`
+          : `No matching FormJson cache entries${scope ? ` for ${scope}` : ''} — nothing was cleared.`,
+    };
   }
 
   private buildMenuTree(docs: Array<SideMenu & { _id: Types.ObjectId }>): SideMenuResponseDto {

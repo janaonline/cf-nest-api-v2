@@ -6,7 +6,7 @@ import { ConfigService } from '@nestjs/config';
 import { SfcStatusService } from './sfc-status.service';
 import { XviFcSfcStatus } from '../../../../schemas/xvi-fc/state/sfc-status.schema';
 import { XviFcSfcStatusHistory } from '../../../../schemas/xvi-fc/state/sfc-status-history.schema';
-import { FormJsonService } from 'src/form-json/form-json.service';
+import { FormJsonService } from 'src/master/form-json/form-json.service';
 import { DynamicFormValidationService } from '../../common/dynamic-form-validation/dynamic-form-validation.service';
 import { XvifcFormActorsService } from '../../common/services/xvifc-form-actors.service';
 import { ExcelService } from 'src/services/excel/excel.service';

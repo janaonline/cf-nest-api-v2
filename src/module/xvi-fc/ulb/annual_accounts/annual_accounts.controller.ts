@@ -10,7 +10,7 @@ import { ConfirmUploadDto } from './dto/confirm-upload.dto';
 import { SubmitSectionDto } from './dto/submit-section.dto';
 import { DocumentDecisionDto } from './dto/document-decision.dto';
 import { SectionDecisionDto } from './dto/section-decision.dto';
-// import { BulkSectionDecisionDto } from './dto/bulk-section-decision.dto'; // only used by the commented-out bulk-decision endpoint below
+import { BulkSectionDecisionDto } from './dto/bulk-section-decision.dto';
 import { UlbSubmissionsQueryDto } from './dto/ulb-submissions-query.dto';
 import { extractIpAndUserAgent } from 'src/module/xvi-fc/common/utils/xvi-fc-request-meta.util';
 
@@ -69,15 +69,6 @@ export class AnnualAccountsController {
     return this.annualAccountsService.getProcessingStatus(id, user);
   }
 
-  @Get(':id/documents/:uploadId/signed-url')
-  getSignedUrl(
-    @Param('id', ParseObjectIdPipe) id: string,
-    @Param('uploadId') uploadId: string,
-    @CurrentUser() user: AuthUser,
-  ) {
-    return this.annualAccountsService.getSignedUrl(id, uploadId, user);
-  }
-
   @Get(':id/logs')
   getFormLogs(
     @Param('id', ParseObjectIdPipe) id: string,
@@ -112,6 +103,21 @@ export class AnnualAccountsController {
     return this.annualAccountsService.retryUpload(id, uploadId, user);
   }
 
+  @Post(':id/documents/:docId/manual-review')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'ULB requests manual review of a document whose OCR validation failed' })
+  requestManualReview(
+    @Param('id', ParseObjectIdPipe) id: string,
+    @Param('docId') docId: string,
+    @Query('section') section: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    if (section !== 'auditedData' && section !== 'unauditedData') {
+      throw new BadRequestException('section must be "auditedData" or "unauditedData"');
+    }
+    return this.annualAccountsService.requestManualReview(id, section, docId, user);
+  }
+
   @Delete(':id/documents/:docId')
   @HttpCode(200)
   @ApiOperation({
@@ -143,6 +149,21 @@ export class AnnualAccountsController {
     return this.annualAccountsService.decideDocument(id, docId, dto, user, ipAddress, userAgent);
   }
 
+  @Delete(':id/documents/:docId/decision')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'State reviewer undoes their own approve/return decision on a single document' })
+  undoDocumentDecision(
+    @Param('id', ParseObjectIdPipe) id: string,
+    @Param('docId') docId: string,
+    @Query('section') section: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    if (section !== 'auditedData' && section !== 'unauditedData') {
+      throw new BadRequestException('section must be "auditedData" or "unauditedData"');
+    }
+    return this.annualAccountsService.undoDocumentDecision(id, section, docId, user);
+  }
+
   @Post(':id/decision')
   @HttpCode(200)
   @ApiOperation({ summary: 'State reviewer approves or returns a whole section, transitioning its status' })
@@ -156,19 +177,13 @@ export class AnnualAccountsController {
     return this.annualAccountsService.decideSection(id, dto, user, ipAddress, userAgent);
   }
 
-  // @Post('bulk-decision')
-  // @HttpCode(200)
-  // @ApiOperation({ summary: 'State reviewer bulk approves or returns a section across many ULB submissions' })
-  // bulkDecideSection(
-  //   @Body() dto: BulkSectionDecisionDto,
-  //   @CurrentUser() user: AuthUser,
-  //   @Req() req: Request,
-  // ) {
-  //   const ipAddress =
-  //     (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ?? req.socket?.remoteAddress ?? null;
-  //   const userAgent = (req.headers['user-agent'] as string) ?? null;
-  //   return this.annualAccountsService.bulkDecideSection(dto, user, ipAddress, userAgent);
-  // }
+  @Post('bulk-decision')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'State reviewer bulk approves or returns a section across many ULB submissions' })
+  bulkDecideSection(@Body() dto: BulkSectionDecisionDto, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    const { ipAddress, userAgent } = extractIpAndUserAgent(req);
+    return this.annualAccountsService.bulkDecideSection(dto, user, ipAddress, userAgent);
+  }
 
   // @Post(':id/mohua-decision')
   // @HttpCode(200)

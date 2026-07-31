@@ -252,7 +252,7 @@ Same Transfer Ownership UI-block-commented-out situation, same reasoning/TODO. M
 - `src/module/auth/strategies/jwt.strategy.ts`, `jwt-refresh.strategy.ts`
 - `src/module/auth/permission.guard.ts`
 - `src/module/auth/enum/role.enum.ts`, `roles-xvi-fc.enum.ts`
-- `src/users/users.controller.ts`, `users.service.ts`
+- `src/module/users/users.controller.ts`, `users.service.ts`
 - `src/schemas/user/user.schema.ts`
 - `src/main.ts` (global prefix `api/v2`)
 

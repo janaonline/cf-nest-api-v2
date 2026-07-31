@@ -11,3 +11,9 @@ export const DOC_TYPE_MAP: Record<string, string> = {
   'auditors-report': 'AUDITOR_REPORT',
   'receipts-and-payments-statement': 'RECEIPTS_AND_PAYMENTS', // TODO: confirm Python doc_type value
 };
+
+/**
+ * docIds that are optional, direct-to-DB uploads and skip the OCR pipeline entirely —
+ * confirmUpload marks these PASSED immediately instead of enqueuing an OCR job.
+ */
+export const NO_OCR_DOC_IDS = new Set<string>(['notes-to-accounts']);

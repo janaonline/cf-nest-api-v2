@@ -13,7 +13,7 @@ import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-f
 import type { XviFcValidationErrorMap } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import type { FieldConfig, SectionLayout } from 'src/module/xvi-fc/common/types/field-config.type';
 import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
-import { FormJsonService } from 'src/form-json/form-json.service';
+import { FormJsonService } from 'src/master/form-json/form-json.service';
 import type { CommonFile, FileInfo } from 'src/schemas/common/file.schema';
 import { State, StateDocument } from 'src/schemas/state.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';

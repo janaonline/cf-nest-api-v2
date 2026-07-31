@@ -56,31 +56,34 @@ describe('bank-account-security.util', () => {
   });
 
   it('maps records to safe responses without encrypted, hash, or full account-number fields', () => {
-    const response = buildSafeBankAccountResponse({
-      _id: 'record-id',
-      ulb: 'ulb-id',
-      designYear: 'year-id',
-      ifscCode: 'SBIN0123456',
-      bankDetails: { name: 'State Bank of India' },
-      accountNumber: '123456789012',
-      accountNumberEncrypted: 'encrypted-value',
-      accountNumberHash: 'hash-value',
-      accountNumberMasked: '********9012',
-      accountNumberLast4: '9012',
-      proofFile: {
-        originalName: 'proof.pdf',
-        mimeType: 'application/pdf',
-        pages: 2,
-        sizeKb: 1,
-        s3Key: 'xvi-fc/bank-account/66/67/proof/proof.pdf',
-        sha256: 'a'.repeat(64),
+    const response = buildSafeBankAccountResponse(
+      {
+        _id: 'record-id',
+        ulb: 'ulb-id',
+        designYear: 'year-id',
+        ifscCode: 'SBIN0123456',
+        bankDetails: { name: 'State Bank of India' },
+        accountNumber: '123456789012',
+        accountNumberEncrypted: 'encrypted-value',
+        accountNumberHash: 'hash-value',
+        accountNumberMasked: '********9012',
+        accountNumberLast4: '9012',
+        proofFile: {
+          originalName: 'proof.pdf',
+          mimeType: 'application/pdf',
+          pages: 2,
+          sizeKb: 1,
+          s3Key: 'xvi-fc/bank-account/66/67/proof/proof.pdf',
+          sha256: 'a'.repeat(64),
+        },
+        currentFormStatus: FORM_STATUS.IN_PROGRESS,
+        submittedBy: 'user-id',
+        submittedAt: new Date('2026-01-01T00:00:00.000Z'),
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+        updatedAt: new Date('2026-01-01T00:00:00.000Z'),
       },
-      currentFormStatus: FORM_STATUS.IN_PROGRESS,
-      submittedBy: 'user-id',
-      submittedAt: new Date('2026-01-01T00:00:00.000Z'),
-      createdAt: new Date('2026-01-01T00:00:00.000Z'),
-      updatedAt: new Date('2026-01-01T00:00:00.000Z'),
-    });
+      (s3Key) => `https://signed.example.com/${s3Key}`,
+    );
 
     expect(response).toMatchObject({
       accountNumberMasked: '********9012',
@@ -94,6 +97,7 @@ describe('bank-account-security.util', () => {
         sizeKb: 1,
         s3Key: 'xvi-fc/bank-account/66/67/proof/proof.pdf',
         sha256: 'a'.repeat(64),
+        fileUrl: 'https://signed.example.com/xvi-fc/bank-account/66/67/proof/proof.pdf',
       },
     });
     expect(response).not.toHaveProperty('accountNumber');

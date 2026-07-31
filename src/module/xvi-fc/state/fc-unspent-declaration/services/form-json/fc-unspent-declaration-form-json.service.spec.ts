@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { InternalServerErrorException, NotFoundException } from '@nestjs/common';
-import { FormJsonService } from 'src/form-json/form-json.service';
+import { FormJsonService } from 'src/master/form-json/form-json.service';
 import type { FormFieldOption } from 'src/module/xvi-fc/common/types/field-config.type';
 import { FcUnspentDeclarationFormJsonService } from './fc-unspent-declaration-form-json.service';
 import {

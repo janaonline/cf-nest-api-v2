@@ -54,3 +54,5 @@ export class SlbForm {
 export const SlbFormSchema = SchemaFactory.createForClass(SlbForm);
 
 SlbFormSchema.index({ ulb: 1, year: 1, formType: 1 }, { unique: true });
+SlbFormSchema.index({ year: 1, ulb: 1 });
+// TODO: Add state _id
