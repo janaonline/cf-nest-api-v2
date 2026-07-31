@@ -71,11 +71,11 @@ export interface UlbCriterionSummary {
 export interface ClaimLetterUlbLevelEligibility {
   /** Merged verdict across every ULB-bulk-evaluable criterion (SLB, Annual Accounts x2, Elected
    *  Body row, FC Unspent row) — a ULB must be ELIGIBLE or EXEMPTED on every one, not INELIGIBLE
-   *  on any, to end up `true` here. Consumed by the picker/getUlbs/buildChildren (plan Part C). */
+   *  on any, to end up `true` here. Consumed by the picker/getUlbs/buildChildren. */
   perUlbEligible: Map<string, boolean>;
   /** Tallies for criteria with no state-level checklist line of their own (SLB, Provisional,
    *  Audited) — there's no state action to gate on, so these surface as a separate informational
-   *  block rather than a pass/fail line (plan's architecture decision). */
+   *  block rather than a pass/fail line. */
   standaloneCriteria: UlbCriterionSummary[];
   /** Tallies for criteria that DO already have a state-level line (Elected Body, FC Unspent),
    *  keyed by `formId` so the caller can merge each into that line's own `ulbBreakdown` rather
@@ -90,10 +90,10 @@ export interface ClaimLetterUlbLevelEligibility {
 
 /**
  * Evaluates the State-level claim eligibility gate and resolves Devolution allocation amounts —
- * kept as two deliberately separate methods (plan §4): the gate answers "can this State claim at
- * all," allocation resolution answers "how much, per ULB." Neither branches on a hardcoded formId
- * — the gate loops generically over whatever `formjsons` documents have an enabled
- * `claimEligibility` config for this design year (today: length 1, Devolution's own entry).
+ * kept as two deliberately separate methods: the gate answers "can this State claim at all,"
+ * allocation resolution answers "how much, per ULB." Neither branches on a hardcoded formId — the
+ * gate loops generically over whatever `formjsons` documents have an enabled `claimEligibility`
+ * config for this design year (today: length 1, Devolution's own entry).
  */
 @Injectable()
 export class ClaimLetterEligibilityService {
@@ -253,9 +253,9 @@ export class ClaimLetterEligibilityService {
    * Runs every enabled ULB-bulk-evaluable source for this design year/installment (SLB, Annual
    * Accounts x2, Elected Body row, FC Unspent row) and merges the results into one per-ULB
    * verdict, plus two differently-shaped tally lists depending on whether the criterion already
-   * has a state-level checklist line to attach to (plan's architecture decision — see
-   * `ClaimLetterUlbLevelEligibility`'s own field docs). `expectedUlbIds` is a parameter, not
-   * re-derived here, since callers (`getEligibilitySummary`, the ULB-options/rows services)
+   * has a state-level checklist line to attach to (see `ClaimLetterUlbLevelEligibility`'s own
+   * field docs). `expectedUlbIds` is a parameter, not re-derived here, since callers
+   * (`getEligibilitySummary`, the ULB-options/rows services)
    * already resolve `ExpectedUlbSetService` themselves for other reasons — avoids a duplicate query.
    *
    * A source qualifies for ULB-bulk evaluation when either `ownerLevel === 'ULB'` (SLB, Annual
@@ -360,7 +360,8 @@ export class ClaimLetterEligibilityService {
 
   /**
    * Bulk-resolves each ULB's Installment-1 Devolution allocation — plain data resolution, never
-   * routed through the evaluator dispatcher (plan §4). Reads whatever Devolution form exists for
+   * routed through the evaluator dispatcher (that dispatcher is for pass/fail eligibility checks,
+   * not amount lookups). Reads whatever Devolution form exists for
    * this State/year/installment regardless of its current status (the eligibility *gate* above is
    * what decides whether that status is acceptable) so the picker can still show last-known
    * figures even while Devolution is temporarily returned.

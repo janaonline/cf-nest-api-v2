@@ -49,9 +49,9 @@ type LeanClaimLetterBatch = Record<string, unknown>;
 
 /**
  * Orchestrates the State-facing claim-letter read paths (eligibility summary, single-claim
- * detail, and the "list my claim letters" history view — brain §15.2), plus the two
- * parent-only mutations that don't touch locks/children (signed-file upload, submit — plan §6).
- * Lock/child-touching mutations (create/update/abandon) live in ClaimLetterAssemblyService.
+ * detail, and the "list my claim letters" history view), plus the two parent-only mutations that
+ * don't touch locks/children (signed-file upload, submit). Lock/child-touching mutations
+ * (create/update/abandon) live in ClaimLetterAssemblyService.
  */
 @Injectable()
 export class ClaimLetterService {
@@ -205,7 +205,8 @@ export class ClaimLetterService {
     return { batchSlotsUsed: usedBatchNumbers.size, nextBatchNumber };
   }
 
-  /** Persists `signedClaimFile` — writable only while IN_PROGRESS (plan §1), no history write. */
+  /** Persists `signedClaimFile` — writable only while IN_PROGRESS, no history write (not a
+   *  workflow transition — docs/adr/0003-workflow-transitions.md). */
   async uploadSignedFile(
     claimLetterId: string,
     fileRef: XviFcFileRefDto,
@@ -252,8 +253,10 @@ export class ClaimLetterService {
   }
 
   /**
-   * `IN_PROGRESS -> UNDER_REVIEW_BY_MOHUA` (plan §6/§9) — requires a signed file, idempotent on
-   * retry (an already-submitted claim returns its current state rather than erroring — plan §10).
+   * `IN_PROGRESS -> UNDER_REVIEW_BY_MOHUA` — requires a signed file, idempotent on retry (an
+   * already-submitted claim returns its current state rather than erroring — see
+   * docs/adr/0001-idempotent-retry.md). Recorded as a workflow transition
+   * (docs/adr/0003-workflow-transitions.md).
    */
   async submit(
     claimLetterId: string,

@@ -65,7 +65,7 @@ export function amountsAreEqual(a: number, b: number): boolean {
   return scaleForExactMath(a) === scaleForExactMath(b);
 }
 
-/** Brain §14.9: `CF_<statecode>_<designyear>_<installmentno>`. */
+/** File base name format: `CF_<statecode>_<designyear>_<installmentno>`. */
 export function buildClaimLetterFileBaseName(stateCode: string, designYearLabel: string, installment: 1 | 2): string {
   return `CF_${stateCode}_${designYearLabel}_${installment}`;
 }

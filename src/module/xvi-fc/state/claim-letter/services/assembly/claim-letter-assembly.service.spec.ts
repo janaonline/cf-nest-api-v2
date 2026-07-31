@@ -258,7 +258,7 @@ describe('ClaimLetterAssemblyService', () => {
     expect(connection.startSession).not.toHaveBeenCalled();
   });
 
-  // ─── Idempotent retry (plan §10) ────────────────────────────────────────────
+  // ─── Idempotent retry (docs/adr/0001-idempotent-retry.md) ───────────────────
 
   it('returns the existing READY doc (mapped to a summary) when retried with the same buildRequestId', async () => {
     const readyDoc = { _id: parentId, assemblyStatus: 'READY', financialSummary: zeroFinancialSummary };
@@ -1011,7 +1011,7 @@ describe('ClaimLetterAssemblyService', () => {
     });
   });
 
-  // ─── createNewVersion (plan §7.6 — mechanism only, no caller in V1) ──────────
+  // ─── createNewVersion (mechanism only, no caller in V1 — docs/adr/0003-workflow-transitions.md) ──
 
   describe('createNewVersion', () => {
     const newParentId = new Types.ObjectId();
@@ -1121,7 +1121,7 @@ describe('ClaimLetterAssemblyService', () => {
     });
   });
 
-  // ─── acknowledgeLocks (plan §7.8 — mechanism only, no caller in V1) ──────────
+  // ─── acknowledgeLocks (mechanism only, no caller in V1 — docs/adr/0003-workflow-transitions.md) ──
 
   describe('acknowledgeLocks', () => {
     it('converts only ACTIVE locks for this claim to ACKNOWLEDGED, scoped by claimLetter', async () => {
@@ -1151,7 +1151,7 @@ describe('ClaimLetterAssemblyService', () => {
   it('never calls the cached *ForDisplay eligibility variants — this pipeline authorizes builds and must always read live data', () => {
     // buildChildren()'s eligibility check and assertNoDrift()'s re-check exist specifically to
     // catch eligibility changing during/around the chunked, non-transactional child-insertion
-    // window (plan §7.3/§7.5) — reading from ClaimLetterEligibilityService's cached
+    // window (docs/adr/0002-batching-and-locks.md) — reading from ClaimLetterEligibilityService's cached
     // evaluateStateLevelGateForDisplay/resolveUlbLevelEligibilityForDisplay here would let a state
     // build a claim against stale eligibility and would silently defeat assertNoDrift's entire
     // purpose (see claim-letter-eligibility.service.ts's doc comments on those two methods).

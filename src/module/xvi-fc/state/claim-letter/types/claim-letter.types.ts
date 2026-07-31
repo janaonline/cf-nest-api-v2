@@ -10,7 +10,7 @@ import type {
 import type { FieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
 import type { ClaimLetterFinancialOverview } from '../services/eligibility/claim-letter-eligibility.service';
 
-/** Display-ready ULB-options picker row (matches the FC Unspent picker-dialog UX — plan §6.1). */
+/** Display-ready ULB-options picker row (matches the FC Unspent picker-dialog UX). */
 export interface ClaimLetterUlbOption {
   ulbId: string;
   ulbName: string;
@@ -26,7 +26,7 @@ export interface ClaimLetterUlbOption {
   ineligibleReasonDetail: string | null;
 }
 
-/** Display-ready selected-ULB table row (matches the FC Unspent Yes-branch table — plan §6.2). */
+/** Display-ready selected-ULB table row (matches the FC Unspent Yes-branch table). */
 export interface ClaimLetterUlbRow {
   ulbId: string;
   ulbName: string;
@@ -38,7 +38,7 @@ export interface ClaimLetterUlbRow {
   eligible: boolean;
 }
 
-/** Crore-denominated — the same unit this is stored in, passed through unconverted (plan §8). */
+/** Crore-denominated — the same unit this is stored in, passed through unconverted. */
 export interface ClaimLetterFinancialSummaryDisplay {
   totalInstallmentAllocation: number;
   totalAlreadyAcknowledged: number;

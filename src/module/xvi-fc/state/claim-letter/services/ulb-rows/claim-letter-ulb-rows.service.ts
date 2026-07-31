@@ -19,7 +19,7 @@ import { ClaimLetterEligibilityService } from '../eligibility/claim-letter-eligi
 import type { GetClaimLetterUlbRowsQueryDto } from '../../dto/get-claim-letter-ulb-rows-query.dto';
 import type { ClaimLetterUlbRow } from '../../types/claim-letter.types';
 
-/** Selected-ULBs table for a claim (plan §6.2) — mirrors the FC Unspent Yes-branch table shape. */
+/** Selected-ULBs table for a claim — mirrors the FC Unspent Yes-branch table shape. */
 @Injectable()
 export class ClaimLetterUlbRowsService {
   constructor(
@@ -79,8 +79,8 @@ export class ClaimLetterUlbRowsService {
         >()
         .exec(),
       this.batchUlbModel.countDocuments(filter).exec(),
-      // Re-verified at read time (plan §6.2), not trusted from the frozen snapshot alone — a
-      // ULB's Devolution status may have changed after being added but before final submit. This
+      // Re-verified at read time, not trusted from the frozen snapshot alone — a ULB's Devolution
+      // status may have changed after being added but before final submit. This
       // is a display-only read (the `eligible` flag only drives a client-side warning badge —
       // actual save/submit authorization is independently, always-freshly re-verified server-side
       // in ClaimLetterAssemblyService), so the cached variant is safe here.

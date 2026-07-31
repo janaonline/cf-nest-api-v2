@@ -645,7 +645,7 @@ describe('ClaimLetterService', () => {
       expect(historyService.recordTransition).not.toHaveBeenCalled();
     });
 
-    it('persists the normalized file, returns the updated summary, and never writes history (plan §9: file upload is not a workflow transition)', async () => {
+    it('persists the normalized file, returns the updated summary, and never writes history (file upload is not a workflow transition — docs/adr/0003-workflow-transitions.md)', async () => {
       batchModel.findOne.mockReturnValue(q({ _id: 'x', state: stateId, currentFormStatus: 2 }));
       batchModel.findOneAndUpdate.mockReturnValue(
         q({
