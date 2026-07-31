@@ -7,6 +7,12 @@ export const FORM_STATUS = {
   UNDER_REVIEW_BY_MOHUA: 5,
   RETURNED_BY_MOHUA: 6,
   SUBMISSION_ACKNOWLEDGED_BY_MOHUA: 7,
+  APPROVED_BY_STATE: 8,
+  AWAITING_CLAIM_LETTER: 9,
+  /** Never a live form_status — appears only as a form-log `toStatus` marking an undo event. */
+  UNDO: 10,
+  /** Reserved — not wired to any transition yet. */
+  ACTION_REQUIRED: 11,
 } as const;
 
 export type FormStatusType = (typeof FORM_STATUS)[keyof typeof FORM_STATUS];
@@ -20,6 +26,10 @@ export const FORM_STATUS_LABELS: Readonly<Record<FormStatusType, string>> = {
   [FORM_STATUS.UNDER_REVIEW_BY_MOHUA]: 'Under Review by MoHUA',
   [FORM_STATUS.RETURNED_BY_MOHUA]: 'Returned by MoHUA',
   [FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA]: 'Acknowledged by MoHUA',
+  [FORM_STATUS.APPROVED_BY_STATE]: 'Approved by State',
+  [FORM_STATUS.AWAITING_CLAIM_LETTER]: 'Awaiting Claim Letter',
+  [FORM_STATUS.UNDO]: 'Undo',
+  [FORM_STATUS.ACTION_REQUIRED]: 'Action Required',
 };
 
 /**
@@ -70,8 +80,13 @@ export function getDefaultOwnerForStatus(status: number): string | null {
       return 'STATE';
     case FORM_STATUS.UNDER_REVIEW_BY_MOHUA:
       return 'MoHUA';
+    case FORM_STATUS.APPROVED_BY_STATE:
+      return 'STATE';
     case FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA:
     case FORM_STATUS.NO_STATUS:
+    case FORM_STATUS.AWAITING_CLAIM_LETTER:
+    case FORM_STATUS.UNDO:
+    case FORM_STATUS.ACTION_REQUIRED:
       return null;
     default:
       return null;
