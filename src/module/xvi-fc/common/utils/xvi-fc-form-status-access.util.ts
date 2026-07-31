@@ -17,6 +17,23 @@ const STATE_EDITABLE_STATUSES: Set<number> = new Set([
 ]);
 
 /**
+ * Returns true if a STATE user may open or decide (approve/return) a ULB-submitted form
+ * in the given status. Shared across every ULB form (Annual Account, Bank Account, ...) —
+ * a single source of truth for the "under review by state" threshold.
+ */
+export function canStateReviewForm(status: number): boolean {
+  return status === FORM_STATUS.UNDER_REVIEW_BY_STATE;
+}
+
+/**
+ * Returns true if a STATE user may undo their own Approve decision on a ULB-submitted form
+ * in the given status. Shared across every ULB form.
+ */
+export function canStateUndoFormApproval(status: number): boolean {
+  return status === FORM_STATUS.APPROVED_BY_STATE;
+}
+
+/**
  * Returns true if a ULB user may save or edit a form in the given status.
  */
 export function canUlbEditForm(status: number): boolean {
