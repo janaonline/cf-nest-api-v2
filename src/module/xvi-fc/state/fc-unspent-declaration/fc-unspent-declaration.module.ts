@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
-import { FormJsonModule } from 'src/form-json/form-json.module';
+import { FormJsonModule } from 'src/master/form-json/form-json.module';
 import { S3Service } from 'src/core/s3/s3.service';
 import { XviFcCommonModule } from 'src/module/xvi-fc/common/xvi-fc-common.module';
 import {

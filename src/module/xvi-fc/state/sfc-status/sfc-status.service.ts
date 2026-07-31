@@ -1,6 +1,6 @@
 ﻿import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { FormJsonService } from 'src/form-json/form-json.service';
+import { FormJsonService } from 'src/master/form-json/form-json.service';
 import { ConfigService } from '@nestjs/config';
 import { Buffer } from 'exceljs';
 import ms, { type StringValue } from 'ms';

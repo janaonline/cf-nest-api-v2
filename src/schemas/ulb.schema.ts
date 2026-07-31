@@ -63,7 +63,7 @@ export class Ulb {
   @Prop({ unique: true, sparse: true, index: true })
   censusCode: string;
 
-  @Prop({ default: null })
+  @Prop({ default: null, index: true })
   sbCode: string;
 
   @Prop({ default: 0 })

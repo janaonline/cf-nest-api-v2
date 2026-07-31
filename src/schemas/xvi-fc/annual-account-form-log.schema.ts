@@ -7,24 +7,43 @@ export type XviFcAnnualAccountFormLogDocument = HydratedDocument<XviFcAnnualAcco
 export type FormLogAction = 'SUBMITTED' | 'APPROVED' | 'RETURNED';
 export type FormLogActorStage = 'ULB' | 'STATE' | 'MOHUA';
 
-/** One document's outcome within a single log event — mirrors DocumentItem, not a full copy of it. */
+/**
+ * One document's outcome within a single log event — mirrors DocumentItem, not a full copy of it.
+ * decision/comment/filePath are omitted entirely (not stored as null) when no decision exists yet
+ * for this document at this event — e.g. every document on a plain SUBMITTED event.
+ */
 @Schema({ _id: false, versionKey: false })
 export class FormLogDocumentEntry {
   @Prop({ required: true })
   docId!: string;
 
-  @Prop({ type: String, enum: ['APPROVED', 'RETURNED'], default: null })
-  decision!: 'APPROVED' | 'RETURNED' | null;
+  @Prop({ type: String, enum: ['APPROVED', 'RETURNED'] })
+  decision?: 'APPROVED' | 'RETURNED';
 
-  @Prop({ type: String, default: null })
-  comment!: string | null;
+  @Prop({ type: String })
+  comment?: string;
 
   /** S3 object key of the file this decision was made against, so the audit trail can point at the exact upload. */
-  @Prop({ type: String, default: null })
-  filePath!: string | null;
+  @Prop({ type: String })
+  filePath?: string;
 }
 
 export const FormLogDocumentEntrySchema = SchemaFactory.createForClass(FormLogDocumentEntry);
+
+/** Builds a FormLogDocumentEntry, omitting decision/comment/filePath rather than storing them as null. */
+export function buildFormLogDocumentEntry(
+  docId: string,
+  decision: 'APPROVED' | 'RETURNED' | null,
+  comment: string | null,
+  filePath: string | null = null,
+): FormLogDocumentEntry {
+  return {
+    docId,
+    ...(decision !== null && { decision }),
+    ...(comment !== null && { comment }),
+    ...(filePath !== null && { filePath }),
+  };
+}
 
 /**
  * Append-only audit trail for annual account section decisions — one row per event
@@ -67,16 +86,24 @@ export class XviFcAnnualAccountFormLog {
   @Prop({ type: UserInfoSchema, required: true })
   userInfo!: UserInfo;
 
-  /** The "Review Note on this form" — visible to the ULB. Null for a plain SUBMITTED event. */
-  @Prop({ type: String, default: null })
-  note!: string | null;
+  /** The "Review Note on this form" — visible to the ULB. Omitted (not stored as null) when there's no note. */
+  @Prop({ type: String })
+  note?: string;
 
-  /** Correlates every row written by one bulk-decide request. Null outside bulk actions. */
-  @Prop({ type: String, default: null })
-  batchId!: string | null;
+  /** Correlates every row written by one bulk-decide request. Omitted outside bulk actions. */
+  @Prop({ type: String })
+  batchId?: string;
 
-  @Prop({ type: [FormLogDocumentEntrySchema], default: [] })
-  documents!: FormLogDocumentEntry[];
+  /**
+   * Per-document breakdown — only meaningful for a STATE RETURNED event, where documents can
+   * genuinely end up with different outcomes (some still individually approved, others returned).
+   * Every other event type (SUBMITTED, STATE APPROVED, either MOHUA outcome) omits this entirely:
+   * SUBMITTED has no decisions yet; STATE APPROVED always ends with every document APPROVED
+   * (enforced by decideSection's stillReturned guard) so the breakdown adds nothing beyond
+   * `action`; MOHUA has no per-document decision layer at all.
+   */
+  @Prop({ type: [FormLogDocumentEntrySchema] })
+  documents?: FormLogDocumentEntry[];
 }
 
 export const XviFcAnnualAccountFormLogSchema = SchemaFactory.createForClass(XviFcAnnualAccountFormLog);

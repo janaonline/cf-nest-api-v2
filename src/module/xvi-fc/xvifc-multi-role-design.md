@@ -958,20 +958,20 @@ Response:   { message: 'OTP resent', maskedMobile: string }
 | File | Change | Priority |
 |---|---|---|
 | `src/schemas/user/user.schema.ts` | Add `xviFcRole: string \| null` field with enum `['submitter', 'editor', 'viewer', null]` | P0 — everything else depends on this |
-| `src/users/users.service.ts` | Update `mapRole()` to read `xviFcRole` first | P0 |
-| `src/users/users.service.ts` | Update `listTeamMembers()` to select `xviFcRole` in query | P0 |
-| `src/users/users.service.ts` | Update `transferOwnership()` — ULB: swap role + xviFcRole; STATE: swap xviFcRole only | P1 |
-| `src/users/users.service.ts` | Add `listVerificationContacts()` method | P0 |
-| `src/users/users.controller.ts` | Add `GET /users/verification-contacts` route | P0 |
-| `src/users/users.service.ts` | Add `sendVerificationOtp()` method | P0 |
-| `src/users/users.controller.ts` | Add `POST /users/verify-profile/send-otp` route | P0 |
-| `src/users/users.service.ts` | Add `confirmVerification()` method (PATH A) | P0 |
-| `src/users/users.controller.ts` | Add `POST /users/verify-profile/confirm` route | P0 |
-| `src/users/users.service.ts` | Add `createNewAndSendOtp()` method (PATH B) | P0 |
-| `src/users/users.controller.ts` | Add `POST /users/verify-profile/create-new` route | P0 |
+| `src/module/users/users.service.ts` | Update `mapRole()` to read `xviFcRole` first | P0 |
+| `src/module/users/users.service.ts` | Update `listTeamMembers()` to select `xviFcRole` in query | P0 |
+| `src/module/users/users.service.ts` | Update `transferOwnership()` — ULB: swap role + xviFcRole; STATE: swap xviFcRole only | P1 |
+| `src/module/users/users.service.ts` | Add `listVerificationContacts()` method | P0 |
+| `src/module/users/users.controller.ts` | Add `GET /users/verification-contacts` route | P0 |
+| `src/module/users/users.service.ts` | Add `sendVerificationOtp()` method | P0 |
+| `src/module/users/users.controller.ts` | Add `POST /users/verify-profile/send-otp` route | P0 |
+| `src/module/users/users.service.ts` | Add `confirmVerification()` method (PATH A) | P0 |
+| `src/module/users/users.controller.ts` | Add `POST /users/verify-profile/confirm` route | P0 |
+| `src/module/users/users.service.ts` | Add `createNewAndSendOtp()` method (PATH B) | P0 |
+| `src/module/users/users.controller.ts` | Add `POST /users/verify-profile/create-new` route | P0 |
 | `src/module/auth/login.service.ts` or similar | Add `POST /auth/set-password` for PATH B activation | P0 |
-| `src/users/users.service.ts` | Filter `.deleted.` accounts in `listTeamMembers` | P1 |
-| `src/users/users.service.ts` | Filter `.deleted.` accounts in `listUsers` | P1 |
+| `src/module/users/users.service.ts` | Filter `.deleted.` accounts in `listTeamMembers` | P1 |
+| `src/module/users/users.service.ts` | Filter `.deleted.` accounts in `listUsers` | P1 |
 | `src/module/auth/enum/role.enum.ts` | No changes needed | — |
 | `src/module/auth/permissions.map.ts` | No changes needed | — |
 | `src/module/auth/permission.guard.ts` | No changes needed | — |

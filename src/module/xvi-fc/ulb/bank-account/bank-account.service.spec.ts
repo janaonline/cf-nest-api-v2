@@ -20,7 +20,7 @@ describe('BankAccountService scope enforcement', () => {
   let bankAccountModel: { findOne: jest.Mock; findOneAndUpdate: jest.Mock };
   let formLogModel: { create: jest.Mock };
   let ulbModel: { findById: jest.Mock };
-  let s3Service: { presignGet: jest.Mock };
+  let fileTokenService: { signFileUrl: jest.Mock };
   const originalEncryptionKey = process.env.BANK_ACCOUNT_ENCRYPTION_KEY;
   const originalHashSecret = process.env.BANK_ACCOUNT_HASH_SECRET;
 
@@ -86,14 +86,14 @@ describe('BankAccountService scope enforcement', () => {
     ulbModel = {
       findById: jest.fn().mockReturnValue(q({ state: stateId })),
     };
-    s3Service = {
-      presignGet: jest.fn().mockResolvedValue('https://signed-url.example.com/proof.pdf'),
+    fileTokenService = {
+      signFileUrl: jest.fn((path: string) => `https://signed-url.example.com/${path}`),
     };
     service = new BankAccountService(
       bankAccountModel as never,
       formLogModel as never,
       ulbModel as never,
-      s3Service as never,
+      fileTokenService as never,
     );
   });
 

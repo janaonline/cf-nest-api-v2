@@ -1,8 +1,8 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
 import { Role } from '../../module/auth/enum/role.enum';
 import { IAuthUser } from '../interfaces/auth-user.interface';
-import { IMessageThread } from '../../communication/interfaces/message-thread.interface';
-import { IThreadParticipant } from '../../communication/interfaces/thread-participant.interface';
+import { IMessageThread } from '../../module/communication/interfaces/message-thread.interface';
+import { IThreadParticipant } from '../../module/communication/interfaces/thread-participant.interface';
 import { MESSAGE_VISIBILITY, THREAD_PERMISSION, THREAD_STATUS } from '../constants/communication.constants';
 
 @Injectable()

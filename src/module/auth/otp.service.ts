@@ -5,7 +5,7 @@ import type { Response } from 'express';
 import axios from 'axios';
 import { EmailQueueService } from 'src/core/queue/email-queue/email-queue.service';
 import { RedisService } from 'src/core/services/redis/redis.service';
-import { UsersRepository } from 'src/users/users.repository';
+import { UsersRepository } from 'src/module/users/users.repository';
 import { AuthService } from './auth.service';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { SendOtpDto } from './dto/send-otp.dto';

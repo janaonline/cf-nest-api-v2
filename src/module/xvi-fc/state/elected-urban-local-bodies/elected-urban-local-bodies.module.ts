@@ -3,7 +3,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { ExcelService } from 'src/services/excel/excel.service';
 import { S3Service } from 'src/core/s3/s3.service';
 import { XviFcCommonModule } from 'src/module/xvi-fc/common/xvi-fc-common.module';
-import { FormJsonModule } from 'src/form-json/form-json.module';
+import { FormJsonModule } from 'src/master/form-json/form-json.module';
 import { EulbFormJsonConfigService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/form-json/elected-urban-local-bodies-form-json.service';
 import {
   ElectedUrbanLocalBodiesForm,

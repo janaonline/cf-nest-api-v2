@@ -147,6 +147,9 @@ ElectedUrbanLocalBodiesRowSchema.index({ form: 1, datasetVersion: 1, validationS
 ElectedUrbanLocalBodiesRowSchema.index({ form: 1, datasetVersion: 1, rowType: 1, validationStatus: 1, rowNumber: 1 });
 // ULB deduplication check used during validate/revalidate
 ElectedUrbanLocalBodiesRowSchema.index({ state: 1, year: 1, ulbId: 1 });
+// Claim-letter eligibility bulk read (evaluateUlbBulkRowStatus) — filters by isActive+datasetVersion
+// without ulbId, so the index above (ulbId-keyed) can't be used past the state+year prefix.
+ElectedUrbanLocalBodiesRowSchema.index({ state: 1, year: 1, isActive: 1, datasetVersion: 1 });
 
 // Partial unique index: prevents duplicate DB ULBs within the same dataset version
 ElectedUrbanLocalBodiesRowSchema.index(

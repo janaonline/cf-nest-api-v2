@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ExcelService } from 'src/services/excel/excel.service';
 import { S3Service } from 'src/core/s3/s3.service';
-import { FormJsonModule } from 'src/form-json/form-json.module';
+import { FormJsonModule } from 'src/master/form-json/form-json.module';
 import { XviFcCommonModule } from 'src/module/xvi-fc/common/xvi-fc-common.module';
 import { DfFormJsonConfigService } from './services/form-json/devolution-formula-form-json.service';
 import {
