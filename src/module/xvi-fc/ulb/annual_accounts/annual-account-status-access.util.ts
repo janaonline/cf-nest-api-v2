@@ -1,5 +1,10 @@
-import { canUlbEditForm } from '../../common/utils/xvi-fc-form-status-access.util';
-import { AnnualAccountFormStatus, DecisionInfo } from '../../../../schemas/xvi-fc/annual-account.schema';
+import {
+  canMohuaMutateForm,
+  canStateReviewForm,
+  canStateUndoFormApproval,
+  canUlbEditForm,
+} from '../../common/utils/xvi-fc-form-status-access.util';
+import { AnnualAccountFormStatus, DecisionInfo, FORM_STATUS_ID } from '../../../../schemas/xvi-fc/annual-account.schema';
 
 /** Computed per-section capability flags returned alongside annual account status data. */
 export interface AnnualAccountPermissions {
@@ -7,38 +12,43 @@ export interface AnnualAccountPermissions {
   canUpload: boolean;
   canReview: boolean;
   canApprove: boolean;
+  /** True only while the section is APPROVED_BY_STATE — the door STATE can still undo through. */
+  canUndoApproval: boolean;
   canMohuaReview: boolean;
   canMohuaApprove: boolean;
 }
 
-/** Statuses in which a STATE user may open this section's documents for review. */
-const STATE_REVIEWABLE_STATUSES: ReadonlySet<AnnualAccountFormStatus> = new Set([
-  AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE,
-]);
-
-/** Statuses in which MOHUA may open this section for review. */
-const MOHUA_REVIEWABLE_STATUSES: ReadonlySet<AnnualAccountFormStatus> = new Set([
-  AnnualAccountFormStatus.UNDER_REVIEW_BY_MOHUA,
-]);
+/**
+ * These delegate to the shared, generic ULB-form status gates in
+ * common/utils/xvi-fc-form-status-access.util.ts — that file is the single
+ * source of truth for the underlying thresholds (3 / 8 / 5). This adapter only
+ * exists to convert Annual Account's own AnnualAccountFormStatus enum to the
+ * numeric status the shared functions expect.
+ */
 
 /** Returns true if a STATE user may open this section's documents for review in the given status. */
 export function canStateReviewAnnualAccount(status: AnnualAccountFormStatus): boolean {
-  return STATE_REVIEWABLE_STATUSES.has(status);
+  return canStateReviewForm(FORM_STATUS_ID[status]);
 }
 
 /** Returns true if a STATE user may record an approve/return decision for this section in the given status. */
 export function canStateDecideAnnualAccount(status: AnnualAccountFormStatus): boolean {
-  return STATE_REVIEWABLE_STATUSES.has(status);
+  return canStateReviewForm(FORM_STATUS_ID[status]);
+}
+
+/** Returns true if a STATE user may undo their own Approve Section decision in the given status. */
+export function canStateUndoSectionApproval(status: AnnualAccountFormStatus): boolean {
+  return canStateUndoFormApproval(FORM_STATUS_ID[status]);
 }
 
 /** Returns true if MOHUA may open this section's handed-off submission for review in the given status. */
 export function canMohuaReviewAnnualAccount(status: AnnualAccountFormStatus): boolean {
-  return MOHUA_REVIEWABLE_STATUSES.has(status);
+  return canMohuaMutateForm(FORM_STATUS_ID[status]);
 }
 
 /** Returns true if MOHUA may record an approve/return decision for this section in the given status. */
 export function canMohuaDecideAnnualAccount(status: AnnualAccountFormStatus): boolean {
-  return MOHUA_REVIEWABLE_STATUSES.has(status);
+  return canMohuaMutateForm(FORM_STATUS_ID[status]);
 }
 
 /**

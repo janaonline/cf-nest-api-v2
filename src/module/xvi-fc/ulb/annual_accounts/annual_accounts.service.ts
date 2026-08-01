@@ -16,6 +16,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { S3Service } from '../../../../core/s3/s3.service';
 import { S3UploadService } from '../../../file/s3-upload.service';
 import { FileTokenService } from '../../../../core/file-token/file-token.service';
+import { assertValidFormStatusTransition } from '../../../../common/utils/form-status-transitions';
 import {
   AnnualAccountFormStatus,
   FORM_STATUS_ID,
@@ -64,6 +65,7 @@ import {
   canMohuaReviewAnnualAccount,
   canStateDecideAnnualAccount,
   canStateReviewAnnualAccount,
+  canStateUndoSectionApproval,
   canUlbReuploadDocument,
 } from './annual-account-status-access.util';
 
@@ -945,11 +947,14 @@ export class AnnualAccountsService implements OnModuleInit {
       }
     }
 
-    // State approval hands the section to MOHUA for their review — it does not close out the workflow.
+    // State approval now lands on APPROVED_BY_STATE first — STATE can still undo it from
+    // there before the (separately-built) Generate Claim Letter feature moves it onward.
     const newStatus =
       dto.decision === 'APPROVED'
-        ? AnnualAccountFormStatus.UNDER_REVIEW_BY_MOHUA
+        ? AnnualAccountFormStatus.APPROVED_BY_STATE
         : AnnualAccountFormStatus.RETURNED_BY_STATE;
+
+    assertValidFormStatusTransition(sectionData.form_status_id, FORM_STATUS_ID[newStatus]);
 
     const decision = buildDecisionRecord(dto.decision, dto.note, user, ipAddress, userAgent);
 
@@ -1009,6 +1014,90 @@ export class AnnualAccountsService implements OnModuleInit {
     );
 
     return this.getProcessingStatus(id, user);
+  }
+
+  /**
+   * Reverses a STATE-level Approve Section decision — only legal while the section is exactly
+   * APPROVED_BY_STATE. Once Generate Claim Letter (built separately) moves it on to
+   * AWAITING_CLAIM_LETTER, this door closes for good — mirrors the shared ALLOWED_TRANSITIONS
+   * table, which has no entry taking AWAITING_CLAIM_LETTER back to UNDER_REVIEW_BY_STATE.
+   *
+   * The live document only ever gets ONE atomic write, straight back to UNDER_REVIEW_BY_STATE —
+   * status UNDO (10) never actually lives on the main record. It appears only as the `toStatus`
+   * of the first of two form-log entries this writes (UNDO, then UNDER_REVIEW_BY_STATE), giving
+   * a complete, literal 8→10→3 audit trail without ever persisting an unsupported live state.
+   */
+  async undoSectionApproval(
+    id: string,
+    section: 'auditedData' | 'unauditedData',
+    user: AuthUser,
+    ipAddress: string | null = null,
+    userAgent: string | null = null,
+  ) {
+    const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
+    if (!doc) throw new NotFoundException('Annual account not found');
+
+    const sectionData = (doc as any)[section];
+    if (!sectionData) throw new NotFoundException('Section not found');
+    await this.assertCanUndoSectionApproval(doc, user, sectionData.form_status);
+
+    assertValidFormStatusTransition(
+      sectionData.form_status_id,
+      FORM_STATUS_ID[AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE],
+    );
+
+    await this.annualAccountModel.updateOne(
+      { _id: new Types.ObjectId(id) },
+      {
+        $set: {
+          [`${section}.form_status`]: AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE,
+          [`${section}.form_status_id`]: FORM_STATUS_ID[AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE],
+          [`${section}.stateDecision`]: null,
+          // Undoing the section-level approval also undoes every document's individual
+          // decision — otherwise they'd all still show APPROVED and re-approving the section
+          // immediately after would trivially succeed with no real re-review (see decideSection).
+          [`${section}.documents.$[].stateDecision`]: null,
+          modifiedBy: new Types.ObjectId(user._id),
+        },
+      },
+    );
+
+    const userInfo = { userId: new Types.ObjectId(user._id), role: user.role, ipAddress, userAgent };
+    const logBase = {
+      annualAccountId: new Types.ObjectId(id),
+      ulb: doc.ulb,
+      designYear: doc.design_year,
+      section,
+      formId: SECTION_FORM_IDS[section],
+      action: 'UNDO' as const,
+      actorStage: 'STATE' as const,
+      userInfo,
+    };
+
+    await this.formLogModel.create({ ...logBase, toStatus: AnnualAccountFormStatus.UNDO });
+    await this.formLogModel.create({ ...logBase, toStatus: AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE });
+
+    this.logger.log(`Section approval undone — annualAccountId=${id} section=${section} by user=${user._id}`);
+
+    return this.getProcessingStatus(id, user);
+  }
+
+  private async assertCanUndoSectionApproval(
+    doc: any,
+    user: AuthUser,
+    sectionStatus: AnnualAccountFormStatus,
+  ): Promise<void> {
+    const hasAccess = await this.hasStateAccessToUlb(user, doc.ulb);
+    if (!hasAccess) {
+      throw new ForbiddenException('Access denied');
+    }
+    const perms = getEffectivePermissions(user);
+    if (!perms.includes(Permission.APPROVE_ULB_SUBMISSIONS)) {
+      throw new ForbiddenException('You do not have permission to approve ULB submissions');
+    }
+    if (sectionStatus !== AnnualAccountFormStatus.APPROVED_BY_STATE) {
+      throw new ForbiddenException(`This section's approval cannot be undone while its status is ${sectionStatus}.`);
+    }
   }
 
   /**
@@ -1398,6 +1487,8 @@ export class AnnualAccountsService implements OnModuleInit {
       canReview: hasStateAccess && perms.has(Permission.REVIEW_ULB_SUBMISSIONS) && canStateReviewAnnualAccount(status),
       canApprove:
         hasStateAccess && perms.has(Permission.APPROVE_ULB_SUBMISSIONS) && canStateDecideAnnualAccount(status),
+      canUndoApproval:
+        hasStateAccess && perms.has(Permission.APPROVE_ULB_SUBMISSIONS) && canStateUndoSectionApproval(status),
       canMohuaReview:
         hasMohuaAccess && perms.has(Permission.REVIEW_STATE_SUBMISSIONS) && canMohuaReviewAnnualAccount(status),
       canMohuaApprove:
