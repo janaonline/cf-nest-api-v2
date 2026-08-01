@@ -291,6 +291,11 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
 
       expect(data.validationStatus).toBe('VALID');
       expect(data.errors).toHaveLength(0);
+
+      // No unmatched/duplicate rows in this upload — the snapshot is empty, and would overwrite
+      // (not append to) any stale snapshot left over from a prior, messier upload.
+      const [, update] = formModel.findOneAndUpdate.mock.calls[0] as [unknown, Record<string, unknown>];
+      expect((update['$set'] as Record<string, unknown>)['excludedRows']).toEqual([]);
     });
 
     it('stores DB_ULB row with VALID validationStatus', async () => {
@@ -310,7 +315,7 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
       await service.validateExcel(makeDto(), adminUser);
 
       const [docs] = rowModel.insertMany.mock.calls[0] as [Record<string, unknown>[]];
-      expect(docs[0]).toMatchObject({ validationStatus: 'VALID', rowType: 'DB_ULB' });
+      expect(docs[0]).toMatchObject({ validationStatus: 'VALID' });
     });
 
     it('ignores client-submitted ulbCount and derives count from active registry', async () => {
@@ -454,7 +459,7 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
       expect(dataErrors.some((e) => e.field === 'censusCode' && e.code === 'unknownUlb')).toBe(true);
     });
 
-    it('stores EXTRA_ULB row with INVALID validationStatus and unknownUlb in errors', async () => {
+    it('never persists an unmatched row — insertMany is called with zero docs', async () => {
       s3Service.getBuffer = jest.fn().mockResolvedValue(
         makeXlsxBuffer([
           {
@@ -468,15 +473,15 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
         ]),
       );
 
-      await catchBadRequest(() => service.validateExcel(makeDto(), adminUser));
+      const { response } = await catchBadRequest(() => service.validateExcel(makeDto(), adminUser));
 
       expect(rowModel.insertMany).toHaveBeenCalledTimes(1);
       const [docs] = rowModel.insertMany.mock.calls[0] as [Record<string, unknown>[]];
-      const rowDoc = docs[0];
+      expect(docs).toHaveLength(0);
 
-      expect(rowDoc['validationStatus']).toBe('INVALID');
-      expect(rowDoc['rowType']).toBe('EXTRA_ULB');
-      expect((rowDoc['errors'] as Array<{ code: string }>).some((e) => e.code === 'unknownUlb')).toBe(true);
+      // The row is still fully reported — just never written as a row.
+      const dataErrors = (response.data as { errors?: EulbRowValidationError[] } | undefined)?.errors ?? [];
+      expect(dataErrors.some((e) => e.field === 'censusCode' && e.code === 'unknownUlb')).toBe(true);
     });
 
     it('generated errorExcelFile metadata has pageCount: null', async () => {
@@ -503,7 +508,7 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
       expect((errorFileSet?.['errorExcelFile'] as { pageCount?: number | null }).pageCount).toBeNull();
     });
 
-    it('insertMany is still called before throwing newUlbsAdded (rows are written to DB)', async () => {
+    it('insertMany is still called (with zero rows) before throwing newUlbsAdded', async () => {
       s3Service.getBuffer = jest.fn().mockResolvedValue(
         makeXlsxBuffer([
           {
@@ -520,6 +525,37 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
       await catchBadRequest(() => service.validateExcel(makeDto(), adminUser));
 
       expect(rowModel.insertMany).toHaveBeenCalledTimes(1);
+      const [docs] = rowModel.insertMany.mock.calls[0] as [Record<string, unknown>[]];
+      expect(docs).toHaveLength(0);
+    });
+
+    it('stores the unmatched row in the excludedRows snapshot so getErrorSheet can still surface it', async () => {
+      s3Service.getBuffer = jest.fn().mockResolvedValue(
+        makeXlsxBuffer([
+          {
+            censusCode: 'NOT_IN_DB',
+            ulbName: 'Some New City',
+            electedBodyStatus: 'Not Constituted',
+            dateOfConstitution: '',
+            dateOfExpiry: '',
+            remarks: '',
+          },
+        ]),
+      );
+
+      await catchBadRequest(() => service.validateExcel(makeDto(), adminUser));
+
+      const [, update] = formModel.findOneAndUpdate.mock.calls[0] as [unknown, Record<string, unknown>];
+      const excludedRows = (update['$set'] as Record<string, unknown>)['excludedRows'] as Array<{
+        censusCode?: string;
+        ulbName: string;
+        errors: Array<{ code: string }>;
+      }>;
+
+      expect(excludedRows).toHaveLength(1);
+      expect(excludedRows[0].censusCode).toBe('NOT_IN_DB');
+      expect(excludedRows[0].ulbName).toBe('Some New City');
+      expect(excludedRows[0].errors.some((e) => e.code === 'unknownUlb')).toBe(true);
     });
   });
 
@@ -549,13 +585,13 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
       );
     });
 
-    it('calls insertMany and stores ulbName as empty string', async () => {
+    it('calls insertMany with zero docs — the unmatched row is never persisted', async () => {
       await catchBadRequest(() => service.validateExcel(makeDto(), adminUser));
 
       expect(rowModel.insertMany).toHaveBeenCalledTimes(1);
       const [docs, opts] = rowModel.insertMany.mock.calls[0] as [Record<string, unknown>[], unknown];
       expect(opts).toMatchObject({ lean: true, ordered: false });
-      expect(docs[0]).toMatchObject({ ulbName: '', validationStatus: 'INVALID' });
+      expect(docs).toHaveLength(0);
     });
 
     it('includes unknownUlb and ulbName required errors in exception data', async () => {
@@ -601,11 +637,11 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
       expect(dataErrors.some((e) => e.field === 'censusCode' && e.code === 'required')).toBe(true);
     });
 
-    it("persists inserted document with censusCode: '' and ulbName: ''", async () => {
+    it('never persists the blank-identity unmatched row', async () => {
       await catchBadRequest(() => service.validateExcel(makeDto(), adminUser));
 
       const [docs] = rowModel.insertMany.mock.calls[0] as [Record<string, unknown>[]];
-      expect(docs[0]).toMatchObject({ censusCode: '', ulbName: '' });
+      expect(docs).toHaveLength(0);
     });
   });
 
@@ -744,19 +780,32 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
       // 2 DB ULBs, 2 rows, excelRowCount (2) === activeUlbCount (2), no extra rows → INVALID due to dup.
       const result = await service.validateExcel(makeDto(), adminUser);
 
+      // Only the first (matched, non-duplicate) occurrence is persisted — the second occurrence's
+      // ulbId was nulled by the duplicate check, so it's excluded the same way an unmatched row is.
       const [docs] = rowModel.insertMany.mock.calls[0] as [Record<string, unknown>[]];
-      expect(docs[0]).toMatchObject({ censusCode: 'DBCODE1', validationStatus: 'VALID', rowType: 'DB_ULB' });
-      expect(docs[1]).toMatchObject({ censusCode: '', validationStatus: 'INVALID', rowType: 'DB_ULB' });
-      expect(docs[1]['ulbId']).toBeUndefined();
+      expect(docs).toHaveLength(1);
+      expect(docs[0]).toMatchObject({ censusCode: 'DBCODE1', validationStatus: 'VALID' });
 
       const errors = (result.data as EulbValidateExcelResponseData).errors;
       const dupError = errors.find((e) => e.field === 'censusCode' && e.code === 'duplicate');
       expect(dupError).toBeDefined();
       expect(dupError!.rowNumber).toBe(2);
+
+      // The dropped duplicate occurrence is snapshotted so getErrorSheet can still surface it,
+      // even though it's a soft 200 response (not the newUlbsAdded hard-throw path).
+      const [, update] = formModel.findOneAndUpdate.mock.calls[0] as [unknown, Record<string, unknown>];
+      const excludedRows = (update['$set'] as Record<string, unknown>)['excludedRows'] as Array<{
+        rowNumber: number;
+        censusCode?: string;
+        errors: Array<{ code: string }>;
+      }>;
+      expect(excludedRows).toHaveLength(1);
+      expect(excludedRows[0].rowNumber).toBe(2);
+      expect(excludedRows[0].errors.some((e) => e.code === 'duplicate')).toBe(true);
     });
 
-    it('marks both EXTRA_ULB duplicate rows INVALID, second gets duplicate error additionally', async () => {
-      // DUP001 is not in registry → EXTRA_ULB rows → newUlbsAdded thrown
+    it('marks both unmatched duplicate rows INVALID and reports both, but persists neither', async () => {
+      // DUP001 is not in registry → both rows are unmatched → newUlbsAdded thrown
       s3Service.getBuffer = jest.fn().mockResolvedValue(
         makeXlsxBuffer([
           {
@@ -778,15 +827,19 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
         ]),
       );
 
-      await catchBadRequest(() => service.validateExcel(makeDto(), adminUser));
+      const { response } = await catchBadRequest(() => service.validateExcel(makeDto(), adminUser));
 
+      // Neither row has a resolved ulbId (both unmatched; the second is additionally a duplicate),
+      // so neither gets persisted.
       const [docs] = rowModel.insertMany.mock.calls[0] as [Record<string, unknown>[]];
-      // First row: EXTRA_ULB → unknownUlb → INVALID
-      expect(docs[0]).toMatchObject({ validationStatus: 'INVALID', rowType: 'EXTRA_ULB' });
-      expect((docs[0]['errors'] as Array<{ code: string }>).some((e) => e.code === 'unknownUlb')).toBe(true);
-      // Second row: EXTRA_ULB + duplicate → censusCode cleared
-      expect(docs[1]).toMatchObject({ censusCode: '', validationStatus: 'INVALID', rowType: 'EXTRA_ULB' });
-      expect((docs[1]['errors'] as Array<{ code: string }>).some((e) => e.code === 'duplicate')).toBe(true);
+      expect(docs).toHaveLength(0);
+
+      const dataErrors = (response.data as { errors?: EulbRowValidationError[] } | undefined)?.errors ?? [];
+      // First row: unmatched → unknownUlb
+      expect(dataErrors.some((e) => e.rowNumber === 1 && e.code === 'unknownUlb')).toBe(true);
+      // Second row: unmatched AND duplicate → both errors
+      expect(dataErrors.some((e) => e.rowNumber === 2 && e.code === 'unknownUlb')).toBe(true);
+      expect(dataErrors.some((e) => e.rowNumber === 2 && e.code === 'duplicate')).toBe(true);
     });
 
     it('leaves two DB_ULB rows with different census codes both VALID', async () => {
@@ -815,8 +868,8 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
       await service.validateExcel(makeDto(), adminUser);
 
       const [docs] = rowModel.insertMany.mock.calls[0] as [Record<string, unknown>[]];
-      expect(docs[0]).toMatchObject({ censusCode: 'DBCODE1', validationStatus: 'VALID', rowType: 'DB_ULB' });
-      expect(docs[1]).toMatchObject({ censusCode: 'DBCODE2', validationStatus: 'VALID', rowType: 'DB_ULB' });
+      expect(docs[0]).toMatchObject({ censusCode: 'DBCODE1', validationStatus: 'VALID' });
+      expect(docs[1]).toMatchObject({ censusCode: 'DBCODE2', validationStatus: 'VALID' });
     });
   });
 
@@ -1189,7 +1242,6 @@ describe('ElectedUrbanLocalBodiesExcelService — revalidateExcel', () => {
           dateOfConstitution: null,
           dateOfExpiry: null,
           remarks: '',
-          rowType: 'DB_ULB',
           ulbId: DB_ULB_1._id,
           isActive: true,
         },
@@ -1202,10 +1254,11 @@ describe('ElectedUrbanLocalBodiesExcelService — revalidateExcel', () => {
       expect(data.errors).toHaveLength(0);
     });
 
-    it('throws 400 with newUlbsAdded when stored rows contain EXTRA_ULB entries', async () => {
+    it('deletes a stored row with no resolved ulbId instead of throwing — no re-parse can discover a new row here', async () => {
       formModel.findOne = jest.fn().mockReturnValue({
         lean: () => ({ exec: () => Promise.resolve(baseFormDoc) }),
       });
+      const staleRowId = new Types.ObjectId();
       rowModel.find = buildRowFindMock([
         {
           _id: new Types.ObjectId(),
@@ -1216,12 +1269,11 @@ describe('ElectedUrbanLocalBodiesExcelService — revalidateExcel', () => {
           dateOfConstitution: null,
           dateOfExpiry: null,
           remarks: '',
-          rowType: 'DB_ULB',
           ulbId: DB_ULB_1._id,
           isActive: true,
         },
         {
-          _id: new Types.ObjectId(),
+          _id: staleRowId,
           rowNumber: 2,
           censusCode: 'EXTRA01',
           ulbName: 'Extra ULB',
@@ -1229,23 +1281,52 @@ describe('ElectedUrbanLocalBodiesExcelService — revalidateExcel', () => {
           dateOfConstitution: null,
           dateOfExpiry: null,
           remarks: '',
-          rowType: 'EXTRA_ULB',
           ulbId: undefined,
           isActive: true,
         },
       ]);
 
-      const { response } = await catchBadRequest(() =>
-        service.revalidateExcel(stateOid.toString(), yearOid.toString(), adminUser),
-      );
+      // Registry (DB_ULB_1) is fully covered by row 1, so deleting the unmatched row 2 leaves
+      // missingDbUlbCount at 0 — this succeeds (200), it never throws newUlbsAdded.
+      const result = await service.revalidateExcel(stateOid.toString(), yearOid.toString(), adminUser);
+      const data = result.data as EulbRevalidateExcelResponseData;
 
-      const errors = response.errors as Record<string, Array<{ code: string }>>;
-      expect(errors['electedBodyExcelFile']).toEqual(
-        expect.arrayContaining([expect.objectContaining({ code: 'newUlbsAdded' })]),
-      );
+      expect(rowModel.deleteMany).toHaveBeenCalledWith({ _id: { $in: [staleRowId] } });
+      expect(data.validationSummary?.missingDbUlbCount).toBe(0);
+      expect(data.validationSummary?.extraExcelRowCount).toBe(0);
     });
 
-    it('includes unknownUlb error in revalidation data for each EXTRA_ULB row', async () => {
+    it('deletes an unmatched row and counts it toward missingDbUlbCount when nothing else covers the registry ULB', async () => {
+      formModel.findOne = jest.fn().mockReturnValue({
+        lean: () => ({ exec: () => Promise.resolve(baseFormDoc) }),
+      });
+      const staleRowId = new Types.ObjectId();
+      rowModel.find = buildRowFindMock([
+        {
+          _id: staleRowId,
+          rowNumber: 1,
+          censusCode: 'EXTRA01',
+          ulbName: 'Extra ULB',
+          electedBodyStatus: 'Exempt',
+          dateOfConstitution: null,
+          dateOfExpiry: null,
+          remarks: '',
+          ulbId: undefined,
+          isActive: true,
+        },
+      ]);
+
+      // Registry is [DB_ULB_1] (default ulbModel mock) but the only stored row is unmatched, so
+      // it's deleted and DB_ULB_1 has no covering row — missingDbUlbCount becomes 1, INVALID, 200.
+      const result = await service.revalidateExcel(stateOid.toString(), yearOid.toString(), adminUser);
+      const data = result.data as EulbRevalidateExcelResponseData;
+
+      expect(rowModel.deleteMany).toHaveBeenCalledWith({ _id: { $in: [staleRowId] } });
+      expect(data.validationSummary?.missingDbUlbCount).toBe(1);
+      expect(data.validationSummary?.validationStatus).toBe('INVALID');
+    });
+
+    it('calls deleteMany, not bulkWrite, when the only stored row has no resolved ulbId', async () => {
       formModel.findOne = jest.fn().mockReturnValue({
         lean: () => ({ exec: () => Promise.resolve(baseFormDoc) }),
       });
@@ -1259,43 +1340,15 @@ describe('ElectedUrbanLocalBodiesExcelService — revalidateExcel', () => {
           dateOfConstitution: null,
           dateOfExpiry: null,
           remarks: '',
-          rowType: 'EXTRA_ULB',
           ulbId: undefined,
           isActive: true,
         },
       ]);
 
-      const { response } = await catchBadRequest(() =>
-        service.revalidateExcel(stateOid.toString(), yearOid.toString(), adminUser),
-      );
+      await service.revalidateExcel(stateOid.toString(), yearOid.toString(), adminUser);
 
-      const dataErrors = (response.data as { errors?: EulbRowValidationError[] } | undefined)?.errors ?? [];
-      expect(dataErrors.some((e) => e.field === 'censusCode' && e.code === 'unknownUlb')).toBe(true);
-    });
-
-    it('still calls bulkWrite to persist updated row errors before throwing newUlbsAdded', async () => {
-      formModel.findOne = jest.fn().mockReturnValue({
-        lean: () => ({ exec: () => Promise.resolve(baseFormDoc) }),
-      });
-      rowModel.find = buildRowFindMock([
-        {
-          _id: new Types.ObjectId(),
-          rowNumber: 1,
-          censusCode: 'EXTRA01',
-          ulbName: 'Extra ULB',
-          electedBodyStatus: 'Exempt',
-          dateOfConstitution: null,
-          dateOfExpiry: null,
-          remarks: '',
-          rowType: 'EXTRA_ULB',
-          ulbId: undefined,
-          isActive: true,
-        },
-      ]);
-
-      await catchBadRequest(() => service.revalidateExcel(stateOid.toString(), yearOid.toString(), adminUser));
-
-      expect(rowModel.bulkWrite).toHaveBeenCalledTimes(1);
+      expect(rowModel.deleteMany).toHaveBeenCalledTimes(1);
+      expect(rowModel.bulkWrite).not.toHaveBeenCalled();
     });
 
     it('returns INVALID when a DB_ULB row has row-level validation errors', async () => {
@@ -1313,7 +1366,6 @@ describe('ElectedUrbanLocalBodiesExcelService — revalidateExcel', () => {
           dateOfConstitution: null,
           dateOfExpiry: null,
           remarks: '',
-          rowType: 'DB_ULB',
           ulbId: DB_ULB_1._id,
           isActive: true,
         },
@@ -1391,6 +1443,33 @@ describe('ElectedUrbanLocalBodiesExcelService — revalidateExcel', () => {
       const deleteOrder = rowModel.deleteMany.mock.invocationCallOrder[0];
       const commitOrder = mockSession.commitTransaction.mock.invocationCallOrder[0];
       expect(deleteOrder).toBeLessThan(commitOrder);
+    });
+
+    it('snapshots an unmatched row into excludedRows on the re-parsed dataset', async () => {
+      formModel.findOneAndUpdate = jest.fn().mockReturnValue(mockUpsertedForm(1));
+      s3Service.getBuffer = jest.fn().mockResolvedValue(
+        makeXlsxBuffer([
+          {
+            censusCode: 'NOT_IN_DB',
+            ulbName: 'Some New City',
+            electedBodyStatus: 'Not Constituted',
+            dateOfConstitution: '',
+            dateOfExpiry: '',
+            remarks: '',
+          },
+        ]),
+      );
+
+      await catchBadRequest(() => service.revalidateExcel(stateOid.toString(), yearOid.toString(), adminUser));
+
+      const [, update] = formModel.findOneAndUpdate.mock.calls[0] as [unknown, Record<string, unknown>];
+      const excludedRows = (update['$set'] as Record<string, unknown>)['excludedRows'] as Array<{
+        censusCode?: string;
+        errors: Array<{ code: string }>;
+      }>;
+      expect(excludedRows).toHaveLength(1);
+      expect(excludedRows[0].censusCode).toBe('NOT_IN_DB');
+      expect(excludedRows[0].errors.some((e) => e.code === 'unknownUlb')).toBe(true);
     });
 
     it('aborts the transaction (no manual reactivation) when insertMany fails', async () => {

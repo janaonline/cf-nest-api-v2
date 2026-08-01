@@ -226,7 +226,6 @@ export class EulbPostSubmissionUpdateService {
       dateOfExpiry:
         r.dateOfExpiry instanceof Date ? r.dateOfExpiry.toISOString().split('T')[0] : (r.dateOfExpiry ?? null),
       remarks: r.remarks ?? null,
-      rowType: r.rowType,
       validationStatus: r.validationStatus,
       errors: (r.errors ?? []).map((e) => ({
         field: e.field,

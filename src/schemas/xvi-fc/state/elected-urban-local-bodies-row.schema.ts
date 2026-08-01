@@ -3,7 +3,6 @@ import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 
 export type EulbRowDocument = HydratedDocument<ElectedUrbanLocalBodiesRow>;
 
-export type EulbRowType = 'DB_ULB' | 'EXTRA_ULB';
 export type EulbRowSource = 'EXCEL' | 'PORTAL' | 'POST_SUBMISSION_UPDATE';
 export type EulbRowValidationStatus = 'VALID' | 'INVALID';
 
@@ -104,9 +103,6 @@ export class ElectedUrbanLocalBodiesRow {
   @Prop({ type: String })
   remarks?: string;
 
-  @Prop({ type: String, enum: ['DB_ULB', 'EXTRA_ULB'], required: true })
-  rowType!: EulbRowType;
-
   @Prop({ type: String, enum: ['EXCEL', 'PORTAL', 'POST_SUBMISSION_UPDATE'], required: true })
   lastUpdatedSource!: EulbRowSource;
 
@@ -143,20 +139,22 @@ export const ElectedUrbanLocalBodiesRowSchema = SchemaFactory.createForClass(Ele
 
 // Primary query + sort: covers all getRows queries filtered by form+datasetVersion and sorted INVALID-first
 ElectedUrbanLocalBodiesRowSchema.index({ form: 1, datasetVersion: 1, validationStatus: 1, rowNumber: 1 });
-// rowType filter with the same sort order
-ElectedUrbanLocalBodiesRowSchema.index({ form: 1, datasetVersion: 1, rowType: 1, validationStatus: 1, rowNumber: 1 });
 // ULB deduplication check used during validate/revalidate
 ElectedUrbanLocalBodiesRowSchema.index({ state: 1, year: 1, ulbId: 1 });
 // Claim-letter eligibility bulk read (evaluateUlbBulkRowStatus) — filters by isActive+datasetVersion
 // without ulbId, so the index above (ulbId-keyed) can't be used past the state+year prefix.
 ElectedUrbanLocalBodiesRowSchema.index({ state: 1, year: 1, isActive: 1, datasetVersion: 1 });
 
-// Partial unique index: prevents duplicate DB ULBs within the same dataset version
+// Unique index: prevents duplicate ULBs within the same dataset version. Partial (not plain)
+// because a row's ulbId can be blank/null on an intra-batch duplicate-census-code row (see
+// flagIntraBatchEulbCensusCodeDuplicates in the excel service) — those must be allowed to coexist.
+// Every persisted row is registry-backed now (unmatched rows are never written), so this no
+// longer needs to be scoped by rowType the way it used to.
 ElectedUrbanLocalBodiesRowSchema.index(
   { form: 1, datasetVersion: 1, ulbId: 1 },
   {
     unique: true,
-    partialFilterExpression: { rowType: 'DB_ULB', ulbId: { $exists: true, $ne: null } },
+    partialFilterExpression: { ulbId: { $exists: true, $ne: null } },
   },
 );
 

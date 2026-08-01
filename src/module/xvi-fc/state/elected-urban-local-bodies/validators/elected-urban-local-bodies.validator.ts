@@ -350,20 +350,23 @@ export class ElectedUrbanLocalBodiesValidator {
     );
   }
 
-  /** Re-validates a single row after a portal update. Delegates to the appropriate validator based on rowType. */
+  /**
+   * Re-validates a single row after a portal update. Every persisted row is registry-backed, so
+   * `dbUlb` should always resolve — the no-dbUlb fallback is defensive, not an expected path.
+   */
   revalidateRow(
-    row: ParsedExcelRow & { rowType: 'DB_ULB' | 'EXTRA_ULB' },
+    row: ParsedExcelRow,
     dbUlb: DbUlbEntry | null,
     today: Date,
     dateConfig: EulbDateValidationConfig,
   ): EulbRowError[] {
-    if (row.rowType === 'DB_ULB' && dbUlb) {
+    if (dbUlb) {
       return this.validateDbUlbRow(row, dbUlb, today, dateConfig);
     }
     return this.validateExtraUlbRow(row, today, dateConfig);
   }
 
-  /** Shared validation rules for both DB_ULB and EXTRA_ULB rows. */
+  /** Shared validation rules for both `validateDbUlbRow` and `validateExtraUlbRow`. */
   private validateCommonFields(row: ParsedExcelRow, today: Date, dateConfig: EulbDateValidationConfig): EulbRowError[] {
     const errors: EulbRowError[] = [];
 

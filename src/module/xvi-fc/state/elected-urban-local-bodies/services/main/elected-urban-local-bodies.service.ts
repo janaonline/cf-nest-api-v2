@@ -121,7 +121,6 @@ const EULB_DUMP_HEADERS: RowHeader[] = [
   { label: 'Date of Constitution', key: 'dateOfConstitution', width: 24 },
   { label: 'Date of Expiry', key: 'dateOfExpiry', width: 20 },
   { label: 'Remarks', key: 'remarks', width: 35 },
-  { label: 'Row Type', key: 'rowType', width: 16 },
   { label: 'Validation Status', key: 'validationStatus', width: 20 },
   { label: 'Latest Data Source', key: 'latestDataSource', width: 22 },
   { label: 'Dataset Version', key: 'datasetVersion', width: 18 },
@@ -194,7 +193,6 @@ export class ElectedUrbanLocalBodiesService {
 
     const mainFormFields = getFieldsByType(fields, 'EULB_MAIN_FORM_FIELDS');
     const rowEditFields = getFieldsByType(fields, 'EULB_ROW_EDIT_FIELDS');
-    const extraUlbEditFields = getFieldsByType(fields, 'EULB_EXTRA_ULB_PORTAL_FIELDS');
     if (mainFormFields.length === 0) {
       throw new InternalServerErrorException('EULB_MAIN_FORM_FIELDS group is empty in form configuration.');
     }
@@ -256,7 +254,6 @@ export class ElectedUrbanLocalBodiesService {
       currentFormStatusLabel: getFormStatusLabel(currentFormStatus),
       questions,
       rowEditFields,
-      extraUlbEditFields,
       permissions,
       actors,
       validationSummary,
@@ -270,9 +267,9 @@ export class ElectedUrbanLocalBodiesService {
   /**
    * Generates an Excel template for the EULB data collection.
    *
-   * The template always represents the current active ULB registry for the state.
-   * When an active dataset exists, saved row values are overlaid only for rows that still
-   * match an active registry ULB (DB_ULB rows). EXTRA_ULB rows are excluded.
+   * The template always represents the current active ULB registry for the state — every
+   * persisted row is registry-backed, so no separate "excluded row" case applies here.
+   * When an active dataset exists, saved row values are overlaid onto the matching registry ULB.
    * No blank padding rows are added beyond the active registry count.
    */
   async getTemplate(stateId: string, yearId: string, user: AuthUser): Promise<Buffer> {
@@ -313,13 +310,12 @@ export class ElectedUrbanLocalBodiesService {
     let rows: EulbTemplateRow[];
 
     if (activeVersion > 0 && formDoc) {
-      // Load only DB_ULB saved rows for the active dataset version.
+      // Load saved rows for the active dataset version — every row is registry-backed.
       const savedDbRows = await this.rowModel
         .find({
           form: formDoc._id as Types.ObjectId,
           datasetVersion: activeVersion,
           isActive: true,
-          rowType: 'DB_ULB',
         })
         .select('ulbId censusCode ulbName electedBodyStatus dateOfConstitution dateOfExpiry remarks')
         .lean()
@@ -404,7 +400,7 @@ export class ElectedUrbanLocalBodiesService {
               isActive: true,
             })
             .select(
-              'rowNumber censusCode ulbName electedBodyStatus dateOfConstitution dateOfExpiry remarks rowType validationStatus lastUpdatedSource datasetVersion createdBy updatedBy createdAt updatedAt',
+              'rowNumber censusCode ulbName electedBodyStatus dateOfConstitution dateOfExpiry remarks validationStatus lastUpdatedSource datasetVersion createdBy updatedBy createdAt updatedAt',
             )
             .populate('createdBy', 'name')
             .populate('updatedBy', 'name')
@@ -1113,7 +1109,6 @@ export class ElectedUrbanLocalBodiesService {
       dateOfConstitution: dateToDumpValue(row.dateOfConstitution),
       dateOfExpiry: dateToDumpValue(row.dateOfExpiry),
       remarks: row.remarks ?? '',
-      rowType: row.rowType,
       validationStatus: row.validationStatus,
       latestDataSource: row.lastUpdatedSource,
       datasetVersion: row.datasetVersion,

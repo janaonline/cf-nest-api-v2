@@ -32,6 +32,7 @@ import {
 import {
   DevolutionFormulaForm,
   DevolutionFormulaFormDocument,
+  DfExcludedRowEntry,
 } from 'src/schemas/xvi-fc/state/devolution-formula-form.schema';
 import {
   DevolutionFormulaRow,
@@ -353,6 +354,22 @@ export class DevolutionFormulaExcelService {
     const formValidationStatus =
       errorRowCount === 0 && missingUlbCount === 0 && allocationBalanced ? 'VALID' : 'INVALID';
 
+    // Snapshot of rows excluded from persistence (unmatched, or an intra-batch duplicate ULB) —
+    // stored on the form doc so getErrorSheet can still surface them even though they never become
+    // row documents. Fully replaces any prior snapshot via formSummaryFieldsBase below.
+    const excludedRows: DfExcludedRowEntry[] = processedRows
+      .filter((r) => r.ulbId === null)
+      .map((r) => ({
+        rowNumber: r.rowNumber,
+        censusCode: r.censusCode,
+        ulbName: r.ulbName,
+        totalGrantAllocation: r.totalGrantAllocation,
+        installment1Amount: r.installment1Amount,
+        installment2Amount: r.installment2Amount,
+        devolutionFormula: r.devolutionFormula,
+        errors: r.rowErrors,
+      }));
+
     // Atomic version allocation + safe dataset replacement, all inside one Mongo transaction.
     // Replaces a prior read-then-increment (`currentVersion = existingDoc.activeDatasetVersion ?? 0;
     // newVersion = currentVersion + 1`) that let two concurrent uploads for the same form compute
@@ -371,6 +388,7 @@ export class DevolutionFormulaExcelService {
       totalMoHUAAllocation,
       grantAllocationRef: grantAlloc._id,
       validationStatus: formValidationStatus,
+      excludedRows,
       lastExcelUploadedAt: new Date(),
       lastExcelUploadedBy: userOid,
       updatedBy: userOid,
@@ -399,28 +417,34 @@ export class DevolutionFormulaExcelService {
       const currentVersion = newVersion - 1;
       formId = updatedForm._id;
 
-      const rowDocs = processedRows.map((r) => ({
-        form: formId,
-        state: stateOid,
-        year: yearOid,
-        installment: dto.installment,
-        datasetVersion: newVersion,
-        rowNumber: r.rowNumber,
-        ulbId: r.ulbId,
-        censusCode: r.censusCode,
-        sbCode: '',
-        ulbName: r.ulbName,
-        totalGrantAllocation: Number(r.totalGrantAllocation) || 0,
-        installment1Amount: Number(r.installment1Amount) || 0,
-        installment2Amount: Number(r.installment2Amount) || 0,
-        devolutionFormula: r.devolutionFormula,
-        validationStatus: r.validationRowStatus,
-        errors: r.rowErrors,
-        rawExcelData: r.validationRowStatus === 'INVALID' ? r.rawExcelData : undefined,
-        isActive: true,
-        createdBy: userOid,
-        updatedBy: userOid,
-      }));
+      // Excludes rows with no resolved ulbId — either the census code didn't match any active
+      // registry ULB (unmatched), or it was a duplicate within this same upload (nulled above).
+      // Both are already fully reported (rowErrors/newUlbCount/newUlbsAdded, computed above) but
+      // are never written as rows; every persisted row is registry-backed.
+      const rowDocs = processedRows
+        .filter((r) => r.ulbId !== null)
+        .map((r) => ({
+          form: formId,
+          state: stateOid,
+          year: yearOid,
+          installment: dto.installment,
+          datasetVersion: newVersion,
+          rowNumber: r.rowNumber,
+          ulbId: r.ulbId,
+          censusCode: r.censusCode,
+          sbCode: '',
+          ulbName: r.ulbName,
+          totalGrantAllocation: Number(r.totalGrantAllocation) || 0,
+          installment1Amount: Number(r.installment1Amount) || 0,
+          installment2Amount: Number(r.installment2Amount) || 0,
+          devolutionFormula: r.devolutionFormula,
+          validationStatus: r.validationRowStatus,
+          errors: r.rowErrors,
+          rawExcelData: r.validationRowStatus === 'INVALID' ? r.rawExcelData : undefined,
+          isActive: true,
+          createdBy: userOid,
+          updatedBy: userOid,
+        }));
 
       if (currentVersion > 0) {
         await this.rowModel

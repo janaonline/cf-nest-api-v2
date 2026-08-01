@@ -301,6 +301,7 @@ export class DevolutionFormulaRowService {
       .findByIdAndUpdate(formId, {
         $unset: { excelFile: 1, errorExcelFile: 1 },
         $set: {
+          excludedRows: [],
           validationStatus: 'NOT_VALIDATED',
           excelRowCount: 0,
           errorRowCount: 0,
@@ -347,7 +348,8 @@ export class DevolutionFormulaRowService {
       .lean()
       .exec();
 
-    const errorRows = rows.map((r) => ({
+    const dbErrorRows = rows.map((r) => ({
+      rowNumber: r.rowNumber,
       censusCode: r.censusCode ?? '',
       ulbName: r.ulbName,
       totalGrantAllocation: r.totalGrantAllocation,
@@ -356,6 +358,35 @@ export class DevolutionFormulaRowService {
       devolutionFormula: r.devolutionFormula,
       errors: r.errors?.map((e: DfRowError) => e.message).join('; ') ?? '',
     }));
+
+    // Merge in rows excluded from persistence at the last validate call (unmatched or intra-batch
+    // duplicate ULBs) — they never became row documents, so the DB query above can't see them.
+    const excludedRows =
+      (formDoc['excludedRows'] as
+        | Array<{
+            rowNumber: number;
+            censusCode: string;
+            ulbName: string;
+            totalGrantAllocation?: unknown;
+            installment1Amount?: unknown;
+            installment2Amount?: unknown;
+            devolutionFormula?: string;
+            errors: DfRowError[];
+          }>
+        | undefined) ?? [];
+
+    const excludedErrorRows = excludedRows.map((r) => ({
+      rowNumber: r.rowNumber,
+      censusCode: r.censusCode,
+      ulbName: r.ulbName,
+      totalGrantAllocation: r.totalGrantAllocation,
+      installment1Amount: r.installment1Amount,
+      installment2Amount: r.installment2Amount,
+      devolutionFormula: r.devolutionFormula,
+      errors: r.errors.map((e) => e.message).join('; '),
+    }));
+
+    const errorRows = [...dbErrorRows, ...excludedErrorRows].sort((a, b) => a.rowNumber - b.rowNumber);
 
     return this.excelService.generateExcel(DF_ERROR_EXCEL_HEADERS, errorRows, 'Devolution Formula Errors');
   }

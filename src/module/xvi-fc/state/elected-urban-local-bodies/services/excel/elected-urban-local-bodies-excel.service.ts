@@ -21,6 +21,7 @@ import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-
 import {
   EULB_FORM_TYPE,
   ElectedUrbanLocalBodiesForm,
+  EulbExcludedRowEntry,
   EulbFormDocument,
   EulbValidationStatus,
 } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
@@ -65,7 +66,10 @@ interface UlbLean {
 }
 
 interface ProcessedRow extends ParsedExcelRow {
-  rowType: 'DB_ULB' | 'EXTRA_ULB';
+  /** Whether this row's census code matched an active registry ULB. Unmatched rows are reported
+   *  (unknownUlb error, extraExcelRowCount, newUlbsAdded) but never persisted as a row — every
+   *  row actually written to the database is registry-backed. */
+  matched: boolean;
   ulbId?: Types.ObjectId;
   dbCensusCode?: string;
   dbUlbName?: string;
@@ -76,10 +80,6 @@ interface ProcessedRow extends ParsedExcelRow {
 const DUPLICATE_CENSUS_CODE_MESSAGE = 'A ULB with this census code already exists for the selected design year.';
 const UNKNOWN_ULB_MESSAGE = 'This ULB is not registered in City Finance. Please register the ULB before uploading.';
 const FORM_CONFLICT_MESSAGE = 'This form was just updated by another request. Please refresh and try again.';
-
-function hasDuplicateCensusCodeError(row: ProcessedRow): boolean {
-  return row.rowErrors.some((e) => e.code === 'duplicate' && e.field === 'censusCode');
-}
 
 @Injectable()
 export class ElectedUrbanLocalBodiesExcelService {
@@ -239,22 +239,21 @@ export class ElectedUrbanLocalBodiesExcelService {
       const parsed = this.parseDataRow(raw, colIndexMap, i + 1);
       const censusCodNorm = parsed.censusCode ? parsed.censusCode.trim().toLowerCase() : '';
       const dbMatch = censusCodNorm ? dbUlbByCode.get(censusCodNorm) : undefined;
-      const rowType: 'DB_ULB' | 'EXTRA_ULB' = dbMatch ? 'DB_ULB' : 'EXTRA_ULB';
+      const matched = !!dbMatch;
 
       if (dbMatch && censusCodNorm) matchedUlbCodes.add(censusCodNorm);
 
-      // EXTRA_ULB rows receive the unknownUlb error to flag non-registry rows explicitly.
-      const rowErrors =
-        rowType === 'DB_ULB'
-          ? this.eulbValidator.validateDbUlbRow(parsed, dbMatch!, today, excelDateConfig)
-          : [
-              { field: 'censusCode', code: 'unknownUlb', message: UNKNOWN_ULB_MESSAGE },
-              ...this.eulbValidator.validateExtraUlbRow(parsed, today, excelDateConfig),
-            ];
+      // Unmatched rows receive the unknownUlb error to flag non-registry rows explicitly.
+      const rowErrors = matched
+        ? this.eulbValidator.validateDbUlbRow(parsed, dbMatch, today, excelDateConfig)
+        : [
+            { field: 'censusCode', code: 'unknownUlb', message: UNKNOWN_ULB_MESSAGE },
+            ...this.eulbValidator.validateExtraUlbRow(parsed, today, excelDateConfig),
+          ];
 
       processedRows.push({
         ...parsed,
-        rowType,
+        matched,
         ulbId: dbMatch ? dbMatch._id : undefined,
         dbCensusCode: dbMatch ? String(dbMatch.censusCode ?? dbMatch.sbCode ?? '') || undefined : undefined,
         dbUlbName: dbMatch ? dbMatch.name : undefined,
@@ -271,7 +270,7 @@ export class ElectedUrbanLocalBodiesExcelService {
     // 10. Compute summary
     const matchedDbUlbCount = matchedUlbCodes.size;
     const missingDbUlbCount = computedActiveUlbCount - matchedDbUlbCount;
-    const extraExcelRowCount = processedRows.filter((r) => r.rowType === 'EXTRA_ULB').length;
+    const extraExcelRowCount = processedRows.filter((r) => !r.matched).length;
     const errorRowCount = processedRows.filter((r) => r.validationRowStatus === 'INVALID').length;
 
     // Form validation is VALID only when there are no row errors, no missing registry ULBs,
@@ -283,6 +282,22 @@ export class ElectedUrbanLocalBodiesExcelService {
       excelRowCount === computedActiveUlbCount
         ? 'VALID'
         : 'INVALID';
+
+    // Snapshot of rows excluded from persistence (unmatched, or an intra-batch duplicate census
+    // code) — stored on the form doc so getErrorSheet can still surface them even though they never
+    // become row documents. Fully replaces any prior snapshot (see formSummaryFieldsBase below).
+    const excludedRows: EulbExcludedRowEntry[] = processedRows
+      .filter((r) => r.ulbId === undefined)
+      .map((r) => ({
+        rowNumber: r.rowNumber,
+        censusCode: r.censusCode,
+        ulbName: r.ulbName,
+        electedBodyStatus: r.electedBodyStatus,
+        dateOfConstitution: r.dateOfConstitution,
+        dateOfExpiry: r.dateOfExpiry,
+        remarks: r.remarks,
+        errors: r.rowErrors,
+      }));
 
     // 11. Atomic version allocation + safe dataset replacement, all inside one Mongo transaction.
     // Replaces a prior read-then-increment (`currentVersion = existing.activeDatasetVersion ?? 0;
@@ -301,6 +316,7 @@ export class ElectedUrbanLocalBodiesExcelService {
       extraExcelRowCount,
       errorRowCount,
       validationStatus: formValidationStatus,
+      excludedRows,
       lastExcelUploadedAt: new Date(),
       lastExcelUploadedBy: userOid,
       updatedBy: userOid,
@@ -332,37 +348,42 @@ export class ElectedUrbanLocalBodiesExcelService {
       formId = updatedForm._id;
 
       // Build row documents for DB insert (formId and newVersion known since the $inc above).
+      // Excludes any row with no resolved ulbId — either unmatched to the active registry, or a
+      // later occurrence of a duplicate census code within this same upload (nulled by
+      // flagIntraBatchEulbCensusCodeDuplicates above). Both are already fully reported
+      // (rowErrors/extraExcelRowCount/newUlbsAdded, all computed from processedRows before this
+      // point) but are never written as rows; every persisted row is registry-backed.
       // lean:true bypasses Mongoose document validation — rows are pre-validated at application
       // level and may intentionally have blank identity fields (stored as INVALID).
       // rawExcelData is only kept for INVALID rows where it may be needed for error display.
-      const rowDocs = processedRows.map((r) => {
-        const constituted = r.electedBodyStatus?.trim() === 'Constituted';
-        return {
-          form: formId,
-          state: stateOid,
-          year: yearOid,
-          datasetVersion: newVersion,
-          rowNumber: r.rowNumber,
-          ulbId: r.ulbId,
-          // Trim and clear duplicate rows so the unique partial index is not violated.
-          censusCode: hasDuplicateCensusCodeError(r) ? '' : (r.censusCode ?? '').trim(),
-          ulbName: r.ulbName,
-          dbCensusCode: r.dbCensusCode,
-          dbUlbName: r.dbUlbName,
-          electedBodyStatus: r.electedBodyStatus,
-          dateOfConstitution: constituted && r.dateOfConstitution ? this.toDate(r.dateOfConstitution) : null,
-          dateOfExpiry: constituted && r.dateOfExpiry ? this.toDate(r.dateOfExpiry) : null,
-          remarks: r.remarks,
-          rowType: r.rowType,
-          lastUpdatedSource: 'EXCEL' as const,
-          validationStatus: r.validationRowStatus,
-          errors: r.rowErrors,
-          rawExcelData: r.validationRowStatus === 'INVALID' ? r.rawExcelData : undefined,
-          createdBy: userOid,
-          updatedBy: userOid,
-          isActive: true,
-        };
-      });
+      const rowDocs = processedRows
+        .filter((r) => r.ulbId !== undefined)
+        .map((r) => {
+          const constituted = r.electedBodyStatus?.trim() === 'Constituted';
+          return {
+            form: formId,
+            state: stateOid,
+            year: yearOid,
+            datasetVersion: newVersion,
+            rowNumber: r.rowNumber,
+            ulbId: r.ulbId,
+            censusCode: (r.censusCode ?? '').trim(),
+            ulbName: r.ulbName,
+            dbCensusCode: r.dbCensusCode,
+            dbUlbName: r.dbUlbName,
+            electedBodyStatus: r.electedBodyStatus,
+            dateOfConstitution: constituted && r.dateOfConstitution ? this.toDate(r.dateOfConstitution) : null,
+            dateOfExpiry: constituted && r.dateOfExpiry ? this.toDate(r.dateOfExpiry) : null,
+            remarks: r.remarks,
+            lastUpdatedSource: 'EXCEL' as const,
+            validationStatus: r.validationRowStatus,
+            errors: r.rowErrors,
+            rawExcelData: r.validationRowStatus === 'INVALID' ? r.rawExcelData : undefined,
+            createdBy: userOid,
+            updatedBy: userOid,
+            isActive: true,
+          };
+        });
 
       if (currentVersion > 0) {
         await this.rowModel
@@ -506,8 +527,8 @@ export class ElectedUrbanLocalBodiesExcelService {
         const revalDateConfig = extractDateConfig(revalRowEditFields, revalExtraUlbPortalFields);
 
         let errorRowCount = 0;
-        let extraExcelRowCount = 0;
         const matchedUlbIds = new Set<string>();
+        const rowIdsToDelete: Types.ObjectId[] = [];
         const flatErrors: EulbRowValidationError[] = [];
 
         type RowBulkOpSet = {
@@ -525,53 +546,33 @@ export class ElectedUrbanLocalBodiesExcelService {
         };
         const bulkOps: RowBulkOp[] = [];
 
+        // No new rows can be discovered here — this branch re-validates already-persisted rows,
+        // it never re-parses an Excel file (that only happens in validateExcel/
+        // revalidateFromStoredFile, neither of which persists an unmatched row anymore). The only
+        // way an existing row can be unmatched here is either legacy data from before this fix, or
+        // a row whose backing ULB was deactivated after being matched. Both are treated the same
+        // way a ULB that was simply never uploaded is treated: the row is deleted, and
+        // missingDbUlbCount picks it up naturally (it stops counting toward matchedUlbIds).
         for (const row of rows) {
-          let newErrors: EulbRowError[];
-
-          if (row.rowType === 'EXTRA_ULB') {
-            // EXTRA_ULB rows are always invalid — they reference unregistered ULBs.
-            extraExcelRowCount++;
-            const parsed: ParsedExcelRow = {
-              censusCode: row.censusCode,
-              ulbName: row.ulbName,
-              electedBodyStatus: row.electedBodyStatus,
-              dateOfConstitution: row.dateOfConstitution,
-              dateOfExpiry: row.dateOfExpiry,
-              remarks: row.remarks,
-              rowNumber: row.rowNumber,
-            };
-            newErrors = [
-              { field: 'censusCode', code: 'unknownUlb', message: UNKNOWN_ULB_MESSAGE },
-              ...this.eulbValidator.validateExtraUlbRow(parsed, today, revalDateConfig),
-            ];
-          } else {
-            const parsed: ParsedExcelRow = {
-              censusCode: row.censusCode,
-              ulbName: row.ulbName,
-              electedBodyStatus: row.electedBodyStatus,
-              dateOfConstitution: row.dateOfConstitution,
-              dateOfExpiry: row.dateOfExpiry,
-              remarks: row.remarks,
-              rowNumber: row.rowNumber,
-            };
-
-            if (row.ulbId) {
-              const ulbIdStr = row.ulbId.toString();
-              const dbUlb = dbUlbById.get(ulbIdStr);
-              if (dbUlb) {
-                matchedUlbIds.add(ulbIdStr);
-                newErrors = this.eulbValidator.validateDbUlbRow(parsed, dbUlb, today, revalDateConfig);
-              } else {
-                // DB_ULB whose registry entry was removed — treat as extra.
-                newErrors = [
-                  { field: 'censusCode', code: 'unknownUlb', message: UNKNOWN_ULB_MESSAGE },
-                  ...this.eulbValidator.validateExtraUlbRow(parsed, today, revalDateConfig),
-                ];
-              }
-            } else {
-              newErrors = this.eulbValidator.validateExtraUlbRow(parsed, today, revalDateConfig);
-            }
+          if (!row.ulbId || !dbUlbById.has(row.ulbId.toString())) {
+            rowIdsToDelete.push(row._id);
+            continue;
           }
+
+          const ulbIdStr = row.ulbId.toString();
+          const dbUlb = dbUlbById.get(ulbIdStr)!;
+          matchedUlbIds.add(ulbIdStr);
+
+          const parsed: ParsedExcelRow = {
+            censusCode: row.censusCode,
+            ulbName: row.ulbName,
+            electedBodyStatus: row.electedBodyStatus,
+            dateOfConstitution: row.dateOfConstitution,
+            dateOfExpiry: row.dateOfExpiry,
+            remarks: row.remarks,
+            rowNumber: row.rowNumber,
+          };
+          const newErrors = this.eulbValidator.validateDbUlbRow(parsed, dbUlb, today, revalDateConfig);
 
           const newValidationStatus: EulbRowValidationStatus = newErrors.length === 0 ? 'VALID' : 'INVALID';
           if (newErrors.length > 0) {
@@ -610,14 +611,19 @@ export class ElectedUrbanLocalBodiesExcelService {
         if (bulkOps.length > 0) {
           await this.rowModel.bulkWrite(bulkOps as unknown as Parameters<typeof this.rowModel.bulkWrite>[0]);
         }
+        if (rowIdsToDelete.length > 0) {
+          await this.rowModel.deleteMany({ _id: { $in: rowIdsToDelete } }).exec();
+        }
 
+        const remainingRowCount = rows.length - rowIdsToDelete.length;
         const matchedDbUlbCount = matchedUlbIds.size;
         const missingDbUlbCount = computedActiveUlbCount - matchedDbUlbCount;
+        // extraExcelRowCount is always 0 here — this branch can only shrink the row set (via
+        // deletion above), never discover a new/unregistered row; kept in the shape below only
+        // for API/type consistency with validateExcel's and revalidateFromStoredFile's summaries.
+        const extraExcelRowCount = 0;
         const validationStatus: EulbValidationStatus =
-          errorRowCount === 0 &&
-          missingDbUlbCount === 0 &&
-          extraExcelRowCount === 0 &&
-          rows.length === computedActiveUlbCount
+          errorRowCount === 0 && missingDbUlbCount === 0 && remainingRowCount === computedActiveUlbCount
             ? 'VALID'
             : 'INVALID';
 
@@ -626,7 +632,7 @@ export class ElectedUrbanLocalBodiesExcelService {
             $set: {
               dbUlbCount: computedActiveUlbCount,
               maxAllowedExcelRows: computedActiveUlbCount * 2,
-              excelRowCount: rows.length,
+              excelRowCount: remainingRowCount,
               matchedDbUlbCount,
               missingDbUlbCount,
               extraExcelRowCount,
@@ -641,7 +647,7 @@ export class ElectedUrbanLocalBodiesExcelService {
         const validationSummary: EulbValidationSummary = {
           dbUlbCount: computedActiveUlbCount,
           maxAllowedExcelRows: computedActiveUlbCount * 2,
-          excelRowCount: rows.length,
+          excelRowCount: remainingRowCount,
           matchedDbUlbCount,
           missingDbUlbCount,
           extraExcelRowCount,
@@ -649,22 +655,6 @@ export class ElectedUrbanLocalBodiesExcelService {
           validationStatus,
           activeDatasetVersion: form.activeDatasetVersion,
         };
-
-        // Extra rows block revalidation with the same field-keyed error as validateExcel.
-        if (extraExcelRowCount > 0) {
-          throwXviFcValidationErrorWithData(
-            {
-              electedBodyExcelFile: [
-                {
-                  field: 'electedBodyExcelFile',
-                  code: 'newUlbsAdded',
-                  message: `You have added ${extraExcelRowCount} ULB(s) not registered in City Finance. Please register before proceeding.`,
-                },
-              ],
-            },
-            { validationSummary, errors: flatErrors },
-          );
-        }
 
         const message =
           errorRowCount > 0 ? 'Excel revalidation completed with errors.' : 'Excel revalidation completed.';
@@ -761,21 +751,20 @@ export class ElectedUrbanLocalBodiesExcelService {
       const parsed = this.parseDataRow(raw, colIndexMap, i + 1);
       const censusCodNorm = parsed.censusCode ? parsed.censusCode.trim().toLowerCase() : '';
       const dbMatch = censusCodNorm ? dbUlbByCode.get(censusCodNorm) : undefined;
-      const rowType: 'DB_ULB' | 'EXTRA_ULB' = dbMatch ? 'DB_ULB' : 'EXTRA_ULB';
+      const matched = !!dbMatch;
 
       if (dbMatch && censusCodNorm) matchedUlbCodes.add(censusCodNorm);
 
-      const rowErrors =
-        rowType === 'DB_ULB'
-          ? this.eulbValidator.validateDbUlbRow(parsed, dbMatch!, today, storedFileDateConfig)
-          : [
-              { field: 'censusCode', code: 'unknownUlb', message: UNKNOWN_ULB_MESSAGE },
-              ...this.eulbValidator.validateExtraUlbRow(parsed, today, storedFileDateConfig),
-            ];
+      const rowErrors = matched
+        ? this.eulbValidator.validateDbUlbRow(parsed, dbMatch, today, storedFileDateConfig)
+        : [
+            { field: 'censusCode', code: 'unknownUlb', message: UNKNOWN_ULB_MESSAGE },
+            ...this.eulbValidator.validateExtraUlbRow(parsed, today, storedFileDateConfig),
+          ];
 
       processedRows.push({
         ...parsed,
-        rowType,
+        matched,
         ulbId: dbMatch ? dbMatch._id : undefined,
         dbCensusCode: dbMatch ? String(dbMatch.censusCode ?? dbMatch.sbCode ?? '') || undefined : undefined,
         dbUlbName: dbMatch ? dbMatch.name : undefined,
@@ -789,7 +778,7 @@ export class ElectedUrbanLocalBodiesExcelService {
 
     const matchedDbUlbCount = matchedUlbCodes.size;
     const missingDbUlbCount = computedActiveUlbCount - matchedDbUlbCount;
-    const extraExcelRowCount = processedRows.filter((r) => r.rowType === 'EXTRA_ULB').length;
+    const extraExcelRowCount = processedRows.filter((r) => !r.matched).length;
     const errorRowCount = processedRows.filter((r) => r.validationRowStatus === 'INVALID').length;
     const validationStatus: EulbValidationStatus =
       errorRowCount === 0 &&
@@ -798,6 +787,21 @@ export class ElectedUrbanLocalBodiesExcelService {
       excelRowCount === computedActiveUlbCount
         ? 'VALID'
         : 'INVALID';
+
+    // Snapshot of rows excluded from persistence — same purpose as validateExcel's (see its
+    // comment); fully replaces any prior snapshot via the $set below.
+    const excludedRows: EulbExcludedRowEntry[] = processedRows
+      .filter((r) => r.ulbId === undefined)
+      .map((r) => ({
+        rowNumber: r.rowNumber,
+        censusCode: r.censusCode,
+        ulbName: r.ulbName,
+        electedBodyStatus: r.electedBodyStatus,
+        dateOfConstitution: r.dateOfConstitution,
+        dateOfExpiry: r.dateOfExpiry,
+        remarks: r.remarks,
+        errors: r.rowErrors,
+      }));
 
     // Atomic version allocation + safe dataset replacement inside one Mongo transaction — same
     // fix as validateExcel (docs/adr/0001-dataset-versioning.md). This path only ever runs against
@@ -822,6 +826,7 @@ export class ElectedUrbanLocalBodiesExcelService {
               extraExcelRowCount,
               errorRowCount,
               validationStatus,
+              excludedRows,
               updatedBy: userOid,
             },
           },
@@ -838,34 +843,37 @@ export class ElectedUrbanLocalBodiesExcelService {
       const formId = updatedForm._id;
 
       // Same normalization as validateExcel: lean:true bypasses Mongoose required-String check
-      // for '' so INVALID rows with blank identity fields are stored without throwing.
-      const rowDocs = processedRows.map((r) => {
-        const constituted = r.electedBodyStatus?.trim() === 'Constituted';
-        return {
-          form: formId,
-          state: stateOid,
-          year: yearOid,
-          datasetVersion: newVersion,
-          rowNumber: r.rowNumber,
-          ulbId: r.ulbId,
-          censusCode: hasDuplicateCensusCodeError(r) ? '' : (r.censusCode ?? '').trim(),
-          ulbName: r.ulbName,
-          dbCensusCode: r.dbCensusCode,
-          dbUlbName: r.dbUlbName,
-          electedBodyStatus: r.electedBodyStatus,
-          dateOfConstitution: constituted && r.dateOfConstitution ? this.toDate(r.dateOfConstitution) : null,
-          dateOfExpiry: constituted && r.dateOfExpiry ? this.toDate(r.dateOfExpiry) : null,
-          remarks: r.remarks,
-          rowType: r.rowType,
-          lastUpdatedSource: 'EXCEL' as const,
-          validationStatus: r.validationRowStatus,
-          errors: r.rowErrors,
-          rawExcelData: r.rawExcelData,
-          createdBy: userOid,
-          updatedBy: userOid,
-          isActive: true,
-        };
-      });
+      // for '' so INVALID rows with blank identity fields are stored without throwing. Excludes
+      // any row with no resolved ulbId (unmatched, or a duplicate census code nulled above) —
+      // see the comment on validateExcel's own rowDocs build for why.
+      const rowDocs = processedRows
+        .filter((r) => r.ulbId !== undefined)
+        .map((r) => {
+          const constituted = r.electedBodyStatus?.trim() === 'Constituted';
+          return {
+            form: formId,
+            state: stateOid,
+            year: yearOid,
+            datasetVersion: newVersion,
+            rowNumber: r.rowNumber,
+            ulbId: r.ulbId,
+            censusCode: (r.censusCode ?? '').trim(),
+            ulbName: r.ulbName,
+            dbCensusCode: r.dbCensusCode,
+            dbUlbName: r.dbUlbName,
+            electedBodyStatus: r.electedBodyStatus,
+            dateOfConstitution: constituted && r.dateOfConstitution ? this.toDate(r.dateOfConstitution) : null,
+            dateOfExpiry: constituted && r.dateOfExpiry ? this.toDate(r.dateOfExpiry) : null,
+            remarks: r.remarks,
+            lastUpdatedSource: 'EXCEL' as const,
+            validationStatus: r.validationRowStatus,
+            errors: r.rowErrors,
+            rawExcelData: r.rawExcelData,
+            createdBy: userOid,
+            updatedBy: userOid,
+            isActive: true,
+          };
+        });
 
       if (currentVersion > 0) {
         await this.rowModel
