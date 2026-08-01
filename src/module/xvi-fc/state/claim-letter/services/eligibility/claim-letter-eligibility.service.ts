@@ -6,6 +6,7 @@ import { ClaimEligibilityEvaluatorService } from 'src/module/xvi-fc/common/servi
 import { ExpectedUlbSetService } from 'src/module/xvi-fc/common/services/expected-ulb-set.service';
 import type {
   EligibilityEvaluationResult,
+  RowEligibilityEvidence,
   UlbEligibilityTally,
 } from 'src/module/xvi-fc/common/types/claim-eligibility.type';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
@@ -86,6 +87,14 @@ export interface ClaimLetterUlbLevelEligibility {
    *  *which* form is blocking a given ULB instead of a single generic reason code. A ULB with no
    *  entry here (or an empty array) failed no ULB-bulk criterion. */
   perUlbFailedCriteria: Map<string, string[]>;
+  /** Per-ULB row evidence (rowDocumentId, resolved rowStatus/datasetVersion, bucket) for
+   *  FORM_AND_ROW criteria, keyed by formId then ulbId — lets `ClaimLetterAssemblyService` build
+   *  each child's frozen `eligibilitySources` entry by reusing this same bulk fetch, no re-query.
+   *  NOT part of the cached `*ForDisplay` shape — see `resolveUlbLevelEligibilityForDisplay`, which
+   *  strips this before caching (no display consumer reads it, and caching a rowDocumentId per ULB
+   *  state-wide would bloat the Redis payload for no benefit). Only the assembly pipeline, which
+   *  always calls this method directly (never `*ForDisplay`), needs it. */
+  rowEvidenceByFormId: Map<number, Map<string, RowEligibilityEvidence>>;
 }
 
 /**
@@ -201,10 +210,15 @@ export class ClaimLetterEligibilityService {
       standaloneCriteria: full.standaloneCriteria,
       rowTalliesByFormId: full.rowTalliesByFormId,
       perUlbFailedCriteria: new Map([...full.perUlbFailedCriteria].filter(([id]) => subset.has(id))),
+      // Display-only path (this method is only called from resolveUlbLevelEligibilityForDisplay) —
+      // never populated here, see the field's own docblock.
+      rowEvidenceByFormId: new Map(),
     };
   }
 
-  /** Maps aren't JSON-serializable directly — round-tripped as arrays of entries instead. */
+  /** Maps aren't JSON-serializable directly — round-tripped as arrays of entries instead.
+   *  `rowEvidenceByFormId` is deliberately omitted — display never reads it, and caching a
+   *  rowDocumentId per ULB state-wide would bloat the payload for no benefit (see its docblock). */
   private serializeUlbLevelEligibility(value: ClaimLetterUlbLevelEligibility): string {
     return JSON.stringify({
       perUlbEligible: [...value.perUlbEligible.entries()],
@@ -226,6 +240,7 @@ export class ClaimLetterEligibilityService {
       standaloneCriteria: parsed.standaloneCriteria,
       rowTalliesByFormId: new Map(parsed.rowTalliesByFormId),
       perUlbFailedCriteria: new Map(parsed.perUlbFailedCriteria),
+      rowEvidenceByFormId: new Map(),
     };
   }
 
@@ -287,8 +302,9 @@ export class ClaimLetterEligibilityService {
     const perUlbFailedCriteria = new Map<string, string[]>();
     const standaloneCriteria: UlbCriterionSummary[] = [];
     const rowTalliesByFormId = new Map<number, UlbEligibilityTally>();
+    const rowEvidenceByFormId = new Map<number, Map<string, RowEligibilityEvidence>>();
 
-    for (const { doc, perUlb, tally } of results) {
+    for (const { doc, perUlb, tally, rowEvidenceByUlbId } of results) {
       const config = doc.claimEligibility!;
       const label = config.displayLabel ?? doc.type ?? 'Form';
 
@@ -308,10 +324,11 @@ export class ClaimLetterEligibilityService {
         });
       } else {
         rowTalliesByFormId.set(doc.formId ?? 0, tally);
+        rowEvidenceByFormId.set(doc.formId ?? 0, rowEvidenceByUlbId ?? new Map());
       }
     }
 
-    return { perUlbEligible, standaloneCriteria, rowTalliesByFormId, perUlbFailedCriteria };
+    return { perUlbEligible, standaloneCriteria, rowTalliesByFormId, perUlbFailedCriteria, rowEvidenceByFormId };
   }
 
   /**

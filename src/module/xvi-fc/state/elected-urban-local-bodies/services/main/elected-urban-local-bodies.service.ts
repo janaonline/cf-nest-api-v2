@@ -753,10 +753,35 @@ export class ElectedUrbanLocalBodiesService {
     // FileInfo `timestamps` option doesn't re-stamp the stored subdocument.
     if (normalizedExcelFile !== undefined) fieldUpdates['electedBodyExcelFile'] = normalizedExcelFile;
 
-    const updated = await this.model
-      .findOneAndUpdate({ _id: existing._id }, { $set: fieldUpdates }, { new: true })
-      .lean()
-      .exec();
+    // Two collections are written together here (parent + rows), so this needs the same
+    // transactional guarantee finalSubmit already has in fc-unspent-declaration.service.ts —
+    // a crash between the two writes must never leave the form UNDER_REVIEW_BY_MOHUA while
+    // its rows are still `null`.
+    const session = await this.model.db.startSession();
+    let updated: EulbFormLeanDoc | null = null;
+    try {
+      session.startTransaction();
+
+      updated = await this.model
+        .findOneAndUpdate({ _id: existing._id }, { $set: fieldUpdates }, { new: true, session })
+        .lean<EulbFormLeanDoc>()
+        .exec();
+
+      await this.rowModel
+        .updateMany(
+          { form: existing._id, datasetVersion: activeDatasetVersion, isActive: true },
+          { $set: { rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA } },
+          { session },
+        )
+        .exec();
+
+      await session.commitTransaction();
+    } catch (err) {
+      await session.abortTransaction();
+      throw err;
+    } finally {
+      await session.endSession();
+    }
 
     return xviFcSuccess('Elected Urban Local Bodies form submitted successfully.', {
       ...updated,

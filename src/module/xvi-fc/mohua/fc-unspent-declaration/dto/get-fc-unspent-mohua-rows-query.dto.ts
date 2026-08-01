@@ -1,7 +1,7 @@
 import { Transform, Type } from 'class-transformer';
 import { IsBoolean, IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
-import { ROW_STATUS } from 'src/common/constants/row-status.constants';
-import type { RowStatusType } from 'src/common/constants/row-status.constants';
+import { ROW_REVIEW_STATUS_VALUES } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
+import type { RowReviewStatus } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
 import { FC_UNSPENT_PAGINATION_MAX_LIMIT } from 'src/module/xvi-fc/state/fc-unspent-declaration/constants/fc-unspent-declaration.constants';
 
 export class GetFcUnspentMohuaRowsQueryDto {
@@ -23,8 +23,9 @@ export class GetFcUnspentMohuaRowsQueryDto {
   limit?: number;
 
   @IsOptional()
-  @IsIn(Object.values(ROW_STATUS))
-  rowStatus?: RowStatusType;
+  @Type(() => Number)
+  @IsIn(ROW_REVIEW_STATUS_VALUES)
+  rowStatus?: RowReviewStatus;
 
   @IsOptional()
   @Transform(({ value }: { value: unknown }): unknown =>

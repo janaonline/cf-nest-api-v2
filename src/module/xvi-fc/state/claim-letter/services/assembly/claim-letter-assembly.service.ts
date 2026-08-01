@@ -22,7 +22,10 @@ import { ClaimLetterUlbLock, ClaimLetterUlbLockDocument } from 'src/schemas/xvi-
 import { State, StateDocument } from 'src/schemas/state.schema';
 import { Year } from 'src/schemas/year.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
-import type { EligibilityEvaluationResult } from 'src/module/xvi-fc/common/types/claim-eligibility.type';
+import type {
+  EligibilityEvaluationResult,
+  RowEligibilityEvidence,
+} from 'src/module/xvi-fc/common/types/claim-eligibility.type';
 import {
   CLAIM_LETTER_CHILD_INSERT_CHUNK_SIZE,
   CLAIM_LETTER_EDIT_LOCK_LEASE_MINUTES,
@@ -467,9 +470,25 @@ export class ClaimLetterAssemblyService {
     yearOid: Types.ObjectId,
     installment: number,
   ): Promise<PreparedChildren> {
-    const [gate, allocationByUlbId, ulbLevelEligibility] = await Promise.all([
+    const [gate, allocationByUlbId] = await Promise.all([
       this.eligibilityService.evaluateStateLevelGate(String(stateOid), String(yearOid), installment as 1 | 2),
       this.eligibilityService.resolveDevolutionAllocations(String(stateOid), String(yearOid), installment as 1 | 2),
+    ]);
+
+    if (!gate.passed) {
+      const reason = gate.sources.find((s) => s.result === 'FAILED')?.reasonCode ?? 'STATE_GATE_FAILED';
+      throw new BadRequestException(`State is not eligible to claim: ${reason}`);
+    }
+
+    // Both deferred until the gate is confirmed passing — resolveUlbLevelEligibility is the
+    // heaviest of this method's fetches (a bulk find per ULB-bulk-evaluable source), entirely
+    // wasted when the state isn't eligible at all; resolveUlbSnapshots was already sequenced after
+    // the gate check, so it now simply runs alongside the other post-gate fetch instead of before it.
+    const [ulbSnapshotById, ulbLevelEligibility] = await Promise.all([
+      this.resolveUlbSnapshots(
+        selections.map((s) => s.ulbId),
+        stateOid,
+      ),
       // Re-verified here too, not just at picker time — a ULB's SLB/Annual Accounts/Elected
       // Body/FC Unspent status can change between being picked and the draft being saved.
       this.eligibilityService.resolveUlbLevelEligibility(
@@ -480,14 +499,11 @@ export class ClaimLetterAssemblyService {
       ),
     ]);
 
-    if (!gate.passed) {
-      const reason = gate.sources.find((s) => s.result === 'FAILED')?.reasonCode ?? 'STATE_GATE_FAILED';
-      throw new BadRequestException(`State is not eligible to claim: ${reason}`);
-    }
-
-    const ulbSnapshotById = await this.resolveUlbSnapshots(
-      selections.map((s) => s.ulbId),
-      stateOid,
+    // Every enabled FORM_AND_ROW source is guaranteed PASSED/EXEMPTED here (gate.passed already
+    // asserted true above) — the filter mirrors the identical one used for stateEligibilitySources
+    // below, purely for self-documentation/defensiveness.
+    const formAndRowSources = gate.sources.filter(
+      (s) => s.evaluationLevel === 'FORM_AND_ROW' && (s.result === 'PASSED' || s.result === 'EXEMPTED'),
     );
 
     const invalid: string[] = [];
@@ -513,6 +529,12 @@ export class ClaimLetterAssemblyService {
         continue;
       }
 
+      const eligibilitySources = this.buildChildEligibilitySources(
+        selection.ulbId,
+        formAndRowSources,
+        ulbLevelEligibility.rowEvidenceByFormId,
+      );
+
       children.push({
         ulbId: selection.ulbId,
         document: this.buildChildDocument(
@@ -525,6 +547,7 @@ export class ClaimLetterAssemblyService {
           stateOid,
           yearOid,
           installment,
+          eligibilitySources,
         ),
       });
     }
@@ -626,6 +649,7 @@ export class ClaimLetterAssemblyService {
     stateOid: Types.ObjectId,
     yearOid: Types.ObjectId,
     installment: number,
+    eligibilitySources: Record<string, unknown>[],
   ): Record<string, unknown> {
     return {
       claimLetter: parent._id,
@@ -650,7 +674,7 @@ export class ClaimLetterAssemblyService {
         allocatedAmount: allocation.allocatedAmount,
         installment,
       },
-      eligibilitySources: [],
+      eligibilitySources,
       appliedExemptionIds: [],
       createdBy: userOid,
       updatedBy: userOid,
@@ -704,6 +728,36 @@ export class ClaimLetterAssemblyService {
       reasonCode: result.reasonCode,
       evidence: result.evidence,
     };
+  }
+
+  /**
+   * One `eligibilitySources` entry per FORM_AND_ROW source, for one specific ULB — merges that
+   * source's already-resolved state-level fields (formId/formJsonId/ruleVersion/formType/
+   * formDocumentId/statusAtEvaluation/evidence, identical for every ULB in this batch) with this
+   * ULB's own row evidence (rowDocumentId/rowStatusAtEvaluation/datasetVersion), both already
+   * in memory from `prepareChildren`'s fetches — no query here. A ULB with no row evidence entry
+   * hit `defaultWhenNoRow` (no row existed) — still gets a PASSED snapshot (it must have, or
+   * `perUlbEligible` would have already rejected it), just with null row fields.
+   */
+  private buildChildEligibilitySources(
+    ulbId: string,
+    formAndRowSources: EligibilityEvaluationResult[],
+    rowEvidenceByFormId: Map<number, Map<string, RowEligibilityEvidence>>,
+  ): Record<string, unknown>[] {
+    return formAndRowSources.map((source) => {
+      const evidence = rowEvidenceByFormId.get(source.formId)?.get(ulbId);
+      const merged: EligibilityEvaluationResult = evidence
+        ? {
+            ...source,
+            rowDocumentId: evidence.rowDocumentId,
+            rowStatusAtEvaluation: evidence.rowStatusAtEvaluation,
+            datasetVersion: evidence.datasetVersion,
+            result: evidence.bucket === 'EXEMPTED' ? 'EXEMPTED' : 'PASSED',
+            reasonCode: evidence.bucket === 'EXEMPTED' ? 'ROW_EXEMPTED' : 'ROW_STATUS_ACCEPTED',
+          }
+        : { ...source, rowDocumentId: null, rowStatusAtEvaluation: null, reasonCode: 'ROW_DEFAULT_NO_ROW' };
+      return this.toEligibilitySourceSnapshot(merged);
+    });
   }
 
   // ─── Step 4: revalidate, verify, finalize (docs/adr/0002-batching-and-locks.md) ──────────────

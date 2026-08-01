@@ -399,5 +399,234 @@ describe('ClaimEligibilityEvaluatorService', () => {
         /missing evaluator.config.rowStatusField/,
       );
     });
+
+    describe('rowFormStatusField / rowAcceptedFormStatuses AND-condition', () => {
+      const fcUnspentRowConfigWithFormStatus: ClaimEligibilityConfig = {
+        ...electedBodyRowConfig,
+        source: {
+          rowCollection: 'xvifc_unspent_state_form_rows',
+          rowFields: { ulb: 'ulbId', designYear: 'year', state: 'state', isActive: 'isActive' },
+        },
+        evaluator: {
+          type: 'ROW_STATUS_AND_FIELDS',
+          config: {
+            rowStatusField: 'eligibility',
+            rowEligibleValues: [true],
+            defaultWhenNoRow: 'ELIGIBLE',
+            rowFormStatusField: 'rowStatus',
+            rowAcceptedFormStatuses: [5, 7],
+          },
+        },
+      };
+
+      it('buckets INELIGIBLE when the domain value is eligible but rowStatus is not accepted', async () => {
+        mockCollection('xvifc_unspent_state_form_rows', [
+          { ulbId: new Types.ObjectId(ulbA), eligibility: true, rowStatus: null },
+        ]);
+        const doc = sourceFormJson({
+          formId: 25,
+          type: 'FC_UNSPENT_STATE',
+          claimEligibility: fcUnspentRowConfigWithFormStatus,
+        });
+
+        const { perUlb } = await service.evaluateUlbBulk(doc, { stateId, designYearId, expectedUlbIds: [ulbA] });
+
+        expect(perUlb.get(ulbA)).toBe('INELIGIBLE');
+      });
+
+      it('buckets ELIGIBLE when the domain value is eligible and rowStatus is accepted', async () => {
+        mockCollection('xvifc_unspent_state_form_rows', [
+          { ulbId: new Types.ObjectId(ulbA), eligibility: true, rowStatus: 7 },
+        ]);
+        const doc = sourceFormJson({
+          formId: 25,
+          type: 'FC_UNSPENT_STATE',
+          claimEligibility: fcUnspentRowConfigWithFormStatus,
+        });
+
+        const { perUlb } = await service.evaluateUlbBulk(doc, { stateId, designYearId, expectedUlbIds: [ulbA] });
+
+        expect(perUlb.get(ulbA)).toBe('ELIGIBLE');
+      });
+
+      it('buckets an exempted row INELIGIBLE when rowStatus is not accepted — no exemption bypass', async () => {
+        const exemptConfig: ClaimEligibilityConfig = {
+          ...electedBodyRowConfig,
+          evaluator: {
+            type: 'ROW_STATUS_AND_FIELDS',
+            config: {
+              ...(electedBodyRowConfig.evaluator.config as Record<string, unknown>),
+              rowFormStatusField: 'rowStatus',
+              rowAcceptedFormStatuses: [7],
+            },
+          },
+        };
+        mockCollection('xvifc_elected_ulb_forms', [{ activeDatasetVersion: 1 }]);
+        mockCollection('xvifc_elected_ulb_rows', [
+          { ulbId: new Types.ObjectId(ulbA), electedBodyStatus: 'Exempt', rowStatus: 5 },
+        ]);
+        const doc = sourceFormJson({ formId: 23, type: 'ELECTED_BODY', claimEligibility: exemptConfig });
+
+        const { perUlb } = await service.evaluateUlbBulk(doc, { stateId, designYearId, expectedUlbIds: [ulbA] });
+
+        expect(perUlb.get(ulbA)).toBe('INELIGIBLE');
+      });
+
+      it('leaves a ULB with no row at all governed by defaultWhenNoRow, unaffected by the FORM_STATUS check', async () => {
+        mockCollection('xvifc_unspent_state_form_rows', []);
+        const doc = sourceFormJson({
+          formId: 25,
+          type: 'FC_UNSPENT_STATE',
+          claimEligibility: fcUnspentRowConfigWithFormStatus,
+        });
+
+        const { perUlb } = await service.evaluateUlbBulk(doc, { stateId, designYearId, expectedUlbIds: [ulbA] });
+
+        expect(perUlb.get(ulbA)).toBe('ELIGIBLE'); // defaultWhenNoRow, unchanged by this check
+      });
+
+      it('is fully config-driven — changing rowAcceptedFormStatuses changes the outcome with no code change', async () => {
+        mockCollection('xvifc_unspent_state_form_rows', [
+          { ulbId: new Types.ObjectId(ulbA), eligibility: true, rowStatus: 5 },
+        ]);
+        const doc = sourceFormJson({
+          formId: 25,
+          type: 'FC_UNSPENT_STATE',
+          claimEligibility: fcUnspentRowConfigWithFormStatus,
+        });
+
+        const first = await service.evaluateUlbBulk(doc, { stateId, designYearId, expectedUlbIds: [ulbA] });
+        expect(first.perUlb.get(ulbA)).toBe('ELIGIBLE'); // 5 is in [5, 7]
+
+        const narrowedConfig: ClaimEligibilityConfig = {
+          ...fcUnspentRowConfigWithFormStatus,
+          evaluator: {
+            type: 'ROW_STATUS_AND_FIELDS',
+            config: {
+              ...(fcUnspentRowConfigWithFormStatus.evaluator.config as Record<string, unknown>),
+              rowAcceptedFormStatuses: [7],
+            },
+          },
+        };
+        mockCollection('xvifc_unspent_state_form_rows', [
+          { ulbId: new Types.ObjectId(ulbA), eligibility: true, rowStatus: 5 },
+        ]);
+        const narrowedDoc = sourceFormJson({
+          formId: 25,
+          type: 'FC_UNSPENT_STATE',
+          claimEligibility: narrowedConfig,
+        });
+
+        const second = await service.evaluateUlbBulk(narrowedDoc, { stateId, designYearId, expectedUlbIds: [ulbA] });
+        expect(second.perUlb.get(ulbA)).toBe('INELIGIBLE'); // 5 no longer in [7]
+      });
+    });
+
+    describe('rowEvidenceByUlbId', () => {
+      it('carries rowDocumentId/rowStatusAtEvaluation/datasetVersion:null for a dataset-versionless source (FC Unspent)', async () => {
+        const rowId = new Types.ObjectId();
+        const fcUnspentRowConfigWithFormStatus: ClaimEligibilityConfig = {
+          ...electedBodyRowConfig,
+          source: {
+            rowCollection: 'xvifc_unspent_state_form_rows',
+            rowFields: { ulb: 'ulbId', designYear: 'year', state: 'state', isActive: 'isActive' },
+          },
+          evaluator: {
+            type: 'ROW_STATUS_AND_FIELDS',
+            config: {
+              rowStatusField: 'eligibility',
+              rowEligibleValues: [true],
+              defaultWhenNoRow: 'ELIGIBLE',
+              rowFormStatusField: 'rowStatus',
+              rowAcceptedFormStatuses: [5, 7],
+            },
+          },
+        };
+        mockCollection('xvifc_unspent_state_form_rows', [
+          { _id: rowId, ulbId: new Types.ObjectId(ulbA), eligibility: true, rowStatus: 7 },
+        ]);
+        const doc = sourceFormJson({
+          formId: 25,
+          type: 'FC_UNSPENT_STATE',
+          claimEligibility: fcUnspentRowConfigWithFormStatus,
+        });
+
+        const { rowEvidenceByUlbId } = await service.evaluateUlbBulk(doc, {
+          stateId,
+          designYearId,
+          expectedUlbIds: [ulbA],
+        });
+
+        expect(rowEvidenceByUlbId?.get(ulbA)).toEqual({
+          bucket: 'ELIGIBLE',
+          rowDocumentId: rowId.toString(),
+          rowStatusAtEvaluation: 7,
+          datasetVersion: null,
+        });
+      });
+
+      it('carries the resolved activeDatasetVersion for a dataset-versioned source (Elected Body)', async () => {
+        const rowId = new Types.ObjectId();
+        // mockCollection's findOne always resolves null (it only wires up find/toArray from
+        // `docs`) — the parent-version lookup goes through findOne, so it needs the manual
+        // byCollection wiring, same as the existing "resolves the parent form's
+        // activeDatasetVersion" test above.
+        byCollection['xvifc_elected_ulb_forms'] = {
+          findOne: jest.fn().mockResolvedValue({ activeDatasetVersion: 4 }),
+          find: jest.fn(),
+        };
+        mockCollection('xvifc_elected_ulb_rows', [
+          { _id: rowId, ulbId: new Types.ObjectId(ulbA), electedBodyStatus: 'Constituted', rowStatus: 5 },
+        ]);
+        const configWithFormStatus: ClaimEligibilityConfig = {
+          ...electedBodyRowConfig,
+          evaluator: {
+            type: 'ROW_STATUS_AND_FIELDS',
+            config: {
+              ...(electedBodyRowConfig.evaluator.config as Record<string, unknown>),
+              rowFormStatusField: 'rowStatus',
+              rowAcceptedFormStatuses: [5, 7],
+            },
+          },
+        };
+        const doc = sourceFormJson({ formId: 23, type: 'ELECTED_BODY', claimEligibility: configWithFormStatus });
+
+        const { rowEvidenceByUlbId } = await service.evaluateUlbBulk(doc, {
+          stateId,
+          designYearId,
+          expectedUlbIds: [ulbA],
+        });
+
+        expect(rowEvidenceByUlbId?.get(ulbA)).toEqual({
+          bucket: 'ELIGIBLE',
+          rowDocumentId: rowId.toString(),
+          rowStatusAtEvaluation: 5,
+          datasetVersion: 4,
+        });
+      });
+
+      it('has no entry for a ULB with no row at all (defaultWhenNoRow applied — nothing to freeze)', async () => {
+        mockCollection('xvifc_elected_ulb_forms', [{ activeDatasetVersion: 1 }]);
+        mockCollection('xvifc_elected_ulb_rows', []);
+        const doc = sourceFormJson({ formId: 23, type: 'ELECTED_BODY', claimEligibility: electedBodyRowConfig });
+
+        const { rowEvidenceByUlbId } = await service.evaluateUlbBulk(doc, {
+          stateId,
+          designYearId,
+          expectedUlbIds: [ulbA],
+        });
+
+        expect(rowEvidenceByUlbId?.has(ulbA)).toBe(false);
+      });
+
+      it('is undefined for the FORM_STATUS-bulk (flat-document, ownerLevel: ULB) path — no row concept there', async () => {
+        mockCollection('xvifc_slb_forms', [{ ulb: new Types.ObjectId(ulbA), currentFormStatus: 3 }]);
+        const doc = sourceFormJson({ formId: 32, type: 'SLB', claimEligibility: slbConfig });
+
+        const result = await service.evaluateUlbBulk(doc, { stateId, designYearId, expectedUlbIds: [ulbA] });
+
+        expect(result.rowEvidenceByUlbId).toBeUndefined();
+      });
+    });
   });
 });

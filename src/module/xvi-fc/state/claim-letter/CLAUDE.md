@@ -41,3 +41,12 @@ touching code that cites it, not just the local comment:
   `helpers/claim-letter-financial.helpers.ts`.
 - The eligibility service's cached `*ForDisplay` methods are for read-only UI paths only — never
   call them from the assembly/mutation pipeline.
+- Each child's `eligibilitySources` is populated with real per-ULB evidence for `FORM_AND_ROW`
+  sources (Elected Body, FC Unspent) — one snapshot per source, built in `prepareChildren` by
+  merging that source's state-level result (`evaluateStateLevelGate`) with this ULB's row evidence
+  (`ClaimLetterUlbLevelEligibility.rowEvidenceByFormId`, from `resolveUlbLevelEligibility`) — no
+  extra query, both are already fetched. The parent's `stateEligibilitySources` stays form-status-only
+  by design (`rowDocumentId`/`rowStatusAtEvaluation` are correctly `null` there — no single row
+  applies to a whole state). `resolveUlbLevelEligibility` in `prepareChildren` is deliberately
+  deferred until after the state gate passes (it's the heaviest of the method's fetches — a bulk
+  find per ULB-bulk-evaluable source — and entirely wasted on a gate failure).

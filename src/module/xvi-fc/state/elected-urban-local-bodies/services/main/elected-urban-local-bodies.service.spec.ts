@@ -278,8 +278,13 @@ const mockEulbFormJsonConfigService = {
   loadFields: jest.fn().mockResolvedValue(MOCK_TYPED_ROW_EDIT_FIELDS),
 };
 
-const mockFormModel = { findOne: jest.fn(), findOneAndUpdate: jest.fn(), create: jest.fn() };
-const mockRowModel = { find: jest.fn() };
+const mockFormModel = {
+  findOne: jest.fn(),
+  findOneAndUpdate: jest.fn(),
+  create: jest.fn(),
+  db: { startSession: jest.fn() },
+};
+const mockRowModel = { find: jest.fn(), updateMany: jest.fn() };
 const mockUlbModel = { find: jest.fn(), countDocuments: jest.fn() };
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -1026,6 +1031,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
 
   describe('finalSubmit', () => {
     let service: ElectedUrbanLocalBodiesService;
+    let mockSession: Record<string, jest.Mock>;
 
     const mockValidator = {
       validateFinalSubmitAndBuildPayload: jest.fn().mockReturnValue({
@@ -1072,6 +1078,15 @@ describe('ElectedUrbanLocalBodiesService', () => {
       mockUlbModel.countDocuments.mockResolvedValue(3); // computed active ULB count
       mockFormModel.findOne.mockReturnValue(q(baseFormDoc));
       mockFormModel.findOneAndUpdate.mockReturnValue(q({ ...baseFormDoc, currentFormStatus: 3 }));
+
+      mockSession = {
+        startTransaction: jest.fn(),
+        commitTransaction: jest.fn().mockResolvedValue(undefined),
+        abortTransaction: jest.fn().mockResolvedValue(undefined),
+        endSession: jest.fn().mockResolvedValue(undefined),
+      };
+      mockFormModel.db.startSession.mockResolvedValue(mockSession);
+      mockRowModel.updateMany.mockReturnValue(q(undefined));
 
       const module: TestingModule = await Test.createTestingModule({
         providers: [
@@ -1232,6 +1247,28 @@ describe('ElectedUrbanLocalBodiesService', () => {
       }
 
       expect(caught).toBeDefined();
+    });
+
+    it('bulk-updates active rows in the current dataset version to rowStatus UNDER_REVIEW_BY_MOHUA, in the same transaction as the parent update', async () => {
+      await service.finalSubmit(baseDto, adminUser, '', '');
+
+      expect(mockFormModel.db.startSession).toHaveBeenCalled();
+      expect(mockRowModel.updateMany).toHaveBeenCalledWith(
+        { form: formOid, datasetVersion: baseFormDoc.activeDatasetVersion, isActive: true },
+        { $set: { rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA } },
+        { session: mockSession },
+      );
+      expect(mockSession.commitTransaction).toHaveBeenCalled();
+    });
+
+    it('aborts the transaction and never commits when the row bulk-update fails', async () => {
+      mockRowModel.updateMany.mockReturnValue({ exec: jest.fn().mockRejectedValue(new Error('row write failed')) });
+
+      await expect(service.finalSubmit(baseDto, adminUser, '', '')).rejects.toThrow('row write failed');
+
+      expect(mockSession.abortTransaction).toHaveBeenCalled();
+      expect(mockSession.commitTransaction).not.toHaveBeenCalled();
+      expect(mockSession.endSession).toHaveBeenCalled();
     });
   });
 });

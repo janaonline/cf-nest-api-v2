@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { AnyBulkWriteOperation, ClientSession, Model, Types } from 'mongoose';
-import type { RowStatusType } from 'src/common/constants/row-status.constants';
+import type { RowReviewStatus } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
 import { FC_UNSPENT_ELIGIBILITY_THRESHOLD_PERCENT } from '../../constants/fc-unspent-declaration.constants';
 import {
   XviFcUnspentStateFormRow,
@@ -36,7 +36,7 @@ type FcUnspentDevolutionRowLean = {
 type FcUnspentExistingRowLean = {
   _id: Types.ObjectId;
   ulbId: Types.ObjectId;
-  rowStatus: RowStatusType | null;
+  rowStatus: RowReviewStatus | null;
 };
 
 /**
@@ -181,7 +181,7 @@ export class FcUnspentDeclarationRowService {
     yearOid: Types.ObjectId,
     resolvedRows: FcUnspentResolvedRow[],
     userOid: Types.ObjectId,
-    targetRowStatus: RowStatusType | undefined,
+    targetRowStatus: RowReviewStatus | undefined,
     session: ClientSession,
   ): Promise<{ transitions: FcUnspentRowStatusTransition[] }> {
     const ulbOids = resolvedRows.map((r) => r.ulbId);

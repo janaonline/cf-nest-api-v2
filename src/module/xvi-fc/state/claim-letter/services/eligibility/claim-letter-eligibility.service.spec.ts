@@ -304,6 +304,40 @@ describe('ClaimLetterEligibilityService', () => {
       expect(result.rowTalliesByFormId.get(23)).toEqual(eulbTally);
     });
 
+    it('captures rowEvidenceByUlbId into rowEvidenceByFormId, keyed by formId (FORM_AND_ROW sources only)', async () => {
+      formJsonService.findEnabledClaimEligibilitySources.mockResolvedValue([ulbOwnedSource(), formAndRowSource()]);
+      const rowEvidence = new Map([
+        [ulbA, { bucket: 'ELIGIBLE' as const, rowDocumentId: 'row-1', rowStatusAtEvaluation: 7, datasetVersion: null }],
+      ]);
+      evaluatorService.evaluateUlbBulk
+        // SLB (ownerLevel: 'ULB') — flat-document source, no rowEvidenceByUlbId at all.
+        .mockResolvedValueOnce({ perUlb: new Map(), tally: { eligible: 0, ineligible: 0, exempted: 0, total: 0 } })
+        // Elected Body (FORM_AND_ROW) — row-collection source, carries rowEvidenceByUlbId.
+        .mockResolvedValueOnce({
+          perUlb: new Map(),
+          tally: { eligible: 1, ineligible: 0, exempted: 0, total: 1 },
+          rowEvidenceByUlbId: rowEvidence,
+        });
+
+      const result = await service.resolveUlbLevelEligibility(stateId, designYearId, 1, [ulbA]);
+
+      expect(result.rowEvidenceByFormId.get(23)).toBe(rowEvidence);
+      // ownerLevel: 'ULB' sources aren't row-collection sources — no entry keyed by their formId.
+      expect(result.rowEvidenceByFormId.has(32)).toBe(false);
+    });
+
+    it('sets an empty rowEvidenceByFormId entry for a FORM_AND_ROW source whose evaluator returned no rowEvidenceByUlbId', async () => {
+      formJsonService.findEnabledClaimEligibilitySources.mockResolvedValue([formAndRowSource()]);
+      evaluatorService.evaluateUlbBulk.mockResolvedValue({
+        perUlb: new Map(),
+        tally: { eligible: 0, ineligible: 0, exempted: 0, total: 0 },
+      });
+
+      const result = await service.resolveUlbLevelEligibility(stateId, designYearId, 1, [ulbA]);
+
+      expect(result.rowEvidenceByFormId.get(23)).toEqual(new Map());
+    });
+
     it('every expected ULB defaults to eligible when there are no qualifying sources at all', async () => {
       formJsonService.findEnabledClaimEligibilitySources.mockResolvedValue([devolutionSource()]); // STATE/FORM only
 
@@ -424,6 +458,35 @@ describe('ClaimLetterEligibilityService', () => {
       const [, ctxArg] = evaluatorService.evaluateUlbBulk.mock.calls[0] as [unknown, { expectedUlbIds: string[] }];
       expect(ctxArg.expectedUlbIds).toEqual([ulbA, ulbB]);
       expect(result.perUlbEligible).toEqual(new Map([[ulbA, true]]));
+    });
+
+    it('never serializes rowEvidenceByFormId into the cache, and returns it empty — no display consumer reads it', async () => {
+      redis.get.mockResolvedValue(null);
+      expectedUlbSetService.resolve.mockResolvedValue([{ ulbId: ulbA, name: 'A', censusCode: null, sbCode: null }]);
+      const formAndRowSource = devolutionSource({
+        formId: 23,
+        type: 'ELECTED_BODY',
+        claimEligibility: {
+          ...devolutionSource().claimEligibility!,
+          ownerLevel: 'STATE',
+          evaluationLevel: 'FORM_AND_ROW',
+        },
+      });
+      formJsonService.findEnabledClaimEligibilitySources.mockResolvedValue([formAndRowSource]);
+      evaluatorService.evaluateUlbBulk.mockResolvedValue({
+        perUlb: new Map([[ulbA, 'ELIGIBLE']]),
+        tally: { eligible: 1, ineligible: 0, exempted: 0, total: 1 },
+        rowEvidenceByUlbId: new Map([
+          [ulbA, { bucket: 'ELIGIBLE' as const, rowDocumentId: 'row-1', rowStatusAtEvaluation: 7, datasetVersion: null }],
+        ]),
+      });
+
+      const result = await service.resolveUlbLevelEligibilityForDisplay(stateId, designYearId, 1, [ulbA]);
+
+      expect(result.rowEvidenceByFormId.size).toBe(0);
+      const [, cachedPayload] = redis.set.mock.calls[0] as [string, string];
+      expect(cachedPayload).not.toContain('rowEvidenceByFormId');
+      expect(cachedPayload).not.toContain('row-1');
     });
   });
 

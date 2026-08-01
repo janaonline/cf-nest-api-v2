@@ -1,6 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
-import { ROW_STATUS, RowStatusType } from 'src/common/constants/row-status.constants';
+import { ROW_REVIEW_STATUS_VALUES } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
+import type { RowReviewStatus } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
 
 export type XviFcUnspentStateFormRowDocument = HydratedDocument<XviFcUnspentStateFormRow>;
 
@@ -64,8 +65,8 @@ export class FcUnspentUlbRowSnapshot {
   @Prop({ type: Boolean, required: true })
   eligibility!: boolean;
 
-  @Prop({ type: String, enum: [...Object.values(ROW_STATUS), null], default: null })
-  rowStatus!: RowStatusType | null;
+  @Prop({ type: Number, enum: [...ROW_REVIEW_STATUS_VALUES, null], default: null })
+  rowStatus!: RowReviewStatus | null;
 
   @Prop({ type: String, default: null })
   rejectionRemark!: string | null;
@@ -80,7 +81,7 @@ export const FcUnspentUlbRowSnapshotSchema = SchemaFactory.createForClass(FcUnsp
  * One current row per (form, ulbId) — upserted, never hard-deleted. `isActive`
  * tracks current dataset membership (omitted-from-latest-draft/submit -> false,
  * re-added -> true again). `rowStatus` tracks the separate MoHUA-review workflow
- * (null pre-submission, ROW_STATUS.UPDATE_PENDING after a state final submit);
+ * (null pre-submission, FORM_STATUS.UNDER_REVIEW_BY_MOHUA after a state final submit);
  * toggling `isActive` never implies a `rowStatus` change.
  */
 @Schema({
@@ -125,13 +126,13 @@ export class XviFcUnspentStateFormRow {
   @Prop({ type: Boolean, required: true })
   eligibility!: boolean;
 
-  @Prop({ type: String, enum: [...Object.values(ROW_STATUS), null], default: null })
-  rowStatus!: RowStatusType | null;
+  @Prop({ type: Number, enum: [...ROW_REVIEW_STATUS_VALUES, null], default: null })
+  rowStatus!: RowReviewStatus | null;
 
   /**
    * MoHUA's reason for rejecting this row. Required (non-empty, trimmed) whenever a
-   * row transitions to `ROW_STATUS.REJECTED`; cleared on approval. A future State-side
-   * row-correction phase will clear it again on resubmission — not implemented yet.
+   * row transitions to `FORM_STATUS.RETURNED_BY_MOHUA`; cleared on approval. A future
+   * State-side row-correction phase will clear it again on resubmission — not implemented yet.
    */
   @Prop({ type: String, default: null })
   rejectionRemark!: string | null;

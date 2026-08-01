@@ -486,6 +486,9 @@ describe('ClaimLetterAssemblyService', () => {
 
     await expect(service.createDraft(baseInput())).rejects.toThrow(BadRequestException);
     expect(batchModel.deleteOne).toHaveBeenCalledWith({ _id: parentId, assemblyStatus: 'BUILDING' }, expect.anything());
+    // Short-circuit: resolveUlbLevelEligibility (the heaviest fetch — a bulk find per
+    // ULB-bulk-evaluable source) must never run once the state gate has already failed.
+    expect(eligibilityService.resolveUlbLevelEligibility).not.toHaveBeenCalled();
   });
 
   it('throws BadRequestException and rolls back when a selected ULB has no Devolution allocation', async () => {
@@ -561,6 +564,108 @@ describe('ClaimLetterAssemblyService', () => {
     expect(devolutionSource['rowDocumentId']).toBeDefined();
     expect(devolutionSource['datasetVersion']).toBe(allocation.datasetVersion);
     expect(devolutionSource['installment']).toBe(1);
+  });
+
+  it('freezes real per-ULB row evidence onto eligibilitySources for a FORM_AND_ROW source, instead of []', async () => {
+    const electedBodyFormJsonId = new Types.ObjectId();
+    const electedBodyFormDocId = new Types.ObjectId();
+    const electedBodyRowId = new Types.ObjectId();
+    const electedBodySource = {
+      formId: 23,
+      formJsonId: electedBodyFormJsonId.toString(),
+      ruleVersion: 1,
+      formType: 'ELECTED_BODY',
+      ownerLevel: 'STATE',
+      evaluationLevel: 'FORM_AND_ROW',
+      formDocumentId: electedBodyFormDocId.toString(),
+      statusAtEvaluation: 7,
+      result: 'PASSED',
+      reasonCode: 'FORM_STATUS_ACCEPTED',
+      evidence: {
+        evidenceVersion: 1,
+        resolvedFormStatus: 7,
+        acceptedFormStatuses: [5, 7],
+        sourceFormDocumentId: electedBodyFormDocId.toString(),
+        evaluatedAt: new Date().toISOString(),
+      },
+    };
+    eligibilityService.evaluateStateLevelGate.mockResolvedValue({ sources: [electedBodySource], passed: true });
+    eligibilityService.resolveUlbLevelEligibility.mockResolvedValue({
+      perUlbEligible: new Map([[ulbAId.toString(), true]]),
+      rowEvidenceByFormId: new Map([
+        [
+          23,
+          new Map([
+            [
+              ulbAId.toString(),
+              { bucket: 'ELIGIBLE', rowDocumentId: electedBodyRowId.toString(), rowStatusAtEvaluation: 7, datasetVersion: 4 },
+            ],
+          ]),
+        ],
+      ]),
+    });
+
+    await service.createDraft(baseInput());
+
+    const [ops] = batchUlbModel.bulkWrite.mock.calls[0] as [
+      Array<{ insertOne: { document: Record<string, unknown> } }>,
+    ];
+    const eligibilitySources = ops[0].insertOne.document['eligibilitySources'] as Record<string, unknown>[];
+
+    expect(eligibilitySources).toHaveLength(1);
+    expect(eligibilitySources[0]).toMatchObject({
+      formId: 23,
+      formDocumentId: electedBodyFormDocId,
+      rowDocumentId: electedBodyRowId,
+      statusAtEvaluation: 7,
+      rowStatusAtEvaluation: 7,
+      datasetVersion: 4,
+      result: 'PASSED',
+      reasonCode: 'ROW_STATUS_ACCEPTED',
+    });
+  });
+
+  it('freezes rowDocumentId: null with reasonCode ROW_DEFAULT_NO_ROW when a ULB has no row evidence for a FORM_AND_ROW source', async () => {
+    const electedBodyFormJsonId = new Types.ObjectId();
+    const electedBodyFormDocId = new Types.ObjectId();
+    const electedBodySource = {
+      formId: 23,
+      formJsonId: electedBodyFormJsonId.toString(),
+      ruleVersion: 1,
+      formType: 'ELECTED_BODY',
+      ownerLevel: 'STATE',
+      evaluationLevel: 'FORM_AND_ROW',
+      formDocumentId: electedBodyFormDocId.toString(),
+      statusAtEvaluation: 7,
+      result: 'PASSED',
+      reasonCode: 'FORM_STATUS_ACCEPTED',
+      evidence: {
+        evidenceVersion: 1,
+        resolvedFormStatus: 7,
+        acceptedFormStatuses: [5, 7],
+        sourceFormDocumentId: electedBodyFormDocId.toString(),
+        evaluatedAt: new Date().toISOString(),
+      },
+    };
+    eligibilityService.evaluateStateLevelGate.mockResolvedValue({ sources: [electedBodySource], passed: true });
+    eligibilityService.resolveUlbLevelEligibility.mockResolvedValue({
+      perUlbEligible: new Map([[ulbAId.toString(), true]]),
+      rowEvidenceByFormId: new Map([[23, new Map()]]), // no entry for ulbA — defaultWhenNoRow applied
+    });
+
+    await service.createDraft(baseInput());
+
+    const [ops] = batchUlbModel.bulkWrite.mock.calls[0] as [
+      Array<{ insertOne: { document: Record<string, unknown> } }>,
+    ];
+    const eligibilitySources = ops[0].insertOne.document['eligibilitySources'] as Record<string, unknown>[];
+
+    expect(eligibilitySources[0]).toMatchObject({
+      rowDocumentId: null,
+      rowStatusAtEvaluation: null,
+      result: 'PASSED',
+      reasonCode: 'ROW_DEFAULT_NO_ROW',
+    });
   });
 
   it('recovers cleanly when a chunk insert fails mid-flight (does not leave the parent READY)', async () => {

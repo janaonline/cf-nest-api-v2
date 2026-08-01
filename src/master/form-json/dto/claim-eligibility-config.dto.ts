@@ -126,8 +126,8 @@ export class ClaimWorkflowActionConfigDto {
   targetFormStatus?: number;
 
   @IsOptional()
-  @IsString()
-  targetRowStatus?: string;
+  @IsInt()
+  targetRowStatus?: number;
 }
 
 export class ClaimEligibilityConfigDto {
@@ -164,8 +164,8 @@ export class ClaimEligibilityConfigDto {
 
   @IsOptional()
   @IsArray()
-  @IsString({ each: true })
-  acceptedRowStatuses?: string[];
+  @IsNumber({}, { each: true })
+  acceptedRowStatuses?: number[];
 
   @IsObject()
   @ValidateNested()

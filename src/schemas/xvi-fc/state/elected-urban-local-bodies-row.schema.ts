@@ -1,5 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
+import { ROW_REVIEW_STATUS_VALUES } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
+import type { RowReviewStatus } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
 
 export type EulbRowDocument = HydratedDocument<ElectedUrbanLocalBodiesRow>;
 
@@ -111,6 +113,16 @@ export class ElectedUrbanLocalBodiesRow {
 
   @Prop({ type: [EulbRowErrorSubdocSchema], default: [] })
   errors!: EulbRowError[];
+
+  /**
+   * Tracks the separate MoHUA-review workflow (null pre-submission — the schema default, set
+   * on every Excel upload/revalidate insert — FORM_STATUS.UNDER_REVIEW_BY_MOHUA after a state
+   * final submit). MoHUA-side row review (transitions to SUBMISSION_ACKNOWLEDGED_BY_MOHUA /
+   * RETURNED_BY_MOHUA) isn't implemented for EULB yet — no MoHUA review module exists for this
+   * form. Distinct from `validationStatus`, which is an Excel-import data-correctness flag.
+   */
+  @Prop({ type: Number, enum: [...ROW_REVIEW_STATUS_VALUES, null], default: null })
+  rowStatus!: RowReviewStatus | null;
 
   @Prop({ type: MongooseSchema.Types.Mixed })
   rawExcelData?: Record<string, unknown>;

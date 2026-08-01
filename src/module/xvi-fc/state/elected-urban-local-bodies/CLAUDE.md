@@ -11,7 +11,9 @@ submitted rows without a full resubmit.
   Swagger decorators rather than inline comments; that's a deliberate, legitimate alternative style
   here, not missing documentation.
 - `services/main/elected-urban-local-bodies.service.ts` — form-level orchestration: get form,
-  template, save draft, final submit.
+  template, save draft, final submit. `finalSubmit` runs inside a Mongo transaction (mirroring the
+  pattern in `fc-unspent-declaration.service.ts`'s `finalSubmit`) because it writes both the parent
+  form and a bulk row-status update in the same call.
 - `services/excel/elected-urban-local-bodies-excel.service.ts` — Excel upload/validate/revalidate.
   Owns the dataset-versioning transaction — see the ADR below before touching it.
 - `services/post-submission-update/elected-urban-local-bodies-post-submission-update.service.ts` —
@@ -27,6 +29,18 @@ submitted rows without a full resubmit.
   version-swap pattern, implemented independently at **two** call sites
   (`validateExcel` and `revalidateExcel`'s re-parse branch) — a fix to one without the other will
   leave them inconsistent.
+
+## Row-level review status (`rowStatus`)
+
+Each `ElectedUrbanLocalBodiesRow` has a `rowStatus` field (`null` pre-submission, set to
+`FORM_STATUS.UNDER_REVIEW_BY_MOHUA` on `finalSubmit` for every active row in the current dataset
+version), mirroring FC Unspent Declaration's row-review pattern — both draw from the shared
+`RowReviewStatus`/`ROW_REVIEW_STATUS_VALUES` in
+`src/module/xvi-fc/common/constants/row-review-status.constants.ts`, a restricted subset of
+`FORM_STATUS`. Unlike FC Unspent, **no MoHUA-side per-row review exists yet for EULB** — there's no
+row approve/reject endpoint, so `rowStatus` only ever reaches `UNDER_REVIEW_BY_MOHUA` today and
+never advances further. The `post-submission-update` correction workflow does not read or write
+`rowStatus`.
 
 ## Outbound dependency: devolution-formula reads this module's status
 
