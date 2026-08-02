@@ -44,6 +44,8 @@ import { DocumentDecisionDto } from './dto/document-decision.dto';
 import { SectionDecisionDto } from './dto/section-decision.dto';
 import { BulkSectionDecisionDto } from './dto/bulk-section-decision.dto';
 import { UlbSubmissionsQueryDto } from './dto/ulb-submissions-query.dto';
+import { ManualReviewDecisionDto } from './dto/manual-review-decision.dto';
+import { ManualReviewQueueQueryDto } from './dto/manual-review-queue-query.dto';
 import type { AnnualAccountOcrJobData } from './dto/annual-account-ocr-job.dto';
 import type { AuthUser } from '../../../auth/auth-user.interface';
 import { Scope, Permission } from '../../../auth/enum/roles-xvi-fc.enum';
@@ -353,6 +355,7 @@ export class AnnualAccountsService implements OnModuleInit {
             'ocrInfo.validationDetails': null,
             'ocrInfo.failedChecks': [],
             'ocrInfo.isManualReviewRequested': false,
+            'ocrInfo.manualReviewRequestedAt': null,
             'queue.bullJobId': null,
             'queue.status': 'waiting',
             'queue.attempts': (historyDoc.queue?.attempts ?? 0) + 1,
@@ -377,6 +380,7 @@ export class AnnualAccountsService implements OnModuleInit {
             [`${historyDoc.section}.documents.$.currentUpload.ocrInfo.validationDetails`]: null,
             [`${historyDoc.section}.documents.$.currentUpload.ocrInfo.failedChecks`]: [],
             [`${historyDoc.section}.documents.$.currentUpload.ocrInfo.isManualReviewRequested`]: false,
+            [`${historyDoc.section}.documents.$.currentUpload.ocrInfo.manualReviewRequestedAt`]: null,
           },
         },
       ),
@@ -606,6 +610,13 @@ export class AnnualAccountsService implements OnModuleInit {
           stateDecision: d.stateDecision
             ? { status: d.stateDecision.status, note: d.stateDecision.note, decidedAt: d.stateDecision.decidedAt }
             : null,
+          manualReviewDecision: d.manualReviewDecision
+            ? {
+                status: d.manualReviewDecision.status,
+                note: d.manualReviewDecision.note,
+                decidedAt: d.manualReviewDecision.decidedAt,
+              }
+            : null,
         })),
       };
     };
@@ -726,14 +737,22 @@ export class AnnualAccountsService implements OnModuleInit {
       throw new BadRequestException('Manual review has already been requested for this document.');
     }
 
+    const requestedAt = new Date();
     await Promise.all([
       this.annualAccountModel.updateOne(
         { _id: new Types.ObjectId(id), [`${section}.documents.docId`]: docId },
-        { $set: { [`${section}.documents.$.currentUpload.ocrInfo.isManualReviewRequested`]: true } },
+        {
+          $set: {
+            [`${section}.documents.$.currentUpload.ocrInfo.isManualReviewRequested`]: true,
+            [`${section}.documents.$.currentUpload.ocrInfo.manualReviewRequestedAt`]: requestedAt,
+            // A fresh request supersedes whatever ADMIN decided last cycle (e.g. after a retry).
+            [`${section}.documents.$.manualReviewDecision`]: null,
+          },
+        },
       ),
       this.uploadHistoryModel.updateOne(
         { uploadId: docSlot.currentUpload.uploadId },
-        { $set: { 'ocrInfo.isManualReviewRequested': true } },
+        { $set: { 'ocrInfo.isManualReviewRequested': true, 'ocrInfo.manualReviewRequestedAt': requestedAt } },
       ),
     ]);
 
@@ -741,6 +760,193 @@ export class AnnualAccountsService implements OnModuleInit {
       `Manual review requested — annualAccountId=${id} section=${section} docId=${docId} by user=${user._id}`,
     );
     return this.getProcessingStatus(id, user);
+  }
+
+  // ─── ADMIN approves/rejects a ULB's manual-review request ────────────────────
+
+  async decideManualReview(
+    id: string,
+    section: 'auditedData' | 'unauditedData',
+    docId: string,
+    dto: ManualReviewDecisionDto,
+    user: AuthUser,
+    ipAddress: string | null = null,
+    userAgent: string | null = null,
+  ) {
+    if (user.scope !== Scope.ADMIN) {
+      throw new ForbiddenException('Only ADMIN users may decide a manual review request');
+    }
+
+    const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
+    if (!doc) throw new NotFoundException('Annual account not found');
+
+    const sectionData = (doc as any)[section];
+    if (!sectionData) throw new NotFoundException('Section not found');
+
+    const docSlot = (sectionData.documents ?? []).find((d: any) => d.docId === docId);
+    if (!docSlot?.currentUpload) throw new NotFoundException('Document not found in this section');
+
+    if (!docSlot.currentUpload.ocrInfo?.isManualReviewRequested) {
+      throw new BadRequestException('No manual review has been requested for this document.');
+    }
+
+    const decision = buildDecisionRecord(dto.decision, dto.note, user, ipAddress, userAgent);
+
+    await this.annualAccountModel.updateOne(
+      { _id: new Types.ObjectId(id), [`${section}.documents.docId`]: docId },
+      {
+        $set: {
+          [`${section}.documents.$.manualReviewDecision`]: decision,
+          ...(dto.decision === 'APPROVED' && { [`${section}.documents.$.processingStatus`]: 'PASSED' }),
+        },
+      },
+    );
+
+    await this.formLogModel.create({
+      annualAccountId: new Types.ObjectId(id),
+      ulb: doc.ulb,
+      designYear: doc.design_year,
+      section,
+      formId: SECTION_FORM_IDS[section],
+      action: dto.decision,
+      toStatus: sectionData.form_status,
+      actorStage: 'ADMIN',
+      userInfo: { userId: new Types.ObjectId(user._id), role: user.role, ipAddress, userAgent },
+      ...(dto.note != null && { note: dto.note }),
+      documents: [
+        buildFormLogDocumentEntry(docId, dto.decision, dto.note ?? null, docSlot.currentUpload.file?.path ?? null),
+      ],
+    });
+
+    this.logger.log(
+      `Manual review ${dto.decision.toLowerCase()} — annualAccountId=${id} section=${section} docId=${docId} by user=${user._id}`,
+    );
+    return this.getProcessingStatus(id, user);
+  }
+
+  // ─── ADMIN's global manual-review queue ──────────────────────────────────────
+
+  async getManualReviewQueue(dto: ManualReviewQueueQueryDto, user: AuthUser) {
+    if (user.scope !== Scope.ADMIN) {
+      throw new ForbiddenException('Only ADMIN users may view the manual-review queue');
+    }
+
+    const page = dto.page ?? 1;
+    const pageSize = dto.pageSize ?? 20;
+
+    const sectionToRows = (section: 'auditedData' | 'unauditedData'): PipelineStage.FacetPipelineStage[] => [
+      // $unwind's default behavior (no preserveNullAndEmptyArrays) already skips documents where
+      // the section itself is null (never started) — no separate null-guard needed beforehand.
+      { $unwind: `$${section}.documents` },
+      {
+        $match: {
+          [`${section}.documents.currentUpload.ocrInfo.isManualReviewRequested`]: true,
+          [`${section}.documents.manualReviewDecision`]: null,
+        },
+      },
+      {
+        $project: {
+          annualAccountId: '$_id',
+          ulbId: '$ulb',
+          state: '$state',
+          section: { $literal: section },
+          year: `$${section}.year`,
+          docId: `$${section}.documents.docId`,
+          uploadId: `$${section}.documents.currentUpload.uploadId`,
+          fileName: `$${section}.documents.currentUpload.file.originalName`,
+          sizeKb: `$${section}.documents.currentUpload.file.sizeKb`,
+          validationStatus: `$${section}.documents.currentUpload.ocrInfo.validationStatus`,
+          validationDetails: `$${section}.documents.currentUpload.ocrInfo.validationDetails`,
+          failedChecks: `$${section}.documents.currentUpload.ocrInfo.failedChecks`,
+          manualReviewRequestedAt: `$${section}.documents.currentUpload.ocrInfo.manualReviewRequestedAt`,
+        },
+      },
+    ];
+
+    const pipeline: PipelineStage[] = [
+      {
+        $facet: {
+          auditedData: sectionToRows('auditedData'),
+          unauditedData: sectionToRows('unauditedData'),
+        },
+      },
+      { $project: { rows: { $concatArrays: ['$auditedData', '$unauditedData'] } } },
+      { $unwind: '$rows' },
+      { $replaceRoot: { newRoot: '$rows' } },
+      {
+        $lookup: {
+          from: 'ulbs',
+          localField: 'ulbId',
+          foreignField: '_id',
+          as: 'ulbDoc',
+        },
+      },
+      { $addFields: { ulbDoc: { $arrayElemAt: ['$ulbDoc', 0] } } },
+      {
+        $lookup: {
+          from: 'states',
+          localField: 'state',
+          foreignField: '_id',
+          as: 'stateDoc',
+        },
+      },
+      { $addFields: { stateDoc: { $arrayElemAt: ['$stateDoc', 0] } } },
+      {
+        $addFields: {
+          ulbName: '$ulbDoc.name',
+          ulbCode: '$ulbDoc.code',
+          stateName: '$stateDoc.name',
+        },
+      },
+      ...(dto.search?.trim()
+        ? [
+            {
+              $match: {
+                $or: [
+                  { ulbName: new RegExp(escapeRegex(dto.search.trim()), 'i') },
+                  { ulbCode: new RegExp(escapeRegex(dto.search.trim()), 'i') },
+                ],
+              },
+            } as PipelineStage,
+          ]
+        : []),
+      { $sort: { manualReviewRequestedAt: 1 } },
+      {
+        $facet: {
+          data: [
+            { $skip: (page - 1) * pageSize },
+            { $limit: pageSize },
+            {
+              $project: {
+                _id: 0,
+                annualAccountId: 1,
+                ulbId: 1,
+                ulbName: 1,
+                ulbCode: 1,
+                stateName: 1,
+                section: 1,
+                year: 1,
+                docId: 1,
+                uploadId: 1,
+                fileName: 1,
+                sizeKb: 1,
+                validationStatus: 1,
+                validationDetails: 1,
+                failedChecks: 1,
+                manualReviewRequestedAt: 1,
+              },
+            },
+          ],
+          totalCount: [{ $count: 'count' }],
+        },
+      },
+    ];
+
+    const [result] = await this.annualAccountModel.aggregate(pipeline).exec();
+    const rows = result?.data ?? [];
+    const total = result?.totalCount?.[0]?.count ?? 0;
+
+    return { total, page, pageSize, rows };
   }
 
   // ─── Submit section to State DMA ─────────────────────────────────────────────
@@ -771,7 +977,7 @@ export class AnnualAccountsService implements OnModuleInit {
     const requiredDocIds = await this.resolveRequiredDocIds(doc.design_year?.toString(), section);
 
     const docsToCheck = requiredDocIds
-      ? sectionData.documents.filter((d: any) => requiredDocIds!.includes(d.docId))
+      ? sectionData.documents.filter((d: any) => requiredDocIds.includes(d.docId))
       : sectionData.documents;
 
     if (!docsToCheck.length) {
@@ -884,12 +1090,7 @@ export class AnnualAccountsService implements OnModuleInit {
    * decisions are provisional until the section is finalized, so undoing one isn't an
    * audit-worthy event on its own.
    */
-  async undoDocumentDecision(
-    id: string,
-    section: 'auditedData' | 'unauditedData',
-    docId: string,
-    user: AuthUser,
-  ) {
+  async undoDocumentDecision(id: string, section: 'auditedData' | 'unauditedData', docId: string, user: AuthUser) {
     const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
     if (!doc) throw new NotFoundException('Annual account not found');
 
@@ -905,7 +1106,9 @@ export class AnnualAccountsService implements OnModuleInit {
       { $set: { [`${section}.documents.$.stateDecision`]: null, updatedAt: new Date() } },
     );
 
-    this.logger.log(`Document decision undone — annualAccountId=${id} section=${section} docId=${docId} by user=${user._id}`);
+    this.logger.log(
+      `Document decision undone — annualAccountId=${id} section=${section} docId=${docId} by user=${user._id}`,
+    );
 
     return this.getProcessingStatus(id, user);
   }
@@ -1251,7 +1454,7 @@ export class AnnualAccountsService implements OnModuleInit {
       .lean()
       .exec();
 
-    return doc!._id.toString();
+    return doc._id.toString();
   }
 
   private async upsertDocumentSlot(

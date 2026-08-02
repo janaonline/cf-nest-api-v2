@@ -13,6 +13,7 @@ import { S3UploadService } from '../../../file/s3-upload.service';
 import { FormJsonService } from '../../../../master/form-json/form-json.service';
 import { ANNUAL_ACCOUNT_PROCESSING_QUEUE } from '../../../../core/constants/queues';
 import type { AuthUser } from '../../../auth/auth-user.interface';
+import type { Request } from 'express';
 
 describe('AnnualAccountsController', () => {
   let controller: AnnualAccountsController;
@@ -123,5 +124,44 @@ describe('AnnualAccountsController', () => {
     await controller.requestManualReview('id-1', 'doc-1', 'auditedData', testUser);
 
     expect(spy).toHaveBeenCalledWith('id-1', 'auditedData', 'doc-1', testUser);
+  });
+
+  const fakeReq = { headers: {}, socket: {} } as unknown as Request;
+
+  it('decideManualReview rejects a section other than auditedData/unauditedData', () => {
+    expect(() =>
+      controller.decideManualReview('id-1', 'doc-1', 'somethingElse', { decision: 'APPROVED' }, testUser, fakeReq),
+    ).toThrow('section must be "auditedData" or "unauditedData"');
+  });
+
+  it('decideManualReview delegates to the service for a valid section', async () => {
+    const spy = jest
+      .spyOn(controller['annualAccountsService'], 'decideManualReview')
+      .mockImplementation(
+        () =>
+          Promise.resolve({ annualAccountId: 'id-1' }) as unknown as ReturnType<
+            AnnualAccountsService['decideManualReview']
+          >,
+      );
+
+    await controller.decideManualReview('id-1', 'doc-1', 'auditedData', { decision: 'APPROVED' }, testUser, fakeReq);
+
+    expect(spy).toHaveBeenCalledWith('id-1', 'auditedData', 'doc-1', { decision: 'APPROVED' }, testUser, null, null);
+  });
+
+  it('getManualReviewQueue delegates to the service', async () => {
+    const spy = jest
+      .spyOn(controller['annualAccountsService'], 'getManualReviewQueue')
+      .mockImplementation(
+        () =>
+          Promise.resolve({ total: 0, page: 1, pageSize: 20, rows: [] }) as unknown as ReturnType<
+            AnnualAccountsService['getManualReviewQueue']
+          >,
+      );
+
+    const dto = { page: 1, pageSize: 20 };
+    await controller.getManualReviewQueue(dto as never, testUser);
+
+    expect(spy).toHaveBeenCalledWith(dto, testUser);
   });
 });
