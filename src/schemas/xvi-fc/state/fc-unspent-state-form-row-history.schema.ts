@@ -13,7 +13,7 @@ export type XviFcUnspentStateFormRowHistoryDocument = HydratedDocument<XviFcUnsp
  * update/delete operations are exposed by the row-history service.
  */
 @Schema({
-  collection: 'xvi_fc_unspent_state_form_row_histories',
+  collection: 'xvifc_unspent_state_form_row_histories',
   timestamps: true,
   versionKey: false,
 })

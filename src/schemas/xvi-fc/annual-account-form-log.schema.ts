@@ -4,7 +4,7 @@ import { AnnualAccountFormStatus, UserInfo, UserInfoSchema } from './annual-acco
 
 export type XviFcAnnualAccountFormLogDocument = HydratedDocument<XviFcAnnualAccountFormLog>;
 
-export type FormLogAction = 'SUBMITTED' | 'APPROVED' | 'RETURNED';
+export type FormLogAction = 'SUBMITTED' | 'APPROVED' | 'RETURNED' | 'UNDO';
 export type FormLogActorStage = 'ULB' | 'STATE' | 'MOHUA' | 'ADMIN';
 
 /**
@@ -74,7 +74,7 @@ export class XviFcAnnualAccountFormLog {
   @Prop({ required: true })
   formId!: number;
 
-  @Prop({ type: String, enum: ['SUBMITTED', 'APPROVED', 'RETURNED'], required: true })
+  @Prop({ type: String, enum: ['SUBMITTED', 'APPROVED', 'RETURNED', 'UNDO'], required: true })
   action!: FormLogAction;
 
   @Prop({ type: String, enum: Object.values(AnnualAccountFormStatus), required: true })

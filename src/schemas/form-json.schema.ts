@@ -1,6 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
 import { FieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
+import { ClaimEligibilityConfig } from 'src/module/xvi-fc/common/types/claim-eligibility.type';
 
 export type FormJsonDocument = FormJson & Document;
 
@@ -27,6 +28,12 @@ export class FormJson {
 
   @Prop({ type: Object })
   meta?: Record<string, unknown>;
+
+  // Loose at the Mongoose level (same treatment as `data`/`meta` above) — real enum/shape
+  // validation happens at the DTO layer (ClaimEligibilityConfigDto), per brain §3.3's
+  // "schema-validated enums, allowlisted actions; never arbitrary JavaScript/operators".
+  @Prop({ type: Object, default: null })
+  claimEligibility?: ClaimEligibilityConfig | null;
 
   @Prop({ type: Boolean, default: true })
   isActive!: boolean;

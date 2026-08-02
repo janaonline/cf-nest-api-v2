@@ -1324,7 +1324,7 @@ curl -H "Authorization: Bearer <token>" \
 **Row data lifecycle**:
 
 - EULB row data is hard-deleted on file removal — no soft-delete, no archive, no history collection.
-- The row collection (`xvi_fc_elected_urban_local_bodies_rows`) holds only the current working dataset at any given time.
+- The row collection (`xvifc_elected_ulb_rows`) holds only the current working dataset at any given time.
 - Rows are scoped by `(form, datasetVersion)`. The form's `activeDatasetVersion` determines which rows are live.
 
 **New Excel upload (safe replace)**:

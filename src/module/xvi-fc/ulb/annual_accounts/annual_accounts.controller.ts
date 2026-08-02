@@ -77,15 +77,6 @@ export class AnnualAccountsController {
     return this.annualAccountsService.getProcessingStatus(id, user);
   }
 
-  @Get(':id/documents/:uploadId/signed-url')
-  getSignedUrl(
-    @Param('id', ParseObjectIdPipe) id: string,
-    @Param('uploadId') uploadId: string,
-    @CurrentUser() user: AuthUser,
-  ) {
-    return this.annualAccountsService.getSignedUrl(id, uploadId, user);
-  }
-
   @Get(':id/logs')
   getFormLogs(
     @Param('id', ParseObjectIdPipe) id: string,
@@ -210,6 +201,22 @@ export class AnnualAccountsController {
   ) {
     const { ipAddress, userAgent } = extractIpAndUserAgent(req);
     return this.annualAccountsService.decideSection(id, dto, user, ipAddress, userAgent);
+  }
+
+  @Post(':id/undo-approval')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'State reviewer undoes their own Approve Section decision (only while status is APPROVED_BY_STATE)' })
+  undoSectionApproval(
+    @Param('id', ParseObjectIdPipe) id: string,
+    @Query('section') section: string,
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    if (section !== 'auditedData' && section !== 'unauditedData') {
+      throw new BadRequestException('section must be "auditedData" or "unauditedData"');
+    }
+    const { ipAddress, userAgent } = extractIpAndUserAgent(req);
+    return this.annualAccountsService.undoSectionApproval(id, section, user, ipAddress, userAgent);
   }
 
   @Post('bulk-decision')

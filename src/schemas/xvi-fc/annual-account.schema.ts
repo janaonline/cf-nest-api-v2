@@ -5,7 +5,9 @@ import { FileInfo, FileInfoSchema } from '../common/file.schema';
 export { FileInfo, FileInfoSchema };
 
 // Mirrors the shared FORM_STATUS lifecycle (src/common/constants/form-status.constants.ts) —
-// state approval hands off to MOHUA, it does not terminate the workflow.
+// state approval now lands on APPROVED_BY_STATE first (STATE may still undo it), then the
+// Generate Claim Letter feature (cross-form, built separately) moves it to AWAITING_CLAIM_LETTER
+// before it finally hands off to MOHUA.
 export enum AnnualAccountFormStatus {
   NOT_STARTED = 'NOT_STARTED',
   IN_PROGRESS = 'IN_PROGRESS',
@@ -14,6 +16,12 @@ export enum AnnualAccountFormStatus {
   UNDER_REVIEW_BY_MOHUA = 'UNDER_REVIEW_BY_MOHUA',
   RETURNED_BY_MOHUA = 'RETURNED_BY_MOHUA',
   SUBMISSION_ACKNOWLEDGED_BY_MOHUA = 'SUBMISSION_ACKNOWLEDGED_BY_MOHUA',
+  APPROVED_BY_STATE = 'APPROVED_BY_STATE',
+  AWAITING_CLAIM_LETTER = 'AWAITING_CLAIM_LETTER',
+  /** Never a live form_status — appears only as a form-log `toStatus` marking an undo event. */
+  UNDO = 'UNDO',
+  /** Reserved — not wired to any transition yet. */
+  ACTION_REQUIRED = 'ACTION_REQUIRED',
 }
 
 export const FORM_STATUS_ID: Record<AnnualAccountFormStatus, number> = {
@@ -24,6 +32,10 @@ export const FORM_STATUS_ID: Record<AnnualAccountFormStatus, number> = {
   [AnnualAccountFormStatus.UNDER_REVIEW_BY_MOHUA]: 5,
   [AnnualAccountFormStatus.RETURNED_BY_MOHUA]: 6,
   [AnnualAccountFormStatus.SUBMISSION_ACKNOWLEDGED_BY_MOHUA]: 7,
+  [AnnualAccountFormStatus.APPROVED_BY_STATE]: 8,
+  [AnnualAccountFormStatus.AWAITING_CLAIM_LETTER]: 9,
+  [AnnualAccountFormStatus.UNDO]: 10,
+  [AnnualAccountFormStatus.ACTION_REQUIRED]: 11,
 };
 
 export type XviFcAnnualAccountDocument = HydratedDocument<XviFcAnnualAccount>;

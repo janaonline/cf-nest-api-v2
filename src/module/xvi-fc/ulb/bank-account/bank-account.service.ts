@@ -9,11 +9,12 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import axios from 'axios';
 import { Model, PipelineStage, Types } from 'mongoose';
-import { S3Service } from 'src/core/s3/s3.service';
+import { FileTokenService } from 'src/core/file-token/file-token.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { AccessLevel, Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
 import { FORM_STATUS, getFormStatusLabel, type FormStatusType } from 'src/common/constants/form-status.constants';
+import { assertValidFormStatusTransition } from 'src/common/utils/form-status-transitions';
 import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import { xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
@@ -25,6 +26,10 @@ import {
 import { toObjectIdString } from 'src/common/utils/objectid.util';
 import { escapeRegex } from 'src/common/utils/regex.util';
 import { resolveStateScopeFilter } from 'src/module/xvi-fc/common/utils/xvi-fc-scope-filter.util';
+import {
+  canStateReviewForm,
+  canStateUndoFormApproval,
+} from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
 import {
   buildDecisionRecord,
   runBulkDecision,
@@ -54,11 +59,14 @@ import {
 export interface BankAccountPermissions {
   canReview: boolean;
   canApprove: boolean;
+  /** True only while the form is Approved by State — the door STATE can still undo through. */
+  canUndoApproval: boolean;
 }
 
 interface BankAccountSubmissionRow {
   ulbId: Types.ObjectId;
   ulbCode: string;
+  censusCode: string;
   ulbName: string;
   formStatus: FormStatusType;
   lastUpdatedAt: Date | null;
@@ -92,8 +100,13 @@ export class BankAccountService {
     private readonly formLogModel: Model<XviFcBankAccountFormLogDocument>,
     @InjectModel(Ulb.name)
     private readonly ulbModel: Model<UlbDocument>,
-    private readonly s3Service: S3Service,
+    private readonly fileTokenService: FileTokenService,
   ) {}
+
+  /** Signs a proof-file S3 key into a short-lived, inline-viewable download URL. */
+  private signProofFileUrl(s3Key: string): string | null {
+    return s3Key ? this.fileTokenService.signFileUrl(s3Key, 'inline') : null;
+  }
 
   async getBankAccount(
     query: GetXviFcBankAccountQueryDto,
@@ -115,27 +128,8 @@ export class BankAccountService {
 
     return xviFcSuccess(
       'Bank account form fetched.',
-      record ? { ...buildSafeBankAccountResponse(record), permissions } : null,
+      record ? { ...buildSafeBankAccountResponse(record, this.signProofFileUrl.bind(this)), permissions } : null,
     );
-  }
-
-  /** Mirrors Annual Accounts' getSignedUrl — generates a presigned S3 GET URL directly, no external service dependency. */
-  async getProofSignedUrl(id: string, user: AuthUser): Promise<XviFcApiResponse<{ url: string }>> {
-    if (!Types.ObjectId.isValid(id)) {
-      throw new BadRequestException('Invalid bank account id.');
-    }
-
-    const record = await this.bankAccountModel.findById(id, 'ulb proofFile').lean().exec();
-    if (!record) throw new NotFoundException('Bank account form not found');
-
-    const ulbId = toObjectIdString(record.ulb);
-    if (!ulbId) throw new NotFoundException('Bank account form not found');
-    await this.assertCanReadBankAccount(user, ulbId);
-
-    if (!record.proofFile?.s3Key) throw new NotFoundException('Proof document not found');
-
-    const url = await this.s3Service.presignGet(record.proofFile.s3Key);
-    return xviFcSuccess('Signed URL fetched.', { url });
   }
 
   /** Mirrors Annual Accounts' buildAnnualAccountPermissions — status-aware capability flags for the STATE reviewer UI. */
@@ -143,11 +137,13 @@ export class BankAccountService {
     // assertCanReadBankAccount already confirmed state-match for STATE scope by the time this runs.
     const hasStateAccess = user.scope === Scope.STATE || user.scope === Scope.ADMIN;
     const perms = getEffectivePermissions(user);
-    const reviewable = status === FORM_STATUS.UNDER_REVIEW_BY_STATE;
+    const reviewable = canStateReviewForm(status);
+    const undoable = canStateUndoFormApproval(status);
 
     return {
       canReview: hasStateAccess && perms.includes(Permission.REVIEW_ULB_SUBMISSIONS) && reviewable,
       canApprove: hasStateAccess && perms.includes(Permission.APPROVE_ULB_SUBMISSIONS) && reviewable,
+      canUndoApproval: hasStateAccess && perms.includes(Permission.APPROVE_ULB_SUBMISSIONS) && undoable,
     };
   }
 
@@ -229,9 +225,14 @@ export class BankAccountService {
       actorStage: 'ULB',
       userInfo: { userId: new Types.ObjectId(user._id), role: user.role, ipAddress, userAgent },
       filePath: proofFileS3Key,
+      ifscCode: record.ifscCode,
+      accountNumberMasked: record.accountNumberMasked,
     });
 
-    return xviFcSuccess('Bank account form submitted.', buildSafeBankAccountResponse(record));
+    return xviFcSuccess(
+      'Bank account form submitted.',
+      buildSafeBankAccountResponse(record, this.signProofFileUrl.bind(this)),
+    );
   }
 
   // ─── STATE review decision ───────────────────────────────────────────────────
@@ -248,8 +249,12 @@ export class BankAccountService {
     if (!record) throw new NotFoundException('Bank account form not found');
     await this.assertCanStateDecideBankAccount(user, record);
 
+    // State approval now lands on APPROVED_BY_STATE first — STATE can still undo it from
+    // there before the (separately-built) Generate Claim Letter feature moves it onward.
     const newStatus =
-      dto.decision === 'APPROVED' ? FORM_STATUS.UNDER_REVIEW_BY_MOHUA : FORM_STATUS.RETURNED_BY_STATE;
+      dto.decision === 'APPROVED' ? FORM_STATUS.APPROVED_BY_STATE : FORM_STATUS.RETURNED_BY_STATE;
+
+    assertValidFormStatusTransition(record.currentFormStatus, newStatus);
 
     const decision = buildDecisionRecord(dto.decision, dto.note, user, ipAddress, userAgent);
 
@@ -280,10 +285,104 @@ export class BankAccountService {
       ...(dto.note != null && { note: dto.note }),
       ...(record.proofFile?.s3Key != null && { filePath: record.proofFile.s3Key }),
       ...(batchId != null && { batchId }),
+      ifscCode: record.ifscCode,
+      accountNumberMasked: record.accountNumberMasked,
     });
 
     this.logger.log(`Bank account ${dto.decision.toLowerCase()} by STATE — id=${id} by user=${user._id}`);
-    return xviFcSuccess('Bank account decision recorded.', buildSafeBankAccountResponse(updated!));
+    return xviFcSuccess(
+      'Bank account decision recorded.',
+      buildSafeBankAccountResponse(updated!, this.signProofFileUrl.bind(this)),
+    );
+  }
+
+  /**
+   * Reverses a STATE-level Approve decision — only legal while the form is exactly
+   * APPROVED_BY_STATE. One atomic write straight back to UNDER_REVIEW_BY_STATE — status
+   * UNDO (10) never actually lives on the main record, it appears only as the `toStatus`
+   * of the first of two form-log entries this writes (UNDO, then UNDER_REVIEW_BY_STATE).
+   */
+  async undoApproval(
+    id: string,
+    user: AuthUser,
+    ipAddress: string | null = null,
+    userAgent: string | null = null,
+  ): Promise<XviFcApiResponse<XviFcBankAccountResponse>> {
+    const record = await this.bankAccountModel.findById(new Types.ObjectId(id)).lean().exec();
+    if (!record) throw new NotFoundException('Bank account form not found');
+    await this.assertCanUndoBankAccountApproval(user, record);
+
+    assertValidFormStatusTransition(record.currentFormStatus, FORM_STATUS.UNDER_REVIEW_BY_STATE);
+
+    const updated = await this.bankAccountModel
+      .findByIdAndUpdate(
+        id,
+        {
+          $set: {
+            currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_STATE,
+            currentFormStatusLabel: getFormStatusLabel(FORM_STATUS.UNDER_REVIEW_BY_STATE),
+            stateDecision: null,
+          },
+        },
+        { new: true },
+      )
+      .lean()
+      .exec();
+
+    const logBase = {
+      bankAccountId: new Types.ObjectId(id),
+      ulb: record.ulb,
+      designYear: record.designYear,
+      action: 'UNDO' as const,
+      actorStage: 'STATE' as const,
+      userInfo: { userId: new Types.ObjectId(user._id), role: user.role, ipAddress, userAgent },
+      ...(record.proofFile?.s3Key != null && { filePath: record.proofFile.s3Key }),
+      ifscCode: record.ifscCode,
+      accountNumberMasked: record.accountNumberMasked,
+    };
+
+    await this.formLogModel.create({
+      ...logBase,
+      toStatus: FORM_STATUS.UNDO,
+      toStatusLabel: getFormStatusLabel(FORM_STATUS.UNDO),
+    });
+    await this.formLogModel.create({
+      ...logBase,
+      toStatus: FORM_STATUS.UNDER_REVIEW_BY_STATE,
+      toStatusLabel: getFormStatusLabel(FORM_STATUS.UNDER_REVIEW_BY_STATE),
+    });
+
+    this.logger.log(`Bank account approval undone by STATE — id=${id} by user=${user._id}`);
+    return xviFcSuccess(
+      'Bank account approval undone.',
+      buildSafeBankAccountResponse(updated!, this.signProofFileUrl.bind(this)),
+    );
+  }
+
+  private async assertCanUndoBankAccountApproval(
+    user: AuthUser,
+    record: { ulb: Types.ObjectId; currentFormStatus: FormStatusType },
+  ): Promise<void> {
+    if (user.scope !== Scope.STATE && user.scope !== Scope.ADMIN) {
+      throw new ForbiddenException('Only STATE or ADMIN users may undo bank account decisions');
+    }
+    if (user.scope === Scope.STATE) {
+      const userStateId = toObjectIdString(user.state);
+      const ulb = await this.ulbModel.findById(record.ulb, 'state').lean().exec();
+      const ulbStateId = toObjectIdString(ulb?.state);
+      if (!userStateId || !ulbStateId || userStateId !== ulbStateId) {
+        throw new ForbiddenException('You can only decide bank account forms within your own state');
+      }
+    }
+    const perms = getEffectivePermissions(user);
+    if (!perms.includes(Permission.APPROVE_ULB_SUBMISSIONS)) {
+      throw new ForbiddenException('You do not have permission to approve ULB submissions');
+    }
+    if (record.currentFormStatus !== FORM_STATUS.APPROVED_BY_STATE) {
+      throw new ForbiddenException(
+        `This form's approval cannot be undone while its status is ${getFormStatusLabel(record.currentFormStatus)}.`,
+      );
+    }
   }
 
   // ─── MoHUA review decision ────────────────────────────────────────────────────
@@ -330,10 +429,15 @@ export class BankAccountService {
       userInfo: { userId: new Types.ObjectId(user._id), role: user.role, ipAddress, userAgent },
       ...(dto.note != null && { note: dto.note }),
       ...(record.proofFile?.s3Key != null && { filePath: record.proofFile.s3Key }),
+      ifscCode: record.ifscCode,
+      accountNumberMasked: record.accountNumberMasked,
     });
 
     this.logger.log(`Bank account ${dto.decision.toLowerCase()} by MoHUA — id=${id} by user=${user._id}`);
-    return xviFcSuccess('Bank account decision recorded.', buildSafeBankAccountResponse(updated!));
+    return xviFcSuccess(
+      'Bank account decision recorded.',
+      buildSafeBankAccountResponse(updated!, this.signProofFileUrl.bind(this)),
+    );
   }
 
   // ─── Form status audit log ────────────────────────────────────────────────────
@@ -364,6 +468,8 @@ export class BankAccountService {
         note: log.note ?? null,
         filePath: log.filePath ?? null,
         batchId: log.batchId ?? null,
+        ifscCode: log.ifscCode ?? null,
+        accountNumberMasked: log.accountNumberMasked ?? null,
         createdAt: (log as unknown as { createdAt: Date }).createdAt,
       })),
     );
@@ -503,6 +609,7 @@ export class BankAccountService {
               _id: 0,
               ulbId: '$_id',
               ulbCode: '$code',
+              censusCode: { $ifNull: ['$censusCode', '$sbCode'] },
               ulbName: '$name',
               formStatus: 1,
               lastUpdatedAt: 1,
@@ -703,7 +810,7 @@ export class BankAccountService {
   }
 
   private toSafeResponse(record: XviFcBankAccountDocument): SafeBankAccountResponse {
-    return buildSafeBankAccountResponse(record);
+    return buildSafeBankAccountResponse(record, this.signProofFileUrl.bind(this));
   }
 
   private assertValidUlbId(ulbId: string): void {
