@@ -129,6 +129,11 @@ export interface ClaimEligibilityConfig {
    *  shown alongside the pass/fail indicator regardless of current result — same wording whether
    *  passing or failing, only the tick/cross changes. */
   displayDescription?: string;
+  /** Compact form of `displayLabel` for column-header-style UIs (e.g. "AFS" for "Audited Financial
+   *  Statement") — today only consumed by the claim letter's Annexure 2 city-conditions table.
+   *  Optional; falls back to `displayLabel` when unset, so an unconfigured source still renders a
+   *  meaningful (if longer) header rather than blank. */
+  shortLabel?: string;
 
   ownerLevel: ClaimEligibilityOwnerLevel;
   evaluationLevel: ClaimEligibilityEvaluationLevel;

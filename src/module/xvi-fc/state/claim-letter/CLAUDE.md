@@ -28,6 +28,10 @@ touching code that cites it, not just the local comment:
   as a transition worth recording.
 - `services/main/claim-letter.service.ts` — read paths + the two parent-only mutations (signed-file
   upload, submit) that don't touch locks/children.
+- `services/document/claim-letter-document.service.ts` — assembles the claim letter document
+  (Covering Letter + Annexure 1 FC Disclosures + Annexure 2 City Conditions) consumed by the
+  frontend's Preview Template dialog and Download Template PDF — read-only, built on top of
+  `ClaimLetterUlbRowsService.getAllUlbRows()` rather than re-querying `ClaimLetterBatchUlb` directly.
 - `helpers/` — pure functions (financial rounding, content hashing, summary mapping). No I/O.
 
 ## Invariants worth knowing before you change adjacent code
@@ -41,6 +45,13 @@ touching code that cites it, not just the local comment:
   `helpers/claim-letter-financial.helpers.ts`.
 - The eligibility service's cached `*ForDisplay` methods are for read-only UI paths only — never
   call them from the assembly/mutation pipeline.
+- Annexure 2's ("City Conditions") criteria columns are never hardcoded — they come from
+  `ClaimLetterUlbLevelEligibility.criteriaColumns` (one entry per currently-enabled ULB-bulk
+  criterion, regardless of pass/fail), itself derived from whatever `formjsons` documents have an
+  enabled `claimEligibility` config. Adding/removing an eligibility criterion is a data change
+  (a formjson doc), never a code change here or in the two frontend renderers — do not reintroduce
+  named `CRITERION_TYPE_*` constants for Annexure 2 (Annexure 1's `eligible` column is the one
+  deliberate exception, since that annexure *is* specifically the FC-disclosure check).
 - Each child's `eligibilitySources` is populated with real per-ULB evidence for `FORM_AND_ROW`
   sources (Elected Body, FC Unspent) — one snapshot per source, built in `prepareChildren` by
   merging that source's state-level result (`evaluateStateLevelGate`) with this ULB's row evidence

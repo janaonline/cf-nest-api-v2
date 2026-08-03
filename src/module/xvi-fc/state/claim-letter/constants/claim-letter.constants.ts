@@ -39,3 +39,8 @@ export const CLAIM_LETTER_STALE_BUILD_THRESHOLD_MINUTES = 30;
  * relationship to how long a draft may sit unsubmitted, which is unbounded by design.
  */
 export const CLAIM_LETTER_EDIT_LOCK_LEASE_MINUTES = 5;
+
+/** Supporting-content action ids on the `signedClaimFile` field — see
+ *  `ClaimLetterService.applySignedFileSupportingContent()` and `ClaimLetterDocumentService`. */
+export const CLAIM_LETTER_ACTION_PREVIEW_TEMPLATE = 'preview-template';
+export const CLAIM_LETTER_ACTION_DOWNLOAD_TEMPLATE = 'download-template';

@@ -281,9 +281,9 @@ describe('ClaimLetterService', () => {
   describe('getClaimContext', () => {
     it('throws ForbiddenException for a STATE user requesting a different state', async () => {
       const otherStateUser: AuthUser = { ...stateUser, state: new Types.ObjectId().toString() };
-      await expect(
-        service.getClaimContext(stateId.toString(), yearId.toString(), 1, otherStateUser),
-      ).rejects.toThrow(ForbiddenException);
+      await expect(service.getClaimContext(stateId.toString(), yearId.toString(), 1, otherStateUser)).rejects.toThrow(
+        ForbiddenException,
+      );
     });
 
     it('throws BadRequestException for installment 2', async () => {
@@ -502,6 +502,65 @@ describe('ClaimLetterService', () => {
         sizeKb: null,
         pageCount: null,
       });
+    });
+
+    it('adds Preview/Download Template actions to signedClaimFile when the batch has ULBs', async () => {
+      const claimLetterId = new Types.ObjectId();
+      const signedFileField = { key: 'signedClaimFile', formFieldType: 'file' };
+      batchModel.findOne.mockReturnValue(
+        q({
+          _id: claimLetterId,
+          state: stateId,
+          year: yearId,
+          installment: 1,
+          batchNumber: 1,
+          version: 1,
+          revision: 0,
+          currentFormStatus: 2,
+          assemblyStatus: 'READY',
+          ulbCount: 5,
+          isAbandoned: false,
+          financialSummary,
+          createdAt: new Date(),
+        }),
+      );
+      formJsonService.findActiveByDesignYearAndFormId.mockResolvedValue({ data: [signedFileField] });
+
+      const result = await service.getDetail(claimLetterId.toString(), stateUser);
+
+      const actions = result.data?.questions?.[0]?.supportingContent?.[0]?.actions ?? [];
+      expect(actions).toEqual([
+        expect.objectContaining({ id: 'preview-template', label: 'Preview Template', visible: true }),
+        expect.objectContaining({ id: 'download-template', label: 'Download Template', visible: true }),
+      ]);
+    });
+
+    it('marks Preview/Download Template actions not visible when the batch has no ULBs', async () => {
+      const claimLetterId = new Types.ObjectId();
+      const signedFileField = { key: 'signedClaimFile', formFieldType: 'file' };
+      batchModel.findOne.mockReturnValue(
+        q({
+          _id: claimLetterId,
+          state: stateId,
+          year: yearId,
+          installment: 1,
+          batchNumber: 1,
+          version: 1,
+          revision: 0,
+          currentFormStatus: 2,
+          assemblyStatus: 'READY',
+          ulbCount: 0,
+          isAbandoned: false,
+          financialSummary,
+          createdAt: new Date(),
+        }),
+      );
+      formJsonService.findActiveByDesignYearAndFormId.mockResolvedValue({ data: [signedFileField] });
+
+      const result = await service.getDetail(claimLetterId.toString(), stateUser);
+
+      const actions = result.data?.questions?.[0]?.supportingContent?.[0]?.actions ?? [];
+      expect(actions.every((a) => a.visible === false)).toBe(true);
     });
 
     it('degrades to an empty questions list (not a 500) when the formjsons entry is not yet seeded', async () => {
@@ -739,10 +798,7 @@ describe('ClaimLetterService', () => {
       expect(session.commitTransaction).toHaveBeenCalled();
 
       const [filter] = batchModel.findOneAndUpdate.mock.calls[0] as [Record<string, unknown>];
-      expect(filter['$or']).toEqual([
-        { editLockToken: null },
-        { editLockAcquiredAt: { $lt: expect.any(Date) } },
-      ]);
+      expect(filter['$or']).toEqual([{ editLockToken: null }, { editLockAcquiredAt: { $lt: expect.any(Date) } }]);
     });
 
     it('treats a concurrent race as idempotent if the doc is already UNDER_REVIEW_BY_MOHUA', async () => {

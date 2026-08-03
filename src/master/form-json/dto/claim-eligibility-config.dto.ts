@@ -145,6 +145,10 @@ export class ClaimEligibilityConfigDto {
   @IsString()
   displayDescription?: string;
 
+  @IsOptional()
+  @IsString()
+  shortLabel?: string;
+
   @IsIn(['STATE', 'ULB'] as ClaimEligibilityOwnerLevel[])
   ownerLevel!: ClaimEligibilityOwnerLevel;
 

@@ -19,6 +19,15 @@ import {
 import { Ulb, UlbSchema } from 'src/schemas/ulb.schema';
 import { State, StateSchema } from 'src/schemas/state.schema';
 import { Year, YearSchema } from 'src/schemas/year.schema';
+import { User, UserSchema } from 'src/schemas/user/user.schema';
+import {
+  XviFcUnspentStateForm,
+  XviFcUnspentStateFormSchema,
+} from 'src/schemas/xvi-fc/state/fc-unspent-state-form.schema';
+import {
+  XviFcUnspentStateFormRow,
+  XviFcUnspentStateFormRowSchema,
+} from 'src/schemas/xvi-fc/state/fc-unspent-state-form-row.schema';
 import { S3Service } from 'src/core/s3/s3.service';
 import { ClaimLetterController } from './claim-letter.controller';
 import { ClaimLetterService } from './services/main/claim-letter.service';
@@ -28,6 +37,7 @@ import { ClaimLetterUlbRowsService } from './services/ulb-rows/claim-letter-ulb-
 import { ClaimLetterAssemblyService } from './services/assembly/claim-letter-assembly.service';
 import { ClaimLetterHistoryService } from './services/history/claim-letter-history.service';
 import { ClaimLetterRecoveryService } from './services/recovery/claim-letter-recovery.service';
+import { ClaimLetterDocumentService } from './services/document/claim-letter-document.service';
 import { FormJsonModule } from 'src/master/form-json/form-json.module';
 
 @Module({
@@ -37,12 +47,16 @@ import { FormJsonModule } from 'src/master/form-json/form-json.module';
       { name: ClaimLetterBatchUlb.name, schema: ClaimLetterBatchUlbSchema },
       { name: ClaimLetterUlbLock.name, schema: ClaimLetterUlbLockSchema },
       { name: ClaimLetterBatchHistory.name, schema: ClaimLetterBatchHistorySchema },
-      // Read-only cross-references — this module never writes to Devolution Formula, Ulb, State, or Year.
+      // Read-only cross-references — this module never writes to Devolution Formula, Ulb, State,
+      // Year, User, or FC Unspent Declaration.
       { name: DevolutionFormulaForm.name, schema: DevolutionFormulaFormSchema },
       { name: DevolutionFormulaRow.name, schema: DevolutionFormulaRowSchema },
       { name: Ulb.name, schema: UlbSchema },
       { name: State.name, schema: StateSchema },
       { name: Year.name, schema: YearSchema },
+      { name: User.name, schema: UserSchema },
+      { name: XviFcUnspentStateForm.name, schema: XviFcUnspentStateFormSchema },
+      { name: XviFcUnspentStateFormRow.name, schema: XviFcUnspentStateFormRowSchema },
     ]),
     XviFcCommonModule,
     FormJsonModule,
@@ -56,6 +70,7 @@ import { FormJsonModule } from 'src/master/form-json/form-json.module';
     ClaimLetterAssemblyService,
     ClaimLetterHistoryService,
     ClaimLetterRecoveryService,
+    ClaimLetterDocumentService,
     S3Service,
   ],
   exports: [ClaimLetterService],

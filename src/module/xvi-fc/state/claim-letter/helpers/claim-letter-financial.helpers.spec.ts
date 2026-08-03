@@ -1,6 +1,7 @@
 import {
   amountsAreEqual,
   buildClaimLetterFileBaseName,
+  buildClaimLetterRefNo,
   computeDifferenceAmount,
   computeDifferencePercentageBasisPoints,
   isClaimedAmountWithinVariance,
@@ -103,5 +104,18 @@ describe('amountsAreEqual', () => {
 describe('buildClaimLetterFileBaseName', () => {
   it('formats as CF_<statecode>_<designyear>_<installment>', () => {
     expect(buildClaimLetterFileBaseName('KA', '2026-27', 1)).toBe('CF_KA_2026-27_1');
+  });
+});
+
+describe('buildClaimLetterRefNo', () => {
+  it('formats as CL/<statecode>/<designyear>/<installment>-<batchnumber>', () => {
+    expect(buildClaimLetterRefNo({ stateCode: 'AP', designYearLabel: '2026-27', installment: 1, batchNumber: 1 })).toBe(
+      'CL/AP/2026-27/1-1',
+    );
+  });
+
+  it('is deterministic for the same inputs', () => {
+    const params = { stateCode: 'KA', designYearLabel: '2028-29', installment: 2 as const, batchNumber: 3 };
+    expect(buildClaimLetterRefNo(params)).toBe(buildClaimLetterRefNo(params));
   });
 });

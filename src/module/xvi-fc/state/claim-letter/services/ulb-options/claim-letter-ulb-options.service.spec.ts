@@ -137,7 +137,15 @@ describe('ClaimLetterUlbOptionsService', () => {
     );
     eligibilityService.resolveUlbLevelEligibilityForDisplay.mockResolvedValue({
       perUlbEligible: new Map([[ulbA.ulbId, false]]),
-      perUlbFailedCriteria: new Map([[ulbA.ulbId, ['Service Level Benchmarks (SLB)', 'Audited Accounts']]]),
+      perUlbFailedCriteria: new Map([
+        [
+          ulbA.ulbId,
+          [
+            { type: 'SLB', label: 'Service Level Benchmarks (SLB)' },
+            { type: 'UPLOAD_CONFIG_AUDITED', label: 'Audited Accounts' },
+          ],
+        ],
+      ]),
     });
 
     const result = await service.getOptions(stateId, yearId, 1, {}, stateUser);

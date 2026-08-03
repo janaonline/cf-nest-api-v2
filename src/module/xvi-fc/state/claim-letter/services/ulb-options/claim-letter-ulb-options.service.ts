@@ -77,7 +77,8 @@ export class ClaimLetterUlbOptionsService {
       else if (!passesUlbLevelCriteria) {
         ineligibleReasonCode = 'ULB_LEVEL_ELIGIBILITY_CRITERIA_NOT_MET';
         const failedCriteria = ulbLevelEligibility.perUlbFailedCriteria.get(ulb.ulbId) ?? [];
-        if (failedCriteria.length) ineligibleReasonDetail = `${failedCriteria.join(', ')} eligibility criteria not met`;
+        if (failedCriteria.length)
+          ineligibleReasonDetail = `${failedCriteria.map((f) => f.label).join(', ')} eligibility criteria not met`;
       }
 
       return {

@@ -138,3 +138,79 @@ export interface ClaimLetterBatchSummary {
    */
   questions?: FieldConfig[];
 }
+
+/** One row of the covering letter's recommended-ULBs table. No per-ULB date field exists on
+ *  `ClaimLetterBatchUlb` (only a shared batch `createdAt`), so this row intentionally carries no
+ *  date — see `ClaimLetterDocumentService`. */
+export interface ClaimLetterDocumentCoveringLetterRow {
+  slNo: number;
+  ulbId: string;
+  ulbName: string;
+  /** Crore-denominated. */
+  claimAmount: number;
+}
+
+/** One row of Annexure 1 (FC Unspent Balance Disclosures). `priorFcUnspentAmount` is the ULB's
+ *  unspent balance from the FC cycle named by `ClaimLetterDocumentData.priorFcCycleLabel` (14th FC
+ *  for design years up to 2026-27, 15th FC thereafter) — 0 when no FC-Unspent declaration is on
+ *  file for the ULB. `claimedAmount` mirrors the covering letter's claim amount for the same ULB
+ *  (labelled "16th FC Allocation" on this annexure, per product decision — not a separate figure). */
+export interface ClaimLetterDocumentAnnexure1Row {
+  slNo: number;
+  ulbId: string;
+  ulbName: string;
+  priorFcUnspentAmount: number;
+  claimedAmount: number;
+  eligible: boolean;
+}
+
+/** One column header for Annexure 2's dynamic criteria table — one per entry in
+ *  `ClaimLetterUlbLevelEligibility.criteriaColumns`, i.e. one per currently-enabled ULB-bulk
+ *  eligibility criterion (never a fixed set — see `ClaimLetterDocumentService`). */
+export interface ClaimLetterDocumentAnnexure2Column {
+  type: string;
+  label: string;
+  shortLabel: string;
+}
+
+/** One ULB's pass/fail against a single Annexure 2 column, paired by `type` with the matching
+ *  entry in `ClaimLetterDocumentData.annexure2Columns`. */
+export interface ClaimLetterDocumentAnnexure2CriterionResult {
+  type: string;
+  met: boolean;
+}
+
+/** One row of Annexure 2 (City-wise Eligibility Conditions) — `criteria` has exactly one entry per
+ *  `ClaimLetterDocumentData.annexure2Columns`, in the same order, for every row. */
+export interface ClaimLetterDocumentAnnexure2Row {
+  slNo: number;
+  ulbId: string;
+  ulbName: string;
+  criteria: ClaimLetterDocumentAnnexure2CriterionResult[];
+}
+
+/** Full content for the claim letter document (Preview Template dialog + Download Template PDF) —
+ *  the live, batch-specific letter a State prints, signs, and re-uploads via `signedClaimFile`. See
+ *  `ClaimLetterDocumentService.getDocumentData()`. */
+export interface ClaimLetterDocumentData {
+  refNo: string;
+  letterDate: string;
+  stateName: string;
+  departmentName: string;
+  designYearLabel: string;
+  installment: ClaimLetterInstallment;
+  batchNumber: ClaimLetterBatchNumber;
+  /** "14th FC" or "15th FC" — see `ClaimLetterDocumentAnnexure1Row.priorFcUnspentAmount`. */
+  priorFcCycleLabel: string;
+  subjectLine: string;
+  introParagraph: string;
+  closingParagraph: string;
+  signatoryName: string;
+  signatoryDesignation: string;
+  coveringLetterRows: ClaimLetterDocumentCoveringLetterRow[];
+  /** Crore-denominated sum of every `coveringLetterRows[].claimAmount`. */
+  totalClaimAmount: number;
+  annexure1Rows: ClaimLetterDocumentAnnexure1Row[];
+  annexure2Columns: ClaimLetterDocumentAnnexure2Column[];
+  annexure2Rows: ClaimLetterDocumentAnnexure2Row[];
+}

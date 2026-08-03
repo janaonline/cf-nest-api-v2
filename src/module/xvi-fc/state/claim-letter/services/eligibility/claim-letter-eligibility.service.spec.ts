@@ -283,9 +283,42 @@ describe('ClaimLetterEligibilityService', () => {
 
       const result = await service.resolveUlbLevelEligibility(stateId, designYearId, 1, [ulbA, ulbB, ulbC]);
 
-      expect(result.perUlbFailedCriteria.get(ulbA)).toEqual(['SLB']);
-      expect(result.perUlbFailedCriteria.get(ulbB)).toEqual(['ELECTED_BODY']);
-      expect(result.perUlbFailedCriteria.get(ulbC)).toEqual(['SLB', 'ELECTED_BODY']);
+      expect(result.perUlbFailedCriteria.get(ulbA)).toEqual([{ type: 'SLB', label: 'SLB', shortLabel: 'SLB' }]);
+      expect(result.perUlbFailedCriteria.get(ulbB)).toEqual([
+        { type: 'ELECTED_BODY', label: 'ELECTED_BODY', shortLabel: 'ELECTED_BODY' },
+      ]);
+      expect(result.perUlbFailedCriteria.get(ulbC)).toEqual([
+        { type: 'SLB', label: 'SLB', shortLabel: 'SLB' },
+        { type: 'ELECTED_BODY', label: 'ELECTED_BODY', shortLabel: 'ELECTED_BODY' },
+      ]);
+    });
+
+    it('populates criteriaColumns with one entry per enabled source regardless of pass/fail, shortLabel falling back to label when unset', async () => {
+      formJsonService.findEnabledClaimEligibilitySources.mockResolvedValue([
+        ulbOwnedSource({
+          claimEligibility: { ...ulbOwnedSource().claimEligibility!, displayLabel: 'SLB', shortLabel: 'SLB' },
+        }),
+        formAndRowSource(), // no displayLabel/shortLabel set at all
+      ]);
+      evaluatorService.evaluateUlbBulk
+        .mockResolvedValueOnce({
+          // Nobody fails SLB in this batch...
+          perUlb: new Map([[ulbA, 'ELIGIBLE']]),
+          tally: { eligible: 1, ineligible: 0, exempted: 0, total: 1 },
+        })
+        .mockResolvedValueOnce({
+          perUlb: new Map([[ulbA, 'INELIGIBLE']]),
+          tally: { eligible: 0, ineligible: 1, exempted: 0, total: 1 },
+        });
+
+      const result = await service.resolveUlbLevelEligibility(stateId, designYearId, 1, [ulbA]);
+
+      // ...yet SLB still appears as a column: criteriaColumns lists every enabled source, not just
+      // the ones somebody actually failed (perUlbFailedCriteria would omit SLB here).
+      expect(result.criteriaColumns).toEqual([
+        { type: 'SLB', label: 'SLB', shortLabel: 'SLB' },
+        { type: 'ELECTED_BODY', label: 'ELECTED_BODY', shortLabel: 'ELECTED_BODY' },
+      ]);
     });
 
     it('routes ownerLevel: ULB sources into standaloneCriteria and FORM_AND_ROW sources into rowTalliesByFormId, keyed by formId', async () => {
@@ -388,7 +421,8 @@ describe('ClaimLetterEligibilityService', () => {
         ],
         standaloneCriteria: [],
         rowTalliesByFormId: [],
-        perUlbFailedCriteria: [[ulbB, ['SLB']]],
+        perUlbFailedCriteria: [[ulbB, [{ type: 'SLB', label: 'SLB', shortLabel: 'SLB' }]]],
+        criteriaColumns: [{ type: 'SLB', label: 'SLB', shortLabel: 'SLB' }],
       };
       redis.get.mockResolvedValue(JSON.stringify(cached));
 
@@ -398,6 +432,8 @@ describe('ClaimLetterEligibilityService', () => {
       expect(result.perUlbFailedCriteria.size).toBe(0);
       expect(expectedUlbSetService.resolve).not.toHaveBeenCalled();
       expect(formJsonService.findEnabledClaimEligibilitySources).not.toHaveBeenCalled();
+      // State-wide, like standaloneCriteria/rowTalliesByFormId — never narrowed to the subset.
+      expect(result.criteriaColumns).toEqual([{ type: 'SLB', label: 'SLB', shortLabel: 'SLB' }]);
     });
 
     it('computes and caches the FULL expected-ULB-set result on a cache miss, then narrows to the caller-requested subset', async () => {
@@ -428,6 +464,12 @@ describe('ClaimLetterEligibilityService', () => {
       // The returned result is narrowed down to just what this caller asked about.
       expect(result.perUlbEligible).toEqual(new Map([[ulbA, true]]));
       expect(redis.set).toHaveBeenCalled();
+      // criteriaColumns is computed and serialized on the miss path too, not just present on a hit.
+      expect(result.criteriaColumns).toEqual([{ type: 'SLB', label: 'SLB', shortLabel: 'SLB' }]);
+      const [, cachedPayload] = redis.set.mock.calls[0] as [string, string];
+      expect((JSON.parse(cachedPayload) as { criteriaColumns: unknown }).criteriaColumns).toEqual([
+        { type: 'SLB', label: 'SLB', shortLabel: 'SLB' },
+      ]);
     });
 
     it('uses the caller-supplied fullExpectedUlbIds on a cache miss instead of re-resolving the full set', async () => {
@@ -446,13 +488,7 @@ describe('ClaimLetterEligibilityService', () => {
         tally: { eligible: 1, ineligible: 1, exempted: 0, total: 2 },
       });
 
-      const result = await service.resolveUlbLevelEligibilityForDisplay(
-        stateId,
-        designYearId,
-        1,
-        [ulbA],
-        [ulbA, ulbB],
-      );
+      const result = await service.resolveUlbLevelEligibilityForDisplay(stateId, designYearId, 1, [ulbA], [ulbA, ulbB]);
 
       expect(expectedUlbSetService.resolve).not.toHaveBeenCalled();
       const [, ctxArg] = evaluatorService.evaluateUlbBulk.mock.calls[0] as [unknown, { expectedUlbIds: string[] }];
@@ -477,7 +513,10 @@ describe('ClaimLetterEligibilityService', () => {
         perUlb: new Map([[ulbA, 'ELIGIBLE']]),
         tally: { eligible: 1, ineligible: 0, exempted: 0, total: 1 },
         rowEvidenceByUlbId: new Map([
-          [ulbA, { bucket: 'ELIGIBLE' as const, rowDocumentId: 'row-1', rowStatusAtEvaluation: 7, datasetVersion: null }],
+          [
+            ulbA,
+            { bucket: 'ELIGIBLE' as const, rowDocumentId: 'row-1', rowStatusAtEvaluation: 7, datasetVersion: null },
+          ],
         ]),
       });
 

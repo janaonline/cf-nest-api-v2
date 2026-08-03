@@ -598,7 +598,12 @@ describe('ClaimLetterAssemblyService', () => {
           new Map([
             [
               ulbAId.toString(),
-              { bucket: 'ELIGIBLE', rowDocumentId: electedBodyRowId.toString(), rowStatusAtEvaluation: 7, datasetVersion: 4 },
+              {
+                bucket: 'ELIGIBLE',
+                rowDocumentId: electedBodyRowId.toString(),
+                rowStatusAtEvaluation: 7,
+                datasetVersion: 4,
+              },
             ],
           ]),
         ],

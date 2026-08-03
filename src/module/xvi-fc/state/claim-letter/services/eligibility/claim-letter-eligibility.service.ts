@@ -69,6 +69,21 @@ export interface UlbCriterionSummary {
   tally: UlbEligibilityTally;
 }
 
+/** One ULB-bulk criterion a ULB failed — `type` is the formjson doc's stable machine key (e.g.
+ *  `UPLOAD_CONFIG_AUDITED`), `label` is its display copy (e.g. "Audited Accounts"). Callers that
+ *  need to test identity (e.g. "did this ULB fail the AFS criterion") should compare `type`, never
+ *  `label` — display copy can change independent of the criterion's identity.
+ *
+ *  Reused (not just for failures — see `ClaimLetterUlbLevelEligibility.criteriaColumns`) as the
+ *  canonical per-source shape wherever a ULB-bulk criterion needs to be identified and labelled,
+ *  regardless of pass/fail. `shortLabel` is always populated (`config.shortLabel ?? label`), unlike
+ *  the config's own optional field, so callers never need their own fallback. */
+export interface ClaimLetterFailedCriterion {
+  type: string;
+  label: string;
+  shortLabel: string;
+}
+
 export interface ClaimLetterUlbLevelEligibility {
   /** Merged verdict across every ULB-bulk-evaluable criterion (SLB, Annual Accounts x2, Elected
    *  Body row, FC Unspent row) — a ULB must be ELIGIBLE or EXEMPTED on every one, not INELIGIBLE
@@ -82,11 +97,21 @@ export interface ClaimLetterUlbLevelEligibility {
    *  keyed by `formId` so the caller can merge each into that line's own `ulbBreakdown` rather
    *  than rendering a second, separate entry for the same requirement. */
   rowTalliesByFormId: Map<number, UlbEligibilityTally>;
-  /** Display labels of every ULB-bulk criterion a ULB was bucketed INELIGIBLE on — e.g. `['Service
-   *  Level Benchmarks (SLB)']` — so callers (the ULB-options picker) can tell the State specifically
-   *  *which* form is blocking a given ULB instead of a single generic reason code. A ULB with no
-   *  entry here (or an empty array) failed no ULB-bulk criterion. */
-  perUlbFailedCriteria: Map<string, string[]>;
+  /** Every ULB-bulk criterion a ULB was bucketed INELIGIBLE on — e.g. `[{type: 'SLB', label:
+   *  'Service Level Benchmarks (SLB)'}]` — so callers (the ULB-options picker) can tell the State
+   *  specifically *which* form is blocking a given ULB instead of a single generic reason code, and
+   *  callers needing identity rather than display copy (e.g. the claim-letter document builder's
+   *  Annexure 2) can test `type` directly against `criteriaColumns` below. A ULB with no entry here
+   *  (or an empty array) failed no ULB-bulk criterion. */
+  perUlbFailedCriteria: Map<string, ClaimLetterFailedCriterion[]>;
+  /** The canonical list of every enabled ULB-bulk criterion for this state/year/installment, one
+   *  entry per source *regardless of pass/fail* — unlike `perUlbFailedCriteria`, which only ever
+   *  lists a criterion where at least one ULB actually failed it. This is what makes a dynamic
+   *  column set (the claim-letter document builder's Annexure 2 city-conditions table) stable and
+   *  complete: it always lists every active criterion, not just whichever ones happened to fail for
+   *  someone in a given batch. A new/removed enabled criterion changes this list with no code
+   *  change on either side. */
+  criteriaColumns: ClaimLetterFailedCriterion[];
   /** Per-ULB row evidence (rowDocumentId, resolved rowStatus/datasetVersion, bucket) for
    *  FORM_AND_ROW criteria, keyed by formId then ulbId — lets `ClaimLetterAssemblyService` build
    *  each child's frozen `eligibilitySources` entry by reusing this same bulk fetch, no re-query.
@@ -210,6 +235,9 @@ export class ClaimLetterEligibilityService {
       standaloneCriteria: full.standaloneCriteria,
       rowTalliesByFormId: full.rowTalliesByFormId,
       perUlbFailedCriteria: new Map([...full.perUlbFailedCriteria].filter(([id]) => subset.has(id))),
+      // State-wide, like standaloneCriteria/rowTalliesByFormId above — the column set doesn't vary
+      // by which ULB subset is being displayed, so it's never narrowed.
+      criteriaColumns: full.criteriaColumns,
       // Display-only path (this method is only called from resolveUlbLevelEligibilityForDisplay) —
       // never populated here, see the field's own docblock.
       rowEvidenceByFormId: new Map(),
@@ -225,6 +253,7 @@ export class ClaimLetterEligibilityService {
       standaloneCriteria: value.standaloneCriteria,
       rowTalliesByFormId: [...value.rowTalliesByFormId.entries()],
       perUlbFailedCriteria: [...value.perUlbFailedCriteria.entries()],
+      criteriaColumns: value.criteriaColumns,
     });
   }
 
@@ -233,13 +262,15 @@ export class ClaimLetterEligibilityService {
       perUlbEligible: [string, boolean][];
       standaloneCriteria: UlbCriterionSummary[];
       rowTalliesByFormId: [number, UlbEligibilityTally][];
-      perUlbFailedCriteria: [string, string[]][];
+      perUlbFailedCriteria: [string, ClaimLetterFailedCriterion[]][];
+      criteriaColumns: ClaimLetterFailedCriterion[];
     };
     return {
       perUlbEligible: new Map(parsed.perUlbEligible),
       standaloneCriteria: parsed.standaloneCriteria,
       rowTalliesByFormId: new Map(parsed.rowTalliesByFormId),
       perUlbFailedCriteria: new Map(parsed.perUlbFailedCriteria),
+      criteriaColumns: parsed.criteriaColumns,
       rowEvidenceByFormId: new Map(),
     };
   }
@@ -299,21 +330,26 @@ export class ClaimLetterEligibilityService {
     );
 
     const perUlbEligible = new Map<string, boolean>(expectedUlbIds.map((id) => [id, true]));
-    const perUlbFailedCriteria = new Map<string, string[]>();
+    const perUlbFailedCriteria = new Map<string, ClaimLetterFailedCriterion[]>();
     const standaloneCriteria: UlbCriterionSummary[] = [];
     const rowTalliesByFormId = new Map<number, UlbEligibilityTally>();
     const rowEvidenceByFormId = new Map<number, Map<string, RowEligibilityEvidence>>();
+    const criteriaColumns: ClaimLetterFailedCriterion[] = [];
 
     for (const { doc, perUlb, tally, rowEvidenceByUlbId } of results) {
       const config = doc.claimEligibility!;
       const label = config.displayLabel ?? doc.type ?? 'Form';
+      const shortLabel = config.shortLabel ?? label;
+      const failedCriterion: ClaimLetterFailedCriterion = { type: doc.type ?? '', label, shortLabel };
+      // One entry per source, regardless of pass/fail — see the field's own docblock.
+      criteriaColumns.push(failedCriterion);
 
       for (const [ulbId, bucket] of perUlb) {
         if (bucket !== 'INELIGIBLE') continue;
         perUlbEligible.set(ulbId, false);
         const failed = perUlbFailedCriteria.get(ulbId);
-        if (failed) failed.push(label);
-        else perUlbFailedCriteria.set(ulbId, [label]);
+        if (failed) failed.push(failedCriterion);
+        else perUlbFailedCriteria.set(ulbId, [failedCriterion]);
       }
 
       if (config.ownerLevel === 'ULB') {
@@ -328,7 +364,14 @@ export class ClaimLetterEligibilityService {
       }
     }
 
-    return { perUlbEligible, standaloneCriteria, rowTalliesByFormId, perUlbFailedCriteria, rowEvidenceByFormId };
+    return {
+      perUlbEligible,
+      standaloneCriteria,
+      rowTalliesByFormId,
+      perUlbFailedCriteria,
+      criteriaColumns,
+      rowEvidenceByFormId,
+    };
   }
 
   /**
