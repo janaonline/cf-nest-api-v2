@@ -72,6 +72,13 @@ import {
 /** formId for each section, per the active upload-config formjson documents (30 = audited, 31 = provisional). */
 const SECTION_FORM_IDS: Record<'auditedData' | 'unauditedData', number> = { auditedData: 30, unauditedData: 31 };
 
+/**
+ * How long a document may sit at PROCESSING before it's treated as stuck (e.g. the worker
+ * died mid-job on a server restart, with nothing left to ever mark it FAILED). Past this
+ * threshold, the ULB gets Retry/Re-upload instead of an infinite spinner.
+ */
+const STALE_PROCESSING_THRESHOLD_MS = 5 * 60 * 1000;
+
 interface UlbSubmissionRow {
   ulbId: Types.ObjectId;
   ulbCode: string;
@@ -335,8 +342,14 @@ export class AnnualAccountsService implements OnModuleInit {
       .exec();
 
     if (!historyDoc) throw new NotFoundException('Upload not found');
-    if (historyDoc.processingStatus !== 'FAILED') {
-      throw new BadRequestException('Only FAILED uploads can be retried');
+
+    const isStalledProcessing =
+      historyDoc.processingStatus === 'PROCESSING' &&
+      !!historyDoc.startedAt &&
+      Date.now() - historyDoc.startedAt.getTime() > STALE_PROCESSING_THRESHOLD_MS;
+
+    if (historyDoc.processingStatus !== 'FAILED' && !isStalledProcessing) {
+      throw new BadRequestException('Only FAILED or stalled uploads can be retried');
     }
 
     const expectedDocType = DOC_TYPE_MAP[historyDoc.docId];
@@ -557,6 +570,31 @@ export class AnnualAccountsService implements OnModuleInit {
 
     const hasStateAccess = await this.hasStateAccessToUlb(user, doc.ulb);
 
+    // Batch-fetch startedAt for every currently-PROCESSING document across both sections, so a
+    // long-stuck upload (e.g. the worker died mid-job on a server restart) can be flagged stale
+    // instead of spinning forever with no way out.
+    const processingUploadIds: string[] = [(doc as any).auditedData, (doc as any).unauditedData]
+      .flatMap((section: any) => section?.documents ?? [])
+      .filter((d: any) => d.processingStatus === 'PROCESSING' && d.currentUpload?.uploadId)
+      .map((d: any) => d.currentUpload.uploadId);
+
+    const startedAtByUploadId = new Map<string, Date>();
+    if (processingUploadIds.length) {
+      const histories = await this.uploadHistoryModel
+        .find({ uploadId: { $in: processingUploadIds } }, 'uploadId startedAt')
+        .lean()
+        .exec();
+      histories.forEach((h) => {
+        if (h.startedAt) startedAtByUploadId.set(h.uploadId, h.startedAt);
+      });
+    }
+
+    const isDocStale = (d: any): boolean => {
+      if (d.processingStatus !== 'PROCESSING' || !d.currentUpload?.uploadId) return false;
+      const startedAt = startedAtByUploadId.get(d.currentUpload.uploadId);
+      return !!startedAt && Date.now() - startedAt.getTime() > STALE_PROCESSING_THRESHOLD_MS;
+    };
+
     const buildSectionStatus = (section: any) => {
       if (!section) {
         const status = AnnualAccountFormStatus.NOT_STARTED;
@@ -594,6 +632,7 @@ export class AnnualAccountsService implements OnModuleInit {
           docId: d.docId,
           uploadStatus: d.uploadStatus,
           processingStatus: d.processingStatus,
+          isStale: isDocStale(d),
           currentUpload: d.currentUpload
             ? {
                 uploadId: d.currentUpload.uploadId,
