@@ -5,7 +5,6 @@ import { readFileSync } from 'fs';
 import { Types } from 'mongoose';
 import { join } from 'path';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
-import { ROW_STATUS } from 'src/common/constants/row-status.constants';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { S3Service } from 'src/core/s3/s3.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
@@ -513,7 +512,7 @@ describe('FcUnspentDeclarationService', () => {
         {
           rowId: new Types.ObjectId(),
           previousStatus: null,
-          currentStatus: ROW_STATUS.UPDATE_PENDING,
+          currentStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
           row: { ...sampleResolvedRow, rowNumber: 1 },
         },
       ];
@@ -533,7 +532,7 @@ describe('FcUnspentDeclarationService', () => {
         yearOid,
         [sampleResolvedRow],
         userOid,
-        ROW_STATUS.UPDATE_PENDING,
+        FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
         mockSession,
       );
       expect(rowService['insertRowHistory']).toHaveBeenCalledWith(

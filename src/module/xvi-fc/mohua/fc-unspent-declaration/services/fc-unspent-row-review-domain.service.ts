@@ -2,7 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { AnyBulkWriteOperation, ClientSession, Model, Types } from 'mongoose';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
-import { ROW_STATUS, RowStatusType } from 'src/common/constants/row-status.constants';
+import type { RowReviewStatus } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
 import {
   FC_UNSPENT_STATE_FORM_TYPE,
   XviFcUnspentStateForm,
@@ -91,7 +91,7 @@ export class FcUnspentRowReviewDomainService {
   }
 
   /** Rows among the given set whose current `rowStatus` isn't `expectedStatus`. */
-  filterNotInStatus(rows: FcUnspentMohuaRowLean[], expectedStatus: RowStatusType): FcUnspentMohuaRowLean[] {
+  filterNotInStatus(rows: FcUnspentMohuaRowLean[], expectedStatus: RowReviewStatus): FcUnspentMohuaRowLean[] {
     return rows.filter((r) => (r.rowStatus ?? null) !== expectedStatus);
   }
 
@@ -158,7 +158,7 @@ export class FcUnspentRowReviewDomainService {
     const query = this.rowModel.countDocuments({
       form: formId,
       isActive: true,
-      rowStatus: { $ne: ROW_STATUS.ACTIVE },
+      rowStatus: { $ne: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA },
     });
     if (session) query.session(session);
     return query.exec();
@@ -169,7 +169,7 @@ export class FcUnspentRowReviewDomainService {
     const rows = await this.rowModel
       .find({ form: formId, isActive: true })
       .select('rowStatus eligibility')
-      .lean<{ rowStatus: RowStatusType | null; eligibility: boolean }[]>()
+      .lean<{ rowStatus: RowReviewStatus | null; eligibility: boolean }[]>()
       .exec();
 
     const summary: FcUnspentMohuaRowSummary = {
@@ -188,16 +188,16 @@ export class FcUnspentRowReviewDomainService {
       else summary.ineligible += 1;
 
       switch (row.rowStatus) {
-        case ROW_STATUS.ACTIVE:
+        case FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA:
           summary.active += 1;
           break;
-        case ROW_STATUS.UPDATE_PENDING:
+        case FORM_STATUS.UNDER_REVIEW_BY_MOHUA:
           summary.updatePending += 1;
           break;
-        case ROW_STATUS.REJECTED:
+        case FORM_STATUS.RETURNED_BY_MOHUA:
           summary.rejected += 1;
           break;
-        case ROW_STATUS.NEEDS_UPDATE:
+        case FORM_STATUS.ACTION_REQUIRED:
           summary.needsUpdate += 1;
           break;
         default:

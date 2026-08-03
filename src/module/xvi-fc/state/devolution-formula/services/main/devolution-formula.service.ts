@@ -119,7 +119,9 @@ export class DevolutionFormulaService {
     installment: number,
     user: AuthUser,
   ): Promise<XviFcApiResponse<DfFormGetResponseData>> {
-    // TODO_NS: reuse existing functions - check what is happening in elected body and sfc.
+    // assertStateAccess-style checks are reimplemented per-service across xvi-fc's state-form
+    // modules (claim-letter alone has 6+ near-identical copies) rather than shared — worth
+    // consolidating into one helper if this becomes a maintenance burden, but out of scope here.
     this.assertStateAccess(user, stateId);
 
     const stateOid = new Types.ObjectId(stateId);
@@ -139,7 +141,9 @@ export class DevolutionFormulaService {
       .exec();
 
     const currentFormStatus = doc?.currentFormStatus ?? FORM_STATUS.NOT_STARTED;
-    // TODO_NS: user common function? see what is happening in elected body and sfc.
+    // buildFormPermissions duplicates logic that likely exists in sibling state-form modules
+    // (elected-urban-local-bodies, sfc-status) — worth checking for a shared helper before this
+    // diverges further, but not resolved here.
     const permissions = this.buildFormPermissions(user, stateId, currentFormStatus);
     const { actors, stateName } = this.xvifcFormActorsService.buildActorsAndStateName(
       doc as unknown as Parameters<typeof this.xvifcFormActorsService.buildActorsAndStateName>[0],
@@ -850,8 +854,9 @@ export class DevolutionFormulaService {
   }
 
   /**
-   * TODO: Unlock when the Claim Batch model is implemented — query for at least one
-   * Installment 1 claim batch acknowledged by MoHUA. Until then Installment 2 stays locked.
+   * TODO: unlock once wired to claim-letter — should query for at least one Installment 1 claim
+   * batch acknowledged by MoHUA (claim-letter's `ClaimLetterBatch` model, which now exists, but
+   * nothing in this module reads it yet). Until then Installment 2 stays locked for every state.
    */
   private isInstallment2Unlocked(): boolean {
     return false;

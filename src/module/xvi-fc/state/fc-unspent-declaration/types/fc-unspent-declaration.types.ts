@@ -3,7 +3,7 @@ import type { HydratedFieldConfig } from 'src/module/xvi-fc/common/dynamic-form-
 import type { FieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
 import type { XvifcFormActor } from 'src/module/xvi-fc/common/types/xvifc-form-actors.type';
 import type { ApplicableFc } from 'src/schemas/xvi-fc/state/fc-unspent-state-form.schema';
-import type { RowStatusType } from 'src/common/constants/row-status.constants';
+import type { RowReviewStatus } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
 
 export interface FcUnspentPermissions {
   canView: boolean;
@@ -78,7 +78,7 @@ export interface FcUnspentUlbOption {
 /**
  * Preserves the exact Devolution Formula row a row's `allocationAmount` was resolved from, so a
  * later Devolution rejection/reconciliation can identify affected rows by exact reference rather
- * than only by state/year (business brain §10.10).
+ * than only by state/year.
  */
 export interface FcUnspentAllocationSourceInput {
   devolutionFormId: Types.ObjectId;
@@ -113,7 +113,7 @@ export interface FcUnspentActiveRowLean {
   unspentAmount: number;
   allocationPerc: number;
   eligibility: boolean;
-  rowStatus: RowStatusType | null;
+  rowStatus: RowReviewStatus | null;
   /**
    * `applyRows` explicitly stamps `null` on every newly-inserted row (bulkWrite upserts
    * don't reliably apply Mongoose schema defaults on insert) — still read this as
@@ -126,7 +126,7 @@ export interface FcUnspentActiveRowLean {
 /** One row whose rowStatus actually changed during applyRows — the input to row-history insertion. */
 export interface FcUnspentRowStatusTransition {
   rowId: Types.ObjectId;
-  previousStatus: RowStatusType | null;
-  currentStatus: RowStatusType;
+  previousStatus: RowReviewStatus | null;
+  currentStatus: RowReviewStatus;
   row: FcUnspentResolvedRow & { rowNumber: number };
 }

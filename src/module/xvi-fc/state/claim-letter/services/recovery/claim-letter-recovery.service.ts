@@ -46,7 +46,8 @@ export interface ClaimLetterReconciliationReport {
 }
 
 /**
- * Plan §7.9 — `cleanupStaleBuilds` also runs on its own schedule (`runScheduledStaleBuildCleanup`
+ * See docs/adr/0002-batching-and-locks.md for the stale-`BUILDING`-row recovery design this
+ * implements. `cleanupStaleBuilds` also runs on its own schedule (`runScheduledStaleBuildCleanup`
  * below), and remains directly callable (script/admin endpoint) too — same method either way, no
  * controller route in V1. Two distinct responsibilities kept separate on purpose:
  * `cleanupStaleBuilds` is the only *automatic* remediation (deletes genuinely stale BUILDING
@@ -141,7 +142,7 @@ export class ClaimLetterRecoveryService {
   }
 
   /** Never touches ACKNOWLEDGED locks or READY/submitted claims — scoped to exactly one
-   *  BUILDING parent and the locks owned by its own buildRequestId (plan §7.9). Delete body is
+   *  BUILDING parent and the locks owned by its own buildRequestId. Delete body is
    *  shared with ClaimLetterAssemblyService's inline reclaim-on-conflict path — see
    *  deleteBuildingParentArtifacts's own doc comment. */
   private async cleanupOneStaleBuild(parentId: Types.ObjectId, buildRequestId: string): Promise<void> {

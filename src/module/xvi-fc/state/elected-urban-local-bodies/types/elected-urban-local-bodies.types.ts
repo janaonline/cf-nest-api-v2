@@ -5,7 +5,6 @@ import type { FieldConfig, HydratedFieldConfig } from 'src/module/xvi-fc/common/
 import type { EulbValidationStatus } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
 import type {
   EulbRowSource,
-  EulbRowType,
   EulbRowValidationStatus,
 } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
 import type { XvifcFormActor } from 'src/module/xvi-fc/common/types/xvifc-form-actors.type';
@@ -38,7 +37,6 @@ export interface EulbFormGetResponseData {
   currentFormStatusLabel: string;
   questions: HydratedFieldConfig[];
   rowEditFields: FieldConfig[];
-  extraUlbEditFields: FieldConfig[];
   permissions: EulbFormPermissions;
   actors: XvifcFormActor[];
   validationSummary: EulbValidationSummary;
@@ -91,7 +89,6 @@ export interface EulbDumpRowRecord {
   dateOfConstitution?: Date | string | null;
   dateOfExpiry?: Date | string | null;
   remarks?: string | null;
-  rowType: EulbRowType;
   validationStatus: EulbRowValidationStatus;
   lastUpdatedSource: EulbRowSource;
   datasetVersion: number;
@@ -109,7 +106,6 @@ export interface EulbDumpRow {
   dateOfConstitution: string;
   dateOfExpiry: string;
   remarks: string;
-  rowType: string;
   validationStatus: string;
   latestDataSource: string;
   datasetVersion: number;
@@ -156,7 +152,6 @@ export interface EulbPostSubmissionUpdateRow {
   dateOfConstitution: string | null;
   dateOfExpiry: string | null;
   remarks: string | null;
-  rowType: string;
   validationStatus: string;
   errors: Array<{
     field?: string;

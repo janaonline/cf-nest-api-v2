@@ -7,7 +7,6 @@ import { Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
 import { FORM_STATUS, getFormStatusLabel } from 'src/common/constants/form-status.constants';
 import { toObjectIdString } from 'src/common/utils/objectid.util';
-import { ROW_STATUS } from 'src/common/constants/row-status.constants';
 import {
   assertCanStateEditForm,
   assertCanStateFinalSubmitForm,
@@ -487,7 +486,7 @@ export class FcUnspentDeclarationService {
           yearOid,
           resolvedRows,
           userOid,
-          ROW_STATUS.UPDATE_PENDING,
+          FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
           session,
         );
         await this.rowService.insertRowHistory(
@@ -654,6 +653,8 @@ export class FcUnspentDeclarationService {
    * derives the dependency block + permission gates. Called identically by GET,
    * save-draft, and final-submit so the three never diverge.
    */
+  // Reads devolution-formula's activeDatasetVersion invariant from outside that module — see
+  // devolution-formula/docs/adr/0001-dataset-versioning.md before changing either side of this.
   private async resolveDevolutionDependency(
     stateOid: Types.ObjectId,
     yearOid: Types.ObjectId,

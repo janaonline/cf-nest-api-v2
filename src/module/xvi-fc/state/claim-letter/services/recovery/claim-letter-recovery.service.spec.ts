@@ -168,7 +168,10 @@ describe('ClaimLetterRecoveryService', () => {
       batchModel.find.mockReturnValue(q([{ _id: staleId, buildRequestId: 'req-1' }]));
 
       await expect(service.runScheduledStaleBuildCleanup()).resolves.toBeUndefined();
-      expect(batchModel.deleteOne).toHaveBeenCalledWith({ _id: staleId, assemblyStatus: 'BUILDING' }, expect.anything());
+      expect(batchModel.deleteOne).toHaveBeenCalledWith(
+        { _id: staleId, assemblyStatus: 'BUILDING' },
+        expect.anything(),
+      );
     });
 
     it('swallows errors from cleanupStaleBuilds instead of letting them escape the cron tick', async () => {

@@ -48,6 +48,9 @@ export class FcUnspentUlbOptionsService {
    * Allocation source: the active Installment-1 Devolution Formula dataset, only
    * while that form is UNDER_REVIEW_BY_MOHUA. Returns an empty page (not an error)
    * when no such Devolution form exists yet, so the dropdown never hard-fails.
+   *
+   * Scopes the aggregation by devolution-formula's activeDatasetVersion from outside that module —
+   * see devolution-formula/docs/adr/0001-dataset-versioning.md.
    */
   async getOptions(
     stateId: string,

@@ -12,6 +12,7 @@ import { ClaimLetterService } from './services/main/claim-letter.service';
 import { ClaimLetterUlbOptionsService } from './services/ulb-options/claim-letter-ulb-options.service';
 import { ClaimLetterUlbRowsService } from './services/ulb-rows/claim-letter-ulb-rows.service';
 import { ClaimLetterAssemblyService } from './services/assembly/claim-letter-assembly.service';
+import { ClaimLetterDocumentService } from './services/document/claim-letter-document.service';
 import { GetClaimLetterUlbOptionsQueryDto } from './dto/get-claim-letter-ulb-options-query.dto';
 import { GetClaimLetterUlbRowsQueryDto } from './dto/get-claim-letter-ulb-rows-query.dto';
 import { GetClaimLetterHistoryQueryDto } from './dto/get-claim-letter-history-query.dto';
@@ -27,6 +28,7 @@ export class ClaimLetterController {
     private readonly ulbOptionsService: ClaimLetterUlbOptionsService,
     private readonly ulbRowsService: ClaimLetterUlbRowsService,
     private readonly assemblyService: ClaimLetterAssemblyService,
+    private readonly documentService: ClaimLetterDocumentService,
   ) {}
 
   @ApiOperation({ summary: 'Get claim eligibility summary (state-level gate, expected ULBs, batch-slot usage)' })
@@ -187,6 +189,17 @@ export class ClaimLetterController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.ulbRowsService.getUlbs(claimLetterId, query, user);
+  }
+
+  @ApiOperation({
+    summary:
+      'Get the claim letter document (covering letter + Annexure 1 FC Disclosures + Annexure 2 City Conditions) for Preview Template / Download Template',
+  })
+  @Get(':claimLetterId/document')
+  @UseGuards(PermissionGuard)
+  @RequirePermissions(Permission.VIEW_STATE_FORMS)
+  getDocument(@Param('claimLetterId', ParseObjectIdPipe) claimLetterId: string, @CurrentUser() user: AuthUser) {
+    return this.documentService.getDocumentData(claimLetterId, user);
   }
 
   // ─── Private helpers ─────────────────────────────────────────────────────

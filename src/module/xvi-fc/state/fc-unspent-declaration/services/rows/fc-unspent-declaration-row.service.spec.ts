@@ -6,7 +6,7 @@ import { XviFcUnspentStateFormRow } from 'src/schemas/xvi-fc/state/fc-unspent-st
 import { XviFcUnspentStateFormRowHistory } from 'src/schemas/xvi-fc/state/fc-unspent-state-form-row-history.schema';
 import { DevolutionFormulaRow } from 'src/schemas/xvi-fc/state/devolution-formula-row.schema';
 import { Ulb } from 'src/schemas/ulb.schema';
-import { ROW_STATUS } from 'src/common/constants/row-status.constants';
+import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import type { FcUnspentDevolutionFormLean, FcUnspentResolvedRow } from '../../types/fc-unspent-declaration.types';
 
 /** Creates a chainable Mongoose Query-like mock that resolves to `value`. */
@@ -342,11 +342,11 @@ describe('FcUnspentDeclarationRowService', () => {
         yearOid,
         [resolvedRow],
         userOid,
-        ROW_STATUS.UPDATE_PENDING,
+        FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
         mockSession,
       );
       const ops = getBulkOps(rowModel['bulkWrite']);
-      expect(ops[0].updateOne.update.$set.rowStatus).toBe(ROW_STATUS.UPDATE_PENDING);
+      expect(ops[0].updateOne.update.$set.rowStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
     });
 
     it('still explicitly stamps rejectionRemark:null in $setOnInsert for a brand-new row inserted at final submit', async () => {
@@ -356,7 +356,7 @@ describe('FcUnspentDeclarationRowService', () => {
         yearOid,
         [resolvedRow],
         userOid,
-        ROW_STATUS.UPDATE_PENDING,
+        FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
         mockSession,
       );
       const ops = getBulkOps(rowModel['bulkWrite']);
@@ -372,7 +372,7 @@ describe('FcUnspentDeclarationRowService', () => {
         yearOid,
         [resolvedRow, rowB],
         userOid,
-        ROW_STATUS.UPDATE_PENDING,
+        FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
         mockSession,
       );
       const ops = getBulkOps(rowModel['bulkWrite']);
@@ -391,7 +391,7 @@ describe('FcUnspentDeclarationRowService', () => {
         yearOid,
         [resolvedRow],
         userOid,
-        ROW_STATUS.UPDATE_PENDING,
+        FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
         mockSession,
       );
 
@@ -399,7 +399,7 @@ describe('FcUnspentDeclarationRowService', () => {
       expect(transitions[0]).toMatchObject({
         rowId: newRowId,
         previousStatus: null,
-        currentStatus: ROW_STATUS.UPDATE_PENDING,
+        currentStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
       });
     });
 
@@ -413,7 +413,7 @@ describe('FcUnspentDeclarationRowService', () => {
         yearOid,
         [resolvedRow],
         userOid,
-        ROW_STATUS.UPDATE_PENDING,
+        FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
         mockSession,
       );
 
@@ -426,7 +426,7 @@ describe('FcUnspentDeclarationRowService', () => {
       const existingRowId = new Types.ObjectId();
       rowModel['find'] = jest
         .fn()
-        .mockReturnValue(q([{ _id: existingRowId, ulbId: ulbOid1, rowStatus: ROW_STATUS.UPDATE_PENDING }]));
+        .mockReturnValue(q([{ _id: existingRowId, ulbId: ulbOid1, rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }]));
 
       const { transitions } = await service.applyRows(
         formOid,
@@ -434,7 +434,7 @@ describe('FcUnspentDeclarationRowService', () => {
         yearOid,
         [resolvedRow],
         userOid,
-        ROW_STATUS.UPDATE_PENDING,
+        FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
         mockSession,
       );
 
@@ -467,7 +467,7 @@ describe('FcUnspentDeclarationRowService', () => {
           {
             rowId,
             previousStatus: null,
-            currentStatus: ROW_STATUS.UPDATE_PENDING,
+            currentStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
             row: {
               ulbId: ulbOid1,
               censusCode: '111',
@@ -493,7 +493,7 @@ describe('FcUnspentDeclarationRowService', () => {
         row: rowId,
         form: formOid,
         previousStatus: null,
-        currentStatus: ROW_STATUS.UPDATE_PENDING,
+        currentStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
         snapshot: { rowNumber: 1, ulbId: ulbOid1, allocationAmount: 100, allocationSource: sampleAllocationSource },
         ipAddress: '127.0.0.1',
         userAgent: 'jest-agent',

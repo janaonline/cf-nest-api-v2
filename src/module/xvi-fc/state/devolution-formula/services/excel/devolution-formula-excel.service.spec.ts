@@ -1070,6 +1070,19 @@ describe('DevolutionFormulaExcelService — validateExcel new/extra ULB detectio
     expect(updateCallArg.$set.newUlbCount).toBe(1);
   });
 
+  it('snapshots the unregistered row into excludedRows so getErrorSheet can still surface it', async () => {
+    const buffer = makeXlsxBuffer([['ZZZZ', 'New Town', 500_000, 300_000, 200_000, 'population']]);
+    await expectRejection(buffer);
+
+    const updateCallArg = (mockFormModel.findOneAndUpdate.mock.calls as unknown[][])[0][1] as {
+      $set: { excludedRows: Array<{ censusCode: string; ulbName: string; errors: Array<{ code: string }> }> };
+    };
+    expect(updateCallArg.$set.excludedRows).toHaveLength(1);
+    expect(updateCallArg.$set.excludedRows[0].censusCode).toBe('ZZZZ');
+    expect(updateCallArg.$set.excludedRows[0].ulbName).toBe('New Town');
+    expect(updateCallArg.$set.excludedRows[0].errors.some((e) => e.code === 'unknownUlb')).toBe(true);
+  });
+
   it('does not include any register-link or supporting-content payload in the validateExcel response itself', async () => {
     const buffer = makeXlsxBuffer([['ZZZZ', 'New Town', 500_000, 300_000, 200_000, 'population']]);
     const caught = await expectRejection(buffer);
@@ -1111,6 +1124,12 @@ describe('DevolutionFormulaExcelService — validateExcel new/extra ULB detectio
     );
 
     expect(result.data?.summary.newUlbCount).toBe(0);
+
+    // Clean upload replaces any prior excludedRows snapshot with an empty one.
+    const updateCallArg = (mockFormModel.findOneAndUpdate.mock.calls as unknown[][])[0][1] as {
+      $set: { excludedRows: unknown[] };
+    };
+    expect(updateCallArg.$set.excludedRows).toEqual([]);
   });
 
   it('resets persisted newUlbCount to 0 on a clean re-upload after a previous invalid upload had added new ULBs', async () => {

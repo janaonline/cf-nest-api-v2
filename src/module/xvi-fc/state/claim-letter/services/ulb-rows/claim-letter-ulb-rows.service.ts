@@ -15,11 +15,31 @@ import {
   CLAIM_LETTER_PAGINATION_DEFAULT_LIMIT,
   CLAIM_LETTER_PAGINATION_DEFAULT_PAGE,
 } from '../../constants/claim-letter.constants';
-import { ClaimLetterEligibilityService } from '../eligibility/claim-letter-eligibility.service';
+import {
+  ClaimLetterEligibilityService,
+  ClaimLetterUlbLevelEligibility,
+} from '../eligibility/claim-letter-eligibility.service';
 import type { GetClaimLetterUlbRowsQueryDto } from '../../dto/get-claim-letter-ulb-rows-query.dto';
 import type { ClaimLetterUlbRow } from '../../types/claim-letter.types';
 
-/** Selected-ULBs table for a claim (plan §6.2) — mirrors the FC Unspent Yes-branch table shape. */
+interface ClaimLetterBatchParent {
+  _id: Types.ObjectId;
+  state: Types.ObjectId;
+  year: Types.ObjectId;
+  installment: 1 | 2;
+  batchNumber: number;
+  ulbCount: number;
+}
+
+interface ClaimLetterBatchUlbRaw {
+  ulbId: Types.ObjectId;
+  ulbSnapshot: { name: string; censusCode: string | null; sbCode: string | null };
+  allocatedAmount: number;
+  claimedAmount: number;
+  differencePercentageBasisPoints: number;
+}
+
+/** Selected-ULBs table for a claim — mirrors the FC Unspent Yes-branch table shape. */
 @Injectable()
 export class ClaimLetterUlbRowsService {
   constructor(
@@ -35,55 +55,87 @@ export class ClaimLetterUlbRowsService {
     query: GetClaimLetterUlbRowsQueryDto,
     user: AuthUser,
   ): Promise<XviFcApiResponse<ClaimLetterUlbRow[]>> {
+    const parent = await this.loadParentWithAccess(claimLetterId, user);
+    const filter = this.buildSearchFilter(parent._id, query.search);
+
+    const page = query.page ?? CLAIM_LETTER_PAGINATION_DEFAULT_PAGE;
+    const limit = query.limit ?? CLAIM_LETTER_PAGINATION_DEFAULT_LIMIT;
+
+    const { rows, total } = await this.fetchRowsWithEligibility(parent, filter, { skip: (page - 1) * limit, limit });
+
+    return xviFcSuccess('Claim letter ULBs fetched.', rows, { page, limit, total });
+  }
+
+  /**
+   * Unpaginated sibling of `getUlbs()` for callers that need every ULB in the batch at once (e.g.
+   * `ClaimLetterDocumentService` — a letter must list every recommended ULB, not one UI page of
+   * them). Deliberately bypasses `CLAIM_LETTER_PAGINATION_MAX_LIMIT`, which exists to bound HTTP
+   * query params, not internal service-to-service calls. Also returns the resolved
+   * `ulbLevelEligibility` (not just the merged `eligible` flag baked into each row) so callers that
+   * need per-criterion detail — e.g. Annexure 2's AFS/Provisional/FC-Disclosure/Elected-Body
+   * checkmarks — don't have to re-resolve it a second time.
+   */
+  async getAllUlbRows(
+    claimLetterId: string,
+    user: AuthUser,
+  ): Promise<{
+    parent: ClaimLetterBatchParent;
+    rows: ClaimLetterUlbRow[];
+    ulbLevelEligibility: ClaimLetterUlbLevelEligibility;
+  }> {
+    const parent = await this.loadParentWithAccess(claimLetterId, user);
+    const filter = this.buildSearchFilter(parent._id);
+
+    const { rows, ulbLevelEligibility } = await this.fetchRowsWithEligibility(parent, filter);
+
+    return { parent, rows, ulbLevelEligibility };
+  }
+
+  private async loadParentWithAccess(claimLetterId: string, user: AuthUser): Promise<ClaimLetterBatchParent> {
     const parent = await this.batchModel
       .findOne({ _id: claimLetterId, assemblyStatus: 'READY' })
-      .select('state year installment')
-      .lean<{
-        _id: Types.ObjectId;
-        state: Types.ObjectId;
-        year: Types.ObjectId;
-        installment: 1 | 2;
-      }>()
+      .select('state year installment batchNumber ulbCount')
+      .lean<ClaimLetterBatchParent>()
       .exec();
     if (!parent) throw new NotFoundException(`Claim letter ${claimLetterId} not found`);
 
     this.assertStateAccess(user, String(parent.state));
+    return parent;
+  }
 
-    const filter: FilterQuery<ClaimLetterBatchUlbDocument> = { claimLetter: parent._id };
-    if (query.search) {
-      const regex = new RegExp(this.escapeRegExp(query.search), 'i');
+  private buildSearchFilter(claimLetterId: Types.ObjectId, search?: string): FilterQuery<ClaimLetterBatchUlbDocument> {
+    const filter: FilterQuery<ClaimLetterBatchUlbDocument> = { claimLetter: claimLetterId };
+    if (search) {
+      const regex = new RegExp(this.escapeRegExp(search), 'i');
       filter.$or = [
         { 'ulbSnapshot.name': regex },
         { 'ulbSnapshot.censusCode': regex },
         { 'ulbSnapshot.sbCode': regex },
       ];
     }
+    return filter;
+  }
 
-    const page = query.page ?? CLAIM_LETTER_PAGINATION_DEFAULT_PAGE;
-    const limit = query.limit ?? CLAIM_LETTER_PAGINATION_DEFAULT_LIMIT;
+  /**
+   * Shared by `getUlbs()` (paginated) and `getAllUlbRows()` (unpaginated, `pagination` omitted) —
+   * fetches the batch's ULB rows plus the state gate and per-ULB criteria, re-verified at read
+   * time rather than trusted from the frozen snapshot alone (a ULB's Devolution/eligibility status
+   * may have changed after being added but before final submit). This is a display-only read (the
+   * `eligible` flag only drives a client-side warning badge — actual save/submit authorization is
+   * independently, always-freshly re-verified server-side in ClaimLetterAssemblyService), so the
+   * cached `*ForDisplay` variants are safe here.
+   */
+  private async fetchRowsWithEligibility(
+    parent: Pick<ClaimLetterBatchParent, 'state' | 'year' | 'installment'>,
+    filter: FilterQuery<ClaimLetterBatchUlbDocument>,
+    pagination?: { skip: number; limit: number },
+  ): Promise<{ rows: ClaimLetterUlbRow[]; total: number; ulbLevelEligibility: ClaimLetterUlbLevelEligibility }> {
+    let rowsQuery = this.batchUlbModel.find(filter).sort({ 'ulbSnapshot.name': 1 });
+    if (pagination) rowsQuery = rowsQuery.skip(pagination.skip).limit(pagination.limit);
 
-    const [rows, total, gate] = await Promise.all([
-      this.batchUlbModel
-        .find(filter)
-        .sort({ 'ulbSnapshot.name': 1 })
-        .skip((page - 1) * limit)
-        .limit(limit)
-        .lean<
-          {
-            ulbId: Types.ObjectId;
-            ulbSnapshot: { name: string; censusCode: string | null; sbCode: string | null };
-            allocatedAmount: number;
-            claimedAmount: number;
-            differencePercentageBasisPoints: number;
-          }[]
-        >()
-        .exec(),
+    const [rawRows, total, gate] = await Promise.all([
+      rowsQuery.lean<ClaimLetterBatchUlbRaw[]>().exec(),
       this.batchUlbModel.countDocuments(filter).exec(),
-      // Re-verified at read time (plan §6.2), not trusted from the frozen snapshot alone — a
-      // ULB's Devolution status may have changed after being added but before final submit. This
-      // is a display-only read (the `eligible` flag only drives a client-side warning badge —
-      // actual save/submit authorization is independently, always-freshly re-verified server-side
-      // in ClaimLetterAssemblyService), so the cached variant is safe here.
       this.eligibilityService.evaluateStateLevelGateForDisplay(
         String(parent.state),
         String(parent.year),
@@ -91,11 +143,10 @@ export class ClaimLetterUlbRowsService {
       ),
     ]);
 
-    // Same re-verification, extended to the per-ULB criteria (SLB, Annual Accounts, Elected
-    // Body/FC Unspent rows) — this endpoint previously only rechecked the state gate, unlike
-    // getOptions()/buildChildren(), which already checked per-ULB data. Only needs a verdict for
-    // the ULBs on this page, not the full state's expected set.
-    const rowUlbIds = rows.map((r) => String(r.ulbId));
+    // Extended re-verification to the per-ULB criteria (SLB, Annual Accounts, Elected Body/FC
+    // Unspent rows) — only needs a verdict for the ULBs actually fetched above, not the full
+    // state's expected set.
+    const rowUlbIds = rawRows.map((r) => String(r.ulbId));
     const ulbLevelEligibility = await this.eligibilityService.resolveUlbLevelEligibilityForDisplay(
       String(parent.state),
       String(parent.year),
@@ -103,7 +154,7 @@ export class ClaimLetterUlbRowsService {
       rowUlbIds,
     );
 
-    const data: ClaimLetterUlbRow[] = rows.map((r) => ({
+    const rows: ClaimLetterUlbRow[] = rawRows.map((r) => ({
       ulbId: String(r.ulbId),
       ulbName: r.ulbSnapshot.name,
       censusCode: r.ulbSnapshot.censusCode,
@@ -114,7 +165,7 @@ export class ClaimLetterUlbRowsService {
       eligible: gate.passed && (ulbLevelEligibility.perUlbEligible.get(String(r.ulbId)) ?? true),
     }));
 
-    return xviFcSuccess('Claim letter ULBs fetched.', data, { page, limit, total });
+    return { rows, total, ulbLevelEligibility };
   }
 
   private escapeRegExp(value: string): string {

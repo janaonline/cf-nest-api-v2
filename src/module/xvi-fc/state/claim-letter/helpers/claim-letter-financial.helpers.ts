@@ -65,9 +65,25 @@ export function amountsAreEqual(a: number, b: number): boolean {
   return scaleForExactMath(a) === scaleForExactMath(b);
 }
 
-/** Brain §14.9: `CF_<statecode>_<designyear>_<installmentno>`. */
+/** File base name format: `CF_<statecode>_<designyear>_<installmentno>`. */
 export function buildClaimLetterFileBaseName(stateCode: string, designYearLabel: string, installment: 1 | 2): string {
   return `CF_${stateCode}_${designYearLabel}_${installment}`;
+}
+
+/**
+ * Ref No. format: `CL/<statecode>/<designyear>/<installment>-<batchnumber>`. Computed live from
+ * fields that are already unique per batch — `{state, year, installment, batchNumber}` is
+ * DB-unique-indexed on `ClaimLetterBatch` — so this is deterministic and needs no stored counter;
+ * the same batch always yields the same Ref No. across repeated Preview/Download calls.
+ */
+export function buildClaimLetterRefNo(params: {
+  stateCode: string;
+  designYearLabel: string;
+  installment: 1 | 2;
+  batchNumber: number;
+}): string {
+  const { stateCode, designYearLabel, installment, batchNumber } = params;
+  return `CL/${stateCode}/${designYearLabel}/${installment}-${batchNumber}`;
 }
 
 export type { ClaimLetterFinancialSummaryDisplay as ClaimLetterFinancialSummaryAmounts };

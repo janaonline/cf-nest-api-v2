@@ -1,5 +1,5 @@
 import type { Types } from 'mongoose';
-import type { RowStatusType } from 'src/common/constants/row-status.constants';
+import type { RowReviewStatus } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
 import type { XvifcFormActor } from 'src/module/xvi-fc/common/types/xvifc-form-actors.type';
 import type { ApplicableFc } from 'src/schemas/xvi-fc/state/fc-unspent-state-form.schema';
 
@@ -29,7 +29,7 @@ export interface FcUnspentMohuaRowLean {
   unspentAmount: number;
   allocationPerc: number;
   eligibility: boolean;
-  rowStatus: RowStatusType | null;
+  rowStatus: RowReviewStatus | null;
   /** May be `undefined` on rows inserted via the State module's bulkWrite upsert (schema defaults
    *  aren't applied on raw bulkWrite inserts) — always read as `rejectionRemark ?? null`. */
   rejectionRemark?: string | null;
@@ -37,7 +37,7 @@ export interface FcUnspentMohuaRowLean {
 
 export interface FcUnspentRowTransitionRequest {
   row: FcUnspentMohuaRowLean;
-  newStatus: RowStatusType;
+  newStatus: RowReviewStatus;
   rejectionRemark: string | null;
 }
 
@@ -92,7 +92,7 @@ export interface FcUnspentMohuaRow {
   unspentAmount: number;
   allocationPerc: number;
   eligibility: boolean;
-  rowStatus: RowStatusType | null;
+  rowStatus: RowReviewStatus | null;
   rejectionRemark: string | null;
   permissions: FcUnspentMohuaRowPermissions;
 }
