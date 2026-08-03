@@ -186,6 +186,23 @@ describe('FormJsonService', () => {
 
       expect(model.create).toHaveBeenCalledWith(expect.objectContaining({ isActive: true, data: [] }));
     });
+
+    it('passes claimEligibility through to the model on create', async () => {
+      model.create.mockResolvedValue({ toObject: () => ({ _id: 'new' }) });
+      const claimEligibility = { enabled: true, ruleVersion: 1 };
+
+      await service.create({ design_year: designYearId, claimEligibility } as any);
+
+      expect(model.create).toHaveBeenCalledWith(expect.objectContaining({ claimEligibility }));
+    });
+
+    it('invalidates that design year\'s claimEligibilitySources cache entry', async () => {
+      model.create.mockResolvedValue({ toObject: () => ({ _id: 'new', design_year: designYearId }) });
+
+      await service.create({ design_year: designYearId } as any);
+
+      expect(redis.del).toHaveBeenCalledWith(`formJson:test:${designYearId}:claimEligibilitySources`);
+    });
   });
 
   describe('update', () => {
@@ -222,17 +239,80 @@ describe('FormJsonService', () => {
 
       await service.update('x', { type: 'y' } as any);
 
-      expect(redis.del).toHaveBeenCalledTimes(1);
+      // 1 for the per-formId key, 1 for the claimEligibilitySources list key (design_year unchanged).
+      expect(redis.del).toHaveBeenCalledTimes(2);
       expect(redis.del).toHaveBeenCalledWith(`formJson:test:${designYearId}:1`);
+      expect(redis.del).toHaveBeenCalledWith(`formJson:test:${designYearId}:claimEligibilitySources`);
     });
 
-    it('does not attempt cache deletion when neither the existing nor updated doc has a formId', async () => {
+    it('always invalidates the claimEligibilitySources cache key, even with no formId', async () => {
       model.findById.mockReturnValue(q({ _id: 'x', design_year: designYearId }));
       model.findByIdAndUpdate.mockReturnValue(q({ _id: 'x', design_year: designYearId, type: 'y' }));
 
       await service.update('x', { type: 'y' } as any);
 
-      expect(redis.del).not.toHaveBeenCalled();
+      expect(redis.del).toHaveBeenCalledTimes(1);
+      expect(redis.del).toHaveBeenCalledWith(`formJson:test:${designYearId}:claimEligibilitySources`);
+    });
+
+    it('invalidates claimEligibilitySources for both the old and new design_year when it changes', async () => {
+      const otherYearId = new Types.ObjectId().toString();
+      model.findById.mockReturnValue(q({ _id: 'x', design_year: designYearId }));
+      model.findByIdAndUpdate.mockReturnValue(q({ _id: 'x', design_year: otherYearId }));
+
+      await service.update('x', { design_year: otherYearId } as any);
+
+      expect(redis.del).toHaveBeenCalledWith(`formJson:test:${otherYearId}:claimEligibilitySources`);
+      expect(redis.del).toHaveBeenCalledWith(`formJson:test:${designYearId}:claimEligibilitySources`);
+    });
+
+    it('includes claimEligibility in the sparse patch when provided', async () => {
+      model.findById.mockReturnValue(q({ _id: 'x', design_year: designYearId }));
+      model.findByIdAndUpdate.mockReturnValue(q({ _id: 'x', design_year: designYearId }));
+      const claimEligibility = { enabled: false, ruleVersion: 2 };
+
+      await service.update('x', { claimEligibility } as any);
+
+      const [, updateArg] = model.findByIdAndUpdate.mock.calls[0] as [string, { $set: Record<string, unknown> }];
+      expect(updateArg.$set).toEqual({ claimEligibility });
+    });
+  });
+
+  describe('findEnabledClaimEligibilitySources', () => {
+    it('returns the cached value without hitting the DB when present in Redis', async () => {
+      const docs = [{ _id: 'a', formId: 24 }];
+      redis.get.mockResolvedValue(JSON.stringify(docs));
+
+      const result = await service.findEnabledClaimEligibilitySources(designYearId);
+
+      expect(result).toEqual(docs);
+      expect(model.find).not.toHaveBeenCalled();
+    });
+
+    it('queries for isActive + claimEligibility.enabled scoped to the design year on a cache miss', async () => {
+      redis.get.mockResolvedValue(null);
+      model.find.mockReturnValue(q([]));
+
+      await service.findEnabledClaimEligibilitySources(designYearId);
+
+      const [filter] = model.find.mock.calls[0] as [Record<string, unknown>];
+      expect((filter['design_year'] as Types.ObjectId).toString()).toBe(designYearId);
+      expect(filter['isActive']).toBe(true);
+      expect(filter['claimEligibility.enabled']).toBe(true);
+    });
+
+    it('returns every matching formJson document and caches the result on a cache miss', async () => {
+      redis.get.mockResolvedValue(null);
+      const docs = [{ _id: 'a', formId: 24 }];
+      model.find.mockReturnValue(q(docs));
+
+      const result = await service.findEnabledClaimEligibilitySources(designYearId);
+
+      expect(result).toEqual(docs);
+      expect(redis.set).toHaveBeenCalledWith(
+        `formJson:test:${designYearId}:claimEligibilitySources`,
+        JSON.stringify(docs),
+      );
     });
   });
 
@@ -279,10 +359,11 @@ describe('FormJsonService', () => {
       await expect(service.remove('missing')).rejects.toThrow(NotFoundException);
     });
 
-    it('skips cache deletion when the document has no formId', async () => {
+    it('still invalidates claimEligibilitySources when the document has no formId', async () => {
       model.findByIdAndUpdate.mockReturnValue(q({ _id: 'x', design_year: designYearId }));
       await service.remove('x');
-      expect(redis.del).not.toHaveBeenCalled();
+      expect(redis.del).toHaveBeenCalledTimes(1);
+      expect(redis.del).toHaveBeenCalledWith(`formJson:test:${designYearId}:claimEligibilitySources`);
     });
   });
 });

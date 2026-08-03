@@ -474,7 +474,7 @@ export class DevolutionFormulaService {
       { $match: rowMatch },
       {
         $lookup: {
-          from: 'xvi_fc_devolution_formula_forms',
+          from: 'xvifc_devolution_forms',
           localField: 'form',
           foreignField: '_id',
           as: 'formDoc',

@@ -10,7 +10,7 @@ export type ApplicableFc = '14TH_FC' | '15TH_FC';
 export type XviFcUnspentStateFormDocument = HydratedDocument<XviFcUnspentStateForm>;
 
 @Schema({
-  collection: 'xvi_fc_unspent_state_forms',
+  collection: 'xvifc_unspent_state_forms',
   timestamps: true,
   versionKey: false,
 })

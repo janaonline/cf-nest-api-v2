@@ -27,6 +27,7 @@ import { FcUnspentDeclarationModule } from './state/fc-unspent-declaration/fc-un
 import { FcUnspentMohuaReviewModule } from './mohua/fc-unspent-declaration/fc-unspent-mohua-review.module';
 import { StateDashboardModule } from './state/dashboard/state-dashboard.module';
 import { SlbModule } from './ulb/slb/slb.module';
+import { ClaimLetterModule } from './state/claim-letter/claim-letter.module';
 
 @Module({
   imports: [
@@ -52,6 +53,7 @@ import { SlbModule } from './ulb/slb/slb.module';
     FcUnspentMohuaReviewModule,
     StateDashboardModule,
     SlbModule,
+    ClaimLetterModule,
   ],
   controllers: [XviFcController],
   providers: [XviFcService, XviFcCacheService, XviFcCacheInterceptor],

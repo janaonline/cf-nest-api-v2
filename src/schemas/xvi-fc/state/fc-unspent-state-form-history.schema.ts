@@ -12,7 +12,7 @@ export type XviFcUnspentStateFormHistoryDocument = HydratedDocument<XviFcUnspent
  * history there is no `action` field.
  */
 @Schema({
-  collection: 'xvi_fc_unspent_state_form_histories',
+  collection: 'xvifc_unspent_state_form_histories',
   timestamps: true,
   versionKey: false,
 })

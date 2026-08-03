@@ -1,6 +1,17 @@
+import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsArray, IsBoolean, IsMongoId, IsNumber, IsObject, IsOptional, IsString } from 'class-validator';
+import {
+  IsArray,
+  IsBoolean,
+  IsMongoId,
+  IsNumber,
+  IsObject,
+  IsOptional,
+  IsString,
+  ValidateNested,
+} from 'class-validator';
 import { FieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
+import { ClaimEligibilityConfigDto } from './claim-eligibility-config.dto';
 
 export class CreateFormJsonDto {
   @ApiProperty({ description: 'Year ObjectId this form template belongs to' })
@@ -27,6 +38,13 @@ export class CreateFormJsonDto {
   @IsOptional()
   @IsObject()
   meta?: Record<string, unknown>;
+
+  @ApiPropertyOptional({ description: 'Claim-letter eligibility gate config for this form (brain §7.2)' })
+  @IsOptional()
+  @IsObject()
+  @ValidateNested()
+  @Type(() => ClaimEligibilityConfigDto)
+  claimEligibility?: ClaimEligibilityConfigDto;
 
   @ApiPropertyOptional({ default: true })
   @IsOptional()
