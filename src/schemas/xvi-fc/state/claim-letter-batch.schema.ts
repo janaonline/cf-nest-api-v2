@@ -65,7 +65,7 @@ export const ClaimLetterFinancialSummarySchema = SchemaFactory.createForClass(Cl
  * what the State uploads directly and is the only file required before submit.
  */
 @Schema({
-  collection: 'xvi_fc_claim_letter_batches',
+  collection: 'xvifc_claim_letter_batches',
   timestamps: true,
   versionKey: false,
 })

@@ -45,7 +45,7 @@ export const ClaimLetterRejectedSourceRefSchema = SchemaFactory.createForClass(C
  * §9: create draft, submit, abandon in V1), never for draft edits or file uploads.
  */
 @Schema({
-  collection: 'xvi_fc_claim_letter_batch_histories',
+  collection: 'xvifc_claim_letter_batch_histories',
   timestamps: true,
   versionKey: false,
 })

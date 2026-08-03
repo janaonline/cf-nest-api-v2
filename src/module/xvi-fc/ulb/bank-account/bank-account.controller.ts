@@ -74,6 +74,14 @@ export class BankAccountController {
     return this.bankAccountService.decideBankAccount(id, dto, user, ipAddress, userAgent);
   }
 
+  @Post(':id/undo-approval')
+  @UseGuards(PermissionGuard)
+  @RequirePermissions(Permission.APPROVE_ULB_SUBMISSIONS)
+  undoApproval(@Param('id', ParseObjectIdPipe) id: string, @CurrentUser() user: AuthUser, @Req() req: Request) {
+    const { ipAddress, userAgent } = extractIpAndUserAgent(req);
+    return this.bankAccountService.undoApproval(id, user, ipAddress, userAgent);
+  }
+
   // @Post(':id/mohua-decision')
   // @UseGuards(PermissionGuard)
   // @RequirePermissions(Permission.APPROVE_STATE_SUBMISSIONS)

@@ -24,7 +24,7 @@ class DfRowError {
 const DfRowErrorSchema = SchemaFactory.createForClass(DfRowError);
 
 @Schema({
-  collection: 'xvi_fc_devolution_formula_rows',
+  collection: 'xvifc_devolution_rows',
   timestamps: true,
   versionKey: false,
 })

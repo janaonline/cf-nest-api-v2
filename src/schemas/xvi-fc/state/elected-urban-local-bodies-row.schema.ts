@@ -55,7 +55,7 @@ class EulbRowUpdateHistorySubdoc {
 const EulbRowUpdateHistorySubdocSchema = SchemaFactory.createForClass(EulbRowUpdateHistorySubdoc);
 
 @Schema({
-  collection: 'xvi_fc_elected_urban_local_bodies_rows',
+  collection: 'xvifc_elected_ulb_rows',
   timestamps: true,
   versionKey: false,
 })

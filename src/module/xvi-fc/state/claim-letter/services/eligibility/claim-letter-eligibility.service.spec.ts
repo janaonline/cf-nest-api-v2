@@ -59,7 +59,7 @@ describe('ClaimLetterEligibilityService', () => {
         applicableInstallments: [1],
         acceptedFormStatuses: [5, 7],
         source: {
-          collection: 'xvi_fc_devolution_formula_forms',
+          collection: 'xvifc_devolution_forms',
           fields: { designYear: 'year', state: 'state', currentFormStatus: 'currentFormStatus' },
         },
         evaluator: { type: 'FORM_STATUS' },
