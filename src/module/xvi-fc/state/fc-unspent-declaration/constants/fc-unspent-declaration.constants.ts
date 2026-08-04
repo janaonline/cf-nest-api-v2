@@ -2,8 +2,16 @@ import type { ApplicableFc } from 'src/schemas/xvi-fc/state/fc-unspent-state-for
 
 export const FC_UNSPENT_FORM_ID = 25;
 
-/** Single declaration point — never duplicate this literal elsewhere. */
-export const FC_UNSPENT_ELIGIBILITY_THRESHOLD_PERCENT = 10;
+/**
+ * Fallback default eligibility threshold, used only when a design year's form-json document has
+ * no `meta.eligibilityThresholdPercent` override (see FC_UNSPENT_ELIGIBILITY_THRESHOLD_META_KEY).
+ * Never read directly for eligibility computation — go through
+ * FcUnspentDeclarationFormJsonService.getEligibilityThresholdPercent().
+ */
+export const FC_UNSPENT_ELIGIBILITY_THRESHOLD_PERCENT = 0;
+
+/** Key read off `formJson.meta` to override FC_UNSPENT_ELIGIBILITY_THRESHOLD_PERCENT per design year. */
+export const FC_UNSPENT_ELIGIBILITY_THRESHOLD_META_KEY = 'eligibilityThresholdPercent';
 
 export const FC_UNSPENT_PAGINATION_DEFAULT_PAGE = 1;
 export const FC_UNSPENT_PAGINATION_DEFAULT_LIMIT = 20;

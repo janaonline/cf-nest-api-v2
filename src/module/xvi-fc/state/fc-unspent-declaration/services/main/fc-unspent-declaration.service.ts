@@ -55,7 +55,6 @@ import {
   FC_UNSPENT_APPLICABLE_FC_BY_YEAR_LABEL,
   FC_UNSPENT_DECLARATION_TEMPLATE_ACTION_ID,
   FC_UNSPENT_DEVOLUTION_INSTALLMENT,
-  FC_UNSPENT_ELIGIBILITY_THRESHOLD_PERCENT,
   FC_UNSPENT_BLOCKING_MESSAGE_MISSING_DEVOLUTION,
   FC_UNSPENT_BLOCKING_MESSAGE_DEVOLUTION_RETURNED,
   FC_UNSPENT_BLOCKING_MESSAGE_DEVOLUTION_NOT_READY,
@@ -144,7 +143,7 @@ export class FcUnspentDeclarationService {
     const permissions = this.buildFormPermissions(user, stateId, currentFormStatus, gates);
     const { actors, stateName } = this.xvifcFormActorsService.buildActorsAndStateName(doc);
 
-    const allFields = await this.formJsonConfigService.loadFields(yearId);
+    const { fields: allFields, thresholdPercent: threshold } = await this.formJsonConfigService.loadFormConfig(yearId);
     const questionsConfig = getFcUnspentFieldsByType(allFields, 'FC_UNSPENT_MAIN_FORM_FIELDS');
     const rowEditFields = getFcUnspentFieldsByType(allFields, 'FC_UNSPENT_ROW_EDIT_FIELDS');
     if (rowEditFields.length === 0) {
@@ -168,7 +167,7 @@ export class FcUnspentDeclarationService {
     const responseData: FcUnspentDeclarationGetResponseData = {
       stateName,
       applicableFc,
-      threshold: FC_UNSPENT_ELIGIBILITY_THRESHOLD_PERCENT,
+      threshold,
       currentFormStatus,
       permissions,
       dependency: gates.dependency,
@@ -217,7 +216,7 @@ export class FcUnspentDeclarationService {
       });
     }
 
-    const allFields = await this.formJsonConfigService.loadFields(dto.yearId);
+    const { fields: allFields, thresholdPercent } = await this.formJsonConfigService.loadFormConfig(dto.yearId);
     const questions = getFcUnspentFieldsByType(allFields, 'FC_UNSPENT_MAIN_FORM_FIELDS');
     const validatorData: FormData = {
       isFcUnspent: dto.data.isFcUnspent ?? null,
@@ -268,7 +267,7 @@ export class FcUnspentDeclarationService {
         stateOid,
         rowsInput,
         gates.devolutionForm,
-        { requireAtLeastOne: false },
+        { requireAtLeastOne: false, thresholdPercent },
       );
       if (Object.keys(errors).length > 0) throwXviFcValidationError(errors);
       resolvedRows = builtRows;
@@ -370,7 +369,7 @@ export class FcUnspentDeclarationService {
       });
     }
 
-    const allFields = await this.formJsonConfigService.loadFields(dto.yearId);
+    const { fields: allFields, thresholdPercent } = await this.formJsonConfigService.loadFormConfig(dto.yearId);
     const questions = getFcUnspentFieldsByType(allFields, 'FC_UNSPENT_MAIN_FORM_FIELDS');
     const validatorData: FormData = {
       isFcUnspent: dto.data.isFcUnspent ?? null,
@@ -438,7 +437,7 @@ export class FcUnspentDeclarationService {
         stateOid,
         rowsInput,
         gates.devolutionForm,
-        { requireAtLeastOne: true },
+        { requireAtLeastOne: true, thresholdPercent },
       );
       if (Object.keys(errors).length > 0) throwXviFcValidationError(errors);
       resolvedRows = builtRows;

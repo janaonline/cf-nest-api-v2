@@ -120,12 +120,12 @@ describe('FcUnspentDeclarationRowService', () => {
 
   describe('resolveAndValidateRows', () => {
     it('requires at least one row when requireAtLeastOne is true', async () => {
-      const result = await service.resolveAndValidateRows(stateOid, [], devolutionForm, { requireAtLeastOne: true });
+      const result = await service.resolveAndValidateRows(stateOid, [], devolutionForm, { requireAtLeastOne: true, thresholdPercent: 10 });
       expect(result.errors['unspentUlbData']).toBeDefined();
     });
 
     it('allows zero rows when requireAtLeastOne is false', async () => {
-      const result = await service.resolveAndValidateRows(stateOid, [], devolutionForm, { requireAtLeastOne: false });
+      const result = await service.resolveAndValidateRows(stateOid, [], devolutionForm, { requireAtLeastOne: false, thresholdPercent: 10 });
       expect(result.rows).toEqual([]);
       expect(Object.keys(result.errors)).toHaveLength(0);
     });
@@ -138,7 +138,7 @@ describe('FcUnspentDeclarationRowService', () => {
           { ulbId: ulbOid1.toString(), unspentAmount: 7 },
         ],
         devolutionForm,
-        { requireAtLeastOne: false },
+        { requireAtLeastOne: false, thresholdPercent: 10 },
       );
       expect(result.errors['unspentUlbData']?.[0].code).toBe('duplicateUlb');
     });
@@ -149,7 +149,7 @@ describe('FcUnspentDeclarationRowService', () => {
         stateOid,
         [{ ulbId: ulbOid1.toString(), unspentAmount: 5 }],
         devolutionForm,
-        { requireAtLeastOne: false },
+        { requireAtLeastOne: false, thresholdPercent: 10 },
       );
       expect(result.errors['unspentUlbData.0.ulbId']?.[0].code).toBe('ulbNotFound');
     });
@@ -160,7 +160,7 @@ describe('FcUnspentDeclarationRowService', () => {
         stateOid,
         [{ ulbId: ulbOid1.toString(), unspentAmount: 5 }],
         devolutionForm,
-        { requireAtLeastOne: false },
+        { requireAtLeastOne: false, thresholdPercent: 10 },
       );
       expect(result.errors['unspentUlbData.0.ulbId']?.[0].code).toBe('noAllocation');
     });
@@ -170,7 +170,7 @@ describe('FcUnspentDeclarationRowService', () => {
         stateOid,
         [{ ulbId: ulbOid1.toString(), unspentAmount: 0 }],
         devolutionForm,
-        { requireAtLeastOne: false },
+        { requireAtLeastOne: false, thresholdPercent: 10 },
       );
       expect(result.errors['unspentUlbData.0.unspentAmount']?.[0].code).toBe('invalidAmount');
     });
@@ -180,7 +180,7 @@ describe('FcUnspentDeclarationRowService', () => {
         stateOid,
         [{ ulbId: ulbOid1.toString(), unspentAmount: 5 }],
         devolutionForm,
-        { requireAtLeastOne: false },
+        { requireAtLeastOne: false, thresholdPercent: 10 },
       );
       expect(result.rows[0]).toMatchObject({ allocationAmount: 100, allocationPerc: 5, eligibility: true });
     });
@@ -190,7 +190,7 @@ describe('FcUnspentDeclarationRowService', () => {
         stateOid,
         [{ ulbId: ulbOid1.toString(), unspentAmount: 5 }],
         devolutionForm,
-        { requireAtLeastOne: false },
+        { requireAtLeastOne: false, thresholdPercent: 10 },
       );
       expect(result.rows[0].allocationSource).toEqual({
         devolutionFormId: devolutionFormOid,
@@ -206,7 +206,7 @@ describe('FcUnspentDeclarationRowService', () => {
         stateOid,
         [{ ulbId: ulbOid1.toString(), unspentAmount: 10 }], // 10/100 = 10% == threshold
         devolutionForm,
-        { requireAtLeastOne: false },
+        { requireAtLeastOne: false, thresholdPercent: 10 },
       );
       expect(result.rows[0].allocationPerc).toBe(10);
       expect(result.rows[0].eligibility).toBe(true);
@@ -217,9 +217,20 @@ describe('FcUnspentDeclarationRowService', () => {
         stateOid,
         [{ ulbId: ulbOid1.toString(), unspentAmount: 10.000001 }], // 10.000001% > 10%
         devolutionForm,
-        { requireAtLeastOne: false },
+        { requireAtLeastOne: false, thresholdPercent: 10 },
       );
       expect(result.rows[0].allocationPerc).toBeCloseTo(10.000001, 6);
+      expect(result.rows[0].eligibility).toBe(false);
+    });
+
+    it('with thresholdPercent 0, marks a row with any positive unspentAmount as not eligible', async () => {
+      const result = await service.resolveAndValidateRows(
+        stateOid,
+        [{ ulbId: ulbOid1.toString(), unspentAmount: 0.01 }],
+        devolutionForm,
+        { requireAtLeastOne: false, thresholdPercent: 0 },
+      );
+      expect(result.rows[0].allocationPerc).toBeGreaterThan(0);
       expect(result.rows[0].eligibility).toBe(false);
     });
 
@@ -237,7 +248,7 @@ describe('FcUnspentDeclarationRowService', () => {
         stateOid,
         [pollutedRow as unknown as { ulbId: string; unspentAmount: number }],
         devolutionForm,
-        { requireAtLeastOne: false },
+        { requireAtLeastOne: false, thresholdPercent: 10 },
       );
       const row = result.rows[0];
       expect(row.allocationAmount).toBe(100); // from DevolutionFormulaRow, not the client

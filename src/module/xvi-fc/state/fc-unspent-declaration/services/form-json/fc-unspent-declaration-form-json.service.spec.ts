@@ -5,6 +5,7 @@ import type { FormFieldOption } from 'src/module/xvi-fc/common/types/field-confi
 import { FcUnspentDeclarationFormJsonService } from './fc-unspent-declaration-form-json.service';
 import {
   FC_UNSPENT_DECLARATION_TEMPLATE_ACTION_ID,
+  FC_UNSPENT_ELIGIBILITY_THRESHOLD_PERCENT,
   FC_UNSPENT_FORM_ID,
 } from '../../constants/fc-unspent-declaration.constants';
 import { loadFcUnspentSeedDocument } from '../../constants/fc-unspent-declaration-seed.fixture';
@@ -131,5 +132,40 @@ describe('FcUnspentDeclarationFormJsonService', () => {
         .mockResolvedValue({ ...FC_UNSPENT_STATE_FORM_JSON, data: wrongBlockType });
       await expect(service.loadFields(yearId)).rejects.toThrow(InternalServerErrorException);
     });
+  });
+
+  describe('loadFormConfig', () => {
+    it('fetches the form-json document exactly once and returns both fields and thresholdPercent', async () => {
+      const config = await service.loadFormConfig(yearId);
+      expect(formJsonService['findActiveByDesignYearAndFormId']).toHaveBeenCalledWith(yearId, FC_UNSPENT_FORM_ID);
+      expect(formJsonService['findActiveByDesignYearAndFormId']).toHaveBeenCalledTimes(1);
+      expect(config.fields).toEqual(FC_UNSPENT_STATE_FORM_JSON.data);
+      expect(config.thresholdPercent).toBe(FC_UNSPENT_ELIGIBILITY_THRESHOLD_PERCENT);
+    });
+
+    it('returns the configured meta.eligibilityThresholdPercent override, including 0', async () => {
+      formJsonService['findActiveByDesignYearAndFormId'] = jest
+        .fn()
+        .mockResolvedValue({ ...FC_UNSPENT_STATE_FORM_JSON, meta: { eligibilityThresholdPercent: 0 } });
+      const config = await service.loadFormConfig(yearId);
+      expect(config.thresholdPercent).toBe(0);
+    });
+
+    it.each([
+      ['a negative number', -1],
+      ['a non-numeric string', '10'],
+      ['null', null],
+    ])(`falls back to the default when meta.eligibilityThresholdPercent is %s`, async (_label, value) => {
+      formJsonService['findActiveByDesignYearAndFormId'] = jest
+        .fn()
+        .mockResolvedValue({ ...FC_UNSPENT_STATE_FORM_JSON, meta: { eligibilityThresholdPercent: value } });
+      const config = await service.loadFormConfig(yearId);
+      expect(config.thresholdPercent).toBe(FC_UNSPENT_ELIGIBILITY_THRESHOLD_PERCENT);
+    });
+  });
+
+  it('loadFields fetches the form-json document exactly once (delegates to loadFormConfig, no duplicate fetch)', async () => {
+    await service.loadFields(yearId);
+    expect(formJsonService['findActiveByDesignYearAndFormId']).toHaveBeenCalledTimes(1);
   });
 });
