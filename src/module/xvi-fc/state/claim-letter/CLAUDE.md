@@ -32,6 +32,14 @@ touching code that cites it, not just the local comment:
   (Covering Letter + Annexure 1 FC Disclosures + Annexure 2 City Conditions) consumed by the
   frontend's Preview Template dialog and Download Template PDF — read-only, built on top of
   `ClaimLetterUlbRowsService.getAllUlbRows()` rather than re-querying `ClaimLetterBatchUlb` directly.
+- `services/form-json/claim-letter-form-json.service.ts` — this feature's own `formjsons` document
+  (formId `CLAIM_LETTER_FORM_ID`): `signedClaimFile` field config plus the claimed-vs-allocated
+  variance band (`meta.varianceLowerPercent`/`varianceUpperPercent`, falling back to
+  `CLAIM_LETTER_VARIANCE_LOWER_PERCENT`/`UPPER_PERCENT` in `helpers/claim-letter-financial.helpers.ts`
+  when unset). `loadFormConfig` fetches the document exactly once per caller and derives both —
+  `getDetail`/`getClaimContext` (main service) and `prepareChildren` (assembly service, via the
+  `loadVarianceConfig` wrapper) each call it once per request; never chain a second independent
+  fetch for the other half of the same document.
 - `helpers/` — pure functions (financial rounding, content hashing, summary mapping). No I/O.
 
 ## Invariants worth knowing before you change adjacent code

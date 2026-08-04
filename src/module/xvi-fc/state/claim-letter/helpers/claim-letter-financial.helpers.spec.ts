@@ -10,31 +10,39 @@ import {
 
 describe('isClaimedAmountWithinVariance', () => {
   const allocated = 100;
+  const lowerPercent = 90;
+  const upperPercent = 110;
 
   it('passes at exactly the 90% lower boundary', () => {
-    expect(isClaimedAmountWithinVariance(allocated, 90)).toBe(true);
+    expect(isClaimedAmountWithinVariance(allocated, 90, lowerPercent, upperPercent)).toBe(true);
   });
 
   it('passes at exactly the 110% upper boundary', () => {
-    expect(isClaimedAmountWithinVariance(allocated, 110)).toBe(true);
+    expect(isClaimedAmountWithinVariance(allocated, 110, lowerPercent, upperPercent)).toBe(true);
   });
 
   it('fails just below the 90% lower boundary', () => {
-    expect(isClaimedAmountWithinVariance(allocated, 89.999999999)).toBe(false);
+    expect(isClaimedAmountWithinVariance(allocated, 89.999999999, lowerPercent, upperPercent)).toBe(false);
   });
 
   it('fails just above the 110% upper boundary', () => {
-    expect(isClaimedAmountWithinVariance(allocated, 110.000000001)).toBe(false);
+    expect(isClaimedAmountWithinVariance(allocated, 110.000000001, lowerPercent, upperPercent)).toBe(false);
   });
 
   it('passes for an exact match', () => {
-    expect(isClaimedAmountWithinVariance(allocated, allocated)).toBe(true);
+    expect(isClaimedAmountWithinVariance(allocated, allocated, lowerPercent, upperPercent)).toBe(true);
   });
 
   it('never trips on ordinary float imprecision at a realistic Crore boundary', () => {
     // 90% of 13.948 is 12.5532 — a value ordinary IEEE-754 multiplication can misrepresent by a
     // fraction of a paisa; the exact-integer scaling must still classify this as the boundary.
-    expect(isClaimedAmountWithinVariance(13.948, 12.5532)).toBe(true);
+    expect(isClaimedAmountWithinVariance(13.948, 12.5532, lowerPercent, upperPercent)).toBe(true);
+  });
+
+  it('respects a configured non-default variance band', () => {
+    expect(isClaimedAmountWithinVariance(allocated, 100, 100, 100)).toBe(true);
+    expect(isClaimedAmountWithinVariance(allocated, 99, 100, 100)).toBe(false);
+    expect(isClaimedAmountWithinVariance(allocated, 101, 100, 100)).toBe(false);
   });
 });
 
