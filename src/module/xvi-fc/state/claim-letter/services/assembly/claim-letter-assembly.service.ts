@@ -48,6 +48,7 @@ import {
 } from '../../helpers/claim-letter-content-hash.helpers';
 import { ClaimLetterEligibilityService, DevolutionAllocation } from '../eligibility/claim-letter-eligibility.service';
 import { ClaimLetterHistoryService } from '../history/claim-letter-history.service';
+import { ClaimLetterFormJsonService } from '../form-json/claim-letter-form-json.service';
 import { mapClaimLetterBatchDocToSummary } from '../../helpers/claim-letter-summary.helpers';
 import type { ClaimLetterBatchSummary } from '../../types/claim-letter.types';
 
@@ -144,6 +145,7 @@ export class ClaimLetterAssemblyService {
     private readonly ulbModel: Model<UlbDocument>,
     private readonly eligibilityService: ClaimLetterEligibilityService,
     private readonly historyService: ClaimLetterHistoryService,
+    private readonly formJsonConfigService: ClaimLetterFormJsonService,
   ) {}
 
   /** Thin public wrapper so every claim-letter mutating endpoint returns the same mapped
@@ -470,9 +472,10 @@ export class ClaimLetterAssemblyService {
     yearOid: Types.ObjectId,
     installment: number,
   ): Promise<PreparedChildren> {
-    const [gate, allocationByUlbId] = await Promise.all([
+    const [gate, allocationByUlbId, varianceConfig] = await Promise.all([
       this.eligibilityService.evaluateStateLevelGate(String(stateOid), String(yearOid), installment as 1 | 2),
       this.eligibilityService.resolveDevolutionAllocations(String(stateOid), String(yearOid), installment as 1 | 2),
+      this.formJsonConfigService.loadVarianceConfig(String(yearOid)),
     ]);
 
     if (!gate.passed) {
@@ -524,7 +527,14 @@ export class ClaimLetterAssemblyService {
         continue;
       }
       const claimedAmount = selection.claimedAmount;
-      if (!isClaimedAmountWithinVariance(allocation.allocatedAmount, claimedAmount)) {
+      if (
+        !isClaimedAmountWithinVariance(
+          allocation.allocatedAmount,
+          claimedAmount,
+          varianceConfig.lowerPercent,
+          varianceConfig.upperPercent,
+        )
+      ) {
         invalid.push(identifier);
         continue;
       }

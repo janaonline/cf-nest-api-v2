@@ -5,6 +5,7 @@ import { Types } from 'mongoose';
 import { ClaimLetterAssemblyService } from './claim-letter-assembly.service';
 import { ClaimLetterEligibilityService } from '../eligibility/claim-letter-eligibility.service';
 import { ClaimLetterHistoryService } from '../history/claim-letter-history.service';
+import { ClaimLetterFormJsonService } from '../form-json/claim-letter-form-json.service';
 import { ClaimLetterBatch } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
 import { ClaimLetterBatchUlb } from 'src/schemas/xvi-fc/state/claim-letter-batch-ulb.schema';
 import { ClaimLetterUlbLock } from 'src/schemas/xvi-fc/state/claim-letter-ulb-lock.schema';
@@ -87,6 +88,7 @@ describe('ClaimLetterAssemblyService', () => {
     getClaimStatusBreakdown: jest.Mock;
   };
   let historyService: { recordTransition: jest.Mock };
+  let formJsonConfigService: { loadVarianceConfig: jest.Mock };
 
   const allocation = {
     allocatedAmount: 100,
@@ -207,6 +209,9 @@ describe('ClaimLetterAssemblyService', () => {
       }),
     };
     historyService = { recordTransition: jest.fn().mockResolvedValue(undefined) };
+    formJsonConfigService = {
+      loadVarianceConfig: jest.fn().mockResolvedValue({ lowerPercent: 90, upperPercent: 110 }),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -220,6 +225,7 @@ describe('ClaimLetterAssemblyService', () => {
         { provide: getModelToken(Ulb.name), useValue: ulbModel },
         { provide: ClaimLetterEligibilityService, useValue: eligibilityService },
         { provide: ClaimLetterHistoryService, useValue: historyService },
+        { provide: ClaimLetterFormJsonService, useValue: formJsonConfigService },
       ],
     }).compile();
 
@@ -523,6 +529,21 @@ describe('ClaimLetterAssemblyService', () => {
     }
     expect(thrown?.message).toContain('111');
     expect(thrown?.message).not.toContain(ulbAId.toString());
+  });
+
+  it('fetches the variance band via ClaimLetterFormJsonService exactly once per prepareChildren invocation', async () => {
+    await service.createDraft(baseInput());
+    expect(formJsonConfigService.loadVarianceConfig).toHaveBeenCalledTimes(1);
+    expect(formJsonConfigService.loadVarianceConfig).toHaveBeenCalledWith(yearId.toString());
+  });
+
+  it('gates against a configured non-default variance band rather than the hardcoded 90/110', async () => {
+    formJsonConfigService.loadVarianceConfig.mockResolvedValue({ lowerPercent: 100, upperPercent: 100 });
+
+    // allocation is 100; a claim of 105 is within the default 90-110 band but outside a 100-100 band.
+    await expect(
+      service.createDraft(baseInput({ ulbSelections: [{ ulbId: ulbAId.toString(), claimedAmount: 105 }] })),
+    ).rejects.toThrow(BadRequestException);
   });
 
   it('inserts children in chunks, never one giant array (chunk-boundary correctness)', async () => {

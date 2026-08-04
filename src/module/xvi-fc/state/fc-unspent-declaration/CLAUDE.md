@@ -11,7 +11,13 @@ Formula's allocation data. No ADR of its own — see "Dependencies" below for wh
   each atomically writing parent + rows + history) — both self-contained to this file, no ADR
   needed for them (single call site each, nothing external depends on the transaction mechanics).
 - `services/rows/fc-unspent-declaration-row.service.ts` — per-ULB row resolution/validation,
-  including the `eligibility` computation (see "Dependencies").
+  including the `eligibility` computation (see "Dependencies"). The threshold percent it compares
+  against is not a constant baked into this file — it's resolved per design year by
+  `services/form-json/fc-unspent-declaration-form-json.service.ts`'s
+  `getEligibilityThresholdPercent()`, which reads `formJson.meta.eligibilityThresholdPercent` and
+  falls back to `FC_UNSPENT_ELIGIBILITY_THRESHOLD_PERCENT` (constants/) only when a design year's
+  form-json document has no override. Main service fetches it once per request and passes it into
+  both the GET response's `threshold` field and `resolveAndValidateRows`'s `opts.thresholdPercent`.
 - `services/ulb-options/fc-unspent-ulb-options.service.ts` — ULB picker data.
 - `services/form-json/`, `helpers/`, `dto/`, `types/`, `constants/` — supporting.
 

@@ -110,6 +110,10 @@ export interface ClaimLetterClaimContext {
   nextBatchNumber: ClaimLetterBatchNumber | null;
   financialOverview: ClaimLetterFinancialOverview;
   remainingUlbCount: number;
+  /** DB-driven claimed-vs-allocated variance band (formJson.meta, falls back to
+   *  CLAIM_LETTER_VARIANCE_LOWER_PERCENT/UPPER_PERCENT) — see ClaimLetterFormJsonService. */
+  varianceLowerPercent: number;
+  varianceUpperPercent: number;
 }
 
 export interface ClaimLetterBatchSummary {
@@ -137,6 +141,10 @@ export interface ClaimLetterBatchSummary {
    * same summary shape leave it `undefined` rather than repeating static config on every row.
    */
   questions?: FieldConfig[];
+  /** DB-driven claimed-vs-allocated variance band, same source as ClaimLetterClaimContext's fields
+   *  above — only populated by `getDetail`, same convention as `questions`. */
+  varianceLowerPercent?: number;
+  varianceUpperPercent?: number;
 }
 
 /** One row of the covering letter's recommended-ULBs table. No per-ULB date field exists on

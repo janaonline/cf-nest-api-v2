@@ -28,7 +28,6 @@ import {
   CLAIM_LETTER_ACTION_DOWNLOAD_TEMPLATE,
   CLAIM_LETTER_ACTION_PREVIEW_TEMPLATE,
   CLAIM_LETTER_EDIT_LOCK_LEASE_MINUTES,
-  CLAIM_LETTER_FORM_ID,
   CLAIM_LETTER_MAX_BATCH_NUMBER,
   CLAIM_LETTER_PAGINATION_DEFAULT_LIMIT,
   CLAIM_LETTER_PAGINATION_DEFAULT_PAGE,
@@ -38,13 +37,13 @@ import { assertInstallmentSupported } from '../../helpers/claim-letter-installme
 import { mapClaimLetterBatchDocToSummary } from '../../helpers/claim-letter-summary.helpers';
 import { ClaimLetterEligibilityService } from '../eligibility/claim-letter-eligibility.service';
 import { ClaimLetterHistoryService } from '../history/claim-letter-history.service';
+import { ClaimLetterFormJsonService } from '../form-json/claim-letter-form-json.service';
 import type { GetClaimLetterHistoryQueryDto } from '../../dto/get-claim-letter-history-query.dto';
 import type {
   ClaimLetterBatchSummary,
   ClaimLetterClaimContext,
   ClaimLetterEligibilitySummary,
 } from '../../types/claim-letter.types';
-import { FormJsonService } from 'src/master/form-json/form-json.service';
 
 /** Loose shape for .lean() query results — real field-level typing lives on the schema itself. */
 type LeanClaimLetterBatch = Record<string, unknown>;
@@ -64,7 +63,7 @@ export class ClaimLetterService {
     private readonly expectedUlbSetService: ExpectedUlbSetService,
     private readonly historyService: ClaimLetterHistoryService,
     private readonly fileInfoNormalizer: FileInfoNormalizerService,
-    private readonly formJsonService: FormJsonService,
+    private readonly formJsonConfigService: ClaimLetterFormJsonService,
     @InjectConnection() private readonly connection: Connection,
     @InjectModel(ClaimLetterBatch.name)
     private readonly batchModel: Model<ClaimLetterBatchDocument>,
@@ -158,10 +157,11 @@ export class ClaimLetterService {
     this.assertStateAccess(user, stateId);
     assertInstallmentSupported(installment);
 
-    const [expectedUlbs, batchSlotInfo, financialOverview] = await Promise.all([
+    const [expectedUlbs, batchSlotInfo, financialOverview, varianceConfig] = await Promise.all([
       this.expectedUlbSetService.resolve(stateId, yearId),
       this.resolveBatchSlotInfo(stateId, yearId, installment),
       this.eligibilityService.getFinancialOverview(stateId, yearId, installment as 1 | 2),
+      this.formJsonConfigService.loadVarianceConfig(yearId),
     ]);
 
     const expectedUlbIds = expectedUlbs.map((u) => u.ulbId);
@@ -179,6 +179,8 @@ export class ClaimLetterService {
       nextBatchNumber: batchSlotInfo.nextBatchNumber,
       financialOverview,
       remainingUlbCount: remainingUlbIds.length,
+      varianceLowerPercent: varianceConfig.lowerPercent,
+      varianceUpperPercent: varianceConfig.upperPercent,
     };
 
     return xviFcSuccess('Claim letter context fetched.', context);
@@ -404,7 +406,10 @@ export class ClaimLetterService {
     this.assertStateAccess(user, toObjectIdString(doc['state']) ?? '');
 
     const summary = mapClaimLetterBatchDocToSummary(doc);
-    summary.questions = await this.loadQuestions(toObjectIdString(doc['year']) ?? '');
+    const formConfig = await this.formJsonConfigService.loadFormConfig(toObjectIdString(doc['year']) ?? '');
+    summary.questions = formConfig.questions;
+    summary.varianceLowerPercent = formConfig.varianceLowerPercent;
+    summary.varianceUpperPercent = formConfig.varianceUpperPercent;
     this.applySignedFileValue(summary.questions, doc['signedClaimFile']);
     this.applySignedFileSupportingContent(summary.questions, doc);
 
@@ -471,28 +476,6 @@ export class ClaimLetterService {
       sizeKb: (file['sizeKb'] as number | undefined) ?? null,
       pageCount: (file['pageCount'] as number | null | undefined) ?? null,
     };
-  }
-
-  /**
-   * Claim Letter's own `formjsons` field config (today: just `signedClaimFile`) — a UI question
-   * source, not to be confused with the `claimEligibility` config living on *other* forms (e.g.
-   * Devolution) that this feature reads for eligibility gating. Missing/unseeded is expected before
-   * the payload is pushed, so it degrades to an empty list with a logged warning rather than a 500 —
-   * the rest of the claim detail must still render.
-   */
-  private async loadQuestions(designYearId: string): Promise<FieldConfig[]> {
-    try {
-      const formJson = await this.formJsonService.findActiveByDesignYearAndFormId(designYearId, CLAIM_LETTER_FORM_ID);
-      return formJson.data ?? [];
-    } catch (err) {
-      if (err instanceof NotFoundException) {
-        this.logger.warn(
-          `Claim Letter formjsons (formId ${CLAIM_LETTER_FORM_ID}) not seeded for year ${designYearId}.`,
-        );
-        return [];
-      }
-      throw err;
-    }
   }
 
   async listHistory(

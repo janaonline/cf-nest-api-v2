@@ -18,21 +18,34 @@ function scaleForExactMath(amountInCrore: number): number {
   return Math.round(amountInCrore * EXACT_COMPARISON_SCALE);
 }
 
+/**
+ * Fallback defaults, used only when a design year's form-json document has no
+ * `meta.varianceLowerPercent`/`meta.varianceUpperPercent` override (see
+ * CLAIM_LETTER_VARIANCE_LOWER_META_KEY/CLAIM_LETTER_VARIANCE_UPPER_META_KEY). Never read directly
+ * for the gating computation — go through ClaimLetterFormJsonService.loadVarianceConfig().
+ */
 export const CLAIM_LETTER_VARIANCE_LOWER_PERCENT = 90;
 export const CLAIM_LETTER_VARIANCE_UPPER_PERCENT = 110;
 
+/** Keys read off `formJson.meta` to override the two constants above, per design year. */
+export const CLAIM_LETTER_VARIANCE_LOWER_META_KEY = 'varianceLowerPercent';
+export const CLAIM_LETTER_VARIANCE_UPPER_META_KEY = 'varianceUpperPercent';
+
 /**
- * ±10% claimed-vs-allocated check, done as exact integer arithmetic (both sides scaled the same
- * way before comparing) so the boundary (exactly 90% or 110%) is never subject to floating-point
- * rounding.
+ * Claimed-vs-allocated variance check, done as exact integer arithmetic (both sides scaled the
+ * same way before comparing) so the boundary is never subject to floating-point rounding.
+ * `lowerPercent`/`upperPercent` are resolved by the caller (ClaimLetterFormJsonService), never
+ * hardcoded here.
  */
-export function isClaimedAmountWithinVariance(allocatedAmount: number, claimedAmount: number): boolean {
+export function isClaimedAmountWithinVariance(
+  allocatedAmount: number,
+  claimedAmount: number,
+  lowerPercent: number,
+  upperPercent: number,
+): boolean {
   const allocatedScaled = scaleForExactMath(allocatedAmount);
   const claimedScaled = scaleForExactMath(claimedAmount);
-  return (
-    claimedScaled * 100 >= allocatedScaled * CLAIM_LETTER_VARIANCE_LOWER_PERCENT &&
-    claimedScaled * 100 <= allocatedScaled * CLAIM_LETTER_VARIANCE_UPPER_PERCENT
-  );
+  return claimedScaled * 100 >= allocatedScaled * lowerPercent && claimedScaled * 100 <= allocatedScaled * upperPercent;
 }
 
 /** Exact (scaled-integer) subtraction — avoids float drift on the stored difference amount. */

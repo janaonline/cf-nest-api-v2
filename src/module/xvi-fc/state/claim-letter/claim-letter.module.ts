@@ -38,6 +38,7 @@ import { ClaimLetterAssemblyService } from './services/assembly/claim-letter-ass
 import { ClaimLetterHistoryService } from './services/history/claim-letter-history.service';
 import { ClaimLetterRecoveryService } from './services/recovery/claim-letter-recovery.service';
 import { ClaimLetterDocumentService } from './services/document/claim-letter-document.service';
+import { ClaimLetterFormJsonService } from './services/form-json/claim-letter-form-json.service';
 import { FormJsonModule } from 'src/master/form-json/form-json.module';
 
 @Module({
@@ -71,6 +72,7 @@ import { FormJsonModule } from 'src/master/form-json/form-json.module';
     ClaimLetterHistoryService,
     ClaimLetterRecoveryService,
     ClaimLetterDocumentService,
+    ClaimLetterFormJsonService,
     S3Service,
   ],
   exports: [ClaimLetterService],

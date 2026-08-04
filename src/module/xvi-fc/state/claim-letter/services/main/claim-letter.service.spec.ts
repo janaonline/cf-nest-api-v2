@@ -5,12 +5,12 @@ import { Types } from 'mongoose';
 import { ClaimLetterService } from './claim-letter.service';
 import { ClaimLetterEligibilityService } from '../eligibility/claim-letter-eligibility.service';
 import { ClaimLetterHistoryService } from '../history/claim-letter-history.service';
+import { ClaimLetterFormJsonService } from '../form-json/claim-letter-form-json.service';
 import { ExpectedUlbSetService } from 'src/module/xvi-fc/common/services/expected-ulb-set.service';
 import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
 import { ClaimLetterBatch } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
-import { FormJsonService } from 'src/master/form-json/form-json.service';
 
 function q<T>(value: T) {
   const chain: Record<string, jest.Mock> = {};
@@ -44,7 +44,7 @@ describe('ClaimLetterService', () => {
   let expectedUlbSetService: { resolve: jest.Mock };
   let historyService: { recordTransition: jest.Mock };
   let fileInfoNormalizer: { normalizeInboundFileInfo: jest.Mock };
-  let formJsonService: { findActiveByDesignYearAndFormId: jest.Mock };
+  let formJsonConfigService: { loadFormConfig: jest.Mock; loadVarianceConfig: jest.Mock };
   let session: {
     startTransaction: jest.Mock;
     commitTransaction: jest.Mock;
@@ -95,8 +95,11 @@ describe('ClaimLetterService', () => {
         errors: [],
       }),
     };
-    formJsonService = {
-      findActiveByDesignYearAndFormId: jest.fn().mockRejectedValue(new NotFoundException('formjson not found')),
+    formJsonConfigService = {
+      loadFormConfig: jest
+        .fn()
+        .mockResolvedValue({ questions: [], varianceLowerPercent: 90, varianceUpperPercent: 110 }),
+      loadVarianceConfig: jest.fn().mockResolvedValue({ lowerPercent: 90, upperPercent: 110 }),
     };
     session = {
       startTransaction: jest.fn(),
@@ -120,7 +123,7 @@ describe('ClaimLetterService', () => {
         { provide: ExpectedUlbSetService, useValue: expectedUlbSetService },
         { provide: ClaimLetterHistoryService, useValue: historyService },
         { provide: FileInfoNormalizerService, useValue: fileInfoNormalizer },
-        { provide: FormJsonService, useValue: formJsonService },
+        { provide: ClaimLetterFormJsonService, useValue: formJsonConfigService },
         { provide: getConnectionToken(), useValue: connection },
         { provide: getModelToken(ClaimLetterBatch.name), useValue: batchModel },
       ],
@@ -319,7 +322,20 @@ describe('ClaimLetterService', () => {
           availableToClaim: 20,
         },
         remainingUlbCount: 1,
+        varianceLowerPercent: 90,
+        varianceUpperPercent: 110,
       });
+    });
+
+    it('sources the variance band from ClaimLetterFormJsonService, keyed by yearId', async () => {
+      expectedUlbSetService.resolve.mockResolvedValue([]);
+      formJsonConfigService.loadVarianceConfig.mockResolvedValue({ lowerPercent: 80, upperPercent: 120 });
+
+      const result = await service.getClaimContext(stateId.toString(), yearId.toString(), 1, stateUser);
+
+      expect(formJsonConfigService.loadVarianceConfig).toHaveBeenCalledWith(yearId.toString());
+      expect(result.data?.varianceLowerPercent).toBe(80);
+      expect(result.data?.varianceUpperPercent).toBe(120);
     });
 
     it('never evaluates the eligibility checklist — the whole point of this lean endpoint', async () => {
@@ -414,12 +430,19 @@ describe('ClaimLetterService', () => {
           createdAt: new Date(),
         }),
       );
-      formJsonService.findActiveByDesignYearAndFormId.mockResolvedValue({ data: [signedFileField] });
+      formJsonConfigService.loadFormConfig.mockResolvedValue({
+        questions: [signedFileField],
+        varianceLowerPercent: 90,
+        varianceUpperPercent: 110,
+      });
 
       const result = await service.getDetail(claimLetterId.toString(), stateUser);
 
-      expect(formJsonService.findActiveByDesignYearAndFormId).toHaveBeenCalledWith(yearId.toString(), 26);
+      expect(formJsonConfigService.loadFormConfig).toHaveBeenCalledWith(yearId.toString());
+      expect(formJsonConfigService.loadFormConfig).toHaveBeenCalledTimes(1);
       expect(result.data?.questions).toEqual([signedFileField]);
+      expect(result.data?.varianceLowerPercent).toBe(90);
+      expect(result.data?.varianceUpperPercent).toBe(110);
     });
 
     it('overlays the actually-persisted signedClaimFile onto the signedClaimFile question, not the blank template', async () => {
@@ -453,7 +476,11 @@ describe('ClaimLetterService', () => {
           },
         }),
       );
-      formJsonService.findActiveByDesignYearAndFormId.mockResolvedValue({ data: [signedFileField] });
+      formJsonConfigService.loadFormConfig.mockResolvedValue({
+        questions: [signedFileField],
+        varianceLowerPercent: 90,
+        varianceUpperPercent: 110,
+      });
 
       const result = await service.getDetail(claimLetterId.toString(), stateUser);
 
@@ -491,7 +518,11 @@ describe('ClaimLetterService', () => {
           signedClaimFile: null,
         }),
       );
-      formJsonService.findActiveByDesignYearAndFormId.mockResolvedValue({ data: [signedFileField] });
+      formJsonConfigService.loadFormConfig.mockResolvedValue({
+        questions: [signedFileField],
+        varianceLowerPercent: 90,
+        varianceUpperPercent: 110,
+      });
 
       const result = await service.getDetail(claimLetterId.toString(), stateUser);
 
@@ -524,7 +555,11 @@ describe('ClaimLetterService', () => {
           createdAt: new Date(),
         }),
       );
-      formJsonService.findActiveByDesignYearAndFormId.mockResolvedValue({ data: [signedFileField] });
+      formJsonConfigService.loadFormConfig.mockResolvedValue({
+        questions: [signedFileField],
+        varianceLowerPercent: 90,
+        varianceUpperPercent: 110,
+      });
 
       const result = await service.getDetail(claimLetterId.toString(), stateUser);
 
@@ -555,7 +590,11 @@ describe('ClaimLetterService', () => {
           createdAt: new Date(),
         }),
       );
-      formJsonService.findActiveByDesignYearAndFormId.mockResolvedValue({ data: [signedFileField] });
+      formJsonConfigService.loadFormConfig.mockResolvedValue({
+        questions: [signedFileField],
+        varianceLowerPercent: 90,
+        varianceUpperPercent: 110,
+      });
 
       const result = await service.getDetail(claimLetterId.toString(), stateUser);
 
@@ -582,7 +621,11 @@ describe('ClaimLetterService', () => {
           createdAt: new Date(),
         }),
       );
-      formJsonService.findActiveByDesignYearAndFormId.mockRejectedValue(new NotFoundException('not found'));
+      formJsonConfigService.loadFormConfig.mockResolvedValue({
+        questions: [],
+        varianceLowerPercent: 90,
+        varianceUpperPercent: 110,
+      });
 
       const result = await service.getDetail(claimLetterId.toString(), stateUser);
 

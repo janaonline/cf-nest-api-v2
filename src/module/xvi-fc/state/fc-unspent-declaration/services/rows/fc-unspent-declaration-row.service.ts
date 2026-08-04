@@ -2,7 +2,6 @@ import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { AnyBulkWriteOperation, ClientSession, Model, Types } from 'mongoose';
 import type { RowReviewStatus } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
-import { FC_UNSPENT_ELIGIBILITY_THRESHOLD_PERCENT } from '../../constants/fc-unspent-declaration.constants';
 import {
   XviFcUnspentStateFormRow,
   XviFcUnspentStateFormRowDocument,
@@ -69,7 +68,7 @@ export class FcUnspentDeclarationRowService {
     stateOid: Types.ObjectId,
     rows: FcUnspentUlbRowInputDto[],
     devolutionForm: FcUnspentDevolutionFormLean | null,
-    opts: { requireAtLeastOne: boolean },
+    opts: { requireAtLeastOne: boolean; thresholdPercent: number },
   ): Promise<{ rows: FcUnspentResolvedRow[]; errors: XviFcValidationErrorMap }> {
     const errors: XviFcValidationErrorMap = {};
 
@@ -144,7 +143,7 @@ export class FcUnspentDeclarationRowService {
       }
 
       const allocationPerc = (row.unspentAmount / allocationAmount) * 100;
-      const eligibility = allocationPerc <= FC_UNSPENT_ELIGIBILITY_THRESHOLD_PERCENT;
+      const eligibility = allocationPerc <= opts.thresholdPercent;
 
       builtRows.push({
         ulbId: new Types.ObjectId(row.ulbId),
