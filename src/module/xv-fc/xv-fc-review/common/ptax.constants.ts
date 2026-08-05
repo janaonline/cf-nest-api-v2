@@ -25,6 +25,14 @@ export const PTAX_METRICS = [
   },
   { code: '2.3', label: 'Total Number of Properties from which Property Tax was Demanded' },
   { code: '2.4', label: 'Total Number of Properties from which Property Tax was Collected' },
+  {
+    code: '1.12',
+    label: 'Total Property Tax Demand (excluding cess, other taxes, and user charges if any)',
+  },
+  {
+    code: '1.20',
+    label: 'Total Property Tax Collection (excluding cess, other taxes, and user charges if any)',
+  },
 ] as const;
 
 export const PTAX_METRIC_CODES = PTAX_METRICS.map((m) => m.code);
@@ -47,6 +55,8 @@ export const PTAX_METRIC_VALIDATION: Record<string, PtaxMetricValidationRule> = 
   '1.18': { min: 0, max: 9999999, decimalLimit: 2, isRupee: true },
   '2.3': { min: 0, max: 999999999999999, decimalLimit: 0, isRupee: false },
   '2.4': { min: 0, max: 999999999999999, decimalLimit: 0, isRupee: false },
+  '1.12': { min: 0, max: 9999999, decimalLimit: 2, isRupee: true },
+  '1.20': { min: 0, max: 9999999, decimalLimit: 2, isRupee: true },
 };
 
 // Returns a human-readable error, or null when the value satisfies the
@@ -77,6 +87,7 @@ export const PTAX_METRIC_ORDER_PAIRS: Array<{ greater: string; lesser: string }>
   { greater: '1.9', lesser: '1.10' },
   { greater: '1.17', lesser: '1.18' },
   { greater: '2.3', lesser: '2.4' },
+  { greater: '1.12', lesser: '1.20' },
 ];
 
 export function validatePtaxMetricOrder(valuesByCode: Record<string, number | null | undefined>): string | null {

@@ -11,7 +11,7 @@ describe('ptax.constants', () => {
 
   describe('toMetricKey / fromMetricKey', () => {
     it('round-trips every real metric code without loss', () => {
-      for (const code of ['1.9', '1.10', '1.17', '1.18', '2.3', '2.4']) {
+      for (const code of ['1.9', '1.10', '1.17', '1.18', '2.3', '2.4', '1.12', '1.20']) {
         expect(fromMetricKey(toMetricKey(code))).toBe(code);
       }
     });

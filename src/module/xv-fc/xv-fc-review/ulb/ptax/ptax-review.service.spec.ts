@@ -161,7 +161,7 @@ describe('PtaxReviewService', () => {
 
     it('reads the cached value and never re-queries propertytaxopmappers once every metric is cached', async () => {
       const cachedReviews: Record<string, unknown> = {};
-      for (const key of ['1_9', '1_10', '1_17', '1_18', '2_3', '2_4']) {
+      for (const key of ['1_9', '1_10', '1_17', '1_18', '2_3', '2_4', '1_12', '1_20']) {
         cachedReviews[key] = { value: '100', flagged: false, comment: '' };
       }
       reviewModel.findOne.mockReturnValue(q(freshReviewDoc({ metricReviews: cachedReviews })));
