@@ -11,6 +11,8 @@ import { S3Service } from '../../../../core/s3/s3.service';
 import { S3UploadService } from '../../../file/s3-upload.service';
 import { FormJsonService } from '../../../../master/form-json/form-json.service';
 import { FileTokenService } from '../../../../core/file-token/file-token.service';
+import { EmailQueueService } from '../../../../core/queue/email-queue/email-queue.service';
+import { ConfigService } from '@nestjs/config';
 import { ANNUAL_ACCOUNT_PROCESSING_QUEUE } from '../../../../core/constants/queues';
 import type { AuthUser } from '../../../auth/auth-user.interface';
 
@@ -42,6 +44,8 @@ describe('AnnualAccountsService', () => {
   let mockS3Service: Record<string, jest.Mock>;
   let mockActionGateModel: { find: jest.Mock };
   let mockFileTokenService: { signFileUrl: jest.Mock };
+  let mockEmailQueueService: { addEmailJob: jest.Mock };
+  let mockConfigService: { get: jest.Mock };
 
   beforeEach(async () => {
     mockAnnualAccountModel = {
@@ -87,6 +91,12 @@ describe('AnnualAccountsService', () => {
     mockFileTokenService = {
       signFileUrl: jest.fn((path: string) => `https://signed.example.com/${path}`),
     };
+    mockEmailQueueService = {
+      addEmailJob: jest.fn().mockResolvedValue(undefined),
+    };
+    mockConfigService = {
+      get: jest.fn(),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -101,6 +111,8 @@ describe('AnnualAccountsService', () => {
         { provide: getQueueToken(ANNUAL_ACCOUNT_PROCESSING_QUEUE), useValue: mockOcrQueue },
         { provide: FormJsonService, useValue: mockFormJsonService },
         { provide: FileTokenService, useValue: mockFileTokenService },
+        { provide: EmailQueueService, useValue: mockEmailQueueService },
+        { provide: ConfigService, useValue: mockConfigService },
       ],
     }).compile();
 

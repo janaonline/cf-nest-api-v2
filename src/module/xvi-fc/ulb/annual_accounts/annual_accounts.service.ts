@@ -9,11 +9,13 @@ import {
 import { FormJsonService } from '../../../../master/form-json/form-json.service';
 import { InjectQueue } from '@nestjs/bullmq';
 import { InjectModel } from '@nestjs/mongoose';
+import { ConfigService } from '@nestjs/config';
 import { createHash } from 'crypto';
 import { Queue } from 'bullmq';
 import { Model, PipelineStage, Types } from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 import { S3Service } from '../../../../core/s3/s3.service';
+import { EmailQueueService } from '../../../../core/queue/email-queue/email-queue.service';
 import { S3UploadService } from '../../../file/s3-upload.service';
 import { FileTokenService } from '../../../../core/file-token/file-token.service';
 import { assertValidFormStatusTransition } from '../../../../common/utils/form-status-transitions';
@@ -80,6 +82,10 @@ const SECTION_FORM_IDS: Record<'auditedData' | 'unauditedData', number> = { audi
  * threshold, the ULB gets Retry/Re-upload instead of an infinite spinner.
  */
 const STALE_PROCESSING_THRESHOLD_MS = 5 * 60 * 1000;
+const SECTION_LABELS: Record<'auditedData' | 'unauditedData', string> = {
+  auditedData: 'Audited',
+  unauditedData: 'Provisional',
+};
 
 interface UlbSubmissionRow {
   ulbId: Types.ObjectId;
@@ -129,6 +135,10 @@ export class AnnualAccountsService implements OnModuleInit {
     private readonly formJsonService: FormJsonService,
 
     private readonly fileTokenService: FileTokenService,
+
+    private readonly emailQueueService: EmailQueueService,
+
+    private readonly configService: ConfigService,
   ) {}
 
   async onModuleInit() {
@@ -785,7 +795,40 @@ export class AnnualAccountsService implements OnModuleInit {
     this.logger.log(
       `Manual review requested — annualAccountId=${id} section=${section} docId=${docId} by user=${user._id}`,
     );
+
+    this.notifyManualReviewRequested(doc, section, docSlot, requestedAt).catch((err: unknown) => {
+      this.logger.error(`Failed to queue manual-review-requested notification for annualAccountId=${id}:`, err);
+    });
+
     return this.getProcessingStatus(id, user);
+  }
+
+  private async notifyManualReviewRequested(
+    doc: { ulb: Types.ObjectId },
+    section: 'auditedData' | 'unauditedData',
+    docSlot: { docId: string; currentUpload: { file?: { originalName?: string | null } | null } },
+    requestedAt: Date,
+  ): Promise<void> {
+    const notifyEmail = this.configService.get<string>('MANUAL_REVIEW_NOTIFY_EMAIL');
+    if (!notifyEmail) return;
+
+    const ulbDoc = await this.ulbModel.findById(doc.ulb).select('name code').lean().exec();
+    const clientUrl = this.configService.get<string>('CLIENT_URL', 'https://cityfinance.in');
+
+    await this.emailQueueService.addEmailJob({
+      to: notifyEmail,
+      subject: 'XVI-FC: Manual review requested for a ULB annual account document',
+      templateName: './annual-account-manual-review-requested',
+      mailData: {
+        ulbName: ulbDoc?.name ?? 'Unknown ULB',
+        ulbCode: ulbDoc?.code ?? '—',
+        section: SECTION_LABELS[section],
+        docId: docSlot.docId,
+        fileName: docSlot.currentUpload.file?.originalName ?? docSlot.docId,
+        requestedAt: requestedAt.toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }),
+        reviewQueueUrl: `${clientUrl}/xvifc`,
+      },
+    });
   }
 
   // ─── ADMIN approves/rejects a ULB's manual-review request ────────────────────
