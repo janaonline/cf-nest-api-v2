@@ -71,6 +71,9 @@ export class OCRInfo {
   /** ULB has asked a human reviewer to look at this failed OCR result. Set once, cleared on retry/re-upload. */
   @Prop({ type: Boolean, default: false })
   isManualReviewRequested!: boolean;
+
+  @Prop({ type: Date, default: null })
+  manualReviewRequestedAt!: Date | null;
 }
 
 export const OCRInfoSchema = SchemaFactory.createForClass(OCRInfo);
@@ -172,6 +175,16 @@ export class DocumentItem {
    */
   @Prop({ type: DecisionInfoSchema, default: null })
   stateDecision!: DecisionInfo | null;
+
+  /**
+   * ADMIN's verdict on a ULB's manual-review request for this document, or null if undecided/never
+   * requested. APPROVED overrides the failed OCR result (processingStatus is forced to PASSED);
+   * RETURNED leaves processingStatus FAILED with a note explaining why. Like stateDecision, this is
+   * never force-cleared on retry/re-upload — it goes stale once currentUpload.uploadedAt postdates
+   * decidedAt, same convention as stateDecision.
+   */
+  @Prop({ type: DecisionInfoSchema, default: null })
+  manualReviewDecision!: DecisionInfo | null;
 }
 
 export const DocumentItemSchema = SchemaFactory.createForClass(DocumentItem);
