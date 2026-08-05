@@ -1,8 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { AnyBulkWriteOperation, ClientSession, Model, Types } from 'mongoose';
-import type { RowStatusType } from 'src/common/constants/row-status.constants';
-import { FC_UNSPENT_ELIGIBILITY_THRESHOLD_PERCENT } from '../../constants/fc-unspent-declaration.constants';
+import type { RowReviewStatus } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
 import {
   XviFcUnspentStateFormRow,
   XviFcUnspentStateFormRowDocument,
@@ -36,7 +35,7 @@ type FcUnspentDevolutionRowLean = {
 type FcUnspentExistingRowLean = {
   _id: Types.ObjectId;
   ulbId: Types.ObjectId;
-  rowStatus: RowStatusType | null;
+  rowStatus: RowReviewStatus | null;
 };
 
 /**
@@ -69,7 +68,7 @@ export class FcUnspentDeclarationRowService {
     stateOid: Types.ObjectId,
     rows: FcUnspentUlbRowInputDto[],
     devolutionForm: FcUnspentDevolutionFormLean | null,
-    opts: { requireAtLeastOne: boolean },
+    opts: { requireAtLeastOne: boolean; thresholdPercent: number },
   ): Promise<{ rows: FcUnspentResolvedRow[]; errors: XviFcValidationErrorMap }> {
     const errors: XviFcValidationErrorMap = {};
 
@@ -144,7 +143,7 @@ export class FcUnspentDeclarationRowService {
       }
 
       const allocationPerc = (row.unspentAmount / allocationAmount) * 100;
-      const eligibility = allocationPerc <= FC_UNSPENT_ELIGIBILITY_THRESHOLD_PERCENT;
+      const eligibility = allocationPerc <= opts.thresholdPercent;
 
       builtRows.push({
         ulbId: new Types.ObjectId(row.ulbId),
@@ -181,7 +180,7 @@ export class FcUnspentDeclarationRowService {
     yearOid: Types.ObjectId,
     resolvedRows: FcUnspentResolvedRow[],
     userOid: Types.ObjectId,
-    targetRowStatus: RowStatusType | undefined,
+    targetRowStatus: RowReviewStatus | undefined,
     session: ClientSession,
   ): Promise<{ transitions: FcUnspentRowStatusTransition[] }> {
     const ulbOids = resolvedRows.map((r) => r.ulbId);
@@ -339,6 +338,8 @@ export class FcUnspentDeclarationRowService {
       .exec();
   }
 
+  // Reads devolution-formula's activeDatasetVersion invariant from outside that module — see
+  // devolution-formula/docs/adr/0001-dataset-versioning.md before changing either side of this.
   private async resolveAllocationsForUlbIds(
     devolutionFormId: Types.ObjectId,
     activeDatasetVersion: number,

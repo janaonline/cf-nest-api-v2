@@ -1,24 +1,8 @@
-import { IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsOptional } from 'class-validator';
 
-/**
- * `@MaxLength` here is a payload-size safety cap only, not the business limit — class-validator
- * decorators run at request-validation time and can't read the DB-driven limit. The real
- * censusCode (10)/ulbName (250) length rules are enforced DB-drivenly downstream in
- * `ElectedUrbanLocalBodiesValidator` (via `extractDateConfig`'s censusCodeMaxLength/ulbNameMaxLength).
- */
-const PAYLOAD_SAFETY_MAX_LENGTH = 500;
-
+// censusCode/ulbName are intentionally not editable here — every row is registry-backed, and
+// identity fields belong to the ULB registry, not to a row-level portal edit.
 export class UpdateElectedUrbanLocalBodiesRowDto {
-  @IsOptional()
-  @IsString()
-  @MaxLength(PAYLOAD_SAFETY_MAX_LENGTH)
-  censusCode?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(PAYLOAD_SAFETY_MAX_LENGTH)
-  ulbName?: string;
-
   @IsOptional()
   electedBodyStatus?: string;
 

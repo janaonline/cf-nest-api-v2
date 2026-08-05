@@ -226,7 +226,6 @@ export class EulbPostSubmissionUpdateService {
       dateOfExpiry:
         r.dateOfExpiry instanceof Date ? r.dateOfExpiry.toISOString().split('T')[0] : (r.dateOfExpiry ?? null),
       remarks: r.remarks ?? null,
-      rowType: r.rowType,
       validationStatus: r.validationStatus,
       errors: (r.errors ?? []).map((e) => ({
         field: e.field,
@@ -379,6 +378,13 @@ export class EulbPostSubmissionUpdateService {
     }
 
     // ─── MongoDB transaction ───────────────────────────────────────────────────
+    // Atomically appends one correction-batch record to the form (postSubmissionUpdates[]) and
+    // applies every proposed row change + per-row audit-history entry — all tagged with the same
+    // batchId. Without the transaction, a crash between the two writes could leave a batch record
+    // with no matching row changes applied, or rows changed with no batch/audit trail explaining
+    // why — either is a silent data-integrity gap for a workflow whose whole purpose is producing
+    // an accurate correction history. Self-contained to this file: nothing outside this service
+    // reads postSubmissionUpdates[]/batchId, so this isn't cross-referenced from an ADR.
 
     const batchId = new Types.ObjectId();
     const now = new Date();

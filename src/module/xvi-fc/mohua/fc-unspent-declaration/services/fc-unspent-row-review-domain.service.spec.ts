@@ -6,7 +6,6 @@ import { XviFcUnspentStateForm } from 'src/schemas/xvi-fc/state/fc-unspent-state
 import { XviFcUnspentStateFormHistory } from 'src/schemas/xvi-fc/state/fc-unspent-state-form-history.schema';
 import { XviFcUnspentStateFormRow } from 'src/schemas/xvi-fc/state/fc-unspent-state-form-row.schema';
 import { XviFcUnspentStateFormRowHistory } from 'src/schemas/xvi-fc/state/fc-unspent-state-form-row-history.schema';
-import { ROW_STATUS } from 'src/common/constants/row-status.constants';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import type { FcUnspentMohuaFormLean, FcUnspentMohuaRowLean } from '../types/fc-unspent-mohua-review.types';
 
@@ -101,7 +100,7 @@ function makeRow(overrides: Partial<FcUnspentMohuaRowLean> = {}): FcUnspentMohua
     unspentAmount: 5,
     allocationPerc: 5,
     eligibility: true,
-    rowStatus: ROW_STATUS.UPDATE_PENDING,
+    rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
     rejectionRemark: null,
     ...overrides,
   };
@@ -167,10 +166,10 @@ describe('FcUnspentRowReviewDomainService', () => {
 
   describe('filterNotInStatus', () => {
     it('returns rows whose rowStatus does not match the expected value', () => {
-      const pending = makeRow({ rowStatus: ROW_STATUS.UPDATE_PENDING });
-      const active = makeRow({ _id: new Types.ObjectId(), rowStatus: ROW_STATUS.ACTIVE });
+      const pending = makeRow({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA });
+      const active = makeRow({ _id: new Types.ObjectId(), rowStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA });
 
-      const result = service.filterNotInStatus([pending, active], ROW_STATUS.UPDATE_PENDING);
+      const result = service.filterNotInStatus([pending, active], FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
 
       expect(result).toEqual([active]);
     });
@@ -189,7 +188,7 @@ describe('FcUnspentRowReviewDomainService', () => {
         formOid,
         stateOid,
         yearOid,
-        [{ row, newStatus: ROW_STATUS.ACTIVE, rejectionRemark: null }],
+        [{ row, newStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA, rejectionRemark: null }],
         userOid,
         null,
         null,
@@ -198,7 +197,7 @@ describe('FcUnspentRowReviewDomainService', () => {
 
       const ops = getBulkOps(rowModel['bulkWrite']);
       expect(ops[0].updateOne.filter).toEqual({ _id: row._id });
-      expect(ops[0].updateOne.update.$set).toMatchObject({ rowStatus: ROW_STATUS.ACTIVE, rejectionRemark: null });
+      expect(ops[0].updateOne.update.$set).toMatchObject({ rowStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA, rejectionRemark: null });
     });
 
     it('sets rejectionRemark on the row when rejecting', async () => {
@@ -207,7 +206,7 @@ describe('FcUnspentRowReviewDomainService', () => {
         formOid,
         stateOid,
         yearOid,
-        [{ row, newStatus: ROW_STATUS.REJECTED, rejectionRemark: 'Allocation mismatch.' }],
+        [{ row, newStatus: FORM_STATUS.RETURNED_BY_MOHUA, rejectionRemark: 'Allocation mismatch.' }],
         userOid,
         null,
         null,
@@ -219,12 +218,12 @@ describe('FcUnspentRowReviewDomainService', () => {
     });
 
     it('inserts one immutable row-history entry per transition with previous/current status and snapshot', async () => {
-      const row = makeRow({ rowStatus: ROW_STATUS.UPDATE_PENDING });
+      const row = makeRow({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA });
       await service.transitionRows(
         formOid,
         stateOid,
         yearOid,
-        [{ row, newStatus: ROW_STATUS.ACTIVE, rejectionRemark: null }],
+        [{ row, newStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA, rejectionRemark: null }],
         userOid,
         '127.0.0.1',
         'jest-agent',
@@ -236,11 +235,11 @@ describe('FcUnspentRowReviewDomainService', () => {
       expect(docs[0]).toMatchObject({
         row: row._id,
         form: formOid,
-        previousStatus: ROW_STATUS.UPDATE_PENDING,
-        currentStatus: ROW_STATUS.ACTIVE,
+        previousStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+        currentStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
         snapshot: expect.objectContaining({
           rowNumber: 1,
-          rowStatus: ROW_STATUS.ACTIVE,
+          rowStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
           rejectionRemark: null,
         }) as Record<string, unknown>,
       });
@@ -254,7 +253,7 @@ describe('FcUnspentRowReviewDomainService', () => {
       expect(rowModel['countDocuments']).toHaveBeenCalledWith({
         form: formOid,
         isActive: true,
-        rowStatus: { $ne: ROW_STATUS.ACTIVE },
+        rowStatus: { $ne: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA },
       });
       expect(count).toBe(2);
     });
@@ -264,10 +263,10 @@ describe('FcUnspentRowReviewDomainService', () => {
     it('tallies rows by status and eligibility', async () => {
       rowModel['find'] = jest.fn().mockReturnValue(
         q([
-          { rowStatus: ROW_STATUS.ACTIVE, eligibility: true },
-          { rowStatus: ROW_STATUS.UPDATE_PENDING, eligibility: false },
-          { rowStatus: ROW_STATUS.REJECTED, eligibility: true },
-          { rowStatus: ROW_STATUS.NEEDS_UPDATE, eligibility: false },
+          { rowStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA, eligibility: true },
+          { rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA, eligibility: false },
+          { rowStatus: FORM_STATUS.RETURNED_BY_MOHUA, eligibility: true },
+          { rowStatus: FORM_STATUS.ACTION_REQUIRED, eligibility: false },
           { rowStatus: null, eligibility: true },
         ]),
       );
@@ -322,7 +321,7 @@ describe('FcUnspentRowReviewDomainService', () => {
     it('builds the unspentUlbData snapshot from current active rows, including rowStatus/rejectionRemark', async () => {
       rowModel['find'] = jest
         .fn()
-        .mockReturnValue(q([{ ...makeRow(), rowStatus: ROW_STATUS.ACTIVE, rejectionRemark: null }]));
+        .mockReturnValue(q([{ ...makeRow(), rowStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA, rejectionRemark: null }]));
 
       await service.insertParentHistory(
         makeForm(),
@@ -341,7 +340,7 @@ describe('FcUnspentRowReviewDomainService', () => {
       expect(historyArg.toStatus).toBe(FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA);
       expect(historyArg.unspentUlbData[0]).toMatchObject({
         rowNumber: 1,
-        rowStatus: ROW_STATUS.ACTIVE,
+        rowStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
         rejectionRemark: null,
       });
     });

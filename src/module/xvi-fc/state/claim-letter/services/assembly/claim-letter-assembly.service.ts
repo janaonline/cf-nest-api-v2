@@ -22,7 +22,10 @@ import { ClaimLetterUlbLock, ClaimLetterUlbLockDocument } from 'src/schemas/xvi-
 import { State, StateDocument } from 'src/schemas/state.schema';
 import { Year } from 'src/schemas/year.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
-import type { EligibilityEvaluationResult } from 'src/module/xvi-fc/common/types/claim-eligibility.type';
+import type {
+  EligibilityEvaluationResult,
+  RowEligibilityEvidence,
+} from 'src/module/xvi-fc/common/types/claim-eligibility.type';
 import {
   CLAIM_LETTER_CHILD_INSERT_CHUNK_SIZE,
   CLAIM_LETTER_EDIT_LOCK_LEASE_MINUTES,
@@ -45,6 +48,7 @@ import {
 } from '../../helpers/claim-letter-content-hash.helpers';
 import { ClaimLetterEligibilityService, DevolutionAllocation } from '../eligibility/claim-letter-eligibility.service';
 import { ClaimLetterHistoryService } from '../history/claim-letter-history.service';
+import { ClaimLetterFormJsonService } from '../form-json/claim-letter-form-json.service';
 import { mapClaimLetterBatchDocToSummary } from '../../helpers/claim-letter-summary.helpers';
 import type { ClaimLetterBatchSummary } from '../../types/claim-letter.types';
 
@@ -104,23 +108,17 @@ interface PreparedChildren {
 }
 
 /**
- * File-private control-flow marker — same status/message contract as a normal
- * `ConflictException` for every existing caller, just additionally inspected by
- * `reserveBatchSlotAndLocks`'s orchestrator to decide whether a conflict might be caused by a
- * stale `BUILDING` row left behind by a crashed `createDraft`, and so is worth one reclaim-and-
- * retry attempt. Deliberately never thrown by the `batchModel.create()` duplicate-key catch —
- * that conflict is proven to always be fresh, live contention between two concurrently-committing
- * requests (`allocateBatchNumber` re-reads a free slot inside the same transaction immediately
- * beforehand, so a stale row would already have been counted as "used" and never selected), never
- * a stale row, so attempting a reclaim there would be pointless overhead on the single most common
- * conflict path in this feature.
+ * File-private control-flow marker distinguishing a conflict that might be a reclaimable stale
+ * `BUILDING` row from one that's proven fresh, live contention — see
+ * docs/adr/0002-batching-and-locks.md for the full reservation/reclaim design this supports.
  */
 class ReclaimableConflictException extends ConflictException {}
 
 /**
- * The claim-letter creation pipeline (plan §7) — the most concurrency-sensitive piece of this
- * feature, since a State's legally binding grant claim must never let two drafts double-claim the
- * same ULB or the same batch slot. Structured in 4 stages:
+ * The claim-letter creation pipeline — the most concurrency-sensitive piece of this feature, since
+ * a State's legally binding grant claim must never let two drafts double-claim the same ULB or the
+ * same batch slot. See docs/adr/0002-batching-and-locks.md for the reservation/reclaim design;
+ * docs/adr/0001-idempotent-retry.md for retry safety. Structured in 4 stages:
  *   1-2. One short transaction: allocate a batch number + acquire all ULB locks, all-or-nothing.
  *   3.   Chunked, non-transactional child assembly (scales to 700+ ULBs without one giant transaction).
  *   4.   Revalidate against live data, verify, and finalize BUILDING -> READY with an
@@ -147,6 +145,7 @@ export class ClaimLetterAssemblyService {
     private readonly ulbModel: Model<UlbDocument>,
     private readonly eligibilityService: ClaimLetterEligibilityService,
     private readonly historyService: ClaimLetterHistoryService,
+    private readonly formJsonConfigService: ClaimLetterFormJsonService,
   ) {}
 
   /** Thin public wrapper so every claim-letter mutating endpoint returns the same mapped
@@ -202,7 +201,7 @@ export class ClaimLetterAssemblyService {
     }
   }
 
-  // ─── Idempotent retry (plan §10) ────────────────────────────────────────────
+  // ─── Idempotent retry (docs/adr/0001-idempotent-retry.md) ───────────────────
 
   /** Scoped by `state` as well as `buildRequestId` — `buildRequestId` is client-suppliable and
    *  only unique at the DB level across *all* states, so without this a caller who (accidentally
@@ -221,7 +220,7 @@ export class ClaimLetterAssemblyService {
     );
   }
 
-  // ─── Steps 1-2: one transaction — allocate batch number + acquire all locks (plan §7.2) ────
+  // ─── Steps 1-2: allocate batch number + acquire all locks (docs/adr/0002-batching-and-locks.md) ───
 
   /** Thin orchestrator around a single reservation attempt — gives a stale `BUILDING` row exactly
    *  one chance to be reclaimed inline before surfacing the standard conflict to the caller,
@@ -447,7 +446,7 @@ export class ClaimLetterAssemblyService {
     }
   }
 
-  // ─── Step 3: resolve sources + build children, chunked, not transactional (plan §7.3) ──────
+  // ─── Step 3: resolve sources + build children, chunked, not transactional (docs/adr/0002-batching-and-locks.md) ───
 
   private async buildChildren(
     parent: ClaimLetterBatchDocument,
@@ -473,11 +472,28 @@ export class ClaimLetterAssemblyService {
     yearOid: Types.ObjectId,
     installment: number,
   ): Promise<PreparedChildren> {
-    const [gate, allocationByUlbId, ulbLevelEligibility] = await Promise.all([
+    const [gate, allocationByUlbId, varianceConfig] = await Promise.all([
       this.eligibilityService.evaluateStateLevelGate(String(stateOid), String(yearOid), installment as 1 | 2),
       this.eligibilityService.resolveDevolutionAllocations(String(stateOid), String(yearOid), installment as 1 | 2),
-      // Re-verified here too, not just at picker time (plan §7.3) — a ULB's SLB/Annual Accounts/
-      // Elected Body/FC Unspent status can change between being picked and the draft being saved.
+      this.formJsonConfigService.loadVarianceConfig(String(yearOid)),
+    ]);
+
+    if (!gate.passed) {
+      const reason = gate.sources.find((s) => s.result === 'FAILED')?.reasonCode ?? 'STATE_GATE_FAILED';
+      throw new BadRequestException(`State is not eligible to claim: ${reason}`);
+    }
+
+    // Both deferred until the gate is confirmed passing — resolveUlbLevelEligibility is the
+    // heaviest of this method's fetches (a bulk find per ULB-bulk-evaluable source), entirely
+    // wasted when the state isn't eligible at all; resolveUlbSnapshots was already sequenced after
+    // the gate check, so it now simply runs alongside the other post-gate fetch instead of before it.
+    const [ulbSnapshotById, ulbLevelEligibility] = await Promise.all([
+      this.resolveUlbSnapshots(
+        selections.map((s) => s.ulbId),
+        stateOid,
+      ),
+      // Re-verified here too, not just at picker time — a ULB's SLB/Annual Accounts/Elected
+      // Body/FC Unspent status can change between being picked and the draft being saved.
       this.eligibilityService.resolveUlbLevelEligibility(
         String(stateOid),
         String(yearOid),
@@ -486,14 +502,11 @@ export class ClaimLetterAssemblyService {
       ),
     ]);
 
-    if (!gate.passed) {
-      const reason = gate.sources.find((s) => s.result === 'FAILED')?.reasonCode ?? 'STATE_GATE_FAILED';
-      throw new BadRequestException(`State is not eligible to claim: ${reason}`);
-    }
-
-    const ulbSnapshotById = await this.resolveUlbSnapshots(
-      selections.map((s) => s.ulbId),
-      stateOid,
+    // Every enabled FORM_AND_ROW source is guaranteed PASSED/EXEMPTED here (gate.passed already
+    // asserted true above) — the filter mirrors the identical one used for stateEligibilitySources
+    // below, purely for self-documentation/defensiveness.
+    const formAndRowSources = gate.sources.filter(
+      (s) => s.evaluationLevel === 'FORM_AND_ROW' && (s.result === 'PASSED' || s.result === 'EXEMPTED'),
     );
 
     const invalid: string[] = [];
@@ -514,10 +527,23 @@ export class ClaimLetterAssemblyService {
         continue;
       }
       const claimedAmount = selection.claimedAmount;
-      if (!isClaimedAmountWithinVariance(allocation.allocatedAmount, claimedAmount)) {
+      if (
+        !isClaimedAmountWithinVariance(
+          allocation.allocatedAmount,
+          claimedAmount,
+          varianceConfig.lowerPercent,
+          varianceConfig.upperPercent,
+        )
+      ) {
         invalid.push(identifier);
         continue;
       }
+
+      const eligibilitySources = this.buildChildEligibilitySources(
+        selection.ulbId,
+        formAndRowSources,
+        ulbLevelEligibility.rowEvidenceByFormId,
+      );
 
       children.push({
         ulbId: selection.ulbId,
@@ -531,6 +557,7 @@ export class ClaimLetterAssemblyService {
           stateOid,
           yearOid,
           installment,
+          eligibilitySources,
         ),
       });
     }
@@ -632,6 +659,7 @@ export class ClaimLetterAssemblyService {
     stateOid: Types.ObjectId,
     yearOid: Types.ObjectId,
     installment: number,
+    eligibilitySources: Record<string, unknown>[],
   ): Record<string, unknown> {
     return {
       claimLetter: parent._id,
@@ -656,7 +684,7 @@ export class ClaimLetterAssemblyService {
         allocatedAmount: allocation.allocatedAmount,
         installment,
       },
-      eligibilitySources: [],
+      eligibilitySources,
       appliedExemptionIds: [],
       createdBy: userOid,
       updatedBy: userOid,
@@ -712,7 +740,37 @@ export class ClaimLetterAssemblyService {
     };
   }
 
-  // ─── Step 4: revalidate, verify, finalize (plan §7.5) ───────────────────────
+  /**
+   * One `eligibilitySources` entry per FORM_AND_ROW source, for one specific ULB — merges that
+   * source's already-resolved state-level fields (formId/formJsonId/ruleVersion/formType/
+   * formDocumentId/statusAtEvaluation/evidence, identical for every ULB in this batch) with this
+   * ULB's own row evidence (rowDocumentId/rowStatusAtEvaluation/datasetVersion), both already
+   * in memory from `prepareChildren`'s fetches — no query here. A ULB with no row evidence entry
+   * hit `defaultWhenNoRow` (no row existed) — still gets a PASSED snapshot (it must have, or
+   * `perUlbEligible` would have already rejected it), just with null row fields.
+   */
+  private buildChildEligibilitySources(
+    ulbId: string,
+    formAndRowSources: EligibilityEvaluationResult[],
+    rowEvidenceByFormId: Map<number, Map<string, RowEligibilityEvidence>>,
+  ): Record<string, unknown>[] {
+    return formAndRowSources.map((source) => {
+      const evidence = rowEvidenceByFormId.get(source.formId)?.get(ulbId);
+      const merged: EligibilityEvaluationResult = evidence
+        ? {
+            ...source,
+            rowDocumentId: evidence.rowDocumentId,
+            rowStatusAtEvaluation: evidence.rowStatusAtEvaluation,
+            datasetVersion: evidence.datasetVersion,
+            result: evidence.bucket === 'EXEMPTED' ? 'EXEMPTED' : 'PASSED',
+            reasonCode: evidence.bucket === 'EXEMPTED' ? 'ROW_EXEMPTED' : 'ROW_STATUS_ACCEPTED',
+          }
+        : { ...source, rowDocumentId: null, rowStatusAtEvaluation: null, reasonCode: 'ROW_DEFAULT_NO_ROW' };
+      return this.toEligibilitySourceSnapshot(merged);
+    });
+  }
+
+  // ─── Step 4: revalidate, verify, finalize (docs/adr/0002-batching-and-locks.md) ──────────────
 
   /** Shared by all three finalize paths (create/update/version-regen) — revalidates against
    *  live data, verifies persisted children match the build, and computes the content hash. */
@@ -976,7 +1034,7 @@ export class ClaimLetterAssemblyService {
     }
   }
 
-  // ─── PATCH .../draft: diff-based update, reusing the create machinery (plan §7.5) ───
+  // ─── PATCH .../draft: diff-based update, reusing the create machinery (docs/adr/0002-batching-and-locks.md) ───
 
   async updateDraft(
     claimLetterId: string,
@@ -1063,10 +1121,11 @@ export class ClaimLetterAssemblyService {
     }
 
     try {
-      // Children aren't required to preserve document identity across an edit (only frozen
-      // claim *versions* are immutable, per plan §7.7) — delete-and-rebuild the full set is
-      // simpler and safer than a true per-field diff, and also sidesteps a duplicate-key
-      // collision that reusing a retained ULB's existing child document would otherwise risk.
+      // Children aren't required to preserve document identity across an edit (only frozen claim
+      // *versions* are immutable — docs/adr/0002-batching-and-locks.md) — delete-and-rebuild the
+      // full set is simpler and safer than a true per-field diff, and also sidesteps a
+      // duplicate-key collision that reusing a retained ULB's existing child document would
+      // otherwise risk.
       //
       // Validate the full new child set in memory FIRST — a business-rule rejection (ineligible
       // ULB, variance violation, state gate failure) throws here, before anything destructive
@@ -1276,7 +1335,7 @@ export class ClaimLetterAssemblyService {
     // changed `currentFormStatus`/`revision` while we hold this token (abandon/submit both refuse
     // to act while it's set), so this is strictly equivalent to the old revision-guard but also
     // clears the lock atomically in the same write. No history write here — draft edits are not
-    // workflow transitions (plan §9/§19.2).
+    // workflow transitions (docs/adr/0003-workflow-transitions.md).
     const updated = await this.batchModel
       .findOneAndUpdate(
         { _id: parent._id, currentFormStatus: FORM_STATUS.IN_PROGRESS, editLockToken: editToken },
@@ -1305,7 +1364,7 @@ export class ClaimLetterAssemblyService {
     return updated;
   }
 
-  // ─── POST .../abandon (plan §7.5) ────────────────────────────────────────────
+  // ─── POST .../abandon (docs/adr/0002-batching-and-locks.md) ─────────────────
 
   async abandonDraft(claimLetterId: string, user: AuthUser): Promise<ClaimLetterBatchSummary> {
     const raw = await this.abandonDraftRaw(claimLetterId, user);
@@ -1350,7 +1409,7 @@ export class ClaimLetterAssemblyService {
         .exec();
 
       if (updated) {
-        // Deleted, not flagged, so the ULB is immediately selectable elsewhere (plan §7.5).
+        // Deleted, not flagged, so the ULB is immediately selectable elsewhere.
         await this.lockModel.deleteMany({ claimLetter: parent['_id'], lockState: 'ACTIVE' }, { session });
         await this.historyService.recordTransition(
           {
@@ -1391,14 +1450,14 @@ export class ClaimLetterAssemblyService {
     throw new ConflictException('Draft could not be abandoned. Please retry.');
   }
 
-  // ─── Version regeneration (plan §7.6) — mechanism only, no State-facing endpoint in V1 ───
+  // ─── Version regeneration — mechanism only, no State-facing endpoint in V1 (docs/adr/0003-workflow-transitions.md) ───
 
   /**
-   * Ties to brain §15.8 (new version on MoHUA rejection — that flow itself is out of scope).
+   * Built ahead of the future MoHUA-rejection flow (out of scope for V1) that will call this.
    * Carries forward the previous version's own ULB/amount selections but re-runs the full
    * build pipeline (fresh eligibility evaluation, fresh locks, fresh children) rather than
    * copying or mutating the previous version's documents — a superseded version stays exactly
-   * as it was (plan §7.7 immutability).
+   * as it was (see docs/adr/0002-batching-and-locks.md's immutability note).
    */
   async createNewVersion(previousClaimId: string, reason: string, user: AuthUser): Promise<Record<string, unknown>> {
     const previous = await this.batchModel
@@ -1469,8 +1528,9 @@ export class ClaimLetterAssemblyService {
     }
   }
 
-  /** Same all-or-nothing pattern as `reserveBatchSlotAndLocks` (plan §7.2), but for an explicit
-   *  {batchNumber, version} pair instead of allocating the next free batch slot. A concurrent
+  /** Same all-or-nothing pattern as `reserveBatchSlotAndLocks`
+   *  (docs/adr/0002-batching-and-locks.md), but for an explicit {batchNumber, version} pair
+   *  instead of allocating the next free batch slot. A concurrent
    *  regeneration attempt racing for the same version hits the same unique index and gets a
    *  clear conflict to retry against — no auto-retry, matching the create-draft precedent. */
   private async reserveVersionSlotAndLocks(
@@ -1642,7 +1702,7 @@ export class ClaimLetterAssemblyService {
     }
   }
 
-  // ─── Acknowledgement lock transition (plan §7.8) — mechanism only, no caller in V1 ───
+  // ─── Acknowledgement lock transition — mechanism only, no caller in V1 (docs/adr/0003-workflow-transitions.md) ───
 
   /** Permanent database-level guarantee against a second acknowledged claim for the same
    *  State/year/installment/ULB — scoped by `claimLetter`, never the bare business key. */

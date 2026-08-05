@@ -93,7 +93,6 @@ const mockSavedDbRows = [
     dateOfConstitution: new Date('2022-06-15T00:00:00.000Z'),
     dateOfExpiry: new Date('2027-06-14T00:00:00.000Z'),
     remarks: 'All good',
-    rowType: 'DB_ULB',
     isActive: true,
   },
   {
@@ -105,12 +104,11 @@ const mockSavedDbRows = [
     dateOfConstitution: undefined,
     dateOfExpiry: undefined,
     remarks: '',
-    rowType: 'DB_ULB',
     isActive: true,
   },
 ];
 
-/** EXTRA_ULB row that should never appear in a newly generated template. */
+/** Unmatched row (no ulbId) that should never appear in a newly generated template. */
 const mockExtraUlbRow = {
   ulbId: undefined,
   rowNumber: 3,
@@ -120,7 +118,6 @@ const mockExtraUlbRow = {
   dateOfConstitution: undefined,
   dateOfExpiry: undefined,
   remarks: 'User added',
-  rowType: 'EXTRA_ULB',
   isActive: true,
 };
 
@@ -140,7 +137,6 @@ const dumpRows: DumpRowFixture[] = [
     dateOfConstitution: new Date('2022-06-15T00:00:00.000Z'),
     dateOfExpiry: new Date('2027-06-14T00:00:00.000Z'),
     remarks: 'Portal corrected',
-    rowType: 'DB_ULB',
     validationStatus: 'VALID',
     lastUpdatedSource: 'PORTAL',
     datasetVersion: 2,
@@ -161,7 +157,6 @@ const dumpRows: DumpRowFixture[] = [
     dateOfConstitution: null,
     dateOfExpiry: null,
     remarks: '',
-    rowType: 'DB_ULB',
     validationStatus: 'VALID',
     lastUpdatedSource: 'EXCEL',
     datasetVersion: 2,
@@ -177,7 +172,6 @@ const dumpRows: DumpRowFixture[] = [
     dateOfConstitution: null,
     dateOfExpiry: null,
     remarks: 'Old version',
-    rowType: 'EXTRA_ULB',
     validationStatus: 'VALID',
     lastUpdatedSource: 'EXCEL',
     datasetVersion: 1,
@@ -193,7 +187,6 @@ const dumpRows: DumpRowFixture[] = [
     dateOfConstitution: null,
     dateOfExpiry: null,
     remarks: 'Inactive row',
-    rowType: 'EXTRA_ULB',
     validationStatus: 'VALID',
     lastUpdatedSource: 'EXCEL',
     datasetVersion: 2,
@@ -285,8 +278,13 @@ const mockEulbFormJsonConfigService = {
   loadFields: jest.fn().mockResolvedValue(MOCK_TYPED_ROW_EDIT_FIELDS),
 };
 
-const mockFormModel = { findOne: jest.fn(), findOneAndUpdate: jest.fn(), create: jest.fn() };
-const mockRowModel = { find: jest.fn() };
+const mockFormModel = {
+  findOne: jest.fn(),
+  findOneAndUpdate: jest.fn(),
+  create: jest.fn(),
+  db: { startSession: jest.fn() },
+};
+const mockRowModel = { find: jest.fn(), updateMany: jest.fn() };
 const mockUlbModel = { find: jest.fn(), countDocuments: jest.fn() };
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -466,10 +464,10 @@ describe('ElectedUrbanLocalBodiesService', () => {
       expect(sheet.getRow(3).getCell(5).value).toBeFalsy();
     });
 
-    it('excludes EXTRA_ULB rows from the template when an active dataset exists', async () => {
+    it('excludes unmatched (no-ulbId) rows from the template when an active dataset exists', async () => {
       mockFormModel.findOne.mockReturnValueOnce(q(mockFormWithDataset));
-      // The service queries with rowType: DB_ULB; include the EXTRA_ULB in the mock
-      // to verify the service itself filters it out via the ulbId overlay mechanism.
+      // The service no longer filters by any row-type field at query time — it fetches every row
+      // for the active version and overlays by ulbId, which naturally skips a row with no ulbId.
       mockRowModel.find.mockReturnValueOnce(q([...mockSavedDbRows, mockExtraUlbRow]));
       const sheet = await generateAndLoad();
 
@@ -623,17 +621,17 @@ describe('ElectedUrbanLocalBodiesService', () => {
     it('exports latest data source from lastUpdatedSource', async () => {
       const sheet = await dumpSheet();
 
-      expect(sheet.getRow(2).getCell(10).value).toBe('PORTAL');
-      expect(sheet.getRow(3).getCell(10).value).toBe('EXCEL');
+      expect(sheet.getRow(2).getCell(9).value).toBe('PORTAL');
+      expect(sheet.getRow(3).getCell(9).value).toBe('EXCEL');
     });
 
     it('exports submission metadata and row actor names', async () => {
       const sheet = await dumpSheet();
 
-      expect(sheet.getRow(2).getCell(12).value).toBe('Submitter User');
-      expect(sheet.getRow(2).getCell(13).value).toBe('2026-02-01T00:00:00.000Z');
-      expect(sheet.getRow(2).getCell(14).value).toBe('Creator User');
-      expect(sheet.getRow(2).getCell(15).value).toBe('Updater User');
+      expect(sheet.getRow(2).getCell(11).value).toBe('Submitter User');
+      expect(sheet.getRow(2).getCell(12).value).toBe('2026-02-01T00:00:00.000Z');
+      expect(sheet.getRow(2).getCell(13).value).toBe('Creator User');
+      expect(sheet.getRow(2).getCell(14).value).toBe('Updater User');
     });
 
     it('does not throw for empty rows and returns a workbook with headers', async () => {
@@ -650,7 +648,6 @@ describe('ElectedUrbanLocalBodiesService', () => {
         'Date of Constitution',
         'Date of Expiry',
         'Remarks',
-        'Row Type',
         'Validation Status',
         'Latest Data Source',
         'Dataset Version',
@@ -711,13 +708,10 @@ describe('ElectedUrbanLocalBodiesService', () => {
       service = module.get<ElectedUrbanLocalBodiesService>(ElectedUrbanLocalBodiesService);
     });
 
-    it('includes extraUlbEditFields in the response with censusCode and ulbName entries', async () => {
+    it('does not include extraUlbEditFields — no row is ever unregistered, so nothing needs a censusCode/ulbName edit form', async () => {
       const result = await service.getForm(stateOid.toString(), yearOid.toString(), adminUser);
       const data = result.data as Record<string, unknown>;
-      expect(Array.isArray(data['extraUlbEditFields'])).toBe(true);
-      const fields = data['extraUlbEditFields'] as Array<{ key: string }>;
-      expect(fields.some((f) => f.key === 'censusCode')).toBe(true);
-      expect(fields.some((f) => f.key === 'ulbName')).toBe(true);
+      expect(data['extraUlbEditFields']).toBeUndefined();
     });
 
     it('leaves rowEditFields unchanged — does not include censusCode or ulbName', async () => {
@@ -1037,6 +1031,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
 
   describe('finalSubmit', () => {
     let service: ElectedUrbanLocalBodiesService;
+    let mockSession: Record<string, jest.Mock>;
 
     const mockValidator = {
       validateFinalSubmitAndBuildPayload: jest.fn().mockReturnValue({
@@ -1083,6 +1078,15 @@ describe('ElectedUrbanLocalBodiesService', () => {
       mockUlbModel.countDocuments.mockResolvedValue(3); // computed active ULB count
       mockFormModel.findOne.mockReturnValue(q(baseFormDoc));
       mockFormModel.findOneAndUpdate.mockReturnValue(q({ ...baseFormDoc, currentFormStatus: 3 }));
+
+      mockSession = {
+        startTransaction: jest.fn(),
+        commitTransaction: jest.fn().mockResolvedValue(undefined),
+        abortTransaction: jest.fn().mockResolvedValue(undefined),
+        endSession: jest.fn().mockResolvedValue(undefined),
+      };
+      mockFormModel.db.startSession.mockResolvedValue(mockSession);
+      mockRowModel.updateMany.mockReturnValue(q(undefined));
 
       const module: TestingModule = await Test.createTestingModule({
         providers: [
@@ -1243,6 +1247,28 @@ describe('ElectedUrbanLocalBodiesService', () => {
       }
 
       expect(caught).toBeDefined();
+    });
+
+    it('bulk-updates active rows in the current dataset version to rowStatus UNDER_REVIEW_BY_MOHUA, in the same transaction as the parent update', async () => {
+      await service.finalSubmit(baseDto, adminUser, '', '');
+
+      expect(mockFormModel.db.startSession).toHaveBeenCalled();
+      expect(mockRowModel.updateMany).toHaveBeenCalledWith(
+        { form: formOid, datasetVersion: baseFormDoc.activeDatasetVersion, isActive: true },
+        { $set: { rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA } },
+        { session: mockSession },
+      );
+      expect(mockSession.commitTransaction).toHaveBeenCalled();
+    });
+
+    it('aborts the transaction and never commits when the row bulk-update fails', async () => {
+      mockRowModel.updateMany.mockReturnValue({ exec: jest.fn().mockRejectedValue(new Error('row write failed')) });
+
+      await expect(service.finalSubmit(baseDto, adminUser, '', '')).rejects.toThrow('row write failed');
+
+      expect(mockSession.abortTransaction).toHaveBeenCalled();
+      expect(mockSession.commitTransaction).not.toHaveBeenCalled();
+      expect(mockSession.endSession).toHaveBeenCalled();
     });
   });
 });

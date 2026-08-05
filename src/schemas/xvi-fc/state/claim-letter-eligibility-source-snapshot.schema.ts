@@ -35,8 +35,8 @@ export class ClaimLetterEligibilitySourceSnapshot {
   @Prop({ type: Number, required: true })
   statusAtEvaluation!: number;
 
-  @Prop({ type: String, default: null })
-  rowStatusAtEvaluation?: string | null;
+  @Prop({ type: Number, default: null })
+  rowStatusAtEvaluation?: number | null;
 
   @Prop({ type: Number, default: null })
   revision?: number | null;

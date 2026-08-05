@@ -12,7 +12,7 @@ export class GetClaimLetterUlbOptionsQueryDto {
   eligibilityFilter?: 'ELIGIBLE' | 'INELIGIBLE';
 
   // Excludes this draft's own locks from the "locked elsewhere" filter, so a draft's already-
-  // selected ULBs still show as eligible/selectable (plan §6.1).
+  // selected ULBs still show as eligible/selectable.
   @IsOptional()
   @IsMongoId()
   claimLetterId?: string;

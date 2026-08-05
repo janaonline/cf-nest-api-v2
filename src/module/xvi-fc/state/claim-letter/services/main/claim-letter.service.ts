@@ -18,15 +18,16 @@ import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-
 import { XviFcFileRefDto } from 'src/module/xvi-fc/common/dto/xvi-fc-file-ref.dto';
 import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
 import { ExpectedUlbSetService } from 'src/module/xvi-fc/common/services/expected-ulb-set.service';
-import type { FieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
+import type { FieldConfig, FieldSupportingContent } from 'src/module/xvi-fc/common/types/field-config.type';
 import {
   ClaimLetterBatch,
   ClaimLetterBatchDocument,
   ClaimLetterBatchNumber,
 } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
 import {
+  CLAIM_LETTER_ACTION_DOWNLOAD_TEMPLATE,
+  CLAIM_LETTER_ACTION_PREVIEW_TEMPLATE,
   CLAIM_LETTER_EDIT_LOCK_LEASE_MINUTES,
-  CLAIM_LETTER_FORM_ID,
   CLAIM_LETTER_MAX_BATCH_NUMBER,
   CLAIM_LETTER_PAGINATION_DEFAULT_LIMIT,
   CLAIM_LETTER_PAGINATION_DEFAULT_PAGE,
@@ -36,22 +37,22 @@ import { assertInstallmentSupported } from '../../helpers/claim-letter-installme
 import { mapClaimLetterBatchDocToSummary } from '../../helpers/claim-letter-summary.helpers';
 import { ClaimLetterEligibilityService } from '../eligibility/claim-letter-eligibility.service';
 import { ClaimLetterHistoryService } from '../history/claim-letter-history.service';
+import { ClaimLetterFormJsonService } from '../form-json/claim-letter-form-json.service';
 import type { GetClaimLetterHistoryQueryDto } from '../../dto/get-claim-letter-history-query.dto';
 import type {
   ClaimLetterBatchSummary,
   ClaimLetterClaimContext,
   ClaimLetterEligibilitySummary,
 } from '../../types/claim-letter.types';
-import { FormJsonService } from 'src/master/form-json/form-json.service';
 
 /** Loose shape for .lean() query results — real field-level typing lives on the schema itself. */
 type LeanClaimLetterBatch = Record<string, unknown>;
 
 /**
  * Orchestrates the State-facing claim-letter read paths (eligibility summary, single-claim
- * detail, and the "list my claim letters" history view — brain §15.2), plus the two
- * parent-only mutations that don't touch locks/children (signed-file upload, submit — plan §6).
- * Lock/child-touching mutations (create/update/abandon) live in ClaimLetterAssemblyService.
+ * detail, and the "list my claim letters" history view), plus the two parent-only mutations that
+ * don't touch locks/children (signed-file upload, submit). Lock/child-touching mutations
+ * (create/update/abandon) live in ClaimLetterAssemblyService.
  */
 @Injectable()
 export class ClaimLetterService {
@@ -62,7 +63,7 @@ export class ClaimLetterService {
     private readonly expectedUlbSetService: ExpectedUlbSetService,
     private readonly historyService: ClaimLetterHistoryService,
     private readonly fileInfoNormalizer: FileInfoNormalizerService,
-    private readonly formJsonService: FormJsonService,
+    private readonly formJsonConfigService: ClaimLetterFormJsonService,
     @InjectConnection() private readonly connection: Connection,
     @InjectModel(ClaimLetterBatch.name)
     private readonly batchModel: Model<ClaimLetterBatchDocument>,
@@ -156,10 +157,11 @@ export class ClaimLetterService {
     this.assertStateAccess(user, stateId);
     assertInstallmentSupported(installment);
 
-    const [expectedUlbs, batchSlotInfo, financialOverview] = await Promise.all([
+    const [expectedUlbs, batchSlotInfo, financialOverview, varianceConfig] = await Promise.all([
       this.expectedUlbSetService.resolve(stateId, yearId),
       this.resolveBatchSlotInfo(stateId, yearId, installment),
       this.eligibilityService.getFinancialOverview(stateId, yearId, installment as 1 | 2),
+      this.formJsonConfigService.loadVarianceConfig(yearId),
     ]);
 
     const expectedUlbIds = expectedUlbs.map((u) => u.ulbId);
@@ -177,6 +179,8 @@ export class ClaimLetterService {
       nextBatchNumber: batchSlotInfo.nextBatchNumber,
       financialOverview,
       remainingUlbCount: remainingUlbIds.length,
+      varianceLowerPercent: varianceConfig.lowerPercent,
+      varianceUpperPercent: varianceConfig.upperPercent,
     };
 
     return xviFcSuccess('Claim letter context fetched.', context);
@@ -205,7 +209,8 @@ export class ClaimLetterService {
     return { batchSlotsUsed: usedBatchNumbers.size, nextBatchNumber };
   }
 
-  /** Persists `signedClaimFile` — writable only while IN_PROGRESS (plan §1), no history write. */
+  /** Persists `signedClaimFile` — writable only while IN_PROGRESS, no history write (not a
+   *  workflow transition — docs/adr/0003-workflow-transitions.md). */
   async uploadSignedFile(
     claimLetterId: string,
     fileRef: XviFcFileRefDto,
@@ -252,8 +257,10 @@ export class ClaimLetterService {
   }
 
   /**
-   * `IN_PROGRESS -> UNDER_REVIEW_BY_MOHUA` (plan §6/§9) — requires a signed file, idempotent on
-   * retry (an already-submitted claim returns its current state rather than erroring — plan §10).
+   * `IN_PROGRESS -> UNDER_REVIEW_BY_MOHUA` — requires a signed file, idempotent on retry (an
+   * already-submitted claim returns its current state rather than erroring — see
+   * docs/adr/0001-idempotent-retry.md). Recorded as a workflow transition
+   * (docs/adr/0003-workflow-transitions.md).
    */
   async submit(
     claimLetterId: string,
@@ -399,10 +406,53 @@ export class ClaimLetterService {
     this.assertStateAccess(user, toObjectIdString(doc['state']) ?? '');
 
     const summary = mapClaimLetterBatchDocToSummary(doc);
-    summary.questions = await this.loadQuestions(toObjectIdString(doc['year']) ?? '');
+    const formConfig = await this.formJsonConfigService.loadFormConfig(toObjectIdString(doc['year']) ?? '');
+    summary.questions = formConfig.questions;
+    summary.varianceLowerPercent = formConfig.varianceLowerPercent;
+    summary.varianceUpperPercent = formConfig.varianceUpperPercent;
     this.applySignedFileValue(summary.questions, doc['signedClaimFile']);
+    this.applySignedFileSupportingContent(summary.questions, doc);
 
     return xviFcSuccess('Claim letter fetched.', summary);
+  }
+
+  /**
+   * Adds the "Preview Template"/"Download Template" actions to `signedClaimFile`'s supporting
+   * content — both are non-mutating reads (no backend file path to hide via `meta`), safe in any
+   * batch state, gated only on the batch actually having ULBs to put in a letter. The frontend
+   * fetches the document data itself via `GET :claimLetterId/document` when either is clicked.
+   */
+  private applySignedFileSupportingContent(questions: FieldConfig[], doc: LeanClaimLetterBatch): void {
+    const field = questions.find((q) => q.key === 'signedClaimFile');
+    if (!field) return;
+
+    const hasUlbs = ((doc['ulbCount'] as number) ?? 0) > 0;
+    const supportingContent: FieldSupportingContent = {
+      type: 'actions',
+      position: 'before',
+      layout: 'inline',
+      separator: 'dot',
+      description: hasUlbs
+        ? 'Preview or download the claim letter for this batch, then upload the signed copy below.'
+        : '',
+      actions: [
+        {
+          id: CLAIM_LETTER_ACTION_PREVIEW_TEMPLATE,
+          label: 'Preview Template',
+          icon: 'bi bi-eye',
+          tone: 'primary',
+          visible: hasUlbs,
+        },
+        {
+          id: CLAIM_LETTER_ACTION_DOWNLOAD_TEMPLATE,
+          label: 'Download Template',
+          icon: 'bi bi-file-earmark-arrow-down',
+          tone: 'primary',
+          visible: hasUlbs,
+        },
+      ],
+    };
+    field.supportingContent = [supportingContent];
   }
 
   /**
@@ -426,28 +476,6 @@ export class ClaimLetterService {
       sizeKb: (file['sizeKb'] as number | undefined) ?? null,
       pageCount: (file['pageCount'] as number | null | undefined) ?? null,
     };
-  }
-
-  /**
-   * Claim Letter's own `formjsons` field config (today: just `signedClaimFile`) — a UI question
-   * source, not to be confused with the `claimEligibility` config living on *other* forms (e.g.
-   * Devolution) that this feature reads for eligibility gating. Missing/unseeded is expected before
-   * the payload is pushed, so it degrades to an empty list with a logged warning rather than a 500 —
-   * the rest of the claim detail must still render.
-   */
-  private async loadQuestions(designYearId: string): Promise<FieldConfig[]> {
-    try {
-      const formJson = await this.formJsonService.findActiveByDesignYearAndFormId(designYearId, CLAIM_LETTER_FORM_ID);
-      return formJson.data ?? [];
-    } catch (err) {
-      if (err instanceof NotFoundException) {
-        this.logger.warn(
-          `Claim Letter formjsons (formId ${CLAIM_LETTER_FORM_ID}) not seeded for year ${designYearId}.`,
-        );
-        return [];
-      }
-      throw err;
-    }
   }
 
   async listHistory(

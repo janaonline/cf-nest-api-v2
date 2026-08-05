@@ -130,7 +130,7 @@ export class ElectedUrbanLocalBodiesController {
   @ApiOperation({
     summary: 'Get Elected Urban Local Bodies rows (paginated)',
     description:
-      'Returns rows from the active dataset for the given state and year. Supports pagination, search by censusCode/ulbName, and filtering by validationStatus, rowType, and errorField.',
+      'Returns rows from the active dataset for the given state and year. Supports pagination, search by censusCode/ulbName, and filtering by validationStatus and errorField.',
   })
   @ApiQuery({ name: 'page', required: false, description: 'Page number (default: 1)' })
   @ApiQuery({ name: 'limit', required: false, description: 'Rows per page (default: 50, max: 200)' })
@@ -141,7 +141,6 @@ export class ElectedUrbanLocalBodiesController {
     enum: ['VALID', 'INVALID'],
     description: 'Filter by row validation status',
   })
-  @ApiQuery({ name: 'rowType', required: false, enum: ['DB_ULB', 'EXTRA_ULB'], description: 'Filter by row type' })
   @ApiQuery({ name: 'errorField', required: false, description: 'Filter rows where errors.field equals this value' })
   @Get(':stateId/:yearId/rows')
   @UseGuards(PermissionGuard)

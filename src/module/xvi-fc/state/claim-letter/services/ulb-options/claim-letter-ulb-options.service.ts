@@ -15,11 +15,11 @@ import type { GetClaimLetterUlbOptionsQueryDto } from '../../dto/get-claim-lette
 import type { ClaimLetterUlbOption } from '../../types/claim-letter.types';
 
 /**
- * ULB picker for the claim-letter select dialog (plan §6.1) — deliberately does NOT reuse FC
- * Unspent's `ulb-options` filtering semantics (that endpoint inner-joins to only ULBs that already
- * have an allocation row, so ineligible ULBs are simply absent). Here every expected ULB is
- * returned, annotated `eligible`/`ineligibleReasonCode`, sorted eligible-first, so the dialog can
- * render ineligible rows visible-but-disabled.
+ * ULB picker for the claim-letter select dialog — deliberately does NOT reuse FC Unspent's
+ * `ulb-options` filtering semantics (that endpoint inner-joins to only ULBs that already have an
+ * allocation row, so ineligible ULBs are simply absent). Here every expected ULB is returned,
+ * annotated `eligible`/`ineligibleReasonCode`, sorted eligible-first, so the dialog can render
+ * ineligible rows visible-but-disabled.
  */
 @Injectable()
 export class ClaimLetterUlbOptionsService {
@@ -77,7 +77,8 @@ export class ClaimLetterUlbOptionsService {
       else if (!passesUlbLevelCriteria) {
         ineligibleReasonCode = 'ULB_LEVEL_ELIGIBILITY_CRITERIA_NOT_MET';
         const failedCriteria = ulbLevelEligibility.perUlbFailedCriteria.get(ulb.ulbId) ?? [];
-        if (failedCriteria.length) ineligibleReasonDetail = `${failedCriteria.join(', ')} eligibility criteria not met`;
+        if (failedCriteria.length)
+          ineligibleReasonDetail = `${failedCriteria.map((f) => f.label).join(', ')} eligibility criteria not met`;
       }
 
       return {
@@ -93,7 +94,8 @@ export class ClaimLetterUlbOptionsService {
     });
 
     if (query.search) {
-      // TODO: use efficient way? check if regex is slow on large data sets?
+      // Linear regex scan over the already-in-memory expected-ULB list — fine at today's per-state
+      // ULB counts; revisit if a state's expected-ULB set grows large enough to make this a real cost.
       const regex = new RegExp(this.escapeRegExp(query.search), 'i');
       options = options.filter(
         (o) =>
@@ -104,7 +106,7 @@ export class ClaimLetterUlbOptionsService {
     if (query.eligibilityFilter === 'ELIGIBLE') options = options.filter((o) => o.eligible);
     else if (query.eligibilityFilter === 'INELIGIBLE') options = options.filter((o) => !o.eligible);
 
-    // Eligible-first, then alphabetical (plan §6.1: "sort by eligible").
+    // Eligible-first, then alphabetical — lets a State scan straight to the ULBs it can actually pick.
     options.sort((a, b) => {
       if (a.eligible !== b.eligible) return a.eligible ? -1 : 1;
       return a.ulbName.localeCompare(b.ulbName);

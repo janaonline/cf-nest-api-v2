@@ -1,5 +1,4 @@
 import { FormStatusType } from 'src/common/constants/form-status.constants';
-import { RowStatusType } from 'src/common/constants/row-status.constants';
 
 // ─── formJson.claimEligibility config (brain §7.2) ─────────────────────────────
 
@@ -31,7 +30,7 @@ export type ClaimWorkflowAction =
 export interface ClaimWorkflowActionConfig {
   action: ClaimWorkflowAction;
   targetFormStatus?: FormStatusType;
-  targetRowStatus?: RowStatusType;
+  targetRowStatus?: FormStatusType;
 }
 
 export interface ClaimEligibilitySourceFieldMapping {
@@ -64,6 +63,17 @@ export interface UlbEligibilityTally {
   total: number;
 }
 
+/** One ULB's resolved row evidence for a `FORM_AND_ROW` source — lets callers (claim-letter
+ *  assembly) freeze a real per-ULB `ClaimEligibilitySourceSnapshot` entry without re-querying, by
+ *  reusing the same bulk fetch `evaluateUlbBulkRowStatus` already runs to compute `perUlb`. */
+export interface RowEligibilityEvidence {
+  bucket: UlbEligibilityBucket;
+  rowDocumentId: string | null;
+  rowStatusAtEvaluation: FormStatusType | null;
+  /** Elected Body's dataset-versioned rows; null for FC Unspent (no dataset-versioning concept). */
+  datasetVersion: number | null;
+}
+
 /**
  * Config shape for the 'ROW_STATUS_AND_FIELDS' evaluator, read out of the free-form
  * `evaluator.config` bag (same convention already used for Devolution's `installmentField`) —
@@ -83,9 +93,11 @@ export interface ClaimEligibilityRowMatchConfig {
    *  silent default. E.g. FC Unspent: 'ELIGIBLE', since "no unspent balance to report" isn't a
    *  problem; a source where every ULB is expected to always have a row would use 'INELIGIBLE'. */
   defaultWhenNoRow: 'ELIGIBLE' | 'INELIGIBLE';
-  /** Forward-compatible, optional second AND-condition — unset until row-level documents gain a
-   *  real FORM_STATUS-constant field (confirmed future work, not built yet). When set, a row must
-   *  satisfy both this and the value mapping above to count as eligible. */
+  /** Optional second AND-condition, read by `ClaimEligibilityEvaluatorService.bucketRowValue` —
+   *  when both are set, a row must be in an accepted FORM_STATUS *and* satisfy the value mapping
+   *  above to count as ELIGIBLE/EXEMPTED; failing the FORM_STATUS check alone makes it INELIGIBLE,
+   *  no exemption bypass. Dynamic and config-driven, same as `acceptedFormStatuses` for the parent
+   *  form — editing `rowAcceptedFormStatuses` changes behavior with no code change. */
   rowFormStatusField?: string;
   rowAcceptedFormStatuses?: number[];
 }
@@ -117,6 +129,11 @@ export interface ClaimEligibilityConfig {
    *  shown alongside the pass/fail indicator regardless of current result — same wording whether
    *  passing or failing, only the tick/cross changes. */
   displayDescription?: string;
+  /** Compact form of `displayLabel` for column-header-style UIs (e.g. "AFS" for "Audited Financial
+   *  Statement") — today only consumed by the claim letter's Annexure 2 city-conditions table.
+   *  Optional; falls back to `displayLabel` when unset, so an unconfigured source still renders a
+   *  meaningful (if longer) header rather than blank. */
+  shortLabel?: string;
 
   ownerLevel: ClaimEligibilityOwnerLevel;
   evaluationLevel: ClaimEligibilityEvaluationLevel;
@@ -124,7 +141,7 @@ export interface ClaimEligibilityConfig {
   applicableInstallments: ClaimEligibilityInstallment[];
 
   acceptedFormStatuses: FormStatusType[];
-  acceptedRowStatuses?: RowStatusType[];
+  acceptedRowStatuses?: FormStatusType[];
 
   source: ClaimEligibilitySource;
   evaluator: ClaimEligibilityEvaluatorConfig;
@@ -187,7 +204,7 @@ export interface EligibilityEvaluationResult {
   rowDocumentId?: string | null;
 
   statusAtEvaluation: FormStatusType | null;
-  rowStatusAtEvaluation?: RowStatusType | null;
+  rowStatusAtEvaluation?: FormStatusType | null;
   revision?: number | null;
   datasetVersion?: number | null;
 
@@ -219,7 +236,7 @@ export interface ClaimEligibilitySourceSnapshot {
   rowDocumentId?: string | null;
 
   statusAtEvaluation: FormStatusType;
-  rowStatusAtEvaluation?: RowStatusType | null;
+  rowStatusAtEvaluation?: FormStatusType | null;
   revision?: number | null;
   datasetVersion?: number | null;
 

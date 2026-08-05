@@ -7,7 +7,6 @@ import { Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
 import { FORM_STATUS, getFormStatusLabel } from 'src/common/constants/form-status.constants';
 import { toObjectIdString } from 'src/common/utils/objectid.util';
-import { ROW_STATUS } from 'src/common/constants/row-status.constants';
 import {
   assertCanStateEditForm,
   assertCanStateFinalSubmitForm,
@@ -56,7 +55,6 @@ import {
   FC_UNSPENT_APPLICABLE_FC_BY_YEAR_LABEL,
   FC_UNSPENT_DECLARATION_TEMPLATE_ACTION_ID,
   FC_UNSPENT_DEVOLUTION_INSTALLMENT,
-  FC_UNSPENT_ELIGIBILITY_THRESHOLD_PERCENT,
   FC_UNSPENT_BLOCKING_MESSAGE_MISSING_DEVOLUTION,
   FC_UNSPENT_BLOCKING_MESSAGE_DEVOLUTION_RETURNED,
   FC_UNSPENT_BLOCKING_MESSAGE_DEVOLUTION_NOT_READY,
@@ -145,7 +143,7 @@ export class FcUnspentDeclarationService {
     const permissions = this.buildFormPermissions(user, stateId, currentFormStatus, gates);
     const { actors, stateName } = this.xvifcFormActorsService.buildActorsAndStateName(doc);
 
-    const allFields = await this.formJsonConfigService.loadFields(yearId);
+    const { fields: allFields, thresholdPercent: threshold } = await this.formJsonConfigService.loadFormConfig(yearId);
     const questionsConfig = getFcUnspentFieldsByType(allFields, 'FC_UNSPENT_MAIN_FORM_FIELDS');
     const rowEditFields = getFcUnspentFieldsByType(allFields, 'FC_UNSPENT_ROW_EDIT_FIELDS');
     if (rowEditFields.length === 0) {
@@ -169,7 +167,7 @@ export class FcUnspentDeclarationService {
     const responseData: FcUnspentDeclarationGetResponseData = {
       stateName,
       applicableFc,
-      threshold: FC_UNSPENT_ELIGIBILITY_THRESHOLD_PERCENT,
+      threshold,
       currentFormStatus,
       permissions,
       dependency: gates.dependency,
@@ -218,7 +216,7 @@ export class FcUnspentDeclarationService {
       });
     }
 
-    const allFields = await this.formJsonConfigService.loadFields(dto.yearId);
+    const { fields: allFields, thresholdPercent } = await this.formJsonConfigService.loadFormConfig(dto.yearId);
     const questions = getFcUnspentFieldsByType(allFields, 'FC_UNSPENT_MAIN_FORM_FIELDS');
     const validatorData: FormData = {
       isFcUnspent: dto.data.isFcUnspent ?? null,
@@ -269,7 +267,7 @@ export class FcUnspentDeclarationService {
         stateOid,
         rowsInput,
         gates.devolutionForm,
-        { requireAtLeastOne: false },
+        { requireAtLeastOne: false, thresholdPercent },
       );
       if (Object.keys(errors).length > 0) throwXviFcValidationError(errors);
       resolvedRows = builtRows;
@@ -371,7 +369,7 @@ export class FcUnspentDeclarationService {
       });
     }
 
-    const allFields = await this.formJsonConfigService.loadFields(dto.yearId);
+    const { fields: allFields, thresholdPercent } = await this.formJsonConfigService.loadFormConfig(dto.yearId);
     const questions = getFcUnspentFieldsByType(allFields, 'FC_UNSPENT_MAIN_FORM_FIELDS');
     const validatorData: FormData = {
       isFcUnspent: dto.data.isFcUnspent ?? null,
@@ -439,7 +437,7 @@ export class FcUnspentDeclarationService {
         stateOid,
         rowsInput,
         gates.devolutionForm,
-        { requireAtLeastOne: true },
+        { requireAtLeastOne: true, thresholdPercent },
       );
       if (Object.keys(errors).length > 0) throwXviFcValidationError(errors);
       resolvedRows = builtRows;
@@ -487,7 +485,7 @@ export class FcUnspentDeclarationService {
           yearOid,
           resolvedRows,
           userOid,
-          ROW_STATUS.UPDATE_PENDING,
+          FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
           session,
         );
         await this.rowService.insertRowHistory(
@@ -654,6 +652,8 @@ export class FcUnspentDeclarationService {
    * derives the dependency block + permission gates. Called identically by GET,
    * save-draft, and final-submit so the three never diverge.
    */
+  // Reads devolution-formula's activeDatasetVersion invariant from outside that module — see
+  // devolution-formula/docs/adr/0001-dataset-versioning.md before changing either side of this.
   private async resolveDevolutionDependency(
     stateOid: Types.ObjectId,
     yearOid: Types.ObjectId,

@@ -6,6 +6,7 @@ import { ClaimEligibilityEvaluatorService } from 'src/module/xvi-fc/common/servi
 import { ExpectedUlbSetService } from 'src/module/xvi-fc/common/services/expected-ulb-set.service';
 import type {
   EligibilityEvaluationResult,
+  RowEligibilityEvidence,
   UlbEligibilityTally,
 } from 'src/module/xvi-fc/common/types/claim-eligibility.type';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
@@ -68,32 +69,65 @@ export interface UlbCriterionSummary {
   tally: UlbEligibilityTally;
 }
 
+/** One ULB-bulk criterion a ULB failed — `type` is the formjson doc's stable machine key (e.g.
+ *  `UPLOAD_CONFIG_AUDITED`), `label` is its display copy (e.g. "Audited Accounts"). Callers that
+ *  need to test identity (e.g. "did this ULB fail the AFS criterion") should compare `type`, never
+ *  `label` — display copy can change independent of the criterion's identity.
+ *
+ *  Reused (not just for failures — see `ClaimLetterUlbLevelEligibility.criteriaColumns`) as the
+ *  canonical per-source shape wherever a ULB-bulk criterion needs to be identified and labelled,
+ *  regardless of pass/fail. `shortLabel` is always populated (`config.shortLabel ?? label`), unlike
+ *  the config's own optional field, so callers never need their own fallback. */
+export interface ClaimLetterFailedCriterion {
+  type: string;
+  label: string;
+  shortLabel: string;
+}
+
 export interface ClaimLetterUlbLevelEligibility {
   /** Merged verdict across every ULB-bulk-evaluable criterion (SLB, Annual Accounts x2, Elected
    *  Body row, FC Unspent row) — a ULB must be ELIGIBLE or EXEMPTED on every one, not INELIGIBLE
-   *  on any, to end up `true` here. Consumed by the picker/getUlbs/buildChildren (plan Part C). */
+   *  on any, to end up `true` here. Consumed by the picker/getUlbs/buildChildren. */
   perUlbEligible: Map<string, boolean>;
   /** Tallies for criteria with no state-level checklist line of their own (SLB, Provisional,
    *  Audited) — there's no state action to gate on, so these surface as a separate informational
-   *  block rather than a pass/fail line (plan's architecture decision). */
+   *  block rather than a pass/fail line. */
   standaloneCriteria: UlbCriterionSummary[];
   /** Tallies for criteria that DO already have a state-level line (Elected Body, FC Unspent),
    *  keyed by `formId` so the caller can merge each into that line's own `ulbBreakdown` rather
    *  than rendering a second, separate entry for the same requirement. */
   rowTalliesByFormId: Map<number, UlbEligibilityTally>;
-  /** Display labels of every ULB-bulk criterion a ULB was bucketed INELIGIBLE on — e.g. `['Service
-   *  Level Benchmarks (SLB)']` — so callers (the ULB-options picker) can tell the State specifically
-   *  *which* form is blocking a given ULB instead of a single generic reason code. A ULB with no
-   *  entry here (or an empty array) failed no ULB-bulk criterion. */
-  perUlbFailedCriteria: Map<string, string[]>;
+  /** Every ULB-bulk criterion a ULB was bucketed INELIGIBLE on — e.g. `[{type: 'SLB', label:
+   *  'Service Level Benchmarks (SLB)'}]` — so callers (the ULB-options picker) can tell the State
+   *  specifically *which* form is blocking a given ULB instead of a single generic reason code, and
+   *  callers needing identity rather than display copy (e.g. the claim-letter document builder's
+   *  Annexure 2) can test `type` directly against `criteriaColumns` below. A ULB with no entry here
+   *  (or an empty array) failed no ULB-bulk criterion. */
+  perUlbFailedCriteria: Map<string, ClaimLetterFailedCriterion[]>;
+  /** The canonical list of every enabled ULB-bulk criterion for this state/year/installment, one
+   *  entry per source *regardless of pass/fail* — unlike `perUlbFailedCriteria`, which only ever
+   *  lists a criterion where at least one ULB actually failed it. This is what makes a dynamic
+   *  column set (the claim-letter document builder's Annexure 2 city-conditions table) stable and
+   *  complete: it always lists every active criterion, not just whichever ones happened to fail for
+   *  someone in a given batch. A new/removed enabled criterion changes this list with no code
+   *  change on either side. */
+  criteriaColumns: ClaimLetterFailedCriterion[];
+  /** Per-ULB row evidence (rowDocumentId, resolved rowStatus/datasetVersion, bucket) for
+   *  FORM_AND_ROW criteria, keyed by formId then ulbId — lets `ClaimLetterAssemblyService` build
+   *  each child's frozen `eligibilitySources` entry by reusing this same bulk fetch, no re-query.
+   *  NOT part of the cached `*ForDisplay` shape — see `resolveUlbLevelEligibilityForDisplay`, which
+   *  strips this before caching (no display consumer reads it, and caching a rowDocumentId per ULB
+   *  state-wide would bloat the Redis payload for no benefit). Only the assembly pipeline, which
+   *  always calls this method directly (never `*ForDisplay`), needs it. */
+  rowEvidenceByFormId: Map<number, Map<string, RowEligibilityEvidence>>;
 }
 
 /**
  * Evaluates the State-level claim eligibility gate and resolves Devolution allocation amounts —
- * kept as two deliberately separate methods (plan §4): the gate answers "can this State claim at
- * all," allocation resolution answers "how much, per ULB." Neither branches on a hardcoded formId
- * — the gate loops generically over whatever `formjsons` documents have an enabled
- * `claimEligibility` config for this design year (today: length 1, Devolution's own entry).
+ * kept as two deliberately separate methods: the gate answers "can this State claim at all,"
+ * allocation resolution answers "how much, per ULB." Neither branches on a hardcoded formId — the
+ * gate loops generically over whatever `formjsons` documents have an enabled `claimEligibility`
+ * config for this design year (today: length 1, Devolution's own entry).
  */
 @Injectable()
 export class ClaimLetterEligibilityService {
@@ -201,16 +235,25 @@ export class ClaimLetterEligibilityService {
       standaloneCriteria: full.standaloneCriteria,
       rowTalliesByFormId: full.rowTalliesByFormId,
       perUlbFailedCriteria: new Map([...full.perUlbFailedCriteria].filter(([id]) => subset.has(id))),
+      // State-wide, like standaloneCriteria/rowTalliesByFormId above — the column set doesn't vary
+      // by which ULB subset is being displayed, so it's never narrowed.
+      criteriaColumns: full.criteriaColumns,
+      // Display-only path (this method is only called from resolveUlbLevelEligibilityForDisplay) —
+      // never populated here, see the field's own docblock.
+      rowEvidenceByFormId: new Map(),
     };
   }
 
-  /** Maps aren't JSON-serializable directly — round-tripped as arrays of entries instead. */
+  /** Maps aren't JSON-serializable directly — round-tripped as arrays of entries instead.
+   *  `rowEvidenceByFormId` is deliberately omitted — display never reads it, and caching a
+   *  rowDocumentId per ULB state-wide would bloat the payload for no benefit (see its docblock). */
   private serializeUlbLevelEligibility(value: ClaimLetterUlbLevelEligibility): string {
     return JSON.stringify({
       perUlbEligible: [...value.perUlbEligible.entries()],
       standaloneCriteria: value.standaloneCriteria,
       rowTalliesByFormId: [...value.rowTalliesByFormId.entries()],
       perUlbFailedCriteria: [...value.perUlbFailedCriteria.entries()],
+      criteriaColumns: value.criteriaColumns,
     });
   }
 
@@ -219,13 +262,16 @@ export class ClaimLetterEligibilityService {
       perUlbEligible: [string, boolean][];
       standaloneCriteria: UlbCriterionSummary[];
       rowTalliesByFormId: [number, UlbEligibilityTally][];
-      perUlbFailedCriteria: [string, string[]][];
+      perUlbFailedCriteria: [string, ClaimLetterFailedCriterion[]][];
+      criteriaColumns: ClaimLetterFailedCriterion[];
     };
     return {
       perUlbEligible: new Map(parsed.perUlbEligible),
       standaloneCriteria: parsed.standaloneCriteria,
       rowTalliesByFormId: new Map(parsed.rowTalliesByFormId),
       perUlbFailedCriteria: new Map(parsed.perUlbFailedCriteria),
+      criteriaColumns: parsed.criteriaColumns,
+      rowEvidenceByFormId: new Map(),
     };
   }
 
@@ -253,9 +299,9 @@ export class ClaimLetterEligibilityService {
    * Runs every enabled ULB-bulk-evaluable source for this design year/installment (SLB, Annual
    * Accounts x2, Elected Body row, FC Unspent row) and merges the results into one per-ULB
    * verdict, plus two differently-shaped tally lists depending on whether the criterion already
-   * has a state-level checklist line to attach to (plan's architecture decision — see
-   * `ClaimLetterUlbLevelEligibility`'s own field docs). `expectedUlbIds` is a parameter, not
-   * re-derived here, since callers (`getEligibilitySummary`, the ULB-options/rows services)
+   * has a state-level checklist line to attach to (see `ClaimLetterUlbLevelEligibility`'s own
+   * field docs). `expectedUlbIds` is a parameter, not re-derived here, since callers
+   * (`getEligibilitySummary`, the ULB-options/rows services)
    * already resolve `ExpectedUlbSetService` themselves for other reasons — avoids a duplicate query.
    *
    * A source qualifies for ULB-bulk evaluation when either `ownerLevel === 'ULB'` (SLB, Annual
@@ -284,20 +330,26 @@ export class ClaimLetterEligibilityService {
     );
 
     const perUlbEligible = new Map<string, boolean>(expectedUlbIds.map((id) => [id, true]));
-    const perUlbFailedCriteria = new Map<string, string[]>();
+    const perUlbFailedCriteria = new Map<string, ClaimLetterFailedCriterion[]>();
     const standaloneCriteria: UlbCriterionSummary[] = [];
     const rowTalliesByFormId = new Map<number, UlbEligibilityTally>();
+    const rowEvidenceByFormId = new Map<number, Map<string, RowEligibilityEvidence>>();
+    const criteriaColumns: ClaimLetterFailedCriterion[] = [];
 
-    for (const { doc, perUlb, tally } of results) {
+    for (const { doc, perUlb, tally, rowEvidenceByUlbId } of results) {
       const config = doc.claimEligibility!;
       const label = config.displayLabel ?? doc.type ?? 'Form';
+      const shortLabel = config.shortLabel ?? label;
+      const failedCriterion: ClaimLetterFailedCriterion = { type: doc.type ?? '', label, shortLabel };
+      // One entry per source, regardless of pass/fail — see the field's own docblock.
+      criteriaColumns.push(failedCriterion);
 
       for (const [ulbId, bucket] of perUlb) {
         if (bucket !== 'INELIGIBLE') continue;
         perUlbEligible.set(ulbId, false);
         const failed = perUlbFailedCriteria.get(ulbId);
-        if (failed) failed.push(label);
-        else perUlbFailedCriteria.set(ulbId, [label]);
+        if (failed) failed.push(failedCriterion);
+        else perUlbFailedCriteria.set(ulbId, [failedCriterion]);
       }
 
       if (config.ownerLevel === 'ULB') {
@@ -308,10 +360,18 @@ export class ClaimLetterEligibilityService {
         });
       } else {
         rowTalliesByFormId.set(doc.formId ?? 0, tally);
+        rowEvidenceByFormId.set(doc.formId ?? 0, rowEvidenceByUlbId ?? new Map());
       }
     }
 
-    return { perUlbEligible, standaloneCriteria, rowTalliesByFormId, perUlbFailedCriteria };
+    return {
+      perUlbEligible,
+      standaloneCriteria,
+      rowTalliesByFormId,
+      perUlbFailedCriteria,
+      criteriaColumns,
+      rowEvidenceByFormId,
+    };
   }
 
   /**
@@ -360,10 +420,16 @@ export class ClaimLetterEligibilityService {
 
   /**
    * Bulk-resolves each ULB's Installment-1 Devolution allocation — plain data resolution, never
-   * routed through the evaluator dispatcher (plan §4). Reads whatever Devolution form exists for
+   * routed through the evaluator dispatcher (that dispatcher is for pass/fail eligibility checks,
+   * not amount lookups). Reads whatever Devolution form exists for
    * this State/year/installment regardless of its current status (the eligibility *gate* above is
    * what decides whether that status is acceptable) so the picker can still show last-known
    * figures even while Devolution is temporarily returned.
+   *
+   * Depends on devolution-formula's dataset-versioning invariant — filters rows by
+   * `datasetVersion: form.activeDatasetVersion` below, so this is only correct as long as that
+   * invariant holds. See `devolution-formula/docs/adr/0001-dataset-versioning.md` (this method is
+   * listed there as an external consumer) before changing anything on either side of this read.
    */
   async resolveDevolutionAllocations(
     stateId: string,
