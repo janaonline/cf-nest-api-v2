@@ -12,6 +12,7 @@ import { S3UploadService } from '../../../file/s3-upload.service';
 import { FormJsonService } from '../../../../master/form-json/form-json.service';
 import { FileTokenService } from '../../../../core/file-token/file-token.service';
 import { ANNUAL_ACCOUNT_PROCESSING_QUEUE } from '../../../../core/constants/queues';
+import { UlbEligibilityService } from '../../../ulb-eligibility/ulb-eligibility.service';
 import type { AuthUser } from '../../../auth/auth-user.interface';
 
 /** Shape of the second argument passed to Mongoose's updateOne in the tests below. */
@@ -41,6 +42,7 @@ describe('AnnualAccountsService', () => {
   let mockS3Service: Record<string, jest.Mock>;
   let mockActionGateModel: { find: jest.Mock };
   let mockFileTokenService: { signFileUrl: jest.Mock };
+  let mockUlbEligibilityService: { assertUlbEligibleForGrantCycle: jest.Mock };
 
   beforeEach(async () => {
     mockAnnualAccountModel = {
@@ -85,6 +87,9 @@ describe('AnnualAccountsService', () => {
     mockFileTokenService = {
       signFileUrl: jest.fn((path: string) => `https://signed.example.com/${path}`),
     };
+    mockUlbEligibilityService = {
+      assertUlbEligibleForGrantCycle: jest.fn().mockResolvedValue(undefined),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -99,6 +104,7 @@ describe('AnnualAccountsService', () => {
         { provide: getQueueToken(ANNUAL_ACCOUNT_PROCESSING_QUEUE), useValue: mockOcrQueue },
         { provide: FormJsonService, useValue: mockFormJsonService },
         { provide: FileTokenService, useValue: mockFileTokenService },
+        { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
       ],
     }).compile();
 

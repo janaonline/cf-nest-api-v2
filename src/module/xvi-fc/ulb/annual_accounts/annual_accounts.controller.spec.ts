@@ -13,6 +13,7 @@ import { S3UploadService } from '../../../file/s3-upload.service';
 import { FormJsonService } from '../../../../master/form-json/form-json.service';
 import { FileTokenService } from '../../../../core/file-token/file-token.service';
 import { ANNUAL_ACCOUNT_PROCESSING_QUEUE } from '../../../../core/constants/queues';
+import { UlbEligibilityService } from '../../../ulb-eligibility/ulb-eligibility.service';
 import type { AuthUser } from '../../../auth/auth-user.interface';
 
 describe('AnnualAccountsController', () => {
@@ -61,6 +62,9 @@ describe('AnnualAccountsController', () => {
     const mockFileTokenService = {
       signFileUrl: jest.fn((path: string) => `https://signed.example.com/${path}`),
     };
+    const mockUlbEligibilityService = {
+      assertUlbEligibleForGrantCycle: jest.fn().mockResolvedValue(undefined),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [AnnualAccountsController],
@@ -76,6 +80,7 @@ describe('AnnualAccountsController', () => {
         { provide: getQueueToken(ANNUAL_ACCOUNT_PROCESSING_QUEUE), useValue: mockOcrQueue },
         { provide: FormJsonService, useValue: mockFormJsonService },
         { provide: FileTokenService, useValue: mockFileTokenService },
+        { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
       ],
     }).compile();
 

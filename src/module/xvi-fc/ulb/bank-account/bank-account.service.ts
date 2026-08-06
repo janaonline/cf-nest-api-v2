@@ -18,6 +18,8 @@ import { assertValidFormStatusTransition } from 'src/common/utils/form-status-tr
 import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import { xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
+import { CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE } from 'src/module/ulb-eligibility/ulb-eligibility.constants';
 import { XviFcBankAccount, XviFcBankAccountDocument } from 'src/schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
 import {
   XviFcBankAccountFormLog,
@@ -101,6 +103,7 @@ export class BankAccountService {
     @InjectModel(Ulb.name)
     private readonly ulbModel: Model<UlbDocument>,
     private readonly fileTokenService: FileTokenService,
+    private readonly ulbEligibilityService: UlbEligibilityService,
   ) {}
 
   /** Signs a proof-file S3 key into a short-lived, inline-viewable download URL. */
@@ -787,6 +790,11 @@ export class BankAccountService {
 
   async assertCanSubmitBankAccount(user: AuthUser, ulbId: string): Promise<void> {
     this.assertValidUlbId(ulbId);
+    await this.ulbEligibilityService.assertUlbEligibleForGrantCycle(
+      ulbId,
+      'XVIFC',
+      CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE,
+    );
 
     if (user.scope === Scope.ADMIN) return;
 

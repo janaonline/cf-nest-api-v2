@@ -21,6 +21,7 @@ describe('BankAccountService scope enforcement', () => {
   let formLogModel: { create: jest.Mock };
   let ulbModel: { findById: jest.Mock };
   let fileTokenService: { signFileUrl: jest.Mock };
+  let ulbEligibilityService: { assertUlbEligibleForGrantCycle: jest.Mock };
   const originalEncryptionKey = process.env.BANK_ACCOUNT_ENCRYPTION_KEY;
   const originalHashSecret = process.env.BANK_ACCOUNT_HASH_SECRET;
 
@@ -89,11 +90,15 @@ describe('BankAccountService scope enforcement', () => {
     fileTokenService = {
       signFileUrl: jest.fn((path: string) => `https://signed-url.example.com/${path}`),
     };
+    ulbEligibilityService = {
+      assertUlbEligibleForGrantCycle: jest.fn().mockResolvedValue(undefined),
+    };
     service = new BankAccountService(
       bankAccountModel as never,
       formLogModel as never,
       ulbModel as never,
       fileTokenService as never,
+      ulbEligibilityService as never,
     );
   });
 
