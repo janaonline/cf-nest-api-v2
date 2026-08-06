@@ -11,6 +11,8 @@ import { S3Service } from '../../../../core/s3/s3.service';
 import { S3UploadService } from '../../../file/s3-upload.service';
 import { FormJsonService } from '../../../../master/form-json/form-json.service';
 import { FileTokenService } from '../../../../core/file-token/file-token.service';
+import { EmailQueueService } from '../../../../core/queue/email-queue/email-queue.service';
+import { ConfigService } from '@nestjs/config';
 import { ANNUAL_ACCOUNT_PROCESSING_QUEUE } from '../../../../core/constants/queues';
 import { UlbEligibilityService } from '../../../ulb-eligibility/ulb-eligibility.service';
 import type { AuthUser } from '../../../auth/auth-user.interface';
@@ -37,11 +39,14 @@ describe('AnnualAccountsService', () => {
   let mockAnnualAccountModel: Record<string, jest.Mock>;
   let mockUploadHistoryModel: Record<string, jest.Mock | { dropIndex: jest.Mock }>;
   let mockUlbModel: Record<string, jest.Mock>;
+  let mockFormLogModel: { create: jest.Mock };
   let mockOcrQueue: { add: jest.Mock };
   let mockFormJsonService: { findActiveByDesignYearAndFormId: jest.Mock };
   let mockS3Service: Record<string, jest.Mock>;
   let mockActionGateModel: { find: jest.Mock };
   let mockFileTokenService: { signFileUrl: jest.Mock };
+  let mockEmailQueueService: { addEmailJob: jest.Mock };
+  let mockConfigService: { get: jest.Mock };
   let mockUlbEligibilityService: { assertUlbEligibleForGrantCycle: jest.Mock };
 
   beforeEach(async () => {
@@ -50,6 +55,7 @@ describe('AnnualAccountsService', () => {
       findOne: jest.fn().mockReturnValue(mockQuery(null)),
       findOneAndUpdate: jest.fn(),
       updateOne: jest.fn().mockResolvedValue({ modifiedCount: 1 }),
+      aggregate: jest.fn().mockReturnValue(mockQuery([{ data: [], totalCount: [] }])),
     };
     mockUploadHistoryModel = {
       countDocuments: jest.fn().mockResolvedValue(0),
@@ -60,7 +66,7 @@ describe('AnnualAccountsService', () => {
         dropIndex: jest.fn().mockResolvedValue(undefined),
       },
     };
-    const mockFormLogModel = {
+    mockFormLogModel = {
       create: jest.fn().mockResolvedValue(undefined),
     };
     mockUlbModel = {
@@ -87,6 +93,12 @@ describe('AnnualAccountsService', () => {
     mockFileTokenService = {
       signFileUrl: jest.fn((path: string) => `https://signed.example.com/${path}`),
     };
+    mockEmailQueueService = {
+      addEmailJob: jest.fn().mockResolvedValue(undefined),
+    };
+    mockConfigService = {
+      get: jest.fn(),
+    };
     mockUlbEligibilityService = {
       assertUlbEligibleForGrantCycle: jest.fn().mockResolvedValue(undefined),
     };
@@ -104,6 +116,8 @@ describe('AnnualAccountsService', () => {
         { provide: getQueueToken(ANNUAL_ACCOUNT_PROCESSING_QUEUE), useValue: mockOcrQueue },
         { provide: FormJsonService, useValue: mockFormJsonService },
         { provide: FileTokenService, useValue: mockFileTokenService },
+        { provide: EmailQueueService, useValue: mockEmailQueueService },
+        { provide: ConfigService, useValue: mockConfigService },
         { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
       ],
     }).compile();
@@ -360,10 +374,128 @@ describe('AnnualAccountsService', () => {
       ];
       expect(filter).toMatchObject({ 'auditedData.documents.docId': 'auditors-report' });
       expect(update.$set?.['auditedData.documents.$.currentUpload.ocrInfo.isManualReviewRequested']).toBe(true);
+      expect(update.$set?.['auditedData.documents.$.manualReviewDecision']).toBeNull();
       expect(mockUploadHistoryModel.updateOne).toHaveBeenCalledWith(
         { uploadId: 'upload-1' },
-        { $set: { 'ocrInfo.isManualReviewRequested': true } },
+        { $set: expect.objectContaining({ 'ocrInfo.isManualReviewRequested': true }) },
       );
+    });
+  });
+
+  describe('decideManualReview', () => {
+    const ULB_ID = '507f1f77bcf86cd799439011';
+    const ACCOUNT_ID = '507f1f77bcf86cd799439014';
+    const adminUser: AuthUser = { _id: '507f1f77bcf86cd799439099', role: 'ADMIN', scope: 'ADMIN' } as AuthUser;
+
+    const docAwaitingReview = (overrides: Record<string, unknown> = {}) =>
+      mockQuery({
+        _id: ACCOUNT_ID,
+        ulb: ULB_ID,
+        design_year: 'year-1',
+        auditedData: {
+          form_status: 'IN_PROGRESS',
+          documents: [
+            {
+              docId: 'auditors-report',
+              processingStatus: 'FAILED',
+              currentUpload: {
+                uploadId: 'upload-1',
+                file: { path: 's3/key.pdf' },
+                ocrInfo: { validationStatus: 'FAIL', isManualReviewRequested: true },
+              },
+              manualReviewDecision: null,
+              ...overrides,
+            },
+          ],
+        },
+        unauditedData: null,
+      });
+
+    it('rejects non-ADMIN users', async () => {
+      const ulbUser: AuthUser = { _id: 'user-1', role: 'ULB-EDITOR', scope: 'ULB', ulb: ULB_ID } as AuthUser;
+      mockAnnualAccountModel.findById.mockReturnValue(docAwaitingReview());
+
+      await expect(
+        service.decideManualReview(ACCOUNT_ID, 'auditedData', 'auditors-report', { decision: 'APPROVED' }, ulbUser),
+      ).rejects.toThrow('Only ADMIN users may decide a manual review request');
+    });
+
+    it('rejects when no manual review was ever requested', async () => {
+      mockAnnualAccountModel.findById.mockReturnValue(
+        docAwaitingReview({ currentUpload: { uploadId: 'upload-1', ocrInfo: { isManualReviewRequested: false } } }),
+      );
+
+      await expect(
+        service.decideManualReview(ACCOUNT_ID, 'auditedData', 'auditors-report', { decision: 'APPROVED' }, adminUser),
+      ).rejects.toThrow('No manual review has been requested for this document.');
+    });
+
+    it('APPROVED forces processingStatus to PASSED and records the decision', async () => {
+      mockAnnualAccountModel.findById.mockReturnValue(docAwaitingReview());
+
+      await service.decideManualReview(
+        ACCOUNT_ID,
+        'auditedData',
+        'auditors-report',
+        { decision: 'APPROVED' },
+        adminUser,
+      );
+
+      const [filter, update] = mockAnnualAccountModel.updateOne.mock.calls[0] as [
+        Record<string, unknown>,
+        MongoUpdateCall,
+      ];
+      expect(filter).toMatchObject({ 'auditedData.documents.docId': 'auditors-report' });
+      expect(update.$set?.['auditedData.documents.$.processingStatus']).toBe('PASSED');
+      expect(update.$set?.['auditedData.documents.$.manualReviewDecision']).toMatchObject({ status: 'APPROVED' });
+      expect(mockFormLogModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({ actorStage: 'ADMIN', action: 'APPROVED' }),
+      );
+    });
+
+    it('RETURNED (reject) leaves processingStatus untouched and requires a note', async () => {
+      mockAnnualAccountModel.findById.mockReturnValue(docAwaitingReview());
+
+      await service.decideManualReview(
+        ACCOUNT_ID,
+        'auditedData',
+        'auditors-report',
+        { decision: 'RETURNED', note: 'File is unreadable, please re-scan.' },
+        adminUser,
+      );
+
+      const [, update] = mockAnnualAccountModel.updateOne.mock.calls[0] as [Record<string, unknown>, MongoUpdateCall];
+      expect(update.$set?.['auditedData.documents.$.processingStatus']).toBeUndefined();
+      expect(update.$set?.['auditedData.documents.$.manualReviewDecision']).toMatchObject({ status: 'RETURNED' });
+    });
+  });
+
+  describe('getManualReviewQueue', () => {
+    const adminUser: AuthUser = { _id: 'admin-1', role: 'ADMIN', scope: 'ADMIN' } as AuthUser;
+
+    it('rejects non-ADMIN users', async () => {
+      const stateUser: AuthUser = { _id: 'user-2', role: 'STATE', scope: 'STATE' } as AuthUser;
+
+      await expect(service.getManualReviewQueue({ page: 1, pageSize: 20 }, stateUser)).rejects.toThrow(
+        'Only ADMIN users may view the manual-review queue',
+      );
+    });
+
+    it('returns the paginated shape from the aggregation result', async () => {
+      const row = { annualAccountId: 'acc-1', ulbName: 'Test ULB', docId: 'auditors-report' };
+      mockAnnualAccountModel.aggregate.mockReturnValue(mockQuery([{ data: [row], totalCount: [{ count: 1 }] }]));
+
+      const result = await service.getManualReviewQueue({ page: 1, pageSize: 20 }, adminUser);
+
+      expect(result).toEqual({ total: 1, page: 1, pageSize: 20, rows: [row] });
+    });
+
+    it('returns an empty page when nothing is pending', async () => {
+      mockAnnualAccountModel.aggregate.mockReturnValue(mockQuery([{ data: [], totalCount: [] }]));
+
+      const result = await service.getManualReviewQueue({ page: 1, pageSize: 20 }, adminUser);
+
+      expect(result).toEqual({ total: 0, page: 1, pageSize: 20, rows: [] });
     });
   });
 

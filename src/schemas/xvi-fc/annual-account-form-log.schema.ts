@@ -5,7 +5,7 @@ import { AnnualAccountFormStatus, UserInfo, UserInfoSchema } from './annual-acco
 export type XviFcAnnualAccountFormLogDocument = HydratedDocument<XviFcAnnualAccountFormLog>;
 
 export type FormLogAction = 'SUBMITTED' | 'APPROVED' | 'RETURNED' | 'UNDO';
-export type FormLogActorStage = 'ULB' | 'STATE' | 'MOHUA';
+export type FormLogActorStage = 'ULB' | 'STATE' | 'MOHUA' | 'ADMIN';
 
 /**
  * One document's outcome within a single log event — mirrors DocumentItem, not a full copy of it.
@@ -80,7 +80,7 @@ export class XviFcAnnualAccountFormLog {
   @Prop({ type: String, enum: Object.values(AnnualAccountFormStatus), required: true })
   toStatus!: AnnualAccountFormStatus;
 
-  @Prop({ type: String, enum: ['ULB', 'STATE', 'MOHUA'], required: true })
+  @Prop({ type: String, enum: ['ULB', 'STATE', 'MOHUA', 'ADMIN'], required: true })
   actorStage!: FormLogActorStage;
 
   @Prop({ type: UserInfoSchema, required: true })

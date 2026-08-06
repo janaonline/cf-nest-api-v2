@@ -141,6 +141,7 @@ xvi-fc-specific environment variables, in addition to the ones the rest of the a
 |---|---|
 | `BANK_ACCOUNT_ENCRYPTION_KEY` | Encrypts ULB bank account details at rest (`ulb/bank-account`) |
 | `BANK_ACCOUNT_HASH_SECRET` | HMAC secret for ULB bank account integrity hashing (`ulb/bank-account`) |
+| `MANUAL_REVIEW_NOTIFY_EMAIL` | Fixed inbox emailed when a ULB requests manual review of a failed OCR validation (`ulb/annual_accounts`) |
 
 ### Roles & access
 

@@ -161,3 +161,4 @@ Required variables (see `.env` for dev defaults):
 | `OTP_TTL_SECONDS` | OTP expiry in Redis |
 | `CLIENT_URL` / `WHITELISTED_DOMAINS` | CORS origins |
 | `BANK_ACCOUNT_ENCRYPTION_KEY` / `BANK_ACCOUNT_HASH_SECRET` | `xvi-fc` ULB bank-account encryption/hashing (`module/xvi-fc/ulb/bank-account`) |
+| `MANUAL_REVIEW_NOTIFY_EMAIL` | Fixed inbox emailed when a ULB requests manual review of a failed OCR validation (`module/xvi-fc/ulb/annual_accounts`) |

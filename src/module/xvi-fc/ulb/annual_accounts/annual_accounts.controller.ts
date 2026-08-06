@@ -12,6 +12,8 @@ import { DocumentDecisionDto } from './dto/document-decision.dto';
 import { SectionDecisionDto } from './dto/section-decision.dto';
 import { BulkSectionDecisionDto } from './dto/bulk-section-decision.dto';
 import { UlbSubmissionsQueryDto } from './dto/ulb-submissions-query.dto';
+import { ManualReviewDecisionDto } from './dto/manual-review-decision.dto';
+import { ManualReviewQueueQueryDto } from './dto/manual-review-queue-query.dto';
 import { extractIpAndUserAgent } from 'src/module/xvi-fc/common/utils/xvi-fc-request-meta.util';
 
 @ApiBearerAuth()
@@ -57,6 +59,12 @@ export class AnnualAccountsController {
   })
   listUlbSubmissions(@Query() dto: UlbSubmissionsQueryDto, @CurrentUser() user: AuthUser) {
     return this.annualAccountsService.listUlbSubmissions(dto, user);
+  }
+
+  @Get('manual-review-queue')
+  @ApiOperation({ summary: "ADMIN's global queue of documents awaiting a manual-review decision, across all ULBs" })
+  getManualReviewQueue(@Query() dto: ManualReviewQueueQueryDto, @CurrentUser() user: AuthUser) {
+    return this.annualAccountsService.getManualReviewQueue(dto, user);
   }
 
   @Get(':id')
@@ -116,6 +124,24 @@ export class AnnualAccountsController {
       throw new BadRequestException('section must be "auditedData" or "unauditedData"');
     }
     return this.annualAccountsService.requestManualReview(id, section, docId, user);
+  }
+
+  @Post(':id/documents/:docId/manual-review/decision')
+  @HttpCode(200)
+  @ApiOperation({ summary: "ADMIN approves or rejects a document's manual-review request" })
+  decideManualReview(
+    @Param('id', ParseObjectIdPipe) id: string,
+    @Param('docId') docId: string,
+    @Query('section') section: string,
+    @Body() dto: ManualReviewDecisionDto,
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    if (section !== 'auditedData' && section !== 'unauditedData') {
+      throw new BadRequestException('section must be "auditedData" or "unauditedData"');
+    }
+    const { ipAddress, userAgent } = extractIpAndUserAgent(req);
+    return this.annualAccountsService.decideManualReview(id, section, docId, dto, user, ipAddress, userAgent);
   }
 
   @Delete(':id/documents/:docId')
