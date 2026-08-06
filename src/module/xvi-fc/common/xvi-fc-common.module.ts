@@ -8,6 +8,7 @@ import { ExpectedUlbSetService } from './services/expected-ulb-set.service';
 import { ClaimEligibilityEvaluatorService } from './services/claim-eligibility-evaluator.service';
 import { Ulb, UlbSchema } from 'src/schemas/ulb.schema';
 import { Year, YearSchema } from 'src/schemas/year.schema';
+import { UlbEligibilityModule } from 'src/module/ulb-eligibility/ulb-eligibility.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { Year, YearSchema } from 'src/schemas/year.schema';
       { name: Ulb.name, schema: UlbSchema },
       { name: Year.name, schema: YearSchema },
     ]),
+    UlbEligibilityModule,
   ],
   providers: [
     DynamicFormValidationService,

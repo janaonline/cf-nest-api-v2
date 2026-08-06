@@ -33,6 +33,7 @@ import { FcUnspentDeclarationService } from './services/main/fc-unspent-declarat
 import { FcUnspentDeclarationRowService } from './services/rows/fc-unspent-declaration-row.service';
 import { FcUnspentUlbOptionsService } from './services/ulb-options/fc-unspent-ulb-options.service';
 import { FcUnspentDeclarationFormJsonService } from './services/form-json/fc-unspent-declaration-form-json.service';
+import { UlbEligibilityModule } from 'src/module/ulb-eligibility/ulb-eligibility.module';
 
 @Module({
   imports: [
@@ -48,6 +49,7 @@ import { FcUnspentDeclarationFormJsonService } from './services/form-json/fc-uns
     ]),
     XviFcCommonModule,
     FormJsonModule,
+    UlbEligibilityModule,
   ],
   controllers: [FcUnspentDeclarationController],
   providers: [

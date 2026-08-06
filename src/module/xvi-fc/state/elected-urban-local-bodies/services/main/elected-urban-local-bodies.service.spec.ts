@@ -17,6 +17,7 @@ import { ConfigService } from '@nestjs/config';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { AccessLevel, Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { EulbFormJsonConfigService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/form-json/elected-urban-local-bodies-form-json.service';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 import type { EulbTypedFieldConfig } from 'src/module/xvi-fc/state/elected-urban-local-bodies/helpers/elected-urban-local-bodies-form-json.helpers';
 import type { FormFieldOption } from 'src/module/xvi-fc/common/types/field-config.type';
 import type { EulbDumpRowRecord } from 'src/module/xvi-fc/state/elected-urban-local-bodies/types/elected-urban-local-bodies.types';
@@ -286,6 +287,17 @@ const mockFormModel = {
 };
 const mockRowModel = { find: jest.fn(), updateMany: jest.fn() };
 const mockUlbModel = { find: jest.fn(), countDocuments: jest.fn() };
+// Mirrors real behavior when no UlbType is excluded from the cycle: state + isActive only —
+// the filter-shape assertions below use objectContaining, so extra keys wouldn't break them
+// either, but this keeps the mock's output realistic.
+const mockUlbEligibilityService = {
+  getEligibleUlbFilter: jest.fn().mockImplementation((stateOid: unknown) =>
+    Promise.resolve({
+      state: stateOid,
+      isActive: true,
+    }),
+  ),
+};
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
@@ -311,6 +323,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: mockFormModel },
           { provide: getModelToken(ElectedUrbanLocalBodiesRow.name), useValue: mockRowModel },
           { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+          { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
           { provide: DynamicFormValidationService, useValue: null },
           { provide: XvifcFormActorsService, useValue: null },
           { provide: FileTokenService, useValue: null },
@@ -560,6 +573,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: mockFormModel },
           { provide: getModelToken(ElectedUrbanLocalBodiesRow.name), useValue: mockRowModel },
           { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+          { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
           { provide: DynamicFormValidationService, useValue: null },
           { provide: XvifcFormActorsService, useValue: null },
           { provide: FileTokenService, useValue: null },
@@ -695,6 +709,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: mockFormModel },
           { provide: getModelToken(ElectedUrbanLocalBodiesRow.name), useValue: mockRowModel },
           { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+          { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
           { provide: DynamicFormValidationService, useValue: mockDynamicFormValidator },
           { provide: XvifcFormActorsService, useValue: mockActorsService },
           { provide: FileTokenService, useValue: mockFileTokenService },
@@ -934,6 +949,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: mockFormModel },
           { provide: getModelToken(ElectedUrbanLocalBodiesRow.name), useValue: mockRowModel },
           { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+          { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
           { provide: DynamicFormValidationService, useValue: mockValidator },
           { provide: XvifcFormActorsService, useValue: { buildActorsAndStateName: jest.fn() } },
           { provide: FileTokenService, useValue: null },
@@ -1095,6 +1111,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: mockFormModel },
           { provide: getModelToken(ElectedUrbanLocalBodiesRow.name), useValue: mockRowModel },
           { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+          { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
           { provide: DynamicFormValidationService, useValue: mockValidator },
           { provide: XvifcFormActorsService, useValue: { buildActorsAndStateName: jest.fn() } },
           { provide: FileTokenService, useValue: null },

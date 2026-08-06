@@ -3,6 +3,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { Year } from 'src/schemas/year.schema';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 import { resolveDesignYearApplicabilityCutoff } from '../constants/expected-ulb-set.constants';
 
 export interface ExpectedUlb {
@@ -31,6 +32,7 @@ export class ExpectedUlbSetService {
   constructor(
     @InjectModel(Ulb.name) private readonly ulbModel: Model<UlbDocument>,
     @InjectModel(Year.name) private readonly yearModel: Model<Year>,
+    private readonly ulbEligibilityService: UlbEligibilityService,
   ) {}
 
   async resolve(stateId: string, designYearId: string): Promise<ExpectedUlb[]> {
@@ -39,12 +41,12 @@ export class ExpectedUlbSetService {
     if (!year) throw new NotFoundException(`Year ${designYearId} not found`);
 
     const cutoff = resolveDesignYearApplicabilityCutoff(year.year);
+    // Delegates the {state, isActive, ulbType-not-excluded} filter to the shared eligibility
+    const eligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateId, 'XVIFC');
 
-    //  TODO: filter Cantonment board
     const docs = await this.ulbModel
       .find({
-        state: new Types.ObjectId(stateId),
-        isActive: true,
+        ...eligibleUlbFilter,
         // Grandfathers ULBs with an unpopulated dateOfConstitution (most existing records) rather
         // than excluding them for missing data the registry never required historically.
         $or: [{ dateOfConstitution: null }, { dateOfConstitution: { $lte: cutoff } }],

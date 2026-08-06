@@ -18,6 +18,7 @@ import { DevolutionFormulaService } from '../main/devolution-formula.service';
 import { DfFormJsonConfigService } from '../form-json/devolution-formula-form-json.service';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import { Scope, UserRole, AccessLevel } from 'src/module/auth/enum/roles-xvi-fc.enum';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -198,6 +199,11 @@ const mockRowModel = {
 };
 
 const mockUlbModel = { find: jest.fn() };
+const mockUlbEligibilityService = {
+  getEligibleUlbFilter: jest
+    .fn()
+    .mockImplementation((stateOid: unknown) => Promise.resolve({ state: stateOid, isActive: true })),
+};
 
 // ─── Service mocks ────────────────────────────────────────────────────────────
 
@@ -229,6 +235,7 @@ describe('DevolutionFormulaExcelService — safe dataset replace', () => {
         { provide: getModelToken(DevolutionFormulaForm.name), useValue: mockFormModel },
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: mockRowModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+        { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: S3Service, useValue: mockS3Service },
         { provide: ExcelService, useValue: mockExcelService },
         { provide: FileTokenService, useValue: mockFileTokenService },
@@ -462,6 +469,7 @@ describe('DevolutionFormulaExcelService — revalidateExcel', () => {
         { provide: getModelToken(DevolutionFormulaForm.name), useValue: mockFormModel },
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: mockRowModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+        { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: S3Service, useValue: mockS3Service },
         { provide: ExcelService, useValue: mockExcelService },
         { provide: FileTokenService, useValue: mockFileTokenService },
@@ -643,6 +651,7 @@ describe('DevolutionFormulaExcelService — generateTemplate', () => {
         { provide: getModelToken(DevolutionFormulaForm.name), useValue: mockFormModel },
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: mockRowModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+        { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: S3Service, useValue: mockS3Service },
         { provide: ExcelService, useValue: mockExcelService },
         { provide: FileTokenService, useValue: mockFileTokenService },
@@ -787,6 +796,7 @@ describe('DevolutionFormulaExcelService — validateExcel ULB identity guard', (
         { provide: getModelToken(DevolutionFormulaForm.name), useValue: mockFormModel },
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: mockRowModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+        { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: S3Service, useValue: mockS3Service },
         { provide: ExcelService, useValue: mockExcelService },
         { provide: FileTokenService, useValue: mockFileTokenService },
@@ -966,6 +976,7 @@ describe('DevolutionFormulaExcelService — validateExcel new/extra ULB detectio
         { provide: getModelToken(DevolutionFormulaForm.name), useValue: mockFormModel },
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: mockRowModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+        { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: S3Service, useValue: mockS3Service },
         { provide: ExcelService, useValue: mockExcelService },
         { provide: FileTokenService, useValue: mockFileTokenService },
@@ -1186,6 +1197,7 @@ describe('DevolutionFormulaExcelService — atomic version allocation & write-co
         { provide: getModelToken(DevolutionFormulaForm.name), useValue: mockFormModel },
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: mockRowModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+        { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: S3Service, useValue: mockS3Service },
         { provide: ExcelService, useValue: mockExcelService },
         { provide: FileTokenService, useValue: mockFileTokenService },

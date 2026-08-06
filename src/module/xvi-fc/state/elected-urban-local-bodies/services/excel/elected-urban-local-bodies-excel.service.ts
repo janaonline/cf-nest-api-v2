@@ -32,6 +32,7 @@ import {
   EulbRowValidationStatus,
 } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 import {
   EXCEL_HEADER_MAP,
   ERROR_EXCEL_HEADERS,
@@ -99,6 +100,7 @@ export class ElectedUrbanLocalBodiesExcelService {
     private readonly fileTokenService: FileTokenService,
     private readonly eulbFormJsonConfig: EulbFormJsonConfigService,
     private readonly fileInfoNormalizer: FileInfoNormalizerService,
+    private readonly ulbEligibilityService: UlbEligibilityService,
   ) {}
 
   async validateExcel(
@@ -112,10 +114,13 @@ export class ElectedUrbanLocalBodiesExcelService {
     const yearOid = new Types.ObjectId(dto.yearId);
     const userOid = new Types.ObjectId(user._id);
 
-    // 1. Load active DB ULBs + check for existing form in parallel (no mutual dependency)
+    // 1. Load active, XVI-FC-eligible DB ULBs + check for existing form in parallel (no mutual
+    // dependency). Must use the same eligibility filter as getTemplate()'s registry query, or a
+    // state's Excel upload will spuriously fail the row-count match check.
     const formFilter = { state: stateOid, year: yearOid, formType: EULB_FORM_TYPE };
+    const eligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC');
     const [dbUlbsRaw, existing] = await Promise.all([
-      this.ulbModel.find({ state: stateOid, isActive: true }).select('_id name censusCode sbCode').lean().exec(),
+      this.ulbModel.find(eligibleUlbFilter).select('_id name censusCode sbCode').lean().exec(),
       this.formModel
         .findOne(formFilter, { _id: 1, currentFormStatus: 1, activeDatasetVersion: 1, electedBodyExcelFile: 1 })
         .lean()
@@ -502,11 +507,12 @@ export class ElectedUrbanLocalBodiesExcelService {
         .exec();
 
       if (rows.length > 0) {
-        // Load active registry ULBs for revalidation; derive count from the find result.
+        // Load active, XVI-FC-eligible registry ULBs for revalidation; derive count from the find
+        // result. Must match getTemplate()'s registry filter or row-count checks will mismatch.
         // TODO: dateOfConstitution has no validation rule defined/implemented yet — same gap as
         // elected-urban-local-bodies.service.ts's getTemplate (identical TODO, not yet scoped).
         const dbUlbs = (await this.ulbModel
-          .find({ state: stateOid, isActive: true })
+          .find(await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC'))
           .select('_id name censusCode sbCode')
           .lean()
           .exec()) as UlbLean[];
@@ -686,9 +692,10 @@ export class ElectedUrbanLocalBodiesExcelService {
     yearOid: Types.ObjectId,
     yearId: string,
   ): Promise<XviFcApiResponse<EulbRevalidateExcelResponseData>> {
-    // Load active registry ULBs; derive count from the find result — no extra query.
+    // Load active, XVI-FC-eligible registry ULBs; derive count from the find result — no extra
+    // query. Must match getTemplate()'s registry filter or row-count checks will mismatch.
     const dbUlbs = (await this.ulbModel
-      .find({ state: stateOid, isActive: true })
+      .find(await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC'))
       .select('_id name censusCode sbCode')
       .lean()
       .exec()) as UlbLean[];

@@ -8,6 +8,7 @@ import { DevolutionFormulaRow } from 'src/schemas/xvi-fc/state/devolution-formul
 import { Ulb } from 'src/schemas/ulb.schema';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import type { FcUnspentDevolutionFormLean, FcUnspentResolvedRow } from '../../types/fc-unspent-declaration.types';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 
 /** Creates a chainable Mongoose Query-like mock that resolves to `value`. */
 function q<T>(value: T) {
@@ -104,6 +105,11 @@ describe('FcUnspentDeclarationRowService', () => {
     ulbModel = {
       find: jest.fn().mockReturnValue(q([{ _id: ulbOid1, name: 'Alpha ULB', censusCode: '111', sbCode: 'A1' }])),
     };
+    const ulbEligibilityService = {
+      getEligibleUlbFilter: jest
+        .fn()
+        .mockImplementation((stateOid: unknown) => Promise.resolve({ state: stateOid, isActive: true })),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -112,6 +118,7 @@ describe('FcUnspentDeclarationRowService', () => {
         { provide: getModelToken(XviFcUnspentStateFormRowHistory.name), useValue: rowHistoryModel },
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: devolutionRowModel },
         { provide: getModelToken(Ulb.name), useValue: ulbModel },
+        { provide: UlbEligibilityService, useValue: ulbEligibilityService },
       ],
     }).compile();
 
@@ -120,12 +127,18 @@ describe('FcUnspentDeclarationRowService', () => {
 
   describe('resolveAndValidateRows', () => {
     it('requires at least one row when requireAtLeastOne is true', async () => {
-      const result = await service.resolveAndValidateRows(stateOid, [], devolutionForm, { requireAtLeastOne: true, thresholdPercent: 10 });
+      const result = await service.resolveAndValidateRows(stateOid, [], devolutionForm, {
+        requireAtLeastOne: true,
+        thresholdPercent: 10,
+      });
       expect(result.errors['unspentUlbData']).toBeDefined();
     });
 
     it('allows zero rows when requireAtLeastOne is false', async () => {
-      const result = await service.resolveAndValidateRows(stateOid, [], devolutionForm, { requireAtLeastOne: false, thresholdPercent: 10 });
+      const result = await service.resolveAndValidateRows(stateOid, [], devolutionForm, {
+        requireAtLeastOne: false,
+        thresholdPercent: 10,
+      });
       expect(result.rows).toEqual([]);
       expect(Object.keys(result.errors)).toHaveLength(0);
     });

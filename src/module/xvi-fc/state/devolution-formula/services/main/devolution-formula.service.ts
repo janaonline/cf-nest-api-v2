@@ -45,6 +45,7 @@ import {
 } from 'src/schemas/xvi-fc/state/devolution-formula-row.schema';
 import { GrantAllocation, GrantAllocationDocument } from 'src/schemas/xvi-fc/grant-allocation.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 import {
   EULB_FORM_TYPE,
   ElectedUrbanLocalBodiesForm,
@@ -111,6 +112,7 @@ export class DevolutionFormulaService {
     private readonly fileInfoNormalizer: FileInfoNormalizerService,
     private readonly dynamicFormValidator: DynamicFormValidationService,
     private readonly dfFormJsonConfig: DfFormJsonConfigService,
+    private readonly ulbEligibilityService: UlbEligibilityService,
   ) {}
 
   async getForm(
@@ -149,9 +151,10 @@ export class DevolutionFormulaService {
       doc as unknown as Parameters<typeof this.xvifcFormActorsService.buildActorsAndStateName>[0],
     );
 
+    const eligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC');
     const [grantAllocationSummary, computedActiveUlbCount] = await Promise.all([
       this.resolveGrantAllocationSummary(stateOid, yearOid),
-      this.ulbModel.countDocuments({ state: stateOid, isActive: true }),
+      this.ulbModel.countDocuments(eligibleUlbFilter),
     ]);
     const validationSummary = this.buildValidationSummary(doc, grantAllocationSummary?.total ?? 0);
 
@@ -225,9 +228,10 @@ export class DevolutionFormulaService {
       assertCanStateEditForm(existing.currentFormStatus ?? FORM_STATUS.NOT_STARTED);
     }
 
+    const eligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC');
     const [grantAlloc, computedActiveUlbCount] = await Promise.all([
       this.resolveGrantAllocation(stateOid, yearOid),
-      this.ulbModel.countDocuments({ state: stateOid, isActive: true }),
+      this.ulbModel.countDocuments(eligibleUlbFilter),
     ]);
 
     const dfFields = await this.dfFormJsonConfig.loadFields(dto.yearId);
@@ -347,9 +351,10 @@ export class DevolutionFormulaService {
 
     // Grant allocation must still exist, and its total must match what was validated.
     // Also compute the current active ULB count to validate row count consistency.
+    const finalSubmitEligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC');
     const [currentAlloc, computedActiveUlbCount] = await Promise.all([
       this.resolveGrantAllocation(stateOid, yearOid),
-      this.ulbModel.countDocuments({ state: stateOid, isActive: true }),
+      this.ulbModel.countDocuments(finalSubmitEligibleUlbFilter),
     ]);
     const currentTotal = currentAlloc.basic + currentAlloc.performance;
 

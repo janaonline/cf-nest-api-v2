@@ -24,6 +24,7 @@ import { DevolutionFormulaService } from './services/main/devolution-formula.ser
 import { DevolutionFormulaExcelService } from './services/excel/devolution-formula-excel.service';
 import { DevolutionFormulaRowService } from './services/row/devolution-formula-row.service';
 import { DevolutionFormulaValidator } from './validators/devolution-formula.validator';
+import { UlbEligibilityModule } from 'src/module/ulb-eligibility/ulb-eligibility.module';
 
 @Module({
   imports: [
@@ -37,6 +38,7 @@ import { DevolutionFormulaValidator } from './validators/devolution-formula.vali
     ]),
     XviFcCommonModule,
     FormJsonModule,
+    UlbEligibilityModule,
   ],
   controllers: [DevolutionFormulaController],
   providers: [

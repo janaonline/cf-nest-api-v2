@@ -11,6 +11,7 @@ import { ExcelService } from 'src/services/excel/excel.service';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import { Scope, UserRole, AccessLevel } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -103,6 +104,10 @@ describe('DevolutionFormulaRowService', () => {
         { provide: DevolutionFormulaValidator, useValue: {} },
         { provide: ExcelService, useValue: excelService },
         { provide: DfFormJsonConfigService, useValue: { loadFields: jest.fn().mockResolvedValue([]) } },
+        {
+          provide: UlbEligibilityService,
+          useValue: { assertUlbEligibleForGrantCycle: jest.fn().mockResolvedValue(undefined) },
+        },
       ],
     }).compile();
 

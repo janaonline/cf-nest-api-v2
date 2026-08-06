@@ -20,6 +20,7 @@ import { ElectedUrbanLocalBodiesExcelService } from 'src/module/xvi-fc/state/ele
 import { ElectedUrbanLocalBodiesRowService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/row/elected-urban-local-bodies-row.service';
 import { ElectedUrbanLocalBodiesValidator } from 'src/module/xvi-fc/state/elected-urban-local-bodies/validators/elected-urban-local-bodies.validator';
 import { EulbPostSubmissionUpdateService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/post-submission-update/elected-urban-local-bodies-post-submission-update.service';
+import { UlbEligibilityModule } from 'src/module/ulb-eligibility/ulb-eligibility.module';
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { EulbPostSubmissionUpdateService } from 'src/module/xvi-fc/state/elected
     ]),
     XviFcCommonModule,
     FormJsonModule,
+    UlbEligibilityModule,
   ],
   controllers: [ElectedUrbanLocalBodiesController],
   providers: [

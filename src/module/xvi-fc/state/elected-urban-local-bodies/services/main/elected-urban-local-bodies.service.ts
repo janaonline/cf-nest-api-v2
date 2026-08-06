@@ -54,6 +54,7 @@ import {
   EulbRowDocument,
 } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 import {
   EULB_ACTION_DOWNLOAD_ERROR_SHEET,
   EULB_ACTION_DOWNLOAD_TEMPLATE,
@@ -148,6 +149,7 @@ export class ElectedUrbanLocalBodiesService {
     private readonly config: ConfigService,
     private readonly fileInfoNormalizer: FileInfoNormalizerService,
     private readonly eulbFormJsonConfig: EulbFormJsonConfigService,
+    private readonly ulbEligibilityService: UlbEligibilityService,
   ) {}
 
   /**
@@ -201,6 +203,7 @@ export class ElectedUrbanLocalBodiesService {
     }
 
     const stateOid = new Types.ObjectId(stateId);
+    const eligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC');
 
     const [doc, computedActiveUlbCount] = await Promise.all([
       this.model
@@ -216,7 +219,7 @@ export class ElectedUrbanLocalBodiesService {
         .populate('submittedBy', 'name')
         .lean<EulbFormLeanDoc>()
         .exec(),
-      this.ulbModel.countDocuments({ state: stateOid, isActive: true }),
+      this.ulbModel.countDocuments(eligibleUlbFilter),
     ]);
 
     const currentFormStatus = doc?.currentFormStatus ?? FORM_STATUS.NOT_STARTED;
@@ -283,11 +286,13 @@ export class ElectedUrbanLocalBodiesService {
 
     const stateOid = new Types.ObjectId(stateId);
 
-    // Always load the active registry — needed in both branches to determine template rows.
+    // Always load the active, XVI-FC-eligible registry — needed in both branches to determine
+    // template rows. Cantonment Board ULBs are excluded here via the shared eligibility filter.
     // TODO: dateOfConstitution has no validation rule defined/implemented yet — same gap as
     // elected-urban-local-bodies-excel.service.ts's revalidateExcel (identical TODO, not yet scoped).
+    const eligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC');
     const activeUlbs = await this.ulbModel
-      .find({ state: stateOid, isActive: true })
+      .find(eligibleUlbFilter)
       .select('_id name censusCode sbCode')
       .sort({ name: 1 })
       .lean()
@@ -446,9 +451,12 @@ export class ElectedUrbanLocalBodiesService {
     const userOid = new Types.ObjectId(user._id);
     const filter = { state: stateOid, year: yearOid, formType: EULB_FORM_TYPE };
 
-    // Compute active ULB count server-side; the client-submitted ulbCount is ignored.
+    // Compute active ULB count server-side; the client-submitted ulbCount is ignored. Must use the
+    // same eligibility filter as getTemplate()'s registry query, or a state's Excel upload will
+    // spuriously fail the row-count match check the moment it has any Cantonment Board ULBs.
+    const eligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC');
     const [activeUlbCount, existing] = await Promise.all([
-      this.ulbModel.countDocuments({ state: stateOid, isActive: true }),
+      this.ulbModel.countDocuments(eligibleUlbFilter),
       this.model
         .findOne(filter, { _id: 1, currentFormStatus: 1, electedBodyExcelFile: 1 })
         .lean<Pick<EulbFormLeanDoc, '_id' | 'currentFormStatus' | 'electedBodyExcelFile'>>()
@@ -552,8 +560,11 @@ export class ElectedUrbanLocalBodiesService {
     const userOid = new Types.ObjectId(user._id);
     const filter = { state: stateOid, year: yearOid, formType: EULB_FORM_TYPE };
 
-    // Compute active ULB count server-side; the client-submitted ulbCount is ignored.
-    const activeUlbCount = await this.ulbModel.countDocuments({ state: stateOid, isActive: true });
+    // Compute active ULB count server-side; the client-submitted ulbCount is ignored. Must use the
+    // same eligibility filter as getTemplate()'s registry query, or a state's Excel upload will
+    // spuriously fail the row-count match check the moment it has any Cantonment Board ULBs.
+    const eligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC');
+    const activeUlbCount = await this.ulbModel.countDocuments(eligibleUlbFilter);
 
     const existing = await this.model
       .findOne(filter, {

@@ -8,6 +8,7 @@ import {
 } from '../../../../schemas/xvi-fc/unspent-balance-disclosure.schema';
 import { UnspentBalanceDisclosureController } from './unspent-balance-disclosure.controller';
 import { UnspentBalanceDisclosureService } from './unspent-balance-disclosure.service';
+import { UlbEligibilityModule } from '../../../ulb-eligibility/ulb-eligibility.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { UnspentBalanceDisclosureService } from './unspent-balance-disclosure.se
         schema: XviFcUnspentBalanceDisclosureSchema,
       },
     ]),
+    UlbEligibilityModule,
   ],
   controllers: [UnspentBalanceDisclosureController],
   providers: [UnspentBalanceDisclosureService, S3Service],
