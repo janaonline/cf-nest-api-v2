@@ -14,6 +14,8 @@ import { State } from 'src/schemas/state.schema';
 import { Ulb } from 'src/schemas/ulb.schema';
 import { Year } from 'src/schemas/year.schema';
 import { UsersRepository } from 'src/module/users/users.repository';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
+import { CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE } from 'src/module/ulb-eligibility/ulb-eligibility.constants';
 import { AuthService } from './auth.service';
 import { LoginService } from './login.service';
 
@@ -82,6 +84,10 @@ const mockAuthService = {
   setRefreshCookie: jest.fn(),
 };
 
+const mockUlbEligibilityService = {
+  isUlbEligibleForGrantCycle: jest.fn().mockResolvedValue(true),
+};
+
 const mockRes = { cookie: jest.fn() } as unknown as Response;
 
 describe('LoginService', () => {
@@ -93,6 +99,7 @@ describe('LoginService', () => {
         LoginService,
         { provide: UsersRepository, useValue: mockUsersRepository },
         { provide: AuthService, useValue: mockAuthService },
+        { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: JwtService, useValue: mockJwtService },
         { provide: ConfigService, useValue: mockConfigService },
         { provide: getModelToken(State.name), useValue: mockStateModel },
@@ -113,6 +120,7 @@ describe('LoginService', () => {
     mockUsersRepository.incrementLoginAttempts.mockResolvedValue(undefined);
     mockStateModel.findById.mockReturnValue({ exec: jest.fn().mockResolvedValue(null) });
     mockUlbModel.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(null) });
+    mockUlbEligibilityService.isUlbEligibleForGrantCycle.mockResolvedValue(true);
     mockYearModel.find.mockReturnValue({
       select: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue([]) }),
     });
@@ -137,17 +145,17 @@ describe('LoginService', () => {
 
     it('throws 401 when user not found (same message as wrong password)', async () => {
       mockUsersRepository.findByIdentifierWithSensitiveFields.mockResolvedValue(null);
-      await expect(
-        service.login({ identifier: 'no@example.com', password: 'pass' }, mockRes),
-      ).rejects.toThrow(UnauthorizedException);
+      await expect(service.login({ identifier: 'no@example.com', password: 'pass' }, mockRes)).rejects.toThrow(
+        UnauthorizedException,
+      );
     });
 
     it('throws 401 when password mismatch (same message)', async () => {
       mockUsersRepository.findByIdentifierWithSensitiveFields.mockResolvedValue(mockLoginUser);
       (bcrypt.compare as jest.Mock).mockResolvedValue(false);
-      await expect(
-        service.login({ identifier: 'test@example.com', password: 'wrong' }, mockRes),
-      ).rejects.toThrow(UnauthorizedException);
+      await expect(service.login({ identifier: 'test@example.com', password: 'wrong' }, mockRes)).rejects.toThrow(
+        UnauthorizedException,
+      );
     });
 
     it('throws 403 when email is not verified', async () => {
@@ -155,9 +163,9 @@ describe('LoginService', () => {
         ...mockLoginUser,
         isEmailVerified: false,
       });
-      await expect(
-        service.login({ identifier: 'test@example.com', password: 'pass' }, mockRes),
-      ).rejects.toThrow(ForbiddenException);
+      await expect(service.login({ identifier: 'test@example.com', password: 'pass' }, mockRes)).rejects.toThrow(
+        ForbiddenException,
+      );
     });
 
     it('throws 403 when account is locked', async () => {
@@ -167,9 +175,9 @@ describe('LoginService', () => {
         lockUntil: Date.now() + 3600000,
       });
       (bcrypt.compare as jest.Mock).mockResolvedValue(true);
-      await expect(
-        service.login({ identifier: 'test@example.com', password: 'pass' }, mockRes),
-      ).rejects.toThrow(ForbiddenException);
+      await expect(service.login({ identifier: 'test@example.com', password: 'pass' }, mockRes)).rejects.toThrow(
+        ForbiddenException,
+      );
     });
 
     it('throws 403 when account status is PENDING', async () => {
@@ -177,9 +185,9 @@ describe('LoginService', () => {
         ...mockLoginUser,
         status: 'PENDING',
       });
-      await expect(
-        service.login({ identifier: 'test@example.com', password: 'pass' }, mockRes),
-      ).rejects.toThrow(ForbiddenException);
+      await expect(service.login({ identifier: 'test@example.com', password: 'pass' }, mockRes)).rejects.toThrow(
+        ForbiddenException,
+      );
     });
 
     it('throws 403 when account status is REJECTED', async () => {
@@ -188,9 +196,61 @@ describe('LoginService', () => {
         status: 'REJECTED',
         rejectReason: 'Duplicate account',
       });
-      await expect(
-        service.login({ identifier: 'test@example.com', password: 'pass' }, mockRes),
-      ).rejects.toThrow(ForbiddenException);
+      await expect(service.login({ identifier: 'test@example.com', password: 'pass' }, mockRes)).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+
+    describe('Cantonment Board / XVI-FC eligibility gate', () => {
+      const mockUlbUser = {
+        ...mockLoginUser,
+        role: 'ULB',
+        ulb: { toString: () => 'ulb-id-123' },
+      };
+      const mockUlbDoc = { _id: 'ulb-id-123', code: 'ULB001', isUA: 'No', isMillionPlus: 'No' };
+
+      beforeEach(() => {
+        mockUlbModel.findOne.mockReturnValue({ exec: jest.fn().mockResolvedValue(mockUlbDoc) });
+      });
+
+      it('throws 403 with the Cantonment Board message when the ULB is ineligible for XVIFC', async () => {
+        mockUsersRepository.findByIdentifierWithSensitiveFields.mockResolvedValue(mockUlbUser);
+        (bcrypt.compare as jest.Mock).mockResolvedValue(true);
+        mockUlbEligibilityService.isUlbEligibleForGrantCycle.mockResolvedValue(false);
+
+        await expect(
+          service.login({ identifier: 'ULB001', password: 'pass', type: '16thFC' }, mockRes),
+        ).rejects.toThrow(new ForbiddenException(CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE));
+      });
+
+      it('does not leak eligibility before credentials are validated — wrong password still yields the generic message', async () => {
+        mockUsersRepository.findByIdentifierWithSensitiveFields.mockResolvedValue(mockUlbUser);
+        (bcrypt.compare as jest.Mock).mockResolvedValue(false);
+        mockUlbEligibilityService.isUlbEligibleForGrantCycle.mockResolvedValue(false);
+
+        await expect(
+          service.login({ identifier: 'ULB001', password: 'wrong', type: '16thFC' }, mockRes),
+        ).rejects.toThrow(UnauthorizedException);
+        expect(mockUlbEligibilityService.isUlbEligibleForGrantCycle).not.toHaveBeenCalled();
+      });
+
+      it('does not block an ineligible ULB logging in outside the XVI-FC context (e.g. 15thFC)', async () => {
+        mockUsersRepository.findByIdentifierWithSensitiveFields.mockResolvedValue(mockUlbUser);
+        (bcrypt.compare as jest.Mock).mockResolvedValue(true);
+        mockUlbEligibilityService.isUlbEligibleForGrantCycle.mockResolvedValue(false);
+
+        const result = await service.login({ identifier: 'ULB001', password: 'pass', type: '15thFC' }, mockRes);
+        expect(result.token).toBe('mock-token');
+      });
+
+      it('allows login when the ULB is eligible for XVIFC', async () => {
+        mockUsersRepository.findByIdentifierWithSensitiveFields.mockResolvedValue(mockUlbUser);
+        (bcrypt.compare as jest.Mock).mockResolvedValue(true);
+        mockUlbEligibilityService.isUlbEligibleForGrantCycle.mockResolvedValue(true);
+
+        const result = await service.login({ identifier: 'ULB001', password: 'pass', type: '16thFC' }, mockRes);
+        expect(result.token).toBe('mock-token');
+      });
     });
   });
 });

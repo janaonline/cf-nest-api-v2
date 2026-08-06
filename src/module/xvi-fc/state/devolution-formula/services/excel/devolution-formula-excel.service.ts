@@ -39,6 +39,7 @@ import {
   DevolutionFormulaRowDocument,
 } from 'src/schemas/xvi-fc/state/devolution-formula-row.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 import {
   DF_ERROR_EXCEL_HEADERS,
   DF_EXCEL_HEADER_MAP,
@@ -138,6 +139,7 @@ export class DevolutionFormulaExcelService {
     private readonly fileTokenService: FileTokenService,
     private readonly fileInfoNormalizer: FileInfoNormalizerService,
     private readonly dfFormJsonConfig: DfFormJsonConfigService,
+    private readonly ulbEligibilityService: UlbEligibilityService,
   ) {}
 
   /**
@@ -183,9 +185,10 @@ export class DevolutionFormulaExcelService {
 
     // 1. Load grant allocation, existing form (incl. current excelFile for unchanged-file detection), and DB ULBs
     const formFilter = { state: stateOid, year: yearOid, installment: dto.installment };
+    const eligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC');
     const [grantAlloc, dbUlbsRaw, existing] = await Promise.all([
       this.dfService.resolveGrantAllocation(stateOid, yearOid),
-      this.ulbModel.find({ state: stateOid, isActive: true }).select('_id name censusCode sbCode').lean().exec(),
+      this.ulbModel.find(eligibleUlbFilter).select('_id name censusCode sbCode').lean().exec(),
       this.formModel
         .findOne(formFilter, { _id: 1, currentFormStatus: 1, activeDatasetVersion: 1, excelFile: 1 })
         .lean<Pick<DfFormLeanDoc, '_id' | 'currentFormStatus' | 'activeDatasetVersion' | 'excelFile'>>()
@@ -568,8 +571,9 @@ export class DevolutionFormulaExcelService {
     const totalMoHUAAllocation = grantAlloc.basic + grantAlloc.performance;
     const { maxFormulaLength } = await this.resolveDfValidationConfig(yearId);
 
+    const eligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC');
     const [dbUlbsRaw, activeRows] = await Promise.all([
-      this.ulbModel.find({ state: stateOid, isActive: true }).select('_id name censusCode sbCode').lean().exec(),
+      this.ulbModel.find(eligibleUlbFilter).select('_id name censusCode sbCode').lean().exec(),
       (form.activeDatasetVersion ?? 0) > 0
         ? this.rowModel
             .find({ form: form._id as Types.ObjectId, datasetVersion: form.activeDatasetVersion ?? 0, isActive: true })
@@ -746,16 +750,14 @@ export class DevolutionFormulaExcelService {
     const stateOid = new Types.ObjectId(stateId);
     const yearOid = new Types.ObjectId(yearId);
 
-    // Always load active registry alongside form and grant alloc — needed in both branches.
+    // Always load active, XVI-FC-eligible registry alongside form and grant alloc — needed in
+    // both branches. Must match the count query below (in validateExcel/revalidateExcel) or
+    // row-count checks will mismatch.
+    const eligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC');
     const [form, grantAlloc, activeUlbsRaw] = await Promise.all([
       this.formModel.findOne({ state: stateOid, year: yearOid, installment }).lean<DfFormLeanDoc>().exec(),
       this.dfService.resolveGrantAllocation(stateOid, yearOid).catch(() => null),
-      this.ulbModel
-        .find({ state: stateOid, isActive: true })
-        .select('_id name censusCode sbCode')
-        .sort({ name: 1 })
-        .lean()
-        .exec(),
+      this.ulbModel.find(eligibleUlbFilter).select('_id name censusCode sbCode').sort({ name: 1 }).lean().exec(),
     ]);
 
     const maxGrantAllocation = grantAlloc ? grantAlloc.basic + grantAlloc.performance : undefined;

@@ -12,6 +12,7 @@ import { DevolutionFormulaRow } from 'src/schemas/xvi-fc/state/devolution-formul
 import { GrantAllocation } from 'src/schemas/xvi-fc/grant-allocation.schema';
 import { ElectedUrbanLocalBodiesForm } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
 import { Ulb } from 'src/schemas/ulb.schema';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 import { ExcelService } from 'src/services/excel/excel.service';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { FileUrlNormalizerService } from 'src/module/xvi-fc/common/services/file-url-normalizer.service';
@@ -121,6 +122,12 @@ const mockRowModel = {
 const mockGrantAllocationModel = { findOne: jest.fn() };
 const mockEulbModel = { findOne: jest.fn() };
 const mockUlbModel = { countDocuments: jest.fn() };
+const mockUlbEligibilityService = {
+  getEligibleUlbFilter: jest
+    .fn()
+    .mockImplementation((stateOid: unknown) => Promise.resolve({ state: stateOid, isActive: true })),
+  assertUlbEligibleForGrantCycle: jest.fn().mockResolvedValue(undefined),
+};
 
 const mockDfFormJsonConfig = { loadFields: jest.fn() };
 
@@ -403,6 +410,7 @@ describe('DevolutionFormulaService', () => {
         { provide: getModelToken(GrantAllocation.name), useValue: mockGrantAllocationModel },
         { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: mockEulbModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+        { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: XvifcFormActorsService, useValue: mockActorsService },
         { provide: FileTokenService, useValue: mockFileTokenService },
         { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
@@ -1559,6 +1567,7 @@ describe('DevolutionFormulaRowService', () => {
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: mockRowModel },
         { provide: ExcelService, useValue: { generateExcel: jest.fn() } },
         { provide: DfFormJsonConfigService, useValue: mockDfFormJsonConfig },
+        { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
       ],
     }).compile();
 
@@ -1743,6 +1752,7 @@ describe('Devolution Formula — getForm rowEditFields', () => {
         { provide: getModelToken(GrantAllocation.name), useValue: mockGrantAllocationModel },
         { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: mockEulbModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+        { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: XvifcFormActorsService, useValue: mockActorsService },
         { provide: FileTokenService, useValue: mockFileTokenService },
         { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },

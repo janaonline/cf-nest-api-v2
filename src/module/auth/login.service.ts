@@ -15,12 +15,16 @@ import { CheckUserDto } from './dto/check-user.dto';
 import { LoginDto } from './dto/login.dto';
 import { AuthResponse } from './types/auth-tokens.type';
 import { parseUserRole } from './roles-xvi-fc.helper';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
+import { CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE } from 'src/module/ulb-eligibility/ulb-eligibility.constants';
+import { User } from './enum/role.enum';
 @Injectable()
 export class LoginService {
   constructor(
     private readonly usersRepository: UsersRepository,
     private readonly authService: AuthService,
     private readonly configService: ConfigService,
+    private readonly ulbEligibilityService: UlbEligibilityService,
     @InjectModel(State.name) private readonly stateModel: Model<StateDocument>,
     @InjectModel(Ulb.name) private readonly ulbModel: Model<UlbDocument>,
     @InjectModel(Year.name) private readonly yearModel: Model<YearDocument>,
@@ -169,6 +173,17 @@ export class LoginService {
       await this.usersRepository.resetLoginAttempts(userId);
     }
 
+    // Only reachable once credentials are confirmed valid — checking this earlier (e.g. alongside
+    // the ULB lookup above) would let an unauthenticated caller who merely knows a ULB code learn
+    // its Cantonment-Board status without ever proving they hold valid credentials.
+    if (
+      ulb &&
+      (dto.type === '16thFC' || dto.type === 'XVIFC') &&
+      !(await this.ulbEligibilityService.isUlbEligibleForGrantCycle(ulb, 'XVIFC'))
+    ) {
+      throw new ForbiddenException(CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE);
+    }
+
     if (user.isNewUser && user.tempPasswordExpiresAt && user.tempPasswordExpiresAt < new Date()) {
       throw new ForbiddenException(
         'Your temporary password has expired. Please contact your administrator to resend the invitation.',
@@ -217,5 +232,18 @@ export class LoginService {
       acc[y.year] = (y._id as { toString(): string }).toString();
       return acc;
     }, {});
+  }
+
+  /**
+   * Live eligibility check for `GET /auth/me` — covers the case of a ULB user who already holds a
+   * valid token (issued before this check existed, or via a flow that doesn't gate it) navigating
+   * straight into the XVI FC module. Returns `null` for non-ULB users, since the rule doesn't apply
+   * to them. Computed fresh from Mongo on every call, same as everything else on `req.user`.
+   */
+  async resolveXviFcEligibility(user: Pick<User, 'role' | 'ulb'>): Promise<boolean | null> {
+    if (user.role !== Role.ULB || !user.ulb) return null;
+    const ulb = await this.ulbModel.findOne({ _id: user.ulb, isActive: true }).exec();
+    if (!ulb) return false;
+    return this.ulbEligibilityService.isUlbEligibleForGrantCycle(ulb, 'XVIFC');
   }
 }

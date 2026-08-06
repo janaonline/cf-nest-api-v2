@@ -14,6 +14,7 @@ import { FileTokenService } from '../../../../core/file-token/file-token.service
 import { EmailQueueService } from '../../../../core/queue/email-queue/email-queue.service';
 import { ConfigService } from '@nestjs/config';
 import { ANNUAL_ACCOUNT_PROCESSING_QUEUE } from '../../../../core/constants/queues';
+import { UlbEligibilityService } from '../../../ulb-eligibility/ulb-eligibility.service';
 import type { AuthUser } from '../../../auth/auth-user.interface';
 
 /** Shape of the second argument passed to Mongoose's updateOne in the tests below. */
@@ -46,6 +47,7 @@ describe('AnnualAccountsService', () => {
   let mockFileTokenService: { signFileUrl: jest.Mock };
   let mockEmailQueueService: { addEmailJob: jest.Mock };
   let mockConfigService: { get: jest.Mock };
+  let mockUlbEligibilityService: { assertUlbEligibleForGrantCycle: jest.Mock };
 
   beforeEach(async () => {
     mockAnnualAccountModel = {
@@ -97,6 +99,9 @@ describe('AnnualAccountsService', () => {
     mockConfigService = {
       get: jest.fn(),
     };
+    mockUlbEligibilityService = {
+      assertUlbEligibleForGrantCycle: jest.fn().mockResolvedValue(undefined),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -113,6 +118,7 @@ describe('AnnualAccountsService', () => {
         { provide: FileTokenService, useValue: mockFileTokenService },
         { provide: EmailQueueService, useValue: mockEmailQueueService },
         { provide: ConfigService, useValue: mockConfigService },
+        { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
       ],
     }).compile();
 

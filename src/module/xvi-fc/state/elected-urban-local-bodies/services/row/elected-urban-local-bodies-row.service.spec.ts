@@ -14,6 +14,7 @@ import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import type { XviFcValidationErrorMap } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -183,6 +184,9 @@ describe('ElectedUrbanLocalBodiesRowService', () => {
       revalidateRow: jest.fn().mockReturnValue([]),
     };
     excelService = { generateExcel: jest.fn().mockResolvedValue(new ArrayBuffer(0)) };
+    const ulbEligibilityService = {
+      assertUlbEligibleForGrantCycle: jest.fn().mockResolvedValue(undefined),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -193,6 +197,7 @@ describe('ElectedUrbanLocalBodiesRowService', () => {
         { provide: ElectedUrbanLocalBodiesValidator, useValue: mockValidator },
         { provide: ExcelService, useValue: excelService },
         { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
+        { provide: UlbEligibilityService, useValue: ulbEligibilityService },
       ],
     }).compile();
 

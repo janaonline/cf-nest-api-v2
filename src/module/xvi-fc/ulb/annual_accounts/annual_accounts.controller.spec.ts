@@ -15,6 +15,7 @@ import { FileTokenService } from '../../../../core/file-token/file-token.service
 import { EmailQueueService } from '../../../../core/queue/email-queue/email-queue.service';
 import { ConfigService } from '@nestjs/config';
 import { ANNUAL_ACCOUNT_PROCESSING_QUEUE } from '../../../../core/constants/queues';
+import { UlbEligibilityService } from '../../../ulb-eligibility/ulb-eligibility.service';
 import type { AuthUser } from '../../../auth/auth-user.interface';
 import type { Request } from 'express';
 
@@ -70,6 +71,9 @@ describe('AnnualAccountsController', () => {
     const mockConfigService = {
       get: jest.fn(),
     };
+    const mockUlbEligibilityService = {
+      assertUlbEligibleForGrantCycle: jest.fn().mockResolvedValue(undefined),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [AnnualAccountsController],
@@ -87,6 +91,7 @@ describe('AnnualAccountsController', () => {
         { provide: FileTokenService, useValue: mockFileTokenService },
         { provide: EmailQueueService, useValue: mockEmailQueueService },
         { provide: ConfigService, useValue: mockConfigService },
+        { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
       ],
     }).compile();
 

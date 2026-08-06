@@ -15,6 +15,7 @@ import {
   DevolutionFormulaRowDocument,
 } from 'src/schemas/xvi-fc/state/devolution-formula-row.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 import type { XviFcValidationErrorMap } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import type { FcUnspentUlbRowInputDto } from '../../dto/fc-unspent-ulb-row.dto';
 import type {
@@ -56,6 +57,7 @@ export class FcUnspentDeclarationRowService {
     private readonly devolutionRowModel: Model<DevolutionFormulaRowDocument>,
     @InjectModel(Ulb.name)
     private readonly ulbModel: Model<UlbDocument>,
+    private readonly ulbEligibilityService: UlbEligibilityService,
   ) {}
 
   /**
@@ -95,9 +97,13 @@ export class FcUnspentDeclarationRowService {
     }
 
     const ulbOids = rows.map((r) => new Types.ObjectId(r.ulbId));
+    // Cantonment Board ULBs are excluded here via the shared eligibility filter — a row for one
+    // simply won't resolve, and falls through to the same "ULB not found in registry" handling as
+    // any other invalid ulbId.
+    const eligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC');
     const [ulbDocs, allocationMap] = await Promise.all([
       this.ulbModel
-        .find({ _id: { $in: ulbOids }, state: stateOid, isActive: true })
+        .find({ ...eligibleUlbFilter, _id: { $in: ulbOids } })
         .select('name censusCode sbCode')
         .lean()
         .exec(),

@@ -36,6 +36,8 @@ import {
   requireField,
   getValidatorValue,
 } from 'src/module/xvi-fc/common/utils/xvi-fc-field-lookup.util';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
+import { CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE } from 'src/module/ulb-eligibility/ulb-eligibility.constants';
 
 @Injectable()
 export class DevolutionFormulaRowService {
@@ -47,6 +49,7 @@ export class DevolutionFormulaRowService {
     private readonly dfValidator: DevolutionFormulaValidator,
     private readonly excelService: ExcelService,
     private readonly dfFormJsonConfig: DfFormJsonConfigService,
+    private readonly ulbEligibilityService: UlbEligibilityService,
   ) {}
 
   /** DB-driven `devolutionFormula` max length — single source of truth is the DF_ROW_EDIT_FIELDS group. */
@@ -166,6 +169,16 @@ export class DevolutionFormulaRowService {
 
     if (!row) {
       throw new NotFoundException('Row not found in the active dataset.');
+    }
+    // Defense-in-depth for rows created before this filter existed — new rows for ineligible
+    // ULBs are already rejected at Excel-ingestion time, but an already-existing row could
+    // otherwise still be edited here.
+    if (row.ulbId) {
+      await this.ulbEligibilityService.assertUlbEligibleForGrantCycle(
+        row.ulbId,
+        'XVIFC',
+        CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE,
+      );
     }
 
     this.assertNoActiveClaimLockForUlb(row.ulbId ? new Types.ObjectId(String(row.ulbId)) : null, yearId, installment);

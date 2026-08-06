@@ -36,6 +36,8 @@ import {
   XviFcAnnualAccountFormLogDocument,
 } from '../../../../schemas/xvi-fc/annual-account-form-log.schema';
 import { Ulb, UlbDocument } from '../../../../schemas/ulb.schema';
+import { UlbEligibilityService } from '../../../ulb-eligibility/ulb-eligibility.service';
+import { CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE } from '../../../ulb-eligibility/ulb-eligibility.constants';
 import {
   DocumentActionGateDocument,
   XviFcDocumentActionGate,
@@ -139,6 +141,8 @@ export class AnnualAccountsService implements OnModuleInit {
     private readonly emailQueueService: EmailQueueService,
 
     private readonly configService: ConfigService,
+
+    private readonly ulbEligibilityService: UlbEligibilityService,
   ) {}
 
   async onModuleInit() {
@@ -161,7 +165,7 @@ export class AnnualAccountsService implements OnModuleInit {
   // ─── Presign upload URL ──────────────────────────────────────────────────────
 
   async presignUpload(dto: PresignUploadDto, user: AuthUser) {
-    this.validateUploadPermission(user, { ulbId: dto.ulbId, section: dto.section } as UploadDocumentDto);
+    await this.validateUploadPermission(user, { ulbId: dto.ulbId, section: dto.section } as UploadDocumentDto);
 
     const ext = dto.fileName.split('.').pop()?.toLowerCase();
     if (ext !== 'pdf') {
@@ -197,7 +201,7 @@ export class AnnualAccountsService implements OnModuleInit {
     ipAddress: string | null = null,
     userAgent: string | null = null,
   ) {
-    this.validateUploadPermission(user, dto as unknown as UploadDocumentDto);
+    await this.validateUploadPermission(user, dto as unknown as UploadDocumentDto);
     await this.assertCanUlbUpload(
       dto.ulbId,
       dto.designYearId,
@@ -1032,6 +1036,11 @@ export class AnnualAccountsService implements OnModuleInit {
     const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
     if (!doc) throw new NotFoundException('Annual account not found');
     // this.validateSubmitAccess(doc, user);
+    await this.ulbEligibilityService.assertUlbEligibleForGrantCycle(
+      doc.ulb,
+      'XVIFC',
+      CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE,
+    );
 
     const sectionData = (doc as any)[section];
     if (!sectionData?.documents?.length) {
@@ -1683,7 +1692,7 @@ export class AnnualAccountsService implements OnModuleInit {
     }
   }
 
-  private validateUploadPermission(user: AuthUser, dto: UploadDocumentDto) {
+  private async validateUploadPermission(user: AuthUser, dto: UploadDocumentDto): Promise<void> {
     if (user.accessLevel === 'VIEWER') {
       throw new ForbiddenException('Viewers cannot upload documents');
     }
@@ -1694,6 +1703,12 @@ export class AnnualAccountsService implements OnModuleInit {
         throw new ForbiddenException('You can only upload documents for your own ULB');
       }
     }
+
+    await this.ulbEligibilityService.assertUlbEligibleForGrantCycle(
+      dto.ulbId,
+      'XVIFC',
+      CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE,
+    );
   }
 
   /**

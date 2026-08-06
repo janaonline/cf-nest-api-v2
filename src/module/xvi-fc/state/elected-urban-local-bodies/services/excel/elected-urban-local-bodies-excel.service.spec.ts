@@ -16,6 +16,7 @@ import { FileUrlNormalizerService } from 'src/module/xvi-fc/common/services/file
 import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
 import { ElectedUrbanLocalBodiesValidator } from 'src/module/xvi-fc/state/elected-urban-local-bodies/validators/elected-urban-local-bodies.validator';
 import { EulbFormJsonConfigService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/form-json/elected-urban-local-bodies-form-json.service';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 import type { EulbTypedFieldConfig } from 'src/module/xvi-fc/state/elected-urban-local-bodies/helpers/elected-urban-local-bodies-form-json.helpers';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
@@ -246,6 +247,12 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
       uploadPrivate: jest.fn().mockResolvedValue(undefined),
     };
 
+    const ulbEligibilityService = {
+      getEligibleUlbFilter: jest
+        .fn()
+        .mockImplementation((stateOid: unknown) => Promise.resolve({ state: stateOid, isActive: true })),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ElectedUrbanLocalBodiesExcelService,
@@ -253,6 +260,7 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
         { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: formModel },
         { provide: getModelToken(ElectedUrbanLocalBodiesRow.name), useValue: rowModel },
         { provide: getModelToken(Ulb.name), useValue: ulbModel },
+        { provide: UlbEligibilityService, useValue: ulbEligibilityService },
         { provide: S3Service, useValue: s3Service },
         { provide: ExcelService, useValue: { generateExcel: jest.fn().mockResolvedValue(new ArrayBuffer(8)) } },
         {
@@ -1189,6 +1197,12 @@ describe('ElectedUrbanLocalBodiesExcelService — revalidateExcel', () => {
       uploadPrivate: jest.fn().mockResolvedValue(undefined),
     };
 
+    const ulbEligibilityService = {
+      getEligibleUlbFilter: jest
+        .fn()
+        .mockImplementation((stateOid: unknown) => Promise.resolve({ state: stateOid, isActive: true })),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ElectedUrbanLocalBodiesExcelService,
@@ -1196,6 +1210,7 @@ describe('ElectedUrbanLocalBodiesExcelService — revalidateExcel', () => {
         { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: formModel },
         { provide: getModelToken(ElectedUrbanLocalBodiesRow.name), useValue: rowModel },
         { provide: getModelToken(Ulb.name), useValue: ulbModel },
+        { provide: UlbEligibilityService, useValue: ulbEligibilityService },
         { provide: S3Service, useValue: s3Service },
         { provide: ExcelService, useValue: { generateExcel: jest.fn().mockResolvedValue(new ArrayBuffer(8)) } },
         {

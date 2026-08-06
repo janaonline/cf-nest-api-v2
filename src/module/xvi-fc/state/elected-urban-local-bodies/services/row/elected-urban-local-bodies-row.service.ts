@@ -28,6 +28,8 @@ import {
   EulbRowDocument,
 } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
+import { CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE } from 'src/module/ulb-eligibility/ulb-eligibility.constants';
 import { ERROR_EXCEL_HEADERS } from 'src/module/xvi-fc/state/elected-urban-local-bodies/constants/elected-urban-local-bodies.constants';
 import type { GetElectedUrbanLocalBodiesRowsQueryDto } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/get-elected-urban-local-bodies-rows-query.dto';
 import type { UpdateElectedUrbanLocalBodiesRowDto } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/update-elected-urban-local-bodies-row.dto';
@@ -67,6 +69,7 @@ export class ElectedUrbanLocalBodiesRowService {
     private readonly eulbValidator: ElectedUrbanLocalBodiesValidator,
     private readonly excelService: ExcelService,
     private readonly eulbFormJsonConfig: EulbFormJsonConfigService,
+    private readonly ulbEligibilityService: UlbEligibilityService,
   ) {}
 
   async getRows(
@@ -127,6 +130,17 @@ export class ElectedUrbanLocalBodiesRowService {
 
     if (!row) {
       throw new NotFoundException('Row not found in the active dataset.');
+    }
+    // Defense-in-depth for rows created before this filter existed — new rows for ineligible
+    // ULBs are already rejected at Excel-ingestion time (see elected-urban-local-bodies-row.service
+    // extra-ULB validation), but an already-existing row could otherwise still be edited here.
+    // `row.ulbId` can be null on an intra-batch duplicate-census-code row — nothing to check then.
+    if (row.ulbId) {
+      await this.ulbEligibilityService.assertUlbEligibleForGrantCycle(
+        row.ulbId,
+        'XVIFC',
+        CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE,
+      );
     }
 
     const today = new Date();

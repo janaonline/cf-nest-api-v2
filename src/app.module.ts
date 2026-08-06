@@ -22,6 +22,7 @@ import { ResourcesSectionModule } from './web/resources-section/resources-sectio
 import { EventsModule } from './admin/events/events.module';
 import { XviFcModule } from './module/xvi-fc/xvi-fc.module';
 import { EmailTemplatesModule } from './admin/email-templates/email-templates.module';
+import { UlbTypesModule } from './admin/ulb-types/ulb-types.module';
 import { EmailRemindersModule } from './admin/email-reminders/email-reminders.module';
 import { FileTokenModule } from './core/file-token/file-token.module';
 import { FileModule } from './module/file/file.module';
@@ -107,6 +108,7 @@ function getQueryCaller(): string {
     EventsModule,
     XviFcModule,
     EmailTemplatesModule,
+    UlbTypesModule,
     EmailRemindersModule,
     FormsModule,
     FormJsonModule,
