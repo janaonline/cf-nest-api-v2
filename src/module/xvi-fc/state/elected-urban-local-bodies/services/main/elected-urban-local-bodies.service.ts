@@ -119,7 +119,7 @@ const EULB_DUMP_HEADERS: RowHeader[] = [
   { label: 'Census Code', key: 'censusCode', width: 16 },
   { label: 'ULB Name', key: 'ulbName', width: 35 },
   { label: 'Elected Body Status', key: 'electedBodyStatus', width: 24 },
-  { label: 'Date of Constitution', key: 'dateOfConstitution', width: 24 },
+  { label: 'Date on which the elected body is in place.', key: 'dateOfConstitution', width: 48 },
   { label: 'Date of Expiry', key: 'dateOfExpiry', width: 20 },
   { label: 'Remarks', key: 'remarks', width: 35 },
   { label: 'Validation Status', key: 'validationStatus', width: 20 },
@@ -1040,7 +1040,7 @@ export class ElectedUrbanLocalBodiesService {
     const expiryField = rowEditFields.find((f) => f.key === 'dateOfExpiry')!;
     const remarksField = rowEditFields.find((f) => f.key === 'remarks')!;
 
-    const statusOptions = (statusField.options as FormFieldOption[]).map((o) => o.id).join(',');
+    const statusOptions = (statusField.options as FormFieldOption[]).map((o) => o.label).join(',');
 
     const constitutionMinVal = constitutionField.validations?.find((v) => v.name === 'minDate')?.validator as string;
     const constitutionMaxVal = constitutionField.maxDate!;
@@ -1085,11 +1085,11 @@ export class ElectedUrbanLocalBodiesService {
               `OR(AND($${statusLetter}${row}<>"Constituted",${constitutionLetter}${row}=""),AND($${statusLetter}${row}="Constituted",ISNUMBER(${constitutionLetter}${row}),${constitutionLetter}${row}>=${constitutionMin},${constitutionLetter}${row}<=${constitutionMax}))`,
             ],
             showInputMessage: true,
-            promptTitle: 'Date of Constitution',
+            promptTitle: 'Date on which the elected body is in place.',
             prompt: 'Required when status is Constituted. Must be between 31 May 2021 and today.',
             showErrorMessage: true,
             errorStyle: 'error',
-            errorTitle: 'Date of Constitution',
+            errorTitle: 'Date on which the elected body is in place.',
             error: 'Required for Constituted status and must be within the allowed date range.',
           };
         },

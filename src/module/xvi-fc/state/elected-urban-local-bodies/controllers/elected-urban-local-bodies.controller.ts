@@ -255,7 +255,7 @@ export class ElectedUrbanLocalBodiesController {
   @ApiQuery({
     name: 'electedBodyStatus',
     required: false,
-    enum: ['Constituted', 'Not Constituted', 'Exempt'],
+    enum: ['Constituted', 'Not Constituted', '6th Schedule'],
     description: 'Filter by elected body status',
   })
   @ApiQuery({
