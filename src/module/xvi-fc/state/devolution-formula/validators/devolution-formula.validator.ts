@@ -252,6 +252,7 @@ export class DevolutionFormulaValidator {
     errorRowCount: number;
     missingUlbCount: number;
     newUlbCount?: number;
+    duplicateUlbCount?: number;
     totalMoHUAAllocation: number;
     totalAllocatedSum: number;
     activeDatasetVersion: number;
@@ -262,6 +263,7 @@ export class DevolutionFormulaValidator {
       errorRowCount,
       missingUlbCount,
       newUlbCount = 0,
+      duplicateUlbCount = 0,
       totalMoHUAAllocation,
       totalAllocatedSum,
       activeDatasetVersion,
@@ -276,6 +278,7 @@ export class DevolutionFormulaValidator {
       errorRowCount,
       missingUlbCount,
       newUlbCount,
+      duplicateUlbCount,
       totalMoHUAAllocation,
       totalAllocatedSum,
       allUlbsCovered,

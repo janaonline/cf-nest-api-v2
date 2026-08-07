@@ -381,6 +381,7 @@ function makeFormSummary(overrides: Record<string, unknown> = {}) {
     matchedDbUlbCount: 10,
     missingDbUlbCount: 0,
     extraExcelRowCount: 0,
+    duplicateUlbCount: 0,
     errorRowCount: 0,
     validationStatus: 'VALID',
     activeDatasetVersion: 1,

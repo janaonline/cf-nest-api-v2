@@ -274,6 +274,7 @@ export class DevolutionFormulaExcelService {
     const processedRows: ProcessedRow[] = [];
     const matchedUlbIds = new Set<string>();
     let newUlbCount = 0;
+    let duplicateUlbCount = 0;
 
     for (let i = 0; i < dataRows.length; i++) {
       const raw = dataRows[i];
@@ -309,6 +310,7 @@ export class DevolutionFormulaExcelService {
           if (matchedUlbIds.has(idKey)) {
             // Duplicate ULB — mark as invalid but null out the ulbId so partial unique index is not violated
             resolvedUlbId = null;
+            duplicateUlbCount++;
             rowErrors.push({
               field: 'censusCode',
               code: 'duplicate',
@@ -387,6 +389,8 @@ export class DevolutionFormulaExcelService {
       excelRowCount,
       errorRowCount,
       newUlbCount,
+      missingUlbCount,
+      duplicateUlbCount,
       totalAllocatedSum,
       totalMoHUAAllocation,
       grantAllocationRef: grantAlloc._id,
@@ -484,6 +488,7 @@ export class DevolutionFormulaExcelService {
       errorRowCount,
       missingUlbCount,
       newUlbCount,
+      duplicateUlbCount,
       totalMoHUAAllocation,
       totalAllocatedSum,
       activeDatasetVersion: newVersion,
@@ -596,6 +601,12 @@ export class DevolutionFormulaExcelService {
       }> = [];
       let errorRowCount = 0;
       let newUlbCount = 0;
+      // Structurally near-unreachable in practice: the {form,datasetVersion,ulbId} unique index
+      // (devolution-formula-row.schema.ts) means two active persisted rows can't already share a
+      // ulbId, so this branch only fires if that invariant is ever violated (e.g. legacy data).
+      // Counted (not hardcoded to 0 like EULB's equivalent Case A) precisely so that if it ever
+      // does happen, the count is honest instead of silently claiming zero duplicates.
+      let duplicateUlbCount = 0;
       let totalAllocatedSum = 0;
 
       for (const row of activeRows) {
@@ -613,6 +624,7 @@ export class DevolutionFormulaExcelService {
         if (row.ulbId) {
           const ulbIdStr = String(row.ulbId);
           if (matchedUlbIds.has(ulbIdStr)) {
+            duplicateUlbCount++;
             rowErrors.push({ field: 'censusCode', code: 'duplicate', message: 'Duplicate ULB in dataset.' });
           } else {
             matchedUlbIds.add(ulbIdStr);
@@ -655,6 +667,8 @@ export class DevolutionFormulaExcelService {
             totalMoHUAAllocation,
             errorRowCount,
             newUlbCount,
+            missingUlbCount,
+            duplicateUlbCount,
             validationStatus: formValidationStatus,
             updatedBy: userOid,
           },
@@ -668,6 +682,7 @@ export class DevolutionFormulaExcelService {
         errorRowCount,
         missingUlbCount,
         newUlbCount,
+        duplicateUlbCount,
         totalMoHUAAllocation,
         totalAllocatedSum,
         activeDatasetVersion: form.activeDatasetVersion ?? 0,

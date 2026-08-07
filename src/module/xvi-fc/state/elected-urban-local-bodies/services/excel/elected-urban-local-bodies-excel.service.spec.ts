@@ -821,6 +821,7 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
       const dupError = errors.find((e) => e.field === 'censusCode' && e.code === 'duplicate');
       expect(dupError).toBeDefined();
       expect(dupError!.rowNumber).toBe(2);
+      expect((result.data as EulbValidateExcelResponseData).summary.duplicateUlbCount).toBe(1);
 
       // The dropped duplicate occurrence is snapshotted so getErrorSheet can still surface it,
       // even though it's a soft 200 response (not the newUlbsAdded hard-throw path).
@@ -871,6 +872,10 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
       // Second row: unmatched AND duplicate → both errors
       expect(dataErrors.some((e) => e.rowNumber === 2 && e.code === 'unknownUlb')).toBe(true);
       expect(dataErrors.some((e) => e.rowNumber === 2 && e.code === 'duplicate')).toBe(true);
+      const dataValidationSummary = (
+        response.data as { validationSummary?: { duplicateUlbCount: number } } | undefined
+      )?.validationSummary;
+      expect(dataValidationSummary?.duplicateUlbCount).toBe(1);
     });
 
     it('leaves two DB_ULB rows with different census codes both VALID', async () => {
@@ -1332,6 +1337,8 @@ describe('ElectedUrbanLocalBodiesExcelService — revalidateExcel', () => {
       expect(rowModel.deleteMany).toHaveBeenCalledWith({ _id: { $in: [staleRowId] } });
       expect(data.validationSummary?.missingDbUlbCount).toBe(0);
       expect(data.validationSummary?.extraExcelRowCount).toBe(0);
+      // Case A never re-parses the Excel, so it can never discover a fresh duplicate census code.
+      expect(data.validationSummary?.duplicateUlbCount).toBe(0);
     });
 
     it('deletes an unmatched row and counts it toward missingDbUlbCount when nothing else covers the registry ULB', async () => {

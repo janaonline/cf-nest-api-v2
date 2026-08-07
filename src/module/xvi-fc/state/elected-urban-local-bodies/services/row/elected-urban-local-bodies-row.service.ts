@@ -367,6 +367,7 @@ export class ElectedUrbanLocalBodiesRowService {
         matchedDbUlbCount: 0,
         missingDbUlbCount: 0,
         extraExcelRowCount: 0,
+        duplicateUlbCount: 0,
         errorRowCount: 0,
         validationStatus: 'NOT_VALIDATED',
         excludedRows: [],
@@ -384,6 +385,7 @@ export class ElectedUrbanLocalBodiesRowService {
         matchedDbUlbCount: 0,
         missingDbUlbCount: 0,
         extraExcelRowCount: 0,
+        duplicateUlbCount: 0,
         errorRowCount: 0,
         validationStatus: 'NOT_VALIDATED',
         activeDatasetVersion: activeVersion,
@@ -426,6 +428,7 @@ export class ElectedUrbanLocalBodiesRowService {
           matchedDbUlbCount: 1,
           missingDbUlbCount: 1,
           extraExcelRowCount: 1,
+          duplicateUlbCount: 1,
           activeDatasetVersion: 1,
         })
         .lean()
@@ -444,6 +447,7 @@ export class ElectedUrbanLocalBodiesRowService {
       matchedDbUlbCount: form?.matchedDbUlbCount ?? 0,
       missingDbUlbCount,
       extraExcelRowCount: form?.extraExcelRowCount ?? 0,
+      duplicateUlbCount: form?.duplicateUlbCount ?? 0,
       errorRowCount,
       validationStatus,
       activeDatasetVersion: form?.activeDatasetVersion ?? 0,

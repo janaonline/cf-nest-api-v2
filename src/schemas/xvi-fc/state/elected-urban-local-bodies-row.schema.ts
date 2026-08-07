@@ -42,7 +42,7 @@ class EulbRowErrorSubdoc {
   @Prop({ type: MongooseSchema.Types.Mixed }) value?: unknown;
 }
 
-const EulbRowErrorSubdocSchema = SchemaFactory.createForClass(EulbRowErrorSubdoc);
+export const EulbRowErrorSubdocSchema = SchemaFactory.createForClass(EulbRowErrorSubdoc);
 
 @Schema({ _id: false })
 class EulbRowUpdateHistorySubdoc {

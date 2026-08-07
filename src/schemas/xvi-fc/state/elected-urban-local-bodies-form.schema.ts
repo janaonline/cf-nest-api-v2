@@ -105,6 +105,9 @@ export class ElectedUrbanLocalBodiesForm {
   extraExcelRowCount!: number;
 
   @Prop({ type: Number, default: 0 })
+  duplicateUlbCount!: number;
+
+  @Prop({ type: Number, default: 0 })
   errorRowCount!: number;
 
   @Prop({ type: String, enum: ['NOT_VALIDATED', 'VALID', 'INVALID'], default: 'NOT_VALIDATED' })

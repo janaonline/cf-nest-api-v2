@@ -161,5 +161,17 @@ describe('DevolutionFormulaRowService', () => {
       expect((update['$set'] as Record<string, unknown>)['excludedRows']).toEqual([]);
       expect(update['$unset']).toMatchObject({ excelFile: 1, errorExcelFile: 1 });
     });
+
+    // Regression: previously only EULB's equivalent reset these three counts to 0 on delete;
+    // devolution left them stale until the next validate/revalidate call.
+    it('resets newUlbCount/missingUlbCount/duplicateUlbCount to 0', async () => {
+      await service.deleteUploadedExcel(stateOid.toString(), yearOid.toString(), 1, adminUser);
+
+      const [, update] = formModel['findByIdAndUpdate'].mock.calls[0] as [unknown, Record<string, unknown>];
+      const set = update['$set'] as Record<string, unknown>;
+      expect(set['newUlbCount']).toBe(0);
+      expect(set['missingUlbCount']).toBe(0);
+      expect(set['duplicateUlbCount']).toBe(0);
+    });
   });
 });

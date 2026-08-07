@@ -126,8 +126,9 @@ export class DevolutionFormulaRowService {
       excelRowCount: (formDoc['excelRowCount'] as number) ?? 0,
       validRowCount: validCount,
       errorRowCount: errorCount,
-      missingUlbCount: 0,
+      missingUlbCount: (formDoc['missingUlbCount'] as number) ?? 0,
       newUlbCount: (formDoc['newUlbCount'] as number) ?? 0,
+      duplicateUlbCount: (formDoc['duplicateUlbCount'] as number) ?? 0,
       totalMoHUAAllocation: (formDoc['totalMoHUAAllocation'] as number) ?? 0,
       totalAllocatedSum: (formDoc['totalAllocatedSum'] as number) ?? 0,
       activeDatasetVersion: activeVersion,
@@ -276,8 +277,9 @@ export class DevolutionFormulaRowService {
       excelRowCount: updatedForm?.excelRowCount ?? totalRowCount,
       validRowCount: validCountUpdated,
       errorRowCount: totalRowCount - validCountUpdated,
-      missingUlbCount: 0,
+      missingUlbCount: updatedForm?.missingUlbCount ?? 0,
       newUlbCount: updatedForm?.newUlbCount ?? 0,
+      duplicateUlbCount: updatedForm?.duplicateUlbCount ?? 0,
       totalMoHUAAllocation: updatedForm?.totalMoHUAAllocation ?? 0,
       totalAllocatedSum: updatedForm?.totalAllocatedSum ?? 0,
       activeDatasetVersion: updatedForm?.activeDatasetVersion ?? (formDoc['activeDatasetVersion'] as number),
@@ -318,6 +320,11 @@ export class DevolutionFormulaRowService {
           validationStatus: 'NOT_VALIDATED',
           excelRowCount: 0,
           errorRowCount: 0,
+          // Reset alongside the rest of the reconciliation state — previously left stale here
+          // (unlike EULB's equivalent deleteUploadedExcel, which already reset all three).
+          newUlbCount: 0,
+          missingUlbCount: 0,
+          duplicateUlbCount: 0,
           totalAllocatedSum: 0,
           updatedBy: userOid,
         },
@@ -449,12 +456,20 @@ export class DevolutionFormulaRowService {
       .exec();
     const errorRowCount = totalRowCount - rows.length;
 
-    const formDoc = await this.formModel.findById(formId).select('totalMoHUAAllocation excelRowCount').lean().exec();
+    const formDoc = await this.formModel
+      .findById(formId)
+      .select('totalMoHUAAllocation excelRowCount missingUlbCount')
+      .lean()
+      .exec();
     const totalMoHUAAllocation = ((formDoc as Record<string, unknown> | null)?.['totalMoHUAAllocation'] as number) ?? 0;
+    const missingUlbCount = ((formDoc as Record<string, unknown> | null)?.['missingUlbCount'] as number) ?? 0;
     const allocationBalanced = Math.abs(totalAllocatedSum - totalMoHUAAllocation) <= 0.001;
-    // Note: missingUlbCount is not re-checked here because row edits cannot introduce missing ULBs
-    // (only a new upload can). If ULB coverage gaps need fixing, use revalidateExcel.
-    const validationStatus = errorRowCount === 0 && allocationBalanced ? 'VALID' : 'INVALID';
+    // Row edits can't introduce a *new* missing ULB or duplicate (only a fresh Excel parse via
+    // validateExcel/revalidateExcel can), so this never recomputes missingUlbCount/duplicateUlbCount
+    // itself — it only reads back the persisted missingUlbCount so a still-outstanding gap isn't
+    // silently overwritten to VALID by a routine row edit (mirrors EULB's recalculateFormSummary,
+    // which includes missingDbUlbCount === 0 in the same way).
+    const validationStatus = errorRowCount === 0 && missingUlbCount === 0 && allocationBalanced ? 'VALID' : 'INVALID';
 
     await this.formModel
       .findByIdAndUpdate(formId, {

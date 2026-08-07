@@ -20,6 +20,7 @@ import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-
 import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
 import { keyByFieldKey, requireField } from 'src/module/xvi-fc/common/utils/xvi-fc-field-lookup.util';
 import { deriveFileValidationOptions } from 'src/module/xvi-fc/common/utils/xvi-fc-file-constraint.util';
+import { buildUlbReconciliationBadges } from 'src/module/xvi-fc/common/utils/xvi-fc-ulb-reconciliation-badges.util';
 import type { FileInfo } from 'src/schemas/common/file.schema';
 import type { FormData } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.types';
 import type {
@@ -654,6 +655,8 @@ export class DevolutionFormulaService {
     const allocationBalanced = Math.abs(totalAllocatedSum - totalMoHUAAllocation) <= 0.001;
     const validationStatus = doc?.validationStatus;
     const newUlbCount = doc?.newUlbCount ?? 0;
+    const missingUlbCount = doc?.missingUlbCount ?? 0;
+    const duplicateUlbCount = doc?.duplicateUlbCount ?? 0;
 
     return [
       {
@@ -714,6 +717,12 @@ export class DevolutionFormulaService {
             tone: 'danger' as const,
             visible: canEdit && errorRowCount > 0,
           },
+          ...buildUlbReconciliationBadges({
+            missingCount: missingUlbCount,
+            newCount: newUlbCount,
+            duplicateCount: duplicateUlbCount,
+            visible: canEdit,
+          }),
           {
             label: `Allocated amount: ₹${formatINR(totalMoHUAAllocation)} Cr.`,
             tone: 'secondary' as const,
@@ -766,6 +775,7 @@ export class DevolutionFormulaService {
         errorRowCount: 0,
         missingUlbCount: 0,
         newUlbCount: 0,
+        duplicateUlbCount: 0,
         totalMoHUAAllocation,
         totalAllocatedSum: 0,
         activeDatasetVersion: 0,
@@ -777,8 +787,9 @@ export class DevolutionFormulaService {
       excelRowCount,
       validRowCount: excelRowCount - errorRowCount,
       errorRowCount,
-      missingUlbCount: 0,
+      missingUlbCount: doc.missingUlbCount ?? 0,
       newUlbCount: doc.newUlbCount ?? 0,
+      duplicateUlbCount: doc.duplicateUlbCount ?? 0,
       totalMoHUAAllocation: doc.totalMoHUAAllocation ?? totalMoHUAAllocation,
       totalAllocatedSum: doc.totalAllocatedSum ?? 0,
       activeDatasetVersion: doc.activeDatasetVersion ?? 0,
