@@ -1,6 +1,6 @@
 import { Body, Controller, Get, Logger, Param, Post, Query, Res, UploadedFile, UseInterceptors, UsePipes, ValidationPipe } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { ApiBody, ApiConsumes } from '@nestjs/swagger';
+import { ApiBody, ApiConsumes , ApiBearerAuth } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { YearIdToLabel } from 'src/core/constants/years';
 import { AfsDigitizationService } from './afs-digitization.service';
@@ -61,6 +61,48 @@ export class AfsDigitizationController {
   @Get('request-log/:requestId')
   async getRequestLog(@Param('requestId') requestId: string) {
     return { data: await this.afsService.getRequestLog(requestId) };
+  }
+  /**
+   * Updates PDF metadata for a specific annual account
+   * @param id 
+   * @returns 
+   */
+  @ApiBearerAuth()
+  @Post('annual-account/:id/pdf-metadata')
+  async updateAnnualAccountPdfMetadata(@Param('id') id: string) {
+    return {
+      status: 'success',
+      data: await this.afsService.updatePdfMetadataForAnnualAccount(id),
+    };
+  }
+
+  @ApiBearerAuth()
+  @Get('annual-accounts/pdf-metadata/status')
+  async getAnnualAccountPdfMetadataStatus() {
+    return {
+      status: 'success',
+      data: await this.afsService.getPdfMetadataBackfillStatus(),
+    };
+  }
+
+  /**
+   * Backfills PDF metadata for annual account documents.
+   */
+  @ApiBearerAuth()
+  @Post('annual-accounts/pdf-metadata/backfill')
+  async backfillAnnualAccountPdfMetadata(
+    @Query('batchSize') batchSize?: string,
+    @Query('limit') limit?: string,
+    @Query('onlyMissing') onlyMissing?: string,
+  ) {
+    return {
+      status: 'success',
+      data: await this.afsService.backfillPdfMetadataForAnnualAccounts({
+        batchSize: batchSize ? Number(batchSize) : undefined,
+        limit: limit ? Number(limit) : undefined,
+        onlyMissing: onlyMissing === undefined ? true : onlyMissing !== 'false',
+      }),
+    };
   }
 
   @Get('dump/afs-excel')
