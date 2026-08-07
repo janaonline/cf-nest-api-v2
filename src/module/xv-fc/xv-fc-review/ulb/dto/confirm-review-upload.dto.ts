@@ -1,7 +1,11 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { IsIn, IsNotEmpty, IsNumber, IsString, IsUUID, Max, Min } from 'class-validator';
-import { DECLARATION_TARGET_CODE, SUPPORTING_DOCUMENT_TARGET_CODE } from '../../common/xv-fc-review.constants';
+import {
+  DECLARATION_TARGET_CODE,
+  MAX_UPLOAD_SIZE_BYTES,
+  SUPPORTING_DOCUMENT_TARGET_CODE,
+} from '../../common/xv-fc-review.constants';
 
 const UPLOAD_TARGET_CODES = [DECLARATION_TARGET_CODE, SUPPORTING_DOCUMENT_TARGET_CODE] as const;
 
@@ -32,6 +36,6 @@ export class ConfirmReviewUploadDto {
   @Type(() => Number)
   @IsNumber()
   @Min(1)
-  @Max(20 * 1024 * 1024)
+  @Max(MAX_UPLOAD_SIZE_BYTES)
   fileSize: number;
 }

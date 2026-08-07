@@ -6,6 +6,12 @@ import type { HeadOfAccountType } from '../../../../schemas/line-item.schema';
 export const DECLARATION_TARGET_CODE = 'DECLARATION';
 export const SUPPORTING_DOCUMENT_TARGET_CODE = 'SUPPORTING_DOCUMENT';
 
+// Shared by the confirm DTOs' client-supplied fileSize bound and the
+// server-side check against S3's actual ContentLength on confirm — a client
+// can lie about fileSize (it's never persisted or otherwise used), so the
+// real enforcement point is the HEAD check, not the DTO validator.
+export const MAX_UPLOAD_SIZE_BYTES = 20 * 1024 * 1024;
+
 // The AFS review window is a fixed 5-year business range, not something
 // to infer from which ledgerlogs documents already happen to exist — MaGC
 // digitization for later years may not have landed yet, but the ULB still

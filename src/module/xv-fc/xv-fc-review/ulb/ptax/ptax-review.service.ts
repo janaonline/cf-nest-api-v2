@@ -28,7 +28,11 @@ import {
   validatePtaxMetricOrder,
   validatePtaxMetricValue,
 } from '../../common/ptax.constants';
-import { DECLARATION_TARGET_CODE, SUPPORTING_DOCUMENT_TARGET_CODE } from '../../common/xv-fc-review.constants';
+import {
+  DECLARATION_TARGET_CODE,
+  MAX_UPLOAD_SIZE_BYTES,
+  SUPPORTING_DOCUMENT_TARGET_CODE,
+} from '../../common/xv-fc-review.constants';
 import { ConfirmPtaxUploadDto } from './dto/confirm-ptax-upload.dto';
 import { PresignPtaxUploadDto } from './dto/presign-ptax-upload.dto';
 import { SavePtaxDraftDto } from './dto/save-ptax-draft.dto';
@@ -210,12 +214,32 @@ export class PtaxReviewService {
     const setOps: Record<string, unknown> = { status: doc.status === 'NOT_STARTED' ? 'DRAFT' : doc.status };
     for (const item of dto.metrics) {
       const key = toMetricKey(item.code);
+      const existing = existingReviews[key];
       setOps[`metricReviews.${key}.flagged`] = item.flagged;
       if (item.proposedValue !== undefined) {
         setOps[`metricReviews.${key}.proposedValue`] = item.proposedValue;
       }
       if (item.comment !== undefined) {
         setOps[`metricReviews.${key}.comment`] = item.comment;
+      }
+
+      // A previously-ACCEPTED decision was made against the old data —
+      // submit()'s resubmission loop leaves ACCEPTED metrics untouched on
+      // the assumption they can't have changed since. If the ULB actually
+      // edits a metric's flagged state, proposed value, or comment after
+      // it was accepted, that acceptance is stale and must be re-reviewed.
+      const changed =
+        existing?.flagged !== item.flagged ||
+        (item.proposedValue !== undefined && existing?.proposedValue !== item.proposedValue) ||
+        (item.comment !== undefined && existing?.comment !== item.comment);
+      if (changed && existing?.adminDecision?.status === 'ACCEPTED') {
+        setOps[`metricReviews.${key}.adminDecision`] = {
+          status: 'PENDING',
+          reason: '',
+          correctedValue: null,
+          reviewedBy: null,
+          reviewedAt: null,
+        };
       }
     }
 
@@ -267,10 +291,17 @@ export class PtaxReviewService {
       throw new BadRequestException('Invalid s3Key for this upload');
     }
 
+    let head: Awaited<ReturnType<S3Service['headObject']>>;
     try {
-      await this.s3Service.headObject(dto.s3Key);
+      head = await this.s3Service.headObject(dto.s3Key);
     } catch {
       throw new BadRequestException('File not found in S3 — upload may have failed or expired');
+    }
+    // dto.fileSize is client-supplied and never persisted — the presigned PUT
+    // URL doesn't constrain upload size, so the actual S3 object is the only
+    // trustworthy source for this check.
+    if (head.ContentLength != null && head.ContentLength > MAX_UPLOAD_SIZE_BYTES) {
+      throw new BadRequestException(`Uploaded file exceeds the ${MAX_UPLOAD_SIZE_BYTES / (1024 * 1024)}MB limit`);
     }
 
     const fileRef = { url: dto.s3Key, name: dto.originalName, uploadedAt: new Date() };

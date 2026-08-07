@@ -77,7 +77,7 @@ describe('XvFcReviewService', () => {
       findById: jest.fn().mockReturnValue(q(mockYear)),
     };
     s3Service = {
-      headObject: jest.fn().mockResolvedValue(undefined),
+      headObject: jest.fn().mockResolvedValue({ ContentLength: 1000 }),
       presignGet: jest.fn().mockResolvedValue('https://signed-url'),
     };
     s3UploadService = {
@@ -213,6 +213,83 @@ describe('XvFcReviewService', () => {
       expect(setOps['xvFcReview.lineItemReviews.110.flagged']).toBe(true);
       expect(setOps['xvFcReview.lineItemReviews.110.proposedValue']).toBe(5000000);
       expect(setOps['xvFcReview.lineItemReviews.110.comment']).toBe('test');
+    });
+
+    it('resets a stale ACCEPTED decision back to PENDING when the ULB changes the accepted proposedValue', async () => {
+      ledgerLogModel.findOne.mockReturnValue(
+        q(
+          baseLedgerLog({
+            xvFcReview: {
+              status: 'DRAFT',
+              lineItemReviews: {
+                '110': {
+                  flagged: true,
+                  proposedValue: 5000000,
+                  comment: 'old',
+                  adminDecision: { status: 'ACCEPTED', correctedValue: 5000000 },
+                },
+              },
+            },
+          }),
+        ),
+      );
+      await service.saveDraft(
+        ulbOid.toString(),
+        yearOid.toString(),
+        { lineItems: [{ code: '110', flagged: true, proposedValue: 6000000, comment: 'old' }] },
+        ulbUser,
+      );
+      const [, updateArg] = ledgerLogModel.updateOne.mock.calls[0];
+      const setOps = (updateArg as { $set: Record<string, unknown> }).$set;
+      expect(setOps['xvFcReview.lineItemReviews.110.adminDecision']).toMatchObject({ status: 'PENDING' });
+    });
+
+    it('leaves an ACCEPTED decision untouched when the resubmitted data is unchanged', async () => {
+      ledgerLogModel.findOne.mockReturnValue(
+        q(
+          baseLedgerLog({
+            xvFcReview: {
+              status: 'DRAFT',
+              lineItemReviews: {
+                '110': {
+                  flagged: true,
+                  proposedValue: 5000000,
+                  comment: 'same',
+                  adminDecision: { status: 'ACCEPTED', correctedValue: 5000000 },
+                },
+              },
+            },
+          }),
+        ),
+      );
+      await service.saveDraft(
+        ulbOid.toString(),
+        yearOid.toString(),
+        { lineItems: [{ code: '110', flagged: true, proposedValue: 5000000, comment: 'same' }] },
+        ulbUser,
+      );
+      const [, updateArg] = ledgerLogModel.updateOne.mock.calls[0];
+      const setOps = (updateArg as { $set: Record<string, unknown> }).$set;
+      expect(setOps['xvFcReview.lineItemReviews.110.adminDecision']).toBeUndefined();
+    });
+  });
+
+  // ─── confirmUpload ───────────────────────────────────────────────────────
+
+  describe('confirmUpload', () => {
+    it('rejects a confirm when the actual S3 object exceeds the 20MB limit, regardless of the claimed fileSize', async () => {
+      s3Service.headObject.mockResolvedValue({ ContentLength: 21 * 1024 * 1024 });
+      const uploadId = '123e4567-e89b-12d3-a456-426614174000';
+      const key = `xv-fc-review/${ulbOid.toString()}/${yearOid.toString()}/DECLARATION/${uploadId}.pdf`;
+      await expect(
+        service.confirmUpload(
+          ulbOid.toString(),
+          yearOid.toString(),
+          // Client lies about fileSize — only the real S3 ContentLength must matter
+          { uploadId, s3Key: key, targetCode: 'DECLARATION', originalName: 'a.pdf', fileSize: 100 },
+          ulbUser,
+        ),
+      ).rejects.toThrow(/exceeds the 20MB limit/);
     });
   });
 
