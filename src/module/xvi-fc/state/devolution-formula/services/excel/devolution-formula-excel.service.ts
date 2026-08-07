@@ -300,7 +300,7 @@ export class DevolutionFormulaExcelService {
           rowErrors.push({
             field: 'censusCode',
             code: 'unknownUlb',
-            message: `Census Code "${parsed.censusCode}" does not match any active onboarded ULB for this state. Unknown ULBs cannot be added to Devolution Formula.`,
+            message: `Census Code "${parsed.censusCode}" does not match any active onboarded ULB for this state. Unknown ULBs cannot be added to ULB-wise Allocation.`,
             value: parsed.censusCode,
           });
         } else {
@@ -562,7 +562,7 @@ export class DevolutionFormulaExcelService {
       .exec();
 
     if (!form) {
-      throw new NotFoundException('Devolution Formula form not found.');
+      throw new NotFoundException('ULB-wise Allocation form not found.');
     }
 
     assertCanStateEditForm(form.currentFormStatus ?? FORM_STATUS.NOT_STARTED);
@@ -793,7 +793,7 @@ export class DevolutionFormulaExcelService {
       return this.excelService.generateExcel(
         DF_TEMPLATE_HEADERS,
         rows,
-        'Devolution Formula',
+        'ULB-wise Allocation',
         this.buildDfTemplateValidations(maxFormulaLength, maxGrantAllocation),
       );
     }
@@ -811,7 +811,7 @@ export class DevolutionFormulaExcelService {
     return this.excelService.generateExcel(
       DF_TEMPLATE_HEADERS,
       rows,
-      'Devolution Formula',
+      'ULB-wise Allocation',
       this.buildDfTemplateValidations(maxFormulaLength, maxGrantAllocation),
     );
   }
@@ -891,8 +891,8 @@ export class DevolutionFormulaExcelService {
             formulae: [`AND(${cellLetter}${row}<>"",LEN(${cellLetter}${row})<=${maxFormulaLength})`],
             showErrorMessage: true,
             errorStyle: 'error',
-            errorTitle: 'Devolution Formula Required',
-            error: `Devolution Formula is required and must not exceed ${maxFormulaLength} characters.`,
+            errorTitle: 'Allocation Formula Required',
+            error: `Allocation Formula is required and must not exceed ${maxFormulaLength} characters.`,
           };
         },
       },
@@ -925,7 +925,7 @@ export class DevolutionFormulaExcelService {
       ['totalGrantAllocation', 'Total Grant Allocation'],
       ['installment1Amount', 'Installment 1 Amount'],
       ['installment2Amount', 'Installment 2 Amount'],
-      ['devolutionFormula', 'Devolution Formula'],
+      ['devolutionFormula', 'Allocation Formula'],
     ];
     const missing: string[] = [];
     for (const [key, label] of requiredDataCols) {
@@ -986,7 +986,7 @@ export class DevolutionFormulaExcelService {
     const buffer = (await this.excelService.generateExcel(
       DF_ERROR_EXCEL_HEADERS,
       errorRows,
-      'Devolution Formula Errors',
+      'ULB-wise Allocation Errors',
     )) as unknown as Buffer;
 
     await this.s3Service.uploadPrivate(

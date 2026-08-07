@@ -19,7 +19,7 @@ import { DumpDevolutionFormulaQueryDto } from './dto/dump-devolution-formula-que
 import { DF_INSTALLMENTS, type DfInstallment } from './constants/devolution-formula.constants';
 import { throwXviFcValidationError } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
 
-@ApiTags('XVI-FC - State Forms - Devolution Formula')
+@ApiTags('XVI-FC - State Forms - ULB-wise Allocation')
 @ApiBearerAuth()
 @Controller('xvi-fc/state/devolution-formula')
 export class DevolutionFormulaController {
@@ -29,7 +29,7 @@ export class DevolutionFormulaController {
     private readonly dfRowService: DevolutionFormulaRowService,
   ) {}
 
-  @ApiOperation({ summary: 'Export all Devolution Formula data (admin/state scoped)' })
+  @ApiOperation({ summary: 'Export all ULB-wise Allocation data (admin/state scoped)' })
   @ApiQuery({ name: 'stateId', required: false })
   @ApiQuery({ name: 'yearId', required: false })
   @ApiQuery({ name: 'installment', required: false, enum: [...DF_INSTALLMENTS] })
@@ -47,11 +47,11 @@ export class DevolutionFormulaController {
     const buffer = await this.dfService.dumpToExcel(query, user);
     return new StreamableFile(buffer as unknown as Uint8Array, {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      disposition: `attachment; filename="devolution-formula-dump_${getTimeStamp(false)}.xlsx"`,
+      disposition: `attachment; filename="ulb-wise-allocation-dump_${getTimeStamp(false)}.xlsx"`,
     });
   }
 
-  @ApiOperation({ summary: 'Save Devolution Formula draft' })
+  @ApiOperation({ summary: 'Save ULB-wise Allocation draft' })
   @ApiBody({ type: SaveDraftDevolutionFormulaDto })
   @Post('save-draft')
   @UseGuards(PermissionGuard)
@@ -60,7 +60,7 @@ export class DevolutionFormulaController {
     return this.dfService.saveDraft(dto, user);
   }
 
-  @ApiOperation({ summary: 'Validate uploaded Devolution Formula Excel' })
+  @ApiOperation({ summary: 'Validate uploaded ULB-wise Allocation Excel' })
   @ApiBody({ type: ValidateExcelDevolutionFormulaDto })
   @Post('validate-excel')
   @UseGuards(PermissionGuard)
@@ -69,7 +69,7 @@ export class DevolutionFormulaController {
     return this.dfExcelService.validateExcel(dto, user);
   }
 
-  @ApiOperation({ summary: 'Final submit Devolution Formula form' })
+  @ApiOperation({ summary: 'Final submit ULB-wise Allocation form' })
   @ApiBody({ type: FinalSubmitDevolutionFormulaDto })
   @Post('final-submit')
   @UseGuards(PermissionGuard)
@@ -78,7 +78,7 @@ export class DevolutionFormulaController {
     return this.dfService.finalSubmit(dto, user);
   }
 
-  @ApiOperation({ summary: 'Get Devolution Formula form (hydrated)' })
+  @ApiOperation({ summary: 'Get ULB-wise Allocation form (hydrated)' })
   @Get(':stateId/:yearId/:installment')
   @UseGuards(PermissionGuard)
   @RequirePermissions(Permission.VIEW_STATE_FORMS)
@@ -92,7 +92,7 @@ export class DevolutionFormulaController {
     return this.dfService.getForm(stateId, yearId, inst, user);
   }
 
-  @ApiOperation({ summary: 'Download Devolution Formula Excel template' })
+  @ApiOperation({ summary: 'Download ULB-wise Allocation Excel template' })
   @Get(':stateId/:yearId/:installment/template')
   @UseGuards(PermissionGuard)
   @RequirePermissions(Permission.VIEW_STATE_FORMS)
@@ -106,11 +106,11 @@ export class DevolutionFormulaController {
     const buffer = await this.dfExcelService.generateTemplate(stateId, yearId, inst, user);
     return new StreamableFile(buffer as unknown as Uint8Array, {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      disposition: `attachment; filename="devolution-formula-template_${getTimeStamp(false)}.xlsx"`,
+      disposition: `attachment; filename="ulb-wise-allocation-template_${getTimeStamp(false)}.xlsx"`,
     });
   }
 
-  @ApiOperation({ summary: 'Get Devolution Formula rows (paginated)' })
+  @ApiOperation({ summary: 'Get ULB-wise Allocation rows (paginated)' })
   @ApiQuery({ name: 'page', required: false })
   @ApiQuery({ name: 'limit', required: false })
   @ApiQuery({ name: 'search', required: false })
@@ -129,7 +129,7 @@ export class DevolutionFormulaController {
     return this.dfRowService.getRows(stateId, yearId, inst, query, user);
   }
 
-  @ApiOperation({ summary: 'Download Devolution Formula error sheet' })
+  @ApiOperation({ summary: 'Download ULB-wise Allocation error sheet' })
   @Get(':stateId/:yearId/:installment/error-sheet')
   @UseGuards(PermissionGuard)
   @RequirePermissions(Permission.VIEW_STATE_FORMS)
@@ -143,11 +143,11 @@ export class DevolutionFormulaController {
     const buffer = await this.dfRowService.getErrorSheet(stateId, yearId, inst, user);
     return new StreamableFile(buffer as unknown as Uint8Array, {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      disposition: `attachment; filename="devolution-formula-errors_${getTimeStamp(false)}.xlsx"`,
+      disposition: `attachment; filename="ulb-wise-allocation-errors_${getTimeStamp(false)}.xlsx"`,
     });
   }
 
-  @ApiOperation({ summary: 'Revalidate Devolution Formula Excel data' })
+  @ApiOperation({ summary: 'Revalidate ULB-wise Allocation Excel data' })
   @Post(':stateId/:yearId/:installment/revalidate-excel')
   @UseGuards(PermissionGuard)
   @RequirePermissions(Permission.EDIT_STATE_FORMS)
@@ -161,7 +161,7 @@ export class DevolutionFormulaController {
     return this.dfExcelService.revalidateExcel(stateId, yearId, inst, user);
   }
 
-  @ApiOperation({ summary: 'Update a single Devolution Formula row (portal edit)' })
+  @ApiOperation({ summary: 'Update a single ULB-wise Allocation row (portal edit)' })
   @Patch(':stateId/:yearId/:installment/rows/:rowId')
   @UseGuards(PermissionGuard)
   @RequirePermissions(Permission.EDIT_STATE_FORMS)
@@ -177,7 +177,7 @@ export class DevolutionFormulaController {
     return this.dfRowService.updateRow(stateId, yearId, inst, rowId, dto, user);
   }
 
-  @ApiOperation({ summary: 'Delete uploaded Devolution Formula Excel and reset dataset' })
+  @ApiOperation({ summary: 'Delete uploaded ULB-wise Allocation Excel and reset dataset' })
   @Delete(':stateId/:yearId/:installment/uploaded-excel')
   @UseGuards(PermissionGuard)
   @RequirePermissions(Permission.EDIT_STATE_FORMS)

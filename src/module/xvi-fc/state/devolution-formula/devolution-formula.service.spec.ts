@@ -1987,7 +1987,7 @@ describe('Devolution Formula — getForm rowEditFields', () => {
         .spyOn((service as any).excelService, 'generateExcel')
         .mockResolvedValue(Buffer.from(''));
       await service.dumpToExcel({} as DumpDevolutionFormulaQueryDto, adminUser);
-      expect(generateExcelSpy).toHaveBeenCalledWith(DF_DUMP_HEADERS, [], 'Devolution Formula Dump');
+      expect(generateExcelSpy).toHaveBeenCalledWith(DF_DUMP_HEADERS, [], 'ULB-wise Allocation Dump');
     });
 
     it('maps aggregation row to DfDumpRow shape with correct field values', async () => {

@@ -209,7 +209,7 @@ export class DevolutionFormulaService {
       meta: { version: 1 },
     };
 
-    return xviFcSuccess('Devolution Formula form fetched.', responseData);
+    return xviFcSuccess('ULB-wise Allocation form fetched.', responseData);
   }
 
   async saveDraft(dto: SaveDraftDevolutionFormulaDto, user: AuthUser): Promise<XviFcApiResponse> {
@@ -289,7 +289,7 @@ export class DevolutionFormulaService {
       .lean()
       .exec();
 
-    return xviFcSuccess('Devolution Formula draft saved.', { _id: String(result._id) });
+    return xviFcSuccess('ULB-wise Allocation draft saved.', { _id: String(result._id) });
   }
 
   async finalSubmit(dto: FinalSubmitDevolutionFormulaDto, user: AuthUser): Promise<XviFcApiResponse> {
@@ -466,10 +466,10 @@ export class DevolutionFormulaService {
       .exec();
 
     this.logger.log(
-      `Devolution Formula [state=${dto.stateId} year=${dto.yearId} installment=${dto.installment}] submitted by user=${user._id}`,
+      `ULB-wise Allocation [state=${dto.stateId} year=${dto.yearId} installment=${dto.installment}] submitted by user=${user._id}`,
     );
 
-    return xviFcSuccess('Devolution Formula submitted successfully.', {
+    return xviFcSuccess('ULB-wise Allocation submitted successfully.', {
       currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
       currentFormStatusLabel: getFormStatusLabel(FORM_STATUS.UNDER_REVIEW_BY_MOHUA),
     });
@@ -528,7 +528,7 @@ export class DevolutionFormulaService {
     const aggRows = (await this.rowModel.aggregate(pipeline).exec()) as Record<string, unknown>[];
     const dumpRows: DfDumpRow[] = aggRows.map((row) => this.mapDumpAggregationRow(row));
 
-    return this.excelService.generateExcel(DF_DUMP_HEADERS, dumpRows, 'Devolution Formula Dump');
+    return this.excelService.generateExcel(DF_DUMP_HEADERS, dumpRows, 'ULB-wise Allocation Dump');
   }
 
   // ─── Private helpers ──────────────────────────────────────────────────────
@@ -837,7 +837,7 @@ export class DevolutionFormulaService {
             field: 'installment',
             code: 'prerequisiteNotMet',
             message:
-              'Elected Body form must be submitted and under review by MoHUA before submitting Devolution Formula.',
+              'Elected Body form must be submitted and under review by MoHUA before submitting ULB-wise Allocation.',
           },
         ],
       });

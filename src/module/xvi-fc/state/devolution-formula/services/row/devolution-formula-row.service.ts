@@ -401,7 +401,7 @@ export class DevolutionFormulaRowService {
 
     const errorRows = [...dbErrorRows, ...excludedErrorRows].sort((a, b) => a.rowNumber - b.rowNumber);
 
-    return this.excelService.generateExcel(DF_ERROR_EXCEL_HEADERS, errorRows, 'Devolution Formula Errors');
+    return this.excelService.generateExcel(DF_ERROR_EXCEL_HEADERS, errorRows, 'ULB-wise Allocation Errors');
   }
 
   // ─── Private helpers ──────────────────────────────────────────────────────
@@ -426,7 +426,7 @@ export class DevolutionFormulaRowService {
       .exec();
 
     if (!form) {
-      throw new NotFoundException('Devolution Formula form not found for this state, year and installment.');
+      throw new NotFoundException('ULB-wise Allocation form not found for this state, year and installment.');
     }
 
     return form;

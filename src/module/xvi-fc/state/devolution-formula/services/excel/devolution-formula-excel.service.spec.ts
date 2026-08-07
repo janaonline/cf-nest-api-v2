@@ -42,7 +42,7 @@ const EXCEL_HEADERS = [
   'Total Grant Allocation',
   'Installment 1 Amount',
   'Installment 2 Amount',
-  'Devolution Formula',
+  'Allocation Formula',
 ];
 
 function makeXlsxBuffer(dataRows: unknown[][]): Buffer {
@@ -665,7 +665,7 @@ describe('DevolutionFormulaExcelService — generateTemplate', () => {
     service = module.get<DevolutionFormulaExcelService>(DevolutionFormulaExcelService);
   });
 
-  it('orders template columns as Census Code, ULB Name, Installment 1, Installment 2, Total Grant Allocation, Devolution Formula', () => {
+  it('orders template columns as Census Code, ULB Name, Installment 1, Installment 2, Total Grant Allocation, Allocation Formula', () => {
     expect(DF_TEMPLATE_HEADERS.map((h) => h.key)).toEqual([
       'censusCode',
       'ulbName',
