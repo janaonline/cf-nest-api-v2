@@ -279,13 +279,16 @@ export class UlbService {
   /**
    * Fills in a default `approval` block for documents created before this field existed.
    * `.lean()` reads bypass Mongoose's schema-default application, so legacy ULBs come back
-   * with `approval: undefined` — treat them as pre-approved master data.
+   * with `approval: undefined` — treat them as pre-approved master data. `isExistingUser`
+   * flags this synthesized case explicitly so callers (the ULB list UI) can label these
+   * rows "Existing User" instead of conflating them with an ADMIN-reviewed 'APPROVED' ULB.
    */
-  private withApprovalDefaults<T extends Ulb>(ulb: T): T {
-    if (ulb.approval) return ulb;
+  private withApprovalDefaults<T extends Ulb>(ulb: T): T & { isExistingUser: boolean } {
+    if (ulb.approval) return { ...ulb, isExistingUser: false };
     return {
       ...ulb,
       approval: { status: 'APPROVED', submittedBy: null, reviewedBy: null, reviewedAt: null, rejectReason: '' },
+      isExistingUser: true,
     };
   }
 
@@ -561,7 +564,7 @@ export class UlbService {
     query: QueryUlbDto,
     user: IAuthUser,
   ): Promise<{
-    data: (Ulb & { stateName: string; ulbTypeName: string })[];
+    data: (Ulb & { stateName: string; ulbTypeName: string; isExistingUser: boolean })[];
     page: number;
     limit: number;
     total: number;
@@ -573,7 +576,15 @@ export class UlbService {
 
     const filter: FilterQuery<UlbDocument> = {};
     if (query.isActive !== undefined) filter.isActive = query.isActive;
-    if (query.approvalStatus) filter['approval.status'] = query.approvalStatus;
+    // 'EXISTING' has no 'approval.status' in Mongo to match against — legacy ULBs never had
+    // the field written at all (see withApprovalDefaults); querying by presence, not value,
+    // is what actually finds them. This also means the plain 'APPROVED' filter already
+    // excludes them today, so the two options stay mutually exclusive.
+    if (query.approvalStatus === 'EXISTING') {
+      filter.approval = { $exists: false };
+    } else if (query.approvalStatus) {
+      filter['approval.status'] = query.approvalStatus;
+    }
     if (query.ulbType) filter.ulbType = new Types.ObjectId(query.ulbType);
 
     if (user.role === Role.STATE) {
@@ -648,7 +659,7 @@ export class UlbService {
     }));
   }
 
-  async findOne(id: string): Promise<Ulb> {
+  async findOne(id: string): Promise<Ulb & { isExistingUser: boolean }> {
     if (!Types.ObjectId.isValid(id)) throw new BadRequestException('Invalid ULB id');
     const ulb = await this.ulbModel.findById(id).lean<Ulb>();
     if (!ulb) throw new NotFoundException('ULB not found');
@@ -661,7 +672,7 @@ export class UlbService {
    * submission an ADMIN sent back, not a general edit capability. A STATE resubmission always
    * resets `approval` back to PENDING so the ADMIN reviews the corrected data.
    */
-  async update(id: string, dto: UpdateUlbDto, user: IAuthUser): Promise<Ulb> {
+  async update(id: string, dto: UpdateUlbDto, user: IAuthUser): Promise<Ulb & { isExistingUser: boolean }> {
     if (!Types.ObjectId.isValid(id)) throw new BadRequestException('Invalid ULB id');
 
     const existing = await this.ulbModel.findById(id).lean<UlbDocument>();
@@ -785,7 +796,7 @@ export class UlbService {
   async findTypes(): Promise<{ _id: Types.ObjectId; name: string }[]> {
     return this.ulbModel.db
       .collection('ulbtypes')
-      .find({}, { projection: { name: 1 } })
+      .find({ isActive: true }, { projection: { name: 1 } })
       .sort({ name: 1 })
       .toArray() as unknown as Promise<{ _id: Types.ObjectId; name: string }[]>;
   }

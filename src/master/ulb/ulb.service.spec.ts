@@ -643,6 +643,85 @@ describe('UlbService', () => {
       expect(result.data[0].stateName).toBe('Andhra Pradesh');
       expect(result.data[0].ulbTypeName).toBe('Municipal Corporation');
     });
+
+    it("filters by presence of 'approval', not its status, when approvalStatus is 'EXISTING'", async () => {
+      const find = jest.fn().mockReturnValue({
+        sort: jest.fn().mockReturnThis(),
+        skip: jest.fn().mockReturnThis(),
+        limit: jest.fn().mockReturnThis(),
+        lean: jest.fn().mockResolvedValue([]),
+      });
+      ulbModel.find = find;
+      ulbModel.countDocuments.mockResolvedValue(0);
+
+      await service.findAll({ approvalStatus: 'EXISTING', page: 1, limit: 10 }, adminUser);
+
+      const [filter] = find.mock.calls[0] as [{ approval?: unknown; 'approval.status'?: unknown }];
+      expect(filter.approval).toEqual({ $exists: false });
+      expect(filter['approval.status']).toBeUndefined();
+    });
+
+    it('flags a legacy row with no stored approval as isExistingUser and backfills a synthetic APPROVED block', async () => {
+      const legacyRow = {
+        _id: new Types.ObjectId(),
+        name: 'Legacy ULB',
+        state: new Types.ObjectId(stateId),
+        ulbType: new Types.ObjectId(ulbTypeId),
+      };
+      ulbModel.find = jest.fn().mockReturnValue({
+        sort: jest.fn().mockReturnThis(),
+        skip: jest.fn().mockReturnThis(),
+        limit: jest.fn().mockReturnThis(),
+        lean: jest.fn().mockResolvedValue([legacyRow]),
+      });
+      ulbModel.countDocuments.mockResolvedValue(1);
+      stateModel.find = jest.fn().mockReturnValue({
+        lean: jest.fn().mockResolvedValue([{ _id: stateId, name: 'Andhra Pradesh' }]),
+      });
+      ulbModel.db = {
+        collection: jest.fn().mockReturnValue({
+          find: jest.fn().mockReturnValue({
+            toArray: jest.fn().mockResolvedValue([{ _id: ulbTypeId, name: 'Municipal Corporation' }]),
+          }),
+        }),
+      };
+
+      const result = await service.findAll({ page: 1, limit: 10 }, adminUser);
+
+      expect(result.data[0].isExistingUser).toBe(true);
+      expect(result.data[0].approval).toMatchObject({ status: 'APPROVED', submittedBy: null, reviewedBy: null });
+    });
+
+    it('marks a row that already has a stored approval as isExistingUser: false', async () => {
+      const reviewedRow = {
+        _id: new Types.ObjectId(),
+        name: 'Reviewed ULB',
+        state: new Types.ObjectId(stateId),
+        ulbType: new Types.ObjectId(ulbTypeId),
+        approval: { status: 'APPROVED', reviewedBy: new Types.ObjectId(), reviewedAt: new Date() },
+      };
+      ulbModel.find = jest.fn().mockReturnValue({
+        sort: jest.fn().mockReturnThis(),
+        skip: jest.fn().mockReturnThis(),
+        limit: jest.fn().mockReturnThis(),
+        lean: jest.fn().mockResolvedValue([reviewedRow]),
+      });
+      ulbModel.countDocuments.mockResolvedValue(1);
+      stateModel.find = jest.fn().mockReturnValue({
+        lean: jest.fn().mockResolvedValue([{ _id: stateId, name: 'Andhra Pradesh' }]),
+      });
+      ulbModel.db = {
+        collection: jest.fn().mockReturnValue({
+          find: jest.fn().mockReturnValue({
+            toArray: jest.fn().mockResolvedValue([{ _id: ulbTypeId, name: 'Municipal Corporation' }]),
+          }),
+        }),
+      };
+
+      const result = await service.findAll({ page: 1, limit: 10 }, adminUser);
+
+      expect(result.data[0].isExistingUser).toBe(false);
+    });
   });
 
   describe('getRegisterSections', () => {
