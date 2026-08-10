@@ -621,7 +621,7 @@ export class StateDashboardService {
 
     return {
       key: STATE_DASHBOARD_TASK_KEY.DEVOLUTION_FORMULA,
-      title: 'Fill in the devolution formula',
+      title: 'Fill in the ULB-wise allocation',
       subtitle: 'Allocation and instalment split for each ULB',
       status,
       actionLabel: status === STATE_DASHBOARD_TASK_STATUS.PENDING ? 'Continue' : null,

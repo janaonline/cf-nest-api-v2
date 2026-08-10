@@ -648,7 +648,7 @@ export class FcUnspentDeclarationService {
   // ─── Devolution dependency ──────────────────────────────────────────────────
 
   /**
-   * Resolves the Devolution Formula (Installment 1) dependency for a state/year and
+   * Resolves the ULB-wise Allocation (Installment 1) dependency for a state/year and
    * derives the dependency block + permission gates. Called identically by GET,
    * save-draft, and final-submit so the three never diverge.
    */

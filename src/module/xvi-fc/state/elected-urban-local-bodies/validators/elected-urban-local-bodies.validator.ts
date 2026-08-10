@@ -256,7 +256,7 @@ export class ElectedUrbanLocalBodiesValidator {
         errors.push({
           field: 'dateOfConstitution',
           code: 'invalidDate',
-          message: 'Date of constitution must be a valid date.',
+          message: 'Date on which the elected body is in place must be a valid date.',
           value: dto.dateOfConstitution,
         });
       } else {
@@ -388,14 +388,18 @@ export class ElectedUrbanLocalBodiesValidator {
     if (isConstituted) {
       // dateOfConstitution required, valid date, min from config, max=today
       if (!row.dateOfConstitution) {
-        errors.push({ field: 'dateOfConstitution', code: 'required', message: 'Date of constitution is required.' });
+        errors.push({
+          field: 'dateOfConstitution',
+          code: 'required',
+          message: 'Date on which the elected body is in place is required.',
+        });
       } else {
         const doc = this.parseDate(row.dateOfConstitution);
         if (!doc) {
           errors.push({
             field: 'dateOfConstitution',
             code: 'invalidDate',
-            message: 'Date of constitution must be a valid date.',
+            message: 'Date on which the elected body is in place must be a valid date.',
             value:
               row.dateOfConstitution instanceof Date ? row.dateOfConstitution.toISOString() : row.dateOfConstitution,
           });

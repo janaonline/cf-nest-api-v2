@@ -110,6 +110,12 @@ export class DevolutionFormulaForm {
   newUlbCount!: number;
 
   @Prop({ type: Number, default: 0 })
+  missingUlbCount!: number;
+
+  @Prop({ type: Number, default: 0 })
+  duplicateUlbCount!: number;
+
+  @Prop({ type: Number, default: 0 })
   activeDatasetVersion!: number;
 
   @Prop({ type: Date })

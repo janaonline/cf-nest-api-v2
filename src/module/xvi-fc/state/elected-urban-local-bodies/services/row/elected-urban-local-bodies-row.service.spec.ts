@@ -66,6 +66,7 @@ const mockForm = {
   matchedDbUlbCount: 10,
   missingDbUlbCount: 0,
   extraExcelRowCount: 0,
+  duplicateUlbCount: 0,
   errorRowCount: 0,
   validationStatus: 'VALID' as const,
 };
@@ -93,12 +94,12 @@ const updatedRow = { ...mockRow, electedBodyStatus: 'Not Constituted', dateOfCon
 const mockRowTypedFields: EulbTypedFieldConfig[] = [
   {
     key: 'dateOfConstitution',
-    label: 'Date of Constitution',
+    label: 'Date on which the elected body is in place.',
     formFieldType: 'date',
     fieldTypes: ['EULB_ROW_EDIT_FIELDS'],
     validations: [
-      { name: 'minDate', validator: '2021-05-31', message: 'Date of Constitution cannot be before 31 May 2021.' },
-      { name: 'maxDate', validator: 'TODAY', message: 'Date of Constitution cannot be a future date.' },
+      { name: 'minDate', validator: '2021-05-31', message: 'Date on which the elected body is in place cannot be before 31 May 2021.' },
+      { name: 'maxDate', validator: 'TODAY', message: 'Date on which the elected body is in place cannot be a future date.' },
     ],
   },
   {
@@ -126,7 +127,7 @@ const mockRowTypedFields: EulbTypedFieldConfig[] = [
     options: [
       { id: 'Constituted', label: 'Constituted' },
       { id: 'Not Constituted', label: 'Not Constituted' },
-      { id: 'Exempt', label: 'Exempt' },
+      { id: '6th Schedule', label: '6th Schedule' },
     ],
     validations: [{ name: 'required', validator: null, message: 'Elected Body Status is required.' }],
   },
@@ -245,7 +246,7 @@ describe('ElectedUrbanLocalBodiesRowService', () => {
         {
           field: 'electedBodyStatus',
           code: 'invalid_enum',
-          message: 'Status must be one of: Constituted, Not Constituted, Exempt.',
+          message: 'Status must be one of: Constituted, Not Constituted, 6th Schedule.',
         },
       ]);
 

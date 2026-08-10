@@ -42,7 +42,7 @@ const EXCEL_HEADERS = [
   'Total Grant Allocation',
   'Installment 1 Amount',
   'Installment 2 Amount',
-  'Devolution Formula',
+  'Allocation Formula',
 ];
 
 function makeXlsxBuffer(dataRows: unknown[][]): Buffer {
@@ -665,7 +665,7 @@ describe('DevolutionFormulaExcelService — generateTemplate', () => {
     service = module.get<DevolutionFormulaExcelService>(DevolutionFormulaExcelService);
   });
 
-  it('orders template columns as Census Code, ULB Name, Installment 1, Installment 2, Total Grant Allocation, Devolution Formula', () => {
+  it('orders template columns as Census Code, ULB Name, Installment 1, Installment 2, Total Grant Allocation, Allocation Formula', () => {
     expect(DF_TEMPLATE_HEADERS.map((h) => h.key)).toEqual([
       'censusCode',
       'ulbName',
@@ -1170,6 +1170,79 @@ describe('DevolutionFormulaExcelService — validateExcel new/extra ULB detectio
       $set: { newUlbCount: number };
     };
     expect(updateCallArg.$set.newUlbCount).toBe(0);
+  });
+
+  // ─── missingUlbCount / duplicateUlbCount persistence ─────────────────────
+
+  it('persists missingUlbCount on the form document (previously computed but never written)', async () => {
+    // mockDbUlbs has one active registry ULB (C001). Uploading a row for a different,
+    // unregistered ULB leaves C001 uncovered — missingUlbCount should be 1.
+    mockS3Service.getBuffer.mockResolvedValue(
+      makeXlsxBuffer([['ZZZZ', 'New Town', 500_000, 300_000, 200_000, 'population']]),
+    );
+
+    let caught: { response: { data: Record<string, unknown> } } | undefined;
+    try {
+      await service.validateExcel(
+        {
+          stateId: stateOid.toString(),
+          yearId: YEAR_ID,
+          installment: 1,
+          excelFile: {
+            originalName: 'test.xlsx',
+            path: 'state/path/test.xlsx',
+            mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            sizeKb: 1,
+            createdAt: '2026-01-01T00:00:00.000Z',
+          },
+        },
+        adminUser,
+      );
+    } catch (e) {
+      caught = e as { response: { data: Record<string, unknown> } };
+    }
+
+    // Unregistered-row upload throws (newUlbsAdded), but the form write already happened —
+    // missingUlbCount (C001 uncovered) must be on that write, not silently dropped.
+    expect(caught).toBeDefined();
+    const updateCallArg = (mockFormModel.findOneAndUpdate.mock.calls as unknown[][])[0][1] as {
+      $set: { missingUlbCount: number };
+    };
+    expect(updateCallArg.$set.missingUlbCount).toBe(1);
+    const summary = caught!.response.data['validationSummary'] as { missingUlbCount: number };
+    expect(summary.missingUlbCount).toBe(1);
+  });
+
+  it('detects an intra-batch duplicate ULB and persists/returns duplicateUlbCount', async () => {
+    const buffer = makeXlsxBuffer([
+      ['C001', 'Alpha City', 500_000, 300_000, 200_000, 'population'],
+      ['C001', 'Alpha City', 500_000, 300_000, 200_000, 'population'],
+    ]);
+    mockS3Service.getBuffer.mockResolvedValue(buffer);
+
+    const result = await service.validateExcel(
+      {
+        stateId: stateOid.toString(),
+        yearId: YEAR_ID,
+        installment: 1,
+        excelFile: {
+          originalName: 'test.xlsx',
+          path: 'state/path/test.xlsx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          sizeKb: 1,
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
+      },
+      adminUser,
+    );
+
+    expect(result.data?.summary.duplicateUlbCount).toBe(1);
+    expect(result.data?.rowErrors.some((e) => e.rowNumber === 2 && e.code === 'duplicate')).toBe(true);
+
+    const updateCallArg = (mockFormModel.findOneAndUpdate.mock.calls as unknown[][])[0][1] as {
+      $set: { duplicateUlbCount: number };
+    };
+    expect(updateCallArg.$set.duplicateUlbCount).toBe(1);
   });
 });
 

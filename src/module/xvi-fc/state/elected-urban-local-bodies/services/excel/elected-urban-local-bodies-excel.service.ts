@@ -276,6 +276,10 @@ export class ElectedUrbanLocalBodiesExcelService {
     const matchedDbUlbCount = matchedUlbCodes.size;
     const missingDbUlbCount = computedActiveUlbCount - matchedDbUlbCount;
     const extraExcelRowCount = processedRows.filter((r) => !r.matched).length;
+    // Rows flagged by flagIntraBatchEulbCensusCodeDuplicates above (the 2nd+ occurrence of a
+    // census code within this upload) — a subset of errorRowCount, surfaced separately so the
+    // duplicate-ULB pill can be shown independently of other row-level errors.
+    const duplicateUlbCount = processedRows.filter((r) => r.rowErrors.some((e) => e.code === 'duplicate')).length;
     const errorRowCount = processedRows.filter((r) => r.validationRowStatus === 'INVALID').length;
 
     // Form validation is VALID only when there are no row errors, no missing registry ULBs,
@@ -319,6 +323,7 @@ export class ElectedUrbanLocalBodiesExcelService {
       matchedDbUlbCount,
       missingDbUlbCount,
       extraExcelRowCount,
+      duplicateUlbCount,
       errorRowCount,
       validationStatus: formValidationStatus,
       excludedRows,
@@ -427,6 +432,7 @@ export class ElectedUrbanLocalBodiesExcelService {
       matchedDbUlbCount,
       missingDbUlbCount,
       extraExcelRowCount,
+      duplicateUlbCount,
       errorRowCount,
       validationStatus: formValidationStatus,
       activeDatasetVersion: newVersion,
@@ -628,6 +634,10 @@ export class ElectedUrbanLocalBodiesExcelService {
         // deletion above), never discover a new/unregistered row; kept in the shape below only
         // for API/type consistency with validateExcel's and revalidateFromStoredFile's summaries.
         const extraExcelRowCount = 0;
+        // duplicateUlbCount is likewise always 0 here — this branch re-validates already-persisted
+        // rows one at a time (validateDbUlbRow), it never re-parses the Excel or re-runs
+        // flagIntraBatchEulbCensusCodeDuplicates, so no fresh duplicate census code can be found.
+        const duplicateUlbCount = 0;
         const validationStatus: EulbValidationStatus =
           errorRowCount === 0 && missingDbUlbCount === 0 && remainingRowCount === computedActiveUlbCount
             ? 'VALID'
@@ -642,6 +652,7 @@ export class ElectedUrbanLocalBodiesExcelService {
               matchedDbUlbCount,
               missingDbUlbCount,
               extraExcelRowCount,
+              duplicateUlbCount,
               errorRowCount,
               validationStatus,
               updatedBy: userOid,
@@ -657,6 +668,7 @@ export class ElectedUrbanLocalBodiesExcelService {
           matchedDbUlbCount,
           missingDbUlbCount,
           extraExcelRowCount,
+          duplicateUlbCount,
           errorRowCount,
           validationStatus,
           activeDatasetVersion: form.activeDatasetVersion,
@@ -786,6 +798,8 @@ export class ElectedUrbanLocalBodiesExcelService {
     const matchedDbUlbCount = matchedUlbCodes.size;
     const missingDbUlbCount = computedActiveUlbCount - matchedDbUlbCount;
     const extraExcelRowCount = processedRows.filter((r) => !r.matched).length;
+    // Same duplicate-count derivation as validateExcel — see its comment above.
+    const duplicateUlbCount = processedRows.filter((r) => r.rowErrors.some((e) => e.code === 'duplicate')).length;
     const errorRowCount = processedRows.filter((r) => r.validationRowStatus === 'INVALID').length;
     const validationStatus: EulbValidationStatus =
       errorRowCount === 0 &&
@@ -831,6 +845,7 @@ export class ElectedUrbanLocalBodiesExcelService {
               matchedDbUlbCount,
               missingDbUlbCount,
               extraExcelRowCount,
+              duplicateUlbCount,
               errorRowCount,
               validationStatus,
               excludedRows,
@@ -924,6 +939,7 @@ export class ElectedUrbanLocalBodiesExcelService {
       matchedDbUlbCount,
       missingDbUlbCount,
       extraExcelRowCount,
+      duplicateUlbCount,
       errorRowCount,
       validationStatus,
       activeDatasetVersion: newVersion,

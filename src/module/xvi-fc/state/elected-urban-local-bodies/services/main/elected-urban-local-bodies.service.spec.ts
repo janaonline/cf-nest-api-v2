@@ -115,7 +115,7 @@ const mockExtraUlbRow = {
   rowNumber: 3,
   censusCode: 'EX01',
   ulbName: 'Extra ULB One',
-  electedBodyStatus: 'Exempt',
+  electedBodyStatus: '6th Schedule',
   dateOfConstitution: undefined,
   dateOfExpiry: undefined,
   remarks: 'User added',
@@ -169,7 +169,7 @@ const dumpRows: DumpRowFixture[] = [
     rowNumber: 3,
     censusCode: 'OLD01',
     ulbName: 'Old Version ULB',
-    electedBodyStatus: 'Exempt',
+    electedBodyStatus: '6th Schedule',
     dateOfConstitution: null,
     dateOfExpiry: null,
     remarks: 'Old version',
@@ -184,7 +184,7 @@ const dumpRows: DumpRowFixture[] = [
     rowNumber: 4,
     censusCode: 'INACTIVE01',
     ulbName: 'Inactive ULB',
-    electedBodyStatus: 'Exempt',
+    electedBodyStatus: '6th Schedule',
     dateOfConstitution: null,
     dateOfExpiry: null,
     remarks: 'Inactive row',
@@ -239,19 +239,23 @@ const MOCK_TYPED_ROW_EDIT_FIELDS: EulbTypedFieldConfig[] = [
     label: 'Elected Body Status',
     formFieldType: 'select',
     fieldTypes: ['EULB_ROW_EDIT_FIELDS'],
-    options: ['Constituted', 'Not Constituted', 'Exempt'].map((s) => ({ id: s, label: s })) as FormFieldOption[],
+    options: [
+      { id: 'Constituted', label: 'Constituted' },
+      { id: 'Not Constituted', label: 'Not Constituted' },
+      { id: '6th Schedule', label: '6th Schedule' },
+    ] as FormFieldOption[],
     validations: [{ name: 'required', validator: null, message: 'Elected Body Status is required.' }],
   },
   {
     key: 'dateOfConstitution',
-    label: 'Date of Constitution',
+    label: 'Date on which the elected body is in place.',
     formFieldType: 'date',
     fieldTypes: ['EULB_ROW_EDIT_FIELDS'],
     minDate: '2021-05-31',
     maxDate: 'TODAY',
     validations: [
-      { name: 'minDate', validator: '2021-05-31', message: 'Date of Constitution cannot be before 31 May 2021.' },
-      { name: 'maxDate', validator: 'TODAY', message: 'Date of Constitution cannot be a future date.' },
+      { name: 'minDate', validator: '2021-05-31', message: 'Date on which the elected body is in place cannot be before 31 May 2021.' },
+      { name: 'maxDate', validator: 'TODAY', message: 'Date on which the elected body is in place cannot be a future date.' },
     ],
   },
   {
@@ -344,11 +348,11 @@ describe('ElectedUrbanLocalBodiesService', () => {
 
     // ── No active dataset (fallback path) ────────────────────────────────────
 
-    it('generates a workbook with electedBodyStatus dropdown derived from MOCK_TYPED_ROW_EDIT_FIELDS', async () => {
+    it('generates a workbook with electedBodyStatus dropdown derived from MOCK_TYPED_ROW_EDIT_FIELDS labels', async () => {
       const sheet = await generateAndLoad();
 
       const statusField = MOCK_TYPED_ROW_EDIT_FIELDS.find((f) => f.key === 'electedBodyStatus')!;
-      const expectedOpts = (statusField.options as FormFieldOption[]).map((o) => o.id).join(',');
+      const expectedOpts = (statusField.options as FormFieldOption[]).map((o) => o.label).join(',');
 
       const dvValues = Object.values(sheet.dataValidations.model);
       const listDv = dvValues.find((v) => v.type === 'list');
@@ -659,7 +663,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
         'Census Code',
         'ULB Name',
         'Elected Body Status',
-        'Date of Constitution',
+        'Date on which the elected body is in place.',
         'Date of Expiry',
         'Remarks',
         'Validation Status',

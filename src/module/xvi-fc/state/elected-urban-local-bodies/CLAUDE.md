@@ -42,6 +42,22 @@ row approve/reject endpoint, so `rowStatus` only ever reaches `UNDER_REVIEW_BY_M
 never advances further. The `post-submission-update` correction workflow does not read or write
 `rowStatus`.
 
+## electedBodyStatus: id is deliberately identical to its label
+
+The `electedBodyStatus` field's DB-config options always have `id === label` (currently
+`'Constituted'`, `'Not Constituted'`, `'6th Schedule'` — all three, not just the third one). This
+is deliberate: Excel's list-validation dropdown has no separate display/value pair like an HTML
+`<select>` — whatever text is in the list is exactly what gets written into the cell when picked —
+so any divergence between `id` and `label` leaks the raw id into every Excel export/dropdown
+unless it's bridged explicitly at the Excel boundary. An earlier version of this field used
+`id: 'Exempt'` with `label: '6th Schedule'` and required a dedicated id↔label mapping layer
+(lookup maps built from `options`, threaded through `getTemplate`/`dumpToExcel`/
+`generateAndStoreErrorExcel`/`getErrorSheet`, plus upload-side normalization) purely to paper over
+that mismatch. That approach was abandoned in favor of keeping `id` and `label` equal — every
+service now reads/writes `row.electedBodyStatus` directly, with no field-specific special-casing.
+Keep it that way: if a future rename needs the *label* to say something new, change the `id` to
+match rather than reintroducing a mapping layer.
+
 ## Outbound dependency: devolution-formula reads this module's status
 
 `devolution-formula`'s `checkInstallment1Prereq` reads this form's `currentFormStatus` directly

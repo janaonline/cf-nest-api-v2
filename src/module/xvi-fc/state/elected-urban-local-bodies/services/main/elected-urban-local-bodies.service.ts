@@ -24,6 +24,7 @@ import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-
 import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
 import { keyByFieldKey, requireField } from 'src/module/xvi-fc/common/utils/xvi-fc-field-lookup.util';
 import { deriveFileValidationOptions } from 'src/module/xvi-fc/common/utils/xvi-fc-file-constraint.util';
+import { buildUlbReconciliationBadges } from 'src/module/xvi-fc/common/utils/xvi-fc-ulb-reconciliation-badges.util';
 import type { FileInfo } from 'src/schemas/common/file.schema';
 import type { FormData } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.types';
 import type {
@@ -119,7 +120,7 @@ const EULB_DUMP_HEADERS: RowHeader[] = [
   { label: 'Census Code', key: 'censusCode', width: 16 },
   { label: 'ULB Name', key: 'ulbName', width: 35 },
   { label: 'Elected Body Status', key: 'electedBodyStatus', width: 24 },
-  { label: 'Date of Constitution', key: 'dateOfConstitution', width: 24 },
+  { label: 'Date on which the elected body is in place.', key: 'dateOfConstitution', width: 48 },
   { label: 'Date of Expiry', key: 'dateOfExpiry', width: 20 },
   { label: 'Remarks', key: 'remarks', width: 35 },
   { label: 'Validation Status', key: 'validationStatus', width: 20 },
@@ -578,6 +579,7 @@ export class ElectedUrbanLocalBodiesService {
         maxAllowedExcelRows: 1,
         matchedDbUlbCount: 1,
         extraExcelRowCount: 1,
+        duplicateUlbCount: 1,
         activeDatasetVersion: 1,
         electedBodyExcelFile: 1,
       })
@@ -642,6 +644,7 @@ export class ElectedUrbanLocalBodiesService {
     const maxAllowedExcelRows = (existing.maxAllowedExcelRows as number | undefined) ?? dbUlbCount * 2;
     const matchedDbUlbCount = (existing.matchedDbUlbCount as number | undefined) ?? 0;
     const extraExcelRowCount = (existing.extraExcelRowCount as number | undefined) ?? 0;
+    const duplicateUlbCount = (existing.duplicateUlbCount as number | undefined) ?? 0;
     const activeDatasetVersion = (existing.activeDatasetVersion as number | undefined) ?? 0;
 
     const dbValidationSummary: EulbValidationSummary = {
@@ -651,6 +654,7 @@ export class ElectedUrbanLocalBodiesService {
       matchedDbUlbCount,
       missingDbUlbCount,
       extraExcelRowCount,
+      duplicateUlbCount,
       errorRowCount,
       validationStatus: storedValidationStatus ?? 'NOT_VALIDATED',
       activeDatasetVersion,
@@ -889,6 +893,7 @@ export class ElectedUrbanLocalBodiesService {
     const errorRowCount = doc?.errorRowCount ?? 0;
     const missingDbUlbCount = doc?.missingDbUlbCount ?? 0;
     const extraExcelRowCount = doc?.extraExcelRowCount ?? 0;
+    const duplicateUlbCount = doc?.duplicateUlbCount ?? 0;
     const validationStatus = doc?.validationStatus ?? 'NOT_VALIDATED';
 
     const hasActiveDataset = activeDatasetVersion > 0 && excelRowCount > 0;
@@ -959,11 +964,12 @@ export class ElectedUrbanLocalBodiesService {
             tone: 'danger',
             visible: canEdit && errorRowCount > 0,
           },
-          {
-            label: `${missingDbUlbCount} missing ULB(s)`,
-            tone: 'warning',
-            visible: canEdit && missingDbUlbCount > 0,
-          },
+          ...buildUlbReconciliationBadges({
+            missingCount: missingDbUlbCount,
+            newCount: extraExcelRowCount,
+            duplicateCount: duplicateUlbCount,
+            visible: canEdit,
+          }),
         ],
       },
     ];
@@ -1000,6 +1006,7 @@ export class ElectedUrbanLocalBodiesService {
       matchedDbUlbCount: doc?.matchedDbUlbCount ?? 0,
       missingDbUlbCount: doc?.missingDbUlbCount ?? 0,
       extraExcelRowCount: doc?.extraExcelRowCount ?? 0,
+      duplicateUlbCount: doc?.duplicateUlbCount ?? 0,
       errorRowCount: doc?.errorRowCount ?? 0,
       validationStatus: doc?.validationStatus ?? 'NOT_VALIDATED',
       activeDatasetVersion: doc?.activeDatasetVersion ?? 0,
@@ -1040,7 +1047,7 @@ export class ElectedUrbanLocalBodiesService {
     const expiryField = rowEditFields.find((f) => f.key === 'dateOfExpiry')!;
     const remarksField = rowEditFields.find((f) => f.key === 'remarks')!;
 
-    const statusOptions = (statusField.options as FormFieldOption[]).map((o) => o.id).join(',');
+    const statusOptions = (statusField.options as FormFieldOption[]).map((o) => o.label).join(',');
 
     const constitutionMinVal = constitutionField.validations?.find((v) => v.name === 'minDate')?.validator as string;
     const constitutionMaxVal = constitutionField.maxDate!;
@@ -1085,11 +1092,11 @@ export class ElectedUrbanLocalBodiesService {
               `OR(AND($${statusLetter}${row}<>"Constituted",${constitutionLetter}${row}=""),AND($${statusLetter}${row}="Constituted",ISNUMBER(${constitutionLetter}${row}),${constitutionLetter}${row}>=${constitutionMin},${constitutionLetter}${row}<=${constitutionMax}))`,
             ],
             showInputMessage: true,
-            promptTitle: 'Date of Constitution',
+            promptTitle: 'Date on which the elected body is in place.',
             prompt: 'Required when status is Constituted. Must be between 31 May 2021 and today.',
             showErrorMessage: true,
             errorStyle: 'error',
-            errorTitle: 'Date of Constitution',
+            errorTitle: 'Date on which the elected body is in place.',
             error: 'Required for Constituted status and must be within the allowed date range.',
           };
         },

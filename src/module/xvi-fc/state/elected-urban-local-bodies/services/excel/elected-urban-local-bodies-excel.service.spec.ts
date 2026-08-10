@@ -97,12 +97,12 @@ const mockExcelTypedFields: EulbTypedFieldConfig[] = [
   },
   {
     key: 'dateOfConstitution',
-    label: 'Date of Constitution',
+    label: 'Date on which the elected body is in place.',
     formFieldType: 'date',
     fieldTypes: ['EULB_ROW_EDIT_FIELDS'],
     validations: [
-      { name: 'minDate', validator: '2021-05-31', message: 'Date of Constitution cannot be before 31 May 2021.' },
-      { name: 'maxDate', validator: 'TODAY', message: 'Date of Constitution cannot be a future date.' },
+      { name: 'minDate', validator: '2021-05-31', message: 'Date on which the elected body is in place cannot be before 31 May 2021.' },
+      { name: 'maxDate', validator: 'TODAY', message: 'Date on which the elected body is in place cannot be a future date.' },
     ],
   },
   {
@@ -130,7 +130,7 @@ const mockExcelTypedFields: EulbTypedFieldConfig[] = [
     options: [
       { id: 'Constituted', label: 'Constituted' },
       { id: 'Not Constituted', label: 'Not Constituted' },
-      { id: 'Exempt', label: 'Exempt' },
+      { id: '6th Schedule', label: '6th Schedule' },
     ],
     validations: [{ name: 'required', validator: null, message: 'Elected Body Status is required.' }],
   },
@@ -183,6 +183,7 @@ function makeDto(): ValidateElectedUrbanLocalBodiesExcelDto {
 
 describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
   let service: ElectedUrbanLocalBodiesExcelService;
+  let excelServiceMock: { generateExcel: jest.Mock };
   let rowModel: {
     insertMany: jest.Mock;
     deleteMany: jest.Mock;
@@ -247,6 +248,8 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
       uploadPrivate: jest.fn().mockResolvedValue(undefined),
     };
 
+    excelServiceMock = { generateExcel: jest.fn().mockResolvedValue(new ArrayBuffer(8)) };
+
     const ulbEligibilityService = {
       getEligibleUlbFilter: jest
         .fn()
@@ -262,7 +265,7 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
         { provide: getModelToken(Ulb.name), useValue: ulbModel },
         { provide: UlbEligibilityService, useValue: ulbEligibilityService },
         { provide: S3Service, useValue: s3Service },
-        { provide: ExcelService, useValue: { generateExcel: jest.fn().mockResolvedValue(new ArrayBuffer(8)) } },
+        { provide: ExcelService, useValue: excelServiceMock },
         {
           provide: FileTokenService,
           useValue: { parseToken: jest.fn(), signFileUrl: jest.fn((p: string) => `signed::${p}`) },
@@ -324,6 +327,26 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
 
       const [docs] = rowModel.insertMany.mock.calls[0] as [Record<string, unknown>[]];
       expect(docs[0]).toMatchObject({ validationStatus: 'VALID' });
+    });
+
+    it('stores the electedBodyStatus value from the Excel cell unchanged', async () => {
+      s3Service.getBuffer = jest.fn().mockResolvedValue(
+        makeXlsxBuffer([
+          {
+            censusCode: 'DBCODE1',
+            ulbName: 'DB City One',
+            electedBodyStatus: '6th Schedule',
+            dateOfConstitution: '',
+            dateOfExpiry: '',
+            remarks: '',
+          },
+        ]),
+      );
+
+      await service.validateExcel(makeDto(), adminUser);
+
+      const [docs] = rowModel.insertMany.mock.calls[0] as [Record<string, unknown>[]];
+      expect(docs[0]).toMatchObject({ electedBodyStatus: '6th Schedule', validationStatus: 'VALID' });
     });
 
     it('ignores client-submitted ulbCount and derives count from active registry', async () => {
@@ -798,6 +821,7 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
       const dupError = errors.find((e) => e.field === 'censusCode' && e.code === 'duplicate');
       expect(dupError).toBeDefined();
       expect(dupError!.rowNumber).toBe(2);
+      expect((result.data as EulbValidateExcelResponseData).summary.duplicateUlbCount).toBe(1);
 
       // The dropped duplicate occurrence is snapshotted so getErrorSheet can still surface it,
       // even though it's a soft 200 response (not the newUlbsAdded hard-throw path).
@@ -848,6 +872,10 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
       // Second row: unmatched AND duplicate → both errors
       expect(dataErrors.some((e) => e.rowNumber === 2 && e.code === 'unknownUlb')).toBe(true);
       expect(dataErrors.some((e) => e.rowNumber === 2 && e.code === 'duplicate')).toBe(true);
+      const dataValidationSummary = (
+        response.data as { validationSummary?: { duplicateUlbCount: number } } | undefined
+      )?.validationSummary;
+      expect(dataValidationSummary?.duplicateUlbCount).toBe(1);
     });
 
     it('leaves two DB_ULB rows with different census codes both VALID', async () => {
@@ -1292,7 +1320,7 @@ describe('ElectedUrbanLocalBodiesExcelService — revalidateExcel', () => {
           rowNumber: 2,
           censusCode: 'EXTRA01',
           ulbName: 'Extra ULB',
-          electedBodyStatus: 'Exempt',
+          electedBodyStatus: '6th Schedule',
           dateOfConstitution: null,
           dateOfExpiry: null,
           remarks: '',
@@ -1309,6 +1337,8 @@ describe('ElectedUrbanLocalBodiesExcelService — revalidateExcel', () => {
       expect(rowModel.deleteMany).toHaveBeenCalledWith({ _id: { $in: [staleRowId] } });
       expect(data.validationSummary?.missingDbUlbCount).toBe(0);
       expect(data.validationSummary?.extraExcelRowCount).toBe(0);
+      // Case A never re-parses the Excel, so it can never discover a fresh duplicate census code.
+      expect(data.validationSummary?.duplicateUlbCount).toBe(0);
     });
 
     it('deletes an unmatched row and counts it toward missingDbUlbCount when nothing else covers the registry ULB', async () => {
@@ -1322,7 +1352,7 @@ describe('ElectedUrbanLocalBodiesExcelService — revalidateExcel', () => {
           rowNumber: 1,
           censusCode: 'EXTRA01',
           ulbName: 'Extra ULB',
-          electedBodyStatus: 'Exempt',
+          electedBodyStatus: '6th Schedule',
           dateOfConstitution: null,
           dateOfExpiry: null,
           remarks: '',
@@ -1351,7 +1381,7 @@ describe('ElectedUrbanLocalBodiesExcelService — revalidateExcel', () => {
           rowNumber: 1,
           censusCode: 'EXTRA01',
           ulbName: 'Extra ULB',
-          electedBodyStatus: 'Exempt',
+          electedBodyStatus: '6th Schedule',
           dateOfConstitution: null,
           dateOfExpiry: null,
           remarks: '',
