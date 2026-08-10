@@ -1,7 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
 
-export type LoginType = 'fiscalRankings' | '15thFC' | 'AAINA' | 'XVIFC' | 'state-dashboard';
+export type LoginType = 'fiscalRankings' | '15thFC' | 'AAINA' | 'XVIFC' | '16thFC' | 'state-dashboard';
 
 @Schema({ timestamps: true })
 export class LoginHistory extends Document {
@@ -21,8 +21,8 @@ export class LoginHistory extends Document {
     type: String,
     default: '15thFC',
     enum: {
-      values: ['fiscalRankings', '15thFC', 'AAINA', 'XVIFC', 'state-dashboard'],
-      message: "ERROR: STATUS BE EITHER 'Fiscal Ranking'/ '15th FC'/ '16th FC' / 'state-dashboard'",
+      values: ['fiscalRankings', '15thFC', 'AAINA', 'XVIFC', '16thFC', 'state-dashboard'],
+      message: "ERROR: STATUS BE EITHER 'Fiscal Ranking'/ '15th FC'/ '16th FC'/ 'XVIFC' / 'state-dashboard'",
     },
   })
   loginType!: LoginType;
