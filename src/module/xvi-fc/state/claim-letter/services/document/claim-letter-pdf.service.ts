@@ -85,11 +85,11 @@ export class ClaimLetterPdfService {
     const contentWidth = this.contentWidth(doc);
 
     doc
-      .font('Helvetica-Bold')
+      .font('Times-Bold')
       .fontSize(CLAIM_LETTER_PDF_FONT_SIZE_TITLE)
       .text(`${data.stateName} - ${data.departmentName}`);
     doc
-      .font('Helvetica')
+      .font('Times-Roman')
       .fontSize(CLAIM_LETTER_PDF_FONT_SIZE_BODY)
       .fillColor('#666666')
       .text(`Government of ${data.stateName}`);
@@ -117,12 +117,12 @@ export class ClaimLetterPdfService {
     doc.y = metaY + 16;
 
     doc
-      .font('Helvetica-Bold')
+      .font('Times-Bold')
       .fontSize(CLAIM_LETTER_PDF_FONT_SIZE_BODY)
       .text(`Subject: ${data.subjectLine}`, doc.page.margins.left, doc.y, { width: contentWidth });
     doc.moveDown(0.5);
     doc
-      .font('Helvetica')
+      .font('Times-Roman')
       .text(data.introParagraph, doc.page.margins.left, doc.y, { width: contentWidth, align: 'justify' });
     doc.moveDown();
 
@@ -138,7 +138,7 @@ export class ClaimLetterPdfService {
       .lineTo(doc.page.margins.left + contentWidth, totalY)
       .strokeColor('black')
       .stroke();
-    doc.font('Helvetica-Bold').fontSize(CLAIM_LETTER_PDF_FONT_SIZE_TABLE);
+    doc.font('Times-Bold').fontSize(CLAIM_LETTER_PDF_FONT_SIZE_TABLE);
     doc.text('Total', doc.page.margins.left, totalY + 4, { width: contentWidth * 0.7 });
     doc.text(formatCrore(data.totalClaimAmount), doc.page.margins.left + contentWidth * 0.7, totalY + 4, {
       width: contentWidth * 0.3,
@@ -149,22 +149,22 @@ export class ClaimLetterPdfService {
     doc.x = doc.page.margins.left;
     doc.y = totalY + 4 + CLAIM_LETTER_PDF_ROW_HEIGHT;
 
-    doc.font('Helvetica').fontSize(CLAIM_LETTER_PDF_FONT_SIZE_BODY);
+    doc.font('Times-Roman').fontSize(CLAIM_LETTER_PDF_FONT_SIZE_BODY);
     doc.moveDown();
     doc.text(data.closingParagraph, doc.page.margins.left, doc.y, { width: contentWidth, align: 'justify' });
     doc.moveDown(2);
-    doc.font('Helvetica-Bold').text(data.signatoryName);
-    doc.font('Helvetica').fontSize(9).fillColor('#444444').text(data.signatoryDesignation);
+    doc.font('Times-Bold').text(data.signatoryName);
+    doc.font('Times-Roman').fontSize(9).fillColor('#444444').text(data.signatoryDesignation);
     doc.fillColor('black');
   }
 
   private drawAnnexure1Section(doc: PDFKit.PDFDocument, data: ClaimLetterDocumentData): void {
     doc.addPage();
     doc
-      .font('Helvetica-Bold')
+      .font('Times-Bold')
       .fontSize(CLAIM_LETTER_PDF_FONT_SIZE_HEADING)
       .text('Annexure 1 - FC Unspent Balance Disclosures');
-    doc.font('Helvetica').fontSize(9).fillColor('#444444').text(`Ref: ${data.refNo}`);
+    doc.font('Times-Roman').fontSize(9).fillColor('#444444').text(`Ref: ${data.refNo}`);
     doc.fillColor('black');
     doc.moveDown(0.5);
     doc
@@ -196,10 +196,10 @@ export class ClaimLetterPdfService {
   private drawAnnexure2Section(doc: PDFKit.PDFDocument, data: ClaimLetterDocumentData): void {
     doc.addPage();
     doc
-      .font('Helvetica-Bold')
+      .font('Times-Bold')
       .fontSize(CLAIM_LETTER_PDF_FONT_SIZE_HEADING)
       .text('Annexure 2 - City-wise Eligibility Conditions');
-    doc.font('Helvetica').fontSize(9).fillColor('#444444').text(`Ref: ${data.refNo}`);
+    doc.font('Times-Roman').fontSize(9).fillColor('#444444').text(`Ref: ${data.refNo}`);
     doc.fillColor('black');
     doc.moveDown(0.5);
     doc
@@ -244,13 +244,13 @@ export class ClaimLetterPdfService {
       // header cell (same technique the row loop below already uses for the ULB-name column)
       // instead of assuming every header fits on one line; otherwise the fixed row height clips
       // the second line and the first data row overlaps it.
-      doc.font('Helvetica-Bold').fontSize(CLAIM_LETTER_PDF_FONT_SIZE_TABLE);
+      doc.font('Times-Bold').fontSize(CLAIM_LETTER_PDF_FONT_SIZE_TABLE);
       const headerHeight = Math.max(
         CLAIM_LETTER_PDF_ROW_HEIGHT,
         ...spec.headers.map((label, i) => doc.heightOfString(label, { width: columnWidths[i] }) + 6),
       );
       doc.rect(doc.page.margins.left, y, contentWidth, headerHeight).fill('#f2f2f2');
-      doc.fillColor('black').font('Helvetica-Bold').fontSize(CLAIM_LETTER_PDF_FONT_SIZE_TABLE);
+      doc.fillColor('black').font('Times-Bold').fontSize(CLAIM_LETTER_PDF_FONT_SIZE_TABLE);
       spec.headers.forEach((label, i) => {
         doc.text(label, columnXOffsets[i], y + 3, { width: columnWidths[i], align: align[i] });
       });
@@ -262,7 +262,7 @@ export class ClaimLetterPdfService {
         .strokeColor('#cccccc')
         .stroke();
       doc.y = y + headerHeight + 2;
-      doc.font('Helvetica').fontSize(CLAIM_LETTER_PDF_FONT_SIZE_TABLE);
+      doc.font('Times-Roman').fontSize(CLAIM_LETTER_PDF_FONT_SIZE_TABLE);
     };
 
     drawHeader();
