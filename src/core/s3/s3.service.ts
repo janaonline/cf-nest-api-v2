@@ -6,12 +6,14 @@ import {
   HeadObjectCommand,
   HeadObjectCommandOutput,
   GetObjectCommandOutput,
+  HeadObjectCommandOutput,
   PutObjectCommand,
   CopyObjectCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { ConfigService } from '@nestjs/config';
 import { Readable } from 'stream';
+import { PDFDocument } from 'pdf-lib';
 
 @Injectable()
 export class S3Service {
@@ -34,7 +36,12 @@ export class S3Service {
   }
 
   async headObject(Key: string): Promise<HeadObjectCommandOutput> {
-    return this.client.send(new HeadObjectCommand({ Bucket: this.bucket, Key }));
+    return await this.client.send(new HeadObjectCommand({ Bucket: this.bucket, Key: this.toS3Key(Key) }));
+  }
+
+  async getObjectContentLength(urlOrKey: string): Promise<number | undefined> {
+    const head = await this.headObject(urlOrKey);
+    return head.ContentLength;
   }
 
   async getObjectStream(Key: string): Promise<Readable> {
@@ -181,11 +188,8 @@ export class S3Service {
     }
   }
 
-  getPdfPageCountFromBuffer(buffer: Buffer): number {
-    // Simple PDF page count by counting "/Type /Page" occurrences
-    const pdfText = buffer.toString('latin1'); // Use 'latin1' to preserve byte values
-    const pageRegex = /\/Type\s*\/Page[^s]/g; // Match "/Type /Page" not followed by 's'
-    const matches = pdfText.match(pageRegex);
-    return matches ? matches.length : 0;
+  async getPdfPageCountFromBuffer(buffer: Buffer): Promise<number> {
+    const pdf = await PDFDocument.load(buffer);
+    return pdf.getPageCount();
   }
 }

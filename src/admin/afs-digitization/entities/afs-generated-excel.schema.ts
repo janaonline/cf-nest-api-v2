@@ -37,7 +37,7 @@ export class File {
   @Prop({ type: Date, default: Date.now })
   uploadedAt: Date;
 
-  @Prop({ enum: ['ULB', 'AFS'], required: true })
+  @Prop({ type: String, enum: ['ULB', 'AFS'], required: true })
   uploadedBy: 'ULB' | 'AFS';
 
   @Prop({ type: [DataRowSchema] })
@@ -58,7 +58,7 @@ export class AfsGeneratedExcel {
   @Prop({ type: Types.ObjectId, ref: 'Year', required: true })
   financialYear: Types.ObjectId;
 
-  @Prop({ enum: ['audited', 'unAudited'], required: true })
+  @Prop({ type: String, enum: ['audited', 'unAudited'], required: true })
   auditType: 'audited' | 'unAudited';
 
   @Prop({ type: String, required: true })

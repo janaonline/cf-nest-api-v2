@@ -63,6 +63,20 @@ import { AuditorsReportOcrProcessor } from './queue/auditors-report-ocr.processo
         }),
       }),
     }),
+    BullBoardModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (cfg: ConfigService) => ({
+        route: '/admin/queues',
+        adapter: ExpressAdapter,
+        middleware: basicAuth({
+          challenge: true,
+          users: {
+            [cfg.get<string>('ADMIN_USER')!]: cfg.get<string>('ADMIN_PASSWORD')!,
+          },
+        }),
+      }),
+    }),
+
     BullBoardModule.forFeature(
       { name: AFS_DIGITIZATION_QUEUE, adapter: BullMQAdapter },
       { name: AFS_AUDITORS_REPORT_QUEUE, adapter: BullMQAdapter },

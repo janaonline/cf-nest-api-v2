@@ -1,11 +1,12 @@
 import { BadRequestException, Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model, Types } from 'mongoose';
+import { FilterQuery, Model, Types } from 'mongoose';
 import { ConfigService } from '@nestjs/config';
 import * as XLSX from 'xlsx';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { YearLabelToId } from 'src/core/constants/years';
 import { buildPopulationMatch } from 'src/core/helpers/populationCategory.helper';
+import { S3Service } from 'src/core/s3/s3.service';
 import { AfsAuditorsReport, AfsAuditorsReportDocument } from 'src/schemas/afs/afs-auditors-report.schema';
 import { AfsExcelFile, AfsExcelFileDocument } from 'src/schemas/afs/afs-excel-file.schema';
 import { AfsMetric, AfsMetricDocument } from 'src/schemas/afs/afs-metrics.schema';
@@ -30,6 +31,67 @@ import {
   getAfsReportPipeline,
   getAuditorReportUrlPipeline,
 } from './queries/afs-excel-files.query';
+
+const ANNUAL_ACCOUNT_AUDIT_TYPES = ['audited', 'unAudited'] as const;
+const ANNUAL_ACCOUNT_PDF_FIELDS = [
+  'bal_sheet',
+  'bal_sheet_schedules',
+  'inc_exp',
+  'inc_exp_schedules',
+  'cash_flow',
+  'auditor_report',
+] as const;
+
+type AnnualAccountAuditType = (typeof ANNUAL_ACCOUNT_AUDIT_TYPES)[number];
+type AnnualAccountPdfField = (typeof ANNUAL_ACCOUNT_PDF_FIELDS)[number];
+
+interface AnnualAccountPdfFile {
+  name?: string;
+  url?: string;
+  pageCount?: number;
+  fileSizeKb?: number;
+}
+
+type AnnualAccountProvisionalData = Partial<Record<AnnualAccountPdfField, { pdf?: AnnualAccountPdfFile }>>;
+
+type AnnualAccountDataLean = Partial<
+  Record<AnnualAccountAuditType, { provisional_data?: AnnualAccountProvisionalData }>
+>;
+
+interface AnnualAccountPdfMetadata {
+  pageCount: number;
+  fileSizeKb: number;
+}
+
+export interface AnnualAccountPdfMetadataSummary {
+  totalPdfsFound: number;
+  updated: number;
+  skipped: number;
+  failed: number;
+}
+
+export interface AnnualAccountPdfMetadataBackfillOptions {
+  batchSize?: number;
+  limit?: number;
+  onlyMissing?: boolean;
+}
+
+export interface AnnualAccountPdfMetadataBackfillSummary extends AnnualAccountPdfMetadataSummary {
+  documentsMatched: number;
+  documentsProcessed: number;
+  documentsSucceeded: number;
+  documentsFailed: number;
+  elapsedMs: number;
+  averageMsPerDocument: number;
+  estimatedRemainingMs: number;
+  estimatedCompletionAt: Date | null;
+}
+
+export interface AnnualAccountPdfMetadataBackfillStatus {
+  total: number;
+  completed: number;
+  remaining: number;
+}
 
 @Injectable()
 export class AfsDigitizationService {
@@ -65,7 +127,245 @@ export class AfsDigitizationService {
 
     private readonly fileTokenService: FileTokenService,
     private readonly configService: ConfigService,
-  ) { }
+    private readonly s3Service: S3Service,
+  ) {}
+
+  async updatePdfMetadataForAnnualAccount(annualAccountId: string): Promise<AnnualAccountPdfMetadataSummary> {
+    const summary: AnnualAccountPdfMetadataSummary = {
+      totalPdfsFound: 0,
+      updated: 0,
+      skipped: 0,
+      failed: 0,
+    };
+
+    if (!Types.ObjectId.isValid(annualAccountId)) {
+      this.logger.warn(`Skipping annual account PDF metadata update for invalid id: ${annualAccountId}`);
+      summary.skipped += 1;
+      return summary;
+    }
+
+    const annualAccount = await this.annualAccountModel.findById(annualAccountId).lean<AnnualAccountDataLean>().exec();
+    if (!annualAccount) {
+      this.logger.warn(`Annual account not found for PDF metadata update: ${annualAccountId}`);
+      summary.skipped += 1;
+      return summary;
+    }
+
+    const setPayload: Record<string, number> = {};
+
+    for (const auditType of ANNUAL_ACCOUNT_AUDIT_TYPES) {
+      for (const pdfField of ANNUAL_ACCOUNT_PDF_FIELDS) {
+        const pdfPath = `${auditType}.provisional_data.${pdfField}.pdf`;
+        const pdf = annualAccount[auditType]?.provisional_data?.[pdfField]?.pdf;
+
+        if (!pdf?.url?.trim()) {
+          summary.skipped += 1;
+          continue;
+        }
+
+        summary.totalPdfsFound += 1;
+
+        try {
+          const metadata = await this.getPdfMetadata(pdf.url);
+          setPayload[`${pdfPath}.pageCount`] = metadata.pageCount;
+          setPayload[`${pdfPath}.fileSizeKb`] = metadata.fileSizeKb;
+          summary.updated += 1;
+        } catch (error) {
+          summary.failed += 1;
+          this.logger.error(
+            `Failed to update annual account PDF metadata for ${annualAccountId} at ${pdfPath}`,
+            error instanceof Error ? error.stack : String(error),
+          );
+        }
+      }
+    }
+
+    if (Object.keys(setPayload).length > 0) {
+      await this.annualAccountModel.updateOne({ _id: new Types.ObjectId(annualAccountId) }, { $set: setPayload }).exec();
+    }
+
+    this.logger.log(`Annual account PDF metadata update completed for ${annualAccountId}`, summary);
+    return summary;
+  }
+
+  async getPdfMetadataBackfillStatus(): Promise<AnnualAccountPdfMetadataBackfillStatus> {
+    const [total, remaining] = await Promise.all([
+      this.annualAccountModel.countDocuments(this.buildAnnualAccountPdfMetadataBackfillFilter(false)).exec(),
+      this.annualAccountModel.countDocuments(this.buildAnnualAccountPdfMetadataBackfillFilter(true)).exec(),
+    ]);
+
+    return {
+      total,
+      completed: Math.max(total - remaining, 0),
+      remaining,
+    };
+  }
+
+  async backfillPdfMetadataForAnnualAccounts(
+    options: AnnualAccountPdfMetadataBackfillOptions = {},
+  ): Promise<AnnualAccountPdfMetadataBackfillSummary> {
+    const batchSize = this.clampPositiveInteger(options.batchSize, 25, 1, 100);
+    const limit = options.limit ? this.clampPositiveInteger(options.limit, 0, 1, 18_000) : undefined;
+    const filter = this.buildAnnualAccountPdfMetadataBackfillFilter(options.onlyMissing ?? true);
+    const matchedDocuments = await this.annualAccountModel.countDocuments(filter).exec();
+    const documentsMatched = limit ? Math.min(matchedDocuments, limit) : matchedDocuments;
+    const startedAt = Date.now();
+
+    const summary: AnnualAccountPdfMetadataBackfillSummary = {
+      documentsMatched,
+      documentsProcessed: 0,
+      documentsSucceeded: 0,
+      documentsFailed: 0,
+      totalPdfsFound: 0,
+      updated: 0,
+      skipped: 0,
+      failed: 0,
+      elapsedMs: 0,
+      averageMsPerDocument: 0,
+      estimatedRemainingMs: 0,
+      estimatedCompletionAt: null,
+    };
+
+    let lastId: Types.ObjectId | undefined;
+
+    while (!limit || summary.documentsProcessed < limit) {
+      const remaining = limit ? limit - summary.documentsProcessed : batchSize;
+      const currentBatchSize = Math.min(batchSize, remaining);
+      const batchFilter: FilterQuery<AnnualAccountDataDocument> = {
+        ...filter,
+        ...(lastId ? { _id: { $gt: lastId } } : {}),
+      };
+
+      const docs = await this.annualAccountModel
+        .find(batchFilter, { _id: 1 })
+        .sort({ _id: 1 })
+        .limit(currentBatchSize)
+        .lean<{ _id: Types.ObjectId }[]>()
+        .exec();
+
+      if (docs.length === 0) {
+        break;
+      }
+
+      for (const doc of docs) {
+        lastId = doc._id;
+        summary.documentsProcessed += 1;
+
+        try {
+          const docSummary = await this.updatePdfMetadataForAnnualAccount(doc._id.toString());
+          summary.totalPdfsFound += docSummary.totalPdfsFound;
+          summary.updated += docSummary.updated;
+          summary.skipped += docSummary.skipped;
+          summary.failed += docSummary.failed;
+
+          if (docSummary.failed > 0) {
+            summary.documentsFailed += 1;
+          } else {
+            summary.documentsSucceeded += 1;
+          }
+        } catch (error) {
+          summary.documentsFailed += 1;
+          summary.failed += 1;
+          this.logger.error(
+            `Failed annual account PDF metadata backfill for ${doc._id.toString()}`,
+            error instanceof Error ? error.stack : String(error),
+          );
+        }
+      }
+
+      this.updateBackfillTimeEstimate(summary, startedAt);
+      this.logger.log(`Annual account PDF metadata backfill progress`, {
+        processed: summary.documentsProcessed,
+        matched: summary.documentsMatched,
+        updated: summary.updated,
+        failed: summary.failed,
+        elapsedMs: summary.elapsedMs,
+        estimatedRemainingMs: summary.estimatedRemainingMs,
+        estimatedCompletionAt: summary.estimatedCompletionAt,
+      });
+    }
+
+    this.updateBackfillTimeEstimate(summary, startedAt);
+    this.logger.log(`Annual account PDF metadata backfill completed`, summary);
+    return summary;
+  }
+
+  private updateBackfillTimeEstimate(
+    summary: AnnualAccountPdfMetadataBackfillSummary,
+    startedAt: number,
+  ): void {
+    summary.elapsedMs = Date.now() - startedAt;
+
+    if (summary.documentsProcessed === 0) {
+      summary.averageMsPerDocument = 0;
+      summary.estimatedRemainingMs = 0;
+      summary.estimatedCompletionAt = null;
+      return;
+    }
+
+    summary.averageMsPerDocument = Math.round(summary.elapsedMs / summary.documentsProcessed);
+    const remainingDocuments = Math.max(summary.documentsMatched - summary.documentsProcessed, 0);
+    summary.estimatedRemainingMs = Math.round(remainingDocuments * summary.averageMsPerDocument);
+    summary.estimatedCompletionAt =
+      summary.estimatedRemainingMs > 0 ? new Date(Date.now() + summary.estimatedRemainingMs) : null;
+  }
+
+  private buildAnnualAccountPdfMetadataBackfillFilter(
+    onlyMissing: boolean,
+  ): FilterQuery<AnnualAccountDataDocument> {
+    const pdfUrlFilters = ANNUAL_ACCOUNT_AUDIT_TYPES.flatMap((auditType) =>
+      ANNUAL_ACCOUNT_PDF_FIELDS.map((pdfField) => ({
+        [`${auditType}.provisional_data.${pdfField}.pdf.url`]: { $exists: true, $ne: '' },
+      })),
+    );
+
+    if (!onlyMissing) {
+      return { $or: pdfUrlFilters };
+    }
+
+    const missingMetadataFilters = ANNUAL_ACCOUNT_AUDIT_TYPES.flatMap((auditType) =>
+      ANNUAL_ACCOUNT_PDF_FIELDS.flatMap((pdfField) => [
+        {
+          [`${auditType}.provisional_data.${pdfField}.pdf.url`]: { $exists: true, $ne: '' },
+          [`${auditType}.provisional_data.${pdfField}.pdf.pageCount`]: { $exists: false },
+        },
+        {
+          [`${auditType}.provisional_data.${pdfField}.pdf.url`]: { $exists: true, $ne: '' },
+          [`${auditType}.provisional_data.${pdfField}.pdf.fileSizeKb`]: { $exists: false },
+        },
+      ]),
+    );
+
+    return { $or: missingMetadataFilters };
+  }
+
+  private clampPositiveInteger(value: number | undefined, fallback: number, min: number, max: number): number {
+    if (!value || Number.isNaN(value)) {
+      return fallback;
+    }
+
+    return Math.min(Math.max(Math.floor(value), min), max);
+  }
+
+  private async getPdfMetadata(url: string): Promise<AnnualAccountPdfMetadata> {
+    const [buffer, contentLength] = await Promise.all([
+      this.s3Service.getPdfBufferFromS3(url),
+      this.s3Service.getObjectContentLength(url).catch((error) => {
+        this.logger.warn(
+          `Unable to read S3 ContentLength for annual account PDF ${url}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+        return undefined;
+      }),
+    ]);
+
+    const sizeInBytes = contentLength ?? buffer.length;
+    return {
+      pageCount: await this.s3Service.getPdfPageCountFromBuffer(buffer),
+      fileSizeKb: Math.round((sizeInBytes / 1024) * 100) / 100,
+    };
+  }
 
   async getAfsFilters() {
     // const auditTypes = [
@@ -381,7 +681,7 @@ export class AfsDigitizationService {
       const data = (await this.afsExcelFileModel.aggregate(pipeline).exec()) as AfsFile[];
       return { success: true, data };
     } catch (err) {
-      console.error('Failed to get afs digitized list', err);
+      this.logger.error('Failed to get afs digitized list', err instanceof Error ? err.stack : String(err));
       throw new InternalServerErrorException('Failed to fetch list.');
     }
   }
@@ -413,7 +713,7 @@ export class AfsDigitizationService {
         },
       };
     } catch (err) {
-      console.error('Failed to get afs digitized report', err);
+      this.logger.error('Failed to get afs digitized report', err instanceof Error ? err.stack : String(err));
       throw new InternalServerErrorException('Failed to fetch reports.');
     }
   }
@@ -433,7 +733,7 @@ export class AfsDigitizationService {
       const auditorReport = (await this.afsAuditorsReportModel.aggregate(pipeline).exec()) as AuditorReport[];
       return { success: true, data: auditorReport[0] };
     } catch (err) {
-      console.error('Failed to get auditors report', err);
+      this.logger.error('Failed to get auditors report', err instanceof Error ? err.stack : String(err));
       throw new InternalServerErrorException('Failed to fetch reports.');
     }
   }

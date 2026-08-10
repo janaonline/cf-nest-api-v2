@@ -31,6 +31,8 @@ import { CommunicationModule } from './module/communication/communication.module
 import { NotificationsModule } from './module/notifications/notifications.module';
 import { UlbModule } from './master/ulb/ulb.module';
 import { StateModule } from './master/state/state.module';
+import { XvFcReviewModule } from './module/xv-fc/xv-fc-review/ulb/xv-fc-review.module';
+import { XvFcReviewAdminModule } from './module/xv-fc/xv-fc-review/admin/xv-fc-review-admin.module';
 function getQueryCaller(): string {
   const stack = new Error().stack?.split('\n') ?? [];
   const frame = stack.find(
@@ -42,12 +44,12 @@ function getQueryCaller(): string {
 
 @Module({
   imports: [
-    ThrottlerModule.forRoot([
-      {
-        ttl: seconds(60), // time window in seconds
-        limit: 60, // max requests per window
-      },
-    ]),
+    // ThrottlerModule.forRoot([
+    //   {
+    //     ttl: seconds(60), // time window in seconds
+    //     limit: 600, // max requests per window
+    //   },
+    // ]),
     ConfigModule.forRoot({ isGlobal: true }),
     ScheduleModule.forRoot(),
     CacheModule.register({ isGlobal: true, ttl: 300000 }),
@@ -112,15 +114,17 @@ function getQueryCaller(): string {
     NotificationsModule,
     UlbModule,
     StateModule,
+    XvFcReviewModule,
+    XvFcReviewAdminModule,
     DataCollectionModule,
   ],
   controllers: [AppController],
   providers: [
     AppService,
-    {
-      provide: APP_GUARD,
-      useClass: ThrottlerBehindProxyGuard,
-    },
+    // {
+    //   provide: APP_GUARD,
+    //   useClass: ThrottlerBehindProxyGuard,
+    // },
   ],
 })
 export class AppModule implements NestModule {
