@@ -108,6 +108,27 @@ describe('AuthService', () => {
     });
   });
 
+  describe('generateTokens()', () => {
+    it('records the 16thFC purpose as-is on the LoginHistory record', async () => {
+      await service.generateTokens('507f1f77bcf86cd799439011', '16thFC');
+      expect(mockLoginHistoryModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({ loginType: '16thFC' }),
+      );
+    });
+
+    it('records the XVIFC purpose as its own distinct loginType, not collapsed into 16thFC', async () => {
+      await service.generateTokens('507f1f77bcf86cd799439011', 'XVIFC');
+      expect(mockLoginHistoryModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({ loginType: 'XVIFC' }),
+      );
+    });
+
+    it('leaves loginType unset (schema default applies) for a non-grant-cycle purpose like WEB', async () => {
+      await service.generateTokens('507f1f77bcf86cd799439011', 'WEB');
+      expect(mockLoginHistoryModel.create).toHaveBeenCalledWith({ user: expect.any(Object) });
+    });
+  });
+
   describe('refreshTokens()', () => {
     it('rotates tokens on valid refresh token', async () => {
       mockUsersRepository.findByIdWithRefreshToken.mockResolvedValue(mockUser);
