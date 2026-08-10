@@ -188,8 +188,8 @@ export class ClaimLetterDocumentService {
     batchNumber: number,
   ): string {
     return (
-      `Claim Letter — State of ${stateName} recommends the following Urban Local Bodies for release ` +
-      `of 16th Finance Commission Basic Grants (FY ${designYearLabel}) — Instalment ${installment} · Batch ${batchNumber}.`
+      `Claim Letter - State of ${stateName} recommends the following Urban Local Bodies for release ` +
+      `of 16th Finance Commission Basic Grants (FY ${designYearLabel}) - Instalment ${installment} · Batch ${batchNumber}.`
     );
   }
 

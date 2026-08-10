@@ -32,6 +32,14 @@ touching code that cites it, not just the local comment:
   (Covering Letter + Annexure 1 FC Disclosures + Annexure 2 City Conditions) consumed by the
   frontend's Preview Template dialog and Download Template PDF — read-only, built on top of
   `ClaimLetterUlbRowsService.getAllUlbRows()` rather than re-querying `ClaimLetterBatchUlb` directly.
+- `services/document/claim-letter-pdf.service.ts` (+ `claim-letter-pdf-layout.helpers.ts`) —
+  renders that same document into an actual PDF, server-side, via `GET :claimLetterId/document/pdf`
+  (`StreamableFile`). Uses `pdfkit`, not `pdfmake` — Download Template used to build the PDF in the
+  browser with `pdfmake`, which needs `'unsafe-eval'` in `script-src` and breaks under a strict CSP;
+  `pdfkit` has built-in text wrapping and no such requirement. `pdfkit` has no table primitive of
+  its own, so the one hand-rolled `drawTable` helper (fixed S.No./ULB columns + N dynamic trailing
+  columns, header re-drawn on page overflow) is reused across all 3 sections — do not duplicate it
+  per section.
 - `services/form-json/claim-letter-form-json.service.ts` — this feature's own `formjsons` document
   (formId `CLAIM_LETTER_FORM_ID`): `signedClaimFile` field config plus the claimed-vs-allocated
   variance band (`meta.varianceLowerPercent`/`varianceUpperPercent`, falling back to
