@@ -18,6 +18,7 @@ import { XviFcUnspentBalanceDisclosure } from '../../schemas/xvi-fc/unspent-bala
 import { XviFcBankAccount } from '../../schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
 import { XviFcCacheService, XVIFC_CACHE_KEY_PREFIX } from './cache/xvi-fc-cache.service';
 import { FormJsonService } from '../../master/form-json/form-json.service';
+import { UlbEligibilityService } from '../ulb-eligibility/ulb-eligibility.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 
@@ -40,6 +41,7 @@ describe('XviFcService', () => {
   let mockBankAccountModel: { findOne: jest.Mock };
   let mockCacheService: { deleteByPattern: jest.Mock };
   let mockFormJsonService: { clearCache: jest.Mock };
+  let mockUlbEligibilityService: { getIneligibleUlbTypeIds: jest.Mock };
 
   function q<T>(value: T) {
     return {
@@ -64,6 +66,7 @@ describe('XviFcService', () => {
     mockBankAccountModel = { findOne: jest.fn().mockReturnValue(q(null)) };
     mockCacheService = { deleteByPattern: jest.fn().mockResolvedValue(0) };
     mockFormJsonService = { clearCache: jest.fn().mockResolvedValue(0) };
+    mockUlbEligibilityService = { getIneligibleUlbTypeIds: jest.fn().mockResolvedValue([]) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -81,6 +84,7 @@ describe('XviFcService', () => {
         { provide: getModelToken(XviFcBankAccount.name), useValue: mockBankAccountModel },
         { provide: XviFcCacheService, useValue: mockCacheService },
         { provide: FormJsonService, useValue: mockFormJsonService },
+        { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
       ],
     }).compile();
 
