@@ -9,6 +9,7 @@ import type {
 } from 'src/module/xvi-fc/common/types/claim-eligibility.type';
 import type { FieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
 import type { ClaimLetterFinancialOverview } from '../services/eligibility/claim-letter-eligibility.service';
+import type { ClaimLetterPermissions } from '../helpers/claim-letter-permissions.helpers';
 
 /** Display-ready ULB-options picker row (matches the FC Unspent picker-dialog UX). */
 export interface ClaimLetterUlbOption {
@@ -114,6 +115,10 @@ export interface ClaimLetterClaimContext {
    *  CLAIM_LETTER_VARIANCE_LOWER_PERCENT/UPPER_PERCENT) — see ClaimLetterFormJsonService. */
   varianceLowerPercent: number;
   varianceUpperPercent: number;
+  /** Whether the current user may start a new claim (PREPARE_GRANT_LETTERS) — there's no batch
+   *  document yet to attach a full ClaimLetterPermissions to, so this is the create-mode-only
+   *  equivalent of ClaimLetterBatchSummary.permissions.canEdit. */
+  canCreate: boolean;
 }
 
 export interface ClaimLetterBatchSummary {
@@ -145,6 +150,9 @@ export interface ClaimLetterBatchSummary {
    *  above — only populated by `getDetail`, same convention as `questions`. */
   varianceLowerPercent?: number;
   varianceUpperPercent?: number;
+  /** Authoritative UI edit/submit gates — see ClaimLetterPermissions doc comment. Always populated
+   *  (every endpoint that returns this summary goes through mapClaimLetterBatchDocToSummary). */
+  permissions: ClaimLetterPermissions;
 }
 
 /** One row of the covering letter's recommended-ULBs table. No per-ULB date field exists on

@@ -153,7 +153,7 @@ export class ClaimLetterAssemblyService {
    *  pipeline below is unchanged and still deals in raw documents throughout. */
   async createDraft(input: CreateClaimLetterDraftInput): Promise<ClaimLetterBatchSummary> {
     const raw = await this.createDraftRaw(input);
-    return mapClaimLetterBatchDocToSummary(raw);
+    return mapClaimLetterBatchDocToSummary(raw, input.user);
   }
 
   private async createDraftRaw(input: CreateClaimLetterDraftInput): Promise<Record<string, unknown>> {
@@ -1043,7 +1043,7 @@ export class ClaimLetterAssemblyService {
     user: AuthUser,
   ): Promise<ClaimLetterBatchSummary> {
     const raw = await this.updateDraftRaw(claimLetterId, selections, expectedRevision, user);
-    return mapClaimLetterBatchDocToSummary(raw);
+    return mapClaimLetterBatchDocToSummary(raw, user);
   }
 
   private async updateDraftRaw(
@@ -1368,7 +1368,7 @@ export class ClaimLetterAssemblyService {
 
   async abandonDraft(claimLetterId: string, user: AuthUser): Promise<ClaimLetterBatchSummary> {
     const raw = await this.abandonDraftRaw(claimLetterId, user);
-    return mapClaimLetterBatchDocToSummary(raw);
+    return mapClaimLetterBatchDocToSummary(raw, user);
   }
 
   private async abandonDraftRaw(claimLetterId: string, user: AuthUser): Promise<Record<string, unknown>> {

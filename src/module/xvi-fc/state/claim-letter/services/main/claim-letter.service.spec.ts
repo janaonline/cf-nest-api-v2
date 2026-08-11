@@ -324,7 +324,18 @@ describe('ClaimLetterService', () => {
         remainingUlbCount: 1,
         varianceLowerPercent: 90,
         varianceUpperPercent: 110,
+        // stateUser has no xviFcSubrole set — defaults to 'viewer', which lacks PREPARE_GRANT_LETTERS.
+        canCreate: false,
       });
+    });
+
+    it('sets canCreate true for a user with PREPARE_GRANT_LETTERS (e.g. reviewer/admin subrole)', async () => {
+      expectedUlbSetService.resolve.mockResolvedValue([]);
+      const reviewerUser: AuthUser = { ...stateUser, xviFcSubrole: 'reviewer' };
+
+      const result = await service.getClaimContext(stateId.toString(), yearId.toString(), 1, reviewerUser);
+
+      expect(result.data?.canCreate).toBe(true);
     });
 
     it('sources the variance band from ClaimLetterFormJsonService, keyed by yearId', async () => {
@@ -535,7 +546,7 @@ describe('ClaimLetterService', () => {
       });
     });
 
-    it('adds Preview/Download Template actions to signedClaimFile when the batch has ULBs', async () => {
+    it('adds Preview/Download Template actions to signedClaimFile when the batch has ULBs and the user can edit', async () => {
       const claimLetterId = new Types.ObjectId();
       const signedFileField = { key: 'signedClaimFile', formFieldType: 'file' };
       batchModel.findOne.mockReturnValue(
@@ -561,13 +572,55 @@ describe('ClaimLetterService', () => {
         varianceUpperPercent: 110,
       });
 
-      const result = await service.getDetail(claimLetterId.toString(), stateUser);
+      // stateUser defaults to the 'viewer' xviFcSubrole (no PREPARE_GRANT_LETTERS) — these actions
+      // are canEdit-gated (see applySignedFileSupportingContent), so use an editable user here.
+      const editableUser: AuthUser = { ...stateUser, xviFcSubrole: 'admin' };
+      const result = await service.getDetail(claimLetterId.toString(), editableUser);
 
-      const actions = result.data?.questions?.[0]?.supportingContent?.[0]?.actions ?? [];
+      const supportingContent = result.data?.questions?.[0]?.supportingContent?.[0];
+      expect(supportingContent?.description).toBe(
+        'Preview or download the claim letter for this batch, then upload the signed copy below.',
+      );
+      const actions = supportingContent?.actions ?? [];
       expect(actions).toEqual([
         expect.objectContaining({ id: 'preview-template', label: 'Preview Template', visible: true }),
         expect.objectContaining({ id: 'download-template', label: 'Download Template', visible: true }),
       ]);
+    });
+
+    it('marks Preview/Download Template actions not visible when the batch has ULBs but the user cannot edit', async () => {
+      const claimLetterId = new Types.ObjectId();
+      const signedFileField = { key: 'signedClaimFile', formFieldType: 'file' };
+      batchModel.findOne.mockReturnValue(
+        q({
+          _id: claimLetterId,
+          state: stateId,
+          year: yearId,
+          installment: 1,
+          batchNumber: 1,
+          version: 1,
+          revision: 0,
+          currentFormStatus: 2,
+          assemblyStatus: 'READY',
+          ulbCount: 5,
+          isAbandoned: false,
+          financialSummary,
+          createdAt: new Date(),
+        }),
+      );
+      formJsonConfigService.loadFormConfig.mockResolvedValue({
+        questions: [signedFileField],
+        varianceLowerPercent: 90,
+        varianceUpperPercent: 110,
+      });
+
+      // stateUser defaults to the 'viewer' xviFcSubrole — no PREPARE_GRANT_LETTERS, so canEdit is false.
+      const result = await service.getDetail(claimLetterId.toString(), stateUser);
+
+      const supportingContent = result.data?.questions?.[0]?.supportingContent?.[0];
+      expect(supportingContent?.description).toBe('');
+      const actions = supportingContent?.actions ?? [];
+      expect(actions.every((a) => a.visible === false)).toBe(true);
     });
 
     it('marks Preview/Download Template actions not visible when the batch has no ULBs', async () => {
