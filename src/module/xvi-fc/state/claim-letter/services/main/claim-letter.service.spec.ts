@@ -9,6 +9,7 @@ import { ClaimLetterFormJsonService } from '../form-json/claim-letter-form-json.
 import { ExpectedUlbSetService } from 'src/module/xvi-fc/common/services/expected-ulb-set.service';
 import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
 import { ClaimLetterBatch } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
+import { State } from 'src/schemas/state.schema';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 
@@ -59,6 +60,7 @@ describe('ClaimLetterService', () => {
     findOneAndUpdate: jest.Mock;
     findById: jest.Mock;
   };
+  let stateModel: { findById: jest.Mock };
 
   const stateId = new Types.ObjectId();
   const yearId = new Types.ObjectId();
@@ -115,6 +117,7 @@ describe('ClaimLetterService', () => {
       findOneAndUpdate: jest.fn(),
       findById: jest.fn(),
     };
+    stateModel = { findById: jest.fn().mockReturnValue(q({ name: 'Test State' })) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -126,6 +129,7 @@ describe('ClaimLetterService', () => {
         { provide: ClaimLetterFormJsonService, useValue: formJsonConfigService },
         { provide: getConnectionToken(), useValue: connection },
         { provide: getModelToken(ClaimLetterBatch.name), useValue: batchModel },
+        { provide: getModelToken(State.name), useValue: stateModel },
       ],
     }).compile();
 
@@ -158,6 +162,7 @@ describe('ClaimLetterService', () => {
       const result = await service.getEligibilitySummary(stateId.toString(), yearId.toString(), 1, stateUser);
 
       expect(result.data).toEqual({
+        stateName: 'Test State',
         installment: 1,
         stateLevelGate: { passed: true, sources: [] },
         expectedUlbCount: 2,
@@ -310,6 +315,7 @@ describe('ClaimLetterService', () => {
       const result = await service.getClaimContext(stateId.toString(), yearId.toString(), 1, stateUser);
 
       expect(result.data).toEqual({
+        stateName: 'Test State',
         expectedUlbCount: 2,
         batchSlotsUsed: 1,
         batchSlotsMax: 3,
@@ -324,7 +330,18 @@ describe('ClaimLetterService', () => {
         remainingUlbCount: 1,
         varianceLowerPercent: 90,
         varianceUpperPercent: 110,
+        // stateUser has no xviFcSubrole set — defaults to 'viewer', which lacks PREPARE_GRANT_LETTERS.
+        canCreate: false,
       });
+    });
+
+    it('sets canCreate true for a user with PREPARE_GRANT_LETTERS (e.g. reviewer/admin subrole)', async () => {
+      expectedUlbSetService.resolve.mockResolvedValue([]);
+      const reviewerUser: AuthUser = { ...stateUser, xviFcSubrole: 'reviewer' };
+
+      const result = await service.getClaimContext(stateId.toString(), yearId.toString(), 1, reviewerUser);
+
+      expect(result.data?.canCreate).toBe(true);
     });
 
     it('sources the variance band from ClaimLetterFormJsonService, keyed by yearId', async () => {
@@ -535,7 +552,7 @@ describe('ClaimLetterService', () => {
       });
     });
 
-    it('adds Preview/Download Template actions to signedClaimFile when the batch has ULBs', async () => {
+    it('adds Preview/Download Template actions to signedClaimFile when the batch has ULBs and the user can edit', async () => {
       const claimLetterId = new Types.ObjectId();
       const signedFileField = { key: 'signedClaimFile', formFieldType: 'file' };
       batchModel.findOne.mockReturnValue(
@@ -561,13 +578,55 @@ describe('ClaimLetterService', () => {
         varianceUpperPercent: 110,
       });
 
-      const result = await service.getDetail(claimLetterId.toString(), stateUser);
+      // stateUser defaults to the 'viewer' xviFcSubrole (no PREPARE_GRANT_LETTERS) — these actions
+      // are canEdit-gated (see applySignedFileSupportingContent), so use an editable user here.
+      const editableUser: AuthUser = { ...stateUser, xviFcSubrole: 'admin' };
+      const result = await service.getDetail(claimLetterId.toString(), editableUser);
 
-      const actions = result.data?.questions?.[0]?.supportingContent?.[0]?.actions ?? [];
+      const supportingContent = result.data?.questions?.[0]?.supportingContent?.[0];
+      expect(supportingContent?.description).toBe(
+        'Preview or download the claim letter for this batch, then upload the signed copy below.',
+      );
+      const actions = supportingContent?.actions ?? [];
       expect(actions).toEqual([
         expect.objectContaining({ id: 'preview-template', label: 'Preview Template', visible: true }),
         expect.objectContaining({ id: 'download-template', label: 'Download Template', visible: true }),
       ]);
+    });
+
+    it('marks Preview/Download Template actions not visible when the batch has ULBs but the user cannot edit', async () => {
+      const claimLetterId = new Types.ObjectId();
+      const signedFileField = { key: 'signedClaimFile', formFieldType: 'file' };
+      batchModel.findOne.mockReturnValue(
+        q({
+          _id: claimLetterId,
+          state: stateId,
+          year: yearId,
+          installment: 1,
+          batchNumber: 1,
+          version: 1,
+          revision: 0,
+          currentFormStatus: 2,
+          assemblyStatus: 'READY',
+          ulbCount: 5,
+          isAbandoned: false,
+          financialSummary,
+          createdAt: new Date(),
+        }),
+      );
+      formJsonConfigService.loadFormConfig.mockResolvedValue({
+        questions: [signedFileField],
+        varianceLowerPercent: 90,
+        varianceUpperPercent: 110,
+      });
+
+      // stateUser defaults to the 'viewer' xviFcSubrole — no PREPARE_GRANT_LETTERS, so canEdit is false.
+      const result = await service.getDetail(claimLetterId.toString(), stateUser);
+
+      const supportingContent = result.data?.questions?.[0]?.supportingContent?.[0];
+      expect(supportingContent?.description).toBe('');
+      const actions = supportingContent?.actions ?? [];
+      expect(actions.every((a) => a.visible === false)).toBe(true);
     });
 
     it('marks Preview/Download Template actions not visible when the batch has no ULBs', async () => {

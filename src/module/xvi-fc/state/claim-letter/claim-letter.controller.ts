@@ -1,4 +1,16 @@
-import { Body, Controller, Get, Headers, Ip, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Headers,
+  Ip,
+  Param,
+  Patch,
+  Post,
+  Query,
+  StreamableFile,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiBody, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { PermissionGuard } from 'src/module/auth/permission.guard';
 import { RequirePermissions } from 'src/module/auth/require-permissions.decorator';
@@ -13,6 +25,7 @@ import { ClaimLetterUlbOptionsService } from './services/ulb-options/claim-lette
 import { ClaimLetterUlbRowsService } from './services/ulb-rows/claim-letter-ulb-rows.service';
 import { ClaimLetterAssemblyService } from './services/assembly/claim-letter-assembly.service';
 import { ClaimLetterDocumentService } from './services/document/claim-letter-document.service';
+import { ClaimLetterPdfService } from './services/document/claim-letter-pdf.service';
 import { GetClaimLetterUlbOptionsQueryDto } from './dto/get-claim-letter-ulb-options-query.dto';
 import { GetClaimLetterUlbRowsQueryDto } from './dto/get-claim-letter-ulb-rows-query.dto';
 import { GetClaimLetterHistoryQueryDto } from './dto/get-claim-letter-history-query.dto';
@@ -29,6 +42,7 @@ export class ClaimLetterController {
     private readonly ulbRowsService: ClaimLetterUlbRowsService,
     private readonly assemblyService: ClaimLetterAssemblyService,
     private readonly documentService: ClaimLetterDocumentService,
+    private readonly pdfService: ClaimLetterPdfService,
   ) {}
 
   @ApiOperation({ summary: 'Get claim eligibility summary (state-level gate, expected ULBs, batch-slot usage)' })
@@ -200,6 +214,23 @@ export class ClaimLetterController {
   @RequirePermissions(Permission.VIEW_STATE_FORMS)
   getDocument(@Param('claimLetterId', ParseObjectIdPipe) claimLetterId: string, @CurrentUser() user: AuthUser) {
     return this.documentService.getDocumentData(claimLetterId, user);
+  }
+
+  @ApiOperation({
+    summary: 'Download the claim letter document (same content as GET :claimLetterId/document) as a PDF',
+  })
+  @Get(':claimLetterId/document/pdf')
+  @UseGuards(PermissionGuard)
+  @RequirePermissions(Permission.VIEW_STATE_FORMS)
+  async getDocumentPdf(
+    @Param('claimLetterId', ParseObjectIdPipe) claimLetterId: string,
+    @CurrentUser() user: AuthUser,
+  ): Promise<StreamableFile> {
+    const { buffer, fileName } = await this.pdfService.generateDocumentPdf(claimLetterId, user);
+    return new StreamableFile(buffer as unknown as Uint8Array, {
+      type: 'application/pdf',
+      disposition: `attachment; filename="${fileName}"`,
+    });
   }
 
   // ─── Private helpers ─────────────────────────────────────────────────────

@@ -10,7 +10,8 @@ import {
 import { InjectConnection, InjectModel } from '@nestjs/mongoose';
 import { Connection, FilterQuery, Model, Types } from 'mongoose';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
-import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
+import { Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
+import { getEffectivePermissions } from 'src/module/auth/permissions.map';
 import { toObjectIdString } from 'src/common/utils/objectid.util';
 import { FORM_STATUS, getFormStatusLabel } from 'src/common/constants/form-status.constants';
 import { xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
@@ -24,6 +25,7 @@ import {
   ClaimLetterBatchDocument,
   ClaimLetterBatchNumber,
 } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
+import { State, StateDocument } from 'src/schemas/state.schema';
 import {
   CLAIM_LETTER_ACTION_DOWNLOAD_TEMPLATE,
   CLAIM_LETTER_ACTION_PREVIEW_TEMPLATE,
@@ -35,6 +37,7 @@ import {
 } from '../../constants/claim-letter.constants';
 import { assertInstallmentSupported } from '../../helpers/claim-letter-installment.helpers';
 import { mapClaimLetterBatchDocToSummary } from '../../helpers/claim-letter-summary.helpers';
+import type { ClaimLetterPermissions } from '../../helpers/claim-letter-permissions.helpers';
 import { ClaimLetterEligibilityService } from '../eligibility/claim-letter-eligibility.service';
 import { ClaimLetterHistoryService } from '../history/claim-letter-history.service';
 import { ClaimLetterFormJsonService } from '../form-json/claim-letter-form-json.service';
@@ -67,6 +70,8 @@ export class ClaimLetterService {
     @InjectConnection() private readonly connection: Connection,
     @InjectModel(ClaimLetterBatch.name)
     private readonly batchModel: Model<ClaimLetterBatchDocument>,
+    @InjectModel(State.name)
+    private readonly stateModel: Model<StateDocument>,
   ) {}
 
   async getEligibilitySummary(
@@ -77,14 +82,13 @@ export class ClaimLetterService {
   ): Promise<XviFcApiResponse<ClaimLetterEligibilitySummary>> {
     this.assertStateAccess(user, stateId);
     assertInstallmentSupported(installment);
-
     // expectedUlbSetService.resolve() runs concurrently with the other independent branches below
     // (only ulbLevelEligibility/remainingUlbIds need its result); each chains off it via .then()
     // instead of the whole request waiting on it first, and reuses the result instead of letting
     // resolveUlbLevelEligibilityForDisplay re-resolve the same full set internally on a cache miss.
     const expectedUlbsPromise = this.expectedUlbSetService.resolve(stateId, yearId);
 
-    const [expectedUlbs, gate, ulbLevelEligibility, batchSlotInfo, financialOverview, remainingUlbIds] =
+    const [expectedUlbs, gate, ulbLevelEligibility, batchSlotInfo, financialOverview, remainingUlbIds, stateName] =
       await Promise.all([
         expectedUlbsPromise,
         this.eligibilityService.evaluateStateLevelGateForDisplay(stateId, yearId, installment),
@@ -108,6 +112,7 @@ export class ClaimLetterService {
             ulbs.map((u) => u.ulbId),
           ),
         ),
+        this.resolveStateName(stateId),
       ]);
 
     const expectedUlbIds = expectedUlbs.map((u) => u.ulbId);
@@ -126,6 +131,7 @@ export class ClaimLetterService {
     };
 
     const summary: ClaimLetterEligibilitySummary = {
+      stateName,
       installment: installment as 1,
       stateLevelGate: { passed: gate.passed, sources: sourcesWithUlbBreakdown },
       expectedUlbCount: expectedUlbs.length,
@@ -157,11 +163,12 @@ export class ClaimLetterService {
     this.assertStateAccess(user, stateId);
     assertInstallmentSupported(installment);
 
-    const [expectedUlbs, batchSlotInfo, financialOverview, varianceConfig] = await Promise.all([
+    const [expectedUlbs, batchSlotInfo, financialOverview, varianceConfig, stateName] = await Promise.all([
       this.expectedUlbSetService.resolve(stateId, yearId),
       this.resolveBatchSlotInfo(stateId, yearId, installment),
       this.eligibilityService.getFinancialOverview(stateId, yearId, installment as 1 | 2),
       this.formJsonConfigService.loadVarianceConfig(yearId),
+      this.resolveStateName(stateId),
     ]);
 
     const expectedUlbIds = expectedUlbs.map((u) => u.ulbId);
@@ -173,6 +180,7 @@ export class ClaimLetterService {
     );
 
     const context: ClaimLetterClaimContext = {
+      stateName,
       expectedUlbCount: expectedUlbs.length,
       batchSlotsUsed: batchSlotInfo.batchSlotsUsed,
       batchSlotsMax: CLAIM_LETTER_MAX_BATCH_NUMBER,
@@ -181,6 +189,7 @@ export class ClaimLetterService {
       remainingUlbCount: remainingUlbIds.length,
       varianceLowerPercent: varianceConfig.lowerPercent,
       varianceUpperPercent: varianceConfig.upperPercent,
+      canCreate: getEffectivePermissions(user).includes(Permission.PREPARE_GRANT_LETTERS),
     };
 
     return xviFcSuccess('Claim letter context fetched.', context);
@@ -240,7 +249,7 @@ export class ClaimLetterService {
 
     if (file === undefined) {
       // Same file re-uploaded — no persistence change (see FileInfoNormalizerService).
-      return xviFcSuccess('Signed claim letter file unchanged.', mapClaimLetterBatchDocToSummary(parent));
+      return xviFcSuccess('Signed claim letter file unchanged.', mapClaimLetterBatchDocToSummary(parent, user));
     }
 
     const updated = await this.batchModel
@@ -253,7 +262,7 @@ export class ClaimLetterService {
       .exec();
     if (!updated) throw new ConflictException('Claim letter status changed. Please retry.');
 
-    return xviFcSuccess('Signed claim letter uploaded.', mapClaimLetterBatchDocToSummary(updated));
+    return xviFcSuccess('Signed claim letter uploaded.', mapClaimLetterBatchDocToSummary(updated, user));
   }
 
   /**
@@ -276,7 +285,7 @@ export class ClaimLetterService {
     this.assertStateAccess(user, toObjectIdString(parent['state']) ?? '');
 
     if (parent['currentFormStatus'] === FORM_STATUS.UNDER_REVIEW_BY_MOHUA) {
-      return xviFcSuccess('Claim letter already submitted to MoHUA.', mapClaimLetterBatchDocToSummary(parent));
+      return xviFcSuccess('Claim letter already submitted to MoHUA.', mapClaimLetterBatchDocToSummary(parent, user));
     }
     if (parent['currentFormStatus'] !== FORM_STATUS.IN_PROGRESS) {
       throw new ConflictException(
@@ -352,13 +361,14 @@ export class ClaimLetterService {
       await session.endSession();
     }
 
-    if (updated) return xviFcSuccess('Claim letter submitted to MoHUA.', mapClaimLetterBatchDocToSummary(updated));
+    if (updated)
+      return xviFcSuccess('Claim letter submitted to MoHUA.', mapClaimLetterBatchDocToSummary(updated, user));
 
     // Concurrent status change (or an in-flight `updateDraft`) between our initial read and the
     // guarded update.
     const current = await this.batchModel.findById(claimLetterId).lean<LeanClaimLetterBatch | null>().exec();
     if (current?.['currentFormStatus'] === FORM_STATUS.UNDER_REVIEW_BY_MOHUA) {
-      return xviFcSuccess('Claim letter already submitted to MoHUA.', mapClaimLetterBatchDocToSummary(current));
+      return xviFcSuccess('Claim letter already submitted to MoHUA.', mapClaimLetterBatchDocToSummary(current, user));
     }
     if (current?.['editLockToken'] && this.isEditLockActive(current['editLockAcquiredAt'])) {
       throw new ConflictException('Claim letter is currently being edited. Please retry in a moment.');
@@ -405,34 +415,53 @@ export class ClaimLetterService {
 
     this.assertStateAccess(user, toObjectIdString(doc['state']) ?? '');
 
-    const summary = mapClaimLetterBatchDocToSummary(doc);
-    const formConfig = await this.formJsonConfigService.loadFormConfig(toObjectIdString(doc['year']) ?? '');
+    const summary = mapClaimLetterBatchDocToSummary(doc, user);
+    const [formConfig, stateName] = await Promise.all([
+      this.formJsonConfigService.loadFormConfig(toObjectIdString(doc['year']) ?? ''),
+      this.resolveStateName(toObjectIdString(doc['state']) ?? ''),
+    ]);
     summary.questions = formConfig.questions;
     summary.varianceLowerPercent = formConfig.varianceLowerPercent;
     summary.varianceUpperPercent = formConfig.varianceUpperPercent;
+    summary.stateName = stateName;
     this.applySignedFileValue(summary.questions, doc['signedClaimFile']);
-    this.applySignedFileSupportingContent(summary.questions, doc);
+    this.applySignedFileSupportingContent(summary.questions, doc, summary.permissions);
 
     return xviFcSuccess('Claim letter fetched.', summary);
   }
 
+  private async resolveStateName(stateId: string): Promise<string> {
+    if (!stateId) return '';
+    const stateDoc = await this.stateModel.findById(stateId).select('name').lean<{ name: string } | null>().exec();
+    return stateDoc?.name ?? '';
+  }
+
   /**
    * Adds the "Preview Template"/"Download Template" actions to `signedClaimFile`'s supporting
-   * content — both are non-mutating reads (no backend file path to hide via `meta`), safe in any
-   * batch state, gated only on the batch actually having ULBs to put in a letter. The frontend
-   * fetches the document data itself via `GET :claimLetterId/document` when either is clicked.
+   * content — both are non-mutating reads (no backend file path to hide via `meta`), but only
+   * meaningful once the batch is actually editable (matches the `canEdit`-gated
+   * visible/description pattern in `elected-urban-local-bodies.service.ts`'s
+   * `buildElectedBodyFileSupportingContent` and `devolution-formula.service.ts`'s
+   * `buildExcelFileSupportingContent` — a read-only viewer gets no supporting actions here either).
+   * Also still gated on the batch actually having ULBs to put in a letter. The frontend fetches the
+   * document data itself via `GET :claimLetterId/document` when either is clicked.
    */
-  private applySignedFileSupportingContent(questions: FieldConfig[], doc: LeanClaimLetterBatch): void {
+  private applySignedFileSupportingContent(
+    questions: FieldConfig[],
+    doc: LeanClaimLetterBatch,
+    permissions: ClaimLetterPermissions,
+  ): void {
     const field = questions.find((q) => q.key === 'signedClaimFile');
     if (!field) return;
 
     const hasUlbs = ((doc['ulbCount'] as number) ?? 0) > 0;
+    const showActions = permissions.canEdit && hasUlbs;
     const supportingContent: FieldSupportingContent = {
       type: 'actions',
       position: 'before',
       layout: 'inline',
       separator: 'dot',
-      description: hasUlbs
+      description: showActions
         ? 'Preview or download the claim letter for this batch, then upload the signed copy below.'
         : '',
       actions: [
@@ -441,14 +470,14 @@ export class ClaimLetterService {
           label: 'Preview Template',
           icon: 'bi bi-eye',
           tone: 'primary',
-          visible: hasUlbs,
+          visible: showActions,
         },
         {
           id: CLAIM_LETTER_ACTION_DOWNLOAD_TEMPLATE,
           label: 'Download Template',
           icon: 'bi bi-file-earmark-arrow-down',
           tone: 'primary',
-          visible: hasUlbs,
+          visible: showActions,
         },
       ],
     };
@@ -509,7 +538,7 @@ export class ClaimLetterService {
 
     return xviFcSuccess(
       'Claim letters fetched.',
-      docs.map((d) => mapClaimLetterBatchDocToSummary(d)),
+      docs.map((d) => mapClaimLetterBatchDocToSummary(d, user)),
       { page, limit, total },
     );
   }

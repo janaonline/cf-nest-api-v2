@@ -9,6 +9,7 @@ import type {
 } from 'src/module/xvi-fc/common/types/claim-eligibility.type';
 import type { FieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
 import type { ClaimLetterFinancialOverview } from '../services/eligibility/claim-letter-eligibility.service';
+import type { ClaimLetterPermissions } from '../helpers/claim-letter-permissions.helpers';
 
 /** Display-ready ULB-options picker row (matches the FC Unspent picker-dialog UX). */
 export interface ClaimLetterUlbOption {
@@ -51,6 +52,9 @@ export interface ClaimLetterFinancialSummaryDisplay {
 }
 
 export interface ClaimLetterEligibilitySummary {
+  /** Resolved from the State document — powers the page-header eyebrow ("16th Finance Commission
+   *  · {state}"), same convention as sfc-status/devolution-formula/elected-urban-local-bodies. */
+  stateName: string;
   installment: ClaimLetterInstallment;
   stateLevelGate: {
     passed: boolean;
@@ -104,6 +108,9 @@ export interface ClaimLetterEligibilitySummary {
  * `ClaimLetterService.getClaimContext()`.
  */
 export interface ClaimLetterClaimContext {
+  /** Resolved from the State document — powers the page-header eyebrow, same convention as
+   *  `ClaimLetterEligibilitySummary.stateName`. */
+  stateName: string;
   expectedUlbCount: number;
   batchSlotsUsed: number;
   batchSlotsMax: number;
@@ -114,6 +121,10 @@ export interface ClaimLetterClaimContext {
    *  CLAIM_LETTER_VARIANCE_LOWER_PERCENT/UPPER_PERCENT) — see ClaimLetterFormJsonService. */
   varianceLowerPercent: number;
   varianceUpperPercent: number;
+  /** Whether the current user may start a new claim (PREPARE_GRANT_LETTERS) — there's no batch
+   *  document yet to attach a full ClaimLetterPermissions to, so this is the create-mode-only
+   *  equivalent of ClaimLetterBatchSummary.permissions.canEdit. */
+  canCreate: boolean;
 }
 
 export interface ClaimLetterBatchSummary {
@@ -141,10 +152,17 @@ export interface ClaimLetterBatchSummary {
    * same summary shape leave it `undefined` rather than repeating static config on every row.
    */
   questions?: FieldConfig[];
+  /** Resolved from the State document — powers the page-header eyebrow. Only populated by
+   *  `getDetail`, same convention as `questions` (other mutation endpoints leave it `undefined` —
+   *  the frontend never sets `claim()` from their response, only from a subsequent `getDetail`). */
+  stateName?: string;
   /** DB-driven claimed-vs-allocated variance band, same source as ClaimLetterClaimContext's fields
    *  above — only populated by `getDetail`, same convention as `questions`. */
   varianceLowerPercent?: number;
   varianceUpperPercent?: number;
+  /** Authoritative UI edit/submit gates — see ClaimLetterPermissions doc comment. Always populated
+   *  (every endpoint that returns this summary goes through mapClaimLetterBatchDocToSummary). */
+  permissions: ClaimLetterPermissions;
 }
 
 /** One row of the covering letter's recommended-ULBs table. No per-ULB date field exists on
