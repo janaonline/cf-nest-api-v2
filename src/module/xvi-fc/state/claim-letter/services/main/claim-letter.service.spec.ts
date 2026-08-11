@@ -12,6 +12,7 @@ import { ClaimLetterBatch } from 'src/schemas/xvi-fc/state/claim-letter-batch.sc
 import { State } from 'src/schemas/state.schema';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
+import { YearIdToLabel } from 'src/core/constants/years';
 
 function q<T>(value: T) {
   const chain: Record<string, jest.Mock> = {};
@@ -164,6 +165,9 @@ describe('ClaimLetterService', () => {
       expect(result.data).toEqual({
         stateName: 'Test State',
         installment: 1,
+        // yearId is a fabricated ObjectId with no YearIdToLabel entry, so this falls back to
+        // '14th FC' the same way `resolvePriorFcCycleLabel` falls back for any unmapped year.
+        priorFcCycleLabel: '14th FC',
         stateLevelGate: { passed: true, sources: [] },
         expectedUlbCount: 2,
         batchSlotsUsed: 2,
@@ -174,6 +178,17 @@ describe('ClaimLetterService', () => {
         ulbReadiness: { eligible: 2, total: 2 },
         remainingUlbCount: 0,
       });
+    });
+
+    it('resolves priorFcCycleLabel from the real design year, matching the Claim Letter document', async () => {
+      const realYearId = Object.keys(YearIdToLabel).find((id) => YearIdToLabel[id] === '2026-27')!;
+      expectedUlbSetService.resolve.mockResolvedValue([]);
+      eligibilityService.evaluateStateLevelGateForDisplay.mockResolvedValue({ sources: [], passed: true });
+
+      const result = await service.getEligibilitySummary(stateId.toString(), realYearId, 1, stateUser);
+
+      // 2026-27 -> '14th FC', same mapping (and same helper) the Claim Letter document itself uses.
+      expect(result.data?.priorFcCycleLabel).toBe('14th FC');
     });
 
     it('reports remainingUlbCount from resolveRemainingUlbIds, independent of ulbReadiness', async () => {
