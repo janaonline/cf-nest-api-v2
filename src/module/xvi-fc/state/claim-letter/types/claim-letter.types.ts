@@ -8,6 +8,7 @@ import type {
   UlbEligibilityTally,
 } from 'src/module/xvi-fc/common/types/claim-eligibility.type';
 import type { FieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
+import type { PriorFcCycleLabel } from 'src/module/xvi-fc/state/fc-unspent-declaration/helpers/fc-unspent-declaration-cycle.helpers';
 import type { ClaimLetterFinancialOverview } from '../services/eligibility/claim-letter-eligibility.service';
 import type { ClaimLetterPermissions } from '../helpers/claim-letter-permissions.helpers';
 
@@ -56,6 +57,11 @@ export interface ClaimLetterEligibilitySummary {
    *  · {state}"), same convention as sfc-status/devolution-formula/elected-urban-local-bodies. */
   stateName: string;
   installment: ClaimLetterInstallment;
+  /** Which FC cycle "FC Unspent Balance" disclosures refer to for this design year — "14th FC" or
+   *  "15th FC" — resolved the same way (and from the same table) as the actual signed Claim Letter
+   *  document's own Annexure 1 heading (`ClaimLetterDocumentData.priorFcCycleLabel`), via the
+   *  shared `resolvePriorFcCycleLabel` helper, so the two can never disagree. */
+  priorFcCycleLabel: PriorFcCycleLabel;
   stateLevelGate: {
     passed: boolean;
     sources: EligibilityEvaluationResult[];

@@ -16,7 +16,7 @@ import {
   XviFcUnspentStateFormRow,
   XviFcUnspentStateFormRowDocument,
 } from 'src/schemas/xvi-fc/state/fc-unspent-state-form-row.schema';
-import { FC_UNSPENT_APPLICABLE_FC_BY_YEAR_LABEL } from 'src/module/xvi-fc/state/fc-unspent-declaration/constants/fc-unspent-declaration.constants';
+import { resolvePriorFcCycleLabel } from 'src/module/xvi-fc/state/fc-unspent-declaration/helpers/fc-unspent-declaration-cycle.helpers';
 import { buildClaimLetterRefNo, sumAmountsExactly } from '../../helpers/claim-letter-financial.helpers';
 import { ClaimLetterUlbRowsService } from '../ulb-rows/claim-letter-ulb-rows.service';
 import type {
@@ -74,8 +74,7 @@ export class ClaimLetterDocumentService {
     if (!userDoc) throw new NotFoundException(`User ${user._id} not found`);
 
     const designYearLabel = yearDoc.year;
-    const priorFc = FC_UNSPENT_APPLICABLE_FC_BY_YEAR_LABEL[designYearLabel] ?? '14TH_FC';
-    const priorFcCycleLabel = priorFc === '15TH_FC' ? '15th FC' : '14th FC';
+    const priorFcCycleLabel = resolvePriorFcCycleLabel(designYearLabel);
 
     const unspentByUlbId = await this.resolveUnspentAmounts(
       parent.state,

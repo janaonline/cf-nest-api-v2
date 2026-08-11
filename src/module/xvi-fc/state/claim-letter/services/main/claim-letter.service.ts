@@ -20,6 +20,8 @@ import { XviFcFileRefDto } from 'src/module/xvi-fc/common/dto/xvi-fc-file-ref.dt
 import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
 import { ExpectedUlbSetService } from 'src/module/xvi-fc/common/services/expected-ulb-set.service';
 import type { FieldConfig, FieldSupportingContent } from 'src/module/xvi-fc/common/types/field-config.type';
+import { YearIdToLabel } from 'src/core/constants/years';
+import { resolvePriorFcCycleLabel } from 'src/module/xvi-fc/state/fc-unspent-declaration/helpers/fc-unspent-declaration-cycle.helpers';
 import {
   ClaimLetterBatch,
   ClaimLetterBatchDocument,
@@ -133,6 +135,7 @@ export class ClaimLetterService {
     const summary: ClaimLetterEligibilitySummary = {
       stateName,
       installment: installment as 1,
+      priorFcCycleLabel: resolvePriorFcCycleLabel(YearIdToLabel[yearId] ?? ''),
       stateLevelGate: { passed: gate.passed, sources: sourcesWithUlbBreakdown },
       expectedUlbCount: expectedUlbs.length,
       batchSlotsUsed,
