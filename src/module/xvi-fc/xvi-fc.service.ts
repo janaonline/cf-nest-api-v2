@@ -31,6 +31,7 @@ import { State, StateDocument } from '../../schemas/state.schema';
 import { SideMenu, SideMenuDocument, MenuRole } from '../../schemas/side-menu.schema';
 import { XviFcCacheService, XVIFC_CACHE_KEY_PREFIX } from './cache/xvi-fc-cache.service';
 import { FormJsonService } from '../../master/form-json/form-json.service';
+import { UlbEligibilityService } from '../ulb-eligibility/ulb-eligibility.service';
 
 @Injectable()
 export class XviFcService {
@@ -53,6 +54,7 @@ export class XviFcService {
     private readonly bankAccountModel: Model<XviFcBankAccountDocument>,
     private readonly cache: XviFcCacheService,
     private readonly formJsonService: FormJsonService,
+    private readonly ulbEligibilityService: UlbEligibilityService,
   ) {}
 
   async getStateWiseData(stateId: string, requester: AuthUser): Promise<StateWiseResponseDto> {
@@ -61,7 +63,8 @@ export class XviFcService {
     }
 
     const stateObjectId = new Types.ObjectId(stateId);
-    const pipeline = buildGetStateWiseDataPipeline(stateObjectId);
+    const ineligibleUlbTypeIds = await this.ulbEligibilityService.getIneligibleUlbTypeIds('XVIFC');
+    const pipeline = buildGetStateWiseDataPipeline(stateObjectId, ineligibleUlbTypeIds);
     const [result] = await this.grantAllocationModel.aggregate<StateWiseResponseDto>(pipeline);
     if (!result) {
       throw new NotFoundException('No grant allocation data found for this state');

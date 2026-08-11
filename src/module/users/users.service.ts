@@ -90,7 +90,7 @@ const STATE_MATRIX: PermissionMatrixRow[] = [
     label: 'Final submit to MoHUA',
     permissionKey: Permission.FINAL_SUBMIT_TO_MOHUA,
     admin: true,
-    reviewer: false,
+    reviewer: true,
     viewer: false,
   },
   { label: 'Manage users', permissionKey: Permission.MANAGE_USERS, admin: true, reviewer: false, viewer: false },

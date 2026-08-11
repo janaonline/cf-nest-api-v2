@@ -159,6 +159,7 @@ Required variables (see `.env` for dev defaults):
 | `AWS_BUCKET_NAME` / `AWS_DIGITIZATION_BUCKET_NAME` | S3 buckets |
 | `RECAPTCHA_SECRET_KEY` | reCAPTCHA v3 (set `RECAPTCHA_SKIP_DEV=true` locally) |
 | `OTP_TTL_SECONDS` | OTP expiry in Redis |
+| `OTP_FORCE_REAL_DELIVERY` | Set `true` in dev/staging to send real OTPs (random code + actual SMS/email) without flipping `NODE_ENV` |
 | `CLIENT_URL` / `WHITELISTED_DOMAINS` | CORS origins |
 | `BANK_ACCOUNT_ENCRYPTION_KEY` / `BANK_ACCOUNT_HASH_SECRET` | `xvi-fc` ULB bank-account encryption/hashing (`module/xvi-fc/ulb/bank-account`) |
 | `MANUAL_REVIEW_NOTIFY_EMAIL` | Fixed inbox emailed when a ULB requests manual review of a failed OCR validation (`module/xvi-fc/ulb/annual_accounts`) |
