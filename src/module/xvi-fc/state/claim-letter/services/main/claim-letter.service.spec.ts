@@ -9,6 +9,7 @@ import { ClaimLetterFormJsonService } from '../form-json/claim-letter-form-json.
 import { ExpectedUlbSetService } from 'src/module/xvi-fc/common/services/expected-ulb-set.service';
 import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
 import { ClaimLetterBatch } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
+import { State } from 'src/schemas/state.schema';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 
@@ -59,6 +60,7 @@ describe('ClaimLetterService', () => {
     findOneAndUpdate: jest.Mock;
     findById: jest.Mock;
   };
+  let stateModel: { findById: jest.Mock };
 
   const stateId = new Types.ObjectId();
   const yearId = new Types.ObjectId();
@@ -115,6 +117,7 @@ describe('ClaimLetterService', () => {
       findOneAndUpdate: jest.fn(),
       findById: jest.fn(),
     };
+    stateModel = { findById: jest.fn().mockReturnValue(q({ name: 'Test State' })) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -126,6 +129,7 @@ describe('ClaimLetterService', () => {
         { provide: ClaimLetterFormJsonService, useValue: formJsonConfigService },
         { provide: getConnectionToken(), useValue: connection },
         { provide: getModelToken(ClaimLetterBatch.name), useValue: batchModel },
+        { provide: getModelToken(State.name), useValue: stateModel },
       ],
     }).compile();
 
@@ -158,6 +162,7 @@ describe('ClaimLetterService', () => {
       const result = await service.getEligibilitySummary(stateId.toString(), yearId.toString(), 1, stateUser);
 
       expect(result.data).toEqual({
+        stateName: 'Test State',
         installment: 1,
         stateLevelGate: { passed: true, sources: [] },
         expectedUlbCount: 2,
@@ -310,6 +315,7 @@ describe('ClaimLetterService', () => {
       const result = await service.getClaimContext(stateId.toString(), yearId.toString(), 1, stateUser);
 
       expect(result.data).toEqual({
+        stateName: 'Test State',
         expectedUlbCount: 2,
         batchSlotsUsed: 1,
         batchSlotsMax: 3,

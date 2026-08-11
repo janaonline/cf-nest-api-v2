@@ -25,6 +25,7 @@ import {
   ClaimLetterBatchDocument,
   ClaimLetterBatchNumber,
 } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
+import { State, StateDocument } from 'src/schemas/state.schema';
 import {
   CLAIM_LETTER_ACTION_DOWNLOAD_TEMPLATE,
   CLAIM_LETTER_ACTION_PREVIEW_TEMPLATE,
@@ -69,6 +70,8 @@ export class ClaimLetterService {
     @InjectConnection() private readonly connection: Connection,
     @InjectModel(ClaimLetterBatch.name)
     private readonly batchModel: Model<ClaimLetterBatchDocument>,
+    @InjectModel(State.name)
+    private readonly stateModel: Model<StateDocument>,
   ) {}
 
   async getEligibilitySummary(
@@ -79,14 +82,13 @@ export class ClaimLetterService {
   ): Promise<XviFcApiResponse<ClaimLetterEligibilitySummary>> {
     this.assertStateAccess(user, stateId);
     assertInstallmentSupported(installment);
-
     // expectedUlbSetService.resolve() runs concurrently with the other independent branches below
     // (only ulbLevelEligibility/remainingUlbIds need its result); each chains off it via .then()
     // instead of the whole request waiting on it first, and reuses the result instead of letting
     // resolveUlbLevelEligibilityForDisplay re-resolve the same full set internally on a cache miss.
     const expectedUlbsPromise = this.expectedUlbSetService.resolve(stateId, yearId);
 
-    const [expectedUlbs, gate, ulbLevelEligibility, batchSlotInfo, financialOverview, remainingUlbIds] =
+    const [expectedUlbs, gate, ulbLevelEligibility, batchSlotInfo, financialOverview, remainingUlbIds, stateName] =
       await Promise.all([
         expectedUlbsPromise,
         this.eligibilityService.evaluateStateLevelGateForDisplay(stateId, yearId, installment),
@@ -110,6 +112,7 @@ export class ClaimLetterService {
             ulbs.map((u) => u.ulbId),
           ),
         ),
+        this.resolveStateName(stateId),
       ]);
 
     const expectedUlbIds = expectedUlbs.map((u) => u.ulbId);
@@ -128,6 +131,7 @@ export class ClaimLetterService {
     };
 
     const summary: ClaimLetterEligibilitySummary = {
+      stateName,
       installment: installment as 1,
       stateLevelGate: { passed: gate.passed, sources: sourcesWithUlbBreakdown },
       expectedUlbCount: expectedUlbs.length,
@@ -159,11 +163,12 @@ export class ClaimLetterService {
     this.assertStateAccess(user, stateId);
     assertInstallmentSupported(installment);
 
-    const [expectedUlbs, batchSlotInfo, financialOverview, varianceConfig] = await Promise.all([
+    const [expectedUlbs, batchSlotInfo, financialOverview, varianceConfig, stateName] = await Promise.all([
       this.expectedUlbSetService.resolve(stateId, yearId),
       this.resolveBatchSlotInfo(stateId, yearId, installment),
       this.eligibilityService.getFinancialOverview(stateId, yearId, installment as 1 | 2),
       this.formJsonConfigService.loadVarianceConfig(yearId),
+      this.resolveStateName(stateId),
     ]);
 
     const expectedUlbIds = expectedUlbs.map((u) => u.ulbId);
@@ -175,6 +180,7 @@ export class ClaimLetterService {
     );
 
     const context: ClaimLetterClaimContext = {
+      stateName,
       expectedUlbCount: expectedUlbs.length,
       batchSlotsUsed: batchSlotInfo.batchSlotsUsed,
       batchSlotsMax: CLAIM_LETTER_MAX_BATCH_NUMBER,
@@ -410,14 +416,24 @@ export class ClaimLetterService {
     this.assertStateAccess(user, toObjectIdString(doc['state']) ?? '');
 
     const summary = mapClaimLetterBatchDocToSummary(doc, user);
-    const formConfig = await this.formJsonConfigService.loadFormConfig(toObjectIdString(doc['year']) ?? '');
+    const [formConfig, stateName] = await Promise.all([
+      this.formJsonConfigService.loadFormConfig(toObjectIdString(doc['year']) ?? ''),
+      this.resolveStateName(toObjectIdString(doc['state']) ?? ''),
+    ]);
     summary.questions = formConfig.questions;
     summary.varianceLowerPercent = formConfig.varianceLowerPercent;
     summary.varianceUpperPercent = formConfig.varianceUpperPercent;
+    summary.stateName = stateName;
     this.applySignedFileValue(summary.questions, doc['signedClaimFile']);
     this.applySignedFileSupportingContent(summary.questions, doc, summary.permissions);
 
     return xviFcSuccess('Claim letter fetched.', summary);
+  }
+
+  private async resolveStateName(stateId: string): Promise<string> {
+    if (!stateId) return '';
+    const stateDoc = await this.stateModel.findById(stateId).select('name').lean<{ name: string } | null>().exec();
+    return stateDoc?.name ?? '';
   }
 
   /**

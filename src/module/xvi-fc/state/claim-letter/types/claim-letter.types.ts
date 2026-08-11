@@ -52,6 +52,9 @@ export interface ClaimLetterFinancialSummaryDisplay {
 }
 
 export interface ClaimLetterEligibilitySummary {
+  /** Resolved from the State document — powers the page-header eyebrow ("16th Finance Commission
+   *  · {state}"), same convention as sfc-status/devolution-formula/elected-urban-local-bodies. */
+  stateName: string;
   installment: ClaimLetterInstallment;
   stateLevelGate: {
     passed: boolean;
@@ -105,6 +108,9 @@ export interface ClaimLetterEligibilitySummary {
  * `ClaimLetterService.getClaimContext()`.
  */
 export interface ClaimLetterClaimContext {
+  /** Resolved from the State document — powers the page-header eyebrow, same convention as
+   *  `ClaimLetterEligibilitySummary.stateName`. */
+  stateName: string;
   expectedUlbCount: number;
   batchSlotsUsed: number;
   batchSlotsMax: number;
@@ -146,6 +152,10 @@ export interface ClaimLetterBatchSummary {
    * same summary shape leave it `undefined` rather than repeating static config on every row.
    */
   questions?: FieldConfig[];
+  /** Resolved from the State document — powers the page-header eyebrow. Only populated by
+   *  `getDetail`, same convention as `questions` (other mutation endpoints leave it `undefined` —
+   *  the frontend never sets `claim()` from their response, only from a subsequent `getDetail`). */
+  stateName?: string;
   /** DB-driven claimed-vs-allocated variance band, same source as ClaimLetterClaimContext's fields
    *  above — only populated by `getDetail`, same convention as `questions`. */
   varianceLowerPercent?: number;
