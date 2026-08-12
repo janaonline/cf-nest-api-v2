@@ -304,8 +304,16 @@ const mockPostSubmitTypedFields: EulbTypedFieldConfig[] = [
     formFieldType: 'date',
     fieldTypes: ['EULB_ROW_EDIT_FIELDS', 'EULB_POST_SUBMIT_UPDATE_FIELDS'],
     validations: [
-      { name: 'minDate', validator: '2021-05-31', message: 'Date on which the elected body is in place cannot be before 31 May 2021.' },
-      { name: 'maxDate', validator: 'TODAY', message: 'Date on which the elected body is in place cannot be a future date.' },
+      {
+        name: 'minDate',
+        validator: '2021-05-31',
+        message: 'Date on which the elected body is in place cannot be before 31 May 2021.',
+      },
+      {
+        name: 'maxDate',
+        validator: 'TODAY',
+        message: 'Date on which the elected body is in place cannot be a future date.',
+      },
     ],
   },
   {

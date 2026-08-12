@@ -232,6 +232,7 @@ export class ElectedUrbanLocalBodiesService {
     if (doc) {
       if (doc.checkboxConfirmation !== undefined) savedData['checkboxConfirmation'] = doc.checkboxConfirmation;
       if (doc.electedBodyExcelFile !== undefined) savedData['electedBodyExcelFile'] = doc.electedBodyExcelFile;
+      if (doc.signedElectedbodyFile !== undefined) savedData['signedElectedbodyFile'] = doc.signedElectedbodyFile;
     }
 
     const permissions = this.buildFormPermissions(user, stateId, currentFormStatus);
@@ -459,8 +460,8 @@ export class ElectedUrbanLocalBodiesService {
     const [activeUlbCount, existing] = await Promise.all([
       this.ulbModel.countDocuments(eligibleUlbFilter),
       this.model
-        .findOne(filter, { _id: 1, currentFormStatus: 1, electedBodyExcelFile: 1 })
-        .lean<Pick<EulbFormLeanDoc, '_id' | 'currentFormStatus' | 'electedBodyExcelFile'>>()
+        .findOne(filter, { _id: 1, currentFormStatus: 1, electedBodyExcelFile: 1, signedElectedbodyFile: 1 })
+        .lean<Pick<EulbFormLeanDoc, '_id' | 'currentFormStatus' | 'electedBodyExcelFile' | 'signedElectedbodyFile'>>()
         .exec(),
     ]);
 
@@ -480,9 +481,26 @@ export class ElectedUrbanLocalBodiesService {
       normalizedExcelFile = file;
     }
 
+    let normalizedSignedFile: FileInfo | null | undefined;
+    if (dto.data.signedElectedbodyFile !== undefined) {
+      const signedFileField = requireField(
+        keyByFieldKey(mainFormFields),
+        'signedElectedbodyFile',
+        'ElectedUrbanLocalBodiesService.saveDraft',
+      );
+      const { file, errors: fileErrors } = this.fileInfoNormalizer.normalizeInboundFileInfo(
+        dto.data.signedElectedbodyFile as unknown as Record<string, unknown>,
+        existing?.signedElectedbodyFile,
+        deriveFileValidationOptions(signedFileField, 'signedElectedbodyFile'),
+      );
+      if (fileErrors.length > 0) throwXviFcValidationError({ signedElectedbodyFile: fileErrors });
+      normalizedSignedFile = file;
+    }
+
     const formData: FormData = {
       ulbCount: activeUlbCount,
       electedBodyExcelFile: normalizedExcelFile,
+      signedElectedbodyFile: normalizedSignedFile,
       checkboxConfirmation: dto.data.checkboxConfirmation,
     };
 
@@ -495,6 +513,7 @@ export class ElectedUrbanLocalBodiesService {
       ulbCount: activeUlbCount,
     };
     if (normalizedExcelFile !== undefined) fieldUpdates['electedBodyExcelFile'] = normalizedExcelFile;
+    if (normalizedSignedFile !== undefined) fieldUpdates['signedElectedbodyFile'] = normalizedSignedFile;
     if (result.sanitizedPayload['checkboxConfirmation'] !== undefined)
       fieldUpdates['checkboxConfirmation'] = result.sanitizedPayload['checkboxConfirmation'];
 
@@ -582,6 +601,7 @@ export class ElectedUrbanLocalBodiesService {
         duplicateUlbCount: 1,
         activeDatasetVersion: 1,
         electedBodyExcelFile: 1,
+        signedElectedbodyFile: 1,
       })
       .lean()
       .exec();
@@ -601,12 +621,26 @@ export class ElectedUrbanLocalBodiesService {
     );
     if (excelFileErrors.length > 0) throwXviFcValidationError({ electedBodyExcelFile: excelFileErrors });
 
-    // `normalizedExcelFile` is `undefined` when the file is unchanged from what's already
-    // stored — fall back to the existing file so the required-field validator below still
-    // sees it as present (the raw, possibly-undefined value is used for the $set below).
+    const signedFileFieldFinal = requireField(
+      keyByFieldKey(mainFormFields),
+      'signedElectedbodyFile',
+      'ElectedUrbanLocalBodiesService.finalSubmit',
+    );
+    const { file: normalizedSignedFile, errors: signedFileErrors } = this.fileInfoNormalizer.normalizeInboundFileInfo(
+      dto.data.signedElectedbodyFile as unknown as Record<string, unknown>,
+      existing?.signedElectedbodyFile as FileInfo | undefined,
+      deriveFileValidationOptions(signedFileFieldFinal, 'signedElectedbodyFile'),
+    );
+    if (signedFileErrors.length > 0) throwXviFcValidationError({ signedElectedbodyFile: signedFileErrors });
+
+    // `normalizedExcelFile`/`normalizedSignedFile` are `undefined` when the file is unchanged from
+    // what's already stored — fall back to the existing file so the required-field validator below
+    // still sees it as present (the raw, possibly-undefined value is used for the $set below).
     const formData: FormData = {
       ulbCount: activeUlbCount,
       electedBodyExcelFile: normalizedExcelFile !== undefined ? normalizedExcelFile : existing?.electedBodyExcelFile,
+      signedElectedbodyFile:
+        normalizedSignedFile !== undefined ? normalizedSignedFile : existing?.signedElectedbodyFile,
       checkboxConfirmation: dto.data.checkboxConfirmation,
     };
     const validation = this.validator.validateFinalSubmitAndBuildPayload(mainFormFields, formData);
@@ -767,6 +801,7 @@ export class ElectedUrbanLocalBodiesService {
     // Omit when unchanged (rather than `electedBodyExcelFile: undefined`) so Mongoose's
     // FileInfo `timestamps` option doesn't re-stamp the stored subdocument.
     if (normalizedExcelFile !== undefined) fieldUpdates['electedBodyExcelFile'] = normalizedExcelFile;
+    if (normalizedSignedFile !== undefined) fieldUpdates['signedElectedbodyFile'] = normalizedSignedFile;
 
     // Two collections are written together here (parent + rows), so this needs the same
     // transactional guarantee finalSubmit already has in fc-unspent-declaration.service.ts —

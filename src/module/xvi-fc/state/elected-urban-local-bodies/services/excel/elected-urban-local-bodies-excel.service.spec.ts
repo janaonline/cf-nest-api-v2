@@ -101,8 +101,16 @@ const mockExcelTypedFields: EulbTypedFieldConfig[] = [
     formFieldType: 'date',
     fieldTypes: ['EULB_ROW_EDIT_FIELDS'],
     validations: [
-      { name: 'minDate', validator: '2021-05-31', message: 'Date on which the elected body is in place cannot be before 31 May 2021.' },
-      { name: 'maxDate', validator: 'TODAY', message: 'Date on which the elected body is in place cannot be a future date.' },
+      {
+        name: 'minDate',
+        validator: '2021-05-31',
+        message: 'Date on which the elected body is in place cannot be before 31 May 2021.',
+      },
+      {
+        name: 'maxDate',
+        validator: 'TODAY',
+        message: 'Date on which the elected body is in place cannot be a future date.',
+      },
     ],
   },
   {
@@ -872,9 +880,8 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
       // Second row: unmatched AND duplicate → both errors
       expect(dataErrors.some((e) => e.rowNumber === 2 && e.code === 'unknownUlb')).toBe(true);
       expect(dataErrors.some((e) => e.rowNumber === 2 && e.code === 'duplicate')).toBe(true);
-      const dataValidationSummary = (
-        response.data as { validationSummary?: { duplicateUlbCount: number } } | undefined
-      )?.validationSummary;
+      const dataValidationSummary = (response.data as { validationSummary?: { duplicateUlbCount: number } } | undefined)
+        ?.validationSummary;
       expect(dataValidationSummary?.duplicateUlbCount).toBe(1);
     });
 
