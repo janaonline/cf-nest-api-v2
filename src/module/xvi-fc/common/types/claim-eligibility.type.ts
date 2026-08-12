@@ -134,6 +134,13 @@ export interface ClaimEligibilityConfig {
    *  Optional; falls back to `displayLabel` when unset, so an unconfigured source still renders a
    *  meaningful (if longer) header rather than blank. */
   shortLabel?: string;
+  /** Relative frontend route for this criterion's "View" action (e.g. '../sfc-status').
+   *  Frontend falls back to '../requirements' (self-link) when unset. */
+  checklistRoute?: string;
+  /** Plain-language checklist line for /requirements.
+   * Supports {{priorFcCycleLabel}}; substituted by ClaimLetterService.getEligibilitySummary().
+   * Falls back to displayDescription when unset. */
+  checklistSummary?: string;
 
   ownerLevel: ClaimEligibilityOwnerLevel;
   evaluationLevel: ClaimEligibilityEvaluationLevel;
@@ -194,6 +201,10 @@ export interface EligibilityEvaluationResult {
    *  see there for what these mean. Absent when the source config didn't set them. */
   displayLabel?: string;
   displayDescription?: string;
+  /** Copied from `ClaimEligibilityConfig.checklistRoute`/`checklistSummary` at evaluation time —
+   *  see there for what these mean. Absent when the source config didn't set them. */
+  checklistRoute?: string;
+  checklistSummary?: string;
 
   ownerLevel: ClaimEligibilityOwnerLevel;
   evaluationLevel: ClaimEligibilityEvaluationLevel;

@@ -122,6 +122,8 @@ export class ClaimEligibilityEvaluatorService {
       formType: sourceFormJson.type ?? '',
       displayLabel: config.displayLabel,
       displayDescription: config.displayDescription,
+      checklistRoute: config.checklistRoute,
+      checklistSummary: config.checklistSummary,
       ownerLevel: config.ownerLevel,
       evaluationLevel: config.evaluationLevel,
     };

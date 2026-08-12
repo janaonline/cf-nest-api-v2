@@ -149,6 +149,14 @@ export class ClaimEligibilityConfigDto {
   @IsString()
   shortLabel?: string;
 
+  @IsOptional()
+  @IsString()
+  checklistRoute?: string;
+
+  @IsOptional()
+  @IsString()
+  checklistSummary?: string;
+
   @IsIn(['STATE', 'ULB'] as ClaimEligibilityOwnerLevel[])
   ownerLevel!: ClaimEligibilityOwnerLevel;
 
