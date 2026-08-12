@@ -36,7 +36,7 @@ describe('XviFcService', () => {
   let mockUlbModel: { findById: jest.Mock };
   let mockStateModel: { findById: jest.Mock };
   let mockSideMenuModel: { find: jest.Mock };
-  let mockAnnualAccountModel: { findOne: jest.Mock };
+  let mockAnnualAccountModel: { find: jest.Mock };
   let mockDisclosureModel: { findOne: jest.Mock };
   let mockBankAccountModel: { findOne: jest.Mock };
   let mockCacheService: { deleteByPattern: jest.Mock };
@@ -61,7 +61,7 @@ describe('XviFcService', () => {
     mockUlbModel = { findById: jest.fn().mockReturnValue(q(null)) };
     mockStateModel = { findById: jest.fn().mockReturnValue(q(null)) };
     mockSideMenuModel = { find: jest.fn().mockReturnValue(q([])) };
-    mockAnnualAccountModel = { findOne: jest.fn().mockReturnValue(q(null)) };
+    mockAnnualAccountModel = { find: jest.fn().mockReturnValue(q([])) };
     mockDisclosureModel = { findOne: jest.fn().mockReturnValue(q(null)) };
     mockBankAccountModel = { findOne: jest.fn().mockReturnValue(q(null)) };
     mockCacheService = { deleteByPattern: jest.fn().mockResolvedValue(0) };
@@ -193,18 +193,21 @@ describe('XviFcService', () => {
 
     it('preserves existing form-status response fields', async () => {
       const annualAccountId = new Types.ObjectId();
-      mockAnnualAccountModel.findOne.mockReturnValue(
-        q({
-          _id: annualAccountId,
-          auditedData: {
+      mockAnnualAccountModel.find.mockReturnValue(
+        q([
+          {
+            _id: annualAccountId,
+            sectionType: 'audited',
             form_status: AnnualAccountFormStatus.IN_PROGRESS,
             form_status_id: FORM_STATUS_ID[AnnualAccountFormStatus.IN_PROGRESS],
           },
-          unauditedData: {
+          {
+            _id: new Types.ObjectId(),
+            sectionType: 'unaudited',
             form_status: AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE,
             form_status_id: FORM_STATUS_ID[AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE],
           },
-        }),
+        ]),
       );
       mockDisclosureModel.findOne.mockReturnValue(q({ formStatus: 'SUBMITTED' }));
 

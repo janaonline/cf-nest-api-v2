@@ -189,15 +189,47 @@ export class DocumentItem {
 
 export const DocumentItemSchema = SchemaFactory.createForClass(DocumentItem);
 
-// ─── AnnualAccountSection ─────────────────────────────────────────────────────
+export type AnnualAccountSectionType = 'audited' | 'unaudited';
 
-@Schema({ _id: false, versionKey: false })
-export class AnnualAccountSection {
-  @Prop({ type: MongooseSchema.Types.ObjectId, required: true })
-  yearId: Types.ObjectId;
+// ─── Root document ────────────────────────────────────────────────────────────
 
-  @Prop({ required: true })
-  year: string;
+/**
+ * One document per {ulb, design_year, sectionType} — audited AFS (formId 30) and provisional
+ * AFS (formId 31) are independent forms with independent lifecycles, not one form with two
+ * embedded halves. The 'audited' document is the anchor: it keeps the `_id` that existed before
+ * this split (back when both sections lived on one document), so every existing external
+ * reference to an "annualAccountId" keeps working unchanged. The 'unaudited' document is a
+ * sibling, looked up by {ulb, design_year, sectionType:'unaudited'} — see
+ * AnnualAccountsService.resolveSectionDocument.
+ */
+@Schema({
+  collection: 'xvifc_annualaccounts',
+  timestamps: true,
+  versionKey: false,
+})
+export class XviFcAnnualAccount {
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Ulb', required: true })
+  ulb!: Types.ObjectId;
+
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'State', required: true })
+  state!: Types.ObjectId;
+
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Year', required: true })
+  design_year!: Types.ObjectId;
+
+  @Prop({ type: String, enum: ['audited', 'unaudited'], required: true })
+  sectionType!: AnnualAccountSectionType;
+
+  /**
+   * Null until this section's first document upload — the flat-document equivalent of the old
+   * "section sub-object is null" NOT_STARTED state (the 'audited' document always exists, as
+   * the {ulb, design_year} anchor, even before any audited document is ever uploaded).
+   */
+  @Prop({ type: MongooseSchema.Types.ObjectId, default: null })
+  yearId: Types.ObjectId | null;
+
+  @Prop({ type: String, default: null })
+  year: string | null;
 
   @Prop({
     type: String,
@@ -221,43 +253,17 @@ export class AnnualAccountSection {
   @Prop({ type: Date, default: null })
   declaredAt: Date | null;
 
-  /** Current/latest STATE decision for the whole section — null until a state user makes a final call. */
+  /** Current/latest STATE decision for this section — null until a state user makes a final call. */
   @Prop({ type: DecisionInfoSchema, default: null })
   stateDecision: DecisionInfo | null;
 
-  /** Current/latest MOHUA decision for the whole section — null until MOHUA acts on what state handed off. */
+  /** Current/latest MOHUA decision for this section — null until MOHUA acts on what state handed off. */
   @Prop({ type: DecisionInfoSchema, default: null })
   mohuaDecision: DecisionInfo | null;
 
   /** Placeholder for a future claim-letter-generation feature — not set by any code path yet. */
   @Prop({ type: Boolean, default: false })
   claimLetterGenerated!: boolean;
-}
-
-export const AnnualAccountSectionSchema = SchemaFactory.createForClass(AnnualAccountSection);
-
-// ─── Root document ────────────────────────────────────────────────────────────
-
-@Schema({
-  collection: 'xvifc_annualaccounts',
-  timestamps: true,
-  versionKey: false,
-})
-export class XviFcAnnualAccount {
-  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Ulb', required: true })
-  ulb!: Types.ObjectId;
-
-  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'State', required: true })
-  state!: Types.ObjectId;
-
-  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Year', required: true })
-  design_year!: Types.ObjectId;
-
-  @Prop({ type: AnnualAccountSectionSchema, default: null })
-  auditedData: AnnualAccountSection | null;
-
-  @Prop({ type: AnnualAccountSectionSchema, default: null })
-  unauditedData: AnnualAccountSection | null;
 
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
   createdBy: Types.ObjectId;
@@ -268,5 +274,5 @@ export class XviFcAnnualAccount {
 
 export const XviFcAnnualAccountSchema = SchemaFactory.createForClass(XviFcAnnualAccount);
 
-XviFcAnnualAccountSchema.index({ ulb: 1, design_year: 1 }, { unique: true });
+XviFcAnnualAccountSchema.index({ ulb: 1, design_year: 1, sectionType: 1 }, { unique: true });
 XviFcAnnualAccountSchema.index({ state: 1, design_year: 1 });

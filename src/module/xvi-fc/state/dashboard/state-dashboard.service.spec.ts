@@ -780,17 +780,21 @@ describe('StateDashboardService', () => {
     });
 
     describe('annual and provisional accounts', () => {
-      it('extracts the audited annual status from auditedData.form_status_id', async () => {
+      it('extracts the audited annual status from the sectionType: audited record', async () => {
         annualAccountModel.find.mockReturnValue(
-          queryResult([{ ulb: activeUlbIds[0], auditedData: { form_status_id: FORM_STATUS.UNDER_REVIEW_BY_STATE } }]),
+          queryResult([
+            { ulb: activeUlbIds[0], sectionType: 'audited', form_status_id: FORM_STATUS.UNDER_REVIEW_BY_STATE },
+          ]),
         );
         const { data } = await fetchDashboard();
         expect(findCompletionItem(data, STATE_DASHBOARD_FORM_KEY.ANNUAL_ACCOUNTS).completed).toBe(1);
       });
 
-      it('extracts the provisional status from unauditedData.form_status_id', async () => {
+      it('extracts the provisional status from the sectionType: unaudited record', async () => {
         annualAccountModel.find.mockReturnValue(
-          queryResult([{ ulb: activeUlbIds[0], unauditedData: { form_status_id: FORM_STATUS.UNDER_REVIEW_BY_STATE } }]),
+          queryResult([
+            { ulb: activeUlbIds[0], sectionType: 'unaudited', form_status_id: FORM_STATUS.UNDER_REVIEW_BY_STATE },
+          ]),
         );
         const { data } = await fetchDashboard();
         expect(findCompletionItem(data, STATE_DASHBOARD_FORM_KEY.PROVISIONAL_ACCOUNTS).completed).toBe(1);
@@ -799,11 +803,8 @@ describe('StateDashboardService', () => {
       it('counts one annual-account record at most once per row', async () => {
         annualAccountModel.find.mockReturnValue(
           queryResult([
-            {
-              ulb: activeUlbIds[0],
-              auditedData: { form_status_id: FORM_STATUS.UNDER_REVIEW_BY_STATE },
-              unauditedData: { form_status_id: FORM_STATUS.UNDER_REVIEW_BY_STATE },
-            },
+            { ulb: activeUlbIds[0], sectionType: 'audited', form_status_id: FORM_STATUS.UNDER_REVIEW_BY_STATE },
+            { ulb: activeUlbIds[0], sectionType: 'unaudited', form_status_id: FORM_STATUS.UNDER_REVIEW_BY_STATE },
           ]),
         );
         const { data } = await fetchDashboard();
@@ -813,7 +814,9 @@ describe('StateDashboardService', () => {
 
       it('treats a missing audited section as incomplete', async () => {
         annualAccountModel.find.mockReturnValue(
-          queryResult([{ ulb: activeUlbIds[0], unauditedData: { form_status_id: FORM_STATUS.UNDER_REVIEW_BY_STATE } }]),
+          queryResult([
+            { ulb: activeUlbIds[0], sectionType: 'unaudited', form_status_id: FORM_STATUS.UNDER_REVIEW_BY_STATE },
+          ]),
         );
         const { data } = await fetchDashboard();
         expect(findCompletionItem(data, STATE_DASHBOARD_FORM_KEY.ANNUAL_ACCOUNTS).completed).toBe(0);
@@ -821,7 +824,9 @@ describe('StateDashboardService', () => {
 
       it('treats a missing provisional section as incomplete', async () => {
         annualAccountModel.find.mockReturnValue(
-          queryResult([{ ulb: activeUlbIds[0], auditedData: { form_status_id: FORM_STATUS.UNDER_REVIEW_BY_STATE } }]),
+          queryResult([
+            { ulb: activeUlbIds[0], sectionType: 'audited', form_status_id: FORM_STATUS.UNDER_REVIEW_BY_STATE },
+          ]),
         );
         const { data } = await fetchDashboard();
         expect(findCompletionItem(data, STATE_DASHBOARD_FORM_KEY.PROVISIONAL_ACCOUNTS).completed).toBe(0);
@@ -829,7 +834,9 @@ describe('StateDashboardService', () => {
 
       it('does not count a returned annual section as completed', async () => {
         annualAccountModel.find.mockReturnValue(
-          queryResult([{ ulb: activeUlbIds[0], auditedData: { form_status_id: FORM_STATUS.RETURNED_BY_STATE } }]),
+          queryResult([
+            { ulb: activeUlbIds[0], sectionType: 'audited', form_status_id: FORM_STATUS.RETURNED_BY_STATE },
+          ]),
         );
         const { data } = await fetchDashboard();
         expect(findCompletionItem(data, STATE_DASHBOARD_FORM_KEY.ANNUAL_ACCOUNTS).completed).toBe(0);
@@ -911,11 +918,8 @@ describe('StateDashboardService', () => {
       it('prevents false eligibility when all four available forms are completed', async () => {
         annualAccountModel.find.mockReturnValue(
           queryResult([
-            {
-              ulb: activeUlbIds[0],
-              auditedData: { form_status_id: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA },
-              unauditedData: { form_status_id: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA },
-            },
+            { ulb: activeUlbIds[0], sectionType: 'audited', form_status_id: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA },
+            { ulb: activeUlbIds[0], sectionType: 'unaudited', form_status_id: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA },
           ]),
         );
         bankAccountModel.find.mockReturnValue(
@@ -942,8 +946,8 @@ describe('StateDashboardService', () => {
       it('uses unique ULB counts', async () => {
         annualAccountModel.find.mockReturnValue(
           queryResult([
-            { ulb: activeUlbIds[0], auditedData: { form_status_id: FORM_STATUS.UNDER_REVIEW_BY_STATE } },
-            { ulb: activeUlbIds[0], auditedData: { form_status_id: FORM_STATUS.UNDER_REVIEW_BY_STATE } },
+            { ulb: activeUlbIds[0], sectionType: 'audited', form_status_id: FORM_STATUS.UNDER_REVIEW_BY_STATE },
+            { ulb: activeUlbIds[0], sectionType: 'audited', form_status_id: FORM_STATUS.UNDER_REVIEW_BY_STATE },
           ]),
         );
         const { data } = await fetchDashboard();
@@ -1113,11 +1117,8 @@ describe('StateDashboardService', () => {
       it('does not average individual form completion percentages', async () => {
         annualAccountModel.find.mockReturnValue(
           queryResult([
-            {
-              ulb: activeUlbIds[0],
-              auditedData: { form_status_id: FORM_STATUS.UNDER_REVIEW_BY_STATE },
-              unauditedData: { form_status_id: FORM_STATUS.UNDER_REVIEW_BY_STATE },
-            },
+            { ulb: activeUlbIds[0], sectionType: 'audited', form_status_id: FORM_STATUS.UNDER_REVIEW_BY_STATE },
+            { ulb: activeUlbIds[0], sectionType: 'unaudited', form_status_id: FORM_STATUS.UNDER_REVIEW_BY_STATE },
           ]),
         );
         const { data } = await fetchDashboard();
@@ -1354,11 +1355,8 @@ describe('StateDashboardService', () => {
       it('keeps the first claim letter locked when four forms are acknowledged but SLB is missing', async () => {
         annualAccountModel.find.mockReturnValue(
           queryResult([
-            {
-              ulb: activeUlbIds[0],
-              auditedData: { form_status_id: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA },
-              unauditedData: { form_status_id: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA },
-            },
+            { ulb: activeUlbIds[0], sectionType: 'audited', form_status_id: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA },
+            { ulb: activeUlbIds[0], sectionType: 'unaudited', form_status_id: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA },
           ]),
         );
         bankAccountModel.find.mockReturnValue(

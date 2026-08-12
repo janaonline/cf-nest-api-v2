@@ -195,17 +195,20 @@ export class XviFcService {
     const ulb = new Types.ObjectId(ulbId);
     const designYear = new Types.ObjectId(designYearId);
 
-    const [annualAccount, disclosure, bankAccount] = await Promise.all([
+    const [annualAccounts, disclosure, bankAccount] = await Promise.all([
       this.annualAccountModel
-        .findOne({ ulb, design_year: designYear })
-        .select(
-          'auditedData.form_status auditedData.form_status_id unauditedData.form_status unauditedData.form_status_id',
-        )
+        .find({ ulb, design_year: designYear })
+        .select('sectionType form_status form_status_id')
         .lean()
         .exec(),
       this.disclosureModel.findOne({ ulb, designYear }).select('formStatus').lean().exec(),
       this.bankAccountModel.findOne({ ulb, designYear }).select('currentFormStatus').lean().exec(),
     ]);
+
+    // 'audited' is always the {ulb, design_year} anchor — its _id is what every other
+    // annual-account endpoint hands back as annualAccountId (see AnnualAccountsService).
+    const auditedDoc = annualAccounts.find((a) => a.sectionType === 'audited');
+    const unauditedDoc = annualAccounts.find((a) => a.sectionType === 'unaudited');
 
     const sectionStatus = (section: Record<string, unknown> | undefined | null) => ({
       form_status: (section?.['form_status'] ?? AnnualAccountFormStatus.NOT_STARTED) as AnnualAccountFormStatus,
@@ -218,13 +221,9 @@ export class XviFcService {
       FORM_STATUS.NOT_STARTED;
 
     return {
-      annualAccountId: (annualAccount as Record<string, unknown> | null)?.['_id']?.toString() ?? null,
-      auditedData: sectionStatus(
-        (annualAccount as Record<string, unknown> | null)?.['auditedData'] as Record<string, unknown>,
-      ),
-      unauditedData: sectionStatus(
-        (annualAccount as Record<string, unknown> | null)?.['unauditedData'] as Record<string, unknown>,
-      ),
+      annualAccountId: auditedDoc?._id?.toString() ?? null,
+      auditedData: sectionStatus(auditedDoc as Record<string, unknown> | undefined),
+      unauditedData: sectionStatus(unauditedDoc as Record<string, unknown> | undefined),
       unspentBalanceDisclosure: {
         form_status: isSubmitted ? 'SUBMITTED' : 'NOT_STARTED',
         form_status_id: null,
