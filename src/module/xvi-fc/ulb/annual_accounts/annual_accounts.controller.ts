@@ -48,9 +48,13 @@ export class AnnualAccountsController {
   findByUlbAndYear(
     @Param('ulbId', ParseObjectIdPipe) ulbId: string,
     @Param('designYearId', ParseObjectIdPipe) designYearId: string,
+    @Query('section') section: string,
     @CurrentUser() user: AuthUser,
   ) {
-    return this.annualAccountsService.findByUlbAndYear(ulbId, designYearId, user);
+    if (section !== 'auditedData' && section !== 'unauditedData') {
+      throw new BadRequestException('section must be "auditedData" or "unauditedData"');
+    }
+    return this.annualAccountsService.findByUlbAndYear(ulbId, designYearId, section, user);
   }
 
   @Get('state/ulb-submissions')
@@ -68,13 +72,27 @@ export class AnnualAccountsController {
   }
 
   @Get(':id')
-  getDetails(@Param('id', ParseObjectIdPipe) id: string, @CurrentUser() user: AuthUser) {
-    return this.annualAccountsService.getDetails(id, user);
+  getDetails(
+    @Param('id', ParseObjectIdPipe) id: string,
+    @Query('section') section: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    if (section !== 'auditedData' && section !== 'unauditedData') {
+      throw new BadRequestException('section must be "auditedData" or "unauditedData"');
+    }
+    return this.annualAccountsService.getDetails(id, section, user);
   }
 
   @Get(':id/status')
-  getProcessingStatus(@Param('id', ParseObjectIdPipe) id: string, @CurrentUser() user: AuthUser) {
-    return this.annualAccountsService.getProcessingStatus(id, user);
+  getProcessingStatus(
+    @Param('id', ParseObjectIdPipe) id: string,
+    @Query('section') section: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    if (section !== 'auditedData' && section !== 'unauditedData') {
+      throw new BadRequestException('section must be "auditedData" or "unauditedData"');
+    }
+    return this.annualAccountsService.getProcessingStatus(id, section, user);
   }
 
   @Get(':id/logs')
