@@ -129,6 +129,90 @@ describe('AnnualAccountsService', () => {
     expect(service).toBeDefined();
   });
 
+  describe('getProcessingStatus / getDetails / findByUlbAndYear — single-section, data field', () => {
+    const ACCOUNT_ID = '507f1f77bcf86cd799439014';
+    const ULB_ID = '507f1f77bcf86cd799439011';
+    const YEAR_ID = '507f1f77bcf86cd799439013';
+    const user: AuthUser = { _id: 'user-1', role: 'ADMIN', scope: 'ADMIN' } as AuthUser;
+
+    const auditedAnchor = {
+      _id: ACCOUNT_ID,
+      ulb: ULB_ID,
+      design_year: YEAR_ID,
+      sectionType: 'audited',
+      form_status: 'UNDER_REVIEW_BY_STATE',
+      form_status_id: 3,
+      documents: [{ docId: 'auditors-report', processingStatus: 'PASSED', stateDecision: null }],
+    };
+
+    it('getProcessingStatus resolves the requested section and returns it under `data`, no sibling fetch for auditedData', async () => {
+      mockAnnualAccountModel.findById.mockReturnValue(mockQuery(auditedAnchor));
+      mockUlbModel.findById.mockReturnValue(mockQuery({ name: 'Test ULB', code: 'TU1' }));
+
+      const result = await service.getProcessingStatus(ACCOUNT_ID, 'auditedData', user);
+
+      expect(mockAnnualAccountModel.findOne).not.toHaveBeenCalled();
+      expect(result.annualAccountId).toBe(ACCOUNT_ID);
+      expect(result.ulbName).toBe('Test ULB');
+      expect(result.data.form_status).toBe('UNDER_REVIEW_BY_STATE');
+      expect('auditedData' in result).toBe(false);
+      expect('unauditedData' in result).toBe(false);
+    });
+
+    it('getProcessingStatus looks up the unaudited sibling by {ulb, design_year, sectionType} and returns NOT_STARTED when it does not exist yet', async () => {
+      mockAnnualAccountModel.findById.mockReturnValue(mockQuery(auditedAnchor));
+      mockAnnualAccountModel.findOne.mockReturnValue(mockQuery(null));
+      mockUlbModel.findById.mockReturnValue(mockQuery({ name: 'Test ULB', code: 'TU1' }));
+
+      const result = await service.getProcessingStatus(ACCOUNT_ID, 'unauditedData', user);
+
+      expect(mockAnnualAccountModel.findOne).toHaveBeenCalledWith(
+        expect.objectContaining({ ulb: ULB_ID, design_year: YEAR_ID, sectionType: 'unaudited' }),
+      );
+      expect(result.data.form_status).toBe('NOT_STARTED');
+      expect(result.data.documents).toEqual([]);
+    });
+
+    it('getDetails returns {annualAccountId, data} for the resolved section, S3 keys stripped', async () => {
+      mockAnnualAccountModel.findById.mockReturnValue(
+        mockQuery({
+          ...auditedAnchor,
+          documents: [
+            {
+              docId: 'auditors-report',
+              currentUpload: { file: { originalName: 'a.pdf', s3Key: 'secret/path.pdf' } },
+            },
+          ],
+        }),
+      );
+
+      const result = await service.getDetails(ACCOUNT_ID, 'auditedData', user);
+
+      expect(result.annualAccountId).toBe(ACCOUNT_ID);
+      expect(result.data.documents[0].currentUpload.file.s3Key).toBeUndefined();
+      expect('auditedData' in result).toBe(false);
+    });
+
+    it('findByUlbAndYear always looks up the audited anchor regardless of the requested section, then delegates', async () => {
+      mockAnnualAccountModel.findOne.mockReturnValue(mockQuery(auditedAnchor));
+      mockAnnualAccountModel.findById.mockReturnValue(mockQuery(auditedAnchor));
+      mockUlbModel.findById.mockReturnValue(mockQuery({ name: 'Test ULB', code: 'TU1' }));
+
+      const result = await service.findByUlbAndYear(ULB_ID, YEAR_ID, 'unauditedData', user);
+
+      expect(mockAnnualAccountModel.findOne).toHaveBeenCalledWith(expect.objectContaining({ sectionType: 'audited' }));
+      expect(result).not.toBeNull();
+    });
+
+    it('findByUlbAndYear returns null when no annual account exists yet for this ulb+year', async () => {
+      mockAnnualAccountModel.findOne.mockReturnValue(mockQuery(null));
+
+      const result = await service.findByUlbAndYear(ULB_ID, YEAR_ID, 'auditedData', user);
+
+      expect(result).toBeNull();
+    });
+  });
+
   describe('confirmUpload — OCR skip for optional, direct-to-DB documents', () => {
     const USER_ID = '507f1f77bcf86cd799439099';
     const ULB_ID = '507f1f77bcf86cd799439011';
@@ -152,6 +236,11 @@ describe('AnnualAccountsService', () => {
     beforeEach(() => {
       mockAnnualAccountModel.findOneAndUpdate.mockReturnValue(mockQuery({ _id: { toString: () => ACCOUNT_ID } }));
       mockAnnualAccountModel.findOne.mockReturnValue(mockQuery(null));
+      // upsertDocumentSlot resolves the target physical document via findById first — 'auditedData'
+      // uploads always land on the anchor itself, no sibling lookup needed.
+      mockAnnualAccountModel.findById.mockReturnValue(
+        mockQuery({ _id: ACCOUNT_ID, ulb: ULB_ID, state: STATE_ID, design_year: YEAR_ID, sectionType: 'audited' }),
+      );
       mockUlbModel.findById.mockReturnValue(mockQuery({ state: { toString: () => STATE_ID } }));
     });
 
@@ -208,13 +297,12 @@ describe('AnnualAccountsService', () => {
               _id: ACCOUNT_ID,
               ulb: '507f1f77bcf86cd799439011',
               design_year: YEAR_ID,
-              auditedData: {
-                form_status_id: 2,
-                documents: [
-                  { docId: 'auditors-report', processingStatus: 'PASSED', stateDecision: null },
-                  { docId: 'notes-to-accounts', processingStatus: 'NOT_STARTED', stateDecision: null },
-                ],
-              },
+              sectionType: 'audited',
+              form_status_id: 2,
+              documents: [
+                { docId: 'auditors-report', processingStatus: 'PASSED', stateDecision: null },
+                { docId: 'notes-to-accounts', processingStatus: 'NOT_STARTED', stateDecision: null },
+              ],
             }),
         }),
       });
@@ -240,11 +328,9 @@ describe('AnnualAccountsService', () => {
         mockQuery({
           _id: ACCOUNT_ID,
           ulb: '507f1f77bcf86cd799439011',
-          auditedData: {
-            form_status: 'UNDER_REVIEW_BY_STATE',
-            documents: [{ docId: 'auditors-report', processingStatus: 'PASSED', stateDecision: null }],
-          },
-          unauditedData: null,
+          sectionType: 'audited',
+          form_status: 'UNDER_REVIEW_BY_STATE',
+          documents: [{ docId: 'auditors-report', processingStatus: 'PASSED', stateDecision: null }],
         }),
       );
 
@@ -259,9 +345,53 @@ describe('AnnualAccountsService', () => {
         Record<string, unknown>,
         MongoUpdateCall,
       ];
-      expect(filter).toMatchObject({ 'auditedData.documents.docId': 'auditors-report' });
+      expect(filter).toMatchObject({ 'documents.docId': 'auditors-report' });
       expect(update.$push).toBeUndefined();
-      expect(update.$set?.['auditedData.documents.$.stateDecision']).toMatchObject({ status: 'APPROVED' });
+      expect(update.$set?.['documents.$.stateDecision']).toMatchObject({ status: 'APPROVED' });
+    });
+
+    it("resolves the 'unauditedData' sibling by {ulb, design_year, sectionType} when the anchor is 'audited'", async () => {
+      mockAnnualAccountModel.findById.mockReturnValue(
+        mockQuery({ _id: ACCOUNT_ID, ulb: '507f1f77bcf86cd799439011', design_year: 'year-1', sectionType: 'audited' }),
+      );
+      mockAnnualAccountModel.findOne.mockReturnValue(
+        mockQuery({
+          _id: 'unaudited-doc-id',
+          ulb: '507f1f77bcf86cd799439011',
+          sectionType: 'unaudited',
+          form_status: 'UNDER_REVIEW_BY_STATE',
+          documents: [{ docId: 'auditors-report', processingStatus: 'PASSED', stateDecision: null }],
+        }),
+      );
+
+      await service.decideDocument(
+        ACCOUNT_ID,
+        'auditors-report',
+        { section: 'unauditedData', decision: 'APPROVED' },
+        adminUser,
+      );
+
+      expect(mockAnnualAccountModel.findOne).toHaveBeenCalledWith(
+        expect.objectContaining({ ulb: '507f1f77bcf86cd799439011', design_year: 'year-1', sectionType: 'unaudited' }),
+      );
+      const [filter] = mockAnnualAccountModel.updateOne.mock.calls[0] as [Record<string, unknown>, MongoUpdateCall];
+      expect(filter).toMatchObject({ _id: 'unaudited-doc-id', 'documents.docId': 'auditors-report' });
+    });
+
+    it("throws Section not found when the 'unauditedData' sibling has never been created", async () => {
+      mockAnnualAccountModel.findById.mockReturnValue(
+        mockQuery({ _id: ACCOUNT_ID, ulb: '507f1f77bcf86cd799439011', design_year: 'year-1', sectionType: 'audited' }),
+      );
+      mockAnnualAccountModel.findOne.mockReturnValue(mockQuery(null));
+
+      await expect(
+        service.decideDocument(
+          ACCOUNT_ID,
+          'auditors-report',
+          { section: 'unauditedData', decision: 'APPROVED' },
+          adminUser,
+        ),
+      ).rejects.toThrow('Section not found');
     });
   });
 
@@ -273,17 +403,15 @@ describe('AnnualAccountsService', () => {
       mockQuery({
         _id: ACCOUNT_ID,
         ulb: '507f1f77bcf86cd799439011',
-        auditedData: {
-          form_status,
-          documents: [
-            {
-              docId: 'auditors-report',
-              processingStatus: 'PASSED',
-              stateDecision: { status: 'APPROVED', note: null, decidedAt: new Date() },
-            },
-          ],
-        },
-        unauditedData: null,
+        sectionType: 'audited',
+        form_status,
+        documents: [
+          {
+            docId: 'auditors-report',
+            processingStatus: 'PASSED',
+            stateDecision: { status: 'APPROVED', note: null, decidedAt: new Date() },
+          },
+        ],
       });
 
     it('resets stateDecision to null while the section is still under state review', async () => {
@@ -292,7 +420,7 @@ describe('AnnualAccountsService', () => {
       await service.undoDocumentDecision(ACCOUNT_ID, 'auditedData', 'auditors-report', adminUser);
 
       const [, update] = mockAnnualAccountModel.updateOne.mock.calls[0] as [Record<string, unknown>, MongoUpdateCall];
-      expect(update.$set?.['auditedData.documents.$.stateDecision']).toBeNull();
+      expect(update.$set?.['documents.$.stateDecision']).toBeNull();
     });
 
     it('is blocked once the section has been finalized past state review', async () => {
@@ -313,18 +441,16 @@ describe('AnnualAccountsService', () => {
       mockQuery({
         _id: ACCOUNT_ID,
         ulb: ULB_ID,
-        auditedData: {
-          form_status: 'IN_PROGRESS',
-          documents: [
-            {
-              docId: 'auditors-report',
-              processingStatus: 'FAILED',
-              currentUpload: { uploadId: 'upload-1', ocrInfo },
-              stateDecision: null,
-            },
-          ],
-        },
-        unauditedData: null,
+        sectionType: 'audited',
+        form_status: 'IN_PROGRESS',
+        documents: [
+          {
+            docId: 'auditors-report',
+            processingStatus: 'FAILED',
+            currentUpload: { uploadId: 'upload-1', ocrInfo },
+            stateDecision: null,
+          },
+        ],
       });
 
     it('rejects non-ULB users', async () => {
@@ -372,9 +498,9 @@ describe('AnnualAccountsService', () => {
         Record<string, unknown>,
         MongoUpdateCall,
       ];
-      expect(filter).toMatchObject({ 'auditedData.documents.docId': 'auditors-report' });
-      expect(update.$set?.['auditedData.documents.$.currentUpload.ocrInfo.isManualReviewRequested']).toBe(true);
-      expect(update.$set?.['auditedData.documents.$.manualReviewDecision']).toBeNull();
+      expect(filter).toMatchObject({ 'documents.docId': 'auditors-report' });
+      expect(update.$set?.['documents.$.currentUpload.ocrInfo.isManualReviewRequested']).toBe(true);
+      expect(update.$set?.['documents.$.manualReviewDecision']).toBeNull();
       expect(mockUploadHistoryModel.updateOne).toHaveBeenCalledWith(
         { uploadId: 'upload-1' },
         { $set: expect.objectContaining({ 'ocrInfo.isManualReviewRequested': true }) },
@@ -392,23 +518,21 @@ describe('AnnualAccountsService', () => {
         _id: ACCOUNT_ID,
         ulb: ULB_ID,
         design_year: 'year-1',
-        auditedData: {
-          form_status: 'IN_PROGRESS',
-          documents: [
-            {
-              docId: 'auditors-report',
-              processingStatus: 'FAILED',
-              currentUpload: {
-                uploadId: 'upload-1',
-                file: { path: 's3/key.pdf' },
-                ocrInfo: { validationStatus: 'FAIL', isManualReviewRequested: true },
-              },
-              manualReviewDecision: null,
-              ...overrides,
+        sectionType: 'audited',
+        form_status: 'IN_PROGRESS',
+        documents: [
+          {
+            docId: 'auditors-report',
+            processingStatus: 'FAILED',
+            currentUpload: {
+              uploadId: 'upload-1',
+              file: { path: 's3/key.pdf' },
+              ocrInfo: { validationStatus: 'FAIL', isManualReviewRequested: true },
             },
-          ],
-        },
-        unauditedData: null,
+            manualReviewDecision: null,
+            ...overrides,
+          },
+        ],
       });
 
     it('rejects non-ADMIN users', async () => {
@@ -445,9 +569,9 @@ describe('AnnualAccountsService', () => {
         Record<string, unknown>,
         MongoUpdateCall,
       ];
-      expect(filter).toMatchObject({ 'auditedData.documents.docId': 'auditors-report' });
-      expect(update.$set?.['auditedData.documents.$.processingStatus']).toBe('PASSED');
-      expect(update.$set?.['auditedData.documents.$.manualReviewDecision']).toMatchObject({ status: 'APPROVED' });
+      expect(filter).toMatchObject({ 'documents.docId': 'auditors-report' });
+      expect(update.$set?.['documents.$.processingStatus']).toBe('PASSED');
+      expect(update.$set?.['documents.$.manualReviewDecision']).toMatchObject({ status: 'APPROVED' });
       expect(mockFormLogModel.create).toHaveBeenCalledWith(
         expect.objectContaining({ actorStage: 'ADMIN', action: 'APPROVED' }),
       );
@@ -465,8 +589,8 @@ describe('AnnualAccountsService', () => {
       );
 
       const [, update] = mockAnnualAccountModel.updateOne.mock.calls[0] as [Record<string, unknown>, MongoUpdateCall];
-      expect(update.$set?.['auditedData.documents.$.processingStatus']).toBeUndefined();
-      expect(update.$set?.['auditedData.documents.$.manualReviewDecision']).toMatchObject({ status: 'RETURNED' });
+      expect(update.$set?.['documents.$.processingStatus']).toBeUndefined();
+      expect(update.$set?.['documents.$.manualReviewDecision']).toMatchObject({ status: 'RETURNED' });
     });
   });
 
