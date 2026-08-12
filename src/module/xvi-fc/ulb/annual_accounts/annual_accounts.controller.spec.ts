@@ -169,6 +169,64 @@ describe('AnnualAccountsController', () => {
     expect(spy).toHaveBeenCalledWith('id-1', 'auditedData', 'doc-1', { decision: 'APPROVED' }, testUser, null, null);
   });
 
+  it('getDetails rejects a section other than auditedData/unauditedData', () => {
+    expect(() => controller.getDetails('id-1', 'somethingElse', testUser)).toThrow(
+      'section must be "auditedData" or "unauditedData"',
+    );
+  });
+
+  it('getDetails delegates to the service for a valid section', async () => {
+    const spy = jest
+      .spyOn(controller['annualAccountsService'], 'getDetails')
+      .mockImplementation(
+        () =>
+          Promise.resolve({ annualAccountId: 'id-1', data: null }) as unknown as ReturnType<
+            AnnualAccountsService['getDetails']
+          >,
+      );
+
+    await controller.getDetails('id-1', 'auditedData', testUser);
+
+    expect(spy).toHaveBeenCalledWith('id-1', 'auditedData', testUser);
+  });
+
+  it('getProcessingStatus rejects a section other than auditedData/unauditedData', () => {
+    expect(() => controller.getProcessingStatus('id-1', 'somethingElse', testUser)).toThrow(
+      'section must be "auditedData" or "unauditedData"',
+    );
+  });
+
+  it('getProcessingStatus delegates to the service for a valid section', async () => {
+    const spy = jest
+      .spyOn(controller['annualAccountsService'], 'getProcessingStatus')
+      .mockImplementation(
+        () =>
+          Promise.resolve({ annualAccountId: 'id-1', ulbName: null, ulbCode: null, data: null }) as unknown as ReturnType<
+            AnnualAccountsService['getProcessingStatus']
+          >,
+      );
+
+    await controller.getProcessingStatus('id-1', 'unauditedData', testUser);
+
+    expect(spy).toHaveBeenCalledWith('id-1', 'unauditedData', testUser);
+  });
+
+  it('findByUlbAndYear rejects a section other than auditedData/unauditedData', () => {
+    expect(() => controller.findByUlbAndYear('ulb-1', 'year-1', 'somethingElse', testUser)).toThrow(
+      'section must be "auditedData" or "unauditedData"',
+    );
+  });
+
+  it('findByUlbAndYear delegates to the service for a valid section', async () => {
+    const spy = jest
+      .spyOn(controller['annualAccountsService'], 'findByUlbAndYear')
+      .mockImplementation(() => Promise.resolve(null) as unknown as ReturnType<AnnualAccountsService['findByUlbAndYear']>);
+
+    await controller.findByUlbAndYear('ulb-1', 'year-1', 'auditedData', testUser);
+
+    expect(spy).toHaveBeenCalledWith('ulb-1', 'year-1', 'auditedData', testUser);
+  });
+
   it('getManualReviewQueue delegates to the service', async () => {
     const spy = jest
       .spyOn(controller['annualAccountsService'], 'getManualReviewQueue')
