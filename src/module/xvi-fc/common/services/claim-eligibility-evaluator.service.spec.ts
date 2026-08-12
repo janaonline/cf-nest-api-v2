@@ -124,12 +124,14 @@ describe('ClaimEligibilityEvaluatorService', () => {
     expect(result.evidence).toMatchObject({ resolvedFormStatus: null, sourceFormDocumentId: null });
   });
 
-  it('copies displayLabel/displayDescription from the config onto both PASSED and not-found results', async () => {
+  it('copies displayLabel/displayDescription/checklistRoute/checklistSummary from the config onto both PASSED and not-found results', async () => {
     const withDisplayCopy = sourceFormJson({
       claimEligibility: {
         ...devolutionConfig,
         displayLabel: 'Devolution Formula',
         displayDescription: 'Devolution Formula must be submitted by the state.',
+        checklistRoute: '../ulb-wise-allocation',
+        checklistSummary: 'Upload the Excel file showing grant amounts and devolution formula for each ULB',
       },
     });
 
@@ -137,20 +139,30 @@ describe('ClaimEligibilityEvaluatorService', () => {
     const passed = await service.evaluate(withDisplayCopy, { stateId, designYearId, installment: 1 });
     expect(passed.displayLabel).toBe('Devolution Formula');
     expect(passed.displayDescription).toBe('Devolution Formula must be submitted by the state.');
+    expect(passed.checklistRoute).toBe('../ulb-wise-allocation');
+    expect(passed.checklistSummary).toBe(
+      'Upload the Excel file showing grant amounts and devolution formula for each ULB',
+    );
 
     findOne.mockResolvedValue(null);
     const notFound = await service.evaluate(withDisplayCopy, { stateId, designYearId, installment: 1 });
     expect(notFound.displayLabel).toBe('Devolution Formula');
     expect(notFound.displayDescription).toBe('Devolution Formula must be submitted by the state.');
+    expect(notFound.checklistRoute).toBe('../ulb-wise-allocation');
+    expect(notFound.checklistSummary).toBe(
+      'Upload the Excel file showing grant amounts and devolution formula for each ULB',
+    );
   });
 
-  it('leaves displayLabel/displayDescription undefined when the config has neither', async () => {
+  it('leaves displayLabel/displayDescription/checklistRoute/checklistSummary undefined when the config has none', async () => {
     findOne.mockResolvedValue({ _id: new Types.ObjectId(), currentFormStatus: 5 });
 
     const result = await service.evaluate(sourceFormJson(), { stateId, designYearId, installment: 1 });
 
     expect(result.displayLabel).toBeUndefined();
     expect(result.displayDescription).toBeUndefined();
+    expect(result.checklistRoute).toBeUndefined();
+    expect(result.checklistSummary).toBeUndefined();
   });
 
   it('never branches on a hardcoded formId anywhere in its evaluation logic', () => {
