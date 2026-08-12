@@ -22,6 +22,7 @@ import { ExpectedUlbSetService } from 'src/module/xvi-fc/common/services/expecte
 import type { FieldConfig, FieldSupportingContent } from 'src/module/xvi-fc/common/types/field-config.type';
 import { YearIdToLabel } from 'src/core/constants/years';
 import { resolvePriorFcCycleLabel } from 'src/module/xvi-fc/state/fc-unspent-declaration/helpers/fc-unspent-declaration-cycle.helpers';
+import { interpolateTemplateTokens } from 'src/module/xvi-fc/common/utils/template-tokens.util';
 import {
   ClaimLetterBatch,
   ClaimLetterBatchDocument,
@@ -120,11 +121,23 @@ export class ClaimLetterService {
     const expectedUlbIds = expectedUlbs.map((u) => u.ulbId);
     const { batchSlotsUsed, nextBatchNumber } = batchSlotInfo;
 
+    // Resolved once, reused both on the summary field below and to interpolate any
+    // `{{priorFcCycleLabel}}` placeholder in DB-authored checklist copy (see interpolateTemplateTokens).
+    const priorFcCycleLabel = resolvePriorFcCycleLabel(YearIdToLabel[yearId] ?? '');
+    const tokens = { priorFcCycleLabel };
+
     // Elected Body / FC Unspent: fold their row-level tally into the same checklist line as the
     // state's own form-submission status, rather than a second, separate entry for one requirement.
+    // Also substitutes any `{{token}}` placeholder (e.g. `{{priorFcCycleLabel}}`) DB-authored
+    // checklistSummary/displayDescription copy may contain — generic, not per-formType.
     const sourcesWithUlbBreakdown = gate.sources.map((source) => {
       const ulbBreakdown = ulbLevelEligibility.rowTalliesByFormId.get(source.formId);
-      return ulbBreakdown ? { ...source, ulbBreakdown } : source;
+      return {
+        ...source,
+        ...(ulbBreakdown ? { ulbBreakdown } : {}),
+        checklistSummary: interpolateTemplateTokens(source.checklistSummary, tokens),
+        displayDescription: interpolateTemplateTokens(source.displayDescription, tokens),
+      };
     });
 
     const ulbReadiness = {
@@ -135,7 +148,7 @@ export class ClaimLetterService {
     const summary: ClaimLetterEligibilitySummary = {
       stateName,
       installment: installment as 1,
-      priorFcCycleLabel: resolvePriorFcCycleLabel(YearIdToLabel[yearId] ?? ''),
+      priorFcCycleLabel,
       stateLevelGate: { passed: gate.passed, sources: sourcesWithUlbBreakdown },
       expectedUlbCount: expectedUlbs.length,
       batchSlotsUsed,

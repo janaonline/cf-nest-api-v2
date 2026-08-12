@@ -191,6 +191,32 @@ describe('ClaimLetterService', () => {
       expect(result.data?.priorFcCycleLabel).toBe('14th FC');
     });
 
+    it('interpolates {{priorFcCycleLabel}} in checklistSummary/displayDescription for stateLevelGate sources', async () => {
+      const realYearId = Object.keys(YearIdToLabel).find((id) => YearIdToLabel[id] === '2026-27')!;
+      expectedUlbSetService.resolve.mockResolvedValue([]);
+      const fcUnspentSource = {
+        formId: 25,
+        formType: 'FC_UNSPENT_STATE',
+        result: 'PASSED',
+        checklistSummary:
+          'Confirm that all ULBs in the state have submitted their {{priorFcCycleLabel}} unspent balance disclosures',
+        displayDescription: '{{priorFcCycleLabel}} Unspent Balance Declaration must be submitted by the state.',
+      };
+      eligibilityService.evaluateStateLevelGateForDisplay.mockResolvedValue({
+        sources: [fcUnspentSource],
+        passed: true,
+      });
+
+      const result = await service.getEligibilitySummary(stateId.toString(), realYearId, 1, stateUser);
+
+      // Neither field is a hardcoded '14th FC' anywhere in this test's config — the substitution
+      // comes entirely from the same resolvePriorFcCycleLabel() call priorFcCycleLabel itself uses.
+      expect(result.data?.stateLevelGate.sources[0]).toMatchObject({
+        checklistSummary: 'Confirm that all ULBs in the state have submitted their 14th FC unspent balance disclosures',
+        displayDescription: '14th FC Unspent Balance Declaration must be submitted by the state.',
+      });
+    });
+
     it('reports remainingUlbCount from resolveRemainingUlbIds, independent of ulbReadiness', async () => {
       expectedUlbSetService.resolve.mockResolvedValue([{ ulbId: '1' }, { ulbId: '2' }, { ulbId: '3' }]);
       eligibilityService.evaluateStateLevelGateForDisplay.mockResolvedValue({ sources: [], passed: true });
