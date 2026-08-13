@@ -39,6 +39,11 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
         validator: 999,
         message: 'Value cannot exceed 999 lpcd.',
       },
+      {
+        name: 'targetLessThanActual',
+        validator: null,
+        message: 'Target must be lower than the actual value.',
+      },
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
@@ -73,6 +78,11 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
         name: 'max',
         validator: 100,
         message: 'Value cannot exceed 100%.',
+      },
+      {
+        name: 'targetLessThanActual',
+        validator: null,
+        message: 'Target must be lower than the actual value.',
       },
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
@@ -109,6 +119,11 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
         validator: 100,
         message: 'Value cannot exceed 100%.',
       },
+      {
+        name: 'targetLessThanActual',
+        validator: null,
+        message: 'Target must be lower than the actual value.',
+      },
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
@@ -143,6 +158,11 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
         name: 'max',
         validator: 100,
         message: 'Value cannot exceed 100%.',
+      },
+      {
+        name: 'targetLessThanActual',
+        validator: null,
+        message: 'Target must be lower than the actual value.',
       },
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
@@ -179,6 +199,11 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
         validator: 100,
         message: 'Value cannot exceed 100%.',
       },
+      {
+        name: 'targetLessThanActual',
+        validator: null,
+        message: 'Target must be lower than the actual value.',
+      },
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
@@ -213,6 +238,11 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
         name: 'max',
         validator: 100,
         message: 'Value cannot exceed 100%.',
+      },
+      {
+        name: 'targetLessThanActual',
+        validator: null,
+        message: 'Target must be lower than the actual value.',
       },
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
@@ -249,6 +279,11 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
         validator: 100,
         message: 'Value cannot exceed 100%.',
       },
+      {
+        name: 'targetLessThanActual',
+        validator: null,
+        message: 'Target must be lower than the actual value.',
+      },
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
@@ -283,6 +318,11 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
         name: 'max',
         validator: 24,
         message: 'Value cannot exceed 24 Hours/day.',
+      },
+      {
+        name: 'targetLessThanActual',
+        validator: null,
+        message: 'Target must be lower than the actual value.',
       },
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
@@ -319,6 +359,11 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
         validator: 100,
         message: 'Value cannot exceed 100%.',
       },
+      {
+        name: 'targetLessThanActual',
+        validator: null,
+        message: 'Target must be lower than the actual value.',
+      },
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
@@ -353,6 +398,11 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
         name: 'max',
         validator: 100,
         message: 'Value cannot exceed 100%.',
+      },
+      {
+        name: 'targetLessThanActual',
+        validator: null,
+        message: 'Target must be lower than the actual value.',
       },
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
@@ -389,6 +439,11 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
         validator: 100,
         message: 'Value cannot exceed 100%.',
       },
+      {
+        name: 'targetLessThanActual',
+        validator: null,
+        message: 'Target must be lower than the actual value.',
+      },
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
@@ -423,6 +478,11 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
         name: 'max',
         validator: 100,
         message: 'Value cannot exceed 100%.',
+      },
+      {
+        name: 'targetLessThanActual',
+        validator: null,
+        message: 'Target must be lower than the actual value.',
       },
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
@@ -459,6 +519,11 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
         validator: 100,
         message: 'Value cannot exceed 100%.',
       },
+      {
+        name: 'targetLessThanActual',
+        validator: null,
+        message: 'Target must be lower than the actual value.',
+      },
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
@@ -493,6 +558,11 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
         name: 'max',
         validator: 100,
         message: 'Value cannot exceed 100%.',
+      },
+      {
+        name: 'targetLessThanActual',
+        validator: null,
+        message: 'Target must be lower than the actual value.',
       },
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
@@ -529,6 +599,11 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
         validator: 100,
         message: 'Value cannot exceed 100%.',
       },
+      {
+        name: 'targetLessThanActual',
+        validator: null,
+        message: 'Target must be lower than the actual value.',
+      },
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
@@ -563,6 +638,11 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
         name: 'max',
         validator: 100,
         message: 'Value cannot exceed 100%.',
+      },
+      {
+        name: 'targetLessThanActual',
+        validator: null,
+        message: 'Target must be lower than the actual value.',
       },
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
@@ -599,6 +679,11 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
         validator: 100,
         message: 'Value cannot exceed 100%.',
       },
+      {
+        name: 'targetLessThanActual',
+        validator: null,
+        message: 'Target must be lower than the actual value.',
+      },
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
@@ -633,6 +718,11 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
         name: 'max',
         validator: 100,
         message: 'Value cannot exceed 100%.',
+      },
+      {
+        name: 'targetLessThanActual',
+        validator: null,
+        message: 'Target must be lower than the actual value.',
       },
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
@@ -669,6 +759,11 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
         validator: 100,
         message: 'Value cannot exceed 100%.',
       },
+      {
+        name: 'targetLessThanActual',
+        validator: null,
+        message: 'Target must be lower than the actual value.',
+      },
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
@@ -703,6 +798,11 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
         name: 'max',
         validator: 100,
         message: 'Value cannot exceed 100%.',
+      },
+      {
+        name: 'targetLessThanActual',
+        validator: null,
+        message: 'Target must be lower than the actual value.',
       },
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
@@ -739,6 +839,11 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
         validator: 100,
         message: 'Value cannot exceed 100%.',
       },
+      {
+        name: 'targetLessThanActual',
+        validator: null,
+        message: 'Target must be lower than the actual value.',
+      },
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
@@ -773,6 +878,11 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
         name: 'max',
         validator: 100,
         message: 'Value cannot exceed 100%.',
+      },
+      {
+        name: 'targetLessThanActual',
+        validator: null,
+        message: 'Target must be lower than the actual value.',
       },
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
@@ -809,6 +919,11 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
         validator: 100,
         message: 'Value cannot exceed 100%.',
       },
+      {
+        name: 'targetLessThanActual',
+        validator: null,
+        message: 'Target must be lower than the actual value.',
+      },
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
@@ -843,6 +958,11 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
         name: 'max',
         validator: 100,
         message: 'Value cannot exceed 100%.',
+      },
+      {
+        name: 'targetLessThanActual',
+        validator: null,
+        message: 'Target must be lower than the actual value.',
       },
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
@@ -879,6 +999,11 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
         validator: 100,
         message: 'Value cannot exceed 100%.',
       },
+      {
+        name: 'targetLessThanActual',
+        validator: null,
+        message: 'Target must be lower than the actual value.',
+      },
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
@@ -913,6 +1038,11 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
         name: 'max',
         validator: 100,
         message: 'Value cannot exceed 100%.',
+      },
+      {
+        name: 'targetLessThanActual',
+        validator: null,
+        message: 'Target must be lower than the actual value.',
       },
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
@@ -949,6 +1079,11 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
         validator: 100,
         message: 'Value cannot exceed 100%.',
       },
+      {
+        name: 'targetLessThanActual',
+        validator: null,
+        message: 'Target must be lower than the actual value.',
+      },
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
@@ -983,6 +1118,11 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
         name: 'max',
         validator: 9999,
         message: 'Value cannot exceed 9999 Nos./Year.',
+      },
+      {
+        name: 'targetLessThanActual',
+        validator: null,
+        message: 'Target must be lower than the actual value.',
       },
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
