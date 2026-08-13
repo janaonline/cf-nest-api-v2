@@ -50,8 +50,16 @@ const VALID_ROW_EDIT_FIELDS: FieldConfig[] = [
     formFieldType: 'date',
     label: 'Date on which the elected body is in place.',
     validations: [
-      { name: 'minDate', validator: '2021-05-31', message: 'Date on which the elected body is in place cannot be before 31 May 2021.' },
-      { name: 'maxDate', validator: 'TODAY', message: 'Date on which the elected body is in place cannot be a future date.' },
+      {
+        name: 'minDate',
+        validator: '2021-05-31',
+        message: 'Date on which the elected body is in place cannot be before 31 May 2021.',
+      },
+      {
+        name: 'maxDate',
+        validator: 'TODAY',
+        message: 'Date on which the elected body is in place cannot be a future date.',
+      },
     ],
   },
   {

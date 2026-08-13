@@ -221,6 +221,16 @@ const MOCK_TYPED_ROW_EDIT_FIELDS: EulbTypedFieldConfig[] = [
     validations: [],
   },
   {
+    key: 'signedElectedbodyFile',
+    label: 'Upload Signed elected bodies list',
+    formFieldType: 'file',
+    fieldTypes: ['EULB_MAIN_FORM_FIELDS'],
+    folderPath: 'state/test/',
+    allowedFileTypes: ['pdf'],
+    maxFileSize: 20,
+    validations: [{ name: 'required', validator: null, message: 'This field is required.' }],
+  },
+  {
     key: 'censusCode',
     label: 'Census Code',
     formFieldType: 'text',
@@ -254,8 +264,16 @@ const MOCK_TYPED_ROW_EDIT_FIELDS: EulbTypedFieldConfig[] = [
     minDate: '2021-05-31',
     maxDate: 'TODAY',
     validations: [
-      { name: 'minDate', validator: '2021-05-31', message: 'Date on which the elected body is in place cannot be before 31 May 2021.' },
-      { name: 'maxDate', validator: 'TODAY', message: 'Date on which the elected body is in place cannot be a future date.' },
+      {
+        name: 'minDate',
+        validator: '2021-05-31',
+        message: 'Date on which the elected body is in place cannot be before 31 May 2021.',
+      },
+      {
+        name: 'maxDate',
+        validator: 'TODAY',
+        message: 'Date on which the elected body is in place cannot be a future date.',
+      },
     ],
   },
   {
@@ -1028,6 +1046,43 @@ describe('ElectedUrbanLocalBodiesService', () => {
       expect((createArg['electedBodyExcelFile'] as { pageCount?: number | null }).pageCount).toBeNull();
     });
 
+    it('accepts and persists data.signedElectedbodyFile', async () => {
+      await service.saveDraft(
+        {
+          stateId: stateOid.toString(),
+          yearId: yearOid.toString(),
+          data: {
+            signedElectedbodyFile: {
+              originalName: 'signed.pdf',
+              path: 'state/signed.pdf',
+              mimeType: 'application/pdf',
+              sizeKb: 500,
+              createdAt: '2026-01-01T00:00:00.000Z',
+            },
+            checkboxConfirmation: true,
+          },
+        },
+        adminUser,
+        '',
+        '',
+      );
+
+      const createArg = (mockFormModel.create.mock.calls as unknown[][])[0][0] as Record<string, unknown>;
+      expect((createArg['signedElectedbodyFile'] as { originalName?: string }).originalName).toBe('signed.pdf');
+    });
+
+    it('leaves signedElectedbodyFile untouched when the client omits it from the draft payload', async () => {
+      await service.saveDraft(
+        { stateId: stateOid.toString(), yearId: yearOid.toString(), data: { checkboxConfirmation: true } },
+        adminUser,
+        '',
+        '',
+      );
+
+      const createArg = (mockFormModel.create.mock.calls as unknown[][])[0][0] as Record<string, unknown>;
+      expect(createArg['signedElectedbodyFile']).toBeUndefined();
+    });
+
     it('does not throw a mismatch error when client ulbCount differs from saved excelRowCount', async () => {
       // Prior behavior: mismatch between ulbCount and excelRowCount was a 400.
       // New behavior: ulbCount is backend-owned, so no mismatch check exists.
@@ -1086,6 +1141,13 @@ describe('ElectedUrbanLocalBodiesService', () => {
           path: 'state/test.xlsx',
           mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
           sizeKb: 0.9765625,
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
+        signedElectedbodyFile: {
+          originalName: 'signed.pdf',
+          path: 'state/signed.pdf',
+          mimeType: 'application/pdf',
+          sizeKb: 500,
           createdAt: '2026-01-01T00:00:00.000Z',
         },
         checkboxConfirmation: true,
@@ -1169,6 +1231,65 @@ describe('ElectedUrbanLocalBodiesService', () => {
         $set: Record<string, unknown>;
       };
       expect((updateArg.$set['electedBodyExcelFile'] as { pageCount?: number | null }).pageCount).toBeNull();
+    });
+
+    it('persists data.signedElectedbodyFile in the final-submit update', async () => {
+      await service.finalSubmit(baseDto, adminUser, '', '');
+
+      const updateArg = (mockFormModel.findOneAndUpdate.mock.calls as unknown[][])[0][1] as {
+        $set: Record<string, unknown>;
+      };
+      expect((updateArg.$set['signedElectedbodyFile'] as { originalName?: string }).originalName).toBe('signed.pdf');
+    });
+
+    it('rejects final submit when signedElectedbodyFile is missing (required field validator fires)', async () => {
+      const mockValidatorRejecting = {
+        validateFinalSubmitAndBuildPayload: jest.fn().mockReturnValue({
+          isValid: false,
+          errors: {
+            signedElectedbodyFile: [
+              { field: 'signedElectedbodyFile', code: 'required', message: 'This field is required.' },
+            ],
+          },
+          sanitizedPayload: {},
+        }),
+      };
+      const module: TestingModule = await Test.createTestingModule({
+        providers: [
+          ElectedUrbanLocalBodiesService,
+          ExcelService,
+          { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: mockFormModel },
+          { provide: getModelToken(ElectedUrbanLocalBodiesRow.name), useValue: mockRowModel },
+          { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+          { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
+          { provide: DynamicFormValidationService, useValue: mockValidatorRejecting },
+          { provide: XvifcFormActorsService, useValue: { buildActorsAndStateName: jest.fn() } },
+          { provide: FileTokenService, useValue: null },
+          { provide: ConfigService, useValue: null },
+          { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
+          FileInfoNormalizerService,
+          { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
+        ],
+      }).compile();
+      const rejectingService = module.get<ElectedUrbanLocalBodiesService>(ElectedUrbanLocalBodiesService);
+
+      let caught: BadRequestException | undefined;
+      try {
+        await rejectingService.finalSubmit(
+          { ...baseDto, data: { ...baseDto.data, signedElectedbodyFile: undefined as never } },
+          adminUser,
+          '',
+          '',
+        );
+      } catch (e) {
+        caught = e as BadRequestException;
+      }
+
+      expect(caught).toBeDefined();
+      const response = caught!.getResponse() as { errors: Record<string, Array<{ code: string }>> };
+      expect(response.errors['signedElectedbodyFile']).toEqual(
+        expect.arrayContaining([expect.objectContaining({ code: 'required' })]),
+      );
     });
 
     it('blocks with electedBodyExcelFile.newUlbsAdded when extraExcelRowCount > 0', async () => {

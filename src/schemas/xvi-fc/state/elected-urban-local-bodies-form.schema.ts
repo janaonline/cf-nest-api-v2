@@ -78,6 +78,9 @@ export class ElectedUrbanLocalBodiesForm {
   electedBodyExcelFile?: FileInfo;
 
   @Prop({ type: FileInfoSchema })
+  signedElectedbodyFile?: FileInfo;
+
+  @Prop({ type: FileInfoSchema })
   errorExcelFile?: FileInfo;
 
   @Prop({ type: [EulbExcludedRowSubdocSchema], default: [] })
