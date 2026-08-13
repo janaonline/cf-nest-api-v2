@@ -147,6 +147,10 @@ export class XviFcService {
       if (doc.icon) item.icon = doc.icon;
       if (doc.routerLink?.length) item.routerLink = doc.routerLink;
       if (doc.featureKey) item.featureKey = doc.featureKey;
+      if (doc.url) {
+        item.url = doc.url;
+        if (doc.target) item.target = doc.target;
+      }
 
       if (doc.type === 'group') {
         item.items = children
@@ -156,6 +160,10 @@ export class XviFcService {
             const child: SideMenuItemDto = { label: c.name };
             if (c.icon) child.icon = c.icon;
             if (c.featureKey) child.featureKey = c.featureKey;
+            if (c.url) {
+              child.url = c.url;
+              if (c.target) child.target = c.target;
+            }
             return child;
           });
       }

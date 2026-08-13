@@ -53,7 +53,8 @@ export class AnnualAccountOcrProcessor extends WorkerHost {
   }
 
   async process(job: Job<AnnualAccountOcrJobData>): Promise<void> {
-    const { uploadId, annualAccountId, ulbId, section, docId, s3Key, expectedDocType, financialYear } = job.data;
+    const { uploadId, annualAccountId, ulbId, section, auditType, docId, s3Key, expectedDocType, financialYear } =
+      job.data;
 
     console.log(`[OCR Processor] ▶ START — uploadId=${uploadId} bullJobId=${job.id}`);
 
@@ -76,6 +77,7 @@ export class AnnualAccountOcrProcessor extends WorkerHost {
       ulbName,
       uploadId,
       financialYear,
+      auditType,
     };
 
     console.log(`[OCR Processor] ⬆ Submitting to OCR API — docType=${expectedDocType}`);

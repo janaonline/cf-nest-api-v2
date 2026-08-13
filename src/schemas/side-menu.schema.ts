@@ -119,6 +119,12 @@ export class SideMenu {
 
   @Prop({ type: [String], default: null })
   routerLink: string[] | null;
+
+  /** Companion to the legacy `url` field above — for an XVI-FC `item` doc that carries a `url`,
+   *  this says whether it should open in a new tab or navigate in place (e.g. `_blank` for the
+   *  Submit Feedback sidebar entry). Legacy 15th-FC docs never set this. */
+  @Prop({ type: String, enum: ['_blank', '_self'], default: null })
+  target: '_blank' | '_self' | null;
 }
 
 export const SideMenuSchema = SchemaFactory.createForClass(SideMenu);
