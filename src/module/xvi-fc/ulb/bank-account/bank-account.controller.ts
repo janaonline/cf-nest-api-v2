@@ -27,6 +27,12 @@ export class BankAccountController {
     return this.bankAccountService.lookupIfsc(ifscCode);
   }
 
+  @Get('form-config')
+  @UseGuards(PermissionGuard)
+  getFormConfig(@Query('yearId') yearId: string) {
+    return this.bankAccountService.getFormConfig(yearId);
+  }
+
   @Get('state/ulb-submissions')
   @UseGuards(PermissionGuard)
   @RequirePermissions(Permission.REVIEW_ULB_SUBMISSIONS)

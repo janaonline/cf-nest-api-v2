@@ -22,6 +22,8 @@ export interface SideMenuAdminItem {
   routerLink?: string[] | null;
   parentId?: Types.ObjectId | null;
   isActive: boolean;
+  url?: string | null;
+  target?: '_blank' | '_self' | null;
 }
 
 @Injectable()
@@ -34,7 +36,9 @@ export class SideMenuService {
 
   // The admin API keeps `label` as the field name for backwards compatibility;
   // internally it's stored as `name` since it's shared with the legacy Sidemenu collection.
-  // Legacy 15th-FC-only fields (code, url, category, ...) are intentionally left out of the response.
+  // Legacy 15th-FC-only fields (code, category, ...) are intentionally left out of the response.
+  // `url`/`target` are the one exception — XVI-FC items now use them for external links (e.g.
+  // Submit Feedback), so the admin API needs to surface and accept them like any other field.
   private toAdminItem(doc: SideMenu & { _id: Types.ObjectId }): SideMenuAdminItem {
     return {
       _id: doc._id,
@@ -49,6 +53,8 @@ export class SideMenuService {
       routerLink: doc.routerLink,
       parentId: doc.parentId,
       isActive: doc.isActive,
+      url: doc.url,
+      target: doc.target,
     };
   }
 
@@ -83,6 +89,8 @@ export class SideMenuService {
       module: MODULE,
       parentId: dto.parentId ? new Types.ObjectId(dto.parentId) : null,
       isActive: dto.isActive ?? true,
+      url: dto.url,
+      target: dto.target,
     });
     await this.invalidateCache(dto.role, dto.year);
     return this.toAdminItem(doc.toObject());
@@ -102,6 +110,8 @@ export class SideMenuService {
       module: MODULE,
       parentId: item.parentId ? new Types.ObjectId(item.parentId) : null,
       isActive: item.isActive ?? true,
+      url: item.url,
+      target: item.target,
     }));
 
     const inserted = await this.sideMenuModel.insertMany(docs);

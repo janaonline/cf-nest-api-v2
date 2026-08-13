@@ -5,6 +5,7 @@ import { SlbService } from './slb.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import type { SaveSlbDto } from './dto/save-slb.dto';
+import type { SlbUlbSubmissionsQueryDto } from './dto/slb-ulb-submissions-query.dto';
 
 describe('SlbController', () => {
   let controller: SlbController;
@@ -22,6 +23,7 @@ describe('SlbController', () => {
       getForm: jest.fn().mockResolvedValue({ success: true }),
       saveDraft: jest.fn().mockResolvedValue({ success: true }),
       finalSubmit: jest.fn().mockResolvedValue({ success: true }),
+      listUlbSlbForms: jest.fn().mockResolvedValue({ success: true }),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -58,5 +60,15 @@ describe('SlbController', () => {
     const dto: SaveSlbDto = { yearId: new Types.ObjectId().toString(), data: {} };
     controller.finalSubmit(dto, user);
     expect(service.finalSubmit).toHaveBeenCalledWith(dto, user);
+  });
+
+  it('listUlbSubmissions delegates dto and user', () => {
+    const dto: SlbUlbSubmissionsQueryDto = {
+      designYearId: new Types.ObjectId().toString(),
+      page: 1,
+      pageSize: 20,
+    };
+    controller.listUlbSubmissions(dto, user);
+    expect(service.listUlbSlbForms).toHaveBeenCalledWith(dto, user);
   });
 });

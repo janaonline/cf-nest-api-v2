@@ -3,6 +3,7 @@ import {
   IsArray,
   IsBoolean,
   IsEnum,
+  IsIn,
   IsMongoId,
   IsNotEmpty,
   IsNumber,
@@ -66,6 +67,19 @@ export class CreateSideMenuDto {
   @IsArray()
   @IsString({ each: true })
   routerLink?: string[];
+
+  @ApiPropertyOptional({
+    example: 'https://tally.so/r/44d28O',
+    description: 'External URL for an item that should open outside the app instead of navigating via routerLink.',
+  })
+  @IsOptional()
+  @IsString()
+  url?: string;
+
+  @ApiPropertyOptional({ enum: ['_blank', '_self'], example: '_blank' })
+  @IsOptional()
+  @IsIn(['_blank', '_self'])
+  target?: '_blank' | '_self';
 
   @ApiPropertyOptional({ example: '6801f2e3a4b5c6d7e8f90124', description: 'Parent group ObjectId. Null for top-level items.' })
   @IsOptional()

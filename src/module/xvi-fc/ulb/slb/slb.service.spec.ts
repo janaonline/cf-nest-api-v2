@@ -10,7 +10,7 @@ import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { SlbFormJsonConfigService } from './services/slb-form-json.service';
 import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
-import { AccessLevel, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
+import { AccessLevel, Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import type { SaveSlbDto } from './dto/save-slb.dto';
 
@@ -53,6 +53,23 @@ const stateUser = (state: Types.ObjectId): AuthUser =>
 
 const adminUser: AuthUser = {
   _id: new Types.ObjectId().toString(),
+  scope: Scope.ADMIN,
+} as unknown as AuthUser;
+
+// getEffectivePermissions grants REVIEW_ULB_SUBMISSIONS only to the 'admin'/'reviewer' STATE
+// subroles (defaults to 'viewer', which lacks it) and to role === UserRole.ADMIN — stateUser()/
+// adminUser above don't set either, so listUlbSlbForms tests need their own fixtures.
+const stateReviewer = (state: Types.ObjectId): AuthUser =>
+  ({
+    _id: new Types.ObjectId().toString(),
+    scope: Scope.STATE,
+    state,
+    xviFcSubrole: 'reviewer',
+  }) as unknown as AuthUser;
+
+const adminReviewer: AuthUser = {
+  _id: new Types.ObjectId().toString(),
+  role: UserRole.ADMIN,
   scope: Scope.ADMIN,
 } as unknown as AuthUser;
 
@@ -105,6 +122,7 @@ describe('SlbService', () => {
     };
     ulbModel = {
       findById: jest.fn().mockReturnValue(q({ _id: ulbOid, state: stateOid })),
+      aggregate: jest.fn().mockReturnValue(q([{ data: [], totalCount: [], counts: [] }])),
     };
     slbFormJsonConfig = {
       loadFields: jest.fn().mockResolvedValue(mockSlbFields),
@@ -294,6 +312,67 @@ describe('SlbService', () => {
       const fieldsPassed = (validator.validateFinalSubmitAndBuildPayload as jest.Mock).mock.calls[0][0];
       const checkboxField = fieldsPassed.find((f: { key: string }) => f.key === 'checkboxConfirmation');
       expect(checkboxField.validations).toEqual([{ name: 'requiredTrue', validator: null, message: 'You must confirm.' }]);
+    });
+  });
+
+  describe('listUlbSlbForms', () => {
+    const baseDto = { designYearId: yearOid.toString(), page: 1, pageSize: 20 };
+
+    it('rejects a ULB-scope caller', async () => {
+      await expect(service.listUlbSlbForms(baseDto, ulbUser(ulbOid))).rejects.toThrow(ForbiddenException);
+    });
+
+    it('runs the aggregation against the Ulb model and returns rows/counts/total', async () => {
+      const row = {
+        ulbId: ulbOid,
+        ulbCode: 'ULB1',
+        censusCode: '900001',
+        ulbName: 'Test ULB',
+        formStatus: FORM_STATUS.IN_PROGRESS,
+        lastUpdatedAt: null,
+        slbFormId: docOid,
+      };
+      ulbModel.aggregate.mockReturnValue(
+        q([
+          {
+            data: [row],
+            totalCount: [{ count: 1 }],
+            counts: [{ _id: FORM_STATUS.IN_PROGRESS, count: 1 }],
+          },
+        ]),
+      );
+
+      const result = await service.listUlbSlbForms(baseDto, stateReviewer(stateOid));
+
+      expect(ulbModel.aggregate).toHaveBeenCalled();
+      expect(result.data.total).toBe(1);
+      expect(result.data.rows).toEqual([row]);
+      expect(result.data.counts[FORM_STATUS.IN_PROGRESS]).toBe(1);
+      expect(result.data.counts[FORM_STATUS.NOT_STARTED]).toBe(0);
+    });
+
+    it('defaults total/rows/counts to empty when the aggregation returns no facet result', async () => {
+      ulbModel.aggregate.mockReturnValue(q([]));
+
+      const result = await service.listUlbSlbForms(baseDto, stateReviewer(stateOid));
+
+      expect(result.data.total).toBe(0);
+      expect(result.data.rows).toEqual([]);
+      expect(Object.values(result.data.counts).every((count) => count === 0)).toBe(true);
+    });
+
+    it('scopes the $match stage to the caller\'s own state for a STATE user', async () => {
+      await service.listUlbSlbForms(baseDto, stateReviewer(stateOid));
+
+      const pipeline = ulbModel.aggregate.mock.calls[0][0];
+      expect(pipeline[0].$match.state).toEqual(stateOid);
+    });
+
+    it('allows ADMIN without a state filter unless one is passed', async () => {
+      await service.listUlbSlbForms(baseDto, adminReviewer);
+
+      const pipeline = ulbModel.aggregate.mock.calls[0][0];
+      expect(pipeline[0].$match.state).toBeUndefined();
     });
   });
 });
