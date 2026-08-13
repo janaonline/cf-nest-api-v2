@@ -12,6 +12,7 @@ import { DevolutionFormulaRow } from 'src/schemas/xvi-fc/state/devolution-formul
 import { GrantAllocation } from 'src/schemas/xvi-fc/grant-allocation.schema';
 import { ElectedUrbanLocalBodiesForm } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
 import { Ulb } from 'src/schemas/ulb.schema';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 import { ExcelService } from 'src/services/excel/excel.service';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { FileUrlNormalizerService } from 'src/module/xvi-fc/common/services/file-url-normalizer.service';
@@ -121,6 +122,12 @@ const mockRowModel = {
 const mockGrantAllocationModel = { findOne: jest.fn() };
 const mockEulbModel = { findOne: jest.fn() };
 const mockUlbModel = { countDocuments: jest.fn() };
+const mockUlbEligibilityService = {
+  getEligibleUlbFilter: jest
+    .fn()
+    .mockImplementation((stateOid: unknown) => Promise.resolve({ state: stateOid, isActive: true })),
+  assertUlbEligibleForGrantCycle: jest.fn().mockResolvedValue(undefined),
+};
 
 const mockDfFormJsonConfig = { loadFields: jest.fn() };
 
@@ -403,6 +410,7 @@ describe('DevolutionFormulaService', () => {
         { provide: getModelToken(GrantAllocation.name), useValue: mockGrantAllocationModel },
         { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: mockEulbModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+        { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: XvifcFormActorsService, useValue: mockActorsService },
         { provide: FileTokenService, useValue: mockFileTokenService },
         { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
@@ -846,6 +854,39 @@ describe('DevolutionFormulaService', () => {
       expect(badge).toBeDefined();
       expect(badge?.visible).toBe(true);
     });
+
+    // ─── missing/new/duplicate ULB reconciliation badges ─────────────────────
+    // Built via the same buildUlbReconciliationBadges() shared helper as EULB — see that
+    // module's badge tests for the equivalent coverage.
+
+    it('missing/new/duplicate ULB badges are all hidden when their counts are 0', async () => {
+      const badges = await getBadges(mockFormInProgress);
+      expect(badges.find((b) => b.label?.includes('missing ULB'))?.visible).toBe(false);
+      expect(badges.find((b) => b.label?.includes('new ULB'))?.visible).toBe(false);
+      expect(badges.find((b) => b.label?.includes('duplicate ULB'))?.visible).toBe(false);
+    });
+
+    it('missing ULB badge is visible with correct label/tone when missingUlbCount > 0', async () => {
+      const badges = await getBadges({ ...mockFormInProgress, missingUlbCount: 2 });
+      const badge = badges.find((b) => b.label?.includes('missing ULB'));
+      expect(badge?.visible).toBe(true);
+      expect(badge?.label).toBe('2 missing ULB(s)');
+      expect(badge?.tone).toBe('warning');
+    });
+
+    it('new ULB badge is visible with correct label when newUlbCount > 0', async () => {
+      const badges = await getBadges({ ...mockFormInProgress, newUlbCount: 3 });
+      const badge = badges.find((b) => b.label?.includes('new ULB'));
+      expect(badge?.visible).toBe(true);
+      expect(badge?.label).toBe('3 new ULB(s)');
+    });
+
+    it('duplicate ULB badge is visible with correct label when duplicateUlbCount > 0', async () => {
+      const badges = await getBadges({ ...mockFormInProgress, duplicateUlbCount: 1 });
+      const badge = badges.find((b) => b.label?.includes('duplicate ULB'));
+      expect(badge?.visible).toBe(true);
+      expect(badge?.label).toBe('1 duplicate ULB(s)');
+    });
   });
 
   // ─── excelFile supportingContent — Register ULB action (Phase 5) ──────────
@@ -991,6 +1032,45 @@ describe('DevolutionFormulaService', () => {
       const data = result.data as { validationSummary: { newUlbCount: number } };
 
       expect(data.validationSummary.newUlbCount).toBe(4);
+    });
+  });
+
+  // ─── validationSummary.missingUlbCount / duplicateUlbCount ─────────────────
+  // Regression coverage: buildValidationSummary() used to hardcode missingUlbCount: 0 here
+  // regardless of what was actually persisted, which made this method's own recomputed
+  // validationStatus (isValid derived from allUlbsCovered = missingUlbCount === 0) disagree with
+  // doc.validationStatus — the value that correctly gates finalSubmit and the "All valid" badge.
+
+  describe('GET form validationSummary — missingUlbCount / duplicateUlbCount', () => {
+    it('returns the persisted missingUlbCount instead of a hardcoded 0', async () => {
+      mockFormModel.findOne.mockReturnValue(q({ ...mockFormInProgress, missingUlbCount: 2 }));
+      mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
+
+      const result = await service.getForm(stateOid.toString(), YEAR_ID, 1, adminUser);
+      const data = result.data as { validationSummary: { missingUlbCount: number; allUlbsCovered: boolean } };
+
+      expect(data.validationSummary.missingUlbCount).toBe(2);
+      expect(data.validationSummary.allUlbsCovered).toBe(false);
+    });
+
+    it('defaults missingUlbCount to 0 when the form has no persisted value', async () => {
+      mockFormModel.findOne.mockReturnValue(q(mockFormInProgress));
+      mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
+
+      const result = await service.getForm(stateOid.toString(), YEAR_ID, 1, adminUser);
+      const data = result.data as { validationSummary: { missingUlbCount: number } };
+
+      expect(data.validationSummary.missingUlbCount).toBe(0);
+    });
+
+    it('returns the persisted duplicateUlbCount', async () => {
+      mockFormModel.findOne.mockReturnValue(q({ ...mockFormInProgress, duplicateUlbCount: 1 }));
+      mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
+
+      const result = await service.getForm(stateOid.toString(), YEAR_ID, 1, adminUser);
+      const data = result.data as { validationSummary: { duplicateUlbCount: number } };
+
+      expect(data.validationSummary.duplicateUlbCount).toBe(1);
     });
   });
 
@@ -1559,6 +1639,7 @@ describe('DevolutionFormulaRowService', () => {
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: mockRowModel },
         { provide: ExcelService, useValue: { generateExcel: jest.fn() } },
         { provide: DfFormJsonConfigService, useValue: mockDfFormJsonConfig },
+        { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
       ],
     }).compile();
 
@@ -1743,6 +1824,7 @@ describe('Devolution Formula — getForm rowEditFields', () => {
         { provide: getModelToken(GrantAllocation.name), useValue: mockGrantAllocationModel },
         { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: mockEulbModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+        { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: XvifcFormActorsService, useValue: mockActorsService },
         { provide: FileTokenService, useValue: mockFileTokenService },
         { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
@@ -1977,7 +2059,7 @@ describe('Devolution Formula — getForm rowEditFields', () => {
         .spyOn((service as any).excelService, 'generateExcel')
         .mockResolvedValue(Buffer.from(''));
       await service.dumpToExcel({} as DumpDevolutionFormulaQueryDto, adminUser);
-      expect(generateExcelSpy).toHaveBeenCalledWith(DF_DUMP_HEADERS, [], 'Devolution Formula Dump');
+      expect(generateExcelSpy).toHaveBeenCalledWith(DF_DUMP_HEADERS, [], 'ULB-wise Allocation Dump');
     });
 
     it('maps aggregation row to DfDumpRow shape with correct field values', async () => {

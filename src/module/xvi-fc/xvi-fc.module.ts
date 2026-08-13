@@ -13,7 +13,7 @@ import { SideMenu, SideMenuSchema } from '../../schemas/side-menu.schema';
 import { XviFcCacheService } from './cache/xvi-fc-cache.service';
 import { XviFcCacheInterceptor } from './cache/xvi-fc-cache.interceptor';
 import { SideMenuModule } from './side-menu/side-menu.module';
-import { FormJsonModule } from '../../form-json/form-json.module';
+import { FormJsonModule } from '../../master/form-json/form-json.module';
 import { UnspentBalanceDisclosureModule } from './ulb/unspent-balance-disclosure/unspent-balance-disclosure.module';
 import { BankAccountModule } from './ulb/bank-account/bank-account.module';
 import { XviFcAnnualAccount, XviFcAnnualAccountSchema } from '../../schemas/xvi-fc/annual-account.schema';
@@ -27,6 +27,8 @@ import { FcUnspentDeclarationModule } from './state/fc-unspent-declaration/fc-un
 import { FcUnspentMohuaReviewModule } from './mohua/fc-unspent-declaration/fc-unspent-mohua-review.module';
 import { StateDashboardModule } from './state/dashboard/state-dashboard.module';
 import { SlbModule } from './ulb/slb/slb.module';
+import { ClaimLetterModule } from './state/claim-letter/claim-letter.module';
+import { UlbEligibilityModule } from '../ulb-eligibility/ulb-eligibility.module';
 
 @Module({
   imports: [
@@ -52,6 +54,8 @@ import { SlbModule } from './ulb/slb/slb.module';
     FcUnspentMohuaReviewModule,
     StateDashboardModule,
     SlbModule,
+    ClaimLetterModule,
+    UlbEligibilityModule,
   ],
   controllers: [XviFcController],
   providers: [XviFcService, XviFcCacheService, XviFcCacheInterceptor],

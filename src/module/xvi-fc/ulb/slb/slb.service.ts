@@ -29,6 +29,8 @@ import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-
 import { throwXviFcValidationError, xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
 import { SLB_FORM_ID, SLB_FORM_TYPE, SlbForm, SlbFormDocument } from 'src/schemas/xvi-fc/ulb/slb-form.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
+import { CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE } from 'src/module/ulb-eligibility/ulb-eligibility.constants';
 import { SlbFormJsonConfigService } from './services/slb-form-json.service';
 import { getSlbFieldsByType } from './helpers/slb-form-json.helpers';
 import type { SaveSlbDto } from './dto/save-slb.dto';
@@ -59,6 +61,7 @@ export class SlbService {
     private readonly validator: DynamicFormValidationService,
     private readonly fileTokenService: FileTokenService,
     private readonly slbFormJsonConfig: SlbFormJsonConfigService,
+    private readonly ulbEligibilityService: UlbEligibilityService,
   ) {}
 
   /** Returns the SLB question config array from the DB for frontend rendering. */
@@ -432,6 +435,11 @@ export class SlbService {
 
   async assertCanSubmitSlb(user: AuthUser, ulbId: string): Promise<void> {
     this.assertValidUlbId(ulbId);
+    await this.ulbEligibilityService.assertUlbEligibleForGrantCycle(
+      ulbId,
+      'XVIFC',
+      CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE,
+    );
 
     if (user.scope === Scope.ADMIN) return;
 

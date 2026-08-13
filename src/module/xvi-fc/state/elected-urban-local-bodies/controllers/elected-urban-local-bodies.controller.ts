@@ -22,6 +22,7 @@ import { ParseObjectIdPipe } from 'src/common/pipes/parse-object-id.pipe';
 import { getTimeStamp } from 'src/shared/utils/date.utils';
 import { ElectedUrbanLocalBodiesService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/main/elected-urban-local-bodies.service';
 import { ElectedUrbanLocalBodiesExcelService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/excel/elected-urban-local-bodies-excel.service';
+import { ElectedUrbanLocalBodiesDocxService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/document/elected-urban-local-bodies-docx.service';
 import { ElectedUrbanLocalBodiesRowService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/row/elected-urban-local-bodies-row.service';
 import { EulbPostSubmissionUpdateService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/post-submission-update/elected-urban-local-bodies-post-submission-update.service';
 import { SaveElectedUrbanLocalBodiesDraftDto } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/save-elected-urban-local-bodies-draft.dto';
@@ -43,6 +44,7 @@ export class ElectedUrbanLocalBodiesController {
     private readonly eulbExcelService: ElectedUrbanLocalBodiesExcelService,
     private readonly eulbRowService: ElectedUrbanLocalBodiesRowService,
     private readonly eulbPostSubmissionUpdateService: EulbPostSubmissionUpdateService,
+    private readonly eulbDocxService: ElectedUrbanLocalBodiesDocxService,
   ) {}
 
   @ApiOperation({
@@ -128,9 +130,29 @@ export class ElectedUrbanLocalBodiesController {
   }
 
   @ApiOperation({
+    summary: 'Download Elected Bodies List declaration document',
+    description:
+      'Generates the "Elected Bodies List" declaration letter (Word doc) for the state to print, sign, and re-upload via signedElectedbodyFile. Table headers come from the live EULB_EXTRA_ULB_PORTAL_FIELDS form-json config. Rejects with a 400 if there are no active rows, or if any active row is not validationStatus VALID.',
+  })
+  @Get(':stateId/:yearId/elected-bodies-list-document')
+  @UseGuards(PermissionGuard)
+  @RequirePermissions(Permission.EDIT_STATE_FORMS)
+  async getElectedBodiesListDocument(
+    @Param('stateId', ParseObjectIdPipe) stateId: string,
+    @Param('yearId', ParseObjectIdPipe) yearId: string,
+    @CurrentUser() user: AuthUser,
+  ): Promise<StreamableFile> {
+    const { buffer, fileName } = await this.eulbDocxService.generateElectedBodiesListDocument(stateId, yearId, user);
+    return new StreamableFile(new Uint8Array(buffer), {
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      disposition: `attachment; filename="${fileName}"`,
+    });
+  }
+
+  @ApiOperation({
     summary: 'Get Elected Urban Local Bodies rows (paginated)',
     description:
-      'Returns rows from the active dataset for the given state and year. Supports pagination, search by censusCode/ulbName, and filtering by validationStatus, rowType, and errorField.',
+      'Returns rows from the active dataset for the given state and year. Supports pagination, search by censusCode/ulbName, and filtering by validationStatus and errorField.',
   })
   @ApiQuery({ name: 'page', required: false, description: 'Page number (default: 1)' })
   @ApiQuery({ name: 'limit', required: false, description: 'Rows per page (default: 50, max: 200)' })
@@ -141,7 +163,6 @@ export class ElectedUrbanLocalBodiesController {
     enum: ['VALID', 'INVALID'],
     description: 'Filter by row validation status',
   })
-  @ApiQuery({ name: 'rowType', required: false, enum: ['DB_ULB', 'EXTRA_ULB'], description: 'Filter by row type' })
   @ApiQuery({ name: 'errorField', required: false, description: 'Filter rows where errors.field equals this value' })
   @Get(':stateId/:yearId/rows')
   @UseGuards(PermissionGuard)
@@ -256,7 +277,7 @@ export class ElectedUrbanLocalBodiesController {
   @ApiQuery({
     name: 'electedBodyStatus',
     required: false,
-    enum: ['Constituted', 'Not Constituted', 'Exempt'],
+    enum: ['Constituted', 'Not Constituted', '6th Schedule'],
     description: 'Filter by elected body status',
   })
   @ApiQuery({
@@ -285,7 +306,7 @@ export class ElectedUrbanLocalBodiesController {
   @ApiBody({ type: ValidateEulbPostSubmissionUpdateDto })
   @Post(':stateId/:yearId/post-submission-update/validate')
   @UseGuards(PermissionGuard)
-  @RequirePermissions(Permission.VIEW_STATE_FORMS)
+  @RequirePermissions(Permission.EDIT_STATE_FORMS)
   validatePostSubmissionUpdateBatch(
     @Param('stateId', ParseObjectIdPipe) stateId: string,
     @Param('yearId', ParseObjectIdPipe) yearId: string,
@@ -303,7 +324,7 @@ export class ElectedUrbanLocalBodiesController {
   @ApiBody({ type: SubmitEulbPostSubmissionUpdateDto })
   @Post(':stateId/:yearId/post-submission-update/submit')
   @UseGuards(PermissionGuard)
-  @RequirePermissions(Permission.VIEW_STATE_FORMS)
+  @RequirePermissions(Permission.FINAL_SUBMIT_STATE_FORMS)
   submitPostSubmissionUpdateBatch(
     @Param('stateId', ParseObjectIdPipe) stateId: string,
     @Param('yearId', ParseObjectIdPipe) yearId: string,

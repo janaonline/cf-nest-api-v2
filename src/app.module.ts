@@ -14,21 +14,22 @@ import { NodeMailerModule } from './core/node-mailer/node-mailer.module';
 import { RedisModule } from './core/services/redis/redis.module';
 import { LoggerMiddleware } from './middleware/logger-middleware';
 import { AuthModule } from './module/auth/auth.module';
-import { UsersModule } from './users/users.module';
+import { DataCollectionModule } from './module/data-collection/data-collection.module';
+import { UsersModule } from './module/users/users.module';
 import { AfsDigitizationModule } from './admin/afs-digitization/afs-digitization.module';
 import { ReportAnIssueModule } from './web/report-an-issue/report-an-issue.module';
 import { ResourcesSectionModule } from './web/resources-section/resources-section.module';
 import { EventsModule } from './admin/events/events.module';
 import { XviFcModule } from './module/xvi-fc/xvi-fc.module';
 import { EmailTemplatesModule } from './admin/email-templates/email-templates.module';
+import { UlbTypesModule } from './admin/ulb-types/ulb-types.module';
 import { EmailRemindersModule } from './admin/email-reminders/email-reminders.module';
 import { FileTokenModule } from './core/file-token/file-token.module';
-import { FileDownloadModule } from './file-download/file-download.module';
-import { S3UploadModule } from './s3-upload/s3-upload.module';
+import { FileModule } from './module/file/file.module';
 import { FormsModule } from './forms/forms.module';
-import { FormJsonModule } from './form-json/form-json.module';
-import { CommunicationModule } from './communication/communication.module';
-import { NotificationsModule } from './notifications/notifications.module';
+import { FormJsonModule } from './master/form-json/form-json.module';
+import { CommunicationModule } from './module/communication/communication.module';
+import { NotificationsModule } from './module/notifications/notifications.module';
 import { UlbModule } from './master/ulb/ulb.module';
 import { StateModule } from './master/state/state.module';
 function getQueryCaller(): string {
@@ -100,19 +101,20 @@ function getQueryCaller(): string {
     EmailModule,
     ReportAnIssueModule,
     FileTokenModule,
-    FileDownloadModule,
+    FileModule,
     AfsDigitizationModule,
     EventsModule,
     XviFcModule,
     EmailTemplatesModule,
+    UlbTypesModule,
     EmailRemindersModule,
-    S3UploadModule,
     FormsModule,
     FormJsonModule,
     CommunicationModule,
     NotificationsModule,
     UlbModule,
     StateModule,
+    DataCollectionModule,
   ],
   controllers: [AppController],
   providers: [

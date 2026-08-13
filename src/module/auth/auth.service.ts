@@ -11,12 +11,25 @@ import type { StringValue } from 'ms';
 import { Model, Types } from 'mongoose';
 import { RedisService } from 'src/core/services/redis/redis.service';
 import { UserDocument } from 'src/schemas/user/user.schema';
-import { LoginHistory } from 'src/schemas/user/login-history.schema';
-import { UsersRepository } from 'src/users/users.repository';
+import { LoginHistory, LoginType } from 'src/schemas/user/login-history.schema';
+import { UsersRepository } from 'src/module/users/users.repository';
 import { RegisterDto } from './dto/register.dto';
 import { SetPasswordDto } from './dto/set-password.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { AuthResponse, AuthTokens } from './types/auth-tokens.type';
+
+// Maps generateTokens()'s `purpose` param (raw DTO `type` values, e.g. login.dto.ts's '16thFC')
+// to a valid LoginHistory `loginType`. Callers that pass something else (e.g. the literal 'WEB'
+// used by OTP-login and profile-completion logins, which are grant-cycle-agnostic by design)
+// fall through undefined, leaving the schema's own `default: '15thFC'` in place.
+const LOGIN_TYPE_MAP: Record<string, LoginType> = {
+  '15thFC': '15thFC',
+  '16thFC': '16thFC',
+  XVIFC: 'XVIFC', // distinct from '16thFC' — stored as whatever the login payload's `type` sent
+  AAINA: 'AAINA',
+  'state-dashboard': 'state-dashboard',
+  fiscalRankings: 'fiscalRankings',
+};
 
 @Injectable()
 export class AuthService {
@@ -177,7 +190,11 @@ export class AuthService {
     const refreshExpires = (this.configService.get<string>('JWT_REFRESH_EXPIRES_IN') ?? '7d') as StringValue;
 
     // Create a login history record for this session — gives us lh_id
-    const lhDoc = await this.loginHistoryModel.create({ user: new Types.ObjectId(userId) });
+    const loginType = LOGIN_TYPE_MAP[purpose];
+    const lhDoc = await this.loginHistoryModel.create({
+      user: new Types.ObjectId(userId),
+      ...(loginType ? { loginType } : {}),
+    });
     const lhId = (lhDoc._id as Types.ObjectId).toString();
 
     const payload = {

@@ -4,8 +4,7 @@ import { FilterQuery, Model, Types } from 'mongoose';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
-import { getFormStatusLabel } from 'src/common/constants/form-status.constants';
-import { ROW_STATUS } from 'src/common/constants/row-status.constants';
+import { FORM_STATUS, getFormStatusLabel } from 'src/common/constants/form-status.constants';
 import {
   assertCanMohuaMutateForm,
   canMohuaMutateForm,
@@ -128,7 +127,7 @@ export class FcUnspentMohuaRowsService {
       });
     }
 
-    const notPending = this.domainService.filterNotInStatus(rows, ROW_STATUS.UPDATE_PENDING);
+    const notPending = this.domainService.filterNotInStatus(rows, FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
     if (notPending.length > 0) {
       throwXviFcValidationError({
         rowIds: [
@@ -155,7 +154,7 @@ export class FcUnspentMohuaRowsService {
         form._id,
         stateOid,
         yearOid,
-        rows.map((row) => ({ row, newStatus: ROW_STATUS.ACTIVE, rejectionRemark: null })),
+        rows.map((row) => ({ row, newStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA, rejectionRemark: null })),
         userOid,
         ip,
         userAgent,
@@ -242,7 +241,7 @@ export class FcUnspentMohuaRowsService {
       });
     }
 
-    const notPending = this.domainService.filterNotInStatus(rows, ROW_STATUS.UPDATE_PENDING);
+    const notPending = this.domainService.filterNotInStatus(rows, FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
     if (notPending.length > 0) {
       throwXviFcValidationError({
         rows: [
@@ -270,7 +269,7 @@ export class FcUnspentMohuaRowsService {
         yearOid,
         rows.map((row) => ({
           row,
-          newStatus: ROW_STATUS.REJECTED,
+          newStatus: FORM_STATUS.RETURNED_BY_MOHUA,
           rejectionRemark: remarkByRowId.get(String(row._id)) ?? '',
         })),
         userOid,
@@ -301,7 +300,7 @@ export class FcUnspentMohuaRowsService {
   // ─── Helpers ─────────────────────────────────────────────────────────────────
 
   private mapRowToResponse(row: FcUnspentMohuaRowLean, canReview: boolean): FcUnspentMohuaRow {
-    const isPending = row.rowStatus === ROW_STATUS.UPDATE_PENDING;
+    const isPending = row.rowStatus === FORM_STATUS.UNDER_REVIEW_BY_MOHUA;
     return {
       _id: String(row._id),
       rowNumber: row.rowNumber,

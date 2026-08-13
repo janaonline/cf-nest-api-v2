@@ -13,7 +13,7 @@ import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-f
 import type { XviFcValidationErrorMap } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import type { FieldConfig, SectionLayout } from 'src/module/xvi-fc/common/types/field-config.type';
 import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
-import { FormJsonService } from 'src/form-json/form-json.service';
+import { FormJsonService } from 'src/master/form-json/form-json.service';
 import type { CommonFile, FileInfo } from 'src/schemas/common/file.schema';
 import { State, StateDocument } from 'src/schemas/state.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
@@ -279,13 +279,16 @@ export class UlbService {
   /**
    * Fills in a default `approval` block for documents created before this field existed.
    * `.lean()` reads bypass Mongoose's schema-default application, so legacy ULBs come back
-   * with `approval: undefined` — treat them as pre-approved master data.
+   * with `approval: undefined` — treat them as pre-approved master data. `isExistingUser`
+   * flags this synthesized case explicitly so callers (the ULB list UI) can label these
+   * rows "Existing User" instead of conflating them with an ADMIN-reviewed 'APPROVED' ULB.
    */
-  private withApprovalDefaults<T extends Ulb>(ulb: T): T {
-    if (ulb.approval) return ulb;
+  private withApprovalDefaults<T extends Ulb>(ulb: T): T & { isExistingUser: boolean } {
+    if (ulb.approval) return { ...ulb, isExistingUser: false };
     return {
       ...ulb,
       approval: { status: 'APPROVED', submittedBy: null, reviewedBy: null, reviewedAt: null, rejectReason: '' },
+      isExistingUser: true,
     };
   }
 
@@ -468,11 +471,13 @@ export class UlbService {
     }
   }
 
-  /** Provisions the ULB's first login: a `Role.ULB` account with a temporary password, emailed
-   *  to the primary contact — mirrors the STATE/MoHUA member-invite flow in `UsersService`.
-   *  `isApproved` mirrors the owning ULB's approval status: ADMIN-created ULBs are auto-approved
-   *  so the login is active immediately; STATE-submitted ULBs start PENDING, so the login stays
-   *  inactive until an ADMIN approves the ULB (see `approve()`).
+  /** Provisions the ULB's first login: a `Role.ULB` account with a temporary password — mirrors
+   *  the STATE/MoHUA member-invite flow in `UsersService`. `isApproved` mirrors the owning ULB's
+   *  approval status: ADMIN-created ULBs are auto-approved so the login is active immediately and
+   *  the invite email goes out now; STATE-submitted ULBs start PENDING, so the login stays inactive
+   *  and un-emailed until an ADMIN approves the ULB — sending credentials for a login that doesn't
+   *  work yet would be confusing, and by approval time this temp password may be well past its TTL
+   *  anyway, so `approve()` regenerates one instead of reusing this one (see `activateAndInviteContact`).
    *  `censusCode`/`sbCode` are copied onto the `User` document (not just left on the `Ulb`) because
    *  ULB logins authenticate by census/SB code, not email — `UsersRepository.resolveByIdentifier()`
    *  looks up `User.censusCode`/`User.sbCode`, so without this copy the code the invite email tells
@@ -511,24 +516,46 @@ export class UlbService {
       tempPasswordExpiresAt: new Date(Date.now() + TEMP_PASSWORD_TTL_MS),
     });
 
+    if (!isApproved || !contact.email) return;
+    this.queueUlbInviteEmail({
+      email: contact.email,
+      name: contact.name,
+      mobile: contact.mobile,
+      ulbName,
+      loginCode,
+      tempPassword,
+    });
+  }
+
+  /** Queues the ULB primary-contact invite email — shared by `createPrimaryContactUser()` (ADMIN-
+   *  created, already-approved ULBs) and `activateAndInviteContact()` (STATE-submitted ULBs, once
+   *  an ADMIN approves them). */
+  private queueUlbInviteEmail(params: {
+    email: string;
+    name?: string;
+    mobile?: string;
+    ulbName: string;
+    loginCode: string;
+    tempPassword: string;
+  }): void {
     const loginUrl = `${this.configService.get<string>('CLIENT_URL', 'https://cityfinance.in')}/login`;
     this.emailQueueService
       .addEmailJob({
-        to: contact.email as string,
+        to: params.email,
         subject: 'You have been invited to the CityFinance Portal',
         templateName: './ulb-member-invite',
         mailData: {
-          name: contact.name,
-          loginCode,
+          name: params.name,
+          loginCode: params.loginCode,
           loginCodeLabel: 'Login ID',
-          mobile: contact.mobile ?? '',
-          ulbName,
+          mobile: params.mobile ?? '',
+          ulbName: params.ulbName,
           loginUrl,
-          tempPassword,
+          tempPassword: params.tempPassword,
         },
       })
       .catch((err: unknown) => {
-        this.logger.error(`Failed to queue ULB primary contact invite email to ${contact.email}:`, err);
+        this.logger.error(`Failed to queue ULB primary contact invite email to ${params.email}:`, err);
       });
   }
 
@@ -561,7 +588,7 @@ export class UlbService {
     query: QueryUlbDto,
     user: IAuthUser,
   ): Promise<{
-    data: (Ulb & { stateName: string; ulbTypeName: string })[];
+    data: (Ulb & { stateName: string; ulbTypeName: string; isExistingUser: boolean })[];
     page: number;
     limit: number;
     total: number;
@@ -573,7 +600,15 @@ export class UlbService {
 
     const filter: FilterQuery<UlbDocument> = {};
     if (query.isActive !== undefined) filter.isActive = query.isActive;
-    if (query.approvalStatus) filter['approval.status'] = query.approvalStatus;
+    // 'EXISTING' has no 'approval.status' in Mongo to match against — legacy ULBs never had
+    // the field written at all (see withApprovalDefaults); querying by presence, not value,
+    // is what actually finds them. This also means the plain 'APPROVED' filter already
+    // excludes them today, so the two options stay mutually exclusive.
+    if (query.approvalStatus === 'EXISTING') {
+      filter.approval = { $exists: false };
+    } else if (query.approvalStatus) {
+      filter['approval.status'] = query.approvalStatus;
+    }
     if (query.ulbType) filter.ulbType = new Types.ObjectId(query.ulbType);
 
     if (user.role === Role.STATE) {
@@ -648,7 +683,7 @@ export class UlbService {
     }));
   }
 
-  async findOne(id: string): Promise<Ulb> {
+  async findOne(id: string): Promise<Ulb & { isExistingUser: boolean }> {
     if (!Types.ObjectId.isValid(id)) throw new BadRequestException('Invalid ULB id');
     const ulb = await this.ulbModel.findById(id).lean<Ulb>();
     if (!ulb) throw new NotFoundException('ULB not found');
@@ -661,7 +696,7 @@ export class UlbService {
    * submission an ADMIN sent back, not a general edit capability. A STATE resubmission always
    * resets `approval` back to PENDING so the ADMIN reviews the corrected data.
    */
-  async update(id: string, dto: UpdateUlbDto, user: IAuthUser): Promise<Ulb> {
+  async update(id: string, dto: UpdateUlbDto, user: IAuthUser): Promise<Ulb & { isExistingUser: boolean }> {
     if (!Types.ObjectId.isValid(id)) throw new BadRequestException('Invalid ULB id');
 
     const existing = await this.ulbModel.findById(id).lean<UlbDocument>();
@@ -750,10 +785,47 @@ export class UlbService {
       .lean<Ulb>();
     if (!updated) throw new NotFoundException('ULB not found');
 
-    // Activate the ULB's primary-contact login now that the ULB itself is approved.
-    await this.userModel.updateMany({ ulb: id, isDeleted: false }, { $set: { isActive: true } }).exec();
+    // Logins registered with this ULB that are still on their original, never-emailed temp
+    // password (see createPrimaryContactUser) get a fresh one now and their invite email goes
+    // out for the first time. `isActive: false` also scopes this to a first-time approval —
+    // re-approving an already-active ULB (e.g. a stray double-click) won't re-send invites.
+    // `User.ulb` is declared with `type: Types.ObjectId` (the BSON driver class, not
+    // `mongoose.Schema.Types.ObjectId`) — Mongoose doesn't recognize that as an ObjectId
+    // SchemaType and silently treats the field as Mixed, so a plain string `id` here would
+    // never auto-cast and this query would always come back empty. Cast explicitly instead.
+    const pendingContacts = await this.userModel
+      .find({ ulb: new Types.ObjectId(id), isDeleted: false, isActive: false })
+      .exec();
+    for (const contact of pendingContacts) {
+      if (contact.isNewUser && contact.email) {
+        await this.activateAndInviteContact(contact, updated.name);
+      } else {
+        contact.isActive = true;
+        await contact.save();
+      }
+    }
 
     return updated;
+  }
+
+  /** Activates a ULB primary-contact login and sends its (first) invite email, now that the ULB
+   *  has cleared ADMIN review. Regenerates the temp password rather than reusing the one hashed
+   *  at registration, since that one was never emailed and may already be past its TTL by now. */
+  private async activateAndInviteContact(contact: UserDocument, ulbName: string): Promise<void> {
+    const tempPassword = this.generateTempPassword();
+    contact.password = await bcrypt.hash(tempPassword, 12);
+    contact.tempPasswordExpiresAt = new Date(Date.now() + TEMP_PASSWORD_TTL_MS);
+    contact.isActive = true;
+    await contact.save();
+
+    this.queueUlbInviteEmail({
+      email: contact.email,
+      name: contact.name,
+      mobile: contact.mobile ?? undefined,
+      ulbName,
+      loginCode: contact.censusCode || contact.sbCode || '',
+      tempPassword,
+    });
   }
 
   /** Rejects a PENDING ULB submission (ADMIN only — enforced by RolesGuard at the controller). */
@@ -785,7 +857,7 @@ export class UlbService {
   async findTypes(): Promise<{ _id: Types.ObjectId; name: string }[]> {
     return this.ulbModel.db
       .collection('ulbtypes')
-      .find({}, { projection: { name: 1 } })
+      .find({ isActive: true }, { projection: { name: 1 } })
       .sort({ name: 1 })
       .toArray() as unknown as Promise<{ _id: Types.ObjectId; name: string }[]>;
   }

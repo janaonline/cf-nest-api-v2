@@ -16,6 +16,7 @@ export interface DfValidationSummary {
   errorRowCount: number;
   missingUlbCount: number;
   newUlbCount: number;
+  duplicateUlbCount: number;
   totalMoHUAAllocation: number;
   totalAllocatedSum: number;
   allUlbsCovered: boolean;
@@ -107,6 +108,8 @@ export interface DfFormLeanDoc {
   excelRowCount?: number;
   errorRowCount?: number;
   newUlbCount?: number;
+  missingUlbCount?: number;
+  duplicateUlbCount?: number;
   totalMoHUAAllocation?: number;
   totalAllocatedSum?: number;
   grantAllocationRef?: Types.ObjectId;

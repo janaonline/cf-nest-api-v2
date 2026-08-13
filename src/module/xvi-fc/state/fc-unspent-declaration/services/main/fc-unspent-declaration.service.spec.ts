@@ -5,7 +5,6 @@ import { readFileSync } from 'fs';
 import { Types } from 'mongoose';
 import { join } from 'path';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
-import { ROW_STATUS } from 'src/common/constants/row-status.constants';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { S3Service } from 'src/core/s3/s3.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
@@ -111,6 +110,13 @@ const sampleResolvedRow: FcUnspentResolvedRow = {
   unspentAmount: 5,
   allocationPerc: 5,
   eligibility: true,
+  allocationSource: {
+    devolutionFormId: new Types.ObjectId(),
+    devolutionRowId: new Types.ObjectId(),
+    datasetVersion: 1,
+    installment: 1,
+    allocationAmount: 100,
+  },
 };
 
 interface TestSetArg {
@@ -199,6 +205,7 @@ describe('FcUnspentDeclarationService', () => {
       getActiveRows: jest.fn().mockResolvedValue([]),
     };
     formJsonConfigService = {
+      loadFormConfig: jest.fn().mockResolvedValue({ fields: FC_UNSPENT_STATE_FORM_JSON.data, thresholdPercent: 10 }),
       loadFields: jest.fn().mockResolvedValue(FC_UNSPENT_STATE_FORM_JSON.data),
     };
     s3Service = {
@@ -371,6 +378,16 @@ describe('FcUnspentDeclarationService', () => {
     expect(result.data!.unspentUlbData).toEqual([]);
   });
 
+  it('GET sources threshold from FcUnspentDeclarationFormJsonService.loadFormConfig, keyed by yearId (single fetch, no separate lookup)', async () => {
+    formJsonConfigService['loadFormConfig'] = jest
+      .fn()
+      .mockResolvedValue({ fields: FC_UNSPENT_STATE_FORM_JSON.data, thresholdPercent: 0 });
+    const result = await service.getForm(stateOid.toString(), yearOid.toString(), stateUser());
+    expect(formJsonConfigService['loadFormConfig']).toHaveBeenCalledWith(yearOid.toString());
+    expect(formJsonConfigService['loadFormConfig']).toHaveBeenCalledTimes(1);
+    expect(result.data!.threshold).toBe(0);
+  });
+
   // ─── Parent schema no longer stores embedded rows ──────────────────────────
 
   it('the parent schema no longer declares an embedded unspentUlbData path', () => {
@@ -420,7 +437,7 @@ describe('FcUnspentDeclarationService', () => {
         stateOid,
         dto.data.unspentUlbData,
         expect.objectContaining({ _id: devolutionFormOid }),
-        { requireAtLeastOne: false },
+        { requireAtLeastOne: false, thresholdPercent: 10 },
       );
       expect(rowService['applyRows']).toHaveBeenCalledWith(
         parentOid,
@@ -506,7 +523,7 @@ describe('FcUnspentDeclarationService', () => {
         {
           rowId: new Types.ObjectId(),
           previousStatus: null,
-          currentStatus: ROW_STATUS.UPDATE_PENDING,
+          currentStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
           row: { ...sampleResolvedRow, rowNumber: 1 },
         },
       ];
@@ -526,7 +543,7 @@ describe('FcUnspentDeclarationService', () => {
         yearOid,
         [sampleResolvedRow],
         userOid,
-        ROW_STATUS.UPDATE_PENDING,
+        FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
         mockSession,
       );
       expect(rowService['insertRowHistory']).toHaveBeenCalledWith(
@@ -538,6 +555,28 @@ describe('FcUnspentDeclarationService', () => {
         '127.0.0.1',
         'jest-agent',
         mockSession,
+      );
+    });
+
+    it('final submit sources thresholdPercent from FcUnspentDeclarationFormJsonService.loadFormConfig (single fetch) and passes it to the row service', async () => {
+      formJsonConfigService['loadFormConfig'] = jest
+        .fn()
+        .mockResolvedValue({ fields: FC_UNSPENT_STATE_FORM_JSON.data, thresholdPercent: 0 });
+      rowService['resolveAndValidateRows'].mockResolvedValueOnce({ rows: [sampleResolvedRow], errors: {} });
+      const dto = baseDto({
+        isFcUnspent: true,
+        checkboxConfirmation: true,
+        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5 }],
+      });
+      await service.finalSubmit(dto, stateUser(), '127.0.0.1', 'jest-agent');
+
+      expect(formJsonConfigService['loadFormConfig']).toHaveBeenCalledWith(dto.yearId);
+      expect(formJsonConfigService['loadFormConfig']).toHaveBeenCalledTimes(1);
+      expect(rowService['resolveAndValidateRows']).toHaveBeenCalledWith(
+        stateOid,
+        dto.data.unspentUlbData,
+        expect.objectContaining({ _id: devolutionFormOid }),
+        { requireAtLeastOne: true, thresholdPercent: 0 },
       );
     });
 
@@ -816,11 +855,10 @@ describe('FcUnspentDeclarationService', () => {
     });
 
     it('throws InternalServerErrorException when the FC_UNSPENT_ROW_EDIT_FIELDS group is empty', async () => {
-      formJsonConfigService['loadFields'] = jest
-        .fn()
-        .mockResolvedValue(
-          FC_UNSPENT_STATE_FORM_JSON.data.filter((f) => f.fieldTypes[0] !== 'FC_UNSPENT_ROW_EDIT_FIELDS'),
-        );
+      formJsonConfigService['loadFormConfig'] = jest.fn().mockResolvedValue({
+        fields: FC_UNSPENT_STATE_FORM_JSON.data.filter((f) => f.fieldTypes[0] !== 'FC_UNSPENT_ROW_EDIT_FIELDS'),
+        thresholdPercent: 10,
+      });
       await expect(service.getForm(stateOid.toString(), yearOid.toString(), stateUser())).rejects.toThrow(
         'FC_UNSPENT_ROW_EDIT_FIELDS group is empty in form configuration.',
       );
@@ -868,17 +906,17 @@ describe('FcUnspentDeclarationService', () => {
   // ─── DB-backed formJson loading ─────────────────────────────────────────────
 
   describe('DB-backed formJson loading', () => {
-    it('loads questions via FcUnspentDeclarationFormJsonService for GET, keyed by yearId', async () => {
+    it('loads questions via FcUnspentDeclarationFormJsonService.loadFormConfig for GET, keyed by yearId', async () => {
       await service.getForm(stateOid.toString(), yearOid.toString(), stateUser());
-      expect(formJsonConfigService['loadFields']).toHaveBeenCalledWith(yearOid.toString());
+      expect(formJsonConfigService['loadFormConfig']).toHaveBeenCalledWith(yearOid.toString());
     });
 
-    it('loads questions via FcUnspentDeclarationFormJsonService for saveDraft, keyed by dto.yearId', async () => {
+    it('loads questions via FcUnspentDeclarationFormJsonService.loadFormConfig for saveDraft, keyed by dto.yearId', async () => {
       await service.saveDraft(baseDto({ isFcUnspent: null }), stateUser());
-      expect(formJsonConfigService['loadFields']).toHaveBeenCalledWith(yearOid.toString());
+      expect(formJsonConfigService['loadFormConfig']).toHaveBeenCalledWith(yearOid.toString());
     });
 
-    it('loads questions via FcUnspentDeclarationFormJsonService for finalSubmit, keyed by dto.yearId', async () => {
+    it('loads questions via FcUnspentDeclarationFormJsonService.loadFormConfig for finalSubmit, keyed by dto.yearId', async () => {
       rowService['resolveAndValidateRows'] = jest.fn().mockResolvedValue({ rows: [sampleResolvedRow], errors: {} });
       await service.finalSubmit(
         baseDto({ isFcUnspent: true, checkboxConfirmation: true, unspentUlbData: [] }),
@@ -886,11 +924,11 @@ describe('FcUnspentDeclarationService', () => {
         '127.0.0.1',
         'jest-agent',
       );
-      expect(formJsonConfigService['loadFields']).toHaveBeenCalledWith(yearOid.toString());
+      expect(formJsonConfigService['loadFormConfig']).toHaveBeenCalledWith(yearOid.toString());
     });
 
     it('propagates a NotFoundException from the formJson loader instead of falling back to hardcoded questions (GET)', async () => {
-      formJsonConfigService['loadFields'] = jest
+      formJsonConfigService['loadFormConfig'] = jest
         .fn()
         .mockRejectedValue(new NotFoundException('FormJson for year ... and formId 25 not found'));
       await expect(service.getForm(stateOid.toString(), yearOid.toString(), stateUser())).rejects.toThrow(
@@ -899,7 +937,9 @@ describe('FcUnspentDeclarationService', () => {
     });
 
     it('propagates a NotFoundException from the formJson loader instead of falling back to hardcoded questions (saveDraft)', async () => {
-      formJsonConfigService['loadFields'] = jest.fn().mockRejectedValue(new NotFoundException('FormJson not found'));
+      formJsonConfigService['loadFormConfig'] = jest
+        .fn()
+        .mockRejectedValue(new NotFoundException('FormJson not found'));
       await expect(service.saveDraft(baseDto({ isFcUnspent: null }), stateUser())).rejects.toThrow(NotFoundException);
     });
 

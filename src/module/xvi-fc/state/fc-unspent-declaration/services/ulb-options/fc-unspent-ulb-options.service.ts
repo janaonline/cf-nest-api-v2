@@ -16,6 +16,7 @@ import {
   DevolutionFormulaRowDocument,
 } from 'src/schemas/xvi-fc/state/devolution-formula-row.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 import {
   FC_UNSPENT_DEVOLUTION_INSTALLMENT,
   FC_UNSPENT_PAGINATION_DEFAULT_LIMIT,
@@ -41,6 +42,7 @@ export class FcUnspentUlbOptionsService {
     private readonly devolutionRowModel: Model<DevolutionFormulaRowDocument>,
     @InjectModel(Ulb.name)
     private readonly ulbModel: Model<UlbDocument>,
+    private readonly ulbEligibilityService: UlbEligibilityService,
   ) {}
 
   /**
@@ -48,6 +50,9 @@ export class FcUnspentUlbOptionsService {
    * Allocation source: the active Installment-1 Devolution Formula dataset, only
    * while that form is UNDER_REVIEW_BY_MOHUA. Returns an empty page (not an error)
    * when no such Devolution form exists yet, so the dropdown never hard-fails.
+   *
+   * Scopes the aggregation by devolution-formula's activeDatasetVersion from outside that module —
+   * see devolution-formula/docs/adr/0001-dataset-versioning.md.
    */
   async getOptions(
     stateId: string,
@@ -79,6 +84,7 @@ export class FcUnspentUlbOptionsService {
     }
 
     const ulbCollectionName = this.ulbModel.collection.name;
+    const ineligibleUlbTypeIds = await this.ulbEligibilityService.getIneligibleUlbTypeIds('XVIFC');
 
     const pipeline: PipelineStage[] = [
       {
@@ -100,13 +106,16 @@ export class FcUnspentUlbOptionsService {
                 $expr: {
                   $and: [{ $eq: ['$_id', '$$rowUlbId'] }, { $eq: ['$state', stateOid] }, { $eq: ['$isActive', true] }],
                 },
+                // Plain field condition can coexist with $expr in one $match — excludes
+                // Cantonment Board (and any other XVI-FC-ineligible type) from the picker.
+                ...(ineligibleUlbTypeIds.length ? { ulbType: { $nin: ineligibleUlbTypeIds } } : {}),
               },
             },
           ],
           as: 'ulb',
         },
       },
-      // Inner-join semantics: drops rows whose ULB is inactive or belongs to another state.
+      // Inner-join semantics: drops rows whose ULB is inactive, ineligible, or belongs to another state.
       { $unwind: '$ulb' },
     ];
 

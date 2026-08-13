@@ -2,8 +2,16 @@ import type { ApplicableFc } from 'src/schemas/xvi-fc/state/fc-unspent-state-for
 
 export const FC_UNSPENT_FORM_ID = 25;
 
-/** Single declaration point — never duplicate this literal elsewhere. */
-export const FC_UNSPENT_ELIGIBILITY_THRESHOLD_PERCENT = 10;
+/**
+ * Fallback default eligibility threshold, used only when a design year's form-json document has
+ * no `meta.eligibilityThresholdPercent` override (see FC_UNSPENT_ELIGIBILITY_THRESHOLD_META_KEY).
+ * Never read directly for eligibility computation — go through
+ * FcUnspentDeclarationFormJsonService.getEligibilityThresholdPercent().
+ */
+export const FC_UNSPENT_ELIGIBILITY_THRESHOLD_PERCENT = 0;
+
+/** Key read off `formJson.meta` to override FC_UNSPENT_ELIGIBILITY_THRESHOLD_PERCENT per design year. */
+export const FC_UNSPENT_ELIGIBILITY_THRESHOLD_META_KEY = 'eligibilityThresholdPercent';
 
 export const FC_UNSPENT_PAGINATION_DEFAULT_PAGE = 1;
 export const FC_UNSPENT_PAGINATION_DEFAULT_LIMIT = 20;
@@ -26,11 +34,11 @@ export const FC_UNSPENT_APPLICABLE_FC_BY_YEAR_LABEL: Record<string, ApplicableFc
 export const FC_UNSPENT_DEVOLUTION_INSTALLMENT = 1;
 
 export const FC_UNSPENT_BLOCKING_MESSAGE_MISSING_DEVOLUTION =
-  'Devolution Formula (Installment 1) must be validated with an active dataset before FC Unspent Declaration can be edited.';
+  'ULB-wise Allocation (Installment 1) must be validated with an active dataset before FC Unspent Declaration can be edited.';
 export const FC_UNSPENT_BLOCKING_MESSAGE_DEVOLUTION_RETURNED =
-  'Devolution Formula (Installment 1) has been returned by MoHUA. You may keep editing and save a draft, but final submit is blocked until Devolution Formula is resubmitted and back under MoHUA review.';
+  'ULB-wise Allocation (Installment 1) has been returned by MoHUA. You may keep editing and save a draft, but final submit is blocked until ULB-wise Allocation is resubmitted and back under MoHUA review.';
 export const FC_UNSPENT_BLOCKING_MESSAGE_DEVOLUTION_NOT_READY =
-  'Devolution Formula (Installment 1) must be under review by MoHUA before FC Unspent Declaration can be finalized.';
+  'ULB-wise Allocation (Installment 1) must be under review by MoHUA before FC Unspent Declaration can be finalized.';
 
 /**
  * Supporting-content action id the No-branch `fcDeclaration` field exposes for template download.

@@ -10,7 +10,7 @@ import * as bcrypt from 'bcrypt';
 import type { Response } from 'express';
 import { EmailQueueService } from 'src/core/queue/email-queue/email-queue.service';
 import { RedisService } from 'src/core/services/redis/redis.service';
-import { UsersRepository } from 'src/users/users.repository';
+import { UsersRepository } from 'src/module/users/users.repository';
 import { AuthService } from './auth.service';
 import { OtpService } from './otp.service';
 
@@ -216,6 +216,24 @@ describe('OtpService', () => {
 
       expect(result.mobile).toMatch(/\*/);
       expect(result.email).toMatch(/\*/);
+    });
+
+    it('returns success without touching Redis for forgot-password on a not-yet-onboarded user (anti-enumeration)', async () => {
+      mockUsersRepository.findByIdentifier.mockResolvedValue({ ...mockUser, isNewUser: true });
+
+      const result = await service.sendOtp({ identifier: 'test@example.com', purpose: 'forgot-password' });
+
+      expect(result).toEqual({ success: true, message: 'OTP sent if account exists' });
+      expect(mockRedisService.set).not.toHaveBeenCalled();
+    });
+
+    it('still sends a login OTP for a not-yet-onboarded user (isNewUser only blocks forgot-password)', async () => {
+      mockUsersRepository.findByIdentifier.mockResolvedValue({ ...mockUser, isNewUser: true });
+
+      const result = await service.sendOtp({ identifier: 'test@example.com', purpose: 'login' });
+
+      expect(result.message).toBe('OTP sent successfully');
+      expect(mockRedisService.set).toHaveBeenCalledTimes(2); // state + cooldown
     });
 
   });

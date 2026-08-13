@@ -11,7 +11,12 @@ import {
   XviFcAnnualAccountUploadHistoryDocument,
 } from '../../../../schemas/xvi-fc/annual-account-upload-history.schema';
 import { Ulb, UlbDocument } from '../../../../schemas/ulb.schema';
-import { AnnualAccountOcrApiService, OcrResultResponse, OcrSubmitJobDto, OcrBasicValidation } from './annual-account-ocr-api.service';
+import {
+  AnnualAccountOcrApiService,
+  OcrResultResponse,
+  OcrSubmitJobDto,
+  OcrBasicValidation,
+} from './annual-account-ocr-api.service';
 import type { AnnualAccountOcrJobData } from './dto/annual-account-ocr-job.dto';
 
 const POLL_INTERVAL_MS = 5_000;
@@ -20,11 +25,14 @@ const MAX_POLLS = 10;
 interface OcrCtx {
   uploadId: string;
   annualAccountId: string;
-  section: string;
+  /** The physical XviFcAnnualAccount document holding this section's `documents` array — the
+   *  'audited' anchor itself when section is 'auditedData', otherwise its 'unaudited' sibling
+   *  (looked up by {ulb, design_year, sectionType:'unaudited'}). Resolved once per job. */
+  targetDocId: Types.ObjectId;
   docId: string;
 }
 
-@Processor(ANNUAL_ACCOUNT_PROCESSING_QUEUE, { concurrency: 2 })
+@Processor(ANNUAL_ACCOUNT_PROCESSING_QUEUE, { concurrency: 14 })
 export class AnnualAccountOcrProcessor extends WorkerHost {
   private readonly logger = new Logger(AnnualAccountOcrProcessor.name);
 
@@ -76,7 +84,8 @@ export class AnnualAccountOcrProcessor extends WorkerHost {
     console.log(`[OCR Processor] ✔ ocrJobId=${ocrJobId} status=${ocrResp.status}`);
 
     const submittedAt = new Date();
-    const ctx: OcrCtx = { uploadId, annualAccountId, section, docId };
+    const targetDocId = await this.resolveTargetDocId(annualAccountId, section);
+    const ctx: OcrCtx = { uploadId, annualAccountId, targetDocId, docId };
 
     await Promise.all([
       this.uploadHistoryModel.updateOne(
@@ -84,12 +93,12 @@ export class AnnualAccountOcrProcessor extends WorkerHost {
         { $set: { 'ocrInfo.jobId': ocrJobId, 'ocrInfo.status': ocrResp.status, 'ocrInfo.submittedAt': submittedAt } },
       ),
       this.annualAccountModel.updateOne(
-        { _id: new Types.ObjectId(annualAccountId), [`${section}.documents.docId`]: docId },
+        { _id: targetDocId, 'documents.docId': docId },
         {
           $set: {
-            [`${section}.documents.$.currentUpload.ocrInfo.jobId`]: ocrJobId,
-            [`${section}.documents.$.currentUpload.ocrInfo.status`]: ocrResp.status,
-            [`${section}.documents.$.currentUpload.ocrInfo.submittedAt`]: submittedAt,
+            'documents.$.currentUpload.ocrInfo.jobId': ocrJobId,
+            'documents.$.currentUpload.ocrInfo.status': ocrResp.status,
+            'documents.$.currentUpload.ocrInfo.submittedAt': submittedAt,
           },
         },
       ),
@@ -112,11 +121,11 @@ export class AnnualAccountOcrProcessor extends WorkerHost {
             { $set: { 'ocrInfo.status': statusNorm, 'ocrInfo.progressStep': statusResp.progress_step } },
           ),
           this.annualAccountModel.updateOne(
-            { _id: new Types.ObjectId(annualAccountId), [`${section}.documents.docId`]: docId },
+            { _id: ctx.targetDocId, 'documents.docId': docId },
             {
               $set: {
-                [`${section}.documents.$.currentUpload.ocrInfo.status`]: statusNorm,
-                [`${section}.documents.$.currentUpload.ocrInfo.progressStep`]: statusResp.progress_step,
+                'documents.$.currentUpload.ocrInfo.status': statusNorm,
+                'documents.$.currentUpload.ocrInfo.progressStep': statusResp.progress_step,
               },
             },
           ),
@@ -140,7 +149,9 @@ export class AnnualAccountOcrProcessor extends WorkerHost {
     }
 
     if (!settled) {
-      this.logger.warn(`OCR not settled after ${MAX_POLLS} polls — cron fallback will pick it up — uploadId=${uploadId}`);
+      this.logger.warn(
+        `OCR not settled after ${MAX_POLLS} polls — cron fallback will pick it up — uploadId=${uploadId}`,
+      );
     }
 
     console.log(`[OCR Processor] ✅ DONE — uploadId=${uploadId} settled=${settled}`);
@@ -148,7 +159,7 @@ export class AnnualAccountOcrProcessor extends WorkerHost {
   }
 
   private async writeCompleted(ctx: OcrCtx, resp: OcrResultResponse): Promise<void> {
-    const { uploadId, annualAccountId, section, docId } = ctx;
+    const { uploadId, targetDocId, docId } = ctx;
     const completedAt = new Date();
 
     // Python nests validation inside result.basic_validation and uses "PASS"/"FAIL"
@@ -156,7 +167,9 @@ export class AnnualAccountOcrProcessor extends WorkerHost {
     const validationStatus = bv?.validation_status ?? null;
     const processingStatus = validationStatus?.toUpperCase() === 'PASS' ? 'PASSED' : 'FAILED';
 
-    console.log(`[OCR Processor] ✔ writeCompleted — processingStatus=${processingStatus} validationStatus=${validationStatus}`);
+    console.log(
+      `[OCR Processor] ✔ writeCompleted — processingStatus=${processingStatus} validationStatus=${validationStatus}`,
+    );
     console.log(`[OCR Processor] basic_validation =`, JSON.stringify(bv));
 
     await Promise.all([
@@ -175,15 +188,15 @@ export class AnnualAccountOcrProcessor extends WorkerHost {
         },
       ),
       this.annualAccountModel.updateOne(
-        { _id: new Types.ObjectId(annualAccountId), [`${section}.documents.docId`]: docId },
+        { _id: targetDocId, 'documents.docId': docId },
         {
           $set: {
-            [`${section}.documents.$.processingStatus`]: processingStatus,
-            [`${section}.documents.$.currentUpload.ocrInfo.status`]: 'COMPLETED',
-            [`${section}.documents.$.currentUpload.ocrInfo.completedAt`]: completedAt,
-            [`${section}.documents.$.currentUpload.ocrInfo.validationStatus`]: validationStatus,
-            [`${section}.documents.$.currentUpload.ocrInfo.validationDetails`]: bv?.validation_details ?? null,
-            [`${section}.documents.$.currentUpload.ocrInfo.failedChecks`]: resp.result?.error_messages ?? [],
+            'documents.$.processingStatus': processingStatus,
+            'documents.$.currentUpload.ocrInfo.status': 'COMPLETED',
+            'documents.$.currentUpload.ocrInfo.completedAt': completedAt,
+            'documents.$.currentUpload.ocrInfo.validationStatus': validationStatus,
+            'documents.$.currentUpload.ocrInfo.validationDetails': bv?.validation_details ?? null,
+            'documents.$.currentUpload.ocrInfo.failedChecks': resp.result?.error_messages ?? [],
           },
         },
       ),
@@ -193,7 +206,7 @@ export class AnnualAccountOcrProcessor extends WorkerHost {
   }
 
   private async writeFailed(ctx: OcrCtx, reason?: string): Promise<void> {
-    const { uploadId, annualAccountId, section, docId } = ctx;
+    const { uploadId, targetDocId, docId } = ctx;
     const completedAt = new Date();
 
     console.log(`[OCR Processor] ❌ FAILED — uploadId=${uploadId} reason=${reason}`);
@@ -212,17 +225,51 @@ export class AnnualAccountOcrProcessor extends WorkerHost {
         },
       ),
       this.annualAccountModel.updateOne(
-        { _id: new Types.ObjectId(annualAccountId), [`${section}.documents.docId`]: docId },
+        { _id: targetDocId, 'documents.docId': docId },
         {
           $set: {
-            [`${section}.documents.$.processingStatus`]: 'FAILED',
-            [`${section}.documents.$.currentUpload.ocrInfo.status`]: 'FAILED',
-            [`${section}.documents.$.currentUpload.ocrInfo.completedAt`]: completedAt,
+            'documents.$.processingStatus': 'FAILED',
+            'documents.$.currentUpload.ocrInfo.status': 'FAILED',
+            'documents.$.currentUpload.ocrInfo.completedAt': completedAt,
           },
         },
       ),
     ]);
 
     this.logger.warn(`OCR failure written — uploadId=${uploadId} reason=${reason}`);
+  }
+
+  /**
+   * `annualAccountId` always names the 'audited' anchor document (see
+   * AnnualAccountsService.resolveSectionDocument for the invariant this mirrors). For
+   * section === 'auditedData' that's already the right document; for 'unauditedData' the actual
+   * `documents` array lives on the sibling document, looked up by {ulb, design_year,
+   * sectionType:'unaudited'} — created lazily by upsertDocumentSlot before this job was ever
+   * enqueued, so it's expected to already exist here.
+   */
+  private async resolveTargetDocId(annualAccountId: string, section: string): Promise<Types.ObjectId> {
+    const anchorId = new Types.ObjectId(annualAccountId);
+    if (section === 'auditedData') return anchorId;
+
+    const anchor = await this.annualAccountModel.findById(anchorId).select('ulb design_year').lean().exec();
+    if (!anchor) {
+      this.logger.error(`OCR write target: annual account not found — annualAccountId=${annualAccountId}`);
+      return anchorId;
+    }
+
+    const sibling = await this.annualAccountModel
+      .findOne({ ulb: anchor.ulb, design_year: anchor.design_year, sectionType: 'unaudited' })
+      .select('_id')
+      .lean()
+      .exec();
+
+    if (!sibling) {
+      this.logger.error(
+        `OCR write target: 'unaudited' sibling not found — annualAccountId=${annualAccountId} ulb=${anchor.ulb.toString()} design_year=${anchor.design_year.toString()}`,
+      );
+      return anchorId;
+    }
+
+    return sibling._id;
   }
 }

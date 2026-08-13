@@ -7,6 +7,9 @@ import {
   type XviFcBankDetails,
 } from '../bank-account.types';
 
+/** Signs an S3 key into a short-lived, viewable download URL — bank-account.service.ts binds this to FileTokenService. */
+export type ProofFileUrlSigner = (s3Key: string) => string | null;
+
 const AES_256_GCM_ALGORITHM = 'aes-256-gcm';
 const AES_256_GCM_KEY_BYTES = 32;
 const AES_256_GCM_IV_BYTES = 12;
@@ -82,16 +85,20 @@ export function getAccountNumberLast4(accountNumber: string): string {
   return accountNumber.slice(-4);
 }
 
-export function buildSafeBankAccountResponse(record: BankAccountRecordLike): XviFcBankAccountResponse {
+export function buildSafeBankAccountResponse(
+  record: BankAccountRecordLike,
+  signProofUrl: ProofFileUrlSigner,
+): XviFcBankAccountResponse {
   const source =
     typeof record.toObject === 'function'
       ? record.toObject()
       : (record as Record<string, unknown>);
   const currentFormStatus = source.currentFormStatus as FormStatusType;
-  const proofFile = {
+  const rawProofFile = {
     ...DEFAULT_XVI_FC_BANK_ACCOUNT_PROOF_FILE,
     ...((source.proofFile as Partial<XviFcBankAccountProofFile> | undefined) ?? {}),
   };
+  const proofFile = { ...rawProofFile, fileUrl: rawProofFile.s3Key ? signProofUrl(rawProofFile.s3Key) : null };
 
   return {
     _id: toResponseString(source._id),
@@ -104,7 +111,10 @@ export function buildSafeBankAccountResponse(record: BankAccountRecordLike): Xvi
     accountNumberLast4: (source.accountNumberLast4 as string | undefined) ?? '',
     proofFile,
     currentFormStatus,
-    currentFormStatusLabel: getFormStatusLabel(currentFormStatus),
+    // Existing records predating this field won't have it stored — fall back to computing it.
+    currentFormStatusLabel: (source.currentFormStatusLabel as string | undefined) ?? getFormStatusLabel(currentFormStatus),
+    stateDecision: (source.stateDecision as XviFcBankAccountResponse['stateDecision']) ?? null,
+    mohuaDecision: (source.mohuaDecision as XviFcBankAccountResponse['mohuaDecision']) ?? null,
     submittedBy: toOptionalResponseString(source.submittedBy),
     submittedAt: toOptionalDateString(source.submittedAt),
     createdAt: toOptionalDateString(source.createdAt),

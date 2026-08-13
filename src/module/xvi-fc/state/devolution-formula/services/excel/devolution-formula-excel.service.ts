@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
+import { MongoServerError } from 'mongodb';
 import { AnyBulkWriteOperation, Model, Types } from 'mongoose';
 import type ExcelJS from 'exceljs';
 import * as XLSX from 'xlsx';
@@ -31,12 +32,14 @@ import {
 import {
   DevolutionFormulaForm,
   DevolutionFormulaFormDocument,
+  DfExcludedRowEntry,
 } from 'src/schemas/xvi-fc/state/devolution-formula-form.schema';
 import {
   DevolutionFormulaRow,
   DevolutionFormulaRowDocument,
 } from 'src/schemas/xvi-fc/state/devolution-formula-row.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 import {
   DF_ERROR_EXCEL_HEADERS,
   DF_EXCEL_HEADER_MAP,
@@ -89,8 +92,33 @@ interface ProcessedRow {
   rawExcelData: Record<string, unknown>;
 }
 
-function isMongoDuplicateKeyError(err: unknown): boolean {
-  return typeof err === 'object' && err !== null && Reflect.get(err, 'code') === 11000;
+/**
+ * On transaction abort, distinguishes a genuine row-level business duplicate (the same ULB
+ * appearing twice in one upload) from a form-level conflict (two requests racing on the same
+ * state+year+installment form doc, or a transaction write-conflict) — these need different,
+ * honest messages. Falls through without throwing for anything else, so the caller's `throw err`
+ * still applies.
+ */
+function classifyAndThrowMongoWriteConflict(err: unknown, formFilterKeys: string[]): void {
+  const conflictMessage = 'This form was just updated by another request. Please refresh and try again.';
+
+  if (err instanceof MongoServerError && err.code === 11000) {
+    const conflictKeys = Object.keys((err.keyValue as Record<string, unknown>) ?? {});
+    const isFormLevelConflict = conflictKeys.length > 0 && conflictKeys.every((k) => formFilterKeys.includes(k));
+    if (isFormLevelConflict) {
+      throwXviFcValidationError({
+        excelFile: [{ field: 'excelFile', code: 'conflict', message: conflictMessage }],
+      });
+    }
+    throwXviFcValidationError({
+      excelFile: [{ field: 'excelFile', code: 'duplicate', message: 'Duplicate ULB entries detected.' }],
+    });
+  }
+  if (err instanceof MongoServerError && err.hasErrorLabel('TransientTransactionError')) {
+    throwXviFcValidationError({
+      excelFile: [{ field: 'excelFile', code: 'conflict', message: conflictMessage }],
+    });
+  }
 }
 
 @Injectable()
@@ -111,6 +139,7 @@ export class DevolutionFormulaExcelService {
     private readonly fileTokenService: FileTokenService,
     private readonly fileInfoNormalizer: FileInfoNormalizerService,
     private readonly dfFormJsonConfig: DfFormJsonConfigService,
+    private readonly ulbEligibilityService: UlbEligibilityService,
   ) {}
 
   /**
@@ -156,9 +185,10 @@ export class DevolutionFormulaExcelService {
 
     // 1. Load grant allocation, existing form (incl. current excelFile for unchanged-file detection), and DB ULBs
     const formFilter = { state: stateOid, year: yearOid, installment: dto.installment };
+    const eligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC');
     const [grantAlloc, dbUlbsRaw, existing] = await Promise.all([
       this.dfService.resolveGrantAllocation(stateOid, yearOid),
-      this.ulbModel.find({ state: stateOid, isActive: true }).select('_id name censusCode sbCode').lean().exec(),
+      this.ulbModel.find(eligibleUlbFilter).select('_id name censusCode sbCode').lean().exec(),
       this.formModel
         .findOne(formFilter, { _id: 1, currentFormStatus: 1, activeDatasetVersion: 1, excelFile: 1 })
         .lean<Pick<DfFormLeanDoc, '_id' | 'currentFormStatus' | 'activeDatasetVersion' | 'excelFile'>>()
@@ -192,10 +222,6 @@ export class DevolutionFormulaExcelService {
 
     const dbUlbs = dbUlbsRaw as UlbLean[];
     const totalMoHUAAllocation = grantAlloc.basic + grantAlloc.performance;
-
-    const currentVersion = existingDoc?.activeDatasetVersion ?? 0;
-    const newVersion = currentVersion + 1;
-    const formId: Types.ObjectId = existingDoc ? (existingDoc._id as Types.ObjectId) : new Types.ObjectId();
 
     // 3. Read and parse Excel from S3
     const buffer = await this.s3Service.getBuffer(effectiveFile.path);
@@ -248,6 +274,7 @@ export class DevolutionFormulaExcelService {
     const processedRows: ProcessedRow[] = [];
     const matchedUlbIds = new Set<string>();
     let newUlbCount = 0;
+    let duplicateUlbCount = 0;
 
     for (let i = 0; i < dataRows.length; i++) {
       const raw = dataRows[i];
@@ -274,7 +301,7 @@ export class DevolutionFormulaExcelService {
           rowErrors.push({
             field: 'censusCode',
             code: 'unknownUlb',
-            message: `Census Code "${parsed.censusCode}" does not match any active onboarded ULB for this state. Unknown ULBs cannot be added to Devolution Formula.`,
+            message: `Census Code "${parsed.censusCode}" does not match any active onboarded ULB for this state. Unknown ULBs cannot be added to ULB-wise Allocation.`,
             value: parsed.censusCode,
           });
         } else {
@@ -283,6 +310,7 @@ export class DevolutionFormulaExcelService {
           if (matchedUlbIds.has(idKey)) {
             // Duplicate ULB — mark as invalid but null out the ulbId so partial unique index is not violated
             resolvedUlbId = null;
+            duplicateUlbCount++;
             rowErrors.push({
               field: 'censusCode',
               code: 'duplicate',
@@ -331,100 +359,119 @@ export class DevolutionFormulaExcelService {
     const formValidationStatus =
       errorRowCount === 0 && missingUlbCount === 0 && allocationBalanced ? 'VALID' : 'INVALID';
 
-    // Build row documents for DB insert
-    const rowDocs = processedRows.map((r) => ({
-      form: formId,
-      state: stateOid,
-      year: yearOid,
-      installment: dto.installment,
-      datasetVersion: newVersion,
-      rowNumber: r.rowNumber,
-      ulbId: r.ulbId,
-      censusCode: r.censusCode,
-      sbCode: '',
-      ulbName: r.ulbName,
-      totalGrantAllocation: Number(r.totalGrantAllocation) || 0,
-      installment1Amount: Number(r.installment1Amount) || 0,
-      installment2Amount: Number(r.installment2Amount) || 0,
-      devolutionFormula: r.devolutionFormula,
-      validationStatus: r.validationRowStatus,
-      errors: r.rowErrors,
-      rawExcelData: r.validationRowStatus === 'INVALID' ? r.rawExcelData : undefined,
-      isActive: true,
-      createdBy: userOid,
+    // Snapshot of rows excluded from persistence (unmatched, or an intra-batch duplicate ULB) —
+    // stored on the form doc so getErrorSheet can still surface them even though they never become
+    // row documents. Fully replaces any prior snapshot via formSummaryFieldsBase below.
+    const excludedRows: DfExcludedRowEntry[] = processedRows
+      .filter((r) => r.ulbId === null)
+      .map((r) => ({
+        rowNumber: r.rowNumber,
+        censusCode: r.censusCode,
+        ulbName: r.ulbName,
+        totalGrantAllocation: r.totalGrantAllocation,
+        installment1Amount: r.installment1Amount,
+        installment2Amount: r.installment2Amount,
+        devolutionFormula: r.devolutionFormula,
+        errors: r.rowErrors,
+      }));
+
+    // Atomic version allocation + safe dataset replacement, all inside one Mongo transaction.
+    // Replaces a prior read-then-increment (`currentVersion = existingDoc.activeDatasetVersion ?? 0;
+    // newVersion = currentVersion + 1`) that let two concurrent uploads for the same form compute
+    // the identical datasetVersion and corrupt each other's rows via the {form,datasetVersion,ulbId}
+    // unique index and a manual, version-number-keyed rollback. The $inc below is atomic — two
+    // concurrent requests can never be handed the same datasetVersion — and wrapping every write in
+    // one transaction means an abort undoes all of them, so no manual rollback/cleanup is needed.
+    // Full design + list of everything that depends on activeDatasetVersion (including claim-letter,
+    // outside this module): docs/adr/0001-dataset-versioning.md.
+    const formSummaryFieldsBase: Record<string, unknown> = {
+      excelFile: normalizedFile,
+      excelRowCount,
+      errorRowCount,
+      newUlbCount,
+      missingUlbCount,
+      duplicateUlbCount,
+      totalAllocatedSum,
+      totalMoHUAAllocation,
+      grantAllocationRef: grantAlloc._id,
+      validationStatus: formValidationStatus,
+      excludedRows,
+      lastExcelUploadedAt: new Date(),
+      lastExcelUploadedBy: userOid,
       updatedBy: userOid,
-    }));
+      currentFormStatus: FORM_STATUS.IN_PROGRESS,
+    };
 
-    // Safe dataset replacement: deactivate → insert → upsert form → delete old async
-    let previousRowsDeactivated = false;
-    let newRowsInserted = false;
+    const session = await this.formModel.db.startSession();
+    let formId!: Types.ObjectId;
+    let newVersion!: number;
     try {
-      const [deactivateResult, insertResult] = await Promise.allSettled([
-        currentVersion > 0
-          ? this.rowModel
-              .updateMany({ form: formId, datasetVersion: currentVersion }, { $set: { isActive: false } })
-              .exec()
-          : Promise.resolve(null),
-        this.rowModel.insertMany(rowDocs, { ordered: false }),
-      ]);
+      session.startTransaction();
 
-      previousRowsDeactivated = currentVersion > 0 && deactivateResult.status === 'fulfilled';
-      newRowsInserted = insertResult.status === 'fulfilled';
+      const updatedForm = await this.formModel
+        .findOneAndUpdate(
+          formFilter,
+          {
+            $inc: { activeDatasetVersion: 1 },
+            $set: formSummaryFieldsBase,
+            $setOnInsert: { createdBy: userOid },
+          },
+          { upsert: true, new: true, session, setDefaultsOnInsert: true },
+        )
+        .exec();
 
-      if (insertResult.status === 'rejected') {
-        throw insertResult.reason;
-      }
-      if (deactivateResult.status === 'rejected') {
-        throw deactivateResult.reason;
-      }
+      newVersion = updatedForm.activeDatasetVersion;
+      const currentVersion = newVersion - 1;
+      formId = updatedForm._id;
 
-      const formSummaryFields: Record<string, unknown> = {
-        excelFile: normalizedFile,
-        excelRowCount,
-        errorRowCount,
-        newUlbCount,
-        totalAllocatedSum,
-        totalMoHUAAllocation,
-        grantAllocationRef: grantAlloc._id,
-        validationStatus: formValidationStatus,
-        activeDatasetVersion: newVersion,
-        lastExcelUploadedAt: new Date(),
-        lastExcelUploadedBy: userOid,
-        updatedBy: userOid,
-        currentFormStatus: FORM_STATUS.IN_PROGRESS,
-      };
-
-      if (existingDoc) {
-        await this.formModel.findByIdAndUpdate(formId, { $set: formSummaryFields }).lean().exec();
-      } else {
-        await this.formModel.create({
-          _id: formId,
+      // Excludes rows with no resolved ulbId — either the census code didn't match any active
+      // registry ULB (unmatched), or it was a duplicate within this same upload (nulled above).
+      // Both are already fully reported (rowErrors/newUlbCount/newUlbsAdded, computed above) but
+      // are never written as rows; every persisted row is registry-backed.
+      const rowDocs = processedRows
+        .filter((r) => r.ulbId !== null)
+        .map((r) => ({
+          form: formId,
           state: stateOid,
           year: yearOid,
           installment: dto.installment,
-          isDraft: true,
+          datasetVersion: newVersion,
+          rowNumber: r.rowNumber,
+          ulbId: r.ulbId,
+          censusCode: r.censusCode,
+          sbCode: '',
+          ulbName: r.ulbName,
+          totalGrantAllocation: Number(r.totalGrantAllocation) || 0,
+          installment1Amount: Number(r.installment1Amount) || 0,
+          installment2Amount: Number(r.installment2Amount) || 0,
+          devolutionFormula: r.devolutionFormula,
+          validationStatus: r.validationRowStatus,
+          errors: r.rowErrors,
+          rawExcelData: r.validationRowStatus === 'INVALID' ? r.rawExcelData : undefined,
           isActive: true,
           createdBy: userOid,
-          ...formSummaryFields,
-        });
-      }
+          updatedBy: userOid,
+        }));
 
       if (currentVersion > 0) {
-        void this.deletePreviousDatasetRows(formId, currentVersion);
+        await this.rowModel
+          .updateMany({ form: formId, datasetVersion: currentVersion }, { $set: { isActive: false } }, { session })
+          .exec();
       }
+
+      await this.rowModel.insertMany(rowDocs, { ordered: false, session });
+
+      if (currentVersion > 0) {
+        await this.rowModel.deleteMany({ form: formId, datasetVersion: currentVersion }, { session }).exec();
+      }
+
+      await session.commitTransaction();
     } catch (err: unknown) {
-      if (previousRowsDeactivated) {
-        await this.rollbackDatasetReplacement(formId, currentVersion, newVersion);
-      } else if (newRowsInserted) {
-        // New form: rows written but form.create failed — delete orphan rows
-        await this.cleanupOrphanRows(formId, newVersion);
-      }
-      if (isMongoDuplicateKeyError(err)) {
-        throwXviFcValidationError({
-          excelFile: [{ field: 'excelFile', code: 'duplicate', message: 'Duplicate ULB entries detected.' }],
-        });
-      }
+      await session.abortTransaction();
+      classifyAndThrowMongoWriteConflict(err, Object.keys(formFilter));
       throw err;
+    } finally {
+      await session.endSession();
     }
 
     // Generate error Excel if row errors exist
@@ -441,6 +488,7 @@ export class DevolutionFormulaExcelService {
       errorRowCount,
       missingUlbCount,
       newUlbCount,
+      duplicateUlbCount,
       totalMoHUAAllocation,
       totalAllocatedSum,
       activeDatasetVersion: newVersion,
@@ -519,7 +567,7 @@ export class DevolutionFormulaExcelService {
       .exec();
 
     if (!form) {
-      throw new NotFoundException('Devolution Formula form not found.');
+      throw new NotFoundException('ULB-wise Allocation form not found.');
     }
 
     assertCanStateEditForm(form.currentFormStatus ?? FORM_STATUS.NOT_STARTED);
@@ -528,8 +576,9 @@ export class DevolutionFormulaExcelService {
     const totalMoHUAAllocation = grantAlloc.basic + grantAlloc.performance;
     const { maxFormulaLength } = await this.resolveDfValidationConfig(yearId);
 
+    const eligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC');
     const [dbUlbsRaw, activeRows] = await Promise.all([
-      this.ulbModel.find({ state: stateOid, isActive: true }).select('_id name censusCode sbCode').lean().exec(),
+      this.ulbModel.find(eligibleUlbFilter).select('_id name censusCode sbCode').lean().exec(),
       (form.activeDatasetVersion ?? 0) > 0
         ? this.rowModel
             .find({ form: form._id as Types.ObjectId, datasetVersion: form.activeDatasetVersion ?? 0, isActive: true })
@@ -552,6 +601,12 @@ export class DevolutionFormulaExcelService {
       }> = [];
       let errorRowCount = 0;
       let newUlbCount = 0;
+      // Structurally near-unreachable in practice: the {form,datasetVersion,ulbId} unique index
+      // (devolution-formula-row.schema.ts) means two active persisted rows can't already share a
+      // ulbId, so this branch only fires if that invariant is ever violated (e.g. legacy data).
+      // Counted (not hardcoded to 0 like EULB's equivalent Case A) precisely so that if it ever
+      // does happen, the count is honest instead of silently claiming zero duplicates.
+      let duplicateUlbCount = 0;
       let totalAllocatedSum = 0;
 
       for (const row of activeRows) {
@@ -569,6 +624,7 @@ export class DevolutionFormulaExcelService {
         if (row.ulbId) {
           const ulbIdStr = String(row.ulbId);
           if (matchedUlbIds.has(ulbIdStr)) {
+            duplicateUlbCount++;
             rowErrors.push({ field: 'censusCode', code: 'duplicate', message: 'Duplicate ULB in dataset.' });
           } else {
             matchedUlbIds.add(ulbIdStr);
@@ -611,6 +667,8 @@ export class DevolutionFormulaExcelService {
             totalMoHUAAllocation,
             errorRowCount,
             newUlbCount,
+            missingUlbCount,
+            duplicateUlbCount,
             validationStatus: formValidationStatus,
             updatedBy: userOid,
           },
@@ -624,22 +682,24 @@ export class DevolutionFormulaExcelService {
         errorRowCount,
         missingUlbCount,
         newUlbCount,
+        duplicateUlbCount,
         totalMoHUAAllocation,
         totalAllocatedSum,
         activeDatasetVersion: form.activeDatasetVersion ?? 0,
       });
 
-      const rowErrors: DfRowValidationError[] = rowUpdates
-        .filter((r) => r.errors.length > 0)
-        .flatMap((r, i) =>
-          r.errors.map((e) => ({
-            rowNumber: activeRows[i]?.rowNumber ?? i + 1,
-            field: e.field,
-            code: e.code,
-            message: e.message,
-            value: e.value,
-          })),
-        );
+      // Map over the full, unfiltered rowUpdates so index `i` stays aligned with activeRows[i] —
+      // filtering first (to only the invalid rows) would shift `i` and misattribute rowNumber to
+      // the wrong row for every invalid row after the first gap of valid rows.
+      const rowErrors: DfRowValidationError[] = rowUpdates.flatMap((r, i) =>
+        r.errors.map((e) => ({
+          rowNumber: activeRows[i]?.rowNumber ?? i + 1,
+          field: e.field,
+          code: e.code,
+          message: e.message,
+          value: e.value,
+        })),
+      );
 
       if (newUlbCount > 0) {
         throwXviFcValidationErrorWithData(
@@ -705,16 +765,14 @@ export class DevolutionFormulaExcelService {
     const stateOid = new Types.ObjectId(stateId);
     const yearOid = new Types.ObjectId(yearId);
 
-    // Always load active registry alongside form and grant alloc — needed in both branches.
+    // Always load active, XVI-FC-eligible registry alongside form and grant alloc — needed in
+    // both branches. Must match the count query below (in validateExcel/revalidateExcel) or
+    // row-count checks will mismatch.
+    const eligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC');
     const [form, grantAlloc, activeUlbsRaw] = await Promise.all([
       this.formModel.findOne({ state: stateOid, year: yearOid, installment }).lean<DfFormLeanDoc>().exec(),
       this.dfService.resolveGrantAllocation(stateOid, yearOid).catch(() => null),
-      this.ulbModel
-        .find({ state: stateOid, isActive: true })
-        .select('_id name censusCode sbCode')
-        .sort({ name: 1 })
-        .lean()
-        .exec(),
+      this.ulbModel.find(eligibleUlbFilter).select('_id name censusCode sbCode').sort({ name: 1 }).lean().exec(),
     ]);
 
     const maxGrantAllocation = grantAlloc ? grantAlloc.basic + grantAlloc.performance : undefined;
@@ -750,7 +808,7 @@ export class DevolutionFormulaExcelService {
       return this.excelService.generateExcel(
         DF_TEMPLATE_HEADERS,
         rows,
-        'Devolution Formula',
+        'ULB-wise Allocation',
         this.buildDfTemplateValidations(maxFormulaLength, maxGrantAllocation),
       );
     }
@@ -768,7 +826,7 @@ export class DevolutionFormulaExcelService {
     return this.excelService.generateExcel(
       DF_TEMPLATE_HEADERS,
       rows,
-      'Devolution Formula',
+      'ULB-wise Allocation',
       this.buildDfTemplateValidations(maxFormulaLength, maxGrantAllocation),
     );
   }
@@ -839,16 +897,18 @@ export class DevolutionFormulaExcelService {
       },
       {
         key: 'devolutionFormula',
-        mode: 'static',
-        validation: {
-          type: 'textLength',
-          operator: 'lessThanOrEqual',
-          allowBlank: true,
-          formulae: [maxFormulaLength],
-          showErrorMessage: true,
-          errorStyle: 'warning',
-          errorTitle: 'Devolution Formula Too Long',
-          error: `Devolution Formula must not exceed ${maxFormulaLength} characters.`,
+        mode: 'perRow',
+        buildValidation: (row, keyToLetter) => {
+          const cellLetter = keyToLetter.get('devolutionFormula')!;
+          return {
+            type: 'custom',
+            allowBlank: false,
+            formulae: [`AND(${cellLetter}${row}<>"",LEN(${cellLetter}${row})<=${maxFormulaLength})`],
+            showErrorMessage: true,
+            errorStyle: 'error',
+            errorTitle: 'Allocation Formula Required',
+            error: `Allocation Formula is required and must not exceed ${maxFormulaLength} characters.`,
+          };
         },
       },
     ];
@@ -880,7 +940,7 @@ export class DevolutionFormulaExcelService {
       ['totalGrantAllocation', 'Total Grant Allocation'],
       ['installment1Amount', 'Installment 1 Amount'],
       ['installment2Amount', 'Installment 2 Amount'],
-      ['devolutionFormula', 'Devolution Formula'],
+      ['devolutionFormula', 'Allocation Formula'],
     ];
     const missing: string[] = [];
     for (const [key, label] of requiredDataCols) {
@@ -941,7 +1001,7 @@ export class DevolutionFormulaExcelService {
     const buffer = (await this.excelService.generateExcel(
       DF_ERROR_EXCEL_HEADERS,
       errorRows,
-      'Devolution Formula Errors',
+      'ULB-wise Allocation Errors',
     )) as unknown as Buffer;
 
     await this.s3Service.uploadPrivate(
@@ -971,35 +1031,6 @@ export class DevolutionFormulaExcelService {
       .exec();
 
     return fileRef;
-  }
-
-  private async deletePreviousDatasetRows(formId: Types.ObjectId, version: number): Promise<void> {
-    try {
-      await this.rowModel.deleteMany({ form: formId, datasetVersion: version }).exec();
-    } catch (err) {
-      this.logger.error(`Failed to delete old dataset rows [form=${formId.toString()} version=${version}]`, err);
-    }
-  }
-
-  private async rollbackDatasetReplacement(
-    formId: Types.ObjectId,
-    oldVersion: number,
-    newVersion: number,
-  ): Promise<void> {
-    try {
-      await this.rowModel.updateMany({ form: formId, datasetVersion: oldVersion }, { $set: { isActive: true } }).exec();
-      await this.rowModel.deleteMany({ form: formId, datasetVersion: newVersion }).exec();
-    } catch (rollbackErr) {
-      this.logger.error(`Rollback failed [form=${formId.toString()}]`, rollbackErr);
-    }
-  }
-
-  private async cleanupOrphanRows(formId: Types.ObjectId, version: number): Promise<void> {
-    try {
-      await this.rowModel.deleteMany({ form: formId, datasetVersion: version }).exec();
-    } catch (err) {
-      this.logger.error(`Failed to clean up orphan rows [form=${formId.toString()} version=${version}]`, err);
-    }
   }
 
   private hydrateErrorExcelFile(file: FileInfo | null | undefined): HydratedFileInfoResponse | undefined {

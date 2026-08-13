@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ExcelService } from 'src/services/excel/excel.service';
 import { S3Service } from 'src/core/s3/s3.service';
-import { FormJsonModule } from 'src/form-json/form-json.module';
+import { FormJsonModule } from 'src/master/form-json/form-json.module';
 import { XviFcCommonModule } from 'src/module/xvi-fc/common/xvi-fc-common.module';
 import { DfFormJsonConfigService } from './services/form-json/devolution-formula-form-json.service';
 import {
@@ -24,6 +24,7 @@ import { DevolutionFormulaService } from './services/main/devolution-formula.ser
 import { DevolutionFormulaExcelService } from './services/excel/devolution-formula-excel.service';
 import { DevolutionFormulaRowService } from './services/row/devolution-formula-row.service';
 import { DevolutionFormulaValidator } from './validators/devolution-formula.validator';
+import { UlbEligibilityModule } from 'src/module/ulb-eligibility/ulb-eligibility.module';
 
 @Module({
   imports: [
@@ -37,6 +38,7 @@ import { DevolutionFormulaValidator } from './validators/devolution-formula.vali
     ]),
     XviFcCommonModule,
     FormJsonModule,
+    UlbEligibilityModule,
   ],
   controllers: [DevolutionFormulaController],
   providers: [

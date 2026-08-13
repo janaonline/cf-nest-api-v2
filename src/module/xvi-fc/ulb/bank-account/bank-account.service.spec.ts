@@ -18,7 +18,10 @@ function q<T>(value: T) {
 describe('BankAccountService scope enforcement', () => {
   let service: BankAccountService;
   let bankAccountModel: { findOne: jest.Mock; findOneAndUpdate: jest.Mock };
+  let formLogModel: { create: jest.Mock };
   let ulbModel: { findById: jest.Mock };
+  let fileTokenService: { signFileUrl: jest.Mock };
+  let ulbEligibilityService: { assertUlbEligibleForGrantCycle: jest.Mock };
   const originalEncryptionKey = process.env.BANK_ACCOUNT_ENCRYPTION_KEY;
   const originalHashSecret = process.env.BANK_ACCOUNT_HASH_SECRET;
 
@@ -78,10 +81,25 @@ describe('BankAccountService scope enforcement', () => {
       findOne: jest.fn(),
       findOneAndUpdate: jest.fn(),
     };
+    formLogModel = {
+      create: jest.fn().mockResolvedValue({}),
+    };
     ulbModel = {
       findById: jest.fn().mockReturnValue(q({ state: stateId })),
     };
-    service = new BankAccountService(bankAccountModel as never, ulbModel as never);
+    fileTokenService = {
+      signFileUrl: jest.fn((path: string) => `https://signed-url.example.com/${path}`),
+    };
+    ulbEligibilityService = {
+      assertUlbEligibleForGrantCycle: jest.fn().mockResolvedValue(undefined),
+    };
+    service = new BankAccountService(
+      bankAccountModel as never,
+      formLogModel as never,
+      ulbModel as never,
+      fileTokenService as never,
+      ulbEligibilityService as never,
+    );
   });
 
   afterAll(() => {

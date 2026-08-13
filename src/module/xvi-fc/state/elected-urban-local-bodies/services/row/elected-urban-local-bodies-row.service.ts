@@ -28,6 +28,8 @@ import {
   EulbRowDocument,
 } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
+import { CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE } from 'src/module/ulb-eligibility/ulb-eligibility.constants';
 import { ERROR_EXCEL_HEADERS } from 'src/module/xvi-fc/state/elected-urban-local-bodies/constants/elected-urban-local-bodies.constants';
 import type { GetElectedUrbanLocalBodiesRowsQueryDto } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/get-elected-urban-local-bodies-rows-query.dto';
 import type { UpdateElectedUrbanLocalBodiesRowDto } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/update-elected-urban-local-bodies-row.dto';
@@ -49,13 +51,6 @@ interface UlbLean {
 
 const DUPLICATE_CENSUS_CODE_MESSAGE = 'A ULB with this census code already exists for the selected design year.';
 
-function normalizeCensusCode(censusCode: string | number | null | undefined): string | null | undefined {
-  if (typeof censusCode === 'string' || typeof censusCode === 'number') {
-    return String(censusCode).trim();
-  }
-  return censusCode;
-}
-
 function isMongoDuplicateKeyError(err: unknown): boolean {
   return typeof err === 'object' && err !== null && Reflect.get(err, 'code') === 11000;
 }
@@ -74,6 +69,7 @@ export class ElectedUrbanLocalBodiesRowService {
     private readonly eulbValidator: ElectedUrbanLocalBodiesValidator,
     private readonly excelService: ExcelService,
     private readonly eulbFormJsonConfig: EulbFormJsonConfigService,
+    private readonly ulbEligibilityService: UlbEligibilityService,
   ) {}
 
   async getRows(
@@ -97,7 +93,6 @@ export class ElectedUrbanLocalBodiesRowService {
     };
 
     if (query.validationStatus) filter['validationStatus'] = query.validationStatus;
-    if (query.rowType) filter['rowType'] = query.rowType;
     if (query.errorField) filter['errors.field'] = query.errorField;
 
     if (query.search) {
@@ -136,39 +131,16 @@ export class ElectedUrbanLocalBodiesRowService {
     if (!row) {
       throw new NotFoundException('Row not found in the active dataset.');
     }
-
-    const yearOid = new Types.ObjectId(yearId);
-
-    // Normalize censusCode early so the duplicate check and all downstream logic use the same value.
-    if (row.rowType === 'EXTRA_ULB' && dto.censusCode !== undefined) {
-      dto = { ...dto, censusCode: normalizeCensusCode(dto.censusCode) ?? undefined };
-    }
-
-    // Reject portal census-code changes that would create a duplicate active EULB row in this design year.
-    if (row.rowType === 'EXTRA_ULB' && dto.censusCode !== undefined && dto.censusCode !== '') {
-      const duplicate = await this.rowModel
-        .findOne({
-          year: yearOid,
-          censusCode: dto.censusCode,
-          isActive: true,
-          _id: { $ne: row._id },
-        })
-        .lean()
-        .exec();
-      if (duplicate) {
-        throwXviFcValidationErrorWithData(
-          {
-            censusCode: [
-              {
-                field: 'censusCode',
-                code: 'duplicate',
-                message: DUPLICATE_CENSUS_CODE_MESSAGE,
-              },
-            ],
-          },
-          { rowId: String(row._id), rowNumber: row.rowNumber, censusCode: dto.censusCode, ulbName: row.ulbName },
-        );
-      }
+    // Defense-in-depth for rows created before this filter existed — new rows for ineligible
+    // ULBs are already rejected at Excel-ingestion time (see elected-urban-local-bodies-row.service
+    // extra-ULB validation), but an already-existing row could otherwise still be edited here.
+    // `row.ulbId` can be null on an intra-batch duplicate-census-code row — nothing to check then.
+    if (row.ulbId) {
+      await this.ulbEligibilityService.assertUlbEligibleForGrantCycle(
+        row.ulbId,
+        'XVIFC',
+        CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE,
+      );
     }
 
     const today = new Date();
@@ -183,10 +155,12 @@ export class ElectedUrbanLocalBodiesRowService {
     const isConstituted = effectiveStatus === 'Constituted';
 
     // For non-Constituted rows, exclude dates from DTO validation and clear them in DB.
-    // DB_ULB identity fields are always ignored — strip them from validation to avoid spurious errors.
+    // Identity fields (censusCode/ulbName) belong to the ULB registry, never to a portal edit —
+    // always ignored here to avoid spurious errors.
     const dtoForValidation = {
       ...(isConstituted ? dto : { ...dto, dateOfConstitution: undefined, dateOfExpiry: undefined }),
-      ...(row.rowType === 'DB_ULB' ? { censusCode: undefined, ulbName: undefined } : {}),
+      censusCode: undefined,
+      ulbName: undefined,
     };
 
     // Validate submitted editable fields before applying — produce uniform 400 with field-keyed errors
@@ -216,14 +190,10 @@ export class ElectedUrbanLocalBodiesRowService {
       updateFields['dateOfExpiry'] = null;
     }
     if (dto.remarks !== undefined) updateFields['remarks'] = dto.remarks;
-    if (row.rowType === 'EXTRA_ULB') {
-      if (dto.censusCode !== undefined) updateFields['censusCode'] = dto.censusCode;
-      if (dto.ulbName !== undefined) updateFields['ulbName'] = dto.ulbName;
-    }
 
     const mergedRow = {
-      censusCode: row.rowType === 'EXTRA_ULB' ? (dto.censusCode ?? row.censusCode) : row.censusCode,
-      ulbName: row.rowType === 'EXTRA_ULB' ? (dto.ulbName ?? row.ulbName) : row.ulbName,
+      censusCode: row.censusCode,
+      ulbName: row.ulbName,
       electedBodyStatus: effectiveStatus,
       dateOfConstitution: isConstituted
         ? dto.dateOfConstitution
@@ -237,11 +207,10 @@ export class ElectedUrbanLocalBodiesRowService {
         : undefined,
       remarks: dto.remarks ?? row.remarks,
       rowNumber: row.rowNumber,
-      rowType: row.rowType,
     };
 
     let dbUlb: UlbLean | null = null;
-    if (row.rowType === 'DB_ULB' && row.ulbId) {
+    if (row.ulbId) {
       dbUlb = (await this.ulbModel
         .findById(row.ulbId)
         .select('_id name censusCode sbCode')
@@ -271,7 +240,7 @@ export class ElectedUrbanLocalBodiesRowService {
           {
             rowId: String(row._id),
             rowNumber: row.rowNumber,
-            censusCode: dto.censusCode ?? row.censusCode,
+            censusCode: row.censusCode,
             ulbName: row.ulbName,
           },
         );
@@ -286,9 +255,11 @@ export class ElectedUrbanLocalBodiesRowService {
   }
 
   /**
-   * Generates an on-demand error sheet Excel from the latest active row dataset.
-   * Includes every row; the `errors` column is empty for valid rows and contains
-   * joined validation messages for invalid rows.
+   * Generates an on-demand error sheet Excel from the latest active row dataset, merged with the
+   * excludedRows snapshot (rows dropped at the last validate/revalidate-from-file call — unmatched
+   * or intra-batch duplicates — which never became row documents). The DB-driven half keeps portal
+   * row edits reflected immediately; the snapshot half restores visibility into excluded rows that
+   * would otherwise be invisible once dropped from persistence.
    * No S3 upload — buffer is streamed directly to the caller.
    *
    * @param stateId - ObjectId string of the target state.
@@ -311,11 +282,14 @@ export class ElectedUrbanLocalBodiesRowService {
       .lean()
       .exec();
 
-    if (rows.length === 0) {
+    const excludedRows = formDoc.excludedRows ?? [];
+
+    if (rows.length === 0 && excludedRows.length === 0) {
       throw new BadRequestException('No uploaded Elected Bodies data found to generate error sheet.');
     }
 
-    const excelRows = rows.map((r) => ({
+    const dbExcelRows = rows.map((r) => ({
+      rowNumber: r.rowNumber,
       censusCode: r.censusCode ?? '',
       ulbName: r.ulbName,
       electedBodyStatus: r.electedBodyStatus ?? '',
@@ -328,6 +302,23 @@ export class ElectedUrbanLocalBodiesRowService {
       remarks: r.remarks ?? '',
       errors: (r.errors ?? []).map((e) => e.message).join('; '),
     }));
+
+    const excludedExcelRows = excludedRows.map((r) => ({
+      rowNumber: r.rowNumber,
+      censusCode: r.censusCode ?? '',
+      ulbName: r.ulbName,
+      electedBodyStatus: r.electedBodyStatus ?? '',
+      dateOfConstitution:
+        r.dateOfConstitution instanceof Date
+          ? r.dateOfConstitution.toISOString().split('T')[0]
+          : (r.dateOfConstitution ?? ''),
+      dateOfExpiry:
+        r.dateOfExpiry instanceof Date ? r.dateOfExpiry.toISOString().split('T')[0] : (r.dateOfExpiry ?? ''),
+      remarks: r.remarks ?? '',
+      errors: (r.errors ?? []).map((e) => e.message).join('; '),
+    }));
+
+    const excelRows = [...dbExcelRows, ...excludedExcelRows].sort((a, b) => a.rowNumber - b.rowNumber);
 
     const buf = await this.excelService.generateExcel(ERROR_EXCEL_HEADERS as RowHeader[], excelRows, 'Error Sheet');
     return buf as unknown as ArrayBuffer;
@@ -376,8 +367,10 @@ export class ElectedUrbanLocalBodiesRowService {
         matchedDbUlbCount: 0,
         missingDbUlbCount: 0,
         extraExcelRowCount: 0,
+        duplicateUlbCount: 0,
         errorRowCount: 0,
         validationStatus: 'NOT_VALIDATED',
+        excludedRows: [],
         updatedBy: userOid,
       },
     });
@@ -392,6 +385,7 @@ export class ElectedUrbanLocalBodiesRowService {
         matchedDbUlbCount: 0,
         missingDbUlbCount: 0,
         extraExcelRowCount: 0,
+        duplicateUlbCount: 0,
         errorRowCount: 0,
         validationStatus: 'NOT_VALIDATED',
         activeDatasetVersion: activeVersion,
@@ -434,6 +428,7 @@ export class ElectedUrbanLocalBodiesRowService {
           matchedDbUlbCount: 1,
           missingDbUlbCount: 1,
           extraExcelRowCount: 1,
+          duplicateUlbCount: 1,
           activeDatasetVersion: 1,
         })
         .lean()
@@ -452,6 +447,7 @@ export class ElectedUrbanLocalBodiesRowService {
       matchedDbUlbCount: form?.matchedDbUlbCount ?? 0,
       missingDbUlbCount,
       extraExcelRowCount: form?.extraExcelRowCount ?? 0,
+      duplicateUlbCount: form?.duplicateUlbCount ?? 0,
       errorRowCount,
       validationStatus,
       activeDatasetVersion: form?.activeDatasetVersion ?? 0,

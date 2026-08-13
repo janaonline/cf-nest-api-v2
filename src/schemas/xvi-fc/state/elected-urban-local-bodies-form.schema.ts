@@ -2,6 +2,7 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import { FileInfo, FileInfoSchema } from 'src/schemas/common/file.schema';
+import { EulbRowError, EulbRowErrorSubdocSchema } from './elected-urban-local-bodies-row.schema';
 
 export const EULB_FORM_TYPE = 'ELECTED_URBAN_LOCAL_BODIES';
 
@@ -28,8 +29,35 @@ class EulbPostSubmissionUpdateBatch {
 }
 const EulbPostSubmissionUpdateBatchSchema = SchemaFactory.createForClass(EulbPostSubmissionUpdateBatch);
 
+/** A row excluded from persistence at the last validateExcel/revalidateFromStoredFile call
+ *  (unmatched to the registry, or an intra-batch duplicate census code). Kept only so
+ *  getErrorSheet can surface these rows — they never appear in ElectedUrbanLocalBodiesRow. */
+export interface EulbExcludedRowEntry {
+  rowNumber: number;
+  censusCode?: string;
+  ulbName: string;
+  electedBodyStatus?: string;
+  dateOfConstitution?: Date | string;
+  dateOfExpiry?: Date | string;
+  remarks?: string;
+  errors: EulbRowError[];
+}
+
+@Schema({ _id: false })
+class EulbExcludedRowSubdoc {
+  @Prop({ type: Number, required: true }) rowNumber!: number;
+  @Prop({ type: String }) censusCode?: string;
+  @Prop({ type: String, default: '' }) ulbName!: string;
+  @Prop({ type: String }) electedBodyStatus?: string;
+  @Prop({ type: MongooseSchema.Types.Mixed }) dateOfConstitution?: Date | string;
+  @Prop({ type: MongooseSchema.Types.Mixed }) dateOfExpiry?: Date | string;
+  @Prop({ type: String }) remarks?: string;
+  @Prop({ type: [EulbRowErrorSubdocSchema], default: [] }) errors!: EulbRowError[];
+}
+const EulbExcludedRowSubdocSchema = SchemaFactory.createForClass(EulbExcludedRowSubdoc);
+
 @Schema({
-  collection: 'xvi_fc_elected_urban_local_bodies_forms',
+  collection: 'xvifc_elected_ulb_forms',
   timestamps: true,
   versionKey: false,
 })
@@ -50,7 +78,13 @@ export class ElectedUrbanLocalBodiesForm {
   electedBodyExcelFile?: FileInfo;
 
   @Prop({ type: FileInfoSchema })
+  signedElectedbodyFile?: FileInfo;
+
+  @Prop({ type: FileInfoSchema })
   errorExcelFile?: FileInfo;
+
+  @Prop({ type: [EulbExcludedRowSubdocSchema], default: [] })
+  excludedRows!: EulbExcludedRowEntry[];
 
   @Prop({ type: Boolean })
   checkboxConfirmation?: boolean;
@@ -72,6 +106,9 @@ export class ElectedUrbanLocalBodiesForm {
 
   @Prop({ type: Number, default: 0 })
   extraExcelRowCount!: number;
+
+  @Prop({ type: Number, default: 0 })
+  duplicateUlbCount!: number;
 
   @Prop({ type: Number, default: 0 })
   errorRowCount!: number;

@@ -1,4 +1,4 @@
-import { Controller, Delete, Get, Param, ParseIntPipe, Query, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Controller, Delete, Get, Param, Query, UseGuards, UseInterceptors } from '@nestjs/common';
 import { ApiQuery } from '@nestjs/swagger';
 
 import { XviFcService } from './xvi-fc.service';
@@ -88,7 +88,10 @@ export class XviFcController {
   @ApiQuery({
     name: 'pattern',
     required: false,
-    description: 'Redis key pattern, e.g. /xvi-fc/sidebar/*. Omit to clear all XVI-FC cache.',
+    description:
+      'Substring to match against cached request URLs, e.g. "sidebar" or "xvi-fc/sidebar". ' +
+      'Matches anywhere in the URL (no need to include the app route prefix or add wildcards). ' +
+      'Omit to clear all XVI-FC cache.',
   })
   @ApiResponse({ status: 200, description: 'Cache cleared successfully' })
   @ApiResponse({ status: 403, description: 'Forbidden — admin scope required' })
@@ -99,16 +102,26 @@ export class XviFcController {
   }
 
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Clear FormJson config cache entry (Admin only)' })
+  @ApiOperation({ summary: 'Clear FormJson config cache (Admin only)' })
+  @ApiQuery({
+    name: 'designYearId',
+    required: false,
+    description: 'Limit clearing to this design year. Omit to match every year.',
+  })
+  @ApiQuery({
+    name: 'formId',
+    required: false,
+    description: 'Limit clearing to this form. Omit to match every form.',
+  })
   @ApiResponse({ status: 200, description: 'Cache cleared successfully' })
   @ApiResponse({ status: 403, description: 'Forbidden — admin scope required' })
-  @Delete('admin/cache/form-json/:designYearId/:formId')
+  @Delete('admin/cache/form-json')
   @UseGuards(PermissionGuard)
   clearFormJsonCache(
     @CurrentUser() user: AuthUser,
-    @Param('designYearId') designYearId: string,
-    @Param('formId', ParseIntPipe) formId: number,
+    @Query('designYearId') designYearId?: string,
+    @Query('formId') formId?: string,
   ): Promise<{ message: string }> {
-    return this.xviFcService.clearFormJsonCache(user, designYearId, formId);
+    return this.xviFcService.clearFormJsonCache(user, designYearId, formId ? Number(formId) : undefined);
   }
 }

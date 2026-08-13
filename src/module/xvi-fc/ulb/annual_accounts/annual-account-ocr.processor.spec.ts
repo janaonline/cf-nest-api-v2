@@ -4,7 +4,7 @@ import type { AnnualAccountOcrJobData } from './dto/annual-account-ocr-job.dto';
 
 describe('AnnualAccountOcrProcessor', () => {
   let processor: AnnualAccountOcrProcessor;
-  let annualAccountModel: { updateOne: jest.Mock };
+  let annualAccountModel: { updateOne: jest.Mock; findById: jest.Mock; findOne: jest.Mock };
   let uploadHistoryModel: { updateOne: jest.Mock };
   let ulbModel: { findById: jest.Mock };
   let s3Service: { getPdfBufferFromS3: jest.Mock };
@@ -17,7 +17,7 @@ describe('AnnualAccountOcrProcessor', () => {
     uploadId: 'upload-1',
     annualAccountId,
     ulbId,
-    section: 'incomeExpenditure',
+    section: 'auditedData',
     docId: 'doc-1',
     s3Key: 'xvi-fc/annual-accounts/file.pdf',
     expectedDocType: 'income_expenditure',
@@ -40,7 +40,11 @@ describe('AnnualAccountOcrProcessor', () => {
   beforeEach(() => {
     jest.useFakeTimers();
 
-    annualAccountModel = { updateOne: jest.fn().mockResolvedValue({}) };
+    annualAccountModel = {
+      updateOne: jest.fn().mockResolvedValue({}),
+      findById: jest.fn(),
+      findOne: jest.fn(),
+    };
     uploadHistoryModel = { updateOne: jest.fn().mockResolvedValue({}) };
     ulbModel = {
       findById: jest.fn().mockReturnValue(findByIdChain({ name: 'Test ULB', slug: 'test-ulb', keywords: 'kw' })),
@@ -121,9 +125,9 @@ describe('AnnualAccountOcrProcessor', () => {
       }),
     );
     expect(annualAccountModel.updateOne).toHaveBeenCalledWith(
-      expect.objectContaining({ 'incomeExpenditure.documents.docId': 'doc-1' }),
+      expect.objectContaining({ 'documents.docId': 'doc-1' }),
       expect.objectContaining({
-        $set: expect.objectContaining({ 'incomeExpenditure.documents.$.processingStatus': 'PASSED' }),
+        $set: expect.objectContaining({ 'documents.$.processingStatus': 'PASSED' }),
       }),
     );
   });
@@ -156,6 +160,33 @@ describe('AnnualAccountOcrProcessor', () => {
     );
   });
 
+  it("resolves the 'unauditedData' sibling document by {ulb, design_year, sectionType} and writes to its own _id, not the audited anchor's", async () => {
+    const siblingId = new Types.ObjectId();
+    const ulbObjId = new Types.ObjectId();
+    const yearObjId = new Types.ObjectId();
+    annualAccountModel.findById.mockReturnValue(findByIdChain({ ulb: ulbObjId, design_year: yearObjId }));
+    annualAccountModel.findOne.mockReturnValue(findByIdChain({ _id: siblingId }));
+    ocrApi.getJobStatus.mockResolvedValue({ job_id: 'ocr-job-1', status: 'completed' });
+    ocrApi.getJobResult.mockResolvedValue({
+      job_id: 'ocr-job-1',
+      status: 'completed',
+      result: { basic_validation: { validation_status: 'PASS' } },
+    });
+
+    const processPromise = processor.process(makeJob({ section: 'unauditedData' }));
+    await jest.advanceTimersByTimeAsync(5000);
+    await processPromise;
+
+    expect(annualAccountModel.findById).toHaveBeenCalled();
+    expect(annualAccountModel.findOne).toHaveBeenCalledWith(
+      expect.objectContaining({ ulb: ulbObjId, design_year: yearObjId, sectionType: 'unaudited' }),
+    );
+    expect(annualAccountModel.updateOne).toHaveBeenCalledWith(
+      expect.objectContaining({ _id: siblingId, 'documents.docId': 'doc-1' }),
+      expect.anything(),
+    );
+  });
+
   it('writes a FAILED status when the OCR job itself fails', async () => {
     ocrApi.getJobStatus.mockResolvedValue({ job_id: 'ocr-job-1', status: 'failed', message: 'OCR engine error' });
 
@@ -171,9 +202,9 @@ describe('AnnualAccountOcrProcessor', () => {
       }),
     );
     expect(annualAccountModel.updateOne).toHaveBeenCalledWith(
-      expect.objectContaining({ 'incomeExpenditure.documents.docId': 'doc-1' }),
+      expect.objectContaining({ 'documents.docId': 'doc-1' }),
       expect.objectContaining({
-        $set: expect.objectContaining({ 'incomeExpenditure.documents.$.processingStatus': 'FAILED' }),
+        $set: expect.objectContaining({ 'documents.$.processingStatus': 'FAILED' }),
       }),
     );
   });

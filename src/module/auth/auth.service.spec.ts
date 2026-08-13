@@ -12,7 +12,7 @@ import * as bcrypt from 'bcrypt';
 import { Response } from 'express';
 import { RedisService } from 'src/core/services/redis/redis.service';
 import { LoginHistory } from 'src/schemas/user/login-history.schema';
-import { UsersRepository } from 'src/users/users.repository';
+import { UsersRepository } from 'src/module/users/users.repository';
 import { AuthService } from './auth.service';
 
 const mockUser = {
@@ -105,6 +105,27 @@ describe('AuthService', () => {
     it('clears refresh cookie', async () => {
       await service.logout('user-id-123', mockRes);
       expect(mockRes.cookie).toHaveBeenCalled();
+    });
+  });
+
+  describe('generateTokens()', () => {
+    it('records the 16thFC purpose as-is on the LoginHistory record', async () => {
+      await service.generateTokens('507f1f77bcf86cd799439011', '16thFC');
+      expect(mockLoginHistoryModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({ loginType: '16thFC' }),
+      );
+    });
+
+    it('records the XVIFC purpose as its own distinct loginType, not collapsed into 16thFC', async () => {
+      await service.generateTokens('507f1f77bcf86cd799439011', 'XVIFC');
+      expect(mockLoginHistoryModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({ loginType: 'XVIFC' }),
+      );
+    });
+
+    it('leaves loginType unset (schema default applies) for a non-grant-cycle purpose like WEB', async () => {
+      await service.generateTokens('507f1f77bcf86cd799439011', 'WEB');
+      expect(mockLoginHistoryModel.create).toHaveBeenCalledWith({ user: expect.any(Object) });
     });
   });
 

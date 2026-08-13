@@ -1,9 +1,9 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { NotFoundException } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { FormJsonService } from 'src/form-json/form-json.service';
+import { FormJsonService } from 'src/master/form-json/form-json.service';
 import { SlbFormJsonConfigService } from './slb-form-json.service';
 import { DEFAULT_SLB_FIELDS } from '../constants/slb-form.constants';
+import { ConfigService } from '@nestjs/config';
 
 describe('SlbFormJsonConfigService', () => {
   let service: SlbFormJsonConfigService;
@@ -31,9 +31,7 @@ describe('SlbFormJsonConfigService', () => {
   });
 
   it('falls back to DEFAULT_SLB_FIELDS when no FormJson has been seeded for the design year', async () => {
-    formJsonService.findActiveByDesignYearAndFormId!.mockRejectedValue(
-      new NotFoundException('FormJson not found'),
-    );
+    formJsonService.findActiveByDesignYearAndFormId!.mockRejectedValue(new NotFoundException('FormJson not found'));
 
     const fields = await service.loadFields('year-id');
 
@@ -49,7 +47,9 @@ describe('SlbFormJsonConfigService', () => {
   });
 
   it('uses the admin-configured FormJson once it has been seeded', async () => {
-    const configured = [{ key: 'ind1', formFieldType: 'actualTarget', label: 'x', fieldTypes: ['SLB_MAIN_FORM_FIELDS'] }];
+    const configured = [
+      { key: 'ind1', formFieldType: 'actualTarget', label: 'x', fieldTypes: ['SLB_MAIN_FORM_FIELDS'] },
+    ];
     formJsonService.findActiveByDesignYearAndFormId!.mockResolvedValue({ data: configured });
 
     const fields = await service.loadFields('year-id');
@@ -68,7 +68,9 @@ describe('SlbFormJsonConfigService', () => {
 
   it('in dev (NODE_ENV !== production), returns DEFAULT_SLB_FIELDS directly and never queries the DB', async () => {
     service = await createService('development');
-    const configured = [{ key: 'ind1', formFieldType: 'actualTarget', label: 'x', fieldTypes: ['SLB_MAIN_FORM_FIELDS'] }];
+    const configured = [
+      { key: 'ind1', formFieldType: 'actualTarget', label: 'x', fieldTypes: ['SLB_MAIN_FORM_FIELDS'] },
+    ];
     formJsonService.findActiveByDesignYearAndFormId!.mockResolvedValue({ data: configured });
 
     const fields = await service.loadFields('year-id');

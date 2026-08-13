@@ -8,6 +8,7 @@ import { Ulb } from 'src/schemas/ulb.schema';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { SlbFormJsonConfigService } from './services/slb-form-json.service';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { AccessLevel, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
@@ -129,6 +130,10 @@ describe('SlbService', () => {
         { provide: DynamicFormValidationService, useValue: validator },
         { provide: FileTokenService, useValue: { signFileUrl: jest.fn((u: string) => `signed::${u}`) } },
         { provide: SlbFormJsonConfigService, useValue: slbFormJsonConfig },
+        {
+          provide: UlbEligibilityService,
+          useValue: { assertUlbEligibleForGrantCycle: jest.fn().mockResolvedValue(undefined) },
+        },
       ],
     }).compile();
 

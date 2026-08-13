@@ -86,5 +86,10 @@ describe('XviFcCacheService', () => {
       await service.deleteByPattern('xvifc:cache:/xvi-fc/*');
       expect(mockRedisService.delByPattern).toHaveBeenCalledWith('xvifc:cache:/xvi-fc/*');
     });
+
+    it('returns the number of keys deleted', async () => {
+      mockRedisService.delByPattern.mockResolvedValue(5);
+      await expect(service.deleteByPattern('xvifc:cache:/xvi-fc/*')).resolves.toBe(5);
+    });
   });
 });

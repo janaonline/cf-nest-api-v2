@@ -3,7 +3,7 @@ import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/commo
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 
-import { FORM_STATUS, type FormStatusType } from 'src/common/constants/form-status.constants';
+import { FORM_STATUS, getFormStatusKey, type FormStatusType } from 'src/common/constants/form-status.constants';
 import { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { toObjectIdString } from 'src/common/utils/objectid.util';
@@ -30,7 +30,8 @@ import { Ulb, UlbDocument } from '../../schemas/ulb.schema';
 import { State, StateDocument } from '../../schemas/state.schema';
 import { SideMenu, SideMenuDocument, MenuRole } from '../../schemas/side-menu.schema';
 import { XviFcCacheService, XVIFC_CACHE_KEY_PREFIX } from './cache/xvi-fc-cache.service';
-import { FormJsonService } from '../../form-json/form-json.service';
+import { FormJsonService } from '../../master/form-json/form-json.service';
+import { UlbEligibilityService } from '../ulb-eligibility/ulb-eligibility.service';
 
 @Injectable()
 export class XviFcService {
@@ -53,6 +54,7 @@ export class XviFcService {
     private readonly bankAccountModel: Model<XviFcBankAccountDocument>,
     private readonly cache: XviFcCacheService,
     private readonly formJsonService: FormJsonService,
+    private readonly ulbEligibilityService: UlbEligibilityService,
   ) {}
 
   async getStateWiseData(stateId: string, requester: AuthUser): Promise<StateWiseResponseDto> {
@@ -61,7 +63,8 @@ export class XviFcService {
     }
 
     const stateObjectId = new Types.ObjectId(stateId);
-    const pipeline = buildGetStateWiseDataPipeline(stateObjectId);
+    const ineligibleUlbTypeIds = await this.ulbEligibilityService.getIneligibleUlbTypeIds('XVIFC');
+    const pipeline = buildGetStateWiseDataPipeline(stateObjectId, ineligibleUlbTypeIds);
     const [result] = await this.grantAllocationModel.aggregate<StateWiseResponseDto>(pipeline);
     if (!result) {
       throw new NotFoundException('No grant allocation data found for this state');
@@ -85,15 +88,39 @@ export class XviFcService {
 
   async clearPageCache(user: AuthUser, pattern?: string): Promise<{ message: string }> {
     if (user.scope !== Scope.ADMIN) throw new ForbiddenException('Only admins can clear the cache.');
-    const redisPattern = pattern ? `${XVIFC_CACHE_KEY_PREFIX}:${pattern}` : `${XVIFC_CACHE_KEY_PREFIX}:*`;
-    await this.cache.deleteByPattern(redisPattern);
-    return { message: `Cache cleared for ${pattern ? `pattern: ${pattern}` : 'all XVI-FC cache'}` };
+    // Cache keys are `xvifc:cache:<full request URL>`, which includes the app's global
+    // route prefix (e.g. /api/v2/xvi-fc/sidebar/STATE?yearId=...) — a caller passing just
+    // "/xvi-fc/sidebar" has no way to know that prefix. Wrap the pattern as a "contains"
+    // glob match instead of an anchored one, so it matches regardless of the prefix or
+    // whether the caller already added their own wildcards.
+    const redisPattern = pattern
+      ? `${XVIFC_CACHE_KEY_PREFIX}:*${pattern.replace(/^\/+|\*+/g, '')}*`
+      : `${XVIFC_CACHE_KEY_PREFIX}:*`;
+    const deletedCount = await this.cache.deleteByPattern(redisPattern);
+    return {
+      message:
+        deletedCount > 0
+          ? `Cleared ${deletedCount} cache ${deletedCount === 1 ? 'entry' : 'entries'}${pattern ? ` for pattern: ${pattern}` : ''}.`
+          : `No cached entries matched${pattern ? ` pattern: ${pattern}` : ''} — nothing was cleared.`,
+    };
   }
 
-  async clearFormJsonCache(user: AuthUser, designYearId: string, formId: number): Promise<{ message: string }> {
+  async clearFormJsonCache(
+    user: AuthUser,
+    designYearId?: string,
+    formId?: number,
+  ): Promise<{ message: string }> {
     if (user.scope !== Scope.ADMIN) throw new ForbiddenException('Only admins can clear the cache.');
-    await this.formJsonService.clearCache(designYearId, formId);
-    return { message: `FormJson cache cleared for designYearId: ${designYearId}, formId: ${formId}` };
+    const deletedCount = await this.formJsonService.clearCache(designYearId, formId);
+    const scope = [designYearId ? `designYearId: ${designYearId}` : null, formId ? `formId: ${formId}` : null]
+      .filter(Boolean)
+      .join(', ');
+    return {
+      message:
+        deletedCount > 0
+          ? `Cleared ${deletedCount} FormJson cache ${deletedCount === 1 ? 'entry' : 'entries'}${scope ? ` for ${scope}` : ''}.`
+          : `No matching FormJson cache entries${scope ? ` for ${scope}` : ''} — nothing was cleared.`,
+    };
   }
 
   private buildMenuTree(docs: Array<SideMenu & { _id: Types.ObjectId }>): SideMenuResponseDto {
@@ -168,17 +195,20 @@ export class XviFcService {
     const ulb = new Types.ObjectId(ulbId);
     const designYear = new Types.ObjectId(designYearId);
 
-    const [annualAccount, disclosure, bankAccount] = await Promise.all([
+    const [annualAccounts, disclosure, bankAccount] = await Promise.all([
       this.annualAccountModel
-        .findOne({ ulb, design_year: designYear })
-        .select(
-          'auditedData.form_status auditedData.form_status_id unauditedData.form_status unauditedData.form_status_id',
-        )
+        .find({ ulb, design_year: designYear })
+        .select('sectionType form_status form_status_id')
         .lean()
         .exec(),
       this.disclosureModel.findOne({ ulb, designYear }).select('formStatus').lean().exec(),
       this.bankAccountModel.findOne({ ulb, designYear }).select('currentFormStatus').lean().exec(),
     ]);
+
+    // 'audited' is always the {ulb, design_year} anchor — its _id is what every other
+    // annual-account endpoint hands back as annualAccountId (see AnnualAccountsService).
+    const auditedDoc = annualAccounts.find((a) => a.sectionType === 'audited');
+    const unauditedDoc = annualAccounts.find((a) => a.sectionType === 'unaudited');
 
     const sectionStatus = (section: Record<string, unknown> | undefined | null) => ({
       form_status: (section?.['form_status'] ?? AnnualAccountFormStatus.NOT_STARTED) as AnnualAccountFormStatus,
@@ -191,20 +221,16 @@ export class XviFcService {
       FORM_STATUS.NOT_STARTED;
 
     return {
-      annualAccountId: (annualAccount as Record<string, unknown> | null)?.['_id']?.toString() ?? null,
-      auditedData: sectionStatus(
-        (annualAccount as Record<string, unknown> | null)?.['auditedData'] as Record<string, unknown>,
-      ),
-      unauditedData: sectionStatus(
-        (annualAccount as Record<string, unknown> | null)?.['unauditedData'] as Record<string, unknown>,
-      ),
+      annualAccountId: auditedDoc?._id?.toString() ?? null,
+      auditedData: sectionStatus(auditedDoc as Record<string, unknown> | undefined),
+      unauditedData: sectionStatus(unauditedDoc as Record<string, unknown> | undefined),
       unspentBalanceDisclosure: {
         form_status: isSubmitted ? 'SUBMITTED' : 'NOT_STARTED',
         form_status_id: null,
       },
       xviFcBankAccount: {
-        form_status: bankAccountStatus,
-        form_status_id: null,
+        form_status: getFormStatusKey(bankAccountStatus),
+        form_status_id: bankAccountStatus,
       },
     };
   }

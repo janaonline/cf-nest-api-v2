@@ -8,13 +8,50 @@ import {
   type DfInstallment,
   type DfValidationStatus,
 } from 'src/module/xvi-fc/state/devolution-formula/constants/devolution-formula.constants';
+import type { DfRowError } from 'src/module/xvi-fc/state/devolution-formula/types/devolution-formula.types';
 
 export { DF_FORM_TYPE as DEVOLUTION_FORMULA_FORM_TYPE };
 
 export type DevolutionFormulaFormDocument = HydratedDocument<DevolutionFormulaForm>;
 
+/** A row excluded from persistence at the last validateExcel call (unmatched to the registry, or an
+ *  intra-batch duplicate ULB). Kept only so getErrorSheet can surface these rows — they never appear
+ *  in DevolutionFormulaRow. */
+export interface DfExcludedRowEntry {
+  rowNumber: number;
+  censusCode: string;
+  ulbName: string;
+  totalGrantAllocation?: unknown;
+  installment1Amount?: unknown;
+  installment2Amount?: unknown;
+  devolutionFormula?: string;
+  errors: DfRowError[];
+}
+
+@Schema({ _id: false })
+class DfRowErrorSubdoc {
+  @Prop({ type: String, required: true }) field!: string;
+  @Prop({ type: String, required: true }) code!: string;
+  @Prop({ type: String, required: true }) message!: string;
+  @Prop({ type: MongooseSchema.Types.Mixed }) value?: unknown;
+}
+const DfRowErrorSubdocSchema = SchemaFactory.createForClass(DfRowErrorSubdoc);
+
+@Schema({ _id: false })
+class DfExcludedRowSubdoc {
+  @Prop({ type: Number, required: true }) rowNumber!: number;
+  @Prop({ type: String, default: '' }) censusCode!: string;
+  @Prop({ type: String, default: '' }) ulbName!: string;
+  @Prop({ type: MongooseSchema.Types.Mixed }) totalGrantAllocation?: unknown;
+  @Prop({ type: MongooseSchema.Types.Mixed }) installment1Amount?: unknown;
+  @Prop({ type: MongooseSchema.Types.Mixed }) installment2Amount?: unknown;
+  @Prop({ type: String }) devolutionFormula?: string;
+  @Prop({ type: [DfRowErrorSubdocSchema], default: [] }) errors!: DfRowError[];
+}
+const DfExcludedRowSubdocSchema = SchemaFactory.createForClass(DfExcludedRowSubdoc);
+
 @Schema({
-  collection: 'xvi_fc_devolution_formula_forms',
+  collection: 'xvifc_devolution_forms',
   timestamps: true,
   versionKey: false,
 })
@@ -60,6 +97,9 @@ export class DevolutionFormulaForm {
   @Prop({ type: FileInfoSchema })
   errorExcelFile?: FileInfo;
 
+  @Prop({ type: [DfExcludedRowSubdocSchema], default: [] })
+  excludedRows!: DfExcludedRowEntry[];
+
   @Prop({ type: Number, default: 0 })
   excelRowCount!: number;
 
@@ -68,6 +108,12 @@ export class DevolutionFormulaForm {
 
   @Prop({ type: Number, default: 0 })
   newUlbCount!: number;
+
+  @Prop({ type: Number, default: 0 })
+  missingUlbCount!: number;
+
+  @Prop({ type: Number, default: 0 })
+  duplicateUlbCount!: number;
 
   @Prop({ type: Number, default: 0 })
   activeDatasetVersion!: number;

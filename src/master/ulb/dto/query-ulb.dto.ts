@@ -26,11 +26,13 @@ export class QueryUlbDto {
 
   @ApiPropertyOptional({
     description:
-      'Filter by approval status. STATE users are always scoped to PENDING+APPROVED+REJECTED within their own state.',
+      'Filter by approval status. STATE users are always scoped to PENDING+APPROVED+REJECTED+EXISTING within ' +
+      "their own state. 'EXISTING' matches legacy ULBs created before the approval workflow existed (no " +
+      "'approval' field stored at all), distinct from an ADMIN-reviewed 'APPROVED' ULB.",
   })
   @IsOptional()
-  @IsIn(['PENDING', 'APPROVED', 'REJECTED'])
-  approvalStatus?: 'PENDING' | 'APPROVED' | 'REJECTED';
+  @IsIn(['PENDING', 'APPROVED', 'REJECTED', 'EXISTING'])
+  approvalStatus?: 'PENDING' | 'APPROVED' | 'REJECTED' | 'EXISTING';
 
   @ApiPropertyOptional({ example: 'name' })
   @IsOptional()

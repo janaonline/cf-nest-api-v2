@@ -1,6 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
-import type { RowStatusType } from 'src/common/constants/row-status.constants';
+import { ROW_REVIEW_STATUS_VALUES } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
+import type { RowReviewStatus } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
 import { FcUnspentUlbRowSnapshot, FcUnspentUlbRowSnapshotSchema } from './fc-unspent-state-form-row.schema';
 
 export type XviFcUnspentStateFormRowHistoryDocument = HydratedDocument<XviFcUnspentStateFormRowHistory>;
@@ -13,7 +14,7 @@ export type XviFcUnspentStateFormRowHistoryDocument = HydratedDocument<XviFcUnsp
  * update/delete operations are exposed by the row-history service.
  */
 @Schema({
-  collection: 'xvi_fc_unspent_state_form_row_histories',
+  collection: 'xvifc_unspent_state_form_row_histories',
   timestamps: true,
   versionKey: false,
 })
@@ -30,11 +31,11 @@ export class XviFcUnspentStateFormRowHistory {
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Year', required: true })
   year!: Types.ObjectId;
 
-  @Prop({ type: String, default: null })
-  previousStatus!: RowStatusType | null;
+  @Prop({ type: Number, enum: [...ROW_REVIEW_STATUS_VALUES, null], default: null })
+  previousStatus!: RowReviewStatus | null;
 
-  @Prop({ type: String, required: true })
-  currentStatus!: RowStatusType;
+  @Prop({ type: Number, enum: ROW_REVIEW_STATUS_VALUES, required: true })
+  currentStatus!: RowReviewStatus;
 
   @Prop({ type: FcUnspentUlbRowSnapshotSchema, required: true })
   snapshot!: FcUnspentUlbRowSnapshot;

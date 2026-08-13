@@ -1,9 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { FormJsonService } from 'src/form-json/form-json.service';
+import { FormJsonService } from 'src/master/form-json/form-json.service';
 import { SLB_FORM_ID, SLB_FORM_TYPE } from 'src/schemas/xvi-fc/ulb/slb-form.schema';
 import { DEFAULT_SLB_FIELDS } from '../constants/slb-form.constants';
 import { SlbTypedFieldConfig, validateSlbFormJsonData } from '../helpers/slb-form-json.helpers';
+import { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class SlbFormJsonConfigService {

@@ -14,6 +14,12 @@ class SaveEulbDraftDataDto {
   electedBodyExcelFile?: XviFcFileRefDto;
 
   @IsOptional()
+  @IsObject()
+  @ValidateNested()
+  @Type(() => XviFcFileRefDto)
+  signedElectedbodyFile?: XviFcFileRefDto;
+
+  @IsOptional()
   @IsBoolean()
   checkboxConfirmation?: boolean;
 }

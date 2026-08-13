@@ -156,8 +156,8 @@ Runtime item counts are:
 | Total ULBs           | Active `Ulb` master records for the State                                                                          |
 | Allocated amount     | `GrantAllocation` / `grantAllocation` (`basic + performance`)                                                      |
 | Claimed amount       | Controlled fallback `0`                                                                                            |
-| Devolution task      | `DevolutionFormulaForm` / `xvi_fc_devolution_formula_forms`                                                        |
-| State conditions     | `XviFcSfcStatus` / `xvifc_sfc_forms` and `ElectedUrbanLocalBodiesForm` / `xvi_fc_elected_urban_local_bodies_forms` |
+| Devolution task      | `DevolutionFormulaForm` / `xvifc_devolution_forms`                                                        |
+| State conditions     | `XviFcSfcStatus` / `xvifc_sfc` and `ElectedUrbanLocalBodiesForm` / `xvifc_elected_ulb_forms` |
 | Annual Accounts      | `XviFcAnnualAccount` / `xvifc_annualaccount_datas.auditedData.form_status_id`                                      |
 | Provisional Accounts | `XviFcAnnualAccount` / `xvifc_annualaccount_datas.unauditedData.form_status_id`                                    |
 | PFMS                 | `XviFcBankAccount` / `xvi_fc_bank_accounts.currentFormStatus`                                                      |
