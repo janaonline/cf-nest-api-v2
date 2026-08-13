@@ -165,6 +165,59 @@ describe('XviFcService', () => {
     it('should throw NotFoundException for unknown role', async () => {
       await expect(service.getSideMenu('UNKNOWN' as any, yearId)).rejects.toThrow(NotFoundException);
     });
+
+    it('copies url/target onto a top-level external-link item', async () => {
+      mockSideMenuModel.find.mockReturnValue(
+        q([
+          {
+            _id: new Types.ObjectId(),
+            name: 'Submit Feedback',
+            section: 'top',
+            type: 'item',
+            sequence: 1,
+            url: 'https://tally.so/r/44d28O',
+            target: '_blank',
+          },
+        ]),
+      );
+      const result = await service.getSideMenu('ULB', yearId);
+      expect(result.topModel[0]).toEqual(
+        expect.objectContaining({ label: 'Submit Feedback', url: 'https://tally.so/r/44d28O', target: '_blank' }),
+      );
+    });
+
+    it('copies url/target onto a child item nested under a group', async () => {
+      const groupId = new Types.ObjectId();
+      mockSideMenuModel.find.mockReturnValue(
+        q([
+          { _id: groupId, name: 'Support', section: 'top', type: 'group', sequence: 1, parentId: null },
+          {
+            _id: new Types.ObjectId(),
+            name: 'Submit Feedback',
+            section: 'top',
+            type: 'item',
+            sequence: 2,
+            parentId: groupId,
+            url: 'https://tally.so/r/44d28O',
+            target: '_blank',
+          },
+        ]),
+      );
+      const result = await service.getSideMenu('ULB', yearId);
+      const group = result.topModel.find((i) => i.label === 'Support');
+      expect(group?.items?.[0]).toEqual(
+        expect.objectContaining({ label: 'Submit Feedback', url: 'https://tally.so/r/44d28O', target: '_blank' }),
+      );
+    });
+
+    it('omits url/target for an item that does not set them', async () => {
+      mockSideMenuModel.find.mockReturnValue(
+        q([{ _id: new Types.ObjectId(), name: 'Overview', section: 'top', type: 'item', sequence: 1 }]),
+      );
+      const result = await service.getSideMenu('ULB', yearId);
+      expect(result.topModel[0].url).toBeUndefined();
+      expect(result.topModel[0].target).toBeUndefined();
+    });
   });
 
   describe('getFormStatus', () => {
