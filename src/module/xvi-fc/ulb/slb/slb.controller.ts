@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiBody, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { PermissionGuard } from 'src/module/auth/permission.guard';
 import { CurrentUser } from 'src/module/auth/decorators/current-user.decorator';
@@ -6,6 +6,7 @@ import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { ParseObjectIdPipe } from 'src/common/pipes/parse-object-id.pipe';
 import { SlbService } from './slb.service';
 import { SaveSlbDto } from './dto/save-slb.dto';
+import { SlbUlbSubmissionsQueryDto } from './dto/slb-ulb-submissions-query.dto';
 
 @ApiTags('XVI-FC - ULB Forms - Service Level Benchmarks')
 @ApiBearerAuth()
@@ -21,6 +22,19 @@ export class SlbController {
   @UseGuards(PermissionGuard)
   getQuestions() {
     return this.slbService.getQuestions();
+  }
+
+  @ApiOperation({
+    summary: 'List ULB SLB submissions for STATE review',
+    description:
+      'Paginated list of every ULB in the requester\'s state for a given design year, with SLB ' +
+      'form status and counts per status. STATE-scoped read-only — SLB has no approve/return ' +
+      'workflow, so this exists purely to power the same stat-tile/table UI every other form uses.',
+  })
+  @Get('state/ulb-submissions')
+  @UseGuards(PermissionGuard)
+  listUlbSubmissions(@Query() dto: SlbUlbSubmissionsQueryDto, @CurrentUser() user: AuthUser) {
+    return this.slbService.listUlbSlbForms(dto, user);
   }
 
   @ApiOperation({
