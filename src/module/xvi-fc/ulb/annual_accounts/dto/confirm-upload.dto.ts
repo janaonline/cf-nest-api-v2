@@ -21,6 +21,9 @@ export class ConfirmUploadDto {
   @IsIn(['auditedData', 'unauditedData'])
   section: string;
 
+  @IsIn(['AUDITED', 'UNAUDITED'])
+  auditType: string;
+
   @IsString()
   @IsNotEmpty()
   docId: string;

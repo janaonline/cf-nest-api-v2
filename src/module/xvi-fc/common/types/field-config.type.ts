@@ -121,6 +121,15 @@ export interface UploadedFileValue {
   pageCount?: number | null;
 }
 
+// ─── Async lookup / cross-field match ──────────────────────────────────────────
+
+export interface FieldLookupConfig {
+  /** Relative API path; `:value` is replaced with this field's current (validated) value. */
+  endpoint: string;
+  /** Maps response keys (dot-path into the JSON body) to the target field `key` they populate. */
+  populates: Record<string, string>;
+}
+
 // ─── Field config ─────────────────────────────────────────────────────────────
 
 export type FieldType =
@@ -194,6 +203,13 @@ export interface FieldConfig {
   inputCardConfig?: { title?: string; description?: string; prefixText?: string; suffixText?: string };
   /** Free-form, non-functional annotations (e.g. grouping/reporting metadata) — never read by validation or rendering logic. */
   meta?: Record<string, unknown>;
+  /** On a valid value, calls `endpoint` and patches sibling fields from the response per `populates`. */
+  lookup?: FieldLookupConfig;
+  /** This field's value must equal the named sibling field's value (e.g. confirm-account-number). */
+  matchesField?: string;
+  /** Strips non-digit characters live as the user types; pairs with named `validations` entries
+   *  (`hasSpaces`/`hasAlphabets`/`hasSpecialChars`/`tooShort`/`tooLong`) for granular messages. */
+  digitsOnly?: boolean;
 }
 
 // ─── Sectioned / resolved form config ──────────────────────────────────────────

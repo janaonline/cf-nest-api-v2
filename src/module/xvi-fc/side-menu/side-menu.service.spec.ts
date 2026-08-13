@@ -184,6 +184,19 @@ describe('SideMenuService', () => {
         `${XVIFC_CACHE_KEY_PREFIX}:/xvi-fc/sidebar/${dto.role}?yearId=${dto.year}`,
       );
     });
+
+    it('passes url/target through to the created document', async () => {
+      const created = rawDoc({ url: 'https://tally.so/r/44d28O', target: '_blank' });
+      mockSideMenuModel.create.mockResolvedValue({ toObject: () => created });
+
+      const result = await service.create({ ...dto, url: 'https://tally.so/r/44d28O', target: '_blank' });
+
+      expect(mockSideMenuModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({ url: 'https://tally.so/r/44d28O', target: '_blank' }),
+      );
+      expect(result.url).toBe('https://tally.so/r/44d28O');
+      expect(result.target).toBe('_blank');
+    });
   });
 
   describe('bulkCreate', () => {
@@ -214,6 +227,28 @@ describe('SideMenuService', () => {
 
       expect(result).toEqual([]);
       expect(mockCache.delete).not.toHaveBeenCalled();
+    });
+
+    it('passes url/target through for each item', async () => {
+      const items: CreateSideMenuDto[] = [
+        {
+          role: 'ULB',
+          year: new Types.ObjectId().toString(),
+          section: MenuSection.TOP,
+          sequence: 2,
+          type: MenuItemType.ITEM,
+          label: 'Submit Feedback',
+          url: 'https://tally.so/r/44d28O',
+          target: '_blank',
+        },
+      ];
+      mockSideMenuModel.insertMany.mockResolvedValue([{ toObject: () => rawDoc({ name: 'Submit Feedback' }) }]);
+
+      await service.bulkCreate(items);
+
+      expect(mockSideMenuModel.insertMany).toHaveBeenCalledWith([
+        expect.objectContaining({ url: 'https://tally.so/r/44d28O', target: '_blank' }),
+      ]);
     });
   });
 
