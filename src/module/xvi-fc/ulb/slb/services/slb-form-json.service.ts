@@ -3,23 +3,19 @@ import { FormJsonService } from 'src/master/form-json/form-json.service';
 import { SLB_FORM_ID, SLB_FORM_TYPE } from 'src/schemas/xvi-fc/ulb/slb-form.schema';
 import { DEFAULT_SLB_FIELDS } from '../constants/slb-form.constants';
 import { SlbTypedFieldConfig, validateSlbFormJsonData } from '../helpers/slb-form-json.helpers';
-import { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class SlbFormJsonConfigService {
   private readonly logger = new Logger(SlbFormJsonConfigService.name);
   private readonly isDev: boolean;
 
-  constructor(
-    private readonly formJsonService: FormJsonService,
-    private readonly config: ConfigService,
-  ) {
-    this.isDev = this.config.get<string>('NODE_ENV') !== 'production';
+  constructor(private readonly formJsonService: FormJsonService) {
+    this.isDev = false; // if true, always returns DEFAULT_SLB_FIELDS directly, skipping the DB lookup entirely
   }
 
   /**
    * Loads and validates SLB field config.
-   * In dev (NODE_ENV !== 'production'), always returns the bundled DEFAULT_SLB_FIELDS
+   * If dev mode is enabled, always returns the bundled DEFAULT_SLB_FIELDS
    * directly, skipping the DB lookup entirely — so local edits to the constants file are
    * reflected immediately without needing to re-run the seed script against a local DB
    * that may hold a stale FormJson document.
