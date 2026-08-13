@@ -22,6 +22,7 @@ import { ParseObjectIdPipe } from 'src/common/pipes/parse-object-id.pipe';
 import { getTimeStamp } from 'src/shared/utils/date.utils';
 import { ElectedUrbanLocalBodiesService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/main/elected-urban-local-bodies.service';
 import { ElectedUrbanLocalBodiesExcelService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/excel/elected-urban-local-bodies-excel.service';
+import { ElectedUrbanLocalBodiesDocxService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/document/elected-urban-local-bodies-docx.service';
 import { ElectedUrbanLocalBodiesRowService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/row/elected-urban-local-bodies-row.service';
 import { EulbPostSubmissionUpdateService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/post-submission-update/elected-urban-local-bodies-post-submission-update.service';
 import { SaveElectedUrbanLocalBodiesDraftDto } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/save-elected-urban-local-bodies-draft.dto';
@@ -43,6 +44,7 @@ export class ElectedUrbanLocalBodiesController {
     private readonly eulbExcelService: ElectedUrbanLocalBodiesExcelService,
     private readonly eulbRowService: ElectedUrbanLocalBodiesRowService,
     private readonly eulbPostSubmissionUpdateService: EulbPostSubmissionUpdateService,
+    private readonly eulbDocxService: ElectedUrbanLocalBodiesDocxService,
   ) {}
 
   @ApiOperation({
@@ -124,6 +126,26 @@ export class ElectedUrbanLocalBodiesController {
     return new StreamableFile(new Uint8Array(buffer as ArrayBuffer), {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       disposition: `attachment; filename="elected-bodies-template_${getTimeStamp(false)}.xlsx"`,
+    });
+  }
+
+  @ApiOperation({
+    summary: 'Download Elected Bodies List declaration document',
+    description:
+      'Generates the "Elected Bodies List" declaration letter (Word doc) for the state to print, sign, and re-upload via signedElectedbodyFile. Table headers come from the live EULB_EXTRA_ULB_PORTAL_FIELDS form-json config. Rejects with a 400 if there are no active rows, or if any active row is not validationStatus VALID.',
+  })
+  @Get(':stateId/:yearId/elected-bodies-list-document')
+  @UseGuards(PermissionGuard)
+  @RequirePermissions(Permission.EDIT_STATE_FORMS)
+  async getElectedBodiesListDocument(
+    @Param('stateId', ParseObjectIdPipe) stateId: string,
+    @Param('yearId', ParseObjectIdPipe) yearId: string,
+    @CurrentUser() user: AuthUser,
+  ): Promise<StreamableFile> {
+    const { buffer, fileName } = await this.eulbDocxService.generateElectedBodiesListDocument(stateId, yearId, user);
+    return new StreamableFile(new Uint8Array(buffer), {
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      disposition: `attachment; filename="${fileName}"`,
     });
   }
 

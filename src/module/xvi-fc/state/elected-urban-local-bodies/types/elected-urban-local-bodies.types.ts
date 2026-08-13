@@ -228,6 +228,7 @@ export interface EulbFormLeanDoc {
   currentFormStatus?: number;
   ulbCount?: number;
   electedBodyExcelFile?: FileInfo;
+  signedElectedbodyFile?: FileInfo;
   errorExcelFile?: FileInfo;
   checkboxConfirmation?: boolean;
   dbUlbCount?: number;

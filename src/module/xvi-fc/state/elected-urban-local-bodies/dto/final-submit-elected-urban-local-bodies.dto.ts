@@ -12,6 +12,11 @@ class FinalSubmitEulbDataDto {
   @Type(() => XviFcFileRefDto)
   electedBodyExcelFile!: XviFcFileRefDto;
 
+  @IsObject()
+  @ValidateNested()
+  @Type(() => XviFcFileRefDto)
+  signedElectedbodyFile!: XviFcFileRefDto;
+
   @IsBoolean()
   checkboxConfirmation!: boolean;
 }

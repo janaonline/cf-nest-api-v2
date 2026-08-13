@@ -21,6 +21,10 @@ submitted rows without a full resubmit.
   applies them as one audited "batch" (see the inline comment on its transaction for the mechanism
   — it's self-contained enough not to need its own ADR).
 - `services/row/elected-urban-local-bodies-row.service.ts` — per-row edits during the draft stage.
+- `services/document/elected-urban-local-bodies-document.service.ts` (+ `-docx.service.ts`) — assembles
+  and renders the "Elected Bodies List" declaration letter (Word doc, via the `docx` npm package) served
+  by `GET :stateId/:yearId/elected-bodies-list-document`. Mirrors `claim-letter`'s document-service /
+  renderer-service split. See "Elected Bodies List document" below.
 - `services/form-json/`, `validators/`, `helpers/`, `dto/`, `types/`, `constants/` — supporting.
 
 ## Before changing dataset/version logic, read the ADR
@@ -57,6 +61,29 @@ that mismatch. That approach was abandoned in favor of keeping `id` and `label` 
 service now reads/writes `row.electedBodyStatus` directly, with no field-specific special-casing.
 Keep it that way: if a future rename needs the *label* to say something new, change the `id` to
 match rather than reintroducing a mapping layer.
+
+## Elected Bodies List document and `signedElectedbodyFile`
+
+The `EULB_MAIN_FORM_FIELDS` group has two distinct file fields, both required at final submit —
+do not conflate them:
+
+- `electedBodyExcelFile` — the state's raw data upload (the ULB-wise elected-body status Excel).
+  Drives the row-ingestion/validation pipeline (`services/excel/`).
+- `signedElectedbodyFile` — a signed **PDF** of the declaration letter, uploaded after the state
+  downloads and signs the Word doc rendered by `services/document/`. Same generic file-field
+  wiring as `electedBodyExcelFile` (schema prop, DTO field, `getForm`/`saveDraft`/`finalSubmit`
+  handling) — always extend both in lockstep if you add a third file field to this form.
+
+`ElectedUrbanLocalBodiesDocumentService.getDocumentData()` refuses to build the letter (400,
+`signedElectedbodyFile` field, code `noRows` or `rowsNotValid`) unless the active dataset has at
+least one row and every active row is `validationStatus: 'VALID'` — the letter is a certification,
+never a partial/unvalidated snapshot. Column headers are read live from
+`EULB_EXTRA_ULB_PORTAL_FIELDS`'s field `label`s (never hardcoded), and the state name / ULB count /
+grant-cycle year label (`designYearLabel`, resolved from the `Year` document by `yearId`, same
+field name/shape as `claim-letter-document.service.ts`'s own `designYearLabel` — see that
+service's `getDocumentData` for the identical pattern) are the only values interpolated into the
+letter — the closing signature block (`[Name]`, `[Designation]`, `Government of [State Name]`,
+etc.) is written as literal, non-interpolated text for the state to fill in by hand before signing.
 
 ## Outbound dependency: devolution-formula reads this module's status
 
