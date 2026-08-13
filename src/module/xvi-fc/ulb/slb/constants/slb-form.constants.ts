@@ -14,7 +14,7 @@ import type { SlbTypedFieldConfig } from '../helpers/slb-form-json.helpers';
 export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
   {
     key: 'perCapitaWaterSupply',
-    label: 'Per capita supply of water',
+    label: 'Per capita supply of water (lpcd)',
     position: 1,
     formFieldType: 'actualTarget',
     required: true,
@@ -84,7 +84,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
   },
   {
     key: 'waterComplaintRedressal',
-    label: 'Efficiency in redressal of customer complaints (Water Supply)',
+    label: 'Efficiency in redressal of customer complaints',
     position: 3,
     formFieldType: 'actualTarget',
     required: true,
@@ -154,7 +154,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
   },
   {
     key: 'waterCostRecovery',
-    label: 'Cost recovery in water supply services',
+    label: 'Cost recovery in water supply service',
     position: 5,
     formFieldType: 'actualTarget',
     required: true,
@@ -357,7 +357,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      section: 'Sanitation',
+      section: 'Sewerage Management',
       indicatorNumber: 10,
       unit: '%',
     },
@@ -392,14 +392,14 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      section: 'Sanitation',
+      section: 'Sewerage Management',
       indicatorNumber: 11,
       unit: '%',
     },
   },
   {
     key: 'wasteWaterComplaintRedressal',
-    label: 'Efficiency in redressal of customer complaints (Waste Water)',
+    label: 'Efficiency in redressal of customer complaints',
     position: 12,
     formFieldType: 'actualTarget',
     required: true,
@@ -427,7 +427,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      section: 'Sanitation',
+      section: 'Sewerage Management',
       indicatorNumber: 12,
       unit: '%',
     },
@@ -462,7 +462,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      section: 'Sanitation',
+      section: 'Sewerage Management',
       indicatorNumber: 13,
       unit: '%',
     },
@@ -497,7 +497,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      section: 'Sanitation',
+      section: 'Sewerage Management',
       indicatorNumber: 14,
       unit: '%',
     },
@@ -532,7 +532,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      section: 'Sanitation',
+      section: 'Sewerage Management',
       indicatorNumber: 15,
       unit: '%',
     },
@@ -567,7 +567,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      section: 'Sanitation',
+      section: 'Sewerage Management',
       indicatorNumber: 16,
       unit: '%',
     },
@@ -602,7 +602,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      section: 'Sanitation',
+      section: 'Sewerage Management',
       indicatorNumber: 17,
       unit: '%',
     },
@@ -637,7 +637,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      section: 'Sanitation',
+      section: 'Sewerage Management',
       indicatorNumber: 18,
       unit: '%',
     },
@@ -672,14 +672,14 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      section: 'Solid Waste',
+      section: 'Solid Waste Management',
       indicatorNumber: 19,
       unit: '%',
     },
   },
   {
     key: 'swmComplaintRedressal',
-    label: 'Efficiency in redressal of customer complaints (SWM)',
+    label: 'Efficiency in redressal of customer complaints',
     position: 20,
     formFieldType: 'actualTarget',
     required: true,
@@ -707,14 +707,14 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      section: 'Solid Waste',
+      section: 'Solid Waste Management',
       indicatorNumber: 20,
       unit: '%',
     },
   },
   {
     key: 'swmChargeCollection',
-    label: 'Efficiency in collection of SWM related user charges',
+    label: 'Efficiency in collection of SWM related user related charges',
     position: 21,
     formFieldType: 'actualTarget',
     required: true,
@@ -742,7 +742,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      section: 'Solid Waste',
+      section: 'Solid Waste Management',
       indicatorNumber: 21,
       unit: '%',
     },
@@ -777,7 +777,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      section: 'Solid Waste',
+      section: 'Solid Waste Management',
       indicatorNumber: 22,
       unit: '%',
     },
@@ -812,7 +812,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      section: 'Solid Waste',
+      section: 'Solid Waste Management',
       indicatorNumber: 23,
       unit: '%',
     },
@@ -847,7 +847,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      section: 'Solid Waste',
+      section: 'Solid Waste Management',
       indicatorNumber: 24,
       unit: '%',
     },
@@ -882,7 +882,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      section: 'Solid Waste',
+      section: 'Solid Waste Management',
       indicatorNumber: 25,
       unit: '%',
     },
@@ -917,7 +917,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      section: 'Solid Waste',
+      section: 'Solid Waste Management',
       indicatorNumber: 26,
       unit: '%',
     },
@@ -952,7 +952,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      section: 'Storm Water',
+      section: 'Storm Water Drainage',
       indicatorNumber: 27,
       unit: '%',
     },
@@ -987,7 +987,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      section: 'Storm Water',
+      section: 'Storm Water Drainage',
       indicatorNumber: 28,
       unit: 'Nos./Year',
     },
