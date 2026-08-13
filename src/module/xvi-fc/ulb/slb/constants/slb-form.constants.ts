@@ -42,7 +42,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      sector: 'Water Supply',
+      section: 'Water Supply',
       indicatorNumber: 1,
       unit: 'lpcd',
     },
@@ -77,7 +77,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      sector: 'Water Supply',
+      section: 'Water Supply',
       indicatorNumber: 2,
       unit: '%',
     },
@@ -112,7 +112,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      sector: 'Water Supply',
+      section: 'Water Supply',
       indicatorNumber: 3,
       unit: '%',
     },
@@ -147,7 +147,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      sector: 'Water Supply',
+      section: 'Water Supply',
       indicatorNumber: 4,
       unit: '%',
     },
@@ -182,7 +182,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      sector: 'Water Supply',
+      section: 'Water Supply',
       indicatorNumber: 5,
       unit: '%',
     },
@@ -217,7 +217,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      sector: 'Water Supply',
+      section: 'Water Supply',
       indicatorNumber: 6,
       unit: '%',
     },
@@ -252,7 +252,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      sector: 'Water Supply',
+      section: 'Water Supply',
       indicatorNumber: 7,
       unit: '%',
     },
@@ -287,7 +287,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      sector: 'Water Supply',
+      section: 'Water Supply',
       indicatorNumber: 8,
       unit: 'Hours/day',
     },
@@ -322,7 +322,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      sector: 'Water Supply',
+      section: 'Water Supply',
       indicatorNumber: 9,
       unit: '%',
     },
@@ -357,7 +357,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      sector: 'Sewerage & Waste Water',
+      section: 'Sanitation',
       indicatorNumber: 10,
       unit: '%',
     },
@@ -392,7 +392,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      sector: 'Sewerage & Waste Water',
+      section: 'Sanitation',
       indicatorNumber: 11,
       unit: '%',
     },
@@ -427,7 +427,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      sector: 'Sewerage & Waste Water',
+      section: 'Sanitation',
       indicatorNumber: 12,
       unit: '%',
     },
@@ -462,7 +462,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      sector: 'Sewerage & Waste Water',
+      section: 'Sanitation',
       indicatorNumber: 13,
       unit: '%',
     },
@@ -497,7 +497,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      sector: 'Sewerage & Waste Water',
+      section: 'Sanitation',
       indicatorNumber: 14,
       unit: '%',
     },
@@ -532,7 +532,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      sector: 'Sewerage & Waste Water',
+      section: 'Sanitation',
       indicatorNumber: 15,
       unit: '%',
     },
@@ -567,7 +567,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      sector: 'Sewerage & Waste Water',
+      section: 'Sanitation',
       indicatorNumber: 16,
       unit: '%',
     },
@@ -602,7 +602,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      sector: 'Sewerage & Waste Water',
+      section: 'Sanitation',
       indicatorNumber: 17,
       unit: '%',
     },
@@ -637,7 +637,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      sector: 'Sewerage & Waste Water',
+      section: 'Sanitation',
       indicatorNumber: 18,
       unit: '%',
     },
@@ -672,7 +672,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      sector: 'Solid Waste Management',
+      section: 'Solid Waste',
       indicatorNumber: 19,
       unit: '%',
     },
@@ -707,7 +707,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      sector: 'Solid Waste Management',
+      section: 'Solid Waste',
       indicatorNumber: 20,
       unit: '%',
     },
@@ -742,7 +742,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      sector: 'Solid Waste Management',
+      section: 'Solid Waste',
       indicatorNumber: 21,
       unit: '%',
     },
@@ -777,7 +777,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      sector: 'Solid Waste Management',
+      section: 'Solid Waste',
       indicatorNumber: 22,
       unit: '%',
     },
@@ -812,7 +812,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      sector: 'Solid Waste Management',
+      section: 'Solid Waste',
       indicatorNumber: 23,
       unit: '%',
     },
@@ -847,7 +847,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      sector: 'Solid Waste Management',
+      section: 'Solid Waste',
       indicatorNumber: 24,
       unit: '%',
     },
@@ -882,7 +882,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      sector: 'Solid Waste Management',
+      section: 'Solid Waste',
       indicatorNumber: 25,
       unit: '%',
     },
@@ -917,7 +917,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      sector: 'Solid Waste Management',
+      section: 'Solid Waste',
       indicatorNumber: 26,
       unit: '%',
     },
@@ -952,7 +952,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      sector: 'Storm Water Drainage',
+      section: 'Storm Water',
       indicatorNumber: 27,
       unit: '%',
     },
@@ -987,7 +987,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
     meta: {
-      sector: 'Storm Water Drainage',
+      section: 'Storm Water',
       indicatorNumber: 28,
       unit: 'Nos./Year',
     },
@@ -1007,6 +1007,9 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
       },
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
+    meta: {
+      section: 'Self Declaration',
+    },
   },
   {
     key: 'declarantDesignation',
@@ -1023,6 +1026,9 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
       },
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
+    meta: {
+      section: 'Self Declaration',
+    },
   },
   {
     key: 'supportingDocumentFile',
@@ -1032,7 +1038,7 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     folderPathKey: 'slb/supporting-document',
     allowedFileTypes: ['pdf', 'jpg', 'jpeg', 'png'],
     maxFileSize: 20,
-    fileViewType: 'button',
+    fileViewType: 'dropzone',
     validations: [
       {
         name: 'required',
@@ -1041,6 +1047,9 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
       },
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
+    meta: {
+      section: 'Self Declaration',
+    },
   },
   {
     key: 'checkboxConfirmation',
@@ -1055,5 +1064,8 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
       },
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
+    meta: {
+      section: 'Self Declaration',
+    },
   },
 ];

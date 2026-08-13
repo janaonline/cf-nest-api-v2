@@ -13,7 +13,11 @@ import {
 import { toObjectIdString } from 'src/common/utils/objectid.util';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
-import type { FieldConfig, FormData, HydratedFieldConfig } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.types';
+import type {
+  FieldConfig,
+  FormData,
+  HydratedFieldConfig,
+} from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.types';
 import type { UploadedFileValue } from 'src/module/xvi-fc/common/types/field-config.type';
 import type { XvifcFormActor } from 'src/module/xvi-fc/common/types/xvifc-form-actors.type';
 import {
@@ -316,9 +320,24 @@ export class SlbService {
 
     const ulbName = getPopulatedName(doc?.ulb) ?? '';
     const actors: XvifcFormActor[] = [
-      { action: 'Created by', designation: 'ULB Officer', by: getPopulatedName(doc?.createdBy) ?? null, date: toIsoStringOrNull(doc?.createdAt) },
-      { action: 'Updated by', designation: 'ULB Officer', by: getPopulatedName(doc?.updatedBy) ?? null, date: toIsoStringOrNull(doc?.updatedAt) },
-      { action: 'Submitted by', designation: 'ULB Officer', by: getPopulatedName(doc?.submittedBy) ?? null, date: toIsoStringOrNull(doc?.submittedAt) },
+      {
+        action: 'Created by',
+        designation: 'ULB Officer',
+        by: getPopulatedName(doc?.createdBy) ?? null,
+        date: toIsoStringOrNull(doc?.createdAt),
+      },
+      {
+        action: 'Updated by',
+        designation: 'ULB Officer',
+        by: getPopulatedName(doc?.updatedBy) ?? null,
+        date: toIsoStringOrNull(doc?.updatedAt),
+      },
+      {
+        action: 'Submitted by',
+        designation: 'ULB Officer',
+        by: getPopulatedName(doc?.submittedBy) ?? null,
+        date: toIsoStringOrNull(doc?.submittedAt),
+      },
     ];
     return { actors, ulbName };
   }

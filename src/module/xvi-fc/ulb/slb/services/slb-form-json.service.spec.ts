@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { FormJsonService } from 'src/form-json/form-json.service';
 import { SlbFormJsonConfigService } from './slb-form-json.service';
 import { DEFAULT_SLB_FIELDS } from '../constants/slb-form.constants';
@@ -8,17 +9,25 @@ describe('SlbFormJsonConfigService', () => {
   let service: SlbFormJsonConfigService;
   let formJsonService: Partial<Record<keyof FormJsonService, jest.Mock>>;
 
-  beforeEach(async () => {
+  async function createService(nodeEnv: string): Promise<SlbFormJsonConfigService> {
     formJsonService = {
       findActiveByDesignYearAndFormId: jest.fn(),
       findByType: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
-      providers: [SlbFormJsonConfigService, { provide: FormJsonService, useValue: formJsonService }],
+      providers: [
+        SlbFormJsonConfigService,
+        { provide: FormJsonService, useValue: formJsonService },
+        { provide: ConfigService, useValue: { get: () => nodeEnv } },
+      ],
     }).compile();
 
-    service = module.get<SlbFormJsonConfigService>(SlbFormJsonConfigService);
+    return module.get<SlbFormJsonConfigService>(SlbFormJsonConfigService);
+  }
+
+  beforeEach(async () => {
+    service = await createService('production');
   });
 
   it('falls back to DEFAULT_SLB_FIELDS when no FormJson has been seeded for the design year', async () => {
@@ -55,5 +64,16 @@ describe('SlbFormJsonConfigService', () => {
 
     expect(fields).toBe(DEFAULT_SLB_FIELDS);
     expect(formJsonService.findByType).toHaveBeenCalledWith('SLB');
+  });
+
+  it('in dev (NODE_ENV !== production), returns DEFAULT_SLB_FIELDS directly and never queries the DB', async () => {
+    service = await createService('development');
+    const configured = [{ key: 'ind1', formFieldType: 'actualTarget', label: 'x', fieldTypes: ['SLB_MAIN_FORM_FIELDS'] }];
+    formJsonService.findActiveByDesignYearAndFormId!.mockResolvedValue({ data: configured });
+
+    const fields = await service.loadFields('year-id');
+
+    expect(fields).toBe(DEFAULT_SLB_FIELDS);
+    expect(formJsonService.findActiveByDesignYearAndFormId).not.toHaveBeenCalled();
   });
 });
