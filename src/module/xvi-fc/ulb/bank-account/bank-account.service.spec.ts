@@ -22,6 +22,7 @@ describe('BankAccountService scope enforcement', () => {
   let ulbModel: { findById: jest.Mock };
   let fileTokenService: { signFileUrl: jest.Mock };
   let ulbEligibilityService: { assertUlbEligibleForGrantCycle: jest.Mock };
+  let formJsonService: { findActiveByDesignYearAndFormId: jest.Mock };
   const originalEncryptionKey = process.env.BANK_ACCOUNT_ENCRYPTION_KEY;
   const originalHashSecret = process.env.BANK_ACCOUNT_HASH_SECRET;
 
@@ -93,12 +94,16 @@ describe('BankAccountService scope enforcement', () => {
     ulbEligibilityService = {
       assertUlbEligibleForGrantCycle: jest.fn().mockResolvedValue(undefined),
     };
+    formJsonService = {
+      findActiveByDesignYearAndFormId: jest.fn(),
+    };
     service = new BankAccountService(
       bankAccountModel as never,
       formLogModel as never,
       ulbModel as never,
       fileTokenService as never,
       ulbEligibilityService as never,
+      formJsonService as never,
     );
   });
 
@@ -869,5 +874,30 @@ describe('BankAccountService scope enforcement', () => {
 
     await expect(service.lookupIfsc('UTIB0005157')).rejects.toThrow(ServiceUnavailableException);
     await expect(service.lookupIfsc('UTIB0005157')).rejects.toThrow('Unable to fetch IFSC details. Please try again.');
+  });
+
+  describe('getFormConfig', () => {
+    it('fetches the formId-33 formJson for the given year and returns its meta/data', async () => {
+      formJsonService.findActiveByDesignYearAndFormId.mockResolvedValue({
+        meta: { title: 'Bank Account' },
+        data: [{ key: 'ifscCode', formFieldType: 'text', label: 'IFSC Code' }],
+      });
+
+      const result = await service.getFormConfig('year-1');
+
+      expect(formJsonService.findActiveByDesignYearAndFormId).toHaveBeenCalledWith('year-1', 33);
+      expect(result).toEqual({
+        meta: { title: 'Bank Account' },
+        data: [{ key: 'ifscCode', formFieldType: 'text', label: 'IFSC Code' }],
+      });
+    });
+
+    it('defaults meta/data to empty when the formJson document has neither set', async () => {
+      formJsonService.findActiveByDesignYearAndFormId.mockResolvedValue({});
+
+      const result = await service.getFormConfig('year-1');
+
+      expect(result).toEqual({ meta: {}, data: [] });
+    });
   });
 });
