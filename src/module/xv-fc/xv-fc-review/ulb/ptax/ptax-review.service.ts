@@ -165,11 +165,13 @@ export class PtaxReviewService {
 
     return {
       ulbId,
+      ulbName: doc.ulbName ?? null,
       yearId,
       financialYear: yearDoc.year,
       hasData,
       status: doc.status ?? 'NOT_STARTED',
       finalAction: doc.finalAction ?? null,
+      submittedAt: doc.submittedAt ?? null,
       declaration: doc.declaration ?? null,
       supportingDocument: doc.supportingDocument ?? null,
       submissionCount: doc.submissionCount ?? 0,

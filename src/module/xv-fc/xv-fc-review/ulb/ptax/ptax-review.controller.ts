@@ -1,5 +1,5 @@
-import { Body, Controller, Get, Param, Post, Put, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
+import { Body, Controller, Get, Param, Post, Put, Query, StreamableFile, UseGuards } from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiParam, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../../../auth/decorators/current-user.decorator';
 import { Roles } from '../../../../auth/decorators/roles.decorator';
 import { Role } from '../../../../auth/enum/role.enum';
@@ -10,6 +10,8 @@ import { ConfirmPtaxUploadDto } from './dto/confirm-ptax-upload.dto';
 import { PresignPtaxUploadDto } from './dto/presign-ptax-upload.dto';
 import { SavePtaxDraftDto } from './dto/save-ptax-draft.dto';
 import { SubmitPtaxReviewDto } from './dto/submit-ptax-review.dto';
+import { PtaxReviewPdfService } from './ptax-review-pdf.service';
+import type { PtaxCurrency } from './ptax-review-pdf.service';
 import { PtaxReviewService } from './ptax-review.service';
 
 @ApiTags('XV-FC Review — Ptax (ULB)')
@@ -18,7 +20,10 @@ import { PtaxReviewService } from './ptax-review.service';
 @ApiBearerAuth()
 @Controller('xv-fc-review/ptax')
 export class PtaxReviewController {
-  constructor(private readonly ptaxReviewService: PtaxReviewService) {}
+  constructor(
+    private readonly ptaxReviewService: PtaxReviewService,
+    private readonly pdfService: PtaxReviewPdfService,
+  ) {}
 
   @ApiOperation({ summary: 'List the 6 reviewable financial-year tabs (with yearId) with review status for this ULB' })
   @ApiParam({ name: 'ulbId', description: 'ULB ObjectId' })
@@ -106,5 +111,34 @@ export class PtaxReviewController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.ptaxReviewService.submit(ulbId, yearId, dto, user);
+  }
+
+  @ApiOperation({ summary: 'Download all Ptax metrics for this financial year as a PDF' })
+  @ApiParam({ name: 'ulbId', description: 'ULB ObjectId' })
+  @ApiParam({ name: 'yearId', description: 'Year ObjectId' })
+  @ApiQuery({ name: 'currency', enum: ['INR', 'LAKH', 'CRORE'], required: false })
+  @Get(':ulbId/:yearId/pdf')
+  async downloadPdf(
+    @Param('ulbId', ParseObjectIdPipe) ulbId: string,
+    @Param('yearId', ParseObjectIdPipe) yearId: string,
+    @Query('currency') currency: PtaxCurrency = 'INR',
+    @CurrentUser() user: AuthUser,
+  ): Promise<StreamableFile> {
+    const detail = await this.ptaxReviewService.getDetail(ulbId, yearId, user);
+    const buffer = await this.pdfService.buildMetricsPdf(
+      {
+        ulbName: detail.ulbName ?? ulbId,
+        financialYear: detail.financialYear,
+        status: detail.status,
+        finalAction: detail.finalAction,
+        submittedAt: detail.submittedAt,
+        metrics: detail.metrics,
+      },
+      currency,
+    );
+    return new StreamableFile(buffer as unknown as Uint8Array, {
+      type: 'application/pdf',
+      disposition: `attachment; filename="xv-fc-review-ptax-${ulbId}-${detail.financialYear}.pdf"`,
+    });
   }
 }
