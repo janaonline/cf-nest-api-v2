@@ -1,7 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import PDFDocument from 'pdfkit';
+import { PTAX_METRIC_VALIDATION } from '../../common/ptax.constants';
 
-export type XvFcCurrency = 'INR' | 'LAKH' | 'CRORE';
+export type PtaxCurrency = 'INR' | 'LAKH' | 'CRORE';
 
 interface AdminDecision {
   status: string;
@@ -9,10 +10,10 @@ interface AdminDecision {
   correctedValue?: number | null;
 }
 
-interface PdfLineItem {
+interface PdfMetric {
   code: string;
-  name: string | null;
-  standardizedAmount: number | null;
+  label: string;
+  value: string | null;
   flagged: boolean;
   proposedValue: number | null;
   comment: string | null;
@@ -25,7 +26,7 @@ interface BuildPdfParams {
   status: string;
   finalAction: string | null;
   submittedAt: Date | string | null;
-  lineItems: PdfLineItem[];
+  metrics: PdfMetric[];
 }
 
 // The controller passes through whatever string a caller sends in the
@@ -35,18 +36,31 @@ interface BuildPdfParams {
 // back the caller's original string, making it look like the currency was
 // applied when it wasn't. Normalize once, up front, so the displayed label
 // and the actual conversion can never disagree.
-export function normalizeCurrency(currency: string | null | undefined): XvFcCurrency {
+export function normalizeCurrency(currency: string | null | undefined): PtaxCurrency {
   const upper = (currency ?? '').trim().toUpperCase();
   return upper === 'LAKH' || upper === 'CRORE' ? upper : 'INR';
 }
 
-// Unlike Ptax's propertytaxopmappers source, ledgerlogs.lineItems values
-// are genuine raw rupees (e.g. 4741268), not pre-scaled to lakhs — verified
-// against real data. Divide down for LAKH/CRORE display.
-function formatAmount(amount: number | null | undefined, currency: XvFcCurrency): string {
-  if (amount === null || amount === undefined) return '-';
-  const divisor = currency === 'CRORE' ? 1e7 : currency === 'LAKH' ? 1e5 : 1;
-  return (amount / divisor).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+// Metric values (and proposedValue/correctedValue, entered against the same
+// figure) arrive already expressed in LAKHS, not raw rupees — confirmed
+// against real data: a "Total Property Tax Demand" of 851.45 is ₹85.145
+// lakh (a plausible city-wide figure), not ₹851.45. Not every metric is a
+// rupee figure either — 2.3/2.4 are property counts, which conversion must
+// never touch. isRupee (from the same per-metric validation rule the
+// ULB/admin forms already use) is the single source of truth for which
+// formatting applies.
+export function formatValue(value: string | number | null | undefined, code: string, currency: PtaxCurrency): string {
+  if (value === null || value === undefined || value === '') return '-';
+  const num = Number(value);
+  if (Number.isNaN(num)) return String(value);
+
+  const isRupee = PTAX_METRIC_VALIDATION[code]?.isRupee ?? false;
+  if (!isRupee) return num.toLocaleString('en-IN', { maximumFractionDigits: 0 });
+
+  const valueInLakhs = num;
+  const displayValue =
+    currency === 'CRORE' ? valueInLakhs / 100 : currency === 'LAKH' ? valueInLakhs : valueInLakhs * 100000;
+  return displayValue.toLocaleString('en-IN', { maximumFractionDigits: 2 });
 }
 
 function formatDate(value: Date | string | null): string {
@@ -71,7 +85,6 @@ const STATUS_COLOR: Record<string, string> = {
   NOT_STARTED: '#6B7280', // gray
   DRAFT: '#6B7280', // gray
   SUBMITTED: '#B45309', // amber — awaiting review
-  LOCKED: '#1D4ED8', // blue — finalized (AFS's terminal state)
   APPROVED: '#15803D', // green
   REJECTED: '#B91C1C', // red
 };
@@ -107,21 +120,24 @@ function buildSummarySegments(
   return segments;
 }
 
-// A flagged line item's "modification block" — what the ULB claimed and
-// where the admin decision currently stands, one color-coded line each.
-// Skipped entirely for unflagged items, which have no user action to
-// report.
-function buildModificationLines(item: PdfLineItem, currency: XvFcCurrency): DetailLine[] {
+// A flagged metric's "modification block" — what the ULB claimed and where
+// the admin decision currently stands, one color-coded line each. Skipped
+// entirely for unflagged metrics, which have no user action to report.
+function buildModificationLines(metric: PdfMetric, currency: PtaxCurrency): DetailLine[] {
   const lines: DetailLine[] = [
-    { text: `Flagged — Proposed Value: ${formatAmount(item.proposedValue, currency)}`, color: FLAG_COLOR, bold: true },
+    {
+      text: `Flagged — Proposed Value: ${formatValue(metric.proposedValue, metric.code, currency)}`,
+      color: FLAG_COLOR,
+      bold: true,
+    },
   ];
-  if (item.comment) lines.push({ text: `Comment: ${item.comment}`, color: COMMENT_COLOR, italic: true });
-  if (item.adminDecision) {
-    const d = item.adminDecision;
+  if (metric.comment) lines.push({ text: `Comment: ${metric.comment}`, color: COMMENT_COLOR, italic: true });
+  if (metric.adminDecision) {
+    const d = metric.adminDecision;
     let text = `Admin Decision: ${d.status}`;
     if (d.reason) text += ` — Reason: ${d.reason}`;
     if (d.correctedValue !== null && d.correctedValue !== undefined) {
-      text += ` — Corrected Value: ${formatAmount(d.correctedValue, currency)}`;
+      text += ` — Corrected Value: ${formatValue(d.correctedValue, metric.code, currency)}`;
     }
     lines.push({ text, color: DECISION_COLOR[d.status] ?? FLAG_COLOR, bold: true });
   }
@@ -129,8 +145,8 @@ function buildModificationLines(item: PdfLineItem, currency: XvFcCurrency): Deta
 }
 
 @Injectable()
-export class XvFcReviewPdfService {
-  buildLineItemsPdf(params: BuildPdfParams, currency: string = 'INR'): Promise<Buffer> {
+export class PtaxReviewPdfService {
+  buildMetricsPdf(params: BuildPdfParams, currency: string = 'INR'): Promise<Buffer> {
     const normalizedCurrency = normalizeCurrency(currency);
 
     return new Promise((resolve, reject) => {
@@ -140,7 +156,7 @@ export class XvFcReviewPdfService {
       doc.on('end', () => resolve(Buffer.concat(chunks)));
       doc.on('error', reject);
 
-      doc.fontSize(14).text(`Standardised Financial Statement — ${params.ulbName}`);
+      doc.fontSize(14).text(`Property Tax Statement — ${params.ulbName}`);
       doc.fontSize(11).text(`Financial Year: ${params.financialYear}   |   Currency: ${normalizedCurrency}`);
 
       // Status/Final Action/Submitted, highlighted as its own panel below
@@ -161,14 +177,17 @@ export class XvFcReviewPdfService {
       doc.font('Helvetica').fillColor('black');
       doc.moveDown();
 
-      const columns = { code: 40, name: 100, amount: 420 };
-      const nameWidth = 300;
+      // Columns sized to fit the A4 usable width (margin 40 both sides,
+      // right edge at 555) — label gets most of the room since Ptax
+      // questions are full sentences, unlike AFS's short line-item names.
+      const columns = { code: 40, label: 100, amount: 440 };
+      const labelWidth = 335;
       const amountWidth = 115;
       const detailX = 100;
-      const detailWidth = 435;
+      const detailWidth = 415;
 
       doc.fontSize(9).text('Code', columns.code, doc.y, { continued: true, width: 60 });
-      doc.text('Line Item', columns.name, doc.y, { continued: true, width: 320 });
+      doc.text('Question', columns.label, doc.y, { continued: true, width: labelWidth });
       // Right-aligned to match the right-aligned data column below it —
       // left-aligning the header while the data is right-aligned reads as
       // misaligned even though each cell individually is correctly placed.
@@ -177,30 +196,30 @@ export class XvFcReviewPdfService {
       doc.moveTo(40, doc.y).lineTo(555, doc.y).stroke();
       doc.moveDown(0.3);
 
-      // A handful of catalog names run long enough to wrap (e.g. "Prepaid
-      // Expenses" is short, but "Miscellaneous Expenditure (to the extent
-      // not written off)" isn't) — a fixed moveDown() only advances past
-      // the first line, letting the next row overlap the wrapped
-      // remainder. Measure the actual wrapped height and advance the
-      // cursor past the tallest cell in the row instead. Flagged items get
-      // an extra indented, highlighted block underneath reporting what the
-      // ULB proposed and where the admin decision stands — skipped for
-      // unflagged items, which have no user action to report.
-      params.lineItems.forEach((item, index) => {
+      // Ptax question labels are full sentences and routinely wrap to 2-3
+      // lines — a fixed moveDown() (fine for AFS's short line-item names)
+      // would advance past only the first line, letting the next row
+      // overlap the wrapped remainder. Measure the actual wrapped height
+      // and advance the cursor past the tallest cell in the row instead.
+      // Flagged metrics get an extra indented, highlighted block
+      // underneath reporting what the ULB proposed and where the admin
+      // decision stands — skipped for unflagged metrics, which have no
+      // user action to report.
+      params.metrics.forEach((metric, index) => {
         const y = doc.y;
         doc.fontSize(9);
-        const nameHeight = doc.heightOfString(item.name ?? '-', { width: nameWidth });
-        doc.text(item.code, columns.code, y, { width: 55 });
-        doc.text(item.name ?? '-', columns.name, y, { width: nameWidth });
-        doc.text(formatAmount(item.standardizedAmount, normalizedCurrency), columns.amount, y, {
+        const labelHeight = doc.heightOfString(metric.label, { width: labelWidth });
+        doc.text(metric.code, columns.code, y, { width: 55 });
+        doc.text(metric.label, columns.label, y, { width: labelWidth });
+        doc.text(formatValue(metric.value, metric.code, normalizedCurrency), columns.amount, y, {
           width: amountWidth,
           align: 'right',
         });
-        let cursorY = y + Math.max(nameHeight, doc.currentLineHeight()) + 4;
+        let cursorY = y + Math.max(labelHeight, doc.currentLineHeight()) + 4;
 
-        if (item.flagged) {
+        if (metric.flagged) {
           doc.fontSize(8);
-          const lines = buildModificationLines(item, normalizedCurrency);
+          const lines = buildModificationLines(metric, normalizedCurrency);
           const lineHeights = lines.map((l) => doc.heightOfString(l.text, { width: detailWidth }));
           const blockHeight = lineHeights.reduce((sum, h) => sum + h, 0) + (lines.length - 1) * 2;
 
@@ -223,8 +242,8 @@ export class XvFcReviewPdfService {
         // draw on it — checking purely on y-position would add a
         // trailing blank page whenever the last row happened to cross
         // the threshold.
-        const isLastItem = index === params.lineItems.length - 1;
-        if (doc.y > 740 && !isLastItem) doc.addPage();
+        const isLastMetric = index === params.metrics.length - 1;
+        if (doc.y > 740 && !isLastMetric) doc.addPage();
       });
 
       doc.end();

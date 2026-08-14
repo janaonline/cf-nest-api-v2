@@ -18,6 +18,7 @@ import { LineItem, LineItemDocument } from '../../../../schemas/line-item.schema
 import { Year, YearDocument } from '../../../../schemas/year.schema';
 import {
   DECLARATION_TARGET_CODE,
+  MAX_UPLOAD_SIZE_BYTES,
   SUPPORTING_DOCUMENT_TARGET_CODE,
   XV_FC_REVIEWABLE_YEARS,
   mapCodeToSubSection,
@@ -155,6 +156,7 @@ export class XvFcReviewService {
       hasData: true,
       status: doc.xvFcReview?.status ?? 'NOT_STARTED',
       finalAction: doc.xvFcReview?.finalAction ?? null,
+      submittedAt: doc.xvFcReview?.submittedAt ?? null,
       declaration: doc.xvFcReview?.declaration ?? null,
       supportingDocument: doc.xvFcReview?.supportingDocument ?? null,
       lineItems,
@@ -182,13 +184,34 @@ export class XvFcReviewService {
       'xvFcReview.draftSavedAt': new Date(),
     };
 
+    const existingReviews: Record<string, any> = doc.xvFcReview?.lineItemReviews ?? {};
     for (const item of dto.lineItems) {
+      const existing = existingReviews[item.code];
       setOps[`xvFcReview.lineItemReviews.${item.code}.flagged`] = item.flagged;
       if (item.proposedValue !== undefined) {
         setOps[`xvFcReview.lineItemReviews.${item.code}.proposedValue`] = item.proposedValue;
       }
       if (item.comment !== undefined) {
         setOps[`xvFcReview.lineItemReviews.${item.code}.comment`] = item.comment;
+      }
+
+      // A previously-ACCEPTED decision was made against the old data —
+      // submit()'s resubmission loop leaves ACCEPTED line items untouched on
+      // the assumption they can't have changed since. If the ULB actually
+      // edits a line item's flagged state, proposed value, or comment after
+      // it was accepted, that acceptance is stale and must be re-reviewed.
+      const changed =
+        existing?.flagged !== item.flagged ||
+        (item.proposedValue !== undefined && existing?.proposedValue !== item.proposedValue) ||
+        (item.comment !== undefined && existing?.comment !== item.comment);
+      if (changed && existing?.adminDecision?.status === 'ACCEPTED') {
+        setOps[`xvFcReview.lineItemReviews.${item.code}.adminDecision`] = {
+          status: 'PENDING',
+          reason: '',
+          correctedValue: null,
+          reviewedBy: null,
+          reviewedAt: null,
+        };
       }
     }
 
@@ -240,10 +263,17 @@ export class XvFcReviewService {
       throw new BadRequestException('Invalid s3Key for this upload');
     }
 
+    let head: Awaited<ReturnType<S3Service['headObject']>>;
     try {
-      await this.s3Service.headObject(dto.s3Key);
+      head = await this.s3Service.headObject(dto.s3Key);
     } catch {
       throw new BadRequestException('File not found in S3 — upload may have failed or expired');
+    }
+    // dto.fileSize is client-supplied and never persisted — the presigned PUT
+    // URL doesn't constrain upload size, so the actual S3 object is the only
+    // trustworthy source for this check.
+    if (head.ContentLength != null && head.ContentLength > MAX_UPLOAD_SIZE_BYTES) {
+      throw new BadRequestException(`Uploaded file exceeds the ${MAX_UPLOAD_SIZE_BYTES / (1024 * 1024)}MB limit`);
     }
 
     const fileRef = { url: dto.s3Key, name: dto.originalName, uploadedAt: new Date() };

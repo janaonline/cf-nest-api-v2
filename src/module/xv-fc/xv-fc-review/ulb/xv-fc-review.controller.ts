@@ -130,7 +130,14 @@ export class XvFcReviewController {
   ): Promise<StreamableFile> {
     const detail = await this.xvFcReviewService.getDetail(ulbId, yearId, user);
     const buffer = await this.pdfService.buildLineItemsPdf(
-      { ulbName: detail.ulbName ?? ulbId, financialYear: detail.financialYear, lineItems: detail.lineItems },
+      {
+        ulbName: detail.ulbName ?? ulbId,
+        financialYear: detail.financialYear,
+        status: detail.status,
+        finalAction: detail.finalAction,
+        submittedAt: detail.submittedAt,
+        lineItems: detail.lineItems,
+      },
       currency,
     );
     return new StreamableFile(buffer as unknown as Uint8Array, {

@@ -9,6 +9,7 @@ import { Ulb, UlbSchema } from '../../../../../schemas/ulb.schema';
 import { XvFcPtaxReview, XvFcPtaxReviewSchema } from '../../../../../schemas/xv-fc-ptax-review.schema';
 import { Year, YearSchema } from '../../../../../schemas/year.schema';
 import { PtaxReviewController } from './ptax-review.controller';
+import { PtaxReviewPdfService } from './ptax-review-pdf.service';
 import { PtaxReviewService } from './ptax-review.service';
 
 @Module({
@@ -23,7 +24,7 @@ import { PtaxReviewService } from './ptax-review.service';
     ]),
   ],
   controllers: [PtaxReviewController],
-  providers: [PtaxReviewService, S3Service],
+  providers: [PtaxReviewService, PtaxReviewPdfService, S3Service],
   exports: [PtaxReviewService],
 })
 export class PtaxReviewModule {}
