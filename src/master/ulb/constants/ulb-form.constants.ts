@@ -92,6 +92,15 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
     hintText: 'Not available? Leave blank; it can be added later.',
   },
   {
+    key: 'population',
+    label: 'Population',
+    displayInlineLabel: true,
+    formFieldType: 'number',
+    validations: [{ name: 'min', validator: 0, message: 'Population cannot be negative.' }],
+    labelHint: '(if available)',
+    hintText: 'Not available? Leave blank; it can be added later.',
+  },
+  {
     key: 'dateOfConstitution',
     label: 'Date of Constitution',
     displayInlineLabel: true,
@@ -217,6 +226,10 @@ export const DEFAULT_ULB_REGISTER_SECTIONS: SectionLayout[] = [
         key: 'censusCode',
         grid: 'col-md-6',
       },
+      {
+        key: 'population',
+        grid: 'col-md-6',
+      },
     ],
   },
   {
@@ -262,6 +275,7 @@ export const DEFAULT_ULB_EDIT_SECTIONS: SectionLayout[] = [
       { key: 'ulbType', grid: 'col-md-6' },
       { key: 'district', grid: 'col-md-6' },
       { key: 'censusCode', grid: 'col-md-6' },
+      { key: 'population', grid: 'col-md-6' },
     ],
   },
   {
