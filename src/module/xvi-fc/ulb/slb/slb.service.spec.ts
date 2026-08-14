@@ -231,6 +231,17 @@ describe('SlbService', () => {
       expect(fileQuestion?.value?.['fileUrl']).toBe(`signed::${storedPath}`);
       expect(fileQuestion?.value?.['path']).toBe(storedPath);
     });
+
+    it('resolves designYear to the target year and actualYearLabel to the prior year', async () => {
+      (slbFormJsonConfig.loadFields as jest.Mock).mockResolvedValue([]);
+      formModel.findOne.mockReturnValue(q(null));
+
+      const result = await service.getForm(ulbOid.toString(), yearOid.toString(), ulbUser(ulbOid));
+
+      const data = result.data as { designYear: string; actualYearLabel: string | null };
+      expect(data.designYear).toBe('2026-27');
+      expect(data.actualYearLabel).toBe('2025-26');
+    });
   });
 
   describe('assertCanSubmitSlb', () => {

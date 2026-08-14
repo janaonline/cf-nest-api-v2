@@ -3,11 +3,11 @@ import type { FcUnspentTypedFieldConfig } from '../helpers/fc-unspent-declaratio
 /**
  * Test-only fixture shaped like the DB-backed `fcUnspent` formJson document
  * (design_year/formId/type/isActive/data) — used by this module's spec files as a realistic
- * `FcUnspentTypedFieldConfig[]` satisfying `validateFcUnspentFormJsonData`'s invariants (the 3
- * required main-form keys, `fcDeclaration`'s `download-template` action, all 8
- * `FC_UNSPENT_ROW_EDIT_FIELDS`-tagged columns). Self-contained — mirrors the real
- * `FC_UNSPENT_STATE_FORM_JSON` seed payload's shape but never reads any external file, so tests
- * never depend on anything outside this repo.
+ * `FcUnspentTypedFieldConfig[]` satisfying `validateFcUnspentFormJsonData`'s invariants (the 4
+ * required main-form keys, `fcDeclaration`'s `download-template` action, `fcUnspentDeclaration`'s
+ * `download-declaration` action, all 8 `FC_UNSPENT_ROW_EDIT_FIELDS`-tagged columns).
+ * Self-contained — mirrors the real `FC_UNSPENT_STATE_FORM_JSON` seed payload's shape but never
+ * reads any external file, so tests never depend on anything outside this repo.
  */
 export function loadFcUnspentSeedDocument(): {
   design_year: string;
@@ -64,19 +64,49 @@ export function loadFcUnspentSeedDocument(): {
             layout: 'inline',
             separator: 'dot',
             description:
-              'Download the official template, have it signed by the authorized State DMA officer, and upload the signed declaration. Declarations on unofficial letterhead will not be accepted.',
+              'Download the declaration, have it signed by the authorized State DMA officer, and upload the signed copy below. Declarations on unofficial letterhead will not be accepted.',
             actions: [
               {
                 id: 'download-template',
-                label: 'Download the official template',
+                label: 'Download the declaration',
                 icon: 'bi bi-file-earmark-word',
                 tone: 'primary',
                 visible: true,
-                meta: {
-                  path: 'xvi-fc/state/common/2026-27/fc-unspent/fc-declaration-template/FC-Unspent-Declaration_9ef58a73-82ef-43b7-991f-02257fcde890.docx',
-                  fileName: 'FC-Unspent-Declaration-2026-27.docx',
-                  mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-                },
+              },
+            ],
+            badges: [],
+          },
+        ],
+      },
+      {
+        fieldTypes: ['FC_UNSPENT_MAIN_FORM_FIELDS'],
+        formFieldType: 'file',
+        label: 'State-Level Declaration - 14th Finance Commission (ULB-wise)',
+        key: 'fcUnspentDeclaration',
+        value: null,
+        validations: [{ name: 'required', validator: null, message: 'This field is required.' }],
+        folderPathKey: 'fc-unspent/fc-unspent-declaration',
+        maxFileSize: 5,
+        allowedFileTypes: ['pdf'],
+        appearance: { color: 'success', variant: 'soft' },
+        visibleWhen: { mode: 'all', conditions: [{ key: 'isFcUnspent', operator: 'equals', value: 'yes' }] },
+        clearValueWhenDisabled: true,
+        layout: { variant: 'inline', labelWidth: 'lg' },
+        supportingContent: [
+          {
+            type: 'actions',
+            position: 'before',
+            layout: 'inline',
+            separator: 'dot',
+            description:
+              'Download the declaration (with the ULB-wise table filled in), have it signed by the authorized State DMA officer, and upload the signed copy below.',
+            actions: [
+              {
+                id: 'download-declaration',
+                label: 'Download the declaration',
+                icon: 'bi bi-file-earmark-word',
+                tone: 'primary',
+                visible: true,
               },
             ],
             badges: [],

@@ -30,8 +30,17 @@ export class XviFcUnspentStateForm {
   @Prop({ type: Boolean, default: null })
   isFcUnspent!: boolean | null;
 
+  /** Signed nil-balance declaration, uploaded only when isFcUnspent is false. */
   @Prop({ type: FileInfoSchema, default: null })
   fcDeclaration!: FileInfo | null;
+
+  /**
+   * Signed unspent-balance declaration (carries the ULB-wise table), uploaded only when
+   * isFcUnspent is true.
+   * Kept separate from fcDeclaration so each branch clears its own file on yes <-> no switches, preventing stale uploads.
+   */
+  @Prop({ type: FileInfoSchema, default: null })
+  fcUnspentDeclaration!: FileInfo | null;
 
   @Prop({ type: Boolean, default: false })
   checkboxConfirmation!: boolean;
@@ -39,19 +48,15 @@ export class XviFcUnspentStateForm {
   /**
    * Mirrors currentFormStatus for quick "still a draft" checks — true while
    * NOT_STARTED/IN_PROGRESS/RETURNED_BY_MOHUA, false from final submit onward.
-   * Same convention as DevolutionFormulaForm.isDraft.
    */
   @Prop({ type: Boolean, default: true })
   isDraft!: boolean;
 
-  /** Form-level MoHUA feedback. Not populated in this phase — reserved for the MoHUA review phase. */
   @Prop({ type: String, default: null })
   mohuaRemarks?: string | null;
 
   /**
-   * Persisted for audit only. GET always returns the freshly re-derived applicableFc
-   * (from the current year->FC mapping), never this stored value, so a later change to
-   * the mapping can never leave stale data authoritative.
+   * Stored for audit only; GET always re-derives applicableFc from the current year -> FC mapping, preventing stale data from becoming authoritative
    */
   @Prop({ type: String, enum: ['14TH_FC', '15TH_FC'], default: null })
   applicableFc?: ApplicableFc | null;

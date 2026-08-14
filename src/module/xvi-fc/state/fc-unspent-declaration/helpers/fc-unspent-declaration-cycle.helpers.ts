@@ -17,3 +17,14 @@ export function resolvePriorFcCycleLabel(designYearLabel: string): PriorFcCycleL
   const applicableFc = FC_UNSPENT_APPLICABLE_FC_BY_YEAR_LABEL[designYearLabel] ?? '14TH_FC';
   return applicableFc === '15TH_FC' ? '15th FC' : '14th FC';
 }
+
+/**
+ * Prose form of {@link resolvePriorFcCycleLabel} — `'14th FC'` -> `'14th Finance Commission'` —
+ * for document text that spells the cycle name out rather than abbreviating it (e.g. the FC
+ * Unspent Declaration document's subject line and body paragraphs). Composes over
+ * `resolvePriorFcCycleLabel` rather than re-deriving the year -> FC mapping, so that function
+ * stays the single source of truth for which cycle applies to a given design year.
+ */
+export function resolvePriorFcCycleFullLabel(designYearLabel: string): string {
+  return resolvePriorFcCycleLabel(designYearLabel).replace(/FC$/, 'Finance Commission');
+}

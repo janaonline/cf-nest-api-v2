@@ -16,7 +16,8 @@ export class SlbController {
 
   @ApiOperation({
     summary: 'Get SLB question config',
-    description: 'Returns the static question config array for the SLB form. Used by the frontend to render the dynamic form.',
+    description:
+      'Returns the static question config array for the SLB form. Used by the frontend to render the dynamic form.',
   })
   @Get('questions')
   @UseGuards(PermissionGuard)

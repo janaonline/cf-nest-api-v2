@@ -41,10 +41,16 @@ export const FC_UNSPENT_BLOCKING_MESSAGE_DEVOLUTION_NOT_READY =
   'ULB-wise Allocation (Installment 1) must be under review by MoHUA before FC Unspent Declaration can be finalized.';
 
 /**
- * Supporting-content action id the No-branch `fcDeclaration` field exposes for template download.
- * The actual template asset (S3 path/fileName/mimeType) lives in this action's DB-driven `meta` —
- * see `findSupportingAction`/`stripSupportingContentMeta` in
- * `common/utils/xvi-fc-supporting-content-visibility.util.ts`. Every design year's own form-json
- * document carries its own `meta` (or none) — there is no fallback from one year to another.
+ * Supporting-content action id the No-branch `fcDeclaration` field exposes for downloading its
+ * generated nil-balance declaration. Server-generated on demand (see
+ * `services/document/fc-unspent-declaration-docx.service.ts`) — there is no longer any DB-driven
+ * `meta` asset reference to resolve, unlike the earlier static-template mechanism this replaced.
  */
 export const FC_UNSPENT_DECLARATION_TEMPLATE_ACTION_ID = 'download-template';
+
+/**
+ * Supporting-content action id the Yes-branch `fcUnspentDeclaration` field exposes for
+ * downloading its generated declaration (carries the ULB-wise unspent-balance table). Sibling to
+ * FC_UNSPENT_DECLARATION_TEMPLATE_ACTION_ID for the No-branch field.
+ */
+export const FC_UNSPENT_DECLARATION_DOCUMENT_ACTION_ID = 'download-declaration';
