@@ -1,9 +1,12 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model, Types } from 'mongoose';
+import { Model, PipelineStage, Types } from 'mongoose';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
-import { AccessLevel, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
-import { FORM_STATUS, getFormStatusLabel } from 'src/common/constants/form-status.constants';
+import { AccessLevel, Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
+import { getEffectivePermissions } from 'src/module/auth/permissions.map';
+import { FORM_STATUS, getFormStatusLabel, type FormStatusType } from 'src/common/constants/form-status.constants';
+import { escapeRegex } from 'src/common/utils/regex.util';
+import { resolveStateScopeFilter } from 'src/module/xvi-fc/common/utils/xvi-fc-scope-filter.util';
 import {
   assertCanUlbEditForm,
   assertCanUlbSubmitForm,
@@ -13,14 +16,18 @@ import {
 import { toObjectIdString } from 'src/common/utils/objectid.util';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
-import type { FieldConfig, FormData, HydratedFieldConfig } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.types';
+import type {
+  FieldConfig,
+  FormData,
+  HydratedFieldConfig,
+} from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.types';
 import type { UploadedFileValue } from 'src/module/xvi-fc/common/types/field-config.type';
 import type { XvifcFormActor } from 'src/module/xvi-fc/common/types/xvifc-form-actors.type';
 import {
   buildXviFcFolderPath,
   type XviFcFolderPathContext,
 } from 'src/module/xvi-fc/common/folder-paths/xvi-fc-folder-path.resolver';
-import { YearIdToLabel } from 'src/core/constants/years';
+import { YearIdToLabel, getPreviousYearLabel } from 'src/core/constants/years';
 import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import { throwXviFcValidationError, xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
 import { SLB_FORM_ID, SLB_FORM_TYPE, SlbForm, SlbFormDocument } from 'src/schemas/xvi-fc/ulb/slb-form.schema';
@@ -30,7 +37,24 @@ import { CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE } from 'src/module/ulb-eligib
 import { SlbFormJsonConfigService } from './services/slb-form-json.service';
 import { getSlbFieldsByType } from './helpers/slb-form-json.helpers';
 import type { SaveSlbDto } from './dto/save-slb.dto';
+import type { SlbUlbSubmissionsQueryDto } from './dto/slb-ulb-submissions-query.dto';
 import type { SlbFormGetResponseData, SlbFormPermissions } from './slb.types';
+
+interface SlbSubmissionRow {
+  ulbId: Types.ObjectId;
+  ulbCode: string;
+  censusCode: string;
+  ulbName: string;
+  formStatus: FormStatusType;
+  lastUpdatedAt: Date | null;
+  slbFormId: Types.ObjectId | null;
+}
+
+interface SlbSubmissionsFacetResult {
+  data: SlbSubmissionRow[];
+  totalCount: Array<{ count: number }>;
+  counts: Array<{ _id: FormStatusType; count: number }>;
+}
 
 type PopulatedNameRef = { _id?: Types.ObjectId; name?: string };
 
@@ -79,6 +103,7 @@ export class SlbService {
     const yearOid = new Types.ObjectId(yearId);
     const designYear = YearIdToLabel[yearId];
     if (!designYear) throw new NotFoundException(`Design year not found for yearId: ${yearId}`);
+    const actualYearLabel = getPreviousYearLabel(designYear);
 
     const doc = await this.model
       .findOne({ ulb: ulbOid, year: yearOid, formType: SLB_FORM_TYPE, isDeleted: false })
@@ -107,6 +132,7 @@ export class SlbService {
       ulbId: effectiveUlbId,
       yearId,
       designYear,
+      actualYearLabel,
       currentFormStatus,
       currentFormStatusLabel: getFormStatusLabel(currentFormStatus),
       questions,
@@ -257,6 +283,120 @@ export class SlbService {
     });
   }
 
+  // ─── State-scoped ULB submissions list ───────────────────────────────────────
+
+  /**
+   * Paginated list of every ULB in the requester's state for a given design year, joined against
+   * that ULB's SLB form status. ULB is the primary collection (left-joined to the SLB doc) so
+   * ULBs that haven't started still appear, reported as NOT_STARTED. Mirrors
+   * BankAccountService.listUlbBankAccounts() exactly — SLB has no bulk decision endpoint (STATE
+   * users can only view, never approve/return an SLB form), so unlike bank-account this is the
+   * only state-scoped SLB endpoint besides the read-only per-ULB getForm().
+   */
+  async listUlbSlbForms(
+    dto: SlbUlbSubmissionsQueryDto,
+    user: AuthUser,
+  ): Promise<
+    XviFcApiResponse<{
+      total: number;
+      page: number;
+      pageSize: number;
+      rows: SlbSubmissionRow[];
+      counts: Record<FormStatusType, number>;
+    }>
+  > {
+    if (user.scope !== Scope.STATE && user.scope !== Scope.ADMIN) {
+      throw new ForbiddenException('Only STATE or ADMIN users may list ULB submissions');
+    }
+    const perms = getEffectivePermissions(user);
+    if (!perms.includes(Permission.REVIEW_ULB_SUBMISSIONS)) {
+      throw new ForbiddenException('You do not have permission to review ULB submissions');
+    }
+
+    const stateId = resolveStateScopeFilter(user, dto.stateId);
+
+    const matchStage: Record<string, unknown> = { isActive: true };
+    if (stateId) matchStage.state = stateId;
+    if (dto.search?.trim()) {
+      const regex = new RegExp(escapeRegex(dto.search.trim()), 'i');
+      matchStage.$or = [{ name: regex }, { code: regex }];
+    }
+
+    const sortField = dto.sortField ?? 'ulbName';
+    const sortDirection = dto.sortDirection === 'desc' ? -1 : 1;
+    const sortStage: Record<string, 1 | -1> =
+      sortField === 'formStatus' ? { formStatus: sortDirection } : { name: sortDirection };
+
+    const page = dto.page ?? 1;
+    const pageSize = dto.pageSize ?? 20;
+    const yearObjectId = new Types.ObjectId(dto.designYearId);
+
+    const pipeline: PipelineStage[] = [
+      { $match: matchStage },
+      {
+        $lookup: {
+          from: 'xvifc_slb_forms',
+          let: { ulbId: '$_id' },
+          pipeline: [
+            {
+              $match: {
+                $expr: { $and: [{ $eq: ['$ulb', '$$ulbId'] }, { $eq: ['$year', yearObjectId] }] },
+              },
+            },
+          ],
+          as: 'slbForm',
+        },
+      },
+      { $addFields: { slbForm: { $arrayElemAt: ['$slbForm', 0] } } },
+      {
+        $addFields: {
+          formStatus: { $ifNull: ['$slbForm.currentFormStatus', FORM_STATUS.NOT_STARTED] },
+          lastUpdatedAt: { $ifNull: ['$slbForm.updatedAt', null] },
+        },
+      },
+    ];
+
+    const statusMatch: PipelineStage.FacetPipelineStage[] =
+      dto.status?.length ? [{ $match: { formStatus: { $in: dto.status } } }] : [];
+
+    pipeline.push({
+      $facet: {
+        data: [
+          ...statusMatch,
+          { $sort: sortStage },
+          { $skip: (page - 1) * pageSize },
+          { $limit: pageSize },
+          {
+            $project: {
+              _id: 0,
+              ulbId: '$_id',
+              ulbCode: '$code',
+              censusCode: { $ifNull: ['$censusCode', '$sbCode'] },
+              ulbName: '$name',
+              formStatus: 1,
+              lastUpdatedAt: 1,
+              slbFormId: { $ifNull: ['$slbForm._id', null] },
+            },
+          },
+        ],
+        totalCount: [...statusMatch, { $count: 'count' }],
+        counts: [{ $group: { _id: '$formStatus', count: { $sum: 1 } } }],
+      },
+    });
+
+    const [result] = await this.ulbModel.aggregate<SlbSubmissionsFacetResult>(pipeline).exec();
+    const rows = result?.data ?? [];
+    const total = result?.totalCount?.[0]?.count ?? 0;
+
+    const counts = Object.fromEntries(
+      Object.values(FORM_STATUS)
+        .filter((status): status is FormStatusType => status !== FORM_STATUS.NO_STATUS)
+        .map((status) => [status, result?.counts.find((c) => c._id === status)?.count ?? 0]),
+    ) as Record<FormStatusType, number>;
+
+    return xviFcSuccess('ULB SLB submissions fetched.', { total, page, pageSize, rows, counts });
+  }
+
   // ─── Draft validation helpers ──────────────────────────────────────────────
 
   /** Strips `requiredTrue` validations so `saveDraft` never blocks on an unchecked confirmation checkbox. */
@@ -319,9 +459,24 @@ export class SlbService {
 
     const ulbName = getPopulatedName(doc?.ulb) ?? '';
     const actors: XvifcFormActor[] = [
-      { action: 'Created by', designation: 'ULB Officer', by: getPopulatedName(doc?.createdBy) ?? null, date: toIsoStringOrNull(doc?.createdAt) },
-      { action: 'Updated by', designation: 'ULB Officer', by: getPopulatedName(doc?.updatedBy) ?? null, date: toIsoStringOrNull(doc?.updatedAt) },
-      { action: 'Submitted by', designation: 'ULB Officer', by: getPopulatedName(doc?.submittedBy) ?? null, date: toIsoStringOrNull(doc?.submittedAt) },
+      {
+        action: 'Created by',
+        designation: 'ULB Officer',
+        by: getPopulatedName(doc?.createdBy) ?? null,
+        date: toIsoStringOrNull(doc?.createdAt),
+      },
+      {
+        action: 'Updated by',
+        designation: 'ULB Officer',
+        by: getPopulatedName(doc?.updatedBy) ?? null,
+        date: toIsoStringOrNull(doc?.updatedAt),
+      },
+      {
+        action: 'Submitted by',
+        designation: 'ULB Officer',
+        by: getPopulatedName(doc?.submittedBy) ?? null,
+        date: toIsoStringOrNull(doc?.submittedAt),
+      },
     ];
     return { actors, ulbName };
   }
