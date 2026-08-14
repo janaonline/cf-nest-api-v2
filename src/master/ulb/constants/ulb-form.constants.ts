@@ -97,11 +97,11 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
     displayInlineLabel: true,
     formFieldType: 'date',
     required: true,
-    minDate: 'TODAY-50Y',
+    minDate: '2021-04-01',
     maxDate: 'TODAY+0D',
     validations: [
       { name: 'required', validator: null, message: 'Date of constitution is required.' },
-      { name: 'minDate', validator: 'TODAY-25Y', message: 'Date of constitution cannot be more than 25 years ago.' },
+      { name: 'minDate', validator: '2021-04-01', message: 'Date of constitution cannot be before 01 Apr 2021.' },
       { name: 'maxDate', validator: 'TODAY+0D', message: 'Date of constitution cannot be a future date.' },
     ],
   },
