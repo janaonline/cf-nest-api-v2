@@ -22,6 +22,12 @@ export class FcUnspentDeclarationDataDto {
   fcDeclaration?: XviFcFileRefDto | null;
 
   @IsOptional()
+  @IsObject()
+  @ValidateNested()
+  @Type(() => XviFcFileRefDto)
+  fcUnspentDeclaration?: XviFcFileRefDto | null;
+
+  @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => FcUnspentUlbRowInputDto)

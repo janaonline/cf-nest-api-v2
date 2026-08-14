@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Headers, Ip, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Headers, Ip, Param, Post, Query, StreamableFile, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiBody, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { PermissionGuard } from 'src/module/auth/permission.guard';
 import { RequirePermissions } from 'src/module/auth/require-permissions.decorator';
@@ -8,6 +8,7 @@ import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { ParseObjectIdPipe } from 'src/common/pipes/parse-object-id.pipe';
 import { FcUnspentDeclarationService } from './services/main/fc-unspent-declaration.service';
 import { FcUnspentUlbOptionsService } from './services/ulb-options/fc-unspent-ulb-options.service';
+import { FcUnspentDeclarationDocxService } from './services/document/fc-unspent-declaration-docx.service';
 import { SaveFcUnspentDeclarationDto } from './dto/save-fc-unspent-declaration.dto';
 import { GetFcUnspentUlbOptionsQueryDto } from './dto/get-fc-unspent-ulb-options-query.dto';
 
@@ -18,6 +19,7 @@ export class FcUnspentDeclarationController {
   constructor(
     private readonly fcUnspentDeclarationService: FcUnspentDeclarationService,
     private readonly fcUnspentUlbOptionsService: FcUnspentUlbOptionsService,
+    private readonly fcUnspentDeclarationDocxService: FcUnspentDeclarationDocxService,
   ) {}
 
   @ApiOperation({ summary: 'Save FC Unspent Declaration draft' })
@@ -72,16 +74,26 @@ export class FcUnspentDeclarationController {
   }
 
   @ApiOperation({
-    summary: 'Get a private, signed download URL for the design-year-specific declaration template (No branch)',
+    summary: 'Download FC Unspent Declaration document',
+    description:
+      "Generates the FC Unspent Declaration letter (Word doc) for the state to print, sign, and re-upload — the nil-balance declaration for the No branch, or the ULB-wise unspent-balance certification for the Yes branch, chosen by the form's stored isFcUnspent. Rejects with a 400 if isFcUnspent has not been answered yet, or (Yes branch) if there are no active ULB rows.",
   })
-  @Get(':stateId/:yearId/declaration-template')
+  @Get(':stateId/:yearId/fc-unspent-declaration-document')
   @UseGuards(PermissionGuard)
   @RequirePermissions(Permission.EDIT_STATE_FORMS)
-  getDeclarationTemplate(
+  async getDeclarationDocument(
     @Param('stateId', ParseObjectIdPipe) stateId: string,
     @Param('yearId', ParseObjectIdPipe) yearId: string,
     @CurrentUser() user: AuthUser,
-  ) {
-    return this.fcUnspentDeclarationService.getDeclarationTemplate(stateId, yearId, user);
+  ): Promise<StreamableFile> {
+    const { buffer, fileName } = await this.fcUnspentDeclarationDocxService.generateDeclarationDocument(
+      stateId,
+      yearId,
+      user,
+    );
+    return new StreamableFile(new Uint8Array(buffer), {
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      disposition: `attachment; filename="${fileName}"`,
+    });
   }
 }

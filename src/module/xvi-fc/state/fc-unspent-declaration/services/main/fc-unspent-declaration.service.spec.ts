@@ -6,7 +6,6 @@ import { Types } from 'mongoose';
 import { join } from 'path';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
-import { S3Service } from 'src/core/s3/s3.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
@@ -21,6 +20,7 @@ import {
 } from 'src/schemas/xvi-fc/state/fc-unspent-state-form.schema';
 import {
   FC_UNSPENT_APPLICABLE_FC_BY_YEAR_LABEL,
+  FC_UNSPENT_DECLARATION_DOCUMENT_ACTION_ID,
   FC_UNSPENT_DECLARATION_TEMPLATE_ACTION_ID,
 } from '../../constants/fc-unspent-declaration.constants';
 import { loadFcUnspentSeedDocument } from '../../constants/fc-unspent-declaration-seed.fixture';
@@ -31,32 +31,6 @@ import { FcUnspentDeclarationRowService } from '../rows/fc-unspent-declaration-r
 import { FcUnspentDeclarationService } from './fc-unspent-declaration.service';
 
 const FC_UNSPENT_STATE_FORM_JSON = loadFcUnspentSeedDocument();
-
-// Mirrors the `meta` the seed fixture attaches to the `fcDeclaration` field's `download-template`
-// supporting action — the DB-driven single source of truth this service now reads from, replacing
-// the old hardcoded FC_UNSPENT_DECLARATION_TEMPLATE_BY_YEAR map.
-const FC_UNSPENT_DECLARATION_TEMPLATE_META = {
-  path: 'xvi-fc/state/common/2026-27/fc-unspent/fc-declaration-template/FC-Unspent-Declaration_9ef58a73-82ef-43b7-991f-02257fcde890.docx',
-  fileName: 'FC-Unspent-Declaration-2026-27.docx',
-  mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-};
-
-/** Returns a copy of the fixture data with the fcDeclaration download-template action's `meta` removed. */
-function fcUnspentFieldsWithoutTemplateMeta() {
-  return FC_UNSPENT_STATE_FORM_JSON.data.map((field) =>
-    field.key === 'fcDeclaration'
-      ? {
-          ...field,
-          supportingContent: field.supportingContent?.map((block) => ({
-            ...block,
-            actions: block.actions?.map((action) =>
-              action.id === FC_UNSPENT_DECLARATION_TEMPLATE_ACTION_ID ? { ...action, meta: undefined } : action,
-            ),
-          })),
-        }
-      : field,
-  );
-}
 
 // ─── Test helpers ─────────────────────────────────────────────────────────────
 
@@ -119,8 +93,18 @@ const sampleResolvedRow: FcUnspentResolvedRow = {
   },
 };
 
+/** A valid signed-upload fixture for the Yes-branch's fcUnspentDeclaration field — final submit
+ *  requires this in the payload the same way it requires fcDeclaration on the No branch. */
+const sampleFcUnspentDeclarationFile = {
+  originalName: 'unspent-declaration.pdf',
+  path: 'unspent-declaration.pdf',
+  mimeType: 'application/pdf',
+  sizeKb: 100,
+};
+
 interface TestSetArg {
   fcDeclaration?: { path: string; originalName?: string; mimeType?: string; sizeKb?: number } | null;
+  fcUnspentDeclaration?: { path: string; originalName?: string; mimeType?: string; sizeKb?: number } | null;
   currentFormStatus: number;
   isDraft?: boolean;
 }
@@ -167,7 +151,6 @@ describe('FcUnspentDeclarationService', () => {
   let devolutionFormModel: Record<string, jest.Mock>;
   let rowService: Record<string, jest.Mock>;
   let formJsonConfigService: Record<string, jest.Mock>;
-  let s3Service: Record<string, jest.Mock>;
   let mockSession: Record<string, jest.Mock>;
 
   beforeEach(async () => {
@@ -208,9 +191,6 @@ describe('FcUnspentDeclarationService', () => {
       loadFormConfig: jest.fn().mockResolvedValue({ fields: FC_UNSPENT_STATE_FORM_JSON.data, thresholdPercent: 10 }),
       loadFields: jest.fn().mockResolvedValue(FC_UNSPENT_STATE_FORM_JSON.data),
     };
-    s3Service = {
-      headObject: jest.fn().mockResolvedValue({ ContentLength: 1024 }),
-    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -225,7 +205,6 @@ describe('FcUnspentDeclarationService', () => {
         FileInfoNormalizerService,
         { provide: FileUrlNormalizerService, useValue: { toRawStoragePath: jest.fn((v: string) => v) } },
         { provide: FileTokenService, useValue: { signFileUrl: jest.fn((p: string) => `signed::${p}`) } },
-        { provide: S3Service, useValue: s3Service },
       ],
     }).compile();
 
@@ -415,6 +394,26 @@ describe('FcUnspentDeclarationService', () => {
       expect(mockSession.commitTransaction).toHaveBeenCalled();
     });
 
+    it('clears fcUnspentDeclaration when saving a No-branch draft, even if none was provided', async () => {
+      const dto = baseDto({ isFcUnspent: false });
+      await service.saveDraft(dto, stateUser());
+      const setArg = getSetArg(model['findOneAndUpdate']);
+      expect(setArg.fcUnspentDeclaration).toBeNull();
+    });
+
+    it('normalizes and persists fcUnspentDeclaration on a Yes-branch draft, clearing fcDeclaration', async () => {
+      rowService['resolveAndValidateRows'].mockResolvedValueOnce({ rows: [sampleResolvedRow], errors: {} });
+      const dto = baseDto({
+        isFcUnspent: true,
+        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5 }],
+        fcUnspentDeclaration: sampleFcUnspentDeclarationFile,
+      });
+      await service.saveDraft(dto, stateUser());
+      const setArg = getSetArg(model['findOneAndUpdate']);
+      expect(setArg.fcUnspentDeclaration?.path).toContain('unspent-declaration.pdf');
+      expect(setArg.fcDeclaration).toBeNull();
+    });
+
     it('rejects a No-branch draft carrying unspentUlbData rows', async () => {
       const dto = baseDto({ isFcUnspent: false, unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5 }] });
       await expect(service.saveDraft(dto, stateUser())).rejects.toThrow(BadRequestException);
@@ -533,6 +532,7 @@ describe('FcUnspentDeclarationService', () => {
         isFcUnspent: true,
         checkboxConfirmation: true,
         unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 10 }],
+        fcUnspentDeclaration: sampleFcUnspentDeclarationFile,
       });
       const result = await service.finalSubmit(dto, stateUser(), '127.0.0.1', 'jest-agent');
 
@@ -567,6 +567,7 @@ describe('FcUnspentDeclarationService', () => {
         isFcUnspent: true,
         checkboxConfirmation: true,
         unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5 }],
+        fcUnspentDeclaration: sampleFcUnspentDeclarationFile,
       });
       await service.finalSubmit(dto, stateUser(), '127.0.0.1', 'jest-agent');
 
@@ -603,6 +604,49 @@ describe('FcUnspentDeclarationService', () => {
       );
     });
 
+    it('rejects a Yes-branch final submit without fcUnspentDeclaration', async () => {
+      rowService['resolveAndValidateRows'].mockResolvedValueOnce({ rows: [sampleResolvedRow], errors: {} });
+      const dto = baseDto({
+        isFcUnspent: true,
+        checkboxConfirmation: true,
+        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 10 }],
+      });
+      const message = await getValidationErrorMessage(
+        service.finalSubmit(dto, stateUser(), '127.0.0.1', 'jest-agent'),
+        'fcUnspentDeclaration',
+      );
+      expect(message).toBe('Signed declaration is required.');
+    });
+
+    it('forces fcUnspentDeclaration to null on a No-branch final submit, clearing any stale Yes-branch upload', async () => {
+      const dto = baseDto({
+        isFcUnspent: false,
+        fcDeclaration: {
+          originalName: 'declaration.pdf',
+          path: 'declaration.pdf',
+          mimeType: 'application/pdf',
+          sizeKb: 100,
+        },
+      });
+      await service.finalSubmit(dto, stateUser(), '127.0.0.1', 'jest-agent');
+      const setArg = getSetArg(model['findOneAndUpdate']);
+      expect(setArg.fcUnspentDeclaration).toBeNull();
+    });
+
+    it('persists fcUnspentDeclaration and forces fcDeclaration to null on a Yes-branch final submit', async () => {
+      rowService['resolveAndValidateRows'].mockResolvedValueOnce({ rows: [sampleResolvedRow], errors: {} });
+      const dto = baseDto({
+        isFcUnspent: true,
+        checkboxConfirmation: true,
+        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 10 }],
+        fcUnspentDeclaration: sampleFcUnspentDeclarationFile,
+      });
+      await service.finalSubmit(dto, stateUser(), '127.0.0.1', 'jest-agent');
+      const setArg = getSetArg(model['findOneAndUpdate']);
+      expect(setArg.fcUnspentDeclaration?.path).toContain('unspent-declaration.pdf');
+      expect(setArg.fcDeclaration).toBeNull();
+    });
+
     it('propagates duplicate-ULB rejection from the row service', async () => {
       rowService['resolveAndValidateRows'].mockResolvedValueOnce({
         rows: [],
@@ -635,6 +679,7 @@ describe('FcUnspentDeclarationService', () => {
         isFcUnspent: true,
         checkboxConfirmation: true,
         unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 10 }],
+        fcUnspentDeclaration: sampleFcUnspentDeclarationFile,
       });
       await service.finalSubmit(dto, stateUser(), '127.0.0.1', 'jest-agent');
 
@@ -681,6 +726,7 @@ describe('FcUnspentDeclarationService', () => {
         isFcUnspent: true,
         checkboxConfirmation: true,
         unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5 }],
+        fcUnspentDeclaration: sampleFcUnspentDeclarationFile,
       });
       await service.finalSubmit(dto, stateUser(), '10.0.0.5', 'jest-agent/1.0');
       const historyArg = getHistoryArg(historyModel['create']);
@@ -697,6 +743,7 @@ describe('FcUnspentDeclarationService', () => {
         isFcUnspent: true,
         checkboxConfirmation: true,
         unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5 }],
+        fcUnspentDeclaration: sampleFcUnspentDeclarationFile,
       });
       await expect(service.finalSubmit(dto, stateUser(), '127.0.0.1', 'jest-agent')).rejects.toThrow(
         'history insert failed',
@@ -712,6 +759,7 @@ describe('FcUnspentDeclarationService', () => {
         isFcUnspent: true,
         checkboxConfirmation: true,
         unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5 }],
+        fcUnspentDeclaration: sampleFcUnspentDeclarationFile,
       });
       await expect(service.finalSubmit(dto, stateUser(), '127.0.0.1', 'jest-agent')).rejects.toThrow(
         'row upsert failed',
@@ -726,6 +774,7 @@ describe('FcUnspentDeclarationService', () => {
         isFcUnspent: true,
         checkboxConfirmation: true,
         unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5 }],
+        fcUnspentDeclaration: sampleFcUnspentDeclarationFile,
       });
       await expect(service.finalSubmit(dto, stateUser(), '127.0.0.1', 'jest-agent')).rejects.toThrow(
         'row history insert failed',
@@ -845,11 +894,12 @@ describe('FcUnspentDeclarationService', () => {
       expect(result.data!.rowEditFields.every((f) => !('fieldTypes' in f))).toBe(true);
     });
 
-    it('questions contains exactly the 3 main fields — row-edit-tagged entries are excluded', async () => {
+    it('questions contains exactly the 4 main fields — row-edit-tagged entries are excluded', async () => {
       const result = await service.getForm(stateOid.toString(), yearOid.toString(), stateUser());
       expect(result.data!.questions.map((q) => q.key)).toEqual([
         'isFcUnspent',
         'fcDeclaration',
+        'fcUnspentDeclaration',
         'checkboxConfirmation',
       ]);
     });
@@ -875,6 +925,7 @@ describe('FcUnspentDeclarationService', () => {
         isFcUnspent: true,
         checkboxConfirmation: true,
         unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5 }],
+        fcUnspentDeclaration: sampleFcUnspentDeclarationFile,
       });
       await expect(service.finalSubmit(dto, stateUser(), '127.0.0.1', 'jest-agent')).resolves.toBeDefined();
     });
@@ -919,7 +970,12 @@ describe('FcUnspentDeclarationService', () => {
     it('loads questions via FcUnspentDeclarationFormJsonService.loadFormConfig for finalSubmit, keyed by dto.yearId', async () => {
       rowService['resolveAndValidateRows'] = jest.fn().mockResolvedValue({ rows: [sampleResolvedRow], errors: {} });
       await service.finalSubmit(
-        baseDto({ isFcUnspent: true, checkboxConfirmation: true, unspentUlbData: [] }),
+        baseDto({
+          isFcUnspent: true,
+          checkboxConfirmation: true,
+          unspentUlbData: [],
+          fcUnspentDeclaration: sampleFcUnspentDeclarationFile,
+        }),
         stateUser(),
         '127.0.0.1',
         'jest-agent',
@@ -950,165 +1006,17 @@ describe('FcUnspentDeclarationService', () => {
     });
   });
 
-  // ─── Declaration-template download ──────────────────────────────────────────
+  // ─── Declaration document generation moved out ──────────────────────────────
+  // The old signed-URL-to-a-static-S3-file `getDeclarationTemplate` method (and its
+  // configuration/access/status-gate/private-signed-download tests) is gone — both branches now
+  // generate a real document server-side. See
+  // services/document/fc-unspent-declaration-document.service.spec.ts and
+  // fc-unspent-declaration-docx.service.spec.ts for that feature's own tests, which cover the
+  // access/status/Devolution gates this service still centralizes via the now-public
+  // `resolveDevolutionDependency`/`buildFormPermissions`/`assertStateAccess`, reused as-is.
 
-  describe('getDeclarationTemplate — configuration', () => {
-    it('the seed fixture carries the expected DB-driven template meta for 2026-27', () => {
-      const fcDeclaration = FC_UNSPENT_STATE_FORM_JSON.data.find((f) => f.key === 'fcDeclaration')!;
-      const actionsBlock = fcDeclaration.supportingContent!.find((b) => b.type === 'actions')!;
-      const action = actionsBlock.actions!.find((a) => a.id === FC_UNSPENT_DECLARATION_TEMPLATE_ACTION_ID)!;
-      expect(action.meta).toEqual(FC_UNSPENT_DECLARATION_TEMPLATE_META);
-    });
-
-    it('never returns the raw S3 path, only the signed url/fileName/mimeType', async () => {
-      const result = await service.getDeclarationTemplate(stateOid.toString(), yearOid.toString(), stateUser());
-      expect(result.data).toEqual({
-        fileName: 'FC-Unspent-Declaration-2026-27.docx',
-        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        url: `signed::${FC_UNSPENT_DECLARATION_TEMPLATE_META.path}`,
-      });
-      // No extra keys (no raw `path`/`bucket`/token payload) beyond the 3 documented fields.
-      expect(Object.keys(result.data!).sort()).toEqual(['fileName', 'mimeType', 'url']);
-    });
-  });
-
-  describe('getDeclarationTemplate — access', () => {
-    it('allows a STATE user to download for their own state', async () => {
-      await expect(
-        service.getDeclarationTemplate(stateOid.toString(), yearOid.toString(), stateUser()),
-      ).resolves.toBeDefined();
-    });
-
-    it('blocks a STATE user from downloading for another state', async () => {
-      await expect(
-        service.getDeclarationTemplate(otherStateOid.toString(), yearOid.toString(), stateUser(stateOid)),
-      ).rejects.toThrow(ForbiddenException);
-    });
-
-    it('allows ADMIN to download for any state', async () => {
-      await expect(
-        service.getDeclarationTemplate(otherStateOid.toString(), yearOid.toString(), adminUser),
-      ).resolves.toBeDefined();
-    });
-
-    it('404s for a yearId with no active formJson document', async () => {
-      formJsonConfigService['loadFields'] = jest.fn().mockRejectedValue(new NotFoundException('FormJson not found'));
-      const unknownYearId = new Types.ObjectId().toString();
-      await expect(service.getDeclarationTemplate(stateOid.toString(), unknownYearId, stateUser())).rejects.toThrow(
-        NotFoundException,
-      );
-    });
-  });
-
-  describe('getDeclarationTemplate — status/dependency gates (same canEdit as State GET)', () => {
-    it('allows when the form is NOT_STARTED (missing parent)', async () => {
-      model['findOne'] = jest.fn().mockReturnValue(q(null));
-      await expect(
-        service.getDeclarationTemplate(stateOid.toString(), yearOid.toString(), stateUser()),
-      ).resolves.toBeDefined();
-    });
-
-    it('allows when the form is IN_PROGRESS', async () => {
-      model['findOne'] = jest.fn().mockReturnValue(q({ currentFormStatus: FORM_STATUS.IN_PROGRESS }));
-      await expect(
-        service.getDeclarationTemplate(stateOid.toString(), yearOid.toString(), stateUser()),
-      ).resolves.toBeDefined();
-    });
-
-    it('allows when the form is RETURNED_BY_MOHUA', async () => {
-      model['findOne'] = jest.fn().mockReturnValue(q({ currentFormStatus: FORM_STATUS.RETURNED_BY_MOHUA }));
-      await expect(
-        service.getDeclarationTemplate(stateOid.toString(), yearOid.toString(), stateUser()),
-      ).resolves.toBeDefined();
-    });
-
-    it('blocks when the form is UNDER_REVIEW_BY_MOHUA', async () => {
-      model['findOne'] = jest.fn().mockReturnValue(q({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }));
-      await expect(
-        service.getDeclarationTemplate(stateOid.toString(), yearOid.toString(), stateUser()),
-      ).rejects.toThrow(ForbiddenException);
-    });
-
-    it('blocks when the form is SUBMISSION_ACKNOWLEDGED_BY_MOHUA', async () => {
-      model['findOne'] = jest
-        .fn()
-        .mockReturnValue(q({ currentFormStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA }));
-      await expect(
-        service.getDeclarationTemplate(stateOid.toString(), yearOid.toString(), stateUser()),
-      ).rejects.toThrow(ForbiddenException);
-    });
-
-    it('blocks when the Devolution dependency gate fails (no Devolution form/dataset)', async () => {
-      devolutionFormModel['findOne'] = jest.fn().mockReturnValue(q(null));
-      await expect(
-        service.getDeclarationTemplate(stateOid.toString(), yearOid.toString(), stateUser()),
-      ).rejects.toThrow(ForbiddenException);
-    });
-  });
-
-  describe('getDeclarationTemplate — private signed download', () => {
-    it('signs the exact full storage path via the existing FileTokenService (never a manually built URL)', async () => {
-      const fileTokenService: { signFileUrl: jest.Mock } = (service as unknown as { fileTokenService: unknown })[
-        'fileTokenService'
-      ] as never;
-      await service.getDeclarationTemplate(stateOid.toString(), yearOid.toString(), stateUser());
-      expect(fileTokenService.signFileUrl).toHaveBeenCalledWith(FC_UNSPENT_DECLARATION_TEMPLATE_META.path);
-    });
-
-    it('verifies the S3 object exists via the shared S3Service.headObject before signing', async () => {
-      await service.getDeclarationTemplate(stateOid.toString(), yearOid.toString(), stateUser());
-      expect(s3Service['headObject']).toHaveBeenCalledWith(FC_UNSPENT_DECLARATION_TEMPLATE_META.path);
-    });
-
-    it('fails without leaking the raw S3 error/key when headObject rejects (object missing)', async () => {
-      s3Service['headObject'] = jest.fn().mockRejectedValue(new Error('NoSuchKey: some/internal/key.docx'));
-      const message = await getValidationErrorMessage(
-        service.getDeclarationTemplate(stateOid.toString(), yearOid.toString(), stateUser()),
-        '_form',
-      );
-      expect(message).toBe('The declaration template could not be generated. Please contact support.');
-      expect(message).not.toContain('NoSuchKey');
-      expect(message).not.toContain(FC_UNSPENT_DECLARATION_TEMPLATE_META.path);
-    });
-
-    it('fails when the object metadata reports an empty file', async () => {
-      s3Service['headObject'] = jest.fn().mockResolvedValue({ ContentLength: 0 });
-      const message = await getValidationErrorMessage(
-        service.getDeclarationTemplate(stateOid.toString(), yearOid.toString(), stateUser()),
-        '_form',
-      );
-      expect(message).toBe('The declaration template could not be generated. Please contact support.');
-    });
-
-    it("returns a controlled field error (not another year's file) when the design year has no configured template", async () => {
-      // Simulate an unconfigured design year: the DB doc exists, but its `fcDeclaration`
-      // download-template action carries no `meta` (never approved/uploaded yet).
-      formJsonConfigService['loadFields'] = jest.fn().mockResolvedValue(fcUnspentFieldsWithoutTemplateMeta());
-      const message = await getValidationErrorMessage(
-        service.getDeclarationTemplate(stateOid.toString(), yearOid.toString(), stateUser()),
-        'fcDeclaration',
-      );
-      expect(message).toBe('The declaration template is not configured for the selected design year.');
-    });
-
-    it('does not write to the database (no parent update, no history, no row mutation)', async () => {
-      await service.getDeclarationTemplate(stateOid.toString(), yearOid.toString(), stateUser());
-      expect(model['findOneAndUpdate']).not.toHaveBeenCalled();
-      expect(historyModel['create']).not.toHaveBeenCalled();
-      expect(rowService['applyRows']).not.toHaveBeenCalled();
-      expect(rowService['deactivateAllRows']).not.toHaveBeenCalled();
-      expect(mockSession['startTransaction']).not.toHaveBeenCalled();
-    });
-
-    it('reuses signFileUrl rather than manually building the /file/download URL or duplicating token logic', () => {
-      const source = readFileSync(join(__dirname, './fc-unspent-declaration.service.ts'), 'utf8');
-      expect(source).toMatch(/signFileUrl\(template\.path\)/);
-      expect(source).not.toMatch(/createToken\(/);
-    });
-  });
-
-  describe('question hydration — download-template action', () => {
-    it('is visible on GET when canEdit is true and the design year has a configured template', async () => {
+  describe('question hydration — download-template/download-declaration actions', () => {
+    it('is visible on GET for fcDeclaration when canEdit is true', async () => {
       model['findOne'] = jest.fn().mockReturnValue(q({ currentFormStatus: FORM_STATUS.IN_PROGRESS }));
       const result = await service.getForm(stateOid.toString(), yearOid.toString(), stateUser());
       const fcDeclaration = result.data!.questions.find((q) => q.key === 'fcDeclaration')!;
@@ -1132,7 +1040,7 @@ describe('FcUnspentDeclarationService', () => {
       const fcDeclaration = result.data!.questions.find((q) => q.key === 'fcDeclaration')!;
       const actionsBlock = fcDeclaration.supportingContent!.find((b) => b.type === 'actions')!;
       expect(actionsBlock.description).toBe(
-        'Download the official template, have it signed by the authorized State DMA officer, and upload the signed declaration. Declarations on unofficial letterhead will not be accepted.',
+        'Download the declaration, have it signed by the authorized State DMA officer, and upload the signed copy below. Declarations on unofficial letterhead will not be accepted.',
       );
     });
 
@@ -1144,38 +1052,24 @@ describe('FcUnspentDeclarationService', () => {
       expect(actionsBlock.description).toBeUndefined();
     });
 
-    it('is hidden when the design year has no configured template, even though canEdit is true', () => {
-      const hydrated = (
-        service as unknown as {
-          hydrateQuestions: (
-            questions: unknown[],
-            savedData: Record<string, unknown>,
-            ctx: unknown,
-            canEdit: boolean,
-          ) => Array<{
-            key: string;
-            supportingContent?: Array<{ type: string; actions?: Array<{ id: string; visible?: boolean }> }>;
-          }>;
-        }
-      )['hydrateQuestions'](
-        fcUnspentFieldsWithoutTemplateMeta(),
-        {},
-        { _id: stateOid.toString(), role: 'state', designYear: '2026-27' },
-        true,
-      );
-      const fcDeclaration = hydrated.find((q) => q.key === 'fcDeclaration')!;
-      const actionsBlock = fcDeclaration.supportingContent!.find((b) => b.type === 'actions')!;
-      const action = actionsBlock.actions!.find((a) => a.id === FC_UNSPENT_DECLARATION_TEMPLATE_ACTION_ID)!;
-      expect(action.visible).toBe(false);
-    });
-
-    it('strips meta from the download-template action before it reaches the GET-form response', async () => {
+    // fcUnspentDeclaration (Yes branch) — mirrors fcDeclaration's visibility hydration exactly,
+    // keyed by FC_UNSPENT_DECLARATION_DOCUMENT_ACTION_ID instead.
+    it('is visible on GET for fcUnspentDeclaration when canEdit is true', async () => {
       model['findOne'] = jest.fn().mockReturnValue(q({ currentFormStatus: FORM_STATUS.IN_PROGRESS }));
       const result = await service.getForm(stateOid.toString(), yearOid.toString(), stateUser());
-      const fcDeclaration = result.data!.questions.find((q) => q.key === 'fcDeclaration')!;
-      const actionsBlock = fcDeclaration.supportingContent!.find((b) => b.type === 'actions')!;
-      const action = actionsBlock.actions!.find((a) => a.id === FC_UNSPENT_DECLARATION_TEMPLATE_ACTION_ID)!;
-      expect(action).not.toHaveProperty('meta');
+      const fcUnspentDeclaration = result.data!.questions.find((q) => q.key === 'fcUnspentDeclaration')!;
+      const actionsBlock = fcUnspentDeclaration.supportingContent!.find((b) => b.type === 'actions')!;
+      const action = actionsBlock.actions!.find((a) => a.id === FC_UNSPENT_DECLARATION_DOCUMENT_ACTION_ID)!;
+      expect(action.visible).toBe(true);
+    });
+
+    it('is hidden on GET for fcUnspentDeclaration when the form is read-only (canEdit false)', async () => {
+      model['findOne'] = jest.fn().mockReturnValue(q({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }));
+      const result = await service.getForm(stateOid.toString(), yearOid.toString(), stateUser());
+      const fcUnspentDeclaration = result.data!.questions.find((q) => q.key === 'fcUnspentDeclaration')!;
+      const actionsBlock = fcUnspentDeclaration.supportingContent!.find((b) => b.type === 'actions')!;
+      const action = actionsBlock.actions!.find((a) => a.id === FC_UNSPENT_DECLARATION_DOCUMENT_ACTION_ID)!;
+      expect(action.visible).toBe(false);
     });
 
     it('never persists a signed URL into formJson — GET never writes to the database', async () => {

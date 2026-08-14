@@ -1,9 +1,17 @@
 import { InternalServerErrorException } from '@nestjs/common';
 import type { FieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
-import { FC_UNSPENT_DECLARATION_TEMPLATE_ACTION_ID } from '../constants/fc-unspent-declaration.constants';
+import {
+  FC_UNSPENT_DECLARATION_DOCUMENT_ACTION_ID,
+  FC_UNSPENT_DECLARATION_TEMPLATE_ACTION_ID,
+} from '../constants/fc-unspent-declaration.constants';
 
-/** The 3 questions the DB-backed formJson document (formId 25) must define. */
-const REQUIRED_FC_UNSPENT_FIELD_KEYS = ['isFcUnspent', 'fcDeclaration', 'checkboxConfirmation'] as const;
+/** The 4 questions the DB-backed formJson document (formId 25) must define. */
+const REQUIRED_FC_UNSPENT_FIELD_KEYS = [
+  'isFcUnspent',
+  'fcDeclaration',
+  'fcUnspentDeclaration',
+  'checkboxConfirmation',
+] as const;
 
 /**
  * `FC_UNSPENT_MAIN_FORM_FIELDS` — the 3 top-level questions (isFcUnspent, fcDeclaration,
@@ -34,10 +42,10 @@ export function getFcUnspentFieldsByType(
 /**
  * Validates the raw formJson.data structure and casts to FcUnspentTypedFieldConfig[].
  * Throws ISE (never silently falls back to hardcoded questions) when the DB document is
- * empty, malformed, missing one of the 3 required main-form field keys, missing/invalid
- * `fieldTypes` on any field, or when `fcDeclaration` is missing its `download-template`
- * supporting action (the hook the main service toggles `visible` on for the
- * declaration-template download).
+ * empty, malformed, missing one of the 4 required main-form field keys, missing/invalid
+ * `fieldTypes` on any field, or when `fcDeclaration`/`fcUnspentDeclaration` is missing its
+ * respective download action (the hook the main service toggles `visible` on for the
+ * declaration-document download on each branch).
  */
 export function validateFcUnspentFormJsonData(data: unknown): FcUnspentTypedFieldConfig[] {
   if (!Array.isArray(data) || data.length === 0) {
@@ -69,26 +77,30 @@ export function validateFcUnspentFormJsonData(data: unknown): FcUnspentTypedFiel
     }
   }
 
-  const fcDeclarationField = fields.find((f) => f['key'] === 'fcDeclaration');
-  if (!hasDownloadTemplateAction(fcDeclarationField)) {
-    throw new InternalServerErrorException(
-      `FC Unspent Declaration form configuration is missing the '${FC_UNSPENT_DECLARATION_TEMPLATE_ACTION_ID}' action on 'fcDeclaration'.`,
-    );
+  const requiredActionsByField: Array<[string, string]> = [
+    ['fcDeclaration', FC_UNSPENT_DECLARATION_TEMPLATE_ACTION_ID],
+    ['fcUnspentDeclaration', FC_UNSPENT_DECLARATION_DOCUMENT_ACTION_ID],
+  ];
+  for (const [fieldKey, actionId] of requiredActionsByField) {
+    const field = fields.find((f) => f['key'] === fieldKey);
+    if (!hasDownloadAction(field, actionId)) {
+      throw new InternalServerErrorException(
+        `FC Unspent Declaration form configuration is missing the '${actionId}' action on '${fieldKey}'.`,
+      );
+    }
   }
 
   return data as unknown as FcUnspentTypedFieldConfig[];
 }
 
-/** Returns true when `fcDeclaration` has an `actions`-type supportingContent block with a `download-template` action. */
-function hasDownloadTemplateAction(fcDeclarationField: Record<string, unknown> | undefined): boolean {
-  const supportingContent = fcDeclarationField?.['supportingContent'];
+/** Returns true when `field` has an `actions`-type supportingContent block with an action matching `actionId`. */
+function hasDownloadAction(field: Record<string, unknown> | undefined, actionId: string): boolean {
+  const supportingContent = field?.['supportingContent'];
   if (!Array.isArray(supportingContent)) return false;
 
   return supportingContent.some((block: unknown) => {
     const b = block as Record<string, unknown>;
     if (b?.['type'] !== 'actions' || !Array.isArray(b['actions'])) return false;
-    return (b['actions'] as unknown[]).some(
-      (action) => (action as Record<string, unknown>)?.['id'] === FC_UNSPENT_DECLARATION_TEMPLATE_ACTION_ID,
-    );
+    return (b['actions'] as unknown[]).some((action) => (action as Record<string, unknown>)?.['id'] === actionId);
   });
 }
