@@ -16,6 +16,7 @@ import { SideMenuModule } from './side-menu/side-menu.module';
 import { FormJsonModule } from '../../master/form-json/form-json.module';
 import { UnspentBalanceDisclosureModule } from './ulb/unspent-balance-disclosure/unspent-balance-disclosure.module';
 import { BankAccountModule } from './ulb/bank-account/bank-account.module';
+import { BudgetDocumentModule } from './ulb/budget-document/budget-document.module';
 import { XviFcAnnualAccount, XviFcAnnualAccountSchema } from '../../schemas/xvi-fc/annual-account.schema';
 import {
   XviFcUnspentBalanceDisclosure,
@@ -49,6 +50,7 @@ import { UlbEligibilityModule } from '../ulb-eligibility/ulb-eligibility.module'
     FormJsonModule,
     UnspentBalanceDisclosureModule,
     BankAccountModule,
+    BudgetDocumentModule,
     DevolutionFormulaModule,
     FcUnspentDeclarationModule,
     FcUnspentMohuaReviewModule,
