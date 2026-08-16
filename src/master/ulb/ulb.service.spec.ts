@@ -48,7 +48,7 @@ describe('UlbService', () => {
     db?: unknown;
   };
   let stateModel: { findById: jest.Mock; find: jest.Mock };
-  let userModel: { create: jest.Mock; findOne: jest.Mock; find: jest.Mock };
+  let userModel: { create: jest.Mock; findOne: jest.Mock; find: jest.Mock; findById: jest.Mock };
   let formJsonService: { findByType: jest.Mock };
   let dynamicFormValidation: { validateFinalSubmitAndBuildPayload: jest.Mock; validateDraftAndBuildPayload: jest.Mock };
   let emailDomainValidation: { domainHasMxRecord: jest.Mock };
@@ -90,6 +90,10 @@ describe('UlbService', () => {
         exec: jest.fn().mockResolvedValue(null),
       }),
       find: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue([]) }),
+      findById: jest.fn().mockReturnValue({
+        select: jest.fn().mockReturnThis(),
+        lean: jest.fn().mockResolvedValue(null),
+      }),
     };
     formJsonService = { findByType: jest.fn().mockRejectedValue(new NotFoundException()) };
     dynamicFormValidation = {
@@ -1152,6 +1156,67 @@ describe('UlbService', () => {
       const [, updateArg] = ulbModel.findByIdAndUpdate.mock.calls[0] as [string, { $set: Record<string, unknown> }];
       expect(updateArg.$set['approval.status']).toBe('REJECTED');
       expect(updateArg.$set['approval.rejectReason']).toBe('Duplicate code');
+    });
+
+    it('emails the STATE submitter that their ULB registration was rejected', async () => {
+      const submitterId = new Types.ObjectId();
+      ulbModel.findByIdAndUpdate.mockReturnValue({
+        lean: jest.fn().mockResolvedValue({
+          _id: 'x',
+          name: 'Vizag Municipal Corporation',
+          code: 'AP001',
+          approval: { status: 'REJECTED', submittedBy: submitterId },
+        }),
+      });
+      userModel.findById.mockReturnValue({
+        select: jest.fn().mockReturnThis(),
+        lean: jest.fn().mockResolvedValue({ email: 'state.user@ulb.gov.in', name: 'State User' }),
+      });
+
+      await service.reject(new Types.ObjectId().toString(), { reason: 'Duplicate code' }, adminUser);
+
+      expect(userModel.findById).toHaveBeenCalledWith(submitterId);
+      const [emailJob] = emailQueueService.addEmailJob.mock.calls[0] as [
+        { to: string; templateName: string; mailData: Record<string, unknown> },
+      ];
+      expect(emailJob.to).toBe('state.user@ulb.gov.in');
+      expect(emailJob.templateName).toBe('./ulb-rejected');
+      expect(emailJob.mailData).toMatchObject({
+        ulbName: 'Vizag Municipal Corporation',
+        ulbCode: 'AP001',
+        reason: 'Duplicate code',
+      });
+    });
+
+    it('does not attempt to email when the ULB has no recorded submitter', async () => {
+      ulbModel.findByIdAndUpdate.mockReturnValue({
+        lean: jest.fn().mockResolvedValue({ _id: 'x', approval: { status: 'REJECTED', submittedBy: null } }),
+      });
+
+      await service.reject(new Types.ObjectId().toString(), { reason: 'Duplicate code' }, adminUser);
+
+      expect(userModel.findById).not.toHaveBeenCalled();
+      expect(emailQueueService.addEmailJob).not.toHaveBeenCalled();
+    });
+
+    it('does not fail the request when the rejection email fails to queue', async () => {
+      const submitterId = new Types.ObjectId();
+      ulbModel.findByIdAndUpdate.mockReturnValue({
+        lean: jest.fn().mockResolvedValue({
+          _id: 'x',
+          name: 'Vizag Municipal Corporation',
+          approval: { status: 'REJECTED', submittedBy: submitterId },
+        }),
+      });
+      userModel.findById.mockReturnValue({
+        select: jest.fn().mockReturnThis(),
+        lean: jest.fn().mockResolvedValue({ email: 'state.user@ulb.gov.in' }),
+      });
+      emailQueueService.addEmailJob.mockRejectedValueOnce(new Error('queue unavailable'));
+
+      await expect(
+        service.reject(new Types.ObjectId().toString(), { reason: 'Duplicate code' }, adminUser),
+      ).resolves.toBeDefined();
     });
   });
 });

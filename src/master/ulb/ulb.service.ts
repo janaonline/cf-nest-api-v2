@@ -871,7 +871,44 @@ export class UlbService {
       )
       .lean<Ulb>();
     if (!updated) throw new NotFoundException('ULB not found');
+
+    await this.notifySubmitterOfRejection(updated, dto.reason);
+
     return updated;
+  }
+
+  /** Emails the STATE user who submitted this ULB (`approval.submittedBy`) that an ADMIN rejected
+   *  it, so they know to fix and resubmit — mirrors `queueUlbInviteEmail`'s notification pattern.
+   *  Best-effort: the ULB's REJECTED state is already persisted by the time this runs, so a
+   *  lookup/queueing failure here must never fail the `reject()` call itself. No-ops when there's
+   *  no `submittedBy` on file (e.g. a legacy ULB with no STATE submitter) or that user has no email. */
+  private async notifySubmitterOfRejection(ulb: Ulb, reason: string): Promise<void> {
+    try {
+      const submittedBy = ulb.approval?.submittedBy;
+      if (!submittedBy) return;
+
+      const submitter = await this.userModel
+        .findById(submittedBy)
+        .select('email name')
+        .lean<{ email?: string; name?: string }>();
+      if (!submitter?.email) return;
+
+      const loginUrl = `${this.configService.get<string>('CLIENT_URL', 'https://cityfinance.in')}/login`;
+      await this.emailQueueService.addEmailJob({
+        to: submitter.email,
+        subject: `Your ULB registration was rejected: ${ulb.name}`,
+        templateName: './ulb-rejected',
+        mailData: {
+          name: submitter.name,
+          ulbName: ulb.name,
+          ulbCode: ulb.code,
+          reason,
+          loginUrl,
+        },
+      });
+    } catch (error: unknown) {
+      this.logger.error(`Failed to notify STATE submitter of ULB rejection for ULB ${ulb._id}:`, error);
+    }
   }
 
   /**
