@@ -7,6 +7,7 @@ import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { EmailQueueService } from 'src/core/queue/email-queue/email-queue.service';
 import { FormJsonService } from 'src/master/form-json/form-json.service';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
+import { EmailDomainValidationService } from 'src/core/email-domain-validation/email-domain-validation.service';
 import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
 import type { IAuthUser } from 'src/common/interfaces/auth-user.interface';
 import { Role } from 'src/module/auth/enum/role.enum';
@@ -50,6 +51,7 @@ describe('UlbService', () => {
   let userModel: { create: jest.Mock; findOne: jest.Mock; find: jest.Mock };
   let formJsonService: { findByType: jest.Mock };
   let dynamicFormValidation: { validateFinalSubmitAndBuildPayload: jest.Mock; validateDraftAndBuildPayload: jest.Mock };
+  let emailDomainValidation: { domainHasMxRecord: jest.Mock };
   let emailQueueService: { addEmailJob: jest.Mock };
   let configService: { get: jest.Mock };
   let fileTokenService: { signFileUrl: jest.Mock };
@@ -94,6 +96,7 @@ describe('UlbService', () => {
       validateFinalSubmitAndBuildPayload: jest.fn(),
       validateDraftAndBuildPayload: jest.fn(),
     };
+    emailDomainValidation = { domainHasMxRecord: jest.fn().mockResolvedValue(true) };
     emailQueueService = { addEmailJob: jest.fn().mockResolvedValue(undefined) };
     configService = { get: jest.fn().mockReturnValue('https://cityfinance.in') };
     fileTokenService = { signFileUrl: jest.fn((url: string) => `signed::${url}`) };
@@ -107,6 +110,7 @@ describe('UlbService', () => {
         { provide: getModelToken(User.name), useValue: userModel },
         { provide: FormJsonService, useValue: formJsonService },
         { provide: DynamicFormValidationService, useValue: dynamicFormValidation },
+        { provide: EmailDomainValidationService, useValue: emailDomainValidation },
         { provide: EmailQueueService, useValue: emailQueueService },
         { provide: ConfigService, useValue: configService },
         { provide: FileTokenService, useValue: fileTokenService },
@@ -386,6 +390,29 @@ describe('UlbService', () => {
       expect(emailQueueService.addEmailJob).toHaveBeenCalledWith(
         expect.objectContaining({ to: 'commissioner@ulb.gov.in', templateName: './ulb-member-invite' }),
       );
+    });
+
+    it("throws BadRequestException when the primary contact email's domain has no MX record", async () => {
+      dynamicFormValidation.validateFinalSubmitAndBuildPayload.mockReturnValue({
+        isValid: true,
+        errors: {},
+        sanitizedPayload: {
+          code: 'AP018',
+          name: 'Bad Domain ULB',
+          state: stateId,
+          ulbType: ulbTypeId,
+          primaryContactName: 'K. Suresh Babu',
+          primaryContactDesignation: 'Commissioner',
+          primaryContactEmail: 'commissioner@ulb.gvo.in',
+          primaryContactMobile: '9849001239',
+        },
+      });
+      emailDomainValidation.domainHasMxRecord.mockResolvedValue(false);
+
+      await expect(service.create({ data: {} }, adminUser)).rejects.toThrow(BadRequestException);
+      expect(emailDomainValidation.domainHasMxRecord).toHaveBeenCalledWith('commissioner@ulb.gvo.in');
+      expect(ulbModel.create).not.toHaveBeenCalled();
+      expect(userModel.create).not.toHaveBeenCalled();
     });
 
     it('copies the auto-generated sbCode onto the primary-contact login and invite email (no censusCode submitted)', async () => {

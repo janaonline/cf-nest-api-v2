@@ -6,6 +6,7 @@ import { randomBytes } from 'crypto';
 import { MongoServerError } from 'mongodb';
 import mongoose, { FilterQuery, Model, Types } from 'mongoose';
 import type { IAuthUser } from 'src/common/interfaces/auth-user.interface';
+import { EmailDomainValidationService } from 'src/core/email-domain-validation/email-domain-validation.service';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { EmailQueueService } from 'src/core/queue/email-queue/email-queue.service';
 import { Role } from 'src/module/auth/enum/role.enum';
@@ -46,6 +47,7 @@ export class UlbService {
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
     private readonly formJsonService: FormJsonService,
     private readonly dynamicFormValidation: DynamicFormValidationService,
+    private readonly emailDomainValidation: EmailDomainValidationService,
     private readonly emailQueueService: EmailQueueService,
     private readonly configService: ConfigService,
     private readonly fileTokenService: FileTokenService,
@@ -335,7 +337,10 @@ export class UlbService {
     if (!isValid) this.throwValidationError(errors);
 
     const primaryContact = this.extractPrimaryContact(sanitizedPayload);
-    if (primaryContact.email) await this.ensureContactNotRegistered(primaryContact.email, primaryContact.mobile);
+    if (primaryContact.email) {
+      await this.ensureContactNotRegistered(primaryContact.email, primaryContact.mobile);
+      await this.ensureEmailDomainIsReachable(primaryContact.email);
+    }
 
     const patch = this.toMongoPatch(sanitizedPayload);
     this.normalizeGazetteFile(patch, null); // create() never has a prior stored file to compare against
@@ -468,6 +473,25 @@ export class UlbService {
     const existing = await this.userModel.findOne({ isDeleted: false, $or: or }).select('_id').lean().exec();
     if (existing) {
       throw new BadRequestException('This email or mobile number is already registered to another account.');
+    }
+  }
+
+  /** Guards against provisioning a login for an email whose domain can't actually receive mail
+   *  (typo'd or made-up domain) — `EMAIL_PATTERN` only checks syntax, not that the domain is real.
+   *  Reported as a field-keyed error under `primaryContactEmail` so it renders the same way as the
+   *  other dynamic-form validation errors on the Register ULB page. */
+  private async ensureEmailDomainIsReachable(email: string): Promise<void> {
+    const hasMx = await this.emailDomainValidation.domainHasMxRecord(email);
+    if (!hasMx) {
+      this.throwValidationError({
+        primaryContactEmail: [
+          {
+            field: 'primaryContactEmail',
+            message: "This email domain doesn't appear to accept mail. Check for a typo in the email address.",
+            code: 'domainMx',
+          },
+        ],
+      });
     }
   }
 
