@@ -10,7 +10,7 @@ import { Logger } from '@nestjs/common';
 // S3/network call would keep this worker's job "active" forever (BullMQ keeps
 // renewing the lock as long as the process is alive), permanently occupying one
 // of only 2 concurrency slots and blocking the entire waiting queue behind it.
-const BUILD_TIMEOUT_MS = 20 * 60 * 1000; // 20 minutes
+const BUILD_TIMEOUT_MS = 40 * 60 * 1000; // 40 minutes
 
 @Processor('zipResources', { concurrency: 2 }) // run up to 2 jobs in parallel
 export class ZipJobsProcessor extends WorkerHost {
