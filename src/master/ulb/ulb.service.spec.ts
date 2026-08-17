@@ -1089,7 +1089,7 @@ describe('UlbService', () => {
       });
     });
 
-    it('activates a still-pending primary-contact login and sends its first invite email, with a freshly generated temp password', async () => {
+    it('activates a still-pending primary-contact login and sends the set-your-password invite email', async () => {
       ulbModel.findByIdAndUpdate.mockReturnValue({
         lean: jest.fn().mockResolvedValue({ _id: 'x', name: 'Pending ULB', approval: { status: 'APPROVED' } }),
       });
@@ -1103,7 +1103,6 @@ describe('UlbService', () => {
         isNewUser: true,
         isActive: false,
         password: 'old-hash',
-        tempPasswordExpiresAt: new Date('2020-01-01'),
         save: jest.fn().mockResolvedValue(undefined),
       };
       userModel.find.mockReturnValue({ exec: jest.fn().mockResolvedValue([contact]) });
@@ -1111,14 +1110,14 @@ describe('UlbService', () => {
       await service.approve(new Types.ObjectId().toString(), adminUser);
 
       expect(contact.isActive).toBe(true);
-      expect(contact.password).not.toBe('old-hash');
-      expect(contact.tempPasswordExpiresAt.getTime()).toBeGreaterThan(Date.now());
+      expect(contact.password).toBe('old-hash'); // never regenerated — it was never emailed either
       expect(contact.save).toHaveBeenCalled();
       const [emailJob] = emailQueueService.addEmailJob.mock.calls[0] as [
         { to: string; templateName: string; mailData: Record<string, unknown> },
       ];
       expect(emailJob).toMatchObject({ to: 'commissioner@ulb.gov.in', templateName: './ulb-member-invite' });
       expect(emailJob.mailData).toMatchObject({ loginCode: '900001', loginCodeLabel: 'Login ID' });
+      expect(emailJob.mailData['resetPasswordUrl']).toContain('/auth/forgot-password');
     });
 
     it('reactivates a non-new-user login tied to the ULB without re-sending an invite', async () => {

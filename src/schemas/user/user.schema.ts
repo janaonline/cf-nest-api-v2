@@ -169,9 +169,6 @@ export class User extends Document {
   @Prop({ type: Boolean, default: false })
   isNewUser!: boolean;
 
-  @Prop({ type: Date, default: null })
-  tempPasswordExpiresAt!: Date | null;
-
   /**
    * Per-user permission overrides.
    * Default permissions come from ROLE_PERMISSIONS in permissions.map.ts.

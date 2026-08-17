@@ -218,16 +218,16 @@ describe('OtpService', () => {
       expect(result.email).toMatch(/\*/);
     });
 
-    it('returns success without touching Redis for forgot-password on a not-yet-onboarded user (anti-enumeration)', async () => {
+    it('sends a forgot-password OTP for a not-yet-onboarded (isNewUser) account — this is now their only way to get a password', async () => {
       mockUsersRepository.findByIdentifier.mockResolvedValue({ ...mockUser, isNewUser: true });
 
       const result = await service.sendOtp({ identifier: 'test@example.com', purpose: 'forgot-password' });
 
-      expect(result).toEqual({ success: true, message: 'OTP sent if account exists' });
-      expect(mockRedisService.set).not.toHaveBeenCalled();
+      expect(result.message).toBe('OTP sent successfully');
+      expect(mockRedisService.set).toHaveBeenCalledTimes(2); // state + cooldown
     });
 
-    it('still sends a login OTP for a not-yet-onboarded user (isNewUser only blocks forgot-password)', async () => {
+    it('still sends a login OTP for a not-yet-onboarded user', async () => {
       mockUsersRepository.findByIdentifier.mockResolvedValue({ ...mockUser, isNewUser: true });
 
       const result = await service.sendOtp({ identifier: 'test@example.com', purpose: 'login' });
@@ -399,6 +399,26 @@ describe('OtpService', () => {
         'user-id-123',
         'hashed-new-password',
       );
+    });
+
+    it('clears isNewUser for a not-yet-onboarded account resetting its password for the first time', async () => {
+      mockRedisService.get.mockImplementation(fpStateOnlyGet(makeFpState()));
+      mockUsersRepository.findByIdentifier.mockResolvedValue({ ...mockUser, isNewUser: true });
+      (bcrypt.compare as jest.Mock).mockResolvedValue(true);
+
+      await service.forgotPasswordReset(fpDto);
+
+      expect(mockUsersRepository.updateProfile).toHaveBeenCalledWith('user-id-123', { isNewUser: false });
+    });
+
+    it('does not touch isNewUser for an already-onboarded account', async () => {
+      mockRedisService.get.mockImplementation(fpStateOnlyGet(makeFpState()));
+      mockUsersRepository.findByIdentifier.mockResolvedValue({ ...mockUser, isNewUser: false });
+      (bcrypt.compare as jest.Mock).mockResolvedValue(true);
+
+      await service.forgotPasswordReset(fpDto);
+
+      expect(mockUsersRepository.updateProfile).not.toHaveBeenCalled();
     });
 
     it('hashes the new password before saving', async () => {

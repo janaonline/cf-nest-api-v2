@@ -35,7 +35,6 @@ import { RejectUlbDto } from './dto/reject-ulb.dto';
 import { UpdateUlbDto } from './dto/update-ulb.dto';
 
 const OBJECT_ID_FIELDS = new Set(['state', 'ulbType', 'UA']);
-const TEMP_PASSWORD_TTL_MS = 72 * 60 * 60 * 1000;
 
 @Injectable()
 export class UlbService {
@@ -495,13 +494,14 @@ export class UlbService {
     }
   }
 
-  /** Provisions the ULB's first login: a `Role.ULB` account with a temporary password — mirrors
-   *  the STATE/MoHUA member-invite flow in `UsersService`. `isApproved` mirrors the owning ULB's
-   *  approval status: ADMIN-created ULBs are auto-approved so the login is active immediately and
-   *  the invite email goes out now; STATE-submitted ULBs start PENDING, so the login stays inactive
-   *  and un-emailed until an ADMIN approves the ULB — sending credentials for a login that doesn't
-   *  work yet would be confusing, and by approval time this temp password may be well past its TTL
-   *  anyway, so `approve()` regenerates one instead of reusing this one (see `activateAndInviteContact`).
+  /** Provisions the ULB's first login: a `Role.ULB` account with a random, never-revealed
+   *  placeholder password — mirrors the STATE/MoHUA member-invite flow in `UsersService`. The
+   *  account can only be unlocked via the "Forgot Password" OTP flow (`OtpService`), which the
+   *  invite email points the contact to. `isApproved` mirrors the owning ULB's approval status:
+   *  ADMIN-created ULBs are auto-approved so the login is active immediately and the invite email
+   *  goes out now; STATE-submitted ULBs start PENDING, so the login stays inactive and un-emailed
+   *  until an ADMIN approves the ULB (see `activateAndInviteContact`) — telling someone to go set
+   *  a password for a login that can't authenticate yet would be confusing.
    *  `censusCode`/`sbCode` are copied onto the `User` document (not just left on the `Ulb`) because
    *  ULB logins authenticate by census/SB code, not email — `UsersRepository.resolveByIdentifier()`
    *  looks up `User.censusCode`/`User.sbCode`, so without this copy the code the invite email tells
@@ -519,8 +519,8 @@ export class UlbService {
     censusCode?: string,
     sbCode?: string,
   ): Promise<void> {
-    const tempPassword = this.generateTempPassword();
-    const hashedPassword = await bcrypt.hash(tempPassword, 12);
+    const placeholderPassword = this.generatePlaceholderPassword();
+    const hashedPassword = await bcrypt.hash(placeholderPassword, 12);
     const loginCode = censusCode || sbCode || '';
 
     await this.userModel.create({
@@ -543,7 +543,6 @@ export class UlbService {
       isDeleted: false,
       password: hashedPassword,
       isNewUser: true,
-      tempPasswordExpiresAt: new Date(Date.now() + TEMP_PASSWORD_TTL_MS),
     });
 
     if (!isApproved || !contact.email) return;
@@ -553,22 +552,23 @@ export class UlbService {
       mobile: contact.mobile,
       ulbName,
       loginCode,
-      tempPassword,
     });
   }
 
   /** Queues the ULB primary-contact invite email — shared by `createPrimaryContactUser()` (ADMIN-
    *  created, already-approved ULBs) and `activateAndInviteContact()` (STATE-submitted ULBs, once
-   *  an ADMIN approves them). */
+   *  an ADMIN approves them). Tells the contact to set their own password via the Forgot Password
+   *  OTP flow — no credential is ever included in this email. */
   private queueUlbInviteEmail(params: {
     email: string;
     name?: string;
     mobile?: string;
     ulbName: string;
     loginCode: string;
-    tempPassword: string;
   }): void {
-    const loginUrl = `${this.configService.get<string>('CLIENT_URL', 'https://cityfinance.in')}/login`;
+    const baseUrl = this.configService.get<string>('CLIENT_URL', 'https://cityfinance.in');
+    const loginUrl = `${baseUrl}/login`;
+    const resetPasswordUrl = `${baseUrl}/auth/forgot-password?type=XVIFC`;
     this.emailQueueService
       .addEmailJob({
         to: params.email,
@@ -581,7 +581,7 @@ export class UlbService {
           mobile: params.mobile ?? '',
           ulbName: params.ulbName,
           loginUrl,
-          tempPassword: params.tempPassword,
+          resetPasswordUrl,
         },
       })
       .catch((err: unknown) => {
@@ -589,8 +589,10 @@ export class UlbService {
       });
   }
 
-  /** Generates a random temporary password for a newly-provisioned login (mirrors `UsersService`). */
-  private generateTempPassword(): string {
+  /** Generates a random password that is never revealed to anyone — the account is created with
+   *  it purely to satisfy the schema's required `password` field. It's unlocked exclusively via
+   *  the Forgot Password OTP flow (`OtpService.sendOtp`/`forgotPasswordReset`), not by this value. */
+  private generatePlaceholderPassword(): string {
     const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
     const lower = 'abcdefghjkmnpqrstuvwxyz';
     const digits = '23456789';
@@ -839,12 +841,10 @@ export class UlbService {
   }
 
   /** Activates a ULB primary-contact login and sends its (first) invite email, now that the ULB
-   *  has cleared ADMIN review. Regenerates the temp password rather than reusing the one hashed
-   *  at registration, since that one was never emailed and may already be past its TTL by now. */
+   *  has cleared ADMIN review. The account's password was never emailed (see
+   *  `createPrimaryContactUser`), so there's nothing to regenerate here — activation just flips
+   *  the login on and tells the contact to set their own password via Forgot Password. */
   private async activateAndInviteContact(contact: UserDocument, ulbName: string): Promise<void> {
-    const tempPassword = this.generateTempPassword();
-    contact.password = await bcrypt.hash(tempPassword, 12);
-    contact.tempPasswordExpiresAt = new Date(Date.now() + TEMP_PASSWORD_TTL_MS);
     contact.isActive = true;
     await contact.save();
 
@@ -854,7 +854,6 @@ export class UlbService {
       mobile: contact.mobile ?? undefined,
       ulbName,
       loginCode: contact.censusCode || contact.sbCode || '',
-      tempPassword,
     });
   }
 

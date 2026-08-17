@@ -53,17 +53,6 @@ export class OtpService {
     const user = await this.usersRepository.findByIdentifier(id);
     if (!user) return { success: true, message: 'OTP sent if account exists' };
 
-    // A new invitee (isNewUser) must complete onboarding via their temp-password email — that's
-    // the one path that sets isXVIFCProfileVerified/xviFcSubrole/profile fields correctly.
-    // forgot-password only touches the password field, so letting it succeed here would leave the
-    // account stuck (isXVIFCProfileVerified never set) and later locked out once the original
-    // tempPasswordExpiresAt lapses. Same vague response as the not-found case above — a distinct
-    // rejection here would let a caller enumerate which identifiers belong to a real, unactivated
-    // account.
-    if (purpose === 'forgot-password' && user.isNewUser) {
-      return { success: true, message: 'OTP sent if account exists' };
-    }
-
     await this.assertNotLocked(purpose, id);
     await this.assertCooldownClear(purpose, id);
 
@@ -212,6 +201,10 @@ export class OtpService {
     const userId = (user._id as { toString(): string }).toString();
     const hashedPassword = await bcrypt.hash(dto.newPassword, 10);
     await this.usersRepository.updatePassword(userId, hashedPassword);
+    // This is now the only way a freshly-provisioned account (isNewUser) ever gets a real
+    // password, so clear the flag here rather than leaving it stuck true until a separate
+    // set-new-password call that may never come.
+    if (user.isNewUser) await this.usersRepository.updateProfile(userId, { isNewUser: false });
 
     return { message: 'Password updated successfully' };
   }
