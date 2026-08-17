@@ -9,6 +9,7 @@ import type { IAuthUser } from 'src/common/interfaces/auth-user.interface';
 import { EmailDomainValidationService } from 'src/core/email-domain-validation/email-domain-validation.service';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { EmailQueueService } from 'src/core/queue/email-queue/email-queue.service';
+import { PORTAL_INVITE_LOGIN_TYPE, buildPortalAuthUrls } from 'src/core/utils/portal-urls.util';
 import { Role } from 'src/module/auth/enum/role.enum';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
 import type { XviFcValidationErrorMap } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
@@ -566,9 +567,7 @@ export class UlbService {
     ulbName: string;
     loginCode: string;
   }): void {
-    const baseUrl = this.configService.get<string>('CLIENT_URL', 'https://cityfinance.in');
-    const loginUrl = `${baseUrl}/login`;
-    const resetPasswordUrl = `${baseUrl}/auth/forgot-password?type=XVIFC`;
+    const { loginUrl, resetPasswordUrl } = buildPortalAuthUrls(this.configService);
     this.emailQueueService
       .addEmailJob({
         to: params.email,

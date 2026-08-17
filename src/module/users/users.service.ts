@@ -15,6 +15,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { RedisService } from 'src/core/services/redis/redis.service';
 import { EmailQueueService } from 'src/core/queue/email-queue/email-queue.service';
+import { PORTAL_INVITE_LOGIN_TYPE, buildPortalAuthUrls } from 'src/core/utils/portal-urls.util';
 import { User } from 'src/schemas/user/user.schema';
 import { State, StateDocument } from 'src/schemas/state.schema';
 import { Permission, Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
@@ -351,11 +352,13 @@ export class UsersService {
     return this.toStateMemberDto(created, dto);
   }
 
-  private async queueInviteEmail(dto: InviteStateMemberDto, stateId: Types.ObjectId, requester: AuthUser): Promise<void> {
+  private async queueInviteEmail(
+    dto: InviteStateMemberDto,
+    stateId: Types.ObjectId,
+    requester: AuthUser,
+  ): Promise<void> {
     const stateDoc = await this.stateModel.findById(stateId).select('name').lean().exec();
-    const baseUrl = this.configService.get<string>('CLIENT_URL', 'https://cityfinance.in');
-    const loginUrl = `${baseUrl}/xvifc`;
-    const resetPasswordUrl = `${baseUrl}/auth/forgot-password?type=XVIFC`;
+    const { loginUrl, resetPasswordUrl } = buildPortalAuthUrls(this.configService);
     this.emailQueueService
       .addEmailJob({
         to: dto.email,
@@ -897,9 +900,7 @@ export class UsersService {
   }
 
   private async queueMohuaInviteEmail(dto: InviteMohuaMemberDto, requester: AuthUser): Promise<void> {
-    const baseUrl = this.configService.get<string>('CLIENT_URL', 'https://cityfinance.in');
-    const loginUrl = `${baseUrl}/xvifc`;
-    const resetPasswordUrl = `${baseUrl}/auth/forgot-password?type=XVIFC`;
+    const { loginUrl, resetPasswordUrl } = buildPortalAuthUrls(this.configService, PORTAL_INVITE_LOGIN_TYPE);
     this.emailQueueService
       .addEmailJob({
         to: dto.email,
