@@ -16,14 +16,18 @@ import {
 import { toObjectIdString } from 'src/common/utils/objectid.util';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
-import type { FieldConfig, FormData, HydratedFieldConfig } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.types';
+import type {
+  FieldConfig,
+  FormData,
+  HydratedFieldConfig,
+} from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.types';
 import type { UploadedFileValue } from 'src/module/xvi-fc/common/types/field-config.type';
 import type { XvifcFormActor } from 'src/module/xvi-fc/common/types/xvifc-form-actors.type';
 import {
   buildXviFcFolderPath,
   type XviFcFolderPathContext,
 } from 'src/module/xvi-fc/common/folder-paths/xvi-fc-folder-path.resolver';
-import { YearIdToLabel } from 'src/core/constants/years';
+import { YearIdToLabel, getPreviousYearLabel } from 'src/core/constants/years';
 import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import { throwXviFcValidationError, xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
 import { SLB_FORM_ID, SLB_FORM_TYPE, SlbForm, SlbFormDocument } from 'src/schemas/xvi-fc/ulb/slb-form.schema';
@@ -99,6 +103,7 @@ export class SlbService {
     const yearOid = new Types.ObjectId(yearId);
     const designYear = YearIdToLabel[yearId];
     if (!designYear) throw new NotFoundException(`Design year not found for yearId: ${yearId}`);
+    const actualYearLabel = getPreviousYearLabel(designYear);
 
     const doc = await this.model
       .findOne({ ulb: ulbOid, year: yearOid, formType: SLB_FORM_TYPE, isDeleted: false })
@@ -127,6 +132,7 @@ export class SlbService {
       ulbId: effectiveUlbId,
       yearId,
       designYear,
+      actualYearLabel,
       currentFormStatus,
       currentFormStatusLabel: getFormStatusLabel(currentFormStatus),
       questions,
@@ -453,9 +459,24 @@ export class SlbService {
 
     const ulbName = getPopulatedName(doc?.ulb) ?? '';
     const actors: XvifcFormActor[] = [
-      { action: 'Created by', designation: 'ULB Officer', by: getPopulatedName(doc?.createdBy) ?? null, date: toIsoStringOrNull(doc?.createdAt) },
-      { action: 'Updated by', designation: 'ULB Officer', by: getPopulatedName(doc?.updatedBy) ?? null, date: toIsoStringOrNull(doc?.updatedAt) },
-      { action: 'Submitted by', designation: 'ULB Officer', by: getPopulatedName(doc?.submittedBy) ?? null, date: toIsoStringOrNull(doc?.submittedAt) },
+      {
+        action: 'Created by',
+        designation: 'ULB Officer',
+        by: getPopulatedName(doc?.createdBy) ?? null,
+        date: toIsoStringOrNull(doc?.createdAt),
+      },
+      {
+        action: 'Updated by',
+        designation: 'ULB Officer',
+        by: getPopulatedName(doc?.updatedBy) ?? null,
+        date: toIsoStringOrNull(doc?.updatedAt),
+      },
+      {
+        action: 'Submitted by',
+        designation: 'ULB Officer',
+        by: getPopulatedName(doc?.submittedBy) ?? null,
+        date: toIsoStringOrNull(doc?.submittedAt),
+      },
     ];
     return { actors, ulbName };
   }

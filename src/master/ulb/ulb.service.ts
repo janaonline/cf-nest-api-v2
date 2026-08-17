@@ -6,6 +6,7 @@ import { randomBytes } from 'crypto';
 import { MongoServerError } from 'mongodb';
 import mongoose, { FilterQuery, Model, Types } from 'mongoose';
 import type { IAuthUser } from 'src/common/interfaces/auth-user.interface';
+import { EmailDomainValidationService } from 'src/core/email-domain-validation/email-domain-validation.service';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { EmailQueueService } from 'src/core/queue/email-queue/email-queue.service';
 import { Role } from 'src/module/auth/enum/role.enum';
@@ -46,6 +47,7 @@ export class UlbService {
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
     private readonly formJsonService: FormJsonService,
     private readonly dynamicFormValidation: DynamicFormValidationService,
+    private readonly emailDomainValidation: EmailDomainValidationService,
     private readonly emailQueueService: EmailQueueService,
     private readonly configService: ConfigService,
     private readonly fileTokenService: FileTokenService,
@@ -335,7 +337,10 @@ export class UlbService {
     if (!isValid) this.throwValidationError(errors);
 
     const primaryContact = this.extractPrimaryContact(sanitizedPayload);
-    if (primaryContact.email) await this.ensureContactNotRegistered(primaryContact.email, primaryContact.mobile);
+    if (primaryContact.email) {
+      await this.ensureContactNotRegistered(primaryContact.email, primaryContact.mobile);
+      await this.ensureEmailDomainIsReachable(primaryContact.email);
+    }
 
     const patch = this.toMongoPatch(sanitizedPayload);
     this.normalizeGazetteFile(patch, null); // create() never has a prior stored file to compare against
@@ -471,6 +476,25 @@ export class UlbService {
     }
   }
 
+  /** Guards against provisioning a login for an email whose domain can't actually receive mail
+   *  (typo'd or made-up domain) — `EMAIL_PATTERN` only checks syntax, not that the domain is real.
+   *  Reported as a field-keyed error under `primaryContactEmail` so it renders the same way as the
+   *  other dynamic-form validation errors on the Register ULB page. */
+  private async ensureEmailDomainIsReachable(email: string): Promise<void> {
+    const hasMx = await this.emailDomainValidation.domainHasMxRecord(email);
+    if (!hasMx) {
+      this.throwValidationError({
+        primaryContactEmail: [
+          {
+            field: 'primaryContactEmail',
+            message: "This email domain doesn't appear to accept mail. Check for a typo in the email address.",
+            code: 'domainMx',
+          },
+        ],
+      });
+    }
+  }
+
   /** Provisions the ULB's first login: a `Role.ULB` account with a temporary password — mirrors
    *  the STATE/MoHUA member-invite flow in `UsersService`. `isApproved` mirrors the owning ULB's
    *  approval status: ADMIN-created ULBs are auto-approved so the login is active immediately and
@@ -481,7 +505,10 @@ export class UlbService {
    *  `censusCode`/`sbCode` are copied onto the `User` document (not just left on the `Ulb`) because
    *  ULB logins authenticate by census/SB code, not email — `UsersRepository.resolveByIdentifier()`
    *  looks up `User.censusCode`/`User.sbCode`, so without this copy the code the invite email tells
-   *  them to log in with would never match any account. */
+   *  them to log in with would never match any account. The contact is also mirrored onto the
+   *  embedded `accountantName`/`accountantEmail`/`accountantConatactNumber` fields (alongside the
+   *  top-level `name`/`email`/`mobile` used for login/invite) so XVI-FC's contact-extraction logic
+   *  (see `xvifc-multi-role-design.md`) picks it up the same way it does for legacy ULB accounts. */
   private async createPrimaryContactUser(
     contact: { name?: string; designation?: string; email?: string; mobile?: string },
     ulbId: Types.ObjectId,
@@ -501,6 +528,9 @@ export class UlbService {
       email: contact.email,
       mobile: contact.mobile || undefined,
       designation: contact.designation || '',
+      accountantName: contact.name || '',
+      accountantEmail: contact.email || '',
+      accountantConatactNumber: contact.mobile || '',
       role: Role.ULB,
       ulb: ulbId,
       state: stateId,
@@ -847,7 +877,44 @@ export class UlbService {
       )
       .lean<Ulb>();
     if (!updated) throw new NotFoundException('ULB not found');
+
+    await this.notifySubmitterOfRejection(updated, dto.reason);
+
     return updated;
+  }
+
+  /** Emails the STATE user who submitted this ULB (`approval.submittedBy`) that an ADMIN rejected
+   *  it, so they know to fix and resubmit — mirrors `queueUlbInviteEmail`'s notification pattern.
+   *  Best-effort: the ULB's REJECTED state is already persisted by the time this runs, so a
+   *  lookup/queueing failure here must never fail the `reject()` call itself. No-ops when there's
+   *  no `submittedBy` on file (e.g. a legacy ULB with no STATE submitter) or that user has no email. */
+  private async notifySubmitterOfRejection(ulb: Ulb, reason: string): Promise<void> {
+    try {
+      const submittedBy = ulb.approval?.submittedBy;
+      if (!submittedBy) return;
+
+      const submitter = await this.userModel
+        .findById(submittedBy)
+        .select('email name')
+        .lean<{ email?: string; name?: string }>();
+      if (!submitter?.email) return;
+
+      const loginUrl = `${this.configService.get<string>('CLIENT_URL', 'https://cityfinance.in')}/login`;
+      await this.emailQueueService.addEmailJob({
+        to: submitter.email,
+        subject: `Your ULB registration was rejected: ${ulb.name}`,
+        templateName: './ulb-rejected',
+        mailData: {
+          name: submitter.name,
+          ulbName: ulb.name,
+          ulbCode: ulb.code,
+          reason,
+          loginUrl,
+        },
+      });
+    } catch (error: unknown) {
+      this.logger.error(`Failed to notify STATE submitter of ULB rejection for ULB ${ulb._id}:`, error);
+    }
   }
 
   /**

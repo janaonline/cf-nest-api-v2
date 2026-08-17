@@ -359,6 +359,17 @@ export class DynamicFormValidationService {
       }
     }
 
+    // cross-field: target must be strictly lower than actual (only checked once both are present numbers)
+    const targetLtActualV = findV('targetLessThanActual');
+    if (
+      targetLtActualV &&
+      typeof pair.actual === 'number' &&
+      typeof pair.target === 'number' &&
+      pair.target >= pair.actual
+    ) {
+      errors.push({ field: `${key}.target`, message: targetLtActualV.message, code: 'targetLessThanActual' });
+    }
+
     return errors;
   }
 

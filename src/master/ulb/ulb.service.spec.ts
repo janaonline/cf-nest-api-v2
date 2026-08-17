@@ -7,6 +7,7 @@ import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { EmailQueueService } from 'src/core/queue/email-queue/email-queue.service';
 import { FormJsonService } from 'src/master/form-json/form-json.service';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
+import { EmailDomainValidationService } from 'src/core/email-domain-validation/email-domain-validation.service';
 import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
 import type { IAuthUser } from 'src/common/interfaces/auth-user.interface';
 import { Role } from 'src/module/auth/enum/role.enum';
@@ -47,9 +48,10 @@ describe('UlbService', () => {
     db?: unknown;
   };
   let stateModel: { findById: jest.Mock; find: jest.Mock };
-  let userModel: { create: jest.Mock; findOne: jest.Mock; find: jest.Mock };
+  let userModel: { create: jest.Mock; findOne: jest.Mock; find: jest.Mock; findById: jest.Mock };
   let formJsonService: { findByType: jest.Mock };
   let dynamicFormValidation: { validateFinalSubmitAndBuildPayload: jest.Mock; validateDraftAndBuildPayload: jest.Mock };
+  let emailDomainValidation: { domainHasMxRecord: jest.Mock };
   let emailQueueService: { addEmailJob: jest.Mock };
   let configService: { get: jest.Mock };
   let fileTokenService: { signFileUrl: jest.Mock };
@@ -88,12 +90,17 @@ describe('UlbService', () => {
         exec: jest.fn().mockResolvedValue(null),
       }),
       find: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue([]) }),
+      findById: jest.fn().mockReturnValue({
+        select: jest.fn().mockReturnThis(),
+        lean: jest.fn().mockResolvedValue(null),
+      }),
     };
     formJsonService = { findByType: jest.fn().mockRejectedValue(new NotFoundException()) };
     dynamicFormValidation = {
       validateFinalSubmitAndBuildPayload: jest.fn(),
       validateDraftAndBuildPayload: jest.fn(),
     };
+    emailDomainValidation = { domainHasMxRecord: jest.fn().mockResolvedValue(true) };
     emailQueueService = { addEmailJob: jest.fn().mockResolvedValue(undefined) };
     configService = { get: jest.fn().mockReturnValue('https://cityfinance.in') };
     fileTokenService = { signFileUrl: jest.fn((url: string) => `signed::${url}`) };
@@ -107,6 +114,7 @@ describe('UlbService', () => {
         { provide: getModelToken(User.name), useValue: userModel },
         { provide: FormJsonService, useValue: formJsonService },
         { provide: DynamicFormValidationService, useValue: dynamicFormValidation },
+        { provide: EmailDomainValidationService, useValue: emailDomainValidation },
         { provide: EmailQueueService, useValue: emailQueueService },
         { provide: ConfigService, useValue: configService },
         { provide: FileTokenService, useValue: fileTokenService },
@@ -379,6 +387,9 @@ describe('UlbService', () => {
           email: 'commissioner@ulb.gov.in',
           mobile: '9849001234',
           designation: 'Commissioner',
+          accountantName: 'K. Suresh Babu',
+          accountantEmail: 'commissioner@ulb.gov.in',
+          accountantConatactNumber: '9849001234',
           role: Role.ULB,
           ulb: ulbId,
         }),
@@ -386,6 +397,29 @@ describe('UlbService', () => {
       expect(emailQueueService.addEmailJob).toHaveBeenCalledWith(
         expect.objectContaining({ to: 'commissioner@ulb.gov.in', templateName: './ulb-member-invite' }),
       );
+    });
+
+    it("throws BadRequestException when the primary contact email's domain has no MX record", async () => {
+      dynamicFormValidation.validateFinalSubmitAndBuildPayload.mockReturnValue({
+        isValid: true,
+        errors: {},
+        sanitizedPayload: {
+          code: 'AP018',
+          name: 'Bad Domain ULB',
+          state: stateId,
+          ulbType: ulbTypeId,
+          primaryContactName: 'K. Suresh Babu',
+          primaryContactDesignation: 'Commissioner',
+          primaryContactEmail: 'commissioner@ulb.gvo.in',
+          primaryContactMobile: '9849001239',
+        },
+      });
+      emailDomainValidation.domainHasMxRecord.mockResolvedValue(false);
+
+      await expect(service.create({ data: {} }, adminUser)).rejects.toThrow(BadRequestException);
+      expect(emailDomainValidation.domainHasMxRecord).toHaveBeenCalledWith('commissioner@ulb.gvo.in');
+      expect(ulbModel.create).not.toHaveBeenCalled();
+      expect(userModel.create).not.toHaveBeenCalled();
     });
 
     it('copies the auto-generated sbCode onto the primary-contact login and invite email (no censusCode submitted)', async () => {
@@ -1125,6 +1159,67 @@ describe('UlbService', () => {
       const [, updateArg] = ulbModel.findByIdAndUpdate.mock.calls[0] as [string, { $set: Record<string, unknown> }];
       expect(updateArg.$set['approval.status']).toBe('REJECTED');
       expect(updateArg.$set['approval.rejectReason']).toBe('Duplicate code');
+    });
+
+    it('emails the STATE submitter that their ULB registration was rejected', async () => {
+      const submitterId = new Types.ObjectId();
+      ulbModel.findByIdAndUpdate.mockReturnValue({
+        lean: jest.fn().mockResolvedValue({
+          _id: 'x',
+          name: 'Vizag Municipal Corporation',
+          code: 'AP001',
+          approval: { status: 'REJECTED', submittedBy: submitterId },
+        }),
+      });
+      userModel.findById.mockReturnValue({
+        select: jest.fn().mockReturnThis(),
+        lean: jest.fn().mockResolvedValue({ email: 'state.user@ulb.gov.in', name: 'State User' }),
+      });
+
+      await service.reject(new Types.ObjectId().toString(), { reason: 'Duplicate code' }, adminUser);
+
+      expect(userModel.findById).toHaveBeenCalledWith(submitterId);
+      const [emailJob] = emailQueueService.addEmailJob.mock.calls[0] as [
+        { to: string; templateName: string; mailData: Record<string, unknown> },
+      ];
+      expect(emailJob.to).toBe('state.user@ulb.gov.in');
+      expect(emailJob.templateName).toBe('./ulb-rejected');
+      expect(emailJob.mailData).toMatchObject({
+        ulbName: 'Vizag Municipal Corporation',
+        ulbCode: 'AP001',
+        reason: 'Duplicate code',
+      });
+    });
+
+    it('does not attempt to email when the ULB has no recorded submitter', async () => {
+      ulbModel.findByIdAndUpdate.mockReturnValue({
+        lean: jest.fn().mockResolvedValue({ _id: 'x', approval: { status: 'REJECTED', submittedBy: null } }),
+      });
+
+      await service.reject(new Types.ObjectId().toString(), { reason: 'Duplicate code' }, adminUser);
+
+      expect(userModel.findById).not.toHaveBeenCalled();
+      expect(emailQueueService.addEmailJob).not.toHaveBeenCalled();
+    });
+
+    it('does not fail the request when the rejection email fails to queue', async () => {
+      const submitterId = new Types.ObjectId();
+      ulbModel.findByIdAndUpdate.mockReturnValue({
+        lean: jest.fn().mockResolvedValue({
+          _id: 'x',
+          name: 'Vizag Municipal Corporation',
+          approval: { status: 'REJECTED', submittedBy: submitterId },
+        }),
+      });
+      userModel.findById.mockReturnValue({
+        select: jest.fn().mockReturnThis(),
+        lean: jest.fn().mockResolvedValue({ email: 'state.user@ulb.gov.in' }),
+      });
+      emailQueueService.addEmailJob.mockRejectedValueOnce(new Error('queue unavailable'));
+
+      await expect(
+        service.reject(new Types.ObjectId().toString(), { reason: 'Duplicate code' }, adminUser),
+      ).resolves.toBeDefined();
     });
   });
 });

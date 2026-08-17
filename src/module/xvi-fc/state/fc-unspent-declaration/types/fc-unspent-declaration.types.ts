@@ -47,12 +47,6 @@ export interface FcUnspentUlbRowResponse {
   eligibility: boolean;
 }
 
-export interface FcUnspentDeclarationTemplateResponseData {
-  fileName: string;
-  mimeType: string;
-  url: string;
-}
-
 export interface FcUnspentDeclarationGetResponseData {
   stateName: string;
   applicableFc: ApplicableFc;
