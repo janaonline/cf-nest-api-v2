@@ -546,7 +546,7 @@ describe('EulbPostSubmissionUpdateService', () => {
       expect(result.data!.permissions.canSubmitUpdate).toBe(true);
     });
 
-    it('returns canSubmitUpdate:false for a reviewer subrole (holds EDIT_STATE_FORMS but not FINAL_SUBMIT_STATE_FORMS)', async () => {
+    it('returns canSubmitUpdate:true for a reviewer subrole (reviewer was granted FINAL_SUBMIT_STATE_FORMS)', async () => {
       formModel['findOne'] = jest.fn().mockReturnValue(q(makeForm(FORM_STATUS.UNDER_REVIEW_BY_MOHUA)));
       const result = await service.getMetadata(
         stateOid.toString(),
@@ -554,7 +554,7 @@ describe('EulbPostSubmissionUpdateService', () => {
         stateUserWithSubrole(stateOid, 'reviewer'),
       );
       expect(result.data!.permissions.canView).toBe(true);
-      expect(result.data!.permissions.canSubmitUpdate).toBe(false);
+      expect(result.data!.permissions.canSubmitUpdate).toBe(true);
     });
   });
 

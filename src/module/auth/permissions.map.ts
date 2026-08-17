@@ -38,6 +38,7 @@ export const XVIFC_STATE_PERMISSIONS: Record<XviFcSubrole, Permission[]> = {
     Permission.FINAL_SUBMIT_TO_MOHUA,
     Permission.VIEW_STATE_FORMS,
     Permission.EDIT_STATE_FORMS,
+    Permission.FINAL_SUBMIT_STATE_FORMS,
   ],
   viewer: [Permission.VIEW_STATUS_REPORTS, Permission.VIEW_DASHBOARDS, Permission.VIEW_STATE_FORMS],
 };

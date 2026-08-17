@@ -7,6 +7,7 @@ Local Bodies shared across grant cycles (XVI-FC, 15th FC, etc). Distinct from `s
 which builds grant-cycle-specific forms on top of this master data.
 
 Two related but separate things live here:
+
 1. **ULB CRUD** — create/list/update/approve/reject/remove `Ulb` documents, with an
    admin-configurable dynamic field/section layout (`FormJsonService`, `ULB_MASTER` /
    `ULB_REGISTER_SECTIONS` / `ULB_EDIT_SECTIONS` types, falling back to `DEFAULT_ULB_*` in
@@ -17,18 +18,18 @@ Two related but separate things live here:
 
 ## Endpoints
 
-| Method | Route | Roles | Notes |
-|---|---|---|---|
-| `POST` | `master/ulb` | ADMIN, STATE | ADMIN submissions auto-approve; STATE submissions are scoped to the requester's state and start `PENDING` |
-| `GET` | `master/ulb` | any authenticated | STATE users are always scoped to their own state |
-| `GET` | `master/ulb/types` | any authenticated | ULB types for a select |
-| `GET` | `master/ulb/register-sections` | any authenticated | Resolved section/field config for the Register ULB page |
-| `GET` | `master/ulb/edit-sections` | ADMIN | Resolved section/field config for the Edit ULB dialog |
-| `GET` | `master/ulb/:id` | any authenticated | |
-| `PATCH` | `master/ulb/:id` | ADMIN, STATE | STATE may only edit their own state's `REJECTED` ULB, which resets it to `PENDING` |
-| `PATCH` | `master/ulb/:id/approve` | ADMIN | See [Approval and onboarding](#registration--onboarding--approval-flow) below |
-| `PATCH` | `master/ulb/:id/reject` | ADMIN | |
-| `DELETE` | `master/ulb/:id` | ADMIN | Soft-delete via `isActive: false` |
+| Method   | Route                          | Roles             | Notes                                                                                                     |
+| -------- | ------------------------------ | ----------------- | --------------------------------------------------------------------------------------------------------- |
+| `POST`   | `master/ulb`                   | ADMIN, STATE      | ADMIN submissions auto-approve; STATE submissions are scoped to the requester's state and start `PENDING` |
+| `GET`    | `master/ulb`                   | any authenticated | STATE users are always scoped to their own state                                                          |
+| `GET`    | `master/ulb/types`             | any authenticated | ULB types for a select                                                                                    |
+| `GET`    | `master/ulb/register-sections` | any authenticated | Resolved section/field config for the Register ULB page                                                   |
+| `GET`    | `master/ulb/edit-sections`     | ADMIN             | Resolved section/field config for the Edit ULB dialog                                                     |
+| `GET`    | `master/ulb/:id`               | any authenticated |                                                                                                           |
+| `PATCH`  | `master/ulb/:id`               | ADMIN, STATE      | STATE may only edit their own state's `REJECTED` ULB, which resets it to `PENDING`                        |
+| `PATCH`  | `master/ulb/:id/approve`       | ADMIN             | See [Approval and onboarding](#registration--onboarding--approval-flow) below                             |
+| `PATCH`  | `master/ulb/:id/reject`        | ADMIN             |                                                                                                           |
+| `DELETE` | `master/ulb/:id`               | ADMIN             | Soft-delete via `isActive: false`                                                                         |
 
 ## Primary Contact fields
 
@@ -91,6 +92,7 @@ way to actually unlock the login is the app-wide Forgot Password OTP flow.
 There's no temp password and no expiry to worry about. The invite/approval email's "Set Your
 Password" button sends the contact to the app's existing Forgot Password page
 (`/auth/forgot-password`), which:
+
 1. `POST /auth/sendOtp` with `{ identifier: censusCode, purpose: 'forgot-password' }` — sends an
    OTP to the account's contact mobile/email (`OtpService.sendOtp()`).
 2. `POST /auth/forgot-password/reset` with the OTP and a new password

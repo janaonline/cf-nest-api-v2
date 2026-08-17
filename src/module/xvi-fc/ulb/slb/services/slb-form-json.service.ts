@@ -10,7 +10,7 @@ export class SlbFormJsonConfigService {
   private readonly isDev: boolean;
 
   constructor(private readonly formJsonService: FormJsonService) {
-    this.isDev = false; // if true, always returns DEFAULT_SLB_FIELDS directly, skipping the DB lookup entirely
+    this.isDev = true; // if true, always returns DEFAULT_SLB_FIELDS directly, skipping the DB lookup entirely
   }
 
   /**

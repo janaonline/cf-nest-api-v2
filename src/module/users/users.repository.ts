@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { User, UserDocument } from 'src/schemas/user/user.schema';
+import { Role } from 'src/module/auth/enum/role.enum';
 
 @Injectable()
 export class UsersRepository {
@@ -11,8 +12,18 @@ export class UsersRepository {
     return this.userModel.findById(id).exec();
   }
 
+  /**
+   * The same email can be shared across role documents (e.g. a ULB account and a STATE account
+   * both registered with the same address) — a ULB account can never legitimately log in by
+   * email (see login.service.ts's ULB Code/Census Code guidance), so a plain `findOne` by email
+   * with no role filter can non-deterministically resolve to the wrong account. Prefer any
+   * non-ULB match; only fall back to a ULB document if that's genuinely the only one, so the
+   * ULB-specific guidance message still fires for a ULB-only account.
+   */
   async findByEmail(email: string): Promise<UserDocument | null> {
-    return this.userModel.findOne({ email: email.toLowerCase() }).exec();
+    const normalizedEmail = email.toLowerCase();
+    const nonUlbMatch = await this.userModel.findOne({ email: normalizedEmail, role: { $ne: Role.ULB } }).exec();
+    return nonUlbMatch ?? this.userModel.findOne({ email: normalizedEmail }).exec();
   }
 
   async findByEmailWithSensitiveFields(email: string): Promise<UserDocument | null> {
@@ -25,10 +36,21 @@ export class UsersRepository {
   async findByIdentifierWithSensitiveFields(identifier: string): Promise<UserDocument | null> {
     const isEmail = identifier.includes('@');
     const query = isEmail
-      ? { email: identifier }
+      ? { email: identifier.toLowerCase() }
       : { $or: [{ censusCode: identifier }, { sbCode: identifier }, { mobile: identifier }] };
+    const baseFilter = { ...query, isDeleted: false, isActive: true };
+
+    if (isEmail) {
+      // Same rationale as findByEmail() above — prefer a non-ULB match on email collision.
+      const nonUlbMatch = await this.userModel
+        .findOne({ ...baseFilter, role: { $ne: Role.ULB } })
+        .select('+password +loginAttempts +lockUntil +isLocked')
+        .exec();
+      if (nonUlbMatch) return nonUlbMatch;
+    }
+
     return this.userModel
-      .findOne({ ...query, isDeleted: false, isActive: true })
+      .findOne(baseFilter)
       .select('+password +loginAttempts +lockUntil +isLocked')
       .exec();
   }
@@ -87,7 +109,11 @@ export class UsersRepository {
         : this.userModel.findOne({ ...q, isDeleted: false }).exec();
 
     if (identifier.includes('@')) {
-      return base({ email: identifier.toLowerCase() });
+      // Same email-collision rationale as findByEmail()/findByIdentifierWithSensitiveFields()
+      // above — prefer a non-ULB match, fall back to ULB only if that's the only one.
+      const email = identifier.toLowerCase();
+      const nonUlbMatch = await base({ email, role: { $ne: Role.ULB } });
+      return nonUlbMatch ?? base({ email });
     }
 
     // Priority 1: mobile field (exact owner)
