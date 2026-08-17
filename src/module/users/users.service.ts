@@ -15,6 +15,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { RedisService } from 'src/core/services/redis/redis.service';
 import { EmailQueueService } from 'src/core/queue/email-queue/email-queue.service';
+import { PORTAL_INVITE_LOGIN_TYPE, buildPortalAuthUrls } from 'src/core/utils/portal-urls.util';
 import { User } from 'src/schemas/user/user.schema';
 import { State, StateDocument } from 'src/schemas/state.schema';
 import { Permission, Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
@@ -234,9 +235,8 @@ export class UsersService {
         return this.createFreshStateMember(dto, stateId, xviFcSubrole, requester);
       }
 
-      const tempPassword = this.generateTempPassword();
-      const hashedPassword = await bcrypt.hash(tempPassword, 12);
-      const tempPasswordExpiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000);
+      const placeholderPassword = this.generatePlaceholderPassword();
+      const hashedPassword = await bcrypt.hash(placeholderPassword, 12);
 
       const restored = await this.userModel
         .findByIdAndUpdate(
@@ -254,7 +254,6 @@ export class UsersService {
               isXVIFCProfileVerified: false,
               password: hashedPassword,
               isNewUser: true,
-              tempPasswordExpiresAt,
               refreshTokenHash: null,
               loginAttempts: 0,
               isLocked: false,
@@ -282,14 +281,17 @@ export class UsersService {
         );
       }
 
-      await this.queueInviteEmail(dto, stateId, requester, tempPassword);
+      await this.queueInviteEmail(dto, stateId, requester);
       return this.toStateMemberDto(restored, dto);
     }
 
     throw new BadRequestException('Invalid action');
   }
 
-  private generateTempPassword(): string {
+  /** Generates a random password that is never revealed to anyone — the account is created with
+   *  it purely to satisfy the schema's required `password` field. It's unlocked exclusively via
+   *  the Forgot Password OTP flow (`OtpService.sendOtp`/`forgotPasswordReset`), not by this value. */
+  private generatePlaceholderPassword(): string {
     const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
     const lower = 'abcdefghjkmnpqrstuvwxyz';
     const digits = '23456789';
@@ -320,9 +322,8 @@ export class UsersService {
     xviFcSubrole: 'reviewer' | 'viewer',
     requester: AuthUser,
   ): Promise<StateMemberResponseDto> {
-    const tempPassword = this.generateTempPassword();
-    const hashedPassword = await bcrypt.hash(tempPassword, 12);
-    const tempPasswordExpiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000);
+    const placeholderPassword = this.generatePlaceholderPassword();
+    const hashedPassword = await bcrypt.hash(placeholderPassword, 12);
 
     const created = await this.userModel.create({
       name: dto.name,
@@ -342,13 +343,12 @@ export class UsersService {
       loginAttempts: 0,
       password: hashedPassword,
       isNewUser: true,
-      tempPasswordExpiresAt,
       isRegistered: false,
       isVerified2223: false,
       isNodalOfficer: false,
     });
 
-    await this.queueInviteEmail(dto, stateId, requester, tempPassword);
+    await this.queueInviteEmail(dto, stateId, requester);
     return this.toStateMemberDto(created, dto);
   }
 
@@ -356,10 +356,9 @@ export class UsersService {
     dto: InviteStateMemberDto,
     stateId: Types.ObjectId,
     requester: AuthUser,
-    tempPassword?: string,
   ): Promise<void> {
     const stateDoc = await this.stateModel.findById(stateId).select('name').lean().exec();
-    const loginUrl = `${this.configService.get<string>('CLIENT_URL', 'https://cityfinance.in')}/xvifc`;
+    const { loginUrl, resetPasswordUrl } = buildPortalAuthUrls(this.configService);
     this.emailQueueService
       .addEmailJob({
         to: dto.email,
@@ -373,7 +372,7 @@ export class UsersService {
           stateName: stateDoc?.name ?? 'your state',
           invitedBy: 'State Administrator',
           loginUrl,
-          tempPassword: tempPassword ?? null,
+          resetPasswordUrl,
         },
       })
       .catch((err: unknown) => {
@@ -817,9 +816,8 @@ export class UsersService {
         return this.createFreshMohuaMember(dto, xviFcSubrole, requester);
       }
 
-      const tempPassword = this.generateTempPassword();
-      const hashedPassword = await bcrypt.hash(tempPassword, 12);
-      const tempPasswordExpiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000);
+      const placeholderPassword = this.generatePlaceholderPassword();
+      const hashedPassword = await bcrypt.hash(placeholderPassword, 12);
 
       const restored = await this.userModel
         .findByIdAndUpdate(
@@ -836,7 +834,6 @@ export class UsersService {
               isXVIFCProfileVerified: false,
               password: hashedPassword,
               isNewUser: true,
-              tempPasswordExpiresAt,
               refreshTokenHash: null,
               loginAttempts: 0,
               isLocked: false,
@@ -864,7 +861,7 @@ export class UsersService {
         );
       }
 
-      await this.queueMohuaInviteEmail(dto, requester, tempPassword);
+      await this.queueMohuaInviteEmail(dto, requester);
       return this.toMohuaMemberDto(restored, dto);
     }
 
@@ -876,9 +873,8 @@ export class UsersService {
     xviFcSubrole: 'reviewer' | 'viewer',
     requester: AuthUser,
   ): Promise<StateMemberResponseDto> {
-    const tempPassword = this.generateTempPassword();
-    const hashedPassword = await bcrypt.hash(tempPassword, 12);
-    const tempPasswordExpiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000);
+    const placeholderPassword = this.generatePlaceholderPassword();
+    const hashedPassword = await bcrypt.hash(placeholderPassword, 12);
 
     const created = await this.userModel.create({
       name: dto.name,
@@ -897,19 +893,14 @@ export class UsersService {
       loginAttempts: 0,
       password: hashedPassword,
       isNewUser: true,
-      tempPasswordExpiresAt,
     });
 
-    await this.queueMohuaInviteEmail(dto, requester, tempPassword);
+    await this.queueMohuaInviteEmail(dto, requester);
     return this.toMohuaMemberDto(created, dto);
   }
 
-  private async queueMohuaInviteEmail(
-    dto: InviteMohuaMemberDto,
-    requester: AuthUser,
-    tempPassword?: string,
-  ): Promise<void> {
-    const loginUrl = `${this.configService.get<string>('CLIENT_URL', 'https://cityfinance.in')}/xvifc`;
+  private async queueMohuaInviteEmail(dto: InviteMohuaMemberDto, requester: AuthUser): Promise<void> {
+    const { loginUrl, resetPasswordUrl } = buildPortalAuthUrls(this.configService, PORTAL_INVITE_LOGIN_TYPE);
     this.emailQueueService
       .addEmailJob({
         to: dto.email,
@@ -922,7 +913,7 @@ export class UsersService {
           role: dto.subRole === 'EDITOR' ? 'Reviewer' : 'Viewer',
           invitedBy: String(requester['name'] ?? 'MoHUA Submitter'),
           loginUrl,
-          tempPassword: tempPassword ?? null,
+          resetPasswordUrl,
         },
       })
       .catch((err: unknown) => {

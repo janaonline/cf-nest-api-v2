@@ -209,10 +209,11 @@ export class SlbService {
   }
 
   /**
-   * Final-submits the SLB form for a given ULB and year to the State DMA.
+   * Final-submits the SLB form for a given ULB and year.
    * Supports one-shot submit: creates the record if none exists yet.
    * Runs full validation — all visible required fields must be present and valid.
-   * Transitions status to UNDER_REVIEW_BY_STATE.
+   * SLB has no STATE approve/return workflow (see listUlbSlbForms), so submission transitions
+   * status directly to APPROVED_BY_STATE rather than parking it at UNDER_REVIEW_BY_STATE.
    */
   async finalSubmit(dto: SaveSlbDto, user: AuthUser): Promise<XviFcApiResponse> {
     const effectiveUlbId = await this.resolveEffectiveUlbId(user, dto.ulbId);
@@ -235,7 +236,7 @@ export class SlbService {
     if (!validation.isValid) throwXviFcValidationError(validation.errors);
 
     const sanitizedPayload = validation.sanitizedPayload;
-    const toStatus = FORM_STATUS.UNDER_REVIEW_BY_STATE;
+    const toStatus = FORM_STATUS.APPROVED_BY_STATE;
     const now = new Date();
 
     let result: Record<string, unknown>;
@@ -277,7 +278,7 @@ export class SlbService {
       result = created.toObject() as unknown as Record<string, unknown>;
     }
 
-    return xviFcSuccess('SLB form submitted to State DMA successfully.', {
+    return xviFcSuccess('SLB form submitted successfully.', {
       ...result,
       currentFormStatusLabel: getFormStatusLabel(toStatus),
     });

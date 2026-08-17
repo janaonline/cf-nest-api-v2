@@ -184,12 +184,6 @@ export class LoginService {
       throw new ForbiddenException(CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE);
     }
 
-    if (user.isNewUser && user.tempPasswordExpiresAt && user.tempPasswordExpiresAt < new Date()) {
-      throw new ForbiddenException(
-        'Your temporary password has expired. Please contact your administrator to resend the invitation.',
-      );
-    }
-
     const tokens = await this.authService.generateTokens(userId, dto.type ?? 'WEB');
     await this.authService.saveRefreshToken(userId, tokens.refreshToken);
     await this.usersRepository.updateLastLogin(userId);
