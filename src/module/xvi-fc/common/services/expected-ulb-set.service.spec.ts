@@ -5,6 +5,7 @@ import { Types } from 'mongoose';
 import { ExpectedUlbSetService } from './expected-ulb-set.service';
 import { Ulb } from 'src/schemas/ulb.schema';
 import { Year } from 'src/schemas/year.schema';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 
 /** Chainable Mongoose Query-like mock resolving to `value` once `.exec()` is called. */
 function q<T>(value: T) {
@@ -27,12 +28,23 @@ describe('ExpectedUlbSetService', () => {
   beforeEach(async () => {
     ulbModel = { find: jest.fn() };
     yearModel = { findById: jest.fn() };
+    // Mirrors real behavior when no UlbType is excluded from the cycle: state + isActive only,
+    // no ulbType clause — keeps the filter-shape assertions below unchanged.
+    const ulbEligibilityService = {
+      getEligibleUlbFilter: jest.fn().mockImplementation((stateOid: Types.ObjectId | string) =>
+        Promise.resolve({
+          state: new Types.ObjectId(stateOid),
+          isActive: true,
+        }),
+      ),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ExpectedUlbSetService,
         { provide: getModelToken(Ulb.name), useValue: ulbModel },
         { provide: getModelToken(Year.name), useValue: yearModel },
+        { provide: UlbEligibilityService, useValue: ulbEligibilityService },
       ],
     }).compile();
 

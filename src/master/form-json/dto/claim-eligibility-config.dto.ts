@@ -126,8 +126,8 @@ export class ClaimWorkflowActionConfigDto {
   targetFormStatus?: number;
 
   @IsOptional()
-  @IsString()
-  targetRowStatus?: string;
+  @IsInt()
+  targetRowStatus?: number;
 }
 
 export class ClaimEligibilityConfigDto {
@@ -144,6 +144,18 @@ export class ClaimEligibilityConfigDto {
   @IsOptional()
   @IsString()
   displayDescription?: string;
+
+  @IsOptional()
+  @IsString()
+  shortLabel?: string;
+
+  @IsOptional()
+  @IsString()
+  checklistRoute?: string;
+
+  @IsOptional()
+  @IsString()
+  checklistSummary?: string;
 
   @IsIn(['STATE', 'ULB'] as ClaimEligibilityOwnerLevel[])
   ownerLevel!: ClaimEligibilityOwnerLevel;
@@ -164,8 +176,8 @@ export class ClaimEligibilityConfigDto {
 
   @IsOptional()
   @IsArray()
-  @IsString({ each: true })
-  acceptedRowStatuses?: string[];
+  @IsNumber({}, { each: true })
+  acceptedRowStatuses?: number[];
 
   @IsObject()
   @ValidateNested()

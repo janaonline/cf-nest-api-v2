@@ -76,9 +76,10 @@ export class AuthController {
   @ApiOperation({ summary: 'Get current authenticated user details' })
   @ApiResponse({ status: 200, description: 'Returns current user details' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
-  getMe(@CurrentUser() user: User) {
+  async getMe(@CurrentUser() user: User) {
     // return this.authService.getUserById(user._id);
-    return { user };
+    const isEligibleForXviFc = await this.loginService.resolveXviFcEligibility(user);
+    return { user, isEligibleForXviFc };
   }
 
   @UseGuards(JwtAuthGuard)

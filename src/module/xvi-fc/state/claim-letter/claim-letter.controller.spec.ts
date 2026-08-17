@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import { StreamableFile } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Types } from 'mongoose';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
@@ -9,6 +10,8 @@ import { ClaimLetterService } from './services/main/claim-letter.service';
 import { ClaimLetterUlbOptionsService } from './services/ulb-options/claim-letter-ulb-options.service';
 import { ClaimLetterUlbRowsService } from './services/ulb-rows/claim-letter-ulb-rows.service';
 import { ClaimLetterAssemblyService } from './services/assembly/claim-letter-assembly.service';
+import { ClaimLetterDocumentService } from './services/document/claim-letter-document.service';
+import { ClaimLetterPdfService } from './services/document/claim-letter-pdf.service';
 
 /** Reads permission metadata off the class prototype — avoids extracting an unbound instance
  *  method (the decorator attaches metadata to the prototype function itself either way). */
@@ -33,6 +36,8 @@ describe('ClaimLetterController', () => {
   let ulbOptionsService: Record<string, jest.Mock>;
   let ulbRowsService: Record<string, jest.Mock>;
   let assemblyService: Record<string, jest.Mock>;
+  let documentService: Record<string, jest.Mock>;
+  let pdfService: Record<string, jest.Mock>;
 
   beforeEach(async () => {
     claimLetterService = {
@@ -49,6 +54,12 @@ describe('ClaimLetterController', () => {
       updateDraft: jest.fn().mockResolvedValue({ success: true }),
       abandonDraft: jest.fn().mockResolvedValue({ success: true }),
     };
+    documentService = { getDocumentData: jest.fn().mockResolvedValue({ success: true }) };
+    pdfService = {
+      generateDocumentPdf: jest
+        .fn()
+        .mockResolvedValue({ buffer: Buffer.from('pdf-bytes'), fileName: 'claim-letter-CL-AP-1-1.pdf' }),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [ClaimLetterController],
@@ -57,6 +68,8 @@ describe('ClaimLetterController', () => {
         { provide: ClaimLetterUlbOptionsService, useValue: ulbOptionsService },
         { provide: ClaimLetterUlbRowsService, useValue: ulbRowsService },
         { provide: ClaimLetterAssemblyService, useValue: assemblyService },
+        { provide: ClaimLetterDocumentService, useValue: documentService },
+        { provide: ClaimLetterPdfService, useValue: pdfService },
       ],
     }).compile();
 
@@ -141,5 +154,21 @@ describe('ClaimLetterController', () => {
     await controller.getUlbs(claimLetterId, query, user);
     expect(ulbRowsService['getUlbs']).toHaveBeenCalledWith(claimLetterId, query, user);
     expect(requiredPermissions('getUlbs')).toEqual([Permission.VIEW_STATE_FORMS]);
+  });
+
+  it('GET :claimLetterId/document delegates to ClaimLetterDocumentService.getDocumentData', async () => {
+    await controller.getDocument(claimLetterId, user);
+    expect(documentService['getDocumentData']).toHaveBeenCalledWith(claimLetterId, user);
+    expect(requiredPermissions('getDocument')).toEqual([Permission.VIEW_STATE_FORMS]);
+  });
+
+  it('GET :claimLetterId/document/pdf returns a StreamableFile built from ClaimLetterPdfService', async () => {
+    const result = await controller.getDocumentPdf(claimLetterId, user);
+
+    expect(pdfService['generateDocumentPdf']).toHaveBeenCalledWith(claimLetterId, user);
+    expect(result).toBeInstanceOf(StreamableFile);
+    expect(result.options.type).toBe('application/pdf');
+    expect(result.options.disposition).toBe('attachment; filename="claim-letter-CL-AP-1-1.pdf"');
+    expect(requiredPermissions('getDocumentPdf')).toEqual([Permission.VIEW_STATE_FORMS]);
   });
 });

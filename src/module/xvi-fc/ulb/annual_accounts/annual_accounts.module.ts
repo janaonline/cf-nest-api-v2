@@ -26,6 +26,8 @@ import { AnnualAccountOcrApiService } from './annual-account-ocr-api.service';
 import { AnnualAccountOcrProcessor } from './annual-account-ocr.processor';
 import { AnnualAccountStatusSyncService } from './annual-account-status-sync.service';
 import { FormJsonModule } from '../../../../master/form-json/form-json.module';
+import { EmailQueueModule } from '../../../../core/queue/email-queue/email-queue.module';
+import { UlbEligibilityModule } from 'src/module/ulb-eligibility/ulb-eligibility.module';
 
 @Module({
   imports: [
@@ -33,6 +35,8 @@ import { FormJsonModule } from '../../../../master/form-json/form-json.module';
     S3Module,
     FileModule,
     FormJsonModule,
+    EmailQueueModule,
+    UlbEligibilityModule,
     BullModule.registerQueue({ name: ANNUAL_ACCOUNT_PROCESSING_QUEUE }),
     MongooseModule.forFeature([
       { name: XviFcAnnualAccount.name, schema: XviFcAnnualAccountSchema },

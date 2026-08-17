@@ -25,10 +25,5 @@ export class GetElectedUrbanLocalBodiesRowsQueryDto {
 
   @IsOptional()
   @IsString()
-  @IsIn(['DB_ULB', 'EXTRA_ULB'])
-  rowType?: 'DB_ULB' | 'EXTRA_ULB';
-
-  @IsOptional()
-  @IsString()
   errorField?: string;
 }

@@ -109,7 +109,7 @@ Technical reference for `src/module/xvi-fc` — the codebase implementation of t
 | [`SfcStatusController`](src/module/xvi-fc/state/sfc-status/sfc-status.controller.ts) | `xvi-fc/state/sfc-status` | questions, Excel dump, hydrated form, save-draft, final-submit |
 | [`AnnualAccountsController`](src/module/xvi-fc/ulb/annual_accounts/annual_accounts.controller.ts) | `xvi-fc/annual-account` | confirm-upload (triggers OCR queue), upload-config, by-ULB lookup, submit, retry/delete doc |
 | [`BankAccountController`](src/module/xvi-fc/ulb/bank-account/bank-account.controller.ts) | `xvi-fc/bank-account` | IFSC lookup, get/submit bank account |
-| [`ElectedUrbanLocalBodiesController`](src/module/xvi-fc/state/elected-urban-local-bodies/controllers/elected-urban-local-bodies.controller.ts) | `xvi-fc/state/elected-urban-local-bodies` | questions, save-draft, validate/revalidate Excel, final-submit, template/error-sheet/dump downloads, row patch, post-submission-update flow |
+| [`ElectedUrbanLocalBodiesController`](src/module/xvi-fc/state/elected-urban-local-bodies/controllers/elected-urban-local-bodies.controller.ts) | `xvi-fc/state/elected-urban-local-bodies` | questions, save-draft, validate/revalidate Excel, final-submit, template/error-sheet/dump/elected-bodies-list-document (Word) downloads, row patch, post-submission-update flow |
 | [`DevolutionFormulaController`](src/module/xvi-fc/state/devolution-formula/devolution-formula.controller.ts) | `xvi-fc/state/devolution-formula` | dump, save-draft, validate-excel, final-submit, template/error-sheet downloads, row patch, revalidate-excel |
 
 ### Async processing
@@ -141,6 +141,7 @@ xvi-fc-specific environment variables, in addition to the ones the rest of the a
 |---|---|
 | `BANK_ACCOUNT_ENCRYPTION_KEY` | Encrypts ULB bank account details at rest (`ulb/bank-account`) |
 | `BANK_ACCOUNT_HASH_SECRET` | HMAC secret for ULB bank account integrity hashing (`ulb/bank-account`) |
+| `MANUAL_REVIEW_NOTIFY_EMAIL` | Fixed inbox emailed when a ULB requests manual review of a failed OCR validation (`ulb/annual_accounts`) |
 
 ### Roles & access
 

@@ -24,6 +24,7 @@ import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-
 import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
 import { keyByFieldKey, requireField } from 'src/module/xvi-fc/common/utils/xvi-fc-field-lookup.util';
 import { deriveFileValidationOptions } from 'src/module/xvi-fc/common/utils/xvi-fc-file-constraint.util';
+import { buildUlbReconciliationBadges } from 'src/module/xvi-fc/common/utils/xvi-fc-ulb-reconciliation-badges.util';
 import type { FileInfo } from 'src/schemas/common/file.schema';
 import type { FormData } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.types';
 import type {
@@ -54,6 +55,7 @@ import {
   EulbRowDocument,
 } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 import {
   EULB_ACTION_DOWNLOAD_ERROR_SHEET,
   EULB_ACTION_DOWNLOAD_TEMPLATE,
@@ -118,10 +120,9 @@ const EULB_DUMP_HEADERS: RowHeader[] = [
   { label: 'Census Code', key: 'censusCode', width: 16 },
   { label: 'ULB Name', key: 'ulbName', width: 35 },
   { label: 'Elected Body Status', key: 'electedBodyStatus', width: 24 },
-  { label: 'Date of Constitution', key: 'dateOfConstitution', width: 24 },
+  { label: 'Date on which the elected body is in place.', key: 'dateOfConstitution', width: 48 },
   { label: 'Date of Expiry', key: 'dateOfExpiry', width: 20 },
   { label: 'Remarks', key: 'remarks', width: 35 },
-  { label: 'Row Type', key: 'rowType', width: 16 },
   { label: 'Validation Status', key: 'validationStatus', width: 20 },
   { label: 'Latest Data Source', key: 'latestDataSource', width: 22 },
   { label: 'Dataset Version', key: 'datasetVersion', width: 18 },
@@ -149,6 +150,7 @@ export class ElectedUrbanLocalBodiesService {
     private readonly config: ConfigService,
     private readonly fileInfoNormalizer: FileInfoNormalizerService,
     private readonly eulbFormJsonConfig: EulbFormJsonConfigService,
+    private readonly ulbEligibilityService: UlbEligibilityService,
   ) {}
 
   /**
@@ -194,7 +196,6 @@ export class ElectedUrbanLocalBodiesService {
 
     const mainFormFields = getFieldsByType(fields, 'EULB_MAIN_FORM_FIELDS');
     const rowEditFields = getFieldsByType(fields, 'EULB_ROW_EDIT_FIELDS');
-    const extraUlbEditFields = getFieldsByType(fields, 'EULB_EXTRA_ULB_PORTAL_FIELDS');
     if (mainFormFields.length === 0) {
       throw new InternalServerErrorException('EULB_MAIN_FORM_FIELDS group is empty in form configuration.');
     }
@@ -203,6 +204,7 @@ export class ElectedUrbanLocalBodiesService {
     }
 
     const stateOid = new Types.ObjectId(stateId);
+    const eligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC');
 
     const [doc, computedActiveUlbCount] = await Promise.all([
       this.model
@@ -218,7 +220,7 @@ export class ElectedUrbanLocalBodiesService {
         .populate('submittedBy', 'name')
         .lean<EulbFormLeanDoc>()
         .exec(),
-      this.ulbModel.countDocuments({ state: stateOid, isActive: true }),
+      this.ulbModel.countDocuments(eligibleUlbFilter),
     ]);
 
     const currentFormStatus = doc?.currentFormStatus ?? FORM_STATUS.NOT_STARTED;
@@ -230,6 +232,7 @@ export class ElectedUrbanLocalBodiesService {
     if (doc) {
       if (doc.checkboxConfirmation !== undefined) savedData['checkboxConfirmation'] = doc.checkboxConfirmation;
       if (doc.electedBodyExcelFile !== undefined) savedData['electedBodyExcelFile'] = doc.electedBodyExcelFile;
+      if (doc.signedElectedbodyFile !== undefined) savedData['signedElectedbodyFile'] = doc.signedElectedbodyFile;
     }
 
     const permissions = this.buildFormPermissions(user, stateId, currentFormStatus);
@@ -256,7 +259,6 @@ export class ElectedUrbanLocalBodiesService {
       currentFormStatusLabel: getFormStatusLabel(currentFormStatus),
       questions,
       rowEditFields,
-      extraUlbEditFields,
       permissions,
       actors,
       validationSummary,
@@ -270,9 +272,9 @@ export class ElectedUrbanLocalBodiesService {
   /**
    * Generates an Excel template for the EULB data collection.
    *
-   * The template always represents the current active ULB registry for the state.
-   * When an active dataset exists, saved row values are overlaid only for rows that still
-   * match an active registry ULB (DB_ULB rows). EXTRA_ULB rows are excluded.
+   * The template always represents the current active ULB registry for the state — every
+   * persisted row is registry-backed, so no separate "excluded row" case applies here.
+   * When an active dataset exists, saved row values are overlaid onto the matching registry ULB.
    * No blank padding rows are added beyond the active registry count.
    */
   async getTemplate(stateId: string, yearId: string, user: AuthUser): Promise<Buffer> {
@@ -286,10 +288,13 @@ export class ElectedUrbanLocalBodiesService {
 
     const stateOid = new Types.ObjectId(stateId);
 
-    // Always load the active registry — needed in both branches to determine template rows.
-    // TODO: Add date of constitution check.
+    // Always load the active, XVI-FC-eligible registry — needed in both branches to determine
+    // template rows. Cantonment Board ULBs are excluded here via the shared eligibility filter.
+    // TODO: dateOfConstitution has no validation rule defined/implemented yet — same gap as
+    // elected-urban-local-bodies-excel.service.ts's revalidateExcel (identical TODO, not yet scoped).
+    const eligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC');
     const activeUlbs = await this.ulbModel
-      .find({ state: stateOid, isActive: true })
+      .find(eligibleUlbFilter)
       .select('_id name censusCode sbCode')
       .sort({ name: 1 })
       .lean()
@@ -312,13 +317,12 @@ export class ElectedUrbanLocalBodiesService {
     let rows: EulbTemplateRow[];
 
     if (activeVersion > 0 && formDoc) {
-      // Load only DB_ULB saved rows for the active dataset version.
+      // Load saved rows for the active dataset version — every row is registry-backed.
       const savedDbRows = await this.rowModel
         .find({
           form: formDoc._id as Types.ObjectId,
           datasetVersion: activeVersion,
           isActive: true,
-          rowType: 'DB_ULB',
         })
         .select('ulbId censusCode ulbName electedBodyStatus dateOfConstitution dateOfExpiry remarks')
         .lean()
@@ -403,7 +407,7 @@ export class ElectedUrbanLocalBodiesService {
               isActive: true,
             })
             .select(
-              'rowNumber censusCode ulbName electedBodyStatus dateOfConstitution dateOfExpiry remarks rowType validationStatus lastUpdatedSource datasetVersion createdBy updatedBy createdAt updatedAt',
+              'rowNumber censusCode ulbName electedBodyStatus dateOfConstitution dateOfExpiry remarks validationStatus lastUpdatedSource datasetVersion createdBy updatedBy createdAt updatedAt',
             )
             .populate('createdBy', 'name')
             .populate('updatedBy', 'name')
@@ -449,12 +453,15 @@ export class ElectedUrbanLocalBodiesService {
     const userOid = new Types.ObjectId(user._id);
     const filter = { state: stateOid, year: yearOid, formType: EULB_FORM_TYPE };
 
-    // Compute active ULB count server-side; the client-submitted ulbCount is ignored.
+    // Compute active ULB count server-side; the client-submitted ulbCount is ignored. Must use the
+    // same eligibility filter as getTemplate()'s registry query, or a state's Excel upload will
+    // spuriously fail the row-count match check the moment it has any Cantonment Board ULBs.
+    const eligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC');
     const [activeUlbCount, existing] = await Promise.all([
-      this.ulbModel.countDocuments({ state: stateOid, isActive: true }),
+      this.ulbModel.countDocuments(eligibleUlbFilter),
       this.model
-        .findOne(filter, { _id: 1, currentFormStatus: 1, electedBodyExcelFile: 1 })
-        .lean<Pick<EulbFormLeanDoc, '_id' | 'currentFormStatus' | 'electedBodyExcelFile'>>()
+        .findOne(filter, { _id: 1, currentFormStatus: 1, electedBodyExcelFile: 1, signedElectedbodyFile: 1 })
+        .lean<Pick<EulbFormLeanDoc, '_id' | 'currentFormStatus' | 'electedBodyExcelFile' | 'signedElectedbodyFile'>>()
         .exec(),
     ]);
 
@@ -474,9 +481,26 @@ export class ElectedUrbanLocalBodiesService {
       normalizedExcelFile = file;
     }
 
+    let normalizedSignedFile: FileInfo | null | undefined;
+    if (dto.data.signedElectedbodyFile !== undefined) {
+      const signedFileField = requireField(
+        keyByFieldKey(mainFormFields),
+        'signedElectedbodyFile',
+        'ElectedUrbanLocalBodiesService.saveDraft',
+      );
+      const { file, errors: fileErrors } = this.fileInfoNormalizer.normalizeInboundFileInfo(
+        dto.data.signedElectedbodyFile as unknown as Record<string, unknown>,
+        existing?.signedElectedbodyFile,
+        deriveFileValidationOptions(signedFileField, 'signedElectedbodyFile'),
+      );
+      if (fileErrors.length > 0) throwXviFcValidationError({ signedElectedbodyFile: fileErrors });
+      normalizedSignedFile = file;
+    }
+
     const formData: FormData = {
       ulbCount: activeUlbCount,
       electedBodyExcelFile: normalizedExcelFile,
+      signedElectedbodyFile: normalizedSignedFile,
       checkboxConfirmation: dto.data.checkboxConfirmation,
     };
 
@@ -489,6 +513,7 @@ export class ElectedUrbanLocalBodiesService {
       ulbCount: activeUlbCount,
     };
     if (normalizedExcelFile !== undefined) fieldUpdates['electedBodyExcelFile'] = normalizedExcelFile;
+    if (normalizedSignedFile !== undefined) fieldUpdates['signedElectedbodyFile'] = normalizedSignedFile;
     if (result.sanitizedPayload['checkboxConfirmation'] !== undefined)
       fieldUpdates['checkboxConfirmation'] = result.sanitizedPayload['checkboxConfirmation'];
 
@@ -527,7 +552,9 @@ export class ElectedUrbanLocalBodiesService {
    * Runs full form-level validation then enforces all Excel row-level pre-conditions:
    * validationStatus VALID, zero errors, zero missing DB ULBs, zero extra ULB rows,
    * and Excel row count matching the computed active ULB count.
-   * Transitions status to UNDER_REVIEW_BY_MOHUA.
+   * Transitions status to UNDER_REVIEW_BY_MOHUA. devolution-formula's Installment-1 gate reads
+   * this status from outside this module (see devolution-formula/CLAUDE.md) — changing when/how
+   * this transition happens has a blast radius there too.
    *
    * @param dto       - Payload with stateId, yearId, and complete form data.
    * @param user      - Authenticated user; must have FINAL_SUBMIT_STATE_FORMS permission.
@@ -553,8 +580,11 @@ export class ElectedUrbanLocalBodiesService {
     const userOid = new Types.ObjectId(user._id);
     const filter = { state: stateOid, year: yearOid, formType: EULB_FORM_TYPE };
 
-    // Compute active ULB count server-side; the client-submitted ulbCount is ignored.
-    const activeUlbCount = await this.ulbModel.countDocuments({ state: stateOid, isActive: true });
+    // Compute active ULB count server-side; the client-submitted ulbCount is ignored. Must use the
+    // same eligibility filter as getTemplate()'s registry query, or a state's Excel upload will
+    // spuriously fail the row-count match check the moment it has any Cantonment Board ULBs.
+    const eligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC');
+    const activeUlbCount = await this.ulbModel.countDocuments(eligibleUlbFilter);
 
     const existing = await this.model
       .findOne(filter, {
@@ -568,8 +598,10 @@ export class ElectedUrbanLocalBodiesService {
         maxAllowedExcelRows: 1,
         matchedDbUlbCount: 1,
         extraExcelRowCount: 1,
+        duplicateUlbCount: 1,
         activeDatasetVersion: 1,
         electedBodyExcelFile: 1,
+        signedElectedbodyFile: 1,
       })
       .lean()
       .exec();
@@ -589,12 +621,26 @@ export class ElectedUrbanLocalBodiesService {
     );
     if (excelFileErrors.length > 0) throwXviFcValidationError({ electedBodyExcelFile: excelFileErrors });
 
-    // `normalizedExcelFile` is `undefined` when the file is unchanged from what's already
-    // stored — fall back to the existing file so the required-field validator below still
-    // sees it as present (the raw, possibly-undefined value is used for the $set below).
+    const signedFileFieldFinal = requireField(
+      keyByFieldKey(mainFormFields),
+      'signedElectedbodyFile',
+      'ElectedUrbanLocalBodiesService.finalSubmit',
+    );
+    const { file: normalizedSignedFile, errors: signedFileErrors } = this.fileInfoNormalizer.normalizeInboundFileInfo(
+      dto.data.signedElectedbodyFile as unknown as Record<string, unknown>,
+      existing?.signedElectedbodyFile as FileInfo | undefined,
+      deriveFileValidationOptions(signedFileFieldFinal, 'signedElectedbodyFile'),
+    );
+    if (signedFileErrors.length > 0) throwXviFcValidationError({ signedElectedbodyFile: signedFileErrors });
+
+    // `normalizedExcelFile`/`normalizedSignedFile` are `undefined` when the file is unchanged from
+    // what's already stored — fall back to the existing file so the required-field validator below
+    // still sees it as present (the raw, possibly-undefined value is used for the $set below).
     const formData: FormData = {
       ulbCount: activeUlbCount,
       electedBodyExcelFile: normalizedExcelFile !== undefined ? normalizedExcelFile : existing?.electedBodyExcelFile,
+      signedElectedbodyFile:
+        normalizedSignedFile !== undefined ? normalizedSignedFile : existing?.signedElectedbodyFile,
       checkboxConfirmation: dto.data.checkboxConfirmation,
     };
     const validation = this.validator.validateFinalSubmitAndBuildPayload(mainFormFields, formData);
@@ -632,6 +678,7 @@ export class ElectedUrbanLocalBodiesService {
     const maxAllowedExcelRows = (existing.maxAllowedExcelRows as number | undefined) ?? dbUlbCount * 2;
     const matchedDbUlbCount = (existing.matchedDbUlbCount as number | undefined) ?? 0;
     const extraExcelRowCount = (existing.extraExcelRowCount as number | undefined) ?? 0;
+    const duplicateUlbCount = (existing.duplicateUlbCount as number | undefined) ?? 0;
     const activeDatasetVersion = (existing.activeDatasetVersion as number | undefined) ?? 0;
 
     const dbValidationSummary: EulbValidationSummary = {
@@ -641,6 +688,7 @@ export class ElectedUrbanLocalBodiesService {
       matchedDbUlbCount,
       missingDbUlbCount,
       extraExcelRowCount,
+      duplicateUlbCount,
       errorRowCount,
       validationStatus: storedValidationStatus ?? 'NOT_VALIDATED',
       activeDatasetVersion,
@@ -753,11 +801,37 @@ export class ElectedUrbanLocalBodiesService {
     // Omit when unchanged (rather than `electedBodyExcelFile: undefined`) so Mongoose's
     // FileInfo `timestamps` option doesn't re-stamp the stored subdocument.
     if (normalizedExcelFile !== undefined) fieldUpdates['electedBodyExcelFile'] = normalizedExcelFile;
+    if (normalizedSignedFile !== undefined) fieldUpdates['signedElectedbodyFile'] = normalizedSignedFile;
 
-    const updated = await this.model
-      .findOneAndUpdate({ _id: existing._id }, { $set: fieldUpdates }, { new: true })
-      .lean()
-      .exec();
+    // Two collections are written together here (parent + rows), so this needs the same
+    // transactional guarantee finalSubmit already has in fc-unspent-declaration.service.ts —
+    // a crash between the two writes must never leave the form UNDER_REVIEW_BY_MOHUA while
+    // its rows are still `null`.
+    const session = await this.model.db.startSession();
+    let updated: EulbFormLeanDoc | null = null;
+    try {
+      session.startTransaction();
+
+      updated = await this.model
+        .findOneAndUpdate({ _id: existing._id }, { $set: fieldUpdates }, { new: true, session })
+        .lean<EulbFormLeanDoc>()
+        .exec();
+
+      await this.rowModel
+        .updateMany(
+          { form: existing._id, datasetVersion: activeDatasetVersion, isActive: true },
+          { $set: { rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA } },
+          { session },
+        )
+        .exec();
+
+      await session.commitTransaction();
+    } catch (err) {
+      await session.abortTransaction();
+      throw err;
+    } finally {
+      await session.endSession();
+    }
 
     return xviFcSuccess('Elected Urban Local Bodies form submitted successfully.', {
       ...updated,
@@ -854,6 +928,7 @@ export class ElectedUrbanLocalBodiesService {
     const errorRowCount = doc?.errorRowCount ?? 0;
     const missingDbUlbCount = doc?.missingDbUlbCount ?? 0;
     const extraExcelRowCount = doc?.extraExcelRowCount ?? 0;
+    const duplicateUlbCount = doc?.duplicateUlbCount ?? 0;
     const validationStatus = doc?.validationStatus ?? 'NOT_VALIDATED';
 
     const hasActiveDataset = activeDatasetVersion > 0 && excelRowCount > 0;
@@ -924,11 +999,12 @@ export class ElectedUrbanLocalBodiesService {
             tone: 'danger',
             visible: canEdit && errorRowCount > 0,
           },
-          {
-            label: `${missingDbUlbCount} missing ULB(s)`,
-            tone: 'warning',
-            visible: canEdit && missingDbUlbCount > 0,
-          },
+          ...buildUlbReconciliationBadges({
+            missingCount: missingDbUlbCount,
+            newCount: extraExcelRowCount,
+            duplicateCount: duplicateUlbCount,
+            visible: canEdit,
+          }),
         ],
       },
     ];
@@ -965,6 +1041,7 @@ export class ElectedUrbanLocalBodiesService {
       matchedDbUlbCount: doc?.matchedDbUlbCount ?? 0,
       missingDbUlbCount: doc?.missingDbUlbCount ?? 0,
       extraExcelRowCount: doc?.extraExcelRowCount ?? 0,
+      duplicateUlbCount: doc?.duplicateUlbCount ?? 0,
       errorRowCount: doc?.errorRowCount ?? 0,
       validationStatus: doc?.validationStatus ?? 'NOT_VALIDATED',
       activeDatasetVersion: doc?.activeDatasetVersion ?? 0,
@@ -1005,7 +1082,7 @@ export class ElectedUrbanLocalBodiesService {
     const expiryField = rowEditFields.find((f) => f.key === 'dateOfExpiry')!;
     const remarksField = rowEditFields.find((f) => f.key === 'remarks')!;
 
-    const statusOptions = (statusField.options as FormFieldOption[]).map((o) => o.id).join(',');
+    const statusOptions = (statusField.options as FormFieldOption[]).map((o) => o.label).join(',');
 
     const constitutionMinVal = constitutionField.validations?.find((v) => v.name === 'minDate')?.validator as string;
     const constitutionMaxVal = constitutionField.maxDate!;
@@ -1050,11 +1127,11 @@ export class ElectedUrbanLocalBodiesService {
               `OR(AND($${statusLetter}${row}<>"Constituted",${constitutionLetter}${row}=""),AND($${statusLetter}${row}="Constituted",ISNUMBER(${constitutionLetter}${row}),${constitutionLetter}${row}>=${constitutionMin},${constitutionLetter}${row}<=${constitutionMax}))`,
             ],
             showInputMessage: true,
-            promptTitle: 'Date of Constitution',
+            promptTitle: 'Date on which the elected body is in place.',
             prompt: 'Required when status is Constituted. Must be between 31 May 2021 and today.',
             showErrorMessage: true,
             errorStyle: 'error',
-            errorTitle: 'Date of Constitution',
+            errorTitle: 'Date on which the elected body is in place.',
             error: 'Required for Constituted status and must be within the allowed date range.',
           };
         },
@@ -1110,7 +1187,6 @@ export class ElectedUrbanLocalBodiesService {
       dateOfConstitution: dateToDumpValue(row.dateOfConstitution),
       dateOfExpiry: dateToDumpValue(row.dateOfExpiry),
       remarks: row.remarks ?? '',
-      rowType: row.rowType,
       validationStatus: row.validationStatus,
       latestDataSource: row.lastUpdatedSource,
       datasetVersion: row.datasetVersion,

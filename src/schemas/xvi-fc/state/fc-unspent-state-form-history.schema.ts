@@ -44,6 +44,9 @@ export class XviFcUnspentStateFormHistory {
   @Prop({ type: FileInfoSchema, default: null })
   fcDeclaration!: FileInfo | null;
 
+  @Prop({ type: FileInfoSchema, default: null })
+  fcUnspentDeclaration!: FileInfo | null;
+
   @Prop({ type: [FcUnspentUlbRowSnapshotSchema], default: [] })
   unspentUlbData!: FcUnspentUlbRowSnapshot[];
 

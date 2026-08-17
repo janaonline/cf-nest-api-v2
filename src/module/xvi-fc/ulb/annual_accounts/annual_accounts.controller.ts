@@ -12,6 +12,8 @@ import { DocumentDecisionDto } from './dto/document-decision.dto';
 import { SectionDecisionDto } from './dto/section-decision.dto';
 import { BulkSectionDecisionDto } from './dto/bulk-section-decision.dto';
 import { UlbSubmissionsQueryDto } from './dto/ulb-submissions-query.dto';
+import { ManualReviewDecisionDto } from './dto/manual-review-decision.dto';
+import { ManualReviewQueueQueryDto } from './dto/manual-review-queue-query.dto';
 import { extractIpAndUserAgent } from 'src/module/xvi-fc/common/utils/xvi-fc-request-meta.util';
 
 @ApiBearerAuth()
@@ -46,9 +48,13 @@ export class AnnualAccountsController {
   findByUlbAndYear(
     @Param('ulbId', ParseObjectIdPipe) ulbId: string,
     @Param('designYearId', ParseObjectIdPipe) designYearId: string,
+    @Query('section') section: string,
     @CurrentUser() user: AuthUser,
   ) {
-    return this.annualAccountsService.findByUlbAndYear(ulbId, designYearId, user);
+    if (section !== 'auditedData' && section !== 'unauditedData') {
+      throw new BadRequestException('section must be "auditedData" or "unauditedData"');
+    }
+    return this.annualAccountsService.findByUlbAndYear(ulbId, designYearId, section, user);
   }
 
   @Get('state/ulb-submissions')
@@ -59,14 +65,34 @@ export class AnnualAccountsController {
     return this.annualAccountsService.listUlbSubmissions(dto, user);
   }
 
+  @Get('manual-review-queue')
+  @ApiOperation({ summary: "ADMIN's global queue of documents awaiting a manual-review decision, across all ULBs" })
+  getManualReviewQueue(@Query() dto: ManualReviewQueueQueryDto, @CurrentUser() user: AuthUser) {
+    return this.annualAccountsService.getManualReviewQueue(dto, user);
+  }
+
   @Get(':id')
-  getDetails(@Param('id', ParseObjectIdPipe) id: string, @CurrentUser() user: AuthUser) {
-    return this.annualAccountsService.getDetails(id, user);
+  getDetails(
+    @Param('id', ParseObjectIdPipe) id: string,
+    @Query('section') section: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    if (section !== 'auditedData' && section !== 'unauditedData') {
+      throw new BadRequestException('section must be "auditedData" or "unauditedData"');
+    }
+    return this.annualAccountsService.getDetails(id, section, user);
   }
 
   @Get(':id/status')
-  getProcessingStatus(@Param('id', ParseObjectIdPipe) id: string, @CurrentUser() user: AuthUser) {
-    return this.annualAccountsService.getProcessingStatus(id, user);
+  getProcessingStatus(
+    @Param('id', ParseObjectIdPipe) id: string,
+    @Query('section') section: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    if (section !== 'auditedData' && section !== 'unauditedData') {
+      throw new BadRequestException('section must be "auditedData" or "unauditedData"');
+    }
+    return this.annualAccountsService.getProcessingStatus(id, section, user);
   }
 
   @Get(':id/logs')
@@ -116,6 +142,24 @@ export class AnnualAccountsController {
       throw new BadRequestException('section must be "auditedData" or "unauditedData"');
     }
     return this.annualAccountsService.requestManualReview(id, section, docId, user);
+  }
+
+  @Post(':id/documents/:docId/manual-review/decision')
+  @HttpCode(200)
+  @ApiOperation({ summary: "ADMIN approves or rejects a document's manual-review request" })
+  decideManualReview(
+    @Param('id', ParseObjectIdPipe) id: string,
+    @Param('docId') docId: string,
+    @Query('section') section: string,
+    @Body() dto: ManualReviewDecisionDto,
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+  ) {
+    if (section !== 'auditedData' && section !== 'unauditedData') {
+      throw new BadRequestException('section must be "auditedData" or "unauditedData"');
+    }
+    const { ipAddress, userAgent } = extractIpAndUserAgent(req);
+    return this.annualAccountsService.decideManualReview(id, section, docId, dto, user, ipAddress, userAgent);
   }
 
   @Delete(':id/documents/:docId')

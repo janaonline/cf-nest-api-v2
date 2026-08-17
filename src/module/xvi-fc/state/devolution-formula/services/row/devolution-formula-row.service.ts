@@ -36,6 +36,8 @@ import {
   requireField,
   getValidatorValue,
 } from 'src/module/xvi-fc/common/utils/xvi-fc-field-lookup.util';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
+import { CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE } from 'src/module/ulb-eligibility/ulb-eligibility.constants';
 
 @Injectable()
 export class DevolutionFormulaRowService {
@@ -47,6 +49,7 @@ export class DevolutionFormulaRowService {
     private readonly dfValidator: DevolutionFormulaValidator,
     private readonly excelService: ExcelService,
     private readonly dfFormJsonConfig: DfFormJsonConfigService,
+    private readonly ulbEligibilityService: UlbEligibilityService,
   ) {}
 
   /** DB-driven `devolutionFormula` max length — single source of truth is the DF_ROW_EDIT_FIELDS group. */
@@ -123,8 +126,9 @@ export class DevolutionFormulaRowService {
       excelRowCount: (formDoc['excelRowCount'] as number) ?? 0,
       validRowCount: validCount,
       errorRowCount: errorCount,
-      missingUlbCount: 0,
+      missingUlbCount: (formDoc['missingUlbCount'] as number) ?? 0,
       newUlbCount: (formDoc['newUlbCount'] as number) ?? 0,
+      duplicateUlbCount: (formDoc['duplicateUlbCount'] as number) ?? 0,
       totalMoHUAAllocation: (formDoc['totalMoHUAAllocation'] as number) ?? 0,
       totalAllocatedSum: (formDoc['totalAllocatedSum'] as number) ?? 0,
       activeDatasetVersion: activeVersion,
@@ -166,6 +170,16 @@ export class DevolutionFormulaRowService {
 
     if (!row) {
       throw new NotFoundException('Row not found in the active dataset.');
+    }
+    // Defense-in-depth for rows created before this filter existed — new rows for ineligible
+    // ULBs are already rejected at Excel-ingestion time, but an already-existing row could
+    // otherwise still be edited here.
+    if (row.ulbId) {
+      await this.ulbEligibilityService.assertUlbEligibleForGrantCycle(
+        row.ulbId,
+        'XVIFC',
+        CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE,
+      );
     }
 
     this.assertNoActiveClaimLockForUlb(row.ulbId ? new Types.ObjectId(String(row.ulbId)) : null, yearId, installment);
@@ -263,8 +277,9 @@ export class DevolutionFormulaRowService {
       excelRowCount: updatedForm?.excelRowCount ?? totalRowCount,
       validRowCount: validCountUpdated,
       errorRowCount: totalRowCount - validCountUpdated,
-      missingUlbCount: 0,
+      missingUlbCount: updatedForm?.missingUlbCount ?? 0,
       newUlbCount: updatedForm?.newUlbCount ?? 0,
+      duplicateUlbCount: updatedForm?.duplicateUlbCount ?? 0,
       totalMoHUAAllocation: updatedForm?.totalMoHUAAllocation ?? 0,
       totalAllocatedSum: updatedForm?.totalAllocatedSum ?? 0,
       activeDatasetVersion: updatedForm?.activeDatasetVersion ?? (formDoc['activeDatasetVersion'] as number),
@@ -301,9 +316,15 @@ export class DevolutionFormulaRowService {
       .findByIdAndUpdate(formId, {
         $unset: { excelFile: 1, errorExcelFile: 1 },
         $set: {
+          excludedRows: [],
           validationStatus: 'NOT_VALIDATED',
           excelRowCount: 0,
           errorRowCount: 0,
+          // Reset alongside the rest of the reconciliation state — previously left stale here
+          // (unlike EULB's equivalent deleteUploadedExcel, which already reset all three).
+          newUlbCount: 0,
+          missingUlbCount: 0,
+          duplicateUlbCount: 0,
           totalAllocatedSum: 0,
           updatedBy: userOid,
         },
@@ -347,7 +368,8 @@ export class DevolutionFormulaRowService {
       .lean()
       .exec();
 
-    const errorRows = rows.map((r) => ({
+    const dbErrorRows = rows.map((r) => ({
+      rowNumber: r.rowNumber,
       censusCode: r.censusCode ?? '',
       ulbName: r.ulbName,
       totalGrantAllocation: r.totalGrantAllocation,
@@ -357,7 +379,36 @@ export class DevolutionFormulaRowService {
       errors: r.errors?.map((e: DfRowError) => e.message).join('; ') ?? '',
     }));
 
-    return this.excelService.generateExcel(DF_ERROR_EXCEL_HEADERS, errorRows, 'Devolution Formula Errors');
+    // Merge in rows excluded from persistence at the last validate call (unmatched or intra-batch
+    // duplicate ULBs) — they never became row documents, so the DB query above can't see them.
+    const excludedRows =
+      (formDoc['excludedRows'] as
+        | Array<{
+            rowNumber: number;
+            censusCode: string;
+            ulbName: string;
+            totalGrantAllocation?: unknown;
+            installment1Amount?: unknown;
+            installment2Amount?: unknown;
+            devolutionFormula?: string;
+            errors: DfRowError[];
+          }>
+        | undefined) ?? [];
+
+    const excludedErrorRows = excludedRows.map((r) => ({
+      rowNumber: r.rowNumber,
+      censusCode: r.censusCode,
+      ulbName: r.ulbName,
+      totalGrantAllocation: r.totalGrantAllocation,
+      installment1Amount: r.installment1Amount,
+      installment2Amount: r.installment2Amount,
+      devolutionFormula: r.devolutionFormula,
+      errors: r.errors.map((e) => e.message).join('; '),
+    }));
+
+    const errorRows = [...dbErrorRows, ...excludedErrorRows].sort((a, b) => a.rowNumber - b.rowNumber);
+
+    return this.excelService.generateExcel(DF_ERROR_EXCEL_HEADERS, errorRows, 'ULB-wise Allocation Errors');
   }
 
   // ─── Private helpers ──────────────────────────────────────────────────────
@@ -382,7 +433,7 @@ export class DevolutionFormulaRowService {
       .exec();
 
     if (!form) {
-      throw new NotFoundException('Devolution Formula form not found for this state, year and installment.');
+      throw new NotFoundException('ULB-wise Allocation form not found for this state, year and installment.');
     }
 
     return form;
@@ -405,12 +456,20 @@ export class DevolutionFormulaRowService {
       .exec();
     const errorRowCount = totalRowCount - rows.length;
 
-    const formDoc = await this.formModel.findById(formId).select('totalMoHUAAllocation excelRowCount').lean().exec();
+    const formDoc = await this.formModel
+      .findById(formId)
+      .select('totalMoHUAAllocation excelRowCount missingUlbCount')
+      .lean()
+      .exec();
     const totalMoHUAAllocation = ((formDoc as Record<string, unknown> | null)?.['totalMoHUAAllocation'] as number) ?? 0;
+    const missingUlbCount = ((formDoc as Record<string, unknown> | null)?.['missingUlbCount'] as number) ?? 0;
     const allocationBalanced = Math.abs(totalAllocatedSum - totalMoHUAAllocation) <= 0.001;
-    // Note: missingUlbCount is not re-checked here because row edits cannot introduce missing ULBs
-    // (only a new upload can). If ULB coverage gaps need fixing, use revalidateExcel.
-    const validationStatus = errorRowCount === 0 && allocationBalanced ? 'VALID' : 'INVALID';
+    // Row edits can't introduce a *new* missing ULB or duplicate (only a fresh Excel parse via
+    // validateExcel/revalidateExcel can), so this never recomputes missingUlbCount/duplicateUlbCount
+    // itself — it only reads back the persisted missingUlbCount so a still-outstanding gap isn't
+    // silently overwritten to VALID by a routine row edit (mirrors EULB's recalculateFormSummary,
+    // which includes missingDbUlbCount === 0 in the same way).
+    const validationStatus = errorRowCount === 0 && missingUlbCount === 0 && allocationBalanced ? 'VALID' : 'INVALID';
 
     await this.formModel
       .findByIdAndUpdate(formId, {
@@ -420,13 +479,13 @@ export class DevolutionFormulaRowService {
       .exec();
   }
 
-  // TODO: implement when ClaimLetter model is available.
-  // Throws if the ULB has an active claim letter locked for this year+installment.
+  // TODO: wire up to claim-letter's ClaimLetterUlbLock model (exists now, just not read here) —
+  // should throw if the ULB has an active claim letter lock for this year+installment.
   private assertNoActiveClaimLockForUlb(
     _ulbId: Types.ObjectId | null,
     _yearId: string,
     _installment: DfInstallment,
   ): void {
-    // stub — no-op until claim letter model is implemented
+    // Still a no-op — see TODO above.
   }
 }

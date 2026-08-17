@@ -6,8 +6,9 @@ import { XviFcUnspentStateFormRow } from 'src/schemas/xvi-fc/state/fc-unspent-st
 import { XviFcUnspentStateFormRowHistory } from 'src/schemas/xvi-fc/state/fc-unspent-state-form-row-history.schema';
 import { DevolutionFormulaRow } from 'src/schemas/xvi-fc/state/devolution-formula-row.schema';
 import { Ulb } from 'src/schemas/ulb.schema';
-import { ROW_STATUS } from 'src/common/constants/row-status.constants';
+import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import type { FcUnspentDevolutionFormLean, FcUnspentResolvedRow } from '../../types/fc-unspent-declaration.types';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 
 /** Creates a chainable Mongoose Query-like mock that resolves to `value`. */
 function q<T>(value: T) {
@@ -104,6 +105,11 @@ describe('FcUnspentDeclarationRowService', () => {
     ulbModel = {
       find: jest.fn().mockReturnValue(q([{ _id: ulbOid1, name: 'Alpha ULB', censusCode: '111', sbCode: 'A1' }])),
     };
+    const ulbEligibilityService = {
+      getEligibleUlbFilter: jest
+        .fn()
+        .mockImplementation((stateOid: unknown) => Promise.resolve({ state: stateOid, isActive: true })),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -112,6 +118,7 @@ describe('FcUnspentDeclarationRowService', () => {
         { provide: getModelToken(XviFcUnspentStateFormRowHistory.name), useValue: rowHistoryModel },
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: devolutionRowModel },
         { provide: getModelToken(Ulb.name), useValue: ulbModel },
+        { provide: UlbEligibilityService, useValue: ulbEligibilityService },
       ],
     }).compile();
 
@@ -120,12 +127,18 @@ describe('FcUnspentDeclarationRowService', () => {
 
   describe('resolveAndValidateRows', () => {
     it('requires at least one row when requireAtLeastOne is true', async () => {
-      const result = await service.resolveAndValidateRows(stateOid, [], devolutionForm, { requireAtLeastOne: true });
+      const result = await service.resolveAndValidateRows(stateOid, [], devolutionForm, {
+        requireAtLeastOne: true,
+        thresholdPercent: 10,
+      });
       expect(result.errors['unspentUlbData']).toBeDefined();
     });
 
     it('allows zero rows when requireAtLeastOne is false', async () => {
-      const result = await service.resolveAndValidateRows(stateOid, [], devolutionForm, { requireAtLeastOne: false });
+      const result = await service.resolveAndValidateRows(stateOid, [], devolutionForm, {
+        requireAtLeastOne: false,
+        thresholdPercent: 10,
+      });
       expect(result.rows).toEqual([]);
       expect(Object.keys(result.errors)).toHaveLength(0);
     });
@@ -138,7 +151,7 @@ describe('FcUnspentDeclarationRowService', () => {
           { ulbId: ulbOid1.toString(), unspentAmount: 7 },
         ],
         devolutionForm,
-        { requireAtLeastOne: false },
+        { requireAtLeastOne: false, thresholdPercent: 10 },
       );
       expect(result.errors['unspentUlbData']?.[0].code).toBe('duplicateUlb');
     });
@@ -149,7 +162,7 @@ describe('FcUnspentDeclarationRowService', () => {
         stateOid,
         [{ ulbId: ulbOid1.toString(), unspentAmount: 5 }],
         devolutionForm,
-        { requireAtLeastOne: false },
+        { requireAtLeastOne: false, thresholdPercent: 10 },
       );
       expect(result.errors['unspentUlbData.0.ulbId']?.[0].code).toBe('ulbNotFound');
     });
@@ -160,7 +173,7 @@ describe('FcUnspentDeclarationRowService', () => {
         stateOid,
         [{ ulbId: ulbOid1.toString(), unspentAmount: 5 }],
         devolutionForm,
-        { requireAtLeastOne: false },
+        { requireAtLeastOne: false, thresholdPercent: 10 },
       );
       expect(result.errors['unspentUlbData.0.ulbId']?.[0].code).toBe('noAllocation');
     });
@@ -170,7 +183,7 @@ describe('FcUnspentDeclarationRowService', () => {
         stateOid,
         [{ ulbId: ulbOid1.toString(), unspentAmount: 0 }],
         devolutionForm,
-        { requireAtLeastOne: false },
+        { requireAtLeastOne: false, thresholdPercent: 10 },
       );
       expect(result.errors['unspentUlbData.0.unspentAmount']?.[0].code).toBe('invalidAmount');
     });
@@ -180,7 +193,7 @@ describe('FcUnspentDeclarationRowService', () => {
         stateOid,
         [{ ulbId: ulbOid1.toString(), unspentAmount: 5 }],
         devolutionForm,
-        { requireAtLeastOne: false },
+        { requireAtLeastOne: false, thresholdPercent: 10 },
       );
       expect(result.rows[0]).toMatchObject({ allocationAmount: 100, allocationPerc: 5, eligibility: true });
     });
@@ -190,7 +203,7 @@ describe('FcUnspentDeclarationRowService', () => {
         stateOid,
         [{ ulbId: ulbOid1.toString(), unspentAmount: 5 }],
         devolutionForm,
-        { requireAtLeastOne: false },
+        { requireAtLeastOne: false, thresholdPercent: 10 },
       );
       expect(result.rows[0].allocationSource).toEqual({
         devolutionFormId: devolutionFormOid,
@@ -206,7 +219,7 @@ describe('FcUnspentDeclarationRowService', () => {
         stateOid,
         [{ ulbId: ulbOid1.toString(), unspentAmount: 10 }], // 10/100 = 10% == threshold
         devolutionForm,
-        { requireAtLeastOne: false },
+        { requireAtLeastOne: false, thresholdPercent: 10 },
       );
       expect(result.rows[0].allocationPerc).toBe(10);
       expect(result.rows[0].eligibility).toBe(true);
@@ -217,9 +230,20 @@ describe('FcUnspentDeclarationRowService', () => {
         stateOid,
         [{ ulbId: ulbOid1.toString(), unspentAmount: 10.000001 }], // 10.000001% > 10%
         devolutionForm,
-        { requireAtLeastOne: false },
+        { requireAtLeastOne: false, thresholdPercent: 10 },
       );
       expect(result.rows[0].allocationPerc).toBeCloseTo(10.000001, 6);
+      expect(result.rows[0].eligibility).toBe(false);
+    });
+
+    it('with thresholdPercent 0, marks a row with any positive unspentAmount as not eligible', async () => {
+      const result = await service.resolveAndValidateRows(
+        stateOid,
+        [{ ulbId: ulbOid1.toString(), unspentAmount: 0.01 }],
+        devolutionForm,
+        { requireAtLeastOne: false, thresholdPercent: 0 },
+      );
+      expect(result.rows[0].allocationPerc).toBeGreaterThan(0);
       expect(result.rows[0].eligibility).toBe(false);
     });
 
@@ -237,7 +261,7 @@ describe('FcUnspentDeclarationRowService', () => {
         stateOid,
         [pollutedRow as unknown as { ulbId: string; unspentAmount: number }],
         devolutionForm,
-        { requireAtLeastOne: false },
+        { requireAtLeastOne: false, thresholdPercent: 10 },
       );
       const row = result.rows[0];
       expect(row.allocationAmount).toBe(100); // from DevolutionFormulaRow, not the client
@@ -342,11 +366,11 @@ describe('FcUnspentDeclarationRowService', () => {
         yearOid,
         [resolvedRow],
         userOid,
-        ROW_STATUS.UPDATE_PENDING,
+        FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
         mockSession,
       );
       const ops = getBulkOps(rowModel['bulkWrite']);
-      expect(ops[0].updateOne.update.$set.rowStatus).toBe(ROW_STATUS.UPDATE_PENDING);
+      expect(ops[0].updateOne.update.$set.rowStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
     });
 
     it('still explicitly stamps rejectionRemark:null in $setOnInsert for a brand-new row inserted at final submit', async () => {
@@ -356,7 +380,7 @@ describe('FcUnspentDeclarationRowService', () => {
         yearOid,
         [resolvedRow],
         userOid,
-        ROW_STATUS.UPDATE_PENDING,
+        FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
         mockSession,
       );
       const ops = getBulkOps(rowModel['bulkWrite']);
@@ -372,7 +396,7 @@ describe('FcUnspentDeclarationRowService', () => {
         yearOid,
         [resolvedRow, rowB],
         userOid,
-        ROW_STATUS.UPDATE_PENDING,
+        FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
         mockSession,
       );
       const ops = getBulkOps(rowModel['bulkWrite']);
@@ -391,7 +415,7 @@ describe('FcUnspentDeclarationRowService', () => {
         yearOid,
         [resolvedRow],
         userOid,
-        ROW_STATUS.UPDATE_PENDING,
+        FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
         mockSession,
       );
 
@@ -399,7 +423,7 @@ describe('FcUnspentDeclarationRowService', () => {
       expect(transitions[0]).toMatchObject({
         rowId: newRowId,
         previousStatus: null,
-        currentStatus: ROW_STATUS.UPDATE_PENDING,
+        currentStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
       });
     });
 
@@ -413,7 +437,7 @@ describe('FcUnspentDeclarationRowService', () => {
         yearOid,
         [resolvedRow],
         userOid,
-        ROW_STATUS.UPDATE_PENDING,
+        FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
         mockSession,
       );
 
@@ -426,7 +450,7 @@ describe('FcUnspentDeclarationRowService', () => {
       const existingRowId = new Types.ObjectId();
       rowModel['find'] = jest
         .fn()
-        .mockReturnValue(q([{ _id: existingRowId, ulbId: ulbOid1, rowStatus: ROW_STATUS.UPDATE_PENDING }]));
+        .mockReturnValue(q([{ _id: existingRowId, ulbId: ulbOid1, rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }]));
 
       const { transitions } = await service.applyRows(
         formOid,
@@ -434,7 +458,7 @@ describe('FcUnspentDeclarationRowService', () => {
         yearOid,
         [resolvedRow],
         userOid,
-        ROW_STATUS.UPDATE_PENDING,
+        FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
         mockSession,
       );
 
@@ -467,7 +491,7 @@ describe('FcUnspentDeclarationRowService', () => {
           {
             rowId,
             previousStatus: null,
-            currentStatus: ROW_STATUS.UPDATE_PENDING,
+            currentStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
             row: {
               ulbId: ulbOid1,
               censusCode: '111',
@@ -493,7 +517,7 @@ describe('FcUnspentDeclarationRowService', () => {
         row: rowId,
         form: formOid,
         previousStatus: null,
-        currentStatus: ROW_STATUS.UPDATE_PENDING,
+        currentStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
         snapshot: { rowNumber: 1, ulbId: ulbOid1, allocationAmount: 100, allocationSource: sampleAllocationSource },
         ipAddress: '127.0.0.1',
         userAgent: 'jest-agent',

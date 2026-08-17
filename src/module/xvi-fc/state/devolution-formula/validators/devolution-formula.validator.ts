@@ -60,12 +60,12 @@ export class DevolutionFormulaValidator {
       errors.push({ field: 'installment2Amount', code: 'required', message: 'Installment 2 Amount is required.' });
     }
     if (!parsed.devolutionFormula || !String(parsed.devolutionFormula).trim()) {
-      errors.push({ field: 'devolutionFormula', code: 'required', message: 'Devolution Formula is required.' });
+      errors.push({ field: 'devolutionFormula', code: 'required', message: 'Allocation Formula is required.' });
     } else if (String(parsed.devolutionFormula).trim().length > maxFormulaLength) {
       errors.push({
         field: 'devolutionFormula',
         code: 'maxlength',
-        message: `Devolution Formula cannot exceed ${maxFormulaLength} characters.`,
+        message: `Allocation Formula cannot exceed ${maxFormulaLength} characters.`,
         value: parsed.devolutionFormula,
       });
     }
@@ -192,12 +192,12 @@ export class DevolutionFormulaValidator {
 
     if (dto.devolutionFormula !== undefined) {
       if (!String(dto.devolutionFormula).trim()) {
-        errors.push({ field: 'devolutionFormula', code: 'required', message: 'Devolution Formula cannot be empty.' });
+        errors.push({ field: 'devolutionFormula', code: 'required', message: 'Allocation Formula cannot be empty.' });
       } else if (String(dto.devolutionFormula).trim().length > maxFormulaLength) {
         errors.push({
           field: 'devolutionFormula',
           code: 'maxlength',
-          message: `Devolution Formula cannot exceed ${maxFormulaLength} characters.`,
+          message: `Allocation Formula cannot exceed ${maxFormulaLength} characters.`,
           value: dto.devolutionFormula,
         });
       }
@@ -252,6 +252,7 @@ export class DevolutionFormulaValidator {
     errorRowCount: number;
     missingUlbCount: number;
     newUlbCount?: number;
+    duplicateUlbCount?: number;
     totalMoHUAAllocation: number;
     totalAllocatedSum: number;
     activeDatasetVersion: number;
@@ -262,6 +263,7 @@ export class DevolutionFormulaValidator {
       errorRowCount,
       missingUlbCount,
       newUlbCount = 0,
+      duplicateUlbCount = 0,
       totalMoHUAAllocation,
       totalAllocatedSum,
       activeDatasetVersion,
@@ -276,6 +278,7 @@ export class DevolutionFormulaValidator {
       errorRowCount,
       missingUlbCount,
       newUlbCount,
+      duplicateUlbCount,
       totalMoHUAAllocation,
       totalAllocatedSum,
       allUlbsCovered,

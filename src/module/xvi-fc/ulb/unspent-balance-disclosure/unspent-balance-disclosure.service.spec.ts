@@ -19,6 +19,7 @@ describe('UnspentBalanceDisclosureService', () => {
   let service: UnspentBalanceDisclosureService;
   let model: { findOne: jest.Mock; findOneAndUpdate: jest.Mock; findById: jest.Mock; findByIdAndUpdate: jest.Mock };
   let s3: { presignGet: jest.Mock };
+  let ulbEligibilityService: { assertUlbEligibleForGrantCycle: jest.Mock };
 
   const ulbId = new Types.ObjectId();
   const otherUlbId = new Types.ObjectId();
@@ -63,7 +64,8 @@ describe('UnspentBalanceDisclosureService', () => {
       findByIdAndUpdate: jest.fn(),
     };
     s3 = { presignGet: jest.fn().mockResolvedValue('https://signed.example/doc.pdf') };
-    service = new UnspentBalanceDisclosureService(model as never, s3 as never);
+    ulbEligibilityService = { assertUlbEligibleForGrantCycle: jest.fn().mockResolvedValue(undefined) };
+    service = new UnspentBalanceDisclosureService(model as never, s3 as never, ulbEligibilityService as never);
   });
 
   afterEach(() => jest.clearAllMocks());
@@ -146,7 +148,9 @@ describe('UnspentBalanceDisclosureService', () => {
     it('throws NotFoundException when the disclosure does not exist', async () => {
       model.findById.mockResolvedValue(null);
 
-      await expect(service.update('missing-id', {} as UpdateDisclosureDto, makeUser())).rejects.toThrow(NotFoundException);
+      await expect(service.update('missing-id', {} as UpdateDisclosureDto, makeUser())).rejects.toThrow(
+        NotFoundException,
+      );
     });
 
     it('throws ForbiddenException when the disclosure belongs to another ULB', async () => {
@@ -222,9 +226,7 @@ describe('UnspentBalanceDisclosureService', () => {
     });
 
     it('returns a presigned URL when the filepath belongs to fc15', async () => {
-      model.findById.mockReturnValue(
-        q({ ulb: ulbId, fc14: { manual: { bankAccounts: [] } }, fc15: makeFcPeriod() }),
-      );
+      model.findById.mockReturnValue(q({ ulb: ulbId, fc14: { manual: { bankAccounts: [] } }, fc15: makeFcPeriod() }));
 
       const result = await service.getDocumentSignedUrl('id-1', filepath, makeUser());
 

@@ -9,6 +9,7 @@ import { Ulb } from 'src/schemas/ulb.schema';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 
 function q<T>(value: T) {
   const chain: Record<string, unknown> = {};
@@ -74,6 +75,9 @@ describe('FcUnspentUlbOptionsService', () => {
       ),
     };
     ulbModel = { collection: { name: 'ulbs' } };
+    const ulbEligibilityService = {
+      getIneligibleUlbTypeIds: jest.fn().mockResolvedValue([]),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -81,6 +85,7 @@ describe('FcUnspentUlbOptionsService', () => {
         { provide: getModelToken(DevolutionFormulaForm.name), useValue: devolutionFormModel },
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: devolutionRowModel },
         { provide: getModelToken(Ulb.name), useValue: ulbModel },
+        { provide: UlbEligibilityService, useValue: ulbEligibilityService },
       ],
     }).compile();
 

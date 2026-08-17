@@ -31,6 +31,7 @@ import { State, StateDocument } from '../../schemas/state.schema';
 import { SideMenu, SideMenuDocument, MenuRole } from '../../schemas/side-menu.schema';
 import { XviFcCacheService, XVIFC_CACHE_KEY_PREFIX } from './cache/xvi-fc-cache.service';
 import { FormJsonService } from '../../master/form-json/form-json.service';
+import { UlbEligibilityService } from '../ulb-eligibility/ulb-eligibility.service';
 
 @Injectable()
 export class XviFcService {
@@ -53,6 +54,7 @@ export class XviFcService {
     private readonly bankAccountModel: Model<XviFcBankAccountDocument>,
     private readonly cache: XviFcCacheService,
     private readonly formJsonService: FormJsonService,
+    private readonly ulbEligibilityService: UlbEligibilityService,
   ) {}
 
   async getStateWiseData(stateId: string, requester: AuthUser): Promise<StateWiseResponseDto> {
@@ -61,7 +63,8 @@ export class XviFcService {
     }
 
     const stateObjectId = new Types.ObjectId(stateId);
-    const pipeline = buildGetStateWiseDataPipeline(stateObjectId);
+    const ineligibleUlbTypeIds = await this.ulbEligibilityService.getIneligibleUlbTypeIds('XVIFC');
+    const pipeline = buildGetStateWiseDataPipeline(stateObjectId, ineligibleUlbTypeIds);
     const [result] = await this.grantAllocationModel.aggregate<StateWiseResponseDto>(pipeline);
     if (!result) {
       throw new NotFoundException('No grant allocation data found for this state');
@@ -144,6 +147,10 @@ export class XviFcService {
       if (doc.icon) item.icon = doc.icon;
       if (doc.routerLink?.length) item.routerLink = doc.routerLink;
       if (doc.featureKey) item.featureKey = doc.featureKey;
+      if (doc.url) {
+        item.url = doc.url;
+        if (doc.target) item.target = doc.target;
+      }
 
       if (doc.type === 'group') {
         item.items = children
@@ -153,6 +160,10 @@ export class XviFcService {
             const child: SideMenuItemDto = { label: c.name };
             if (c.icon) child.icon = c.icon;
             if (c.featureKey) child.featureKey = c.featureKey;
+            if (c.url) {
+              child.url = c.url;
+              if (c.target) child.target = c.target;
+            }
             return child;
           });
       }
@@ -192,17 +203,20 @@ export class XviFcService {
     const ulb = new Types.ObjectId(ulbId);
     const designYear = new Types.ObjectId(designYearId);
 
-    const [annualAccount, disclosure, bankAccount] = await Promise.all([
+    const [annualAccounts, disclosure, bankAccount] = await Promise.all([
       this.annualAccountModel
-        .findOne({ ulb, design_year: designYear })
-        .select(
-          'auditedData.form_status auditedData.form_status_id unauditedData.form_status unauditedData.form_status_id',
-        )
+        .find({ ulb, design_year: designYear })
+        .select('sectionType form_status form_status_id')
         .lean()
         .exec(),
       this.disclosureModel.findOne({ ulb, designYear }).select('formStatus').lean().exec(),
       this.bankAccountModel.findOne({ ulb, designYear }).select('currentFormStatus').lean().exec(),
     ]);
+
+    // 'audited' is always the {ulb, design_year} anchor — its _id is what every other
+    // annual-account endpoint hands back as annualAccountId (see AnnualAccountsService).
+    const auditedDoc = annualAccounts.find((a) => a.sectionType === 'audited');
+    const unauditedDoc = annualAccounts.find((a) => a.sectionType === 'unaudited');
 
     const sectionStatus = (section: Record<string, unknown> | undefined | null) => ({
       form_status: (section?.['form_status'] ?? AnnualAccountFormStatus.NOT_STARTED) as AnnualAccountFormStatus,
@@ -215,13 +229,9 @@ export class XviFcService {
       FORM_STATUS.NOT_STARTED;
 
     return {
-      annualAccountId: (annualAccount as Record<string, unknown> | null)?.['_id']?.toString() ?? null,
-      auditedData: sectionStatus(
-        (annualAccount as Record<string, unknown> | null)?.['auditedData'] as Record<string, unknown>,
-      ),
-      unauditedData: sectionStatus(
-        (annualAccount as Record<string, unknown> | null)?.['unauditedData'] as Record<string, unknown>,
-      ),
+      annualAccountId: auditedDoc?._id?.toString() ?? null,
+      auditedData: sectionStatus(auditedDoc as Record<string, unknown> | undefined),
+      unauditedData: sectionStatus(unauditedDoc as Record<string, unknown> | undefined),
       unspentBalanceDisclosure: {
         form_status: isSubmitted ? 'SUBMITTED' : 'NOT_STARTED',
         form_status_id: null,

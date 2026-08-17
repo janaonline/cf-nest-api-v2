@@ -7,6 +7,7 @@ import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { EmailQueueService } from 'src/core/queue/email-queue/email-queue.service';
 import { FormJsonService } from 'src/master/form-json/form-json.service';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
+import { EmailDomainValidationService } from 'src/core/email-domain-validation/email-domain-validation.service';
 import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
 import type { IAuthUser } from 'src/common/interfaces/auth-user.interface';
 import { Role } from 'src/module/auth/enum/role.enum';
@@ -47,9 +48,10 @@ describe('UlbService', () => {
     db?: unknown;
   };
   let stateModel: { findById: jest.Mock; find: jest.Mock };
-  let userModel: { create: jest.Mock; findOne: jest.Mock; updateMany: jest.Mock };
+  let userModel: { create: jest.Mock; findOne: jest.Mock; find: jest.Mock; findById: jest.Mock };
   let formJsonService: { findByType: jest.Mock };
   let dynamicFormValidation: { validateFinalSubmitAndBuildPayload: jest.Mock; validateDraftAndBuildPayload: jest.Mock };
+  let emailDomainValidation: { domainHasMxRecord: jest.Mock };
   let emailQueueService: { addEmailJob: jest.Mock };
   let configService: { get: jest.Mock };
   let fileTokenService: { signFileUrl: jest.Mock };
@@ -87,13 +89,18 @@ describe('UlbService', () => {
         lean: jest.fn().mockReturnThis(),
         exec: jest.fn().mockResolvedValue(null),
       }),
-      updateMany: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue({ acknowledged: true }) }),
+      find: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue([]) }),
+      findById: jest.fn().mockReturnValue({
+        select: jest.fn().mockReturnThis(),
+        lean: jest.fn().mockResolvedValue(null),
+      }),
     };
     formJsonService = { findByType: jest.fn().mockRejectedValue(new NotFoundException()) };
     dynamicFormValidation = {
       validateFinalSubmitAndBuildPayload: jest.fn(),
       validateDraftAndBuildPayload: jest.fn(),
     };
+    emailDomainValidation = { domainHasMxRecord: jest.fn().mockResolvedValue(true) };
     emailQueueService = { addEmailJob: jest.fn().mockResolvedValue(undefined) };
     configService = { get: jest.fn().mockReturnValue('https://cityfinance.in') };
     fileTokenService = { signFileUrl: jest.fn((url: string) => `signed::${url}`) };
@@ -107,6 +114,7 @@ describe('UlbService', () => {
         { provide: getModelToken(User.name), useValue: userModel },
         { provide: FormJsonService, useValue: formJsonService },
         { provide: DynamicFormValidationService, useValue: dynamicFormValidation },
+        { provide: EmailDomainValidationService, useValue: emailDomainValidation },
         { provide: EmailQueueService, useValue: emailQueueService },
         { provide: ConfigService, useValue: configService },
         { provide: FileTokenService, useValue: fileTokenService },
@@ -359,7 +367,10 @@ describe('UlbService', () => {
       });
       ulbModel.create.mockResolvedValue({ _id: ulbId, toObject: () => ({ _id: ulbId, code: 'AP010' }) });
 
-      await service.create({ data: {} }, stateUser);
+      // ADMIN submissions are auto-approved, so the invite email goes out immediately — a STATE
+      // (PENDING) submission defers it to approve() instead (see 'creates the primary contact
+      // login inactive for a STATE (PENDING) submission' and the 'approve' describe block below).
+      await service.create({ data: {} }, adminUser);
 
       const [patch] = ulbModel.create.mock.calls[0] as [Record<string, unknown>];
       expect(patch).not.toHaveProperty('primaryContactName');
@@ -376,6 +387,9 @@ describe('UlbService', () => {
           email: 'commissioner@ulb.gov.in',
           mobile: '9849001234',
           designation: 'Commissioner',
+          accountantName: 'K. Suresh Babu',
+          accountantEmail: 'commissioner@ulb.gov.in',
+          accountantConatactNumber: '9849001234',
           role: Role.ULB,
           ulb: ulbId,
         }),
@@ -383,6 +397,29 @@ describe('UlbService', () => {
       expect(emailQueueService.addEmailJob).toHaveBeenCalledWith(
         expect.objectContaining({ to: 'commissioner@ulb.gov.in', templateName: './ulb-member-invite' }),
       );
+    });
+
+    it("throws BadRequestException when the primary contact email's domain has no MX record", async () => {
+      dynamicFormValidation.validateFinalSubmitAndBuildPayload.mockReturnValue({
+        isValid: true,
+        errors: {},
+        sanitizedPayload: {
+          code: 'AP018',
+          name: 'Bad Domain ULB',
+          state: stateId,
+          ulbType: ulbTypeId,
+          primaryContactName: 'K. Suresh Babu',
+          primaryContactDesignation: 'Commissioner',
+          primaryContactEmail: 'commissioner@ulb.gvo.in',
+          primaryContactMobile: '9849001239',
+        },
+      });
+      emailDomainValidation.domainHasMxRecord.mockResolvedValue(false);
+
+      await expect(service.create({ data: {} }, adminUser)).rejects.toThrow(BadRequestException);
+      expect(emailDomainValidation.domainHasMxRecord).toHaveBeenCalledWith('commissioner@ulb.gvo.in');
+      expect(ulbModel.create).not.toHaveBeenCalled();
+      expect(userModel.create).not.toHaveBeenCalled();
     });
 
     it('copies the auto-generated sbCode onto the primary-contact login and invite email (no censusCode submitted)', async () => {
@@ -403,7 +440,7 @@ describe('UlbService', () => {
       });
       ulbModel.create.mockResolvedValue({ _id: ulbId, toObject: () => ({ _id: ulbId, code: 'AP017' }) });
 
-      await service.create({ data: {} }, stateUser);
+      await service.create({ data: {} }, adminUser);
 
       expect(userModel.create).toHaveBeenCalledWith(expect.objectContaining({ censusCode: null, sbCode: '900001' }));
       const [emailJob] = emailQueueService.addEmailJob.mock.calls[0] as [{ mailData: Record<string, unknown> }];
@@ -428,7 +465,7 @@ describe('UlbService', () => {
       });
       ulbModel.create.mockResolvedValue({ _id: ulbId, toObject: () => ({ _id: ulbId, code: 'AP018' }) });
 
-      await service.create({ data: {} }, stateUser);
+      await service.create({ data: {} }, adminUser);
 
       expect(userModel.create).toHaveBeenCalledWith(expect.objectContaining({ censusCode: '800011', sbCode: null }));
       const [emailJob] = emailQueueService.addEmailJob.mock.calls[0] as [{ mailData: Record<string, unknown> }];
@@ -455,6 +492,9 @@ describe('UlbService', () => {
       await service.create({ data: {} }, stateUser);
 
       expect(userModel.create).toHaveBeenCalledWith(expect.objectContaining({ isActive: false, status: 'APPROVED' }));
+      // The login isn't usable yet (PENDING ULB) — the invite is deferred to approve() instead
+      // of being emailed now with credentials that won't work until an ADMIN approves the ULB.
+      expect(emailQueueService.addEmailJob).not.toHaveBeenCalled();
     });
 
     it('creates the primary contact login active for an ADMIN (auto-approved) submission', async () => {
@@ -642,6 +682,85 @@ describe('UlbService', () => {
 
       expect(result.data[0].stateName).toBe('Andhra Pradesh');
       expect(result.data[0].ulbTypeName).toBe('Municipal Corporation');
+    });
+
+    it("filters by presence of 'approval', not its status, when approvalStatus is 'EXISTING'", async () => {
+      const find = jest.fn().mockReturnValue({
+        sort: jest.fn().mockReturnThis(),
+        skip: jest.fn().mockReturnThis(),
+        limit: jest.fn().mockReturnThis(),
+        lean: jest.fn().mockResolvedValue([]),
+      });
+      ulbModel.find = find;
+      ulbModel.countDocuments.mockResolvedValue(0);
+
+      await service.findAll({ approvalStatus: 'EXISTING', page: 1, limit: 10 }, adminUser);
+
+      const [filter] = find.mock.calls[0] as [{ approval?: unknown; 'approval.status'?: unknown }];
+      expect(filter.approval).toEqual({ $exists: false });
+      expect(filter['approval.status']).toBeUndefined();
+    });
+
+    it('flags a legacy row with no stored approval as isExistingUser and backfills a synthetic APPROVED block', async () => {
+      const legacyRow = {
+        _id: new Types.ObjectId(),
+        name: 'Legacy ULB',
+        state: new Types.ObjectId(stateId),
+        ulbType: new Types.ObjectId(ulbTypeId),
+      };
+      ulbModel.find = jest.fn().mockReturnValue({
+        sort: jest.fn().mockReturnThis(),
+        skip: jest.fn().mockReturnThis(),
+        limit: jest.fn().mockReturnThis(),
+        lean: jest.fn().mockResolvedValue([legacyRow]),
+      });
+      ulbModel.countDocuments.mockResolvedValue(1);
+      stateModel.find = jest.fn().mockReturnValue({
+        lean: jest.fn().mockResolvedValue([{ _id: stateId, name: 'Andhra Pradesh' }]),
+      });
+      ulbModel.db = {
+        collection: jest.fn().mockReturnValue({
+          find: jest.fn().mockReturnValue({
+            toArray: jest.fn().mockResolvedValue([{ _id: ulbTypeId, name: 'Municipal Corporation' }]),
+          }),
+        }),
+      };
+
+      const result = await service.findAll({ page: 1, limit: 10 }, adminUser);
+
+      expect(result.data[0].isExistingUser).toBe(true);
+      expect(result.data[0].approval).toMatchObject({ status: 'APPROVED', submittedBy: null, reviewedBy: null });
+    });
+
+    it('marks a row that already has a stored approval as isExistingUser: false', async () => {
+      const reviewedRow = {
+        _id: new Types.ObjectId(),
+        name: 'Reviewed ULB',
+        state: new Types.ObjectId(stateId),
+        ulbType: new Types.ObjectId(ulbTypeId),
+        approval: { status: 'APPROVED', reviewedBy: new Types.ObjectId(), reviewedAt: new Date() },
+      };
+      ulbModel.find = jest.fn().mockReturnValue({
+        sort: jest.fn().mockReturnThis(),
+        skip: jest.fn().mockReturnThis(),
+        limit: jest.fn().mockReturnThis(),
+        lean: jest.fn().mockResolvedValue([reviewedRow]),
+      });
+      ulbModel.countDocuments.mockResolvedValue(1);
+      stateModel.find = jest.fn().mockReturnValue({
+        lean: jest.fn().mockResolvedValue([{ _id: stateId, name: 'Andhra Pradesh' }]),
+      });
+      ulbModel.db = {
+        collection: jest.fn().mockReturnValue({
+          find: jest.fn().mockReturnValue({
+            toArray: jest.fn().mockResolvedValue([{ _id: ulbTypeId, name: 'Municipal Corporation' }]),
+          }),
+        }),
+      };
+
+      const result = await service.findAll({ page: 1, limit: 10 }, adminUser);
+
+      expect(result.data[0].isExistingUser).toBe(false);
     });
   });
 
@@ -953,7 +1072,7 @@ describe('UlbService', () => {
   describe('approve', () => {
     it('marks a ULB APPROVED and records the reviewer', async () => {
       ulbModel.findByIdAndUpdate.mockReturnValue({
-        lean: jest.fn().mockResolvedValue({ _id: 'x', approval: { status: 'APPROVED' } }),
+        lean: jest.fn().mockResolvedValue({ _id: 'x', name: 'Some ULB', approval: { status: 'APPROVED' } }),
       });
       const id = new Types.ObjectId().toString();
 
@@ -962,8 +1081,64 @@ describe('UlbService', () => {
       const [, updateArg] = ulbModel.findByIdAndUpdate.mock.calls[0] as [string, { $set: Record<string, unknown> }];
       expect(updateArg.$set['approval.status']).toBe('APPROVED');
       expect(updateArg.$set['approval.reviewedBy']).toBeInstanceOf(Types.ObjectId);
-      expect(result).toEqual({ _id: 'x', approval: { status: 'APPROVED' } });
-      expect(userModel.updateMany).toHaveBeenCalledWith({ ulb: id, isDeleted: false }, { $set: { isActive: true } });
+      expect(result).toEqual({ _id: 'x', name: 'Some ULB', approval: { status: 'APPROVED' } });
+      expect(userModel.find).toHaveBeenCalledWith({
+        ulb: new Types.ObjectId(id),
+        isDeleted: false,
+        isActive: false,
+      });
+    });
+
+    it('activates a still-pending primary-contact login and sends its first invite email, with a freshly generated temp password', async () => {
+      ulbModel.findByIdAndUpdate.mockReturnValue({
+        lean: jest.fn().mockResolvedValue({ _id: 'x', name: 'Pending ULB', approval: { status: 'APPROVED' } }),
+      });
+      const contact = {
+        _id: new Types.ObjectId(),
+        email: 'commissioner@ulb.gov.in',
+        name: 'K. Suresh Babu',
+        mobile: '9849001234',
+        censusCode: '',
+        sbCode: '900001',
+        isNewUser: true,
+        isActive: false,
+        password: 'old-hash',
+        tempPasswordExpiresAt: new Date('2020-01-01'),
+        save: jest.fn().mockResolvedValue(undefined),
+      };
+      userModel.find.mockReturnValue({ exec: jest.fn().mockResolvedValue([contact]) });
+
+      await service.approve(new Types.ObjectId().toString(), adminUser);
+
+      expect(contact.isActive).toBe(true);
+      expect(contact.password).not.toBe('old-hash');
+      expect(contact.tempPasswordExpiresAt.getTime()).toBeGreaterThan(Date.now());
+      expect(contact.save).toHaveBeenCalled();
+      const [emailJob] = emailQueueService.addEmailJob.mock.calls[0] as [
+        { to: string; templateName: string; mailData: Record<string, unknown> },
+      ];
+      expect(emailJob).toMatchObject({ to: 'commissioner@ulb.gov.in', templateName: './ulb-member-invite' });
+      expect(emailJob.mailData).toMatchObject({ loginCode: '900001', loginCodeLabel: 'Login ID' });
+    });
+
+    it('reactivates a non-new-user login tied to the ULB without re-sending an invite', async () => {
+      ulbModel.findByIdAndUpdate.mockReturnValue({
+        lean: jest.fn().mockResolvedValue({ _id: 'x', name: 'Some ULB', approval: { status: 'APPROVED' } }),
+      });
+      const contact = {
+        _id: new Types.ObjectId(),
+        email: 'already-claimed@ulb.gov.in',
+        isNewUser: false,
+        isActive: false,
+        save: jest.fn().mockResolvedValue(undefined),
+      };
+      userModel.find.mockReturnValue({ exec: jest.fn().mockResolvedValue([contact]) });
+
+      await service.approve(new Types.ObjectId().toString(), adminUser);
+
+      expect(contact.isActive).toBe(true);
+      expect(contact.save).toHaveBeenCalled();
+      expect(emailQueueService.addEmailJob).not.toHaveBeenCalled();
     });
 
     it('throws NotFoundException when the ULB does not exist', async () => {
@@ -984,6 +1159,67 @@ describe('UlbService', () => {
       const [, updateArg] = ulbModel.findByIdAndUpdate.mock.calls[0] as [string, { $set: Record<string, unknown> }];
       expect(updateArg.$set['approval.status']).toBe('REJECTED');
       expect(updateArg.$set['approval.rejectReason']).toBe('Duplicate code');
+    });
+
+    it('emails the STATE submitter that their ULB registration was rejected', async () => {
+      const submitterId = new Types.ObjectId();
+      ulbModel.findByIdAndUpdate.mockReturnValue({
+        lean: jest.fn().mockResolvedValue({
+          _id: 'x',
+          name: 'Vizag Municipal Corporation',
+          code: 'AP001',
+          approval: { status: 'REJECTED', submittedBy: submitterId },
+        }),
+      });
+      userModel.findById.mockReturnValue({
+        select: jest.fn().mockReturnThis(),
+        lean: jest.fn().mockResolvedValue({ email: 'state.user@ulb.gov.in', name: 'State User' }),
+      });
+
+      await service.reject(new Types.ObjectId().toString(), { reason: 'Duplicate code' }, adminUser);
+
+      expect(userModel.findById).toHaveBeenCalledWith(submitterId);
+      const [emailJob] = emailQueueService.addEmailJob.mock.calls[0] as [
+        { to: string; templateName: string; mailData: Record<string, unknown> },
+      ];
+      expect(emailJob.to).toBe('state.user@ulb.gov.in');
+      expect(emailJob.templateName).toBe('./ulb-rejected');
+      expect(emailJob.mailData).toMatchObject({
+        ulbName: 'Vizag Municipal Corporation',
+        ulbCode: 'AP001',
+        reason: 'Duplicate code',
+      });
+    });
+
+    it('does not attempt to email when the ULB has no recorded submitter', async () => {
+      ulbModel.findByIdAndUpdate.mockReturnValue({
+        lean: jest.fn().mockResolvedValue({ _id: 'x', approval: { status: 'REJECTED', submittedBy: null } }),
+      });
+
+      await service.reject(new Types.ObjectId().toString(), { reason: 'Duplicate code' }, adminUser);
+
+      expect(userModel.findById).not.toHaveBeenCalled();
+      expect(emailQueueService.addEmailJob).not.toHaveBeenCalled();
+    });
+
+    it('does not fail the request when the rejection email fails to queue', async () => {
+      const submitterId = new Types.ObjectId();
+      ulbModel.findByIdAndUpdate.mockReturnValue({
+        lean: jest.fn().mockResolvedValue({
+          _id: 'x',
+          name: 'Vizag Municipal Corporation',
+          approval: { status: 'REJECTED', submittedBy: submitterId },
+        }),
+      });
+      userModel.findById.mockReturnValue({
+        select: jest.fn().mockReturnThis(),
+        lean: jest.fn().mockResolvedValue({ email: 'state.user@ulb.gov.in' }),
+      });
+      emailQueueService.addEmailJob.mockRejectedValueOnce(new Error('queue unavailable'));
+
+      await expect(
+        service.reject(new Types.ObjectId().toString(), { reason: 'Duplicate code' }, adminUser),
+      ).resolves.toBeDefined();
     });
   });
 });

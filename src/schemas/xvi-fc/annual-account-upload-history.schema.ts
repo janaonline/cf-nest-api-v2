@@ -40,6 +40,12 @@ export class XviFcAnnualAccountUploadHistory {
   @Prop({ required: true })
   section: string;
 
+  /** 'AUDITED' | 'UNAUDITED' — sent explicitly by the frontend alongside `section` and forwarded
+   *  to the OCR API's `audit_type` field. Persisted here (not derived from `section`) so a retry
+   *  re-submits with the same value the original upload used. */
+  @Prop({ required: true })
+  auditType: string;
+
   @Prop({ required: true })
   docId: string;
 

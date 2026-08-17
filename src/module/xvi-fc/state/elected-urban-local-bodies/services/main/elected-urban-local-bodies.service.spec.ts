@@ -17,6 +17,7 @@ import { ConfigService } from '@nestjs/config';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { AccessLevel, Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { EulbFormJsonConfigService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/form-json/elected-urban-local-bodies-form-json.service';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 import type { EulbTypedFieldConfig } from 'src/module/xvi-fc/state/elected-urban-local-bodies/helpers/elected-urban-local-bodies-form-json.helpers';
 import type { FormFieldOption } from 'src/module/xvi-fc/common/types/field-config.type';
 import type { EulbDumpRowRecord } from 'src/module/xvi-fc/state/elected-urban-local-bodies/types/elected-urban-local-bodies.types';
@@ -93,7 +94,6 @@ const mockSavedDbRows = [
     dateOfConstitution: new Date('2022-06-15T00:00:00.000Z'),
     dateOfExpiry: new Date('2027-06-14T00:00:00.000Z'),
     remarks: 'All good',
-    rowType: 'DB_ULB',
     isActive: true,
   },
   {
@@ -105,22 +105,20 @@ const mockSavedDbRows = [
     dateOfConstitution: undefined,
     dateOfExpiry: undefined,
     remarks: '',
-    rowType: 'DB_ULB',
     isActive: true,
   },
 ];
 
-/** EXTRA_ULB row that should never appear in a newly generated template. */
+/** Unmatched row (no ulbId) that should never appear in a newly generated template. */
 const mockExtraUlbRow = {
   ulbId: undefined,
   rowNumber: 3,
   censusCode: 'EX01',
   ulbName: 'Extra ULB One',
-  electedBodyStatus: 'Exempt',
+  electedBodyStatus: '6th Schedule',
   dateOfConstitution: undefined,
   dateOfExpiry: undefined,
   remarks: 'User added',
-  rowType: 'EXTRA_ULB',
   isActive: true,
 };
 
@@ -140,7 +138,6 @@ const dumpRows: DumpRowFixture[] = [
     dateOfConstitution: new Date('2022-06-15T00:00:00.000Z'),
     dateOfExpiry: new Date('2027-06-14T00:00:00.000Z'),
     remarks: 'Portal corrected',
-    rowType: 'DB_ULB',
     validationStatus: 'VALID',
     lastUpdatedSource: 'PORTAL',
     datasetVersion: 2,
@@ -161,7 +158,6 @@ const dumpRows: DumpRowFixture[] = [
     dateOfConstitution: null,
     dateOfExpiry: null,
     remarks: '',
-    rowType: 'DB_ULB',
     validationStatus: 'VALID',
     lastUpdatedSource: 'EXCEL',
     datasetVersion: 2,
@@ -173,11 +169,10 @@ const dumpRows: DumpRowFixture[] = [
     rowNumber: 3,
     censusCode: 'OLD01',
     ulbName: 'Old Version ULB',
-    electedBodyStatus: 'Exempt',
+    electedBodyStatus: '6th Schedule',
     dateOfConstitution: null,
     dateOfExpiry: null,
     remarks: 'Old version',
-    rowType: 'EXTRA_ULB',
     validationStatus: 'VALID',
     lastUpdatedSource: 'EXCEL',
     datasetVersion: 1,
@@ -189,11 +184,10 @@ const dumpRows: DumpRowFixture[] = [
     rowNumber: 4,
     censusCode: 'INACTIVE01',
     ulbName: 'Inactive ULB',
-    electedBodyStatus: 'Exempt',
+    electedBodyStatus: '6th Schedule',
     dateOfConstitution: null,
     dateOfExpiry: null,
     remarks: 'Inactive row',
-    rowType: 'EXTRA_ULB',
     validationStatus: 'VALID',
     lastUpdatedSource: 'EXCEL',
     datasetVersion: 2,
@@ -227,6 +221,16 @@ const MOCK_TYPED_ROW_EDIT_FIELDS: EulbTypedFieldConfig[] = [
     validations: [],
   },
   {
+    key: 'signedElectedbodyFile',
+    label: 'Upload Signed elected bodies list',
+    formFieldType: 'file',
+    fieldTypes: ['EULB_MAIN_FORM_FIELDS'],
+    folderPath: 'state/test/',
+    allowedFileTypes: ['pdf'],
+    maxFileSize: 20,
+    validations: [{ name: 'required', validator: null, message: 'This field is required.' }],
+  },
+  {
     key: 'censusCode',
     label: 'Census Code',
     formFieldType: 'text',
@@ -245,19 +249,31 @@ const MOCK_TYPED_ROW_EDIT_FIELDS: EulbTypedFieldConfig[] = [
     label: 'Elected Body Status',
     formFieldType: 'select',
     fieldTypes: ['EULB_ROW_EDIT_FIELDS'],
-    options: ['Constituted', 'Not Constituted', 'Exempt'].map((s) => ({ id: s, label: s })) as FormFieldOption[],
+    options: [
+      { id: 'Constituted', label: 'Constituted' },
+      { id: 'Not Constituted', label: 'Not Constituted' },
+      { id: '6th Schedule', label: '6th Schedule' },
+    ] as FormFieldOption[],
     validations: [{ name: 'required', validator: null, message: 'Elected Body Status is required.' }],
   },
   {
     key: 'dateOfConstitution',
-    label: 'Date of Constitution',
+    label: 'Date on which the elected body is in place.',
     formFieldType: 'date',
     fieldTypes: ['EULB_ROW_EDIT_FIELDS'],
     minDate: '2021-05-31',
     maxDate: 'TODAY',
     validations: [
-      { name: 'minDate', validator: '2021-05-31', message: 'Date of Constitution cannot be before 31 May 2021.' },
-      { name: 'maxDate', validator: 'TODAY', message: 'Date of Constitution cannot be a future date.' },
+      {
+        name: 'minDate',
+        validator: '2021-05-31',
+        message: 'Date on which the elected body is in place cannot be before 31 May 2021.',
+      },
+      {
+        name: 'maxDate',
+        validator: 'TODAY',
+        message: 'Date on which the elected body is in place cannot be a future date.',
+      },
     ],
   },
   {
@@ -285,9 +301,25 @@ const mockEulbFormJsonConfigService = {
   loadFields: jest.fn().mockResolvedValue(MOCK_TYPED_ROW_EDIT_FIELDS),
 };
 
-const mockFormModel = { findOne: jest.fn(), findOneAndUpdate: jest.fn(), create: jest.fn() };
-const mockRowModel = { find: jest.fn() };
+const mockFormModel = {
+  findOne: jest.fn(),
+  findOneAndUpdate: jest.fn(),
+  create: jest.fn(),
+  db: { startSession: jest.fn() },
+};
+const mockRowModel = { find: jest.fn(), updateMany: jest.fn() };
 const mockUlbModel = { find: jest.fn(), countDocuments: jest.fn() };
+// Mirrors real behavior when no UlbType is excluded from the cycle: state + isActive only —
+// the filter-shape assertions below use objectContaining, so extra keys wouldn't break them
+// either, but this keeps the mock's output realistic.
+const mockUlbEligibilityService = {
+  getEligibleUlbFilter: jest.fn().mockImplementation((stateOid: unknown) =>
+    Promise.resolve({
+      state: stateOid,
+      isActive: true,
+    }),
+  ),
+};
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
@@ -313,6 +345,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: mockFormModel },
           { provide: getModelToken(ElectedUrbanLocalBodiesRow.name), useValue: mockRowModel },
           { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+          { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
           { provide: DynamicFormValidationService, useValue: null },
           { provide: XvifcFormActorsService, useValue: null },
           { provide: FileTokenService, useValue: null },
@@ -333,11 +366,11 @@ describe('ElectedUrbanLocalBodiesService', () => {
 
     // ── No active dataset (fallback path) ────────────────────────────────────
 
-    it('generates a workbook with electedBodyStatus dropdown derived from MOCK_TYPED_ROW_EDIT_FIELDS', async () => {
+    it('generates a workbook with electedBodyStatus dropdown derived from MOCK_TYPED_ROW_EDIT_FIELDS labels', async () => {
       const sheet = await generateAndLoad();
 
       const statusField = MOCK_TYPED_ROW_EDIT_FIELDS.find((f) => f.key === 'electedBodyStatus')!;
-      const expectedOpts = (statusField.options as FormFieldOption[]).map((o) => o.id).join(',');
+      const expectedOpts = (statusField.options as FormFieldOption[]).map((o) => o.label).join(',');
 
       const dvValues = Object.values(sheet.dataValidations.model);
       const listDv = dvValues.find((v) => v.type === 'list');
@@ -466,10 +499,10 @@ describe('ElectedUrbanLocalBodiesService', () => {
       expect(sheet.getRow(3).getCell(5).value).toBeFalsy();
     });
 
-    it('excludes EXTRA_ULB rows from the template when an active dataset exists', async () => {
+    it('excludes unmatched (no-ulbId) rows from the template when an active dataset exists', async () => {
       mockFormModel.findOne.mockReturnValueOnce(q(mockFormWithDataset));
-      // The service queries with rowType: DB_ULB; include the EXTRA_ULB in the mock
-      // to verify the service itself filters it out via the ulbId overlay mechanism.
+      // The service no longer filters by any row-type field at query time — it fetches every row
+      // for the active version and overlays by ulbId, which naturally skips a row with no ulbId.
       mockRowModel.find.mockReturnValueOnce(q([...mockSavedDbRows, mockExtraUlbRow]));
       const sheet = await generateAndLoad();
 
@@ -562,6 +595,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: mockFormModel },
           { provide: getModelToken(ElectedUrbanLocalBodiesRow.name), useValue: mockRowModel },
           { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+          { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
           { provide: DynamicFormValidationService, useValue: null },
           { provide: XvifcFormActorsService, useValue: null },
           { provide: FileTokenService, useValue: null },
@@ -623,17 +657,17 @@ describe('ElectedUrbanLocalBodiesService', () => {
     it('exports latest data source from lastUpdatedSource', async () => {
       const sheet = await dumpSheet();
 
-      expect(sheet.getRow(2).getCell(10).value).toBe('PORTAL');
-      expect(sheet.getRow(3).getCell(10).value).toBe('EXCEL');
+      expect(sheet.getRow(2).getCell(9).value).toBe('PORTAL');
+      expect(sheet.getRow(3).getCell(9).value).toBe('EXCEL');
     });
 
     it('exports submission metadata and row actor names', async () => {
       const sheet = await dumpSheet();
 
-      expect(sheet.getRow(2).getCell(12).value).toBe('Submitter User');
-      expect(sheet.getRow(2).getCell(13).value).toBe('2026-02-01T00:00:00.000Z');
-      expect(sheet.getRow(2).getCell(14).value).toBe('Creator User');
-      expect(sheet.getRow(2).getCell(15).value).toBe('Updater User');
+      expect(sheet.getRow(2).getCell(11).value).toBe('Submitter User');
+      expect(sheet.getRow(2).getCell(12).value).toBe('2026-02-01T00:00:00.000Z');
+      expect(sheet.getRow(2).getCell(13).value).toBe('Creator User');
+      expect(sheet.getRow(2).getCell(14).value).toBe('Updater User');
     });
 
     it('does not throw for empty rows and returns a workbook with headers', async () => {
@@ -647,10 +681,9 @@ describe('ElectedUrbanLocalBodiesService', () => {
         'Census Code',
         'ULB Name',
         'Elected Body Status',
-        'Date of Constitution',
+        'Date on which the elected body is in place.',
         'Date of Expiry',
         'Remarks',
-        'Row Type',
         'Validation Status',
         'Latest Data Source',
         'Dataset Version',
@@ -698,6 +731,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: mockFormModel },
           { provide: getModelToken(ElectedUrbanLocalBodiesRow.name), useValue: mockRowModel },
           { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+          { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
           { provide: DynamicFormValidationService, useValue: mockDynamicFormValidator },
           { provide: XvifcFormActorsService, useValue: mockActorsService },
           { provide: FileTokenService, useValue: mockFileTokenService },
@@ -711,13 +745,10 @@ describe('ElectedUrbanLocalBodiesService', () => {
       service = module.get<ElectedUrbanLocalBodiesService>(ElectedUrbanLocalBodiesService);
     });
 
-    it('includes extraUlbEditFields in the response with censusCode and ulbName entries', async () => {
+    it('does not include extraUlbEditFields — no row is ever unregistered, so nothing needs a censusCode/ulbName edit form', async () => {
       const result = await service.getForm(stateOid.toString(), yearOid.toString(), adminUser);
       const data = result.data as Record<string, unknown>;
-      expect(Array.isArray(data['extraUlbEditFields'])).toBe(true);
-      const fields = data['extraUlbEditFields'] as Array<{ key: string }>;
-      expect(fields.some((f) => f.key === 'censusCode')).toBe(true);
-      expect(fields.some((f) => f.key === 'ulbName')).toBe(true);
+      expect(data['extraUlbEditFields']).toBeUndefined();
     });
 
     it('leaves rowEditFields unchanged — does not include censusCode or ulbName', async () => {
@@ -940,6 +971,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: mockFormModel },
           { provide: getModelToken(ElectedUrbanLocalBodiesRow.name), useValue: mockRowModel },
           { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+          { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
           { provide: DynamicFormValidationService, useValue: mockValidator },
           { provide: XvifcFormActorsService, useValue: { buildActorsAndStateName: jest.fn() } },
           { provide: FileTokenService, useValue: null },
@@ -1014,6 +1046,43 @@ describe('ElectedUrbanLocalBodiesService', () => {
       expect((createArg['electedBodyExcelFile'] as { pageCount?: number | null }).pageCount).toBeNull();
     });
 
+    it('accepts and persists data.signedElectedbodyFile', async () => {
+      await service.saveDraft(
+        {
+          stateId: stateOid.toString(),
+          yearId: yearOid.toString(),
+          data: {
+            signedElectedbodyFile: {
+              originalName: 'signed.pdf',
+              path: 'state/signed.pdf',
+              mimeType: 'application/pdf',
+              sizeKb: 500,
+              createdAt: '2026-01-01T00:00:00.000Z',
+            },
+            checkboxConfirmation: true,
+          },
+        },
+        adminUser,
+        '',
+        '',
+      );
+
+      const createArg = (mockFormModel.create.mock.calls as unknown[][])[0][0] as Record<string, unknown>;
+      expect((createArg['signedElectedbodyFile'] as { originalName?: string }).originalName).toBe('signed.pdf');
+    });
+
+    it('leaves signedElectedbodyFile untouched when the client omits it from the draft payload', async () => {
+      await service.saveDraft(
+        { stateId: stateOid.toString(), yearId: yearOid.toString(), data: { checkboxConfirmation: true } },
+        adminUser,
+        '',
+        '',
+      );
+
+      const createArg = (mockFormModel.create.mock.calls as unknown[][])[0][0] as Record<string, unknown>;
+      expect(createArg['signedElectedbodyFile']).toBeUndefined();
+    });
+
     it('does not throw a mismatch error when client ulbCount differs from saved excelRowCount', async () => {
       // Prior behavior: mismatch between ulbCount and excelRowCount was a 400.
       // New behavior: ulbCount is backend-owned, so no mismatch check exists.
@@ -1037,6 +1106,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
 
   describe('finalSubmit', () => {
     let service: ElectedUrbanLocalBodiesService;
+    let mockSession: Record<string, jest.Mock>;
 
     const mockValidator = {
       validateFinalSubmitAndBuildPayload: jest.fn().mockReturnValue({
@@ -1073,6 +1143,13 @@ describe('ElectedUrbanLocalBodiesService', () => {
           sizeKb: 0.9765625,
           createdAt: '2026-01-01T00:00:00.000Z',
         },
+        signedElectedbodyFile: {
+          originalName: 'signed.pdf',
+          path: 'state/signed.pdf',
+          mimeType: 'application/pdf',
+          sizeKb: 500,
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
         checkboxConfirmation: true,
       },
     };
@@ -1084,6 +1161,15 @@ describe('ElectedUrbanLocalBodiesService', () => {
       mockFormModel.findOne.mockReturnValue(q(baseFormDoc));
       mockFormModel.findOneAndUpdate.mockReturnValue(q({ ...baseFormDoc, currentFormStatus: 3 }));
 
+      mockSession = {
+        startTransaction: jest.fn(),
+        commitTransaction: jest.fn().mockResolvedValue(undefined),
+        abortTransaction: jest.fn().mockResolvedValue(undefined),
+        endSession: jest.fn().mockResolvedValue(undefined),
+      };
+      mockFormModel.db.startSession.mockResolvedValue(mockSession);
+      mockRowModel.updateMany.mockReturnValue(q(undefined));
+
       const module: TestingModule = await Test.createTestingModule({
         providers: [
           ElectedUrbanLocalBodiesService,
@@ -1091,6 +1177,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: mockFormModel },
           { provide: getModelToken(ElectedUrbanLocalBodiesRow.name), useValue: mockRowModel },
           { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+          { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
           { provide: DynamicFormValidationService, useValue: mockValidator },
           { provide: XvifcFormActorsService, useValue: { buildActorsAndStateName: jest.fn() } },
           { provide: FileTokenService, useValue: null },
@@ -1144,6 +1231,65 @@ describe('ElectedUrbanLocalBodiesService', () => {
         $set: Record<string, unknown>;
       };
       expect((updateArg.$set['electedBodyExcelFile'] as { pageCount?: number | null }).pageCount).toBeNull();
+    });
+
+    it('persists data.signedElectedbodyFile in the final-submit update', async () => {
+      await service.finalSubmit(baseDto, adminUser, '', '');
+
+      const updateArg = (mockFormModel.findOneAndUpdate.mock.calls as unknown[][])[0][1] as {
+        $set: Record<string, unknown>;
+      };
+      expect((updateArg.$set['signedElectedbodyFile'] as { originalName?: string }).originalName).toBe('signed.pdf');
+    });
+
+    it('rejects final submit when signedElectedbodyFile is missing (required field validator fires)', async () => {
+      const mockValidatorRejecting = {
+        validateFinalSubmitAndBuildPayload: jest.fn().mockReturnValue({
+          isValid: false,
+          errors: {
+            signedElectedbodyFile: [
+              { field: 'signedElectedbodyFile', code: 'required', message: 'This field is required.' },
+            ],
+          },
+          sanitizedPayload: {},
+        }),
+      };
+      const module: TestingModule = await Test.createTestingModule({
+        providers: [
+          ElectedUrbanLocalBodiesService,
+          ExcelService,
+          { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: mockFormModel },
+          { provide: getModelToken(ElectedUrbanLocalBodiesRow.name), useValue: mockRowModel },
+          { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+          { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
+          { provide: DynamicFormValidationService, useValue: mockValidatorRejecting },
+          { provide: XvifcFormActorsService, useValue: { buildActorsAndStateName: jest.fn() } },
+          { provide: FileTokenService, useValue: null },
+          { provide: ConfigService, useValue: null },
+          { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
+          FileInfoNormalizerService,
+          { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
+        ],
+      }).compile();
+      const rejectingService = module.get<ElectedUrbanLocalBodiesService>(ElectedUrbanLocalBodiesService);
+
+      let caught: BadRequestException | undefined;
+      try {
+        await rejectingService.finalSubmit(
+          { ...baseDto, data: { ...baseDto.data, signedElectedbodyFile: undefined as never } },
+          adminUser,
+          '',
+          '',
+        );
+      } catch (e) {
+        caught = e as BadRequestException;
+      }
+
+      expect(caught).toBeDefined();
+      const response = caught!.getResponse() as { errors: Record<string, Array<{ code: string }>> };
+      expect(response.errors['signedElectedbodyFile']).toEqual(
+        expect.arrayContaining([expect.objectContaining({ code: 'required' })]),
+      );
     });
 
     it('blocks with electedBodyExcelFile.newUlbsAdded when extraExcelRowCount > 0', async () => {
@@ -1243,6 +1389,28 @@ describe('ElectedUrbanLocalBodiesService', () => {
       }
 
       expect(caught).toBeDefined();
+    });
+
+    it('bulk-updates active rows in the current dataset version to rowStatus UNDER_REVIEW_BY_MOHUA, in the same transaction as the parent update', async () => {
+      await service.finalSubmit(baseDto, adminUser, '', '');
+
+      expect(mockFormModel.db.startSession).toHaveBeenCalled();
+      expect(mockRowModel.updateMany).toHaveBeenCalledWith(
+        { form: formOid, datasetVersion: baseFormDoc.activeDatasetVersion, isActive: true },
+        { $set: { rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA } },
+        { session: mockSession },
+      );
+      expect(mockSession.commitTransaction).toHaveBeenCalled();
+    });
+
+    it('aborts the transaction and never commits when the row bulk-update fails', async () => {
+      mockRowModel.updateMany.mockReturnValue({ exec: jest.fn().mockRejectedValue(new Error('row write failed')) });
+
+      await expect(service.finalSubmit(baseDto, adminUser, '', '')).rejects.toThrow('row write failed');
+
+      expect(mockSession.abortTransaction).toHaveBeenCalled();
+      expect(mockSession.commitTransaction).not.toHaveBeenCalled();
+      expect(mockSession.endSession).toHaveBeenCalled();
     });
   });
 });

@@ -34,6 +34,15 @@ npm run migrate:xvifc-side-menu    # Migrate xvi-fc side-menu data (scripts/migr
 ```
 src/
 ├── module/auth/         # JWT auth, OTP, login, refresh token rotation
+├── module/ulb-eligibility/ # Shared, grant-cycle-parameterized ULB eligibility service (e.g. Cantonment
+│                        # Board exclusion from 'XVIFC') — consumed by both module/auth (login-time gate)
+│                        # and module/xvi-fc (write-path guards, list/template/count filters). Its
+│                        # ineligible-UlbType-id cache is Redis-backed (RedisService) and purely
+│                        # event-driven — no TTL — cleared only by admin/ulb-types's CRUD (below).
+│                        # `ulb-eligibility.constants.ts` holds the user-facing ineligibility message
+│                        # every call site throws — do not retype the literal string; the frontend
+│                        # (login.component.ts) matches on it verbatim to redirect instead of showing
+│                        # an inline error, so changing it means updating both sides together
 ├── module/xvi-fc/       # 16th Finance Commission forms (state/ULB/MoHUA roles)
 │   ├── ulb/             # annual_accounts (OCR via ANNUAL_ACCOUNT_PROCESSING_QUEUE), bank-account, unspent-balance-disclosure
 │   ├── state/           # sfc-status, elected-urban-local-bodies, devolution-formula, fc-unspent-declaration, dashboard
@@ -42,7 +51,10 @@ src/
 │   └── xvi-fc.module.ts # composition root importing the feature modules above
 ├── users/               # User CRUD with repository pattern
 ├── admin/
-│   └── afs-digitization/ # AFS file processing with BullMQ queues
+│   ├── afs-digitization/ # AFS file processing with BullMQ queues
+│   └── ulb-types/       # ADMIN-only CRUD for the `ulbtypes` reference-data collection (in particular
+│                        # `ineligibleForGrantCycles`); calls UlbEligibilityService.invalidate() on
+│                        # every create/update/remove that touches that field
 ├── web/
 │   └── resources-section/ # Resource downloads + async ZIP generation
 ├── common/              # Global filter (HttpExceptionFilter), interceptor (ResponseTransformInterceptor)
@@ -68,6 +80,7 @@ When defining models that belong to the digitization DB, use `MongooseModule.for
 4. `JwtRefreshStrategy` extracts the refresh token from the `refresh_token` cookie and compares against the stored hash
 5. `JwtAuthGuard` is registered globally (APP_GUARD); routes decorated with `@Public()` bypass it
 6. OTP login: `OtpService` generates + sends OTP, stored in Redis with `OTP_TTL_SECONDS` TTL
+7. XVI-FC grant-cycle eligibility gate: for `Role.ULB` users logging in with `dto.type` of `16thFC`/`XVIFC`, `LoginService.login()` checks `UlbEligibilityService.isUlbEligibleForGrantCycle(ulb, 'XVIFC')` — checked only *after* credentials are confirmed valid (never before, to avoid leaking a ULB's eligibility to an unauthenticated caller) — and rejects with `ForbiddenException` before issuing tokens if the ULB's type is excluded (e.g. Cantonment Board). `GET /auth/me` also exposes a live `isEligibleForXviFc` flag for already-authenticated sessions. `OtpService.verifyOtp()` deliberately does **not** carry this gate — it's a shared endpoint used by every grant cycle (15th FC, Ranking, etc.), and neither `VerifyOtpDto` nor the Redis OTP record carry a `type`/grant-cycle field to scope a check on the way `dto.type` lets `login()` do; a Cantonment-Board ULB that authenticates via this path is still blocked at the XVI-FC write-path guards (`assertUlbEligibleForGrantCycle`) and the frontend's `/xvifc/**` route guard (which re-derives eligibility live via `/auth/me`, independent of how the token was issued).
 
 ### Authorization
 
@@ -112,7 +125,9 @@ BullBoard admin UI is at `/admin/queues` (HTTP basic auth via `ADMIN_USER`/`ADMI
 ### Key Global Providers
 
 Registered in `AppModule` and available everywhere:
-- `CacheModule` (global, 5-min TTL in-memory)
+- `CacheModule` (global, 5-min TTL, **in-memory** — local to a single Node process, not shared across
+  replicas; prefer `RedisService` over this for anything that must invalidate consistently across
+  instances, e.g. `UlbEligibilityService`'s reference-data cache)
 - `ThrottlerModule` (60 req / 60s window; override per-route with `@Throttle()`)
 - `RedisModule` (global, inject `RedisService` to access the ioredis client)
 - `APP_GUARD`: `JwtAuthGuard` then `ThrottlerGuard` (order matters)
@@ -144,5 +159,7 @@ Required variables (see `.env` for dev defaults):
 | `AWS_BUCKET_NAME` / `AWS_DIGITIZATION_BUCKET_NAME` | S3 buckets |
 | `RECAPTCHA_SECRET_KEY` | reCAPTCHA v3 (set `RECAPTCHA_SKIP_DEV=true` locally) |
 | `OTP_TTL_SECONDS` | OTP expiry in Redis |
+| `OTP_FORCE_REAL_DELIVERY` | Set `true` in dev/staging to send real OTPs (random code + actual SMS/email) without flipping `NODE_ENV` |
 | `CLIENT_URL` / `WHITELISTED_DOMAINS` | CORS origins |
 | `BANK_ACCOUNT_ENCRYPTION_KEY` / `BANK_ACCOUNT_HASH_SECRET` | `xvi-fc` ULB bank-account encryption/hashing (`module/xvi-fc/ulb/bank-account`) |
+| `MANUAL_REVIEW_NOTIFY_EMAIL` | Fixed inbox emailed when a ULB requests manual review of a failed OCR validation (`module/xvi-fc/ulb/annual_accounts`) |

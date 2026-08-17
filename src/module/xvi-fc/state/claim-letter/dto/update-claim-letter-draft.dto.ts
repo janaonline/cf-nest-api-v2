@@ -10,7 +10,8 @@ export class UpdateClaimLetterDraftDto {
   @Type(() => ClaimLetterUlbSelectionDto)
   ulbSelections!: ClaimLetterUlbSelectionDto[];
 
-  // Optimistic-concurrency guard (plan §7.5/§10) — must match the draft's current `revision`.
+  // Optimistic-concurrency guard — must match the draft's current `revision` (see
+  // docs/adr/0001-idempotent-retry.md for why edits use this instead of an idempotency key).
   @IsInt()
   @Min(0)
   expectedRevision!: number;

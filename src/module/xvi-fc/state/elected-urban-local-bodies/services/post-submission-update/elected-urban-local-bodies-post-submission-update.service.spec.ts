@@ -267,10 +267,10 @@ describe('buildEligibleRowCondition', () => {
     expect(constitutedClause?.['dateOfExpiry']).toEqual({ $lt: TODAY });
   });
 
-  it('does not include Exempt rows', () => {
+  it('does not include 6th Schedule rows', () => {
     const condition = buildEligibleRowCondition(TODAY);
     const orClauses = condition['$or'] as Array<Record<string, unknown>>;
-    const hasExempt = orClauses.some((c) => c['electedBodyStatus'] === 'Exempt');
+    const hasExempt = orClauses.some((c) => c['electedBodyStatus'] === '6th Schedule');
     expect(hasExempt).toBe(false);
   });
 
@@ -300,12 +300,20 @@ describe('buildPostSubmissionEligibleRowsFilter', () => {
 const mockPostSubmitTypedFields: EulbTypedFieldConfig[] = [
   {
     key: 'dateOfConstitution',
-    label: 'Date of Constitution',
+    label: 'Date on which the elected body is in place.',
     formFieldType: 'date',
     fieldTypes: ['EULB_ROW_EDIT_FIELDS', 'EULB_POST_SUBMIT_UPDATE_FIELDS'],
     validations: [
-      { name: 'minDate', validator: '2021-05-31', message: 'Date of Constitution cannot be before 31 May 2021.' },
-      { name: 'maxDate', validator: 'TODAY', message: 'Date of Constitution cannot be a future date.' },
+      {
+        name: 'minDate',
+        validator: '2021-05-31',
+        message: 'Date on which the elected body is in place cannot be before 31 May 2021.',
+      },
+      {
+        name: 'maxDate',
+        validator: 'TODAY',
+        message: 'Date on which the elected body is in place cannot be a future date.',
+      },
     ],
   },
   {
@@ -333,7 +341,7 @@ const mockPostSubmitTypedFields: EulbTypedFieldConfig[] = [
     options: [
       { id: 'Constituted', label: 'Constituted' },
       { id: 'Not Constituted', label: 'Not Constituted' },
-      { id: 'Exempt', label: 'Exempt' },
+      { id: '6th Schedule', label: '6th Schedule' },
     ],
     validations: [{ name: 'required', validator: null, message: 'Elected Body Status is required.' }],
   },
@@ -381,6 +389,7 @@ function makeFormSummary(overrides: Record<string, unknown> = {}) {
     matchedDbUlbCount: 10,
     missingDbUlbCount: 0,
     extraExcelRowCount: 0,
+    duplicateUlbCount: 0,
     errorRowCount: 0,
     validationStatus: 'VALID',
     activeDatasetVersion: 1,
@@ -493,7 +502,7 @@ describe('EulbPostSubmissionUpdateService', () => {
         makeRow({ rowNumber: 2, electedBodyStatus: 'Constituted', dateOfExpiry: pastExpiry }),
         makeRow({ rowNumber: 3, electedBodyStatus: 'Constituted', dateOfExpiry: TODAY }),
         makeRow({ rowNumber: 4, electedBodyStatus: 'Constituted', dateOfExpiry: futureExpiry }),
-        makeRow({ rowNumber: 5, electedBodyStatus: 'Exempt' }),
+        makeRow({ rowNumber: 5, electedBodyStatus: '6th Schedule' }),
         makeRow({ rowNumber: 6, electedBodyStatus: 'Not Constituted', isActive: false }),
       ];
       rowModel['countDocuments'] = jest.fn((filter: Record<string, unknown>) =>
@@ -537,7 +546,7 @@ describe('EulbPostSubmissionUpdateService', () => {
       expect(result.data!.permissions.canSubmitUpdate).toBe(true);
     });
 
-    it('returns canSubmitUpdate:false for a reviewer subrole (holds EDIT_STATE_FORMS but not FINAL_SUBMIT_STATE_FORMS)', async () => {
+    it('returns canSubmitUpdate:true for a reviewer subrole (reviewer was granted FINAL_SUBMIT_STATE_FORMS)', async () => {
       formModel['findOne'] = jest.fn().mockReturnValue(q(makeForm(FORM_STATUS.UNDER_REVIEW_BY_MOHUA)));
       const result = await service.getMetadata(
         stateOid.toString(),
@@ -545,7 +554,7 @@ describe('EulbPostSubmissionUpdateService', () => {
         stateUserWithSubrole(stateOid, 'reviewer'),
       );
       expect(result.data!.permissions.canView).toBe(true);
-      expect(result.data!.permissions.canSubmitUpdate).toBe(false);
+      expect(result.data!.permissions.canSubmitUpdate).toBe(true);
     });
   });
 
@@ -684,7 +693,7 @@ describe('EulbPostSubmissionUpdateService', () => {
         makeRow({ rowNumber: 3, electedBodyStatus: 'Constituted', dateOfExpiry: TODAY }),
         makeRow({ rowNumber: 4, electedBodyStatus: 'Constituted', dateOfExpiry: futureExpiry }),
         makeRow({ rowNumber: 5, electedBodyStatus: 'Constituted', dateOfExpiry: null }),
-        makeRow({ rowNumber: 6, electedBodyStatus: 'Exempt' }),
+        makeRow({ rowNumber: 6, electedBodyStatus: '6th Schedule' }),
         makeRow({ rowNumber: 7, electedBodyStatus: 'Not Constituted', isActive: false }),
         makeRow({ rowNumber: 8, electedBodyStatus: 'Not Constituted', datasetVersion: 2 }),
         makeRow({ rowNumber: 9, electedBodyStatus: 'Not Constituted', form: new Types.ObjectId() }),
@@ -703,7 +712,7 @@ describe('EulbPostSubmissionUpdateService', () => {
       futureExpiry.setDate(futureExpiry.getDate() + 1);
       installFilteredRows([
         makeRow({ rowNumber: 1, ulbName: 'Alpha City', electedBodyStatus: 'Not Constituted' }),
-        makeRow({ rowNumber: 2, ulbName: 'Alpha Exempt', electedBodyStatus: 'Exempt' }),
+        makeRow({ rowNumber: 2, ulbName: 'Alpha Exempt', electedBodyStatus: '6th Schedule' }),
         makeRow({
           rowNumber: 3,
           ulbName: 'Alpha Future',
@@ -757,7 +766,7 @@ describe('EulbPostSubmissionUpdateService', () => {
       installFilteredRows([
         makeRow({ rowNumber: 1, electedBodyStatus: 'Not Constituted' }),
         makeRow({ rowNumber: 2, electedBodyStatus: 'Constituted', dateOfExpiry: pastExpiry }),
-        makeRow({ rowNumber: 3, electedBodyStatus: 'Exempt' }),
+        makeRow({ rowNumber: 3, electedBodyStatus: '6th Schedule' }),
       ]);
 
       const result = await service.getEligibleRows(
@@ -771,16 +780,16 @@ describe('EulbPostSubmissionUpdateService', () => {
       expect(result.data!.total).toBe(1);
     });
 
-    it('returns empty for Exempt filter because Exempt is not a post-submission candidate row', async () => {
+    it('returns empty for 6th Schedule filter because 6th Schedule is not a post-submission candidate row', async () => {
       installFilteredRows([
         makeRow({ rowNumber: 1, electedBodyStatus: 'Not Constituted' }),
-        makeRow({ rowNumber: 2, electedBodyStatus: 'Exempt' }),
+        makeRow({ rowNumber: 2, electedBodyStatus: '6th Schedule' }),
       ]);
 
       const result = await service.getEligibleRows(
         stateOid.toString(),
         yearOid.toString(),
-        { electedBodyStatus: 'Exempt' },
+        { electedBodyStatus: '6th Schedule' },
         adminUser,
       );
 
@@ -794,7 +803,7 @@ describe('EulbPostSubmissionUpdateService', () => {
       installFilteredRows([
         makeRow({ rowNumber: 1, electedBodyStatus: 'Not Constituted' }),
         makeRow({ rowNumber: 2, electedBodyStatus: 'Constituted', dateOfExpiry: pastExpiry }),
-        makeRow({ rowNumber: 3, electedBodyStatus: 'Exempt' }),
+        makeRow({ rowNumber: 3, electedBodyStatus: '6th Schedule' }),
       ]);
 
       const result = await service.getEligibleRows(
@@ -876,7 +885,7 @@ describe('EulbPostSubmissionUpdateService', () => {
         installSummaryGroups([
           { _id: 'Constituted', count: 50 },
           { _id: 'Not Constituted', count: 60 },
-          { _id: 'Exempt', count: 13 },
+          { _id: '6th Schedule', count: 13 },
           { _id: null, count: 3 }, // unknown/null status rows
         ]);
 
@@ -888,7 +897,7 @@ describe('EulbPostSubmissionUpdateService', () => {
         installSummaryGroups([
           { _id: 'Constituted', count: 117 },
           { _id: 'Not Constituted', count: 4 },
-          { _id: 'Exempt', count: 2 },
+          { _id: '6th Schedule', count: 2 },
         ]);
 
         const result = await service.getEligibleRows(stateOid.toString(), yearOid.toString(), {}, adminUser);
@@ -899,18 +908,18 @@ describe('EulbPostSubmissionUpdateService', () => {
         installSummaryGroups([
           { _id: 'Constituted', count: 117 },
           { _id: 'Not Constituted', count: 4 },
-          { _id: 'Exempt', count: 2 },
+          { _id: '6th Schedule', count: 2 },
         ]);
 
         const result = await service.getEligibleRows(stateOid.toString(), yearOid.toString(), {}, adminUser);
         expect(result.data!.statusSummary.notConstitutedCount).toBe(4);
       });
 
-      it('exemptCount counts only electedBodyStatus === Exempt', async () => {
+      it("exemptCount counts only electedBodyStatus === '6th Schedule'", async () => {
         installSummaryGroups([
           { _id: 'Constituted', count: 117 },
           { _id: 'Not Constituted', count: 4 },
-          { _id: 'Exempt', count: 2 },
+          { _id: '6th Schedule', count: 2 },
         ]);
 
         const result = await service.getEligibleRows(stateOid.toString(), yearOid.toString(), {}, adminUser);
@@ -931,7 +940,7 @@ describe('EulbPostSubmissionUpdateService', () => {
         installSummaryGroups([
           { _id: 'Constituted', count: 50 },
           { _id: 'Not Constituted', count: 60 },
-          { _id: 'Exempt', count: 13 },
+          { _id: '6th Schedule', count: 13 },
         ]);
 
         await service.getEligibleRows(
@@ -953,7 +962,7 @@ describe('EulbPostSubmissionUpdateService', () => {
         installSummaryGroups([
           { _id: 'Constituted', count: 50 },
           { _id: 'Not Constituted', count: 60 },
-          { _id: 'Exempt', count: 13 },
+          { _id: '6th Schedule', count: 13 },
         ]);
         rowModel['find'] = jest.fn().mockReturnValue(q([]));
         rowModel['countDocuments'] = jest.fn().mockReturnValue(q(0)); // eligible rows = 0 after filter
@@ -961,7 +970,7 @@ describe('EulbPostSubmissionUpdateService', () => {
         const result = await service.getEligibleRows(
           stateOid.toString(),
           yearOid.toString(),
-          { electedBodyStatus: 'Exempt' }, // Exempt never shows in eligible rows
+          { electedBodyStatus: '6th Schedule' }, // 6th Schedule never shows in eligible rows
           adminUser,
         );
 
@@ -994,7 +1003,7 @@ describe('EulbPostSubmissionUpdateService', () => {
         installFilteredRows([
           makeRow({ rowNumber: 1, electedBodyStatus: 'Not Constituted' }),
           makeRow({ rowNumber: 2, electedBodyStatus: 'Constituted', dateOfExpiry: pastExpiry }),
-          makeRow({ rowNumber: 3, electedBodyStatus: 'Exempt' }),
+          makeRow({ rowNumber: 3, electedBodyStatus: '6th Schedule' }),
         ]);
 
         const result = await service.getEligibleRows(stateOid.toString(), yearOid.toString(), {}, adminUser);
@@ -1203,8 +1212,8 @@ describe('EulbPostSubmissionUpdateService', () => {
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('throws BadRequestException when a submitted row is Exempt (not eligible)', async () => {
-      const exemptRow = makeEligibleRow({ electedBodyStatus: 'Exempt' });
+    it('throws BadRequestException when a submitted row is 6th Schedule (not eligible)', async () => {
+      const exemptRow = makeEligibleRow({ electedBodyStatus: '6th Schedule' });
       rowModel['find'] = jest.fn().mockReturnValue(q([exemptRow]));
 
       await expect(
@@ -1421,8 +1430,8 @@ describe('EulbPostSubmissionUpdateService', () => {
       );
     });
 
-    it('throws BadRequestException when a row is not eligible (Exempt)', async () => {
-      rowModel['find'] = jest.fn().mockReturnValue(q([eligibleRow({ electedBodyStatus: 'Exempt' })]));
+    it('throws BadRequestException when a row is not eligible (6th Schedule)', async () => {
+      rowModel['find'] = jest.fn().mockReturnValue(q([eligibleRow({ electedBodyStatus: '6th Schedule' })]));
       await expect(service.submitBatch(stateOid.toString(), yearOid.toString(), makeDto(), adminUser)).rejects.toThrow(
         BadRequestException,
       );

@@ -101,8 +101,8 @@ interface ActiveUlbRecord {
 
 interface AnnualAccountStatusRecord {
   ulb: Types.ObjectId;
-  auditedData?: { form_status_id?: number | null } | null;
-  unauditedData?: { form_status_id?: number | null } | null;
+  sectionType: 'audited' | 'unaudited';
+  form_status_id?: number | null;
 }
 
 interface PfmsBankAccountStatusRecord {
@@ -329,8 +329,8 @@ export class StateDashboardService {
         .select({
           _id: 0,
           ulb: 1,
-          'auditedData.form_status_id': 1,
-          'unauditedData.form_status_id': 1,
+          sectionType: 1,
+          form_status_id: 1,
         })
         .lean<AnnualAccountStatusRecord[]>()
         .exec(),
@@ -354,8 +354,8 @@ export class StateDashboardService {
 
     for (const record of annualAccountRecords) {
       const ulbId = record.ulb.toString();
-      emptyMaps.annualAccounts.set(ulbId, this.normalizeFormStatus(record.auditedData?.form_status_id));
-      emptyMaps.provisionalAccounts.set(ulbId, this.normalizeFormStatus(record.unauditedData?.form_status_id));
+      const map = record.sectionType === 'audited' ? emptyMaps.annualAccounts : emptyMaps.provisionalAccounts;
+      map.set(ulbId, this.normalizeFormStatus(record.form_status_id));
     }
 
     for (const record of pfmsRecords) {
@@ -621,7 +621,7 @@ export class StateDashboardService {
 
     return {
       key: STATE_DASHBOARD_TASK_KEY.DEVOLUTION_FORMULA,
-      title: 'Fill in the devolution formula',
+      title: 'Fill in the ULB-wise allocation',
       subtitle: 'Allocation and instalment split for each ULB',
       status,
       actionLabel: status === STATE_DASHBOARD_TASK_STATUS.PENDING ? 'Continue' : null,
