@@ -49,7 +49,6 @@ export class ZipBuildService {
           Key: outputKey,
           Body: bodyStream,
           ContentType: 'application/zip',
-          ACL: 'public-read', // 👈 make file public
         },
         queueSize: 4, // parts in parallel
         partSize: 10 * 1024 * 1024, // 10MB parts
