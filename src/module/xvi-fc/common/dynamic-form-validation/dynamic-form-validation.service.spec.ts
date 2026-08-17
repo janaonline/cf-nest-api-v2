@@ -233,7 +233,7 @@ describe('DynamicFormValidationService — actualTarget field', () => {
   });
 });
 
-describe('DynamicFormValidationService — actualTarget targetLessThanActual rule', () => {
+describe('DynamicFormValidationService — actualTarget actualLessThanOrEqualToTarget rule', () => {
   const mockNormalizer = { toRawStoragePath: jest.fn((url: string) => url) };
   const service = new DynamicFormValidationService(mockNormalizer as unknown as FileUrlNormalizerService);
 
@@ -243,35 +243,36 @@ describe('DynamicFormValidationService — actualTarget targetLessThanActual rul
     label: 'Per capita supply of water',
     validations: [
       { name: 'required', validator: null, message: 'Required.' },
-      { name: 'targetLessThanActual', validator: null, message: 'Target must be lower than actual.' },
+      { name: 'actualLessThanOrEqualToTarget', validator: null, message: 'Actual must be less than or equal to target.' },
     ],
   } as unknown as FieldConfig;
 
-  it('rejects when target equals actual', () => {
+  it('passes when target equals actual', () => {
     const result = service.validateFinalSubmitAndBuildPayload([fieldWithRule], {
       ind1: { actual: 100, target: 100 },
     });
 
-    expect(result.isValid).toBe(false);
-    expect(result.errors['ind1.target']).toEqual([
-      { field: 'ind1.target', message: 'Target must be lower than actual.', code: 'targetLessThanActual' },
-    ]);
+    expect(result.isValid).toBe(true);
   });
 
-  it('rejects when target is greater than actual', () => {
+  it('rejects when actual is greater than target', () => {
     const result = service.validateFinalSubmitAndBuildPayload([fieldWithRule], {
-      ind1: { actual: 100, target: 120 },
+      ind1: { actual: 120, target: 100 },
     });
 
     expect(result.isValid).toBe(false);
     expect(result.errors['ind1.target']).toEqual([
-      { field: 'ind1.target', message: 'Target must be lower than actual.', code: 'targetLessThanActual' },
+      {
+        field: 'ind1.target',
+        message: 'Actual must be less than or equal to target.',
+        code: 'actualLessThanOrEqualToTarget',
+      },
     ]);
   });
 
-  it('passes when target is strictly lower than actual', () => {
+  it('passes when actual is strictly lower than target', () => {
     const result = service.validateFinalSubmitAndBuildPayload([fieldWithRule], {
-      ind1: { actual: 100, target: 80 },
+      ind1: { actual: 80, target: 100 },
     });
 
     expect(result.isValid).toBe(true);
