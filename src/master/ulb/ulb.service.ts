@@ -505,7 +505,10 @@ export class UlbService {
    *  `censusCode`/`sbCode` are copied onto the `User` document (not just left on the `Ulb`) because
    *  ULB logins authenticate by census/SB code, not email — `UsersRepository.resolveByIdentifier()`
    *  looks up `User.censusCode`/`User.sbCode`, so without this copy the code the invite email tells
-   *  them to log in with would never match any account. */
+   *  them to log in with would never match any account. The contact is also mirrored onto the
+   *  embedded `accountantName`/`accountantEmail`/`accountantConatactNumber` fields (alongside the
+   *  top-level `name`/`email`/`mobile` used for login/invite) so XVI-FC's contact-extraction logic
+   *  (see `xvifc-multi-role-design.md`) picks it up the same way it does for legacy ULB accounts. */
   private async createPrimaryContactUser(
     contact: { name?: string; designation?: string; email?: string; mobile?: string },
     ulbId: Types.ObjectId,
@@ -525,6 +528,9 @@ export class UlbService {
       email: contact.email,
       mobile: contact.mobile || undefined,
       designation: contact.designation || '',
+      accountantName: contact.name || '',
+      accountantEmail: contact.email || '',
+      accountantConatactNumber: contact.mobile || '',
       role: Role.ULB,
       ulb: ulbId,
       state: stateId,
