@@ -20,6 +20,7 @@ import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-
 import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
 import { keyByFieldKey, requireField } from 'src/module/xvi-fc/common/utils/xvi-fc-field-lookup.util';
 import { deriveFileValidationOptions } from 'src/module/xvi-fc/common/utils/xvi-fc-file-constraint.util';
+import { buildUlbReconciliationBadges } from 'src/module/xvi-fc/common/utils/xvi-fc-ulb-reconciliation-badges.util';
 import type { FileInfo } from 'src/schemas/common/file.schema';
 import type { FormData } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.types';
 import type {
@@ -45,6 +46,7 @@ import {
 } from 'src/schemas/xvi-fc/state/devolution-formula-row.schema';
 import { GrantAllocation, GrantAllocationDocument } from 'src/schemas/xvi-fc/grant-allocation.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 import {
   EULB_FORM_TYPE,
   ElectedUrbanLocalBodiesForm,
@@ -111,6 +113,7 @@ export class DevolutionFormulaService {
     private readonly fileInfoNormalizer: FileInfoNormalizerService,
     private readonly dynamicFormValidator: DynamicFormValidationService,
     private readonly dfFormJsonConfig: DfFormJsonConfigService,
+    private readonly ulbEligibilityService: UlbEligibilityService,
   ) {}
 
   async getForm(
@@ -119,7 +122,9 @@ export class DevolutionFormulaService {
     installment: number,
     user: AuthUser,
   ): Promise<XviFcApiResponse<DfFormGetResponseData>> {
-    // TODO_NS: reuse existing functions - check what is happening in elected body and sfc.
+    // assertStateAccess-style checks are reimplemented per-service across xvi-fc's state-form
+    // modules (claim-letter alone has 6+ near-identical copies) rather than shared — worth
+    // consolidating into one helper if this becomes a maintenance burden, but out of scope here.
     this.assertStateAccess(user, stateId);
 
     const stateOid = new Types.ObjectId(stateId);
@@ -139,15 +144,18 @@ export class DevolutionFormulaService {
       .exec();
 
     const currentFormStatus = doc?.currentFormStatus ?? FORM_STATUS.NOT_STARTED;
-    // TODO_NS: user common function? see what is happening in elected body and sfc.
+    // buildFormPermissions duplicates logic that likely exists in sibling state-form modules
+    // (elected-urban-local-bodies, sfc-status) — worth checking for a shared helper before this
+    // diverges further, but not resolved here.
     const permissions = this.buildFormPermissions(user, stateId, currentFormStatus);
     const { actors, stateName } = this.xvifcFormActorsService.buildActorsAndStateName(
       doc as unknown as Parameters<typeof this.xvifcFormActorsService.buildActorsAndStateName>[0],
     );
 
+    const eligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC');
     const [grantAllocationSummary, computedActiveUlbCount] = await Promise.all([
       this.resolveGrantAllocationSummary(stateOid, yearOid),
-      this.ulbModel.countDocuments({ state: stateOid, isActive: true }),
+      this.ulbModel.countDocuments(eligibleUlbFilter),
     ]);
     const validationSummary = this.buildValidationSummary(doc, grantAllocationSummary?.total ?? 0);
 
@@ -202,7 +210,7 @@ export class DevolutionFormulaService {
       meta: { version: 1 },
     };
 
-    return xviFcSuccess('Devolution Formula form fetched.', responseData);
+    return xviFcSuccess('ULB-wise Allocation form fetched.', responseData);
   }
 
   async saveDraft(dto: SaveDraftDevolutionFormulaDto, user: AuthUser): Promise<XviFcApiResponse> {
@@ -221,9 +229,10 @@ export class DevolutionFormulaService {
       assertCanStateEditForm(existing.currentFormStatus ?? FORM_STATUS.NOT_STARTED);
     }
 
+    const eligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC');
     const [grantAlloc, computedActiveUlbCount] = await Promise.all([
       this.resolveGrantAllocation(stateOid, yearOid),
-      this.ulbModel.countDocuments({ state: stateOid, isActive: true }),
+      this.ulbModel.countDocuments(eligibleUlbFilter),
     ]);
 
     const dfFields = await this.dfFormJsonConfig.loadFields(dto.yearId);
@@ -281,7 +290,7 @@ export class DevolutionFormulaService {
       .lean()
       .exec();
 
-    return xviFcSuccess('Devolution Formula draft saved.', { _id: String(result._id) });
+    return xviFcSuccess('ULB-wise Allocation draft saved.', { _id: String(result._id) });
   }
 
   async finalSubmit(dto: FinalSubmitDevolutionFormulaDto, user: AuthUser): Promise<XviFcApiResponse> {
@@ -343,9 +352,10 @@ export class DevolutionFormulaService {
 
     // Grant allocation must still exist, and its total must match what was validated.
     // Also compute the current active ULB count to validate row count consistency.
+    const finalSubmitEligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC');
     const [currentAlloc, computedActiveUlbCount] = await Promise.all([
       this.resolveGrantAllocation(stateOid, yearOid),
-      this.ulbModel.countDocuments({ state: stateOid, isActive: true }),
+      this.ulbModel.countDocuments(finalSubmitEligibleUlbFilter),
     ]);
     const currentTotal = currentAlloc.basic + currentAlloc.performance;
 
@@ -457,10 +467,10 @@ export class DevolutionFormulaService {
       .exec();
 
     this.logger.log(
-      `Devolution Formula [state=${dto.stateId} year=${dto.yearId} installment=${dto.installment}] submitted by user=${user._id}`,
+      `ULB-wise Allocation [state=${dto.stateId} year=${dto.yearId} installment=${dto.installment}] submitted by user=${user._id}`,
     );
 
-    return xviFcSuccess('Devolution Formula submitted successfully.', {
+    return xviFcSuccess('ULB-wise Allocation submitted successfully.', {
       currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
       currentFormStatusLabel: getFormStatusLabel(FORM_STATUS.UNDER_REVIEW_BY_MOHUA),
     });
@@ -519,7 +529,7 @@ export class DevolutionFormulaService {
     const aggRows = (await this.rowModel.aggregate(pipeline).exec()) as Record<string, unknown>[];
     const dumpRows: DfDumpRow[] = aggRows.map((row) => this.mapDumpAggregationRow(row));
 
-    return this.excelService.generateExcel(DF_DUMP_HEADERS, dumpRows, 'Devolution Formula Dump');
+    return this.excelService.generateExcel(DF_DUMP_HEADERS, dumpRows, 'ULB-wise Allocation Dump');
   }
 
   // ─── Private helpers ──────────────────────────────────────────────────────
@@ -645,6 +655,8 @@ export class DevolutionFormulaService {
     const allocationBalanced = Math.abs(totalAllocatedSum - totalMoHUAAllocation) <= 0.001;
     const validationStatus = doc?.validationStatus;
     const newUlbCount = doc?.newUlbCount ?? 0;
+    const missingUlbCount = doc?.missingUlbCount ?? 0;
+    const duplicateUlbCount = doc?.duplicateUlbCount ?? 0;
 
     return [
       {
@@ -705,6 +717,12 @@ export class DevolutionFormulaService {
             tone: 'danger' as const,
             visible: canEdit && errorRowCount > 0,
           },
+          ...buildUlbReconciliationBadges({
+            missingCount: missingUlbCount,
+            newCount: newUlbCount,
+            duplicateCount: duplicateUlbCount,
+            visible: canEdit,
+          }),
           {
             label: `Allocated amount: ₹${formatINR(totalMoHUAAllocation)} Cr.`,
             tone: 'secondary' as const,
@@ -757,6 +775,7 @@ export class DevolutionFormulaService {
         errorRowCount: 0,
         missingUlbCount: 0,
         newUlbCount: 0,
+        duplicateUlbCount: 0,
         totalMoHUAAllocation,
         totalAllocatedSum: 0,
         activeDatasetVersion: 0,
@@ -768,8 +787,9 @@ export class DevolutionFormulaService {
       excelRowCount,
       validRowCount: excelRowCount - errorRowCount,
       errorRowCount,
-      missingUlbCount: 0,
+      missingUlbCount: doc.missingUlbCount ?? 0,
       newUlbCount: doc.newUlbCount ?? 0,
+      duplicateUlbCount: doc.duplicateUlbCount ?? 0,
       totalMoHUAAllocation: doc.totalMoHUAAllocation ?? totalMoHUAAllocation,
       totalAllocatedSum: doc.totalAllocatedSum ?? 0,
       activeDatasetVersion: doc.activeDatasetVersion ?? 0,
@@ -828,7 +848,7 @@ export class DevolutionFormulaService {
             field: 'installment',
             code: 'prerequisiteNotMet',
             message:
-              'Elected Body form must be submitted and under review by MoHUA before submitting Devolution Formula.',
+              'Elected Body form must be submitted and under review by MoHUA before submitting ULB-wise Allocation.',
           },
         ],
       });
@@ -850,8 +870,9 @@ export class DevolutionFormulaService {
   }
 
   /**
-   * TODO: Unlock when the Claim Batch model is implemented — query for at least one
-   * Installment 1 claim batch acknowledged by MoHUA. Until then Installment 2 stays locked.
+   * TODO: unlock once wired to claim-letter — should query for at least one Installment 1 claim
+   * batch acknowledged by MoHUA (claim-letter's `ClaimLetterBatch` model, which now exists, but
+   * nothing in this module reads it yet). Until then Installment 2 stays locked for every state.
    */
   private isInstallment2Unlocked(): boolean {
     return false;

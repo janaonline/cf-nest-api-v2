@@ -1,4 +1,4 @@
-/** V1 supports Installment 1 only (plan §1) — Installment 2 stays schema-legal but is rejected here. */
+/** V1 supports Installment 1 only — Installment 2 stays schema-legal but is rejected here. */
 export const CLAIM_LETTER_SUPPORTED_INSTALLMENT = 1;
 
 /**
@@ -9,21 +9,24 @@ export const CLAIM_LETTER_SUPPORTED_INSTALLMENT = 1;
  */
 export const CLAIM_LETTER_FORM_ID = 26;
 
-/** Brain §15.6: at most 3 logical claim batches per State/year/installment. */
+/** At most 3 logical claim batches per State/year/installment — see
+ *  docs/adr/0002-batching-and-locks.md for the reservation model this enforces. */
 export const CLAIM_LETTER_MAX_BATCH_NUMBER = 3;
 
 export const CLAIM_LETTER_PAGINATION_DEFAULT_PAGE = 1;
 export const CLAIM_LETTER_PAGINATION_DEFAULT_LIMIT = 20;
 export const CLAIM_LETTER_PAGINATION_MAX_LIMIT = 100;
 
-/** Brain §14.7: bulk-insert claim-letter children in bounded chunks (200-250), never one giant array. */
+/** Bulk-insert claim-letter children in bounded chunks, never one giant array — a single
+ *  transaction wouldn't scale to states with 700+ ULBs (docs/adr/0002-batching-and-locks.md). */
 export const CLAIM_LETTER_CHILD_INSERT_CHUNK_SIZE = 200;
 
 /** Matches the common 20MB ceiling used for other PDF uploads across xvi-fc (e.g. SFC Status extension orders). */
 export const CLAIM_LETTER_SIGNED_FILE_MAX_SIZE_KB = 20 * 1024;
 
-/** Plan §7.9: generous default so no legitimate synchronous build is ever mistaken for stale —
- *  real value should reflect observed p99 build latency once there's production traffic. */
+/** Generous default so no legitimate synchronous build is ever mistaken for stale — real value
+ *  should reflect observed p99 build latency once there's production traffic. Used by the stale-
+ *  BUILDING recovery paths in docs/adr/0002-batching-and-locks.md. */
 export const CLAIM_LETTER_STALE_BUILD_THRESHOLD_MINUTES = 30;
 
 /**
@@ -36,3 +39,8 @@ export const CLAIM_LETTER_STALE_BUILD_THRESHOLD_MINUTES = 30;
  * relationship to how long a draft may sit unsubmitted, which is unbounded by design.
  */
 export const CLAIM_LETTER_EDIT_LOCK_LEASE_MINUTES = 5;
+
+/** Supporting-content action ids on the `signedClaimFile` field — see
+ *  `ClaimLetterService.applySignedFileSupportingContent()` and `ClaimLetterDocumentService`. */
+export const CLAIM_LETTER_ACTION_PREVIEW_TEMPLATE = 'preview-template';
+export const CLAIM_LETTER_ACTION_DOWNLOAD_TEMPLATE = 'download-template';

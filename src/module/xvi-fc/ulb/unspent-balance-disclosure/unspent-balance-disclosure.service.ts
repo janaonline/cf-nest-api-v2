@@ -9,6 +9,8 @@ import { SubmitDisclosureDto } from './dto/submit-disclosure.dto';
 import { UpdateDisclosureDto } from './dto/update-disclosure.dto';
 import { AuthUser } from '../../../auth/auth-user.interface';
 import { S3Service } from '../../../../core/s3/s3.service';
+import { UlbEligibilityService } from '../../../ulb-eligibility/ulb-eligibility.service';
+import { CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE } from '../../../ulb-eligibility/ulb-eligibility.constants';
 
 @Injectable()
 export class UnspentBalanceDisclosureService {
@@ -16,33 +18,32 @@ export class UnspentBalanceDisclosureService {
     @InjectModel(XviFcUnspentBalanceDisclosure.name)
     private readonly model: Model<XviFcUnspentBalanceDisclosureDocument>,
     private readonly s3: S3Service,
+    private readonly ulbEligibilityService: UlbEligibilityService,
   ) {}
 
-  async submit(
-    dto: SubmitDisclosureDto,
-    user: AuthUser,
-  ): Promise<XviFcUnspentBalanceDisclosureDocument> {
+  async submit(dto: SubmitDisclosureDto, user: AuthUser): Promise<XviFcUnspentBalanceDisclosureDocument> {
     if (!user.ulb) throw new ForbiddenException('ULB context is required.');
+    await this.ulbEligibilityService.assertUlbEligibleForGrantCycle(
+      user.ulb.toString(),
+      'XVIFC',
+      CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE,
+    );
 
-    const ulbId      = new Types.ObjectId(user.ulb.toString());
+    const ulbId = new Types.ObjectId(user.ulb.toString());
     const designYear = new Types.ObjectId(dto.designYearId);
 
-    const existing = await this.model
-      .findOne({ ulb: ulbId, designYear })
-      .select('formStatus')
-      .lean()
-      .exec();
+    const existing = await this.model.findOne({ ulb: ulbId, designYear }).select('formStatus').lean().exec();
 
     if (existing?.formStatus === 'SUBMITTED') {
       throw new ConflictException('Disclosure already submitted and cannot be overwritten.');
     }
 
     const payload = {
-      ulb:         ulbId,
+      ulb: ulbId,
       designYear,
-      fc14:        dto.fc14,
-      fc15:        dto.fc15,
-      formStatus:  'SUBMITTED',
+      fc14: dto.fc14,
+      fc15: dto.fc15,
+      formStatus: 'SUBMITTED',
       submittedBy: new Types.ObjectId(user._id),
       submittedAt: new Date(),
     };
@@ -52,7 +53,7 @@ export class UnspentBalanceDisclosureService {
       { $set: payload },
       { upsert: true, new: true, runValidators: true },
     );
-    return doc!;
+    return doc;
   }
 
   async getByUlbAndYear(
@@ -60,22 +61,23 @@ export class UnspentBalanceDisclosureService {
     designYearId: string,
   ): Promise<XviFcUnspentBalanceDisclosureDocument | null> {
     const filter: FilterQuery<XviFcUnspentBalanceDisclosureDocument> = {
-      ulb:        new Types.ObjectId(ulbId.toString()),
+      ulb: new Types.ObjectId(ulbId.toString()),
       designYear: new Types.ObjectId(designYearId),
     };
     return this.model.findOne(filter);
   }
 
-  async update(
-    id: string,
-    dto: UpdateDisclosureDto,
-    user: AuthUser,
-  ): Promise<XviFcUnspentBalanceDisclosureDocument> {
+  async update(id: string, dto: UpdateDisclosureDto, user: AuthUser): Promise<XviFcUnspentBalanceDisclosureDocument> {
     const disclosure = await this.model.findById(id, 'ulb formStatus');
     if (!disclosure) throw new NotFoundException('Disclosure not found.');
     if (disclosure.ulb.toString() !== user.ulb?.toString()) {
       throw new ForbiddenException('You are not authorised to update this disclosure.');
     }
+    await this.ulbEligibilityService.assertUlbEligibleForGrantCycle(
+      disclosure.ulb.toString(),
+      'XVIFC',
+      CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE,
+    );
     if (disclosure.formStatus === 'SUBMITTED') {
       throw new ForbiddenException('This disclosure has already been submitted and cannot be modified.');
     }
@@ -90,11 +92,7 @@ export class UnspentBalanceDisclosureService {
     return updated;
   }
 
-  async getDocumentSignedUrl(
-    disclosureId: string,
-    filepath: string,
-    user: AuthUser,
-  ): Promise<{ signedUrl: string }> {
+  async getDocumentSignedUrl(disclosureId: string, filepath: string, user: AuthUser): Promise<{ signedUrl: string }> {
     const disclosure = await this.model.findById(disclosureId, 'ulb fc14 fc15').lean().exec();
     if (!disclosure) throw new NotFoundException('Disclosure not found.');
     if (disclosure.ulb.toString() !== user.ulb?.toString()) {

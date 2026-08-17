@@ -1,8 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { AnyBulkWriteOperation, ClientSession, Model, Types } from 'mongoose';
-import type { RowStatusType } from 'src/common/constants/row-status.constants';
-import { FC_UNSPENT_ELIGIBILITY_THRESHOLD_PERCENT } from '../../constants/fc-unspent-declaration.constants';
+import type { RowReviewStatus } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
 import {
   XviFcUnspentStateFormRow,
   XviFcUnspentStateFormRowDocument,
@@ -16,6 +15,7 @@ import {
   DevolutionFormulaRowDocument,
 } from 'src/schemas/xvi-fc/state/devolution-formula-row.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 import type { XviFcValidationErrorMap } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import type { FcUnspentUlbRowInputDto } from '../../dto/fc-unspent-ulb-row.dto';
 import type {
@@ -36,7 +36,7 @@ type FcUnspentDevolutionRowLean = {
 type FcUnspentExistingRowLean = {
   _id: Types.ObjectId;
   ulbId: Types.ObjectId;
-  rowStatus: RowStatusType | null;
+  rowStatus: RowReviewStatus | null;
 };
 
 /**
@@ -57,6 +57,7 @@ export class FcUnspentDeclarationRowService {
     private readonly devolutionRowModel: Model<DevolutionFormulaRowDocument>,
     @InjectModel(Ulb.name)
     private readonly ulbModel: Model<UlbDocument>,
+    private readonly ulbEligibilityService: UlbEligibilityService,
   ) {}
 
   /**
@@ -69,7 +70,7 @@ export class FcUnspentDeclarationRowService {
     stateOid: Types.ObjectId,
     rows: FcUnspentUlbRowInputDto[],
     devolutionForm: FcUnspentDevolutionFormLean | null,
-    opts: { requireAtLeastOne: boolean },
+    opts: { requireAtLeastOne: boolean; thresholdPercent: number },
   ): Promise<{ rows: FcUnspentResolvedRow[]; errors: XviFcValidationErrorMap }> {
     const errors: XviFcValidationErrorMap = {};
 
@@ -96,9 +97,13 @@ export class FcUnspentDeclarationRowService {
     }
 
     const ulbOids = rows.map((r) => new Types.ObjectId(r.ulbId));
+    // Cantonment Board ULBs are excluded here via the shared eligibility filter — a row for one
+    // simply won't resolve, and falls through to the same "ULB not found in registry" handling as
+    // any other invalid ulbId.
+    const eligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC');
     const [ulbDocs, allocationMap] = await Promise.all([
       this.ulbModel
-        .find({ _id: { $in: ulbOids }, state: stateOid, isActive: true })
+        .find({ ...eligibleUlbFilter, _id: { $in: ulbOids } })
         .select('name censusCode sbCode')
         .lean()
         .exec(),
@@ -144,7 +149,7 @@ export class FcUnspentDeclarationRowService {
       }
 
       const allocationPerc = (row.unspentAmount / allocationAmount) * 100;
-      const eligibility = allocationPerc <= FC_UNSPENT_ELIGIBILITY_THRESHOLD_PERCENT;
+      const eligibility = allocationPerc <= opts.thresholdPercent;
 
       builtRows.push({
         ulbId: new Types.ObjectId(row.ulbId),
@@ -181,7 +186,7 @@ export class FcUnspentDeclarationRowService {
     yearOid: Types.ObjectId,
     resolvedRows: FcUnspentResolvedRow[],
     userOid: Types.ObjectId,
-    targetRowStatus: RowStatusType | undefined,
+    targetRowStatus: RowReviewStatus | undefined,
     session: ClientSession,
   ): Promise<{ transitions: FcUnspentRowStatusTransition[] }> {
     const ulbOids = resolvedRows.map((r) => r.ulbId);
@@ -339,6 +344,8 @@ export class FcUnspentDeclarationRowService {
       .exec();
   }
 
+  // Reads devolution-formula's activeDatasetVersion invariant from outside that module — see
+  // devolution-formula/docs/adr/0001-dataset-versioning.md before changing either side of this.
   private async resolveAllocationsForUlbIds(
     devolutionFormId: Types.ObjectId,
     activeDatasetVersion: number,

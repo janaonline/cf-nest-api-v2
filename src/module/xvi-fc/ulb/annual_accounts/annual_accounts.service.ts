@@ -9,16 +9,19 @@ import {
 import { FormJsonService } from '../../../../master/form-json/form-json.service';
 import { InjectQueue } from '@nestjs/bullmq';
 import { InjectModel } from '@nestjs/mongoose';
+import { ConfigService } from '@nestjs/config';
 import { createHash } from 'crypto';
 import { Queue } from 'bullmq';
 import { Model, PipelineStage, Types } from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 import { S3Service } from '../../../../core/s3/s3.service';
+import { EmailQueueService } from '../../../../core/queue/email-queue/email-queue.service';
 import { S3UploadService } from '../../../file/s3-upload.service';
 import { FileTokenService } from '../../../../core/file-token/file-token.service';
 import { assertValidFormStatusTransition } from '../../../../common/utils/form-status-transitions';
 import {
   AnnualAccountFormStatus,
+  AnnualAccountSectionType,
   FORM_STATUS_ID,
   XviFcAnnualAccount,
   XviFcAnnualAccountDocument,
@@ -34,6 +37,8 @@ import {
   XviFcAnnualAccountFormLogDocument,
 } from '../../../../schemas/xvi-fc/annual-account-form-log.schema';
 import { Ulb, UlbDocument } from '../../../../schemas/ulb.schema';
+import { UlbEligibilityService } from '../../../ulb-eligibility/ulb-eligibility.service';
+import { CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE } from '../../../ulb-eligibility/ulb-eligibility.constants';
 import {
   DocumentActionGateDocument,
   XviFcDocumentActionGate,
@@ -46,6 +51,8 @@ import { DocumentDecisionDto } from './dto/document-decision.dto';
 import { SectionDecisionDto } from './dto/section-decision.dto';
 import { BulkSectionDecisionDto } from './dto/bulk-section-decision.dto';
 import { UlbSubmissionsQueryDto } from './dto/ulb-submissions-query.dto';
+import { ManualReviewDecisionDto } from './dto/manual-review-decision.dto';
+import { ManualReviewQueueQueryDto } from './dto/manual-review-queue-query.dto';
 import type { AnnualAccountOcrJobData } from './dto/annual-account-ocr-job.dto';
 import type { AuthUser } from '../../../auth/auth-user.interface';
 import { Scope, Permission } from '../../../auth/enum/roles-xvi-fc.enum';
@@ -69,8 +76,17 @@ import {
   canUlbReuploadDocument,
 } from './annual-account-status-access.util';
 
+/** 'auditedData' | 'unauditedData' section keys as they appear in DTOs/query params, mapped to
+ *  the physical-document discriminator (XviFcAnnualAccount.sectionType) below. */
+export type AnnualAccountSectionKey = 'auditedData' | 'unauditedData';
+
+const SECTION_KEY_TO_TYPE: Record<AnnualAccountSectionKey, AnnualAccountSectionType> = {
+  auditedData: 'audited',
+  unauditedData: 'unaudited',
+};
+
 /** formId for each section, per the active upload-config formjson documents (30 = audited, 31 = provisional). */
-const SECTION_FORM_IDS: Record<'auditedData' | 'unauditedData', number> = { auditedData: 30, unauditedData: 31 };
+const SECTION_FORM_IDS: Record<AnnualAccountSectionKey, number> = { auditedData: 30, unauditedData: 31 };
 
 /**
  * How long a document may sit at PROCESSING before it's treated as stuck (e.g. the worker
@@ -78,6 +94,10 @@ const SECTION_FORM_IDS: Record<'auditedData' | 'unauditedData', number> = { audi
  * threshold, the ULB gets Retry/Re-upload instead of an infinite spinner.
  */
 const STALE_PROCESSING_THRESHOLD_MS = 5 * 60 * 1000;
+const SECTION_LABELS: Record<AnnualAccountSectionKey, string> = {
+  auditedData: 'Audited',
+  unauditedData: 'Provisional',
+};
 
 interface UlbSubmissionRow {
   ulbId: Types.ObjectId;
@@ -127,6 +147,12 @@ export class AnnualAccountsService implements OnModuleInit {
     private readonly formJsonService: FormJsonService,
 
     private readonly fileTokenService: FileTokenService,
+
+    private readonly emailQueueService: EmailQueueService,
+
+    private readonly configService: ConfigService,
+
+    private readonly ulbEligibilityService: UlbEligibilityService,
   ) {}
 
   async onModuleInit() {
@@ -149,7 +175,7 @@ export class AnnualAccountsService implements OnModuleInit {
   // ─── Presign upload URL ──────────────────────────────────────────────────────
 
   async presignUpload(dto: PresignUploadDto, user: AuthUser) {
-    this.validateUploadPermission(user, { ulbId: dto.ulbId, section: dto.section } as UploadDocumentDto);
+    await this.validateUploadPermission(user, { ulbId: dto.ulbId, section: dto.section } as UploadDocumentDto);
 
     const ext = dto.fileName.split('.').pop()?.toLowerCase();
     if (ext !== 'pdf') {
@@ -185,11 +211,11 @@ export class AnnualAccountsService implements OnModuleInit {
     ipAddress: string | null = null,
     userAgent: string | null = null,
   ) {
-    this.validateUploadPermission(user, dto as unknown as UploadDocumentDto);
+    await this.validateUploadPermission(user, dto as unknown as UploadDocumentDto);
     await this.assertCanUlbUpload(
       dto.ulbId,
       dto.designYearId,
-      dto.section as 'auditedData' | 'unauditedData',
+      dto.section as AnnualAccountSectionKey,
       dto.docId,
     );
 
@@ -215,6 +241,9 @@ export class AnnualAccountsService implements OnModuleInit {
     const sizeKb = Math.round((dto.fileSize / 1024) * 100) / 100;
     const pages = await this.s3Service.getPdfPageCountFromBuffer(pdfBuffer);
 
+    // Always the 'audited' anchor document's id, regardless of which section is being
+    // uploaded to — see resolveSectionDocument for why every external annualAccountId is
+    // this id.
     const annualAccountId = await this.findOrInitialize(dto.ulbId, dto.stateId, dto.designYearId, user);
 
     const existingCount = await this.uploadHistoryModel.countDocuments({
@@ -269,6 +298,7 @@ export class AnnualAccountsService implements OnModuleInit {
       annualAccountId,
       dto as unknown as UploadDocumentDto,
       currentUpload,
+      user,
       initialProcessingStatus,
     );
 
@@ -277,6 +307,7 @@ export class AnnualAccountsService implements OnModuleInit {
       ulb: new Types.ObjectId(dto.ulbId),
       designYear: new Types.ObjectId(dto.designYearId),
       section: dto.section,
+      auditType: dto.auditType,
       docId: dto.docId,
       uploadId: dto.uploadId,
       version,
@@ -308,6 +339,7 @@ export class AnnualAccountsService implements OnModuleInit {
         annualAccountId,
         ulbId: dto.ulbId,
         section: dto.section,
+        auditType: dto.auditType,
         docId: dto.docId,
         s3Key: dto.s3Key,
         expectedDocType: expectedDocType!,
@@ -332,9 +364,9 @@ export class AnnualAccountsService implements OnModuleInit {
   // ─── Retry failed upload ─────────────────────────────────────────────────────
 
   async retryUpload(id: string, uploadId: string, user: AuthUser) {
-    const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
-    if (!doc) throw new NotFoundException('Annual account not found');
-    await this.validateViewAccess(doc, user);
+    const anchor = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
+    if (!anchor) throw new NotFoundException('Annual account not found');
+    await this.validateViewAccess(anchor, user);
 
     const historyDoc = await this.uploadHistoryModel
       .findOne({ annualAccountId: new Types.ObjectId(id), uploadId })
@@ -355,6 +387,9 @@ export class AnnualAccountsService implements OnModuleInit {
     const expectedDocType = DOC_TYPE_MAP[historyDoc.docId];
     if (!expectedDocType) throw new BadRequestException(`Unknown docId: ${historyDoc.docId}`);
 
+    const sectionDoc = await this.lookupSectionDoc(anchor, historyDoc.section as AnnualAccountSectionKey);
+    if (!sectionDoc) throw new NotFoundException('Section not found');
+
     await Promise.all([
       this.uploadHistoryModel.updateOne(
         { uploadId },
@@ -372,6 +407,7 @@ export class AnnualAccountsService implements OnModuleInit {
             'ocrInfo.validationDetails': null,
             'ocrInfo.failedChecks': [],
             'ocrInfo.isManualReviewRequested': false,
+            'ocrInfo.manualReviewRequestedAt': null,
             'queue.bullJobId': null,
             'queue.status': 'waiting',
             'queue.attempts': (historyDoc.queue?.attempts ?? 0) + 1,
@@ -381,36 +417,37 @@ export class AnnualAccountsService implements OnModuleInit {
 
       this.annualAccountModel.updateOne(
         {
-          _id: new Types.ObjectId(id),
-          [`${historyDoc.section}.documents.docId`]: historyDoc.docId,
+          _id: sectionDoc._id,
+          'documents.docId': historyDoc.docId,
         },
         {
           $set: {
-            [`${historyDoc.section}.documents.$.processingStatus`]: 'PROCESSING',
-            [`${historyDoc.section}.documents.$.currentUpload.ocrInfo.jobId`]: null,
-            [`${historyDoc.section}.documents.$.currentUpload.ocrInfo.status`]: null,
-            [`${historyDoc.section}.documents.$.currentUpload.ocrInfo.progressStep`]: null,
-            [`${historyDoc.section}.documents.$.currentUpload.ocrInfo.submittedAt`]: null,
-            [`${historyDoc.section}.documents.$.currentUpload.ocrInfo.completedAt`]: null,
-            [`${historyDoc.section}.documents.$.currentUpload.ocrInfo.validationStatus`]: null,
-            [`${historyDoc.section}.documents.$.currentUpload.ocrInfo.validationDetails`]: null,
-            [`${historyDoc.section}.documents.$.currentUpload.ocrInfo.failedChecks`]: [],
-            [`${historyDoc.section}.documents.$.currentUpload.ocrInfo.isManualReviewRequested`]: false,
+            'documents.$.processingStatus': 'PROCESSING',
+            'documents.$.currentUpload.ocrInfo.jobId': null,
+            'documents.$.currentUpload.ocrInfo.status': null,
+            'documents.$.currentUpload.ocrInfo.progressStep': null,
+            'documents.$.currentUpload.ocrInfo.submittedAt': null,
+            'documents.$.currentUpload.ocrInfo.completedAt': null,
+            'documents.$.currentUpload.ocrInfo.validationStatus': null,
+            'documents.$.currentUpload.ocrInfo.validationDetails': null,
+            'documents.$.currentUpload.ocrInfo.failedChecks': [],
+            'documents.$.currentUpload.ocrInfo.isManualReviewRequested': false,
+            'documents.$.currentUpload.ocrInfo.manualReviewRequestedAt': null,
           },
         },
       ),
     ]);
 
-    const sectionData = (doc as any)[historyDoc.section];
     await this.enqueueOcrJob({
       uploadId,
       annualAccountId: id,
-      ulbId: doc.ulb.toString(),
+      ulbId: anchor.ulb.toString(),
       section: historyDoc.section,
+      auditType: historyDoc.auditType,
       docId: historyDoc.docId,
       s3Key: historyDoc.file.path,
       expectedDocType,
-      financialYear: sectionData?.year ?? '',
+      financialYear: sectionDoc.year ?? '',
     });
 
     return { uploadId, status: 'PROCESSING', message: 'Retry queued successfully' };
@@ -418,18 +455,26 @@ export class AnnualAccountsService implements OnModuleInit {
 
   // ─── Lookup by ULB + design year ─────────────────────────────────────────────
 
-  async findByUlbAndYear(ulbId: string, designYearId: string, user: AuthUser) {
+  async findByUlbAndYear(
+    ulbId: string,
+    designYearId: string,
+    section: AnnualAccountSectionKey,
+    user: AuthUser,
+  ) {
+    // Always look up the 'audited' anchor regardless of which section was requested — that's
+    // the id resolveSectionDocument (via getProcessingStatus) expects to resolve against.
     const doc = await this.annualAccountModel
       .findOne({
         ulb: new Types.ObjectId(ulbId),
         design_year: new Types.ObjectId(designYearId),
+        sectionType: 'audited',
       })
       .lean()
       .exec();
 
     if (!doc) return null;
     await this.validateViewAccess(doc, user);
-    return this.getProcessingStatus(doc._id.toString(), user);
+    return this.getProcessingStatus(doc._id.toString(), section, user);
   }
 
   // ─── State-scoped ULB submissions list ───────────────────────────────────────
@@ -466,9 +511,12 @@ export class AnnualAccountsService implements OnModuleInit {
     const page = dto.page ?? 1;
     const pageSize = dto.pageSize ?? 20;
     const notStarted = AnnualAccountFormStatus.NOT_STARTED;
+    const wantSectionType = SECTION_KEY_TO_TYPE[dto.section];
 
     const pipeline: PipelineStage[] = [
       { $match: matchStage },
+      // 'audited' is always the anchor doc's own id — every annualAccountId this endpoint
+      // hands back must be that id regardless of which section tab is being listed.
       {
         $lookup: {
           from: 'xvifc_annualaccounts',
@@ -477,24 +525,49 @@ export class AnnualAccountsService implements OnModuleInit {
             {
               $match: {
                 $expr: {
-                  $and: [{ $eq: ['$ulb', '$$ulbId'] }, { $eq: ['$design_year', new Types.ObjectId(dto.designYearId)] }],
+                  $and: [
+                    { $eq: ['$ulb', '$$ulbId'] },
+                    { $eq: ['$design_year', new Types.ObjectId(dto.designYearId)] },
+                    { $eq: ['$sectionType', 'audited'] },
+                  ],
                 },
               },
             },
           ],
-          as: 'account',
+          as: 'anchorAccount',
         },
       },
-      { $addFields: { account: { $arrayElemAt: ['$account', 0] } } },
+      { $addFields: { anchorAccount: { $arrayElemAt: ['$anchorAccount', 0] } } },
+      {
+        $lookup: {
+          from: 'xvifc_annualaccounts',
+          let: { ulbId: '$_id' },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ['$ulb', '$$ulbId'] },
+                    { $eq: ['$design_year', new Types.ObjectId(dto.designYearId)] },
+                    { $eq: ['$sectionType', wantSectionType] },
+                  ],
+                },
+              },
+            },
+          ],
+          as: 'sectionAccount',
+        },
+      },
+      { $addFields: { sectionAccount: { $arrayElemAt: ['$sectionAccount', 0] } } },
       {
         $addFields: {
-          formStatus: { $ifNull: [`$account.${dto.section}.form_status`, notStarted] },
-          formStatusId: { $ifNull: [`$account.${dto.section}.form_status_id`, FORM_STATUS_ID[notStarted]] },
-          lastUpdatedAt: { $ifNull: ['$account.updatedAt', null] },
+          formStatus: { $ifNull: ['$sectionAccount.form_status', notStarted] },
+          formStatusId: { $ifNull: ['$sectionAccount.form_status_id', FORM_STATUS_ID[notStarted]] },
+          lastUpdatedAt: { $ifNull: ['$sectionAccount.updatedAt', null] },
           hasManualReviewRequests: {
             $anyElementTrue: {
               $map: {
-                input: { $ifNull: [`$account.${dto.section}.documents`, []] },
+                input: { $ifNull: ['$sectionAccount.documents', []] },
                 as: 'd',
                 in: { $ifNull: ['$$d.currentUpload.ocrInfo.isManualReviewRequested', false] },
               },
@@ -525,7 +598,7 @@ export class AnnualAccountsService implements OnModuleInit {
               formStatus: 1,
               formStatusId: 1,
               lastUpdatedAt: 1,
-              annualAccountId: { $ifNull: ['$account._id', null] },
+              annualAccountId: { $ifNull: ['$anchorAccount._id', null] },
               hasManualReviewRequests: 1,
             },
           },
@@ -554,27 +627,25 @@ export class AnnualAccountsService implements OnModuleInit {
   /** STATE users are always scoped to their own state; ADMIN may optionally pass one, else sees all. */
   // ─── Get full details ────────────────────────────────────────────────────────
 
-  async getDetails(id: string, user: AuthUser) {
-    const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
-    if (!doc) throw new NotFoundException('Annual account not found');
-    await this.validateViewAccess(doc, user);
-    return this.stripS3Keys(doc);
+  async getDetails(id: string, section: AnnualAccountSectionKey, user: AuthUser) {
+    const { anchor, sectionDoc } = await this.resolveSectionDocument(id, section);
+    await this.validateViewAccess(anchor, user);
+
+    return { annualAccountId: anchor._id, data: sectionDoc ? this.stripS3Keys(sectionDoc) : null };
   }
 
   // ─── Polling status ───────────────────────────────────────────────────────────
 
-  async getProcessingStatus(id: string, user: AuthUser) {
-    const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
-    if (!doc) throw new NotFoundException('Annual account not found');
-    await this.validateViewAccess(doc, user);
+  async getProcessingStatus(id: string, section: AnnualAccountSectionKey, user: AuthUser) {
+    const { anchor, sectionDoc } = await this.resolveSectionDocument(id, section);
+    await this.validateViewAccess(anchor, user);
 
-    const hasStateAccess = await this.hasStateAccessToUlb(user, doc.ulb);
+    const hasStateAccess = await this.hasStateAccessToUlb(user, anchor.ulb);
 
-    // Batch-fetch startedAt for every currently-PROCESSING document across both sections, so a
+    // Batch-fetch startedAt for every currently-PROCESSING document in this section, so a
     // long-stuck upload (e.g. the worker died mid-job on a server restart) can be flagged stale
     // instead of spinning forever with no way out.
-    const processingUploadIds: string[] = [(doc as any).auditedData, (doc as any).unauditedData]
-      .flatMap((section: any) => section?.documents ?? [])
+    const processingUploadIds: string[] = (sectionDoc?.documents ?? [])
       .filter((d: any) => d.processingStatus === 'PROCESSING' && d.currentUpload?.uploadId)
       .map((d: any) => d.currentUpload.uploadId);
 
@@ -596,7 +667,11 @@ export class AnnualAccountsService implements OnModuleInit {
     };
 
     const buildSectionStatus = (section: any) => {
-      if (!section) {
+      // A section is "not started" either because its document doesn't exist yet (unaudited,
+      // never touched) or because it exists only as the anchor placeholder created by the
+      // very first upload to *either* section (audited, materialized but never itself
+      // uploaded to) — both cases render identically.
+      if (!section || section.form_status === AnnualAccountFormStatus.NOT_STARTED) {
         const status = AnnualAccountFormStatus.NOT_STARTED;
         return {
           form_status: status,
@@ -655,28 +730,36 @@ export class AnnualAccountsService implements OnModuleInit {
           stateDecision: d.stateDecision
             ? { status: d.stateDecision.status, note: d.stateDecision.note, decidedAt: d.stateDecision.decidedAt }
             : null,
+          manualReviewDecision: d.manualReviewDecision
+            ? {
+                status: d.manualReviewDecision.status,
+                note: d.manualReviewDecision.note,
+                decidedAt: d.manualReviewDecision.decidedAt,
+              }
+            : null,
         })),
       };
     };
 
-    const ulb = await this.ulbModel.findById(doc.ulb).select('name code').lean().exec();
+    const ulb = await this.ulbModel.findById(anchor.ulb).select('name code').lean().exec();
 
     return {
-      annualAccountId: doc._id,
+      annualAccountId: anchor._id,
       ulbName: ulb?.name ?? null,
       ulbCode: ulb?.code ?? null,
-      auditedData: buildSectionStatus(doc.auditedData),
-      unauditedData: buildSectionStatus(doc.unauditedData),
+      data: buildSectionStatus(sectionDoc),
     };
   }
 
   // ─── Form status audit log ────────────────────────────────────────────────────
 
-  async getFormLogs(id: string, section: 'auditedData' | 'unauditedData' | undefined, user: AuthUser) {
+  async getFormLogs(id: string, section: AnnualAccountSectionKey | undefined, user: AuthUser) {
     const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
     if (!doc) throw new NotFoundException('Annual account not found');
     await this.validateViewAccess(doc, user);
 
+    // Every form-log entry (either section) is stamped with the anchor id — see
+    // resolveSectionDocument.
     const filter: Record<string, unknown> = { annualAccountId: new Types.ObjectId(id) };
     if (section) filter.section = section;
 
@@ -697,28 +780,25 @@ export class AnnualAccountsService implements OnModuleInit {
 
   // ─── Remove (hard-delete) a document slot ────────────────────────────────────
 
-  async removeDocument(id: string, section: 'auditedData' | 'unauditedData', docId: string, user: AuthUser) {
-    const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
-    if (!doc) throw new NotFoundException('Annual account not found');
-    await this.validateViewAccess(doc, user);
+  async removeDocument(id: string, section: AnnualAccountSectionKey, docId: string, user: AuthUser) {
+    const { anchor, sectionDoc } = await this.resolveSectionDocument(id, section);
+    await this.validateViewAccess(anchor, user);
+    if (!sectionDoc) throw new NotFoundException('Section not found');
 
-    const sectionData = (doc as any)[section];
-    if (!sectionData) throw new NotFoundException('Section not found');
-
-    const docSlot = (sectionData.documents ?? []).find((d: any) => d.docId === docId);
+    const docSlot = (sectionDoc.documents ?? []).find((d: any) => d.docId === docId);
     if (!docSlot) throw new NotFoundException('Document not found in this section');
 
-    if (!canUlbReuploadDocument(sectionData.form_status_id, docSlot.stateDecision)) {
+    if (!canUlbReuploadDocument(sectionDoc.form_status_id, docSlot.stateDecision)) {
       throw new ForbiddenException('This document has already been approved and cannot be removed.');
     }
 
     await this.annualAccountModel.updateOne(
-      { _id: new Types.ObjectId(id), [`${section}.documents.docId`]: docId },
+      { _id: sectionDoc._id, 'documents.docId': docId },
       {
         $set: {
-          [`${section}.documents.$.currentUpload`]: null,
-          [`${section}.documents.$.uploadStatus`]: 'NOT_UPLOADED',
-          [`${section}.documents.$.processingStatus`]: 'NOT_STARTED',
+          'documents.$.currentUpload': null,
+          'documents.$.uploadStatus': 'NOT_UPLOADED',
+          'documents.$.processingStatus': 'NOT_STARTED',
           updatedAt: new Date(),
         },
       },
@@ -730,19 +810,16 @@ export class AnnualAccountsService implements OnModuleInit {
 
   // ─── ULB requests manual review of a failed OCR validation ───────────────────
 
-  async requestManualReview(id: string, section: 'auditedData' | 'unauditedData', docId: string, user: AuthUser) {
+  async requestManualReview(id: string, section: AnnualAccountSectionKey, docId: string, user: AuthUser) {
     if (user.scope !== Scope.ULB) {
       throw new ForbiddenException('Only ULB users may request manual review');
     }
 
-    const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
-    if (!doc) throw new NotFoundException('Annual account not found');
-    await this.validateViewAccess(doc, user);
+    const { anchor, sectionDoc } = await this.resolveSectionDocument(id, section);
+    await this.validateViewAccess(anchor, user);
+    if (!sectionDoc) throw new NotFoundException('Section not found');
 
-    const sectionData = (doc as any)[section];
-    if (!sectionData) throw new NotFoundException('Section not found');
-
-    const docSlot = (sectionData.documents ?? []).find((d: any) => d.docId === docId);
+    const docSlot = (sectionDoc.documents ?? []).find((d: any) => d.docId === docId);
     if (!docSlot?.currentUpload) throw new NotFoundException('Document not found in this section');
 
     if (docSlot.currentUpload.ocrInfo?.validationStatus !== 'FAIL') {
@@ -752,53 +829,333 @@ export class AnnualAccountsService implements OnModuleInit {
       throw new BadRequestException('Manual review has already been requested for this document.');
     }
 
+    const requestedAt = new Date();
     await Promise.all([
       this.annualAccountModel.updateOne(
-        { _id: new Types.ObjectId(id), [`${section}.documents.docId`]: docId },
-        { $set: { [`${section}.documents.$.currentUpload.ocrInfo.isManualReviewRequested`]: true } },
+        { _id: sectionDoc._id, 'documents.docId': docId },
+        {
+          $set: {
+            'documents.$.currentUpload.ocrInfo.isManualReviewRequested': true,
+            'documents.$.currentUpload.ocrInfo.manualReviewRequestedAt': requestedAt,
+            // A fresh request supersedes whatever ADMIN decided last cycle (e.g. after a retry).
+            'documents.$.manualReviewDecision': null,
+          },
+        },
       ),
       this.uploadHistoryModel.updateOne(
         { uploadId: docSlot.currentUpload.uploadId },
-        { $set: { 'ocrInfo.isManualReviewRequested': true } },
+        { $set: { 'ocrInfo.isManualReviewRequested': true, 'ocrInfo.manualReviewRequestedAt': requestedAt } },
       ),
     ]);
 
     this.logger.log(
       `Manual review requested — annualAccountId=${id} section=${section} docId=${docId} by user=${user._id}`,
     );
-    return this.getProcessingStatus(id, user);
+
+    this.notifyManualReviewRequested(anchor, section, docSlot, requestedAt).catch((err: unknown) => {
+      this.logger.error(`Failed to queue manual-review-requested notification for annualAccountId=${id}:`, err);
+    });
+
+    return this.getProcessingStatus(id, section, user);
+  }
+
+  private async notifyManualReviewRequested(
+    doc: { ulb: Types.ObjectId },
+    section: AnnualAccountSectionKey,
+    docSlot: { docId: string; currentUpload: { file?: { originalName?: string | null } | null } },
+    requestedAt: Date,
+  ): Promise<void> {
+    const notifyEmail = this.configService.get<string>('MANUAL_REVIEW_NOTIFY_EMAIL');
+    if (!notifyEmail) return;
+
+    const ulbDoc = await this.ulbModel.findById(doc.ulb).select('name code').lean().exec();
+    const clientUrl = this.configService.get<string>('CLIENT_URL', 'https://cityfinance.in');
+
+    await this.emailQueueService.addEmailJob({
+      to: notifyEmail,
+      subject: 'XVI-FC: Manual review requested for a ULB annual account document',
+      templateName: './annual-account-manual-review-requested',
+      mailData: {
+        ulbName: ulbDoc?.name ?? 'Unknown ULB',
+        ulbCode: ulbDoc?.code ?? '—',
+        section: SECTION_LABELS[section],
+        docId: docSlot.docId,
+        fileName: docSlot.currentUpload.file?.originalName ?? docSlot.docId,
+        requestedAt: requestedAt.toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }),
+        reviewQueueUrl: `${clientUrl}/xvifc`,
+      },
+    });
+  }
+
+  // ─── ADMIN approves/rejects a ULB's manual-review request ────────────────────
+
+  async decideManualReview(
+    id: string,
+    section: AnnualAccountSectionKey,
+    docId: string,
+    dto: ManualReviewDecisionDto,
+    user: AuthUser,
+    ipAddress: string | null = null,
+    userAgent: string | null = null,
+  ) {
+    if (user.scope !== Scope.ADMIN) {
+      throw new ForbiddenException('Only ADMIN users may decide a manual review request');
+    }
+
+    const { anchor, sectionDoc } = await this.resolveSectionDocument(id, section);
+    if (!sectionDoc) throw new NotFoundException('Section not found');
+
+    const docSlot = (sectionDoc.documents ?? []).find((d: any) => d.docId === docId);
+    if (!docSlot?.currentUpload) throw new NotFoundException('Document not found in this section');
+
+    if (!docSlot.currentUpload.ocrInfo?.isManualReviewRequested) {
+      throw new BadRequestException('No manual review has been requested for this document.');
+    }
+
+    const decision = buildDecisionRecord(dto.decision, dto.note, user, ipAddress, userAgent);
+
+    await this.annualAccountModel.updateOne(
+      { _id: sectionDoc._id, 'documents.docId': docId },
+      {
+        $set: {
+          'documents.$.manualReviewDecision': decision,
+          ...(dto.decision === 'APPROVED' && { 'documents.$.processingStatus': 'PASSED' }),
+        },
+      },
+    );
+
+    await this.formLogModel.create({
+      annualAccountId: new Types.ObjectId(id),
+      ulb: anchor.ulb,
+      designYear: anchor.design_year,
+      section,
+      formId: SECTION_FORM_IDS[section],
+      action: dto.decision,
+      toStatus: sectionDoc.form_status,
+      actorStage: 'ADMIN',
+      userInfo: { userId: new Types.ObjectId(user._id), role: user.role, ipAddress, userAgent },
+      ...(dto.note != null && { note: dto.note }),
+      documents: [
+        buildFormLogDocumentEntry(docId, dto.decision, dto.note ?? null, docSlot.currentUpload.file?.path ?? null),
+      ],
+    });
+
+    this.logger.log(
+      `Manual review ${dto.decision.toLowerCase()} — annualAccountId=${id} section=${section} docId=${docId} by user=${user._id}`,
+    );
+    return this.getProcessingStatus(id, section, user);
+  }
+
+  // ─── ADMIN's global manual-review queue ──────────────────────────────────────
+
+  async getManualReviewQueue(dto: ManualReviewQueueQueryDto, user: AuthUser) {
+    if (user.scope !== Scope.ADMIN) {
+      throw new ForbiddenException('Only ADMIN users may view the manual-review queue');
+    }
+
+    const page = dto.page ?? 1;
+    const pageSize = dto.pageSize ?? 20;
+
+    // Rooted at the 'audited' document so `$_id` is always the anchor id for both branches
+    // below — the unaudited sibling is joined in, never queried as its own starting point.
+    const pipeline: PipelineStage[] = [
+      { $match: { sectionType: 'audited' } },
+      {
+        $lookup: {
+          from: 'xvifc_annualaccounts',
+          let: { ulbId: '$ulb', designYear: '$design_year' },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ['$ulb', '$$ulbId'] },
+                    { $eq: ['$design_year', '$$designYear'] },
+                    { $eq: ['$sectionType', 'unaudited'] },
+                  ],
+                },
+              },
+            },
+          ],
+          as: 'unauditedSibling',
+        },
+      },
+      { $addFields: { unauditedSibling: { $arrayElemAt: ['$unauditedSibling', 0] } } },
+      {
+        $facet: {
+          auditedRows: [
+            // $unwind's default behavior (no preserveNullAndEmptyArrays) already skips documents
+            // with no documents — no separate null-guard needed beforehand.
+            { $unwind: '$documents' },
+            {
+              $match: {
+                'documents.currentUpload.ocrInfo.isManualReviewRequested': true,
+                'documents.manualReviewDecision': null,
+              },
+            },
+            {
+              $project: {
+                annualAccountId: '$_id',
+                ulbId: '$ulb',
+                state: '$state',
+                section: { $literal: 'auditedData' },
+                year: '$year',
+                docId: '$documents.docId',
+                uploadId: '$documents.currentUpload.uploadId',
+                jobId: '$documents.currentUpload.ocrInfo.jobId',
+                fileName: '$documents.currentUpload.file.originalName',
+                sizeKb: '$documents.currentUpload.file.sizeKb',
+                validationStatus: '$documents.currentUpload.ocrInfo.validationStatus',
+                validationDetails: '$documents.currentUpload.ocrInfo.validationDetails',
+                failedChecks: '$documents.currentUpload.ocrInfo.failedChecks',
+                manualReviewRequestedAt: '$documents.currentUpload.ocrInfo.manualReviewRequestedAt',
+              },
+            },
+          ],
+          unauditedRows: [
+            { $unwind: '$unauditedSibling.documents' },
+            {
+              $match: {
+                'unauditedSibling.documents.currentUpload.ocrInfo.isManualReviewRequested': true,
+                'unauditedSibling.documents.manualReviewDecision': null,
+              },
+            },
+            {
+              $project: {
+                // Anchor's own _id, not the unaudited sibling's — the external annualAccountId
+                // is always the audited document's id.
+                annualAccountId: '$_id',
+                ulbId: '$ulb',
+                state: '$state',
+                section: { $literal: 'unauditedData' },
+                year: '$unauditedSibling.year',
+                docId: '$unauditedSibling.documents.docId',
+                uploadId: '$unauditedSibling.documents.currentUpload.uploadId',
+                jobId: '$unauditedSibling.documents.currentUpload.ocrInfo.jobId',
+                fileName: '$unauditedSibling.documents.currentUpload.file.originalName',
+                sizeKb: '$unauditedSibling.documents.currentUpload.file.sizeKb',
+                validationStatus: '$unauditedSibling.documents.currentUpload.ocrInfo.validationStatus',
+                validationDetails: '$unauditedSibling.documents.currentUpload.ocrInfo.validationDetails',
+                failedChecks: '$unauditedSibling.documents.currentUpload.ocrInfo.failedChecks',
+                manualReviewRequestedAt: '$unauditedSibling.documents.currentUpload.ocrInfo.manualReviewRequestedAt',
+              },
+            },
+          ],
+        },
+      },
+      { $project: { rows: { $concatArrays: ['$auditedRows', '$unauditedRows'] } } },
+      { $unwind: '$rows' },
+      { $replaceRoot: { newRoot: '$rows' } },
+      {
+        $lookup: {
+          from: 'ulbs',
+          localField: 'ulbId',
+          foreignField: '_id',
+          as: 'ulbDoc',
+        },
+      },
+      { $addFields: { ulbDoc: { $arrayElemAt: ['$ulbDoc', 0] } } },
+      {
+        $lookup: {
+          from: 'states',
+          localField: 'state',
+          foreignField: '_id',
+          as: 'stateDoc',
+        },
+      },
+      { $addFields: { stateDoc: { $arrayElemAt: ['$stateDoc', 0] } } },
+      {
+        $addFields: {
+          ulbName: '$ulbDoc.name',
+          ulbCode: '$ulbDoc.code',
+          stateName: '$stateDoc.name',
+        },
+      },
+      ...(dto.search?.trim()
+        ? [
+            {
+              $match: {
+                $or: [
+                  { ulbName: new RegExp(escapeRegex(dto.search.trim()), 'i') },
+                  { ulbCode: new RegExp(escapeRegex(dto.search.trim()), 'i') },
+                ],
+              },
+            } as PipelineStage,
+          ]
+        : []),
+      { $sort: { manualReviewRequestedAt: 1 } },
+      {
+        $facet: {
+          data: [
+            { $skip: (page - 1) * pageSize },
+            { $limit: pageSize },
+            {
+              $project: {
+                _id: 0,
+                annualAccountId: 1,
+                ulbId: 1,
+                ulbName: 1,
+                ulbCode: 1,
+                stateName: 1,
+                section: 1,
+                year: 1,
+                docId: 1,
+                uploadId: 1,
+                jobId: 1,
+                fileName: 1,
+                sizeKb: 1,
+                validationStatus: 1,
+                validationDetails: 1,
+                failedChecks: 1,
+                manualReviewRequestedAt: 1,
+              },
+            },
+          ],
+          totalCount: [{ $count: 'count' }],
+        },
+      },
+    ];
+
+    const [result] = await this.annualAccountModel.aggregate(pipeline).exec();
+    const rows = result?.data ?? [];
+    const total = result?.totalCount?.[0]?.count ?? 0;
+
+    return { total, page, pageSize, rows };
   }
 
   // ─── Submit section to State DMA ─────────────────────────────────────────────
 
   async submitSection(
     id: string,
-    section: 'auditedData' | 'unauditedData',
+    section: AnnualAccountSectionKey,
     user: AuthUser,
     ipAddress: string | null = null,
     userAgent: string | null = null,
   ) {
-    const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
-    if (!doc) throw new NotFoundException('Annual account not found');
+    const { anchor, sectionDoc } = await this.resolveSectionDocument(id, section);
     // this.validateSubmitAccess(doc, user);
+    await this.ulbEligibilityService.assertUlbEligibleForGrantCycle(
+      anchor.ulb,
+      'XVIFC',
+      CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE,
+    );
 
-    const sectionData = (doc as any)[section];
-    if (!sectionData?.documents?.length) {
+    if (!sectionDoc?.documents?.length) {
       throw new BadRequestException('No documents found in this section');
     }
 
-    if (!canUlbSubmitForm(sectionData.form_status_id)) {
-      throw new ForbiddenException(`This section cannot be submitted while its status is ${sectionData.form_status}.`);
+    if (!canUlbSubmitForm(sectionDoc.form_status_id)) {
+      throw new ForbiddenException(`This section cannot be submitted while its status is ${sectionDoc.form_status}.`);
     }
 
     // Resolve which docIds are currently required by the active upload config.
     // This means documents that were previously uploaded but are now hidden in the
     // config (e.g. receipts-payments while temporarily hidden) are not blocking.
-    const requiredDocIds = await this.resolveRequiredDocIds(doc.design_year?.toString(), section);
+    const requiredDocIds = await this.resolveRequiredDocIds(anchor.design_year?.toString(), section);
 
     const docsToCheck = requiredDocIds
-      ? sectionData.documents.filter((d: any) => requiredDocIds!.includes(d.docId))
-      : sectionData.documents;
+      ? sectionDoc.documents.filter((d: any) => requiredDocIds.includes(d.docId))
+      : sectionDoc.documents;
 
     if (!docsToCheck.length) {
       throw new BadRequestException('No documents found in this section');
@@ -821,14 +1178,14 @@ export class AnnualAccountsService implements OnModuleInit {
     }
 
     await this.annualAccountModel.updateOne(
-      { _id: new Types.ObjectId(id) },
+      { _id: sectionDoc._id },
       {
         $set: {
-          [`${section}.form_status`]: AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE,
-          [`${section}.form_status_id`]: FORM_STATUS_ID[AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE],
-          [`${section}.selfDeclared`]: true,
-          [`${section}.declaredBy`]: { userId: new Types.ObjectId(user._id), role: user.role, ipAddress, userAgent },
-          [`${section}.declaredAt`]: new Date(),
+          form_status: AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE,
+          form_status_id: FORM_STATUS_ID[AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE],
+          selfDeclared: true,
+          declaredBy: { userId: new Types.ObjectId(user._id), role: user.role, ipAddress, userAgent },
+          declaredAt: new Date(),
           modifiedBy: new Types.ObjectId(user._id),
         },
       },
@@ -836,8 +1193,8 @@ export class AnnualAccountsService implements OnModuleInit {
 
     await this.formLogModel.create({
       annualAccountId: new Types.ObjectId(id),
-      ulb: doc.ulb,
-      designYear: doc.design_year,
+      ulb: anchor.ulb,
+      designYear: anchor.design_year,
       section,
       formId: SECTION_FORM_IDS[section],
       action: 'SUBMITTED',
@@ -869,17 +1226,14 @@ export class AnnualAccountsService implements OnModuleInit {
     ipAddress: string | null = null,
     userAgent: string | null = null,
   ) {
-    const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
-    if (!doc) throw new NotFoundException('Annual account not found');
+    const { anchor, sectionDoc } = await this.resolveSectionDocument(id, dto.section);
+    if (!sectionDoc) throw new NotFoundException('Section not found');
+    await this.assertCanDecide(anchor, user, sectionDoc.form_status);
 
-    const sectionData = (doc as any)[dto.section];
-    if (!sectionData) throw new NotFoundException('Section not found');
-    await this.assertCanDecide(doc, user, sectionData.form_status);
-
-    const docSlot = (sectionData.documents ?? []).find((d: any) => d.docId === docId);
+    const docSlot = (sectionDoc.documents ?? []).find((d: any) => d.docId === docId);
     if (!docSlot) throw new NotFoundException('Document not found in this section');
 
-    const requiredDocIds = await this.resolveRequiredDocIds(doc.design_year?.toString(), dto.section);
+    const requiredDocIds = await this.resolveRequiredDocIds(anchor.design_year?.toString(), dto.section);
     if (requiredDocIds && !requiredDocIds.includes(docId)) {
       throw new BadRequestException('This document is optional and cannot be approved or returned.');
     }
@@ -891,15 +1245,15 @@ export class AnnualAccountsService implements OnModuleInit {
     // action (decideSection), not the moment any one document is approved or returned.
     // Provisional until then — STATE can undo it (see undoDocumentDecision) any time before.
     await this.annualAccountModel.updateOne(
-      { _id: new Types.ObjectId(id), [`${dto.section}.documents.docId`]: docId },
-      { $set: { [`${dto.section}.documents.$.stateDecision`]: decision, updatedAt: new Date() } },
+      { _id: sectionDoc._id, 'documents.docId': docId },
+      { $set: { 'documents.$.stateDecision': decision, updatedAt: new Date() } },
     );
 
     this.logger.log(
       `Document ${dto.decision.toLowerCase()} — annualAccountId=${id} section=${dto.section} docId=${docId} by user=${user._id}`,
     );
 
-    return this.getProcessingStatus(id, user);
+    return this.getProcessingStatus(id, dto.section, user);
   }
 
   /**
@@ -910,30 +1264,24 @@ export class AnnualAccountsService implements OnModuleInit {
    * decisions are provisional until the section is finalized, so undoing one isn't an
    * audit-worthy event on its own.
    */
-  async undoDocumentDecision(
-    id: string,
-    section: 'auditedData' | 'unauditedData',
-    docId: string,
-    user: AuthUser,
-  ) {
-    const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
-    if (!doc) throw new NotFoundException('Annual account not found');
+  async undoDocumentDecision(id: string, section: AnnualAccountSectionKey, docId: string, user: AuthUser) {
+    const { anchor, sectionDoc } = await this.resolveSectionDocument(id, section);
+    if (!sectionDoc) throw new NotFoundException('Section not found');
+    await this.assertCanDecide(anchor, user, sectionDoc.form_status);
 
-    const sectionData = (doc as any)[section];
-    if (!sectionData) throw new NotFoundException('Section not found');
-    await this.assertCanDecide(doc, user, sectionData.form_status);
-
-    const docSlot = (sectionData.documents ?? []).find((d: any) => d.docId === docId);
+    const docSlot = (sectionDoc.documents ?? []).find((d: any) => d.docId === docId);
     if (!docSlot) throw new NotFoundException('Document not found in this section');
 
     await this.annualAccountModel.updateOne(
-      { _id: new Types.ObjectId(id), [`${section}.documents.docId`]: docId },
-      { $set: { [`${section}.documents.$.stateDecision`]: null, updatedAt: new Date() } },
+      { _id: sectionDoc._id, 'documents.docId': docId },
+      { $set: { 'documents.$.stateDecision': null, updatedAt: new Date() } },
     );
 
-    this.logger.log(`Document decision undone — annualAccountId=${id} section=${section} docId=${docId} by user=${user._id}`);
+    this.logger.log(
+      `Document decision undone — annualAccountId=${id} section=${section} docId=${docId} by user=${user._id}`,
+    );
 
-    return this.getProcessingStatus(id, user);
+    return this.getProcessingStatus(id, section, user);
   }
 
   /**
@@ -958,19 +1306,16 @@ export class AnnualAccountsService implements OnModuleInit {
     userAgent: string | null = null,
     batchId: string | null = null,
   ) {
-    const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
-    if (!doc) throw new NotFoundException('Annual account not found');
-
-    const sectionData = (doc as any)[dto.section];
-    if (!sectionData) throw new NotFoundException('Section not found');
-    await this.assertCanDecide(doc, user, sectionData.form_status);
+    const { anchor, sectionDoc } = await this.resolveSectionDocument(id, dto.section);
+    if (!sectionDoc) throw new NotFoundException('Section not found');
+    await this.assertCanDecide(anchor, user, sectionDoc.form_status);
 
     // Optional documents (e.g. notes-to-accounts) are never approved/returned — individually
     // or via this section-wide sweep — so exclude them from every check below.
-    const requiredDocIds = await this.resolveRequiredDocIds(doc.design_year?.toString(), dto.section);
+    const requiredDocIds = await this.resolveRequiredDocIds(anchor.design_year?.toString(), dto.section);
     const isRequired = (docId: string) => !requiredDocIds || requiredDocIds.includes(docId);
 
-    const documents: any[] = (sectionData.documents ?? []).filter((d: any) => isRequired(d.docId as string));
+    const documents: any[] = (sectionDoc.documents ?? []).filter((d: any) => isRequired(d.docId as string));
     const effectiveByDoc = documents.map((d) => ({
       docId: d.docId as string,
       effective: this.resolveEffectiveDecision(d),
@@ -993,7 +1338,7 @@ export class AnnualAccountsService implements OnModuleInit {
         ? AnnualAccountFormStatus.APPROVED_BY_STATE
         : AnnualAccountFormStatus.RETURNED_BY_STATE;
 
-    assertValidFormStatusTransition(sectionData.form_status_id, FORM_STATUS_ID[newStatus]);
+    assertValidFormStatusTransition(sectionDoc.form_status_id, FORM_STATUS_ID[newStatus]);
 
     const decision = buildDecisionRecord(dto.decision, dto.note, user, ipAddress, userAgent);
 
@@ -1002,15 +1347,15 @@ export class AnnualAccountsService implements OnModuleInit {
     const toBulkDecide = effectiveByDoc.filter((d) => d.effective === null).map((d) => d.docId);
 
     await this.annualAccountModel.updateOne(
-      { _id: new Types.ObjectId(id) },
+      { _id: sectionDoc._id },
       {
         $set: {
-          [`${dto.section}.form_status`]: newStatus,
-          [`${dto.section}.form_status_id`]: FORM_STATUS_ID[newStatus],
-          [`${dto.section}.stateDecision`]: decision,
+          form_status: newStatus,
+          form_status_id: FORM_STATUS_ID[newStatus],
+          stateDecision: decision,
           modifiedBy: new Types.ObjectId(user._id),
           ...(toBulkDecide.length > 0 && {
-            [`${dto.section}.documents.$[elem].stateDecision`]: decision,
+            'documents.$[elem].stateDecision': decision,
           }),
         },
       },
@@ -1034,8 +1379,8 @@ export class AnnualAccountsService implements OnModuleInit {
 
     await this.formLogModel.create({
       annualAccountId: new Types.ObjectId(id),
-      ulb: doc.ulb,
-      designYear: doc.design_year,
+      ulb: anchor.ulb,
+      designYear: anchor.design_year,
       section: dto.section,
       formId: SECTION_FORM_IDS[dto.section],
       action: dto.decision,
@@ -1052,7 +1397,7 @@ export class AnnualAccountsService implements OnModuleInit {
         (toBulkDecide.length > 0 ? ` — bulk-decided ${toBulkDecide.length} document(s)` : ''),
     );
 
-    return this.getProcessingStatus(id, user);
+    return this.getProcessingStatus(id, dto.section, user);
   }
 
   /**
@@ -1068,34 +1413,31 @@ export class AnnualAccountsService implements OnModuleInit {
    */
   async undoSectionApproval(
     id: string,
-    section: 'auditedData' | 'unauditedData',
+    section: AnnualAccountSectionKey,
     user: AuthUser,
     ipAddress: string | null = null,
     userAgent: string | null = null,
   ) {
-    const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
-    if (!doc) throw new NotFoundException('Annual account not found');
-
-    const sectionData = (doc as any)[section];
-    if (!sectionData) throw new NotFoundException('Section not found');
-    await this.assertCanUndoSectionApproval(doc, user, sectionData.form_status);
+    const { anchor, sectionDoc } = await this.resolveSectionDocument(id, section);
+    if (!sectionDoc) throw new NotFoundException('Section not found');
+    await this.assertCanUndoSectionApproval(anchor, user, sectionDoc.form_status);
 
     assertValidFormStatusTransition(
-      sectionData.form_status_id,
+      sectionDoc.form_status_id,
       FORM_STATUS_ID[AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE],
     );
 
     await this.annualAccountModel.updateOne(
-      { _id: new Types.ObjectId(id) },
+      { _id: sectionDoc._id },
       {
         $set: {
-          [`${section}.form_status`]: AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE,
-          [`${section}.form_status_id`]: FORM_STATUS_ID[AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE],
-          [`${section}.stateDecision`]: null,
+          form_status: AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE,
+          form_status_id: FORM_STATUS_ID[AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE],
+          stateDecision: null,
           // Undoing the section-level approval also undoes every document's individual
           // decision — otherwise they'd all still show APPROVED and re-approving the section
           // immediately after would trivially succeed with no real re-review (see decideSection).
-          [`${section}.documents.$[].stateDecision`]: null,
+          'documents.$[].stateDecision': null,
           modifiedBy: new Types.ObjectId(user._id),
         },
       },
@@ -1104,8 +1446,8 @@ export class AnnualAccountsService implements OnModuleInit {
     const userInfo = { userId: new Types.ObjectId(user._id), role: user.role, ipAddress, userAgent };
     const logBase = {
       annualAccountId: new Types.ObjectId(id),
-      ulb: doc.ulb,
-      designYear: doc.design_year,
+      ulb: anchor.ulb,
+      designYear: anchor.design_year,
       section,
       formId: SECTION_FORM_IDS[section],
       action: 'UNDO' as const,
@@ -1118,7 +1460,7 @@ export class AnnualAccountsService implements OnModuleInit {
 
     this.logger.log(`Section approval undone — annualAccountId=${id} section=${section} by user=${user._id}`);
 
-    return this.getProcessingStatus(id, user);
+    return this.getProcessingStatus(id, section, user);
   }
 
   private async assertCanUndoSectionApproval(
@@ -1165,7 +1507,7 @@ export class AnnualAccountsService implements OnModuleInit {
    */
   private async resolveRequiredDocIds(
     designYearId: string | undefined,
-    section: 'auditedData' | 'unauditedData',
+    section: AnnualAccountSectionKey,
   ): Promise<string[] | null> {
     try {
       const formJson = await this.formJsonService.findActiveByDesignYearAndFormId(
@@ -1246,12 +1588,9 @@ export class AnnualAccountsService implements OnModuleInit {
     ipAddress: string | null = null,
     userAgent: string | null = null,
   ) {
-    const doc = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
-    if (!doc) throw new NotFoundException('Annual account not found');
-
-    const sectionData = (doc as any)[dto.section];
-    if (!sectionData) throw new NotFoundException('Section not found');
-    this.assertCanMohuaDecide(user, sectionData.form_status);
+    const { anchor, sectionDoc } = await this.resolveSectionDocument(id, dto.section);
+    if (!sectionDoc) throw new NotFoundException('Section not found');
+    this.assertCanMohuaDecide(user, sectionDoc.form_status);
 
     const newStatus =
       dto.decision === 'APPROVED'
@@ -1261,12 +1600,12 @@ export class AnnualAccountsService implements OnModuleInit {
     const decision = buildDecisionRecord(dto.decision, dto.note, user, ipAddress, userAgent);
 
     await this.annualAccountModel.updateOne(
-      { _id: new Types.ObjectId(id) },
+      { _id: sectionDoc._id },
       {
         $set: {
-          [`${dto.section}.form_status`]: newStatus,
-          [`${dto.section}.form_status_id`]: FORM_STATUS_ID[newStatus],
-          [`${dto.section}.mohuaDecision`]: decision,
+          form_status: newStatus,
+          form_status_id: FORM_STATUS_ID[newStatus],
+          mohuaDecision: decision,
           modifiedBy: new Types.ObjectId(user._id),
         },
       },
@@ -1277,8 +1616,8 @@ export class AnnualAccountsService implements OnModuleInit {
     // so there's no per-document breakdown worth recording for either outcome.
     await this.formLogModel.create({
       annualAccountId: new Types.ObjectId(id),
-      ulb: doc.ulb,
-      designYear: doc.design_year,
+      ulb: anchor.ulb,
+      designYear: anchor.design_year,
       section: dto.section,
       formId: SECTION_FORM_IDS[dto.section],
       action: dto.decision,
@@ -1292,7 +1631,7 @@ export class AnnualAccountsService implements OnModuleInit {
       `Section ${dto.decision.toLowerCase()} by MOHUA — annualAccountId=${id} section=${dto.section} by user=${user._id}`,
     );
 
-    return this.getProcessingStatus(id, user);
+    return this.getProcessingStatus(id, dto.section, user);
   }
 
   /** Guards the MOHUA decision endpoint: requester must hold MOHUA/ADMIN scope and APPROVE_STATE_SUBMISSIONS. */
@@ -1327,6 +1666,35 @@ export class AnnualAccountsService implements OnModuleInit {
     );
   }
 
+  /**
+   * Resolves the physical document for {id, section}: `id` always names the 'audited' anchor
+   * document (every code path that hands out an annualAccountId returns that id — see
+   * findOrInitialize/getProcessingStatus/listUlbSubmissions/getManualReviewQueue), so
+   * 'auditedData' resolves to the anchor itself, and 'unauditedData' is looked up by the
+   * anchor's own {ulb, design_year}. `sectionDoc` is null when that section hasn't been
+   * touched yet (matches the old "embedded sub-object is null" NOT_STARTED semantics) — throws
+   * only when `id` itself doesn't resolve to any document at all.
+   */
+  private async resolveSectionDocument(
+    id: string,
+    section: AnnualAccountSectionKey,
+  ): Promise<{ anchor: any; sectionDoc: any }> {
+    const anchor = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
+    if (!anchor) throw new NotFoundException('Annual account not found');
+    const sectionDoc = section === 'auditedData' ? anchor : await this.lookupSectionDoc(anchor, section);
+    return { anchor, sectionDoc };
+  }
+
+  /** Looks up `section`'s physical document given an already-fetched anchor, or returns it directly when `section` is the anchor's own type. */
+  private async lookupSectionDoc(anchor: any, section: AnnualAccountSectionKey): Promise<any> {
+    const wantType = SECTION_KEY_TO_TYPE[section];
+    if (anchor.sectionType === wantType) return anchor;
+    return this.annualAccountModel
+      .findOne({ ulb: anchor.ulb, design_year: anchor.design_year, sectionType: wantType })
+      .lean()
+      .exec();
+  }
+
   private async findOrInitialize(
     ulbId: string,
     stateId: string,
@@ -1342,18 +1710,25 @@ export class AnnualAccountsService implements OnModuleInit {
     const filter = {
       ulb: new Types.ObjectId(ulbId),
       design_year: new Types.ObjectId(designYearId),
+      sectionType: 'audited' as const,
     };
 
     // Atomic upsert — eliminates the find→create race condition that caused
-    // duplicate-key 11000 errors when multiple uploads arrived simultaneously.
+    // duplicate-key 11000 errors when multiple uploads arrived simultaneously. The anchor is
+    // created here regardless of which section the caller is actually uploading to (it's the
+    // stable {ulb, design_year} identity both sections resolve against) — its own yearId/year
+    // stay null (NOT_STARTED) until an audited document is actually uploaded.
     const doc = await this.annualAccountModel
       .findOneAndUpdate(
         filter,
         {
           $setOnInsert: {
             state: new Types.ObjectId(stateId),
-            auditedData: null,
-            unauditedData: null,
+            yearId: null,
+            year: null,
+            form_status: AnnualAccountFormStatus.NOT_STARTED,
+            form_status_id: FORM_STATUS_ID[AnnualAccountFormStatus.NOT_STARTED],
+            documents: [],
             createdBy: new Types.ObjectId(user._id),
             modifiedBy: new Types.ObjectId(user._id),
           },
@@ -1364,54 +1739,87 @@ export class AnnualAccountsService implements OnModuleInit {
       .lean()
       .exec();
 
-    return doc!._id.toString();
+    return doc._id.toString();
   }
 
   private async upsertDocumentSlot(
     annualAccountId: string,
     dto: UploadDocumentDto,
     currentUpload: Record<string, unknown>,
+    user: AuthUser,
     processingStatus: string = 'PROCESSING',
   ) {
     const { section, docId, yearId, year } = dto;
-    const annAccountObjId = new Types.ObjectId(annualAccountId);
+    const wantType = SECTION_KEY_TO_TYPE[section as AnnualAccountSectionKey];
+
+    const anchor = await this.annualAccountModel
+      .findById(new Types.ObjectId(annualAccountId))
+      .select('ulb state design_year sectionType')
+      .lean()
+      .exec();
+    if (!anchor) throw new NotFoundException('Annual account not found');
+
+    // Lazily create the unaudited sibling on its own first touch — mirrors the anchor's own
+    // NOT_STARTED-until-touched initialization in findOrInitialize.
+    const target =
+      anchor.sectionType === wantType
+        ? anchor
+        : await this.annualAccountModel
+            .findOneAndUpdate(
+              { ulb: anchor.ulb, design_year: anchor.design_year, sectionType: wantType },
+              {
+                $setOnInsert: {
+                  state: anchor.state,
+                  yearId: null,
+                  year: null,
+                  form_status: AnnualAccountFormStatus.NOT_STARTED,
+                  form_status_id: FORM_STATUS_ID[AnnualAccountFormStatus.NOT_STARTED],
+                  documents: [],
+                  createdBy: new Types.ObjectId(user._id),
+                  modifiedBy: new Types.ObjectId(user._id),
+                },
+              },
+              { upsert: true, new: true },
+            )
+            .select('_id')
+            .lean()
+            .exec();
+
+    const targetObjId = target._id;
 
     await this.annualAccountModel.updateOne(
-      { _id: annAccountObjId, [section]: null },
+      { _id: targetObjId, yearId: null },
       {
         $set: {
-          [section]: {
-            yearId: new Types.ObjectId(yearId),
-            year,
-            form_status: AnnualAccountFormStatus.IN_PROGRESS,
-            form_status_id: FORM_STATUS_ID[AnnualAccountFormStatus.IN_PROGRESS],
-            documents: [],
-          },
+          yearId: new Types.ObjectId(yearId),
+          year,
+          form_status: AnnualAccountFormStatus.IN_PROGRESS,
+          form_status_id: FORM_STATUS_ID[AnnualAccountFormStatus.IN_PROGRESS],
         },
       },
     );
 
-    // Ensure form_status is IN_PROGRESS even if section already existed
+    // Ensure form_status is IN_PROGRESS even if the document was already touched before
     await this.annualAccountModel.updateOne(
-      { _id: annAccountObjId, [`${section}.form_status`]: { $ne: AnnualAccountFormStatus.IN_PROGRESS } },
+      { _id: targetObjId, form_status: { $ne: AnnualAccountFormStatus.IN_PROGRESS } },
       {
         $set: {
-          [`${section}.form_status`]: AnnualAccountFormStatus.IN_PROGRESS,
-          [`${section}.form_status_id`]: FORM_STATUS_ID[AnnualAccountFormStatus.IN_PROGRESS],
+          form_status: AnnualAccountFormStatus.IN_PROGRESS,
+          form_status_id: FORM_STATUS_ID[AnnualAccountFormStatus.IN_PROGRESS],
         },
       },
     );
 
     const updated = await this.annualAccountModel.updateOne(
       {
-        _id: annAccountObjId,
-        [`${section}.documents.docId`]: docId,
+        _id: targetObjId,
+        'documents.docId': docId,
       },
       {
         $set: {
-          [`${section}.documents.$.currentUpload`]: currentUpload,
-          [`${section}.documents.$.uploadStatus`]: 'UPLOADED',
-          [`${section}.documents.$.processingStatus`]: processingStatus,
+          'documents.$.currentUpload': currentUpload,
+          'documents.$.uploadStatus': 'UPLOADED',
+          'documents.$.processingStatus': processingStatus,
           updatedAt: new Date(),
         },
       },
@@ -1419,10 +1827,10 @@ export class AnnualAccountsService implements OnModuleInit {
 
     if (updated.modifiedCount === 0) {
       await this.annualAccountModel.updateOne(
-        { _id: annAccountObjId },
+        { _id: targetObjId },
         {
           $push: {
-            [`${section}.documents`]: {
+            documents: {
               docId,
               uploadStatus: 'UPLOADED',
               processingStatus,
@@ -1435,7 +1843,7 @@ export class AnnualAccountsService implements OnModuleInit {
     }
   }
 
-  private validateUploadPermission(user: AuthUser, dto: UploadDocumentDto) {
+  private async validateUploadPermission(user: AuthUser, dto: UploadDocumentDto): Promise<void> {
     if (user.accessLevel === 'VIEWER') {
       throw new ForbiddenException('Viewers cannot upload documents');
     }
@@ -1446,6 +1854,12 @@ export class AnnualAccountsService implements OnModuleInit {
         throw new ForbiddenException('You can only upload documents for your own ULB');
       }
     }
+
+    await this.ulbEligibilityService.assertUlbEligibleForGrantCycle(
+      dto.ulbId,
+      'XVIFC',
+      CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE,
+    );
   }
 
   /**
@@ -1455,24 +1869,25 @@ export class AnnualAccountsService implements OnModuleInit {
   private async assertCanUlbUpload(
     ulbId: string,
     designYearId: string,
-    section: 'auditedData' | 'unauditedData',
+    section: AnnualAccountSectionKey,
     docId: string,
   ): Promise<void> {
-    const doc = await this.annualAccountModel
-      .findOne({ ulb: new Types.ObjectId(ulbId), design_year: new Types.ObjectId(designYearId) })
+    const sectionDoc = await this.annualAccountModel
+      .findOne({
+        ulb: new Types.ObjectId(ulbId),
+        design_year: new Types.ObjectId(designYearId),
+        sectionType: SECTION_KEY_TO_TYPE[section],
+      })
       .lean()
       .exec();
-    if (!doc) return;
+    if (!sectionDoc) return;
 
-    const sectionData = doc[section];
-    if (!sectionData) return;
-
-    if (!canUlbEditForm(sectionData.form_status_id)) {
-      throw new ForbiddenException(`This section cannot be edited while its status is ${sectionData.form_status}.`);
+    if (!canUlbEditForm(sectionDoc.form_status_id)) {
+      throw new ForbiddenException(`This section cannot be edited while its status is ${sectionDoc.form_status}.`);
     }
 
-    const docSlot = sectionData.documents.find((d) => d.docId === docId);
-    if (!canUlbReuploadDocument(sectionData.form_status_id, docSlot?.stateDecision)) {
+    const docSlot = sectionDoc.documents.find((d) => d.docId === docId);
+    if (!canUlbReuploadDocument(sectionDoc.form_status_id, docSlot?.stateDecision)) {
       throw new ForbiddenException('This document has already been approved and cannot be re-uploaded.');
     }
   }
@@ -1549,26 +1964,18 @@ export class AnnualAccountsService implements OnModuleInit {
   }
 
   private stripS3Keys(doc: any): any {
-    const stripSection = (section: any) => {
-      if (!section?.documents) return section;
-      return {
-        ...section,
-        documents: section.documents.map((d: any) => ({
-          ...d,
-          currentUpload: d.currentUpload
-            ? {
-                ...d.currentUpload,
-                file: d.currentUpload.file ? { ...d.currentUpload.file, s3Key: undefined } : d.currentUpload.file,
-              }
-            : null,
-        })),
-      };
-    };
-
+    if (!doc?.documents) return doc;
     return {
       ...doc,
-      auditedData: stripSection(doc.auditedData),
-      unauditedData: stripSection(doc.unauditedData),
+      documents: doc.documents.map((d: any) => ({
+        ...d,
+        currentUpload: d.currentUpload
+          ? {
+              ...d.currentUpload,
+              file: d.currentUpload.file ? { ...d.currentUpload.file, s3Key: undefined } : d.currentUpload.file,
+            }
+          : null,
+      })),
     };
   }
 

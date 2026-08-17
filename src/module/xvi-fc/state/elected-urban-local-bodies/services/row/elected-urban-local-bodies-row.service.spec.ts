@@ -14,6 +14,7 @@ import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import type { XviFcValidationErrorMap } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -65,6 +66,7 @@ const mockForm = {
   matchedDbUlbCount: 10,
   missingDbUlbCount: 0,
   extraExcelRowCount: 0,
+  duplicateUlbCount: 0,
   errorRowCount: 0,
   validationStatus: 'VALID' as const,
 };
@@ -76,14 +78,12 @@ const mockRow = {
   censusCode: '1234567',
   ulbName: 'Test City',
   electedBodyStatus: 'Constituted',
-  rowType: 'EXTRA_ULB' as const,
   datasetVersion: 1,
   errors: [],
 };
 
 const mockDbUlbRow = {
   ...mockRow,
-  rowType: 'DB_ULB' as const,
   censusCode: 'DB_CODE',
   ulbName: 'DB City',
   ulbId: new Types.ObjectId(),
@@ -94,12 +94,20 @@ const updatedRow = { ...mockRow, electedBodyStatus: 'Not Constituted', dateOfCon
 const mockRowTypedFields: EulbTypedFieldConfig[] = [
   {
     key: 'dateOfConstitution',
-    label: 'Date of Constitution',
+    label: 'Date on which the elected body is in place.',
     formFieldType: 'date',
     fieldTypes: ['EULB_ROW_EDIT_FIELDS'],
     validations: [
-      { name: 'minDate', validator: '2021-05-31', message: 'Date of Constitution cannot be before 31 May 2021.' },
-      { name: 'maxDate', validator: 'TODAY', message: 'Date of Constitution cannot be a future date.' },
+      {
+        name: 'minDate',
+        validator: '2021-05-31',
+        message: 'Date on which the elected body is in place cannot be before 31 May 2021.',
+      },
+      {
+        name: 'maxDate',
+        validator: 'TODAY',
+        message: 'Date on which the elected body is in place cannot be a future date.',
+      },
     ],
   },
   {
@@ -127,7 +135,7 @@ const mockRowTypedFields: EulbTypedFieldConfig[] = [
     options: [
       { id: 'Constituted', label: 'Constituted' },
       { id: 'Not Constituted', label: 'Not Constituted' },
-      { id: 'Exempt', label: 'Exempt' },
+      { id: '6th Schedule', label: '6th Schedule' },
     ],
     validations: [{ name: 'required', validator: null, message: 'Elected Body Status is required.' }],
   },
@@ -164,6 +172,7 @@ describe('ElectedUrbanLocalBodiesRowService', () => {
   let formModel: Record<string, jest.Mock>;
   let rowModel: Record<string, jest.Mock>;
   let validator: ElectedUrbanLocalBodiesValidator;
+  let excelService: { generateExcel: jest.Mock };
 
   beforeEach(async () => {
     formModel = {
@@ -183,6 +192,10 @@ describe('ElectedUrbanLocalBodiesRowService', () => {
       validatePortalUpdateFields: jest.fn().mockReturnValue([]),
       revalidateRow: jest.fn().mockReturnValue([]),
     };
+    excelService = { generateExcel: jest.fn().mockResolvedValue(new ArrayBuffer(0)) };
+    const ulbEligibilityService = {
+      assertUlbEligibleForGrantCycle: jest.fn().mockResolvedValue(undefined),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -191,8 +204,9 @@ describe('ElectedUrbanLocalBodiesRowService', () => {
         { provide: getModelToken(ElectedUrbanLocalBodiesRow.name), useValue: rowModel },
         { provide: getModelToken(Ulb.name), useValue: ulbModel },
         { provide: ElectedUrbanLocalBodiesValidator, useValue: mockValidator },
-        { provide: ExcelService, useValue: { generateExcel: jest.fn() } },
+        { provide: ExcelService, useValue: excelService },
         { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
+        { provide: UlbEligibilityService, useValue: ulbEligibilityService },
       ],
     }).compile();
 
@@ -240,7 +254,7 @@ describe('ElectedUrbanLocalBodiesRowService', () => {
         {
           field: 'electedBodyStatus',
           code: 'invalid_enum',
-          message: 'Status must be one of: Constituted, Not Constituted, Exempt.',
+          message: 'Status must be one of: Constituted, Not Constituted, 6th Schedule.',
         },
       ]);
 
@@ -302,22 +316,7 @@ describe('ElectedUrbanLocalBodiesRowService', () => {
       });
     });
 
-    it('updates censusCode and ulbName in updateFields for EXTRA_ULB rows', async () => {
-      rowModel['findOne'] = jest.fn().mockReturnValueOnce(q(mockRow)).mockReturnValueOnce(q(null));
-
-      await service.updateRow(
-        stateOid.toString(),
-        yearOid.toString(),
-        rowOid.toString(),
-        { censusCode: 'NEW_CODE', ulbName: 'New City' },
-        adminUser,
-      );
-      const setArg = rowModel['findByIdAndUpdate'].mock.calls[0][1].$set as Record<string, unknown>;
-      expect(setArg['censusCode']).toBe('NEW_CODE');
-      expect(setArg['ulbName']).toBe('New City');
-    });
-
-    it('ignores censusCode and ulbName from DTO for DB_ULB rows and preserves stored values', async () => {
+    it('ignores censusCode and ulbName from DTO and preserves stored values — identity fields are never portal-editable', async () => {
       rowModel['findOne'] = jest.fn().mockReturnValue(q(mockDbUlbRow));
       const updatedDbRow = { ...mockDbUlbRow };
       rowModel['findByIdAndUpdate'] = jest.fn().mockReturnValue(q(updatedDbRow));
@@ -353,85 +352,13 @@ describe('ElectedUrbanLocalBodiesRowService', () => {
       expect(errMap).toHaveProperty('remarks');
     });
 
-    // ─── census code duplicate enforcement ───────────────────────────────────
-
-    it('rejects a censusCode update that duplicates an existing active row in the same design year', async () => {
-      const existingDuplicate = { ...mockRow, _id: new Types.ObjectId(), censusCode: 'DUP_CODE' };
-      rowModel['findOne'] = jest.fn().mockReturnValueOnce(q(mockRow)).mockReturnValueOnce(q(existingDuplicate));
-
-      let caught: unknown;
-      try {
-        await service.updateRow(
-          stateOid.toString(),
-          yearOid.toString(),
-          rowOid.toString(),
-          { censusCode: 'DUP_CODE' },
-          adminUser,
-        );
-      } catch (e) {
-        caught = e;
-      }
-
-      expect(caught).toBeInstanceOf(BadRequestException);
-      const response = (caught as BadRequestException).getResponse() as Record<string, unknown>;
-      const errMap = response['errors'] as XviFcValidationErrorMap;
-      expect(errMap).toHaveProperty('censusCode');
-      expect(errMap['censusCode'][0]).toMatchObject({ field: 'censusCode', code: 'duplicate' });
-
-      expect(rowModel['findOne']).toHaveBeenNthCalledWith(
-        2,
-        expect.objectContaining({
-          year: yearOid,
-          censusCode: 'DUP_CODE',
-          isActive: true,
-          _id: { $ne: rowOid },
-        }),
-      );
-      const duplicateQuery = rowModel['findOne'].mock.calls[1][0] as Record<string, unknown>;
-      expect(duplicateQuery).not.toHaveProperty('datasetVersion');
-      expect(duplicateQuery).not.toHaveProperty('rowType');
-    });
-
-    it('allows updating censusCode when no other active row in the same design year matches', async () => {
-      rowModel['findOne'] = jest.fn().mockReturnValueOnce(q(mockRow)).mockReturnValueOnce(q(null));
-
-      const result = await service.updateRow(
-        stateOid.toString(),
-        yearOid.toString(),
-        rowOid.toString(),
-        { censusCode: mockRow.censusCode ?? 'SAME_CODE' },
-        adminUser,
-      );
-      expect(result).toMatchObject({ success: true });
-      expect(rowModel['findOne']).toHaveBeenNthCalledWith(
-        2,
-        expect.objectContaining({
-          year: yearOid,
-          censusCode: mockRow.censusCode,
-          isActive: true,
-          _id: { $ne: rowOid },
-        }),
-      );
-    });
-
-    it('trims censusCode before duplicate validation and persistence', async () => {
-      rowModel['findOne'] = jest.fn().mockReturnValueOnce(q(mockRow)).mockReturnValueOnce(q(null));
-
-      await service.updateRow(
-        stateOid.toString(),
-        yearOid.toString(),
-        rowOid.toString(),
-        { censusCode: '  TRIMMED_CODE  ' },
-        adminUser,
-      );
-
-      expect(rowModel['findOne']).toHaveBeenNthCalledWith(2, expect.objectContaining({ censusCode: 'TRIMMED_CODE' }));
-      const setArg = rowModel['findByIdAndUpdate'].mock.calls[0][1].$set as Record<string, unknown>;
-      expect(setArg['censusCode']).toBe('TRIMMED_CODE');
-    });
+    // censusCode/ulbName are never portal-editable (see the DB_ULB-preservation test above), so
+    // the duplicate-census-code-on-portal-edit checks that used to live here no longer apply —
+    // that whole code path was removed along with EXTRA_ULB row editing.
 
     it('converts a Mongo 11000 duplicate-key error to a clean censusCode validation error', async () => {
-      // Duplicate check passes (no pre-existing row), but DB fires 11000 at write time.
+      // Simulates a write-time 11000 from some other constraint; the catch block reports it via
+      // the same censusCode-labeled duplicate message regardless of which field actually raced.
       rowModel['findOne'] = jest.fn().mockReturnValueOnce(q(mockRow)).mockReturnValueOnce(q(null));
       rowModel['findByIdAndUpdate'] = jest.fn().mockReturnValue({
         lean: () => ({
@@ -445,7 +372,7 @@ describe('ElectedUrbanLocalBodiesRowService', () => {
           stateOid.toString(),
           yearOid.toString(),
           rowOid.toString(),
-          { censusCode: 'RACE_CODE' },
+          { remarks: 'trigger write' },
           adminUser,
         );
       } catch (e) {
@@ -472,6 +399,57 @@ describe('ElectedUrbanLocalBodiesRowService', () => {
         success: true,
         data: { rows: expect.any(Array), total: 1, page: 1, limit: 50 },
       });
+    });
+  });
+
+  // ─── getErrorSheet ────────────────────────────────────────────────────────
+
+  describe('getErrorSheet', () => {
+    const excludedRow = {
+      rowNumber: 2,
+      censusCode: 'NOT_IN_DB',
+      ulbName: 'Some New City',
+      electedBodyStatus: 'Not Constituted',
+      errors: [{ field: 'censusCode', code: 'unknownUlb', message: 'Unknown ULB.' }],
+    };
+
+    it('merges live DB rows with the excludedRows snapshot, sorted by rowNumber', async () => {
+      formModel['findOne'] = jest.fn().mockReturnValue(q({ ...mockForm, excludedRows: [excludedRow] }));
+      rowModel['find'] = jest.fn().mockReturnValue(q([{ ...mockDbUlbRow, rowNumber: 1, errors: [] }]));
+
+      await service.getErrorSheet(stateOid.toString(), yearOid.toString(), adminUser);
+
+      expect(excelService.generateExcel).toHaveBeenCalledTimes(1);
+      const [, rows] = excelService.generateExcel.mock.calls[0] as [unknown, Array<{ rowNumber: number }>];
+      expect(rows.map((r) => r.rowNumber)).toEqual([1, 2]);
+    });
+
+    it('still generates a sheet when there are no live rows but excludedRows has entries', async () => {
+      formModel['findOne'] = jest.fn().mockReturnValue(q({ ...mockForm, excludedRows: [excludedRow] }));
+      rowModel['find'] = jest.fn().mockReturnValue(q([]));
+
+      await expect(service.getErrorSheet(stateOid.toString(), yearOid.toString(), adminUser)).resolves.toBeDefined();
+      expect(excelService.generateExcel).toHaveBeenCalledTimes(1);
+    });
+
+    it('throws BadRequestException when both live rows and excludedRows are empty', async () => {
+      formModel['findOne'] = jest.fn().mockReturnValue(q({ ...mockForm, excludedRows: [] }));
+      rowModel['find'] = jest.fn().mockReturnValue(q([]));
+
+      await expect(service.getErrorSheet(stateOid.toString(), yearOid.toString(), adminUser)).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+  });
+
+  // ─── deleteUploadedExcel ──────────────────────────────────────────────────
+
+  describe('deleteUploadedExcel', () => {
+    it('clears the excludedRows snapshot alongside the rest of the validation summary', async () => {
+      await service.deleteUploadedExcel(stateOid.toString(), yearOid.toString(), adminUser, '127.0.0.1', 'jest');
+
+      const [, update] = formModel['findByIdAndUpdate'].mock.calls[0] as [unknown, Record<string, unknown>];
+      expect((update['$set'] as Record<string, unknown>)['excludedRows']).toEqual([]);
     });
   });
 });

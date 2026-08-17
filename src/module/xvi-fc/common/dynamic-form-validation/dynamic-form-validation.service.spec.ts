@@ -232,3 +232,62 @@ describe('DynamicFormValidationService — actualTarget field', () => {
     expect(result.isValid).toBe(true);
   });
 });
+
+describe('DynamicFormValidationService — actualTarget actualLessThanOrEqualToTarget rule', () => {
+  const mockNormalizer = { toRawStoragePath: jest.fn((url: string) => url) };
+  const service = new DynamicFormValidationService(mockNormalizer as unknown as FileUrlNormalizerService);
+
+  const fieldWithRule = {
+    key: 'ind1',
+    formFieldType: 'actualTarget',
+    label: 'Per capita supply of water',
+    validations: [
+      { name: 'required', validator: null, message: 'Required.' },
+      { name: 'actualLessThanOrEqualToTarget', validator: null, message: 'Actual must be less than or equal to target.' },
+    ],
+  } as unknown as FieldConfig;
+
+  it('passes when target equals actual', () => {
+    const result = service.validateFinalSubmitAndBuildPayload([fieldWithRule], {
+      ind1: { actual: 100, target: 100 },
+    });
+
+    expect(result.isValid).toBe(true);
+  });
+
+  it('rejects when actual is greater than target', () => {
+    const result = service.validateFinalSubmitAndBuildPayload([fieldWithRule], {
+      ind1: { actual: 120, target: 100 },
+    });
+
+    expect(result.isValid).toBe(false);
+    expect(result.errors['ind1.target']).toEqual([
+      {
+        field: 'ind1.target',
+        message: 'Actual must be less than or equal to target.',
+        code: 'actualLessThanOrEqualToTarget',
+      },
+    ]);
+  });
+
+  it('passes when actual is strictly lower than target', () => {
+    const result = service.validateFinalSubmitAndBuildPayload([fieldWithRule], {
+      ind1: { actual: 80, target: 100 },
+    });
+
+    expect(result.isValid).toBe(true);
+  });
+
+  it('is not enforced when the field config does not declare the rule', () => {
+    const fieldWithoutRule = {
+      ...fieldWithRule,
+      validations: [{ name: 'required', validator: null, message: 'Required.' }],
+    } as unknown as FieldConfig;
+
+    const result = service.validateFinalSubmitAndBuildPayload([fieldWithoutRule], {
+      ind1: { actual: 50, target: 90 },
+    });
+
+    expect(result.isValid).toBe(true);
+  });
+});

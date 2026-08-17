@@ -25,7 +25,6 @@ import {
   XviFcUnspentStateFormDocument,
 } from 'src/schemas/xvi-fc/state/fc-unspent-state-form.schema';
 import { FC_UNSPENT_APPLICABLE_FC_BY_YEAR_LABEL } from 'src/module/xvi-fc/state/fc-unspent-declaration/constants/fc-unspent-declaration.constants';
-import { ROW_STATUS } from 'src/common/constants/row-status.constants';
 import { FcUnspentRowReviewDomainService } from './fc-unspent-row-review-domain.service';
 import type {
   FcUnspentMohuaFormLean,
@@ -179,7 +178,7 @@ export class FcUnspentMohuaReviewService {
     }
 
     const blocking = activeRows.filter(
-      (r) => r.rowStatus !== ROW_STATUS.UPDATE_PENDING && r.rowStatus !== ROW_STATUS.ACTIVE,
+      (r) => r.rowStatus !== FORM_STATUS.UNDER_REVIEW_BY_MOHUA && r.rowStatus !== FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
     );
     if (blocking.length > 0) {
       throwXviFcValidationError({
@@ -193,7 +192,7 @@ export class FcUnspentMohuaReviewService {
       });
     }
 
-    const toApprove = activeRows.filter((r) => r.rowStatus === ROW_STATUS.UPDATE_PENDING);
+    const toApprove = activeRows.filter((r) => r.rowStatus === FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
 
     const stateOid = new Types.ObjectId(stateId);
     const yearOid = new Types.ObjectId(yearId);
@@ -210,7 +209,7 @@ export class FcUnspentMohuaReviewService {
         form._id,
         stateOid,
         yearOid,
-        toApprove.map((row) => ({ row, newStatus: ROW_STATUS.ACTIVE, rejectionRemark: null })),
+        toApprove.map((row) => ({ row, newStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA, rejectionRemark: null })),
         userOid,
         ip,
         userAgent,
@@ -285,7 +284,7 @@ export class FcUnspentMohuaReviewService {
     let toReject: Awaited<ReturnType<FcUnspentRowReviewDomainService['getActiveRows']>> = [];
     if (form.isFcUnspent === true) {
       const activeRows = await this.domainService.getActiveRows(form._id);
-      const alreadyActive = activeRows.filter((r) => r.rowStatus === ROW_STATUS.ACTIVE);
+      const alreadyActive = activeRows.filter((r) => r.rowStatus === FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA);
       if (alreadyActive.length > 0) {
         throwXviFcValidationError({
           _form: [
@@ -297,7 +296,7 @@ export class FcUnspentMohuaReviewService {
           ],
         });
       }
-      toReject = activeRows.filter((r) => r.rowStatus === ROW_STATUS.UPDATE_PENDING);
+      toReject = activeRows.filter((r) => r.rowStatus === FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
     }
 
     const session = await this.formModel.db.startSession();
@@ -308,7 +307,7 @@ export class FcUnspentMohuaReviewService {
         form._id,
         stateOid,
         yearOid,
-        toReject.map((row) => ({ row, newStatus: ROW_STATUS.REJECTED, rejectionRemark: trimmedRemarks })),
+        toReject.map((row) => ({ row, newStatus: FORM_STATUS.RETURNED_BY_MOHUA, rejectionRemark: trimmedRemarks })),
         userOid,
         ip,
         userAgent,

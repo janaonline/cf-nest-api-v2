@@ -3,6 +3,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { FormJsonModule } from 'src/master/form-json/form-json.module';
 import { SlbForm, SlbFormSchema } from 'src/schemas/xvi-fc/ulb/slb-form.schema';
 import { Ulb, UlbSchema } from 'src/schemas/ulb.schema';
+import { UlbEligibilityModule } from 'src/module/ulb-eligibility/ulb-eligibility.module';
 import { XviFcCommonModule } from '../../common/xvi-fc-common.module';
 import { SlbController } from './slb.controller';
 import { SlbService } from './slb.service';
@@ -16,6 +17,7 @@ import { SlbFormJsonConfigService } from './services/slb-form-json.service';
     ]),
     XviFcCommonModule,
     FormJsonModule,
+    UlbEligibilityModule,
   ],
   controllers: [SlbController],
   providers: [SlbService, SlbFormJsonConfigService],

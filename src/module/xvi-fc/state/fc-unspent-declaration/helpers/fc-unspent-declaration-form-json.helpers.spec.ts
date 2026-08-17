@@ -11,7 +11,12 @@ const FC_UNSPENT_STATE_FORM_JSON = loadFcUnspentSeedDocument();
 describe('getFcUnspentFieldsByType', () => {
   it('filters fields by group and strips fieldTypes from the result', () => {
     const mainFields = getFcUnspentFieldsByType(FC_UNSPENT_STATE_FORM_JSON.data, 'FC_UNSPENT_MAIN_FORM_FIELDS');
-    expect(mainFields.map((f) => f.key)).toEqual(['isFcUnspent', 'fcDeclaration', 'checkboxConfirmation']);
+    expect(mainFields.map((f) => f.key)).toEqual([
+      'isFcUnspent',
+      'fcDeclaration',
+      'fcUnspentDeclaration',
+      'checkboxConfirmation',
+    ]);
     expect(mainFields.every((f) => !('fieldTypes' in f))).toBe(true);
   });
 

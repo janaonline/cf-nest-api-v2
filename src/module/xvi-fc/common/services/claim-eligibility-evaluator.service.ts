@@ -8,6 +8,7 @@ import {
   type ClaimEligibilityRowMatchConfig,
   type EligibilityEvaluationResult,
   type FormStatusEvidenceV1,
+  type RowEligibilityEvidence,
   type UlbEligibilityBucket,
   type UlbEligibilityTally,
 } from 'src/module/xvi-fc/common/types/claim-eligibility.type';
@@ -28,6 +29,16 @@ export interface UlbBulkEvaluationContext {
    *  document/row still gets a bucket (via each source's own no-data default), rather than being
    *  silently absent from the tally. */
   expectedUlbIds: string[];
+}
+
+/** One row's resolved field values for `bucketRowValue` — the domain value (`rowStatusField`),
+ *  only when `rowFormStatusField` is configured, the row's FORM_STATUS-backed review value, and
+ *  the row's own `_id` (always present on a fetched doc, never explicitly projected out) for
+ *  callers that need to freeze `rowDocumentId` onto a snapshot without a second query. */
+interface RowMatchValues {
+  value: unknown;
+  formStatus?: unknown;
+  rowDocumentId: string;
 }
 
 /** Reads a possibly-dotted field path off a plain object (e.g. `'auditedData.form_status_id'`) —
@@ -111,6 +122,8 @@ export class ClaimEligibilityEvaluatorService {
       formType: sourceFormJson.type ?? '',
       displayLabel: config.displayLabel,
       displayDescription: config.displayDescription,
+      checklistRoute: config.checklistRoute,
+      checklistSummary: config.checklistSummary,
       ownerLevel: config.ownerLevel,
       evaluationLevel: config.evaluationLevel,
     };
@@ -175,7 +188,13 @@ export class ClaimEligibilityEvaluatorService {
   async evaluateUlbBulk(
     sourceFormJson: IFormJson,
     ctx: UlbBulkEvaluationContext,
-  ): Promise<{ perUlb: Map<string, UlbEligibilityBucket>; tally: UlbEligibilityTally }> {
+  ): Promise<{
+    perUlb: Map<string, UlbEligibilityBucket>;
+    tally: UlbEligibilityTally;
+    /** Only set by the row-collection path (`evaluateUlbBulkRowStatus`) — undefined for
+     *  ownerLevel:'ULB' flat-document sources (SLB, Annual Accounts), which have no row concept. */
+    rowEvidenceByUlbId?: Map<string, RowEligibilityEvidence>;
+  }> {
     const config = sourceFormJson.claimEligibility;
     if (!config?.enabled) {
       throw new InternalServerErrorException(
@@ -252,7 +271,11 @@ export class ClaimEligibilityEvaluatorService {
   private async evaluateUlbBulkRowStatus(
     sourceFormJson: IFormJson,
     ctx: UlbBulkEvaluationContext,
-  ): Promise<{ perUlb: Map<string, UlbEligibilityBucket>; tally: UlbEligibilityTally }> {
+  ): Promise<{
+    perUlb: Map<string, UlbEligibilityBucket>;
+    tally: UlbEligibilityTally;
+    rowEvidenceByUlbId: Map<string, RowEligibilityEvidence>;
+  }> {
     const config = sourceFormJson.claimEligibility!;
     const { source } = config;
     if (!source.rowCollection || !source.rowFields?.['ulb'] || !source.rowFields?.['designYear']) {
@@ -274,6 +297,9 @@ export class ClaimEligibilityEvaluatorService {
     if (rowFields['state']) query[rowFields['state']] = ctx.stateId;
     if (rowFields['isActive']) query[rowFields['isActive']] = true;
 
+    // Hoisted (not scoped to the `if` below) so it's available when building rowEvidenceByUlbId —
+    // one shared value per source-evaluation call, frozen identically onto every ULB's evidence.
+    let activeDatasetVersion: number | undefined;
     if (source.parentCollection && source.parentFields && rowFields['datasetVersion']) {
       const parentDesignYearField = source.parentFields['designYear'] ?? rowFields['designYear'];
       const parentQuery: Record<string, unknown> = {
@@ -284,39 +310,67 @@ export class ClaimEligibilityEvaluatorService {
       const parent = await this.connection
         .collection(source.parentCollection)
         .findOne(parentQuery, { projection: { [activeDatasetVersionField]: 1 } });
-      const activeDatasetVersion = parent ? resolveNestedField(parent, activeDatasetVersionField) : undefined;
-      if (activeDatasetVersion !== undefined) query[rowFields['datasetVersion']] = activeDatasetVersion;
+      const resolvedVersion = parent ? resolveNestedField(parent, activeDatasetVersionField) : undefined;
+      if (resolvedVersion !== undefined) {
+        activeDatasetVersion = resolvedVersion as number;
+        query[rowFields['datasetVersion']] = resolvedVersion;
+      }
     }
 
-    const rows = await this.connection
-      .collection(source.rowCollection)
-      .find(query, { projection: { [rowFields['ulb']]: 1, [rowMatch.rowStatusField]: 1 } })
-      .toArray();
+    const projection: Record<string, 1> = { [rowFields['ulb']]: 1, [rowMatch.rowStatusField]: 1 };
+    if (rowMatch.rowFormStatusField) projection[rowMatch.rowFormStatusField] = 1;
 
-    const valueByUlbId = new Map<string, unknown>();
+    const rows = await this.connection.collection(source.rowCollection).find(query, { projection }).toArray();
+
+    const valueByUlbId = new Map<string, RowMatchValues>();
     for (const row of rows) {
       const ulbValue = resolveNestedField(row, rowFields['ulb']);
       if (!ulbValue) continue; // e.g. Elected Body's unmatched EXTRA_ULB rows, which have no ulbId
       // Genuinely an ObjectId at runtime — cast, not a raw `unknown`, so String() has a real
       // toString() to call.
-      valueByUlbId.set(String(ulbValue as Types.ObjectId), resolveNestedField(row, rowMatch.rowStatusField));
+      valueByUlbId.set(String(ulbValue as Types.ObjectId), {
+        value: resolveNestedField(row, rowMatch.rowStatusField),
+        formStatus: rowMatch.rowFormStatusField ? resolveNestedField(row, rowMatch.rowFormStatusField) : undefined,
+        rowDocumentId: String(row['_id'] as Types.ObjectId),
+      });
     }
 
     const perUlb = new Map<string, UlbEligibilityBucket>();
+    const rowEvidenceByUlbId = new Map<string, RowEligibilityEvidence>();
     for (const ulbId of ctx.expectedUlbIds) {
-      if (!valueByUlbId.has(ulbId)) {
+      const entry = valueByUlbId.get(ulbId);
+      if (!entry) {
         perUlb.set(ulbId, rowMatch.defaultWhenNoRow);
+        // No row -> nothing to freeze; callers treat a missing map entry as "no row existed".
         continue;
       }
-      perUlb.set(ulbId, this.bucketRowValue(valueByUlbId.get(ulbId), rowMatch));
+      const bucket = this.bucketRowValue(entry, rowMatch);
+      perUlb.set(ulbId, bucket);
+      rowEvidenceByUlbId.set(ulbId, {
+        bucket,
+        rowDocumentId: entry.rowDocumentId,
+        rowStatusAtEvaluation: (entry.formStatus as FormStatusType | undefined) ?? null,
+        datasetVersion: activeDatasetVersion ?? null,
+      });
     }
 
-    return { perUlb, tally: this.tallyBuckets(perUlb) };
+    return { perUlb, tally: this.tallyBuckets(perUlb), rowEvidenceByUlbId };
   }
 
-  private bucketRowValue(value: unknown, rowMatch: ClaimEligibilityRowMatchConfig): UlbEligibilityBucket {
-    if (rowMatch.rowExemptedValues?.some((v) => v === value)) return 'EXEMPTED';
-    if (rowMatch.rowEligibleValues.some((v) => v === value)) return 'ELIGIBLE';
+  /**
+   * Buckets one row's already-resolved field values. When `rowFormStatusField`/
+   * `rowAcceptedFormStatuses` are configured, a row must clear that AND-condition first — an
+   * unreviewed/rejected row is `INELIGIBLE` regardless of its domain value, with no exemption
+   * bypass — before the existing `rowEligibleValues`/`rowExemptedValues` value mapping applies.
+   * Unset (either field absent), this is a no-op and behavior is unchanged from before this check
+   * existed — every source that hasn't opted in keeps its current behavior exactly.
+   */
+  private bucketRowValue(entry: RowMatchValues, rowMatch: ClaimEligibilityRowMatchConfig): UlbEligibilityBucket {
+    if (rowMatch.rowFormStatusField && rowMatch.rowAcceptedFormStatuses) {
+      if (!rowMatch.rowAcceptedFormStatuses.includes(entry.formStatus as FormStatusType)) return 'INELIGIBLE';
+    }
+    if (rowMatch.rowExemptedValues?.some((v) => v === entry.value)) return 'EXEMPTED';
+    if (rowMatch.rowEligibleValues.some((v) => v === entry.value)) return 'ELIGIBLE';
     return 'INELIGIBLE';
   }
 

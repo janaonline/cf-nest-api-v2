@@ -1,6 +1,8 @@
 import { getFormStatusLabel } from 'src/common/constants/form-status.constants';
 import { toObjectIdString } from 'src/common/utils/objectid.util';
+import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import type { ClaimLetterBatchSummary, ClaimLetterFinancialSummaryDisplay } from '../types/claim-letter.types';
+import { buildClaimLetterPermissions } from './claim-letter-permissions.helpers';
 
 /**
  * Shared mapper from a raw `ClaimLetterBatch` lean/full document to the display-ready
@@ -8,8 +10,12 @@ import type { ClaimLetterBatchSummary, ClaimLetterFinancialSummaryDisplay } from
  * (`ClaimLetterService.getDetail/listHistory/uploadSignedFile/submit` and
  * `ClaimLetterAssemblyService.createDraft/updateDraft/abandonDraft`) so a client can treat all of
  * them uniformly instead of some returning a raw Mongoose document and others a mapped summary.
+ *
+ * `user` drives `permissions` (see `buildClaimLetterPermissions`) — every call site already calls
+ * `assertStateAccess(user, stateId)` before reaching this, so state access itself is not
+ * re-checked here.
  */
-export function mapClaimLetterBatchDocToSummary(doc: Record<string, unknown>): ClaimLetterBatchSummary {
+export function mapClaimLetterBatchDocToSummary(doc: Record<string, unknown>, user: AuthUser): ClaimLetterBatchSummary {
   const currentFormStatus = doc['currentFormStatus'] as number;
   const isAbandoned = doc['isAbandoned'] as boolean;
   return {
@@ -42,5 +48,6 @@ export function mapClaimLetterBatchDocToSummary(doc: Record<string, unknown>): C
     supersedes: toObjectIdString(doc['supersedes']),
     supersededBy: toObjectIdString(doc['supersededBy']),
     createdAt: doc['createdAt'] as Date,
+    permissions: buildClaimLetterPermissions(user, currentFormStatus, isAbandoned),
   };
 }

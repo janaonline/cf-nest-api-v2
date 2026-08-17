@@ -7,7 +7,6 @@ import { Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
 import { FORM_STATUS, getFormStatusLabel } from 'src/common/constants/form-status.constants';
 import { toObjectIdString } from 'src/common/utils/objectid.util';
-import { ROW_STATUS } from 'src/common/constants/row-status.constants';
 import {
   assertCanStateEditForm,
   assertCanStateFinalSubmitForm,
@@ -25,7 +24,6 @@ import type { XvifcActorSourceDocument } from 'src/module/xvi-fc/common/types/xv
 import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
 import {
   applyActionVisibility,
-  findSupportingAction,
   stripSupportingContentMeta,
 } from 'src/module/xvi-fc/common/utils/xvi-fc-supporting-content-visibility.util';
 import { keyByFieldKey, requireField } from 'src/module/xvi-fc/common/utils/xvi-fc-field-lookup.util';
@@ -54,9 +52,9 @@ import {
 } from 'src/schemas/xvi-fc/state/devolution-formula-form.schema';
 import {
   FC_UNSPENT_APPLICABLE_FC_BY_YEAR_LABEL,
+  FC_UNSPENT_DECLARATION_DOCUMENT_ACTION_ID,
   FC_UNSPENT_DECLARATION_TEMPLATE_ACTION_ID,
   FC_UNSPENT_DEVOLUTION_INSTALLMENT,
-  FC_UNSPENT_ELIGIBILITY_THRESHOLD_PERCENT,
   FC_UNSPENT_BLOCKING_MESSAGE_MISSING_DEVOLUTION,
   FC_UNSPENT_BLOCKING_MESSAGE_DEVOLUTION_RETURNED,
   FC_UNSPENT_BLOCKING_MESSAGE_DEVOLUTION_NOT_READY,
@@ -64,7 +62,6 @@ import {
 import type {
   FcUnspentActiveRowLean,
   FcUnspentDeclarationGetResponseData,
-  FcUnspentDeclarationTemplateResponseData,
   FcUnspentDependencyGates,
   FcUnspentDevolutionFormLean,
   FcUnspentPermissions,
@@ -74,7 +71,6 @@ import { SaveFcUnspentDeclarationDto } from '../../dto/save-fc-unspent-declarati
 import { FcUnspentDeclarationRowService } from '../rows/fc-unspent-declaration-row.service';
 import { FcUnspentDeclarationFormJsonService } from '../form-json/fc-unspent-declaration-form-json.service';
 import { getFcUnspentFieldsByType } from '../../helpers/fc-unspent-declaration-form-json.helpers';
-import { S3Service } from 'src/core/s3/s3.service';
 
 type PopulatedNameRef = { _id?: Types.ObjectId; name?: string };
 
@@ -84,6 +80,7 @@ type FcUnspentLeanDoc = XvifcActorSourceDocument & {
   currentFormStatus?: number;
   isFcUnspent?: boolean | null;
   fcDeclaration?: FileInfo | null;
+  fcUnspentDeclaration?: FileInfo | null;
   checkboxConfirmation?: boolean;
 };
 
@@ -91,6 +88,7 @@ type FcUnspentExistingLean = {
   _id: Types.ObjectId;
   currentFormStatus: number;
   fcDeclaration?: FileInfo | null;
+  fcUnspentDeclaration?: FileInfo | null;
   auditRevision?: number;
 };
 
@@ -109,7 +107,6 @@ export class FcUnspentDeclarationService {
     private readonly xvifcFormActorsService: XvifcFormActorsService,
     private readonly fileInfoNormalizer: FileInfoNormalizerService,
     private readonly fileTokenService: FileTokenService,
-    private readonly s3Service: S3Service,
   ) {}
 
   /**
@@ -145,7 +142,7 @@ export class FcUnspentDeclarationService {
     const permissions = this.buildFormPermissions(user, stateId, currentFormStatus, gates);
     const { actors, stateName } = this.xvifcFormActorsService.buildActorsAndStateName(doc);
 
-    const allFields = await this.formJsonConfigService.loadFields(yearId);
+    const { fields: allFields, thresholdPercent: threshold } = await this.formJsonConfigService.loadFormConfig(yearId);
     const questionsConfig = getFcUnspentFieldsByType(allFields, 'FC_UNSPENT_MAIN_FORM_FIELDS');
     const rowEditFields = getFcUnspentFieldsByType(allFields, 'FC_UNSPENT_ROW_EDIT_FIELDS');
     if (rowEditFields.length === 0) {
@@ -158,6 +155,7 @@ export class FcUnspentDeclarationService {
       savedData['isFcUnspent'] = doc.isFcUnspent === true ? 'yes' : doc.isFcUnspent === false ? 'no' : null;
     }
     if (doc?.fcDeclaration !== undefined) savedData['fcDeclaration'] = doc.fcDeclaration;
+    if (doc?.fcUnspentDeclaration !== undefined) savedData['fcUnspentDeclaration'] = doc.fcUnspentDeclaration;
     if (doc?.checkboxConfirmation !== undefined) savedData['checkboxConfirmation'] = doc.checkboxConfirmation;
 
     const folderPathContext: XviFcFolderPathContext = { _id: stateId, role: 'state', designYear };
@@ -169,7 +167,7 @@ export class FcUnspentDeclarationService {
     const responseData: FcUnspentDeclarationGetResponseData = {
       stateName,
       applicableFc,
-      threshold: FC_UNSPENT_ELIGIBILITY_THRESHOLD_PERCENT,
+      threshold,
       currentFormStatus,
       permissions,
       dependency: gates.dependency,
@@ -218,11 +216,12 @@ export class FcUnspentDeclarationService {
       });
     }
 
-    const allFields = await this.formJsonConfigService.loadFields(dto.yearId);
+    const { fields: allFields, thresholdPercent } = await this.formJsonConfigService.loadFormConfig(dto.yearId);
     const questions = getFcUnspentFieldsByType(allFields, 'FC_UNSPENT_MAIN_FORM_FIELDS');
     const validatorData: FormData = {
       isFcUnspent: dto.data.isFcUnspent ?? null,
       fcDeclaration: dto.data.fcDeclaration ?? null,
+      fcUnspentDeclaration: dto.data.fcUnspentDeclaration ?? null,
       checkboxConfirmation: dto.data.checkboxConfirmation ?? false,
     };
     const validation = this.dynamicFormValidator.validateDraftAndBuildPayload(questions, validatorData);
@@ -232,6 +231,7 @@ export class FcUnspentDeclarationService {
     const isNo = dto.data.isFcUnspent === false;
 
     let fcDeclaration: FileInfo | null | undefined;
+    let fcUnspentDeclaration: FileInfo | null | undefined;
     let branch: 'yes' | 'no' | 'undecided' = 'undecided';
     let resolvedRows: Awaited<ReturnType<FcUnspentDeclarationRowService['resolveAndValidateRows']>>['rows'] = [];
 
@@ -262,6 +262,9 @@ export class FcUnspentDeclarationService {
         if (errors.length > 0) throwXviFcValidationError({ fcDeclaration: errors });
         fcDeclaration = file;
       }
+      // Switching to No clears any stale Yes-branch upload — it can never toggle back to
+      // visible/relevant without the state re-answering Yes and re-uploading.
+      fcUnspentDeclaration = null;
     } else if (isYes) {
       branch = 'yes';
       const rowsInput = dto.data.unspentUlbData ?? [];
@@ -269,11 +272,26 @@ export class FcUnspentDeclarationService {
         stateOid,
         rowsInput,
         gates.devolutionForm,
-        { requireAtLeastOne: false },
+        { requireAtLeastOne: false, thresholdPercent },
       );
       if (Object.keys(errors).length > 0) throwXviFcValidationError(errors);
       resolvedRows = builtRows;
+      // Switching to Yes clears any stale No-branch upload, mirroring the reverse case above.
       fcDeclaration = null;
+      if (dto.data.fcUnspentDeclaration !== undefined) {
+        const fcUnspentDeclarationField = requireField(
+          keyByFieldKey(questions),
+          'fcUnspentDeclaration',
+          'FcUnspentDeclarationService.saveDraft',
+        );
+        const { file, errors } = this.fileInfoNormalizer.normalizeInboundFileInfo(
+          dto.data.fcUnspentDeclaration as unknown as Record<string, unknown>,
+          existing?.fcUnspentDeclaration,
+          deriveFileValidationOptions(fcUnspentDeclarationField, 'fcUnspentDeclaration'),
+        );
+        if (errors.length > 0) throwXviFcValidationError({ fcUnspentDeclaration: errors });
+        fcUnspentDeclaration = file;
+      }
     }
 
     const setDoc: Record<string, unknown> = {
@@ -285,6 +303,7 @@ export class FcUnspentDeclarationService {
       updatedBy: userOid,
     };
     if (fcDeclaration !== undefined) setDoc['fcDeclaration'] = fcDeclaration;
+    if (fcUnspentDeclaration !== undefined) setDoc['fcUnspentDeclaration'] = fcUnspentDeclaration;
 
     const session = await this.model.db.startSession();
     let updatedParent: XviFcUnspentStateFormDocument;
@@ -371,11 +390,12 @@ export class FcUnspentDeclarationService {
       });
     }
 
-    const allFields = await this.formJsonConfigService.loadFields(dto.yearId);
+    const { fields: allFields, thresholdPercent } = await this.formJsonConfigService.loadFormConfig(dto.yearId);
     const questions = getFcUnspentFieldsByType(allFields, 'FC_UNSPENT_MAIN_FORM_FIELDS');
     const validatorData: FormData = {
       isFcUnspent: dto.data.isFcUnspent ?? null,
       fcDeclaration: dto.data.fcDeclaration ?? existing?.fcDeclaration ?? null,
+      fcUnspentDeclaration: dto.data.fcUnspentDeclaration ?? existing?.fcUnspentDeclaration ?? null,
       checkboxConfirmation: dto.data.checkboxConfirmation ?? false,
     };
     const validation = this.dynamicFormValidator.validateFinalSubmitAndBuildPayload(questions, validatorData);
@@ -390,6 +410,7 @@ export class FcUnspentDeclarationService {
     }
 
     let finalFcDeclaration: FileInfo | null | undefined;
+    let finalFcUnspentDeclaration: FileInfo | null | undefined;
     let resolvedRows: Awaited<ReturnType<FcUnspentDeclarationRowService['resolveAndValidateRows']>>['rows'] = [];
     let finalCheckboxConfirmation = false;
 
@@ -426,6 +447,7 @@ export class FcUnspentDeclarationService {
       );
       if (errors.length > 0) throwXviFcValidationError({ fcDeclaration: errors });
       finalFcDeclaration = file;
+      finalFcUnspentDeclaration = null;
     } else {
       if (dto.data.checkboxConfirmation !== true) {
         throwXviFcValidationError({
@@ -439,12 +461,35 @@ export class FcUnspentDeclarationService {
         stateOid,
         rowsInput,
         gates.devolutionForm,
-        { requireAtLeastOne: true },
+        { requireAtLeastOne: true, thresholdPercent },
       );
       if (Object.keys(errors).length > 0) throwXviFcValidationError(errors);
       resolvedRows = builtRows;
       finalFcDeclaration = null;
       finalCheckboxConfirmation = true;
+
+      // Same "always required, no silent fallback to existing" rule as the No branch above.
+      if (dto.data.fcUnspentDeclaration === undefined || dto.data.fcUnspentDeclaration === null) {
+        throwXviFcValidationError({
+          fcUnspentDeclaration: [
+            { field: 'fcUnspentDeclaration', code: 'required', message: 'Signed declaration is required.' },
+          ],
+        });
+      }
+      const fcUnspentDeclarationField = requireField(
+        keyByFieldKey(questions),
+        'fcUnspentDeclaration',
+        'FcUnspentDeclarationService.finalSubmit',
+      );
+      const { file, errors: fcUnspentDeclarationErrors } = this.fileInfoNormalizer.normalizeInboundFileInfo(
+        dto.data.fcUnspentDeclaration as unknown as Record<string, unknown>,
+        existing?.fcUnspentDeclaration,
+        deriveFileValidationOptions(fcUnspentDeclarationField, 'fcUnspentDeclaration'),
+      );
+      if (fcUnspentDeclarationErrors.length > 0) {
+        throwXviFcValidationError({ fcUnspentDeclaration: fcUnspentDeclarationErrors });
+      }
+      finalFcUnspentDeclaration = file;
     }
 
     const now = new Date();
@@ -463,6 +508,7 @@ export class FcUnspentDeclarationService {
       auditRevision: newAuditRevision,
     };
     if (finalFcDeclaration !== undefined) setDoc['fcDeclaration'] = finalFcDeclaration;
+    if (finalFcUnspentDeclaration !== undefined) setDoc['fcUnspentDeclaration'] = finalFcUnspentDeclaration;
 
     const session = await this.model.db.startSession();
     try {
@@ -487,7 +533,7 @@ export class FcUnspentDeclarationService {
           yearOid,
           resolvedRows,
           userOid,
-          ROW_STATUS.UPDATE_PENDING,
+          FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
           session,
         );
         await this.rowService.insertRowHistory(
@@ -517,6 +563,7 @@ export class FcUnspentDeclarationService {
             applicableFc,
             isFcUnspent: updatedParent.isFcUnspent,
             fcDeclaration: updatedParent.fcDeclaration ?? null,
+            fcUnspentDeclaration: updatedParent.fcUnspentDeclaration ?? null,
             unspentUlbData: snapshot,
             checkboxConfirmation: updatedParent.checkboxConfirmation,
             changedBy: userOid,
@@ -542,119 +589,17 @@ export class FcUnspentDeclarationService {
     });
   }
 
-  /**
-   * Returns a private, signed download URL for the design-year-specific FC Unspent
-   * declaration DOCX template (No-branch only). Available only while the form is
-   * effectively editable — the same `canEdit` gate (permission + access + form
-   * status + Devolution dependency) computed for State GET, so the endpoint and
-   * the supporting action it drives are never out of sync.
-   */
-  async getDeclarationTemplate(
-    stateId: string,
-    yearId: string,
-    user: AuthUser,
-  ): Promise<XviFcApiResponse<FcUnspentDeclarationTemplateResponseData>> {
-    this.assertStateAccess(user, stateId);
-
-    const stateOid = new Types.ObjectId(stateId);
-    const yearOid = new Types.ObjectId(yearId);
-
-    const doc = await this.model
-      .findOne({ state: stateOid, year: yearOid, formType: FC_UNSPENT_STATE_FORM_TYPE, isDeleted: false })
-      .select('currentFormStatus')
-      .lean<{ currentFormStatus?: number }>()
-      .exec();
-
-    const currentFormStatus = doc?.currentFormStatus ?? FORM_STATUS.NOT_STARTED;
-    const gates = await this.resolveDevolutionDependency(stateOid, yearOid);
-    const permissions = this.buildFormPermissions(user, stateId, currentFormStatus, gates);
-
-    if (!permissions.canEdit) {
-      throw new ForbiddenException(`Form cannot be edited when status is ${getFormStatusLabel(currentFormStatus)}.`);
-    }
-
-    const allFields = await this.formJsonConfigService.loadFields(yearId);
-    const mainFields = getFcUnspentFieldsByType(allFields, 'FC_UNSPENT_MAIN_FORM_FIELDS');
-    const fcDeclarationField = requireField(
-      keyByFieldKey(mainFields),
-      'fcDeclaration',
-      'FcUnspentDeclarationService.getDeclarationTemplate',
-    );
-    const template = this.resolveDeclarationTemplateMeta(fcDeclarationField);
-    if (!template) {
-      throwXviFcValidationError({
-        fcDeclaration: [
-          {
-            field: 'fcDeclaration',
-            code: 'templateNotConfigured',
-            message: 'The declaration template is not configured for the selected design year.',
-          },
-        ],
-      });
-    }
-
-    try {
-      const head = await this.s3Service.headObject(template.path);
-      if (head.ContentLength === 0) throw new Error('empty object');
-    } catch {
-      throwXviFcValidationError({
-        _form: [
-          {
-            message: 'The declaration template could not be generated. Please contact support.',
-            code: 'templateUnavailable',
-          },
-        ],
-      });
-    }
-
-    const url = this.fileTokenService.signFileUrl(template.path);
-
-    return xviFcSuccess('Declaration template generated successfully.', {
-      fileName: template.fileName,
-      mimeType: template.mimeType,
-      url,
-    });
-  }
-
-  /**
-   * Reads the design-year-specific declaration template asset (S3 path/fileName/mimeType) off
-   * the `fcDeclaration` field's `download-template` supporting action `meta` — DB-driven, single
-   * source of truth. Returns `undefined` (not a thrown error) when the action or a well-formed
-   * `meta` is absent — that's an expected, legitimate state for a design year whose template
-   * hasn't been approved/uploaded yet, not a malformed-config bug.
-   */
-  private resolveDeclarationTemplateMeta(
-    fcDeclarationField: FieldConfig,
-  ): { path: string; fileName: string; mimeType: string } | undefined {
-    const action = findSupportingAction(
-      fcDeclarationField.supportingContent,
-      FC_UNSPENT_DECLARATION_TEMPLATE_ACTION_ID,
-    );
-    const meta = action?.meta;
-    const path = meta?.['path'];
-    const fileName = meta?.['fileName'];
-    const mimeType = meta?.['mimeType'];
-    if (
-      typeof path !== 'string' ||
-      !path ||
-      typeof fileName !== 'string' ||
-      !fileName ||
-      typeof mimeType !== 'string' ||
-      !mimeType
-    ) {
-      return undefined;
-    }
-    return { path, fileName, mimeType };
-  }
-
   // ─── Devolution dependency ──────────────────────────────────────────────────
 
   /**
-   * Resolves the Devolution Formula (Installment 1) dependency for a state/year and
+   * Resolves the ULB-wise Allocation (Installment 1) dependency for a state/year and
    * derives the dependency block + permission gates. Called identically by GET,
-   * save-draft, and final-submit so the three never diverge.
+   * save-draft, final-submit, and (not `private` for this reason) the document-generation
+   * service's own gating, so all four never diverge.
    */
-  private async resolveDevolutionDependency(
+  // Reads devolution-formula's activeDatasetVersion invariant from outside that module — see
+  // devolution-formula/docs/adr/0001-dataset-versioning.md before changing either side of this.
+  async resolveDevolutionDependency(
     stateOid: Types.ObjectId,
     yearOid: Types.ObjectId,
   ): Promise<FcUnspentDependencyGates> {
@@ -726,7 +671,8 @@ export class FcUnspentDeclarationService {
     };
   }
 
-  private buildFormPermissions(
+  /** Not `private` — reused as-is by the document-generation service's own gating. */
+  buildFormPermissions(
     user: AuthUser,
     stateId: string,
     status: number,
@@ -815,8 +761,14 @@ export class FcUnspentDeclarationService {
           value: hydrated ?? value,
         };
         if (question.key === 'fcDeclaration') {
-          const templateConfigured = !!this.resolveDeclarationTemplateMeta(question);
-          return finalize(this.hydrateDeclarationTemplateAction(hydratedQuestion, canEdit && templateConfigured));
+          return finalize(
+            this.hydrateDeclarationTemplateAction(hydratedQuestion, FC_UNSPENT_DECLARATION_TEMPLATE_ACTION_ID, canEdit),
+          );
+        }
+        if (question.key === 'fcUnspentDeclaration') {
+          return finalize(
+            this.hydrateDeclarationTemplateAction(hydratedQuestion, FC_UNSPENT_DECLARATION_DOCUMENT_ACTION_ID, canEdit),
+          );
         }
         return finalize(hydratedQuestion);
       }
@@ -829,19 +781,22 @@ export class FcUnspentDeclarationService {
   }
 
   /**
-   * Toggles the `download-template` supporting action's `visible` flag on the
-   * `fcDeclaration` question, keeping its paired `description` ("Download the
-   * official template...") in sync via the shared applyActionVisibility helper —
-   * that description only makes sense alongside the action, so it must not linger
-   * once the action is hidden. Never mutates formJson — this is a per-response
-   * hydration derived from `canEdit` and whether the design year has a configured
-   * template; it is never written back to the DB.
+   * Toggles a download action's `visible` flag on its owning file question, keeping its paired
+   * `description` in sync via the shared applyActionVisibility helper — that description only
+   * makes sense alongside the action, so it must not linger once the action is hidden. Never
+   * mutates formJson — this is a per-response hydration derived from `canEdit`; it is never
+   * written back to the DB. Shared by both `fcDeclaration` (No branch) and `fcUnspentDeclaration`
+   * (Yes branch), keyed by whichever action id belongs to that question.
    */
-  private hydrateDeclarationTemplateAction(question: HydratedFieldConfig, visible: boolean): HydratedFieldConfig {
+  private hydrateDeclarationTemplateAction(
+    question: HydratedFieldConfig,
+    actionId: string,
+    visible: boolean,
+  ): HydratedFieldConfig {
     return {
       ...question,
       supportingContent: applyActionVisibility(question.supportingContent, {
-        [FC_UNSPENT_DECLARATION_TEMPLATE_ACTION_ID]: visible,
+        [actionId]: visible,
       }),
     };
   }
@@ -867,9 +822,9 @@ export class FcUnspentDeclarationService {
   /**
    * Never persisted — GET-only signed URL for the stored raw S3-relative path. Signed
    * `inline` so the uploaded declaration opens in a new tab (matches sfc-status and
-   * other "view your uploaded file" links) rather than force-downloading — unlike
-   * getDeclarationTemplate's blank-template link, which is a genuine download and
-   * stays on signFileUrl's default `attachment`.
+   * other "view your uploaded file" links) rather than force-downloading — unlike the
+   * generated-declaration download routes (`services/document/`), which are genuine
+   * downloads and stay on `StreamableFile`'s `attachment` disposition.
    */
   private signStorageFileUrl(path: string): string {
     try {
@@ -898,7 +853,8 @@ export class FcUnspentDeclarationService {
     return false;
   }
 
-  private assertStateAccess(user: AuthUser, stateId: string): void {
+  /** Not `private` — reused as-is by the document-generation service's own gating. */
+  assertStateAccess(user: AuthUser, stateId: string): void {
     if (!this.hasStateAccess(user, stateId)) {
       throw new ForbiddenException(
         user.scope === Scope.STATE ? 'You can only access your own state data' : 'Access denied',

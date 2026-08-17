@@ -33,7 +33,12 @@ export function getOtpConfig(config: ConfigService): OtpConfig {
     maxVerifyAttempts: n('OTP_MAX_VERIFY_ATTEMPTS', 5),
     maxResendAttempts: n('OTP_MAX_RESEND_ATTEMPTS', 3),
     lockSeconds: n('OTP_LOCK_SECONDS', 900),
-    isProduction: config.get<string>('NODE_ENV') === 'production',
+    // OTP_FORCE_REAL_DELIVERY lets dev/staging opt into real random OTPs + actual SMS/email
+    // dispatch (e.g. to test the MSG91 key) without flipping NODE_ENV, which also controls
+    // unrelated things like cookie `secure` flags and log verbosity.
+    isProduction:
+      config.get<string>('NODE_ENV') === 'production' ||
+      config.get<string>('OTP_FORCE_REAL_DELIVERY') === 'true',
   };
 }
 

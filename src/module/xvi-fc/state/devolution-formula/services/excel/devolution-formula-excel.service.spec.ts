@@ -18,6 +18,7 @@ import { DevolutionFormulaService } from '../main/devolution-formula.service';
 import { DfFormJsonConfigService } from '../form-json/devolution-formula-form-json.service';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import { Scope, UserRole, AccessLevel } from 'src/module/auth/enum/roles-xvi-fc.enum';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -41,7 +42,7 @@ const EXCEL_HEADERS = [
   'Total Grant Allocation',
   'Installment 1 Amount',
   'Installment 2 Amount',
-  'Devolution Formula',
+  'Allocation Formula',
 ];
 
 function makeXlsxBuffer(dataRows: unknown[][]): Buffer {
@@ -198,6 +199,11 @@ const mockRowModel = {
 };
 
 const mockUlbModel = { find: jest.fn() };
+const mockUlbEligibilityService = {
+  getEligibleUlbFilter: jest
+    .fn()
+    .mockImplementation((stateOid: unknown) => Promise.resolve({ state: stateOid, isActive: true })),
+};
 
 // ─── Service mocks ────────────────────────────────────────────────────────────
 
@@ -229,6 +235,7 @@ describe('DevolutionFormulaExcelService — safe dataset replace', () => {
         { provide: getModelToken(DevolutionFormulaForm.name), useValue: mockFormModel },
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: mockRowModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+        { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: S3Service, useValue: mockS3Service },
         { provide: ExcelService, useValue: mockExcelService },
         { provide: FileTokenService, useValue: mockFileTokenService },
@@ -462,6 +469,7 @@ describe('DevolutionFormulaExcelService — revalidateExcel', () => {
         { provide: getModelToken(DevolutionFormulaForm.name), useValue: mockFormModel },
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: mockRowModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+        { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: S3Service, useValue: mockS3Service },
         { provide: ExcelService, useValue: mockExcelService },
         { provide: FileTokenService, useValue: mockFileTokenService },
@@ -643,6 +651,7 @@ describe('DevolutionFormulaExcelService — generateTemplate', () => {
         { provide: getModelToken(DevolutionFormulaForm.name), useValue: mockFormModel },
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: mockRowModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+        { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: S3Service, useValue: mockS3Service },
         { provide: ExcelService, useValue: mockExcelService },
         { provide: FileTokenService, useValue: mockFileTokenService },
@@ -656,7 +665,7 @@ describe('DevolutionFormulaExcelService — generateTemplate', () => {
     service = module.get<DevolutionFormulaExcelService>(DevolutionFormulaExcelService);
   });
 
-  it('orders template columns as Census Code, ULB Name, Installment 1, Installment 2, Total Grant Allocation, Devolution Formula', () => {
+  it('orders template columns as Census Code, ULB Name, Installment 1, Installment 2, Total Grant Allocation, Allocation Formula', () => {
     expect(DF_TEMPLATE_HEADERS.map((h) => h.key)).toEqual([
       'censusCode',
       'ulbName',
@@ -787,6 +796,7 @@ describe('DevolutionFormulaExcelService — validateExcel ULB identity guard', (
         { provide: getModelToken(DevolutionFormulaForm.name), useValue: mockFormModel },
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: mockRowModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+        { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: S3Service, useValue: mockS3Service },
         { provide: ExcelService, useValue: mockExcelService },
         { provide: FileTokenService, useValue: mockFileTokenService },
@@ -966,6 +976,7 @@ describe('DevolutionFormulaExcelService — validateExcel new/extra ULB detectio
         { provide: getModelToken(DevolutionFormulaForm.name), useValue: mockFormModel },
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: mockRowModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+        { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: S3Service, useValue: mockS3Service },
         { provide: ExcelService, useValue: mockExcelService },
         { provide: FileTokenService, useValue: mockFileTokenService },
@@ -1070,6 +1081,19 @@ describe('DevolutionFormulaExcelService — validateExcel new/extra ULB detectio
     expect(updateCallArg.$set.newUlbCount).toBe(1);
   });
 
+  it('snapshots the unregistered row into excludedRows so getErrorSheet can still surface it', async () => {
+    const buffer = makeXlsxBuffer([['ZZZZ', 'New Town', 500_000, 300_000, 200_000, 'population']]);
+    await expectRejection(buffer);
+
+    const updateCallArg = (mockFormModel.findOneAndUpdate.mock.calls as unknown[][])[0][1] as {
+      $set: { excludedRows: Array<{ censusCode: string; ulbName: string; errors: Array<{ code: string }> }> };
+    };
+    expect(updateCallArg.$set.excludedRows).toHaveLength(1);
+    expect(updateCallArg.$set.excludedRows[0].censusCode).toBe('ZZZZ');
+    expect(updateCallArg.$set.excludedRows[0].ulbName).toBe('New Town');
+    expect(updateCallArg.$set.excludedRows[0].errors.some((e) => e.code === 'unknownUlb')).toBe(true);
+  });
+
   it('does not include any register-link or supporting-content payload in the validateExcel response itself', async () => {
     const buffer = makeXlsxBuffer([['ZZZZ', 'New Town', 500_000, 300_000, 200_000, 'population']]);
     const caught = await expectRejection(buffer);
@@ -1111,6 +1135,12 @@ describe('DevolutionFormulaExcelService — validateExcel new/extra ULB detectio
     );
 
     expect(result.data?.summary.newUlbCount).toBe(0);
+
+    // Clean upload replaces any prior excludedRows snapshot with an empty one.
+    const updateCallArg = (mockFormModel.findOneAndUpdate.mock.calls as unknown[][])[0][1] as {
+      $set: { excludedRows: unknown[] };
+    };
+    expect(updateCallArg.$set.excludedRows).toEqual([]);
   });
 
   it('resets persisted newUlbCount to 0 on a clean re-upload after a previous invalid upload had added new ULBs', async () => {
@@ -1141,6 +1171,79 @@ describe('DevolutionFormulaExcelService — validateExcel new/extra ULB detectio
     };
     expect(updateCallArg.$set.newUlbCount).toBe(0);
   });
+
+  // ─── missingUlbCount / duplicateUlbCount persistence ─────────────────────
+
+  it('persists missingUlbCount on the form document (previously computed but never written)', async () => {
+    // mockDbUlbs has one active registry ULB (C001). Uploading a row for a different,
+    // unregistered ULB leaves C001 uncovered — missingUlbCount should be 1.
+    mockS3Service.getBuffer.mockResolvedValue(
+      makeXlsxBuffer([['ZZZZ', 'New Town', 500_000, 300_000, 200_000, 'population']]),
+    );
+
+    let caught: { response: { data: Record<string, unknown> } } | undefined;
+    try {
+      await service.validateExcel(
+        {
+          stateId: stateOid.toString(),
+          yearId: YEAR_ID,
+          installment: 1,
+          excelFile: {
+            originalName: 'test.xlsx',
+            path: 'state/path/test.xlsx',
+            mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            sizeKb: 1,
+            createdAt: '2026-01-01T00:00:00.000Z',
+          },
+        },
+        adminUser,
+      );
+    } catch (e) {
+      caught = e as { response: { data: Record<string, unknown> } };
+    }
+
+    // Unregistered-row upload throws (newUlbsAdded), but the form write already happened —
+    // missingUlbCount (C001 uncovered) must be on that write, not silently dropped.
+    expect(caught).toBeDefined();
+    const updateCallArg = (mockFormModel.findOneAndUpdate.mock.calls as unknown[][])[0][1] as {
+      $set: { missingUlbCount: number };
+    };
+    expect(updateCallArg.$set.missingUlbCount).toBe(1);
+    const summary = caught!.response.data['validationSummary'] as { missingUlbCount: number };
+    expect(summary.missingUlbCount).toBe(1);
+  });
+
+  it('detects an intra-batch duplicate ULB and persists/returns duplicateUlbCount', async () => {
+    const buffer = makeXlsxBuffer([
+      ['C001', 'Alpha City', 500_000, 300_000, 200_000, 'population'],
+      ['C001', 'Alpha City', 500_000, 300_000, 200_000, 'population'],
+    ]);
+    mockS3Service.getBuffer.mockResolvedValue(buffer);
+
+    const result = await service.validateExcel(
+      {
+        stateId: stateOid.toString(),
+        yearId: YEAR_ID,
+        installment: 1,
+        excelFile: {
+          originalName: 'test.xlsx',
+          path: 'state/path/test.xlsx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          sizeKb: 1,
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
+      },
+      adminUser,
+    );
+
+    expect(result.data?.summary.duplicateUlbCount).toBe(1);
+    expect(result.data?.rowErrors.some((e) => e.rowNumber === 2 && e.code === 'duplicate')).toBe(true);
+
+    const updateCallArg = (mockFormModel.findOneAndUpdate.mock.calls as unknown[][])[0][1] as {
+      $set: { duplicateUlbCount: number };
+    };
+    expect(updateCallArg.$set.duplicateUlbCount).toBe(1);
+  });
 });
 
 // ─── 6 · Atomic version allocation & write-conflict classification ──────────
@@ -1167,6 +1270,7 @@ describe('DevolutionFormulaExcelService — atomic version allocation & write-co
         { provide: getModelToken(DevolutionFormulaForm.name), useValue: mockFormModel },
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: mockRowModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+        { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: S3Service, useValue: mockS3Service },
         { provide: ExcelService, useValue: mockExcelService },
         { provide: FileTokenService, useValue: mockFileTokenService },

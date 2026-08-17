@@ -2,6 +2,7 @@ import { PipelineStage, Types } from 'mongoose';
 
 export const buildGetStateWiseDataPipeline = (
   stateId: Types.ObjectId,
+  ineligibleUlbTypeIds: Types.ObjectId[] = [],
 ): PipelineStage[] => [
   {
     $match: {
@@ -78,6 +79,8 @@ export const buildGetStateWiseDataPipeline = (
             $expr: {
               $eq: ['$state', '$$currentStateId'],
             },
+            isActive: true,
+            ...(ineligibleUlbTypeIds.length ? { ulbType: { $nin: ineligibleUlbTypeIds } } : {}),
           },
         },
         {

@@ -5,6 +5,7 @@ import { Types } from 'mongoose';
 import { ClaimLetterAssemblyService } from './claim-letter-assembly.service';
 import { ClaimLetterEligibilityService } from '../eligibility/claim-letter-eligibility.service';
 import { ClaimLetterHistoryService } from '../history/claim-letter-history.service';
+import { ClaimLetterFormJsonService } from '../form-json/claim-letter-form-json.service';
 import { ClaimLetterBatch } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
 import { ClaimLetterBatchUlb } from 'src/schemas/xvi-fc/state/claim-letter-batch-ulb.schema';
 import { ClaimLetterUlbLock } from 'src/schemas/xvi-fc/state/claim-letter-ulb-lock.schema';
@@ -87,6 +88,7 @@ describe('ClaimLetterAssemblyService', () => {
     getClaimStatusBreakdown: jest.Mock;
   };
   let historyService: { recordTransition: jest.Mock };
+  let formJsonConfigService: { loadVarianceConfig: jest.Mock };
 
   const allocation = {
     allocatedAmount: 100,
@@ -207,6 +209,9 @@ describe('ClaimLetterAssemblyService', () => {
       }),
     };
     historyService = { recordTransition: jest.fn().mockResolvedValue(undefined) };
+    formJsonConfigService = {
+      loadVarianceConfig: jest.fn().mockResolvedValue({ lowerPercent: 90, upperPercent: 110 }),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -220,6 +225,7 @@ describe('ClaimLetterAssemblyService', () => {
         { provide: getModelToken(Ulb.name), useValue: ulbModel },
         { provide: ClaimLetterEligibilityService, useValue: eligibilityService },
         { provide: ClaimLetterHistoryService, useValue: historyService },
+        { provide: ClaimLetterFormJsonService, useValue: formJsonConfigService },
       ],
     }).compile();
 
@@ -258,7 +264,7 @@ describe('ClaimLetterAssemblyService', () => {
     expect(connection.startSession).not.toHaveBeenCalled();
   });
 
-  // ─── Idempotent retry (plan §10) ────────────────────────────────────────────
+  // ─── Idempotent retry (docs/adr/0001-idempotent-retry.md) ───────────────────
 
   it('returns the existing READY doc (mapped to a summary) when retried with the same buildRequestId', async () => {
     const readyDoc = { _id: parentId, assemblyStatus: 'READY', financialSummary: zeroFinancialSummary };
@@ -486,6 +492,9 @@ describe('ClaimLetterAssemblyService', () => {
 
     await expect(service.createDraft(baseInput())).rejects.toThrow(BadRequestException);
     expect(batchModel.deleteOne).toHaveBeenCalledWith({ _id: parentId, assemblyStatus: 'BUILDING' }, expect.anything());
+    // Short-circuit: resolveUlbLevelEligibility (the heaviest fetch — a bulk find per
+    // ULB-bulk-evaluable source) must never run once the state gate has already failed.
+    expect(eligibilityService.resolveUlbLevelEligibility).not.toHaveBeenCalled();
   });
 
   it('throws BadRequestException and rolls back when a selected ULB has no Devolution allocation', async () => {
@@ -520,6 +529,21 @@ describe('ClaimLetterAssemblyService', () => {
     }
     expect(thrown?.message).toContain('111');
     expect(thrown?.message).not.toContain(ulbAId.toString());
+  });
+
+  it('fetches the variance band via ClaimLetterFormJsonService exactly once per prepareChildren invocation', async () => {
+    await service.createDraft(baseInput());
+    expect(formJsonConfigService.loadVarianceConfig).toHaveBeenCalledTimes(1);
+    expect(formJsonConfigService.loadVarianceConfig).toHaveBeenCalledWith(yearId.toString());
+  });
+
+  it('gates against a configured non-default variance band rather than the hardcoded 90/110', async () => {
+    formJsonConfigService.loadVarianceConfig.mockResolvedValue({ lowerPercent: 100, upperPercent: 100 });
+
+    // allocation is 100; a claim of 105 is within the default 90-110 band but outside a 100-100 band.
+    await expect(
+      service.createDraft(baseInput({ ulbSelections: [{ ulbId: ulbAId.toString(), claimedAmount: 105 }] })),
+    ).rejects.toThrow(BadRequestException);
   });
 
   it('inserts children in chunks, never one giant array (chunk-boundary correctness)', async () => {
@@ -561,6 +585,113 @@ describe('ClaimLetterAssemblyService', () => {
     expect(devolutionSource['rowDocumentId']).toBeDefined();
     expect(devolutionSource['datasetVersion']).toBe(allocation.datasetVersion);
     expect(devolutionSource['installment']).toBe(1);
+  });
+
+  it('freezes real per-ULB row evidence onto eligibilitySources for a FORM_AND_ROW source, instead of []', async () => {
+    const electedBodyFormJsonId = new Types.ObjectId();
+    const electedBodyFormDocId = new Types.ObjectId();
+    const electedBodyRowId = new Types.ObjectId();
+    const electedBodySource = {
+      formId: 23,
+      formJsonId: electedBodyFormJsonId.toString(),
+      ruleVersion: 1,
+      formType: 'ELECTED_BODY',
+      ownerLevel: 'STATE',
+      evaluationLevel: 'FORM_AND_ROW',
+      formDocumentId: electedBodyFormDocId.toString(),
+      statusAtEvaluation: 7,
+      result: 'PASSED',
+      reasonCode: 'FORM_STATUS_ACCEPTED',
+      evidence: {
+        evidenceVersion: 1,
+        resolvedFormStatus: 7,
+        acceptedFormStatuses: [5, 7],
+        sourceFormDocumentId: electedBodyFormDocId.toString(),
+        evaluatedAt: new Date().toISOString(),
+      },
+    };
+    eligibilityService.evaluateStateLevelGate.mockResolvedValue({ sources: [electedBodySource], passed: true });
+    eligibilityService.resolveUlbLevelEligibility.mockResolvedValue({
+      perUlbEligible: new Map([[ulbAId.toString(), true]]),
+      rowEvidenceByFormId: new Map([
+        [
+          23,
+          new Map([
+            [
+              ulbAId.toString(),
+              {
+                bucket: 'ELIGIBLE',
+                rowDocumentId: electedBodyRowId.toString(),
+                rowStatusAtEvaluation: 7,
+                datasetVersion: 4,
+              },
+            ],
+          ]),
+        ],
+      ]),
+    });
+
+    await service.createDraft(baseInput());
+
+    const [ops] = batchUlbModel.bulkWrite.mock.calls[0] as [
+      Array<{ insertOne: { document: Record<string, unknown> } }>,
+    ];
+    const eligibilitySources = ops[0].insertOne.document['eligibilitySources'] as Record<string, unknown>[];
+
+    expect(eligibilitySources).toHaveLength(1);
+    expect(eligibilitySources[0]).toMatchObject({
+      formId: 23,
+      formDocumentId: electedBodyFormDocId,
+      rowDocumentId: electedBodyRowId,
+      statusAtEvaluation: 7,
+      rowStatusAtEvaluation: 7,
+      datasetVersion: 4,
+      result: 'PASSED',
+      reasonCode: 'ROW_STATUS_ACCEPTED',
+    });
+  });
+
+  it('freezes rowDocumentId: null with reasonCode ROW_DEFAULT_NO_ROW when a ULB has no row evidence for a FORM_AND_ROW source', async () => {
+    const electedBodyFormJsonId = new Types.ObjectId();
+    const electedBodyFormDocId = new Types.ObjectId();
+    const electedBodySource = {
+      formId: 23,
+      formJsonId: electedBodyFormJsonId.toString(),
+      ruleVersion: 1,
+      formType: 'ELECTED_BODY',
+      ownerLevel: 'STATE',
+      evaluationLevel: 'FORM_AND_ROW',
+      formDocumentId: electedBodyFormDocId.toString(),
+      statusAtEvaluation: 7,
+      result: 'PASSED',
+      reasonCode: 'FORM_STATUS_ACCEPTED',
+      evidence: {
+        evidenceVersion: 1,
+        resolvedFormStatus: 7,
+        acceptedFormStatuses: [5, 7],
+        sourceFormDocumentId: electedBodyFormDocId.toString(),
+        evaluatedAt: new Date().toISOString(),
+      },
+    };
+    eligibilityService.evaluateStateLevelGate.mockResolvedValue({ sources: [electedBodySource], passed: true });
+    eligibilityService.resolveUlbLevelEligibility.mockResolvedValue({
+      perUlbEligible: new Map([[ulbAId.toString(), true]]),
+      rowEvidenceByFormId: new Map([[23, new Map()]]), // no entry for ulbA — defaultWhenNoRow applied
+    });
+
+    await service.createDraft(baseInput());
+
+    const [ops] = batchUlbModel.bulkWrite.mock.calls[0] as [
+      Array<{ insertOne: { document: Record<string, unknown> } }>,
+    ];
+    const eligibilitySources = ops[0].insertOne.document['eligibilitySources'] as Record<string, unknown>[];
+
+    expect(eligibilitySources[0]).toMatchObject({
+      rowDocumentId: null,
+      rowStatusAtEvaluation: null,
+      result: 'PASSED',
+      reasonCode: 'ROW_DEFAULT_NO_ROW',
+    });
   });
 
   it('recovers cleanly when a chunk insert fails mid-flight (does not leave the parent READY)', async () => {
@@ -1011,7 +1142,7 @@ describe('ClaimLetterAssemblyService', () => {
     });
   });
 
-  // ─── createNewVersion (plan §7.6 — mechanism only, no caller in V1) ──────────
+  // ─── createNewVersion (mechanism only, no caller in V1 — docs/adr/0003-workflow-transitions.md) ──
 
   describe('createNewVersion', () => {
     const newParentId = new Types.ObjectId();
@@ -1121,7 +1252,7 @@ describe('ClaimLetterAssemblyService', () => {
     });
   });
 
-  // ─── acknowledgeLocks (plan §7.8 — mechanism only, no caller in V1) ──────────
+  // ─── acknowledgeLocks (mechanism only, no caller in V1 — docs/adr/0003-workflow-transitions.md) ──
 
   describe('acknowledgeLocks', () => {
     it('converts only ACTIVE locks for this claim to ACKNOWLEDGED, scoped by claimLetter', async () => {
@@ -1151,7 +1282,7 @@ describe('ClaimLetterAssemblyService', () => {
   it('never calls the cached *ForDisplay eligibility variants — this pipeline authorizes builds and must always read live data', () => {
     // buildChildren()'s eligibility check and assertNoDrift()'s re-check exist specifically to
     // catch eligibility changing during/around the chunked, non-transactional child-insertion
-    // window (plan §7.3/§7.5) — reading from ClaimLetterEligibilityService's cached
+    // window (docs/adr/0002-batching-and-locks.md) — reading from ClaimLetterEligibilityService's cached
     // evaluateStateLevelGateForDisplay/resolveUlbLevelEligibilityForDisplay here would let a state
     // build a claim against stale eligibility and would silently defeat assertNoDrift's entire
     // purpose (see claim-letter-eligibility.service.ts's doc comments on those two methods).

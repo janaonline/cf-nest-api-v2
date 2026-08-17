@@ -35,8 +35,10 @@ export const XVIFC_STATE_PERMISSIONS: Record<XviFcSubrole, Permission[]> = {
     Permission.APPROVE_ULB_SUBMISSIONS,
     Permission.PREPARE_GRANT_LETTERS,
     Permission.RECOMMEND_EXEMPTIONS,
+    Permission.FINAL_SUBMIT_TO_MOHUA,
     Permission.VIEW_STATE_FORMS,
     Permission.EDIT_STATE_FORMS,
+    Permission.FINAL_SUBMIT_STATE_FORMS,
   ],
   viewer: [Permission.VIEW_STATUS_REPORTS, Permission.VIEW_DASHBOARDS, Permission.VIEW_STATE_FORMS],
 };

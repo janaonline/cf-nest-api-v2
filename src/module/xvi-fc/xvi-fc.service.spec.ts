@@ -18,6 +18,7 @@ import { XviFcUnspentBalanceDisclosure } from '../../schemas/xvi-fc/unspent-bala
 import { XviFcBankAccount } from '../../schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
 import { XviFcCacheService, XVIFC_CACHE_KEY_PREFIX } from './cache/xvi-fc-cache.service';
 import { FormJsonService } from '../../master/form-json/form-json.service';
+import { UlbEligibilityService } from '../ulb-eligibility/ulb-eligibility.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 
@@ -35,11 +36,12 @@ describe('XviFcService', () => {
   let mockUlbModel: { findById: jest.Mock };
   let mockStateModel: { findById: jest.Mock };
   let mockSideMenuModel: { find: jest.Mock };
-  let mockAnnualAccountModel: { findOne: jest.Mock };
+  let mockAnnualAccountModel: { find: jest.Mock };
   let mockDisclosureModel: { findOne: jest.Mock };
   let mockBankAccountModel: { findOne: jest.Mock };
   let mockCacheService: { deleteByPattern: jest.Mock };
   let mockFormJsonService: { clearCache: jest.Mock };
+  let mockUlbEligibilityService: { getIneligibleUlbTypeIds: jest.Mock };
 
   function q<T>(value: T) {
     return {
@@ -59,11 +61,12 @@ describe('XviFcService', () => {
     mockUlbModel = { findById: jest.fn().mockReturnValue(q(null)) };
     mockStateModel = { findById: jest.fn().mockReturnValue(q(null)) };
     mockSideMenuModel = { find: jest.fn().mockReturnValue(q([])) };
-    mockAnnualAccountModel = { findOne: jest.fn().mockReturnValue(q(null)) };
+    mockAnnualAccountModel = { find: jest.fn().mockReturnValue(q([])) };
     mockDisclosureModel = { findOne: jest.fn().mockReturnValue(q(null)) };
     mockBankAccountModel = { findOne: jest.fn().mockReturnValue(q(null)) };
     mockCacheService = { deleteByPattern: jest.fn().mockResolvedValue(0) };
     mockFormJsonService = { clearCache: jest.fn().mockResolvedValue(0) };
+    mockUlbEligibilityService = { getIneligibleUlbTypeIds: jest.fn().mockResolvedValue([]) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -81,6 +84,7 @@ describe('XviFcService', () => {
         { provide: getModelToken(XviFcBankAccount.name), useValue: mockBankAccountModel },
         { provide: XviFcCacheService, useValue: mockCacheService },
         { provide: FormJsonService, useValue: mockFormJsonService },
+        { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
       ],
     }).compile();
 
@@ -161,6 +165,59 @@ describe('XviFcService', () => {
     it('should throw NotFoundException for unknown role', async () => {
       await expect(service.getSideMenu('UNKNOWN' as any, yearId)).rejects.toThrow(NotFoundException);
     });
+
+    it('copies url/target onto a top-level external-link item', async () => {
+      mockSideMenuModel.find.mockReturnValue(
+        q([
+          {
+            _id: new Types.ObjectId(),
+            name: 'Submit Feedback',
+            section: 'top',
+            type: 'item',
+            sequence: 1,
+            url: 'https://tally.so/r/44d28O',
+            target: '_blank',
+          },
+        ]),
+      );
+      const result = await service.getSideMenu('ULB', yearId);
+      expect(result.topModel[0]).toEqual(
+        expect.objectContaining({ label: 'Submit Feedback', url: 'https://tally.so/r/44d28O', target: '_blank' }),
+      );
+    });
+
+    it('copies url/target onto a child item nested under a group', async () => {
+      const groupId = new Types.ObjectId();
+      mockSideMenuModel.find.mockReturnValue(
+        q([
+          { _id: groupId, name: 'Support', section: 'top', type: 'group', sequence: 1, parentId: null },
+          {
+            _id: new Types.ObjectId(),
+            name: 'Submit Feedback',
+            section: 'top',
+            type: 'item',
+            sequence: 2,
+            parentId: groupId,
+            url: 'https://tally.so/r/44d28O',
+            target: '_blank',
+          },
+        ]),
+      );
+      const result = await service.getSideMenu('ULB', yearId);
+      const group = result.topModel.find((i) => i.label === 'Support');
+      expect(group?.items?.[0]).toEqual(
+        expect.objectContaining({ label: 'Submit Feedback', url: 'https://tally.so/r/44d28O', target: '_blank' }),
+      );
+    });
+
+    it('omits url/target for an item that does not set them', async () => {
+      mockSideMenuModel.find.mockReturnValue(
+        q([{ _id: new Types.ObjectId(), name: 'Overview', section: 'top', type: 'item', sequence: 1 }]),
+      );
+      const result = await service.getSideMenu('ULB', yearId);
+      expect(result.topModel[0].url).toBeUndefined();
+      expect(result.topModel[0].target).toBeUndefined();
+    });
   });
 
   describe('getFormStatus', () => {
@@ -189,18 +246,21 @@ describe('XviFcService', () => {
 
     it('preserves existing form-status response fields', async () => {
       const annualAccountId = new Types.ObjectId();
-      mockAnnualAccountModel.findOne.mockReturnValue(
-        q({
-          _id: annualAccountId,
-          auditedData: {
+      mockAnnualAccountModel.find.mockReturnValue(
+        q([
+          {
+            _id: annualAccountId,
+            sectionType: 'audited',
             form_status: AnnualAccountFormStatus.IN_PROGRESS,
             form_status_id: FORM_STATUS_ID[AnnualAccountFormStatus.IN_PROGRESS],
           },
-          unauditedData: {
+          {
+            _id: new Types.ObjectId(),
+            sectionType: 'unaudited',
             form_status: AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE,
             form_status_id: FORM_STATUS_ID[AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE],
           },
-        }),
+        ]),
       );
       mockDisclosureModel.findOne.mockReturnValue(q({ formStatus: 'SUBMITTED' }));
 

@@ -53,7 +53,7 @@ describe('DevolutionFormulaRowSchema — ulbName / devolutionFormula must be sto
       installment2Amount: 0,
       devolutionFormula: '', // blank Excel cell — must not fail schema validation
       validationStatus: 'INVALID',
-      errors: [{ field: 'devolutionFormula', code: 'required', message: 'Devolution Formula is required.' }],
+      errors: [{ field: 'devolutionFormula', code: 'required', message: 'Allocation Formula is required.' }],
       createdBy: new Types.ObjectId(),
       updatedBy: new Types.ObjectId(),
     });

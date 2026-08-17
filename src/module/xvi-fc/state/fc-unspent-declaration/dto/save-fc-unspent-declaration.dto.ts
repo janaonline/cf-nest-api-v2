@@ -7,8 +7,8 @@ import { FcUnspentUlbRowInputDto } from './fc-unspent-ulb-row.dto';
  * `isFcUnspent` is intentionally `@IsBoolean()` only — no `@Transform`. The frontend's
  * current mock service sends the radio control's raw `'yes'|'no'` string; that is
  * rejected with a 400 by design (no yes/no->boolean transformer precedent exists
- * anywhere in this repo, and the brief explicitly requires a strict boolean DTO plus
- * a reported Angular follow-up rather than a silently-introduced transformer).
+ * anywhere in this repo) — a strict boolean DTO plus a reported Angular follow-up,
+ * rather than a silently-introduced transformer that would mask the frontend bug.
  */
 export class FcUnspentDeclarationDataDto {
   @IsOptional()
@@ -20,6 +20,12 @@ export class FcUnspentDeclarationDataDto {
   @ValidateNested()
   @Type(() => XviFcFileRefDto)
   fcDeclaration?: XviFcFileRefDto | null;
+
+  @IsOptional()
+  @IsObject()
+  @ValidateNested()
+  @Type(() => XviFcFileRefDto)
+  fcUnspentDeclaration?: XviFcFileRefDto | null;
 
   @IsOptional()
   @IsArray()

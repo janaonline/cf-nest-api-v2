@@ -26,11 +26,12 @@ function hashToken(value: string | number | null | undefined): string {
 }
 
 /**
- * Deterministic content hash (plan §7.4) — SHA-256 over an explicit ordered token array, never
- * generic JSON.stringify (key ordering / numeric formatting isn't guaranteed stable across Node
- * versions or object construction order). Children are sorted ascending by ulbId before hashing
- * so build/request insertion order never changes the result. Only identity + financial content
- * is included — audit timestamps and file checksums are deliberately excluded (see plan §7.4).
+ * Deterministic content hash — SHA-256 over an explicit ordered token array, never generic
+ * JSON.stringify (key ordering / numeric formatting isn't guaranteed stable across Node versions
+ * or object construction order). Children are sorted ascending by ulbId before hashing so
+ * build/request insertion order never changes the result. Only identity + financial content is
+ * included — audit timestamps and file checksums are deliberately excluded, since this hash exists
+ * to detect a change in what was claimed, not a change in surrounding metadata.
  */
 export function computeClaimLetterContentHash(input: ClaimLetterContentHashInput): string {
   const sortedChildren = [...input.children].sort((a, b) => a.ulbId.localeCompare(b.ulbId));

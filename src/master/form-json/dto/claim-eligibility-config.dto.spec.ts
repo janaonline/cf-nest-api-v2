@@ -111,6 +111,22 @@ describe('ClaimEligibilityConfigDto', () => {
     expect(await validate(build(), PIPE_OPTIONS)).toHaveLength(0);
   });
 
+  it('accepts and preserves checklistRoute/checklistSummary under whitelist mode', async () => {
+    const dto = build({
+      checklistRoute: '../ulb-wise-allocation',
+      checklistSummary: 'Upload the Excel file showing grant amounts and devolution formula for each ULB',
+    });
+    expect(await validate(dto, PIPE_OPTIONS)).toHaveLength(0);
+    expect(dto.checklistRoute).toBe('../ulb-wise-allocation');
+    expect(dto.checklistSummary).toBe(
+      'Upload the Excel file showing grant amounts and devolution formula for each ULB',
+    );
+  });
+
+  it('validates cleanly with checklistRoute/checklistSummary omitted (both optional)', async () => {
+    expect(await validate(build(), PIPE_OPTIONS)).toHaveLength(0);
+  });
+
   it('accepts optional dependentActions when provided as a valid array', async () => {
     const errors = await validate(
       build({ dependentActions: [{ action: 'MARK_DEPENDENT_ROWS_NEEDS_UPDATE' }] }),

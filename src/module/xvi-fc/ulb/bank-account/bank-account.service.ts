@@ -18,6 +18,8 @@ import { assertValidFormStatusTransition } from 'src/common/utils/form-status-tr
 import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import { xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
+import { CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE } from 'src/module/ulb-eligibility/ulb-eligibility.constants';
 import { XviFcBankAccount, XviFcBankAccountDocument } from 'src/schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
 import {
   XviFcBankAccountFormLog,
@@ -55,6 +57,8 @@ import {
   maskAccountNumber,
   type SafeBankAccountResponse,
 } from './utils/bank-account-security.util';
+import { FormJsonService } from 'src/master/form-json/form-json.service';
+import { BANK_ACCOUNT_FORM_ID } from './constants/bank-account-form.constants';
 
 export interface BankAccountPermissions {
   canReview: boolean;
@@ -101,11 +105,23 @@ export class BankAccountService {
     @InjectModel(Ulb.name)
     private readonly ulbModel: Model<UlbDocument>,
     private readonly fileTokenService: FileTokenService,
+    private readonly ulbEligibilityService: UlbEligibilityService,
+    private readonly formJsonService: FormJsonService,
   ) {}
 
   /** Signs a proof-file S3 key into a short-lived, inline-viewable download URL. */
   private signProofFileUrl(s3Key: string): string | null {
     return s3Key ? this.fileTokenService.signFileUrl(s3Key, 'inline') : null;
+  }
+
+  /**
+   * Field-config for the bank-account form (formId 33), Redis-cached the same way as every other
+   * formJson consumer via `findActiveByDesignYearAndFormId` — see AnnualAccountsService.getUploadConfig
+   * for the identical pattern used by formId 30/31.
+   */
+  async getFormConfig(yearId: string) {
+    const formJson = await this.formJsonService.findActiveByDesignYearAndFormId(yearId, BANK_ACCOUNT_FORM_ID);
+    return { meta: formJson.meta ?? {}, data: formJson.data ?? [] };
   }
 
   async getBankAccount(
@@ -787,6 +803,11 @@ export class BankAccountService {
 
   async assertCanSubmitBankAccount(user: AuthUser, ulbId: string): Promise<void> {
     this.assertValidUlbId(ulbId);
+    await this.ulbEligibilityService.assertUlbEligibleForGrantCycle(
+      ulbId,
+      'XVIFC',
+      CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE,
+    );
 
     if (user.scope === Scope.ADMIN) return;
 

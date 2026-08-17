@@ -35,12 +35,37 @@ Update triggers (only these, and only when the change lives in `src/module/xvi-f
 
 If nothing in the above changed this task, leave CLAUDE.md untouched — say so, don't touch the file for the sake of touching it.
 
-## Step 2 — Verify README.md
+## Step 2 — Verify feature-level docs (nested CLAUDE.md / docs/adr, where they exist)
+
+Some `xvi-fc` sub-features maintain their own nested `CLAUDE.md` plus a `docs/adr/*.md` set inside
+their own folder (e.g. `src/module/xvi-fc/state/claim-letter/CLAUDE.md` +
+`docs/adr/000N-*.md`) — a smaller, colocated version of the root-CLAUDE.md pattern, scoped to that
+one feature's design decisions instead of the whole backend. Only applies where this structure
+already exists; do not create it for a sub-feature that doesn't have one.
+
+If this task touched a sub-feature folder that has a nested `CLAUDE.md`:
+
+- Check any comment you added or edited in that folder which explains non-obvious rationale: does
+  it cite something resolvable from inside the repo (an ADR under that folder's `docs/adr/`, or
+  self-contained prose), or does it cite an external/unpushed document (a local `.claude/plans/*.md`
+  path, a "brain" doc, a bare section number like `§7.2` with no file to open)? The latter is a
+  dangling reference for anyone without that exact local state — replace it with either the inline
+  rationale or a pointer to an in-repo ADR before finishing the task.
+- If the task's change altered a decision an existing ADR documents (not just touched code near it),
+  update that ADR or add a new one that supersedes it (`Status: Superseded by 000X` on the old file
+  — never silently rewrite an accepted ADR out from under existing comment references to it).
+- If the nested `CLAUDE.md`'s invariants list or ADR links are now stale because of this task's
+  change, update them the same way root `CLAUDE.md` gets updated in Step 1.
+
+If nothing in the above changed this task, or the touched sub-feature has no nested `CLAUDE.md`,
+say so and move on — don't create this structure speculatively.
+
+## Step 3 — Verify README.md
 
 Root: `README.md`. If missing, create it. If present, keep it in sync with reality, not with CLAUDE.md — README is for humans setting up the project (install, run, test, high-level description); CLAUDE.md is for Claude Code (commands + architecture reference). Don't duplicate CLAUDE.md's architecture deep-dive into README; a short "what this project is" plus setup/run/test steps is enough.
 
 Update only if this task's `xvi-fc` change affected: install/setup steps, how to run the app, how to run tests, or the project's one-line description. Otherwise leave it alone — and leave any unrelated README staleness untouched, since it's outside this task's `xvi-fc` scope.
 
-## Step 3 — Report, then summarize
+## Step 4 — Report, then summarize
 
 State plainly what was checked and what (if anything) changed in each file — one or two lines, not a diff dump — then proceed to the task's final summary as normal.

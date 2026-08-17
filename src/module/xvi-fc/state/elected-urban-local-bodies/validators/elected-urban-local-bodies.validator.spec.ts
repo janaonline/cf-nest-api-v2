@@ -18,8 +18,8 @@ const OVER_LIMIT_ULB_NAME = 'X'.repeat(ULB_NAME_MAX_LENGTH + 1); // 251 chars
 
 const mockDateConfig: EulbDateValidationConfig = {
   constitutionMin: new Date(Date.UTC(2021, 4, 31, 0, 0, 0, 0)),
-  constitutionMinMessage: 'Date of Constitution cannot be before 31 May 2021.',
-  constitutionMaxMessage: 'Date of Constitution cannot be a future date.',
+  constitutionMinMessage: 'Date on which the elected body is in place cannot be before 31 May 2021.',
+  constitutionMaxMessage: 'Date on which the elected body is in place cannot be a future date.',
   expiryMax: new Date(Date.UTC(2030, 2, 31, 23, 59, 59, 999)),
   expiryMaxMessage: 'Date of Expiry cannot be after 31 March 2030.',
   expiryMinMessage: 'Date of Expiry cannot be before today.',
@@ -29,7 +29,7 @@ const mockDateConfig: EulbDateValidationConfig = {
   censusCodeMaxLengthMessage: `Census code must not exceed ${CENSUS_CODE_MAX_LENGTH} characters.`,
   ulbNameMaxLength: ULB_NAME_MAX_LENGTH,
   ulbNameMaxLengthMessage: `ULB name must not exceed ${ULB_NAME_MAX_LENGTH} characters.`,
-  electedBodyStatuses: ['Constituted', 'Not Constituted', 'Exempt'],
+  electedBodyStatuses: ['Constituted', 'Not Constituted', '6th Schedule'],
 };
 
 function makeRow(overrides: Record<string, unknown> = {}) {
@@ -48,10 +48,18 @@ const VALID_ROW_EDIT_FIELDS: FieldConfig[] = [
   {
     key: 'dateOfConstitution',
     formFieldType: 'date',
-    label: 'Date of Constitution',
+    label: 'Date on which the elected body is in place.',
     validations: [
-      { name: 'minDate', validator: '2021-05-31', message: 'Date of Constitution cannot be before 31 May 2021.' },
-      { name: 'maxDate', validator: 'TODAY', message: 'Date of Constitution cannot be a future date.' },
+      {
+        name: 'minDate',
+        validator: '2021-05-31',
+        message: 'Date on which the elected body is in place cannot be before 31 May 2021.',
+      },
+      {
+        name: 'maxDate',
+        validator: 'TODAY',
+        message: 'Date on which the elected body is in place cannot be a future date.',
+      },
     ],
   },
   {
@@ -76,7 +84,7 @@ const VALID_ROW_EDIT_FIELDS: FieldConfig[] = [
     options: [
       { id: 'Constituted', label: 'Constituted' },
       { id: 'Not Constituted', label: 'Not Constituted' },
-      { id: 'Exempt', label: 'Exempt' },
+      { id: '6th Schedule', label: '6th Schedule' },
     ],
     validations: [{ name: 'required', validator: null, message: 'Elected Body Status is required.' }],
   },
@@ -110,7 +118,7 @@ describe('extractDateConfig', () => {
     expect(config.censusCodeMaxLengthMessage).toBe('Census code must not exceed 10 characters.');
     expect(config.ulbNameMaxLength).toBe(250);
     expect(config.ulbNameMaxLengthMessage).toBe('ULB name must not exceed 250 characters.');
-    expect(config.electedBodyStatuses).toEqual(['Constituted', 'Not Constituted', 'Exempt']);
+    expect(config.electedBodyStatuses).toEqual(['Constituted', 'Not Constituted', '6th Schedule']);
   });
 
   it('throws when EXTRA_ULB_PORTAL_FIELDS is missing censusCode/ulbName', () => {
