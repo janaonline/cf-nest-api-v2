@@ -67,9 +67,10 @@ export class SlbController {
   }
 
   @ApiOperation({
-    summary: 'Final submit SLB form to State DMA',
+    summary: 'Final submit SLB form',
     description:
-      'Final-submits the SLB form for the given ULB and year. Runs full validation and transitions status to `UNDER_REVIEW_BY_STATE`.',
+      'Final-submits the SLB form for the given ULB and year. Runs full validation and transitions status ' +
+      'directly to `APPROVED_BY_STATE` — SLB has no STATE approve/return workflow.',
   })
   @ApiBody({ type: SaveSlbDto })
   @Post('final-submit')

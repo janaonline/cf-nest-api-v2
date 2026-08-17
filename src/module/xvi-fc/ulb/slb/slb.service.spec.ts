@@ -300,18 +300,18 @@ describe('SlbService', () => {
   });
 
   describe('finalSubmit', () => {
-    it('transitions status to UNDER_REVIEW_BY_STATE on first submit', async () => {
+    it('transitions status to APPROVED_BY_STATE on first submit', async () => {
       const result = await service.finalSubmit(validDto, ulbUser(ulbOid));
 
       expect(formModel.create).toHaveBeenCalledWith(
-        expect.objectContaining({ ulb: ulbOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_STATE }),
+        expect.objectContaining({ ulb: ulbOid, currentFormStatus: FORM_STATUS.APPROVED_BY_STATE }),
       );
       expect(result.success).toBe(true);
     });
 
     it('blocks re-submission when status does not allow it', async () => {
       formModel.findOne.mockReturnValue(
-        q({ _id: docOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_STATE }),
+        q({ _id: docOid, currentFormStatus: FORM_STATUS.APPROVED_BY_STATE }),
       );
 
       await expect(service.finalSubmit(validDto, ulbUser(ulbOid))).rejects.toThrow(ForbiddenException);
