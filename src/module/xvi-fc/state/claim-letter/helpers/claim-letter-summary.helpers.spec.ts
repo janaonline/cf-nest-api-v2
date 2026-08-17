@@ -91,12 +91,12 @@ describe('mapClaimLetterBatchDocToSummary', () => {
       expect(summary.permissions).toEqual({ canView: true, canEdit: true, canFinalSubmit: true });
     });
 
-    it('grants canEdit but not canFinalSubmit to a reviewer subrole — PREPARE_GRANT_LETTERS without FINAL_SUBMIT_TO_MOHUA', () => {
+    it('grants canEdit and canFinalSubmit to a reviewer subrole — reviewer holds both PREPARE_GRANT_LETTERS and FINAL_SUBMIT_TO_MOHUA', () => {
       const summary = mapClaimLetterBatchDocToSummary(
         batchDoc({ currentFormStatus: 2, isAbandoned: false }),
         mockUser({ xviFcSubrole: 'reviewer' }),
       );
-      expect(summary.permissions).toEqual({ canView: true, canEdit: true, canFinalSubmit: false });
+      expect(summary.permissions).toEqual({ canView: true, canEdit: true, canFinalSubmit: true });
     });
 
     it('grants neither canEdit nor canFinalSubmit to a viewer subrole', () => {
