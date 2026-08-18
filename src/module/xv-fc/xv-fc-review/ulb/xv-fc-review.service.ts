@@ -156,6 +156,7 @@ export class XvFcReviewService {
       hasData: true,
       status: doc.xvFcReview?.status ?? 'NOT_STARTED',
       finalAction: doc.xvFcReview?.finalAction ?? null,
+      submittedAt: doc.xvFcReview?.submittedAt ?? null,
       declaration: doc.xvFcReview?.declaration ?? null,
       supportingDocument: doc.xvFcReview?.supportingDocument ?? null,
       lineItems,
