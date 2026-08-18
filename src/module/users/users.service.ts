@@ -31,6 +31,8 @@ import { UpdateUserRoleDto } from './dto/update-user-role.dto';
 import { StateMemberResponseDto } from './dto/state-member-response.dto';
 import { UpdateXviFcSubroleDto } from './dto/update-xvi-fc-subrole.dto';
 import { TransferSubmitterDto } from './dto/transfer-submitter.dto';
+import { EmailDomainValidationService } from 'src/core/email-domain-validation/email-domain-validation.service';
+import type { XviFcValidationErrorMap } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 
 // ─── Permission-matrix display types ────────────────────────────────────────
 
@@ -165,7 +167,40 @@ export class UsersService {
     private readonly redisService: RedisService,
     private readonly emailQueueService: EmailQueueService,
     private readonly configService: ConfigService,
+    private readonly emailDomainValidation: EmailDomainValidationService,
   ) {}
+
+  private throwValidationError(errors: XviFcValidationErrorMap): never {
+    throw new BadRequestException({ message: 'Validation failed', errors });
+  }
+
+  /** Guards against saving a Commissioner/Nodal Officer email whose domain can't actually
+   *  receive mail (typo'd or made-up domain) — @IsEmail() only checks syntax, not that the
+   *  domain is real. Same check and same fail-open-on-DNS-trouble policy as
+   *  UlbService.ensureEmailDomainIsReachable, reused here for the profile-verification flow. */
+  private async assertProfileContactEmailsAreDeliverable(dto: UpdateProfileContactsDto): Promise<void> {
+    const checks: Array<{ field: 'commissionerEmail' | 'accountantEmail'; email: string }> = [];
+    if (dto.commissionerEmail) checks.push({ field: 'commissionerEmail', email: dto.commissionerEmail });
+    if (dto.accountantEmail) checks.push({ field: 'accountantEmail', email: dto.accountantEmail });
+    if (!checks.length) return;
+
+    const results = await Promise.all(
+      checks.map(async (c) => ({ ...c, hasMx: await this.emailDomainValidation.domainHasMxRecord(c.email) })),
+    );
+    const errors: XviFcValidationErrorMap = {};
+    for (const r of results) {
+      if (!r.hasMx) {
+        errors[r.field] = [
+          {
+            field: r.field,
+            message: "This email domain doesn't appear to accept mail. Check for a typo in the email address.",
+            code: 'domainMx',
+          },
+        ];
+      }
+    }
+    if (Object.keys(errors).length) this.throwValidationError(errors);
+  }
 
   async issueProfileSaveToken(userId: string): Promise<{ token: string }> {
     if (!Types.ObjectId.isValid(userId)) throw new BadRequestException('Invalid user ID');
@@ -645,6 +680,8 @@ export class UsersService {
       }
       await this.redisService.del(this.saveTokenKey(userId));
     }
+
+    await this.assertProfileContactEmailsAreDeliverable(dto);
 
     // Strip saveToken — it is not a DB field
     const { saveToken: _t, ...rest } = dto;
