@@ -9,6 +9,7 @@ import { User } from 'src/schemas/user/user.schema';
 import { State } from 'src/schemas/state.schema';
 import { RedisService } from 'src/core/services/redis/redis.service';
 import { EmailQueueService } from 'src/core/queue/email-queue/email-queue.service';
+import { EmailDomainValidationService } from 'src/core/email-domain-validation/email-domain-validation.service';
 import { Permission } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { Role } from 'src/module/auth/enum/role.enum';
 
@@ -49,6 +50,7 @@ describe('UsersService', () => {
   let mockRedisService: { get: jest.Mock; set: jest.Mock; del: jest.Mock };
   let mockEmailQueueService: { addEmailJob: jest.Mock };
   let mockConfigService: { get: jest.Mock };
+  let mockEmailDomainValidation: { domainHasMxRecord: jest.Mock };
 
   beforeEach(async () => {
     mockUserModel = createChainMock();
@@ -56,6 +58,7 @@ describe('UsersService', () => {
     mockRedisService = { get: jest.fn(), set: jest.fn(), del: jest.fn() };
     mockEmailQueueService = { addEmailJob: jest.fn().mockResolvedValue(undefined) };
     mockConfigService = { get: jest.fn().mockReturnValue('https://cityfinance.in') };
+    mockEmailDomainValidation = { domainHasMxRecord: jest.fn().mockResolvedValue(true) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -65,6 +68,7 @@ describe('UsersService', () => {
         { provide: RedisService, useValue: mockRedisService },
         { provide: EmailQueueService, useValue: mockEmailQueueService },
         { provide: ConfigService, useValue: mockConfigService },
+        { provide: EmailDomainValidationService, useValue: mockEmailDomainValidation },
       ],
     }).compile();
 
