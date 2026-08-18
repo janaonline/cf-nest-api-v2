@@ -79,8 +79,13 @@ export class ZipBuildService {
         // console.log('ulbFolder', ulbFolder);
         archive.append('', { name: `${ulbFolder}/` }); // folder entry
         // console.log('ulb---', ulb.ulbName);
-        // this.logger.log(`ulb--- ${ulb.ulbName}`);
         for (const f of ulb.files) {
+          if (!f.url) {
+            skippedFiles++;
+            this.logger.log(`ulbFolder--- ${ulbFolder}`);
+            this.logger.warn(`Skipping file with missing url: ${f.name || '(unnamed)'} | url: ${f.url}`);
+            continue;
+          }
           const name = f.name?.trim() || path.basename(f.url) || `file-${++totalFiles}.bin`;
           f.url = this.cleanUrl(f.url);
           const ext = path.posix.extname(f.url);
