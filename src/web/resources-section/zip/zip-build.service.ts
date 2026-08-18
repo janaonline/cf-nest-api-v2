@@ -82,7 +82,7 @@ export class ZipBuildService {
         for (const f of ulb.files) {
           if (!f.url) {
             skippedFiles++;
-            this.logger.log(`ulbFolder--- ${ulbFolder}`);
+            this.logger.warn(`ulbFolder--- ${ulbFolder}`);
             this.logger.warn(`Skipping file with missing url: ${f.name || '(unnamed)'} | url: ${f.url}`);
             continue;
           }
