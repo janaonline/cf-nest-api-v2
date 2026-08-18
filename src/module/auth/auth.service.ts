@@ -148,7 +148,6 @@ export class AuthService {
 
     const profileUpdate: Record<string, unknown> = {
       isNewUser: false,
-      tempPasswordExpiresAt: null,
       isXVIFCProfileVerified: true,
       isXviFcdeleted: false,
       ...(profile?.name && { name: profile.name }),

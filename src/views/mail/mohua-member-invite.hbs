@@ -44,26 +44,21 @@
         <p><strong>Team:</strong> Ministry of Housing and Urban Affairs (MoHUA)</p>
       </div>
 
-      {{#if tempPassword}}
       <p>
-        Your account has been created with a temporary password. Use your email address and the password
-        below to log in for the first time. You will be prompted to set a new password after verifying your email.
+        Please set your password to access the CityFinance Portal. Click the button below to set
+        your password and complete your account setup. Your registered email address will be your
+        login ID going forward.
       </p>
       <div class="info-box" style="background:#fff3cd;border-left-color:#f0ad4e;">
-        <p style="margin:0 0 6px;font-size:13px;color:#856404;"><strong>Login Email:</strong> {{email}}</p>
-        <p style="margin:0;font-size:16px;letter-spacing:2px;font-family:monospace;color:#333;"><strong>Temporary Password:</strong> <span style="background:#fff;padding:2px 8px;border-radius:3px;border:1px solid #f0ad4e;">{{tempPassword}}</span></p>
+        <p style="margin:0;font-size:13px;color:#856404;"><strong>Login Email:</strong> {{email}}</p>
       </div>
-      <p style="font-size:13px;color:#cc0000;"><strong>&#9888; This temporary password expires in 72 hours.</strong> Please log in and set a new password as soon as possible.</p>
-      {{else}}
-      <p>
-        To get started, click the button below to log in using your registered email address.
-        You will be prompted to complete your profile verification on first login.
-      </p>
-      {{/if}}
 
       <div class="cta">
-        <a href="{{loginUrl}}" target="_blank">Access CityFinance Portal</a>
+        <a href="{{resetPasswordUrl}}" target="_blank">Set Password</a>
       </div>
+      <p style="font-size:13px;color:#777777;text-align:center;margin-top:-16px;">
+        Once your password is set, log in at <a href="{{loginUrl}}">{{loginUrl}}</a>.
+      </p>
 
       <hr class="divider" />
 

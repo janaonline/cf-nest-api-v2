@@ -31,9 +31,8 @@
       <h2>You have been registered as the primary contact for your ULB</h2>
       <p>Hello <strong>{{name}}</strong>,</p>
       <p>
-        Your account has been created as the primary contact for <strong>{{ulbName}}</strong>
-        on the XVI Finance Commission portal. It is currently pending admin review and will be
-        activated once your ULB's registration is approved.
+        Your account has been created and activated as the primary contact for <strong>{{ulbName}}</strong>
+        on the XVI Finance Commission portal.
       </p>
 
       <div class="info-box">
@@ -43,18 +42,19 @@
       </div>
 
       <p>
-        Your account has been created with a temporary password. Use your {{loginCodeLabel}} and the
-        password below to log in for the first time. You will be prompted to set a new password after logging in.
+        No password has been set on your account yet. Use your {{loginCodeLabel}} below to set your
+        password before logging in for the first time.
       </p>
       <div class="info-box" style="background:#fff3cd;border-left-color:#f0ad4e;">
-        <p style="margin:0 0 6px;font-size:13px;color:#856404;"><strong>{{loginCodeLabel}}:</strong> {{loginCode}}</p>
-        <p style="margin:0;font-size:16px;letter-spacing:2px;font-family:monospace;color:#333;"><strong>Temporary Password:</strong> <span style="background:#fff;padding:2px 8px;border-radius:3px;border:1px solid #f0ad4e;">{{tempPassword}}</span></p>
+        <p style="margin:0;font-size:13px;color:#856404;"><strong>{{loginCodeLabel}}:</strong> {{loginCode}}</p>
       </div>
-      <p style="font-size:13px;color:#cc0000;"><strong>&#9888; This temporary password expires in 72 hours.</strong> Please log in and set a new password as soon as possible.</p>
 
       <div class="cta">
-        <a href="{{loginUrl}}" target="_blank">Access CityFinance Portal</a>
+        <a href="{{resetPasswordUrl}}" target="_blank">Set Your Password</a>
       </div>
+      <p style="font-size:13px;color:#777777;text-align:center;margin-top:-16px;">
+        Once your password is set, log in at <a href="{{loginUrl}}">{{loginUrl}}</a>.
+      </p>
 
       <hr class="divider" />
 

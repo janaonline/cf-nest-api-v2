@@ -52,8 +52,14 @@ loginForm.getRawValue() → { identifier, password }
 9. ULB role: an active `Ulb` document must exist.
 10. Account lock check (`isLocked` + `lockUntil`) → 403, locked for 1 hour after repeated failures.
 11. `bcrypt.compare(password, user.password)` — **with a master-password bypass**: if env `USER_IDENTITY` is set and equals the submitted password, auth succeeds regardless of the real password (dev/support backdoor — flag this for a security review). Wrong password increments `loginAttempts`.
-12. `isNewUser && tempPasswordExpiresAt` in the past → 403 "temporary password has expired".
-13. Success → issues tokens, creates a `LoginHistory` row, updates `lastLoginAt`, sets refresh cookie, returns a hydrated `user` object plus `allYears`.
+12. Success → issues tokens, creates a `LoginHistory` row, updates `lastLoginAt`, sets refresh cookie, returns a hydrated `user` object plus `allYears`.
+
+**Note**: newly-provisioned accounts (ULB primary contact, STATE/MoHUA invites) are created with a
+random, never-revealed password — there is no temp password or expiry anymore. The invite/approval
+email instead points the recipient at the Forgot Password OTP flow (`POST /auth/sendOtp` with
+`purpose: 'forgot-password'`, then `POST /auth/forgot-password/reset`) to set their password before
+their first login. `isNewUser` stays true until that reset succeeds (or until the profile-verification
+save flow completes it), independent of *how* the password was set.
 
 ### 1.4 Tokens
 
