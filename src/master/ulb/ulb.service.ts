@@ -350,6 +350,7 @@ export class UlbService {
     if (typeof patch.censusCode === 'string' && patch.censusCode.trim()) {
       await this.ensureCensusCodeNotTaken(patch.censusCode);
     } else {
+      delete patch.censusCode; // never persist a blank string — treats "" as a real value
       patch.sbCode = await this.generateSbCode();
     }
 
@@ -761,9 +762,13 @@ export class UlbService {
       if (nameChanged) await this.ensureNameNotTaken(patch.name, id);
       patch.slug = this.buildSlug(patch.name);
     }
-    if (typeof patch.censusCode === 'string' && patch.censusCode.trim()) {
-      const censusCodeChanged = patch.censusCode.trim() !== (existing.censusCode ?? '').trim();
-      if (censusCodeChanged) await this.ensureCensusCodeNotTaken(patch.censusCode, id);
+    if (typeof patch.censusCode === 'string') {
+      if (patch.censusCode.trim()) {
+        const censusCodeChanged = patch.censusCode.trim() !== (existing.censusCode ?? '').trim();
+        if (censusCodeChanged) await this.ensureCensusCodeNotTaken(patch.censusCode, id);
+      } else {
+        delete patch.censusCode; // never persist a blank string — sparse unique index treats "" as a real value
+      }
     }
 
     if (user.role === Role.STATE) {
