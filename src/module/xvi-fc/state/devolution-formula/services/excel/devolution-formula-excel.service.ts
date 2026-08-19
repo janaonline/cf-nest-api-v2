@@ -56,6 +56,7 @@ import type {
   DfValidateExcelResponseData,
 } from '../../types/devolution-formula.types';
 import { DevolutionFormulaValidator, type DfParsedExcelRow } from '../../validators/devolution-formula.validator';
+import { amountsAreEqual } from '../../helpers/devolution-formula-tolerance.helpers';
 import { DevolutionFormulaService } from '../main/devolution-formula.service';
 import { DfFormJsonConfigService } from '../form-json/devolution-formula-form-json.service';
 import { getDfFieldsByType } from '../../helpers/devolution-formula-form-json.helpers';
@@ -221,7 +222,9 @@ export class DevolutionFormulaExcelService {
     }
 
     const dbUlbs = dbUlbsRaw as UlbLean[];
-    const totalMoHUAAllocation = grantAlloc.basic + grantAlloc.performance;
+    // Defensive rounding — GrantAllocation is externally written and unconstrained (see
+    // grant-allocation.schema.ts).
+    const totalMoHUAAllocation = Math.round(grantAlloc.basic + grantAlloc.performance);
 
     // 3. Read and parse Excel from S3
     const buffer = await this.s3Service.getBuffer(effectiveFile.path);
@@ -355,7 +358,9 @@ export class DevolutionFormulaExcelService {
     const validRows = processedRows.filter((r) => r.validationRowStatus === 'VALID');
     const errorRowCount = processedRows.length - validRows.length;
     const totalAllocatedSum = validRows.reduce((sum, r) => sum + (Number(r.totalGrantAllocation) || 0), 0);
-    const allocationBalanced = Math.abs(totalAllocatedSum - totalMoHUAAllocation) <= 0.001;
+    // Exact match (within float-noise epsilon), not a forgiving tolerance — every rupee of
+    // totalMoHUAAllocation must be accounted for; see devolution-formula-tolerance.helpers.ts.
+    const allocationBalanced = amountsAreEqual(totalAllocatedSum, totalMoHUAAllocation);
     const formValidationStatus =
       errorRowCount === 0 && missingUlbCount === 0 && allocationBalanced ? 'VALID' : 'INVALID';
 
@@ -526,7 +531,7 @@ export class DevolutionFormulaExcelService {
       excelFileErrors.push({
         field: 'excelFile',
         code: 'allocationMismatch',
-        message: `Sum of ULB allocations (${totalAllocatedSum.toFixed(2)}) does not equal Total MoHUA Allocation (${totalMoHUAAllocation.toFixed(2)}).`,
+        message: `Sum of ULB allocations (₹${totalAllocatedSum}) does not equal Total MoHUA Allocation (₹${totalMoHUAAllocation}). Difference: ₹${Math.abs(totalAllocatedSum - totalMoHUAAllocation)}.`,
       });
     }
 
@@ -573,7 +578,8 @@ export class DevolutionFormulaExcelService {
     assertCanStateEditForm(form.currentFormStatus ?? FORM_STATUS.NOT_STARTED);
 
     const grantAlloc = await this.dfService.resolveGrantAllocation(stateOid, yearOid);
-    const totalMoHUAAllocation = grantAlloc.basic + grantAlloc.performance;
+    // Defensive rounding — see the matching comment in validateExcel above.
+    const totalMoHUAAllocation = Math.round(grantAlloc.basic + grantAlloc.performance);
     const { maxFormulaLength } = await this.resolveDfValidationConfig(yearId);
 
     const eligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC');
@@ -656,7 +662,9 @@ export class DevolutionFormulaExcelService {
       await this.rowModel.bulkWrite(bulkOps, { ordered: false });
 
       const missingUlbCount = dbUlbs.filter((u) => !matchedUlbIds.has(String(u._id))).length;
-      const allocationBalanced = Math.abs(totalAllocatedSum - totalMoHUAAllocation) <= 0.001;
+      // Exact match (within float-noise epsilon), not a forgiving tolerance — every rupee of
+      // totalMoHUAAllocation must be accounted for; see devolution-formula-tolerance.helpers.ts.
+      const allocationBalanced = amountsAreEqual(totalAllocatedSum, totalMoHUAAllocation);
       const formValidationStatus =
         errorRowCount === 0 && missingUlbCount === 0 && allocationBalanced ? 'VALID' : 'INVALID';
 
@@ -775,7 +783,8 @@ export class DevolutionFormulaExcelService {
       this.ulbModel.find(eligibleUlbFilter).select('_id name censusCode sbCode').sort({ name: 1 }).lean().exec(),
     ]);
 
-    const maxGrantAllocation = grantAlloc ? grantAlloc.basic + grantAlloc.performance : undefined;
+    // Defensive rounding — see the matching comment in validateExcel above.
+    const maxGrantAllocation = grantAlloc ? Math.round(grantAlloc.basic + grantAlloc.performance) : undefined;
     const activeVersion = form?.activeDatasetVersion ?? 0;
     const { maxFormulaLength } = await this.resolveDfValidationConfig(yearId);
 
@@ -847,13 +856,14 @@ export class DevolutionFormulaExcelService {
             type: 'custom',
             allowBlank: true,
             formulae: [
-              `OR(${totalLetter}${row}="",AND(ISNUMBER(${totalLetter}${row}),${totalLetter}${row}>=0${maxClause},ISNUMBER(${inst1Letter}${row}),ISNUMBER(${inst2Letter}${row}),ABS(${totalLetter}${row}-(${inst1Letter}${row}+${inst2Letter}${row}))<0.001))`,
+              // Whole Rupees only (MOD(...,1)=0) on all three cells, plus the existing ≥0/max/sum checks.
+              `OR(${totalLetter}${row}="",AND(ISNUMBER(${totalLetter}${row}),MOD(${totalLetter}${row},1)=0,${totalLetter}${row}>=0${maxClause},ISNUMBER(${inst1Letter}${row}),MOD(${inst1Letter}${row},1)=0,ISNUMBER(${inst2Letter}${row}),MOD(${inst2Letter}${row},1)=0,${totalLetter}${row}=(${inst1Letter}${row}+${inst2Letter}${row})))`,
             ],
             showErrorMessage: true,
             errorStyle: 'warning',
             errorTitle: 'Allocation Mismatch',
             error:
-              'Total Grant Allocation must be ≥ 0 and must equal the sum of Installment 1 and Installment 2 amounts.',
+              'Total Grant Allocation must be a whole number (no decimals), ≥ 0, and must equal the sum of Installment 1 and Installment 2 amounts.',
           };
         },
       },
@@ -867,12 +877,12 @@ export class DevolutionFormulaExcelService {
             type: 'custom',
             allowBlank: true,
             formulae: [
-              `OR(${inst1Letter}${row}="",AND(ISNUMBER(${inst1Letter}${row}),${inst1Letter}${row}>=0,OR(${totalLetter}${row}="",${inst1Letter}${row}<=${totalLetter}${row})))`,
+              `OR(${inst1Letter}${row}="",AND(ISNUMBER(${inst1Letter}${row}),MOD(${inst1Letter}${row},1)=0,${inst1Letter}${row}>=0,OR(${totalLetter}${row}="",${inst1Letter}${row}<=${totalLetter}${row})))`,
             ],
             showErrorMessage: true,
             errorStyle: 'error',
             errorTitle: 'Invalid Installment 1 Amount',
-            error: `Installment 1 Amount must be ≥ 0 and cannot exceed Total Grant Allocation (${totalMoHUAAllocation}Cr.).`,
+            error: `Installment 1 Amount must be a whole number (no decimals), ≥ 0, and cannot exceed Total Grant Allocation (₹${totalMoHUAAllocation}).`,
           };
         },
       },
@@ -886,12 +896,12 @@ export class DevolutionFormulaExcelService {
             type: 'custom',
             allowBlank: true,
             formulae: [
-              `OR(${inst2Letter}${row}="",AND(ISNUMBER(${inst2Letter}${row}),${inst2Letter}${row}>=0,OR(${totalLetter}${row}="",${inst2Letter}${row}<=${totalLetter}${row})))`,
+              `OR(${inst2Letter}${row}="",AND(ISNUMBER(${inst2Letter}${row}),MOD(${inst2Letter}${row},1)=0,${inst2Letter}${row}>=0,OR(${totalLetter}${row}="",${inst2Letter}${row}<=${totalLetter}${row})))`,
             ],
             showErrorMessage: true,
             errorStyle: 'error',
             errorTitle: 'Invalid Installment 2 Amount',
-            error: `Installment 2 Amount must be ≥ 0 and cannot exceed Total Grant Allocation (${totalMoHUAAllocation}).`,
+            error: `Installment 2 Amount must be a whole number (no decimals), ≥ 0, and cannot exceed Total Grant Allocation (₹${totalMoHUAAllocation}).`,
           };
         },
       },

@@ -60,6 +60,17 @@ new model in `fc-unspent-declaration.module.ts` purely for this. The "14th"/"15t
 `*FullLabel` variant is a thin prose wrapper composed over the original, not a second year->FC
 mapping.
 
+## Invariants worth knowing before you change adjacent code
+
+- `unspentAmount` and `allocationAmount` are whole Rupees only — no decimals. Enforced by `@IsInt()`
+  on `FcUnspentUlbRowInputDto` (`unspentAmount`); `allocationAmount` is inherited unconverted from
+  Devolution Formula's `totalGrantAllocation`, itself `@IsInt()`-enforced there. This was previously
+  the one state-form amount left decimal-tolerant (`@IsNumber({ maxDecimalPlaces: 2 })`, since it's a
+  real bank-balance figure a State user types in rather than a computed proportional split) — brought
+  in line with every other state-form amount for full consistency. `allocationPerc` is a ratio
+  (`unspentAmount / allocationAmount * 100`) and is unaffected by the unit — computed unrounded, see
+  `FcUnspentDeclarationRowService`.
+
 ## Dependencies
 
 **Inbound — reads devolution-formula's dataset-versioning invariant (read-only, no writes):**

@@ -54,7 +54,7 @@ import type { ClaimLetterBatchSummary } from '../../types/claim-letter.types';
 
 export interface ClaimLetterUlbSelectionInput {
   ulbId: string;
-  /** Crore-denominated — the client's natural input unit, and also this service's storage unit. */
+  /** Whole Rupees (no decimals) — the client's natural input unit, and also this service's storage unit. */
   claimedAmount: number;
 }
 

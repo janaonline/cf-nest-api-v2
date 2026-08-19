@@ -479,9 +479,9 @@ describe('StateDashboardService', () => {
       expect(data.metrics.compliance).toEqual({ rate: 0, compliantUlbs: 0, totalUlbs: 0 });
     });
 
-    it('returns the CRORE amount unit constant', async () => {
+    it('returns the RUPEE amount unit constant', async () => {
       const { data } = await fetchDashboard();
-      expect(data.metrics.amountUnit).toBe(STATE_DASHBOARD_AMOUNT_UNIT.CRORE);
+      expect(data.metrics.amountUnit).toBe(STATE_DASHBOARD_AMOUNT_UNIT.RUPEE);
     });
 
     it('returns the INR currency constant', async () => {
@@ -718,7 +718,7 @@ describe('StateDashboardService', () => {
           totalUlbs: 7,
           allocatedAmount: 15_620_000_000,
           claimedAmount: 0,
-          amountUnit: STATE_DASHBOARD_AMOUNT_UNIT.CRORE,
+          amountUnit: STATE_DASHBOARD_AMOUNT_UNIT.RUPEE,
           currency: STATE_DASHBOARD_CURRENCY.INR,
           compliance: { rate: 0, compliantUlbs: 0, totalUlbs: 7 },
         });
@@ -1148,7 +1148,7 @@ describe('StateDashboardService', () => {
         expect(data.metrics).toMatchObject({
           allocatedAmount: 15_620_000_000,
           claimedAmount: 0,
-          amountUnit: STATE_DASHBOARD_AMOUNT_UNIT.CRORE,
+          amountUnit: STATE_DASHBOARD_AMOUNT_UNIT.RUPEE,
           currency: STATE_DASHBOARD_CURRENCY.INR,
         });
       });

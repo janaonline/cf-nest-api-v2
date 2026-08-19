@@ -34,7 +34,7 @@ export interface ClaimLetterStateLevelGate {
 }
 
 export interface DevolutionAllocation {
-  /** Crore-denominated, read directly from Devolution's own stored value — no unit conversion. */
+  /** Whole Rupees (no decimals), read directly from Devolution's own stored value — no unit conversion. */
   allocatedAmount: number;
   formDocumentId: string;
   rowDocumentId: string;

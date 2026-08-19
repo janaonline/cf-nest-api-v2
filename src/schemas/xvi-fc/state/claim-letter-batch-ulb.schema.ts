@@ -38,7 +38,7 @@ export class ClaimLetterDevolutionSource {
   @Prop({ type: Number, enum: [1, 2], required: true })
   installment!: ClaimLetterInstallment;
 
-  // Crore-denominated, matching Devolution's own storage — see ClaimLetterBatchUlb below.
+  // Whole Rupees (no decimals), matching Devolution's own storage — see ClaimLetterBatchUlb below.
   @Prop({ type: Number, required: true })
   allocatedAmount!: number;
 }
@@ -48,8 +48,8 @@ export const ClaimLetterDevolutionSourceSchema = SchemaFactory.createForClass(Cl
 /**
  * Immutable per-ULB claim child (brain §14.4) — one document per ULB per claim version. Never
  * reused by a later version (plan §7.6); a new version always creates fresh children. Money
- * fields are Crore-denominated decimal floats, matching Devolution's own storage convention;
- * percentage is integer basis points (plan §8).
+ * fields are whole Rupees (no decimals), matching Devolution's own storage convention; percentage
+ * is integer basis points (plan §8).
  */
 @Schema({
   collection: 'xvifc_claim_letter_batch_ulbs',

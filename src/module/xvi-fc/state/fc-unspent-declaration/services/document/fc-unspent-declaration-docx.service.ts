@@ -33,8 +33,9 @@ const TABLE_BORDER: ITableBordersOptions = {
   insideVertical: { style: BorderStyle.SINGLE, size: 4, color: '999999' },
 };
 
-function formatCrore(value: number): string {
-  return `${value.toLocaleString('en-IN', { maximumFractionDigits: 2 })} Cr.`;
+function formatRupees(value: number): string {
+  // Whole Rupees only — no decimals.
+  return `₹${value.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
 }
 
 function formatPercent(value: number): string {
@@ -186,8 +187,8 @@ export class FcUnspentDeclarationDocxService {
         headerCell('#', COLUMN_WIDTHS_PCT[0]),
         headerCell('ULB', COLUMN_WIDTHS_PCT[1]),
         headerCell('CENSUS ID', COLUMN_WIDTHS_PCT[2]),
-        headerCell('16TH FC ALLOCATION', COLUMN_WIDTHS_PCT[3]),
-        headerCell(`${data.priorFcCycleLabel.toUpperCase()} UNSPENT`, COLUMN_WIDTHS_PCT[4]),
+        headerCell('16TH FC ALLOCATION (RS.)', COLUMN_WIDTHS_PCT[3]),
+        headerCell(`${data.priorFcCycleLabel.toUpperCase()} UNSPENT (RS.)`, COLUMN_WIDTHS_PCT[4]),
         headerCell('% OF ALLOC.', COLUMN_WIDTHS_PCT[5]),
         headerCell('ELIGIBLE?', COLUMN_WIDTHS_PCT[6]),
       ],
@@ -200,8 +201,8 @@ export class FcUnspentDeclarationDocxService {
             dataCell(String(row.slNo), COLUMN_WIDTHS_PCT[0]),
             dataCell(row.ulbName, COLUMN_WIDTHS_PCT[1]),
             dataCell(row.censusCode, COLUMN_WIDTHS_PCT[2]),
-            dataCell(formatCrore(row.allocationAmount), COLUMN_WIDTHS_PCT[3]),
-            dataCell(formatCrore(row.unspentAmount), COLUMN_WIDTHS_PCT[4]),
+            dataCell(formatRupees(row.allocationAmount), COLUMN_WIDTHS_PCT[3]),
+            dataCell(formatRupees(row.unspentAmount), COLUMN_WIDTHS_PCT[4]),
             dataCell(formatPercent(row.allocationPerc), COLUMN_WIDTHS_PCT[5]),
             dataCell(yesNo(row.eligibility), COLUMN_WIDTHS_PCT[6]),
           ],

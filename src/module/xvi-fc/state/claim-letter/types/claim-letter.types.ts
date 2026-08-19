@@ -18,7 +18,7 @@ export interface ClaimLetterUlbOption {
   ulbName: string;
   censusCode: string | null;
   sbCode: string | null;
-  /** Crore-denominated, display-ready — null when the ULB has no active Devolution allocation row. */
+  /** Whole Rupees (no decimals), display-ready — null when the ULB has no active Devolution allocation row. */
   allocationAmount: number | null;
   eligible: boolean;
   ineligibleReasonCode: string | null;
@@ -40,7 +40,7 @@ export interface ClaimLetterUlbRow {
   eligible: boolean;
 }
 
-/** Crore-denominated — the same unit this is stored in, passed through unconverted. */
+/** Whole Rupees (no decimals) — the same unit this is stored in, passed through unconverted. */
 export interface ClaimLetterFinancialSummaryDisplay {
   totalInstallmentAllocation: number;
   totalAlreadyAcknowledged: number;
@@ -178,7 +178,7 @@ export interface ClaimLetterDocumentCoveringLetterRow {
   slNo: number;
   ulbId: string;
   ulbName: string;
-  /** Crore-denominated. */
+  /** Whole Rupees (no decimals). */
   claimAmount: number;
 }
 
@@ -240,7 +240,7 @@ export interface ClaimLetterDocumentData {
   signatoryName: string;
   signatoryDesignation: string;
   coveringLetterRows: ClaimLetterDocumentCoveringLetterRow[];
-  /** Crore-denominated sum of every `coveringLetterRows[].claimAmount`. */
+  /** Whole Rupees (no decimals) — sum of every `coveringLetterRows[].claimAmount`. */
   totalClaimAmount: number;
   annexure1Rows: ClaimLetterDocumentAnnexure1Row[];
   annexure2Columns: ClaimLetterDocumentAnnexure2Column[];
