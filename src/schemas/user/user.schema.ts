@@ -94,6 +94,13 @@ export class User extends Document {
   @Prop({ type: String, default: '' })
   accountantConatactNumber!: string;
 
+  // Set once this user has confirmed an email via OTP on the XVI-FC profile-verification page —
+  // the STATE/MoHUA user's own email, or the ULB Nodal Officer's email. Only ever written from
+  // that page's OTP-verify flow (updateProfileContacts / AuthService.setNewPassword), never
+  // elsewhere.
+  @Prop({ type: Boolean, default: false })
+  isXviFcEmailVerified!: boolean;
+
   @Prop({ type: Types.ObjectId, ref: 'User', default: null })
   createdBy!: Types.ObjectId;
 

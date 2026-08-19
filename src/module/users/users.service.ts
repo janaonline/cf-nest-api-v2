@@ -671,6 +671,7 @@ export class UsersService {
     'isNodalOfficer',
     'isXVIFCProfileVerified',
     'isXviFcdeleted',
+    'isXviFcEmailVerified',
   ]);
 
   async updateProfileContacts(
