@@ -223,7 +223,9 @@ export class AnnualAccountsController {
 
   @Post(':id/undo-approval')
   @HttpCode(200)
-  @ApiOperation({ summary: 'State reviewer undoes their own Approve Section decision (only while status is APPROVED_BY_STATE)' })
+  @ApiOperation({
+    summary: 'State reviewer undoes their own Approve Section decision (only while status is APPROVED_BY_STATE)',
+  })
   undoSectionApproval(
     @Param('id', ParseObjectIdPipe) id: string,
     @Query('section') section: string,

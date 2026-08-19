@@ -7,6 +7,7 @@ import { XviFcAnnualAccountUploadHistory } from '../../../../schemas/xvi-fc/annu
 import { XviFcAnnualAccountFormLog } from '../../../../schemas/xvi-fc/annual-account-form-log.schema';
 import { XviFcDocumentActionGate } from '../../../../schemas/xvi-fc/document-action-gate.schema';
 import { Ulb } from '../../../../schemas/ulb.schema';
+import { User } from '../../../../schemas/user/user.schema';
 import { S3Service } from '../../../../core/s3/s3.service';
 import { S3UploadService } from '../../../file/s3-upload.service';
 import { FormJsonService } from '../../../../master/form-json/form-json.service';
@@ -39,6 +40,7 @@ describe('AnnualAccountsService', () => {
   let mockAnnualAccountModel: Record<string, jest.Mock>;
   let mockUploadHistoryModel: Record<string, jest.Mock | { dropIndex: jest.Mock }>;
   let mockUlbModel: Record<string, jest.Mock>;
+  let mockUserModel: Record<string, jest.Mock>;
   let mockFormLogModel: { create: jest.Mock };
   let mockOcrQueue: { add: jest.Mock };
   let mockFormJsonService: { findActiveByDesignYearAndFormId: jest.Mock };
@@ -71,6 +73,9 @@ describe('AnnualAccountsService', () => {
     };
     mockUlbModel = {
       findById: jest.fn().mockReturnValue(mockQuery({ state: { toString: () => 'state-1' } })),
+    };
+    mockUserModel = {
+      findOne: jest.fn().mockReturnValue(mockQuery(null)),
     };
     mockS3Service = {
       headObject: jest.fn().mockResolvedValue(undefined),
@@ -110,6 +115,7 @@ describe('AnnualAccountsService', () => {
         { provide: getModelToken(XviFcAnnualAccountUploadHistory.name), useValue: mockUploadHistoryModel },
         { provide: getModelToken(XviFcAnnualAccountFormLog.name), useValue: mockFormLogModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+        { provide: getModelToken(User.name), useValue: mockUserModel },
         { provide: getModelToken(XviFcDocumentActionGate.name), useValue: mockActionGateModel },
         { provide: S3Service, useValue: mockS3Service },
         { provide: S3UploadService, useValue: mockS3UploadService },

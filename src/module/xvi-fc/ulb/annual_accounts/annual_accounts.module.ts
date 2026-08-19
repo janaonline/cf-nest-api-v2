@@ -7,6 +7,7 @@ import { S3Service } from '../../../../core/s3/s3.service';
 import { FileModule } from '../../../file/file.module';
 import { ANNUAL_ACCOUNT_PROCESSING_QUEUE } from '../../../../core/constants/queues';
 import { Ulb, UlbSchema } from '../../../../schemas/ulb.schema';
+import { User, UserSchema } from '../../../../schemas/user/user.schema';
 import { XviFcAnnualAccount, XviFcAnnualAccountSchema } from '../../../../schemas/xvi-fc/annual-account.schema';
 import {
   XviFcAnnualAccountUploadHistory,
@@ -44,6 +45,7 @@ import { UlbEligibilityModule } from 'src/module/ulb-eligibility/ulb-eligibility
       { name: XviFcAnnualAccountFormLog.name, schema: XviFcAnnualAccountFormLogSchema },
       { name: XviFcDocumentActionGate.name, schema: XviFcDocumentActionGateSchema },
       { name: Ulb.name, schema: UlbSchema },
+      { name: User.name, schema: UserSchema },
     ]),
   ],
   controllers: [AnnualAccountsController],

@@ -37,6 +37,8 @@ import {
   XviFcAnnualAccountFormLogDocument,
 } from '../../../../schemas/xvi-fc/annual-account-form-log.schema';
 import { Ulb, UlbDocument } from '../../../../schemas/ulb.schema';
+import { User, UserDocument } from '../../../../schemas/user/user.schema';
+import { Role } from '../../../auth/enum/role.enum';
 import { UlbEligibilityService } from '../../../ulb-eligibility/ulb-eligibility.service';
 import { CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE } from '../../../ulb-eligibility/ulb-eligibility.constants';
 import {
@@ -133,6 +135,9 @@ export class AnnualAccountsService implements OnModuleInit {
 
     @InjectModel(Ulb.name)
     private readonly ulbModel: Model<UlbDocument>,
+
+    @InjectModel(User.name)
+    private readonly userModel: Model<UserDocument>,
 
     @InjectModel(XviFcDocumentActionGate.name)
     private readonly actionGateModel: Model<DocumentActionGateDocument>,
@@ -943,7 +948,52 @@ export class AnnualAccountsService implements OnModuleInit {
     this.logger.log(
       `Manual review ${dto.decision.toLowerCase()} — annualAccountId=${id} section=${section} docId=${docId} by user=${user._id}`,
     );
+
+    this.notifyUlbOfManualReviewDecision(anchor, section, docSlot, decision).catch((err: unknown) => {
+      this.logger.error(`Failed to queue manual-review-decision notification for annualAccountId=${id}:`, err);
+    });
+
     return this.getProcessingStatus(id, section, user);
+  }
+
+  private async notifyUlbOfManualReviewDecision(
+    doc: { ulb: Types.ObjectId },
+    section: AnnualAccountSectionKey,
+    docSlot: { docId: string; currentUpload: { file?: { originalName?: string | null } | null } },
+    decision: { status: 'APPROVED' | 'RETURNED'; note?: string | null; decidedAt: Date },
+  ): Promise<void> {
+    const [ulbDoc, ulbUser] = await Promise.all([
+      this.ulbModel.findById(doc.ulb).select('name code').lean().exec(),
+      this.userModel.findOne({ ulb: doc.ulb, role: Role.ULB }).select('email name').lean().exec(),
+    ]);
+    if (!ulbUser?.email) return;
+
+    const clientUrl = this.configService.get<string>('CLIENT_URL', 'https://cityfinance.in');
+    const decidedAt = decision.decidedAt.toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
+    const templateName =
+      decision.status === 'APPROVED'
+        ? './annual-account-manual-review-approved'
+        : './annual-account-manual-review-returned';
+
+    await this.emailQueueService.addEmailJob({
+      to: ulbUser.email,
+      subject:
+        decision.status === 'APPROVED'
+          ? 'XVI-FC: Your manual review request was approved'
+          : 'XVI-FC: Your manual review request was returned',
+      templateName,
+      mailData: {
+        name: ulbUser.name,
+        ulbName: ulbDoc?.name ?? 'Unknown ULB',
+        ulbCode: ulbDoc?.code ?? '—',
+        section: SECTION_LABELS[section],
+        docId: docSlot.docId,
+        fileName: docSlot.currentUpload.file?.originalName ?? docSlot.docId,
+        note: decision.note ?? null,
+        decidedAt,
+        loginUrl: `${clientUrl}/xvifc`,
+      },
+    });
   }
 
   // ─── ADMIN's global manual-review queue ──────────────────────────────────────
