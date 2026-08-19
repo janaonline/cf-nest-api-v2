@@ -6,6 +6,12 @@ import { ZipBuildService } from './zip-build.service';
 import { ZipJobRequest, ZipJobResult } from './zip.types';
 import { Logger } from '@nestjs/common';
 
+// Hard ceiling on a single job's build+upload step. Without this, a stalled
+// S3/network call would keep this worker's job "active" forever (BullMQ keeps
+// renewing the lock as long as the process is alive), permanently occupying one
+// of only 2 concurrency slots and blocking the entire waiting queue behind it.
+const BUILD_TIMEOUT_MS = 40 * 60 * 1000; // 40 minutes
+
 @Processor('zipResources', { concurrency: 2 }) // run up to 2 jobs in parallel
 export class ZipJobsProcessor extends WorkerHost {
   logger = new Logger(ZipJobsProcessor.name);
@@ -33,11 +39,20 @@ export class ZipJobsProcessor extends WorkerHost {
 
     await job.updateProgress(5);
     // console.log('start');
-    const result = await this.zip.buildZipToS3({
-      ulbData,
-      outputKey: zipKey,
-      downloadType,
-    });
+    let timeoutHandle: NodeJS.Timeout;
+    const result = await Promise.race([
+      this.zip.buildZipToS3({
+        ulbData,
+        outputKey: zipKey,
+        downloadType,
+      }),
+      new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(
+          () => reject(new Error(`buildZipToS3 timed out after ${BUILD_TIMEOUT_MS}ms for job ${job.id}`)),
+          BUILD_TIMEOUT_MS,
+        );
+      }),
+    ]).finally(() => clearTimeout(timeoutHandle));
     // console.log('job 95-----');
     await job.updateProgress(95);
     // console.log('Zip built', result);
