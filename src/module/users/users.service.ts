@@ -202,6 +202,24 @@ export class UsersService {
     if (Object.keys(errors).length) this.throwValidationError(errors);
   }
 
+  /** Same domain-reachability guard as assertProfileContactEmailsAreDeliverable, for the
+   *  invite-a-new-member flows (STATE and MoHUA) — the invited email is what future login and
+   *  all grant-related notifications go to, so a typo'd/made-up domain should block the invite. */
+  private async assertInviteEmailIsDeliverable(email: string): Promise<void> {
+    const hasMx = await this.emailDomainValidation.domainHasMxRecord(email);
+    if (!hasMx) {
+      this.throwValidationError({
+        email: [
+          {
+            field: 'email',
+            message: "This email domain doesn't appear to accept mail. Check for a typo in the email address.",
+            code: 'domainMx',
+          },
+        ],
+      });
+    }
+  }
+
   async issueProfileSaveToken(userId: string): Promise<{ token: string }> {
     if (!Types.ObjectId.isValid(userId)) throw new BadRequestException('Invalid user ID');
     const user = await this.userModel.findById(userId).select('_id').lean().exec();
@@ -218,6 +236,8 @@ export class UsersService {
 
   async inviteStateMember(dto: InviteStateMemberDto, requester: AuthUser): Promise<StateMemberResponseDto> {
     if (!requester.state) throw new ForbiddenException('No state scope on this account');
+
+    await this.assertInviteEmailIsDeliverable(dto.email);
 
     const action = dto.action ?? 'invite';
     const stateId = new Types.ObjectId(String(requester.state));
@@ -805,6 +825,8 @@ export class UsersService {
   }
 
   async inviteMohuaMember(dto: InviteMohuaMemberDto, requester: AuthUser): Promise<StateMemberResponseDto> {
+    await this.assertInviteEmailIsDeliverable(dto.email);
+
     const action = dto.action ?? 'invite';
     const xviFcSubrole: 'reviewer' | 'viewer' = dto.subRole === 'EDITOR' ? 'reviewer' : 'viewer';
 
