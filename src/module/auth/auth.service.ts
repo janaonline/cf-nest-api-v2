@@ -149,6 +149,7 @@ export class AuthService {
     const profileUpdate: Record<string, unknown> = {
       isNewUser: false,
       isXVIFCProfileVerified: true,
+      isXviFcEmailVerified: true,
       isXviFcdeleted: false,
       ...(profile?.name && { name: profile.name }),
       ...(profile?.mobile && { mobile: profile.mobile }),
