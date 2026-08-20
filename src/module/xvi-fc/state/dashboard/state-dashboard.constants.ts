@@ -1,7 +1,10 @@
 import { FORM_STATUS, type FormStatusType } from 'src/common/constants/form-status.constants';
 
+// RUPEE is the current unit — dashboard amounts are whole Rupees. CRORE is kept defined but unused,
+// leaving room for a future display-preference toggle without a breaking rename.
 export const STATE_DASHBOARD_AMOUNT_UNIT = {
   CRORE: 'CRORE',
+  RUPEE: 'RUPEE',
 } as const;
 
 export type DashboardAmountUnit = (typeof STATE_DASHBOARD_AMOUNT_UNIT)[keyof typeof STATE_DASHBOARD_AMOUNT_UNIT];

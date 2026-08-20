@@ -9,40 +9,41 @@ import {
 } from './claim-letter-financial.helpers';
 
 describe('isClaimedAmountWithinVariance', () => {
-  const allocated = 100;
+  const allocated = 100_000; // a whole-Rupee allocatedAmount
   const lowerPercent = 90;
   const upperPercent = 110;
 
   it('passes at exactly the 90% lower boundary', () => {
-    expect(isClaimedAmountWithinVariance(allocated, 90, lowerPercent, upperPercent)).toBe(true);
+    expect(isClaimedAmountWithinVariance(allocated, 90_000, lowerPercent, upperPercent)).toBe(true);
   });
 
   it('passes at exactly the 110% upper boundary', () => {
-    expect(isClaimedAmountWithinVariance(allocated, 110, lowerPercent, upperPercent)).toBe(true);
+    expect(isClaimedAmountWithinVariance(allocated, 110_000, lowerPercent, upperPercent)).toBe(true);
   });
 
   it('fails just below the 90% lower boundary', () => {
-    expect(isClaimedAmountWithinVariance(allocated, 89.999999999, lowerPercent, upperPercent)).toBe(false);
+    expect(isClaimedAmountWithinVariance(allocated, 89_999, lowerPercent, upperPercent)).toBe(false);
   });
 
   it('fails just above the 110% upper boundary', () => {
-    expect(isClaimedAmountWithinVariance(allocated, 110.000000001, lowerPercent, upperPercent)).toBe(false);
+    expect(isClaimedAmountWithinVariance(allocated, 110_001, lowerPercent, upperPercent)).toBe(false);
   });
 
   it('passes for an exact match', () => {
     expect(isClaimedAmountWithinVariance(allocated, allocated, lowerPercent, upperPercent)).toBe(true);
   });
 
-  it('never trips on ordinary float imprecision at a realistic Crore boundary', () => {
-    // 90% of 13.948 is 12.5532 — a value ordinary IEEE-754 multiplication can misrepresent by a
-    // fraction of a paisa; the exact-integer scaling must still classify this as the boundary.
-    expect(isClaimedAmountWithinVariance(13.948, 12.5532, lowerPercent, upperPercent)).toBe(true);
+  it('never introduces a float division even when the true boundary is not a whole number', () => {
+    // 90% of 141,792,453 is 127,613,207.7 — not a whole number, even though both inputs are.
+    const oddAllocated = 141_792_453;
+    expect(isClaimedAmountWithinVariance(oddAllocated, 127_613_208, 90, 110)).toBe(true); // just at/above 90%
+    expect(isClaimedAmountWithinVariance(oddAllocated, 127_613_207, 90, 110)).toBe(false); // just below 90%
   });
 
   it('respects a configured non-default variance band', () => {
-    expect(isClaimedAmountWithinVariance(allocated, 100, 100, 100)).toBe(true);
-    expect(isClaimedAmountWithinVariance(allocated, 99, 100, 100)).toBe(false);
-    expect(isClaimedAmountWithinVariance(allocated, 101, 100, 100)).toBe(false);
+    expect(isClaimedAmountWithinVariance(100, 100, 100, 100)).toBe(true);
+    expect(isClaimedAmountWithinVariance(100, 99, 100, 100)).toBe(false);
+    expect(isClaimedAmountWithinVariance(100, 101, 100, 100)).toBe(false);
   });
 });
 
@@ -55,8 +56,8 @@ describe('computeDifferenceAmount', () => {
     expect(computeDifferenceAmount(100, 95)).toBe(-5);
   });
 
-  it('stays exact for typical decimal Crore inputs', () => {
-    expect(computeDifferenceAmount(13.948, 14.2)).toBeCloseTo(0.252, 9);
+  it('stays exact for large whole-Rupee inputs', () => {
+    expect(computeDifferenceAmount(139_480_000_013, 142_000_000_038)).toBe(2_520_000_025);
   });
 });
 
@@ -75,7 +76,7 @@ describe('computeDifferencePercentageBasisPoints', () => {
 });
 
 describe('sumAmountsExactly', () => {
-  it('sums a list of Crore amounts', () => {
+  it('sums a list of whole-Rupee amounts', () => {
     expect(sumAmountsExactly([1, 2, 3])).toBe(6);
   });
 
@@ -83,29 +84,28 @@ describe('sumAmountsExactly', () => {
     expect(sumAmountsExactly([])).toBe(0);
   });
 
-  it('avoids float drift across many decimal additions', () => {
-    const amounts = Array.from({ length: 10 }, () => 0.1);
-    // Plain JS `+=` summation of ten 0.1s does not equal 1 exactly (0.9999999999999999).
-    expect(amounts.reduce((s, a) => s + a, 0)).not.toBe(1);
-    expect(sumAmountsExactly(amounts)).toBe(1);
-  });
-
   it('handles negative amounts (subtraction via negation)', () => {
     expect(sumAmountsExactly([100, -20, -28])).toBe(52);
+  });
+
+  it('sums a large number of whole-Rupee proportional-split rows without any drift (Maharashtra-style)', () => {
+    const perRowShare = 141_792_453;
+    const amounts = Array.from({ length: 1000 }, () => perRowShare);
+    expect(sumAmountsExactly(amounts)).toBe(perRowShare * 1000);
   });
 });
 
 describe('amountsAreEqual', () => {
-  it('is true for identical values', () => {
-    expect(amountsAreEqual(13.948, 13.948)).toBe(true);
+  it('is true for identical whole-Rupee values', () => {
+    expect(amountsAreEqual(139_480_000_25, 139_480_000_25)).toBe(true);
   });
 
-  it('is true for values equal only up to ordinary float noise', () => {
-    expect(amountsAreEqual(0.1 + 0.2, 0.3)).toBe(true);
+  it('is exact — even a difference of one Rupee is not treated as equal', () => {
+    expect(amountsAreEqual(100_000, 100_001)).toBe(false);
   });
 
   it('is false for genuinely different values', () => {
-    expect(amountsAreEqual(13.948, 13.949)).toBe(false);
+    expect(amountsAreEqual(139_480_002_5, 139_490_002_5)).toBe(false);
   });
 });
 

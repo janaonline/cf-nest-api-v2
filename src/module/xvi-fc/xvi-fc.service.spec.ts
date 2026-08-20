@@ -103,13 +103,43 @@ describe('XviFcService', () => {
 
   describe('getStateWiseData', () => {
     const stateId = new Types.ObjectId().toHexString();
-    const mockResult = { stateId, grants: [] };
+    const mockResult = {
+      stateId,
+      stateName: 'Test State',
+      totalUlbs: 5,
+      years: '2026-27',
+      tableData: [{ year: 'FY2026-27', basic: 100, performance: 50 }],
+      totalAllocation: 150,
+    };
 
     it('should return state wise data when found', async () => {
       mockGrantAllocationModel.aggregate.mockResolvedValue([mockResult]);
       const result = await service.getStateWiseData(stateId, mockUser);
       expect(result).toEqual(mockResult);
       expect(mockGrantAllocationModel.aggregate).toHaveBeenCalledTimes(1);
+    });
+
+    it('defensively rounds basic/performance and re-derives totalAllocation from the rounded rows', async () => {
+      mockGrantAllocationModel.aggregate.mockResolvedValue([
+        {
+          ...mockResult,
+          tableData: [
+            { year: 'FY2026-27', basic: 100.4, performance: 50.6 },
+            { year: 'FY2027-28', basic: 200.2, performance: 0 },
+          ],
+          totalAllocation: 351.2, // what the raw (unrounded) sum would be
+        },
+      ]);
+
+      const result = await service.getStateWiseData(stateId, mockUser);
+
+      expect(result.tableData).toEqual([
+        { year: 'FY2026-27', basic: 100, performance: 51 },
+        { year: 'FY2027-28', basic: 200, performance: 0 },
+      ]);
+      // Sum of the rounded rows (100+51+200+0=351), not the raw 351.2 — keeps the displayed total
+      // consistent with the displayed per-year figures rather than drifting from them.
+      expect(result.totalAllocation).toBe(351);
     });
 
     it('should throw NotFoundException when no data found', async () => {

@@ -56,9 +56,19 @@ touching code that cites it, not just the local comment:
   DB-enforced, not just application-checked (ADR 0002).
 - A frozen claim *version* is immutable — `createNewVersion` builds a new parent rather than
   mutating an existing READY one (ADR 0002, ADR 0003).
-- Money is stored as Crore-denominated decimals throughout this feature, matching every other
-  xvi-fc form — never paise/rupees. Exact (non-float-drift) arithmetic lives in
-  `helpers/claim-letter-financial.helpers.ts`.
+- Money is stored as whole Rupees (no decimals) throughout this feature, matching every other
+  xvi-fc form — `claimedAmount`/`allocatedAmount` are `@IsInt()`/validator-enforced, not just
+  conventionally whole. This feature has gone Crore-denominated decimals → briefly whole-Rupee
+  integers → Rupees with unbounded decimal places → whole-Rupee integers again (current), all
+  converted before production launch, so no stored-data migration exists for any of them. The
+  decimal-precision attempt was abandoned because a proportional split of a total allocation across
+  many ULBs (Devolution Formula) essentially never divides evenly, and letting amounts carry
+  decimals let real sums drift from the target total by whole rupees, not just float noise (a real
+  state's allocation total summed its rows ₹2.08 off) — whole numbers make that drift structurally
+  impossible instead of tolerating it. `helpers/claim-letter-financial.helpers.ts` centralizes the
+  amount arithmetic (sum/diff/variance-check); since every input is a whole Rupee, plain
+  integer arithmetic is exact with no scaling needed, except the ±10% variance boundary, which
+  cross-multiplies instead of dividing to stay exact without introducing a float division.
 - The eligibility service's cached `*ForDisplay` methods are for read-only UI paths only — never
   call them from the assembly/mutation pipeline.
 - Annexure 2's ("City Conditions") criteria columns are never hardcoded — they come from

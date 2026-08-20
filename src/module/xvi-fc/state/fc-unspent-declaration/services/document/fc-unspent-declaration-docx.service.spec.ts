@@ -144,13 +144,13 @@ describe('FcUnspentDeclarationDocxService', () => {
       expect(xml).not.toMatch(/>false</);
     });
 
-    it('formats money fields with the Cr. suffix', async () => {
+    it('formats money fields as whole-Rupee amounts with a ₹ prefix, no decimals', async () => {
       documentService.getDocumentData.mockResolvedValue(buildYesBranchData(1));
       const result = await service.generateDeclarationDocument(stateId, yearId, user);
       const xml = await extractDocumentXml(result.buffer);
 
-      expect(xml).toContain('100 Cr.');
-      expect(xml).toContain('4 Cr.');
+      expect(xml).toContain('₹100');
+      expect(xml).toContain('₹4');
     });
 
     it('uses the "This is submitted for the consideration" closing wording verbatim from the reference PDF', async () => {

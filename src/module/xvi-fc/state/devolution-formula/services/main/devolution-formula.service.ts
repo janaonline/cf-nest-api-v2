@@ -77,6 +77,7 @@ import type {
   DfInstallmentAccess,
 } from '../../types/devolution-formula.types';
 import { DevolutionFormulaValidator } from '../../validators/devolution-formula.validator';
+import { amountsAreEqual } from '../../helpers/devolution-formula-tolerance.helpers';
 
 function formatINR(amount: number): string {
   const rounded = Math.round(amount);
@@ -183,7 +184,7 @@ export class DevolutionFormulaService {
           ...field,
           validations: [
             ...(field.validations ?? []),
-            { name: 'max', validator: grantMax, message: `Cannot exceed the MoHUA grant allocation (${grantMax}Cr.).` },
+            { name: 'max', validator: grantMax, message: `Cannot exceed the MoHUA grant allocation (₹${grantMax}).` },
           ],
         };
       }
@@ -267,7 +268,9 @@ export class DevolutionFormulaService {
       installment: dto.installment,
       currentFormStatus: FORM_STATUS.IN_PROGRESS,
       isDraft: true,
-      totalMoHUAAllocation: grantAlloc.basic + grantAlloc.performance,
+      // Defensive rounding — GrantAllocation is externally written and unconstrained (see
+      // grant-allocation.schema.ts).
+      totalMoHUAAllocation: Math.round(grantAlloc.basic + grantAlloc.performance),
       grantAllocationRef: grantAlloc._id,
       updatedBy: userOid,
       ulbCount: computedActiveUlbCount,
@@ -357,7 +360,8 @@ export class DevolutionFormulaService {
       this.resolveGrantAllocation(stateOid, yearOid),
       this.ulbModel.countDocuments(finalSubmitEligibleUlbFilter),
     ]);
-    const currentTotal = currentAlloc.basic + currentAlloc.performance;
+    // Defensive rounding — see the matching comment on totalMoHUAAllocation above.
+    const currentTotal = Math.round(currentAlloc.basic + currentAlloc.performance);
 
     if (!form.excelRowCount || form.excelRowCount === 0) {
       throwXviFcValidationError({
@@ -652,7 +656,9 @@ export class DevolutionFormulaService {
     const excelRowCount = doc?.excelRowCount ?? 0;
     const totalMoHUAAllocation = doc?.totalMoHUAAllocation ?? 0;
     const totalAllocatedSum = doc?.totalAllocatedSum ?? 0;
-    const allocationBalanced = Math.abs(totalAllocatedSum - totalMoHUAAllocation) <= 0.001;
+    // Exact match (within float-noise epsilon), not a forgiving tolerance — every rupee of
+    // totalMoHUAAllocation must be accounted for; see devolution-formula-tolerance.helpers.ts.
+    const allocationBalanced = amountsAreEqual(totalAllocatedSum, totalMoHUAAllocation);
     const validationStatus = doc?.validationStatus;
     const newUlbCount = doc?.newUlbCount ?? 0;
     const missingUlbCount = doc?.missingUlbCount ?? 0;
@@ -724,17 +730,17 @@ export class DevolutionFormulaService {
             visible: canEdit,
           }),
           {
-            label: `Allocated amount: ₹${formatINR(totalMoHUAAllocation)} Cr.`,
+            label: `Allocated amount: ₹${formatINR(totalMoHUAAllocation)}`,
             tone: 'secondary' as const,
             visible: canEdit && hasDataset,
           },
           {
-            label: `Allocated sum: ₹${formatINR(totalAllocatedSum)} Cr.`,
+            label: `Allocated sum: ₹${formatINR(totalAllocatedSum)}`,
             tone: (allocationBalanced ? 'success' : 'danger') as SupportingContentTone,
             visible: canEdit && hasDataset,
           },
           {
-            label: `Remaining: ₹${formatINR(totalMoHUAAllocation - totalAllocatedSum)} Cr.`,
+            label: `Remaining: ₹${formatINR(totalMoHUAAllocation - totalAllocatedSum)}`,
             tone: (allocationBalanced ? 'success' : 'danger') as SupportingContentTone,
             visible: canEdit && hasDataset,
           },
@@ -826,7 +832,8 @@ export class DevolutionFormulaService {
       grantAllocationId: String(alloc._id),
       basic: alloc.basic,
       performance: alloc.performance,
-      total: alloc.basic + alloc.performance,
+      // Defensive rounding — see the matching comment on totalMoHUAAllocation above.
+      total: Math.round(alloc.basic + alloc.performance),
     };
   }
 

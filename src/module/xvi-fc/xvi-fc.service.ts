@@ -72,7 +72,21 @@ export class XviFcService {
     if (!result) {
       throw new NotFoundException('No grant allocation data found for this state');
     }
-    return result;
+    return this.roundStateWiseAmounts(result);
+  }
+
+  // Defensive rounding — GrantAllocation is externally written and unconstrained (see
+  // grant-allocation.schema.ts). Rounds each year's basic/performance first, then re-derives
+  // totalAllocation from the rounded rows, so the displayed total always matches the sum of the
+  // displayed per-year figures rather than drifting from them by a rounding remainder.
+  private roundStateWiseAmounts(data: StateWiseResponseDto): StateWiseResponseDto {
+    const tableData = data.tableData.map((row) => ({
+      ...row,
+      basic: Math.round(row.basic),
+      performance: Math.round(row.performance),
+    }));
+    const totalAllocation = tableData.reduce((sum, row) => sum + row.basic + row.performance, 0);
+    return { ...data, tableData, totalAllocation };
   }
 
   async getSideMenu(role: MenuRole, yearId: string): Promise<SideMenuResponseDto> {

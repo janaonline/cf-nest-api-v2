@@ -29,6 +29,7 @@
     "@aws-sdk/client-sesv2": "^3.899.0",
     "@aws-sdk/lib-storage": "^3.896.0",
     "@aws-sdk/s3-request-presigner": "^3.896.0",
+    "@smithy/node-http-handler": "^4.4.7",
     "@bull-board/api": "^6.17.0",
     "@bull-board/express": "^6.17.0",
     "@bull-board/nestjs": "^6.17.0",
