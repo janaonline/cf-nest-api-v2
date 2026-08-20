@@ -14,10 +14,11 @@ export function buildValidationIssuesMessage(params: {
   missingCount: number;
   newCount: number;
   duplicateCount: number;
-  /** Pre-formatted amount, e.g. '₹50,000'. Omit for forms with no allocation dimension (EULB) —
-   *  kept as a caller-supplied label rather than a raw number so this util stays free of any
-   *  money-formatting logic and reusable by modules with a different currency/format need. */
-  allocationMismatchLabel?: string;
+  /** Pre-formatted amounts, e.g. `{ differenceLabel: '₹6,50,00,000', targetLabel: '₹1,30,00,00,000' }`.
+   *  Omit for forms with no allocation dimension (EULB) — kept as caller-supplied labels rather
+   *  than raw numbers so this util stays free of any money-formatting logic and reusable by
+   *  modules with a different currency/format need. */
+  allocationMismatch?: { differenceLabel: string; targetLabel: string };
   visible: boolean;
 }): string | undefined {
   if (!params.visible) return undefined;
@@ -27,8 +28,9 @@ export function buildValidationIssuesMessage(params: {
   if (params.missingCount > 0) clauses.push(`add the ${params.missingCount} missing ULB(s)`);
   if (params.newCount > 0) clauses.push(`register ${params.newCount} new ULB(s)`);
   if (params.duplicateCount > 0) clauses.push(`remove ${params.duplicateCount} duplicate ULB(s)`);
-  if (params.allocationMismatchLabel) {
-    clauses.push(`reconcile the ${params.allocationMismatchLabel} allocation mismatch`);
+  if (params.allocationMismatch) {
+    const { differenceLabel, targetLabel } = params.allocationMismatch;
+    clauses.push(`reconcile the ${differenceLabel} to match ${targetLabel} (Allocated amount)`);
   }
 
   if (clauses.length === 0) return undefined;

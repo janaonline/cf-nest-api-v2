@@ -1097,13 +1097,13 @@ describe('DevolutionFormulaService', () => {
       expect(message).toBe('To submit, remove 1 duplicate ULB(s).');
     });
 
-    it('reports an allocation mismatch only, formatted the same way as the Remaining badge', async () => {
+    it('reports an allocation mismatch only, naming both the shortfall and the Allocated amount to match', async () => {
       const message = await getValidationMessage({
         ...mockFormInProgress,
         totalAllocatedSum: 400_000,
         validationStatus: 'INVALID' as const,
       });
-      expect(message).toBe('To submit, reconcile the ₹1,00,000 allocation mismatch.');
+      expect(message).toBe('To submit, reconcile the ₹1,00,000 to match ₹5,00,000 (Allocated amount).');
     });
 
     it('joins multiple active problems into one sentence', async () => {

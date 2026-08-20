@@ -7,7 +7,7 @@ describe('buildValidationIssuesMessage', () => {
       missingCount: 5,
       newCount: 3,
       duplicateCount: 2,
-      allocationMismatchLabel: '₹50,000',
+      allocationMismatch: { differenceLabel: '₹6,50,00,000', targetLabel: '₹1,30,00,00,000' },
       visible: false,
     });
 
@@ -74,17 +74,17 @@ describe('buildValidationIssuesMessage', () => {
     expect(result).toBe('To submit, remove 2 duplicate ULB(s).');
   });
 
-  it('builds a single-clause sentence for an allocation mismatch only', () => {
+  it('builds a single-clause sentence for an allocation mismatch only, naming both amounts', () => {
     const result = buildValidationIssuesMessage({
       errorRowCount: 0,
       missingCount: 0,
       newCount: 0,
       duplicateCount: 0,
-      allocationMismatchLabel: '₹50,000',
+      allocationMismatch: { differenceLabel: '₹6,50,00,000', targetLabel: '₹1,30,00,00,000' },
       visible: true,
     });
 
-    expect(result).toBe('To submit, reconcile the ₹50,000 allocation mismatch.');
+    expect(result).toBe('To submit, reconcile the ₹6,50,00,000 to match ₹1,30,00,00,000 (Allocated amount).');
   });
 
   it('joins exactly two clauses with "and", no Oxford comma', () => {
@@ -105,12 +105,13 @@ describe('buildValidationIssuesMessage', () => {
       missingCount: 5,
       newCount: 0,
       duplicateCount: 0,
-      allocationMismatchLabel: '₹50,000',
+      allocationMismatch: { differenceLabel: '₹6,50,00,000', targetLabel: '₹1,30,00,00,000' },
       visible: true,
     });
 
     expect(result).toBe(
-      'To submit, fix 20 row error(s), add the 5 missing ULB(s), and reconcile the ₹50,000 allocation mismatch.',
+      'To submit, fix 20 row error(s), add the 5 missing ULB(s), and reconcile the ₹6,50,00,000 ' +
+        'to match ₹1,30,00,00,000 (Allocated amount).',
     );
   });
 
@@ -120,17 +121,17 @@ describe('buildValidationIssuesMessage', () => {
       missingCount: 5,
       newCount: 3,
       duplicateCount: 2,
-      allocationMismatchLabel: '₹50,000',
+      allocationMismatch: { differenceLabel: '₹6,50,00,000', targetLabel: '₹1,30,00,00,000' },
       visible: true,
     });
 
     expect(result).toBe(
       'To submit, fix 20 row error(s), add the 5 missing ULB(s), register 3 new ULB(s), ' +
-        'remove 2 duplicate ULB(s), and reconcile the ₹50,000 allocation mismatch.',
+        'remove 2 duplicate ULB(s), and reconcile the ₹6,50,00,000 to match ₹1,30,00,00,000 (Allocated amount).',
     );
   });
 
-  it('omits the allocation clause entirely when allocationMismatchLabel is undefined (e.g. EULB)', () => {
+  it('omits the allocation clause entirely when allocationMismatch is undefined (e.g. EULB)', () => {
     const result = buildValidationIssuesMessage({
       errorRowCount: 20,
       missingCount: 0,

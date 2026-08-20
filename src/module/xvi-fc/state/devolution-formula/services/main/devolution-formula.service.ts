@@ -761,9 +761,12 @@ export class DevolutionFormulaService {
           missingCount: missingUlbCount,
           newCount: newUlbCount,
           duplicateCount: duplicateUlbCount,
-          allocationMismatchLabel: allocationBalanced
+          allocationMismatch: allocationBalanced
             ? undefined
-            : `₹${formatINR(Math.abs(totalMoHUAAllocation - totalAllocatedSum))}`,
+            : {
+                differenceLabel: `₹${formatINR(Math.abs(totalMoHUAAllocation - totalAllocatedSum))}`,
+                targetLabel: `₹${formatINR(totalMoHUAAllocation)}`,
+              },
           visible: canEdit && hasDataset && validationStatus === 'INVALID',
         }),
       },
