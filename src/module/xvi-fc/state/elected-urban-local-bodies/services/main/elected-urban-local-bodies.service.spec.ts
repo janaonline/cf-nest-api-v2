@@ -258,7 +258,7 @@ const MOCK_TYPED_ROW_EDIT_FIELDS: EulbTypedFieldConfig[] = [
   },
   {
     key: 'dateOfConstitution',
-    label: 'Date on which the elected body is in place.',
+    label: 'Date on which the elected body is in place',
     formFieldType: 'date',
     fieldTypes: ['EULB_ROW_EDIT_FIELDS'],
     minDate: '2021-05-31',
@@ -681,7 +681,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
         'Census Code',
         'ULB Name',
         'Elected Body Status',
-        'Date on which the elected body is in place.',
+        'Date on which the elected body is in place',
         'Date of Expiry',
         'Remarks',
         'Validation Status',

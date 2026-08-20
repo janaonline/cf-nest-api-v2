@@ -97,7 +97,7 @@ const mockExcelTypedFields: EulbTypedFieldConfig[] = [
   },
   {
     key: 'dateOfConstitution',
-    label: 'Date on which the elected body is in place.',
+    label: 'Date on which the elected body is in place',
     formFieldType: 'date',
     fieldTypes: ['EULB_ROW_EDIT_FIELDS'],
     validations: [

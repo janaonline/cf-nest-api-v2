@@ -67,7 +67,7 @@ const EXTRA_ULB_PORTAL_FIELDS: EulbTypedFieldConfig[] = [
   },
   {
     key: 'dateOfConstitution',
-    label: 'Date on which the elected body is in place.',
+    label: 'Date on which the elected body is in place',
     formFieldType: 'date',
     fieldTypes: ['EULB_EXTRA_ULB_PORTAL_FIELDS'],
     validations: [],
@@ -229,7 +229,7 @@ describe('ElectedUrbanLocalBodiesDocumentService', () => {
       { key: 'censusCode', label: 'Census Code' },
       { key: 'ulbName', label: 'ULB Name' },
       { key: 'electedBodyStatus', label: 'Elected Body Status' },
-      { key: 'dateOfConstitution', label: 'Date on which the elected body is in place.' },
+      { key: 'dateOfConstitution', label: 'Date on which the elected body is in place' },
       { key: 'dateOfExpiry', label: 'Date of Expiry' },
       { key: 'remarks', label: 'Remarks' },
     ]);
