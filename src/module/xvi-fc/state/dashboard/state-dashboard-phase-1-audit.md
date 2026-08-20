@@ -141,6 +141,16 @@ This document is discovery only. No dashboard route, controller, service, DTO, s
 
 ## 7. Amount-unit findings
 
+> **Superseded (see the xvi-fc Rupee-conversion work in this directory):** the finding below — that
+> the stored unit is crores and the API must not multiply/divide by `10,000,000` — described the
+> state of the world when this audit was written. Every xvi-fc amount field, including
+> `GrantAllocation.basic`/`.performance`, has since moved to Rupees with up to 2 decimal places
+> (paise) — not strictly whole numbers, since a proportional split of a total allocation across
+> many ULBs essentially never divides evenly. `StateDashboardMetrics.amountUnit` now returns
+> `STATE_DASHBOARD_AMOUNT_UNIT.RUPEE`, and the dashboard still returns the stored value unchanged —
+> the "no unit conversion at the API boundary" principle holds, only the underlying stored unit
+> changed. The paragraphs below are left as originally written for historical context.
+
 - `GrantAllocation.basic` and `GrantAllocation.performance` are `Number` fields with minimum `0`.
 - The unique State/year allocation record is the authoritative source. Dashboard allocated amount should be `basic + performance`.
 - The devolution workflow names this sum `totalMoHUAAllocation`, and Excel/UI labels display `Cr.`. Therefore the stored operational unit is crores.

@@ -1,12 +1,13 @@
-import { IsMongoId, IsNumber, Min } from 'class-validator';
+import { IsInt, IsMongoId, Min } from 'class-validator';
 
 export class ClaimLetterUlbSelectionDto {
   @IsMongoId()
   ulbId!: string;
 
-  // Server-authoritative ±10% variance check happens in ClaimLetterAssemblyService — this only
-  // guards against a non-positive amount before it reaches business logic.
-  @IsNumber()
-  @Min(0.01)
+  // Whole Rupees only — matches allocatedAmount's unit.
+  // Server-authoritative ±10% variance check happens in ClaimLetterAssemblyService
+  // — this only guards against a non-positive/sub-₹1 amount.
+  @IsInt()
+  @Min(1)
   claimedAmount!: number;
 }

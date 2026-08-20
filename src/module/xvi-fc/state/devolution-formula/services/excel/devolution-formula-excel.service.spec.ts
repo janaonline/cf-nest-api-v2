@@ -371,6 +371,46 @@ describe('DevolutionFormulaExcelService — safe dataset replace', () => {
     expect(deleteOrder).toBeLessThan(commitOrder);
   });
 
+  // Whole Rupees only — a fractional cell is rejected outright, not rounded.
+  it('rejects a fractional Excel cell value rather than accepting or rounding it', async () => {
+    mockFormModel.findOne.mockReturnValue(q(mockExistingForm));
+    mockFormModel.findOneAndUpdate.mockReturnValue(mockUpsertedForm({ activeDatasetVersion: 2 }));
+    mockRowModel.updateMany.mockReturnValue(q({ modifiedCount: 2 }));
+    mockRowModel.insertMany.mockResolvedValue([]);
+    mockFormModel.findByIdAndUpdate.mockReturnValue(q(null));
+    mockRowModel.deleteMany.mockReturnValue(q(null));
+    mockDfService.resolveGrantAllocation.mockResolvedValue({ _id: allocOid, basic: 141_792_453, performance: 0 });
+
+    const buffer = makeXlsxBuffer([['C001', 'Alpha City', 141_792_452.83, 141_792_452.83, 0, 'population']]);
+    mockS3Service.getBuffer.mockResolvedValue(buffer);
+
+    await service.validateExcel(
+      {
+        stateId: stateOid.toString(),
+        yearId: YEAR_ID,
+        installment: 1,
+        excelFile: {
+          originalName: 'test.xlsx',
+          path: 'state/path/test.xlsx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          sizeKb: 1,
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
+      },
+      adminUser,
+    );
+
+    const insertCalls = mockRowModel.insertMany.mock.calls as unknown[][][];
+    const rowDocs = insertCalls[0][0] as Array<Record<string, unknown>>;
+    expect(rowDocs).toHaveLength(1);
+    const errors = rowDocs[0]['errors'] as Array<{ code: string; field: string }>;
+    expect(errors.some((e) => e.code === 'notWholeNumber' && e.field === 'totalGrantAllocation')).toBe(true);
+    expect(errors.some((e) => e.code === 'notWholeNumber' && e.field === 'installment1Amount')).toBe(true);
+    expect(rowDocs[0]['validationStatus']).toBe('INVALID');
+    // Stored as-uploaded (for redisplay/error-sheet purposes), not rounded away.
+    expect(rowDocs[0]['totalGrantAllocation']).toBe(141_792_452.83);
+  });
+
   it('accepts excelFile.pageCount: null and persists it on the form excelFile', async () => {
     mockFormModel.findOne.mockReturnValue(q(mockExistingForm));
     mockFormModel.findOneAndUpdate.mockReturnValue(mockUpsertedForm({ activeDatasetVersion: 2 }));
@@ -527,6 +567,107 @@ describe('DevolutionFormulaExcelService — revalidateExcel', () => {
     const allArgs = formUpdateCalls.map((c) => c[1] as Record<string, unknown>);
     const hasUnset = allArgs.some((a) => a['$unset'] !== undefined);
     expect(hasUnset).toBe(false);
+  });
+
+  // Every rupee of totalMoHUAAllocation must be accounted for — a small real gap across several
+  // rows is not reconciliation noise to forgive, it's unaccounted-for government money. See
+  // devolution-formula-tolerance.helpers.ts.
+  it('does NOT unset errorExcelFile when the multi-row sum is off by a small but real amount (Case A)', async () => {
+    const ulb2 = new Types.ObjectId();
+    const ulb3 = new Types.ObjectId();
+    const threeRows = [
+      {
+        ...mockActiveRows[0],
+        ulbId: ulbOid,
+        censusCode: 'C001',
+        totalGrantAllocation: 166_667,
+        installment1Amount: 166_667, // inst1 + inst2 === total per row, installment 1 → inst2 may be 0
+        installment2Amount: 0,
+      },
+      {
+        ...mockActiveRows[0],
+        _id: new Types.ObjectId(),
+        ulbId: ulb2,
+        censusCode: 'C002',
+        totalGrantAllocation: 166_667,
+        installment1Amount: 166_667,
+        installment2Amount: 0,
+      },
+      {
+        ...mockActiveRows[0],
+        _id: new Types.ObjectId(),
+        ulbId: ulb3,
+        censusCode: 'C003',
+        totalGrantAllocation: 166_667,
+        installment1Amount: 166_667,
+        installment2Amount: 0,
+      },
+    ]; // sums to 500,001 — a real ₹1 gap from totalMoHUAAllocation (500_000)
+    mockFormModel.findOne.mockReturnValue(q(mockExistingForm));
+    mockUlbModel.find.mockReturnValue(
+      q([
+        { _id: ulbOid, name: 'Alpha City', censusCode: 'C001', sbCode: '' },
+        { _id: ulb2, name: 'Beta City', censusCode: 'C002', sbCode: '' },
+        { _id: ulb3, name: 'Gamma City', censusCode: 'C003', sbCode: '' },
+      ]),
+    );
+    mockRowModel.find.mockReturnValue(q(threeRows));
+
+    await service.revalidateExcel(stateOid.toString(), YEAR_ID, 1, adminUser);
+
+    const formUpdateCalls = mockFormModel.findByIdAndUpdate.mock.calls as unknown[][][];
+    const allArgs = formUpdateCalls.map((c) => c[1] as Record<string, unknown>);
+    const hasUnset = allArgs.some((a) => a['$unset'] !== undefined);
+    expect(hasUnset).toBe(false);
+  });
+
+  it('unsets errorExcelFile when the multi-row sum matches totalMoHUAAllocation exactly (Case A)', async () => {
+    const ulb2 = new Types.ObjectId();
+    const ulb3 = new Types.ObjectId();
+    const threeRows = [
+      {
+        ...mockActiveRows[0],
+        ulbId: ulbOid,
+        censusCode: 'C001',
+        totalGrantAllocation: 166_667,
+        installment1Amount: 166_667,
+        installment2Amount: 0,
+      },
+      {
+        ...mockActiveRows[0],
+        _id: new Types.ObjectId(),
+        ulbId: ulb2,
+        censusCode: 'C002',
+        totalGrantAllocation: 166_667,
+        installment1Amount: 166_667,
+        installment2Amount: 0,
+      },
+      {
+        ...mockActiveRows[0],
+        _id: new Types.ObjectId(),
+        ulbId: ulb3,
+        censusCode: 'C003',
+        totalGrantAllocation: 166_666,
+        installment1Amount: 166_666,
+        installment2Amount: 0,
+      },
+    ]; // sums to exactly 500,000 — matches totalMoHUAAllocation (500_000) exactly
+    mockFormModel.findOne.mockReturnValue(q(mockExistingForm));
+    mockUlbModel.find.mockReturnValue(
+      q([
+        { _id: ulbOid, name: 'Alpha City', censusCode: 'C001', sbCode: '' },
+        { _id: ulb2, name: 'Beta City', censusCode: 'C002', sbCode: '' },
+        { _id: ulb3, name: 'Gamma City', censusCode: 'C003', sbCode: '' },
+      ]),
+    );
+    mockRowModel.find.mockReturnValue(q(threeRows));
+
+    await service.revalidateExcel(stateOid.toString(), YEAR_ID, 1, adminUser);
+
+    const formUpdateCalls = mockFormModel.findByIdAndUpdate.mock.calls as unknown[][][];
+    const allArgs = formUpdateCalls.map((c) => c[1] as Record<string, unknown>);
+    const hasUnset = allArgs.some((a) => a['$unset'] !== undefined);
+    expect(hasUnset).toBe(true);
   });
 
   it('throws excelFile.newUlbsAdded when stored rows include rows without ulbId (Case A)', async () => {
