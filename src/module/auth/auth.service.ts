@@ -1,6 +1,6 @@
 /* eslint-disable prettier/prettier */
 import { randomUUID } from 'crypto';
-import { ConflictException, HttpException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { ConflictException, HttpException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { JwtService } from '@nestjs/jwt';
@@ -16,7 +16,6 @@ import { State, StateDocument } from 'src/schemas/state.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { UsersRepository } from 'src/module/users/users.repository';
 import { RegisterDto } from './dto/register.dto';
-import { SetPasswordDto } from './dto/set-password.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { AuthResponse, AuthTokens } from './types/auth-tokens.type';
 import { Role } from './enum/role.enum';
@@ -119,22 +118,6 @@ export class AuthService {
     if (!updated) throw new HttpException('User not found', 404);
 
     return { message: 'Profile updated successfully', updatedFields: update };
-  }
-
-  async setPassword(dto: SetPasswordDto): Promise<{ message: string }> {
-    const user = await this.usersRepository.findByIdentifier(dto.identifier);
-    if (!user) throw new NotFoundException('User not found. Please check your details.');
-
-    const hash = await bcrypt.hash(dto.newPassword, 12);
-    const userId = (user._id as { toString(): string }).toString();
-    await this.usersRepository.updatePassword(userId, hash);
-    await this.usersRepository.updateProfile(userId, {
-      isActive: true,
-      status: 'APPROVED',
-      isXVIFCProfileVerified: true,
-    });
-
-    return { message: 'Password updated successfully' };
   }
 
   async setNewPassword(
