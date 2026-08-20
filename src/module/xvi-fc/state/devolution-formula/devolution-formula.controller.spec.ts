@@ -174,7 +174,7 @@ describe('DevolutionFormulaController', () => {
     expect(xviFcService['getStateById']).toHaveBeenCalledWith(stateId);
     expect(xviFcService['getYearLabelById']).toHaveBeenCalledWith(yearId);
     expect(result.getHeaders().disposition).toBe(
-      'attachment; filename="CF_Andhra-Pradesh_Devolution-formula-template_2026-27.xlsx"',
+      'attachment; filename="CF_Andhra-Pradesh_Ulb-wise-allocation-formula-template_2026-27.xlsx"',
     );
   });
 

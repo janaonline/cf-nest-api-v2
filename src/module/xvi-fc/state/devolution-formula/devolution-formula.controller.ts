@@ -121,7 +121,7 @@ export class DevolutionFormulaController {
     const inst = this.parseInstallment(installment);
     const [buffer, fileName] = await Promise.all([
       this.dfExcelService.generateTemplate(stateId, yearId, inst, user),
-      this.buildDownloadFileName(stateId, yearId, 'devolution-formula-template', 'xlsx'),
+      this.buildDownloadFileName(stateId, yearId, 'ulb-wise-allocation-formula-template', 'xlsx'),
     ]);
     return new StreamableFile(buffer as unknown as Uint8Array, {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

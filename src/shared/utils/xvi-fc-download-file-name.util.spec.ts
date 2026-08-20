@@ -4,12 +4,12 @@ describe('buildXviFcDownloadFileName', () => {
   it('builds the CF_{StateName}_{FormName}_{YearLabel}.{ext} filename for normal inputs', () => {
     const result = buildXviFcDownloadFileName({
       entityName: 'Chhattisgarh',
-      formName: 'devolution-formula-template',
+      formName: 'ulb-wise-allocation-formula-template',
       yearLabel: '2024-25',
       extension: 'xlsx',
     });
 
-    expect(result).toBe('CF_Chhattisgarh_Devolution-formula-template_2024-25.xlsx');
+    expect(result).toBe('CF_Chhattisgarh_Ulb-wise-allocation-formula-template_2024-25.xlsx');
   });
 
   it('sanitizes special characters in a state name (spaces, slashes) into single hyphens', () => {
