@@ -910,6 +910,139 @@ describe('ElectedUrbanLocalBodiesService', () => {
       expect(registerUlbAction?.url).toBe(`/xvifc/${yearOid.toString()}/register-ulb`);
     });
 
+    // ─── validationMessage ────────────────────────────────────────────────────
+    // The plain-English "what to fix" sentence built by buildValidationIssuesMessage() from the
+    // same counts driving the badges above — see that util's own spec for exhaustive join-logic
+    // coverage.
+
+    async function getValidationMessage(doc: object | null) {
+      mockFormModel.findOne.mockReturnValueOnce(q(doc));
+      const result = await service.getForm(stateOid.toString(), yearOid.toString(), adminUser);
+      const data = result.data as Record<string, unknown>;
+      const questions = data['questions'] as Array<Record<string, unknown>>;
+      const excelQ = questions.find((q) => q['key'] === 'electedBodyExcelFile');
+      const supportingContent = excelQ!['supportingContent'] as Array<{ validationMessage?: string }>;
+      return supportingContent[0]?.validationMessage;
+    }
+
+    it('is undefined when validationStatus is VALID', async () => {
+      const message = await getValidationMessage({
+        _id: formOid,
+        currentFormStatus: FORM_STATUS.IN_PROGRESS,
+        activeDatasetVersion: 1,
+        excelRowCount: 2,
+        errorRowCount: 0,
+        extraExcelRowCount: 0,
+        validationStatus: 'VALID',
+        electedBodyExcelFile: { originalName: 'test.xlsx', path: 'state/test.xlsx' },
+      });
+
+      expect(message).toBeUndefined();
+    });
+
+    it('is undefined when there is no active dataset yet, even if validationStatus is somehow INVALID', async () => {
+      const message = await getValidationMessage({
+        _id: formOid,
+        currentFormStatus: FORM_STATUS.IN_PROGRESS,
+        activeDatasetVersion: 0,
+        excelRowCount: 0,
+        errorRowCount: 3,
+        validationStatus: 'INVALID',
+        electedBodyExcelFile: { originalName: 'test.xlsx', path: 'state/test.xlsx' },
+      });
+
+      expect(message).toBeUndefined();
+    });
+
+    it('reports row errors only', async () => {
+      const message = await getValidationMessage({
+        _id: formOid,
+        currentFormStatus: FORM_STATUS.IN_PROGRESS,
+        activeDatasetVersion: 1,
+        excelRowCount: 3,
+        errorRowCount: 3,
+        validationStatus: 'INVALID',
+        electedBodyExcelFile: { originalName: 'test.xlsx', path: 'state/test.xlsx' },
+      });
+
+      expect(message).toBe('To submit, fix 3 row error(s).');
+    });
+
+    it('reports missing ULBs only', async () => {
+      const message = await getValidationMessage({
+        _id: formOid,
+        currentFormStatus: FORM_STATUS.IN_PROGRESS,
+        activeDatasetVersion: 1,
+        excelRowCount: 3,
+        errorRowCount: 0,
+        missingDbUlbCount: 2,
+        validationStatus: 'INVALID',
+        electedBodyExcelFile: { originalName: 'test.xlsx', path: 'state/test.xlsx' },
+      });
+
+      expect(message).toBe('To submit, add the 2 missing ULB(s).');
+    });
+
+    it('reports new ULBs only', async () => {
+      const message = await getValidationMessage({
+        _id: formOid,
+        currentFormStatus: FORM_STATUS.IN_PROGRESS,
+        activeDatasetVersion: 1,
+        excelRowCount: 3,
+        errorRowCount: 0,
+        extraExcelRowCount: 3,
+        validationStatus: 'INVALID',
+        electedBodyExcelFile: { originalName: 'test.xlsx', path: 'state/test.xlsx' },
+      });
+
+      expect(message).toBe('To submit, register 3 new ULB(s).');
+    });
+
+    it('reports duplicate ULBs only', async () => {
+      const message = await getValidationMessage({
+        _id: formOid,
+        currentFormStatus: FORM_STATUS.IN_PROGRESS,
+        activeDatasetVersion: 1,
+        excelRowCount: 3,
+        errorRowCount: 0,
+        duplicateUlbCount: 1,
+        validationStatus: 'INVALID',
+        electedBodyExcelFile: { originalName: 'test.xlsx', path: 'state/test.xlsx' },
+      });
+
+      expect(message).toBe('To submit, remove 1 duplicate ULB(s).');
+    });
+
+    it('never mentions an allocation mismatch — EULB has no monetary dimension', async () => {
+      const message = await getValidationMessage({
+        _id: formOid,
+        currentFormStatus: FORM_STATUS.IN_PROGRESS,
+        activeDatasetVersion: 1,
+        excelRowCount: 3,
+        errorRowCount: 3,
+        validationStatus: 'INVALID',
+        electedBodyExcelFile: { originalName: 'test.xlsx', path: 'state/test.xlsx' },
+      });
+
+      expect(message).not.toContain('reconcile');
+      expect(message).not.toContain('₹');
+    });
+
+    it('joins multiple active problems into one sentence', async () => {
+      const message = await getValidationMessage({
+        _id: formOid,
+        currentFormStatus: FORM_STATUS.IN_PROGRESS,
+        activeDatasetVersion: 1,
+        excelRowCount: 3,
+        errorRowCount: 1,
+        extraExcelRowCount: 2,
+        validationStatus: 'INVALID',
+        electedBodyExcelFile: { originalName: 'test.xlsx', path: 'state/test.xlsx' },
+      });
+
+      expect(message).toBe('To submit, fix 1 row error(s) and register 2 new ULB(s).');
+    });
+
     // ─── pageCount hydration ─────────────────────────────────────────────────
 
     it('returns the saved electedBodyExcelFile.pageCount on the hydrated file value', async () => {

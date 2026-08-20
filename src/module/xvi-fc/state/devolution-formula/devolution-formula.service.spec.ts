@@ -1032,6 +1032,91 @@ describe('DevolutionFormulaService', () => {
     });
   });
 
+  // ─── excelFile supportingContent — validationMessage ───────────────────────
+  // The plain-English "what to fix" sentence built by buildValidationIssuesMessage() from the
+  // same counts as the badges above — see that util's own spec for exhaustive join-logic coverage.
+
+  describe('excelFile supportingContent — validationMessage', () => {
+    async function getValidationMessage(doc: object) {
+      mockFormModel.findOne.mockReturnValue(q(doc));
+      mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
+      const result = await service.getForm(stateOid.toString(), YEAR_ID, 1, adminUser);
+      const data = result.data as { questions: HydratedFieldConfig[] };
+      const fileQ = data.questions.find((q) => q.key === 'excelFile');
+      return fileQ?.supportingContent?.[0]?.validationMessage;
+    }
+
+    it('is undefined when validationStatus is VALID', async () => {
+      const message = await getValidationMessage(mockFormInProgress);
+      expect(message).toBeUndefined();
+    });
+
+    it('is undefined when there is no active dataset yet, even if validationStatus is somehow INVALID', async () => {
+      const message = await getValidationMessage({
+        ...mockFormInProgress,
+        activeDatasetVersion: 0,
+        errorRowCount: 3,
+        validationStatus: 'INVALID' as const,
+      });
+      expect(message).toBeUndefined();
+    });
+
+    it('reports row errors only', async () => {
+      const message = await getValidationMessage({
+        ...mockFormInProgress,
+        errorRowCount: 3,
+        validationStatus: 'INVALID' as const,
+      });
+      expect(message).toBe('To submit, fix 3 row error(s).');
+    });
+
+    it('reports missing ULBs only', async () => {
+      const message = await getValidationMessage({
+        ...mockFormInProgress,
+        missingUlbCount: 2,
+        validationStatus: 'INVALID' as const,
+      });
+      expect(message).toBe('To submit, add the 2 missing ULB(s).');
+    });
+
+    it('reports new ULBs only', async () => {
+      const message = await getValidationMessage({
+        ...mockFormInProgress,
+        newUlbCount: 3,
+        validationStatus: 'INVALID' as const,
+      });
+      expect(message).toBe('To submit, register 3 new ULB(s).');
+    });
+
+    it('reports duplicate ULBs only', async () => {
+      const message = await getValidationMessage({
+        ...mockFormInProgress,
+        duplicateUlbCount: 1,
+        validationStatus: 'INVALID' as const,
+      });
+      expect(message).toBe('To submit, remove 1 duplicate ULB(s).');
+    });
+
+    it('reports an allocation mismatch only, formatted the same way as the Remaining badge', async () => {
+      const message = await getValidationMessage({
+        ...mockFormInProgress,
+        totalAllocatedSum: 400_000,
+        validationStatus: 'INVALID' as const,
+      });
+      expect(message).toBe('To submit, reconcile the ₹1,00,000 allocation mismatch.');
+    });
+
+    it('joins multiple active problems into one sentence', async () => {
+      const message = await getValidationMessage({
+        ...mockFormInProgress,
+        errorRowCount: 3,
+        duplicateUlbCount: 1,
+        validationStatus: 'INVALID' as const,
+      });
+      expect(message).toBe('To submit, fix 3 row error(s) and remove 1 duplicate ULB(s).');
+    });
+  });
+
   // ─── excelFile supportingContent — Register ULB action (Phase 5) ──────────
 
   describe('excelFile supportingContent — Register ULB action', () => {

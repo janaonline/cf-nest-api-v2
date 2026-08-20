@@ -21,6 +21,7 @@ import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/fil
 import { keyByFieldKey, requireField } from 'src/module/xvi-fc/common/utils/xvi-fc-field-lookup.util';
 import { deriveFileValidationOptions } from 'src/module/xvi-fc/common/utils/xvi-fc-file-constraint.util';
 import { buildUlbReconciliationBadges } from 'src/module/xvi-fc/common/utils/xvi-fc-ulb-reconciliation-badges.util';
+import { buildValidationIssuesMessage } from 'src/module/xvi-fc/common/utils/xvi-fc-validation-issues-message.util';
 import type { FileInfo } from 'src/schemas/common/file.schema';
 import type { FormData } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.types';
 import type {
@@ -755,6 +756,16 @@ export class DevolutionFormulaService {
             visible: canEdit && validationStatus === 'VALID',
           },
         ],
+        validationMessage: buildValidationIssuesMessage({
+          errorRowCount,
+          missingCount: missingUlbCount,
+          newCount: newUlbCount,
+          duplicateCount: duplicateUlbCount,
+          allocationMismatchLabel: allocationBalanced
+            ? undefined
+            : `₹${formatINR(Math.abs(totalMoHUAAllocation - totalAllocatedSum))}`,
+          visible: canEdit && hasDataset && validationStatus === 'INVALID',
+        }),
       },
     ];
   }

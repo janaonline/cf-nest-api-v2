@@ -109,6 +109,8 @@ export interface FieldSupportingContent {
   separator?: 'dot' | 'none';
   actions?: SupportingContentAction[];
   badges?: SupportingContentBadge[];
+  /** Plain-English fix message shown after badges when the form is invalid. */
+  validationMessage?: string;
 }
 
 // ─── File value shape ─────────────────────────────────────────────────────────
