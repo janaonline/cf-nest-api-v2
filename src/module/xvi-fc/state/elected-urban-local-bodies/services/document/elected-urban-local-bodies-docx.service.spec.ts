@@ -82,6 +82,18 @@ describe('ElectedUrbanLocalBodiesDocxService', () => {
     expect(result.buffer.subarray(0, 2).toString('utf8')).toBe('PK');
   });
 
+  it('opens with the shared MoHUA addressee block, not the old one', async () => {
+    documentService.getDocumentData.mockResolvedValue(buildDocumentData(1));
+    const result = await service.generateElectedBodiesListDocument(stateId, yearId, user);
+    const xml = await extractDocumentXml(result.buffer);
+
+    expect(xml).toContain('Economic Advisor/ Deputy Secretary (Finance Commission Cell)');
+    expect(xml).toContain('Sankalp Bhawan, GPOA-2, Pt. Ravi Shankar Shukla Lane,');
+    expect(xml).toContain('Kasturba Gandhi Marg, New Delhi-110001');
+    expect(xml).not.toContain('The Director,');
+    expect(xml).not.toContain('AMRUT-IIB');
+  });
+
   it('builds the CF_{StateName}_Elected-body-list_{YearLabel}.docx filename', async () => {
     documentService.getDocumentData.mockResolvedValue(buildDocumentData(1));
     const result = await service.generateElectedBodiesListDocument(stateId, yearId, user);

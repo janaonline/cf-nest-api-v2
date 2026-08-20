@@ -14,6 +14,7 @@ import {
 } from 'docx';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { buildXviFcDownloadFileName } from 'src/shared/utils/xvi-fc-download-file-name.util';
+import { buildMohuaLetterAddressBlock } from 'src/module/xvi-fc/common/utils/xvi-fc-letter-address-block.util';
 import { ElectedUrbanLocalBodiesDocumentService } from './elected-urban-local-bodies-document.service';
 import type {
   EulbListDocumentData,
@@ -114,12 +115,7 @@ export class ElectedUrbanLocalBodiesDocxService {
 
   private buildAddressBlock(): Paragraph[] {
     return [
-      new Paragraph({ text: 'To,' }),
-      new Paragraph({ text: 'The Director,' }),
-      new Paragraph({ text: 'Ministry of Housing and Urban Affairs (AMRUT-IIB),' }),
-      new Paragraph({ text: 'Government of India,' }),
-      new Paragraph({ text: 'New Delhi' }),
-      new Paragraph({ text: '' }),
+      ...buildMohuaLetterAddressBlock(),
       new Paragraph({
         children: [
           new TextRun({ text: 'Subject: Declaration regarding Elected Body Status of Urban Local Bodies', bold: true }),
