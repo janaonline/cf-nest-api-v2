@@ -16,6 +16,7 @@ import {
 } from '../../schemas/xvi-fc/annual-account.schema';
 import { XviFcUnspentBalanceDisclosure } from '../../schemas/xvi-fc/unspent-balance-disclosure.schema';
 import { XviFcBankAccount } from '../../schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
+import { SlbForm } from '../../schemas/xvi-fc/ulb/slb-form.schema';
 import { XviFcCacheService, XVIFC_CACHE_KEY_PREFIX } from './cache/xvi-fc-cache.service';
 import { FormJsonService } from '../../master/form-json/form-json.service';
 import { UlbEligibilityService } from '../ulb-eligibility/ulb-eligibility.service';
@@ -39,6 +40,7 @@ describe('XviFcService', () => {
   let mockAnnualAccountModel: { find: jest.Mock };
   let mockDisclosureModel: { findOne: jest.Mock };
   let mockBankAccountModel: { findOne: jest.Mock };
+  let mockSlbFormModel: { findOne: jest.Mock };
   let mockCacheService: { deleteByPattern: jest.Mock };
   let mockFormJsonService: { clearCache: jest.Mock };
   let mockUlbEligibilityService: { getIneligibleUlbTypeIds: jest.Mock };
@@ -64,6 +66,7 @@ describe('XviFcService', () => {
     mockAnnualAccountModel = { find: jest.fn().mockReturnValue(q([])) };
     mockDisclosureModel = { findOne: jest.fn().mockReturnValue(q(null)) };
     mockBankAccountModel = { findOne: jest.fn().mockReturnValue(q(null)) };
+    mockSlbFormModel = { findOne: jest.fn().mockReturnValue(q(null)) };
     mockCacheService = { deleteByPattern: jest.fn().mockResolvedValue(0) };
     mockFormJsonService = { clearCache: jest.fn().mockResolvedValue(0) };
     mockUlbEligibilityService = { getIneligibleUlbTypeIds: jest.fn().mockResolvedValue([]) };
@@ -82,6 +85,7 @@ describe('XviFcService', () => {
         { provide: getModelToken(XviFcAnnualAccount.name), useValue: mockAnnualAccountModel },
         { provide: getModelToken(XviFcUnspentBalanceDisclosure.name), useValue: mockDisclosureModel },
         { provide: getModelToken(XviFcBankAccount.name), useValue: mockBankAccountModel },
+        { provide: getModelToken(SlbForm.name), useValue: mockSlbFormModel },
         { provide: XviFcCacheService, useValue: mockCacheService },
         { provide: FormJsonService, useValue: mockFormJsonService },
         { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },

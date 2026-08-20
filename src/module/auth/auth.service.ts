@@ -12,11 +12,15 @@ import { Model, Types } from 'mongoose';
 import { RedisService } from 'src/core/services/redis/redis.service';
 import { UserDocument } from 'src/schemas/user/user.schema';
 import { LoginHistory, LoginType } from 'src/schemas/user/login-history.schema';
+import { State, StateDocument } from 'src/schemas/state.schema';
+import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { UsersRepository } from 'src/module/users/users.repository';
 import { RegisterDto } from './dto/register.dto';
 import { SetPasswordDto } from './dto/set-password.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { AuthResponse, AuthTokens } from './types/auth-tokens.type';
+import { Role } from './enum/role.enum';
+import { buildUserResponsePayload } from './auth-user-response.helper';
 
 // Maps generateTokens()'s `purpose` param (raw DTO `type` values, e.g. login.dto.ts's '16thFC')
 // to a valid LoginHistory `loginType`. Callers that pass something else (e.g. the literal 'WEB'
@@ -39,6 +43,8 @@ export class AuthService {
     private readonly configService: ConfigService,
     private readonly redisService: RedisService,
     @InjectModel(LoginHistory.name) private readonly loginHistoryModel: Model<LoginHistory>,
+    @InjectModel(State.name) private readonly stateModel: Model<StateDocument>,
+    @InjectModel(Ulb.name) private readonly ulbModel: Model<UlbDocument>,
   ) {}
 
   async getUserById(id: string) {
@@ -72,7 +78,15 @@ export class AuthService {
     const tokens = await this.generateTokens(userId);
     await this.saveRefreshToken(userId, tokens.refreshToken);
     this.setRefreshCookie(res, tokens.refreshToken);
-    return { token: tokens.accessToken, user: this.sanitizeUser(user) };
+
+    // Mirrors login()'s own state/ulb lookups so the refreshed user payload never drifts out of
+    // sync with what login returns (see buildUserResponsePayload's doc comment) — unlike login,
+    // this never throws on a stale/inactive reference; a silent background token refresh should
+    // degrade gracefully (missing derived fields), never log the user out over a data nuance.
+    const state = user.state ? await this.stateModel.findById(user.state).exec() : null;
+    const ulb = user.role === Role.ULB ? await this.ulbModel.findOne({ _id: user.ulb }).exec() : null;
+
+    return { token: tokens.accessToken, user: buildUserResponsePayload(user, state, ulb) };
   }
   // TODO: to be removed
   // async register(dto: RegisterDto): Promise<Record<string, unknown>> {
@@ -149,6 +163,7 @@ export class AuthService {
     const profileUpdate: Record<string, unknown> = {
       isNewUser: false,
       isXVIFCProfileVerified: true,
+      isXviFcEmailVerified: true,
       isXviFcdeleted: false,
       ...(profile?.name && { name: profile.name }),
       ...(profile?.mobile && { mobile: profile.mobile }),
@@ -260,20 +275,5 @@ export class AuthService {
   private clearRefreshCookie(res: Response): void {
     const cookieName = this.configService.get<string>('REFRESH_COOKIE_NAME') ?? 'refresh_token';
     res.cookie(cookieName, '', { httpOnly: true, maxAge: 0, path: '/' });
-  }
-
-  private sanitizeUser(user: UserDocument): Record<string, unknown> {
-    const obj = (user.toObject ? user.toObject() : { ...user }) as unknown as Record<string, unknown>;
-    delete obj['password'];
-    delete obj['refreshTokenHash'];
-    delete obj['otpHash'];
-    delete obj['otpAttempts'];
-    delete obj['otpExpiresAt'];
-    delete obj['loginAttempts'];
-    delete obj['lockUntil'];
-    delete obj['isLocked'];
-    delete obj['passwordHistory'];
-    delete obj['passwordExpires'];
-    return obj;
   }
 }

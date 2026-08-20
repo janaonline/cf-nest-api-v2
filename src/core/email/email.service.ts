@@ -228,7 +228,12 @@ export class EmailService {
   // ── Profile verification OTP (bypasses EmailList — always sends) ────────────
 
   private get isProduction(): boolean {
-    return this.configService.get<string>('NODE_ENV') === 'production';
+    // OTP_FORCE_REAL_DELIVERY lets dev/staging opt into a real random OTP + actual email
+    // dispatch without flipping NODE_ENV — same override OtpService honors (see otp.config.ts).
+    return (
+      this.configService.get<string>('NODE_ENV') === 'production' ||
+      this.configService.get<string>('OTP_FORCE_REAL_DELIVERY') === 'true'
+    );
   }
 
   async sendProfileOtp(email: string): Promise<{ isOtpSent: boolean; message: string }> {
@@ -238,7 +243,7 @@ export class EmailService {
     // In production a random 4-digit OTP is generated and emailed.
     const otp = this.isProduction
       ? Math.floor(1000 + Math.random() * 9000).toString() // 4-digit random
-      : '111111'; // fixed dev OTP
+      : '1111'; // fixed dev OTP
 
     await this.redis.set(`profile_otp:${email}`, otp, 600); // 10 min TTL
 

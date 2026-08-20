@@ -22,6 +22,7 @@ import {
   XviFcBankAccount,
   XviFcBankAccountDocument,
 } from '../../schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
+import { SlbForm, SlbFormDocument, SLB_FORM_TYPE } from '../../schemas/xvi-fc/ulb/slb-form.schema';
 import { StateWiseResponseDto } from './dto/state-wise-response.dto';
 import { buildGetStateWiseDataPipeline } from './queries/get-state-wise-data.query';
 import { SideMenuItemDto, SideMenuResponseDto } from './dto/side-menu.dto';
@@ -52,6 +53,8 @@ export class XviFcService {
     private readonly disclosureModel: Model<XviFcUnspentBalanceDisclosureDocument>,
     @InjectModel(XviFcBankAccount.name)
     private readonly bankAccountModel: Model<XviFcBankAccountDocument>,
+    @InjectModel(SlbForm.name)
+    private readonly slbFormModel: Model<SlbFormDocument>,
     private readonly cache: XviFcCacheService,
     private readonly formJsonService: FormJsonService,
     private readonly ulbEligibilityService: UlbEligibilityService,
@@ -217,7 +220,7 @@ export class XviFcService {
     const ulb = new Types.ObjectId(ulbId);
     const designYear = new Types.ObjectId(designYearId);
 
-    const [annualAccounts, disclosure, bankAccount] = await Promise.all([
+    const [annualAccounts, disclosure, bankAccount, slbForm] = await Promise.all([
       this.annualAccountModel
         .find({ ulb, design_year: designYear })
         .select('sectionType form_status form_status_id')
@@ -225,6 +228,11 @@ export class XviFcService {
         .exec(),
       this.disclosureModel.findOne({ ulb, designYear }).select('formStatus').lean().exec(),
       this.bankAccountModel.findOne({ ulb, designYear }).select('currentFormStatus').lean().exec(),
+      this.slbFormModel
+        .findOne({ ulb, year: designYear, formType: SLB_FORM_TYPE, isDeleted: false })
+        .select('currentFormStatus')
+        .lean()
+        .exec(),
     ]);
 
     // 'audited' is always the {ulb, design_year} anchor — its _id is what every other
@@ -241,6 +249,9 @@ export class XviFcService {
     const bankAccountStatus =
       ((bankAccount as Record<string, unknown> | null)?.['currentFormStatus'] as FormStatusType | undefined) ??
       FORM_STATUS.NOT_STARTED;
+    const slbStatus =
+      ((slbForm as Record<string, unknown> | null)?.['currentFormStatus'] as FormStatusType | undefined) ??
+      FORM_STATUS.NOT_STARTED;
 
     return {
       annualAccountId: auditedDoc?._id?.toString() ?? null,
@@ -253,6 +264,10 @@ export class XviFcService {
       xviFcBankAccount: {
         form_status: getFormStatusKey(bankAccountStatus),
         form_status_id: bankAccountStatus,
+      },
+      serviceLevelBenchmarks: {
+        form_status: getFormStatusKey(slbStatus),
+        form_status_id: slbStatus,
       },
     };
   }

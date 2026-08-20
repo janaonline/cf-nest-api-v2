@@ -11,6 +11,7 @@ import {
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { ConfigService } from '@nestjs/config';
+import { NodeHttpHandler } from '@smithy/node-http-handler';
 import { Readable } from 'stream';
 
 @Injectable()
@@ -30,6 +31,13 @@ export class S3Service {
       region: this.region,
       requestChecksumCalculation: 'WHEN_REQUIRED',
       responseChecksumValidation: 'WHEN_REQUIRED',
+      // Without these, a stalled connection to S3 hangs forever, which keeps a BullMQ
+      // job "active" indefinitely (the worker keeps renewing the lock) and blocks the
+      // whole queue instead of failing the one job.
+      requestHandler: new NodeHttpHandler({
+        connectionTimeout: 10_000,
+        requestTimeout: 60_000,
+      }),
     });
   }
 

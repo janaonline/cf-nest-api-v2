@@ -5,6 +5,7 @@
   "compilerOptions": {
     "builder": "swc",
     "deleteOutDir": true,
+    "watchAssets": true,
     "assets": [
       {
         "include": "views/**/*",
