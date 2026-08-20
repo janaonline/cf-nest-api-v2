@@ -216,6 +216,12 @@ export class XviFcService {
     return { stateName: state.name };
   }
 
+  async getYearLabelById(yearId: string): Promise<{ yearLabel: string }> {
+    const year = await this.yearModel.findById(yearId).select('year').lean().exec();
+    if (!year) throw new NotFoundException('Year not found');
+    return { yearLabel: year.year };
+  }
+
   async getFormStatus(ulbId: string, designYearId: string) {
     const ulb = new Types.ObjectId(ulbId);
     const designYear = new Types.ObjectId(designYearId);

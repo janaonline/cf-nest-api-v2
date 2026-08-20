@@ -10,6 +10,7 @@ import { DevolutionFormulaController } from './devolution-formula.controller';
 import { DevolutionFormulaService } from './services/main/devolution-formula.service';
 import { DevolutionFormulaExcelService } from './services/excel/devolution-formula-excel.service';
 import { DevolutionFormulaRowService } from './services/row/devolution-formula-row.service';
+import { XviFcService } from 'src/module/xvi-fc/xvi-fc.service';
 import type { SaveDraftDevolutionFormulaDto } from './dto/save-draft-devolution-formula.dto';
 import type { ValidateExcelDevolutionFormulaDto } from './dto/validate-excel-devolution-formula.dto';
 import type { FinalSubmitDevolutionFormulaDto } from './dto/final-submit-devolution-formula.dto';
@@ -33,6 +34,7 @@ describe('DevolutionFormulaController', () => {
   let dfService: Record<string, jest.Mock>;
   let dfExcelService: Record<string, jest.Mock>;
   let dfRowService: Record<string, jest.Mock>;
+  let xviFcService: Record<string, jest.Mock>;
 
   beforeEach(async () => {
     dfService = {
@@ -52,6 +54,10 @@ describe('DevolutionFormulaController', () => {
       updateRow: jest.fn().mockResolvedValue({ success: true }),
       deleteUploadedExcel: jest.fn().mockResolvedValue({ success: true }),
     };
+    xviFcService = {
+      getStateById: jest.fn().mockResolvedValue({ stateName: 'Andhra Pradesh' }),
+      getYearLabelById: jest.fn().mockResolvedValue({ yearLabel: '2026-27' }),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [DevolutionFormulaController],
@@ -59,6 +65,7 @@ describe('DevolutionFormulaController', () => {
         { provide: DevolutionFormulaService, useValue: dfService },
         { provide: DevolutionFormulaExcelService, useValue: dfExcelService },
         { provide: DevolutionFormulaRowService, useValue: dfRowService },
+        { provide: XviFcService, useValue: xviFcService },
       ],
     }).compile();
 
@@ -80,9 +87,7 @@ describe('DevolutionFormulaController', () => {
     });
 
     it('retains the VIEW_STATUS_REPORTS permission', () => {
-      expect(Reflect.getMetadata(REQUIRED_PERMISSIONS_KEY, controller.dump)).toEqual([
-        Permission.VIEW_STATUS_REPORTS,
-      ]);
+      expect(Reflect.getMetadata(REQUIRED_PERMISSIONS_KEY, controller.dump)).toEqual([Permission.VIEW_STATUS_REPORTS]);
     });
   });
 
@@ -95,9 +100,7 @@ describe('DevolutionFormulaController', () => {
   });
 
   it('saveDraft retains the EDIT_STATE_FORMS permission', () => {
-    expect(Reflect.getMetadata(REQUIRED_PERMISSIONS_KEY, controller.saveDraft)).toEqual([
-      Permission.EDIT_STATE_FORMS,
-    ]);
+    expect(Reflect.getMetadata(REQUIRED_PERMISSIONS_KEY, controller.saveDraft)).toEqual([Permission.EDIT_STATE_FORMS]);
   });
 
   // ─── POST validate-excel ─────────────────────────────────────────────────
@@ -166,6 +169,15 @@ describe('DevolutionFormulaController', () => {
     expect(result).toBeInstanceOf(StreamableFile);
   });
 
+  it('getTemplate resolves state/year via XviFcService and builds the CF_ filename', async () => {
+    const result = await controller.getTemplate(stateId, yearId, '1', user);
+    expect(xviFcService['getStateById']).toHaveBeenCalledWith(stateId);
+    expect(xviFcService['getYearLabelById']).toHaveBeenCalledWith(yearId);
+    expect(result.getHeaders().disposition).toBe(
+      'attachment; filename="CF_Andhra-Pradesh_Devolution-formula-template_2026-27.xlsx"',
+    );
+  });
+
   it('getTemplate rejects an invalid installment before calling the service', async () => {
     await expect(controller.getTemplate(stateId, yearId, '3', user)).rejects.toThrow(BadRequestException);
     expect(dfExcelService['generateTemplate']).not.toHaveBeenCalled();
@@ -185,6 +197,13 @@ describe('DevolutionFormulaController', () => {
     const result = await controller.getErrorSheet(stateId, yearId, '1', user);
     expect(dfRowService['getErrorSheet']).toHaveBeenCalledWith(stateId, yearId, 1, user);
     expect(result).toBeInstanceOf(StreamableFile);
+  });
+
+  it('getErrorSheet resolves state/year via XviFcService and builds the CF_ filename', async () => {
+    const result = await controller.getErrorSheet(stateId, yearId, '1', user);
+    expect(result.getHeaders().disposition).toBe(
+      'attachment; filename="CF_Andhra-Pradesh_Devolution-formula-error-sheet_2026-27.xlsx"',
+    );
   });
 
   // ─── POST :stateId/:yearId/:installment/revalidate-excel ─────────────────

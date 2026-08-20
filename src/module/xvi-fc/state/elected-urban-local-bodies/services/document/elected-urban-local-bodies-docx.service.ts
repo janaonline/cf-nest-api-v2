@@ -13,7 +13,7 @@ import {
   type ITableBordersOptions,
 } from 'docx';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
-import { getTimeStamp } from 'src/shared/utils/date.utils';
+import { buildXviFcDownloadFileName } from 'src/shared/utils/xvi-fc-download-file-name.util';
 import { ElectedUrbanLocalBodiesDocumentService } from './elected-urban-local-bodies-document.service';
 import type {
   EulbListDocumentData,
@@ -84,7 +84,12 @@ export class ElectedUrbanLocalBodiesDocxService {
     const data = await this.documentService.getDocumentData(stateId, yearId, user);
     const doc = this.buildDocument(data);
     const buffer = await Packer.toBuffer(doc);
-    const fileName = `elected-bodies-list_${getTimeStamp(false)}.docx`;
+    const fileName = buildXviFcDownloadFileName({
+      entityName: data.stateName,
+      formName: 'elected-body-list',
+      yearLabel: data.designYearLabel,
+      extension: 'docx',
+    });
     return { buffer, fileName };
   }
 

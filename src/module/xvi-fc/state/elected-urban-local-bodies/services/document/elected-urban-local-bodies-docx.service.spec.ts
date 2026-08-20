@@ -82,10 +82,10 @@ describe('ElectedUrbanLocalBodiesDocxService', () => {
     expect(result.buffer.subarray(0, 2).toString('utf8')).toBe('PK');
   });
 
-  it('uses a getTimeStamp-based .docx filename', async () => {
+  it('builds the CF_{StateName}_Elected-body-list_{YearLabel}.docx filename', async () => {
     documentService.getDocumentData.mockResolvedValue(buildDocumentData(1));
     const result = await service.generateElectedBodiesListDocument(stateId, yearId, user);
-    expect(result.fileName).toMatch(/^elected-bodies-list_.*\.docx$/);
+    expect(result.fileName).toBe('CF_Andhra-Pradesh_Elected-body-list_2026-27.docx');
   });
 
   it('interpolates the real state name and ULB count into the intro paragraph', async () => {

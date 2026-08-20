@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import PDFDocument from 'pdfkit';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
+import { buildXviFcDownloadFileName } from 'src/shared/utils/xvi-fc-download-file-name.util';
 import { ClaimLetterDocumentService } from './claim-letter-document.service';
 import type { ClaimLetterDocumentData } from '../../types/claim-letter.types';
 import {
@@ -61,9 +62,12 @@ export class ClaimLetterPdfService {
     // (see claim-letter-document.service.spec.ts).
     const data = response.data!;
     const buffer = await this.renderPdf(data);
-    // Mirrors the frontend's pre-migration `downloadTemplate()` filename derivation exactly — the
-    // Ref No.'s `/` separators aren't filesystem-safe.
-    const fileName = `claim-letter-${data.refNo.replace(/[/\\]/g, '-')}.pdf`;
+    const fileName = buildXviFcDownloadFileName({
+      entityName: data.stateName,
+      formName: `claim-letter-${data.refNo}`,
+      yearLabel: data.designYearLabel,
+      extension: 'pdf',
+    });
     return { buffer, fileName };
   }
 
