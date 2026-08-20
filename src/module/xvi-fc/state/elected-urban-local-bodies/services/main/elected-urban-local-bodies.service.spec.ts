@@ -441,6 +441,59 @@ describe('ElectedUrbanLocalBodiesService', () => {
       expect(dvRow3!.formulae?.[0]).not.toContain('E2');
     });
 
+    // ── prompt text derived from config, not hardcoded (regression) ──────────
+    // These previously embedded a hand-typed literal date disconnected from the DB-configured
+    // minDate/maxDate — see xvi-fc-date-format.util.ts. Proven here by changing the fixture's
+    // date and confirming the prompt text follows it.
+
+    it('dateOfConstitution prompt reflects the configured minDate', async () => {
+      const sheet = await generateAndLoad();
+      const dvRow2 = sheet.dataValidations.model['D2'];
+      expect(dvRow2!.prompt).toBe('Required when status is Constituted. Must be between 31 May 2021 and today.');
+    });
+
+    it('dateOfConstitution prompt updates when the configured minDate changes', async () => {
+      const fieldsWithDifferentMin = MOCK_TYPED_ROW_EDIT_FIELDS.map((f) =>
+        f.key === 'dateOfConstitution'
+          ? {
+              ...f,
+              minDate: '2019-11-15',
+              validations: f.validations?.map((v) => (v.name === 'minDate' ? { ...v, validator: '2019-11-15' } : v)),
+            }
+          : f,
+      );
+      mockEulbFormJsonConfigService.loadFields.mockResolvedValueOnce(fieldsWithDifferentMin);
+
+      const sheet = await generateAndLoad();
+      const dvRow2 = sheet.dataValidations.model['D2'];
+      expect(dvRow2!.prompt).toContain('15 November 2019');
+      expect(dvRow2!.prompt).not.toContain('31 May 2021');
+    });
+
+    it('dateOfExpiry prompt reflects the configured maxDate', async () => {
+      const sheet = await generateAndLoad();
+      const dvRow2 = sheet.dataValidations.model['E2'];
+      expect(dvRow2!.prompt).toBe('Required when status is Constituted. Must be between today and 31 March 2030.');
+    });
+
+    it('dateOfExpiry prompt updates when the configured maxDate changes', async () => {
+      const fieldsWithDifferentMax = MOCK_TYPED_ROW_EDIT_FIELDS.map((f) =>
+        f.key === 'dateOfExpiry'
+          ? {
+              ...f,
+              maxDate: '2031-03-31',
+              validations: f.validations?.map((v) => (v.name === 'maxDate' ? { ...v, validator: '2031-03-31' } : v)),
+            }
+          : f,
+      );
+      mockEulbFormJsonConfigService.loadFields.mockResolvedValueOnce(fieldsWithDifferentMax);
+
+      const sheet = await generateAndLoad();
+      const dvRow2 = sheet.dataValidations.model['E2'];
+      expect(dvRow2!.prompt).toContain('31 March 2031');
+      expect(dvRow2!.prompt).not.toContain('31 March 2030');
+    });
+
     it('generates validations covering exactly the active registry rows, with no blank padding', async () => {
       // 2 active ULBs → validations on data rows 2 and 3 only; row 4 absent (no blank padding).
       const sheet = await generateAndLoad();

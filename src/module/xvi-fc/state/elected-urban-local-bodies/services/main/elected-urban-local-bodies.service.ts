@@ -26,6 +26,7 @@ import { keyByFieldKey, requireField } from 'src/module/xvi-fc/common/utils/xvi-
 import { deriveFileValidationOptions } from 'src/module/xvi-fc/common/utils/xvi-fc-file-constraint.util';
 import { buildUlbReconciliationBadges } from 'src/module/xvi-fc/common/utils/xvi-fc-ulb-reconciliation-badges.util';
 import { buildValidationIssuesMessage } from 'src/module/xvi-fc/common/utils/xvi-fc-validation-issues-message.util';
+import { formatXviFcDate } from 'src/module/xvi-fc/common/utils/xvi-fc-date-format.util';
 import type { FileInfo } from 'src/schemas/common/file.schema';
 import type { FormData } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.types';
 import type {
@@ -1136,7 +1137,7 @@ export class ElectedUrbanLocalBodiesService {
             ],
             showInputMessage: true,
             promptTitle: 'Date on which the elected body is in place',
-            prompt: 'Required when status is Constituted. Must be between 31 May 2021 and today.',
+            prompt: `Required when status is Constituted. Must be between ${formatXviFcDate(constitutionMinVal)} and today.`,
             showErrorMessage: true,
             errorStyle: 'error',
             errorTitle: 'Date on which the elected body is in place',
@@ -1158,7 +1159,7 @@ export class ElectedUrbanLocalBodiesService {
             ],
             showInputMessage: true,
             promptTitle: 'Date of Expiry',
-            prompt: `Required when status is Constituted. Must be between today and 31 March 2030.`,
+            prompt: `Required when status is Constituted. Must be between today and ${formatXviFcDate(expiryMaxVal)}.`,
             showErrorMessage: true,
             errorStyle: 'error',
             errorTitle: 'Date of Expiry',
