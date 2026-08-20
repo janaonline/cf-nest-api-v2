@@ -173,6 +173,7 @@ export class DevolutionFormulaService {
       folderPathContext,
       yearId,
       computedActiveUlbCount,
+      grantAllocationSummary,
     );
     const grantMax = grantAllocationSummary?.total ?? null;
     const rowEditFields = getDfFieldsByType(fields, 'DF_ROW_EDIT_FIELDS').map((field) => {
@@ -603,6 +604,7 @@ export class DevolutionFormulaService {
     folderPathContext: XviFcFolderPathContext,
     yearId: string,
     computedActiveUlbCount: number,
+    grantAllocationSummary: DfGrantAllocationSummary | null,
   ): HydratedFieldConfig[] {
     return questions.map((question) => {
       if (question.key === 'ulbCount') {
@@ -633,7 +635,7 @@ export class DevolutionFormulaService {
             ...question,
             folderPath: resolvedFolderPath,
             value,
-            supportingContent: this.buildExcelFileSupportingContent(doc, permissions, yearId),
+            supportingContent: this.buildExcelFileSupportingContent(doc, permissions, yearId, grantAllocationSummary),
           };
         }
 
@@ -648,6 +650,7 @@ export class DevolutionFormulaService {
     doc: DfFormLeanDoc | null,
     permissions: DfFormPermissions,
     yearId: string,
+    grantAllocationSummary: DfGrantAllocationSummary | null,
   ): FieldSupportingContent[] {
     const { canView, canEdit } = permissions;
     const hasDataset = (doc?.activeDatasetVersion ?? 0) > 0;
@@ -656,6 +659,7 @@ export class DevolutionFormulaService {
     const excelRowCount = doc?.excelRowCount ?? 0;
     const totalMoHUAAllocation = doc?.totalMoHUAAllocation ?? 0;
     const totalAllocatedSum = doc?.totalAllocatedSum ?? 0;
+    const liveAllocatedAmount = grantAllocationSummary?.total ?? totalMoHUAAllocation;
     // Exact match (within float-noise epsilon), not a forgiving tolerance — every rupee of
     // totalMoHUAAllocation must be accounted for; see devolution-formula-tolerance.helpers.ts.
     const allocationBalanced = amountsAreEqual(totalAllocatedSum, totalMoHUAAllocation);
@@ -730,9 +734,9 @@ export class DevolutionFormulaService {
             visible: canEdit,
           }),
           {
-            label: `Allocated amount: ₹${formatINR(totalMoHUAAllocation)}`,
+            label: `Allocated amount: ₹${formatINR(liveAllocatedAmount)}`,
             tone: 'secondary' as const,
-            visible: canEdit && hasDataset,
+            visible: canEdit,
           },
           {
             label: `Allocated sum: ₹${formatINR(totalAllocatedSum)}`,

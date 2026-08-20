@@ -934,6 +934,26 @@ describe('DevolutionFormulaService', () => {
       expect(badge?.label).toBe('Allocated amount: ₹5,00,000');
     });
 
+    it('Allocated amount badge is visible even with no active dataset, as long as canEdit is true', async () => {
+      const badges = await getBadges(docNoDataset);
+      const badge = badges.find((b) => b.label?.startsWith('Allocated amount'));
+      expect(badge?.visible).toBe(true);
+    });
+
+    it('Allocated amount badge shows the live GrantAllocation total, not a cached ₹0, when no form document exists yet', async () => {
+      mockFormModel.findOne.mockReturnValue(q(null));
+      mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
+
+      const result = await service.getForm(stateOid.toString(), YEAR_ID, 1, adminUser);
+      const data = result.data as { questions: HydratedFieldConfig[] };
+      const fileQ = data.questions.find((q) => q.key === 'excelFile');
+      const badges = fileQ?.supportingContent?.[0]?.badges ?? [];
+      const badge = badges.find((b) => b.label?.startsWith('Allocated amount'));
+
+      expect(badge?.label).toBe('Allocated amount: ₹5,00,000');
+      expect(badge?.visible).toBe(true);
+    });
+
     it('Allocated sum badge tone is success when allocation is balanced', async () => {
       const badges = await getBadges(mockFormInProgress);
       const badge = badges.find((b) => b.label?.startsWith('Allocated sum'));
