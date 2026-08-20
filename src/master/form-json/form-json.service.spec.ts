@@ -6,6 +6,7 @@ import { Types } from 'mongoose';
 import { FormJsonService } from './form-json.service';
 import { FormJson } from '../../schemas/form-json.schema';
 import { RedisService } from 'src/core/services/redis/redis.service';
+import { NamespacedCacheService } from 'src/core/services/redis/namespaced-cache.service';
 
 /** Chainable Mongoose Query-like mock resolving to `value` once `.exec()` is called. */
 function q<T>(value: T) {
@@ -45,6 +46,7 @@ describe('FormJsonService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         FormJsonService,
+        NamespacedCacheService,
         { provide: getModelToken(FormJson.name), useValue: model },
         { provide: RedisService, useValue: redis },
         { provide: ConfigService, useValue: configService },

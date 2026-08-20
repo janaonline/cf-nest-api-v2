@@ -1,13 +1,15 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { SideMenu, SideMenuDocument } from '../../../schemas/side-menu.schema';
-import { XviFcCacheService, XVIFC_CACHE_KEY_PREFIX } from '../cache/xvi-fc-cache.service';
+import { SideMenu, SideMenuDocument, MenuRole } from '../../../schemas/side-menu.schema';
+import { NamespacedCacheService } from '../../../core/services/redis/namespaced-cache.service';
+import { SideMenuItemDto, SideMenuResponseDto } from '../dto/side-menu.dto';
 import { CreateSideMenuDto } from './dto/create-side-menu.dto';
 import { UpdateSideMenuDto } from './dto/update-side-menu.dto';
 import { QuerySideMenuDto } from './dto/query-side-menu.dto';
 
 const MODULE = 'XVI-FC';
+const CACHE_NAMESPACE = 'sidemenu';
 
 export interface SideMenuAdminItem {
   _id: Types.ObjectId;
@@ -31,8 +33,102 @@ export class SideMenuService {
   constructor(
     @InjectModel(SideMenu.name)
     private readonly sideMenuModel: Model<SideMenuDocument>,
-    private readonly cache: XviFcCacheService,
+    private readonly cache: NamespacedCacheService,
   ) {}
+
+  private getSideMenuCacheKey(role: string, yearId: string): string {
+    return this.cache.buildKey(CACHE_NAMESPACE, role, yearId);
+  }
+
+  /** Same shape as getSideMenuCacheKey, but `*` for either part clearCache leaves unspecified. */
+  private getSideMenuCachePattern(role?: string, yearId?: string): string {
+    return this.cache.buildPattern(CACHE_NAMESPACE, role, yearId);
+  }
+
+  /**
+   * Fetches the sidebar menu for a role+year, tree-shaped into top/bottom sections.
+   * Returns the cached value from Redis when available (No TTL) — same scheme as
+   * FormJsonService.findActiveByDesignYearAndFormId: a key built from domain values (not the
+   * request URL), read/write/invalidate all in this one file, so they can never drift apart.
+   * Cache key format: `sidemenu:<env>:<role>:<yearId>`.
+   */
+  async getSideMenu(role: MenuRole, yearId: string): Promise<SideMenuResponseDto> {
+    if (!yearId) throw new NotFoundException('yearId is required');
+
+    const key = this.getSideMenuCacheKey(role, yearId);
+    const cached = await this.cache.get<SideMenuResponseDto>(key);
+    if (cached !== null) return cached;
+
+    const docs = await this.sideMenuModel
+      .find({ module: MODULE, role, year: new Types.ObjectId(yearId), isActive: true })
+      .sort({ sequence: 1 })
+      .lean()
+      .exec();
+
+    if (!docs.length) throw new NotFoundException(`No menu configured for role ${role}`);
+
+    const result = this.buildMenuTree(docs);
+    await this.cache.set(key, result);
+    return result;
+  }
+
+  /**
+   * Deletes side-menu cache entries matching role and/or yearId — omit either to clear more
+   * broadly. Pattern-based so it still works when a caller under- or over-specifies; returns the
+   * number of keys actually deleted so a caller can tell a real clear from a no-op.
+   */
+  async clearCache(role?: string, yearId?: string): Promise<number> {
+    return this.cache.delByPattern(this.getSideMenuCachePattern(role, yearId));
+  }
+
+  private buildMenuTree(docs: Array<SideMenu & { _id: Types.ObjectId }>): SideMenuResponseDto {
+    return {
+      topModel: this.buildSection(docs, 'top'),
+      bottomModel: this.buildSection(docs, 'bottom'),
+    };
+  }
+
+  private buildSection(
+    docs: Array<SideMenu & { _id: Types.ObjectId }>,
+    section: 'top' | 'bottom',
+  ): SideMenuItemDto[] {
+    const sectionDocs = docs.filter((d) => d.section === section);
+    const topLevel = sectionDocs.filter((d) => !d.parentId).sort((a, b) => a.sequence! - b.sequence!);
+    const children = sectionDocs.filter((d) => d.parentId);
+
+    return topLevel.map((doc) => {
+      if (doc.type === 'separator') {
+        return { label: '_', separator: true };
+      }
+
+      const item: SideMenuItemDto = { label: doc.name };
+      if (doc.icon) item.icon = doc.icon;
+      if (doc.routerLink?.length) item.routerLink = doc.routerLink;
+      if (doc.featureKey) item.featureKey = doc.featureKey;
+      if (doc.url) {
+        item.url = doc.url;
+        if (doc.target) item.target = doc.target;
+      }
+
+      if (doc.type === 'group') {
+        item.items = children
+          .filter((c) => c.parentId!.toString() === doc._id.toString())
+          .sort((a, b) => a.sequence! - b.sequence!)
+          .map((c) => {
+            const child: SideMenuItemDto = { label: c.name };
+            if (c.icon) child.icon = c.icon;
+            if (c.featureKey) child.featureKey = c.featureKey;
+            if (c.url) {
+              child.url = c.url;
+              if (c.target) child.target = c.target;
+            }
+            return child;
+          });
+      }
+
+      return item;
+    });
+  }
 
   // The admin API keeps `label` as the field name for backwards compatibility;
   // internally it's stored as `name` since it's shared with the legacy Sidemenu collection.
@@ -180,6 +276,6 @@ export class SideMenuService {
   }
 
   private async invalidateCache(role: string, yearId: string): Promise<void> {
-    await this.cache.delete(`${XVIFC_CACHE_KEY_PREFIX}:/xvi-fc/sidebar/${role}?yearId=${yearId}`);
+    await this.cache.del(this.getSideMenuCacheKey(role, yearId));
   }
 }

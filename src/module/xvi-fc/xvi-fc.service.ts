@@ -25,14 +25,15 @@ import {
 import { SlbForm, SlbFormDocument, SLB_FORM_TYPE } from '../../schemas/xvi-fc/ulb/slb-form.schema';
 import { StateWiseResponseDto } from './dto/state-wise-response.dto';
 import { buildGetStateWiseDataPipeline } from './queries/get-state-wise-data.query';
-import { SideMenuItemDto, SideMenuResponseDto } from './dto/side-menu.dto';
+import { SideMenuResponseDto } from './dto/side-menu.dto';
 import { Year, YearDocument } from '../../schemas/year.schema';
 import { Ulb, UlbDocument } from '../../schemas/ulb.schema';
 import { State, StateDocument } from '../../schemas/state.schema';
-import { SideMenu, SideMenuDocument, MenuRole } from '../../schemas/side-menu.schema';
+import type { MenuRole } from '../../schemas/side-menu.schema';
 import { XviFcCacheService, XVIFC_CACHE_KEY_PREFIX } from './cache/xvi-fc-cache.service';
 import { FormJsonService } from '../../master/form-json/form-json.service';
 import { UlbEligibilityService } from '../ulb-eligibility/ulb-eligibility.service';
+import { SideMenuService } from './side-menu/side-menu.service';
 
 @Injectable()
 export class XviFcService {
@@ -45,8 +46,6 @@ export class XviFcService {
     private readonly ulbModel: Model<UlbDocument>,
     @InjectModel(State.name)
     private readonly stateModel: Model<StateDocument>,
-    @InjectModel(SideMenu.name)
-    private readonly sideMenuModel: Model<SideMenuDocument>,
     @InjectModel(XviFcAnnualAccount.name)
     private readonly annualAccountModel: Model<XviFcAnnualAccountDocument>,
     @InjectModel(XviFcUnspentBalanceDisclosure.name)
@@ -58,6 +57,7 @@ export class XviFcService {
     private readonly cache: XviFcCacheService,
     private readonly formJsonService: FormJsonService,
     private readonly ulbEligibilityService: UlbEligibilityService,
+    private readonly sideMenuService: SideMenuService,
   ) {}
 
   async getStateWiseData(stateId: string, requester: AuthUser): Promise<StateWiseResponseDto> {
@@ -75,18 +75,8 @@ export class XviFcService {
     return result;
   }
 
-  async getSideMenu(role: MenuRole, yearId: string): Promise<SideMenuResponseDto> {
-    if (!yearId) throw new NotFoundException('yearId is required');
-
-    const docs = await this.sideMenuModel
-      .find({ module: 'XVI-FC', role, year: new Types.ObjectId(yearId), isActive: true })
-      .sort({ sequence: 1 })
-      .lean()
-      .exec();
-
-    if (!docs.length) throw new NotFoundException(`No menu configured for role ${role}`);
-
-    return this.buildMenuTree(docs);
+  getSideMenu(role: MenuRole, yearId: string): Promise<SideMenuResponseDto> {
+    return this.sideMenuService.getSideMenu(role, yearId);
   }
 
   async clearPageCache(user: AuthUser, pattern?: string): Promise<{ message: string }> {
@@ -126,53 +116,16 @@ export class XviFcService {
     };
   }
 
-  private buildMenuTree(docs: Array<SideMenu & { _id: Types.ObjectId }>): SideMenuResponseDto {
+  async clearSideMenuCache(user: AuthUser, role?: string, yearId?: string): Promise<{ message: string }> {
+    if (user.scope !== Scope.ADMIN) throw new ForbiddenException('Only admins can clear the cache.');
+    const deletedCount = await this.sideMenuService.clearCache(role, yearId);
+    const scope = [role ? `role: ${role}` : null, yearId ? `yearId: ${yearId}` : null].filter(Boolean).join(', ');
     return {
-      topModel: this.buildSection(docs, 'top'),
-      bottomModel: this.buildSection(docs, 'bottom'),
+      message:
+        deletedCount > 0
+          ? `Cleared ${deletedCount} side-menu cache ${deletedCount === 1 ? 'entry' : 'entries'}${scope ? ` for ${scope}` : ''}.`
+          : `No matching side-menu cache entries${scope ? ` for ${scope}` : ''} — nothing was cleared.`,
     };
-  }
-
-  private buildSection(
-    docs: Array<SideMenu & { _id: Types.ObjectId }>,
-    section: 'top' | 'bottom',
-  ): SideMenuItemDto[] {
-    const sectionDocs = docs.filter((d) => d.section === section);
-    const topLevel = sectionDocs.filter((d) => !d.parentId).sort((a, b) => a.sequence! - b.sequence!);
-    const children = sectionDocs.filter((d) => d.parentId);
-
-    return topLevel.map((doc) => {
-      if (doc.type === 'separator') {
-        return { label: '_', separator: true };
-      }
-
-      const item: SideMenuItemDto = { label: doc.name };
-      if (doc.icon) item.icon = doc.icon;
-      if (doc.routerLink?.length) item.routerLink = doc.routerLink;
-      if (doc.featureKey) item.featureKey = doc.featureKey;
-      if (doc.url) {
-        item.url = doc.url;
-        if (doc.target) item.target = doc.target;
-      }
-
-      if (doc.type === 'group') {
-        item.items = children
-          .filter((c) => c.parentId!.toString() === doc._id.toString())
-          .sort((a, b) => a.sequence! - b.sequence!)
-          .map((c) => {
-            const child: SideMenuItemDto = { label: c.name };
-            if (c.icon) child.icon = c.icon;
-            if (c.featureKey) child.featureKey = c.featureKey;
-            if (c.url) {
-              child.url = c.url;
-              if (c.target) child.target = c.target;
-            }
-            return child;
-          });
-      }
-
-      return item;
-    });
   }
 
   async getYears(): Promise<{ _id: string; year: string }[]> {
