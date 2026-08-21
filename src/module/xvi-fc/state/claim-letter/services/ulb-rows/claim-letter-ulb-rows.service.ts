@@ -4,6 +4,7 @@ import { FilterQuery, Model, Types } from 'mongoose';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { toObjectIdString } from 'src/common/utils/objectid.util';
+import { escapeRegex } from 'src/common/utils/regex.util';
 import { xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
 import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import { ClaimLetterBatch, ClaimLetterBatchDocument } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
@@ -106,7 +107,7 @@ export class ClaimLetterUlbRowsService {
   private buildSearchFilter(claimLetterId: Types.ObjectId, search?: string): FilterQuery<ClaimLetterBatchUlbDocument> {
     const filter: FilterQuery<ClaimLetterBatchUlbDocument> = { claimLetter: claimLetterId };
     if (search) {
-      const regex = new RegExp(this.escapeRegExp(search), 'i');
+      const regex = new RegExp(escapeRegex(search), 'i');
       filter.$or = [
         { 'ulbSnapshot.name': regex },
         { 'ulbSnapshot.censusCode': regex },
@@ -166,10 +167,6 @@ export class ClaimLetterUlbRowsService {
     }));
 
     return { rows, total, ulbLevelEligibility };
-  }
-
-  private escapeRegExp(value: string): string {
-    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
   private hasStateAccess(user: AuthUser, stateId: string): boolean {

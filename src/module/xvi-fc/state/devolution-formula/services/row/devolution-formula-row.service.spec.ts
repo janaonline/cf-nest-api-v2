@@ -101,7 +101,22 @@ describe('DevolutionFormulaRowService', () => {
         DevolutionFormulaRowService,
         { provide: getModelToken(DevolutionFormulaForm.name), useValue: formModel },
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: rowModel },
-        { provide: DevolutionFormulaValidator, useValue: {} },
+        {
+          provide: DevolutionFormulaValidator,
+          useValue: {
+            buildValidationSummary: jest.fn().mockReturnValue({
+              excelRowCount: 0,
+              validRowCount: 0,
+              errorRowCount: 0,
+              missingUlbCount: 0,
+              newUlbCount: 0,
+              duplicateUlbCount: 0,
+              totalMoHUAAllocation: 0,
+              totalAllocatedSum: 0,
+              activeDatasetVersion: 1,
+            }),
+          },
+        },
         { provide: ExcelService, useValue: excelService },
         { provide: DfFormJsonConfigService, useValue: { loadFields: jest.fn().mockResolvedValue([]) } },
         {
@@ -112,6 +127,26 @@ describe('DevolutionFormulaRowService', () => {
     }).compile();
 
     service = module.get(DevolutionFormulaRowService);
+  });
+
+  // ─── getRows ──────────────────────────────────────────────────────────────
+
+  describe('getRows', () => {
+    it('escapes regex metacharacters in search instead of passing the raw string to RegExp', async () => {
+      rowModel['find'] = jest.fn().mockReturnValue(q([]));
+      rowModel['countDocuments'] = jest.fn().mockReturnValue(q(0));
+
+      // An unescaped `new RegExp('Alpha(', 'i')` throws (unterminated group) — this must not.
+      await expect(
+        service.getRows(stateOid.toString(), yearOid.toString(), 1, { search: 'Alpha(' }, adminUser),
+      ).resolves.toMatchObject({ success: true });
+
+      const filter = rowModel['find'].mock.calls[0][0] as Record<string, unknown>;
+      const orClauses = filter['$or'] as Array<Record<string, unknown>>;
+      const ulbNameRegex = orClauses.find((c) => 'ulbName' in c)?.['ulbName'] as RegExp;
+      expect(ulbNameRegex).toBeInstanceOf(RegExp);
+      expect(ulbNameRegex.source).toBe('Alpha\\(');
+    });
   });
 
   // ─── getErrorSheet ────────────────────────────────────────────────────────

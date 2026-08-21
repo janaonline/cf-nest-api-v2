@@ -737,6 +737,33 @@ describe('EulbPostSubmissionUpdateService', () => {
       expect(getOrClauses(getAndConditions(findFilter)[1])).toHaveLength(2);
     });
 
+    it('escapes regex metacharacters in search so a literal match against special characters still works', async () => {
+      installFilteredRows([
+        makeRow({ rowNumber: 1, ulbName: 'Alpha (Ward 1)', electedBodyStatus: 'Not Constituted' }),
+        makeRow({ rowNumber: 2, ulbName: 'Beta City', electedBodyStatus: 'Not Constituted' }),
+      ]);
+
+      // An unescaped regex would treat "(Ward 1)" as a capture group rather than literal
+      // parentheses, so it would fail to match this row's literal "(Ward 1)" text.
+      const result = await service.getEligibleRows(
+        stateOid.toString(),
+        yearOid.toString(),
+        { search: 'Alpha (Ward 1)' },
+        adminUser,
+      );
+
+      expect(result.data!.rows.map((row) => row.rowNumber)).toEqual([1]);
+    });
+
+    it('does not throw when search contains an unbalanced regex metacharacter', async () => {
+      installFilteredRows([makeRow({ rowNumber: 1, ulbName: 'Alpha City', electedBodyStatus: 'Not Constituted' })]);
+
+      // An unescaped `new RegExp('Alpha(', 'i')` throws (unterminated group) — this must not.
+      await expect(
+        service.getEligibleRows(stateOid.toString(), yearOid.toString(), { search: 'Alpha(' }, adminUser),
+      ).resolves.toMatchObject({ success: true });
+    });
+
     it('filters Constituted rows to return only past-expiry constituted rows', async () => {
       const pastExpiry = new Date(TODAY);
       pastExpiry.setDate(pastExpiry.getDate() - 1);
