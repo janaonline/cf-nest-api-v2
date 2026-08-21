@@ -208,6 +208,43 @@ describe('UsersService', () => {
     });
   });
 
+  // ─── updateProfileContacts() ─────────────────────────────────────────────
+
+  describe('updateProfileContacts()', () => {
+    it('rejects a ULB self-update with no saveToken (same rule STATE/MoHUA already enforce)', async () => {
+      const requester = makeUlbAdmin({ _id: TARGET_USER_ID });
+      mockUserModel.exec.mockResolvedValueOnce(makeUserDoc());
+
+      await expect(
+        service.updateProfileContacts(TARGET_USER_ID, { name: 'New Name' }, requester),
+      ).rejects.toThrow(BadRequestException);
+
+      expect(mockRedisService.get).not.toHaveBeenCalled();
+    });
+
+    it('rejects a ULB self-update whose saveToken does not match what is stored in redis', async () => {
+      const requester = makeUlbAdmin({ _id: TARGET_USER_ID });
+      mockUserModel.exec.mockResolvedValueOnce(makeUserDoc());
+      mockRedisService.get.mockResolvedValueOnce('a-different-token');
+
+      await expect(
+        service.updateProfileContacts(TARGET_USER_ID, { name: 'New Name', saveToken: 'wrong-token' }, requester),
+      ).rejects.toThrow('Save token is invalid or expired. Please verify your email again.');
+    });
+
+    it('accepts a ULB self-update with a valid saveToken', async () => {
+      const requester = makeUlbAdmin({ _id: TARGET_USER_ID });
+      mockUserModel.exec
+        .mockResolvedValueOnce(makeUserDoc())
+        .mockResolvedValueOnce(makeUserDoc({ name: 'New Name' }));
+      mockRedisService.get.mockResolvedValueOnce('good-token');
+
+      await service.updateProfileContacts(TARGET_USER_ID, { name: 'New Name', saveToken: 'good-token' }, requester);
+
+      expect(mockRedisService.del).toHaveBeenCalledWith(`profile_save_token:${TARGET_USER_ID}`);
+    });
+  });
+
   // ─── softDeleteStateUser() ───────────────────────────────────────────────
 
   describe('softDeleteStateUser()', () => {

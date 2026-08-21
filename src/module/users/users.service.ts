@@ -691,8 +691,11 @@ export class UsersService {
     const isSelfUpdate = requester._id.toString() === userId;
     const isUlbScope = requester.scope === Scope.ULB;
 
-    if (isSelfUpdate && !isUlbScope) {
-      // State / MoHUA self-updates require a valid one-time save token (issued post-OTP)
+    if (isSelfUpdate) {
+      // Every self-update (ULB, STATE, or MoHUA) requires a valid one-time save token issued
+      // after OTP verification — this is the only server-side proof that OTP verification
+      // actually happened; the client-side "only called after verified" gating alone is not
+      // a security boundary.
       const { saveToken } = dto;
       if (!saveToken) throw new BadRequestException('A verified save token is required to update your profile');
       const stored = await this.redisService.get(this.saveTokenKey(userId));
