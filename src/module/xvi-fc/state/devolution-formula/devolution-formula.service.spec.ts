@@ -238,6 +238,62 @@ describe('DevolutionFormulaValidator', () => {
     expect(errors.some((e) => e.code === 'allocationMismatch')).toBe(true);
   });
 
+  it('validateAllocations accepts an exact whole-number match (inst1 + inst2 === total)', () => {
+    const row = {
+      ...baseRow(),
+      totalGrantAllocation: 141_792_453,
+      installment1Amount: 70_896_227,
+      installment2Amount: 70_896_226,
+    };
+    const errors = validator.validateRow(row, 1, 250);
+    expect(errors.some((e) => e.code === 'allocationMismatch')).toBe(false);
+  });
+
+  it('validateAllocations still rejects a real mismatch', () => {
+    const row = { ...baseRow(), totalGrantAllocation: 500_000, installment1Amount: 300_000, installment2Amount: 199_998 };
+    const errors = validator.validateRow(row, 1, 250);
+    expect(errors.some((e) => e.code === 'allocationMismatch')).toBe(true);
+  });
+
+  it('validateRow rejects a fractional totalGrantAllocation/installment1Amount/installment2Amount', () => {
+    const row = {
+      ...baseRow(),
+      totalGrantAllocation: 141_792_452.83,
+      installment1Amount: 70_896_226.415,
+      installment2Amount: 70_896_226.415,
+    };
+    const errors = validator.validateRow(row, 1, 250);
+    expect(errors.some((e) => e.field === 'totalGrantAllocation' && e.code === 'notWholeNumber')).toBe(true);
+    expect(errors.some((e) => e.field === 'installment1Amount' && e.code === 'notWholeNumber')).toBe(true);
+    expect(errors.some((e) => e.field === 'installment2Amount' && e.code === 'notWholeNumber')).toBe(true);
+  });
+
+  describe('validatePortalRowEdit', () => {
+    it('rejects a fractional totalGrantAllocation on the manual row-edit path', () => {
+      const errors = validator.validatePortalRowEdit({ totalGrantAllocation: 500_000.5 }, 1, 250);
+      expect(errors.some((e) => e.field === 'totalGrantAllocation' && e.code === 'notWholeNumber')).toBe(true);
+    });
+
+    it('rejects a fractional installment1Amount/installment2Amount on the manual row-edit path', () => {
+      const errors = validator.validatePortalRowEdit(
+        { installment1Amount: 300_000.25, installment2Amount: 199_999.75 },
+        1,
+        250,
+      );
+      expect(errors.some((e) => e.field === 'installment1Amount' && e.code === 'notWholeNumber')).toBe(true);
+      expect(errors.some((e) => e.field === 'installment2Amount' && e.code === 'notWholeNumber')).toBe(true);
+    });
+
+    it('accepts a whole-number edit with no errors', () => {
+      const errors = validator.validatePortalRowEdit(
+        { totalGrantAllocation: 500_000, installment1Amount: 300_000, installment2Amount: 200_000 },
+        1,
+        250,
+      );
+      expect(errors).toHaveLength(0);
+    });
+  });
+
   it('validateRow returns required error when ulbName is blank', () => {
     const row = { ...baseRow(), ulbName: '   ' };
     const errors = validator.validateRow(row, 1, 250);
@@ -328,6 +384,54 @@ describe('DevolutionFormulaValidator', () => {
     });
     expect(summary.validationStatus).toBe('INVALID');
     expect(summary.allocationBalanced).toBe(false);
+  });
+
+  // Every rupee of totalMoHUAAllocation must be accounted for — not "close enough." A real
+  // Maharashtra dataset (424 ULBs) summed to ₹4 off; that's real unaccounted-for government
+  // money, not immaterial rounding noise, so it must still be flagged INVALID. See
+  // devolution-formula-tolerance.helpers.ts.
+  it('buildValidationSummary marks INVALID even for a small real-world-scale gap (real Maharashtra case: 424 rows, ₹4 off) — every rupee must be accounted for', () => {
+    const summary = validator.buildValidationSummary({
+      excelRowCount: 424,
+      validRowCount: 424,
+      errorRowCount: 0,
+      missingUlbCount: 0,
+      totalMoHUAAllocation: 60_120_000_000,
+      totalAllocatedSum: 60_120_000_004,
+      activeDatasetVersion: 1,
+    });
+    expect(summary.allocationBalanced).toBe(false);
+    expect(summary.validationStatus).toBe('INVALID');
+  });
+
+  it('buildValidationSummary marks INVALID when totalAllocatedSum is off by a larger, unambiguously genuine mismatch', () => {
+    const summary = validator.buildValidationSummary({
+      excelRowCount: 424,
+      validRowCount: 424,
+      errorRowCount: 0,
+      missingUlbCount: 0,
+      totalMoHUAAllocation: 60_120_000_000,
+      totalAllocatedSum: 60_120_010_000, // off by ₹10,000
+      activeDatasetVersion: 1,
+    });
+    expect(summary.allocationBalanced).toBe(false);
+    expect(summary.validationStatus).toBe('INVALID');
+  });
+
+  // The epsilon's one remaining job: absorbing sub-paisa float-summation noise (e.g. from summing
+  // hundreds of raw, unrounded row values) without being mistaken for a forgiving tolerance.
+  it('buildValidationSummary marks VALID when totalAllocatedSum matches to within sub-paisa float noise', () => {
+    const summary = validator.buildValidationSummary({
+      excelRowCount: 424,
+      validRowCount: 424,
+      errorRowCount: 0,
+      missingUlbCount: 0,
+      totalMoHUAAllocation: 60_120_000_000,
+      totalAllocatedSum: 60_120_000_000.0005, // sub-paisa float noise, not a real gap
+      activeDatasetVersion: 1,
+    });
+    expect(summary.allocationBalanced).toBe(true);
+    expect(summary.validationStatus).toBe('VALID');
   });
 });
 
@@ -824,10 +928,10 @@ describe('DevolutionFormulaService', () => {
       expect(badge?.label).toBe('3 error(s)');
     });
 
-    it('Allocated amount badge label uses INR format with Cr. suffix', async () => {
+    it('Allocated amount badge label uses INR format, whole-Rupee, no unit suffix', async () => {
       const badges = await getBadges(mockFormInProgress);
       const badge = badges.find((b) => b.label?.startsWith('Allocated amount'));
-      expect(badge?.label).toBe('Allocated amount: ₹5,00,000 Cr.');
+      expect(badge?.label).toBe('Allocated amount: ₹5,00,000');
     });
 
     it('Allocated sum badge tone is success when allocation is balanced', async () => {
@@ -842,10 +946,29 @@ describe('DevolutionFormulaService', () => {
       expect(badge?.tone).toBe('danger');
     });
 
-    it('Remaining badge label shows formatted difference with Cr. suffix', async () => {
+    it('Remaining badge label shows formatted difference, whole-Rupee, no unit suffix', async () => {
       const badges = await getBadges(docUnbalanced);
       const badge = badges.find((b) => b.label?.startsWith('Remaining'));
-      expect(badge?.label).toBe('Remaining: ₹1,00,000 Cr.');
+      expect(badge?.label).toBe('Remaining: ₹1,00,000');
+    });
+
+    // A real-world-scale gap (424-ULB Maharashtra shape, ₹4 off) must show as unbalanced, not be
+    // reconciled away — every rupee of the MoHUA allocation must be accounted for. See
+    // devolution-formula-tolerance.helpers.ts.
+    it('Allocated sum / Remaining badges show danger tone for a real ₹4-off Maharashtra-shaped dataset, not success', async () => {
+      const docMaharashtraShapedGap = {
+        ...mockFormInProgress,
+        excelRowCount: 424,
+        totalMoHUAAllocation: 60_120_000_000,
+        totalAllocatedSum: 60_120_000_004,
+      };
+      const badges = await getBadges(docMaharashtraShapedGap);
+      const allocatedSum = badges.find((b) => b.label?.startsWith('Allocated sum'));
+      expect(allocatedSum?.label).toBe('Allocated sum: ₹60,12,00,00,004');
+      expect(allocatedSum?.tone).toBe('danger');
+      const remaining = badges.find((b) => b.label?.startsWith('Remaining'));
+      expect(remaining?.label).toBe('Remaining: ₹-4');
+      expect(remaining?.tone).toBe('danger');
     });
 
     it('All valid badge is visible when validationStatus is VALID', async () => {

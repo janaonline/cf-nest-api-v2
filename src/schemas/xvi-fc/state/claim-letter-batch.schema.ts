@@ -14,11 +14,10 @@ export type ClaimLetterAssemblyStatus = 'BUILDING' | 'READY';
 export type ClaimLetterBatchDocument = HydratedDocument<ClaimLetterBatch>;
 
 /**
- * All monetary fields are Crore-denominated decimal floats, matching Devolution's own storage
+ * All monetary fields are whole Rupees (no decimals), matching Devolution's own storage
  * convention (and every other xvi-fc form) — no unit conversion at any boundary, stored and
- * returned as-is. Comparisons/sums that must be exact (the ±10% variance boundary,
- * financial-totals cross-checks) scale to an integer internally, for computation only — see
- * claim-letter-financial.helpers.ts.
+ * returned as-is. See claim-letter-financial.helpers.ts for the exact-integer comparison/sum
+ * helpers used on these fields (the ±10% variance boundary, financial-totals cross-checks).
  */
 @Schema({ _id: false })
 export class ClaimLetterFinancialSummary {

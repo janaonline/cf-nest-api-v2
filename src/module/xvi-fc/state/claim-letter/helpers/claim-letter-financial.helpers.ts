@@ -1,22 +1,13 @@
 import type { ClaimLetterFinancialSummaryDisplay } from '../types/claim-letter.types';
 
 /**
- * Devolution Formula — and every other xvi-fc form — stores money as a Crore-denominated decimal
- * float, and so does Claim Letter: no paise/rupee conversion happens at the storage boundary,
- * confirmed against devolution-formula.constants.ts's Excel column labels (e.g. "Installment 2
- * Amount (Cr.)"). The API response is a direct passthrough of the stored value; the UI just
- * appends "Cr." to it.
- *
- * Plain float summation/subtraction on these values can still drift by a tiny epsilon across many
- * operations, so anywhere that must be exact — the ±10% variance boundary, financial-totals
- * cross-checks — scales to an integer internally before comparing. This scaling is purely a
- * computation aid: it is never persisted, never returned, and never exposed outside this file.
+ * Devolution Formula — and every other xvi-fc form — stores money as whole Rupees only (no
+ * decimals), and so does Claim Letter: no unit conversion at the storage boundary. Both
+ * `allocatedAmount` and `claimedAmount` are always integers, so plain arithmetic here is exact
+ * (JS sums/differences of integers under 2^53 never drift) — no scaling needed, except in
+ * `isClaimedAmountWithinVariance`, where a percentage boundary still requires care (see its own
+ * comment).
  */
-const EXACT_COMPARISON_SCALE = 1_000_000_000; // paise-per-crore, reused here only for precision
-
-function scaleForExactMath(amountInCrore: number): number {
-  return Math.round(amountInCrore * EXACT_COMPARISON_SCALE);
-}
 
 /**
  * Fallback defaults, used only when a design year's form-json document has no
@@ -32,10 +23,11 @@ export const CLAIM_LETTER_VARIANCE_LOWER_META_KEY = 'varianceLowerPercent';
 export const CLAIM_LETTER_VARIANCE_UPPER_META_KEY = 'varianceUpperPercent';
 
 /**
- * Claimed-vs-allocated variance check, done as exact integer arithmetic (both sides scaled the
- * same way before comparing) so the boundary is never subject to floating-point rounding.
- * `lowerPercent`/`upperPercent` are resolved by the caller (ClaimLetterFormJsonService), never
- * hardcoded here.
+ * Claimed-vs-allocated variance check. `allocatedAmount * percent / 100` would introduce a float
+ * division (a percent of a whole number isn't generally whole itself), so this cross-multiplies
+ * instead (`claimedAmount * 100` vs. `allocatedAmount * percent`) — exact integer comparison, no
+ * division, no epsilon. Requires `lowerPercent`/`upperPercent` to themselves be whole numbers.
+ * Resolved by the caller (ClaimLetterFormJsonService), never hardcoded here.
  */
 export function isClaimedAmountWithinVariance(
   allocatedAmount: number,
@@ -43,14 +35,11 @@ export function isClaimedAmountWithinVariance(
   lowerPercent: number,
   upperPercent: number,
 ): boolean {
-  const allocatedScaled = scaleForExactMath(allocatedAmount);
-  const claimedScaled = scaleForExactMath(claimedAmount);
-  return claimedScaled * 100 >= allocatedScaled * lowerPercent && claimedScaled * 100 <= allocatedScaled * upperPercent;
+  return claimedAmount * 100 >= allocatedAmount * lowerPercent && claimedAmount * 100 <= allocatedAmount * upperPercent;
 }
 
-/** Exact (scaled-integer) subtraction — avoids float drift on the stored difference amount. */
 export function computeDifferenceAmount(allocatedAmount: number, claimedAmount: number): number {
-  return (scaleForExactMath(claimedAmount) - scaleForExactMath(allocatedAmount)) / EXACT_COMPARISON_SCALE;
+  return claimedAmount - allocatedAmount;
 }
 
 /**
@@ -63,19 +52,14 @@ export function computeDifferencePercentageBasisPoints(allocatedAmount: number, 
   return Math.round(((claimedAmount - allocatedAmount) * 10000) / allocatedAmount);
 }
 
-/** Exact (scaled-integer) summation — avoids cumulative float drift across many additions, so a
- *  total computed this way stays bit-for-bit reproducible against the same inputs summed again
- *  elsewhere (e.g. the create-time total vs. the verify-time re-sum over persisted children). */
+/** Plain summation — every amount is a whole Rupee, so this stays bit-for-bit reproducible against
+ *  the same inputs summed again elsewhere (e.g. create-time total vs. verify-time re-sum). */
 export function sumAmountsExactly(amounts: readonly number[]): number {
-  const scaledSum = amounts.reduce((sum, amount) => sum + scaleForExactMath(amount), 0);
-  return scaledSum / EXACT_COMPARISON_SCALE;
+  return amounts.reduce((sum, amount) => sum + amount, 0);
 }
 
-/** Exact equality on two Crore amounts — scales both sides the same way `sumAmountsExactly` does,
- *  so a sum produced by that helper always compares equal to an independently-stored total that's
- *  supposed to match it. */
 export function amountsAreEqual(a: number, b: number): boolean {
-  return scaleForExactMath(a) === scaleForExactMath(b);
+  return a === b;
 }
 
 /** File base name format: `CF_<statecode>_<designyear>_<installmentno>`. */

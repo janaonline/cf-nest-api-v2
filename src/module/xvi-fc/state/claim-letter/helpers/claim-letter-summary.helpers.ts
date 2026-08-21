@@ -31,7 +31,7 @@ export function mapClaimLetterBatchDocToSummary(doc: Record<string, unknown>, us
     ulbCount: doc['ulbCount'] as number,
     isAbandoned,
     hasSignedFile: !!doc['signedClaimFile'],
-    // Already Crore-denominated in storage — a direct passthrough, no unit conversion needed.
+    // Already whole Rupees (no decimals) in storage — a direct passthrough, no unit conversion needed.
     // `totalClaimInProgress`/`totalClaimInDraft`/`availableToClaim` are defaulted defensively:
     // reads here go through `.lean()`, which skips Mongoose schema defaults, so a batch saved
     // before these fields existed would otherwise come back with them `undefined` (not `0`) until

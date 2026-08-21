@@ -59,6 +59,9 @@ export class DevolutionFormulaRow {
   @Prop({ type: String, default: '' })
   ulbName!: string;
 
+  // Whole Rupees only — no decimals. Enforced by @IsInt() on UpdateRowDevolutionFormulaDto and by
+  // DevolutionFormulaValidator's isWholeNumber check on the Excel-upload path. See
+  // devolution-formula-tolerance.helpers.ts for the reconciliation checks this feeds.
   @Prop({ type: Number, required: true })
   totalGrantAllocation!: number;
 
