@@ -76,6 +76,7 @@ import {
   canStateReviewAnnualAccount,
   canStateUndoSectionApproval,
   canUlbReuploadDocument,
+  isAwaitingManualReviewDecision,
 } from './annual-account-status-access.util';
 
 /** 'auditedData' | 'unauditedData' section keys as they appear in DTOs/query params, mapped to
@@ -295,6 +296,7 @@ export class AnnualAccountsService implements OnModuleInit {
         userAgent,
       },
       uploadedAt: now,
+      retryValidationCount: 0,
     };
 
     const initialProcessingStatus = isNoOcrDoc ? 'PASSED' : 'PROCESSING';
@@ -395,6 +397,13 @@ export class AnnualAccountsService implements OnModuleInit {
     const sectionDoc = await this.lookupSectionDoc(anchor, historyDoc.section as AnnualAccountSectionKey);
     if (!sectionDoc) throw new NotFoundException('Section not found');
 
+    const docSlot = (sectionDoc.documents ?? []).find((d: any) => d.docId === historyDoc.docId);
+    if (isAwaitingManualReviewDecision(docSlot?.currentUpload?.ocrInfo?.isManualReviewRequested, docSlot?.manualReviewDecision)) {
+      throw new ForbiddenException(
+        'This document is awaiting manual review and cannot be retried until an ADMIN makes a decision.',
+      );
+    }
+
     await Promise.all([
       this.uploadHistoryModel.updateOne(
         { uploadId },
@@ -439,6 +448,7 @@ export class AnnualAccountsService implements OnModuleInit {
             'documents.$.currentUpload.ocrInfo.isManualReviewRequested': false,
             'documents.$.currentUpload.ocrInfo.manualReviewRequestedAt': null,
           },
+          $inc: { 'documents.$.currentUpload.retryValidationCount': 1 },
         },
       ),
     ]);
@@ -730,6 +740,7 @@ export class AnnualAccountsService implements OnModuleInit {
                 ocrInfo: d.currentUpload.ocrInfo,
                 userInfo: d.currentUpload.userInfo,
                 uploadedAt: d.currentUpload.uploadedAt,
+                retryValidationCount: d.currentUpload.retryValidationCount ?? 0,
               }
             : null,
           stateDecision: d.stateDecision
@@ -795,6 +806,12 @@ export class AnnualAccountsService implements OnModuleInit {
 
     if (!canUlbReuploadDocument(sectionDoc.form_status_id, docSlot.stateDecision)) {
       throw new ForbiddenException('This document has already been approved and cannot be removed.');
+    }
+
+    if (isAwaitingManualReviewDecision(docSlot.currentUpload?.ocrInfo?.isManualReviewRequested, docSlot.manualReviewDecision)) {
+      throw new ForbiddenException(
+        'This document is awaiting manual review and cannot be removed until an ADMIN makes a decision.',
+      );
     }
 
     await this.annualAccountModel.updateOne(
@@ -1939,6 +1956,12 @@ export class AnnualAccountsService implements OnModuleInit {
     const docSlot = sectionDoc.documents.find((d) => d.docId === docId);
     if (!canUlbReuploadDocument(sectionDoc.form_status_id, docSlot?.stateDecision)) {
       throw new ForbiddenException('This document has already been approved and cannot be re-uploaded.');
+    }
+
+    if (isAwaitingManualReviewDecision(docSlot?.currentUpload?.ocrInfo?.isManualReviewRequested, docSlot?.manualReviewDecision)) {
+      throw new ForbiddenException(
+        'This document is awaiting manual review and cannot be re-uploaded until an ADMIN makes a decision.',
+      );
     }
   }
 
