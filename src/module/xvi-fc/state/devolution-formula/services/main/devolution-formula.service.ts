@@ -669,6 +669,18 @@ export class DevolutionFormulaService {
     const missingUlbCount = doc?.missingUlbCount ?? 0;
     const duplicateUlbCount = doc?.duplicateUlbCount ?? 0;
 
+    /**
+     * Mirrors all warning/danger badges below. newUlbCount/duplicateUlbCount aren't part of
+     * validationStatus, so warnings could exist while status is VALID. Keep Revalidate Excel
+     * visible so users can re-run validation after fixing them.
+     * */
+    const hasWarningOrDangerBadge =
+      errorRowCount > 0 ||
+      missingUlbCount > 0 ||
+      newUlbCount > 0 ||
+      duplicateUlbCount > 0 ||
+      (hasDataset && !allocationBalanced);
+
     return [
       {
         type: 'actions',
@@ -705,7 +717,7 @@ export class DevolutionFormulaService {
             label: 'Revalidate Excel',
             icon: 'bi bi-arrow-repeat',
             tone: 'primary' as const,
-            visible: canEdit && hasUploadedExcel && validationStatus !== 'VALID',
+            visible: canEdit && hasUploadedExcel && (validationStatus !== 'VALID' || hasWarningOrDangerBadge),
           },
           {
             id: DF_ACTION_REGISTER_ULB,

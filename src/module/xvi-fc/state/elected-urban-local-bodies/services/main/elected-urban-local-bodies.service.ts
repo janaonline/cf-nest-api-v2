@@ -462,8 +462,19 @@ export class ElectedUrbanLocalBodiesService {
     const [activeUlbCount, existing] = await Promise.all([
       this.ulbModel.countDocuments(eligibleUlbFilter),
       this.model
-        .findOne(filter, { _id: 1, currentFormStatus: 1, electedBodyExcelFile: 1, signedElectedbodyFile: 1 })
-        .lean<Pick<EulbFormLeanDoc, '_id' | 'currentFormStatus' | 'electedBodyExcelFile' | 'signedElectedbodyFile'>>()
+        .findOne(filter, {
+          _id: 1,
+          currentFormStatus: 1,
+          electedBodyExcelFile: 1,
+          signedElectedbodyFile: 1,
+          validationStatus: 1,
+        })
+        .lean<
+          Pick<
+            EulbFormLeanDoc,
+            '_id' | 'currentFormStatus' | 'electedBodyExcelFile' | 'signedElectedbodyFile' | 'validationStatus'
+          >
+        >()
         .exec(),
     ]);
 
@@ -499,11 +510,21 @@ export class ElectedUrbanLocalBodiesService {
       normalizedSignedFile = file;
     }
 
+    /**
+     * A new/replaced/removed electedBodyExcelFile invalidates the previous validationStatus.
+     * normalizedExcelFile is undefined only when the file is unchanged, matching the persistence logic below.
+     */
+    const effectiveValidationStatus: EulbValidationStatus =
+      normalizedExcelFile !== undefined ? 'NOT_VALIDATED' : (existing?.validationStatus ?? 'NOT_VALIDATED');
+
     const formData: FormData = {
       ulbCount: activeUlbCount,
       electedBodyExcelFile: normalizedExcelFile,
       signedElectedbodyFile: normalizedSignedFile,
       checkboxConfirmation: dto.data.checkboxConfirmation,
+      // Synthetic key for signedElectedbodyFile.visibleWhen to check Excel validity, not just presence.
+      // See dynamic-form-validation.service.ts's evaluateCondition.
+      electedBodyExcelValidationStatus: effectiveValidationStatus,
     };
 
     const result = this.validator.validateDraftAndBuildPayload(mainFormFields, formData);
@@ -514,7 +535,12 @@ export class ElectedUrbanLocalBodiesService {
       updatedBy: userOid,
       ulbCount: activeUlbCount,
     };
-    if (normalizedExcelFile !== undefined) fieldUpdates['electedBodyExcelFile'] = normalizedExcelFile;
+    if (normalizedExcelFile !== undefined) {
+      fieldUpdates['electedBodyExcelFile'] = normalizedExcelFile;
+      // Reset the stale validationStatus from the previous file — mirrors deleteUploadedExcel's
+      // reset on delete (services/row/elected-urban-local-bodies-row.service.ts).
+      fieldUpdates['validationStatus'] = effectiveValidationStatus;
+    }
     if (normalizedSignedFile !== undefined) fieldUpdates['signedElectedbodyFile'] = normalizedSignedFile;
     if (result.sanitizedPayload['checkboxConfirmation'] !== undefined)
       fieldUpdates['checkboxConfirmation'] = result.sanitizedPayload['checkboxConfirmation'];
@@ -644,6 +670,9 @@ export class ElectedUrbanLocalBodiesService {
       signedElectedbodyFile:
         normalizedSignedFile !== undefined ? normalizedSignedFile : existing?.signedElectedbodyFile,
       checkboxConfirmation: dto.data.checkboxConfirmation,
+      // Same synthetic key as saveDraft — existing.validationStatus is already loaded above (it's
+      // exactly what the hard-gate check below reads too), so this needs no extra query.
+      electedBodyExcelValidationStatus: existing?.validationStatus ?? 'NOT_VALIDATED',
     };
     const validation = this.validator.validateFinalSubmitAndBuildPayload(mainFormFields, formData);
     if (!validation.isValid) throwXviFcValidationError(validation.errors);

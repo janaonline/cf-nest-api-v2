@@ -1117,6 +1117,81 @@ describe('DevolutionFormulaService', () => {
     });
   });
 
+  // ─── excelFile supportingContent — Revalidate Excel visibility ─────────────
+  // newUlbCount/duplicateUlbCount aren't part of the persisted validationStatus formula (see
+  // devolution-formula-excel.service.ts), so a warning badge can be showing even when
+  // validationStatus already reads 'VALID' — Revalidate Excel must still be offered in that case.
+
+  describe('excelFile supportingContent — Revalidate Excel visibility', () => {
+    const uploadedExcel = { originalName: 'test.xlsx', path: 'state/test.xlsx' };
+
+    async function getRevalidateAction(doc: object) {
+      mockFormModel.findOne.mockReturnValue(q(doc));
+      mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
+      const result = await service.getForm(stateOid.toString(), YEAR_ID, 1, adminUser);
+      const data = result.data as { questions: HydratedFieldConfig[] };
+      const fileQ = data.questions.find((q) => q.key === 'excelFile');
+      const actions = fileQ?.supportingContent?.[0]?.actions ?? [];
+      return actions.find((a) => a.id === 'revalidate-excel');
+    }
+
+    it('is visible when validationStatus is INVALID (baseline)', async () => {
+      const action = await getRevalidateAction({
+        ...mockFormInProgress,
+        excelFile: uploadedExcel,
+        errorRowCount: 3,
+        validationStatus: 'INVALID' as const,
+      });
+      expect(action?.visible).toBe(true);
+    });
+
+    it('is not visible when validationStatus is VALID and every badge is clean', async () => {
+      const action = await getRevalidateAction({ ...mockFormInProgress, excelFile: uploadedExcel });
+      expect(action?.visible).toBe(false);
+    });
+
+    it('is visible when validationStatus is VALID but newUlbCount > 0 (new-ULB warning badge showing)', async () => {
+      const action = await getRevalidateAction({
+        ...mockFormInProgress,
+        excelFile: uploadedExcel,
+        newUlbCount: 2,
+      });
+      expect(action?.visible).toBe(true);
+    });
+
+    it('is visible when validationStatus is VALID but duplicateUlbCount > 0 (duplicate-ULB warning badge showing)', async () => {
+      const action = await getRevalidateAction({
+        ...mockFormInProgress,
+        excelFile: uploadedExcel,
+        duplicateUlbCount: 1,
+      });
+      expect(action?.visible).toBe(true);
+    });
+
+    it('is visible when validationStatus is VALID but missingUlbCount > 0 (missing-ULB warning badge showing)', async () => {
+      const action = await getRevalidateAction({
+        ...mockFormInProgress,
+        excelFile: uploadedExcel,
+        missingUlbCount: 3,
+      });
+      expect(action?.visible).toBe(true);
+    });
+
+    it('is visible when validationStatus is VALID but the allocation is unbalanced (danger badge showing)', async () => {
+      const action = await getRevalidateAction({
+        ...mockFormInProgress,
+        excelFile: uploadedExcel,
+        totalAllocatedSum: 400_000,
+      });
+      expect(action?.visible).toBe(true);
+    });
+
+    it('is not visible when no excel has been uploaded, even with a warning condition', async () => {
+      const action = await getRevalidateAction({ ...mockFormInProgress, newUlbCount: 2 });
+      expect(action?.visible).toBe(false);
+    });
+  });
+
   // ─── excelFile supportingContent — Register ULB action (Phase 5) ──────────
 
   describe('excelFile supportingContent — Register ULB action', () => {

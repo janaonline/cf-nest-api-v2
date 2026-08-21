@@ -1286,6 +1286,123 @@ describe('ElectedUrbanLocalBodiesService', () => {
         ),
       ).resolves.toBeDefined();
     });
+
+    // ── validationStatus staleness fix + electedBodyExcelValidationStatus threading ──────────
+
+    it('resets validationStatus to NOT_VALIDATED when a new electedBodyExcelFile is submitted, even if the previous status was VALID', async () => {
+      mockFormModel.findOne.mockReturnValueOnce(
+        q({
+          _id: formOid,
+          currentFormStatus: FORM_STATUS.IN_PROGRESS,
+          validationStatus: 'VALID',
+          electedBodyExcelFile: { originalName: 'old.xlsx', path: 'state/old.xlsx' },
+        }),
+      );
+      mockFormModel.findOneAndUpdate.mockReturnValueOnce(q({ _id: formOid }));
+
+      await service.saveDraft(
+        {
+          stateId: stateOid.toString(),
+          yearId: yearOid.toString(),
+          data: {
+            electedBodyExcelFile: {
+              originalName: 'new.xlsx',
+              path: 'state/new.xlsx',
+              mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+              sizeKb: 5,
+            },
+          },
+        },
+        adminUser,
+        '',
+        '',
+      );
+
+      const updateArg = (mockFormModel.findOneAndUpdate.mock.calls as unknown[][])[0][1] as {
+        $set: Record<string, unknown>;
+      };
+      expect(updateArg.$set['validationStatus']).toBe('NOT_VALIDATED');
+    });
+
+    it('leaves validationStatus untouched when electedBodyExcelFile is omitted from the draft payload', async () => {
+      mockFormModel.findOne.mockReturnValueOnce(
+        q({
+          _id: formOid,
+          currentFormStatus: FORM_STATUS.IN_PROGRESS,
+          validationStatus: 'VALID',
+          electedBodyExcelFile: { originalName: 'old.xlsx', path: 'state/old.xlsx' },
+        }),
+      );
+      mockFormModel.findOneAndUpdate.mockReturnValueOnce(q({ _id: formOid }));
+
+      await service.saveDraft(
+        { stateId: stateOid.toString(), yearId: yearOid.toString(), data: { checkboxConfirmation: true } },
+        adminUser,
+        '',
+        '',
+      );
+
+      const updateArg = (mockFormModel.findOneAndUpdate.mock.calls as unknown[][])[0][1] as {
+        $set: Record<string, unknown>;
+      };
+      expect(Object.prototype.hasOwnProperty.call(updateArg.$set, 'validationStatus')).toBe(false);
+    });
+
+    it("threads electedBodyExcelValidationStatus into the validator's formData as NOT_VALIDATED when a new file is submitted", async () => {
+      mockFormModel.findOne.mockReturnValueOnce(
+        q({
+          _id: formOid,
+          currentFormStatus: FORM_STATUS.IN_PROGRESS,
+          validationStatus: 'VALID',
+          electedBodyExcelFile: { originalName: 'old.xlsx', path: 'state/old.xlsx' },
+        }),
+      );
+      mockFormModel.findOneAndUpdate.mockReturnValueOnce(q({ _id: formOid }));
+
+      await service.saveDraft(
+        {
+          stateId: stateOid.toString(),
+          yearId: yearOid.toString(),
+          data: {
+            electedBodyExcelFile: {
+              originalName: 'new.xlsx',
+              path: 'state/new.xlsx',
+              mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+              sizeKb: 5,
+            },
+          },
+        },
+        adminUser,
+        '',
+        '',
+      );
+
+      const formDataArg = (mockValidator.validateDraftAndBuildPayload.mock.calls as unknown[][])[0][1] as Record<
+        string,
+        unknown
+      >;
+      expect(formDataArg['electedBodyExcelValidationStatus']).toBe('NOT_VALIDATED');
+    });
+
+    it("threads the existing validationStatus into the validator's formData when the Excel file is unchanged", async () => {
+      mockFormModel.findOne.mockReturnValueOnce(
+        q({ _id: formOid, currentFormStatus: FORM_STATUS.IN_PROGRESS, validationStatus: 'VALID' }),
+      );
+      mockFormModel.findOneAndUpdate.mockReturnValueOnce(q({ _id: formOid }));
+
+      await service.saveDraft(
+        { stateId: stateOid.toString(), yearId: yearOid.toString(), data: { checkboxConfirmation: true } },
+        adminUser,
+        '',
+        '',
+      );
+
+      const formDataArg = (mockValidator.validateDraftAndBuildPayload.mock.calls as unknown[][])[0][1] as Record<
+        string,
+        unknown
+      >;
+      expect(formDataArg['electedBodyExcelValidationStatus']).toBe('VALID');
+    });
   });
 
   // ─── finalSubmit ─────────────────────────────────────────────────────────────
@@ -1426,6 +1543,16 @@ describe('ElectedUrbanLocalBodiesService', () => {
         $set: Record<string, unknown>;
       };
       expect((updateArg.$set['signedElectedbodyFile'] as { originalName?: string }).originalName).toBe('signed.pdf');
+    });
+
+    it("threads the persisted validationStatus into the validator's formData as electedBodyExcelValidationStatus", async () => {
+      await service.finalSubmit(baseDto, adminUser, '', '');
+
+      const formDataArg = (mockValidator.validateFinalSubmitAndBuildPayload.mock.calls as unknown[][])[0][1] as Record<
+        string,
+        unknown
+      >;
+      expect(formDataArg['electedBodyExcelValidationStatus']).toBe('VALID');
     });
 
     it('rejects final submit when signedElectedbodyFile is missing (required field validator fires)', async () => {

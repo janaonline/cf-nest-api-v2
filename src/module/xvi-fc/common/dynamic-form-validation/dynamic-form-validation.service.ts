@@ -113,9 +113,29 @@ export class DynamicFormValidationService {
       notEquals: () => fieldValue !== value,
       in: () => Array.isArray(value) && value.includes(fieldValue as string),
       notIn: () => Array.isArray(value) && !value.includes(fieldValue as string),
+      isNotEmpty: () => this.isValuePresent(fieldValue),
+      isEmpty: () => !this.isValuePresent(fieldValue),
     };
 
     return OPS[operator]?.() ?? false;
+  }
+
+  /**
+   * Unary presence check for isNotEmpty/isEmpty. Unlike isEmptyValue, this
+   * duck-types file objects so visibleWhen can detect whether a file was uploaded.
+   */
+  private isValuePresent(value: unknown): boolean {
+    if (value === undefined || value === null) return false;
+    if (typeof value === 'string') return value.trim() !== '';
+    if (Array.isArray(value)) return value.length > 0;
+    if (typeof value === 'object') {
+      const obj = value as Record<string, unknown>;
+      if (['fileUrl', 'path', 'fileName', 'originalName'].some((k) => k in obj)) {
+        return Boolean(obj['fileUrl'] ?? obj['path']) || Boolean(obj['fileName'] ?? obj['originalName']);
+      }
+      return Object.keys(obj).length > 0;
+    }
+    return true; // numbers/booleans (incl. 0/false) are explicit present values
   }
 
   private isVisible(field: FieldConfig, data: FormData): boolean {
