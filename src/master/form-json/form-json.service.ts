@@ -1,5 +1,4 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model, Types } from 'mongoose';
 import { FormJson, FormJsonDocument } from '../../schemas/form-json.schema';
@@ -7,34 +6,30 @@ import type { IFormJson } from './interfaces/form-json.interface';
 import type { CreateFormJsonDto } from './dto/create-form-json.dto';
 import type { UpdateFormJsonDto } from './dto/update-form-json.dto';
 import type { QueryFormJsonDto } from './dto/query-form-json.dto';
-import { RedisService } from 'src/core/services/redis/redis.service';
+import { NamespacedCacheService } from 'src/core/services/redis/namespaced-cache.service';
+
+const CACHE_NAMESPACE = 'formJson';
 
 @Injectable()
 export class FormJsonService {
-  /** Namespaces cache keys per environment; dev and stg share the same Redis instance. */
-  private readonly env: string;
-
   constructor(
     @InjectModel(FormJson.name)
     private readonly model: Model<FormJsonDocument>,
-    private readonly redis: RedisService,
-    private readonly config: ConfigService,
-  ) {
-    this.env = this.config.get<string>('NODE_ENV') ?? 'production';
-  }
+    private readonly cache: NamespacedCacheService,
+  ) {}
 
   private getFormJsonCacheKey(designYearId: string, formId: number): string {
-    return `formJson:${this.env}:${designYearId}:${formId}`;
+    return this.cache.buildKey(CACHE_NAMESPACE, designYearId, formId);
   }
 
   /** Same shape as getFormJsonCacheKey, but `*` for either part clearCache leaves unspecified. */
   private getFormJsonCachePattern(designYearId?: string, formId?: number): string {
-    return `formJson:${this.env}:${designYearId ?? '*'}:${formId ?? '*'}`;
+    return this.cache.buildPattern(CACHE_NAMESPACE, designYearId, formId);
   }
 
   /** Fixed literal suffix instead of a formId, so this can never collide with a per-form cache key. */
   private getClaimEligibilitySourcesCacheKey(designYearId: string): string {
-    return `formJson:${this.env}:${designYearId}:claimEligibilitySources`;
+    return this.cache.buildKey(CACHE_NAMESPACE, designYearId, 'claimEligibilitySources');
   }
 
   /**
@@ -44,8 +39,8 @@ export class FormJsonService {
    */
   async findActiveByDesignYearAndFormId(designYearId: string, formId: number): Promise<IFormJson> {
     const key = this.getFormJsonCacheKey(designYearId, formId);
-    const cached = await this.redis.get(key);
-    if (cached !== null) return JSON.parse(cached) as IFormJson;
+    const cached = await this.cache.get<IFormJson>(key);
+    if (cached !== null) return cached;
 
     const doc = (await this.model
       .findOne({ design_year: new Types.ObjectId(designYearId), formId, isActive: true })
@@ -53,7 +48,7 @@ export class FormJsonService {
       .exec()) as unknown as IFormJson | null;
     if (!doc) throw new NotFoundException(`FormJson for year ${designYearId} and formId ${formId} not found`);
 
-    await this.redis.set(key, JSON.stringify(doc));
+    await this.cache.set(key, doc);
     return doc;
   }
 
@@ -76,8 +71,8 @@ export class FormJsonService {
    */
   async findEnabledClaimEligibilitySources(designYearId: string): Promise<IFormJson[]> {
     const key = this.getClaimEligibilitySourcesCacheKey(designYearId);
-    const cached = await this.redis.get(key);
-    if (cached !== null) return JSON.parse(cached) as IFormJson[];
+    const cached = await this.cache.get<IFormJson[]>(key);
+    if (cached !== null) return cached;
 
     const result = (await this.model
       .find({
@@ -87,7 +82,7 @@ export class FormJsonService {
       })
       .lean()
       .exec()) as unknown as IFormJson[];
-    await this.redis.set(key, JSON.stringify(result));
+    await this.cache.set(key, result);
     return result;
   }
 
@@ -123,13 +118,13 @@ export class FormJsonService {
 
     if (doc.formId !== undefined && doc.isActive) {
       const key = this.getFormJsonCacheKey(String(doc.design_year), doc.formId);
-      await this.redis.set(key, JSON.stringify(doc));
+      await this.cache.set(key, doc);
     }
 
     // A new document can add itself to (or, if claimEligibility.enabled, change) that design
     // year's enabled-sources list — the cached list from `findEnabledClaimEligibilitySources` is
     // now stale and must be dropped so the next read repopulates it.
-    await this.redis.del(this.getClaimEligibilitySourcesCacheKey(String(doc.design_year)));
+    await this.cache.del(this.getClaimEligibilitySourcesCacheKey(String(doc.design_year)));
 
     return doc;
   }
@@ -158,23 +153,23 @@ export class FormJsonService {
     if (!updated) throw new NotFoundException(`FormJson ${id} not found`);
 
     if (existing?.formId !== undefined) {
-      await this.redis.del(this.getFormJsonCacheKey(String(existing.design_year), existing.formId));
+      await this.cache.del(this.getFormJsonCacheKey(String(existing.design_year), existing.formId));
     }
     if (updated.formId !== undefined) {
       const newKey = this.getFormJsonCacheKey(String(updated.design_year), updated.formId);
       const oldKey =
         existing?.formId !== undefined ? this.getFormJsonCacheKey(String(existing.design_year), existing.formId) : null;
       if (newKey !== oldKey) {
-        await this.redis.del(newKey);
+        await this.cache.del(newKey);
       }
     }
 
     // `claimEligibility`, `isActive`, or `design_year` may have changed — any of those can change
     // whether this document belongs in either design year's enabled-sources list, so both the old
     // and new year's cached list (if different) must be dropped.
-    await this.redis.del(this.getClaimEligibilitySourcesCacheKey(String(updated.design_year)));
+    await this.cache.del(this.getClaimEligibilitySourcesCacheKey(String(updated.design_year)));
     if (existing && String(existing.design_year) !== String(updated.design_year)) {
-      await this.redis.del(this.getClaimEligibilitySourcesCacheKey(String(existing.design_year)));
+      await this.cache.del(this.getClaimEligibilitySourcesCacheKey(String(existing.design_year)));
     }
 
     return updated;
@@ -187,7 +182,7 @@ export class FormJsonService {
    * returns the number of keys actually deleted so a caller can tell a real clear from a no-op.
    */
   async clearCache(designYearId?: string, formId?: number): Promise<number> {
-    return this.redis.delByPattern(this.getFormJsonCachePattern(designYearId, formId));
+    return this.cache.delByPattern(this.getFormJsonCachePattern(designYearId, formId));
   }
 
   /**
@@ -203,11 +198,11 @@ export class FormJsonService {
     if (!existing) throw new NotFoundException(`FormJson ${id} not found`);
 
     if (existing.formId !== undefined) {
-      await this.redis.del(this.getFormJsonCacheKey(String(existing.design_year), existing.formId));
+      await this.cache.del(this.getFormJsonCacheKey(String(existing.design_year), existing.formId));
     }
 
     // Soft-deleting (isActive:false) removes this document from its design year's enabled-sources
     // list — drop the cached list so the next read reflects that.
-    await this.redis.del(this.getClaimEligibilitySourcesCacheKey(String(existing.design_year)));
+    await this.cache.del(this.getClaimEligibilitySourcesCacheKey(String(existing.design_year)));
   }
 }
