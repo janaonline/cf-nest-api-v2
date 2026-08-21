@@ -8,7 +8,6 @@ import { GrantAllocation } from '../../schemas/xvi-fc/grant-allocation.schema';
 import { Year } from '../../schemas/year.schema';
 import { Ulb } from '../../schemas/ulb.schema';
 import { State } from '../../schemas/state.schema';
-import { SideMenu } from '../../schemas/side-menu.schema';
 import {
   XviFcAnnualAccount,
   AnnualAccountFormStatus,
@@ -20,6 +19,7 @@ import { SlbForm } from '../../schemas/xvi-fc/ulb/slb-form.schema';
 import { XviFcCacheService, XVIFC_CACHE_KEY_PREFIX } from './cache/xvi-fc-cache.service';
 import { FormJsonService } from '../../master/form-json/form-json.service';
 import { UlbEligibilityService } from '../ulb-eligibility/ulb-eligibility.service';
+import { SideMenuService } from './side-menu/side-menu.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 
@@ -36,7 +36,6 @@ describe('XviFcService', () => {
   let mockYearModel: { find: jest.Mock };
   let mockUlbModel: { findById: jest.Mock };
   let mockStateModel: { findById: jest.Mock };
-  let mockSideMenuModel: { find: jest.Mock };
   let mockAnnualAccountModel: { find: jest.Mock };
   let mockDisclosureModel: { findOne: jest.Mock };
   let mockBankAccountModel: { findOne: jest.Mock };
@@ -44,6 +43,7 @@ describe('XviFcService', () => {
   let mockCacheService: { deleteByPattern: jest.Mock };
   let mockFormJsonService: { clearCache: jest.Mock };
   let mockUlbEligibilityService: { getIneligibleUlbTypeIds: jest.Mock };
+  let mockSideMenuService: { getSideMenu: jest.Mock; clearCache: jest.Mock };
 
   function q<T>(value: T) {
     return {
@@ -62,7 +62,6 @@ describe('XviFcService', () => {
     mockYearModel = { find: jest.fn().mockReturnValue(q([])) };
     mockUlbModel = { findById: jest.fn().mockReturnValue(q(null)) };
     mockStateModel = { findById: jest.fn().mockReturnValue(q(null)) };
-    mockSideMenuModel = { find: jest.fn().mockReturnValue(q([])) };
     mockAnnualAccountModel = { find: jest.fn().mockReturnValue(q([])) };
     mockDisclosureModel = { findOne: jest.fn().mockReturnValue(q(null)) };
     mockBankAccountModel = { findOne: jest.fn().mockReturnValue(q(null)) };
@@ -70,6 +69,7 @@ describe('XviFcService', () => {
     mockCacheService = { deleteByPattern: jest.fn().mockResolvedValue(0) };
     mockFormJsonService = { clearCache: jest.fn().mockResolvedValue(0) };
     mockUlbEligibilityService = { getIneligibleUlbTypeIds: jest.fn().mockResolvedValue([]) };
+    mockSideMenuService = { getSideMenu: jest.fn(), clearCache: jest.fn().mockResolvedValue(0) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -81,7 +81,6 @@ describe('XviFcService', () => {
         { provide: getModelToken(Year.name), useValue: mockYearModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
         { provide: getModelToken(State.name), useValue: mockStateModel },
-        { provide: getModelToken(SideMenu.name), useValue: mockSideMenuModel },
         { provide: getModelToken(XviFcAnnualAccount.name), useValue: mockAnnualAccountModel },
         { provide: getModelToken(XviFcUnspentBalanceDisclosure.name), useValue: mockDisclosureModel },
         { provide: getModelToken(XviFcBankAccount.name), useValue: mockBankAccountModel },
@@ -89,6 +88,7 @@ describe('XviFcService', () => {
         { provide: XviFcCacheService, useValue: mockCacheService },
         { provide: FormJsonService, useValue: mockFormJsonService },
         { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
+        { provide: SideMenuService, useValue: mockSideMenuService },
       ],
     }).compile();
 
@@ -159,98 +159,23 @@ describe('XviFcService', () => {
   });
 
   describe('getSideMenu', () => {
+    // The actual query/tree-building/caching logic lives in SideMenuService now (see
+    // side-menu.service.spec.ts) — this just confirms XviFcService delegates to it unchanged.
     const yearId = new Types.ObjectId().toString();
 
-    it('should return ULB side menu', async () => {
-      mockSideMenuModel.find.mockReturnValue(
-        q([{ _id: new Types.ObjectId(), name: 'Overview', section: 'top', type: 'item', sequence: 1 }]),
-      );
+    it('delegates to sideMenuService.getSideMenu with the same role and yearId', async () => {
+      const expected = { topModel: [], bottomModel: [] };
+      mockSideMenuService.getSideMenu.mockResolvedValue(expected);
+
       const result = await service.getSideMenu('ULB', yearId);
-      expect(result).toHaveProperty('topModel');
-      expect(result).toHaveProperty('bottomModel');
-      expect(Array.isArray(result.topModel)).toBe(true);
+
+      expect(mockSideMenuService.getSideMenu).toHaveBeenCalledWith('ULB', yearId);
+      expect(result).toBe(expected);
     });
 
-    it('should return STATE side menu', async () => {
-      mockSideMenuModel.find.mockReturnValue(
-        q([{ _id: new Types.ObjectId(), name: 'Overview', section: 'top', type: 'item', sequence: 1 }]),
-      );
-      const result = await service.getSideMenu('STATE', yearId);
-      expect(result).toHaveProperty('topModel');
-      expect(Array.isArray(result.topModel)).toBe(true);
-    });
-
-    it('should return MOHUA side menu', async () => {
-      mockSideMenuModel.find.mockReturnValue(
-        q([{ _id: new Types.ObjectId(), name: 'Overview', section: 'top', type: 'item', sequence: 1 }]),
-      );
-      const result = await service.getSideMenu('MOHUA', yearId);
-      expect(result).toHaveProperty('topModel');
-    });
-
-    it('should return DOE side menu', async () => {
-      mockSideMenuModel.find.mockReturnValue(
-        q([{ _id: new Types.ObjectId(), name: 'Overview', section: 'top', type: 'item', sequence: 1 }]),
-      );
-      const result = await service.getSideMenu('DOE', yearId);
-      expect(result).toHaveProperty('topModel');
-    });
-
-    it('should throw NotFoundException for unknown role', async () => {
+    it('propagates errors from sideMenuService.getSideMenu (e.g. NotFoundException)', async () => {
+      mockSideMenuService.getSideMenu.mockRejectedValue(new NotFoundException('No menu configured for role X'));
       await expect(service.getSideMenu('UNKNOWN' as any, yearId)).rejects.toThrow(NotFoundException);
-    });
-
-    it('copies url/target onto a top-level external-link item', async () => {
-      mockSideMenuModel.find.mockReturnValue(
-        q([
-          {
-            _id: new Types.ObjectId(),
-            name: 'Submit Feedback',
-            section: 'top',
-            type: 'item',
-            sequence: 1,
-            url: 'https://tally.so/r/44d28O',
-            target: '_blank',
-          },
-        ]),
-      );
-      const result = await service.getSideMenu('ULB', yearId);
-      expect(result.topModel[0]).toEqual(
-        expect.objectContaining({ label: 'Submit Feedback', url: 'https://tally.so/r/44d28O', target: '_blank' }),
-      );
-    });
-
-    it('copies url/target onto a child item nested under a group', async () => {
-      const groupId = new Types.ObjectId();
-      mockSideMenuModel.find.mockReturnValue(
-        q([
-          { _id: groupId, name: 'Support', section: 'top', type: 'group', sequence: 1, parentId: null },
-          {
-            _id: new Types.ObjectId(),
-            name: 'Submit Feedback',
-            section: 'top',
-            type: 'item',
-            sequence: 2,
-            parentId: groupId,
-            url: 'https://tally.so/r/44d28O',
-            target: '_blank',
-          },
-        ]),
-      );
-      const result = await service.getSideMenu('ULB', yearId);
-      const group = result.topModel.find((i) => i.label === 'Support');
-      expect(group?.items?.[0]).toEqual(
-        expect.objectContaining({ label: 'Submit Feedback', url: 'https://tally.so/r/44d28O', target: '_blank' }),
-      );
-    });
-
-    it('omits url/target for an item that does not set them', async () => {
-      mockSideMenuModel.find.mockReturnValue(
-        q([{ _id: new Types.ObjectId(), name: 'Overview', section: 'top', type: 'item', sequence: 1 }]),
-      );
-      const result = await service.getSideMenu('ULB', yearId);
-      expect(result.topModel[0].url).toBeUndefined();
-      expect(result.topModel[0].target).toBeUndefined();
     });
   });
 
@@ -402,6 +327,37 @@ describe('XviFcService', () => {
     it('says nothing was cleared when nothing matched', async () => {
       mockFormJsonService.clearCache.mockResolvedValue(0);
       const result = await service.clearFormJsonCache(adminUser, designYearId, 25);
+      expect(result.message).toContain('nothing was cleared');
+    });
+  });
+
+  describe('clearSideMenuCache', () => {
+    const adminUser: AuthUser = { ...mockUser, scope: Scope.ADMIN };
+    const yearId = new Types.ObjectId().toHexString();
+
+    it('rejects non-admin users', async () => {
+      await expect(service.clearSideMenuCache({ ...mockUser, scope: Scope.STATE })).rejects.toThrow();
+    });
+
+    it('clears everything when both role and yearId are omitted', async () => {
+      await service.clearSideMenuCache(adminUser);
+      expect(mockSideMenuService.clearCache).toHaveBeenCalledWith(undefined, undefined);
+    });
+
+    it('passes role and yearId through unchanged', async () => {
+      await service.clearSideMenuCache(adminUser, 'ULB', yearId);
+      expect(mockSideMenuService.clearCache).toHaveBeenCalledWith('ULB', yearId);
+    });
+
+    it('reports how many entries were actually cleared', async () => {
+      mockSideMenuService.clearCache.mockResolvedValue(2);
+      const result = await service.clearSideMenuCache(adminUser, 'ULB', yearId);
+      expect(result.message).toContain('Cleared 2');
+    });
+
+    it('says nothing was cleared when nothing matched', async () => {
+      mockSideMenuService.clearCache.mockResolvedValue(0);
+      const result = await service.clearSideMenuCache(adminUser, 'ULB', yearId);
       expect(result.message).toContain('nothing was cleared');
     });
   });

@@ -4,8 +4,14 @@ import { NotFoundException } from '@nestjs/common';
 import { Types } from 'mongoose';
 import { SideMenuService } from './side-menu.service';
 import { SideMenu } from '../../../schemas/side-menu.schema';
-import { XviFcCacheService, XVIFC_CACHE_KEY_PREFIX } from '../cache/xvi-fc-cache.service';
+import { NamespacedCacheService } from '../../../core/services/redis/namespaced-cache.service';
 import { CreateSideMenuDto, MenuItemType, MenuSection } from './dto/create-side-menu.dto';
+
+/** Mirrors NamespacedCacheService.buildKey/buildPattern exactly, so assertions below read off
+ *  the same key shape the real service would produce (namespace:env:part1:part2). */
+function buildKey(namespace: string, ...parts: Array<string | number | undefined>): string {
+  return [namespace, 'test', ...parts.map((p) => p ?? '*')].join(':');
+}
 
 describe('SideMenuService', () => {
   let service: SideMenuService;
@@ -17,7 +23,14 @@ describe('SideMenuService', () => {
     findByIdAndUpdate: jest.Mock;
     findByIdAndDelete: jest.Mock;
   };
-  let mockCache: { delete: jest.Mock };
+  let mockCache: {
+    get: jest.Mock;
+    set: jest.Mock;
+    del: jest.Mock;
+    delByPattern: jest.Mock;
+    buildKey: jest.Mock;
+    buildPattern: jest.Mock;
+  };
 
   function q<T>(value: T) {
     return {
@@ -55,13 +68,20 @@ describe('SideMenuService', () => {
       findByIdAndUpdate: jest.fn().mockReturnValue(q(null)),
       findByIdAndDelete: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue(null) }),
     };
-    mockCache = { delete: jest.fn() };
+    mockCache = {
+      get: jest.fn().mockResolvedValue(null),
+      set: jest.fn(),
+      del: jest.fn(),
+      delByPattern: jest.fn(),
+      buildKey: jest.fn(buildKey),
+      buildPattern: jest.fn(buildKey),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         SideMenuService,
         { provide: getModelToken(SideMenu.name), useValue: mockSideMenuModel },
-        { provide: XviFcCacheService, useValue: mockCache },
+        { provide: NamespacedCacheService, useValue: mockCache },
       ],
     }).compile();
 
@@ -114,6 +134,126 @@ describe('SideMenuService', () => {
       expect(result).toHaveLength(1);
       expect(result[0].label).toBe('Dashboard');
       expect(result[0]._id).toBe(doc._id);
+    });
+  });
+
+  describe('getSideMenu', () => {
+    const yearId = new Types.ObjectId().toString();
+
+    it('should return ULB side menu', async () => {
+      mockSideMenuModel.find.mockReturnValue(
+        q([{ _id: new Types.ObjectId(), name: 'Overview', section: 'top', type: 'item', sequence: 1 }]),
+      );
+      const result = await service.getSideMenu('ULB', yearId);
+      expect(result).toHaveProperty('topModel');
+      expect(result).toHaveProperty('bottomModel');
+      expect(Array.isArray(result.topModel)).toBe(true);
+    });
+
+    it('should return STATE side menu', async () => {
+      mockSideMenuModel.find.mockReturnValue(
+        q([{ _id: new Types.ObjectId(), name: 'Overview', section: 'top', type: 'item', sequence: 1 }]),
+      );
+      const result = await service.getSideMenu('STATE', yearId);
+      expect(result).toHaveProperty('topModel');
+      expect(Array.isArray(result.topModel)).toBe(true);
+    });
+
+    it('should return MOHUA side menu', async () => {
+      mockSideMenuModel.find.mockReturnValue(
+        q([{ _id: new Types.ObjectId(), name: 'Overview', section: 'top', type: 'item', sequence: 1 }]),
+      );
+      const result = await service.getSideMenu('MOHUA', yearId);
+      expect(result).toHaveProperty('topModel');
+    });
+
+    it('should return DOE side menu', async () => {
+      mockSideMenuModel.find.mockReturnValue(
+        q([{ _id: new Types.ObjectId(), name: 'Overview', section: 'top', type: 'item', sequence: 1 }]),
+      );
+      const result = await service.getSideMenu('DOE', yearId);
+      expect(result).toHaveProperty('topModel');
+    });
+
+    it('should throw NotFoundException for unknown role', async () => {
+      await expect(service.getSideMenu('UNKNOWN' as any, yearId)).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws NotFoundException when yearId is missing', async () => {
+      await expect(service.getSideMenu('ULB', '')).rejects.toThrow(NotFoundException);
+    });
+
+    it('returns the cached value without querying the model on a cache hit', async () => {
+      const cached = { topModel: [{ label: 'Cached' }], bottomModel: [] };
+      mockCache.get.mockResolvedValue(cached);
+
+      const result = await service.getSideMenu('ULB', yearId);
+
+      expect(result).toBe(cached);
+      expect(mockSideMenuModel.find).not.toHaveBeenCalled();
+    });
+
+    it('populates the cache on a miss, keyed by role+yearId', async () => {
+      mockSideMenuModel.find.mockReturnValue(
+        q([{ _id: new Types.ObjectId(), name: 'Overview', section: 'top', type: 'item', sequence: 1 }]),
+      );
+
+      const result = await service.getSideMenu('ULB', yearId);
+
+      expect(mockCache.set).toHaveBeenCalledWith(buildKey('sidemenu', 'ULB', yearId), result);
+    });
+
+    it('copies url/target onto a top-level external-link item', async () => {
+      mockSideMenuModel.find.mockReturnValue(
+        q([
+          {
+            _id: new Types.ObjectId(),
+            name: 'Submit Feedback',
+            section: 'top',
+            type: 'item',
+            sequence: 1,
+            url: 'https://tally.so/r/44d28O',
+            target: '_blank',
+          },
+        ]),
+      );
+      const result = await service.getSideMenu('ULB', yearId);
+      expect(result.topModel[0]).toEqual(
+        expect.objectContaining({ label: 'Submit Feedback', url: 'https://tally.so/r/44d28O', target: '_blank' }),
+      );
+    });
+
+    it('copies url/target onto a child item nested under a group', async () => {
+      const groupId = new Types.ObjectId();
+      mockSideMenuModel.find.mockReturnValue(
+        q([
+          { _id: groupId, name: 'Support', section: 'top', type: 'group', sequence: 1, parentId: null },
+          {
+            _id: new Types.ObjectId(),
+            name: 'Submit Feedback',
+            section: 'top',
+            type: 'item',
+            sequence: 2,
+            parentId: groupId,
+            url: 'https://tally.so/r/44d28O',
+            target: '_blank',
+          },
+        ]),
+      );
+      const result = await service.getSideMenu('ULB', yearId);
+      const group = result.topModel.find((i) => i.label === 'Support');
+      expect(group?.items?.[0]).toEqual(
+        expect.objectContaining({ label: 'Submit Feedback', url: 'https://tally.so/r/44d28O', target: '_blank' }),
+      );
+    });
+
+    it('omits url/target for an item that does not set them', async () => {
+      mockSideMenuModel.find.mockReturnValue(
+        q([{ _id: new Types.ObjectId(), name: 'Overview', section: 'top', type: 'item', sequence: 1 }]),
+      );
+      const result = await service.getSideMenu('ULB', yearId);
+      expect(result.topModel[0].url).toBeUndefined();
+      expect(result.topModel[0].target).toBeUndefined();
     });
   });
 
@@ -180,9 +320,7 @@ describe('SideMenuService', () => {
 
       await service.create(dto);
 
-      expect(mockCache.delete).toHaveBeenCalledWith(
-        `${XVIFC_CACHE_KEY_PREFIX}:/xvi-fc/sidebar/${dto.role}?yearId=${dto.year}`,
-      );
+      expect(mockCache.del).toHaveBeenCalledWith(buildKey('sidemenu', dto.role, dto.year));
     });
 
     it('passes url/target through to the created document', async () => {
@@ -215,9 +353,9 @@ describe('SideMenuService', () => {
 
       expect(mockSideMenuModel.insertMany).toHaveBeenCalledTimes(1);
       expect(result).toHaveLength(3);
-      expect(mockCache.delete).toHaveBeenCalledTimes(2);
-      expect(mockCache.delete).toHaveBeenCalledWith(`${XVIFC_CACHE_KEY_PREFIX}:/xvi-fc/sidebar/ULB?yearId=${yearA}`);
-      expect(mockCache.delete).toHaveBeenCalledWith(`${XVIFC_CACHE_KEY_PREFIX}:/xvi-fc/sidebar/STATE?yearId=${yearB}`);
+      expect(mockCache.del).toHaveBeenCalledTimes(2);
+      expect(mockCache.del).toHaveBeenCalledWith(buildKey('sidemenu', 'ULB', yearA));
+      expect(mockCache.del).toHaveBeenCalledWith(buildKey('sidemenu', 'STATE', yearB));
     });
 
     it('returns an empty array and skips cache invalidation when items is empty', async () => {
@@ -226,7 +364,7 @@ describe('SideMenuService', () => {
       const result = await service.bulkCreate([]);
 
       expect(result).toEqual([]);
-      expect(mockCache.delete).not.toHaveBeenCalled();
+      expect(mockCache.del).not.toHaveBeenCalled();
     });
 
     it('passes url/target through for each item', async () => {
@@ -272,9 +410,7 @@ describe('SideMenuService', () => {
         { new: true },
       );
       expect(result.label).toBe('Renamed');
-      expect(mockCache.delete).toHaveBeenCalledWith(
-        `${XVIFC_CACHE_KEY_PREFIX}:/xvi-fc/sidebar/ULB?yearId=${existing.year.toString()}`,
-      );
+      expect(mockCache.del).toHaveBeenCalledWith(buildKey('sidemenu', 'ULB', existing.year.toString()));
     });
 
     it('invalidates both old and new role+year caches when role changes', async () => {
@@ -284,13 +420,9 @@ describe('SideMenuService', () => {
 
       await service.update(existing._id.toString(), { role: 'STATE' });
 
-      expect(mockCache.delete).toHaveBeenCalledTimes(2);
-      expect(mockCache.delete).toHaveBeenCalledWith(
-        `${XVIFC_CACHE_KEY_PREFIX}:/xvi-fc/sidebar/ULB?yearId=${existing.year.toString()}`,
-      );
-      expect(mockCache.delete).toHaveBeenCalledWith(
-        `${XVIFC_CACHE_KEY_PREFIX}:/xvi-fc/sidebar/STATE?yearId=${existing.year.toString()}`,
-      );
+      expect(mockCache.del).toHaveBeenCalledTimes(2);
+      expect(mockCache.del).toHaveBeenCalledWith(buildKey('sidemenu', 'ULB', existing.year.toString()));
+      expect(mockCache.del).toHaveBeenCalledWith(buildKey('sidemenu', 'STATE', existing.year.toString()));
     });
 
     it('converts parentId to ObjectId when provided, and to null when explicitly cleared', async () => {
@@ -349,8 +481,8 @@ describe('SideMenuService', () => {
         { new: true },
       );
       expect(result.isActive).toBe(false);
-      expect(mockCache.delete).toHaveBeenCalledWith(
-        `${XVIFC_CACHE_KEY_PREFIX}:/xvi-fc/sidebar/${existing.role}?yearId=${existing.year.toString()}`,
+      expect(mockCache.del).toHaveBeenCalledWith(
+        buildKey('sidemenu', existing.role as string, existing.year.toString()),
       );
     });
 
@@ -385,8 +517,8 @@ describe('SideMenuService', () => {
 
       expect(mockSideMenuModel.findByIdAndDelete).toHaveBeenCalledWith(existing._id.toString());
       expect(deleteExec).toHaveBeenCalled();
-      expect(mockCache.delete).toHaveBeenCalledWith(
-        `${XVIFC_CACHE_KEY_PREFIX}:/xvi-fc/sidebar/${existing.role}?yearId=${existing.year.toString()}`,
+      expect(mockCache.del).toHaveBeenCalledWith(
+        buildKey('sidemenu', existing.role as string, existing.year.toString()),
       );
       expect(result).toEqual({ deleted: true });
     });
