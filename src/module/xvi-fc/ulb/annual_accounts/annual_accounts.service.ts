@@ -297,6 +297,7 @@ export class AnnualAccountsService implements OnModuleInit {
       },
       uploadedAt: now,
       retryValidationCount: 0,
+      retryValidationAt: null,
     };
 
     const initialProcessingStatus = isNoOcrDoc ? 'PASSED' : 'PROCESSING';
@@ -404,6 +405,8 @@ export class AnnualAccountsService implements OnModuleInit {
       );
     }
 
+    const retriedAt = new Date();
+
     await Promise.all([
       this.uploadHistoryModel.updateOne(
         { uploadId },
@@ -447,6 +450,7 @@ export class AnnualAccountsService implements OnModuleInit {
             'documents.$.currentUpload.ocrInfo.failedChecks': [],
             'documents.$.currentUpload.ocrInfo.isManualReviewRequested': false,
             'documents.$.currentUpload.ocrInfo.manualReviewRequestedAt': null,
+            'documents.$.currentUpload.retryValidationAt': retriedAt,
           },
           $inc: { 'documents.$.currentUpload.retryValidationCount': 1 },
         },
@@ -741,6 +745,7 @@ export class AnnualAccountsService implements OnModuleInit {
                 userInfo: d.currentUpload.userInfo,
                 uploadedAt: d.currentUpload.uploadedAt,
                 retryValidationCount: d.currentUpload.retryValidationCount ?? 0,
+                retryValidationAt: d.currentUpload.retryValidationAt ?? null,
               }
             : null,
           stateDecision: d.stateDecision
