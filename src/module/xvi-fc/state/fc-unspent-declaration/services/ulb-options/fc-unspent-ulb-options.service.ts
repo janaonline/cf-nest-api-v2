@@ -4,6 +4,7 @@ import { Model, PipelineStage, Types } from 'mongoose';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { toObjectIdString } from 'src/common/utils/objectid.util';
+import { escapeRegex } from 'src/common/utils/regex.util';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import { xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
 import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
@@ -120,7 +121,7 @@ export class FcUnspentUlbOptionsService {
     ];
 
     if (query.search) {
-      const regex = new RegExp(this.escapeRegExp(query.search), 'i');
+      const regex = new RegExp(escapeRegex(query.search), 'i');
       pipeline.push({
         $match: { $or: [{ 'ulb.censusCode': regex }, { 'ulb.sbCode': regex }, { 'ulb.name': regex }] },
       });
@@ -164,11 +165,6 @@ export class FcUnspentUlbOptionsService {
     }));
 
     return xviFcSuccess('ULB options fetched.', options, { page, limit, total });
-  }
-
-  /** Escapes regex metacharacters so free-text search can't inject regex behavior. */
-  private escapeRegExp(value: string): string {
-    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
   private hasStateAccess(user: AuthUser, stateId: string): boolean {

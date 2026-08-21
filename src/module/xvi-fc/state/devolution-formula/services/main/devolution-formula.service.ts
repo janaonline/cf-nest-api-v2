@@ -21,6 +21,7 @@ import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/fil
 import { keyByFieldKey, requireField } from 'src/module/xvi-fc/common/utils/xvi-fc-field-lookup.util';
 import { deriveFileValidationOptions } from 'src/module/xvi-fc/common/utils/xvi-fc-file-constraint.util';
 import { buildUlbReconciliationBadges } from 'src/module/xvi-fc/common/utils/xvi-fc-ulb-reconciliation-badges.util';
+import { buildValidationIssuesMessage } from 'src/module/xvi-fc/common/utils/xvi-fc-validation-issues-message.util';
 import type { FileInfo } from 'src/schemas/common/file.schema';
 import type { FormData } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.types';
 import type {
@@ -173,6 +174,7 @@ export class DevolutionFormulaService {
       folderPathContext,
       yearId,
       computedActiveUlbCount,
+      grantAllocationSummary,
     );
     const grantMax = grantAllocationSummary?.total ?? null;
     const rowEditFields = getDfFieldsByType(fields, 'DF_ROW_EDIT_FIELDS').map((field) => {
@@ -603,6 +605,7 @@ export class DevolutionFormulaService {
     folderPathContext: XviFcFolderPathContext,
     yearId: string,
     computedActiveUlbCount: number,
+    grantAllocationSummary: DfGrantAllocationSummary | null,
   ): HydratedFieldConfig[] {
     return questions.map((question) => {
       if (question.key === 'ulbCount') {
@@ -633,7 +636,7 @@ export class DevolutionFormulaService {
             ...question,
             folderPath: resolvedFolderPath,
             value,
-            supportingContent: this.buildExcelFileSupportingContent(doc, permissions, yearId),
+            supportingContent: this.buildExcelFileSupportingContent(doc, permissions, yearId, grantAllocationSummary),
           };
         }
 
@@ -648,6 +651,7 @@ export class DevolutionFormulaService {
     doc: DfFormLeanDoc | null,
     permissions: DfFormPermissions,
     yearId: string,
+    grantAllocationSummary: DfGrantAllocationSummary | null,
   ): FieldSupportingContent[] {
     const { canView, canEdit } = permissions;
     const hasDataset = (doc?.activeDatasetVersion ?? 0) > 0;
@@ -656,6 +660,7 @@ export class DevolutionFormulaService {
     const excelRowCount = doc?.excelRowCount ?? 0;
     const totalMoHUAAllocation = doc?.totalMoHUAAllocation ?? 0;
     const totalAllocatedSum = doc?.totalAllocatedSum ?? 0;
+    const liveAllocatedAmount = grantAllocationSummary?.total ?? totalMoHUAAllocation;
     // Exact match (within float-noise epsilon), not a forgiving tolerance — every rupee of
     // totalMoHUAAllocation must be accounted for; see devolution-formula-tolerance.helpers.ts.
     const allocationBalanced = amountsAreEqual(totalAllocatedSum, totalMoHUAAllocation);
@@ -663,6 +668,18 @@ export class DevolutionFormulaService {
     const newUlbCount = doc?.newUlbCount ?? 0;
     const missingUlbCount = doc?.missingUlbCount ?? 0;
     const duplicateUlbCount = doc?.duplicateUlbCount ?? 0;
+
+    /**
+     * Mirrors all warning/danger badges below. newUlbCount/duplicateUlbCount aren't part of
+     * validationStatus, so warnings could exist while status is VALID. Keep Revalidate Excel
+     * visible so users can re-run validation after fixing them.
+     * */
+    const hasWarningOrDangerBadge =
+      errorRowCount > 0 ||
+      missingUlbCount > 0 ||
+      newUlbCount > 0 ||
+      duplicateUlbCount > 0 ||
+      (hasDataset && !allocationBalanced);
 
     return [
       {
@@ -700,7 +717,7 @@ export class DevolutionFormulaService {
             label: 'Revalidate Excel',
             icon: 'bi bi-arrow-repeat',
             tone: 'primary' as const,
-            visible: canEdit && hasUploadedExcel && validationStatus !== 'VALID',
+            visible: canEdit && hasUploadedExcel && (validationStatus !== 'VALID' || hasWarningOrDangerBadge),
           },
           {
             id: DF_ACTION_REGISTER_ULB,
@@ -730,9 +747,9 @@ export class DevolutionFormulaService {
             visible: canEdit,
           }),
           {
-            label: `Allocated amount: ₹${formatINR(totalMoHUAAllocation)}`,
+            label: `Allocated amount: ₹${formatINR(liveAllocatedAmount)}`,
             tone: 'secondary' as const,
-            visible: canEdit && hasDataset,
+            visible: canEdit,
           },
           {
             label: `Allocated sum: ₹${formatINR(totalAllocatedSum)}`,
@@ -751,6 +768,19 @@ export class DevolutionFormulaService {
             visible: canEdit && validationStatus === 'VALID',
           },
         ],
+        validationMessage: buildValidationIssuesMessage({
+          errorRowCount,
+          missingCount: missingUlbCount,
+          newCount: newUlbCount,
+          duplicateCount: duplicateUlbCount,
+          allocationMismatch: allocationBalanced
+            ? undefined
+            : {
+                differenceLabel: `₹${formatINR(Math.abs(totalMoHUAAllocation - totalAllocatedSum))}`,
+                targetLabel: `₹${formatINR(totalMoHUAAllocation)}`,
+              },
+          visible: canEdit && hasDataset && validationStatus === 'INVALID',
+        }),
       },
     ];
   }

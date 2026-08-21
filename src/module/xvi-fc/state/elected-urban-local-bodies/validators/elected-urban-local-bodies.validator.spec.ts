@@ -48,7 +48,7 @@ const VALID_ROW_EDIT_FIELDS: FieldConfig[] = [
   {
     key: 'dateOfConstitution',
     formFieldType: 'date',
-    label: 'Date on which the elected body is in place.',
+    label: 'Date on which the elected body is in place',
     validations: [
       {
         name: 'minDate',

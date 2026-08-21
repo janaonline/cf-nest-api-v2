@@ -357,6 +357,20 @@ describe('FcUnspentDeclarationService', () => {
     expect(result.data!.unspentUlbData).toEqual([]);
   });
 
+  it('GET never queries rows (and returns none) when isFcUnspent is not true, even if the parent form exists — defensive guard against stale active rows from a pre-fix undecided save', async () => {
+    model['findOne'] = jest.fn().mockReturnValue(
+      q({ _id: parentOid, currentFormStatus: FORM_STATUS.IN_PROGRESS, isFcUnspent: null }),
+    );
+    rowService['getActiveRows'] = jest.fn().mockResolvedValue([
+      { rowNumber: 1, ulbId: ulbOid1, censusCode: '111', sbCode: 'A1', ulbName: 'Alpha ULB', allocationAmount: 100, unspentAmount: 5, allocationPerc: 5, eligibility: true },
+    ]);
+
+    const result = await service.getForm(stateOid.toString(), yearOid.toString(), stateUser());
+
+    expect(rowService['getActiveRows']).not.toHaveBeenCalled();
+    expect(result.data!.unspentUlbData).toEqual([]);
+  });
+
   it('GET sources threshold from FcUnspentDeclarationFormJsonService.loadFormConfig, keyed by yearId (single fetch, no separate lookup)', async () => {
     formJsonConfigService['loadFormConfig'] = jest
       .fn()
@@ -488,6 +502,54 @@ describe('FcUnspentDeclarationService', () => {
       expect(mockSession.abortTransaction).toHaveBeenCalled();
       expect(mockSession.commitTransaction).not.toHaveBeenCalled();
     });
+
+    // ── staleness fix: 'undecided' (isFcUnspent omitted/null) must deactivate rows too ──────
+
+    it('deactivates the active row set when isFcUnspent is saved as undecided (omitted), not just No — previously only No did this, leaving stale active rows from a prior Yes branch', async () => {
+      const dto = baseDto({}); // isFcUnspent omitted -> branch === 'undecided'
+      await service.saveDraft(dto, stateUser());
+
+      expect(rowService['deactivateAllRows']).toHaveBeenCalledWith(parentOid, userOid, mockSession);
+      expect(rowService['applyRows']).not.toHaveBeenCalled();
+    });
+
+    it('deactivates the active row set when isFcUnspent is saved as null after previously being answered', async () => {
+      const dto = baseDto({ isFcUnspent: null as unknown as boolean });
+      await service.saveDraft(dto, stateUser());
+
+      expect(rowService['deactivateAllRows']).toHaveBeenCalledWith(parentOid, userOid, mockSession);
+      expect(rowService['applyRows']).not.toHaveBeenCalled();
+    });
+
+    // ── savedUnspentUlbData threaded into the validator's formData ──────────────────────────
+
+    it("threads the submitted unspentUlbData into the validator's formData as savedUnspentUlbData", async () => {
+      rowService['resolveAndValidateRows'].mockResolvedValueOnce({ rows: [sampleResolvedRow], errors: {} });
+      const validatorSpy = jest.spyOn(
+        service['dynamicFormValidator'] as unknown as { validateDraftAndBuildPayload: (...args: unknown[]) => unknown },
+        'validateDraftAndBuildPayload',
+      );
+      const rows = [{ ulbId: ulbOid1.toString(), unspentAmount: 5 }];
+      const dto = baseDto({ isFcUnspent: true, unspentUlbData: rows });
+
+      await service.saveDraft(dto, stateUser());
+
+      const formDataArg = validatorSpy.mock.calls[0][1] as Record<string, unknown>;
+      expect(formDataArg['savedUnspentUlbData']).toEqual(rows);
+    });
+
+    it("threads an empty savedUnspentUlbData when no rows are submitted", async () => {
+      const validatorSpy = jest.spyOn(
+        service['dynamicFormValidator'] as unknown as { validateDraftAndBuildPayload: (...args: unknown[]) => unknown },
+        'validateDraftAndBuildPayload',
+      );
+      const dto = baseDto({ isFcUnspent: true });
+
+      await service.saveDraft(dto, stateUser());
+
+      const formDataArg = validatorSpy.mock.calls[0][1] as Record<string, unknown>;
+      expect(formDataArg['savedUnspentUlbData']).toEqual([]);
+    });
   });
 
   // ─── Final submit ───────────────────────────────────────────────────────────
@@ -556,6 +618,29 @@ describe('FcUnspentDeclarationService', () => {
         'jest-agent',
         mockSession,
       );
+    });
+
+    it("threads the submitted unspentUlbData into the validator's formData as savedUnspentUlbData", async () => {
+      rowService['resolveAndValidateRows'].mockResolvedValueOnce({ rows: [sampleResolvedRow], errors: {} });
+      rowService['applyRows'].mockResolvedValueOnce({ transitions: [] });
+      const validatorSpy = jest.spyOn(
+        service['dynamicFormValidator'] as unknown as {
+          validateFinalSubmitAndBuildPayload: (...args: unknown[]) => unknown;
+        },
+        'validateFinalSubmitAndBuildPayload',
+      );
+      const rows = [{ ulbId: ulbOid1.toString(), unspentAmount: 10 }];
+      const dto = baseDto({
+        isFcUnspent: true,
+        checkboxConfirmation: true,
+        unspentUlbData: rows,
+        fcUnspentDeclaration: sampleFcUnspentDeclarationFile,
+      });
+
+      await service.finalSubmit(dto, stateUser(), '127.0.0.1', 'jest-agent');
+
+      const formDataArg = validatorSpy.mock.calls[0][1] as Record<string, unknown>;
+      expect(formDataArg['savedUnspentUlbData']).toEqual(rows);
     });
 
     it('final submit sources thresholdPercent from FcUnspentDeclarationFormJsonService.loadFormConfig (single fetch) and passes it to the row service', async () => {

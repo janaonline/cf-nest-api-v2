@@ -10,6 +10,7 @@ import { EulbPostSubmissionUpdateService } from 'src/module/xvi-fc/state/elected
 import { ElectedUrbanLocalBodiesRowService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/row/elected-urban-local-bodies-row.service';
 import { ElectedUrbanLocalBodiesService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/main/elected-urban-local-bodies.service';
 import { ElectedUrbanLocalBodiesDocxService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/document/elected-urban-local-bodies-docx.service';
+import { XviFcService } from 'src/module/xvi-fc/xvi-fc.service';
 
 describe('ElectedUrbanLocalBodiesController', () => {
   const stateId = new Types.ObjectId().toString();
@@ -30,6 +31,7 @@ describe('ElectedUrbanLocalBodiesController', () => {
       [string, string, AuthUser]
     >;
   };
+  let xviFcService: { getStateById: jest.Mock; getYearLabelById: jest.Mock };
 
   beforeEach(async () => {
     eulbService = {
@@ -38,7 +40,14 @@ describe('ElectedUrbanLocalBodiesController', () => {
     eulbDocxService = {
       generateElectedBodiesListDocument: jest
         .fn<Promise<{ buffer: Buffer; fileName: string }>, [string, string, AuthUser]>()
-        .mockResolvedValue({ buffer: Buffer.from('docx'), fileName: 'elected-bodies-list_2026-01-01.docx' }),
+        .mockResolvedValue({
+          buffer: Buffer.from('docx'),
+          fileName: 'CF_Andhra-Pradesh_Elected-body-list_2026-27.docx',
+        }),
+    };
+    xviFcService = {
+      getStateById: jest.fn().mockResolvedValue({ stateName: 'Andhra Pradesh' }),
+      getYearLabelById: jest.fn().mockResolvedValue({ yearLabel: '2026-27' }),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -49,6 +58,7 @@ describe('ElectedUrbanLocalBodiesController', () => {
         { provide: ElectedUrbanLocalBodiesRowService, useValue: {} },
         { provide: EulbPostSubmissionUpdateService, useValue: {} },
         { provide: ElectedUrbanLocalBodiesDocxService, useValue: eulbDocxService },
+        { provide: XviFcService, useValue: xviFcService },
       ],
     }).compile();
 
@@ -62,8 +72,7 @@ describe('ElectedUrbanLocalBodiesController', () => {
     expect(eulbService.dumpToExcel).toHaveBeenCalledWith(stateId, yearId, user);
     expect(result).toBeInstanceOf(StreamableFile);
     expect(headers.type).toBe('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    expect(headers.disposition).toMatch(/^attachment; filename="elected-body-data-dump_/);
-    expect(headers.disposition).toMatch(/\.xlsx"$/);
+    expect(headers.disposition).toBe('attachment; filename="CF_Andhra-Pradesh_Elected-body-data-dump_2026-27.xlsx"');
   });
 
   it('calls the docx service and returns a Word StreamableFile with the correct MIME type and filename', async () => {
@@ -73,7 +82,7 @@ describe('ElectedUrbanLocalBodiesController', () => {
     expect(eulbDocxService.generateElectedBodiesListDocument).toHaveBeenCalledWith(stateId, yearId, user);
     expect(result).toBeInstanceOf(StreamableFile);
     expect(headers.type).toBe('application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-    expect(headers.disposition).toBe('attachment; filename="elected-bodies-list_2026-01-01.docx"');
+    expect(headers.disposition).toBe('attachment; filename="CF_Andhra-Pradesh_Elected-body-list_2026-27.docx"');
   });
 
   describe('post-submission-update permission gates', () => {

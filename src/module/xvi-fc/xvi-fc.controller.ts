@@ -1,4 +1,4 @@
-import { Controller, Delete, Get, Param, Query, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Controller, Delete, Get, Param, Query, UseGuards } from '@nestjs/common';
 import { ApiQuery } from '@nestjs/swagger';
 
 import { XviFcService } from './xvi-fc.service';
@@ -12,7 +12,6 @@ import { PermissionGuard } from 'src/module/auth/permission.guard';
 import { Permission } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { CurrentUser } from 'src/module/auth/decorators/current-user.decorator';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
-import { XviFcCacheInterceptor, XviFcCacheTTL } from './cache/xvi-fc-cache.interceptor';
 
 @ApiTags('XVI-FC')
 @Controller('xvi-fc')
@@ -34,8 +33,6 @@ export class XviFcController {
   @Get('sidebar/:role')
   @UseGuards(PermissionGuard)
   // @RequirePermissions(Permission.VIEW_STATUS_REPORTS)
-  @UseInterceptors(XviFcCacheInterceptor)
-  @XviFcCacheTTL(600)
   async getSideMenu(@Param('role') role: MenuRole, @Query('yearId') yearId: string): Promise<SideMenuResponseDto> {
     return this.xviFcService.getSideMenu(role, yearId);
   }
@@ -123,5 +120,29 @@ export class XviFcController {
     @Query('formId') formId?: string,
   ): Promise<{ message: string }> {
     return this.xviFcService.clearFormJsonCache(user, designYearId, formId ? Number(formId) : undefined);
+  }
+
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Clear side-menu cache (Admin only)' })
+  @ApiQuery({
+    name: 'role',
+    required: false,
+    description: 'Limit clearing to this role. Omit to match every role.',
+  })
+  @ApiQuery({
+    name: 'yearId',
+    required: false,
+    description: 'Limit clearing to this year. Omit to match every year.',
+  })
+  @ApiResponse({ status: 200, description: 'Cache cleared successfully' })
+  @ApiResponse({ status: 403, description: 'Forbidden — admin scope required' })
+  @Delete('admin/cache/side-menu')
+  @UseGuards(PermissionGuard)
+  clearSideMenuCache(
+    @CurrentUser() user: AuthUser,
+    @Query('role') role?: string,
+    @Query('yearId') yearId?: string,
+  ): Promise<{ message: string }> {
+    return this.xviFcService.clearSideMenuCache(user, role, yearId);
   }
 }

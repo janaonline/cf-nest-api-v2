@@ -161,7 +161,8 @@ export class FcUnspentDeclarationService {
     const folderPathContext: XviFcFolderPathContext = { _id: stateId, role: 'state', designYear };
     const questions = this.hydrateQuestions(questionsConfig, savedData, folderPathContext, permissions.canEdit);
 
-    const activeRows = doc ? await this.rowService.getActiveRows(doc._id) : [];
+    // Only the Yes branch has disclosures. Gate here to ignore stale rows from older saves.
+    const activeRows = doc?.isFcUnspent === true ? await this.rowService.getActiveRows(doc._id) : [];
     const unspentUlbData = activeRows.map((row) => this.mapRowToResponse(row));
 
     const responseData: FcUnspentDeclarationGetResponseData = {
@@ -223,6 +224,10 @@ export class FcUnspentDeclarationService {
       fcDeclaration: dto.data.fcDeclaration ?? null,
       fcUnspentDeclaration: dto.data.fcUnspentDeclaration ?? null,
       checkboxConfirmation: dto.data.checkboxConfirmation ?? false,
+      // Synthetic key matching the frontend's savedUnspentUlbData signal, used by
+      // fcUnspentDeclaration.visibleWhen to check whether any rows are being saved.
+      // Safe to derive from the raw payload since invalid/duplicate rows are rejected.
+      savedUnspentUlbData: dto.data.unspentUlbData ?? [],
     };
     const validation = this.dynamicFormValidator.validateDraftAndBuildPayload(questions, validatorData);
     if (!validation.isValid) throwXviFcValidationError(validation.errors);
@@ -318,9 +323,7 @@ export class FcUnspentDeclarationService {
         )
         .exec();
 
-      if (branch === 'no') {
-        await this.rowService.deactivateAllRows(updatedParent._id, userOid, session);
-      } else if (branch === 'yes') {
+      if (branch === 'yes') {
         await this.rowService.applyRows(
           updatedParent._id,
           stateOid,
@@ -330,8 +333,11 @@ export class FcUnspentDeclarationService {
           undefined,
           session,
         );
+      } else {
+        // Both 'no' and 'undecided' mean no active disclosed rows;
+        // clear stale rows from a prior Yes branch.
+        await this.rowService.deactivateAllRows(updatedParent._id, userOid, session);
       }
-      // branch === 'undecided' -> isFcUnspent not yet chosen; leave existing rows untouched.
 
       await session.commitTransaction();
     } catch (err) {
@@ -397,6 +403,8 @@ export class FcUnspentDeclarationService {
       fcDeclaration: dto.data.fcDeclaration ?? existing?.fcDeclaration ?? null,
       fcUnspentDeclaration: dto.data.fcUnspentDeclaration ?? existing?.fcUnspentDeclaration ?? null,
       checkboxConfirmation: dto.data.checkboxConfirmation ?? false,
+      // Same synthetic key as saveDraft — see the comment there.
+      savedUnspentUlbData: dto.data.unspentUlbData ?? [],
     };
     const validation = this.dynamicFormValidator.validateFinalSubmitAndBuildPayload(questions, validatorData);
     if (!validation.isValid) throwXviFcValidationError(validation.errors);

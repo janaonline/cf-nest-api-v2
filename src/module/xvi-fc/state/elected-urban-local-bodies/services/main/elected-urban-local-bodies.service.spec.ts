@@ -258,7 +258,7 @@ const MOCK_TYPED_ROW_EDIT_FIELDS: EulbTypedFieldConfig[] = [
   },
   {
     key: 'dateOfConstitution',
-    label: 'Date on which the elected body is in place.',
+    label: 'Date on which the elected body is in place',
     formFieldType: 'date',
     fieldTypes: ['EULB_ROW_EDIT_FIELDS'],
     minDate: '2021-05-31',
@@ -439,6 +439,59 @@ describe('ElectedUrbanLocalBodiesService', () => {
       expect(dvRow3!.formulae?.[0]).toContain('$C3<>"Constituted",E3=""');
       expect(dvRow3!.formulae?.[0]).toContain('E3');
       expect(dvRow3!.formulae?.[0]).not.toContain('E2');
+    });
+
+    // ── prompt text derived from config, not hardcoded (regression) ──────────
+    // These previously embedded a hand-typed literal date disconnected from the DB-configured
+    // minDate/maxDate — see xvi-fc-date-format.util.ts. Proven here by changing the fixture's
+    // date and confirming the prompt text follows it.
+
+    it('dateOfConstitution prompt reflects the configured minDate', async () => {
+      const sheet = await generateAndLoad();
+      const dvRow2 = sheet.dataValidations.model['D2'];
+      expect(dvRow2!.prompt).toBe('Required when status is Constituted. Must be between 31 May 2021 and today.');
+    });
+
+    it('dateOfConstitution prompt updates when the configured minDate changes', async () => {
+      const fieldsWithDifferentMin = MOCK_TYPED_ROW_EDIT_FIELDS.map((f) =>
+        f.key === 'dateOfConstitution'
+          ? {
+              ...f,
+              minDate: '2019-11-15',
+              validations: f.validations?.map((v) => (v.name === 'minDate' ? { ...v, validator: '2019-11-15' } : v)),
+            }
+          : f,
+      );
+      mockEulbFormJsonConfigService.loadFields.mockResolvedValueOnce(fieldsWithDifferentMin);
+
+      const sheet = await generateAndLoad();
+      const dvRow2 = sheet.dataValidations.model['D2'];
+      expect(dvRow2!.prompt).toContain('15 November 2019');
+      expect(dvRow2!.prompt).not.toContain('31 May 2021');
+    });
+
+    it('dateOfExpiry prompt reflects the configured maxDate', async () => {
+      const sheet = await generateAndLoad();
+      const dvRow2 = sheet.dataValidations.model['E2'];
+      expect(dvRow2!.prompt).toBe('Required when status is Constituted. Must be between today and 31 March 2030.');
+    });
+
+    it('dateOfExpiry prompt updates when the configured maxDate changes', async () => {
+      const fieldsWithDifferentMax = MOCK_TYPED_ROW_EDIT_FIELDS.map((f) =>
+        f.key === 'dateOfExpiry'
+          ? {
+              ...f,
+              maxDate: '2031-03-31',
+              validations: f.validations?.map((v) => (v.name === 'maxDate' ? { ...v, validator: '2031-03-31' } : v)),
+            }
+          : f,
+      );
+      mockEulbFormJsonConfigService.loadFields.mockResolvedValueOnce(fieldsWithDifferentMax);
+
+      const sheet = await generateAndLoad();
+      const dvRow2 = sheet.dataValidations.model['E2'];
+      expect(dvRow2!.prompt).toContain('31 March 2031');
+      expect(dvRow2!.prompt).not.toContain('31 March 2030');
     });
 
     it('generates validations covering exactly the active registry rows, with no blank padding', async () => {
@@ -681,7 +734,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
         'Census Code',
         'ULB Name',
         'Elected Body Status',
-        'Date on which the elected body is in place.',
+        'Date on which the elected body is in place',
         'Date of Expiry',
         'Remarks',
         'Validation Status',
@@ -910,6 +963,139 @@ describe('ElectedUrbanLocalBodiesService', () => {
       expect(registerUlbAction?.url).toBe(`/xvifc/${yearOid.toString()}/register-ulb`);
     });
 
+    // ─── validationMessage ────────────────────────────────────────────────────
+    // The plain-English "what to fix" sentence built by buildValidationIssuesMessage() from the
+    // same counts driving the badges above — see that util's own spec for exhaustive join-logic
+    // coverage.
+
+    async function getValidationMessage(doc: object | null) {
+      mockFormModel.findOne.mockReturnValueOnce(q(doc));
+      const result = await service.getForm(stateOid.toString(), yearOid.toString(), adminUser);
+      const data = result.data as Record<string, unknown>;
+      const questions = data['questions'] as Array<Record<string, unknown>>;
+      const excelQ = questions.find((q) => q['key'] === 'electedBodyExcelFile');
+      const supportingContent = excelQ!['supportingContent'] as Array<{ validationMessage?: string }>;
+      return supportingContent[0]?.validationMessage;
+    }
+
+    it('is undefined when validationStatus is VALID', async () => {
+      const message = await getValidationMessage({
+        _id: formOid,
+        currentFormStatus: FORM_STATUS.IN_PROGRESS,
+        activeDatasetVersion: 1,
+        excelRowCount: 2,
+        errorRowCount: 0,
+        extraExcelRowCount: 0,
+        validationStatus: 'VALID',
+        electedBodyExcelFile: { originalName: 'test.xlsx', path: 'state/test.xlsx' },
+      });
+
+      expect(message).toBeUndefined();
+    });
+
+    it('is undefined when there is no active dataset yet, even if validationStatus is somehow INVALID', async () => {
+      const message = await getValidationMessage({
+        _id: formOid,
+        currentFormStatus: FORM_STATUS.IN_PROGRESS,
+        activeDatasetVersion: 0,
+        excelRowCount: 0,
+        errorRowCount: 3,
+        validationStatus: 'INVALID',
+        electedBodyExcelFile: { originalName: 'test.xlsx', path: 'state/test.xlsx' },
+      });
+
+      expect(message).toBeUndefined();
+    });
+
+    it('reports row errors only', async () => {
+      const message = await getValidationMessage({
+        _id: formOid,
+        currentFormStatus: FORM_STATUS.IN_PROGRESS,
+        activeDatasetVersion: 1,
+        excelRowCount: 3,
+        errorRowCount: 3,
+        validationStatus: 'INVALID',
+        electedBodyExcelFile: { originalName: 'test.xlsx', path: 'state/test.xlsx' },
+      });
+
+      expect(message).toBe('To submit, fix 3 row error(s).');
+    });
+
+    it('reports missing ULBs only', async () => {
+      const message = await getValidationMessage({
+        _id: formOid,
+        currentFormStatus: FORM_STATUS.IN_PROGRESS,
+        activeDatasetVersion: 1,
+        excelRowCount: 3,
+        errorRowCount: 0,
+        missingDbUlbCount: 2,
+        validationStatus: 'INVALID',
+        electedBodyExcelFile: { originalName: 'test.xlsx', path: 'state/test.xlsx' },
+      });
+
+      expect(message).toBe('To submit, add the 2 missing ULB(s).');
+    });
+
+    it('reports new ULBs only', async () => {
+      const message = await getValidationMessage({
+        _id: formOid,
+        currentFormStatus: FORM_STATUS.IN_PROGRESS,
+        activeDatasetVersion: 1,
+        excelRowCount: 3,
+        errorRowCount: 0,
+        extraExcelRowCount: 3,
+        validationStatus: 'INVALID',
+        electedBodyExcelFile: { originalName: 'test.xlsx', path: 'state/test.xlsx' },
+      });
+
+      expect(message).toBe('To submit, register 3 new ULB(s).');
+    });
+
+    it('reports duplicate ULBs only', async () => {
+      const message = await getValidationMessage({
+        _id: formOid,
+        currentFormStatus: FORM_STATUS.IN_PROGRESS,
+        activeDatasetVersion: 1,
+        excelRowCount: 3,
+        errorRowCount: 0,
+        duplicateUlbCount: 1,
+        validationStatus: 'INVALID',
+        electedBodyExcelFile: { originalName: 'test.xlsx', path: 'state/test.xlsx' },
+      });
+
+      expect(message).toBe('To submit, remove 1 duplicate ULB(s).');
+    });
+
+    it('never mentions an allocation mismatch — EULB has no monetary dimension', async () => {
+      const message = await getValidationMessage({
+        _id: formOid,
+        currentFormStatus: FORM_STATUS.IN_PROGRESS,
+        activeDatasetVersion: 1,
+        excelRowCount: 3,
+        errorRowCount: 3,
+        validationStatus: 'INVALID',
+        electedBodyExcelFile: { originalName: 'test.xlsx', path: 'state/test.xlsx' },
+      });
+
+      expect(message).not.toContain('reconcile');
+      expect(message).not.toContain('₹');
+    });
+
+    it('joins multiple active problems into one sentence', async () => {
+      const message = await getValidationMessage({
+        _id: formOid,
+        currentFormStatus: FORM_STATUS.IN_PROGRESS,
+        activeDatasetVersion: 1,
+        excelRowCount: 3,
+        errorRowCount: 1,
+        extraExcelRowCount: 2,
+        validationStatus: 'INVALID',
+        electedBodyExcelFile: { originalName: 'test.xlsx', path: 'state/test.xlsx' },
+      });
+
+      expect(message).toBe('To submit, fix 1 row error(s) and register 2 new ULB(s).');
+    });
+
     // ─── pageCount hydration ─────────────────────────────────────────────────
 
     it('returns the saved electedBodyExcelFile.pageCount on the hydrated file value', async () => {
@@ -1100,6 +1286,123 @@ describe('ElectedUrbanLocalBodiesService', () => {
         ),
       ).resolves.toBeDefined();
     });
+
+    // ── validationStatus staleness fix + electedBodyExcelValidationStatus threading ──────────
+
+    it('resets validationStatus to NOT_VALIDATED when a new electedBodyExcelFile is submitted, even if the previous status was VALID', async () => {
+      mockFormModel.findOne.mockReturnValueOnce(
+        q({
+          _id: formOid,
+          currentFormStatus: FORM_STATUS.IN_PROGRESS,
+          validationStatus: 'VALID',
+          electedBodyExcelFile: { originalName: 'old.xlsx', path: 'state/old.xlsx' },
+        }),
+      );
+      mockFormModel.findOneAndUpdate.mockReturnValueOnce(q({ _id: formOid }));
+
+      await service.saveDraft(
+        {
+          stateId: stateOid.toString(),
+          yearId: yearOid.toString(),
+          data: {
+            electedBodyExcelFile: {
+              originalName: 'new.xlsx',
+              path: 'state/new.xlsx',
+              mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+              sizeKb: 5,
+            },
+          },
+        },
+        adminUser,
+        '',
+        '',
+      );
+
+      const updateArg = (mockFormModel.findOneAndUpdate.mock.calls as unknown[][])[0][1] as {
+        $set: Record<string, unknown>;
+      };
+      expect(updateArg.$set['validationStatus']).toBe('NOT_VALIDATED');
+    });
+
+    it('leaves validationStatus untouched when electedBodyExcelFile is omitted from the draft payload', async () => {
+      mockFormModel.findOne.mockReturnValueOnce(
+        q({
+          _id: formOid,
+          currentFormStatus: FORM_STATUS.IN_PROGRESS,
+          validationStatus: 'VALID',
+          electedBodyExcelFile: { originalName: 'old.xlsx', path: 'state/old.xlsx' },
+        }),
+      );
+      mockFormModel.findOneAndUpdate.mockReturnValueOnce(q({ _id: formOid }));
+
+      await service.saveDraft(
+        { stateId: stateOid.toString(), yearId: yearOid.toString(), data: { checkboxConfirmation: true } },
+        adminUser,
+        '',
+        '',
+      );
+
+      const updateArg = (mockFormModel.findOneAndUpdate.mock.calls as unknown[][])[0][1] as {
+        $set: Record<string, unknown>;
+      };
+      expect(Object.prototype.hasOwnProperty.call(updateArg.$set, 'validationStatus')).toBe(false);
+    });
+
+    it("threads electedBodyExcelValidationStatus into the validator's formData as NOT_VALIDATED when a new file is submitted", async () => {
+      mockFormModel.findOne.mockReturnValueOnce(
+        q({
+          _id: formOid,
+          currentFormStatus: FORM_STATUS.IN_PROGRESS,
+          validationStatus: 'VALID',
+          electedBodyExcelFile: { originalName: 'old.xlsx', path: 'state/old.xlsx' },
+        }),
+      );
+      mockFormModel.findOneAndUpdate.mockReturnValueOnce(q({ _id: formOid }));
+
+      await service.saveDraft(
+        {
+          stateId: stateOid.toString(),
+          yearId: yearOid.toString(),
+          data: {
+            electedBodyExcelFile: {
+              originalName: 'new.xlsx',
+              path: 'state/new.xlsx',
+              mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+              sizeKb: 5,
+            },
+          },
+        },
+        adminUser,
+        '',
+        '',
+      );
+
+      const formDataArg = (mockValidator.validateDraftAndBuildPayload.mock.calls as unknown[][])[0][1] as Record<
+        string,
+        unknown
+      >;
+      expect(formDataArg['electedBodyExcelValidationStatus']).toBe('NOT_VALIDATED');
+    });
+
+    it("threads the existing validationStatus into the validator's formData when the Excel file is unchanged", async () => {
+      mockFormModel.findOne.mockReturnValueOnce(
+        q({ _id: formOid, currentFormStatus: FORM_STATUS.IN_PROGRESS, validationStatus: 'VALID' }),
+      );
+      mockFormModel.findOneAndUpdate.mockReturnValueOnce(q({ _id: formOid }));
+
+      await service.saveDraft(
+        { stateId: stateOid.toString(), yearId: yearOid.toString(), data: { checkboxConfirmation: true } },
+        adminUser,
+        '',
+        '',
+      );
+
+      const formDataArg = (mockValidator.validateDraftAndBuildPayload.mock.calls as unknown[][])[0][1] as Record<
+        string,
+        unknown
+      >;
+      expect(formDataArg['electedBodyExcelValidationStatus']).toBe('VALID');
+    });
   });
 
   // ─── finalSubmit ─────────────────────────────────────────────────────────────
@@ -1240,6 +1543,16 @@ describe('ElectedUrbanLocalBodiesService', () => {
         $set: Record<string, unknown>;
       };
       expect((updateArg.$set['signedElectedbodyFile'] as { originalName?: string }).originalName).toBe('signed.pdf');
+    });
+
+    it("threads the persisted validationStatus into the validator's formData as electedBodyExcelValidationStatus", async () => {
+      await service.finalSubmit(baseDto, adminUser, '', '');
+
+      const formDataArg = (mockValidator.validateFinalSubmitAndBuildPayload.mock.calls as unknown[][])[0][1] as Record<
+        string,
+        unknown
+      >;
+      expect(formDataArg['electedBodyExcelValidationStatus']).toBe('VALID');
     });
 
     it('rejects final submit when signedElectedbodyFile is missing (required field validator fires)', async () => {
