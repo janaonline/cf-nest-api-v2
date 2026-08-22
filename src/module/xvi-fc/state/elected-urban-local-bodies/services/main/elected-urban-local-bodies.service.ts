@@ -25,6 +25,8 @@ import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/fil
 import { keyByFieldKey, requireField } from 'src/module/xvi-fc/common/utils/xvi-fc-field-lookup.util';
 import { deriveFileValidationOptions } from 'src/module/xvi-fc/common/utils/xvi-fc-file-constraint.util';
 import { buildUlbReconciliationBadges } from 'src/module/xvi-fc/common/utils/xvi-fc-ulb-reconciliation-badges.util';
+import { buildValidationIssuesMessage } from 'src/module/xvi-fc/common/utils/xvi-fc-validation-issues-message.util';
+import { formatXviFcDate } from 'src/module/xvi-fc/common/utils/xvi-fc-date-format.util';
 import type { FileInfo } from 'src/schemas/common/file.schema';
 import type { FormData } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.types';
 import type {
@@ -120,7 +122,7 @@ const EULB_DUMP_HEADERS: RowHeader[] = [
   { label: 'Census Code', key: 'censusCode', width: 16 },
   { label: 'ULB Name', key: 'ulbName', width: 35 },
   { label: 'Elected Body Status', key: 'electedBodyStatus', width: 24 },
-  { label: 'Date on which the elected body is in place.', key: 'dateOfConstitution', width: 48 },
+  { label: 'Date on which the elected body is in place', key: 'dateOfConstitution', width: 48 },
   { label: 'Date of Expiry', key: 'dateOfExpiry', width: 20 },
   { label: 'Remarks', key: 'remarks', width: 35 },
   { label: 'Validation Status', key: 'validationStatus', width: 20 },
@@ -460,8 +462,19 @@ export class ElectedUrbanLocalBodiesService {
     const [activeUlbCount, existing] = await Promise.all([
       this.ulbModel.countDocuments(eligibleUlbFilter),
       this.model
-        .findOne(filter, { _id: 1, currentFormStatus: 1, electedBodyExcelFile: 1, signedElectedbodyFile: 1 })
-        .lean<Pick<EulbFormLeanDoc, '_id' | 'currentFormStatus' | 'electedBodyExcelFile' | 'signedElectedbodyFile'>>()
+        .findOne(filter, {
+          _id: 1,
+          currentFormStatus: 1,
+          electedBodyExcelFile: 1,
+          signedElectedbodyFile: 1,
+          validationStatus: 1,
+        })
+        .lean<
+          Pick<
+            EulbFormLeanDoc,
+            '_id' | 'currentFormStatus' | 'electedBodyExcelFile' | 'signedElectedbodyFile' | 'validationStatus'
+          >
+        >()
         .exec(),
     ]);
 
@@ -497,11 +510,21 @@ export class ElectedUrbanLocalBodiesService {
       normalizedSignedFile = file;
     }
 
+    /**
+     * A new/replaced/removed electedBodyExcelFile invalidates the previous validationStatus.
+     * normalizedExcelFile is undefined only when the file is unchanged, matching the persistence logic below.
+     */
+    const effectiveValidationStatus: EulbValidationStatus =
+      normalizedExcelFile !== undefined ? 'NOT_VALIDATED' : (existing?.validationStatus ?? 'NOT_VALIDATED');
+
     const formData: FormData = {
       ulbCount: activeUlbCount,
       electedBodyExcelFile: normalizedExcelFile,
       signedElectedbodyFile: normalizedSignedFile,
       checkboxConfirmation: dto.data.checkboxConfirmation,
+      // Synthetic key for signedElectedbodyFile.visibleWhen to check Excel validity, not just presence.
+      // See dynamic-form-validation.service.ts's evaluateCondition.
+      electedBodyExcelValidationStatus: effectiveValidationStatus,
     };
 
     const result = this.validator.validateDraftAndBuildPayload(mainFormFields, formData);
@@ -512,7 +535,12 @@ export class ElectedUrbanLocalBodiesService {
       updatedBy: userOid,
       ulbCount: activeUlbCount,
     };
-    if (normalizedExcelFile !== undefined) fieldUpdates['electedBodyExcelFile'] = normalizedExcelFile;
+    if (normalizedExcelFile !== undefined) {
+      fieldUpdates['electedBodyExcelFile'] = normalizedExcelFile;
+      // Reset the stale validationStatus from the previous file — mirrors deleteUploadedExcel's
+      // reset on delete (services/row/elected-urban-local-bodies-row.service.ts).
+      fieldUpdates['validationStatus'] = effectiveValidationStatus;
+    }
     if (normalizedSignedFile !== undefined) fieldUpdates['signedElectedbodyFile'] = normalizedSignedFile;
     if (result.sanitizedPayload['checkboxConfirmation'] !== undefined)
       fieldUpdates['checkboxConfirmation'] = result.sanitizedPayload['checkboxConfirmation'];
@@ -642,6 +670,9 @@ export class ElectedUrbanLocalBodiesService {
       signedElectedbodyFile:
         normalizedSignedFile !== undefined ? normalizedSignedFile : existing?.signedElectedbodyFile,
       checkboxConfirmation: dto.data.checkboxConfirmation,
+      // Same synthetic key as saveDraft — existing.validationStatus is already loaded above (it's
+      // exactly what the hard-gate check below reads too), so this needs no extra query.
+      electedBodyExcelValidationStatus: existing?.validationStatus ?? 'NOT_VALIDATED',
     };
     const validation = this.validator.validateFinalSubmitAndBuildPayload(mainFormFields, formData);
     if (!validation.isValid) throwXviFcValidationError(validation.errors);
@@ -1006,6 +1037,13 @@ export class ElectedUrbanLocalBodiesService {
             visible: canEdit,
           }),
         ],
+        validationMessage: buildValidationIssuesMessage({
+          errorRowCount,
+          missingCount: missingDbUlbCount,
+          newCount: extraExcelRowCount,
+          duplicateCount: duplicateUlbCount,
+          visible: canEdit && hasActiveDataset && validationStatus === 'INVALID',
+        }),
       },
     ];
   }
@@ -1127,11 +1165,11 @@ export class ElectedUrbanLocalBodiesService {
               `OR(AND($${statusLetter}${row}<>"Constituted",${constitutionLetter}${row}=""),AND($${statusLetter}${row}="Constituted",ISNUMBER(${constitutionLetter}${row}),${constitutionLetter}${row}>=${constitutionMin},${constitutionLetter}${row}<=${constitutionMax}))`,
             ],
             showInputMessage: true,
-            promptTitle: 'Date on which the elected body is in place.',
-            prompt: 'Required when status is Constituted. Must be between 31 May 2021 and today.',
+            promptTitle: 'Date on which the elected body is in place',
+            prompt: `Required when status is Constituted. Must be between ${formatXviFcDate(constitutionMinVal)} and today.`,
             showErrorMessage: true,
             errorStyle: 'error',
-            errorTitle: 'Date on which the elected body is in place.',
+            errorTitle: 'Date on which the elected body is in place',
             error: 'Required for Constituted status and must be within the allowed date range.',
           };
         },
@@ -1150,7 +1188,7 @@ export class ElectedUrbanLocalBodiesService {
             ],
             showInputMessage: true,
             promptTitle: 'Date of Expiry',
-            prompt: `Required when status is Constituted. Must be between today and 31 March 2030.`,
+            prompt: `Required when status is Constituted. Must be between today and ${formatXviFcDate(expiryMaxVal)}.`,
             showErrorMessage: true,
             errorStyle: 'error',
             errorTitle: 'Date of Expiry',

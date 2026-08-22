@@ -7,6 +7,8 @@ import { CurrentUser } from 'src/module/auth/decorators/current-user.decorator';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { ParseObjectIdPipe } from 'src/common/pipes/parse-object-id.pipe';
 import { getTimeStamp } from 'src/shared/utils/date.utils';
+import { buildXviFcDownloadFileName } from 'src/shared/utils/xvi-fc-download-file-name.util';
+import { XviFcService } from 'src/module/xvi-fc/xvi-fc.service';
 import { DevolutionFormulaService } from './services/main/devolution-formula.service';
 import { DevolutionFormulaExcelService } from './services/excel/devolution-formula-excel.service';
 import { DevolutionFormulaRowService } from './services/row/devolution-formula-row.service';
@@ -27,7 +29,21 @@ export class DevolutionFormulaController {
     private readonly dfService: DevolutionFormulaService,
     private readonly dfExcelService: DevolutionFormulaExcelService,
     private readonly dfRowService: DevolutionFormulaRowService,
+    private readonly xviFcService: XviFcService,
   ) {}
+
+  private async buildDownloadFileName(
+    stateId: string,
+    yearId: string,
+    formName: string,
+    extension: string,
+  ): Promise<string> {
+    const [{ stateName }, { yearLabel }] = await Promise.all([
+      this.xviFcService.getStateById(stateId),
+      this.xviFcService.getYearLabelById(yearId),
+    ]);
+    return buildXviFcDownloadFileName({ entityName: stateName, formName, yearLabel, extension });
+  }
 
   @ApiOperation({ summary: 'Export all ULB-wise Allocation data (admin/state scoped)' })
   @ApiQuery({ name: 'stateId', required: false })
@@ -103,10 +119,13 @@ export class DevolutionFormulaController {
     @CurrentUser() user: AuthUser,
   ): Promise<StreamableFile> {
     const inst = this.parseInstallment(installment);
-    const buffer = await this.dfExcelService.generateTemplate(stateId, yearId, inst, user);
+    const [buffer, fileName] = await Promise.all([
+      this.dfExcelService.generateTemplate(stateId, yearId, inst, user),
+      this.buildDownloadFileName(stateId, yearId, 'ulb-wise-allocation-formula-template', 'xlsx'),
+    ]);
     return new StreamableFile(buffer as unknown as Uint8Array, {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      disposition: `attachment; filename="ulb-wise-allocation-template_${getTimeStamp(false)}.xlsx"`,
+      disposition: `attachment; filename="${fileName}"`,
     });
   }
 
@@ -140,10 +159,13 @@ export class DevolutionFormulaController {
     @CurrentUser() user: AuthUser,
   ): Promise<StreamableFile> {
     const inst = this.parseInstallment(installment);
-    const buffer = await this.dfRowService.getErrorSheet(stateId, yearId, inst, user);
+    const [buffer, fileName] = await Promise.all([
+      this.dfRowService.getErrorSheet(stateId, yearId, inst, user),
+      this.buildDownloadFileName(stateId, yearId, 'devolution-formula-error-sheet', 'xlsx'),
+    ]);
     return new StreamableFile(buffer as unknown as Uint8Array, {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      disposition: `attachment; filename="ulb-wise-allocation-errors_${getTimeStamp(false)}.xlsx"`,
+      disposition: `attachment; filename="${fileName}"`,
     });
   }
 

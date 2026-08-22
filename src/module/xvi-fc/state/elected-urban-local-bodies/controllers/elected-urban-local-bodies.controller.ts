@@ -19,7 +19,6 @@ import { Permission } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { CurrentUser } from 'src/module/auth/decorators/current-user.decorator';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { ParseObjectIdPipe } from 'src/common/pipes/parse-object-id.pipe';
-import { getTimeStamp } from 'src/shared/utils/date.utils';
 import { ElectedUrbanLocalBodiesService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/main/elected-urban-local-bodies.service';
 import { ElectedUrbanLocalBodiesExcelService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/excel/elected-urban-local-bodies-excel.service';
 import { ElectedUrbanLocalBodiesDocxService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/document/elected-urban-local-bodies-docx.service';
@@ -34,6 +33,8 @@ import { RevalidateEulbExcelDto } from 'src/module/xvi-fc/state/elected-urban-lo
 import { GetEulbPostSubmissionUpdateRowsQueryDto } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/get-eulb-post-submission-update-rows-query.dto';
 import { ValidateEulbPostSubmissionUpdateDto } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/validate-eulb-post-submission-update.dto';
 import { SubmitEulbPostSubmissionUpdateDto } from 'src/module/xvi-fc/state/elected-urban-local-bodies/dto/submit-eulb-post-submission-update.dto';
+import { XviFcService } from 'src/module/xvi-fc/xvi-fc.service';
+import { buildXviFcDownloadFileName } from 'src/shared/utils/xvi-fc-download-file-name.util';
 
 @ApiTags('XVI-FC - State Forms - Elected Urban Local Bodies')
 @ApiBearerAuth()
@@ -45,7 +46,21 @@ export class ElectedUrbanLocalBodiesController {
     private readonly eulbRowService: ElectedUrbanLocalBodiesRowService,
     private readonly eulbPostSubmissionUpdateService: EulbPostSubmissionUpdateService,
     private readonly eulbDocxService: ElectedUrbanLocalBodiesDocxService,
+    private readonly xviFcService: XviFcService,
   ) {}
+
+  private async buildDownloadFileName(
+    stateId: string,
+    yearId: string,
+    formName: string,
+    extension: string,
+  ): Promise<string> {
+    const [{ stateName }, { yearLabel }] = await Promise.all([
+      this.xviFcService.getStateById(stateId),
+      this.xviFcService.getYearLabelById(yearId),
+    ]);
+    return buildXviFcDownloadFileName({ entityName: stateName, formName, yearLabel, extension });
+  }
 
   @ApiOperation({
     summary: 'Get Elected Urban Local Bodies form questions',
@@ -122,10 +137,13 @@ export class ElectedUrbanLocalBodiesController {
     @Param('yearId', ParseObjectIdPipe) yearId: string,
     @CurrentUser() user: AuthUser,
   ): Promise<StreamableFile> {
-    const buffer = await this.eulbService.getTemplate(stateId, yearId, user);
+    const [buffer, fileName] = await Promise.all([
+      this.eulbService.getTemplate(stateId, yearId, user),
+      this.buildDownloadFileName(stateId, yearId, 'elected-body-template', 'xlsx'),
+    ]);
     return new StreamableFile(new Uint8Array(buffer as ArrayBuffer), {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      disposition: `attachment; filename="elected-bodies-template_${getTimeStamp(false)}.xlsx"`,
+      disposition: `attachment; filename="${fileName}"`,
     });
   }
 
@@ -189,10 +207,13 @@ export class ElectedUrbanLocalBodiesController {
     @Param('yearId', ParseObjectIdPipe) yearId: string,
     @CurrentUser() user: AuthUser,
   ): Promise<StreamableFile> {
-    const buffer = await this.eulbRowService.getErrorSheet(stateId, yearId, user);
+    const [buffer, fileName] = await Promise.all([
+      this.eulbRowService.getErrorSheet(stateId, yearId, user),
+      this.buildDownloadFileName(stateId, yearId, 'elected-body-error-sheet', 'xlsx'),
+    ]);
     return new StreamableFile(new Uint8Array(buffer), {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      disposition: `attachment; filename="elected-bodies-error-sheet_${getTimeStamp(false)}.xlsx"`,
+      disposition: `attachment; filename="${fileName}"`,
     });
   }
 
@@ -209,10 +230,13 @@ export class ElectedUrbanLocalBodiesController {
     @Param('yearId', ParseObjectIdPipe) yearId: string,
     @CurrentUser() user: AuthUser,
   ): Promise<StreamableFile> {
-    const buffer = await this.eulbService.dumpToExcel(stateId, yearId, user);
+    const [buffer, fileName] = await Promise.all([
+      this.eulbService.dumpToExcel(stateId, yearId, user),
+      this.buildDownloadFileName(stateId, yearId, 'elected-body-data-dump', 'xlsx'),
+    ]);
     return new StreamableFile(new Uint8Array(buffer as ArrayBuffer), {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      disposition: `attachment; filename="elected-body-data-dump_${getTimeStamp(false)}.xlsx"`,
+      disposition: `attachment; filename="${fileName}"`,
     });
   }
 

@@ -291,3 +291,105 @@ describe('DynamicFormValidationService — actualTarget actualLessThanOrEqualToT
     expect(result.isValid).toBe(true);
   });
 });
+
+describe('DynamicFormValidationService — isNotEmpty/isEmpty visibility operator', () => {
+  const mockNormalizer = { toRawStoragePath: jest.fn((url: string) => url) };
+  const service = new DynamicFormValidationService(mockNormalizer as unknown as FileUrlNormalizerService);
+
+  // Mirrors the EULB pair: signedElectedbodyFile only visible once electedBodyExcelFile has a file.
+  const controllerFileField = {
+    key: 'electedBodyExcelFile',
+    formFieldType: 'file',
+    label: 'Upload elected bodies list',
+  } as unknown as FieldConfig;
+
+  const dependentFileField = {
+    key: 'signedElectedbodyFile',
+    formFieldType: 'file',
+    label: 'Upload signed elected bodies list',
+    validations: [{ name: 'required', validator: null, message: 'This field is required.' }],
+    visibleWhen: { mode: 'all', conditions: [{ key: 'electedBodyExcelFile', operator: 'isNotEmpty' }] },
+  } as unknown as FieldConfig;
+
+  const fields = [controllerFileField, dependentFileField];
+
+  it('hides the dependent (excluded from payload, required skipped) when the controller file is absent', () => {
+    const result = service.validateFinalSubmitAndBuildPayload(fields, {});
+
+    expect(result.isValid).toBe(true);
+    expect(result.errors['signedElectedbodyFile']).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(result.sanitizedPayload, 'signedElectedbodyFile')).toBe(false);
+  });
+
+  it('hides the dependent when the controller file is the default empty shape ({originalName: "", path: "", ...})', () => {
+    const result = service.validateFinalSubmitAndBuildPayload(fields, {
+      electedBodyExcelFile: { originalName: '', path: '', mimeType: '', sizeKb: null, pageCount: null },
+    });
+
+    expect(result.isValid).toBe(true);
+    expect(result.errors['signedElectedbodyFile']).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(result.sanitizedPayload, 'signedElectedbodyFile')).toBe(false);
+  });
+
+  it('shows the dependent once the controller file has a path, and enforces its own required validator', () => {
+    const withoutSigned = service.validateFinalSubmitAndBuildPayload(fields, {
+      electedBodyExcelFile: { originalName: 'ulbs.xlsx', path: 'state/ulbs.xlsx' },
+    });
+
+    expect(withoutSigned.isValid).toBe(false);
+    expect(withoutSigned.errors['signedElectedbodyFile']?.[0]).toMatchObject({ code: 'required' });
+
+    const withSigned = service.validateFinalSubmitAndBuildPayload(fields, {
+      electedBodyExcelFile: { originalName: 'ulbs.xlsx', path: 'state/ulbs.xlsx' },
+      signedElectedbodyFile: { originalName: 'signed.pdf', path: 'state/signed.pdf' },
+    });
+
+    expect(withSigned.isValid).toBe(true);
+    expect(withSigned.sanitizedPayload['signedElectedbodyFile']).toMatchObject({ originalName: 'signed.pdf' });
+  });
+
+  it('also recognizes the legacy fileName/fileUrl shape as present', () => {
+    const result = service.validateFinalSubmitAndBuildPayload(fields, {
+      electedBodyExcelFile: { fileName: 'ulbs.xlsx', fileUrl: 'state/ulbs.xlsx' },
+      signedElectedbodyFile: { fileName: 'signed.pdf', fileUrl: 'state/signed.pdf' },
+    });
+
+    expect(result.isValid).toBe(true);
+  });
+
+  it('isEmpty is the exact inverse of isNotEmpty', () => {
+    const invertedField = {
+      ...dependentFileField,
+      visibleWhen: { mode: 'all', conditions: [{ key: 'electedBodyExcelFile', operator: 'isEmpty' }] },
+    } as unknown as FieldConfig;
+
+    // electedBodyExcelFile absent -> isEmpty() true -> dependent is visible and required.
+    const whenAbsent = service.validateFinalSubmitAndBuildPayload([controllerFileField, invertedField], {});
+    expect(whenAbsent.isValid).toBe(false);
+    expect(whenAbsent.errors['signedElectedbodyFile']?.[0]).toMatchObject({ code: 'required' });
+
+    // electedBodyExcelFile present -> isEmpty() false -> dependent is hidden, required skipped.
+    const whenPresent = service.validateFinalSubmitAndBuildPayload([controllerFileField, invertedField], {
+      electedBodyExcelFile: { originalName: 'ulbs.xlsx', path: 'state/ulbs.xlsx' },
+    });
+    expect(whenPresent.isValid).toBe(true);
+    expect(whenPresent.errors['signedElectedbodyFile']).toBeUndefined();
+  });
+
+  it('treats a non-empty scalar (e.g. a filled-in text field) as present for isNotEmpty', () => {
+    const textController = { key: 'note', formFieldType: 'text', label: 'Note' } as unknown as FieldConfig;
+    const dependent = {
+      key: 'followUp',
+      formFieldType: 'text',
+      label: 'Follow-up',
+      validations: [{ name: 'required', validator: null, message: 'Required.' }],
+      visibleWhen: { mode: 'all', conditions: [{ key: 'note', operator: 'isNotEmpty' }] },
+    } as unknown as FieldConfig;
+
+    const whenBlank = service.validateFinalSubmitAndBuildPayload([textController, dependent], { note: '   ' });
+    expect(whenBlank.errors['followUp']).toBeUndefined();
+
+    const whenFilled = service.validateFinalSubmitAndBuildPayload([textController, dependent], { note: 'hello' });
+    expect(whenFilled.errors['followUp']?.[0]).toMatchObject({ code: 'required' });
+  });
+});

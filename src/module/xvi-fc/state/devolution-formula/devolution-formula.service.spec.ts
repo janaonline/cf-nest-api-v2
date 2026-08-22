@@ -934,6 +934,26 @@ describe('DevolutionFormulaService', () => {
       expect(badge?.label).toBe('Allocated amount: ₹5,00,000');
     });
 
+    it('Allocated amount badge is visible even with no active dataset, as long as canEdit is true', async () => {
+      const badges = await getBadges(docNoDataset);
+      const badge = badges.find((b) => b.label?.startsWith('Allocated amount'));
+      expect(badge?.visible).toBe(true);
+    });
+
+    it('Allocated amount badge shows the live GrantAllocation total, not a cached ₹0, when no form document exists yet', async () => {
+      mockFormModel.findOne.mockReturnValue(q(null));
+      mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
+
+      const result = await service.getForm(stateOid.toString(), YEAR_ID, 1, adminUser);
+      const data = result.data as { questions: HydratedFieldConfig[] };
+      const fileQ = data.questions.find((q) => q.key === 'excelFile');
+      const badges = fileQ?.supportingContent?.[0]?.badges ?? [];
+      const badge = badges.find((b) => b.label?.startsWith('Allocated amount'));
+
+      expect(badge?.label).toBe('Allocated amount: ₹5,00,000');
+      expect(badge?.visible).toBe(true);
+    });
+
     it('Allocated sum badge tone is success when allocation is balanced', async () => {
       const badges = await getBadges(mockFormInProgress);
       const badge = badges.find((b) => b.label?.startsWith('Allocated sum'));
@@ -1009,6 +1029,166 @@ describe('DevolutionFormulaService', () => {
       const badge = badges.find((b) => b.label?.includes('duplicate ULB'));
       expect(badge?.visible).toBe(true);
       expect(badge?.label).toBe('1 duplicate ULB(s)');
+    });
+  });
+
+  // ─── excelFile supportingContent — validationMessage ───────────────────────
+  // The plain-English "what to fix" sentence built by buildValidationIssuesMessage() from the
+  // same counts as the badges above — see that util's own spec for exhaustive join-logic coverage.
+
+  describe('excelFile supportingContent — validationMessage', () => {
+    async function getValidationMessage(doc: object) {
+      mockFormModel.findOne.mockReturnValue(q(doc));
+      mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
+      const result = await service.getForm(stateOid.toString(), YEAR_ID, 1, adminUser);
+      const data = result.data as { questions: HydratedFieldConfig[] };
+      const fileQ = data.questions.find((q) => q.key === 'excelFile');
+      return fileQ?.supportingContent?.[0]?.validationMessage;
+    }
+
+    it('is undefined when validationStatus is VALID', async () => {
+      const message = await getValidationMessage(mockFormInProgress);
+      expect(message).toBeUndefined();
+    });
+
+    it('is undefined when there is no active dataset yet, even if validationStatus is somehow INVALID', async () => {
+      const message = await getValidationMessage({
+        ...mockFormInProgress,
+        activeDatasetVersion: 0,
+        errorRowCount: 3,
+        validationStatus: 'INVALID' as const,
+      });
+      expect(message).toBeUndefined();
+    });
+
+    it('reports row errors only', async () => {
+      const message = await getValidationMessage({
+        ...mockFormInProgress,
+        errorRowCount: 3,
+        validationStatus: 'INVALID' as const,
+      });
+      expect(message).toBe('To submit, fix 3 row error(s).');
+    });
+
+    it('reports missing ULBs only', async () => {
+      const message = await getValidationMessage({
+        ...mockFormInProgress,
+        missingUlbCount: 2,
+        validationStatus: 'INVALID' as const,
+      });
+      expect(message).toBe('To submit, add the 2 missing ULB(s).');
+    });
+
+    it('reports new ULBs only', async () => {
+      const message = await getValidationMessage({
+        ...mockFormInProgress,
+        newUlbCount: 3,
+        validationStatus: 'INVALID' as const,
+      });
+      expect(message).toBe('To submit, register 3 new ULB(s).');
+    });
+
+    it('reports duplicate ULBs only', async () => {
+      const message = await getValidationMessage({
+        ...mockFormInProgress,
+        duplicateUlbCount: 1,
+        validationStatus: 'INVALID' as const,
+      });
+      expect(message).toBe('To submit, remove 1 duplicate ULB(s).');
+    });
+
+    it('reports an allocation mismatch only, naming both the shortfall and the Allocated amount to match', async () => {
+      const message = await getValidationMessage({
+        ...mockFormInProgress,
+        totalAllocatedSum: 400_000,
+        validationStatus: 'INVALID' as const,
+      });
+      expect(message).toBe('To submit, reconcile the ₹1,00,000 to match ₹5,00,000 (Allocated amount).');
+    });
+
+    it('joins multiple active problems into one sentence', async () => {
+      const message = await getValidationMessage({
+        ...mockFormInProgress,
+        errorRowCount: 3,
+        duplicateUlbCount: 1,
+        validationStatus: 'INVALID' as const,
+      });
+      expect(message).toBe('To submit, fix 3 row error(s) and remove 1 duplicate ULB(s).');
+    });
+  });
+
+  // ─── excelFile supportingContent — Revalidate Excel visibility ─────────────
+  // newUlbCount/duplicateUlbCount aren't part of the persisted validationStatus formula (see
+  // devolution-formula-excel.service.ts), so a warning badge can be showing even when
+  // validationStatus already reads 'VALID' — Revalidate Excel must still be offered in that case.
+
+  describe('excelFile supportingContent — Revalidate Excel visibility', () => {
+    const uploadedExcel = { originalName: 'test.xlsx', path: 'state/test.xlsx' };
+
+    async function getRevalidateAction(doc: object) {
+      mockFormModel.findOne.mockReturnValue(q(doc));
+      mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
+      const result = await service.getForm(stateOid.toString(), YEAR_ID, 1, adminUser);
+      const data = result.data as { questions: HydratedFieldConfig[] };
+      const fileQ = data.questions.find((q) => q.key === 'excelFile');
+      const actions = fileQ?.supportingContent?.[0]?.actions ?? [];
+      return actions.find((a) => a.id === 'revalidate-excel');
+    }
+
+    it('is visible when validationStatus is INVALID (baseline)', async () => {
+      const action = await getRevalidateAction({
+        ...mockFormInProgress,
+        excelFile: uploadedExcel,
+        errorRowCount: 3,
+        validationStatus: 'INVALID' as const,
+      });
+      expect(action?.visible).toBe(true);
+    });
+
+    it('is not visible when validationStatus is VALID and every badge is clean', async () => {
+      const action = await getRevalidateAction({ ...mockFormInProgress, excelFile: uploadedExcel });
+      expect(action?.visible).toBe(false);
+    });
+
+    it('is visible when validationStatus is VALID but newUlbCount > 0 (new-ULB warning badge showing)', async () => {
+      const action = await getRevalidateAction({
+        ...mockFormInProgress,
+        excelFile: uploadedExcel,
+        newUlbCount: 2,
+      });
+      expect(action?.visible).toBe(true);
+    });
+
+    it('is visible when validationStatus is VALID but duplicateUlbCount > 0 (duplicate-ULB warning badge showing)', async () => {
+      const action = await getRevalidateAction({
+        ...mockFormInProgress,
+        excelFile: uploadedExcel,
+        duplicateUlbCount: 1,
+      });
+      expect(action?.visible).toBe(true);
+    });
+
+    it('is visible when validationStatus is VALID but missingUlbCount > 0 (missing-ULB warning badge showing)', async () => {
+      const action = await getRevalidateAction({
+        ...mockFormInProgress,
+        excelFile: uploadedExcel,
+        missingUlbCount: 3,
+      });
+      expect(action?.visible).toBe(true);
+    });
+
+    it('is visible when validationStatus is VALID but the allocation is unbalanced (danger badge showing)', async () => {
+      const action = await getRevalidateAction({
+        ...mockFormInProgress,
+        excelFile: uploadedExcel,
+        totalAllocatedSum: 400_000,
+      });
+      expect(action?.visible).toBe(true);
+    });
+
+    it('is not visible when no excel has been uploaded, even with a warning condition', async () => {
+      const action = await getRevalidateAction({ ...mockFormInProgress, newUlbCount: 2 });
+      expect(action?.visible).toBe(false);
     });
   });
 

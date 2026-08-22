@@ -94,7 +94,7 @@ const updatedRow = { ...mockRow, electedBodyStatus: 'Not Constituted', dateOfCon
 const mockRowTypedFields: EulbTypedFieldConfig[] = [
   {
     key: 'dateOfConstitution',
-    label: 'Date on which the elected body is in place.',
+    label: 'Date on which the elected body is in place',
     formFieldType: 'date',
     fieldTypes: ['EULB_ROW_EDIT_FIELDS'],
     validations: [
@@ -399,6 +399,22 @@ describe('ElectedUrbanLocalBodiesRowService', () => {
         success: true,
         data: { rows: expect.any(Array), total: 1, page: 1, limit: 50 },
       });
+    });
+
+    it('escapes regex metacharacters in search instead of passing the raw string to RegExp', async () => {
+      rowModel['find'] = jest.fn().mockReturnValue(q([]));
+      rowModel['countDocuments'] = jest.fn().mockReturnValue(q(0));
+
+      // An unescaped `new RegExp('Alpha(', 'i')` throws (unterminated group) — this must not.
+      await expect(
+        service.getRows(stateOid.toString(), yearOid.toString(), { search: 'Alpha(' }, adminUser),
+      ).resolves.toMatchObject({ success: true });
+
+      const filter = rowModel['find'].mock.calls[0][0] as Record<string, unknown>;
+      const orClauses = filter['$or'] as Array<Record<string, unknown>>;
+      const ulbNameRegex = orClauses.find((c) => 'ulbName' in c)?.['ulbName'] as RegExp;
+      expect(ulbNameRegex).toBeInstanceOf(RegExp);
+      expect(ulbNameRegex.source).toBe('Alpha\\(');
     });
   });
 

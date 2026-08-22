@@ -2,6 +2,7 @@ import { ForbiddenException, Injectable } from '@nestjs/common';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { toObjectIdString } from 'src/common/utils/objectid.util';
+import { escapeRegex } from 'src/common/utils/regex.util';
 import { xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
 import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import { ExpectedUlbSetService } from 'src/module/xvi-fc/common/services/expected-ulb-set.service';
@@ -96,7 +97,7 @@ export class ClaimLetterUlbOptionsService {
     if (query.search) {
       // Linear regex scan over the already-in-memory expected-ULB list — fine at today's per-state
       // ULB counts; revisit if a state's expected-ULB set grows large enough to make this a real cost.
-      const regex = new RegExp(this.escapeRegExp(query.search), 'i');
+      const regex = new RegExp(escapeRegex(query.search), 'i');
       options = options.filter(
         (o) =>
           regex.test(o.ulbName) || (o.censusCode && regex.test(o.censusCode)) || (o.sbCode && regex.test(o.sbCode)),
@@ -127,10 +128,6 @@ export class ClaimLetterUlbOptionsService {
     excludeClaimLetterId?: string,
   ): Promise<Set<string>> {
     return this.eligibilityService.resolveClaimedUlbIds(stateId, yearId, installment, excludeClaimLetterId);
-  }
-
-  private escapeRegExp(value: string): string {
-    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
   private hasStateAccess(user: AuthUser, stateId: string): boolean {

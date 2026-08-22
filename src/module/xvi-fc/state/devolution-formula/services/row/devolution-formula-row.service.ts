@@ -8,6 +8,7 @@ import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import { assertCanStateEditForm } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
 import { toObjectIdString } from 'src/common/utils/objectid.util';
+import { escapeRegex } from 'src/common/utils/regex.util';
 import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import { throwXviFcValidationError, xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
 import {
@@ -96,7 +97,7 @@ export class DevolutionFormulaRowService {
     if (query.validationStatus) filter['validationStatus'] = query.validationStatus;
 
     if (query.search) {
-      const regex = new RegExp(query.search, 'i');
+      const regex = new RegExp(escapeRegex(query.search), 'i');
       filter['$or'] = [{ censusCode: regex }, { sbCode: regex }, { ulbName: regex }];
     }
 

@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { XviFcController } from './xvi-fc.controller';
 import { XviFcService } from './xvi-fc.service';
@@ -47,13 +47,13 @@ import { UlbEligibilityModule } from '../ulb-eligibility/ulb-eligibility.module'
     ]),
     AnnualAccountsModule,
     SfcStatusModule,
-    ElectedUrbanLocalBodiesModule,
+    forwardRef(() => ElectedUrbanLocalBodiesModule),
     SideMenuModule,
     FormJsonModule,
     UnspentBalanceDisclosureModule,
     BankAccountModule,
     BudgetDocumentModule,
-    DevolutionFormulaModule,
+    forwardRef(() => DevolutionFormulaModule),
     FcUnspentDeclarationModule,
     FcUnspentMohuaReviewModule,
     StateDashboardModule,
@@ -63,6 +63,6 @@ import { UlbEligibilityModule } from '../ulb-eligibility/ulb-eligibility.module'
   ],
   controllers: [XviFcController],
   providers: [XviFcService, XviFcCacheService, XviFcCacheInterceptor],
-  exports: [XviFcCacheService, XviFcCacheInterceptor],
+  exports: [XviFcService, XviFcCacheService, XviFcCacheInterceptor],
 })
 export class XviFcModule {}
