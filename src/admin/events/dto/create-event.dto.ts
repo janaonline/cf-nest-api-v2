@@ -47,6 +47,7 @@ export class CreateEventDto {
   desc: string;
 
   @ApiProperty({
+    enum: EventStatus,
     example: EventStatus.ACTIVE,
     description: 'Status of the event. Allowed values are: 0 (Inactive), 1 (Active), 2 (Draft).',
   })

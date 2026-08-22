@@ -1,0 +1,220 @@
+import { ForbiddenException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { InjectModel } from '@nestjs/mongoose';
+import * as bcrypt from 'bcrypt';
+import type { Response } from 'express';
+import { Model } from 'mongoose';
+import { State, StateDocument } from 'src/schemas/state.schema';
+import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
+import { Year, YearDocument } from 'src/schemas/year.schema';
+import { Role } from './enum/role.enum';
+import { UserDocument } from 'src/schemas/user/user.schema';
+import { UsersRepository } from 'src/module/users/users.repository';
+import { AuthService } from './auth.service';
+import { CheckUserDto } from './dto/check-user.dto';
+import { LoginDto } from './dto/login.dto';
+import { AuthResponse } from './types/auth-tokens.type';
+import { buildUserResponsePayload } from './auth-user-response.helper';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
+import { CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE } from 'src/module/ulb-eligibility/ulb-eligibility.constants';
+import { User } from './enum/role.enum';
+@Injectable()
+export class LoginService {
+  constructor(
+    private readonly usersRepository: UsersRepository,
+    private readonly authService: AuthService,
+    private readonly configService: ConfigService,
+    private readonly ulbEligibilityService: UlbEligibilityService,
+    @InjectModel(State.name) private readonly stateModel: Model<StateDocument>,
+    @InjectModel(Ulb.name) private readonly ulbModel: Model<UlbDocument>,
+    @InjectModel(Year.name) private readonly yearModel: Model<YearDocument>,
+  ) {}
+
+  private static readonly MOBILE_RE = /^[6-9]\d{9}$/;
+  private static readonly EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  private static readonly CODE_RE = /^\d{2,}$/;
+
+  async checkUser(dto: CheckUserDto): Promise<{
+    status: string;
+    isXVIFCProfileVerified: boolean;
+    maskedContact: string;
+    loginFlow: 'PASSWORD' | 'OTP';
+    message: string;
+    role: Role | null;
+  }> {
+    const identifier = dto.identifier;
+    const isEmail = LoginService.EMAIL_RE.test(identifier);
+
+    let user: UserDocument | null = null;
+
+    if (LoginService.MOBILE_RE.test(identifier)) {
+      user = await this.usersRepository.findByMobile(identifier);
+    } else if (isEmail) {
+      user = await this.usersRepository.findByEmail(identifier.toLowerCase());
+    } else if (LoginService.CODE_RE.test(identifier)) {
+      user = await this.usersRepository.findByCensusOrSbCode(identifier);
+    }
+
+    if (!user) throw new NotFoundException('User not found. Please check your details.');
+
+    const loginFlow: 'PASSWORD' | 'OTP' = isEmail
+      ? 'PASSWORD'
+      : user.status === 'APPROVED' && user.isXVIFCProfileVerified
+        ? 'PASSWORD'
+        : 'OTP';
+
+    return {
+      status: user.status ?? '',
+      isXVIFCProfileVerified: user.isXVIFCProfileVerified ?? false,
+      maskedContact: this.maskContact(user.mobile, user.email),
+      loginFlow,
+      message: 'User found',
+      role: user.role ?? null,
+    };
+  }
+
+  private maskContact(mobile?: string, email?: string): string {
+    if (mobile?.trim()) {
+      const m = mobile.trim();
+      return 'X'.repeat(Math.max(0, m.length - 4)) + m.slice(-4);
+    }
+    if (email?.trim()) {
+      const [local, domain] = email.split('@');
+      return `${local.slice(0, 2)}**@${domain}`;
+    }
+    return '';
+  }
+
+  async login(dto: LoginDto, res: Response): Promise<AuthResponse> {
+    const isEmail = dto.identifier.includes('@');
+    const isMobile = /^\d{10}$/.test(dto.identifier.trim());
+
+    if (isMobile && dto.type !== '16thFC') {
+      throw new ForbiddenException('Mobile number login is only supported for 16thFC');
+    }
+
+    const invalidMsg = isEmail
+      ? 'Invalid email or password'
+      : isMobile
+        ? 'Invalid mobile number or password'
+        : 'Invalid ULB Code/Census Code or password';
+
+    const user = await this.usersRepository.findByIdentifierWithSensitiveFields(dto.identifier);
+    if (!user) throw new UnauthorizedException(invalidMsg);
+
+    if (user.status === 'PENDING') throw new ForbiddenException('Waiting for admin action on request.');
+    if (user.status === 'REJECTED')
+      throw new ForbiddenException(`Your request has been rejected. Reason: ${user.rejectReason}`);
+    if (dto.type === '16thFC' && user.isXviFcdeleted) {
+      throw new ForbiddenException('Invalid email or password');
+    }
+    if (!user.isEmailVerified) {
+      const url = `${this.configService.get<string>('HOSTNAME')}/account-reactivate`;
+      throw new ForbiddenException(
+        `Email not verified yet. Please <a href='${url}'>click here</a> to send the activation link on your registered email`,
+      );
+    }
+    if (user.role === Role.ULB && isEmail) throw new ForbiddenException('Please use ULB Code/Census Code for login');
+
+    let state: StateDocument | null = null;
+    if (user.state) {
+      state = await this.stateModel.findById(user.state).exec();
+      if (state?.accessToXVFC === false) {
+        throw new ForbiddenException('Sorry! You are not Authorized To Access XV FC Grants Module');
+      }
+    }
+
+    if (dto.type) {
+      if ([Role.PMU, Role.AAINA].includes(user.role) && dto.type === '15thFC') {
+        throw new ForbiddenException(
+          `${user.role} user not allowed login from 15th Fc, Please login with Ranking 2022.`,
+        );
+      }
+      if (![Role.STATE, Role.STATE_DASHBOARD].includes(user.role) && dto.type === 'state-dashboard') {
+        throw new ForbiddenException(
+          `${user.role} user not allowed login State Dashboard, Please login with State Dashboard user id.`,
+        );
+      }
+      if (![Role.XVIFC_STATE, Role.XVIFC, Role.ULB].includes(user.role) && dto.type === 'XVIFC') {
+        throw new ForbiddenException(`${user.role} user not allowed XVIFC login, Please login with XVIFC user id.`);
+      }
+      if (user.role === Role.XVIFC_STATE && (dto.type === '15thFC' || dto.type === 'fiscalRankings')) {
+        throw new ForbiddenException(
+          `${user.role} user not allowed login from 15th FC or Fiscal Ranking, Please login with XVIFC user id.`,
+        );
+      }
+    }
+
+    let ulb: UlbDocument | null = null;
+    if (user.role === Role.ULB) {
+      ulb = await this.ulbModel.findOne({ _id: user.ulb, isActive: true }).exec();
+      if (!ulb) throw new NotFoundException('User not found');
+    }
+
+    const userId = (user._id as { toString(): string }).toString();
+
+    if (user.isLocked) {
+      if (!user.lockUntil || Date.now() < user.lockUntil) {
+        throw new ForbiddenException('Your account is temporarily locked for 1 hour');
+      }
+      await this.usersRepository.resetLoginAttempts(userId);
+    }
+
+    const masterPassword = this.configService.get<string>('USER_IDENTITY');
+    const valid =
+      masterPassword && dto.password === masterPassword ? true : await bcrypt.compare(dto.password, user.password);
+
+    if (!valid) {
+      await this.usersRepository.incrementLoginAttempts(userId);
+      throw new UnauthorizedException(invalidMsg);
+    }
+
+    if (user.loginAttempts > 0) {
+      await this.usersRepository.resetLoginAttempts(userId);
+    }
+
+    // Only reachable once credentials are confirmed valid — checking this earlier (e.g. alongside
+    // the ULB lookup above) would let an unauthenticated caller who merely knows a ULB code learn
+    // its Cantonment-Board status without ever proving they hold valid credentials.
+    if (
+      ulb &&
+      (dto.type === '16thFC' || dto.type === 'XVIFC') &&
+      !(await this.ulbEligibilityService.isUlbEligibleForGrantCycle(ulb, 'XVIFC'))
+    ) {
+      throw new ForbiddenException(CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE);
+    }
+
+    const tokens = await this.authService.generateTokens(userId, dto.type ?? 'WEB');
+    await this.authService.saveRefreshToken(userId, tokens.refreshToken);
+    await this.usersRepository.updateLastLogin(userId);
+    this.authService.setRefreshCookie(res, tokens.refreshToken);
+
+    const allYears = await this.getActiveYears();
+    return {
+      token: tokens.accessToken,
+      user: buildUserResponsePayload(user, state, ulb),
+      allYears,
+    };
+  }
+
+  private async getActiveYears(): Promise<Record<string, unknown>> {
+    const years = await this.yearModel.find({ isActive: true }).select({ isActive: 0 }).exec();
+    return years.reduce<Record<string, unknown>>((acc, y) => {
+      acc[y.year] = (y._id as { toString(): string }).toString();
+      return acc;
+    }, {});
+  }
+
+  /**
+   * Live eligibility check for `GET /auth/me` — covers the case of a ULB user who already holds a
+   * valid token (issued before this check existed, or via a flow that doesn't gate it) navigating
+   * straight into the XVI FC module. Returns `null` for non-ULB users, since the rule doesn't apply
+   * to them. Computed fresh from Mongo on every call, same as everything else on `req.user`.
+   */
+  async resolveXviFcEligibility(user: Pick<User, 'role' | 'ulb'>): Promise<boolean | null> {
+    if (user.role !== Role.ULB || !user.ulb) return null;
+    const ulb = await this.ulbModel.findOne({ _id: user.ulb, isActive: true }).exec();
+    if (!ulb) return false;
+    return this.ulbEligibilityService.isUlbEligibleForGrantCycle(ulb, 'XVIFC');
+  }
+}

@@ -1,35 +1,30 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
-// import { MailService } from '../../mail/mail.service';
-// import { OtpJobData } from '../otp.types';
 import { Logger } from '@nestjs/common';
 import { Job } from 'bullmq/dist/esm/classes';
 import { NodeMailerService } from 'src/core/node-mailer/node-mailer.service';
 import { EmailJob } from '../../aws-ses/email-job.type';
 import { EMAIL_QUEUE } from './email-queue.constant';
 
-@Processor(EMAIL_QUEUE, {
-  concurrency: 5,
-})
+@Processor(EMAIL_QUEUE, { concurrency: 5 })
 export class EmailQueueProcessor extends WorkerHost {
-  logger = new Logger(EmailQueueProcessor.name);
-  constructor(
-    // private ses: SESMailService,
-    private readonly mailService: NodeMailerService,
-  ) {
+  private readonly logger = new Logger(EmailQueueProcessor.name);
+
+  constructor(private readonly mailService: NodeMailerService) {
     super();
   }
 
-  //   async process(job: { name: string; data: OtpJobData }) {
-  async process(job: Job<EmailJob>) {
-    try {
-      // this.logger.log('Processing job:', job.name, 'with data:', job.data);
-      this.logger.log(`Processing job ${job.id} of type ${job.name} with data: `, job.data);
-      const { from, to, text, subject, templateName, mailData } = job.data;
-      // const params = { from?: string; to: string; html: string; text?: string; subject: string }
-      // await this.ses.sendEmail({ to, subject, html, text, from });
-      await this.mailService.sendEmailWithTemplate(to, subject, templateName, mailData);
-    } catch (error) {
-      this.logger.error('Error processing job:', error);
+  async process(job: Job<EmailJob>): Promise<void> {
+    const { to, subject, html, templateName, mailData } = job.data;
+    const recipient = Array.isArray(to) ? `${to.length} recipients` : to;
+    this.logger.log(`Processing job ${job.id}: "${subject}" → ${recipient}`);
+
+    if (html) {
+      await this.mailService.sendHtml(to, subject, html);
+    } else if (templateName) {
+      const singleTo = typeof to === 'string' ? to : to[0];
+      await this.mailService.sendEmailWithTemplate(singleTo, subject, templateName, mailData);
+    } else {
+      throw new Error(`Job ${job.id}: neither html nor templateName provided`);
     }
   }
 }
