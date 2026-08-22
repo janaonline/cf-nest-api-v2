@@ -7,6 +7,7 @@ import { XviFcAnnualAccount } from '../../../../schemas/xvi-fc/annual-account.sc
 import { XviFcAnnualAccountUploadHistory } from '../../../../schemas/xvi-fc/annual-account-upload-history.schema';
 import { XviFcAnnualAccountFormLog } from '../../../../schemas/xvi-fc/annual-account-form-log.schema';
 import { XviFcDocumentActionGate } from '../../../../schemas/xvi-fc/document-action-gate.schema';
+import { XviFcManualReviewRequest } from '../../../../schemas/xvi-fc/manual-review-request.schema';
 import { Ulb } from '../../../../schemas/ulb.schema';
 import { User } from '../../../../schemas/user/user.schema';
 import { S3Service } from '../../../../core/s3/s3.service';
@@ -51,6 +52,11 @@ describe('AnnualAccountsController', () => {
     const mockActionGateModel = {
       find: jest.fn().mockReturnValue({ lean: () => ({ exec: () => Promise.resolve([]) }) }),
     };
+    const mockManualReviewRequestModel = {
+      create: jest.fn(),
+      find: jest.fn().mockReturnValue({ sort: () => ({ lean: () => ({ exec: () => Promise.resolve([]) }) }) }),
+      findOneAndUpdate: jest.fn(),
+    };
     const mockS3Service = {
       headObject: jest.fn(),
       getPdfBufferFromS3: jest.fn(),
@@ -89,6 +95,7 @@ describe('AnnualAccountsController', () => {
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
         { provide: getModelToken(User.name), useValue: mockUserModel },
         { provide: getModelToken(XviFcDocumentActionGate.name), useValue: mockActionGateModel },
+        { provide: getModelToken(XviFcManualReviewRequest.name), useValue: mockManualReviewRequestModel },
         { provide: S3Service, useValue: mockS3Service },
         { provide: S3UploadService, useValue: mockS3UploadService },
         { provide: getQueueToken(ANNUAL_ACCOUNT_PROCESSING_QUEUE), useValue: mockOcrQueue },
@@ -130,8 +137,10 @@ describe('AnnualAccountsController', () => {
     expect(spy).toHaveBeenCalledWith('id-1', 'auditedData', 'doc-1', testUser);
   });
 
+  const fakeReq = { headers: {}, socket: {} } as unknown as Request;
+
   it('requestManualReview rejects a section other than auditedData/unauditedData', () => {
-    expect(() => controller.requestManualReview('id-1', 'doc-1', 'somethingElse', testUser)).toThrow(
+    expect(() => controller.requestManualReview('id-1', 'doc-1', 'somethingElse', testUser, fakeReq)).toThrow(
       'section must be "auditedData" or "unauditedData"',
     );
   });
@@ -146,12 +155,10 @@ describe('AnnualAccountsController', () => {
           >,
       );
 
-    await controller.requestManualReview('id-1', 'doc-1', 'auditedData', testUser);
+    await controller.requestManualReview('id-1', 'doc-1', 'auditedData', testUser, fakeReq);
 
-    expect(spy).toHaveBeenCalledWith('id-1', 'auditedData', 'doc-1', testUser);
+    expect(spy).toHaveBeenCalledWith('id-1', 'auditedData', 'doc-1', testUser, null, null);
   });
-
-  const fakeReq = { headers: {}, socket: {} } as unknown as Request;
 
   it('decideManualReview rejects a section other than auditedData/unauditedData', () => {
     expect(() =>
@@ -172,6 +179,24 @@ describe('AnnualAccountsController', () => {
     await controller.decideManualReview('id-1', 'doc-1', 'auditedData', { decision: 'APPROVED' }, testUser, fakeReq);
 
     expect(spy).toHaveBeenCalledWith('id-1', 'auditedData', 'doc-1', { decision: 'APPROVED' }, testUser, null, null);
+  });
+
+  it('getManualReviewHistory rejects a section other than auditedData/unauditedData', () => {
+    expect(() => controller.getManualReviewHistory('id-1', 'doc-1', 'somethingElse', testUser)).toThrow(
+      'section must be "auditedData" or "unauditedData"',
+    );
+  });
+
+  it('getManualReviewHistory delegates to the service for a valid section', async () => {
+    const spy = jest
+      .spyOn(controller['annualAccountsService'], 'getManualReviewHistory')
+      .mockImplementation(
+        () => Promise.resolve([]) as unknown as ReturnType<AnnualAccountsService['getManualReviewHistory']>,
+      );
+
+    await controller.getManualReviewHistory('id-1', 'doc-1', 'auditedData', testUser);
+
+    expect(spy).toHaveBeenCalledWith('id-1', 'auditedData', 'doc-1', testUser);
   });
 
   it('getDetails rejects a section other than auditedData/unauditedData', () => {

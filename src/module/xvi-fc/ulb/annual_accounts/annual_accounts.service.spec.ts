@@ -6,6 +6,7 @@ import { XviFcAnnualAccount } from '../../../../schemas/xvi-fc/annual-account.sc
 import { XviFcAnnualAccountUploadHistory } from '../../../../schemas/xvi-fc/annual-account-upload-history.schema';
 import { XviFcAnnualAccountFormLog } from '../../../../schemas/xvi-fc/annual-account-form-log.schema';
 import { XviFcDocumentActionGate } from '../../../../schemas/xvi-fc/document-action-gate.schema';
+import { XviFcManualReviewRequest } from '../../../../schemas/xvi-fc/manual-review-request.schema';
 import { Ulb } from '../../../../schemas/ulb.schema';
 import { User } from '../../../../schemas/user/user.schema';
 import { S3Service } from '../../../../core/s3/s3.service';
@@ -42,6 +43,8 @@ describe('AnnualAccountsService', () => {
   let mockUlbModel: Record<string, jest.Mock>;
   let mockUserModel: Record<string, jest.Mock>;
   let mockFormLogModel: { create: jest.Mock };
+  let mockManualReviewRequestModel: { create: jest.Mock; find: jest.Mock; findOneAndUpdate: jest.Mock };
+
   let mockOcrQueue: { add: jest.Mock };
   let mockFormJsonService: { findActiveByDesignYearAndFormId: jest.Mock };
   let mockS3Service: Record<string, jest.Mock>;
@@ -70,6 +73,11 @@ describe('AnnualAccountsService', () => {
     };
     mockFormLogModel = {
       create: jest.fn().mockResolvedValue(undefined),
+    };
+    mockManualReviewRequestModel = {
+      create: jest.fn().mockResolvedValue(undefined),
+      find: jest.fn().mockReturnValue(mockQuery([])),
+      findOneAndUpdate: jest.fn().mockResolvedValue({ _id: 'mr-1' }),
     };
     mockUlbModel = {
       findById: jest.fn().mockReturnValue(mockQuery({ state: { toString: () => 'state-1' } })),
@@ -117,6 +125,7 @@ describe('AnnualAccountsService', () => {
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
         { provide: getModelToken(User.name), useValue: mockUserModel },
         { provide: getModelToken(XviFcDocumentActionGate.name), useValue: mockActionGateModel },
+        { provide: getModelToken(XviFcManualReviewRequest.name), useValue: mockManualReviewRequestModel },
         { provide: S3Service, useValue: mockS3Service },
         { provide: S3UploadService, useValue: mockS3UploadService },
         { provide: getQueueToken(ANNUAL_ACCOUNT_PROCESSING_QUEUE), useValue: mockOcrQueue },
@@ -441,7 +450,12 @@ describe('AnnualAccountsService', () => {
   describe('requestManualReview', () => {
     const ULB_ID = '507f1f77bcf86cd799439011';
     const ACCOUNT_ID = '507f1f77bcf86cd799439014';
-    const ulbUser: AuthUser = { _id: 'user-1', role: 'ULB-EDITOR', scope: 'ULB', ulb: ULB_ID } as AuthUser;
+    const ulbUser: AuthUser = {
+      _id: '507f1f77bcf86cd799439098',
+      role: 'ULB-EDITOR',
+      scope: 'ULB',
+      ulb: ULB_ID,
+    } as AuthUser;
 
     const docWithOcr = (ocrInfo: Record<string, unknown>) =>
       mockQuery({
@@ -495,7 +509,9 @@ describe('AnnualAccountsService', () => {
     });
 
     it('sets isManualReviewRequested on both the account and upload-history records', async () => {
-      mockAnnualAccountModel.findById.mockReturnValue(docWithOcr({ validationStatus: 'FAIL' }));
+      mockAnnualAccountModel.findById.mockReturnValue(
+        docWithOcr({ validationStatus: 'FAIL', jobId: 'ocr-job-1' }),
+      );
       mockUploadHistoryModel.updateOne = jest.fn().mockResolvedValue({ modifiedCount: 1 });
 
       await service.requestManualReview(ACCOUNT_ID, 'auditedData', 'auditors-report', ulbUser);
@@ -510,6 +526,15 @@ describe('AnnualAccountsService', () => {
       expect(mockUploadHistoryModel.updateOne).toHaveBeenCalledWith(
         { uploadId: 'upload-1' },
         { $set: expect.objectContaining({ 'ocrInfo.isManualReviewRequested': true }) },
+      );
+      expect(mockManualReviewRequestModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          docId: 'auditors-report',
+          uploadId: 'upload-1',
+          ocrJobId: 'ocr-job-1',
+          status: 'PENDING',
+          dueAt: expect.any(Date),
+        }),
       );
     });
   });
@@ -578,8 +603,27 @@ describe('AnnualAccountsService', () => {
       expect(filter).toMatchObject({ 'documents.docId': 'auditors-report' });
       expect(update.$set?.['documents.$.processingStatus']).toBe('PASSED');
       expect(update.$set?.['documents.$.manualReviewDecision']).toMatchObject({ status: 'APPROVED' });
-      expect(mockFormLogModel.create).toHaveBeenCalledWith(
-        expect.objectContaining({ actorStage: 'ADMIN', action: 'APPROVED' }),
+      expect(mockManualReviewRequestModel.findOneAndUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ docId: 'auditors-report', uploadId: 'upload-1', status: 'PENDING' }),
+        expect.objectContaining({ $set: expect.objectContaining({ status: 'APPROVED' }) }),
+        expect.objectContaining({ sort: { requestedAt: -1 } }),
+      );
+    });
+
+    it('falls back to synthesizing a manual-review record when no PENDING row is found (legacy request)', async () => {
+      mockAnnualAccountModel.findById.mockReturnValue(docAwaitingReview());
+      mockManualReviewRequestModel.findOneAndUpdate.mockResolvedValueOnce(null);
+
+      await service.decideManualReview(
+        ACCOUNT_ID,
+        'auditedData',
+        'auditors-report',
+        { decision: 'APPROVED' },
+        adminUser,
+      );
+
+      expect(mockManualReviewRequestModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({ docId: 'auditors-report', uploadId: 'upload-1', status: 'APPROVED' }),
       );
     });
 

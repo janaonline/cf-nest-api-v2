@@ -38,6 +38,11 @@ import {
 } from '../../../../schemas/xvi-fc/annual-account-form-log.schema';
 import { Ulb, UlbDocument } from '../../../../schemas/ulb.schema';
 import { User, UserDocument } from '../../../../schemas/user/user.schema';
+import {
+  MANUAL_REVIEW_SLA_HOURS,
+  XviFcManualReviewRequest,
+  XviFcManualReviewRequestDocument,
+} from '../../../../schemas/xvi-fc/manual-review-request.schema';
 import { Role } from '../../../auth/enum/role.enum';
 import { UlbEligibilityService } from '../../../ulb-eligibility/ulb-eligibility.service';
 import { CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE } from '../../../ulb-eligibility/ulb-eligibility.constants';
@@ -142,6 +147,9 @@ export class AnnualAccountsService implements OnModuleInit {
 
     @InjectModel(XviFcDocumentActionGate.name)
     private readonly actionGateModel: Model<DocumentActionGateDocument>,
+
+    @InjectModel(XviFcManualReviewRequest.name)
+    private readonly manualReviewRequestModel: Model<XviFcManualReviewRequestDocument>,
 
     private readonly s3Service: S3Service,
 
@@ -837,7 +845,14 @@ export class AnnualAccountsService implements OnModuleInit {
 
   // ─── ULB requests manual review of a failed OCR validation ───────────────────
 
-  async requestManualReview(id: string, section: AnnualAccountSectionKey, docId: string, user: AuthUser) {
+  async requestManualReview(
+    id: string,
+    section: AnnualAccountSectionKey,
+    docId: string,
+    user: AuthUser,
+    ipAddress: string | null = null,
+    userAgent: string | null = null,
+  ) {
     if (user.scope !== Scope.ULB) {
       throw new ForbiddenException('Only ULB users may request manual review');
     }
@@ -874,6 +889,20 @@ export class AnnualAccountsService implements OnModuleInit {
         { $set: { 'ocrInfo.isManualReviewRequested': true, 'ocrInfo.manualReviewRequestedAt': requestedAt } },
       ),
     ]);
+
+    await this.manualReviewRequestModel.create({
+      annualAccountId: new Types.ObjectId(id),
+      ulb: anchor.ulb,
+      designYear: anchor.design_year,
+      section,
+      docId,
+      uploadId: docSlot.currentUpload.uploadId,
+      ocrJobId: docSlot.currentUpload.ocrInfo?.jobId ?? null,
+      status: 'PENDING',
+      requestedAt,
+      requestedBy: { userId: new Types.ObjectId(user._id), role: user.role, ipAddress, userAgent },
+      dueAt: new Date(requestedAt.getTime() + MANUAL_REVIEW_SLA_HOURS * 60 * 60 * 1000),
+    });
 
     this.logger.log(
       `Manual review requested — annualAccountId=${id} section=${section} docId=${docId} by user=${user._id}`,
@@ -951,21 +980,40 @@ export class AnnualAccountsService implements OnModuleInit {
       },
     );
 
-    await this.formLogModel.create({
-      annualAccountId: new Types.ObjectId(id),
-      ulb: anchor.ulb,
-      designYear: anchor.design_year,
-      section,
-      formId: SECTION_FORM_IDS[section],
-      action: dto.decision,
-      toStatus: sectionDoc.form_status,
-      actorStage: 'ADMIN',
-      userInfo: { userId: new Types.ObjectId(user._id), role: user.role, ipAddress, userAgent },
-      ...(dto.note != null && { note: dto.note }),
-      documents: [
-        buildFormLogDocumentEntry(docId, dto.decision, dto.note ?? null, docSlot.currentUpload.file?.path ?? null),
-      ],
-    });
+    const decidedBy = { userId: new Types.ObjectId(user._id), role: user.role, ipAddress, userAgent };
+    const updatedRequest = await this.manualReviewRequestModel.findOneAndUpdate(
+      {
+        annualAccountId: new Types.ObjectId(id),
+        section,
+        docId,
+        uploadId: docSlot.currentUpload.uploadId,
+        status: 'PENDING',
+      },
+      { $set: { status: dto.decision, decidedAt: decision.decidedAt, decidedBy, decisionNote: dto.note ?? null } },
+      { sort: { requestedAt: -1 } },
+    );
+
+    if (!updatedRequest) {
+      // No PENDING row to match — this request predates the XviFcManualReviewRequest collection.
+      // Synthesize one from the embedded requestedAt so the decision isn't lost from the history.
+      const requestedAt = docSlot.currentUpload.ocrInfo?.manualReviewRequestedAt ?? decision.decidedAt;
+      await this.manualReviewRequestModel.create({
+        annualAccountId: new Types.ObjectId(id),
+        ulb: anchor.ulb,
+        designYear: anchor.design_year,
+        section,
+        docId,
+        uploadId: docSlot.currentUpload.uploadId,
+        ocrJobId: docSlot.currentUpload.ocrInfo?.jobId ?? null,
+        status: dto.decision,
+        requestedAt,
+        requestedBy: docSlot.currentUpload.userInfo,
+        dueAt: new Date(requestedAt.getTime() + MANUAL_REVIEW_SLA_HOURS * 60 * 60 * 1000),
+        decidedAt: decision.decidedAt,
+        decidedBy,
+        decisionNote: dto.note ?? null,
+      });
+    }
 
     this.logger.log(
       `Manual review ${dto.decision.toLowerCase()} — annualAccountId=${id} section=${section} docId=${docId} by user=${user._id}`,
@@ -1015,6 +1063,36 @@ export class AnnualAccountsService implements OnModuleInit {
         decidedAt,
         loginUrl: `${clientUrl}/xvifc`,
       },
+    });
+  }
+
+  // ─── Manual-review request history for one document ──────────────────────────
+
+  async getManualReviewHistory(id: string, section: AnnualAccountSectionKey, docId: string, user: AuthUser) {
+    const anchor = await this.annualAccountModel.findById(new Types.ObjectId(id)).lean().exec();
+    if (!anchor) throw new NotFoundException('Annual account not found');
+    await this.validateViewAccess(anchor, user);
+
+    const requests = await this.manualReviewRequestModel
+      .find({ annualAccountId: new Types.ObjectId(id), section, docId })
+      .sort({ requestedAt: -1 })
+      .lean()
+      .exec();
+
+    return requests.map((r) => {
+      const breachedAgainst = r.decidedAt ?? new Date();
+      return {
+        uploadId: r.uploadId,
+        ocrJobId: r.ocrJobId ?? null,
+        status: r.status,
+        requestedAt: r.requestedAt,
+        requestedBy: { role: r.requestedBy.role },
+        dueAt: r.dueAt,
+        isBreached: r.dueAt.getTime() < breachedAgainst.getTime(),
+        decidedAt: r.decidedAt,
+        decidedBy: r.decidedBy ? { role: r.decidedBy.role } : null,
+        decisionNote: r.decisionNote,
+      };
     });
   }
 
