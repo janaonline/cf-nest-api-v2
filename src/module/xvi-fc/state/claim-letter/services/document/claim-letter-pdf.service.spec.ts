@@ -83,7 +83,7 @@ describe('ClaimLetterPdfService', () => {
     await expect(service.generateDocumentPdf(claimLetterId, user)).rejects.toThrow(ForbiddenException);
   });
 
-  it('sanitizes "/" and "\\\\" out of refNo for the filename', async () => {
+  it('builds the CF_{StateName}_claim-letter-{refNo}_{YearLabel}.pdf filename, sanitizing "/" out of refNo', async () => {
     documentService.getDocumentData.mockResolvedValue({
       success: true,
       message: 'ok',
@@ -93,7 +93,7 @@ describe('ClaimLetterPdfService', () => {
 
     const result = await service.generateDocumentPdf(claimLetterId, user);
 
-    expect(result.fileName).toBe('claim-letter-CL-AP-2026-27-1-1.pdf');
+    expect(result.fileName).toBe('CF_Andhra-Pradesh_Claim-letter-CL-AP-2026-27-1-1_2026-27.pdf');
   });
 
   it('produces a well-formed PDF with at least 3 pages (one per section) for a small batch', async () => {

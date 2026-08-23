@@ -85,6 +85,27 @@ service's `getDocumentData` for the identical pattern) are the only values inter
 letter — the closing signature block (`[Name]`, `[Designation]`, `Government of [State Name]`,
 etc.) is written as literal, non-interpolated text for the state to fill in by hand before signing.
 
+### `signedElectedbodyFile`'s visibility is gated on Excel *validity*, not just presence
+
+The `formjsons` config for `signedElectedbodyFile` carries a `visibleWhen` condition against
+`electedBodyExcelValidationStatus` (`{ operator: 'equals', value: 'VALID' }`) — **not** one of this
+form's own `FieldConfig` fields. `ElectedUrbanLocalBodiesService` (`services/main/`) injects it
+into the `FormData` passed to `DynamicFormValidationService` at both `saveDraft` and `finalSubmit`,
+sourced from the persisted `validationStatus` flag (the same one the `finalSubmit` hard-gate
+already reads) — mirror this in both places if a third gated field is ever added. The frontend
+mirrors the same key as a synthetic (non-`FieldConfig`) `FormControl`, added in
+`elected-body-status.component.ts`'s `createFormControls()` from the `validationSummary` signal
+(same non-backend-driven-control pattern as `fc-unspent-declaration.component.ts`'s
+`unspentUlbData`).
+
+`saveDraft` resets `validationStatus` to `'NOT_VALIDATED'` whenever the incoming
+`electedBodyExcelFile` actually changes (detected via `FileInfoNormalizerService
+.normalizeInboundFileInfo`'s own contract — its result is `undefined` only when nothing changed) —
+without this, swapping in a brand-new, never-validated file would leave the previous file's
+`'VALID'` flag in place until the next validate/revalidate call, letting
+`signedElectedbodyFile` appear (and its own `required` validator be skipped or enforced) against a
+stale status.
+
 ## Outbound dependency: devolution-formula reads this module's status
 
 `devolution-formula`'s `checkInstallment1Prereq` reads this form's `currentFormStatus` directly

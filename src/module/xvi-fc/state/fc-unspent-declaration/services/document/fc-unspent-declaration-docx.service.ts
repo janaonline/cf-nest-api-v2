@@ -13,7 +13,8 @@ import {
   type ITableBordersOptions,
 } from 'docx';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
-import { getTimeStamp } from 'src/shared/utils/date.utils';
+import { buildXviFcDownloadFileName } from 'src/shared/utils/xvi-fc-download-file-name.util';
+import { buildMohuaLetterAddressBlock } from 'src/module/xvi-fc/common/utils/xvi-fc-letter-address-block.util';
 import { FcUnspentDeclarationDocumentService } from './fc-unspent-declaration-document.service';
 import type {
   FcUnspentDeclarationDocumentData,
@@ -92,7 +93,13 @@ export class FcUnspentDeclarationDocxService {
     const data = await this.documentService.getDocumentData(stateId, yearId, user);
     const doc = this.buildDocument(data);
     const buffer = await Packer.toBuffer(doc);
-    const fileName = `fc-unspent-declaration_${getTimeStamp(false)}.docx`;
+    const branch = data.isFcUnspent ? 'yes' : 'no';
+    const fileName = buildXviFcDownloadFileName({
+      entityName: data.stateName,
+      formName: `fc-unspent-declaration-${branch}`,
+      yearLabel: data.designYearLabel,
+      extension: 'docx',
+    });
     return { buffer, fileName };
   }
 
@@ -102,7 +109,7 @@ export class FcUnspentDeclarationDocxService {
         {
           properties: {},
           children: [
-            ...this.buildAddressBlock(),
+            ...buildMohuaLetterAddressBlock(),
             ...this.buildSubjectAndIntro(data),
             ...(data.isFcUnspent ? [this.buildTable(data), new Paragraph({ text: '' })] : []),
             ...this.buildClosingParagraph(data),
@@ -112,17 +119,6 @@ export class FcUnspentDeclarationDocxService {
         },
       ],
     });
-  }
-
-  private buildAddressBlock(): Paragraph[] {
-    return [
-      new Paragraph({ text: 'To,' }),
-      new Paragraph({ text: 'The Director,' }),
-      new Paragraph({ text: 'Ministry of Housing and Urban Affairs (AMRUT-IIB),' }),
-      new Paragraph({ text: 'Government of India,' }),
-      new Paragraph({ text: 'New Delhi' }),
-      new Paragraph({ text: '' }),
-    ];
   }
 
   private buildSubjectAndIntro(data: FcUnspentDeclarationDocumentData): Paragraph[] {

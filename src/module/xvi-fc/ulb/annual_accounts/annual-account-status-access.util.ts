@@ -69,3 +69,16 @@ export function canUlbReuploadDocument(
   if (!canUlbEditForm(sectionFormStatusId)) return false;
   return documentStateDecision?.status !== 'APPROVED';
 }
+
+/**
+ * Returns true if this document has a manual-review request outstanding with no ADMIN
+ * decision recorded yet. While awaiting, the ULB must not be able to re-upload, retry,
+ * or remove this document — doing so would change the file out from under the ADMIN
+ * mid-review (or silently cancel the pending request).
+ */
+export function isAwaitingManualReviewDecision(
+  isManualReviewRequested: boolean | null | undefined,
+  manualReviewDecision: DecisionInfo | null | undefined,
+): boolean {
+  return !!isManualReviewRequested && !manualReviewDecision;
+}

@@ -33,7 +33,7 @@ const mockUser: AuthUser = {
 describe('XviFcService', () => {
   let service: XviFcService;
   let mockGrantAllocationModel: { aggregate: jest.Mock };
-  let mockYearModel: { find: jest.Mock };
+  let mockYearModel: { find: jest.Mock; findById: jest.Mock };
   let mockUlbModel: { findById: jest.Mock };
   let mockStateModel: { findById: jest.Mock };
   let mockAnnualAccountModel: { find: jest.Mock };
@@ -59,7 +59,7 @@ describe('XviFcService', () => {
     mockGrantAllocationModel = {
       aggregate: jest.fn(),
     };
-    mockYearModel = { find: jest.fn().mockReturnValue(q([])) };
+    mockYearModel = { find: jest.fn().mockReturnValue(q([])), findById: jest.fn().mockReturnValue(q(null)) };
     mockUlbModel = { findById: jest.fn().mockReturnValue(q(null)) };
     mockStateModel = { findById: jest.fn().mockReturnValue(q(null)) };
     mockAnnualAccountModel = { find: jest.fn().mockReturnValue(q([])) };
@@ -176,6 +176,34 @@ describe('XviFcService', () => {
     it('propagates errors from sideMenuService.getSideMenu (e.g. NotFoundException)', async () => {
       mockSideMenuService.getSideMenu.mockRejectedValue(new NotFoundException('No menu configured for role X'));
       await expect(service.getSideMenu('UNKNOWN' as any, yearId)).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('getYearLabelById', () => {
+    const yearId = new Types.ObjectId().toHexString();
+
+    it('returns the yearLabel for an existing year', async () => {
+      mockYearModel.findById.mockReturnValue(q({ year: '2026-27' }));
+
+      const result = await service.getYearLabelById(yearId);
+
+      expect(result).toEqual({ yearLabel: '2026-27' });
+    });
+
+    it('selects only the year field', async () => {
+      const chain = q({ year: '2026-27' });
+      mockYearModel.findById.mockReturnValue(chain);
+
+      await service.getYearLabelById(yearId);
+
+      expect(chain.select).toHaveBeenCalledWith('year');
+    });
+
+    it('throws NotFoundException when the year does not exist', async () => {
+      mockYearModel.findById.mockReturnValue(q(null));
+
+      await expect(service.getYearLabelById(yearId)).rejects.toThrow(NotFoundException);
+      await expect(service.getYearLabelById(yearId)).rejects.toThrow('Year not found');
     });
   });
 

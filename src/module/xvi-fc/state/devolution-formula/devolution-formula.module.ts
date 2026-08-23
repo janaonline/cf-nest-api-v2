@@ -1,8 +1,9 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ExcelService } from 'src/services/excel/excel.service';
 import { S3Service } from 'src/core/s3/s3.service';
 import { FormJsonModule } from 'src/master/form-json/form-json.module';
+import { XviFcModule } from 'src/module/xvi-fc/xvi-fc.module';
 import { XviFcCommonModule } from 'src/module/xvi-fc/common/xvi-fc-common.module';
 import { DfFormJsonConfigService } from './services/form-json/devolution-formula-form-json.service';
 import {
@@ -39,6 +40,9 @@ import { UlbEligibilityModule } from 'src/module/ulb-eligibility/ulb-eligibility
     XviFcCommonModule,
     FormJsonModule,
     UlbEligibilityModule,
+    // Needed for XviFcService.getStateById/getYearLabelById (download filename resolution in the
+    // controller) — forwardRef because XviFcModule imports this module back.
+    forwardRef(() => XviFcModule),
   ],
   controllers: [DevolutionFormulaController],
   providers: [
