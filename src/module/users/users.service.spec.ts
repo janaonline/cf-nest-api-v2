@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
 import { ConfigService } from '@nestjs/config';
 import { Types } from 'mongoose';
@@ -17,10 +17,13 @@ import {
   createChainMock,
   makeUlbAdmin,
   makeStateAdmin,
+  makeMohuaAdmin,
   makeOverridesDto,
   makeUserDoc,
   ULB_ID,
+  ULB_ID_2,
   STATE_ID,
+  STATE_ID_2,
   TARGET_USER_ID,
 } from './test/users.fixtures';
 
@@ -143,23 +146,45 @@ describe('UsersService', () => {
       ).rejects.toThrow(BadRequestException);
     });
 
-    // FLAGGED FOR A SECOND LOOK — likely a real authorization bug, not a stale test:
-    // The JSDoc directly above `UsersService.updatePermissionOverrides` states "The requester
-    // must be a ULB/STATE admin and the target user must belong to the requester's own ULB
-    // or state", but the method body never reads `requester` at all (it's an unused
-    // parameter). So today, ANY authenticated caller that reaches this method can grant or
-    // revoke permissions on ANY user, regardless of role or ULB/state — the ForbiddenException
-    // paths the previous version of this spec asserted (non-admin roles, cross-ULB, cross-state)
-    // do not exist in the implementation. Left skipped (not deleted, not asserted as passing)
-    // so the gap stays visible instead of being silently blessed as "correct current behavior".
-    // This was NOT changed as part of this fix per instructions to not modify source files.
-    describe.skip('authorization scoping — documented in JSDoc but not enforced by the code (see flag above)', () => {
-      it('should reject non-admin roles attempting to override permissions', () => {
-        /* not implemented in UsersService.updatePermissionOverrides */
+    // Same-tenant scoping — previously flagged (see git history) as documented in the JSDoc but
+    // not enforced by the code; "admin-only" itself is the route's @RequirePermissions guard's
+    // job, not this service's — these tests cover the part that IS this service's job: the
+    // target must belong to the requester's own ULB/state/organization.
+    describe('authorization scoping — target must belong to the requester\'s own tenant', () => {
+      it('rejects a STATE requester acting on a user in a different state', async () => {
+        const targetDoc = makeUserDoc({ role: Role.STATE, state: new Types.ObjectId(STATE_ID_2) });
+        mockUserModel.exec.mockResolvedValueOnce(targetDoc);
+
+        await expect(
+          service.updatePermissionOverrides(targetId, makeOverridesDto(), makeStateAdmin()),
+        ).rejects.toThrow(ForbiddenException);
       });
 
-      it('should reject a requester acting outside their own ULB/state', () => {
-        /* not implemented in UsersService.updatePermissionOverrides */
+      it('rejects a ULB requester acting on a user in a different ULB', async () => {
+        const targetDoc = makeUserDoc({ ulb: new Types.ObjectId(ULB_ID_2) });
+        mockUserModel.exec.mockResolvedValueOnce(targetDoc);
+
+        await expect(
+          service.updatePermissionOverrides(targetId, makeOverridesDto(), makeUlbAdmin()),
+        ).rejects.toThrow(ForbiddenException);
+      });
+
+      it('rejects a MoHUA requester acting on a non-MoHUA user', async () => {
+        const targetDoc = makeUserDoc({ role: Role.STATE, state: new Types.ObjectId(STATE_ID) });
+        mockUserModel.exec.mockResolvedValueOnce(targetDoc);
+
+        await expect(
+          service.updatePermissionOverrides(targetId, makeOverridesDto(), makeMohuaAdmin()),
+        ).rejects.toThrow(ForbiddenException);
+      });
+
+      it('allows a MoHUA requester to update another MoHUA user', async () => {
+        const targetDoc = makeUserDoc({ role: Role.MoHUA, xviFcSubrole: 'reviewer', ulb: undefined });
+        mockUserModel.exec.mockResolvedValueOnce(targetDoc).mockResolvedValueOnce(undefined);
+
+        await expect(
+          service.updatePermissionOverrides(targetId, makeOverridesDto(), makeMohuaAdmin()),
+        ).resolves.toBeDefined();
       });
     });
   });

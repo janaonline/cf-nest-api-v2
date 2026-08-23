@@ -165,7 +165,7 @@ export class UsersController {
   @ApiBearerAuth()
   @Patch(':id/permission-overrides')
   @UseGuards(JwtAuthGuard, PermissionGuard)
-  // @RequirePermissions(Permission.MANAGE_USERS)
+  @RequirePermissions(Permission.MANAGE_USERS)
   @ApiOperation({ summary: 'Grant or revoke specific permissions for a managed user' })
   updatePermissionOverrides(
     @Param('id') id: string,

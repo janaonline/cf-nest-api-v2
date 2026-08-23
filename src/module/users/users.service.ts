@@ -482,6 +482,23 @@ export class UsersService {
 
     if (!targetUser) throw new NotFoundException('User not found');
 
+    // @RequirePermissions(Permission.MANAGE_USERS) on the route only proves the requester holds
+    // that permission somewhere — it says nothing about *whose* users they may manage. Without
+    // this, a STATE admin from state A could grant/revoke permissions for a user in state B (and
+    // symmetrically for ULB), which is exactly what this method's own JSDoc says must not happen.
+    const sameTenant =
+      (requester.scope === Scope.STATE &&
+        !!requester.state &&
+        targetUser.state?.toString() === requester.state.toString()) ||
+      (requester.scope === Scope.ULB &&
+        !!requester.ulb &&
+        targetUser.ulb?.toString() === requester.ulb.toString()) ||
+      // MoHUA has no state/ULB subdivision — every MoHUA admin manages the same flat team.
+      (requester.scope === Scope.MOHUA && targetUser.role === Role.MoHUA);
+    if (!sameTenant) {
+      throw new ForbiddenException('You can only manage users within your own ULB, state, or organization');
+    }
+
     const allow = dto.allow ?? [];
     const deny = dto.deny ?? [];
 
