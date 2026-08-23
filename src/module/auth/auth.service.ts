@@ -16,7 +16,6 @@ import { State, StateDocument } from 'src/schemas/state.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { UsersRepository } from 'src/module/users/users.repository';
 import { RegisterDto } from './dto/register.dto';
-import { UpdateProfileDto } from './dto/update-profile.dto';
 import { AuthResponse, AuthTokens } from './types/auth-tokens.type';
 import { Role } from './enum/role.enum';
 import { buildUserResponsePayload } from './auth-user-response.helper';
@@ -102,22 +101,6 @@ export class AuthService {
     if (!user?.refreshTokenHash) return null;
     const valid = await bcrypt.compare(token, user.refreshTokenHash);
     return valid ? user : null;
-  }
-
-  async updateProfile(userId: string, dto: UpdateProfileDto): Promise<Record<string, unknown>> {
-    const { mobileNumber, commissionerContactNumber, accountantContactNumber, ...rest } = dto;
-    const update: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(rest)) {
-      if (value !== undefined) update[key] = value;
-    }
-    if (mobileNumber !== undefined) update['mobile'] = mobileNumber;
-    if (commissionerContactNumber !== undefined) update['commissionerConatactNumber'] = commissionerContactNumber;
-    if (accountantContactNumber !== undefined) update['accountantConatactNumber'] = accountantContactNumber;
-
-    const updated = await this.usersRepository.updateProfile(userId, update);
-    if (!updated) throw new HttpException('User not found', 404);
-
-    return { message: 'Profile updated successfully', updatedFields: update };
   }
 
   async setNewPassword(
