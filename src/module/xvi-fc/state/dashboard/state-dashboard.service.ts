@@ -211,7 +211,7 @@ export class StateDashboardService {
         totalUlbs,
         allocatedAmount,
         claimedAmount,
-        amountUnit: STATE_DASHBOARD_AMOUNT_UNIT.CRORE,
+        amountUnit: STATE_DASHBOARD_AMOUNT_UNIT.RUPEE,
         currency: STATE_DASHBOARD_CURRENCY.INR,
         compliance,
       },
@@ -308,7 +308,9 @@ export class StateDashboardService {
   }
 
   private calculateAllocatedAmount(allocation: GrantAllocationRecord | null): number {
-    return allocation ? allocation.basic + allocation.performance : 0;
+    // Defensive rounding — GrantAllocation is externally written and unconstrained (see
+    // grant-allocation.schema.ts).
+    return allocation ? Math.round(allocation.basic + allocation.performance) : 0;
   }
 
   private async loadUlbFormStatusMaps(

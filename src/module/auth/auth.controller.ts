@@ -23,11 +23,9 @@ import { Public } from './decorators/public.decorator';
 import { CheckUserDto } from './dto/check-user.dto';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
-import { SetPasswordDto } from './dto/set-password.dto';
 import { SetNewPasswordDto } from './dto/set-new-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { SendOtpDto } from './dto/send-otp.dto';
-import { UpdateProfileDto } from './dto/update-profile.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { JwtRefreshGuard } from './guards/jwt-refresh.guard';
@@ -157,26 +155,6 @@ export class AuthController {
   @ApiResponse({ status: 429, description: 'Too many attempts' })
   verifyMobileOtp(@Body() dto: VerifyOtpDto) {
     return this.otpService.verifyMobileOtp(dto);
-  }
-
-  @Patch('update-profile')
-  @HttpCode(HttpStatus.OK)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Update current user profile fields' })
-  @ApiResponse({ status: 200, description: 'Profile updated successfully' })
-  updateProfile(@CurrentUser() user: { _id: string }, @Body() dto: UpdateProfileDto) {
-    return this.authService.updateProfile(user._id, dto);
-  }
-
-  @Public()
-  @Post('set-password')
-  @HttpCode(HttpStatus.OK)
-  @Throttle({ default: { limit: 5, ttl: 60000 } })
-  @ApiOperation({ summary: 'Set or reset password directly without OTP verification' })
-  @ApiResponse({ status: 200, description: 'Password updated successfully' })
-  @ApiResponse({ status: 404, description: 'User not found' })
-  setPassword(@Body() dto: SetPasswordDto) {
-    return this.authService.setPassword(dto);
   }
 
   @Patch('set-new-password')

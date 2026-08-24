@@ -24,6 +24,8 @@ export class FcUnspentAllocationSource {
   @Prop({ type: Number, enum: [1, 2], required: true })
   installment!: 1 | 2;
 
+  // Whole Rupees only — inherited unconverted from DevolutionFormulaRow.totalGrantAllocation,
+  // which is itself @IsInt()-enforced.
   @Prop({ type: Number, required: true })
   allocationAmount!: number;
 }
@@ -53,6 +55,10 @@ export class FcUnspentUlbRowSnapshot {
   @Prop({ type: String, required: true })
   ulbName!: string;
 
+  // allocationAmount/unspentAmount are whole Rupees only — allocationAmount is inherited
+  // unconverted from DevolutionFormulaRow, unspentAmount is validated @IsInt() on
+  // FcUnspentUlbRowInputDto. allocationPerc is a ratio (unspentAmount/allocationAmount * 100)
+  // and is unaffected by the unit — computed unrounded, see FcUnspentDeclarationRowService.
   @Prop({ type: Number, required: true })
   allocationAmount!: number;
 
@@ -114,6 +120,8 @@ export class XviFcUnspentStateFormRow {
   @Prop({ type: String, required: true })
   ulbName!: string;
 
+  // allocationAmount/unspentAmount are whole Rupees only — see FcUnspentUlbRowSnapshot above
+  // for the full unit note; this is the live row's own copy.
   @Prop({ type: Number, required: true })
   allocationAmount!: number;
 

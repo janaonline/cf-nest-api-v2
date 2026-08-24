@@ -13,7 +13,9 @@ import {
   type ITableBordersOptions,
 } from 'docx';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
-import { getTimeStamp } from 'src/shared/utils/date.utils';
+import { buildXviFcDownloadFileName } from 'src/shared/utils/xvi-fc-download-file-name.util';
+import { buildMohuaLetterAddressBlock } from 'src/module/xvi-fc/common/utils/xvi-fc-letter-address-block.util';
+import { formatXviFcDate } from 'src/module/xvi-fc/common/utils/xvi-fc-date-format.util';
 import { ElectedUrbanLocalBodiesDocumentService } from './elected-urban-local-bodies-document.service';
 import type {
   EulbListDocumentData,
@@ -32,13 +34,6 @@ const TABLE_BORDER: ITableBordersOptions = {
   insideHorizontal: { style: BorderStyle.SINGLE, size: 4, color: '999999' },
   insideVertical: { style: BorderStyle.SINGLE, size: 4, color: '999999' },
 };
-
-function formatEulbDate(value: Date | string | null): string {
-  if (!value) return '-';
-  const d = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(d.getTime())) return '-';
-  return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' });
-}
 
 function cellText(text: string, opts: { bold?: boolean } = {}): Paragraph {
   return new Paragraph({ children: [new TextRun({ text: text || '-', bold: opts.bold })] });
@@ -84,7 +79,12 @@ export class ElectedUrbanLocalBodiesDocxService {
     const data = await this.documentService.getDocumentData(stateId, yearId, user);
     const doc = this.buildDocument(data);
     const buffer = await Packer.toBuffer(doc);
-    const fileName = `elected-bodies-list_${getTimeStamp(false)}.docx`;
+    const fileName = buildXviFcDownloadFileName({
+      entityName: data.stateName,
+      formName: 'elected-body-list',
+      yearLabel: data.designYearLabel,
+      extension: 'docx',
+    });
     return { buffer, fileName };
   }
 
@@ -109,12 +109,7 @@ export class ElectedUrbanLocalBodiesDocxService {
 
   private buildAddressBlock(): Paragraph[] {
     return [
-      new Paragraph({ text: 'To,' }),
-      new Paragraph({ text: 'The Director,' }),
-      new Paragraph({ text: 'Ministry of Housing and Urban Affairs (AMRUT-IIB),' }),
-      new Paragraph({ text: 'Government of India,' }),
-      new Paragraph({ text: 'New Delhi' }),
-      new Paragraph({ text: '' }),
+      ...buildMohuaLetterAddressBlock(),
       new Paragraph({
         children: [
           new TextRun({ text: 'Subject: Declaration regarding Elected Body Status of Urban Local Bodies', bold: true }),
@@ -158,8 +153,8 @@ export class ElectedUrbanLocalBodiesDocxService {
             dataCell(row.censusCode, COLUMN_WIDTHS_PCT[1]),
             dataCell(row.ulbName, COLUMN_WIDTHS_PCT[2]),
             dataCell(row.electedBodyStatus, COLUMN_WIDTHS_PCT[3]),
-            dataCell(formatEulbDate(row.dateOfConstitution), COLUMN_WIDTHS_PCT[4]),
-            dataCell(formatEulbDate(row.dateOfExpiry), COLUMN_WIDTHS_PCT[5]),
+            dataCell(formatXviFcDate(row.dateOfConstitution), COLUMN_WIDTHS_PCT[4]),
+            dataCell(formatXviFcDate(row.dateOfExpiry), COLUMN_WIDTHS_PCT[5]),
             dataCell(row.remarks, COLUMN_WIDTHS_PCT[6]),
           ],
         }),

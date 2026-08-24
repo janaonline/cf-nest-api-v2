@@ -10,7 +10,7 @@ const validPayload = (): TestPayload => ({
   designYearId: new Types.ObjectId().toString(),
   originalName: 'Budget-2026-27.pdf',
   sizeKb: 512,
-  s3Key: 'budgets/2026-27/Budget-2026-27_abc123.pdf',
+  s3Key: 'budgets/2026-27/64b7f1c2e2a1b2c3d4e5f6a7/Budget-2026-27_abc123.pdf',
 });
 
 const validatePayload = (payload: Record<string, unknown>) => {
@@ -58,7 +58,16 @@ describe('UploadBudgetDocumentDto', () => {
   });
 
   it('fails for a s3Key not ending in .pdf', () => {
-    expect(errorProperties({ ...validPayload(), s3Key: 'budgets/2026-27/Budget-2026-27_abc123.jpg' })).toContain(
+    expect(
+      errorProperties({
+        ...validPayload(),
+        s3Key: 'budgets/2026-27/64b7f1c2e2a1b2c3d4e5f6a7/Budget-2026-27_abc123.jpg',
+      }),
+    ).toContain('s3Key');
+  });
+
+  it('fails for a s3Key missing the ulbId path segment', () => {
+    expect(errorProperties({ ...validPayload(), s3Key: 'budgets/2026-27/Budget-2026-27_abc123.pdf' })).toContain(
       's3Key',
     );
   });

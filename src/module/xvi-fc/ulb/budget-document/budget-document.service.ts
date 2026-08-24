@@ -66,7 +66,7 @@ export class BudgetDocumentService {
     }
 
     const { id: designYearObjId, label: designYear } = await this.resolveDesignYear(dto.designYearId);
-    this.assertS3KeyMatchesYear(dto.s3Key, designYear);
+    this.assertS3KeyMatchesUlbAndYear(dto.s3Key, ulbId, designYear);
 
     const ulbObjId = new Types.ObjectId(ulbId);
     const newFile: BudgetDocumentFile = {
@@ -146,8 +146,8 @@ export class BudgetDocumentService {
     return { id: new Types.ObjectId(designYearId), label: year.year };
   }
 
-  private assertS3KeyMatchesYear(s3Key: string, designYear: string): void {
-    const expectedPrefix = `budgets/${designYear}/`;
+  private assertS3KeyMatchesUlbAndYear(s3Key: string, ulbId: string, designYear: string): void {
+    const expectedPrefix = `budgets/${designYear}/${ulbId}/`;
     if (!s3Key.startsWith(expectedPrefix)) {
       throw new BadRequestException(`file.s3Key must be an object key under ${expectedPrefix}.`);
     }

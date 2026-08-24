@@ -202,6 +202,24 @@ export class UsersService {
     if (Object.keys(errors).length) this.throwValidationError(errors);
   }
 
+  /** Same domain-reachability guard as assertProfileContactEmailsAreDeliverable, for the
+   *  invite-a-new-member flows (STATE and MoHUA) — the invited email is what future login and
+   *  all grant-related notifications go to, so a typo'd/made-up domain should block the invite. */
+  private async assertInviteEmailIsDeliverable(email: string): Promise<void> {
+    const hasMx = await this.emailDomainValidation.domainHasMxRecord(email);
+    if (!hasMx) {
+      this.throwValidationError({
+        email: [
+          {
+            field: 'email',
+            message: "This email domain doesn't appear to accept mail. Check for a typo in the email address.",
+            code: 'domainMx',
+          },
+        ],
+      });
+    }
+  }
+
   async issueProfileSaveToken(userId: string): Promise<{ token: string }> {
     if (!Types.ObjectId.isValid(userId)) throw new BadRequestException('Invalid user ID');
     const user = await this.userModel.findById(userId).select('_id').lean().exec();
@@ -218,6 +236,8 @@ export class UsersService {
 
   async inviteStateMember(dto: InviteStateMemberDto, requester: AuthUser): Promise<StateMemberResponseDto> {
     if (!requester.state) throw new ForbiddenException('No state scope on this account');
+
+    await this.assertInviteEmailIsDeliverable(dto.email);
 
     const action = dto.action ?? 'invite';
     const stateId = new Types.ObjectId(String(requester.state));
@@ -462,6 +482,23 @@ export class UsersService {
 
     if (!targetUser) throw new NotFoundException('User not found');
 
+    // @RequirePermissions(Permission.MANAGE_USERS) on the route only proves the requester holds
+    // that permission somewhere — it says nothing about *whose* users they may manage. Without
+    // this, a STATE admin from state A could grant/revoke permissions for a user in state B (and
+    // symmetrically for ULB), which is exactly what this method's own JSDoc says must not happen.
+    const sameTenant =
+      (requester.scope === Scope.STATE &&
+        !!requester.state &&
+        targetUser.state?.toString() === requester.state.toString()) ||
+      (requester.scope === Scope.ULB &&
+        !!requester.ulb &&
+        targetUser.ulb?.toString() === requester.ulb.toString()) ||
+      // MoHUA has no state/ULB subdivision — every MoHUA admin manages the same flat team.
+      (requester.scope === Scope.MOHUA && targetUser.role === Role.MoHUA);
+    if (!sameTenant) {
+      throw new ForbiddenException('You can only manage users within your own ULB, state, or organization');
+    }
+
     const allow = dto.allow ?? [];
     const deny = dto.deny ?? [];
 
@@ -651,6 +688,7 @@ export class UsersService {
     'isNodalOfficer',
     'isXVIFCProfileVerified',
     'isXviFcdeleted',
+    'isXviFcEmailVerified',
   ]);
 
   async updateProfileContacts(
@@ -670,8 +708,11 @@ export class UsersService {
     const isSelfUpdate = requester._id.toString() === userId;
     const isUlbScope = requester.scope === Scope.ULB;
 
-    if (isSelfUpdate && !isUlbScope) {
-      // State / MoHUA self-updates require a valid one-time save token (issued post-OTP)
+    if (isSelfUpdate) {
+      // Every self-update (ULB, STATE, or MoHUA) requires a valid one-time save token issued
+      // after OTP verification — this is the only server-side proof that OTP verification
+      // actually happened; the client-side "only called after verified" gating alone is not
+      // a security boundary.
       const { saveToken } = dto;
       if (!saveToken) throw new BadRequestException('A verified save token is required to update your profile');
       const stored = await this.redisService.get(this.saveTokenKey(userId));
@@ -784,13 +825,16 @@ export class UsersService {
     }));
   }
 
-  async getMohuaMembers(): Promise<StateMemberResponseDto[]> {
+  async getMohuaMembers(requester: AuthUser): Promise<StateMemberResponseDto[]> {
+    if ((requester.role as string) !== Role.MoHUA) {
+      throw new ForbiddenException('Only MoHUA team members can view this list');
+    }
+
     const users = await this.userModel
       .find({ role: Role.MoHUA, isXviFcdeleted: { $ne: true }, isDeleted: false })
       .select('_id name mobile email designation xviFcSubrole isActive isXVIFCProfileVerified lastLoginAt')
       .lean()
       .exec();
-    console.log('users', users);
     return users.map((u) => ({
       _id: String(u._id),
       name: u.name,
@@ -805,6 +849,12 @@ export class UsersService {
   }
 
   async inviteMohuaMember(dto: InviteMohuaMemberDto, requester: AuthUser): Promise<StateMemberResponseDto> {
+    if ((requester.role as string) !== Role.MoHUA || requester.xviFcSubrole !== 'admin') {
+      throw new ForbiddenException('Only the MoHUA Submitter can invite new members');
+    }
+
+    await this.assertInviteEmailIsDeliverable(dto.email);
+
     const action = dto.action ?? 'invite';
     const xviFcSubrole: 'reviewer' | 'viewer' = dto.subRole === 'EDITOR' ? 'reviewer' : 'viewer';
 

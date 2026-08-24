@@ -80,7 +80,9 @@ export class DevolutionFormulaForm {
   @Prop({ type: Boolean, default: true })
   isActive!: boolean;
 
-  // Grant allocation
+  // Whole Rupees only (no decimals), matching DevolutionFormulaRow. totalMoHUAAllocation mirrors
+  // GrantAllocation.basic + .performance (defensively rounded — that collection is externally
+  // written); totalAllocatedSum is the recomputed sum of active/valid rows' totalGrantAllocation.
   @Prop({ type: Number, default: 0 })
   totalMoHUAAllocation!: number;
 

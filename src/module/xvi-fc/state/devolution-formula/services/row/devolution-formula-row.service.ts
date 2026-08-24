@@ -8,6 +8,7 @@ import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import { assertCanStateEditForm } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
 import { toObjectIdString } from 'src/common/utils/objectid.util';
+import { escapeRegex } from 'src/common/utils/regex.util';
 import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import { throwXviFcValidationError, xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
 import {
@@ -29,6 +30,7 @@ import type { RowsQueryDevolutionFormulaDto } from '../../dto/rows-query-devolut
 import type { UpdateRowDevolutionFormulaDto } from '../../dto/update-row-devolution-formula.dto';
 import type { DfFormLeanDoc, DfRowError } from '../../types/devolution-formula.types';
 import { DevolutionFormulaValidator, type DfParsedExcelRow } from '../../validators/devolution-formula.validator';
+import { amountsAreEqual } from '../../helpers/devolution-formula-tolerance.helpers';
 import { DfFormJsonConfigService } from '../form-json/devolution-formula-form-json.service';
 import { getDfFieldsByType } from '../../helpers/devolution-formula-form-json.helpers';
 import {
@@ -95,7 +97,7 @@ export class DevolutionFormulaRowService {
     if (query.validationStatus) filter['validationStatus'] = query.validationStatus;
 
     if (query.search) {
-      const regex = new RegExp(query.search, 'i');
+      const regex = new RegExp(escapeRegex(query.search), 'i');
       filter['$or'] = [{ censusCode: regex }, { sbCode: regex }, { ulbName: regex }];
     }
 
@@ -463,7 +465,9 @@ export class DevolutionFormulaRowService {
       .exec();
     const totalMoHUAAllocation = ((formDoc as Record<string, unknown> | null)?.['totalMoHUAAllocation'] as number) ?? 0;
     const missingUlbCount = ((formDoc as Record<string, unknown> | null)?.['missingUlbCount'] as number) ?? 0;
-    const allocationBalanced = Math.abs(totalAllocatedSum - totalMoHUAAllocation) <= 0.001;
+    // Exact match (within float-noise epsilon), not a forgiving tolerance — every rupee of
+    // totalMoHUAAllocation must be accounted for; see devolution-formula-tolerance.helpers.ts.
+    const allocationBalanced = amountsAreEqual(totalAllocatedSum, totalMoHUAAllocation);
     // Row edits can't introduce a *new* missing ULB or duplicate (only a fresh Excel parse via
     // validateExcel/revalidateExcel can), so this never recomputes missingUlbCount/duplicateUlbCount
     // itself — it only reads back the persisted missingUlbCount so a still-outstanding gap isn't

@@ -6,6 +6,7 @@ import { Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import { toObjectIdString } from 'src/common/utils/objectid.util';
+import { escapeRegex } from 'src/common/utils/regex.util';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import {
   FileInfoNormalizerService,
@@ -195,7 +196,7 @@ export class EulbPostSubmissionUpdateService {
 
     // Use $and to combine the eligible-row $or with the optional search $or without one overwriting the other
     if (query.search) {
-      const regex = new RegExp(query.search, 'i');
+      const regex = new RegExp(escapeRegex(query.search), 'i');
       filter['$and'] = [...(filter['$and'] ?? []), { $or: [{ censusCode: regex }, { ulbName: regex }] }];
     }
 

@@ -32,7 +32,21 @@ conflate them:
 
 - `fcDeclaration` — the No-branch's signed nil-balance declaration. `visibleWhen isFcUnspent === 'no'`.
 - `fcUnspentDeclaration` — the Yes-branch's signed declaration (carries the ULB-wise unspent-balance
-  table). `visibleWhen isFcUnspent === 'yes'`.
+  table). `visibleWhen isFcUnspent === 'yes' AND savedUnspentUlbData isNotEmpty` — the second
+  condition only shows the field once at least one ULB-wise row has actually been *saved* (not
+  merely typed into the browser FormArray). `savedUnspentUlbData` is a synthetic key, not one of
+  this form's own `FieldConfig` fields — `FcUnspentDeclarationService` (`services/main/`) injects
+  it into the generic validator's `FormData` at both `saveDraft` and `finalSubmit`, sourced straight
+  from the submitted `unspentUlbData` array (safe to use as-is: `resolveAndValidateRows` always
+  throws on unresolvable/duplicate rows rather than silently dropping them, so for any request that
+  succeeds this count matches what actually persists). `getForm` mirrors the same "isFcUnspent must
+  be true" gate on its own row fetch. The frontend mirrors the same key as a synthetic
+  (non-`FieldConfig`) `FormControl`, added in `fc-unspent-declaration.component.ts`'s
+  `createFormControls()` from the `savedUnspentUlbData` signal — deliberately *not* the live
+  `unspentUlbData` FormArray, since the gate must react to saved/authoritative data, not in-progress
+  edits. Because hiding the whole field also hides its own in-field "save your changes" message, the
+  component adds a separate save-prompt banner (`fc-unspent-declaration-save-prompt`) specifically
+  for the case where the field is hidden for having zero saved rows.
 
 Deliberately two fields rather than one dual-purpose field: every other branch-conditional file
 field in this form's formjson (and elsewhere in xvi-fc) uses strict single-branch `visibleWhen` +
@@ -59,6 +73,28 @@ new model in `fc-unspent-declaration.module.ts` purely for this. The "14th"/"15t
 — the same shared, single-source-of-truth helper claim-letter's Annexure 1 also reads from; the
 `*FullLabel` variant is a thin prose wrapper composed over the original, not a second year->FC
 mapping.
+
+## Every branch outcome deactivates rows except an actual "Yes"
+
+`saveDraft` resolves `isFcUnspent` to one of three branches: `'yes'`, `'no'`, or `'undecided'`
+(sent as `null`/omitted — e.g. a draft saved before the radio has been answered, or after it's been
+cleared). Only `'yes'` calls `rowService.applyRows(...)`; both `'no'` *and* `'undecided'`
+deactivate the active row set (`rowService.deactivateAllRows(...)`) — previously only `'no'` did,
+leaving `'undecided'` a no-op that could strand a prior Yes-branch's rows active (and their
+`eligibility`/`allocationAmount` stale) after the state cleared the radio without re-answering. Keep
+this `else` branch covering both cases if this dispatch is ever refactored — don't reintroduce a
+third no-op branch.
+
+## Invariants worth knowing before you change adjacent code
+
+- `unspentAmount` and `allocationAmount` are whole Rupees only — no decimals. Enforced by `@IsInt()`
+  on `FcUnspentUlbRowInputDto` (`unspentAmount`); `allocationAmount` is inherited unconverted from
+  Devolution Formula's `totalGrantAllocation`, itself `@IsInt()`-enforced there. This was previously
+  the one state-form amount left decimal-tolerant (`@IsNumber({ maxDecimalPlaces: 2 })`, since it's a
+  real bank-balance figure a State user types in rather than a computed proportional split) — brought
+  in line with every other state-form amount for full consistency. `allocationPerc` is a ratio
+  (`unspentAmount / allocationAmount * 100`) and is unaffected by the unit — computed unrounded, see
+  `FcUnspentDeclarationRowService`.
 
 ## Dependencies
 

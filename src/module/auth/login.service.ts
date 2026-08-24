@@ -14,7 +14,7 @@ import { AuthService } from './auth.service';
 import { CheckUserDto } from './dto/check-user.dto';
 import { LoginDto } from './dto/login.dto';
 import { AuthResponse } from './types/auth-tokens.type';
-import { parseUserRole } from './roles-xvi-fc.helper';
+import { buildUserResponsePayload } from './auth-user-response.helper';
 import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 import { CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE } from 'src/module/ulb-eligibility/ulb-eligibility.constants';
 import { User } from './enum/role.enum';
@@ -190,32 +190,9 @@ export class LoginService {
     this.authService.setRefreshCookie(res, tokens.refreshToken);
 
     const allYears = await this.getActiveYears();
-    const parsedRole = parseUserRole(
-      user.role as unknown as Parameters<typeof parseUserRole>[0],
-      user.xviFcSubrole as string | null | undefined,
-    );
     return {
       token: tokens.accessToken,
-      user: {
-        _id: user._id,
-        name: user.name,
-        email: user.email,
-        mobile: user.mobile,
-        isActive: user.isActive,
-        role: user.role,
-        ...(parsedRole && { accessLevel: parsedRole.accessLevel }),
-        isXVIFCProfileVerified: user.isXVIFCProfileVerified ?? false,
-        isNewUser: user.isNewUser ?? false,
-        state: user.state,
-        stateName: state?.name ?? null,
-        designation: user.designation,
-        ulb: user.ulb,
-        ulbCode: user.role === Role.ULB ? (ulb?.code ?? '') : '',
-        stateCode: user.role === Role.STATE || user.role === Role.ULB ? (state?.code ?? '') : '',
-        isUA: user.role === Role.ULB ? (ulb?.isUA ?? null) : null,
-        isMillionPlus: user.role === Role.ULB ? (ulb?.isMillionPlus ?? null) : null,
-        isUserVerified2223: user.isVerified2223,
-      },
+      user: buildUserResponsePayload(user, state, ulb),
       allYears,
     };
   }

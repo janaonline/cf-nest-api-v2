@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import PDFDocument from 'pdfkit';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
+import { buildXviFcDownloadFileName } from 'src/shared/utils/xvi-fc-download-file-name.util';
 import { ClaimLetterDocumentService } from './claim-letter-document.service';
 import type { ClaimLetterDocumentData } from '../../types/claim-letter.types';
 import {
@@ -25,8 +26,10 @@ interface PdfTableSpec {
   align?: CellAlign[];
 }
 
-function formatCrore(value: number): string {
-  return `${value.toLocaleString('en-IN', { maximumFractionDigits: 2 })} Cr.`;
+function formatRupees(value: number): string {
+  // Whole Rupees (no decimals) — the stored figure is always an integer, so no fraction digits
+  // are shown on this formal document.
+  return `₹${value.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
 }
 
 function yesNo(value: boolean): string {
@@ -59,9 +62,12 @@ export class ClaimLetterPdfService {
     // (see claim-letter-document.service.spec.ts).
     const data = response.data!;
     const buffer = await this.renderPdf(data);
-    // Mirrors the frontend's pre-migration `downloadTemplate()` filename derivation exactly — the
-    // Ref No.'s `/` separators aren't filesystem-safe.
-    const fileName = `claim-letter-${data.refNo.replace(/[/\\]/g, '-')}.pdf`;
+    const fileName = buildXviFcDownloadFileName({
+      entityName: data.stateName,
+      formName: `claim-letter-${data.refNo}`,
+      yearLabel: data.designYearLabel,
+      extension: 'pdf',
+    });
     return { buffer, fileName };
   }
 
@@ -127,8 +133,8 @@ export class ClaimLetterPdfService {
     doc.moveDown();
 
     this.drawTable(doc, {
-      headers: ['S.No.', 'Urban Local Body', 'Amount (Cr.)'],
-      rows: data.coveringLetterRows.map((row) => [String(row.slNo), row.ulbName, formatCrore(row.claimAmount)]),
+      headers: ['S.No.', 'Urban Local Body', 'Amount (Rs.)'],
+      rows: data.coveringLetterRows.map((row) => [String(row.slNo), row.ulbName, formatRupees(row.claimAmount)]),
       align: ['left', 'left', 'right'],
     });
 
@@ -140,7 +146,7 @@ export class ClaimLetterPdfService {
       .stroke();
     doc.font('Times-Bold').fontSize(CLAIM_LETTER_PDF_FONT_SIZE_TABLE);
     doc.text('Total', doc.page.margins.left, totalY + 4, { width: contentWidth * 0.7 });
-    doc.text(formatCrore(data.totalClaimAmount), doc.page.margins.left + contentWidth * 0.7, totalY + 4, {
+    doc.text(formatRupees(data.totalClaimAmount), doc.page.margins.left + contentWidth * 0.7, totalY + 4, {
       width: contentWidth * 0.3,
       align: 'right',
     });
@@ -178,15 +184,15 @@ export class ClaimLetterPdfService {
       headers: [
         'S.No.',
         'Urban Local Body',
-        `${data.priorFcCycleLabel} Unspent (Cr.)`,
-        '16th FC Allocation (Cr.)',
+        `${data.priorFcCycleLabel} Unspent (Rs.)`,
+        '16th FC Allocation (Rs.)',
         'Eligible (<10%)',
       ],
       rows: data.annexure1Rows.map((row) => [
         String(row.slNo),
         row.ulbName,
-        formatCrore(row.priorFcUnspentAmount),
-        formatCrore(row.claimedAmount),
+        formatRupees(row.priorFcUnspentAmount),
+        formatRupees(row.claimedAmount),
         yesNo(row.eligible),
       ]),
       align: ['left', 'left', 'right', 'right', 'center'],

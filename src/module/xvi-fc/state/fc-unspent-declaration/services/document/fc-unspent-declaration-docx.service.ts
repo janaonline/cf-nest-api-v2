@@ -13,7 +13,8 @@ import {
   type ITableBordersOptions,
 } from 'docx';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
-import { getTimeStamp } from 'src/shared/utils/date.utils';
+import { buildXviFcDownloadFileName } from 'src/shared/utils/xvi-fc-download-file-name.util';
+import { buildMohuaLetterAddressBlock } from 'src/module/xvi-fc/common/utils/xvi-fc-letter-address-block.util';
 import { FcUnspentDeclarationDocumentService } from './fc-unspent-declaration-document.service';
 import type {
   FcUnspentDeclarationDocumentData,
@@ -33,8 +34,9 @@ const TABLE_BORDER: ITableBordersOptions = {
   insideVertical: { style: BorderStyle.SINGLE, size: 4, color: '999999' },
 };
 
-function formatCrore(value: number): string {
-  return `${value.toLocaleString('en-IN', { maximumFractionDigits: 2 })} Cr.`;
+function formatRupees(value: number): string {
+  // Whole Rupees only — no decimals.
+  return `₹${value.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
 }
 
 function formatPercent(value: number): string {
@@ -91,7 +93,13 @@ export class FcUnspentDeclarationDocxService {
     const data = await this.documentService.getDocumentData(stateId, yearId, user);
     const doc = this.buildDocument(data);
     const buffer = await Packer.toBuffer(doc);
-    const fileName = `fc-unspent-declaration_${getTimeStamp(false)}.docx`;
+    const branch = data.isFcUnspent ? 'yes' : 'no';
+    const fileName = buildXviFcDownloadFileName({
+      entityName: data.stateName,
+      formName: `fc-unspent-declaration-${branch}`,
+      yearLabel: data.designYearLabel,
+      extension: 'docx',
+    });
     return { buffer, fileName };
   }
 
@@ -101,7 +109,7 @@ export class FcUnspentDeclarationDocxService {
         {
           properties: {},
           children: [
-            ...this.buildAddressBlock(),
+            ...buildMohuaLetterAddressBlock(),
             ...this.buildSubjectAndIntro(data),
             ...(data.isFcUnspent ? [this.buildTable(data), new Paragraph({ text: '' })] : []),
             ...this.buildClosingParagraph(data),
@@ -111,17 +119,6 @@ export class FcUnspentDeclarationDocxService {
         },
       ],
     });
-  }
-
-  private buildAddressBlock(): Paragraph[] {
-    return [
-      new Paragraph({ text: 'To,' }),
-      new Paragraph({ text: 'The Director,' }),
-      new Paragraph({ text: 'Ministry of Housing and Urban Affairs (AMRUT-IIB),' }),
-      new Paragraph({ text: 'Government of India,' }),
-      new Paragraph({ text: 'New Delhi' }),
-      new Paragraph({ text: '' }),
-    ];
   }
 
   private buildSubjectAndIntro(data: FcUnspentDeclarationDocumentData): Paragraph[] {
@@ -186,8 +183,8 @@ export class FcUnspentDeclarationDocxService {
         headerCell('#', COLUMN_WIDTHS_PCT[0]),
         headerCell('ULB', COLUMN_WIDTHS_PCT[1]),
         headerCell('CENSUS ID', COLUMN_WIDTHS_PCT[2]),
-        headerCell('16TH FC ALLOCATION', COLUMN_WIDTHS_PCT[3]),
-        headerCell(`${data.priorFcCycleLabel.toUpperCase()} UNSPENT`, COLUMN_WIDTHS_PCT[4]),
+        headerCell('16TH FC ALLOCATION (RS.)', COLUMN_WIDTHS_PCT[3]),
+        headerCell(`${data.priorFcCycleLabel.toUpperCase()} UNSPENT (RS.)`, COLUMN_WIDTHS_PCT[4]),
         headerCell('% OF ALLOC.', COLUMN_WIDTHS_PCT[5]),
         headerCell('ELIGIBLE?', COLUMN_WIDTHS_PCT[6]),
       ],
@@ -200,8 +197,8 @@ export class FcUnspentDeclarationDocxService {
             dataCell(String(row.slNo), COLUMN_WIDTHS_PCT[0]),
             dataCell(row.ulbName, COLUMN_WIDTHS_PCT[1]),
             dataCell(row.censusCode, COLUMN_WIDTHS_PCT[2]),
-            dataCell(formatCrore(row.allocationAmount), COLUMN_WIDTHS_PCT[3]),
-            dataCell(formatCrore(row.unspentAmount), COLUMN_WIDTHS_PCT[4]),
+            dataCell(formatRupees(row.allocationAmount), COLUMN_WIDTHS_PCT[3]),
+            dataCell(formatRupees(row.unspentAmount), COLUMN_WIDTHS_PCT[4]),
             dataCell(formatPercent(row.allocationPerc), COLUMN_WIDTHS_PCT[5]),
             dataCell(yesNo(row.eligibility), COLUMN_WIDTHS_PCT[6]),
           ],

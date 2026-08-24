@@ -12,6 +12,7 @@ import { ExcelService, RowHeader } from 'src/services/excel/excel.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { toObjectIdString } from 'src/common/utils/objectid.util';
+import { escapeRegex } from 'src/common/utils/regex.util';
 import { assertCanStateEditForm } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
 import {
   throwXviFcValidationErrorWithData,
@@ -96,7 +97,7 @@ export class ElectedUrbanLocalBodiesRowService {
     if (query.errorField) filter['errors.field'] = query.errorField;
 
     if (query.search) {
-      const regex = new RegExp(query.search, 'i');
+      const regex = new RegExp(escapeRegex(query.search), 'i');
       filter['$or'] = [{ censusCode: regex }, { ulbName: regex }];
     }
 

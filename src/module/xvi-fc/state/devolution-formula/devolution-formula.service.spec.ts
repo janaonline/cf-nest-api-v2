@@ -238,6 +238,62 @@ describe('DevolutionFormulaValidator', () => {
     expect(errors.some((e) => e.code === 'allocationMismatch')).toBe(true);
   });
 
+  it('validateAllocations accepts an exact whole-number match (inst1 + inst2 === total)', () => {
+    const row = {
+      ...baseRow(),
+      totalGrantAllocation: 141_792_453,
+      installment1Amount: 70_896_227,
+      installment2Amount: 70_896_226,
+    };
+    const errors = validator.validateRow(row, 1, 250);
+    expect(errors.some((e) => e.code === 'allocationMismatch')).toBe(false);
+  });
+
+  it('validateAllocations still rejects a real mismatch', () => {
+    const row = { ...baseRow(), totalGrantAllocation: 500_000, installment1Amount: 300_000, installment2Amount: 199_998 };
+    const errors = validator.validateRow(row, 1, 250);
+    expect(errors.some((e) => e.code === 'allocationMismatch')).toBe(true);
+  });
+
+  it('validateRow rejects a fractional totalGrantAllocation/installment1Amount/installment2Amount', () => {
+    const row = {
+      ...baseRow(),
+      totalGrantAllocation: 141_792_452.83,
+      installment1Amount: 70_896_226.415,
+      installment2Amount: 70_896_226.415,
+    };
+    const errors = validator.validateRow(row, 1, 250);
+    expect(errors.some((e) => e.field === 'totalGrantAllocation' && e.code === 'notWholeNumber')).toBe(true);
+    expect(errors.some((e) => e.field === 'installment1Amount' && e.code === 'notWholeNumber')).toBe(true);
+    expect(errors.some((e) => e.field === 'installment2Amount' && e.code === 'notWholeNumber')).toBe(true);
+  });
+
+  describe('validatePortalRowEdit', () => {
+    it('rejects a fractional totalGrantAllocation on the manual row-edit path', () => {
+      const errors = validator.validatePortalRowEdit({ totalGrantAllocation: 500_000.5 }, 1, 250);
+      expect(errors.some((e) => e.field === 'totalGrantAllocation' && e.code === 'notWholeNumber')).toBe(true);
+    });
+
+    it('rejects a fractional installment1Amount/installment2Amount on the manual row-edit path', () => {
+      const errors = validator.validatePortalRowEdit(
+        { installment1Amount: 300_000.25, installment2Amount: 199_999.75 },
+        1,
+        250,
+      );
+      expect(errors.some((e) => e.field === 'installment1Amount' && e.code === 'notWholeNumber')).toBe(true);
+      expect(errors.some((e) => e.field === 'installment2Amount' && e.code === 'notWholeNumber')).toBe(true);
+    });
+
+    it('accepts a whole-number edit with no errors', () => {
+      const errors = validator.validatePortalRowEdit(
+        { totalGrantAllocation: 500_000, installment1Amount: 300_000, installment2Amount: 200_000 },
+        1,
+        250,
+      );
+      expect(errors).toHaveLength(0);
+    });
+  });
+
   it('validateRow returns required error when ulbName is blank', () => {
     const row = { ...baseRow(), ulbName: '   ' };
     const errors = validator.validateRow(row, 1, 250);
@@ -328,6 +384,54 @@ describe('DevolutionFormulaValidator', () => {
     });
     expect(summary.validationStatus).toBe('INVALID');
     expect(summary.allocationBalanced).toBe(false);
+  });
+
+  // Every rupee of totalMoHUAAllocation must be accounted for — not "close enough." A real
+  // Maharashtra dataset (424 ULBs) summed to ₹4 off; that's real unaccounted-for government
+  // money, not immaterial rounding noise, so it must still be flagged INVALID. See
+  // devolution-formula-tolerance.helpers.ts.
+  it('buildValidationSummary marks INVALID even for a small real-world-scale gap (real Maharashtra case: 424 rows, ₹4 off) — every rupee must be accounted for', () => {
+    const summary = validator.buildValidationSummary({
+      excelRowCount: 424,
+      validRowCount: 424,
+      errorRowCount: 0,
+      missingUlbCount: 0,
+      totalMoHUAAllocation: 60_120_000_000,
+      totalAllocatedSum: 60_120_000_004,
+      activeDatasetVersion: 1,
+    });
+    expect(summary.allocationBalanced).toBe(false);
+    expect(summary.validationStatus).toBe('INVALID');
+  });
+
+  it('buildValidationSummary marks INVALID when totalAllocatedSum is off by a larger, unambiguously genuine mismatch', () => {
+    const summary = validator.buildValidationSummary({
+      excelRowCount: 424,
+      validRowCount: 424,
+      errorRowCount: 0,
+      missingUlbCount: 0,
+      totalMoHUAAllocation: 60_120_000_000,
+      totalAllocatedSum: 60_120_010_000, // off by ₹10,000
+      activeDatasetVersion: 1,
+    });
+    expect(summary.allocationBalanced).toBe(false);
+    expect(summary.validationStatus).toBe('INVALID');
+  });
+
+  // The epsilon's one remaining job: absorbing sub-paisa float-summation noise (e.g. from summing
+  // hundreds of raw, unrounded row values) without being mistaken for a forgiving tolerance.
+  it('buildValidationSummary marks VALID when totalAllocatedSum matches to within sub-paisa float noise', () => {
+    const summary = validator.buildValidationSummary({
+      excelRowCount: 424,
+      validRowCount: 424,
+      errorRowCount: 0,
+      missingUlbCount: 0,
+      totalMoHUAAllocation: 60_120_000_000,
+      totalAllocatedSum: 60_120_000_000.0005, // sub-paisa float noise, not a real gap
+      activeDatasetVersion: 1,
+    });
+    expect(summary.allocationBalanced).toBe(true);
+    expect(summary.validationStatus).toBe('VALID');
   });
 });
 
@@ -824,10 +928,30 @@ describe('DevolutionFormulaService', () => {
       expect(badge?.label).toBe('3 error(s)');
     });
 
-    it('Allocated amount badge label uses INR format with Cr. suffix', async () => {
+    it('Allocated amount badge label uses INR format, whole-Rupee, no unit suffix', async () => {
       const badges = await getBadges(mockFormInProgress);
       const badge = badges.find((b) => b.label?.startsWith('Allocated amount'));
-      expect(badge?.label).toBe('Allocated amount: ₹5,00,000 Cr.');
+      expect(badge?.label).toBe('Allocated amount: ₹5,00,000');
+    });
+
+    it('Allocated amount badge is visible even with no active dataset, as long as canEdit is true', async () => {
+      const badges = await getBadges(docNoDataset);
+      const badge = badges.find((b) => b.label?.startsWith('Allocated amount'));
+      expect(badge?.visible).toBe(true);
+    });
+
+    it('Allocated amount badge shows the live GrantAllocation total, not a cached ₹0, when no form document exists yet', async () => {
+      mockFormModel.findOne.mockReturnValue(q(null));
+      mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
+
+      const result = await service.getForm(stateOid.toString(), YEAR_ID, 1, adminUser);
+      const data = result.data as { questions: HydratedFieldConfig[] };
+      const fileQ = data.questions.find((q) => q.key === 'excelFile');
+      const badges = fileQ?.supportingContent?.[0]?.badges ?? [];
+      const badge = badges.find((b) => b.label?.startsWith('Allocated amount'));
+
+      expect(badge?.label).toBe('Allocated amount: ₹5,00,000');
+      expect(badge?.visible).toBe(true);
     });
 
     it('Allocated sum badge tone is success when allocation is balanced', async () => {
@@ -842,10 +966,29 @@ describe('DevolutionFormulaService', () => {
       expect(badge?.tone).toBe('danger');
     });
 
-    it('Remaining badge label shows formatted difference with Cr. suffix', async () => {
+    it('Remaining badge label shows formatted difference, whole-Rupee, no unit suffix', async () => {
       const badges = await getBadges(docUnbalanced);
       const badge = badges.find((b) => b.label?.startsWith('Remaining'));
-      expect(badge?.label).toBe('Remaining: ₹1,00,000 Cr.');
+      expect(badge?.label).toBe('Remaining: ₹1,00,000');
+    });
+
+    // A real-world-scale gap (424-ULB Maharashtra shape, ₹4 off) must show as unbalanced, not be
+    // reconciled away — every rupee of the MoHUA allocation must be accounted for. See
+    // devolution-formula-tolerance.helpers.ts.
+    it('Allocated sum / Remaining badges show danger tone for a real ₹4-off Maharashtra-shaped dataset, not success', async () => {
+      const docMaharashtraShapedGap = {
+        ...mockFormInProgress,
+        excelRowCount: 424,
+        totalMoHUAAllocation: 60_120_000_000,
+        totalAllocatedSum: 60_120_000_004,
+      };
+      const badges = await getBadges(docMaharashtraShapedGap);
+      const allocatedSum = badges.find((b) => b.label?.startsWith('Allocated sum'));
+      expect(allocatedSum?.label).toBe('Allocated sum: ₹60,12,00,00,004');
+      expect(allocatedSum?.tone).toBe('danger');
+      const remaining = badges.find((b) => b.label?.startsWith('Remaining'));
+      expect(remaining?.label).toBe('Remaining: ₹-4');
+      expect(remaining?.tone).toBe('danger');
     });
 
     it('All valid badge is visible when validationStatus is VALID', async () => {
@@ -886,6 +1029,166 @@ describe('DevolutionFormulaService', () => {
       const badge = badges.find((b) => b.label?.includes('duplicate ULB'));
       expect(badge?.visible).toBe(true);
       expect(badge?.label).toBe('1 duplicate ULB(s)');
+    });
+  });
+
+  // ─── excelFile supportingContent — validationMessage ───────────────────────
+  // The plain-English "what to fix" sentence built by buildValidationIssuesMessage() from the
+  // same counts as the badges above — see that util's own spec for exhaustive join-logic coverage.
+
+  describe('excelFile supportingContent — validationMessage', () => {
+    async function getValidationMessage(doc: object) {
+      mockFormModel.findOne.mockReturnValue(q(doc));
+      mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
+      const result = await service.getForm(stateOid.toString(), YEAR_ID, 1, adminUser);
+      const data = result.data as { questions: HydratedFieldConfig[] };
+      const fileQ = data.questions.find((q) => q.key === 'excelFile');
+      return fileQ?.supportingContent?.[0]?.validationMessage;
+    }
+
+    it('is undefined when validationStatus is VALID', async () => {
+      const message = await getValidationMessage(mockFormInProgress);
+      expect(message).toBeUndefined();
+    });
+
+    it('is undefined when there is no active dataset yet, even if validationStatus is somehow INVALID', async () => {
+      const message = await getValidationMessage({
+        ...mockFormInProgress,
+        activeDatasetVersion: 0,
+        errorRowCount: 3,
+        validationStatus: 'INVALID' as const,
+      });
+      expect(message).toBeUndefined();
+    });
+
+    it('reports row errors only', async () => {
+      const message = await getValidationMessage({
+        ...mockFormInProgress,
+        errorRowCount: 3,
+        validationStatus: 'INVALID' as const,
+      });
+      expect(message).toBe('To submit, fix 3 row error(s).');
+    });
+
+    it('reports missing ULBs only', async () => {
+      const message = await getValidationMessage({
+        ...mockFormInProgress,
+        missingUlbCount: 2,
+        validationStatus: 'INVALID' as const,
+      });
+      expect(message).toBe('To submit, add the 2 missing ULB(s).');
+    });
+
+    it('reports new ULBs only', async () => {
+      const message = await getValidationMessage({
+        ...mockFormInProgress,
+        newUlbCount: 3,
+        validationStatus: 'INVALID' as const,
+      });
+      expect(message).toBe('To submit, register 3 new ULB(s).');
+    });
+
+    it('reports duplicate ULBs only', async () => {
+      const message = await getValidationMessage({
+        ...mockFormInProgress,
+        duplicateUlbCount: 1,
+        validationStatus: 'INVALID' as const,
+      });
+      expect(message).toBe('To submit, remove 1 duplicate ULB(s).');
+    });
+
+    it('reports an allocation mismatch only, naming both the shortfall and the Allocated amount to match', async () => {
+      const message = await getValidationMessage({
+        ...mockFormInProgress,
+        totalAllocatedSum: 400_000,
+        validationStatus: 'INVALID' as const,
+      });
+      expect(message).toBe('To submit, reconcile the ₹1,00,000 to match ₹5,00,000 (Allocated amount).');
+    });
+
+    it('joins multiple active problems into one sentence', async () => {
+      const message = await getValidationMessage({
+        ...mockFormInProgress,
+        errorRowCount: 3,
+        duplicateUlbCount: 1,
+        validationStatus: 'INVALID' as const,
+      });
+      expect(message).toBe('To submit, fix 3 row error(s) and remove 1 duplicate ULB(s).');
+    });
+  });
+
+  // ─── excelFile supportingContent — Revalidate Excel visibility ─────────────
+  // newUlbCount/duplicateUlbCount aren't part of the persisted validationStatus formula (see
+  // devolution-formula-excel.service.ts), so a warning badge can be showing even when
+  // validationStatus already reads 'VALID' — Revalidate Excel must still be offered in that case.
+
+  describe('excelFile supportingContent — Revalidate Excel visibility', () => {
+    const uploadedExcel = { originalName: 'test.xlsx', path: 'state/test.xlsx' };
+
+    async function getRevalidateAction(doc: object) {
+      mockFormModel.findOne.mockReturnValue(q(doc));
+      mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
+      const result = await service.getForm(stateOid.toString(), YEAR_ID, 1, adminUser);
+      const data = result.data as { questions: HydratedFieldConfig[] };
+      const fileQ = data.questions.find((q) => q.key === 'excelFile');
+      const actions = fileQ?.supportingContent?.[0]?.actions ?? [];
+      return actions.find((a) => a.id === 'revalidate-excel');
+    }
+
+    it('is visible when validationStatus is INVALID (baseline)', async () => {
+      const action = await getRevalidateAction({
+        ...mockFormInProgress,
+        excelFile: uploadedExcel,
+        errorRowCount: 3,
+        validationStatus: 'INVALID' as const,
+      });
+      expect(action?.visible).toBe(true);
+    });
+
+    it('is not visible when validationStatus is VALID and every badge is clean', async () => {
+      const action = await getRevalidateAction({ ...mockFormInProgress, excelFile: uploadedExcel });
+      expect(action?.visible).toBe(false);
+    });
+
+    it('is visible when validationStatus is VALID but newUlbCount > 0 (new-ULB warning badge showing)', async () => {
+      const action = await getRevalidateAction({
+        ...mockFormInProgress,
+        excelFile: uploadedExcel,
+        newUlbCount: 2,
+      });
+      expect(action?.visible).toBe(true);
+    });
+
+    it('is visible when validationStatus is VALID but duplicateUlbCount > 0 (duplicate-ULB warning badge showing)', async () => {
+      const action = await getRevalidateAction({
+        ...mockFormInProgress,
+        excelFile: uploadedExcel,
+        duplicateUlbCount: 1,
+      });
+      expect(action?.visible).toBe(true);
+    });
+
+    it('is visible when validationStatus is VALID but missingUlbCount > 0 (missing-ULB warning badge showing)', async () => {
+      const action = await getRevalidateAction({
+        ...mockFormInProgress,
+        excelFile: uploadedExcel,
+        missingUlbCount: 3,
+      });
+      expect(action?.visible).toBe(true);
+    });
+
+    it('is visible when validationStatus is VALID but the allocation is unbalanced (danger badge showing)', async () => {
+      const action = await getRevalidateAction({
+        ...mockFormInProgress,
+        excelFile: uploadedExcel,
+        totalAllocatedSum: 400_000,
+      });
+      expect(action?.visible).toBe(true);
+    });
+
+    it('is not visible when no excel has been uploaded, even with a warning condition', async () => {
+      const action = await getRevalidateAction({ ...mockFormInProgress, newUlbCount: 2 });
+      expect(action?.visible).toBe(false);
     });
   });
 

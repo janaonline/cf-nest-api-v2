@@ -87,10 +87,28 @@ describe('FcUnspentDeclarationDocxService', () => {
     expect(result.buffer.subarray(0, 2).toString('utf8')).toBe('PK');
   });
 
-  it('uses a getTimeStamp-based .docx filename', async () => {
+  it('opens with the shared MoHUA addressee block, not the old one', async () => {
     documentService.getDocumentData.mockResolvedValue(buildNoBranchData());
     const result = await service.generateDeclarationDocument(stateId, yearId, user);
-    expect(result.fileName).toMatch(/^fc-unspent-declaration_.*\.docx$/);
+    const xml = await extractDocumentXml(result.buffer);
+
+    expect(xml).toContain('Economic Advisor/ Deputy Secretary (Finance Commission Cell)');
+    expect(xml).toContain('Sankalp Bhawan, GPOA-2, Pt. Ravi Shankar Shukla Lane,');
+    expect(xml).toContain('Kasturba Gandhi Marg, New Delhi-110001');
+    expect(xml).not.toContain('The Director,');
+    expect(xml).not.toContain('AMRUT-IIB');
+  });
+
+  it('builds the CF_{StateName}_fc-unspent-declaration-no_{YearLabel}.docx filename on the No branch', async () => {
+    documentService.getDocumentData.mockResolvedValue(buildNoBranchData());
+    const result = await service.generateDeclarationDocument(stateId, yearId, user);
+    expect(result.fileName).toBe('CF_Andhra-Pradesh_Fc-unspent-declaration-no_2026-27.docx');
+  });
+
+  it('builds the CF_{StateName}_fc-unspent-declaration-yes_{YearLabel}.docx filename on the Yes branch', async () => {
+    documentService.getDocumentData.mockResolvedValue(buildYesBranchData(1));
+    const result = await service.generateDeclarationDocument(stateId, yearId, user);
+    expect(result.fileName).toBe('CF_Andhra-Pradesh_Fc-unspent-declaration-yes_2026-27.docx');
   });
 
   describe('No branch', () => {
@@ -144,13 +162,13 @@ describe('FcUnspentDeclarationDocxService', () => {
       expect(xml).not.toMatch(/>false</);
     });
 
-    it('formats money fields with the Cr. suffix', async () => {
+    it('formats money fields as whole-Rupee amounts with a ₹ prefix, no decimals', async () => {
       documentService.getDocumentData.mockResolvedValue(buildYesBranchData(1));
       const result = await service.generateDeclarationDocument(stateId, yearId, user);
       const xml = await extractDocumentXml(result.buffer);
 
-      expect(xml).toContain('100 Cr.');
-      expect(xml).toContain('4 Cr.');
+      expect(xml).toContain('₹100');
+      expect(xml).toContain('₹4');
     });
 
     it('uses the "This is submitted for the consideration" closing wording verbatim from the reference PDF', async () => {

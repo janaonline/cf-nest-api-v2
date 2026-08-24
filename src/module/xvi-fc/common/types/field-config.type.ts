@@ -1,13 +1,16 @@
 // ─── Condition / visibility ───────────────────────────────────────────────────
 
-export type ConditionOperator = 'equals' | 'notEquals' | 'in' | 'notIn';
+export type ConditionOperator = 'equals' | 'notEquals' | 'in' | 'notIn' | 'isNotEmpty' | 'isEmpty';
 export type VisibleWhenMode = 'all' | 'any';
 
 export interface VisibilityCondition {
   key: string;
   operator: ConditionOperator;
-  /** Scalar for equals/notEquals; array for in/notIn */
-  value: string | string[] | boolean | number;
+  /**
+   * Scalar for equals/notEquals; array for in/notIn.
+   * Omitted for isNotEmpty/isEmpty.
+   * */
+  value?: string | string[] | boolean | number;
 }
 
 export interface VisibleWhen {
@@ -109,6 +112,8 @@ export interface FieldSupportingContent {
   separator?: 'dot' | 'none';
   actions?: SupportingContentAction[];
   badges?: SupportingContentBadge[];
+  /** Plain-English fix message shown after badges when the form is invalid. */
+  validationMessage?: string;
 }
 
 // ─── File value shape ─────────────────────────────────────────────────────────

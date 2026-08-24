@@ -26,14 +26,16 @@ class IsBudgetDocumentS3KeyConstraint implements ValidatorConstraintInterface {
     if (/^s3:\/\//i.test(normalizedValue)) return false;
     if (normalizedValue.includes('?')) return false;
 
-    // Structural check only — folder must be budgets/<designYear>/<filename>.pdf. The service
-    // re-validates the EXACT budgets/{designYear}/ prefix once designYear is resolved from the
-    // Year lookup (mirrors bank-account's DTO-level generic check + service-level exact check).
-    return /^budgets\/[^/]+\/[A-Za-z0-9._-]+\.pdf$/i.test(normalizedValue);
+    // Structural check only — folder must be budgets/<designYear>/<ulbId>/<filename>.pdf. The
+    // service re-validates the EXACT budgets/{designYear}/{ulbId}/ prefix once both are resolved
+    // from the authenticated requester (mirrors bank-account's DTO-level generic check +
+    // service-level exact check) — this DTO alone can't scope by ULB since it has no access to
+    // the requester.
+    return /^budgets\/[^/]+\/[^/]+\/[A-Za-z0-9._-]+\.pdf$/i.test(normalizedValue);
   }
 
   defaultMessage(): string {
-    return 'file.s3Key must be an unsigned budgets/{designYear}/ S3 object key ending in .pdf.';
+    return 'file.s3Key must be an unsigned budgets/{designYear}/{ulbId}/ S3 object key ending in .pdf.';
   }
 }
 

@@ -1,8 +1,9 @@
 import { createHash } from 'crypto';
 
-// Bumped from 1: children now hash Crore-denominated decimal amounts (allocatedAmount/
-// claimedAmount) instead of integer paise — a hash computed under version 1 is not comparable.
-export const CLAIM_LETTER_CONTENT_HASH_VERSION = 2;
+// Bump whenever the amount representation (unit or precision) of allocatedAmount/claimedAmount
+// changes — a hash computed under an earlier version isn't comparable to this one, even for the
+// "same" logical amount, since the version number is folded into the hash (see hashToken below).
+export const CLAIM_LETTER_CONTENT_HASH_VERSION = 5;
 
 export interface ClaimLetterContentHashChildInput {
   ulbId: string;

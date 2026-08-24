@@ -116,6 +116,12 @@ export class UpdateProfileContactsDto {
   @IsBoolean()
   isXVIFCProfileVerified?: boolean;
 
+  @ApiPropertyOptional({ description: 'Set true once this user\'s (or, for ULB, the Nodal Officer\'s) email has been confirmed via OTP on the profile-verification page' })
+  @IsOptional()
+  @Transform(({ value }) => value === true || value === 'true')
+  @IsBoolean()
+  isXviFcEmailVerified?: boolean;
+
   @ApiPropertyOptional({ description: 'Mark false when a MoHUA user verifies their profile to un-flag any soft-removal' })
   @IsOptional()
   @Transform(({ value }) => value === false || value === 'false' ? false : value === true || value === 'true' ? true : undefined)
