@@ -4,7 +4,7 @@ import { UsersController } from './users.controller';
 import { UsersService } from './users.service';
 import { Types } from 'mongoose';
 
-import { makeStateAdmin, makeUlbAdmin, TARGET_USER_ID } from './test/users.fixtures';
+import { makeStateAdmin, makeUlbAdmin, makeMohuaAdmin, TARGET_USER_ID } from './test/users.fixtures';
 
 // ─── NOTE ON DRIFT FROM THE PREVIOUS VERSION OF THIS FILE ──────────────────
 //
@@ -162,11 +162,15 @@ describe('UsersController', () => {
   });
 
   describe('getMohuaMembers()', () => {
-    it('delegates to usersService.getMohuaMembers()', async () => {
+    it('delegates to usersService.getMohuaMembers() with the current user', async () => {
       const members = [{ _id: TARGET_USER_ID }];
+      const user = makeMohuaAdmin();
       mockUsersService.getMohuaMembers.mockResolvedValue(members);
 
-      expect(await controller.getMohuaMembers()).toEqual(members);
+      const result = await controller.getMohuaMembers(user as any);
+
+      expect(result).toEqual(members);
+      expect(mockUsersService.getMohuaMembers).toHaveBeenCalledWith(user);
     });
   });
 

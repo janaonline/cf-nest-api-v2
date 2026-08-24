@@ -105,6 +105,20 @@ describe('BankAccountService scope enforcement', () => {
       ulbEligibilityService as never,
       formJsonService as never,
     );
+
+    // Default Razorpay IFSC lookup used by submitBankAccount()'s verifyIfscCode() — matches
+    // makeSubmitDto()'s default bankDetails so existing submit tests pass verification unchanged.
+    // lookupIfsc()-specific tests below override this with their own jest.spyOn(axios, 'get').
+    jest.spyOn(axios, 'get').mockResolvedValue({
+      data: {
+        BANK: 'State Bank of India',
+        BRANCH: 'Main',
+        ADDRESS: 'MG Road',
+        CITY: 'Bhopal',
+        STATE: 'Madhya Pradesh',
+        MICR: null,
+      },
+    });
   });
 
   afterAll(() => {
@@ -448,6 +462,36 @@ describe('BankAccountService scope enforcement', () => {
       proofFile: dto.proofFile,
     });
     expect(result.data).not.toHaveProperty('proof');
+  });
+
+  it('POST rejects bankDetails that do not match the verified IFSC record', async () => {
+    const dto = makeSubmitDto({ bankDetails: { ...makeSubmitDto().bankDetails, name: 'Fabricated Bank' } });
+    const user = makeUser({ role: UserRole.ULB, scope: Scope.ULB, accessLevel: AccessLevel.ADMIN, ulb: ulbId });
+
+    await expect(service.submitBankAccount(dto, user)).rejects.toThrow(BadRequestException);
+    await expect(service.submitBankAccount(dto, user)).rejects.toThrow(
+      'bankDetails.name does not match the verified IFSC details.',
+    );
+    expect(bankAccountModel.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('POST rejects an IFSC code that Razorpay does not recognize', async () => {
+    jest.spyOn(axios, 'get').mockResolvedValue({ data: {} });
+    const dto = makeSubmitDto();
+    const user = makeUser({ role: UserRole.ULB, scope: Scope.ULB, accessLevel: AccessLevel.ADMIN, ulb: ulbId });
+
+    await expect(service.submitBankAccount(dto, user)).rejects.toThrow(BadRequestException);
+    expect(bankAccountModel.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('POST fails closed when the Razorpay IFSC lookup is unreachable', async () => {
+    jest.spyOn(axios, 'get').mockRejectedValue(new Error('network error'));
+    jest.spyOn(axios, 'isAxiosError').mockReturnValue(false);
+    const dto = makeSubmitDto();
+    const user = makeUser({ role: UserRole.ULB, scope: Scope.ULB, accessLevel: AccessLevel.ADMIN, ulb: ulbId });
+
+    await expect(service.submitBankAccount(dto, user)).rejects.toThrow(ServiceUnavailableException);
+    expect(bankAccountModel.findOneAndUpdate).not.toHaveBeenCalled();
   });
 
   it('POST throws a controlled error when BANK_ACCOUNT_ENCRYPTION_KEY is missing', async () => {

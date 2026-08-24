@@ -704,35 +704,41 @@ export class BankAccountService {
       throw new BadRequestException('ifscCode must be a valid Indian IFSC code.');
     }
 
+    const data = await this.fetchRazorpayIfscDetails(normalizedIfsc);
+    if (!data) {
+      throw new NotFoundException('No bank details found for this IFSC code.');
+    }
+
+    return xviFcSuccess('IFSC details fetched.', {
+      ifscCode: normalizedIfsc,
+      bankDetails: {
+        name: data.BANK,
+        branch: data.BRANCH,
+        address: data.ADDRESS ?? '',
+        city: data.CITY ?? '',
+        state: data.STATE,
+        micr: data.MICR ?? null,
+      },
+    });
+  }
+
+  /** Fetches raw IFSC details from Razorpay's public lookup API. Returns null only for an unrecognized IFSC code. */
+  private async fetchRazorpayIfscDetails(
+    normalizedIfsc: string,
+  ): Promise<(RazorpayIfscResponse & { BANK: string; BRANCH: string }) | null> {
     try {
       const { data } = await axios.get<RazorpayIfscResponse>(
         `https://ifsc.razorpay.com/${encodeURIComponent(normalizedIfsc)}`,
       );
 
       if (!data?.BANK || !data?.BRANCH) {
-        throw new NotFoundException('No bank details found for this IFSC code.');
+        return null;
       }
-
-      return xviFcSuccess('IFSC details fetched.', {
-        ifscCode: normalizedIfsc,
-        bankDetails: {
-          name: data.BANK,
-          branch: data.BRANCH,
-          address: data.ADDRESS ?? '',
-          city: data.CITY ?? '',
-          state: data.STATE,
-          micr: data.MICR ?? null,
-        },
-      });
+      return data as RazorpayIfscResponse & { BANK: string; BRANCH: string };
     } catch (error) {
-      if (error instanceof NotFoundException) {
-        throw error;
-      }
-
       if (axios.isAxiosError(error) && error.response?.status === 404) {
-        throw new NotFoundException('No bank details found for this IFSC code.');
+        return null;
       }
-
       throw new ServiceUnavailableException('Unable to fetch IFSC details. Please try again.');
     }
   }
@@ -909,19 +915,27 @@ export class BankAccountService {
     return fileUrl.split('?')[0];
   }
 
-  private async verifyIfscCode(ifscCode: string): Promise<VerifiedIfscDetails | null> {
-    void ifscCode;
-    // TODO: Wire this to the approved IFSC master/Razorpay verification source when available.
-    // The method exists deliberately so server-side verification is not skipped silently.
-    return null;
+  private async verifyIfscCode(ifscCode: string): Promise<VerifiedIfscDetails> {
+    const normalizedIfsc = (ifscCode ?? '').trim().toUpperCase();
+    const data = await this.fetchRazorpayIfscDetails(normalizedIfsc);
+    if (!data) {
+      throw new BadRequestException('ifscCode could not be verified against bank records.');
+    }
+
+    return {
+      bank: data.BANK,
+      branch: data.BRANCH,
+      address: data.ADDRESS ?? '',
+      city: data.CITY ?? '',
+      state: data.STATE,
+      micr: data.MICR ?? null,
+    };
   }
 
   private assertBankDetailsMatchVerifiedIfsc(
     bankDetails: SubmitXviFcBankAccountDto['bankDetails'],
-    verifiedIfscDetails: VerifiedIfscDetails | null,
+    verifiedIfscDetails: VerifiedIfscDetails,
   ): void {
-    if (!verifiedIfscDetails) return;
-
     const comparisons: Array<[string, string | null | undefined, string | null | undefined]> = [
       ['bankDetails.name', bankDetails.name, verifiedIfscDetails.bank],
       ['bankDetails.branch', bankDetails.branch, verifiedIfscDetails.branch],
