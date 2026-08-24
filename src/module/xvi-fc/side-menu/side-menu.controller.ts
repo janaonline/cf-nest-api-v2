@@ -12,7 +12,7 @@ import { ParseObjectIdPipe } from 'src/common/pipes/parse-object-id.pipe';
 @ApiTags('XVI-FC Side Menu (Admin)')
 @ApiBearerAuth()
 @UseGuards(PermissionGuard)
-// @RequirePermissions(Permission.MANAGE_USERS)
+@RequirePermissions(Permission.MANAGE_USERS)
 @Controller('xvi-fc/side-menu')
 export class SideMenuController {
   constructor(private readonly sideMenuService: SideMenuService) {}

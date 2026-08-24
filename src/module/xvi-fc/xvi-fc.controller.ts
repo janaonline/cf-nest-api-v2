@@ -21,7 +21,7 @@ export class XviFcController {
   @ApiBearerAuth()
   @Get('state/:stateId')
   @UseGuards(PermissionGuard)
-  // @RequirePermissions(Permission.VIEW_STATUS_REPORTS)
+  @RequirePermissions(Permission.VIEW_STATUS_REPORTS)
   async getStateWiseData(
     @Param('stateId', ParseObjectIdPipe) stateId: string,
     @CurrentUser() user: AuthUser,
