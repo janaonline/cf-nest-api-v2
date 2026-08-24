@@ -7,6 +7,7 @@ import { S3Service } from '../../../../core/s3/s3.service';
 import { FileModule } from '../../../file/file.module';
 import { ANNUAL_ACCOUNT_PROCESSING_QUEUE } from '../../../../core/constants/queues';
 import { Ulb, UlbSchema } from '../../../../schemas/ulb.schema';
+import { User, UserSchema } from '../../../../schemas/user/user.schema';
 import { XviFcAnnualAccount, XviFcAnnualAccountSchema } from '../../../../schemas/xvi-fc/annual-account.schema';
 import {
   XviFcAnnualAccountUploadHistory,
@@ -20,6 +21,10 @@ import {
   XviFcDocumentActionGate,
   XviFcDocumentActionGateSchema,
 } from '../../../../schemas/xvi-fc/document-action-gate.schema';
+import {
+  XviFcManualReviewRequest,
+  XviFcManualReviewRequestSchema,
+} from '../../../../schemas/xvi-fc/manual-review-request.schema';
 import { AnnualAccountsController } from './annual_accounts.controller';
 import { AnnualAccountsService } from './annual_accounts.service';
 import { AnnualAccountOcrApiService } from './annual-account-ocr-api.service';
@@ -44,6 +49,8 @@ import { UlbEligibilityModule } from 'src/module/ulb-eligibility/ulb-eligibility
       { name: XviFcAnnualAccountFormLog.name, schema: XviFcAnnualAccountFormLogSchema },
       { name: XviFcDocumentActionGate.name, schema: XviFcDocumentActionGateSchema },
       { name: Ulb.name, schema: UlbSchema },
+      { name: User.name, schema: UserSchema },
+      { name: XviFcManualReviewRequest.name, schema: XviFcManualReviewRequestSchema },
     ]),
   ],
   controllers: [AnnualAccountsController],
