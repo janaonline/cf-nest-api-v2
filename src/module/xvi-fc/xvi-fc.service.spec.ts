@@ -103,6 +103,8 @@ describe('XviFcService', () => {
 
   describe('getStateWiseData', () => {
     const stateId = new Types.ObjectId().toHexString();
+    const adminUser: AuthUser = { ...mockUser, scope: Scope.ADMIN };
+    const ownStateUser: AuthUser = { ...mockUser, role: 'STATE', scope: Scope.STATE, state: stateId };
     const mockResult = {
       stateId,
       stateName: 'Test State',
@@ -112,11 +114,37 @@ describe('XviFcService', () => {
       totalAllocation: 150,
     };
 
-    it('should return state wise data when found', async () => {
+    it('should return state wise data when found (ADMIN)', async () => {
       mockGrantAllocationModel.aggregate.mockResolvedValue([mockResult]);
-      const result = await service.getStateWiseData(stateId, mockUser);
+      const result = await service.getStateWiseData(stateId, adminUser);
       expect(result).toEqual(mockResult);
       expect(mockGrantAllocationModel.aggregate).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns the data for a STATE user requesting their own state', async () => {
+      mockGrantAllocationModel.aggregate.mockResolvedValue([mockResult]);
+      const result = await service.getStateWiseData(stateId, ownStateUser);
+      expect(result).toEqual(mockResult);
+    });
+
+    it('rejects a STATE user requesting a different state', async () => {
+      const otherStateUser: AuthUser = { ...ownStateUser, state: new Types.ObjectId().toHexString() };
+      await expect(service.getStateWiseData(stateId, otherStateUser)).rejects.toThrow(
+        'You can only view your own state data',
+      );
+      expect(mockGrantAllocationModel.aggregate).not.toHaveBeenCalled();
+    });
+
+    it('rejects a ULB-scoped user regardless of which state is requested', async () => {
+      const ulbUser: AuthUser = { ...mockUser, role: 'ULB', scope: Scope.ULB, ulb: new Types.ObjectId().toHexString() };
+      await expect(service.getStateWiseData(stateId, ulbUser)).rejects.toThrow('You can only view your own state data');
+      expect(mockGrantAllocationModel.aggregate).not.toHaveBeenCalled();
+    });
+
+    it('rejects a MoHUA-scoped user — only that state\'s own STATE user (or ADMIN) may view it', async () => {
+      const mohuaUser: AuthUser = { ...mockUser, role: 'MoHUA', scope: Scope.MOHUA };
+      await expect(service.getStateWiseData(stateId, mohuaUser)).rejects.toThrow('You can only view your own state data');
+      expect(mockGrantAllocationModel.aggregate).not.toHaveBeenCalled();
     });
 
     it('defensively rounds basic/performance and re-derives totalAllocation from the rounded rows', async () => {
@@ -131,7 +159,7 @@ describe('XviFcService', () => {
         },
       ]);
 
-      const result = await service.getStateWiseData(stateId, mockUser);
+      const result = await service.getStateWiseData(stateId, adminUser);
 
       expect(result.tableData).toEqual([
         { year: 'FY2026-27', basic: 100, performance: 51 },
@@ -144,15 +172,15 @@ describe('XviFcService', () => {
 
     it('should throw NotFoundException when no data found', async () => {
       mockGrantAllocationModel.aggregate.mockResolvedValue([]);
-      await expect(service.getStateWiseData(stateId, mockUser)).rejects.toThrow(NotFoundException);
-      await expect(service.getStateWiseData(stateId, mockUser)).rejects.toThrow(
+      await expect(service.getStateWiseData(stateId, adminUser)).rejects.toThrow(NotFoundException);
+      await expect(service.getStateWiseData(stateId, adminUser)).rejects.toThrow(
         'No grant allocation data found for this state',
       );
     });
 
     it('should call aggregate with a pipeline array', async () => {
       mockGrantAllocationModel.aggregate.mockResolvedValue([mockResult]);
-      await service.getStateWiseData(stateId, mockUser);
+      await service.getStateWiseData(stateId, adminUser);
       const [pipeline] = mockGrantAllocationModel.aggregate.mock.calls[0];
       expect(Array.isArray(pipeline)).toBe(true);
     });

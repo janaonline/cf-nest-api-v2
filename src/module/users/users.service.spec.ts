@@ -207,6 +207,34 @@ describe('UsersService', () => {
     });
   });
 
+  describe('getMohuaMembers()', () => {
+    it('returns the roster for a MoHUA requester', async () => {
+      mockUserModel.exec.mockResolvedValueOnce([]);
+      await expect(service.getMohuaMembers(makeMohuaAdmin())).resolves.toEqual([]);
+    });
+
+    it('rejects a non-MoHUA requester', async () => {
+      await expect(service.getMohuaMembers(makeStateAdmin())).rejects.toThrow(ForbiddenException);
+      expect(mockUserModel.find).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('inviteMohuaMember()', () => {
+    const dto = { name: 'A', email: 'a@b.com', mobile: '9999999999', designation: 'Officer', subRole: 'VIEWER' as const };
+
+    it('rejects a non-admin-subrole MoHUA requester', async () => {
+      await expect(
+        service.inviteMohuaMember(dto, makeMohuaAdmin({ xviFcSubrole: 'viewer' })),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockEmailDomainValidation.domainHasMxRecord).not.toHaveBeenCalled();
+    });
+
+    it('rejects a non-MoHUA requester', async () => {
+      await expect(service.inviteMohuaMember(dto, makeStateAdmin())).rejects.toThrow(ForbiddenException);
+      expect(mockEmailDomainValidation.domainHasMxRecord).not.toHaveBeenCalled();
+    });
+  });
+
   // ─── issueProfileSaveToken() ─────────────────────────────────────────────
 
   describe('issueProfileSaveToken()', () => {

@@ -825,13 +825,16 @@ export class UsersService {
     }));
   }
 
-  async getMohuaMembers(): Promise<StateMemberResponseDto[]> {
+  async getMohuaMembers(requester: AuthUser): Promise<StateMemberResponseDto[]> {
+    if ((requester.role as string) !== Role.MoHUA) {
+      throw new ForbiddenException('Only MoHUA team members can view this list');
+    }
+
     const users = await this.userModel
       .find({ role: Role.MoHUA, isXviFcdeleted: { $ne: true }, isDeleted: false })
       .select('_id name mobile email designation xviFcSubrole isActive isXVIFCProfileVerified lastLoginAt')
       .lean()
       .exec();
-    console.log('users', users);
     return users.map((u) => ({
       _id: String(u._id),
       name: u.name,
@@ -846,6 +849,10 @@ export class UsersService {
   }
 
   async inviteMohuaMember(dto: InviteMohuaMemberDto, requester: AuthUser): Promise<StateMemberResponseDto> {
+    if ((requester.role as string) !== Role.MoHUA || requester.xviFcSubrole !== 'admin') {
+      throw new ForbiddenException('Only the MoHUA Submitter can invite new members');
+    }
+
     await this.assertInviteEmailIsDeliverable(dto.email);
 
     const action = dto.action ?? 'invite';

@@ -99,8 +99,8 @@ export class UsersController {
   @Get('mohua-members')
   @ApiOperation({ summary: 'List all MoHUA team members' })
   @ApiOkResponse({ type: [StateMemberResponseDto] })
-  getMohuaMembers(): Promise<StateMemberResponseDto[]> {
-    return this.usersService.getMohuaMembers();
+  getMohuaMembers(@CurrentUser() user: AuthUser): Promise<StateMemberResponseDto[]> {
+    return this.usersService.getMohuaMembers(user);
   }
 
   @ApiBearerAuth()
