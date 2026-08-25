@@ -233,6 +233,50 @@ describe('UsersService', () => {
       await expect(service.inviteMohuaMember(dto, makeStateAdmin())).rejects.toThrow(ForbiddenException);
       expect(mockEmailDomainValidation.domainHasMxRecord).not.toHaveBeenCalled();
     });
+
+    it('restore: sets role back to MoHUA even if the removed document had drifted to a different role', async () => {
+      const restoreDto = { ...dto, action: 'restore' as const };
+      const requester = makeMohuaAdmin();
+      const removedDoc = { _id: new Types.ObjectId(TARGET_USER_ID), email: dto.email, role: Role.STATE };
+
+      mockUserModel.exec
+        .mockResolvedValueOnce(null) // activeUser check — no active user with this email
+        .mockResolvedValueOnce(removedDoc) // toRestore lookup
+        .mockResolvedValueOnce({ ...removedDoc, role: Role.MoHUA }); // findByIdAndUpdate result
+      mockUserModel.exists.mockResolvedValue(null); // no race conflict
+
+      await service.inviteMohuaMember(restoreDto, requester);
+
+      expect(mockUserModel.findByIdAndUpdate).toHaveBeenCalledWith(
+        removedDoc._id,
+        expect.objectContaining({ $set: expect.objectContaining({ role: Role.MoHUA }) }),
+        expect.any(Object),
+      );
+    });
+  });
+
+  describe('inviteStateMember()', () => {
+    const dto = { name: 'A', email: 'a@b.com', mobile: '9999999999', designation: 'Officer', subRole: 'VIEWER' as const };
+
+    it('restore: sets role back to STATE even if the removed document had drifted to a different role (e.g. MoHUA)', async () => {
+      const restoreDto = { ...dto, action: 'restore' as const };
+      const requester = makeStateAdmin();
+      const removedDoc = { _id: new Types.ObjectId(TARGET_USER_ID), email: dto.email, role: Role.MoHUA };
+
+      mockUserModel.exec
+        .mockResolvedValueOnce(null) // activeUser check — no active user with this email
+        .mockResolvedValueOnce(removedDoc) // toRestore lookup
+        .mockResolvedValueOnce({ ...removedDoc, role: Role.STATE, state: requester.state }); // findByIdAndUpdate result
+      mockUserModel.exists.mockResolvedValue(null); // no race conflict
+
+      await service.inviteStateMember(restoreDto, requester);
+
+      expect(mockUserModel.findByIdAndUpdate).toHaveBeenCalledWith(
+        removedDoc._id,
+        expect.objectContaining({ $set: expect.objectContaining({ role: Role.STATE }) }),
+        expect.any(Object),
+      );
+    });
   });
 
   // ─── issueProfileSaveToken() ─────────────────────────────────────────────
