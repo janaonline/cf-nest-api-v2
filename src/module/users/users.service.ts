@@ -260,7 +260,7 @@ export class UsersService {
       // Check if this email belongs to a member that was XVI-FC removed (isXviFcdeleted: true).
       // Email is never scrambled in the new flow, so we match directly on the email field.
       const removedUser = await this.userModel
-        .findOne({ email: dto.email, isDeleted: false, isXviFcdeleted: true })
+        .findOne({ email: dto.email, isDeleted: true, isXviFcdeleted: true })
         .select('name designation')
         .lean()
         .exec();
@@ -281,7 +281,7 @@ export class UsersService {
 
     if (action === 'restore') {
       const toRestore = await this.userModel
-        .findOne({ email: dto.email, isDeleted: false, isXviFcdeleted: true })
+        .findOne({ email: dto.email, isDeleted: true, isXviFcdeleted: true })
         .lean()
         .exec();
 
@@ -305,6 +305,7 @@ export class UsersService {
               xviFcSubrole,
               state: stateId,
               isXviFcdeleted: false,
+              isDeleted: false,
               createdBy: new Types.ObjectId(String(requester._id)),
               isActive: true,
               isXVIFCProfileVerified: false,
@@ -330,7 +331,7 @@ export class UsersService {
         _id: { $ne: restored._id },
       });
       if (raceConflict) {
-        await this.userModel.findByIdAndUpdate(restored._id, { $set: { isXviFcdeleted: true } });
+        await this.userModel.findByIdAndUpdate(restored._id, { $set: { isXviFcdeleted: true, isDeleted: true } });
         throw new HttpException(
           { code: 'EMAIL_ALREADY_ACTIVE', message: 'Email address is already registered' },
           HttpStatus.CONFLICT,
@@ -491,9 +492,7 @@ export class UsersService {
       (requester.scope === Scope.STATE &&
         !!requester.state &&
         targetUser.state?.toString() === requester.state.toString()) ||
-      (requester.scope === Scope.ULB &&
-        !!requester.ulb &&
-        targetUser.ulb?.toString() === requester.ulb.toString()) ||
+      (requester.scope === Scope.ULB && !!requester.ulb && targetUser.ulb?.toString() === requester.ulb.toString()) ||
       // MoHUA has no state/ULB subdivision — every MoHUA admin manages the same flat team.
       (requester.scope === Scope.MOHUA && targetUser.role === Role.MoHUA);
     if (!sameTenant) {
@@ -539,8 +538,8 @@ export class UsersService {
 
     if (!targetUser) throw new NotFoundException('User not found');
 
-    // STATE users are removed from the XVI-FC portal only — isDeleted is left unchanged
-    // so 15th FC data is not affected. Email is preserved so the user can be restored later.
+    // STATE users are removed from the whole platform (isDeleted: true), not just XVI-FC —
+    // email is preserved (not tombstoned) so the same email can be re-invited/restored later.
     if ((targetUser.role as string) === UserRole.STATE) {
       if ((targetUser as Record<string, unknown>)['xviFcSubrole'] === 'admin') {
         throw new BadRequestException('Cannot remove the Admin. Transfer ownership first.');
@@ -548,7 +547,7 @@ export class UsersService {
       if (targetUserId === String(requester._id)) {
         throw new BadRequestException('You cannot remove yourself from the team');
       }
-      await this.userModel.findByIdAndUpdate(targetUserId, { $set: { isXviFcdeleted: true } }).exec();
+      await this.userModel.findByIdAndUpdate(targetUserId, { $set: { isXviFcdeleted: true, isDeleted: true } }).exec();
       return { message: 'Member removed from the XVI-FC portal' };
     }
 
@@ -874,7 +873,7 @@ export class UsersService {
 
     if (action === 'invite') {
       const removedUser = await this.userModel
-        .findOne({ email: dto.email, isDeleted: false, isXviFcdeleted: true })
+        .findOne({ email: dto.email, isDeleted: true, isXviFcdeleted: true })
         .select('name designation')
         .lean()
         .exec();
@@ -895,7 +894,7 @@ export class UsersService {
 
     if (action === 'restore') {
       const toRestore = await this.userModel
-        .findOne({ email: dto.email, isDeleted: false, isXviFcdeleted: true })
+        .findOne({ email: dto.email, isDeleted: true, isXviFcdeleted: true })
         .lean()
         .exec();
 
@@ -918,6 +917,7 @@ export class UsersService {
               role: Role.MoHUA,
               xviFcSubrole,
               isXviFcdeleted: false,
+              isDeleted: false,
               createdBy: new Types.ObjectId(String(requester._id)),
               isActive: true,
               isXVIFCProfileVerified: false,
@@ -943,7 +943,7 @@ export class UsersService {
         _id: { $ne: restored._id },
       });
       if (raceConflict) {
-        await this.userModel.findByIdAndUpdate(restored._id, { $set: { isXviFcdeleted: true } });
+        await this.userModel.findByIdAndUpdate(restored._id, { $set: { isXviFcdeleted: true, isDeleted: true } });
         throw new HttpException(
           { code: 'EMAIL_ALREADY_ACTIVE', message: 'Email address is already registered' },
           HttpStatus.CONFLICT,
@@ -1120,7 +1120,9 @@ export class UsersService {
       throw new BadRequestException('Cannot remove the Submitter. Transfer ownership first.');
     }
 
-    await this.userModel.findByIdAndUpdate(targetUserId, { $set: { isXviFcdeleted: true } }).exec();
+    // Removed from the whole platform (isDeleted: true), not just XVI-FC — email is preserved
+    // (not tombstoned) so the same email can be re-invited/restored later.
+    await this.userModel.findByIdAndUpdate(targetUserId, { $set: { isXviFcdeleted: true, isDeleted: true } }).exec();
 
     return { message: 'Member removed successfully' };
   }

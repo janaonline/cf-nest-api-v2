@@ -247,9 +247,12 @@ describe('UsersService', () => {
 
       await service.inviteMohuaMember(restoreDto, requester);
 
+      // The restore lookup must not filter on isDeleted — removed members now carry isDeleted:
+      // true too, so filtering on isDeleted: false here would make them permanently unrestorable.
+      expect(mockUserModel.findOne).toHaveBeenCalledWith({ email: dto.email, isXviFcdeleted: true });
       expect(mockUserModel.findByIdAndUpdate).toHaveBeenCalledWith(
         removedDoc._id,
-        expect.objectContaining({ $set: expect.objectContaining({ role: Role.MoHUA }) }),
+        expect.objectContaining({ $set: expect.objectContaining({ role: Role.MoHUA, isDeleted: false }) }),
         expect.any(Object),
       );
     });
@@ -271,9 +274,12 @@ describe('UsersService', () => {
 
       await service.inviteStateMember(restoreDto, requester);
 
+      // The restore lookup must not filter on isDeleted — removed members now carry isDeleted:
+      // true too, so filtering on isDeleted: false here would make them permanently unrestorable.
+      expect(mockUserModel.findOne).toHaveBeenCalledWith({ email: dto.email, isXviFcdeleted: true });
       expect(mockUserModel.findByIdAndUpdate).toHaveBeenCalledWith(
         removedDoc._id,
-        expect.objectContaining({ $set: expect.objectContaining({ role: Role.STATE }) }),
+        expect.objectContaining({ $set: expect.objectContaining({ role: Role.STATE, isDeleted: false }) }),
         expect.any(Object),
       );
     });
@@ -345,7 +351,7 @@ describe('UsersService', () => {
   // ─── softDeleteStateUser() ───────────────────────────────────────────────
 
   describe('softDeleteStateUser()', () => {
-    it('marks a non-admin STATE user as removed from XVI-FC without touching isDeleted', async () => {
+    it('marks a non-admin STATE user as removed from XVI-FC and from the whole platform', async () => {
       const targetDoc = makeUserDoc({ role: Role.STATE, xviFcSubrole: 'reviewer' });
       mockUserModel.exec.mockResolvedValueOnce(targetDoc).mockResolvedValueOnce(undefined);
 
@@ -353,7 +359,7 @@ describe('UsersService', () => {
 
       expect(result.message).toBe('Member removed from the XVI-FC portal');
       expect(mockUserModel.findByIdAndUpdate).toHaveBeenCalledWith(TARGET_USER_ID, {
-        $set: { isXviFcdeleted: true },
+        $set: { isXviFcdeleted: true, isDeleted: true },
       });
     });
 

@@ -99,15 +99,15 @@ export class LoginService {
         ? 'Invalid mobile number or password'
         : 'Invalid ULB Code/Census Code or password';
 
+    // isXviFcdeleted removal now also sets isDeleted: true (see UsersService.softDeleteStateUser/
+    // softDeleteMohuaMember), so findByIdentifierWithSensitiveFields's own isDeleted: false filter
+    // already excludes these users for every login type — no separate 16thFC-only check needed.
     const user = await this.usersRepository.findByIdentifierWithSensitiveFields(dto.identifier);
     if (!user) throw new UnauthorizedException(invalidMsg);
 
     if (user.status === 'PENDING') throw new ForbiddenException('Waiting for admin action on request.');
     if (user.status === 'REJECTED')
       throw new ForbiddenException(`Your request has been rejected. Reason: ${user.rejectReason}`);
-    if (dto.type === '16thFC' && user.isXviFcdeleted) {
-      throw new ForbiddenException('Invalid email or password');
-    }
     if (!user.isEmailVerified) {
       const url = `${this.configService.get<string>('HOSTNAME')}/account-reactivate`;
       throw new ForbiddenException(
