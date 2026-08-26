@@ -35,18 +35,20 @@ describe('NodeMailerController', () => {
     expect(controller).toBeDefined();
   });
 
-  describe('sendTestMail', () => {
-    it('should call sendWelcomeEmail and return message', async () => {
-      const result = await controller.sendTestMail();
-      expect(service.sendWelcomeEmail).toHaveBeenCalledTimes(1);
-      expect(result).toEqual({ message: 'HTML Template Mail sent!' });
-    });
-
-    it('should propagate errors from sendWelcomeEmail', async () => {
-      service.sendWelcomeEmail.mockRejectedValue(new Error('SMTP error'));
-      await expect(controller.sendTestMail()).rejects.toThrow('SMTP error');
-    });
-  });
+  // sendTestMail/pingEmail were commented out in node-mailer.controller.ts (unauthenticated
+  // real-mail-send security finding) — these tests are disabled to match.
+  // describe('sendTestMail', () => {
+  //   it('should call sendWelcomeEmail and return message', async () => {
+  //     const result = await controller.sendTestMail();
+  //     expect(service.sendWelcomeEmail).toHaveBeenCalledTimes(1);
+  //     expect(result).toEqual({ message: 'HTML Template Mail sent!' });
+  //   });
+  //
+  //   it('should propagate errors from sendWelcomeEmail', async () => {
+  //     service.sendWelcomeEmail.mockRejectedValue(new Error('SMTP error'));
+  //     await expect(controller.sendTestMail()).rejects.toThrow('SMTP error');
+  //   });
+  // });
 
   describe('status', () => {
     it('should return not_found when job does not exist', async () => {
