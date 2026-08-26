@@ -77,7 +77,7 @@ describe('EmailQueueProcessor', () => {
       expect(mockNodeMailerService.sendHtml).not.toHaveBeenCalled();
     });
 
-    it('should use the first recipient when "to" is an array and templateName is used', async () => {
+    it('sends to every recipient when "to" is an array and templateName is used', async () => {
       const job = {
         id: 'job-3',
         data: {
@@ -91,7 +91,7 @@ describe('EmailQueueProcessor', () => {
       await processor.process(job);
 
       expect(mockNodeMailerService.sendEmailWithTemplate).toHaveBeenCalledWith(
-        'first@example.com',
+        ['first@example.com', 'second@example.com'],
         'Bulk Email',
         'welcome',
         { name: 'City Finance' },
