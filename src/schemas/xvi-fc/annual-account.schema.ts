@@ -68,7 +68,13 @@ export class OCRInfo {
   @Prop({ type: [String], default: [] })
   failedChecks!: string[];
 
-  /** ULB has asked a human reviewer to look at this failed OCR result. Set once, cleared on retry/re-upload. */
+  /**
+   * ULB has asked a human reviewer to look at this failed OCR result. Set once; while true and
+   * `DocumentItem.manualReviewDecision` is still null (i.e. ADMIN hasn't decided yet), the ULB is
+   * blocked from re-uploading or retrying this document so the file under review can't change out
+   * from under the ADMIN — see `isAwaitingManualReviewDecision` in annual-account-status-access.util.ts.
+   * Cleared once a fresh upload/retry is allowed to proceed (post-decision).
+   */
   @Prop({ type: Boolean, default: false })
   isManualReviewRequested!: boolean;
 
@@ -138,6 +144,19 @@ export class CurrentUpload {
 
   @Prop({ default: () => new Date() })
   uploadedAt: Date;
+
+  /** Number of times the ULB has retried OCR on this exact uploaded file. Persisted so the
+   *  "Request Manual Review" gate (retry at least once) survives a page reload; scoped to this
+   *  upload — a fresh confirmUpload replaces `currentUpload` wholesale, resetting it to 0. */
+  @Prop({ default: 0 })
+  retryValidationCount!: number;
+
+  /** When the most recent retry was kicked off — null if this upload has never been retried.
+   *  The frontend measures its 20-minute stuck-processing cutoff from this (falling back to
+   *  `uploadedAt`) so a stale timer from the original upload doesn't fire the moment a retry
+   *  is requested. Reset to null on a fresh confirmUpload, same as retryValidationCount. */
+  @Prop({ type: Date, default: null })
+  retryValidationAt!: Date | null;
 }
 
 export const CurrentUploadSchema = SchemaFactory.createForClass(CurrentUpload);

@@ -137,11 +137,13 @@ export class AnnualAccountsController {
     @Param('docId') docId: string,
     @Query('section') section: string,
     @CurrentUser() user: AuthUser,
+    @Req() req: Request,
   ) {
     if (section !== 'auditedData' && section !== 'unauditedData') {
       throw new BadRequestException('section must be "auditedData" or "unauditedData"');
     }
-    return this.annualAccountsService.requestManualReview(id, section, docId, user);
+    const { ipAddress, userAgent } = extractIpAndUserAgent(req);
+    return this.annualAccountsService.requestManualReview(id, section, docId, user, ipAddress, userAgent);
   }
 
   @Post(':id/documents/:docId/manual-review/decision')
@@ -160,6 +162,20 @@ export class AnnualAccountsController {
     }
     const { ipAddress, userAgent } = extractIpAndUserAgent(req);
     return this.annualAccountsService.decideManualReview(id, section, docId, dto, user, ipAddress, userAgent);
+  }
+
+  @Get(':id/documents/:docId/manual-review')
+  @ApiOperation({ summary: 'Manual-review request history for one document (SLA, reviewer, decision notes)' })
+  getManualReviewHistory(
+    @Param('id', ParseObjectIdPipe) id: string,
+    @Param('docId') docId: string,
+    @Query('section') section: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    if (section !== 'auditedData' && section !== 'unauditedData') {
+      throw new BadRequestException('section must be "auditedData" or "unauditedData"');
+    }
+    return this.annualAccountsService.getManualReviewHistory(id, section, docId, user);
   }
 
   @Delete(':id/documents/:docId')
@@ -223,7 +239,9 @@ export class AnnualAccountsController {
 
   @Post(':id/undo-approval')
   @HttpCode(200)
-  @ApiOperation({ summary: 'State reviewer undoes their own Approve Section decision (only while status is APPROVED_BY_STATE)' })
+  @ApiOperation({
+    summary: 'State reviewer undoes their own Approve Section decision (only while status is APPROVED_BY_STATE)',
+  })
   undoSectionApproval(
     @Param('id', ParseObjectIdPipe) id: string,
     @Query('section') section: string,

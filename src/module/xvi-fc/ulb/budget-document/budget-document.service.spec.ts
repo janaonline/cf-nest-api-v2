@@ -35,7 +35,7 @@ describe('BudgetDocumentService', () => {
       designYearId: designYearId.toString(),
       originalName: 'Budget-2026-27.pdf',
       sizeKb: 512,
-      s3Key: 'budgets/2026-27/Budget-2026-27_abc123.pdf',
+      s3Key: `budgets/2026-27/${ulbId.toString()}/Budget-2026-27_abc123.pdf`,
       ...overrides,
     }) as UploadBudgetDocumentDto;
 
@@ -133,7 +133,14 @@ describe('BudgetDocumentService', () => {
     });
 
     it("throws BadRequestException when s3Key doesn't match the resolved design year folder", async () => {
-      const dto = makeUploadDto({ s3Key: 'budgets/2025-26/Budget.pdf' }); // resolved year is 2026-27
+      const dto = makeUploadDto({ s3Key: `budgets/2025-26/${ulbId.toString()}/Budget.pdf` }); // resolved year is 2026-27
+      await expect(service.upload(dto, makeUser())).rejects.toThrow(BadRequestException);
+      expect(model.findOneAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it("throws BadRequestException when s3Key belongs to a different ULB's folder for the same year", async () => {
+      const otherUlbId = new Types.ObjectId().toString();
+      const dto = makeUploadDto({ s3Key: `budgets/2026-27/${otherUlbId}/Budget.pdf` });
       await expect(service.upload(dto, makeUser())).rejects.toThrow(BadRequestException);
       expect(model.findOneAndUpdate).not.toHaveBeenCalled();
     });

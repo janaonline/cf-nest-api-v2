@@ -11,6 +11,8 @@ const OBJECT_ID_PATTERN = '^[0-9a-fA-F]{24}$';
 const MOBILE_PATTERN = '^[6-9]\\d{9}$';
 const CENSUS_CODE_PATTERN = '^\\d{6}$';
 const EMAIL_PATTERN = '^[^\\s@]+@[^\\s@]+\\.[a-zA-Z]{2,}$';
+const MAX_AREA_SQ_KM = 5000;
+const MAX_WARDS = 500;
 
 /**
  * Fallback field definition used when no admin-configured FormJson document
@@ -93,12 +95,39 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
   },
   {
     key: 'population',
-    label: 'Population',
+    label: '2011 Population',
     displayInlineLabel: true,
     formFieldType: 'number',
     validations: [{ name: 'min', validator: 0, message: 'Population cannot be negative.' }],
     labelHint: '(if available)',
     hintText: 'Not available? Leave blank; it can be added later.',
+  },
+  {
+    key: 'area',
+    label: 'Area',
+    displayInlineLabel: true,
+    formFieldType: 'number',
+    maxLength: String(MAX_AREA_SQ_KM).length,
+    validations: [
+      { name: 'min', validator: 0, message: 'Area cannot be negative.' },
+      { name: 'max', validator: MAX_AREA_SQ_KM, message: `Area cannot exceed ${MAX_AREA_SQ_KM} sq km.` },
+    ],
+    labelHint: '(if available)',
+    // hintText: 'Not available? Leave blank; it can be added later.',
+    inputCardConfig: { suffixText: 'sq km' },
+  },
+  {
+    key: 'wards',
+    label: 'Number of Wards',
+    displayInlineLabel: true,
+    formFieldType: 'number',
+    maxLength: String(MAX_WARDS).length,
+    validations: [
+      { name: 'min', validator: 0, message: 'Number of wards cannot be negative.' },
+      { name: 'max', validator: MAX_WARDS, message: `Number of wards cannot exceed ${MAX_WARDS}.` },
+    ],
+    labelHint: '(if available)',
+    // hintText: 'Not available? Leave blank; it can be added later.',
   },
   {
     key: 'dateOfConstitution',
@@ -230,6 +259,14 @@ export const DEFAULT_ULB_REGISTER_SECTIONS: SectionLayout[] = [
         key: 'population',
         grid: 'col-md-6',
       },
+      {
+        key: 'area',
+        grid: 'col-md-6',
+      },
+      {
+        key: 'wards',
+        grid: 'col-md-6',
+      },
     ],
   },
   {
@@ -276,6 +313,8 @@ export const DEFAULT_ULB_EDIT_SECTIONS: SectionLayout[] = [
       { key: 'district', grid: 'col-md-6' },
       { key: 'censusCode', grid: 'col-md-6' },
       { key: 'population', grid: 'col-md-6' },
+      { key: 'area', grid: 'col-md-6' },
+      { key: 'wards', grid: 'col-md-6' },
     ],
   },
   {

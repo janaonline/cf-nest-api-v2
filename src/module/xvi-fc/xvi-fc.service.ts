@@ -61,7 +61,14 @@ export class XviFcService {
   ) {}
 
   async getStateWiseData(stateId: string, requester: AuthUser): Promise<StateWiseResponseDto> {
-    if (requester.scope === Scope.STATE && toObjectIdString(requester.state) !== stateId) {
+    // Only that state's own STATE user may view its financial data — ADMIN is the sole exception
+    // (same "ADMIN bypasses, STATE must match own state, everyone else denied" convention as
+    // ClaimLetterUlbOptionsService.hasStateAccess). Any other scope (ULB, MoHUA, or a STATE user
+    // requesting a different state) is rejected outright, not just left unchecked.
+    const hasStateAccess =
+      requester.scope === Scope.ADMIN ||
+      (requester.scope === Scope.STATE && toObjectIdString(requester.state) === stateId);
+    if (!hasStateAccess) {
       throw new ForbiddenException('You can only view your own state data');
     }
 
