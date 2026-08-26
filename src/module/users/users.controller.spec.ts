@@ -33,7 +33,9 @@ describe('UsersController', () => {
   };
 
   const mockUsersService = {
-    create: jest.fn(),
+    adminCreateUser: jest.fn(),
+    adminUpdateUser: jest.fn(),
+    adminSoftDeleteUser: jest.fn(),
     inviteStateMember: jest.fn(),
     getPermissionMatrix: jest.fn(),
     getStateMembers: jest.fn(),
@@ -76,22 +78,50 @@ describe('UsersController', () => {
   });
 
   describe('create()', () => {
-    it('delegates to usersService.create()', async () => {
-      const createUserDto = { name: 'New User', email: 'newuser@example.com', password: 'password123' };
-      mockUsersService.create.mockResolvedValue(mockUser);
+    it('delegates to usersService.adminCreateUser() with the current user', async () => {
+      const createUserDto = {
+        name: 'New User',
+        email: 'newuser@example.com',
+        mobile: '9876543210',
+        designation: 'XVIFC_USER',
+        role: 'XVIFC',
+      };
+      const user = makeStateAdmin();
+      mockUsersService.adminCreateUser.mockResolvedValue(mockUser);
 
-      const result = await controller.create(createUserDto);
+      const result = await controller.create(createUserDto as any, user as any);
 
       expect(result).toEqual(mockUser);
-      expect(mockUsersService.create).toHaveBeenCalledWith(createUserDto);
-      expect(mockUsersService.create).toHaveBeenCalledTimes(1);
+      expect(mockUsersService.adminCreateUser).toHaveBeenCalledWith(createUserDto, user);
+      expect(mockUsersService.adminCreateUser).toHaveBeenCalledTimes(1);
     });
 
     it('propagates errors from the service', async () => {
-      const createUserDto = { name: 'New User', email: 'newuser@example.com', password: 'password123' };
-      mockUsersService.create.mockRejectedValue(new Error('User already exists'));
+      const createUserDto = {
+        name: 'New User',
+        email: 'newuser@example.com',
+        mobile: '9876543210',
+        designation: 'XVIFC_USER',
+        role: 'XVIFC',
+      };
+      mockUsersService.adminCreateUser.mockRejectedValue(new Error('User already exists'));
 
-      await expect(controller.create(createUserDto)).rejects.toThrow('User already exists');
+      await expect(controller.create(createUserDto as any, makeStateAdmin() as any)).rejects.toThrow(
+        'User already exists',
+      );
+    });
+  });
+
+  describe('update()', () => {
+    it('delegates to usersService.adminUpdateUser() with the target id and current user', async () => {
+      const updateDto = { name: 'Renamed User' };
+      const user = makeStateAdmin();
+      mockUsersService.adminUpdateUser.mockResolvedValue(mockUser);
+
+      const result = await controller.update(TARGET_USER_ID, updateDto as any, user as any);
+
+      expect(result).toEqual(mockUser);
+      expect(mockUsersService.adminUpdateUser).toHaveBeenCalledWith(TARGET_USER_ID, updateDto, user);
     });
   });
 
@@ -328,6 +358,25 @@ describe('UsersController', () => {
       mockUsersService.softDeleteStateUser.mockRejectedValue(new Error('User not found'));
 
       await expect(controller.softDeleteStateUser(TARGET_USER_ID, user as any)).rejects.toThrow('User not found');
+    });
+  });
+
+  describe('adminSoftDeleteUser()', () => {
+    it('delegates to usersService.adminSoftDeleteUser() with the target id and current user', async () => {
+      const user = makeStateAdmin({ scope: 'ADMIN' as any });
+      mockUsersService.adminSoftDeleteUser.mockResolvedValue({ message: 'User deleted successfully' });
+
+      const result = await controller.adminSoftDeleteUser(TARGET_USER_ID, user as any);
+
+      expect(result).toEqual({ message: 'User deleted successfully' });
+      expect(mockUsersService.adminSoftDeleteUser).toHaveBeenCalledWith(TARGET_USER_ID, user);
+    });
+
+    it('propagates errors from the service', async () => {
+      const user = makeStateAdmin({ scope: 'ADMIN' as any });
+      mockUsersService.adminSoftDeleteUser.mockRejectedValue(new ForbiddenException('Only ADMIN can perform this action'));
+
+      await expect(controller.adminSoftDeleteUser(TARGET_USER_ID, user as any)).rejects.toThrow(ForbiddenException);
     });
   });
 });
