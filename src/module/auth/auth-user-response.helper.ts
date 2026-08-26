@@ -29,6 +29,7 @@ export function buildUserResponsePayload(
     mobile: user.mobile,
     isActive: user.isActive,
     role: user.role,
+    createdAt: user.createdAt,
     ...(parsedRole && { accessLevel: parsedRole.accessLevel }),
     isXVIFCProfileVerified: user.isXVIFCProfileVerified ?? false,
     isNewUser: user.isNewUser ?? false,
