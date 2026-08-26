@@ -192,6 +192,10 @@ export class User extends Document {
     allow: Permission[];
     deny: Permission[];
   };
+
+  // Managed by `timestamps: true` above — declared here only so TS knows they exist.
+  createdAt?: Date;
+  updatedAt?: Date;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

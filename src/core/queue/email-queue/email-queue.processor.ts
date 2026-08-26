@@ -21,8 +21,7 @@ export class EmailQueueProcessor extends WorkerHost {
     if (html) {
       await this.mailService.sendHtml(to, subject, html);
     } else if (templateName) {
-      const singleTo = typeof to === 'string' ? to : to[0];
-      await this.mailService.sendEmailWithTemplate(singleTo, subject, templateName, mailData);
+      await this.mailService.sendEmailWithTemplate(to, subject, templateName, mailData);
     } else {
       throw new Error(`Job ${job.id}: neither html nor templateName provided`);
     }
