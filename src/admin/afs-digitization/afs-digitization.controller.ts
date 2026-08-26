@@ -1,5 +1,6 @@
-import { Body, Controller, Get, Logger, Param, Post, Query, Res, UsePipes, ValidationPipe } from '@nestjs/common';
-import { ApiBody } from '@nestjs/swagger';
+import { Body, Controller, Get, Logger, Param, Post, Query, Res, UploadedFile, UseInterceptors, UsePipes, ValidationPipe } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiBody, ApiConsumes } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { YearIdToLabel } from 'src/core/constants/years';
 import { AfsDigitizationService } from './afs-digitization.service';
@@ -13,6 +14,7 @@ import { ResourcesSectionExcelReportDto } from './dto/resources-section-excel-re
 import { SubmitARDecisionDto } from './dto/submit-ar-decision.dto';
 import { AuditorsReportOcrQueueService } from './queue/auditors-report-ocr-queue/auditors-report-ocr-queue.service';
 import { DigitizationQueueService } from './queue/digitization-queue/digitization-queue.service';
+import { Public } from 'src/module/auth/decorators/public.decorator';
 
 @Controller('afs-digitization')
 export class AfsDigitizationController {
@@ -78,6 +80,30 @@ export class AfsDigitizationController {
   @Post('upload-afs-file')
   async uploadAFSFile(@Body() body: DigitizationJobDto) {
     const result = await this.digitizationQueueService.upsertAfsExcelFile(body);
+    return {
+      status: 'success',
+      data: result,
+    };
+  }
+
+  @Public()
+  @Post('upload-ulb-keywords')
+  @UseInterceptors(FileInterceptor('file'))
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: {
+          type: 'string',
+          format: 'binary',
+        },
+      },
+      required: ['file'],
+    },
+  })
+  async uploadUlbKeywords(@UploadedFile() file: Express.Multer.File) {
+    const result = await this.afsService.uploadUlbKeywords(file);
     return {
       status: 'success',
       data: result,

@@ -1,24 +1,37 @@
+import { CacheModule } from '@nestjs/cache-manager';
 import { BullModule } from '@nestjs/bullmq';
 import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { MongooseModule } from '@nestjs/mongoose';
+import { ScheduleModule } from '@nestjs/schedule';
 import { seconds, ThrottlerModule } from '@nestjs/throttler';
 import { ThrottlerBehindProxyGuard } from './core/guards/throttler-behind-proxy.guard';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { EmailModule } from './core/email/email.module';
 import { NodeMailerModule } from './core/node-mailer/node-mailer.module';
+import { RedisModule } from './core/services/redis/redis.module';
 import { LoggerMiddleware } from './middleware/logger-middleware';
 import { AuthModule } from './module/auth/auth.module';
 import { DataCollectionModule } from './module/data-collection/data-collection.module';
-import { UsersModule } from './users/users.module';
+import { UsersModule } from './module/users/users.module';
 import { AfsDigitizationModule } from './admin/afs-digitization/afs-digitization.module';
 import { ReportAnIssueModule } from './web/report-an-issue/report-an-issue.module';
 import { ResourcesSectionModule } from './web/resources-section/resources-section.module';
 import { EventsModule } from './admin/events/events.module';
+import { XviFcModule } from './module/xvi-fc/xvi-fc.module';
+import { EmailTemplatesModule } from './admin/email-templates/email-templates.module';
+import { UlbTypesModule } from './admin/ulb-types/ulb-types.module';
+import { EmailRemindersModule } from './admin/email-reminders/email-reminders.module';
 import { FileTokenModule } from './core/file-token/file-token.module';
-import { FileDownloadModule } from './file-download/file-download.module';
+import { EmailDomainValidationModule } from './core/email-domain-validation/email-domain-validation.module';
+import { FileModule } from './module/file/file.module';
+import { FormJsonModule } from './master/form-json/form-json.module';
+import { CommunicationModule } from './module/communication/communication.module';
+import { NotificationsModule } from './module/notifications/notifications.module';
+import { UlbModule } from './master/ulb/ulb.module';
+import { StateModule } from './master/state/state.module';
 function getQueryCaller(): string {
   const stack = new Error().stack?.split('\n') ?? [];
   const frame = stack.find(
@@ -37,6 +50,9 @@ function getQueryCaller(): string {
       },
     ]),
     ConfigModule.forRoot({ isGlobal: true }),
+    ScheduleModule.forRoot(),
+    CacheModule.register({ isGlobal: true, ttl: 300000 }),
+    RedisModule,
     AuthModule,
     BullModule.forRootAsync({
       inject: [ConfigService],
@@ -45,7 +61,7 @@ function getQueryCaller(): string {
         if (!redisUrl) throw new Error('REDIS_URL missing');
         return {
           connection: { url: redisUrl }, // supports redis:// and rediss://
-          prefix: 'appq', // optional key prefix
+          prefix: cfg.get<string>('BULL_QUEUE_PREFIX') ?? 'appq',
         };
       },
     }),
@@ -55,6 +71,13 @@ function getQueryCaller(): string {
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
         uri: configService.get<string>('MONGO_URI'),
+        // connectionFactory: (connection: any) => {
+        //   connection.set('debug', (collection: string, method: string, ...args: any[]) => {
+        //     const caller = getQueryCaller();
+        //     console.log(`[Query] ${collection}.${method} | ${caller}`, JSON.stringify(args));
+        //   });
+        //   return connection;
+        // },
       }),
     }),
     MongooseModule.forRootAsync({
@@ -62,18 +85,36 @@ function getQueryCaller(): string {
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
         uri: configService.get<string>('MONGO_URI_2'),
+        // connectionFactory: (connection: any) => {
+        //   connection.set('debug', (collection: string, method: string, ...args: any[]) => {
+        //     const caller = getQueryCaller();
+        //     console.log(`[Query:digitization_db] ${collection}.${method} | ${caller}`, JSON.stringify(args));
+        //   });
+        //   return connection;
+        // },
       }),
       connectionName: 'digitization_db',
     }),
-    // UsersModule,
+    UsersModule,
     ResourcesSectionModule,
     NodeMailerModule,
     EmailModule,
     ReportAnIssueModule,
     FileTokenModule,
-    FileDownloadModule,
+    EmailDomainValidationModule,
+    FileModule,
     AfsDigitizationModule,
     EventsModule,
+    XviFcModule,
+    EmailTemplatesModule,
+    UlbTypesModule,
+    EmailRemindersModule,
+    // FormsModule, // intentionally not registered - This is not consumed by any module.
+    FormJsonModule,
+    CommunicationModule,
+    NotificationsModule,
+    UlbModule,
+    StateModule,
     DataCollectionModule,
   ],
   controllers: [AppController],

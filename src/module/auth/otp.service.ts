@@ -1,0 +1,415 @@
+import { Injectable, Logger, HttpException, UnauthorizedException, BadRequestException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import * as bcrypt from 'bcrypt';
+import type { Response } from 'express';
+import axios from 'axios';
+import { EmailQueueService } from 'src/core/queue/email-queue/email-queue.service';
+import { RedisService } from 'src/core/services/redis/redis.service';
+import { UsersRepository } from 'src/module/users/users.repository';
+import { AuthService } from './auth.service';
+import { ResetPasswordDto } from './dto/reset-password.dto';
+import { SendOtpDto } from './dto/send-otp.dto';
+import { VerifyOtpDto } from './dto/verify-otp.dto';
+import { AuthResponse } from './types/auth-tokens.type';
+import { generateOtp, getOtpConfig } from './otp/otp.config';
+import {
+  OtpState,
+  normalizeIdentifier,
+  otpCooldownKey,
+  otpLockKey,
+  otpStateKey,
+} from './otp/otp-redis.types';
+
+@Injectable()
+export class OtpService {
+  private readonly logger = new Logger(OtpService.name);
+
+  constructor(
+    private readonly usersRepository: UsersRepository,
+    private readonly authService: AuthService,
+    private readonly configService: ConfigService,
+    private readonly emailQueueService: EmailQueueService,
+    private readonly redisService: RedisService,
+  ) {}
+
+  // ─── Public API ────────────────────────────────────────────────────────────
+
+  async sendOtp(dto: SendOtpDto): Promise<{
+    success: boolean;
+    message: string;
+    mobile?: string;
+    email?: string;
+  }> {
+    const purpose = dto.purpose ?? 'login';
+    const id = normalizeIdentifier(dto.identifier);
+    const cfg = getOtpConfig(this.configService);
+
+    // mobile-verify: no DB lookup — send OTP to any valid mobile for contact ownership check
+    if (purpose === 'mobile-verify') {
+      return this.sendMobileVerifyOtp(id, cfg);
+    }
+
+    // Always return success shape even when user not found (no enumeration)
+    const user = await this.usersRepository.findByIdentifier(id);
+    if (!user) return { success: true, message: 'OTP sent if account exists' };
+
+    await this.assertNotLocked(purpose, id);
+    await this.assertCooldownClear(purpose, id);
+
+    const existingState = await this.readOtpState(purpose, id);
+    const resendCount = existingState?.resendCount ?? 0;
+
+    if (resendCount >= cfg.maxResendAttempts) {
+      throw new HttpException('Maximum OTP requests reached. Please try again later.', 429);
+    }
+
+    const otp = generateOtp(cfg.length, cfg.isProduction);
+    const hashedOtp = await bcrypt.hash(otp, 10);
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + cfg.ttlSeconds * 1000);
+
+    const state: OtpState = {
+      hashedOtp,
+      purpose,
+      identifier: id,
+      createdAt: now.toISOString(),
+      expiresAt: expiresAt.toISOString(),
+      resendCount: resendCount + 1,
+      verifyAttempts: 0,
+    };
+
+    await this.redisService.set(otpStateKey(purpose, id), state, cfg.ttlSeconds);
+    // Cooldown key expires independently of the main state TTL
+    await this.redisService.set(otpCooldownKey(purpose, id), '1', cfg.resendCooldownSeconds);
+
+    await this.dispatchOtp(user, otp, cfg.isProduction);
+
+    if (!cfg.isProduction) {
+      this.logger.debug(`[DEV] OTP for ${id}: ${otp}`);
+    }
+    return {
+      success: true,
+      message: 'OTP sent successfully',
+      mobile: this.maskMobile(this.resolveContactMobile(user) ?? ''),
+      email: this.maskEmail(user.email),
+    };
+  }
+
+  async verifyOtp(dto: VerifyOtpDto, res: Response): Promise<AuthResponse> {
+    const purpose = 'login';
+    const id = normalizeIdentifier(dto.identifier);
+    const cfg = getOtpConfig(this.configService);
+
+    await this.assertNotLocked(purpose, id);
+
+    const state = await this.readOtpState(purpose, id);
+    if (!state) throw new HttpException('Invalid or expired OTP', 422);
+
+    if (new Date() > new Date(state.expiresAt)) {
+      await this.redisService.del(otpStateKey(purpose, id));
+      throw new HttpException('Invalid or expired OTP', 422);
+    }
+
+    if (state.verifyAttempts >= cfg.maxVerifyAttempts) {
+      await this.triggerLock(purpose, id, cfg.lockSeconds);
+      throw new HttpException('Too many attempts. Please request a new OTP.', 429);
+    }
+
+    // bcrypt.compare provides constant-time comparison
+    const valid = await bcrypt.compare(dto.otp, state.hashedOtp);
+
+    if (!valid) {
+      state.verifyAttempts += 1;
+
+      if (state.verifyAttempts >= cfg.maxVerifyAttempts) {
+        await this.triggerLock(purpose, id, cfg.lockSeconds);
+        await this.redisService.del(otpStateKey(purpose, id));
+        throw new HttpException('Too many attempts. Please request a new OTP.', 429);
+      }
+
+      // Persist updated attempt count; recalculate remaining TTL to avoid extending it
+      const remainingTtl = Math.max(
+        1,
+        Math.ceil((new Date(state.expiresAt).getTime() - Date.now()) / 1000),
+      );
+      await this.redisService.set(otpStateKey(purpose, id), state, remainingTtl);
+      throw new HttpException('Invalid or expired OTP', 422);
+    }
+
+    // ── Success path ──────────────────────────────────────────────────────────
+    // Remove OTP state immediately so it cannot be replayed
+    await this.redisService.del(otpStateKey(purpose, id));
+
+    const user = await this.usersRepository.findByIdentifier(id);
+    if (!user) throw new UnauthorizedException('User not found');
+
+    const userId = (user._id as { toString(): string }).toString();
+    await this.usersRepository.updateProfile(userId, { isXVIFCProfileVerified: true, status: 'APPROVED', isActive: true });
+
+    const tokens = await this.authService.generateTokens(userId, 'WEB');
+    await this.authService.saveRefreshToken(userId, tokens.refreshToken);
+    await this.usersRepository.updateLastLogin(userId);
+    this.authService.setRefreshCookie(res, tokens.refreshToken);
+
+    return { token: tokens.accessToken, user: this.sanitizeUser(user) };
+  }
+
+  async forgotPasswordReset(dto: ResetPasswordDto): Promise<{ message: string }> {
+    const purpose = 'forgot-password';
+    const id = normalizeIdentifier(dto.identifier);
+    const cfg = getOtpConfig(this.configService);
+
+    await this.assertNotLocked(purpose, id);
+
+    const state = await this.readOtpState(purpose, id);
+    if (!state) throw new HttpException('Invalid or expired OTP', 422);
+
+    if (new Date() > new Date(state.expiresAt)) {
+      await this.redisService.del(otpStateKey(purpose, id));
+      throw new HttpException('Invalid or expired OTP', 422);
+    }
+
+    if (state.verifyAttempts >= cfg.maxVerifyAttempts) {
+      await this.triggerLock(purpose, id, cfg.lockSeconds);
+      throw new HttpException('Too many attempts. Please request a new OTP.', 429);
+    }
+
+    const valid = await bcrypt.compare(dto.otp, state.hashedOtp);
+
+    if (!valid) {
+      state.verifyAttempts += 1;
+
+      if (state.verifyAttempts >= cfg.maxVerifyAttempts) {
+        await this.triggerLock(purpose, id, cfg.lockSeconds);
+        await this.redisService.del(otpStateKey(purpose, id));
+        throw new HttpException('Too many attempts. Please request a new OTP.', 429);
+      }
+
+      const remainingTtl = Math.max(
+        1,
+        Math.ceil((new Date(state.expiresAt).getTime() - Date.now()) / 1000),
+      );
+      await this.redisService.set(otpStateKey(purpose, id), state, remainingTtl);
+      throw new HttpException('Invalid or expired OTP', 422);
+    }
+
+    await this.redisService.del(otpStateKey(purpose, id));
+
+    const user = await this.usersRepository.findByIdentifier(id);
+    if (!user) throw new UnauthorizedException('User not found');
+
+    const userId = (user._id as { toString(): string }).toString();
+    const hashedPassword = await bcrypt.hash(dto.newPassword, 10);
+    await this.usersRepository.updatePassword(userId, hashedPassword);
+    // This is now the only way a freshly-provisioned account (isNewUser) ever gets a real
+    // password, so clear the flag here rather than leaving it stuck true until a separate
+    // set-new-password call that may never come.
+    if (user.isNewUser) await this.usersRepository.updateProfile(userId, { isNewUser: false });
+
+    return { message: 'Password updated successfully' };
+  }
+
+  // ─── Mobile-verify OTP (no DB lookup, no token generation) ─────────────────
+
+  private async sendMobileVerifyOtp(
+    mobile: string,
+    cfg: ReturnType<typeof getOtpConfig>,
+  ): Promise<{ success: boolean; message: string; mobile?: string }> {
+    if (!/^[6-9]\d{9}$/.test(mobile)) {
+      throw new BadRequestException('Please provide a valid 10-digit mobile number.');
+    }
+
+    const purpose = 'mobile-verify';
+    await this.assertNotLocked(purpose, mobile);
+    await this.assertCooldownClear(purpose, mobile);
+
+    const existingState = await this.readOtpState(purpose, mobile);
+    const resendCount = existingState?.resendCount ?? 0;
+
+    if (resendCount >= cfg.maxResendAttempts) {
+      throw new HttpException('Maximum OTP requests reached. Please try again later.', 429);
+    }
+
+    const otp = generateOtp(cfg.length, cfg.isProduction);
+    const hashedOtp = await bcrypt.hash(otp, 10);
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + cfg.ttlSeconds * 1000);
+
+    const state: OtpState = {
+      hashedOtp,
+      purpose,
+      identifier: mobile,
+      createdAt: now.toISOString(),
+      expiresAt: expiresAt.toISOString(),
+      resendCount: resendCount + 1,
+      verifyAttempts: 0,
+    };
+
+    await this.redisService.set(otpStateKey(purpose, mobile), state, cfg.ttlSeconds);
+    await this.redisService.set(otpCooldownKey(purpose, mobile), '1', cfg.resendCooldownSeconds);
+
+    if (cfg.isProduction) {
+      await this.sendSms(mobile, otp);
+    } else {
+      this.logger.debug(`[DEV] mobile-verify OTP for ${mobile}: ${otp}`);
+    }
+
+    return { success: true, message: 'OTP sent successfully', mobile: this.maskMobile(mobile) };
+  }
+
+  async verifyMobileOtp(dto: VerifyOtpDto): Promise<{ success: boolean }> {
+    const purpose = 'mobile-verify';
+    const id = normalizeIdentifier(dto.identifier);
+    const cfg = getOtpConfig(this.configService);
+
+    await this.assertNotLocked(purpose, id);
+
+    const state = await this.readOtpState(purpose, id);
+    if (!state) throw new HttpException('Invalid or expired OTP', 422);
+
+    if (new Date() > new Date(state.expiresAt)) {
+      await this.redisService.del(otpStateKey(purpose, id));
+      throw new HttpException('Invalid or expired OTP', 422);
+    }
+
+    if (state.verifyAttempts >= cfg.maxVerifyAttempts) {
+      await this.triggerLock(purpose, id, cfg.lockSeconds);
+      throw new HttpException('Too many attempts. Please request a new OTP.', 429);
+    }
+
+    const valid = await bcrypt.compare(dto.otp, state.hashedOtp);
+
+    if (!valid) {
+      state.verifyAttempts += 1;
+      if (state.verifyAttempts >= cfg.maxVerifyAttempts) {
+        await this.triggerLock(purpose, id, cfg.lockSeconds);
+        await this.redisService.del(otpStateKey(purpose, id));
+        throw new HttpException('Too many attempts. Please request a new OTP.', 429);
+      }
+      const remainingTtl = Math.max(
+        1,
+        Math.ceil((new Date(state.expiresAt).getTime() - Date.now()) / 1000),
+      );
+      await this.redisService.set(otpStateKey(purpose, id), state, remainingTtl);
+      throw new HttpException('Invalid or expired OTP', 422);
+    }
+
+    await this.redisService.del(otpStateKey(purpose, id));
+    return { success: true };
+  }
+
+  // ─── Redis state helpers ────────────────────────────────────────────────────
+
+  private async readOtpState(purpose: string, id: string): Promise<OtpState | null> {
+    const raw = await this.redisService.get(otpStateKey(purpose, id));
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw) as OtpState;
+    } catch {
+      return null;
+    }
+  }
+
+  private async assertNotLocked(purpose: string, id: string): Promise<void> {
+    const locked = await this.redisService.get(otpLockKey(purpose, id));
+    if (locked) throw new HttpException('Too many attempts. Please try again later.', 429);
+  }
+
+  private async assertCooldownClear(purpose: string, id: string): Promise<void> {
+    const cooling = await this.redisService.get(otpCooldownKey(purpose, id));
+    if (cooling) throw new HttpException('Please wait before requesting another OTP.', 429);
+  }
+
+  private async triggerLock(purpose: string, id: string, lockSeconds: number): Promise<void> {
+    await this.redisService.set(otpLockKey(purpose, id), '1', lockSeconds);
+    this.logger.warn(`OTP lockout triggered for ${purpose}:${id}`);
+  }
+
+  // ─── OTP dispatch ──────────────────────────────────────────────────────────
+
+  private resolveContactMobile(user: NonNullable<Awaited<ReturnType<UsersRepository['findByIdentifier']>>>): string | null {
+    const candidates = [
+      user.mobile,
+      user.accountantConatactNumber,
+      user.commissionerConatactNumber,
+      user.departmentContactNumber,
+    ];
+    return candidates.find((n) => n && this.isValidPhone(n)) ?? null;
+  }
+
+  private async dispatchOtp(
+    user: Awaited<ReturnType<UsersRepository['findByIdentifier']>>,
+    otp: string,
+    isProduction: boolean,
+  ): Promise<void> {
+    if (!user || !isProduction) return;
+    const mobile = this.resolveContactMobile(user);
+    if (mobile) await this.sendSms(mobile, otp);
+    if (user.email) await this.sendOtpEmail(user.email, otp);
+  }
+
+  private isValidPhone(mobile: string): boolean {
+    return /^\d{10}$/.test(String(mobile).trim());
+  }
+
+  private async sendSms(mobile: string, otp: string): Promise<void> {
+    const authKey = this.configService.get<string>('MSG91_AUTH_KEY');
+    const templateId = this.configService.get<string>('TEMPLATE_ID');
+    const senderId = this.configService.get<string>('MSG91_SENDER_ID');
+    if (!authKey) {
+      this.logger.warn('MSG91_AUTH_KEY not configured — skipping SMS');
+      return;
+    }
+    try {
+      await axios.get('https://api.msg91.com/api/v5/otp', {
+        params: { template_id: templateId, mobile: `91${mobile}`, authkey: authKey, otp, sender: senderId },
+      });
+    } catch (err) {
+      this.logger.error('SMS OTP send failed', err);
+    }
+  }
+
+  private async sendOtpEmail(to: string, otp: string): Promise<void> {
+    try {
+      await this.emailQueueService.addEmailJob({
+        to,
+        subject: 'Authentication Mail',
+        templateName: 'otp',
+        mailData: { otp },
+      });
+    } catch (err) {
+      this.logger.error('Email OTP send failed', err);
+    }
+  }
+
+  // ─── Formatting helpers ─────────────────────────────────────────────────────
+
+  private maskMobile(mobile = ''): string {
+    const s = String(mobile);
+    if (!s || s.length <= 4) return s.replace(/\d/g, '*');
+    return `${s.slice(0, 2)}${'*'.repeat(Math.max(0, s.length - 4))}${s.slice(-2)}`;
+  }
+
+  private maskEmail(email = ''): string {
+    const atIdx = email.indexOf('@');
+    if (atIdx === -1) return email;
+    const local = email.slice(0, atIdx);
+    const domain = email.slice(atIdx + 1);
+    return `${local.slice(0, 2)}${'*'.repeat(Math.max(0, local.length - 2))}@${domain}`;
+  }
+
+  private sanitizeUser(user: NonNullable<Awaited<ReturnType<UsersRepository['findByIdentifier']>>>): Record<string, unknown> {
+    const obj = (
+      typeof (user as unknown as { toObject?: () => Record<string, unknown> }).toObject === 'function'
+        ? (user as unknown as { toObject: () => Record<string, unknown> }).toObject()
+        : { ...(user as unknown as Record<string, unknown>) }
+    ) as Record<string, unknown>;
+    const sensitiveFields = [
+      'password', 'refreshTokenHash', 'otpHash', 'otpAttempts',
+      'otpExpiresAt', 'loginAttempts', 'lockUntil', 'isLocked',
+      'passwordHistory', 'passwordExpires',
+    ];
+    for (const f of sensitiveFields) delete obj[f];
+    return obj;
+  }
+}

@@ -8,6 +8,9 @@ import * as express from 'express';
 import { join } from 'path';
 import { AppModule } from './app.module';
 import basicAuth from 'express-basic-auth';
+import cookieParser from 'cookie-parser';
+import { HttpExceptionFilter } from './common/filters/http-exception.filter';
+import { ResponseTransformInterceptor } from './common/interceptors/response-transform.interceptor';
 
 async function bootstrap() {
   // Create the main NestJS application instance using the root AppModule
@@ -29,8 +32,12 @@ async function bootstrap() {
   const configService = app.get(ConfigService);
   const logger = new Logger('MAIN');
 
+  app.use(cookieParser());
+  app.useGlobalFilters(new HttpExceptionFilter());
+  app.useGlobalInterceptors(new ResponseTransformInterceptor());
+
   // Tell Nest where views are stored
-  app.setBaseViewsDir(join(__dirname, '..', 'src/views'));
+  app.setBaseViewsDir(join(__dirname, 'views'));
   app.setViewEngine('hbs');
 
   // Optional: partials/helpers
@@ -111,8 +118,10 @@ async function bootstrap() {
   const corsOptions: CorsOptions = {
     origin: WHITELISTED_DOMAINS,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
+    credentials: true,
     preflightContinue: false,
     optionsSuccessStatus: 204,
+    exposedHeaders: ['Content-Disposition'],
   };
 
   app.enableCors(corsOptions);
