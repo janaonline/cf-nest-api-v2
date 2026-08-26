@@ -14,11 +14,29 @@ export class NodeMailerController {
     @InjectQueue(EMAIL_QUEUE) private readonly queue: Queue<EmailJob>,
   ) {}
 
-  @Get()
-  async sendTestMail() {
-    await this.nodeMailerService.sendWelcomeEmail('jeevanantham.d@janaagraha.org', 'Jeeva');
-    return { message: 'HTML Template Mail sent!' };
-  }
+  // SECURITY: disabled — unauthenticated (@Public()) endpoints that let anyone trigger a real
+  // send through the app's mail infrastructure to an arbitrary/hardcoded address, with no
+  // rate limiting tailored to email abuse (only the generic global throttle applied). Manual
+  // test utilities, not a product feature. Commented out rather than deleted so they're easy
+  // to restore for local debugging if needed — do not re-enable in a public/unauthenticated form.
+  //
+  // @Get()
+  // async sendTestMail() {
+  //   await this.nodeMailerService.sendWelcomeEmail('jeevanantham.d@janaagraha.org', 'Jeeva');
+  //   return { message: 'HTML Template Mail sent!' };
+  // }
+  //
+  // @Public()
+  // @Post('ping')
+  // async pingEmail(@Body('to') to: string) {
+  //   if (!to) return { error: 'Provide a "to" email in the request body' };
+  //   try {
+  //     await this.nodeMailerService.sendEmailWithTemplate(to, 'Email delivery test', './welcome', { name: 'Test' });
+  //     return { ok: true, message: `Test email sent to ${to}` };
+  //   } catch (err) {
+  //     return { ok: false, error: String((err as Error).message ?? err) };
+  //   }
+  // }
 
   @Get('status/:id')
   async status(@Param('id') id: string) {

@@ -1,0 +1,68 @@
+import { Module, forwardRef } from '@nestjs/common';
+import { MongooseModule } from '@nestjs/mongoose';
+import { XviFcController } from './xvi-fc.controller';
+import { XviFcService } from './xvi-fc.service';
+import { AnnualAccountsModule } from './ulb/annual_accounts/annual_accounts.module';
+import { SfcStatusModule } from './state/sfc-status/sfc-status.module';
+import { ElectedUrbanLocalBodiesModule } from './state/elected-urban-local-bodies/elected-urban-local-bodies.module';
+import { GrantAllocation, GrantAllocationSchema } from '../../schemas/xvi-fc/grant-allocation.schema';
+import { State, StateSchema } from '../../schemas/state.schema';
+import { Year, YearSchema } from '../../schemas/year.schema';
+import { Ulb, UlbSchema } from '../../schemas/ulb.schema';
+import { SideMenu, SideMenuSchema } from '../../schemas/side-menu.schema';
+import { XviFcCacheService } from './cache/xvi-fc-cache.service';
+import { XviFcCacheInterceptor } from './cache/xvi-fc-cache.interceptor';
+import { SideMenuModule } from './side-menu/side-menu.module';
+import { FormJsonModule } from '../../master/form-json/form-json.module';
+import { UnspentBalanceDisclosureModule } from './ulb/unspent-balance-disclosure/unspent-balance-disclosure.module';
+import { BankAccountModule } from './ulb/bank-account/bank-account.module';
+import { BudgetDocumentModule } from './ulb/budget-document/budget-document.module';
+import { XviFcAnnualAccount, XviFcAnnualAccountSchema } from '../../schemas/xvi-fc/annual-account.schema';
+import {
+  XviFcUnspentBalanceDisclosure,
+  XviFcUnspentBalanceDisclosureSchema,
+} from '../../schemas/xvi-fc/unspent-balance-disclosure.schema';
+import { DevolutionFormulaModule } from './state/devolution-formula/devolution-formula.module';
+import { XviFcBankAccount, XviFcBankAccountSchema } from '../../schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
+import { SlbForm, SlbFormSchema } from '../../schemas/xvi-fc/ulb/slb-form.schema';
+import { FcUnspentDeclarationModule } from './state/fc-unspent-declaration/fc-unspent-declaration.module';
+import { FcUnspentMohuaReviewModule } from './mohua/fc-unspent-declaration/fc-unspent-mohua-review.module';
+import { StateDashboardModule } from './state/dashboard/state-dashboard.module';
+import { SlbModule } from './ulb/slb/slb.module';
+import { ClaimLetterModule } from './state/claim-letter/claim-letter.module';
+import { UlbEligibilityModule } from '../ulb-eligibility/ulb-eligibility.module';
+
+@Module({
+  imports: [
+    MongooseModule.forFeature([
+      { name: GrantAllocation.name, schema: GrantAllocationSchema },
+      { name: State.name, schema: StateSchema },
+      { name: Year.name, schema: YearSchema },
+      { name: Ulb.name, schema: UlbSchema },
+      { name: SideMenu.name, schema: SideMenuSchema },
+      { name: XviFcAnnualAccount.name, schema: XviFcAnnualAccountSchema },
+      { name: XviFcUnspentBalanceDisclosure.name, schema: XviFcUnspentBalanceDisclosureSchema },
+      { name: XviFcBankAccount.name, schema: XviFcBankAccountSchema },
+      { name: SlbForm.name, schema: SlbFormSchema },
+    ]),
+    AnnualAccountsModule,
+    SfcStatusModule,
+    forwardRef(() => ElectedUrbanLocalBodiesModule),
+    SideMenuModule,
+    FormJsonModule,
+    UnspentBalanceDisclosureModule,
+    BankAccountModule,
+    BudgetDocumentModule,
+    forwardRef(() => DevolutionFormulaModule),
+    FcUnspentDeclarationModule,
+    FcUnspentMohuaReviewModule,
+    StateDashboardModule,
+    SlbModule,
+    ClaimLetterModule,
+    UlbEligibilityModule,
+  ],
+  controllers: [XviFcController],
+  providers: [XviFcService, XviFcCacheService, XviFcCacheInterceptor],
+  exports: [XviFcService, XviFcCacheService, XviFcCacheInterceptor],
+})
+export class XviFcModule {}

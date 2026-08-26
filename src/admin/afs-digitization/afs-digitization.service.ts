@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, InternalServerErrorException, Logger }
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { ConfigService } from '@nestjs/config';
+import * as XLSX from 'xlsx';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { YearLabelToId } from 'src/core/constants/years';
 import { buildPopulationMatch } from 'src/core/helpers/populationCategory.helper';
@@ -196,6 +197,85 @@ export class AfsDigitizationService {
     return this.afsExcelFileModel.findById(id);
   }
 
+  async uploadUlbKeywords(file: Express.Multer.File) {
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('Excel file is required.');
+    }
+
+    const workbook = XLSX.read(file.buffer, { type: 'buffer' });
+    const sheetName = workbook.SheetNames[0];
+    if (!sheetName) {
+      throw new BadRequestException('Excel file does not contain any sheets.');
+    }
+
+    const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(workbook.Sheets[sheetName], {
+      defval: '',
+      raw: false,
+    });
+
+    if (!rows.length) {
+      throw new BadRequestException('Excel file does not contain any rows.');
+    }
+
+    const normalizedRows = rows.map((row, index) => {
+      const rowMap = this.normalizeExcelRow(row);
+      return {
+        rowNumber: index + 2,
+        ulbName: rowMap.expected_ulb_name || rowMap.ulb_name || rowMap.name || '',
+        keywords: rowMap.keywords || '',
+      };
+    });
+
+    const validRows = normalizedRows.filter((row) => row.ulbName && row.keywords);
+    if (!validRows.length) {
+      throw new BadRequestException('Excel must include expected_ulb_name and Keywords values.');
+    }
+
+    const ulbs = await this.ulbModel.find({}, { name: 1, keywords: 1 }).lean();
+    const ulbByName = new Map(ulbs.map((ulb) => [this.normalizeLookupValue(ulb.name), ulb]));
+    const updates = new Map<string, { id: Types.ObjectId; keywords: string }>();
+    const notFound: { rowNumber: number; expected_ulb_name: string }[] = [];
+    let skipped = normalizedRows.length - validRows.length;
+
+    for (const row of validRows) {
+      const ulb = ulbByName.get(this.normalizeLookupValue(row.ulbName));
+      if (!ulb) {
+        notFound.push({ rowNumber: row.rowNumber, expected_ulb_name: row.ulbName });
+        continue;
+      }
+
+      const existingUpdate = updates.get(ulb._id.toString());
+      const currentKeywords = existingUpdate?.keywords ?? ulb.keywords ?? '';
+      const mergedKeywords = this.mergeKeywords(currentKeywords, row.keywords);
+
+      if (mergedKeywords === currentKeywords) {
+        skipped += 1;
+        continue;
+      }
+
+      updates.set(ulb._id.toString(), { id: ulb._id, keywords: mergedKeywords });
+    }
+
+    if (updates.size) {
+      await this.ulbModel.bulkWrite(
+        Array.from(updates.values()).map((update) => ({
+          updateOne: {
+            filter: { _id: update.id },
+            update: { $set: { keywords: update.keywords } },
+          },
+        })),
+      );
+    }
+
+    return {
+      totalRows: rows.length,
+      updated: updates.size,
+      skipped,
+      notFoundCount: notFound.length,
+      notFound,
+    };
+  }
+
   async afsList(query: DigitizationReportQueryDto): Promise<any> {
     const [data, countResult] = await Promise.all([
       this.annualAccountModel.aggregate(afsQuery(query)).exec(),
@@ -231,6 +311,40 @@ export class AfsDigitizationService {
     });
 
     return { data: signedData, totalCount };
+  }
+
+  private normalizeExcelRow(row: Record<string, unknown>): Record<string, string> {
+    return Object.entries(row).reduce<Record<string, string>>((acc, [key, value]) => {
+      const normalizedKey = key.trim().toLowerCase().replace(/\s+/g, '_');
+      acc[normalizedKey] = String(value ?? '').trim();
+      return acc;
+    }, {});
+  }
+
+  private normalizeLookupValue(value: string): string {
+    return value.trim().toLowerCase().replace(/\s+/g, ' ');
+  }
+
+  private mergeKeywords(existingKeywords: string, newKeywords: string): string {
+    const keywords = [...this.splitKeywords(existingKeywords)];
+    const seen = new Set(keywords.map((keyword) => keyword.toLowerCase()));
+
+    for (const keyword of this.splitKeywords(newKeywords)) {
+      const normalizedKeyword = keyword.toLowerCase();
+      if (!seen.has(normalizedKeyword)) {
+        keywords.push(keyword);
+        seen.add(normalizedKeyword);
+      }
+    }
+
+    return keywords.join(', ');
+  }
+
+  private splitKeywords(keywords: string): string[] {
+    return String(keywords || '')
+      .split(',')
+      .map((keyword) => keyword.trim())
+      .filter(Boolean);
   }
 
   async getRequestLog(requestId: string): Promise<DigitizationLogDocument | null> {
