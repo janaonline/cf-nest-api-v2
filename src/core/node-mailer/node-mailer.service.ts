@@ -25,9 +25,14 @@ export class NodeMailerService {
     }
   }
 
-  async sendEmailWithTemplate(to: string, subject: string, templateName: string, mailData?: Record<string, any>) {
+  async sendEmailWithTemplate(
+    to: string | string[],
+    subject: string,
+    templateName: string,
+    mailData?: Record<string, any>,
+  ) {
     try {
-      this.logger.log('Sending email to:', to);
+      this.logger.log(`Sending email to: ${Array.isArray(to) ? to.join(', ') : to}`);
       await this.mailerService.sendMail({
         to,
         subject,

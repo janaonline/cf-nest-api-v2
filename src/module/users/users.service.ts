@@ -18,6 +18,7 @@ import { EmailQueueService } from 'src/core/queue/email-queue/email-queue.servic
 import { PORTAL_INVITE_LOGIN_TYPE, buildPortalAuthUrls } from 'src/core/utils/portal-urls.util';
 import { User } from 'src/schemas/user/user.schema';
 import { State, StateDocument } from 'src/schemas/state.schema';
+import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { Permission, Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { Role } from 'src/module/auth/enum/role.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
@@ -31,8 +32,30 @@ import { UpdateUserRoleDto } from './dto/update-user-role.dto';
 import { StateMemberResponseDto } from './dto/state-member-response.dto';
 import { UpdateXviFcSubroleDto } from './dto/update-xvi-fc-subrole.dto';
 import { TransferSubmitterDto } from './dto/transfer-submitter.dto';
+import { CreateUserDto, type AdminSubRole } from './dto/create-user.dto';
+import { AdminUpdateUserDto } from './dto/admin-update-user.dto';
+import { objectIdToString } from 'src/common/utils/objectid.util';
 import { EmailDomainValidationService } from 'src/core/email-domain-validation/email-domain-validation.service';
 import type { XviFcValidationErrorMap } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
+
+// ─── Admin user create/update response type ─────────────────────────────────
+
+export interface AdminUserResponse {
+  _id: string;
+  name: string;
+  email: string;
+  mobile: string;
+  designation: string;
+  role: Role;
+  subRole: 'admin' | 'reviewer' | 'viewer' | null;
+  stateId: string | null;
+  ulbId: string | null;
+  address: string;
+  departmentName: string;
+  departmentEmail: string;
+  departmentContactNumber: string;
+  isActive: boolean;
+}
 
 // ─── Permission-matrix display types ────────────────────────────────────────
 
@@ -164,11 +187,43 @@ export class UsersService {
   constructor(
     @InjectModel(User.name) private userModel: Model<User>,
     @InjectModel(State.name) private stateModel: Model<StateDocument>,
+    @InjectModel(Ulb.name) private ulbModel: Model<UlbDocument>,
     private readonly redisService: RedisService,
     private readonly emailQueueService: EmailQueueService,
     private readonly configService: ConfigService,
     private readonly emailDomainValidation: EmailDomainValidationService,
   ) {}
+
+  /**
+   * Roles whose account must belong to exactly one State — adminCreateUser/adminUpdateUser
+   * require + validate `stateId` for these, and reject `stateId` for every other role.
+   * STATE_EDITOR/STATE_VIEWER/XVIFC_STATE/STATE_DASHBOARD are deliberately excluded: none of
+   * them are ever assigned to a user by any live mutation path in this codebase (STATE_EDITOR/
+   * STATE_VIEWER only appear in an unwired TransferOwnershipDto with no controller/service
+   * method, and test fixtures; XVIFC_STATE/STATE_DASHBOARD are checked in login.service.ts's
+   * login-type gate but nothing here ever creates one) — the only real, functional state-scoped
+   * role today is STATE.
+   */
+  private static readonly STATE_FAMILY_ROLES: ReadonlySet<Role> = new Set([Role.STATE]);
+
+  /** Roles whose account must belong to exactly one ULB — same treatment as STATE_FAMILY_ROLES.
+   *  ULB_EDITOR/ULB_VIEWER excluded for the same reason as their STATE counterparts above. */
+  private static readonly ULB_FAMILY_ROLES: ReadonlySet<Role> = new Set([Role.ULB]);
+
+  /**
+   * Roles that use the xviFcSubrole (admin/reviewer/viewer) vocabulary at all.
+   * STATE_EDITOR/STATE_VIEWER/ULB_EDITOR/ULB_VIEWER are deliberately excluded: they're a
+   * separate, legacy role-level encoding (ownership-demotion target in transfer-ownership.dto.ts,
+   * recipient category in email-reminders.service.ts) — parseUserRole() (roles-xvi-fc.helper.ts)
+   * has no case for them and returns scope=null, so they never consult xviFcSubrole at all.
+   */
+  private static readonly SUBROLE_AWARE_ROLES: ReadonlySet<Role> = new Set([Role.STATE, Role.ULB, Role.MoHUA]);
+
+  private static readonly ADMIN_SUBROLE_TO_XVIFC_SUBROLE: Record<AdminSubRole, 'admin' | 'reviewer' | 'viewer'> = {
+    ADMIN: 'admin',
+    EDITOR: 'reviewer',
+    VIEWER: 'viewer',
+  };
 
   private throwValidationError(errors: XviFcValidationErrorMap): never {
     throw new BadRequestException({ message: 'Validation failed', errors });
@@ -229,9 +284,236 @@ export class UsersService {
     return { token };
   }
 
-  async create(data: Partial<User>): Promise<User> {
-    const user = new this.userModel(data);
-    return user.save();
+  /**
+   * ADMIN-only user creation for any Role — distinct from inviteStateMember/inviteMohuaMember,
+   * which stay scoped to a STATE/MoHUA admin inviting a member into their own team. This is the
+   * one path a platform ADMIN uses to directly create a user of any role (STATE, ULB, MoHUA,
+   * XVIFC, PARTNER, ...), each with whatever scoping (stateId/ulbId) that role requires.
+   */
+  async adminCreateUser(dto: CreateUserDto, requester: AuthUser): Promise<AdminUserResponse> {
+    if (requester.scope !== Scope.ADMIN) {
+      throw new ForbiddenException('Only platform admins can create users');
+    }
+
+    await this.assertInviteEmailIsDeliverable(dto.email);
+
+    const activeUser = await this.userModel
+      .findOne({ email: dto.email, isDeleted: false, isXviFcdeleted: { $ne: true } })
+      .select('_id')
+      .lean()
+      .exec();
+    if (activeUser) {
+      throw new HttpException(
+        { code: 'EMAIL_ALREADY_ACTIVE', message: 'Email address is already registered' },
+        HttpStatus.CONFLICT,
+      );
+    }
+
+    const { stateObjectId, ulbObjectId, xviFcSubrole } = await this.resolveRoleScoping(dto.role, dto.subRole, {
+      stateId: dto.stateId,
+      ulbId: dto.ulbId,
+    });
+
+    const placeholderPassword = this.generatePlaceholderPassword();
+    const hashedPassword = await bcrypt.hash(placeholderPassword, 12);
+
+    const created = await this.userModel.create({
+      name: dto.name,
+      email: dto.email,
+      mobile: dto.mobile,
+      designation: dto.designation,
+      address: dto.address ?? '',
+      departmentName: dto.departmentName ?? '',
+      departmentEmail: dto.departmentEmail ?? '',
+      departmentContactNumber: dto.departmentContactNumber ?? '',
+      role: dto.role,
+      xviFcSubrole,
+      state: stateObjectId,
+      ulb: ulbObjectId,
+      createdBy: new Types.ObjectId(String(requester._id)),
+      status: 'APPROVED',
+      isXVIFCProfileVerified: false,
+      isEmailVerified: true,
+      isActive: true,
+      isDeleted: false,
+      isXviFcdeleted: false,
+      isLocked: false,
+      loginAttempts: 0,
+      password: hashedPassword,
+      isNewUser: true,
+    });
+
+    return this.toAdminUserResponse(created);
+  }
+
+  /**
+   * ADMIN-only user update — every field optional. If `role` changes, whichever of state/ulb no
+   * longer applies to the new role is explicitly cleared (never left stale) — the same bug class
+   * found in the MoHUA/STATE cross-role restore issue, applied proactively here.
+   */
+  async adminUpdateUser(targetUserId: string, dto: AdminUpdateUserDto, requester: AuthUser): Promise<AdminUserResponse> {
+    if (requester.scope !== Scope.ADMIN) {
+      throw new ForbiddenException('Only platform admins can update users');
+    }
+    if (!Types.ObjectId.isValid(targetUserId)) throw new BadRequestException('Invalid user ID');
+
+    const targetUser = await this.userModel
+      .findOne({ _id: targetUserId, isDeleted: false })
+      .select('role state ulb xviFcSubrole email mobile')
+      .lean()
+      .exec();
+    if (!targetUser) throw new NotFoundException('User not found');
+
+    if (dto.email || dto.mobile) {
+      const duplicate = await this.userModel
+        .findOne({
+          _id: { $ne: targetUserId },
+          isDeleted: false,
+          isXviFcdeleted: { $ne: true },
+          $or: [
+            ...(dto.email ? [{ email: dto.email }] : []),
+            ...(dto.mobile ? [{ mobile: dto.mobile }] : []),
+          ],
+        })
+        .select('_id')
+        .lean()
+        .exec();
+      if (duplicate) {
+        throw new HttpException(
+          { code: 'EMAIL_ALREADY_ACTIVE', message: 'Email or mobile number is already registered' },
+          HttpStatus.CONFLICT,
+        );
+      }
+    }
+
+    const newRole = dto.role ?? (targetUser.role as Role);
+    const roleIsChanging = dto.role !== undefined && dto.role !== targetUser.role;
+
+    const $set: Record<string, unknown> = {};
+    if (dto.name !== undefined) $set.name = dto.name;
+    if (dto.email !== undefined) $set.email = dto.email;
+    if (dto.mobile !== undefined) $set.mobile = dto.mobile;
+    if (dto.designation !== undefined) $set.designation = dto.designation;
+    if (dto.address !== undefined) $set.address = dto.address;
+    if (dto.departmentName !== undefined) $set.departmentName = dto.departmentName;
+    if (dto.departmentEmail !== undefined) $set.departmentEmail = dto.departmentEmail;
+    if (dto.departmentContactNumber !== undefined) $set.departmentContactNumber = dto.departmentContactNumber;
+    if (dto.isActive !== undefined) $set.isActive = dto.isActive;
+
+    if (roleIsChanging || dto.subRole !== undefined || dto.stateId !== undefined || dto.ulbId !== undefined) {
+      // A role change never carries the old state/ulb forward as an implicit fallback — the new
+      // role might not use it at all (STATE → XVIFC), or might need a *different* one (STATE →
+      // ULB), so the caller must supply it explicitly whenever role changes. Only when the role
+      // is staying the same does "not sent" mean "keep what's already there".
+      const { stateObjectId, ulbObjectId, xviFcSubrole } = await this.resolveRoleScoping(newRole, dto.subRole, {
+        stateId: dto.stateId ?? (roleIsChanging ? undefined : objectIdToString(targetUser.state as Types.ObjectId | null)),
+        ulbId: dto.ulbId ?? (roleIsChanging ? undefined : objectIdToString(targetUser.ulb as Types.ObjectId | null)),
+        // A role change without an explicit new subRole drops the old one rather than carrying
+        // an now-unvalidated value across roles (e.g. STATE 'admin' surviving a move to ULB).
+        keepExistingSubroleWhenUnset: !roleIsChanging,
+        existingXviFcSubrole: targetUser.xviFcSubrole,
+      });
+      $set.role = newRole;
+      $set.xviFcSubrole = xviFcSubrole;
+      $set.state = stateObjectId;
+      $set.ulb = ulbObjectId;
+    }
+
+    const updated = await this.userModel.findByIdAndUpdate(targetUserId, { $set }, { new: true }).lean().exec();
+    if (!updated) throw new NotFoundException('User not found');
+
+    return this.toAdminUserResponse(updated);
+  }
+
+  /** Validates stateId/ulbId/subRole against the target role's requirements, shared by
+   *  adminCreateUser and adminUpdateUser. Throws 400 on any mismatch. */
+  private async resolveRoleScoping(
+    role: Role,
+    subRole: AdminSubRole | undefined,
+    opts: {
+      stateId?: string;
+      ulbId?: string;
+      keepExistingSubroleWhenUnset?: boolean;
+      existingXviFcSubrole?: 'admin' | 'reviewer' | 'viewer' | null;
+    },
+  ): Promise<{ stateObjectId: Types.ObjectId | null; ulbObjectId: Types.ObjectId | null; xviFcSubrole: 'admin' | 'reviewer' | 'viewer' | null }> {
+    const needsState = UsersService.STATE_FAMILY_ROLES.has(role);
+    const needsUlb = UsersService.ULB_FAMILY_ROLES.has(role);
+    const isSubroleAware = UsersService.SUBROLE_AWARE_ROLES.has(role);
+
+    if (needsState) {
+      if (!opts.stateId) throw new BadRequestException('stateId is required for this role');
+      if (!Types.ObjectId.isValid(opts.stateId)) throw new BadRequestException('Invalid stateId');
+      const state = await this.stateModel.findById(opts.stateId).select('_id').lean().exec();
+      if (!state) throw new NotFoundException('State not found');
+    } else if (opts.stateId) {
+      throw new BadRequestException('stateId is not applicable for this role');
+    }
+
+    if (needsUlb) {
+      if (!opts.ulbId) throw new BadRequestException('ulbId is required for this role');
+      if (!Types.ObjectId.isValid(opts.ulbId)) throw new BadRequestException('Invalid ulbId');
+      const ulb = await this.ulbModel.findById(opts.ulbId).select('_id').lean().exec();
+      if (!ulb) throw new NotFoundException('ULB not found');
+    } else if (opts.ulbId) {
+      throw new BadRequestException('ulbId is not applicable for this role');
+    }
+
+    let xviFcSubrole: 'admin' | 'reviewer' | 'viewer' | null = null;
+    if (isSubroleAware) {
+      if (subRole) {
+        xviFcSubrole = UsersService.ADMIN_SUBROLE_TO_XVIFC_SUBROLE[subRole];
+      } else if (opts.keepExistingSubroleWhenUnset) {
+        xviFcSubrole = opts.existingXviFcSubrole ?? null;
+      }
+    } else if (subRole) {
+      throw new BadRequestException('subRole is not applicable for this role');
+    }
+
+    return {
+      stateObjectId: needsState ? new Types.ObjectId(opts.stateId) : null,
+      ulbObjectId: needsUlb ? new Types.ObjectId(opts.ulbId) : null,
+      xviFcSubrole,
+    };
+  }
+
+  private toAdminUserResponse(user: Record<string, unknown>): AdminUserResponse {
+    return {
+      _id: String(user._id),
+      name: user.name as string,
+      email: user.email as string,
+      mobile: user.mobile as string,
+      designation: (user.designation as string) ?? '',
+      role: user.role as Role,
+      subRole: (user.xviFcSubrole as 'admin' | 'reviewer' | 'viewer' | null) ?? null,
+      stateId: user.state ? String(user.state) : null,
+      ulbId: user.ulb ? String(user.ulb) : null,
+      address: (user.address as string) ?? '',
+      departmentName: (user.departmentName as string) ?? '',
+      departmentEmail: (user.departmentEmail as string) ?? '',
+      departmentContactNumber: (user.departmentContactNumber as string) ?? '',
+      isActive: (user.isActive as boolean) ?? false,
+    };
+  }
+
+  /** ADMIN-only: soft-delete any user, setting both isDeleted and isXviFcdeleted to true. */
+  async adminSoftDeleteUser(targetUserId: string, requester: AuthUser): Promise<{ message: string }> {
+    if (requester.scope !== Scope.ADMIN) throw new ForbiddenException('Only ADMIN can perform this action');
+    if (!Types.ObjectId.isValid(targetUserId)) throw new BadRequestException('Invalid user ID');
+
+    const targetUser = await this.userModel
+      .findById(targetUserId)
+      .select('isDeleted isXviFcdeleted')
+      .lean()
+      .exec();
+    if (!targetUser) throw new NotFoundException('User not found');
+
+    if (targetUser.isDeleted && (targetUser as Record<string, unknown>)['isXviFcdeleted']) {
+      return { message: 'User is already deleted' };
+    }
+
+    await this.userModel.findByIdAndUpdate(targetUserId, { $set: { isDeleted: true, isXviFcdeleted: true } }).exec();
+    return { message: 'User deleted successfully' };
   }
 
   async inviteStateMember(dto: InviteStateMemberDto, requester: AuthUser): Promise<StateMemberResponseDto> {
@@ -260,7 +542,7 @@ export class UsersService {
       // Check if this email belongs to a member that was XVI-FC removed (isXviFcdeleted: true).
       // Email is never scrambled in the new flow, so we match directly on the email field.
       const removedUser = await this.userModel
-        .findOne({ email: dto.email, isDeleted: false, isXviFcdeleted: true })
+        .findOne({ email: dto.email, isDeleted: true, isXviFcdeleted: true })
         .select('name designation')
         .lean()
         .exec();
@@ -281,7 +563,7 @@ export class UsersService {
 
     if (action === 'restore') {
       const toRestore = await this.userModel
-        .findOne({ email: dto.email, isDeleted: false, isXviFcdeleted: true })
+        .findOne({ email: dto.email, isDeleted: true, isXviFcdeleted: true })
         .lean()
         .exec();
 
@@ -301,9 +583,11 @@ export class UsersService {
               name: dto.name,
               mobile: dto.mobile,
               designation: dto.designation,
+              role: Role.STATE,
               xviFcSubrole,
               state: stateId,
               isXviFcdeleted: false,
+              isDeleted: false,
               createdBy: new Types.ObjectId(String(requester._id)),
               isActive: true,
               isXVIFCProfileVerified: false,
@@ -329,7 +613,7 @@ export class UsersService {
         _id: { $ne: restored._id },
       });
       if (raceConflict) {
-        await this.userModel.findByIdAndUpdate(restored._id, { $set: { isXviFcdeleted: true } });
+        await this.userModel.findByIdAndUpdate(restored._id, { $set: { isXviFcdeleted: true, isDeleted: true } });
         throw new HttpException(
           { code: 'EMAIL_ALREADY_ACTIVE', message: 'Email address is already registered' },
           HttpStatus.CONFLICT,
@@ -490,9 +774,7 @@ export class UsersService {
       (requester.scope === Scope.STATE &&
         !!requester.state &&
         targetUser.state?.toString() === requester.state.toString()) ||
-      (requester.scope === Scope.ULB &&
-        !!requester.ulb &&
-        targetUser.ulb?.toString() === requester.ulb.toString()) ||
+      (requester.scope === Scope.ULB && !!requester.ulb && targetUser.ulb?.toString() === requester.ulb.toString()) ||
       // MoHUA has no state/ULB subdivision — every MoHUA admin manages the same flat team.
       (requester.scope === Scope.MOHUA && targetUser.role === Role.MoHUA);
     if (!sameTenant) {
@@ -538,8 +820,8 @@ export class UsersService {
 
     if (!targetUser) throw new NotFoundException('User not found');
 
-    // STATE users are removed from the XVI-FC portal only — isDeleted is left unchanged
-    // so 15th FC data is not affected. Email is preserved so the user can be restored later.
+    // STATE users are removed from the whole platform (isDeleted: true), not just XVI-FC —
+    // email is preserved (not tombstoned) so the same email can be re-invited/restored later.
     if ((targetUser.role as string) === UserRole.STATE) {
       if ((targetUser as Record<string, unknown>)['xviFcSubrole'] === 'admin') {
         throw new BadRequestException('Cannot remove the Admin. Transfer ownership first.');
@@ -547,7 +829,7 @@ export class UsersService {
       if (targetUserId === String(requester._id)) {
         throw new BadRequestException('You cannot remove yourself from the team');
       }
-      await this.userModel.findByIdAndUpdate(targetUserId, { $set: { isXviFcdeleted: true } }).exec();
+      await this.userModel.findByIdAndUpdate(targetUserId, { $set: { isXviFcdeleted: true, isDeleted: true } }).exec();
       return { message: 'Member removed from the XVI-FC portal' };
     }
 
@@ -873,7 +1155,7 @@ export class UsersService {
 
     if (action === 'invite') {
       const removedUser = await this.userModel
-        .findOne({ email: dto.email, isDeleted: false, isXviFcdeleted: true })
+        .findOne({ email: dto.email, isDeleted: true, isXviFcdeleted: true })
         .select('name designation')
         .lean()
         .exec();
@@ -894,7 +1176,7 @@ export class UsersService {
 
     if (action === 'restore') {
       const toRestore = await this.userModel
-        .findOne({ email: dto.email, isDeleted: false, isXviFcdeleted: true })
+        .findOne({ email: dto.email, isDeleted: true, isXviFcdeleted: true })
         .lean()
         .exec();
 
@@ -914,8 +1196,10 @@ export class UsersService {
               name: dto.name,
               mobile: dto.mobile,
               designation: dto.designation,
+              role: Role.MoHUA,
               xviFcSubrole,
               isXviFcdeleted: false,
+              isDeleted: false,
               createdBy: new Types.ObjectId(String(requester._id)),
               isActive: true,
               isXVIFCProfileVerified: false,
@@ -941,7 +1225,7 @@ export class UsersService {
         _id: { $ne: restored._id },
       });
       if (raceConflict) {
-        await this.userModel.findByIdAndUpdate(restored._id, { $set: { isXviFcdeleted: true } });
+        await this.userModel.findByIdAndUpdate(restored._id, { $set: { isXviFcdeleted: true, isDeleted: true } });
         throw new HttpException(
           { code: 'EMAIL_ALREADY_ACTIVE', message: 'Email address is already registered' },
           HttpStatus.CONFLICT,
@@ -1118,7 +1402,9 @@ export class UsersService {
       throw new BadRequestException('Cannot remove the Submitter. Transfer ownership first.');
     }
 
-    await this.userModel.findByIdAndUpdate(targetUserId, { $set: { isXviFcdeleted: true } }).exec();
+    // Removed from the whole platform (isDeleted: true), not just XVI-FC — email is preserved
+    // (not tombstoned) so the same email can be re-invited/restored later.
+    await this.userModel.findByIdAndUpdate(targetUserId, { $set: { isXviFcdeleted: true, isDeleted: true } }).exec();
 
     return { message: 'Member removed successfully' };
   }
