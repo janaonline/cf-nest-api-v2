@@ -38,6 +38,9 @@ export class NotificationAudienceResolver {
       } else {
         query['$or'] = [{ ulb: new Types.ObjectId(orgIdStr) }, { state: new Types.ObjectId(orgIdStr) }];
       }
+    } else if (audience.orgType === 'ULB' || audience.orgType === 'STATE') {
+      // orgType requires an orgId — fail closed if missing.
+      return [];
     }
 
     const users = await this.userModel.find(query).select('_id').lean().exec();
