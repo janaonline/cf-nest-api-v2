@@ -161,14 +161,13 @@ describe('AfsDigitizationService', () => {
     it('should return AFS filters with states, ULBs, years, and document types', async () => {
       const result = await service.getAfsFilters();
 
-      expect(result).toHaveProperty('data');
-      expect(result.data).toHaveProperty('states');
-      expect(result.data).toHaveProperty('ulbs');
-      expect(result.data).toHaveProperty('years');
-      expect(result.data).toHaveProperty('populationCategories');
-      expect(result.data).toHaveProperty('documentTypes');
-      expect(result.data).toHaveProperty('auditTypes');
-      expect(result.data).toHaveProperty('digitizationStatuses');
+      expect(result).toHaveProperty('states');
+      expect(result).toHaveProperty('ulbs');
+      expect(result).toHaveProperty('years');
+      expect(result).toHaveProperty('populationCategories');
+      expect(result).toHaveProperty('documentTypes');
+      expect(result).toHaveProperty('auditTypes');
+      expect(result).toHaveProperty('digitizationStatuses');
     });
 
     it('should fetch active and published states', async () => {
@@ -206,16 +205,15 @@ describe('AfsDigitizationService', () => {
     it('should return metrics with cards', async () => {
       const result = await service.getMetrics();
 
-      expect(result).toHaveProperty('data');
-      expect(result.data).toHaveProperty('cards');
-      expect(Array.isArray(result.data.cards)).toBe(true);
-      expect(result.data.cards.length).toBeGreaterThan(0);
+      expect(result).toHaveProperty('cards');
+      expect(Array.isArray(result.cards)).toBe(true);
+      expect(result.cards.length).toBeGreaterThan(0);
     });
 
     it('should calculate success percentage correctly', async () => {
       const result = await service.getMetrics();
 
-      const successCard = result.data.cards.find((card: any) => card.title === 'Successful');
+      const successCard = result.cards.find((card: any) => card.title === 'Successful');
       expect(successCard).toBeDefined();
       expect(successCard.value).toBe('95%'); // 100 / (100 + 5) * 100
     });
@@ -228,7 +226,7 @@ describe('AfsDigitizationService', () => {
 
       const result = await service.getMetrics();
 
-      const successCard = result.data.cards.find((card: any) => card.title === 'Successful');
+      const successCard = result.cards.find((card: any) => card.title === 'Successful');
       expect(successCard.value).toBe('0%');
     });
 
@@ -237,8 +235,8 @@ describe('AfsDigitizationService', () => {
 
       const result = await service.getMetrics();
 
-      expect(result.data.cards).toBeDefined();
-      const digitizedCard = result.data.cards.find((card: any) => card.title === 'Files Digitized');
+      expect(result.cards).toBeDefined();
+      const digitizedCard = result.cards.find((card: any) => card.title === 'Files Digitized');
       expect(digitizedCard.value).toBe(0);
     });
   });
@@ -249,8 +247,7 @@ describe('AfsDigitizationService', () => {
 
       const result = await service.getUlbs(params);
 
-      expect(result).toHaveProperty('data');
-      expect(Array.isArray(result.data)).toBe(true);
+      expect(Array.isArray(result)).toBe(true);
     });
 
     it('should fetch active and published ULBs', async () => {
