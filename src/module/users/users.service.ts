@@ -973,6 +973,17 @@ export class UsersService {
     'isXviFcEmailVerified',
   ]);
 
+  /** Fields a self-update must prove OTP re-verification for via saveToken — only the two flags
+   *  that claim OTP verification actually happened (the exact thing the original vulnerability
+   *  let a caller fake). Editing anything else, including the email fields themselves, needs no
+   *  fresh OTP — the "People & Roles" page (ongoing contact-info management, no OTP step of its
+   *  own) relies on that: it never touches these two flags, so it's never gated. Only the
+   *  dedicated profile-verification page's save sets them, so only it needs the token. */
+  private static readonly SAVE_TOKEN_REQUIRED_FIELDS = new Set<string>([
+    'isXVIFCProfileVerified',
+    'isXviFcEmailVerified',
+  ]);
+
   async updateProfileContacts(
     userId: string,
     dto: UpdateProfileContactsDto,
@@ -982,7 +993,7 @@ export class UsersService {
 
     const targetUser = await this.userModel
       .findOne({ _id: userId, isDeleted: false })
-      .select('ulb state isNodalOfficer xviFcSubrole')
+      .select('ulb state isNodalOfficer xviFcSubrole isXVIFCProfileVerified isXviFcEmailVerified')
       .lean()
       .exec();
     if (!targetUser) throw new NotFoundException('User not found');
@@ -990,12 +1001,29 @@ export class UsersService {
     const isSelfUpdate = requester._id.toString() === userId;
     const isUlbScope = requester.scope === Scope.ULB;
 
-    if (isSelfUpdate) {
-      // Every self-update (ULB, STATE, or MoHUA) requires a valid one-time save token issued
-      // after OTP verification — this is the only server-side proof that OTP verification
-      // actually happened; the client-side "only called after verified" gating alone is not
-      // a security boundary.
-      const { saveToken } = dto;
+    // Strip saveToken — it is not a DB field
+    const { saveToken, ...rest } = dto;
+    const unknown = Object.keys(rest).filter((k) => !UsersService.UPDATABLE_FIELDS.has(k));
+    if (unknown.length) throw new BadRequestException(`Field(s) not updatable: ${unknown.join(', ')}`);
+
+    // Only counts as "touched" if the new value actually differs from what's stored — a caller
+    // resending the current value of a gated field alongside an unrelated edit must not be
+    // mistaken for actually trying to flip it.
+    const touchesSaveTokenRequiredField = Object.entries(rest).some(
+      ([key, value]) =>
+        value !== undefined &&
+        UsersService.SAVE_TOKEN_REQUIRED_FIELDS.has(key) &&
+        value !== (targetUser as Record<string, unknown>)[key],
+    );
+
+    if (isSelfUpdate && touchesSaveTokenRequiredField) {
+      // Claiming OTP verification happened (isXVIFCProfileVerified / isXviFcEmailVerified) requires
+      // a valid one-time save token issued after that OTP actually succeeded — this is the only
+      // server-side proof it happened; the client-side "only called after verified" gating alone is
+      // not a security boundary. Every other field, including the email addresses themselves, is
+      // NOT gated — the "People & Roles" page (ongoing contact-info management) edits them with no
+      // OTP step of its own, by design; only the dedicated profile-verification page's save ever
+      // sets these two flags, so only it needs the token.
       if (!saveToken) throw new BadRequestException('A verified save token is required to update your profile');
       const stored = await this.redisService.get(this.saveTokenKey(userId));
       if (!stored || stored !== saveToken) {
@@ -1005,11 +1033,6 @@ export class UsersService {
     }
 
     await this.assertProfileContactEmailsAreDeliverable(dto);
-
-    // Strip saveToken — it is not a DB field
-    const { saveToken: _t, ...rest } = dto;
-    const unknown = Object.keys(rest).filter((k) => !UsersService.UPDATABLE_FIELDS.has(k));
-    if (unknown.length) throw new BadRequestException(`Field(s) not updatable: ${unknown.join(', ')}`);
 
     const update: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(rest)) {
