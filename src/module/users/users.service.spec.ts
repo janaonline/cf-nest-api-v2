@@ -318,12 +318,12 @@ describe('UsersService', () => {
   // ─── updateProfileContacts() ─────────────────────────────────────────────
 
   describe('updateProfileContacts()', () => {
-    it('rejects a ULB self-update with no saveToken (same rule STATE/MoHUA already enforce)', async () => {
+    it('rejects a ULB self-update that sets isXviFcEmailVerified with no saveToken (the exact thing the original vulnerability faked)', async () => {
       const requester = makeUlbAdmin({ _id: TARGET_USER_ID });
       mockUserModel.exec.mockResolvedValueOnce(makeUserDoc());
 
       await expect(
-        service.updateProfileContacts(TARGET_USER_ID, { name: 'New Name' }, requester),
+        service.updateProfileContacts(TARGET_USER_ID, { isXviFcEmailVerified: true }, requester),
       ).rejects.toThrow(BadRequestException);
 
       expect(mockRedisService.get).not.toHaveBeenCalled();
@@ -335,20 +335,57 @@ describe('UsersService', () => {
       mockRedisService.get.mockResolvedValueOnce('a-different-token');
 
       await expect(
-        service.updateProfileContacts(TARGET_USER_ID, { name: 'New Name', saveToken: 'wrong-token' }, requester),
+        service.updateProfileContacts(
+          TARGET_USER_ID,
+          { isXviFcEmailVerified: true, saveToken: 'wrong-token' },
+          requester,
+        ),
       ).rejects.toThrow('Save token is invalid or expired. Please verify your email again.');
     });
 
-    it('accepts a ULB self-update with a valid saveToken', async () => {
+    it('accepts a ULB self-update that sets isXviFcEmailVerified with a valid saveToken', async () => {
+      const requester = makeUlbAdmin({ _id: TARGET_USER_ID });
+      mockUserModel.exec
+        .mockResolvedValueOnce(makeUserDoc())
+        .mockResolvedValueOnce(makeUserDoc({ isXviFcEmailVerified: true }));
+      mockRedisService.get.mockResolvedValueOnce('good-token');
+
+      await service.updateProfileContacts(
+        TARGET_USER_ID,
+        { isXviFcEmailVerified: true, saveToken: 'good-token' },
+        requester,
+      );
+
+      expect(mockRedisService.del).toHaveBeenCalledWith(`profile_save_token:${TARGET_USER_ID}`);
+    });
+
+    it('accepts a ULB self-update with no saveToken when only non-email fields change', async () => {
+      // The "People & Roles" page edits name/mobile without ever obtaining a saveToken — only
+      // the two verification flags need OTP re-proof, not routine contact edits.
       const requester = makeUlbAdmin({ _id: TARGET_USER_ID });
       mockUserModel.exec
         .mockResolvedValueOnce(makeUserDoc())
         .mockResolvedValueOnce(makeUserDoc({ name: 'New Name' }));
-      mockRedisService.get.mockResolvedValueOnce('good-token');
 
-      await service.updateProfileContacts(TARGET_USER_ID, { name: 'New Name', saveToken: 'good-token' }, requester);
+      const result = await service.updateProfileContacts(TARGET_USER_ID, { name: 'New Name' }, requester);
 
-      expect(mockRedisService.del).toHaveBeenCalledWith(`profile_save_token:${TARGET_USER_ID}`);
+      expect(mockRedisService.get).not.toHaveBeenCalled();
+      expect(result).toEqual(
+        expect.objectContaining({ message: 'Profile contacts updated successfully' }),
+      );
+    });
+
+    it('accepts a ULB self-update to commissionerEmail with no saveToken — the "People & Roles" page never has one to send', async () => {
+      // Deliberately no OTP step on that page — the email fields themselves are not gated,
+      // only isXVIFCProfileVerified/isXviFcEmailVerified are.
+      const requester = makeUlbAdmin({ _id: TARGET_USER_ID });
+      mockUserModel.exec
+        .mockResolvedValueOnce(makeUserDoc())
+        .mockResolvedValueOnce(makeUserDoc({ commissionerEmail: 'new@ulb.gov.in' }));
+
+      await service.updateProfileContacts(TARGET_USER_ID, { commissionerEmail: 'new@ulb.gov.in' }, requester);
+
+      expect(mockRedisService.get).not.toHaveBeenCalled();
     });
   });
 
