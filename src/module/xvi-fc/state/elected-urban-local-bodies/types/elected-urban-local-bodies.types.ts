@@ -41,6 +41,9 @@ export interface EulbFormGetResponseData {
   permissions: EulbFormPermissions;
   actors: XvifcFormActor[];
   validationSummary: EulbValidationSummary;
+  /** Constituted/not-constituted/exempt row breakdown; `null` until the form reaches
+   *  UNDER_REVIEW_BY_MOHUA or later (computed lazily so pre-submission loads skip the aggregation). */
+  statusSummary: EulbStatusSummary | null;
   instructions: unknown[];
   meta: { version: number };
 }

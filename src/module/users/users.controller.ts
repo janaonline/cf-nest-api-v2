@@ -231,7 +231,7 @@ export class UsersController {
   @UseGuards(PermissionGuard)
   // @RequirePermissions(Permission.DELETE_MANAGED_USER)
   @ApiOperation({
-    summary: 'Remove a STATE team member from the XVI-FC portal (sets isXviFcdeleted; does not touch isDeleted)',
+    summary: 'Remove a STATE team member from the XVI-FC portal (sets both isXviFcdeleted and isDeleted)',
   })
   softDeleteStateUser(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.usersService.softDeleteStateUser(id, user);
