@@ -307,7 +307,7 @@ const mockFormModel = {
   create: jest.fn(),
   db: { startSession: jest.fn() },
 };
-const mockRowModel = { find: jest.fn(), updateMany: jest.fn() };
+const mockRowModel = { find: jest.fn(), updateMany: jest.fn(), aggregate: jest.fn().mockReturnValue(q([])) };
 const mockUlbModel = { find: jest.fn(), countDocuments: jest.fn() };
 // Mirrors real behavior when no UlbType is excluded from the cycle: state + isActive only —
 // the filter-shape assertions below use objectContaining, so extra keys wouldn't break them
@@ -796,6 +796,72 @@ describe('ElectedUrbanLocalBodiesService', () => {
       }).compile();
 
       service = module.get<ElectedUrbanLocalBodiesService>(ElectedUrbanLocalBodiesService);
+    });
+
+    // ─── statusSummary ────────────────────────────────────────────────────────
+
+    describe('statusSummary', () => {
+      function installSummaryGroups(groups: Array<{ _id: string | null; count: number }>): void {
+        mockRowModel.aggregate.mockReturnValueOnce(q(groups));
+      }
+
+      it('is null when no form exists yet (doc is null)', async () => {
+        mockFormModel.findOne.mockReturnValueOnce(q(null));
+
+        const result = await service.getForm(stateOid.toString(), yearOid.toString(), adminUser);
+
+        expect(result.data!.statusSummary).toBeNull();
+        expect(mockRowModel.aggregate).not.toHaveBeenCalled();
+      });
+
+      it('is null when form status is below UNDER_REVIEW_BY_MOHUA', async () => {
+        mockFormModel.findOne.mockReturnValueOnce(
+          q({ _id: formOid, currentFormStatus: FORM_STATUS.IN_PROGRESS, activeDatasetVersion: 1 }),
+        );
+
+        const result = await service.getForm(stateOid.toString(), yearOid.toString(), adminUser);
+
+        expect(result.data!.statusSummary).toBeNull();
+        expect(mockRowModel.aggregate).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+        FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+        FORM_STATUS.APPROVED_BY_STATE,
+        FORM_STATUS.AWAITING_CLAIM_LETTER,
+      ])('computes statusSummary when form status is %i (>= UNDER_REVIEW_BY_MOHUA)', async (status) => {
+        mockFormModel.findOne.mockReturnValueOnce(
+          q({ _id: formOid, currentFormStatus: status, activeDatasetVersion: 1 }),
+        );
+        installSummaryGroups([
+          { _id: 'Constituted', count: 3 },
+          { _id: 'Not Constituted', count: 1 },
+          { _id: '6th Schedule', count: 1 },
+        ]);
+
+        const result = await service.getForm(stateOid.toString(), yearOid.toString(), adminUser);
+
+        expect(result.data!.statusSummary).toEqual({
+          totalUlbCount: 5,
+          constitutedCount: 3,
+          notConstitutedCount: 1,
+          exemptCount: 1,
+        });
+      });
+
+      it('passes form, state, year, active datasetVersion, and isActive:true to the aggregation $match', async () => {
+        mockFormModel.findOne.mockReturnValueOnce(
+          q({ _id: formOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA, activeDatasetVersion: 4 }),
+        );
+        installSummaryGroups([{ _id: 'Constituted', count: 1 }]);
+
+        await service.getForm(stateOid.toString(), yearOid.toString(), adminUser);
+
+        const pipeline = mockRowModel.aggregate.mock.calls[0][0] as Array<Record<string, unknown>>;
+        const matchStage = pipeline[0]['$match'] as Record<string, unknown>;
+        expect(matchStage).toMatchObject({ form: formOid, datasetVersion: 4, isActive: true });
+      });
     });
 
     it('does not include extraUlbEditFields — no row is ever unregistered, so nothing needs a censusCode/ulbName edit form', async () => {

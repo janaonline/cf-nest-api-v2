@@ -5,7 +5,7 @@ import { SfcStatusAction } from './sfc-status.schema';
 export type XviFcSfcStatusHistoryDocument = HydratedDocument<XviFcSfcStatusHistory>;
 
 @Schema({
-  collection: 'xvifc_sfc_histories',
+  collection: 'xvifc_sfc_logs',
   timestamps: true,
   versionKey: false,
 })
