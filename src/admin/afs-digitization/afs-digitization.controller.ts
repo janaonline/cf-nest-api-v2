@@ -75,7 +75,7 @@ export class AfsDigitizationController {
 
   @Get('request-log/:requestId')
   async getRequestLog(@Param('requestId') requestId: string) {
-    return { data: await this.afsService.getRequestLog(requestId) };
+    return await this.afsService.getRequestLog(requestId);
   }
   /**
    * Updates PDF metadata for a specific annual account
@@ -136,11 +136,7 @@ export class AfsDigitizationController {
 
   @Post('upload-afs-file')
   async uploadAFSFile(@Body() body: DigitizationJobDto) {
-    const result = await this.digitizationQueueService.upsertAfsExcelFile(body);
-    return {
-      status: 'success',
-      data: result,
-    };
+    return await this.digitizationQueueService.upsertAfsExcelFile(body);
   }
 
   @Public()
@@ -244,7 +240,7 @@ export class AfsDigitizationController {
 
   @Get('get-ar-item/:id')
   async getAuditorsReportItem(@Param('id') id: string) {
-    return { data: await this.afsService.getAuditorsReportItem(id) };
+    return await this.afsService.getAuditorsReportItem(id);
   }
 
   @Post('submit-ar-decision')
