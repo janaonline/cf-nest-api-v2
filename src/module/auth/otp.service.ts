@@ -373,7 +373,7 @@ export class OtpService {
     try {
       await this.emailQueueService.addEmailJob({
         to,
-        subject: 'Authentication Mail',
+        subject: 'CityFinance - Your email verification code',
         templateName: 'otp',
         mailData: { otp },
       });
