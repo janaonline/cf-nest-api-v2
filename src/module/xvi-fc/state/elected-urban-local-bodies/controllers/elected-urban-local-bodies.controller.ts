@@ -361,7 +361,7 @@ export class ElectedUrbanLocalBodiesController {
   @ApiOperation({
     summary: 'Get Elected Urban Local Bodies form (hydrated)',
     description:
-      'Returns the EULB form for the given state and year with saved data merged into question defaults, current status, permissions, actors, and validation summary.',
+      'Returns the EULB form for the given state and year with saved data merged into question defaults, current status, permissions, actors, validation summary, and status summary (constituted/not-constituted/exempt row counts, available once the form has reached Under Review by MoHUA or later).',
   })
   @Get(':stateId/:yearId')
   @UseGuards(PermissionGuard)

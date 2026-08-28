@@ -65,7 +65,7 @@ export class AfsDigitizationService {
 
     private readonly fileTokenService: FileTokenService,
     private readonly configService: ConfigService,
-  ) { }
+  ) {}
 
   async getAfsFilters() {
     // const auditTypes = [
@@ -95,15 +95,13 @@ export class AfsDigitizationService {
     ]);
 
     return {
-      data: {
-        states,
-        ulbs,
-        years,
-        populationCategories,
-        documentTypes,
-        auditTypes,
-        digitizationStatuses,
-      },
+      states,
+      ulbs,
+      years,
+      populationCategories,
+      documentTypes,
+      auditTypes,
+      digitizationStatuses,
     };
   }
   async getMetricsAfs(docType: string = 'all') {
@@ -122,7 +120,7 @@ export class AfsDigitizationService {
 
     await this.afsMetricModel.updateOne({ docType }, { $set: finalMetrics }, { runValidators: true, upsert: true });
 
-    return { data: result[0] ?? finalMetrics };
+    return result[0] ?? finalMetrics;
   }
   async getMetrics(docType: string = 'all') {
     const result = await this.afsMetricModel.findOne({ docType }).lean();
@@ -167,14 +165,10 @@ export class AfsDigitizationService {
             : '0%',
       },
     ];
-    return { data: { cards } };
+    return { cards };
   }
 
-  async getUlbs(params: {
-    populationCategory: string;
-    stateId?: string[];
-    limit?: number;
-  }): Promise<{ data: UlbDocument[] }> {
+  async getUlbs(params: { populationCategory: string; stateId?: string[]; limit?: number }): Promise<UlbDocument[]> {
     const populationRange = buildPopulationMatch(params.populationCategory || '');
     const stateObjectIds = params.stateId ? params.stateId.map((id) => new Types.ObjectId(id)) : undefined;
 
@@ -190,7 +184,7 @@ export class AfsDigitizationService {
       )
       .sort({ name: 1 })
       .limit(params.limit || 2000);
-    return { data };
+    return data;
   }
 
   async getFile(id: string) {
@@ -296,7 +290,9 @@ export class AfsDigitizationService {
         item.afsFiles.ulbFile.excelUrl_signed = this.fileTokenService.signFileUrl(item.afsFiles.ulbFile.excelUrl);
       }
       if (item.afsFiles?.ulbFile?.digitizedFileUrl) {
-        item.afsFiles.ulbFile.digitizedFileUrl_signed = this.fileTokenService.signFileUrl(item.afsFiles.ulbFile.digitizedFileUrl);
+        item.afsFiles.ulbFile.digitizedFileUrl_signed = this.fileTokenService.signFileUrl(
+          item.afsFiles.ulbFile.digitizedFileUrl,
+        );
       }
       if (item.afsFiles?.afsFile?.pdfUrl) {
         item.afsFiles.afsFile.pdfUrl_signed = this.fileTokenService.signFileUrl(item.afsFiles.afsFile.pdfUrl);
@@ -305,12 +301,14 @@ export class AfsDigitizationService {
         item.afsFiles.afsFile.excelUrl_signed = this.fileTokenService.signFileUrl(item.afsFiles.afsFile.excelUrl);
       }
       if (item.afsFiles?.afsFile?.digitizedFileUrl) {
-        item.afsFiles.afsFile.digitizedFileUrl_signed = this.fileTokenService.signFileUrl(item.afsFiles.afsFile.digitizedFileUrl);
+        item.afsFiles.afsFile.digitizedFileUrl_signed = this.fileTokenService.signFileUrl(
+          item.afsFiles.afsFile.digitizedFileUrl,
+        );
       }
       return item;
     });
 
-    return { data: signedData, totalCount };
+    return { success: true, data: signedData, totalCount };
   }
 
   private normalizeExcelRow(row: Record<string, unknown>): Record<string, string> {
