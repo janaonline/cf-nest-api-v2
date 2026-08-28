@@ -1,4 +1,17 @@
-import { Body, Controller, Get, Logger, Param, Post, Query, Res, UploadedFile, UseInterceptors, UsePipes, ValidationPipe } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Logger,
+  Param,
+  Post,
+  Query,
+  Res,
+  UploadedFile,
+  UseInterceptors,
+  UsePipes,
+  ValidationPipe,
+} from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBody, ApiConsumes , ApiBearerAuth } from '@nestjs/swagger';
 import type { Response } from 'express';
@@ -40,6 +53,7 @@ export class AfsDigitizationController {
     return await this.afsService.getUlbs(query);
   }
 
+  @Public()
   @Post('afs-list')
   async afsList(@Body() body: DigitizationReportQueryDto): Promise<any> {
     // query.yearId = new Types.ObjectId(query.yearId);
