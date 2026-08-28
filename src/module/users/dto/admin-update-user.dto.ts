@@ -95,4 +95,14 @@ export class AdminUpdateUserDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+  @ApiProperty({
+    required: false,
+    description:
+      "Marks this account as its team's Nodal Officer — drives xviFcSubrole derivation when a " +
+      'STATE user later verifies their own profile (isNodalOfficer: true → admin, false → reviewer).',
+  })
+  @IsOptional()
+  @IsBoolean()
+  isNodalOfficer?: boolean;
 }

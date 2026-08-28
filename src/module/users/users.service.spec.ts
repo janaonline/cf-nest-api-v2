@@ -458,6 +458,18 @@ describe('UsersService', () => {
       );
     });
 
+    it('passes isNodalOfficer through to the created user, defaulting to false when omitted', async () => {
+      mockUserModel.exec.mockResolvedValueOnce(null);
+      mockUserModel.create.mockResolvedValue({ _id: new Types.ObjectId(TARGET_USER_ID), ...baseDto, isActive: true });
+
+      await service.adminCreateUser({ ...baseDto, isNodalOfficer: true } as any, platformAdmin);
+      expect(mockUserModel.create).toHaveBeenCalledWith(expect.objectContaining({ isNodalOfficer: true }));
+
+      mockUserModel.exec.mockResolvedValueOnce(null);
+      await service.adminCreateUser(baseDto as any, platformAdmin);
+      expect(mockUserModel.create).toHaveBeenCalledWith(expect.objectContaining({ isNodalOfficer: false }));
+    });
+
     it('rejects a STATE-family role with no stateId', async () => {
       mockUserModel.exec.mockResolvedValueOnce(null);
       await expect(
@@ -544,6 +556,21 @@ describe('UsersService', () => {
       expect(mockUserModel.findByIdAndUpdate).toHaveBeenCalledWith(
         TARGET_USER_ID,
         { $set: { name: 'Renamed' } },
+        { new: true },
+      );
+    });
+
+    it('updates isNodalOfficer when explicitly sent', async () => {
+      const targetDoc = makeUserDoc({ role: Role.STATE, state: new Types.ObjectId(STATE_ID), ulb: undefined });
+      mockUserModel.exec
+        .mockResolvedValueOnce(targetDoc)
+        .mockResolvedValueOnce({ ...targetDoc, isNodalOfficer: true });
+
+      await service.adminUpdateUser(TARGET_USER_ID, { isNodalOfficer: true }, platformAdmin);
+
+      expect(mockUserModel.findByIdAndUpdate).toHaveBeenCalledWith(
+        TARGET_USER_ID,
+        { $set: { isNodalOfficer: true } },
         { new: true },
       );
     });

@@ -55,6 +55,7 @@ export interface AdminUserResponse {
   departmentEmail: string;
   departmentContactNumber: string;
   isActive: boolean;
+  isNodalOfficer: boolean;
 }
 
 // ─── Permission-matrix display types ────────────────────────────────────────
@@ -330,6 +331,7 @@ export class UsersService {
       xviFcSubrole,
       state: stateObjectId,
       ulb: ulbObjectId,
+      isNodalOfficer: dto.isNodalOfficer ?? false,
       createdBy: new Types.ObjectId(String(requester._id)),
       status: 'APPROVED',
       isXVIFCProfileVerified: false,
@@ -399,6 +401,7 @@ export class UsersService {
     if (dto.departmentEmail !== undefined) $set.departmentEmail = dto.departmentEmail;
     if (dto.departmentContactNumber !== undefined) $set.departmentContactNumber = dto.departmentContactNumber;
     if (dto.isActive !== undefined) $set.isActive = dto.isActive;
+    if (dto.isNodalOfficer !== undefined) $set.isNodalOfficer = dto.isNodalOfficer;
 
     if (roleIsChanging || dto.subRole !== undefined || dto.stateId !== undefined || dto.ulbId !== undefined) {
       // A role change never carries the old state/ulb forward as an implicit fallback — the new
@@ -493,6 +496,7 @@ export class UsersService {
       departmentEmail: (user.departmentEmail as string) ?? '',
       departmentContactNumber: (user.departmentContactNumber as string) ?? '',
       isActive: (user.isActive as boolean) ?? false,
+      isNodalOfficer: (user.isNodalOfficer as boolean) ?? false,
     };
   }
 
