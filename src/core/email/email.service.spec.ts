@@ -4,6 +4,7 @@ import { JwtService } from '@nestjs/jwt';
 import { getModelToken } from '@nestjs/mongoose';
 import { Test, TestingModule } from '@nestjs/testing';
 import { EmailList } from 'src/schemas/email-list';
+import { EmailDomainValidationService } from '../email-domain-validation/email-domain-validation.service';
 import { EmailQueueService } from '../queue/email-queue/email-queue.service';
 import { RateLimitService } from '../services/rate-limit/rate-limit.service';
 import { RedisService } from '../services/redis/redis.service';
@@ -22,6 +23,7 @@ describe('EmailService', () => {
     findOneAndUpdate: jest.Mock;
   };
   let configGet: jest.Mock;
+  let emailDomainValidation: { domainHasMxRecord: jest.Mock };
 
   const buildModule = async (nodeEnv = 'test') => {
     configGet = jest.fn((key: string) => {
@@ -41,6 +43,7 @@ describe('EmailService', () => {
     redis = { get: jest.fn(), set: jest.fn().mockResolvedValue(true), del: jest.fn().mockResolvedValue(true) };
     mailQueue = { addEmailJob: jest.fn().mockResolvedValue(undefined) };
     jwtService = { sign: jest.fn().mockReturnValue('signed-token'), verify: jest.fn() };
+    emailDomainValidation = { domainHasMxRecord: jest.fn().mockResolvedValue(true) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -51,6 +54,7 @@ describe('EmailService', () => {
         { provide: RateLimitService, useValue: rateLimit },
         { provide: RedisService, useValue: redis },
         { provide: EmailQueueService, useValue: mailQueue },
+        { provide: EmailDomainValidationService, useValue: emailDomainValidation },
       ],
     }).compile();
 
@@ -82,6 +86,7 @@ describe('EmailService', () => {
           { provide: RateLimitService, useValue: { checkLimit: jest.fn() } },
           { provide: RedisService, useValue: {} },
           { provide: EmailQueueService, useValue: {} },
+          { provide: EmailDomainValidationService, useValue: { domainHasMxRecord: jest.fn() } },
         ],
       }).compile(),
     ).rejects.toThrow('JWT_SECRET is not defined in environment variables');
@@ -226,6 +231,25 @@ describe('EmailService', () => {
       await expect(service.verifyOtp({ email: 'a@b.com', otp: '123456' })).rejects.toThrow(
         'Failed to verify email id!',
       );
+    });
+  });
+
+  describe('checkEmailDomain()', () => {
+    it('returns deliverable: true for a domain with an MX/A record', async () => {
+      emailDomainValidation.domainHasMxRecord.mockResolvedValue(true);
+
+      const result = await service.checkEmailDomain('a@gmail.com');
+
+      expect(emailDomainValidation.domainHasMxRecord).toHaveBeenCalledWith('a@gmail.com');
+      expect(result).toEqual({ deliverable: true });
+    });
+
+    it('returns deliverable: false for a made-up domain', async () => {
+      emailDomainValidation.domainHasMxRecord.mockResolvedValue(false);
+
+      const result = await service.checkEmailDomain('a@examplesdcds.co');
+
+      expect(result).toEqual({ deliverable: false });
     });
   });
 
