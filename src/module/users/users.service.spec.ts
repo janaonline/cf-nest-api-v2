@@ -375,15 +375,47 @@ describe('UsersService', () => {
       );
     });
 
-    it('accepts a ULB self-update to commissionerEmail with no saveToken — the "People & Roles" page never has one to send', async () => {
-      // Deliberately no OTP step on that page — the email fields themselves are not gated,
-      // only isXVIFCProfileVerified/isXviFcEmailVerified are.
+    it('rejects a ULB self-update that changes commissionerEmail with no saveToken — "People & Roles" now has its own OTP step', async () => {
+      const requester = makeUlbAdmin({ _id: TARGET_USER_ID });
+      mockUserModel.exec.mockResolvedValueOnce(makeUserDoc());
+
+      await expect(
+        service.updateProfileContacts(TARGET_USER_ID, { commissionerEmail: 'new@ulb.gov.in' }, requester),
+      ).rejects.toThrow(BadRequestException);
+
+      expect(mockRedisService.get).not.toHaveBeenCalled();
+    });
+
+    it('accepts a ULB self-update to commissionerEmail with a valid saveToken', async () => {
       const requester = makeUlbAdmin({ _id: TARGET_USER_ID });
       mockUserModel.exec
         .mockResolvedValueOnce(makeUserDoc())
         .mockResolvedValueOnce(makeUserDoc({ commissionerEmail: 'new@ulb.gov.in' }));
+      mockRedisService.get.mockResolvedValueOnce('good-token');
 
-      await service.updateProfileContacts(TARGET_USER_ID, { commissionerEmail: 'new@ulb.gov.in' }, requester);
+      await service.updateProfileContacts(
+        TARGET_USER_ID,
+        { commissionerEmail: 'new@ulb.gov.in', saveToken: 'good-token' },
+        requester,
+      );
+
+      expect(mockRedisService.del).toHaveBeenCalledWith(`profile_save_token:${TARGET_USER_ID}`);
+    });
+
+    it('accepts a ULB self-update with no saveToken when the resent commissionerEmail is unchanged', async () => {
+      // "People & Roles" always resends the current email alongside an edited name, since it's
+      // one form per contact card, not one input per field — this must not be mistaken for an
+      // actual email change and shouldn't force an OTP round-trip when nothing email-related moved.
+      const requester = makeUlbAdmin({ _id: TARGET_USER_ID });
+      mockUserModel.exec
+        .mockResolvedValueOnce(makeUserDoc({ commissionerEmail: 'unchanged@ulb.gov.in' }))
+        .mockResolvedValueOnce(makeUserDoc({ commissionerName: 'New Name' }));
+
+      await service.updateProfileContacts(
+        TARGET_USER_ID,
+        { commissionerName: 'New Name', commissionerEmail: 'unchanged@ulb.gov.in' },
+        requester,
+      );
 
       expect(mockRedisService.get).not.toHaveBeenCalled();
     });
@@ -456,6 +488,18 @@ describe('UsersService', () => {
       expect(mockUserModel.create).toHaveBeenCalledWith(
         expect.objectContaining({ role: Role.XVIFC, state: null, ulb: null, xviFcSubrole: null }),
       );
+    });
+
+    it('passes isNodalOfficer through to the created user, defaulting to false when omitted', async () => {
+      mockUserModel.exec.mockResolvedValueOnce(null);
+      mockUserModel.create.mockResolvedValue({ _id: new Types.ObjectId(TARGET_USER_ID), ...baseDto, isActive: true });
+
+      await service.adminCreateUser({ ...baseDto, isNodalOfficer: true } as any, platformAdmin);
+      expect(mockUserModel.create).toHaveBeenCalledWith(expect.objectContaining({ isNodalOfficer: true }));
+
+      mockUserModel.exec.mockResolvedValueOnce(null);
+      await service.adminCreateUser(baseDto as any, platformAdmin);
+      expect(mockUserModel.create).toHaveBeenCalledWith(expect.objectContaining({ isNodalOfficer: false }));
     });
 
     it('rejects a STATE-family role with no stateId', async () => {
@@ -544,6 +588,21 @@ describe('UsersService', () => {
       expect(mockUserModel.findByIdAndUpdate).toHaveBeenCalledWith(
         TARGET_USER_ID,
         { $set: { name: 'Renamed' } },
+        { new: true },
+      );
+    });
+
+    it('updates isNodalOfficer when explicitly sent', async () => {
+      const targetDoc = makeUserDoc({ role: Role.STATE, state: new Types.ObjectId(STATE_ID), ulb: undefined });
+      mockUserModel.exec
+        .mockResolvedValueOnce(targetDoc)
+        .mockResolvedValueOnce({ ...targetDoc, isNodalOfficer: true });
+
+      await service.adminUpdateUser(TARGET_USER_ID, { isNodalOfficer: true }, platformAdmin);
+
+      expect(mockUserModel.findByIdAndUpdate).toHaveBeenCalledWith(
+        TARGET_USER_ID,
+        { $set: { isNodalOfficer: true } },
         { new: true },
       );
     });

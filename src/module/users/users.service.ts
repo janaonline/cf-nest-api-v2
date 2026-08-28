@@ -55,6 +55,7 @@ export interface AdminUserResponse {
   departmentEmail: string;
   departmentContactNumber: string;
   isActive: boolean;
+  isNodalOfficer: boolean;
 }
 
 // ─── Permission-matrix display types ────────────────────────────────────────
@@ -330,6 +331,7 @@ export class UsersService {
       xviFcSubrole,
       state: stateObjectId,
       ulb: ulbObjectId,
+      isNodalOfficer: dto.isNodalOfficer ?? false,
       createdBy: new Types.ObjectId(String(requester._id)),
       status: 'APPROVED',
       isXVIFCProfileVerified: false,
@@ -399,6 +401,7 @@ export class UsersService {
     if (dto.departmentEmail !== undefined) $set.departmentEmail = dto.departmentEmail;
     if (dto.departmentContactNumber !== undefined) $set.departmentContactNumber = dto.departmentContactNumber;
     if (dto.isActive !== undefined) $set.isActive = dto.isActive;
+    if (dto.isNodalOfficer !== undefined) $set.isNodalOfficer = dto.isNodalOfficer;
 
     if (roleIsChanging || dto.subRole !== undefined || dto.stateId !== undefined || dto.ulbId !== undefined) {
       // A role change never carries the old state/ulb forward as an implicit fallback — the new
@@ -493,6 +496,7 @@ export class UsersService {
       departmentEmail: (user.departmentEmail as string) ?? '',
       departmentContactNumber: (user.departmentContactNumber as string) ?? '',
       isActive: (user.isActive as boolean) ?? false,
+      isNodalOfficer: (user.isNodalOfficer as boolean) ?? false,
     };
   }
 
@@ -973,13 +977,16 @@ export class UsersService {
     'isXviFcEmailVerified',
   ]);
 
-  /** Fields a self-update must prove OTP re-verification for via saveToken — only the two flags
-   *  that claim OTP verification actually happened (the exact thing the original vulnerability
-   *  let a caller fake). Editing anything else, including the email fields themselves, needs no
-   *  fresh OTP — the "People & Roles" page (ongoing contact-info management, no OTP step of its
-   *  own) relies on that: it never touches these two flags, so it's never gated. Only the
-   *  dedicated profile-verification page's save sets them, so only it needs the token. */
+  /** Fields a self-update must prove OTP re-verification for via saveToken — the email addresses
+   *  official grant communications go to, and the two flags that claim OTP verification actually
+   *  happened (the exact thing the original vulnerability let a caller fake). Editing anything
+   *  else (name, mobile, designation, ...) needs no fresh OTP. The "People & Roles" page now has
+   *  its own OTP step for email changes (mirroring the dedicated profile-verification page), so
+   *  it can supply a valid saveToken here just like that page does. */
   private static readonly SAVE_TOKEN_REQUIRED_FIELDS = new Set<string>([
+    'email',
+    'commissionerEmail',
+    'accountantEmail',
     'isXVIFCProfileVerified',
     'isXviFcEmailVerified',
   ]);
@@ -993,7 +1000,9 @@ export class UsersService {
 
     const targetUser = await this.userModel
       .findOne({ _id: userId, isDeleted: false })
-      .select('ulb state isNodalOfficer xviFcSubrole isXVIFCProfileVerified isXviFcEmailVerified')
+      .select(
+        'ulb state isNodalOfficer xviFcSubrole email commissionerEmail accountantEmail isXVIFCProfileVerified isXviFcEmailVerified',
+      )
       .lean()
       .exec();
     if (!targetUser) throw new NotFoundException('User not found');
@@ -1017,13 +1026,14 @@ export class UsersService {
     );
 
     if (isSelfUpdate && touchesSaveTokenRequiredField) {
-      // Claiming OTP verification happened (isXVIFCProfileVerified / isXviFcEmailVerified) requires
-      // a valid one-time save token issued after that OTP actually succeeded — this is the only
-      // server-side proof it happened; the client-side "only called after verified" gating alone is
-      // not a security boundary. Every other field, including the email addresses themselves, is
-      // NOT gated — the "People & Roles" page (ongoing contact-info management) edits them with no
-      // OTP step of its own, by design; only the dedicated profile-verification page's save ever
-      // sets these two flags, so only it needs the token.
+      // Changing an official-communication email address, or claiming OTP verification happened
+      // (isXVIFCProfileVerified / isXviFcEmailVerified), requires a valid one-time save token
+      // issued after that OTP actually succeeded — this is the only server-side proof it
+      // happened; the client-side "only called after verified" gating alone is not a security
+      // boundary. Both the dedicated profile-verification page and the "People & Roles" page's
+      // own email-change OTP step obtain this token the same way (send OTP → verify → issue
+      // token) before calling this endpoint. Non-email fields (name, mobile, designation, ...)
+      // are never gated — no fresh OTP needed to change those.
       if (!saveToken) throw new BadRequestException('A verified save token is required to update your profile');
       const stored = await this.redisService.get(this.saveTokenKey(userId));
       if (!stored || stored !== saveToken) {

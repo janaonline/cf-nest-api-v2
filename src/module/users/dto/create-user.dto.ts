@@ -1,6 +1,17 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import { IsEmail, IsIn, IsMongoId, IsNotEmpty, IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator';
+import {
+  IsBoolean,
+  IsEmail,
+  IsIn,
+  IsMongoId,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  Matches,
+  MaxLength,
+  MinLength,
+} from 'class-validator';
 import { Role } from 'src/module/auth/enum/role.enum';
 
 export type AdminSubRole = 'ADMIN' | 'EDITOR' | 'VIEWER';
@@ -87,4 +98,14 @@ export class CreateUserDto {
   @IsOptional()
   @Matches(/^[6-9]\d{9}$/, { message: 'departmentContactNumber must be a valid 10-digit Indian mobile number' })
   departmentContactNumber?: string;
+
+  @ApiProperty({
+    required: false,
+    description:
+      "Marks this account as its team's Nodal Officer — drives xviFcSubrole derivation when a " +
+      'STATE user later verifies their own profile (isNodalOfficer: true → admin, false → reviewer).',
+  })
+  @IsOptional()
+  @IsBoolean()
+  isNodalOfficer?: boolean;
 }

@@ -4,6 +4,7 @@ import { JwtService } from '@nestjs/jwt';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { EmailList } from 'src/schemas/email-list';
+import { EmailDomainValidationService } from '../email-domain-validation/email-domain-validation.service';
 import { EmailQueueService } from '../queue/email-queue/email-queue.service';
 import { RateLimitService } from '../services/rate-limit/rate-limit.service';
 import { RedisService } from '../services/redis/redis.service';
@@ -24,9 +25,16 @@ export class EmailService {
     private readonly rateLimit: RateLimitService,
     private readonly redis: RedisService,
     private readonly mailQueue: EmailQueueService,
+    private readonly emailDomainValidation: EmailDomainValidationService,
   ) {
     this.secret = this.configService.get<string>('JWT_SECRET')!;
     if (!this.secret) throw new Error('JWT_SECRET is not defined in environment variables');
+  }
+
+  /** Lets a caller check a domain's deliverability up front (e.g. before sending an OTP to it),
+   *  instead of only finding out at final save time via assertProfileContactEmailsAreDeliverable. */
+  async checkEmailDomain(email: string): Promise<{ deliverable: boolean }> {
+    return { deliverable: await this.emailDomainValidation.domainHasMxRecord(email) };
   }
 
   async handleUnsubscribe(token: string): Promise<{ success: boolean; email?: string; error?: string }> {
