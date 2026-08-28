@@ -141,7 +141,7 @@ describe('AfsDigitizationController', () => {
 
       const result = await controller.getRequestLog(requestId);
 
-      expect(result).toEqual({ data: mockLog });
+      expect(result).toEqual(mockLog);
       expect(afsService.getRequestLog).toHaveBeenCalledWith(requestId);
     });
 
@@ -151,7 +151,7 @@ describe('AfsDigitizationController', () => {
 
       const result = await controller.getRequestLog(requestId);
 
-      expect(result).toEqual({ data: null });
+      expect(result).toEqual(null);
     });
   });
 
@@ -208,7 +208,7 @@ describe('AfsDigitizationController', () => {
 
       const result = await controller.uploadAFSFile(mockBody as any);
 
-      expect(result).toEqual({ status: 'success', data: mockResult });
+      expect(result).toEqual(mockResult);
       expect(digitizationQueueService.upsertAfsExcelFile).toHaveBeenCalledWith(mockBody);
     });
 
