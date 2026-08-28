@@ -1,4 +1,17 @@
-import { Body, Controller, Get, Logger, Param, Post, Query, Res, UploadedFile, UseInterceptors, UsePipes, ValidationPipe } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Logger,
+  Param,
+  Post,
+  Query,
+  Res,
+  UploadedFile,
+  UseInterceptors,
+  UsePipes,
+  ValidationPipe,
+} from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBody, ApiConsumes } from '@nestjs/swagger';
 import type { Response } from 'express';
@@ -48,11 +61,13 @@ export class AfsDigitizationController {
     return await this.afsService.afsList(body);
   }
 
+  @Public()
   @Get('afs-list')
   async getAfsList(@Query() query: ResourcesSectionExcelListDto): Promise<AfsFileList> {
     return await this.afsService.getAfsList(query);
   }
 
+  @Public()
   @Get('afs-excel-report')
   async getAfsReport(@Query() query: ResourcesSectionExcelReportDto): Promise<AfsFileReport> {
     return await this.afsService.getAfsReport(query);
@@ -60,7 +75,7 @@ export class AfsDigitizationController {
 
   @Get('request-log/:requestId')
   async getRequestLog(@Param('requestId') requestId: string) {
-    return { data: await this.afsService.getRequestLog(requestId) };
+    return await this.afsService.getRequestLog(requestId);
   }
 
   @Get('dump/afs-excel')
@@ -79,11 +94,7 @@ export class AfsDigitizationController {
 
   @Post('upload-afs-file')
   async uploadAFSFile(@Body() body: DigitizationJobDto) {
-    const result = await this.digitizationQueueService.upsertAfsExcelFile(body);
-    return {
-      status: 'success',
-      data: result,
-    };
+    return await this.digitizationQueueService.upsertAfsExcelFile(body);
   }
 
   @Public()
@@ -187,7 +198,7 @@ export class AfsDigitizationController {
 
   @Get('get-ar-item/:id')
   async getAuditorsReportItem(@Param('id') id: string) {
-    return { data: await this.afsService.getAuditorsReportItem(id) };
+    return await this.afsService.getAuditorsReportItem(id);
   }
 
   @Post('submit-ar-decision')
