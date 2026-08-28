@@ -84,6 +84,13 @@ export class EmailController {
     return await this.emailService.verifyOtp(body);
   }
 
+  @Post('checkEmailDomain')
+  @ApiOperation({ summary: "Check whether an email's domain can plausibly receive mail (MX/A record), with no side effects" })
+  @ApiResponse({ status: 200, description: 'Domain deliverability result' })
+  async checkEmailDomain(@Body('email') email: string) {
+    return await this.emailService.checkEmailDomain(email);
+  }
+
   @Post('sendProfileOtp')
   @ApiOperation({ summary: 'Send profile-verification OTP — always sends regardless of email verification status' })
   @ApiResponse({ status: 200, description: 'OTP sent' })
