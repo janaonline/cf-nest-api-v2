@@ -67,6 +67,7 @@ export class AfsDigitizationController {
     return await this.afsService.getAfsList(query);
   }
 
+  @Public()
   @Get('afs-excel-report')
   async getAfsReport(@Query() query: ResourcesSectionExcelReportDto): Promise<AfsFileReport> {
     return await this.afsService.getAfsReport(query);
