@@ -53,7 +53,6 @@ export class AfsDigitizationController {
     return await this.afsService.getUlbs(query);
   }
 
-  @Public()
   @Post('afs-list')
   async afsList(@Body() body: DigitizationReportQueryDto): Promise<any> {
     // query.yearId = new Types.ObjectId(query.yearId);
@@ -62,6 +61,7 @@ export class AfsDigitizationController {
     return await this.afsService.afsList(body);
   }
 
+  @Public()
   @Get('afs-list')
   async getAfsList(@Query() query: ResourcesSectionExcelListDto): Promise<AfsFileList> {
     return await this.afsService.getAfsList(query);
