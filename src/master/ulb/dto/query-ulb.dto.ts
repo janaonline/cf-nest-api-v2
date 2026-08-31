@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import { IsBoolean, IsIn, IsInt, IsMongoId, IsOptional, IsString, Max, Min } from 'class-validator';
 
 export class QueryUlbDto {
@@ -20,7 +20,7 @@ export class QueryUlbDto {
 
   @ApiPropertyOptional()
   @IsOptional()
-  @Type(() => Boolean)
+  @Transform(({ value }) => (value === 'false' ? false : value === 'true' ? true : value))
   @IsBoolean()
   isActive?: boolean;
 

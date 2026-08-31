@@ -8,6 +8,8 @@ import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { ExcelColumnValidation, ExcelService, RowHeader } from 'src/services/excel/excel.service';
 import { EulbFormJsonConfigService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/form-json/elected-urban-local-bodies-form-json.service';
 import { getFieldsByType } from 'src/module/xvi-fc/state/elected-urban-local-bodies/helpers/elected-urban-local-bodies-form-json.helpers';
+import { computeEulbStatusSummary } from 'src/module/xvi-fc/state/elected-urban-local-bodies/helpers/elected-urban-local-bodies-status-summary.helper';
+import { deriveElectedBodyStatuses } from 'src/module/xvi-fc/state/elected-urban-local-bodies/validators/elected-urban-local-bodies.validator';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
@@ -77,6 +79,7 @@ import type {
   EulbDumpFormRecord,
   EulbDumpRow,
   EulbDumpRowRecord,
+  EulbStatusSummary,
   EulbValidationSummary,
 } from 'src/module/xvi-fc/state/elected-urban-local-bodies/types/elected-urban-local-bodies.types';
 
@@ -251,6 +254,21 @@ export class ElectedUrbanLocalBodiesService {
     const { actors, stateName } = this.xvifcFormActorsService.buildActorsAndStateName(doc);
     const validationSummary = this.buildValidationSummary(doc);
 
+    // Only computed once the form has actually been submitted (UNDER_REVIEW_BY_MOHUA or later) —
+    // avoids a needless aggregation query on every pre-submission page load. `null` beforehand.
+    let statusSummary: EulbStatusSummary | null = null;
+    if (doc && currentFormStatus >= FORM_STATUS.UNDER_REVIEW_BY_MOHUA) {
+      const electedBodyStatuses = deriveElectedBodyStatuses(rowEditFields);
+      statusSummary = await computeEulbStatusSummary(
+        this.rowModel,
+        doc._id as Types.ObjectId,
+        stateId,
+        yearId,
+        doc.activeDatasetVersion ?? 0,
+        electedBodyStatuses,
+      );
+    }
+
     const responseData: EulbFormGetResponseData = {
       _id: doc ? String(doc._id) : null,
       formName: EULB_FORM_NAME,
@@ -264,6 +282,7 @@ export class ElectedUrbanLocalBodiesService {
       permissions,
       actors,
       validationSummary,
+      statusSummary,
       instructions: [],
       meta: { version: 1 },
     };

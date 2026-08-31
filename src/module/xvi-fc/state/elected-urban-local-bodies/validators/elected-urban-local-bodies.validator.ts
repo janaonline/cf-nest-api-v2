@@ -33,6 +33,24 @@ function parseDateBoundary(iso: string, mode: 'min' | 'max'): Date {
 }
 
 /**
+ * Derives the `[constituted, notConstituted, exempt]`-ordered enum list from the DB-backed
+ * `electedBodyStatus` field's options (ROW_EDIT_FIELDS group). Single source of truth for this
+ * mapping — used both by `extractDateConfig` (full row-edit validation) and standalone by
+ * anything that only needs the status enum (e.g. the status-summary aggregation).
+ */
+export function deriveElectedBodyStatuses(rowEditFields: FieldConfig[]): string[] {
+  const statusField = rowEditFields.find((f) => f.key === 'electedBodyStatus');
+  if (!statusField) {
+    throw new InternalServerErrorException('EULB ROW_EDIT_FIELDS is missing the electedBodyStatus field.');
+  }
+  const statusOptions = statusField.options;
+  if (!statusOptions || statusOptions.length === 0) {
+    throw new InternalServerErrorException('EULB ROW_EDIT_FIELDS electedBodyStatus is missing its options list.');
+  }
+  return statusOptions.map((o) => (typeof o === 'string' ? o : (o as FormFieldOption).id));
+}
+
+/**
  * Derives EulbDateValidationConfig from the DB-backed ROW_EDIT_FIELDS group (dates, remarks,
  * electedBodyStatus enum) and EXTRA_ULB_PORTAL_FIELDS group (censusCode/ulbName max length —
  * these two keys aren't tagged ROW_EDIT_FIELDS in the DB document). Single source of truth for
@@ -45,14 +63,14 @@ export function extractDateConfig(
   const cField = rowEditFields.find((f) => f.key === 'dateOfConstitution');
   const eField = rowEditFields.find((f) => f.key === 'dateOfExpiry');
   const rField = rowEditFields.find((f) => f.key === 'remarks');
-  const statusField = rowEditFields.find((f) => f.key === 'electedBodyStatus');
   const censusCodeField = extraUlbPortalFields.find((f) => f.key === 'censusCode');
   const ulbNameField = extraUlbPortalFields.find((f) => f.key === 'ulbName');
-  if (!cField || !eField || !rField || !statusField || !censusCodeField || !ulbNameField) {
+  if (!cField || !eField || !rField || !censusCodeField || !ulbNameField) {
     throw new InternalServerErrorException(
       'EULB ROW_EDIT_FIELDS/EXTRA_ULB_PORTAL_FIELDS is missing required date/remarks/status/census/ulbName fields.',
     );
   }
+  const electedBodyStatuses = deriveElectedBodyStatuses(rowEditFields);
   const cMinV = cField.validations?.find((v) => v.name === 'minDate');
   const cMaxV = cField.validations?.find((v) => v.name === 'maxDate');
   const eMaxV = eField.validations?.find((v) => v.name === 'maxDate');
@@ -77,12 +95,6 @@ export function extractDateConfig(
       'EULB EXTRA_ULB_PORTAL_FIELDS censusCode/ulbName maxlength validations are incomplete.',
     );
   }
-
-  const statusOptions = statusField.options;
-  if (!statusOptions || statusOptions.length === 0) {
-    throw new InternalServerErrorException('EULB ROW_EDIT_FIELDS electedBodyStatus is missing its options list.');
-  }
-  const electedBodyStatuses = statusOptions.map((o) => (typeof o === 'string' ? o : (o as FormFieldOption).id));
 
   const cMinIso: string = cMinV.validator;
   const eMaxIso: string = eMaxV.validator;

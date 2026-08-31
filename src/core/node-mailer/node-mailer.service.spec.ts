@@ -30,4 +30,15 @@ describe('NodeMailerService', () => {
   it('should be defined', () => {
     expect(service).toBeDefined();
   });
+
+  it('sends to every recipient when "to" is an array', async () => {
+    await service.sendEmailWithTemplate(['a@example.com', 'b@example.com'], 'Subject', './welcome', { name: 'X' });
+
+    expect(mockMailerService.sendMail).toHaveBeenCalledWith({
+      to: ['a@example.com', 'b@example.com'],
+      subject: 'Subject',
+      template: './welcome',
+      context: { name: 'X' },
+    });
+  });
 });

@@ -14,6 +14,7 @@ import {
 import { ApiBearerAuth, ApiOkResponse, ApiOperation } from '@nestjs/swagger';
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
+import { AdminUpdateUserDto } from './dto/admin-update-user.dto';
 import { UpdateProfileContactsDto } from './dto/update-profile-contacts.dto';
 import { ProfileContactsResponseDto } from './dto/profile-contacts-response.dto';
 import { InviteStateMemberDto } from './dto/invite-state-member.dto';
@@ -34,9 +35,32 @@ import type { AuthUser } from 'src/module/auth/auth-user.interface';
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
+  @ApiBearerAuth()
   @Post()
-  create(@Body() createUserDto: CreateUserDto) {
-    return this.usersService.create(createUserDto);
+  @UseGuards(JwtAuthGuard, PermissionGuard)
+  @RequirePermissions(Permission.MANAGE_USERS)
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'ADMIN-only: create a user of any role, with whatever scoping that role requires' })
+  create(@Body() createUserDto: CreateUserDto, @CurrentUser() user: AuthUser) {
+    return this.usersService.adminCreateUser(createUserDto, user);
+  }
+
+  @ApiBearerAuth()
+  @Patch(':id')
+  @UseGuards(JwtAuthGuard, PermissionGuard)
+  @RequirePermissions(Permission.MANAGE_USERS)
+  @ApiOperation({ summary: 'ADMIN-only: update any field (including role/subRole/state/ulb) on any user' })
+  update(@Param('id') id: string, @Body() dto: AdminUpdateUserDto, @CurrentUser() user: AuthUser) {
+    return this.usersService.adminUpdateUser(id, dto, user);
+  }
+
+  @ApiBearerAuth()
+  @Delete('admin/:id')
+  @UseGuards(JwtAuthGuard, PermissionGuard)
+  @RequirePermissions(Permission.MANAGE_USERS)
+  @ApiOperation({ summary: 'ADMIN-only: soft-delete any user (sets isDeleted and isXviFcdeleted)' })
+  adminSoftDeleteUser(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.usersService.adminSoftDeleteUser(id, user);
   }
 
   @ApiBearerAuth()
@@ -207,7 +231,7 @@ export class UsersController {
   @UseGuards(PermissionGuard)
   // @RequirePermissions(Permission.DELETE_MANAGED_USER)
   @ApiOperation({
-    summary: 'Remove a STATE team member from the XVI-FC portal (sets isXviFcdeleted; does not touch isDeleted)',
+    summary: 'Remove a STATE team member from the XVI-FC portal (sets both isXviFcdeleted and isDeleted)',
   })
   softDeleteStateUser(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.usersService.softDeleteStateUser(id, user);

@@ -1,5 +1,6 @@
 import {
   ElectedUrbanLocalBodiesValidator,
+  deriveElectedBodyStatuses,
   extractDateConfig,
 } from 'src/module/xvi-fc/state/elected-urban-local-bodies/validators/elected-urban-local-bodies.validator';
 import type { EulbDateValidationConfig } from 'src/module/xvi-fc/state/elected-urban-local-bodies/validators/elected-urban-local-bodies.validator';
@@ -110,6 +111,28 @@ const VALID_EXTRA_ULB_PORTAL_FIELDS: FieldConfig[] = [
     ],
   },
 ];
+
+describe('deriveElectedBodyStatuses', () => {
+  it('derives the [constituted, notConstituted, exempt]-ordered tuple from field options', () => {
+    expect(deriveElectedBodyStatuses(VALID_ROW_EDIT_FIELDS)).toEqual([
+      'Constituted',
+      'Not Constituted',
+      '6th Schedule',
+    ]);
+  });
+
+  it('throws when the electedBodyStatus field is missing entirely', () => {
+    const fieldsWithoutStatus = VALID_ROW_EDIT_FIELDS.filter((f) => f.key !== 'electedBodyStatus');
+    expect(() => deriveElectedBodyStatuses(fieldsWithoutStatus)).toThrow();
+  });
+
+  it('throws when electedBodyStatus is missing its options list', () => {
+    const brokenRowFields = VALID_ROW_EDIT_FIELDS.map((f) =>
+      f.key === 'electedBodyStatus' ? { ...f, options: [] } : f,
+    );
+    expect(() => deriveElectedBodyStatuses(brokenRowFields)).toThrow();
+  });
+});
 
 describe('extractDateConfig', () => {
   it('derives censusCodeMaxLength/ulbNameMaxLength/electedBodyStatuses from the DB-loaded field groups', () => {

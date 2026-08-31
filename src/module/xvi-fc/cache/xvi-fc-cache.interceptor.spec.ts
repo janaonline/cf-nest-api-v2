@@ -1,11 +1,6 @@
 import type { CallHandler, ExecutionContext } from '@nestjs/common';
 import { lastValueFrom, of } from 'rxjs';
-import {
-  XviFcCacheInterceptor,
-  XVIFC_CACHE_TTL_KEY,
-  XviFcCacheTTL,
-  XVIFC_CACHE_KEY_PREFIX,
-} from './xvi-fc-cache.interceptor';
+import { XviFcCacheInterceptor, XVIFC_CACHE_TTL_KEY, XVIFC_CACHE_KEY_PREFIX } from './xvi-fc-cache.interceptor';
 import type { XviFcCacheService } from './xvi-fc-cache.service';
 
 function buildContext(url = '/xvi-fc/sidebar/ULB?yearId=year1'): ExecutionContext {
@@ -73,6 +68,21 @@ describe('XviFcCacheInterceptor', () => {
     });
   });
 
+  describe('cache read failure', () => {
+    it('falls back to next.handle() instead of failing the request when cache.get() rejects', async () => {
+      cache.get.mockRejectedValue(new Error('Redis connection lost'));
+      reflector.get.mockReturnValue(undefined);
+      const handler = buildHandler({ fresh: true });
+      const nextHandleSpy = jest.spyOn(handler, 'handle');
+
+      const result$ = await interceptor.intercept(buildContext(), handler);
+      const result = await lastValueFrom(result$);
+
+      expect(result).toEqual({ fresh: true });
+      expect(nextHandleSpy).toHaveBeenCalled();
+    });
+  });
+
   describe('cache miss', () => {
     it('calls next.handle() and caches the response with the default TTL', async () => {
       cache.get.mockResolvedValue(null);
@@ -118,27 +128,23 @@ describe('XviFcCacheInterceptor', () => {
     });
   });
 
-  describe('XviFcCacheTTL decorator', () => {
-    // NOTE: this decorator is implemented as raw `Reflect.metadata(KEY, ttl)` rather than
-    // Nest's `SetMetadata`. Reflect.metadata's decorator only takes (target, propertyKey) and
-    // stores metadata keyed by that pair — it does NOT (like SetMetadata does) also write to
-    // descriptor.value. Reflector.get(key, context.getHandler()) reads metadata off the handler
-    // *function reference*, so metadata attached this way is never visible to the interceptor's
-    // reflector.get() call above. Documented here as a pre-existing bug, not fixed per task rules:
-    // `@XviFcCacheTTL(n)` silently has no effect and every route falls back to the 600s default.
-    class TestTarget {
-      method() {}
-    }
-    const descriptor = Object.getOwnPropertyDescriptor(TestTarget.prototype, 'method')!;
-
-    it('attaches the TTL as metadata on the (prototype, propertyKey) pair', () => {
-      XviFcCacheTTL(300)(TestTarget.prototype, 'method', descriptor);
-      expect(Reflect.getMetadata(XVIFC_CACHE_TTL_KEY, TestTarget.prototype, 'method')).toBe(300);
-    });
-
-    it('BUG: metadata is NOT retrievable off the handler function reference, so Reflector.get(key, context.getHandler()) always misses', () => {
-      XviFcCacheTTL(300)(TestTarget.prototype, 'method', descriptor);
-      expect(Reflect.getMetadata(XVIFC_CACHE_TTL_KEY, TestTarget.prototype.method)).toBeUndefined();
-    });
-  });
+  // XviFcCacheTTL decorator was commented out in xvi-fc-cache.interceptor.ts (broken —
+  // Reflect.metadata doesn't attach to the handler function reference — and unused by any
+  // route). These tests are disabled to match; see the interceptor file for details.
+  // describe('XviFcCacheTTL decorator', () => {
+  //   class TestTarget {
+  //     method() {}
+  //   }
+  //   const descriptor = Object.getOwnPropertyDescriptor(TestTarget.prototype, 'method')!;
+  //
+  //   it('attaches the TTL as metadata on the (prototype, propertyKey) pair', () => {
+  //     XviFcCacheTTL(300)(TestTarget.prototype, 'method', descriptor);
+  //     expect(Reflect.getMetadata(XVIFC_CACHE_TTL_KEY, TestTarget.prototype, 'method')).toBe(300);
+  //   });
+  //
+  //   it('BUG: metadata is NOT retrievable off the handler function reference, so Reflector.get(key, context.getHandler()) always misses', () => {
+  //     XviFcCacheTTL(300)(TestTarget.prototype, 'method', descriptor);
+  //     expect(Reflect.getMetadata(XVIFC_CACHE_TTL_KEY, TestTarget.prototype.method)).toBeUndefined();
+  //   });
+  // });
 });

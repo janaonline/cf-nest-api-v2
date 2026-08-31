@@ -401,6 +401,20 @@ describe('MessageThreadService', () => {
       ]);
     });
 
+    // Regex metacharacters in `search` must be treated as literal text, not regex operators —
+    // otherwise a search term like this is both a broken literal search and a ReDoS vector.
+    it('escapes regex metacharacters in search before building the $regex filter', async () => {
+      mockFindThreads([], 0);
+
+      await service.getThreads(adminUser, { page: 1, limit: 20, search: 'A.B(1)' });
+
+      const findArg = mockThreadModel.find.mock.calls[0][0];
+      expect(findArg.$or).toEqual([
+        { formName: { $regex: 'A\\.B\\(1\\)', $options: 'i' } },
+        { title: { $regex: 'A\\.B\\(1\\)', $options: 'i' } },
+      ]);
+    });
+
     it('applies optional filters (financialYear, contextType, threadPurpose, currentFormStatus)', async () => {
       mockFindThreads([], 0);
 

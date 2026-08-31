@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, HttpException, NotFoundException } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
 import { ConfigService } from '@nestjs/config';
 import { Types } from 'mongoose';
@@ -7,10 +7,11 @@ import { Types } from 'mongoose';
 import { UsersService } from './users.service';
 import { User } from 'src/schemas/user/user.schema';
 import { State } from 'src/schemas/state.schema';
+import { Ulb } from 'src/schemas/ulb.schema';
 import { RedisService } from 'src/core/services/redis/redis.service';
 import { EmailQueueService } from 'src/core/queue/email-queue/email-queue.service';
 import { EmailDomainValidationService } from 'src/core/email-domain-validation/email-domain-validation.service';
-import { Permission } from 'src/module/auth/enum/roles-xvi-fc.enum';
+import { Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { Role } from 'src/module/auth/enum/role.enum';
 
 import {
@@ -50,6 +51,7 @@ describe('UsersService', () => {
   let service: UsersService;
   let mockUserModel: ReturnType<typeof createChainMock>;
   let mockStateModel: ReturnType<typeof createChainMock>;
+  let mockUlbModel: ReturnType<typeof createChainMock>;
   let mockRedisService: { get: jest.Mock; set: jest.Mock; del: jest.Mock };
   let mockEmailQueueService: { addEmailJob: jest.Mock };
   let mockConfigService: { get: jest.Mock };
@@ -58,6 +60,7 @@ describe('UsersService', () => {
   beforeEach(async () => {
     mockUserModel = createChainMock();
     mockStateModel = createChainMock();
+    mockUlbModel = createChainMock();
     mockRedisService = { get: jest.fn(), set: jest.fn(), del: jest.fn() };
     mockEmailQueueService = { addEmailJob: jest.fn().mockResolvedValue(undefined) };
     mockConfigService = { get: jest.fn().mockReturnValue('https://cityfinance.in') };
@@ -68,6 +71,7 @@ describe('UsersService', () => {
         UsersService,
         { provide: getModelToken(User.name), useValue: mockUserModel },
         { provide: getModelToken(State.name), useValue: mockStateModel },
+        { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
         { provide: RedisService, useValue: mockRedisService },
         { provide: EmailQueueService, useValue: mockEmailQueueService },
         { provide: ConfigService, useValue: mockConfigService },
@@ -233,6 +237,56 @@ describe('UsersService', () => {
       await expect(service.inviteMohuaMember(dto, makeStateAdmin())).rejects.toThrow(ForbiddenException);
       expect(mockEmailDomainValidation.domainHasMxRecord).not.toHaveBeenCalled();
     });
+
+    it('restore: sets role back to MoHUA even if the removed document had drifted to a different role', async () => {
+      const restoreDto = { ...dto, action: 'restore' as const };
+      const requester = makeMohuaAdmin();
+      const removedDoc = { _id: new Types.ObjectId(TARGET_USER_ID), email: dto.email, role: Role.STATE };
+
+      mockUserModel.exec
+        .mockResolvedValueOnce(null) // activeUser check — no active user with this email
+        .mockResolvedValueOnce(removedDoc) // toRestore lookup
+        .mockResolvedValueOnce({ ...removedDoc, role: Role.MoHUA }); // findByIdAndUpdate result
+      mockUserModel.exists.mockResolvedValue(null); // no race conflict
+
+      await service.inviteMohuaMember(restoreDto, requester);
+
+      // The restore lookup must not filter on isDeleted — removed members now carry isDeleted:
+      // true too, so filtering on isDeleted: false here would make them permanently unrestorable.
+      expect(mockUserModel.findOne).toHaveBeenCalledWith({ email: dto.email, isDeleted: true, isXviFcdeleted: true });
+      expect(mockUserModel.findByIdAndUpdate).toHaveBeenCalledWith(
+        removedDoc._id,
+        expect.objectContaining({ $set: expect.objectContaining({ role: Role.MoHUA, isDeleted: false }) }),
+        expect.any(Object),
+      );
+    });
+  });
+
+  describe('inviteStateMember()', () => {
+    const dto = { name: 'A', email: 'a@b.com', mobile: '9999999999', designation: 'Officer', subRole: 'VIEWER' as const };
+
+    it('restore: sets role back to STATE even if the removed document had drifted to a different role (e.g. MoHUA)', async () => {
+      const restoreDto = { ...dto, action: 'restore' as const };
+      const requester = makeStateAdmin();
+      const removedDoc = { _id: new Types.ObjectId(TARGET_USER_ID), email: dto.email, role: Role.MoHUA };
+
+      mockUserModel.exec
+        .mockResolvedValueOnce(null) // activeUser check — no active user with this email
+        .mockResolvedValueOnce(removedDoc) // toRestore lookup
+        .mockResolvedValueOnce({ ...removedDoc, role: Role.STATE, state: requester.state }); // findByIdAndUpdate result
+      mockUserModel.exists.mockResolvedValue(null); // no race conflict
+
+      await service.inviteStateMember(restoreDto, requester);
+
+      // The restore lookup must not filter on isDeleted — removed members now carry isDeleted:
+      // true too, so filtering on isDeleted: false here would make them permanently unrestorable.
+      expect(mockUserModel.findOne).toHaveBeenCalledWith({ email: dto.email, isDeleted: true, isXviFcdeleted: true });
+      expect(mockUserModel.findByIdAndUpdate).toHaveBeenCalledWith(
+        removedDoc._id,
+        expect.objectContaining({ $set: expect.objectContaining({ role: Role.STATE, isDeleted: false }) }),
+        expect.any(Object),
+      );
+    });
   });
 
   // ─── issueProfileSaveToken() ─────────────────────────────────────────────
@@ -264,12 +318,12 @@ describe('UsersService', () => {
   // ─── updateProfileContacts() ─────────────────────────────────────────────
 
   describe('updateProfileContacts()', () => {
-    it('rejects a ULB self-update with no saveToken (same rule STATE/MoHUA already enforce)', async () => {
+    it('rejects a ULB self-update that sets isXviFcEmailVerified with no saveToken (the exact thing the original vulnerability faked)', async () => {
       const requester = makeUlbAdmin({ _id: TARGET_USER_ID });
       mockUserModel.exec.mockResolvedValueOnce(makeUserDoc());
 
       await expect(
-        service.updateProfileContacts(TARGET_USER_ID, { name: 'New Name' }, requester),
+        service.updateProfileContacts(TARGET_USER_ID, { isXviFcEmailVerified: true }, requester),
       ).rejects.toThrow(BadRequestException);
 
       expect(mockRedisService.get).not.toHaveBeenCalled();
@@ -281,27 +335,96 @@ describe('UsersService', () => {
       mockRedisService.get.mockResolvedValueOnce('a-different-token');
 
       await expect(
-        service.updateProfileContacts(TARGET_USER_ID, { name: 'New Name', saveToken: 'wrong-token' }, requester),
+        service.updateProfileContacts(
+          TARGET_USER_ID,
+          { isXviFcEmailVerified: true, saveToken: 'wrong-token' },
+          requester,
+        ),
       ).rejects.toThrow('Save token is invalid or expired. Please verify your email again.');
     });
 
-    it('accepts a ULB self-update with a valid saveToken', async () => {
+    it('accepts a ULB self-update that sets isXviFcEmailVerified with a valid saveToken', async () => {
+      const requester = makeUlbAdmin({ _id: TARGET_USER_ID });
+      mockUserModel.exec
+        .mockResolvedValueOnce(makeUserDoc())
+        .mockResolvedValueOnce(makeUserDoc({ isXviFcEmailVerified: true }));
+      mockRedisService.get.mockResolvedValueOnce('good-token');
+
+      await service.updateProfileContacts(
+        TARGET_USER_ID,
+        { isXviFcEmailVerified: true, saveToken: 'good-token' },
+        requester,
+      );
+
+      expect(mockRedisService.del).toHaveBeenCalledWith(`profile_save_token:${TARGET_USER_ID}`);
+    });
+
+    it('accepts a ULB self-update with no saveToken when only non-email fields change', async () => {
+      // The "People & Roles" page edits name/mobile without ever obtaining a saveToken — only
+      // the two verification flags need OTP re-proof, not routine contact edits.
       const requester = makeUlbAdmin({ _id: TARGET_USER_ID });
       mockUserModel.exec
         .mockResolvedValueOnce(makeUserDoc())
         .mockResolvedValueOnce(makeUserDoc({ name: 'New Name' }));
+
+      const result = await service.updateProfileContacts(TARGET_USER_ID, { name: 'New Name' }, requester);
+
+      expect(mockRedisService.get).not.toHaveBeenCalled();
+      expect(result).toEqual(
+        expect.objectContaining({ message: 'Profile contacts updated successfully' }),
+      );
+    });
+
+    it('rejects a ULB self-update that changes commissionerEmail with no saveToken — "People & Roles" now has its own OTP step', async () => {
+      const requester = makeUlbAdmin({ _id: TARGET_USER_ID });
+      mockUserModel.exec.mockResolvedValueOnce(makeUserDoc());
+
+      await expect(
+        service.updateProfileContacts(TARGET_USER_ID, { commissionerEmail: 'new@ulb.gov.in' }, requester),
+      ).rejects.toThrow(BadRequestException);
+
+      expect(mockRedisService.get).not.toHaveBeenCalled();
+    });
+
+    it('accepts a ULB self-update to commissionerEmail with a valid saveToken', async () => {
+      const requester = makeUlbAdmin({ _id: TARGET_USER_ID });
+      mockUserModel.exec
+        .mockResolvedValueOnce(makeUserDoc())
+        .mockResolvedValueOnce(makeUserDoc({ commissionerEmail: 'new@ulb.gov.in' }));
       mockRedisService.get.mockResolvedValueOnce('good-token');
 
-      await service.updateProfileContacts(TARGET_USER_ID, { name: 'New Name', saveToken: 'good-token' }, requester);
+      await service.updateProfileContacts(
+        TARGET_USER_ID,
+        { commissionerEmail: 'new@ulb.gov.in', saveToken: 'good-token' },
+        requester,
+      );
 
       expect(mockRedisService.del).toHaveBeenCalledWith(`profile_save_token:${TARGET_USER_ID}`);
+    });
+
+    it('accepts a ULB self-update with no saveToken when the resent commissionerEmail is unchanged', async () => {
+      // "People & Roles" always resends the current email alongside an edited name, since it's
+      // one form per contact card, not one input per field — this must not be mistaken for an
+      // actual email change and shouldn't force an OTP round-trip when nothing email-related moved.
+      const requester = makeUlbAdmin({ _id: TARGET_USER_ID });
+      mockUserModel.exec
+        .mockResolvedValueOnce(makeUserDoc({ commissionerEmail: 'unchanged@ulb.gov.in' }))
+        .mockResolvedValueOnce(makeUserDoc({ commissionerName: 'New Name' }));
+
+      await service.updateProfileContacts(
+        TARGET_USER_ID,
+        { commissionerName: 'New Name', commissionerEmail: 'unchanged@ulb.gov.in' },
+        requester,
+      );
+
+      expect(mockRedisService.get).not.toHaveBeenCalled();
     });
   });
 
   // ─── softDeleteStateUser() ───────────────────────────────────────────────
 
   describe('softDeleteStateUser()', () => {
-    it('marks a non-admin STATE user as removed from XVI-FC without touching isDeleted', async () => {
+    it('marks a non-admin STATE user as removed from XVI-FC and from the whole platform', async () => {
       const targetDoc = makeUserDoc({ role: Role.STATE, xviFcSubrole: 'reviewer' });
       mockUserModel.exec.mockResolvedValueOnce(targetDoc).mockResolvedValueOnce(undefined);
 
@@ -309,7 +432,7 @@ describe('UsersService', () => {
 
       expect(result.message).toBe('Member removed from the XVI-FC portal');
       expect(mockUserModel.findByIdAndUpdate).toHaveBeenCalledWith(TARGET_USER_ID, {
-        $set: { isXviFcdeleted: true },
+        $set: { isXviFcdeleted: true, isDeleted: true },
       });
     });
 
@@ -327,6 +450,240 @@ describe('UsersService', () => {
       await expect(service.softDeleteStateUser(TARGET_USER_ID, makeStateAdmin())).rejects.toThrow(
         NotFoundException,
       );
+    });
+  });
+
+  // ─── adminCreateUser() ──────────────────────────────────────────────────
+
+  describe('adminCreateUser()', () => {
+    const platformAdmin = makeStateAdmin({ scope: Scope.ADMIN, state: undefined });
+    const baseDto = {
+      name: 'User 10',
+      email: 'user10_16fc@cityfinance.in',
+      mobile: '8987654321',
+      designation: 'XVIFC_USER',
+      role: Role.XVIFC,
+    };
+
+    it('rejects a non-ADMIN requester', async () => {
+      await expect(service.adminCreateUser(baseDto as any, makeStateAdmin())).rejects.toThrow(ForbiddenException);
+      expect(mockUserModel.findOne).not.toHaveBeenCalled();
+    });
+
+    it('rejects when the email is already active', async () => {
+      mockUserModel.exec.mockResolvedValueOnce({ _id: new Types.ObjectId(TARGET_USER_ID) });
+      await expect(service.adminCreateUser(baseDto as any, platformAdmin)).rejects.toThrow(HttpException);
+      expect(mockUserModel.create).not.toHaveBeenCalled();
+    });
+
+    it('creates a non-scoped role (XVIFC) with no state/ulb and no subRole', async () => {
+      mockUserModel.exec.mockResolvedValueOnce(null); // no active email conflict
+      mockUserModel.create.mockResolvedValue({ _id: new Types.ObjectId(TARGET_USER_ID), ...baseDto, isActive: true });
+
+      const result = await service.adminCreateUser(baseDto as any, platformAdmin);
+
+      expect(result.role).toBe(Role.XVIFC);
+      expect(result.stateId).toBeNull();
+      expect(result.ulbId).toBeNull();
+      expect(mockUserModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({ role: Role.XVIFC, state: null, ulb: null, xviFcSubrole: null }),
+      );
+    });
+
+    it('passes isNodalOfficer through to the created user, defaulting to false when omitted', async () => {
+      mockUserModel.exec.mockResolvedValueOnce(null);
+      mockUserModel.create.mockResolvedValue({ _id: new Types.ObjectId(TARGET_USER_ID), ...baseDto, isActive: true });
+
+      await service.adminCreateUser({ ...baseDto, isNodalOfficer: true } as any, platformAdmin);
+      expect(mockUserModel.create).toHaveBeenCalledWith(expect.objectContaining({ isNodalOfficer: true }));
+
+      mockUserModel.exec.mockResolvedValueOnce(null);
+      await service.adminCreateUser(baseDto as any, platformAdmin);
+      expect(mockUserModel.create).toHaveBeenCalledWith(expect.objectContaining({ isNodalOfficer: false }));
+    });
+
+    it('rejects a STATE-family role with no stateId', async () => {
+      mockUserModel.exec.mockResolvedValueOnce(null);
+      await expect(
+        service.adminCreateUser({ ...baseDto, role: Role.STATE, subRole: 'EDITOR' } as any, platformAdmin),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects a STATE-family role whose stateId does not exist', async () => {
+      mockUserModel.exec.mockResolvedValueOnce(null); // active-email check
+      mockStateModel.exec.mockResolvedValueOnce(null); // State.findById → not found
+
+      await expect(
+        service.adminCreateUser(
+          { ...baseDto, role: Role.STATE, subRole: 'EDITOR', stateId: STATE_ID } as any,
+          platformAdmin,
+        ),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('creates a STATE-family role user, mapping EDITOR → reviewer', async () => {
+      mockUserModel.exec.mockResolvedValueOnce(null);
+      mockStateModel.exec.mockResolvedValueOnce({ _id: new Types.ObjectId(STATE_ID) });
+      mockUserModel.create.mockResolvedValue({
+        _id: new Types.ObjectId(TARGET_USER_ID),
+        ...baseDto,
+        role: Role.STATE,
+        state: new Types.ObjectId(STATE_ID),
+        xviFcSubrole: 'reviewer',
+        isActive: true,
+      });
+
+      const result = await service.adminCreateUser(
+        { ...baseDto, role: Role.STATE, subRole: 'EDITOR', stateId: STATE_ID } as any,
+        platformAdmin,
+      );
+
+      expect(result.subRole).toBe('reviewer');
+      expect(result.stateId).toBe(STATE_ID);
+      expect(mockUserModel.create).toHaveBeenCalledWith(expect.objectContaining({ xviFcSubrole: 'reviewer' }));
+    });
+
+    it('rejects a ULB-family role with no ulbId', async () => {
+      mockUserModel.exec.mockResolvedValueOnce(null);
+      await expect(
+        service.adminCreateUser({ ...baseDto, role: Role.ULB, subRole: 'VIEWER' } as any, platformAdmin),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects subRole for a role that has no subrole vocabulary', async () => {
+      mockUserModel.exec.mockResolvedValueOnce(null);
+      await expect(
+        service.adminCreateUser({ ...baseDto, role: Role.XVIFC, subRole: 'EDITOR' } as any, platformAdmin),
+      ).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  // ─── adminUpdateUser() ──────────────────────────────────────────────────
+
+  describe('adminUpdateUser()', () => {
+    const platformAdmin = makeStateAdmin({ scope: Scope.ADMIN, state: undefined });
+
+    it('rejects a non-ADMIN requester', async () => {
+      await expect(service.adminUpdateUser(TARGET_USER_ID, { name: 'X' }, makeStateAdmin())).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+
+    it('throws 404 when the target user does not exist', async () => {
+      mockUserModel.exec.mockResolvedValueOnce(null);
+      await expect(service.adminUpdateUser(TARGET_USER_ID, { name: 'X' }, platformAdmin)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('updates a simple field without touching role/state/ulb', async () => {
+      const targetDoc = makeUserDoc({ role: Role.STATE, state: new Types.ObjectId(STATE_ID), ulb: undefined });
+      mockUserModel.exec
+        .mockResolvedValueOnce(targetDoc) // findOne target
+        .mockResolvedValueOnce({ ...targetDoc, name: 'Renamed' }); // findByIdAndUpdate result
+
+      const result = await service.adminUpdateUser(TARGET_USER_ID, { name: 'Renamed' }, platformAdmin);
+
+      expect(result.name).toBe('Renamed');
+      expect(mockUserModel.findByIdAndUpdate).toHaveBeenCalledWith(
+        TARGET_USER_ID,
+        { $set: { name: 'Renamed' } },
+        { new: true },
+      );
+    });
+
+    it('updates isNodalOfficer when explicitly sent', async () => {
+      const targetDoc = makeUserDoc({ role: Role.STATE, state: new Types.ObjectId(STATE_ID), ulb: undefined });
+      mockUserModel.exec
+        .mockResolvedValueOnce(targetDoc)
+        .mockResolvedValueOnce({ ...targetDoc, isNodalOfficer: true });
+
+      await service.adminUpdateUser(TARGET_USER_ID, { isNodalOfficer: true }, platformAdmin);
+
+      expect(mockUserModel.findByIdAndUpdate).toHaveBeenCalledWith(
+        TARGET_USER_ID,
+        { $set: { isNodalOfficer: true } },
+        { new: true },
+      );
+    });
+
+    it('clears the stale state field when role changes from STATE to a non-scoped role', async () => {
+      const targetDoc = makeUserDoc({
+        role: Role.STATE,
+        state: new Types.ObjectId(STATE_ID),
+        ulb: undefined,
+        xviFcSubrole: 'reviewer',
+      });
+      mockUserModel.exec
+        .mockResolvedValueOnce(targetDoc)
+        .mockResolvedValueOnce({ ...targetDoc, role: Role.XVIFC, state: null, xviFcSubrole: null });
+
+      await service.adminUpdateUser(TARGET_USER_ID, { role: Role.XVIFC }, platformAdmin);
+
+      expect(mockUserModel.findByIdAndUpdate).toHaveBeenCalledWith(
+        TARGET_USER_ID,
+        { $set: expect.objectContaining({ role: Role.XVIFC, state: null, ulb: null, xviFcSubrole: null }) },
+        { new: true },
+      );
+    });
+
+    it('rejects a role change to a STATE-family role with no stateId supplied', async () => {
+      const targetDoc = makeUserDoc({ role: Role.XVIFC, state: undefined, ulb: undefined });
+      mockUserModel.exec.mockResolvedValueOnce(targetDoc);
+
+      await expect(
+        service.adminUpdateUser(TARGET_USER_ID, { role: Role.STATE }, platformAdmin),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects when the new email/mobile collides with another active user', async () => {
+      const targetDoc = makeUserDoc({ role: Role.XVIFC, state: undefined, ulb: undefined });
+      mockUserModel.exec
+        .mockResolvedValueOnce(targetDoc) // findOne target
+        .mockResolvedValueOnce({ _id: new Types.ObjectId() }); // duplicate check
+
+      await expect(
+        service.adminUpdateUser(TARGET_USER_ID, { email: 'taken@example.com' }, platformAdmin),
+      ).rejects.toThrow(HttpException);
+      expect(mockUserModel.findByIdAndUpdate).not.toHaveBeenCalled();
+    });
+  });
+
+  // ─── adminSoftDeleteUser() ──────────────────────────────────────────────
+
+  describe('adminSoftDeleteUser()', () => {
+    const platformAdmin = makeStateAdmin({ scope: Scope.ADMIN, state: undefined });
+
+    it('rejects a non-ADMIN requester', async () => {
+      await expect(service.adminSoftDeleteUser(TARGET_USER_ID, makeStateAdmin())).rejects.toThrow(
+        ForbiddenException,
+      );
+      expect(mockUserModel.findById).not.toHaveBeenCalled();
+    });
+
+    it('throws 404 when the target user does not exist', async () => {
+      mockUserModel.exec.mockResolvedValueOnce(null);
+      await expect(service.adminSoftDeleteUser(TARGET_USER_ID, platformAdmin)).rejects.toThrow(NotFoundException);
+    });
+
+    it('soft-deletes a user that is not yet deleted', async () => {
+      mockUserModel.exec.mockResolvedValueOnce(makeUserDoc({ isDeleted: false, isXviFcdeleted: false }));
+
+      const result = await service.adminSoftDeleteUser(TARGET_USER_ID, platformAdmin);
+
+      expect(mockUserModel.findByIdAndUpdate).toHaveBeenCalledWith(TARGET_USER_ID, {
+        $set: { isDeleted: true, isXviFcdeleted: true },
+      });
+      expect(result).toEqual({ message: 'User deleted successfully' });
+    });
+
+    it('returns an already-deleted message without writing again', async () => {
+      mockUserModel.exec.mockResolvedValueOnce(makeUserDoc({ isDeleted: true, isXviFcdeleted: true }));
+
+      const result = await service.adminSoftDeleteUser(TARGET_USER_ID, platformAdmin);
+
+      expect(mockUserModel.findByIdAndUpdate).not.toHaveBeenCalled();
+      expect(result).toEqual({ message: 'User is already deleted' });
     });
   });
 });

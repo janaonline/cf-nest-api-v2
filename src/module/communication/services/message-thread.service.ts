@@ -9,6 +9,7 @@ import {
 } from '../../../common/constants/communication.constants';
 import { IAuthUser } from '../../../common/interfaces/auth-user.interface';
 import { CommunicationPermissions } from '../../../common/services/communication.permissions';
+import { escapeRegex } from '../../../common/utils/regex.util';
 import { IFormSubmission } from '../../../forms/interfaces/form-submission.interface';
 import { Role } from '../../auth/enum/role.enum';
 import { IMessageThread } from '../interfaces/message-thread.interface';
@@ -249,9 +250,10 @@ export class MessageThreadService {
     }
 
     if (filters.search) {
+      const searchRegex = escapeRegex(filters.search);
       query['$or'] = [
-        { formName: { $regex: filters.search, $options: 'i' } },
-        { title: { $regex: filters.search, $options: 'i' } },
+        { formName: { $regex: searchRegex, $options: 'i' } },
+        { title: { $regex: searchRegex, $options: 'i' } },
       ];
     }
 
