@@ -12,13 +12,7 @@ import { SendOtpDto } from './dto/send-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { AuthResponse } from './types/auth-tokens.type';
 import { generateOtp, getOtpConfig } from './otp/otp.config';
-import {
-  OtpState,
-  normalizeIdentifier,
-  otpCooldownKey,
-  otpLockKey,
-  otpStateKey,
-} from './otp/otp-redis.types';
+import { OtpState, normalizeIdentifier, otpCooldownKey, otpLockKey, otpStateKey } from './otp/otp-redis.types';
 
 @Injectable()
 export class OtpService {
@@ -82,7 +76,7 @@ export class OtpService {
     // Cooldown key expires independently of the main state TTL
     await this.redisService.set(otpCooldownKey(purpose, id), '1', cfg.resendCooldownSeconds);
 
-    await this.dispatchOtp(user, otp, cfg.isProduction);
+    await this.dispatchOtp(user, otp, cfg.isProduction, cfg.ttlSeconds);
 
     if (!cfg.isProduction) {
       this.logger.debug(`[DEV] OTP for ${id}: ${otp}`);
@@ -128,10 +122,7 @@ export class OtpService {
       }
 
       // Persist updated attempt count; recalculate remaining TTL to avoid extending it
-      const remainingTtl = Math.max(
-        1,
-        Math.ceil((new Date(state.expiresAt).getTime() - Date.now()) / 1000),
-      );
+      const remainingTtl = Math.max(1, Math.ceil((new Date(state.expiresAt).getTime() - Date.now()) / 1000));
       await this.redisService.set(otpStateKey(purpose, id), state, remainingTtl);
       throw new HttpException('Invalid or expired OTP', 422);
     }
@@ -144,7 +135,11 @@ export class OtpService {
     if (!user) throw new UnauthorizedException('User not found');
 
     const userId = (user._id as { toString(): string }).toString();
-    await this.usersRepository.updateProfile(userId, { isXVIFCProfileVerified: true, status: 'APPROVED', isActive: true });
+    await this.usersRepository.updateProfile(userId, {
+      isXVIFCProfileVerified: true,
+      status: 'APPROVED',
+      isActive: true,
+    });
 
     const tokens = await this.authService.generateTokens(userId, 'WEB');
     await this.authService.saveRefreshToken(userId, tokens.refreshToken);
@@ -185,10 +180,7 @@ export class OtpService {
         throw new HttpException('Too many attempts. Please request a new OTP.', 429);
       }
 
-      const remainingTtl = Math.max(
-        1,
-        Math.ceil((new Date(state.expiresAt).getTime() - Date.now()) / 1000),
-      );
+      const remainingTtl = Math.max(1, Math.ceil((new Date(state.expiresAt).getTime() - Date.now()) / 1000));
       await this.redisService.set(otpStateKey(purpose, id), state, remainingTtl);
       throw new HttpException('Invalid or expired OTP', 422);
     }
@@ -286,10 +278,7 @@ export class OtpService {
         await this.redisService.del(otpStateKey(purpose, id));
         throw new HttpException('Too many attempts. Please request a new OTP.', 429);
       }
-      const remainingTtl = Math.max(
-        1,
-        Math.ceil((new Date(state.expiresAt).getTime() - Date.now()) / 1000),
-      );
+      const remainingTtl = Math.max(1, Math.ceil((new Date(state.expiresAt).getTime() - Date.now()) / 1000));
       await this.redisService.set(otpStateKey(purpose, id), state, remainingTtl);
       throw new HttpException('Invalid or expired OTP', 422);
     }
@@ -327,7 +316,9 @@ export class OtpService {
 
   // ─── OTP dispatch ──────────────────────────────────────────────────────────
 
-  private resolveContactMobile(user: NonNullable<Awaited<ReturnType<UsersRepository['findByIdentifier']>>>): string | null {
+  private resolveContactMobile(
+    user: NonNullable<Awaited<ReturnType<UsersRepository['findByIdentifier']>>>,
+  ): string | null {
     const candidates = [
       user.mobile,
       user.accountantConatactNumber,
@@ -341,11 +332,12 @@ export class OtpService {
     user: Awaited<ReturnType<UsersRepository['findByIdentifier']>>,
     otp: string,
     isProduction: boolean,
+    ttlSeconds: number,
   ): Promise<void> {
     if (!user || !isProduction) return;
     const mobile = this.resolveContactMobile(user);
     if (mobile) await this.sendSms(mobile, otp);
-    if (user.email) await this.sendOtpEmail(user.email, otp);
+    if (user.email) await this.sendOtpEmail(user.email, otp, ttlSeconds);
   }
 
   private isValidPhone(mobile: string): boolean {
@@ -369,13 +361,13 @@ export class OtpService {
     }
   }
 
-  private async sendOtpEmail(to: string, otp: string): Promise<void> {
+  private async sendOtpEmail(to: string, otp: string, ttlSeconds: number): Promise<void> {
     try {
       await this.emailQueueService.addEmailJob({
         to,
         subject: 'CityFinance - Your email verification code',
         templateName: 'otp',
-        mailData: { otp },
+        mailData: { otp, validityMinutes: Math.round(ttlSeconds / 60) },
       });
     } catch (err) {
       this.logger.error('Email OTP send failed', err);
@@ -398,16 +390,25 @@ export class OtpService {
     return `${local.slice(0, 2)}${'*'.repeat(Math.max(0, local.length - 2))}@${domain}`;
   }
 
-  private sanitizeUser(user: NonNullable<Awaited<ReturnType<UsersRepository['findByIdentifier']>>>): Record<string, unknown> {
+  private sanitizeUser(
+    user: NonNullable<Awaited<ReturnType<UsersRepository['findByIdentifier']>>>,
+  ): Record<string, unknown> {
     const obj = (
       typeof (user as unknown as { toObject?: () => Record<string, unknown> }).toObject === 'function'
         ? (user as unknown as { toObject: () => Record<string, unknown> }).toObject()
         : { ...(user as unknown as Record<string, unknown>) }
     ) as Record<string, unknown>;
     const sensitiveFields = [
-      'password', 'refreshTokenHash', 'otpHash', 'otpAttempts',
-      'otpExpiresAt', 'loginAttempts', 'lockUntil', 'isLocked',
-      'passwordHistory', 'passwordExpires',
+      'password',
+      'refreshTokenHash',
+      'otpHash',
+      'otpAttempts',
+      'otpExpiresAt',
+      'loginAttempts',
+      'lockUntil',
+      'isLocked',
+      'passwordHistory',
+      'passwordExpires',
     ];
     for (const f of sensitiveFields) delete obj[f];
     return obj;

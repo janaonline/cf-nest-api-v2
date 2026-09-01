@@ -164,13 +164,13 @@ export class EmailService {
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
     // Set OTP to cache.
-    await this.redis.set(`otp:${email}`, otp, 300); // 5 min TTL
-    const html = `<p>Your OTP is <b>${otp}</b>. It is valid for 5 minutes.</p>`;
+    const ttlSeconds = 300; // 5 min TTL
+    await this.redis.set(`otp:${email}`, otp, ttlSeconds);
     await this.mailQueue.addEmailJob({
       to: email,
       subject: 'CityFinance - Your OTP Code',
       templateName: 'otp',
-      mailData: { otp },
+      mailData: { otp, validityMinutes: ttlSeconds / 60 },
     });
 
     this.logger.log(`Sent OTP ${otp} to ${email}`);
@@ -253,7 +253,8 @@ export class EmailService {
       ? Math.floor(1000 + Math.random() * 9000).toString() // 4-digit random
       : '1111'; // fixed dev OTP
 
-    await this.redis.set(`profile_otp:${email}`, otp, 600); // 10 min TTL
+    const ttlSeconds = 600; // 10 min TTL
+    await this.redis.set(`profile_otp:${email}`, otp, ttlSeconds);
 
     if (this.isProduction) {
       // Only hit the mail queue in production — no emails in dev/staging
@@ -261,7 +262,7 @@ export class EmailService {
         to: email,
         subject: 'CityFinance - Profile Verification OTP',
         templateName: 'otp',
-        mailData: { otp },
+        mailData: { otp, validityMinutes: ttlSeconds / 60 },
       });
       this.logger.log(`[profile-otp] Email sent to ${email}`);
     } else {
