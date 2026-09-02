@@ -105,11 +105,3 @@ without this, swapping in a brand-new, never-validated file would leave the prev
 `'VALID'` flag in place until the next validate/revalidate call, letting
 `signedElectedbodyFile` appear (and its own `required` validator be skipped or enforced) against a
 stale status.
-
-## Outbound dependency: devolution-formula reads this module's status
-
-`devolution-formula`'s `checkInstallment1Prereq` reads this form's `currentFormStatus` directly
-(gate: EULB must be `UNDER_REVIEW_BY_MOHUA` before Devolution can submit Installment 1). Changing
-when/how `finalSubmit` transitions status here has a real blast radius into devolution-formula's
-Installment-1 gate — see `devolution-formula/CLAUDE.md`'s "Known gaps" section for the other side
-of this dependency.
