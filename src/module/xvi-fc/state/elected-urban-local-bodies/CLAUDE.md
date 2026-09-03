@@ -62,6 +62,39 @@ service now reads/writes `row.electedBodyStatus` directly, with no field-specifi
 Keep it that way: if a future rename needs the *label* to say something new, change the `id` to
 match rather than reintroducing a mapping layer.
 
+## dateOfExpiry's maxDate: `FIELD:<key>[+-]N[DMY]` cross-field date bound
+
+`dateOfExpiry`'s `maxDate` is `"FIELD:dateOfConstitution+5Y"` — the expiry date can't be more than
+5 years after `dateOfConstitution`'s own value, per row. This is the **only** cross-field date
+bound anywhere in `xvi-fc` (the generic `DynamicFormValidationService.resolveDate()` only
+understands `'TODAY'`/`'TODAY±N[DMY]'`/a literal ISO date, all resolvable from a single string with
+no sibling-field lookup — EULB never routes through that service, so it wasn't extended). The
+`FIELD:` grammar and its parsing (`parseFieldRelativeBoundary`, `applyDateOffset`,
+`resolveExpiryMax`) live entirely in `validators/elected-urban-local-bodies.validator.ts`, and the
+frontend mirrors the same token in `date-constraint-resolver.ts`'s `resolveDateConstraint` — keep
+both in sync the same way the `TODAY` grammar already is (see that file's own comment).
+
+Why it can't be precomputed once like every other bound: `extractDateConfig()` still parses this
+into `EulbDateValidationConfig` at config-load time, but stores it as `expiryMaxRelative` (an
+`{fieldKey, sign, amount, unit}` descriptor) rather than a resolved `Date` — the actual bound
+depends on *that row's own* `dateOfConstitution` value, so `resolveExpiryMax()` is called per-row,
+inside `validateCommonFields`/`validatePortalUpdateFields`, not once up front.
+
+`validatePortalUpdateFields` is the one call site where this needs an extra parameter
+(`effectiveDateOfConstitution`): a portal PATCH can update `dateOfExpiry` alone, without touching
+`dateOfConstitution` in the same request, so there's no in-request base date to resolve against.
+Its caller (`elected-urban-local-bodies-row.service.ts`) passes `dto.dateOfConstitution ??
+row.dateOfConstitution ?? null` — the persisted row's value as a fallback. Every other validation
+path (`validateDbUlbRow`/`validateExtraUlbRow`/`validatePostSubmissionRowUpdate`/`revalidateRow`)
+already receives both fields together in the same row/dto, so no fallback plumbing is needed there.
+
+The downloadable Excel template's `buildTemplateValidations()` (`services/main/`) can't embed a
+precomputed constant either — its per-row `dateOfExpiry` data-validation formula instead builds an
+`EDATE(<dateOfConstitution cell for this row>, <months>)` expression referencing the sibling
+column's own cell, via the same `parseFieldRelativeBoundary` (exported for this purpose). The
+prompt text is a static human-readable phrase ("... 5 years after Date on which the elected body is
+in place.") rather than a formatted date, since Excel prompts can't be computed per row.
+
 ## Elected Bodies List document and `signedElectedbodyFile`
 
 The `EULB_MAIN_FORM_FIELDS` group has two distinct file fields, both required at final submit —

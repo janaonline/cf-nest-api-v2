@@ -9,7 +9,11 @@ import { ExcelColumnValidation, ExcelService, RowHeader } from 'src/services/exc
 import { EulbFormJsonConfigService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/form-json/elected-urban-local-bodies-form-json.service';
 import { getFieldsByType } from 'src/module/xvi-fc/state/elected-urban-local-bodies/helpers/elected-urban-local-bodies-form-json.helpers';
 import { computeEulbStatusSummary } from 'src/module/xvi-fc/state/elected-urban-local-bodies/helpers/elected-urban-local-bodies-status-summary.helper';
-import { deriveElectedBodyStatuses } from 'src/module/xvi-fc/state/elected-urban-local-bodies/validators/elected-urban-local-bodies.validator';
+import {
+  deriveElectedBodyStatuses,
+  parseFieldRelativeBoundary,
+  type EulbDateOffsetBoundary,
+} from 'src/module/xvi-fc/state/elected-urban-local-bodies/validators/elected-urban-local-bodies.validator';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
@@ -88,6 +92,31 @@ function toExcelDateExpr(dateVal: string): string {
   if (dateVal === 'TODAY') return 'TODAY()';
   const d = new Date(dateVal);
   return `DATE(${d.getUTCFullYear()},${d.getUTCMonth() + 1},${d.getUTCDate()})`;
+}
+
+/** Builds a per-row Excel formula expression for a FIELD-relative bound (e.g. dateOfConstitution
+ *  + 5 years), referencing that sibling column's own cell for the given row. `EDATE` shifts by
+ *  whole months, so Y/M units use it directly; D uses plain cell arithmetic. */
+function buildRelativeExcelExpr(cellRef: string, offset: EulbDateOffsetBoundary): string {
+  const delta = offset.amount * offset.sign;
+  switch (offset.unit) {
+    case 'Y':
+      return `EDATE(${cellRef},${delta * 12})`;
+    case 'M':
+      return `EDATE(${cellRef},${delta})`;
+    case 'D':
+      return `(${cellRef}+${delta})`;
+  }
+}
+
+/** Human-readable description of a FIELD-relative bound for Excel prompt text, e.g.
+ *  "5 years after Date on which the elected body is in place" (Excel data-validation prompts are
+ *  static text shown before entry, so unlike the formula itself this can't be computed per row.) */
+function describeRelativeOffset(offset: EulbDateOffsetBoundary, fieldLabel: string): string {
+  const unitWord = offset.unit === 'D' ? 'day' : offset.unit === 'M' ? 'month' : 'year';
+  const plural = offset.amount === 1 ? '' : 's';
+  const direction = offset.sign < 0 ? 'before' : 'after';
+  return `${offset.amount} ${unitWord}${plural} ${direction} ${fieldLabel}`;
 }
 
 /** Converts a stored date (Date object or ISO string) to a Date for ExcelJS to serialize as a date
@@ -1146,13 +1175,18 @@ export class ElectedUrbanLocalBodiesService {
 
     const expiryMinVal = expiryField.minDate!;
     const expiryMaxVal = expiryField.validations?.find((v) => v.name === 'maxDate')?.validator as string;
+    // dateOfExpiry's maxDate may be a fixed ISO date (toExcelDateExpr handles it directly, same as
+    // the other three bounds) or a 'FIELD:<key>+-N[DMY]' token (e.g. dateOfConstitution + 5 years)
+    // — that one needs a per-row formula referencing the constitution column's own cell, so it's
+    // built separately below rather than as a shared constant.
+    const expiryMaxRelative = parseFieldRelativeBoundary(expiryMaxVal);
 
     const maxLength = remarksField.validations?.find((v) => v.name === 'maxlength')?.validator as number;
 
     const constitutionMin = toExcelDateExpr(constitutionMinVal);
     const constitutionMax = toExcelDateExpr(constitutionMaxVal);
     const expiryMin = toExcelDateExpr(expiryMinVal);
-    const expiryMax = toExcelDateExpr(expiryMaxVal);
+    const expiryMax = expiryMaxRelative ? undefined : toExcelDateExpr(expiryMaxVal);
 
     return [
       {
@@ -1199,15 +1233,22 @@ export class ElectedUrbanLocalBodiesService {
         buildValidation: (row, keyToLetter) => {
           const statusLetter = keyToLetter.get('electedBodyStatus')!;
           const expiryLetter = keyToLetter.get('dateOfExpiry')!;
+          const constitutionLetter = keyToLetter.get('dateOfConstitution')!;
+          const upperBoundExpr = expiryMaxRelative
+            ? buildRelativeExcelExpr(`${constitutionLetter}${row}`, expiryMaxRelative)
+            : expiryMax!;
+          const prompt = expiryMaxRelative
+            ? `Required when status is Constituted. Must be between today and ${describeRelativeOffset(expiryMaxRelative, constitutionField.label)}.`
+            : `Required when status is Constituted. Must be between today and ${formatXviFcDate(expiryMaxVal)}.`;
           return {
             type: 'custom',
             allowBlank: false,
             formulae: [
-              `OR(AND($${statusLetter}${row}<>"Constituted",${expiryLetter}${row}=""),AND($${statusLetter}${row}="Constituted",ISNUMBER(${expiryLetter}${row}),${expiryLetter}${row}>=${expiryMin},${expiryLetter}${row}<=${expiryMax}))`,
+              `OR(AND($${statusLetter}${row}<>"Constituted",${expiryLetter}${row}=""),AND($${statusLetter}${row}="Constituted",ISNUMBER(${expiryLetter}${row}),${expiryLetter}${row}>=${expiryMin},${expiryLetter}${row}<=${upperBoundExpr}))`,
             ],
             showInputMessage: true,
             promptTitle: 'Date of Expiry',
-            prompt: `Required when status is Constituted. Must be between today and ${formatXviFcDate(expiryMaxVal)}.`,
+            prompt,
             showErrorMessage: true,
             errorStyle: 'error',
             errorTitle: 'Date of Expiry',

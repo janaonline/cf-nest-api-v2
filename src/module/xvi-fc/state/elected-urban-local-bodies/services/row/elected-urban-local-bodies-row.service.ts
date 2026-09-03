@@ -164,8 +164,19 @@ export class ElectedUrbanLocalBodiesRowService {
       ulbName: undefined,
     };
 
+    // Base for dateOfExpiry's FIELD-relative maxDate (e.g. dateOfConstitution + 5 years) when this
+    // PATCH updates dateOfExpiry without also updating dateOfConstitution in the same request.
+    const effectiveDateOfConstitution = isConstituted
+      ? (dto.dateOfConstitution ?? row.dateOfConstitution ?? null)
+      : null;
+
     // Validate submitted editable fields before applying — produce uniform 400 with field-keyed errors
-    const dtoErrors = this.eulbValidator.validatePortalUpdateFields(dtoForValidation, today, rowDateConfig);
+    const dtoErrors = this.eulbValidator.validatePortalUpdateFields(
+      dtoForValidation,
+      today,
+      rowDateConfig,
+      effectiveDateOfConstitution,
+    );
     if (dtoErrors.length > 0) {
       const errorMap: XviFcValidationErrorMap = {};
       for (const e of dtoErrors) {
