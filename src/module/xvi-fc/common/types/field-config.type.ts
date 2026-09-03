@@ -183,9 +183,13 @@ export interface FieldConfig {
   options?: FieldOptions;
   allowedFileTypes?: string[];
   maxFileSize?: number;
-  /** For date fields: earliest selectable date as ISO string or 'TODAY' */
+  /** For date fields: earliest selectable date as an ISO string, 'TODAY(+-N[DMY])', or
+   *  'FIELD:<siblingKey>(+-N[DMY])' to bound relative to another field's current value
+   *  (e.g. 'FIELD:dateOfConstitution+5Y'). */
   minDate?: string;
-  /** For date fields: latest selectable date as ISO string or 'TODAY' */
+  /** For date fields: latest selectable date as an ISO string, 'TODAY(+-N[DMY])', or
+   *  'FIELD:<siblingKey>(+-N[DMY])' to bound relative to another field's current value
+   *  (e.g. 'FIELD:dateOfConstitution+5Y'). */
   maxDate?: string;
   placeholder?: string;
   folderPath?: string;
