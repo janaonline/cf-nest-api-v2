@@ -3,14 +3,28 @@ import type { EulbRowError } from 'src/schemas/xvi-fc/state/elected-urban-local-
 import type { FieldConfig, FormFieldOption } from 'src/module/xvi-fc/common/types/field-config.type';
 import { getValidatorValue } from 'src/module/xvi-fc/common/utils/xvi-fc-field-lookup.util';
 
+/** A parsed 'FIELD:<key>[+-]N[DMY]' relative-to-sibling-field date boundary. */
+export interface EulbDateOffsetBoundary {
+  fieldKey: string;
+  sign: 1 | -1;
+  amount: number;
+  unit: 'D' | 'M' | 'Y';
+}
+
 export interface EulbDateValidationConfig {
   /** Static minDate for dateOfConstitution, parsed as UTC start-of-day. */
   constitutionMin: Date;
   constitutionMinMessage: string;
   /** Message for the TODAY upper-bound on dateOfConstitution (enforced via `today` param). */
   constitutionMaxMessage: string;
-  /** Static maxDate for dateOfExpiry, parsed as UTC end-of-day. */
-  expiryMax: Date;
+  /** Static maxDate for dateOfExpiry, parsed as UTC end-of-day — set when the configured maxDate
+   *  is a plain ISO date. Mutually exclusive with `expiryMaxRelative`. */
+  expiryMaxFixed?: Date;
+  /** FIELD-relative maxDate for dateOfExpiry (e.g. dateOfConstitution + 5 years) — set when the
+   *  configured maxDate is a 'FIELD:<key>[+-]N[DMY]' token. Resolved per-row via
+   *  `resolveExpiryMax` since it depends on that row's own dateOfConstitution value. Mutually
+   *  exclusive with `expiryMaxFixed`. */
+  expiryMaxRelative?: EulbDateOffsetBoundary;
   expiryMaxMessage: string;
   /** Message for the TODAY lower-bound on dateOfExpiry (enforced via `today` param). */
   expiryMinMessage: string;
@@ -30,6 +44,61 @@ function parseDateBoundary(iso: string, mode: 'min' | 'max'): Date {
   return mode === 'min'
     ? new Date(Date.UTC(y, m - 1, d, 0, 0, 0, 0))
     : new Date(Date.UTC(y, m - 1, d, 23, 59, 59, 999));
+}
+
+/**
+ * Parses a 'FIELD:<key>[+-]N[DMY]' relative-to-sibling-field boundary token (e.g.
+ * 'FIELD:dateOfConstitution+5Y'). Returns null when `value` doesn't match this grammar — callers
+ * fall back to treating it as a static ISO date (via `parseDateBoundary`) or 'TODAY'.
+ *
+ * Exported so `ElectedUrbanLocalBodiesService.buildTemplateValidations` can detect the same token
+ * when building the downloadable Excel template's per-row dateOfExpiry formula.
+ */
+export function parseFieldRelativeBoundary(value: string): EulbDateOffsetBoundary | null {
+  const m = /^FIELD:([A-Za-z0-9_]+)([+-])(\d+)([DMY])$/i.exec(value.trim());
+  if (!m) return null;
+  return {
+    fieldKey: m[1],
+    sign: m[2] === '-' ? -1 : 1,
+    amount: Number(m[3]),
+    unit: m[4].toUpperCase() as 'D' | 'M' | 'Y',
+  };
+}
+
+/**
+ * Applies a FIELD-relative offset to a base date, using local calendar-date arithmetic — matches
+ * `normalizeDate`'s local-timezone semantics elsewhere in this file. (Unlike the UTC-based
+ * 'TODAY' resolution in DynamicFormValidationService, EULB fields never route through that
+ * generic engine, so there's no cross-service UTC/local contract to preserve here.)
+ */
+function applyDateOffset(base: Date, offset: Pick<EulbDateOffsetBoundary, 'sign' | 'amount' | 'unit'>): Date {
+  const d = new Date(base.getFullYear(), base.getMonth(), base.getDate());
+  const delta = offset.amount * offset.sign;
+  switch (offset.unit) {
+    case 'D':
+      d.setDate(d.getDate() + delta);
+      break;
+    case 'M':
+      d.setMonth(d.getMonth() + delta);
+      break;
+    case 'Y':
+      d.setFullYear(d.getFullYear() + delta);
+      break;
+  }
+  return d;
+}
+
+/**
+ * Resolves dateOfExpiry's effective maxDate for one row. A FIELD-relative bound needs that row's
+ * own (already-parsed, normalized) dateOfConstitution value as the base and resolves to null when
+ * that base isn't available — dateOfConstitution's own required/invalidDate checks cover that
+ * case independently, so no separate error is raised here. A fixed bound is returned as-is.
+ */
+function resolveExpiryMax(dateConfig: EulbDateValidationConfig, dateOfConstitution: Date | null): Date | null {
+  if (dateConfig.expiryMaxRelative) {
+    return dateOfConstitution ? applyDateOffset(dateOfConstitution, dateConfig.expiryMaxRelative) : null;
+  }
+  return dateConfig.expiryMaxFixed ?? null;
 }
 
 /**
@@ -99,11 +168,12 @@ export function extractDateConfig(
   const cMinIso: string = cMinV.validator;
   const eMaxIso: string = eMaxV.validator;
   const remarksMax: number = rMaxV.validator;
+  const expiryMaxRelative = parseFieldRelativeBoundary(eMaxIso);
   return {
     constitutionMin: parseDateBoundary(cMinIso, 'min'),
     constitutionMinMessage: cMinV.message,
     constitutionMaxMessage: cMaxV.message,
-    expiryMax: parseDateBoundary(eMaxIso, 'max'),
+    ...(expiryMaxRelative ? { expiryMaxRelative } : { expiryMaxFixed: parseDateBoundary(eMaxIso, 'max') }),
     expiryMaxMessage: eMaxV.message,
     expiryMinMessage: eMinV.message,
     remarksMaxLength: remarksMax,
@@ -208,6 +278,11 @@ export class ElectedUrbanLocalBodiesValidator {
    * Validates only the editable fields submitted via a portal PATCH update.
    * Returns structured errors so the service can throw a uniform 400 response.
    * All fields are optional — only provided fields are validated.
+   *
+   * `effectiveDateOfConstitution` is the base used to resolve dateOfExpiry's FIELD-relative
+   * maxDate (e.g. dateOfConstitution + 5 years) when the PATCH updates dateOfExpiry without also
+   * updating dateOfConstitution in the same request — callers should pass `dto.dateOfConstitution
+   * ?? <persisted row's dateOfConstitution>`.
    */
   validatePortalUpdateFields(
     dto: {
@@ -220,6 +295,7 @@ export class ElectedUrbanLocalBodiesValidator {
     },
     today: Date,
     dateConfig: EulbDateValidationConfig,
+    effectiveDateOfConstitution?: Date | string | null,
   ): EulbRowError[] {
     const errors: EulbRowError[] = [];
 
@@ -302,6 +378,8 @@ export class ElectedUrbanLocalBodiesValidator {
         });
       } else {
         const doeNorm = this.normalizeDate(doe);
+        const constitutionBase = this.parseDate(dto.dateOfConstitution ?? effectiveDateOfConstitution);
+        const expiryMax = resolveExpiryMax(dateConfig, constitutionBase ? this.normalizeDate(constitutionBase) : null);
         if (doeNorm < this.normalizeDate(today)) {
           errors.push({
             field: 'dateOfExpiry',
@@ -309,7 +387,7 @@ export class ElectedUrbanLocalBodiesValidator {
             message: dateConfig.expiryMinMessage,
             value: doe.toISOString(),
           });
-        } else if (doeNorm > this.normalizeDate(dateConfig.expiryMax)) {
+        } else if (expiryMax && doeNorm > this.normalizeDate(expiryMax)) {
           errors.push({
             field: 'dateOfExpiry',
             code: 'maxDate',
@@ -396,6 +474,9 @@ export class ElectedUrbanLocalBodiesValidator {
 
     // dateOfConstitution and dateOfExpiry are only required and validated when status is Constituted
     const isConstituted = row.electedBodyStatus?.trim() === 'Constituted';
+    // Hoisted so the dateOfExpiry block below can resolve a FIELD-relative maxDate (e.g.
+    // dateOfConstitution + 5 years) against this same row's own dateOfConstitution value.
+    let constitutionDate: Date | null = null;
 
     if (isConstituted) {
       // dateOfConstitution required, valid date, min from config, max=today
@@ -417,6 +498,7 @@ export class ElectedUrbanLocalBodiesValidator {
           });
         } else {
           const docNorm = this.normalizeDate(doc);
+          constitutionDate = docNorm;
           if (docNorm < this.normalizeDate(dateConfig.constitutionMin)) {
             errors.push({
               field: 'dateOfConstitution',
@@ -449,6 +531,7 @@ export class ElectedUrbanLocalBodiesValidator {
           });
         } else {
           const doeNorm = this.normalizeDate(doe);
+          const expiryMax = resolveExpiryMax(dateConfig, constitutionDate);
           if (doeNorm < this.normalizeDate(today)) {
             errors.push({
               field: 'dateOfExpiry',
@@ -456,7 +539,7 @@ export class ElectedUrbanLocalBodiesValidator {
               message: dateConfig.expiryMinMessage,
               value: doe.toISOString(),
             });
-          } else if (doeNorm > this.normalizeDate(dateConfig.expiryMax)) {
+          } else if (expiryMax && doeNorm > this.normalizeDate(expiryMax)) {
             errors.push({
               field: 'dateOfExpiry',
               code: 'maxDate',

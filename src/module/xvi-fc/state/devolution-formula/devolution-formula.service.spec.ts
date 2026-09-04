@@ -10,7 +10,6 @@ import type { DfParsedExcelRow } from './validators/devolution-formula.validator
 import { DevolutionFormulaForm } from 'src/schemas/xvi-fc/state/devolution-formula-form.schema';
 import { DevolutionFormulaRow } from 'src/schemas/xvi-fc/state/devolution-formula-row.schema';
 import { GrantAllocation } from 'src/schemas/xvi-fc/grant-allocation.schema';
-import { ElectedUrbanLocalBodiesForm } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
 import { Ulb } from 'src/schemas/ulb.schema';
 import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 import { ExcelService } from 'src/services/excel/excel.service';
@@ -120,7 +119,6 @@ const mockRowModel = {
 };
 
 const mockGrantAllocationModel = { findOne: jest.fn() };
-const mockEulbModel = { findOne: jest.fn() };
 const mockUlbModel = { countDocuments: jest.fn() };
 const mockUlbEligibilityService = {
   getEligibleUlbFilter: jest
@@ -498,7 +496,6 @@ describe('DevolutionFormulaService', () => {
     jest.clearAllMocks();
 
     mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
-    mockEulbModel.findOne.mockReturnValue(q(null));
     mockRowModel.findOne.mockReturnValue(q(null));
     mockDfFormJsonConfig.loadFields.mockResolvedValue(mockDfTypedFields);
     mockUlbModel.countDocuments.mockResolvedValue(2);
@@ -512,7 +509,6 @@ describe('DevolutionFormulaService', () => {
         { provide: getModelToken(DevolutionFormulaForm.name), useValue: mockFormModel },
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: mockRowModel },
         { provide: getModelToken(GrantAllocation.name), useValue: mockGrantAllocationModel },
-        { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: mockEulbModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
         { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: XvifcFormActorsService, useValue: mockActorsService },
@@ -1382,7 +1378,6 @@ describe('DevolutionFormulaService', () => {
   describe('finalSubmit — new ULB / identity-modified blocking gates', () => {
     it('rejects when persisted newUlbCount > 0, error keyed to excelFile with code newUlbsAdded', async () => {
       mockFormModel.findOne.mockReturnValue(q({ ...mockFormInProgress, newUlbCount: 3 }));
-      mockEulbModel.findOne.mockReturnValue(q({ _id: new Types.ObjectId() }));
 
       await expect(
         service.finalSubmit(
@@ -1414,7 +1409,6 @@ describe('DevolutionFormulaService', () => {
 
     it('newUlbsAdded message includes the persisted count', async () => {
       mockFormModel.findOne.mockReturnValue(q({ ...mockFormInProgress, newUlbCount: 3 }));
-      mockEulbModel.findOne.mockReturnValue(q({ _id: new Types.ObjectId() }));
 
       await expect(
         service.finalSubmit(
@@ -1447,7 +1441,6 @@ describe('DevolutionFormulaService', () => {
 
     it('rejects when the active dataset has a row error with code identityModified, error keyed to excelFile', async () => {
       mockFormModel.findOne.mockReturnValue(q(mockFormInProgress));
-      mockEulbModel.findOne.mockReturnValue(q({ _id: new Types.ObjectId() }));
       mockRowModel.findOne.mockReturnValue(q({ _id: rowOid }));
 
       await expect(
@@ -1480,7 +1473,6 @@ describe('DevolutionFormulaService', () => {
 
     it('returns both newUlbsAdded and identityModified under errors.excelFile when both conditions exist', async () => {
       mockFormModel.findOne.mockReturnValue(q({ ...mockFormInProgress, newUlbCount: 2 }));
-      mockEulbModel.findOne.mockReturnValue(q({ _id: new Types.ObjectId() }));
       mockRowModel.findOne.mockReturnValue(q({ _id: rowOid }));
 
       await expect(
@@ -1519,9 +1511,6 @@ describe('DevolutionFormulaService', () => {
     it('happy path: finalSubmit succeeds when newUlbCount is 0, no identityModified rows, validationStatus VALID, and excelRowCount matches computed active ULB count', async () => {
       mockUlbModel.countDocuments.mockResolvedValue(50);
       mockFormModel.findOne.mockReturnValue(q({ ...mockFormInProgress, excelRowCount: 50, newUlbCount: 0 }));
-      mockEulbModel.findOne.mockReturnValue(
-        q({ _id: new Types.ObjectId(), currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }),
-      );
       mockRowModel.findOne.mockReturnValue(q(null));
       mockFormModel.findOneAndUpdate.mockReturnValue(q({ _id: formOid }));
 
@@ -1550,9 +1539,6 @@ describe('DevolutionFormulaService', () => {
     it('finalSubmit preserves data.excelFile.pageCount in the persisted update', async () => {
       mockUlbModel.countDocuments.mockResolvedValue(50);
       mockFormModel.findOne.mockReturnValue(q({ ...mockFormInProgress, excelRowCount: 50, newUlbCount: 0 }));
-      mockEulbModel.findOne.mockReturnValue(
-        q({ _id: new Types.ObjectId(), currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }),
-      );
       mockRowModel.findOne.mockReturnValue(q(null));
       mockFormModel.findOneAndUpdate.mockReturnValue(q({ _id: formOid }));
 
@@ -1586,7 +1572,6 @@ describe('DevolutionFormulaService', () => {
   // Test 11: final-submit blocked when form not valid — error keyed to excelFile
   it('finalSubmit throws when validationStatus is INVALID, error keyed to excelFile', async () => {
     mockFormModel.findOne.mockReturnValue(q({ ...mockFormInProgress, validationStatus: 'INVALID' }));
-    mockEulbModel.findOne.mockReturnValue(q({ _id: new Types.ObjectId() }));
 
     await expect(
       service.finalSubmit(
@@ -1639,7 +1624,6 @@ describe('DevolutionFormulaService', () => {
     mockUlbModel.countDocuments.mockResolvedValue(2);
     mockFormModel.findOne.mockReturnValue(q(mockFormInProgress)); // excelRowCount: 2
     mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
-    mockEulbModel.findOne.mockReturnValue(q({ _id: new Types.ObjectId() }));
     mockRowModel.findOne.mockReturnValue(q(null));
     mockFormModel.findOneAndUpdate.mockReturnValue(q({ _id: formOid }));
 
@@ -1671,7 +1655,6 @@ describe('DevolutionFormulaService', () => {
     mockUlbModel.countDocuments.mockResolvedValue(5); // registry has 5 active ULBs
     mockFormModel.findOne.mockReturnValue(q(mockFormInProgress)); // excelRowCount: 2
     mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
-    mockEulbModel.findOne.mockReturnValue(q({ _id: new Types.ObjectId() }));
     mockRowModel.findOne.mockReturnValue(q(null));
 
     await expect(
@@ -1706,7 +1689,6 @@ describe('DevolutionFormulaService', () => {
     mockUlbModel.countDocuments.mockResolvedValue(2);
     mockFormModel.findOne.mockReturnValue(q(mockFormInProgress)); // excelRowCount: 2
     mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
-    mockEulbModel.findOne.mockReturnValue(q({ _id: new Types.ObjectId() }));
     mockRowModel.findOne.mockReturnValue(q(null));
     mockFormModel.findOneAndUpdate.mockReturnValue(q({ _id: formOid }));
 
@@ -1770,7 +1752,6 @@ describe('DevolutionFormulaService', () => {
   // finalSubmit: excelRowCount === 0 blocks submission — error keyed to excelFile
   it('finalSubmit throws when excelRowCount is 0, error keyed to excelFile', async () => {
     mockFormModel.findOne.mockReturnValue(q({ ...mockFormInProgress, excelRowCount: 0, validationStatus: 'VALID' }));
-    mockEulbModel.findOne.mockReturnValue(q({ _id: new Types.ObjectId() }));
 
     await expect(
       service.finalSubmit(
@@ -1807,7 +1788,6 @@ describe('DevolutionFormulaService', () => {
       q({ ...mockFormInProgress, validationStatus: 'VALID', totalMoHUAAllocation: 600_000 }),
     );
     mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc)); // basic=400k + performance=100k = 500k
-    mockEulbModel.findOne.mockReturnValue(q({ _id: new Types.ObjectId() }));
 
     await expect(
       service.finalSubmit(
@@ -1837,48 +1817,14 @@ describe('DevolutionFormulaService', () => {
     });
   });
 
-  // installment 1 prerequisite not met — EULB not yet under review by MoHUA
-  it('finalSubmit throws when installment 1 EULB prerequisite is not met, error keyed to installment', async () => {
-    mockFormModel.findOne.mockReturnValue(q(mockFormInProgress)); // validationStatus: VALID, excelRowCount: 2
-    mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
-    mockEulbModel.findOne.mockReturnValue(q(null)); // EULB not yet under review
-
-    await expect(
-      service.finalSubmit(
-        {
-          stateId: stateOid.toString(),
-          yearId: YEAR_ID,
-          installment: 1,
-          data: {
-            excelFile: {
-              originalName: 'f.xlsx',
-              path: 'path/f.xlsx',
-              mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-              sizeKb: 1,
-              createdAt: '2026-01-01T00:00:00.000Z',
-            },
-            checkboxConfirmation: true,
-            ulbCount: 50,
-          },
-        },
-        adminUser,
-      ),
-    ).rejects.toMatchObject({
-      response: {
-        message: 'Validation failed.',
-        errors: { installment: [{ field: 'installment', code: 'prerequisiteNotMet' }] },
-      },
-    });
-  });
-
-  // installment 1 prerequisite met — EULB is UNDER_REVIEW_BY_MOHUA
-  it('finalSubmit installment 1 prerequisite passes when EULB currentFormStatus is UNDER_REVIEW_BY_MOHUA', async () => {
+  // Regression guard: the old EULB "prerequisite" gate for installment 1 was intentionally
+  // removed (the two forms no longer depend on each other) — this proves finalSubmit succeeds
+  // for installment 1 with zero Elected Body form/state involved, so the gate cannot silently
+  // come back unnoticed.
+  it('finalSubmit succeeds for installment 1 with no Elected Body (EULB) prerequisite required', async () => {
     mockUlbModel.countDocuments.mockResolvedValue(50); // must match excelRowCount below
     mockFormModel.findOne.mockReturnValue(q({ ...mockFormInProgress, excelRowCount: 50, newUlbCount: 0 }));
     mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
-    mockEulbModel.findOne.mockReturnValue(
-      q({ _id: new Types.ObjectId(), currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }),
-    );
     mockRowModel.findOne.mockReturnValue(q(null)); // no identityModified rows
     mockFormModel.findOneAndUpdate.mockReturnValue(q({ _id: formOid }));
 
@@ -2125,7 +2071,6 @@ describe('Devolution Formula — getForm rowEditFields', () => {
         { provide: getModelToken(DevolutionFormulaForm.name), useValue: mockFormModel },
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: mockRowModel },
         { provide: getModelToken(GrantAllocation.name), useValue: mockGrantAllocationModel },
-        { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: mockEulbModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
         { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: XvifcFormActorsService, useValue: mockActorsService },
