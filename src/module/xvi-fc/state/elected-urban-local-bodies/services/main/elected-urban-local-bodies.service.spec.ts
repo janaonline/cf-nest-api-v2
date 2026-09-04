@@ -494,6 +494,44 @@ describe('ElectedUrbanLocalBodiesService', () => {
       expect(dvRow2!.prompt).not.toContain('31 March 2030');
     });
 
+    // ── FIELD-relative maxDate (dateOfExpiry = dateOfConstitution + N years) ─
+
+    describe('dateOfExpiry FIELD-relative maxDate (dateOfConstitution + N years)', () => {
+      const fieldsWithRelativeExpiry = MOCK_TYPED_ROW_EDIT_FIELDS.map((f) =>
+        f.key === 'dateOfExpiry'
+          ? {
+              ...f,
+              maxDate: 'FIELD:dateOfConstitution+5Y',
+              validations: f.validations?.map((v) =>
+                v.name === 'maxDate' ? { ...v, validator: 'FIELD:dateOfConstitution+5Y' } : v,
+              ),
+            }
+          : f,
+      );
+
+      it('builds a per-row EDATE(...) formula referencing the dateOfConstitution column instead of a fixed date', async () => {
+        mockEulbFormJsonConfigService.loadFields.mockResolvedValueOnce(fieldsWithRelativeExpiry);
+        const sheet = await generateAndLoad();
+
+        const dvRow2 = sheet.dataValidations.model['E2'];
+        const dvRow3 = sheet.dataValidations.model['E3'];
+
+        expect(dvRow2!.formulae?.[0]).toContain('EDATE(D2,60)');
+        expect(dvRow2!.formulae?.[0]).not.toContain('D3');
+        expect(dvRow3!.formulae?.[0]).toContain('EDATE(D3,60)');
+        expect(dvRow3!.formulae?.[0]).not.toContain('D2');
+      });
+
+      it('describes the relative bound in the prompt instead of a fixed date', async () => {
+        mockEulbFormJsonConfigService.loadFields.mockResolvedValueOnce(fieldsWithRelativeExpiry);
+        const sheet = await generateAndLoad();
+        const dvRow2 = sheet.dataValidations.model['E2'];
+        expect(dvRow2!.prompt).toBe(
+          'Required when status is Constituted. Must be between today and 5 years after Date on which the elected body is in place',
+        );
+      });
+    });
+
     it('generates validations covering exactly the active registry rows, with no blank padding', async () => {
       // 2 active ULBs → validations on data rows 2 and 3 only; row 4 absent (no blank padding).
       const sheet = await generateAndLoad();
