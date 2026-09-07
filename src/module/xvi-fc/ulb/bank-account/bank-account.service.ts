@@ -18,6 +18,7 @@ import { assertValidFormStatusTransition } from 'src/common/utils/form-status-tr
 import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import { xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
+import { User, UserDocument } from 'src/schemas/user/user.schema';
 import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 import { CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE } from 'src/module/ulb-eligibility/ulb-eligibility.constants';
 import { XviFcBankAccount, XviFcBankAccountDocument } from 'src/schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
@@ -34,6 +35,7 @@ import {
 } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
 import {
   buildDecisionRecord,
+  resolveDeciderName,
   runBulkDecision,
   type BulkDecisionResult,
 } from 'src/module/xvi-fc/common/utils/xvi-fc-decision.util';
@@ -74,6 +76,9 @@ interface BankAccountSubmissionRow {
   ulbName: string;
   formStatus: FormStatusType;
   lastUpdatedAt: Date | null;
+  /** When this form entered UNDER_REVIEW_BY_STATE (bankAccount.submittedAt) — see the identical
+   *  field on AnnualAccountsService's UlbSubmissionRow for the full rationale. */
+  enteredReviewAt: Date | null;
   bankAccountId: Types.ObjectId | null;
 }
 
@@ -104,6 +109,8 @@ export class BankAccountService {
     private readonly formLogModel: Model<XviFcBankAccountFormLogDocument>,
     @InjectModel(Ulb.name)
     private readonly ulbModel: Model<UlbDocument>,
+    @InjectModel(User.name)
+    private readonly userModel: Model<UserDocument>,
     private readonly fileTokenService: FileTokenService,
     private readonly ulbEligibilityService: UlbEligibilityService,
     private readonly formJsonService: FormJsonService,
@@ -220,6 +227,7 @@ export class BankAccountService {
       currentFormStatusLabel: getFormStatusLabel(FORM_STATUS.UNDER_REVIEW_BY_STATE),
       submittedBy,
       submittedAt: now,
+      lastReminderSentAt: null,
     };
 
     const record = await this.bankAccountModel
@@ -272,7 +280,8 @@ export class BankAccountService {
 
     assertValidFormStatusTransition(record.currentFormStatus, newStatus);
 
-    const decision = buildDecisionRecord(dto.decision, dto.note, user, ipAddress, userAgent);
+    const deciderName = await resolveDeciderName(this.userModel, user._id);
+    const decision = buildDecisionRecord(dto.decision, dto.note, user, ipAddress, userAgent, deciderName);
 
     const updated = await this.bankAccountModel
       .findByIdAndUpdate(
@@ -338,6 +347,10 @@ export class BankAccountService {
             currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_STATE,
             currentFormStatusLabel: getFormStatusLabel(FORM_STATUS.UNDER_REVIEW_BY_STATE),
             stateDecision: null,
+            // Restart the STATE review digest's dwell clock — an undone approval goes back on
+            // the pending-review pile today, not however many days ago it first entered review.
+            submittedAt: new Date(),
+            lastReminderSentAt: null,
           },
         },
         { new: true },
@@ -417,7 +430,8 @@ export class BankAccountService {
     const newStatus =
       dto.decision === 'APPROVED' ? FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA : FORM_STATUS.RETURNED_BY_MOHUA;
 
-    const decision = buildDecisionRecord(dto.decision, dto.note, user, ipAddress, userAgent);
+    const deciderName = await resolveDeciderName(this.userModel, user._id);
+    const decision = buildDecisionRecord(dto.decision, dto.note, user, ipAddress, userAgent, deciderName);
 
     const updated = await this.bankAccountModel
       .findByIdAndUpdate(
@@ -606,6 +620,7 @@ export class BankAccountService {
         $addFields: {
           formStatus: { $ifNull: ['$bankAccount.currentFormStatus', FORM_STATUS.NOT_STARTED] },
           lastUpdatedAt: { $ifNull: ['$bankAccount.updatedAt', null] },
+          enteredReviewAt: { $ifNull: ['$bankAccount.submittedAt', null] },
         },
       },
     ];
@@ -629,6 +644,7 @@ export class BankAccountService {
               ulbName: '$name',
               formStatus: 1,
               lastUpdatedAt: 1,
+              enteredReviewAt: 1,
               bankAccountId: { $ifNull: ['$bankAccount._id', null] },
             },
           },
