@@ -411,6 +411,52 @@ describe('DevolutionFormulaExcelService — safe dataset replace', () => {
     expect(rowDocs[0]['totalGrantAllocation']).toBe(141_792_452.83);
   });
 
+  // Companion to the fractional-rejection test above: a cell that only *looks* fractional because of
+  // IEEE-754 formula noise (e.g. a 50/50 installment split), invisible in Excel's own display
+  // formatting, must be accepted and normalized — not rejected like a genuine decimal.
+  it('accepts a near-integer Excel cell value (IEEE-754 formula noise) and stores it as the exact whole Rupee', async () => {
+    mockFormModel.findOne.mockReturnValue(q(mockExistingForm));
+    mockFormModel.findOneAndUpdate.mockReturnValue(mockUpsertedForm({ activeDatasetVersion: 2 }));
+    mockRowModel.updateMany.mockReturnValue(q({ modifiedCount: 2 }));
+    mockRowModel.insertMany.mockResolvedValue([]);
+    mockFormModel.findByIdAndUpdate.mockReturnValue(q(null));
+    mockRowModel.deleteMany.mockReturnValue(q(null));
+    mockDfService.resolveGrantAllocation.mockResolvedValue({ _id: allocOid, basic: 88_715_340, performance: 0 });
+
+    // total/inst1/inst2 each individually within FLOAT_EQUALITY_EPSILON of their true whole-Rupee
+    // value, exactly as a formula-computed 50/50 split would leave them.
+    const buffer = makeXlsxBuffer([
+      ['C001', 'Alpha City', 88_715_339.9999999, 44_357_669.9999999, 44_357_670.0000001, 'population'],
+    ]);
+    mockS3Service.getBuffer.mockResolvedValue(buffer);
+
+    await service.validateExcel(
+      {
+        stateId: stateOid.toString(),
+        yearId: YEAR_ID,
+        installment: 1,
+        excelFile: {
+          originalName: 'test.xlsx',
+          path: 'state/path/test.xlsx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          sizeKb: 1,
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
+      },
+      adminUser,
+    );
+
+    const insertCalls = mockRowModel.insertMany.mock.calls as unknown[][][];
+    const rowDocs = insertCalls[0][0] as Array<Record<string, unknown>>;
+    expect(rowDocs).toHaveLength(1);
+    expect(rowDocs[0]['errors']).toEqual([]);
+    expect(rowDocs[0]['validationStatus']).toBe('VALID');
+    // Snapped to the exact whole Rupee, not stored with the float residue.
+    expect(rowDocs[0]['totalGrantAllocation']).toBe(88_715_340);
+    expect(rowDocs[0]['installment1Amount']).toBe(44_357_670);
+    expect(rowDocs[0]['installment2Amount']).toBe(44_357_670);
+  });
+
   it('accepts excelFile.pageCount: null and persists it on the form excelFile', async () => {
     mockFormModel.findOne.mockReturnValue(q(mockExistingForm));
     mockFormModel.findOneAndUpdate.mockReturnValue(mockUpsertedForm({ activeDatasetVersion: 2 }));

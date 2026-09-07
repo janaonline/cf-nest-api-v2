@@ -33,6 +33,18 @@ figures, populated via Excel upload and editable row-by-row after that.
   tolerating it with a rounding/tolerance scheme; apportioning the total into whole-Rupee shares
   that sum exactly is the State's responsibility in the Excel they upload, not something this
   codebase reconciles for them.
+- That whole-Rupee check is strict on purpose (previous paragraph), but a formula-computed Excel
+  cell (e.g. a 50/50 installment split) routinely leaves IEEE-754 noise in its raw stored value —
+  something like `63579869.999999996` — that Excel's own display formatting rounds away, so the
+  cell *looks* like a clean integer to the person who uploaded it. `DevolutionFormulaExcelService`'s
+  `parseDataRow()` runs the three amount fields through `snapToWholeRupee`
+  (`helpers/devolution-formula-tolerance.helpers.ts`) before anything else sees them, snapping a
+  value to the nearest integer only when it's within `FLOAT_EQUALITY_EPSILON` (0.001) of one — far
+  tighter than any real fractional Rupee amount, so a genuine decimal (a real `X.50`) still
+  correctly fails `isWholeNumber` unchanged. This is a single ingestion-time fix, not a loosening of
+  `isWholeNumber`/`validateRow`/`validatePortalRowEdit` themselves: it runs once, before the
+  validator ever sees the value, so every downstream consumer (validation, persistence,
+  `totalAllocatedSum`, the regenerated error-Excel) sees the corrected whole number.
 - Row-level (`inst1 + inst2 === total`) and form-level (`totalAllocatedSum === totalMoHUAAllocation`)
   reconciliation are handled differently: the row-level check is plain exact-integer equality (both
   operands are already whole-number-validated in-process). The form-level check still goes through
