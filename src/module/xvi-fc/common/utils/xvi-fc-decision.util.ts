@@ -1,28 +1,51 @@
-import { Types } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
+import type { UserDocument } from 'src/schemas/user/user.schema';
 
 export interface DecisionRecord {
   status: 'APPROVED' | 'RETURNED';
   note: string | null;
-  decidedBy: { userId: Types.ObjectId; role: string; ipAddress: string | null; userAgent: string | null };
+  decidedBy: {
+    userId: Types.ObjectId;
+    role: string;
+    name: string | null;
+    ipAddress: string | null;
+    userAgent: string | null;
+  };
   decidedAt: Date;
 }
 
-/** Builds the `{status, note, decidedBy, decidedAt}` shape recorded for every STATE/MoHUA decision, on any XVI-FC form. */
+/**
+ * Builds the `{status, note, decidedBy, decidedAt}` shape recorded for every STATE/MoHUA decision,
+ * on any XVI-FC form. `deciderName` is looked up by the caller (a live `User.name` read at
+ * decision time, not resolvable from `AuthUser`/the JWT) so it can be denormalized here rather
+ * than requiring a populate/lookup every time the decision is later displayed.
+ */
 export function buildDecisionRecord(
   decision: 'APPROVED' | 'RETURNED',
   note: string | null | undefined,
   user: AuthUser,
   ipAddress: string | null,
   userAgent: string | null,
+  deciderName: string | null = null,
 ): DecisionRecord {
   return {
     status: decision,
     note: note ?? null,
-    decidedBy: { userId: new Types.ObjectId(user._id), role: user.role, ipAddress, userAgent },
+    decidedBy: { userId: new Types.ObjectId(user._id), role: user.role, name: deciderName, ipAddress, userAgent },
     decidedAt: new Date(),
   };
+}
+
+/**
+ * Resolves the acting user's current display name for `buildDecisionRecord`'s `deciderName` param
+ * — one shared lookup so every STATE/MoHUA/manual-review decision call site fetches it the same
+ * way, instead of each inlining its own `findById(...).select('name')`.
+ */
+export async function resolveDeciderName(userModel: Model<UserDocument>, userId: string): Promise<string | null> {
+  const user = await userModel.findById(userId).select('name').lean().exec();
+  return user?.name ?? null;
 }
 
 export interface BulkDecisionResult {

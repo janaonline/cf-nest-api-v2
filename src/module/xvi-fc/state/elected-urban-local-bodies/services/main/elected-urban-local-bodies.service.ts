@@ -1238,7 +1238,7 @@ export class ElectedUrbanLocalBodiesService {
             ? buildRelativeExcelExpr(`${constitutionLetter}${row}`, expiryMaxRelative)
             : expiryMax!;
           const prompt = expiryMaxRelative
-            ? `Required when status is Constituted. Must be between today and ${describeRelativeOffset(expiryMaxRelative, constitutionField.label)}.`
+            ? `Required when status is Constituted. Must be between today and ${describeRelativeOffset(expiryMaxRelative, constitutionField.label)}`
             : `Required when status is Constituted. Must be between today and ${formatXviFcDate(expiryMaxVal)}.`;
           return {
             type: 'custom',

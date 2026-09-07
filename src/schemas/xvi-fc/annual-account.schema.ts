@@ -92,6 +92,11 @@ export class UserInfo {
   @Prop({ required: true })
   role!: string;
 
+  /** Denormalized from User.name at decision time so the frontend can show "Approved by <name>"
+   *  without a live lookup. Null on records written before this field existed. */
+  @Prop({ type: String, default: null })
+  name!: string | null;
+
   @Prop({ type: String, default: null })
   ipAddress!: string | null;
 
@@ -271,6 +276,24 @@ export class XviFcAnnualAccount {
 
   @Prop({ type: Date, default: null })
   declaredAt: Date | null;
+
+  /**
+   * Set once, the moment this section's form_status transitions to IN_PROGRESS (first upload /
+   * section init) — the dwell-time anchor for the "please submit to state" ULB reminder cron.
+   * Deliberately not `createdAt`: the lazily-created sibling section (e.g. 'unaudited' when the
+   * ULB started with 'audited') is created as NOT_STARTED and only flips to IN_PROGRESS later, on
+   * its own first upload, so `createdAt` would understate its real dwell time.
+   */
+  @Prop({ type: Date, default: null })
+  inProgressSince: Date | null;
+
+  /**
+   * Last time a dwell-time reminder (ULB in-progress nudge or STATE review digest) was sent for
+   * this document — gates the next reminder via `lastReminderSentAt ?? (inProgressSince|declaredAt) + intervalDays`.
+   * Shared by both reminder jobs since a document is only ever in one status at a time.
+   */
+  @Prop({ type: Date, default: null })
+  lastReminderSentAt: Date | null;
 
   /** Current/latest STATE decision for this section — null until a state user makes a final call. */
   @Prop({ type: DecisionInfoSchema, default: null })

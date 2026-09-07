@@ -102,6 +102,14 @@ export class XviFcBankAccount {
   @Prop({ type: Date })
   submittedAt?: Date;
 
+  /**
+   * Last time the STATE review reminder digest included this document — gates the next send via
+   * `lastReminderSentAt ?? submittedAt + 7 days`. See XviFcAnnualAccount.lastReminderSentAt for
+   * the shared rationale (one field, not a stored day count).
+   */
+  @Prop({ type: Date, default: null })
+  lastReminderSentAt?: Date | null;
+
   createdAt?: Date;
   updatedAt?: Date;
 }

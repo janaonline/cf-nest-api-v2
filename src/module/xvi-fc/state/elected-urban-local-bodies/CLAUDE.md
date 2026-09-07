@@ -93,7 +93,24 @@ precomputed constant either — its per-row `dateOfExpiry` data-validation formu
 `EDATE(<dateOfConstitution cell for this row>, <months>)` expression referencing the sibling
 column's own cell, via the same `parseFieldRelativeBoundary` (exported for this purpose). The
 prompt text is a static human-readable phrase ("... 5 years after Date on which the elected body is
-in place.") rather than a formatted date, since Excel prompts can't be computed per row.
+in place.") rather than a formatted date, since Excel prompts can't be computed per row — it embeds
+`dateOfConstitution`'s own field `label` verbatim. That label's trailing punctuation isn't
+reliable (seen both with and without a period across real payload snapshots), so
+`describeRelativeOffset` normalizes to exactly one via `ensureTrailingPeriod` instead of assuming
+either way.
+
+Two correctness details worth knowing before touching `applyDateOffset` or `extractDateConfig`:
+
+- **Leap-day/month-end clamping**: `applyDateOffset`'s `'M'`/`'Y'` math clamps the day-of-month to
+  the target month's last day (29 Feb + 5Y → 28 Feb, not 1 Mar) instead of letting plain
+  `setMonth`/`setFullYear` roll over — matching Excel's `EDATE()`. The frontend's
+  `resolveDateConstraint` uses the same clamping (it also covers the pre-existing `TODAY±N[DMY]`
+  grammar, which shares that offset math) — keep both in sync.
+- **`fieldKey` is validated, not generalized**: `parseFieldRelativeBoundary` parses whatever key
+  follows `FIELD:`, but every consumer hardcodes `dateOfConstitution` as the base — `fieldKey`
+  itself is never read to pick a different sibling. `extractDateConfig()` throws if the configured
+  token ever names anything else, turning a silent wrong-bound risk into a config error, rather
+  than generalizing for a sibling field that doesn't exist in this row model yet.
 
 ## Elected Bodies List document and `signedElectedbodyFile`
 
