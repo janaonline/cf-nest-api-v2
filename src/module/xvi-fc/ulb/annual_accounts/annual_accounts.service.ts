@@ -70,6 +70,7 @@ import { escapeRegex } from 'src/common/utils/regex.util';
 import { resolveStateScopeFilter } from 'src/module/xvi-fc/common/utils/xvi-fc-scope-filter.util';
 import {
   buildDecisionRecord,
+  resolveDeciderName,
   runBulkDecision,
   type BulkDecisionResult,
 } from 'src/module/xvi-fc/common/utils/xvi-fc-decision.util';
@@ -115,6 +116,10 @@ interface UlbSubmissionRow {
   formStatus: AnnualAccountFormStatus;
   formStatusId: number;
   lastUpdatedAt: Date | null;
+  /** When this section entered UNDER_REVIEW_BY_STATE (sectionAccount.declaredAt) — the precise
+   *  anchor the frontend's "Pending Since" column uses for review-bucket rows, distinct from
+   *  lastUpdatedAt which reflects any write, not specifically the review-entry moment. */
+  enteredReviewAt: Date | null;
   annualAccountId: Types.ObjectId | null;
   hasManualReviewRequests: boolean;
 }
@@ -591,6 +596,7 @@ export class AnnualAccountsService implements OnModuleInit {
           formStatus: { $ifNull: ['$sectionAccount.form_status', notStarted] },
           formStatusId: { $ifNull: ['$sectionAccount.form_status_id', FORM_STATUS_ID[notStarted]] },
           lastUpdatedAt: { $ifNull: ['$sectionAccount.updatedAt', null] },
+          enteredReviewAt: { $ifNull: ['$sectionAccount.declaredAt', null] },
           hasManualReviewRequests: {
             $anyElementTrue: {
               $map: {
@@ -625,6 +631,7 @@ export class AnnualAccountsService implements OnModuleInit {
               formStatus: 1,
               formStatusId: 1,
               lastUpdatedAt: 1,
+              enteredReviewAt: 1,
               annualAccountId: { $ifNull: ['$anchorAccount._id', null] },
               hasManualReviewRequests: 1,
             },
@@ -721,6 +728,7 @@ export class AnnualAccountsService implements OnModuleInit {
               status: section.stateDecision.status,
               note: section.stateDecision.note,
               decidedAt: section.stateDecision.decidedAt,
+              decidedBy: { name: section.stateDecision.decidedBy?.name ?? null },
             }
           : null,
         mohuaDecision: section.mohuaDecision
@@ -728,6 +736,7 @@ export class AnnualAccountsService implements OnModuleInit {
               status: section.mohuaDecision.status,
               note: section.mohuaDecision.note,
               decidedAt: section.mohuaDecision.decidedAt,
+              decidedBy: { name: section.mohuaDecision.decidedBy?.name ?? null },
             }
           : null,
         documents: (section.documents ?? []).map((d: any) => ({
@@ -757,13 +766,19 @@ export class AnnualAccountsService implements OnModuleInit {
               }
             : null,
           stateDecision: d.stateDecision
-            ? { status: d.stateDecision.status, note: d.stateDecision.note, decidedAt: d.stateDecision.decidedAt }
+            ? {
+                status: d.stateDecision.status,
+                note: d.stateDecision.note,
+                decidedAt: d.stateDecision.decidedAt,
+                decidedBy: { name: d.stateDecision.decidedBy?.name ?? null },
+              }
             : null,
           manualReviewDecision: d.manualReviewDecision
             ? {
                 status: d.manualReviewDecision.status,
                 note: d.manualReviewDecision.note,
                 decidedAt: d.manualReviewDecision.decidedAt,
+                decidedBy: { name: d.manualReviewDecision.decidedBy?.name ?? null },
               }
             : null,
         })),
@@ -968,7 +983,8 @@ export class AnnualAccountsService implements OnModuleInit {
       throw new BadRequestException('No manual review has been requested for this document.');
     }
 
-    const decision = buildDecisionRecord(dto.decision, dto.note, user, ipAddress, userAgent);
+    const deciderName = await resolveDeciderName(this.userModel, user._id);
+    const decision = buildDecisionRecord(dto.decision, dto.note, user, ipAddress, userAgent, deciderName);
 
     await this.annualAccountModel.updateOne(
       { _id: sectionDoc._id, 'documents.docId': docId },
@@ -1336,6 +1352,7 @@ export class AnnualAccountsService implements OnModuleInit {
           selfDeclared: true,
           declaredBy: { userId: new Types.ObjectId(user._id), role: user.role, ipAddress, userAgent },
           declaredAt: new Date(),
+          lastReminderSentAt: null,
           modifiedBy: new Types.ObjectId(user._id),
         },
       },
@@ -1388,7 +1405,8 @@ export class AnnualAccountsService implements OnModuleInit {
       throw new BadRequestException('This document is optional and cannot be approved or returned.');
     }
 
-    const decision = buildDecisionRecord(dto.decision, dto.note, user, ipAddress, userAgent);
+    const deciderName = await resolveDeciderName(this.userModel, user._id);
+    const decision = buildDecisionRecord(dto.decision, dto.note, user, ipAddress, userAgent, deciderName);
 
     // Per-document decisions are informational only — the section's form_status and the
     // form-log audit trail only change on the explicit final "Approve Section"/"Return Section"
@@ -1490,7 +1508,8 @@ export class AnnualAccountsService implements OnModuleInit {
 
     assertValidFormStatusTransition(sectionDoc.form_status_id, FORM_STATUS_ID[newStatus]);
 
-    const decision = buildDecisionRecord(dto.decision, dto.note, user, ipAddress, userAgent);
+    const deciderName = await resolveDeciderName(this.userModel, user._id);
+    const decision = buildDecisionRecord(dto.decision, dto.note, user, ipAddress, userAgent, deciderName);
 
     // Only documents with no live decision (never decided, or stale after a re-upload) are
     // swept into this bulk action — already-decided documents are left exactly as they are.
@@ -1584,6 +1603,10 @@ export class AnnualAccountsService implements OnModuleInit {
           form_status: AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE,
           form_status_id: FORM_STATUS_ID[AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE],
           stateDecision: null,
+          // Restart the STATE review digest's dwell clock — an undone approval goes back on the
+          // pending-review pile today, not however many days ago it first entered review.
+          declaredAt: new Date(),
+          lastReminderSentAt: null,
           // Undoing the section-level approval also undoes every document's individual
           // decision — otherwise they'd all still show APPROVED and re-approving the section
           // immediately after would trivially succeed with no real re-review (see decideSection).
@@ -1747,7 +1770,8 @@ export class AnnualAccountsService implements OnModuleInit {
         ? AnnualAccountFormStatus.SUBMISSION_ACKNOWLEDGED_BY_MOHUA
         : AnnualAccountFormStatus.RETURNED_BY_MOHUA;
 
-    const decision = buildDecisionRecord(dto.decision, dto.note, user, ipAddress, userAgent);
+    const deciderName = await resolveDeciderName(this.userModel, user._id);
+    const decision = buildDecisionRecord(dto.decision, dto.note, user, ipAddress, userAgent, deciderName);
 
     await this.annualAccountModel.updateOne(
       { _id: sectionDoc._id },
@@ -1949,15 +1973,29 @@ export class AnnualAccountsService implements OnModuleInit {
       },
     );
 
-    // Ensure form_status is IN_PROGRESS even if the document was already touched before
+    // Ensure form_status is IN_PROGRESS even if the document was already touched before. Also
+    // re-stamps the dwell-time anchor here (not just via the inProgressSince:null guard below) so
+    // a section the state returned, and which is now being re-touched, restarts its reminder clock
+    // instead of keeping the stale one from whenever it first ever went IN_PROGRESS.
     await this.annualAccountModel.updateOne(
       { _id: targetObjId, form_status: { $ne: AnnualAccountFormStatus.IN_PROGRESS } },
       {
         $set: {
           form_status: AnnualAccountFormStatus.IN_PROGRESS,
           form_status_id: FORM_STATUS_ID[AnnualAccountFormStatus.IN_PROGRESS],
+          inProgressSince: new Date(),
+          lastReminderSentAt: null,
         },
       },
+    );
+
+    // Stamp the IN_PROGRESS dwell-time anchor the very first time this section ever enters
+    // IN_PROGRESS — used by the ULB "please submit to state" reminder cron, not by form_status
+    // itself. Guarded on inProgressSince still being null so a later re-touch never resets it here
+    // (the return→resubmit case is already handled by the update above).
+    await this.annualAccountModel.updateOne(
+      { _id: targetObjId, inProgressSince: null },
+      { $set: { inProgressSince: new Date() } },
     );
 
     const updated = await this.annualAccountModel.updateOne(
