@@ -258,6 +258,11 @@ const MOCK_TYPED_ROW_EDIT_FIELDS: EulbTypedFieldConfig[] = [
   },
   {
     key: 'dateOfConstitution',
+    // No trailing period, matching the current DB payload's label — but different payload
+    // snapshots of this same field have been seen both with and without one, so the
+    // dateOfExpiry FIELD-relative prompt (below) doesn't rely on this either way; it normalizes
+    // via `ensureTrailingPeriod` regardless of what this label ends with. See the "does not
+    // double up" test below, which overrides this field's label to prove the with-period case too.
     label: 'Date on which the elected body is in place',
     formFieldType: 'date',
     fieldTypes: ['EULB_ROW_EDIT_FIELDS'],
@@ -529,6 +534,23 @@ describe('ElectedUrbanLocalBodiesService', () => {
         expect(dvRow2!.prompt).toBe(
           'Required when status is Constituted. Must be between today and 5 years after Date on which the elected body is in place',
         );
+      });
+
+      it('does not double up the period when the referenced field label already ends with one', async () => {
+        // Different payload snapshots of dateOfConstitution's label have been seen both with and
+        // without a trailing period — override it here to explicitly cover the with-period case,
+        // since the base MOCK_TYPED_ROW_EDIT_FIELDS fixture above intentionally has neither.
+        const fieldsWithPeriodTerminatedLabel = fieldsWithRelativeExpiry.map((f) =>
+          f.key === 'dateOfConstitution' ? { ...f, label: 'Date on which the elected body is in place.' } : f,
+        );
+        mockEulbFormJsonConfigService.loadFields.mockResolvedValueOnce(fieldsWithPeriodTerminatedLabel);
+
+        const sheet = await generateAndLoad();
+        const dvRow2 = sheet.dataValidations.model['E2'];
+        expect(dvRow2!.prompt).toBe(
+          'Required when status is Constituted. Must be between today and 5 years after Date on which the elected body is in place.',
+        );
+        expect(dvRow2!.prompt?.endsWith('..')).toBe(false);
       });
     });
 

@@ -70,22 +70,25 @@ export function parseFieldRelativeBoundary(value: string): EulbDateOffsetBoundar
  * `normalizeDate`'s local-timezone semantics elsewhere in this file. (Unlike the UTC-based
  * 'TODAY' resolution in DynamicFormValidationService, EULB fields never route through that
  * generic engine, so there's no cross-service UTC/local contract to preserve here.)
+ * 'M'/'Y' match Excel's EDATE(): shift by whole months, then clamp to the target month's last day.
+ * Avoid setMonth/setFullYear rollover (e.g. 29 Feb + 5Y → 28 Feb). 'D' needs no clamping.
  */
 function applyDateOffset(base: Date, offset: Pick<EulbDateOffsetBoundary, 'sign' | 'amount' | 'unit'>): Date {
-  const d = new Date(base.getFullYear(), base.getMonth(), base.getDate());
   const delta = offset.amount * offset.sign;
-  switch (offset.unit) {
-    case 'D':
-      d.setDate(d.getDate() + delta);
-      break;
-    case 'M':
-      d.setMonth(d.getMonth() + delta);
-      break;
-    case 'Y':
-      d.setFullYear(d.getFullYear() + delta);
-      break;
+
+  if (offset.unit === 'D') {
+    const d = new Date(base.getFullYear(), base.getMonth(), base.getDate());
+    d.setDate(d.getDate() + delta);
+    return d;
   }
-  return d;
+
+  const totalMonths = offset.unit === 'Y' ? delta * 12 : delta;
+  const totalMonthIndex = base.getMonth() + totalMonths;
+  const targetYear = base.getFullYear() + Math.floor(totalMonthIndex / 12);
+  const targetMonth = ((totalMonthIndex % 12) + 12) % 12;
+  const daysInTargetMonth = new Date(targetYear, targetMonth + 1, 0).getDate();
+  const targetDay = Math.min(base.getDate(), daysInTargetMonth);
+  return new Date(targetYear, targetMonth, targetDay);
 }
 
 /**
@@ -169,6 +172,14 @@ export function extractDateConfig(
   const eMaxIso: string = eMaxV.validator;
   const remarksMax: number = rMaxV.validator;
   const expiryMaxRelative = parseFieldRelativeBoundary(eMaxIso);
+
+  // `eMaxIso` only validates `dateOfExpiry`'s maxDate and resolves FIELD-relative values
+  // against `dateOfConstitution`; fail loudly if the DB config points to another field.
+  if (expiryMaxRelative && expiryMaxRelative.fieldKey !== 'dateOfConstitution') {
+    throw new InternalServerErrorException(
+      `EULB dateOfExpiry maxDate references unsupported field '${expiryMaxRelative.fieldKey}' — only 'dateOfConstitution' is resolvable.`,
+    );
+  }
   return {
     constitutionMin: parseDateBoundary(cMinIso, 'min'),
     constitutionMinMessage: cMinV.message,

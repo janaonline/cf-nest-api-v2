@@ -212,6 +212,43 @@ describe('extractDateConfig', () => {
       expect(config.expiryMaxRelative).toBeUndefined();
       expect(config.expiryMaxFixed).toEqual(new Date(Date.UTC(2030, 2, 31, 23, 59, 59, 999)));
     });
+
+    it('throws when the maxDate token references a field other than dateOfConstitution', () => {
+      const fieldsWithUnsupportedReference = ROW_EDIT_FIELDS_WITH_RELATIVE_EXPIRY.map((f) =>
+        f.key === 'dateOfExpiry'
+          ? {
+              ...f,
+              validations: f.validations!.map((v) =>
+                v.name === 'maxDate' ? { ...v, validator: 'FIELD:someOtherField+5Y' } : v,
+              ),
+            }
+          : f,
+      );
+      expect(() => extractDateConfig(fieldsWithUnsupportedReference, VALID_EXTRA_ULB_PORTAL_FIELDS)).toThrow();
+    });
+
+    it('does not apply the FIELD:<key> guard to any other field\'s minDate/maxDate — only dateOfExpiry\'s own maxDate is inspected', () => {
+      // dateOfConstitution's own maxDate validator is set to a FIELD:-shaped string referencing a
+      // different field entirely. It's never parsed as a date bound at all (dateOfConstitution's
+      // upper bound comes from `today` at validation time, not from config), so this must not
+      // throw, and dateOfExpiry's own static maxDate must still resolve normally.
+      const fieldsWithUnrelatedFieldToken = VALID_ROW_EDIT_FIELDS.map((f) =>
+        f.key === 'dateOfConstitution'
+          ? {
+              ...f,
+              validations: f.validations!.map((v) =>
+                v.name === 'maxDate' ? { ...v, validator: 'FIELD:someOtherField+5Y' } : v,
+              ),
+            }
+          : f,
+      );
+
+      expect(() => extractDateConfig(fieldsWithUnrelatedFieldToken, VALID_EXTRA_ULB_PORTAL_FIELDS)).not.toThrow();
+
+      const config = extractDateConfig(fieldsWithUnrelatedFieldToken, VALID_EXTRA_ULB_PORTAL_FIELDS);
+      expect(config.expiryMaxRelative).toBeUndefined();
+      expect(config.expiryMaxFixed).toEqual(new Date(Date.UTC(2030, 2, 31, 23, 59, 59, 999)));
+    });
   });
 });
 
@@ -351,6 +388,24 @@ describe('ElectedUrbanLocalBodiesValidator', () => {
       );
       expect(errors.some((e) => e.field === 'dateOfExpiry' && e.code === 'maxDate')).toBe(false);
       expect(errors.some((e) => e.field === 'dateOfConstitution' && e.code === 'required')).toBe(true);
+    });
+
+    // 2024 is a leap year; 2029 is not — Excel's EDATE(29-Feb-2024, 60) clamps to 28-Feb-2029
+    // rather than rolling over to 1-Mar-2029 the way plain setFullYear/setMonth would.
+    it('clamps a leap-day dateOfConstitution + 5Y to 28 Feb (matches Excel EDATE(), not JS rollover)', () => {
+      const atClampedBound = validator.validateExtraUlbRow(
+        makeRow({ electedBodyStatus: 'Constituted', dateOfConstitution: '2024-02-29', dateOfExpiry: '2029-02-28' }),
+        TODAY,
+        mockDateConfigWithRelativeExpiry,
+      );
+      expect(atClampedBound.some((e) => e.field === 'dateOfExpiry' && e.code === 'maxDate')).toBe(false);
+
+      const pastClampedBound = validator.validateExtraUlbRow(
+        makeRow({ electedBodyStatus: 'Constituted', dateOfConstitution: '2024-02-29', dateOfExpiry: '2029-03-01' }),
+        TODAY,
+        mockDateConfigWithRelativeExpiry,
+      );
+      expect(pastClampedBound.some((e) => e.field === 'dateOfExpiry' && e.code === 'maxDate')).toBe(true);
     });
   });
 
