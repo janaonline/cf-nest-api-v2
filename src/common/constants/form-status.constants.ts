@@ -17,6 +17,13 @@ export const FORM_STATUS = {
 
 export type FormStatusType = (typeof FORM_STATUS)[keyof typeof FORM_STATUS];
 
+/** Action tag for a form-status-history log entry */
+export enum FormHistoryAction {
+  CREATE_DRAFT = 'CREATE_DRAFT',
+  UPDATE_DRAFT = 'UPDATE_DRAFT',
+  FINAL_SUBMIT = 'FINAL_SUBMIT',
+}
+
 export const FORM_STATUS_LABELS: Readonly<Record<FormStatusType, string>> = {
   [FORM_STATUS.NO_STATUS]: 'No Status',
   [FORM_STATUS.NOT_STARTED]: 'Not Started',

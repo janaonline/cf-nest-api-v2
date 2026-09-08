@@ -15,7 +15,7 @@ import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { ExcelColumnValidation, ExcelService } from 'src/services/excel/excel.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
-import { FORM_STATUS } from 'src/common/constants/form-status.constants';
+import { FORM_STATUS, FormHistoryAction } from 'src/common/constants/form-status.constants';
 import { assertCanStateEditForm } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
 import { toObjectIdString } from 'src/common/utils/objectid.util';
 import {
@@ -38,6 +38,10 @@ import {
   DevolutionFormulaRow,
   DevolutionFormulaRowDocument,
 } from 'src/schemas/xvi-fc/state/devolution-formula-row.schema';
+import {
+  DevolutionFormulaFormHistory,
+  DevolutionFormulaFormHistoryDocument,
+} from 'src/schemas/xvi-fc/state/devolution-formula-form-history.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 import {
@@ -131,6 +135,8 @@ export class DevolutionFormulaExcelService {
     private readonly formModel: Model<DevolutionFormulaFormDocument>,
     @InjectModel(DevolutionFormulaRow.name)
     private readonly rowModel: Model<DevolutionFormulaRowDocument>,
+    @InjectModel(DevolutionFormulaFormHistory.name)
+    private readonly historyModel: Model<DevolutionFormulaFormHistoryDocument>,
     @InjectModel(Ulb.name)
     private readonly ulbModel: Model<UlbDocument>,
     private readonly s3Service: S3Service,
@@ -177,6 +183,8 @@ export class DevolutionFormulaExcelService {
   async validateExcel(
     dto: ValidateExcelDevolutionFormulaDto,
     user: AuthUser,
+    ip: string = '',
+    userAgent: string = '',
   ): Promise<XviFcApiResponse<DfValidateExcelResponseData>> {
     this.assertStateAccess(user, dto.stateId);
 
@@ -197,9 +205,10 @@ export class DevolutionFormulaExcelService {
     ]);
 
     const existingDoc = existing;
+    const fromStatus = existingDoc?.currentFormStatus ?? FORM_STATUS.NOT_STARTED;
 
     if (existingDoc) {
-      assertCanStateEditForm(existingDoc.currentFormStatus ?? FORM_STATUS.NOT_STARTED);
+      assertCanStateEditForm(fromStatus);
     }
 
     // 2. Normalize + validate the inbound canonical file object (path, extension/MIME, size)
@@ -468,6 +477,28 @@ export class DevolutionFormulaExcelService {
 
       if (currentVersion > 0) {
         await this.rowModel.deleteMany({ form: formId, datasetVersion: currentVersion }, { session }).exec();
+      }
+
+      // This upsert is the real place a brand-new form's status changes — saveDraft later sees
+      // fromStatus already IN_PROGRESS and correctly no-ops, so without this call the transition
+      // would never be logged. Written inside this transaction, not best-effort.
+      if (fromStatus !== FORM_STATUS.IN_PROGRESS) {
+        await this.historyModel.create(
+          [
+            {
+              devolutionFormulaForm: formId,
+              state: stateOid,
+              year: yearOid,
+              action: FormHistoryAction.CREATE_DRAFT,
+              fromStatus,
+              toStatus: FORM_STATUS.IN_PROGRESS,
+              changedBy: userOid,
+              ip,
+              userAgent,
+            },
+          ],
+          { session },
+        );
       }
 
       await session.commitTransaction();

@@ -556,32 +556,36 @@ export class FcUnspentDeclarationService {
         );
       }
 
-      const activeRows = await this.rowService.getActiveRows(parentId, session);
-      const snapshot = activeRows.map((row) => this.mapRowToSnapshot(row));
+      // Defensive — assertCanStateFinalSubmitForm above already guarantees a real transition, but
+      // skip explicitly rather than relying solely on that upstream guard.
+      if (fromStatus !== toStatus) {
+        const activeRows = await this.rowService.getActiveRows(parentId, session);
+        const snapshot = activeRows.map((row) => this.mapRowToSnapshot(row));
 
-      await this.historyModel.create(
-        [
-          {
-            fcUnspentForm: parentId,
-            state: stateOid,
-            year: yearOid,
-            fromStatus,
-            toStatus,
-            auditRevision: newAuditRevision,
-            applicableFc,
-            isFcUnspent: updatedParent.isFcUnspent,
-            fcDeclaration: updatedParent.fcDeclaration ?? null,
-            fcUnspentDeclaration: updatedParent.fcUnspentDeclaration ?? null,
-            unspentUlbData: snapshot,
-            checkboxConfirmation: updatedParent.checkboxConfirmation,
-            changedBy: userOid,
-            changedAt: now,
-            ip,
-            userAgent,
-          },
-        ],
-        { session },
-      );
+        await this.historyModel.create(
+          [
+            {
+              fcUnspentForm: parentId,
+              state: stateOid,
+              year: yearOid,
+              fromStatus,
+              toStatus,
+              auditRevision: newAuditRevision,
+              applicableFc,
+              isFcUnspent: updatedParent.isFcUnspent,
+              fcDeclaration: updatedParent.fcDeclaration ?? null,
+              fcUnspentDeclaration: updatedParent.fcUnspentDeclaration ?? null,
+              unspentUlbData: snapshot,
+              checkboxConfirmation: updatedParent.checkboxConfirmation,
+              changedBy: userOid,
+              changedAt: now,
+              ip,
+              userAgent,
+            },
+          ],
+          { session },
+        );
+      }
 
       await session.commitTransaction();
     } catch (err) {

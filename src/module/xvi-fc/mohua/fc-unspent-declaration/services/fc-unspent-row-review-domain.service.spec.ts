@@ -197,7 +197,10 @@ describe('FcUnspentRowReviewDomainService', () => {
 
       const ops = getBulkOps(rowModel['bulkWrite']);
       expect(ops[0].updateOne.filter).toEqual({ _id: row._id });
-      expect(ops[0].updateOne.update.$set).toMatchObject({ rowStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA, rejectionRemark: null });
+      expect(ops[0].updateOne.update.$set).toMatchObject({
+        rowStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+        rejectionRemark: null,
+      });
     });
 
     it('sets rejectionRemark on the row when rejecting', async () => {
@@ -243,6 +246,51 @@ describe('FcUnspentRowReviewDomainService', () => {
           rejectionRemark: null,
         }) as Record<string, unknown>,
       });
+    });
+
+    it('filters out a transition whose row is already at the target status — no bulk update, no history entry for it', async () => {
+      const alreadyActiveRow = makeRow({ rowStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA });
+      const pendingRow = makeRow({ _id: new Types.ObjectId(), rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA });
+
+      await service.transitionRows(
+        formOid,
+        stateOid,
+        yearOid,
+        [
+          { row: alreadyActiveRow, newStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA, rejectionRemark: null },
+          { row: pendingRow, newStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA, rejectionRemark: null },
+        ],
+        userOid,
+        null,
+        null,
+        mockSession,
+      );
+
+      const ops = getBulkOps(rowModel['bulkWrite']);
+      expect(ops).toHaveLength(1);
+      expect(ops[0].updateOne.filter).toEqual({ _id: pendingRow._id });
+
+      const docs = getInsertManyDocs(rowHistoryModel['insertMany']);
+      expect(docs).toHaveLength(1);
+      expect(docs[0].row).toEqual(pendingRow._id);
+    });
+
+    it('is a no-op when every transition is already at its target status', async () => {
+      const alreadyActiveRow = makeRow({ rowStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA });
+
+      await service.transitionRows(
+        formOid,
+        stateOid,
+        yearOid,
+        [{ row: alreadyActiveRow, newStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA, rejectionRemark: null }],
+        userOid,
+        null,
+        null,
+        mockSession,
+      );
+
+      expect(rowModel['bulkWrite']).not.toHaveBeenCalled();
+      expect(rowHistoryModel['insertMany']).not.toHaveBeenCalled();
     });
   });
 
@@ -321,7 +369,9 @@ describe('FcUnspentRowReviewDomainService', () => {
     it('builds the unspentUlbData snapshot from current active rows, including rowStatus/rejectionRemark', async () => {
       rowModel['find'] = jest
         .fn()
-        .mockReturnValue(q([{ ...makeRow(), rowStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA, rejectionRemark: null }]));
+        .mockReturnValue(
+          q([{ ...makeRow(), rowStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA, rejectionRemark: null }]),
+        );
 
       await service.insertParentHistory(
         makeForm(),
@@ -343,6 +393,23 @@ describe('FcUnspentRowReviewDomainService', () => {
         rowStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
         rejectionRemark: null,
       });
+    });
+
+    it('is a no-op when fromStatus equals toStatus', async () => {
+      await service.insertParentHistory(
+        makeForm(),
+        FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+        FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+        2,
+        '14TH_FC',
+        userOid,
+        '127.0.0.1',
+        'jest-agent',
+        mockSession,
+      );
+
+      expect(historyModel['create']).not.toHaveBeenCalled();
+      expect(rowModel['find']).not.toHaveBeenCalled();
     });
   });
 

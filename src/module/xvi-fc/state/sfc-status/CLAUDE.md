@@ -23,6 +23,11 @@ This is a deliberate, accepted tradeoff, not an oversight; see the comment on
 here, decide explicitly whether it needs the same treatment or genuinely needs transactional
 atomicity — don't assume one or the other.
 
+`createHistoryEntry` also no-ops when `fromStatus === toStatus` — a re-save that leaves the form
+`IN_PROGRESS` writes nothing (older `xvifc_sfc_logs` rows from before this guard still have
+same-status `UPDATE_DRAFT` entries). `action` uses the shared `FormHistoryAction` enum
+(`src/common/constants/form-status.constants.ts` — one enum for every state form, not per-form).
+
 No ADRs exist for this module (unlike `claim-letter`) — there's no cross-cutting concurrency
 machinery (no transactions, locking, idempotency keys, or batch/reservation logic) that would
 warrant one.
