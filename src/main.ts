@@ -121,7 +121,9 @@ async function bootstrap() {
     credentials: true,
     preflightContinue: false,
     optionsSuccessStatus: 204,
-    exposedHeaders: ['Content-Disposition'],
+    // Retry-After: exposed so the frontend can read the throttler's exact remaining-seconds value
+    // off a 429 and show a live countdown, instead of a vague "try again later" with no timer.
+    exposedHeaders: ['Content-Disposition', 'Retry-After'],
   };
 
   app.enableCors(corsOptions);

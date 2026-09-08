@@ -58,19 +58,22 @@ src/
 │   │                            # Annual Account status counts (Not Started/Under Review/Approved/
 │   │                            # UNDER_REVIEW_BY_MOHUA + a 10-day-stale review count), one email per
 │   │                            # state to users with role STATE and an assigned xviFcSubrole
-│   │                            # (admin/reviewer/viewer) AND isXVIFCProfileVerified: true — deliberately
-│   │                            # separate from `admin/email-templates/weekly-report.service.ts` (both are
-│   │                            # wanted; that one is unscoped/still placeholder, this one isn't). All 4
-│   │                            # crons (these 3 + weekly-report) are gated by the single
-│   │                            # `XVIFC_REMINDER_CRONS_ENABLED` env flag — each `@Cron`-decorated method
-│   │                            # checks it and no-ops if not exactly 'true'; the manual trigger endpoints
-│   │                            # call the underlying method directly and bypass the flag. Email copy for
-│   │                            # all three reminders crons lives in DB-backed `EmailTemplate` rows (slugs
-│   │                            # `ulb-in-progress-reminder`/`state-review-reminder`/`weekly-state-summary`)
-│   │                            # — `RemindersModule.onModuleInit` auto-seeds all three on every app boot
-│   │                            # (idempotent, no manual step needed); the
-│   │                            # `POST xvi-fc/reminders/seed-*-template` endpoints still exist for an
-│   │                            # on-demand re-seed without restarting the app
+│   │                            # (admin/reviewer/viewer) AND isXVIFCProfileVerified: true. These 3 crons
+│   │                            # are gated by the single `XVIFC_REMINDER_CRONS_ENABLED` env flag — each
+│   │                            # `@Cron`-decorated method checks it and no-ops if not exactly 'true'; the
+│   │                            # manual trigger endpoints call the underlying method directly and bypass
+│   │                            # the flag. Email copy for all three lives in DB-backed `EmailTemplate`
+│   │                            # rows (slugs `ulb-in-progress-reminder`/`state-review-reminder`/
+│   │                            # `weekly-state-summary`) — `RemindersModule.onModuleInit` auto-seeds all
+│   │                            # four templates on every app boot (idempotent, no manual step needed);
+│   │                            # the `POST xvi-fc/reminders/seed-*-template` endpoints still exist for an
+│   │                            # on-demand re-seed without restarting the app. Also
+│   │                            # `FormReturnedNotificationService` (slug `form-returned-notification`) —
+│   │                            # event-triggered, not a cron: fires once, synchronously, the moment
+│   │                            # STATE returns an Annual Account section or Bank Account form (called
+│   │                            # from `decideSection`/`decideBankAccount`), so it is NOT gated by
+│   │                            # `XVIFC_REMINDER_CRONS_ENABLED` and has no `send-*-now` endpoint. Never
+│   │                            # throws — a notification failure must not fail the underlying decision.
 │   └── xvi-fc.module.ts # composition root importing the feature modules above
 ├── users/               # User CRUD with repository pattern
 ├── admin/
@@ -186,4 +189,4 @@ Required variables (see `.env` for dev defaults):
 | `CLIENT_URL` / `WHITELISTED_DOMAINS` | CORS origins |
 | `BANK_ACCOUNT_ENCRYPTION_KEY` / `BANK_ACCOUNT_HASH_SECRET` | `xvi-fc` ULB bank-account encryption/hashing (`module/xvi-fc/ulb/bank-account`) |
 | `MANUAL_REVIEW_NOTIFY_EMAIL` | Fixed inbox emailed when a ULB requests manual review of a failed OCR validation (`module/xvi-fc/ulb/annual_accounts`) |
-| `XVIFC_REMINDER_CRONS_ENABLED` | Master on/off switch for all 4 reminder/summary crons (`module/xvi-fc/common/reminders` + `admin/email-templates/weekly-report.service.ts`) — must be exactly `'true'` for their scheduled runs to fire; manual triggers bypass this flag regardless of its value |
+| `XVIFC_REMINDER_CRONS_ENABLED` | Master on/off switch for the 3 dwell-time/summary crons in `module/xvi-fc/common/reminders` — must be exactly `'true'` for their scheduled runs to fire; manual triggers bypass this flag regardless of its value. Does not gate `FormReturnedNotificationService`, which is event-triggered, not a cron |

@@ -150,7 +150,7 @@ export class StateReviewDigestService {
     private readonly config: ConfigService,
   ) {}
 
-  // ─── Seed default template (idempotent — mirrors WeeklyReportService.seedWeeklyReportTemplate) ──
+  // ─── Seed default template (idempotent — mirrors the other reminder services' seedTemplate) ──
 
   async seedTemplate(): Promise<{ created: boolean; message: string }> {
     const existing = await this.templateModel.findOne({ slug: TEMPLATE_SLUG }).exec();
@@ -168,7 +168,7 @@ export class StateReviewDigestService {
   }
 
   // Master on/off switch — see UlbInProgressReminderService.handleScheduledRun for the full
-  // rationale (one flag shared across all four reminder/summary crons). Manual trigger
+  // rationale (one flag shared across the 3 reminder/summary crons). Manual trigger
   // (POST xvi-fc/reminders/send-state-review-now → sendDueDigests() directly) bypasses this flag.
   @Cron('0 9 * * *', { timeZone: 'Asia/Kolkata' })
   async handleScheduledRun(): Promise<void> {
