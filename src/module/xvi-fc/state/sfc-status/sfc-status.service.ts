@@ -10,7 +10,7 @@ import { ExcelService, RowHeader } from 'src/services/excel/excel.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
-import { FORM_STATUS, getFormStatusLabel } from 'src/common/constants/form-status.constants';
+import { FORM_STATUS, FormHistoryAction, getFormStatusLabel } from 'src/common/constants/form-status.constants';
 import {
   assertCanStateEditForm,
   assertCanStateFinalSubmitForm,
@@ -21,7 +21,6 @@ import { toObjectIdString } from 'src/common/utils/objectid.util';
 import {
   SFC_FORM_ID,
   SFC_STATUS_FORM_TYPE,
-  SfcStatusAction,
   XviFcSfcStatus,
   XviFcSfcStatusDocument,
 } from '../../../../schemas/xvi-fc/state/sfc-status.schema';
@@ -250,7 +249,7 @@ export class SfcStatusService {
         sfcStatusFormId: existing._id,
         stateId: stateOid,
         yearId: yearOid,
-        action: SfcStatusAction.UPDATE_DRAFT,
+        action: FormHistoryAction.UPDATE_DRAFT,
         fromStatus: existing.currentFormStatus,
         toStatus: FORM_STATUS.IN_PROGRESS,
         changedBy: userOid,
@@ -280,7 +279,7 @@ export class SfcStatusService {
       sfcStatusFormId: created._id,
       stateId: stateOid,
       yearId: yearOid,
-      action: SfcStatusAction.CREATE_DRAFT,
+      action: FormHistoryAction.CREATE_DRAFT,
       fromStatus: FORM_STATUS.NOT_STARTED,
       toStatus: FORM_STATUS.IN_PROGRESS,
       changedBy: userOid,
@@ -376,7 +375,7 @@ export class SfcStatusService {
       sfcStatusFormId: formOid,
       stateId: stateOid,
       yearId: yearOid,
-      action: SfcStatusAction.FINAL_SUBMIT,
+      action: FormHistoryAction.FINAL_SUBMIT,
       fromStatus,
       toStatus,
       changedBy: userOid,
@@ -527,15 +526,14 @@ export class SfcStatusService {
   }
 
   /**
-   * Inserts a single history record into xvi_fc_sfc_status_histories.
-   * Called after every successful status transition. The main form document
-   * is updated first; if this insert fails the transition already persisted —
-   * use transactions if atomic history is required.
+   * Inserts a history row unless `fromStatus === toStatus` (no-op re-save). The form document is
+   * updated first; if this insert fails, the transition has already persisted.
    *
-   * @param entry - All fields required to describe the transition;
-   *                ip and userAgent are optional (omitted for non-HTTP triggers).
+   * @param entry - ip/userAgent are optional (omitted for non-HTTP triggers).
    */
   private async createHistoryEntry(entry: SfcHistoryEntryInput): Promise<void> {
+    if (entry.fromStatus === entry.toStatus) return;
+
     await this.historyModel.create({
       sfcStatusForm: entry.sfcStatusFormId,
       state: entry.stateId,
