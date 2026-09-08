@@ -27,6 +27,12 @@ class PdfFile {
 
   @Prop({ required: true })
   name: string;
+
+  @Prop()
+  pageCount?: number;
+
+  @Prop()
+  fileSizeKb?: number;
 }
 export const PdfFileSchema = SchemaFactory.createForClass(PdfFile);
 

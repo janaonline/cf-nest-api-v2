@@ -54,7 +54,11 @@ export class OtpService {
     const resendCount = existingState?.resendCount ?? 0;
 
     if (resendCount >= cfg.maxResendAttempts) {
-      throw new HttpException('Maximum OTP requests reached. Please try again later.', 429);
+      const retryAfterSeconds = await this.redisService.ttl(otpStateKey(purpose, id));
+      throw new HttpException(
+        { message: 'Maximum OTP requests reached. Please try again later.', data: { retryAfterSeconds: Math.max(retryAfterSeconds, 0) } },
+        429,
+      );
     }
 
     const otp = generateOtp(cfg.length, cfg.isProduction);
@@ -106,7 +110,10 @@ export class OtpService {
 
     if (state.verifyAttempts >= cfg.maxVerifyAttempts) {
       await this.triggerLock(purpose, id, cfg.lockSeconds);
-      throw new HttpException('Too many attempts. Please request a new OTP.', 429);
+      throw new HttpException(
+        { message: 'Too many attempts. Please request a new OTP.', data: { retryAfterSeconds: cfg.lockSeconds } },
+        429,
+      );
     }
 
     // bcrypt.compare provides constant-time comparison
@@ -118,7 +125,10 @@ export class OtpService {
       if (state.verifyAttempts >= cfg.maxVerifyAttempts) {
         await this.triggerLock(purpose, id, cfg.lockSeconds);
         await this.redisService.del(otpStateKey(purpose, id));
-        throw new HttpException('Too many attempts. Please request a new OTP.', 429);
+        throw new HttpException(
+        { message: 'Too many attempts. Please request a new OTP.', data: { retryAfterSeconds: cfg.lockSeconds } },
+        429,
+      );
       }
 
       // Persist updated attempt count; recalculate remaining TTL to avoid extending it
@@ -166,7 +176,10 @@ export class OtpService {
 
     if (state.verifyAttempts >= cfg.maxVerifyAttempts) {
       await this.triggerLock(purpose, id, cfg.lockSeconds);
-      throw new HttpException('Too many attempts. Please request a new OTP.', 429);
+      throw new HttpException(
+        { message: 'Too many attempts. Please request a new OTP.', data: { retryAfterSeconds: cfg.lockSeconds } },
+        429,
+      );
     }
 
     const valid = await bcrypt.compare(dto.otp, state.hashedOtp);
@@ -177,7 +190,10 @@ export class OtpService {
       if (state.verifyAttempts >= cfg.maxVerifyAttempts) {
         await this.triggerLock(purpose, id, cfg.lockSeconds);
         await this.redisService.del(otpStateKey(purpose, id));
-        throw new HttpException('Too many attempts. Please request a new OTP.', 429);
+        throw new HttpException(
+        { message: 'Too many attempts. Please request a new OTP.', data: { retryAfterSeconds: cfg.lockSeconds } },
+        429,
+      );
       }
 
       const remainingTtl = Math.max(1, Math.ceil((new Date(state.expiresAt).getTime() - Date.now()) / 1000));
@@ -219,7 +235,11 @@ export class OtpService {
     const resendCount = existingState?.resendCount ?? 0;
 
     if (resendCount >= cfg.maxResendAttempts) {
-      throw new HttpException('Maximum OTP requests reached. Please try again later.', 429);
+      const retryAfterSeconds = await this.redisService.ttl(otpStateKey(purpose, mobile));
+      throw new HttpException(
+        { message: 'Maximum OTP requests reached. Please try again later.', data: { retryAfterSeconds: Math.max(retryAfterSeconds, 0) } },
+        429,
+      );
     }
 
     const otp = generateOtp(cfg.length, cfg.isProduction);
@@ -266,7 +286,10 @@ export class OtpService {
 
     if (state.verifyAttempts >= cfg.maxVerifyAttempts) {
       await this.triggerLock(purpose, id, cfg.lockSeconds);
-      throw new HttpException('Too many attempts. Please request a new OTP.', 429);
+      throw new HttpException(
+        { message: 'Too many attempts. Please request a new OTP.', data: { retryAfterSeconds: cfg.lockSeconds } },
+        429,
+      );
     }
 
     const valid = await bcrypt.compare(dto.otp, state.hashedOtp);
@@ -276,7 +299,10 @@ export class OtpService {
       if (state.verifyAttempts >= cfg.maxVerifyAttempts) {
         await this.triggerLock(purpose, id, cfg.lockSeconds);
         await this.redisService.del(otpStateKey(purpose, id));
-        throw new HttpException('Too many attempts. Please request a new OTP.', 429);
+        throw new HttpException(
+        { message: 'Too many attempts. Please request a new OTP.', data: { retryAfterSeconds: cfg.lockSeconds } },
+        429,
+      );
       }
       const remainingTtl = Math.max(1, Math.ceil((new Date(state.expiresAt).getTime() - Date.now()) / 1000));
       await this.redisService.set(otpStateKey(purpose, id), state, remainingTtl);
@@ -301,12 +327,22 @@ export class OtpService {
 
   private async assertNotLocked(purpose: string, id: string): Promise<void> {
     const locked = await this.redisService.get(otpLockKey(purpose, id));
-    if (locked) throw new HttpException('Too many attempts. Please try again later.', 429);
+    if (!locked) return;
+    const retryAfterSeconds = await this.redisService.ttl(otpLockKey(purpose, id));
+    throw new HttpException(
+      { message: 'Too many attempts. Please try again later.', data: { retryAfterSeconds: Math.max(retryAfterSeconds, 0) } },
+      429,
+    );
   }
 
   private async assertCooldownClear(purpose: string, id: string): Promise<void> {
     const cooling = await this.redisService.get(otpCooldownKey(purpose, id));
-    if (cooling) throw new HttpException('Please wait before requesting another OTP.', 429);
+    if (!cooling) return;
+    const retryAfterSeconds = await this.redisService.ttl(otpCooldownKey(purpose, id));
+    throw new HttpException(
+      { message: 'Please wait before requesting another OTP.', data: { retryAfterSeconds: Math.max(retryAfterSeconds, 0) } },
+      429,
+    );
   }
 
   private async triggerLock(purpose: string, id: string, lockSeconds: number): Promise<void> {

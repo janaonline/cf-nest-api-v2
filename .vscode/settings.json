@@ -1,7 +1,10 @@
 {
   "editor.formatOnSave": true,
   "editor.defaultFormatter": "esbenp.prettier-vscode",
-  "eslint.format.enable": true,
+  "eslint.format.enable": false,
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": "explicit"
+  },
   "files.eol": "\n",
   "files.watcherExclude": {
     "**/.history/**": true,

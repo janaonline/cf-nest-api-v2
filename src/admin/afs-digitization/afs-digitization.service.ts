@@ -1,11 +1,12 @@
 import { BadRequestException, Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model, Types } from 'mongoose';
+import { FilterQuery, Model, Types } from 'mongoose';
 import { ConfigService } from '@nestjs/config';
 import * as XLSX from 'xlsx';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { YearLabelToId } from 'src/core/constants/years';
 import { buildPopulationMatch } from 'src/core/helpers/populationCategory.helper';
+import { S3Service } from 'src/core/s3/s3.service';
 import { AfsAuditorsReport, AfsAuditorsReportDocument } from 'src/schemas/afs/afs-auditors-report.schema';
 import { AfsExcelFile, AfsExcelFileDocument } from 'src/schemas/afs/afs-excel-file.schema';
 import { AfsMetric, AfsMetricDocument } from 'src/schemas/afs/afs-metrics.schema';
@@ -30,6 +31,67 @@ import {
   getAfsReportPipeline,
   getAuditorReportUrlPipeline,
 } from './queries/afs-excel-files.query';
+
+const ANNUAL_ACCOUNT_AUDIT_TYPES = ['audited', 'unAudited'] as const;
+const ANNUAL_ACCOUNT_PDF_FIELDS = [
+  'bal_sheet',
+  'bal_sheet_schedules',
+  'inc_exp',
+  'inc_exp_schedules',
+  'cash_flow',
+  'auditor_report',
+] as const;
+
+type AnnualAccountAuditType = (typeof ANNUAL_ACCOUNT_AUDIT_TYPES)[number];
+type AnnualAccountPdfField = (typeof ANNUAL_ACCOUNT_PDF_FIELDS)[number];
+
+interface AnnualAccountPdfFile {
+  name?: string;
+  url?: string;
+  pageCount?: number;
+  fileSizeKb?: number;
+}
+
+type AnnualAccountProvisionalData = Partial<Record<AnnualAccountPdfField, { pdf?: AnnualAccountPdfFile }>>;
+
+type AnnualAccountDataLean = Partial<
+  Record<AnnualAccountAuditType, { provisional_data?: AnnualAccountProvisionalData }>
+>;
+
+interface AnnualAccountPdfMetadata {
+  pageCount: number;
+  fileSizeKb: number;
+}
+
+export interface AnnualAccountPdfMetadataSummary {
+  totalPdfsFound: number;
+  updated: number;
+  skipped: number;
+  failed: number;
+}
+
+export interface AnnualAccountPdfMetadataBackfillOptions {
+  batchSize?: number;
+  limit?: number;
+  onlyMissing?: boolean;
+}
+
+export interface AnnualAccountPdfMetadataBackfillSummary extends AnnualAccountPdfMetadataSummary {
+  documentsMatched: number;
+  documentsProcessed: number;
+  documentsSucceeded: number;
+  documentsFailed: number;
+  elapsedMs: number;
+  averageMsPerDocument: number;
+  estimatedRemainingMs: number;
+  estimatedCompletionAt: Date | null;
+}
+
+export interface AnnualAccountPdfMetadataBackfillStatus {
+  total: number;
+  completed: number;
+  remaining: number;
+}
 
 @Injectable()
 export class AfsDigitizationService {
@@ -379,7 +441,7 @@ export class AfsDigitizationService {
       const data = (await this.afsExcelFileModel.aggregate(pipeline).exec()) as AfsFile[];
       return { success: true, data };
     } catch (err) {
-      console.error('Failed to get afs digitized list', err);
+      this.logger.error('Failed to get afs digitized list', err instanceof Error ? err.stack : String(err));
       throw new InternalServerErrorException('Failed to fetch list.');
     }
   }
@@ -411,7 +473,7 @@ export class AfsDigitizationService {
         },
       };
     } catch (err) {
-      console.error('Failed to get afs digitized report', err);
+      this.logger.error('Failed to get afs digitized report', err instanceof Error ? err.stack : String(err));
       throw new InternalServerErrorException('Failed to fetch reports.');
     }
   }
@@ -431,7 +493,7 @@ export class AfsDigitizationService {
       const auditorReport = (await this.afsAuditorsReportModel.aggregate(pipeline).exec()) as AuditorReport[];
       return { success: true, data: auditorReport[0] };
     } catch (err) {
-      console.error('Failed to get auditors report', err);
+      this.logger.error('Failed to get auditors report', err instanceof Error ? err.stack : String(err));
       throw new InternalServerErrorException('Failed to fetch reports.');
     }
   }

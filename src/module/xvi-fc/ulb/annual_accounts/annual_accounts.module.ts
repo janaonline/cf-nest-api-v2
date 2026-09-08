@@ -33,6 +33,7 @@ import { AnnualAccountStatusSyncService } from './annual-account-status-sync.ser
 import { FormJsonModule } from '../../../../master/form-json/form-json.module';
 import { EmailQueueModule } from '../../../../core/queue/email-queue/email-queue.module';
 import { UlbEligibilityModule } from 'src/module/ulb-eligibility/ulb-eligibility.module';
+import { RemindersModule } from '../../common/reminders/reminders.module';
 
 @Module({
   imports: [
@@ -42,6 +43,7 @@ import { UlbEligibilityModule } from 'src/module/ulb-eligibility/ulb-eligibility
     FormJsonModule,
     EmailQueueModule,
     UlbEligibilityModule,
+    RemindersModule,
     BullModule.registerQueue({ name: ANNUAL_ACCOUNT_PROCESSING_QUEUE }),
     MongooseModule.forFeature([
       { name: XviFcAnnualAccount.name, schema: XviFcAnnualAccountSchema },
