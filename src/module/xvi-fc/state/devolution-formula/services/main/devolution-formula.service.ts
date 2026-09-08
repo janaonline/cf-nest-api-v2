@@ -7,7 +7,7 @@ import { ExcelService } from 'src/services/excel/excel.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
-import { FORM_STATUS, getFormStatusLabel } from 'src/common/constants/form-status.constants';
+import { FORM_STATUS, FormHistoryAction, getFormStatusLabel } from 'src/common/constants/form-status.constants';
 import {
   assertCanStateEditForm,
   assertCanStateFinalSubmitForm,
@@ -45,6 +45,10 @@ import {
   DevolutionFormulaRow,
   DevolutionFormulaRowDocument,
 } from 'src/schemas/xvi-fc/state/devolution-formula-row.schema';
+import {
+  DevolutionFormulaFormHistory,
+  DevolutionFormulaFormHistoryDocument,
+} from 'src/schemas/xvi-fc/state/devolution-formula-form-history.schema';
 import { GrantAllocation, GrantAllocationDocument } from 'src/schemas/xvi-fc/grant-allocation.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
@@ -97,6 +101,8 @@ export class DevolutionFormulaService {
     private readonly model: Model<DevolutionFormulaFormDocument>,
     @InjectModel(DevolutionFormulaRow.name)
     private readonly rowModel: Model<DevolutionFormulaRowDocument>,
+    @InjectModel(DevolutionFormulaFormHistory.name)
+    private readonly historyModel: Model<DevolutionFormulaFormHistoryDocument>,
     @InjectModel(GrantAllocation.name)
     private readonly grantAllocationModel: Model<GrantAllocationDocument>,
     @InjectModel(Ulb.name)
@@ -209,7 +215,12 @@ export class DevolutionFormulaService {
     return xviFcSuccess('ULB-wise Allocation form fetched.', responseData);
   }
 
-  async saveDraft(dto: SaveDraftDevolutionFormulaDto, user: AuthUser): Promise<XviFcApiResponse> {
+  async saveDraft(
+    dto: SaveDraftDevolutionFormulaDto,
+    user: AuthUser,
+    ip: string = '',
+    userAgent: string = '',
+  ): Promise<XviFcApiResponse> {
     this.assertStateAccess(user, dto.stateId);
 
     const stateOid = new Types.ObjectId(dto.stateId);
@@ -221,8 +232,9 @@ export class DevolutionFormulaService {
       .lean<Pick<DfFormLeanDoc, '_id' | 'currentFormStatus' | 'excelFile'>>()
       .exec();
 
+    const fromStatus = existing?.currentFormStatus ?? FORM_STATUS.NOT_STARTED;
     if (existing) {
-      assertCanStateEditForm(existing.currentFormStatus ?? FORM_STATUS.NOT_STARTED);
+      assertCanStateEditForm(fromStatus);
     }
 
     const eligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC');
@@ -288,10 +300,27 @@ export class DevolutionFormulaService {
       .lean()
       .exec();
 
+    await this.recordFormHistory({
+      formId: result._id,
+      state: stateOid,
+      year: yearOid,
+      action: FormHistoryAction.CREATE_DRAFT,
+      fromStatus,
+      toStatus: FORM_STATUS.IN_PROGRESS,
+      changedBy: userOid,
+      ip,
+      userAgent,
+    });
+
     return xviFcSuccess('ULB-wise Allocation draft saved.', { _id: String(result._id) });
   }
 
-  async finalSubmit(dto: FinalSubmitDevolutionFormulaDto, user: AuthUser): Promise<XviFcApiResponse> {
+  async finalSubmit(
+    dto: FinalSubmitDevolutionFormulaDto,
+    user: AuthUser,
+    ip: string = '',
+    userAgent: string = '',
+  ): Promise<XviFcApiResponse> {
     this.assertStateAccess(user, dto.stateId);
 
     const stateOid = new Types.ObjectId(dto.stateId);
@@ -309,7 +338,8 @@ export class DevolutionFormulaService {
       });
     }
 
-    assertCanStateFinalSubmitForm(form.currentFormStatus ?? FORM_STATUS.NOT_STARTED);
+    const fromStatus = form.currentFormStatus ?? FORM_STATUS.NOT_STARTED;
+    assertCanStateFinalSubmitForm(fromStatus);
 
     const dfFields = await this.dfFormJsonConfig.loadFields(dto.yearId);
     const dfMainFields = getDfFieldsByType(dfFields, 'DF_MAIN_FORM_FIELDS');
@@ -460,6 +490,44 @@ export class DevolutionFormulaService {
       .findOneAndUpdate({ state: stateOid, year: yearOid, installment: dto.installment }, { $set: finalSubmitSet })
       .exec();
 
+    // Snapshot rows now — Excel re-upload hard-deletes the previous version's rows (see
+    // docs/adr/0001-dataset-versioning.md), so this is the only surviving record of what was submitted.
+    let submittedRowsSnapshot: Record<string, unknown>[] | null = null;
+    if (fromStatus !== FORM_STATUS.UNDER_REVIEW_BY_MOHUA && activeVersion > 0) {
+      const activeRows = await this.rowModel
+        .find({ form: form._id, datasetVersion: activeVersion, isActive: true })
+        .sort({ rowNumber: 1 })
+        .select(
+          'rowNumber ulbId censusCode ulbName totalGrantAllocation installment1Amount installment2Amount devolutionFormula datasetVersion',
+        )
+        .lean()
+        .exec();
+      submittedRowsSnapshot = activeRows.map((r) => ({
+        rowNumber: r.rowNumber,
+        ulbId: r.ulbId,
+        censusCode: r.censusCode,
+        ulbName: r.ulbName,
+        totalGrantAllocation: r.totalGrantAllocation,
+        installment1Amount: r.installment1Amount,
+        installment2Amount: r.installment2Amount,
+        devolutionFormula: r.devolutionFormula,
+        datasetVersion: r.datasetVersion,
+      }));
+    }
+
+    await this.recordFormHistory({
+      formId: form._id as Types.ObjectId,
+      state: stateOid,
+      year: yearOid,
+      action: FormHistoryAction.FINAL_SUBMIT,
+      fromStatus,
+      toStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+      changedBy: userOid,
+      ip,
+      userAgent,
+      snapshot: submittedRowsSnapshot,
+    });
+
     this.logger.log(
       `ULB-wise Allocation [state=${dto.stateId} year=${dto.yearId} installment=${dto.installment}] submitted by user=${user._id}`,
     );
@@ -527,6 +595,42 @@ export class DevolutionFormulaService {
   }
 
   // ─── Private helpers ──────────────────────────────────────────────────────
+
+  /**
+   * Inserts a history row unless `fromStatus === toStatus` (no-op re-save). Best-effort,
+   * non-transactional — a failure here must not fail saveDraft/finalSubmit. Mirrors
+   * sfc-status.service.ts's update-then-log pattern.
+   */
+  private async recordFormHistory(entry: {
+    formId: Types.ObjectId;
+    state: Types.ObjectId;
+    year: Types.ObjectId;
+    action: FormHistoryAction;
+    fromStatus: number;
+    toStatus: number;
+    changedBy: Types.ObjectId;
+    ip?: string;
+    userAgent?: string;
+    snapshot?: Record<string, unknown>[] | null;
+  }): Promise<void> {
+    if (entry.fromStatus === entry.toStatus) return;
+    try {
+      await this.historyModel.create({
+        devolutionFormulaForm: entry.formId,
+        state: entry.state,
+        year: entry.year,
+        action: entry.action,
+        fromStatus: entry.fromStatus,
+        toStatus: entry.toStatus,
+        changedBy: entry.changedBy,
+        ip: entry.ip,
+        userAgent: entry.userAgent,
+        snapshot: entry.snapshot ?? null,
+      });
+    } catch (err) {
+      this.logger.error('Failed to write Devolution Formula form history', err);
+    }
+  }
 
   private buildDumpRowMatch(query: DumpDevolutionFormulaQueryDto): Record<string, unknown> {
     return { isActive: query.isActive ?? true };

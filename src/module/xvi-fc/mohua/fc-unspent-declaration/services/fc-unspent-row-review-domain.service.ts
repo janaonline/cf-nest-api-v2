@@ -98,8 +98,9 @@ export class FcUnspentRowReviewDomainService {
   /**
    * Transitions the given rows to their target status (with the corresponding rejectionRemark, or
    * `null` to clear it) via one `bulkWrite`, and inserts one immutable row-history entry per row via
-   * one `insertMany`. Must run inside the caller's Mongo transaction session. Callers must have
-   * already validated each row's current status — this method targets rows by `_id` only.
+   * one `insertMany`. Must run inside the caller's Mongo transaction session. Defensively re-filters
+   * to rows whose `rowStatus` actually differs from `t.newStatus`, so a caller that forgets to
+   * pre-filter can't write a same-status no-op entry.
    */
   async transitionRows(
     formId: Types.ObjectId,
@@ -111,9 +112,10 @@ export class FcUnspentRowReviewDomainService {
     userAgent: string | null,
     session: ClientSession,
   ): Promise<void> {
-    if (transitions.length === 0) return;
+    const realTransitions = transitions.filter((t) => (t.row.rowStatus ?? null) !== t.newStatus);
+    if (realTransitions.length === 0) return;
 
-    const bulkOps: AnyBulkWriteOperation<XviFcUnspentStateFormRowDocument>[] = transitions.map((t) => ({
+    const bulkOps: AnyBulkWriteOperation<XviFcUnspentStateFormRowDocument>[] = realTransitions.map((t) => ({
       updateOne: {
         filter: { _id: t.row._id },
         update: {
@@ -124,7 +126,7 @@ export class FcUnspentRowReviewDomainService {
     await this.rowModel.bulkWrite(bulkOps, { session });
 
     await this.rowHistoryModel.insertMany(
-      transitions.map((t) => ({
+      realTransitions.map((t) => ({
         row: t.row._id,
         form: formId,
         state: stateOid,
@@ -231,7 +233,11 @@ export class FcUnspentRowReviewDomainService {
     return updated;
   }
 
-  /** Inserts one parent-history entry, snapshotting the form's current active rows. */
+  /**
+   * Inserts one parent-history entry, snapshotting the form's current active rows. No-op when
+   * `fromStatus === toStatus` — defensive, since a future caller might not gate on a real
+   * transition the way every current one does (via `assertCanMohuaMutateForm`).
+   */
   async insertParentHistory(
     form: FcUnspentMohuaFormLean,
     fromStatus: number,
@@ -243,6 +249,8 @@ export class FcUnspentRowReviewDomainService {
     userAgent: string | null,
     session: ClientSession,
   ): Promise<void> {
+    if (fromStatus === toStatus) return;
+
     const activeRows = await this.getActiveRows(form._id, session);
     const snapshot = activeRows.map((row) => ({
       rowNumber: row.rowNumber,
