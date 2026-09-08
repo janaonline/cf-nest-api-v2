@@ -1171,6 +1171,7 @@ export class AnnualAccountsService implements OnModuleInit {
                 uploadId: '$documents.currentUpload.uploadId',
                 jobId: '$documents.currentUpload.ocrInfo.jobId',
                 fileName: '$documents.currentUpload.file.originalName',
+                filePath: '$documents.currentUpload.file.path',
                 sizeKb: '$documents.currentUpload.file.sizeKb',
                 validationStatus: '$documents.currentUpload.ocrInfo.validationStatus',
                 validationDetails: '$documents.currentUpload.ocrInfo.validationDetails',
@@ -1200,6 +1201,7 @@ export class AnnualAccountsService implements OnModuleInit {
                 uploadId: '$unauditedSibling.documents.currentUpload.uploadId',
                 jobId: '$unauditedSibling.documents.currentUpload.ocrInfo.jobId',
                 fileName: '$unauditedSibling.documents.currentUpload.file.originalName',
+                filePath: '$unauditedSibling.documents.currentUpload.file.path',
                 sizeKb: '$unauditedSibling.documents.currentUpload.file.sizeKb',
                 validationStatus: '$unauditedSibling.documents.currentUpload.ocrInfo.validationStatus',
                 validationDetails: '$unauditedSibling.documents.currentUpload.ocrInfo.validationDetails',
@@ -1274,6 +1276,7 @@ export class AnnualAccountsService implements OnModuleInit {
                 uploadId: 1,
                 jobId: 1,
                 fileName: 1,
+                filePath: 1,
                 sizeKb: 1,
                 validationStatus: 1,
                 validationDetails: 1,
@@ -1290,7 +1293,10 @@ export class AnnualAccountsService implements OnModuleInit {
     ];
 
     const [result] = await this.annualAccountModel.aggregate(pipeline).exec();
-    const rows = result?.data ?? [];
+    const rows = (result?.data ?? []).map(({ filePath, ...row }: any) => ({
+      ...row,
+      fileUrl: filePath ? this.fileTokenService.signFileUrl(filePath, 'inline') : null,
+    }));
     const total = result?.totalCount?.[0]?.count ?? 0;
 
     return { total, page, pageSize, rows };
@@ -1330,6 +1336,7 @@ export class AnnualAccountsService implements OnModuleInit {
           stateName: '$stateDoc.name',
           year: '$yearDoc.year',
           fileName: '$uploadHistory.file.originalName',
+          filePath: '$uploadHistory.file.path',
           sizeKb: '$uploadHistory.file.sizeKb',
           validationStatus: '$uploadHistory.ocrInfo.validationStatus',
           validationDetails: '$uploadHistory.ocrInfo.validationDetails',
@@ -1357,6 +1364,7 @@ export class AnnualAccountsService implements OnModuleInit {
         uploadId: 1,
         ocrJobId: 1,
         fileName: 1,
+        filePath: 1,
         sizeKb: 1,
         validationStatus: 1,
         validationDetails: 1,
@@ -1425,7 +1433,10 @@ export class AnnualAccountsService implements OnModuleInit {
     ];
 
     const [result] = await this.manualReviewRequestModel.aggregate(pipeline).exec();
-    const rows = result?.data ?? [];
+    const rows = (result?.data ?? []).map(({ filePath, ...row }: any) => ({
+      ...row,
+      fileUrl: filePath ? this.fileTokenService.signFileUrl(filePath, 'inline') : null,
+    }));
     const total = result?.totalCount?.[0]?.count ?? 0;
 
     return { total, page, pageSize, rows };
@@ -1444,7 +1455,9 @@ export class AnnualAccountsService implements OnModuleInit {
 
     const [row] = await this.manualReviewRequestModel.aggregate(pipeline).exec();
     if (!row) throw new NotFoundException('Manual-review request not found');
-    return row;
+
+    const { filePath, ...rest } = row as any;
+    return { ...rest, fileUrl: filePath ? this.fileTokenService.signFileUrl(filePath, 'inline') : null };
   }
 
   // ─── Submit section to State DMA ─────────────────────────────────────────────
