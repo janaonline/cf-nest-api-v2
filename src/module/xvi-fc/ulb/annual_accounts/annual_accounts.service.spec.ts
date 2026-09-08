@@ -667,13 +667,25 @@ describe('AnnualAccountsService', () => {
       );
     });
 
-    it('returns the paginated shape from the aggregation result', async () => {
-      const row = { annualAccountId: 'acc-1', ulbName: 'Test ULB', docId: 'auditors-report' };
+    it('returns the paginated shape from the aggregation result, signing filePath into a fileUrl', async () => {
+      const row = { annualAccountId: 'acc-1', ulbName: 'Test ULB', docId: 'auditors-report', filePath: 's3/path.pdf' };
       mockAnnualAccountModel.aggregate.mockReturnValue(mockQuery([{ data: [row], totalCount: [{ count: 1 }] }]));
 
       const result = await service.getManualReviewQueue({ page: 1, pageSize: 20 }, adminUser);
 
-      expect(result).toEqual({ total: 1, page: 1, pageSize: 20, rows: [row] });
+      expect(result).toEqual({
+        total: 1,
+        page: 1,
+        pageSize: 20,
+        rows: [
+          {
+            annualAccountId: 'acc-1',
+            ulbName: 'Test ULB',
+            docId: 'auditors-report',
+            fileUrl: 'https://signed.example.com/s3/path.pdf',
+          },
+        ],
+      });
     });
 
     it('returns an empty page when nothing is pending', async () => {
@@ -696,13 +708,32 @@ describe('AnnualAccountsService', () => {
       );
     });
 
-    it('returns the paginated shape from the aggregation result', async () => {
-      const row = { requestId: 'mr-1', ulbName: 'Test ULB', status: 'APPROVED', docId: 'auditors-report' };
+    it('returns the paginated shape from the aggregation result, signing filePath into a fileUrl', async () => {
+      const row = {
+        requestId: 'mr-1',
+        ulbName: 'Test ULB',
+        status: 'APPROVED',
+        docId: 'auditors-report',
+        filePath: 's3/path.pdf',
+      };
       mockManualReviewRequestModel.aggregate.mockReturnValue(mockQuery([{ data: [row], totalCount: [{ count: 1 }] }]));
 
       const result = await service.listManualReviewRequestHistory({ page: 1, pageSize: 20 }, adminUser);
 
-      expect(result).toEqual({ total: 1, page: 1, pageSize: 20, rows: [row] });
+      expect(result).toEqual({
+        total: 1,
+        page: 1,
+        pageSize: 20,
+        rows: [
+          {
+            requestId: 'mr-1',
+            ulbName: 'Test ULB',
+            status: 'APPROVED',
+            docId: 'auditors-report',
+            fileUrl: 'https://signed.example.com/s3/path.pdf',
+          },
+        ],
+      });
     });
 
     it('returns an empty page when nothing matches', async () => {
@@ -725,13 +756,18 @@ describe('AnnualAccountsService', () => {
       );
     });
 
-    it('returns the single request when found', async () => {
-      const row = { requestId: 'mr-1', ulbName: 'Test ULB', status: 'PENDING' };
+    it('returns the single request when found, signing filePath into a fileUrl', async () => {
+      const row = { requestId: 'mr-1', ulbName: 'Test ULB', status: 'PENDING', filePath: 's3/path.pdf' };
       mockManualReviewRequestModel.aggregate.mockReturnValue(mockQuery([row]));
 
       const result = await service.getManualReviewRequestDetail('507f1f77bcf86cd799439011', adminUser);
 
-      expect(result).toEqual(row);
+      expect(result).toEqual({
+        requestId: 'mr-1',
+        ulbName: 'Test ULB',
+        status: 'PENDING',
+        fileUrl: 'https://signed.example.com/s3/path.pdf',
+      });
     });
 
     it('throws NotFoundException when the request does not exist', async () => {
