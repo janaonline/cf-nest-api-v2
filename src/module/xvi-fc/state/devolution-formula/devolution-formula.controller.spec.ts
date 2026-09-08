@@ -96,7 +96,7 @@ describe('DevolutionFormulaController', () => {
   it('saveDraft delegates dto and user to DevolutionFormulaService.saveDraft', () => {
     const dto = { stateId, yearId, installment: 1 } as unknown as SaveDraftDevolutionFormulaDto;
     controller.saveDraft(dto, user);
-    expect(dfService['saveDraft']).toHaveBeenCalledWith(dto, user);
+    expect(dfService['saveDraft']).toHaveBeenCalledWith(dto, user, '', '');
   });
 
   it('saveDraft retains the EDIT_STATE_FORMS permission', () => {
@@ -108,7 +108,7 @@ describe('DevolutionFormulaController', () => {
   it('validateExcel delegates dto and user to DevolutionFormulaExcelService.validateExcel', () => {
     const dto = { stateId, yearId, installment: 1 } as unknown as ValidateExcelDevolutionFormulaDto;
     controller.validateExcel(dto, user);
-    expect(dfExcelService['validateExcel']).toHaveBeenCalledWith(dto, user);
+    expect(dfExcelService['validateExcel']).toHaveBeenCalledWith(dto, user, '', '');
   });
 
   // ─── POST final-submit ───────────────────────────────────────────────────
@@ -116,7 +116,7 @@ describe('DevolutionFormulaController', () => {
   it('finalSubmit delegates dto and user to DevolutionFormulaService.finalSubmit', () => {
     const dto = { stateId, yearId, installment: 1 } as unknown as FinalSubmitDevolutionFormulaDto;
     controller.finalSubmit(dto, user);
-    expect(dfService['finalSubmit']).toHaveBeenCalledWith(dto, user);
+    expect(dfService['finalSubmit']).toHaveBeenCalledWith(dto, user, '', '');
   });
 
   it('finalSubmit retains the FINAL_SUBMIT_STATE_FORMS permission', () => {
