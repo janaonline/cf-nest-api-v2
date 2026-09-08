@@ -39,6 +39,7 @@ import {
   runBulkDecision,
   type BulkDecisionResult,
 } from 'src/module/xvi-fc/common/utils/xvi-fc-decision.util';
+import { FormReturnedNotificationService } from 'src/module/xvi-fc/common/reminders/form-returned-notification.service';
 import type { GetXviFcBankAccountQueryDto } from './dto/get-xvi-fc-bank-account-query.dto';
 import { IFSC_REGEX } from './dto/submit-xvi-fc-bank-account.dto';
 import type { SubmitXviFcBankAccountDto } from './dto/submit-xvi-fc-bank-account.dto';
@@ -114,6 +115,7 @@ export class BankAccountService {
     private readonly fileTokenService: FileTokenService,
     private readonly ulbEligibilityService: UlbEligibilityService,
     private readonly formJsonService: FormJsonService,
+    private readonly formReturnedNotification: FormReturnedNotificationService,
   ) {}
 
   /** Signs a proof-file S3 key into a short-lived, inline-viewable download URL. */
@@ -315,6 +317,15 @@ export class BankAccountService {
     });
 
     this.logger.log(`Bank account ${dto.decision.toLowerCase()} by STATE — id=${id} by user=${user._id}`);
+
+    if (newStatus === FORM_STATUS.RETURNED_BY_STATE) {
+      void this.formReturnedNotification.notifyReturned({
+        ulbId: record.ulb,
+        formName: 'Bank Account',
+        note: dto.note ?? null,
+      });
+    }
+
     return xviFcSuccess(
       'Bank account decision recorded.',
       buildSafeBankAccountResponse(updated!, this.signProofFileUrl.bind(this)),
