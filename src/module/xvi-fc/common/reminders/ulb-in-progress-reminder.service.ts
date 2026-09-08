@@ -160,9 +160,7 @@ export class UlbInProgressReminderService {
       return;
     }
 
-    for (const doc of due) {
-      await this.sendReminderForForm(doc, template);
-    }
+    await Promise.all(due.map((doc) => this.sendReminderForForm(doc, template)));
   }
 
   // now >= (lastReminderSentAt ?? inProgressSince) + INTERVAL_DAYS

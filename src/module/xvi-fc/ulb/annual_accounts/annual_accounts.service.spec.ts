@@ -17,6 +17,7 @@ import { EmailQueueService } from '../../../../core/queue/email-queue/email-queu
 import { ConfigService } from '@nestjs/config';
 import { ANNUAL_ACCOUNT_PROCESSING_QUEUE } from '../../../../core/constants/queues';
 import { UlbEligibilityService } from '../../../ulb-eligibility/ulb-eligibility.service';
+import { FormReturnedNotificationService } from '../../common/reminders/form-returned-notification.service';
 import type { AuthUser } from '../../../auth/auth-user.interface';
 
 /** Shape of the second argument passed to Mongoose's updateOne in the tests below. */
@@ -53,6 +54,7 @@ describe('AnnualAccountsService', () => {
   let mockEmailQueueService: { addEmailJob: jest.Mock };
   let mockConfigService: { get: jest.Mock };
   let mockUlbEligibilityService: { assertUlbEligibleForGrantCycle: jest.Mock };
+  let mockFormReturnedNotification: { notifyReturned: jest.Mock };
 
   beforeEach(async () => {
     mockAnnualAccountModel = {
@@ -115,6 +117,9 @@ describe('AnnualAccountsService', () => {
     mockUlbEligibilityService = {
       assertUlbEligibleForGrantCycle: jest.fn().mockResolvedValue(undefined),
     };
+    mockFormReturnedNotification = {
+      notifyReturned: jest.fn().mockResolvedValue(undefined),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -134,6 +139,7 @@ describe('AnnualAccountsService', () => {
         { provide: EmailQueueService, useValue: mockEmailQueueService },
         { provide: ConfigService, useValue: mockConfigService },
         { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
+        { provide: FormReturnedNotificationService, useValue: mockFormReturnedNotification },
       ],
     }).compile();
 
