@@ -7,6 +7,7 @@ import { Public } from 'src/module/auth/decorators/public.decorator';
 import { UlbInProgressReminderService } from './ulb-in-progress-reminder.service';
 import { StateReviewDigestService } from './state-review-digest.service';
 import { WeeklyStateSummaryService } from './weekly-state-summary.service';
+import { FormReturnedNotificationService } from './form-returned-notification.service';
 
 @ApiTags('xvi-fc-reminders')
 @ApiBearerAuth()
@@ -18,6 +19,7 @@ export class RemindersController {
     private readonly ulbReminder: UlbInProgressReminderService,
     private readonly stateDigest: StateReviewDigestService,
     private readonly weeklyStateSummary: WeeklyStateSummaryService,
+    private readonly formReturnedNotification: FormReturnedNotificationService,
   ) {}
 
   @Public()
@@ -63,5 +65,13 @@ export class RemindersController {
   @ApiOperation({ summary: 'Manually trigger the weekly state summary cron immediately (same logic as the Monday 11AM IST run)' })
   sendWeeklyStateSummaryNow() {
     return this.weeklyStateSummary.sendWeeklySummaries();
+  }
+
+  @Public()
+  @Post('seed-form-returned-template')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Seed the default form-returned notification template into DB (safe to call multiple times)' })
+  seedFormReturnedTemplate() {
+    return this.formReturnedNotification.seedTemplate();
   }
 }
