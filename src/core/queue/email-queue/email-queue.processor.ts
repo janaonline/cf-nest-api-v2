@@ -14,12 +14,12 @@ export class EmailQueueProcessor extends WorkerHost {
   }
 
   async process(job: Job<EmailJob>): Promise<void> {
-    const { to, subject, html, templateName, mailData } = job.data;
+    const { to, subject, html, templateName, mailData, attachments } = job.data;
     const recipient = Array.isArray(to) ? `${to.length} recipients` : to;
     this.logger.log(`Processing job ${job.id}: "${subject}" → ${recipient}`);
 
     if (html) {
-      await this.mailService.sendHtml(to, subject, html);
+      await this.mailService.sendHtml(to, subject, html, attachments);
     } else if (templateName) {
       await this.mailService.sendEmailWithTemplate(to, subject, templateName, mailData);
     } else {

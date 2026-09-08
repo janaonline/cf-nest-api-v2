@@ -1,11 +1,13 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
+import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { EmailQueueService } from 'src/core/queue/email-queue/email-queue.service';
 import { User, UserDocument } from 'src/schemas/user/user.schema';
 import { EmailTemplate, EmailTemplateDocument } from 'src/schemas/email-template.schema';
 import { interpolate } from 'src/core/utils/interpolate.util';
+import { remindersCronsEnabled } from 'src/common/utils/reminder-cron-gate.util';
 
 const WEEKLY_REPORT_SLUG = 'weekly-report';
 
@@ -47,12 +49,19 @@ export class WeeklyReportService {
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
     @InjectModel(EmailTemplate.name) private readonly templateModel: Model<EmailTemplateDocument>,
     private readonly emailQueue: EmailQueueService,
+    private readonly config: ConfigService,
   ) {}
 
   // ─── Cron: every Monday 10:00 AM IST ──────────────────────────────────────
-
+  // Master on/off switch — see UlbInProgressReminderService.handleScheduledRun (xvi-fc/common/
+  // reminders) for the full rationale, one flag shared across all four reminder/summary crons.
+  // Still worth knowing even with the flag on: this job sends PLACEHOLDER all-zero stats to every
+  // single user in the system (see buildStats()'s TODO) — the flag controls whether it runs on
+  // schedule, not whether the data it sends is real. Manual trigger
+  // (POST /email-templates/send-weekly-report → sendWeeklyReport() directly) bypasses this flag.
   @Cron('0 10 * * 1', { timeZone: 'Asia/Kolkata' })
   async handleWeeklyCron(): Promise<void> {
+    if (!remindersCronsEnabled(this.config, this.logger)) return;
     this.logger.log('Weekly report cron triggered');
     const result = await this.sendWeeklyReport();
     this.logger.log(`Weekly report queued — queued: ${result.queued}, total: ${result.total}`);

@@ -16,10 +16,6 @@ import {
 } from 'src/schemas/xvi-fc/state/devolution-formula-row.schema';
 import { Ulb, UlbSchema } from 'src/schemas/ulb.schema';
 import { GrantAllocation, GrantAllocationSchema } from 'src/schemas/xvi-fc/grant-allocation.schema';
-import {
-  ElectedUrbanLocalBodiesForm,
-  ElectedUrbanLocalBodiesFormSchema,
-} from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
 import { DevolutionFormulaController } from './devolution-formula.controller';
 import { DevolutionFormulaService } from './services/main/devolution-formula.service';
 import { DevolutionFormulaExcelService } from './services/excel/devolution-formula-excel.service';
@@ -34,8 +30,6 @@ import { UlbEligibilityModule } from 'src/module/ulb-eligibility/ulb-eligibility
       { name: DevolutionFormulaRow.name, schema: DevolutionFormulaRowSchema },
       { name: Ulb.name, schema: UlbSchema },
       { name: GrantAllocation.name, schema: GrantAllocationSchema },
-      // Needed to check Installment 1 prerequisite (EULB must be acknowledged)
-      { name: ElectedUrbanLocalBodiesForm.name, schema: ElectedUrbanLocalBodiesFormSchema },
     ]),
     XviFcCommonModule,
     FormJsonModule,

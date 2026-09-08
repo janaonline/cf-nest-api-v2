@@ -56,7 +56,7 @@ import type {
   DfValidateExcelResponseData,
 } from '../../types/devolution-formula.types';
 import { DevolutionFormulaValidator, type DfParsedExcelRow } from '../../validators/devolution-formula.validator';
-import { amountsAreEqual } from '../../helpers/devolution-formula-tolerance.helpers';
+import { amountsAreEqual, snapToWholeRupee } from '../../helpers/devolution-formula-tolerance.helpers';
 import { DevolutionFormulaService } from '../main/devolution-formula.service';
 import { DfFormJsonConfigService } from '../form-json/devolution-formula-form-json.service';
 import { getDfFieldsByType } from '../../helpers/devolution-formula-form-json.helpers';
@@ -972,9 +972,12 @@ export class DevolutionFormulaExcelService {
       rowNumber,
       censusCode: String((get('censusCode') ?? '') as string | number | boolean).trim(),
       ulbName: String((get('ulbName') ?? '') as string | number | boolean).trim(),
-      totalGrantAllocation: get('totalGrantAllocation'),
-      installment1Amount: get('installment1Amount'),
-      installment2Amount: get('installment2Amount'),
+      // Normalize once when raw cell values enter the pipeline to absorb IEEE-754 noise from formula cells
+      // without weakening the validator's whole-Rupee check. All downstream consumers of parsed see the
+      // corrected value. See devolution-formula-tolerance.helpers.ts.
+      totalGrantAllocation: snapToWholeRupee(get('totalGrantAllocation')),
+      installment1Amount: snapToWholeRupee(get('installment1Amount')),
+      installment2Amount: snapToWholeRupee(get('installment2Amount')),
       devolutionFormula: String((get('devolutionFormula') ?? '') as string | number | boolean).trim(),
     };
   }

@@ -49,11 +49,6 @@ import { GrantAllocation, GrantAllocationDocument } from 'src/schemas/xvi-fc/gra
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 import {
-  EULB_FORM_TYPE,
-  ElectedUrbanLocalBodiesForm,
-  EulbFormDocument,
-} from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
-import {
   DF_ACTION_DOWNLOAD_ERROR_SHEET,
   DF_ACTION_DOWNLOAD_TEMPLATE,
   DF_ACTION_REGISTER_ULB,
@@ -104,8 +99,6 @@ export class DevolutionFormulaService {
     private readonly rowModel: Model<DevolutionFormulaRowDocument>,
     @InjectModel(GrantAllocation.name)
     private readonly grantAllocationModel: Model<GrantAllocationDocument>,
-    @InjectModel(ElectedUrbanLocalBodiesForm.name)
-    private readonly eulbModel: Model<EulbFormDocument>,
     @InjectModel(Ulb.name)
     private readonly ulbModel: Model<UlbDocument>,
     private readonly dfValidator: DevolutionFormulaValidator,
@@ -344,11 +337,6 @@ export class DevolutionFormulaService {
 
     const validation = this.dynamicFormValidator.validateFinalSubmitAndBuildPayload(dfMainFields, formData);
     if (!validation.isValid) throwXviFcValidationError(validation.errors);
-
-    // Prerequisite gate for installment 1
-    if (dto.installment === 1) {
-      await this.checkInstallment1Prereq(stateOid, yearOid);
-    }
 
     // Prerequisite gate for installment 2
     if (dto.installment === 2) {
@@ -865,31 +853,6 @@ export class DevolutionFormulaService {
       // Defensive rounding — see the matching comment on totalMoHUAAllocation above.
       total: Math.round(alloc.basic + alloc.performance),
     };
-  }
-
-  private async checkInstallment1Prereq(stateOid: Types.ObjectId, yearOid: Types.ObjectId): Promise<void> {
-    const eulbUnderReview = await this.eulbModel
-      .findOne({
-        state: stateOid,
-        year: yearOid,
-        formType: EULB_FORM_TYPE,
-        currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
-      })
-      .lean()
-      .exec();
-
-    if (!eulbUnderReview) {
-      throwXviFcValidationError({
-        installment: [
-          {
-            field: 'installment',
-            code: 'prerequisiteNotMet',
-            message:
-              'Elected Body form must be submitted and under review by MoHUA before submitting ULB-wise Allocation.',
-          },
-        ],
-      });
-    }
   }
 
   private checkInstallment2Prereq(): void {
