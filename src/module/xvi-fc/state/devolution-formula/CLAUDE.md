@@ -13,6 +13,32 @@ figures, populated via Excel upload and editable row-by-row after that.
 - `services/form-json/devolution-formula-form-json.service.ts` — form question config.
 - `validators/`, `helpers/`, `dto/`, `types/`, `constants/` — supporting, mostly self-contained.
 
+## Form status history log
+
+`schemas/xvi-fc/state/devolution-formula-form-history.schema.ts` (collection
+`xvifc_devolution_form_logs`) is an append-only log of `currentFormStatus` transitions, mirroring
+`sfc-status-history.schema.ts`. `action` uses the shared `FormHistoryAction` enum
+(`src/common/constants/form-status.constants.ts` — one enum for every state form, not per-form).
+
+**The real `NOT_STARTED→IN_PROGRESS` transition happens in `DevolutionFormulaExcelService
+.validateExcel`, not `saveDraft`** — the actual flow is upload Excel → validate → click Save, and
+`validateExcel`'s upsert is what first flips a brand-new form to `IN_PROGRESS`. It logs that
+transition itself (guarded the same way: no row when `fromStatus === toStatus`) inside its own
+transaction. This was originally missed (only `saveDraft`/`finalSubmit` were wired up), so the
+form's real first transition went silently unlogged — `saveDraft` saw `fromStatus === toStatus`
+and correctly no-opped. **Any new write path that can change `currentFormStatus` needs its own
+history-log call** — the no-op guard doesn't compose across services.
+
+`saveDraft`/`finalSubmit` insert their own row as a separate, non-transactional, best-effort call
+(a logging failure is caught/logged, never fails the request — same tradeoff as
+`sfc-status.service.ts`). No MoHUA workflow exists yet, so only `CREATE_DRAFT`/`FINAL_SUBMIT` are
+ever logged.
+
+`snapshot` is populated on `FINAL_SUBMIT` with the active dataset version's row content — because
+the Excel-upload transaction *hard-deletes* the previous version's rows on every re-upload (see the
+ADR below), and there's no row-history collection, this is the only surviving record of what was
+submitted. `null` on `CREATE_DRAFT`.
+
 ## Before changing dataset/version logic, read the ADR
 
 - [docs/adr/0001-dataset-versioning.md](docs/adr/0001-dataset-versioning.md) — the atomic

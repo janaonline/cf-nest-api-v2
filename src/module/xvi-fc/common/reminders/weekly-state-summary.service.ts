@@ -96,11 +96,10 @@ interface StatusCounts {
 
 /**
  * Every Monday 11AM IST, emails each state's own STATE/STATE-EDITOR/STATE-VIEWER users a summary
- * of that state's Annual Account (Audited) status — a deliberately separate cron from
- * `WeeklyReportService` (which stays as-is; both jobs are wanted, not one replacing the other).
- * "Forwarded to MoHUA" is a direct count of UNDER_REVIEW_BY_MOHUA (form_status_id 5) — a form
- * actually sitting with MoHUA — not a claim-letter-batch join, which would count ULBs merely
- * eligible/ready rather than actually forwarded.
+ * of that state's Annual Account (Audited) status. "Forwarded to MoHUA" is a direct count of
+ * UNDER_REVIEW_BY_MOHUA (form_status_id 5) — a form actually sitting with MoHUA — not a
+ * claim-letter-batch join, which would count ULBs merely eligible/ready rather than actually
+ * forwarded.
  */
 @Injectable()
 export class WeeklyStateSummaryService {
@@ -117,7 +116,7 @@ export class WeeklyStateSummaryService {
     private readonly config: ConfigService,
   ) {}
 
-  // ─── Seed default template (idempotent — mirrors WeeklyReportService.seedWeeklyReportTemplate) ──
+  // ─── Seed default template (idempotent — mirrors the other reminder services' seedTemplate) ──
 
   async seedTemplate(): Promise<{ created: boolean; message: string }> {
     const existing = await this.templateModel.findOne({ slug: TEMPLATE_SLUG }).exec();
@@ -135,7 +134,7 @@ export class WeeklyStateSummaryService {
   }
 
   // Master on/off switch — see UlbInProgressReminderService.handleScheduledRun for the full
-  // rationale (one flag shared across all four reminder/summary crons). Manual trigger
+  // rationale (one flag shared across the 3 reminder/summary crons). Manual trigger
   // (POST xvi-fc/reminders/send-weekly-state-summary-now → sendWeeklySummaries() directly)
   // bypasses this flag.
   @Cron('0 11 * * 1', { timeZone: 'Asia/Kolkata' })

@@ -8,6 +8,7 @@ import { DF_TEMPLATE_HEADERS } from '../../constants/devolution-formula.constant
 import { DevolutionFormulaValidator } from '../../validators/devolution-formula.validator';
 import { DevolutionFormulaForm } from 'src/schemas/xvi-fc/state/devolution-formula-form.schema';
 import { DevolutionFormulaRow } from 'src/schemas/xvi-fc/state/devolution-formula-row.schema';
+import { DevolutionFormulaFormHistory } from 'src/schemas/xvi-fc/state/devolution-formula-form-history.schema';
 import { Ulb } from 'src/schemas/ulb.schema';
 import { S3Service } from 'src/core/s3/s3.service';
 import { ExcelService } from 'src/services/excel/excel.service';
@@ -16,7 +17,7 @@ import { FileUrlNormalizerService } from 'src/module/xvi-fc/common/services/file
 import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
 import { DevolutionFormulaService } from '../main/devolution-formula.service';
 import { DfFormJsonConfigService } from '../form-json/devolution-formula-form-json.service';
-import { FORM_STATUS } from 'src/common/constants/form-status.constants';
+import { FORM_STATUS, FormHistoryAction } from 'src/common/constants/form-status.constants';
 import { Scope, UserRole, AccessLevel } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
@@ -198,6 +199,8 @@ const mockRowModel = {
   bulkWrite: jest.fn(),
 };
 
+const mockHistoryModel = { create: jest.fn().mockResolvedValue(undefined) };
+
 const mockUlbModel = { find: jest.fn() };
 const mockUlbEligibilityService = {
   getEligibleUlbFilter: jest
@@ -234,6 +237,7 @@ describe('DevolutionFormulaExcelService — safe dataset replace', () => {
         DevolutionFormulaValidator,
         { provide: getModelToken(DevolutionFormulaForm.name), useValue: mockFormModel },
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: mockRowModel },
+        { provide: getModelToken(DevolutionFormulaFormHistory.name), useValue: mockHistoryModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
         { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: S3Service, useValue: mockS3Service },
@@ -369,6 +373,80 @@ describe('DevolutionFormulaExcelService — safe dataset replace', () => {
     const deleteOrder = mockRowModel.deleteMany.mock.invocationCallOrder[0];
     const commitOrder = mockSession.commitTransaction.mock.invocationCallOrder[0];
     expect(deleteOrder).toBeLessThan(commitOrder);
+  });
+
+  // ─── form history logging (the real transition happens here, not in saveDraft) ─────────────
+
+  it("logs a CREATE_DRAFT history row on a brand-new form's first validateExcel call, inside the transaction", async () => {
+    mockFormModel.findOne.mockReturnValue(q(null)); // brand-new form
+    mockFormModel.findOneAndUpdate.mockReturnValue(mockUpsertedForm({ activeDatasetVersion: 1 }));
+    mockRowModel.insertMany.mockResolvedValue([]);
+    mockFormModel.findByIdAndUpdate.mockReturnValue(q(null));
+    mockRowModel.deleteMany.mockReturnValue(q(null));
+
+    const buffer = makeXlsxBuffer([['C001', 'Alpha City', 500_000, 300_000, 200_000, 'population']]);
+    mockS3Service.getBuffer.mockResolvedValue(buffer);
+
+    await service.validateExcel(
+      {
+        stateId: stateOid.toString(),
+        yearId: YEAR_ID,
+        installment: 1,
+        excelFile: {
+          originalName: 'test.xlsx',
+          path: 'state/path/test.xlsx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          sizeKb: 1,
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
+      },
+      adminUser,
+      '1.2.3.4',
+      'jest-agent',
+    );
+
+    expect(mockHistoryModel.create).toHaveBeenCalledWith(
+      [
+        expect.objectContaining({
+          action: FormHistoryAction.CREATE_DRAFT,
+          fromStatus: FORM_STATUS.NOT_STARTED,
+          toStatus: FORM_STATUS.IN_PROGRESS,
+          ip: '1.2.3.4',
+          userAgent: 'jest-agent',
+        }),
+      ],
+      { session: mockSession },
+    );
+  });
+
+  it('writes no history row when the form is already IN_PROGRESS (re-upload while still a draft)', async () => {
+    mockFormModel.findOne.mockReturnValue(q(mockExistingForm)); // already IN_PROGRESS
+    mockFormModel.findOneAndUpdate.mockReturnValue(mockUpsertedForm({ activeDatasetVersion: 2 }));
+    mockRowModel.updateMany.mockReturnValue(q({ modifiedCount: 2 }));
+    mockRowModel.insertMany.mockResolvedValue([]);
+    mockFormModel.findByIdAndUpdate.mockReturnValue(q(null));
+    mockRowModel.deleteMany.mockReturnValue(q(null));
+
+    const buffer = makeXlsxBuffer([['C001', 'Alpha City', 500_000, 300_000, 200_000, 'population']]);
+    mockS3Service.getBuffer.mockResolvedValue(buffer);
+
+    await service.validateExcel(
+      {
+        stateId: stateOid.toString(),
+        yearId: YEAR_ID,
+        installment: 1,
+        excelFile: {
+          originalName: 'test.xlsx',
+          path: 'state/path/test.xlsx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          sizeKb: 1,
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
+      },
+      adminUser,
+    );
+
+    expect(mockHistoryModel.create).not.toHaveBeenCalled();
   });
 
   // Whole Rupees only — a fractional cell is rejected outright, not rounded.
@@ -554,6 +632,7 @@ describe('DevolutionFormulaExcelService — revalidateExcel', () => {
         DevolutionFormulaValidator,
         { provide: getModelToken(DevolutionFormulaForm.name), useValue: mockFormModel },
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: mockRowModel },
+        { provide: getModelToken(DevolutionFormulaFormHistory.name), useValue: mockHistoryModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
         { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: S3Service, useValue: mockS3Service },
@@ -837,6 +916,7 @@ describe('DevolutionFormulaExcelService — generateTemplate', () => {
         DevolutionFormulaValidator,
         { provide: getModelToken(DevolutionFormulaForm.name), useValue: mockFormModel },
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: mockRowModel },
+        { provide: getModelToken(DevolutionFormulaFormHistory.name), useValue: mockHistoryModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
         { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: S3Service, useValue: mockS3Service },
@@ -982,6 +1062,7 @@ describe('DevolutionFormulaExcelService — validateExcel ULB identity guard', (
         DevolutionFormulaValidator,
         { provide: getModelToken(DevolutionFormulaForm.name), useValue: mockFormModel },
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: mockRowModel },
+        { provide: getModelToken(DevolutionFormulaFormHistory.name), useValue: mockHistoryModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
         { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: S3Service, useValue: mockS3Service },
@@ -1162,6 +1243,7 @@ describe('DevolutionFormulaExcelService — validateExcel new/extra ULB detectio
         DevolutionFormulaValidator,
         { provide: getModelToken(DevolutionFormulaForm.name), useValue: mockFormModel },
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: mockRowModel },
+        { provide: getModelToken(DevolutionFormulaFormHistory.name), useValue: mockHistoryModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
         { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: S3Service, useValue: mockS3Service },
@@ -1456,6 +1538,7 @@ describe('DevolutionFormulaExcelService — atomic version allocation & write-co
         DevolutionFormulaValidator,
         { provide: getModelToken(DevolutionFormulaForm.name), useValue: mockFormModel },
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: mockRowModel },
+        { provide: getModelToken(DevolutionFormulaFormHistory.name), useValue: mockHistoryModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
         { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: S3Service, useValue: mockS3Service },

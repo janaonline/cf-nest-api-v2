@@ -44,6 +44,7 @@ import {
   XviFcManualReviewRequestDocument,
 } from '../../../../schemas/xvi-fc/manual-review-request.schema';
 import { Role } from '../../../auth/enum/role.enum';
+import { FormReturnedNotificationService } from '../../common/reminders/form-returned-notification.service';
 import { UlbEligibilityService } from '../../../ulb-eligibility/ulb-eligibility.service';
 import { CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE } from '../../../ulb-eligibility/ulb-eligibility.constants';
 import {
@@ -173,6 +174,8 @@ export class AnnualAccountsService implements OnModuleInit {
     private readonly configService: ConfigService,
 
     private readonly ulbEligibilityService: UlbEligibilityService,
+
+    private readonly formReturnedNotification: FormReturnedNotificationService,
   ) {}
 
   async onModuleInit() {
@@ -1694,6 +1697,11 @@ export class AnnualAccountsService implements OnModuleInit {
           form_status_id: FORM_STATUS_ID[newStatus],
           stateDecision: decision,
           modifiedBy: new Types.ObjectId(user._id),
+          // RETURNED_BY_STATE is outside the ULB in-progress reminder's IN_PROGRESS gate, so
+          // inProgressSince is moot here either way — cleared anyway so a stale value doesn't
+          // linger while the section isn't IN_PROGRESS. It's set fresh again the moment the ULB
+          // re-touches a document and the section flips back to IN_PROGRESS (see uploadDocument).
+          ...(newStatus === AnnualAccountFormStatus.RETURNED_BY_STATE && { inProgressSince: null }),
           ...(toBulkDecide.length > 0 && {
             'documents.$[elem].stateDecision': decision,
           }),
@@ -1736,6 +1744,14 @@ export class AnnualAccountsService implements OnModuleInit {
       `Section ${dto.decision.toLowerCase()} — annualAccountId=${id} section=${dto.section} by user=${user._id}` +
         (toBulkDecide.length > 0 ? ` — bulk-decided ${toBulkDecide.length} document(s)` : ''),
     );
+
+    if (newStatus === AnnualAccountFormStatus.RETURNED_BY_STATE) {
+      void this.formReturnedNotification.notifyReturned({
+        ulbId: anchor.ulb,
+        formName: `${SECTION_LABELS[dto.section]} Statements`,
+        note: dto.note ?? null,
+      });
+    }
 
     return this.getProcessingStatus(id, dto.section, user);
   }

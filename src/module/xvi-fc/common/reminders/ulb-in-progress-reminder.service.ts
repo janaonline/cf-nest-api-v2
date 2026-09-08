@@ -119,7 +119,7 @@ export class UlbInProgressReminderService {
     private readonly config: ConfigService,
   ) {}
 
-  // ─── Seed default template (idempotent — mirrors WeeklyReportService.seedWeeklyReportTemplate) ──
+  // ─── Seed default template (idempotent — mirrors the other reminder services' seedTemplate) ──
 
   async seedTemplate(): Promise<{ created: boolean; message: string }> {
     const existing = await this.templateModel.findOne({ slug: TEMPLATE_SLUG }).exec();
@@ -137,10 +137,9 @@ export class UlbInProgressReminderService {
   }
 
   // Master on/off switch for every XVI-FC reminder/summary cron (this one + StateReviewDigest +
-  // WeeklyStateSummary + WeeklyReport) — set XVIFC_REMINDER_CRONS_ENABLED=true in env to let the
-  // scheduled run actually fire. The manual trigger (POST xvi-fc/reminders/send-ulb-in-progress-now
-  // → sendDueReminders() directly) deliberately bypasses this flag, same as WeeklyReportService's
-  // existing handleWeeklyCron()/sendWeeklyReport() split.
+  // WeeklyStateSummary) — set XVIFC_REMINDER_CRONS_ENABLED=true in env to let the scheduled run
+  // actually fire. The manual trigger (POST xvi-fc/reminders/send-ulb-in-progress-now →
+  // sendDueReminders() directly) deliberately bypasses this flag.
   @Cron('0 9 * * *', { timeZone: 'Asia/Kolkata' })
   async handleScheduledRun(): Promise<void> {
     if (!remindersCronsEnabled(this.config, this.logger)) return;
@@ -160,9 +159,7 @@ export class UlbInProgressReminderService {
       return;
     }
 
-    for (const doc of due) {
-      await this.sendReminderForForm(doc, template);
-    }
+    await Promise.all(due.map((doc) => this.sendReminderForForm(doc, template)));
   }
 
   // now >= (lastReminderSentAt ?? inProgressSince) + INTERVAL_DAYS
