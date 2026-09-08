@@ -60,6 +60,7 @@ import { BulkSectionDecisionDto } from './dto/bulk-section-decision.dto';
 import { UlbSubmissionsQueryDto } from './dto/ulb-submissions-query.dto';
 import { ManualReviewDecisionDto } from './dto/manual-review-decision.dto';
 import { ManualReviewQueueQueryDto } from './dto/manual-review-queue-query.dto';
+import { ManualReviewHistoryQueryDto } from './dto/manual-review-history-query.dto';
 import type { AnnualAccountOcrJobData } from './dto/annual-account-ocr-job.dto';
 import type { AuthUser } from '../../../auth/auth-user.interface';
 import { Scope, Permission } from '../../../auth/enum/roles-xvi-fc.enum';
@@ -1235,8 +1236,12 @@ export class AnnualAccountsService implements OnModuleInit {
           ulbName: '$ulbDoc.name',
           ulbCode: '$ulbDoc.code',
           stateName: '$stateDoc.name',
+          // Every row here is still PENDING (never decided — see the $match above), so breach is
+          // always measured against now, unlike the decided-inclusive history endpoint.
+          dueAt: { $add: ['$manualReviewRequestedAt', MANUAL_REVIEW_SLA_HOURS * 60 * 60 * 1000] },
         },
       },
+      { $addFields: { isBreached: { $lt: ['$dueAt', '$$NOW'] } } },
       ...(dto.search?.trim()
         ? [
             {
@@ -1274,6 +1279,8 @@ export class AnnualAccountsService implements OnModuleInit {
                 validationDetails: 1,
                 failedChecks: 1,
                 manualReviewRequestedAt: 1,
+                dueAt: 1,
+                isBreached: 1,
               },
             },
           ],
@@ -1287,6 +1294,157 @@ export class AnnualAccountsService implements OnModuleInit {
     const total = result?.totalCount?.[0]?.count ?? 0;
 
     return { total, page, pageSize, rows };
+  }
+
+  // ─── ADMIN's global manual-review audit trail (all statuses) ─────────────────
+
+  /**
+   * Shared lookup/projection stages for both the paginated history list and the single-request
+   * detail view — joined straight off `xvifc_ac_manual_review_requests` (not reconstructed from
+   * live document state, unlike getManualReviewQueue) so decided requests are covered too. The
+   * upload-history join is keyed on `uploadId` (unique per upload), which sidesteps the
+   * audited/unaudited-sibling `$facet` dance getManualReviewQueue needs — a manual-review
+   * request's uploadId always resolves to exactly one upload-history row regardless of section.
+   */
+  private manualReviewHistoryLookupStages(): PipelineStage.FacetPipelineStage[] {
+    return [
+      { $lookup: { from: 'ulbs', localField: 'ulb', foreignField: '_id', as: 'ulbDoc' } },
+      { $addFields: { ulbDoc: { $arrayElemAt: ['$ulbDoc', 0] } } },
+      { $lookup: { from: 'states', localField: 'ulbDoc.state', foreignField: '_id', as: 'stateDoc' } },
+      { $addFields: { stateDoc: { $arrayElemAt: ['$stateDoc', 0] } } },
+      { $lookup: { from: 'years', localField: 'designYear', foreignField: '_id', as: 'yearDoc' } },
+      { $addFields: { yearDoc: { $arrayElemAt: ['$yearDoc', 0] } } },
+      {
+        $lookup: {
+          from: 'xvifc_annualaccount_upload_history',
+          localField: 'uploadId',
+          foreignField: 'uploadId',
+          as: 'uploadHistory',
+        },
+      },
+      { $addFields: { uploadHistory: { $arrayElemAt: ['$uploadHistory', 0] } } },
+      {
+        $addFields: {
+          ulbName: '$ulbDoc.name',
+          ulbCode: '$ulbDoc.code',
+          stateName: '$stateDoc.name',
+          year: '$yearDoc.year',
+          fileName: '$uploadHistory.file.originalName',
+          sizeKb: '$uploadHistory.file.sizeKb',
+          validationStatus: '$uploadHistory.ocrInfo.validationStatus',
+          validationDetails: '$uploadHistory.ocrInfo.validationDetails',
+          failedChecks: { $ifNull: ['$uploadHistory.ocrInfo.failedChecks', []] },
+          // Breach is derived here, never stored — see MANUAL_REVIEW_SLA_HOURS' doc comment.
+          isBreached: { $lt: ['$dueAt', { $ifNull: ['$decidedAt', '$$NOW'] }] },
+        },
+      },
+    ];
+  }
+
+  private manualReviewHistoryProjectStage(): PipelineStage.Project {
+    return {
+      $project: {
+        _id: 0,
+        requestId: '$_id',
+        annualAccountId: 1,
+        ulbId: '$ulb',
+        ulbName: 1,
+        ulbCode: 1,
+        stateName: 1,
+        section: 1,
+        year: 1,
+        docId: 1,
+        uploadId: 1,
+        ocrJobId: 1,
+        fileName: 1,
+        sizeKb: 1,
+        validationStatus: 1,
+        validationDetails: 1,
+        failedChecks: 1,
+        status: 1,
+        requestedAt: 1,
+        requestedBy: { role: '$requestedBy.role', name: '$requestedBy.name' },
+        dueAt: 1,
+        isBreached: 1,
+        decidedAt: 1,
+        decidedBy: {
+          $cond: [{ $ifNull: ['$decidedBy', false] }, { role: '$decidedBy.role', name: '$decidedBy.name' }, null],
+        },
+        decisionNote: 1,
+      },
+    };
+  }
+
+  async listManualReviewRequestHistory(dto: ManualReviewHistoryQueryDto, user: AuthUser) {
+    if (user.scope !== Scope.ADMIN) {
+      throw new ForbiddenException('Only ADMIN users may view the manual-review history');
+    }
+
+    const page = dto.page ?? 1;
+    const pageSize = dto.pageSize ?? 20;
+
+    const match: Record<string, unknown> = {};
+    if (dto.status) match.status = dto.status;
+    if (dto.requestedFrom || dto.requestedTo) {
+      match.requestedAt = {
+        ...(dto.requestedFrom ? { $gte: new Date(dto.requestedFrom) } : {}),
+        ...(dto.requestedTo ? { $lte: new Date(dto.requestedTo) } : {}),
+      };
+    }
+    if (dto.decidedFrom || dto.decidedTo) {
+      match.decidedAt = {
+        ...(dto.decidedFrom ? { $gte: new Date(dto.decidedFrom) } : {}),
+        ...(dto.decidedTo ? { $lte: new Date(dto.decidedTo) } : {}),
+      };
+    }
+
+    const pipeline: PipelineStage[] = [
+      { $match: match },
+      ...this.manualReviewHistoryLookupStages(),
+      ...(dto.stateId ? [{ $match: { 'stateDoc._id': new Types.ObjectId(dto.stateId) } } as PipelineStage] : []),
+      ...(dto.breachedOnly ? [{ $match: { isBreached: true } } as PipelineStage] : []),
+      ...(dto.search?.trim()
+        ? [
+            {
+              $match: {
+                $or: [
+                  { ulbName: new RegExp(escapeRegex(dto.search.trim()), 'i') },
+                  { ulbCode: new RegExp(escapeRegex(dto.search.trim()), 'i') },
+                ],
+              },
+            } as PipelineStage,
+          ]
+        : []),
+      { $sort: { requestedAt: -1 } },
+      {
+        $facet: {
+          data: [{ $skip: (page - 1) * pageSize }, { $limit: pageSize }, this.manualReviewHistoryProjectStage()],
+          totalCount: [{ $count: 'count' }],
+        },
+      },
+    ];
+
+    const [result] = await this.manualReviewRequestModel.aggregate(pipeline).exec();
+    const rows = result?.data ?? [];
+    const total = result?.totalCount?.[0]?.count ?? 0;
+
+    return { total, page, pageSize, rows };
+  }
+
+  async getManualReviewRequestDetail(requestId: string, user: AuthUser) {
+    if (user.scope !== Scope.ADMIN) {
+      throw new ForbiddenException('Only ADMIN users may view manual-review request details');
+    }
+
+    const pipeline: PipelineStage[] = [
+      { $match: { _id: new Types.ObjectId(requestId) } },
+      ...this.manualReviewHistoryLookupStages(),
+      this.manualReviewHistoryProjectStage(),
+    ];
+
+    const [row] = await this.manualReviewRequestModel.aggregate(pipeline).exec();
+    if (!row) throw new NotFoundException('Manual-review request not found');
+    return row;
   }
 
   // ─── Submit section to State DMA ─────────────────────────────────────────────

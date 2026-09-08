@@ -14,6 +14,7 @@ import { BulkSectionDecisionDto } from './dto/bulk-section-decision.dto';
 import { UlbSubmissionsQueryDto } from './dto/ulb-submissions-query.dto';
 import { ManualReviewDecisionDto } from './dto/manual-review-decision.dto';
 import { ManualReviewQueueQueryDto } from './dto/manual-review-queue-query.dto';
+import { ManualReviewHistoryQueryDto } from './dto/manual-review-history-query.dto';
 import { extractIpAndUserAgent } from 'src/module/xvi-fc/common/utils/xvi-fc-request-meta.util';
 
 @ApiBearerAuth()
@@ -69,6 +70,21 @@ export class AnnualAccountsController {
   @ApiOperation({ summary: "ADMIN's global queue of documents awaiting a manual-review decision, across all ULBs" })
   getManualReviewQueue(@Query() dto: ManualReviewQueueQueryDto, @CurrentUser() user: AuthUser) {
     return this.annualAccountsService.getManualReviewQueue(dto, user);
+  }
+
+  @Get('manual-review-history')
+  @ApiOperation({ summary: "ADMIN's paginated audit trail of all manual-review requests (any status), across all ULBs" })
+  listManualReviewRequestHistory(@Query() dto: ManualReviewHistoryQueryDto, @CurrentUser() user: AuthUser) {
+    return this.annualAccountsService.listManualReviewRequestHistory(dto, user);
+  }
+
+  @Get('manual-review-history/:requestId')
+  @ApiOperation({ summary: 'ADMIN view of a single manual-review request by its own id' })
+  getManualReviewRequestDetail(
+    @Param('requestId', ParseObjectIdPipe) requestId: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.annualAccountsService.getManualReviewRequestDetail(requestId, user);
   }
 
   @Get(':id')

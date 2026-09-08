@@ -43,7 +43,12 @@ describe('AnnualAccountsService', () => {
   let mockUlbModel: Record<string, jest.Mock>;
   let mockUserModel: Record<string, jest.Mock>;
   let mockFormLogModel: { create: jest.Mock };
-  let mockManualReviewRequestModel: { create: jest.Mock; find: jest.Mock; findOneAndUpdate: jest.Mock };
+  let mockManualReviewRequestModel: {
+    create: jest.Mock;
+    find: jest.Mock;
+    findOneAndUpdate: jest.Mock;
+    aggregate: jest.Mock;
+  };
 
   let mockOcrQueue: { add: jest.Mock };
   let mockFormJsonService: { findActiveByDesignYearAndFormId: jest.Mock };
@@ -78,6 +83,7 @@ describe('AnnualAccountsService', () => {
       create: jest.fn().mockResolvedValue(undefined),
       find: jest.fn().mockReturnValue(mockQuery([])),
       findOneAndUpdate: jest.fn().mockResolvedValue({ _id: 'mr-1' }),
+      aggregate: jest.fn().mockReturnValue(mockQuery([{ data: [], totalCount: [] }])),
     };
     mockUlbModel = {
       findById: jest.fn().mockReturnValue(mockQuery({ state: { toString: () => 'state-1' } })),
@@ -670,6 +676,64 @@ describe('AnnualAccountsService', () => {
       const result = await service.getManualReviewQueue({ page: 1, pageSize: 20 }, adminUser);
 
       expect(result).toEqual({ total: 0, page: 1, pageSize: 20, rows: [] });
+    });
+  });
+
+  describe('listManualReviewRequestHistory', () => {
+    const adminUser: AuthUser = { _id: 'admin-1', role: 'ADMIN', scope: 'ADMIN' } as AuthUser;
+
+    it('rejects non-ADMIN users', async () => {
+      const stateUser: AuthUser = { _id: 'user-2', role: 'STATE', scope: 'STATE' } as AuthUser;
+
+      await expect(service.listManualReviewRequestHistory({ page: 1, pageSize: 20 }, stateUser)).rejects.toThrow(
+        'Only ADMIN users may view the manual-review history',
+      );
+    });
+
+    it('returns the paginated shape from the aggregation result', async () => {
+      const row = { requestId: 'mr-1', ulbName: 'Test ULB', status: 'APPROVED', docId: 'auditors-report' };
+      mockManualReviewRequestModel.aggregate.mockReturnValue(mockQuery([{ data: [row], totalCount: [{ count: 1 }] }]));
+
+      const result = await service.listManualReviewRequestHistory({ page: 1, pageSize: 20 }, adminUser);
+
+      expect(result).toEqual({ total: 1, page: 1, pageSize: 20, rows: [row] });
+    });
+
+    it('returns an empty page when nothing matches', async () => {
+      mockManualReviewRequestModel.aggregate.mockReturnValue(mockQuery([{ data: [], totalCount: [] }]));
+
+      const result = await service.listManualReviewRequestHistory({ page: 1, pageSize: 20 }, adminUser);
+
+      expect(result).toEqual({ total: 0, page: 1, pageSize: 20, rows: [] });
+    });
+  });
+
+  describe('getManualReviewRequestDetail', () => {
+    const adminUser: AuthUser = { _id: 'admin-1', role: 'ADMIN', scope: 'ADMIN' } as AuthUser;
+
+    it('rejects non-ADMIN users', async () => {
+      const stateUser: AuthUser = { _id: 'user-2', role: 'STATE', scope: 'STATE' } as AuthUser;
+
+      await expect(service.getManualReviewRequestDetail('mr-1', stateUser)).rejects.toThrow(
+        'Only ADMIN users may view manual-review request details',
+      );
+    });
+
+    it('returns the single request when found', async () => {
+      const row = { requestId: 'mr-1', ulbName: 'Test ULB', status: 'PENDING' };
+      mockManualReviewRequestModel.aggregate.mockReturnValue(mockQuery([row]));
+
+      const result = await service.getManualReviewRequestDetail('507f1f77bcf86cd799439011', adminUser);
+
+      expect(result).toEqual(row);
+    });
+
+    it('throws NotFoundException when the request does not exist', async () => {
+      mockManualReviewRequestModel.aggregate.mockReturnValue(mockQuery([]));
+
+      await expect(service.getManualReviewRequestDetail('507f1f77bcf86cd799439011', adminUser)).rejects.toThrow(
+        'Manual-review request not found',
+      );
     });
   });
 
