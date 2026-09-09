@@ -6,12 +6,6 @@ import { EulbRowError, EulbRowErrorSubdocSchema } from './elected-urban-local-bo
 
 export const EULB_FORM_TYPE = 'ELECTED_URBAN_LOCAL_BODIES';
 
-export enum EulbFormAction {
-  CREATE_DRAFT = 'CREATE_DRAFT',
-  UPDATE_DRAFT = 'UPDATE_DRAFT',
-  FINAL_SUBMIT = 'FINAL_SUBMIT',
-}
-
 export type EulbValidationStatus = 'NOT_VALIDATED' | 'VALID' | 'INVALID';
 
 export type EulbFormDocument = HydratedDocument<ElectedUrbanLocalBodiesForm>;

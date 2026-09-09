@@ -45,6 +45,11 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     await this.client.del(key);
   }
 
+  /** Seconds remaining before `key` expires, or -1/-2 per Redis TTL semantics (no expiry / no key). */
+  async ttl(key: string): Promise<number> {
+    return this.client.ttl(key);
+  }
+
   async incr(key: string): Promise<number> {
     return this.client.incr(key);
   }

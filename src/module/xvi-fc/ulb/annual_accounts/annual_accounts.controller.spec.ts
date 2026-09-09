@@ -18,6 +18,7 @@ import { EmailQueueService } from '../../../../core/queue/email-queue/email-queu
 import { ConfigService } from '@nestjs/config';
 import { ANNUAL_ACCOUNT_PROCESSING_QUEUE } from '../../../../core/constants/queues';
 import { UlbEligibilityService } from '../../../ulb-eligibility/ulb-eligibility.service';
+import { FormReturnedNotificationService } from '../../common/reminders/form-returned-notification.service';
 import type { AuthUser } from '../../../auth/auth-user.interface';
 import type { Request } from 'express';
 
@@ -84,6 +85,9 @@ describe('AnnualAccountsController', () => {
     const mockUlbEligibilityService = {
       assertUlbEligibleForGrantCycle: jest.fn().mockResolvedValue(undefined),
     };
+    const mockFormReturnedNotification = {
+      notifyReturned: jest.fn().mockResolvedValue(undefined),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [AnnualAccountsController],
@@ -104,6 +108,7 @@ describe('AnnualAccountsController', () => {
         { provide: EmailQueueService, useValue: mockEmailQueueService },
         { provide: ConfigService, useValue: mockConfigService },
         { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
+        { provide: FormReturnedNotificationService, useValue: mockFormReturnedNotification },
       ],
     }).compile();
 

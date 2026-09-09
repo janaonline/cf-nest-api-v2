@@ -15,7 +15,7 @@ import { FileUrlNormalizerService } from '../../common/services/file-url-normali
 import { FileInfoNormalizerService } from '../../common/services/file-info-normalizer.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
-import { FORM_STATUS } from 'src/common/constants/form-status.constants';
+import { FORM_STATUS, FormHistoryAction } from 'src/common/constants/form-status.constants';
 import type { XviFcValidationErrorMap } from '../../common/response/xvi-fc-api-response';
 import type { SaveSfcStatusDto } from './dto/save-sfc-status.dto';
 
@@ -230,6 +230,30 @@ describe('SfcStatusService', () => {
       const savedFile = (createArg['data'] as Record<string, unknown>)['sfcReport'] as { pageCount?: number | null };
       expect(savedFile.pageCount).toBe(4);
     });
+
+    // ─── form history logging ──────────────────────────────────────────────
+
+    it('writes a CREATE_DRAFT history row on the very first save (NOT_STARTED → IN_PROGRESS)', async () => {
+      await service.saveDraft(validDto, adminUser, '127.0.0.1', 'jest');
+
+      expect(historyModel['create']).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: FormHistoryAction.CREATE_DRAFT,
+          fromStatus: FORM_STATUS.NOT_STARTED,
+          toStatus: FORM_STATUS.IN_PROGRESS,
+        }),
+      );
+    });
+
+    it('writes no history row when the form is already IN_PROGRESS (no real status change)', async () => {
+      formModel['findOne'] = jest
+        .fn()
+        .mockReturnValue(q({ _id: docOid, currentFormStatus: FORM_STATUS.IN_PROGRESS, data: {} }));
+
+      await service.saveDraft(validDto, adminUser, '127.0.0.1', 'jest');
+
+      expect(historyModel['create']).not.toHaveBeenCalled();
+    });
   });
 
   // ─── finalSubmit ─────────────────────────────────────────────────────────
@@ -274,6 +298,20 @@ describe('SfcStatusService', () => {
       expect(Array.isArray(errors)).toBe(false);
       expect(errors).toHaveProperty('sfcStatus');
       expect(errors).toHaveProperty('checkboxConfirmation');
+    });
+
+    it('writes a FINAL_SUBMIT history row (NOT_STARTED → UNDER_REVIEW_BY_MOHUA)', async () => {
+      formModel['create'] = jest.fn().mockResolvedValue(mockFormDoc);
+
+      await service.finalSubmit(validDto, adminUser, '127.0.0.1', 'jest');
+
+      expect(historyModel['create']).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: FormHistoryAction.FINAL_SUBMIT,
+          fromStatus: FORM_STATUS.NOT_STARTED,
+          toStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+        }),
+      );
     });
   });
 

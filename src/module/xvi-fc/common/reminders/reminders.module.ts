@@ -12,6 +12,7 @@ import { UlbInProgressReminderService } from './ulb-in-progress-reminder.service
 import { StateReviewDigestService } from './state-review-digest.service';
 import { StateReviewPdfService } from './state-review-pdf.service';
 import { WeeklyStateSummaryService } from './weekly-state-summary.service';
+import { FormReturnedNotificationService } from './form-returned-notification.service';
 import { RemindersController } from './reminders.controller';
 
 /**
@@ -33,7 +34,14 @@ import { RemindersController } from './reminders.controller';
     EmailTemplatesModule,
   ],
   controllers: [RemindersController],
-  providers: [UlbInProgressReminderService, StateReviewDigestService, StateReviewPdfService, WeeklyStateSummaryService],
+  providers: [
+    UlbInProgressReminderService,
+    StateReviewDigestService,
+    StateReviewPdfService,
+    WeeklyStateSummaryService,
+    FormReturnedNotificationService,
+  ],
+  exports: [FormReturnedNotificationService],
 })
 export class RemindersModule implements OnModuleInit {
   private readonly logger = new Logger(RemindersModule.name);
@@ -42,15 +50,17 @@ export class RemindersModule implements OnModuleInit {
     private readonly ulbReminder: UlbInProgressReminderService,
     private readonly stateDigest: StateReviewDigestService,
     private readonly weeklyStateSummary: WeeklyStateSummaryService,
+    private readonly formReturnedNotification: FormReturnedNotificationService,
   ) {}
 
   // Idempotent (each seedTemplate() is a check-then-create) — safe to run on every boot in every
-  // environment, so this removes the need to manually call the three seed-*-template endpoints.
+  // environment, so this removes the need to manually call the seed-*-template endpoints.
   async onModuleInit(): Promise<void> {
     const results = await Promise.all([
       this.ulbReminder.seedTemplate(),
       this.stateDigest.seedTemplate(),
       this.weeklyStateSummary.seedTemplate(),
+      this.formReturnedNotification.seedTemplate(),
     ]);
     const created = results.filter((r) => r.created).length;
     if (created > 0) this.logger.log(`Seeded ${created} reminder email template(s) on startup`);

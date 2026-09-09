@@ -2,17 +2,18 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 import { FormHistoryAction } from 'src/common/constants/form-status.constants';
 
-export type XviFcSfcStatusHistoryDocument = HydratedDocument<XviFcSfcStatusHistory>;
+export type DevolutionFormulaFormHistoryDocument = HydratedDocument<DevolutionFormulaFormHistory>;
 
+/** Append-only log of `currentFormStatus` transitions. One row per real status change — a no-op
+ *  re-save writes nothing. */
 @Schema({
-  collection: 'xvifc_sfc_logs',
+  collection: 'xvifc_devolution_form_logs',
   timestamps: true,
   versionKey: false,
 })
-export class XviFcSfcStatusHistory {
-  /** Reference to the parent SFC Status form document */
-  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'XviFcSfcStatus', required: true })
-  sfcStatusForm!: Types.ObjectId;
+export class DevolutionFormulaFormHistory {
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'DevolutionFormulaForm', required: true })
+  devolutionFormulaForm!: Types.ObjectId;
 
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'State', required: true })
   state!: Types.ObjectId;
@@ -23,8 +24,8 @@ export class XviFcSfcStatusHistory {
   @Prop({ type: String, enum: Object.values(FormHistoryAction), required: true })
   action!: FormHistoryAction;
 
-  @Prop({ type: Number })
-  fromStatus?: number;
+  @Prop({ type: Number, required: true })
+  fromStatus!: number;
 
   @Prop({ type: Number, required: true })
   toStatus!: number;
@@ -44,8 +45,10 @@ export class XviFcSfcStatusHistory {
   @Prop({ type: String })
   remarks?: string;
 
-  @Prop({ type: MongooseSchema.Types.Mixed })
-  metadata?: Record<string, unknown>;
+  // Row-data snapshot, populated only on FINAL_SUBMIT. Excel re-upload hard-deletes the previous
+  // dataset version's rows, so this is the only surviving record of what was actually submitted.
+  @Prop({ type: MongooseSchema.Types.Mixed, default: null })
+  snapshot?: Record<string, unknown>[] | null;
 
   @Prop({ type: Boolean, default: true })
   isActive!: boolean;
@@ -54,7 +57,7 @@ export class XviFcSfcStatusHistory {
   isDeleted!: boolean;
 }
 
-export const XviFcSfcStatusHistorySchema = SchemaFactory.createForClass(XviFcSfcStatusHistory);
+export const DevolutionFormulaFormHistorySchema = SchemaFactory.createForClass(DevolutionFormulaFormHistory);
 
-XviFcSfcStatusHistorySchema.index({ sfcStatusForm: 1, changedAt: -1 });
-XviFcSfcStatusHistorySchema.index({ state: 1, year: 1, changedAt: -1 });
+DevolutionFormulaFormHistorySchema.index({ devolutionFormulaForm: 1, changedAt: -1 });
+DevolutionFormulaFormHistorySchema.index({ state: 1, year: 1, changedAt: -1 });

@@ -2,10 +2,11 @@ import { ConfigService } from '@nestjs/config';
 import { Logger } from '@nestjs/common';
 
 /**
- * Master on/off switch shared by all 4 reminder/summary crons — the 3 in
- * `module/xvi-fc/common/reminders/` plus the pre-existing, otherwise-unrelated
- * `admin/email-templates/weekly-report.service.ts` (kept under the same flag deliberately, so one
- * switch controls all 4 rather than needing separate flags per cron).
+ * Master on/off switch shared by the 3 dwell-time/summary crons in
+ * `module/xvi-fc/common/reminders/` (ulb-in-progress-reminder, state-review-digest,
+ * weekly-state-summary) — one flag instead of a separate one per cron. Does not gate
+ * `form-returned-notification.service.ts`, which is event-triggered (fires once at the moment
+ * STATE returns a form), not a scheduled cron.
  *
  * Returns true (safe to proceed) only when `XVIFC_REMINDER_CRONS_ENABLED` is exactly `'true'`.
  * Manual trigger endpoints call each cron's underlying method directly and never go through this
