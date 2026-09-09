@@ -87,6 +87,7 @@ const mockRedisService = {
   get: jest.fn(),
   set: jest.fn(),
   del: jest.fn(),
+  ttl: jest.fn().mockResolvedValue(30),
 };
 
 const mockEmailQueueService = {

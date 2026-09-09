@@ -1,4 +1,10 @@
-﻿import { ForbiddenException, Injectable, InternalServerErrorException, NotFoundException } from '@nestjs/common';
+﻿import {
+  ForbiddenException,
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { ConfigService } from '@nestjs/config';
 import { Buffer } from 'exceljs';
@@ -17,7 +23,7 @@ import {
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
-import { FORM_STATUS, getFormStatusLabel } from 'src/common/constants/form-status.constants';
+import { FORM_STATUS, FormHistoryAction, getFormStatusLabel } from 'src/common/constants/form-status.constants';
 import {
   assertCanStateEditForm,
   assertCanStateFinalSubmitForm,
@@ -62,6 +68,10 @@ import {
   ElectedUrbanLocalBodiesRow,
   EulbRowDocument,
 } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
+import {
+  ElectedUrbanLocalBodiesFormHistory,
+  EulbFormHistoryDocument,
+} from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form-history.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 import {
@@ -170,11 +180,15 @@ const EULB_DUMP_HEADERS: RowHeader[] = [
 
 @Injectable()
 export class ElectedUrbanLocalBodiesService {
+  private readonly logger = new Logger(ElectedUrbanLocalBodiesService.name);
+
   constructor(
     @InjectModel(ElectedUrbanLocalBodiesForm.name)
     private readonly model: Model<EulbFormDocument>,
     @InjectModel(ElectedUrbanLocalBodiesRow.name)
     private readonly rowModel: Model<EulbRowDocument>,
+    @InjectModel(ElectedUrbanLocalBodiesFormHistory.name)
+    private readonly historyModel: Model<EulbFormHistoryDocument>,
     @InjectModel(Ulb.name)
     private readonly ulbModel: Model<UlbDocument>,
     private readonly validator: DynamicFormValidationService,
@@ -481,14 +495,14 @@ export class ElectedUrbanLocalBodiesService {
    *
    * @param dto       - Payload with stateId, yearId, and partial form data.
    * @param user      - Authenticated user; must have EDIT_STATE_FORMS permission.
-   * @param ip        - Client IP (reserved for future audit trail).
-   * @param userAgent - User-Agent header (reserved for future audit trail).
+   * @param ip        - Client IP, stamped onto the history entry when status changes.
+   * @param userAgent - Same, for the User-Agent header.
    */
   async saveDraft(
     dto: SaveElectedUrbanLocalBodiesDraftDto,
     user: AuthUser,
-    _ip: string,
-    _userAgent: string,
+    ip: string,
+    userAgent: string,
   ): Promise<XviFcApiResponse> {
     this.assertStateAccess(user, dto.stateId);
 
@@ -594,9 +608,22 @@ export class ElectedUrbanLocalBodiesService {
       fieldUpdates['checkboxConfirmation'] = result.sanitizedPayload['checkboxConfirmation'];
 
     if (existing) {
-      assertCanStateEditForm(existing.currentFormStatus ?? FORM_STATUS.NOT_STARTED);
+      const fromStatus = existing.currentFormStatus ?? FORM_STATUS.NOT_STARTED;
+      assertCanStateEditForm(fromStatus);
 
       const updated = await this.model.findOneAndUpdate(filter, { $set: fieldUpdates }, { new: true }).lean().exec();
+
+      await this.recordFormHistory({
+        formId: existing._id as Types.ObjectId,
+        state: stateOid,
+        year: yearOid,
+        action: FormHistoryAction.CREATE_DRAFT,
+        fromStatus,
+        toStatus: FORM_STATUS.IN_PROGRESS,
+        changedBy: userOid,
+        ip,
+        userAgent,
+      });
 
       return xviFcSuccess('Elected Urban Local Bodies form saved as draft.', {
         ...updated,
@@ -614,6 +641,18 @@ export class ElectedUrbanLocalBodiesService {
       isDeleted: false,
       createdBy: userOid,
       ...fieldUpdates,
+    });
+
+    await this.recordFormHistory({
+      formId: created._id,
+      state: stateOid,
+      year: yearOid,
+      action: FormHistoryAction.CREATE_DRAFT,
+      fromStatus: FORM_STATUS.NOT_STARTED,
+      toStatus: FORM_STATUS.IN_PROGRESS,
+      changedBy: userOid,
+      ip,
+      userAgent,
     });
 
     return xviFcSuccess('Elected Urban Local Bodies form saved as draft.', {
@@ -634,14 +673,14 @@ export class ElectedUrbanLocalBodiesService {
    *
    * @param dto       - Payload with stateId, yearId, and complete form data.
    * @param user      - Authenticated user; must have FINAL_SUBMIT_STATE_FORMS permission.
-   * @param ip        - Client IP (reserved for future audit trail).
-   * @param userAgent - User-Agent header (reserved for future audit trail).
+   * @param ip        - Client IP, stamped onto the history entry written inside this transaction.
+   * @param userAgent - Same, for the User-Agent header.
    */
   async finalSubmit(
     dto: FinalSubmitElectedUrbanLocalBodiesDto,
     user: AuthUser,
-    _ip: string,
-    _userAgent: string,
+    ip: string,
+    userAgent: string,
   ): Promise<XviFcApiResponse> {
     this.assertStateAccess(user, dto.stateId);
 
@@ -904,6 +943,54 @@ export class ElectedUrbanLocalBodiesService {
         )
         .exec();
 
+      // Written inside the same transaction (unlike saveDraft's best-effort insert) so a failure
+      // here aborts the whole submit instead of leaving no audit trail.
+      if (fromStatus !== toStatus) {
+        // Snapshot rows now — Excel re-upload hard-deletes the previous version's rows (see
+        // docs/adr/0001-dataset-versioning.md), so this is the only surviving record of what was submitted.
+        let submittedRowsSnapshot: Record<string, unknown>[] | null = null;
+        if (activeDatasetVersion > 0) {
+          const activeRows = await this.rowModel
+            .find({ form: existing._id, datasetVersion: activeDatasetVersion, isActive: true })
+            .session(session)
+            .sort({ rowNumber: 1 })
+            .select(
+              'rowNumber ulbId censusCode ulbName electedBodyStatus dateOfConstitution dateOfExpiry remarks datasetVersion',
+            )
+            .lean()
+            .exec();
+          submittedRowsSnapshot = activeRows.map((r) => ({
+            rowNumber: r.rowNumber,
+            ulbId: r.ulbId,
+            censusCode: r.censusCode,
+            ulbName: r.ulbName,
+            electedBodyStatus: r.electedBodyStatus,
+            dateOfConstitution: r.dateOfConstitution,
+            dateOfExpiry: r.dateOfExpiry,
+            remarks: r.remarks,
+            datasetVersion: r.datasetVersion,
+          }));
+        }
+
+        await this.historyModel.create(
+          [
+            {
+              eulbForm: existing._id,
+              state: stateOid,
+              year: yearOid,
+              action: FormHistoryAction.FINAL_SUBMIT,
+              fromStatus,
+              toStatus,
+              changedBy: userOid,
+              ip,
+              userAgent,
+              snapshot: submittedRowsSnapshot,
+            },
+          ],
+          { session },
+        );
+      }
+
       await session.commitTransaction();
     } catch (err) {
       await session.abortTransaction();
@@ -919,6 +1006,41 @@ export class ElectedUrbanLocalBodiesService {
   }
 
   // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+  /**
+   * Inserts a history row unless `fromStatus === toStatus` (no-op re-save). Best-effort,
+   * non-transactional — a failure here must not fail saveDraft. Mirrors sfc-status.service.ts's
+   * update-then-log pattern. `finalSubmit` doesn't use this — it writes its own entry inside its
+   * transaction so a failure there aborts the submit instead of being swallowed.
+   */
+  private async recordFormHistory(entry: {
+    formId: Types.ObjectId;
+    state: Types.ObjectId;
+    year: Types.ObjectId;
+    action: FormHistoryAction;
+    fromStatus: number;
+    toStatus: number;
+    changedBy: Types.ObjectId;
+    ip?: string;
+    userAgent?: string;
+  }): Promise<void> {
+    if (entry.fromStatus === entry.toStatus) return;
+    try {
+      await this.historyModel.create({
+        eulbForm: entry.formId,
+        state: entry.state,
+        year: entry.year,
+        action: entry.action,
+        fromStatus: entry.fromStatus,
+        toStatus: entry.toStatus,
+        changedBy: entry.changedBy,
+        ip: entry.ip,
+        userAgent: entry.userAgent,
+      });
+    } catch (err) {
+      this.logger.error('Failed to write Elected Urban Local Bodies form history', err);
+    }
+  }
 
   /**
    * Merges saved form data onto TEMP_QUESTIONS in one O(n) pass.
@@ -1238,7 +1360,7 @@ export class ElectedUrbanLocalBodiesService {
             ? buildRelativeExcelExpr(`${constitutionLetter}${row}`, expiryMaxRelative)
             : expiryMax!;
           const prompt = expiryMaxRelative
-            ? `Required when status is Constituted. Must be between today and ${describeRelativeOffset(expiryMaxRelative, constitutionField.label)}.`
+            ? `Required when status is Constituted. Must be between today and ${describeRelativeOffset(expiryMaxRelative, constitutionField.label)}`
             : `Required when status is Constituted. Must be between today and ${formatXviFcDate(expiryMaxVal)}.`;
           return {
             type: 'custom',

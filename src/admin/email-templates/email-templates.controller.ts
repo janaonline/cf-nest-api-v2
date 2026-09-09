@@ -17,9 +17,7 @@ import { Role } from 'src/module/auth/enum/role.enum';
 import { RolesGuard } from 'src/module/auth/guards/roles.guard';
 import { ParseObjectIdPipe } from 'src/common/pipes/parse-object-id.pipe';
 import { PaginationDto } from 'src/common/dto/pagination.dto';
-import { Public } from 'src/module/auth/decorators/public.decorator';
 import { EmailTemplatesService } from './email-templates.service';
-import { WeeklyReportService } from './weekly-report.service';
 import { CreateEmailTemplateDto } from './dto/create-email-template.dto';
 import { UpdateEmailTemplateDto } from './dto/update-email-template.dto';
 import { SendTemplateEmailDto } from './dto/send-template-email.dto';
@@ -30,10 +28,7 @@ import { SendTemplateEmailDto } from './dto/send-template-email.dto';
 @UseGuards(RolesGuard)
 @Controller('email-templates')
 export class EmailTemplatesController {
-  constructor(
-    private readonly service: EmailTemplatesService,
-    private readonly weeklyReport: WeeklyReportService,
-  ) {}
+  constructor(private readonly service: EmailTemplatesService) {}
 
   // ─── Template CRUD ──────────────────────────────────────────────────────────
 
@@ -87,25 +82,5 @@ export class EmailTemplatesController {
   })
   send(@Body() dto: SendTemplateEmailDto) {
     return this.service.send(dto);
-  }
-
-  // ─── Weekly report ──────────────────────────────────────────────────────────
-
-  @Public()
-  @Post('seed-weekly-template')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Seed the default weekly-report template into DB (safe to call multiple times)' })
-  seedWeeklyTemplate() {
-    return this.weeklyReport.seedWeeklyReportTemplate();
-  }
-
-  @Post('send-weekly-report')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({
-    summary: 'Manually trigger the weekly report email to all users (same logic as Monday 10AM cron)',
-  })
-  @ApiResponse({ status: 200, description: 'Returns queued/total counts' })
-  sendWeeklyReport() {
-    return this.weeklyReport.sendWeeklyReport();
   }
 }
