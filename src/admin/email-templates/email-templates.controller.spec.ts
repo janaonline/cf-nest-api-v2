@@ -1,7 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { EmailTemplatesController } from './email-templates.controller';
 import { EmailTemplatesService } from './email-templates.service';
-import { WeeklyReportService } from './weekly-report.service';
 import { CreateEmailTemplateDto } from './dto/create-email-template.dto';
 import { UpdateEmailTemplateDto } from './dto/update-email-template.dto';
 import { SendTemplateEmailDto } from './dto/send-template-email.dto';
@@ -9,7 +8,6 @@ import { SendTemplateEmailDto } from './dto/send-template-email.dto';
 describe('EmailTemplatesController', () => {
   let controller: EmailTemplatesController;
   let service: jest.Mocked<EmailTemplatesService>;
-  let weeklyReport: jest.Mocked<WeeklyReportService>;
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -27,19 +25,11 @@ describe('EmailTemplatesController', () => {
             send: jest.fn(),
           },
         },
-        {
-          provide: WeeklyReportService,
-          useValue: {
-            seedWeeklyReportTemplate: jest.fn(),
-            sendWeeklyReport: jest.fn(),
-          },
-        },
       ],
     }).compile();
 
     controller = module.get<EmailTemplatesController>(EmailTemplatesController);
     service = module.get(EmailTemplatesService);
-    weeklyReport = module.get(WeeklyReportService);
   });
 
   afterEach(() => jest.clearAllMocks());
@@ -149,36 +139,6 @@ describe('EmailTemplatesController', () => {
 
       expect(service.send).toHaveBeenCalledWith(dto);
       expect(result).toEqual(sent);
-    });
-  });
-
-  describe('seedWeeklyTemplate', () => {
-    it('should delegate to weeklyReport.seedWeeklyReportTemplate', async () => {
-      const seeded = { created: true, message: 'Weekly report template created successfully' };
-      weeklyReport.seedWeeklyReportTemplate.mockResolvedValue(seeded);
-
-      const result = await controller.seedWeeklyTemplate();
-
-      expect(weeklyReport.seedWeeklyReportTemplate).toHaveBeenCalledTimes(1);
-      expect(result).toEqual(seeded);
-    });
-  });
-
-  describe('sendWeeklyReport', () => {
-    it('should delegate to weeklyReport.sendWeeklyReport', async () => {
-      const sent = { queued: 5, total: 5 };
-      weeklyReport.sendWeeklyReport.mockResolvedValue(sent);
-
-      const result = await controller.sendWeeklyReport();
-
-      expect(weeklyReport.sendWeeklyReport).toHaveBeenCalledTimes(1);
-      expect(result).toEqual(sent);
-    });
-
-    it('should propagate NotFoundException when the weekly template is missing', async () => {
-      weeklyReport.sendWeeklyReport.mockRejectedValue(new Error('Weekly report template not found'));
-
-      await expect(controller.sendWeeklyReport()).rejects.toThrow('Weekly report template not found');
     });
   });
 });

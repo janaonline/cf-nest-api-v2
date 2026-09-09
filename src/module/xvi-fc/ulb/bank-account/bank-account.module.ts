@@ -16,6 +16,7 @@ import { S3Service } from 'src/core/s3/s3.service';
 import { UlbEligibilityModule } from 'src/module/ulb-eligibility/ulb-eligibility.module';
 import { FormJsonModule } from 'src/master/form-json/form-json.module';
 import { FormJsonConfigModule } from 'src/master/form-json-config/form-json-config.module';
+import { RemindersModule } from '../../common/reminders/reminders.module';
 import { BankAccountController } from './bank-account.controller';
 import { BankAccountService } from './bank-account.service';
 
@@ -38,6 +39,7 @@ import { BankAccountService } from './bank-account.service';
     UlbEligibilityModule,
     FormJsonModule,
     FormJsonConfigModule,
+    RemindersModule,
   ],
   controllers: [BankAccountController],
   providers: [BankAccountService, S3Service],

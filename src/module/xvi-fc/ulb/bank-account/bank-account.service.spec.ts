@@ -33,6 +33,7 @@ describe('BankAccountService scope enforcement', () => {
   let ulbEligibilityService: { assertUlbEligibleForGrantCycle: jest.Mock };
   let formJsonService: { findActiveByDesignYearAndFormId: jest.Mock };
   let formJsonConfigService: { findByFormId: jest.Mock };
+  let formReturnedNotification: { notifyReturned: jest.Mock };
   const originalEncryptionKey = process.env.BANK_ACCOUNT_ENCRYPTION_KEY;
   const originalHashSecret = process.env.BANK_ACCOUNT_HASH_SECRET;
 
@@ -117,6 +118,9 @@ describe('BankAccountService scope enforcement', () => {
     formJsonConfigService = {
       findByFormId: jest.fn().mockResolvedValue(null),
     };
+    formReturnedNotification = {
+      notifyReturned: jest.fn().mockResolvedValue(undefined),
+    };
     service = new BankAccountService(
       bankAccountModel as never,
       formLogModel as never,
@@ -127,6 +131,7 @@ describe('BankAccountService scope enforcement', () => {
       ulbEligibilityService as never,
       formJsonService as never,
       formJsonConfigService as never,
+      formReturnedNotification as never,
     );
 
     // Default Razorpay IFSC lookup used by submitBankAccount()'s verifyIfscCode() — matches
