@@ -101,6 +101,162 @@ describe('XviFcService', () => {
     expect(service).toBeDefined();
   });
 
+  describe('getYears', () => {
+    const yearA = { _id: new Types.ObjectId(), year: '2026-27' };
+    const yearB = { _id: new Types.ObjectId(), year: '2027-28' };
+
+    beforeEach(() => {
+      // Default "now" is after the whole 16th FC cycle ends, so every test below exercises only
+      // the yearAccess/scope logic under test, not the separate "future year" gate covered by its
+      // own describe block further down (which sets its own system time explicitly).
+      jest.useFakeTimers().setSystemTime(new Date('2031-01-01'));
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('returns every active year, all isEnabled, for STATE/ADMIN callers', async () => {
+      mockYearModel.find.mockReturnValue(q([yearA, yearB]));
+      const adminUser: AuthUser = { ...mockUser, scope: Scope.ADMIN };
+
+      const result = await service.getYears(adminUser);
+
+      expect(mockYearModel.find).toHaveBeenCalledWith({ isActive: true }, { _id: 1, year: 1 });
+      expect(result).toEqual([
+        { _id: yearA._id.toString(), year: '2026-27', isEnabled: true },
+        { _id: yearB._id.toString(), year: '2027-28', isEnabled: true },
+      ]);
+    });
+
+    it('excludes years outside the 16th FC award period (14th/15th FC years in the shared Year collection)', async () => {
+      const legacyYear = { _id: new Types.ObjectId(), year: '2024-25' }; // 15th FC, predates the cycle
+      const futureYear = { _id: new Types.ObjectId(), year: '2031-32' }; // after the cycle ends
+      mockYearModel.find.mockReturnValue(q([legacyYear, yearA, yearB, futureYear]));
+      const adminUser: AuthUser = { ...mockUser, scope: Scope.ADMIN };
+
+      const result = await service.getYears(adminUser);
+
+      expect(result).toEqual([
+        { _id: yearA._id.toString(), year: '2026-27', isEnabled: true },
+        { _id: yearB._id.toString(), year: '2027-28', isEnabled: true },
+      ]);
+    });
+
+    it('returns every active year, all isEnabled, when called with no user (backward compatible)', async () => {
+      mockYearModel.find.mockReturnValue(q([yearA]));
+
+      const result = await service.getYears();
+
+      expect(result).toEqual([{ _id: yearA._id.toString(), year: '2026-27', isEnabled: true }]);
+    });
+
+    it('reads isEnabled literally off Ulb.yearAccess[year].yearEnabled - a year missing from yearAccess entirely is isEnabled: false', async () => {
+      mockYearModel.find.mockReturnValue(q([yearA, yearB]));
+      const ulbId = new Types.ObjectId();
+      // yearA ('2026-27') has no key at all in yearAccess; yearB ('2027-28') has an explicit entry.
+      const ulb = {
+        _id: ulbId,
+        startYear: 2027,
+        yearAccess: { '2027-28': { yearEnabled: true, yearId: yearB._id, disabledFormIds: [] } },
+      };
+      mockUlbModel.findById.mockReturnValue(q(ulb));
+      const ulbUser: AuthUser = { ...mockUser, scope: Scope.ULB, ulb: ulbId.toString() };
+
+      const result = await service.getYears(ulbUser);
+
+      expect(result).toEqual([
+        { _id: yearA._id.toString(), year: '2026-27', isEnabled: false },
+        { _id: yearB._id.toString(), year: '2027-28', isEnabled: true },
+      ]);
+    });
+
+    it('is isEnabled: false for a year whose yearAccess entry explicitly has yearEnabled: false, not just a missing one', async () => {
+      mockYearModel.find.mockReturnValue(q([yearA]));
+      const ulbId = new Types.ObjectId();
+      const ulb = {
+        _id: ulbId,
+        startYear: 2027,
+        yearAccess: { '2026-27': { yearEnabled: false, yearId: yearA._id, disabledFormIds: [] } },
+      };
+      mockUlbModel.findById.mockReturnValue(q(ulb));
+      const ulbUser: AuthUser = { ...mockUser, scope: Scope.ULB, ulb: ulbId.toString() };
+
+      const result = await service.getYears(ulbUser);
+
+      expect(result).toEqual([{ _id: yearA._id.toString(), year: '2026-27', isEnabled: false }]);
+    });
+
+    it('never writes to the ULB document — this is a literal field read, and ulbModel exposes no write method for this path to call', async () => {
+      mockYearModel.find.mockReturnValue(q([yearA, yearB]));
+      const ulbId = new Types.ObjectId();
+      // Deliberately no updateOne/findByIdAndUpdate on this mock — if getYears() ever tried to
+      // persist as a side effect of this read, this test would throw instead of silently passing,
+      // since mockUlbModel only ever defines findById.
+      mockUlbModel.findById.mockReturnValue(q({ _id: ulbId, startYear: 2027, yearAccess: {} }));
+      const ulbUser: AuthUser = { ...mockUser, scope: Scope.ULB, ulb: ulbId.toString() };
+
+      await expect(service.getYears(ulbUser)).resolves.toBeDefined();
+    });
+
+    it('returns every active year, all isEnabled, when the ULB record cannot be found', async () => {
+      mockYearModel.find.mockReturnValue(q([yearA, yearB]));
+      mockUlbModel.findById.mockReturnValue(q(null));
+      const ulbUser: AuthUser = { ...mockUser, scope: Scope.ULB, ulb: new Types.ObjectId().toString() };
+
+      const result = await service.getYears(ulbUser);
+
+      expect(result).toEqual([
+        { _id: yearA._id.toString(), year: '2026-27', isEnabled: true },
+        { _id: yearB._id.toString(), year: '2027-28', isEnabled: true },
+      ]);
+    });
+
+    describe('disables a design year that has not started yet, regardless of yearAccess or scope', () => {
+      it('e.g. "now" is 2026 -> only 2026-27 is enabled; 2027-28..2030-31 are disabled, for STATE/ADMIN callers', async () => {
+        jest.setSystemTime(new Date('2026-09-09'));
+        const yearC = { _id: new Types.ObjectId(), year: '2028-29' };
+        const yearD = { _id: new Types.ObjectId(), year: '2029-30' };
+        const yearE = { _id: new Types.ObjectId(), year: '2030-31' };
+        mockYearModel.find.mockReturnValue(q([yearA, yearB, yearC, yearD, yearE]));
+        const adminUser: AuthUser = { ...mockUser, scope: Scope.ADMIN };
+
+        const result = await service.getYears(adminUser);
+
+        expect(result).toEqual([
+          { _id: yearA._id.toString(), year: '2026-27', isEnabled: true },
+          { _id: yearB._id.toString(), year: '2027-28', isEnabled: false },
+          { _id: yearC._id.toString(), year: '2028-29', isEnabled: false },
+          { _id: yearD._id.toString(), year: '2029-30', isEnabled: false },
+          { _id: yearE._id.toString(), year: '2030-31', isEnabled: false },
+        ]);
+      });
+
+      it('overrides a ULB yearAccess entry explicitly set to yearEnabled: true for a future year', async () => {
+        jest.setSystemTime(new Date('2026-09-09'));
+        mockYearModel.find.mockReturnValue(q([yearA, yearB]));
+        const ulbId = new Types.ObjectId();
+        const ulb = {
+          _id: ulbId,
+          startYear: null,
+          yearAccess: {
+            '2026-27': { yearEnabled: true, yearId: yearA._id, disabledFormIds: [] },
+            '2027-28': { yearEnabled: true, yearId: yearB._id, disabledFormIds: [] },
+          },
+        };
+        mockUlbModel.findById.mockReturnValue(q(ulb));
+        const ulbUser: AuthUser = { ...mockUser, scope: Scope.ULB, ulb: ulbId.toString() };
+
+        const result = await service.getYears(ulbUser);
+
+        expect(result).toEqual([
+          { _id: yearA._id.toString(), year: '2026-27', isEnabled: true },
+          { _id: yearB._id.toString(), year: '2027-28', isEnabled: false },
+        ]);
+      });
+    });
+  });
+
   describe('getStateWiseData', () => {
     const stateId = new Types.ObjectId().toHexString();
     const adminUser: AuthUser = { ...mockUser, scope: Scope.ADMIN };

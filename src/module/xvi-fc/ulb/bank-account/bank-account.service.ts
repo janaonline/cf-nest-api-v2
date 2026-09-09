@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   Logger,
@@ -19,6 +20,7 @@ import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-
 import { xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { User, UserDocument } from 'src/schemas/user/user.schema';
+import { Year } from 'src/schemas/year.schema';
 import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 import { CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE } from 'src/module/ulb-eligibility/ulb-eligibility.constants';
 import { XviFcBankAccount, XviFcBankAccountDocument } from 'src/schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
@@ -60,6 +62,8 @@ import {
   type SafeBankAccountResponse,
 } from './utils/bank-account-security.util';
 import { FormJsonService } from 'src/master/form-json/form-json.service';
+import { FormJsonConfigService } from 'src/master/form-json-config/form-json-config.service';
+import type { SubmissionScope } from 'src/schemas/form-json-config.schema';
 import { BANK_ACCOUNT_FORM_ID } from './constants/bank-account-form.constants';
 
 export interface BankAccountPermissions {
@@ -111,9 +115,12 @@ export class BankAccountService {
     private readonly ulbModel: Model<UlbDocument>,
     @InjectModel(User.name)
     private readonly userModel: Model<UserDocument>,
+    @InjectModel(Year.name)
+    private readonly yearModel: Model<Year>,
     private readonly fileTokenService: FileTokenService,
     private readonly ulbEligibilityService: UlbEligibilityService,
     private readonly formJsonService: FormJsonService,
+    private readonly formJsonConfigService: FormJsonConfigService,
   ) {}
 
   /** Signs a proof-file S3 key into a short-lived, inline-viewable download URL. */
@@ -134,25 +141,71 @@ export class BankAccountService {
   async getBankAccount(
     query: GetXviFcBankAccountQueryDto,
     user: AuthUser,
-  ): Promise<XviFcApiResponse<(XviFcBankAccountResponse & { permissions: BankAccountPermissions }) | null>> {
+  ): Promise<
+    XviFcApiResponse<
+      | (XviFcBankAccountResponse & {
+          permissions: BankAccountPermissions;
+          submissionScope: SubmissionScope;
+          designYearLabel: string | null;
+        })
+      | null
+    >
+  > {
     const ulbId = await this.resolveEffectiveUlbId(user, query.ulbId);
     await this.assertCanReadBankAccount(user, ulbId);
 
-    const record = await this.bankAccountModel
-      .findOne({
-        ulb: new Types.ObjectId(ulbId),
-        designYear: new Types.ObjectId(query.yearId),
-      })
-      .lean()
-      .exec();
+    // XVI-FC dynamic year access: ONCE_EVER forms are submitted once and reused across all years.
+    // Resolve by ULB only; the existing submission is the single source of truth for every year.
+    const formConfig = await this.formJsonConfigService.findByFormId(BANK_ACCOUNT_FORM_ID);
+    const submissionScope: SubmissionScope = formConfig?.submissionScope ?? 'PER_YEAR';
+    const filter =
+      submissionScope === 'ONCE_EVER'
+        ? { ulb: new Types.ObjectId(ulbId) }
+        : { ulb: new Types.ObjectId(ulbId), designYear: new Types.ObjectId(query.yearId) };
+
+    const record = await this.bankAccountModel.findOne(filter).lean().exec();
 
     const status = record?.currentFormStatus ?? FORM_STATUS.NOT_STARTED;
     const permissions = this.buildBankAccountPermissions(user, status);
 
+    const belongsToDifferentYear =
+      !!record && submissionScope === 'ONCE_EVER' && String(record.designYear) !== query.yearId;
+    const designYearLabel = belongsToDifferentYear
+      ? ((await this.yearModel.findById(record.designYear, { year: 1 }).lean().exec())?.year ?? null)
+      : null;
+
     return xviFcSuccess(
       'Bank account form fetched.',
-      record ? { ...buildSafeBankAccountResponse(record, this.signProofFileUrl.bind(this)), permissions } : null,
+      record
+        ? {
+            ...buildSafeBankAccountResponse(record, this.signProofFileUrl.bind(this)),
+            permissions,
+            submissionScope,
+            designYearLabel,
+          }
+        : null,
     );
+  }
+
+  /**
+   * ONCE_EVER forms (e.g. PFMS) are submitted once and reused across every year - reject a second
+   * submission for a different design year instead of silently creating an ambiguous duplicate
+   * (the {ulb, designYear} unique index would otherwise happily create a second real document,
+   * and getBankAccount's ulb-only ONCE_EVER lookup would then have no way to pick between them).
+   * No-op for PER_YEAR forms, and for a same-year resubmission (e.g. STATE returned it for
+   * correction), which still goes through the normal upsert below unchanged.
+   */
+  private async assertNoCrossYearBankAccountRecord(ulbObjectId: Types.ObjectId, designYearId: string): Promise<void> {
+    const formConfig = await this.formJsonConfigService.findByFormId(BANK_ACCOUNT_FORM_ID);
+    if (formConfig?.submissionScope !== 'ONCE_EVER') return;
+
+    const existing = await this.bankAccountModel.findOne({ ulb: ulbObjectId }, { designYear: 1 }).lean().exec();
+    if (!existing || String(existing.designYear) === designYearId) return;
+
+    throw new ConflictException({
+      message: 'Bank account details have already been submitted for a different design year. Edit them from that year instead.',
+      existingDesignYearId: String(existing.designYear),
+    });
   }
 
   /** Mirrors Annual Accounts' buildAnnualAccountPermissions — status-aware capability flags for the STATE reviewer UI. */
@@ -179,10 +232,12 @@ export class BankAccountService {
     const ulbId = await this.resolveEffectiveUlbId(user, dto.ulbId);
     await this.assertCanSubmitBankAccount(user, ulbId);
 
+    const ulbObjectId = new Types.ObjectId(ulbId);
+    await this.assertNoCrossYearBankAccountRecord(ulbObjectId, dto.designYearId);
+
     const verifiedIfscDetails = await this.verifyIfscCode(dto.ifscCode);
     this.assertBankDetailsMatchVerifiedIfsc(dto.bankDetails, verifiedIfscDetails);
 
-    const ulbObjectId = new Types.ObjectId(ulbId);
     const ulb = await this.ulbModel.findById(ulbId, 'state').lean().exec();
     const ulbStateId = toObjectIdString(ulb?.state);
     if (!ulbStateId) {

@@ -28,6 +28,7 @@ import { FileTokenModule } from './core/file-token/file-token.module';
 import { EmailDomainValidationModule } from './core/email-domain-validation/email-domain-validation.module';
 import { FileModule } from './module/file/file.module';
 import { FormJsonModule } from './master/form-json/form-json.module';
+import { FormJsonConfigModule } from './master/form-json-config/form-json-config.module';
 import { CommunicationModule } from './module/communication/communication.module';
 import { NotificationsModule } from './module/notifications/notifications.module';
 import { UlbModule } from './master/ulb/ulb.module';
@@ -111,6 +112,7 @@ function getQueryCaller(): string {
     EmailRemindersModule,
     // FormsModule, // intentionally not registered - This is not consumed by any module.
     FormJsonModule,
+    FormJsonConfigModule,
     CommunicationModule,
     NotificationsModule,
     UlbModule,

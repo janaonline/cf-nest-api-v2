@@ -58,7 +58,7 @@ describe('ExpectedUlbSetService', () => {
     expect(ulbModel.find).not.toHaveBeenCalled();
   });
 
-  it('queries active ULBs for the State, grandfathering a null dateOfConstitution', async () => {
+  it('queries active ULBs for the State, falling back to dateOfConstitution only when startYear is unset', async () => {
     yearModel.findById.mockReturnValue(q({ _id: designYearId, year: '2026-27' }));
     ulbModel.find.mockReturnValue(q([]));
 
@@ -68,8 +68,11 @@ describe('ExpectedUlbSetService', () => {
     expect((filter['state'] as Types.ObjectId).toString()).toBe(stateId);
     expect(filter['isActive']).toBe(true);
     expect(filter['$or']).toEqual([
-      { dateOfConstitution: null },
-      { dateOfConstitution: { $lte: new Date('2027-03-31T23:59:59.999Z') } },
+      { startYear: { $ne: null, $lte: 2026 } },
+      {
+        startYear: null,
+        $or: [{ dateOfConstitution: null }, { dateOfConstitution: { $lte: new Date('2027-03-31T23:59:59.999Z') } }],
+      },
     ]);
   });
 
