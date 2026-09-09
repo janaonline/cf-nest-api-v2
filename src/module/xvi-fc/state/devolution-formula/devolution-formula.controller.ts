@@ -1,4 +1,17 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, StreamableFile, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Headers,
+  Ip,
+  Param,
+  Patch,
+  Post,
+  Query,
+  StreamableFile,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiBody, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { PermissionGuard } from 'src/module/auth/permission.guard';
 import { RequirePermissions } from 'src/module/auth/require-permissions.decorator';
@@ -72,8 +85,13 @@ export class DevolutionFormulaController {
   @Post('save-draft')
   @UseGuards(PermissionGuard)
   @RequirePermissions(Permission.EDIT_STATE_FORMS)
-  saveDraft(@Body() dto: SaveDraftDevolutionFormulaDto, @CurrentUser() user: AuthUser) {
-    return this.dfService.saveDraft(dto, user);
+  saveDraft(
+    @Body() dto: SaveDraftDevolutionFormulaDto,
+    @CurrentUser() user: AuthUser,
+    @Ip() ip: string = '',
+    @Headers('user-agent') userAgent: string = '',
+  ) {
+    return this.dfService.saveDraft(dto, user, ip ?? '', userAgent ?? '');
   }
 
   @ApiOperation({ summary: 'Validate uploaded ULB-wise Allocation Excel' })
@@ -81,8 +99,13 @@ export class DevolutionFormulaController {
   @Post('validate-excel')
   @UseGuards(PermissionGuard)
   @RequirePermissions(Permission.EDIT_STATE_FORMS)
-  validateExcel(@Body() dto: ValidateExcelDevolutionFormulaDto, @CurrentUser() user: AuthUser) {
-    return this.dfExcelService.validateExcel(dto, user);
+  validateExcel(
+    @Body() dto: ValidateExcelDevolutionFormulaDto,
+    @CurrentUser() user: AuthUser,
+    @Ip() ip: string = '',
+    @Headers('user-agent') userAgent: string = '',
+  ) {
+    return this.dfExcelService.validateExcel(dto, user, ip ?? '', userAgent ?? '');
   }
 
   @ApiOperation({ summary: 'Final submit ULB-wise Allocation form' })
@@ -90,8 +113,13 @@ export class DevolutionFormulaController {
   @Post('final-submit')
   @UseGuards(PermissionGuard)
   @RequirePermissions(Permission.FINAL_SUBMIT_STATE_FORMS)
-  finalSubmit(@Body() dto: FinalSubmitDevolutionFormulaDto, @CurrentUser() user: AuthUser) {
-    return this.dfService.finalSubmit(dto, user);
+  finalSubmit(
+    @Body() dto: FinalSubmitDevolutionFormulaDto,
+    @CurrentUser() user: AuthUser,
+    @Ip() ip: string = '',
+    @Headers('user-agent') userAgent: string = '',
+  ) {
+    return this.dfService.finalSubmit(dto, user, ip ?? '', userAgent ?? '');
   }
 
   @ApiOperation({ summary: 'Get ULB-wise Allocation form (hydrated)' })

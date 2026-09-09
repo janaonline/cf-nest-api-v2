@@ -6,6 +6,7 @@ import ExcelJS from 'exceljs';
 import { ElectedUrbanLocalBodiesService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/main/elected-urban-local-bodies.service';
 import { ElectedUrbanLocalBodiesForm } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
 import { ElectedUrbanLocalBodiesRow } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
+import { ElectedUrbanLocalBodiesFormHistory } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form-history.schema';
 import { Ulb } from 'src/schemas/ulb.schema';
 import { ExcelService } from 'src/services/excel/excel.service';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
@@ -28,7 +29,7 @@ import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 /** Creates a chainable Mongoose Query-like mock that resolves to `value`. */
 function q<T>(value: T) {
   const chain: Record<string, unknown> = {};
-  for (const m of ['lean', 'select', 'sort', 'skip', 'limit', 'populate']) {
+  for (const m of ['lean', 'select', 'sort', 'skip', 'limit', 'populate', 'session']) {
     chain[m] = jest.fn().mockReturnValue(chain);
   }
   chain['exec'] = jest.fn().mockResolvedValue(value);
@@ -258,6 +259,11 @@ const MOCK_TYPED_ROW_EDIT_FIELDS: EulbTypedFieldConfig[] = [
   },
   {
     key: 'dateOfConstitution',
+    // No trailing period, matching the current DB payload's label — but different payload
+    // snapshots of this same field have been seen both with and without one, so the
+    // dateOfExpiry FIELD-relative prompt (below) doesn't rely on this either way; it normalizes
+    // via `ensureTrailingPeriod` regardless of what this label ends with. See the "does not
+    // double up" test below, which overrides this field's label to prove the with-period case too.
     label: 'Date on which the elected body is in place',
     formFieldType: 'date',
     fieldTypes: ['EULB_ROW_EDIT_FIELDS'],
@@ -308,6 +314,7 @@ const mockFormModel = {
   db: { startSession: jest.fn() },
 };
 const mockRowModel = { find: jest.fn(), updateMany: jest.fn(), aggregate: jest.fn().mockReturnValue(q([])) };
+const mockHistoryModel = { create: jest.fn().mockResolvedValue(undefined) };
 const mockUlbModel = { find: jest.fn(), countDocuments: jest.fn() };
 // Mirrors real behavior when no UlbType is excluded from the cycle: state + isActive only —
 // the filter-shape assertions below use objectContaining, so extra keys wouldn't break them
@@ -344,6 +351,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           ExcelService,
           { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: mockFormModel },
           { provide: getModelToken(ElectedUrbanLocalBodiesRow.name), useValue: mockRowModel },
+          { provide: getModelToken(ElectedUrbanLocalBodiesFormHistory.name), useValue: mockHistoryModel },
           { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
           { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
           { provide: DynamicFormValidationService, useValue: null },
@@ -530,6 +538,23 @@ describe('ElectedUrbanLocalBodiesService', () => {
           'Required when status is Constituted. Must be between today and 5 years after Date on which the elected body is in place',
         );
       });
+
+      it('does not double up the period when the referenced field label already ends with one', async () => {
+        // Different payload snapshots of dateOfConstitution's label have been seen both with and
+        // without a trailing period — override it here to explicitly cover the with-period case,
+        // since the base MOCK_TYPED_ROW_EDIT_FIELDS fixture above intentionally has neither.
+        const fieldsWithPeriodTerminatedLabel = fieldsWithRelativeExpiry.map((f) =>
+          f.key === 'dateOfConstitution' ? { ...f, label: 'Date on which the elected body is in place.' } : f,
+        );
+        mockEulbFormJsonConfigService.loadFields.mockResolvedValueOnce(fieldsWithPeriodTerminatedLabel);
+
+        const sheet = await generateAndLoad();
+        const dvRow2 = sheet.dataValidations.model['E2'];
+        expect(dvRow2!.prompt).toBe(
+          'Required when status is Constituted. Must be between today and 5 years after Date on which the elected body is in place.',
+        );
+        expect(dvRow2!.prompt?.endsWith('..')).toBe(false);
+      });
     });
 
     it('generates validations covering exactly the active registry rows, with no blank padding', async () => {
@@ -685,6 +710,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           ExcelService,
           { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: mockFormModel },
           { provide: getModelToken(ElectedUrbanLocalBodiesRow.name), useValue: mockRowModel },
+          { provide: getModelToken(ElectedUrbanLocalBodiesFormHistory.name), useValue: mockHistoryModel },
           { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
           { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
           { provide: DynamicFormValidationService, useValue: null },
@@ -821,6 +847,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           ExcelService,
           { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: mockFormModel },
           { provide: getModelToken(ElectedUrbanLocalBodiesRow.name), useValue: mockRowModel },
+          { provide: getModelToken(ElectedUrbanLocalBodiesFormHistory.name), useValue: mockHistoryModel },
           { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
           { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
           { provide: DynamicFormValidationService, useValue: mockDynamicFormValidator },
@@ -1252,7 +1279,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
       mockEulbFormJsonConfigService.loadFields.mockResolvedValue(MOCK_TYPED_ROW_EDIT_FIELDS);
       mockUlbModel.countDocuments.mockResolvedValue(3);
       mockFormModel.findOne.mockReturnValue(q(null)); // no existing form → create path
-      mockFormModel.create.mockResolvedValue({ toObject: () => ({ _id: formOid, ulbCount: 3 }) });
+      mockFormModel.create.mockResolvedValue({ _id: formOid, toObject: () => ({ _id: formOid, ulbCount: 3 }) });
 
       const module: TestingModule = await Test.createTestingModule({
         providers: [
@@ -1260,6 +1287,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           ExcelService,
           { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: mockFormModel },
           { provide: getModelToken(ElectedUrbanLocalBodiesRow.name), useValue: mockRowModel },
+          { provide: getModelToken(ElectedUrbanLocalBodiesFormHistory.name), useValue: mockHistoryModel },
           { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
           { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
           { provide: DynamicFormValidationService, useValue: mockValidator },
@@ -1507,6 +1535,54 @@ describe('ElectedUrbanLocalBodiesService', () => {
       >;
       expect(formDataArg['electedBodyExcelValidationStatus']).toBe('VALID');
     });
+
+    // ─── form history logging ────────────────────────────────────────────────
+
+    it('logs a CREATE_DRAFT history row on the first save (NOT_STARTED → IN_PROGRESS)', async () => {
+      await service.saveDraft(
+        { stateId: stateOid.toString(), yearId: yearOid.toString(), data: { checkboxConfirmation: true } },
+        adminUser,
+        '1.2.3.4',
+        'jest-agent',
+      );
+
+      expect(mockHistoryModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eulbForm: formOid,
+          fromStatus: FORM_STATUS.NOT_STARTED,
+          toStatus: FORM_STATUS.IN_PROGRESS,
+          ip: '1.2.3.4',
+          userAgent: 'jest-agent',
+        }),
+      );
+    });
+
+    it('writes no history row when the form is already IN_PROGRESS (no real status change)', async () => {
+      mockFormModel.findOne.mockReturnValueOnce(q({ _id: formOid, currentFormStatus: FORM_STATUS.IN_PROGRESS }));
+      mockFormModel.findOneAndUpdate.mockReturnValueOnce(q({ _id: formOid }));
+
+      await service.saveDraft(
+        { stateId: stateOid.toString(), yearId: yearOid.toString(), data: { checkboxConfirmation: true } },
+        adminUser,
+        '',
+        '',
+      );
+
+      expect(mockHistoryModel.create).not.toHaveBeenCalled();
+    });
+
+    it('does not let a history-write failure surface as a saveDraft failure', async () => {
+      mockHistoryModel.create.mockRejectedValueOnce(new Error('history write failed'));
+
+      await expect(
+        service.saveDraft(
+          { stateId: stateOid.toString(), yearId: yearOid.toString(), data: { checkboxConfirmation: true } },
+          adminUser,
+          '',
+          '',
+        ),
+      ).resolves.toBeDefined();
+    });
   });
 
   // ─── finalSubmit ─────────────────────────────────────────────────────────────
@@ -1576,6 +1652,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
       };
       mockFormModel.db.startSession.mockResolvedValue(mockSession);
       mockRowModel.updateMany.mockReturnValue(q(undefined));
+      mockRowModel.find.mockReturnValue(q([]));
 
       const module: TestingModule = await Test.createTestingModule({
         providers: [
@@ -1583,6 +1660,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           ExcelService,
           { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: mockFormModel },
           { provide: getModelToken(ElectedUrbanLocalBodiesRow.name), useValue: mockRowModel },
+          { provide: getModelToken(ElectedUrbanLocalBodiesFormHistory.name), useValue: mockHistoryModel },
           { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
           { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
           { provide: DynamicFormValidationService, useValue: mockValidator },
@@ -1677,6 +1755,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           ExcelService,
           { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: mockFormModel },
           { provide: getModelToken(ElectedUrbanLocalBodiesRow.name), useValue: mockRowModel },
+          { provide: getModelToken(ElectedUrbanLocalBodiesFormHistory.name), useValue: mockHistoryModel },
           { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
           { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
           { provide: DynamicFormValidationService, useValue: mockValidatorRejecting },
@@ -1828,6 +1907,58 @@ describe('ElectedUrbanLocalBodiesService', () => {
       expect(mockSession.abortTransaction).toHaveBeenCalled();
       expect(mockSession.commitTransaction).not.toHaveBeenCalled();
       expect(mockSession.endSession).toHaveBeenCalled();
+    });
+
+    // ─── form history logging ────────────────────────────────────────────────
+
+    it('logs a FINAL_SUBMIT history row inside the same transaction as the parent/row updates, with a row-data snapshot', async () => {
+      mockRowModel.find.mockReturnValue(
+        q([
+          {
+            rowNumber: 1,
+            ulbId: mockUlbs[0]._id,
+            censusCode: 'C001',
+            ulbName: 'Alpha City',
+            electedBodyStatus: 'Constituted',
+            dateOfConstitution: new Date('2022-06-15T00:00:00.000Z'),
+            dateOfExpiry: new Date('2027-06-14T00:00:00.000Z'),
+            remarks: '',
+            datasetVersion: 1,
+          },
+        ]),
+      );
+
+      await service.finalSubmit(baseDto, adminUser, '9.9.9.9', 'jest-final-agent');
+
+      expect(mockHistoryModel.create).toHaveBeenCalledWith(
+        [
+          expect.objectContaining({
+            eulbForm: formOid,
+            fromStatus: FORM_STATUS.IN_PROGRESS,
+            toStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+            ip: '9.9.9.9',
+            userAgent: 'jest-final-agent',
+            snapshot: [
+              expect.objectContaining({
+                rowNumber: 1,
+                censusCode: 'C001',
+                ulbName: 'Alpha City',
+                electedBodyStatus: 'Constituted',
+              }),
+            ],
+          }),
+        ],
+        { session: mockSession },
+      );
+    });
+
+    it('aborts the transaction and never commits when the history write fails', async () => {
+      mockHistoryModel.create.mockRejectedValueOnce(new Error('history write failed'));
+
+      await expect(service.finalSubmit(baseDto, adminUser, '', '')).rejects.toThrow('history write failed');
+
+      expect(mockSession.abortTransaction).toHaveBeenCalled();
+      expect(mockSession.commitTransaction).not.toHaveBeenCalled();
     });
   });
 });

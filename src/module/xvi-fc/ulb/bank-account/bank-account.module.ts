@@ -9,10 +9,12 @@ import {
   XviFcBankAccountFormLogSchema,
 } from 'src/schemas/xvi-fc/ulb/xvi-fc-bank-account-form-log.schema';
 import { Ulb, UlbSchema } from 'src/schemas/ulb.schema';
+import { User, UserSchema } from 'src/schemas/user/user.schema';
 import { S3Module } from 'src/core/s3/s3.module';
 import { S3Service } from 'src/core/s3/s3.service';
 import { UlbEligibilityModule } from 'src/module/ulb-eligibility/ulb-eligibility.module';
 import { FormJsonModule } from 'src/master/form-json/form-json.module';
+import { RemindersModule } from '../../common/reminders/reminders.module';
 import { BankAccountController } from './bank-account.controller';
 import { BankAccountService } from './bank-account.service';
 
@@ -28,10 +30,12 @@ import { BankAccountService } from './bank-account.service';
         schema: XviFcBankAccountFormLogSchema,
       },
       { name: Ulb.name, schema: UlbSchema },
+      { name: User.name, schema: UserSchema },
     ]),
     S3Module,
     UlbEligibilityModule,
     FormJsonModule,
+    RemindersModule,
   ],
   controllers: [BankAccountController],
   providers: [BankAccountService, S3Service],

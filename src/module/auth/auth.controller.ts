@@ -128,7 +128,9 @@ export class AuthController {
   @Public()
   @Post('sendOtp')
   @HttpCode(HttpStatus.OK)
-  @Throttle({ default: { limit: 3, ttl: 600000 } })
+  // Bumped 3 -> 5: 3 was tripping on innocent retries (double-click, a slow/flaky request the user
+  // resent, multiple tabs) — 5 still meaningfully caps abuse without blocking normal usage as easily.
+  @Throttle({ default: { limit: 5, ttl: 600000 } })
   @ApiOperation({ summary: 'Send OTP via SMS and email (accepts email, census code, or SB code or mobile number)' })
   @ApiResponse({ status: 200, description: 'OTP sent — returns masked mobile and email' })
   sendOtp(@Body() dto: SendOtpDto) {

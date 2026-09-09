@@ -46,6 +46,28 @@ row approve/reject endpoint, so `rowStatus` only ever reaches `UNDER_REVIEW_BY_M
 never advances further. The `post-submission-update` correction workflow does not read or write
 `rowStatus`.
 
+## Form status history log
+
+`schemas/xvi-fc/state/elected-urban-local-bodies-form-history.schema.ts` (collection
+`xvifc_elected_ulb_form_logs`) is an append-only log of `currentFormStatus` transitions, mirroring
+`sfc-status-history.schema.ts` — distinct from `postSubmissionUpdates`/`updateHistory` above, which
+track row-*data* edits, not form-level status. `action` uses the shared `FormHistoryAction` enum
+(`src/common/constants/form-status.constants.ts` — one enum for every state form, not per-form).
+
+`saveDraft`/`finalSubmit` insert one row whenever `currentFormStatus` actually changes — a re-save
+that leaves the form `IN_PROGRESS` writes nothing. `saveDraft` writes it as a separate,
+non-transactional, best-effort call (a failure is caught/logged, never fails the save); `finalSubmit`
+writes it *inside* the same transaction as its parent/row updates, so a failure there aborts the
+whole submit. Unlike devolution-formula, EULB's Excel-upload service never touches
+`currentFormStatus` (confirmed — no equivalent gap there). No MoHUA workflow exists yet, so only
+`CREATE_DRAFT`/`FINAL_SUBMIT` are ever logged.
+
+`snapshot` is populated on `FINAL_SUBMIT` with the active dataset version's row content, fetched
+inside the same transaction — because the Excel-upload transaction *hard-deletes* the previous
+version's rows on every re-upload (same pattern as devolution-formula's), and there's no
+row-history collection, this is the only surviving record of what was submitted. `null` on
+`CREATE_DRAFT`.
+
 ## electedBodyStatus: id is deliberately identical to its label
 
 The `electedBodyStatus` field's DB-config options always have `id === label` (currently
@@ -93,7 +115,24 @@ precomputed constant either — its per-row `dateOfExpiry` data-validation formu
 `EDATE(<dateOfConstitution cell for this row>, <months>)` expression referencing the sibling
 column's own cell, via the same `parseFieldRelativeBoundary` (exported for this purpose). The
 prompt text is a static human-readable phrase ("... 5 years after Date on which the elected body is
-in place.") rather than a formatted date, since Excel prompts can't be computed per row.
+in place.") rather than a formatted date, since Excel prompts can't be computed per row — it embeds
+`dateOfConstitution`'s own field `label` verbatim. That label's trailing punctuation isn't
+reliable (seen both with and without a period across real payload snapshots), so
+`describeRelativeOffset` normalizes to exactly one via `ensureTrailingPeriod` instead of assuming
+either way.
+
+Two correctness details worth knowing before touching `applyDateOffset` or `extractDateConfig`:
+
+- **Leap-day/month-end clamping**: `applyDateOffset`'s `'M'`/`'Y'` math clamps the day-of-month to
+  the target month's last day (29 Feb + 5Y → 28 Feb, not 1 Mar) instead of letting plain
+  `setMonth`/`setFullYear` roll over — matching Excel's `EDATE()`. The frontend's
+  `resolveDateConstraint` uses the same clamping (it also covers the pre-existing `TODAY±N[DMY]`
+  grammar, which shares that offset math) — keep both in sync.
+- **`fieldKey` is validated, not generalized**: `parseFieldRelativeBoundary` parses whatever key
+  follows `FIELD:`, but every consumer hardcodes `dateOfConstitution` as the base — `fieldKey`
+  itself is never read to pick a different sibling. `extractDateConfig()` throws if the configured
+  token ever names anything else, turning a silent wrong-bound risk into a config error, rather
+  than generalizing for a sibling field that doesn't exist in this row model yet.
 
 ## Elected Bodies List document and `signedElectedbodyFile`
 

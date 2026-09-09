@@ -14,6 +14,10 @@ import {
   DevolutionFormulaRow,
   DevolutionFormulaRowSchema,
 } from 'src/schemas/xvi-fc/state/devolution-formula-row.schema';
+import {
+  DevolutionFormulaFormHistory,
+  DevolutionFormulaFormHistorySchema,
+} from 'src/schemas/xvi-fc/state/devolution-formula-form-history.schema';
 import { Ulb, UlbSchema } from 'src/schemas/ulb.schema';
 import { GrantAllocation, GrantAllocationSchema } from 'src/schemas/xvi-fc/grant-allocation.schema';
 import { DevolutionFormulaController } from './devolution-formula.controller';
@@ -28,6 +32,7 @@ import { UlbEligibilityModule } from 'src/module/ulb-eligibility/ulb-eligibility
     MongooseModule.forFeature([
       { name: DevolutionFormulaForm.name, schema: DevolutionFormulaFormSchema },
       { name: DevolutionFormulaRow.name, schema: DevolutionFormulaRowSchema },
+      { name: DevolutionFormulaFormHistory.name, schema: DevolutionFormulaFormHistorySchema },
       { name: Ulb.name, schema: UlbSchema },
       { name: GrantAllocation.name, schema: GrantAllocationSchema },
     ]),

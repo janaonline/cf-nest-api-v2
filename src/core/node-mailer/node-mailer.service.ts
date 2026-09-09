@@ -1,5 +1,6 @@
 import { MailerService } from '@nestjs-modules/mailer';
 import { Injectable, Logger } from '@nestjs/common';
+import { EmailAttachment } from '../aws-ses/email-job.type';
 
 @Injectable()
 export class NodeMailerService {
@@ -46,10 +47,25 @@ export class NodeMailerService {
     }
   }
 
-  async sendHtml(to: string | string[], subject: string, html: string): Promise<void> {
+  async sendHtml(
+    to: string | string[],
+    subject: string,
+    html: string,
+    attachments?: EmailAttachment[],
+  ): Promise<void> {
     try {
       this.logger.log(`Sending HTML email to: ${Array.isArray(to) ? to.join(', ') : to}`);
-      await this.mailerService.sendMail({ to, subject, html });
+      await this.mailerService.sendMail({
+        to,
+        subject,
+        html,
+        attachments: attachments?.map((a) => ({
+          filename: a.filename,
+          content: a.content,
+          encoding: 'base64' as const,
+          contentType: a.contentType,
+        })),
+      });
     } catch (error) {
       this.logger.error('Error sending HTML email:', error);
       throw error;

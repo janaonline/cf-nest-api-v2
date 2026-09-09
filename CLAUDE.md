@@ -23,8 +23,9 @@ npm run lint             # ESLint with auto-fix
 npm run format           # Prettier format
 
 # xvi-fc one-off scripts
-npm run seed:mohua-side-menu       # Seed MoHUA side-menu entries (scripts/seed-mohua-side-menu.ts)
-npm run migrate:xvifc-side-menu    # Migrate xvi-fc side-menu data (scripts/migrate-xvifc-sidemenu.ts)
+npm run migrate:xvifc-in-progress-since  # Backfill inProgressSince on pre-existing IN_PROGRESS annual
+                                          # accounts (scripts/backfill-annual-account-in-progress-since.ts) —
+                                          # safe/re-runnable, only touches records still missing the field
 ```
 
 ## Architecture
@@ -48,6 +49,31 @@ src/
 │   ├── state/           # sfc-status, elected-urban-local-bodies, devolution-formula, fc-unspent-declaration, dashboard
 │   ├── mohua/           # fc-unspent-declaration review workflow
 │   ├── side-menu/, cache/, common/ # XviFcCacheService/Interceptor, form-actors, form-status-access helpers shared across sub-features
+│   │   └── common/reminders/    # Dwell-time reminder crons (daily 9AM IST): ULB Nodal Officer nudge for
+│   │                            # Annual Accounts stuck IN_PROGRESS (every 3 days), STATE digest (HTML
+│   │                            # table + PDF attachment) for Annual Account/Bank Account forms stuck
+│   │                            # UNDER_REVIEW_BY_STATE (every 7 days). Cadence tracked via a
+│   │                            # `lastReminderSentAt` timestamp on each form doc, never a stored day
+│   │                            # count. Also `WeeklyStateSummaryService` (Monday 11AM IST) — per-state
+│   │                            # Annual Account status counts (Not Started/Under Review/Approved/
+│   │                            # UNDER_REVIEW_BY_MOHUA + a 10-day-stale review count), one email per
+│   │                            # state to users with role STATE and an assigned xviFcSubrole
+│   │                            # (admin/reviewer/viewer) AND isXVIFCProfileVerified: true. These 3 crons
+│   │                            # are gated by the single `XVIFC_REMINDER_CRONS_ENABLED` env flag — each
+│   │                            # `@Cron`-decorated method checks it and no-ops if not exactly 'true'; the
+│   │                            # manual trigger endpoints call the underlying method directly and bypass
+│   │                            # the flag. Email copy for all three lives in DB-backed `EmailTemplate`
+│   │                            # rows (slugs `ulb-in-progress-reminder`/`state-review-reminder`/
+│   │                            # `weekly-state-summary`) — `RemindersModule.onModuleInit` auto-seeds all
+│   │                            # four templates on every app boot (idempotent, no manual step needed);
+│   │                            # the `POST xvi-fc/reminders/seed-*-template` endpoints still exist for an
+│   │                            # on-demand re-seed without restarting the app. Also
+│   │                            # `FormReturnedNotificationService` (slug `form-returned-notification`) —
+│   │                            # event-triggered, not a cron: fires once, synchronously, the moment
+│   │                            # STATE returns an Annual Account section or Bank Account form (called
+│   │                            # from `decideSection`/`decideBankAccount`), so it is NOT gated by
+│   │                            # `XVIFC_REMINDER_CRONS_ENABLED` and has no `send-*-now` endpoint. Never
+│   │                            # throws — a notification failure must not fail the underlying decision.
 │   └── xvi-fc.module.ts # composition root importing the feature modules above
 ├── users/               # User CRUD with repository pattern
 ├── admin/
@@ -163,3 +189,4 @@ Required variables (see `.env` for dev defaults):
 | `CLIENT_URL` / `WHITELISTED_DOMAINS` | CORS origins |
 | `BANK_ACCOUNT_ENCRYPTION_KEY` / `BANK_ACCOUNT_HASH_SECRET` | `xvi-fc` ULB bank-account encryption/hashing (`module/xvi-fc/ulb/bank-account`) |
 | `MANUAL_REVIEW_NOTIFY_EMAIL` | Fixed inbox emailed when a ULB requests manual review of a failed OCR validation (`module/xvi-fc/ulb/annual_accounts`) |
+| `XVIFC_REMINDER_CRONS_ENABLED` | Master on/off switch for the 3 dwell-time/summary crons in `module/xvi-fc/common/reminders` — must be exactly `'true'` for their scheduled runs to fire; manual triggers bypass this flag regardless of its value. Does not gate `FormReturnedNotificationService`, which is event-triggered, not a cron |

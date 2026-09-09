@@ -9,6 +9,7 @@ import { DevolutionFormulaValidator } from './validators/devolution-formula.vali
 import type { DfParsedExcelRow } from './validators/devolution-formula.validator';
 import { DevolutionFormulaForm } from 'src/schemas/xvi-fc/state/devolution-formula-form.schema';
 import { DevolutionFormulaRow } from 'src/schemas/xvi-fc/state/devolution-formula-row.schema';
+import { DevolutionFormulaFormHistory } from 'src/schemas/xvi-fc/state/devolution-formula-form-history.schema';
 import { GrantAllocation } from 'src/schemas/xvi-fc/grant-allocation.schema';
 import { Ulb } from 'src/schemas/ulb.schema';
 import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
@@ -117,6 +118,8 @@ const mockRowModel = {
   countDocuments: jest.fn(),
   aggregate: jest.fn(),
 };
+
+const mockHistoryModel = { create: jest.fn().mockResolvedValue(undefined) };
 
 const mockGrantAllocationModel = { findOne: jest.fn() };
 const mockUlbModel = { countDocuments: jest.fn() };
@@ -497,6 +500,7 @@ describe('DevolutionFormulaService', () => {
 
     mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
     mockRowModel.findOne.mockReturnValue(q(null));
+    mockRowModel.find.mockReturnValue(q([]));
     mockDfFormJsonConfig.loadFields.mockResolvedValue(mockDfTypedFields);
     mockUlbModel.countDocuments.mockResolvedValue(2);
 
@@ -508,6 +512,7 @@ describe('DevolutionFormulaService', () => {
         DynamicFormValidationService,
         { provide: getModelToken(DevolutionFormulaForm.name), useValue: mockFormModel },
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: mockRowModel },
+        { provide: getModelToken(DevolutionFormulaFormHistory.name), useValue: mockHistoryModel },
         { provide: getModelToken(GrantAllocation.name), useValue: mockGrantAllocationModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
         { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
@@ -1869,6 +1874,118 @@ describe('DevolutionFormulaService', () => {
     expect(data).toHaveProperty('questions');
     expect(Array.isArray(data['questions'])).toBe(true);
   });
+
+  // ─── form history logging ──────────────────────────────────────────────────
+
+  describe('form history logging', () => {
+    it('saveDraft logs a CREATE_DRAFT history row on the first save (NOT_STARTED → IN_PROGRESS)', async () => {
+      mockFormModel.findOne.mockReturnValue(q(null)); // no existing form
+      mockFormModel.findOneAndUpdate.mockReturnValue(q({ _id: formOid }));
+
+      await service.saveDraft(
+        { stateId: stateOid.toString(), yearId: YEAR_ID, installment: 1, data: { checkboxConfirmation: true } },
+        adminUser,
+        '1.2.3.4',
+        'jest-agent',
+      );
+
+      expect(mockHistoryModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          devolutionFormulaForm: formOid,
+          fromStatus: FORM_STATUS.NOT_STARTED,
+          toStatus: FORM_STATUS.IN_PROGRESS,
+          ip: '1.2.3.4',
+          userAgent: 'jest-agent',
+        }),
+      );
+    });
+
+    it('saveDraft writes no history row when the form is already IN_PROGRESS (no real status change)', async () => {
+      mockFormModel.findOne.mockReturnValue(q({ _id: formOid, currentFormStatus: FORM_STATUS.IN_PROGRESS }));
+      mockFormModel.findOneAndUpdate.mockReturnValue(q({ _id: formOid }));
+
+      await service.saveDraft(
+        { stateId: stateOid.toString(), yearId: YEAR_ID, installment: 1, data: { checkboxConfirmation: true } },
+        adminUser,
+      );
+
+      expect(mockHistoryModel.create).not.toHaveBeenCalled();
+    });
+
+    it('finalSubmit logs a FINAL_SUBMIT history row (IN_PROGRESS → UNDER_REVIEW_BY_MOHUA) with a row-data snapshot', async () => {
+      mockUlbModel.countDocuments.mockResolvedValue(50);
+      mockFormModel.findOne.mockReturnValue(q({ ...mockFormInProgress, excelRowCount: 50, newUlbCount: 0 }));
+      mockRowModel.findOne.mockReturnValue(q(null));
+      mockRowModel.find.mockReturnValue(
+        q([
+          {
+            rowNumber: 1,
+            ulbId: ulbOid,
+            censusCode: 'C001',
+            ulbName: 'Alpha City',
+            totalGrantAllocation: 500_000,
+            installment1Amount: 300_000,
+            installment2Amount: 200_000,
+            devolutionFormula: 'population',
+            datasetVersion: 1,
+          },
+        ]),
+      );
+      mockFormModel.findOneAndUpdate.mockReturnValue(q({ _id: formOid }));
+
+      await service.finalSubmit(
+        {
+          stateId: stateOid.toString(),
+          yearId: YEAR_ID,
+          installment: 1,
+          data: {
+            excelFile: {
+              originalName: 'f.xlsx',
+              path: 'path/f.xlsx',
+              mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+              sizeKb: 1,
+              createdAt: '2026-01-01T00:00:00.000Z',
+            },
+            checkboxConfirmation: true,
+          },
+        },
+        adminUser,
+        '5.6.7.8',
+        'jest-agent-2',
+      );
+
+      expect(mockHistoryModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          devolutionFormulaForm: formOid,
+          fromStatus: FORM_STATUS.IN_PROGRESS,
+          toStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+          ip: '5.6.7.8',
+          userAgent: 'jest-agent-2',
+          snapshot: [
+            expect.objectContaining({
+              rowNumber: 1,
+              censusCode: 'C001',
+              ulbName: 'Alpha City',
+              totalGrantAllocation: 500_000,
+            }),
+          ],
+        }),
+      );
+    });
+
+    it('does not let a history-write failure surface as a saveDraft failure', async () => {
+      mockFormModel.findOne.mockReturnValue(q(null));
+      mockFormModel.findOneAndUpdate.mockReturnValue(q({ _id: formOid }));
+      mockHistoryModel.create.mockRejectedValueOnce(new Error('history write failed'));
+
+      await expect(
+        service.saveDraft(
+          { stateId: stateOid.toString(), yearId: YEAR_ID, installment: 1, data: { checkboxConfirmation: true } },
+          adminUser,
+        ),
+      ).resolves.toBeDefined();
+    });
+  });
 });
 
 // ─── 5 · DevolutionFormulaRowService ─────────────────────────────────────────
@@ -2070,6 +2187,7 @@ describe('Devolution Formula — getForm rowEditFields', () => {
         DynamicFormValidationService,
         { provide: getModelToken(DevolutionFormulaForm.name), useValue: mockFormModel },
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: mockRowModel },
+        { provide: getModelToken(DevolutionFormulaFormHistory.name), useValue: mockHistoryModel },
         { provide: getModelToken(GrantAllocation.name), useValue: mockGrantAllocationModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
         { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },

@@ -1,5 +1,5 @@
-import { ExecutionContext, Injectable, Logger } from '@nestjs/common';
-import { ThrottlerException, ThrottlerGuard } from '@nestjs/throttler';
+import { ExecutionContext, HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
+import { ThrottlerGuard } from '@nestjs/throttler';
 
 @Injectable()
 export class ThrottlerBehindProxyGuard extends ThrottlerGuard {
@@ -12,7 +12,14 @@ export class ThrottlerBehindProxyGuard extends ThrottlerGuard {
     return clientIp;
   }
 
+  // Plain HttpException (not ThrottlerException) — that class forces its message through a
+  // template literal in its constructor, so it can only ever carry a string, never a `code`
+  // field for callers to key off of (see forgot-password.component.ts's OTP_COOLDOWN_ACTIVE
+  // handling, which relies on other OTP 429s carrying one).
   protected throwThrottlingException(_context: ExecutionContext): Promise<void> {
-    throw new ThrottlerException('Too many attempts. Please try again in a moment.');
+    throw new HttpException(
+      { message: 'Too many attempts. Please try again in a moment.', code: 'IP_RATE_LIMITED' },
+      HttpStatus.TOO_MANY_REQUESTS,
+    );
   }
 }
