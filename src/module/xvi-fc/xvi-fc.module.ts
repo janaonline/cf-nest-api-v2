@@ -32,6 +32,7 @@ import { SlbModule } from './ulb/slb/slb.module';
 import { ClaimLetterModule } from './state/claim-letter/claim-letter.module';
 import { UlbEligibilityModule } from '../ulb-eligibility/ulb-eligibility.module';
 import { RemindersModule } from './common/reminders/reminders.module';
+import { XviFcCommonModule } from './common/xvi-fc-common.module';
 
 @Module({
   imports: [
@@ -62,6 +63,7 @@ import { RemindersModule } from './common/reminders/reminders.module';
     ClaimLetterModule,
     UlbEligibilityModule,
     RemindersModule,
+    XviFcCommonModule,
   ],
   controllers: [XviFcController],
   providers: [XviFcService, XviFcCacheService, XviFcCacheInterceptor],

@@ -46,6 +46,13 @@ export class SlbForm {
   @Prop({ type: Boolean, default: false })
   isDeleted?: boolean;
 
+  // -- xvi-fc dynamic year access: automatic exemption stub, never edited by a ULB --------
+  @Prop({ type: Boolean, default: false })
+  isExemptionStub?: boolean;
+
+  @Prop({ type: Date })
+  exemptionMaterializedAt?: Date;
+
   // Injected by Mongoose timestamps: true — declared here for TypeScript visibility only.
   createdAt?: Date;
   updatedAt?: Date;
