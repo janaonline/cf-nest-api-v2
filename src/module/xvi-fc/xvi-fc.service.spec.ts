@@ -20,6 +20,7 @@ import { XviFcCacheService, XVIFC_CACHE_KEY_PREFIX } from './cache/xvi-fc-cache.
 import { FormJsonService } from '../../master/form-json/form-json.service';
 import { UlbEligibilityService } from '../ulb-eligibility/ulb-eligibility.service';
 import { SideMenuService } from './side-menu/side-menu.service';
+import { ExemptionResolverService } from './common/services/exemption-resolver.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 
@@ -44,6 +45,7 @@ describe('XviFcService', () => {
   let mockFormJsonService: { clearCache: jest.Mock };
   let mockUlbEligibilityService: { getIneligibleUlbTypeIds: jest.Mock };
   let mockSideMenuService: { getSideMenu: jest.Mock; clearCache: jest.Mock };
+  let mockExemptionResolverService: { resolveBulk: jest.Mock };
 
   function q<T>(value: T) {
     return {
@@ -70,6 +72,7 @@ describe('XviFcService', () => {
     mockFormJsonService = { clearCache: jest.fn().mockResolvedValue(0) };
     mockUlbEligibilityService = { getIneligibleUlbTypeIds: jest.fn().mockResolvedValue([]) };
     mockSideMenuService = { getSideMenu: jest.fn(), clearCache: jest.fn().mockResolvedValue(0) };
+    mockExemptionResolverService = { resolveBulk: jest.fn().mockResolvedValue(new Map()) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -89,6 +92,7 @@ describe('XviFcService', () => {
         { provide: FormJsonService, useValue: mockFormJsonService },
         { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: SideMenuService, useValue: mockSideMenuService },
+        { provide: ExemptionResolverService, useValue: mockExemptionResolverService },
       ],
     }).compile();
 
@@ -466,6 +470,68 @@ describe('XviFcService', () => {
         designYear: new Types.ObjectId(designYearId),
       });
       expect(chain.select).toHaveBeenCalledWith('currentFormStatus');
+    });
+
+    describe('serviceLevelBenchmarks — exemption-aware when no SLB document exists yet', () => {
+      it('reports EXEMPTED_ACKNOWLEDGED when no SLB doc exists but the ULB is exempt', async () => {
+        const ulb = { _id: new Types.ObjectId(ulbId), startYear: 2027, yearAccess: {} };
+        const year = { _id: new Types.ObjectId(designYearId), year: '2027-28' };
+        mockUlbModel.findById.mockReturnValue(q(ulb));
+        mockYearModel.findById.mockReturnValue(q(year));
+        mockExemptionResolverService.resolveBulk.mockResolvedValue(
+          new Map([[String(ulb._id), { exempted: true, source: 'AUTOMATIC' }]]),
+        );
+
+        const result = await service.getFormStatus(ulbId, designYearId);
+
+        expect(result.serviceLevelBenchmarks).toEqual({
+          form_status: 'EXEMPTED_ACKNOWLEDGED',
+          form_status_id: FORM_STATUS.EXEMPTED_ACKNOWLEDGED,
+        });
+        expect(mockExemptionResolverService.resolveBulk).toHaveBeenCalledWith([ulb], year, expect.any(Number));
+      });
+
+      it('reports NOT_STARTED when no SLB doc exists and the ULB is not exempt', async () => {
+        const ulb = { _id: new Types.ObjectId(ulbId), startYear: null, yearAccess: {} };
+        const year = { _id: new Types.ObjectId(designYearId), year: '2027-28' };
+        mockUlbModel.findById.mockReturnValue(q(ulb));
+        mockYearModel.findById.mockReturnValue(q(year));
+        mockExemptionResolverService.resolveBulk.mockResolvedValue(
+          new Map([[String(ulb._id), { exempted: false, source: null }]]),
+        );
+
+        const result = await service.getFormStatus(ulbId, designYearId);
+
+        expect(result.serviceLevelBenchmarks).toEqual({
+          form_status: 'NOT_STARTED',
+          form_status_id: FORM_STATUS.NOT_STARTED,
+        });
+      });
+
+      it('reports NOT_STARTED without calling the exemption resolver when the ULB record cannot be found', async () => {
+        mockUlbModel.findById.mockReturnValue(q(null));
+
+        const result = await service.getFormStatus(ulbId, designYearId);
+
+        expect(result.serviceLevelBenchmarks).toEqual({
+          form_status: 'NOT_STARTED',
+          form_status_id: FORM_STATUS.NOT_STARTED,
+        });
+        expect(mockExemptionResolverService.resolveBulk).not.toHaveBeenCalled();
+      });
+
+      it('uses the real SLB document status as-is when one already exists, even for an exempt ULB — golden rule', async () => {
+        mockSlbFormModel.findOne.mockReturnValue(q({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_STATE }));
+
+        const result = await service.getFormStatus(ulbId, designYearId);
+
+        expect(result.serviceLevelBenchmarks).toEqual({
+          form_status: 'UNDER_REVIEW_BY_STATE',
+          form_status_id: FORM_STATUS.UNDER_REVIEW_BY_STATE,
+        });
+        expect(mockUlbModel.findById).not.toHaveBeenCalled();
+        expect(mockExemptionResolverService.resolveBulk).not.toHaveBeenCalled();
+      });
     });
   });
 

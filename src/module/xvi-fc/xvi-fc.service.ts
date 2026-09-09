@@ -22,7 +22,7 @@ import {
   XviFcBankAccount,
   XviFcBankAccountDocument,
 } from '../../schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
-import { SlbForm, SlbFormDocument, SLB_FORM_TYPE } from '../../schemas/xvi-fc/ulb/slb-form.schema';
+import { SlbForm, SlbFormDocument, SLB_FORM_TYPE, SLB_FORM_ID } from '../../schemas/xvi-fc/ulb/slb-form.schema';
 import { StateWiseResponseDto } from './dto/state-wise-response.dto';
 import { buildGetStateWiseDataPipeline } from './queries/get-state-wise-data.query';
 import { SideMenuResponseDto } from './dto/side-menu.dto';
@@ -35,6 +35,7 @@ import { FormJsonService } from '../../master/form-json/form-json.service';
 import { UlbEligibilityService } from '../ulb-eligibility/ulb-eligibility.service';
 import { SideMenuService } from './side-menu/side-menu.service';
 import { isWithinXvifcCycle, hasDesignYearStarted } from './common/constants/xvifc-cycle.constants';
+import { ExemptionResolverService } from './common/services/exemption-resolver.service';
 
 @Injectable()
 export class XviFcService {
@@ -59,6 +60,7 @@ export class XviFcService {
     private readonly formJsonService: FormJsonService,
     private readonly ulbEligibilityService: UlbEligibilityService,
     private readonly sideMenuService: SideMenuService,
+    private readonly exemptionResolverService: ExemptionResolverService,
   ) {}
 
   async getStateWiseData(stateId: string, requester: AuthUser): Promise<StateWiseResponseDto> {
@@ -242,9 +244,11 @@ export class XviFcService {
     const bankAccountStatus =
       ((bankAccount as Record<string, unknown> | null)?.['currentFormStatus'] as FormStatusType | undefined) ??
       FORM_STATUS.NOT_STARTED;
-    const slbStatus =
-      ((slbForm as Record<string, unknown> | null)?.['currentFormStatus'] as FormStatusType | undefined) ??
-      FORM_STATUS.NOT_STARTED;
+    const slbStatus = await this.resolveSlbStatus(
+      ulb,
+      designYear,
+      slbForm as { currentFormStatus?: FormStatusType } | null,
+    );
 
     return {
       annualAccountId: auditedDoc?._id?.toString() ?? null,
@@ -263,6 +267,31 @@ export class XviFcService {
         form_status_id: slbStatus,
       },
     };
+  }
+
+  /**
+   * SLB's status for the "Conditions Progress" dashboard. If a real SLB document already exists,
+   * its own currentFormStatus is authoritative (golden rule — never overridden, matches
+   * SlbService.getForm's own precedence). Only when no document exists yet does this check
+   * exemption (read-only, via the same ExemptionResolverService the STATE review table uses) so
+   * an exempted ULB that has never opened /slb still sees EXEMPTED_ACKNOWLEDGED here instead of
+   * the misleading default NOT_STARTED.
+   */
+  private async resolveSlbStatus(
+    ulbId: Types.ObjectId,
+    designYearId: Types.ObjectId,
+    slbForm: { currentFormStatus?: FormStatusType } | null,
+  ): Promise<FormStatusType> {
+    if (slbForm?.currentFormStatus != null) return slbForm.currentFormStatus;
+
+    const [ulb, year] = await Promise.all([
+      this.ulbModel.findById(ulbId, { startYear: 1, yearAccess: 1 }).lean().exec(),
+      this.yearModel.findById(designYearId, { year: 1 }).lean().exec(),
+    ]);
+    if (!ulb || !year) return FORM_STATUS.NOT_STARTED;
+
+    const resolution = await this.exemptionResolverService.resolveBulk([ulb], year, SLB_FORM_ID);
+    return resolution.get(String(ulb._id))?.exempted ? FORM_STATUS.EXEMPTED_ACKNOWLEDGED : FORM_STATUS.NOT_STARTED;
   }
 
   getSupportHours(): {
