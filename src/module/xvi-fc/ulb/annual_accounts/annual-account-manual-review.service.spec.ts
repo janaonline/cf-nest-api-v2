@@ -1,0 +1,560 @@
+import { Test, TestingModule } from '@nestjs/testing';
+import { getModelToken } from '@nestjs/mongoose';
+import { getQueueToken } from '@nestjs/bullmq';
+import { AnnualAccountsService } from './annual_accounts.service';
+import { AnnualAccountManualReviewService } from './annual-account-manual-review.service';
+import { XviFcAnnualAccount } from '../../../../schemas/xvi-fc/annual-account.schema';
+import { XviFcAnnualAccountUploadHistory } from '../../../../schemas/xvi-fc/annual-account-upload-history.schema';
+import { XviFcAnnualAccountFormLog } from '../../../../schemas/xvi-fc/annual-account-form-log.schema';
+import { XviFcDocumentActionGate } from '../../../../schemas/xvi-fc/document-action-gate.schema';
+import { XviFcManualReviewRequest } from '../../../../schemas/xvi-fc/manual-review-request.schema';
+import { Ulb } from '../../../../schemas/ulb.schema';
+import { User } from '../../../../schemas/user/user.schema';
+import { S3Service } from '../../../../core/s3/s3.service';
+import { S3UploadService } from '../../../file/s3-upload.service';
+import { FormJsonService } from '../../../../master/form-json/form-json.service';
+import { FileTokenService } from '../../../../core/file-token/file-token.service';
+import { EmailQueueService } from '../../../../core/queue/email-queue/email-queue.service';
+import { ConfigService } from '@nestjs/config';
+import { ANNUAL_ACCOUNT_PROCESSING_QUEUE } from '../../../../core/constants/queues';
+import { UlbEligibilityService } from '../../../ulb-eligibility/ulb-eligibility.service';
+import { FormReturnedNotificationService } from '../../common/reminders/form-returned-notification.service';
+import { ExcelService } from '../../../../services/excel/excel.service';
+import type { AuthUser } from '../../../auth/auth-user.interface';
+
+/** Shape of the second argument passed to Mongoose's updateOne in the tests below. */
+interface MongoUpdateCall {
+  $set?: Record<string, unknown>;
+  $push?: Record<string, unknown>;
+}
+
+/** Mimics a Mongoose query — `.select()`/`.lean()` are no-ops that return the same
+ *  chain object, `.exec()` resolves to the given value, regardless of call order. */
+function mockQuery<T>(result: T) {
+  const query: Record<string, unknown> = {
+    exec: () => Promise.resolve(result),
+  };
+  query.select = () => query;
+  query.lean = () => query;
+  return query;
+}
+
+describe('AnnualAccountManualReviewService', () => {
+  let service: AnnualAccountManualReviewService;
+  let mockAnnualAccountModel: Record<string, jest.Mock>;
+  let mockUploadHistoryModel: Record<string, jest.Mock | { dropIndex: jest.Mock }>;
+  let mockUlbModel: Record<string, jest.Mock>;
+  let mockUserModel: Record<string, jest.Mock>;
+  let mockFormLogModel: { create: jest.Mock };
+  let mockManualReviewRequestModel: {
+    create: jest.Mock;
+    find: jest.Mock;
+    findOneAndUpdate: jest.Mock;
+    aggregate: jest.Mock;
+  };
+
+  let mockOcrQueue: { add: jest.Mock };
+  let mockFormJsonService: { findActiveByDesignYearAndFormId: jest.Mock };
+  let mockS3Service: Record<string, jest.Mock>;
+  let mockActionGateModel: { find: jest.Mock };
+  let mockFileTokenService: { signFileUrl: jest.Mock };
+  let mockEmailQueueService: { addEmailJob: jest.Mock };
+  let mockConfigService: { get: jest.Mock };
+  let mockUlbEligibilityService: { assertUlbEligibleForGrantCycle: jest.Mock };
+  let mockFormReturnedNotification: { notifyReturned: jest.Mock };
+  let mockExcelService: { generateExcel: jest.Mock };
+
+  beforeEach(async () => {
+    mockAnnualAccountModel = {
+      findById: jest.fn(),
+      findOne: jest.fn().mockReturnValue(mockQuery(null)),
+      findOneAndUpdate: jest.fn(),
+      updateOne: jest.fn().mockResolvedValue({ modifiedCount: 1 }),
+      aggregate: jest.fn().mockReturnValue(mockQuery([{ data: [], totalCount: [] }])),
+    };
+    mockUploadHistoryModel = {
+      countDocuments: jest.fn().mockResolvedValue(0),
+      create: jest.fn().mockResolvedValue(undefined),
+      findOne: jest.fn(),
+      updateOne: jest.fn(),
+      collection: {
+        dropIndex: jest.fn().mockResolvedValue(undefined),
+      },
+    };
+    mockFormLogModel = {
+      create: jest.fn().mockResolvedValue(undefined),
+    };
+    mockManualReviewRequestModel = {
+      create: jest.fn().mockResolvedValue(undefined),
+      find: jest.fn().mockReturnValue(mockQuery([])),
+      findOneAndUpdate: jest.fn().mockResolvedValue({ _id: 'mr-1' }),
+      aggregate: jest.fn().mockReturnValue(mockQuery([{ data: [], totalCount: [] }])),
+    };
+    mockUlbModel = {
+      findById: jest.fn().mockReturnValue(mockQuery({ state: { toString: () => 'state-1' } })),
+    };
+    mockUserModel = {
+      findOne: jest.fn().mockReturnValue(mockQuery(null)),
+    };
+    mockS3Service = {
+      headObject: jest.fn().mockResolvedValue(undefined),
+      getPdfBufferFromS3: jest.fn().mockResolvedValue(Buffer.from('pdf')),
+      getPdfPageCountFromBuffer: jest.fn().mockResolvedValue(3),
+      presignGet: jest.fn(),
+    };
+    const mockS3UploadService = {
+      generatePutSignedUrl: jest.fn(),
+    };
+    mockOcrQueue = {
+      add: jest.fn().mockResolvedValue({ id: 'job-1' }),
+    };
+    mockFormJsonService = {
+      findActiveByDesignYearAndFormId: jest.fn(),
+    };
+    mockActionGateModel = {
+      find: jest.fn().mockReturnValue(mockQuery([])),
+    };
+    mockFileTokenService = {
+      signFileUrl: jest.fn((path: string) => `https://signed.example.com/${path}`),
+    };
+    mockEmailQueueService = {
+      addEmailJob: jest.fn().mockResolvedValue(undefined),
+    };
+    mockConfigService = {
+      get: jest.fn(),
+    };
+    mockUlbEligibilityService = {
+      assertUlbEligibleForGrantCycle: jest.fn().mockResolvedValue(undefined),
+    };
+    mockFormReturnedNotification = {
+      notifyReturned: jest.fn().mockResolvedValue(undefined),
+    };
+    mockExcelService = {
+      generateExcel: jest.fn().mockResolvedValue(Buffer.from('excel')),
+    };
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        AnnualAccountManualReviewService,
+        // AnnualAccountsService is a real instance here (not mocked) — the manual-review service
+        // reuses its resolveSectionDocument/validateViewAccess/getProcessingStatus, and these
+        // tests want the same section-resolution and access-control behavior the moved-from
+        // AnnualAccountsService.spec.ts tests exercised.
+        AnnualAccountsService,
+        { provide: getModelToken(XviFcAnnualAccount.name), useValue: mockAnnualAccountModel },
+        { provide: getModelToken(XviFcAnnualAccountUploadHistory.name), useValue: mockUploadHistoryModel },
+        { provide: getModelToken(XviFcAnnualAccountFormLog.name), useValue: mockFormLogModel },
+        { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+        { provide: getModelToken(User.name), useValue: mockUserModel },
+        { provide: getModelToken(XviFcDocumentActionGate.name), useValue: mockActionGateModel },
+        { provide: getModelToken(XviFcManualReviewRequest.name), useValue: mockManualReviewRequestModel },
+        { provide: S3Service, useValue: mockS3Service },
+        { provide: S3UploadService, useValue: mockS3UploadService },
+        { provide: getQueueToken(ANNUAL_ACCOUNT_PROCESSING_QUEUE), useValue: mockOcrQueue },
+        { provide: FormJsonService, useValue: mockFormJsonService },
+        { provide: FileTokenService, useValue: mockFileTokenService },
+        { provide: EmailQueueService, useValue: mockEmailQueueService },
+        { provide: ConfigService, useValue: mockConfigService },
+        { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
+        { provide: FormReturnedNotificationService, useValue: mockFormReturnedNotification },
+        { provide: ExcelService, useValue: mockExcelService },
+      ],
+    }).compile();
+
+    service = module.get<AnnualAccountManualReviewService>(AnnualAccountManualReviewService);
+  });
+
+  describe('requestManualReview', () => {
+    const ULB_ID = '507f1f77bcf86cd799439011';
+    const ACCOUNT_ID = '507f1f77bcf86cd799439014';
+    const ulbUser: AuthUser = {
+      _id: '507f1f77bcf86cd799439098',
+      role: 'ULB-EDITOR',
+      scope: 'ULB',
+      ulb: ULB_ID,
+    } as AuthUser;
+
+    const docWithOcr = (ocrInfo: Record<string, unknown>) =>
+      mockQuery({
+        _id: ACCOUNT_ID,
+        ulb: ULB_ID,
+        sectionType: 'audited',
+        form_status: 'IN_PROGRESS',
+        documents: [
+          {
+            docId: 'auditors-report',
+            processingStatus: 'FAILED',
+            currentUpload: { uploadId: 'upload-1', ocrInfo },
+            stateDecision: null,
+          },
+        ],
+      });
+
+    it('rejects non-ULB users', async () => {
+      const stateUser: AuthUser = { _id: 'user-2', role: 'STATE', scope: 'STATE' } as AuthUser;
+
+      await expect(
+        service.requestManualReview(ACCOUNT_ID, 'auditedData', 'auditors-report', stateUser),
+      ).rejects.toThrow('Only ULB users may request manual review');
+    });
+
+    it("rejects a ULB user acting on another ULB's account", async () => {
+      mockAnnualAccountModel.findById.mockReturnValue(docWithOcr({ validationStatus: 'FAIL' }));
+      const otherUlbUser: AuthUser = { _id: 'user-3', role: 'ULB-EDITOR', scope: 'ULB', ulb: 'other-ulb' } as AuthUser;
+
+      await expect(
+        service.requestManualReview(ACCOUNT_ID, 'auditedData', 'auditors-report', otherUlbUser),
+      ).rejects.toThrow('Access denied');
+    });
+
+    it('rejects when OCR validation has not failed', async () => {
+      mockAnnualAccountModel.findById.mockReturnValue(docWithOcr({ validationStatus: 'PASS' }));
+
+      await expect(service.requestManualReview(ACCOUNT_ID, 'auditedData', 'auditors-report', ulbUser)).rejects.toThrow(
+        'Manual review can only be requested for a failed OCR validation.',
+      );
+    });
+
+    it('rejects when manual review was already requested', async () => {
+      mockAnnualAccountModel.findById.mockReturnValue(
+        docWithOcr({ validationStatus: 'FAIL', isManualReviewRequested: true }),
+      );
+
+      await expect(service.requestManualReview(ACCOUNT_ID, 'auditedData', 'auditors-report', ulbUser)).rejects.toThrow(
+        'Manual review has already been requested for this document.',
+      );
+    });
+
+    it('sets isManualReviewRequested on both the account and upload-history records', async () => {
+      mockAnnualAccountModel.findById.mockReturnValue(
+        docWithOcr({ validationStatus: 'FAIL', jobId: 'ocr-job-1' }),
+      );
+      mockUploadHistoryModel.updateOne = jest.fn().mockResolvedValue({ modifiedCount: 1 });
+
+      await service.requestManualReview(ACCOUNT_ID, 'auditedData', 'auditors-report', ulbUser);
+
+      const [filter, update] = mockAnnualAccountModel.updateOne.mock.calls[0] as [
+        Record<string, unknown>,
+        MongoUpdateCall,
+      ];
+      expect(filter).toMatchObject({ 'documents.docId': 'auditors-report' });
+      expect(update.$set?.['documents.$.currentUpload.ocrInfo.isManualReviewRequested']).toBe(true);
+      expect(update.$set?.['documents.$.manualReviewDecision']).toBeNull();
+      expect(mockUploadHistoryModel.updateOne).toHaveBeenCalledWith(
+        { uploadId: 'upload-1' },
+        { $set: expect.objectContaining({ 'ocrInfo.isManualReviewRequested': true }) },
+      );
+      expect(mockManualReviewRequestModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          docId: 'auditors-report',
+          uploadId: 'upload-1',
+          ocrJobId: 'ocr-job-1',
+          status: 'PENDING',
+          dueAt: expect.any(Date),
+        }),
+      );
+    });
+  });
+
+  describe('decideManualReview', () => {
+    const ULB_ID = '507f1f77bcf86cd799439011';
+    const ACCOUNT_ID = '507f1f77bcf86cd799439014';
+    const adminUser: AuthUser = { _id: '507f1f77bcf86cd799439099', role: 'ADMIN', scope: 'ADMIN' } as AuthUser;
+
+    const docAwaitingReview = (overrides: Record<string, unknown> = {}) =>
+      mockQuery({
+        _id: ACCOUNT_ID,
+        ulb: ULB_ID,
+        design_year: 'year-1',
+        sectionType: 'audited',
+        form_status: 'IN_PROGRESS',
+        documents: [
+          {
+            docId: 'auditors-report',
+            processingStatus: 'FAILED',
+            currentUpload: {
+              uploadId: 'upload-1',
+              file: { path: 's3/key.pdf' },
+              ocrInfo: { validationStatus: 'FAIL', isManualReviewRequested: true },
+            },
+            manualReviewDecision: null,
+            ...overrides,
+          },
+        ],
+      });
+
+    it('rejects non-ADMIN users', async () => {
+      const ulbUser: AuthUser = { _id: 'user-1', role: 'ULB-EDITOR', scope: 'ULB', ulb: ULB_ID } as AuthUser;
+      mockAnnualAccountModel.findById.mockReturnValue(docAwaitingReview());
+
+      await expect(
+        service.decideManualReview(ACCOUNT_ID, 'auditedData', 'auditors-report', { decision: 'APPROVED' }, ulbUser),
+      ).rejects.toThrow('Only ADMIN users may decide a manual review request');
+    });
+
+    it('rejects when no manual review was ever requested', async () => {
+      mockAnnualAccountModel.findById.mockReturnValue(
+        docAwaitingReview({ currentUpload: { uploadId: 'upload-1', ocrInfo: { isManualReviewRequested: false } } }),
+      );
+
+      await expect(
+        service.decideManualReview(ACCOUNT_ID, 'auditedData', 'auditors-report', { decision: 'APPROVED' }, adminUser),
+      ).rejects.toThrow('No manual review has been requested for this document.');
+    });
+
+    it('APPROVED forces processingStatus to PASSED and records the decision', async () => {
+      mockAnnualAccountModel.findById.mockReturnValue(docAwaitingReview());
+
+      await service.decideManualReview(
+        ACCOUNT_ID,
+        'auditedData',
+        'auditors-report',
+        { decision: 'APPROVED' },
+        adminUser,
+      );
+
+      const [filter, update] = mockAnnualAccountModel.updateOne.mock.calls[0] as [
+        Record<string, unknown>,
+        MongoUpdateCall,
+      ];
+      expect(filter).toMatchObject({ 'documents.docId': 'auditors-report' });
+      expect(update.$set?.['documents.$.processingStatus']).toBe('PASSED');
+      expect(update.$set?.['documents.$.manualReviewDecision']).toMatchObject({ status: 'APPROVED' });
+      expect(mockManualReviewRequestModel.findOneAndUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ docId: 'auditors-report', uploadId: 'upload-1', status: 'PENDING' }),
+        expect.objectContaining({ $set: expect.objectContaining({ status: 'APPROVED' }) }),
+        expect.objectContaining({ sort: { requestedAt: -1 } }),
+      );
+    });
+
+    it('falls back to synthesizing a manual-review record when no PENDING row is found (legacy request)', async () => {
+      mockAnnualAccountModel.findById.mockReturnValue(docAwaitingReview());
+      mockManualReviewRequestModel.findOneAndUpdate.mockResolvedValueOnce(null);
+
+      await service.decideManualReview(
+        ACCOUNT_ID,
+        'auditedData',
+        'auditors-report',
+        { decision: 'APPROVED' },
+        adminUser,
+      );
+
+      expect(mockManualReviewRequestModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({ docId: 'auditors-report', uploadId: 'upload-1', status: 'APPROVED' }),
+      );
+    });
+
+    it('RETURNED (reject) leaves processingStatus untouched and requires a note', async () => {
+      mockAnnualAccountModel.findById.mockReturnValue(docAwaitingReview());
+
+      await service.decideManualReview(
+        ACCOUNT_ID,
+        'auditedData',
+        'auditors-report',
+        { decision: 'RETURNED', note: 'File is unreadable, please re-scan.' },
+        adminUser,
+      );
+
+      const [, update] = mockAnnualAccountModel.updateOne.mock.calls[0] as [Record<string, unknown>, MongoUpdateCall];
+      expect(update.$set?.['documents.$.processingStatus']).toBeUndefined();
+      expect(update.$set?.['documents.$.manualReviewDecision']).toMatchObject({ status: 'RETURNED' });
+    });
+  });
+
+  describe('getManualReviewQueue', () => {
+    const adminUser: AuthUser = { _id: 'admin-1', role: 'ADMIN', scope: 'ADMIN' } as AuthUser;
+
+    it('rejects non-ADMIN users', async () => {
+      const stateUser: AuthUser = { _id: 'user-2', role: 'STATE', scope: 'STATE' } as AuthUser;
+
+      await expect(service.getManualReviewQueue({ page: 1, pageSize: 20 }, stateUser)).rejects.toThrow(
+        'Only ADMIN users may view the manual-review queue',
+      );
+    });
+
+    it('returns the paginated shape from the aggregation result, signing filePath into a fileUrl', async () => {
+      const row = { annualAccountId: 'acc-1', ulbName: 'Test ULB', docId: 'auditors-report', filePath: 's3/path.pdf' };
+      mockAnnualAccountModel.aggregate.mockReturnValue(mockQuery([{ data: [row], totalCount: [{ count: 1 }] }]));
+
+      const result = await service.getManualReviewQueue({ page: 1, pageSize: 20 }, adminUser);
+
+      expect(result).toEqual({
+        total: 1,
+        page: 1,
+        pageSize: 20,
+        rows: [
+          {
+            annualAccountId: 'acc-1',
+            ulbName: 'Test ULB',
+            docId: 'auditors-report',
+            fileUrl: 'https://signed.example.com/s3/path.pdf',
+          },
+        ],
+      });
+    });
+
+    it('returns an empty page when nothing is pending', async () => {
+      mockAnnualAccountModel.aggregate.mockReturnValue(mockQuery([{ data: [], totalCount: [] }]));
+
+      const result = await service.getManualReviewQueue({ page: 1, pageSize: 20 }, adminUser);
+
+      expect(result).toEqual({ total: 0, page: 1, pageSize: 20, rows: [] });
+    });
+  });
+
+  describe('listManualReviewRequestHistory', () => {
+    const adminUser: AuthUser = { _id: 'admin-1', role: 'ADMIN', scope: 'ADMIN' } as AuthUser;
+
+    it('rejects non-ADMIN users', async () => {
+      const stateUser: AuthUser = { _id: 'user-2', role: 'STATE', scope: 'STATE' } as AuthUser;
+
+      await expect(service.listManualReviewRequestHistory({ page: 1, pageSize: 20 }, stateUser)).rejects.toThrow(
+        'Only ADMIN users may view the manual-review history',
+      );
+    });
+
+    it('returns the paginated shape from the aggregation result, signing filePath into a fileUrl', async () => {
+      const row = {
+        requestId: 'mr-1',
+        ulbName: 'Test ULB',
+        status: 'APPROVED',
+        docId: 'auditors-report',
+        filePath: 's3/path.pdf',
+      };
+      mockManualReviewRequestModel.aggregate.mockReturnValue(mockQuery([{ data: [row], totalCount: [{ count: 1 }] }]));
+
+      const result = await service.listManualReviewRequestHistory({ page: 1, pageSize: 20 }, adminUser);
+
+      expect(result).toEqual({
+        total: 1,
+        page: 1,
+        pageSize: 20,
+        rows: [
+          {
+            requestId: 'mr-1',
+            ulbName: 'Test ULB',
+            status: 'APPROVED',
+            docId: 'auditors-report',
+            fileUrl: 'https://signed.example.com/s3/path.pdf',
+          },
+        ],
+      });
+    });
+
+    it('returns an empty page when nothing matches', async () => {
+      mockManualReviewRequestModel.aggregate.mockReturnValue(mockQuery([{ data: [], totalCount: [] }]));
+
+      const result = await service.listManualReviewRequestHistory({ page: 1, pageSize: 20 }, adminUser);
+
+      expect(result).toEqual({ total: 0, page: 1, pageSize: 20, rows: [] });
+    });
+  });
+
+  describe('getManualReviewRequestDetail', () => {
+    const adminUser: AuthUser = { _id: 'admin-1', role: 'ADMIN', scope: 'ADMIN' } as AuthUser;
+
+    it('rejects non-ADMIN users', async () => {
+      const stateUser: AuthUser = { _id: 'user-2', role: 'STATE', scope: 'STATE' } as AuthUser;
+
+      await expect(service.getManualReviewRequestDetail('mr-1', stateUser)).rejects.toThrow(
+        'Only ADMIN users may view manual-review request details',
+      );
+    });
+
+    it('returns the single request when found, signing filePath into a fileUrl', async () => {
+      const row = { requestId: 'mr-1', ulbName: 'Test ULB', status: 'PENDING', filePath: 's3/path.pdf' };
+      mockManualReviewRequestModel.aggregate.mockReturnValue(mockQuery([row]));
+
+      const result = await service.getManualReviewRequestDetail('507f1f77bcf86cd799439011', adminUser);
+
+      expect(result).toEqual({
+        requestId: 'mr-1',
+        ulbName: 'Test ULB',
+        status: 'PENDING',
+        fileUrl: 'https://signed.example.com/s3/path.pdf',
+      });
+    });
+
+    it('throws NotFoundException when the request does not exist', async () => {
+      mockManualReviewRequestModel.aggregate.mockReturnValue(mockQuery([]));
+
+      await expect(service.getManualReviewRequestDetail('507f1f77bcf86cd799439011', adminUser)).rejects.toThrow(
+        'Manual-review request not found',
+      );
+    });
+  });
+
+  describe('dumpManualReviewHistoryToExcel', () => {
+    const adminUser: AuthUser = { _id: 'admin-1', role: 'ADMIN', scope: 'ADMIN' } as AuthUser;
+
+    it('rejects non-ADMIN users', async () => {
+      const stateUser: AuthUser = { _id: 'user-2', role: 'STATE', scope: 'STATE' } as AuthUser;
+
+      await expect(service.dumpManualReviewHistoryToExcel({ page: 1, pageSize: 20 }, stateUser)).rejects.toThrow(
+        'Only ADMIN users may view the manual-review history',
+      );
+    });
+
+    it('builds a workbook from every matching row, unpaginated, including the file/OCR-log links', async () => {
+      mockConfigService.get.mockImplementation((key: string, defaultValue?: string) =>
+        ({ CLIENT_URL: 'https://cityfinance.in', API_BASE_URL_V3: 'https://ocr.example.com/api/v3' })[key] ??
+        defaultValue,
+      );
+      const rows = [
+        {
+          ulbName: 'Test ULB',
+          ulbCode: 'ULB1',
+          stateName: 'Karnataka',
+          section: 'auditedData',
+          year: '2024-25',
+          docId: 'auditors-report',
+          fileName: 'report.pdf',
+          filePath: 's3/path/report.pdf',
+          ocrJobId: 'job-42',
+          status: 'APPROVED',
+          requestedAt: '2024-01-01T00:00:00.000Z',
+          requestedBy: { role: 'ULB', name: 'Nodal Officer' },
+          dueAt: '2024-01-03T00:00:00.000Z',
+          isBreached: false,
+          decidedAt: '2024-01-02T00:00:00.000Z',
+          decidedBy: { role: 'ADMIN', name: 'Admin User' },
+          decisionNote: 'Looks fine',
+        },
+      ];
+      mockManualReviewRequestModel.aggregate.mockReturnValue(mockQuery(rows));
+
+      const buffer = await service.dumpManualReviewHistoryToExcel({ page: 1, pageSize: 20 }, adminUser);
+
+      expect(buffer).toEqual(Buffer.from('excel'));
+      expect(mockExcelService.generateExcel).toHaveBeenCalledTimes(1);
+      const [headers, excelRows, sheetName] = mockExcelService.generateExcel.mock.calls[0];
+      expect(sheetName).toBe('Manual Review History');
+      expect(headers.map((h: { key: string }) => h.key)).toEqual(
+        expect.arrayContaining(['decisionNote', 'fileUrl', 'ocrLogUrl']),
+      );
+      expect(excelRows).toEqual([
+        expect.objectContaining({
+          ulbName: 'Test ULB',
+          section: 'Audited',
+          status: 'APPROVED',
+          requestedBy: 'Nodal Officer',
+          isBreached: 'No',
+          decidedBy: 'Admin User',
+          decisionNote: 'Looks fine',
+          fileUrl: 'https://ocr.example.com/api/v3/ocr-validation/jobs/job-42/download',
+          ocrLogUrl: 'https://cityfinance.in/ocr/validation?jobId=job-42',
+        }),
+      ]);
+    });
+
+    it('leaves fileUrl/ocrLogUrl blank when there is no file path or OCR job', async () => {
+      const rows = [{ ulbName: 'Test ULB', status: 'PENDING', requestedBy: {}, decidedBy: null }];
+      mockManualReviewRequestModel.aggregate.mockReturnValue(mockQuery(rows));
+
+      await service.dumpManualReviewHistoryToExcel({ page: 1, pageSize: 20 }, adminUser);
+
+      const [, excelRows] = mockExcelService.generateExcel.mock.calls[0];
+      expect(excelRows[0]).toMatchObject({ fileUrl: '', ocrLogUrl: '' });
+    });
+  });
+});
