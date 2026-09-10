@@ -103,13 +103,25 @@ by `persistEntry`:
 that already materialized the same entry wins without a redundant write; the computed value is
 deterministic for the same `(ulb, year)` pair either way, so this is safe without a lock.
 
+**Invalidation on `startYear` change**: `UlbService.updateYearAccess` wipes the entire `yearAccess`
+map (`$set: { yearAccess: {} }`, atomically alongside the `startYear` write itself) whenever
+`startYear` actually changes to a different value. Every entry's `computeEntry` result depends on
+`startYear`, so an already-materialized entry frozen under the *old* value would otherwise silently
+drift out of sync with it forever (`getEntry`/`peekEntry` never recompute an existing entry). A
+no-op resubmit of the same `startYear` value does not wipe anything. `setSeedExemptions` still runs
+after the wipe (when `disabledFormIds` is provided in the same request) to re-establish the new seed
+entry; every other year recomputes lazily the next time something touches it.
+
 ## Invariants worth knowing before you change adjacent code
 
 - **Golden rule**: if a real form document already exists for `(ulb, year, form)`, none of this ever
   touches it — no automatic re-creation, no re-classification. An already-started ULB a state wants
   excused goes through the separate discretionary STATE→MoHUA flow (not built yet), not this one.
 - Once an entry is materialized, `yearEnabled`/`disabledFormIds` are read directly. No code path
-  falls back to `dateOfConstitution` or any other condition once `yearAccess[label]` exists.
+  falls back to `dateOfConstitution` or any other condition once `yearAccess[label]` exists — with
+  one deliberate exception: an admin changing `startYear` itself invalidates the whole map (see
+  "Invalidation on `startYear` change" above), specifically because every entry's correctness
+  depends on `startYear` in the first place.
 - `submissionScope: 'ONCE_EVER'` forms (e.g. Bank Account/PFMS) never appear in `disabledFormIds` —
   they aren't "exempted," they're "already satisfied elsewhere." They're looked up by `{ulb}` alone
   on GET, returning the same record regardless of which year is requested. The write path guards

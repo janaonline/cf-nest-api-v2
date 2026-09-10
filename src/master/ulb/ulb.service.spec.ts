@@ -1287,11 +1287,42 @@ describe('UlbService', () => {
         await expect(service.updateYearAccess(ulbId, { disabledFormIds: [32] })).rejects.toThrow(BadRequestException);
       });
 
-      it('sets startYear alone without touching yearAccess when disabledFormIds is omitted', async () => {
+      it('sets startYear and wipes yearAccess to force a lazy recompute, when startYear actually changes', async () => {
+        // beforeEach seeds existing.startYear: null, so 2026 is a real change.
         await service.updateYearAccess(ulbId, { startYear: 2026 });
 
-        expect(ulbModel.findByIdAndUpdate).toHaveBeenCalledWith(ulbId, { $set: { startYear: 2026 } });
+        expect(ulbModel.findByIdAndUpdate).toHaveBeenCalledWith(ulbId, {
+          $set: { startYear: 2026, yearAccess: {} },
+        });
         expect(yearAccessService.setSeedExemptions).not.toHaveBeenCalled();
+      });
+
+      it('does not wipe yearAccess when startYear is resubmitted with its own current value (no-op)', async () => {
+        ulbModel.findById.mockReturnValue({ lean: jest.fn().mockResolvedValue({ _id: ulbId, startYear: 2027 }) });
+
+        await service.updateYearAccess(ulbId, { startYear: 2027 });
+
+        expect(ulbModel.findByIdAndUpdate).toHaveBeenCalledWith(ulbId, { $set: { startYear: 2027 } });
+      });
+
+      it('wipes yearAccess when a real prior startYear is explicitly cleared back to null', async () => {
+        ulbModel.findById.mockReturnValue({ lean: jest.fn().mockResolvedValue({ _id: ulbId, startYear: 2027 }) });
+
+        await service.updateYearAccess(ulbId, { startYear: null });
+
+        expect(ulbModel.findByIdAndUpdate).toHaveBeenCalledWith(ulbId, {
+          $set: { startYear: null, yearAccess: {} },
+        });
+      });
+
+      it('wipes yearAccess when startYear moves from one real value to a different one', async () => {
+        ulbModel.findById.mockReturnValue({ lean: jest.fn().mockResolvedValue({ _id: ulbId, startYear: 2027 }) });
+
+        await service.updateYearAccess(ulbId, { startYear: 2028 });
+
+        expect(ulbModel.findByIdAndUpdate).toHaveBeenCalledWith(ulbId, {
+          $set: { startYear: 2028, yearAccess: {} },
+        });
       });
 
       it('throws when no Year document exists for the computed seed label', async () => {
@@ -1334,7 +1365,8 @@ describe('UlbService', () => {
         );
       });
 
-      it('allows explicitly clearing startYear back to null (no restriction)', async () => {
+      it('allows explicitly setting startYear to null (no restriction) - a no-op here since it was already null, so no wipe needed', async () => {
+        // beforeEach seeds existing.startYear: null already - null -> null is not a real change.
         await service.updateYearAccess(ulbId, { startYear: null });
 
         expect(ulbModel.findByIdAndUpdate).toHaveBeenCalledWith(ulbId, { $set: { startYear: null } });

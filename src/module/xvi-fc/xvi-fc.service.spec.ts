@@ -21,6 +21,7 @@ import { FormJsonService } from '../../master/form-json/form-json.service';
 import { UlbEligibilityService } from '../ulb-eligibility/ulb-eligibility.service';
 import { SideMenuService } from './side-menu/side-menu.service';
 import { ExemptionResolverService } from './common/services/exemption-resolver.service';
+import { FormJsonConfigService } from '../../master/form-json-config/form-json-config.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 
@@ -46,6 +47,7 @@ describe('XviFcService', () => {
   let mockUlbEligibilityService: { getIneligibleUlbTypeIds: jest.Mock };
   let mockSideMenuService: { getSideMenu: jest.Mock; clearCache: jest.Mock };
   let mockExemptionResolverService: { resolveBulk: jest.Mock };
+  let mockFormJsonConfigService: { findByFormId: jest.Mock };
 
   function q<T>(value: T) {
     return {
@@ -73,6 +75,8 @@ describe('XviFcService', () => {
     mockUlbEligibilityService = { getIneligibleUlbTypeIds: jest.fn().mockResolvedValue([]) };
     mockSideMenuService = { getSideMenu: jest.fn(), clearCache: jest.fn().mockResolvedValue(0) };
     mockExemptionResolverService = { resolveBulk: jest.fn().mockResolvedValue(new Map()) };
+    // Default: PER_YEAR (or unconfigured) - existing getFormStatus tests' exact-year behavior unchanged.
+    mockFormJsonConfigService = { findByFormId: jest.fn().mockResolvedValue(null) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -93,6 +97,7 @@ describe('XviFcService', () => {
         { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: SideMenuService, useValue: mockSideMenuService },
         { provide: ExemptionResolverService, useValue: mockExemptionResolverService },
+        { provide: FormJsonConfigService, useValue: mockFormJsonConfigService },
       ],
     }).compile();
 
@@ -497,6 +502,43 @@ describe('XviFcService', () => {
         designYear: new Types.ObjectId(designYearId),
       });
       expect(chain.select).toHaveBeenCalledWith('currentFormStatus');
+    });
+
+    describe('xviFcBankAccount — ONCE_EVER-aware when the record belongs to an earlier design year', () => {
+      it('falls back to a {ulb}-only lookup when the exact-year lookup finds nothing and submissionScope is ONCE_EVER, reporting the real status instead of NOT_STARTED', async () => {
+        mockFormJsonConfigService.findByFormId.mockResolvedValue({ formId: 33, submissionScope: 'ONCE_EVER' });
+        mockBankAccountModel.findOne.mockImplementation((filter: { designYear?: unknown }) =>
+          filter.designYear ? q(null) : q({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_STATE }),
+        );
+
+        const result = await service.getFormStatus(ulbId, designYearId);
+
+        expect(result.xviFcBankAccount).toEqual({
+          form_status: 'UNDER_REVIEW_BY_STATE',
+          form_status_id: FORM_STATUS.UNDER_REVIEW_BY_STATE,
+        });
+        expect(mockBankAccountModel.findOne).toHaveBeenCalledWith({ ulb: new Types.ObjectId(ulbId) });
+      });
+
+      it('does not issue the fallback {ulb}-only lookup when the exact-year record already exists', async () => {
+        mockFormJsonConfigService.findByFormId.mockResolvedValue({ formId: 33, submissionScope: 'ONCE_EVER' });
+        mockBankAccountModel.findOne.mockReturnValue(q({ currentFormStatus: FORM_STATUS.APPROVED_BY_STATE }));
+
+        const result = await service.getFormStatus(ulbId, designYearId);
+
+        expect(result.xviFcBankAccount.form_status_id).toBe(FORM_STATUS.APPROVED_BY_STATE);
+        expect(mockBankAccountModel.findOne).toHaveBeenCalledTimes(1);
+      });
+
+      it('does not issue the fallback lookup when submissionScope is PER_YEAR or unconfigured - stays NOT_STARTED', async () => {
+        // mockFormJsonConfigService default resolves null (PER_YEAR/unconfigured) - see beforeEach.
+        mockBankAccountModel.findOne.mockReturnValue(q(null));
+
+        const result = await service.getFormStatus(ulbId, designYearId);
+
+        expect(result.xviFcBankAccount).toEqual({ form_status: 'NOT_STARTED', form_status_id: FORM_STATUS.NOT_STARTED });
+        expect(mockBankAccountModel.findOne).toHaveBeenCalledTimes(1);
+      });
     });
 
     describe('serviceLevelBenchmarks — exemption-aware when no SLB document exists yet', () => {
