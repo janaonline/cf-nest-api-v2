@@ -1,15 +1,27 @@
 import { ConfigService } from '@nestjs/config';
 
-const DEFAULT_CLIENT_URL = 'https://cityfinance.in';
+// Last-resort default when neither CLIENT_URL nor BASE_URL is configured.
+const DEFAULT_CLIENT_URL = 'https://www.cityfinance.in';
 
 /** Login-flow `type` shared by every ULB/STATE/MoHUA invite and onboarding email — all of this
  *  portal's account-provisioning flows are XVI-FC ones. Kept in one place instead of the literal
  *  `'XVIFC'` being retyped at each call site. */
 export const PORTAL_INVITE_LOGIN_TYPE = '16thFC';
 
-/** Resolves the frontend's base URL, consistently defaulting when `CLIENT_URL` is unset. */
+/**
+ * Resolves the frontend's base URL. Prefers an explicit `CLIENT_URL`; otherwise derives the
+ * hostname from this API's own `BASE_URL` (e.g. `BASE_URL=https://www.cityfinance.in/api/v2/` ->
+ * `https://www.cityfinance.in`), the same pattern `AnnualAccountOcrApiService` uses for the OCR
+ * API host — so a dev/staging deployment links back to its own frontend instead of the hardcoded
+ * prod default. This is config-only (no Request involved), so it resolves identically from
+ * controllers, queue processors, and `@Cron` jobs alike.
+ */
 export function resolveClientBaseUrl(configService: ConfigService): string {
-  return configService.get<string>('CLIENT_URL', DEFAULT_CLIENT_URL);
+  const clientUrl = configService.get<string>('CLIENT_URL');
+  if (clientUrl) return clientUrl;
+
+  const baseUrl = configService.get<string>('BASE_URL', '');
+  return baseUrl ? new URL(baseUrl).origin : DEFAULT_CLIENT_URL;
 }
 
 export const APP_URL = {
@@ -42,6 +54,8 @@ export function buildPortalAuthUrls(
   };
 }
 
+// Builds the full URL for a given path within the portal.
+// eg: getPortalUrl(configService, 'auth/login') => 'https://www.cityfinance.in/fc/auth/login'
 export function getPortalUrl(configService: ConfigService, path: string): string {
   const baseUrl = resolveClientBaseUrl(configService);
   return `${baseUrl}/fc/${path}`;
