@@ -140,9 +140,11 @@ export class FormReturnedNotificationService {
   }
 
   /**
-   * Notifies the ULB's Nodal Officer that `formName` was returned by the State. Best-effort:
-   * logs and returns (never throws) on any missing precondition — template inactive/missing, no
-   * Nodal Officer on file — so the caller's own transaction is never put at risk by this.
+   * Notifies the ULB's Nodal Officer that `formName` was returned by the State. Falls back to the
+   * ULB's plain-text `accountantEmail` contact (embedded on its primary User doc) when no verified
+   * Nodal Officer is on file. Best-effort: logs and returns (never throws) on any missing
+   * precondition — template inactive/missing, no Nodal Officer and no accountant email either — so
+   * the caller's own transaction is never put at risk by this.
    */
   async notifyReturned(params: { ulbId: Types.ObjectId; formName: string; note: string | null }): Promise<void> {
     const { ulbId, formName, note } = params;
@@ -163,8 +165,29 @@ export class FormReturnedNotificationService {
         .lean()
         .exec();
 
-      if (!nodalOfficer) {
-        this.logger.warn(`No active Nodal Officer found for ULB ${ulbId.toString()} — skipping return notification`);
+      let recipientEmail = nodalOfficer?.email as string | undefined;
+
+      // No verified Nodal Officer on file — fall back to the ULB's plain-text accountant contact
+      // (accountantEmail, embedded on the ULB's primary User doc) rather than sending nothing.
+      if (!recipientEmail) {
+        const primaryUser = await this.userModel
+          .findOne({ ulb: ulbId, role: Role.ULB, isDeleted: false })
+          .select('accountantEmail')
+          .lean()
+          .exec();
+        recipientEmail = primaryUser?.accountantEmail || undefined;
+
+        if (recipientEmail) {
+          this.logger.warn(
+            `No active Nodal Officer found for ULB ${ulbId.toString()} — falling back to accountant email ${recipientEmail}`,
+          );
+        }
+      }
+
+      if (!recipientEmail) {
+        this.logger.warn(
+          `No active Nodal Officer or accountant email found for ULB ${ulbId.toString()} — skipping return notification`,
+        );
         return;
       }
 
@@ -182,9 +205,9 @@ export class FormReturnedNotificationService {
 
       const subject = interpolate(template.subject, variables);
       const html = interpolate(template.body, variables);
-      await this.emailQueue.addEmailJob({ to: nodalOfficer.email as string, subject, html });
+      await this.emailQueue.addEmailJob({ to: recipientEmail, subject, html });
 
-      this.logger.log(`Return notification sent for ULB ${ulbId.toString()} (${formName}) → ${nodalOfficer.email as string}`);
+      this.logger.log(`Return notification sent for ULB ${ulbId.toString()} (${formName}) → ${recipientEmail}`);
     } catch (err) {
       this.logger.warn(
         `Failed to send return notification for ULB ${ulbId.toString()} (${formName}): ${err instanceof Error ? err.message : String(err)}`,
