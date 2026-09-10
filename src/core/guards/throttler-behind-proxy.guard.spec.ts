@@ -1,4 +1,5 @@
-import { ExecutionContext, HttpException } from '@nestjs/common';
+import { ExecutionContext } from '@nestjs/common';
+import { ThrottlerException } from '@nestjs/throttler';
 import { ThrottlerBehindProxyGuard } from './throttler-behind-proxy.guard';
 
 describe('ThrottlerBehindProxyGuard', () => {
@@ -53,22 +54,11 @@ describe('ThrottlerBehindProxyGuard', () => {
   });
 
   describe('throwThrottlingException', () => {
-    it('should throw HttpException with a custom message', () => {
+    it('should throw ThrottlerException with a custom message', () => {
       const ctx = {} as ExecutionContext;
 
-      expect(() => guard.throwThrottlingException(ctx)).toThrow(HttpException);
+      expect(() => guard.throwThrottlingException(ctx)).toThrow(ThrottlerException);
       expect(() => guard.throwThrottlingException(ctx)).toThrow('Too many attempts. Please try again in a moment.');
-    });
-
-    it('should carry a stable IP_RATE_LIMITED code for the frontend to key off of', () => {
-      const ctx = {} as ExecutionContext;
-
-      expect.assertions(1);
-      try {
-        guard.throwThrottlingException(ctx);
-      } catch (err) {
-        expect((err as HttpException).getResponse()).toMatchObject({ code: 'IP_RATE_LIMITED' });
-      }
     });
   });
 });

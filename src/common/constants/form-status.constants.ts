@@ -13,8 +13,6 @@ export const FORM_STATUS = {
   UNDO: 10,
   /** Reserved — not wired to any transition yet. */
   ACTION_REQUIRED: 11,
-  /** Terminal, no-owner. Set automatically when a form is exempted for a genuinely new ULB (xvi-fc dynamic year access) - never a manual ULB/STATE/MoHUA action. Docs: src/module/xvi-fc/common/services/CLAUDE.md. */
-  EXEMPTED_ACKNOWLEDGED: 12,
 } as const;
 
 export type FormStatusType = (typeof FORM_STATUS)[keyof typeof FORM_STATUS];
@@ -39,7 +37,6 @@ export const FORM_STATUS_LABELS: Readonly<Record<FormStatusType, string>> = {
   [FORM_STATUS.AWAITING_CLAIM_LETTER]: 'Awaiting Claim Letter',
   [FORM_STATUS.UNDO]: 'Undo',
   [FORM_STATUS.ACTION_REQUIRED]: 'Action Required',
-  [FORM_STATUS.EXEMPTED_ACKNOWLEDGED]: 'Exempted',
 };
 
 /**
@@ -70,7 +67,7 @@ export function getFormStatusKey(status: number): string {
  * @returns True if no further workflow transitions are possible.
  */
 export function isTerminalStatus(status: number): boolean {
-  return status === FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA || status === FORM_STATUS.EXEMPTED_ACKNOWLEDGED;
+  return status === FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA;
 }
 
 /**
@@ -97,7 +94,6 @@ export function getDefaultOwnerForStatus(status: number): string | null {
     case FORM_STATUS.AWAITING_CLAIM_LETTER:
     case FORM_STATUS.UNDO:
     case FORM_STATUS.ACTION_REQUIRED:
-    case FORM_STATUS.EXEMPTED_ACKNOWLEDGED:
       return null;
     default:
       return null;

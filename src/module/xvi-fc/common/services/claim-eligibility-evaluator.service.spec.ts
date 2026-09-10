@@ -1,32 +1,16 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { InternalServerErrorException } from '@nestjs/common';
-import { getConnectionToken, getModelToken } from '@nestjs/mongoose';
+import { getConnectionToken } from '@nestjs/mongoose';
 import { Types } from 'mongoose';
 import { ClaimEligibilityEvaluatorService } from './claim-eligibility-evaluator.service';
 import type { IFormJson } from 'src/form-json/interfaces/form-json.interface';
 import type { ClaimEligibilityConfig } from 'src/module/xvi-fc/common/types/claim-eligibility.type';
-import { Ulb } from 'src/schemas/ulb.schema';
-import { Year } from 'src/schemas/year.schema';
-import { FormJsonConfigService } from 'src/master/form-json-config/form-json-config.service';
-import { YearAccessService } from './year-access.service';
-
-/** Chainable Mongoose Query-like mock resolving to `value` once `.exec()` is called. */
-function q<T>(value: T) {
-  const chain: Record<string, jest.Mock> = {};
-  for (const m of ['select', 'lean']) chain[m] = jest.fn().mockReturnValue(chain);
-  chain['exec'] = jest.fn().mockResolvedValue(value);
-  return chain;
-}
 
 describe('ClaimEligibilityEvaluatorService', () => {
   let service: ClaimEligibilityEvaluatorService;
   let findOne: jest.Mock;
   let collection: jest.Mock;
   let connection: { collection: jest.Mock };
-  let ulbModel: { find: jest.Mock };
-  let yearModel: { findById: jest.Mock };
-  let formJsonConfigService: { findByFormId: jest.Mock };
-  let yearAccessService: { peekEntry: jest.Mock };
 
   const stateId = new Types.ObjectId();
   const designYearId = new Types.ObjectId().toString();
@@ -68,21 +52,8 @@ describe('ClaimEligibilityEvaluatorService', () => {
     collection = jest.fn().mockReturnValue({ findOne });
     connection = { collection };
 
-    ulbModel = { find: jest.fn() };
-    yearModel = { findById: jest.fn() };
-    formJsonConfigService = { findByFormId: jest.fn().mockResolvedValue(null) };
-    yearAccessService = { peekEntry: jest.fn() };
-
     const module: TestingModule = await Test.createTestingModule({
-      providers: [
-        ClaimEligibilityEvaluatorService,
-        { provide: getConnectionToken(), useValue: connection },
-        { provide: getModelToken(Ulb.name), useValue: ulbModel },
-        { provide: getModelToken(Year.name), useValue: yearModel },
-        // Default: exemption never applies, so existing (pre-dynamic-year-access) behavior is unchanged.
-        { provide: FormJsonConfigService, useValue: formJsonConfigService },
-        { provide: YearAccessService, useValue: yearAccessService },
-      ],
+      providers: [ClaimEligibilityEvaluatorService, { provide: getConnectionToken(), useValue: connection }],
     }).compile();
 
     service = module.get<ClaimEligibilityEvaluatorService>(ClaimEligibilityEvaluatorService);
@@ -270,70 +241,6 @@ describe('ClaimEligibilityEvaluatorService', () => {
       const [query] = byCollection['xvifc_slb_forms'].find.mock.calls[0] as [Record<string, unknown>];
       const ulbFilter = query['ulb'] as { $in: Types.ObjectId[] };
       expect(ulbFilter.$in.map((id) => id.toString())).toEqual(expectedUlbIds);
-    });
-
-    describe('xvi-fc dynamic year access - EXEMPTED bucket', () => {
-      const exemptSlbConfig: ClaimEligibilityConfig = { ...slbConfig, exemption: { allowed: true, targetLevel: 'FORM_STATUS' } };
-
-      it('a document with EXEMPTED_ACKNOWLEDGED status is always EXEMPTED, regardless of acceptedFormStatuses', async () => {
-        mockCollection('xvifc_slb_forms', [{ ulb: new Types.ObjectId(ulbA), currentFormStatus: 12 }]);
-        const doc = sourceFormJson({ formId: 32, type: 'SLB', claimEligibility: exemptSlbConfig });
-
-        const { perUlb, tally } = await service.evaluateUlbBulk(doc, { stateId, designYearId, expectedUlbIds: [ulbA] });
-
-        expect(perUlb.get(ulbA)).toBe('EXEMPTED');
-        expect(tally).toEqual({ eligible: 0, ineligible: 0, exempted: 1, total: 1 });
-        // Never needs the Ulb/formJsonConfig lookup - the document's own status is sufficient.
-        expect(formJsonConfigService.findByFormId).not.toHaveBeenCalled();
-      });
-
-      it('a ULB with no document is EXEMPTED when isApplicableForExemption is set and yearAccess says exempt', async () => {
-        mockCollection('xvifc_slb_forms', []);
-        formJsonConfigService.findByFormId.mockResolvedValue({ formId: 32, isApplicableForExemption: true });
-        yearModel.findById.mockReturnValue(q({ _id: designYearId, year: '2026-27' }));
-        ulbModel.find.mockReturnValue(q([{ _id: new Types.ObjectId(ulbA), startYear: 2026, yearAccess: {} }]));
-        yearAccessService.peekEntry.mockResolvedValue({ yearEnabled: true, yearId: designYearId, disabledFormIds: [32] });
-        const doc = sourceFormJson({ formId: 32, type: 'SLB', claimEligibility: exemptSlbConfig });
-
-        const { perUlb } = await service.evaluateUlbBulk(doc, { stateId, designYearId, expectedUlbIds: [ulbA] });
-
-        expect(perUlb.get(ulbA)).toBe('EXEMPTED');
-      });
-
-      it('stays INELIGIBLE (unaffected) when config.exemption.allowed is false, even with no document', async () => {
-        mockCollection('xvifc_slb_forms', []);
-        const doc = sourceFormJson({ formId: 32, type: 'SLB', claimEligibility: slbConfig }); // exemption.allowed: false
-
-        const { perUlb } = await service.evaluateUlbBulk(doc, { stateId, designYearId, expectedUlbIds: [ulbA] });
-
-        expect(perUlb.get(ulbA)).toBe('INELIGIBLE');
-        expect(formJsonConfigService.findByFormId).not.toHaveBeenCalled(); // zero extra cost for non-exemptable forms
-      });
-
-      it('stays INELIGIBLE when formJsonConfig.isApplicableForExemption is false even though config.exemption.allowed is true', async () => {
-        mockCollection('xvifc_slb_forms', []);
-        formJsonConfigService.findByFormId.mockResolvedValue({ formId: 32, isApplicableForExemption: false });
-        const doc = sourceFormJson({ formId: 32, type: 'SLB', claimEligibility: exemptSlbConfig });
-
-        const { perUlb } = await service.evaluateUlbBulk(doc, { stateId, designYearId, expectedUlbIds: [ulbA] });
-
-        expect(perUlb.get(ulbA)).toBe('INELIGIBLE');
-      });
-
-      it('never re-classifies a document with a real, non-exempt status - golden rule (a ULB with data is judged on it)', async () => {
-        mockCollection('xvifc_slb_forms', [{ ulb: new Types.ObjectId(ulbA), currentFormStatus: 2 }]); // IN_PROGRESS
-        formJsonConfigService.findByFormId.mockResolvedValue({ formId: 32, isApplicableForExemption: true });
-        yearModel.findById.mockReturnValue(q({ _id: designYearId, year: '2026-27' }));
-        ulbModel.find.mockReturnValue(q([{ _id: new Types.ObjectId(ulbA), startYear: 2026, yearAccess: {} }]));
-        yearAccessService.peekEntry.mockResolvedValue({ yearEnabled: true, yearId: designYearId, disabledFormIds: [32] });
-        const doc = sourceFormJson({ formId: 32, type: 'SLB', claimEligibility: exemptSlbConfig });
-
-        const { perUlb } = await service.evaluateUlbBulk(doc, { stateId, designYearId, expectedUlbIds: [ulbA] });
-
-        // Has a real document with status 2 (not in acceptedFormStatuses [3]) - stays INELIGIBLE,
-        // never EXEMPTED, even though yearAccess would otherwise say exempt.
-        expect(perUlb.get(ulbA)).toBe('INELIGIBLE');
-      });
     });
 
     it('FORM_STATUS bulk: resolves a dotted currentFormStatus path (Annual Accounts style)', async () => {

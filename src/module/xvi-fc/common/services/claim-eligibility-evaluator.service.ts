@@ -1,15 +1,10 @@
 import { Injectable, InternalServerErrorException } from '@nestjs/common';
-import { InjectConnection, InjectModel } from '@nestjs/mongoose';
-import { Connection, Model, Types } from 'mongoose';
-import { FORM_STATUS, type FormStatusType } from 'src/common/constants/form-status.constants';
+import { InjectConnection } from '@nestjs/mongoose';
+import { Connection, Types } from 'mongoose';
+import type { FormStatusType } from 'src/common/constants/form-status.constants';
 import { IFormJson } from 'src/master/form-json/interfaces/form-json.interface';
-import { FormJsonConfigService } from 'src/master/form-json-config/form-json-config.service';
-import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
-import { Year } from 'src/schemas/year.schema';
-import { YearAccessService } from './year-access.service';
 import {
   CLAIM_ELIGIBILITY_EVIDENCE_MAX_SERIALIZED_BYTES,
-  type ClaimEligibilityConfig,
   type ClaimEligibilityRowMatchConfig,
   type EligibilityEvaluationResult,
   type FormStatusEvidenceV1,
@@ -68,13 +63,7 @@ function resolveNestedField(doc: Record<string, unknown>, path: string): unknown
  */
 @Injectable()
 export class ClaimEligibilityEvaluatorService {
-  constructor(
-    @InjectConnection() private readonly connection: Connection,
-    @InjectModel(Ulb.name) private readonly ulbModel: Model<UlbDocument>,
-    @InjectModel(Year.name) private readonly yearModel: Model<Year>,
-    private readonly formJsonConfigService: FormJsonConfigService,
-    private readonly yearAccessService: YearAccessService,
-  ) {}
+  constructor(@InjectConnection() private readonly connection: Connection) {}
 
   async evaluate(
     sourceFormJson: IFormJson,
@@ -260,73 +249,17 @@ export class ClaimEligibilityEvaluatorService {
       statusByUlbId.set(String(ulbValue as Types.ObjectId), resolveNestedField(doc, source.fields.currentFormStatus));
     }
 
-    // xvi-fc dynamic year access: EXEMPTED bucket, gated behind both config.exemption.allowed
-    // and formJsonConfig.isApplicableForExemption so every non-exemptable form pays zero extra
-    // query cost. Also skipped outright when every expected ULB already has a document - only a
-    // ULB with no document at all can ever be EXEMPTED, so there is nothing to look up.
-    const needsExemptionCheck = ctx.expectedUlbIds.some((ulbId) => !statusByUlbId.has(ulbId));
-    const isExemptByUlbId = needsExemptionCheck ? await this.buildExemptionLookup(sourceFormJson, config, ctx) : null;
-
     const perUlb = new Map<string, UlbEligibilityBucket>();
     for (const ulbId of ctx.expectedUlbIds) {
       const status = statusByUlbId.get(ulbId);
-
-      // A document with the exempted stub status is always EXEMPTED, regardless of
-      // acceptedFormStatuses (no admin needs to remember to add it to every form's list).
-      if (status === FORM_STATUS.EXEMPTED_ACKNOWLEDGED) {
-        perUlb.set(ulbId, 'EXEMPTED');
-        continue;
-      }
-      if (status !== undefined && config.acceptedFormStatuses.includes(status as FormStatusType)) {
-        perUlb.set(ulbId, 'ELIGIBLE');
-        continue;
-      }
-      // Only a ULB with NO document at all can be EXEMPTED this way - a document with any other
-      // real status is always judged on that data, never re-classified.
-      if (status === undefined && isExemptByUlbId?.get(ulbId)) {
-        perUlb.set(ulbId, 'EXEMPTED');
-        continue;
-      }
-      perUlb.set(ulbId, 'INELIGIBLE');
+      const bucket: UlbEligibilityBucket =
+        status !== undefined && config.acceptedFormStatuses.includes(status as FormStatusType)
+          ? 'ELIGIBLE'
+          : 'INELIGIBLE';
+      perUlb.set(ulbId, bucket);
     }
 
     return { perUlb, tally: this.tallyBuckets(perUlb) };
-  }
-
-  /**
-   * Bulk, read-only exemption lookup for evaluateUlbBulkFormStatus - one Ulb query for every
-   * expected ULB, then a plain map lookup per ULB, never a second query per ULB. Uses
-   * YearAccessService.peekEntry (never writes) since a claim-eligibility pass over hundreds of
-   * ULBs must not materialize hundreds of yearAccess entries as a side effect. Returns null when
-   * exemption does not apply to this source at all, so callers can skip the whole branch cheaply.
-   */
-  private async buildExemptionLookup(
-    sourceFormJson: IFormJson,
-    config: ClaimEligibilityConfig,
-    ctx: UlbBulkEvaluationContext,
-  ): Promise<Map<string, boolean> | null> {
-    if (!config.exemption?.allowed || sourceFormJson.formId === undefined) return null;
-
-    const formConfig = await this.formJsonConfigService.findByFormId(sourceFormJson.formId);
-    if (!formConfig?.isApplicableForExemption) return null;
-
-    const year = await this.yearModel
-      .findById(ctx.designYearId, { year: 1 })
-      .lean<{ _id: Types.ObjectId; year: string }>()
-      .exec();
-    if (!year) return null;
-
-    const ulbs = await this.ulbModel
-      .find({ _id: { $in: ctx.expectedUlbIds.map((id) => new Types.ObjectId(id)) } }, { startYear: 1, yearAccess: 1 })
-      .lean()
-      .exec();
-
-    const isExemptByUlbId = new Map<string, boolean>();
-    for (const ulb of ulbs) {
-      const entry = await this.yearAccessService.peekEntry(ulb, year);
-      isExemptByUlbId.set(String(ulb._id), entry.yearEnabled && entry.disabledFormIds.includes(sourceFormJson.formId));
-    }
-    return isExemptByUlbId;
   }
 
   /** Elected Body / FC Unspent rows: a genuine child-row collection, bucketed via the

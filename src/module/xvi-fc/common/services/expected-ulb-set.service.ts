@@ -5,7 +5,6 @@ import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { Year } from 'src/schemas/year.schema';
 import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 import { resolveDesignYearApplicabilityCutoff } from '../constants/expected-ulb-set.constants';
-import { parseStartCalendarYear } from '../utils/design-year-label.util';
 
 export interface ExpectedUlb {
   ulbId: string;
@@ -42,29 +41,15 @@ export class ExpectedUlbSetService {
     if (!year) throw new NotFoundException(`Year ${designYearId} not found`);
 
     const cutoff = resolveDesignYearApplicabilityCutoff(year.year);
-    const yearStartCalendarYear = parseStartCalendarYear(year.year);
     // Delegates the {state, isActive, ulbType-not-excluded} filter to the shared eligibility
     const eligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateId, 'XVIFC');
 
     const docs = await this.ulbModel
       .find({
         ...eligibleUlbFilter,
-        // XVI-FC dynamic year access — examples (design year "2027-28" -> yearStartCalendarYear = 2027):
-        //   - Existing ULB, startYear not set, dateOfConstitution = 2005-04-01 (<= cutoff)
-        //       -> included (branch 2: constituted well before this design year).
-        //   - Old ULB record, startYear not set, dateOfConstitution = null (never captured)
-        //       -> included (branch 2: missing data defaults to include, never excludes).
-        //   - New ULB, startYear = 2029, dateOfConstitution = 2029-06-01
-        //       -> excluded from "2027-28" (branch 1: 2029 > 2027, ULB didn't exist yet for this year).
-        //   - Same new ULB (startYear = 2029), queried for design year "2029-30" (yearStartCalendarYear = 2029)
-        //       -> included (branch 1: 2029 <= 2029, this is its first participating year).
-        //   - ULB has both startYear and dateOfConstitution set
-        //       -> startYear always wins; dateOfConstitution is ignored (branches are mutually
-        //          exclusive on startYear being null vs. not null).
-        $or: [
-          { startYear: { $ne: null, $lte: yearStartCalendarYear } },
-          { startYear: null, $or: [{ dateOfConstitution: null }, { dateOfConstitution: { $lte: cutoff } }] },
-        ],
+        // Grandfathers ULBs with an unpopulated dateOfConstitution (most existing records) rather
+        // than excluding them for missing data the registry never required historically.
+        $or: [{ dateOfConstitution: null }, { dateOfConstitution: { $lte: cutoff } }],
       })
       .select('name censusCode sbCode')
       .lean<LeanUlb[]>()

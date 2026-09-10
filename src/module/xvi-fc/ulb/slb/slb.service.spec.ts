@@ -5,13 +5,10 @@ import { Types } from 'mongoose';
 import { SlbService } from './slb.service';
 import { SlbForm } from 'src/schemas/xvi-fc/ulb/slb-form.schema';
 import { Ulb } from 'src/schemas/ulb.schema';
-import { Year } from 'src/schemas/year.schema';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { SlbFormJsonConfigService } from './services/slb-form-json.service';
 import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
-import { YearAccessService } from 'src/module/xvi-fc/common/services/year-access.service';
-import { ExemptionResolverService } from 'src/module/xvi-fc/common/services/exemption-resolver.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { AccessLevel, Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
@@ -116,8 +113,6 @@ describe('SlbService', () => {
   let ulbModel: Record<string, jest.Mock>;
   let slbFormJsonConfig: Partial<SlbFormJsonConfigService>;
   let validator: Partial<DynamicFormValidationService>;
-  let yearAccessService: { isFormExempt: jest.Mock };
-  let exemptionResolverService: { resolveBulk: jest.Mock };
 
   beforeEach(async () => {
     formModel = {
@@ -127,7 +122,6 @@ describe('SlbService', () => {
     };
     ulbModel = {
       findById: jest.fn().mockReturnValue(q({ _id: ulbOid, state: stateOid })),
-      find: jest.fn().mockReturnValue(q([])), // default: no candidate ULBs need an exemption lookup
       aggregate: jest.fn().mockReturnValue(q([{ data: [], totalCount: [], counts: [] }])),
     };
     slbFormJsonConfig = {
@@ -157,12 +151,6 @@ describe('SlbService', () => {
         {
           provide: UlbEligibilityService,
           useValue: { assertUlbEligibleForGrantCycle: jest.fn().mockResolvedValue(undefined) },
-        },
-        { provide: getModelToken(Year.name), useValue: { findById: jest.fn().mockReturnValue(q({ _id: yearOid, year: '2026-27' })) } },
-        { provide: YearAccessService, useValue: (yearAccessService = { isFormExempt: jest.fn().mockResolvedValue(false) }) },
-        {
-          provide: ExemptionResolverService,
-          useValue: (exemptionResolverService = { resolveBulk: jest.fn().mockResolvedValue(new Map()) }),
         },
       ],
     }).compile();
@@ -253,48 +241,6 @@ describe('SlbService', () => {
       const data = result.data as { designYear: string; actualYearLabel: string | null };
       expect(data.designYear).toBe('2026-27');
       expect(data.actualYearLabel).toBe('2025-26');
-    });
-
-    describe('dynamic year access exemption', () => {
-      it('does not materialize a stub when the ULB is not exempted (default)', async () => {
-        (slbFormJsonConfig.loadFields as jest.Mock).mockResolvedValue([]);
-        formModel.findOne.mockReturnValue(q(null));
-
-        const result = await service.getForm(ulbOid.toString(), yearOid.toString(), ulbUser(ulbOid));
-
-        expect(formModel.findOneAndUpdate).not.toHaveBeenCalled();
-        expect((result.data as { currentFormStatus: number }).currentFormStatus).toBe(FORM_STATUS.NOT_STARTED);
-      });
-
-      it('materializes an exemption stub and returns it when the ULB is exempted', async () => {
-        (slbFormJsonConfig.loadFields as jest.Mock).mockResolvedValue([]);
-        yearAccessService.isFormExempt.mockResolvedValue(true);
-
-        const stub = { _id: docOid, currentFormStatus: FORM_STATUS.EXEMPTED_ACKNOWLEDGED, isExemptionStub: true, data: {} };
-        formModel.findOne
-          .mockReturnValueOnce(q(null)) // first read: no record yet
-          .mockReturnValueOnce(q(stub)); // re-read after upsert
-
-        const result = await service.getForm(ulbOid.toString(), yearOid.toString(), ulbUser(ulbOid));
-
-        expect(formModel.findOneAndUpdate).toHaveBeenCalledWith(
-          expect.objectContaining({ ulb: ulbOid, year: yearOid }),
-          expect.objectContaining({
-            $setOnInsert: expect.objectContaining({ currentFormStatus: FORM_STATUS.EXEMPTED_ACKNOWLEDGED, isExemptionStub: true }),
-          }),
-          { upsert: true },
-        );
-        expect((result.data as { currentFormStatus: number }).currentFormStatus).toBe(FORM_STATUS.EXEMPTED_ACKNOWLEDGED);
-      });
-
-      it('never checks exemption when a real record already exists (golden rule)', async () => {
-        (slbFormJsonConfig.loadFields as jest.Mock).mockResolvedValue([]);
-        formModel.findOne.mockReturnValue(q(mockFormDoc)); // real, in-progress record
-
-        await service.getForm(ulbOid.toString(), yearOid.toString(), ulbUser(ulbOid));
-
-        expect(formModel.findOneAndUpdate).not.toHaveBeenCalled();
-      });
     });
   });
 
@@ -438,51 +384,6 @@ describe('SlbService', () => {
 
       const pipeline = ulbModel.aggregate.mock.calls[0][0];
       expect(pipeline[0].$match.state).toBeUndefined();
-    });
-
-    it('includes an EXEMPTED_ACKNOWLEDGED fallback for a documentless-but-exempt ULB in the aggregation pipeline', async () => {
-      const exemptUlbId = new Types.ObjectId();
-      ulbModel.find.mockReturnValue(q([{ _id: exemptUlbId, startYear: 2026, yearAccess: {} }]));
-      exemptionResolverService.resolveBulk.mockResolvedValue(
-        new Map([[String(exemptUlbId), { exempted: true, source: 'AUTOMATIC' }]]),
-      );
-
-      await service.listUlbSlbForms(baseDto, stateReviewer(stateOid));
-
-      const pipeline = ulbModel.aggregate.mock.calls[0][0];
-      const addFieldsStage = pipeline.find(
-        (stage: Record<string, unknown>) =>
-          typeof stage.$addFields === 'object' && stage.$addFields !== null && 'formStatus' in stage.$addFields,
-      );
-      const exemptIds = addFieldsStage.$addFields.formStatus.$ifNull[1].$cond[0].$in[1];
-      expect(exemptIds).toEqual([exemptUlbId]);
-    });
-
-    it('skips the exemption lookup entirely when the design year is not found', async () => {
-      const yearModelMock = { findById: jest.fn().mockReturnValue(q(null)) };
-      const module: TestingModule = await Test.createTestingModule({
-        providers: [
-          SlbService,
-          { provide: getModelToken(SlbForm.name), useValue: formModel },
-          { provide: getModelToken(Ulb.name), useValue: ulbModel },
-          { provide: DynamicFormValidationService, useValue: validator },
-          { provide: FileTokenService, useValue: { signFileUrl: jest.fn((u: string) => `signed::${u}`) } },
-          { provide: SlbFormJsonConfigService, useValue: slbFormJsonConfig },
-          {
-            provide: UlbEligibilityService,
-            useValue: { assertUlbEligibleForGrantCycle: jest.fn().mockResolvedValue(undefined) },
-          },
-          { provide: getModelToken(Year.name), useValue: yearModelMock },
-          { provide: YearAccessService, useValue: yearAccessService },
-          { provide: ExemptionResolverService, useValue: exemptionResolverService },
-        ],
-      }).compile();
-      const serviceWithMissingYear = module.get<SlbService>(SlbService);
-
-      await serviceWithMissingYear.listUlbSlbForms(baseDto, stateReviewer(stateOid));
-
-      expect(ulbModel.find).not.toHaveBeenCalled();
-      expect(exemptionResolverService.resolveBulk).not.toHaveBeenCalled();
     });
   });
 });

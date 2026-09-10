@@ -56,11 +56,7 @@ export class OtpService {
     if (resendCount >= cfg.maxResendAttempts) {
       const retryAfterSeconds = await this.redisService.ttl(otpStateKey(purpose, id));
       throw new HttpException(
-        {
-          message: 'Maximum OTP requests reached. Please try again later.',
-          code: 'OTP_RESEND_CEILING',
-          data: { retryAfterSeconds: Math.max(retryAfterSeconds, 0) },
-        },
+        { message: 'Maximum OTP requests reached. Please try again later.', data: { retryAfterSeconds: Math.max(retryAfterSeconds, 0) } },
         429,
       );
     }
@@ -241,11 +237,7 @@ export class OtpService {
     if (resendCount >= cfg.maxResendAttempts) {
       const retryAfterSeconds = await this.redisService.ttl(otpStateKey(purpose, mobile));
       throw new HttpException(
-        {
-          message: 'Maximum OTP requests reached. Please try again later.',
-          code: 'OTP_RESEND_CEILING',
-          data: { retryAfterSeconds: Math.max(retryAfterSeconds, 0) },
-        },
+        { message: 'Maximum OTP requests reached. Please try again later.', data: { retryAfterSeconds: Math.max(retryAfterSeconds, 0) } },
         429,
       );
     }
@@ -338,11 +330,7 @@ export class OtpService {
     if (!locked) return;
     const retryAfterSeconds = await this.redisService.ttl(otpLockKey(purpose, id));
     throw new HttpException(
-      {
-        message: 'Too many attempts. Please try again later.',
-        code: 'OTP_LOCKED',
-        data: { retryAfterSeconds: Math.max(retryAfterSeconds, 0) },
-      },
+      { message: 'Too many attempts. Please try again later.', data: { retryAfterSeconds: Math.max(retryAfterSeconds, 0) } },
       429,
     );
   }
@@ -352,15 +340,7 @@ export class OtpService {
     if (!cooling) return;
     const retryAfterSeconds = await this.redisService.ttl(otpCooldownKey(purpose, id));
     throw new HttpException(
-      {
-        // A live, still-valid OTP is guaranteed to exist while this cooldown is active — the
-        // cooldown key is set at the exact same instant as the (much longer-TTL) OTP state, so
-        // this is the ONE 429 code the frontend can safely treat as "go enter the OTP you already
-        // have" rather than "stay put" — see forgot-password.component.ts's onContinue().
-        message: 'Please wait before requesting another OTP.',
-        code: 'OTP_COOLDOWN_ACTIVE',
-        data: { retryAfterSeconds: Math.max(retryAfterSeconds, 0) },
-      },
+      { message: 'Please wait before requesting another OTP.', data: { retryAfterSeconds: Math.max(retryAfterSeconds, 0) } },
       429,
     );
   }
