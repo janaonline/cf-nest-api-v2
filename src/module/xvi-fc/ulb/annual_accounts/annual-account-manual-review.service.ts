@@ -27,6 +27,7 @@ import { ManualReviewDecisionDto } from './dto/manual-review-decision.dto';
 import { ManualReviewQueueQueryDto } from './dto/manual-review-queue-query.dto';
 import { ManualReviewHistoryQueryDto } from './dto/manual-review-history-query.dto';
 import { AnnualAccountsService, AnnualAccountSectionKey, SECTION_LABELS } from './annual_accounts.service';
+import { getPortalUrl } from 'src/core/utils/portal-urls.util';
 
 /**
  * Everything related to the ULB "manual review" workflow for a failed OCR validation — the ULB's
@@ -707,7 +708,7 @@ export class AnnualAccountManualReviewService {
       docId: r.docId ?? '',
       fileName: r.fileName ?? '',
       fileUrl: r.ocrJobId ? `${ocrApiV3Base}ocr-validation/jobs/${r.ocrJobId}/download` : '',
-      ocrLogUrl: r.ocrJobId ? `${clientUrl}/ocr/validation?jobId=${r.ocrJobId}` : '',
+      ocrLogUrl: r.ocrJobId ? getPortalUrl(this.configService, `ocr/validation?jobId=${r.ocrJobId}`) : '',
       status: r.status ?? '',
       requestedAt: formatDate(r.requestedAt),
       requestedBy: r.requestedBy?.name ?? r.requestedBy?.role ?? '',
