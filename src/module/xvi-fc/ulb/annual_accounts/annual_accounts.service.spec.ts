@@ -18,6 +18,7 @@ import { ConfigService } from '@nestjs/config';
 import { ANNUAL_ACCOUNT_PROCESSING_QUEUE } from '../../../../core/constants/queues';
 import { UlbEligibilityService } from '../../../ulb-eligibility/ulb-eligibility.service';
 import { FormReturnedNotificationService } from '../../common/reminders/form-returned-notification.service';
+import { ExcelService } from '../../../../services/excel/excel.service';
 import type { AuthUser } from '../../../auth/auth-user.interface';
 
 /** Shape of the second argument passed to Mongoose's updateOne in the tests below. */
@@ -60,6 +61,7 @@ describe('AnnualAccountsService', () => {
   let mockConfigService: { get: jest.Mock };
   let mockUlbEligibilityService: { assertUlbEligibleForGrantCycle: jest.Mock };
   let mockFormReturnedNotification: { notifyReturned: jest.Mock };
+  let mockExcelService: { generateExcel: jest.Mock };
 
   beforeEach(async () => {
     mockAnnualAccountModel = {
@@ -126,6 +128,9 @@ describe('AnnualAccountsService', () => {
     mockFormReturnedNotification = {
       notifyReturned: jest.fn().mockResolvedValue(undefined),
     };
+    mockExcelService = {
+      generateExcel: jest.fn().mockResolvedValue(Buffer.from('excel')),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -146,6 +151,7 @@ describe('AnnualAccountsService', () => {
         { provide: ConfigService, useValue: mockConfigService },
         { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: FormReturnedNotificationService, useValue: mockFormReturnedNotification },
+        { provide: ExcelService, useValue: mockExcelService },
       ],
     }).compile();
 
@@ -776,6 +782,80 @@ describe('AnnualAccountsService', () => {
       await expect(service.getManualReviewRequestDetail('507f1f77bcf86cd799439011', adminUser)).rejects.toThrow(
         'Manual-review request not found',
       );
+    });
+  });
+
+  describe('dumpManualReviewHistoryToExcel', () => {
+    const adminUser: AuthUser = { _id: 'admin-1', role: 'ADMIN', scope: 'ADMIN' } as AuthUser;
+
+    it('rejects non-ADMIN users', async () => {
+      const stateUser: AuthUser = { _id: 'user-2', role: 'STATE', scope: 'STATE' } as AuthUser;
+
+      await expect(service.dumpManualReviewHistoryToExcel({ page: 1, pageSize: 20 }, stateUser)).rejects.toThrow(
+        'Only ADMIN users may view the manual-review history',
+      );
+    });
+
+    it('builds a workbook from every matching row, unpaginated, including the file/OCR-log links', async () => {
+      mockConfigService.get.mockImplementation((key: string, defaultValue?: string) =>
+        ({ CLIENT_URL: 'https://cityfinance.in', API_BASE_URL_V3: 'https://ocr.example.com/api/v3' })[key] ??
+        defaultValue,
+      );
+      const rows = [
+        {
+          ulbName: 'Test ULB',
+          ulbCode: 'ULB1',
+          stateName: 'Karnataka',
+          section: 'auditedData',
+          year: '2024-25',
+          docId: 'auditors-report',
+          fileName: 'report.pdf',
+          filePath: 's3/path/report.pdf',
+          ocrJobId: 'job-42',
+          status: 'APPROVED',
+          requestedAt: '2024-01-01T00:00:00.000Z',
+          requestedBy: { role: 'ULB', name: 'Nodal Officer' },
+          dueAt: '2024-01-03T00:00:00.000Z',
+          isBreached: false,
+          decidedAt: '2024-01-02T00:00:00.000Z',
+          decidedBy: { role: 'ADMIN', name: 'Admin User' },
+          decisionNote: 'Looks fine',
+        },
+      ];
+      mockManualReviewRequestModel.aggregate.mockReturnValue(mockQuery(rows));
+
+      const buffer = await service.dumpManualReviewHistoryToExcel({ page: 1, pageSize: 20 }, adminUser);
+
+      expect(buffer).toEqual(Buffer.from('excel'));
+      expect(mockExcelService.generateExcel).toHaveBeenCalledTimes(1);
+      const [headers, excelRows, sheetName] = mockExcelService.generateExcel.mock.calls[0];
+      expect(sheetName).toBe('Manual Review History');
+      expect(headers.map((h: { key: string }) => h.key)).toEqual(
+        expect.arrayContaining(['decisionNote', 'fileUrl', 'ocrLogUrl']),
+      );
+      expect(excelRows).toEqual([
+        expect.objectContaining({
+          ulbName: 'Test ULB',
+          section: 'Audited',
+          status: 'APPROVED',
+          requestedBy: 'Nodal Officer',
+          isBreached: 'No',
+          decidedBy: 'Admin User',
+          decisionNote: 'Looks fine',
+          fileUrl: 'https://ocr.example.com/api/v3/ocr-validation/jobs/job-42/download',
+          ocrLogUrl: 'https://cityfinance.in/ocr/validation?jobId=job-42',
+        }),
+      ]);
+    });
+
+    it('leaves fileUrl/ocrLogUrl blank when there is no file path or OCR job', async () => {
+      const rows = [{ ulbName: 'Test ULB', status: 'PENDING', requestedBy: {}, decidedBy: null }];
+      mockManualReviewRequestModel.aggregate.mockReturnValue(mockQuery(rows));
+
+      await service.dumpManualReviewHistoryToExcel({ page: 1, pageSize: 20 }, adminUser);
+
+      const [, excelRows] = mockExcelService.generateExcel.mock.calls[0];
+      expect(excelRows[0]).toMatchObject({ fileUrl: '', ocrLogUrl: '' });
     });
   });
 

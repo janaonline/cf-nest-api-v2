@@ -19,6 +19,7 @@ import { ConfigService } from '@nestjs/config';
 import { ANNUAL_ACCOUNT_PROCESSING_QUEUE } from '../../../../core/constants/queues';
 import { UlbEligibilityService } from '../../../ulb-eligibility/ulb-eligibility.service';
 import { FormReturnedNotificationService } from '../../common/reminders/form-returned-notification.service';
+import { ExcelService } from '../../../../services/excel/excel.service';
 import type { AuthUser } from '../../../auth/auth-user.interface';
 import type { Request } from 'express';
 
@@ -88,6 +89,9 @@ describe('AnnualAccountsController', () => {
     const mockFormReturnedNotification = {
       notifyReturned: jest.fn().mockResolvedValue(undefined),
     };
+    const mockExcelService = {
+      generateExcel: jest.fn().mockResolvedValue(Buffer.from('excel')),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [AnnualAccountsController],
@@ -109,6 +113,7 @@ describe('AnnualAccountsController', () => {
         { provide: ConfigService, useValue: mockConfigService },
         { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: FormReturnedNotificationService, useValue: mockFormReturnedNotification },
+        { provide: ExcelService, useValue: mockExcelService },
       ],
     }).compile();
 
