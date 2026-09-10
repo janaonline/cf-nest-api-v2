@@ -748,7 +748,11 @@ export class UlbService {
   /**
    * Patches startYear and/or the seed year's disabledFormIds.
    * disabledFormIds are validated against the currently exemptable forms.
-   * Other years are derived lazily by YearAccessService and never persisted here.
+   * Other years are derived lazily by YearAccessService and never persisted here - EXCEPT that
+   * changing startYear itself invalidates every already-materialized yearAccess entry (see below).
+   * Every entry's computeEntry result depends on startYear, so once it changes, entries frozen
+   * under the old value would otherwise silently go stale forever (getEntry/peekEntry never
+   * recompute an existing entry - see common/services/CLAUDE.md's invariants).
    */
   async updateYearAccess(id: string, dto: UpdateUlbYearAccessDto): Promise<Ulb & { isExistingUser: boolean }> {
     if (!Types.ObjectId.isValid(id)) throw new BadRequestException('Invalid ULB id');
@@ -771,7 +775,14 @@ export class UlbService {
     }
 
     if (dto.startYear !== undefined) {
-      await this.ulbModel.findByIdAndUpdate(id, { $set: { startYear: dto.startYear } });
+      const startYearChanged = dto.startYear !== existing.startYear;
+
+      // Deliberately wipe the whole map: every value depends on startYear, so partial resets risk
+      // stale entries. Wipe-and-recompute-lazily is cheap and correct for this low-volume admin path.
+      // A single findByIdAndUpdate atomically applies startYear and the wipe together.
+      await this.ulbModel.findByIdAndUpdate(id, {
+        $set: startYearChanged ? { startYear: dto.startYear, yearAccess: {} } : { startYear: dto.startYear },
+      });
     }
 
     if (dto.disabledFormIds !== undefined && effectiveStartYear != null) {

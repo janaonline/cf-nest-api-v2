@@ -36,6 +36,9 @@ import { UlbEligibilityService } from '../ulb-eligibility/ulb-eligibility.servic
 import { SideMenuService } from './side-menu/side-menu.service';
 import { isWithinXvifcCycle, hasDesignYearStarted } from './common/constants/xvifc-cycle.constants';
 import { ExemptionResolverService } from './common/services/exemption-resolver.service';
+import { FormJsonConfigService } from '../../master/form-json-config/form-json-config.service';
+import type { SubmissionScope } from '../../schemas/form-json-config.schema';
+import { BANK_ACCOUNT_FORM_ID } from './ulb/bank-account/constants/bank-account-form.constants';
 
 @Injectable()
 export class XviFcService {
@@ -61,6 +64,7 @@ export class XviFcService {
     private readonly ulbEligibilityService: UlbEligibilityService,
     private readonly sideMenuService: SideMenuService,
     private readonly exemptionResolverService: ExemptionResolverService,
+    private readonly formJsonConfigService: FormJsonConfigService,
   ) {}
 
   async getStateWiseData(stateId: string, requester: AuthUser): Promise<StateWiseResponseDto> {
@@ -222,7 +226,7 @@ export class XviFcService {
     const ulb = new Types.ObjectId(ulbId);
     const designYear = new Types.ObjectId(designYearId);
 
-    const [annualAccounts, disclosure, bankAccount, slbForm] = await Promise.all([
+    const [annualAccounts, disclosure, bankAccountByYear, slbForm, bankFormConfig] = await Promise.all([
       this.annualAccountModel
         .find({ ulb, design_year: designYear })
         .select('sectionType form_status form_status_id')
@@ -235,7 +239,19 @@ export class XviFcService {
         .select('currentFormStatus')
         .lean()
         .exec(),
+      this.formJsonConfigService.findByFormId(BANK_ACCOUNT_FORM_ID),
     ]);
+
+    // ONCE_EVER (Bank Account's actual scope): the record can live in an earlier design year than
+    // the one being requested here. Mirrors BankAccountService.getBankAccount's own ONCE_EVER
+    // branch. Only fires the extra query when the fast, common-case lookup above came up empty -
+    // no added latency for a ULB whose record already belongs to the current year.
+    const bankSubmissionScope: SubmissionScope = bankFormConfig?.submissionScope ?? 'PER_YEAR';
+    const bankAccount =
+      bankAccountByYear ??
+      (bankSubmissionScope === 'ONCE_EVER'
+        ? await this.bankAccountModel.findOne({ ulb }).select('currentFormStatus').lean().exec()
+        : null);
 
     // 'audited' is always the {ulb, design_year} anchor — its _id is what every other
     // annual-account endpoint hands back as annualAccountId (see AnnualAccountsService).
