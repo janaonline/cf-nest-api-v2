@@ -1,9 +1,22 @@
-import { BadRequestException, Body, Controller, Delete, Get, Param, Post, Query, Req, HttpCode } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Post,
+  Query,
+  Req,
+  HttpCode,
+  StreamableFile,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation } from '@nestjs/swagger/dist/decorators';
 import type { Request } from 'express';
 import { CurrentUser } from 'src/module/auth/decorators/current-user.decorator';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { ParseObjectIdPipe } from '../../../../common/pipes/parse-object-id.pipe';
+import { getTimeStamp } from 'src/shared/utils/date.utils';
 import { AnnualAccountsService } from './annual_accounts.service';
 import { PresignUploadDto } from './dto/presign-upload.dto';
 import { ConfirmUploadDto } from './dto/confirm-upload.dto';
@@ -76,6 +89,19 @@ export class AnnualAccountsController {
   @ApiOperation({ summary: "ADMIN's paginated audit trail of all manual-review requests (any status), across all ULBs" })
   listManualReviewRequestHistory(@Query() dto: ManualReviewHistoryQueryDto, @CurrentUser() user: AuthUser) {
     return this.annualAccountsService.listManualReviewRequestHistory(dto, user);
+  }
+
+  @Get('manual-review-history/dump')
+  @ApiOperation({ summary: "ADMIN's Excel export of the manual-review history, respecting the same filters as the list" })
+  async dumpManualReviewHistory(
+    @Query() dto: ManualReviewHistoryQueryDto,
+    @CurrentUser() user: AuthUser,
+  ): Promise<StreamableFile> {
+    const buffer = await this.annualAccountsService.dumpManualReviewHistoryToExcel(dto, user);
+    return new StreamableFile(buffer as unknown as Uint8Array, {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      disposition: `attachment; filename="manual-review-history_${getTimeStamp(false)}.xlsx"`,
+    });
   }
 
   @Get('manual-review-history/:requestId')

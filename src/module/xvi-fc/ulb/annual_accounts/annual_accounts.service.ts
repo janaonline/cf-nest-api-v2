@@ -14,10 +14,12 @@ import { createHash } from 'crypto';
 import { Queue } from 'bullmq';
 import { Model, PipelineStage, Types } from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
+import type ExcelJS from 'exceljs';
 import { S3Service } from '../../../../core/s3/s3.service';
 import { EmailQueueService } from '../../../../core/queue/email-queue/email-queue.service';
 import { S3UploadService } from '../../../file/s3-upload.service';
 import { FileTokenService } from '../../../../core/file-token/file-token.service';
+import { ExcelService } from '../../../../services/excel/excel.service';
 import { assertValidFormStatusTransition } from '../../../../common/utils/form-status-transitions';
 import {
   AnnualAccountFormStatus,
@@ -176,6 +178,8 @@ export class AnnualAccountsService implements OnModuleInit {
     private readonly ulbEligibilityService: UlbEligibilityService,
 
     private readonly formReturnedNotification: FormReturnedNotificationService,
+
+    private readonly excelService: ExcelService,
   ) {}
 
   async onModuleInit() {
@@ -1386,14 +1390,11 @@ export class AnnualAccountsService implements OnModuleInit {
     };
   }
 
-  async listManualReviewRequestHistory(dto: ManualReviewHistoryQueryDto, user: AuthUser) {
-    if (user.scope !== Scope.ADMIN) {
-      throw new ForbiddenException('Only ADMIN users may view the manual-review history');
-    }
-
-    const page = dto.page ?? 1;
-    const pageSize = dto.pageSize ?? 20;
-
+  /**
+   * Filter + lookup stages shared by the paginated list and the unpaginated Excel dump — everything
+   * up to (not including) sort/pagination, so both read exactly the same rows for a given query.
+   */
+  private buildManualReviewHistoryFilterStages(dto: ManualReviewHistoryQueryDto): PipelineStage[] {
     const match: Record<string, unknown> = {};
     if (dto.status) match.status = dto.status;
     if (dto.requestedFrom || dto.requestedTo) {
@@ -1409,7 +1410,7 @@ export class AnnualAccountsService implements OnModuleInit {
       };
     }
 
-    const pipeline: PipelineStage[] = [
+    return [
       { $match: match },
       ...this.manualReviewHistoryLookupStages(),
       ...(dto.stateId ? [{ $match: { 'stateDoc._id': new Types.ObjectId(dto.stateId) } } as PipelineStage] : []),
@@ -1426,6 +1427,19 @@ export class AnnualAccountsService implements OnModuleInit {
             } as PipelineStage,
           ]
         : []),
+    ];
+  }
+
+  async listManualReviewRequestHistory(dto: ManualReviewHistoryQueryDto, user: AuthUser) {
+    if (user.scope !== Scope.ADMIN) {
+      throw new ForbiddenException('Only ADMIN users may view the manual-review history');
+    }
+
+    const page = dto.page ?? 1;
+    const pageSize = dto.pageSize ?? 20;
+
+    const pipeline: PipelineStage[] = [
+      ...this.buildManualReviewHistoryFilterStages(dto),
       { $sort: { requestedAt: -1 } },
       {
         $facet: {
@@ -1443,6 +1457,81 @@ export class AnnualAccountsService implements OnModuleInit {
     const total = result?.totalCount?.[0]?.count ?? 0;
 
     return { total, page, pageSize, rows };
+  }
+
+  async dumpManualReviewHistoryToExcel(dto: ManualReviewHistoryQueryDto, user: AuthUser): Promise<ExcelJS.Buffer> {
+    if (user.scope !== Scope.ADMIN) {
+      throw new ForbiddenException('Only ADMIN users may view the manual-review history');
+    }
+
+    const pipeline: PipelineStage[] = [
+      ...this.buildManualReviewHistoryFilterStages(dto),
+      { $sort: { requestedAt: -1 } },
+      this.manualReviewHistoryProjectStage(),
+    ];
+
+    const requests = await this.manualReviewRequestModel.aggregate(pipeline).exec();
+
+    const formatDate = (value: unknown) =>
+      value ? new Date(value as string).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' }) : '';
+
+    const clientUrl = this.configService.get<string>('CLIENT_URL', 'https://cityfinance.in');
+    // Mirrors AnnualAccountOcrApiService.setOcrJobApiUrl's derivation — the OCR engine's own v3
+    // API, not this app's CLIENT_URL (used below for the in-app log-viewer link instead). Trailing
+    // slash is normalized rather than assumed, since API_BASE_URL_V3 is free-form config.
+    const ocrApiV3Base = (() => {
+      const configured = this.configService.get<string>('API_BASE_URL_V3');
+      const base = configured || (() => {
+        const baseUrl = this.configService.get<string>('BASE_URL', '');
+        const origin = baseUrl ? new URL(baseUrl).origin : '';
+        return `${origin}/api/v3/`;
+      })();
+      return base.replace(/\/+$/, '') + '/';
+    })();
+
+    const rows = requests.map((r: any) => ({
+      ulbName: r.ulbName ?? '',
+      ulbCode: r.ulbCode ?? '',
+      stateName: r.stateName ?? '',
+      section: r.section === 'auditedData' ? 'Audited' : 'Provisional',
+      year: r.year ?? '',
+      docId: r.docId ?? '',
+      fileName: r.fileName ?? '',
+      fileUrl: r.ocrJobId ? `${ocrApiV3Base}ocr-validation/jobs/${r.ocrJobId}/download` : '',
+      ocrLogUrl: r.ocrJobId ? `${clientUrl}/ocr/validation?jobId=${r.ocrJobId}` : '',
+      status: r.status ?? '',
+      requestedAt: formatDate(r.requestedAt),
+      requestedBy: r.requestedBy?.name ?? r.requestedBy?.role ?? '',
+      dueAt: formatDate(r.dueAt),
+      isBreached: r.isBreached ? 'Yes' : 'No',
+      decidedAt: formatDate(r.decidedAt),
+      decidedBy: r.decidedBy?.name ?? r.decidedBy?.role ?? '',
+      decisionNote: r.decisionNote ?? '',
+    }));
+
+    return this.excelService.generateExcel(
+      [
+        { label: 'ULB', key: 'ulbName', width: 28 },
+        { label: 'ULB Code', key: 'ulbCode', width: 14 },
+        { label: 'State', key: 'stateName', width: 20 },
+        { label: 'Section', key: 'section', width: 12 },
+        { label: 'Year', key: 'year', width: 12 },
+        { label: 'Document', key: 'docId', width: 20 },
+        { label: 'File Name', key: 'fileName', width: 30 },
+        { label: 'File Download URL', key: 'fileUrl', width: 40 },
+        { label: 'OCR Log URL', key: 'ocrLogUrl', width: 40 },
+        { label: 'Decision', key: 'status', width: 12 },
+        { label: 'Requested At', key: 'requestedAt', width: 20 },
+        { label: 'Requested By', key: 'requestedBy', width: 20 },
+        { label: 'SLA Due At', key: 'dueAt', width: 20 },
+        { label: 'SLA Breached', key: 'isBreached', width: 14 },
+        { label: 'Decided At', key: 'decidedAt', width: 20 },
+        { label: 'Reviewed By', key: 'decidedBy', width: 20 },
+        { label: 'Message Sent to the ULB', key: 'decisionNote', width: 40 },
+      ],
+      rows,
+      'Manual Review History',
+    );
   }
 
   async getManualReviewRequestDetail(requestId: string, user: AuthUser) {

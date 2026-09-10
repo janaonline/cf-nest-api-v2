@@ -34,6 +34,7 @@ import { FormJsonModule } from '../../../../master/form-json/form-json.module';
 import { EmailQueueModule } from '../../../../core/queue/email-queue/email-queue.module';
 import { UlbEligibilityModule } from 'src/module/ulb-eligibility/ulb-eligibility.module';
 import { RemindersModule } from '../../common/reminders/reminders.module';
+import { ExcelService } from '../../../../services/excel/excel.service';
 
 @Module({
   imports: [
@@ -62,6 +63,7 @@ import { RemindersModule } from '../../common/reminders/reminders.module';
     AnnualAccountOcrApiService,
     AnnualAccountOcrProcessor,
     AnnualAccountStatusSyncService,
+    ExcelService,
   ],
   exports: [AnnualAccountsService],
 })
