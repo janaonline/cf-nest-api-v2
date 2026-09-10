@@ -3,6 +3,7 @@ import { getModelToken } from '@nestjs/mongoose';
 import { getQueueToken } from '@nestjs/bullmq';
 import { AnnualAccountsController } from './annual_accounts.controller';
 import { AnnualAccountsService } from './annual_accounts.service';
+import { AnnualAccountManualReviewService } from './annual-account-manual-review.service';
 import { XviFcAnnualAccount } from '../../../../schemas/xvi-fc/annual-account.schema';
 import { XviFcAnnualAccountUploadHistory } from '../../../../schemas/xvi-fc/annual-account-upload-history.schema';
 import { XviFcAnnualAccountFormLog } from '../../../../schemas/xvi-fc/annual-account-form-log.schema';
@@ -19,6 +20,7 @@ import { ConfigService } from '@nestjs/config';
 import { ANNUAL_ACCOUNT_PROCESSING_QUEUE } from '../../../../core/constants/queues';
 import { UlbEligibilityService } from '../../../ulb-eligibility/ulb-eligibility.service';
 import { FormReturnedNotificationService } from '../../common/reminders/form-returned-notification.service';
+import { ExcelService } from '../../../../services/excel/excel.service';
 import type { AuthUser } from '../../../auth/auth-user.interface';
 import type { Request } from 'express';
 
@@ -88,11 +90,15 @@ describe('AnnualAccountsController', () => {
     const mockFormReturnedNotification = {
       notifyReturned: jest.fn().mockResolvedValue(undefined),
     };
+    const mockExcelService = {
+      generateExcel: jest.fn().mockResolvedValue(Buffer.from('excel')),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [AnnualAccountsController],
       providers: [
         AnnualAccountsService,
+        AnnualAccountManualReviewService,
         { provide: getModelToken(XviFcAnnualAccount.name), useValue: mockAnnualAccountModel },
         { provide: getModelToken(XviFcAnnualAccountUploadHistory.name), useValue: mockUploadHistoryModel },
         { provide: getModelToken(XviFcAnnualAccountFormLog.name), useValue: mockFormLogModel },
@@ -109,6 +115,7 @@ describe('AnnualAccountsController', () => {
         { provide: ConfigService, useValue: mockConfigService },
         { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: FormReturnedNotificationService, useValue: mockFormReturnedNotification },
+        { provide: ExcelService, useValue: mockExcelService },
       ],
     }).compile();
 
@@ -152,11 +159,11 @@ describe('AnnualAccountsController', () => {
 
   it('requestManualReview delegates to the service for a valid section', async () => {
     const spy = jest
-      .spyOn(controller['annualAccountsService'], 'requestManualReview')
+      .spyOn(controller['manualReviewService'], 'requestManualReview')
       .mockImplementation(
         () =>
           Promise.resolve({ annualAccountId: 'id-1' }) as unknown as ReturnType<
-            AnnualAccountsService['requestManualReview']
+            AnnualAccountManualReviewService['requestManualReview']
           >,
       );
 
@@ -173,11 +180,11 @@ describe('AnnualAccountsController', () => {
 
   it('decideManualReview delegates to the service for a valid section', async () => {
     const spy = jest
-      .spyOn(controller['annualAccountsService'], 'decideManualReview')
+      .spyOn(controller['manualReviewService'], 'decideManualReview')
       .mockImplementation(
         () =>
           Promise.resolve({ annualAccountId: 'id-1' }) as unknown as ReturnType<
-            AnnualAccountsService['decideManualReview']
+            AnnualAccountManualReviewService['decideManualReview']
           >,
       );
 
@@ -194,9 +201,9 @@ describe('AnnualAccountsController', () => {
 
   it('getManualReviewHistory delegates to the service for a valid section', async () => {
     const spy = jest
-      .spyOn(controller['annualAccountsService'], 'getManualReviewHistory')
+      .spyOn(controller['manualReviewService'], 'getManualReviewHistory')
       .mockImplementation(
-        () => Promise.resolve([]) as unknown as ReturnType<AnnualAccountsService['getManualReviewHistory']>,
+        () => Promise.resolve([]) as unknown as ReturnType<AnnualAccountManualReviewService['getManualReviewHistory']>,
       );
 
     await controller.getManualReviewHistory('id-1', 'doc-1', 'auditedData', testUser);
@@ -264,11 +271,11 @@ describe('AnnualAccountsController', () => {
 
   it('getManualReviewQueue delegates to the service', async () => {
     const spy = jest
-      .spyOn(controller['annualAccountsService'], 'getManualReviewQueue')
+      .spyOn(controller['manualReviewService'], 'getManualReviewQueue')
       .mockImplementation(
         () =>
           Promise.resolve({ total: 0, page: 1, pageSize: 20, rows: [] }) as unknown as ReturnType<
-            AnnualAccountsService['getManualReviewQueue']
+            AnnualAccountManualReviewService['getManualReviewQueue']
           >,
       );
 
