@@ -46,6 +46,18 @@ export class Approval {
 
 export const ApprovalSchema = SchemaFactory.createForClass(Approval);
 
+/**
+ * Materialized access and exemption state for one ULB and year.
+ * Once present, yearEnabled and disabledFormIds are the source of truth with no fallback.
+ * Shape is enforced by YearAccessService, the sole writer of this field.
+*/
+export interface UlbYearAccessEntry {
+  yearEnabled: boolean;
+  yearId: Types.ObjectId | string;
+  /** formIds exempted this year. formId not listed here defaults to mandatory. */
+  disabledFormIds: number[];
+}
+
 @Schema({ timestamps: { createdAt: 'createdAt', updatedAt: 'modifiedAt' } })
 export class Ulb {
   @Prop({ required: true, unique: true, index: true })
@@ -84,23 +96,46 @@ export class Ulb {
   @Prop({ type: Boolean, default: true })
   isPublish: boolean;
 
+  /** @deprecated superseded by startYear/yearAccess (xvi-fc dynamic year access). Unused in cf-nest-api-v2. */
   @Prop({ type: Boolean, default: true })
   access_2021: boolean;
 
+  /** @deprecated superseded by startYear/yearAccess (xvi-fc dynamic year access). Unused in cf-nest-api-v2. */
   @Prop({ type: Boolean, default: true })
   access_2122: boolean;
 
+  /** @deprecated superseded by startYear/yearAccess (xvi-fc dynamic year access). Unused in cf-nest-api-v2. */
   @Prop({ type: Boolean, default: true })
   access_2223: boolean;
 
+  /** @deprecated superseded by startYear/yearAccess (xvi-fc dynamic year access). Unused in cf-nest-api-v2. */
   @Prop({ type: Boolean, default: true })
   access_2324: boolean;
 
+  /** @deprecated superseded by startYear/yearAccess (xvi-fc dynamic year access). Unused in cf-nest-api-v2. */
   @Prop({ type: Boolean, default: true })
   access_2425: boolean;
 
+  /** @deprecated superseded by startYear/yearAccess (xvi-fc dynamic year access). Unused in cf-nest-api-v2. */
   @Prop({ type: Boolean, default: true })
   access_2526: boolean;
+
+  // -- xvi-fc dynamic year access - docs: src/module/xvi-fc/common/services/CLAUDE.md ----
+  /** Starting calendar year of the ULB's first participating design year. null = no restriction (sees every year). */
+  @Prop({ type: Number, default: null })
+  startYear!: number | null;
+
+  /**
+   * Sparse, lazily materialized year/form state keyed by design year (e.g. "2026-27").
+   * Only the seed (startYear) entry is admin-managed; later years are derived by YearAccessService.
+   * Uses a plain object so lean and hydrated documents behave consistently.
+  */
+  @Prop({ type: Object, default: () => ({}) })
+  yearAccess!: Record<string, UlbYearAccessEntry>;
+
+  /** Context for the admin's exemption decision. Informational only - never read by any logic. */
+  @Prop({ type: String, enum: ['NEW_CONSTITUTION', 'SPLIT', 'MERGER', 'EXISTING_ULB_ONBOARDING'], default: null })
+  registrationReason!: string | null;
 
   @Prop({ type: Types.ObjectId, ref: 'State', required: true })
   state: Types.ObjectId;

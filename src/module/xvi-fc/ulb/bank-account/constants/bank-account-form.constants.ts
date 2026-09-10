@@ -5,8 +5,9 @@ import {
   IFSC_REGEX,
 } from '../dto/submit-xvi-fc-bank-account.dto';
 
-/** formId for the bank-account (PFMS) formJson document — see CLAUDE.md's formId registry
- *  (22 SFC, 23 EULB, 24 Devolution, 25 FC Unspent, 26 Claim Letter, 30/31 Annual Account, 32 SLB). */
+/** formId for the bank-account (PFMS) formJson document — see the formId registry in
+ *  src/master/form-json-config/CLAUDE.md (22 SFC, 23 EULB, 24 Devolution, 25 FC Unspent,
+ *  26 Claim Letter, 30/31 Annual Account, 32 SLB, 33 this form). */
 export const BANK_ACCOUNT_FORM_ID = 33;
 
 /**

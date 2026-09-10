@@ -6,6 +6,9 @@ import mongoose, { Types } from 'mongoose';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { EmailQueueService } from 'src/core/queue/email-queue/email-queue.service';
 import { FormJsonService } from 'src/master/form-json/form-json.service';
+import { FormJsonConfigService } from 'src/master/form-json-config/form-json-config.service';
+import { Year } from 'src/schemas/year.schema';
+import { YearAccessService } from 'src/module/xvi-fc/common/services/year-access.service';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
 import { EmailDomainValidationService } from 'src/core/email-domain-validation/email-domain-validation.service';
 import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
@@ -14,6 +17,7 @@ import { Role } from 'src/module/auth/enum/role.enum';
 import { State } from 'src/schemas/state.schema';
 import { Ulb } from 'src/schemas/ulb.schema';
 import { User } from 'src/schemas/user/user.schema';
+import { SlbForm } from 'src/schemas/xvi-fc/ulb/slb-form.schema';
 import { ULB_EDIT_SECTIONS_FORM_JSON_TYPE, ULB_REGISTER_SECTIONS_FORM_JSON_TYPE } from './constants/ulb-form.constants';
 import { UlbService } from './ulb.service';
 
@@ -50,6 +54,10 @@ describe('UlbService', () => {
   let stateModel: { findById: jest.Mock; find: jest.Mock };
   let userModel: { create: jest.Mock; findOne: jest.Mock; find: jest.Mock; findById: jest.Mock };
   let formJsonService: { findByType: jest.Mock };
+  let formJsonConfigService: { findAllExemptable: jest.Mock };
+  let yearAccessService: { setSeedExemptions: jest.Mock };
+  let yearModel: { findOne: jest.Mock };
+  let slbModel: { exists: jest.Mock };
   let dynamicFormValidation: { validateFinalSubmitAndBuildPayload: jest.Mock; validateDraftAndBuildPayload: jest.Mock };
   let emailDomainValidation: { domainHasMxRecord: jest.Mock };
   let emailQueueService: { addEmailJob: jest.Mock };
@@ -96,6 +104,10 @@ describe('UlbService', () => {
       }),
     };
     formJsonService = { findByType: jest.fn().mockRejectedValue(new NotFoundException()) };
+    formJsonConfigService = { findAllExemptable: jest.fn().mockResolvedValue([]) };
+    yearAccessService = { setSeedExemptions: jest.fn().mockResolvedValue(undefined) };
+    yearModel = { findOne: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(null) }) };
+    slbModel = { exists: jest.fn().mockResolvedValue(null) };
     dynamicFormValidation = {
       validateFinalSubmitAndBuildPayload: jest.fn(),
       validateDraftAndBuildPayload: jest.fn(),
@@ -112,7 +124,11 @@ describe('UlbService', () => {
         { provide: getModelToken(Ulb.name), useValue: ulbModel },
         { provide: getModelToken(State.name), useValue: stateModel },
         { provide: getModelToken(User.name), useValue: userModel },
+        { provide: getModelToken(Year.name), useValue: yearModel },
+        { provide: getModelToken(SlbForm.name), useValue: slbModel },
         { provide: FormJsonService, useValue: formJsonService },
+        { provide: FormJsonConfigService, useValue: formJsonConfigService },
+        { provide: YearAccessService, useValue: yearAccessService },
         { provide: DynamicFormValidationService, useValue: dynamicFormValidation },
         { provide: EmailDomainValidationService, useValue: emailDomainValidation },
         { provide: EmailQueueService, useValue: emailQueueService },
@@ -1219,6 +1235,155 @@ describe('UlbService', () => {
       await expect(
         service.reject(new Types.ObjectId().toString(), { reason: 'Duplicate code' }, adminUser),
       ).resolves.toBeDefined();
+    });
+  });
+
+  describe('xvi-fc dynamic year access', () => {
+    const ulbId = new Types.ObjectId().toString();
+
+    describe('getYearAccess', () => {
+      it('returns startYear, yearAccess, and the exemptable-form list', async () => {
+        ulbModel.findById.mockReturnValue({
+          lean: jest.fn().mockResolvedValue({ startYear: 2026, yearAccess: { '2026-27': { yearEnabled: true, disabledFormIds: [32] } } }),
+        });
+        formJsonConfigService.findAllExemptable.mockResolvedValue([{ formId: 32, isApplicableForExemption: true }]);
+
+        const result = await service.getYearAccess(ulbId);
+
+        expect(result.startYear).toBe(2026);
+        expect(result.yearAccess).toEqual({ '2026-27': { yearEnabled: true, disabledFormIds: [32] } });
+        expect(result.exemptableForms).toEqual([{ formId: 32, isApplicableForExemption: true }]);
+      });
+
+      it('defaults startYear to null and yearAccess to {} for a ULB that predates this field', async () => {
+        ulbModel.findById.mockReturnValue({ lean: jest.fn().mockResolvedValue({}) });
+        formJsonConfigService.findAllExemptable.mockResolvedValue([]);
+
+        const result = await service.getYearAccess(ulbId);
+
+        expect(result.startYear).toBeNull();
+        expect(result.yearAccess).toEqual({});
+      });
+    });
+
+    describe('updateYearAccess', () => {
+      beforeEach(() => {
+        ulbModel.findById.mockReturnValue({ lean: jest.fn().mockResolvedValue({ _id: ulbId, startYear: null }) });
+        ulbModel.findByIdAndUpdate.mockReturnValue({ lean: jest.fn().mockResolvedValue({ startYear: 2026 }) });
+      });
+
+      it('rejects a formId not in the currently-exemptable list', async () => {
+        formJsonConfigService.findAllExemptable.mockResolvedValue([{ formId: 32 }]);
+
+        await expect(
+          service.updateYearAccess(ulbId, { startYear: 2026, disabledFormIds: [33] }),
+        ).rejects.toThrow(BadRequestException);
+        expect(yearAccessService.setSeedExemptions).not.toHaveBeenCalled();
+      });
+
+      it('rejects disabledFormIds when no startYear is set (existing or provided)', async () => {
+        formJsonConfigService.findAllExemptable.mockResolvedValue([{ formId: 32 }]);
+
+        await expect(service.updateYearAccess(ulbId, { disabledFormIds: [32] })).rejects.toThrow(BadRequestException);
+      });
+
+      it('sets startYear alone without touching yearAccess when disabledFormIds is omitted', async () => {
+        await service.updateYearAccess(ulbId, { startYear: 2026 });
+
+        expect(ulbModel.findByIdAndUpdate).toHaveBeenCalledWith(ulbId, { $set: { startYear: 2026 } });
+        expect(yearAccessService.setSeedExemptions).not.toHaveBeenCalled();
+      });
+
+      it('throws when no Year document exists for the computed seed label', async () => {
+        formJsonConfigService.findAllExemptable.mockResolvedValue([{ formId: 32 }]);
+        yearModel.findOne.mockReturnValue({ lean: jest.fn().mockResolvedValue(null) });
+
+        await expect(
+          service.updateYearAccess(ulbId, { startYear: 2026, disabledFormIds: [32] }),
+        ).rejects.toThrow(BadRequestException);
+      });
+
+      it('resolves the seed year and calls setSeedExemptions when both startYear and disabledFormIds are set', async () => {
+        formJsonConfigService.findAllExemptable.mockResolvedValue([{ formId: 32 }]);
+        const seedYear = { _id: new Types.ObjectId(), year: '2026-27' };
+        yearModel.findOne.mockReturnValue({ lean: jest.fn().mockResolvedValue(seedYear) });
+
+        await service.updateYearAccess(ulbId, { startYear: 2026, disabledFormIds: [32] });
+
+        expect(yearModel.findOne).toHaveBeenCalledWith({ year: '2026-27' }, { _id: 1, year: 1 });
+        expect(yearAccessService.setSeedExemptions).toHaveBeenCalledWith(
+          expect.objectContaining({ startYear: 2026 }),
+          seedYear,
+          [32],
+        );
+      });
+
+      it('uses the existing startYear to seed exemptions when only disabledFormIds is provided', async () => {
+        ulbModel.findById.mockReturnValue({ lean: jest.fn().mockResolvedValue({ _id: ulbId, startYear: 2027 }) });
+        formJsonConfigService.findAllExemptable.mockResolvedValue([{ formId: 32 }]);
+        const seedYear = { _id: new Types.ObjectId(), year: '2027-28' };
+        yearModel.findOne.mockReturnValue({ lean: jest.fn().mockResolvedValue(seedYear) });
+
+        await service.updateYearAccess(ulbId, { disabledFormIds: [32] });
+
+        expect(ulbModel.findByIdAndUpdate).not.toHaveBeenCalled(); // startYear itself unchanged
+        expect(yearAccessService.setSeedExemptions).toHaveBeenCalledWith(
+          expect.objectContaining({ startYear: 2027 }),
+          seedYear,
+          [32],
+        );
+      });
+
+      it('allows explicitly clearing startYear back to null (no restriction)', async () => {
+        await service.updateYearAccess(ulbId, { startYear: null });
+
+        expect(ulbModel.findByIdAndUpdate).toHaveBeenCalledWith(ulbId, { $set: { startYear: null } });
+      });
+
+      describe('exemption vs. an already-real submission', () => {
+        beforeEach(() => {
+          formJsonConfigService.findAllExemptable.mockResolvedValue([{ formId: 32 }]);
+          yearModel.findOne.mockReturnValue({
+            lean: jest.fn().mockResolvedValue({ _id: new Types.ObjectId(), year: '2026-27' }),
+          });
+        });
+
+        it('blocks exempting SLB when a real (non-stub) SLB submission already exists for the seed year', async () => {
+          slbModel.exists.mockResolvedValue({ _id: new Types.ObjectId() });
+
+          await expect(
+            service.updateYearAccess(ulbId, { startYear: 2026, disabledFormIds: [32] }),
+          ).rejects.toThrow(BadRequestException);
+          expect(yearAccessService.setSeedExemptions).not.toHaveBeenCalled();
+        });
+
+        it('excludes exemption stubs from the real-submission check (isExemptionStub: true is not real data)', async () => {
+          slbModel.exists.mockResolvedValue(null); // the $ne: true filter means a stub-only match resolves to null
+
+          await service.updateYearAccess(ulbId, { startYear: 2026, disabledFormIds: [32] });
+
+          expect(slbModel.exists).toHaveBeenCalledWith(
+            expect.objectContaining({ isExemptionStub: { $ne: true } }),
+          );
+          expect(yearAccessService.setSeedExemptions).toHaveBeenCalled();
+        });
+
+        it('allows exempting SLB when no submission exists yet for the seed year', async () => {
+          slbModel.exists.mockResolvedValue(null);
+
+          await service.updateYearAccess(ulbId, { startYear: 2026, disabledFormIds: [32] });
+
+          expect(yearAccessService.setSeedExemptions).toHaveBeenCalled();
+        });
+
+        it('does not check SLB submissions when SLB is not among the requested disabledFormIds', async () => {
+          formJsonConfigService.findAllExemptable.mockResolvedValue([{ formId: 32 }, { formId: 40 }]);
+
+          await service.updateYearAccess(ulbId, { startYear: 2026, disabledFormIds: [] });
+
+          expect(slbModel.exists).not.toHaveBeenCalled();
+        });
+      });
     });
   });
 });
