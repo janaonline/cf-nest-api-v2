@@ -27,6 +27,15 @@ describe('FileTokenService', () => {
     it('returns an empty/falsy url unchanged without signing', () => {
       expect(service.signFileUrl('')).toBe('');
     });
+
+    it('honors an explicit validityMs override instead of the ~24-minute default', () => {
+      const before = Date.now();
+      const url = service.signFileUrl('state/foo/bar.pdf', 'inline', 24 * 60 * 60 * 1000);
+      const signature = new URL(url).searchParams.get('signature')!;
+      const { exp } = service.parseToken(signature);
+      expect(exp).toBeGreaterThanOrEqual(before + 24 * 60 * 60 * 1000);
+      expect(exp).toBeLessThan(before + 24 * 60 * 60 * 1000 + 5000);
+    });
   });
 
   describe('createToken / parseToken', () => {
