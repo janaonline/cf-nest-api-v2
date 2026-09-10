@@ -22,7 +22,7 @@ import {
   XviFcBankAccount,
   XviFcBankAccountDocument,
 } from '../../schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
-import { SlbForm, SlbFormDocument, SLB_FORM_TYPE } from '../../schemas/xvi-fc/ulb/slb-form.schema';
+import { SlbForm, SlbFormDocument, SLB_FORM_TYPE, SLB_FORM_ID } from '../../schemas/xvi-fc/ulb/slb-form.schema';
 import { StateWiseResponseDto } from './dto/state-wise-response.dto';
 import { buildGetStateWiseDataPipeline } from './queries/get-state-wise-data.query';
 import { SideMenuResponseDto } from './dto/side-menu.dto';
@@ -34,6 +34,8 @@ import { XviFcCacheService, XVIFC_CACHE_KEY_PREFIX } from './cache/xvi-fc-cache.
 import { FormJsonService } from '../../master/form-json/form-json.service';
 import { UlbEligibilityService } from '../ulb-eligibility/ulb-eligibility.service';
 import { SideMenuService } from './side-menu/side-menu.service';
+import { isWithinXvifcCycle, hasDesignYearStarted } from './common/constants/xvifc-cycle.constants';
+import { ExemptionResolverService } from './common/services/exemption-resolver.service';
 
 @Injectable()
 export class XviFcService {
@@ -58,6 +60,7 @@ export class XviFcService {
     private readonly formJsonService: FormJsonService,
     private readonly ulbEligibilityService: UlbEligibilityService,
     private readonly sideMenuService: SideMenuService,
+    private readonly exemptionResolverService: ExemptionResolverService,
   ) {}
 
   async getStateWiseData(stateId: string, requester: AuthUser): Promise<StateWiseResponseDto> {
@@ -119,11 +122,7 @@ export class XviFcService {
     };
   }
 
-  async clearFormJsonCache(
-    user: AuthUser,
-    designYearId?: string,
-    formId?: number,
-  ): Promise<{ message: string }> {
+  async clearFormJsonCache(user: AuthUser, designYearId?: string, formId?: number): Promise<{ message: string }> {
     if (user.scope !== Scope.ADMIN) throw new ForbiddenException('Only admins can clear the cache.');
     const deletedCount = await this.formJsonService.clearCache(designYearId, formId);
     const scope = [designYearId ? `designYearId: ${designYearId}` : null, formId ? `formId: ${formId}` : null]
@@ -149,13 +148,43 @@ export class XviFcService {
     };
   }
 
-  async getYears(): Promise<{ _id: string; year: string }[]> {
-    const YEAR_RANGE = ['2026-27', '2027-28', '2028-29', '2029-30', '2030-31'];
-    const results = await this.yearModel
-      .find({ year: { $in: YEAR_RANGE } }, { _id: 1, year: 1 })
-      .lean()
-      .exec();
-    return results.map((r) => ({ _id: r._id.toString(), year: r.year }));
+  /**
+
+  * Returns all 16th FC award years (2026-27 to 2030-31) in ascending order.
+  * Excludes 14th/15th FC years. Every year is returned with isEnabled so callers
+  can distinguish selectable and locked years without inferring from omissions.
+  *For ULBs, isEnabled directly reflects yearAccess[year].yearEnabled; missing
+  entries are treated as false and are never materialized. STATE/ADMIN can access
+  all in-cycle years.
+
+  A year whose starting calendar year hasn't arrived yet is always isEnabled: false, for every
+  caller - e.g. while the current calendar year is 2026, "2026-27" is enabled but "2027-28" through
+  "2030-31" are not, regardless of yearAccess or scope. This future-year gate is a hard override on
+  top of everything else; it can only turn a year off, never on.
+  */
+  async getYears(user?: AuthUser): Promise<{ _id: string; year: string; isEnabled: boolean }[]> {
+    const activeYears = (
+      await this.yearModel.find({ isActive: true }, { _id: 1, year: 1 }).sort({ year: 1 }).lean().exec()
+    ).filter((y) => isWithinXvifcCycle(y.year));
+
+    if (user?.scope === Scope.ULB) {
+      const ulbId = toObjectIdString(user.ulb);
+      const ulb = ulbId ? await this.ulbModel.findById(ulbId, { startYear: 1, yearAccess: 1 }).lean().exec() : null;
+
+      if (ulb) {
+        return activeYears.map((r) => ({
+          _id: r._id.toString(),
+          year: r.year,
+          isEnabled: hasDesignYearStarted(r.year) && ulb.yearAccess?.[r.year]?.yearEnabled === true,
+        }));
+      }
+    }
+
+    return activeYears.map((r) => ({
+      _id: r._id.toString(),
+      year: r.year,
+      isEnabled: hasDesignYearStarted(r.year),
+    }));
   }
 
   async getUlbById(ulbId: string): Promise<{ ulbName: string; stateId: string; stateName: string }> {
@@ -215,9 +244,11 @@ export class XviFcService {
     const bankAccountStatus =
       ((bankAccount as Record<string, unknown> | null)?.['currentFormStatus'] as FormStatusType | undefined) ??
       FORM_STATUS.NOT_STARTED;
-    const slbStatus =
-      ((slbForm as Record<string, unknown> | null)?.['currentFormStatus'] as FormStatusType | undefined) ??
-      FORM_STATUS.NOT_STARTED;
+    const slbStatus = await this.resolveSlbStatus(
+      ulb,
+      designYear,
+      slbForm as { currentFormStatus?: FormStatusType } | null,
+    );
 
     return {
       annualAccountId: auditedDoc?._id?.toString() ?? null,
@@ -236,6 +267,31 @@ export class XviFcService {
         form_status_id: slbStatus,
       },
     };
+  }
+
+  /**
+   * SLB's status for the "Conditions Progress" dashboard. If a real SLB document already exists,
+   * its own currentFormStatus is authoritative (golden rule — never overridden, matches
+   * SlbService.getForm's own precedence). Only when no document exists yet does this check
+   * exemption (read-only, via the same ExemptionResolverService the STATE review table uses) so
+   * an exempted ULB that has never opened /slb still sees EXEMPTED_ACKNOWLEDGED here instead of
+   * the misleading default NOT_STARTED.
+   */
+  private async resolveSlbStatus(
+    ulbId: Types.ObjectId,
+    designYearId: Types.ObjectId,
+    slbForm: { currentFormStatus?: FormStatusType } | null,
+  ): Promise<FormStatusType> {
+    if (slbForm?.currentFormStatus != null) return slbForm.currentFormStatus;
+
+    const [ulb, year] = await Promise.all([
+      this.ulbModel.findById(ulbId, { startYear: 1, yearAccess: 1 }).lean().exec(),
+      this.yearModel.findById(designYearId, { year: 1 }).lean().exec(),
+    ]);
+    if (!ulb || !year) return FORM_STATUS.NOT_STARTED;
+
+    const resolution = await this.exemptionResolverService.resolveBulk([ulb], year, SLB_FORM_ID);
+    return resolution.get(String(ulb._id))?.exempted ? FORM_STATUS.EXEMPTED_ACKNOWLEDGED : FORM_STATUS.NOT_STARTED;
   }
 
   getSupportHours(): {

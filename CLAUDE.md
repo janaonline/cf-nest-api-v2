@@ -48,7 +48,9 @@ src/
 │   ├── ulb/             # annual_accounts (OCR via ANNUAL_ACCOUNT_PROCESSING_QUEUE), bank-account, unspent-balance-disclosure
 │   ├── state/           # sfc-status, elected-urban-local-bodies, devolution-formula, fc-unspent-declaration, dashboard
 │   ├── mohua/           # fc-unspent-declaration review workflow
-│   ├── side-menu/, cache/, common/ # XviFcCacheService/Interceptor, form-actors, form-status-access helpers shared across sub-features
+│   ├── side-menu/, cache/, common/ # XviFcCacheService/Interceptor, form-actors, form-status-access helpers,
+│   │                     # YearAccessService (dynamic year access/exemption for new ULBs - see below) shared
+│   │                     # across sub-features
 │   │   └── common/reminders/    # Dwell-time reminder crons (daily 9AM IST): ULB Nodal Officer nudge for
 │   │                            # Annual Accounts stuck IN_PROGRESS (every 3 days), STATE digest (HTML
 │   │                            # table + PDF attachment) for Annual Account/Bank Account forms stuck
@@ -89,6 +91,12 @@ src/
 ├── middleware/          # LoggerMiddleware, RecaptchaMiddleware
 └── views/mail/          # Handlebars email templates
 ```
+
+### xvi-fc Dynamic Year Access
+
+Replaces the old module's hardcoded `Ulb.access_20xx` boolean fields (deprecated, confirmed unused in this app, left in place only because the separate old Express app still reads them) with two admin-set facts on `Ulb` (`startYear`, `yearAccess`) plus a per-formId `formJsonConfig` collection, so a genuinely new ULB can be exempted from specific forms without a schema/code change per year.
+
+Full docs live with the code, not here: [`module/xvi-fc/common/services/CLAUDE.md`](src/module/xvi-fc/common/services/CLAUDE.md) (the mechanism — `YearAccessService`, the data model, lazy materialization) and [`master/form-json-config/CLAUDE.md`](src/master/form-json-config/CLAUDE.md) (the config side, the formId registry, and how to extend this to a new form).
 
 ### Database
 

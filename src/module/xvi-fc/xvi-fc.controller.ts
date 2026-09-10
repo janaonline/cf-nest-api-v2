@@ -41,8 +41,8 @@ export class XviFcController {
   @Get('years')
   @UseGuards(PermissionGuard)
   // @RequirePermissions(Permission.VIEW_STATUS_REPORTS)
-  async getYears(): Promise<{ _id: string; year: string }[]> {
-    return this.xviFcService.getYears();
+  async getYears(@CurrentUser() user: AuthUser): Promise<{ _id: string; year: string }[]> {
+    return this.xviFcService.getYears(user);
   }
 
   @ApiBearerAuth()

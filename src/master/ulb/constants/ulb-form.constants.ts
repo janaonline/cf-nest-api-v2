@@ -144,6 +144,20 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
     ],
   },
   {
+    key: 'registrationReason',
+    label: 'Reason for Registration',
+    displayInlineLabel: true,
+    formFieldType: 'select',
+    placeholder: 'Select reason...',
+    options: [
+      { id: 'NEW_CONSTITUTION', label: 'Fresh Constitution' },
+      { id: 'SPLIT', label: 'Split from an Existing ULB' },
+      { id: 'MERGER', label: 'Merger' },
+      { id: 'EXISTING_ULB_ONBOARDING', label: 'Existing ULB Newly Onboarded to the Portal' },
+    ],
+    labelHint: '(context only - does not itself change year/form access)',
+  },
+  {
     key: 'gazetteNotificationNumber',
     label: 'Gazette Notification Number',
     displayInlineLabel: true,
@@ -274,6 +288,7 @@ export const DEFAULT_ULB_REGISTER_SECTIONS: SectionLayout[] = [
     icon: 'bi-journal-text',
     fields: [
       { key: 'dateOfConstitution', grid: 'col-md-6' },
+      { key: 'registrationReason', grid: 'col-md-6' },
       { key: 'gazetteNotificationNumber', grid: 'col-md-6' },
       {
         key: 'gazetteNotificationFile',
@@ -322,6 +337,7 @@ export const DEFAULT_ULB_EDIT_SECTIONS: SectionLayout[] = [
     icon: 'bi-journal-text',
     fields: [
       { key: 'dateOfConstitution', grid: 'col-md-6' },
+      { key: 'registrationReason', grid: 'col-md-6' },
       { key: 'gazetteNotificationNumber', grid: 'col-md-6' },
       { key: 'gazetteNotificationFile', grid: 'col-12' },
     ],

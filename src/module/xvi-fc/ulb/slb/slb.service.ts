@@ -32,8 +32,14 @@ import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-
 import { throwXviFcValidationError, xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
 import { SLB_FORM_ID, SLB_FORM_TYPE, SlbForm, SlbFormDocument } from 'src/schemas/xvi-fc/ulb/slb-form.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
+import { Year } from 'src/schemas/year.schema';
 import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 import { CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE } from 'src/module/ulb-eligibility/ulb-eligibility.constants';
+import { YearAccessService, UlbAccessInput } from 'src/module/xvi-fc/common/services/year-access.service';
+import {
+  ExemptionResolverService,
+  ExemptionResolution,
+} from 'src/module/xvi-fc/common/services/exemption-resolver.service';
 import { SlbFormJsonConfigService } from './services/slb-form-json.service';
 import { getSlbFieldsByType } from './helpers/slb-form-json.helpers';
 import type { SaveSlbDto } from './dto/save-slb.dto';
@@ -78,10 +84,14 @@ export class SlbService {
     private readonly model: Model<SlbFormDocument>,
     @InjectModel(Ulb.name)
     private readonly ulbModel: Model<UlbDocument>,
+    @InjectModel(Year.name)
+    private readonly yearModel: Model<Year>,
     private readonly validator: DynamicFormValidationService,
     private readonly fileTokenService: FileTokenService,
     private readonly slbFormJsonConfig: SlbFormJsonConfigService,
     private readonly ulbEligibilityService: UlbEligibilityService,
+    private readonly yearAccessService: YearAccessService,
+    private readonly exemptionResolverService: ExemptionResolverService,
   ) {}
 
   /** Returns the SLB question config array from the DB for frontend rendering. */
@@ -105,7 +115,7 @@ export class SlbService {
     if (!designYear) throw new NotFoundException(`Design year not found for yearId: ${yearId}`);
     const actualYearLabel = getPreviousYearLabel(designYear);
 
-    const doc = await this.model
+    let doc = await this.model
       .findOne({ ulb: ulbOid, year: yearOid, formType: SLB_FORM_TYPE, isDeleted: false })
       .populate('ulb', 'name')
       .populate('createdBy', 'name')
@@ -113,6 +123,12 @@ export class SlbService {
       .populate('submittedBy', 'name')
       .lean<SlbFormLeanDoc>()
       .exec();
+
+    // xvi-fc dynamic year access: no record yet - if this ULB is exempted, materialize a stub
+    // instead of showing a blank form. Never touches an existing record (see `if (!doc)` above).
+    if (!doc) {
+      doc = await this.materializeExemptionStubIfNeeded(ulbOid, yearOid, user);
+    }
 
     const fields = await this.slbFormJsonConfig.loadFields(yearId);
     const mainFields = getSlbFieldsByType(fields, 'SLB_MAIN_FORM_FIELDS');
@@ -332,6 +348,25 @@ export class SlbService {
     const pageSize = dto.pageSize ?? 20;
     const yearObjectId = new Types.ObjectId(dto.designYearId);
 
+    // xvi-fc dynamic year access: resolve exemption for the whole candidate set up front (not just
+    // the current page) so sorting/counts/the status filter below - all computed before $facet -
+    // see a correct formStatus for a ULB that's exempt but has never opened its SLB form (no
+    // document exists yet to carry EXEMPTED_ACKNOWLEDGED). One extra Ulb query reusing this same
+    // matchStage, never one query per ULB. Read-only - see ExemptionResolverService.
+    const yearDoc = await this.yearModel
+      .findById(yearObjectId, { year: 1 })
+      .lean<{ _id: Types.ObjectId; year: string }>()
+      .exec();
+    const candidateUlbs: UlbAccessInput[] = yearDoc
+      ? await this.ulbModel.find(matchStage, { startYear: 1, yearAccess: 1 }).lean().exec()
+      : [];
+    const exemptionByUlbId: Map<string, ExemptionResolution> = yearDoc
+      ? await this.exemptionResolverService.resolveBulk(candidateUlbs, yearDoc, SLB_FORM_ID)
+      : new Map();
+    const exemptUlbIds = candidateUlbs
+      .filter((ulb) => exemptionByUlbId.get(String(ulb._id))?.exempted)
+      .map((ulb) => ulb._id);
+
     const pipeline: PipelineStage[] = [
       { $match: matchStage },
       {
@@ -351,14 +386,20 @@ export class SlbService {
       { $addFields: { slbForm: { $arrayElemAt: ['$slbForm', 0] } } },
       {
         $addFields: {
-          formStatus: { $ifNull: ['$slbForm.currentFormStatus', FORM_STATUS.NOT_STARTED] },
+          formStatus: {
+            $ifNull: [
+              '$slbForm.currentFormStatus',
+              { $cond: [{ $in: ['$_id', exemptUlbIds] }, FORM_STATUS.EXEMPTED_ACKNOWLEDGED, FORM_STATUS.NOT_STARTED] },
+            ],
+          },
           lastUpdatedAt: { $ifNull: ['$slbForm.updatedAt', null] },
         },
       },
     ];
 
-    const statusMatch: PipelineStage.FacetPipelineStage[] =
-      dto.status?.length ? [{ $match: { formStatus: { $in: dto.status } } }] : [];
+    const statusMatch: PipelineStage.FacetPipelineStage[] = dto.status?.length
+      ? [{ $match: { formStatus: { $in: dto.status } } }]
+      : [];
 
     pipeline.push({
       $facet: {
@@ -396,6 +437,61 @@ export class SlbService {
     ) as Record<FormStatusType, number>;
 
     return xviFcSuccess('ULB SLB submissions fetched.', { total, page, pageSize, rows, counts });
+  }
+
+  // ─── xvi-fc dynamic year access ────────────────────────────────────────────
+
+  /**
+   * Called only when no SLB record exists yet for (ulb, year). Checks whether this ULB is
+   * exempted from SLB this year (dynamic year access) and, if so, upserts an automatic stub
+   * (never a real answer, never a ULB action) so getForm returns an already-exempted form
+   * instead of a blank one. Returns null (unchanged flow) when not exempted.
+   * This is the worked reference implementation for the mechanism documented in
+   * src/module/xvi-fc/common/services/CLAUDE.md - copy this pattern when wiring a new form in.
+   */
+  private async materializeExemptionStubIfNeeded(
+    ulbOid: Types.ObjectId,
+    yearOid: Types.ObjectId,
+    user: AuthUser,
+  ): Promise<SlbFormLeanDoc | null> {
+    const ulb = await this.ulbModel.findById(ulbOid, { startYear: 1, yearAccess: 1 }).lean().exec();
+    if (!ulb) return null;
+
+    const year = await this.yearModel
+      .findById(yearOid, { year: 1 })
+      .lean<{ _id: Types.ObjectId; year: string }>()
+      .exec();
+    if (!year) return null;
+
+    const exempt = await this.yearAccessService.isFormExempt(ulb, year, SLB_FORM_ID);
+    if (!exempt) return null;
+
+    const userOid = new Types.ObjectId(user._id);
+    await this.model.findOneAndUpdate(
+      { ulb: ulbOid, year: yearOid, formType: SLB_FORM_TYPE },
+      {
+        $setOnInsert: {
+          data: {},
+          currentFormStatus: FORM_STATUS.EXEMPTED_ACKNOWLEDGED,
+          isExemptionStub: true,
+          exemptionMaterializedAt: new Date(),
+          createdBy: userOid,
+          updatedBy: userOid,
+          isActive: true,
+          isDeleted: false,
+        },
+      },
+      { upsert: true },
+    );
+
+    return this.model
+      .findOne({ ulb: ulbOid, year: yearOid, formType: SLB_FORM_TYPE, isDeleted: false })
+      .populate('ulb', 'name')
+      .populate('createdBy', 'name')
+      .populate('updatedBy', 'name')
+      .populate('submittedBy', 'name')
+      .lean<SlbFormLeanDoc>()
+      .exec();
   }
 
   // ─── Draft validation helpers ──────────────────────────────────────────────
