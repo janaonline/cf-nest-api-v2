@@ -35,10 +35,14 @@ export function buildPortalAuthUrls(
   configService: ConfigService,
   type?: string,
 ): { loginUrl: string; resetPasswordUrl: string } {
-  const baseUrl = resolveClientBaseUrl(configService);
   const suffix = type ? `/${type}` : '';
   return {
-    loginUrl: `${baseUrl}/fc/auth/login${suffix}`,
-    resetPasswordUrl: `${baseUrl}/fc/auth/forgot-password${suffix}`,
+    loginUrl: getPortalUrl(configService, `auth/login${suffix}`),
+    resetPasswordUrl: getPortalUrl(configService, `auth/forgot-password${suffix}`),
   };
+}
+
+export function getPortalUrl(configService: ConfigService, path: string): string {
+  const baseUrl = resolveClientBaseUrl(configService);
+  return `${baseUrl}/fc/${path}`;
 }
