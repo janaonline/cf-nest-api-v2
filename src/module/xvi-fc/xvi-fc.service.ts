@@ -154,8 +154,13 @@ export class XviFcService {
   * Excludes 14th/15th FC years. Every year is returned with isEnabled so callers
   can distinguish selectable and locked years without inferring from omissions.
   *For ULBs, isEnabled directly reflects yearAccess[year].yearEnabled; missing
-  entries are treated as false and are never materialized. STATE/ADMIN can access
-  all in-cycle years.
+  entries are treated as false and are never materialized - EXCEPT when
+  ulb.startYear is null, which is itself the documented "no restriction, sees
+  every year" signal (already in hand from the same read, no YearAccessService
+  call), so a missing entry there means unrestricted-and-enabled rather than
+  locked. A ULB with a non-null startYear still gets false for any year it
+  hasn't been materialized for, same as before. STATE/ADMIN can access all
+  in-cycle years.
 
   A year whose starting calendar year hasn't arrived yet is always isEnabled: false, for every
   caller - e.g. while the current calendar year is 2026, "2026-27" is enabled but "2027-28" through
@@ -175,7 +180,9 @@ export class XviFcService {
         return activeYears.map((r) => ({
           _id: r._id.toString(),
           year: r.year,
-          isEnabled: hasDesignYearStarted(r.year) && ulb.yearAccess?.[r.year]?.yearEnabled === true,
+          isEnabled:
+            hasDesignYearStarted(r.year) &&
+            (ulb.startYear == null || ulb.yearAccess?.[r.year]?.yearEnabled === true),
         }));
       }
     }

@@ -37,6 +37,12 @@ everything else.
   all comes back `isEnabled: false`, not "compute what it should be." This is a deliberate
   divergence from every other consumer in this file (which all read live/computed access via
   `peekEntry`) — by design, `getYears()` only trusts what's already been explicitly materialized.
+  One exception: `ulb.startYear == null` is itself the documented "no restriction" fact (see Data
+  model below), already sitting on the same `findById` read `getYears()` does — it isn't computed
+  or fetched specially, so a missing `yearAccess` entry for an unrestricted ULB comes back
+  `isEnabled: true`, not `false`. A ULB with a non-null `startYear` still gets `false` for any year
+  with no entry, exactly as above — this exception only ever widens what's already known to be
+  true from data already in hand, it never triggers a `YearAccessService` call.
   `hasDesignYearStarted` is then AND-ed on top for every caller (ULB and STATE/ADMIN alike) — a
   future year (e.g. "2027-28" while the current calendar year is 2026) is always `isEnabled: false`
   regardless of `yearAccess` or scope; it's a hard override that can only turn a year off, never on.

@@ -191,6 +191,33 @@ describe('XviFcService', () => {
       expect(result).toEqual([{ _id: yearA._id.toString(), year: '2026-27', isEnabled: false }]);
     });
 
+    it('an unrestricted ULB (startYear: null) with no materialized yearAccess entries is isEnabled: true for every started year, not locked out', async () => {
+      mockYearModel.find.mockReturnValue(q([yearA, yearB]));
+      const ulbId = new Types.ObjectId();
+      // startYear: null is the documented "no restriction, sees every year" default for an
+      // established ULB that predates Dynamic Year Access - yearAccess is empty because nothing
+      // has ever touched it (getYears() no longer materializes, and this ULB hasn't visited an
+      // exemption-aware form like SLB yet).
+      mockUlbModel.findById.mockReturnValue(q({ _id: ulbId, startYear: null, yearAccess: {} }));
+      const ulbUser: AuthUser = { ...mockUser, scope: Scope.ULB, ulb: ulbId.toString() };
+
+      const result = await service.getYears(ulbUser);
+
+      expect(result).toEqual([
+        { _id: yearA._id.toString(), year: '2026-27', isEnabled: true },
+        { _id: yearB._id.toString(), year: '2027-28', isEnabled: true },
+      ]);
+    });
+
+    it('does not persist anything for an unrestricted ULB either — ulbModel exposes no write method for this path to call', async () => {
+      mockYearModel.find.mockReturnValue(q([yearA]));
+      const ulbId = new Types.ObjectId();
+      mockUlbModel.findById.mockReturnValue(q({ _id: ulbId, startYear: null, yearAccess: {} }));
+      const ulbUser: AuthUser = { ...mockUser, scope: Scope.ULB, ulb: ulbId.toString() };
+
+      await expect(service.getYears(ulbUser)).resolves.toBeDefined();
+    });
+
     it('never writes to the ULB document — this is a literal field read, and ulbModel exposes no write method for this path to call', async () => {
       mockYearModel.find.mockReturnValue(q([yearA, yearB]));
       const ulbId = new Types.ObjectId();
