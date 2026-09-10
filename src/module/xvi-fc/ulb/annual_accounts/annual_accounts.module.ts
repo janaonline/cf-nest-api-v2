@@ -27,6 +27,7 @@ import {
 } from '../../../../schemas/xvi-fc/manual-review-request.schema';
 import { AnnualAccountsController } from './annual_accounts.controller';
 import { AnnualAccountsService } from './annual_accounts.service';
+import { AnnualAccountManualReviewService } from './annual-account-manual-review.service';
 import { AnnualAccountOcrApiService } from './annual-account-ocr-api.service';
 import { AnnualAccountOcrProcessor } from './annual-account-ocr.processor';
 import { AnnualAccountStatusSyncService } from './annual-account-status-sync.service';
@@ -59,12 +60,13 @@ import { ExcelService } from '../../../../services/excel/excel.service';
   controllers: [AnnualAccountsController],
   providers: [
     AnnualAccountsService,
+    AnnualAccountManualReviewService,
     S3Service,
     AnnualAccountOcrApiService,
     AnnualAccountOcrProcessor,
     AnnualAccountStatusSyncService,
     ExcelService,
   ],
-  exports: [AnnualAccountsService],
+  exports: [AnnualAccountsService, AnnualAccountManualReviewService],
 })
 export class AnnualAccountsModule {}
