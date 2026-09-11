@@ -78,7 +78,7 @@ export class DevolutionFormulaRow {
   validationStatus!: DfRowValidationStatus;
 
   @Prop({ type: [DfRowErrorSchema], default: [] })
-  errors!: DfRowError[];
+  validationErrors!: DfRowError[];
 
   @Prop({ type: MongooseSchema.Types.Mixed })
   rawExcelData?: Record<string, unknown>;

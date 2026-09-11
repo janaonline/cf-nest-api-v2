@@ -429,7 +429,7 @@ export class DevolutionFormulaService {
           form: form._id as Types.ObjectId,
           datasetVersion: activeVersion,
           isActive: true,
-          'errors.code': 'identityModified',
+          'validationErrors.code': 'identityModified',
         })
         .select('_id')
         .lean()

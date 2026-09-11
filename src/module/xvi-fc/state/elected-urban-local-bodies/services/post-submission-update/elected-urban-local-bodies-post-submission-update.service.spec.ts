@@ -116,7 +116,7 @@ interface TestEulbRow {
   rowType: 'DB_ULB' | 'EXTRA_ULB';
   datasetVersion: number;
   validationStatus: 'VALID' | 'INVALID';
-  errors: TestEulbRowError[];
+  validationErrors: TestEulbRowError[];
   isActive: boolean;
 }
 
@@ -201,7 +201,7 @@ function makeRow(overrides: Partial<TestEulbRow> = {}): TestEulbRow {
     rowType: 'DB_ULB',
     datasetVersion: 1,
     validationStatus: 'VALID',
-    errors: [],
+    validationErrors: [],
     isActive: true,
     ...overrides,
   };
@@ -877,16 +877,16 @@ describe('EulbPostSubmissionUpdateService', () => {
       expect(result.data!.rows[0]._id).toBe(rowOid.toString());
     });
 
-    it('includes errors array on each row', async () => {
+    it('includes validationErrors array on each row', async () => {
       const row = makeRow({
-        errors: [{ field: 'dateOfExpiry', code: 'required', message: 'Date of Expiry is required.' }],
+        validationErrors: [{ field: 'dateOfExpiry', code: 'required', message: 'Date of Expiry is required.' }],
         validationStatus: 'INVALID',
       });
       rowModel['find'] = jest.fn().mockReturnValue(q([row]));
       rowModel['countDocuments'] = jest.fn().mockReturnValue(q(1));
 
       const result = await service.getEligibleRows(stateOid.toString(), yearOid.toString(), {}, adminUser);
-      expect(result.data!.rows[0].errors).toEqual([
+      expect(result.data!.rows[0].validationErrors).toEqual([
         { field: 'dateOfExpiry', code: 'required', message: 'Date of Expiry is required.' },
       ]);
     });
@@ -1070,7 +1070,7 @@ describe('EulbPostSubmissionUpdateService', () => {
       expect(result.data!.validRowCount).toBe(1);
       expect(result.data!.totalRowCount).toBe(1);
       expect(result.data!.rows[0].validationStatus).toBe('VALID');
-      expect(result.data!.rows[0].errors).toHaveLength(0);
+      expect(result.data!.rows[0].validationErrors).toHaveLength(0);
     });
 
     it('returns success:true with INVALID and row-level errors when Constituted row is missing required dates', async () => {
@@ -1087,7 +1087,7 @@ describe('EulbPostSubmissionUpdateService', () => {
       expect(result.success).toBe(true);
       expect(result.data!.validationStatus).toBe('INVALID');
       expect(result.data!.rows[0].validationStatus).toBe('INVALID');
-      const errorFields = result.data!.rows[0].errors.map((e) => e.field);
+      const errorFields = result.data!.rows[0].validationErrors.map((e) => e.field);
       expect(errorFields).toContain('dateOfConstitution');
       expect(errorFields).toContain('dateOfExpiry');
     });
@@ -1114,7 +1114,7 @@ describe('EulbPostSubmissionUpdateService', () => {
 
       expect(result.success).toBe(true);
       expect(result.data!.validationStatus).toBe('INVALID');
-      const expiryError = result.data!.rows[0].errors.find((e) => e.field === 'dateOfExpiry');
+      const expiryError = result.data!.rows[0].validationErrors.find((e) => e.field === 'dateOfExpiry');
       expect(expiryError?.code).toBe('minDate');
     });
 

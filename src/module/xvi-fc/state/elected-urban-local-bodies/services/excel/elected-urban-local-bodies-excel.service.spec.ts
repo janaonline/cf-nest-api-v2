@@ -309,7 +309,7 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
       const data = result.data as EulbValidateExcelResponseData;
 
       expect(data.validationStatus).toBe('VALID');
-      expect(data.errors).toHaveLength(0);
+      expect(data.validationErrors).toHaveLength(0);
 
       // No unmatched/duplicate rows in this upload — the snapshot is empty, and would overwrite
       // (not append to) any stale snapshot left over from a prior, messier upload.
@@ -493,7 +493,8 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
       );
 
       const { response } = await catchBadRequest(() => service.validateExcel(makeDto(), adminUser));
-      const dataErrors = (response.data as { errors?: EulbRowValidationError[] } | undefined)?.errors ?? [];
+      const dataErrors = (response.data as { validationErrors?: EulbRowValidationError[] } | undefined)
+        ?.validationErrors ?? [];
 
       expect(dataErrors.some((e) => e.field === 'censusCode' && e.code === 'unknownUlb')).toBe(true);
     });
@@ -519,7 +520,8 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
       expect(docs).toHaveLength(0);
 
       // The row is still fully reported — just never written as a row.
-      const dataErrors = (response.data as { errors?: EulbRowValidationError[] } | undefined)?.errors ?? [];
+      const dataErrors = (response.data as { validationErrors?: EulbRowValidationError[] } | undefined)
+        ?.validationErrors ?? [];
       expect(dataErrors.some((e) => e.field === 'censusCode' && e.code === 'unknownUlb')).toBe(true);
     });
 
@@ -588,13 +590,13 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
       const excludedRows = (update['$set'] as Record<string, unknown>)['excludedRows'] as Array<{
         censusCode?: string;
         ulbName: string;
-        errors: Array<{ code: string }>;
+        validationErrors: Array<{ code: string }>;
       }>;
 
       expect(excludedRows).toHaveLength(1);
       expect(excludedRows[0].censusCode).toBe('NOT_IN_DB');
       expect(excludedRows[0].ulbName).toBe('Some New City');
-      expect(excludedRows[0].errors.some((e) => e.code === 'unknownUlb')).toBe(true);
+      expect(excludedRows[0].validationErrors.some((e) => e.code === 'unknownUlb')).toBe(true);
     });
   });
 
@@ -635,7 +637,8 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
 
     it('includes unknownUlb and ulbName required errors in exception data', async () => {
       const { response } = await catchBadRequest(() => service.validateExcel(makeDto(), adminUser));
-      const dataErrors = (response.data as { errors?: EulbRowValidationError[] } | undefined)?.errors ?? [];
+      const dataErrors = (response.data as { validationErrors?: EulbRowValidationError[] } | undefined)
+        ?.validationErrors ?? [];
 
       expect(dataErrors.some((e) => e.field === 'censusCode' && e.code === 'unknownUlb')).toBe(true);
       expect(dataErrors.some((e) => e.field === 'ulbName' && e.code === 'required')).toBe(true);
@@ -670,7 +673,8 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
 
     it('includes required errors for both censusCode and ulbName in exception data', async () => {
       const { response } = await catchBadRequest(() => service.validateExcel(makeDto(), adminUser));
-      const dataErrors = (response.data as { errors?: EulbRowValidationError[] } | undefined)?.errors ?? [];
+      const dataErrors = (response.data as { validationErrors?: EulbRowValidationError[] } | undefined)
+        ?.validationErrors ?? [];
 
       expect(dataErrors.some((e) => e.field === 'ulbName' && e.code === 'required')).toBe(true);
       expect(dataErrors.some((e) => e.field === 'censusCode' && e.code === 'required')).toBe(true);
@@ -735,7 +739,7 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
 
       const [docs] = rowModel.insertMany.mock.calls[0] as [Record<string, unknown>[]];
       expect(docs[0]['validationStatus']).toBe('VALID');
-      const errors = (result.data as EulbValidateExcelResponseData).errors;
+      const errors = (result.data as EulbValidateExcelResponseData).validationErrors;
       expect(errors.some((e) => e.field === 'dateOfConstitution')).toBe(false);
       expect(errors.some((e) => e.field === 'dateOfExpiry')).toBe(false);
     });
@@ -825,7 +829,7 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
       expect(docs).toHaveLength(1);
       expect(docs[0]).toMatchObject({ censusCode: 'DBCODE1', validationStatus: 'VALID' });
 
-      const errors = (result.data as EulbValidateExcelResponseData).errors;
+      const errors = (result.data as EulbValidateExcelResponseData).validationErrors;
       const dupError = errors.find((e) => e.field === 'censusCode' && e.code === 'duplicate');
       expect(dupError).toBeDefined();
       expect(dupError!.rowNumber).toBe(2);
@@ -837,11 +841,11 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
       const excludedRows = (update['$set'] as Record<string, unknown>)['excludedRows'] as Array<{
         rowNumber: number;
         censusCode?: string;
-        errors: Array<{ code: string }>;
+        validationErrors: Array<{ code: string }>;
       }>;
       expect(excludedRows).toHaveLength(1);
       expect(excludedRows[0].rowNumber).toBe(2);
-      expect(excludedRows[0].errors.some((e) => e.code === 'duplicate')).toBe(true);
+      expect(excludedRows[0].validationErrors.some((e) => e.code === 'duplicate')).toBe(true);
     });
 
     it('marks both unmatched duplicate rows INVALID and reports both, but persists neither', async () => {
@@ -874,7 +878,8 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
       const [docs] = rowModel.insertMany.mock.calls[0] as [Record<string, unknown>[]];
       expect(docs).toHaveLength(0);
 
-      const dataErrors = (response.data as { errors?: EulbRowValidationError[] } | undefined)?.errors ?? [];
+      const dataErrors = (response.data as { validationErrors?: EulbRowValidationError[] } | undefined)
+        ?.validationErrors ?? [];
       // First row: unmatched → unknownUlb
       expect(dataErrors.some((e) => e.rowNumber === 1 && e.code === 'unknownUlb')).toBe(true);
       // Second row: unmatched AND duplicate → both errors
@@ -1301,7 +1306,7 @@ describe('ElectedUrbanLocalBodiesExcelService — revalidateExcel', () => {
       const data = result.data as EulbRevalidateExcelResponseData;
 
       expect(data.validationSummary?.validationStatus).toBe('VALID');
-      expect(data.errors).toHaveLength(0);
+      expect(data.validationErrors).toHaveLength(0);
     });
 
     it('deletes a stored row with no resolved ulbId instead of throwing — no re-parse can discover a new row here', async () => {
@@ -1427,7 +1432,7 @@ describe('ElectedUrbanLocalBodiesExcelService — revalidateExcel', () => {
       const data = result.data as EulbRevalidateExcelResponseData;
 
       expect(data.validationSummary?.validationStatus).toBe('INVALID');
-      expect(data.errors.length).toBeGreaterThan(0);
+      expect(data.validationErrors.length).toBeGreaterThan(0);
     });
   });
 
@@ -1517,11 +1522,11 @@ describe('ElectedUrbanLocalBodiesExcelService — revalidateExcel', () => {
       const [, update] = formModel.findOneAndUpdate.mock.calls[0] as [unknown, Record<string, unknown>];
       const excludedRows = (update['$set'] as Record<string, unknown>)['excludedRows'] as Array<{
         censusCode?: string;
-        errors: Array<{ code: string }>;
+        validationErrors: Array<{ code: string }>;
       }>;
       expect(excludedRows).toHaveLength(1);
       expect(excludedRows[0].censusCode).toBe('NOT_IN_DB');
-      expect(excludedRows[0].errors.some((e) => e.code === 'unknownUlb')).toBe(true);
+      expect(excludedRows[0].validationErrors.some((e) => e.code === 'unknownUlb')).toBe(true);
     });
 
     it('aborts the transaction (no manual reactivation) when insertMany fails', async () => {
