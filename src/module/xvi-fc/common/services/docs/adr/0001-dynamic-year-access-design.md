@@ -69,14 +69,19 @@ revisiting as time passes. Full mechanics: `../CLAUDE.md` in this folder.
 
 ## Deferred / explicitly out of scope
 
-- **`ONCE_EVER`'s write path — resolved without a schema change.** A second submission in a
-  different design year is now rejected at the application level
-  (`BankAccountService.assertNoCrossYearBankAccountRecord`, a `ConflictException`) rather than by
-  changing `submitBankAccount`'s upsert key or unique index — `{ulb, designYear}` stays as-is, so
-  the S3 proof-file path scheme (which is keyed off the *original* submission's design year) never
-  needed to change either. The frontend redirects the ULB to the year the record actually lives in
-  before this guard would ever trigger in normal use; the guard exists for direct API calls, races,
-  and multiple tabs.
+- **`ONCE_EVER`'s write path.** A second submission in a different design year is rejected at the
+  application level (`BankAccountService.assertNoCrossYearBankAccountRecord`, a
+  `ConflictException`) — `{ulb, designYear}` stays as the upsert key/unique index as-is, so the S3
+  proof-file path scheme (which is keyed off the *original* submission's design year) never needed
+  to change. The frontend redirects the ULB to the year the record actually lives in before this
+  guard would ever trigger in normal use; the guard exists for direct API calls and multiple tabs.
+  Originally left as an accepted, theoretical race for two concurrent requests targeting different
+  years (both could pass the preflight check before either commits) — since closed at the DB level
+  by a second, additive index: `submissionScope` denormalized onto `XviFcBankAccount` at write time,
+  with a `{ulb: 1}` partial unique index scoped to `submissionScope: 'ONCE_EVER'` docs. This doesn't
+  touch `{ulb, designYear}` or the S3 path scheme — it's a second, independent index; a concurrent
+  duplicate insert now fails with a DB-level duplicate-key error, caught and translated into the
+  same `ConflictException` the preflight check throws in the non-racing case.
 - **Extending exemption/`ONCE_EVER` to forms beyond SLB/Bank Account.** A pure `formJsonConfig` data
   change plus a small per-form code change (the GET-flow stub-materialization glue, and — for a form
   with its own bespoke status enum, e.g. Annual Accounts — an equivalent terminal status). See
