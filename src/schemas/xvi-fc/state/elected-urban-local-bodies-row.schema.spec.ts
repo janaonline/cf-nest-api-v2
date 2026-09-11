@@ -37,7 +37,7 @@ describe('ElectedUrbanLocalBodiesRowSchema — ulbName must be storable when bla
       rowType: 'DB_ULB',
       lastUpdatedSource: 'EXCEL',
       validationStatus: 'INVALID',
-      errors: [{ field: 'ulbName', code: 'required', message: 'ULB Name is required.' }],
+      validationErrors: [{ field: 'ulbName', code: 'required', message: 'ULB Name is required.' }],
       createdBy: new Types.ObjectId(),
       updatedBy: new Types.ObjectId(),
     });

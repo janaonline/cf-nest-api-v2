@@ -94,7 +94,7 @@ export class ElectedUrbanLocalBodiesRowService {
     };
 
     if (query.validationStatus) filter['validationStatus'] = query.validationStatus;
-    if (query.errorField) filter['errors.field'] = query.errorField;
+    if (query.errorField) filter['validationErrors.field'] = query.errorField;
 
     if (query.search) {
       const regex = new RegExp(escapeRegex(query.search), 'i');
@@ -232,7 +232,7 @@ export class ElectedUrbanLocalBodiesRowService {
 
     const newErrors = this.eulbValidator.revalidateRow(mergedRow, dbUlb, today, rowDateConfig);
     updateFields['validationStatus'] = newErrors.length === 0 ? 'VALID' : 'INVALID';
-    updateFields['errors'] = newErrors;
+    updateFields['validationErrors'] = newErrors;
 
     let updatedRow: typeof row | null;
     try {
@@ -312,7 +312,7 @@ export class ElectedUrbanLocalBodiesRowService {
       dateOfExpiry:
         r.dateOfExpiry instanceof Date ? r.dateOfExpiry.toISOString().split('T')[0] : (r.dateOfExpiry ?? ''),
       remarks: r.remarks ?? '',
-      errors: (r.errors ?? []).map((e) => e.message).join('; '),
+      errors: (r.validationErrors ?? []).map((e) => e.message).join('; '),
     }));
 
     const excludedExcelRows = excludedRows.map((r) => ({
@@ -327,7 +327,7 @@ export class ElectedUrbanLocalBodiesRowService {
       dateOfExpiry:
         r.dateOfExpiry instanceof Date ? r.dateOfExpiry.toISOString().split('T')[0] : (r.dateOfExpiry ?? ''),
       remarks: r.remarks ?? '',
-      errors: (r.errors ?? []).map((e) => e.message).join('; '),
+      errors: (r.validationErrors ?? []).map((e) => e.message).join('; '),
     }));
 
     const excelRows = [...dbExcelRows, ...excludedExcelRows].sort((a, b) => a.rowNumber - b.rowNumber);
