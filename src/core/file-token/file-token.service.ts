@@ -26,9 +26,14 @@ export class FileTokenService {
     this.baseUrl = cfg.get<string>('BASE_URL', '');
   }
 
-  signFileUrl(url: string, disposition: 'inline' | 'attachment' = 'attachment'): string {
+  /**
+   * `validityMs` overrides the default ~24-minute expiry — use a longer window for links baked
+   * into an artifact meant to be opened later (e.g. an Excel export), where the default would
+   * likely have already lapsed by the time someone opens the file.
+   */
+  signFileUrl(url: string, disposition: 'inline' | 'attachment' = 'attachment', validityMs?: number): string {
     if (!url) return url;
-    const token = this.createToken({ path: url, disposition });
+    const token = this.createToken({ path: url, disposition, exp: validityMs ? Date.now() + validityMs : undefined });
     return `${this.baseUrl}file/download?signature=${token}`;
   }
 

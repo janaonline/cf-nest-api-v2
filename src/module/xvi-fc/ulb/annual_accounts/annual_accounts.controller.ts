@@ -1,10 +1,24 @@
-import { BadRequestException, Body, Controller, Delete, Get, Param, Post, Query, Req, HttpCode } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Post,
+  Query,
+  Req,
+  HttpCode,
+  StreamableFile,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation } from '@nestjs/swagger/dist/decorators';
 import type { Request } from 'express';
 import { CurrentUser } from 'src/module/auth/decorators/current-user.decorator';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { ParseObjectIdPipe } from '../../../../common/pipes/parse-object-id.pipe';
+import { getTimeStamp } from 'src/shared/utils/date.utils';
 import { AnnualAccountsService } from './annual_accounts.service';
+import { AnnualAccountManualReviewService } from './annual-account-manual-review.service';
 import { PresignUploadDto } from './dto/presign-upload.dto';
 import { ConfirmUploadDto } from './dto/confirm-upload.dto';
 import { SubmitSectionDto } from './dto/submit-section.dto';
@@ -14,12 +28,16 @@ import { BulkSectionDecisionDto } from './dto/bulk-section-decision.dto';
 import { UlbSubmissionsQueryDto } from './dto/ulb-submissions-query.dto';
 import { ManualReviewDecisionDto } from './dto/manual-review-decision.dto';
 import { ManualReviewQueueQueryDto } from './dto/manual-review-queue-query.dto';
+import { ManualReviewHistoryQueryDto } from './dto/manual-review-history-query.dto';
 import { extractIpAndUserAgent } from 'src/module/xvi-fc/common/utils/xvi-fc-request-meta.util';
 
 @ApiBearerAuth()
 @Controller('xvi-fc/annual-account')
 export class AnnualAccountsController {
-  constructor(private readonly annualAccountsService: AnnualAccountsService) {}
+  constructor(
+    private readonly annualAccountsService: AnnualAccountsService,
+    private readonly manualReviewService: AnnualAccountManualReviewService,
+  ) {}
 
   // @Get('presign-upload')
   // @ApiOperation({ summary: 'Generate a presigned S3 PUT URL for direct browser-to-S3 upload' })
@@ -68,7 +86,35 @@ export class AnnualAccountsController {
   @Get('manual-review-queue')
   @ApiOperation({ summary: "ADMIN's global queue of documents awaiting a manual-review decision, across all ULBs" })
   getManualReviewQueue(@Query() dto: ManualReviewQueueQueryDto, @CurrentUser() user: AuthUser) {
-    return this.annualAccountsService.getManualReviewQueue(dto, user);
+    return this.manualReviewService.getManualReviewQueue(dto, user);
+  }
+
+  @Get('manual-review-history')
+  @ApiOperation({ summary: "ADMIN's paginated audit trail of all manual-review requests (any status), across all ULBs" })
+  listManualReviewRequestHistory(@Query() dto: ManualReviewHistoryQueryDto, @CurrentUser() user: AuthUser) {
+    return this.manualReviewService.listManualReviewRequestHistory(dto, user);
+  }
+
+  @Get('manual-review-history/dump')
+  @ApiOperation({ summary: "ADMIN's Excel export of the manual-review history, respecting the same filters as the list" })
+  async dumpManualReviewHistory(
+    @Query() dto: ManualReviewHistoryQueryDto,
+    @CurrentUser() user: AuthUser,
+  ): Promise<StreamableFile> {
+    const buffer = await this.manualReviewService.dumpManualReviewHistoryToExcel(dto, user);
+    return new StreamableFile(buffer as unknown as Uint8Array, {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      disposition: `attachment; filename="manual-review-history_${getTimeStamp(false)}.xlsx"`,
+    });
+  }
+
+  @Get('manual-review-history/:requestId')
+  @ApiOperation({ summary: 'ADMIN view of a single manual-review request by its own id' })
+  getManualReviewRequestDetail(
+    @Param('requestId', ParseObjectIdPipe) requestId: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.manualReviewService.getManualReviewRequestDetail(requestId, user);
   }
 
   @Get(':id')
@@ -143,7 +189,7 @@ export class AnnualAccountsController {
       throw new BadRequestException('section must be "auditedData" or "unauditedData"');
     }
     const { ipAddress, userAgent } = extractIpAndUserAgent(req);
-    return this.annualAccountsService.requestManualReview(id, section, docId, user, ipAddress, userAgent);
+    return this.manualReviewService.requestManualReview(id, section, docId, user, ipAddress, userAgent);
   }
 
   @Post(':id/documents/:docId/manual-review/decision')
@@ -161,7 +207,7 @@ export class AnnualAccountsController {
       throw new BadRequestException('section must be "auditedData" or "unauditedData"');
     }
     const { ipAddress, userAgent } = extractIpAndUserAgent(req);
-    return this.annualAccountsService.decideManualReview(id, section, docId, dto, user, ipAddress, userAgent);
+    return this.manualReviewService.decideManualReview(id, section, docId, dto, user, ipAddress, userAgent);
   }
 
   @Get(':id/documents/:docId/manual-review')
@@ -175,7 +221,7 @@ export class AnnualAccountsController {
     if (section !== 'auditedData' && section !== 'unauditedData') {
       throw new BadRequestException('section must be "auditedData" or "unauditedData"');
     }
-    return this.annualAccountsService.getManualReviewHistory(id, section, docId, user);
+    return this.manualReviewService.getManualReviewHistory(id, section, docId, user);
   }
 
   @Delete(':id/documents/:docId')
