@@ -33,6 +33,7 @@ import { CommunicationModule } from './module/communication/communication.module
 import { NotificationsModule } from './module/notifications/notifications.module';
 import { UlbModule } from './master/ulb/ulb.module';
 import { StateModule } from './master/state/state.module';
+import { DigitizationDbModule } from './core/database/digitization-db.module';
 function getQueryCaller(): string {
   const stack = new Error().stack?.split('\n') ?? [];
   const frame = stack.find(
@@ -72,6 +73,7 @@ function getQueryCaller(): string {
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
         uri: configService.get<string>('MONGO_URI'),
+        dbName: configService.get<string>('MONGO_DB_NAME'),
         // connectionFactory: (connection: any) => {
         //   connection.set('debug', (collection: string, method: string, ...args: any[]) => {
         //     const caller = getQueryCaller();
@@ -81,21 +83,17 @@ function getQueryCaller(): string {
         // },
       }),
     }),
-    MongooseModule.forRootAsync({
-      imports: [ConfigModule],
-      inject: [ConfigService],
-      useFactory: (configService: ConfigService) => ({
-        uri: configService.get<string>('MONGO_URI_2'),
-        // connectionFactory: (connection: any) => {
-        //   connection.set('debug', (collection: string, method: string, ...args: any[]) => {
-        //     const caller = getQueryCaller();
-        //     console.log(`[Query:digitization_db] ${collection}.${method} | ${caller}`, JSON.stringify(args));
-        //   });
-        //   return connection;
-        // },
-      }),
-      connectionName: 'digitization_db',
-    }),
+    // MongooseModule.forRootAsync({
+    //   imports: [ConfigModule],
+    //   inject: [ConfigService],
+    //   useFactory: (configService: ConfigService) => ({
+    //     uri: configService.get<string>('MONGO_URI_2'),
+    //   }),
+    //   connectionName: 'digitization_db',
+    // }),
+    // digitization_db shares the same physical connection as the default one above
+    // (same server, different db name) via Connection#useDb — see DigitizationDbModule.
+    DigitizationDbModule,
     UsersModule,
     ResourcesSectionModule,
     NodeMailerModule,
