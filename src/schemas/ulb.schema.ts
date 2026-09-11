@@ -90,34 +90,28 @@ export class Ulb {
   @Prop({ default: null })
   natureOfUlb: string;
 
-  @Prop({ type: Boolean, default: true })
+  @Prop({ type: Boolean, default: false })
   isActive: boolean;
 
-  @Prop({ type: Boolean, default: true })
+  @Prop({ type: Boolean, default: false })
   isPublish: boolean;
 
-  /** @deprecated superseded by startYear/yearAccess (xvi-fc dynamic year access). Unused in cf-nest-api-v2. */
-  @Prop({ type: Boolean, default: true })
+  @Prop({ type: Boolean, default: false })
   access_2021: boolean;
 
-  /** @deprecated superseded by startYear/yearAccess (xvi-fc dynamic year access). Unused in cf-nest-api-v2. */
-  @Prop({ type: Boolean, default: true })
+  @Prop({ type: Boolean, default: false })
   access_2122: boolean;
 
-  /** @deprecated superseded by startYear/yearAccess (xvi-fc dynamic year access). Unused in cf-nest-api-v2. */
-  @Prop({ type: Boolean, default: true })
+  @Prop({ type: Boolean, default: false })
   access_2223: boolean;
 
-  /** @deprecated superseded by startYear/yearAccess (xvi-fc dynamic year access). Unused in cf-nest-api-v2. */
-  @Prop({ type: Boolean, default: true })
+  @Prop({ type: Boolean, default: false })
   access_2324: boolean;
 
-  /** @deprecated superseded by startYear/yearAccess (xvi-fc dynamic year access). Unused in cf-nest-api-v2. */
-  @Prop({ type: Boolean, default: true })
+  @Prop({ type: Boolean, default: false })
   access_2425: boolean;
 
-  /** @deprecated superseded by startYear/yearAccess (xvi-fc dynamic year access). Unused in cf-nest-api-v2. */
-  @Prop({ type: Boolean, default: true })
+  @Prop({ type: Boolean, default: false })
   access_2526: boolean;
 
   // -- xvi-fc dynamic year access - docs: src/module/xvi-fc/common/services/CLAUDE.md ----
