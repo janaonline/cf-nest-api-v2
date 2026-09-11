@@ -14,6 +14,7 @@ import { XviFcCacheService } from './cache/xvi-fc-cache.service';
 import { XviFcCacheInterceptor } from './cache/xvi-fc-cache.interceptor';
 import { SideMenuModule } from './side-menu/side-menu.module';
 import { FormJsonModule } from '../../master/form-json/form-json.module';
+import { FormJsonConfigModule } from '../../master/form-json-config/form-json-config.module';
 import { UnspentBalanceDisclosureModule } from './ulb/unspent-balance-disclosure/unspent-balance-disclosure.module';
 import { BankAccountModule } from './ulb/bank-account/bank-account.module';
 import { BudgetDocumentModule } from './ulb/budget-document/budget-document.module';
@@ -32,6 +33,7 @@ import { SlbModule } from './ulb/slb/slb.module';
 import { ClaimLetterModule } from './state/claim-letter/claim-letter.module';
 import { UlbEligibilityModule } from '../ulb-eligibility/ulb-eligibility.module';
 import { RemindersModule } from './common/reminders/reminders.module';
+import { XviFcCommonModule } from './common/xvi-fc-common.module';
 
 @Module({
   imports: [
@@ -51,6 +53,7 @@ import { RemindersModule } from './common/reminders/reminders.module';
     forwardRef(() => ElectedUrbanLocalBodiesModule),
     SideMenuModule,
     FormJsonModule,
+    FormJsonConfigModule,
     UnspentBalanceDisclosureModule,
     BankAccountModule,
     BudgetDocumentModule,
@@ -62,6 +65,7 @@ import { RemindersModule } from './common/reminders/reminders.module';
     ClaimLetterModule,
     UlbEligibilityModule,
     RemindersModule,
+    XviFcCommonModule,
   ],
   controllers: [XviFcController],
   providers: [XviFcService, XviFcCacheService, XviFcCacheInterceptor],

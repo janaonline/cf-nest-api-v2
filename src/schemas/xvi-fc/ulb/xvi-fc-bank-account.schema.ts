@@ -2,6 +2,7 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 import { FORM_STATUS, getFormStatusLabel, type FormStatusType } from 'src/common/constants/form-status.constants';
 import { DecisionInfo, DecisionInfoSchema } from 'src/schemas/xvi-fc/annual-account.schema';
+import type { SubmissionScope } from 'src/schemas/form-json-config.schema';
 
 export type XviFcBankAccountDocument = HydratedDocument<XviFcBankAccount>;
 
@@ -42,6 +43,14 @@ export class XviFcBankAccount {
 
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'State', required: true })
   state!: Types.ObjectId;
+
+  /**
+   * Denormalized from FormJsonConfig at submission time so the {ulb} partial unique index
+   * can atomically enforce one ONCE_EVER doc per ulb, closing the concurrent submission race.
+   * Bank Account scope has always been ONCE_EVER; this field isn't re-derived on read.
+   */
+  @Prop({ type: String, enum: ['PER_YEAR', 'ONCE_EVER'], required: true })
+  submissionScope!: SubmissionScope;
 
   @Prop({ type: String, default: '' })
   ifscCode!: string;
@@ -117,3 +126,10 @@ export class XviFcBankAccount {
 export const XviFcBankAccountSchema = SchemaFactory.createForClass(XviFcBankAccount);
 
 XviFcBankAccountSchema.index({ ulb: 1, designYear: 1 }, { unique: true });
+
+/**
+ * Enforces at most one ONCE_EVER doc per ulb atomically at the DB level. The {ulb, designYear}
+ * index above doesn't prevent different designYear values for the same ulb; concurrent inserts
+ *  now fail with a duplicate-key error instead of creating a second record.
+ */
+XviFcBankAccountSchema.index({ ulb: 1 }, { unique: true, partialFilterExpression: { submissionScope: 'ONCE_EVER' } });
