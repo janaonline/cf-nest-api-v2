@@ -386,7 +386,7 @@ export class DevolutionFormulaExcelService {
         installment1Amount: r.installment1Amount,
         installment2Amount: r.installment2Amount,
         devolutionFormula: r.devolutionFormula,
-        errors: r.rowErrors,
+        validationErrors: r.rowErrors,
       }));
 
     // Atomic version allocation + safe dataset replacement, all inside one Mongo transaction.
@@ -460,7 +460,7 @@ export class DevolutionFormulaExcelService {
           installment2Amount: Number(r.installment2Amount) || 0,
           devolutionFormula: r.devolutionFormula,
           validationStatus: r.validationRowStatus,
-          errors: r.rowErrors,
+          validationErrors: r.rowErrors,
           rawExcelData: r.validationRowStatus === 'INVALID' ? r.rawExcelData : undefined,
           isActive: true,
           createdBy: userOid,
@@ -632,7 +632,7 @@ export class DevolutionFormulaExcelService {
       const matchedUlbIds = new Set<string>();
       const rowUpdates: Array<{
         id: Types.ObjectId;
-        errors: DfRowError[];
+        validationErrors: DfRowError[];
         validationStatus: 'VALID' | 'INVALID';
         totalGrantAllocation: number;
       }> = [];
@@ -678,7 +678,7 @@ export class DevolutionFormulaExcelService {
 
         rowUpdates.push({
           id: row._id,
-          errors: rowErrors,
+          validationErrors: rowErrors,
           validationStatus: rowStatus,
           totalGrantAllocation: row.totalGrantAllocation,
         });
@@ -687,7 +687,9 @@ export class DevolutionFormulaExcelService {
       const bulkOps = rowUpdates.map((r) => ({
         updateOne: {
           filter: { _id: r.id },
-          update: { $set: { errors: r.errors, validationStatus: r.validationStatus, updatedBy: userOid } },
+          update: {
+            $set: { validationErrors: r.validationErrors, validationStatus: r.validationStatus, updatedBy: userOid },
+          },
         },
       })) as unknown as AnyBulkWriteOperation<DevolutionFormulaRowDocument>[];
       await this.rowModel.bulkWrite(bulkOps, { ordered: false });
@@ -731,7 +733,7 @@ export class DevolutionFormulaExcelService {
       // filtering first (to only the invalid rows) would shift `i` and misattribute rowNumber to
       // the wrong row for every invalid row after the first gap of valid rows.
       const rowErrors: DfRowValidationError[] = rowUpdates.flatMap((r, i) =>
-        r.errors.map((e) => ({
+        r.validationErrors.map((e) => ({
           rowNumber: activeRows[i]?.rowNumber ?? i + 1,
           field: e.field,
           code: e.code,

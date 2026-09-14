@@ -112,7 +112,7 @@ export class ElectedUrbanLocalBodiesRow {
   validationStatus!: EulbRowValidationStatus;
 
   @Prop({ type: [EulbRowErrorSubdocSchema], default: [] })
-  errors!: EulbRowError[];
+  validationErrors!: EulbRowError[];
 
   /**
    * Tracks the separate MoHUA-review workflow (null pre-submission — the schema default, set

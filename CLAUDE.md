@@ -100,9 +100,9 @@ Full docs live with the code, not here: [`module/xvi-fc/common/services/CLAUDE.m
 
 ### Database
 
-Two MongoDB connections:
-- `MONGO_URI` — main app database (default connection)
-- `MONGO_URI_2` — digitization database (`connectionName: 'digitization_db'`)
+One physical connection (`MONGO_URI`), two logical databases selected by name:
+- `MONGO_DB_NAME` — main app database, set as `dbName` on the default `MongooseModule.forRootAsync` connection
+- `DIGITIZATION_DB_NAME` — digitization database, exposed as connection `'digitization_db'`. `src/core/database/digitization-db.module.ts` (global) derives it from the default connection via `connection.useDb(DIGITIZATION_DB_NAME, { useCache: true })` instead of opening a second socket/connection pool — both databases must live on the same server/cluster reachable via `MONGO_URI`.
 
 When defining models that belong to the digitization DB, use `MongooseModule.forFeature([...], 'digitization_db')` and inject with `@InjectModel(Model.name, 'digitization_db')`.
 
@@ -186,8 +186,9 @@ Required variables (see `.env` for dev defaults):
 
 | Variable | Purpose |
 |---|---|
-| `MONGO_URI` | Main MongoDB connection |
-| `MONGO_URI_2` | Digitization MongoDB connection |
+| `MONGO_URI` | MongoDB server/cluster connection (single physical connection, no db name) |
+| `MONGO_DB_NAME` | Main app database name (default connection) |
+| `DIGITIZATION_DB_NAME` | Digitization database name (reuses the default connection via `useDb`, connection name `'digitization_db'`) |
 | `REDIS_URL` | Redis for BullMQ and OTP storage |
 | `JWT_SECRET` / `JWT_REFRESH_SECRET` | Token signing |
 | `AWS_BUCKET_NAME` / `AWS_DIGITIZATION_BUCKET_NAME` | S3 buckets |
