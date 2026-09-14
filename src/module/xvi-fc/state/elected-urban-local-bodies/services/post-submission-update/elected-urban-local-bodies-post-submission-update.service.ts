@@ -227,7 +227,7 @@ export class EulbPostSubmissionUpdateService {
         r.dateOfExpiry instanceof Date ? r.dateOfExpiry.toISOString().split('T')[0] : (r.dateOfExpiry ?? null),
       remarks: r.remarks ?? null,
       validationStatus: r.validationStatus,
-      errors: (r.errors ?? []).map((e) => ({
+      validationErrors: (r.validationErrors ?? []).map((e) => ({
         field: e.field,
         code: e.code,
         message: e.message,
@@ -361,7 +361,7 @@ export class EulbPostSubmissionUpdateService {
           rowNumber: dbRow.rowNumber,
           censusCode: dbRow.censusCode ?? null,
           ulbName: dbRow.ulbName,
-          errors,
+          validationErrors: errors,
         });
         for (const e of errors) {
           const key = e.field ?? '_form';
@@ -460,7 +460,7 @@ export class EulbPostSubmissionUpdateService {
                   lastUpdatedSource: 'POST_SUBMISSION_UPDATE',
                   lastUpdateBatchId: batchId,
                   validationStatus: 'VALID',
-                  errors: [],
+                  validationErrors: [],
                   updatedBy: userOid,
                 },
                 $push: { updateHistory: historyEntry },
@@ -620,7 +620,7 @@ export class EulbPostSubmissionUpdateService {
         dateOfExpiry: proposed.dateOfExpiry ?? null,
         remarks: proposed.remarks ?? '',
         validationStatus: errors.length > 0 ? 'INVALID' : 'VALID',
-        errors,
+        validationErrors: errors,
       };
     });
 
