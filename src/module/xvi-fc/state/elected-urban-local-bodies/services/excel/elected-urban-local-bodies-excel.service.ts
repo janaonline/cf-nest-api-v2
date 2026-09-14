@@ -305,7 +305,7 @@ export class ElectedUrbanLocalBodiesExcelService {
         dateOfConstitution: r.dateOfConstitution,
         dateOfExpiry: r.dateOfExpiry,
         remarks: r.remarks,
-        errors: r.rowErrors,
+        validationErrors: r.rowErrors,
       }));
 
     // 11. Atomic version allocation + safe dataset replacement, all inside one Mongo transaction.
@@ -387,7 +387,7 @@ export class ElectedUrbanLocalBodiesExcelService {
             remarks: r.remarks,
             lastUpdatedSource: 'EXCEL' as const,
             validationStatus: r.validationRowStatus,
-            errors: r.rowErrors,
+            validationErrors: r.rowErrors,
             rawExcelData: r.validationRowStatus === 'INVALID' ? r.rawExcelData : undefined,
             createdBy: userOid,
             updatedBy: userOid,
@@ -465,7 +465,7 @@ export class ElectedUrbanLocalBodiesExcelService {
             },
           ],
         },
-        { validationSummary: summary, errors: rowErrors },
+        { validationSummary: summary, validationErrors: rowErrors },
       );
     }
 
@@ -473,7 +473,7 @@ export class ElectedUrbanLocalBodiesExcelService {
       validationStatus: formValidationStatus,
       summary,
       errorExcelFile: this.hydrateErrorExcelFile(errorExcelFile),
-      errors: rowErrors,
+      validationErrors: rowErrors,
     };
 
     const message =
@@ -544,7 +544,7 @@ export class ElectedUrbanLocalBodiesExcelService {
         const flatErrors: EulbRowValidationError[] = [];
 
         type RowBulkOpSet = {
-          errors: EulbRowError[];
+          validationErrors: EulbRowError[];
           validationStatus: EulbRowValidationStatus;
           updatedBy: Types.ObjectId;
           dateOfConstitution?: Date | null;
@@ -603,7 +603,7 @@ export class ElectedUrbanLocalBodiesExcelService {
           }
 
           const rowSetFields: RowBulkOpSet = {
-            errors: newErrors,
+            validationErrors: newErrors,
             validationStatus: newValidationStatus,
             updatedBy: userOid,
           };
@@ -676,7 +676,7 @@ export class ElectedUrbanLocalBodiesExcelService {
 
         const message =
           errorRowCount > 0 ? 'Excel revalidation completed with errors.' : 'Excel revalidation completed.';
-        return xviFcSuccess(message, { validationSummary, errors: flatErrors });
+        return xviFcSuccess(message, { validationSummary, validationErrors: flatErrors });
       }
     }
 
@@ -821,7 +821,7 @@ export class ElectedUrbanLocalBodiesExcelService {
         dateOfConstitution: r.dateOfConstitution,
         dateOfExpiry: r.dateOfExpiry,
         remarks: r.remarks,
-        errors: r.rowErrors,
+        validationErrors: r.rowErrors,
       }));
 
     // Atomic version allocation + safe dataset replacement inside one Mongo transaction — same
@@ -889,7 +889,7 @@ export class ElectedUrbanLocalBodiesExcelService {
             remarks: r.remarks,
             lastUpdatedSource: 'EXCEL' as const,
             validationStatus: r.validationRowStatus,
-            errors: r.rowErrors,
+            validationErrors: r.rowErrors,
             rawExcelData: r.rawExcelData,
             createdBy: userOid,
             updatedBy: userOid,
@@ -957,12 +957,12 @@ export class ElectedUrbanLocalBodiesExcelService {
             },
           ],
         },
-        { validationSummary, errors: flatErrors },
+        { validationSummary, validationErrors: flatErrors },
       );
     }
 
     const message = errorRowCount > 0 ? 'Excel revalidation completed with errors.' : 'Excel revalidation completed.';
-    return xviFcSuccess(message, { validationSummary, errors: flatErrors });
+    return xviFcSuccess(message, { validationSummary, validationErrors: flatErrors });
   }
 
   /** Builds a map from normalized camelCase key → column index. */

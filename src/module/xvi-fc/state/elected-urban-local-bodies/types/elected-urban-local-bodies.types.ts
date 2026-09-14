@@ -64,13 +64,13 @@ export interface EulbValidateExcelResponseData {
   validationStatus: EulbValidationStatus;
   summary: EulbValidationSummary;
   errorExcelFile?: HydratedFileInfoResponse;
-  errors: EulbRowValidationError[];
+  validationErrors: EulbRowValidationError[];
 }
 
 /** Shape of the `data` field returned by POST revalidate-excel. */
 export interface EulbRevalidateExcelResponseData {
   validationSummary: EulbValidationSummary;
-  errors: EulbRowValidationError[];
+  validationErrors: EulbRowValidationError[];
 }
 
 export interface EulbDumpFormRecord {
@@ -157,7 +157,7 @@ export interface EulbPostSubmissionUpdateRow {
   dateOfExpiry: string | null;
   remarks: string | null;
   validationStatus: string;
-  errors: Array<{
+  validationErrors: Array<{
     field?: string;
     code?: string;
     message: string;
@@ -187,7 +187,7 @@ export interface EulbPostSubmissionUpdateValidateRow {
   dateOfExpiry: string | null;
   remarks: string;
   validationStatus: 'VALID' | 'INVALID';
-  errors: Array<{
+  validationErrors: Array<{
     field?: string;
     code?: string;
     message: string;
@@ -208,7 +208,7 @@ export interface EulbPostSubmissionSubmitRowError {
   rowNumber: number;
   censusCode: string | null;
   ulbName: string;
-  errors: Array<{ field?: string; code?: string; message: string; value?: unknown }>;
+  validationErrors: Array<{ field?: string; code?: string; message: string; value?: unknown }>;
 }
 
 export interface EulbPostSubmissionUpdateSubmitData {

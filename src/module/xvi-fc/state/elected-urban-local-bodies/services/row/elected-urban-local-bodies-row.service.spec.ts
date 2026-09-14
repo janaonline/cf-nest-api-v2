@@ -79,7 +79,7 @@ const mockRow = {
   ulbName: 'Test City',
   electedBodyStatus: 'Constituted',
   datasetVersion: 1,
-  errors: [],
+  validationErrors: [],
 };
 
 const mockDbUlbRow = {
@@ -426,12 +426,12 @@ describe('ElectedUrbanLocalBodiesRowService', () => {
       censusCode: 'NOT_IN_DB',
       ulbName: 'Some New City',
       electedBodyStatus: 'Not Constituted',
-      errors: [{ field: 'censusCode', code: 'unknownUlb', message: 'Unknown ULB.' }],
+      validationErrors: [{ field: 'censusCode', code: 'unknownUlb', message: 'Unknown ULB.' }],
     };
 
     it('merges live DB rows with the excludedRows snapshot, sorted by rowNumber', async () => {
       formModel['findOne'] = jest.fn().mockReturnValue(q({ ...mockForm, excludedRows: [excludedRow] }));
-      rowModel['find'] = jest.fn().mockReturnValue(q([{ ...mockDbUlbRow, rowNumber: 1, errors: [] }]));
+      rowModel['find'] = jest.fn().mockReturnValue(q([{ ...mockDbUlbRow, rowNumber: 1, validationErrors: [] }]));
 
       await service.getErrorSheet(stateOid.toString(), yearOid.toString(), adminUser);
 

@@ -181,7 +181,11 @@ export class ElectedUrbanLocalBodiesController {
     enum: ['VALID', 'INVALID'],
     description: 'Filter by row validation status',
   })
-  @ApiQuery({ name: 'errorField', required: false, description: 'Filter rows where errors.field equals this value' })
+  @ApiQuery({
+    name: 'errorField',
+    required: false,
+    description: 'Filter rows where validationErrors.field equals this value',
+  })
   @Get(':stateId/:yearId/rows')
   @UseGuards(PermissionGuard)
   @RequirePermissions(Permission.VIEW_STATE_FORMS)

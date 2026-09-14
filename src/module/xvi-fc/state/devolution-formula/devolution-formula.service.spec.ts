@@ -98,7 +98,7 @@ const mockRow = {
   installment2Amount: 200_000,
   devolutionFormula: 'population',
   validationStatus: 'VALID' as const,
-  errors: [],
+  validationErrors: [],
   isActive: true,
 };
 
@@ -2039,10 +2039,10 @@ describe('DevolutionFormulaRowService', () => {
     );
 
     const rowUpdateArg = (mockRowModel.findByIdAndUpdate.mock.calls as unknown[][][])[0][1] as {
-      $set: { errors: Array<{ code: string }> };
+      $set: { validationErrors: Array<{ code: string }> };
     };
-    expect(rowUpdateArg.$set.errors).toHaveLength(1);
-    expect(rowUpdateArg.$set.errors[0].code).toBe('unknownUlb');
+    expect(rowUpdateArg.$set.validationErrors).toHaveLength(1);
+    expect(rowUpdateArg.$set.validationErrors[0].code).toBe('unknownUlb');
   });
 
   // Test 14: updateRow triggers form-level recalculation
