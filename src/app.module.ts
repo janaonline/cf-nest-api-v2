@@ -34,6 +34,19 @@ import { NotificationsModule } from './module/notifications/notifications.module
 import { UlbModule } from './master/ulb/ulb.module';
 import { StateModule } from './master/state/state.module';
 import { DigitizationDbModule } from './core/database/digitization-db.module';
+/** Fails app startup before Mongoose ever attempts a connection if MONGO_URI/MONGO_DB_NAME are
+ *  missing or blank — MongooseModule.forRootAsync below would otherwise pass `undefined` through
+ *  silently and only surface the problem once something tries to read/write. */
+function validateEnv(config: Record<string, unknown>): Record<string, unknown> {
+  for (const key of ['MONGO_URI', 'MONGO_DB_NAME']) {
+    const value = typeof config[key] === 'string' ? (config[key] as string).trim() : '';
+    if (!value) {
+      throw new Error(`${key} environment variable is required and must not be empty`);
+    }
+  }
+  return config;
+}
+
 function getQueryCaller(): string {
   const stack = new Error().stack?.split('\n') ?? [];
   const frame = stack.find(
@@ -51,7 +64,7 @@ function getQueryCaller(): string {
         limit: 60, // max requests per window
       },
     ]),
-    ConfigModule.forRoot({ isGlobal: true }),
+    ConfigModule.forRoot({ isGlobal: true, validate: validateEnv }),
     ScheduleModule.forRoot(),
     CacheModule.register({ isGlobal: true, ttl: 300000 }),
     RedisModule,
