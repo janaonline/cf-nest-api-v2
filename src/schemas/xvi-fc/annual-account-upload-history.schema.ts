@@ -91,7 +91,6 @@ export const XviFcAnnualAccountUploadHistorySchema = SchemaFactory.createForClas
   XviFcAnnualAccountUploadHistory,
 );
 
-XviFcAnnualAccountUploadHistorySchema.index({ uploadId: 1 }, { unique: true });
 XviFcAnnualAccountUploadHistorySchema.index(
   { annualAccountId: 1, section: 1, docId: 1, version: 1 },
   { unique: true },

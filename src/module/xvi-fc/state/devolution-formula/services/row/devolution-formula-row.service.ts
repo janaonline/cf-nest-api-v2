@@ -240,7 +240,14 @@ export class DevolutionFormulaRowService {
     const updatedRow = await this.rowModel
       .findByIdAndUpdate(
         rowId,
-        { $set: { ...updatedFields, ...mergedValues, errors: rowErrors, validationStatus: rowValidationStatus } },
+        {
+          $set: {
+            ...updatedFields,
+            ...mergedValues,
+            validationErrors: rowErrors,
+            validationStatus: rowValidationStatus,
+          },
+        },
         { new: true },
       )
       .lean()
@@ -378,7 +385,7 @@ export class DevolutionFormulaRowService {
       installment1Amount: r.installment1Amount,
       installment2Amount: r.installment2Amount,
       devolutionFormula: r.devolutionFormula,
-      errors: r.errors?.map((e: DfRowError) => e.message).join('; ') ?? '',
+      errors: r.validationErrors?.map((e: DfRowError) => e.message).join('; ') ?? '',
     }));
 
     // Merge in rows excluded from persistence at the last validate call (unmatched or intra-batch
@@ -393,7 +400,7 @@ export class DevolutionFormulaRowService {
             installment1Amount?: unknown;
             installment2Amount?: unknown;
             devolutionFormula?: string;
-            errors: DfRowError[];
+            validationErrors: DfRowError[];
           }>
         | undefined) ?? [];
 
@@ -405,7 +412,7 @@ export class DevolutionFormulaRowService {
       installment1Amount: r.installment1Amount,
       installment2Amount: r.installment2Amount,
       devolutionFormula: r.devolutionFormula,
-      errors: r.errors.map((e) => e.message).join('; '),
+      errors: r.validationErrors.map((e) => e.message).join('; '),
     }));
 
     const errorRows = [...dbErrorRows, ...excludedErrorRows].sort((a, b) => a.rowNumber - b.rowNumber);

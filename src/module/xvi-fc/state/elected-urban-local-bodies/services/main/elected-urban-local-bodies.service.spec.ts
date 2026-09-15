@@ -127,7 +127,7 @@ type DumpRowFixture = EulbDumpRowRecord & {
   isActive: boolean;
   updateHistory?: unknown[];
   rawExcelData?: Record<string, unknown>;
-  errors?: unknown[];
+  validationErrors?: unknown[];
 };
 
 const dumpRows: DumpRowFixture[] = [
@@ -147,7 +147,7 @@ const dumpRows: DumpRowFixture[] = [
     isActive: true,
     updateHistory: [{ previous: { remarks: 'Old' } }],
     rawExcelData: { remarks: 'Old' },
-    errors: [],
+    validationErrors: [],
     createdAt: new Date('2026-01-01T00:00:00.000Z'),
     updatedAt: new Date('2026-01-02T00:00:00.000Z'),
   },
@@ -694,11 +694,11 @@ describe('ElectedUrbanLocalBodiesService', () => {
           dumpRows
             .filter((row) => row.datasetVersion === filter.datasetVersion && row.isActive === filter.isActive)
             .sort((a, b) => a.rowNumber - b.rowNumber)
-            .map(({ isActive, updateHistory, rawExcelData, errors, ...row }) => {
+            .map(({ isActive, updateHistory, rawExcelData, validationErrors, ...row }) => {
               void isActive;
               void updateHistory;
               void rawExcelData;
-              void errors;
+              void validationErrors;
               return row;
             }),
         ),

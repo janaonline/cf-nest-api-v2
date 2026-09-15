@@ -34,7 +34,7 @@ export interface EulbExcludedRowEntry {
   dateOfConstitution?: Date | string;
   dateOfExpiry?: Date | string;
   remarks?: string;
-  errors: EulbRowError[];
+  validationErrors: EulbRowError[];
 }
 
 @Schema({ _id: false })
@@ -46,7 +46,7 @@ class EulbExcludedRowSubdoc {
   @Prop({ type: MongooseSchema.Types.Mixed }) dateOfConstitution?: Date | string;
   @Prop({ type: MongooseSchema.Types.Mixed }) dateOfExpiry?: Date | string;
   @Prop({ type: String }) remarks?: string;
-  @Prop({ type: [EulbRowErrorSubdocSchema], default: [] }) errors!: EulbRowError[];
+  @Prop({ type: [EulbRowErrorSubdocSchema], default: [] }) validationErrors!: EulbRowError[];
 }
 const EulbExcludedRowSubdocSchema = SchemaFactory.createForClass(EulbExcludedRowSubdoc);
 

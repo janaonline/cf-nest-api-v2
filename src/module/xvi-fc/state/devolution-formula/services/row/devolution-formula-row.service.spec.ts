@@ -62,7 +62,7 @@ const mockDbRow = {
   installment1Amount: 200_000,
   installment2Amount: 100_000,
   devolutionFormula: 'population',
-  errors: [],
+  validationErrors: [],
 };
 
 const excludedRow = {
@@ -73,7 +73,7 @@ const excludedRow = {
   installment1Amount: 300_000,
   installment2Amount: 200_000,
   devolutionFormula: 'population',
-  errors: [{ field: 'censusCode', code: 'unknownUlb', message: 'Unknown ULB.' }],
+  validationErrors: [{ field: 'censusCode', code: 'unknownUlb', message: 'Unknown ULB.' }],
 };
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
