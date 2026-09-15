@@ -450,6 +450,81 @@ describe('AnnualAccountManualReviewService', () => {
     });
   });
 
+  describe('getManualReviewHistoryStats', () => {
+    const adminUser: AuthUser = { _id: 'admin-1', role: 'ADMIN', scope: 'ADMIN' } as AuthUser;
+
+    it('rejects non-ADMIN users', async () => {
+      const stateUser: AuthUser = { _id: 'user-2', role: 'STATE', scope: 'STATE' } as AuthUser;
+
+      await expect(service.getManualReviewHistoryStats({ range: 'all' }, stateUser)).rejects.toThrow(
+        'Only ADMIN users may view the manual-review history',
+      );
+    });
+
+    it('computes the overturn rate and warns once enough requests are decided', async () => {
+      mockManualReviewRequestModel.aggregate.mockReturnValue(
+        mockQuery([
+          { received: 18, pending: 2, approved: 15, rejected: 1, over48hCount: 3, avgResponseHours: 26.4 },
+        ]),
+      );
+
+      const result = await service.getManualReviewHistoryStats({ range: 'all' }, adminUser);
+
+      expect(result).toEqual({
+        range: 'all',
+        received: 18,
+        pending: 2,
+        approved: 15,
+        rejected: 1,
+        over48hCount: 3,
+        avgResponseHours: 26.4,
+        overturnRatePercent: 94,
+        overturnRateWarning: true,
+      });
+    });
+
+    it('suppresses the warning when fewer than 5 requests have been decided, even at 100%', async () => {
+      mockManualReviewRequestModel.aggregate.mockReturnValue(
+        mockQuery([{ received: 2, pending: 0, approved: 2, rejected: 0, over48hCount: 0, avgResponseHours: 5 }]),
+      );
+
+      const result = await service.getManualReviewHistoryStats({ range: 'today' }, adminUser);
+
+      expect(result.overturnRatePercent).toBe(100);
+      expect(result.overturnRateWarning).toBe(false);
+    });
+
+    it('returns zeroed/null stats when nothing matches', async () => {
+      mockManualReviewRequestModel.aggregate.mockReturnValue(mockQuery([]));
+
+      const result = await service.getManualReviewHistoryStats({ range: 'week' }, adminUser);
+
+      expect(result).toEqual({
+        range: 'week',
+        received: 0,
+        pending: 0,
+        approved: 0,
+        rejected: 0,
+        over48hCount: 0,
+        avgResponseHours: null,
+        overturnRatePercent: null,
+        overturnRateWarning: false,
+      });
+    });
+
+    it('omits the requestedAt filter for the "all" range but applies one for "today"', async () => {
+      mockManualReviewRequestModel.aggregate.mockReturnValue(mockQuery([]));
+
+      await service.getManualReviewHistoryStats({ range: 'all' }, adminUser);
+      const allPipeline = mockManualReviewRequestModel.aggregate.mock.calls.at(-1)?.[0];
+      expect(allPipeline[0]).toEqual({ $match: {} });
+
+      await service.getManualReviewHistoryStats({ range: 'today' }, adminUser);
+      const todayPipeline = mockManualReviewRequestModel.aggregate.mock.calls.at(-1)?.[0];
+      expect(todayPipeline[0].$match.requestedAt.$gte).toBeInstanceOf(Date);
+    });
+  });
+
   describe('getManualReviewRequestDetail', () => {
     const adminUser: AuthUser = { _id: 'admin-1', role: 'ADMIN', scope: 'ADMIN' } as AuthUser;
 

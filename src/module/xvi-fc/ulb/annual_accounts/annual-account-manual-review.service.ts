@@ -26,6 +26,10 @@ import type { AuthUser } from '../../../auth/auth-user.interface';
 import { ManualReviewDecisionDto } from './dto/manual-review-decision.dto';
 import { ManualReviewQueueQueryDto } from './dto/manual-review-queue-query.dto';
 import { ManualReviewHistoryQueryDto } from './dto/manual-review-history-query.dto';
+import {
+  ManualReviewHistoryStatsQueryDto,
+  ManualReviewHistoryStatsRange,
+} from './dto/manual-review-history-stats-query.dto';
 import { AnnualAccountsService, AnnualAccountSectionKey, SECTION_LABELS } from './annual_accounts.service';
 import { getPortalUrl } from 'src/core/utils/portal-urls.util';
 
@@ -659,6 +663,94 @@ export class AnnualAccountManualReviewService {
     const total = result?.totalCount?.[0]?.count ?? 0;
 
     return { total, page, pageSize, rows };
+  }
+
+  private static readonly IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000;
+  /** Overturn rate is only surfaced to ADMINs once there's a meaningful sample — a 100% rate off
+   *  one early approval would be a false alarm, not a signal the OCR rule needs re-tuning. */
+  private static readonly OVERTURN_RATE_MIN_DECIDED = 5;
+  private static readonly OVERTURN_RATE_WARNING_THRESHOLD = 50;
+
+  /** Start of "today" or "this week" (Monday) in IST, as the equivalent UTC instant — null for
+   *  'all' (no lower bound). Uses the same IST-shift trick as XviFcService.getSupportHours rather
+   *  than pulling in a timezone library for two date-boundary cases. */
+  private rangeStartUtc(range: ManualReviewHistoryStatsRange): Date | null {
+    if (range === 'all') return null;
+
+    const istNow = new Date(Date.now() + AnnualAccountManualReviewService.IST_OFFSET_MS);
+    const istMidnightToday = Date.UTC(istNow.getUTCFullYear(), istNow.getUTCMonth(), istNow.getUTCDate());
+
+    if (range === 'today') {
+      return new Date(istMidnightToday - AnnualAccountManualReviewService.IST_OFFSET_MS);
+    }
+
+    const daysSinceMonday = (istNow.getUTCDay() + 6) % 7;
+    const istMidnightMonday = istMidnightToday - daysSinceMonday * 24 * 60 * 60 * 1000;
+    return new Date(istMidnightMonday - AnnualAccountManualReviewService.IST_OFFSET_MS);
+  }
+
+  /** Summary counts for the history page's REQUESTED time-range tabs — received/pending/approved/
+   *  rejected, average request→decision turnaround, SLA-breach count, and the overturn rate (share
+   *  of decided requests where the OCR flag turned out to be wrong). */
+  async getManualReviewHistoryStats(dto: ManualReviewHistoryStatsQueryDto, user: AuthUser) {
+    if (user.scope !== Scope.ADMIN) {
+      throw new ForbiddenException('Only ADMIN users may view the manual-review history');
+    }
+
+    const range = dto.range ?? 'all';
+    const rangeStart = this.rangeStartUtc(range);
+    const match: Record<string, unknown> = rangeStart ? { requestedAt: { $gte: rangeStart } } : {};
+
+    const [result] = await this.manualReviewRequestModel
+      .aggregate([
+        { $match: match },
+        {
+          $addFields: {
+            // Same derivation as manualReviewHistoryLookupStages' isBreached — never stored.
+            isBreached: { $lt: ['$dueAt', { $ifNull: ['$decidedAt', '$$NOW'] }] },
+            responseHours: {
+              $cond: [
+                { $ifNull: ['$decidedAt', false] },
+                { $divide: [{ $subtract: ['$decidedAt', '$requestedAt'] }, 1000 * 60 * 60] },
+                null,
+              ],
+            },
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            received: { $sum: 1 },
+            pending: { $sum: { $cond: [{ $eq: ['$status', 'PENDING'] }, 1, 0] } },
+            approved: { $sum: { $cond: [{ $eq: ['$status', 'APPROVED'] }, 1, 0] } },
+            rejected: { $sum: { $cond: [{ $eq: ['$status', 'RETURNED'] }, 1, 0] } },
+            over48hCount: { $sum: { $cond: ['$isBreached', 1, 0] } },
+            // $avg ignores the null entries left by still-PENDING requests.
+            avgResponseHours: { $avg: '$responseHours' },
+          },
+        },
+      ])
+      .exec();
+
+    const approved = result?.approved ?? 0;
+    const rejected = result?.rejected ?? 0;
+    const decided = approved + rejected;
+    const overturnRatePercent = decided > 0 ? Math.round((approved / decided) * 100) : null;
+
+    return {
+      range,
+      received: result?.received ?? 0,
+      pending: result?.pending ?? 0,
+      approved,
+      rejected,
+      over48hCount: result?.over48hCount ?? 0,
+      avgResponseHours: result?.avgResponseHours != null ? Math.round(result.avgResponseHours * 10) / 10 : null,
+      overturnRatePercent,
+      overturnRateWarning:
+        decided >= AnnualAccountManualReviewService.OVERTURN_RATE_MIN_DECIDED &&
+        overturnRatePercent !== null &&
+        overturnRatePercent > AnnualAccountManualReviewService.OVERTURN_RATE_WARNING_THRESHOLD,
+    };
   }
 
   async dumpManualReviewHistoryToExcel(dto: ManualReviewHistoryQueryDto, user: AuthUser): Promise<ExcelJS.Buffer> {
