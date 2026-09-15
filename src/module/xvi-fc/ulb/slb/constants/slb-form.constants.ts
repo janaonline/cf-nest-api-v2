@@ -14,7 +14,7 @@ import type { SlbTypedFieldConfig } from '../helpers/slb-form-json.helpers';
 export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
   {
     key: 'perCapitaWaterSupply',
-    label: 'Per capita supply of water (lpcd)',
+    label: 'Per capita supply of water (lpcd) -- dev',
     position: 1,
     formFieldType: 'actualTarget',
     required: true,
@@ -280,9 +280,9 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
         message: 'Value cannot exceed 100%.',
       },
       {
-        name: 'actualLessThanOrEqualToTarget',
+        name: 'targetLessThanOrEqualToActual',
         validator: null,
-        message: 'Actual value cannot exceed the target value.',
+        message: 'Target value cannot exceed the actual value.',
       },
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
@@ -1120,9 +1120,9 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
         message: 'Value cannot exceed 9999 Nos./Year.',
       },
       {
-        name: 'actualLessThanOrEqualToTarget',
+        name: 'targetLessThanOrEqualToActual',
         validator: null,
-        message: 'Actual value cannot exceed the target value.',
+        message: 'Target value cannot exceed the actual value.',
       },
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
