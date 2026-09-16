@@ -13,6 +13,20 @@ import { XviFcEligibilityExemptionFormLog } from 'src/schemas/xvi-fc/state/xvi-f
 import { XviFcAnnualAccount } from 'src/schemas/xvi-fc/annual-account.schema';
 import { RequestExemptionService } from './request-exemption.service';
 import { SaveRequestExemptionDto } from './dto/save-request-exemption.dto';
+import { RequestExemptionFormJsonConfigService } from './services/form-json/request-exemption-form-json.service';
+
+const REQUEST_EXEMPTION_FIELDS_FIXTURE = [
+  { fieldTypes: ['RE_MAIN_FORM_FIELDS'], formFieldType: 'autocomplete', key: 'ulb', label: 'ULB' },
+  {
+    fieldTypes: ['RE_MAIN_FORM_FIELDS'],
+    formFieldType: 'select',
+    key: 'reasonForExemption',
+    label: 'Reason for Exemption',
+    options: [],
+  },
+  { fieldTypes: ['RE_MAIN_FORM_FIELDS'], formFieldType: 'textarea', key: 'supportingDetails', label: 'Supporting Details' },
+  { fieldTypes: ['RE_MAIN_FORM_FIELDS'], formFieldType: 'file', key: 'supportingFile', label: 'Supporting Document' },
+];
 
 function q<T>(value: T) {
   return {
@@ -96,6 +110,7 @@ describe('RequestExemptionService', () => {
   let ulbModel: { find: jest.Mock };
   let annualAccountModel: { find: jest.Mock };
   let fileInfoNormalizer: { normalizeInboundFileInfo: jest.Mock };
+  let formJsonConfig: { loadFields: jest.Mock };
   let connection: { startSession: jest.Mock };
   let session: ReturnType<typeof makeSession>;
 
@@ -125,6 +140,9 @@ describe('RequestExemptionService', () => {
     fileInfoNormalizer = {
       normalizeInboundFileInfo: jest.fn().mockReturnValue({ file: null, errors: [] }),
     };
+    formJsonConfig = {
+      loadFields: jest.fn().mockResolvedValue(REQUEST_EXEMPTION_FIELDS_FIXTURE),
+    };
     connection = {
       startSession: jest.fn().mockResolvedValue(session),
     };
@@ -139,6 +157,7 @@ describe('RequestExemptionService', () => {
         { provide: getModelToken(XviFcAnnualAccount.name), useValue: annualAccountModel },
         { provide: getConnectionToken(), useValue: connection },
         { provide: FileInfoNormalizerService, useValue: fileInfoNormalizer },
+        { provide: RequestExemptionFormJsonConfigService, useValue: formJsonConfig },
       ],
     }).compile();
 

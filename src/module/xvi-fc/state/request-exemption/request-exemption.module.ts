@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
+import { FormJsonModule } from 'src/master/form-json/form-json.module';
 import { XviFcCommonModule } from 'src/module/xvi-fc/common/xvi-fc-common.module';
 import { State, StateSchema } from 'src/schemas/state.schema';
 import { Ulb, UlbSchema } from 'src/schemas/ulb.schema';
@@ -14,6 +15,7 @@ import {
 import { XviFcAnnualAccount, XviFcAnnualAccountSchema } from 'src/schemas/xvi-fc/annual-account.schema';
 import { RequestExemptionController } from './request-exemption.controller';
 import { RequestExemptionService } from './request-exemption.service';
+import { RequestExemptionFormJsonConfigService } from './services/form-json/request-exemption-form-json.service';
 
 @Module({
   imports: [
@@ -25,9 +27,10 @@ import { RequestExemptionService } from './request-exemption.service';
       { name: Ulb.name, schema: UlbSchema },
     ]),
     XviFcCommonModule,
+    FormJsonModule,
   ],
   controllers: [RequestExemptionController],
-  providers: [RequestExemptionService],
+  providers: [RequestExemptionService, RequestExemptionFormJsonConfigService],
   exports: [RequestExemptionService],
 })
 export class RequestExemptionModule {}

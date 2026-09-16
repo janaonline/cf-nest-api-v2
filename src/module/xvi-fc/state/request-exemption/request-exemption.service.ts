@@ -27,10 +27,9 @@ import {
   XviFcEligibilityExemptionFormLogDocument,
 } from 'src/schemas/xvi-fc/state/xvi-fc-eligibility-exemption-form-log.schema';
 import { XviFcAnnualAccount, XviFcAnnualAccountDocument } from 'src/schemas/xvi-fc/annual-account.schema';
-import {
-  REQUEST_EXEMPTION_FIELDS,
-  REQUEST_EXEMPTION_REASON_LABELS,
-} from './constants/request-exemption-fields.constants';
+import { REQUEST_EXEMPTION_REASON_LABELS } from './constants/request-exemption-fields.constants';
+import { getFieldsByType } from './helpers/request-exemption-form-json.helpers';
+import { RequestExemptionFormJsonConfigService } from './services/form-json/request-exemption-form-json.service';
 import { RequestExemptionDataDto, SaveRequestExemptionDto } from './dto/save-request-exemption.dto';
 import type { GetRequestExemptionListQueryDto } from './dto/get-request-exemption-list-query.dto';
 import type {
@@ -99,6 +98,7 @@ export class RequestExemptionService {
     @InjectConnection()
     private readonly connection: Connection,
     private readonly fileInfoNormalizer: FileInfoNormalizerService,
+    private readonly formJsonConfig: RequestExemptionFormJsonConfigService,
   ) {}
 
   /**
@@ -116,7 +116,8 @@ export class RequestExemptionService {
 
     const state = await this.stateModel.findById(stateId, { name: 1 }).lean<{ name?: string }>().exec();
     const permissions = this.buildFormPermissions(user, stateId);
-    const fields: HydratedFieldConfig[] = REQUEST_EXEMPTION_FIELDS.map((field) => ({
+    const rawFields = await this.formJsonConfig.loadFields(yearId);
+    const fields: HydratedFieldConfig[] = getFieldsByType(rawFields, 'RE_MAIN_FORM_FIELDS').map((field) => ({
       ...field,
       value: field.value ?? null,
     }));
