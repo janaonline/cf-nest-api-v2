@@ -1,0 +1,64 @@
+# CodeRabbit configuration
+# https://docs.coderabbit.ai/reference/configuration
+
+language: en-US
+early_access: false
+
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: true
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - main
+
+  path_filters:
+    - "!dist/**"
+    - "!coverage/**"
+    - "!node_modules/**"
+    - "!**/*.lock"
+    - "!package-lock.json"
+
+  path_instructions:
+    - path: "src/module/xvi-fc/**"
+      instructions: >
+        This is the 16th Finance Commission module. Flag any change to
+        ineligibility/eligibility messages (module/ulb-eligibility) that isn't
+        mirrored on the frontend (login.component.ts matches the message
+        verbatim). Flag any new cron or scheduled job that isn't gated behind
+        an env flag the way XVIFC_REMINDER_CRONS_ENABLED gates the existing
+        reminder crons, unless it is explicitly event-triggered like
+        FormReturnedNotificationService. Confirm notification/email-sending
+        code never throws in a way that could fail the underlying business
+        transaction.
+
+    - path: "src/schemas/**"
+      instructions: >
+        Schema changes to Mongoose models should be checked for backward
+        compatibility with existing documents (no new required fields without
+        a migration/backfill plan) and for whether they belong in the main DB
+        or the digitization_db connection.
+
+    - path: "src/module/auth/**"
+      instructions: >
+        Authentication and authorization code. Check that new routes are
+        annotated with @Public() only when deliberately unauthenticated, that
+        RolesGuard/@Roles() are applied consistently, and that no secrets or
+        tokens are logged.
+
+    - path: "scripts/**"
+      instructions: >
+        One-off/backfill scripts should be idempotent and safe to re-run,
+        matching the pattern used by existing migrate:* scripts.
+
+  tools:
+    eslint:
+      enabled: true
+
+chat:
+  auto_reply: true
