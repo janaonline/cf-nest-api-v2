@@ -1,10 +1,13 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { FORM_STATUS, type FormStatusType } from 'src/common/constants/form-status.constants';
+import * as ExcelJS from 'exceljs';
+import { FORM_STATUS, getFormStatusLabel, type FormStatusType } from 'src/common/constants/form-status.constants';
 import { toObjectIdString } from 'src/common/utils/objectid.util';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
-import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
+import { Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
+import { getEffectivePermissions } from 'src/module/auth/permissions.map';
+import { resolveStateScopeFilter } from 'src/module/xvi-fc/common/utils/xvi-fc-scope-filter.util';
 import { State, type StateDocument } from 'src/schemas/state.schema';
 import { Ulb, type UlbDocument } from 'src/schemas/ulb.schema';
 import { Year, type YearDocument } from 'src/schemas/year.schema';
@@ -30,8 +33,10 @@ import {
   type XviFcUnspentBalanceDisclosureDocument,
 } from 'src/schemas/xvi-fc/unspent-balance-disclosure.schema';
 import { XviFcBankAccount, type XviFcBankAccountDocument } from 'src/schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
+import { SlbForm, type SlbFormDocument } from 'src/schemas/xvi-fc/ulb/slb-form.schema';
 import { xviFcSuccess } from '../../common/response/xvi-fc-response.util';
 import type { GetStateDashboardParamsDto } from './dto/get-state-dashboard-params.dto';
+import type { ExportAllFormsQueryDto } from './dto/export-all-forms-query.dto';
 import {
   STATE_DASHBOARD_AMOUNT_UNIT,
   STATE_DASHBOARD_CLAIM_LETTER_KEY,
@@ -169,6 +174,8 @@ export class StateDashboardService {
     private readonly bankAccountModel: Model<XviFcBankAccountDocument>,
     @InjectModel(XviFcUnspentBalanceDisclosure.name)
     private readonly unspentBalanceModel: Model<XviFcUnspentBalanceDisclosureDocument>,
+    @InjectModel(SlbForm.name)
+    private readonly slbFormModel: Model<SlbFormDocument>,
   ) {}
 
   async getDashboard(params: GetStateDashboardParamsDto, user: AuthUser): Promise<StateDashboardApiResponse> {
@@ -222,6 +229,222 @@ export class StateDashboardService {
     };
 
     return xviFcSuccess('State dashboard fetched successfully', dashboardData);
+  }
+
+  /**
+   * Combined "every ULB × every ULB-facing form" Excel workbook — one row per ULB with its status
+   * on each of Audited/Provisional Annual Account, PFMS Bank Account, and SLB, for the "Export
+   * Data" button on the Review ULB Submissions page. Always the full, unfiltered ULB list for the
+   * state/year — unlike the per-form exports it replaces, this ignores the page's own
+   * form/bucket/search state.
+   */
+  async exportAllFormsCsv(dto: ExportAllFormsQueryDto, user: AuthUser): Promise<{ fileName: string; buffer: Buffer }> {
+    if (user.scope !== Scope.STATE && user.scope !== Scope.ADMIN) {
+      throw new ForbiddenException('Only STATE or ADMIN users may export ULB submissions');
+    }
+    const perms = getEffectivePermissions(user);
+    if (!perms.includes(Permission.REVIEW_ULB_SUBMISSIONS)) {
+      throw new ForbiddenException('You do not have permission to review ULB submissions');
+    }
+
+    const stateId = resolveStateScopeFilter(user, dto.stateId);
+    const yearObjectId = new Types.ObjectId(dto.designYearId);
+
+    const ulbMatch: Record<string, unknown> = { isActive: true };
+    if (stateId) ulbMatch.state = stateId;
+
+    const [ulbs, stateDoc, yearDoc] = await Promise.all([
+      this.ulbModel
+        .find(ulbMatch)
+        .select({ _id: 1, name: 1, censusCode: 1, sbCode: 1 })
+        .sort({ name: 1 })
+        .lean<Array<{ _id: Types.ObjectId; name: string; censusCode?: string; sbCode?: string }>>()
+        .exec(),
+      stateId
+        ? this.stateModel.findOne({ _id: stateId, isActive: true }).select({ name: 1 }).lean<{ name: string }>().exec()
+        : null,
+      this.yearModel.findOne({ _id: yearObjectId }).select({ year: 1 }).lean<{ year: string }>().exec(),
+    ]);
+
+    // stateId is only non-null when it was actually resolved (the STATE user's own state, or an
+    // ADMIN-supplied stateId) — a miss here means that state no longer exists/is inactive, not
+    // "no state was requested". Left unchecked, the report would silently mislabel itself "State:
+    // All States" instead of surfacing that the requester's own state record is gone.
+    if (stateId && !stateDoc) {
+      throw new NotFoundException('The requested State was not found.');
+    }
+    if (!yearDoc) {
+      throw new NotFoundException('The requested XVI-FC design year was not found.');
+    }
+
+    const ulbIds = ulbs.map((ulb) => ulb._id);
+
+    const [annualAccountRecords, bankAccountRecords, slbRecords] = await Promise.all([
+      this.annualAccountModel
+        .find({ ulb: { $in: ulbIds }, design_year: yearObjectId })
+        .select({ _id: 0, ulb: 1, sectionType: 1, form_status_id: 1 })
+        .lean<Array<{ ulb: Types.ObjectId; sectionType: 'audited' | 'unaudited'; form_status_id?: number | null }>>()
+        .exec(),
+      this.bankAccountModel
+        .find({ ulb: { $in: ulbIds }, designYear: yearObjectId })
+        .select({ _id: 0, ulb: 1, currentFormStatus: 1 })
+        .lean<Array<{ ulb: Types.ObjectId; currentFormStatus?: number | null }>>()
+        .exec(),
+      this.slbFormModel
+        .find({ ulb: { $in: ulbIds }, year: yearObjectId })
+        .select({ _id: 0, ulb: 1, currentFormStatus: 1 })
+        .lean<Array<{ ulb: Types.ObjectId; currentFormStatus?: number | null }>>()
+        .exec(),
+    ]);
+
+    const auditedByUlb = new Map<string, number>();
+    const provisionalByUlb = new Map<string, number>();
+    for (const record of annualAccountRecords) {
+      const map = record.sectionType === 'audited' ? auditedByUlb : provisionalByUlb;
+      map.set(record.ulb.toString(), record.form_status_id ?? FORM_STATUS.NOT_STARTED);
+    }
+    const bankAccountByUlb = new Map(
+      bankAccountRecords.map((r) => [r.ulb.toString(), r.currentFormStatus ?? FORM_STATUS.NOT_STARTED]),
+    );
+    const slbByUlb = new Map(slbRecords.map((r) => [r.ulb.toString(), r.currentFormStatus ?? FORM_STATUS.NOT_STARTED]));
+
+    const headers = ['ULB Name', 'Census Code', 'Audited Form', 'Provisional Form', 'PFMS Bank Account', 'SLB Form'];
+    const rows = ulbs.map((ulb) => {
+      const id = ulb._id.toString();
+      return [
+        ulb.name,
+        ulb.censusCode || ulb.sbCode || '',
+        getFormStatusLabel(auditedByUlb.get(id) ?? FORM_STATUS.NOT_STARTED),
+        getFormStatusLabel(provisionalByUlb.get(id) ?? FORM_STATUS.NOT_STARTED),
+        getFormStatusLabel(bankAccountByUlb.get(id) ?? FORM_STATUS.NOT_STARTED),
+        getFormStatusLabel(slbByUlb.get(id) ?? FORM_STATUS.NOT_STARTED),
+      ];
+    });
+
+    const stateName = stateDoc?.name ?? 'All States';
+    const fyLabel = yearDoc?.year ? `FY ${yearDoc.year}` : '';
+    const now = new Date();
+
+    const buffer = await this.buildAllFormsWorkbookBuffer(headers, rows, stateName, fyLabel, now);
+    const fileName = `${this.slugifyForFileName(stateName)}_all_ulb_submissions_${this.formatFileDate(now)}.xlsx`;
+
+    return { fileName, buffer };
+  }
+
+  /** Title block (brand colors) + colored header row + footer contact strip, around the plain
+   *  ULB × form-status table — kept as its own method since exportAllFormsCsv's own body is
+   *  already long enough without the styling detail mixed in. */
+  private async buildAllFormsWorkbookBuffer(
+    headers: string[],
+    rows: string[][],
+    stateName: string,
+    fyLabel: string,
+    now: Date,
+  ): Promise<Buffer> {
+    const columnWidths = [32, 16, 20, 20, 20, 16];
+    const lastColLetter = String.fromCharCode('A'.charCodeAt(0) + columnWidths.length - 1);
+
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('ULB Submissions');
+    sheet.columns = columnWidths.map((width) => ({ width }));
+
+    // Every row number below is tracked explicitly (never via addRow's own auto-increment) so the
+    // title/subtitle/meta block, the blank spacer rows, and the data table can't drift relative
+    // to each other regardless of how ExcelJS internally accounts for touched-but-empty rows.
+    let rowNum = 1;
+
+    sheet.mergeCells(`A${rowNum}:${lastColLetter}${rowNum}`);
+    const titleCell = sheet.getCell(`A${rowNum}`);
+    titleCell.value = `City Finance - 16th Finance Commission${fyLabel ? ` - ${fyLabel}` : ''}`;
+    titleCell.font = { bold: true, size: 14, color: { argb: 'FFFFFFFF' } };
+    titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F4C81' } };
+    titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+    sheet.getRow(rowNum).height = 26;
+    rowNum++;
+
+    sheet.mergeCells(`A${rowNum}:${lastColLetter}${rowNum}`);
+    const subtitleCell = sheet.getCell(`A${rowNum}`);
+    subtitleCell.value = 'ULB Submissions - All Forms';
+    subtitleCell.font = { bold: true, size: 12, color: { argb: 'FFFFFFFF' } };
+    subtitleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF3B6EA5' } };
+    subtitleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+    sheet.getRow(rowNum).height = 20;
+    rowNum++;
+
+    sheet.mergeCells(`A${rowNum}:${lastColLetter}${rowNum}`);
+    const metaCell = sheet.getCell(`A${rowNum}`);
+    metaCell.value = `State: ${stateName}  |  Generated on: ${this.formatIstTimestamp(now)}`;
+    metaCell.font = { italic: true, size: 10, color: { argb: 'FF555555' } };
+    metaCell.alignment = { horizontal: 'center', vertical: 'middle' };
+    rowNum++;
+
+    rowNum++; // blank spacer row before the table
+
+    headers.forEach((label, colIndex) => {
+      const cell = sheet.getCell(rowNum, colIndex + 1);
+      cell.value = label;
+      cell.font = { bold: true, color: { argb: 'FF0D6EFD' } };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE7F1FF' } };
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    });
+    rowNum++;
+
+    for (const row of rows) {
+      row.forEach((value, colIndex) => {
+        sheet.getCell(rowNum, colIndex + 1).value = value;
+      });
+      rowNum++;
+    }
+
+    rowNum++; // blank spacer row before the footer
+
+    sheet.mergeCells(`A${rowNum}:${lastColLetter}${rowNum}`);
+    const footerCell = sheet.getCell(`A${rowNum}`);
+    footerCell.value =
+      'This is a system-generated report. For questions on the data, please contact: 16fc.grant@cityfinance.in';
+    footerCell.font = { italic: true, size: 9, color: { argb: 'FF777777' } };
+    footerCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF4F6F9' } };
+    footerCell.alignment = { horizontal: 'center', vertical: 'middle' };
+
+    const excelBuffer = await workbook.xlsx.writeBuffer();
+    return Buffer.from(excelBuffer as ArrayBuffer);
+  }
+
+  /** "16-Sep-2026 8:00AM" — IST, matching every other reminder/digest email's timezone convention. */
+  private formatIstTimestamp(date: Date): string {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Kolkata',
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    }).formatToParts(date);
+    const byType = Object.fromEntries(parts.map((p) => [p.type, p.value]));
+    const meridiem = (byType['dayPeriod'] ?? '').toUpperCase();
+    return `${byType['day']}-${byType['month']}-${byType['year']} ${byType['hour']}:${byType['minute']}${meridiem}`;
+  }
+
+  /** "25_02_2026" (IST) — the date component of the dynamic filename. */
+  private formatFileDate(date: Date): string {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Kolkata',
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+    }).formatToParts(date);
+    const byType = Object.fromEntries(parts.map((p) => [p.type, p.value]));
+    return `${byType['day']}_${byType['month']}_${byType['year']}`;
+  }
+
+  /** "Andhra Pradesh" → "andhra_pradesh", for the dynamic filename's state segment. */
+  private slugifyForFileName(name: string): string {
+    return name
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '');
   }
 
   private hasStateAccess(user: AuthUser, requestedStateId: string): boolean {
