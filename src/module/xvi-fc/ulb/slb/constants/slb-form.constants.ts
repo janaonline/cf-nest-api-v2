@@ -14,7 +14,7 @@ import type { SlbTypedFieldConfig } from '../helpers/slb-form-json.helpers';
 export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
   {
     key: 'perCapitaWaterSupply',
-    label: 'Per capita supply of water (lpcd)',
+    label: 'Per capita supply of water (lpcd) -- dev',
     position: 1,
     formFieldType: 'actualTarget',
     required: true,
@@ -280,9 +280,9 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
         message: 'Value cannot exceed 100%.',
       },
       {
-        name: 'actualLessThanOrEqualToTarget',
+        name: 'targetLessThanOrEqualToActual',
         validator: null,
-        message: 'Actual value cannot exceed the target value.',
+        message: 'Target value cannot exceed the actual value.',
       },
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
@@ -1120,9 +1120,9 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
         message: 'Value cannot exceed 9999 Nos./Year.',
       },
       {
-        name: 'actualLessThanOrEqualToTarget',
+        name: 'targetLessThanOrEqualToActual',
         validator: null,
-        message: 'Actual value cannot exceed the target value.',
+        message: 'Target value cannot exceed the actual value.',
       },
     ],
     fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
@@ -1171,10 +1171,34 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     },
   },
   {
+    key: 'supportingDocumentType',
+    label: 'Supporting Document',
+    formFieldType: 'radio',
+    required: true,
+    hintText: '(Gazette notification, source document, SLB records)',
+    radioLayout: 'vertical',
+    options: [
+      { label: 'I have a source document for these figures', id: 'HAS_SOURCE_DOCUMENT' },
+      { label: "I don't have a source document", id: 'NO_SOURCE_DOCUMENT' },
+    ],
+    validations: [
+      {
+        name: 'required',
+        validator: null,
+        message: 'Please select a supporting document option.',
+      },
+    ],
+    fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
+    meta: {
+      section: 'Self Declaration',
+    },
+  },
+  {
     key: 'supportingDocumentFile',
     label: 'Supporting Document',
     formFieldType: 'file',
     required: true,
+    hideLabel: true,
     folderPathKey: 'slb/supporting-document',
     allowedFileTypes: ['pdf', 'jpg', 'jpeg', 'png'],
     maxFileSize: 20,
