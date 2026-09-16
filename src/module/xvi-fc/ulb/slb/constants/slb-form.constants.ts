@@ -1171,10 +1171,34 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     },
   },
   {
+    key: 'supportingDocumentType',
+    label: 'Supporting Document',
+    formFieldType: 'radio',
+    required: true,
+    hintText: '(Gazette notification, source document, SLB records)',
+    radioLayout: 'vertical',
+    options: [
+      { label: 'I have a source document for these figures', id: 'HAS_SOURCE_DOCUMENT' },
+      { label: "I don't have a source document", id: 'NO_SOURCE_DOCUMENT' },
+    ],
+    validations: [
+      {
+        name: 'required',
+        validator: null,
+        message: 'Please select a supporting document option.',
+      },
+    ],
+    fieldTypes: ['SLB_MAIN_FORM_FIELDS'],
+    meta: {
+      section: 'Self Declaration',
+    },
+  },
+  {
     key: 'supportingDocumentFile',
     label: 'Supporting Document',
     formFieldType: 'file',
     required: true,
+    hideLabel: true,
     folderPathKey: 'slb/supporting-document',
     allowedFileTypes: ['pdf', 'jpg', 'jpeg', 'png'],
     maxFileSize: 20,
