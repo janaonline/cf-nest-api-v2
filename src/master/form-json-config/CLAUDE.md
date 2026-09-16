@@ -75,6 +75,7 @@ is that registry.
 | 31 | Annual Account — Provisional/Unaudited | `module/xvi-fc/ulb/annual_accounts` (`sectionType: 'unaudited'`) |
 | 32 | SLB | `module/xvi-fc/ulb/slb` |
 | 33 | Bank Account / PFMS | `module/xvi-fc/ulb/bank-account` |
+| 34 | Request Exemption | `module/xvi-fc/state/request-exemption` — the discretionary STATE→MoHUA exemption flow (not part of Dynamic Year Access's automatic mechanism; no `formJsonConfig` row) |
 
 ## How to add a new form to Dynamic Year Access
 
