@@ -394,6 +394,22 @@ export class DynamicFormValidationService {
       });
     }
 
+    // cross-field: target must be less than or equal to actual (indicators where lower is better,
+    // e.g. non-revenue water, water logging incidence — target is the improvement goal to fall to)
+    const targetLteActualV = findV('targetLessThanOrEqualToActual');
+    if (
+      targetLteActualV &&
+      typeof pair.actual === 'number' &&
+      typeof pair.target === 'number' &&
+      pair.target > pair.actual
+    ) {
+      errors.push({
+        field: `${key}.target`,
+        message: targetLteActualV.message,
+        code: 'targetLessThanOrEqualToActual',
+      });
+    }
+
     return errors;
   }
 
