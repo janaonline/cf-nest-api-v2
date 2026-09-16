@@ -89,6 +89,7 @@ export class AnnualAccountManualReviewService {
     const { anchor, sectionDoc } = await this.annualAccountsService.resolveSectionDocument(id, section);
     await this.annualAccountsService.validateViewAccess(anchor, user);
     if (!sectionDoc) throw new NotFoundException('Section not found');
+    await this.annualAccountsService.assertNotBlockedByPendingExemption(anchor.ulb, anchor.design_year, section);
 
     const docSlot = (sectionDoc.documents ?? []).find((d: any) => d.docId === docId);
     if (!docSlot?.currentUpload) throw new NotFoundException('Document not found in this section');

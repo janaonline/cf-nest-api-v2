@@ -19,11 +19,16 @@ everything else.
   the cutoff instead of `dateOfConstitution`.
 - `claim-eligibility-evaluator.service.ts` — the `EXEMPTED` eligibility bucket.
 - `exemption-resolver.service.ts` — the shared "is this (ulb, formId, year) exempt, and why"
-  resolver every read-only display consumer (e.g. the SLB review table) should call instead of
-  re-deriving the doc-exists-or-no-doc-and-exempt check itself. Wraps `peekEntry` only, never
-  writes. Scoped to the automatic mechanism only — a future discretionary STATE→MoHUA
-  exemption-request flow (unbuilt; see the ADR's "Deferred" section) would be a second source this
-  resolver folds in later, not a reason to bypass it today.
+  resolver every read-only display consumer (e.g. the SLB review table, `AnnualAccountsService`'s
+  `listUlbSubmissions`/`resolveExemptionStatusForResponse`) should call instead of re-deriving the
+  doc-exists-or-no-doc-and-exempt check itself. Two independent sources, both read-only:
+  `resolveBulk`/`resolveBulk` wraps `peekEntry` for the AUTOMATIC mechanism (this file's own
+  subject); `resolveDiscretionary`/`resolveDiscretionaryBulk` reads `xvifc_eligibility_exemptions`
+  directly for the discretionary STATE→MoHUA Request Exemption flow
+  (`module/xvi-fc/state/request-exemption` / `module/xvi-fc/mohua/request-exemption`) — a
+  genuinely separate mechanism (different collection, different actors, different lifecycle), not
+  folded into `Ulb.yearAccess` itself; this service is just the one place both are read from. Never
+  writes to either source.
 - `../utils/design-year-label.util.ts` — `formatYearLabel`/`parseStartCalendarYear`, the
   `number ⇄ "YYYY-YY"` conversion every piece below relies on.
 - `../constants/xvifc-cycle.constants.ts` — `isWithinXvifcCycle`, the fixed 2026-27…2030-31 award
@@ -114,9 +119,13 @@ entry; every other year recomputes lazily the next time something touches it.
 
 ## Invariants worth knowing before you change adjacent code
 
-- **Golden rule**: if a real form document already exists for `(ulb, year, form)`, none of this ever
-  touches it — no automatic re-creation, no re-classification. An already-started ULB a state wants
-  excused goes through the separate discretionary STATE→MoHUA flow (not built yet), not this one.
+- **Golden rule**: if a real form document already exists for `(ulb, year, form)`, none of this
+  automatic mechanism ever touches it — no automatic re-creation, no re-classification. An
+  already-started ULB a state wants excused instead goes through the separate discretionary
+  STATE→MoHUA Request Exemption flow (`module/xvi-fc/state/request-exemption` +
+  `module/xvi-fc/mohua/request-exemption`) — built for Audited/Provisional AFS (formIds 30/31);
+  MoHUA's approve there *does* block on (not silently override) an already-started target section,
+  via the same "real progress" check, rather than the automatic path's blanket hands-off rule.
 - Once an entry is materialized, `yearEnabled`/`disabledFormIds` are read directly. No code path
   falls back to `dateOfConstitution` or any other condition once `yearAccess[label]` exists — with
   one deliberate exception: an admin changing `startYear` itself invalidates the whole map (see
@@ -128,8 +137,15 @@ entry; every other year recomputes lazily the next time something touches it.
   against the underlying `{ulb, designYear}` unique index otherwise letting a second submission in
   a different year create an ambiguous duplicate — see `BankAccountService.assertNoCrossYearBankAccountRecord`.
 - `FORM_STATUS.EXEMPTED_ACKNOWLEDGED` (`src/common/constants/form-status.constants.ts`) is terminal
-  and ownerless — set once, automatically, by the exempted form's own service; never a manual
-  ULB/STATE/MoHUA action.
+  and ownerless. One writer only: this mechanism's own automatic materialization (e.g.
+  `SlbService.materializeExemptionStubIfNeeded`). `RequestExemptionMohuaService.approve` (the
+  discretionary STATE→MoHUA flow) deliberately does **not** write this status, or anything else,
+  into a target form's own collection — an earlier version did, and it repeatedly conflicted with
+  that collection's own invariants (e.g. Annual Accounts' `sectionType: 'audited'` universal anchor);
+  see `RequestExemptionMohuaService`'s own class-level doc-comment. A MoHUA-approved discretionary
+  exemption is a pure display-only overlay instead — `resolveDiscretionary`'s lookup is the only
+  source of truth for it, read directly by `listUlbSubmissions` and the ULB-facing exemption banner,
+  never by checking this status.
 
 ## Before changing this, read the ADR
 
