@@ -2,6 +2,7 @@ import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { Types } from 'mongoose';
+import * as ExcelJS from 'exceljs';
 import { FORM_STATUS, type FormStatusType } from 'src/common/constants/form-status.constants';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { AccessLevel, Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
@@ -21,6 +22,7 @@ import {
 import { SFC_STATUS_FORM_TYPE, XviFcSfcStatus } from 'src/schemas/xvi-fc/state/sfc-status.schema';
 import { XviFcUnspentBalanceDisclosure } from 'src/schemas/xvi-fc/unspent-balance-disclosure.schema';
 import { XviFcBankAccount } from 'src/schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
+import { SlbForm } from 'src/schemas/xvi-fc/ulb/slb-form.schema';
 import {
   STATE_DASHBOARD_AMOUNT_UNIT,
   STATE_DASHBOARD_CLAIM_LETTER_KEY,
@@ -52,6 +54,7 @@ import type {
 
 interface MockQuery<T> {
   select: jest.Mock;
+  sort: jest.Mock;
   lean: jest.Mock;
   exec: jest.Mock<Promise<T>, []>;
 }
@@ -69,10 +72,12 @@ interface TestUlbFormSnapshot {
 function queryResult<T>(value: T): MockQuery<T> {
   const query = {
     select: jest.fn(),
+    sort: jest.fn(),
     lean: jest.fn(),
     exec: jest.fn<Promise<T>, []>().mockResolvedValue(value),
   };
   query.select.mockReturnValue(query);
+  query.sort.mockReturnValue(query);
   query.lean.mockReturnValue(query);
   return query;
 }
@@ -121,6 +126,7 @@ describe('StateDashboardService', () => {
   const annualAccountModel = { find: jest.fn() };
   const bankAccountModel = { find: jest.fn() };
   const unspentBalanceModel = { find: jest.fn() };
+  const slbFormModel = { find: jest.fn() };
 
   let service: StateDashboardService;
 
@@ -209,6 +215,7 @@ describe('StateDashboardService', () => {
     annualAccountModel.find.mockReturnValue(queryResult([]));
     bankAccountModel.find.mockReturnValue(queryResult([]));
     unspentBalanceModel.find.mockReturnValue(queryResult([]));
+    slbFormModel.find.mockReturnValue(queryResult([]));
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -223,6 +230,7 @@ describe('StateDashboardService', () => {
         { provide: getModelToken(XviFcAnnualAccount.name), useValue: annualAccountModel },
         { provide: getModelToken(XviFcBankAccount.name), useValue: bankAccountModel },
         { provide: getModelToken(XviFcUnspentBalanceDisclosure.name), useValue: unspentBalanceModel },
+        { provide: getModelToken(SlbForm.name), useValue: slbFormModel },
       ],
     }).compile();
 
@@ -1803,6 +1811,118 @@ describe('StateDashboardService', () => {
         const { data } = await fetchDashboard();
         expect(JSON.stringify(data)).not.toContain('stack');
       });
+    });
+  });
+
+  describe('exportAllFormsCsv()', () => {
+    const ulbA = new Types.ObjectId();
+    const ulbB = new Types.ObjectId();
+
+    beforeEach(() => {
+      ulbModel.find.mockReturnValue(
+        queryResult([
+          { _id: ulbA, name: 'Achalpur Municipal Council', censusCode: '802685' },
+          { _id: ulbB, name: 'Beta Nagar Panchayat', censusCode: '', sbCode: 'SB-42' },
+        ]),
+      );
+    });
+
+    it('rejects a scope that is neither STATE nor ADMIN', async () => {
+      await expect(
+        service.exportAllFormsCsv({ designYearId: yearId }, makeUser({ scope: Scope.ULB })),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('rejects a STATE user lacking the REVIEW_ULB_SUBMISSIONS permission', async () => {
+      await expect(
+        service.exportAllFormsCsv({ designYearId: yearId }, makeUser({ xviFcSubrole: 'viewer' })),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it("404s when the requester's own state no longer exists/is inactive", async () => {
+      stateModel.findOne.mockReturnValue(queryResult(null));
+
+      await expect(
+        service.exportAllFormsCsv({ designYearId: yearId }, makeUser({ xviFcSubrole: 'admin' })),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('404s when the design year does not exist', async () => {
+      yearModel.findOne.mockReturnValue(queryResult(null));
+
+      await expect(
+        service.exportAllFormsCsv({ designYearId: yearId }, makeUser({ xviFcSubrole: 'admin' })),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('builds a branded Excel workbook with one row per ULB, defaulting missing forms to Not Started', async () => {
+      annualAccountModel.find.mockReturnValue(
+        queryResult([
+          { ulb: ulbA, sectionType: 'audited', form_status_id: FORM_STATUS.IN_PROGRESS },
+          { ulb: ulbA, sectionType: 'unaudited', form_status_id: FORM_STATUS.UNDER_REVIEW_BY_STATE },
+        ]),
+      );
+      bankAccountModel.find.mockReturnValue(
+        queryResult([{ ulb: ulbA, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }]),
+      );
+      slbFormModel.find.mockReturnValue(queryResult([]));
+
+      const { buffer, fileName } = await service.exportAllFormsCsv(
+        { designYearId: yearId },
+        makeUser({ xviFcSubrole: 'admin' }),
+      );
+
+      expect(fileName).toMatch(/^database_state_name_all_ulb_submissions_\d{2}_\d{2}_\d{4}\.xlsx$/);
+
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(buffer as unknown as Buffer);
+      const sheet = workbook.getWorksheet('ULB Submissions');
+      if (!sheet) throw new Error('Expected a "ULB Submissions" worksheet');
+
+      expect(String(sheet.getCell('A1').value)).toContain('City Finance - 16th Finance Commission');
+      expect(String(sheet.getCell('A1').value)).toContain(yearRecord.year);
+      expect(sheet.getCell('A2').value).toBe('ULB Submissions - All Forms');
+      expect(String(sheet.getCell('A3').value)).toContain(`State: ${stateRecord.name}`);
+
+      expect((sheet.getRow(5).values as unknown[]).slice(1)).toEqual([
+        'ULB Name',
+        'Census Code',
+        'Audited Form',
+        'Provisional Form',
+        'PFMS Bank Account',
+        'SLB Form',
+      ]);
+      expect((sheet.getRow(6).values as unknown[]).slice(1)).toEqual([
+        'Achalpur Municipal Council',
+        '802685',
+        'In Progress',
+        'Under Review by State',
+        'Under Review by MoHUA',
+        'Not Started',
+      ]);
+      expect((sheet.getRow(7).values as unknown[]).slice(1)).toEqual([
+        'Beta Nagar Panchayat',
+        'SB-42',
+        'Not Started',
+        'Not Started',
+        'Not Started',
+        'Not Started',
+      ]);
+
+      const lastRow = sheet.lastRow;
+      if (!lastRow) throw new Error('Expected a footer row');
+      expect(String(lastRow.getCell(1).value)).toContain('This is a system-generated report');
+      expect(String(lastRow.getCell(1).value)).toContain('16fc.grant@cityfinance.in');
+    });
+
+    it('scopes the ULB list to the requesting STATE user\'s own state', async () => {
+      annualAccountModel.find.mockReturnValue(queryResult([]));
+      bankAccountModel.find.mockReturnValue(queryResult([]));
+      slbFormModel.find.mockReturnValue(queryResult([]));
+
+      await service.exportAllFormsCsv({ designYearId: yearId }, makeUser({ xviFcSubrole: 'admin' }));
+
+      expect(ulbModel.find).toHaveBeenCalledWith({ isActive: true, state: new Types.ObjectId(stateId) });
     });
   });
 });
