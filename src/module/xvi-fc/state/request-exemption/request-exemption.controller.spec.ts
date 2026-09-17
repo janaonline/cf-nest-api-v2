@@ -7,7 +7,7 @@ import { GetRequestExemptionListQueryDto } from './dto/get-request-exemption-lis
 
 describe('RequestExemptionController', () => {
   let controller: RequestExemptionController;
-  let service: { getForm: jest.Mock; finalSubmit: jest.Mock; list: jest.Mock };
+  let service: { getForm: jest.Mock; finalSubmit: jest.Mock; list: jest.Mock; getReasonOptions: jest.Mock };
 
   const user = { _id: 'user-id' } as unknown as AuthUser;
 
@@ -16,6 +16,7 @@ describe('RequestExemptionController', () => {
       getForm: jest.fn().mockResolvedValue({ success: true }),
       finalSubmit: jest.fn().mockResolvedValue({ success: true }),
       list: jest.fn().mockResolvedValue({ success: true }),
+      getReasonOptions: jest.fn().mockResolvedValue({ success: true }),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -41,5 +42,10 @@ describe('RequestExemptionController', () => {
     const query = { page: 1, limit: 10 } as GetRequestExemptionListQueryDto;
     await controller.list('state-id', 'year-id', query, user);
     expect(service.list).toHaveBeenCalledWith('state-id', 'year-id', query, user);
+  });
+
+  it('getReasonOptions delegates to the service with the route params and current user', async () => {
+    await controller.getReasonOptions('state-id', 'year-id', user);
+    expect(service.getReasonOptions).toHaveBeenCalledWith('state-id', 'year-id', user);
   });
 });

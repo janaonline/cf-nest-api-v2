@@ -21,6 +21,19 @@ export interface RequestExemptionSaveResponseData {
 }
 
 /**
+ * Per-year `reasonForExemption` formId and display label are sourced from
+ * `formjsons` (formId 34, field key `reasonForExemption`) via
+ * `RequestExemptionFormJsonConfigService.loadReasonOptions`.
+ *
+ * This is the single source for reason formIds, labels, and validation, so
+ * year-over-year reason changes require only a `formjsons` data update—no code changes.
+ */
+export interface RequestExemptionReasonOption {
+  id: number;
+  label: string;
+}
+
+/**
  * One row of `GET :stateId/:yearId/list` — backs the "Exemption Status" landing table. One row per
  * `(document, data[] entry)` pair, not one row per document — a ULB with two requested reasons
  * shows as two rows. `_id` is a stable synthetic `${requestId}_${formId}` key (not a real document
@@ -32,9 +45,9 @@ export interface RequestExemptionListItem {
   formId: number;
   /** `censusCode` falls back to `sbCode` server-side when the census code isn't set. */
   ulb: { _id: string; name: string; censusCode: string | null } | null;
-  /** Display label for `formId`, computed server-side from the same `REQUEST_EXEMPTION_REASON_LABELS`
-   *  map the fill-in form's own options use — the frontend list page never needs its own
-   *  formId->label lookup. */
+  /** Display label for `formId`, resolved server-side via `loadReasonOptions` (see
+   *  `RequestExemptionReasonOption`) — the frontend list page never needs its own formId->label
+   *  lookup. */
   reasonForExemptionLabel: string;
   currentFormStatus: number;
   currentFormStatusLabel: string;

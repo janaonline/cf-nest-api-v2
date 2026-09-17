@@ -7,6 +7,12 @@ import {
 } from 'src/schemas/xvi-fc/state/xvi-fc-eligibility-exemption.schema';
 import { RequestExemptionFormJsonConfigService } from './request-exemption-form-json.service';
 
+const REASON_OPTIONS_FIXTURE = [
+  { id: '23', label: 'Election / duly constituted ULB exemption' },
+  { id: '30', label: 'Audited Financial Statement' },
+  { id: '31', label: 'Provisional Financial Statement' },
+];
+
 const VALID_RE_FIELDS = [
   { fieldTypes: ['RE_MAIN_FORM_FIELDS'], formFieldType: 'autocomplete', key: 'ulb', label: 'ULB' },
   {
@@ -14,6 +20,7 @@ const VALID_RE_FIELDS = [
     formFieldType: 'select',
     key: 'reasonForExemption',
     label: 'Reason for Exemption',
+    options: REASON_OPTIONS_FIXTURE,
   },
 ];
 
@@ -87,13 +94,17 @@ describe('RequestExemptionFormJsonConfigService', () => {
   it('throws when a field is missing fieldTypes', async () => {
     const withoutFieldTypes = [{ key: 'ulb' }];
     formJsonService['findActiveByDesignYearAndFormId'] = jest.fn().mockResolvedValue({ data: withoutFieldTypes });
-    await expect(service.loadFields(yearId)).rejects.toThrow("Request Exemption form field 'ulb' is missing fieldTypes.");
+    await expect(service.loadFields(yearId)).rejects.toThrow(
+      "Request Exemption form field 'ulb' is missing fieldTypes.",
+    );
   });
 
   it('throws when a field has an empty fieldTypes array', async () => {
     const emptyFieldTypes = [{ key: 'ulb', fieldTypes: [] }];
     formJsonService['findActiveByDesignYearAndFormId'] = jest.fn().mockResolvedValue({ data: emptyFieldTypes });
-    await expect(service.loadFields(yearId)).rejects.toThrow("Request Exemption form field 'ulb' is missing fieldTypes.");
+    await expect(service.loadFields(yearId)).rejects.toThrow(
+      "Request Exemption form field 'ulb' is missing fieldTypes.",
+    );
   });
 
   it('throws when a field has an unknown fieldType', async () => {
@@ -102,5 +113,56 @@ describe('RequestExemptionFormJsonConfigService', () => {
     await expect(service.loadFields(yearId)).rejects.toThrow(
       "Request Exemption form field 'ulb' has unknown fieldType 'SOME_UNKNOWN_TYPE'.",
     );
+  });
+
+  // ─── loadReasonOptions ────────────────────────────────────────────────────
+
+  describe('loadReasonOptions', () => {
+    it("extracts and number-converts the 'reasonForExemption' field's options", async () => {
+      const options = await service.loadReasonOptions(yearId);
+      expect(options).toEqual([
+        { id: 23, label: 'Election / duly constituted ULB exemption' },
+        { id: 30, label: 'Audited Financial Statement' },
+        { id: 31, label: 'Provisional Financial Statement' },
+      ]);
+    });
+
+    it('reflects whatever this year’s formjson actually offers, not a fixed set', async () => {
+      formJsonService['findActiveByDesignYearAndFormId'] = jest.fn().mockResolvedValue({
+        data: [
+          {
+            fieldTypes: ['RE_MAIN_FORM_FIELDS'],
+            formFieldType: 'select',
+            key: 'reasonForExemption',
+            label: 'Reason for Exemption',
+            options: [{ id: '99', label: 'A brand new next-year reason' }],
+          },
+        ],
+      });
+
+      const options = await service.loadReasonOptions(yearId);
+      expect(options).toEqual([{ id: 99, label: 'A brand new next-year reason' }]);
+    });
+
+    it('throws InternalServerErrorException when the reasonForExemption field is missing', async () => {
+      formJsonService['findActiveByDesignYearAndFormId'] = jest.fn().mockResolvedValue({
+        data: [{ fieldTypes: ['RE_MAIN_FORM_FIELDS'], formFieldType: 'autocomplete', key: 'ulb', label: 'ULB' }],
+      });
+      await expect(service.loadReasonOptions(yearId)).rejects.toThrow(InternalServerErrorException);
+    });
+
+    it('throws InternalServerErrorException when its options are missing/malformed', async () => {
+      formJsonService['findActiveByDesignYearAndFormId'] = jest.fn().mockResolvedValue({
+        data: [
+          {
+            fieldTypes: ['RE_MAIN_FORM_FIELDS'],
+            formFieldType: 'select',
+            key: 'reasonForExemption',
+            label: 'Reason for Exemption',
+          },
+        ],
+      });
+      await expect(service.loadReasonOptions(yearId)).rejects.toThrow(InternalServerErrorException);
+    });
   });
 });
