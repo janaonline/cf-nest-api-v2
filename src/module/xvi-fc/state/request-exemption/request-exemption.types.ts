@@ -30,7 +30,8 @@ export interface RequestExemptionListItem {
   _id: string;
   requestId: string;
   formId: number;
-  ulb: { _id: string; name: string } | null;
+  /** `censusCode` falls back to `sbCode` server-side when the census code isn't set. */
+  ulb: { _id: string; name: string; censusCode: string | null } | null;
   /** Display label for `formId`, computed server-side from the same `REQUEST_EXEMPTION_REASON_LABELS`
    *  map the fill-in form's own options use — the frontend list page never needs its own
    *  formId->label lookup. */

@@ -296,21 +296,24 @@ export class RequestExemptionService {
     ]);
 
     const ulbIds = docs.map((doc) => doc.ulb).filter((id): id is Types.ObjectId => !!id);
-    const ulbNameById = await this.resolveUlbNames(ulbIds);
+    const ulbInfoById = await this.resolveUlbNames(ulbIds);
 
-    const allItems: RequestExemptionListItem[] = docs.flatMap((doc) =>
-      (doc.data ?? []).map((entry) => ({
+    const allItems: RequestExemptionListItem[] = docs.flatMap((doc) => {
+      const ulbInfo = doc.ulb ? ulbInfoById.get(String(doc.ulb)) : undefined;
+      return (doc.data ?? []).map((entry) => ({
         _id: `${String(doc._id)}_${entry.formId}`,
         requestId: String(doc._id),
         formId: entry.formId,
-        ulb: doc.ulb ? { _id: String(doc.ulb), name: ulbNameById.get(String(doc.ulb)) ?? '' } : null,
+        ulb: doc.ulb
+          ? { _id: String(doc.ulb), name: ulbInfo?.name ?? '', censusCode: ulbInfo?.censusCode ?? null }
+          : null,
         reasonForExemptionLabel: REQUEST_EXEMPTION_REASON_LABELS[entry.formId] ?? `Reason #${entry.formId}`,
         currentFormStatus: entry.currentFormStatus,
         currentFormStatusLabel: getFormStatusLabel(entry.currentFormStatus),
         submittedAt: entry.submittedAt ? new Date(entry.submittedAt).toISOString() : null,
         createdAt: doc.createdAt.toISOString(),
-      })),
-    );
+      }));
+    });
 
     const total = allItems.length;
     const skip = (page - 1) * limit;
@@ -327,16 +330,23 @@ export class RequestExemptionService {
     });
   }
 
-  /** Batch-resolves `{ulbId -> name}` for a page of list rows — same find-by-ids + Map technique
-   *  `ulb.service.ts`'s `attachLookupNames` uses; kept local since only the name is needed here. */
-  private async resolveUlbNames(ulbIds: Types.ObjectId[]): Promise<Map<string, string>> {
+  /** Batch-resolves `{ulbId -> {name, censusCode}}` for a page of list rows — same find-by-ids + Map
+   *  technique `ulb.service.ts`'s `attachLookupNames` uses; kept local since only these two fields are
+   *  needed here. `censusCode` falls back to `sbCode` — same convention `listUlbSlbForms`/
+   *  `listUlbSubmissions`'s own `$ifNull: ['$censusCode', '$sbCode']` aggregation stage uses, just
+   *  computed in plain TS since this is a `.find()`, not an aggregation pipeline. */
+  private async resolveUlbNames(
+    ulbIds: Types.ObjectId[],
+  ): Promise<Map<string, { name: string; censusCode: string | null }>> {
     if (ulbIds.length === 0) return new Map();
 
     const ulbs = await this.ulbModel
-      .find({ _id: { $in: ulbIds } }, { name: 1 })
-      .lean<{ _id: Types.ObjectId; name: string }[]>()
+      .find({ _id: { $in: ulbIds } }, { name: 1, censusCode: 1, sbCode: 1 })
+      .lean<{ _id: Types.ObjectId; name: string; censusCode: string | null; sbCode: string | null }[]>()
       .exec();
-    return new Map(ulbs.map((ulb) => [String(ulb._id), ulb.name]));
+    return new Map(
+      ulbs.map((ulb) => [String(ulb._id), { name: ulb.name, censusCode: ulb.censusCode ?? ulb.sbCode ?? null }]),
+    );
   }
 
   // ─── Helpers ─────────────────────────────────────────────────────────────────

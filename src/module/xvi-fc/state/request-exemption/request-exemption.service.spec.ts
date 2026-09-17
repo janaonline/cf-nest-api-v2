@@ -486,13 +486,37 @@ describe('RequestExemptionService', () => {
           _id: `${String(requestOid)}_23`,
           requestId: String(requestOid),
           formId: 23,
-          ulb: { _id: ulbOid.toString(), name: 'Agra' },
+          ulb: { _id: ulbOid.toString(), name: 'Agra', censusCode: null },
           reasonForExemptionLabel: 'Election / duly constituted ULB exemption',
           currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
         }),
       ]);
       expect(result.data?.total).toBe(1);
       expect(result.data?.canCreate).toBe(true);
+    });
+
+    it('resolves censusCode, falling back to sbCode when censusCode is not set', async () => {
+      const requestOid = new Types.ObjectId();
+      model.find.mockReturnValue(
+        findChain([{ _id: requestOid, ulb: ulbOid, data: [entry({ formId: 23 })], createdAt: new Date() }]),
+      );
+      ulbModel.find.mockReturnValue(q([{ _id: ulbOid, name: 'Agra', censusCode: null, sbCode: 'SB-1' }]));
+
+      const result = await service.list(stateOid.toString(), yearOid.toString(), { page: 1, limit: 10 }, stateReviewer);
+
+      expect(result.data?.items[0]?.ulb).toEqual({ _id: ulbOid.toString(), name: 'Agra', censusCode: 'SB-1' });
+    });
+
+    it('prefers censusCode over sbCode when both are set', async () => {
+      const requestOid = new Types.ObjectId();
+      model.find.mockReturnValue(
+        findChain([{ _id: requestOid, ulb: ulbOid, data: [entry({ formId: 23 })], createdAt: new Date() }]),
+      );
+      ulbModel.find.mockReturnValue(q([{ _id: ulbOid, name: 'Agra', censusCode: 'CC-1', sbCode: 'SB-1' }]));
+
+      const result = await service.list(stateOid.toString(), yearOid.toString(), { page: 1, limit: 10 }, stateReviewer);
+
+      expect(result.data?.items[0]?.ulb).toEqual({ _id: ulbOid.toString(), name: 'Agra', censusCode: 'CC-1' });
     });
 
     it('flattens multiple entries from one document into separate rows', async () => {
