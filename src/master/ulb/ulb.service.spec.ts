@@ -1133,7 +1133,7 @@ describe('UlbService', () => {
       ];
       expect(emailJob).toMatchObject({ to: 'commissioner@ulb.gov.in', templateName: './ulb-member-invite' });
       expect(emailJob.mailData).toMatchObject({ loginCode: '900001', loginCodeLabel: 'Login ID' });
-      expect(emailJob.mailData['resetPasswordUrl']).toContain('/auth/forgot-password');
+      expect(emailJob.mailData['resetPasswordUrl']).toContain('/auth/reset-password');
     });
 
     it('reactivates a non-new-user login tied to the ULB without re-sending an invite', async () => {

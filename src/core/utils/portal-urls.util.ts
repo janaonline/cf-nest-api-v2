@@ -34,14 +34,14 @@ export const APP_URL = {
 const baseUrl = '';
 export const AUTH_URL = {
   LOGIN: `auth/login`,
-  RESET_PASSWORD: 'auth/forgot-password',
+  RESET_PASSWORD: 'auth/reset-password',
 };
 
 /**
  * Builds the login and password-reset URLs emailed to a newly-provisioned or invited portal
  * account. When given, `type` is appended as a path segment (`login/:type`,
- * `forgot-password/:type` in `auth.routes.ts` on the frontend); callers that don't know/need a
- * type get the bare `login`/`forgot-password` routes instead.
+ * `reset-password/:type` in `auth.routes.ts` on the frontend); callers that don't know/need a
+ * type get the bare `login`/`reset-password` routes instead.
  */
 export function buildPortalAuthUrls(
   configService: ConfigService,
@@ -50,7 +50,7 @@ export function buildPortalAuthUrls(
   const suffix = type ? `/${type}` : '';
   return {
     loginUrl: getPortalUrl(configService, `auth/login${suffix}`),
-    resetPasswordUrl: getPortalUrl(configService, `auth/forgot-password${suffix}`),
+    resetPasswordUrl: getPortalUrl(configService, `auth/reset-password${suffix}`),
   };
 }
 
