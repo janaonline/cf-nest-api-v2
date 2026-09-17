@@ -6,15 +6,15 @@ export const REQUEST_EXEMPTION_FORM_TYPE = 'REQUEST_EXEMPTION';
 export const REQUEST_EXEMPTION_FORM_ID = 34;
 
 /**
- * The only formIds a state may currently request a discretionary exemption for — TS-133's
+ * The formIds a state may request a discretionary exemption for are per-year data, not a compiled
+ * constant — see `RequestExemptionFormJsonConfigService.loadReasonOptions`, which reads them from
+ * the `formjsons` document (formId 34, field key `reasonForExemption`). Today that set is TS-133's
  * "Requested" conditions (Elected Body / Audited AFS / Provisional AFS). SFC (formId 22) is
  * deliberately excluded: `sfc-status.schema.ts` has no `ulb` field at all (it's a flat {state,
  * year} document, evaluated once for the whole state in `evaluateStateLevelGate`), so it has no
  * per-ULB unit this mechanism could ever exempt. See the request-exemption feature plan for the
  * full reasoning; a state-level gate exemption (SFC or otherwise) is a distinct, deferred feature.
  */
-export const REQUEST_EXEMPTION_REASON_FORM_IDS = [23, 30, 31] as const;
-
 export type XviFcEligibilityExemptionDocument = HydratedDocument<XviFcEligibilityExemption>;
 
 /**

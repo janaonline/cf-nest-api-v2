@@ -6,6 +6,7 @@ import { Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
 import { FORM_STATUS, getFormStatusLabel } from 'src/common/constants/form-status.constants';
 import { toObjectIdString } from 'src/common/utils/objectid.util';
+import { escapeRegex } from 'src/common/utils/regex.util';
 import {
   canStateFinalSubmitForm,
   ULB_EDITABLE_STATUS_IDS,
@@ -18,7 +19,6 @@ import type { FileInfo } from 'src/schemas/common/file.schema';
 import { State, StateDocument } from 'src/schemas/state.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import {
-  REQUEST_EXEMPTION_REASON_FORM_IDS,
   XviFcEligibilityExemption,
   XviFcEligibilityExemptionDocument,
 } from 'src/schemas/xvi-fc/state/xvi-fc-eligibility-exemption.schema';
@@ -27,7 +27,6 @@ import {
   XviFcEligibilityExemptionFormLogDocument,
 } from 'src/schemas/xvi-fc/state/xvi-fc-eligibility-exemption-form-log.schema';
 import { XviFcAnnualAccount, XviFcAnnualAccountDocument } from 'src/schemas/xvi-fc/annual-account.schema';
-import { REQUEST_EXEMPTION_REASON_LABELS } from './constants/request-exemption-fields.constants';
 import { getFieldsByType } from './helpers/request-exemption-form-json.helpers';
 import { RequestExemptionFormJsonConfigService } from './services/form-json/request-exemption-form-json.service';
 import { RequestExemptionDataDto, SaveRequestExemptionDto } from './dto/save-request-exemption.dto';
@@ -37,10 +36,9 @@ import type {
   RequestExemptionListItem,
   RequestExemptionListResponseData,
   RequestExemptionPermissions,
+  RequestExemptionReasonOption,
   RequestExemptionSaveResponseData,
 } from './request-exemption.types';
-
-const ALLOWED_REASON_FORM_IDS: readonly number[] = REQUEST_EXEMPTION_REASON_FORM_IDS;
 
 /** formId 23 (Elected Body) has no per-ULB status to check at all - ElectedUrbanLocalBodiesForm is
  *  a whole-state document (state+year, no `ulb` field), not per-ULB like Annual Accounts - so
@@ -49,7 +47,9 @@ const ALLOWED_REASON_FORM_IDS: readonly number[] = REQUEST_EXEMPTION_REASON_FORM
  *  `AnnualAccountsService`'s own SECTION_FORM_IDS (inverse direction) and
  *  `RequestExemptionMohuaService`'s AFS_SECTION_TYPE_BY_FORM_ID - kept as three small local copies
  *  rather than a shared cross-module export, consistent with this codebase's existing convention
- *  for small formId lookup tables (e.g. REQUEST_EXEMPTION_REASON_LABELS itself). */
+ *  for small structural formId lookup tables. Unlike the *offered reasons and their labels* (now
+ *  sourced per-year via `RequestExemptionFormJsonConfigService.loadReasonOptions`), this is a stable
+ *  code-level mapping of which Annual Accounts section a reason corresponds to. */
 const AFS_SECTION_TYPE_BY_FORM_ID: Record<number, 'audited' | 'unaudited'> = { 30: 'audited', 31: 'unaudited' };
 
 /** Plain-object shape of one `data[]` entry — used both for what's read back (`.lean()`) and for
@@ -132,6 +132,23 @@ export class RequestExemptionService {
   }
 
   /**
+   * The `reasonForExemption` field's `{id, label}` options for `yearId` — the same per-year
+   * `formjsons`-sourced list `getForm` embeds in its field config, exposed on its own so the
+   * "Exemption Status" list's filter dropdown can fetch just this, without `getForm`'s unrelated
+   * ULB-autocomplete/file fields and start-a-new-request permission gating.
+   */
+  async getReasonOptions(
+    stateId: string,
+    yearId: string,
+    user: AuthUser,
+  ): Promise<XviFcApiResponse<RequestExemptionReasonOption[]>> {
+    this.assertStateAccess(user, stateId);
+
+    const reasonOptions = await this.formJsonConfig.loadReasonOptions(yearId);
+    return xviFcSuccess('Request Exemption reason options fetched.', reasonOptions);
+  }
+
+  /**
    * Final-submits a Request Exemption for one or more `formId`s at once — the only write path for
    * this form (no draft step). Resolves the one document for `{ulb, year}` (creating it if this is
    * this ULB's first-ever request this year) and merges each submitted `formId` into its `data[]`:
@@ -154,7 +171,13 @@ export class RequestExemptionService {
   ): Promise<XviFcApiResponse<RequestExemptionSaveResponseData>> {
     this.assertStateAccess(user, dto.stateId);
 
-    const sanitized = await this.validateAndSanitize(dto.data);
+    const reasonOptions = await this.formJsonConfig.loadReasonOptions(dto.yearId);
+    const reasonLabelById = new Map(reasonOptions.map((option) => [option.id, option.label]));
+
+    const sanitized = this.validateAndSanitize(
+      dto.data,
+      reasonOptions.map((option) => option.id),
+    );
     const existingDoc = await this.resolveExistingDocument(dto.stateId, dto.yearId, sanitized.ulb);
 
     const existingByFormId = new Map((existingDoc?.data ?? []).map((entry) => [entry.formId, entry]));
@@ -166,7 +189,7 @@ export class RequestExemptionService {
       const details = blocked
         .map(
           (entry) =>
-            `${REQUEST_EXEMPTION_REASON_LABELS[entry.formId] ?? `Reason #${entry.formId}`} (${getFormStatusLabel(entry.currentFormStatus)})`,
+            `${reasonLabelById.get(entry.formId) ?? `Reason #${entry.formId}`} (${getFormStatusLabel(entry.currentFormStatus)})`,
         )
         .join(', ');
       // ConflictException (409), deliberately not ForbiddenException (403): the frontend's global
@@ -183,7 +206,7 @@ export class RequestExemptionService {
       );
     }
 
-    await this.assertTargetFormsEligible(sanitized.ulb, dto.yearId, sanitized.reasonForExemption);
+    await this.assertTargetFormsEligible(sanitized.ulb, dto.yearId, sanitized.reasonForExemption, reasonLabelById);
 
     const userOid = new Types.ObjectId(user._id);
     const now = new Date();
@@ -274,9 +297,9 @@ export class RequestExemptionService {
    *
    * Pagination happens after flattening, in memory, not at the Mongo query level: every document
    * for this state+year is fetched (bounded by how many distinct ULBs have ever filed a request —
-   * small even for a large state, and each document holds at most
-   * `REQUEST_EXEMPTION_REASON_FORM_IDS.length` entries), which is simpler than an `$unwind`
-   * aggregation for a row count nowhere near large enough for that to matter.
+   * small even for a large state, and each document holds at most one entry per this year's offered
+   * reasons), which is simpler than an `$unwind` aggregation for a row count nowhere near large
+   * enough for that to matter.
    */
   async list(
     stateId: string,
@@ -290,27 +313,46 @@ export class RequestExemptionService {
     const limit = Math.min(query.limit ?? 10, 100);
     const filter = { state: new Types.ObjectId(stateId), year: new Types.ObjectId(yearId) };
 
-    const [state, docs] = await Promise.all([
+    const [state, docs, reasonOptions] = await Promise.all([
       this.stateModel.findById(stateId, { name: 1 }).lean<{ name?: string }>().exec(),
       this.model.find(filter, { ulb: 1, data: 1, createdAt: 1 }).sort({ createdAt: -1 }).lean<ListRowLean[]>().exec(),
+      this.formJsonConfig.loadReasonOptions(yearId),
     ]);
+    const reasonLabelById = new Map(reasonOptions.map((option) => [option.id, option.label]));
 
     const ulbIds = docs.map((doc) => doc.ulb).filter((id): id is Types.ObjectId => !!id);
-    const ulbNameById = await this.resolveUlbNames(ulbIds);
+    const ulbInfoById = await this.resolveUlbNames(ulbIds);
 
-    const allItems: RequestExemptionListItem[] = docs.flatMap((doc) =>
-      (doc.data ?? []).map((entry) => ({
+    let allItems: RequestExemptionListItem[] = docs.flatMap((doc) => {
+      const ulbInfo = doc.ulb ? ulbInfoById.get(String(doc.ulb)) : undefined;
+      return (doc.data ?? []).map((entry) => ({
         _id: `${String(doc._id)}_${entry.formId}`,
         requestId: String(doc._id),
         formId: entry.formId,
-        ulb: doc.ulb ? { _id: String(doc.ulb), name: ulbNameById.get(String(doc.ulb)) ?? '' } : null,
-        reasonForExemptionLabel: REQUEST_EXEMPTION_REASON_LABELS[entry.formId] ?? `Reason #${entry.formId}`,
+        ulb: doc.ulb
+          ? { _id: String(doc.ulb), name: ulbInfo?.name ?? '', censusCode: ulbInfo?.censusCode ?? null }
+          : null,
+        reasonForExemptionLabel: reasonLabelById.get(entry.formId) ?? `Reason #${entry.formId}`,
         currentFormStatus: entry.currentFormStatus,
         currentFormStatusLabel: getFormStatusLabel(entry.currentFormStatus),
         submittedAt: entry.submittedAt ? new Date(entry.submittedAt).toISOString() : null,
         createdAt: doc.createdAt.toISOString(),
-      })),
-    );
+      }));
+    });
+
+    // Filters applied in-memory, before pagination - the whole state+year candidate set is already
+    // in hand (see the comment above on why this stays a plain .find() + JS, not an aggregation).
+    if (query.reasonForExemption != null) {
+      allItems = allItems.filter((item) => item.formId === query.reasonForExemption);
+    }
+    if (query.status != null) {
+      allItems = allItems.filter((item) => item.currentFormStatus === query.status);
+    }
+    const search = query.search?.trim();
+    if (search) {
+      const regex = new RegExp(escapeRegex(search), 'i');
+      allItems = allItems.filter((item) => regex.test(item.ulb?.name ?? '') || regex.test(item.ulb?.censusCode ?? ''));
+    }
 
     const total = allItems.length;
     const skip = (page - 1) * limit;
@@ -327,16 +369,23 @@ export class RequestExemptionService {
     });
   }
 
-  /** Batch-resolves `{ulbId -> name}` for a page of list rows — same find-by-ids + Map technique
-   *  `ulb.service.ts`'s `attachLookupNames` uses; kept local since only the name is needed here. */
-  private async resolveUlbNames(ulbIds: Types.ObjectId[]): Promise<Map<string, string>> {
+  /** Batch-resolves `{ulbId -> {name, censusCode}}` for a page of list rows — same find-by-ids + Map
+   *  technique `ulb.service.ts`'s `attachLookupNames` uses; kept local since only these two fields are
+   *  needed here. `censusCode` falls back to `sbCode` — same convention `listUlbSlbForms`/
+   *  `listUlbSubmissions`'s own `$ifNull: ['$censusCode', '$sbCode']` aggregation stage uses, just
+   *  computed in plain TS since this is a `.find()`, not an aggregation pipeline. */
+  private async resolveUlbNames(
+    ulbIds: Types.ObjectId[],
+  ): Promise<Map<string, { name: string; censusCode: string | null }>> {
     if (ulbIds.length === 0) return new Map();
 
     const ulbs = await this.ulbModel
-      .find({ _id: { $in: ulbIds } }, { name: 1 })
-      .lean<{ _id: Types.ObjectId; name: string }[]>()
+      .find({ _id: { $in: ulbIds } }, { name: 1, censusCode: 1, sbCode: 1 })
+      .lean<{ _id: Types.ObjectId; name: string; censusCode: string | null; sbCode: string | null }[]>()
       .exec();
-    return new Map(ulbs.map((ulb) => [String(ulb._id), ulb.name]));
+    return new Map(
+      ulbs.map((ulb) => [String(ulb._id), { name: ulb.name, censusCode: ulb.censusCode ?? ulb.sbCode ?? null }]),
+    );
   }
 
   // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -369,6 +418,7 @@ export class RequestExemptionService {
     ulb: Types.ObjectId,
     yearId: string,
     reasonForExemption: number[],
+    reasonLabelById: Map<number, string>,
   ): Promise<void> {
     const sectionFormIds = reasonForExemption.filter((formId) => formId in AFS_SECTION_TYPE_BY_FORM_ID);
     if (sectionFormIds.length === 0) return;
@@ -394,7 +444,7 @@ export class RequestExemptionService {
 
     if (ineligible.length > 0) {
       const details = ineligible
-        .map((x) => `${REQUEST_EXEMPTION_REASON_LABELS[x.formId]} (${getFormStatusLabel(x.statusId)})`)
+        .map((x) => `${reasonLabelById.get(x.formId) ?? `Reason #${x.formId}`} (${getFormStatusLabel(x.statusId)})`)
         .join(', ');
       throw new ConflictException(
         `This ULB already has real progress on: ${details}. An exemption can only be requested before the ` +
@@ -403,12 +453,15 @@ export class RequestExemptionService {
     }
   }
 
-  private async validateAndSanitize(data: RequestExemptionDataDto): Promise<{
+  private validateAndSanitize(
+    data: RequestExemptionDataDto,
+    allowedReasonFormIds: readonly number[],
+  ): {
     ulb: Types.ObjectId;
     reasonForExemption: number[];
     supportingDetails: string;
     supportingFile: FileInfo | null;
-  }> {
+  } {
     const errors: XviFcValidationErrorMap = {};
 
     if (!data.ulb) {
@@ -421,7 +474,7 @@ export class RequestExemptionService {
         { field: 'reasonForExemption', message: 'This field is required.', code: 'required' },
       ];
     } else {
-      const invalid = reasonForExemption.filter((id) => !ALLOWED_REASON_FORM_IDS.includes(id));
+      const invalid = reasonForExemption.filter((id) => !allowedReasonFormIds.includes(id));
       if (invalid.length > 0) {
         errors['reasonForExemption'] = [
           {

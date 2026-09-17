@@ -54,4 +54,16 @@ export class RequestExemptionController {
   ) {
     return this.requestExemptionService.list(stateId, yearId, query, user);
   }
+
+  @ApiOperation({ summary: "This year's Reason for Exemption options, for the Exemption Status list's filter" })
+  @Get(':stateId/:yearId/reason-options')
+  @UseGuards(PermissionGuard)
+  @RequirePermissions(Permission.VIEW_STATE_FORMS)
+  getReasonOptions(
+    @Param('stateId', ParseObjectIdPipe) stateId: string,
+    @Param('yearId', ParseObjectIdPipe) yearId: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.requestExemptionService.getReasonOptions(stateId, yearId, user);
+  }
 }

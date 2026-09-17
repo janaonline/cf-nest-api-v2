@@ -15,6 +15,12 @@ import { RequestExemptionService } from './request-exemption.service';
 import { SaveRequestExemptionDto } from './dto/save-request-exemption.dto';
 import { RequestExemptionFormJsonConfigService } from './services/form-json/request-exemption-form-json.service';
 
+const REASON_OPTIONS_FIXTURE = [
+  { id: 23, label: 'Election / duly constituted ULB exemption' },
+  { id: 30, label: 'Audited Financial Statement' },
+  { id: 31, label: 'Provisional Financial Statement' },
+];
+
 const REQUEST_EXEMPTION_FIELDS_FIXTURE = [
   { fieldTypes: ['RE_MAIN_FORM_FIELDS'], formFieldType: 'autocomplete', key: 'ulb', label: 'ULB' },
   {
@@ -22,9 +28,14 @@ const REQUEST_EXEMPTION_FIELDS_FIXTURE = [
     formFieldType: 'select',
     key: 'reasonForExemption',
     label: 'Reason for Exemption',
-    options: [],
+    options: REASON_OPTIONS_FIXTURE.map((o) => ({ id: String(o.id), label: o.label })),
   },
-  { fieldTypes: ['RE_MAIN_FORM_FIELDS'], formFieldType: 'textarea', key: 'supportingDetails', label: 'Supporting Details' },
+  {
+    fieldTypes: ['RE_MAIN_FORM_FIELDS'],
+    formFieldType: 'textarea',
+    key: 'supportingDetails',
+    label: 'Supporting Details',
+  },
   { fieldTypes: ['RE_MAIN_FORM_FIELDS'], formFieldType: 'file', key: 'supportingFile', label: 'Supporting Document' },
 ];
 
@@ -110,7 +121,7 @@ describe('RequestExemptionService', () => {
   let ulbModel: { find: jest.Mock };
   let annualAccountModel: { find: jest.Mock };
   let fileInfoNormalizer: { normalizeInboundFileInfo: jest.Mock };
-  let formJsonConfig: { loadFields: jest.Mock };
+  let formJsonConfig: { loadFields: jest.Mock; loadReasonOptions: jest.Mock };
   let connection: { startSession: jest.Mock };
   let session: ReturnType<typeof makeSession>;
 
@@ -142,6 +153,7 @@ describe('RequestExemptionService', () => {
     };
     formJsonConfig = {
       loadFields: jest.fn().mockResolvedValue(REQUEST_EXEMPTION_FIELDS_FIXTURE),
+      loadReasonOptions: jest.fn().mockResolvedValue(REASON_OPTIONS_FIXTURE),
     };
     connection = {
       startSession: jest.fn().mockResolvedValue(session),
@@ -193,6 +205,19 @@ describe('RequestExemptionService', () => {
     });
   });
 
+  describe('getReasonOptions', () => {
+    it("returns this year's reason options for a state user with access", async () => {
+      const result = await service.getReasonOptions(stateOid.toString(), yearOid.toString(), stateReviewer);
+      expect(result.data).toEqual(REASON_OPTIONS_FIXTURE);
+    });
+
+    it('rejects a state user requesting a different state', async () => {
+      await expect(service.getReasonOptions(stateOid.toString(), yearOid.toString(), otherStateUser)).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+  });
+
   describe('finalSubmit', () => {
     it('requires ulb, reasonForExemption, and supportingDetails', async () => {
       await expect(service.finalSubmit(makeDto({ data: {} }), stateReviewer, '127.0.0.1', 'jest')).rejects.toThrow(
@@ -220,6 +245,40 @@ describe('RequestExemptionService', () => {
           'jest',
         ),
       ).rejects.toThrow(BadRequestException);
+    });
+
+    it('validates reasonForExemption against whatever loadReasonOptions returns for the year, not a fixed set', async () => {
+      // This year's formjson no longer offers formId 23 - a formerly-valid id must now be rejected.
+      formJsonConfig.loadReasonOptions.mockResolvedValue([
+        { id: 30, label: 'Audited Financial Statement' },
+        { id: 31, label: 'Provisional Financial Statement' },
+      ]);
+
+      await expect(
+        service.finalSubmit(
+          makeDto({ data: { ...validData, reasonForExemption: [23] } }),
+          stateReviewer,
+          '127.0.0.1',
+          'jest',
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('accepts a brand-new reason formId once this year’s formjson offers it', async () => {
+      formJsonConfig.loadReasonOptions.mockResolvedValue([
+        ...REASON_OPTIONS_FIXTURE,
+        { id: 99, label: 'A brand new next-year reason' },
+      ]);
+      model.create.mockResolvedValue([{ _id: new Types.ObjectId() }]);
+
+      await expect(
+        service.finalSubmit(
+          makeDto({ data: { ...validData, reasonForExemption: [99] } }),
+          stateReviewer,
+          '127.0.0.1',
+          'jest',
+        ),
+      ).resolves.toBeDefined();
     });
 
     it('enforces supportingDetails length bounds', async () => {
@@ -302,7 +361,7 @@ describe('RequestExemptionService', () => {
                 mohuaRemarks: null,
               }),
             ],
-            updatedBy: expect.any(Types.ObjectId),
+            updatedBy: expect.any(Types.ObjectId) as Types.ObjectId,
           },
         },
         { session },
@@ -333,7 +392,7 @@ describe('RequestExemptionService', () => {
               existingEntry,
               expect.objectContaining({ formId: 30, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }),
             ],
-            updatedBy: expect.any(Types.ObjectId),
+            updatedBy: expect.any(Types.ObjectId) as Types.ObjectId,
           },
         },
         { session },
@@ -486,13 +545,63 @@ describe('RequestExemptionService', () => {
           _id: `${String(requestOid)}_23`,
           requestId: String(requestOid),
           formId: 23,
-          ulb: { _id: ulbOid.toString(), name: 'Agra' },
+          ulb: { _id: ulbOid.toString(), name: 'Agra', censusCode: null },
           reasonForExemptionLabel: 'Election / duly constituted ULB exemption',
           currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
         }),
       ]);
       expect(result.data?.total).toBe(1);
       expect(result.data?.canCreate).toBe(true);
+    });
+
+    it('labels each row from loadReasonOptions for the year, not a fixed map', async () => {
+      const requestOid = new Types.ObjectId();
+      model.find.mockReturnValue(
+        findChain([{ _id: requestOid, ulb: ulbOid, data: [entry({ formId: 99 })], createdAt: new Date() }]),
+      );
+      ulbModel.find.mockReturnValue(q([{ _id: ulbOid, name: 'Agra' }]));
+      formJsonConfig.loadReasonOptions.mockResolvedValue([{ id: 99, label: 'A brand new next-year reason' }]);
+
+      const result = await service.list(stateOid.toString(), yearOid.toString(), { page: 1, limit: 10 }, stateReviewer);
+
+      expect(result.data?.items[0]?.reasonForExemptionLabel).toBe('A brand new next-year reason');
+    });
+
+    it('falls back to a generic "Reason #<id>" label when a row\'s formId is no longer offered this year', async () => {
+      const requestOid = new Types.ObjectId();
+      model.find.mockReturnValue(
+        findChain([{ _id: requestOid, ulb: ulbOid, data: [entry({ formId: 23 })], createdAt: new Date() }]),
+      );
+      ulbModel.find.mockReturnValue(q([{ _id: ulbOid, name: 'Agra' }]));
+      formJsonConfig.loadReasonOptions.mockResolvedValue([{ id: 30, label: 'Audited Financial Statement' }]);
+
+      const result = await service.list(stateOid.toString(), yearOid.toString(), { page: 1, limit: 10 }, stateReviewer);
+
+      expect(result.data?.items[0]?.reasonForExemptionLabel).toBe('Reason #23');
+    });
+
+    it('resolves censusCode, falling back to sbCode when censusCode is not set', async () => {
+      const requestOid = new Types.ObjectId();
+      model.find.mockReturnValue(
+        findChain([{ _id: requestOid, ulb: ulbOid, data: [entry({ formId: 23 })], createdAt: new Date() }]),
+      );
+      ulbModel.find.mockReturnValue(q([{ _id: ulbOid, name: 'Agra', censusCode: null, sbCode: 'SB-1' }]));
+
+      const result = await service.list(stateOid.toString(), yearOid.toString(), { page: 1, limit: 10 }, stateReviewer);
+
+      expect(result.data?.items[0]?.ulb).toEqual({ _id: ulbOid.toString(), name: 'Agra', censusCode: 'SB-1' });
+    });
+
+    it('prefers censusCode over sbCode when both are set', async () => {
+      const requestOid = new Types.ObjectId();
+      model.find.mockReturnValue(
+        findChain([{ _id: requestOid, ulb: ulbOid, data: [entry({ formId: 23 })], createdAt: new Date() }]),
+      );
+      ulbModel.find.mockReturnValue(q([{ _id: ulbOid, name: 'Agra', censusCode: 'CC-1', sbCode: 'SB-1' }]));
+
+      const result = await service.list(stateOid.toString(), yearOid.toString(), { page: 1, limit: 10 }, stateReviewer);
+
+      expect(result.data?.items[0]?.ulb).toEqual({ _id: ulbOid.toString(), name: 'Agra', censusCode: 'CC-1' });
     });
 
     it('flattens multiple entries from one document into separate rows', async () => {
@@ -538,6 +647,101 @@ describe('RequestExemptionService', () => {
       expect(result.data?.items).toHaveLength(1);
       expect(result.data?.total).toBe(2);
       expect(result.data?.pages).toBe(2);
+    });
+
+    describe('filters', () => {
+      const twoUlbDoc = (overrides: Record<string, unknown> = {}) => ({
+        _id: new Types.ObjectId(),
+        ulb: ulbOid,
+        data: [
+          entry({ formId: 23, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }),
+          entry({ formId: 30, currentFormStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA }),
+        ],
+        createdAt: new Date(),
+        ...overrides,
+      });
+
+      beforeEach(() => {
+        model.find.mockReturnValue(findChain([twoUlbDoc()]));
+        ulbModel.find.mockReturnValue(q([{ _id: ulbOid, name: 'Agra', censusCode: 'CC-9', sbCode: null }]));
+      });
+
+      it('filters by reasonForExemption', async () => {
+        const result = await service.list(
+          stateOid.toString(),
+          yearOid.toString(),
+          { page: 1, limit: 10, reasonForExemption: 30 },
+          stateReviewer,
+        );
+
+        expect(result.data?.items.map((i) => i.formId)).toEqual([30]);
+        expect(result.data?.total).toBe(1);
+      });
+
+      it('filters by status', async () => {
+        const result = await service.list(
+          stateOid.toString(),
+          yearOid.toString(),
+          { page: 1, limit: 10, status: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA },
+          stateReviewer,
+        );
+
+        expect(result.data?.items.map((i) => i.formId)).toEqual([30]);
+        expect(result.data?.total).toBe(1);
+      });
+
+      it('searches case-insensitively by ULB name', async () => {
+        const result = await service.list(
+          stateOid.toString(),
+          yearOid.toString(),
+          { page: 1, limit: 10, search: 'agr' },
+          stateReviewer,
+        );
+
+        expect(result.data?.total).toBe(2);
+      });
+
+      it('searches by the resolved censusCode (sbCode fallback included)', async () => {
+        const result = await service.list(
+          stateOid.toString(),
+          yearOid.toString(),
+          { page: 1, limit: 10, search: 'CC-9' },
+          stateReviewer,
+        );
+
+        expect(result.data?.total).toBe(2);
+      });
+
+      it('returns nothing when the search matches neither name nor censusCode', async () => {
+        const result = await service.list(
+          stateOid.toString(),
+          yearOid.toString(),
+          { page: 1, limit: 10, search: 'no-such-ulb' },
+          stateReviewer,
+        );
+
+        expect(result.data?.items).toEqual([]);
+        expect(result.data?.total).toBe(0);
+      });
+
+      it('combines reasonForExemption, status, and search with AND semantics', async () => {
+        const result = await service.list(
+          stateOid.toString(),
+          yearOid.toString(),
+          {
+            page: 1,
+            limit: 10,
+            reasonForExemption: 23,
+            status: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+            search: 'agra',
+          },
+          stateReviewer,
+        );
+
+        // formId 23 is UNDER_REVIEW_BY_MOHUA in the fixture, not SUBMISSION_ACKNOWLEDGED_BY_MOHUA - no row satisfies all three.
+        expect(result.data?.items).toEqual([]);
+        expect(result.data?.total).toBe(0);
+      });
     });
 
     it("rejects a state user listing another state's requests", async () => {
