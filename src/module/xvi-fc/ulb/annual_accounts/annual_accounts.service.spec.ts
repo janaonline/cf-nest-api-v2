@@ -1,13 +1,18 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { ForbiddenException } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
 import { getQueueToken } from '@nestjs/bullmq';
+import { Types } from 'mongoose';
 import { AnnualAccountsService } from './annual_accounts.service';
 import { XviFcAnnualAccount } from '../../../../schemas/xvi-fc/annual-account.schema';
 import { XviFcAnnualAccountUploadHistory } from '../../../../schemas/xvi-fc/annual-account-upload-history.schema';
 import { XviFcAnnualAccountFormLog } from '../../../../schemas/xvi-fc/annual-account-form-log.schema';
 import { XviFcDocumentActionGate } from '../../../../schemas/xvi-fc/document-action-gate.schema';
 import { Ulb } from '../../../../schemas/ulb.schema';
+import { Year } from '../../../../schemas/year.schema';
 import { User } from '../../../../schemas/user/user.schema';
+import { ExemptionResolverService } from '../../common/services/exemption-resolver.service';
+import { FORM_STATUS } from '../../../../common/constants/form-status.constants';
 import { S3Service } from '../../../../core/s3/s3.service';
 import { S3UploadService } from '../../../file/s3-upload.service';
 import { FormJsonService } from '../../../../master/form-json/form-json.service';
@@ -49,6 +54,8 @@ describe('AnnualAccountsService', () => {
   let mockFileTokenService: { signFileUrl: jest.Mock };
   let mockUlbEligibilityService: { assertUlbEligibleForGrantCycle: jest.Mock };
   let mockFormReturnedNotification: { notifyReturned: jest.Mock };
+  let mockYearModel: { findById: jest.Mock };
+  let mockExemptionResolverService: { resolveBulk: jest.Mock; resolveDiscretionaryBulk: jest.Mock; resolveDiscretionary: jest.Mock };
 
   beforeEach(async () => {
     mockAnnualAccountModel = {
@@ -72,6 +79,8 @@ describe('AnnualAccountsService', () => {
     };
     mockUlbModel = {
       findById: jest.fn().mockReturnValue(mockQuery({ state: { toString: () => 'state-1' } })),
+      find: jest.fn().mockReturnValue(mockQuery([])),
+      aggregate: jest.fn().mockReturnValue(mockQuery([{ data: [], totalCount: [], counts: [] }])),
     };
     mockUserModel = {
       findOne: jest.fn().mockReturnValue(mockQuery(null)),
@@ -103,6 +112,14 @@ describe('AnnualAccountsService', () => {
     mockFormReturnedNotification = {
       notifyReturned: jest.fn().mockResolvedValue(undefined),
     };
+    mockYearModel = {
+      findById: jest.fn().mockReturnValue(mockQuery({ _id: 'year-1', year: '2026-27' })),
+    };
+    mockExemptionResolverService = {
+      resolveBulk: jest.fn().mockResolvedValue(new Map()),
+      resolveDiscretionaryBulk: jest.fn().mockResolvedValue(new Map()),
+      resolveDiscretionary: jest.fn().mockResolvedValue(null),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -111,6 +128,7 @@ describe('AnnualAccountsService', () => {
         { provide: getModelToken(XviFcAnnualAccountUploadHistory.name), useValue: mockUploadHistoryModel },
         { provide: getModelToken(XviFcAnnualAccountFormLog.name), useValue: mockFormLogModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+        { provide: getModelToken(Year.name), useValue: mockYearModel },
         { provide: getModelToken(User.name), useValue: mockUserModel },
         { provide: getModelToken(XviFcDocumentActionGate.name), useValue: mockActionGateModel },
         { provide: S3Service, useValue: mockS3Service },
@@ -120,6 +138,7 @@ describe('AnnualAccountsService', () => {
         { provide: FileTokenService, useValue: mockFileTokenService },
         { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: FormReturnedNotificationService, useValue: mockFormReturnedNotification },
+        { provide: ExemptionResolverService, useValue: mockExemptionResolverService },
       ],
     }).compile();
 
@@ -283,6 +302,43 @@ describe('AnnualAccountsService', () => {
 
       await expect(service.confirmUpload(dto as any, baseUser)).rejects.toThrow('Unknown docId');
     });
+
+    it('blocks the upload while a discretionary exemption request is pending MoHUA review, even before any section document exists', async () => {
+      mockExemptionResolverService.resolveDiscretionary.mockResolvedValue({
+        requestId: new Types.ObjectId(),
+        currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+        decidedAt: null,
+        mohuaRemarks: null,
+      });
+      const dto = {
+        ...baseDto,
+        docId: 'auditors-report',
+        s3Key: `xvi-fc/annual-accounts/${ULB_ID}/${YEAR_ID}/auditedData/auditors-report/upload-1.pdf`,
+      };
+
+      await expect(service.confirmUpload(dto as any, baseUser)).rejects.toThrow(/pending MoHUA review/);
+      expect(mockExemptionResolverService.resolveDiscretionary).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        30,
+      );
+    });
+
+    it('blocks the upload while a discretionary exemption request is MoHUA-approved, even though the section document itself was never touched by that approval', async () => {
+      mockExemptionResolverService.resolveDiscretionary.mockResolvedValue({
+        requestId: new Types.ObjectId(),
+        currentFormStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+        decidedAt: new Date(),
+        mohuaRemarks: null,
+      });
+      const dto = {
+        ...baseDto,
+        docId: 'auditors-report',
+        s3Key: `xvi-fc/annual-accounts/${ULB_ID}/${YEAR_ID}/auditedData/auditors-report/upload-1.pdf`,
+      };
+
+      await expect(service.confirmUpload(dto as any, baseUser)).rejects.toThrow(/MoHUA-approved discretionary exemption/);
+    });
   });
 
   describe('submitSection — optional documents never block submission', () => {
@@ -317,6 +373,88 @@ describe('AnnualAccountsService', () => {
       const result = await service.submitSection(ACCOUNT_ID, 'auditedData', baseUser);
 
       expect(result.section).toBe('auditedData');
+    });
+
+    it('blocks submission while a discretionary exemption request is pending MoHUA review', async () => {
+      mockAnnualAccountModel.findById.mockReturnValue(
+        mockQuery({
+          _id: ACCOUNT_ID,
+          ulb: '507f1f77bcf86cd799439011',
+          design_year: YEAR_ID,
+          sectionType: 'audited',
+          form_status_id: 2,
+          documents: [{ docId: 'auditors-report', processingStatus: 'PASSED', stateDecision: null }],
+        }),
+      );
+      mockExemptionResolverService.resolveDiscretionary.mockResolvedValue({
+        requestId: new Types.ObjectId(),
+        currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+        decidedAt: null,
+        mohuaRemarks: null,
+      });
+
+      await expect(service.submitSection(ACCOUNT_ID, 'auditedData', baseUser)).rejects.toThrow(/pending MoHUA review/);
+      expect(mockUlbEligibilityService.assertUlbEligibleForGrantCycle).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('removeDocument', () => {
+    const baseUser: AuthUser = {
+      _id: '507f1f77bcf86cd799439099',
+      role: 'ULB-EDITOR',
+      scope: 'ULB',
+      ulb: '507f1f77bcf86cd799439011',
+    } as AuthUser;
+    const ACCOUNT_ID = '507f1f77bcf86cd799439014';
+    const YEAR_ID = '507f1f77bcf86cd799439013';
+
+    const sectionDoc = {
+      _id: ACCOUNT_ID,
+      ulb: '507f1f77bcf86cd799439011',
+      design_year: YEAR_ID,
+      sectionType: 'audited',
+      form_status_id: FORM_STATUS.IN_PROGRESS,
+      documents: [{ docId: 'auditors-report', processingStatus: 'PASSED', stateDecision: null, currentUpload: null }],
+    };
+
+    it('removes a document slot when the section is editable and not exemption-blocked', async () => {
+      mockAnnualAccountModel.findById.mockReturnValue(mockQuery(sectionDoc));
+      mockAnnualAccountModel.updateOne.mockResolvedValue({ modifiedCount: 1 });
+
+      const result = await service.removeDocument(ACCOUNT_ID, 'auditedData', 'auditors-report', baseUser);
+
+      expect(result.docId).toBe('auditors-report');
+      expect(mockAnnualAccountModel.updateOne).toHaveBeenCalled();
+    });
+
+    it('blocks removal while a discretionary exemption request is pending MoHUA review', async () => {
+      mockAnnualAccountModel.findById.mockReturnValue(mockQuery(sectionDoc));
+      mockExemptionResolverService.resolveDiscretionary.mockResolvedValue({
+        requestId: new Types.ObjectId(),
+        currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+        decidedAt: null,
+        mohuaRemarks: null,
+      });
+
+      await expect(service.removeDocument(ACCOUNT_ID, 'auditedData', 'auditors-report', baseUser)).rejects.toThrow(
+        /pending MoHUA review/,
+      );
+      expect(mockAnnualAccountModel.updateOne).not.toHaveBeenCalled();
+    });
+
+    it('does not block removal once the discretionary request has been rejected - the section\'s real status governs again', async () => {
+      mockAnnualAccountModel.findById.mockReturnValue(mockQuery(sectionDoc));
+      mockAnnualAccountModel.updateOne.mockResolvedValue({ modifiedCount: 1 });
+      mockExemptionResolverService.resolveDiscretionary.mockResolvedValue({
+        requestId: new Types.ObjectId(),
+        currentFormStatus: FORM_STATUS.RETURNED_BY_MOHUA,
+        decidedAt: new Date(),
+        mohuaRemarks: 'Not eligible.',
+      });
+
+      const result = await service.removeDocument(ACCOUNT_ID, 'auditedData', 'auditors-report', baseUser);
+
+      expect(result.docId).toBe('auditors-report');
     });
   });
 
@@ -470,6 +608,140 @@ describe('AnnualAccountsService', () => {
         isActive: true,
       });
       expect(result.actionGates).toEqual([]);
+    });
+  });
+
+  describe('listUlbSubmissions', () => {
+    const adminUser: AuthUser = { _id: 'user-1', role: 'ADMIN', scope: 'ADMIN' } as AuthUser;
+    const baseDto = { section: 'auditedData' as const, designYearId: '507f1f77bcf86cd799439013', page: 1, pageSize: 20 };
+
+    beforeEach(() => {
+      mockYearModel.findById.mockReturnValue(mockQuery({ _id: 'year-1', year: '2026-27' }));
+    });
+
+    it('runs the aggregation against the Ulb model and returns rows/counts/total', async () => {
+      const row = {
+        ulbId: 'ulb-1',
+        ulbCode: 'ULB1',
+        censusCode: '900001',
+        ulbName: 'Test ULB',
+        formStatus: 'IN_PROGRESS',
+        formStatusId: 2,
+        lastUpdatedAt: null,
+        enteredReviewAt: null,
+        annualAccountId: null,
+        hasManualReviewRequests: false,
+      };
+      mockUlbModel.aggregate.mockReturnValue(
+        mockQuery([{ data: [row], totalCount: [{ count: 1 }], counts: [{ _id: 'IN_PROGRESS', count: 1 }] }]),
+      );
+
+      const result = await service.listUlbSubmissions(baseDto, adminUser);
+
+      expect(mockUlbModel.aggregate).toHaveBeenCalled();
+      expect(result.total).toBe(1);
+      expect(result.rows).toEqual([row]);
+      expect(result.counts.IN_PROGRESS).toBe(1);
+      expect(result.counts.NOT_STARTED).toBe(0);
+      // Synthetic exemption-overlay buckets are always present, even when nothing landed in them.
+      expect(result.counts.EXEMPTION_PENDING).toBe(0);
+      expect(result.counts.EXEMPTION_REJECTED).toBe(0);
+      expect(result.counts.EXEMPTION_APPROVED).toBe(0);
+      expect(result.counts.AUTO_EXEMPTED).toBe(0);
+    });
+
+    it('resolves the automatic-exemption candidate set with the section formId (30 for auditedData)', async () => {
+      await service.listUlbSubmissions(baseDto, adminUser);
+
+      expect(mockExemptionResolverService.resolveBulk).toHaveBeenCalledWith(
+        [],
+        { _id: 'year-1', year: '2026-27' },
+        30,
+      );
+    });
+
+    it('resolves the section formId as 31 for unauditedData', async () => {
+      await service.listUlbSubmissions({ ...baseDto, section: 'unauditedData' }, adminUser);
+
+      expect(mockExemptionResolverService.resolveBulk).toHaveBeenCalledWith(expect.anything(), expect.anything(), 31);
+      expect(mockExemptionResolverService.resolveDiscretionaryBulk).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.any(Types.ObjectId),
+        31,
+      );
+    });
+
+    it('feeds AUTOMATIC-exempt ULB ids into the documentless-fallback $addFields stage', async () => {
+      const exemptUlbId = new Types.ObjectId();
+      mockUlbModel.find.mockReturnValue(mockQuery([{ _id: exemptUlbId, startYear: 2026, yearAccess: {} }]));
+      mockExemptionResolverService.resolveBulk.mockResolvedValue(
+        new Map([[String(exemptUlbId), { exempted: true, source: 'AUTOMATIC' }]]),
+      );
+
+      await service.listUlbSubmissions(baseDto, adminUser);
+
+      const pipeline = mockUlbModel.aggregate.mock.calls[0][0];
+      const fallbackStage = pipeline.find(
+        (stage: Record<string, any>) => stage.$addFields?.formStatus?.$ifNull !== undefined,
+      );
+      expect(fallbackStage.$addFields.formStatus.$ifNull[1].$cond[0].$in[1]).toEqual([exemptUlbId]);
+      expect(fallbackStage.$addFields.formStatus.$ifNull[1].$cond[1]).toBe('EXEMPTED_ACKNOWLEDGED');
+    });
+
+    it('feeds Pending/Rejected/Approved discretionary ULB ids into the exemption-overlay $switch stage', async () => {
+      const pendingId = new Types.ObjectId();
+      const rejectedId = new Types.ObjectId();
+      const approvedId = new Types.ObjectId();
+      mockUlbModel.find.mockReturnValue(
+        mockQuery([
+          { _id: pendingId, startYear: null, yearAccess: {} },
+          { _id: rejectedId, startYear: null, yearAccess: {} },
+          { _id: approvedId, startYear: null, yearAccess: {} },
+        ]),
+      );
+      mockExemptionResolverService.resolveDiscretionaryBulk.mockResolvedValue(
+        new Map([
+          [String(pendingId), { currentFormStatus: 5, requestId: new Types.ObjectId(), decidedAt: null, mohuaRemarks: null }],
+          [String(rejectedId), { currentFormStatus: 6, requestId: new Types.ObjectId(), decidedAt: new Date(), mohuaRemarks: 'No' }],
+          [String(approvedId), { currentFormStatus: 7, requestId: new Types.ObjectId(), decidedAt: new Date(), mohuaRemarks: null }],
+        ]),
+      );
+
+      await service.listUlbSubmissions(baseDto, adminUser);
+
+      const pipeline = mockUlbModel.aggregate.mock.calls[0][0];
+      const overlayStage = pipeline.find((stage: Record<string, any>) => stage.$addFields?.formStatus?.$switch !== undefined);
+      const branches = overlayStage.$addFields.formStatus.$switch.branches;
+
+      expect(branches[0].case.$in[1]).toEqual([pendingId]);
+      expect(branches[0].then).toBe('EXEMPTION_PENDING');
+      expect(branches[1].case.$and[0].$in[1]).toEqual([rejectedId]);
+      // Only while still genuinely untouched (NOT_STARTED, id 1) - not the whole ULB_EDITABLE_STATUS_IDS
+      // set. IN_PROGRESS/RETURNED_BY_STATE/RETURNED_BY_MOHUA all mean real work happened since the
+      // rejection, so those fall through to the real live status instead of a stale "Exemption Rejected".
+      expect(branches[1].case.$and[1]).toEqual({ $eq: ['$formStatusId', 1] });
+      expect(branches[1].then).toBe('EXEMPTION_REJECTED');
+      expect(branches[2].case.$in[1]).toEqual([approvedId]);
+      expect(branches[2].then).toBe('EXEMPTION_APPROVED');
+      expect(branches[3].then).toBe('AUTO_EXEMPTED');
+    });
+
+    it('skips every exemption lookup when the design year is not found', async () => {
+      mockYearModel.findById.mockReturnValue(mockQuery(null));
+
+      await service.listUlbSubmissions(baseDto, adminUser);
+
+      expect(mockUlbModel.find).not.toHaveBeenCalled();
+      expect(mockExemptionResolverService.resolveBulk).not.toHaveBeenCalled();
+      // Discretionary lookup still runs even with an empty candidate set - resolveDiscretionaryBulk
+      // itself short-circuits to an empty map when given no ULB ids (see its own implementation).
+      expect(mockExemptionResolverService.resolveDiscretionaryBulk).toHaveBeenCalledWith([], expect.any(Types.ObjectId), 30);
+    });
+
+    it('rejects a caller without REVIEW_ULB_SUBMISSIONS permission', async () => {
+      const ulbUser: AuthUser = { _id: 'u-1', role: 'ULB-EDITOR', scope: 'ULB' } as AuthUser;
+
+      await expect(service.listUlbSubmissions(baseDto, ulbUser)).rejects.toThrow(ForbiddenException);
     });
   });
 });

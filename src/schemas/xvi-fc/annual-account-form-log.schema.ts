@@ -4,7 +4,13 @@ import { AnnualAccountFormStatus, UserInfo, UserInfoSchema } from './annual-acco
 
 export type XviFcAnnualAccountFormLogDocument = HydratedDocument<XviFcAnnualAccountFormLog>;
 
-export type FormLogAction = 'SUBMITTED' | 'APPROVED' | 'RETURNED' | 'UNDO';
+/** EXEMPTED is written only by the discretionary Request Exemption MoHUA-approve flow
+ *  (mohua/request-exemption) - a genuine transition of this section's own status to
+ *  EXEMPTED_ACKNOWLEDGED, distinct from a real state/MoHUA APPROVED decision on submitted content.
+ *  A discretionary *rejection*, by contrast, never touches this section's own status at all (see
+ *  that flow's own doc-comments) and so never writes a row here - only into
+ *  xvifc_eligibility_exemption_form_logs. */
+export type FormLogAction = 'SUBMITTED' | 'APPROVED' | 'RETURNED' | 'UNDO' | 'EXEMPTED';
 export type FormLogActorStage = 'ULB' | 'STATE' | 'MOHUA' | 'ADMIN';
 
 /**
@@ -74,7 +80,7 @@ export class XviFcAnnualAccountFormLog {
   @Prop({ required: true })
   formId!: number;
 
-  @Prop({ type: String, enum: ['SUBMITTED', 'APPROVED', 'RETURNED', 'UNDO'], required: true })
+  @Prop({ type: String, enum: ['SUBMITTED', 'APPROVED', 'RETURNED', 'UNDO', 'EXEMPTED'], required: true })
   action!: FormLogAction;
 
   @Prop({ type: String, enum: Object.values(AnnualAccountFormStatus), required: true })

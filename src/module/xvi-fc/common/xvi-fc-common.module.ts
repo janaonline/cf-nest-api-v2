@@ -12,12 +12,17 @@ import { Ulb, UlbSchema } from 'src/schemas/ulb.schema';
 import { Year, YearSchema } from 'src/schemas/year.schema';
 import { UlbEligibilityModule } from 'src/module/ulb-eligibility/ulb-eligibility.module';
 import { FormJsonConfigModule } from 'src/master/form-json-config/form-json-config.module';
+import {
+  XviFcEligibilityExemption,
+  XviFcEligibilityExemptionSchema,
+} from 'src/schemas/xvi-fc/state/xvi-fc-eligibility-exemption.schema';
 
 @Module({
   imports: [
     MongooseModule.forFeature([
       { name: Ulb.name, schema: UlbSchema },
       { name: Year.name, schema: YearSchema },
+      { name: XviFcEligibilityExemption.name, schema: XviFcEligibilityExemptionSchema },
     ]),
     UlbEligibilityModule,
     FormJsonConfigModule,

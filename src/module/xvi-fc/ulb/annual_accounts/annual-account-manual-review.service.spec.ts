@@ -9,7 +9,9 @@ import { XviFcAnnualAccountFormLog } from '../../../../schemas/xvi-fc/annual-acc
 import { XviFcDocumentActionGate } from '../../../../schemas/xvi-fc/document-action-gate.schema';
 import { XviFcManualReviewRequest } from '../../../../schemas/xvi-fc/manual-review-request.schema';
 import { Ulb } from '../../../../schemas/ulb.schema';
+import { Year } from '../../../../schemas/year.schema';
 import { User } from '../../../../schemas/user/user.schema';
+import { ExemptionResolverService } from '../../common/services/exemption-resolver.service';
 import { S3Service } from '../../../../core/s3/s3.service';
 import { S3UploadService } from '../../../file/s3-upload.service';
 import { FormJsonService } from '../../../../master/form-json/form-json.service';
@@ -92,6 +94,16 @@ describe('AnnualAccountManualReviewService', () => {
     };
     mockUlbModel = {
       findById: jest.fn().mockReturnValue(mockQuery({ state: { toString: () => 'state-1' } })),
+      find: jest.fn().mockReturnValue(mockQuery([])),
+      aggregate: jest.fn().mockReturnValue(mockQuery([{ data: [], totalCount: [], counts: [] }])),
+    };
+    const mockYearModel = {
+      findById: jest.fn().mockReturnValue(mockQuery(null)),
+    };
+    const mockExemptionResolverService = {
+      resolveBulk: jest.fn().mockResolvedValue(new Map()),
+      resolveDiscretionaryBulk: jest.fn().mockResolvedValue(new Map()),
+      resolveDiscretionary: jest.fn().mockResolvedValue(null),
     };
     mockUserModel = {
       findOne: jest.fn().mockReturnValue(mockQuery(null)),
@@ -145,6 +157,7 @@ describe('AnnualAccountManualReviewService', () => {
         { provide: getModelToken(XviFcAnnualAccountUploadHistory.name), useValue: mockUploadHistoryModel },
         { provide: getModelToken(XviFcAnnualAccountFormLog.name), useValue: mockFormLogModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+        { provide: getModelToken(Year.name), useValue: mockYearModel },
         { provide: getModelToken(User.name), useValue: mockUserModel },
         { provide: getModelToken(XviFcDocumentActionGate.name), useValue: mockActionGateModel },
         { provide: getModelToken(XviFcManualReviewRequest.name), useValue: mockManualReviewRequestModel },
@@ -158,6 +171,7 @@ describe('AnnualAccountManualReviewService', () => {
         { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: FormReturnedNotificationService, useValue: mockFormReturnedNotification },
         { provide: ExcelService, useValue: mockExcelService },
+        { provide: ExemptionResolverService, useValue: mockExemptionResolverService },
       ],
     }).compile();
 
@@ -447,6 +461,81 @@ describe('AnnualAccountManualReviewService', () => {
       const result = await service.listManualReviewRequestHistory({ page: 1, pageSize: 20 }, adminUser);
 
       expect(result).toEqual({ total: 0, page: 1, pageSize: 20, rows: [] });
+    });
+  });
+
+  describe('getManualReviewHistoryStats', () => {
+    const adminUser: AuthUser = { _id: 'admin-1', role: 'ADMIN', scope: 'ADMIN' } as AuthUser;
+
+    it('rejects non-ADMIN users', async () => {
+      const stateUser: AuthUser = { _id: 'user-2', role: 'STATE', scope: 'STATE' } as AuthUser;
+
+      await expect(service.getManualReviewHistoryStats({ range: 'all' }, stateUser)).rejects.toThrow(
+        'Only ADMIN users may view the manual-review history',
+      );
+    });
+
+    it('computes the overturn rate and warns once enough requests are decided', async () => {
+      mockManualReviewRequestModel.aggregate.mockReturnValue(
+        mockQuery([
+          { received: 18, pending: 2, approved: 15, rejected: 1, over48hCount: 3, avgResponseHours: 26.4 },
+        ]),
+      );
+
+      const result = await service.getManualReviewHistoryStats({ range: 'all' }, adminUser);
+
+      expect(result).toEqual({
+        range: 'all',
+        received: 18,
+        pending: 2,
+        approved: 15,
+        rejected: 1,
+        over48hCount: 3,
+        avgResponseHours: 26.4,
+        overturnRatePercent: 94,
+        overturnRateWarning: true,
+      });
+    });
+
+    it('suppresses the warning when fewer than 5 requests have been decided, even at 100%', async () => {
+      mockManualReviewRequestModel.aggregate.mockReturnValue(
+        mockQuery([{ received: 2, pending: 0, approved: 2, rejected: 0, over48hCount: 0, avgResponseHours: 5 }]),
+      );
+
+      const result = await service.getManualReviewHistoryStats({ range: 'today' }, adminUser);
+
+      expect(result.overturnRatePercent).toBe(100);
+      expect(result.overturnRateWarning).toBe(false);
+    });
+
+    it('returns zeroed/null stats when nothing matches', async () => {
+      mockManualReviewRequestModel.aggregate.mockReturnValue(mockQuery([]));
+
+      const result = await service.getManualReviewHistoryStats({ range: 'week' }, adminUser);
+
+      expect(result).toEqual({
+        range: 'week',
+        received: 0,
+        pending: 0,
+        approved: 0,
+        rejected: 0,
+        over48hCount: 0,
+        avgResponseHours: null,
+        overturnRatePercent: null,
+        overturnRateWarning: false,
+      });
+    });
+
+    it('omits the requestedAt filter for the "all" range but applies one for "today"', async () => {
+      mockManualReviewRequestModel.aggregate.mockReturnValue(mockQuery([]));
+
+      await service.getManualReviewHistoryStats({ range: 'all' }, adminUser);
+      const allPipeline = mockManualReviewRequestModel.aggregate.mock.calls.at(-1)?.[0];
+      expect(allPipeline[0]).toEqual({ $match: {} });
+
+      await service.getManualReviewHistoryStats({ range: 'today' }, adminUser);
+      const todayPipeline = mockManualReviewRequestModel.aggregate.mock.calls.at(-1)?.[0];
+      expect(todayPipeline[0].$match.requestedAt.$gte).toBeInstanceOf(Date);
     });
   });
 

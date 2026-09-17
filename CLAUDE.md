@@ -46,8 +46,12 @@ src/
 │                        # an inline error, so changing it means updating both sides together
 ├── module/xvi-fc/       # 16th Finance Commission forms (state/ULB/MoHUA roles)
 │   ├── ulb/             # annual_accounts (OCR via ANNUAL_ACCOUNT_PROCESSING_QUEUE), bank-account, unspent-balance-disclosure
-│   ├── state/           # sfc-status, elected-urban-local-bodies, devolution-formula, fc-unspent-declaration, dashboard
-│   ├── mohua/           # fc-unspent-declaration review workflow
+│   ├── state/           # sfc-status, elected-urban-local-bodies, devolution-formula, fc-unspent-declaration, dashboard,
+│   │                    # request-exemption (discretionary STATE→MoHUA exemption requests — one document per
+│   │                    # {ulb, year} (DB-enforced unique index), one data[] entry per requested formId (23/30/31);
+│   │                    # see master/form-json-config/CLAUDE.md's formId registry, formId 34)
+│   ├── mohua/           # fc-unspent-declaration and request-exemption review workflows (each a separate module,
+│   │                    # decoupled from its own STATE-side module — mirrors fc-unspent's own split)
 │   ├── side-menu/, cache/, common/ # XviFcCacheService/Interceptor, form-actors, form-status-access helpers,
 │   │                     # YearAccessService (dynamic year access/exemption for new ULBs - see below) shared
 │   │                     # across sub-features

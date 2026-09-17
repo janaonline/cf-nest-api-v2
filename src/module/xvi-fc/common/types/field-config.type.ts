@@ -135,6 +135,33 @@ export interface FieldLookupConfig {
   populates: Record<string, string>;
 }
 
+/** Drives the frontend's `AutocompleteComponent` (`formFieldType: 'autocomplete'`) — a debounced,
+ *  search-as-you-type remote lookup, as opposed to `FieldLookupConfig` (validates one value and
+ *  patches siblings). Mirrors the frontend's own `FieldRemoteSearchConfig`
+ *  (`shared/dynamic-form/field.interface.ts`) field-for-field. */
+export interface FieldRemoteSearchConfig {
+  /** Relative API path, no `:value` placeholder — the live search term is sent as a query param
+   *  (`searchParam`) instead, alongside `extraParams` and `limit`. */
+  endpoint: string;
+  /** Query param the search text is sent under. Frontend default: `'search'`. */
+  searchParam?: string;
+  /** Extra static query params merged into every request (e.g. state-scoping filters). */
+  extraParams?: Record<string, string | number | boolean>;
+  /** Dot-path into each result item for the option id. Frontend default: `'_id'`. */
+  valueKey?: string;
+  /** Dot-path into each result item for the option's display label. Frontend default: `'name'`. */
+  labelKey?: string;
+  /** Dot-path into the response body where the array of result items lives. Frontend default:
+   *  `'data.data'` (a paginated `{success, data: {data: [...], page, ...}}` envelope). */
+  resultsPath?: string;
+  /** Minimum characters typed before a search fires. Frontend default: `2`. */
+  minLength?: number;
+  /** Debounce window in ms. Frontend default: `300`. */
+  debounceMs?: number;
+  /** Sent as a `limit` query param. Frontend default: `10`. */
+  limit?: number;
+}
+
 // ─── Field config ─────────────────────────────────────────────────────────────
 
 export type FieldType =
@@ -148,7 +175,10 @@ export type FieldType =
   | 'select'
   /** Single question rendering two related numeric inputs (Actual/Target) sharing one set of
    *  validators. Value shape: `{ actual: number | null; target: number | null }`. */
-  | 'actualTarget';
+  | 'actualTarget'
+  /** Debounced, search-as-you-type remote lookup — see `remoteSearch`/`FieldRemoteSearchConfig`.
+   *  The control's value is still just the plain selected option id, same as `'select'`. */
+  | 'autocomplete';
 
 export interface FieldConfig {
   /** Centralized key used by the backend resolver to derive a runtime-contextual folderPath. */
@@ -181,6 +211,10 @@ export interface FieldConfig {
   validations?: Validator[];
   /** Radio fields: FormFieldOption[]; select fields: string[] */
   options?: FieldOptions;
+  /** 'select' fields only — renders a multi-select whose control value is an array of chosen
+   *  option ids (e.g. Request Exemption's `reasonForExemption`). Mirrors the frontend's own
+   *  `FieldConfig.multiple` (`shared/dynamic-form/field.interface.ts`). */
+  multiple?: boolean;
   allowedFileTypes?: string[];
   maxFileSize?: number;
   /** For date fields: earliest selectable date as an ISO string, 'TODAY(+-N[DMY])', or
@@ -214,6 +248,8 @@ export interface FieldConfig {
   meta?: Record<string, unknown>;
   /** On a valid value, calls `endpoint` and patches sibling fields from the response per `populates`. */
   lookup?: FieldLookupConfig;
+  /** `formFieldType: 'autocomplete'` fields only — drives the debounced remote search. */
+  remoteSearch?: FieldRemoteSearchConfig;
   /** This field's value must equal the named sibling field's value (e.g. confirm-account-number). */
   matchesField?: string;
   /** Strips non-digit characters live as the user types; pairs with named `validations` entries

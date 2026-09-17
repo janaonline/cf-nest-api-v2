@@ -12,6 +12,10 @@ const STATUS_FILTER_VALUES = [
   'SUBMISSION_ACKNOWLEDGED_BY_MOHUA',
   'APPROVED_BY_STATE',
   'AWAITING_CLAIM_LETTER',
+  'EXEMPTION_PENDING',
+  'EXEMPTION_REJECTED',
+  'EXEMPTION_APPROVED',
+  'AUTO_EXEMPTED',
 ] as const;
 
 export class UlbSubmissionsQueryDto extends UlbSubmissionsQueryBaseDto {
