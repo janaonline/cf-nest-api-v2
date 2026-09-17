@@ -91,7 +91,7 @@ way to actually unlock the login is the app-wide Forgot Password OTP flow.
 
 There's no temp password and no expiry to worry about. The invite/approval email's "Set Your
 Password" button sends the contact to the app's existing Forgot Password page
-(`/auth/forgot-password`), which:
+(`/auth/reset-password`), which:
 
 1. `POST /auth/sendOtp` with `{ identifier: censusCode, purpose: 'forgot-password' }` — sends an
    OTP to the account's contact mobile/email (`OtpService.sendOtp()`).

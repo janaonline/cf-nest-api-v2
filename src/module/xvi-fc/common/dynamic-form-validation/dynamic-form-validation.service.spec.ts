@@ -292,6 +292,69 @@ describe('DynamicFormValidationService — actualTarget actualLessThanOrEqualToT
   });
 });
 
+describe('DynamicFormValidationService — actualTarget targetLessThanOrEqualToActual rule', () => {
+  const mockNormalizer = { toRawStoragePath: jest.fn((url: string) => url) };
+  const service = new DynamicFormValidationService(mockNormalizer as unknown as FileUrlNormalizerService);
+
+  const fieldWithRule = {
+    key: 'nonRevenueWater',
+    formFieldType: 'actualTarget',
+    label: 'Extent of non-revenue water (NRW)',
+    validations: [
+      { name: 'required', validator: null, message: 'Required.' },
+      {
+        name: 'targetLessThanOrEqualToActual',
+        validator: null,
+        message: 'Target value cannot exceed the actual value.',
+      },
+    ],
+  } as unknown as FieldConfig;
+
+  it('passes when target equals actual', () => {
+    const result = service.validateFinalSubmitAndBuildPayload([fieldWithRule], {
+      nonRevenueWater: { actual: 30, target: 30 },
+    });
+
+    expect(result.isValid).toBe(true);
+  });
+
+  it('rejects when target is greater than actual', () => {
+    const result = service.validateFinalSubmitAndBuildPayload([fieldWithRule], {
+      nonRevenueWater: { actual: 30, target: 40 },
+    });
+
+    expect(result.isValid).toBe(false);
+    expect(result.errors['nonRevenueWater.target']).toEqual([
+      {
+        field: 'nonRevenueWater.target',
+        message: 'Target value cannot exceed the actual value.',
+        code: 'targetLessThanOrEqualToActual',
+      },
+    ]);
+  });
+
+  it('passes when target is strictly lower than actual', () => {
+    const result = service.validateFinalSubmitAndBuildPayload([fieldWithRule], {
+      nonRevenueWater: { actual: 30, target: 20 },
+    });
+
+    expect(result.isValid).toBe(true);
+  });
+
+  it('is not enforced when the field config does not declare the rule', () => {
+    const fieldWithoutRule = {
+      ...fieldWithRule,
+      validations: [{ name: 'required', validator: null, message: 'Required.' }],
+    } as unknown as FieldConfig;
+
+    const result = service.validateFinalSubmitAndBuildPayload([fieldWithoutRule], {
+      nonRevenueWater: { actual: 20, target: 50 },
+    });
+
+    expect(result.isValid).toBe(true);
+  });
+});
+
 describe('DynamicFormValidationService — isNotEmpty/isEmpty visibility operator', () => {
   const mockNormalizer = { toRawStoragePath: jest.fn((url: string) => url) };
   const service = new DynamicFormValidationService(mockNormalizer as unknown as FileUrlNormalizerService);
