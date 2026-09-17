@@ -90,11 +90,48 @@ revisiting as time passes. Full mechanics: `../CLAUDE.md` in this folder.
   the unrelated discretionary flow's own dead `EXEMPTION_REQUESTED` status (below).
 - **No backfill migration.** The old Express app and its data are untouched; new ULBs onboard with
   `startYear: null` (no restriction) until an admin deliberately sets one.
-- **The discretionary STATE → MoHUA exemption flow.** Already scaffolded elsewhere in the codebase
-  (`xvi_fc_eligibility_exemptions`, `Permission.RECOMMEND_EXEMPTIONS`, a dead dashboard status) but
-  not built. Different actors, different lifecycle (request → approve/reject), different audit needs
-  from this automatic mechanism. If it's ever built: an approved discretionary exemption always
-  additionally grants; a rejection has no bearing on this automatic one.
+- **The discretionary STATE → MoHUA exemption flow — filing covers Elected Body/Audited/Provisional
+  AFS uniformly; the MoHUA decide step never grants anything downstream, for any of the three.**
+  `module/xvi-fc/state/request-exemption` (formId 34, schema
+  `xvifc_eligibility_exemptions`) has the STATE-side: one document per `{ulb, year}` (DB-enforced
+  via a unique index — a state filing several requests in flight at once, for different ULBs, means
+  several documents, one per ULB, not one per request), holding a `data[]` entry per requested
+  `formId` (23 Elected Body / 30 Audited AFS / 31 Provisional AFS) so a ULB can have multiple
+  independently-tracked reasons without needing more than one document. Final-submit only — no
+  draft step, by design; see `xvi-fc-eligibility-exemption.schema.ts`'s own doc-comments (on both
+  the document and the entry) for the full reasoning. `Permission.RECOMMEND_EXEMPTIONS`-gated,
+  transitioning straight to `UNDER_REVIEW_BY_MOHUA` (no STATE-review leg). Different actors,
+  different lifecycle, different audit needs from this automatic mechanism — kept as a fully
+  separate collection/module, not folded into `Ulb.yearAccess`.
+  `module/xvi-fc/mohua/request-exemption` (`RequestExemptionMohuaService.approve`/`.reject`) is the
+  MoHUA-side decide endpoint, now built — and deliberately **never writes to the target form's own
+  collection at all**, for any formId, on either approve or reject. An earlier version did (writing
+  `EXEMPTED_ACKNOWLEDGED` into Annual Accounts on approve for formId 30/31 only, materializing a stub
+  document if none existed), but that repeatedly conflicted with invariants owned by
+  `AnnualAccountsService` itself — most notably `sectionType: 'audited'`'s role as a universal
+  per-`{ulb, year}` anchor (`findOrInitialize`), which the discretionary-grant write path didn't know
+  about or preserve, producing orphaned/invisible documents. "Approved" is instead a pure
+  display-only overlay, exactly like "Pending"/"Rejected" already were: `approve` only flips the
+  exemption entry's own `currentFormStatus`; every consumer (`AnnualAccountsService.
+  listUlbSubmissions`'s exemption overlay, `assertNotBlockedByPendingExemption`'s ULB write-gating,
+  the ULB-facing exemption banner) reads that live entry via `ExemptionResolverService.
+  resolveDiscretionary(Bulk)` directly, never a copy written elsewhere. `approve` does still run a
+  **read-only** eligibility check for formId 30/31 (blocks with a 409 if the target Annual Accounts
+  section already has real progress beyond `ULB_EDITABLE_STATUS_IDS` — approving an exemption for a
+  section the ULB has substantially already submitted would be nonsensical) — formId 23 (Elected
+  Body) skips this check entirely, since `ElectedUrbanLocalBodiesForm` has no `ulb` field at all (one
+  whole-state document per `{state, year}`, not per-ULB) and so has no per-ULB progress to check.
+  This is no longer a "known gap" the way an earlier version of this flow had one — since nothing is
+  written downstream for *any* formId now, 23/30/31 are fully uniform; there's no asymmetry left to
+  document. `AnnualAccountsService.listUlbSubmissions`'s exemption overlay
+  (`EXEMPTION_PENDING`/`EXEMPTION_REJECTED`/`EXEMPTION_APPROVED`/`AUTO_EXEMPTED`, display-layer
+  only, not real `form_status` values) is Audited/Provisional-only — `/ulb-submissions` never lists
+  Elected Body at all (it's a STATE form, not a ULB one; that page's whole premise is ULB-submitted
+  forms). The dead dashboard `EXEMPTION_REQUESTED` status
+  (`state/dashboard/state-dashboard.constants.ts`) remains unwired — explicitly deferred, not part
+  of this feature's current scope. A state-level (not per-ULB) exemption — e.g. for SFC Status,
+  which has no `ulb` field at all and so can never be reached by this per-ULB mechanism — is a
+  distinct, separately-deferred idea; see the request-exemption feature's own planning notes.
 
 ## References
 

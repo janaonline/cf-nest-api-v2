@@ -36,6 +36,19 @@ import { StateModule } from './master/state/state.module';
 import { XvFcReviewModule } from './module/xv-fc/xv-fc-review/ulb/xv-fc-review.module';
 import { XvFcReviewAdminModule } from './module/xv-fc/xv-fc-review/admin/xv-fc-review-admin.module';
 import { DigitizationDbModule } from './core/database/digitization-db.module';
+/** Fails app startup before Mongoose ever attempts a connection if MONGO_URI/MONGO_DB_NAME are
+ *  missing or blank — MongooseModule.forRootAsync below would otherwise pass `undefined` through
+ *  silently and only surface the problem once something tries to read/write. */
+function validateEnv(config: Record<string, unknown>): Record<string, unknown> {
+  for (const key of ['MONGO_URI', 'MONGO_DB_NAME']) {
+    const value = typeof config[key] === 'string' ? (config[key] as string).trim() : '';
+    if (!value) {
+      throw new Error(`${key} environment variable is required and must not be empty`);
+    }
+  }
+  return config;
+}
+
 function getQueryCaller(): string {
   const stack = new Error().stack?.split('\n') ?? [];
   const frame = stack.find(
@@ -47,13 +60,13 @@ function getQueryCaller(): string {
 
 @Module({
   imports: [
-    // ThrottlerModule.forRoot([
-    //   {
-    //     ttl: seconds(60), // time window in seconds
-    //     limit: 600, // max requests per window
-    //   },
-    // ]),
-    ConfigModule.forRoot({ isGlobal: true }),
+    ThrottlerModule.forRoot([
+      {
+        ttl: seconds(60), // time window in seconds
+        limit: 60, // max requests per window
+      },
+    ]),
+    ConfigModule.forRoot({ isGlobal: true, validate: validateEnv }),
     ScheduleModule.forRoot(),
     CacheModule.register({ isGlobal: true, ttl: 300000 }),
     RedisModule,
