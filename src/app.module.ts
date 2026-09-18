@@ -36,6 +36,7 @@ import { StateModule } from './master/state/state.module';
 import { DigitizationDbModule } from './core/database/digitization-db.module';
 import { XvFcReviewModule } from './module/xv-fc/xv-fc-review/ulb/xv-fc-review.module';
 import { XvFcReviewAdminModule } from './module/xv-fc/xv-fc-review/admin/xv-fc-review-admin.module';
+import { PropertyTaxModule } from './module/property-tax/property-tax.module';
 /** Fails app startup before Mongoose ever attempts a connection if MONGO_URI/MONGO_DB_NAME are
  *  missing or blank — MongooseModule.forRootAsync below would otherwise pass `undefined` through
  *  silently and only surface the problem once something tries to read/write. */
@@ -132,6 +133,7 @@ function getQueryCaller(): string {
     StateModule,
     XvFcReviewModule,
     XvFcReviewAdminModule,
+    PropertyTaxModule,
     DataCollectionModule,
   ],
   controllers: [AppController],
