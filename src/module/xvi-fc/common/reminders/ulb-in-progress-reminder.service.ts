@@ -214,7 +214,6 @@ export class UlbInProgressReminderService {
       to: nodalOfficer.email as string,
       subject,
       html,
-      bcc: this.config.get<string>('CRON_EMAIL_BCC'),
       replyTo: REMINDER_CRON_REPLY_TO,
     });
 
