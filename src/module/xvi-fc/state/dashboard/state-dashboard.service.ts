@@ -308,7 +308,14 @@ export class StateDashboardService {
     );
     const slbByUlb = new Map(slbRecords.map((r) => [r.ulb.toString(), r.currentFormStatus ?? FORM_STATUS.NOT_STARTED]));
 
-    const headers = ['ULB Name', 'Census Code', 'Audited Form', 'Provisional Form', 'PFMS Bank Account', 'SLB Form'];
+    const headers = [
+      'ULB Name',
+      'Census Code',
+      'Audited Statements',
+      'Provisional Statements',
+      'PFMS Bank Account',
+      'SLB Form',
+    ];
     const rows = ulbs.map((ulb) => {
       const id = ulb._id.toString();
       return [
@@ -353,11 +360,18 @@ export class StateDashboardService {
     // to each other regardless of how ExcelJS internally accounts for touched-but-empty rows.
     let rowNum = 1;
 
+    // XVI-FC module theme colors (styles/_theme-colors.scss primary palette — the same teal used
+    // for the XVI-FC sidebar/nav surface), not the site-wide orange/blue brand — this report lives
+    // inside the XVI-FC module.
+    const BRAND_SECONDARY = 'FF0B414D'; // primary palette tone 25 — sidebar surface color
+    const BRAND_PRIMARY = 'FF366571'; // primary palette tone 40 — lighter teal accent
+    const BRAND_SECONDARY_TINT = 'FFD9F6FF'; // primary palette tone 95 — pale teal tint
+
     sheet.mergeCells(`A${rowNum}:${lastColLetter}${rowNum}`);
     const titleCell = sheet.getCell(`A${rowNum}`);
     titleCell.value = `City Finance - 16th Finance Commission${fyLabel ? ` - ${fyLabel}` : ''}`;
     titleCell.font = { bold: true, size: 14, color: { argb: 'FFFFFFFF' } };
-    titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F4C81' } };
+    titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BRAND_SECONDARY } };
     titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
     sheet.getRow(rowNum).height = 26;
     rowNum++;
@@ -366,7 +380,7 @@ export class StateDashboardService {
     const subtitleCell = sheet.getCell(`A${rowNum}`);
     subtitleCell.value = 'ULB Submissions - All Forms';
     subtitleCell.font = { bold: true, size: 12, color: { argb: 'FFFFFFFF' } };
-    subtitleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF3B6EA5' } };
+    subtitleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BRAND_PRIMARY } };
     subtitleCell.alignment = { horizontal: 'center', vertical: 'middle' };
     sheet.getRow(rowNum).height = 20;
     rowNum++;
@@ -378,13 +392,22 @@ export class StateDashboardService {
     metaCell.alignment = { horizontal: 'center', vertical: 'middle' };
     rowNum++;
 
+    // Contact line sits right under the State/Generated-on line, not buried past the data table.
+    sheet.mergeCells(`A${rowNum}:${lastColLetter}${rowNum}`);
+    const contactCell = sheet.getCell(`A${rowNum}`);
+    contactCell.value =
+      'This is a system-generated report. For questions on the data, please contact: 16fc.grant@cityfinance.in';
+    contactCell.font = { italic: true, size: 9, color: { argb: 'FF777777' } };
+    contactCell.alignment = { horizontal: 'center', vertical: 'middle' };
+    rowNum++;
+
     rowNum++; // blank spacer row before the table
 
     headers.forEach((label, colIndex) => {
       const cell = sheet.getCell(rowNum, colIndex + 1);
       cell.value = label;
-      cell.font = { bold: true, color: { argb: 'FF0D6EFD' } };
-      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE7F1FF' } };
+      cell.font = { bold: true, color: { argb: BRAND_SECONDARY } };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BRAND_SECONDARY_TINT } };
       cell.alignment = { horizontal: 'center', vertical: 'middle' };
     });
     rowNum++;
@@ -395,16 +418,6 @@ export class StateDashboardService {
       });
       rowNum++;
     }
-
-    rowNum++; // blank spacer row before the footer
-
-    sheet.mergeCells(`A${rowNum}:${lastColLetter}${rowNum}`);
-    const footerCell = sheet.getCell(`A${rowNum}`);
-    footerCell.value =
-      'This is a system-generated report. For questions on the data, please contact: 16fc.grant@cityfinance.in';
-    footerCell.font = { italic: true, size: 9, color: { argb: 'FF777777' } };
-    footerCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF4F6F9' } };
-    footerCell.alignment = { horizontal: 'center', vertical: 'middle' };
 
     const excelBuffer = await workbook.xlsx.writeBuffer();
     return Buffer.from(excelBuffer as ArrayBuffer);

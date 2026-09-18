@@ -21,7 +21,7 @@ import {
 } from 'src/schemas/xvi-fc/annual-account.schema';
 import { XviFcBankAccount, XviFcBankAccountDocument } from 'src/schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
 import { StateReviewPdfRow, StateReviewPdfService } from './state-review-pdf.service';
-import { remindersCronsEnabled } from 'src/common/utils/reminder-cron-gate.util';
+import { remindersCronsEnabled, REMINDER_CRON_REPLY_TO } from 'src/common/utils/reminder-cron-gate.util';
 import { escapeHtml } from 'src/common/utils/html-escape.util';
 
 const INTERVAL_DAYS = 7;
@@ -100,7 +100,8 @@ const DEFAULT_BODY = `
 
     <div class="footer">
       &copy; CityFinance &mdash; Ministry of Housing and Urban Affairs, Government of India<br />
-      This is an automated message. Please do not reply to this email.
+      This is an automated message. For any information needed, please reply only to
+      16fc.grant@cityfinance.in.
     </div>
   </div>
 </body>
@@ -334,6 +335,8 @@ export class StateReviewDigestService {
           contentType: 'application/pdf',
         },
       ],
+      bcc: this.config.get<string>('CRON_EMAIL_BCC'),
+      replyTo: REMINDER_CRON_REPLY_TO,
     });
 
     const annualAccountIds = rows.filter((r) => r.docType === 'annual_account').map((r) => r.docId);

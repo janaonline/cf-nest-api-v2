@@ -1883,16 +1883,19 @@ describe('StateDashboardService', () => {
       expect(String(sheet.getCell('A1').value)).toContain(yearRecord.year);
       expect(sheet.getCell('A2').value).toBe('ULB Submissions - All Forms');
       expect(String(sheet.getCell('A3').value)).toContain(`State: ${stateRecord.name}`);
+      // Contact line sits right under the State/Generated-on line, not buried past the data table.
+      expect(String(sheet.getCell('A4').value)).toContain('This is a system-generated report');
+      expect(String(sheet.getCell('A4').value)).toContain('16fc.grant@cityfinance.in');
 
-      expect((sheet.getRow(5).values as unknown[]).slice(1)).toEqual([
+      expect((sheet.getRow(6).values as unknown[]).slice(1)).toEqual([
         'ULB Name',
         'Census Code',
-        'Audited Form',
-        'Provisional Form',
+        'Audited Statements',
+        'Provisional Statements',
         'PFMS Bank Account',
         'SLB Form',
       ]);
-      expect((sheet.getRow(6).values as unknown[]).slice(1)).toEqual([
+      expect((sheet.getRow(7).values as unknown[]).slice(1)).toEqual([
         'Achalpur Municipal Council',
         '802685',
         'In Progress',
@@ -1900,7 +1903,7 @@ describe('StateDashboardService', () => {
         'Under Review by MoHUA',
         'Not Started',
       ]);
-      expect((sheet.getRow(7).values as unknown[]).slice(1)).toEqual([
+      expect((sheet.getRow(8).values as unknown[]).slice(1)).toEqual([
         'Beta Nagar Panchayat',
         'SB-42',
         'Not Started',
@@ -1908,11 +1911,6 @@ describe('StateDashboardService', () => {
         'Not Started',
         'Not Started',
       ]);
-
-      const lastRow = sheet.lastRow;
-      if (!lastRow) throw new Error('Expected a footer row');
-      expect(String(lastRow.getCell(1).value)).toContain('This is a system-generated report');
-      expect(String(lastRow.getCell(1).value)).toContain('16fc.grant@cityfinance.in');
     });
 
     it('scopes the ULB list to the requesting STATE user\'s own state', async () => {
