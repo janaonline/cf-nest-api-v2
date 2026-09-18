@@ -32,6 +32,11 @@ export class AdminReviewListQueryDto {
   @IsString()
   stateId?: string;
 
+  @ApiPropertyOptional({ description: 'Partial match against the ULB’s census code' })
+  @IsOptional()
+  @IsString()
+  censusCode?: string;
+
   @ApiPropertyOptional({ example: '2022-23' })
   @IsOptional()
   @IsString()

@@ -16,6 +16,11 @@ import {
 import { escapeRegex } from '../common/regex.util';
 import { AdminReviewListQueryDto } from './dto/admin-review-list-query.dto';
 import { LineItemDecisionDto } from './dto/line-item-decision.dto';
+import { ReopenReviewDto } from './dto/reopen-review.dto';
+
+// Statuses a submission sits in before it's been finalized — decideLineItem/acceptAll bump
+// straight past these to VERIFYING the moment any decision is made.
+const PRE_VERIFICATION_STATUSES = ['LOCKED', 'SUBMITTED'] as const;
 
 @Injectable()
 export class XvFcReviewAdminService {
@@ -37,6 +42,7 @@ export class XvFcReviewAdminService {
     if (query.stateId) filter['state_code'] = query.stateId;
     if (query.financialYear) filter['year'] = query.financialYear;
     if (query.reviewStatus) filter['xvFcReview.status'] = query.reviewStatus;
+    if (query.censusCode) filter['censusCode'] = new RegExp(escapeRegex(query.censusCode));
     if (query.search) {
       const regex = new RegExp(escapeRegex(query.search), 'i');
       filter['$or'] = [{ ulb: regex }, { ulb_code: regex }];
@@ -55,7 +61,7 @@ export class XvFcReviewAdminService {
       this.ledgerLogModel
         .find(filter)
         .select(
-          'ulb_id ulb ulb_code state state_code year xvFcReview.status xvFcReview.submittedAt xvFcReview.lineItemReviews',
+          'ulb_id ulb ulb_code censusCode state state_code year xvFcReview.status xvFcReview.submittedAt xvFcReview.lineItemReviews',
         )
         .sort(sort)
         .skip(skip)
@@ -70,6 +76,7 @@ export class XvFcReviewAdminService {
         ulbId: doc.ulb_id?.toString(),
         ulbName: doc.ulb,
         ulbCode: doc.ulb_code,
+        censusCode: doc.censusCode ?? null,
         state: doc.state,
         stateCode: doc.state_code,
         financialYear: doc.year,
@@ -82,6 +89,27 @@ export class XvFcReviewAdminService {
       page,
       limit,
     };
+  }
+
+  /** This ULB's status across every reviewable financial year — powers the admin UI's year tabs. */
+  async getYearsSummary(ulbId: string) {
+    const reviewableYears = XV_FC_REVIEWABLE_YEARS as unknown as string[];
+    const [yearDocs, reviewDocs] = await Promise.all([
+      this.yearModel.find({ year: { $in: reviewableYears } }).select('year').lean().exec(),
+      this.ledgerLogModel
+        .find({ ulb_id: new Types.ObjectId(ulbId), year: { $in: reviewableYears } })
+        .select('year xvFcReview.status')
+        .lean()
+        .exec(),
+    ]);
+    const yearIdByYear = new Map(yearDocs.map((y: any) => [y.year, y._id.toString()]));
+    const statusByYear = new Map(reviewDocs.map((d: any) => [d.year, d.xvFcReview?.status ?? 'NOT_STARTED']));
+
+    return XV_FC_REVIEWABLE_YEARS.map((financialYear) => ({
+      financialYear,
+      yearId: yearIdByYear.get(financialYear) ?? null,
+      status: statusByYear.get(financialYear) ?? 'NOT_STARTED',
+    }));
   }
 
   async getDetail(ulbId: string, yearId: string) {
@@ -133,37 +161,53 @@ export class XvFcReviewAdminService {
       declaration: doc.xvFcReview?.declaration ?? null,
       supportingDocument: doc.xvFcReview?.supportingDocument ?? null,
       lineItems,
+      // Filterable client-side by lineItemCode — same shape/purpose as Ptax's `history`.
+      auditTrail: doc.xvFcReview?.auditTrail ?? [],
     };
   }
 
   async decideLineItem(ulbId: string, yearId: string, code: string, dto: LineItemDecisionDto, user: AuthUser) {
     const financialYear = await this.resolveYearString(yearId);
     const doc = await this.findLedgerLogOrThrow(ulbId, financialYear);
+    this.assertNotFinalized(doc.xvFcReview?.status);
 
     const review = doc.xvFcReview?.lineItemReviews?.[code];
     if (!review?.flagged) {
       throw new BadRequestException('This line item was not flagged by the ULB');
     }
-    if (review.adminDecision?.status !== 'PENDING') {
-      throw new ConflictException('This line item is not currently pending a decision');
-    }
+    // Deliberately NOT requiring adminDecision.status === 'PENDING' here — the admin can freely
+    // flip a line item between Accept/Reject (or re-decide it) any number of times up until
+    // Final Submit locks the form, matching what the UI itself always allowed (the decision
+    // buttons only ever disable once the whole form is finalized, never per-row after one click).
 
     const previousValue = doc.lineItems?.[code] ?? null;
     const now = new Date();
     const reviewedBy = new Types.ObjectId(user._id);
+    const reason = dto.reason ?? '';
 
     const setOps: Record<string, unknown> = {
       [`xvFcReview.lineItemReviews.${code}.adminDecision.status`]: dto.decision,
-      [`xvFcReview.lineItemReviews.${code}.adminDecision.reason`]: dto.reason,
+      [`xvFcReview.lineItemReviews.${code}.adminDecision.reason`]: reason,
       [`xvFcReview.lineItemReviews.${code}.adminDecision.reviewedBy`]: reviewedBy,
       [`xvFcReview.lineItemReviews.${code}.adminDecision.reviewedAt`]: now,
     };
 
-    if (dto.decision === 'ACCEPTED') {
+    // correctedValue is optional on ACCEPTED — a flagged item with no original/proposed value at
+    // all (e.g. a comment-only flag on an empty field) has nothing to overwrite. Skipping these
+    // two writes when it's absent leaves both fields as they already were, rather than clobbering
+    // them with `undefined`.
+    if (dto.decision === 'ACCEPTED' && dto.correctedValue !== undefined) {
       setOps[`xvFcReview.lineItemReviews.${code}.adminDecision.correctedValue`] = dto.correctedValue;
       // ACCEPTED propagates into the source-of-truth value on the same document —
       // one atomic write keeps lineItems and the audit trail from ever drifting apart.
       setOps[`lineItems.${code}`] = dto.correctedValue;
+    }
+
+    // First decision on this submission moves it out of the "awaiting admin action" state
+    // and into "being worked on" — Final Submit (a separate, deliberate action) is what
+    // actually resolves it to APPROVED/REJECTED.
+    if ((PRE_VERIFICATION_STATUSES as readonly string[]).includes(doc.xvFcReview?.status)) {
+      setOps['xvFcReview.status'] = 'VERIFYING';
     }
 
     const auditEntry = {
@@ -173,24 +217,173 @@ export class XvFcReviewAdminService {
       newValue: dto.decision === 'ACCEPTED' ? (dto.correctedValue ?? null) : null,
       performedBy: reviewedBy,
       performedByRole: user.role,
-      reason: dto.reason,
+      reason,
       createdAt: now,
     };
 
     const result = await this.ledgerLogModel
-      .updateOne(
-        { _id: doc._id, [`xvFcReview.lineItemReviews.${code}.adminDecision.status`]: 'PENDING' },
-        { $set: setOps, $push: { 'xvFcReview.auditTrail': auditEntry } },
-      )
+      .updateOne({ _id: doc._id }, { $set: setOps, $push: { 'xvFcReview.auditTrail': auditEntry } })
       .exec();
 
     if (result.modifiedCount === 0) {
-      throw new ConflictException('This line item has already been decided by another admin');
+      throw new ConflictException('Failed to save this decision — please retry.');
     }
 
     this.logger.log(
       `XV-FC admin decision — ulb=${ulbId} year=${financialYear} code=${code} decision=${dto.decision} by=${user._id}`,
     );
+
+    return this.getDetail(ulbId, yearId);
+  }
+
+  /** Bulk-accepts every still-PENDING flagged line item, using each one's own `proposedValue`. */
+  async acceptAll(ulbId: string, yearId: string, user: AuthUser) {
+    const financialYear = await this.resolveYearString(yearId);
+    const doc = await this.findLedgerLogOrThrow(ulbId, financialYear);
+    this.assertNotFinalized(doc.xvFcReview?.status);
+
+    const reviewMap: Record<string, any> = doc.xvFcReview?.lineItemReviews ?? {};
+    const pendingCodes = Object.entries(reviewMap)
+      .filter(([, review]) => review?.flagged && review?.adminDecision?.status === 'PENDING')
+      .map(([code]) => code);
+
+    if (pendingCodes.length === 0) return this.getDetail(ulbId, yearId);
+
+    const now = new Date();
+    const reviewedBy = new Types.ObjectId(user._id);
+    const setOps: Record<string, unknown> = {};
+    const auditEntries: unknown[] = [];
+
+    for (const code of pendingCodes) {
+      const correctedValue = reviewMap[code].proposedValue;
+      setOps[`xvFcReview.lineItemReviews.${code}.adminDecision.status`] = 'ACCEPTED';
+      setOps[`xvFcReview.lineItemReviews.${code}.adminDecision.reason`] = '';
+      setOps[`xvFcReview.lineItemReviews.${code}.adminDecision.correctedValue`] = correctedValue;
+      setOps[`xvFcReview.lineItemReviews.${code}.adminDecision.reviewedBy`] = reviewedBy;
+      setOps[`xvFcReview.lineItemReviews.${code}.adminDecision.reviewedAt`] = now;
+      setOps[`lineItems.${code}`] = correctedValue;
+      auditEntries.push({
+        action: 'ADMIN_ACCEPT',
+        lineItemCode: code,
+        previousValue: doc.lineItems?.[code] ?? null,
+        newValue: correctedValue,
+        performedBy: reviewedBy,
+        performedByRole: user.role,
+        reason: 'Accepted via Accept All',
+        createdAt: now,
+      });
+    }
+    if ((PRE_VERIFICATION_STATUSES as readonly string[]).includes(doc.xvFcReview?.status)) {
+      setOps['xvFcReview.status'] = 'VERIFYING';
+    }
+
+    await this.ledgerLogModel
+      .updateOne({ _id: doc._id }, { $set: setOps, $push: { 'xvFcReview.auditTrail': { $each: auditEntries } } })
+      .exec();
+
+    this.logger.log(
+      `XV-FC admin accept-all — ulb=${ulbId} year=${financialYear} count=${pendingCodes.length} by=${user._id}`,
+    );
+
+    return this.getDetail(ulbId, yearId);
+  }
+
+  /**
+   * Deliberate, separate finalization step — every flagged item must already have a decision
+   * (with a reason on any Reject) before this succeeds. Resolves to REJECTED if any flagged
+   * item was rejected, APPROVED otherwise; matches the same rule Ptax used to auto-apply after
+   * every single decision, now applied once, on purpose, via this endpoint.
+   */
+  async finalize(ulbId: string, yearId: string, user: AuthUser) {
+    const financialYear = await this.resolveYearString(yearId);
+    const doc = await this.findLedgerLogOrThrow(ulbId, financialYear);
+    this.assertNotFinalized(doc.xvFcReview?.status);
+
+    const reviewMap: Record<string, any> = doc.xvFcReview?.lineItemReviews ?? {};
+    const flagged = Object.values(reviewMap).filter((r: any) => r?.flagged);
+    const stillPending = flagged.filter((r: any) => !r.adminDecision || r.adminDecision.status === 'PENDING');
+    if (stillPending.length > 0) {
+      throw new BadRequestException(`${stillPending.length} flagged line item(s) still need an Accept/Reject decision`);
+    }
+    const missingReason = flagged.filter(
+      (r: any) => r.adminDecision.status === 'REJECTED' && !r.adminDecision.reason?.trim(),
+    );
+    if (missingReason.length > 0) {
+      throw new BadRequestException('Every rejected line item needs a reason before Final Submit');
+    }
+
+    const hasRejected = flagged.some((r: any) => r.adminDecision.status === 'REJECTED');
+    const nextStatus = hasRejected ? 'REJECTED' : 'APPROVED';
+    const now = new Date();
+    const performedBy = new Types.ObjectId(user._id);
+
+    await this.ledgerLogModel
+      .updateOne(
+        { _id: doc._id },
+        {
+          $set: { 'xvFcReview.status': nextStatus },
+          $push: {
+            'xvFcReview.auditTrail': {
+              action: nextStatus === 'APPROVED' ? 'SUBMISSION_APPROVED' : 'SUBMISSION_REJECTED',
+              lineItemCode: null,
+              previousValue: null,
+              newValue: null,
+              performedBy,
+              performedByRole: user.role,
+              reason:
+                nextStatus === 'APPROVED'
+                  ? 'All flagged line items accepted'
+                  : 'At least one flagged line item was rejected',
+              createdAt: now,
+            },
+          },
+        },
+      )
+      .exec();
+
+    this.logger.log(`XV-FC admin finalize — ulb=${ulbId} year=${financialYear} result=${nextStatus} by=${user._id}`);
+
+    return this.getDetail(ulbId, yearId);
+  }
+
+  /**
+   * Moves a finalized submission back to DRAFT so the ULB can edit and resubmit. Existing
+   * line-item decisions are left untouched — only the form-level status changes.
+   */
+  async reopen(ulbId: string, yearId: string, dto: ReopenReviewDto, user: AuthUser) {
+    const financialYear = await this.resolveYearString(yearId);
+    const doc = await this.findLedgerLogOrThrow(ulbId, financialYear);
+
+    const status = doc.xvFcReview?.status;
+    if (status !== 'APPROVED' && status !== 'REJECTED') {
+      throw new ConflictException('Only a finalized (Approved/Rejected) submission can be reopened');
+    }
+
+    const now = new Date();
+    const performedBy = new Types.ObjectId(user._id);
+
+    await this.ledgerLogModel
+      .updateOne(
+        { _id: doc._id },
+        {
+          $set: { 'xvFcReview.status': 'DRAFT' },
+          $push: {
+            'xvFcReview.auditTrail': {
+              action: 'REOPENED',
+              lineItemCode: null,
+              previousValue: null,
+              newValue: null,
+              performedBy,
+              performedByRole: user.role,
+              reason: dto.reason ?? '',
+              createdAt: now,
+            },
+          },
+        },
+      )
+      .exec();
+
+    this.logger.log(`XV-FC admin reopen — ulb=${ulbId} year=${financialYear} by=${user._id}`);
 
     return this.getDetail(ulbId, yearId);
   }
@@ -245,5 +438,11 @@ export class XvFcReviewAdminService {
     if (!lineItemReviews) return 0;
     return Object.values(lineItemReviews).filter((r: any) => r?.flagged && r?.adminDecision?.status === 'PENDING')
       .length;
+  }
+
+  private assertNotFinalized(status: string | undefined): void {
+    if (status === 'APPROVED' || status === 'REJECTED') {
+      throw new ConflictException('This submission has already been finalized — Reopen it first.');
+    }
   }
 }

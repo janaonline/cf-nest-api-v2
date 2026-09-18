@@ -2,7 +2,12 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
 import { XvFcDeclaration, XvFcDeclarationSchema, XvFcFileRef, XvFcFileRefSchema } from './ledger-log.schema';
 
-export const PTAX_REVIEW_STATUS = ['NOT_STARTED', 'DRAFT', 'SUBMITTED', 'REJECTED', 'APPROVED'] as const;
+// SUBMITTED = ULB has submitted, awaiting admin action. VERIFYING = admin has made at least
+// one metric decision but hasn't finalized yet. APPROVED / REJECTED = admin has finalized
+// (POST .../finalize) — REJECTED whenever any flagged metric was rejected, APPROVED otherwise.
+// Reopen moves either back to DRAFT. (Previously auto-computed after every decision — see
+// PtaxReviewAdminService — finalization is now a deliberate, separate admin action.)
+export const PTAX_REVIEW_STATUS = ['NOT_STARTED', 'DRAFT', 'SUBMITTED', 'VERIFYING', 'REJECTED', 'APPROVED'] as const;
 export type PtaxReviewStatus = (typeof PTAX_REVIEW_STATUS)[number];
 
 export const PTAX_FINAL_ACTION = ['ACCEPT_NO_CHANGES', 'SUBMIT_WITH_COMMENTS'] as const;
@@ -18,6 +23,7 @@ export const PTAX_HISTORY_ACTION = [
   'ADMIN_REJECT',
   'SUBMISSION_APPROVED',
   'SUBMISSION_REJECTED',
+  'REOPENED',
 ] as const;
 export type PtaxHistoryAction = (typeof PTAX_HISTORY_ACTION)[number];
 
@@ -106,6 +112,11 @@ export class XvFcPtaxReview {
 
   @Prop({ type: String })
   ulbCode: string;
+
+  // Denormalized from Ulb.censusCode — populated via scripts/backfill-xv-fc-census-code.ts for
+  // pre-existing documents; new ones should be denormalized the same way ulbName/ulbCode/state are.
+  @Prop({ type: String })
+  censusCode: string;
 
   @Prop({ type: String })
   state: string;

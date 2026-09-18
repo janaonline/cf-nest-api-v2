@@ -20,7 +20,19 @@ import { Document, Schema as MongooseSchema, Types } from 'mongoose';
  * ---------------------------------------------------------------------------
  */
 
-export const XV_FC_REVIEW_STATUS = ['NOT_STARTED', 'DRAFT', 'SUBMITTED', 'LOCKED'] as const;
+// LOCKED = ULB has submitted, awaiting admin action (set by the ULB-side submit endpoint).
+// VERIFYING = admin has made at least one line-item decision but hasn't finalized yet.
+// APPROVED / REJECTED = admin has finalized (POST .../finalize) — REJECTED whenever any
+// flagged item was rejected, APPROVED otherwise. Reopen moves either back to DRAFT.
+export const XV_FC_REVIEW_STATUS = [
+  'NOT_STARTED',
+  'DRAFT',
+  'SUBMITTED',
+  'LOCKED',
+  'VERIFYING',
+  'APPROVED',
+  'REJECTED',
+] as const;
 export type XvFcReviewStatus = (typeof XV_FC_REVIEW_STATUS)[number];
 
 export const XV_FC_FINAL_ACTION = ['ACCEPT_NO_CHANGES', 'SUBMIT_WITH_COMMENTS'] as const;
@@ -29,7 +41,15 @@ export type XvFcFinalAction = (typeof XV_FC_FINAL_ACTION)[number];
 export const XV_FC_ADMIN_DECISION_STATUS = ['PENDING', 'ACCEPTED', 'REJECTED'] as const;
 export type XvFcAdminDecisionStatus = (typeof XV_FC_ADMIN_DECISION_STATUS)[number];
 
-export const XV_FC_AUDIT_ACTION = ['ULB_FLAG', 'ULB_SUBMIT', 'ADMIN_ACCEPT', 'ADMIN_REJECT'] as const;
+export const XV_FC_AUDIT_ACTION = [
+  'ULB_FLAG',
+  'ULB_SUBMIT',
+  'ADMIN_ACCEPT',
+  'ADMIN_REJECT',
+  'SUBMISSION_APPROVED',
+  'SUBMISSION_REJECTED',
+  'REOPENED',
+] as const;
 export type XvFcAuditAction = (typeof XV_FC_AUDIT_ACTION)[number];
 
 @Schema({ _id: false })
@@ -171,6 +191,11 @@ export class LedgerLog {
 
   @Prop({ type: String })
   ulb_code: string;
+
+  // Denormalized from Ulb.censusCode — populated via scripts/backfill-xv-fc-census-code.ts for
+  // pre-existing documents; new ones should be denormalized the same way ulb/ulb_code/state are.
+  @Prop({ type: String })
+  censusCode: string;
 
   @Prop({ type: String })
   state: string;

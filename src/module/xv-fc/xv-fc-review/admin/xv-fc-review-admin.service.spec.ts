@@ -80,7 +80,10 @@ describe('XvFcReviewAdminService', () => {
     lineItemModel = {
       find: jest.fn().mockReturnValue(q([{ code: '110', name: 'Tax Revenue', headOfAccount: 'Revenue' }])),
     };
-    yearModel = { findById: jest.fn().mockReturnValue(q(mockYear)) };
+    yearModel = {
+      findById: jest.fn().mockReturnValue(q(mockYear)),
+      find: jest.fn().mockReturnValue(q([mockYear])),
+    };
     s3Service = { presignGet: jest.fn().mockResolvedValue('https://signed-url') };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -119,6 +122,30 @@ describe('XvFcReviewAdminService', () => {
         'xvFcReview.status': 'LOCKED',
       });
       expect(filterArg['$or']).toBeDefined();
+    });
+
+    it('applies a partial-match censusCode filter when provided', async () => {
+      await service.list({ censusCode: '8005' } as never);
+      const filterArg = ledgerLogModel.find.mock.calls[0][0];
+      expect((filterArg['censusCode'] as RegExp).test('800563')).toBe(true);
+    });
+  });
+
+  // ─── getYearsSummary ─────────────────────────────────────────────────────
+
+  describe('getYearsSummary', () => {
+    it('returns every reviewable year, defaulting to NOT_STARTED where no ledgerlogs doc exists', async () => {
+      ledgerLogModel.find.mockReturnValue(q([{ year: '2022-23', xvFcReview: { status: 'LOCKED' } }]));
+      const result = await service.getYearsSummary(ulbOid.toString());
+      expect(result).toHaveLength(5);
+      expect(result.find((r) => r.financialYear === '2022-23')).toMatchObject({ status: 'LOCKED' });
+      expect(result.find((r) => r.financialYear === '2019-20')).toMatchObject({ status: 'NOT_STARTED' });
+    });
+
+    it('resolves yearId to null for a reviewable year with no matching Year document', async () => {
+      yearModel.find.mockReturnValue(q([]));
+      const result = await service.getYearsSummary(ulbOid.toString());
+      expect(result.every((r) => r.yearId === null)).toBe(true);
     });
   });
 
@@ -159,6 +186,13 @@ describe('XvFcReviewAdminService', () => {
       );
       const result = await service.getDetail(ulbOid.toString(), yearOid.toString());
       expect(result.lineItems.map((li: { code: string }) => li.code)).toEqual(['460', '33104', '31001', '31002']);
+    });
+
+    it('surfaces the full auditTrail, filterable client-side by lineItemCode — same shape as Ptax’s `history`', async () => {
+      const entry = { action: 'ADMIN_ACCEPT', lineItemCode: '110', reason: '' };
+      ledgerLogModel.findOne.mockReturnValue(q(baseDoc({ xvFcReview: { auditTrail: [entry] } })));
+      const result = await service.getDetail(ulbOid.toString(), yearOid.toString());
+      expect(result.auditTrail).toEqual([entry]);
     });
   });
 
@@ -208,6 +242,21 @@ describe('XvFcReviewAdminService', () => {
       expect(setOps['xvFcReview.lineItemReviews.110.adminDecision.status']).toBe('REJECTED');
     });
 
+    it('allows ACCEPT with no correctedValue — a flagged item with no proposed value has nothing to overwrite', async () => {
+      await service.decideLineItem(
+        ulbOid.toString(),
+        yearOid.toString(),
+        '110',
+        { decision: 'ACCEPTED', reason: '' } as never,
+        adminUser,
+      );
+      const [, updateArg] = ledgerLogModel.updateOne.mock.calls[0];
+      const setOps = (updateArg as { $set: Record<string, unknown> }).$set;
+      expect(setOps['lineItems.110']).toBeUndefined();
+      expect(setOps['xvFcReview.lineItemReviews.110.adminDecision.correctedValue']).toBeUndefined();
+      expect(setOps['xvFcReview.lineItemReviews.110.adminDecision.status']).toBe('ACCEPTED');
+    });
+
     it('records the real previousValue/newValue in the audit trail entry', async () => {
       await service.decideLineItem(
         ulbOid.toString(),
@@ -223,7 +272,7 @@ describe('XvFcReviewAdminService', () => {
       expect(auditEntry).toMatchObject({ action: 'ADMIN_ACCEPT', previousValue: 4741268, newValue: 5000000 });
     });
 
-    it('surfaces a concurrency conflict when another admin already decided this item (modifiedCount 0)', async () => {
+    it('surfaces a concurrency conflict when the write unexpectedly matches nothing (modifiedCount 0)', async () => {
       ledgerLogModel.updateOne.mockReturnValue(q({ modifiedCount: 0 }));
       await expect(
         service.decideLineItem(
@@ -234,6 +283,222 @@ describe('XvFcReviewAdminService', () => {
           adminUser,
         ),
       ).rejects.toThrow(ConflictException);
+    });
+
+    it('allows re-deciding a line item that was already decided (e.g. ACCEPTED → REJECTED) before Final Submit', async () => {
+      ledgerLogModel.findOne.mockReturnValue(
+        q(
+          baseDoc({
+            xvFcReview: {
+              status: 'VERIFYING',
+              lineItemReviews: { '110': { flagged: true, adminDecision: { status: 'ACCEPTED' } } },
+            },
+          }),
+        ),
+      );
+      await service.decideLineItem(
+        ulbOid.toString(),
+        yearOid.toString(),
+        '110',
+        { decision: 'REJECTED', reason: 'x' } as never,
+        adminUser,
+      );
+      const [filterArg, updateArg] = ledgerLogModel.updateOne.mock.calls[0];
+      // No adminDecision.status clause in the filter — the write applies regardless of the
+      // line item's current decision state.
+      expect(filterArg).toEqual({ _id: docOid });
+      expect(
+        (updateArg as { $set: Record<string, unknown> }).$set['xvFcReview.lineItemReviews.110.adminDecision.status'],
+      ).toBe('REJECTED');
+    });
+
+    it('rejects deciding on an already-finalized submission', async () => {
+      ledgerLogModel.findOne.mockReturnValue(q(baseDoc({ xvFcReview: { status: 'APPROVED', lineItemReviews: {} } })));
+      await expect(
+        service.decideLineItem(
+          ulbOid.toString(),
+          yearOid.toString(),
+          '110',
+          { decision: 'REJECTED', reason: 'x' } as never,
+          adminUser,
+        ),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('bumps status from LOCKED to VERIFYING on the first decision — Final Submit (not this) resolves it', async () => {
+      await service.decideLineItem(
+        ulbOid.toString(),
+        yearOid.toString(),
+        '110',
+        { decision: 'ACCEPTED', reason: 'x', correctedValue: 5000000 } as never,
+        adminUser,
+      );
+      const [, updateArg] = ledgerLogModel.updateOne.mock.calls[0];
+      const setOps = (updateArg as { $set: Record<string, unknown> }).$set;
+      expect(setOps['xvFcReview.status']).toBe('VERIFYING');
+    });
+
+    it('leaves status untouched when already past LOCKED (e.g. already VERIFYING)', async () => {
+      ledgerLogModel.findOne.mockReturnValue(q(baseDoc({ xvFcReview: { ...baseDoc().xvFcReview, status: 'VERIFYING' } })));
+      await service.decideLineItem(
+        ulbOid.toString(),
+        yearOid.toString(),
+        '110',
+        { decision: 'ACCEPTED', reason: 'x', correctedValue: 5000000 } as never,
+        adminUser,
+      );
+      const [, updateArg] = ledgerLogModel.updateOne.mock.calls[0];
+      const setOps = (updateArg as { $set: Record<string, unknown> }).$set;
+      expect(setOps['xvFcReview.status']).toBeUndefined();
+    });
+
+    it('defaults reason to an empty string on ACCEPT when omitted', async () => {
+      await service.decideLineItem(
+        ulbOid.toString(),
+        yearOid.toString(),
+        '110',
+        { decision: 'ACCEPTED', correctedValue: 5000000 } as never,
+        adminUser,
+      );
+      const [, updateArg] = ledgerLogModel.updateOne.mock.calls[0];
+      const setOps = (updateArg as { $set: Record<string, unknown> }).$set;
+      expect(setOps['xvFcReview.lineItemReviews.110.adminDecision.reason']).toBe('');
+    });
+  });
+
+  // ─── acceptAll ───────────────────────────────────────────────────────────
+
+  describe('acceptAll', () => {
+    it('bulk-accepts every pending flagged line item using its proposedValue, and bumps status to VERIFYING', async () => {
+      ledgerLogModel.findOne.mockReturnValue(
+        q(
+          baseDoc({
+            lineItems: { '110': 100, '120': 50, '130': 10 },
+            xvFcReview: {
+              status: 'LOCKED',
+              lineItemReviews: {
+                '110': { flagged: true, proposedValue: 200, adminDecision: { status: 'PENDING' } },
+                '120': { flagged: true, proposedValue: 60, adminDecision: { status: 'ACCEPTED' } },
+                '130': { flagged: false, adminDecision: null },
+              },
+            },
+          }),
+        ),
+      );
+
+      await service.acceptAll(ulbOid.toString(), yearOid.toString(), adminUser);
+
+      const [, updateArg] = ledgerLogModel.updateOne.mock.calls[0];
+      const setOps = (updateArg as { $set: Record<string, unknown> }).$set;
+      expect(setOps['xvFcReview.lineItemReviews.110.adminDecision.status']).toBe('ACCEPTED');
+      expect(setOps['lineItems.110']).toBe(200);
+      expect(setOps['xvFcReview.lineItemReviews.120.adminDecision.status']).toBeUndefined(); // already decided
+      expect(setOps['xvFcReview.lineItemReviews.130.adminDecision.status']).toBeUndefined(); // never flagged
+      expect(setOps['xvFcReview.status']).toBe('VERIFYING');
+    });
+
+    it('is a no-op (no write) when nothing is pending', async () => {
+      ledgerLogModel.findOne.mockReturnValue(
+        q(
+          baseDoc({
+            xvFcReview: { lineItemReviews: { '110': { flagged: true, adminDecision: { status: 'ACCEPTED' } } } },
+          }),
+        ),
+      );
+      await service.acceptAll(ulbOid.toString(), yearOid.toString(), adminUser);
+      expect(ledgerLogModel.updateOne).not.toHaveBeenCalled();
+    });
+
+    it('rejects when the submission is already finalized', async () => {
+      ledgerLogModel.findOne.mockReturnValue(q(baseDoc({ xvFcReview: { status: 'APPROVED' } })));
+      await expect(service.acceptAll(ulbOid.toString(), yearOid.toString(), adminUser)).rejects.toThrow(
+        ConflictException,
+      );
+    });
+  });
+
+  // ─── finalize ────────────────────────────────────────────────────────────
+
+  describe('finalize', () => {
+    it('rejects when a flagged line item is still PENDING', async () => {
+      await expect(service.finalize(ulbOid.toString(), yearOid.toString(), adminUser)).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('rejects when a rejected line item has no reason recorded', async () => {
+      ledgerLogModel.findOne.mockReturnValue(
+        q(
+          baseDoc({
+            xvFcReview: {
+              lineItemReviews: { '110': { flagged: true, adminDecision: { status: 'REJECTED', reason: '' } } },
+            },
+          }),
+        ),
+      );
+      await expect(service.finalize(ulbOid.toString(), yearOid.toString(), adminUser)).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('resolves to APPROVED when every flagged line item was accepted', async () => {
+      ledgerLogModel.findOne.mockReturnValue(
+        q(
+          baseDoc({
+            xvFcReview: { lineItemReviews: { '110': { flagged: true, adminDecision: { status: 'ACCEPTED' } } } },
+          }),
+        ),
+      );
+      await service.finalize(ulbOid.toString(), yearOid.toString(), adminUser);
+      const [, updateArg] = ledgerLogModel.updateOne.mock.calls[0];
+      expect((updateArg as { $set: { 'xvFcReview.status': string } }).$set['xvFcReview.status']).toBe('APPROVED');
+    });
+
+    it('resolves to REJECTED when any flagged line item was rejected (with a reason)', async () => {
+      ledgerLogModel.findOne.mockReturnValue(
+        q(
+          baseDoc({
+            xvFcReview: {
+              lineItemReviews: {
+                '110': { flagged: true, adminDecision: { status: 'ACCEPTED' } },
+                '120': { flagged: true, adminDecision: { status: 'REJECTED', reason: 'bad value' } },
+              },
+            },
+          }),
+        ),
+      );
+      await service.finalize(ulbOid.toString(), yearOid.toString(), adminUser);
+      const [, updateArg] = ledgerLogModel.updateOne.mock.calls[0];
+      expect((updateArg as { $set: { 'xvFcReview.status': string } }).$set['xvFcReview.status']).toBe('REJECTED');
+    });
+
+    it('rejects when the submission is already finalized', async () => {
+      ledgerLogModel.findOne.mockReturnValue(q(baseDoc({ xvFcReview: { status: 'REJECTED' } })));
+      await expect(service.finalize(ulbOid.toString(), yearOid.toString(), adminUser)).rejects.toThrow(
+        ConflictException,
+      );
+    });
+  });
+
+  // ─── reopen ──────────────────────────────────────────────────────────────
+
+  describe('reopen', () => {
+    it('moves an APPROVED submission back to DRAFT with a REOPENED audit entry', async () => {
+      ledgerLogModel.findOne.mockReturnValue(q(baseDoc({ xvFcReview: { status: 'APPROVED' } })));
+      await service.reopen(ulbOid.toString(), yearOid.toString(), { reason: 'please recheck' }, adminUser);
+      const [, updateArg] = ledgerLogModel.updateOne.mock.calls[0];
+      expect((updateArg as { $set: { 'xvFcReview.status': string } }).$set['xvFcReview.status']).toBe('DRAFT');
+      const auditEntry = (updateArg as { $push: { 'xvFcReview.auditTrail': Record<string, unknown> } }).$push[
+        'xvFcReview.auditTrail'
+      ];
+      expect(auditEntry).toMatchObject({ action: 'REOPENED', reason: 'please recheck' });
+    });
+
+    it('rejects reopening a submission that is not currently finalized', async () => {
+      ledgerLogModel.findOne.mockReturnValue(q(baseDoc({ xvFcReview: { status: 'VERIFYING' } })));
+      await expect(service.reopen(ulbOid.toString(), yearOid.toString(), {}, adminUser)).rejects.toThrow(
+        ConflictException,
+      );
     });
   });
 

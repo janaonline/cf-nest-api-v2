@@ -21,7 +21,8 @@
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "seed:mohua-side-menu": "ts-node -r tsconfig-paths/register --skip-project scripts/seed-mohua-side-menu.ts",
     "migrate:xvifc-side-menu": "ts-node -r tsconfig-paths/register --skip-project scripts/migrate-xvifc-sidemenu.ts",
-    "seed:slb-form-json": "ts-node -r tsconfig-paths/register scripts/seed-slb-form-json.ts"
+    "seed:slb-form-json": "ts-node -r tsconfig-paths/register scripts/seed-slb-form-json.ts",
+    "backfill:xv-fc-census-code": "ts-node -r tsconfig-paths/register --skip-project scripts/backfill-xv-fc-census-code.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.896.0",
