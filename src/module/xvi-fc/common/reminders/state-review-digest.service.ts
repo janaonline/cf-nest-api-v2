@@ -335,7 +335,6 @@ export class StateReviewDigestService {
           contentType: 'application/pdf',
         },
       ],
-      bcc: this.config.get<string>('CRON_EMAIL_BCC'),
       replyTo: REMINDER_CRON_REPLY_TO,
     });
 
