@@ -256,9 +256,9 @@ export class StateDashboardService {
     const [ulbs, stateDoc, yearDoc] = await Promise.all([
       this.ulbModel
         .find(ulbMatch)
-        .select({ _id: 1, name: 1, censusCode: 1, sbCode: 1 })
+        .select({ _id: 1, name: 1, censusCode: 1, sbCode: 1, state: 1 })
         .sort({ name: 1 })
-        .lean<Array<{ _id: Types.ObjectId; name: string; censusCode?: string; sbCode?: string }>>()
+        .lean<Array<{ _id: Types.ObjectId; name: string; censusCode?: string; sbCode?: string; state: Types.ObjectId }>>()
         .exec(),
       stateId
         ? this.stateModel.findOne({ _id: stateId, isActive: true }).select({ name: 1 }).lean<{ name: string }>().exec()
@@ -276,6 +276,23 @@ export class StateDashboardService {
     if (!yearDoc) {
       throw new NotFoundException('The requested XVI-FC design year was not found.');
     }
+
+    // An ADMIN who omits stateId deliberately gets every state's ULBs in one export (see
+    // resolveStateScopeFilter) — that multi-state list is unreadable without knowing which state
+    // each ULB belongs to, so resolve every distinct state name up front for the row projection
+    // below, rather than requiring stateId and losing that all-states view.
+    const stateIds = [...new Set(ulbs.map((ulb) => ulb.state?.toString()).filter((id): id is string => !!id))];
+    const stateNameById = stateId
+      ? new Map(stateDoc ? [[stateId.toString(), stateDoc.name]] : [])
+      : new Map(
+          (
+            await this.stateModel
+              .find({ _id: { $in: stateIds } })
+              .select({ name: 1 })
+              .lean<Array<{ _id: Types.ObjectId; name: string }>>()
+              .exec()
+          ).map((s) => [s._id.toString(), s.name]),
+        );
 
     const ulbIds = ulbs.map((ulb) => ulb._id);
 
@@ -308,8 +325,13 @@ export class StateDashboardService {
     );
     const slbByUlb = new Map(slbRecords.map((r) => [r.ulb.toString(), r.currentFormStatus ?? FORM_STATUS.NOT_STARTED]));
 
+    // Only the all-states export (ADMIN, no stateId) needs a per-row State column — a single-state
+    // export already names its one state in the sheet's meta line, so adding it there would just
+    // repeat the same value on every row.
+    const includeStateColumn = !stateId;
     const headers = [
       'ULB Name',
+      ...(includeStateColumn ? ['State'] : []),
       'Census Code',
       'Audited Statements',
       'Provisional Statements',
@@ -320,6 +342,7 @@ export class StateDashboardService {
       const id = ulb._id.toString();
       return [
         ulb.name,
+        ...(includeStateColumn ? [stateNameById.get(ulb.state?.toString() ?? '') ?? ''] : []),
         ulb.censusCode || ulb.sbCode || '',
         getFormStatusLabel(auditedByUlb.get(id) ?? FORM_STATUS.NOT_STARTED),
         getFormStatusLabel(provisionalByUlb.get(id) ?? FORM_STATUS.NOT_STARTED),
@@ -348,7 +371,8 @@ export class StateDashboardService {
     fyLabel: string,
     now: Date,
   ): Promise<Buffer> {
-    const columnWidths = [32, 16, 20, 20, 20, 16];
+    const WIDTH_BY_HEADER: Record<string, number> = { 'ULB Name': 32, State: 18, 'Census Code': 16, 'SLB Form': 16 };
+    const columnWidths = headers.map((h) => WIDTH_BY_HEADER[h] ?? 20);
     const lastColLetter = String.fromCharCode('A'.charCodeAt(0) + columnWidths.length - 1);
 
     const workbook = new ExcelJS.Workbook();
