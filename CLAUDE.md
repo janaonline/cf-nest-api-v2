@@ -203,3 +203,4 @@ Required variables (see `.env` for dev defaults):
 | `BANK_ACCOUNT_ENCRYPTION_KEY` / `BANK_ACCOUNT_HASH_SECRET` | `xvi-fc` ULB bank-account encryption/hashing (`module/xvi-fc/ulb/bank-account`) |
 | `MANUAL_REVIEW_NOTIFY_EMAIL` | Fixed inbox emailed when a ULB requests manual review of a failed OCR validation (`module/xvi-fc/ulb/annual_accounts`) |
 | `XVIFC_REMINDER_CRONS_ENABLED` | Master on/off switch for the 3 dwell-time/summary crons in `module/xvi-fc/common/reminders` — must be exactly `'true'` for their scheduled runs to fire; manual triggers bypass this flag regardless of its value. Does not gate `FormReturnedNotificationService`, which is event-triggered, not a cron |
+| `CRON_EMAIL_BCC` | BCC'd on the 3 `module/xvi-fc/common/reminders` cron emails (ULB in-progress reminder, STATE review digest, weekly state summary) so the team can monitor what's actually being sent. Not applied to any other email (OTP, manual-review decisions, etc.) |

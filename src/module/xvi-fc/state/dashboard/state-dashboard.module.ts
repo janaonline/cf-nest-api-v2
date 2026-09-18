@@ -19,6 +19,7 @@ import {
   XviFcUnspentBalanceDisclosureSchema,
 } from '../../../../schemas/xvi-fc/unspent-balance-disclosure.schema';
 import { XviFcBankAccount, XviFcBankAccountSchema } from '../../../../schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
+import { SlbForm, SlbFormSchema } from '../../../../schemas/xvi-fc/ulb/slb-form.schema';
 import { StateDashboardController } from './state-dashboard.controller';
 import { StateDashboardService } from './state-dashboard.service';
 
@@ -35,6 +36,7 @@ import { StateDashboardService } from './state-dashboard.service';
       { name: XviFcAnnualAccount.name, schema: XviFcAnnualAccountSchema },
       { name: XviFcBankAccount.name, schema: XviFcBankAccountSchema },
       { name: XviFcUnspentBalanceDisclosure.name, schema: XviFcUnspentBalanceDisclosureSchema },
+      { name: SlbForm.name, schema: SlbFormSchema },
     ]),
   ],
   controllers: [StateDashboardController],

@@ -19,4 +19,6 @@ export type EmailJob = {
   templateName?: string;
   mailData?: Record<string, any>;
   attachments?: EmailAttachment[];
+  bcc?: string | string[];
+  replyTo?: string;
 };
