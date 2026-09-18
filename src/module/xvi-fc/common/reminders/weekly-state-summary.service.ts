@@ -13,7 +13,7 @@ import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { State, StateDocument } from 'src/schemas/state.schema';
 import { PORTAL_INVITE_LOGIN_TYPE, buildPortalAuthUrls } from 'src/core/utils/portal-urls.util';
 import { AnnualAccountFormStatus, FORM_STATUS_ID, XviFcAnnualAccount, XviFcAnnualAccountDocument } from 'src/schemas/xvi-fc/annual-account.schema';
-import { remindersCronsEnabled } from 'src/common/utils/reminder-cron-gate.util';
+import { remindersCronsEnabled, REMINDER_CRON_REPLY_TO } from 'src/common/utils/reminder-cron-gate.util';
 
 const TEMPLATE_SLUG = 'weekly-state-summary';
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -79,7 +79,8 @@ const DEFAULT_BODY = `
 
     <div class="footer">
       &copy; CityFinance &mdash; Ministry of Housing and Urban Affairs, Government of India<br />
-      This is an automated message. Please do not reply to this email.
+      This is an automated message. For any information needed, please reply only to
+      16fc.grant@cityfinance.in.
     </div>
   </div>
 </body>
@@ -207,8 +208,15 @@ export class WeeklyStateSummaryService {
 
     const subject = interpolate(template.subject, variables);
     const html = interpolate(template.body, variables);
+    const bcc = this.config.get<string>('CRON_EMAIL_BCC');
     for (const recipient of recipients) {
-      await this.emailQueue.addEmailJob({ to: recipient.email as string, subject, html });
+      await this.emailQueue.addEmailJob({
+        to: recipient.email as string,
+        subject,
+        html,
+        bcc,
+        replyTo: REMINDER_CRON_REPLY_TO,
+      });
     }
     return recipients.length;
   }

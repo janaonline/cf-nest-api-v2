@@ -1,4 +1,4 @@
-import { Controller, Get, Param, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, Query, StreamableFile, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { CurrentUser } from 'src/module/auth/decorators/current-user.decorator';
@@ -6,6 +6,7 @@ import { Permission } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { PermissionGuard } from 'src/module/auth/permission.guard';
 import { RequirePermissions } from 'src/module/auth/require-permissions.decorator';
 import { GetStateDashboardParamsDto } from './dto/get-state-dashboard-params.dto';
+import { ExportAllFormsQueryDto } from './dto/export-all-forms-query.dto';
 import { StateDashboardService } from './state-dashboard.service';
 import type { StateDashboardApiResponse } from './state-dashboard.types';
 
@@ -33,5 +34,22 @@ export class StateDashboardController {
     @CurrentUser() user: AuthUser,
   ): Promise<StateDashboardApiResponse> {
     return this.stateDashboardService.getDashboard(params, user);
+  }
+
+  @Get('ulb-submissions/export')
+  @RequirePermissions(Permission.REVIEW_ULB_SUBMISSIONS)
+  @ApiOperation({
+    summary:
+      "Excel export of every ULB's status across all four ULB forms (Audited, Provisional, PFMS Bank Account, SLB)",
+  })
+  async exportUlbSubmissionsAllForms(
+    @Query() dto: ExportAllFormsQueryDto,
+    @CurrentUser() user: AuthUser,
+  ): Promise<StreamableFile> {
+    const { fileName, buffer } = await this.stateDashboardService.exportAllFormsCsv(dto, user);
+    return new StreamableFile(new Uint8Array(buffer), {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      disposition: `attachment; filename="${fileName}"`,
+    });
   }
 }
