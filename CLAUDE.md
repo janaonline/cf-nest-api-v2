@@ -46,7 +46,7 @@ src/
 │                        # an inline error, so changing it means updating both sides together
 ├── module/xvi-fc/       # 16th Finance Commission forms (state/ULB/MoHUA roles)
 │   ├── ulb/             # annual_accounts (OCR via ANNUAL_ACCOUNT_PROCESSING_QUEUE), bank-account, unspent-balance-disclosure
-│   ├── state/           # sfc-status, elected-urban-local-bodies, devolution-formula, fc-unspent-declaration, dashboard,
+│   ├── state/           # sfc-status, elected-urban-local-bodies, devolution-formula, fc-unspent-declaration, gtc, dashboard,
 │   │                    # request-exemption (discretionary STATE→MoHUA exemption requests — one document per
 │   │                    # {ulb, year} (DB-enforced unique index), one data[] entry per requested formId (23/30/31);
 │   │                    # see master/form-json-config/CLAUDE.md's formId registry, formId 34)
