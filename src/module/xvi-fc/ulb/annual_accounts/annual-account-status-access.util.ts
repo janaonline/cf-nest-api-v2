@@ -82,3 +82,22 @@ export function isAwaitingManualReviewDecision(
 ): boolean {
   return !!isManualReviewRequested && !manualReviewDecision;
 }
+
+/** After this many failed re-upload attempts following a manual-review RETURN, the ULB is locked
+ *  out of uploading a new version of this document for POST_REJECTION_COOLDOWN_DAYS. */
+export const MAX_POST_REJECTION_ATTEMPTS = 3;
+export const POST_REJECTION_COOLDOWN_DAYS = 7;
+
+/** Returns true while this document's `uploadBlockedUntil` cooldown is still in effect. */
+export function isUploadBlocked(uploadBlockedUntil: Date | null | undefined): boolean {
+  return !!uploadBlockedUntil && uploadBlockedUntil.getTime() > Date.now();
+}
+
+/** Inbox pointed to for ULBs who need help past the self-service attempt/cooldown flow. */
+export const MANUAL_REVIEW_SUPPORT_EMAIL = '16fc.grant@cityfinance.in';
+
+/** Shared copy for every "this document is upload-blocked" error — deliberately doesn't expose the
+ *  exact unblock timestamp to the ULB, just points them at support. */
+export const UPLOAD_BLOCKED_MESSAGE =
+  `Too many failed attempts on this document. Uploads are temporarily blocked for ${POST_REJECTION_COOLDOWN_DAYS} days. ` +
+  `For further details, please email ${MANUAL_REVIEW_SUPPORT_EMAIL}.`;

@@ -74,6 +74,8 @@ import {
   canStateUndoSectionApproval,
   canUlbReuploadDocument,
   isAwaitingManualReviewDecision,
+  isUploadBlocked,
+  UPLOAD_BLOCKED_MESSAGE,
 } from './annual-account-status-access.util';
 
 /** 'auditedData' | 'unauditedData' section keys as they appear in DTOs/query params, mapped to
@@ -404,6 +406,10 @@ export class AnnualAccountsService implements OnModuleInit {
       throw new ForbiddenException(
         'This document is awaiting manual review and cannot be retried until an ADMIN makes a decision.',
       );
+    }
+
+    if (isUploadBlocked(docSlot?.uploadBlockedUntil)) {
+      throw new ForbiddenException(UPLOAD_BLOCKED_MESSAGE);
     }
 
     const retriedAt = new Date();
@@ -764,6 +770,9 @@ export class AnnualAccountsService implements OnModuleInit {
                 decidedBy: { name: d.manualReviewDecision.decidedBy?.name ?? null },
               }
             : null,
+          postRejectionAttemptsUsed: d.postRejectionAttemptsUsed ?? 0,
+          manualReviewRejectionCount: d.manualReviewRejectionCount ?? 0,
+          uploadBlockedUntil: d.uploadBlockedUntil ?? null,
         })),
       };
     };
@@ -828,6 +837,10 @@ export class AnnualAccountsService implements OnModuleInit {
       throw new ForbiddenException(
         'This document is awaiting manual review and cannot be removed until an ADMIN makes a decision.',
       );
+    }
+
+    if (isUploadBlocked(docSlot.uploadBlockedUntil)) {
+      throw new ForbiddenException(UPLOAD_BLOCKED_MESSAGE);
     }
 
     await this.annualAccountModel.updateOne(
@@ -1661,6 +1674,10 @@ export class AnnualAccountsService implements OnModuleInit {
       throw new ForbiddenException(
         'This document is awaiting manual review and cannot be re-uploaded until an ADMIN makes a decision.',
       );
+    }
+
+    if (isUploadBlocked(docSlot?.uploadBlockedUntil)) {
+      throw new ForbiddenException(UPLOAD_BLOCKED_MESSAGE);
     }
   }
 
