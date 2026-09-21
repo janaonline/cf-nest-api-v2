@@ -1,17 +1,9 @@
 import { randomUUID } from 'crypto';
-import {
-  BadRequestException,
-  ConflictException,
-  ForbiddenException,
-  Injectable,
-  Logger,
-  NotFoundException,
-} from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectConnection, InjectModel } from '@nestjs/mongoose';
 import { ClientSession, Connection, Model, Types } from 'mongoose';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
-import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
-import { toObjectIdString } from 'src/common/utils/objectid.util';
+import { assertStateAccess } from 'src/module/xvi-fc/common/utils/xvi-fc-state-access.util';
 import { FORM_STATUS, isTerminalStatus } from 'src/common/constants/form-status.constants';
 import { ClaimLetterBatch, ClaimLetterBatchDocument } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
 import {
@@ -157,7 +149,7 @@ export class ClaimLetterAssemblyService {
   }
 
   private async createDraftRaw(input: CreateClaimLetterDraftInput): Promise<Record<string, unknown>> {
-    this.assertStateAccess(input.user, input.stateId);
+    assertStateAccess(input.user, input.stateId);
     assertInstallmentSupported(input.installment);
 
     const ulbIds = input.ulbSelections.map((s) => s.ulbId);
@@ -1066,7 +1058,7 @@ export class ClaimLetterAssemblyService {
       .lean<Record<string, unknown> | null>()
       .exec();
     if (!existing) throw new NotFoundException(`Claim letter ${claimLetterId} not found`);
-    this.assertStateAccess(user, String(existing['state']));
+    assertStateAccess(user, String(existing['state']));
 
     // Claimed atomically alongside the currentFormStatus/revision check — this is what closes the
     // race where two concurrent PATCHes both pass a plain in-memory revision check and then
@@ -1377,7 +1369,7 @@ export class ClaimLetterAssemblyService {
       .lean<Record<string, unknown> | null>()
       .exec();
     if (!parent) throw new NotFoundException(`Claim letter ${claimLetterId} not found`);
-    this.assertStateAccess(user, String(parent['state']));
+    assertStateAccess(user, String(parent['state']));
 
     if (parent['isAbandoned']) return parent;
     if (parent['currentFormStatus'] !== FORM_STATUS.IN_PROGRESS) {
@@ -1465,7 +1457,7 @@ export class ClaimLetterAssemblyService {
       .lean<Record<string, unknown> | null>()
       .exec();
     if (!previous) throw new NotFoundException(`Claim letter ${previousClaimId} not found`);
-    this.assertStateAccess(user, String(previous['state']));
+    assertStateAccess(user, String(previous['state']));
     if (previous['isAbandoned']) {
       throw new ConflictException('Cannot regenerate a version for an abandoned draft.');
     }
@@ -1744,22 +1736,5 @@ export class ClaimLetterAssemblyService {
     if (code === 11000) return true;
     const writeErrors = (err as { writeErrors?: Array<{ code?: unknown }> }).writeErrors;
     return Array.isArray(writeErrors) && writeErrors.some((w) => w.code === 11000);
-  }
-
-  private hasStateAccess(user: AuthUser, stateId: string): boolean {
-    if (user.scope === Scope.ADMIN) return true;
-    if (user.scope === Scope.STATE) {
-      const userStateId = toObjectIdString(user.state);
-      return !!userStateId && userStateId === stateId;
-    }
-    return false;
-  }
-
-  private assertStateAccess(user: AuthUser, stateId: string): void {
-    if (!this.hasStateAccess(user, stateId)) {
-      throw new ForbiddenException(
-        user.scope === Scope.STATE ? 'You can only access your own state data' : 'Access denied',
-      );
-    }
   }
 }

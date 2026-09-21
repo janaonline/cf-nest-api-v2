@@ -76,6 +76,7 @@ is that registry.
 | 32 | SLB | `module/xvi-fc/ulb/slb` |
 | 33 | Bank Account / PFMS | `module/xvi-fc/ulb/bank-account` |
 | 34 | Request Exemption | `module/xvi-fc/state/request-exemption` — the discretionary STATE→MoHUA exemption flow (not part of Dynamic Year Access's automatic mechanism; no `formJsonConfig` row) |
+| 35 | Grant Transfer Certificate (GTC) | `module/xvi-fc/state/gtc` - State-level, no `formJsonConfig` row (this mechanism is ULB-exemption-only, not applicable to a State form) |
 
 ## How to add a new form to Dynamic Year Access
 

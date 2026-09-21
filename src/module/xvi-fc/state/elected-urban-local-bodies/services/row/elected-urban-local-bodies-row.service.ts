@@ -1,6 +1,5 @@
 ﻿import {
   BadRequestException,
-  ForbiddenException,
   Injectable,
   InternalServerErrorException,
   NotFoundException,
@@ -10,10 +9,9 @@ import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model, Types } from 'mongoose';
 import { ExcelService, RowHeader } from 'src/services/excel/excel.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
-import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
-import { toObjectIdString } from 'src/common/utils/objectid.util';
 import { escapeRegex } from 'src/common/utils/regex.util';
 import { assertCanStateEditForm } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
+import { assertStateAccess } from 'src/module/xvi-fc/common/utils/xvi-fc-state-access.util';
 import {
   throwXviFcValidationErrorWithData,
   xviFcSuccess,
@@ -79,7 +77,7 @@ export class ElectedUrbanLocalBodiesRowService {
     query: GetElectedUrbanLocalBodiesRowsQueryDto,
     user: AuthUser,
   ): Promise<XviFcApiResponse> {
-    this.assertStateAccess(user, stateId);
+    assertStateAccess(user, stateId);
 
     const formDoc = await this.findFormOrThrow(stateId, yearId);
     const activeVersion = formDoc.activeDatasetVersion ?? 0;
@@ -116,7 +114,7 @@ export class ElectedUrbanLocalBodiesRowService {
     dto: UpdateElectedUrbanLocalBodiesRowDto,
     user: AuthUser,
   ): Promise<XviFcApiResponse> {
-    this.assertStateAccess(user, stateId);
+    assertStateAccess(user, stateId);
 
     const formDoc = await this.findFormOrThrow(stateId, yearId);
     assertCanStateEditForm(formDoc.currentFormStatus);
@@ -279,7 +277,7 @@ export class ElectedUrbanLocalBodiesRowService {
    * @param user    - Authenticated user; scope-checked against stateId.
    */
   async getErrorSheet(stateId: string, yearId: string, user: AuthUser): Promise<ArrayBuffer> {
-    this.assertStateAccess(user, stateId);
+    assertStateAccess(user, stateId);
 
     const formDoc = await this.findFormOrThrow(stateId, yearId);
     const activeVersion = formDoc.activeDatasetVersion;
@@ -355,7 +353,7 @@ export class ElectedUrbanLocalBodiesRowService {
     _ip: string,
     _userAgent: string,
   ): Promise<XviFcApiResponse> {
-    this.assertStateAccess(user, stateId);
+    assertStateAccess(user, stateId);
 
     const formDoc = await this.findFormOrThrow(stateId, yearId);
 
@@ -464,22 +462,5 @@ export class ElectedUrbanLocalBodiesRowService {
       validationStatus,
       activeDatasetVersion: form?.activeDatasetVersion ?? 0,
     };
-  }
-
-  private hasStateAccess(user: AuthUser, stateId: string): boolean {
-    if (user.scope === Scope.ADMIN) return true;
-    if (user.scope === Scope.STATE) {
-      const userStateId = toObjectIdString(user.state);
-      return !!userStateId && userStateId === stateId;
-    }
-    return false;
-  }
-
-  private assertStateAccess(user: AuthUser, stateId: string): void {
-    if (!this.hasStateAccess(user, stateId)) {
-      throw new ForbiddenException(
-        user.scope === Scope.STATE ? 'You can only access your own state data' : 'Access denied',
-      );
-    }
   }
 }

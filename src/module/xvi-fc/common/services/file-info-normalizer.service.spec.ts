@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { FileInfoNormalizerService } from './file-info-normalizer.service';
 import { FileUrlNormalizerService } from './file-url-normalizer.service';
 import type { FileInfo } from 'src/schemas/common/file.schema';
+import type { FieldConfig } from '../types/field-config.type';
 
 describe('FileInfoNormalizerService', () => {
   let service: FileInfoNormalizerService;
@@ -267,6 +268,57 @@ describe('FileInfoNormalizerService', () => {
 
     it('returns false when there is no existing file', () => {
       expect(service.isSameStoredFile('a/b.xlsx', null)).toBe(false);
+    });
+  });
+
+  // ─── normalizePayloadFileFields ────────────────────────────────────────────
+
+  describe('normalizePayloadFileFields', () => {
+    const fileField: FieldConfig = {
+      key: 'report',
+      formFieldType: 'file',
+      label: 'Report',
+      allowedFileTypes: ['xlsx'],
+      maxFileSize: 5, // MB
+    };
+    const textField: FieldConfig = { key: 'note', formFieldType: 'text', label: 'Note' };
+
+    it('rebuilds a new valid file into the canonical shape with fresh timestamps', () => {
+      const result = service.normalizePayloadFileFields({ report: validInput }, [fileField], {});
+      expect(result.errors).toEqual({});
+      const file = result.payload['report'] as FileInfo;
+      expect(file.originalName).toBe('report.xlsx');
+      expect(file.createdAt).toEqual(new Date('2026-08-01T00:00:00.000Z'));
+      expect(file.updatedAt).toEqual(new Date('2026-08-01T00:00:00.000Z'));
+    });
+
+    it('leaves non-file fields untouched', () => {
+      const result = service.normalizePayloadFileFields({ note: 'hello' }, [textField], {});
+      expect(result.payload).toEqual({ note: 'hello' });
+      expect(result.errors).toEqual({});
+    });
+
+    it('sets the field to null when the payload value is explicitly null', () => {
+      const result = service.normalizePayloadFileFields({ report: null }, [fileField], {});
+      expect(result.payload['report']).toBeNull();
+      expect(result.errors).toEqual({});
+    });
+
+    it('skips a field absent from the payload entirely', () => {
+      const result = service.normalizePayloadFileFields({}, [fileField], {});
+      expect(Object.prototype.hasOwnProperty.call(result.payload, 'report')).toBe(false);
+    });
+
+    it('preserves the existing stored file (no timestamp bump) when the path is unchanged', () => {
+      const existing = existingFile({ path: 'state/2026-27/report.xlsx' });
+      const result = service.normalizePayloadFileFields({ report: validInput }, [fileField], { report: existing });
+      expect(result.payload['report']).toBe(existing);
+    });
+
+    it('collects a field-keyed error without throwing when a file fails validation', () => {
+      const tooLarge = { ...validInput, sizeKb: 10 * 1024 };
+      const result = service.normalizePayloadFileFields({ report: tooLarge }, [fileField], {});
+      expect(result.errors['report']).toEqual([expect.objectContaining({ field: 'report', code: 'maxFileSize' })]);
     });
   });
 });
