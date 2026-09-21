@@ -2,9 +2,9 @@ import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/commo
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { FORM_STATUS, type FormStatusType } from 'src/common/constants/form-status.constants';
+import { toObjectIdString } from 'src/common/utils/objectid.util';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
-import { hasStateAccess } from 'src/module/xvi-fc/common/utils/xvi-fc-state-access.util';
 import { State, type StateDocument } from 'src/schemas/state.schema';
 import { Ulb, type UlbDocument } from 'src/schemas/ulb.schema';
 import { Year, type YearDocument } from 'src/schemas/year.schema';
@@ -224,13 +224,16 @@ export class StateDashboardService {
     return xviFcSuccess('State dashboard fetched successfully', dashboardData);
   }
 
-  /**
-   * Keep the access check shared, but preserve this endpoint's structured
-   * {code, message} error response expected by the frontend.
-   */
+  private hasStateAccess(user: AuthUser, requestedStateId: string): boolean {
+    if (user.scope === Scope.ADMIN) return true;
+    if (user.scope !== Scope.STATE) return false;
+
+    const userStateId = toObjectIdString(user.state);
+    return userStateId !== null && userStateId === requestedStateId;
+  }
 
   private assertStateAccess(user: AuthUser, requestedStateId: string): void {
-    if (hasStateAccess(user, requestedStateId)) return;
+    if (this.hasStateAccess(user, requestedStateId)) return;
 
     const message =
       user.scope === Scope.STATE
