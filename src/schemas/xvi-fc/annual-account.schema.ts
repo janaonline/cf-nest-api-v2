@@ -22,6 +22,11 @@ export enum AnnualAccountFormStatus {
   UNDO = 'UNDO',
   /** Reserved — not wired to any transition yet. */
   ACTION_REQUIRED = 'ACTION_REQUIRED',
+  /** Terminal, no-owner — mirrors the shared FORM_STATUS.EXEMPTED_ACKNOWLEDGED (12). Set either
+   *  automatically (a genuinely new ULB, via xvi-fc dynamic year access) or by MoHUA approving a
+   *  discretionary Request Exemption entry for this section's formId (30/31) — see
+   *  `RequestExemptionService`/`mohua/request-exemption`. Never a manual ULB/STATE action. */
+  EXEMPTED_ACKNOWLEDGED = 'EXEMPTED_ACKNOWLEDGED',
 }
 
 export const FORM_STATUS_ID: Record<AnnualAccountFormStatus, number> = {
@@ -36,6 +41,7 @@ export const FORM_STATUS_ID: Record<AnnualAccountFormStatus, number> = {
   [AnnualAccountFormStatus.AWAITING_CLAIM_LETTER]: 9,
   [AnnualAccountFormStatus.UNDO]: 10,
   [AnnualAccountFormStatus.ACTION_REQUIRED]: 11,
+  [AnnualAccountFormStatus.EXEMPTED_ACKNOWLEDGED]: 12,
 };
 
 export type XviFcAnnualAccountDocument = HydratedDocument<XviFcAnnualAccount>;

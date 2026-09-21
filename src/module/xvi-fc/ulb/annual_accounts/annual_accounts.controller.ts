@@ -29,6 +29,7 @@ import { UlbSubmissionsQueryDto } from './dto/ulb-submissions-query.dto';
 import { ManualReviewDecisionDto } from './dto/manual-review-decision.dto';
 import { ManualReviewQueueQueryDto } from './dto/manual-review-queue-query.dto';
 import { ManualReviewHistoryQueryDto } from './dto/manual-review-history-query.dto';
+import { ManualReviewHistoryStatsQueryDto } from './dto/manual-review-history-stats-query.dto';
 import { extractIpAndUserAgent } from 'src/module/xvi-fc/common/utils/xvi-fc-request-meta.util';
 
 @ApiBearerAuth()
@@ -93,6 +94,12 @@ export class AnnualAccountsController {
   @ApiOperation({ summary: "ADMIN's paginated audit trail of all manual-review requests (any status), across all ULBs" })
   listManualReviewRequestHistory(@Query() dto: ManualReviewHistoryQueryDto, @CurrentUser() user: AuthUser) {
     return this.manualReviewService.listManualReviewRequestHistory(dto, user);
+  }
+
+  @Get('manual-review-history/stats')
+  @ApiOperation({ summary: "ADMIN's summary counts for the manual-review history page's REQUESTED time-range tabs" })
+  getManualReviewHistoryStats(@Query() dto: ManualReviewHistoryStatsQueryDto, @CurrentUser() user: AuthUser) {
+    return this.manualReviewService.getManualReviewHistoryStats(dto, user);
   }
 
   @Get('manual-review-history/dump')

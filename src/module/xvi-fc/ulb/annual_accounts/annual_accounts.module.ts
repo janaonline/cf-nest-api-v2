@@ -7,6 +7,7 @@ import { S3Service } from '../../../../core/s3/s3.service';
 import { FileModule } from '../../../file/file.module';
 import { ANNUAL_ACCOUNT_PROCESSING_QUEUE } from '../../../../core/constants/queues';
 import { Ulb, UlbSchema } from '../../../../schemas/ulb.schema';
+import { Year, YearSchema } from '../../../../schemas/year.schema';
 import { User, UserSchema } from '../../../../schemas/user/user.schema';
 import { XviFcAnnualAccount, XviFcAnnualAccountSchema } from '../../../../schemas/xvi-fc/annual-account.schema';
 import {
@@ -36,6 +37,7 @@ import { EmailQueueModule } from '../../../../core/queue/email-queue/email-queue
 import { UlbEligibilityModule } from 'src/module/ulb-eligibility/ulb-eligibility.module';
 import { RemindersModule } from '../../common/reminders/reminders.module';
 import { ExcelService } from '../../../../services/excel/excel.service';
+import { XviFcCommonModule } from '../../common/xvi-fc-common.module';
 
 @Module({
   imports: [
@@ -46,6 +48,9 @@ import { ExcelService } from '../../../../services/excel/excel.service';
     EmailQueueModule,
     UlbEligibilityModule,
     RemindersModule,
+    // ExemptionResolverService (automatic + discretionary exemption lookups for
+    // listUlbSubmissions) and YearAccessService.
+    XviFcCommonModule,
     BullModule.registerQueue({ name: ANNUAL_ACCOUNT_PROCESSING_QUEUE }),
     MongooseModule.forFeature([
       { name: XviFcAnnualAccount.name, schema: XviFcAnnualAccountSchema },
@@ -53,6 +58,7 @@ import { ExcelService } from '../../../../services/excel/excel.service';
       { name: XviFcAnnualAccountFormLog.name, schema: XviFcAnnualAccountFormLogSchema },
       { name: XviFcDocumentActionGate.name, schema: XviFcDocumentActionGateSchema },
       { name: Ulb.name, schema: UlbSchema },
+      { name: Year.name, schema: YearSchema },
       { name: User.name, schema: UserSchema },
       { name: XviFcManualReviewRequest.name, schema: XviFcManualReviewRequestSchema },
     ]),

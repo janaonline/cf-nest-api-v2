@@ -31,6 +31,8 @@ import { FcUnspentMohuaReviewModule } from './mohua/fc-unspent-declaration/fc-un
 import { StateDashboardModule } from './state/dashboard/state-dashboard.module';
 import { SlbModule } from './ulb/slb/slb.module';
 import { ClaimLetterModule } from './state/claim-letter/claim-letter.module';
+import { RequestExemptionModule } from './state/request-exemption/request-exemption.module';
+import { RequestExemptionMohuaModule } from './mohua/request-exemption/request-exemption-mohua.module';
 import { UlbEligibilityModule } from '../ulb-eligibility/ulb-eligibility.module';
 import { RemindersModule } from './common/reminders/reminders.module';
 import { XviFcCommonModule } from './common/xvi-fc-common.module';
@@ -63,6 +65,8 @@ import { XviFcCommonModule } from './common/xvi-fc-common.module';
     StateDashboardModule,
     SlbModule,
     ClaimLetterModule,
+    RequestExemptionModule,
+    RequestExemptionMohuaModule,
     UlbEligibilityModule,
     RemindersModule,
     XviFcCommonModule,

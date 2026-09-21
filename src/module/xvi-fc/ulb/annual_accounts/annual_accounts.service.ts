@@ -35,7 +35,17 @@ import {
   XviFcAnnualAccountFormLogDocument,
 } from '../../../../schemas/xvi-fc/annual-account-form-log.schema';
 import { Ulb, UlbDocument } from '../../../../schemas/ulb.schema';
+import { Year } from '../../../../schemas/year.schema';
 import { User, UserDocument } from '../../../../schemas/user/user.schema';
+import {
+  DiscretionaryExemptionEntry,
+  DISCRETIONARY_APPROVED_STATUS,
+  DISCRETIONARY_PENDING_STATUS,
+  DISCRETIONARY_REJECTED_STATUS,
+  ExemptionResolution,
+  ExemptionResolverService,
+} from '../../common/services/exemption-resolver.service';
+import type { UlbAccessInput } from '../../common/services/year-access.service';
 import { FormReturnedNotificationService } from '../../common/reminders/form-returned-notification.service';
 import { UlbEligibilityService } from '../../../ulb-eligibility/ulb-eligibility.service';
 import { CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE } from '../../../ulb-eligibility/ulb-eligibility.constants';
@@ -101,12 +111,22 @@ export const SECTION_LABELS: Record<AnnualAccountSectionKey, string> = {
   unauditedData: 'Provisional',
 };
 
+/** Display-only status from the Request Exemption flow, not a real form_status.
+ *  EXEMPTION_APPROVED and AUTO_EXEMPTED both map to EXEMPTED_ACKNOWLEDGED(12);
+ *  only the exemption lookup distinguishes them.
+ */
+export type ExemptionDisplayStatus =
+  | 'EXEMPTION_PENDING'
+  | 'EXEMPTION_REJECTED'
+  | 'EXEMPTION_APPROVED'
+  | 'AUTO_EXEMPTED';
+
 interface UlbSubmissionRow {
   ulbId: Types.ObjectId;
   ulbCode: string;
   censusCode: string;
   ulbName: string;
-  formStatus: AnnualAccountFormStatus;
+  formStatus: AnnualAccountFormStatus | ExemptionDisplayStatus;
   formStatusId: number;
   lastUpdatedAt: Date | null;
   /** When this section entered UNDER_REVIEW_BY_STATE (sectionAccount.declaredAt) — the precise
@@ -120,7 +140,7 @@ interface UlbSubmissionRow {
 interface UlbSubmissionsFacetResult {
   data: UlbSubmissionRow[];
   totalCount: Array<{ count: number }>;
-  counts: Array<{ _id: AnnualAccountFormStatus; count: number }>;
+  counts: Array<{ _id: AnnualAccountFormStatus | ExemptionDisplayStatus; count: number }>;
 }
 
 @Injectable()
@@ -139,6 +159,9 @@ export class AnnualAccountsService implements OnModuleInit {
 
     @InjectModel(Ulb.name)
     private readonly ulbModel: Model<UlbDocument>,
+
+    @InjectModel(Year.name)
+    private readonly yearModel: Model<Year>,
 
     @InjectModel(User.name)
     private readonly userModel: Model<UserDocument>,
@@ -160,6 +183,8 @@ export class AnnualAccountsService implements OnModuleInit {
     private readonly ulbEligibilityService: UlbEligibilityService,
 
     private readonly formReturnedNotification: FormReturnedNotificationService,
+
+    private readonly exemptionResolverService: ExemptionResolverService,
   ) {}
 
   async onModuleInit() {
@@ -487,7 +512,16 @@ export class AnnualAccountsService implements OnModuleInit {
       .lean()
       .exec();
 
-    if (!doc) return null;
+    if (!doc) {
+      // No document at all yet for this ULB+year - the common case (returns plain null, exactly
+      // as before) unless there's a discretionary exemption request to report; a PENDING one must
+      // still surface (and block) even before the ULB has ever opened this section.
+      const ulbOid = new Types.ObjectId(ulbId);
+      await this.validateViewAccess({ ulb: ulbOid }, user);
+      const exemption = await this.resolveExemptionStatusForResponse(ulbOid, new Types.ObjectId(designYearId), section);
+      if (!exemption.exemptionStatus) return null;
+      return { annualAccountId: null, ulbName: null, ulbCode: null, data: null, ...exemption };
+    }
     await this.validateViewAccess(doc, user);
     return this.getProcessingStatus(doc._id.toString(), section, user);
   }
@@ -527,6 +561,41 @@ export class AnnualAccountsService implements OnModuleInit {
     const pageSize = dto.pageSize ?? 20;
     const notStarted = AnnualAccountFormStatus.NOT_STARTED;
     const wantSectionType = SECTION_KEY_TO_TYPE[dto.section];
+    const yearObjectId = new Types.ObjectId(dto.designYearId);
+    const sectionFormId = SECTION_FORM_IDS[dto.section];
+
+    // Resolve exemptions for all candidates before pagination so sorting, counts, and status filters
+    // use the correct status. This also handles ULBs with no section document yet.
+    // Sources:
+    // - AUTOMATIC: year-access exemptions.
+    // - DISCRETIONARY: state/request-exemption entries; Pending/Rejected override display status.
+    //   Approved and Automatic exemptions both map to EXEMPTED_ACKNOWLEDGED(12), so the lookup
+    //   distinguishes them for display.
+    const yearDoc = await this.yearModel
+      .findById(yearObjectId, { year: 1 })
+      .lean<{ _id: Types.ObjectId; year: string }>()
+      .exec();
+    const candidateUlbs: UlbAccessInput[] = yearDoc
+      ? await this.ulbModel.find(matchStage, { startYear: 1, yearAccess: 1 }).lean().exec()
+      : [];
+    const candidateUlbIds = candidateUlbs.map((ulb) => ulb._id as Types.ObjectId);
+
+    const exemptionByUlbId: Map<string, ExemptionResolution> = yearDoc
+      ? await this.exemptionResolverService.resolveBulk(candidateUlbs, yearDoc, sectionFormId)
+      : new Map();
+    const exemptUlbIds = candidateUlbIds.filter((id) => exemptionByUlbId.get(String(id))?.exempted);
+
+    const discretionaryByUlbId: Map<string, DiscretionaryExemptionEntry> =
+      await this.exemptionResolverService.resolveDiscretionaryBulk(candidateUlbIds, yearObjectId, sectionFormId);
+    const pendingUlbIds: Types.ObjectId[] = [];
+    const rejectedUlbIds: Types.ObjectId[] = [];
+    const approvedUlbIds: Types.ObjectId[] = [];
+    for (const id of candidateUlbIds) {
+      const status = discretionaryByUlbId.get(String(id))?.currentFormStatus;
+      if (status === DISCRETIONARY_PENDING_STATUS) pendingUlbIds.push(id);
+      else if (status === DISCRETIONARY_REJECTED_STATUS) rejectedUlbIds.push(id);
+      else if (status === DISCRETIONARY_APPROVED_STATUS) approvedUlbIds.push(id);
+    }
 
     const pipeline: PipelineStage[] = [
       { $match: matchStage },
@@ -576,8 +645,26 @@ export class AnnualAccountsService implements OnModuleInit {
       { $addFields: { sectionAccount: { $arrayElemAt: ['$sectionAccount', 0] } } },
       {
         $addFields: {
-          formStatus: { $ifNull: ['$sectionAccount.form_status', notStarted] },
-          formStatusId: { $ifNull: ['$sectionAccount.form_status_id', FORM_STATUS_ID[notStarted]] },
+          // No sectionAccount yet: use AUTO_EXEMPTED for automatically exempt ULBs instead of NOT_STARTED.
+          // Discretionary exemptions are handled separately below, even without a sectionAccount.
+          formStatus: {
+            $ifNull: [
+              '$sectionAccount.form_status',
+              { $cond: [{ $in: ['$_id', exemptUlbIds] }, AnnualAccountFormStatus.EXEMPTED_ACKNOWLEDGED, notStarted] },
+            ],
+          },
+          formStatusId: {
+            $ifNull: [
+              '$sectionAccount.form_status_id',
+              {
+                $cond: [
+                  { $in: ['$_id', exemptUlbIds] },
+                  FORM_STATUS_ID[AnnualAccountFormStatus.EXEMPTED_ACKNOWLEDGED],
+                  FORM_STATUS_ID[notStarted],
+                ],
+              },
+            ],
+          },
           lastUpdatedAt: { $ifNull: ['$sectionAccount.updatedAt', null] },
           enteredReviewAt: { $ifNull: ['$sectionAccount.declaredAt', null] },
           hasManualReviewRequests: {
@@ -587,6 +674,35 @@ export class AnnualAccountsService implements OnModuleInit {
                 as: 'd',
                 in: { $ifNull: ['$$d.currentUpload.ocrInfo.isManualReviewRequested', false] },
               },
+            },
+          },
+        },
+      },
+      // Exemption overlay - applied after the real status is computed.
+      // Pending/Rejected can override the display status, but formStatusId always keeps the real status.
+      {
+        $addFields: {
+          formStatus: {
+            $switch: {
+              branches: [
+                { case: { $in: ['$_id', pendingUlbIds] }, then: 'EXEMPTION_PENDING' },
+                // Only genuinely untouched (NOT_STARTED) ULBs stay as "Exemption Rejected".
+                // Other editable statuses mean work has resumed, so show their live status.
+                {
+                  case: {
+                    $and: [{ $in: ['$_id', rejectedUlbIds] }, { $eq: ['$formStatusId', FORM_STATUS_ID[notStarted]] }],
+                  },
+                  then: 'EXEMPTION_REJECTED',
+                },
+                // Approved is display-only; MoHUA approval does not write status 12.
+                // So approvedUlbIds alone is enough—no formStatusId check needed.
+                { case: { $in: ['$_id', approvedUlbIds] }, then: 'EXEMPTION_APPROVED' },
+                {
+                  case: { $eq: ['$formStatusId', FORM_STATUS_ID[AnnualAccountFormStatus.EXEMPTED_ACKNOWLEDGED]] },
+                  then: 'AUTO_EXEMPTED',
+                },
+              ],
+              default: '$formStatus',
             },
           },
         },
@@ -631,12 +747,19 @@ export class AnnualAccountsService implements OnModuleInit {
     const rows = result?.data ?? [];
     const total = result?.totalCount?.[0]?.count ?? 0;
 
+    // EXEMPTED_ACKNOWLEDGED itself never appears as a `formStatus` bucket anymore - the overlay
+    // stage above always reclassifies it as EXEMPTION_APPROVED or AUTO_EXEMPTED - so its count
+    // stays 0 here; both synthetic buckets are counted alongside the real statuses instead.
+    const countKeys: (AnnualAccountFormStatus | ExemptionDisplayStatus)[] = [
+      ...Object.values(AnnualAccountFormStatus),
+      'EXEMPTION_PENDING',
+      'EXEMPTION_REJECTED',
+      'EXEMPTION_APPROVED',
+      'AUTO_EXEMPTED',
+    ];
     const counts = Object.fromEntries(
-      Object.values(AnnualAccountFormStatus).map((status) => [
-        status,
-        result?.counts.find((c) => c._id === status)?.count ?? 0,
-      ]),
-    ) as Record<AnnualAccountFormStatus, number>;
+      countKeys.map((status) => [status, result?.counts.find((c) => c._id === status)?.count ?? 0]),
+    ) as Record<AnnualAccountFormStatus | ExemptionDisplayStatus, number>;
 
     return { total, page, pageSize, rows, counts };
   }
@@ -647,8 +770,33 @@ export class AnnualAccountsService implements OnModuleInit {
   async getDetails(id: string, section: AnnualAccountSectionKey, user: AuthUser) {
     const { anchor, sectionDoc } = await this.resolveSectionDocument(id, section);
     await this.validateViewAccess(anchor, user);
+    const exemption = await this.resolveExemptionStatusForResponse(anchor.ulb, anchor.design_year, section);
 
-    return { annualAccountId: anchor._id, data: sectionDoc ? this.stripS3Keys(sectionDoc) : null };
+    return { annualAccountId: anchor._id, data: sectionDoc ? this.stripS3Keys(sectionDoc) : null, ...exemption };
+  }
+
+  /**
+   * Read-only signal for the ULB page: is a discretionary Request Exemption pending or
+   * decided for this section, and (for Rejected) why — lets the frontend show a status
+   * banner and render read-only while Pending, instead of only hitting the block on the
+   * next write (assertNotBlockedByPendingExemption). Approved is also surfaced explicitly
+   * so the frontend never has to infer auto vs. discretionary EXEMPTED_ACKNOWLEDGED itself —
+   * same distinction listUlbSubmissions' overlay makes.
+   */
+  private async resolveExemptionStatusForResponse(
+    ulb: Types.ObjectId,
+    designYear: Types.ObjectId,
+    section: AnnualAccountSectionKey,
+  ): Promise<{ exemptionStatus: 'PENDING' | 'APPROVED' | 'REJECTED' | null; exemptionMohuaRemarks: string | null }> {
+    const entry = await this.exemptionResolverService.resolveDiscretionary(ulb, designYear, SECTION_FORM_IDS[section]);
+    if (entry?.currentFormStatus === DISCRETIONARY_PENDING_STATUS)
+      return { exemptionStatus: 'PENDING', exemptionMohuaRemarks: null };
+    if (entry?.currentFormStatus === DISCRETIONARY_APPROVED_STATUS)
+      return { exemptionStatus: 'APPROVED', exemptionMohuaRemarks: null };
+    if (entry?.currentFormStatus === DISCRETIONARY_REJECTED_STATUS) {
+      return { exemptionStatus: 'REJECTED', exemptionMohuaRemarks: entry.mohuaRemarks };
+    }
+    return { exemptionStatus: null, exemptionMohuaRemarks: null };
   }
 
   // ─── Polling status ───────────────────────────────────────────────────────────
@@ -768,13 +916,17 @@ export class AnnualAccountsService implements OnModuleInit {
       };
     };
 
-    const ulb = await this.ulbModel.findById(anchor.ulb).select('name code').lean().exec();
+    const [ulb, exemption] = await Promise.all([
+      this.ulbModel.findById(anchor.ulb).select('name code').lean().exec(),
+      this.resolveExemptionStatusForResponse(anchor.ulb, anchor.design_year, section),
+    ]);
 
     return {
       annualAccountId: anchor._id,
       ulbName: ulb?.name ?? null,
       ulbCode: ulb?.code ?? null,
       data: buildSectionStatus(sectionDoc),
+      ...exemption,
     };
   }
 
@@ -811,6 +963,7 @@ export class AnnualAccountsService implements OnModuleInit {
     const { anchor, sectionDoc } = await this.resolveSectionDocument(id, section);
     await this.validateViewAccess(anchor, user);
     if (!sectionDoc) throw new NotFoundException('Section not found');
+    await this.assertNotBlockedByPendingExemption(anchor.ulb, anchor.design_year, section);
 
     const docSlot = (sectionDoc.documents ?? []).find((d: any) => d.docId === docId);
     if (!docSlot) throw new NotFoundException('Document not found in this section');
@@ -857,6 +1010,7 @@ export class AnnualAccountsService implements OnModuleInit {
   ) {
     const { anchor, sectionDoc } = await this.resolveSectionDocument(id, section);
     // this.validateSubmitAccess(doc, user);
+    await this.assertNotBlockedByPendingExemption(anchor.ulb, anchor.design_year, section);
     await this.ulbEligibilityService.assertUlbEligibleForGrantCycle(
       anchor.ulb,
       'XVIFC',
@@ -1316,6 +1470,36 @@ export class AnnualAccountsService implements OnModuleInit {
     }
   }
 
+  /**
+   * Blocks ULB write actions on a section while a discretionary Request Exemption entry for this
+   * ULB+year+formId is UNDER_REVIEW_BY_MOHUA or already SUBMISSION_ACKNOWLEDGED_BY_MOHUA (Approved) -
+   * the section's own real `form_status`/`form_status_id` is never touched by either outcome
+   * (RequestExemptionMohuaService deliberately only writes to its own collections; see its own
+   * doc-comment), so the ordinary canUlbEditForm/canUlbSubmitForm/canUlbReuploadDocument gates would
+   * otherwise still allow editing straight through both states - this is the only place that blocks
+   * them. Once Rejected, the section's real status governs normally again - no separate check for
+   * that case; the ULB regains access the moment this entry leaves UNDER_REVIEW_BY_MOHUA/APPROVED.
+   * Public so AnnualAccountManualReviewService.requestManualReview (a ULB action with no existing
+   * section-status gate at all today) can reuse it too.
+   */
+  async assertNotBlockedByPendingExemption(
+    ulb: Types.ObjectId,
+    designYear: Types.ObjectId,
+    section: AnnualAccountSectionKey,
+  ): Promise<void> {
+    const entry = await this.exemptionResolverService.resolveDiscretionary(ulb, designYear, SECTION_FORM_IDS[section]);
+    if (entry?.currentFormStatus === DISCRETIONARY_PENDING_STATUS) {
+      throw new ForbiddenException(
+        `This section cannot be edited while a discretionary exemption request for ${SECTION_LABELS[section]} is pending MoHUA review.`,
+      );
+    }
+    if (entry?.currentFormStatus === DISCRETIONARY_APPROVED_STATUS) {
+      throw new ForbiddenException(
+        `This section is exempted per a MoHUA-approved discretionary exemption request for ${SECTION_LABELS[section]}; no submission is required.`,
+      );
+    }
+  }
+
   // ─── MOHUA review decisions ───────────────────────────────────────────────────
 
   /**
@@ -1633,10 +1817,17 @@ export class AnnualAccountsService implements OnModuleInit {
     section: AnnualAccountSectionKey,
     docId: string,
   ): Promise<void> {
+    const ulbOid = new Types.ObjectId(ulbId);
+    const designYearOid = new Types.ObjectId(designYearId);
+
+    // Checked even when no sectionDoc exists yet (early-return below) - a pending discretionary
+    // exemption blocks the ULB before they've ever started this section, not just afterward.
+    await this.assertNotBlockedByPendingExemption(ulbOid, designYearOid, section);
+
     const sectionDoc = await this.annualAccountModel
       .findOne({
-        ulb: new Types.ObjectId(ulbId),
-        design_year: new Types.ObjectId(designYearId),
+        ulb: ulbOid,
+        design_year: designYearOid,
         sectionType: SECTION_KEY_TO_TYPE[section],
       })
       .lean()
