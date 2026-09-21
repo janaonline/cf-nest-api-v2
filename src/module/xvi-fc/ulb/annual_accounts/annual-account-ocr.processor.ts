@@ -18,6 +18,7 @@ import {
   OcrBasicValidation,
 } from './annual-account-ocr-api.service';
 import type { AnnualAccountOcrJobData } from './dto/annual-account-ocr-job.dto';
+import { MAX_POST_REJECTION_ATTEMPTS, POST_REJECTION_COOLDOWN_DAYS } from './annual-account-status-access.util';
 
 const POLL_INTERVAL_MS = 5_000;
 const MAX_POLLS = 10;
@@ -174,6 +175,8 @@ export class AnnualAccountOcrProcessor extends WorkerHost {
     );
     console.log(`[OCR Processor] basic_validation =`, JSON.stringify(bv));
 
+    const postRejectionUpdate = await this.computePostRejectionUpdate(targetDocId, docId, processingStatus);
+
     await Promise.all([
       this.uploadHistoryModel.updateOne(
         { uploadId },
@@ -199,6 +202,7 @@ export class AnnualAccountOcrProcessor extends WorkerHost {
             'documents.$.currentUpload.ocrInfo.validationStatus': validationStatus,
             'documents.$.currentUpload.ocrInfo.validationDetails': bv?.validation_details ?? null,
             'documents.$.currentUpload.ocrInfo.failedChecks': resp.result?.error_messages ?? [],
+            ...postRejectionUpdate,
           },
         },
       ),
@@ -212,6 +216,8 @@ export class AnnualAccountOcrProcessor extends WorkerHost {
     const completedAt = new Date();
 
     console.log(`[OCR Processor] ❌ FAILED — uploadId=${uploadId} reason=${reason}`);
+
+    const postRejectionUpdate = await this.computePostRejectionUpdate(targetDocId, docId, 'FAILED');
 
     await Promise.all([
       this.uploadHistoryModel.updateOne(
@@ -233,12 +239,58 @@ export class AnnualAccountOcrProcessor extends WorkerHost {
             'documents.$.processingStatus': 'FAILED',
             'documents.$.currentUpload.ocrInfo.status': 'FAILED',
             'documents.$.currentUpload.ocrInfo.completedAt': completedAt,
+            ...postRejectionUpdate,
           },
         },
       ),
     ]);
 
     this.logger.warn(`OCR failure written — uploadId=${uploadId} reason=${reason}`);
+  }
+
+  /**
+   * Advances the post-manual-review-rejection strike counter. A PASS always clears the whole
+   * cycle (manualReviewDecision, the attempt counter, the rejection counter, and any cooldown)
+   * regardless of how it got there. A FAIL only counts as a "strike" while a RETURNED manual-review
+   * decision is still the live one for this document — an ordinary first-time OCR failure (no
+   * rejection yet) must not consume any of the 3 attempts. The moment the strike count reaches
+   * MAX_POST_REJECTION_ATTEMPTS, the document is blocked for POST_REJECTION_COOLDOWN_DAYS right
+   * here — no second manual-review request/rejection round-trip required first. Reads the current
+   * docSlot first since Mongo can't conditionally $inc off another field of the same array element
+   * in one plain updateOne.
+   */
+  private async computePostRejectionUpdate(
+    targetDocId: Types.ObjectId,
+    docId: string,
+    processingStatus: 'PASSED' | 'FAILED',
+  ): Promise<Record<string, unknown>> {
+    if (processingStatus === 'PASSED') {
+      return {
+        'documents.$.manualReviewDecision': null,
+        'documents.$.postRejectionAttemptsUsed': 0,
+        'documents.$.manualReviewRejectionCount': 0,
+        'documents.$.uploadBlockedUntil': null,
+      };
+    }
+
+    const doc = await this.annualAccountModel
+      .findOne(
+        { _id: targetDocId, 'documents.docId': docId },
+        { 'documents.$': 1 },
+      )
+      .lean()
+      .exec();
+    const docSlot = doc?.documents?.[0];
+    if (docSlot?.manualReviewDecision?.status !== 'RETURNED') return {};
+
+    const attemptsUsed = Math.min((docSlot.postRejectionAttemptsUsed ?? 0) + 1, MAX_POST_REJECTION_ATTEMPTS);
+    const update: Record<string, unknown> = { 'documents.$.postRejectionAttemptsUsed': attemptsUsed };
+    if (attemptsUsed >= MAX_POST_REJECTION_ATTEMPTS) {
+      update['documents.$.uploadBlockedUntil'] = new Date(
+        Date.now() + POST_REJECTION_COOLDOWN_DAYS * 24 * 60 * 60 * 1000,
+      );
+    }
+    return update;
   }
 
   /**

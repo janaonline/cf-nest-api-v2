@@ -116,7 +116,7 @@ describe('StateDashboardService', () => {
   const makeActiveUlbRecords = (count: number): Array<{ _id: Types.ObjectId }> =>
     Array.from({ length: count }, () => ({ _id: new Types.ObjectId() }));
 
-  const stateModel = { findOne: jest.fn() };
+  const stateModel = { findOne: jest.fn(), find: jest.fn() };
   const yearModel = { findOne: jest.fn() };
   const ulbModel = { find: jest.fn() };
   const grantAllocationModel = { findOne: jest.fn() };
@@ -1921,6 +1921,45 @@ describe('StateDashboardService', () => {
       await service.exportAllFormsCsv({ designYearId: yearId }, makeUser({ xviFcSubrole: 'admin' }));
 
       expect(ulbModel.find).toHaveBeenCalledWith({ isActive: true, state: new Types.ObjectId(stateId) });
+    });
+
+    it('adds a per-row State column identifying each ULB when an ADMIN omits stateId (all-states export)', async () => {
+      const otherState = { _id: new Types.ObjectId(otherStateId), name: 'Neighbouring State' };
+      ulbModel.find.mockReturnValue(
+        queryResult([
+          { _id: ulbA, name: 'Achalpur Municipal Council', censusCode: '802685', state: stateRecord._id },
+          { _id: ulbB, name: 'Beta Nagar Panchayat', censusCode: '', sbCode: 'SB-42', state: otherState._id },
+        ]),
+      );
+      stateModel.find.mockReturnValue(queryResult([stateRecord, otherState]));
+      annualAccountModel.find.mockReturnValue(queryResult([]));
+      bankAccountModel.find.mockReturnValue(queryResult([]));
+      slbFormModel.find.mockReturnValue(queryResult([]));
+
+      const { buffer } = await service.exportAllFormsCsv(
+        { designYearId: yearId },
+        makeUser({ role: UserRole.ADMIN, scope: Scope.ADMIN, xviFcSubrole: undefined, state: undefined }),
+      );
+
+      // No stateId is resolved for this request, so the ULB query must not be scoped to one state.
+      expect(ulbModel.find).toHaveBeenCalledWith({ isActive: true });
+
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(buffer as unknown as Buffer);
+      const sheet = workbook.getWorksheet('ULB Submissions');
+      if (!sheet) throw new Error('Expected a "ULB Submissions" worksheet');
+
+      expect((sheet.getRow(6).values as unknown[]).slice(1)).toEqual([
+        'ULB Name',
+        'State',
+        'Census Code',
+        'Audited Statements',
+        'Provisional Statements',
+        'PFMS Bank Account',
+        'SLB Form',
+      ]);
+      expect((sheet.getRow(7).values as unknown[]).slice(1, 3)).toEqual(['Achalpur Municipal Council', 'Database State Name']);
+      expect((sheet.getRow(8).values as unknown[]).slice(1, 3)).toEqual(['Beta Nagar Panchayat', 'Neighbouring State']);
     });
   });
 });

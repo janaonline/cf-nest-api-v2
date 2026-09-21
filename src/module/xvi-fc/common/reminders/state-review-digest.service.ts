@@ -28,6 +28,13 @@ const INTERVAL_DAYS = 7;
 const TEMPLATE_SLUG = 'state-review-reminder';
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+// One-time content migration target for seedTemplate() below — the footer sentence every template
+// seeded before the reply-to-only rollout still carries, replaced in place so already-persisted
+// templates pick up the new guidance without clobbering any other admin customization to the body.
+const LEGACY_FOOTER_TEXT = 'This is an automated message. Please do not reply to this email.';
+const REPLY_TO_FOOTER_TEXT =
+  'This is an automated message. For any information needed, please reply only to 16fc.grant@cityfinance.in.';
+
 const DEFAULT_SUBJECT = 'Action Required: {{totalCount}} ULB Submission(s) Pending State Review for 7+ Days — {{stateName}}';
 
 const DEFAULT_BODY = `
@@ -155,7 +162,15 @@ export class StateReviewDigestService {
 
   async seedTemplate(): Promise<{ created: boolean; message: string }> {
     const existing = await this.templateModel.findOne({ slug: TEMPLATE_SLUG }).exec();
-    if (existing) return { created: false, message: 'State review reminder template already exists' };
+    if (existing) {
+      if (existing.body.includes(LEGACY_FOOTER_TEXT)) {
+        const migratedBody = existing.body.replace(LEGACY_FOOTER_TEXT, REPLY_TO_FOOTER_TEXT);
+        await this.templateModel.updateOne({ _id: existing._id }, { $set: { body: migratedBody } });
+        this.logger.log('State review reminder template migrated to the reply-to-only footer');
+        return { created: false, message: 'State review reminder template migrated to reply-to-only footer' };
+      }
+      return { created: false, message: 'State review reminder template already exists' };
+    }
 
     await this.templateModel.create({
       name: 'State Review Reminder',
