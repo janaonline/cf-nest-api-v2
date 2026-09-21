@@ -1,22 +1,18 @@
 ﻿import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { FormJsonService } from 'src/master/form-json/form-json.service';
-import { ConfigService } from '@nestjs/config';
 import { Buffer } from 'exceljs';
-import ms, { type StringValue } from 'ms';
 import { FilterQuery, Model, Types } from 'mongoose';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { ExcelService, RowHeader } from 'src/services/excel/excel.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
-import { Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
-import { getEffectivePermissions } from 'src/module/auth/permissions.map';
+import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { FORM_STATUS, FormHistoryAction, getFormStatusLabel } from 'src/common/constants/form-status.constants';
 import {
   assertCanStateEditForm,
   assertCanStateFinalSubmitForm,
-  canStateEditForm,
-  canStateFinalSubmitForm,
 } from '../../common/utils/xvi-fc-form-status-access.util';
+import { assertStateAccess, buildStateFormPermissions } from '../../common/utils/xvi-fc-state-access.util';
 import { toObjectIdString } from 'src/common/utils/objectid.util';
 import {
   SFC_FORM_ID,
@@ -39,7 +35,7 @@ import type {
   FormJson,
   HydratedFieldConfig,
 } from '../../common/dynamic-form-validation/dynamic-form-validation.types';
-import { XviFcApiResponse, XviFcValidationErrorMap } from '../../common/response/xvi-fc-api-response';
+import { XviFcApiResponse } from '../../common/response/xvi-fc-api-response';
 import { throwXviFcValidationError, xviFcSuccess } from '../../common/response/xvi-fc-response.util';
 import type { FormFieldOption } from '../../common/types/field-config.type';
 import {
@@ -48,7 +44,7 @@ import {
 } from '../../common/folder-paths/xvi-fc-folder-path.resolver';
 import { YearIdToLabel } from 'src/core/constants/years';
 import { SaveSfcStatusDto } from './dto/save-sfc-status.dto';
-import type { SfcFormGetResponseData, SfcFormPermissions } from './sfc-status.types';
+import type { SfcFormGetResponseData } from './sfc-status.types';
 import type { SfcHistoryEntryInput } from './types/sfc-status-history.types';
 import type {
   SfcStatusDumpFilters,
@@ -126,7 +122,6 @@ export class SfcStatusService {
     private readonly fileInfoNormalizer: FileInfoNormalizerService,
     private readonly excelService: ExcelService,
     private readonly fileTokenService: FileTokenService,
-    private readonly config: ConfigService,
   ) {}
 
   /** Returns the SFC Status question config array from the DB for frontend rendering. */
@@ -147,7 +142,7 @@ export class SfcStatusService {
    * @param user    - Authenticated user; scope-checked against stateId.
    */
   async getForm(stateId: string, yearId: string, user: AuthUser): Promise<XviFcApiResponse<SfcFormGetResponseData>> {
-    this.assertStateAccess(user, stateId);
+    assertStateAccess(user, stateId);
 
     const doc = await this.model
       .findOne({
@@ -177,11 +172,9 @@ export class SfcStatusService {
 
     const currentFormStatus = doc?.currentFormStatus ?? FORM_STATUS.NOT_STARTED;
     const savedData: FormData = (doc?.data ?? {}) as FormData;
-    const jwtExpiresIn = (this.config.get<string>('JWT_EXPIRES_IN') ?? '24h') as StringValue;
-    const jwtExpiresMs = ms(jwtExpiresIn) ?? 24 * 60 * 60 * 1000;
     const folderPathContext: XviFcFolderPathContext = { _id: stateId, designYear, role: 'state' };
-    const questions = this.hydrateQuestions(savedData, formJson, jwtExpiresMs, folderPathContext);
-    const permissions = this.buildFormPermissions(user, stateId, currentFormStatus);
+    const questions = this.hydrateQuestions(savedData, formJson, folderPathContext);
+    const permissions = buildStateFormPermissions(user, stateId, currentFormStatus);
     const { actors, stateName } = this.xvifcFormActorsService.buildActorsAndStateName(doc);
 
     const responseData: SfcFormGetResponseData = {
@@ -215,7 +208,7 @@ export class SfcStatusService {
    * @param userAgent - User-Agent header stored in history.
    */
   async saveDraft(dto: SaveSfcStatusDto, user: AuthUser, ip: string, userAgent: string): Promise<XviFcApiResponse> {
-    this.assertStateAccess(user, dto.stateId);
+    assertStateAccess(user, dto.stateId);
 
     const formQuestions = await this.loadFormQuestions(dto.yearId);
     const result = this.validator.validateDraftAndBuildPayload(formQuestions, dto.data as FormData);
@@ -231,7 +224,12 @@ export class SfcStatusService {
       .lean<{ _id: Types.ObjectId; currentFormStatus: number; data?: FormData }>()
       .exec();
 
-    const sanitizedPayload = this.normalizeFileFields(result.sanitizedPayload, formQuestions, existing?.data ?? {});
+    const { payload: sanitizedPayload, errors: fileErrors } = this.fileInfoNormalizer.normalizePayloadFileFields(
+      result.sanitizedPayload,
+      formQuestions,
+      existing?.data ?? {},
+    );
+    if (Object.keys(fileErrors).length > 0) throwXviFcValidationError(fileErrors);
 
     if (existing) {
       assertCanStateEditForm(existing.currentFormStatus);
@@ -306,7 +304,7 @@ export class SfcStatusService {
    * @param userAgent - User-Agent header stored in history.
    */
   async finalSubmit(dto: SaveSfcStatusDto, user: AuthUser, ip: string, userAgent: string): Promise<XviFcApiResponse> {
-    this.assertStateAccess(user, dto.stateId);
+    assertStateAccess(user, dto.stateId);
 
     const formQuestions = await this.loadFormQuestions(dto.yearId);
     const stateOid = new Types.ObjectId(dto.stateId);
@@ -325,7 +323,12 @@ export class SfcStatusService {
     const validation = this.validator.validateFinalSubmitAndBuildPayload(formQuestions, dto.data as FormData);
     if (!validation.isValid) throwXviFcValidationError(validation.errors);
 
-    const sanitizedPayload = this.normalizeFileFields(validation.sanitizedPayload, formQuestions, existing?.data ?? {});
+    const { payload: sanitizedPayload, errors: fileErrors } = this.fileInfoNormalizer.normalizePayloadFileFields(
+      validation.sanitizedPayload,
+      formQuestions,
+      existing?.data ?? {},
+    );
+    if (Object.keys(fileErrors).length > 0) throwXviFcValidationError(fileErrors);
     const toStatus = FORM_STATUS.UNDER_REVIEW_BY_MOHUA;
     const now = new Date();
 
@@ -426,61 +429,18 @@ export class SfcStatusService {
   // ─── Helpers ─────────────────────────────────────────────────────────────────
 
   /**
-   * Rebuilds every file-type field in a validated payload into the canonical FileInfo
-   * shape, discarding any client-supplied `updatedAt` and any other stray keys. When
-   * the normalized incoming path matches the existing stored path, the stored FileInfo
-   * (both timestamps) is preserved unchanged. Throws a field-keyed XviFc validation
-   * error if any file field fails normalization (bad ISO date, size, or type).
-   */
-  private normalizeFileFields(payload: FormData, formQuestions: FieldConfig[], existingData: FormData): FormData {
-    const errors: XviFcValidationErrorMap = {};
-    const normalized: FormData = { ...payload };
-    const now = new Date();
-
-    for (const field of formQuestions) {
-      if (field.formFieldType !== 'file') continue;
-      if (!Object.prototype.hasOwnProperty.call(payload, field.key)) continue;
-
-      const raw = payload[field.key];
-      if (raw === null || raw === undefined) {
-        normalized[field.key] = null;
-        continue;
-      }
-
-      const existingFile = existingData[field.key] as FileInfo | undefined;
-      const maxSizeKb = field.maxFileSize !== undefined ? field.maxFileSize * 1024 : undefined;
-      const { file, errors: fieldErrors } = this.fileInfoNormalizer.normalizeInboundFileInfo(
-        raw as Record<string, unknown>,
-        existingFile,
-        { fieldKey: field.key, allowedExtensions: field.allowedFileTypes, maxSizeKb },
-      );
-
-      if (fieldErrors.length > 0) {
-        errors[field.key] = fieldErrors;
-        continue;
-      }
-
-      normalized[field.key] = file !== undefined ? { ...file, createdAt: now, updatedAt: now } : existingFile;
-    }
-
-    if (Object.keys(errors).length > 0) throwXviFcValidationError(errors);
-    return normalized;
-  }
-
-  /**
    * Merges saved form data onto the question template in one O(n) pass.
    * For each question: uses saved value if the key exists in savedData,
    * otherwise keeps the template default. File-type questions additionally
-   * have their fileUrl signed with a JWT-lifetime token.
+   * have their fileUrl signed with a session-length token
+   * (`FileTokenService.signFileUrlForSession`).
    *
-   * @param savedData    - Key-value pairs from the stored document's `data` field.
-   * @param formJson     - Form template carrying the question config array.
-   * @param jwtExpiresMs - Token lifetime in milliseconds used to sign file URLs.
+   * @param savedData - Key-value pairs from the stored document's `data` field.
+   * @param formJson  - Form template carrying the question config array.
    */
   private hydrateQuestions(
     savedData: FormData,
     formJson: FormJson,
-    jwtExpiresMs: number,
     folderPathContext?: XviFcFolderPathContext,
   ): HydratedFieldConfig[] {
     return formJson.data.map((question) => {
@@ -496,33 +456,13 @@ export class SfcStatusService {
 
         const fileVal = value as FileInfo | null | undefined;
         const hydrated = this.fileInfoNormalizer.hydrateFileInfoForResponse(fileVal ?? null, (p) =>
-          this.signStorageFileUrl(p, jwtExpiresMs),
+          this.fileTokenService.signFileUrlForSession(p),
         );
         return { ...question, folderPath: resolvedFolderPath, value: hydrated ?? value };
       }
 
       return { ...question, value };
     });
-  }
-
-  /**
-   * Derives status-aware form permissions for the requesting user.
-   * All three flags are gated by role/permission, state scope access, and current form status.
-   * canEdit and canFinalSubmit are false whenever the status does not allow editing/submission,
-   * regardless of the user's role.
-   *
-   * @param user    - Authenticated user.
-   * @param stateId - ObjectId string of the target state; used for scope check.
-   * @param status  - Current numeric form status from the document (or NOT_STARTED if absent).
-   */
-  private buildFormPermissions(user: AuthUser, stateId: string, status: number): SfcFormPermissions {
-    const perms = new Set(getEffectivePermissions(user));
-    const hasAccess = this.hasStateAccess(user, stateId);
-    return {
-      canView: perms.has(Permission.VIEW_STATE_FORMS) && hasAccess,
-      canEdit: perms.has(Permission.EDIT_STATE_FORMS) && hasAccess && canStateEditForm(status),
-      canFinalSubmit: perms.has(Permission.FINAL_SUBMIT_STATE_FORMS) && hasAccess && canStateFinalSubmitForm(status),
-    };
   }
 
   /**
@@ -656,33 +596,10 @@ export class SfcStatusService {
     const rawPath = typeof f.path === 'string' ? f.path : '';
     return {
       fileName: typeof f.originalName === 'string' ? f.originalName : '',
-      fileUrl: this.signStorageFileUrl(rawPath, 7 * 24 * 60 * 60 * 1000),
+      fileUrl: this.fileTokenService.signFileUrl(rawPath, 'inline', 7 * 24 * 60 * 60 * 1000),
       fileSize: typeof f.sizeKb === 'number' ? (f.sizeKb / 1024).toFixed(2) + ' MB' : '',
       mimeType: typeof f.mimeType === 'string' ? f.mimeType : '',
     };
-  }
-
-  /**
-   * Signs a relative S3 file path into an encrypted download token URL, and
-   * returns the app download endpoint URL with the token as a query param.
-   * Signs the bare relative key directly (no AWS_STORAGE_URL reconstruction) —
-   * the download handler's `S3Service.getKeyFromS3Url` already accepts a bare
-   * key as-is, and naively concatenating AWS_STORAGE_URL + relativePath without
-   * a separator previously corrupted the resulting "S3 key" whenever
-   * AWS_STORAGE_URL had no trailing slash.
-   *
-   * @param relativePath - S3 key as stored in the DB.
-   * @param expMs        - Token lifetime in milliseconds from now.
-   */
-  private signStorageFileUrl(relativePath: string, expMs: number): string {
-    if (!relativePath) return '';
-    const token = this.fileTokenService.createToken({
-      path: relativePath,
-      disposition: 'inline',
-      exp: Date.now() + expMs,
-    });
-    const baseUrl = this.config.get<string>('BASE_URL', '');
-    return `${baseUrl}file/download?signature=${token}`;
   }
 
   /**
@@ -731,29 +648,5 @@ export class SfcStatusService {
     const m = /^(\d{4})-(\d{4})$/.exec(awardPeriod);
     if (!m) return '';
     return String(parseInt(m[2], 10) - parseInt(m[1], 10));
-  }
-
-  // ─── Scope enforcement ────────────────────────────────────────────────────
-
-  /**
-   * Returns true when the user is permitted to access data for the given state.
-   * ADMIN bypasses state scope; STATE users must match their assigned state.
-   */
-  private hasStateAccess(user: AuthUser, stateId: string): boolean {
-    if (user.scope === Scope.ADMIN) return true;
-    if (user.scope === Scope.STATE) {
-      const userStateId = toObjectIdString(user.state);
-      return !!userStateId && userStateId === stateId;
-    }
-    return false;
-  }
-
-  /** Throws ForbiddenException when the user does not have access to the given state. */
-  private assertStateAccess(user: AuthUser, stateId: string): void {
-    if (!this.hasStateAccess(user, stateId)) {
-      throw new ForbiddenException(
-        user.scope === Scope.STATE ? 'You can only access your own state data' : 'Access denied',
-      );
-    }
   }
 }

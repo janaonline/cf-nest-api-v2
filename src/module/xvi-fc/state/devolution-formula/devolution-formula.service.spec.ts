@@ -251,7 +251,12 @@ describe('DevolutionFormulaValidator', () => {
   });
 
   it('validateAllocations still rejects a real mismatch', () => {
-    const row = { ...baseRow(), totalGrantAllocation: 500_000, installment1Amount: 300_000, installment2Amount: 199_998 };
+    const row = {
+      ...baseRow(),
+      totalGrantAllocation: 500_000,
+      installment1Amount: 300_000,
+      installment2Amount: 199_998,
+    };
     const errors = validator.validateRow(row, 1, 250);
     expect(errors.some((e) => e.code === 'allocationMismatch')).toBe(true);
   });
@@ -877,6 +882,29 @@ describe('DevolutionFormulaService', () => {
     expect(ids).toContain('download-template');
     expect(ids).toContain('view-uploaded-data');
     expect(ids).toContain('revalidate-excel');
+  });
+
+  // GET form: canEdit/canFinalSubmit must be gated by state access, not just permission/status
+  // (buildStateFormPermissions) - regression coverage for a prior gap where Devolution's own
+  // buildFormPermissions never checked state access at all. assertStateAccess already blocks a
+  // mismatched STATE user before permissions are built, so the only place this is observable is
+  // an ADMIN-scoped caller, which bypasses assertStateAccess entirely; buildStateFormPermissions'
+  // own unit tests (xvi-fc-state-access.util.spec.ts) cover the STATE-mismatch case directly.
+  it('getForm grants canView for a fully-permissioned matching STATE user', async () => {
+    mockFormModel.findOne.mockReturnValue(q({ ...mockFormInProgress, activeDatasetVersion: 1 }));
+    mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
+
+    const stateUserMatching: AuthUser = {
+      _id: new Types.ObjectId().toString(),
+      role: UserRole.STATE,
+      scope: Scope.STATE,
+      accessLevel: AccessLevel.ADMIN,
+      state: stateOid,
+    };
+
+    const result = await service.getForm(stateOid.toString(), YEAR_ID, 1, stateUserMatching);
+    const data = result.data as { permissions: { canView: boolean } };
+    expect(data.permissions.canView).toBe(true);
   });
 
   // ─── excelFile supportingContent — badges ──────────────────────────────────

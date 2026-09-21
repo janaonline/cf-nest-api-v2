@@ -1,18 +1,12 @@
 import { randomUUID } from 'crypto';
-import {
-  BadRequestException,
-  ConflictException,
-  ForbiddenException,
-  Injectable,
-  Logger,
-  NotFoundException,
-} from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectConnection, InjectModel } from '@nestjs/mongoose';
 import { Connection, FilterQuery, Model, Types } from 'mongoose';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
-import { Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
+import { Permission } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
 import { toObjectIdString } from 'src/common/utils/objectid.util';
+import { assertStateAccess } from 'src/module/xvi-fc/common/utils/xvi-fc-state-access.util';
 import { FORM_STATUS, getFormStatusLabel } from 'src/common/constants/form-status.constants';
 import { xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
 import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
@@ -83,7 +77,7 @@ export class ClaimLetterService {
     installment: number,
     user: AuthUser,
   ): Promise<XviFcApiResponse<ClaimLetterEligibilitySummary>> {
-    this.assertStateAccess(user, stateId);
+    assertStateAccess(user, stateId);
     assertInstallmentSupported(installment);
     // expectedUlbSetService.resolve() runs concurrently with the other independent branches below
     // (only ulbLevelEligibility/remainingUlbIds need its result); each chains off it via .then()
@@ -176,7 +170,7 @@ export class ClaimLetterService {
     installment: number,
     user: AuthUser,
   ): Promise<XviFcApiResponse<ClaimLetterClaimContext>> {
-    this.assertStateAccess(user, stateId);
+    assertStateAccess(user, stateId);
     assertInstallmentSupported(installment);
 
     const [expectedUlbs, batchSlotInfo, financialOverview, varianceConfig, stateName] = await Promise.all([
@@ -246,7 +240,7 @@ export class ClaimLetterService {
       .lean<LeanClaimLetterBatch>()
       .exec();
     if (!parent) throw new NotFoundException(`Claim letter ${claimLetterId} not found`);
-    this.assertStateAccess(user, toObjectIdString(parent['state']) ?? '');
+    assertStateAccess(user, toObjectIdString(parent['state']) ?? '');
 
     if (parent['currentFormStatus'] !== FORM_STATUS.IN_PROGRESS) {
       throw new ConflictException(
@@ -298,7 +292,7 @@ export class ClaimLetterService {
       .lean<LeanClaimLetterBatch>()
       .exec();
     if (!parent) throw new NotFoundException(`Claim letter ${claimLetterId} not found`);
-    this.assertStateAccess(user, toObjectIdString(parent['state']) ?? '');
+    assertStateAccess(user, toObjectIdString(parent['state']) ?? '');
 
     if (parent['currentFormStatus'] === FORM_STATUS.UNDER_REVIEW_BY_MOHUA) {
       return xviFcSuccess('Claim letter already submitted to MoHUA.', mapClaimLetterBatchDocToSummary(parent, user));
@@ -429,7 +423,7 @@ export class ClaimLetterService {
       .exec();
     if (!doc) throw new NotFoundException(`Claim letter ${claimLetterId} not found`);
 
-    this.assertStateAccess(user, toObjectIdString(doc['state']) ?? '');
+    assertStateAccess(user, toObjectIdString(doc['state']) ?? '');
 
     const summary = mapClaimLetterBatchDocToSummary(doc, user);
     const [formConfig, stateName] = await Promise.all([
@@ -529,7 +523,7 @@ export class ClaimLetterService {
     query: GetClaimLetterHistoryQueryDto,
     user: AuthUser,
   ): Promise<XviFcApiResponse<ClaimLetterBatchSummary[]>> {
-    this.assertStateAccess(user, stateId);
+    assertStateAccess(user, stateId);
 
     const filter: FilterQuery<ClaimLetterBatchDocument> = {
       state: new Types.ObjectId(stateId),
@@ -569,22 +563,5 @@ export class ClaimLetterService {
   private isEditLockActive(acquiredAt: unknown): boolean {
     if (!acquiredAt) return false;
     return new Date(acquiredAt as string | Date) >= this.editLockStaleBefore();
-  }
-
-  private hasStateAccess(user: AuthUser, stateId: string): boolean {
-    if (user.scope === Scope.ADMIN) return true;
-    if (user.scope === Scope.STATE) {
-      const userStateId = toObjectIdString(user.state);
-      return !!userStateId && userStateId === stateId;
-    }
-    return false;
-  }
-
-  private assertStateAccess(user: AuthUser, stateId: string): void {
-    if (!this.hasStateAccess(user, stateId)) {
-      throw new ForbiddenException(
-        user.scope === Scope.STATE ? 'You can only access your own state data' : 'Access denied',
-      );
-    }
   }
 }

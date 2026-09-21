@@ -1,9 +1,8 @@
-import { ForbiddenException, Injectable } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, PipelineStage, Types } from 'mongoose';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
-import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
-import { toObjectIdString } from 'src/common/utils/objectid.util';
+import { assertStateAccess } from 'src/module/xvi-fc/common/utils/xvi-fc-state-access.util';
 import { escapeRegex } from 'src/common/utils/regex.util';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import { xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
@@ -61,7 +60,7 @@ export class FcUnspentUlbOptionsService {
     query: GetFcUnspentUlbOptionsQueryDto,
     user: AuthUser,
   ): Promise<XviFcApiResponse<FcUnspentUlbOption[]>> {
-    this.assertStateAccess(user, stateId);
+    assertStateAccess(user, stateId);
 
     const stateOid = new Types.ObjectId(stateId);
     const yearOid = new Types.ObjectId(yearId);
@@ -165,22 +164,5 @@ export class FcUnspentUlbOptionsService {
     }));
 
     return xviFcSuccess('ULB options fetched.', options, { page, limit, total });
-  }
-
-  private hasStateAccess(user: AuthUser, stateId: string): boolean {
-    if (user.scope === Scope.ADMIN) return true;
-    if (user.scope === Scope.STATE) {
-      const userStateId = toObjectIdString(user.state);
-      return !!userStateId && userStateId === stateId;
-    }
-    return false;
-  }
-
-  private assertStateAccess(user: AuthUser, stateId: string): void {
-    if (!this.hasStateAccess(user, stateId)) {
-      throw new ForbiddenException(
-        user.scope === Scope.STATE ? 'You can only access your own state data' : 'Access denied',
-      );
-    }
   }
 }

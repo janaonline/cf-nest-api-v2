@@ -2,7 +2,6 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { Types } from 'mongoose';
-import { ConfigService } from '@nestjs/config';
 import { SfcStatusService } from './sfc-status.service';
 import { XviFcSfcStatus } from '../../../../schemas/xvi-fc/state/sfc-status.schema';
 import { XviFcSfcStatusHistory } from '../../../../schemas/xvi-fc/state/sfc-status-history.schema';
@@ -126,10 +125,10 @@ describe('SfcStatusService', () => {
           provide: FileTokenService,
           useValue: {
             signFileUrl: jest.fn().mockReturnValue('https://signed-url'),
+            signFileUrlForSession: jest.fn().mockReturnValue('https://signed-url'),
             createToken: jest.fn().mockReturnValue('mock-token'),
           },
         },
-        { provide: ConfigService, useValue: { get: jest.fn().mockReturnValue('24h') } },
         { provide: FileUrlNormalizerService, useValue: { toRawStoragePath: jest.fn((v: string) => v) } },
         FileInfoNormalizerService,
       ],

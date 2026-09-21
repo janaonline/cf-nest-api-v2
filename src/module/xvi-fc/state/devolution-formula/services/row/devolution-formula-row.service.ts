@@ -1,13 +1,12 @@
-import { ForbiddenException, Injectable, InternalServerErrorException, NotFoundException } from '@nestjs/common';
+import { Injectable, InternalServerErrorException, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model, Types } from 'mongoose';
 import type ExcelJS from 'exceljs';
 import { ExcelService } from 'src/services/excel/excel.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
-import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import { assertCanStateEditForm } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
-import { toObjectIdString } from 'src/common/utils/objectid.util';
+import { assertStateAccess } from 'src/module/xvi-fc/common/utils/xvi-fc-state-access.util';
 import { escapeRegex } from 'src/common/utils/regex.util';
 import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import { throwXviFcValidationError, xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
@@ -79,7 +78,7 @@ export class DevolutionFormulaRowService {
     query: RowsQueryDevolutionFormulaDto,
     user: AuthUser,
   ): Promise<XviFcApiResponse> {
-    this.assertStateAccess(user, stateId);
+    assertStateAccess(user, stateId);
 
     const form = await this.findFormOrThrow(stateId, yearId, installment);
     const activeVersion = ((form as Record<string, unknown>)['activeDatasetVersion'] as number) ?? 0;
@@ -154,7 +153,7 @@ export class DevolutionFormulaRowService {
     dto: UpdateRowDevolutionFormulaDto,
     user: AuthUser,
   ): Promise<XviFcApiResponse> {
-    this.assertStateAccess(user, stateId);
+    assertStateAccess(user, stateId);
 
     const form = await this.findFormOrThrow(stateId, yearId, installment);
     const formDoc = form as Record<string, unknown>;
@@ -303,7 +302,7 @@ export class DevolutionFormulaRowService {
     installment: DfInstallment,
     user: AuthUser,
   ): Promise<XviFcApiResponse> {
-    this.assertStateAccess(user, stateId);
+    assertStateAccess(user, stateId);
 
     const form = await this.findFormOrThrow(stateId, yearId, installment);
     const formDoc = form as Record<string, unknown>;
@@ -349,7 +348,7 @@ export class DevolutionFormulaRowService {
     installment: DfInstallment,
     user: AuthUser,
   ): Promise<ExcelJS.Buffer> {
-    this.assertStateAccess(user, stateId);
+    assertStateAccess(user, stateId);
 
     const form = await this.findFormOrThrow(stateId, yearId, installment);
     const formDoc = form as Record<string, unknown>;
@@ -421,15 +420,6 @@ export class DevolutionFormulaRowService {
   }
 
   // ─── Private helpers ──────────────────────────────────────────────────────
-
-  private assertStateAccess(user: AuthUser, stateId: string): void {
-    if (user.scope === Scope.ADMIN) return;
-    if (user.scope === Scope.STATE) {
-      const userStateId = toObjectIdString(user.state);
-      if (userStateId && userStateId === stateId) return;
-    }
-    throw new ForbiddenException("You do not have access to this state's data.");
-  }
 
   private async findFormOrThrow(stateId: string, yearId: string, installment: DfInstallment) {
     const form = await this.formModel

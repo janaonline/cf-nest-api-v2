@@ -1,16 +1,16 @@
-import { ConflictException, ForbiddenException, Injectable } from '@nestjs/common';
+import { ConflictException, Injectable } from '@nestjs/common';
 import { InjectConnection, InjectModel } from '@nestjs/mongoose';
 import { Connection, Model, Types } from 'mongoose';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
-import { Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
+import { Permission } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
 import { FORM_STATUS, getFormStatusLabel } from 'src/common/constants/form-status.constants';
-import { toObjectIdString } from 'src/common/utils/objectid.util';
 import { escapeRegex } from 'src/common/utils/regex.util';
 import {
   canStateFinalSubmitForm,
   ULB_EDITABLE_STATUS_IDS,
 } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
+import { assertStateAccess, hasStateAccess } from 'src/module/xvi-fc/common/utils/xvi-fc-state-access.util';
 import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
 import type { HydratedFieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
 import type { XviFcApiResponse, XviFcValidationErrorMap } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
@@ -112,7 +112,7 @@ export class RequestExemptionService {
     yearId: string,
     user: AuthUser,
   ): Promise<XviFcApiResponse<RequestExemptionGetResponseData>> {
-    this.assertStateAccess(user, stateId);
+    assertStateAccess(user, stateId);
 
     const state = await this.stateModel.findById(stateId, { name: 1 }).lean<{ name?: string }>().exec();
     const permissions = this.buildFormPermissions(user, stateId);
@@ -142,7 +142,7 @@ export class RequestExemptionService {
     yearId: string,
     user: AuthUser,
   ): Promise<XviFcApiResponse<RequestExemptionReasonOption[]>> {
-    this.assertStateAccess(user, stateId);
+    assertStateAccess(user, stateId);
 
     const reasonOptions = await this.formJsonConfig.loadReasonOptions(yearId);
     return xviFcSuccess('Request Exemption reason options fetched.', reasonOptions);
@@ -169,7 +169,7 @@ export class RequestExemptionService {
     ip: string,
     userAgent: string,
   ): Promise<XviFcApiResponse<RequestExemptionSaveResponseData>> {
-    this.assertStateAccess(user, dto.stateId);
+    assertStateAccess(user, dto.stateId);
 
     const reasonOptions = await this.formJsonConfig.loadReasonOptions(dto.yearId);
     const reasonLabelById = new Map(reasonOptions.map((option) => [option.id, option.label]));
@@ -307,7 +307,7 @@ export class RequestExemptionService {
     query: GetRequestExemptionListQueryDto,
     user: AuthUser,
   ): Promise<XviFcApiResponse<RequestExemptionListResponseData>> {
-    this.assertStateAccess(user, stateId);
+    assertStateAccess(user, stateId);
 
     const page = query.page ?? 1;
     const limit = Math.min(query.limit ?? 10, 100);
@@ -522,30 +522,11 @@ export class RequestExemptionService {
 
   private buildFormPermissions(user: AuthUser, stateId: string): RequestExemptionPermissions {
     const perms = new Set(getEffectivePermissions(user));
-    const hasAccess = this.hasStateAccess(user, stateId);
+    const hasAccess = hasStateAccess(user, stateId);
     return {
       canView: perms.has(Permission.VIEW_STATE_FORMS) && hasAccess,
       canEdit: perms.has(Permission.RECOMMEND_EXEMPTIONS) && hasAccess,
       canFinalSubmit: perms.has(Permission.RECOMMEND_EXEMPTIONS) && hasAccess,
     };
-  }
-
-  // ─── Scope enforcement ────────────────────────────────────────────────────
-
-  private hasStateAccess(user: AuthUser, stateId: string): boolean {
-    if (user.scope === Scope.ADMIN) return true;
-    if (user.scope === Scope.STATE) {
-      const userStateId = toObjectIdString(user.state);
-      return !!userStateId && userStateId === stateId;
-    }
-    return false;
-  }
-
-  private assertStateAccess(user: AuthUser, stateId: string): void {
-    if (!this.hasStateAccess(user, stateId)) {
-      throw new ForbiddenException(
-        user.scope === Scope.STATE ? 'You can only access your own state data' : 'Access denied',
-      );
-    }
   }
 }
