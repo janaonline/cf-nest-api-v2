@@ -44,6 +44,15 @@ async function extractDocumentXml(buffer: Buffer): Promise<string> {
   return file.async('text');
 }
 
+/** The `Document`-level default font/size lands in word/styles.xml's <w:docDefaults>, not
+ *  word/document.xml — separate extraction helper for that file. */
+async function extractStylesXml(buffer: Buffer): Promise<string> {
+  const zip = await JSZip.loadAsync(buffer);
+  const file = zip.file('word/styles.xml');
+  if (!file) throw new Error('word/styles.xml missing from generated docx');
+  return file.async('text');
+}
+
 describe('ElectedUrbanLocalBodiesDocxService', () => {
   let service: ElectedUrbanLocalBodiesDocxService;
   let documentService: { getDocumentData: jest.Mock };
@@ -82,16 +91,42 @@ describe('ElectedUrbanLocalBodiesDocxService', () => {
     expect(result.buffer.subarray(0, 2).toString('utf8')).toBe('PK');
   });
 
-  it('opens with the shared MoHUA addressee block, not the old one', async () => {
+  it('renders the title heading, bold/underlined/centered, above the address block', async () => {
     documentService.getDocumentData.mockResolvedValue(buildDocumentData(1));
     const result = await service.generateElectedBodiesListDocument(stateId, yearId, user);
     const xml = await extractDocumentXml(result.buffer);
 
-    expect(xml).toContain('Economic Advisor/ Deputy Secretary (Finance Commission Cell)');
-    expect(xml).toContain('Sankalp Bhawan, GPOA-2, Pt. Ravi Shankar Shukla Lane,');
-    expect(xml).toContain('Kasturba Gandhi Marg, New Delhi-110001');
+    expect(xml).toContain('Format of Letter to be Submitted by the State reg. Elected Bodies Status');
+    expect(xml).toContain('w:jc w:val="center"');
+    expect(xml).toMatch(/<w:u\b/);
+  });
+
+  it('opens with the EULB-specific addressee block, not the shared MoHUA one', async () => {
+    documentService.getDocumentData.mockResolvedValue(buildDocumentData(1));
+    const result = await service.generateElectedBodiesListDocument(stateId, yearId, user);
+    const xml = await extractDocumentXml(result.buffer);
+
+    expect(xml).toContain('The Deputy Secretary');
+    expect(xml).toContain('Finance Commission Cell');
+    expect(xml).toContain('Department of Urban Development');
+    expect(xml).toContain('Government of India');
+    expect(xml).toContain('Sankalp Bhawan, New Delhi');
+    expect(xml).not.toContain('Economic Advisor/ Deputy Secretary (Finance Commission Cell)');
+    expect(xml).not.toContain('Sankalp Bhawan, GPOA-2, Pt. Ravi Shankar Shukla Lane,');
+    expect(xml).not.toContain('Kasturba Gandhi Marg, New Delhi-110001');
     expect(xml).not.toContain('The Director,');
     expect(xml).not.toContain('AMRUT-IIB');
+  });
+
+  it('renders the new subject line and "Sir," salutation, not the old wording', async () => {
+    documentService.getDocumentData.mockResolvedValue(buildDocumentData(1));
+    const result = await service.generateElectedBodiesListDocument(stateId, yearId, user);
+    const xml = await extractDocumentXml(result.buffer);
+
+    expect(xml).toContain('Subject: Declaration in respect of Elected Body Status of Urban Local Bodies -reg.');
+    expect(xml).toContain('Sir,');
+    expect(xml).not.toContain('Declaration regarding Elected Body Status of Urban Local Bodies');
+    expect(xml).not.toContain('Respected Sir/Madam,');
   });
 
   it('builds the CF_{StateName}_Elected-body-list_{YearLabel}.docx filename', async () => {
@@ -109,12 +144,12 @@ describe('ElectedUrbanLocalBodiesDocxService', () => {
     expect(xml).toContain('all 3 Urban Local Bodies');
   });
 
-  it('uses the singular noun for a single-ULB dataset', async () => {
+  it('always uses the plural noun, even for a single-ULB dataset, matching the MoHUA specimen', async () => {
     documentService.getDocumentData.mockResolvedValue(buildDocumentData(1));
     const result = await service.generateElectedBodiesListDocument(stateId, yearId, user);
     const xml = await extractDocumentXml(result.buffer);
 
-    expect(xml).toContain('all 1 Urban Local Body ');
+    expect(xml).toContain('all 1 Urban Local Bodies');
   });
 
   it('renders table headers from the form-json-sourced column labels, not hardcoded text', async () => {
@@ -128,7 +163,7 @@ describe('ElectedUrbanLocalBodiesDocxService', () => {
     expect(xml).toContain('Renamed Census Label');
   });
 
-  it('renders the closing signature block as literal, non-interpolated placeholder text — including its own "[State Name]"', async () => {
+  it('renders the closing signature block as literal, non-interpolated placeholder text — including its own "[State Name]" — right-aligned', async () => {
     documentService.getDocumentData.mockResolvedValue(buildDocumentData(1));
     const result = await service.generateElectedBodiesListDocument(stateId, yearId, user);
     const xml = await extractDocumentXml(result.buffer);
@@ -143,9 +178,10 @@ describe('ElectedUrbanLocalBodiesDocxService', () => {
     // The intro paragraph's real state name must never leak into the signature block's own
     // "[State Name]" placeholder.
     expect(xml).not.toContain('Government of Andhra Pradesh');
+    expect(xml).toContain('w:jc w:val="right"');
   });
 
-  it('interpolates designYearLabel into the closing paragraph rather than a hardcoded FY', async () => {
+  it('interpolates designYearLabel into the numbered closing paragraph rather than a hardcoded FY', async () => {
     const data = buildDocumentData(1);
     data.designYearLabel = '2031-32';
     documentService.getDocumentData.mockResolvedValue(data);
@@ -153,8 +189,18 @@ describe('ElectedUrbanLocalBodiesDocxService', () => {
     const result = await service.generateElectedBodiesListDocument(stateId, yearId, user);
     const xml = await extractDocumentXml(result.buffer);
 
+    expect(xml).toContain('2. This is submitted for the consideration of the claim of first installment');
     expect(xml).toContain('FY 2031-32');
     expect(xml).not.toContain('2026-27');
+  });
+
+  it('sets Times New Roman 12pt as the document default font', async () => {
+    documentService.getDocumentData.mockResolvedValue(buildDocumentData(1));
+    const result = await service.generateElectedBodiesListDocument(stateId, yearId, user);
+    const stylesXml = await extractStylesXml(result.buffer);
+
+    expect(stylesXml).toContain('Times New Roman');
+    expect(stylesXml).toContain('w:sz w:val="24"');
   });
 
   it('never emits an em dash anywhere in the generated document', async () => {
