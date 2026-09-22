@@ -3,6 +3,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { XviFcController } from './xvi-fc.controller';
 import { XviFcService } from './xvi-fc.service';
 import { AnnualAccountsModule } from './ulb/annual_accounts/annual_accounts.module';
+import { DurModule } from './ulb/dur/dur.module';
 import { SfcStatusModule } from './state/sfc-status/sfc-status.module';
 import { ElectedUrbanLocalBodiesModule } from './state/elected-urban-local-bodies/elected-urban-local-bodies.module';
 import { GrantAllocation, GrantAllocationSchema } from '../../schemas/xvi-fc/grant-allocation.schema';
@@ -25,6 +26,7 @@ import {
 import { DevolutionFormulaModule } from './state/devolution-formula/devolution-formula.module';
 import { XviFcBankAccount, XviFcBankAccountSchema } from '../../schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
 import { SlbForm, SlbFormSchema } from '../../schemas/xvi-fc/ulb/slb-form.schema';
+import { XviFcDur, XviFcDurSchema } from '../../schemas/xvi-fc/dur.schema';
 import { FcUnspentDeclarationModule } from './state/fc-unspent-declaration/fc-unspent-declaration.module';
 import { FcUnspentMohuaReviewModule } from './mohua/fc-unspent-declaration/fc-unspent-mohua-review.module';
 import { StateDashboardModule } from './state/dashboard/state-dashboard.module';
@@ -45,8 +47,10 @@ import { RemindersModule } from './common/reminders/reminders.module';
       { name: XviFcUnspentBalanceDisclosure.name, schema: XviFcUnspentBalanceDisclosureSchema },
       { name: XviFcBankAccount.name, schema: XviFcBankAccountSchema },
       { name: SlbForm.name, schema: SlbFormSchema },
+      { name: XviFcDur.name, schema: XviFcDurSchema },
     ]),
     AnnualAccountsModule,
+    DurModule,
     SfcStatusModule,
     forwardRef(() => ElectedUrbanLocalBodiesModule),
     SideMenuModule,

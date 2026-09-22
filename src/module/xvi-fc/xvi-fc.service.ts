@@ -23,6 +23,7 @@ import {
   XviFcBankAccountDocument,
 } from '../../schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
 import { SlbForm, SlbFormDocument, SLB_FORM_TYPE } from '../../schemas/xvi-fc/ulb/slb-form.schema';
+import { XviFcDur, XviFcDurDocument } from '../../schemas/xvi-fc/dur.schema';
 import { StateWiseResponseDto } from './dto/state-wise-response.dto';
 import { buildGetStateWiseDataPipeline } from './queries/get-state-wise-data.query';
 import { SideMenuResponseDto } from './dto/side-menu.dto';
@@ -54,6 +55,8 @@ export class XviFcService {
     private readonly bankAccountModel: Model<XviFcBankAccountDocument>,
     @InjectModel(SlbForm.name)
     private readonly slbFormModel: Model<SlbFormDocument>,
+    @InjectModel(XviFcDur.name)
+    private readonly durModel: Model<XviFcDurDocument>,
     private readonly cache: XviFcCacheService,
     private readonly formJsonService: FormJsonService,
     private readonly ulbEligibilityService: UlbEligibilityService,
@@ -186,7 +189,7 @@ export class XviFcService {
     const ulb = new Types.ObjectId(ulbId);
     const designYear = new Types.ObjectId(designYearId);
 
-    const [annualAccounts, disclosure, bankAccount, slbForm] = await Promise.all([
+    const [annualAccounts, disclosure, bankAccount, slbForm, durForm] = await Promise.all([
       this.annualAccountModel
         .find({ ulb, design_year: designYear })
         .select('sectionType form_status form_status_id')
@@ -199,6 +202,7 @@ export class XviFcService {
         .select('currentFormStatus')
         .lean()
         .exec(),
+      this.durModel.findOne({ ulb, design_year: designYear }).select('currentFormStatus').lean().exec(),
     ]);
 
     // 'audited' is always the {ulb, design_year} anchor — its _id is what every other
@@ -218,6 +222,9 @@ export class XviFcService {
     const slbStatus =
       ((slbForm as Record<string, unknown> | null)?.['currentFormStatus'] as FormStatusType | undefined) ??
       FORM_STATUS.NOT_STARTED;
+    const durStatus =
+      ((durForm as Record<string, unknown> | null)?.['currentFormStatus'] as FormStatusType | undefined) ??
+      FORM_STATUS.NOT_STARTED;
 
     return {
       annualAccountId: auditedDoc?._id?.toString() ?? null,
@@ -234,6 +241,10 @@ export class XviFcService {
       serviceLevelBenchmarks: {
         form_status: getFormStatusKey(slbStatus),
         form_status_id: slbStatus,
+      },
+      detailedUtilisationReport: {
+        form_status: getFormStatusKey(durStatus),
+        form_status_id: durStatus,
       },
     };
   }

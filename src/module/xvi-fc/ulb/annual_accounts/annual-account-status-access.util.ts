@@ -5,6 +5,26 @@ import {
   canUlbEditForm,
 } from '../../common/utils/xvi-fc-form-status-access.util';
 import { AnnualAccountFormStatus, DecisionInfo, FORM_STATUS_ID } from '../../../../schemas/xvi-fc/annual-account.schema';
+import {
+  MAX_POST_REJECTION_ATTEMPTS,
+  POST_REJECTION_COOLDOWN_DAYS,
+  MANUAL_REVIEW_SUPPORT_EMAIL,
+  UPLOAD_BLOCKED_MESSAGE,
+  isUploadBlocked,
+  isAwaitingManualReviewDecision,
+} from '../../../../common/utils/manual-review-cooldown.util';
+
+// Re-exported for backward compatibility — every existing import of these from this file keeps
+// working unchanged. The real definitions now live in the shared, form-agnostic
+// common/utils/manual-review-cooldown.util.ts (DUR reuses the same policy directly from there).
+export {
+  MAX_POST_REJECTION_ATTEMPTS,
+  POST_REJECTION_COOLDOWN_DAYS,
+  MANUAL_REVIEW_SUPPORT_EMAIL,
+  UPLOAD_BLOCKED_MESSAGE,
+  isUploadBlocked,
+  isAwaitingManualReviewDecision,
+};
 
 /** Computed per-section capability flags returned alongside annual account status data. */
 export interface AnnualAccountPermissions {
@@ -70,34 +90,3 @@ export function canUlbReuploadDocument(
   return documentStateDecision?.status !== 'APPROVED';
 }
 
-/**
- * Returns true if this document has a manual-review request outstanding with no ADMIN
- * decision recorded yet. While awaiting, the ULB must not be able to re-upload, retry,
- * or remove this document — doing so would change the file out from under the ADMIN
- * mid-review (or silently cancel the pending request).
- */
-export function isAwaitingManualReviewDecision(
-  isManualReviewRequested: boolean | null | undefined,
-  manualReviewDecision: DecisionInfo | null | undefined,
-): boolean {
-  return !!isManualReviewRequested && !manualReviewDecision;
-}
-
-/** After this many failed re-upload attempts following a manual-review RETURN, the ULB is locked
- *  out of uploading a new version of this document for POST_REJECTION_COOLDOWN_DAYS. */
-export const MAX_POST_REJECTION_ATTEMPTS = 3;
-export const POST_REJECTION_COOLDOWN_DAYS = 7;
-
-/** Returns true while this document's `uploadBlockedUntil` cooldown is still in effect. */
-export function isUploadBlocked(uploadBlockedUntil: Date | null | undefined): boolean {
-  return !!uploadBlockedUntil && uploadBlockedUntil.getTime() > Date.now();
-}
-
-/** Inbox pointed to for ULBs who need help past the self-service attempt/cooldown flow. */
-export const MANUAL_REVIEW_SUPPORT_EMAIL = '16fc.grant@cityfinance.in';
-
-/** Shared copy for every "this document is upload-blocked" error — deliberately doesn't expose the
- *  exact unblock timestamp to the ULB, just points them at support. */
-export const UPLOAD_BLOCKED_MESSAGE =
-  `Too many failed attempts on this document. Uploads are temporarily blocked for ${POST_REJECTION_COOLDOWN_DAYS} days. ` +
-  `For further details, please email ${MANUAL_REVIEW_SUPPORT_EMAIL}.`;
