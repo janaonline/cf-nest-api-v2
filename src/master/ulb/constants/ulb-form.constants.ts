@@ -150,9 +150,9 @@ export const DEFAULT_ULB_FIELDS: FieldConfig[] = [
     formFieldType: 'select',
     placeholder: 'Select reason...',
     options: [
-      { id: 'NEW_CONSTITUTION', label: 'Fresh Constitution' },
+      { id: 'NEW_CONSTITUTION', label: 'Newly Constituted' },
       { id: 'SPLIT', label: 'Split from an Existing ULB' },
-      { id: 'MERGER', label: 'Merger' },
+      // { id: 'MERGER', label: 'Merger' },
       { id: 'EXISTING_ULB_ONBOARDING', label: 'Existing ULB Newly Onboarded to the Portal' },
     ],
     labelHint: '(context only - does not itself change year/form access)',

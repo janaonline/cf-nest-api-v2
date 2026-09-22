@@ -1031,12 +1031,13 @@ export class UlbService {
 
   /**
    * Lists ULB types for populating a select. `ulbtypes` has no Mongoose model in this codebase
-   * (see UsersService.getProfileContacts) — queried directly via the raw collection.
+   * (see UsersService.getProfileContacts) — queried directly via the raw collection. Excludes
+   * types ineligible for XVI-FC (e.g. Cantonment Board, `ineligibleForGrantCycles: ['XVIFC']`)
    */
   async findTypes(): Promise<{ _id: Types.ObjectId; name: string }[]> {
     return this.ulbModel.db
       .collection('ulbtypes')
-      .find({ isActive: true }, { projection: { name: 1 } })
+      .find({ isActive: true, ineligibleForGrantCycles: { $ne: 'XVIFC' } }, { projection: { name: 1 } })
       .sort({ name: 1 })
       .toArray() as unknown as Promise<{ _id: Types.ObjectId; name: string }[]>;
   }

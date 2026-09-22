@@ -145,6 +145,20 @@ describe('UlbService', () => {
     expect(service).toBeDefined();
   });
 
+  describe('findTypes', () => {
+    it('queries active, XVIFC-eligible ULB types', async () => {
+      mockUlbTypes(ulbModel, [{ _id: ulbTypeId, name: 'Municipal Corporation' }]);
+
+      await service.findTypes();
+
+      const collection = (ulbModel.db as { collection: jest.Mock }).collection('ulbtypes');
+      expect(collection.find).toHaveBeenCalledWith(
+        { isActive: true, ineligibleForGrantCycles: { $ne: 'XVIFC' } },
+        { projection: { name: 1 } },
+      );
+    });
+  });
+
   describe('create', () => {
     it('throws BadRequestException when validation fails', async () => {
       dynamicFormValidation.validateFinalSubmitAndBuildPayload.mockReturnValue({
