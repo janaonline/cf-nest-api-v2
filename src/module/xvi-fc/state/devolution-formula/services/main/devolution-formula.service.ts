@@ -5,15 +5,13 @@ import type ExcelJS from 'exceljs';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { ExcelService } from 'src/services/excel/excel.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
-import { Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
-import { getEffectivePermissions } from 'src/module/auth/permissions.map';
+import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { FORM_STATUS, FormHistoryAction, getFormStatusLabel } from 'src/common/constants/form-status.constants';
 import {
   assertCanStateEditForm,
   assertCanStateFinalSubmitForm,
-  canStateEditForm,
-  canStateFinalSubmitForm,
 } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
+import { assertStateAccess, buildStateFormPermissions } from 'src/module/xvi-fc/common/utils/xvi-fc-state-access.util';
 import { toObjectIdString } from 'src/common/utils/objectid.util';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
 import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
@@ -123,10 +121,7 @@ export class DevolutionFormulaService {
     installment: number,
     user: AuthUser,
   ): Promise<XviFcApiResponse<DfFormGetResponseData>> {
-    // assertStateAccess-style checks are reimplemented per-service across xvi-fc's state-form
-    // modules (claim-letter alone has 6+ near-identical copies) rather than shared — worth
-    // consolidating into one helper if this becomes a maintenance burden, but out of scope here.
-    this.assertStateAccess(user, stateId);
+    assertStateAccess(user, stateId);
 
     const stateOid = new Types.ObjectId(stateId);
     const yearOid = new Types.ObjectId(yearId);
@@ -145,10 +140,7 @@ export class DevolutionFormulaService {
       .exec();
 
     const currentFormStatus = doc?.currentFormStatus ?? FORM_STATUS.NOT_STARTED;
-    // buildFormPermissions duplicates logic that likely exists in sibling state-form modules
-    // (elected-urban-local-bodies, sfc-status) — worth checking for a shared helper before this
-    // diverges further, but not resolved here.
-    const permissions = this.buildFormPermissions(user, stateId, currentFormStatus);
+    const permissions = buildStateFormPermissions(user, stateId, currentFormStatus);
     const { actors, stateName } = this.xvifcFormActorsService.buildActorsAndStateName(
       doc as unknown as Parameters<typeof this.xvifcFormActorsService.buildActorsAndStateName>[0],
     );
@@ -221,7 +213,7 @@ export class DevolutionFormulaService {
     ip: string = '',
     userAgent: string = '',
   ): Promise<XviFcApiResponse> {
-    this.assertStateAccess(user, dto.stateId);
+    assertStateAccess(user, dto.stateId);
 
     const stateOid = new Types.ObjectId(dto.stateId);
     const yearOid = new Types.ObjectId(dto.yearId);
@@ -321,7 +313,7 @@ export class DevolutionFormulaService {
     ip: string = '',
     userAgent: string = '',
   ): Promise<XviFcApiResponse> {
-    this.assertStateAccess(user, dto.stateId);
+    assertStateAccess(user, dto.stateId);
 
     const stateOid = new Types.ObjectId(dto.stateId);
     const yearOid = new Types.ObjectId(dto.yearId);
@@ -875,24 +867,6 @@ export class DevolutionFormulaService {
         }),
       },
     ];
-  }
-
-  private assertStateAccess(user: AuthUser, stateId: string): void {
-    if (user.scope === Scope.ADMIN) return;
-    if (user.scope === Scope.STATE) {
-      const userStateId = toObjectIdString(user.state);
-      if (userStateId && userStateId === stateId) return;
-    }
-    throw new ForbiddenException("You do not have access to this state's data.");
-  }
-
-  private buildFormPermissions(user: AuthUser, _stateId: string, status: number): DfFormPermissions {
-    const perms = new Set(getEffectivePermissions(user));
-    return {
-      canView: perms.has(Permission.VIEW_STATE_FORMS),
-      canEdit: perms.has(Permission.EDIT_STATE_FORMS) && canStateEditForm(status),
-      canFinalSubmit: perms.has(Permission.FINAL_SUBMIT_STATE_FORMS) && canStateFinalSubmitForm(status),
-    };
   }
 
   private buildValidationSummary(doc: DfFormLeanDoc | null, totalMoHUAAllocation: number) {

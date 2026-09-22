@@ -824,14 +824,9 @@ describe('ElectedUrbanLocalBodiesService', () => {
       buildActorsAndStateName: jest.fn().mockReturnValue({ actors: [], stateName: 'Test State' }),
     };
     const mockDynamicFormValidator = { validateForm: jest.fn() };
-    const mockFileTokenService = { createToken: jest.fn().mockReturnValue('mock-token') };
-    const mockConfig = {
-      get: jest.fn().mockImplementation((key: string, def: unknown) => {
-        if (key === 'JWT_EXPIRES_IN') return '24h';
-        if (key === 'AWS_STORAGE_URL') return '';
-        if (key === 'BASE_URL') return '';
-        return def ?? '';
-      }),
+    const mockFileTokenService = {
+      createToken: jest.fn().mockReturnValue('mock-token'),
+      signFileUrlForSession: jest.fn().mockReturnValue('https://signed-url'),
     };
     const mockFileUrlNormalizer = { normalizeFileUrl: jest.fn((v: unknown) => v) };
 
@@ -853,7 +848,6 @@ describe('ElectedUrbanLocalBodiesService', () => {
           { provide: DynamicFormValidationService, useValue: mockDynamicFormValidator },
           { provide: XvifcFormActorsService, useValue: mockActorsService },
           { provide: FileTokenService, useValue: mockFileTokenService },
-          { provide: ConfigService, useValue: mockConfig },
           { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
           FileInfoNormalizerService,
           { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },

@@ -51,8 +51,35 @@ describe('EmailQueueProcessor', () => {
         'test@example.com',
         'Test Subject',
         '<p>Hello</p>',
+        undefined,
+        undefined,
+        undefined,
       );
       expect(mockNodeMailerService.sendEmailWithTemplate).not.toHaveBeenCalled();
+    });
+
+    it('forwards bcc and replyTo to sendHtml when present on the job', async () => {
+      const job = {
+        id: 'job-bcc',
+        data: {
+          to: 'test@example.com',
+          subject: 'Test Subject',
+          html: '<p>Hello</p>',
+          bcc: 'mridhula.raghavan@janaagraha.org',
+          replyTo: '16fc.grant@cityfinance.in',
+        } as EmailJob,
+      } as Job<EmailJob>;
+
+      await processor.process(job);
+
+      expect(mockNodeMailerService.sendHtml).toHaveBeenCalledWith(
+        'test@example.com',
+        'Test Subject',
+        '<p>Hello</p>',
+        undefined,
+        'mridhula.raghavan@janaagraha.org',
+        '16fc.grant@cityfinance.in',
+      );
     });
 
     it('should send templated email with a single string recipient', async () => {
@@ -73,6 +100,8 @@ describe('EmailQueueProcessor', () => {
         'OTP Email',
         'otp',
         { otp: '123456' },
+        undefined,
+        undefined,
       );
       expect(mockNodeMailerService.sendHtml).not.toHaveBeenCalled();
     });
@@ -95,6 +124,8 @@ describe('EmailQueueProcessor', () => {
         'Bulk Email',
         'welcome',
         { name: 'City Finance' },
+        undefined,
+        undefined,
       );
     });
 
@@ -111,7 +142,14 @@ describe('EmailQueueProcessor', () => {
 
       await processor.process(job);
 
-      expect(mockNodeMailerService.sendHtml).toHaveBeenCalledWith('test@example.com', 'Both Provided', '<p>Wins</p>');
+      expect(mockNodeMailerService.sendHtml).toHaveBeenCalledWith(
+        'test@example.com',
+        'Both Provided',
+        '<p>Wins</p>',
+        undefined,
+        undefined,
+        undefined,
+      );
       expect(mockNodeMailerService.sendEmailWithTemplate).not.toHaveBeenCalled();
     });
 

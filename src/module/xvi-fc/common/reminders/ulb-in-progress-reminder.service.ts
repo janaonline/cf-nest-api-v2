@@ -11,7 +11,7 @@ import { Role } from 'src/module/auth/enum/role.enum';
 import { User, UserDocument } from 'src/schemas/user/user.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { PORTAL_INVITE_LOGIN_TYPE, buildPortalAuthUrls } from 'src/core/utils/portal-urls.util';
-import { remindersCronsEnabled } from 'src/common/utils/reminder-cron-gate.util';
+import { remindersCronsEnabled, REMINDER_CRON_REPLY_TO } from 'src/common/utils/reminder-cron-gate.util';
 import {
   AnnualAccountFormStatus,
   FORM_STATUS_ID,
@@ -72,7 +72,7 @@ const DEFAULT_BODY = `
       <p>If you require any assistance in completing the submission, you may:</p>
       <ul style="padding-left:20px;margin:8px 0;">
         <li>Join the CityFinance Support Hour for live guidance and support.</li>
-        <li>Reply to this email with your query, and our team will assist you.</li>
+        <li>Reply to this email with your query — replies are routed only to 16fc.grant@cityfinance.in.</li>
       </ul>
       <p>
         We request you to complete the pending submission at the earliest to enable your State to review it
@@ -92,7 +92,9 @@ const DEFAULT_BODY = `
     </div>
 
     <div class="footer">
-      &copy; CityFinance &mdash; Ministry of Housing and Urban Affairs, Government of India
+      &copy; CityFinance &mdash; Ministry of Housing and Urban Affairs, Government of India<br />
+      This is an automated message. For any information needed, please reply only to
+      16fc.grant@cityfinance.in.
     </div>
   </div>
 </body>
@@ -208,7 +210,12 @@ export class UlbInProgressReminderService {
     };
     const subject = interpolate(template.subject, variables);
     const html = interpolate(template.body, variables);
-    await this.emailQueue.addEmailJob({ to: nodalOfficer.email as string, subject, html });
+    await this.emailQueue.addEmailJob({
+      to: nodalOfficer.email as string,
+      subject,
+      html,
+      replyTo: REMINDER_CRON_REPLY_TO,
+    });
 
     await this.annualAccountModel.updateOne({ _id: doc._id }, { $set: { lastReminderSentAt: new Date() } });
     this.logger.log(`Reminder sent for annualAccountId=${doc._id.toString()} → ${nodalOfficer.email as string}`);

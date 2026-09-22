@@ -2,21 +2,21 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { Types } from 'mongoose';
-import { SfcStatusService } from './sfc-status.service';
-import { XviFcSfcStatus } from '../../../../schemas/xvi-fc/state/sfc-status.schema';
-import { XviFcSfcStatusHistory } from '../../../../schemas/xvi-fc/state/sfc-status-history.schema';
+import { GtcService } from './gtc.service';
+import { XviFcGtc } from '../../../../schemas/xvi-fc/state/gtc-form.schema';
+import { XviFcGtcHistory } from '../../../../schemas/xvi-fc/state/gtc-form-history.schema';
 import { FormJsonService } from 'src/master/form-json/form-json.service';
 import { DynamicFormValidationService } from '../../common/dynamic-form-validation/dynamic-form-validation.service';
 import { XvifcFormActorsService } from '../../common/services/xvifc-form-actors.service';
-import { ExcelService } from 'src/services/excel/excel.service';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
+import { S3Service } from 'src/core/s3/s3.service';
 import { FileUrlNormalizerService } from '../../common/services/file-url-normalizer.service';
 import { FileInfoNormalizerService } from '../../common/services/file-info-normalizer.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { FORM_STATUS, FormHistoryAction } from 'src/common/constants/form-status.constants';
 import type { XviFcValidationErrorMap } from '../../common/response/xvi-fc-api-response';
-import type { SaveSfcStatusDto } from './dto/save-sfc-status.dto';
+import type { SaveGtcDto } from './dto/save-gtc.dto';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -55,33 +55,61 @@ const mockFormDoc = {
   _id: docOid,
   state: stateOid,
   year: yearOid,
+  installment: 1,
   currentFormStatus: FORM_STATUS.IN_PROGRESS,
   data: {},
   toObject: () => ({
     _id: docOid,
     state: stateOid,
     year: yearOid,
+    installment: 1,
     currentFormStatus: FORM_STATUS.IN_PROGRESS,
     data: {},
   }),
 };
 
-const mockFormQuestions = [{ key: 'sfcStatus', formFieldType: 'radio', label: 'SFC Status', value: '' }];
+const mockFormQuestions = [{ key: 'i2GtcFile', formFieldType: 'file', label: 'GTC File', value: null }];
 
-const validDto: SaveSfcStatusDto = {
+const mockTemplateField = {
+  key: 'i2GtcFile',
+  formFieldType: 'file',
+  label: 'GTC File',
+  value: null,
+  supportingContent: [
+    {
+      type: 'actions',
+      position: 'before',
+      actions: [
+        {
+          id: 'download-template',
+          label: 'Download the GTC template',
+          meta: {
+            path: 'xvi-fc/state/common/2026-27/gtc/gtc-template/template.docx',
+            fileName: 'GTC-Template-2026-27.docx',
+            mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          },
+        },
+      ],
+    },
+  ],
+};
+
+const validDto: SaveGtcDto = {
   stateId: stateOid.toString(),
   yearId: yearOid.toString(),
-  data: { sfcStatus: 'active' },
+  installment: 1,
+  data: { i2GtcFile: null },
 };
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
-describe('SfcStatusService', () => {
-  let service: SfcStatusService;
+describe('GtcService', () => {
+  let service: GtcService;
   let formModel: Record<string, jest.Mock>;
   let historyModel: Record<string, jest.Mock>;
   let formJsonService: Partial<FormJsonService>;
   let validator: Partial<DynamicFormValidationService>;
+  let s3Service: Partial<S3Service>;
 
   beforeEach(async () => {
     formModel = {
@@ -100,27 +128,29 @@ describe('SfcStatusService', () => {
       validateDraftAndBuildPayload: jest.fn().mockReturnValue({
         isValid: true,
         errors: {},
-        sanitizedPayload: { sfcStatus: 'active' },
+        sanitizedPayload: { i2GtcFile: null },
       }),
       validateFinalSubmitAndBuildPayload: jest.fn().mockReturnValue({
         isValid: true,
         errors: {},
-        sanitizedPayload: { sfcStatus: 'active' },
+        sanitizedPayload: { i2GtcFile: null },
       }),
+    };
+    s3Service = {
+      headObject: jest.fn().mockResolvedValue({ ContentLength: 1024 }),
     };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
-        SfcStatusService,
-        { provide: getModelToken(XviFcSfcStatus.name), useValue: formModel },
-        { provide: getModelToken(XviFcSfcStatusHistory.name), useValue: historyModel },
+        GtcService,
+        { provide: getModelToken(XviFcGtc.name), useValue: formModel },
+        { provide: getModelToken(XviFcGtcHistory.name), useValue: historyModel },
         { provide: FormJsonService, useValue: formJsonService },
         { provide: DynamicFormValidationService, useValue: validator },
         {
           provide: XvifcFormActorsService,
           useValue: { buildActorsAndStateName: jest.fn().mockReturnValue({ actors: [], stateName: 'Test State' }) },
         },
-        { provide: ExcelService, useValue: { generateExcel: jest.fn() } },
         {
           provide: FileTokenService,
           useValue: {
@@ -129,12 +159,13 @@ describe('SfcStatusService', () => {
             createToken: jest.fn().mockReturnValue('mock-token'),
           },
         },
+        { provide: S3Service, useValue: s3Service },
         { provide: FileUrlNormalizerService, useValue: { toRawStoragePath: jest.fn((v: string) => v) } },
         FileInfoNormalizerService,
       ],
     }).compile();
 
-    service = module.get(SfcStatusService);
+    service = module.get(GtcService);
   });
 
   // ─── saveDraft ───────────────────────────────────────────────────────────
@@ -147,12 +178,19 @@ describe('SfcStatusService', () => {
         message: expect.any(String),
         data: expect.any(Object),
       });
-      expect((result.message ?? '').length).toBeGreaterThan(0);
+    });
+
+    it('upserts scoped by state + year + installment', async () => {
+      await service.saveDraft(validDto, adminUser, '127.0.0.1', 'jest');
+      expect(formModel['findOne']).toHaveBeenCalledWith(
+        expect.objectContaining({ state: stateOid, year: yearOid, installment: 1 }),
+        expect.anything(),
+      );
     });
 
     it('throws BadRequestException with field-keyed errors map when validation fails', async () => {
       const fieldErrors: XviFcValidationErrorMap = {
-        sfcStatus: [{ field: 'sfcStatus', message: 'SFC Status is required', code: 'required' }],
+        i2GtcFile: [{ field: 'i2GtcFile', message: 'GTC file is required', code: 'required' }],
       };
       (validator.validateDraftAndBuildPayload as jest.Mock).mockReturnValue({
         isValid: false,
@@ -169,15 +207,8 @@ describe('SfcStatusService', () => {
 
       expect(caught).toBeInstanceOf(BadRequestException);
       const response = (caught as BadRequestException).getResponse() as Record<string, unknown>;
-      expect(typeof response['message']).toBe('string');
-      expect((response['message'] as string).length).toBeGreaterThan(0);
-
       const errors = response['errors'] as XviFcValidationErrorMap;
-      expect(Array.isArray(errors)).toBe(false);
-      expect(typeof errors).toBe('object');
-      expect(errors).toHaveProperty('sfcStatus');
-      expect(Array.isArray(errors['sfcStatus'])).toBe(true);
-      expect(errors['sfcStatus'][0]).toMatchObject({ message: expect.any(String) });
+      expect(errors).toHaveProperty('i2GtcFile');
     });
 
     it('throws ForbiddenException when state user accesses a different state', async () => {
@@ -185,58 +216,12 @@ describe('SfcStatusService', () => {
       await expect(service.saveDraft(validDto, wrongState, '127.0.0.1', 'jest')).rejects.toThrow(ForbiddenException);
     });
 
-    it('successful response does not include errors field', async () => {
-      const result = await service.saveDraft(validDto, adminUser, '127.0.0.1', 'jest');
-      expect(result).not.toHaveProperty('errors');
-    });
-
-    it('persists file metadata with pageCount from the sanitized payload', async () => {
-      (validator.validateDraftAndBuildPayload as jest.Mock).mockReturnValue({
-        isValid: true,
-        errors: {},
-        sanitizedPayload: {
-          sfcReport: {
-            fileName: 'sfc-report.pdf',
-            fileUrl: 'state/sfc/sfc-report.pdf',
-            fileSize: 2048,
-            mimeType: 'application/pdf',
-            pageCount: 4,
-          },
-        },
-      });
-
-      await service.saveDraft(
-        {
-          stateId: stateOid.toString(),
-          yearId: yearOid.toString(),
-          data: {
-            sfcReport: {
-              fileName: 'sfc-report.pdf',
-              fileUrl: 'state/sfc/sfc-report.pdf',
-              fileSize: 2048,
-              mimeType: 'application/pdf',
-              pageCount: 4,
-            },
-          },
-        },
-        adminUser,
-        '127.0.0.1',
-        'jest',
-      );
-
-      // No existing doc → create path; the sanitized payload lands in `data` untouched
-      const createArg = (formModel['create'].mock.calls as unknown[][])[0][0] as Record<string, unknown>;
-      const savedFile = (createArg['data'] as Record<string, unknown>)['sfcReport'] as { pageCount?: number | null };
-      expect(savedFile.pageCount).toBe(4);
-    });
-
-    // ─── form history logging ──────────────────────────────────────────────
-
     it('writes a CREATE_DRAFT history row on the very first save (NOT_STARTED → IN_PROGRESS)', async () => {
       await service.saveDraft(validDto, adminUser, '127.0.0.1', 'jest');
 
       expect(historyModel['create']).toHaveBeenCalledWith(
         expect.objectContaining({
+          installment: 1,
           action: FormHistoryAction.CREATE_DRAFT,
           fromStatus: FORM_STATUS.NOT_STARTED,
           toStatus: FORM_STATUS.IN_PROGRESS,
@@ -259,12 +244,10 @@ describe('SfcStatusService', () => {
 
   describe('finalSubmit', () => {
     beforeEach(() => {
-      // finalSubmit requires assertCanStateFinalSubmitForm to pass — use NOT_STARTED so submission is allowed
       formModel['findOne'] = jest.fn().mockReturnValue(q(null)); // no existing doc → NOT_STARTED
     });
 
     it('returns success:true on valid final submit', async () => {
-      // Final submit creates the record when no existing doc
       formModel['create'] = jest.fn().mockResolvedValue(mockFormDoc);
       const result = await service.finalSubmit(validDto, adminUser, '127.0.0.1', 'jest');
       expect(result).toMatchObject({ success: true, message: expect.any(String), data: expect.any(Object) });
@@ -272,8 +255,7 @@ describe('SfcStatusService', () => {
 
     it('throws BadRequestException with field-keyed errors map when validation fails', async () => {
       const fieldErrors: XviFcValidationErrorMap = {
-        sfcStatus: [{ field: 'sfcStatus', message: 'SFC Status is required for final submit', code: 'required' }],
-        checkboxConfirmation: [{ field: 'checkboxConfirmation', message: 'Must be confirmed', code: 'requiredTrue' }],
+        i2GtcFile: [{ field: 'i2GtcFile', message: 'GTC file is required for final submit', code: 'required' }],
       };
       (validator.validateFinalSubmitAndBuildPayload as jest.Mock).mockReturnValue({
         isValid: false,
@@ -281,22 +263,9 @@ describe('SfcStatusService', () => {
         sanitizedPayload: {},
       });
 
-      let caught: unknown;
-      try {
-        await service.finalSubmit(validDto, adminUser, '127.0.0.1', 'jest');
-      } catch (e) {
-        caught = e;
-      }
-
-      expect(caught).toBeInstanceOf(BadRequestException);
-      const response = (caught as BadRequestException).getResponse() as Record<string, unknown>;
-      expect(typeof response['message']).toBe('string');
-      expect((response['message'] as string).length).toBeGreaterThan(0);
-
-      const errors = response['errors'] as XviFcValidationErrorMap;
-      expect(Array.isArray(errors)).toBe(false);
-      expect(errors).toHaveProperty('sfcStatus');
-      expect(errors).toHaveProperty('checkboxConfirmation');
+      await expect(service.finalSubmit(validDto, adminUser, '127.0.0.1', 'jest')).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
     });
 
     it('writes a FINAL_SUBMIT history row (NOT_STARTED → UNDER_REVIEW_BY_MOHUA)', async () => {
@@ -312,18 +281,36 @@ describe('SfcStatusService', () => {
         }),
       );
     });
+
+    it('rejects installment 2 with installment2Locked before running any validation', async () => {
+      const installment2Dto: SaveGtcDto = { ...validDto, installment: 2 };
+
+      let caught: unknown;
+      try {
+        await service.finalSubmit(installment2Dto, adminUser, '127.0.0.1', 'jest');
+      } catch (e) {
+        caught = e;
+      }
+
+      expect(caught).toBeInstanceOf(BadRequestException);
+      const response = (caught as BadRequestException).getResponse() as Record<string, unknown>;
+      const errors = response['errors'] as XviFcValidationErrorMap;
+      expect(errors['installment']?.[0]).toMatchObject({ code: 'installment2Locked' });
+      expect(validator.validateFinalSubmitAndBuildPayload).not.toHaveBeenCalled();
+    });
   });
 
   // ─── getForm ─────────────────────────────────────────────────────────────
 
   describe('getForm', () => {
-    it('returns success:true with data including currentFormStatus and permissions', async () => {
+    it('returns success:true with data including installment, currentFormStatus, and permissions', async () => {
       formModel['findOne'] = jest.fn().mockReturnValue(q(mockFormDoc));
-      const result = await service.getForm(stateOid.toString(), yearOid.toString(), adminUser);
+      const result = await service.getForm(stateOid.toString(), yearOid.toString(), 1, adminUser);
       expect(result).toMatchObject({
         success: true,
         message: expect.any(String),
         data: expect.objectContaining({
+          installment: 1,
           currentFormStatus: expect.any(Number),
           permissions: expect.objectContaining({ canView: expect.any(Boolean) }),
         }),
@@ -332,47 +319,116 @@ describe('SfcStatusService', () => {
 
     it('returns success:true even when no form document exists yet (NOT_STARTED)', async () => {
       formModel['findOne'] = jest.fn().mockReturnValue(q(null));
-      const result = await service.getForm(stateOid.toString(), yearOid.toString(), adminUser);
+      const result = await service.getForm(stateOid.toString(), yearOid.toString(), 1, adminUser);
       expect(result).toMatchObject({ success: true });
       expect(result.data?.currentFormStatus).toBe(FORM_STATUS.NOT_STARTED);
     });
 
     it('throws ForbiddenException when state user accesses a different state', async () => {
       const wrongState = stateUser(new Types.ObjectId());
-      await expect(service.getForm(stateOid.toString(), yearOid.toString(), wrongState)).rejects.toThrow(
+      await expect(service.getForm(stateOid.toString(), yearOid.toString(), 1, wrongState)).rejects.toThrow(
         ForbiddenException,
       );
     });
 
-    it('returns the saved pageCount on hydrated file values alongside the signed URL', async () => {
-      const fileQuestion = { key: 'sfcReport', formFieldType: 'file', label: 'SFC Report', value: null };
-      (formJsonService.findActiveByDesignYearAndFormId as jest.Mock).mockResolvedValue({ data: [fileQuestion] });
-      (formJsonService.findByType as jest.Mock).mockResolvedValue({ data: [fileQuestion] });
+    it('reports installment 2 as locked and installment 1 as unlocked', async () => {
+      const result = await service.getForm(stateOid.toString(), yearOid.toString(), 1, adminUser);
+      expect(result.data?.installmentAccess).toEqual({
+        installment1: { canSelect: true, locked: false, lockReason: null },
+        installment2: { canSelect: false, locked: true, lockReason: expect.any(String) },
+      });
+    });
 
-      formModel['findOne'] = jest.fn().mockReturnValue(
-        q({
-          ...mockFormDoc,
-          data: {
-            sfcReport: {
-              originalName: 'sfc-report.pdf',
-              path: 'state/sfc/sfc-report.pdf',
-              mimeType: 'application/pdf',
-              sizeKb: 2,
-              createdAt: new Date('2026-01-01T00:00:00.000Z'),
-              updatedAt: new Date('2026-01-01T00:00:00.000Z'),
-              pageCount: 7,
-            },
-          },
-        }),
-      );
+    it('hides the download-template action when the form is not editable', async () => {
+      (formJsonService.findActiveByDesignYearAndFormId as jest.Mock).mockResolvedValue({ data: [mockTemplateField] });
+      formModel['findOne'] = jest
+        .fn()
+        .mockReturnValue(q({ ...mockFormDoc, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }));
 
-      const result = await service.getForm(stateOid.toString(), yearOid.toString(), adminUser);
+      const result = await service.getForm(stateOid.toString(), yearOid.toString(), 1, adminUser);
       const questions = (result.data as Record<string, unknown>)['questions'] as Array<Record<string, unknown>>;
-      const fileQ = questions.find((question) => question['key'] === 'sfcReport');
+      const field = questions.find((question) => question['key'] === 'i2GtcFile') as {
+        supportingContent: Array<{ actions: Array<{ id: string; visible?: boolean; meta?: unknown }> }>;
+      };
 
-      const fileValue = fileQ!['value'] as { path: string; pageCount?: number | null };
-      expect(fileValue.pageCount).toBe(7);
-      expect(fileValue.path).not.toBe('state/sfc/sfc-report.pdf'); // re-signed, not the raw path
+      expect(field.supportingContent[0].actions[0].visible).toBe(false);
+    });
+
+    it('strips meta from supportingContent actions before returning to the client', async () => {
+      (formJsonService.findActiveByDesignYearAndFormId as jest.Mock).mockResolvedValue({ data: [mockTemplateField] });
+
+      const result = await service.getForm(stateOid.toString(), yearOid.toString(), 1, adminUser);
+      const questions = (result.data as Record<string, unknown>)['questions'] as Array<Record<string, unknown>>;
+      const field = questions.find((question) => question['key'] === 'i2GtcFile') as {
+        supportingContent: Array<{ actions: Array<{ id: string; meta?: unknown }> }>;
+      };
+
+      expect(field.supportingContent[0].actions[0]).not.toHaveProperty('meta');
+    });
+  });
+
+  // ─── getTemplate ─────────────────────────────────────────────────────────
+
+  describe('getTemplate', () => {
+    it('throws templateNotConfigured when no field configures a download-template action', async () => {
+      let caught: unknown;
+      try {
+        await service.getTemplate(stateOid.toString(), yearOid.toString(), 1, adminUser);
+      } catch (e) {
+        caught = e;
+      }
+
+      expect(caught).toBeInstanceOf(BadRequestException);
+      const response = (caught as BadRequestException).getResponse() as Record<string, unknown>;
+      const errors = response['errors'] as XviFcValidationErrorMap;
+      expect(errors['_form']?.[0]).toMatchObject({ code: 'templateNotConfigured' });
+    });
+
+    it('throws templateUnavailable when the configured S3 object is missing', async () => {
+      (formJsonService.findActiveByDesignYearAndFormId as jest.Mock).mockResolvedValue({ data: [mockTemplateField] });
+      (s3Service.headObject as jest.Mock).mockRejectedValue(new Error('not found'));
+
+      let caught: unknown;
+      try {
+        await service.getTemplate(stateOid.toString(), yearOid.toString(), 1, adminUser);
+      } catch (e) {
+        caught = e;
+      }
+
+      expect(caught).toBeInstanceOf(BadRequestException);
+      const response = (caught as BadRequestException).getResponse() as Record<string, unknown>;
+      const errors = response['errors'] as XviFcValidationErrorMap;
+      expect(errors['_form']?.[0]).toMatchObject({ code: 'templateUnavailable' });
+    });
+
+    it('returns a signed url when the template is configured and the S3 object exists', async () => {
+      (formJsonService.findActiveByDesignYearAndFormId as jest.Mock).mockResolvedValue({ data: [mockTemplateField] });
+
+      const result = await service.getTemplate(stateOid.toString(), yearOid.toString(), 1, adminUser);
+
+      expect(result).toMatchObject({
+        success: true,
+        data: {
+          fileName: 'GTC-Template-2026-27.docx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          url: 'https://signed-url',
+        },
+      });
+    });
+
+    it('throws ForbiddenException when the form status does not allow editing', async () => {
+      formModel['findOne'] = jest.fn().mockReturnValue(q({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }));
+
+      await expect(service.getTemplate(stateOid.toString(), yearOid.toString(), 1, adminUser)).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+
+    it('throws ForbiddenException when state user accesses a different state', async () => {
+      const wrongState = stateUser(new Types.ObjectId());
+      await expect(service.getTemplate(stateOid.toString(), yearOid.toString(), 1, wrongState)).rejects.toThrow(
+        ForbiddenException,
+      );
     });
   });
 });

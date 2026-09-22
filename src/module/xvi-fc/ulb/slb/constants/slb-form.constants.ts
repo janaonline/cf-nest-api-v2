@@ -1175,11 +1175,11 @@ export const DEFAULT_SLB_FIELDS: SlbTypedFieldConfig[] = [
     label: 'Supporting Document',
     formFieldType: 'radio',
     required: true,
-    hintText: '(Gazette notification, source document, SLB records)',
+    hintText: '(Gazette notification, internal ULB records, other source documents available with the ULB)',
     radioLayout: 'vertical',
     options: [
-      { label: 'I have a source document for these figures', id: 'HAS_SOURCE_DOCUMENT' },
-      { label: "I don't have a source document", id: 'NO_SOURCE_DOCUMENT' },
+      { label: 'I have a supporting document for these figures', id: 'HAS_SOURCE_DOCUMENT' },
+      { label: "I don't have a supporting document", id: 'NO_SOURCE_DOCUMENT' },
     ],
     validations: [
       {
