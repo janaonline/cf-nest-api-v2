@@ -5,6 +5,26 @@ import {
   canUlbEditForm,
 } from '../../common/utils/xvi-fc-form-status-access.util';
 import { AnnualAccountFormStatus, DecisionInfo, FORM_STATUS_ID } from '../../../../schemas/xvi-fc/annual-account.schema';
+import {
+  MAX_POST_REJECTION_ATTEMPTS,
+  POST_REJECTION_COOLDOWN_DAYS,
+  MANUAL_REVIEW_SUPPORT_EMAIL,
+  UPLOAD_BLOCKED_MESSAGE,
+  isUploadBlocked,
+  isAwaitingManualReviewDecision,
+} from '../../../../common/utils/manual-review-cooldown.util';
+
+// Re-exported for backward compatibility — every existing import of these from this file keeps
+// working unchanged. The real definitions now live in the shared, form-agnostic
+// common/utils/manual-review-cooldown.util.ts (DUR reuses the same policy directly from there).
+export {
+  MAX_POST_REJECTION_ATTEMPTS,
+  POST_REJECTION_COOLDOWN_DAYS,
+  MANUAL_REVIEW_SUPPORT_EMAIL,
+  UPLOAD_BLOCKED_MESSAGE,
+  isUploadBlocked,
+  isAwaitingManualReviewDecision,
+};
 
 /** Computed per-section capability flags returned alongside annual account status data. */
 export interface AnnualAccountPermissions {
@@ -70,15 +90,3 @@ export function canUlbReuploadDocument(
   return documentStateDecision?.status !== 'APPROVED';
 }
 
-/**
- * Returns true if this document has a manual-review request outstanding with no ADMIN
- * decision recorded yet. While awaiting, the ULB must not be able to re-upload, retry,
- * or remove this document — doing so would change the file out from under the ADMIN
- * mid-review (or silently cancel the pending request).
- */
-export function isAwaitingManualReviewDecision(
-  isManualReviewRequested: boolean | null | undefined,
-  manualReviewDecision: DecisionInfo | null | undefined,
-): boolean {
-  return !!isManualReviewRequested && !manualReviewDecision;
-}
