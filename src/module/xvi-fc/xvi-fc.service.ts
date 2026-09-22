@@ -18,11 +18,9 @@ import {
   XviFcUnspentBalanceDisclosure,
   XviFcUnspentBalanceDisclosureDocument,
 } from '../../schemas/xvi-fc/unspent-balance-disclosure.schema';
-import {
-  XviFcBankAccount,
-  XviFcBankAccountDocument,
-} from '../../schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
-import { SlbForm, SlbFormDocument, SLB_FORM_TYPE, SLB_FORM_ID } from '../../schemas/xvi-fc/ulb/slb-form.schema';
+import { XviFcBankAccount, XviFcBankAccountDocument } from '../../schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
+import { SlbForm, SlbFormDocument, SLB_FORM_TYPE } from '../../schemas/xvi-fc/ulb/slb-form.schema';
+import { XviFcDur, XviFcDurDocument } from '../../schemas/xvi-fc/dur.schema';
 import { StateWiseResponseDto } from './dto/state-wise-response.dto';
 import { buildGetStateWiseDataPipeline } from './queries/get-state-wise-data.query';
 import { SideMenuResponseDto } from './dto/side-menu.dto';
@@ -59,6 +57,8 @@ export class XviFcService {
     private readonly bankAccountModel: Model<XviFcBankAccountDocument>,
     @InjectModel(SlbForm.name)
     private readonly slbFormModel: Model<SlbFormDocument>,
+    @InjectModel(XviFcDur.name)
+    private readonly durModel: Model<XviFcDurDocument>,
     private readonly cache: XviFcCacheService,
     private readonly formJsonService: FormJsonService,
     private readonly ulbEligibilityService: UlbEligibilityService,
@@ -185,8 +185,7 @@ export class XviFcService {
           _id: r._id.toString(),
           year: r.year,
           isEnabled:
-            hasDesignYearStarted(r.year) &&
-            (ulb.startYear == null || ulb.yearAccess?.[r.year]?.yearEnabled === true),
+            hasDesignYearStarted(r.year) && (ulb.startYear == null || ulb.yearAccess?.[r.year]?.yearEnabled === true),
         }));
       }
     }
@@ -226,7 +225,7 @@ export class XviFcService {
     const ulb = new Types.ObjectId(ulbId);
     const designYear = new Types.ObjectId(designYearId);
 
-    const [annualAccounts, disclosure, bankAccountByYear, slbForm, bankFormConfig] = await Promise.all([
+    const [annualAccounts, disclosure, bankAccount, slbForm, durForm] = await Promise.all([
       this.annualAccountModel
         .find({ ulb, design_year: designYear })
         .select('sectionType form_status form_status_id')
@@ -239,19 +238,8 @@ export class XviFcService {
         .select('currentFormStatus')
         .lean()
         .exec(),
-      this.formJsonConfigService.findByFormId(BANK_ACCOUNT_FORM_ID),
+      this.durModel.findOne({ ulb, design_year: designYear }).select('currentFormStatus').lean().exec(),
     ]);
-
-    // ONCE_EVER (Bank Account's actual scope): the record can live in an earlier design year than
-    // the one being requested here. Mirrors BankAccountService.getBankAccount's own ONCE_EVER
-    // branch. Only fires the extra query when the fast, common-case lookup above came up empty -
-    // no added latency for a ULB whose record already belongs to the current year.
-    const bankSubmissionScope: SubmissionScope = bankFormConfig?.submissionScope ?? 'PER_YEAR';
-    const bankAccount =
-      bankAccountByYear ??
-      (bankSubmissionScope === 'ONCE_EVER'
-        ? await this.bankAccountModel.findOne({ ulb }).select('currentFormStatus').lean().exec()
-        : null);
 
     // 'audited' is always the {ulb, design_year} anchor — its _id is what every other
     // annual-account endpoint hands back as annualAccountId (see AnnualAccountsService).
@@ -267,11 +255,12 @@ export class XviFcService {
     const bankAccountStatus =
       ((bankAccount as Record<string, unknown> | null)?.['currentFormStatus'] as FormStatusType | undefined) ??
       FORM_STATUS.NOT_STARTED;
-    const slbStatus = await this.resolveSlbStatus(
-      ulb,
-      designYear,
-      slbForm as { currentFormStatus?: FormStatusType } | null,
-    );
+    const slbStatus =
+      ((slbForm as Record<string, unknown> | null)?.['currentFormStatus'] as FormStatusType | undefined) ??
+      FORM_STATUS.NOT_STARTED;
+    const durStatus =
+      ((durForm as Record<string, unknown> | null)?.['currentFormStatus'] as FormStatusType | undefined) ??
+      FORM_STATUS.NOT_STARTED;
 
     return {
       annualAccountId: auditedDoc?._id?.toString() ?? null,
@@ -289,32 +278,11 @@ export class XviFcService {
         form_status: getFormStatusKey(slbStatus),
         form_status_id: slbStatus,
       },
+      detailedUtilisationReport: {
+        form_status: getFormStatusKey(durStatus),
+        form_status_id: durStatus,
+      },
     };
-  }
-
-  /**
-   * SLB's status for the "Conditions Progress" dashboard. If a real SLB document already exists,
-   * its own currentFormStatus is authoritative (golden rule — never overridden, matches
-   * SlbService.getForm's own precedence). Only when no document exists yet does this check
-   * exemption (read-only, via the same ExemptionResolverService the STATE review table uses) so
-   * an exempted ULB that has never opened /slb still sees EXEMPTED_ACKNOWLEDGED here instead of
-   * the misleading default NOT_STARTED.
-   */
-  private async resolveSlbStatus(
-    ulbId: Types.ObjectId,
-    designYearId: Types.ObjectId,
-    slbForm: { currentFormStatus?: FormStatusType } | null,
-  ): Promise<FormStatusType> {
-    if (slbForm?.currentFormStatus != null) return slbForm.currentFormStatus;
-
-    const [ulb, year] = await Promise.all([
-      this.ulbModel.findById(ulbId, { startYear: 1, yearAccess: 1 }).lean().exec(),
-      this.yearModel.findById(designYearId, { year: 1 }).lean().exec(),
-    ]);
-    if (!ulb || !year) return FORM_STATUS.NOT_STARTED;
-
-    const resolution = await this.exemptionResolverService.resolveBulk([ulb], year, SLB_FORM_ID);
-    return resolution.get(String(ulb._id))?.exempted ? FORM_STATUS.EXEMPTED_ACKNOWLEDGED : FORM_STATUS.NOT_STARTED;
   }
 
   getSupportHours(): {

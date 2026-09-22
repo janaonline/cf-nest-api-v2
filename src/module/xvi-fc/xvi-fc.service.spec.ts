@@ -16,6 +16,7 @@ import {
 import { XviFcUnspentBalanceDisclosure } from '../../schemas/xvi-fc/unspent-balance-disclosure.schema';
 import { XviFcBankAccount } from '../../schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
 import { SlbForm } from '../../schemas/xvi-fc/ulb/slb-form.schema';
+import { XviFcDur } from '../../schemas/xvi-fc/dur.schema';
 import { XviFcCacheService, XVIFC_CACHE_KEY_PREFIX } from './cache/xvi-fc-cache.service';
 import { FormJsonService } from '../../master/form-json/form-json.service';
 import { UlbEligibilityService } from '../ulb-eligibility/ulb-eligibility.service';
@@ -42,6 +43,7 @@ describe('XviFcService', () => {
   let mockDisclosureModel: { findOne: jest.Mock };
   let mockBankAccountModel: { findOne: jest.Mock };
   let mockSlbFormModel: { findOne: jest.Mock };
+  let mockDurModel: { findOne: jest.Mock };
   let mockCacheService: { deleteByPattern: jest.Mock };
   let mockFormJsonService: { clearCache: jest.Mock };
   let mockUlbEligibilityService: { getIneligibleUlbTypeIds: jest.Mock };
@@ -70,6 +72,7 @@ describe('XviFcService', () => {
     mockDisclosureModel = { findOne: jest.fn().mockReturnValue(q(null)) };
     mockBankAccountModel = { findOne: jest.fn().mockReturnValue(q(null)) };
     mockSlbFormModel = { findOne: jest.fn().mockReturnValue(q(null)) };
+    mockDurModel = { findOne: jest.fn().mockReturnValue(q(null)) };
     mockCacheService = { deleteByPattern: jest.fn().mockResolvedValue(0) };
     mockFormJsonService = { clearCache: jest.fn().mockResolvedValue(0) };
     mockUlbEligibilityService = { getIneligibleUlbTypeIds: jest.fn().mockResolvedValue([]) };
@@ -92,6 +95,7 @@ describe('XviFcService', () => {
         { provide: getModelToken(XviFcUnspentBalanceDisclosure.name), useValue: mockDisclosureModel },
         { provide: getModelToken(XviFcBankAccount.name), useValue: mockBankAccountModel },
         { provide: getModelToken(SlbForm.name), useValue: mockSlbFormModel },
+        { provide: getModelToken(XviFcDur.name), useValue: mockDurModel },
         { provide: XviFcCacheService, useValue: mockCacheService },
         { provide: FormJsonService, useValue: mockFormJsonService },
         { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
@@ -489,6 +493,26 @@ describe('XviFcService', () => {
         },
       });
       expect(result.xviFcBankAccount.form_status).not.toBe('SUBMITTED');
+    });
+
+    it('returns detailedUtilisationReport as NOT_STARTED using form-status field names when no DUR record exists', async () => {
+      const result = await service.getFormStatus(ulbId, designYearId);
+
+      expect(result.detailedUtilisationReport).toEqual({
+        form_status: 'NOT_STARTED',
+        form_status_id: FORM_STATUS.NOT_STARTED,
+      });
+    });
+
+    it('returns detailedUtilisationReport with stored status when a DUR record exists', async () => {
+      mockDurModel.findOne.mockReturnValue(q({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_STATE }));
+
+      const result = await service.getFormStatus(ulbId, designYearId);
+
+      expect(result.detailedUtilisationReport).toEqual({
+        form_status: 'UNDER_REVIEW_BY_STATE',
+        form_status_id: FORM_STATUS.UNDER_REVIEW_BY_STATE,
+      });
     });
 
     it('queries bank-account status by ulb and designYear and selects only currentFormStatus', async () => {
