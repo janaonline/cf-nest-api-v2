@@ -6,6 +6,7 @@ import { S3Module } from 'src/core/s3/s3.module';
 import { S3Service } from 'src/core/s3/s3.service';
 import { FormJsonModule } from 'src/master/form-json/form-json.module';
 import { UlbEligibilityModule } from 'src/module/ulb-eligibility/ulb-eligibility.module';
+import { RemindersModule } from 'src/module/xvi-fc/common/reminders/reminders.module';
 import { DUR_VALIDATION_QUEUE } from 'src/core/constants/queues';
 import { DocumentActionGatesService } from 'src/module/xvi-fc/common/services/document-action-gates.service';
 import {
@@ -29,11 +30,9 @@ import { DurValidationResultWriter } from './dur-validation-result-writer.servic
 import { DurStatusSyncService } from './dur-status-sync.service';
 
 /**
- * ULB-view slice of DUR (Detailed Utilisation Report) — presign(generic)/confirm-upload/retry/
- * manual-review/submit-to-state. STATE and MoHUA review endpoints are a later phase (not yet
- * built — see project memory on the DUR feature), so this module currently exports only what
- * the ULB-facing controller needs; no FormJsonModule/EmailQueueModule/RemindersModule wiring yet
- * either (form-json-driven field config and return-notification emails are follow-up work).
+ * ULB + STATE-review slices of DUR (Detailed Utilisation Report) — presign(generic)/confirm-upload/
+ * retry/manual-review/submit-to-state (ULB) plus list/decide/undo/bulk-decide/logs (STATE).
+ * MoHUA review endpoints are a later phase (not yet built — see project memory on the DUR feature).
  */
 @Module({
   imports: [
@@ -41,6 +40,7 @@ import { DurStatusSyncService } from './dur-status-sync.service';
     S3Module,
     FormJsonModule,
     UlbEligibilityModule,
+    RemindersModule,
     BullModule.registerQueue({ name: DUR_VALIDATION_QUEUE }),
     MongooseModule.forFeature([
       { name: XviFcDur.name, schema: XviFcDurSchema },
