@@ -17,3 +17,9 @@ export function remindersCronsEnabled(config: ConfigService, logger: Logger): bo
   if (!enabled) logger.debug('XVIFC_REMINDER_CRONS_ENABLED is not "true" — skipping scheduled run');
   return enabled;
 }
+
+/**
+ * Reply-To address set on the same 3 reminder/summary cron emails — recipients replying to a
+ * cron digest land here instead of the "from" mailbox, which nothing actually monitors.
+ */
+export const REMINDER_CRON_REPLY_TO = '16fc.grant@cityfinance.in';
