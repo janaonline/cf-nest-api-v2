@@ -1,9 +1,8 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
-import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
-import { toObjectIdString } from 'src/common/utils/objectid.util';
+import { assertStateAccess } from 'src/module/xvi-fc/common/utils/xvi-fc-state-access.util';
 import { Year, YearDocument } from 'src/schemas/year.schema';
 import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
 import { keyByFieldKey, requireField } from 'src/module/xvi-fc/common/utils/xvi-fc-field-lookup.util';
@@ -78,7 +77,7 @@ export class ElectedUrbanLocalBodiesDocumentService {
   ) {}
 
   async getDocumentData(stateId: string, yearId: string, user: AuthUser): Promise<EulbListDocumentData> {
-    this.assertStateAccess(user, stateId);
+    assertStateAccess(user, stateId);
 
     const stateOid = new Types.ObjectId(stateId);
     const yearOid = new Types.ObjectId(yearId);
@@ -166,22 +165,5 @@ export class ElectedUrbanLocalBodiesDocumentService {
       const field = requireField(extraFields, key, 'ElectedUrbanLocalBodiesDocumentService.resolveColumns');
       return { key, label: field.label };
     });
-  }
-
-  private hasStateAccess(user: AuthUser, stateId: string): boolean {
-    if (user.scope === Scope.ADMIN) return true;
-    if (user.scope === Scope.STATE) {
-      const userStateId = toObjectIdString(user.state);
-      return !!userStateId && userStateId === stateId;
-    }
-    return false;
-  }
-
-  private assertStateAccess(user: AuthUser, stateId: string): void {
-    if (!this.hasStateAccess(user, stateId)) {
-      throw new ForbiddenException(
-        user.scope === Scope.STATE ? 'You can only access your own state data' : 'Access denied',
-      );
-    }
   }
 }

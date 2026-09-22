@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/unbound-method */
-import { RequestMethod } from '@nestjs/common';
+import { RequestMethod, StreamableFile } from '@nestjs/common';
 import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { validate } from 'class-validator';
@@ -8,6 +8,7 @@ import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { AccessLevel, Permission, Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { REQUIRED_PERMISSIONS_KEY } from 'src/module/auth/require-permissions.decorator';
 import { GetStateDashboardParamsDto } from './dto/get-state-dashboard-params.dto';
+import { ExportAllFormsQueryDto } from './dto/export-all-forms-query.dto';
 import { StateDashboardController } from './state-dashboard.controller';
 import { StateDashboardService } from './state-dashboard.service';
 import type { StateDashboardApiResponse } from './state-dashboard.types';
@@ -31,7 +32,7 @@ describe('StateDashboardController', () => {
     timestamp: '2026-07-13T10:00:00.000Z',
   } as unknown as StateDashboardApiResponse;
 
-  const service = { getDashboard: jest.fn() };
+  const service = { getDashboard: jest.fn(), exportAllFormsCsv: jest.fn() };
   let controller: StateDashboardController;
 
   beforeEach(async () => {
@@ -89,10 +90,50 @@ describe('StateDashboardController', () => {
     expect(errors.some((error) => error.property === 'yearId')).toBe(true);
   });
 
-  it('exposes no query-parameter alternative or CTA controller method', () => {
+  it('exposes only the dashboard and export-all-forms controller methods', () => {
     expect(Object.getOwnPropertyNames(StateDashboardController.prototype).sort()).toEqual([
       'constructor',
+      'exportUlbSubmissionsAllForms',
       'getDashboard',
     ]);
+  });
+
+  describe('exportUlbSubmissionsAllForms()', () => {
+    const exportQuery: ExportAllFormsQueryDto = { designYearId: params.yearId };
+
+    beforeEach(() => {
+      service.exportAllFormsCsv.mockResolvedValue({
+        fileName: 'andhra_pradesh_all_ulb_submissions_13_07_2026.xlsx',
+        buffer: Buffer.from('xlsx-content', 'utf-8'),
+      });
+    });
+
+    it('delegates the validated DTO and authenticated user to the service', async () => {
+      await controller.exportUlbSubmissionsAllForms(exportQuery, user);
+      expect(service.exportAllFormsCsv).toHaveBeenCalledWith(exportQuery, user);
+    });
+
+    it('returns an Excel StreamableFile with the service-provided filename', async () => {
+      const result = await controller.exportUlbSubmissionsAllForms(exportQuery, user);
+      const headers = result.getHeaders();
+      expect(result).toBeInstanceOf(StreamableFile);
+      expect(headers.type).toBe('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      expect(headers.disposition).toBe(
+        'attachment; filename="andhra_pradesh_all_ulb_submissions_13_07_2026.xlsx"',
+      );
+    });
+
+    it('retains the REVIEW_ULB_SUBMISSIONS permission decorator', () => {
+      expect(Reflect.getMetadata(REQUIRED_PERMISSIONS_KEY, controller.exportUlbSubmissionsAllForms)).toEqual([
+        Permission.REVIEW_ULB_SUBMISSIONS,
+      ]);
+    });
+
+    it('retains the GET xvi-fc/state/ulb-submissions/export route', () => {
+      expect(Reflect.getMetadata(PATH_METADATA, controller.exportUlbSubmissionsAllForms)).toBe(
+        'ulb-submissions/export',
+      );
+      expect(Reflect.getMetadata(METHOD_METADATA, controller.exportUlbSubmissionsAllForms)).toBe(RequestMethod.GET);
+    });
   });
 });

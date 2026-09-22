@@ -1,7 +1,6 @@
-import { ForbiddenException, Injectable } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
-import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
-import { toObjectIdString } from 'src/common/utils/objectid.util';
+import { assertStateAccess } from 'src/module/xvi-fc/common/utils/xvi-fc-state-access.util';
 import { escapeRegex } from 'src/common/utils/regex.util';
 import { xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
 import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
@@ -36,7 +35,7 @@ export class ClaimLetterUlbOptionsService {
     query: GetClaimLetterUlbOptionsQueryDto,
     user: AuthUser,
   ): Promise<XviFcApiResponse<ClaimLetterUlbOption[]>> {
-    this.assertStateAccess(user, stateId);
+    assertStateAccess(user, stateId);
     assertInstallmentSupported(installment);
 
     // Display-only read (this dialog never authorizes a build) — cached, so repeated searches/
@@ -128,22 +127,5 @@ export class ClaimLetterUlbOptionsService {
     excludeClaimLetterId?: string,
   ): Promise<Set<string>> {
     return this.eligibilityService.resolveClaimedUlbIds(stateId, yearId, installment, excludeClaimLetterId);
-  }
-
-  private hasStateAccess(user: AuthUser, stateId: string): boolean {
-    if (user.scope === Scope.ADMIN) return true;
-    if (user.scope === Scope.STATE) {
-      const userStateId = toObjectIdString(user.state);
-      return !!userStateId && userStateId === stateId;
-    }
-    return false;
-  }
-
-  private assertStateAccess(user: AuthUser, stateId: string): void {
-    if (!this.hasStateAccess(user, stateId)) {
-      throw new ForbiddenException(
-        user.scope === Scope.STATE ? 'You can only access your own state data' : 'Access denied',
-      );
-    }
   }
 }

@@ -1,14 +1,6 @@
-﻿import {
-  ForbiddenException,
-  Injectable,
-  InternalServerErrorException,
-  Logger,
-  NotFoundException,
-} from '@nestjs/common';
+﻿import { Injectable, InternalServerErrorException, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { ConfigService } from '@nestjs/config';
 import { Buffer } from 'exceljs';
-import ms, { type StringValue } from 'ms';
 import { Model, Types } from 'mongoose';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { ExcelColumnValidation, ExcelService, RowHeader } from 'src/services/excel/excel.service';
@@ -21,16 +13,12 @@ import {
   type EulbDateOffsetBoundary,
 } from 'src/module/xvi-fc/state/elected-urban-local-bodies/validators/elected-urban-local-bodies.validator';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
-import { Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
-import { getEffectivePermissions } from 'src/module/auth/permissions.map';
 import { FORM_STATUS, FormHistoryAction, getFormStatusLabel } from 'src/common/constants/form-status.constants';
 import {
   assertCanStateEditForm,
   assertCanStateFinalSubmitForm,
-  canStateEditForm,
-  canStateFinalSubmitForm,
 } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
-import { toObjectIdString } from 'src/common/utils/objectid.util';
+import { assertStateAccess, buildStateFormPermissions } from 'src/module/xvi-fc/common/utils/xvi-fc-state-access.util';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
 import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
 import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
@@ -195,7 +183,6 @@ export class ElectedUrbanLocalBodiesService {
     private readonly xvifcFormActorsService: XvifcFormActorsService,
     private readonly excelService: ExcelService,
     private readonly fileTokenService: FileTokenService,
-    private readonly config: ConfigService,
     private readonly fileInfoNormalizer: FileInfoNormalizerService,
     private readonly eulbFormJsonConfig: EulbFormJsonConfigService,
     private readonly ulbEligibilityService: UlbEligibilityService,
@@ -235,7 +222,7 @@ export class ElectedUrbanLocalBodiesService {
    * @param user    - Authenticated user; scope-checked against stateId.
    */
   async getForm(stateId: string, yearId: string, user: AuthUser): Promise<XviFcApiResponse<EulbFormGetResponseData>> {
-    this.assertStateAccess(user, stateId);
+    assertStateAccess(user, stateId);
 
     const fields = await this.eulbFormJsonConfig.loadFields(yearId);
     const designYear = YearIdToLabel[yearId];
@@ -272,8 +259,6 @@ export class ElectedUrbanLocalBodiesService {
     ]);
 
     const currentFormStatus = doc?.currentFormStatus ?? FORM_STATUS.NOT_STARTED;
-    const jwtExpiresIn = (this.config.get<string>('JWT_EXPIRES_IN') ?? '24h') as StringValue;
-    const jwtExpiresMs = ms(jwtExpiresIn) ?? 24 * 60 * 60 * 1000;
 
     // Build savedData from top-level form fields (ulbCount is not included — it is backend-owned)
     const savedData: FormData = {};
@@ -283,11 +268,10 @@ export class ElectedUrbanLocalBodiesService {
       if (doc.signedElectedbodyFile !== undefined) savedData['signedElectedbodyFile'] = doc.signedElectedbodyFile;
     }
 
-    const permissions = this.buildFormPermissions(user, stateId, currentFormStatus);
+    const permissions = buildStateFormPermissions(user, stateId, currentFormStatus);
     const questions = this.hydrateQuestions(
       mainFormFields,
       savedData,
-      jwtExpiresMs,
       doc,
       permissions,
       yearId,
@@ -342,7 +326,7 @@ export class ElectedUrbanLocalBodiesService {
    * No blank padding rows are added beyond the active registry count.
    */
   async getTemplate(stateId: string, yearId: string, user: AuthUser): Promise<Buffer> {
-    this.assertStateAccess(user, stateId);
+    assertStateAccess(user, stateId);
 
     const fields = await this.eulbFormJsonConfig.loadFields(yearId);
     const rowEditFields = getFieldsByType(fields, 'EULB_ROW_EDIT_FIELDS');
@@ -439,7 +423,7 @@ export class ElectedUrbanLocalBodiesService {
    * are deliberately excluded.
    */
   async dumpToExcel(stateId: string, yearId: string, user: AuthUser): Promise<Buffer> {
-    this.assertStateAccess(user, stateId);
+    assertStateAccess(user, stateId);
 
     const stateOid = new Types.ObjectId(stateId);
     const yearOid = new Types.ObjectId(yearId);
@@ -504,7 +488,7 @@ export class ElectedUrbanLocalBodiesService {
     ip: string,
     userAgent: string,
   ): Promise<XviFcApiResponse> {
-    this.assertStateAccess(user, dto.stateId);
+    assertStateAccess(user, dto.stateId);
 
     const fields = await this.eulbFormJsonConfig.loadFields(dto.yearId);
     const mainFormFields = getFieldsByType(fields, 'EULB_MAIN_FORM_FIELDS');
@@ -682,7 +666,7 @@ export class ElectedUrbanLocalBodiesService {
     ip: string,
     userAgent: string,
   ): Promise<XviFcApiResponse> {
-    this.assertStateAccess(user, dto.stateId);
+    assertStateAccess(user, dto.stateId);
 
     const fields = await this.eulbFormJsonConfig.loadFields(dto.yearId);
     const mainFormFields = getFieldsByType(fields, 'EULB_MAIN_FORM_FIELDS');
@@ -1044,12 +1028,12 @@ export class ElectedUrbanLocalBodiesService {
 
   /**
    * Merges saved form data onto TEMP_QUESTIONS in one O(n) pass.
-   * File-type questions have their fileUrl signed with a JWT-lifetime token.
+   * File-type questions have their fileUrl signed with a session-length token
+   * (`FileTokenService.signFileUrlForSession`).
    * The electedBodyExcelFile question receives backend-driven supporting actions based on the form doc.
    * The ulbCount question is overridden with the backend-computed active ULB count (read-only).
    *
    * @param savedData              - Key-value pairs extracted from the stored form document's top-level fields.
-   * @param jwtExpiresMs           - Token lifetime in milliseconds used when signing file URLs.
    * @param doc                    - Lean form document used to compute supporting action/badge visibility.
    * @param yearId                 - Design year ObjectId string (for building Register ULB URL).
    * @param computedActiveUlbCount - Active ULB count from the registry (server-side authoritative value).
@@ -1057,7 +1041,6 @@ export class ElectedUrbanLocalBodiesService {
   private hydrateQuestions(
     questions: FieldConfig[],
     savedData: FormData,
-    jwtExpiresMs: number,
     doc: EulbFormLeanDoc | null,
     permissions: EulbFormPermissions,
     yearId: string,
@@ -1082,7 +1065,7 @@ export class ElectedUrbanLocalBodiesService {
 
         const fileVal = rawValue as FileInfo | null | undefined;
         const hydrated = this.fileInfoNormalizer.hydrateFileInfoForResponse(fileVal ?? null, (p) =>
-          this.signStorageFileUrl(p, jwtExpiresMs),
+          this.fileTokenService.signFileUrlForSession(p),
         );
         if (hydrated) value = hydrated;
 
@@ -1219,23 +1202,6 @@ export class ElectedUrbanLocalBodiesService {
   }
 
   /**
-   * Derives canView, canEdit, canFinalSubmit from role permissions, state scope, and current form status.
-   *
-   * @param user    - Authenticated user providing role and scope context.
-   * @param stateId - ObjectId string of the target state; compared against user scope.
-   * @param status  - Current numeric form status; gates canEdit and canFinalSubmit.
-   */
-  private buildFormPermissions(user: AuthUser, stateId: string, status: number): EulbFormPermissions {
-    const perms = new Set(getEffectivePermissions(user));
-    const hasAccess = this.hasStateAccess(user, stateId);
-    return {
-      canView: perms.has(Permission.VIEW_STATE_FORMS) && hasAccess,
-      canEdit: perms.has(Permission.EDIT_STATE_FORMS) && hasAccess && canStateEditForm(status),
-      canFinalSubmit: perms.has(Permission.FINAL_SUBMIT_STATE_FORMS) && hasAccess && canStateFinalSubmitForm(status),
-    };
-  }
-
-  /**
    * Extracts the Excel validation summary fields from a stored form document.
    * Returns zero/NOT_VALIDATED defaults when no doc exists.
    *
@@ -1254,28 +1220,6 @@ export class ElectedUrbanLocalBodiesService {
       validationStatus: doc?.validationStatus ?? 'NOT_VALIDATED',
       activeDatasetVersion: doc?.activeDatasetVersion ?? 0,
     };
-  }
-
-  /**
-   * Signs a relative S3 path with FileTokenService and returns the app-relative
-   * download URL with the token as a query param. Signs the bare relative key
-   * directly (no AWS_STORAGE_URL reconstruction) — the download handler's
-   * `S3Service.getKeyFromS3Url` already accepts a bare key as-is, and naively
-   * concatenating AWS_STORAGE_URL + relativePath without a separator previously
-   * corrupted the resulting "S3 key" whenever AWS_STORAGE_URL had no trailing slash.
-   *
-   * @param relativePath - S3 key as stored in the DB (e.g. `state/2026-27/...`).
-   * @param expMs        - Token lifetime in milliseconds from now.
-   */
-  private signStorageFileUrl(relativePath: string, expMs: number): string {
-    if (!relativePath) return '';
-    const token = this.fileTokenService.createToken({
-      path: relativePath,
-      disposition: 'inline',
-      exp: Date.now() + expMs,
-    });
-    const baseUrl = this.config.get<string>('BASE_URL', '');
-    return `${baseUrl}file/download?signature=${token}`;
   }
 
   /**
@@ -1417,34 +1361,5 @@ export class ElectedUrbanLocalBodiesService {
       createdAt: datetimeToDumpValue(row.createdAt),
       updatedAt: datetimeToDumpValue(row.updatedAt),
     };
-  }
-
-  /**
-   * Returns true if the user is ADMIN, or is a STATE user whose state matches the given stateId.
-   *
-   * @param user    - Authenticated user providing scope and state context.
-   * @param stateId - ObjectId string of the target state to check access for.
-   */
-  private hasStateAccess(user: AuthUser, stateId: string): boolean {
-    if (user.scope === Scope.ADMIN) return true;
-    if (user.scope === Scope.STATE) {
-      const userStateId = toObjectIdString(user.state);
-      return !!userStateId && userStateId === stateId;
-    }
-    return false;
-  }
-
-  /**
-   * Throws ForbiddenException when the user does not have access to the given stateId.
-   *
-   * @param user    - Authenticated user to validate scope for.
-   * @param stateId - ObjectId string of the state being accessed.
-   */
-  private assertStateAccess(user: AuthUser, stateId: string): void {
-    if (!this.hasStateAccess(user, stateId)) {
-      throw new ForbiddenException(
-        user.scope === Scope.STATE ? 'You can only access your own state data' : 'Access denied',
-      );
-    }
   }
 }

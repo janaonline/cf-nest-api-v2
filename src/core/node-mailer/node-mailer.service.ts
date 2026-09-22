@@ -31,6 +31,8 @@ export class NodeMailerService {
     subject: string,
     templateName: string,
     mailData?: Record<string, any>,
+    bcc?: string | string[],
+    replyTo?: string,
   ) {
     try {
       this.logger.log(`Sending email to: ${Array.isArray(to) ? to.join(', ') : to}`);
@@ -39,6 +41,8 @@ export class NodeMailerService {
         subject,
         template: templateName,
         context: mailData,
+        bcc,
+        replyTo,
       });
       this.logger.log(`Email sent successfully to: ${to}`);
     } catch (error) {
@@ -52,6 +56,8 @@ export class NodeMailerService {
     subject: string,
     html: string,
     attachments?: EmailAttachment[],
+    bcc?: string | string[],
+    replyTo?: string,
   ): Promise<void> {
     try {
       this.logger.log(`Sending HTML email to: ${Array.isArray(to) ? to.join(', ') : to}`);
@@ -65,6 +71,8 @@ export class NodeMailerService {
           encoding: 'base64' as const,
           contentType: a.contentType,
         })),
+        bcc,
+        replyTo,
       });
     } catch (error) {
       this.logger.error('Error sending HTML email:', error);

@@ -1,10 +1,4 @@
-import {
-  ForbiddenException,
-  Injectable,
-  InternalServerErrorException,
-  Logger,
-  NotFoundException,
-} from '@nestjs/common';
+import { Injectable, InternalServerErrorException, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { MongoServerError } from 'mongodb';
 import { AnyBulkWriteOperation, Model, Types } from 'mongoose';
@@ -14,10 +8,9 @@ import { S3Service } from 'src/core/s3/s3.service';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { ExcelColumnValidation, ExcelService } from 'src/services/excel/excel.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
-import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { FORM_STATUS, FormHistoryAction } from 'src/common/constants/form-status.constants';
 import { assertCanStateEditForm } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
-import { toObjectIdString } from 'src/common/utils/objectid.util';
+import { assertStateAccess } from 'src/module/xvi-fc/common/utils/xvi-fc-state-access.util';
 import {
   FileInfoNormalizerService,
   type HydratedFileInfoResponse,
@@ -186,7 +179,7 @@ export class DevolutionFormulaExcelService {
     ip: string = '',
     userAgent: string = '',
   ): Promise<XviFcApiResponse<DfValidateExcelResponseData>> {
-    this.assertStateAccess(user, dto.stateId);
+    assertStateAccess(user, dto.stateId);
 
     const stateOid = new Types.ObjectId(dto.stateId);
     const yearOid = new Types.ObjectId(dto.yearId);
@@ -591,7 +584,7 @@ export class DevolutionFormulaExcelService {
     installment: DfInstallment,
     user: AuthUser,
   ): Promise<XviFcApiResponse<DfRevalidateExcelResponseData>> {
-    this.assertStateAccess(user, stateId);
+    assertStateAccess(user, stateId);
 
     const stateOid = new Types.ObjectId(stateId);
     const yearOid = new Types.ObjectId(yearId);
@@ -801,7 +794,7 @@ export class DevolutionFormulaExcelService {
     installment: DfInstallment,
     user: AuthUser,
   ): Promise<ExcelJS.Buffer> {
-    this.assertStateAccess(user, stateId);
+    assertStateAccess(user, stateId);
 
     const stateOid = new Types.ObjectId(stateId);
     const yearOid = new Types.ObjectId(yearId);
@@ -955,15 +948,6 @@ export class DevolutionFormulaExcelService {
         },
       },
     ];
-  }
-
-  private assertStateAccess(user: AuthUser, stateId: string): void {
-    if (user.scope === Scope.ADMIN) return;
-    if (user.scope === Scope.STATE) {
-      const userStateId = toObjectIdString(user.state);
-      if (userStateId && userStateId === stateId) return;
-    }
-    throw new ForbiddenException("You do not have access to this state's data.");
   }
 
   private buildColIndexMap(headerRow: string[]): Map<string, number> {
