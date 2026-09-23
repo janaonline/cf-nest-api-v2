@@ -32,6 +32,12 @@ import {
 } from './dto/manual-review-history-stats-query.dto';
 import { AnnualAccountsService, AnnualAccountSectionKey, SECTION_LABELS } from './annual_accounts.service';
 import { getPortalUrl } from 'src/core/utils/portal-urls.util';
+import {
+  MAX_POST_REJECTION_ATTEMPTS,
+  MANUAL_REVIEW_SUPPORT_EMAIL,
+  UPLOAD_BLOCKED_MESSAGE,
+  isUploadBlocked,
+} from './annual-account-status-access.util';
 
 /**
  * Everything related to the ULB "manual review" workflow for a failed OCR validation — the ULB's
@@ -99,6 +105,22 @@ export class AnnualAccountManualReviewService {
     }
     if (docSlot.currentUpload.ocrInfo?.isManualReviewRequested) {
       throw new BadRequestException('Manual review has already been requested for this document.');
+    }
+    if (isUploadBlocked(docSlot.uploadBlockedUntil)) {
+      throw new ForbiddenException(UPLOAD_BLOCKED_MESSAGE);
+    }
+    // A RETURNED decision stays live through the whole self-service window (see the schema's own
+    // doc comment on manualReviewDecision) — re-request is only allowed once that window is
+    // actually exhausted; before then, the ULB must use their remaining re-upload attempts first.
+    if (
+      docSlot.manualReviewDecision?.status === 'RETURNED' &&
+      (docSlot.postRejectionAttemptsUsed ?? 0) < MAX_POST_REJECTION_ATTEMPTS
+    ) {
+      throw new BadRequestException(
+        `Manual review was already declined for this document. Please correct the file and re-upload — ` +
+          `you have ${MAX_POST_REJECTION_ATTEMPTS - (docSlot.postRejectionAttemptsUsed ?? 0)} attempt(s) left before you can request another review. ` +
+          `After that, uploads will be temporarily blocked. For further details, please email ${MANUAL_REVIEW_SUPPORT_EMAIL}.`,
+      );
     }
 
     const requestedAt = new Date();
@@ -201,12 +223,23 @@ export class AnnualAccountManualReviewService {
     const deciderName = await resolveDeciderName(this.userModel, user._id);
     const decision = buildDecisionRecord(dto.decision, dto.note, user, ipAddress, userAgent, deciderName);
 
+    // A rejection just starts (or restarts) the 3-attempt self-service window — the 7-day
+    // cooldown itself is set once those attempts run out (AnnualAccountOcrProcessor.
+    // computePostRejectionUpdate), not here. manualReviewRejectionCount is kept purely as an
+    // audit/stats counter (see getManualReviewHistoryStats) and no longer gates the cooldown.
+    const rejectionUpdate: Record<string, unknown> = {};
+    if (dto.decision === 'RETURNED') {
+      rejectionUpdate['documents.$.manualReviewRejectionCount'] = (docSlot.manualReviewRejectionCount ?? 0) + 1;
+      rejectionUpdate['documents.$.postRejectionAttemptsUsed'] = 0;
+    }
+
     await this.annualAccountModel.updateOne(
       { _id: sectionDoc._id, 'documents.docId': docId },
       {
         $set: {
           'documents.$.manualReviewDecision': decision,
           ...(dto.decision === 'APPROVED' && { 'documents.$.processingStatus': 'PASSED' }),
+          ...rejectionUpdate,
         },
       },
     );

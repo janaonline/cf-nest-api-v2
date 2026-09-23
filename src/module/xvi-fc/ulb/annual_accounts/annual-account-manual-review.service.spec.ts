@@ -107,6 +107,9 @@ describe('AnnualAccountManualReviewService', () => {
     };
     mockUserModel = {
       findOne: jest.fn().mockReturnValue(mockQuery(null)),
+      // resolveDeciderName (xvi-fc-decision.util.ts) calls findById, not findOne — without this,
+      // every decideManualReview test throws 'userModel.findById is not a function'.
+      findById: jest.fn().mockReturnValue(mockQuery({ name: 'Admin User' })),
     };
     mockS3Service = {
       headObject: jest.fn().mockResolvedValue(undefined),
@@ -268,6 +271,50 @@ describe('AnnualAccountManualReviewService', () => {
         }),
       );
     });
+
+    const docReturned = (postRejectionAttemptsUsed: number, uploadBlockedUntil: Date | null = null) =>
+      mockQuery({
+        _id: ACCOUNT_ID,
+        ulb: ULB_ID,
+        sectionType: 'audited',
+        form_status: 'IN_PROGRESS',
+        documents: [
+          {
+            docId: 'auditors-report',
+            processingStatus: 'FAILED',
+            currentUpload: { uploadId: 'upload-1', ocrInfo: { validationStatus: 'FAIL' } },
+            manualReviewDecision: { status: 'RETURNED', note: 'Wrong document' },
+            postRejectionAttemptsUsed,
+            uploadBlockedUntil,
+          },
+        ],
+      });
+
+    it('rejects a re-request while self-service attempts remain', async () => {
+      mockAnnualAccountModel.findById.mockReturnValue(docReturned(1));
+
+      await expect(
+        service.requestManualReview(ACCOUNT_ID, 'auditedData', 'auditors-report', ulbUser),
+      ).rejects.toThrow(/already declined.*2 attempt\(s\) left/);
+    });
+
+    it('allows a re-request once all 3 self-service attempts are exhausted', async () => {
+      mockAnnualAccountModel.findById.mockReturnValue(docReturned(3));
+
+      await service.requestManualReview(ACCOUNT_ID, 'auditedData', 'auditors-report', ulbUser);
+
+      const [, update] = mockAnnualAccountModel.updateOne.mock.calls[0] as [Record<string, unknown>, MongoUpdateCall];
+      expect(update.$set?.['documents.$.currentUpload.ocrInfo.isManualReviewRequested']).toBe(true);
+    });
+
+    it('rejects while the document is in its post-rejection cooldown', async () => {
+      const future = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      mockAnnualAccountModel.findById.mockReturnValue(docReturned(3, future));
+
+      await expect(
+        service.requestManualReview(ACCOUNT_ID, 'auditedData', 'auditors-report', ulbUser),
+      ).rejects.toThrow('Too many failed attempts');
+    });
   });
 
   describe('decideManualReview', () => {
@@ -372,6 +419,42 @@ describe('AnnualAccountManualReviewService', () => {
       const [, update] = mockAnnualAccountModel.updateOne.mock.calls[0] as [Record<string, unknown>, MongoUpdateCall];
       expect(update.$set?.['documents.$.processingStatus']).toBeUndefined();
       expect(update.$set?.['documents.$.manualReviewDecision']).toMatchObject({ status: 'RETURNED' });
+    });
+
+    it('a first RETURNED sets manualReviewRejectionCount to 1 and does not set a cooldown', async () => {
+      mockAnnualAccountModel.findById.mockReturnValue(docAwaitingReview({ manualReviewRejectionCount: 0 }));
+
+      await service.decideManualReview(
+        ACCOUNT_ID,
+        'auditedData',
+        'auditors-report',
+        { decision: 'RETURNED', note: 'Wrong document' },
+        adminUser,
+      );
+
+      const [, update] = mockAnnualAccountModel.updateOne.mock.calls[0] as [Record<string, unknown>, MongoUpdateCall];
+      expect(update.$set?.['documents.$.manualReviewRejectionCount']).toBe(1);
+      expect(update.$set?.['documents.$.postRejectionAttemptsUsed']).toBe(0);
+      expect(update.$set?.['documents.$.uploadBlockedUntil']).toBeUndefined();
+    });
+
+    it('a second RETURNED just bumps manualReviewRejectionCount and resets attempts — it no longer sets a cooldown itself (that is now the OCR processor\'s job once attempts run out)', async () => {
+      mockAnnualAccountModel.findById.mockReturnValue(
+        docAwaitingReview({ manualReviewRejectionCount: 1, postRejectionAttemptsUsed: 3 }),
+      );
+
+      await service.decideManualReview(
+        ACCOUNT_ID,
+        'auditedData',
+        'auditors-report',
+        { decision: 'RETURNED', note: 'Still wrong' },
+        adminUser,
+      );
+
+      const [, update] = mockAnnualAccountModel.updateOne.mock.calls[0] as [Record<string, unknown>, MongoUpdateCall];
+      expect(update.$set?.['documents.$.manualReviewRejectionCount']).toBe(2);
+      expect(update.$set?.['documents.$.postRejectionAttemptsUsed']).toBe(0);
+      expect(update.$set?.['documents.$.uploadBlockedUntil']).toBeUndefined();
     });
   });
 
