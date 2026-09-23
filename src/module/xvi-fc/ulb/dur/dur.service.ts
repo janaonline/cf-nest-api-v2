@@ -862,7 +862,9 @@ export class DurService {
           // exemptUlbIds check used when no doc exists at all.
           formStatus: {
             $cond: [
-              { $and: [{ $ne: ['$dur', null] }, { $ne: ['$dur.isExemptionStub', true] }] },
+              {
+                $and: [{ $ne: [{ $ifNull: ['$dur', null] }, null] }, { $ne: ['$dur.isExemptionStub', true] }],
+              },
               '$dur.currentFormStatus',
               { $cond: [{ $in: ['$_id', exemptUlbIds] }, FORM_STATUS.EXEMPTED_ACKNOWLEDGED, FORM_STATUS.NOT_STARTED] },
             ],

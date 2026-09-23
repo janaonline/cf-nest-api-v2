@@ -504,7 +504,12 @@ describe('SlbService', () => {
           typeof stage.$addFields === 'object' && stage.$addFields !== null && 'formStatus' in stage.$addFields,
       );
       const [condition, trueBranch] = addFieldsStage.$addFields.formStatus.$cond;
-      expect(condition).toEqual({ $and: [{ $ne: ['$slbForm', null] }, { $ne: ['$slbForm.isExemptionStub', true] }] });
+      expect(condition).toEqual({
+        $and: [
+          { $ne: [{ $ifNull: ['$slbForm', null] }, null] },
+          { $ne: ['$slbForm.isExemptionStub', true] },
+        ],
+      });
       expect(trueBranch).toBe('$slbForm.currentFormStatus');
     });
 

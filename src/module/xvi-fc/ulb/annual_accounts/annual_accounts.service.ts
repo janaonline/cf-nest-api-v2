@@ -834,7 +834,7 @@ export class AnnualAccountsService implements OnModuleInit {
     // at all.
     const trustsStoredSectionStatus = {
       $and: [
-        { $ne: ['$sectionAccount', null] },
+        { $ne: [{ $ifNull: ['$sectionAccount', null] }, null] },
         { $ne: ['$sectionAccount.form_status', notStarted] },
         { $ne: ['$sectionAccount.isExemptionStub', true] },
       ],
