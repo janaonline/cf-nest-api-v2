@@ -45,7 +45,7 @@ import {
   ExemptionResolution,
   ExemptionResolverService,
 } from '../../common/services/exemption-resolver.service';
-import type { UlbAccessInput } from '../../common/services/year-access.service';
+import { YearAccessService, type UlbAccessInput } from '../../common/services/year-access.service';
 import { FormReturnedNotificationService } from '../../common/reminders/form-returned-notification.service';
 import { UlbEligibilityService } from '../../../ulb-eligibility/ulb-eligibility.service';
 import { CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE } from '../../../ulb-eligibility/ulb-eligibility.constants';
@@ -187,6 +187,7 @@ export class AnnualAccountsService implements OnModuleInit {
     private readonly formReturnedNotification: FormReturnedNotificationService,
 
     private readonly exemptionResolverService: ExemptionResolverService,
+    private readonly yearAccessService: YearAccessService,
   ) {}
 
   async onModuleInit() {
@@ -507,11 +508,37 @@ export class AnnualAccountsService implements OnModuleInit {
   // ─── Lookup by ULB + design year ─────────────────────────────────────────────
 
   async findByUlbAndYear(ulbId: string, designYearId: string, section: AnnualAccountSectionKey, user: AuthUser) {
+    // Authorize before any read/write. materializeExemptionStubIfNeeded and
+    // revalidateExemptionStubIfNeeded may create, update, reset, or delete documents,
+    // so out-of-scope callers must be rejected first. validateViewAccess only reads
+    // doc.ulb, so a synthetic object is safe before a document exists.
+    const ulbOid = new Types.ObjectId(ulbId);
+    await this.validateViewAccess({ ulb: ulbOid }, user);
+
     // Always look up the 'audited' anchor regardless of which section was requested — that's
     // the id resolveSectionDocument (via getProcessingStatus) expects to resolve against.
-    const doc = await this.annualAccountModel
+    let doc = await this.annualAccountModel
       .findOne({
-        ulb: new Types.ObjectId(ulbId),
+        ulb: ulbOid,
+        design_year: new Types.ObjectId(designYearId),
+        sectionType: 'audited',
+      })
+      .lean()
+      .exec();
+
+    // xvi-fc dynamic year access: materialize always runs - it independently determines whether the
+    // anchor is missing, exists only as an untouched NOT_STARTED placeholder (a byproduct of an
+    // unaudited-only real upload, or of its own not-exempt branch), or needs no action, so gating it
+    // on `!doc` alone would miss the placeholder case entirely. revalidate runs whenever a document
+    // already exists, to catch an admin having since undone the exemption; it independently no-ops
+    // when neither section is a stale stub. Both re-fetch/re-derive from a fresh read afterward.
+    await this.materializeExemptionStubIfNeeded(ulbId, designYearId, user);
+    if (doc) {
+      await this.revalidateExemptionStubIfNeeded(doc, ulbId, designYearId);
+    }
+    doc = await this.annualAccountModel
+      .findOne({
+        ulb: ulbOid,
         design_year: new Types.ObjectId(designYearId),
         sectionType: 'audited',
       })
@@ -519,17 +546,212 @@ export class AnnualAccountsService implements OnModuleInit {
       .exec();
 
     if (!doc) {
-      // No document at all yet for this ULB+year - the common case (returns plain null, exactly
-      // as before) unless there's a discretionary exemption request to report; a PENDING one must
-      // still surface (and block) even before the ULB has ever opened this section.
-      const ulbOid = new Types.ObjectId(ulbId);
-      await this.validateViewAccess({ ulb: ulbOid }, user);
+      // Still nothing - the common case (returns plain null, exactly as before) unless there's a
+      // discretionary exemption request to report; a PENDING one must still surface (and block)
+      // even before the ULB has ever opened this section.
       const exemption = await this.resolveExemptionStatusForResponse(ulbOid, new Types.ObjectId(designYearId), section);
       if (!exemption.exemptionStatus) return null;
       return { annualAccountId: null, ulbName: null, ulbCode: null, data: null, ...exemption };
     }
-    await this.validateViewAccess(doc, user);
     return this.getProcessingStatus(doc._id.toString(), section, user);
+  }
+
+  /**
+   * Called on every findByUlbAndYear visit (not just when the anchor is missing) - checks AFS
+   * (formId 30) / PFS (formId 31) exemptions for the current year and upserts stubs so
+   * findByUlbAndYear returns an exempted form instead of a blank one. No-ops if neither is exempt.
+   *
+   * 'audited' is always ensured to exist (preserves findOrInitialize's anchor invariant); its
+   * status reflects only formId 30. Because findOrInitialize (and this method's own not-exempt
+   * branch below) can leave the anchor sitting as a genuinely untouched NOT_STARTED placeholder
+   * long before formId 30 is ever exempt, an insert-only $setOnInsert upsert isn't enough - it
+   * would silently no-op against that placeholder forever. So when auditedExempt, an existing
+   * anchor is read first and, if it's still just that untouched placeholder (not a real
+   * submission, not already a stub), upgraded in place. 'unaudited' is upserted only when formId
+   * 31 is exempt, keeping its lazy first-touch behavior otherwise - it has no equivalent
+   * placeholder-byproduct path, so a plain insert-only upsert remains correct for it.
+   */
+  private async materializeExemptionStubIfNeeded(ulbId: string, designYearId: string, user: AuthUser): Promise<void> {
+    const ulbOid = new Types.ObjectId(ulbId);
+    const designYearOid = new Types.ObjectId(designYearId);
+
+    const ulb = await this.ulbModel.findById(ulbOid, { startYear: 1, yearAccess: 1, state: 1 }).lean().exec();
+    if (!ulb) return;
+    const year = await this.yearModel
+      .findById(designYearOid, { year: 1 })
+      .lean<{ _id: Types.ObjectId; year: string }>()
+      .exec();
+    if (!year) return;
+
+    const exemptFormIds = await this.yearAccessService.getExemptFormIds(ulb, year, [
+      SECTION_FORM_IDS.auditedData,
+      SECTION_FORM_IDS.unauditedData,
+    ]);
+    if (exemptFormIds.size === 0) return; // nothing exempt - unchanged behavior, caller still sees a blank form
+
+    const auditedExempt = exemptFormIds.has(SECTION_FORM_IDS.auditedData);
+    const unauditedExempt = exemptFormIds.has(SECTION_FORM_IDS.unauditedData);
+    const userOid = new Types.ObjectId(user._id);
+    const common = {
+      yearId: null,
+      year: null,
+      documents: [],
+      state: ulb.state,
+      createdBy: userOid,
+      modifiedBy: userOid,
+    };
+
+    if (auditedExempt) {
+      const existingAnchor = await this.annualAccountModel
+        .findOne(
+          { ulb: ulbOid, design_year: designYearOid, sectionType: 'audited' },
+          { form_status: 1, isExemptionStub: 1 },
+        )
+        .lean()
+        .exec();
+
+      if (!existingAnchor) {
+        await this.annualAccountModel.findOneAndUpdate(
+          { ulb: ulbOid, design_year: designYearOid, sectionType: 'audited' },
+          {
+            $setOnInsert: {
+              ...common,
+              form_status: AnnualAccountFormStatus.EXEMPTED_ACKNOWLEDGED,
+              form_status_id: FORM_STATUS_ID[AnnualAccountFormStatus.EXEMPTED_ACKNOWLEDGED],
+              isExemptionStub: true,
+              exemptionMaterializedAt: new Date(),
+            },
+          },
+          { upsert: true },
+        );
+      } else if (
+        existingAnchor.form_status === AnnualAccountFormStatus.NOT_STARTED &&
+        existingAnchor.isExemptionStub !== true
+      ) {
+        // Untouched placeholder - upgrade in place. The filter re-checks the same two conditions
+        // so a real upload landing between the read above and this write wins instead of being
+        // silently overwritten.
+        await this.annualAccountModel.updateOne(
+          {
+            _id: existingAnchor._id,
+            form_status: AnnualAccountFormStatus.NOT_STARTED,
+            isExemptionStub: { $ne: true },
+          },
+          {
+            $set: {
+              form_status: AnnualAccountFormStatus.EXEMPTED_ACKNOWLEDGED,
+              form_status_id: FORM_STATUS_ID[AnnualAccountFormStatus.EXEMPTED_ACKNOWLEDGED],
+              isExemptionStub: true,
+              exemptionMaterializedAt: new Date(),
+              modifiedBy: userOid,
+            },
+          },
+        );
+      }
+      // else: real activity, or already a stub - leave alone.
+    } else {
+      // Audited not itself exempt - still must exist once either section is touched. A NOT_STARTED
+      // target never needs "upgrading" from anything, so a plain insert-only upsert (no-op against
+      // any existing document, whatever its status) is always correct here.
+      await this.annualAccountModel.findOneAndUpdate(
+        { ulb: ulbOid, design_year: designYearOid, sectionType: 'audited' },
+        {
+          $setOnInsert: {
+            ...common,
+            form_status: AnnualAccountFormStatus.NOT_STARTED,
+            form_status_id: FORM_STATUS_ID[AnnualAccountFormStatus.NOT_STARTED],
+          },
+        },
+        { upsert: true },
+      );
+    }
+
+    if (unauditedExempt) {
+      await this.annualAccountModel.findOneAndUpdate(
+        { ulb: ulbOid, design_year: designYearOid, sectionType: 'unaudited' },
+        {
+          $setOnInsert: {
+            ...common,
+            form_status: AnnualAccountFormStatus.EXEMPTED_ACKNOWLEDGED,
+            form_status_id: FORM_STATUS_ID[AnnualAccountFormStatus.EXEMPTED_ACKNOWLEDGED],
+            isExemptionStub: true,
+            exemptionMaterializedAt: new Date(),
+          },
+        },
+        { upsert: true },
+      );
+    }
+  }
+
+  /**
+   * Reverse of materializeExemptionStubIfNeeded. Called unconditionally whenever the audited anchor
+   * already exists (not gated on the anchor's own isExemptionStub - the unaudited sibling can be a
+   * stub needing revalidation even when the anchor itself is a real, non-stub document, and vice
+   * versa). One extra lean query for the sibling's stub flag; bails immediately if neither document
+   * is a stub. 'unaudited' has nothing else resolving against its _id, so it's always safe to delete
+   * outright. 'audited' is the anchor other code requires to exist once either section is touched
+   * (see findOrInitialize/resolveSectionDocument), so it can only be deleted once the sibling check
+   * below confirms no sibling document remains - otherwise it's reset in place to the same non-stub
+   * NOT_STARTED shape materializeExemptionStubIfNeeded already produces for an anchor that exists
+   * only because the *other* section was touched first (buildSectionStatus already treats that
+   * identically to "no document" - no downstream change needed for that case).
+   */
+  private async revalidateExemptionStubIfNeeded(
+    anchorDoc: { _id: Types.ObjectId; isExemptionStub?: boolean },
+    ulbId: string,
+    designYearId: string,
+  ): Promise<void> {
+    const ulbOid = new Types.ObjectId(ulbId);
+    const designYearOid = new Types.ObjectId(designYearId);
+
+    const unauditedDoc = await this.annualAccountModel
+      .findOne({ ulb: ulbOid, design_year: designYearOid, sectionType: 'unaudited' }, { isExemptionStub: 1 })
+      .lean()
+      .exec();
+    const auditedIsStub = anchorDoc.isExemptionStub === true;
+    const unauditedIsStub = unauditedDoc?.isExemptionStub === true;
+    if (!auditedIsStub && !unauditedIsStub) return;
+
+    const ulb = await this.ulbModel.findById(ulbOid, { startYear: 1, yearAccess: 1 }).lean().exec();
+    const year = await this.yearModel
+      .findById(designYearOid, { year: 1 })
+      .lean<{ _id: Types.ObjectId; year: string }>()
+      .exec();
+    if (!ulb || !year) return;
+
+    const stillExempt = await this.yearAccessService.getExemptFormIds(ulb, year, [
+      SECTION_FORM_IDS.auditedData,
+      SECTION_FORM_IDS.unauditedData,
+    ]);
+
+    if (unauditedIsStub && !stillExempt.has(SECTION_FORM_IDS.unauditedData)) {
+      await this.annualAccountModel.deleteOne({ _id: unauditedDoc._id, isExemptionStub: true });
+    }
+
+    if (auditedIsStub && !stillExempt.has(SECTION_FORM_IDS.auditedData)) {
+      // Re-check AFTER the delete above, so undoing both formIds together cleans up to complete
+      // absence instead of leaving a stray reset anchor.
+      const siblingStillExists = await this.annualAccountModel.exists({
+        ulb: ulbOid,
+        design_year: designYearOid,
+        sectionType: 'unaudited',
+      });
+      if (siblingStillExists) {
+        await this.annualAccountModel.updateOne(
+          { _id: anchorDoc._id, isExemptionStub: true },
+          {
+            $set: {
+              form_status: AnnualAccountFormStatus.NOT_STARTED,
+              form_status_id: FORM_STATUS_ID[AnnualAccountFormStatus.NOT_STARTED],
+              isExemptionStub: false,
+              exemptionMaterializedAt: null,
+            },
+          },
+        );
+      } else {
+        await this.annualAccountModel.deleteOne({ _id: anchorDoc._id, isExemptionStub: true });
+      }
+    }
   }
 
   // ─── State-scoped ULB submissions list ───────────────────────────────────────
@@ -603,6 +825,21 @@ export class AnnualAccountsService implements OnModuleInit {
       else if (status === DISCRETIONARY_APPROVED_STATUS) approvedUlbIds.push(id);
     }
 
+    // Trust sectionAccount's own stored status only when it represents real, settled progress -
+    // not when it's missing, a stale exemption stub (admin undid the exemption, nobody has
+    // revisited the form yet), or an untouched NOT_STARTED placeholder (the 'audited' anchor
+    // findOrInitialize creates the moment *either* section is touched, even when only 'unaudited'
+    // was actually uploaded to - see materializeExemptionStubIfNeeded's own doc-comment). Any of
+    // those three fall through to the same live exemptUlbIds check used when there's no document
+    // at all.
+    const trustsStoredSectionStatus = {
+      $and: [
+        { $ne: [{ $ifNull: ['$sectionAccount', null] }, null] },
+        { $ne: ['$sectionAccount.form_status', notStarted] },
+        { $ne: ['$sectionAccount.isExemptionStub', true] },
+      ],
+    };
+
     const pipeline: PipelineStage[] = [
       { $match: matchStage },
       // 'audited' is always the anchor doc's own id — every annualAccountId this endpoint
@@ -651,16 +888,16 @@ export class AnnualAccountsService implements OnModuleInit {
       { $addFields: { sectionAccount: { $arrayElemAt: ['$sectionAccount', 0] } } },
       {
         $addFields: {
-          // No sectionAccount yet: use AUTO_EXEMPTED for automatically exempt ULBs instead of NOT_STARTED.
-          // Discretionary exemptions are handled separately below, even without a sectionAccount.
           formStatus: {
-            $ifNull: [
+            $cond: [
+              trustsStoredSectionStatus,
               '$sectionAccount.form_status',
               { $cond: [{ $in: ['$_id', exemptUlbIds] }, AnnualAccountFormStatus.EXEMPTED_ACKNOWLEDGED, notStarted] },
             ],
           },
           formStatusId: {
-            $ifNull: [
+            $cond: [
+              trustsStoredSectionStatus,
               '$sectionAccount.form_status_id',
               {
                 $cond: [

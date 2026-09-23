@@ -119,6 +119,16 @@ entry; every other year recomputes lazily the next time something touches it.
 
 ## Invariants worth knowing before you change adjacent code
 
+- **Authorize before touching a stub, not after**: `materializeExemptionStubIfNeeded` and
+  `revalidateExemptionStubIfNeeded` both write (create/upgrade/reset/delete a document) for whatever
+  `ulbId` the caller passed in, before there's necessarily any real document to authorize against. A
+  form's `findByUlbAndYear`/`getForm` must call its `validateViewAccess`-equivalent check against a
+  synthetic `{ ulb: new Types.ObjectId(ulbId) }` (every such check only ever reads `.ulb`) as the
+  *first* thing it does — not after the initial doc fetch, and not only in the "doc still missing"
+  fallback branch. `SlbService.getForm` is the reference for getting this right; DUR's and Annual
+  Accounts' `findByUlbAndYear` originally authorized only after already writing, letting an
+  out-of-scope caller trigger materialize/revalidate for an arbitrary ULB — fixed once found in
+  review, but worth checking again for the next form wired into this mechanism.
 - **Golden rule**: if a real form document already exists for `(ulb, year, form)`, none of this
   automatic mechanism ever touches it — no automatic re-creation, no re-classification. An
   already-started ULB a state wants excused instead goes through the separate discretionary
@@ -126,6 +136,10 @@ entry; every other year recomputes lazily the next time something touches it.
   `module/xvi-fc/mohua/request-exemption`) — built for Audited/Provisional AFS (formIds 30/31);
   MoHUA's approve there *does* block on (not silently override) an already-started target section,
   via the same "real progress" check, rather than the automatic path's blanket hands-off rule.
+  "Real" excludes an untouched `NOT_STARTED` document with no actual submission on it — Annual
+  Accounts' `materializeExemptionStubIfNeeded` does reach into and upgrade such a document in place
+  (see "Undoing an exemption" below for why), which looks like it's touching an existing document
+  until you know `NOT_STARTED` itself was never real progress to begin with.
 - Once an entry is materialized, `yearEnabled`/`disabledFormIds` are read directly. No code path
   falls back to `dateOfConstitution` or any other condition once `yearAccess[label]` exists — with
   one deliberate exception: an admin changing `startYear` itself invalidates the whole map (see
@@ -137,8 +151,10 @@ entry; every other year recomputes lazily the next time something touches it.
   against the underlying `{ulb, designYear}` unique index otherwise letting a second submission in
   a different year create an ambiguous duplicate — see `BankAccountService.assertNoCrossYearBankAccountRecord`.
 - `FORM_STATUS.EXEMPTED_ACKNOWLEDGED` (`src/common/constants/form-status.constants.ts`) is terminal
-  and ownerless. One writer only: this mechanism's own automatic materialization (e.g.
-  `SlbService.materializeExemptionStubIfNeeded`). `RequestExemptionMohuaService.approve` (the
+  from the discretionary flow's point of view, but not immutable from this mechanism's own — see
+  "Undoing an exemption" below. Written only by this mechanism's own automatic materialization (e.g.
+  `SlbService.materializeExemptionStubIfNeeded`) and, in reverse, its own
+  `revalidateExemptionStubIfNeeded`. `RequestExemptionMohuaService.approve` (the
   discretionary STATE→MoHUA flow) deliberately does **not** write this status, or anything else,
   into a target form's own collection — an earlier version did, and it repeatedly conflicted with
   that collection's own invariants (e.g. Annual Accounts' `sectionType: 'audited'` universal anchor);
@@ -146,6 +162,61 @@ entry; every other year recomputes lazily the next time something touches it.
   exemption is a pure display-only overlay instead — `resolveDiscretionary`'s lookup is the only
   source of truth for it, read directly by `listUlbSubmissions` and the ULB-facing exemption banner,
   never by checking this status.
+
+## Undoing an exemption (self-correcting stubs)
+
+`disabledFormIds` can be edited any time (see "edit-anytime" at the top) — including removing a
+formId that was previously exempted. Since the materialized stub document is a separate write from
+`yearAccess` itself, undoing the exemption there doesn't retroactively touch any stub already
+materialized in SLB/DUR/Annual Accounts' own collections. Every read path that could otherwise keep
+trusting a now-stale stub forever is made self-correcting instead, by checking a doc's
+`isExemptionStub` flag before trusting its stored status:
+
+- **Single-record GET flow** (`SlbService.getForm`, `DurService.findByUlbAndYear`,
+  `AnnualAccountsService.findByUlbAndYear`): each service's `revalidateExemptionStubIfNeeded` re-runs
+  the same live exemption check the materializer used, and deletes a stub outright once it's no longer
+  exempt (never reset to `NOT_STARTED` in place) — this part is uniform across all three. When it
+  actually *runs* differs: SLB/DUR only call it when the existing doc's own `isExemptionStub` is
+  true (a flat one-document-per-`{ulb, year}` shape, so the doc itself is unambiguously the thing to
+  check). Annual Accounts calls it whenever the audited anchor exists at all, stub or not — the
+  *unaudited* sibling can independently be the stale stub even when the anchor itself is a genuine,
+  untouched `NOT_STARTED` placeholder or a real submission, so gating on the anchor's own flag would
+  miss it; `revalidateExemptionStubIfNeeded` checks both documents' flags itself and no-ops if
+  neither is a stub. Annual Accounts' own audited anchor is the one document in this mechanism that
+  *can* end up reset to a persisted `NOT_STARTED` rather than deleted — see the anchor/sibling
+  paragraph below. Once nothing is left to revalidate, the caller falls through to the exact same
+  code path a never-visited ULB already gets.
+
+  `NOT_STARTED` is not exclusively an "absence of a document" state, contrary to an earlier version
+  of this note — `DurService.findOrInitialize` and Annual Accounts' own `findOrInitialize` both
+  persist it as part of ordinary upload initialization (before the real content lands), same as the
+  anchor-placeholder case below. What *is* still true, and load-bearing for
+  `UlbService.assertNoRealSubmissionsForExemptedForms`: an exemption stub itself is never left at
+  `NOT_STARTED` — it's either `EXEMPTED_ACKNOWLEDGED` (materialized/still valid) or deleted (undone),
+  and a plain `NOT_STARTED` document with `isExemptionStub` not `true` is never itself the product of
+  this mechanism, exemption-wise indistinguishable from "no real submission yet" regardless of which
+  code path actually created it.
+- **Bulk STATE list overlays** (`listUlbSlbForms`/`listUlbSubmissions` in all three services): these
+  resolve `formStatus` live for every candidate ULB regardless of whether a doc has been visited yet,
+  so they're widened to distrust a *stub's* stored status the same way they already treat a missing
+  doc — falling through to the live check instead of trusting `isExemptionStub: true` data. Purely
+  read-time, no write, so a list is correct even for a ULB whose stub was undone but who never
+  revisited the form page.
+- **`XviFcService.resolveSlbStatus`** (the "Conditions Progress" dashboard's SLB status) has the same
+  golden-rule shape and the same widening. Its DUR/Annual-Accounts siblings in the same method have no
+  live exemption check at all (a separate, already-known gap, unrelated to undo) — not touched here.
+
+Annual Accounts' anchor/sibling split (see `annual-account.schema.ts`'s own doc-comment) makes the
+`audited` anchor's revalidation asymmetric with the `unaudited` sibling's: the sibling is always safe
+to delete outright (nothing else resolves against its `_id`), but the anchor can only be deleted once
+its sibling document is confirmed gone too — otherwise it's reset in place (cleared stub flags, status
+back to `NOT_STARTED`) rather than deleted, preserving the same "anchor exists once either section is
+touched" invariant `findOrInitialize` relies on for real uploads.
+
+Undo is deliberately silent — no audit-log entry, mirroring materialization itself (also unlogged).
+The admin's actual `disabledFormIds` edit, in `UlbService.updateYearAccess`, is unlogged too; if that
+ever needs an audit trail, the write belongs there, not scattered across each form's stub
+materialize/revalidate methods, since a bulk-list revalidation is read-only and would never see it.
 
 ## Before changing this, read the ADR
 

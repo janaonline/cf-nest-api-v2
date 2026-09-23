@@ -359,6 +359,13 @@ export class XviFcAnnualAccount {
 
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
   modifiedBy: Types.ObjectId;
+
+  // -- xvi-fc dynamic year access: automatic exemption stub, never edited by a ULB --------
+  @Prop({ type: Boolean, default: false })
+  isExemptionStub?: boolean;
+
+  @Prop({ type: Date })
+  exemptionMaterializedAt?: Date;
 }
 
 export const XviFcAnnualAccountSchema = SchemaFactory.createForClass(XviFcAnnualAccount);

@@ -5,7 +5,10 @@
  * Access (see that file's "How to add a new form" section).
  */
 export const FORM_LABELS: Readonly<Record<number, string>> = {
+  30: 'Audited Financial Statements',
+  31: 'Provisional Financial Statements',
   32: 'SLB',
+  36: 'DUR',
 };
 
 /** Falls back to a generic "Form #<id>" label for a formId not yet in the registry above. */

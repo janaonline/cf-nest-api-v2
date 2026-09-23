@@ -22,11 +22,13 @@ form's own folder.** The mechanism is generic; no per-form documentation exists 
 `findByFormId`/`findAllExemptable` return nothing for a formId with no row - the mechanism they
 back is silently inert until a row exists. There is no auto-seed on boot (removed — it was writing
 rows as a side effect of every app startup); a fresh environment needs each row created once via
-`POST form-json-config` (ADMIN only). Dynamic Year Access currently depends on exactly two rows: 32
-(SLB - `isApplicableForExemption: true`) and 33 (Bank Account - `submissionScope: 'ONCE_EVER'`). See
-`POST form-json-config` request bodies below. Every other formId in the registry below is a
-reference entry only - it has no `formJsonConfig` row, and doesn't need one unless it's later wired
-into exemption or `ONCE_EVER` (see "How to add a new form" below).
+`POST form-json-config` (ADMIN only). Dynamic Year Access currently depends on five rows: 32
+(SLB - `isApplicableForExemption: true`), 33 (Bank Account - `submissionScope: 'ONCE_EVER'`), 30
+(Annual Account — Audited/AFS), 31 (Annual Account — Provisional/PFS), and 36 (DUR) — the latter
+three all `isApplicableForExemption: true`, `submissionScope: 'PER_YEAR'`. See `POST form-json-config`
+request bodies below. Every other formId in the registry below is a reference entry only - it has no
+`formJsonConfig` row, and doesn't need one unless it's later wired into exemption or `ONCE_EVER` (see
+"How to add a new form" below).
 
 ```jsonc
 // POST form-json-config  (ADMIN only) — SLB
@@ -34,6 +36,15 @@ into exemption or `ONCE_EVER` (see "How to add a new form" below).
 
 // POST form-json-config  (ADMIN only) — Bank Account / PFMS
 { "formId": 33, "isApplicableForExemption": false, "exemptionGraceYears": 1, "submissionScope": "ONCE_EVER" }
+
+// POST form-json-config  (ADMIN only) — Annual Account, Audited (AFS)
+{ "formId": 30, "isApplicableForExemption": true, "exemptionGraceYears": 1, "submissionScope": "PER_YEAR" }
+
+// POST form-json-config  (ADMIN only) — Annual Account, Provisional (PFS)
+{ "formId": 31, "isApplicableForExemption": true, "exemptionGraceYears": 1, "submissionScope": "PER_YEAR" }
+
+// POST form-json-config  (ADMIN only) — DUR
+{ "formId": 36, "isApplicableForExemption": true, "exemptionGraceYears": 1, "submissionScope": "PER_YEAR" }
 ```
 
 ## Fields
@@ -71,12 +82,13 @@ is that registry.
 | 24 | Devolution Formula | `module/xvi-fc/state/devolution-formula` |
 | 25 | FC Unspent Declaration | `module/xvi-fc/state/fc-unspent-declaration` |
 | 26 | Claim Letter | `module/xvi-fc/state/claim-letter` |
-| 30 | Annual Account — Audited | `module/xvi-fc/ulb/annual_accounts` (`sectionType: 'audited'`) |
-| 31 | Annual Account — Provisional/Unaudited | `module/xvi-fc/ulb/annual_accounts` (`sectionType: 'unaudited'`) |
+| 30 | Annual Account — Audited (AFS) | `module/xvi-fc/ulb/annual_accounts` (`sectionType: 'audited'`) |
+| 31 | Annual Account — Provisional/Unaudited (PFS) | `module/xvi-fc/ulb/annual_accounts` (`sectionType: 'unaudited'`) |
 | 32 | SLB | `module/xvi-fc/ulb/slb` |
 | 33 | Bank Account / PFMS | `module/xvi-fc/ulb/bank-account` |
 | 34 | Request Exemption | `module/xvi-fc/state/request-exemption` — the discretionary STATE→MoHUA exemption flow (not part of Dynamic Year Access's automatic mechanism; no `formJsonConfig` row) |
 | 35 | Grant Transfer Certificate (GTC) | `module/xvi-fc/state/gtc` - State-level, no `formJsonConfig` row (this mechanism is ULB-exemption-only, not applicable to a State form) |
+| 36 | DUR (Detailed Utilisation Report) | `module/xvi-fc/ulb/dur` |
 
 ## How to add a new form to Dynamic Year Access
 

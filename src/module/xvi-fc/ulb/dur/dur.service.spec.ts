@@ -1,7 +1,9 @@
+import { ForbiddenException } from '@nestjs/common';
 import { DurService } from './dur.service';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
+import { DUR_FORM_ID } from './constants/dur-form.constants';
 
 /** Mimics a Mongoose query chain — `.select()`/`.lean()` are no-ops, `.exec()` resolves the value. */
 function mockQuery<T>(result: T) {
@@ -14,12 +16,21 @@ function mockQuery<T>(result: T) {
 
 describe('DurService', () => {
   let service: DurService;
-  let mockDurModel: { findById: jest.Mock; findByIdAndUpdate: jest.Mock };
+  let mockDurModel: {
+    findById: jest.Mock;
+    findByIdAndUpdate: jest.Mock;
+    findOne: jest.Mock;
+    findOneAndUpdate: jest.Mock;
+    deleteOne: jest.Mock;
+  };
   let mockFormLogModel: { create: jest.Mock; find: jest.Mock };
-  let mockUlbModel: { findById: jest.Mock; aggregate: jest.Mock };
+  let mockUlbModel: { findById: jest.Mock; find: jest.Mock; aggregate: jest.Mock };
+  let mockYearModel: { findById: jest.Mock };
   let mockUserModel: { findById: jest.Mock };
   let mockFormJsonService: { findActiveByDesignYearAndFormId: jest.Mock };
   let mockFormReturnedNotification: { notifyReturned: jest.Mock };
+  let mockYearAccessService: { isFormExempt: jest.Mock };
+  let mockExemptionResolverService: { resolveBulk: jest.Mock };
 
   const ulbId = '507f1f77bcf86cd799439001';
   const stateId = '507f1f77bcf86cd799439002';
@@ -48,20 +59,31 @@ describe('DurService', () => {
   };
 
   beforeEach(() => {
-    mockDurModel = { findById: jest.fn(), findByIdAndUpdate: jest.fn() };
+    mockDurModel = {
+      findById: jest.fn(),
+      findByIdAndUpdate: jest.fn(),
+      findOne: jest.fn().mockReturnValue(mockQuery(null)),
+      findOneAndUpdate: jest.fn().mockResolvedValue(undefined),
+      deleteOne: jest.fn().mockResolvedValue({ deletedCount: 1 }),
+    };
     mockFormLogModel = { create: jest.fn().mockResolvedValue(undefined), find: jest.fn().mockReturnValue(mockQuery([])) };
     mockUlbModel = {
       findById: jest.fn().mockReturnValue(mockQuery({ state: stateId })),
+      find: jest.fn().mockReturnValue(mockQuery([])),
       aggregate: jest.fn().mockReturnValue({ exec: () => Promise.resolve([{ data: [], totalCount: [], counts: [] }]) }),
     };
+    mockYearModel = { findById: jest.fn().mockReturnValue(mockQuery({ _id: designYearId, year: '2026-27' })) };
     mockUserModel = { findById: jest.fn().mockReturnValue(mockQuery({ name: 'Reviewer' })) };
     mockFormJsonService = { findActiveByDesignYearAndFormId: jest.fn() };
     mockFormReturnedNotification = { notifyReturned: jest.fn().mockResolvedValue(undefined) };
+    mockYearAccessService = { isFormExempt: jest.fn().mockResolvedValue(false) };
+    mockExemptionResolverService = { resolveBulk: jest.fn().mockResolvedValue(new Map()) };
 
     service = new DurService(
       mockDurModel as any,
       mockFormLogModel as any,
       mockUlbModel as any,
+      mockYearModel as any,
       mockUserModel as any,
       {} as any,
       {} as any,
@@ -70,6 +92,8 @@ describe('DurService', () => {
       mockFormJsonService as any,
       mockFormReturnedNotification as any,
       { signFileUrl: jest.fn().mockReturnValue('https://signed.example.com/file.pdf') } as any,
+      mockYearAccessService as any,
+      mockExemptionResolverService as any,
     );
   });
 
@@ -206,6 +230,110 @@ describe('DurService', () => {
     });
   });
 
+  describe('findByUlbAndYear', () => {
+    const stub = {
+      _id: durId,
+      ulb: ulbId,
+      currentFormStatus: FORM_STATUS.EXEMPTED_ACKNOWLEDGED,
+      currentFormStatusLabel: 'Exempted',
+      isExemptionStub: true,
+      declaredAt: null,
+      stateDecision: null,
+      mohuaDecision: null,
+      documents: [],
+    };
+
+    it('rejects an out-of-scope STATE caller before any write, not after materialization', async () => {
+      const otherStateUser: AuthUser = { ...stateUser, state: 'a-different-state-id' } as AuthUser;
+      mockUlbModel.findById.mockReturnValue(mockQuery({ state: stateId })); // ULB's real state, not otherStateUser's
+      mockYearAccessService.isFormExempt.mockResolvedValue(true);
+      mockDurModel.findOne.mockReturnValue(mockQuery(null));
+
+      await expect(service.findByUlbAndYear(ulbId, designYearId, otherStateUser)).rejects.toThrow(ForbiddenException);
+
+      expect(mockDurModel.findOneAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('returns null without checking exemption when a real record already exists (golden rule)', async () => {
+      mockDurModel.findOne.mockReturnValue(mockQuery({ ...baseDur, documents: [] }));
+      mockDurModel.findById.mockReturnValue(mockQuery({ ...baseDur, documents: [] }));
+
+      await service.findByUlbAndYear(ulbId, designYearId, stateUser);
+
+      expect(mockYearAccessService.isFormExempt).not.toHaveBeenCalled();
+      expect(mockDurModel.findOneAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('does not materialize a stub when the ULB is not exempted (default)', async () => {
+      mockDurModel.findOne.mockReturnValue(mockQuery(null));
+
+      const result = await service.findByUlbAndYear(ulbId, designYearId, stateUser);
+
+      expect(mockDurModel.findOneAndUpdate).not.toHaveBeenCalled();
+      expect(result).toBeNull();
+    });
+
+    it('materializes an exemption stub and returns it when the ULB is exempted', async () => {
+      mockYearAccessService.isFormExempt.mockResolvedValue(true);
+      mockDurModel.findOne
+        .mockReturnValueOnce(mockQuery(null)) // findByUlbAndYear's own first read: no record yet
+        .mockReturnValueOnce(mockQuery(stub)); // materializeExemptionStubIfNeeded's re-read after upsert
+      mockDurModel.findById.mockReturnValue(mockQuery(stub)); // getProcessingStatus's own lookup
+
+      const result = await service.findByUlbAndYear(ulbId, designYearId, stateUser);
+
+      expect(mockYearAccessService.isFormExempt).toHaveBeenCalledWith(
+        expect.objectContaining({ state: stateId }),
+        expect.objectContaining({ year: '2026-27' }),
+        DUR_FORM_ID,
+      );
+      expect(mockDurModel.findOneAndUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ ulb: expect.anything(), design_year: expect.anything() }),
+        expect.objectContaining({
+          $setOnInsert: expect.objectContaining({
+            currentFormStatus: FORM_STATUS.EXEMPTED_ACKNOWLEDGED,
+            isExemptionStub: true,
+          }),
+        }),
+        { upsert: true },
+      );
+      expect(result?.currentFormStatus).toBe(FORM_STATUS.EXEMPTED_ACKNOWLEDGED);
+    });
+
+    describe('undoing an exemption (existing stub, no longer exempt)', () => {
+      it('is a no-op when still exempt - the stub is returned unchanged', async () => {
+        mockYearAccessService.isFormExempt.mockResolvedValue(true);
+        mockDurModel.findOne.mockReturnValue(mockQuery(stub));
+        mockDurModel.findById.mockReturnValue(mockQuery(stub));
+
+        const result = await service.findByUlbAndYear(ulbId, designYearId, stateUser);
+
+        expect(mockDurModel.deleteOne).not.toHaveBeenCalled();
+        expect(result?.currentFormStatus).toBe(FORM_STATUS.EXEMPTED_ACKNOWLEDGED);
+      });
+
+      it('deletes the stub (filtered on isExemptionStub:true) when the admin has undone the exemption', async () => {
+        mockYearAccessService.isFormExempt.mockResolvedValue(false);
+        mockDurModel.findOne.mockReturnValue(mockQuery(stub));
+
+        const result = await service.findByUlbAndYear(ulbId, designYearId, stateUser);
+
+        expect(mockDurModel.deleteOne).toHaveBeenCalledWith({ _id: durId, isExemptionStub: true });
+        expect(result).toBeNull();
+      });
+
+      it('does not revalidate a real (non-stub) record', async () => {
+        mockDurModel.findOne.mockReturnValue(mockQuery({ ...baseDur, documents: [] }));
+        mockDurModel.findById.mockReturnValue(mockQuery({ ...baseDur, documents: [] }));
+
+        await service.findByUlbAndYear(ulbId, designYearId, stateUser);
+
+        expect(mockYearAccessService.isFormExempt).not.toHaveBeenCalled();
+        expect(mockDurModel.deleteOne).not.toHaveBeenCalled();
+      });
+    });
+  });
+
   describe('listUlbSubmissions', () => {
     it('rejects non-STATE/ADMIN users', async () => {
       const ulbUser = { _id: 'u1', role: 'ULB', scope: Scope.ULB } as AuthUser;
@@ -233,6 +361,56 @@ describe('DurService', () => {
 
       expect(result.data.total).toBe(1);
       expect(result.data.rows).toEqual([row]);
+    });
+
+    it('includes an EXEMPTED_ACKNOWLEDGED fallback for a documentless-but-exempt ULB in the aggregation pipeline', async () => {
+      const exemptUlbId = 'ulb-exempt-1';
+      mockUlbModel.find.mockReturnValue(mockQuery([{ _id: exemptUlbId, startYear: 2026, yearAccess: {} }]));
+      mockExemptionResolverService.resolveBulk.mockResolvedValue(
+        new Map([[exemptUlbId, { exempted: true, source: 'AUTOMATIC' }]]),
+      );
+
+      await service.listUlbSubmissions({ designYearId, page: 1, pageSize: 20 }, stateUser);
+
+      const pipeline = mockUlbModel.aggregate.mock.calls[0][0];
+      const addFieldsStage = pipeline.find(
+        (stage: Record<string, unknown>) =>
+          typeof stage.$addFields === 'object' && stage.$addFields !== null && 'formStatus' in stage.$addFields,
+      );
+      const exemptIds = addFieldsStage.$addFields.formStatus.$cond[2].$cond[0].$in[1];
+      expect(exemptIds).toEqual([exemptUlbId]);
+      expect(mockExemptionResolverService.resolveBulk).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ year: '2026-27' }),
+        DUR_FORM_ID,
+      );
+    });
+
+    it('does not trust a stale exemption stub\'s stored status - falls through to the live exemption check', async () => {
+      await service.listUlbSubmissions({ designYearId, page: 1, pageSize: 20 }, stateUser);
+
+      const pipeline = mockUlbModel.aggregate.mock.calls[0][0];
+      const addFieldsStage = pipeline.find(
+        (stage: Record<string, unknown>) =>
+          typeof stage.$addFields === 'object' && stage.$addFields !== null && 'formStatus' in stage.$addFields,
+      );
+      const [condition, trueBranch] = addFieldsStage.$addFields.formStatus.$cond;
+      expect(condition).toEqual({
+        $and: [
+          { $ne: [{ $ifNull: ['$dur', null] }, null] },
+          { $ne: ['$dur.isExemptionStub', true] },
+        ],
+      });
+      expect(trueBranch).toBe('$dur.currentFormStatus');
+    });
+
+    it('skips the exemption lookup entirely when the design year is not found', async () => {
+      mockYearModel.findById.mockReturnValue(mockQuery(null));
+
+      await service.listUlbSubmissions({ designYearId, page: 1, pageSize: 20 }, stateUser);
+
+      expect(mockUlbModel.find).not.toHaveBeenCalled();
+      expect(mockExemptionResolverService.resolveBulk).not.toHaveBeenCalled();
     });
   });
 

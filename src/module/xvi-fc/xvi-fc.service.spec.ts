@@ -625,6 +625,27 @@ describe('XviFcService', () => {
         expect(mockUlbModel.findById).not.toHaveBeenCalled();
         expect(mockExemptionResolverService.resolveBulk).not.toHaveBeenCalled();
       });
+
+      it('does not trust a stale exemption stub - falls through to the live exemption check instead of the golden rule', async () => {
+        const ulb = { _id: new Types.ObjectId(ulbId), startYear: 2027, yearAccess: {} };
+        const year = { _id: new Types.ObjectId(designYearId), year: '2027-28' };
+        mockSlbFormModel.findOne.mockReturnValue(
+          q({ currentFormStatus: FORM_STATUS.EXEMPTED_ACKNOWLEDGED, isExemptionStub: true }),
+        );
+        mockUlbModel.findById.mockReturnValue(q(ulb));
+        mockYearModel.findById.mockReturnValue(q(year));
+        mockExemptionResolverService.resolveBulk.mockResolvedValue(
+          new Map([[String(ulb._id), { exempted: false, source: null }]]), // admin has since undone the exemption
+        );
+
+        const result = await service.getFormStatus(ulbId, designYearId);
+
+        expect(result.serviceLevelBenchmarks).toEqual({
+          form_status: 'NOT_STARTED',
+          form_status_id: FORM_STATUS.NOT_STARTED,
+        });
+        expect(mockExemptionResolverService.resolveBulk).toHaveBeenCalledWith([ulb], year, expect.any(Number));
+      });
     });
   });
 

@@ -12,6 +12,7 @@ import { Ulb } from '../../../../schemas/ulb.schema';
 import { Year } from '../../../../schemas/year.schema';
 import { User } from '../../../../schemas/user/user.schema';
 import { ExemptionResolverService } from '../../common/services/exemption-resolver.service';
+import { YearAccessService } from '../../common/services/year-access.service';
 import { FORM_STATUS } from '../../../../common/constants/form-status.constants';
 import { S3Service } from '../../../../core/s3/s3.service';
 import { S3UploadService } from '../../../file/s3-upload.service';
@@ -56,6 +57,7 @@ describe('AnnualAccountsService', () => {
   let mockFormReturnedNotification: { notifyReturned: jest.Mock };
   let mockYearModel: { findById: jest.Mock };
   let mockExemptionResolverService: { resolveBulk: jest.Mock; resolveDiscretionaryBulk: jest.Mock; resolveDiscretionary: jest.Mock };
+  let mockYearAccessService: { getExemptFormIds: jest.Mock };
 
   beforeEach(async () => {
     mockAnnualAccountModel = {
@@ -63,6 +65,8 @@ describe('AnnualAccountsService', () => {
       findOne: jest.fn().mockReturnValue(mockQuery(null)),
       findOneAndUpdate: jest.fn(),
       updateOne: jest.fn().mockResolvedValue({ modifiedCount: 1 }),
+      deleteOne: jest.fn().mockResolvedValue({ deletedCount: 1 }),
+      exists: jest.fn().mockResolvedValue(null),
       aggregate: jest.fn().mockReturnValue(mockQuery([{ data: [], totalCount: [] }])),
     };
     mockUploadHistoryModel = {
@@ -120,6 +124,9 @@ describe('AnnualAccountsService', () => {
       resolveDiscretionaryBulk: jest.fn().mockResolvedValue(new Map()),
       resolveDiscretionary: jest.fn().mockResolvedValue(null),
     };
+    mockYearAccessService = {
+      getExemptFormIds: jest.fn().mockResolvedValue(new Set()),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -139,6 +146,7 @@ describe('AnnualAccountsService', () => {
         { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: FormReturnedNotificationService, useValue: mockFormReturnedNotification },
         { provide: ExemptionResolverService, useValue: mockExemptionResolverService },
+        { provide: YearAccessService, useValue: mockYearAccessService },
       ],
     }).compile();
 
@@ -230,6 +238,315 @@ describe('AnnualAccountsService', () => {
       const result = await service.findByUlbAndYear(ULB_ID, YEAR_ID, 'auditedData', user);
 
       expect(result).toBeNull();
+    });
+
+    describe('findByUlbAndYear — dynamic year access exemption', () => {
+      // Shadows the outer `user` fixture - materializeExemptionStubIfNeeded constructs
+      // `new Types.ObjectId(user._id)`, which needs a real 24-char hex string.
+      const user: AuthUser = { _id: '507f1f77bcf86cd799439099', role: 'ADMIN', scope: 'ADMIN' } as AuthUser;
+
+      const exemptedAnchor = {
+        _id: ACCOUNT_ID,
+        ulb: ULB_ID,
+        design_year: YEAR_ID,
+        sectionType: 'audited',
+        form_status: 'EXEMPTED_ACKNOWLEDGED',
+        form_status_id: 12,
+        isExemptionStub: true,
+        documents: [],
+      };
+
+      beforeEach(() => {
+        mockUlbModel.findById.mockReturnValue(mockQuery({ name: 'Test ULB', code: 'TU1', state: { toString: () => 'state-1' } }));
+      });
+
+      it('rejects an out-of-scope ULB caller before any write, not after materialization', async () => {
+        const otherUlbUser = { _id: user._id, role: 'ULB', scope: 'ULB', ulb: 'a-different-ulb-id' } as AuthUser;
+        mockYearAccessService.getExemptFormIds.mockResolvedValue(new Set([30, 31]));
+        mockAnnualAccountModel.findOne.mockReturnValue(mockQuery(null));
+
+        await expect(service.findByUlbAndYear(ULB_ID, YEAR_ID, 'auditedData', otherUlbUser)).rejects.toThrow(
+          ForbiddenException,
+        );
+
+        expect(mockAnnualAccountModel.findOneAndUpdate).not.toHaveBeenCalled();
+      });
+
+      it('does not materialize a stub when neither formId is exempt (unchanged behavior)', async () => {
+        mockAnnualAccountModel.findOne.mockReturnValue(mockQuery(null));
+
+        const result = await service.findByUlbAndYear(ULB_ID, YEAR_ID, 'auditedData', user);
+
+        expect(mockAnnualAccountModel.findOneAndUpdate).not.toHaveBeenCalled();
+        expect(result).toBeNull();
+      });
+
+      it('materializes the anchor as EXEMPTED when only formId 30 (audited) is exempt', async () => {
+        mockYearAccessService.getExemptFormIds.mockResolvedValue(new Set([30]));
+        mockAnnualAccountModel.findOne
+          .mockReturnValueOnce(mockQuery(null)) // findByUlbAndYear's initial check: no anchor yet
+          .mockReturnValueOnce(mockQuery(null)) // materialize's own existingAnchor check: still none
+          .mockReturnValueOnce(mockQuery(exemptedAnchor)); // re-read after materialization
+        mockAnnualAccountModel.findById.mockReturnValue(mockQuery(exemptedAnchor));
+
+        const result = await service.findByUlbAndYear(ULB_ID, YEAR_ID, 'auditedData', user);
+
+        expect(mockYearAccessService.getExemptFormIds).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.anything(),
+          [30, 31],
+        );
+        expect(mockAnnualAccountModel.findOneAndUpdate).toHaveBeenCalledTimes(1);
+        expect(mockAnnualAccountModel.findOneAndUpdate).toHaveBeenCalledWith(
+          expect.objectContaining({ sectionType: 'audited' }),
+          expect.objectContaining({
+            $setOnInsert: expect.objectContaining({
+              form_status: 'EXEMPTED_ACKNOWLEDGED',
+              isExemptionStub: true,
+            }),
+          }),
+          { upsert: true },
+        );
+        expect(result?.data.form_status).toBe('EXEMPTED_ACKNOWLEDGED');
+      });
+
+      it('materializes the anchor as NOT_STARTED but the sibling as EXEMPTED when only formId 31 (unaudited) is exempt', async () => {
+        mockYearAccessService.getExemptFormIds.mockResolvedValue(new Set([31]));
+        const notStartedAnchor = { ...exemptedAnchor, form_status: 'NOT_STARTED', form_status_id: 1 };
+        mockAnnualAccountModel.findOne
+          .mockReturnValueOnce(mockQuery(null))
+          .mockReturnValueOnce(mockQuery(notStartedAnchor));
+        mockAnnualAccountModel.findById.mockReturnValue(mockQuery(notStartedAnchor));
+
+        const result = await service.findByUlbAndYear(ULB_ID, YEAR_ID, 'auditedData', user);
+
+        expect(mockAnnualAccountModel.findOneAndUpdate).toHaveBeenCalledTimes(2);
+        expect(mockAnnualAccountModel.findOneAndUpdate).toHaveBeenNthCalledWith(
+          1,
+          expect.objectContaining({ sectionType: 'audited' }),
+          expect.objectContaining({
+            $setOnInsert: expect.objectContaining({ form_status: 'NOT_STARTED' }),
+          }),
+          { upsert: true },
+        );
+        expect(mockAnnualAccountModel.findOneAndUpdate.mock.calls[0][1].$setOnInsert.isExemptionStub).toBeUndefined();
+        expect(mockAnnualAccountModel.findOneAndUpdate).toHaveBeenNthCalledWith(
+          2,
+          expect.objectContaining({ sectionType: 'unaudited' }),
+          expect.objectContaining({
+            $setOnInsert: expect.objectContaining({ form_status: 'EXEMPTED_ACKNOWLEDGED', isExemptionStub: true }),
+          }),
+          { upsert: true },
+        );
+        expect(result?.data.form_status).toBe('NOT_STARTED');
+      });
+
+      it('materializes both the anchor and sibling as EXEMPTED when both formIds are exempt', async () => {
+        mockYearAccessService.getExemptFormIds.mockResolvedValue(new Set([30, 31]));
+        mockAnnualAccountModel.findOne
+          .mockReturnValueOnce(mockQuery(null)) // findByUlbAndYear's initial check: no anchor yet
+          .mockReturnValueOnce(mockQuery(null)) // materialize's own existingAnchor check: still none
+          .mockReturnValueOnce(mockQuery(exemptedAnchor)); // re-read after materialization
+        mockAnnualAccountModel.findById.mockReturnValue(mockQuery(exemptedAnchor));
+
+        await service.findByUlbAndYear(ULB_ID, YEAR_ID, 'auditedData', user);
+
+        expect(mockAnnualAccountModel.findOneAndUpdate).toHaveBeenCalledTimes(2);
+        expect(mockAnnualAccountModel.findOneAndUpdate).toHaveBeenNthCalledWith(
+          1,
+          expect.objectContaining({ sectionType: 'audited' }),
+          expect.objectContaining({ $setOnInsert: expect.objectContaining({ form_status: 'EXEMPTED_ACKNOWLEDGED' }) }),
+          { upsert: true },
+        );
+        expect(mockAnnualAccountModel.findOneAndUpdate).toHaveBeenNthCalledWith(
+          2,
+          expect.objectContaining({ sectionType: 'unaudited' }),
+          expect.objectContaining({ $setOnInsert: expect.objectContaining({ form_status: 'EXEMPTED_ACKNOWLEDGED' }) }),
+          { upsert: true },
+        );
+      });
+
+      it('upgrades an untouched NOT_STARTED anchor placeholder in place when formId 30 becomes exempt', async () => {
+        // findOrInitialize (a real, unrelated unaudited-only upload) leaves the audited anchor
+        // sitting exactly like this - a plain, non-stub NOT_STARTED placeholder with no documents.
+        // A blind $setOnInsert-only upsert would silently no-op against it forever; materialize
+        // must instead recognize it as untouched and upgrade it.
+        const untouchedPlaceholder = {
+          _id: ACCOUNT_ID,
+          ulb: ULB_ID,
+          design_year: YEAR_ID,
+          sectionType: 'audited',
+          form_status: 'NOT_STARTED',
+          form_status_id: 1,
+          isExemptionStub: false,
+          documents: [],
+        };
+        const upgradedAnchor = { ...untouchedPlaceholder, form_status: 'EXEMPTED_ACKNOWLEDGED', form_status_id: 12, isExemptionStub: true };
+        mockYearAccessService.getExemptFormIds.mockResolvedValue(new Set([30]));
+        mockAnnualAccountModel.findOne
+          .mockReturnValueOnce(mockQuery(untouchedPlaceholder)) // findByUlbAndYear's initial anchor fetch
+          .mockReturnValueOnce(mockQuery(untouchedPlaceholder)) // materialize's own existingAnchor check
+          .mockReturnValueOnce(mockQuery(null)) // revalidate's unaudited sibling check - never touched
+          .mockReturnValueOnce(mockQuery(upgradedAnchor)); // final refetch, post-upgrade
+        mockAnnualAccountModel.findById.mockReturnValue(mockQuery(upgradedAnchor));
+
+        const result = await service.findByUlbAndYear(ULB_ID, YEAR_ID, 'auditedData', user);
+
+        expect(mockAnnualAccountModel.findOneAndUpdate).not.toHaveBeenCalled();
+        expect(mockAnnualAccountModel.updateOne).toHaveBeenCalledWith(
+          { _id: ACCOUNT_ID, form_status: 'NOT_STARTED', isExemptionStub: { $ne: true } },
+          {
+            $set: expect.objectContaining({
+              form_status: 'EXEMPTED_ACKNOWLEDGED',
+              form_status_id: 12,
+              isExemptionStub: true,
+            }),
+          },
+        );
+        expect(result?.data.form_status).toBe('EXEMPTED_ACKNOWLEDGED');
+      });
+
+      it('never writes when a real anchor document already exists (golden rule)', async () => {
+        // materialize now runs unconditionally (to catch the untouched-placeholder case below), so
+        // it always probes live exemption state - but since neither formId is exempt by default
+        // (mockYearAccessService.getExemptFormIds resolves an empty Set), it makes no writes. And
+        // since this anchor represents real, settled progress (not NOT_STARTED, not a stub), neither
+        // materialize's own upgrade path nor revalidate ever touches it.
+        const realAnchor = { ...exemptedAnchor, form_status: 'IN_PROGRESS', form_status_id: 2, isExemptionStub: false };
+        mockAnnualAccountModel.findOne.mockReturnValue(mockQuery(realAnchor));
+        mockAnnualAccountModel.findById.mockReturnValue(mockQuery(realAnchor));
+
+        await service.findByUlbAndYear(ULB_ID, YEAR_ID, 'auditedData', user);
+
+        expect(mockAnnualAccountModel.findOneAndUpdate).not.toHaveBeenCalled();
+        expect(mockAnnualAccountModel.updateOne).not.toHaveBeenCalled();
+        expect(mockAnnualAccountModel.deleteOne).not.toHaveBeenCalled();
+      });
+
+      describe('undoing an exemption (existing stub, no longer exempt)', () => {
+        const UNAUDITED_ID = '507f1f77bcf86cd799439015';
+        const unauditedStub = {
+          _id: UNAUDITED_ID,
+          ulb: ULB_ID,
+          design_year: YEAR_ID,
+          sectionType: 'unaudited',
+          form_status: 'EXEMPTED_ACKNOWLEDGED',
+          form_status_id: 12,
+          isExemptionStub: true,
+          documents: [],
+        };
+
+        it('is a no-op when still exempt - neither document is touched', async () => {
+          mockYearAccessService.getExemptFormIds.mockResolvedValue(new Set([30, 31]));
+          mockAnnualAccountModel.findOne
+            .mockReturnValueOnce(mockQuery(exemptedAnchor)) // findByUlbAndYear's initial anchor fetch
+            .mockReturnValueOnce(mockQuery(exemptedAnchor)) // materialize's own existingAnchor check - already a stub
+            .mockReturnValueOnce(mockQuery(unauditedStub)) // revalidate's sibling stub-flag check
+            .mockReturnValueOnce(mockQuery(exemptedAnchor)); // final refetch
+          mockAnnualAccountModel.findById.mockReturnValue(mockQuery(exemptedAnchor));
+
+          const result = await service.findByUlbAndYear(ULB_ID, YEAR_ID, 'auditedData', user);
+
+          expect(mockAnnualAccountModel.deleteOne).not.toHaveBeenCalled();
+          expect(mockAnnualAccountModel.updateOne).not.toHaveBeenCalled();
+          expect(result?.data.form_status).toBe('EXEMPTED_ACKNOWLEDGED');
+        });
+
+        it('deletes only the unaudited sibling when just formId 31 is undone, leaving a real audited doc alone', async () => {
+          const realAnchor = { ...exemptedAnchor, form_status: 'IN_PROGRESS', form_status_id: 2, isExemptionStub: false };
+          mockYearAccessService.getExemptFormIds.mockResolvedValue(new Set()); // 31 no longer exempt
+          mockAnnualAccountModel.findOne
+            .mockReturnValueOnce(mockQuery(realAnchor)) // initial anchor fetch - real, not a stub
+            .mockReturnValueOnce(mockQuery(unauditedStub)) // sibling stub-flag check
+            .mockReturnValueOnce(mockQuery(realAnchor)); // final refetch
+          mockAnnualAccountModel.findById.mockReturnValue(mockQuery(realAnchor));
+
+          await service.findByUlbAndYear(ULB_ID, YEAR_ID, 'auditedData', user);
+
+          expect(mockAnnualAccountModel.deleteOne).toHaveBeenCalledWith({ _id: UNAUDITED_ID, isExemptionStub: true });
+          expect(mockAnnualAccountModel.deleteOne).toHaveBeenCalledTimes(1);
+          expect(mockAnnualAccountModel.updateOne).not.toHaveBeenCalled();
+        });
+
+        it('resets the anchor in place (does not delete it) when formId 30 is undone but the sibling still exists', async () => {
+          const realSibling = { ...unauditedStub, form_status: 'IN_PROGRESS', form_status_id: 2, isExemptionStub: false };
+          const resetAnchor = { ...exemptedAnchor, form_status: 'NOT_STARTED', form_status_id: 1, isExemptionStub: false };
+          mockYearAccessService.getExemptFormIds.mockResolvedValue(new Set()); // 30 no longer exempt
+          mockAnnualAccountModel.findOne
+            .mockReturnValueOnce(mockQuery(exemptedAnchor)) // initial anchor fetch - stub
+            .mockReturnValueOnce(mockQuery(realSibling)) // sibling stub-flag check - sibling exists (not a stub)
+            .mockReturnValueOnce(mockQuery(resetAnchor)); // final refetch after reset
+          mockAnnualAccountModel.exists.mockResolvedValue(true); // sibling document still exists
+          mockAnnualAccountModel.findById.mockReturnValue(mockQuery(resetAnchor));
+
+          const result = await service.findByUlbAndYear(ULB_ID, YEAR_ID, 'auditedData', user);
+
+          expect(mockAnnualAccountModel.deleteOne).not.toHaveBeenCalled();
+          expect(mockAnnualAccountModel.updateOne).toHaveBeenCalledWith(
+            { _id: ACCOUNT_ID, isExemptionStub: true },
+            {
+              $set: expect.objectContaining({
+                form_status: 'NOT_STARTED',
+                form_status_id: 1,
+                isExemptionStub: false,
+                exemptionMaterializedAt: null,
+              }),
+            },
+          );
+          expect(result?.data.form_status).toBe('NOT_STARTED');
+        });
+
+        it('deletes the anchor outright when formId 30 is undone and no sibling document remains', async () => {
+          mockYearAccessService.getExemptFormIds.mockResolvedValue(new Set()); // 30 no longer exempt
+          mockAnnualAccountModel.findOne
+            .mockReturnValueOnce(mockQuery(exemptedAnchor)) // initial anchor fetch - stub
+            .mockReturnValueOnce(mockQuery(null)) // sibling stub-flag check - no sibling at all
+            .mockReturnValueOnce(mockQuery(null)); // final refetch - anchor is gone
+          mockAnnualAccountModel.exists.mockResolvedValue(null); // no sibling document
+
+          const result = await service.findByUlbAndYear(ULB_ID, YEAR_ID, 'auditedData', user);
+
+          expect(mockAnnualAccountModel.updateOne).not.toHaveBeenCalled();
+          expect(mockAnnualAccountModel.deleteOne).toHaveBeenCalledWith({ _id: ACCOUNT_ID, isExemptionStub: true });
+          expect(result).toBeNull();
+        });
+
+        it('deletes both documents when both formIds are undone together, cleaning up to complete absence', async () => {
+          mockYearAccessService.getExemptFormIds.mockResolvedValue(new Set()); // both no longer exempt
+          mockAnnualAccountModel.findOne
+            .mockReturnValueOnce(mockQuery(exemptedAnchor)) // initial anchor fetch - stub
+            .mockReturnValueOnce(mockQuery(unauditedStub)) // sibling stub-flag check - also a stub
+            .mockReturnValueOnce(mockQuery(null)); // final refetch - anchor is gone too
+          mockAnnualAccountModel.exists.mockResolvedValue(null); // sibling already deleted by the time the anchor is checked
+
+          const result = await service.findByUlbAndYear(ULB_ID, YEAR_ID, 'auditedData', user);
+
+          expect(mockAnnualAccountModel.deleteOne).toHaveBeenNthCalledWith(1, { _id: UNAUDITED_ID, isExemptionStub: true });
+          expect(mockAnnualAccountModel.deleteOne).toHaveBeenNthCalledWith(2, { _id: ACCOUNT_ID, isExemptionStub: true });
+          expect(result).toBeNull();
+        });
+
+        it('does not delete/reset anything when neither the anchor nor the sibling is a stub', async () => {
+          // materialize still runs unconditionally and probes live exemption state (empty Set by
+          // default), but since this anchor is real, settled progress - not NOT_STARTED, not a
+          // stub - it makes no writes; revalidate's own fast path then avoids a second exemption
+          // check entirely, since neither document is a stub.
+          const realAnchor = { ...exemptedAnchor, form_status: 'IN_PROGRESS', form_status_id: 2, isExemptionStub: false };
+          const realSibling = { ...unauditedStub, form_status: 'IN_PROGRESS', form_status_id: 2, isExemptionStub: false };
+          mockAnnualAccountModel.findOne
+            .mockReturnValueOnce(mockQuery(realAnchor))
+            .mockReturnValueOnce(mockQuery(realSibling))
+            .mockReturnValueOnce(mockQuery(realAnchor));
+          mockAnnualAccountModel.findById.mockReturnValue(mockQuery(realAnchor));
+
+          await service.findByUlbAndYear(ULB_ID, YEAR_ID, 'auditedData', user);
+
+          expect(mockYearAccessService.getExemptFormIds).toHaveBeenCalledTimes(1);
+          expect(mockAnnualAccountModel.findOneAndUpdate).not.toHaveBeenCalled();
+          expect(mockAnnualAccountModel.deleteOne).not.toHaveBeenCalled();
+          expect(mockAnnualAccountModel.updateOne).not.toHaveBeenCalled();
+        });
+      });
     });
   });
 
@@ -682,10 +999,49 @@ describe('AnnualAccountsService', () => {
 
       const pipeline = mockUlbModel.aggregate.mock.calls[0][0];
       const fallbackStage = pipeline.find(
-        (stage: Record<string, any>) => stage.$addFields?.formStatus?.$ifNull !== undefined,
+        (stage: Record<string, any>) => stage.$addFields?.formStatus?.$cond !== undefined,
       );
-      expect(fallbackStage.$addFields.formStatus.$ifNull[1].$cond[0].$in[1]).toEqual([exemptUlbId]);
-      expect(fallbackStage.$addFields.formStatus.$ifNull[1].$cond[1]).toBe('EXEMPTED_ACKNOWLEDGED');
+      expect(fallbackStage.$addFields.formStatus.$cond[2].$cond[0].$in[1]).toEqual([exemptUlbId]);
+      expect(fallbackStage.$addFields.formStatus.$cond[2].$cond[1]).toBe('EXEMPTED_ACKNOWLEDGED');
+    });
+
+    it('does not trust a stale exemption stub\'s stored status - falls through to the live exemption check', async () => {
+      await service.listUlbSubmissions(baseDto, adminUser);
+
+      const pipeline = mockUlbModel.aggregate.mock.calls[0][0];
+      const fallbackStage = pipeline.find(
+        (stage: Record<string, any>) => stage.$addFields?.formStatus?.$cond !== undefined,
+      );
+      const [condition, trueBranch] = fallbackStage.$addFields.formStatus.$cond;
+      expect(condition).toEqual({
+        $and: [
+          { $ne: [{ $ifNull: ['$sectionAccount', null] }, null] },
+          { $ne: ['$sectionAccount.form_status', 'NOT_STARTED'] },
+          { $ne: ['$sectionAccount.isExemptionStub', true] },
+        ],
+      });
+      expect(trueBranch).toBe('$sectionAccount.form_status');
+
+      const formStatusIdCond = fallbackStage.$addFields.formStatusId.$cond;
+      expect(formStatusIdCond[0]).toEqual(condition);
+      expect(formStatusIdCond[1]).toBe('$sectionAccount.form_status_id');
+    });
+
+    it('does not trust an untouched NOT_STARTED anchor placeholder\'s stored status either - the same live fallback applies', async () => {
+      const exemptUlbId = new Types.ObjectId();
+      mockUlbModel.find.mockReturnValue(mockQuery([{ _id: exemptUlbId, startYear: 2026, yearAccess: {} }]));
+      mockExemptionResolverService.resolveBulk.mockResolvedValue(
+        new Map([[String(exemptUlbId), { exempted: true, source: 'AUTOMATIC' }]]),
+      );
+
+      await service.listUlbSubmissions(baseDto, adminUser);
+
+      const pipeline = mockUlbModel.aggregate.mock.calls[0][0];
+      const fallbackStage = pipeline.find(
+        (stage: Record<string, any>) => stage.$addFields?.formStatus?.$cond !== undefined,
+      );
+      const [condition] = fallbackStage.$addFields.formStatus.$cond;
+      expect(condition.$and).toContainEqual({ $ne: ['$sectionAccount.form_status', 'NOT_STARTED'] });
     });
 
     it('feeds Pending/Rejected/Approved discretionary ULB ids into the exemption-overlay $switch stage', async () => {
