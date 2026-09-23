@@ -13,6 +13,7 @@ import { Ulb } from '../../../../schemas/ulb.schema';
 import { Year } from '../../../../schemas/year.schema';
 import { User } from '../../../../schemas/user/user.schema';
 import { ExemptionResolverService } from '../../common/services/exemption-resolver.service';
+import { YearAccessService } from '../../common/services/year-access.service';
 import { S3Service } from '../../../../core/s3/s3.service';
 import { S3UploadService } from '../../../file/s3-upload.service';
 import { FormJsonService } from '../../../../master/form-json/form-json.service';
@@ -104,6 +105,9 @@ describe('AnnualAccountsController', () => {
     const mockExcelService = {
       generateExcel: jest.fn().mockResolvedValue(Buffer.from('excel')),
     };
+    const mockYearAccessService = {
+      getExemptFormIds: jest.fn().mockResolvedValue(new Set()),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [AnnualAccountsController],
@@ -129,6 +133,7 @@ describe('AnnualAccountsController', () => {
         { provide: FormReturnedNotificationService, useValue: mockFormReturnedNotification },
         { provide: ExcelService, useValue: mockExcelService },
         { provide: ExemptionResolverService, useValue: mockExemptionResolverService },
+        { provide: YearAccessService, useValue: mockYearAccessService },
       ],
     }).compile();
 

@@ -65,6 +65,17 @@ export class YearAccessService {
   }
 
   /**
+   * Batched form-exemption check: one getEntry() call shared across every formId, instead of a
+   * separate call (and DB round trip) per formId - use this instead of calling isFormExempt() in
+   * a loop whenever more than one formId is checked for the same (ulb, year).
+   */
+  async getExemptFormIds(ulb: UlbAccessInput, year: YearAccessInput, formIds: number[]): Promise<Set<number>> {
+    const entry = await this.getEntry(ulb, year);
+    if (!entry.yearEnabled) return new Set();
+    return new Set(formIds.filter((formId) => entry.disabledFormIds.includes(formId)));
+  }
+
+  /**
    * Admin write path - sets the seed (startYear) entry's disabledFormIds directly. This is the
    * ONLY entry an admin ever edits; every other year is derived from it on next access. Also
    * (re)writes yearEnabled for the seed entry itself (always true - it's the ULB's first year).

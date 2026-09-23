@@ -12,6 +12,7 @@ import { Ulb } from '../../../../schemas/ulb.schema';
 import { Year } from '../../../../schemas/year.schema';
 import { User } from '../../../../schemas/user/user.schema';
 import { ExemptionResolverService } from '../../common/services/exemption-resolver.service';
+import { YearAccessService } from '../../common/services/year-access.service';
 import { FORM_STATUS } from '../../../../common/constants/form-status.constants';
 import { S3Service } from '../../../../core/s3/s3.service';
 import { S3UploadService } from '../../../file/s3-upload.service';
@@ -56,6 +57,7 @@ describe('AnnualAccountsService', () => {
   let mockFormReturnedNotification: { notifyReturned: jest.Mock };
   let mockYearModel: { findById: jest.Mock };
   let mockExemptionResolverService: { resolveBulk: jest.Mock; resolveDiscretionaryBulk: jest.Mock; resolveDiscretionary: jest.Mock };
+  let mockYearAccessService: { getExemptFormIds: jest.Mock };
 
   beforeEach(async () => {
     mockAnnualAccountModel = {
@@ -120,6 +122,9 @@ describe('AnnualAccountsService', () => {
       resolveDiscretionaryBulk: jest.fn().mockResolvedValue(new Map()),
       resolveDiscretionary: jest.fn().mockResolvedValue(null),
     };
+    mockYearAccessService = {
+      getExemptFormIds: jest.fn().mockResolvedValue(new Set()),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -139,6 +144,7 @@ describe('AnnualAccountsService', () => {
         { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: FormReturnedNotificationService, useValue: mockFormReturnedNotification },
         { provide: ExemptionResolverService, useValue: mockExemptionResolverService },
+        { provide: YearAccessService, useValue: mockYearAccessService },
       ],
     }).compile();
 
@@ -230,6 +236,129 @@ describe('AnnualAccountsService', () => {
       const result = await service.findByUlbAndYear(ULB_ID, YEAR_ID, 'auditedData', user);
 
       expect(result).toBeNull();
+    });
+
+    describe('findByUlbAndYear — dynamic year access exemption', () => {
+      // Shadows the outer `user` fixture - materializeExemptionStubIfNeeded constructs
+      // `new Types.ObjectId(user._id)`, which needs a real 24-char hex string.
+      const user: AuthUser = { _id: '507f1f77bcf86cd799439099', role: 'ADMIN', scope: 'ADMIN' } as AuthUser;
+
+      const exemptedAnchor = {
+        _id: ACCOUNT_ID,
+        ulb: ULB_ID,
+        design_year: YEAR_ID,
+        sectionType: 'audited',
+        form_status: 'EXEMPTED_ACKNOWLEDGED',
+        form_status_id: 12,
+        documents: [],
+      };
+
+      beforeEach(() => {
+        mockUlbModel.findById.mockReturnValue(mockQuery({ name: 'Test ULB', code: 'TU1', state: { toString: () => 'state-1' } }));
+      });
+
+      it('does not materialize a stub when neither formId is exempt (unchanged behavior)', async () => {
+        mockAnnualAccountModel.findOne.mockReturnValue(mockQuery(null));
+
+        const result = await service.findByUlbAndYear(ULB_ID, YEAR_ID, 'auditedData', user);
+
+        expect(mockAnnualAccountModel.findOneAndUpdate).not.toHaveBeenCalled();
+        expect(result).toBeNull();
+      });
+
+      it('materializes the anchor as EXEMPTED when only formId 30 (audited) is exempt', async () => {
+        mockYearAccessService.getExemptFormIds.mockResolvedValue(new Set([30]));
+        mockAnnualAccountModel.findOne
+          .mockReturnValueOnce(mockQuery(null)) // initial check: no anchor yet
+          .mockReturnValueOnce(mockQuery(exemptedAnchor)); // re-read after materialization
+        mockAnnualAccountModel.findById.mockReturnValue(mockQuery(exemptedAnchor));
+
+        const result = await service.findByUlbAndYear(ULB_ID, YEAR_ID, 'auditedData', user);
+
+        expect(mockYearAccessService.getExemptFormIds).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.anything(),
+          [30, 31],
+        );
+        expect(mockAnnualAccountModel.findOneAndUpdate).toHaveBeenCalledTimes(1);
+        expect(mockAnnualAccountModel.findOneAndUpdate).toHaveBeenCalledWith(
+          expect.objectContaining({ sectionType: 'audited' }),
+          expect.objectContaining({
+            $setOnInsert: expect.objectContaining({
+              form_status: 'EXEMPTED_ACKNOWLEDGED',
+              isExemptionStub: true,
+            }),
+          }),
+          { upsert: true },
+        );
+        expect(result?.data.form_status).toBe('EXEMPTED_ACKNOWLEDGED');
+      });
+
+      it('materializes the anchor as NOT_STARTED but the sibling as EXEMPTED when only formId 31 (unaudited) is exempt', async () => {
+        mockYearAccessService.getExemptFormIds.mockResolvedValue(new Set([31]));
+        const notStartedAnchor = { ...exemptedAnchor, form_status: 'NOT_STARTED', form_status_id: 1 };
+        mockAnnualAccountModel.findOne
+          .mockReturnValueOnce(mockQuery(null))
+          .mockReturnValueOnce(mockQuery(notStartedAnchor));
+        mockAnnualAccountModel.findById.mockReturnValue(mockQuery(notStartedAnchor));
+
+        const result = await service.findByUlbAndYear(ULB_ID, YEAR_ID, 'auditedData', user);
+
+        expect(mockAnnualAccountModel.findOneAndUpdate).toHaveBeenCalledTimes(2);
+        expect(mockAnnualAccountModel.findOneAndUpdate).toHaveBeenNthCalledWith(
+          1,
+          expect.objectContaining({ sectionType: 'audited' }),
+          expect.objectContaining({
+            $setOnInsert: expect.objectContaining({ form_status: 'NOT_STARTED' }),
+          }),
+          { upsert: true },
+        );
+        expect(mockAnnualAccountModel.findOneAndUpdate.mock.calls[0][1].$setOnInsert.isExemptionStub).toBeUndefined();
+        expect(mockAnnualAccountModel.findOneAndUpdate).toHaveBeenNthCalledWith(
+          2,
+          expect.objectContaining({ sectionType: 'unaudited' }),
+          expect.objectContaining({
+            $setOnInsert: expect.objectContaining({ form_status: 'EXEMPTED_ACKNOWLEDGED', isExemptionStub: true }),
+          }),
+          { upsert: true },
+        );
+        expect(result?.data.form_status).toBe('NOT_STARTED');
+      });
+
+      it('materializes both the anchor and sibling as EXEMPTED when both formIds are exempt', async () => {
+        mockYearAccessService.getExemptFormIds.mockResolvedValue(new Set([30, 31]));
+        mockAnnualAccountModel.findOne
+          .mockReturnValueOnce(mockQuery(null))
+          .mockReturnValueOnce(mockQuery(exemptedAnchor));
+        mockAnnualAccountModel.findById.mockReturnValue(mockQuery(exemptedAnchor));
+
+        await service.findByUlbAndYear(ULB_ID, YEAR_ID, 'auditedData', user);
+
+        expect(mockAnnualAccountModel.findOneAndUpdate).toHaveBeenCalledTimes(2);
+        expect(mockAnnualAccountModel.findOneAndUpdate).toHaveBeenNthCalledWith(
+          1,
+          expect.objectContaining({ sectionType: 'audited' }),
+          expect.objectContaining({ $setOnInsert: expect.objectContaining({ form_status: 'EXEMPTED_ACKNOWLEDGED' }) }),
+          { upsert: true },
+        );
+        expect(mockAnnualAccountModel.findOneAndUpdate).toHaveBeenNthCalledWith(
+          2,
+          expect.objectContaining({ sectionType: 'unaudited' }),
+          expect.objectContaining({ $setOnInsert: expect.objectContaining({ form_status: 'EXEMPTED_ACKNOWLEDGED' }) }),
+          { upsert: true },
+        );
+      });
+
+      it('never checks exemption when a real anchor document already exists (golden rule)', async () => {
+        const realAnchor = { ...exemptedAnchor, form_status: 'IN_PROGRESS', form_status_id: 2 };
+        mockAnnualAccountModel.findOne.mockReturnValue(mockQuery(realAnchor));
+        mockAnnualAccountModel.findById.mockReturnValue(mockQuery(realAnchor));
+
+        await service.findByUlbAndYear(ULB_ID, YEAR_ID, 'auditedData', user);
+
+        expect(mockYearAccessService.getExemptFormIds).not.toHaveBeenCalled();
+        expect(mockAnnualAccountModel.findOneAndUpdate).not.toHaveBeenCalled();
+      });
     });
   });
 
