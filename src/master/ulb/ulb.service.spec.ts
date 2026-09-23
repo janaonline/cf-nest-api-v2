@@ -19,7 +19,7 @@ import { Ulb } from 'src/schemas/ulb.schema';
 import { User } from 'src/schemas/user/user.schema';
 import { SlbForm } from 'src/schemas/xvi-fc/ulb/slb-form.schema';
 import { XviFcDur } from 'src/schemas/xvi-fc/dur.schema';
-import { XviFcAnnualAccount } from 'src/schemas/xvi-fc/annual-account.schema';
+import { AnnualAccountFormStatus, XviFcAnnualAccount } from 'src/schemas/xvi-fc/annual-account.schema';
 import { ULB_EDIT_SECTIONS_FORM_JSON_TYPE, ULB_REGISTER_SECTIONS_FORM_JSON_TYPE } from './constants/ulb-form.constants';
 import { UlbService } from './ulb.service';
 
@@ -1481,6 +1481,28 @@ describe('UlbService', () => {
           expect(annualAccountModel.exists).toHaveBeenCalledWith(
             expect.objectContaining({ sectionType: 'unaudited', isExemptionStub: { $ne: true } }),
           );
+        });
+
+        it('allows exempting AFS when the only existing audited document is an untouched NOT_STARTED placeholder', async () => {
+          // findOrInitialize creates the audited anchor as a bare NOT_STARTED placeholder the moment
+          // *either* section is touched - even when only the unaudited section was really uploaded
+          // to. That placeholder is not real AFS progress, so it must not block granting the AFS
+          // exemption. The exists() filter itself excludes it (form_status: {$ne: NOT_STARTED}); this
+          // test only asserts the filter is actually sent and the call is not blocked - it can't
+          // exercise Mongo's own filter evaluation against a mock.
+          formJsonConfigService.findAllExemptable.mockResolvedValue([{ formId: 30 }]);
+          annualAccountModel.exists.mockResolvedValue(null);
+
+          await service.updateYearAccess(ulbId, { startYear: 2026, disabledFormIds: [30] });
+
+          expect(annualAccountModel.exists).toHaveBeenCalledWith(
+            expect.objectContaining({
+              sectionType: 'audited',
+              form_status: { $ne: AnnualAccountFormStatus.NOT_STARTED },
+              isExemptionStub: { $ne: true },
+            }),
+          );
+          expect(yearAccessService.setSeedExemptions).toHaveBeenCalled();
         });
 
         it('checks AFS and PFS independently when both are requested', async () => {

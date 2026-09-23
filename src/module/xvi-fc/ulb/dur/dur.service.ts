@@ -415,6 +415,12 @@ export class DurService {
   }
 
   async findByUlbAndYear(ulbId: string, designYearId: string, user: AuthUser) {
+    // Authorize before any read/write below - materializeExemptionStubIfNeeded and
+    // revalidateExemptionStubIfNeeded can both write (create or delete a stub), so an out-of-scope
+    // caller must be rejected before either ever runs, not after. Only doc.ulb is ever read by
+    // validateViewAccess, so a synthetic object works fine before a real document exists.
+    await this.validateViewAccess({ ulb: new Types.ObjectId(ulbId) }, user);
+
     let dur = await this.durModel
       .findOne({ ulb: new Types.ObjectId(ulbId), design_year: new Types.ObjectId(designYearId) })
       .lean()
@@ -430,7 +436,6 @@ export class DurService {
     }
     if (!dur) return null;
 
-    await this.validateViewAccess(dur, user);
     return this.getProcessingStatus(dur._id.toString(), user);
   }
 

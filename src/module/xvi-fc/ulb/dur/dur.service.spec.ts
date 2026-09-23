@@ -1,3 +1,4 @@
+import { ForbiddenException } from '@nestjs/common';
 import { DurService } from './dur.service';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
@@ -241,6 +242,17 @@ describe('DurService', () => {
       mohuaDecision: null,
       documents: [],
     };
+
+    it('rejects an out-of-scope STATE caller before any write, not after materialization', async () => {
+      const otherStateUser: AuthUser = { ...stateUser, state: 'a-different-state-id' } as AuthUser;
+      mockUlbModel.findById.mockReturnValue(mockQuery({ state: stateId })); // ULB's real state, not otherStateUser's
+      mockYearAccessService.isFormExempt.mockResolvedValue(true);
+      mockDurModel.findOne.mockReturnValue(mockQuery(null));
+
+      await expect(service.findByUlbAndYear(ulbId, designYearId, otherStateUser)).rejects.toThrow(ForbiddenException);
+
+      expect(mockDurModel.findOneAndUpdate).not.toHaveBeenCalled();
+    });
 
     it('returns null without checking exemption when a real record already exists (golden rule)', async () => {
       mockDurModel.findOne.mockReturnValue(mockQuery({ ...baseDur, documents: [] }));

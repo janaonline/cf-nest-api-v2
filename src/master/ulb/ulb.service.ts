@@ -27,7 +27,11 @@ import { formatYearLabel } from 'src/module/xvi-fc/common/utils/design-year-labe
 import { SlbForm, SlbFormDocument, SLB_FORM_ID, SLB_FORM_TYPE } from 'src/schemas/xvi-fc/ulb/slb-form.schema';
 import { XviFcDur, XviFcDurDocument } from 'src/schemas/xvi-fc/dur.schema';
 import { DUR_FORM_ID } from 'src/module/xvi-fc/ulb/dur/constants/dur-form.constants';
-import { XviFcAnnualAccount, XviFcAnnualAccountDocument } from 'src/schemas/xvi-fc/annual-account.schema';
+import {
+  AnnualAccountFormStatus,
+  XviFcAnnualAccount,
+  XviFcAnnualAccountDocument,
+} from 'src/schemas/xvi-fc/annual-account.schema';
 import {
   DEFAULT_ULB_EDIT_SECTIONS,
   DEFAULT_ULB_FIELDS,
@@ -860,10 +864,15 @@ export class UlbService {
     // independent per-section documents - check each one only against its own disabledFormIds
     // entry, same section independence AnnualAccountsService itself maintains throughout.
     if (disabledFormIds.includes(AFS_FORM_ID)) {
+      // findOrInitialize creates the 'audited' anchor when either section is touched,
+      // even if only 'unaudited' was uploaded, leaving a NOT_STARTED placeholder.
+      // Since this isn't real AFS progress, it must not block the AFS exemption.
+      // See AnnualAccountsService.materializeExemptionStubIfNeeded's doc-comment.
       const hasRealAuditedSubmission = await this.annualAccountModel.exists({
         ulb: ulbId,
         design_year: seedYearId,
         sectionType: 'audited',
+        form_status: { $ne: AnnualAccountFormStatus.NOT_STARTED },
         isExemptionStub: { $ne: true },
       });
       if (hasRealAuditedSubmission) {

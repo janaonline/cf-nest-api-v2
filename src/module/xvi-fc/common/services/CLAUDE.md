@@ -119,6 +119,16 @@ entry; every other year recomputes lazily the next time something touches it.
 
 ## Invariants worth knowing before you change adjacent code
 
+- **Authorize before touching a stub, not after**: `materializeExemptionStubIfNeeded` and
+  `revalidateExemptionStubIfNeeded` both write (create/upgrade/reset/delete a document) for whatever
+  `ulbId` the caller passed in, before there's necessarily any real document to authorize against. A
+  form's `findByUlbAndYear`/`getForm` must call its `validateViewAccess`-equivalent check against a
+  synthetic `{ ulb: new Types.ObjectId(ulbId) }` (every such check only ever reads `.ulb`) as the
+  *first* thing it does — not after the initial doc fetch, and not only in the "doc still missing"
+  fallback branch. `SlbService.getForm` is the reference for getting this right; DUR's and Annual
+  Accounts' `findByUlbAndYear` originally authorized only after already writing, letting an
+  out-of-scope caller trigger materialize/revalidate for an arbitrary ULB — fixed once found in
+  review, but worth checking again for the next form wired into this mechanism.
 - **Golden rule**: if a real form document already exists for `(ulb, year, form)`, none of this
   automatic mechanism ever touches it — no automatic re-creation, no re-classification. An
   already-started ULB a state wants excused instead goes through the separate discretionary
