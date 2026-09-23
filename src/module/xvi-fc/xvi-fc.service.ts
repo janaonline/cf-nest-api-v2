@@ -239,7 +239,7 @@ export class XviFcService {
       this.bankAccountModel.findOne({ ulb, designYear }).select('currentFormStatus').lean().exec(),
       this.slbFormModel
         .findOne({ ulb, year: designYear, formType: SLB_FORM_TYPE, isDeleted: false })
-        .select('currentFormStatus')
+        .select('currentFormStatus isExemptionStub')
         .lean()
         .exec(),
       this.formJsonConfigService.findByFormId(BANK_ACCOUNT_FORM_ID),
@@ -274,7 +274,7 @@ export class XviFcService {
     const slbStatus = await this.resolveSlbStatus(
       ulb,
       designYear,
-      slbForm as { currentFormStatus?: FormStatusType } | null,
+      slbForm as { currentFormStatus?: FormStatusType; isExemptionStub?: boolean } | null,
     );
     const durStatus =
       ((durForm as Record<string, unknown> | null)?.['currentFormStatus'] as FormStatusType | undefined) ??
@@ -304,19 +304,21 @@ export class XviFcService {
   }
 
   /**
-   * SLB's status for the "Conditions Progress" dashboard. If a real SLB document already exists,
-   * its own currentFormStatus is authoritative (golden rule — never overridden, matches
-   * SlbService.getForm's own precedence). Only when no document exists yet does this check
-   * exemption (read-only, via the same ExemptionResolverService the STATE review table uses) so
-   * an exempted ULB that has never opened /slb still sees EXEMPTED_ACKNOWLEDGED here instead of
-   * the misleading default NOT_STARTED.
+   * SLB's status for the "Conditions Progress" dashboard. If a real (non-stub) SLB document
+   * already exists, its own currentFormStatus is authoritative (golden rule — never overridden,
+   * matches SlbService.getForm's own precedence). A stub is deliberately excluded from that golden
+   * rule — it may be stale (an admin can undo the exemption after the stub was materialized), so it
+   * falls through to the same live exemption check as a missing document, below. Only when no
+   * document exists yet, or it's a stub, does this check exemption (read-only, via the same
+   * ExemptionResolverService the STATE review table uses) so an exempted ULB that has never opened
+   * /slb still sees EXEMPTED_ACKNOWLEDGED here instead of the misleading default NOT_STARTED.
    */
   private async resolveSlbStatus(
     ulbId: Types.ObjectId,
     designYearId: Types.ObjectId,
-    slbForm: { currentFormStatus?: FormStatusType } | null,
+    slbForm: { currentFormStatus?: FormStatusType; isExemptionStub?: boolean } | null,
   ): Promise<FormStatusType> {
-    if (slbForm?.currentFormStatus != null) return slbForm.currentFormStatus;
+    if (slbForm?.currentFormStatus != null && !slbForm.isExemptionStub) return slbForm.currentFormStatus;
 
     const [ulb, year] = await Promise.all([
       this.ulbModel.findById(ulbId, { startYear: 1, yearAccess: 1 }).lean().exec(),

@@ -521,18 +521,22 @@ export class AnnualAccountsService implements OnModuleInit {
 
     // xvi-fc dynamic year access: the anchor doesn't exist yet - if this ULB is exempted from
     // formId 30 and/or 31, materialize the appropriate stub(s) instead of leaving a blank form.
-    // Never touches an existing document (see `if (!doc)` above).
+    // Never touches an existing document (see `if (!doc)` above). If the anchor (or its unaudited
+    // sibling) already exists as a stub, re-check it instead - an admin may have since undone the
+    // exemption. Both branches re-fetch the anchor afterward since either can mutate it.
     if (!doc) {
       await this.materializeExemptionStubIfNeeded(ulbId, designYearId, user);
-      doc = await this.annualAccountModel
-        .findOne({
-          ulb: new Types.ObjectId(ulbId),
-          design_year: new Types.ObjectId(designYearId),
-          sectionType: 'audited',
-        })
-        .lean()
-        .exec();
+    } else {
+      await this.revalidateExemptionStubIfNeeded(doc, ulbId, designYearId);
     }
+    doc = await this.annualAccountModel
+      .findOne({
+        ulb: new Types.ObjectId(ulbId),
+        design_year: new Types.ObjectId(designYearId),
+        sectionType: 'audited',
+      })
+      .lean()
+      .exec();
 
     if (!doc) {
       // Still nothing - the common case (returns plain null, exactly as before) unless there's a
@@ -619,6 +623,77 @@ export class AnnualAccountsService implements OnModuleInit {
         },
         { upsert: true },
       );
+    }
+  }
+
+  /**
+   * Reverse of materializeExemptionStubIfNeeded. Called unconditionally whenever the audited anchor
+   * already exists (not gated on the anchor's own isExemptionStub - the unaudited sibling can be a
+   * stub needing revalidation even when the anchor itself is a real, non-stub document, and vice
+   * versa). One extra lean query for the sibling's stub flag; bails immediately if neither document
+   * is a stub. 'unaudited' has nothing else resolving against its _id, so it's always safe to delete
+   * outright. 'audited' is the anchor other code requires to exist once either section is touched
+   * (see findOrInitialize/resolveSectionDocument), so it can only be deleted once the sibling check
+   * below confirms no sibling document remains - otherwise it's reset in place to the same non-stub
+   * NOT_STARTED shape materializeExemptionStubIfNeeded already produces for an anchor that exists
+   * only because the *other* section was touched first (buildSectionStatus already treats that
+   * identically to "no document" - no downstream change needed for that case).
+   */
+  private async revalidateExemptionStubIfNeeded(
+    anchorDoc: { _id: Types.ObjectId; isExemptionStub?: boolean },
+    ulbId: string,
+    designYearId: string,
+  ): Promise<void> {
+    const ulbOid = new Types.ObjectId(ulbId);
+    const designYearOid = new Types.ObjectId(designYearId);
+
+    const unauditedDoc = await this.annualAccountModel
+      .findOne({ ulb: ulbOid, design_year: designYearOid, sectionType: 'unaudited' }, { isExemptionStub: 1 })
+      .lean()
+      .exec();
+    const auditedIsStub = anchorDoc.isExemptionStub === true;
+    const unauditedIsStub = unauditedDoc?.isExemptionStub === true;
+    if (!auditedIsStub && !unauditedIsStub) return;
+
+    const ulb = await this.ulbModel.findById(ulbOid, { startYear: 1, yearAccess: 1 }).lean().exec();
+    const year = await this.yearModel
+      .findById(designYearOid, { year: 1 })
+      .lean<{ _id: Types.ObjectId; year: string }>()
+      .exec();
+    if (!ulb || !year) return;
+
+    const stillExempt = await this.yearAccessService.getExemptFormIds(ulb, year, [
+      SECTION_FORM_IDS.auditedData,
+      SECTION_FORM_IDS.unauditedData,
+    ]);
+
+    if (unauditedIsStub && !stillExempt.has(SECTION_FORM_IDS.unauditedData)) {
+      await this.annualAccountModel.deleteOne({ _id: unauditedDoc._id, isExemptionStub: true });
+    }
+
+    if (auditedIsStub && !stillExempt.has(SECTION_FORM_IDS.auditedData)) {
+      // Re-check AFTER the delete above, so undoing both formIds together cleans up to complete
+      // absence instead of leaving a stray reset anchor.
+      const siblingStillExists = await this.annualAccountModel.exists({
+        ulb: ulbOid,
+        design_year: designYearOid,
+        sectionType: 'unaudited',
+      });
+      if (siblingStillExists) {
+        await this.annualAccountModel.updateOne(
+          { _id: anchorDoc._id, isExemptionStub: true },
+          {
+            $set: {
+              form_status: AnnualAccountFormStatus.NOT_STARTED,
+              form_status_id: FORM_STATUS_ID[AnnualAccountFormStatus.NOT_STARTED],
+              isExemptionStub: false,
+              exemptionMaterializedAt: null,
+            },
+          },
+        );
+      } else {
+        await this.annualAccountModel.deleteOne({ _id: anchorDoc._id, isExemptionStub: true });
+      }
     }
   }
 
@@ -741,16 +816,20 @@ export class AnnualAccountsService implements OnModuleInit {
       { $addFields: { sectionAccount: { $arrayElemAt: ['$sectionAccount', 0] } } },
       {
         $addFields: {
-          // No sectionAccount yet: use AUTO_EXEMPTED for automatically exempt ULBs instead of NOT_STARTED.
-          // Discretionary exemptions are handled separately below, even without a sectionAccount.
+          // No sectionAccount yet, or it's a stale exemption stub (admin undid the exemption,
+          // nobody has revisited the form yet): use AUTO_EXEMPTED for automatically exempt ULBs
+          // instead of NOT_STARTED. Discretionary exemptions are handled separately below, even
+          // without a sectionAccount.
           formStatus: {
-            $ifNull: [
+            $cond: [
+              { $and: [{ $ne: ['$sectionAccount', null] }, { $ne: ['$sectionAccount.isExemptionStub', true] }] },
               '$sectionAccount.form_status',
               { $cond: [{ $in: ['$_id', exemptUlbIds] }, AnnualAccountFormStatus.EXEMPTED_ACKNOWLEDGED, notStarted] },
             ],
           },
           formStatusId: {
-            $ifNull: [
+            $cond: [
+              { $and: [{ $ne: ['$sectionAccount', null] }, { $ne: ['$sectionAccount.isExemptionStub', true] }] },
               '$sectionAccount.form_status_id',
               {
                 $cond: [

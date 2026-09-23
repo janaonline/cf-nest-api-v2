@@ -124,6 +124,7 @@ describe('SlbService', () => {
       findOne: jest.fn().mockReturnValue(q(null)), // default: no existing doc
       findOneAndUpdate: jest.fn().mockReturnValue(q(mockFormDoc)),
       create: jest.fn().mockResolvedValue(mockFormDoc),
+      deleteOne: jest.fn().mockResolvedValue({ deletedCount: 1 }),
     };
     ulbModel = {
       findById: jest.fn().mockReturnValue(q({ _id: ulbOid, state: stateOid })),
@@ -295,6 +296,42 @@ describe('SlbService', () => {
 
         expect(formModel.findOneAndUpdate).not.toHaveBeenCalled();
       });
+
+      describe('undoing an exemption (existing stub, no longer exempt)', () => {
+        const stub = { _id: docOid, currentFormStatus: FORM_STATUS.EXEMPTED_ACKNOWLEDGED, isExemptionStub: true, data: {} };
+
+        it('is a no-op when still exempt - the stub is returned unchanged', async () => {
+          (slbFormJsonConfig.loadFields as jest.Mock).mockResolvedValue([]);
+          yearAccessService.isFormExempt.mockResolvedValue(true);
+          formModel.findOne.mockReturnValue(q(stub));
+
+          const result = await service.getForm(ulbOid.toString(), yearOid.toString(), ulbUser(ulbOid));
+
+          expect(formModel.deleteOne).not.toHaveBeenCalled();
+          expect((result.data as { currentFormStatus: number }).currentFormStatus).toBe(FORM_STATUS.EXEMPTED_ACKNOWLEDGED);
+        });
+
+        it('deletes the stub (filtered on isExemptionStub:true) when the admin has undone the exemption', async () => {
+          (slbFormJsonConfig.loadFields as jest.Mock).mockResolvedValue([]);
+          yearAccessService.isFormExempt.mockResolvedValue(false);
+          formModel.findOne.mockReturnValue(q(stub));
+
+          const result = await service.getForm(ulbOid.toString(), yearOid.toString(), ulbUser(ulbOid));
+
+          expect(formModel.deleteOne).toHaveBeenCalledWith({ _id: docOid, isExemptionStub: true });
+          expect((result.data as { currentFormStatus: number }).currentFormStatus).toBe(FORM_STATUS.NOT_STARTED);
+        });
+
+        it('does not revalidate a real (non-stub) record', async () => {
+          (slbFormJsonConfig.loadFields as jest.Mock).mockResolvedValue([]);
+          formModel.findOne.mockReturnValue(q(mockFormDoc)); // isExemptionStub is undefined
+
+          await service.getForm(ulbOid.toString(), yearOid.toString(), ulbUser(ulbOid));
+
+          expect(yearAccessService.isFormExempt).not.toHaveBeenCalled();
+          expect(formModel.deleteOne).not.toHaveBeenCalled();
+        });
+      });
     });
   });
 
@@ -454,8 +491,21 @@ describe('SlbService', () => {
         (stage: Record<string, unknown>) =>
           typeof stage.$addFields === 'object' && stage.$addFields !== null && 'formStatus' in stage.$addFields,
       );
-      const exemptIds = addFieldsStage.$addFields.formStatus.$ifNull[1].$cond[0].$in[1];
+      const exemptIds = addFieldsStage.$addFields.formStatus.$cond[2].$cond[0].$in[1];
       expect(exemptIds).toEqual([exemptUlbId]);
+    });
+
+    it('does not trust a stale exemption stub\'s stored status - falls through to the live exemption check', async () => {
+      await service.listUlbSlbForms(baseDto, stateReviewer(stateOid));
+
+      const pipeline = ulbModel.aggregate.mock.calls[0][0];
+      const addFieldsStage = pipeline.find(
+        (stage: Record<string, unknown>) =>
+          typeof stage.$addFields === 'object' && stage.$addFields !== null && 'formStatus' in stage.$addFields,
+      );
+      const [condition, trueBranch] = addFieldsStage.$addFields.formStatus.$cond;
+      expect(condition).toEqual({ $and: [{ $ne: ['$slbForm', null] }, { $ne: ['$slbForm.isExemptionStub', true] }] });
+      expect(trueBranch).toBe('$slbForm.currentFormStatus');
     });
 
     it('skips the exemption lookup entirely when the design year is not found', async () => {

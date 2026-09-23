@@ -75,6 +75,7 @@ type SlbFormLeanDoc = {
   submittedAt?: Date;
   currentFormStatus?: number;
   data?: unknown;
+  isExemptionStub?: boolean;
 };
 
 @Injectable()
@@ -128,6 +129,9 @@ export class SlbService {
     // instead of showing a blank form. Never touches an existing record (see `if (!doc)` above).
     if (!doc) {
       doc = await this.materializeExemptionStubIfNeeded(ulbOid, yearOid, user);
+    } else if (doc.isExemptionStub) {
+      // Existing doc is a stub - an admin may have since undone the exemption. Re-check live state.
+      doc = await this.revalidateExemptionStubIfNeeded(doc, ulbOid, yearOid);
     }
 
     const fields = await this.slbFormJsonConfig.loadFields(yearId);
@@ -386,8 +390,12 @@ export class SlbService {
       { $addFields: { slbForm: { $arrayElemAt: ['$slbForm', 0] } } },
       {
         $addFields: {
+          // A joined doc that's a stale exemption stub (admin undid the exemption, nobody has
+          // revisited the form yet) must not be trusted as-is - fall through to the same live
+          // exemptUlbIds check used when no doc exists at all.
           formStatus: {
-            $ifNull: [
+            $cond: [
+              { $and: [{ $ne: ['$slbForm', null] }, { $ne: ['$slbForm.isExemptionStub', true] }] },
               '$slbForm.currentFormStatus',
               { $cond: [{ $in: ['$_id', exemptUlbIds] }, FORM_STATUS.EXEMPTED_ACKNOWLEDGED, FORM_STATUS.NOT_STARTED] },
             ],
@@ -492,6 +500,30 @@ export class SlbService {
       .populate('submittedBy', 'name')
       .lean<SlbFormLeanDoc>()
       .exec();
+  }
+
+  /**
+   * Reverse of materializeExemptionStubIfNeeded - runs whenever an existing doc is a stub, to catch
+   * an admin having since undone the exemption. Still-exempt is a no-op; no-longer-exempt deletes
+   * the stub (never rewritten to NOT_STARTED - that status is never persisted, see ulb.service.ts's
+   * assertNoRealSubmissionsForExemptedForms) so getForm falls back to the same blank-form path a
+   * never-visited ULB gets. isExemptionStub:true in the delete filter guards against a real
+   * submission racing in between the live check and the delete.
+   */
+  private async revalidateExemptionStubIfNeeded(
+    doc: SlbFormLeanDoc,
+    ulbOid: Types.ObjectId,
+    yearOid: Types.ObjectId,
+  ): Promise<SlbFormLeanDoc | null> {
+    const ulb = await this.ulbModel.findById(ulbOid, { startYear: 1, yearAccess: 1 }).lean().exec();
+    const year = await this.yearModel
+      .findById(yearOid, { year: 1 })
+      .lean<{ _id: Types.ObjectId; year: string }>()
+      .exec();
+    if (ulb && year && (await this.yearAccessService.isFormExempt(ulb, year, SLB_FORM_ID))) return doc;
+
+    await this.model.deleteOne({ _id: doc._id, isExemptionStub: true });
+    return null;
   }
 
   // ─── Draft validation helpers ──────────────────────────────────────────────
