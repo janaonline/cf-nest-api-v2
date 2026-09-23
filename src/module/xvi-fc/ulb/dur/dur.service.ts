@@ -415,6 +415,12 @@ export class DurService {
   }
 
   async findByUlbAndYear(ulbId: string, designYearId: string, user: AuthUser) {
+    // Authorize before any read/write below - materializeExemptionStubIfNeeded and
+    // revalidateExemptionStubIfNeeded can both write (create or delete a stub), so an out-of-scope
+    // caller must be rejected before either ever runs, not after. Only doc.ulb is ever read by
+    // validateViewAccess, so a synthetic object works fine before a real document exists.
+    await this.validateViewAccess({ ulb: new Types.ObjectId(ulbId) }, user);
+
     let dur = await this.durModel
       .findOne({ ulb: new Types.ObjectId(ulbId), design_year: new Types.ObjectId(designYearId) })
       .lean()
@@ -424,10 +430,12 @@ export class DurService {
     // instead of showing a blank form. Never touches an existing record (see `if (!dur)` above).
     if (!dur) {
       dur = await this.materializeExemptionStubIfNeeded(ulbId, designYearId, user);
+    } else if (dur.isExemptionStub) {
+      // Existing doc is a stub - an admin may have since undone the exemption. Re-check live state.
+      dur = await this.revalidateExemptionStubIfNeeded(dur, ulbId, designYearId);
     }
     if (!dur) return null;
 
-    await this.validateViewAccess(dur, user);
     return this.getProcessingStatus(dur._id.toString(), user);
   }
 
@@ -483,6 +491,33 @@ export class DurService {
     );
 
     return this.durModel.findOne({ ulb: ulbOid, design_year: designYearOid }).lean().exec();
+  }
+
+  /**
+   * Reverse of materializeExemptionStubIfNeeded - runs whenever an existing doc is a stub, to catch
+   * an admin having since undone the exemption. Still-exempt is a no-op; no-longer-exempt deletes
+   * the stub (never rewritten to NOT_STARTED - that status is never persisted, see ulb.service.ts's
+   * assertNoRealSubmissionsForExemptedForms) so findByUlbAndYear falls back to the same
+   * never-visited-ULB path. isExemptionStub:true in the delete filter guards against a real
+   * submission racing in between the live check and the delete.
+   */
+  private async revalidateExemptionStubIfNeeded<T extends { _id: Types.ObjectId; isExemptionStub?: boolean }>(
+    dur: T,
+    ulbId: string,
+    designYearId: string,
+  ): Promise<T | null> {
+    const ulbOid = new Types.ObjectId(ulbId);
+    const designYearOid = new Types.ObjectId(designYearId);
+
+    const ulb = await this.ulbModel.findById(ulbOid, { startYear: 1, yearAccess: 1 }).lean().exec();
+    const year = await this.yearModel
+      .findById(designYearOid, { year: 1 })
+      .lean<{ _id: Types.ObjectId; year: string }>()
+      .exec();
+    if (ulb && year && (await this.yearAccessService.isFormExempt(ulb, year, DUR_FORM_ID))) return dur;
+
+    await this.durModel.deleteOne({ _id: dur._id, isExemptionStub: true });
+    return null;
   }
 
   // ─── Submit to STATE ───────────────────────────────────────────────────────
@@ -822,8 +857,12 @@ export class DurService {
       { $addFields: { dur: { $arrayElemAt: ['$dur', 0] } } },
       {
         $addFields: {
+          // A joined doc that's a stale exemption stub (admin undid the exemption, nobody has
+          // revisited the form yet) must not be trusted as-is - fall through to the same live
+          // exemptUlbIds check used when no doc exists at all.
           formStatus: {
-            $ifNull: [
+            $cond: [
+              { $and: [{ $ne: ['$dur', null] }, { $ne: ['$dur.isExemptionStub', true] }] },
               '$dur.currentFormStatus',
               { $cond: [{ $in: ['$_id', exemptUlbIds] }, FORM_STATUS.EXEMPTED_ACKNOWLEDGED, FORM_STATUS.NOT_STARTED] },
             ],

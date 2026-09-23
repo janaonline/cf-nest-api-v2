@@ -119,6 +119,16 @@ entry; every other year recomputes lazily the next time something touches it.
 
 ## Invariants worth knowing before you change adjacent code
 
+- **Authorize before touching a stub, not after**: `materializeExemptionStubIfNeeded` and
+  `revalidateExemptionStubIfNeeded` both write (create/upgrade/reset/delete a document) for whatever
+  `ulbId` the caller passed in, before there's necessarily any real document to authorize against. A
+  form's `findByUlbAndYear`/`getForm` must call its `validateViewAccess`-equivalent check against a
+  synthetic `{ ulb: new Types.ObjectId(ulbId) }` (every such check only ever reads `.ulb`) as the
+  *first* thing it does — not after the initial doc fetch, and not only in the "doc still missing"
+  fallback branch. `SlbService.getForm` is the reference for getting this right; DUR's and Annual
+  Accounts' `findByUlbAndYear` originally authorized only after already writing, letting an
+  out-of-scope caller trigger materialize/revalidate for an arbitrary ULB — fixed once found in
+  review, but worth checking again for the next form wired into this mechanism.
 - **Golden rule**: if a real form document already exists for `(ulb, year, form)`, none of this
   automatic mechanism ever touches it — no automatic re-creation, no re-classification. An
   already-started ULB a state wants excused instead goes through the separate discretionary
@@ -137,8 +147,10 @@ entry; every other year recomputes lazily the next time something touches it.
   against the underlying `{ulb, designYear}` unique index otherwise letting a second submission in
   a different year create an ambiguous duplicate — see `BankAccountService.assertNoCrossYearBankAccountRecord`.
 - `FORM_STATUS.EXEMPTED_ACKNOWLEDGED` (`src/common/constants/form-status.constants.ts`) is terminal
-  and ownerless. One writer only: this mechanism's own automatic materialization (e.g.
-  `SlbService.materializeExemptionStubIfNeeded`). `RequestExemptionMohuaService.approve` (the
+  from the discretionary flow's point of view, but not immutable from this mechanism's own — see
+  "Undoing an exemption" below. Written only by this mechanism's own automatic materialization (e.g.
+  `SlbService.materializeExemptionStubIfNeeded`) and, in reverse, its own
+  `revalidateExemptionStubIfNeeded`. `RequestExemptionMohuaService.approve` (the
   discretionary STATE→MoHUA flow) deliberately does **not** write this status, or anything else,
   into a target form's own collection — an earlier version did, and it repeatedly conflicted with
   that collection's own invariants (e.g. Annual Accounts' `sectionType: 'audited'` universal anchor);
@@ -146,6 +158,45 @@ entry; every other year recomputes lazily the next time something touches it.
   exemption is a pure display-only overlay instead — `resolveDiscretionary`'s lookup is the only
   source of truth for it, read directly by `listUlbSubmissions` and the ULB-facing exemption banner,
   never by checking this status.
+
+## Undoing an exemption (self-correcting stubs)
+
+`disabledFormIds` can be edited any time (see "edit-anytime" at the top) — including removing a
+formId that was previously exempted. Since the materialized stub document is a separate write from
+`yearAccess` itself, undoing the exemption there doesn't retroactively touch any stub already
+materialized in SLB/DUR/Annual Accounts' own collections. Every read path that could otherwise keep
+trusting a now-stale stub forever is made self-correcting instead, by checking a doc's
+`isExemptionStub` flag before trusting its stored status:
+
+- **Single-record GET flow** (`SlbService.getForm`, `DurService.findByUlbAndYear`,
+  `AnnualAccountsService.findByUlbAndYear`): when the existing doc is a stub, each service's
+  `revalidateExemptionStubIfNeeded` re-runs the same live exemption check the materializer used. Still
+  exempt → no-op. No longer exempt → the stub is deleted outright (never rewritten to a persisted
+  `NOT_STARTED` — that status is never stored, only ever the absence of a document; see
+  `UlbService.assertNoRealSubmissionsForExemptedForms`, which already treats "no doc" and "stub-only
+  doc" as equivalent). The caller then falls through to the exact same code path a never-visited ULB
+  already gets.
+- **Bulk STATE list overlays** (`listUlbSlbForms`/`listUlbSubmissions` in all three services): these
+  resolve `formStatus` live for every candidate ULB regardless of whether a doc has been visited yet,
+  so they're widened to distrust a *stub's* stored status the same way they already treat a missing
+  doc — falling through to the live check instead of trusting `isExemptionStub: true` data. Purely
+  read-time, no write, so a list is correct even for a ULB whose stub was undone but who never
+  revisited the form page.
+- **`XviFcService.resolveSlbStatus`** (the "Conditions Progress" dashboard's SLB status) has the same
+  golden-rule shape and the same widening. Its DUR/Annual-Accounts siblings in the same method have no
+  live exemption check at all (a separate, already-known gap, unrelated to undo) — not touched here.
+
+Annual Accounts' anchor/sibling split (see `annual-account.schema.ts`'s own doc-comment) makes the
+`audited` anchor's revalidation asymmetric with the `unaudited` sibling's: the sibling is always safe
+to delete outright (nothing else resolves against its `_id`), but the anchor can only be deleted once
+its sibling document is confirmed gone too — otherwise it's reset in place (cleared stub flags, status
+back to `NOT_STARTED`) rather than deleted, preserving the same "anchor exists once either section is
+touched" invariant `findOrInitialize` relies on for real uploads.
+
+Undo is deliberately silent — no audit-log entry, mirroring materialization itself (also unlogged).
+The admin's actual `disabledFormIds` edit, in `UlbService.updateYearAccess`, is unlogged too; if that
+ever needs an audit trail, the write belongs there, not scattered across each form's stub
+materialize/revalidate methods, since a bulk-list revalidation is read-only and would never see it.
 
 ## Before changing this, read the ADR
 
