@@ -17,7 +17,10 @@ import { escapeRegex } from 'src/common/utils/regex.util';
 import { S3Service } from 'src/core/s3/s3.service';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
+import { Year } from 'src/schemas/year.schema';
 import { User, UserDocument } from 'src/schemas/user/user.schema';
+import { YearAccessService, type UlbAccessInput } from 'src/module/xvi-fc/common/services/year-access.service';
+import { ExemptionResolverService, type ExemptionResolution } from 'src/module/xvi-fc/common/services/exemption-resolver.service';
 import { XviFcDur, XviFcDurDocument, DUR_DOC_IDS, type XviFcDurDocId } from 'src/schemas/xvi-fc/dur.schema';
 import { XviFcDurFormLog, XviFcDurFormLogDocument } from 'src/schemas/xvi-fc/dur-form-log.schema';
 import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
@@ -84,6 +87,9 @@ export class DurService {
     @InjectModel(Ulb.name)
     private readonly ulbModel: Model<UlbDocument>,
 
+    @InjectModel(Year.name)
+    private readonly yearModel: Model<Year>,
+
     @InjectModel(User.name)
     private readonly userModel: Model<UserDocument>,
 
@@ -101,6 +107,10 @@ export class DurService {
     private readonly formReturnedNotification: FormReturnedNotificationService,
 
     private readonly fileTokenService: FileTokenService,
+
+    private readonly yearAccessService: YearAccessService,
+
+    private readonly exemptionResolverService: ExemptionResolverService,
   ) {}
 
   /** Signs a document's stored S3 key into a short-lived, inline-viewable download URL — same
@@ -405,13 +415,74 @@ export class DurService {
   }
 
   async findByUlbAndYear(ulbId: string, designYearId: string, user: AuthUser) {
-    const dur = await this.durModel
+    let dur = await this.durModel
       .findOne({ ulb: new Types.ObjectId(ulbId), design_year: new Types.ObjectId(designYearId) })
       .lean()
       .exec();
+
+    // xvi-fc dynamic year access: no record yet - if this ULB is exempted, materialize a stub
+    // instead of showing a blank form. Never touches an existing record (see `if (!dur)` above).
+    if (!dur) {
+      dur = await this.materializeExemptionStubIfNeeded(ulbId, designYearId, user);
+    }
     if (!dur) return null;
+
     await this.validateViewAccess(dur, user);
     return this.getProcessingStatus(dur._id.toString(), user);
+  }
+
+  /**
+   * Called only when no DUR record exists yet for (ulb, design_year). Checks whether this ULB is
+   * exempted from DUR this year (dynamic year access) and, if so, upserts an automatic stub
+   * (never a real answer, never a ULB action) so findByUlbAndYear returns an already-exempted form
+   * instead of a blank one. Returns null (unchanged flow) when not exempted. Mirrors
+   * SlbService.materializeExemptionStubIfNeeded, the worked reference implementation documented in
+   * src/module/xvi-fc/common/services/CLAUDE.md.
+   */
+  private async materializeExemptionStubIfNeeded(ulbId: string, designYearId: string, user: AuthUser) {
+    const ulbOid = new Types.ObjectId(ulbId);
+    const designYearOid = new Types.ObjectId(designYearId);
+
+    const ulb = await this.ulbModel.findById(ulbOid, { startYear: 1, yearAccess: 1, state: 1 }).lean().exec();
+    if (!ulb) return null;
+    const year = await this.yearModel
+      .findById(designYearOid, { year: 1 })
+      .lean<{ _id: Types.ObjectId; year: string }>()
+      .exec();
+    if (!year) return null;
+
+    const exempt = await this.yearAccessService.isFormExempt(ulb, year, DUR_FORM_ID);
+    if (!exempt) return null;
+
+    const userOid = new Types.ObjectId(user._id);
+    await this.durModel.findOneAndUpdate(
+      { ulb: ulbOid, design_year: designYearOid },
+      {
+        $setOnInsert: {
+          state: ulb.state,
+          documents: DUR_DOC_IDS.map((docId) => ({
+            docId,
+            uploadStatus: 'NOT_UPLOADED',
+            processingStatus: 'NOT_STARTED',
+            currentUpload: null,
+            stateDecision: null,
+            manualReviewDecision: null,
+            postRejectionAttemptsUsed: 0,
+            manualReviewRejectionCount: 0,
+            uploadBlockedUntil: null,
+          })),
+          currentFormStatus: FORM_STATUS.EXEMPTED_ACKNOWLEDGED,
+          currentFormStatusLabel: getFormStatusLabel(FORM_STATUS.EXEMPTED_ACKNOWLEDGED),
+          isExemptionStub: true,
+          exemptionMaterializedAt: new Date(),
+          createdBy: userOid,
+          modifiedBy: userOid,
+        },
+      },
+      { upsert: true },
+    );
+
+    return this.durModel.findOne({ ulb: ulbOid, design_year: designYearOid }).lean().exec();
   }
 
   // ─── Submit to STATE ───────────────────────────────────────────────────────
@@ -714,6 +785,24 @@ export class DurService {
     const pageSize = dto.pageSize ?? 20;
     const designYearObjectId = new Types.ObjectId(dto.designYearId);
 
+    // xvi-fc dynamic year access: resolve exemption for the whole candidate set up front (not just
+    // the current page) - see a correct formStatus for a ULB that's exempt but has never opened its
+    // DUR form (no document exists yet to carry EXEMPTED_ACKNOWLEDGED). One extra Ulb query reusing
+    // this same matchStage, never one query per ULB. Read-only - see ExemptionResolverService.
+    const designYear = await this.yearModel
+      .findById(designYearObjectId, { year: 1 })
+      .lean<{ _id: Types.ObjectId; year: string }>()
+      .exec();
+    const candidateUlbs: UlbAccessInput[] = designYear
+      ? await this.ulbModel.find(matchStage, { startYear: 1, yearAccess: 1 }).lean().exec()
+      : [];
+    const exemptionByUlbId: Map<string, ExemptionResolution> = designYear
+      ? await this.exemptionResolverService.resolveBulk(candidateUlbs, designYear, DUR_FORM_ID)
+      : new Map();
+    const exemptUlbIds = candidateUlbs
+      .filter((ulb) => exemptionByUlbId.get(String(ulb._id))?.exempted)
+      .map((ulb) => ulb._id);
+
     const pipeline: PipelineStage[] = [
       { $match: matchStage },
       {
@@ -733,7 +822,12 @@ export class DurService {
       { $addFields: { dur: { $arrayElemAt: ['$dur', 0] } } },
       {
         $addFields: {
-          formStatus: { $ifNull: ['$dur.currentFormStatus', FORM_STATUS.NOT_STARTED] },
+          formStatus: {
+            $ifNull: [
+              '$dur.currentFormStatus',
+              { $cond: [{ $in: ['$_id', exemptUlbIds] }, FORM_STATUS.EXEMPTED_ACKNOWLEDGED, FORM_STATUS.NOT_STARTED] },
+            ],
+          },
           lastUpdatedAt: { $ifNull: ['$dur.updatedAt', null] },
           enteredReviewAt: { $ifNull: ['$dur.declaredAt', null] },
         },

@@ -23,6 +23,7 @@ import { SFC_STATUS_FORM_TYPE, XviFcSfcStatus } from 'src/schemas/xvi-fc/state/s
 import { XviFcUnspentBalanceDisclosure } from 'src/schemas/xvi-fc/unspent-balance-disclosure.schema';
 import { XviFcBankAccount } from 'src/schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
 import { SlbForm } from 'src/schemas/xvi-fc/ulb/slb-form.schema';
+import { XviFcDur } from 'src/schemas/xvi-fc/dur.schema';
 import {
   STATE_DASHBOARD_AMOUNT_UNIT,
   STATE_DASHBOARD_CLAIM_LETTER_KEY,
@@ -127,6 +128,7 @@ describe('StateDashboardService', () => {
   const bankAccountModel = { find: jest.fn() };
   const unspentBalanceModel = { find: jest.fn() };
   const slbFormModel = { find: jest.fn() };
+  const durModel = { find: jest.fn() };
 
   let service: StateDashboardService;
 
@@ -216,6 +218,7 @@ describe('StateDashboardService', () => {
     bankAccountModel.find.mockReturnValue(queryResult([]));
     unspentBalanceModel.find.mockReturnValue(queryResult([]));
     slbFormModel.find.mockReturnValue(queryResult([]));
+    durModel.find.mockReturnValue(queryResult([]));
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -231,6 +234,7 @@ describe('StateDashboardService', () => {
         { provide: getModelToken(XviFcBankAccount.name), useValue: bankAccountModel },
         { provide: getModelToken(XviFcUnspentBalanceDisclosure.name), useValue: unspentBalanceModel },
         { provide: getModelToken(SlbForm.name), useValue: slbFormModel },
+        { provide: getModelToken(XviFcDur.name), useValue: durModel },
       ],
     }).compile();
 
@@ -1866,6 +1870,9 @@ describe('StateDashboardService', () => {
         queryResult([{ ulb: ulbA, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }]),
       );
       slbFormModel.find.mockReturnValue(queryResult([]));
+      durModel.find.mockReturnValue(
+        queryResult([{ ulb: ulbA, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_STATE }]),
+      );
 
       const { buffer, fileName } = await service.exportAllFormsCsv(
         { designYearId: yearId },
@@ -1894,6 +1901,7 @@ describe('StateDashboardService', () => {
         'Provisional Statements',
         'PFMS Bank Account',
         'SLB Form',
+        'DUR Form',
       ]);
       expect((sheet.getRow(7).values as unknown[]).slice(1)).toEqual([
         'Achalpur Municipal Council',
@@ -1902,10 +1910,12 @@ describe('StateDashboardService', () => {
         'Under Review by State',
         'Under Review by MoHUA',
         'Not Started',
+        'Under Review by State',
       ]);
       expect((sheet.getRow(8).values as unknown[]).slice(1)).toEqual([
         'Beta Nagar Panchayat',
         'SB-42',
+        'Not Started',
         'Not Started',
         'Not Started',
         'Not Started',
@@ -1917,6 +1927,7 @@ describe('StateDashboardService', () => {
       annualAccountModel.find.mockReturnValue(queryResult([]));
       bankAccountModel.find.mockReturnValue(queryResult([]));
       slbFormModel.find.mockReturnValue(queryResult([]));
+      durModel.find.mockReturnValue(queryResult([]));
 
       await service.exportAllFormsCsv({ designYearId: yearId }, makeUser({ xviFcSubrole: 'admin' }));
 
@@ -1935,6 +1946,7 @@ describe('StateDashboardService', () => {
       annualAccountModel.find.mockReturnValue(queryResult([]));
       bankAccountModel.find.mockReturnValue(queryResult([]));
       slbFormModel.find.mockReturnValue(queryResult([]));
+      durModel.find.mockReturnValue(queryResult([]));
 
       const { buffer } = await service.exportAllFormsCsv(
         { designYearId: yearId },
@@ -1957,6 +1969,7 @@ describe('StateDashboardService', () => {
         'Provisional Statements',
         'PFMS Bank Account',
         'SLB Form',
+        'DUR Form',
       ]);
       expect((sheet.getRow(7).values as unknown[]).slice(1, 3)).toEqual(['Achalpur Municipal Council', 'Database State Name']);
       expect((sheet.getRow(8).values as unknown[]).slice(1, 3)).toEqual(['Beta Nagar Panchayat', 'Neighbouring State']);

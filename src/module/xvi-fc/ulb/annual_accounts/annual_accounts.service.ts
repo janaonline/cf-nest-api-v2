@@ -45,7 +45,7 @@ import {
   ExemptionResolution,
   ExemptionResolverService,
 } from '../../common/services/exemption-resolver.service';
-import type { UlbAccessInput } from '../../common/services/year-access.service';
+import { YearAccessService, type UlbAccessInput } from '../../common/services/year-access.service';
 import { FormReturnedNotificationService } from '../../common/reminders/form-returned-notification.service';
 import { UlbEligibilityService } from '../../../ulb-eligibility/ulb-eligibility.service';
 import { CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE } from '../../../ulb-eligibility/ulb-eligibility.constants';
@@ -187,6 +187,7 @@ export class AnnualAccountsService implements OnModuleInit {
     private readonly formReturnedNotification: FormReturnedNotificationService,
 
     private readonly exemptionResolverService: ExemptionResolverService,
+    private readonly yearAccessService: YearAccessService,
   ) {}
 
   async onModuleInit() {
@@ -509,7 +510,7 @@ export class AnnualAccountsService implements OnModuleInit {
   async findByUlbAndYear(ulbId: string, designYearId: string, section: AnnualAccountSectionKey, user: AuthUser) {
     // Always look up the 'audited' anchor regardless of which section was requested — that's
     // the id resolveSectionDocument (via getProcessingStatus) expects to resolve against.
-    const doc = await this.annualAccountModel
+    let doc = await this.annualAccountModel
       .findOne({
         ulb: new Types.ObjectId(ulbId),
         design_year: new Types.ObjectId(designYearId),
@@ -518,10 +519,25 @@ export class AnnualAccountsService implements OnModuleInit {
       .lean()
       .exec();
 
+    // xvi-fc dynamic year access: the anchor doesn't exist yet - if this ULB is exempted from
+    // formId 30 and/or 31, materialize the appropriate stub(s) instead of leaving a blank form.
+    // Never touches an existing document (see `if (!doc)` above).
     if (!doc) {
-      // No document at all yet for this ULB+year - the common case (returns plain null, exactly
-      // as before) unless there's a discretionary exemption request to report; a PENDING one must
-      // still surface (and block) even before the ULB has ever opened this section.
+      await this.materializeExemptionStubIfNeeded(ulbId, designYearId, user);
+      doc = await this.annualAccountModel
+        .findOne({
+          ulb: new Types.ObjectId(ulbId),
+          design_year: new Types.ObjectId(designYearId),
+          sectionType: 'audited',
+        })
+        .lean()
+        .exec();
+    }
+
+    if (!doc) {
+      // Still nothing - the common case (returns plain null, exactly as before) unless there's a
+      // discretionary exemption request to report; a PENDING one must still surface (and block)
+      // even before the ULB has ever opened this section.
       const ulbOid = new Types.ObjectId(ulbId);
       await this.validateViewAccess({ ulb: ulbOid }, user);
       const exemption = await this.resolveExemptionStatusForResponse(ulbOid, new Types.ObjectId(designYearId), section);
@@ -530,6 +546,80 @@ export class AnnualAccountsService implements OnModuleInit {
     }
     await this.validateViewAccess(doc, user);
     return this.getProcessingStatus(doc._id.toString(), section, user);
+  }
+
+  /**
+   * Runs only when neither section has been touched yet for {ulb, design_year}.
+   * Checks AFS (formId 30) / PFS (formId 31) exemptions for the current year and
+   * upserts stubs so findByUlbAndYear returns an exempted form instead of a blank one.
+   * No-ops if neither is exempt.
+   *
+   * 'audited' is always upserted (preserves findOrInitialize anchor invariant);
+   * its status reflects only formId 30. 'unaudited' is upserted only when formId 31
+   * is exempt, keeping its lazy first-touch behavior otherwise.
+   */
+  private async materializeExemptionStubIfNeeded(ulbId: string, designYearId: string, user: AuthUser): Promise<void> {
+    const ulbOid = new Types.ObjectId(ulbId);
+    const designYearOid = new Types.ObjectId(designYearId);
+
+    const ulb = await this.ulbModel.findById(ulbOid, { startYear: 1, yearAccess: 1, state: 1 }).lean().exec();
+    if (!ulb) return;
+    const year = await this.yearModel
+      .findById(designYearOid, { year: 1 })
+      .lean<{ _id: Types.ObjectId; year: string }>()
+      .exec();
+    if (!year) return;
+
+    const exemptFormIds = await this.yearAccessService.getExemptFormIds(ulb, year, [
+      SECTION_FORM_IDS.auditedData,
+      SECTION_FORM_IDS.unauditedData,
+    ]);
+    if (exemptFormIds.size === 0) return; // nothing exempt - unchanged behavior, caller still sees a blank form
+
+    const auditedExempt = exemptFormIds.has(SECTION_FORM_IDS.auditedData);
+    const unauditedExempt = exemptFormIds.has(SECTION_FORM_IDS.unauditedData);
+    const userOid = new Types.ObjectId(user._id);
+    const common = {
+      yearId: null,
+      year: null,
+      documents: [],
+      state: ulb.state,
+      createdBy: userOid,
+      modifiedBy: userOid,
+    };
+
+    await this.annualAccountModel.findOneAndUpdate(
+      { ulb: ulbOid, design_year: designYearOid, sectionType: 'audited' },
+      {
+        $setOnInsert: {
+          ...common,
+          form_status: auditedExempt
+            ? AnnualAccountFormStatus.EXEMPTED_ACKNOWLEDGED
+            : AnnualAccountFormStatus.NOT_STARTED,
+          form_status_id: auditedExempt
+            ? FORM_STATUS_ID[AnnualAccountFormStatus.EXEMPTED_ACKNOWLEDGED]
+            : FORM_STATUS_ID[AnnualAccountFormStatus.NOT_STARTED],
+          ...(auditedExempt ? { isExemptionStub: true, exemptionMaterializedAt: new Date() } : {}),
+        },
+      },
+      { upsert: true },
+    );
+
+    if (unauditedExempt) {
+      await this.annualAccountModel.findOneAndUpdate(
+        { ulb: ulbOid, design_year: designYearOid, sectionType: 'unaudited' },
+        {
+          $setOnInsert: {
+            ...common,
+            form_status: AnnualAccountFormStatus.EXEMPTED_ACKNOWLEDGED,
+            form_status_id: FORM_STATUS_ID[AnnualAccountFormStatus.EXEMPTED_ACKNOWLEDGED],
+            isExemptionStub: true,
+            exemptionMaterializedAt: new Date(),
+          },
+        },
+        { upsert: true },
+      );
+    }
   }
 
   // ─── State-scoped ULB submissions list ───────────────────────────────────────

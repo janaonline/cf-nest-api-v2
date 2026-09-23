@@ -69,6 +69,7 @@ export class XviFcDur {
       FORM_STATUS.RETURNED_BY_MOHUA,
       FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
       FORM_STATUS.APPROVED_BY_STATE,
+      FORM_STATUS.EXEMPTED_ACKNOWLEDGED,
     ],
     default: FORM_STATUS.NOT_STARTED,
   })
@@ -108,6 +109,13 @@ export class XviFcDur {
 
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
   modifiedBy!: Types.ObjectId;
+
+  // -- xvi-fc dynamic year access: automatic exemption stub, never edited by a ULB --------
+  @Prop({ type: Boolean, default: false })
+  isExemptionStub?: boolean;
+
+  @Prop({ type: Date })
+  exemptionMaterializedAt?: Date;
 }
 
 export const XviFcDurSchema = SchemaFactory.createForClass(XviFcDur);

@@ -25,6 +25,9 @@ import { Year } from 'src/schemas/year.schema';
 import { YearAccessService } from 'src/module/xvi-fc/common/services/year-access.service';
 import { formatYearLabel } from 'src/module/xvi-fc/common/utils/design-year-label.util';
 import { SlbForm, SlbFormDocument, SLB_FORM_ID, SLB_FORM_TYPE } from 'src/schemas/xvi-fc/ulb/slb-form.schema';
+import { XviFcDur, XviFcDurDocument } from 'src/schemas/xvi-fc/dur.schema';
+import { DUR_FORM_ID } from 'src/module/xvi-fc/ulb/dur/constants/dur-form.constants';
+import { XviFcAnnualAccount, XviFcAnnualAccountDocument } from 'src/schemas/xvi-fc/annual-account.schema';
 import {
   DEFAULT_ULB_EDIT_SECTIONS,
   DEFAULT_ULB_FIELDS,
@@ -43,6 +46,12 @@ import { UpdateUlbYearAccessDto } from './dto/update-ulb-year-access.dto';
 
 const OBJECT_ID_FIELDS = new Set(['state', 'ulbType', 'UA']);
 
+// Annual Accounts' own two exemptable formIds - see annual_accounts.service.ts's own
+// SECTION_FORM_IDS (private to that file; kept as a small local copy here rather than exported,
+// consistent with this codebase's existing convention for small formId lookup tables).
+const AFS_FORM_ID = 30;
+const PFS_FORM_ID = 31;
+
 @Injectable()
 export class UlbService {
   private readonly logger = new Logger(UlbService.name);
@@ -53,6 +62,8 @@ export class UlbService {
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
     @InjectModel(Year.name) private readonly yearModel: Model<Year>,
     @InjectModel(SlbForm.name) private readonly slbModel: Model<SlbFormDocument>,
+    @InjectModel(XviFcDur.name) private readonly durModel: Model<XviFcDurDocument>,
+    @InjectModel(XviFcAnnualAccount.name) private readonly annualAccountModel: Model<XviFcAnnualAccountDocument>,
     private readonly formJsonService: FormJsonService,
     private readonly formJsonConfigService: FormJsonConfigService,
     private readonly yearAccessService: YearAccessService,
@@ -807,7 +818,9 @@ export class UlbService {
   /**
    * Prevents exempting a form that the ULB has already submitted.
    * Exemption stubs are allowed; re-exempting an already-exempt year remains a no-op.
-   * Currently applies only to SLB. Add a formId branch when other forms support exemption.
+   * One formId branch per exemptable form — SLB, DUR, and Annual Accounts (AFS/PFS). Add a new
+   * branch here whenever another form is wired into the exemption mechanism (no generic
+   * formId->Model registry exists in this codebase; see form-json-config/CLAUDE.md).
    */
   private async assertNoRealSubmissionsForExemptedForms(
     ulbId: Types.ObjectId,
@@ -826,6 +839,50 @@ export class UlbService {
       if (hasRealSlbSubmission) {
         throw new BadRequestException(
           `This ULB already has SLB data submitted for ${seedLabel} - exemption cannot be applied retroactively.`,
+        );
+      }
+    }
+
+    if (disabledFormIds.includes(DUR_FORM_ID)) {
+      const hasRealDurSubmission = await this.durModel.exists({
+        ulb: ulbId,
+        design_year: seedYearId,
+        isExemptionStub: { $ne: true },
+      });
+      if (hasRealDurSubmission) {
+        throw new BadRequestException(
+          `This ULB already has DUR data submitted for ${seedLabel} - exemption cannot be applied retroactively.`,
+        );
+      }
+    }
+
+    // Annual Accounts: AFS (formId 30, 'audited') and PFS (formId 31, 'unaudited') are
+    // independent per-section documents - check each one only against its own disabledFormIds
+    // entry, same section independence AnnualAccountsService itself maintains throughout.
+    if (disabledFormIds.includes(AFS_FORM_ID)) {
+      const hasRealAuditedSubmission = await this.annualAccountModel.exists({
+        ulb: ulbId,
+        design_year: seedYearId,
+        sectionType: 'audited',
+        isExemptionStub: { $ne: true },
+      });
+      if (hasRealAuditedSubmission) {
+        throw new BadRequestException(
+          `This ULB already has Audited Financial Statement data submitted for ${seedLabel} - exemption cannot be applied retroactively.`,
+        );
+      }
+    }
+
+    if (disabledFormIds.includes(PFS_FORM_ID)) {
+      const hasRealUnauditedSubmission = await this.annualAccountModel.exists({
+        ulb: ulbId,
+        design_year: seedYearId,
+        sectionType: 'unaudited',
+        isExemptionStub: { $ne: true },
+      });
+      if (hasRealUnauditedSubmission) {
+        throw new BadRequestException(
+          `This ULB already has Provisional Financial Statement data submitted for ${seedLabel} - exemption cannot be applied retroactively.`,
         );
       }
     }
@@ -1031,12 +1088,13 @@ export class UlbService {
 
   /**
    * Lists ULB types for populating a select. `ulbtypes` has no Mongoose model in this codebase
-   * (see UsersService.getProfileContacts) — queried directly via the raw collection.
+   * (see UsersService.getProfileContacts) — queried directly via the raw collection. Excludes
+   * types ineligible for XVI-FC (e.g. Cantonment Board, `ineligibleForGrantCycles: ['XVIFC']`)
    */
   async findTypes(): Promise<{ _id: Types.ObjectId; name: string }[]> {
     return this.ulbModel.db
       .collection('ulbtypes')
-      .find({ isActive: true }, { projection: { name: 1 } })
+      .find({ isActive: true, ineligibleForGrantCycles: { $ne: 'XVIFC' } }, { projection: { name: 1 } })
       .sort({ name: 1 })
       .toArray() as unknown as Promise<{ _id: Types.ObjectId; name: string }[]>;
   }
