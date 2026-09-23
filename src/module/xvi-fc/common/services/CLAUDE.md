@@ -136,6 +136,10 @@ entry; every other year recomputes lazily the next time something touches it.
   `module/xvi-fc/mohua/request-exemption`) — built for Audited/Provisional AFS (formIds 30/31);
   MoHUA's approve there *does* block on (not silently override) an already-started target section,
   via the same "real progress" check, rather than the automatic path's blanket hands-off rule.
+  "Real" excludes an untouched `NOT_STARTED` document with no actual submission on it — Annual
+  Accounts' `materializeExemptionStubIfNeeded` does reach into and upgrade such a document in place
+  (see "Undoing an exemption" below for why), which looks like it's touching an existing document
+  until you know `NOT_STARTED` itself was never real progress to begin with.
 - Once an entry is materialized, `yearEnabled`/`disabledFormIds` are read directly. No code path
   falls back to `dateOfConstitution` or any other condition once `yearAccess[label]` exists — with
   one deliberate exception: an admin changing `startYear` itself invalidates the whole map (see
@@ -169,13 +173,29 @@ trusting a now-stale stub forever is made self-correcting instead, by checking a
 `isExemptionStub` flag before trusting its stored status:
 
 - **Single-record GET flow** (`SlbService.getForm`, `DurService.findByUlbAndYear`,
-  `AnnualAccountsService.findByUlbAndYear`): when the existing doc is a stub, each service's
-  `revalidateExemptionStubIfNeeded` re-runs the same live exemption check the materializer used. Still
-  exempt → no-op. No longer exempt → the stub is deleted outright (never rewritten to a persisted
-  `NOT_STARTED` — that status is never stored, only ever the absence of a document; see
-  `UlbService.assertNoRealSubmissionsForExemptedForms`, which already treats "no doc" and "stub-only
-  doc" as equivalent). The caller then falls through to the exact same code path a never-visited ULB
-  already gets.
+  `AnnualAccountsService.findByUlbAndYear`): each service's `revalidateExemptionStubIfNeeded` re-runs
+  the same live exemption check the materializer used, and deletes a stub outright once it's no longer
+  exempt (never reset to `NOT_STARTED` in place) — this part is uniform across all three. When it
+  actually *runs* differs: SLB/DUR only call it when the existing doc's own `isExemptionStub` is
+  true (a flat one-document-per-`{ulb, year}` shape, so the doc itself is unambiguously the thing to
+  check). Annual Accounts calls it whenever the audited anchor exists at all, stub or not — the
+  *unaudited* sibling can independently be the stale stub even when the anchor itself is a genuine,
+  untouched `NOT_STARTED` placeholder or a real submission, so gating on the anchor's own flag would
+  miss it; `revalidateExemptionStubIfNeeded` checks both documents' flags itself and no-ops if
+  neither is a stub. Annual Accounts' own audited anchor is the one document in this mechanism that
+  *can* end up reset to a persisted `NOT_STARTED` rather than deleted — see the anchor/sibling
+  paragraph below. Once nothing is left to revalidate, the caller falls through to the exact same
+  code path a never-visited ULB already gets.
+
+  `NOT_STARTED` is not exclusively an "absence of a document" state, contrary to an earlier version
+  of this note — `DurService.findOrInitialize` and Annual Accounts' own `findOrInitialize` both
+  persist it as part of ordinary upload initialization (before the real content lands), same as the
+  anchor-placeholder case below. What *is* still true, and load-bearing for
+  `UlbService.assertNoRealSubmissionsForExemptedForms`: an exemption stub itself is never left at
+  `NOT_STARTED` — it's either `EXEMPTED_ACKNOWLEDGED` (materialized/still valid) or deleted (undone),
+  and a plain `NOT_STARTED` document with `isExemptionStub` not `true` is never itself the product of
+  this mechanism, exemption-wise indistinguishable from "no real submission yet" regardless of which
+  code path actually created it.
 - **Bulk STATE list overlays** (`listUlbSlbForms`/`listUlbSubmissions` in all three services): these
   resolve `formStatus` live for every candidate ULB regardless of whether a doc has been visited yet,
   so they're widened to distrust a *stub's* stored status the same way they already treat a missing

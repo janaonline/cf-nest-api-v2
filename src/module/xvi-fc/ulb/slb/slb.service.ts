@@ -395,7 +395,12 @@ export class SlbService {
           // exemptUlbIds check used when no doc exists at all.
           formStatus: {
             $cond: [
-              { $and: [{ $ne: ['$slbForm', null] }, { $ne: ['$slbForm.isExemptionStub', true] }] },
+              {
+                $and: [
+                  { $ne: [{ $ifNull: ['$slbForm', null] }, null] },
+                  { $ne: ['$slbForm.isExemptionStub', true] },
+                ],
+              },
               '$slbForm.currentFormStatus',
               { $cond: [{ $in: ['$_id', exemptUlbIds] }, FORM_STATUS.EXEMPTED_ACKNOWLEDGED, FORM_STATUS.NOT_STARTED] },
             ],

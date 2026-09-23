@@ -1015,7 +1015,7 @@ describe('AnnualAccountsService', () => {
       const [condition, trueBranch] = fallbackStage.$addFields.formStatus.$cond;
       expect(condition).toEqual({
         $and: [
-          { $ne: ['$sectionAccount', null] },
+          { $ne: [{ $ifNull: ['$sectionAccount', null] }, null] },
           { $ne: ['$sectionAccount.form_status', 'NOT_STARTED'] },
           { $ne: ['$sectionAccount.isExemptionStub', true] },
         ],
