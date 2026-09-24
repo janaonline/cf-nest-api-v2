@@ -238,6 +238,47 @@ describe('GtcService', () => {
 
       expect(historyModel['create']).not.toHaveBeenCalled();
     });
+
+    it('guards the update filter with the read-time status', async () => {
+      formModel['findOne'] = jest
+        .fn()
+        .mockReturnValue(q({ _id: docOid, currentFormStatus: FORM_STATUS.IN_PROGRESS, data: {} }));
+
+      await service.saveDraft(validDto, adminUser, '127.0.0.1', 'jest');
+
+      expect(formModel['findOneAndUpdate']).toHaveBeenCalledWith(
+        expect.objectContaining({ currentFormStatus: FORM_STATUS.IN_PROGRESS }),
+        expect.anything(),
+        expect.anything(),
+      );
+    });
+
+    it('rejects with the current status when a concurrent write changed status since the read', async () => {
+      formModel['findOne'] = jest
+        .fn()
+        .mockReturnValueOnce(q({ _id: docOid, currentFormStatus: FORM_STATUS.IN_PROGRESS, data: {} }))
+        .mockReturnValueOnce(q({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }));
+      formModel['findOneAndUpdate'] = jest.fn().mockReturnValue(q(null));
+
+      await expect(service.saveDraft(validDto, adminUser, '127.0.0.1', 'jest')).rejects.toThrow(ForbiddenException);
+      expect(historyModel['create']).not.toHaveBeenCalled();
+    });
+
+    it('rejects with a conflict error when two first-saves race on create', async () => {
+      formModel['create'] = jest.fn().mockRejectedValue({ code: 11000 });
+
+      let caught: unknown;
+      try {
+        await service.saveDraft(validDto, adminUser, '127.0.0.1', 'jest');
+      } catch (e) {
+        caught = e;
+      }
+
+      expect(caught).toBeInstanceOf(BadRequestException);
+      const response = (caught as BadRequestException).getResponse() as Record<string, unknown>;
+      const errors = response['errors'] as XviFcValidationErrorMap;
+      expect(errors['_form']?.[0]).toMatchObject({ code: 'conflict' });
+    });
   });
 
   // ─── finalSubmit ─────────────────────────────────────────────────────────
@@ -297,6 +338,47 @@ describe('GtcService', () => {
       const errors = response['errors'] as XviFcValidationErrorMap;
       expect(errors['installment']?.[0]).toMatchObject({ code: 'installment2Locked' });
       expect(validator.validateFinalSubmitAndBuildPayload).not.toHaveBeenCalled();
+    });
+
+    it('guards the update filter with the read-time status', async () => {
+      formModel['findOne'] = jest
+        .fn()
+        .mockReturnValue(q({ _id: docOid, currentFormStatus: FORM_STATUS.IN_PROGRESS, data: {} }));
+
+      await service.finalSubmit(validDto, adminUser, '127.0.0.1', 'jest');
+
+      expect(formModel['findOneAndUpdate']).toHaveBeenCalledWith(
+        expect.objectContaining({ _id: docOid, currentFormStatus: FORM_STATUS.IN_PROGRESS }),
+        expect.anything(),
+        expect.anything(),
+      );
+    });
+
+    it('rejects when a second concurrent final submit already changed status', async () => {
+      formModel['findOne'] = jest
+        .fn()
+        .mockReturnValueOnce(q({ _id: docOid, currentFormStatus: FORM_STATUS.IN_PROGRESS, data: {} }))
+        .mockReturnValueOnce(q({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }));
+      formModel['findOneAndUpdate'] = jest.fn().mockReturnValue(q(null));
+
+      await expect(service.finalSubmit(validDto, adminUser, '127.0.0.1', 'jest')).rejects.toThrow(ForbiddenException);
+      expect(historyModel['create']).not.toHaveBeenCalled();
+    });
+
+    it('rejects with a conflict error when two first-submits race on create', async () => {
+      formModel['create'] = jest.fn().mockRejectedValue({ code: 11000 });
+
+      let caught: unknown;
+      try {
+        await service.finalSubmit(validDto, adminUser, '127.0.0.1', 'jest');
+      } catch (e) {
+        caught = e;
+      }
+
+      expect(caught).toBeInstanceOf(BadRequestException);
+      const response = (caught as BadRequestException).getResponse() as Record<string, unknown>;
+      const errors = response['errors'] as XviFcValidationErrorMap;
+      expect(errors['_form']?.[0]).toMatchObject({ code: 'conflict' });
     });
   });
 

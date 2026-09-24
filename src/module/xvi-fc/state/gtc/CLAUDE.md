@@ -113,6 +113,9 @@ requires GTC installment N to already be submitted, exactly mirroring Devolution
 identical tradeoff to SFC Status; see that module's CLAUDE.md for the full reasoning. `action`
 uses the shared `FormHistoryAction` enum (`src/common/constants/form-status.constants.ts`).
 
+The form update itself is guarded against a concurrent status change the same way SFC Status is -
+see `xvi-fc-concurrent-write.util.ts`.
+
 No ADRs exist for this module - there's no cross-cutting concurrency machinery (no transactions,
 locking, idempotency keys, or batch/reservation logic) that would warrant one, same reasoning as
 `sfc-status`.

@@ -34,6 +34,10 @@ history-log call** — the no-op guard doesn't compose across services.
 `sfc-status.service.ts`). No MoHUA workflow exists yet, so only `CREATE_DRAFT`/`FINAL_SUBMIT` are
 ever logged.
 
+Both writes are guarded against a concurrent status change (`currentFormStatus` in the write
+filter; `saveDraft`'s upsert also catches the unique-index race on a first save) - same guard as
+SFC Status and GTC, see `xvi-fc-concurrent-write.util.ts`.
+
 `snapshot` is populated on `FINAL_SUBMIT` with the active dataset version's row content — because
 the Excel-upload transaction *hard-deletes* the previous version's rows on every re-upload (see the
 ADR below), and there's no row-history collection, this is the only surviving record of what was

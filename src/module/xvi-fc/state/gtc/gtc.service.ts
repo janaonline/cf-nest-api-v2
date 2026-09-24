@@ -12,6 +12,11 @@ import {
 } from '../../common/utils/xvi-fc-form-status-access.util';
 import { assertStateAccess, buildStateFormPermissions } from '../../common/utils/xvi-fc-state-access.util';
 import {
+  assertFreshFormStatus,
+  isMongoDuplicateKeyError,
+  throwXviFcConflictError,
+} from '../../common/utils/xvi-fc-concurrent-write.util';
+import {
   applyActionVisibility,
   findSupportingAction,
   stripSupportingContentMeta,
@@ -198,12 +203,15 @@ export class GtcService {
 
       const updated = await this.model
         .findOneAndUpdate(
-          filter,
+          { ...filter, currentFormStatus: existing.currentFormStatus },
           { $set: { data: sanitizedPayload, currentFormStatus: FORM_STATUS.IN_PROGRESS, updatedBy: userOid } },
           { new: true },
         )
         .lean()
         .exec();
+
+      // Filter matched nothing - status changed since it was read (e.g. a concurrent final submit).
+      if (!updated) await this.assertFreshDraftStatus(filter);
 
       await this.createHistoryEntry({
         gtcFormId: existing._id,
@@ -224,17 +232,23 @@ export class GtcService {
       });
     }
 
-    const created = await this.model.create({
-      state: stateOid,
-      year: yearOid,
-      installment: dto.installment,
-      data: sanitizedPayload,
-      currentFormStatus: FORM_STATUS.IN_PROGRESS,
-      createdBy: userOid,
-      updatedBy: userOid,
-      isActive: true,
-      isDeleted: false,
-    });
+    let created: XviFcGtcDocument;
+    try {
+      created = await this.model.create({
+        state: stateOid,
+        year: yearOid,
+        installment: dto.installment,
+        data: sanitizedPayload,
+        currentFormStatus: FORM_STATUS.IN_PROGRESS,
+        createdBy: userOid,
+        updatedBy: userOid,
+        isActive: true,
+        isDeleted: false,
+      });
+    } catch (error) {
+      if (isMongoDuplicateKeyError(error)) throwXviFcConflictError();
+      throw error;
+    }
 
     await this.createHistoryEntry({
       gtcFormId: created._id,
@@ -301,7 +315,7 @@ export class GtcService {
     if (existing) {
       const updated = await this.model
         .findOneAndUpdate(
-          { _id: existing._id },
+          { _id: existing._id, currentFormStatus: existing.currentFormStatus },
           {
             $set: {
               data: sanitizedPayload,
@@ -316,22 +330,31 @@ export class GtcService {
         .lean()
         .exec();
 
+      // Filter matched nothing - status changed since it was read (e.g. a second concurrent submit).
+      if (!updated) await this.assertFreshFinalSubmitStatus(filter);
+
       formOid = existing._id;
-      result = (updated ?? {}) as Record<string, unknown>;
+      result = updated as Record<string, unknown>;
     } else {
-      const created = await this.model.create({
-        state: stateOid,
-        year: yearOid,
-        installment: dto.installment,
-        data: sanitizedPayload,
-        currentFormStatus: toStatus,
-        submittedBy: userOid,
-        submittedAt: now,
-        createdBy: userOid,
-        updatedBy: userOid,
-        isActive: true,
-        isDeleted: false,
-      });
+      let created: XviFcGtcDocument;
+      try {
+        created = await this.model.create({
+          state: stateOid,
+          year: yearOid,
+          installment: dto.installment,
+          data: sanitizedPayload,
+          currentFormStatus: toStatus,
+          submittedBy: userOid,
+          submittedAt: now,
+          createdBy: userOid,
+          updatedBy: userOid,
+          isActive: true,
+          isDeleted: false,
+        });
+      } catch (error) {
+        if (isMongoDuplicateKeyError(error)) throwXviFcConflictError();
+        throw error;
+      }
 
       formOid = created._id;
       result = created.toObject() as unknown as Record<string, unknown>;
@@ -496,6 +519,24 @@ export class GtcService {
       return undefined;
     }
     return { path, fileName, mimeType };
+  }
+
+  private async assertFreshDraftStatus(filter: Record<string, unknown>): Promise<never> {
+    return assertFreshFormStatus(
+      async () =>
+        (await this.model.findOne(filter, { currentFormStatus: 1 }).lean<{ currentFormStatus?: number }>().exec())
+          ?.currentFormStatus,
+      assertCanStateEditForm,
+    );
+  }
+
+  private async assertFreshFinalSubmitStatus(filter: Record<string, unknown>): Promise<never> {
+    return assertFreshFormStatus(
+      async () =>
+        (await this.model.findOne(filter, { currentFormStatus: 1 }).lean<{ currentFormStatus?: number }>().exec())
+          ?.currentFormStatus,
+      assertCanStateFinalSubmitForm,
+    );
   }
 
   private checkInstallment2Prereq(): void {

@@ -12,6 +12,10 @@ import {
   assertCanStateFinalSubmitForm,
 } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
 import { assertStateAccess, buildStateFormPermissions } from 'src/module/xvi-fc/common/utils/xvi-fc-state-access.util';
+import {
+  assertFreshFormStatus,
+  isMongoDuplicateKeyError,
+} from 'src/module/xvi-fc/common/utils/xvi-fc-concurrent-write.util';
 import { toObjectIdString } from 'src/common/utils/objectid.util';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
 import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
@@ -280,31 +284,45 @@ export class DevolutionFormulaService {
       update['checkboxConfirmation'] = validation.sanitizedPayload['checkboxConfirmation'];
     }
 
-    const result = await this.model
-      .findOneAndUpdate(
-        { state: stateOid, year: yearOid, installment: dto.installment },
-        {
-          $set: update,
-          $setOnInsert: { createdBy: userOid },
-        },
-        { upsert: true, new: true },
-      )
-      .lean()
-      .exec();
+    const filter = { state: stateOid, year: yearOid, installment: dto.installment };
 
-    await this.recordFormHistory({
-      formId: result._id,
-      state: stateOid,
-      year: yearOid,
-      action: FormHistoryAction.CREATE_DRAFT,
-      fromStatus,
-      toStatus: FORM_STATUS.IN_PROGRESS,
-      changedBy: userOid,
-      ip,
-      userAgent,
-    });
+    try {
+      const result = await this.model
+        .findOneAndUpdate(
+          { ...filter, currentFormStatus: fromStatus },
+          {
+            $set: update,
+            $setOnInsert: { createdBy: userOid },
+          },
+          { upsert: true, new: true },
+        )
+        .lean()
+        .exec();
 
-    return xviFcSuccess('ULB-wise Allocation draft saved.', { _id: String(result._id) });
+      await this.recordFormHistory({
+        formId: result._id,
+        state: stateOid,
+        year: yearOid,
+        action: FormHistoryAction.CREATE_DRAFT,
+        fromStatus,
+        toStatus: FORM_STATUS.IN_PROGRESS,
+        changedBy: userOid,
+        ip,
+        userAgent,
+      });
+
+      return xviFcSuccess('ULB-wise Allocation draft saved.', { _id: String(result._id) });
+    } catch (error) {
+      // Status-guarded filter matched nothing and the upsert tried (and failed) to insert a
+      // duplicate - status changed since it was read (e.g. a concurrent final submit).
+      if (!isMongoDuplicateKeyError(error)) throw error;
+      await assertFreshFormStatus(
+        async () =>
+          (await this.model.findOne(filter, { currentFormStatus: 1 }).lean<{ currentFormStatus?: number }>().exec())
+            ?.currentFormStatus,
+        assertCanStateEditForm,
+      );
+    }
   }
 
   async finalSubmit(
@@ -319,10 +337,9 @@ export class DevolutionFormulaService {
     const yearOid = new Types.ObjectId(dto.yearId);
     const userOid = new Types.ObjectId(user._id);
 
-    const form = await this.model
-      .findOne({ state: stateOid, year: yearOid, installment: dto.installment })
-      .lean<DfFormLeanDoc>()
-      .exec();
+    const filter = { state: stateOid, year: yearOid, installment: dto.installment };
+
+    const form = await this.model.findOne(filter).lean<DfFormLeanDoc>().exec();
 
     if (!form) {
       throwXviFcValidationError({
@@ -478,9 +495,19 @@ export class DevolutionFormulaService {
     // Mongoose's FileInfo `timestamps` option doesn't stamp the stored subdocument.
     if (normalizedFile !== undefined) finalSubmitSet['excelFile'] = normalizedFile;
 
-    await this.model
-      .findOneAndUpdate({ state: stateOid, year: yearOid, installment: dto.installment }, { $set: finalSubmitSet })
+    const updated = await this.model
+      .findOneAndUpdate({ ...filter, currentFormStatus: fromStatus }, { $set: finalSubmitSet })
       .exec();
+
+    // Filter matched nothing - status changed since it was read (e.g. a second concurrent submit).
+    if (!updated) {
+      await assertFreshFormStatus(
+        async () =>
+          (await this.model.findOne(filter, { currentFormStatus: 1 }).lean<{ currentFormStatus?: number }>().exec())
+            ?.currentFormStatus,
+        assertCanStateFinalSubmitForm,
+      );
+    }
 
     // Snapshot rows now — Excel re-upload hard-deletes the previous version's rows (see
     // docs/adr/0001-dataset-versioning.md), so this is the only surviving record of what was submitted.

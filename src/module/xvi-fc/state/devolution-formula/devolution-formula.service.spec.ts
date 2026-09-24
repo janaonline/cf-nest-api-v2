@@ -2014,6 +2014,109 @@ describe('DevolutionFormulaService', () => {
       ).resolves.toBeDefined();
     });
   });
+
+  describe('concurrency guards', () => {
+    it('saveDraft guards the upsert filter with the read-time status', async () => {
+      mockFormModel.findOne.mockReturnValue(q({ ...mockFormInProgress }));
+      mockFormModel.findOneAndUpdate.mockReturnValue(q({ _id: formOid }));
+
+      await service.saveDraft(
+        { stateId: stateOid.toString(), yearId: YEAR_ID, installment: 1, data: { checkboxConfirmation: true } },
+        adminUser,
+      );
+
+      const filterArg = (mockFormModel.findOneAndUpdate.mock.calls as unknown[][])[0][0] as Record<string, unknown>;
+      expect(filterArg).toMatchObject({ currentFormStatus: FORM_STATUS.IN_PROGRESS });
+    });
+
+    it('saveDraft rejects with the current status when the upsert races against a status change', async () => {
+      mockFormModel.findOne
+        .mockReturnValueOnce(q({ ...mockFormInProgress }))
+        .mockReturnValueOnce(q({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }));
+      const duplicateKeyError = Object.assign(new Error('E11000 duplicate key'), { code: 11000 });
+      mockFormModel.findOneAndUpdate.mockReturnValue({
+        lean: () => ({ exec: () => Promise.reject(duplicateKeyError) }),
+      });
+
+      await expect(
+        service.saveDraft(
+          { stateId: stateOid.toString(), yearId: YEAR_ID, installment: 1, data: { checkboxConfirmation: true } },
+          adminUser,
+        ),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockHistoryModel.create).not.toHaveBeenCalled();
+    });
+
+    it('saveDraft rethrows a write error that is not a duplicate-key race', async () => {
+      mockFormModel.findOne.mockReturnValue(q(null));
+      mockFormModel.findOneAndUpdate.mockReturnValue({
+        lean: () => ({ exec: () => Promise.reject(new Error('connection lost')) }),
+      });
+
+      await expect(
+        service.saveDraft(
+          { stateId: stateOid.toString(), yearId: YEAR_ID, installment: 1, data: { checkboxConfirmation: true } },
+          adminUser,
+        ),
+      ).rejects.toThrow('connection lost');
+    });
+
+    it('finalSubmit guards the update filter with the read-time status', async () => {
+      mockFormModel.findOne.mockReturnValue(q({ ...mockFormInProgress }));
+      mockFormModel.findOneAndUpdate.mockReturnValue(q({ _id: formOid }));
+
+      await service.finalSubmit(
+        {
+          stateId: stateOid.toString(),
+          yearId: YEAR_ID,
+          installment: 1,
+          data: {
+            excelFile: {
+              originalName: 'f.xlsx',
+              path: 'path/f.xlsx',
+              mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+              sizeKb: 1,
+              createdAt: '2026-01-01T00:00:00.000Z',
+            },
+            checkboxConfirmation: true,
+          },
+        },
+        adminUser,
+      );
+
+      const filterArg = (mockFormModel.findOneAndUpdate.mock.calls as unknown[][])[0][0] as Record<string, unknown>;
+      expect(filterArg).toMatchObject({ currentFormStatus: FORM_STATUS.IN_PROGRESS });
+    });
+
+    it('finalSubmit rejects when a second concurrent submit already changed status', async () => {
+      mockFormModel.findOne
+        .mockReturnValueOnce(q({ ...mockFormInProgress }))
+        .mockReturnValueOnce(q({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }));
+      mockFormModel.findOneAndUpdate.mockReturnValue(q(null));
+
+      await expect(
+        service.finalSubmit(
+          {
+            stateId: stateOid.toString(),
+            yearId: YEAR_ID,
+            installment: 1,
+            data: {
+              excelFile: {
+                originalName: 'f.xlsx',
+                path: 'path/f.xlsx',
+                mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                sizeKb: 1,
+                createdAt: '2026-01-01T00:00:00.000Z',
+              },
+              checkboxConfirmation: true,
+            },
+          },
+          adminUser,
+        ),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockHistoryModel.create).not.toHaveBeenCalled();
+    });
+  });
 });
 
 // ─── 5 · DevolutionFormulaRowService ─────────────────────────────────────────

@@ -108,14 +108,17 @@ by `persistEntry`:
 that already materialized the same entry wins without a redundant write; the computed value is
 deterministic for the same `(ulb, year)` pair either way, so this is safe without a lock.
 
-**Invalidation on `startYear` change**: `UlbService.updateYearAccess` wipes the entire `yearAccess`
-map (`$set: { yearAccess: {} }`, atomically alongside the `startYear` write itself) whenever
-`startYear` actually changes to a different value. Every entry's `computeEntry` result depends on
-`startYear`, so an already-materialized entry frozen under the *old* value would otherwise silently
-drift out of sync with it forever (`getEntry`/`peekEntry` never recompute an existing entry). A
-no-op resubmit of the same `startYear` value does not wipe anything. `setSeedExemptions` still runs
-after the wipe (when `disabledFormIds` is provided in the same request) to re-establish the new seed
-entry; every other year recomputes lazily the next time something touches it.
+**Invalidation on `startYear` or seed `disabledFormIds` change**: both wipe the entire `yearAccess`
+map before writing the new value, since every derived entry's `computeEntry` result depends on both
+(`getEntry`/`peekEntry` never recompute an existing entry, so a frozen entry would otherwise drift out
+of sync forever). `UlbService.updateYearAccess` does the wipe itself for `startYear`
+(`$set: { yearAccess: {} }`, atomic with the `startYear` write; no-op on a same-value resubmit).
+`YearAccessService.setSeedExemptions` does its own wipe for `disabledFormIds`, replacing the whole map
+with just the fresh seed entry in one `$set`. Every other year recomputes lazily the next time
+something touches it. Not covered: a `formJsonConfig` change (e.g. `exemptionGraceYears`) — an
+already-materialized year keeps whatever that config looked like at materialization time; fixing that
+needs either an unbounded per-ULB sweep or dropping the never-recompute cache for derived years, so
+it's left as a known gap rather than folded into this fix.
 
 ## Invariants worth knowing before you change adjacent code
 
@@ -141,10 +144,9 @@ entry; every other year recomputes lazily the next time something touches it.
   (see "Undoing an exemption" below for why), which looks like it's touching an existing document
   until you know `NOT_STARTED` itself was never real progress to begin with.
 - Once an entry is materialized, `yearEnabled`/`disabledFormIds` are read directly. No code path
-  falls back to `dateOfConstitution` or any other condition once `yearAccess[label]` exists — with
-  one deliberate exception: an admin changing `startYear` itself invalidates the whole map (see
-  "Invalidation on `startYear` change" above), specifically because every entry's correctness
-  depends on `startYear` in the first place.
+  falls back to `dateOfConstitution` or any other condition once `yearAccess[label]` exists — except
+  that changing `startYear` or the seed's `disabledFormIds` both wipe the whole map first (see
+  "Invalidation..." above), since every entry's correctness depends on both.
 - `submissionScope: 'ONCE_EVER'` forms (e.g. Bank Account/PFMS) never appear in `disabledFormIds` —
   they aren't "exempted," they're "already satisfied elsewhere." They're looked up by `{ulb}` alone
   on GET, returning the same record regardless of which year is requested. The write path guards
