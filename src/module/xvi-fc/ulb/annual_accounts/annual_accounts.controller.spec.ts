@@ -10,7 +10,10 @@ import { XviFcAnnualAccountFormLog } from '../../../../schemas/xvi-fc/annual-acc
 import { XviFcDocumentActionGate } from '../../../../schemas/xvi-fc/document-action-gate.schema';
 import { XviFcManualReviewRequest } from '../../../../schemas/xvi-fc/manual-review-request.schema';
 import { Ulb } from '../../../../schemas/ulb.schema';
+import { Year } from '../../../../schemas/year.schema';
 import { User } from '../../../../schemas/user/user.schema';
+import { ExemptionResolverService } from '../../common/services/exemption-resolver.service';
+import { YearAccessService } from '../../common/services/year-access.service';
 import { S3Service } from '../../../../core/s3/s3.service';
 import { S3UploadService } from '../../../file/s3-upload.service';
 import { FormJsonService } from '../../../../master/form-json/form-json.service';
@@ -48,6 +51,15 @@ describe('AnnualAccountsController', () => {
     };
     const mockUlbModel = {
       findById: jest.fn(),
+      find: jest.fn().mockReturnValue({ lean: () => ({ exec: () => Promise.resolve([]) }) }),
+    };
+    const mockYearModel = {
+      findById: jest.fn().mockReturnValue({ lean: () => ({ exec: () => Promise.resolve(null) }) }),
+    };
+    const mockExemptionResolverService = {
+      resolveBulk: jest.fn().mockResolvedValue(new Map()),
+      resolveDiscretionaryBulk: jest.fn().mockResolvedValue(new Map()),
+      resolveDiscretionary: jest.fn().mockResolvedValue(null),
     };
     const mockUserModel = {
       findOne: jest.fn().mockReturnValue({ select: () => ({ lean: () => ({ exec: () => Promise.resolve(null) }) }) }),
@@ -93,6 +105,9 @@ describe('AnnualAccountsController', () => {
     const mockExcelService = {
       generateExcel: jest.fn().mockResolvedValue(Buffer.from('excel')),
     };
+    const mockYearAccessService = {
+      getExemptFormIds: jest.fn().mockResolvedValue(new Set()),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [AnnualAccountsController],
@@ -103,6 +118,7 @@ describe('AnnualAccountsController', () => {
         { provide: getModelToken(XviFcAnnualAccountUploadHistory.name), useValue: mockUploadHistoryModel },
         { provide: getModelToken(XviFcAnnualAccountFormLog.name), useValue: mockFormLogModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+        { provide: getModelToken(Year.name), useValue: mockYearModel },
         { provide: getModelToken(User.name), useValue: mockUserModel },
         { provide: getModelToken(XviFcDocumentActionGate.name), useValue: mockActionGateModel },
         { provide: getModelToken(XviFcManualReviewRequest.name), useValue: mockManualReviewRequestModel },
@@ -116,6 +132,8 @@ describe('AnnualAccountsController', () => {
         { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: FormReturnedNotificationService, useValue: mockFormReturnedNotification },
         { provide: ExcelService, useValue: mockExcelService },
+        { provide: ExemptionResolverService, useValue: mockExemptionResolverService },
+        { provide: YearAccessService, useValue: mockYearAccessService },
       ],
     }).compile();
 

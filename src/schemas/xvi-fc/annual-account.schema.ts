@@ -22,6 +22,11 @@ export enum AnnualAccountFormStatus {
   UNDO = 'UNDO',
   /** Reserved — not wired to any transition yet. */
   ACTION_REQUIRED = 'ACTION_REQUIRED',
+  /** Terminal, no-owner — mirrors the shared FORM_STATUS.EXEMPTED_ACKNOWLEDGED (12). Set either
+   *  automatically (a genuinely new ULB, via xvi-fc dynamic year access) or by MoHUA approving a
+   *  discretionary Request Exemption entry for this section's formId (30/31) — see
+   *  `RequestExemptionService`/`mohua/request-exemption`. Never a manual ULB/STATE action. */
+  EXEMPTED_ACKNOWLEDGED = 'EXEMPTED_ACKNOWLEDGED',
 }
 
 export const FORM_STATUS_ID: Record<AnnualAccountFormStatus, number> = {
@@ -36,6 +41,7 @@ export const FORM_STATUS_ID: Record<AnnualAccountFormStatus, number> = {
   [AnnualAccountFormStatus.AWAITING_CLAIM_LETTER]: 9,
   [AnnualAccountFormStatus.UNDO]: 10,
   [AnnualAccountFormStatus.ACTION_REQUIRED]: 11,
+  [AnnualAccountFormStatus.EXEMPTED_ACKNOWLEDGED]: 12,
 };
 
 export type XviFcAnnualAccountDocument = HydratedDocument<XviFcAnnualAccount>;
@@ -203,12 +209,53 @@ export class DocumentItem {
   /**
    * ADMIN's verdict on a ULB's manual-review request for this document, or null if undecided/never
    * requested. APPROVED overrides the failed OCR result (processingStatus is forced to PASSED);
-   * RETURNED leaves processingStatus FAILED with a note explaining why. Like stateDecision, this is
-   * never force-cleared on retry/re-upload — it goes stale once currentUpload.uploadedAt postdates
-   * decidedAt, same convention as stateDecision.
+   * RETURNED leaves processingStatus FAILED with a note explaining why.
+   *
+   * Unlike stateDecision, this is deliberately NOT treated as "stale" by a later re-upload — a
+   * RETURNED verdict stays the live decision straight through the whole post-rejection attempt
+   * window (see postRejectionAttemptsUsed below), since it's the very thing marking "this document
+   * is in that window" and gating whether a fresh manual-review request is allowed. It's cleared
+   * back to null only by AnnualAccountManualReviewService.requestManualReview (a genuinely new
+   * request) or the moment this document reaches PASSED — never merely by time or a re-upload.
    */
   @Prop({ type: DecisionInfoSchema, default: null })
   manualReviewDecision!: DecisionInfo | null;
+
+  /**
+   * Failed re-upload attempts since ADMIN last RETURNED a manual-review request for this document.
+   * Incremented only while `manualReviewDecision.status === 'RETURNED'` is still the live decision
+   * (i.e. no fresh upload has passed OCR since) — see `isUploadBlocked`/`MAX_POST_REJECTION_ATTEMPTS`
+   * in annual-account-status-access.util.ts. Capped at MAX_POST_REJECTION_ATTEMPTS: once reached,
+   * Re-upload is hidden and Request Manual Review re-opens instead — self-service is exhausted, but
+   * escalating to a human always stays available (a pure time-based lockout with no recourse would
+   * be too risky for a form with real filing deadlines). Reset to 0 whenever this document reaches
+   * PASSED, or when a *second* manual-review rejection sets uploadBlockedUntil (see
+   * manualReviewRejectionCount below) — either way starting the next cycle fresh. Deliberately not
+   * reset by a plain retry/re-upload the way retryValidationCount is — it must survive across
+   * re-uploads to actually count "attempts since rejection".
+   */
+  @Prop({ default: 0 })
+  postRejectionAttemptsUsed!: number;
+
+  /**
+   * Total number of times ADMIN has RETURNED a manual-review request for this document, across its
+   * whole lifecycle — reset to 0 once it reaches PASSED. The *first* rejection only starts the
+   * postRejectionAttemptsUsed window above (self-service re-upload, no cooldown). Only a *second*
+   * rejection (i.e. this counter reaching 2) sets uploadBlockedUntil — by that point a human has
+   * confirmed twice that something is genuinely wrong, which is a meaningfully stronger signal than
+   * "OCR failed 3 times unassisted" (which could just as easily mean the OCR rule itself is flaky).
+   */
+  @Prop({ default: 0 })
+  manualReviewRejectionCount!: number;
+
+  /**
+   * Set once a second manual-review rejection lands (see manualReviewRejectionCount) — the ULB
+   * cannot upload a new version of, or request another review for, this document until this
+   * timestamp passes. Null the rest of the time; cleared (along with the two counters above) once
+   * the document reaches PASSED.
+   */
+  @Prop({ type: Date, default: null })
+  uploadBlockedUntil!: Date | null;
 }
 
 export const DocumentItemSchema = SchemaFactory.createForClass(DocumentItem);
@@ -312,6 +359,13 @@ export class XviFcAnnualAccount {
 
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
   modifiedBy: Types.ObjectId;
+
+  // -- xvi-fc dynamic year access: automatic exemption stub, never edited by a ULB --------
+  @Prop({ type: Boolean, default: false })
+  isExemptionStub?: boolean;
+
+  @Prop({ type: Date })
+  exemptionMaterializedAt?: Date;
 }
 
 export const XviFcAnnualAccountSchema = SchemaFactory.createForClass(XviFcAnnualAccount);

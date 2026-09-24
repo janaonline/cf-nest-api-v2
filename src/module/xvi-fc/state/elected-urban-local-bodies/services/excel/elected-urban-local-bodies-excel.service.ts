@@ -8,9 +8,9 @@ import { S3Service } from 'src/core/s3/s3.service';
 import { ExcelService } from 'src/services/excel/excel.service';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
-import { Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
+import { Permission } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
-import { toObjectIdString } from 'src/common/utils/objectid.util';
+import { assertStateAccess } from 'src/module/xvi-fc/common/utils/xvi-fc-state-access.util';
 import { assertCanStateEditForm } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
 import {
   throwXviFcValidationError,
@@ -107,7 +107,7 @@ export class ElectedUrbanLocalBodiesExcelService {
     dto: ValidateElectedUrbanLocalBodiesExcelDto,
     user: AuthUser,
   ): Promise<XviFcApiResponse<EulbValidateExcelResponseData>> {
-    this.assertStateAccess(user, dto.stateId);
+    assertStateAccess(user, dto.stateId);
     this.assertEditPermission(user);
 
     const stateOid = new Types.ObjectId(dto.stateId);
@@ -305,7 +305,7 @@ export class ElectedUrbanLocalBodiesExcelService {
         dateOfConstitution: r.dateOfConstitution,
         dateOfExpiry: r.dateOfExpiry,
         remarks: r.remarks,
-        errors: r.rowErrors,
+        validationErrors: r.rowErrors,
       }));
 
     // 11. Atomic version allocation + safe dataset replacement, all inside one Mongo transaction.
@@ -387,7 +387,7 @@ export class ElectedUrbanLocalBodiesExcelService {
             remarks: r.remarks,
             lastUpdatedSource: 'EXCEL' as const,
             validationStatus: r.validationRowStatus,
-            errors: r.rowErrors,
+            validationErrors: r.rowErrors,
             rawExcelData: r.validationRowStatus === 'INVALID' ? r.rawExcelData : undefined,
             createdBy: userOid,
             updatedBy: userOid,
@@ -465,7 +465,7 @@ export class ElectedUrbanLocalBodiesExcelService {
             },
           ],
         },
-        { validationSummary: summary, errors: rowErrors },
+        { validationSummary: summary, validationErrors: rowErrors },
       );
     }
 
@@ -473,7 +473,7 @@ export class ElectedUrbanLocalBodiesExcelService {
       validationStatus: formValidationStatus,
       summary,
       errorExcelFile: this.hydrateErrorExcelFile(errorExcelFile),
-      errors: rowErrors,
+      validationErrors: rowErrors,
     };
 
     const message =
@@ -486,7 +486,7 @@ export class ElectedUrbanLocalBodiesExcelService {
     yearId: string,
     user: AuthUser,
   ): Promise<XviFcApiResponse<EulbRevalidateExcelResponseData>> {
-    this.assertStateAccess(user, stateId);
+    assertStateAccess(user, stateId);
     this.assertEditPermission(user);
 
     const stateOid = new Types.ObjectId(stateId);
@@ -544,7 +544,7 @@ export class ElectedUrbanLocalBodiesExcelService {
         const flatErrors: EulbRowValidationError[] = [];
 
         type RowBulkOpSet = {
-          errors: EulbRowError[];
+          validationErrors: EulbRowError[];
           validationStatus: EulbRowValidationStatus;
           updatedBy: Types.ObjectId;
           dateOfConstitution?: Date | null;
@@ -603,7 +603,7 @@ export class ElectedUrbanLocalBodiesExcelService {
           }
 
           const rowSetFields: RowBulkOpSet = {
-            errors: newErrors,
+            validationErrors: newErrors,
             validationStatus: newValidationStatus,
             updatedBy: userOid,
           };
@@ -676,7 +676,7 @@ export class ElectedUrbanLocalBodiesExcelService {
 
         const message =
           errorRowCount > 0 ? 'Excel revalidation completed with errors.' : 'Excel revalidation completed.';
-        return xviFcSuccess(message, { validationSummary, errors: flatErrors });
+        return xviFcSuccess(message, { validationSummary, validationErrors: flatErrors });
       }
     }
 
@@ -821,7 +821,7 @@ export class ElectedUrbanLocalBodiesExcelService {
         dateOfConstitution: r.dateOfConstitution,
         dateOfExpiry: r.dateOfExpiry,
         remarks: r.remarks,
-        errors: r.rowErrors,
+        validationErrors: r.rowErrors,
       }));
 
     // Atomic version allocation + safe dataset replacement inside one Mongo transaction — same
@@ -889,7 +889,7 @@ export class ElectedUrbanLocalBodiesExcelService {
             remarks: r.remarks,
             lastUpdatedSource: 'EXCEL' as const,
             validationStatus: r.validationRowStatus,
-            errors: r.rowErrors,
+            validationErrors: r.rowErrors,
             rawExcelData: r.rawExcelData,
             createdBy: userOid,
             updatedBy: userOid,
@@ -957,12 +957,12 @@ export class ElectedUrbanLocalBodiesExcelService {
             },
           ],
         },
-        { validationSummary, errors: flatErrors },
+        { validationSummary, validationErrors: flatErrors },
       );
     }
 
     const message = errorRowCount > 0 ? 'Excel revalidation completed with errors.' : 'Excel revalidation completed.';
-    return xviFcSuccess(message, { validationSummary, errors: flatErrors });
+    return xviFcSuccess(message, { validationSummary, validationErrors: flatErrors });
   }
 
   /** Builds a map from normalized camelCase key → column index. */
@@ -1121,23 +1121,6 @@ export class ElectedUrbanLocalBodiesExcelService {
   }
 
   // ─── Scope enforcement ────────────────────────────────────────────────────────
-
-  private hasStateAccess(user: AuthUser, stateId: string): boolean {
-    if (user.scope === Scope.ADMIN) return true;
-    if (user.scope === Scope.STATE) {
-      const userStateId = toObjectIdString(user.state);
-      return !!userStateId && userStateId === stateId;
-    }
-    return false;
-  }
-
-  private assertStateAccess(user: AuthUser, stateId: string): void {
-    if (!this.hasStateAccess(user, stateId)) {
-      throw new ForbiddenException(
-        user.scope === Scope.STATE ? 'You can only access your own state data' : 'Access denied',
-      );
-    }
-  }
 
   private assertEditPermission(user: AuthUser): void {
     const perms = new Set(getEffectivePermissions(user));

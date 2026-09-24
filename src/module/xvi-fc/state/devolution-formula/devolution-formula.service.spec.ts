@@ -98,7 +98,7 @@ const mockRow = {
   installment2Amount: 200_000,
   devolutionFormula: 'population',
   validationStatus: 'VALID' as const,
-  errors: [],
+  validationErrors: [],
   isActive: true,
 };
 
@@ -251,7 +251,12 @@ describe('DevolutionFormulaValidator', () => {
   });
 
   it('validateAllocations still rejects a real mismatch', () => {
-    const row = { ...baseRow(), totalGrantAllocation: 500_000, installment1Amount: 300_000, installment2Amount: 199_998 };
+    const row = {
+      ...baseRow(),
+      totalGrantAllocation: 500_000,
+      installment1Amount: 300_000,
+      installment2Amount: 199_998,
+    };
     const errors = validator.validateRow(row, 1, 250);
     expect(errors.some((e) => e.code === 'allocationMismatch')).toBe(true);
   });
@@ -877,6 +882,29 @@ describe('DevolutionFormulaService', () => {
     expect(ids).toContain('download-template');
     expect(ids).toContain('view-uploaded-data');
     expect(ids).toContain('revalidate-excel');
+  });
+
+  // GET form: canEdit/canFinalSubmit must be gated by state access, not just permission/status
+  // (buildStateFormPermissions) - regression coverage for a prior gap where Devolution's own
+  // buildFormPermissions never checked state access at all. assertStateAccess already blocks a
+  // mismatched STATE user before permissions are built, so the only place this is observable is
+  // an ADMIN-scoped caller, which bypasses assertStateAccess entirely; buildStateFormPermissions'
+  // own unit tests (xvi-fc-state-access.util.spec.ts) cover the STATE-mismatch case directly.
+  it('getForm grants canView for a fully-permissioned matching STATE user', async () => {
+    mockFormModel.findOne.mockReturnValue(q({ ...mockFormInProgress, activeDatasetVersion: 1 }));
+    mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
+
+    const stateUserMatching: AuthUser = {
+      _id: new Types.ObjectId().toString(),
+      role: UserRole.STATE,
+      scope: Scope.STATE,
+      accessLevel: AccessLevel.ADMIN,
+      state: stateOid,
+    };
+
+    const result = await service.getForm(stateOid.toString(), YEAR_ID, 1, stateUserMatching);
+    const data = result.data as { permissions: { canView: boolean } };
+    expect(data.permissions.canView).toBe(true);
   });
 
   // ─── excelFile supportingContent — badges ──────────────────────────────────
@@ -1986,6 +2014,109 @@ describe('DevolutionFormulaService', () => {
       ).resolves.toBeDefined();
     });
   });
+
+  describe('concurrency guards', () => {
+    it('saveDraft guards the upsert filter with the read-time status', async () => {
+      mockFormModel.findOne.mockReturnValue(q({ ...mockFormInProgress }));
+      mockFormModel.findOneAndUpdate.mockReturnValue(q({ _id: formOid }));
+
+      await service.saveDraft(
+        { stateId: stateOid.toString(), yearId: YEAR_ID, installment: 1, data: { checkboxConfirmation: true } },
+        adminUser,
+      );
+
+      const filterArg = (mockFormModel.findOneAndUpdate.mock.calls as unknown[][])[0][0] as Record<string, unknown>;
+      expect(filterArg).toMatchObject({ currentFormStatus: FORM_STATUS.IN_PROGRESS });
+    });
+
+    it('saveDraft rejects with the current status when the upsert races against a status change', async () => {
+      mockFormModel.findOne
+        .mockReturnValueOnce(q({ ...mockFormInProgress }))
+        .mockReturnValueOnce(q({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }));
+      const duplicateKeyError = Object.assign(new Error('E11000 duplicate key'), { code: 11000 });
+      mockFormModel.findOneAndUpdate.mockReturnValue({
+        lean: () => ({ exec: () => Promise.reject(duplicateKeyError) }),
+      });
+
+      await expect(
+        service.saveDraft(
+          { stateId: stateOid.toString(), yearId: YEAR_ID, installment: 1, data: { checkboxConfirmation: true } },
+          adminUser,
+        ),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockHistoryModel.create).not.toHaveBeenCalled();
+    });
+
+    it('saveDraft rethrows a write error that is not a duplicate-key race', async () => {
+      mockFormModel.findOne.mockReturnValue(q(null));
+      mockFormModel.findOneAndUpdate.mockReturnValue({
+        lean: () => ({ exec: () => Promise.reject(new Error('connection lost')) }),
+      });
+
+      await expect(
+        service.saveDraft(
+          { stateId: stateOid.toString(), yearId: YEAR_ID, installment: 1, data: { checkboxConfirmation: true } },
+          adminUser,
+        ),
+      ).rejects.toThrow('connection lost');
+    });
+
+    it('finalSubmit guards the update filter with the read-time status', async () => {
+      mockFormModel.findOne.mockReturnValue(q({ ...mockFormInProgress }));
+      mockFormModel.findOneAndUpdate.mockReturnValue(q({ _id: formOid }));
+
+      await service.finalSubmit(
+        {
+          stateId: stateOid.toString(),
+          yearId: YEAR_ID,
+          installment: 1,
+          data: {
+            excelFile: {
+              originalName: 'f.xlsx',
+              path: 'path/f.xlsx',
+              mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+              sizeKb: 1,
+              createdAt: '2026-01-01T00:00:00.000Z',
+            },
+            checkboxConfirmation: true,
+          },
+        },
+        adminUser,
+      );
+
+      const filterArg = (mockFormModel.findOneAndUpdate.mock.calls as unknown[][])[0][0] as Record<string, unknown>;
+      expect(filterArg).toMatchObject({ currentFormStatus: FORM_STATUS.IN_PROGRESS });
+    });
+
+    it('finalSubmit rejects when a second concurrent submit already changed status', async () => {
+      mockFormModel.findOne
+        .mockReturnValueOnce(q({ ...mockFormInProgress }))
+        .mockReturnValueOnce(q({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }));
+      mockFormModel.findOneAndUpdate.mockReturnValue(q(null));
+
+      await expect(
+        service.finalSubmit(
+          {
+            stateId: stateOid.toString(),
+            yearId: YEAR_ID,
+            installment: 1,
+            data: {
+              excelFile: {
+                originalName: 'f.xlsx',
+                path: 'path/f.xlsx',
+                mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                sizeKb: 1,
+                createdAt: '2026-01-01T00:00:00.000Z',
+              },
+              checkboxConfirmation: true,
+            },
+          },
+          adminUser,
+        ),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockHistoryModel.create).not.toHaveBeenCalled();
+    });
+  });
 });
 
 // ─── 5 · DevolutionFormulaRowService ─────────────────────────────────────────
@@ -2039,10 +2170,10 @@ describe('DevolutionFormulaRowService', () => {
     );
 
     const rowUpdateArg = (mockRowModel.findByIdAndUpdate.mock.calls as unknown[][][])[0][1] as {
-      $set: { errors: Array<{ code: string }> };
+      $set: { validationErrors: Array<{ code: string }> };
     };
-    expect(rowUpdateArg.$set.errors).toHaveLength(1);
-    expect(rowUpdateArg.$set.errors[0].code).toBe('unknownUlb');
+    expect(rowUpdateArg.$set.validationErrors).toHaveLength(1);
+    expect(rowUpdateArg.$set.validationErrors[0].code).toBe('unknownUlb');
   });
 
   // Test 14: updateRow triggers form-level recalculation

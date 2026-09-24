@@ -12,6 +12,7 @@ export interface OcrSubmitJobDto {
   uploadId: string;
   financialYear: string;
   auditType: string;
+  state: string;
 }
 
 export interface OcrSubmitResponse {
@@ -81,7 +82,7 @@ export class AnnualAccountOcrApiService {
   }
 
   async submitJob(dto: OcrSubmitJobDto): Promise<OcrSubmitResponse> {
-    const { pdfBuffer, fileName, docType, ulbName, uploadId, financialYear, auditType } = dto;
+    const { pdfBuffer, fileName, docType, ulbName, uploadId, financialYear, auditType, state } = dto;
 
     const form = new FormData();
     form.append('file', pdfBuffer, { filename: fileName, contentType: 'application/pdf' });
@@ -90,6 +91,7 @@ export class AnnualAccountOcrApiService {
     form.append('upload_id', uploadId);
     form.append('financial_year', financialYear);
     form.append('audit_type', auditType);
+    form.append('state', state);
 
     this.logger.log(`Submitting OCR job — uploadId=${uploadId} docType=${docType}`);
 

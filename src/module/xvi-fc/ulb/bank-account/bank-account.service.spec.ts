@@ -1,4 +1,10 @@
-import { BadRequestException, ForbiddenException, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import axios from 'axios';
 import { Types } from 'mongoose';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
@@ -10,6 +16,7 @@ import { decryptAccountNumber } from './utils/bank-account-security.util';
 
 function q<T>(value: T) {
   return {
+    select: jest.fn().mockReturnThis(),
     lean: jest.fn().mockReturnThis(),
     exec: jest.fn().mockResolvedValue(value),
   };
@@ -19,10 +26,13 @@ describe('BankAccountService scope enforcement', () => {
   let service: BankAccountService;
   let bankAccountModel: { findOne: jest.Mock; findOneAndUpdate: jest.Mock };
   let formLogModel: { create: jest.Mock };
-  let ulbModel: { findById: jest.Mock };
+  let ulbModel: { findById: jest.Mock; aggregate: jest.Mock };
+  let userModel: { findById: jest.Mock };
+  let yearModel: { findById: jest.Mock };
   let fileTokenService: { signFileUrl: jest.Mock };
   let ulbEligibilityService: { assertUlbEligibleForGrantCycle: jest.Mock };
   let formJsonService: { findActiveByDesignYearAndFormId: jest.Mock };
+  let formJsonConfigService: { findByFormId: jest.Mock };
   let formReturnedNotification: { notifyReturned: jest.Mock };
   const originalEncryptionKey = process.env.BANK_ACCOUNT_ENCRYPTION_KEY;
   const originalHashSecret = process.env.BANK_ACCOUNT_HASH_SECRET;
@@ -88,6 +98,13 @@ describe('BankAccountService scope enforcement', () => {
     };
     ulbModel = {
       findById: jest.fn().mockReturnValue(q({ state: stateId })),
+      aggregate: jest.fn(),
+    };
+    userModel = {
+      findById: jest.fn().mockReturnValue(q({ name: 'Test Decider' })),
+    };
+    yearModel = {
+      findById: jest.fn().mockReturnValue(q({ year: '2027-28' })),
     };
     fileTokenService = {
       signFileUrl: jest.fn((path: string) => `https://signed-url.example.com/${path}`),
@@ -98,6 +115,10 @@ describe('BankAccountService scope enforcement', () => {
     formJsonService = {
       findActiveByDesignYearAndFormId: jest.fn(),
     };
+    // Default: PER_YEAR (or unconfigured) - existing (pre-dynamic-year-access) behavior unchanged.
+    formJsonConfigService = {
+      findByFormId: jest.fn().mockResolvedValue(null),
+    };
     formReturnedNotification = {
       notifyReturned: jest.fn().mockResolvedValue(undefined),
     };
@@ -105,9 +126,12 @@ describe('BankAccountService scope enforcement', () => {
       bankAccountModel as never,
       formLogModel as never,
       ulbModel as never,
+      userModel as never,
+      yearModel as never,
       fileTokenService as never,
       ulbEligibilityService as never,
       formJsonService as never,
+      formJsonConfigService as never,
       formReturnedNotification as never,
     );
 
@@ -340,6 +364,228 @@ describe('BankAccountService scope enforcement', () => {
       },
     });
     expect(result.data).not.toHaveProperty('proof');
+  });
+
+  describe('GET - xvi-fc dynamic year access (ONCE_EVER submission scope)', () => {
+    it('queries by ulb + designYear (unchanged) when submissionScope is PER_YEAR or unconfigured', async () => {
+      const user = makeUser({ role: UserRole.ULB, scope: Scope.ULB, accessLevel: AccessLevel.ADMIN, ulb: ulbId });
+      const requestedYearId = new Types.ObjectId();
+      bankAccountModel.findOne.mockReturnValue(q(null));
+
+      await service.getBankAccount({ yearId: requestedYearId.toString() }, user);
+
+      const [filter] = bankAccountModel.findOne.mock.calls[0] as [Record<string, unknown>];
+      expect(filter).toHaveProperty('designYear');
+    });
+
+    it('queries by ulb alone, ignoring the requested year, when submissionScope is ONCE_EVER', async () => {
+      formJsonConfigService.findByFormId.mockResolvedValue({ formId: 33, submissionScope: 'ONCE_EVER' });
+      const user = makeUser({ role: UserRole.ULB, scope: Scope.ULB, accessLevel: AccessLevel.ADMIN, ulb: ulbId });
+      const requestedYearId = new Types.ObjectId();
+      bankAccountModel.findOne.mockReturnValue(q(null));
+
+      await service.getBankAccount({ yearId: requestedYearId.toString() }, user);
+
+      const [filter] = bankAccountModel.findOne.mock.calls[0] as [Record<string, unknown>];
+      expect(filter).not.toHaveProperty('designYear');
+      expect((filter['ulb'] as Types.ObjectId).toString()).toBe(ulbId.toString());
+    });
+
+    it('returns the record from its original year even when a different year is requested (ONCE_EVER)', async () => {
+      formJsonConfigService.findByFormId.mockResolvedValue({ formId: 33, submissionScope: 'ONCE_EVER' });
+      const originalYearId = new Types.ObjectId();
+      const requestedYearId = new Types.ObjectId(); // different from originalYearId
+      const user = makeUser({ role: UserRole.ULB, scope: Scope.ULB, accessLevel: AccessLevel.ADMIN, ulb: ulbId });
+      bankAccountModel.findOne.mockReturnValue(
+        q({
+          _id: new Types.ObjectId(),
+          ulb: ulbId,
+          designYear: originalYearId, // record belongs to its original submission year
+          currentFormStatus: FORM_STATUS.IN_PROGRESS,
+          proofFile: { originalName: 'proof.pdf', mimeType: 'application/pdf', pages: 2, sizeKb: 1, s3Key: 'k', sha256: validSha256 },
+        }),
+      );
+
+      yearModel.findById.mockReturnValue(q({ year: '2026-27' }));
+
+      const result = await service.getBankAccount({ yearId: requestedYearId.toString() }, user);
+
+      // designYear in the response is the record's true year, not the requested one - the
+      // frontend uses this mismatch to redirect the ULB to where the record actually lives.
+      expect((result.data as { designYear: string }).designYear).toBe(originalYearId.toString());
+      expect((result.data as { designYearLabel: string | null }).designYearLabel).toBe('2026-27');
+      expect(yearModel.findById).toHaveBeenCalledWith(originalYearId, { year: 1 });
+    });
+
+    it('leaves designYearLabel null when the requested year already matches the record (ONCE_EVER)', async () => {
+      formJsonConfigService.findByFormId.mockResolvedValue({ formId: 33, submissionScope: 'ONCE_EVER' });
+      const yearId = new Types.ObjectId();
+      const user = makeUser({ role: UserRole.ULB, scope: Scope.ULB, accessLevel: AccessLevel.ADMIN, ulb: ulbId });
+      bankAccountModel.findOne.mockReturnValue(
+        q({
+          _id: new Types.ObjectId(),
+          ulb: ulbId,
+          designYear: yearId,
+          currentFormStatus: FORM_STATUS.IN_PROGRESS,
+          proofFile: { originalName: 'proof.pdf', mimeType: 'application/pdf', pages: 2, sizeKb: 1, s3Key: 'k', sha256: validSha256 },
+        }),
+      );
+
+      const result = await service.getBankAccount({ yearId: yearId.toString() }, user);
+
+      expect((result.data as { designYearLabel: string | null }).designYearLabel).toBeNull();
+      expect(yearModel.findById).not.toHaveBeenCalled();
+    });
+
+    it('includes submissionScope in the response so the frontend does not have to hardcode it', async () => {
+      formJsonConfigService.findByFormId.mockResolvedValue({ formId: 33, submissionScope: 'ONCE_EVER' });
+      const user = makeUser({ role: UserRole.ULB, scope: Scope.ULB, accessLevel: AccessLevel.ADMIN, ulb: ulbId });
+      bankAccountModel.findOne.mockReturnValue(
+        q({
+          _id: new Types.ObjectId(),
+          ulb: ulbId,
+          designYear: new Types.ObjectId(),
+          currentFormStatus: FORM_STATUS.IN_PROGRESS,
+          proofFile: { originalName: 'proof.pdf', mimeType: 'application/pdf', pages: 2, sizeKb: 1, s3Key: 'k', sha256: validSha256 },
+        }),
+      );
+
+      const result = await service.getBankAccount({ yearId: new Types.ObjectId().toString() }, user);
+
+      expect((result.data as { submissionScope: string }).submissionScope).toBe('ONCE_EVER');
+    });
+  });
+
+  describe('submitBankAccount - xvi-fc dynamic year access (ONCE_EVER submission scope)', () => {
+    it('blocks a second submission for a different design year when submissionScope is ONCE_EVER', async () => {
+      formJsonConfigService.findByFormId.mockResolvedValue({ formId: 33, submissionScope: 'ONCE_EVER' });
+      const existingYearId = new Types.ObjectId();
+      bankAccountModel.findOne.mockReturnValue(q({ designYear: existingYearId }));
+      const dto = makeSubmitDto({ designYearId: new Types.ObjectId().toString() });
+      const user = makeUser({ role: UserRole.ADMIN, scope: Scope.ADMIN, accessLevel: AccessLevel.ADMIN });
+
+      await expect(service.submitBankAccount(dto, user)).rejects.toThrow(ConflictException);
+      expect(bankAccountModel.findOneAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('allows resubmission for the same design year when submissionScope is ONCE_EVER', async () => {
+      const dto = makeSubmitDto();
+      formJsonConfigService.findByFormId.mockResolvedValue({ formId: 33, submissionScope: 'ONCE_EVER' });
+      bankAccountModel.findOne.mockReturnValue(q({ designYear: new Types.ObjectId(dto.designYearId) }));
+      bankAccountModel.findOneAndUpdate.mockImplementation((_filter, update) => q({ _id: new Types.ObjectId(), ...update.$set }));
+      const user = makeUser({ role: UserRole.ADMIN, scope: Scope.ADMIN, accessLevel: AccessLevel.ADMIN });
+
+      await service.submitBankAccount(dto, user);
+
+      expect(bankAccountModel.findOneAndUpdate).toHaveBeenCalledTimes(1);
+    });
+
+    it('allows submission when no prior record exists yet, even if submissionScope is ONCE_EVER', async () => {
+      const dto = makeSubmitDto();
+      formJsonConfigService.findByFormId.mockResolvedValue({ formId: 33, submissionScope: 'ONCE_EVER' });
+      bankAccountModel.findOne.mockReturnValue(q(null));
+      bankAccountModel.findOneAndUpdate.mockImplementation((_filter, update) => q({ _id: new Types.ObjectId(), ...update.$set }));
+      const user = makeUser({ role: UserRole.ADMIN, scope: Scope.ADMIN, accessLevel: AccessLevel.ADMIN });
+
+      await service.submitBankAccount(dto, user);
+
+      expect(bankAccountModel.findOneAndUpdate).toHaveBeenCalledTimes(1);
+    });
+
+    it('never checks for a cross-year record when submissionScope is PER_YEAR or unconfigured', async () => {
+      const dto = makeSubmitDto();
+      // formJsonConfigService default mock resolves null (PER_YEAR/unconfigured) - see beforeEach.
+      bankAccountModel.findOneAndUpdate.mockImplementation((_filter, update) => q({ _id: new Types.ObjectId(), ...update.$set }));
+      const user = makeUser({ role: UserRole.ADMIN, scope: Scope.ADMIN, accessLevel: AccessLevel.ADMIN });
+
+      await service.submitBankAccount(dto, user);
+
+      expect(bankAccountModel.findOne).not.toHaveBeenCalled();
+      expect(bankAccountModel.findOneAndUpdate).toHaveBeenCalledTimes(1);
+    });
+
+    it('denormalizes submissionScope onto the upserted document, for the {ulb} partial unique index to key off', async () => {
+      const dto = makeSubmitDto();
+      formJsonConfigService.findByFormId.mockResolvedValue({ formId: 33, submissionScope: 'ONCE_EVER' });
+      bankAccountModel.findOne.mockReturnValue(q(null));
+      bankAccountModel.findOneAndUpdate.mockImplementation((_filter, update) => q({ _id: new Types.ObjectId(), ...update.$set }));
+      const user = makeUser({ role: UserRole.ADMIN, scope: Scope.ADMIN, accessLevel: AccessLevel.ADMIN });
+
+      await service.submitBankAccount(dto, user);
+
+      const [, update] = bankAccountModel.findOneAndUpdate.mock.calls[0];
+      expect(update.$set.submissionScope).toBe('ONCE_EVER');
+    });
+
+    it('translates a duplicate-key error (E11000) from the {ulb} partial unique index into the same ConflictException the preflight check throws', async () => {
+      const dto = makeSubmitDto();
+      formJsonConfigService.findByFormId.mockResolvedValue({ formId: 33, submissionScope: 'ONCE_EVER' });
+      // Preflight check sees no record yet (the race: another request's insert commits in between).
+      const existingYearId = new Types.ObjectId();
+      bankAccountModel.findOne
+        .mockReturnValueOnce(q(null)) // assertNoCrossYearBankAccountRecord's preflight
+        .mockReturnValueOnce(q({ designYear: existingYearId })); // the catch block's re-lookup
+      bankAccountModel.findOneAndUpdate.mockImplementation(() => ({
+        lean: jest.fn().mockReturnThis(),
+        exec: jest.fn().mockRejectedValue(Object.assign(new Error('E11000 duplicate key'), { code: 11000 })),
+      }));
+      const user = makeUser({ role: UserRole.ADMIN, scope: Scope.ADMIN, accessLevel: AccessLevel.ADMIN });
+
+      await expect(service.submitBankAccount(dto, user)).rejects.toThrow(ConflictException);
+    });
+
+    it('rethrows a non-duplicate-key error from the upsert unchanged', async () => {
+      const dto = makeSubmitDto();
+      bankAccountModel.findOneAndUpdate.mockImplementation(() => ({
+        lean: jest.fn().mockReturnThis(),
+        exec: jest.fn().mockRejectedValue(new Error('connection reset')),
+      }));
+      const user = makeUser({ role: UserRole.ADMIN, scope: Scope.ADMIN, accessLevel: AccessLevel.ADMIN });
+
+      await expect(service.submitBankAccount(dto, user)).rejects.toThrow('connection reset');
+    });
+  });
+
+  describe('listUlbBankAccounts - xvi-fc dynamic year access (ONCE_EVER submission scope)', () => {
+    const stateReviewer = (state: Types.ObjectId): AuthUser =>
+      ({
+        _id: new Types.ObjectId().toString(),
+        scope: Scope.STATE,
+        state,
+        xviFcSubrole: 'reviewer',
+      }) as unknown as AuthUser;
+
+    const baseDto = { designYearId: new Types.ObjectId().toString(), page: 1, pageSize: 20 } as never;
+
+    function lastPipeline(): Array<Record<string, unknown>> {
+      return ulbModel.aggregate.mock.calls[ulbModel.aggregate.mock.calls.length - 1][0];
+    }
+
+    it('joins by ulb alone (no designYear clause) when submissionScope is ONCE_EVER, so a record filed in an earlier year still resolves', async () => {
+      formJsonConfigService.findByFormId.mockResolvedValue({ formId: 33, submissionScope: 'ONCE_EVER' });
+      ulbModel.aggregate.mockReturnValue(q([{ data: [], totalCount: [], counts: [] }]));
+
+      await service.listUlbBankAccounts(baseDto, stateReviewer(stateId));
+
+      const lookupStage = lastPipeline().find((stage) => '$lookup' in stage) as {
+        $lookup: { pipeline: Array<{ $match: { $expr: unknown } } >} ;
+      };
+      expect(lookupStage.$lookup.pipeline[0].$match.$expr).toEqual({ $eq: ['$ulb', '$$ulbId'] });
+    });
+
+    it('still joins by ulb + designYear when submissionScope is PER_YEAR or unconfigured', async () => {
+      // formJsonConfigService default mock resolves null (PER_YEAR/unconfigured) - see beforeEach.
+      ulbModel.aggregate.mockReturnValue(q([{ data: [], totalCount: [], counts: [] }]));
+
+      await service.listUlbBankAccounts(baseDto, stateReviewer(stateId));
+
+      const lookupStage = lastPipeline().find((stage) => '$lookup' in stage) as {
+        $lookup: { pipeline: Array<{ $match: { $expr: unknown } }> };
+      };
+      expect(lookupStage.$lookup.pipeline[0].$match.$expr).toEqual({
+        $and: [{ $eq: ['$ulb', '$$ulbId'] }, { $eq: ['$designYear', new Types.ObjectId(baseDto.designYearId)] }],
+      });
+    });
   });
 
   it('GET does not expose encrypted, hash, or full account-number fields', async () => {

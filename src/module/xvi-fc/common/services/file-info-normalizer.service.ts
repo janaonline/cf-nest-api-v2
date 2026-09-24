@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { FileInfo } from 'src/schemas/common/file.schema';
-import { XviFcValidationError } from '../response/xvi-fc-api-response';
+import { XviFcValidationError, XviFcValidationErrorMap } from '../response/xvi-fc-api-response';
+import type { FieldConfig } from '../types/field-config.type';
+import type { FormData } from '../dynamic-form-validation/dynamic-form-validation.types';
 import { FileUrlNormalizerService } from './file-url-normalizer.service';
 
 export interface FileInfoValidationOptions {
@@ -170,6 +172,57 @@ export class FileInfoNormalizerService {
     };
 
     return { file, errors: [] };
+  }
+
+  /**
+   * Normalizes every file-type field in a validated payload into the canonical FileInfo shape,
+   * discarding any client-supplied `updatedAt` and any other stray keys. When the normalized
+   * incoming path matches the existing stored path, the stored FileInfo (both timestamps) is
+   * preserved unchanged. Shared by every xvi-fc state form's save-draft/final-submit path that
+   * loops over its own formJson field config dynamically (SFC Status, GTC) - previously each
+   * form duplicated this loop. Returns errors rather than throwing, matching
+   * `normalizeInboundFileInfo`'s own style - the caller decides whether/how to surface them.
+   */
+  normalizePayloadFileFields(
+    payload: FormData,
+    formQuestions: FieldConfig[],
+    existingData: FormData,
+  ): { payload: FormData; errors: XviFcValidationErrorMap } {
+    const errors: XviFcValidationErrorMap = {};
+    const normalized: FormData = { ...payload };
+    const now = new Date();
+
+    for (const field of formQuestions) {
+      if (field.formFieldType !== 'file') continue;
+      if (!Object.prototype.hasOwnProperty.call(payload, field.key)) continue;
+
+      const raw = payload[field.key];
+      if (raw === null || raw === undefined) {
+        normalized[field.key] = null;
+        continue;
+      }
+
+      const existingFile = existingData[field.key] as FileInfo | undefined;
+      const maxSizeKb = field.maxFileSize !== undefined ? field.maxFileSize * 1024 : undefined;
+      const { file, errors: fieldErrors } = this.normalizeInboundFileInfo(
+        raw as Record<string, unknown>,
+        existingFile,
+        {
+          fieldKey: field.key,
+          allowedExtensions: field.allowedFileTypes,
+          maxSizeKb,
+        },
+      );
+
+      if (fieldErrors.length > 0) {
+        errors[field.key] = fieldErrors;
+        continue;
+      }
+
+      normalized[field.key] = file !== undefined ? { ...file, createdAt: now, updatedAt: now } : existingFile;
+    }
+
+    return { payload: normalized, errors };
   }
 
   /**

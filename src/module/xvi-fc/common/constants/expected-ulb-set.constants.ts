@@ -1,10 +1,7 @@
 /**
- * Design-year ULB-applicability cutoff (brain §6.5) — centralizes the date-boundary rule so no
- * feature hand-rolls its own comparison against `ulbs.dateOfConstitution`. Brain §26.1 explicitly
- * flags the *exact* cutoff rule as "not an invitation to guess" and requiring product sign-off;
- * this function ships with a stated placeholder default (end of the design year's second
- * calendar/fiscal year) so the real rule can be swapped in later as a one-line change, without
- * touching any call site.
+ * Centralizes the design-year ULB applicability cutoff.
+ * Uses a placeholder cutoff until the product-approved rule is finalized, allowing the rule
+ * to be changed in one place without updating callers.
  */
 export function resolveDesignYearApplicabilityCutoff(designYearLabel: string): Date {
   const match = /^(\d{4})-(\d{2})$/.exec(designYearLabel);

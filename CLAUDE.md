@@ -46,9 +46,15 @@ src/
 │                        # an inline error, so changing it means updating both sides together
 ├── module/xvi-fc/       # 16th Finance Commission forms (state/ULB/MoHUA roles)
 │   ├── ulb/             # annual_accounts (OCR via ANNUAL_ACCOUNT_PROCESSING_QUEUE), bank-account, unspent-balance-disclosure
-│   ├── state/           # sfc-status, elected-urban-local-bodies, devolution-formula, fc-unspent-declaration, dashboard
-│   ├── mohua/           # fc-unspent-declaration review workflow
-│   ├── side-menu/, cache/, common/ # XviFcCacheService/Interceptor, form-actors, form-status-access helpers shared across sub-features
+│   ├── state/           # sfc-status, elected-urban-local-bodies, devolution-formula, fc-unspent-declaration, gtc, dashboard,
+│   │                    # request-exemption (discretionary STATE→MoHUA exemption requests — one document per
+│   │                    # {ulb, year} (DB-enforced unique index), one data[] entry per requested formId (23/30/31);
+│   │                    # see master/form-json-config/CLAUDE.md's formId registry, formId 34)
+│   ├── mohua/           # fc-unspent-declaration and request-exemption review workflows (each a separate module,
+│   │                    # decoupled from its own STATE-side module — mirrors fc-unspent's own split)
+│   ├── side-menu/, cache/, common/ # XviFcCacheService/Interceptor, form-actors, form-status-access helpers,
+│   │                     # YearAccessService (dynamic year access/exemption for new ULBs - see below) shared
+│   │                     # across sub-features
 │   │   └── common/reminders/    # Dwell-time reminder crons (daily 9AM IST): ULB Nodal Officer nudge for
 │   │                            # Annual Accounts stuck IN_PROGRESS (every 3 days), STATE digest (HTML
 │   │                            # table + PDF attachment) for Annual Account/Bank Account forms stuck
@@ -90,11 +96,17 @@ src/
 └── views/mail/          # Handlebars email templates
 ```
 
+### xvi-fc Dynamic Year Access
+
+Replaces the old module's hardcoded `Ulb.access_20xx` boolean fields (deprecated, confirmed unused in this app, left in place only because the separate old Express app still reads them) with two admin-set facts on `Ulb` (`startYear`, `yearAccess`) plus a per-formId `formJsonConfig` collection, so a genuinely new ULB can be exempted from specific forms without a schema/code change per year.
+
+Full docs live with the code, not here: [`module/xvi-fc/common/services/CLAUDE.md`](src/module/xvi-fc/common/services/CLAUDE.md) (the mechanism — `YearAccessService`, the data model, lazy materialization) and [`master/form-json-config/CLAUDE.md`](src/master/form-json-config/CLAUDE.md) (the config side, the formId registry, and how to extend this to a new form).
+
 ### Database
 
-Two MongoDB connections:
-- `MONGO_URI` — main app database (default connection)
-- `MONGO_URI_2` — digitization database (`connectionName: 'digitization_db'`)
+One physical connection (`MONGO_URI`), two logical databases selected by name:
+- `MONGO_DB_NAME` — main app database, set as `dbName` on the default `MongooseModule.forRootAsync` connection
+- `DIGITIZATION_DB_NAME` — digitization database, exposed as connection `'digitization_db'`. `src/core/database/digitization-db.module.ts` (global) derives it from the default connection via `connection.useDb(DIGITIZATION_DB_NAME, { useCache: true })` instead of opening a second socket/connection pool — both databases must live on the same server/cluster reachable via `MONGO_URI`.
 
 When defining models that belong to the digitization DB, use `MongooseModule.forFeature([...], 'digitization_db')` and inject with `@InjectModel(Model.name, 'digitization_db')`.
 
@@ -178,8 +190,9 @@ Required variables (see `.env` for dev defaults):
 
 | Variable | Purpose |
 |---|---|
-| `MONGO_URI` | Main MongoDB connection |
-| `MONGO_URI_2` | Digitization MongoDB connection |
+| `MONGO_URI` | MongoDB server/cluster connection (single physical connection, no db name) |
+| `MONGO_DB_NAME` | Main app database name (default connection) |
+| `DIGITIZATION_DB_NAME` | Digitization database name (reuses the default connection via `useDb`, connection name `'digitization_db'`) |
 | `REDIS_URL` | Redis for BullMQ and OTP storage |
 | `JWT_SECRET` / `JWT_REFRESH_SECRET` | Token signing |
 | `AWS_BUCKET_NAME` / `AWS_DIGITIZATION_BUCKET_NAME` | S3 buckets |

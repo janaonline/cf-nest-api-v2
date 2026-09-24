@@ -1,10 +1,13 @@
 import { Paragraph } from 'docx';
 
 /**
- * The standard MoHUA addressee block every xvi-fc declaration letter opens with, followed by
- * one blank paragraph for spacing before that letter's own Subject line. Shared by
- * `elected-urban-local-bodies-docx.service.ts` and `fc-unspent-declaration-docx.service.ts` —
- * previously hand-duplicated identically in both files.
+ * The standard MoHUA addressee block, followed by one blank paragraph for spacing before that
+ * letter's own Subject line. Used by `fc-unspent-declaration-docx.service.ts`.
+ *
+ * `elected-urban-local-bodies-docx.service.ts` previously shared this util too, but its specimen
+ * letter now uses different addressee text (a distinct MoHUA format) and forks its own
+ * `buildAddressBlock()` locally instead — do not repoint EULB back at this util without checking
+ * its addressee text still matches its own specimen.
  */
 export function buildMohuaLetterAddressBlock(): Paragraph[] {
   return [

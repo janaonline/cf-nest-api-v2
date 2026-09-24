@@ -25,7 +25,7 @@ export interface DfExcludedRowEntry {
   installment1Amount?: unknown;
   installment2Amount?: unknown;
   devolutionFormula?: string;
-  errors: DfRowError[];
+  validationErrors: DfRowError[];
 }
 
 @Schema({ _id: false })
@@ -46,7 +46,7 @@ class DfExcludedRowSubdoc {
   @Prop({ type: MongooseSchema.Types.Mixed }) installment1Amount?: unknown;
   @Prop({ type: MongooseSchema.Types.Mixed }) installment2Amount?: unknown;
   @Prop({ type: String }) devolutionFormula?: string;
-  @Prop({ type: [DfRowErrorSubdocSchema], default: [] }) errors!: DfRowError[];
+  @Prop({ type: [DfRowErrorSubdocSchema], default: [] }) validationErrors!: DfRowError[];
 }
 const DfExcludedRowSubdocSchema = SchemaFactory.createForClass(DfExcludedRowSubdoc);
 

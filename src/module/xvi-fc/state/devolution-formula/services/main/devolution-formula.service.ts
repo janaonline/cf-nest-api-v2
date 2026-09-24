@@ -5,15 +5,17 @@ import type ExcelJS from 'exceljs';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { ExcelService } from 'src/services/excel/excel.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
-import { Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
-import { getEffectivePermissions } from 'src/module/auth/permissions.map';
+import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { FORM_STATUS, FormHistoryAction, getFormStatusLabel } from 'src/common/constants/form-status.constants';
 import {
   assertCanStateEditForm,
   assertCanStateFinalSubmitForm,
-  canStateEditForm,
-  canStateFinalSubmitForm,
 } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
+import { assertStateAccess, buildStateFormPermissions } from 'src/module/xvi-fc/common/utils/xvi-fc-state-access.util';
+import {
+  assertFreshFormStatus,
+  isMongoDuplicateKeyError,
+} from 'src/module/xvi-fc/common/utils/xvi-fc-concurrent-write.util';
 import { toObjectIdString } from 'src/common/utils/objectid.util';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
 import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
@@ -123,10 +125,7 @@ export class DevolutionFormulaService {
     installment: number,
     user: AuthUser,
   ): Promise<XviFcApiResponse<DfFormGetResponseData>> {
-    // assertStateAccess-style checks are reimplemented per-service across xvi-fc's state-form
-    // modules (claim-letter alone has 6+ near-identical copies) rather than shared — worth
-    // consolidating into one helper if this becomes a maintenance burden, but out of scope here.
-    this.assertStateAccess(user, stateId);
+    assertStateAccess(user, stateId);
 
     const stateOid = new Types.ObjectId(stateId);
     const yearOid = new Types.ObjectId(yearId);
@@ -145,10 +144,7 @@ export class DevolutionFormulaService {
       .exec();
 
     const currentFormStatus = doc?.currentFormStatus ?? FORM_STATUS.NOT_STARTED;
-    // buildFormPermissions duplicates logic that likely exists in sibling state-form modules
-    // (elected-urban-local-bodies, sfc-status) — worth checking for a shared helper before this
-    // diverges further, but not resolved here.
-    const permissions = this.buildFormPermissions(user, stateId, currentFormStatus);
+    const permissions = buildStateFormPermissions(user, stateId, currentFormStatus);
     const { actors, stateName } = this.xvifcFormActorsService.buildActorsAndStateName(
       doc as unknown as Parameters<typeof this.xvifcFormActorsService.buildActorsAndStateName>[0],
     );
@@ -221,7 +217,7 @@ export class DevolutionFormulaService {
     ip: string = '',
     userAgent: string = '',
   ): Promise<XviFcApiResponse> {
-    this.assertStateAccess(user, dto.stateId);
+    assertStateAccess(user, dto.stateId);
 
     const stateOid = new Types.ObjectId(dto.stateId);
     const yearOid = new Types.ObjectId(dto.yearId);
@@ -288,31 +284,45 @@ export class DevolutionFormulaService {
       update['checkboxConfirmation'] = validation.sanitizedPayload['checkboxConfirmation'];
     }
 
-    const result = await this.model
-      .findOneAndUpdate(
-        { state: stateOid, year: yearOid, installment: dto.installment },
-        {
-          $set: update,
-          $setOnInsert: { createdBy: userOid },
-        },
-        { upsert: true, new: true },
-      )
-      .lean()
-      .exec();
+    const filter = { state: stateOid, year: yearOid, installment: dto.installment };
 
-    await this.recordFormHistory({
-      formId: result._id,
-      state: stateOid,
-      year: yearOid,
-      action: FormHistoryAction.CREATE_DRAFT,
-      fromStatus,
-      toStatus: FORM_STATUS.IN_PROGRESS,
-      changedBy: userOid,
-      ip,
-      userAgent,
-    });
+    try {
+      const result = await this.model
+        .findOneAndUpdate(
+          { ...filter, currentFormStatus: fromStatus },
+          {
+            $set: update,
+            $setOnInsert: { createdBy: userOid },
+          },
+          { upsert: true, new: true },
+        )
+        .lean()
+        .exec();
 
-    return xviFcSuccess('ULB-wise Allocation draft saved.', { _id: String(result._id) });
+      await this.recordFormHistory({
+        formId: result._id,
+        state: stateOid,
+        year: yearOid,
+        action: FormHistoryAction.CREATE_DRAFT,
+        fromStatus,
+        toStatus: FORM_STATUS.IN_PROGRESS,
+        changedBy: userOid,
+        ip,
+        userAgent,
+      });
+
+      return xviFcSuccess('ULB-wise Allocation draft saved.', { _id: String(result._id) });
+    } catch (error) {
+      // Status-guarded filter matched nothing and the upsert tried (and failed) to insert a
+      // duplicate - status changed since it was read (e.g. a concurrent final submit).
+      if (!isMongoDuplicateKeyError(error)) throw error;
+      await assertFreshFormStatus(
+        async () =>
+          (await this.model.findOne(filter, { currentFormStatus: 1 }).lean<{ currentFormStatus?: number }>().exec())
+            ?.currentFormStatus,
+        assertCanStateEditForm,
+      );
+    }
   }
 
   async finalSubmit(
@@ -321,16 +331,15 @@ export class DevolutionFormulaService {
     ip: string = '',
     userAgent: string = '',
   ): Promise<XviFcApiResponse> {
-    this.assertStateAccess(user, dto.stateId);
+    assertStateAccess(user, dto.stateId);
 
     const stateOid = new Types.ObjectId(dto.stateId);
     const yearOid = new Types.ObjectId(dto.yearId);
     const userOid = new Types.ObjectId(user._id);
 
-    const form = await this.model
-      .findOne({ state: stateOid, year: yearOid, installment: dto.installment })
-      .lean<DfFormLeanDoc>()
-      .exec();
+    const filter = { state: stateOid, year: yearOid, installment: dto.installment };
+
+    const form = await this.model.findOne(filter).lean<DfFormLeanDoc>().exec();
 
     if (!form) {
       throwXviFcValidationError({
@@ -429,7 +438,7 @@ export class DevolutionFormulaService {
           form: form._id as Types.ObjectId,
           datasetVersion: activeVersion,
           isActive: true,
-          'errors.code': 'identityModified',
+          'validationErrors.code': 'identityModified',
         })
         .select('_id')
         .lean()
@@ -486,9 +495,19 @@ export class DevolutionFormulaService {
     // Mongoose's FileInfo `timestamps` option doesn't stamp the stored subdocument.
     if (normalizedFile !== undefined) finalSubmitSet['excelFile'] = normalizedFile;
 
-    await this.model
-      .findOneAndUpdate({ state: stateOid, year: yearOid, installment: dto.installment }, { $set: finalSubmitSet })
+    const updated = await this.model
+      .findOneAndUpdate({ ...filter, currentFormStatus: fromStatus }, { $set: finalSubmitSet })
       .exec();
+
+    // Filter matched nothing - status changed since it was read (e.g. a second concurrent submit).
+    if (!updated) {
+      await assertFreshFormStatus(
+        async () =>
+          (await this.model.findOne(filter, { currentFormStatus: 1 }).lean<{ currentFormStatus?: number }>().exec())
+            ?.currentFormStatus,
+        assertCanStateFinalSubmitForm,
+      );
+    }
 
     // Snapshot rows now — Excel re-upload hard-deletes the previous version's rows (see
     // docs/adr/0001-dataset-versioning.md), so this is the only surviving record of what was submitted.
@@ -875,24 +894,6 @@ export class DevolutionFormulaService {
         }),
       },
     ];
-  }
-
-  private assertStateAccess(user: AuthUser, stateId: string): void {
-    if (user.scope === Scope.ADMIN) return;
-    if (user.scope === Scope.STATE) {
-      const userStateId = toObjectIdString(user.state);
-      if (userStateId && userStateId === stateId) return;
-    }
-    throw new ForbiddenException("You do not have access to this state's data.");
-  }
-
-  private buildFormPermissions(user: AuthUser, _stateId: string, status: number): DfFormPermissions {
-    const perms = new Set(getEffectivePermissions(user));
-    return {
-      canView: perms.has(Permission.VIEW_STATE_FORMS),
-      canEdit: perms.has(Permission.EDIT_STATE_FORMS) && canStateEditForm(status),
-      canFinalSubmit: perms.has(Permission.FINAL_SUBMIT_STATE_FORMS) && canStateFinalSubmitForm(status),
-    };
   }
 
   private buildValidationSummary(doc: DfFormLeanDoc | null, totalMoHUAAllocation: number) {

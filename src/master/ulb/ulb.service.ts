@@ -9,17 +9,29 @@ import type { IAuthUser } from 'src/common/interfaces/auth-user.interface';
 import { EmailDomainValidationService } from 'src/core/email-domain-validation/email-domain-validation.service';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { EmailQueueService } from 'src/core/queue/email-queue/email-queue.service';
-import { PORTAL_INVITE_LOGIN_TYPE, buildPortalAuthUrls } from 'src/core/utils/portal-urls.util';
+import { buildPortalAuthUrls } from 'src/core/utils/portal-urls.util';
 import { Role } from 'src/module/auth/enum/role.enum';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
 import type { XviFcValidationErrorMap } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import type { FieldConfig, SectionLayout } from 'src/module/xvi-fc/common/types/field-config.type';
 import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
 import { FormJsonService } from 'src/master/form-json/form-json.service';
+import { FormJsonConfigService } from 'src/master/form-json-config/form-json-config.service';
 import type { CommonFile, FileInfo } from 'src/schemas/common/file.schema';
 import { State, StateDocument } from 'src/schemas/state.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { User, UserDocument } from 'src/schemas/user/user.schema';
+import { Year } from 'src/schemas/year.schema';
+import { YearAccessService } from 'src/module/xvi-fc/common/services/year-access.service';
+import { formatYearLabel } from 'src/module/xvi-fc/common/utils/design-year-label.util';
+import { SlbForm, SlbFormDocument, SLB_FORM_ID, SLB_FORM_TYPE } from 'src/schemas/xvi-fc/ulb/slb-form.schema';
+import { XviFcDur, XviFcDurDocument } from 'src/schemas/xvi-fc/dur.schema';
+import { DUR_FORM_ID } from 'src/module/xvi-fc/ulb/dur/constants/dur-form.constants';
+import {
+  AnnualAccountFormStatus,
+  XviFcAnnualAccount,
+  XviFcAnnualAccountDocument,
+} from 'src/schemas/xvi-fc/annual-account.schema';
 import {
   DEFAULT_ULB_EDIT_SECTIONS,
   DEFAULT_ULB_FIELDS,
@@ -34,8 +46,15 @@ import { CreateUlbDto } from './dto/create-ulb.dto';
 import { QueryUlbDto } from './dto/query-ulb.dto';
 import { RejectUlbDto } from './dto/reject-ulb.dto';
 import { UpdateUlbDto } from './dto/update-ulb.dto';
+import { UpdateUlbYearAccessDto } from './dto/update-ulb-year-access.dto';
 
 const OBJECT_ID_FIELDS = new Set(['state', 'ulbType', 'UA']);
+
+// Annual Accounts' own two exemptable formIds - see annual_accounts.service.ts's own
+// SECTION_FORM_IDS (private to that file; kept as a small local copy here rather than exported,
+// consistent with this codebase's existing convention for small formId lookup tables).
+const AFS_FORM_ID = 30;
+const PFS_FORM_ID = 31;
 
 @Injectable()
 export class UlbService {
@@ -45,7 +64,13 @@ export class UlbService {
     @InjectModel(Ulb.name) private readonly ulbModel: Model<UlbDocument>,
     @InjectModel(State.name) private readonly stateModel: Model<StateDocument>,
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
+    @InjectModel(Year.name) private readonly yearModel: Model<Year>,
+    @InjectModel(SlbForm.name) private readonly slbModel: Model<SlbFormDocument>,
+    @InjectModel(XviFcDur.name) private readonly durModel: Model<XviFcDurDocument>,
+    @InjectModel(XviFcAnnualAccount.name) private readonly annualAccountModel: Model<XviFcAnnualAccountDocument>,
     private readonly formJsonService: FormJsonService,
+    private readonly formJsonConfigService: FormJsonConfigService,
+    private readonly yearAccessService: YearAccessService,
     private readonly dynamicFormValidation: DynamicFormValidationService,
     private readonly emailDomainValidation: EmailDomainValidationService,
     private readonly emailQueueService: EmailQueueService,
@@ -722,6 +747,156 @@ export class UlbService {
     return this.withSignedGazetteFile(this.withApprovalDefaults(ulb));
   }
 
+  // ─── xvi-fc dynamic year access (ADMIN) ────────────────────────────────────
+
+  /** Current startYear/yearAccess for a ULB, plus the small, currently-known exemptable-form list. */
+  async getYearAccess(id: string) {
+    const ulb = await this.findOne(id);
+    const exemptableForms = await this.formJsonConfigService.findAllExemptable();
+    return {
+      startYear: ulb.startYear ?? null,
+      yearAccess: ulb.yearAccess ?? {},
+      exemptableForms,
+    };
+  }
+
+  /**
+   * Patches startYear and/or the seed year's disabledFormIds.
+   * disabledFormIds are validated against the currently exemptable forms.
+   * Other years are derived lazily by YearAccessService and never persisted here - EXCEPT that
+   * changing startYear itself invalidates every already-materialized yearAccess entry (see below).
+   * Every entry's computeEntry result depends on startYear, so once it changes, entries frozen
+   * under the old value would otherwise silently go stale forever (getEntry/peekEntry never
+   * recompute an existing entry - see common/services/CLAUDE.md's invariants).
+   */
+  async updateYearAccess(id: string, dto: UpdateUlbYearAccessDto): Promise<Ulb & { isExistingUser: boolean }> {
+    if (!Types.ObjectId.isValid(id)) throw new BadRequestException('Invalid ULB id');
+    const existing = await this.ulbModel.findById(id).lean<Ulb & { _id: Types.ObjectId }>();
+    if (!existing) throw new NotFoundException('ULB not found');
+
+    const disabledFormIds = dto.disabledFormIds ?? [];
+    if (disabledFormIds.length > 0) {
+      const exemptable = await this.formJsonConfigService.findAllExemptable();
+      const exemptableFormIds = new Set(exemptable.map((c) => c.formId));
+      const invalid = disabledFormIds.filter((formId) => !exemptableFormIds.has(formId));
+      if (invalid.length > 0) {
+        throw new BadRequestException(`These formIds do not support the exemption mechanism: ${invalid.join(', ')}`);
+      }
+    }
+
+    const effectiveStartYear = dto.startYear === undefined ? existing.startYear : dto.startYear;
+    if (dto.disabledFormIds !== undefined && effectiveStartYear == null) {
+      throw new BadRequestException('startYear must be set before exempting any forms.');
+    }
+
+    if (dto.startYear !== undefined) {
+      const startYearChanged = dto.startYear !== existing.startYear;
+
+      // Deliberately wipe the whole map: every value depends on startYear, so partial resets risk
+      // stale entries. Wipe-and-recompute-lazily is cheap and correct for this low-volume admin path.
+      // A single findByIdAndUpdate atomically applies startYear and the wipe together.
+      await this.ulbModel.findByIdAndUpdate(id, {
+        $set: startYearChanged ? { startYear: dto.startYear, yearAccess: {} } : { startYear: dto.startYear },
+      });
+    }
+
+    if (dto.disabledFormIds !== undefined && effectiveStartYear != null) {
+      const seedLabel = formatYearLabel(effectiveStartYear);
+      const seedYear = await this.yearModel
+        .findOne({ year: seedLabel }, { _id: 1, year: 1 })
+        .lean<{ _id: Types.ObjectId; year: string }>();
+      if (!seedYear) throw new BadRequestException(`No Year document exists for "${seedLabel}" - create it first.`);
+
+      await this.assertNoRealSubmissionsForExemptedForms(existing._id, seedYear._id, seedLabel, disabledFormIds);
+
+      await this.yearAccessService.setSeedExemptions(
+        { _id: existing._id, startYear: effectiveStartYear },
+        seedYear,
+        disabledFormIds,
+      );
+    }
+
+    return this.findOne(id);
+  }
+
+  /**
+   * Prevents exempting a form that the ULB has already submitted.
+   * Exemption stubs are allowed; re-exempting an already-exempt year remains a no-op.
+   * One formId branch per exemptable form — SLB, DUR, and Annual Accounts (AFS/PFS). Add a new
+   * branch here whenever another form is wired into the exemption mechanism (no generic
+   * formId->Model registry exists in this codebase; see form-json-config/CLAUDE.md).
+   */
+  private async assertNoRealSubmissionsForExemptedForms(
+    ulbId: Types.ObjectId,
+    seedYearId: Types.ObjectId,
+    seedLabel: string,
+    disabledFormIds: number[],
+  ): Promise<void> {
+    if (disabledFormIds.includes(SLB_FORM_ID)) {
+      const hasRealSlbSubmission = await this.slbModel.exists({
+        ulb: ulbId,
+        year: seedYearId,
+        formType: SLB_FORM_TYPE,
+        isDeleted: false,
+        isExemptionStub: { $ne: true },
+      });
+      if (hasRealSlbSubmission) {
+        throw new BadRequestException(
+          `This ULB already has SLB data submitted for ${seedLabel} - exemption cannot be applied retroactively.`,
+        );
+      }
+    }
+
+    if (disabledFormIds.includes(DUR_FORM_ID)) {
+      const hasRealDurSubmission = await this.durModel.exists({
+        ulb: ulbId,
+        design_year: seedYearId,
+        isExemptionStub: { $ne: true },
+      });
+      if (hasRealDurSubmission) {
+        throw new BadRequestException(
+          `This ULB already has DUR data submitted for ${seedLabel} - exemption cannot be applied retroactively.`,
+        );
+      }
+    }
+
+    // Annual Accounts: AFS (formId 30, 'audited') and PFS (formId 31, 'unaudited') are
+    // independent per-section documents - check each one only against its own disabledFormIds
+    // entry, same section independence AnnualAccountsService itself maintains throughout.
+    if (disabledFormIds.includes(AFS_FORM_ID)) {
+      // findOrInitialize creates the 'audited' anchor when either section is touched,
+      // even if only 'unaudited' was uploaded, leaving a NOT_STARTED placeholder.
+      // Since this isn't real AFS progress, it must not block the AFS exemption.
+      // See AnnualAccountsService.materializeExemptionStubIfNeeded's doc-comment.
+      const hasRealAuditedSubmission = await this.annualAccountModel.exists({
+        ulb: ulbId,
+        design_year: seedYearId,
+        sectionType: 'audited',
+        form_status: { $ne: AnnualAccountFormStatus.NOT_STARTED },
+        isExemptionStub: { $ne: true },
+      });
+      if (hasRealAuditedSubmission) {
+        throw new BadRequestException(
+          `This ULB already has Audited Financial Statement data submitted for ${seedLabel} - exemption cannot be applied retroactively.`,
+        );
+      }
+    }
+
+    if (disabledFormIds.includes(PFS_FORM_ID)) {
+      const hasRealUnauditedSubmission = await this.annualAccountModel.exists({
+        ulb: ulbId,
+        design_year: seedYearId,
+        sectionType: 'unaudited',
+        isExemptionStub: { $ne: true },
+      });
+      if (hasRealUnauditedSubmission) {
+        throw new BadRequestException(
+          `This ULB already has Provisional Financial Statement data submitted for ${seedLabel} - exemption cannot be applied retroactively.`,
+        );
+      }
+    }
+  }
+
   /**
    * Updates a ULB. ADMIN may edit any ULB at any time. A STATE user may only edit their own
    * state's ULB, and only while it's REJECTED — this is the "fix and resubmit" path for a
@@ -922,12 +1097,13 @@ export class UlbService {
 
   /**
    * Lists ULB types for populating a select. `ulbtypes` has no Mongoose model in this codebase
-   * (see UsersService.getProfileContacts) — queried directly via the raw collection.
+   * (see UsersService.getProfileContacts) — queried directly via the raw collection. Excludes
+   * types ineligible for XVI-FC (e.g. Cantonment Board, `ineligibleForGrantCycles: ['XVIFC']`)
    */
   async findTypes(): Promise<{ _id: Types.ObjectId; name: string }[]> {
     return this.ulbModel.db
       .collection('ulbtypes')
-      .find({ isActive: true }, { projection: { name: 1 } })
+      .find({ isActive: true, ineligibleForGrantCycles: { $ne: 'XVIFC' } }, { projection: { name: 1 } })
       .sort({ name: 1 })
       .toArray() as unknown as Promise<{ _id: Types.ObjectId; name: string }[]>;
   }

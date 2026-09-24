@@ -1,13 +1,17 @@
 import { ForbiddenException } from '@nestjs/common';
 import { FORM_STATUS, getFormStatusLabel } from 'src/common/constants/form-status.constants';
 
-/** Statuses in which a ULB user may save or edit a ULB form. */
+/** Statuses in which a ULB user may save or edit a ULB form.
+ * Also exported as a plain array (ULB_EDITABLE_STATUS_IDS) for use cases that can't call canUlbEditForm, such as MongoDB aggregation or cross-collection status checks.
+ */
 const ULB_EDITABLE_STATUSES: Set<number> = new Set([
   FORM_STATUS.NOT_STARTED,
   FORM_STATUS.IN_PROGRESS,
   FORM_STATUS.RETURNED_BY_STATE,
   FORM_STATUS.RETURNED_BY_MOHUA,
 ]);
+
+export const ULB_EDITABLE_STATUS_IDS: readonly number[] = [...ULB_EDITABLE_STATUSES];
 
 /** Statuses in which a STATE user may save, edit, or final-submit a state form. */
 const STATE_EDITABLE_STATUSES: Set<number> = new Set([

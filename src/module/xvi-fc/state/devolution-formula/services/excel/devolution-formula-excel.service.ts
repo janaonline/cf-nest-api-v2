@@ -1,10 +1,4 @@
-import {
-  ForbiddenException,
-  Injectable,
-  InternalServerErrorException,
-  Logger,
-  NotFoundException,
-} from '@nestjs/common';
+import { Injectable, InternalServerErrorException, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { MongoServerError } from 'mongodb';
 import { AnyBulkWriteOperation, Model, Types } from 'mongoose';
@@ -14,10 +8,9 @@ import { S3Service } from 'src/core/s3/s3.service';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { ExcelColumnValidation, ExcelService } from 'src/services/excel/excel.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
-import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { FORM_STATUS, FormHistoryAction } from 'src/common/constants/form-status.constants';
 import { assertCanStateEditForm } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
-import { toObjectIdString } from 'src/common/utils/objectid.util';
+import { assertStateAccess } from 'src/module/xvi-fc/common/utils/xvi-fc-state-access.util';
 import {
   FileInfoNormalizerService,
   type HydratedFileInfoResponse,
@@ -186,7 +179,7 @@ export class DevolutionFormulaExcelService {
     ip: string = '',
     userAgent: string = '',
   ): Promise<XviFcApiResponse<DfValidateExcelResponseData>> {
-    this.assertStateAccess(user, dto.stateId);
+    assertStateAccess(user, dto.stateId);
 
     const stateOid = new Types.ObjectId(dto.stateId);
     const yearOid = new Types.ObjectId(dto.yearId);
@@ -386,7 +379,7 @@ export class DevolutionFormulaExcelService {
         installment1Amount: r.installment1Amount,
         installment2Amount: r.installment2Amount,
         devolutionFormula: r.devolutionFormula,
-        errors: r.rowErrors,
+        validationErrors: r.rowErrors,
       }));
 
     // Atomic version allocation + safe dataset replacement, all inside one Mongo transaction.
@@ -460,7 +453,7 @@ export class DevolutionFormulaExcelService {
           installment2Amount: Number(r.installment2Amount) || 0,
           devolutionFormula: r.devolutionFormula,
           validationStatus: r.validationRowStatus,
-          errors: r.rowErrors,
+          validationErrors: r.rowErrors,
           rawExcelData: r.validationRowStatus === 'INVALID' ? r.rawExcelData : undefined,
           isActive: true,
           createdBy: userOid,
@@ -591,7 +584,7 @@ export class DevolutionFormulaExcelService {
     installment: DfInstallment,
     user: AuthUser,
   ): Promise<XviFcApiResponse<DfRevalidateExcelResponseData>> {
-    this.assertStateAccess(user, stateId);
+    assertStateAccess(user, stateId);
 
     const stateOid = new Types.ObjectId(stateId);
     const yearOid = new Types.ObjectId(yearId);
@@ -632,7 +625,7 @@ export class DevolutionFormulaExcelService {
       const matchedUlbIds = new Set<string>();
       const rowUpdates: Array<{
         id: Types.ObjectId;
-        errors: DfRowError[];
+        validationErrors: DfRowError[];
         validationStatus: 'VALID' | 'INVALID';
         totalGrantAllocation: number;
       }> = [];
@@ -678,7 +671,7 @@ export class DevolutionFormulaExcelService {
 
         rowUpdates.push({
           id: row._id,
-          errors: rowErrors,
+          validationErrors: rowErrors,
           validationStatus: rowStatus,
           totalGrantAllocation: row.totalGrantAllocation,
         });
@@ -687,7 +680,9 @@ export class DevolutionFormulaExcelService {
       const bulkOps = rowUpdates.map((r) => ({
         updateOne: {
           filter: { _id: r.id },
-          update: { $set: { errors: r.errors, validationStatus: r.validationStatus, updatedBy: userOid } },
+          update: {
+            $set: { validationErrors: r.validationErrors, validationStatus: r.validationStatus, updatedBy: userOid },
+          },
         },
       })) as unknown as AnyBulkWriteOperation<DevolutionFormulaRowDocument>[];
       await this.rowModel.bulkWrite(bulkOps, { ordered: false });
@@ -731,7 +726,7 @@ export class DevolutionFormulaExcelService {
       // filtering first (to only the invalid rows) would shift `i` and misattribute rowNumber to
       // the wrong row for every invalid row after the first gap of valid rows.
       const rowErrors: DfRowValidationError[] = rowUpdates.flatMap((r, i) =>
-        r.errors.map((e) => ({
+        r.validationErrors.map((e) => ({
           rowNumber: activeRows[i]?.rowNumber ?? i + 1,
           field: e.field,
           code: e.code,
@@ -799,7 +794,7 @@ export class DevolutionFormulaExcelService {
     installment: DfInstallment,
     user: AuthUser,
   ): Promise<ExcelJS.Buffer> {
-    this.assertStateAccess(user, stateId);
+    assertStateAccess(user, stateId);
 
     const stateOid = new Types.ObjectId(stateId);
     const yearOid = new Types.ObjectId(yearId);
@@ -953,15 +948,6 @@ export class DevolutionFormulaExcelService {
         },
       },
     ];
-  }
-
-  private assertStateAccess(user: AuthUser, stateId: string): void {
-    if (user.scope === Scope.ADMIN) return;
-    if (user.scope === Scope.STATE) {
-      const userStateId = toObjectIdString(user.state);
-      if (userStateId && userStateId === stateId) return;
-    }
-    throw new ForbiddenException("You do not have access to this state's data.");
   }
 
   private buildColIndexMap(headerRow: string[]): Map<string, number> {

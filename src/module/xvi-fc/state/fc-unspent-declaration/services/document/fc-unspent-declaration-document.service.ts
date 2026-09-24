@@ -3,6 +3,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { FORM_STATUS, getFormStatusLabel } from 'src/common/constants/form-status.constants';
+import { assertStateAccess } from 'src/module/xvi-fc/common/utils/xvi-fc-state-access.util';
 import { YearIdToLabel } from 'src/core/constants/years';
 import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
 import type { XvifcActorSourceDocument } from 'src/module/xvi-fc/common/types/xvifc-form-actors.type';
@@ -34,10 +35,10 @@ type FcUnspentDeclarationSourceDoc = XvifcActorSourceDocument & {
  * FcUnspentDeclarationDocxService's `GET :stateId/:yearId/fc-unspent-declaration-document` route.
  * Same document/docx-service split as elected-urban-local-bodies' equivalent feature.
  *
- * Gating reuses FcUnspentDeclarationService's `assertStateAccess`/`resolveDevolutionDependency`/
- * `buildFormPermissions` as-is (those are the same three the GET/save-draft/final-submit paths
- * already share) rather than re-deriving the Devolution dependency logic a second time — see that
- * service's own doc comment on `resolveDevolutionDependency`.
+ * Gating uses the shared `assertStateAccess` util plus FcUnspentDeclarationService's own
+ * `resolveDevolutionDependency`/`buildFormPermissions` (the same the GET/save-draft/final-submit
+ * paths already share) rather than re-deriving the Devolution dependency logic a second time - see
+ * that service's own doc comment on `resolveDevolutionDependency`.
  */
 @Injectable()
 export class FcUnspentDeclarationDocumentService {
@@ -50,7 +51,7 @@ export class FcUnspentDeclarationDocumentService {
   ) {}
 
   async getDocumentData(stateId: string, yearId: string, user: AuthUser): Promise<FcUnspentDeclarationDocumentData> {
-    this.mainService.assertStateAccess(user, stateId);
+    assertStateAccess(user, stateId);
 
     const designYearLabel = YearIdToLabel[yearId];
     if (!designYearLabel) throw new NotFoundException(`Design year not found for yearId: ${yearId}`);
