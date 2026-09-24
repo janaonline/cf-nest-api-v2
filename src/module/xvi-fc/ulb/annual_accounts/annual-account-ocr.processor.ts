@@ -64,9 +64,15 @@ export class AnnualAccountOcrProcessor extends WorkerHost {
       { $set: { 'queue.bullJobId': String(job.id), 'queue.status': 'active', startedAt: new Date() } },
     );
 
-    const ulb = await this.ulbModel.findById(new Types.ObjectId(ulbId)).select('name slug keywords').lean().exec();
+    const ulb = await this.ulbModel
+      .findById(new Types.ObjectId(ulbId))
+      .select('name slug keywords state')
+      .populate<{ state: { name: string } | null }>('state', 'name')
+      .lean()
+      .exec();
     if (!ulb) throw new Error(`ULB not found: ${ulbId}`);
     const ulbName = `${ulb.name}|${ulb.slug}|${ulb.keywords ?? ''}`;
+    const stateName = ulb.state?.name ?? '';
 
     console.log(`[OCR Processor] ⬇ Downloading PDF — key=${s3Key}`);
     const pdfBuffer = await this.s3Service.getPdfBufferFromS3(s3Key);
@@ -79,6 +85,7 @@ export class AnnualAccountOcrProcessor extends WorkerHost {
       uploadId,
       financialYear,
       auditType,
+      state: stateName,
     };
 
     console.log(`[OCR Processor] ⬆ Submitting to OCR API — docType=${expectedDocType}`);
