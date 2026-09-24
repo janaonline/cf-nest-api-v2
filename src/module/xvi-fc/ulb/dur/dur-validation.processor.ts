@@ -68,7 +68,7 @@ export class DurValidationProcessor extends WorkerHost {
       const submittedAt = new Date();
 
       await this.durModel.updateOne(
-        { _id: new Types.ObjectId(durId), 'documents.docId': docId },
+        { _id: new Types.ObjectId(durId), documents: { $elemMatch: { docId, 'currentUpload.uploadId': uploadId } } },
         {
           $set: {
             'documents.$.currentUpload.ocrInfo.jobId': jobId,
@@ -88,7 +88,7 @@ export class DurValidationProcessor extends WorkerHost {
 
         if (statusResp.progress_step) {
           await this.durModel.updateOne(
-            { _id: new Types.ObjectId(durId), 'documents.docId': docId },
+            { _id: new Types.ObjectId(durId), documents: { $elemMatch: { docId, 'currentUpload.uploadId': uploadId } } },
             {
               $set: {
                 'documents.$.currentUpload.ocrInfo.status': statusNorm,
@@ -100,13 +100,13 @@ export class DurValidationProcessor extends WorkerHost {
 
         if (statusNorm === 'completed') {
           const result = await this.durApi.getJobResult(jobId);
-          await this.resultWriter.writeCompleted(durId, docId, result);
+          await this.resultWriter.writeCompleted(durId, docId, uploadId, result);
           settled = true;
           break;
         }
 
         if (statusNorm === 'failed') {
-          await this.resultWriter.writeFailed(durId, docId, statusResp.error_message ?? statusResp.message);
+          await this.resultWriter.writeFailed(durId, docId, uploadId, statusResp.error_message ?? statusResp.message);
           settled = true;
           break;
         }
@@ -119,7 +119,7 @@ export class DurValidationProcessor extends WorkerHost {
       }
     } catch (err) {
       this.logger.error(`[DUR Processor] validation call failed — uploadId=${uploadId}`, err);
-      await this.resultWriter.writeFailed(durId, docId, this.describeError(err));
+      await this.resultWriter.writeFailed(durId, docId, uploadId, this.describeError(err));
     }
   }
 

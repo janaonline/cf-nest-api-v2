@@ -41,7 +41,7 @@ describe('DurStatusSyncService', () => {
             {
               docId: 'tiedGrant',
               processingStatus: 'PROCESSING',
-              currentUpload: { ocrInfo: { jobId: 'dur-job-1', submittedAt: staleSubmittedAt } },
+              currentUpload: { uploadId: 'upload-1', ocrInfo: { jobId: 'dur-job-1', submittedAt: staleSubmittedAt } },
             },
             { docId: 'untiedGrant', processingStatus: 'NOT_STARTED', currentUpload: null },
           ],
@@ -54,7 +54,12 @@ describe('DurStatusSyncService', () => {
     await service.syncPendingJobs();
 
     expect(durApi.getJobStatus).toHaveBeenCalledWith('dur-job-1');
-    expect(resultWriter.writeCompleted).toHaveBeenCalledWith(durId.toString(), 'tiedGrant', expect.objectContaining({ job_id: 'dur-job-1' }));
+    expect(resultWriter.writeCompleted).toHaveBeenCalledWith(
+      durId.toString(),
+      'tiedGrant',
+      'upload-1',
+      expect.objectContaining({ job_id: 'dur-job-1' }),
+    );
   });
 
   it('writes FAILED when the re-checked job comes back failed', async () => {
@@ -66,7 +71,7 @@ describe('DurStatusSyncService', () => {
             {
               docId: 'tiedGrant',
               processingStatus: 'PROCESSING',
-              currentUpload: { ocrInfo: { jobId: 'dur-job-1', submittedAt: staleSubmittedAt } },
+              currentUpload: { uploadId: 'upload-1', ocrInfo: { jobId: 'dur-job-1', submittedAt: staleSubmittedAt } },
             },
           ],
         },
@@ -76,7 +81,7 @@ describe('DurStatusSyncService', () => {
 
     await service.syncPendingJobs();
 
-    expect(resultWriter.writeFailed).toHaveBeenCalledWith(durId.toString(), 'tiedGrant', 'timed out');
+    expect(resultWriter.writeFailed).toHaveBeenCalledWith(durId.toString(), 'tiedGrant', 'upload-1', 'timed out');
   });
 
   it('marks the document FAILED when the validation job is gone (404) on the processing server', async () => {
@@ -88,7 +93,7 @@ describe('DurStatusSyncService', () => {
             {
               docId: 'tiedGrant',
               processingStatus: 'PROCESSING',
-              currentUpload: { ocrInfo: { jobId: 'dur-job-1', submittedAt: staleSubmittedAt } },
+              currentUpload: { uploadId: 'upload-1', ocrInfo: { jobId: 'dur-job-1', submittedAt: staleSubmittedAt } },
             },
           ],
         },
@@ -101,6 +106,7 @@ describe('DurStatusSyncService', () => {
     expect(resultWriter.writeFailed).toHaveBeenCalledWith(
       durId.toString(),
       'tiedGrant',
+      'upload-1',
       'Validation job not found on processing server (404)',
     );
   });
@@ -114,7 +120,7 @@ describe('DurStatusSyncService', () => {
             {
               docId: 'tiedGrant',
               processingStatus: 'PROCESSING',
-              currentUpload: { ocrInfo: { jobId: 'dur-job-1', submittedAt: staleSubmittedAt } },
+              currentUpload: { uploadId: 'upload-1', ocrInfo: { jobId: 'dur-job-1', submittedAt: staleSubmittedAt } },
             },
           ],
         },
@@ -138,7 +144,7 @@ describe('DurStatusSyncService', () => {
             {
               docId: 'tiedGrant',
               processingStatus: 'PROCESSING',
-              currentUpload: { ocrInfo: { jobId: 'dur-job-1', submittedAt: staleSubmittedAt } },
+              currentUpload: { uploadId: 'upload-1', ocrInfo: { jobId: 'dur-job-1', submittedAt: staleSubmittedAt } },
             },
           ],
         },
