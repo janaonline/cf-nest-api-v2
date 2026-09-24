@@ -1,11 +1,11 @@
-﻿import { ForbiddenException, Injectable, InternalServerErrorException, NotFoundException } from '@nestjs/common';
+﻿import { Injectable, InternalServerErrorException, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model, Types } from 'mongoose';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
-import { Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
+import { Permission } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
-import { toObjectIdString } from 'src/common/utils/objectid.util';
+import { assertStateAccess, hasStateAccess } from 'src/module/xvi-fc/common/utils/xvi-fc-state-access.util';
 import { escapeRegex } from 'src/common/utils/regex.util';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import {
@@ -122,7 +122,7 @@ export class EulbPostSubmissionUpdateService {
     yearId: string,
     user: AuthUser,
   ): Promise<XviFcApiResponse<EulbPostSubmissionUpdateMetaData>> {
-    this.assertStateAccess(user, stateId);
+    assertStateAccess(user, stateId);
 
     const formDoc = await this.findForm(stateId, yearId);
     const formStatus = formDoc?.currentFormStatus ?? FORM_STATUS.NOT_STARTED;
@@ -177,7 +177,7 @@ export class EulbPostSubmissionUpdateService {
     query: GetEulbPostSubmissionUpdateRowsQueryDto,
     user: AuthUser,
   ): Promise<XviFcApiResponse<EulbPostSubmissionUpdateRowsData>> {
-    this.assertStateAccess(user, stateId);
+    assertStateAccess(user, stateId);
 
     const formDoc = await this.findForm(stateId, yearId);
     if (!formDoc) {
@@ -227,7 +227,7 @@ export class EulbPostSubmissionUpdateService {
         r.dateOfExpiry instanceof Date ? r.dateOfExpiry.toISOString().split('T')[0] : (r.dateOfExpiry ?? null),
       remarks: r.remarks ?? null,
       validationStatus: r.validationStatus,
-      errors: (r.errors ?? []).map((e) => ({
+      validationErrors: (r.validationErrors ?? []).map((e) => ({
         field: e.field,
         code: e.code,
         message: e.message,
@@ -263,7 +263,7 @@ export class EulbPostSubmissionUpdateService {
     dto: SubmitEulbPostSubmissionUpdateDto,
     user: AuthUser,
   ): Promise<XviFcApiResponse<EulbPostSubmissionUpdateSubmitData>> {
-    this.assertStateAccess(user, stateId);
+    assertStateAccess(user, stateId);
 
     // ─── Document validation ───────────────────────────────────────────────────
     // Backend-generated documents never flow through this path — `document` always
@@ -361,7 +361,7 @@ export class EulbPostSubmissionUpdateService {
           rowNumber: dbRow.rowNumber,
           censusCode: dbRow.censusCode ?? null,
           ulbName: dbRow.ulbName,
-          errors,
+          validationErrors: errors,
         });
         for (const e of errors) {
           const key = e.field ?? '_form';
@@ -460,7 +460,7 @@ export class EulbPostSubmissionUpdateService {
                   lastUpdatedSource: 'POST_SUBMISSION_UPDATE',
                   lastUpdateBatchId: batchId,
                   validationStatus: 'VALID',
-                  errors: [],
+                  validationErrors: [],
                   updatedBy: userOid,
                 },
                 $push: { updateHistory: historyEntry },
@@ -552,7 +552,7 @@ export class EulbPostSubmissionUpdateService {
     dto: ValidateEulbPostSubmissionUpdateDto,
     user: AuthUser,
   ): Promise<XviFcApiResponse<EulbPostSubmissionUpdateValidateData>> {
-    this.assertStateAccess(user, stateId);
+    assertStateAccess(user, stateId);
 
     const formDoc = await this.findForm(stateId, yearId);
     if (!formDoc) {
@@ -620,7 +620,7 @@ export class EulbPostSubmissionUpdateService {
         dateOfExpiry: proposed.dateOfExpiry ?? null,
         remarks: proposed.remarks ?? '',
         validationStatus: errors.length > 0 ? 'INVALID' : 'VALID',
-        errors,
+        validationErrors: errors,
       };
     });
 
@@ -668,7 +668,7 @@ export class EulbPostSubmissionUpdateService {
    */
   private buildPermissions(user: AuthUser, stateId: string, formStatus: number): EulbPostSubmissionUpdatePermissions {
     const perms = new Set(getEffectivePermissions(user));
-    const hasAccess = this.hasStateAccess(user, stateId);
+    const hasAccess = hasStateAccess(user, stateId);
     const canUpdate = canViewPostSubmissionUpdate(formStatus);
     const canView = perms.has(Permission.VIEW_STATE_FORMS) && hasAccess && canUpdate;
     const canSubmitUpdate = perms.has(Permission.FINAL_SUBMIT_STATE_FORMS) && hasAccess && canUpdate;
@@ -702,32 +702,5 @@ export class EulbPostSubmissionUpdateService {
     const d = new Date();
     d.setHours(0, 0, 0, 0);
     return d;
-  }
-
-  /**
-   * Returns true if the user is an admin or is a state user whose state matches `stateId`.
-   * @param user Authenticated user.
-   * @param stateId State ID to check access for.
-   */
-  private hasStateAccess(user: AuthUser, stateId: string): boolean {
-    if (user.scope === Scope.ADMIN) return true;
-    if (user.scope === Scope.STATE) {
-      const userStateId = toObjectIdString(user.state);
-      return !!userStateId && userStateId === stateId;
-    }
-    return false;
-  }
-
-  /**
-   * Throws `ForbiddenException` if the user does not have access to the given state.
-   * @param user Authenticated user.
-   * @param stateId State ID to enforce access on.
-   */
-  private assertStateAccess(user: AuthUser, stateId: string): void {
-    if (!this.hasStateAccess(user, stateId)) {
-      throw new ForbiddenException(
-        user.scope === Scope.STATE ? 'You can only access your own state data' : 'Access denied',
-      );
-    }
   }
 }

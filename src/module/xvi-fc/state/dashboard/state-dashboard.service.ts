@@ -34,6 +34,7 @@ import {
 } from 'src/schemas/xvi-fc/unspent-balance-disclosure.schema';
 import { XviFcBankAccount, type XviFcBankAccountDocument } from 'src/schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
 import { SlbForm, type SlbFormDocument } from 'src/schemas/xvi-fc/ulb/slb-form.schema';
+import { XviFcDur, type XviFcDurDocument } from 'src/schemas/xvi-fc/dur.schema';
 import { xviFcSuccess } from '../../common/response/xvi-fc-response.util';
 import type { GetStateDashboardParamsDto } from './dto/get-state-dashboard-params.dto';
 import type { ExportAllFormsQueryDto } from './dto/export-all-forms-query.dto';
@@ -176,6 +177,8 @@ export class StateDashboardService {
     private readonly unspentBalanceModel: Model<XviFcUnspentBalanceDisclosureDocument>,
     @InjectModel(SlbForm.name)
     private readonly slbFormModel: Model<SlbFormDocument>,
+    @InjectModel(XviFcDur.name)
+    private readonly durModel: Model<XviFcDurDocument>,
   ) {}
 
   async getDashboard(params: GetStateDashboardParamsDto, user: AuthUser): Promise<StateDashboardApiResponse> {
@@ -258,7 +261,9 @@ export class StateDashboardService {
         .find(ulbMatch)
         .select({ _id: 1, name: 1, censusCode: 1, sbCode: 1, state: 1 })
         .sort({ name: 1 })
-        .lean<Array<{ _id: Types.ObjectId; name: string; censusCode?: string; sbCode?: string; state: Types.ObjectId }>>()
+        .lean<
+          Array<{ _id: Types.ObjectId; name: string; censusCode?: string; sbCode?: string; state: Types.ObjectId }>
+        >()
         .exec(),
       stateId
         ? this.stateModel.findOne({ _id: stateId, isActive: true }).select({ name: 1 }).lean<{ name: string }>().exec()
@@ -296,7 +301,7 @@ export class StateDashboardService {
 
     const ulbIds = ulbs.map((ulb) => ulb._id);
 
-    const [annualAccountRecords, bankAccountRecords, slbRecords] = await Promise.all([
+    const [annualAccountRecords, bankAccountRecords, slbRecords, durRecords] = await Promise.all([
       this.annualAccountModel
         .find({ ulb: { $in: ulbIds }, design_year: yearObjectId })
         .select({ _id: 0, ulb: 1, sectionType: 1, form_status_id: 1 })
@@ -312,6 +317,11 @@ export class StateDashboardService {
         .select({ _id: 0, ulb: 1, currentFormStatus: 1 })
         .lean<Array<{ ulb: Types.ObjectId; currentFormStatus?: number | null }>>()
         .exec(),
+      this.durModel
+        .find({ ulb: { $in: ulbIds }, design_year: yearObjectId })
+        .select({ _id: 0, ulb: 1, currentFormStatus: 1 })
+        .lean<Array<{ ulb: Types.ObjectId; currentFormStatus?: number | null }>>()
+        .exec(),
     ]);
 
     const auditedByUlb = new Map<string, number>();
@@ -324,6 +334,7 @@ export class StateDashboardService {
       bankAccountRecords.map((r) => [r.ulb.toString(), r.currentFormStatus ?? FORM_STATUS.NOT_STARTED]),
     );
     const slbByUlb = new Map(slbRecords.map((r) => [r.ulb.toString(), r.currentFormStatus ?? FORM_STATUS.NOT_STARTED]));
+    const durByUlb = new Map(durRecords.map((r) => [r.ulb.toString(), r.currentFormStatus ?? FORM_STATUS.NOT_STARTED]));
 
     // Only the all-states export (ADMIN, no stateId) needs a per-row State column — a single-state
     // export already names its one state in the sheet's meta line, so adding it there would just
@@ -337,6 +348,7 @@ export class StateDashboardService {
       'Provisional Statements',
       'PFMS Bank Account',
       'SLB Form',
+      'Detailed Utilisation Report',
     ];
     const rows = ulbs.map((ulb) => {
       const id = ulb._id.toString();
@@ -348,6 +360,7 @@ export class StateDashboardService {
         getFormStatusLabel(provisionalByUlb.get(id) ?? FORM_STATUS.NOT_STARTED),
         getFormStatusLabel(bankAccountByUlb.get(id) ?? FORM_STATUS.NOT_STARTED),
         getFormStatusLabel(slbByUlb.get(id) ?? FORM_STATUS.NOT_STARTED),
+        getFormStatusLabel(durByUlb.get(id) ?? FORM_STATUS.NOT_STARTED),
       ];
     });
 

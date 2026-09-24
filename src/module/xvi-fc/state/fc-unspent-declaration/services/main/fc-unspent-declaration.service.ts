@@ -1,18 +1,18 @@
-import { ForbiddenException, Injectable, InternalServerErrorException, NotFoundException } from '@nestjs/common';
+import { Injectable, InternalServerErrorException, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
-import { Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
+import { Permission } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
 import { FORM_STATUS, getFormStatusLabel } from 'src/common/constants/form-status.constants';
-import { toObjectIdString } from 'src/common/utils/objectid.util';
 import {
   assertCanStateEditForm,
   assertCanStateFinalSubmitForm,
   canStateEditForm,
   canStateFinalSubmitForm,
 } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
+import { assertStateAccess, hasStateAccess } from 'src/module/xvi-fc/common/utils/xvi-fc-state-access.util';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
 import type {
   FieldConfig,
@@ -120,7 +120,7 @@ export class FcUnspentDeclarationService {
     yearId: string,
     user: AuthUser,
   ): Promise<XviFcApiResponse<FcUnspentDeclarationGetResponseData>> {
-    this.assertStateAccess(user, stateId);
+    assertStateAccess(user, stateId);
 
     const stateOid = new Types.ObjectId(stateId);
     const yearOid = new Types.ObjectId(yearId);
@@ -187,7 +187,7 @@ export class FcUnspentDeclarationService {
    * history. Parent and row writes happen in one Mongo transaction.
    */
   async saveDraft(dto: SaveFcUnspentDeclarationDto, user: AuthUser): Promise<XviFcApiResponse> {
-    this.assertStateAccess(user, dto.stateId);
+    assertStateAccess(user, dto.stateId);
 
     const stateOid = new Types.ObjectId(dto.stateId);
     const yearOid = new Types.ObjectId(dto.yearId);
@@ -366,7 +366,7 @@ export class FcUnspentDeclarationService {
     ip: string,
     userAgent: string,
   ): Promise<XviFcApiResponse> {
-    this.assertStateAccess(user, dto.stateId);
+    assertStateAccess(user, dto.stateId);
 
     const stateOid = new Types.ObjectId(dto.stateId);
     const yearOid = new Types.ObjectId(dto.yearId);
@@ -691,7 +691,7 @@ export class FcUnspentDeclarationService {
     gates: FcUnspentDependencyGates,
   ): FcUnspentPermissions {
     const perms = new Set(getEffectivePermissions(user));
-    const hasAccess = this.hasStateAccess(user, stateId);
+    const hasAccess = hasStateAccess(user, stateId);
     return {
       canView: perms.has(Permission.VIEW_STATE_FORMS) && hasAccess,
       canEdit: perms.has(Permission.EDIT_STATE_FORMS) && hasAccess && canStateEditForm(status) && gates.canEditGate,
@@ -852,25 +852,5 @@ export class FcUnspentDeclarationService {
       throw new NotFoundException(`No applicable FC mapping for design year: ${designYear}`);
     }
     return applicableFc;
-  }
-
-  // ─── Scope enforcement ──────────────────────────────────────────────────────
-
-  private hasStateAccess(user: AuthUser, stateId: string): boolean {
-    if (user.scope === Scope.ADMIN) return true;
-    if (user.scope === Scope.STATE) {
-      const userStateId = toObjectIdString(user.state);
-      return !!userStateId && userStateId === stateId;
-    }
-    return false;
-  }
-
-  /** Not `private` — reused as-is by the document-generation service's own gating. */
-  assertStateAccess(user: AuthUser, stateId: string): void {
-    if (!this.hasStateAccess(user, stateId)) {
-      throw new ForbiddenException(
-        user.scope === Scope.STATE ? 'You can only access your own state data' : 'Access denied',
-      );
-    }
   }
 }

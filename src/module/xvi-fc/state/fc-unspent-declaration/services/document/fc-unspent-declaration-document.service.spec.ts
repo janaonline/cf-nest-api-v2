@@ -64,7 +64,6 @@ describe('FcUnspentDeclarationDocumentService', () => {
   let service: FcUnspentDeclarationDocumentService;
   let mockModel: { findOne: jest.Mock };
   let mockMainService: {
-    assertStateAccess: jest.Mock;
     resolveDevolutionDependency: jest.Mock;
     buildFormPermissions: jest.Mock;
   };
@@ -74,7 +73,6 @@ describe('FcUnspentDeclarationDocumentService', () => {
   beforeEach(async () => {
     mockModel = { findOne: jest.fn() };
     mockMainService = {
-      assertStateAccess: jest.fn(),
       resolveDevolutionDependency: jest.fn().mockResolvedValue(GRANTED_GATES),
       buildFormPermissions: jest.fn().mockReturnValue({
         canView: true,
@@ -101,12 +99,17 @@ describe('FcUnspentDeclarationDocumentService', () => {
     service = module.get(FcUnspentDeclarationDocumentService);
   });
 
-  it('delegates access control to FcUnspentDeclarationService.assertStateAccess', async () => {
-    mockMainService.assertStateAccess.mockImplementationOnce(() => {
-      throw new ForbiddenException('denied');
-    });
+  it('enforces state access via the shared assertStateAccess util for a mismatched STATE user', async () => {
+    const mismatchedStateUser: AuthUser = {
+      _id: new Types.ObjectId().toString(),
+      role: UserRole.STATE,
+      scope: Scope.STATE,
+      accessLevel: AccessLevel.ADMIN,
+      state: new Types.ObjectId(),
+    } as unknown as AuthUser;
+
     mockModel.findOne.mockReturnValue(q(null));
-    await expect(service.getDocumentData(stateOid.toString(), yearOid.toString(), adminUser)).rejects.toThrow(
+    await expect(service.getDocumentData(stateOid.toString(), yearOid.toString(), mismatchedStateUser)).rejects.toThrow(
       ForbiddenException,
     );
   });

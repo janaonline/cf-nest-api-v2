@@ -38,6 +38,43 @@ describe('FileTokenService', () => {
     });
   });
 
+  describe('signFileUrlForSession', () => {
+    it('defaults to inline disposition when none is passed', () => {
+      const url = service.signFileUrlForSession('state/foo/bar.pdf');
+      const signature = new URL(url).searchParams.get('signature')!;
+      expect(service.parseToken(signature).disposition).toBe('inline');
+    });
+
+    it('honors an explicit attachment override', () => {
+      const url = service.signFileUrlForSession('state/foo/bar.pdf', 'attachment');
+      const signature = new URL(url).searchParams.get('signature')!;
+      expect(service.parseToken(signature).disposition).toBe('attachment');
+    });
+
+    it('falls back to a 24h expiry when JWT_EXPIRES_IN is unset', () => {
+      const before = Date.now();
+      const url = service.signFileUrlForSession('state/foo/bar.pdf');
+      const signature = new URL(url).searchParams.get('signature')!;
+      const { exp } = service.parseToken(signature);
+      expect(exp).toBeGreaterThanOrEqual(before + 24 * 60 * 60 * 1000);
+      expect(exp).toBeLessThan(before + 24 * 60 * 60 * 1000 + 5000);
+    });
+
+    it('signs with an expiry matching the configured JWT_EXPIRES_IN', () => {
+      const twoHourService = buildService({
+        JWT_SECRET: 'test-secret',
+        BASE_URL: 'https://app.example.com/',
+        JWT_EXPIRES_IN: '2h',
+      });
+      const before = Date.now();
+      const url = twoHourService.signFileUrlForSession('state/foo/bar.pdf');
+      const signature = new URL(url).searchParams.get('signature')!;
+      const { exp } = twoHourService.parseToken(signature);
+      expect(exp).toBeGreaterThanOrEqual(before + 2 * 60 * 60 * 1000);
+      expect(exp).toBeLessThan(before + 2 * 60 * 60 * 1000 + 5000);
+    });
+  });
+
   describe('createToken / parseToken', () => {
     it('round-trips the path, disposition, and expiry unchanged', () => {
       const exp = Date.now() + 60_000;

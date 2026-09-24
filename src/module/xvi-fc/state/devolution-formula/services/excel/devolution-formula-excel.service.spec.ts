@@ -118,7 +118,7 @@ const mockActiveRows = [
     installment2Amount: 100_000,
     devolutionFormula: 'population',
     validationStatus: 'VALID',
-    errors: [],
+    validationErrors: [],
   },
   {
     _id: new Types.ObjectId(),
@@ -132,7 +132,7 @@ const mockActiveRows = [
     installment2Amount: 100_000,
     devolutionFormula: 'area',
     validationStatus: 'INVALID',
-    errors: [{ field: 'censusCode', code: 'unknownUlb', message: 'ULB not found.' }],
+    validationErrors: [{ field: 'censusCode', code: 'unknownUlb', message: 'ULB not found.' }],
   },
 ];
 
@@ -481,7 +481,7 @@ describe('DevolutionFormulaExcelService — safe dataset replace', () => {
     const insertCalls = mockRowModel.insertMany.mock.calls as unknown[][][];
     const rowDocs = insertCalls[0][0] as Array<Record<string, unknown>>;
     expect(rowDocs).toHaveLength(1);
-    const errors = rowDocs[0]['errors'] as Array<{ code: string; field: string }>;
+    const errors = rowDocs[0]['validationErrors'] as Array<{ code: string; field: string }>;
     expect(errors.some((e) => e.code === 'notWholeNumber' && e.field === 'totalGrantAllocation')).toBe(true);
     expect(errors.some((e) => e.code === 'notWholeNumber' && e.field === 'installment1Amount')).toBe(true);
     expect(rowDocs[0]['validationStatus']).toBe('INVALID');
@@ -527,7 +527,7 @@ describe('DevolutionFormulaExcelService — safe dataset replace', () => {
     const insertCalls = mockRowModel.insertMany.mock.calls as unknown[][][];
     const rowDocs = insertCalls[0][0] as Array<Record<string, unknown>>;
     expect(rowDocs).toHaveLength(1);
-    expect(rowDocs[0]['errors']).toEqual([]);
+    expect(rowDocs[0]['validationErrors']).toEqual([]);
     expect(rowDocs[0]['validationStatus']).toBe('VALID');
     // Snapped to the exact whole Rupee, not stored with the float residue.
     expect(rowDocs[0]['totalGrantAllocation']).toBe(88_715_340);
@@ -1355,12 +1355,14 @@ describe('DevolutionFormulaExcelService — validateExcel new/extra ULB detectio
     await expectRejection(buffer);
 
     const updateCallArg = (mockFormModel.findOneAndUpdate.mock.calls as unknown[][])[0][1] as {
-      $set: { excludedRows: Array<{ censusCode: string; ulbName: string; errors: Array<{ code: string }> }> };
+      $set: {
+        excludedRows: Array<{ censusCode: string; ulbName: string; validationErrors: Array<{ code: string }> }>;
+      };
     };
     expect(updateCallArg.$set.excludedRows).toHaveLength(1);
     expect(updateCallArg.$set.excludedRows[0].censusCode).toBe('ZZZZ');
     expect(updateCallArg.$set.excludedRows[0].ulbName).toBe('New Town');
-    expect(updateCallArg.$set.excludedRows[0].errors.some((e) => e.code === 'unknownUlb')).toBe(true);
+    expect(updateCallArg.$set.excludedRows[0].validationErrors.some((e) => e.code === 'unknownUlb')).toBe(true);
   });
 
   it('does not include any register-link or supporting-content payload in the validateExcel response itself', async () => {

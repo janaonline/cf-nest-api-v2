@@ -2,7 +2,6 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { Types } from 'mongoose';
-import { ConfigService } from '@nestjs/config';
 import { SfcStatusService } from './sfc-status.service';
 import { XviFcSfcStatus } from '../../../../schemas/xvi-fc/state/sfc-status.schema';
 import { XviFcSfcStatusHistory } from '../../../../schemas/xvi-fc/state/sfc-status-history.schema';
@@ -126,10 +125,10 @@ describe('SfcStatusService', () => {
           provide: FileTokenService,
           useValue: {
             signFileUrl: jest.fn().mockReturnValue('https://signed-url'),
+            signFileUrlForSession: jest.fn().mockReturnValue('https://signed-url'),
             createToken: jest.fn().mockReturnValue('mock-token'),
           },
         },
-        { provide: ConfigService, useValue: { get: jest.fn().mockReturnValue('24h') } },
         { provide: FileUrlNormalizerService, useValue: { toRawStoragePath: jest.fn((v: string) => v) } },
         FileInfoNormalizerService,
       ],
@@ -254,6 +253,47 @@ describe('SfcStatusService', () => {
 
       expect(historyModel['create']).not.toHaveBeenCalled();
     });
+
+    it('guards the update filter with the read-time status', async () => {
+      formModel['findOne'] = jest
+        .fn()
+        .mockReturnValue(q({ _id: docOid, currentFormStatus: FORM_STATUS.IN_PROGRESS, data: {} }));
+
+      await service.saveDraft(validDto, adminUser, '127.0.0.1', 'jest');
+
+      expect(formModel['findOneAndUpdate']).toHaveBeenCalledWith(
+        expect.objectContaining({ currentFormStatus: FORM_STATUS.IN_PROGRESS }),
+        expect.anything(),
+        expect.anything(),
+      );
+    });
+
+    it('rejects with the current status when a concurrent write changed status since the read', async () => {
+      formModel['findOne'] = jest
+        .fn()
+        .mockReturnValueOnce(q({ _id: docOid, currentFormStatus: FORM_STATUS.IN_PROGRESS, data: {} }))
+        .mockReturnValueOnce(q({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }));
+      formModel['findOneAndUpdate'] = jest.fn().mockReturnValue(q(null));
+
+      await expect(service.saveDraft(validDto, adminUser, '127.0.0.1', 'jest')).rejects.toThrow(ForbiddenException);
+      expect(historyModel['create']).not.toHaveBeenCalled();
+    });
+
+    it('rejects with a conflict error when two first-saves race on create', async () => {
+      formModel['create'] = jest.fn().mockRejectedValue({ code: 11000 });
+
+      let caught: unknown;
+      try {
+        await service.saveDraft(validDto, adminUser, '127.0.0.1', 'jest');
+      } catch (e) {
+        caught = e;
+      }
+
+      expect(caught).toBeInstanceOf(BadRequestException);
+      const response = (caught as BadRequestException).getResponse() as Record<string, unknown>;
+      const errors = response['errors'] as XviFcValidationErrorMap;
+      expect(errors['_form']?.[0]).toMatchObject({ code: 'conflict' });
+    });
   });
 
   // ─── finalSubmit ─────────────────────────────────────────────────────────
@@ -312,6 +352,47 @@ describe('SfcStatusService', () => {
           toStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
         }),
       );
+    });
+
+    it('guards the update filter with the read-time status', async () => {
+      formModel['findOne'] = jest
+        .fn()
+        .mockReturnValue(q({ _id: docOid, currentFormStatus: FORM_STATUS.IN_PROGRESS, data: {} }));
+
+      await service.finalSubmit(validDto, adminUser, '127.0.0.1', 'jest');
+
+      expect(formModel['findOneAndUpdate']).toHaveBeenCalledWith(
+        expect.objectContaining({ _id: docOid, currentFormStatus: FORM_STATUS.IN_PROGRESS }),
+        expect.anything(),
+        expect.anything(),
+      );
+    });
+
+    it('rejects when a second concurrent final submit already changed status', async () => {
+      formModel['findOne'] = jest
+        .fn()
+        .mockReturnValueOnce(q({ _id: docOid, currentFormStatus: FORM_STATUS.IN_PROGRESS, data: {} }))
+        .mockReturnValueOnce(q({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }));
+      formModel['findOneAndUpdate'] = jest.fn().mockReturnValue(q(null));
+
+      await expect(service.finalSubmit(validDto, adminUser, '127.0.0.1', 'jest')).rejects.toThrow(ForbiddenException);
+      expect(historyModel['create']).not.toHaveBeenCalled();
+    });
+
+    it('rejects with a conflict error when two first-submits race on create', async () => {
+      formModel['create'] = jest.fn().mockRejectedValue({ code: 11000 });
+
+      let caught: unknown;
+      try {
+        await service.finalSubmit(validDto, adminUser, '127.0.0.1', 'jest');
+      } catch (e) {
+        caught = e;
+      }
+
+      expect(caught).toBeInstanceOf(BadRequestException);
+      const response = (caught as BadRequestException).getResponse() as Record<string, unknown>;
+      const errors = response['errors'] as XviFcValidationErrorMap;
+      expect(errors['_form']?.[0]).toMatchObject({ code: 'conflict' });
     });
   });
 

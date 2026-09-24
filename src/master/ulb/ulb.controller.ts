@@ -10,6 +10,7 @@ import { CreateUlbDto } from './dto/create-ulb.dto';
 import { QueryUlbDto } from './dto/query-ulb.dto';
 import { RejectUlbDto } from './dto/reject-ulb.dto';
 import { UpdateUlbDto } from './dto/update-ulb.dto';
+import { UpdateUlbYearAccessDto } from './dto/update-ulb-year-access.dto';
 import { UlbService } from './ulb.service';
 
 @ApiTags('Master - ULB')
@@ -97,5 +98,25 @@ export class UlbController {
   @ApiOperation({ summary: 'Deactivate a ULB (ADMIN only). Soft-delete via isActive=false.' })
   remove(@Param('id', ParseObjectIdPipe) id: string) {
     return this.ulbService.remove(id);
+  }
+
+  // ─── xvi-fc dynamic year access (ADMIN) ──────────────────────────────────────
+
+  @Get(':id/year-access')
+  @Roles([Role.ADMIN])
+  @ApiOperation({ summary: 'Current startYear/yearAccess for a ULB, plus the exemptable-form list (ADMIN only).' })
+  getYearAccess(@Param('id', ParseObjectIdPipe) id: string) {
+    return this.ulbService.getYearAccess(id);
+  }
+
+  @Patch(':id/year-access')
+  @Roles([Role.ADMIN])
+  @ApiOperation({
+    summary:
+      'Set a ULB startYear and/or seed-year exemptions (ADMIN only). Optional, edit-anytime - ' +
+      'never blocks approval. Every other year is derived automatically, never hand-maintained.',
+  })
+  updateYearAccess(@Param('id', ParseObjectIdPipe) id: string, @Body() dto: UpdateUlbYearAccessDto) {
+    return this.ulbService.updateYearAccess(id, dto);
   }
 }

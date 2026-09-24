@@ -28,10 +28,25 @@ import { FileTokenModule } from './core/file-token/file-token.module';
 import { EmailDomainValidationModule } from './core/email-domain-validation/email-domain-validation.module';
 import { FileModule } from './module/file/file.module';
 import { FormJsonModule } from './master/form-json/form-json.module';
+import { FormJsonConfigModule } from './master/form-json-config/form-json-config.module';
 import { CommunicationModule } from './module/communication/communication.module';
 import { NotificationsModule } from './module/notifications/notifications.module';
 import { UlbModule } from './master/ulb/ulb.module';
 import { StateModule } from './master/state/state.module';
+import { DigitizationDbModule } from './core/database/digitization-db.module';
+/** Fails app startup before Mongoose ever attempts a connection if MONGO_URI/MONGO_DB_NAME are
+ *  missing or blank — MongooseModule.forRootAsync below would otherwise pass `undefined` through
+ *  silently and only surface the problem once something tries to read/write. */
+function validateEnv(config: Record<string, unknown>): Record<string, unknown> {
+  for (const key of ['MONGO_URI', 'MONGO_DB_NAME']) {
+    const value = typeof config[key] === 'string' ? (config[key] as string).trim() : '';
+    if (!value) {
+      throw new Error(`${key} environment variable is required and must not be empty`);
+    }
+  }
+  return config;
+}
+
 function getQueryCaller(): string {
   const stack = new Error().stack?.split('\n') ?? [];
   const frame = stack.find(
@@ -49,7 +64,7 @@ function getQueryCaller(): string {
         limit: 60, // max requests per window
       },
     ]),
-    ConfigModule.forRoot({ isGlobal: true }),
+    ConfigModule.forRoot({ isGlobal: true, validate: validateEnv }),
     ScheduleModule.forRoot(),
     CacheModule.register({ isGlobal: true, ttl: 300000 }),
     RedisModule,
@@ -71,6 +86,7 @@ function getQueryCaller(): string {
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
         uri: configService.get<string>('MONGO_URI'),
+        dbName: configService.get<string>('MONGO_DB_NAME'),
         // connectionFactory: (connection: any) => {
         //   connection.set('debug', (collection: string, method: string, ...args: any[]) => {
         //     const caller = getQueryCaller();
@@ -80,21 +96,17 @@ function getQueryCaller(): string {
         // },
       }),
     }),
-    MongooseModule.forRootAsync({
-      imports: [ConfigModule],
-      inject: [ConfigService],
-      useFactory: (configService: ConfigService) => ({
-        uri: configService.get<string>('MONGO_URI_2'),
-        // connectionFactory: (connection: any) => {
-        //   connection.set('debug', (collection: string, method: string, ...args: any[]) => {
-        //     const caller = getQueryCaller();
-        //     console.log(`[Query:digitization_db] ${collection}.${method} | ${caller}`, JSON.stringify(args));
-        //   });
-        //   return connection;
-        // },
-      }),
-      connectionName: 'digitization_db',
-    }),
+    // MongooseModule.forRootAsync({
+    //   imports: [ConfigModule],
+    //   inject: [ConfigService],
+    //   useFactory: (configService: ConfigService) => ({
+    //     uri: configService.get<string>('MONGO_URI_2'),
+    //   }),
+    //   connectionName: 'digitization_db',
+    // }),
+    // digitization_db shares the same physical connection as the default one above
+    // (same server, different db name) via Connection#useDb — see DigitizationDbModule.
+    DigitizationDbModule,
     UsersModule,
     ResourcesSectionModule,
     NodeMailerModule,
@@ -111,6 +123,7 @@ function getQueryCaller(): string {
     EmailRemindersModule,
     // FormsModule, // intentionally not registered - This is not consumed by any module.
     FormJsonModule,
+    FormJsonConfigModule,
     CommunicationModule,
     NotificationsModule,
     UlbModule,

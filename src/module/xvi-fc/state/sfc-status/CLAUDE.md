@@ -23,6 +23,11 @@ This is a deliberate, accepted tradeoff, not an oversight; see the comment on
 here, decide explicitly whether it needs the same treatment or genuinely needs transactional
 atomicity — don't assume one or the other.
 
+The form update itself is guarded against a concurrent status change (e.g. a final submit racing a
+draft save): both writes include `currentFormStatus` in their filter, and a first-save race that
+hits the unique index is caught too. See `xvi-fc-concurrent-write.util.ts` (shared with GTC and
+Devolution Formula).
+
 `createHistoryEntry` also no-ops when `fromStatus === toStatus` — a re-save that leaves the form
 `IN_PROGRESS` writes nothing (older `xvifc_sfc_logs` rows from before this guard still have
 same-status `UPDATE_DRAFT` entries). `action` uses the shared `FormHistoryAction` enum

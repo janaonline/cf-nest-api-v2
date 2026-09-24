@@ -14,13 +14,14 @@ import {
 } from 'docx';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { buildXviFcDownloadFileName } from 'src/shared/utils/xvi-fc-download-file-name.util';
-import { buildMohuaLetterAddressBlock } from 'src/module/xvi-fc/common/utils/xvi-fc-letter-address-block.util';
 import { formatXviFcDate } from 'src/module/xvi-fc/common/utils/xvi-fc-date-format.util';
 import { ElectedUrbanLocalBodiesDocumentService } from './elected-urban-local-bodies-document.service';
 import type {
   EulbListDocumentData,
   EulbListDocumentRow,
 } from 'src/module/xvi-fc/state/elected-urban-local-bodies/types/elected-urban-local-bodies-document.types';
+
+const DOC_FONT = { font: 'Times New Roman', size: 24 };
 
 /** Percentage column widths, in the same left-to-right order as the rendered table: '#' plus the
  *  6 form-json-labelled columns. Sums to 100. */
@@ -36,7 +37,9 @@ const TABLE_BORDER: ITableBordersOptions = {
 };
 
 function cellText(text: string, opts: { bold?: boolean } = {}): Paragraph {
-  return new Paragraph({ children: [new TextRun({ text: text || '-', bold: opts.bold })] });
+  return new Paragraph({
+    children: [new TextRun({ text: text || '-', bold: opts.bold, ...DOC_FONT })],
+  });
 }
 
 function headerCell(text: string, widthPct: number): TableCell {
@@ -55,11 +58,17 @@ function dataCell(text: string, widthPct: number): TableCell {
 }
 
 /**
- * Renders the "Elected Bodies List" declaration letter (see the shared PDF mockup this mirrors)
- * as a `.docx` — consumed by `GET :stateId/:yearId/elected-bodies-list-document`. Uses the `docx`
- * npm package, unlike claim-letter's PDF sibling (which uses `pdfkit`): the state must be able to
- * type over the closing signature block in Word before printing and signing, so the output has to
- * be an editable document, not a flattened PDF.
+ * Renders the "Elected Bodies List" declaration letter (mirrors the MoHUA specimen PDF verbatim,
+ * including its title heading) as a `.docx` — consumed by
+ * `GET :stateId/:yearId/elected-bodies-list-document`. Uses the `docx` npm package, unlike
+ * claim-letter's PDF sibling (which uses `pdfkit`): the state must be able to type over the
+ * closing signature block in Word before printing and signing, so the output has to be an
+ * editable document, not a flattened PDF.
+ *
+ * The addressee block is intentionally NOT the shared `buildMohuaLetterAddressBlock()` util (see
+ * `xvi-fc-letter-address-block.util.ts`) — EULB's specimen uses different addressee text than
+ * `fc-unspent-declaration`'s letter, so it's forked locally in `buildAddressBlock()` rather than
+ * risking a shared-util change leaking into that sibling's own, differently-worded letter.
  *
  * The closing signature block (`[Name]`, `[Designation]`, etc.) is written as literal,
  * non-interpolated text — including its own `[State Name]` — by design; only the intro
@@ -90,10 +99,16 @@ export class ElectedUrbanLocalBodiesDocxService {
 
   private buildDocument(data: EulbListDocumentData): Document {
     return new Document({
+      styles: {
+        default: {
+          document: { run: DOC_FONT },
+        },
+      },
       sections: [
         {
           properties: {},
           children: [
+            ...this.buildTitle(),
             ...this.buildAddressBlock(),
             ...this.buildSubjectAndIntro(data),
             this.buildTable(data),
@@ -107,30 +122,55 @@ export class ElectedUrbanLocalBodiesDocxService {
     });
   }
 
-  private buildAddressBlock(): Paragraph[] {
+  /** Verbatim heading from the MoHUA specimen letter this mirrors — bold, underlined, centered. */
+  private buildTitle(): Paragraph[] {
     return [
-      ...buildMohuaLetterAddressBlock(),
       new Paragraph({
+        alignment: AlignmentType.CENTER,
         children: [
-          new TextRun({ text: 'Subject: Declaration regarding Elected Body Status of Urban Local Bodies', bold: true }),
+          new TextRun({
+            text: 'Format of Letter to be Submitted by the State reg. Elected Bodies Status',
+            bold: true,
+            underline: {},
+          }),
         ],
       }),
       new Paragraph({ text: '' }),
-      new Paragraph({ text: 'Respected Sir/Madam,' }),
+    ];
+  }
+
+  private buildAddressBlock(): Paragraph[] {
+    return [
+      new Paragraph({ text: 'To,' }),
+      new Paragraph({ text: 'The Deputy Secretary' }),
+      new Paragraph({ text: 'Finance Commission Cell' }),
+      new Paragraph({ text: 'Department of Urban Development' }),
+      new Paragraph({ text: 'Ministry of Housing and Urban Affairs' }),
+      new Paragraph({ text: 'Government of India' }),
+      new Paragraph({ text: 'Sankalp Bhawan, New Delhi' }),
+      new Paragraph({ text: '' }),
+      new Paragraph({
+        children: [
+          new TextRun({
+            text: 'Subject: Declaration in respect of Elected Body Status of Urban Local Bodies -reg.',
+            bold: true,
+          }),
+        ],
+      }),
+      new Paragraph({ text: '' }),
+      new Paragraph({ text: 'Sir,' }),
       new Paragraph({ text: '' }),
     ];
   }
 
   private buildSubjectAndIntro(data: EulbListDocumentData): Paragraph[] {
-    const ulbNoun = data.ulbCount === 1 ? 'Urban Local Body' : 'Urban Local Bodies';
     return [
       new Paragraph({
         alignment: AlignmentType.JUSTIFIED,
         text:
           `This is to certify that the elected body status of every Urban Local Body in the State of ${data.stateName} ` +
-          `has been compiled as per the current records maintained by the State Nodal Department, and is furnished ` +
-          `in the table below. The table lists all ${data.ulbCount} ${ulbNoun} in the State, together with the ` +
-          `status recorded for each.`,
+          `has been compiled and is furnished in the table below. The table lists all ${data.ulbCount} Urban Local ` +
+          `Bodies in the State, together with their status recorded for each.`,
       }),
       new Paragraph({ text: '' }),
     ];
@@ -171,23 +211,25 @@ export class ElectedUrbanLocalBodiesDocxService {
     return [
       new Paragraph({
         text:
-          'This declaration is being submitted for consideration of the first installment claim for ' +
+          '2. This is submitted for the consideration of the claim of first installment for ' +
           `FY ${data.designYearLabel} under the 16th Finance Commission grants.`,
       }),
     ];
   }
 
   /** Literal, non-interpolated placeholder text — the state fills this in by hand in Word before
-   *  printing and signing. Deliberately never substituted, including its own "[State Name]". */
+   *  printing and signing. Deliberately never substituted, including its own "[State Name]".
+   *  Right-aligned to match the MoHUA specimen's bottom-right signature block. */
   private buildSignatureBlock(): Paragraph[] {
+    const line = (text: string) => new Paragraph({ alignment: AlignmentType.RIGHT, text });
     return [
-      new Paragraph({ text: '[Name]' }),
-      new Paragraph({ text: '[Designation]' }),
-      new Paragraph({ text: '[Department / Directorate]' }),
-      new Paragraph({ text: 'Government of [State Name]' }),
-      new Paragraph({ text: 'Date: [DD/MM/YYYY]' }),
-      new Paragraph({ text: 'Place: [Place]' }),
-      new Paragraph({ text: 'Seal: [Official Seal]' }),
+      line('[Name]'),
+      line('[Designation]'),
+      line('[Department / Directorate]'),
+      line('Government of [State Name]'),
+      line('Date: [DD/MM/YYYY]'),
+      line('Place: [Place]'),
+      line('Seal: [Official Seal]'),
     ];
   }
 }

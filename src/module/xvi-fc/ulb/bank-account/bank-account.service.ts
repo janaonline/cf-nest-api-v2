@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   Logger,
@@ -19,6 +20,7 @@ import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-
 import { xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { User, UserDocument } from 'src/schemas/user/user.schema';
+import { Year } from 'src/schemas/year.schema';
 import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 import { CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE } from 'src/module/ulb-eligibility/ulb-eligibility.constants';
 import { XviFcBankAccount, XviFcBankAccountDocument } from 'src/schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
@@ -61,6 +63,8 @@ import {
   type SafeBankAccountResponse,
 } from './utils/bank-account-security.util';
 import { FormJsonService } from 'src/master/form-json/form-json.service';
+import { FormJsonConfigService } from 'src/master/form-json-config/form-json-config.service';
+import type { SubmissionScope } from 'src/schemas/form-json-config.schema';
 import { BANK_ACCOUNT_FORM_ID } from './constants/bank-account-form.constants';
 
 export interface BankAccountPermissions {
@@ -112,9 +116,12 @@ export class BankAccountService {
     private readonly ulbModel: Model<UlbDocument>,
     @InjectModel(User.name)
     private readonly userModel: Model<UserDocument>,
+    @InjectModel(Year.name)
+    private readonly yearModel: Model<Year>,
     private readonly fileTokenService: FileTokenService,
     private readonly ulbEligibilityService: UlbEligibilityService,
     private readonly formJsonService: FormJsonService,
+    private readonly formJsonConfigService: FormJsonConfigService,
     private readonly formReturnedNotification: FormReturnedNotificationService,
   ) {}
 
@@ -136,25 +143,83 @@ export class BankAccountService {
   async getBankAccount(
     query: GetXviFcBankAccountQueryDto,
     user: AuthUser,
-  ): Promise<XviFcApiResponse<(XviFcBankAccountResponse & { permissions: BankAccountPermissions }) | null>> {
+  ): Promise<
+    XviFcApiResponse<
+      | (XviFcBankAccountResponse & {
+          permissions: BankAccountPermissions;
+          submissionScope: SubmissionScope;
+          designYearLabel: string | null;
+        })
+      | null
+    >
+  > {
     const ulbId = await this.resolveEffectiveUlbId(user, query.ulbId);
     await this.assertCanReadBankAccount(user, ulbId);
 
-    const record = await this.bankAccountModel
-      .findOne({
-        ulb: new Types.ObjectId(ulbId),
-        designYear: new Types.ObjectId(query.yearId),
-      })
-      .lean()
-      .exec();
+    // XVI-FC dynamic year access: ONCE_EVER forms are submitted once and reused across all years.
+    // Resolve by ULB only; the existing submission is the single source of truth for every year.
+    const formConfig = await this.formJsonConfigService.findByFormId(BANK_ACCOUNT_FORM_ID);
+    const submissionScope: SubmissionScope = formConfig?.submissionScope ?? 'PER_YEAR';
+    const filter =
+      submissionScope === 'ONCE_EVER'
+        ? { ulb: new Types.ObjectId(ulbId) }
+        : { ulb: new Types.ObjectId(ulbId), designYear: new Types.ObjectId(query.yearId) };
+
+    const record = await this.bankAccountModel.findOne(filter).lean().exec();
 
     const status = record?.currentFormStatus ?? FORM_STATUS.NOT_STARTED;
     const permissions = this.buildBankAccountPermissions(user, status);
 
+    const belongsToDifferentYear =
+      !!record && submissionScope === 'ONCE_EVER' && String(record.designYear) !== query.yearId;
+    const designYearLabel = belongsToDifferentYear
+      ? ((await this.yearModel.findById(record.designYear, { year: 1 }).lean().exec())?.year ?? null)
+      : null;
+
     return xviFcSuccess(
       'Bank account form fetched.',
-      record ? { ...buildSafeBankAccountResponse(record, this.signProofFileUrl.bind(this)), permissions } : null,
+      record
+        ? {
+            ...buildSafeBankAccountResponse(record, this.signProofFileUrl.bind(this)),
+            permissions,
+            submissionScope,
+            designYearLabel,
+          }
+        : null,
     );
+  }
+
+  /**
+   * ONCE_EVER forms (e.g. PFMS) are submitted once and reused across every year - reject a second
+   * submission for a different design year instead of silently creating an ambiguous duplicate.
+   * Fast early rejection for the common case, but not the correctness guarantee: concurrent
+   * submissions can both pass this preflight check.
+   * The {ulb} partial unique index is the atomic backstop; duplicate-key errors from the race are * handled in submitBankAccount.
+   * No-op for PER_YEAR forms, and for a same-year resubmission (e.g. STATE returned it for
+   * correction), which still goes through the normal upsert below unchanged.
+   */
+  private async assertNoCrossYearBankAccountRecord(
+    ulbObjectId: Types.ObjectId,
+    designYearId: string,
+    submissionScope: SubmissionScope,
+  ): Promise<void> {
+    if (submissionScope !== 'ONCE_EVER') return;
+
+    const existing = await this.bankAccountModel.findOne({ ulb: ulbObjectId }, { designYear: 1 }).lean().exec();
+    if (!existing || String(existing.designYear) === designYearId) return;
+
+    throw new ConflictException({
+      message:
+        'Bank account details have already been submitted for a different design year. Edit them from that year instead.',
+      existingDesignYearId: String(existing.designYear),
+    });
+  }
+
+  /** True for MongoDB/Mongoose duplicate-key errors (E11000) - the code path that means the {ulb}
+   *  partial unique index rejected a second ONCE_EVER doc for this ulb, i.e. the race window
+   *  assertNoCrossYearBankAccountRecord's preflight check can't fully close on its own. */
+  private isDuplicateKeyError(error: unknown): boolean {
+    return typeof error === 'object' && error !== null && (error as { code?: number }).code === 11000;
   }
 
   /** Mirrors Annual Accounts' buildAnnualAccountPermissions — status-aware capability flags for the STATE reviewer UI. */
@@ -181,10 +246,14 @@ export class BankAccountService {
     const ulbId = await this.resolveEffectiveUlbId(user, dto.ulbId);
     await this.assertCanSubmitBankAccount(user, ulbId);
 
+    const ulbObjectId = new Types.ObjectId(ulbId);
+    const formConfig = await this.formJsonConfigService.findByFormId(BANK_ACCOUNT_FORM_ID);
+    const submissionScope: SubmissionScope = formConfig?.submissionScope ?? 'PER_YEAR';
+    await this.assertNoCrossYearBankAccountRecord(ulbObjectId, dto.designYearId, submissionScope);
+
     const verifiedIfscDetails = await this.verifyIfscCode(dto.ifscCode);
     this.assertBankDetailsMatchVerifiedIfsc(dto.bankDetails, verifiedIfscDetails);
 
-    const ulbObjectId = new Types.ObjectId(ulbId);
     const ulb = await this.ulbModel.findById(ulbId, 'state').lean().exec();
     const ulbStateId = toObjectIdString(ulb?.state);
     if (!ulbStateId) {
@@ -225,6 +294,7 @@ export class BankAccountService {
         s3Key: proofFileS3Key,
         sha256: dto.proofFile.sha256,
       },
+      submissionScope,
       currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_STATE,
       currentFormStatusLabel: getFormStatusLabel(FORM_STATUS.UNDER_REVIEW_BY_STATE),
       submittedBy,
@@ -232,14 +302,32 @@ export class BankAccountService {
       lastReminderSentAt: null,
     };
 
-    const record = await this.bankAccountModel
-      .findOneAndUpdate(
-        { ulb: ulbObjectId, designYear: designYearObjectId },
-        { $set: payload },
-        { upsert: true, new: true, runValidators: true },
-      )
-      .lean()
-      .exec();
+    let record: XviFcBankAccount & { _id: Types.ObjectId };
+    try {
+      record = await this.bankAccountModel
+        .findOneAndUpdate(
+          { ulb: ulbObjectId, designYear: designYearObjectId },
+          { $set: payload },
+          { upsert: true, new: true, runValidators: true },
+        )
+        .lean()
+        .exec();
+    } catch (error) {
+      // Backstop for the race assertNoCrossYearBankAccountRecord's preflight check can't fully
+      // close on its own - two concurrent submissions for different design years both passing
+      // that check before either commits. The {ulb} partial unique index (ONCE_EVER docs only)
+      // is what actually enforces this atomically; translate its violation into the same
+      // ConflictException shape the preflight check throws in the non-racing case.
+      if (this.isDuplicateKeyError(error)) {
+        const existing = await this.bankAccountModel.findOne({ ulb: ulbObjectId }, { designYear: 1 }).lean().exec();
+        throw new ConflictException({
+          message:
+            'Bank account details have already been submitted for a different design year. Edit them from that year instead.',
+          existingDesignYearId: existing ? String(existing.designYear) : null,
+        });
+      }
+      throw error;
+    }
 
     await this.formLogModel.create({
       bankAccountId: record._id,
@@ -277,8 +365,7 @@ export class BankAccountService {
 
     // State approval now lands on APPROVED_BY_STATE first — STATE can still undo it from
     // there before the (separately-built) Generate Claim Letter feature moves it onward.
-    const newStatus =
-      dto.decision === 'APPROVED' ? FORM_STATUS.APPROVED_BY_STATE : FORM_STATUS.RETURNED_BY_STATE;
+    const newStatus = dto.decision === 'APPROVED' ? FORM_STATUS.APPROVED_BY_STATE : FORM_STATUS.RETURNED_BY_STATE;
 
     assertValidFormStatusTransition(record.currentFormStatus, newStatus);
 
@@ -610,6 +697,12 @@ export class BankAccountService {
     const pageSize = dto.pageSize ?? 20;
     const designYearObjectId = new Types.ObjectId(dto.designYearId);
 
+    // ONCE_EVER scope: join by ulb alone so records from earlier design years still resolve,
+    // matching getBankAccount's ONCE_EVER branch. $arrayElemAt(..., 0) is safe because the
+    // {ulb} partial unique index guarantees at most one ONCE_EVER match.
+    const formConfig = await this.formJsonConfigService.findByFormId(BANK_ACCOUNT_FORM_ID);
+    const submissionScope: SubmissionScope = formConfig?.submissionScope ?? 'PER_YEAR';
+
     const pipeline: PipelineStage[] = [
       { $match: matchStage },
       {
@@ -619,7 +712,10 @@ export class BankAccountService {
           pipeline: [
             {
               $match: {
-                $expr: { $and: [{ $eq: ['$ulb', '$$ulbId'] }, { $eq: ['$designYear', designYearObjectId] }] },
+                $expr:
+                  submissionScope === 'ONCE_EVER'
+                    ? { $eq: ['$ulb', '$$ulbId'] }
+                    : { $and: [{ $eq: ['$ulb', '$$ulbId'] }, { $eq: ['$designYear', designYearObjectId] }] },
               },
             },
           ],
@@ -636,8 +732,9 @@ export class BankAccountService {
       },
     ];
 
-    const statusMatch: PipelineStage.FacetPipelineStage[] =
-      dto.status?.length ? [{ $match: { formStatus: { $in: dto.status } } }] : [];
+    const statusMatch: PipelineStage.FacetPipelineStage[] = dto.status?.length
+      ? [{ $match: { formStatus: { $in: dto.status } } }]
+      : [];
 
     pipeline.push({
       $facet: {
