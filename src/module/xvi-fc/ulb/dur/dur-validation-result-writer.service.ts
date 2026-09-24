@@ -10,6 +10,13 @@ import type { DurJobResultResponse } from './dur-validation-api.service';
  * both DurValidationProcessor (the BullMQ worker's own bounded poll loop) and DurStatusSyncService
  * (the cron fallback for jobs that outlive that loop), so the PASS/FAIL interpretation and the
  * post-rejection cooldown bookkeeping is written exactly once, not duplicated between them.
+ *
+ * Every write here is scoped by `uploadId`, not just `docId` — assertCanUlbUpload allows a
+ * re-upload while the slot is still PROCESSING, which replaces `documents.$.currentUpload` with a
+ * new upload (and a new validation job) before the old one has settled. Without the uploadId
+ * check, a late result for the old upload would still match on docId alone and stamp its verdict
+ * onto the new upload's currentUpload — marking a file the vendor never actually validated as
+ * PASSED. Scoping every write means a stale result simply finds no matching slot and is dropped.
  */
 @Injectable()
 export class DurValidationResultWriter {
@@ -20,7 +27,7 @@ export class DurValidationResultWriter {
     private readonly durModel: Model<XviFcDurDocument>,
   ) {}
 
-  async writeCompleted(durId: string, docId: string, resp: DurJobResultResponse): Promise<void> {
+  async writeCompleted(durId: string, docId: string, uploadId: string, resp: DurJobResultResponse): Promise<void> {
     const completedAt = new Date();
     const checks = resp.result?.checks;
     const overallValid = checks?.overall_valid === true;
@@ -29,12 +36,12 @@ export class DurValidationResultWriter {
     const extraction = resp.result?.extraction;
     const validationDetails = extraction?.extraction_notes ?? null;
 
-    this.logger.log(`writeCompleted — durId=${durId} docId=${docId} processingStatus=${processingStatus}`);
+    this.logger.log(`writeCompleted — durId=${durId} docId=${docId} uploadId=${uploadId} processingStatus=${processingStatus}`);
 
-    const postRejectionUpdate = await this.computePostRejectionUpdate(durId, docId, processingStatus);
+    const postRejectionUpdate = await this.computePostRejectionUpdate(durId, docId, uploadId, processingStatus);
 
-    await this.durModel.updateOne(
-      { _id: new Types.ObjectId(durId), 'documents.docId': docId },
+    const result = await this.durModel.updateOne(
+      { _id: new Types.ObjectId(durId), documents: { $elemMatch: { docId, 'currentUpload.uploadId': uploadId } } },
       {
         $set: {
           'documents.$.processingStatus': processingStatus,
@@ -47,16 +54,17 @@ export class DurValidationResultWriter {
         },
       },
     );
+    this.logStaleResultIfUnmatched(result.matchedCount, durId, docId, uploadId);
   }
 
-  async writeFailed(durId: string, docId: string, reason?: string | null): Promise<void> {
+  async writeFailed(durId: string, docId: string, uploadId: string, reason?: string | null): Promise<void> {
     const completedAt = new Date();
-    this.logger.warn(`writeFailed — durId=${durId} docId=${docId} reason=${reason}`);
+    this.logger.warn(`writeFailed — durId=${durId} docId=${docId} uploadId=${uploadId} reason=${reason}`);
 
-    const postRejectionUpdate = await this.computePostRejectionUpdate(durId, docId, 'FAILED');
+    const postRejectionUpdate = await this.computePostRejectionUpdate(durId, docId, uploadId, 'FAILED');
 
-    await this.durModel.updateOne(
-      { _id: new Types.ObjectId(durId), 'documents.docId': docId },
+    const result = await this.durModel.updateOne(
+      { _id: new Types.ObjectId(durId), documents: { $elemMatch: { docId, 'currentUpload.uploadId': uploadId } } },
       {
         $set: {
           'documents.$.processingStatus': 'FAILED',
@@ -67,13 +75,25 @@ export class DurValidationResultWriter {
         },
       },
     );
+    this.logStaleResultIfUnmatched(result.matchedCount, durId, docId, uploadId);
+  }
+
+  private logStaleResultIfUnmatched(matchedCount: number, durId: string, docId: string, uploadId: string): void {
+    if (matchedCount === 0) {
+      this.logger.warn(
+        `Dropped a stale validation result — durId=${durId} docId=${docId} uploadId=${uploadId} no longer matches the document's current upload (superseded by a re-upload)`,
+      );
+    }
   }
 
   /** Mirrors AnnualAccountOcrProcessor.computePostRejectionUpdate exactly, using the shared
-   *  cooldown util instead of a locally re-derived threshold. */
+   *  cooldown util instead of a locally re-derived threshold. Scoped by uploadId too, same reason
+   *  as the write above — reading a re-uploaded slot's fields here would build an update for the
+   *  wrong upload, even though the outer write's own uploadId match would still stop it landing. */
   private async computePostRejectionUpdate(
     durId: string,
     docId: string,
+    uploadId: string,
     processingStatus: 'PASSED' | 'FAILED',
   ): Promise<Record<string, unknown>> {
     if (processingStatus === 'PASSED') {
@@ -86,7 +106,10 @@ export class DurValidationResultWriter {
     }
 
     const doc = await this.durModel
-      .findOne({ _id: new Types.ObjectId(durId), 'documents.docId': docId }, { 'documents.$': 1 })
+      .findOne(
+        { _id: new Types.ObjectId(durId), documents: { $elemMatch: { docId, 'currentUpload.uploadId': uploadId } } },
+        { 'documents.$': 1 },
+      )
       .lean()
       .exec();
     const docSlot = doc?.documents?.[0];

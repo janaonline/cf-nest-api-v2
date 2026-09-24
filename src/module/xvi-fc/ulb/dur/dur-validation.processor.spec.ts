@@ -96,7 +96,7 @@ describe('DurValidationProcessor', () => {
     await jest.advanceTimersByTimeAsync(5000);
     await processPromise;
 
-    expect(resultWriter.writeCompleted).toHaveBeenCalledWith(durId, 'tiedGrant', resultResponse);
+    expect(resultWriter.writeCompleted).toHaveBeenCalledWith(durId, 'tiedGrant', 'upload-1', resultResponse);
     expect(resultWriter.writeFailed).not.toHaveBeenCalled();
   });
 
@@ -108,7 +108,7 @@ describe('DurValidationProcessor', () => {
     await processPromise;
 
     expect(durApi.getJobResult).not.toHaveBeenCalled();
-    expect(resultWriter.writeFailed).toHaveBeenCalledWith(durId, 'tiedGrant', 'Gemini upload timed out');
+    expect(resultWriter.writeFailed).toHaveBeenCalledWith(durId, 'tiedGrant', 'upload-1', 'Gemini upload timed out');
     expect(resultWriter.writeCompleted).not.toHaveBeenCalled();
   });
 
@@ -120,6 +120,7 @@ describe('DurValidationProcessor', () => {
     expect(resultWriter.writeFailed).toHaveBeenCalledWith(
       durId,
       'tiedGrant',
+      'upload-1',
       'The validation service did not respond in time. Please try again.',
     );
     expect(resultWriter.writeCompleted).not.toHaveBeenCalled();
@@ -130,7 +131,12 @@ describe('DurValidationProcessor', () => {
 
     await processor.process(makeJob());
 
-    expect(resultWriter.writeFailed).toHaveBeenCalledWith(durId, 'tiedGrant', 'Failed to validate this document. Please try again.');
+    expect(resultWriter.writeFailed).toHaveBeenCalledWith(
+      durId,
+      'tiedGrant',
+      'upload-1',
+      'Failed to validate this document. Please try again.',
+    );
   });
 
   it('leaves the job unsettled (neither writeCompleted nor writeFailed called) after exhausting all polls', async () => {
@@ -153,7 +159,7 @@ describe('DurValidationProcessor', () => {
     await processPromise;
 
     expect(durModel.updateOne).toHaveBeenCalledWith(
-      { _id: expect.anything(), 'documents.docId': 'tiedGrant' },
+      { _id: expect.anything(), documents: { $elemMatch: { docId: 'tiedGrant', 'currentUpload.uploadId': 'upload-1' } } },
       expect.objectContaining({
         $set: expect.objectContaining({
           'documents.$.currentUpload.ocrInfo.jobId': 'dur-job-1',
