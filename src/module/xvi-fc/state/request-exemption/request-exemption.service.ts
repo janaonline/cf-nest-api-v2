@@ -60,25 +60,13 @@ import type {
   RequestExemptionSaveResponseData,
 } from './request-exemption.types';
 
-/** Only formId 30/31 (Audited/Provisional AFS) map to a real per-ULB section document checked
- *  here - formId 23 (Elected Body) is checked separately, by
- *  `assertElectedBodyRowNotAlreadyEligible` below, since its real data lives in a row inside a
- *  shared per-state dataset rather than a discrete per-ULB document (see that method's own
- *  doc-comment). Same mapping as `AnnualAccountsService`'s own SECTION_FORM_IDS (inverse direction)
- *  and `RequestExemptionMohuaService`'s AFS_SECTION_TYPE_BY_FORM_ID - kept as three small local
- *  copies rather than a shared cross-module export, consistent with this codebase's existing
- *  convention for small structural formId lookup tables. Unlike the *offered reasons and their
- *  labels* (now sourced per-year via `RequestExemptionFormJsonConfigService.loadReasonOptions`),
- *  this is a stable
- *  code-level mapping of which Annual Accounts section a reason corresponds to. */
+/** Maps a per-ULB reason formId to its Annual Accounts section type; formId 23 (Elected Body) is
+ *  checked separately by `assertElectedBodyRowNotAlreadyEligible`. See CLAUDE.md's Invariants
+ *  section for why this stays a small local copy rather than a shared export. */
 const AFS_SECTION_TYPE_BY_FORM_ID: Record<number, 'audited' | 'unaudited'> = { 30: 'audited', 31: 'unaudited' };
 
-/** Whole-state reasons (`reasonForExemptionState`) that map to a real target state form to check
- *  real progress on before allowing a filing - today only SFC Status (formId 22). A whole-state
- *  reason with no entry here (none exist yet) is treated as always-eligible, same convention as
- *  formId 23 on the per-ULB side (AFS_SECTION_TYPE_BY_FORM_ID, above) - it just has no real
- *  progress to check. Extend this set (and assertTargetStateFormsEligible's dispatch) the day a
- *  second whole-state reason is added. */
+/** Whole-state reasons with a real target form to check - only SFC Status today. Extend this (and
+ *  assertTargetStateFormsEligible's dispatch) the day a second whole-state reason is added. */
 const STATE_FORM_IDS_WITH_REAL_PROGRESS_CHECK: ReadonlySet<number> = new Set([SFC_FORM_ID]);
 
 /** Plain-object shape of one `data[]` entry — used both for what's read back (`.lean()`) and for
@@ -169,12 +157,9 @@ export class RequestExemptionService {
   }
 
   /**
-   * The union of both reason fields' `{id, label}` options for `yearId` (per-ULB —
-   * `reasonForExemption` — and whole-state — `reasonForExemptionState`) — the same per-year
-   * `formjsons`-sourced lists `getForm` embeds in its field config, exposed on their own so the
-   * "Exemption Status" list's filter dropdown can fetch just this, without `getForm`'s unrelated
-   * ULB-autocomplete/file fields and start-a-new-request permission gating. IDs are disjoint by
-   * construction (per-ULB formIds vs whole-state formIds never overlap), so a flat merge is safe.
+   * The union of both reason fields' `{id, label}` options for `yearId`, for the "Exemption Status"
+   * list's filter dropdown — exposed separately from `getForm` so callers don't need its unrelated
+   * fields/permissions. IDs are disjoint by construction, so a flat merge is safe.
    */
   async getReasonOptions(
     stateId: string,
@@ -191,20 +176,9 @@ export class RequestExemptionService {
   }
 
   /**
-   * Final-submits a Request Exemption for one or more `formId`s at once — the only write path for
-   * this form (no draft step). Resolves the one document for `{ulb, year}` (per-ULB branch) or
-   * `{state, year, ulb:null}` (whole-state branch — creating it if this is the first-ever request
-   * of that kind) and merges each submitted `formId` into its `data[]`: a brand-new `formId` is
-   * pushed; a `RETURNED_BY_MOHUA` one is wholesale-replaced in place (fresh content/timestamps,
-   * decision fields cleared); a still-`UNDER_REVIEW_BY_MOHUA` or already
-   * `SUBMISSION_ACKNOWLEDGED_BY_MOHUA` one blocks the *whole* submission (all-or-nothing), naming
-   * every conflicting `formId`. See `xvi-fc-eligibility-exemption.schema.ts`'s own doc-comment for
-   * the full reasoning behind this shape (both branches).
-   *
-   * Writes one append-only log row per submitted `formId` alongside the document write, in the
-   * same transaction — see `xvi-fc-eligibility-exemption-form-log.schema.ts`'s doc-comment for why
-   * that pairing needs transactional integrity here specifically (unlike most of this feature's
-   * other writes).
+   * Final-submits one or more `formId`s at once — the only write path for this form (no draft
+   * step). See docs/adr/0001-document-shape-and-write-concurrency.md for the document shape,
+   * wholesale-replace semantics, and write-concurrency mechanics.
    */
   async finalSubmit(
     dto: SaveRequestExemptionDto,
@@ -241,14 +215,8 @@ export class RequestExemptionService {
             `${reasonLabelById.get(entry.formId) ?? `Reason #${entry.formId}`} (${getFormStatusLabel(entry.currentFormStatus)})`,
         )
         .join(', ');
-      // ConflictException (409), deliberately not ForbiddenException (403): the frontend's global
-      // HTTP interceptor treats *any* 403 as an invalid/expired session and force-logs the user
-      // out - correct for a genuine cross-state access violation (assertStateAccess, above), but
-      // wrong here. This is a normal, expected business-rule conflict for a fully authenticated,
-      // authorized user - there's no client-side equivalent check to prevent them from hitting it
-      // in the first place (unlike every other ForbiddenException in this codebase's state forms,
-      // which the UI already makes practically unreachable by disabling the button first), so this
-      // is the one case in this feature that a real user actually hits in normal use.
+      // ConflictException (409), not ForbiddenException (403) - see
+      // docs/adr/0002-eligibility-gating-and-race-window.md for why.
       const subject = sanitized.ulb ? 'This ULB' : 'This state';
       throw new ConflictException(
         `${subject} already has a request for: ${details}. Check the Exemption Status list, and resubmit ` +
@@ -365,14 +333,8 @@ export class RequestExemptionService {
   /**
    * Paginated, flattened list of this state's own requests for the year — one row per
    * `(document, data[] entry)` pair, newest document first. Backs the "Exemption Status" landing
-   * table; `canCreate` mirrors `getForm`'s `canEdit` so the frontend can disable/hide the "Request
-   * Exemption" button without a second round trip.
-   *
-   * Pagination happens after flattening, in memory, not at the Mongo query level: every document
-   * for this state+year is fetched (bounded by how many distinct ULBs have ever filed a request —
-   * small even for a large state, and each document holds at most one entry per this year's offered
-   * reasons), which is simpler than an `$unwind` aggregation for a row count nowhere near large
-   * enough for that to matter.
+   * table. Filters and pagination are applied in memory - see CLAUDE.md's "list() filters and
+   * paginates in memory" section for why.
    */
   async list(
     stateId: string,
@@ -416,8 +378,6 @@ export class RequestExemptionService {
       }));
     });
 
-    // Filters applied in-memory, before pagination - the whole state+year candidate set is already
-    // in hand (see the comment above on why this stays a plain .find() + JS, not an aggregation).
     if (query.reasonForExemption != null) {
       allItems = allItems.filter((item) => item.formId === query.reasonForExemption);
     }
@@ -445,11 +405,8 @@ export class RequestExemptionService {
     });
   }
 
-  /** Batch-resolves `{ulbId -> {name, censusCode}}` for a page of list rows — same find-by-ids + Map
-   *  technique `ulb.service.ts`'s `attachLookupNames` uses; kept local since only these two fields are
-   *  needed here. `censusCode` falls back to `sbCode` — same convention `listUlbSlbForms`/
-   *  `listUlbSubmissions`'s own `$ifNull: ['$censusCode', '$sbCode']` aggregation stage uses, just
-   *  computed in plain TS since this is a `.find()`, not an aggregation pipeline. */
+  /** Batch-resolves `{ulbId -> {name, censusCode}}` for a page of list rows. `censusCode` falls back
+   *  to `sbCode`, same convention as `listUlbSlbForms`/`listUlbSubmissions`. */
   private async resolveUlbNames(
     ulbIds: Types.ObjectId[],
   ): Promise<Map<string, { name: string; censusCode: string | null }>> {
@@ -485,11 +442,9 @@ export class RequestExemptionService {
   }
 
   /**
-   * Fails fast (409) if any submitted formId's own target form already has real progress -
-   * re-verified again at MoHUA-decide time (RequestExemptionMohuaService.approve), since time may
-   * pass between filing and decision; this is purely so a doomed request never sits in MoHUA's
-   * queue in the first place. Only formId 30/31 have a real per-ULB status to check - see
-   * AFS_SECTION_TYPE_BY_FORM_ID's own doc-comment for why formId 23 is skipped entirely.
+   * Fails fast (409) if any submitted formId's own target form already has real progress. See
+   * docs/adr/0002-eligibility-gating-and-race-window.md for the fail-fast/re-verify pattern and why
+   * each formId's check is shaped differently.
    */
   private async assertTargetFormsEligible(
     ulb: Types.ObjectId,
@@ -536,15 +491,9 @@ export class RequestExemptionService {
   }
 
   /**
-   * Elected Body (23) has no per-ULB submission-status document to check the way 30/31 do - its
-   * row-level domain value (`electedBodyStatus`) and its submission-workflow status (`rowStatus`)
-   * are decoupled (both only ever move together, in bulk, at finalSubmit - see
-   * common/services/CLAUDE.md). So "already has real progress" here means something different:
-   * not "has this been submitted for review", but "does the ULB's current row value already meet
-   * the requirement" - an exemption only makes sense when it wouldn't (e.g. "Not Constituted");
-   * requesting one for a ULB that's already "Constituted"/"6th Schedule" has nothing to excuse.
-   * `rowEligibleValues` is read live from Elected Body's own claimEligibility config (not a second
-   * hardcoded list) so an admin's edit to that config changes this gate automatically.
+   * Elected Body (23) has no per-ULB submission-status document to check the way 30/31 do - checks
+   * the ULB's current row value against Elected Body's own live eligibility config instead. See
+   * docs/adr/0002-eligibility-gating-and-race-window.md.
    */
   private async assertElectedBodyRowNotAlreadyEligible(
     ulb: Types.ObjectId,
@@ -580,13 +529,8 @@ export class RequestExemptionService {
     }
   }
 
-  /**
-   * Whole-state counterpart of `assertTargetFormsEligible` - fails fast (409) if a submitted
-   * whole-state reason's own target form already has real progress (no longer Not Started/In
-   * Progress/Returned by MoHUA - i.e. already submitted to MoHUA or beyond), re-verified again at
-   * MoHUA-decide time same as the per-ULB branch. Only formId 22 (SFC Status) has a real target
-   * form to check today - see STATE_FORM_IDS_WITH_REAL_PROGRESS_CHECK's own doc-comment.
-   */
+  /** Whole-state counterpart of `assertTargetFormsEligible` - only formId 22 (SFC Status) has a
+   *  real target form to check today. See docs/adr/0002-eligibility-gating-and-race-window.md. */
   private async assertTargetStateFormsEligible(
     stateId: string,
     yearId: string,
@@ -622,19 +566,8 @@ export class RequestExemptionService {
     }
   }
 
-  /**
-   * Branches on `data.exemptionFor` (defaulting to `'ULB'` when absent — see
-   * `RequestExemptionDataDto.exemptionFor`'s doc-comment on why this stays optional):
-   * - `'ULB'`: `ulb` is required and `reasonForExemption` is validated against
-   *   `allowedUlbReasonFormIds` — unchanged from the original single-branch behavior.
-   * - `'STATE'`: `ulb` is forced to `null` regardless of what the client sent (a stray value is
-   *   discarded, not treated as a validation error — nothing sensitive happens by ignoring it),
-   *   and `reasonForExemptionState` is validated against `allowedStateReasonFormIds` instead.
-   * This per-branch (not unioned) validation is load-bearing, not cosmetic: it's what guarantees a
-   * whole-state (`ulb: null`) document can never carry a formId 30/31 entry, which is exactly what
-   * lets `finalSubmit` skip `assertTargetFormsEligible` for that branch without re-deriving the
-   * same guarantee there.
-   */
+  /** Validates the `'ULB'`/`'STATE'` branches of `data` separately, not as a union - see CLAUDE.md's
+   *  "exemptionFor branching" section for why this split is load-bearing. */
   private validateAndSanitize(
     data: RequestExemptionDataDto,
     allowedUlbReasonFormIds: readonly number[],

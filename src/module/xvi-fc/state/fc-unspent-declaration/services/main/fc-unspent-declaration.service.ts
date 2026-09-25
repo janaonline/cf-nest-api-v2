@@ -224,9 +224,8 @@ export class FcUnspentDeclarationService {
       fcDeclaration: dto.data.fcDeclaration ?? null,
       fcUnspentDeclaration: dto.data.fcUnspentDeclaration ?? null,
       checkboxConfirmation: dto.data.checkboxConfirmation ?? false,
-      // Synthetic key matching the frontend's savedUnspentUlbData signal, used by
-      // fcUnspentDeclaration.visibleWhen to check whether any rows are being saved.
-      // Safe to derive from the raw payload since invalid/duplicate rows are rejected.
+      // Synthetic key for fcUnspentDeclaration.visibleWhen — see CLAUDE.md's "FC Unspent
+      // Declaration document and its two file fields" section.
       savedUnspentUlbData: dto.data.unspentUlbData ?? [],
     };
     const validation = this.dynamicFormValidator.validateDraftAndBuildPayload(questions, validatorData);
@@ -403,7 +402,8 @@ export class FcUnspentDeclarationService {
       fcDeclaration: dto.data.fcDeclaration ?? existing?.fcDeclaration ?? null,
       fcUnspentDeclaration: dto.data.fcUnspentDeclaration ?? existing?.fcUnspentDeclaration ?? null,
       checkboxConfirmation: dto.data.checkboxConfirmation ?? false,
-      // Same synthetic key as saveDraft — see the comment there.
+      // Same synthetic key as saveDraft — see CLAUDE.md's "FC Unspent Declaration document and
+      // its two file fields" section.
       savedUnspentUlbData: dto.data.unspentUlbData ?? [],
     };
     const validation = this.dynamicFormValidator.validateFinalSubmitAndBuildPayload(questions, validatorData);

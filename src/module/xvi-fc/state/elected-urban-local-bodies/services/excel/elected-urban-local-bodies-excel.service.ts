@@ -115,8 +115,8 @@ export class ElectedUrbanLocalBodiesExcelService {
     const userOid = new Types.ObjectId(user._id);
 
     // 1. Load active, XVI-FC-eligible DB ULBs + check for existing form in parallel (no mutual
-    // dependency). Must use the same eligibility filter as getTemplate()'s registry query, or a
-    // state's Excel upload will spuriously fail the row-count match check.
+    // dependency). See CLAUDE.md's "Every active-ULB-count call site must use the same eligibility
+    // filter".
     const formFilter = { state: stateOid, year: yearOid, formType: EULB_FORM_TYPE };
     const eligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC');
     const [dbUlbsRaw, existing] = await Promise.all([
@@ -514,9 +514,10 @@ export class ElectedUrbanLocalBodiesExcelService {
 
       if (rows.length > 0) {
         // Load active, XVI-FC-eligible registry ULBs for revalidation; derive count from the find
-        // result. Must match getTemplate()'s registry filter or row-count checks will mismatch.
-        // TODO: dateOfConstitution has no validation rule defined/implemented yet — same gap as
-        // elected-urban-local-bodies.service.ts's getTemplate (identical TODO, not yet scoped).
+        // result. Must use the same filter as every other active-ULB-count call site (see
+        // CLAUDE.md's "Every active-ULB-count call site must use the same eligibility filter").
+        // TODO: dateOfConstitution's maxDate is hardcoded to today, not read from config — see
+        // CLAUDE.md's "Known gaps". Not yet scoped.
         const dbUlbs = (await this.ulbModel
           .find(await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC'))
           .select('_id name censusCode sbCode')
@@ -705,7 +706,7 @@ export class ElectedUrbanLocalBodiesExcelService {
     yearId: string,
   ): Promise<XviFcApiResponse<EulbRevalidateExcelResponseData>> {
     // Load active, XVI-FC-eligible registry ULBs; derive count from the find result — no extra
-    // query. Must match getTemplate()'s registry filter or row-count checks will mismatch.
+    // query. See CLAUDE.md's "Every active-ULB-count call site must use the same eligibility filter".
     const dbUlbs = (await this.ulbModel
       .find(await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC'))
       .select('_id name censusCode sbCode')

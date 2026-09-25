@@ -34,6 +34,21 @@ submitted rows without a full resubmit.
   (`validateExcel` and `revalidateExcel`'s re-parse branch) — a fix to one without the other will
   leave them inconsistent.
 
+## Every active-ULB-count call site must use the same eligibility filter
+
+Six call sites independently compute "how many ULBs currently count for this state" via
+`UlbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC')`:
+`services/main/elected-urban-local-bodies.service.ts`'s `getTemplate`, `saveDraft`, and
+`finalSubmit`, and `services/excel/elected-urban-local-bodies-excel.service.ts`'s `validateExcel`,
+`revalidateExcel`'s Case A, and `revalidateFromStoredFile`. All six must resolve to the identical
+set of ULBs (this filter excludes Cantonment Boards and any other XVI-FC-ineligible type) — if one
+call site drifts to a plain `{state, isActive: true}` query, its active-ULB count diverges from the
+others', and the Excel row-count-match check (`excelRowCount === activeUlbCount`) spuriously fails
+(or spuriously passes) for any state that has one of the excluded ULB types. Not factored into one
+shared helper: each call site's surrounding query already differs (`.find()` vs `.countDocuments()`,
+different `.select()` projections), so a shared function would mostly just take back what it was
+meant to remove.
+
 ## Row-level review status (`rowStatus`)
 
 Each `ElectedUrbanLocalBodiesRow` has a `rowStatus` field (`null` pre-submission, set to
@@ -184,3 +199,16 @@ without this, swapping in a brand-new, never-validated file would leave the prev
 `'VALID'` flag in place until the next validate/revalidate call, letting
 `signedElectedbodyFile` appear (and its own `required` validator be skipped or enforced) against a
 stale status.
+
+## Known gaps
+
+- **`dateOfConstitution`'s maxDate is hardcoded to `today`, not read from config.** Unlike
+  `dateOfExpiry` (whose configured `maxDate` — a fixed ISO date or a `FIELD:` relative token — is
+  fully parsed and enforced via `expiryMaxFixed`/`expiryMaxRelative`, see the section above),
+  `dateOfConstitution`'s own DB-configured `maxDate` validator entry has its `.message` read by
+  `extractDateConfig()` but its `.validator` (the actual bound) is never parsed or used —
+  `EulbDateValidationConfig` has no `constitutionMax` field at all. The real upper bound enforced in
+  `validateCommonFields`/`validatePortalUpdateFields` is unconditionally "today", regardless of
+  whatever date the DB config's `maxDate.validator` specifies. Flagged inline as a short TODO at both
+  places that load the ULB registry (`elected-urban-local-bodies.service.ts`'s `getTemplate` and
+  `elected-urban-local-bodies-excel.service.ts`'s `revalidateExcel`) — not yet scoped as a task.

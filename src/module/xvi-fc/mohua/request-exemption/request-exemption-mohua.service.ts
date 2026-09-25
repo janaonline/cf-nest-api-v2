@@ -66,15 +66,10 @@ const AFS_SECTION_LABEL_BY_FORM_ID: Record<number, string> = {
  * `mohua/fc-unspent-declaration`'s split. Much simpler than that module: one `data[]` entry per
  * decide call, addressed by `{requestId, formId}` — no bulk-row/eligibility machinery.
  *
- * Deliberately never writes to `xvifc_annualaccounts`/its own log collection - both approve and
- * reject only ever touch this module's own collections (`xvifc_eligibility_exemptions` + its own
- * form-log). An "Approved" outcome is a pure display-only overlay, exactly like "Pending"/"Rejected"
- * already are (see `AnnualAccountsService.listUlbSubmissions`'s exemption overlay and
- * `assertNotBlockedByPendingExemption`) - not a real status write into a collection this module
- * doesn't own. This was a deliberate architecture change: an earlier version materialized/revised a
- * real Annual Accounts section document on approve, which repeatedly conflicted with that
- * collection's own invariants owned by `AnnualAccountsService` (e.g. the `sectionType: 'audited'`
- * universal per-{ulb,year} anchor `findOrInitialize` guarantees elsewhere) - see this feature's ADR.
+ * Deliberately never writes to `xvifc_annualaccounts`/a target form's own collection - both approve
+ * and reject only ever touch this module's own collections. See
+ * `docs/adr/0001-display-only-overlay-no-target-form-writes.md` for why (a real architecture change
+ * after an earlier version's writes conflicted with the target collections' own invariants).
  */
 @Injectable()
 export class RequestExemptionMohuaService {
@@ -278,11 +273,8 @@ export class RequestExemptionMohuaService {
   /** Fast pre-transaction check - not a full race guard on its own, see `assertUpdateMatched`. */
   private assertPending(entry: ExemptionEntryLean): void {
     if (entry.currentFormStatus !== FORM_STATUS.UNDER_REVIEW_BY_MOHUA) {
-      // ConflictException (409), not ForbiddenException - same reasoning as the STATE-side
-      // finalSubmit's own blocked-formId check: an ordinary, expected business-rule conflict for
-      // an authenticated, authorized MoHUA user (e.g. a double-click, or two reviewers racing on
-      // the same request), not an auth failure - the frontend's global interceptor force-logs out
-      // on any 403, which would be wrong here.
+      // ConflictException (409), not ForbiddenException — see state/request-exemption's ADR 0002
+      // for why.
       throw new ConflictException(
         `This entry cannot be decided while its status is ${getFormStatusLabel(entry.currentFormStatus)}.`,
       );
@@ -301,15 +293,10 @@ export class RequestExemptionMohuaService {
   }
 
   /**
-   * Read-only eligibility check re-run at decide time (filing already checked this once, but time
-   * may pass between filing and decision - see `RequestExemptionService.assertTargetFormsEligible`/
-   * `assertTargetStateFormsEligible`, the same check's filing-time counterparts). Branches on
-   * `formId`, not on `doc.ulb` - formId 30/31 check the real per-ULB Annual Accounts section;
-   * formId 22 checks the real whole-state SFC Status document; formId 23 (Elected Body) checks the
-   * ULB's row eligibility instead, via `assertElectedBodyRowNotAlreadyEligible` below. The first two
-   * block approval (409) if the target form already has real progress beyond
-   * ULB_EDITABLE_STATUS_IDS/STATE_EDITABLE_STATUS_IDS; Elected Body blocks on a different condition
-   * (row already eligible) - see that method's own doc-comment for why.
+   * Read-only eligibility check re-run at decide time — the decide-time half of the same check
+   * `RequestExemptionService.assertTargetFormsEligible`/`assertTargetStateFormsEligible` run at
+   * filing time. See CLAUDE.md's "assertSectionStillEligible branches by formId, not by doc.ulb"
+   * section.
    */
   private async assertSectionStillEligible(doc: ExemptionDocLean, formId: number): Promise<void> {
     const sectionType = AFS_SECTION_TYPE_BY_FORM_ID[formId];
@@ -352,16 +339,10 @@ export class RequestExemptionMohuaService {
   }
 
   /**
-   * Elected Body (23) has no per-ULB submission-status document the way 30/31 do - its row-level
-   * domain value (`electedBodyStatus`) and its submission-workflow status (`rowStatus`) are
-   * decoupled (both only ever move together, in bulk, at finalSubmit - see
-   * common/services/CLAUDE.md). So this re-checks the same thing `RequestExemptionService`'s
-   * `assertElectedBodyRowNotAlreadyEligible` already checked at filing time: not "has this been
-   * submitted for review", but "does the ULB's current row value already meet the requirement" -
-   * approving an exemption for a ULB that's already "Constituted"/"6th Schedule" would be
-   * nonsensical, since there's nothing left to excuse. `rowEligibleValues` is read live from
-   * Elected Body's own claimEligibility config, same as at filing time - not a second hardcoded
-   * list.
+   * Elected Body's decide-time counterpart to `RequestExemptionService`'s own
+   * `assertElectedBodyRowNotAlreadyEligible` — same question, same live `rowEligibleValues` read.
+   * See `elected-urban-local-bodies/CLAUDE.md`'s "Row-level review status (`rowStatus`)" section for
+   * why this checks `electedBodyStatus`, not a submission-status document the way 30/31 have.
    */
   private async assertElectedBodyRowNotAlreadyEligible(doc: ExemptionDocLean): Promise<void> {
     if (!doc.ulb) return; // formId 23 is always a per-ULB request; defensive, not reachable today.

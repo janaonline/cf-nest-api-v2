@@ -13,11 +13,12 @@ Formula's allocation data. No ADR of its own — see "Dependencies" below for wh
 - `services/rows/fc-unspent-declaration-row.service.ts` — per-ULB row resolution/validation,
   including the `eligibility` computation (see "Dependencies"). The threshold percent it compares
   against is not a constant baked into this file — it's resolved per design year by
-  `services/form-json/fc-unspent-declaration-form-json.service.ts`'s
-  `getEligibilityThresholdPercent()`, which reads `formJson.meta.eligibilityThresholdPercent` and
-  falls back to `FC_UNSPENT_ELIGIBILITY_THRESHOLD_PERCENT` (constants/) only when a design year's
-  form-json document has no override. Main service fetches it once per request and passes it into
-  both the GET response's `threshold` field and `resolveAndValidateRows`'s `opts.thresholdPercent`.
+  `services/form-json/fc-unspent-declaration-form-json.service.ts`'s `loadFormConfig()`, whose
+  returned `thresholdPercent` reads `formJson.meta.eligibilityThresholdPercent` (via the private
+  `resolveThresholdPercent()`) and falls back to `FC_UNSPENT_ELIGIBILITY_THRESHOLD_PERCENT`
+  (constants/) only when a design year's form-json document has no override. Main service calls
+  `loadFormConfig()` once per request and passes the result into both the GET response's
+  `threshold` field and `resolveAndValidateRows`'s `opts.thresholdPercent`.
 - `services/ulb-options/fc-unspent-ulb-options.service.ts` — ULB picker data.
 - `services/document/fc-unspent-declaration-document.service.ts` (+ `-docx.service.ts`) — assembles
   and renders the FC Unspent Declaration letter (Word doc, via the `docx` npm package) served by
@@ -57,9 +58,10 @@ server-side on every branch switch as a second line of defense, mirroring `fcDec
 established forcing behavior.
 
 `FcUnspentDeclarationDocumentService.getDocumentData()` gates the same way `getForm`/`saveDraft`/
-`finalSubmit` do (`FcUnspentDeclarationService.assertStateAccess`/`resolveDevolutionDependency`/
-`buildFormPermissions`, reused as-is — those methods are intentionally not `private` for this
-reason) and additionally refuses to build the Yes-branch document (400, `fcUnspentDeclaration`
+`finalSubmit` do — the shared `assertStateAccess` util (imported independently, same as every other
+xvi-fc module), plus `FcUnspentDeclarationService`'s own `resolveDevolutionDependency`/
+`buildFormPermissions` reused as-is (those two are intentionally not `private` for this reason) —
+and additionally refuses to build the Yes-branch document (400, `fcUnspentDeclaration`
 field, code `noRows`) unless the active row set has at least one row, and refuses either branch
 (400, `_form`, code `branchNotChosen`) until `isFcUnspent` has been answered. Column values come
 straight off already-computed row data (`allocationAmount`/`unspentAmount`/`allocationPerc`/

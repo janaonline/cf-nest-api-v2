@@ -20,14 +20,7 @@ export interface RequestExemptionSaveResponseData {
   currentFormStatusLabel: string;
 }
 
-/**
- * Per-year `reasonForExemption` formId and display label are sourced from
- * `formjsons` (formId 34, field key `reasonForExemption`) via
- * `RequestExemptionFormJsonConfigService.loadReasonOptions`.
- *
- * This is the single source for reason formIds, labels, and validation, so
- * year-over-year reason changes require only a `formjsons` data update—no code changes.
- */
+/** Sourced live from `formjsons` — see CLAUDE.md's "Reason options are sourced live" section. */
 export interface RequestExemptionReasonOption {
   id: number;
   label: string;

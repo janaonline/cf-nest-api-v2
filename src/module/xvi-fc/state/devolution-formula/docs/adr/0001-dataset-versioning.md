@@ -19,8 +19,8 @@ be handed the same version number.
   `activeDatasetVersion` is the single source of truth for which version is "live"; any row with a
   lower `datasetVersion` is stale.
 - The version swap (`DevolutionFormulaExcelService.validateExcel`,
-  `services/excel/devolution-formula-excel.service.ts:378-442`) happens as one atomic operation,
-  entirely inside one Mongo transaction:
+  `services/excel/devolution-formula-excel.service.ts`, ~lines 406-497) happens as one atomic
+  operation, entirely inside one Mongo transaction:
   1. `findOneAndUpdate` with `$inc: { activeDatasetVersion: 1 }` (upsert) — atomic; two concurrent
      requests can never be handed the same new version number, since MongoDB serializes the
      increment.

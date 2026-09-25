@@ -482,12 +482,9 @@ export class SfcStatusService {
   // ─── Helpers ─────────────────────────────────────────────────────────────────
 
   /**
-   * Read-only signal for the state page: is a discretionary whole-state Request Exemption
-   * pending or decided for SFC Status, and (for Rejected) why — lets the frontend show a status
-   * banner and render read-only while Pending, instead of only hitting the block on the next
-   * write (assertNotBlockedByExemption). Approved is also surfaced explicitly so the frontend
-   * never has to infer it itself. Mirrors AnnualAccountsService.resolveExemptionStatusForResponse,
-   * but keyed on the whole-state (`ulb: null`) branch instead of a per-ULB, per-section one.
+   * Read-only exemption signal for the state page (status banner + read-only render while Pending,
+   * ahead of the next write hitting `assertNotBlockedByExemption`). See CLAUDE.md's "Discretionary
+   * whole-state exemption awareness" section.
    */
   private async resolveExemptionStatusForResponse(
     stateId: string,
@@ -510,32 +507,12 @@ export class SfcStatusService {
   }
 
   /**
-   * Blocks state write actions on SFC Status while a discretionary whole-state Request Exemption
-   * entry for this state+year is UNDER_REVIEW_BY_MOHUA or already SUBMISSION_ACKNOWLEDGED_BY_MOHUA
-   * (Approved) - SFC Status's own real `currentFormStatus` is never touched by either outcome
-   * (RequestExemptionMohuaService deliberately only writes to its own collections), so the ordinary
-   * assertCanStateEditForm/assertCanStateFinalSubmitForm gates would otherwise still allow editing
-   * straight through both states - this is the only place that blocks them. Once Rejected, SFC
-   * Status's real status governs normally again. Mirrors
-   * AnnualAccountsService.assertNotBlockedByPendingExemption.
-   *
-   * `finalSubmit` calls this twice - once up front (fail fast, avoid wasted validation work) and
-   * again immediately before its write - since a discretionary exemption could be filed and
-   * approved during the awaited work in between (loadFormQuestions, the existence `findOne`,
-   * validation, file normalization). Neither call reserves anything (still a plain, unlocked read,
-   * same as `RequestExemptionMohuaService.approve`'s own eligibility check), so this narrows the
-   * window rather than closing it outright - accepted as sufficient given approving an exemption
-   * requires a human MoHUA decision, not something that can land inside a single request's
-   * lifetime by accident.
-   *
-   * Throws ConflictException (409), deliberately not ForbiddenException (403): the frontend's
-   * global HTTP interceptor treats *any* 403 as an invalid/expired session and force-logs the user
-   * out - correct for a genuine cross-state access violation (assertStateAccess), but wrong here.
-   * The acknowledgment section is hidden client-side once `formLocked()` is true, but that only
-   * prevents a click from a page that's already current - a tab left open from before the
-   * exemption went Pending/Approved still renders the old, unlocked buttons until reloaded, so a
-   * real authenticated STATE user can still reach this guard in normal use. Same reasoning as
-   * `request-exemption.service.ts`'s own "already has a request for..." conflict.
+   * Blocks state writes while SFC Status's discretionary whole-state exemption is Pending/Approved
+   * (neither outcome touches SFC Status's own `currentFormStatus`, so the ordinary status gates
+   * wouldn't otherwise catch this). `finalSubmit` calls this twice to narrow the TOCTOU window
+   * across its awaited validation steps. See CLAUDE.md's "Discretionary whole-state exemption
+   * awareness" section and request-exemption's `docs/adr/0002-eligibility-gating-and-race-window.md`
+   * for the full rationale, incl. the ConflictException-not-ForbiddenException convention.
    */
   private async assertNotBlockedByExemption(stateId: string, yearId: string): Promise<void> {
     const entry = await this.exemptionResolverService.resolveDiscretionary(
@@ -612,8 +589,8 @@ export class SfcStatusService {
   }
 
   /**
-   * Inserts a history row unless `fromStatus === toStatus` (no-op re-save). The form document is
-   * updated first; if this insert fails, the transition has already persisted.
+   * No-ops when `fromStatus === toStatus`. See CLAUDE.md's "The one tradeoff worth knowing before
+   * touching writes" section for the non-transactional-write tradeoff.
    *
    * @param entry - ip/userAgent are optional (omitted for non-HTTP triggers).
    */

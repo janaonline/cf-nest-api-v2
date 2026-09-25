@@ -1097,8 +1097,8 @@ describe('FcUnspentDeclarationService', () => {
   // generate a real document server-side. See
   // services/document/fc-unspent-declaration-document.service.spec.ts and
   // fc-unspent-declaration-docx.service.spec.ts for that feature's own tests, which cover the
-  // access/status/Devolution gates this service still centralizes via the now-public
-  // `resolveDevolutionDependency`/`buildFormPermissions`/`assertStateAccess`, reused as-is.
+  // access/status/Devolution gates this service still centralizes via the shared `assertStateAccess`
+  // util plus its own now-public `resolveDevolutionDependency`/`buildFormPermissions`, reused as-is.
 
   describe('question hydration — download-template/download-declaration actions', () => {
     it('is visible on GET for fcDeclaration when canEdit is true', async () => {
