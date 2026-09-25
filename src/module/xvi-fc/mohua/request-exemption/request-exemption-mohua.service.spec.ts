@@ -9,6 +9,9 @@ import { XviFcEligibilityExemption } from 'src/schemas/xvi-fc/state/xvi-fc-eligi
 import { XviFcEligibilityExemptionFormLog } from 'src/schemas/xvi-fc/state/xvi-fc-eligibility-exemption-form-log.schema';
 import { XviFcAnnualAccount } from 'src/schemas/xvi-fc/annual-account.schema';
 import { XviFcSfcStatus } from 'src/schemas/xvi-fc/state/sfc-status.schema';
+import { ElectedUrbanLocalBodiesForm } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
+import { ElectedUrbanLocalBodiesRow } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
+import { FormJsonService } from 'src/master/form-json/form-json.service';
 import { RequestExemptionMohuaService } from './request-exemption-mohua.service';
 
 /** find/findById/findOne().lean().session().exec() chain mock. */
@@ -46,6 +49,9 @@ describe('RequestExemptionMohuaService', () => {
   let exemptionLogModel: { create: jest.Mock };
   let annualAccountModel: { findOne: jest.Mock };
   let sfcStatusModel: { findOne: jest.Mock };
+  let electedBodyFormModel: { findOne: jest.Mock };
+  let electedBodyRowModel: { findOne: jest.Mock };
+  let formJsonService: { findActiveByDesignYearAndFormId: jest.Mock };
   let session: ReturnType<typeof makeSession>;
   let connection: { startSession: jest.Mock };
 
@@ -81,6 +87,16 @@ describe('RequestExemptionMohuaService', () => {
     exemptionLogModel = { create: jest.fn().mockResolvedValue([{}]) };
     annualAccountModel = { findOne: jest.fn().mockReturnValue(q(null)) };
     sfcStatusModel = { findOne: jest.fn().mockReturnValue(q(null)) };
+    // No Elected Body form doc by default - nothing uploaded yet means formId 23 is always
+    // eligible to approve (nothing to check). Individual tests override this to exercise
+    // assertElectedBodyRowNotAlreadyEligible's blocking path.
+    electedBodyFormModel = { findOne: jest.fn().mockReturnValue(q(null)) };
+    electedBodyRowModel = { findOne: jest.fn().mockReturnValue(q(null)) };
+    formJsonService = {
+      findActiveByDesignYearAndFormId: jest.fn().mockResolvedValue({
+        claimEligibility: { evaluator: { config: { rowEligibleValues: ['Constituted', '6th Schedule'] } } },
+      }),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -89,7 +105,10 @@ describe('RequestExemptionMohuaService', () => {
         { provide: getModelToken(XviFcEligibilityExemptionFormLog.name), useValue: exemptionLogModel },
         { provide: getModelToken(XviFcAnnualAccount.name), useValue: annualAccountModel },
         { provide: getModelToken(XviFcSfcStatus.name), useValue: sfcStatusModel },
+        { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: electedBodyFormModel },
+        { provide: getModelToken(ElectedUrbanLocalBodiesRow.name), useValue: electedBodyRowModel },
         { provide: getConnectionToken(), useValue: connection },
+        { provide: FormJsonService, useValue: formJsonService },
       ],
     }).compile();
 
@@ -194,7 +213,7 @@ describe('RequestExemptionMohuaService', () => {
       expect(exemptionModel.findOneAndUpdate).not.toHaveBeenCalled();
     });
 
-    it('skips the Annual Accounts eligibility check entirely for formId 23 (Elected Body) - no per-ULB document to check', async () => {
+    it('skips the Annual Accounts eligibility check entirely for formId 23 (Elected Body is checked separately, by row eligibility)', async () => {
       exemptionModel.findById.mockReturnValue(q(pendingDoc(23)));
 
       await service.approve(requestId.toString(), 23, mohuaUser, '127.0.0.1', 'jest');
@@ -202,6 +221,73 @@ describe('RequestExemptionMohuaService', () => {
       expect(annualAccountModel.findOne).not.toHaveBeenCalled();
       expect(exemptionModel.findOneAndUpdate).toHaveBeenCalled();
       expect(session.commitTransaction).toHaveBeenCalled();
+    });
+
+    describe('target row eligibility (formId 23 / Elected Body)', () => {
+      it('approves fine when no Elected Body form document exists yet (nothing uploaded)', async () => {
+        exemptionModel.findById.mockReturnValue(q(pendingDoc(23)));
+
+        await service.approve(requestId.toString(), 23, mohuaUser, '127.0.0.1', 'jest');
+
+        expect(electedBodyRowModel.findOne).not.toHaveBeenCalled();
+        expect(exemptionModel.findOneAndUpdate).toHaveBeenCalled();
+      });
+
+      it('approves fine when the ULB has no row in the active dataset', async () => {
+        exemptionModel.findById.mockReturnValue(q(pendingDoc(23)));
+        electedBodyFormModel.findOne.mockReturnValue(q({ activeDatasetVersion: 2 }));
+        electedBodyRowModel.findOne.mockReturnValue(q(null));
+
+        await service.approve(requestId.toString(), 23, mohuaUser, '127.0.0.1', 'jest');
+
+        expect(exemptionModel.findOneAndUpdate).toHaveBeenCalled();
+      });
+
+      it('approves fine when the ULB’s row is already "Not Constituted" (ineligible - the real use case)', async () => {
+        exemptionModel.findById.mockReturnValue(q(pendingDoc(23)));
+        electedBodyFormModel.findOne.mockReturnValue(q({ activeDatasetVersion: 2 }));
+        electedBodyRowModel.findOne.mockReturnValue(q({ electedBodyStatus: 'Not Constituted' }));
+
+        await service.approve(requestId.toString(), 23, mohuaUser, '127.0.0.1', 'jest');
+
+        expect(exemptionModel.findOneAndUpdate).toHaveBeenCalled();
+        expect(session.commitTransaction).toHaveBeenCalled();
+      });
+
+      it('blocks with ConflictException, before starting a transaction, when the ULB’s row is already "Constituted"', async () => {
+        exemptionModel.findById.mockReturnValue(q(pendingDoc(23)));
+        electedBodyFormModel.findOne.mockReturnValue(q({ activeDatasetVersion: 2 }));
+        electedBodyRowModel.findOne.mockReturnValue(q({ electedBodyStatus: 'Constituted' }));
+
+        await expect(service.approve(requestId.toString(), 23, mohuaUser, '127.0.0.1', 'jest')).rejects.toThrow(
+          ConflictException,
+        );
+        expect(exemptionModel.findOneAndUpdate).not.toHaveBeenCalled();
+        expect(connection.startSession).not.toHaveBeenCalled();
+      });
+
+      it('blocks with ConflictException when the ULB’s row is already "6th Schedule"', async () => {
+        exemptionModel.findById.mockReturnValue(q(pendingDoc(23)));
+        electedBodyFormModel.findOne.mockReturnValue(q({ activeDatasetVersion: 2 }));
+        electedBodyRowModel.findOne.mockReturnValue(q({ electedBodyStatus: '6th Schedule' }));
+
+        await expect(service.approve(requestId.toString(), 23, mohuaUser, '127.0.0.1', 'jest')).rejects.toThrow(
+          ConflictException,
+        );
+      });
+
+      it('reads rowEligibleValues live from the Elected Body formjson, not a hardcoded list', async () => {
+        exemptionModel.findById.mockReturnValue(q(pendingDoc(23)));
+        electedBodyFormModel.findOne.mockReturnValue(q({ activeDatasetVersion: 2 }));
+        electedBodyRowModel.findOne.mockReturnValue(q({ electedBodyStatus: 'Some Future Value' }));
+        formJsonService.findActiveByDesignYearAndFormId.mockResolvedValue({
+          claimEligibility: { evaluator: { config: { rowEligibleValues: ['Some Future Value'] } } },
+        });
+
+        await expect(service.approve(requestId.toString(), 23, mohuaUser, '127.0.0.1', 'jest')).rejects.toThrow(
+          ConflictException,
+        );
+      });
     });
 
     it('aborts the transaction and rethrows if a write fails', async () => {

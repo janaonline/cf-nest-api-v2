@@ -46,6 +46,13 @@ row approve/reject endpoint, so `rowStatus` only ever reaches `UNDER_REVIEW_BY_M
 never advances further. The `post-submission-update` correction workflow does not read or write
 `rowStatus`.
 
+This decoupling (a row's domain value `electedBodyStatus` can be real and final well before
+`rowStatus`/the form's own `currentFormStatus` ever leaves draft) is exactly why
+`state/request-exemption`'s and `mohua/request-exemption`'s Elected Body eligibility gate
+(`assertElectedBodyRowNotAlreadyEligible` in both) checks `electedBodyStatus` against the live
+`rowEligibleValues` config, not `rowStatus`/`currentFormStatus` the way SFC/AFS's gates do — see
+root `CLAUDE.md`'s xvi-fc/state bullet.
+
 ## Form status history log
 
 `schemas/xvi-fc/state/elected-urban-local-bodies-form-history.schema.ts` (collection

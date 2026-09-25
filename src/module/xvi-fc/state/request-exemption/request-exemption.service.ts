@@ -36,6 +36,17 @@ import {
   XviFcSfcStatus,
   XviFcSfcStatusDocument,
 } from 'src/schemas/xvi-fc/state/sfc-status.schema';
+import {
+  ElectedUrbanLocalBodiesForm,
+  EulbFormDocument,
+} from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
+import {
+  ElectedUrbanLocalBodiesRow,
+  EulbRowDocument,
+} from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
+import { EULB_FORM_ID } from 'src/module/xvi-fc/state/elected-urban-local-bodies/constants/elected-urban-local-bodies.constants';
+import { FormJsonService } from 'src/master/form-json/form-json.service';
+import type { ClaimEligibilityRowMatchConfig } from 'src/module/xvi-fc/common/types/claim-eligibility.type';
 import { getFieldsByType } from './helpers/request-exemption-form-json.helpers';
 import { RequestExemptionFormJsonConfigService } from './services/form-json/request-exemption-form-json.service';
 import { RequestExemptionDataDto, SaveRequestExemptionDto } from './dto/save-request-exemption.dto';
@@ -49,15 +60,16 @@ import type {
   RequestExemptionSaveResponseData,
 } from './request-exemption.types';
 
-/** formId 23 (Elected Body) has no per-ULB status to check at all - ElectedUrbanLocalBodiesForm is
- *  a whole-state document (state+year, no `ulb` field), not per-ULB like Annual Accounts - so
- *  there's no equivalent "does this ULB already have real progress" question to ask for it. Only
- *  formId 30/31 (Audited/Provisional AFS) map to a real per-ULB section document. Same mapping as
- *  `AnnualAccountsService`'s own SECTION_FORM_IDS (inverse direction) and
- *  `RequestExemptionMohuaService`'s AFS_SECTION_TYPE_BY_FORM_ID - kept as three small local copies
- *  rather than a shared cross-module export, consistent with this codebase's existing convention
- *  for small structural formId lookup tables. Unlike the *offered reasons and their labels* (now
- *  sourced per-year via `RequestExemptionFormJsonConfigService.loadReasonOptions`), this is a stable
+/** Only formId 30/31 (Audited/Provisional AFS) map to a real per-ULB section document checked
+ *  here - formId 23 (Elected Body) is checked separately, by
+ *  `assertElectedBodyRowNotAlreadyEligible` below, since its real data lives in a row inside a
+ *  shared per-state dataset rather than a discrete per-ULB document (see that method's own
+ *  doc-comment). Same mapping as `AnnualAccountsService`'s own SECTION_FORM_IDS (inverse direction)
+ *  and `RequestExemptionMohuaService`'s AFS_SECTION_TYPE_BY_FORM_ID - kept as three small local
+ *  copies rather than a shared cross-module export, consistent with this codebase's existing
+ *  convention for small structural formId lookup tables. Unlike the *offered reasons and their
+ *  labels* (now sourced per-year via `RequestExemptionFormJsonConfigService.loadReasonOptions`),
+ *  this is a stable
  *  code-level mapping of which Annual Accounts section a reason corresponds to. */
 const AFS_SECTION_TYPE_BY_FORM_ID: Record<number, 'audited' | 'unaudited'> = { 30: 'audited', 31: 'unaudited' };
 
@@ -115,10 +127,15 @@ export class RequestExemptionService {
     private readonly annualAccountModel: Model<XviFcAnnualAccountDocument>,
     @InjectModel(XviFcSfcStatus.name)
     private readonly sfcStatusModel: Model<XviFcSfcStatusDocument>,
+    @InjectModel(ElectedUrbanLocalBodiesForm.name)
+    private readonly electedBodyFormModel: Model<EulbFormDocument>,
+    @InjectModel(ElectedUrbanLocalBodiesRow.name)
+    private readonly electedBodyRowModel: Model<EulbRowDocument>,
     @InjectConnection()
     private readonly connection: Connection,
     private readonly fileInfoNormalizer: FileInfoNormalizerService,
     private readonly formJsonConfig: RequestExemptionFormJsonConfigService,
+    private readonly formJsonService: FormJsonService,
   ) {}
 
   /**
@@ -240,16 +257,18 @@ export class RequestExemptionService {
     }
 
     if (sanitized.ulb) {
-      // Per-ULB branch: only formId 30/31 map to a real Annual Accounts section to check.
-      await this.assertTargetFormsEligible(sanitized.ulb, dto.yearId, sanitized.reasonForExemption, reasonLabelById);
-    } else {
-      // Whole-state branch: only formId 22 (SFC Status) maps to a real target form to check today.
-      await this.assertTargetStateFormsEligible(
+      // Per-ULB branch: formId 30/31 map to a real Annual Accounts section; formId 23 (Elected
+      // Body) checks the ULB's current row value instead - see assertTargetFormsEligible.
+      await this.assertTargetFormsEligible(
+        sanitized.ulb,
         dto.stateId,
         dto.yearId,
         sanitized.reasonForExemption,
         reasonLabelById,
       );
+    } else {
+      // Whole-state branch: only formId 22 (SFC Status) maps to a real target form to check today.
+      await this.assertTargetStateFormsEligible(dto.stateId, dto.yearId, sanitized.reasonForExemption, reasonLabelById);
     }
 
     const userOid = new Types.ObjectId(user._id);
@@ -474,39 +493,89 @@ export class RequestExemptionService {
    */
   private async assertTargetFormsEligible(
     ulb: Types.ObjectId,
+    stateId: string,
     yearId: string,
     reasonForExemption: number[],
     reasonLabelById: Map<number, string>,
   ): Promise<void> {
     const sectionFormIds = reasonForExemption.filter((formId) => formId in AFS_SECTION_TYPE_BY_FORM_ID);
-    if (sectionFormIds.length === 0) return;
+    if (sectionFormIds.length > 0) {
+      const sectionTypes = sectionFormIds.map((formId) => AFS_SECTION_TYPE_BY_FORM_ID[formId]);
+      const sectionDocs = await this.annualAccountModel
+        .find(
+          { ulb, design_year: new Types.ObjectId(yearId), sectionType: { $in: sectionTypes } },
+          { sectionType: 1, form_status_id: 1 },
+        )
+        .lean<{ sectionType: 'audited' | 'unaudited'; form_status_id: number }[]>()
+        .exec();
+      const statusIdBySectionType = new Map(sectionDocs.map((doc) => [doc.sectionType, doc.form_status_id]));
 
-    const sectionTypes = sectionFormIds.map((formId) => AFS_SECTION_TYPE_BY_FORM_ID[formId]);
-    const sectionDocs = await this.annualAccountModel
-      .find(
-        { ulb, design_year: new Types.ObjectId(yearId), sectionType: { $in: sectionTypes } },
-        { sectionType: 1, form_status_id: 1 },
-      )
-      .lean<{ sectionType: 'audited' | 'unaudited'; form_status_id: number }[]>()
+      const ineligible = sectionFormIds
+        .map((formId) => ({ formId, statusId: statusIdBySectionType.get(AFS_SECTION_TYPE_BY_FORM_ID[formId]) }))
+        // No document at all = NOT_STARTED-equivalent = eligible; only a present, non-editable
+        // status blocks.
+        .filter(
+          (x): x is { formId: number; statusId: number } =>
+            x.statusId !== undefined && !ULB_EDITABLE_STATUS_IDS.includes(x.statusId),
+        );
+
+      if (ineligible.length > 0) {
+        const details = ineligible
+          .map((x) => `${reasonLabelById.get(x.formId) ?? `Reason #${x.formId}`} (${getFormStatusLabel(x.statusId)})`)
+          .join(', ');
+        throw new ConflictException(
+          `This ULB already has real progress on: ${details}. An exemption can only be requested before the ` +
+            `ULB has submitted that form for state review.`,
+        );
+      }
+    }
+
+    if (reasonForExemption.includes(EULB_FORM_ID)) {
+      await this.assertElectedBodyRowNotAlreadyEligible(ulb, stateId, yearId, reasonLabelById);
+    }
+  }
+
+  /**
+   * Elected Body (23) has no per-ULB submission-status document to check the way 30/31 do - its
+   * row-level domain value (`electedBodyStatus`) and its submission-workflow status (`rowStatus`)
+   * are decoupled (both only ever move together, in bulk, at finalSubmit - see
+   * common/services/CLAUDE.md). So "already has real progress" here means something different:
+   * not "has this been submitted for review", but "does the ULB's current row value already meet
+   * the requirement" - an exemption only makes sense when it wouldn't (e.g. "Not Constituted");
+   * requesting one for a ULB that's already "Constituted"/"6th Schedule" has nothing to excuse.
+   * `rowEligibleValues` is read live from Elected Body's own claimEligibility config (not a second
+   * hardcoded list) so an admin's edit to that config changes this gate automatically.
+   */
+  private async assertElectedBodyRowNotAlreadyEligible(
+    ulb: Types.ObjectId,
+    stateId: string,
+    yearId: string,
+    reasonLabelById: Map<number, string>,
+  ): Promise<void> {
+    const form = await this.electedBodyFormModel
+      .findOne({ state: new Types.ObjectId(stateId), year: new Types.ObjectId(yearId) }, { activeDatasetVersion: 1 })
+      .lean<{ activeDatasetVersion: number }>()
       .exec();
-    const statusIdBySectionType = new Map(sectionDocs.map((doc) => [doc.sectionType, doc.form_status_id]));
+    if (!form) return; // nothing uploaded yet - nothing to check
 
-    const ineligible = sectionFormIds
-      .map((formId) => ({ formId, statusId: statusIdBySectionType.get(AFS_SECTION_TYPE_BY_FORM_ID[formId]) }))
-      // No document at all = NOT_STARTED-equivalent = eligible; only a present, non-editable
-      // status blocks.
-      .filter(
-        (x): x is { formId: number; statusId: number } =>
-          x.statusId !== undefined && !ULB_EDITABLE_STATUS_IDS.includes(x.statusId),
-      );
+    const row = await this.electedBodyRowModel
+      .findOne(
+        { ulbId: ulb, year: new Types.ObjectId(yearId), datasetVersion: form.activeDatasetVersion, isActive: true },
+        { electedBodyStatus: 1 },
+      )
+      .lean<{ electedBodyStatus?: string }>()
+      .exec();
+    if (!row?.electedBodyStatus) return; // no row, or no value yet - nothing to check
 
-    if (ineligible.length > 0) {
-      const details = ineligible
-        .map((x) => `${reasonLabelById.get(x.formId) ?? `Reason #${x.formId}`} (${getFormStatusLabel(x.statusId)})`)
-        .join(', ');
+    const formJson = await this.formJsonService.findActiveByDesignYearAndFormId(yearId, EULB_FORM_ID);
+    const rowMatch = formJson.claimEligibility?.evaluator?.config as ClaimEligibilityRowMatchConfig | undefined;
+    const eligibleValues = rowMatch?.rowEligibleValues ?? [];
+
+    if (eligibleValues.includes(row.electedBodyStatus)) {
       throw new ConflictException(
-        `This ULB already has real progress on: ${details}. An exemption can only be requested before the ` +
-          `ULB has submitted that form for state review.`,
+        `This ULB's Elected Body status is already "${row.electedBodyStatus}" - ` +
+          `${reasonLabelById.get(EULB_FORM_ID) ?? 'Election / duly constituted ULB exemption'} can only be ` +
+          `requested when the ULB's current status doesn't already meet the requirement.`,
       );
     }
   }

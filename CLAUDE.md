@@ -60,8 +60,12 @@ src/
 │   │                    # request-exemption-mohua.service.ts's assertSectionStillEligible) — both
 │   │                    # request-exemption modules directly inject the target schemas' models for this, a small
 │   │                    # deliberate coupling (not routed through XviFcCommonModule) since only these read-only
-│   │                    # eligibility checks need them. formId 23 (Elected Body) has no real per-ULB/state document
-│   │                    # to check and is skipped entirely.
+│   │                    # eligibility checks need them. formId 23 (Elected Body) is checked too, but on a
+│   │                    # different axis — its row-level domain value (electedBodyStatus) and submission-workflow
+│   │                    # status (rowStatus) are decoupled (see elected-urban-local-bodies/CLAUDE.md), so filing/
+│   │                    # approving is blocked when the ULB's current row is already eligible per Elected Body's
+│   │                    # own claimEligibility.evaluator.config.rowEligibleValues (read live, not hardcoded), not
+│   │                    # when it's merely been submitted.
 │   ├── mohua/           # fc-unspent-declaration and request-exemption review workflows (each a separate module,
 │   │                    # decoupled from its own STATE-side module — mirrors fc-unspent's own split)
 │   ├── side-menu/, cache/, common/ # XviFcCacheService/Interceptor, form-actors, form-status-access helpers,
