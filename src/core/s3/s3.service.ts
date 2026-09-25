@@ -1,20 +1,19 @@
 // s3.service.ts
-import { Injectable, Logger } from '@nestjs/common';
 import {
-  S3Client,
+  CopyObjectCommand,
   GetObjectCommand,
+  GetObjectCommandOutput,
   HeadObjectCommand,
   HeadObjectCommandOutput,
-  GetObjectCommandOutput,
-  HeadObjectCommandOutput,
   PutObjectCommand,
-  CopyObjectCommand,
+  S3Client,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NodeHttpHandler } from '@smithy/node-http-handler';
-import { Readable } from 'stream';
 import { PDFDocument } from 'pdf-lib';
+import { Readable } from 'stream';
 
 @Injectable()
 export class S3Service {
