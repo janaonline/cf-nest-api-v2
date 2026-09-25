@@ -9,6 +9,7 @@ import {
   XviFcEligibilityExemptionFormLogSchema,
 } from 'src/schemas/xvi-fc/state/xvi-fc-eligibility-exemption-form-log.schema';
 import { XviFcAnnualAccount, XviFcAnnualAccountSchema } from 'src/schemas/xvi-fc/annual-account.schema';
+import { XviFcSfcStatus, XviFcSfcStatusSchema } from 'src/schemas/xvi-fc/state/sfc-status.schema';
 import { RequestExemptionMohuaController } from './request-exemption-mohua.controller';
 import { RequestExemptionMohuaService } from './request-exemption-mohua.service';
 
@@ -18,6 +19,7 @@ import { RequestExemptionMohuaService } from './request-exemption-mohua.service'
       { name: XviFcEligibilityExemption.name, schema: XviFcEligibilityExemptionSchema },
       { name: XviFcEligibilityExemptionFormLog.name, schema: XviFcEligibilityExemptionFormLogSchema },
       { name: XviFcAnnualAccount.name, schema: XviFcAnnualAccountSchema },
+      { name: XviFcSfcStatus.name, schema: XviFcSfcStatusSchema },
     ]),
   ],
   controllers: [RequestExemptionMohuaController],

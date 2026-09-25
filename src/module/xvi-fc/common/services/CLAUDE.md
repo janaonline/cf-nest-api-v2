@@ -20,15 +20,21 @@ everything else.
 - `claim-eligibility-evaluator.service.ts` — the `EXEMPTED` eligibility bucket.
 - `exemption-resolver.service.ts` — the shared "is this (ulb, formId, year) exempt, and why"
   resolver every read-only display consumer (e.g. the SLB review table, `AnnualAccountsService`'s
-  `listUlbSubmissions`/`resolveExemptionStatusForResponse`) should call instead of re-deriving the
-  doc-exists-or-no-doc-and-exempt check itself. Two independent sources, both read-only:
+  `listUlbSubmissions`/`resolveExemptionStatusForResponse`, `SfcStatusService`'s own
+  `resolveExemptionStatusForResponse`) should call instead of re-deriving the doc-exists-or-no-doc-
+  and-exempt check itself. Two independent sources, both read-only:
   `resolveBulk`/`resolveBulk` wraps `peekEntry` for the AUTOMATIC mechanism (this file's own
   subject); `resolveDiscretionary`/`resolveDiscretionaryBulk` reads `xvifc_eligibility_exemptions`
   directly for the discretionary STATE→MoHUA Request Exemption flow
   (`module/xvi-fc/state/request-exemption` / `module/xvi-fc/mohua/request-exemption`) — a
   genuinely separate mechanism (different collection, different actors, different lifecycle), not
   folded into `Ulb.yearAccess` itself; this service is just the one place both are read from. Never
-  writes to either source.
+  writes to either source. `resolveDiscretionary` also resolves the **whole-state** branch of that
+  same collection (`ulb: null` documents, e.g. SFC Status's formId 22) via a `ulbId: null` overload
+  that additionally requires `stateId` — unlike a real ULB id, `ulb: null` alone isn't unique to one
+  state (every state's whole-state exemption doc for a given year shares it), so the query must be
+  scoped by `state` too in that branch. `resolveDiscretionaryBulk` has no whole-state variant (no
+  caller needs one yet — only ever called with real ULB ids).
 - `../utils/design-year-label.util.ts` — `formatYearLabel`/`parseStartCalendarYear`, the
   `number ⇄ "YYYY-YY"` conversion every piece below relies on.
 - `../constants/xvifc-cycle.constants.ts` — `isWithinXvifcCycle`, the fixed 2026-27…2030-31 award
