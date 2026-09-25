@@ -9,6 +9,8 @@ import { Ulb } from 'src/schemas/ulb.schema';
 import { Year } from 'src/schemas/year.schema';
 import { FormJsonConfigService } from 'src/master/form-json-config/form-json-config.service';
 import { YearAccessService } from './year-access.service';
+import { ExemptionResolverService } from './exemption-resolver.service';
+import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 
 /** Chainable Mongoose Query-like mock resolving to `value` once `.exec()` is called. */
 function q<T>(value: T) {
@@ -27,6 +29,7 @@ describe('ClaimEligibilityEvaluatorService', () => {
   let yearModel: { findById: jest.Mock };
   let formJsonConfigService: { findByFormId: jest.Mock };
   let yearAccessService: { peekEntry: jest.Mock };
+  let exemptionResolverService: { resolveDiscretionary: jest.Mock; resolveDiscretionaryBulk: jest.Mock };
 
   const stateId = new Types.ObjectId();
   const designYearId = new Types.ObjectId().toString();
@@ -72,6 +75,11 @@ describe('ClaimEligibilityEvaluatorService', () => {
     yearModel = { findById: jest.fn() };
     formJsonConfigService = { findByFormId: jest.fn().mockResolvedValue(null) };
     yearAccessService = { peekEntry: jest.fn() };
+    // Default: no discretionary requests on record, so existing (pre-discretionary) behavior is unchanged.
+    exemptionResolverService = {
+      resolveDiscretionary: jest.fn().mockResolvedValue(null),
+      resolveDiscretionaryBulk: jest.fn().mockResolvedValue(new Map()),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -82,6 +90,7 @@ describe('ClaimEligibilityEvaluatorService', () => {
         // Default: exemption never applies, so existing (pre-dynamic-year-access) behavior is unchanged.
         { provide: FormJsonConfigService, useValue: formJsonConfigService },
         { provide: YearAccessService, useValue: yearAccessService },
+        { provide: ExemptionResolverService, useValue: exemptionResolverService },
       ],
     }).compile();
 
@@ -199,6 +208,91 @@ describe('ClaimEligibilityEvaluatorService', () => {
     // §3.1) — the evaluator must stay driven entirely by the passed-in config.
     const serviceSource = ClaimEligibilityEvaluatorService.toString();
     expect(serviceSource).not.toMatch(/formId\s*===\s*24/);
+  });
+
+  describe('evaluate - discretionary exemption (state-level, single result)', () => {
+    const exemptDevolutionConfig: ClaimEligibilityConfig = { ...devolutionConfig, exemption: { allowed: true } };
+
+    it('returns EXEMPTED with no source document, when an Approved discretionary exemption exists', async () => {
+      findOne.mockResolvedValue(null);
+      exemptionResolverService.resolveDiscretionary.mockResolvedValue({
+        requestId: new Types.ObjectId('6ab630c411607f9d6540b099'),
+        currentFormStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+        decidedAt: new Date(),
+        mohuaRemarks: null,
+      });
+      const doc = sourceFormJson({ claimEligibility: exemptDevolutionConfig });
+
+      const result = await service.evaluate(doc, { stateId, designYearId, installment: 1 });
+
+      expect(result.result).toBe('EXEMPTED');
+      expect(result.reasonCode).toBe('DISCRETIONARY_EXEMPTION_APPROVED');
+      expect(result.exemptionId).toBe('6ab630c411607f9d6540b099');
+      expect(result.formDocumentId).toBeNull();
+      expect(exemptionResolverService.resolveDiscretionary).toHaveBeenCalledWith(
+        null,
+        new Types.ObjectId(designYearId),
+        24,
+        stateId,
+      );
+    });
+
+    it('overrides a real source document stuck at a non-accepted status, when an Approved discretionary exemption exists', async () => {
+      const formDocId = new Types.ObjectId();
+      findOne.mockResolvedValue({ _id: formDocId, currentFormStatus: 2 });
+      exemptionResolverService.resolveDiscretionary.mockResolvedValue({
+        requestId: new Types.ObjectId('6ab630c411607f9d6540b099'),
+        currentFormStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+        decidedAt: new Date(),
+        mohuaRemarks: null,
+      });
+      const doc = sourceFormJson({ claimEligibility: exemptDevolutionConfig });
+
+      const result = await service.evaluate(doc, { stateId, designYearId, installment: 1 });
+
+      // A later, authoritative MoHUA decision overrides the real (but non-accepted) document
+      // status - same "exemption always wins" precedence as the bulk per-ULB paths.
+      expect(result.result).toBe('EXEMPTED');
+      expect(result.exemptionId).toBe('6ab630c411607f9d6540b099');
+      // Evidence from the real document is still preserved, not discarded.
+      expect(result.formDocumentId).toBe(String(formDocId));
+      expect(result.statusAtEvaluation).toBe(2);
+    });
+
+    it('stays PASSED/FAILED, unaffected, when config.exemption.allowed is false', async () => {
+      findOne.mockResolvedValue(null);
+      exemptionResolverService.resolveDiscretionary.mockResolvedValue({
+        requestId: new Types.ObjectId(),
+        currentFormStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+        decidedAt: new Date(),
+        mohuaRemarks: null,
+      });
+      const doc = sourceFormJson(); // devolutionConfig: exemption.allowed: false
+
+      const result = await service.evaluate(doc, { stateId, designYearId, installment: 1 });
+
+      expect(result.result).toBe('FAILED');
+      expect(result.reasonCode).toBe('SOURCE_FORM_NOT_FOUND');
+      expect(result.exemptionId).toBeNull();
+      expect(exemptionResolverService.resolveDiscretionary).not.toHaveBeenCalled();
+    });
+
+    it('does not override when the discretionary request is only Pending or was Rejected', async () => {
+      findOne.mockResolvedValue({ _id: new Types.ObjectId(), currentFormStatus: 2 });
+      exemptionResolverService.resolveDiscretionary.mockResolvedValue({
+        requestId: new Types.ObjectId(),
+        currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+        decidedAt: null,
+        mohuaRemarks: null,
+      });
+      const doc = sourceFormJson({ claimEligibility: exemptDevolutionConfig });
+
+      const result = await service.evaluate(doc, { stateId, designYearId, installment: 1 });
+
+      expect(result.result).toBe('FAILED');
+      expect(result.reasonCode).toBe('FORM_STATUS_2_NOT_ACCEPTED');
+      expect(result.exemptionId).toBeNull();
+    });
   });
 
   // ─── evaluateUlbBulk ────────────────────────────────────────────────────────
@@ -334,6 +428,19 @@ describe('ClaimEligibilityEvaluatorService', () => {
         // never EXEMPTED, even though yearAccess would otherwise say exempt.
         expect(perUlb.get(ulbA)).toBe('INELIGIBLE');
       });
+
+      it('discretionary exemption overrides a document with a real, non-exempt status - MoHUA approval always wins', async () => {
+        mockCollection('xvifc_slb_forms', [{ ulb: new Types.ObjectId(ulbA), currentFormStatus: 2 }]); // IN_PROGRESS
+        exemptionResolverService.resolveDiscretionaryBulk.mockResolvedValue(
+          new Map([[ulbA, { currentFormStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA }]]),
+        );
+        const doc = sourceFormJson({ formId: 32, type: 'SLB', claimEligibility: exemptSlbConfig });
+
+        const { perUlb, tally } = await service.evaluateUlbBulk(doc, { stateId, designYearId, expectedUlbIds: [ulbA] });
+
+        expect(perUlb.get(ulbA)).toBe('EXEMPTED');
+        expect(tally).toEqual({ eligible: 0, ineligible: 0, exempted: 1, total: 1 });
+      });
     });
 
     it('FORM_STATUS bulk: resolves a dotted currentFormStatus path (Annual Accounts style)', async () => {
@@ -441,6 +548,177 @@ describe('ClaimEligibilityEvaluatorService', () => {
       const { perUlb } = await service.evaluateUlbBulk(doc, { stateId, designYearId, expectedUlbIds: [ulbA] });
 
       expect(perUlb.get(ulbA)).toBe('INELIGIBLE'); // Elected Body's configured default
+    });
+
+    describe('ROW_STATUS_AND_FIELDS bulk - exemption (both mechanisms)', () => {
+      const exemptElectedBodyRowConfig: ClaimEligibilityConfig = {
+        ...electedBodyRowConfig,
+        exemption: { allowed: true, targetLevel: 'ROW_ELIGIBILITY' },
+      };
+
+      it('a ULB with no row is EXEMPTED when it has an Approved discretionary exemption', async () => {
+        mockCollection('xvifc_elected_ulb_forms', [{ activeDatasetVersion: 1 }]);
+        mockCollection('xvifc_elected_ulb_rows', []); // no rows for anyone
+        exemptionResolverService.resolveDiscretionaryBulk.mockResolvedValue(
+          new Map([[ulbA, { currentFormStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA }]]),
+        );
+        const doc = sourceFormJson({ formId: 23, type: 'ELECTED_BODY', claimEligibility: exemptElectedBodyRowConfig });
+
+        const { perUlb } = await service.evaluateUlbBulk(doc, { stateId, designYearId, expectedUlbIds: [ulbA] });
+
+        expect(perUlb.get(ulbA)).toBe('EXEMPTED');
+        expect(exemptionResolverService.resolveDiscretionaryBulk).toHaveBeenCalledWith(
+          [new Types.ObjectId(ulbA)],
+          new Types.ObjectId(designYearId),
+          23,
+        );
+      });
+
+      it('a ULB with no row is EXEMPTED when isApplicableForExemption is set and yearAccess says exempt (automatic)', async () => {
+        mockCollection('xvifc_elected_ulb_forms', [{ activeDatasetVersion: 1 }]);
+        mockCollection('xvifc_elected_ulb_rows', []);
+        formJsonConfigService.findByFormId.mockResolvedValue({ formId: 23, isApplicableForExemption: true });
+        yearModel.findById.mockReturnValue(q({ _id: designYearId, year: '2026-27' }));
+        ulbModel.find.mockReturnValue(q([{ _id: new Types.ObjectId(ulbA), startYear: 2026, yearAccess: {} }]));
+        yearAccessService.peekEntry.mockResolvedValue({ yearEnabled: true, yearId: designYearId, disabledFormIds: [23] });
+        const doc = sourceFormJson({ formId: 23, type: 'ELECTED_BODY', claimEligibility: exemptElectedBodyRowConfig });
+
+        const { perUlb } = await service.evaluateUlbBulk(doc, { stateId, designYearId, expectedUlbIds: [ulbA] });
+
+        expect(perUlb.get(ulbA)).toBe('EXEMPTED');
+      });
+
+      it('automatic and discretionary each independently exempt a different no-row ULB in the same call', async () => {
+        const ulbC = new Types.ObjectId().toString();
+        mockCollection('xvifc_elected_ulb_forms', [{ activeDatasetVersion: 1 }]);
+        mockCollection('xvifc_elected_ulb_rows', []);
+        formJsonConfigService.findByFormId.mockResolvedValue({ formId: 23, isApplicableForExemption: true });
+        yearModel.findById.mockReturnValue(q({ _id: designYearId, year: '2026-27' }));
+        ulbModel.find.mockReturnValue(q([{ _id: new Types.ObjectId(ulbA), startYear: 2026, yearAccess: {} }]));
+        yearAccessService.peekEntry.mockResolvedValue({ yearEnabled: true, yearId: designYearId, disabledFormIds: [23] });
+        exemptionResolverService.resolveDiscretionaryBulk.mockResolvedValue(
+          new Map([[ulbC, { currentFormStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA }]]),
+        );
+        const doc = sourceFormJson({ formId: 23, type: 'ELECTED_BODY', claimEligibility: exemptElectedBodyRowConfig });
+
+        const { perUlb } = await service.evaluateUlbBulk(doc, {
+          stateId,
+          designYearId,
+          expectedUlbIds: [ulbA, ulbC],
+        });
+
+        expect(perUlb.get(ulbA)).toBe('EXEMPTED'); // automatic
+        expect(perUlb.get(ulbC)).toBe('EXEMPTED'); // discretionary
+      });
+
+      it('stays at defaultWhenNoRow when config.exemption.allowed is false, even with an Approved discretionary exemption', async () => {
+        mockCollection('xvifc_elected_ulb_forms', [{ activeDatasetVersion: 1 }]);
+        mockCollection('xvifc_elected_ulb_rows', []);
+        exemptionResolverService.resolveDiscretionaryBulk.mockResolvedValue(
+          new Map([[ulbA, { currentFormStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA }]]),
+        );
+        const doc = sourceFormJson({ formId: 23, type: 'ELECTED_BODY', claimEligibility: electedBodyRowConfig }); // exemption.allowed: false
+
+        const { perUlb } = await service.evaluateUlbBulk(doc, { stateId, designYearId, expectedUlbIds: [ulbA] });
+
+        expect(perUlb.get(ulbA)).toBe('INELIGIBLE');
+        expect(exemptionResolverService.resolveDiscretionaryBulk).not.toHaveBeenCalled();
+      });
+
+      it('discretionary exemption overrides a ULB that already has a real row - MoHUA approval always wins', async () => {
+        mockCollection('xvifc_elected_ulb_forms', [{ activeDatasetVersion: 1 }]);
+        mockCollection('xvifc_elected_ulb_rows', [
+          { ulbId: new Types.ObjectId(ulbA), electedBodyStatus: 'Not Constituted' },
+        ]);
+        exemptionResolverService.resolveDiscretionaryBulk.mockResolvedValue(
+          new Map([[ulbA, { currentFormStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA }]]),
+        );
+        const doc = sourceFormJson({ formId: 23, type: 'ELECTED_BODY', claimEligibility: exemptElectedBodyRowConfig });
+
+        const { perUlb, tally, rowEvidenceByUlbId } = await service.evaluateUlbBulk(doc, {
+          stateId,
+          designYearId,
+          expectedUlbIds: [ulbA],
+        });
+
+        // A later, authoritative MoHUA decision overrides the real (but now moot) row data.
+        expect(perUlb.get(ulbA)).toBe('EXEMPTED');
+        expect(tally).toEqual({ eligible: 0, ineligible: 0, exempted: 1, total: 1 });
+        // Still frozen as evidence (with the real row's own fields) so claim-letter assembly
+        // doesn't fall back to the state-level source's own result for this ULB.
+        expect(rowEvidenceByUlbId.get(ulbA)).toEqual({
+          bucket: 'EXEMPTED',
+          rowDocumentId: expect.any(String),
+          rowStatusAtEvaluation: null,
+          datasetVersion: null, // mockCollection's findOne always resolves null; unrelated to this test
+        });
+      });
+
+      it('automatic exemption never overrides a ULB that already has a real row - golden rule (unchanged)', async () => {
+        mockCollection('xvifc_elected_ulb_forms', [{ activeDatasetVersion: 1 }]);
+        mockCollection('xvifc_elected_ulb_rows', [
+          { ulbId: new Types.ObjectId(ulbA), electedBodyStatus: 'Not Constituted' },
+        ]);
+        formJsonConfigService.findByFormId.mockResolvedValue({ formId: 23, isApplicableForExemption: true });
+        yearModel.findById.mockReturnValue(q({ _id: designYearId, year: '2026-27' }));
+        ulbModel.find.mockReturnValue(q([{ _id: new Types.ObjectId(ulbA), startYear: 2026, yearAccess: {} }]));
+        yearAccessService.peekEntry.mockResolvedValue({ yearEnabled: true, yearId: designYearId, disabledFormIds: [23] });
+        const doc = sourceFormJson({ formId: 23, type: 'ELECTED_BODY', claimEligibility: exemptElectedBodyRowConfig });
+
+        const { perUlb } = await service.evaluateUlbBulk(doc, { stateId, designYearId, expectedUlbIds: [ulbA] });
+
+        // Has a real row with status 'Not Constituted' - stays INELIGIBLE, never EXEMPTED, even
+        // though yearAccess would otherwise say exempt. The automatic golden rule (documented in
+        // common/services/CLAUDE.md) is unchanged by the discretionary precedence flip above.
+        expect(perUlb.get(ulbA)).toBe('INELIGIBLE');
+        // Golden rule means it's never even queried for a ULB that already has a row.
+        expect(formJsonConfigService.findByFormId).not.toHaveBeenCalled();
+      });
+
+      it('automatic exemption of a no-row ULB is frozen as evidence too, same as discretionary', async () => {
+        mockCollection('xvifc_elected_ulb_forms', [{ activeDatasetVersion: 1 }]);
+        mockCollection('xvifc_elected_ulb_rows', []);
+        formJsonConfigService.findByFormId.mockResolvedValue({ formId: 23, isApplicableForExemption: true });
+        yearModel.findById.mockReturnValue(q({ _id: designYearId, year: '2026-27' }));
+        ulbModel.find.mockReturnValue(q([{ _id: new Types.ObjectId(ulbA), startYear: 2026, yearAccess: {} }]));
+        yearAccessService.peekEntry.mockResolvedValue({ yearEnabled: true, yearId: designYearId, disabledFormIds: [23] });
+        const doc = sourceFormJson({ formId: 23, type: 'ELECTED_BODY', claimEligibility: exemptElectedBodyRowConfig });
+
+        const { perUlb, rowEvidenceByUlbId } = await service.evaluateUlbBulk(doc, {
+          stateId,
+          designYearId,
+          expectedUlbIds: [ulbA],
+        });
+
+        expect(perUlb.get(ulbA)).toBe('EXEMPTED');
+        expect(rowEvidenceByUlbId.get(ulbA)).toEqual({
+          bucket: 'EXEMPTED',
+          rowDocumentId: null,
+          rowStatusAtEvaluation: null,
+          datasetVersion: null, // mockCollection's findOne always resolves null; unrelated to this test
+        });
+      });
+
+      it('queries discretionary exemption even when every ULB already has a row, but skips the automatic lookup', async () => {
+        mockCollection('xvifc_elected_ulb_forms', [{ activeDatasetVersion: 1 }]);
+        mockCollection('xvifc_elected_ulb_rows', [
+          { ulbId: new Types.ObjectId(ulbA), electedBodyStatus: 'Constituted' },
+        ]);
+        const doc = sourceFormJson({ formId: 23, type: 'ELECTED_BODY', claimEligibility: exemptElectedBodyRowConfig });
+
+        await service.evaluateUlbBulk(doc, { stateId, designYearId, expectedUlbIds: [ulbA] });
+
+        // Discretionary must see every expected ULB, not just the ones missing a row, since it
+        // can override real data too.
+        expect(exemptionResolverService.resolveDiscretionaryBulk).toHaveBeenCalledWith(
+          [new Types.ObjectId(ulbA)],
+          new Types.ObjectId(designYearId),
+          23,
+        );
+        // Automatic's golden rule keeps it scoped to ULBs missing data - none here, so it's
+        // never queried at all.
+        expect(formJsonConfigService.findByFormId).not.toHaveBeenCalled();
+      });
     });
 
     it('FC-Unspent-shaped source (no parentCollection, boolean field, defaultWhenNoRow: ELIGIBLE) skips the dataset-version lookup entirely', async () => {
