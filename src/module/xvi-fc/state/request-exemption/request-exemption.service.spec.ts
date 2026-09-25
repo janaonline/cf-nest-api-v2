@@ -16,6 +16,9 @@ import {
 import { XviFcEligibilityExemptionFormLog } from 'src/schemas/xvi-fc/state/xvi-fc-eligibility-exemption-form-log.schema';
 import { XviFcAnnualAccount } from 'src/schemas/xvi-fc/annual-account.schema';
 import { XviFcSfcStatus } from 'src/schemas/xvi-fc/state/sfc-status.schema';
+import { ElectedUrbanLocalBodiesForm } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
+import { ElectedUrbanLocalBodiesRow } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
+import { FormJsonService } from 'src/master/form-json/form-json.service';
 import { RequestExemptionService } from './request-exemption.service';
 import { SaveRequestExemptionDto } from './dto/save-request-exemption.dto';
 import { RequestExemptionFormJsonConfigService } from './services/form-json/request-exemption-form-json.service';
@@ -147,8 +150,11 @@ describe('RequestExemptionService', () => {
   let ulbModel: { find: jest.Mock };
   let annualAccountModel: { find: jest.Mock };
   let sfcStatusModel: { findOne: jest.Mock };
+  let electedBodyFormModel: { findOne: jest.Mock };
+  let electedBodyRowModel: { findOne: jest.Mock };
   let fileInfoNormalizer: { normalizeInboundFileInfo: jest.Mock };
   let formJsonConfig: { loadFields: jest.Mock; loadReasonOptions: jest.Mock };
+  let formJsonService: { findActiveByDesignYearAndFormId: jest.Mock };
   let connection: { startSession: jest.Mock };
   let session: ReturnType<typeof makeSession>;
 
@@ -181,12 +187,26 @@ describe('RequestExemptionService', () => {
     sfcStatusModel = {
       findOne: jest.fn().mockReturnValue(q(null)),
     };
+    // No Elected Body form doc by default - nothing uploaded yet means every formId 23 reason is
+    // eligible (nothing to check). Individual tests override this to exercise
+    // assertElectedBodyRowNotAlreadyEligible's blocking path.
+    electedBodyFormModel = {
+      findOne: jest.fn().mockReturnValue(q(null)),
+    };
+    electedBodyRowModel = {
+      findOne: jest.fn().mockReturnValue(q(null)),
+    };
     fileInfoNormalizer = {
       normalizeInboundFileInfo: jest.fn().mockReturnValue({ file: null, errors: [] }),
     };
     formJsonConfig = {
       loadFields: jest.fn().mockResolvedValue(REQUEST_EXEMPTION_FIELDS_FIXTURE),
       loadReasonOptions: jest.fn().mockImplementation(defaultLoadReasonOptionsImpl()),
+    };
+    formJsonService = {
+      findActiveByDesignYearAndFormId: jest.fn().mockResolvedValue({
+        claimEligibility: { evaluator: { config: { rowEligibleValues: ['Constituted', '6th Schedule'] } } },
+      }),
     };
     connection = {
       startSession: jest.fn().mockResolvedValue(session),
@@ -201,9 +221,12 @@ describe('RequestExemptionService', () => {
         { provide: getModelToken(Ulb.name), useValue: ulbModel },
         { provide: getModelToken(XviFcAnnualAccount.name), useValue: annualAccountModel },
         { provide: getModelToken(XviFcSfcStatus.name), useValue: sfcStatusModel },
+        { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: electedBodyFormModel },
+        { provide: getModelToken(ElectedUrbanLocalBodiesRow.name), useValue: electedBodyRowModel },
         { provide: getConnectionToken(), useValue: connection },
         { provide: FileInfoNormalizerService, useValue: fileInfoNormalizer },
         { provide: RequestExemptionFormJsonConfigService, useValue: formJsonConfig },
+        { provide: FormJsonService, useValue: formJsonService },
       ],
     }).compile();
 
@@ -543,7 +566,7 @@ describe('RequestExemptionService', () => {
       expect(model.create).toHaveBeenCalled();
     });
 
-    it('never checks Annual Accounts at all for formId 23 (Elected Body has no per-ULB status)', async () => {
+    it('never checks Annual Accounts at all for formId 23 (Elected Body is checked separately, by row eligibility)', async () => {
       model.create.mockResolvedValue([{ _id: new Types.ObjectId() }]);
 
       await service.finalSubmit(
@@ -554,6 +577,112 @@ describe('RequestExemptionService', () => {
       );
 
       expect(annualAccountModel.find).not.toHaveBeenCalled();
+    });
+
+    describe('target row eligibility (formId 23 / Elected Body)', () => {
+      it('allows filing when no Elected Body form document exists yet (nothing uploaded)', async () => {
+        model.create.mockResolvedValue([{ _id: new Types.ObjectId() }]);
+
+        await expect(
+          service.finalSubmit(
+            makeDto({ data: { ...validData, reasonForExemption: [23] } }),
+            stateReviewer,
+            '127.0.0.1',
+            'jest',
+          ),
+        ).resolves.toBeDefined();
+        expect(electedBodyRowModel.findOne).not.toHaveBeenCalled();
+      });
+
+      it('allows filing when the ULB has no row in the active dataset', async () => {
+        electedBodyFormModel.findOne.mockReturnValue(q({ activeDatasetVersion: 2 }));
+        electedBodyRowModel.findOne.mockReturnValue(q(null));
+        model.create.mockResolvedValue([{ _id: new Types.ObjectId() }]);
+
+        await expect(
+          service.finalSubmit(
+            makeDto({ data: { ...validData, reasonForExemption: [23] } }),
+            stateReviewer,
+            '127.0.0.1',
+            'jest',
+          ),
+        ).resolves.toBeDefined();
+      });
+
+      it('allows filing when the ULB’s row is already "Not Constituted" (ineligible - the real use case)', async () => {
+        electedBodyFormModel.findOne.mockReturnValue(q({ activeDatasetVersion: 2 }));
+        electedBodyRowModel.findOne.mockReturnValue(q({ electedBodyStatus: 'Not Constituted' }));
+        model.create.mockResolvedValue([{ _id: new Types.ObjectId() }]);
+
+        await expect(
+          service.finalSubmit(
+            makeDto({ data: { ...validData, reasonForExemption: [23] } }),
+            stateReviewer,
+            '127.0.0.1',
+            'jest',
+          ),
+        ).resolves.toBeDefined();
+      });
+
+      it('blocks (409) filing when the ULB’s row is already "Constituted" (already eligible - nothing to excuse)', async () => {
+        electedBodyFormModel.findOne.mockReturnValue(q({ activeDatasetVersion: 2 }));
+        electedBodyRowModel.findOne.mockReturnValue(q({ electedBodyStatus: 'Constituted' }));
+
+        await expect(
+          service.finalSubmit(
+            makeDto({ data: { ...validData, reasonForExemption: [23] } }),
+            stateReviewer,
+            '127.0.0.1',
+            'jest',
+          ),
+        ).rejects.toThrow(ConflictException);
+      });
+
+      it('blocks (409) filing when the ULB’s row is already "6th Schedule" (already eligible)', async () => {
+        electedBodyFormModel.findOne.mockReturnValue(q({ activeDatasetVersion: 2 }));
+        electedBodyRowModel.findOne.mockReturnValue(q({ electedBodyStatus: '6th Schedule' }));
+
+        await expect(
+          service.finalSubmit(
+            makeDto({ data: { ...validData, reasonForExemption: [23] } }),
+            stateReviewer,
+            '127.0.0.1',
+            'jest',
+          ),
+        ).rejects.toThrow(ConflictException);
+      });
+
+      it('reads rowEligibleValues live from the Elected Body formjson, not a hardcoded list', async () => {
+        electedBodyFormModel.findOne.mockReturnValue(q({ activeDatasetVersion: 2 }));
+        electedBodyRowModel.findOne.mockReturnValue(q({ electedBodyStatus: 'Some Future Value' }));
+        // This year's config treats a custom value as eligible - the check must follow it with no
+        // code change.
+        formJsonService.findActiveByDesignYearAndFormId.mockResolvedValue({
+          claimEligibility: { evaluator: { config: { rowEligibleValues: ['Some Future Value'] } } },
+        });
+
+        await expect(
+          service.finalSubmit(
+            makeDto({ data: { ...validData, reasonForExemption: [23] } }),
+            stateReviewer,
+            '127.0.0.1',
+            'jest',
+          ),
+        ).rejects.toThrow(ConflictException);
+      });
+
+      it('does not check Elected Body row eligibility at all when formId 23 is not among the submitted reasons', async () => {
+        model.create.mockResolvedValue([{ _id: new Types.ObjectId() }]);
+
+        await service.finalSubmit(
+          makeDto({ data: { ...validData, reasonForExemption: [30] } }),
+          stateReviewer,
+          '127.0.0.1',
+          'jest',
+        );
+
+        expect(electedBodyFormModel.findOne).not.toHaveBeenCalled();
+      });
     });
 
     it('rejects a state user submitting a request under another state', async () => {

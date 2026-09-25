@@ -1,4 +1,4 @@
-﻿import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+﻿import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { FormJsonService } from 'src/master/form-json/form-json.service';
 import { Buffer } from 'exceljs';
@@ -189,7 +189,15 @@ export class SfcStatusService {
     const savedData: FormData = (doc?.data ?? {}) as FormData;
     const folderPathContext: XviFcFolderPathContext = { _id: stateId, designYear, role: 'state' };
     const questions = this.hydrateQuestions(savedData, formJson, folderPathContext);
-    const permissions = buildStateFormPermissions(user, stateId, currentFormStatus);
+    let permissions = buildStateFormPermissions(user, stateId, currentFormStatus);
+    // buildStateFormPermissions only knows currentFormStatus - it has no concept of exemptions
+    // (correctly, since it's shared by every state form, most of which have none). A Pending or
+    // Approved exemption blocks saveDraft/finalSubmit regardless of currentFormStatus
+    // (assertNotBlockedByExemption), so canEdit/canFinalSubmit must reflect that here too, or the
+    // response could advertise an action the next write of that same action would reject.
+    if (exemption.exemptionStatus === 'PENDING' || exemption.exemptionStatus === 'APPROVED') {
+      permissions = { ...permissions, canEdit: false, canFinalSubmit: false };
+    }
     const { actors, stateName } = this.xvifcFormActorsService.buildActorsAndStateName(doc);
 
     const responseData: SfcFormGetResponseData = {
@@ -356,6 +364,15 @@ export class SfcStatusService {
       existing?.data ?? {},
     );
     if (Object.keys(fileErrors).length > 0) throwXviFcValidationError(fileErrors);
+
+    // Re-check right before the write, not just at the top of this method - loadFormQuestions,
+    // the findOne above, and validation/file-normalization are all real awaited steps a
+    // discretionary exemption request could be filed *and* approved within (see
+    // assertNotBlockedByExemption's own doc-comment). Re-running the exact same check here closes
+    // that window down to the gap between this read and the write immediately below, rather than
+    // leaving it open for this method's entire duration.
+    await this.assertNotBlockedByExemption(dto.stateId, dto.yearId);
+
     const toStatus = FORM_STATUS.UNDER_REVIEW_BY_MOHUA;
     const now = new Date();
 
@@ -465,12 +482,9 @@ export class SfcStatusService {
   // ─── Helpers ─────────────────────────────────────────────────────────────────
 
   /**
-   * Read-only signal for the state page: is a discretionary whole-state Request Exemption
-   * pending or decided for SFC Status, and (for Rejected) why — lets the frontend show a status
-   * banner and render read-only while Pending, instead of only hitting the block on the next
-   * write (assertNotBlockedByExemption). Approved is also surfaced explicitly so the frontend
-   * never has to infer it itself. Mirrors AnnualAccountsService.resolveExemptionStatusForResponse,
-   * but keyed on the whole-state (`ulb: null`) branch instead of a per-ULB, per-section one.
+   * Read-only exemption signal for the state page (status banner + read-only render while Pending,
+   * ahead of the next write hitting `assertNotBlockedByExemption`). See CLAUDE.md's "Discretionary
+   * whole-state exemption awareness" section.
    */
   private async resolveExemptionStatusForResponse(
     stateId: string,
@@ -493,14 +507,12 @@ export class SfcStatusService {
   }
 
   /**
-   * Blocks state write actions on SFC Status while a discretionary whole-state Request Exemption
-   * entry for this state+year is UNDER_REVIEW_BY_MOHUA or already SUBMISSION_ACKNOWLEDGED_BY_MOHUA
-   * (Approved) - SFC Status's own real `currentFormStatus` is never touched by either outcome
-   * (RequestExemptionMohuaService deliberately only writes to its own collections), so the ordinary
-   * assertCanStateEditForm/assertCanStateFinalSubmitForm gates would otherwise still allow editing
-   * straight through both states - this is the only place that blocks them. Once Rejected, SFC
-   * Status's real status governs normally again. Mirrors
-   * AnnualAccountsService.assertNotBlockedByPendingExemption.
+   * Blocks state writes while SFC Status's discretionary whole-state exemption is Pending/Approved
+   * (neither outcome touches SFC Status's own `currentFormStatus`, so the ordinary status gates
+   * wouldn't otherwise catch this). `finalSubmit` calls this twice to narrow the TOCTOU window
+   * across its awaited validation steps. See CLAUDE.md's "Discretionary whole-state exemption
+   * awareness" section and request-exemption's `docs/adr/0002-eligibility-gating-and-race-window.md`
+   * for the full rationale, incl. the ConflictException-not-ForbiddenException convention.
    */
   private async assertNotBlockedByExemption(stateId: string, yearId: string): Promise<void> {
     const entry = await this.exemptionResolverService.resolveDiscretionary(
@@ -510,12 +522,12 @@ export class SfcStatusService {
       new Types.ObjectId(stateId),
     );
     if (entry?.currentFormStatus === DISCRETIONARY_PENDING_STATUS) {
-      throw new ForbiddenException(
+      throw new ConflictException(
         'This form cannot be edited while a discretionary exemption request for SFC Status is pending MoHUA review.',
       );
     }
     if (entry?.currentFormStatus === DISCRETIONARY_APPROVED_STATUS) {
-      throw new ForbiddenException(
+      throw new ConflictException(
         'SFC Status is exempted per a MoHUA-approved discretionary exemption request; no submission is required.',
       );
     }
@@ -577,8 +589,8 @@ export class SfcStatusService {
   }
 
   /**
-   * Inserts a history row unless `fromStatus === toStatus` (no-op re-save). The form document is
-   * updated first; if this insert fails, the transition has already persisted.
+   * No-ops when `fromStatus === toStatus`. See CLAUDE.md's "The one tradeoff worth knowing before
+   * touching writes" section for the non-transactional-write tradeoff.
    *
    * @param entry - ip/userAgent are optional (omitted for non-HTTP triggers).
    */

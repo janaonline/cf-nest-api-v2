@@ -337,9 +337,10 @@ export class ElectedUrbanLocalBodiesService {
     const stateOid = new Types.ObjectId(stateId);
 
     // Always load the active, XVI-FC-eligible registry — needed in both branches to determine
-    // template rows. Cantonment Board ULBs are excluded here via the shared eligibility filter.
-    // TODO: dateOfConstitution has no validation rule defined/implemented yet — same gap as
-    // elected-urban-local-bodies-excel.service.ts's revalidateExcel (identical TODO, not yet scoped).
+    // template rows. Must use the same filter as every other active-ULB-count call site (see
+    // CLAUDE.md's "Every active-ULB-count call site must use the same eligibility filter").
+    // TODO: dateOfConstitution's maxDate is hardcoded to today, not read from config — see
+    // CLAUDE.md's "Known gaps". Not yet scoped.
     const eligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC');
     const activeUlbs = await this.ulbModel
       .find(eligibleUlbFilter)
@@ -501,9 +502,8 @@ export class ElectedUrbanLocalBodiesService {
     const userOid = new Types.ObjectId(user._id);
     const filter = { state: stateOid, year: yearOid, formType: EULB_FORM_TYPE };
 
-    // Compute active ULB count server-side; the client-submitted ulbCount is ignored. Must use the
-    // same eligibility filter as getTemplate()'s registry query, or a state's Excel upload will
-    // spuriously fail the row-count match check the moment it has any Cantonment Board ULBs.
+    // Compute active ULB count server-side; the client-submitted ulbCount is ignored. See
+    // CLAUDE.md's "Every active-ULB-count call site must use the same eligibility filter".
     const eligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC');
     const [activeUlbCount, existing] = await Promise.all([
       this.ulbModel.countDocuments(eligibleUlbFilter),
@@ -679,9 +679,8 @@ export class ElectedUrbanLocalBodiesService {
     const userOid = new Types.ObjectId(user._id);
     const filter = { state: stateOid, year: yearOid, formType: EULB_FORM_TYPE };
 
-    // Compute active ULB count server-side; the client-submitted ulbCount is ignored. Must use the
-    // same eligibility filter as getTemplate()'s registry query, or a state's Excel upload will
-    // spuriously fail the row-count match check the moment it has any Cantonment Board ULBs.
+    // Compute active ULB count server-side; the client-submitted ulbCount is ignored. See
+    // CLAUDE.md's "Every active-ULB-count call site must use the same eligibility filter".
     const eligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC');
     const activeUlbCount = await this.ulbModel.countDocuments(eligibleUlbFilter);
 

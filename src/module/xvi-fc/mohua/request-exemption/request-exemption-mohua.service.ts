@@ -25,6 +25,17 @@ import {
   XviFcSfcStatus,
   XviFcSfcStatusDocument,
 } from 'src/schemas/xvi-fc/state/sfc-status.schema';
+import {
+  ElectedUrbanLocalBodiesForm,
+  EulbFormDocument,
+} from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
+import {
+  ElectedUrbanLocalBodiesRow,
+  EulbRowDocument,
+} from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
+import { EULB_FORM_ID } from 'src/module/xvi-fc/state/elected-urban-local-bodies/constants/elected-urban-local-bodies.constants';
+import { FormJsonService } from 'src/master/form-json/form-json.service';
+import type { ClaimEligibilityRowMatchConfig } from 'src/module/xvi-fc/common/types/claim-eligibility.type';
 import type { RequestExemptionDecideResponseData } from './request-exemption-mohua.types';
 
 type ExemptionEntryLean = { formId: number; currentFormStatus: number };
@@ -41,8 +52,8 @@ type ExemptionDocLean = {
 
 /** The two discretionary-exemption reasons that map to a real, per-ULB Annual Accounts section
  *  document - used only to read-check eligibility before approving (see `assertSectionStillEligible`).
- *  formId 23 (Elected Body) has no per-ULB document at all (one whole-state doc per {state, year}),
- *  so it's skipped entirely - not a gap, just nothing to check. */
+ *  formId 23 (Elected Body) is checked separately there, by row eligibility rather than a per-ULB
+ *  document - see that method's own `formId === EULB_FORM_ID` branch. */
 const AFS_SECTION_TYPE_BY_FORM_ID: Record<number, 'audited' | 'unaudited'> = { 30: 'audited', 31: 'unaudited' };
 const AFS_SECTION_LABEL_BY_FORM_ID: Record<number, string> = {
   30: 'Audited Financial Statement',
@@ -55,15 +66,10 @@ const AFS_SECTION_LABEL_BY_FORM_ID: Record<number, string> = {
  * `mohua/fc-unspent-declaration`'s split. Much simpler than that module: one `data[]` entry per
  * decide call, addressed by `{requestId, formId}` — no bulk-row/eligibility machinery.
  *
- * Deliberately never writes to `xvifc_annualaccounts`/its own log collection - both approve and
- * reject only ever touch this module's own collections (`xvifc_eligibility_exemptions` + its own
- * form-log). An "Approved" outcome is a pure display-only overlay, exactly like "Pending"/"Rejected"
- * already are (see `AnnualAccountsService.listUlbSubmissions`'s exemption overlay and
- * `assertNotBlockedByPendingExemption`) - not a real status write into a collection this module
- * doesn't own. This was a deliberate architecture change: an earlier version materialized/revised a
- * real Annual Accounts section document on approve, which repeatedly conflicted with that
- * collection's own invariants owned by `AnnualAccountsService` (e.g. the `sectionType: 'audited'`
- * universal per-{ulb,year} anchor `findOrInitialize` guarantees elsewhere) - see this feature's ADR.
+ * Deliberately never writes to `xvifc_annualaccounts`/a target form's own collection - both approve
+ * and reject only ever touch this module's own collections. See
+ * `docs/adr/0001-display-only-overlay-no-target-form-writes.md` for why (a real architecture change
+ * after an earlier version's writes conflicted with the target collections' own invariants).
  */
 @Injectable()
 export class RequestExemptionMohuaService {
@@ -76,8 +82,13 @@ export class RequestExemptionMohuaService {
     private readonly annualAccountModel: Model<XviFcAnnualAccountDocument>,
     @InjectModel(XviFcSfcStatus.name)
     private readonly sfcStatusModel: Model<XviFcSfcStatusDocument>,
+    @InjectModel(ElectedUrbanLocalBodiesForm.name)
+    private readonly electedBodyFormModel: Model<EulbFormDocument>,
+    @InjectModel(ElectedUrbanLocalBodiesRow.name)
+    private readonly electedBodyRowModel: Model<EulbRowDocument>,
     @InjectConnection()
     private readonly connection: Connection,
+    private readonly formJsonService: FormJsonService,
   ) {}
 
   /**
@@ -262,11 +273,8 @@ export class RequestExemptionMohuaService {
   /** Fast pre-transaction check - not a full race guard on its own, see `assertUpdateMatched`. */
   private assertPending(entry: ExemptionEntryLean): void {
     if (entry.currentFormStatus !== FORM_STATUS.UNDER_REVIEW_BY_MOHUA) {
-      // ConflictException (409), not ForbiddenException - same reasoning as the STATE-side
-      // finalSubmit's own blocked-formId check: an ordinary, expected business-rule conflict for
-      // an authenticated, authorized MoHUA user (e.g. a double-click, or two reviewers racing on
-      // the same request), not an auth failure - the frontend's global interceptor force-logs out
-      // on any 403, which would be wrong here.
+      // ConflictException (409), not ForbiddenException — see state/request-exemption's ADR 0002
+      // for why.
       throw new ConflictException(
         `This entry cannot be decided while its status is ${getFormStatusLabel(entry.currentFormStatus)}.`,
       );
@@ -285,13 +293,10 @@ export class RequestExemptionMohuaService {
   }
 
   /**
-   * Read-only eligibility check re-run at decide time (filing already checked this once, but time
-   * may pass between filing and decision - see `RequestExemptionService.assertTargetFormsEligible`/
-   * `assertTargetStateFormsEligible`, the same check's filing-time counterparts). Branches on
-   * `formId`, not on `doc.ulb` - formId 30/31 check the real per-ULB Annual Accounts section;
-   * formId 22 checks the real whole-state SFC Status document; formId 23 (Elected Body) has no real
-   * target document at all and is skipped entirely, same as before. Blocks approval (409) if the
-   * target form already has real progress beyond ULB_EDITABLE_STATUS_IDS/STATE_EDITABLE_STATUS_IDS.
+   * Read-only eligibility check re-run at decide time — the decide-time half of the same check
+   * `RequestExemptionService.assertTargetFormsEligible`/`assertTargetStateFormsEligible` run at
+   * filing time. See CLAUDE.md's "assertSectionStillEligible branches by formId, not by doc.ulb"
+   * section.
    */
   private async assertSectionStillEligible(doc: ExemptionDocLean, formId: number): Promise<void> {
     const sectionType = AFS_SECTION_TYPE_BY_FORM_ID[formId];
@@ -325,6 +330,47 @@ export class RequestExemptionMohuaService {
             `instead, or ask the state to withdraw it.`,
         );
       }
+      return;
+    }
+
+    if (formId === EULB_FORM_ID) {
+      await this.assertElectedBodyRowNotAlreadyEligible(doc);
+    }
+  }
+
+  /**
+   * Elected Body's decide-time counterpart to `RequestExemptionService`'s own
+   * `assertElectedBodyRowNotAlreadyEligible` — same question, same live `rowEligibleValues` read.
+   * See `elected-urban-local-bodies/CLAUDE.md`'s "Row-level review status (`rowStatus`)" section for
+   * why this checks `electedBodyStatus`, not a submission-status document the way 30/31 have.
+   */
+  private async assertElectedBodyRowNotAlreadyEligible(doc: ExemptionDocLean): Promise<void> {
+    if (!doc.ulb) return; // formId 23 is always a per-ULB request; defensive, not reachable today.
+
+    const form = await this.electedBodyFormModel
+      .findOne({ state: doc.state, year: doc.year }, { activeDatasetVersion: 1 })
+      .lean<{ activeDatasetVersion: number }>()
+      .exec();
+    if (!form) return; // nothing uploaded yet - nothing to check
+
+    const row = await this.electedBodyRowModel
+      .findOne(
+        { ulbId: doc.ulb, year: doc.year, datasetVersion: form.activeDatasetVersion, isActive: true },
+        { electedBodyStatus: 1 },
+      )
+      .lean<{ electedBodyStatus?: string }>()
+      .exec();
+    if (!row?.electedBodyStatus) return; // no row, or no value yet - nothing to check
+
+    const formJson = await this.formJsonService.findActiveByDesignYearAndFormId(String(doc.year), EULB_FORM_ID);
+    const rowMatch = formJson.claimEligibility?.evaluator?.config as ClaimEligibilityRowMatchConfig | undefined;
+    const eligibleValues = rowMatch?.rowEligibleValues ?? [];
+
+    if (eligibleValues.includes(row.electedBodyStatus)) {
+      throw new ConflictException(
+        `This ULB's Elected Body status is already "${row.electedBodyStatus}" and cannot be exempted. Reject ` +
+          `this request instead, or ask the state to withdraw it.`,
+      );
     }
   }
 

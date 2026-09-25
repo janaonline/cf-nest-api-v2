@@ -18,10 +18,13 @@ multi-service pipeline):
 
 `saveDraft`/`finalSubmit` update the form document and insert a history record as two separate,
 **non-transactional** writes — if the history insert fails, the form update has already persisted.
-This is a deliberate, accepted tradeoff, not an oversight; see the comment on
-`sfc-status.service.ts`'s `createHistoryEntry` for the reasoning. If you're adding a new write path
-here, decide explicitly whether it needs the same treatment or genuinely needs transactional
-atomicity — don't assume one or the other.
+This is a deliberate, accepted tradeoff, not an oversight: history rows are an audit trail of status
+transitions, never the source of truth for anything — every access-control/status decision reads
+`currentFormStatus`/`data` straight off the form document, which has already durably persisted by
+the time `createHistoryEntry` runs. A failed insert leaves a gap in the audit trail, never a
+functional inconsistency, so it isn't judged worth a cross-collection transaction for what amounts
+to a supplementary log write. If you're adding a new write path here, decide explicitly whether it
+needs the same treatment or genuinely needs transactional atomicity — don't assume one or the other.
 
 The form update itself is guarded against a concurrent status change (e.g. a final submit racing a
 draft save): both writes include `currentFormStatus` in their filter, and a first-save race that
@@ -50,9 +53,12 @@ per-ULB version — see `common/services/CLAUDE.md`'s `ExemptionResolverService`
   `exemptionStatus: 'PENDING' | 'APPROVED' | 'REJECTED' | null` + `exemptionMohuaRemarks` alongside
   the hydrated form.
 - `saveDraft` and `finalSubmit` both call the private `assertNotBlockedByExemption(stateId, yearId)`
-  right after `assertStateAccess`, before any DB read — throws `ForbiddenException` while the
-  exemption is Pending (under MoHUA review) or Approved. Once Rejected, SFC Status's own
+  right after `assertStateAccess`, before any DB read — throws `ConflictException` (409, not 403 —
+  see request-exemption's `docs/adr/0002-eligibility-gating-and-race-window.md`) while the exemption
+  is Pending (under MoHUA review) or Approved. Once Rejected, SFC Status's own
   `currentFormStatus`/`assertCanStateEditForm`/`assertCanStateFinalSubmitForm` govern normally again.
+  `finalSubmit` calls this twice — see the same ADR's "SFC `finalSubmit` race window" — to narrow the
+  TOCTOU gap between its validation steps and its write.
 
 Both private methods are SFC Status's own copies of `AnnualAccountsService`'s
 `resolveExemptionStatusForResponse`/`assertNotBlockedByPendingExemption`, not shared code — SFC

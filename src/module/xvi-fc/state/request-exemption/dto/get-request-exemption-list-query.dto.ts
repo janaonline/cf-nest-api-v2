@@ -11,9 +11,8 @@ const REQUEST_EXEMPTION_STATUS_FILTER_VALUES = [
 ] as const;
 
 /** Query params for `GET :stateId/:yearId/list` — mirrors `QueryUlbDto`'s page/limit convention
- *  (`master/ulb/dto/query-ulb.dto.ts`). `search`/`reasonForExemption`/`status` are applied in-memory
- *  in `RequestExemptionService.list()`, after the exemption docs are fetched and ULB info resolved,
- *  before pagination — same place `total`/`pages` are computed from, so filtered counts stay correct. */
+ *  (`master/ulb/dto/query-ulb.dto.ts`). See CLAUDE.md's "list() filters and paginates in memory"
+ *  section for how these are applied. */
 export class GetRequestExemptionListQueryDto {
   @ApiPropertyOptional({ example: 1 })
   @IsOptional()

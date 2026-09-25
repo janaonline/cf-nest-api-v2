@@ -6,7 +6,7 @@ export const FC_UNSPENT_FORM_ID = 25;
  * Fallback default eligibility threshold, used only when a design year's form-json document has
  * no `meta.eligibilityThresholdPercent` override (see FC_UNSPENT_ELIGIBILITY_THRESHOLD_META_KEY).
  * Never read directly for eligibility computation — go through
- * FcUnspentDeclarationFormJsonService.getEligibilityThresholdPercent().
+ * FcUnspentDeclarationFormJsonService.loadFormConfig()'s returned `thresholdPercent`.
  */
 export const FC_UNSPENT_ELIGIBILITY_THRESHOLD_PERCENT = 0;
 

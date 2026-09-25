@@ -22,10 +22,11 @@ everything else.
   ULB/state's own real data: automatic keeps this file's Golden rule untouched (only ever applies
   when nothing real exists yet); discretionary always overrides real data, including an existing
   row/document, since a MoHUA approval is a later, authoritative decision — this matters for a
-  formId like Elected Body (23), where the approval-time gate itself has no "already started" check
-  to block it in the first place (see root `CLAUDE.md`'s xvi-fc/state bullet), so a MoHUA-approved
-  exemption for a ULB with real in-progress data is an expected, reachable case, not just a
-  hypothetical.
+  formId like Elected Body (23), whose filing/approval gate blocks on a different axis than
+  SFC/AFS's: not "already started", but "already eligible" (see root `CLAUDE.md`'s xvi-fc/state
+  bullet) — a ULB whose row already says "Not Constituted" (real, ineligible data) is deliberately
+  still approvable, so a MoHUA-approved exemption for a ULB with real in-progress data is an
+  expected, reachable case, not just a hypothetical.
 - `exemption-resolver.service.ts` — the shared "is this (ulb, formId, year) exempt, and why"
   resolver every read-only display consumer (e.g. the SLB review table, `AnnualAccountsService`'s
   `listUlbSubmissions`/`resolveExemptionStatusForResponse`, `SfcStatusService`'s own

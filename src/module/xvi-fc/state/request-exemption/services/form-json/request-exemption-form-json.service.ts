@@ -29,29 +29,20 @@ export class RequestExemptionFormJsonConfigService {
   }
 
   /**
-   * A reason field's own `{id, label}` options for `yearId` — the single per-year source every
-   * reason-formId allow-list/label in this module reads from (submission validation, the
-   * "Exemption Status" list's filter + row label, and its conflict/ineligibility messages), so a
-   * year-over-year change to the offered reasons only ever needs a `formjsons` data edit.
-   *
-   * `fieldKey` is `REASON_FIELD_KEY_ULB` (per-ULB reasons) or `REASON_FIELD_KEY_STATE`
-   * (whole-state reasons) — see `xvi-fc-eligibility-exemption.schema.ts`'s doc-comment on those
-   * constants. `required` defaults to `true` (missing field = a real config error, throws) —
-   * callers pass `required: false` for `REASON_FIELD_KEY_STATE` only, so the backend can deploy
-   * before the `formjsons` document gains that field (rollout sequencing; see the request-exemption
-   * feature plan). The original `REASON_FIELD_KEY_ULB` keeps its unchanged throw-on-missing
-   * behavior — that field has always existed, so its absence is never expected.
+   * A reason field's own `{id, label}` options for `yearId` — see CLAUDE.md's "Reason options are
+   * sourced live" section. `required` defaults to `true` (missing field is a real config error,
+   * throws); callers pass `required: false` for `REASON_FIELD_KEY_STATE` only, so the backend can
+   * deploy before `formjsons` gains that field. `REASON_FIELD_KEY_ULB` has always existed, so its
+   * absence stays an error.
    */
-  async loadReasonOptions(
-    yearId: string,
-    fieldKey: string,
-    required = true,
-  ): Promise<RequestExemptionReasonOption[]> {
+  async loadReasonOptions(yearId: string, fieldKey: string, required = true): Promise<RequestExemptionReasonOption[]> {
     const fields = await this.loadFields(yearId);
     const reasonField = getFieldsByType(fields, 'RE_MAIN_FORM_FIELDS').find((field) => field.key === fieldKey);
     if (!reasonField) {
       if (!required) return [];
-      throw new InternalServerErrorException(`Request Exemption form configuration is missing the '${fieldKey}' field.`);
+      throw new InternalServerErrorException(
+        `Request Exemption form configuration is missing the '${fieldKey}' field.`,
+      );
     }
 
     const options = reasonField.options;
