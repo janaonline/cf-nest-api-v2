@@ -1,0 +1,135 @@
+import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
+import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
+import { FORM_STATUS, getFormStatusLabel, type FormStatusType } from 'src/common/constants/form-status.constants';
+import { DecisionInfo, DecisionInfoSchema } from 'src/schemas/xvi-fc/annual-account.schema';
+import type { SubmissionScope } from 'src/schemas/form-json-config.schema';
+
+export type XviFcBankAccountDocument = HydratedDocument<XviFcBankAccount>;
+
+@Schema({ _id: false, versionKey: false })
+export class XviFcBankAccountProofFile {
+  @Prop({ type: String, required: true })
+  originalName!: string;
+
+  @Prop({ type: String, required: true })
+  mimeType!: string;
+
+  @Prop({ type: Number, default: null })
+  pages!: number | null;
+
+  @Prop({ type: Number, required: true })
+  sizeKb!: number;
+
+  @Prop({ type: String, required: true })
+  s3Key!: string;
+
+  @Prop({ type: String, required: true, match: /^[a-fA-F0-9]{64}$/ })
+  sha256!: string;
+}
+
+export const XviFcBankAccountProofFileSchema = SchemaFactory.createForClass(XviFcBankAccountProofFile);
+
+@Schema({
+  collection: 'xvifc_bankaccounts',
+  timestamps: true,
+  versionKey: false,
+})
+export class XviFcBankAccount {
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Ulb', required: true })
+  ulb!: Types.ObjectId;
+
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Year', required: true })
+  designYear!: Types.ObjectId;
+
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'State', required: true })
+  state!: Types.ObjectId;
+
+  /**
+   * Denormalized from FormJsonConfig at submission time so the {ulb} partial unique index
+   * can atomically enforce one ONCE_EVER doc per ulb, closing the concurrent submission race.
+   * Bank Account scope has always been ONCE_EVER; this field isn't re-derived on read.
+   */
+  @Prop({ type: String, enum: ['PER_YEAR', 'ONCE_EVER'], required: true })
+  submissionScope!: SubmissionScope;
+
+  @Prop({ type: String, default: '' })
+  ifscCode!: string;
+
+  @Prop({ type: MongooseSchema.Types.Mixed, default: {} })
+  bankDetails!: Record<string, unknown>;
+
+  @Prop({ type: String, default: '', select: false })
+  accountNumberEncrypted!: string;
+
+  @Prop({ type: String, default: '', select: false })
+  accountNumberHash!: string;
+
+  @Prop({ type: String, default: '' })
+  accountNumberMasked!: string;
+
+  @Prop({ type: String, default: '' })
+  accountNumberLast4!: string;
+
+  @Prop({
+    type: XviFcBankAccountProofFileSchema,
+    required: true,
+  })
+  proofFile!: XviFcBankAccountProofFile;
+
+  @Prop({
+    type: Number,
+    enum: [
+      FORM_STATUS.NOT_STARTED,
+      FORM_STATUS.IN_PROGRESS,
+      FORM_STATUS.UNDER_REVIEW_BY_STATE,
+      FORM_STATUS.RETURNED_BY_STATE,
+      FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+      FORM_STATUS.RETURNED_BY_MOHUA,
+      FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+      FORM_STATUS.APPROVED_BY_STATE,
+      FORM_STATUS.AWAITING_CLAIM_LETTER,
+    ],
+    default: FORM_STATUS.NOT_STARTED,
+  })
+  currentFormStatus!: FormStatusType;
+
+  /** Human-readable label mirroring currentFormStatus — persisted so the status is readable directly from Mongo. */
+  @Prop({ type: String, default: getFormStatusLabel(FORM_STATUS.NOT_STARTED) })
+  currentFormStatusLabel!: string;
+
+  /** Current/latest STATE decision — null until a state user makes a final call. */
+  @Prop({ type: DecisionInfoSchema, default: null })
+  stateDecision!: DecisionInfo | null;
+
+  /** Current/latest MoHUA decision — null until MoHUA acts on what state handed off. */
+  @Prop({ type: DecisionInfoSchema, default: null })
+  mohuaDecision!: DecisionInfo | null;
+
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User' })
+  submittedBy?: Types.ObjectId;
+
+  @Prop({ type: Date })
+  submittedAt?: Date;
+
+  /**
+   * Last time the STATE review reminder digest included this document — gates the next send via
+   * `lastReminderSentAt ?? submittedAt + 7 days`. See XviFcAnnualAccount.lastReminderSentAt for
+   * the shared rationale (one field, not a stored day count).
+   */
+  @Prop({ type: Date, default: null })
+  lastReminderSentAt?: Date | null;
+
+  createdAt?: Date;
+  updatedAt?: Date;
+}
+
+export const XviFcBankAccountSchema = SchemaFactory.createForClass(XviFcBankAccount);
+
+XviFcBankAccountSchema.index({ ulb: 1, designYear: 1 }, { unique: true });
+
+/**
+ * Enforces at most one ONCE_EVER doc per ulb atomically at the DB level. The {ulb, designYear}
+ * index above doesn't prevent different designYear values for the same ulb; concurrent inserts
+ *  now fail with a duplicate-key error instead of creating a second record.
+ */
+XviFcBankAccountSchema.index({ ulb: 1 }, { unique: true, partialFilterExpression: { submissionScope: 'ONCE_EVER' } });

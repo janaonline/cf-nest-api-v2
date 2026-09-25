@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Manual review returned</title>
+  <style>
+    body { margin: 0; padding: 0; background-color: #f4f6f9; font-family: Arial, sans-serif; }
+    .wrapper { max-width: 600px; margin: 40px auto; background: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    .header { background-color: #0f4c81; padding: 28px 32px; text-align: center; }
+    .header-title { color: #ffffff; font-size: 18px; font-weight: bold; margin-top: 12px; }
+    .body { padding: 32px; color: #333333; font-size: 15px; line-height: 1.6; }
+    .body h2 { font-size: 20px; color: #0f4c81; margin-bottom: 8px; }
+    .info-box { background: #f0f5ff; border-left: 4px solid #0f4c81; border-radius: 4px; padding: 14px 18px; margin: 20px 0; font-size: 14px; }
+    .info-box p { margin: 4px 0; }
+    .info-box strong { color: #0f4c81; }
+    .reason-box { background: #fdf0f0; border-left: 4px solid #cc0000; border-radius: 4px; padding: 14px 18px; margin: 20px 0; font-size: 14px; }
+    .reason-box strong { color: #cc0000; }
+    .cta { text-align: center; margin: 28px 0; }
+    .cta a { background-color: #0f4c81; color: #ffffff; text-decoration: none; padding: 13px 32px; border-radius: 6px; font-size: 15px; font-weight: bold; display: inline-block; }
+    .footer { background: #f4f6f9; text-align: center; padding: 18px 32px; font-size: 12px; color: #999999; }
+    .divider { border: none; border-top: 1px solid #eeeeee; margin: 24px 0; }
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    <div class="header">
+      <div class="header-title">XVI Finance Commission — CityFinance Portal</div>
+    </div>
+
+    <div class="body">
+      <h2>Your manual review request was returned</h2>
+      <p>Hello{{#if name}} <strong>{{name}}</strong>{{/if}},</p>
+      <p>
+        An admin has reviewed the document you flagged for manual review and returned it.
+        Please review the note below and resubmit the document.
+      </p>
+
+      <div class="info-box">
+        <p><strong>ULB:</strong> {{ulbName}}{{#if ulbCode}} ({{ulbCode}}){{/if}}</p>
+        <p><strong>Section:</strong> {{section}}</p>
+        <p><strong>Document:</strong> {{docId}} &middot; {{fileName}}</p>
+        <p><strong>Decided at:</strong> {{decidedAt}}</p>
+      </div>
+
+      {{#if note}}
+      <div class="reason-box">
+        <p><strong>Note from the admin:</strong></p>
+        <p>{{note}}</p>
+      </div>
+      {{/if}}
+
+      <div class="cta">
+        <a href="{{loginUrl}}" target="_blank">Open the portal</a>
+      </div>
+
+      <hr class="divider" />
+    </div>
+
+    <div class="footer">
+      &copy; CityFinance &mdash; Ministry of Housing and Urban Affairs, Government of India<br />
+      This is an automated message. Please do not reply to this email.
+    </div>
+  </div>
+</body>
+</html>

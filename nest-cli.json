@@ -3,11 +3,13 @@
   "collection": "@nestjs/schematics",
   "sourceRoot": "src",
   "compilerOptions": {
+    "builder": "swc",
     "deleteOutDir": true,
+    "watchAssets": true,
     "assets": [
       {
         "include": "views/**/*",
-        "outDir": "dist/src"
+        "outDir": "dist/"
       }
     ]
   }

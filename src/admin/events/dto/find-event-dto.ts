@@ -17,6 +17,7 @@ export class FindEventDto {
   title?: string;
 
   @ApiPropertyOptional({
+    enum: EventStatus,
     example: EventStatus.ACTIVE,
     description: 'Status of the event. Allowed values are: 1 (Active), 2 (Draft).',
   })

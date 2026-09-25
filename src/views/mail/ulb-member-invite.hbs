@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>You have been invited</title>
+  <style>
+    body { margin: 0; padding: 0; background-color: #f4f6f9; font-family: Arial, sans-serif; }
+    .wrapper { max-width: 600px; margin: 40px auto; background: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    .header { background-color: #0f4c81; padding: 28px 32px; text-align: center; }
+    .header-title { color: #ffffff; font-size: 18px; font-weight: bold; margin-top: 12px; }
+    .body { padding: 32px; color: #333333; font-size: 15px; line-height: 1.6; }
+    .body h2 { font-size: 20px; color: #0f4c81; margin-bottom: 8px; }
+    .info-box { background: #f0f5ff; border-left: 4px solid #0f4c81; border-radius: 4px; padding: 14px 18px; margin: 20px 0; font-size: 14px; }
+    .info-box p { margin: 4px 0; }
+    .info-box strong { color: #0f4c81; }
+    .cta { text-align: center; margin: 28px 0; }
+    .cta a { background-color: #0f4c81; color: #ffffff; text-decoration: none; padding: 13px 32px; border-radius: 6px; font-size: 15px; font-weight: bold; display: inline-block; }
+    .note { font-size: 13px; color: #777777; margin-top: 24px; background: #fff8e1; border-radius: 4px; padding: 12px 16px; }
+    .footer { background: #f4f6f9; text-align: center; padding: 18px 32px; font-size: 12px; color: #999999; }
+    .divider { border: none; border-top: 1px solid #eeeeee; margin: 24px 0; }
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    <div class="header">
+      <div class="header-title">XVI Finance Commission — CityFinance Portal</div>
+    </div>
+
+    <div class="body">
+      <h2>You have been registered as the primary contact for your ULB</h2>
+      <p>Hello <strong>{{name}}</strong>,</p>
+      <p>
+        Your account has been created and activated as the primary contact for <strong>{{ulbName}}</strong>
+        on the XVI Finance Commission portal.
+      </p>
+
+      <div class="info-box">
+        <p><strong>Name:</strong> {{name}}</p>
+        {{#if mobile}}<p><strong>Mobile:</strong> {{mobile}}</p>{{/if}}
+        <p><strong>ULB:</strong> {{ulbName}}</p>
+      </div>
+
+      <p>
+        No password has been set on your account yet. Use your {{loginCodeLabel}} below to set your
+        password before logging in for the first time.
+      </p>
+      <div class="info-box" style="background:#fff3cd;border-left-color:#f0ad4e;">
+        <p style="margin:0;font-size:13px;color:#856404;"><strong>{{loginCodeLabel}}:</strong> {{loginCode}}</p>
+      </div>
+
+      <div class="cta">
+        <a href="{{resetPasswordUrl}}" target="_blank">Set Your Password</a>
+      </div>
+      <p style="font-size:13px;color:#777777;text-align:center;margin-top:-16px;">
+        Once your password is set, log in at <a href="{{loginUrl}}">{{loginUrl}}</a>.
+      </p>
+
+      <hr class="divider" />
+
+      <div class="note">
+        <strong>Note:</strong> If you did not expect this invitation or believe it was sent in error,
+        please ignore this email or contact your state administrator.
+        Do not share this link with anyone.
+      </div>
+    </div>
+
+    <div class="footer">
+      &copy; CityFinance &mdash; Ministry of Housing and Urban Affairs, Government of India<br />
+      This is an automated message. Please do not reply to this email.
+    </div>
+  </div>
+</body>
+</html>

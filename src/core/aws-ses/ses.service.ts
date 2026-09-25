@@ -33,9 +33,10 @@ export class SESMailService {
   //   async sendEmail(to: string, name: string, link: string) {
   async sendEmail(params: EmailJob) {
     try {
+      const toAddresses = Array.isArray(params.to) ? params.to : [params.to];
       const cmd = new SendEmailCommand({
         FromEmailAddress: params.from || 'updates@cityfinance.in',
-        Destination: { ToAddresses: [params.to] },
+        Destination: { ToAddresses: toAddresses },
         Content: {
           Simple: {
             Subject: { Data: params.subject },
@@ -65,10 +66,11 @@ export class SESMailService {
 
   async sendEmailTemplate(params: EmailJob) {
     try {
+      const toAddresses = Array.isArray(params.to) ? params.to : [params.to];
       const htmlTemplate = this.compileTemplate('resource-zip-ready', params.mailData);
       const cmd = new SendEmailCommand({
         FromEmailAddress: params.from || 'updates@cityfinance.in',
-        Destination: { ToAddresses: [params.to] },
+        Destination: { ToAddresses: toAddresses },
         Content: {
           Simple: {
             Subject: { Data: params.subject },

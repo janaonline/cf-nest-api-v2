@@ -5,6 +5,7 @@ import { JobsOptions, Queue } from 'bullmq';
 import { responseJsonUlb } from './responseJsonUlb';
 import { ZipBuildService } from './zip-build.service';
 import type { ZipJobRequest, ZipJobResult } from './zip.types';
+import { Public } from 'src/module/auth/decorators/public.decorator';
 
 @Controller('zip-jobs')
 export class ZipController {
@@ -13,6 +14,7 @@ export class ZipController {
     private readonly mailer: ZipBuildService,
   ) {}
 
+  @Public()
   @Post()
   async create() {
     const body = {} as ZipJobRequest;

@@ -24,6 +24,12 @@ export const YearLabels: string[] = [
   '2026-27',
 ];
 
+/** Returns the FY label immediately before `designYear` in `YearLabels` (e.g. "2026-27" -> "2025-26"), or null if it's the earliest known year or unrecognized. */
+export function getPreviousYearLabel(designYear: string): string | null {
+  const idx = YearLabels.indexOf(designYear);
+  return idx > 0 ? YearLabels[idx - 1] : null;
+}
+
 export const YearLabelToId: Record<string, string> = {
   '2017-18': '63735a4bd44534713673bfbf',
   '2018-19': '63735a5bd44534713673c1ca',

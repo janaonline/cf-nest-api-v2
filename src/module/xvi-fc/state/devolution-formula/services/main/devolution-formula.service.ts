@@ -1,0 +1,998 @@
+import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { InjectModel } from '@nestjs/mongoose';
+import { type PipelineStage, Model, Types } from 'mongoose';
+import type ExcelJS from 'exceljs';
+import { FileTokenService } from 'src/core/file-token/file-token.service';
+import { ExcelService } from 'src/services/excel/excel.service';
+import type { AuthUser } from 'src/module/auth/auth-user.interface';
+import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
+import { FORM_STATUS, FormHistoryAction, getFormStatusLabel } from 'src/common/constants/form-status.constants';
+import {
+  assertCanStateEditForm,
+  assertCanStateFinalSubmitForm,
+} from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
+import { assertStateAccess, buildStateFormPermissions } from 'src/module/xvi-fc/common/utils/xvi-fc-state-access.util';
+import {
+  assertFreshFormStatus,
+  isMongoDuplicateKeyError,
+} from 'src/module/xvi-fc/common/utils/xvi-fc-concurrent-write.util';
+import { toObjectIdString } from 'src/common/utils/objectid.util';
+import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
+import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
+import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
+import { keyByFieldKey, requireField } from 'src/module/xvi-fc/common/utils/xvi-fc-field-lookup.util';
+import { deriveFileValidationOptions } from 'src/module/xvi-fc/common/utils/xvi-fc-file-constraint.util';
+import { buildUlbReconciliationBadges } from 'src/module/xvi-fc/common/utils/xvi-fc-ulb-reconciliation-badges.util';
+import { buildValidationIssuesMessage } from 'src/module/xvi-fc/common/utils/xvi-fc-validation-issues-message.util';
+import type { FileInfo } from 'src/schemas/common/file.schema';
+import type { FormData } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.types';
+import type {
+  FieldConfig,
+  FieldSupportingContent,
+  HydratedFieldConfig,
+  SupportingContentTone,
+} from 'src/module/xvi-fc/common/types/field-config.type';
+import {
+  buildXviFcFolderPath,
+  type XviFcFolderPathContext,
+} from 'src/module/xvi-fc/common/folder-paths/xvi-fc-folder-path.resolver';
+import { YearIdToLabel } from 'src/core/constants/years';
+import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
+import { throwXviFcValidationError, xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
+import {
+  DevolutionFormulaForm,
+  DevolutionFormulaFormDocument,
+} from 'src/schemas/xvi-fc/state/devolution-formula-form.schema';
+import {
+  DevolutionFormulaRow,
+  DevolutionFormulaRowDocument,
+} from 'src/schemas/xvi-fc/state/devolution-formula-row.schema';
+import {
+  DevolutionFormulaFormHistory,
+  DevolutionFormulaFormHistoryDocument,
+} from 'src/schemas/xvi-fc/state/devolution-formula-form-history.schema';
+import { GrantAllocation, GrantAllocationDocument } from 'src/schemas/xvi-fc/grant-allocation.schema';
+import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
+import {
+  DF_ACTION_DOWNLOAD_ERROR_SHEET,
+  DF_ACTION_DOWNLOAD_TEMPLATE,
+  DF_ACTION_REGISTER_ULB,
+  DF_ACTION_REVALIDATE_EXCEL,
+  DF_ACTION_VIEW_UPLOADED_DATA,
+  DF_DUMP_HEADERS,
+  DF_FORM_NAME,
+  buildDfRegisterUlbUrl,
+} from '../../constants/devolution-formula.constants';
+import { DfFormJsonConfigService } from '../form-json/devolution-formula-form-json.service';
+import { getDfFieldsByType } from '../../helpers/devolution-formula-form-json.helpers';
+import type { SaveDraftDevolutionFormulaDto } from '../../dto/save-draft-devolution-formula.dto';
+import type { FinalSubmitDevolutionFormulaDto } from '../../dto/final-submit-devolution-formula.dto';
+import type { DumpDevolutionFormulaQueryDto } from '../../dto/dump-devolution-formula-query.dto';
+import type {
+  DfFormGetResponseData,
+  DfFormLeanDoc,
+  DfFormPermissions,
+  DfGrantAllocationSummary,
+  DfDumpRow,
+  DfRowError,
+  DfInstallmentAccess,
+} from '../../types/devolution-formula.types';
+import { DevolutionFormulaValidator } from '../../validators/devolution-formula.validator';
+import { amountsAreEqual } from '../../helpers/devolution-formula-tolerance.helpers';
+
+function formatINR(amount: number): string {
+  const rounded = Math.round(amount);
+  const s = String(Math.abs(rounded));
+  const prefix = rounded < 0 ? '-' : '';
+  if (s.length <= 3) return `${prefix}${s}`;
+  const last3 = s.slice(-3);
+  const rest = s.slice(0, -3);
+  return `${prefix}${rest.replace(/\B(?=(\d{2})+(?!\d))/g, ',')},${last3}`;
+}
+
+@Injectable()
+export class DevolutionFormulaService {
+  private readonly logger = new Logger(DevolutionFormulaService.name);
+
+  private static readonly INSTALLMENT_2_LOCK_REASON =
+    'Installment 2 is locked until at least one Installment 1 claim batch is acknowledged by MoHUA.';
+
+  constructor(
+    @InjectModel(DevolutionFormulaForm.name)
+    private readonly model: Model<DevolutionFormulaFormDocument>,
+    @InjectModel(DevolutionFormulaRow.name)
+    private readonly rowModel: Model<DevolutionFormulaRowDocument>,
+    @InjectModel(DevolutionFormulaFormHistory.name)
+    private readonly historyModel: Model<DevolutionFormulaFormHistoryDocument>,
+    @InjectModel(GrantAllocation.name)
+    private readonly grantAllocationModel: Model<GrantAllocationDocument>,
+    @InjectModel(Ulb.name)
+    private readonly ulbModel: Model<UlbDocument>,
+    private readonly dfValidator: DevolutionFormulaValidator,
+    private readonly xvifcFormActorsService: XvifcFormActorsService,
+    private readonly excelService: ExcelService,
+    private readonly fileTokenService: FileTokenService,
+    private readonly fileInfoNormalizer: FileInfoNormalizerService,
+    private readonly dynamicFormValidator: DynamicFormValidationService,
+    private readonly dfFormJsonConfig: DfFormJsonConfigService,
+    private readonly ulbEligibilityService: UlbEligibilityService,
+  ) {}
+
+  async getForm(
+    stateId: string,
+    yearId: string,
+    installment: number,
+    user: AuthUser,
+  ): Promise<XviFcApiResponse<DfFormGetResponseData>> {
+    assertStateAccess(user, stateId);
+
+    const stateOid = new Types.ObjectId(stateId);
+    const yearOid = new Types.ObjectId(yearId);
+    const designYear = YearIdToLabel[yearId];
+    if (!designYear) throw new NotFoundException(`Design year not found for yearId: ${yearId}`);
+
+    const folderPathContext: XviFcFolderPathContext = { _id: stateId, designYear, role: 'state' };
+
+    const doc = await this.model
+      .findOne({ state: stateOid, year: yearOid, installment })
+      .populate('state', 'name')
+      .populate('createdBy', 'name')
+      .populate('updatedBy', 'name')
+      .populate('submittedBy', 'name')
+      .lean<DfFormLeanDoc>()
+      .exec();
+
+    const currentFormStatus = doc?.currentFormStatus ?? FORM_STATUS.NOT_STARTED;
+    const permissions = buildStateFormPermissions(user, stateId, currentFormStatus);
+    const { actors, stateName } = this.xvifcFormActorsService.buildActorsAndStateName(
+      doc as unknown as Parameters<typeof this.xvifcFormActorsService.buildActorsAndStateName>[0],
+    );
+
+    const eligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC');
+    const [grantAllocationSummary, computedActiveUlbCount] = await Promise.all([
+      this.resolveGrantAllocationSummary(stateOid, yearOid),
+      this.ulbModel.countDocuments(eligibleUlbFilter),
+    ]);
+    const validationSummary = this.buildValidationSummary(doc, grantAllocationSummary?.total ?? 0);
+
+    const savedData: FormData = {};
+    if (doc?.excelFile) savedData['excelFile'] = doc.excelFile;
+    if (doc?.checkboxConfirmation !== undefined) savedData['checkboxConfirmation'] = doc.checkboxConfirmation;
+
+    const fields = await this.dfFormJsonConfig.loadFields(yearId);
+    const questions = this.hydrateQuestions(
+      getDfFieldsByType(fields, 'DF_MAIN_FORM_FIELDS'),
+      savedData,
+      doc,
+      permissions,
+      folderPathContext,
+      yearId,
+      computedActiveUlbCount,
+      grantAllocationSummary,
+    );
+    const grantMax = grantAllocationSummary?.total ?? null;
+    const rowEditFields = getDfFieldsByType(fields, 'DF_ROW_EDIT_FIELDS').map((field) => {
+      if (
+        grantMax !== null &&
+        ['totalGrantAllocation', 'installment1Amount', 'installment2Amount'].includes(field.key)
+      ) {
+        return {
+          ...field,
+          validations: [
+            ...(field.validations ?? []),
+            { name: 'max', validator: grantMax, message: `Cannot exceed the MoHUA grant allocation (₹${grantMax}).` },
+          ],
+        };
+      }
+      return field;
+    });
+    const installmentAccess = this.buildInstallmentAccess();
+
+    const responseData: DfFormGetResponseData = {
+      _id: doc ? String(doc._id) : null,
+      formName: DF_FORM_NAME,
+      stateId,
+      yearId,
+      installment: installment as 1 | 2,
+      stateName,
+      currentFormStatus,
+      currentFormStatusLabel: getFormStatusLabel(currentFormStatus),
+      permissions,
+      actors,
+      validationSummary,
+      grantAllocationSummary,
+      questions,
+      rowEditFields,
+      installmentAccess,
+      meta: { version: 1 },
+    };
+
+    return xviFcSuccess('ULB-wise Allocation form fetched.', responseData);
+  }
+
+  async saveDraft(
+    dto: SaveDraftDevolutionFormulaDto,
+    user: AuthUser,
+    ip: string = '',
+    userAgent: string = '',
+  ): Promise<XviFcApiResponse> {
+    assertStateAccess(user, dto.stateId);
+
+    const stateOid = new Types.ObjectId(dto.stateId);
+    const yearOid = new Types.ObjectId(dto.yearId);
+    const userOid = new Types.ObjectId(user._id);
+
+    const existing = await this.model
+      .findOne({ state: stateOid, year: yearOid, installment: dto.installment })
+      .lean<Pick<DfFormLeanDoc, '_id' | 'currentFormStatus' | 'excelFile'>>()
+      .exec();
+
+    const fromStatus = existing?.currentFormStatus ?? FORM_STATUS.NOT_STARTED;
+    if (existing) {
+      assertCanStateEditForm(fromStatus);
+    }
+
+    const eligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC');
+    const [grantAlloc, computedActiveUlbCount] = await Promise.all([
+      this.resolveGrantAllocation(stateOid, yearOid),
+      this.ulbModel.countDocuments(eligibleUlbFilter),
+    ]);
+
+    const dfFields = await this.dfFormJsonConfig.loadFields(dto.yearId);
+    const dfMainFields = getDfFieldsByType(dfFields, 'DF_MAIN_FORM_FIELDS');
+
+    let normalizedFile: FileInfo | null | undefined;
+    if (dto.data?.excelFile !== undefined) {
+      const excelFileField = requireField(
+        keyByFieldKey(dfMainFields),
+        'excelFile',
+        'DevolutionFormulaService.saveDraft',
+      );
+      const { file, errors: fileErrors } = this.fileInfoNormalizer.normalizeInboundFileInfo(
+        dto.data.excelFile as unknown as Record<string, unknown>,
+        existing?.excelFile,
+        deriveFileValidationOptions(excelFileField, 'excelFile'),
+      );
+      if (fileErrors.length > 0) throwXviFcValidationError({ excelFile: fileErrors });
+      normalizedFile = file;
+    }
+
+    const formData: FormData = {};
+    if (normalizedFile !== undefined) formData['excelFile'] = normalizedFile;
+    if (dto.data?.checkboxConfirmation !== undefined) formData['checkboxConfirmation'] = dto.data.checkboxConfirmation;
+
+    const validation = this.dynamicFormValidator.validateDraftAndBuildPayload(dfMainFields, formData);
+    if (!validation.isValid) throwXviFcValidationError(validation.errors);
+
+    const update: Record<string, unknown> = {
+      state: stateOid,
+      year: yearOid,
+      installment: dto.installment,
+      currentFormStatus: FORM_STATUS.IN_PROGRESS,
+      isDraft: true,
+      // Defensive rounding — GrantAllocation is externally written and unconstrained (see
+      // grant-allocation.schema.ts).
+      totalMoHUAAllocation: Math.round(grantAlloc.basic + grantAlloc.performance),
+      grantAllocationRef: grantAlloc._id,
+      updatedBy: userOid,
+      ulbCount: computedActiveUlbCount,
+    };
+
+    if (normalizedFile !== undefined) update['excelFile'] = normalizedFile;
+    if (validation.sanitizedPayload['checkboxConfirmation'] !== undefined) {
+      update['checkboxConfirmation'] = validation.sanitizedPayload['checkboxConfirmation'];
+    }
+
+    const filter = { state: stateOid, year: yearOid, installment: dto.installment };
+
+    try {
+      const result = await this.model
+        .findOneAndUpdate(
+          { ...filter, currentFormStatus: fromStatus },
+          {
+            $set: update,
+            $setOnInsert: { createdBy: userOid },
+          },
+          { upsert: true, new: true },
+        )
+        .lean()
+        .exec();
+
+      await this.recordFormHistory({
+        formId: result._id,
+        state: stateOid,
+        year: yearOid,
+        action: FormHistoryAction.CREATE_DRAFT,
+        fromStatus,
+        toStatus: FORM_STATUS.IN_PROGRESS,
+        changedBy: userOid,
+        ip,
+        userAgent,
+      });
+
+      return xviFcSuccess('ULB-wise Allocation draft saved.', { _id: String(result._id) });
+    } catch (error) {
+      // Status-guarded filter matched nothing and the upsert tried (and failed) to insert a
+      // duplicate - status changed since it was read (e.g. a concurrent final submit).
+      if (!isMongoDuplicateKeyError(error)) throw error;
+      await assertFreshFormStatus(
+        async () =>
+          (await this.model.findOne(filter, { currentFormStatus: 1 }).lean<{ currentFormStatus?: number }>().exec())
+            ?.currentFormStatus,
+        assertCanStateEditForm,
+      );
+    }
+  }
+
+  async finalSubmit(
+    dto: FinalSubmitDevolutionFormulaDto,
+    user: AuthUser,
+    ip: string = '',
+    userAgent: string = '',
+  ): Promise<XviFcApiResponse> {
+    assertStateAccess(user, dto.stateId);
+
+    const stateOid = new Types.ObjectId(dto.stateId);
+    const yearOid = new Types.ObjectId(dto.yearId);
+    const userOid = new Types.ObjectId(user._id);
+
+    const filter = { state: stateOid, year: yearOid, installment: dto.installment };
+
+    const form = await this.model.findOne(filter).lean<DfFormLeanDoc>().exec();
+
+    if (!form) {
+      throwXviFcValidationError({
+        excelFile: [{ field: 'excelFile', code: 'notFound', message: 'Form not found. Please save a draft first.' }],
+      });
+    }
+
+    const fromStatus = form.currentFormStatus ?? FORM_STATUS.NOT_STARTED;
+    assertCanStateFinalSubmitForm(fromStatus);
+
+    const dfFields = await this.dfFormJsonConfig.loadFields(dto.yearId);
+    const dfMainFields = getDfFieldsByType(dfFields, 'DF_MAIN_FORM_FIELDS');
+    const excelFileField = requireField(
+      keyByFieldKey(dfMainFields),
+      'excelFile',
+      'DevolutionFormulaService.finalSubmit',
+    );
+
+    const { file: normalizedFile, errors: fileErrors } = this.fileInfoNormalizer.normalizeInboundFileInfo(
+      dto.data.excelFile as unknown as Record<string, unknown>,
+      form.excelFile,
+      deriveFileValidationOptions(excelFileField, 'excelFile'),
+    );
+    if (fileErrors.length > 0) throwXviFcValidationError({ excelFile: fileErrors });
+
+    // `normalizedFile` is `undefined` when the excel file is unchanged from what's already
+    // stored (see FileInfoNormalizerService) — that must stay out of the Mongo $set (below)
+    // so Mongoose doesn't re-stamp the stored file's timestamps, but the required-field
+    // validator below still needs to see the (unchanged) file as present.
+    const formData: FormData = {
+      excelFile: normalizedFile !== undefined ? normalizedFile : form.excelFile,
+      checkboxConfirmation: dto.data.checkboxConfirmation,
+    };
+
+    const validation = this.dynamicFormValidator.validateFinalSubmitAndBuildPayload(dfMainFields, formData);
+    if (!validation.isValid) throwXviFcValidationError(validation.errors);
+
+    // Prerequisite gate for installment 2
+    if (dto.installment === 2) {
+      this.checkInstallment2Prereq();
+    }
+
+    // Grant allocation must still exist, and its total must match what was validated.
+    // Also compute the current active ULB count to validate row count consistency.
+    const finalSubmitEligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC');
+    const [currentAlloc, computedActiveUlbCount] = await Promise.all([
+      this.resolveGrantAllocation(stateOid, yearOid),
+      this.ulbModel.countDocuments(finalSubmitEligibleUlbFilter),
+    ]);
+    // Defensive rounding — see the matching comment on totalMoHUAAllocation above.
+    const currentTotal = Math.round(currentAlloc.basic + currentAlloc.performance);
+
+    if (!form.excelRowCount || form.excelRowCount === 0) {
+      throwXviFcValidationError({
+        excelFile: [
+          {
+            field: 'excelFile',
+            code: 'noData',
+            message:
+              'No Excel data has been uploaded and validated. Please upload and validate the Excel file before submitting.',
+          },
+        ],
+      });
+    }
+
+    if (Math.abs((form.totalMoHUAAllocation ?? 0) - currentTotal) > 0.001) {
+      throwXviFcValidationError({
+        excelFile: [
+          {
+            field: 'excelFile',
+            code: 'staleAllocation',
+            message:
+              'The grant allocation has changed since the last validation. Please revalidate the Excel file before submitting.',
+          },
+        ],
+      });
+    }
+
+    // Specific, actionable gates — checked before the generic notValid gate below so the
+    // user is shown precisely what to fix rather than a generic "not valid" message.
+    const excelFileBlockingErrors: DfRowError[] = [];
+
+    const persistedNewUlbCount = form.newUlbCount ?? 0;
+    if (persistedNewUlbCount > 0) {
+      excelFileBlockingErrors.push({
+        field: 'excelFile',
+        code: 'newUlbsAdded',
+        message: `You have added ${persistedNewUlbCount} ULB(s). Please register before proceeding.`,
+      });
+    }
+
+    const activeVersion = form.activeDatasetVersion ?? 0;
+    if (activeVersion > 0) {
+      const identityModifiedRow = await this.rowModel
+        .findOne({
+          form: form._id as Types.ObjectId,
+          datasetVersion: activeVersion,
+          isActive: true,
+          'validationErrors.code': 'identityModified',
+        })
+        .select('_id')
+        .lean()
+        .exec();
+
+      if (identityModifiedRow) {
+        excelFileBlockingErrors.push({
+          field: 'excelFile',
+          code: 'identityModified',
+          message: 'Some ULB identity fields were modified. Please correct the uploaded data before proceeding.',
+        });
+      }
+    }
+
+    if (excelFileBlockingErrors.length > 0) {
+      throwXviFcValidationError({ excelFile: excelFileBlockingErrors });
+    }
+
+    if (!form.validationStatus || form.validationStatus !== 'VALID') {
+      throwXviFcValidationError({
+        excelFile: [
+          {
+            field: 'excelFile',
+            code: 'notValid',
+            message:
+              'Excel validation must pass (all ULBs covered, no row errors, allocation balanced) before final submit.',
+          },
+        ],
+      });
+    }
+
+    if ((form.excelRowCount ?? 0) > 0 && form.excelRowCount !== computedActiveUlbCount) {
+      throwXviFcValidationError({
+        excelFile: [
+          {
+            field: 'excelFile',
+            code: 'excelInvalid',
+            message: `The uploaded Excel has ${form.excelRowCount} row(s) but there are ${computedActiveUlbCount} active ULB(s) registered. Please re-upload with all active ULBs.`,
+          },
+        ],
+      });
+    }
+
+    const finalSubmitSet: Record<string, unknown> = {
+      currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+      isDraft: false,
+      submittedAt: new Date(),
+      submittedBy: userOid,
+      updatedBy: userOid,
+      checkboxConfirmation: dto.data.checkboxConfirmation,
+      ulbCount: computedActiveUlbCount,
+    };
+    // Omit excelFile entirely when unchanged (rather than `excelFile: undefined`) so
+    // Mongoose's FileInfo `timestamps` option doesn't stamp the stored subdocument.
+    if (normalizedFile !== undefined) finalSubmitSet['excelFile'] = normalizedFile;
+
+    const updated = await this.model
+      .findOneAndUpdate({ ...filter, currentFormStatus: fromStatus }, { $set: finalSubmitSet })
+      .exec();
+
+    // Filter matched nothing - status changed since it was read (e.g. a second concurrent submit).
+    if (!updated) {
+      await assertFreshFormStatus(
+        async () =>
+          (await this.model.findOne(filter, { currentFormStatus: 1 }).lean<{ currentFormStatus?: number }>().exec())
+            ?.currentFormStatus,
+        assertCanStateFinalSubmitForm,
+      );
+    }
+
+    // Snapshot rows now — Excel re-upload hard-deletes the previous version's rows (see
+    // docs/adr/0001-dataset-versioning.md), so this is the only surviving record of what was submitted.
+    let submittedRowsSnapshot: Record<string, unknown>[] | null = null;
+    if (fromStatus !== FORM_STATUS.UNDER_REVIEW_BY_MOHUA && activeVersion > 0) {
+      const activeRows = await this.rowModel
+        .find({ form: form._id, datasetVersion: activeVersion, isActive: true })
+        .sort({ rowNumber: 1 })
+        .select(
+          'rowNumber ulbId censusCode ulbName totalGrantAllocation installment1Amount installment2Amount devolutionFormula datasetVersion',
+        )
+        .lean()
+        .exec();
+      submittedRowsSnapshot = activeRows.map((r) => ({
+        rowNumber: r.rowNumber,
+        ulbId: r.ulbId,
+        censusCode: r.censusCode,
+        ulbName: r.ulbName,
+        totalGrantAllocation: r.totalGrantAllocation,
+        installment1Amount: r.installment1Amount,
+        installment2Amount: r.installment2Amount,
+        devolutionFormula: r.devolutionFormula,
+        datasetVersion: r.datasetVersion,
+      }));
+    }
+
+    await this.recordFormHistory({
+      formId: form._id as Types.ObjectId,
+      state: stateOid,
+      year: yearOid,
+      action: FormHistoryAction.FINAL_SUBMIT,
+      fromStatus,
+      toStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+      changedBy: userOid,
+      ip,
+      userAgent,
+      snapshot: submittedRowsSnapshot,
+    });
+
+    this.logger.log(
+      `ULB-wise Allocation [state=${dto.stateId} year=${dto.yearId} installment=${dto.installment}] submitted by user=${user._id}`,
+    );
+
+    return xviFcSuccess('ULB-wise Allocation submitted successfully.', {
+      currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+      currentFormStatusLabel: getFormStatusLabel(FORM_STATUS.UNDER_REVIEW_BY_MOHUA),
+    });
+  }
+
+  async dumpToExcel(query: DumpDevolutionFormulaQueryDto, user: AuthUser): Promise<ExcelJS.Buffer> {
+    const rowMatch = this.buildDumpRowMatch(query);
+    const formMatch = this.buildDumpFormMatch(query, user);
+
+    const pipeline: PipelineStage[] = [
+      { $match: rowMatch },
+      {
+        $lookup: {
+          from: 'xvifc_devolution_forms',
+          localField: 'form',
+          foreignField: '_id',
+          as: 'formDoc',
+        },
+      },
+      { $unwind: '$formDoc' },
+      { $match: { ...formMatch, $expr: { $eq: ['$datasetVersion', '$formDoc.activeDatasetVersion'] } } },
+      { $lookup: { from: 'states', localField: 'formDoc.state', foreignField: '_id', as: 'stateDoc' } },
+      { $unwind: { path: '$stateDoc', preserveNullAndEmptyArrays: true } },
+      { $lookup: { from: 'users', localField: 'formDoc.submittedBy', foreignField: '_id', as: 'submittedByDoc' } },
+      { $unwind: { path: '$submittedByDoc', preserveNullAndEmptyArrays: true } },
+      { $lookup: { from: 'users', localField: 'createdBy', foreignField: '_id', as: 'createdByDoc' } },
+      { $unwind: { path: '$createdByDoc', preserveNullAndEmptyArrays: true } },
+      { $lookup: { from: 'users', localField: 'updatedBy', foreignField: '_id', as: 'updatedByDoc' } },
+      { $unwind: { path: '$updatedByDoc', preserveNullAndEmptyArrays: true } },
+      { $sort: { 'stateDoc.name': 1, 'formDoc.year': 1, 'formDoc.installment': 1, rowNumber: 1 } },
+      {
+        $project: {
+          rowNumber: 1,
+          censusCode: 1,
+          ulbName: 1,
+          totalGrantAllocation: 1,
+          installment1Amount: 1,
+          installment2Amount: 1,
+          devolutionFormula: 1,
+          datasetVersion: 1,
+          createdAt: 1,
+          updatedAt: 1,
+          'formDoc.year': 1,
+          'formDoc.installment': 1,
+          'formDoc.currentFormStatus': 1,
+          'formDoc.validationStatus': 1,
+          'formDoc.submittedAt': 1,
+          'stateDoc.name': 1,
+          'submittedByDoc.name': 1,
+          'createdByDoc.name': 1,
+          'updatedByDoc.name': 1,
+        },
+      },
+    ];
+
+    const aggRows = (await this.rowModel.aggregate(pipeline).exec()) as Record<string, unknown>[];
+    const dumpRows: DfDumpRow[] = aggRows.map((row) => this.mapDumpAggregationRow(row));
+
+    return this.excelService.generateExcel(DF_DUMP_HEADERS, dumpRows, 'ULB-wise Allocation Dump');
+  }
+
+  // ─── Private helpers ──────────────────────────────────────────────────────
+
+  /**
+   * Inserts a history row unless `fromStatus === toStatus` (no-op re-save). Best-effort,
+   * non-transactional — a failure here must not fail saveDraft/finalSubmit. Mirrors
+   * sfc-status.service.ts's update-then-log pattern.
+   */
+  private async recordFormHistory(entry: {
+    formId: Types.ObjectId;
+    state: Types.ObjectId;
+    year: Types.ObjectId;
+    action: FormHistoryAction;
+    fromStatus: number;
+    toStatus: number;
+    changedBy: Types.ObjectId;
+    ip?: string;
+    userAgent?: string;
+    snapshot?: Record<string, unknown>[] | null;
+  }): Promise<void> {
+    if (entry.fromStatus === entry.toStatus) return;
+    try {
+      await this.historyModel.create({
+        devolutionFormulaForm: entry.formId,
+        state: entry.state,
+        year: entry.year,
+        action: entry.action,
+        fromStatus: entry.fromStatus,
+        toStatus: entry.toStatus,
+        changedBy: entry.changedBy,
+        ip: entry.ip,
+        userAgent: entry.userAgent,
+        snapshot: entry.snapshot ?? null,
+      });
+    } catch (err) {
+      this.logger.error('Failed to write Devolution Formula form history', err);
+    }
+  }
+
+  private buildDumpRowMatch(query: DumpDevolutionFormulaQueryDto): Record<string, unknown> {
+    return { isActive: query.isActive ?? true };
+  }
+
+  private buildDumpFormMatch(query: DumpDevolutionFormulaQueryDto, user: AuthUser): Record<string, unknown> {
+    const match: Record<string, unknown> = {};
+
+    if (user.scope === Scope.STATE) {
+      const userStateId = toObjectIdString(user.state);
+      if (!userStateId) throw new ForbiddenException('Your account is not mapped to any state.');
+      match['formDoc.state'] = new Types.ObjectId(userStateId);
+    } else if (user.scope === Scope.ADMIN) {
+      if (query.stateId) match['formDoc.state'] = new Types.ObjectId(query.stateId);
+    } else {
+      throw new ForbiddenException('Insufficient permissions for dump.');
+    }
+
+    if (query.yearId) match['formDoc.year'] = new Types.ObjectId(query.yearId);
+    if (query.installment) match['formDoc.installment'] = query.installment;
+    if (query.validationStatus) match['formDoc.validationStatus'] = query.validationStatus;
+    if (query.formStatus !== undefined) match['formDoc.currentFormStatus'] = query.formStatus;
+
+    return match;
+  }
+
+  private mapDumpAggregationRow(row: Record<string, unknown>): DfDumpRow {
+    const formDoc = row['formDoc'] as Record<string, unknown> | undefined;
+    const stateDoc = row['stateDoc'] as { name?: string } | undefined;
+    const submittedByDoc = row['submittedByDoc'] as { name?: string } | undefined;
+    const createdByDoc = row['createdByDoc'] as { name?: string } | undefined;
+    const updatedByDoc = row['updatedByDoc'] as { name?: string } | undefined;
+    const yearRaw = formDoc?.['year'] as Types.ObjectId | string | null | undefined;
+    const yearId = yearRaw != null ? String(yearRaw) : '';
+
+    return {
+      rowNumber: row['rowNumber'] as number,
+      stateName: stateDoc?.name ?? '',
+      yearLabel: YearIdToLabel[yearId] ?? yearId,
+      installment: (formDoc?.['installment'] as number) ?? 0,
+      formStatus: getFormStatusLabel((formDoc?.['currentFormStatus'] as number) ?? 0),
+      validationStatus: (formDoc?.['validationStatus'] as string | undefined) ?? '',
+      censusCode: (row['censusCode'] as string | undefined) ?? '',
+      ulbName: row['ulbName'] as string,
+      totalGrantAllocation: row['totalGrantAllocation'] as number,
+      installment1Amount: row['installment1Amount'] as number,
+      installment2Amount: row['installment2Amount'] as number,
+      devolutionFormula: row['devolutionFormula'] as string,
+      datasetVersion: row['datasetVersion'] as number,
+      submittedBy: submittedByDoc?.name ?? '',
+      submittedAt: formDoc?.['submittedAt'] ? new Date(formDoc['submittedAt'] as Date).toISOString() : '',
+      createdBy: createdByDoc?.name ?? '',
+      updatedBy: updatedByDoc?.name ?? '',
+      createdAt: row['createdAt'] ? new Date(row['createdAt'] as Date).toISOString() : '',
+      updatedAt: row['updatedAt'] ? new Date(row['updatedAt'] as Date).toISOString() : '',
+    };
+  }
+
+  private hydrateQuestions(
+    questions: FieldConfig[],
+    savedData: FormData,
+    doc: DfFormLeanDoc | null,
+    permissions: DfFormPermissions,
+    folderPathContext: XviFcFolderPathContext,
+    yearId: string,
+    computedActiveUlbCount: number,
+    grantAllocationSummary: DfGrantAllocationSummary | null,
+  ): HydratedFieldConfig[] {
+    return questions.map((question) => {
+      if (question.key === 'ulbCount') {
+        return { ...question, value: computedActiveUlbCount };
+      }
+
+      const rawValue = Object.prototype.hasOwnProperty.call(savedData, question.key)
+        ? savedData[question.key]
+        : question.value;
+
+      if (question.formFieldType === 'file') {
+        const resolvedFolderPath = question.folderPathKey
+          ? buildXviFcFolderPath(question.folderPathKey, folderPathContext)
+          : question.folderPath;
+
+        const fileVal = rawValue as FileInfo | null | undefined;
+        const hydrated = this.fileInfoNormalizer.hydrateFileInfoForResponse(fileVal ?? null, (p) => {
+          try {
+            return this.fileTokenService.signFileUrl(p);
+          } catch {
+            return p;
+          }
+        });
+        const value = hydrated ?? rawValue;
+
+        if (question.key === 'excelFile') {
+          return {
+            ...question,
+            folderPath: resolvedFolderPath,
+            value,
+            supportingContent: this.buildExcelFileSupportingContent(doc, permissions, yearId, grantAllocationSummary),
+          };
+        }
+
+        return { ...question, folderPath: resolvedFolderPath, value };
+      }
+
+      return { ...question, value: rawValue };
+    });
+  }
+
+  private buildExcelFileSupportingContent(
+    doc: DfFormLeanDoc | null,
+    permissions: DfFormPermissions,
+    yearId: string,
+    grantAllocationSummary: DfGrantAllocationSummary | null,
+  ): FieldSupportingContent[] {
+    const { canView, canEdit } = permissions;
+    const hasDataset = (doc?.activeDatasetVersion ?? 0) > 0;
+    const hasUploadedExcel = !!doc?.excelFile?.path;
+    const errorRowCount = doc?.errorRowCount ?? 0;
+    const excelRowCount = doc?.excelRowCount ?? 0;
+    const totalMoHUAAllocation = doc?.totalMoHUAAllocation ?? 0;
+    const totalAllocatedSum = doc?.totalAllocatedSum ?? 0;
+    const liveAllocatedAmount = grantAllocationSummary?.total ?? totalMoHUAAllocation;
+    // Exact match (within float-noise epsilon), not a forgiving tolerance — every rupee of
+    // totalMoHUAAllocation must be accounted for; see devolution-formula-tolerance.helpers.ts.
+    const allocationBalanced = amountsAreEqual(totalAllocatedSum, totalMoHUAAllocation);
+    const validationStatus = doc?.validationStatus;
+    const newUlbCount = doc?.newUlbCount ?? 0;
+    const missingUlbCount = doc?.missingUlbCount ?? 0;
+    const duplicateUlbCount = doc?.duplicateUlbCount ?? 0;
+
+    /**
+     * Mirrors all warning/danger badges below. newUlbCount/duplicateUlbCount aren't part of
+     * validationStatus, so warnings could exist while status is VALID. Keep Revalidate Excel
+     * visible so users can re-run validation after fixing them.
+     * */
+    const hasWarningOrDangerBadge =
+      errorRowCount > 0 ||
+      missingUlbCount > 0 ||
+      newUlbCount > 0 ||
+      duplicateUlbCount > 0 ||
+      (hasDataset && !allocationBalanced);
+
+    return [
+      {
+        type: 'actions',
+        position: 'before',
+        layout: 'inline',
+        separator: 'dot',
+        description: canEdit
+          ? 'Download the template, upload the completed Excel file, review and resolve any validation errors, register newly added ULBs where required, and revalidate before final submission.'
+          : '',
+        actions: [
+          {
+            id: DF_ACTION_DOWNLOAD_TEMPLATE,
+            label: 'Download Template',
+            icon: 'bi bi-file-earmark-arrow-down',
+            tone: 'primary' as const,
+            visible: canEdit,
+          },
+          {
+            id: DF_ACTION_VIEW_UPLOADED_DATA,
+            label: 'View Uploaded Data',
+            icon: 'bi bi-table',
+            tone: (errorRowCount > 0 ? 'danger' : 'primary') as SupportingContentTone,
+            visible: canView && hasDataset,
+          },
+          {
+            id: DF_ACTION_DOWNLOAD_ERROR_SHEET,
+            label: 'Download Error Sheet',
+            icon: 'bi bi-file-earmark-excel',
+            tone: 'danger' as const,
+            visible: canView && errorRowCount > 0,
+          },
+          {
+            id: DF_ACTION_REVALIDATE_EXCEL,
+            label: 'Revalidate Excel',
+            icon: 'bi bi-arrow-repeat',
+            tone: 'primary' as const,
+            visible: canEdit && hasUploadedExcel && (validationStatus !== 'VALID' || hasWarningOrDangerBadge),
+          },
+          {
+            id: DF_ACTION_REGISTER_ULB,
+            label: 'Register ULB',
+            icon: 'bi bi-person-check',
+            url: buildDfRegisterUlbUrl(yearId),
+            tone: 'success' as const,
+            variant: 'link' as const,
+            visible: canEdit && newUlbCount > 0,
+          },
+        ],
+        badges: [
+          {
+            label: `Total rows: ${excelRowCount}`,
+            tone: 'secondary' as const,
+            visible: canEdit && hasDataset,
+          },
+          {
+            label: `${errorRowCount} error(s)`,
+            tone: 'danger' as const,
+            visible: canEdit && errorRowCount > 0,
+          },
+          ...buildUlbReconciliationBadges({
+            missingCount: missingUlbCount,
+            newCount: newUlbCount,
+            duplicateCount: duplicateUlbCount,
+            visible: canEdit,
+          }),
+          {
+            label: `Allocated amount: ₹${formatINR(liveAllocatedAmount)}`,
+            tone: 'secondary' as const,
+            visible: canEdit,
+          },
+          {
+            label: `Allocated sum: ₹${formatINR(totalAllocatedSum)}`,
+            tone: (allocationBalanced ? 'success' : 'danger') as SupportingContentTone,
+            visible: canEdit && hasDataset,
+          },
+          {
+            label: `Remaining: ₹${formatINR(totalMoHUAAllocation - totalAllocatedSum)}`,
+            tone: (allocationBalanced ? 'success' : 'danger') as SupportingContentTone,
+            visible: canEdit && hasDataset,
+          },
+          {
+            label: 'All valid',
+            icon: 'bi bi-check-circle-fill',
+            tone: 'success' as const,
+            visible: canEdit && validationStatus === 'VALID',
+          },
+        ],
+        validationMessage: buildValidationIssuesMessage({
+          errorRowCount,
+          missingCount: missingUlbCount,
+          newCount: newUlbCount,
+          duplicateCount: duplicateUlbCount,
+          allocationMismatch: allocationBalanced
+            ? undefined
+            : {
+                differenceLabel: `₹${formatINR(Math.abs(totalMoHUAAllocation - totalAllocatedSum))}`,
+                targetLabel: `₹${formatINR(totalMoHUAAllocation)}`,
+              },
+          visible: canEdit && hasDataset && validationStatus === 'INVALID',
+        }),
+      },
+    ];
+  }
+
+  private buildValidationSummary(doc: DfFormLeanDoc | null, totalMoHUAAllocation: number) {
+    if (!doc) {
+      return this.dfValidator.buildValidationSummary({
+        excelRowCount: 0,
+        validRowCount: 0,
+        errorRowCount: 0,
+        missingUlbCount: 0,
+        newUlbCount: 0,
+        duplicateUlbCount: 0,
+        totalMoHUAAllocation,
+        totalAllocatedSum: 0,
+        activeDatasetVersion: 0,
+      });
+    }
+    const excelRowCount = doc.excelRowCount ?? 0;
+    const errorRowCount = doc.errorRowCount ?? 0;
+    return this.dfValidator.buildValidationSummary({
+      excelRowCount,
+      validRowCount: excelRowCount - errorRowCount,
+      errorRowCount,
+      missingUlbCount: doc.missingUlbCount ?? 0,
+      newUlbCount: doc.newUlbCount ?? 0,
+      duplicateUlbCount: doc.duplicateUlbCount ?? 0,
+      totalMoHUAAllocation: doc.totalMoHUAAllocation ?? totalMoHUAAllocation,
+      totalAllocatedSum: doc.totalAllocatedSum ?? 0,
+      activeDatasetVersion: doc.activeDatasetVersion ?? 0,
+    });
+  }
+
+  async resolveGrantAllocation(stateOid: Types.ObjectId, yearOid: Types.ObjectId) {
+    const alloc = await this.grantAllocationModel.findOne({ stateId: stateOid, yearId: yearOid }).lean().exec();
+
+    if (!alloc) {
+      throwXviFcValidationError({
+        excelFile: [
+          {
+            field: 'excelFile',
+            code: 'grantAllocationMissing',
+            message: 'Grant allocation not found for this state and year. Please contact the administrator.',
+          },
+        ],
+      });
+    }
+
+    return alloc;
+  }
+
+  private async resolveGrantAllocationSummary(
+    stateOid: Types.ObjectId,
+    yearOid: Types.ObjectId,
+  ): Promise<DfGrantAllocationSummary | null> {
+    const alloc = await this.grantAllocationModel.findOne({ stateId: stateOid, yearId: yearOid }).lean().exec();
+
+    if (!alloc) return null;
+
+    return {
+      grantAllocationId: String(alloc._id),
+      basic: alloc.basic,
+      performance: alloc.performance,
+      // Defensive rounding — see the matching comment on totalMoHUAAllocation above.
+      total: Math.round(alloc.basic + alloc.performance),
+    };
+  }
+
+  private checkInstallment2Prereq(): void {
+    if (this.isInstallment2Unlocked()) return;
+
+    throwXviFcValidationError({
+      installment: [
+        {
+          field: 'installment',
+          code: 'installment2Locked',
+          message: DevolutionFormulaService.INSTALLMENT_2_LOCK_REASON,
+        },
+      ],
+    });
+  }
+
+  /**
+   * TODO: unlock once wired to claim-letter — should query for at least one Installment 1 claim
+   * batch acknowledged by MoHUA (claim-letter's `ClaimLetterBatch` model, which now exists, but
+   * nothing in this module reads it yet). Until then Installment 2 stays locked for every state.
+   */
+  private isInstallment2Unlocked(): boolean {
+    return false;
+  }
+
+  private buildInstallmentAccess(): DfInstallmentAccess {
+    const installment2Unlocked = this.isInstallment2Unlocked();
+
+    return {
+      installment1: { canSelect: true, locked: false, lockReason: null },
+      installment2: {
+        canSelect: installment2Unlocked,
+        locked: !installment2Unlocked,
+        lockReason: installment2Unlocked ? null : DevolutionFormulaService.INSTALLMENT_2_LOCK_REASON,
+      },
+    };
+  }
+}

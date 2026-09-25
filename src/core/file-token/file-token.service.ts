@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
+import ms, { type StringValue } from 'ms';
 
 const ALGORITHM = 'aes-256-gcm';
 const IV_BYTES = 12;
@@ -18,18 +19,37 @@ export type TokenError = { type: 'invalid' | 'expired' | 'tampered' };
 export class FileTokenService {
   private readonly key: Buffer;
   private readonly baseUrl: string;
+  private readonly sessionExpiryMs: number;
 
   constructor(cfg: ConfigService) {
     const secret = cfg.get<string>('JWT_SECRET');
     if (!secret) throw new Error('SECRET env variable is not set for FileTokenService');
     this.key = crypto.createHash('sha256').update(secret).digest();
     this.baseUrl = cfg.get<string>('BASE_URL', '');
+
+    const jwtExpiresIn = (cfg.get<string>('JWT_EXPIRES_IN') ?? '24h') as StringValue;
+    this.sessionExpiryMs = ms(jwtExpiresIn) ?? 24 * 60 * 60 * 1000;
   }
 
-  signFileUrl(url: string): string {
+  /**
+   * `validityMs` overrides the default ~24-minute expiry — use a longer window for links baked
+   * into an artifact meant to be opened later (e.g. an Excel export), where the default would
+   * likely have already lapsed by the time someone opens the file.
+   */
+  signFileUrl(url: string, disposition: 'inline' | 'attachment' = 'attachment', validityMs?: number): string {
     if (!url) return url;
-    const token = this.createToken({ path: url, disposition: 'attachment' });
+    const token = this.createToken({ path: url, disposition, exp: validityMs ? Date.now() + validityMs : undefined });
     return `${this.baseUrl}file/download?signature=${token}`;
+  }
+
+  /**
+   * Signs `path` with a lifetime matching the configured JWT session length (JWT_EXPIRES_IN),
+   * so a file link shown alongside an active session doesn't expire before the session does.
+   * Shared by every state form that signs file URLs on its GET-form response (SFC Status, EULB,
+   * GTC) - previously each form recomputed this expiry locally.
+   */
+  signFileUrlForSession(path: string, disposition: 'inline' | 'attachment' = 'inline'): string {
+    return this.signFileUrl(path, disposition, this.sessionExpiryMs);
   }
 
   createToken(payload: FileDownloadPayload): string {

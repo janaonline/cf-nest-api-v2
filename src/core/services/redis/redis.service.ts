@@ -45,11 +45,30 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     await this.client.del(key);
   }
 
+  /** Seconds remaining before `key` expires, or -1/-2 per Redis TTL semantics (no expiry / no key). */
+  async ttl(key: string): Promise<number> {
+    return this.client.ttl(key);
+  }
+
   async incr(key: string): Promise<number> {
     return this.client.incr(key);
   }
 
   async expire(key: string, ttl: number): Promise<void> {
     await this.client.expire(key, ttl);
+  }
+
+  /** Deletes every key matching `pattern` (Redis SCAN glob syntax). Returns how many keys were actually deleted. */
+  async delByPattern(pattern: string): Promise<number> {
+    let cursor = '0';
+    let deleted = 0;
+    do {
+      const [nextCursor, keys] = await this.client.scan(cursor, 'MATCH', pattern, 'COUNT', 100);
+      cursor = nextCursor;
+      if (keys.length) {
+        deleted += await this.client.del(...keys);
+      }
+    } while (cursor !== '0');
+    return deleted;
   }
 }

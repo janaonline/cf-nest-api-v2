@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, InternalServerErrorException, Logger }
 import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model, Types } from 'mongoose';
 import { ConfigService } from '@nestjs/config';
+import * as XLSX from 'xlsx';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { YearLabelToId } from 'src/core/constants/years';
 import { buildPopulationMatch } from 'src/core/helpers/populationCategory.helper';
@@ -180,7 +181,9 @@ export class AfsDigitizationService {
     }
 
     if (Object.keys(setPayload).length > 0) {
-      await this.annualAccountModel.updateOne({ _id: new Types.ObjectId(annualAccountId) }, { $set: setPayload }).exec();
+      await this.annualAccountModel
+        .updateOne({ _id: new Types.ObjectId(annualAccountId) }, { $set: setPayload })
+        .exec();
     }
 
     this.logger.log(`Annual account PDF metadata update completed for ${annualAccountId}`, summary);
@@ -289,10 +292,7 @@ export class AfsDigitizationService {
     return summary;
   }
 
-  private updateBackfillTimeEstimate(
-    summary: AnnualAccountPdfMetadataBackfillSummary,
-    startedAt: number,
-  ): void {
+  private updateBackfillTimeEstimate(summary: AnnualAccountPdfMetadataBackfillSummary, startedAt: number): void {
     summary.elapsedMs = Date.now() - startedAt;
 
     if (summary.documentsProcessed === 0) {
@@ -309,9 +309,7 @@ export class AfsDigitizationService {
       summary.estimatedRemainingMs > 0 ? new Date(Date.now() + summary.estimatedRemainingMs) : null;
   }
 
-  private buildAnnualAccountPdfMetadataBackfillFilter(
-    onlyMissing: boolean,
-  ): FilterQuery<AnnualAccountDataDocument> {
+  private buildAnnualAccountPdfMetadataBackfillFilter(onlyMissing: boolean): FilterQuery<AnnualAccountDataDocument> {
     const pdfUrlFilters = ANNUAL_ACCOUNT_AUDIT_TYPES.flatMap((auditType) =>
       ANNUAL_ACCOUNT_PDF_FIELDS.map((pdfField) => ({
         [`${auditType}.provisional_data.${pdfField}.pdf.url`]: { $exists: true, $ne: '' },
@@ -394,15 +392,13 @@ export class AfsDigitizationService {
     ]);
 
     return {
-      data: {
-        states,
-        ulbs,
-        years,
-        populationCategories,
-        documentTypes,
-        auditTypes,
-        digitizationStatuses,
-      },
+      states,
+      ulbs,
+      years,
+      populationCategories,
+      documentTypes,
+      auditTypes,
+      digitizationStatuses,
     };
   }
   async getMetricsAfs(docType: string = 'all') {
@@ -421,7 +417,7 @@ export class AfsDigitizationService {
 
     await this.afsMetricModel.updateOne({ docType }, { $set: finalMetrics }, { runValidators: true, upsert: true });
 
-    return { data: result[0] ?? finalMetrics };
+    return result[0] ?? finalMetrics;
   }
   async getMetrics(docType: string = 'all') {
     const result = await this.afsMetricModel.findOne({ docType }).lean();
@@ -466,14 +462,10 @@ export class AfsDigitizationService {
             : '0%',
       },
     ];
-    return { data: { cards } };
+    return { cards };
   }
 
-  async getUlbs(params: {
-    populationCategory: string;
-    stateId?: string[];
-    limit?: number;
-  }): Promise<{ data: UlbDocument[] }> {
+  async getUlbs(params: { populationCategory: string; stateId?: string[]; limit?: number }): Promise<UlbDocument[]> {
     const populationRange = buildPopulationMatch(params.populationCategory || '');
     const stateObjectIds = params.stateId ? params.stateId.map((id) => new Types.ObjectId(id)) : undefined;
 
@@ -489,11 +481,90 @@ export class AfsDigitizationService {
       )
       .sort({ name: 1 })
       .limit(params.limit || 2000);
-    return { data };
+    return data;
   }
 
   async getFile(id: string) {
     return this.afsExcelFileModel.findById(id);
+  }
+
+  async uploadUlbKeywords(file: Express.Multer.File) {
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('Excel file is required.');
+    }
+
+    const workbook = XLSX.read(file.buffer, { type: 'buffer' });
+    const sheetName = workbook.SheetNames[0];
+    if (!sheetName) {
+      throw new BadRequestException('Excel file does not contain any sheets.');
+    }
+
+    const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(workbook.Sheets[sheetName], {
+      defval: '',
+      raw: false,
+    });
+
+    if (!rows.length) {
+      throw new BadRequestException('Excel file does not contain any rows.');
+    }
+
+    const normalizedRows = rows.map((row, index) => {
+      const rowMap = this.normalizeExcelRow(row);
+      return {
+        rowNumber: index + 2,
+        ulbName: rowMap.expected_ulb_name || rowMap.ulb_name || rowMap.name || '',
+        keywords: rowMap.keywords || '',
+      };
+    });
+
+    const validRows = normalizedRows.filter((row) => row.ulbName && row.keywords);
+    if (!validRows.length) {
+      throw new BadRequestException('Excel must include expected_ulb_name and Keywords values.');
+    }
+
+    const ulbs = await this.ulbModel.find({}, { name: 1, keywords: 1 }).lean();
+    const ulbByName = new Map(ulbs.map((ulb) => [this.normalizeLookupValue(ulb.name), ulb]));
+    const updates = new Map<string, { id: Types.ObjectId; keywords: string }>();
+    const notFound: { rowNumber: number; expected_ulb_name: string }[] = [];
+    let skipped = normalizedRows.length - validRows.length;
+
+    for (const row of validRows) {
+      const ulb = ulbByName.get(this.normalizeLookupValue(row.ulbName));
+      if (!ulb) {
+        notFound.push({ rowNumber: row.rowNumber, expected_ulb_name: row.ulbName });
+        continue;
+      }
+
+      const existingUpdate = updates.get(ulb._id.toString());
+      const currentKeywords = existingUpdate?.keywords ?? ulb.keywords ?? '';
+      const mergedKeywords = this.mergeKeywords(currentKeywords, row.keywords);
+
+      if (mergedKeywords === currentKeywords) {
+        skipped += 1;
+        continue;
+      }
+
+      updates.set(ulb._id.toString(), { id: ulb._id, keywords: mergedKeywords });
+    }
+
+    if (updates.size) {
+      await this.ulbModel.bulkWrite(
+        Array.from(updates.values()).map((update) => ({
+          updateOne: {
+            filter: { _id: update.id },
+            update: { $set: { keywords: update.keywords } },
+          },
+        })),
+      );
+    }
+
+    return {
+      totalRows: rows.length,
+      updated: updates.size,
+      skipped,
+      notFoundCount: notFound.length,
+      notFound,
+    };
   }
 
   async afsList(query: DigitizationReportQueryDto): Promise<any> {
@@ -516,7 +587,9 @@ export class AfsDigitizationService {
         item.afsFiles.ulbFile.excelUrl_signed = this.fileTokenService.signFileUrl(item.afsFiles.ulbFile.excelUrl);
       }
       if (item.afsFiles?.ulbFile?.digitizedFileUrl) {
-        item.afsFiles.ulbFile.digitizedFileUrl_signed = this.fileTokenService.signFileUrl(item.afsFiles.ulbFile.digitizedFileUrl);
+        item.afsFiles.ulbFile.digitizedFileUrl_signed = this.fileTokenService.signFileUrl(
+          item.afsFiles.ulbFile.digitizedFileUrl,
+        );
       }
       if (item.afsFiles?.afsFile?.pdfUrl) {
         item.afsFiles.afsFile.pdfUrl_signed = this.fileTokenService.signFileUrl(item.afsFiles.afsFile.pdfUrl);
@@ -525,12 +598,48 @@ export class AfsDigitizationService {
         item.afsFiles.afsFile.excelUrl_signed = this.fileTokenService.signFileUrl(item.afsFiles.afsFile.excelUrl);
       }
       if (item.afsFiles?.afsFile?.digitizedFileUrl) {
-        item.afsFiles.afsFile.digitizedFileUrl_signed = this.fileTokenService.signFileUrl(item.afsFiles.afsFile.digitizedFileUrl);
+        item.afsFiles.afsFile.digitizedFileUrl_signed = this.fileTokenService.signFileUrl(
+          item.afsFiles.afsFile.digitizedFileUrl,
+        );
       }
       return item;
     });
 
-    return { data: signedData, totalCount };
+    return { success: true, data: signedData, totalCount };
+  }
+
+  private normalizeExcelRow(row: Record<string, unknown>): Record<string, string> {
+    return Object.entries(row).reduce<Record<string, string>>((acc, [key, value]) => {
+      const normalizedKey = key.trim().toLowerCase().replace(/\s+/g, '_');
+      acc[normalizedKey] = String(value ?? '').trim();
+      return acc;
+    }, {});
+  }
+
+  private normalizeLookupValue(value: string): string {
+    return value.trim().toLowerCase().replace(/\s+/g, ' ');
+  }
+
+  private mergeKeywords(existingKeywords: string, newKeywords: string): string {
+    const keywords = [...this.splitKeywords(existingKeywords)];
+    const seen = new Set(keywords.map((keyword) => keyword.toLowerCase()));
+
+    for (const keyword of this.splitKeywords(newKeywords)) {
+      const normalizedKeyword = keyword.toLowerCase();
+      if (!seen.has(normalizedKeyword)) {
+        keywords.push(keyword);
+        seen.add(normalizedKeyword);
+      }
+    }
+
+    return keywords.join(', ');
+  }
+
+  private splitKeywords(keywords: string): string[] {
+    return String(keywords || '')
+      .split(',')
+      .map((keyword) => keyword.trim())
+      .filter(Boolean);
   }
 
   async getRequestLog(requestId: string): Promise<DigitizationLogDocument | null> {

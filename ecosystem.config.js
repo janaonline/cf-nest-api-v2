@@ -2,7 +2,7 @@ module.exports = {
   apps: [
     {
       name: 'cf-nest-api-v2',
-      script: 'dist/src/main.js',
+      script: 'dist/main.js',
       env: {
         NODE_ENV: 'production',
         PORT: 3000,
@@ -14,7 +14,7 @@ module.exports = {
     },
     {
       name: 'dev-cf-nest-api-v2',
-      script: 'dist/src/main.js',
+      script: 'dist/main.js',
       env: {
         NODE_ENV: 'development',
         PORT: 3000,
@@ -22,7 +22,7 @@ module.exports = {
     },
     {
       name: 'stag-cf-nest-api-v2',
-      script: 'dist/src/main.js',
+      script: 'dist/main.js',
       // watch: true, // optional for dev
       env: {
         NODE_ENV: 'staging',

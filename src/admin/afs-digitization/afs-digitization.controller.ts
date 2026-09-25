@@ -1,5 +1,19 @@
-import { Body, Controller, Get, Logger, Param, Post, Query, Res, UsePipes, ValidationPipe } from '@nestjs/common';
-import { ApiBearerAuth, ApiBody } from '@nestjs/swagger';
+import {
+  Body,
+  Controller,
+  Get,
+  Logger,
+  Param,
+  Post,
+  Query,
+  Res,
+  UsePipes,
+  ValidationPipe,
+  UploadedFile,
+  UseInterceptors,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiBody, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { YearIdToLabel } from 'src/core/constants/years';
 import { AfsDigitizationService } from './afs-digitization.service';
@@ -13,6 +27,7 @@ import { ResourcesSectionExcelReportDto } from './dto/resources-section-excel-re
 import { SubmitARDecisionDto } from './dto/submit-ar-decision.dto';
 import { AuditorsReportOcrQueueService } from './queue/auditors-report-ocr-queue/auditors-report-ocr-queue.service';
 import { DigitizationQueueService } from './queue/digitization-queue/digitization-queue.service';
+import { Public } from 'src/module/auth/decorators/public.decorator';
 
 @Controller('afs-digitization')
 export class AfsDigitizationController {
@@ -46,11 +61,13 @@ export class AfsDigitizationController {
     return await this.afsService.afsList(body);
   }
 
+  @Public()
   @Get('afs-list')
   async getAfsList(@Query() query: ResourcesSectionExcelListDto): Promise<AfsFileList> {
     return await this.afsService.getAfsList(query);
   }
 
+  @Public()
   @Get('afs-excel-report')
   async getAfsReport(@Query() query: ResourcesSectionExcelReportDto): Promise<AfsFileReport> {
     return await this.afsService.getAfsReport(query);
@@ -58,12 +75,12 @@ export class AfsDigitizationController {
 
   @Get('request-log/:requestId')
   async getRequestLog(@Param('requestId') requestId: string) {
-    return { data: await this.afsService.getRequestLog(requestId) };
+    return await this.afsService.getRequestLog(requestId);
   }
   /**
    * Updates PDF metadata for a specific annual account
-   * @param id 
-   * @returns 
+   * @param id
+   * @returns
    */
   @ApiBearerAuth()
   @Post('annual-account/:id/pdf-metadata')
@@ -119,7 +136,27 @@ export class AfsDigitizationController {
 
   @Post('upload-afs-file')
   async uploadAFSFile(@Body() body: DigitizationJobDto) {
-    const result = await this.digitizationQueueService.upsertAfsExcelFile(body);
+    return await this.digitizationQueueService.upsertAfsExcelFile(body);
+  }
+
+  @Public()
+  @Post('upload-ulb-keywords')
+  @UseInterceptors(FileInterceptor('file'))
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: {
+          type: 'string',
+          format: 'binary',
+        },
+      },
+      required: ['file'],
+    },
+  })
+  async uploadUlbKeywords(@UploadedFile() file: Express.Multer.File) {
+    const result = await this.afsService.uploadUlbKeywords(file);
     return {
       status: 'success',
       data: result,
@@ -203,7 +240,7 @@ export class AfsDigitizationController {
 
   @Get('get-ar-item/:id')
   async getAuditorsReportItem(@Param('id') id: string) {
-    return { data: await this.afsService.getAuditorsReportItem(id) };
+    return await this.afsService.getAuditorsReportItem(id);
   }
 
   @Post('submit-ar-decision')

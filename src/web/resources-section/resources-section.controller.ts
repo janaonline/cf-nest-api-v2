@@ -3,7 +3,9 @@ import { QueryResourcesSectionDto } from './dto/query-resources-section.dto';
 import { ResourcesSectionService } from './resources-section.service';
 import { responseJsonUlb } from './responseJsonUlb';
 import { S3ZipService } from './s3-zip.service';
+import { Public } from 'src/module/auth/decorators/public.decorator';
 
+// Resources Dashboard downloads page — public, no login required.
 @Controller('resources-section')
 export class ResourcesSectionController {
   constructor(
@@ -11,15 +13,18 @@ export class ResourcesSectionController {
     private readonly s3ZipService: S3ZipService,
   ) { }
 
+  @Public()
   @Get('data-sets')
   async getAnnualAccounts(@Query() query: QueryResourcesSectionDto) {
     return this.resourcesSectionService.getFiles(query);
   }
+  @Public()
   @Get('data-sets/zip')
   async getAnnualAccountsZip(@Query() query: QueryResourcesSectionDto) {
     return this.resourcesSectionService.zipData(query);
   }
 
+  @Public()
   @Get('data-sets/download')
   async getAnnualAccountsDownload(@Query() query: QueryResourcesSectionDto, @Res() res) {
     // return this.resourcesSectionService.getFiles(query);
@@ -46,6 +51,7 @@ export class ResourcesSectionController {
     zipStream.pipe(res);
   }
 
+  @Public()
   @Get('sizes')
   async getSizes() {
     const keys: string[] = [];

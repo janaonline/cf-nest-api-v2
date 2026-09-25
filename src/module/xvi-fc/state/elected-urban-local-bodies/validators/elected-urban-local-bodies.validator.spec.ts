@@ -1,0 +1,451 @@
+import {
+  ElectedUrbanLocalBodiesValidator,
+  deriveElectedBodyStatuses,
+  extractDateConfig,
+} from 'src/module/xvi-fc/state/elected-urban-local-bodies/validators/elected-urban-local-bodies.validator';
+import type { EulbDateValidationConfig } from 'src/module/xvi-fc/state/elected-urban-local-bodies/validators/elected-urban-local-bodies.validator';
+import type { FieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
+
+// DB-driven — mirrors the DB form-json document's censusCode/ulbName maxlength validators and
+// electedBodyStatus options (see mockDateConfig below), not a hardcoded backend constant.
+const CENSUS_CODE_MAX_LENGTH = 10;
+const ULB_NAME_MAX_LENGTH = 250;
+
+const TODAY = new Date('2025-01-15');
+const VALID_CENSUS_CODE = 'ABC12345'; // 8 chars — within limit
+const OVER_LIMIT_CENSUS_CODE = 'A'.repeat(CENSUS_CODE_MAX_LENGTH + 1); // 11 chars
+const VALID_ULB_NAME = 'Some City Council';
+const OVER_LIMIT_ULB_NAME = 'X'.repeat(ULB_NAME_MAX_LENGTH + 1); // 251 chars
+
+const mockDateConfig: EulbDateValidationConfig = {
+  constitutionMin: new Date(Date.UTC(2021, 4, 31, 0, 0, 0, 0)),
+  constitutionMinMessage: 'Date on which the elected body is in place cannot be before 31 May 2021.',
+  constitutionMaxMessage: 'Date on which the elected body is in place cannot be a future date.',
+  expiryMaxFixed: new Date(Date.UTC(2030, 2, 31, 23, 59, 59, 999)),
+  expiryMaxMessage: 'Date of Expiry cannot be after 31 March 2030.',
+  expiryMinMessage: 'Date of Expiry cannot be before today.',
+  remarksMaxLength: 250,
+  remarksMaxLengthMessage: 'Remarks must not exceed 250 characters.',
+  censusCodeMaxLength: CENSUS_CODE_MAX_LENGTH,
+  censusCodeMaxLengthMessage: `Census code must not exceed ${CENSUS_CODE_MAX_LENGTH} characters.`,
+  ulbNameMaxLength: ULB_NAME_MAX_LENGTH,
+  ulbNameMaxLengthMessage: `ULB name must not exceed ${ULB_NAME_MAX_LENGTH} characters.`,
+  electedBodyStatuses: ['Constituted', 'Not Constituted', '6th Schedule'],
+};
+
+// dateOfExpiry.maxDate resolved as dateOfConstitution + 5 years instead of a fixed date — used by
+// the "dateOfExpiry FIELD-relative maxDate" describe blocks below.
+const mockDateConfigWithRelativeExpiry: EulbDateValidationConfig = {
+  constitutionMin: mockDateConfig.constitutionMin,
+  constitutionMinMessage: mockDateConfig.constitutionMinMessage,
+  constitutionMaxMessage: mockDateConfig.constitutionMaxMessage,
+  expiryMaxRelative: { fieldKey: 'dateOfConstitution', sign: 1, amount: 5, unit: 'Y' },
+  expiryMaxMessage: 'Date of Expiry cannot be more than 5 years after the Date on which the elected body is in place',
+  expiryMinMessage: mockDateConfig.expiryMinMessage,
+  remarksMaxLength: mockDateConfig.remarksMaxLength,
+  remarksMaxLengthMessage: mockDateConfig.remarksMaxLengthMessage,
+  censusCodeMaxLength: mockDateConfig.censusCodeMaxLength,
+  censusCodeMaxLengthMessage: mockDateConfig.censusCodeMaxLengthMessage,
+  ulbNameMaxLength: mockDateConfig.ulbNameMaxLength,
+  ulbNameMaxLengthMessage: mockDateConfig.ulbNameMaxLengthMessage,
+  electedBodyStatuses: mockDateConfig.electedBodyStatuses,
+};
+
+function makeRow(overrides: Record<string, unknown> = {}) {
+  return {
+    rowNumber: 1,
+    ulbName: VALID_ULB_NAME,
+    censusCode: VALID_CENSUS_CODE,
+    electedBodyStatus: 'Not Constituted',
+    ...overrides,
+  };
+}
+
+// ─── extractDateConfig ───────────────────────────────────────────────────────
+
+const VALID_ROW_EDIT_FIELDS: FieldConfig[] = [
+  {
+    key: 'dateOfConstitution',
+    formFieldType: 'date',
+    label: 'Date on which the elected body is in place',
+    validations: [
+      {
+        name: 'minDate',
+        validator: '2021-05-31',
+        message: 'Date on which the elected body is in place cannot be before 31 May 2021.',
+      },
+      {
+        name: 'maxDate',
+        validator: 'TODAY',
+        message: 'Date on which the elected body is in place cannot be a future date.',
+      },
+    ],
+  },
+  {
+    key: 'dateOfExpiry',
+    formFieldType: 'date',
+    label: 'Date of Expiry',
+    validations: [
+      { name: 'minDate', validator: 'TODAY', message: 'Date of Expiry cannot be before today.' },
+      { name: 'maxDate', validator: '2030-03-31', message: 'Date of Expiry cannot be after 31 March 2030.' },
+    ],
+  },
+  {
+    key: 'remarks',
+    formFieldType: 'text',
+    label: 'Remarks',
+    validations: [{ name: 'maxlength', validator: 250, message: 'Remarks cannot exceed 250 characters.' }],
+  },
+  {
+    key: 'electedBodyStatus',
+    formFieldType: 'select',
+    label: 'Elected Body Status',
+    options: [
+      { id: 'Constituted', label: 'Constituted' },
+      { id: 'Not Constituted', label: 'Not Constituted' },
+      { id: '6th Schedule', label: '6th Schedule' },
+    ],
+    validations: [{ name: 'required', validator: null, message: 'Elected Body Status is required.' }],
+  },
+];
+
+// Same as VALID_ROW_EDIT_FIELDS but dateOfExpiry's maxDate is a FIELD-relative token instead of a
+// fixed ISO date — used by the "FIELD-relative maxDate" describe blocks below.
+const ROW_EDIT_FIELDS_WITH_RELATIVE_EXPIRY: FieldConfig[] = VALID_ROW_EDIT_FIELDS.map((f) =>
+  f.key === 'dateOfExpiry'
+    ? {
+        ...f,
+        validations: f.validations!.map((v) =>
+          v.name === 'maxDate'
+            ? {
+                ...v,
+                validator: 'FIELD:dateOfConstitution+5Y',
+                message:
+                  'Date of Expiry cannot be more than 5 years after the Date on which the elected body is in place',
+              }
+            : v,
+        ),
+      }
+    : f,
+);
+
+const VALID_EXTRA_ULB_PORTAL_FIELDS: FieldConfig[] = [
+  {
+    key: 'censusCode',
+    formFieldType: 'text',
+    label: 'Census Code',
+    validations: [
+      { name: 'required', validator: null, message: 'Census code is required.' },
+      { name: 'maxlength', validator: 10, message: 'Census code must not exceed 10 characters.' },
+    ],
+  },
+  {
+    key: 'ulbName',
+    formFieldType: 'text',
+    label: 'ULB Name',
+    validations: [
+      { name: 'required', validator: null, message: 'ULB name is required.' },
+      { name: 'maxlength', validator: 250, message: 'ULB name must not exceed 250 characters.' },
+    ],
+  },
+];
+
+describe('deriveElectedBodyStatuses', () => {
+  it('derives the [constituted, notConstituted, exempt]-ordered tuple from field options', () => {
+    expect(deriveElectedBodyStatuses(VALID_ROW_EDIT_FIELDS)).toEqual([
+      'Constituted',
+      'Not Constituted',
+      '6th Schedule',
+    ]);
+  });
+
+  it('throws when the electedBodyStatus field is missing entirely', () => {
+    const fieldsWithoutStatus = VALID_ROW_EDIT_FIELDS.filter((f) => f.key !== 'electedBodyStatus');
+    expect(() => deriveElectedBodyStatuses(fieldsWithoutStatus)).toThrow();
+  });
+
+  it('throws when electedBodyStatus is missing its options list', () => {
+    const brokenRowFields = VALID_ROW_EDIT_FIELDS.map((f) =>
+      f.key === 'electedBodyStatus' ? { ...f, options: [] } : f,
+    );
+    expect(() => deriveElectedBodyStatuses(brokenRowFields)).toThrow();
+  });
+});
+
+describe('extractDateConfig', () => {
+  it('derives censusCodeMaxLength/ulbNameMaxLength/electedBodyStatuses from the DB-loaded field groups', () => {
+    const config = extractDateConfig(VALID_ROW_EDIT_FIELDS, VALID_EXTRA_ULB_PORTAL_FIELDS);
+    expect(config.censusCodeMaxLength).toBe(10);
+    expect(config.censusCodeMaxLengthMessage).toBe('Census code must not exceed 10 characters.');
+    expect(config.ulbNameMaxLength).toBe(250);
+    expect(config.ulbNameMaxLengthMessage).toBe('ULB name must not exceed 250 characters.');
+    expect(config.electedBodyStatuses).toEqual(['Constituted', 'Not Constituted', '6th Schedule']);
+  });
+
+  it('throws when EXTRA_ULB_PORTAL_FIELDS is missing censusCode/ulbName', () => {
+    expect(() => extractDateConfig(VALID_ROW_EDIT_FIELDS, [])).toThrow();
+  });
+
+  it('throws when censusCode/ulbName are missing a maxlength validator', () => {
+    const brokenExtraFields = VALID_EXTRA_ULB_PORTAL_FIELDS.map((f) =>
+      f.key === 'censusCode' ? { ...f, validations: [] } : f,
+    );
+    expect(() => extractDateConfig(VALID_ROW_EDIT_FIELDS, brokenExtraFields)).toThrow();
+  });
+
+  it('throws when electedBodyStatus is missing its options list', () => {
+    const brokenRowFields = VALID_ROW_EDIT_FIELDS.map((f) =>
+      f.key === 'electedBodyStatus' ? { ...f, options: [] } : f,
+    );
+    expect(() => extractDateConfig(brokenRowFields, VALID_EXTRA_ULB_PORTAL_FIELDS)).toThrow();
+  });
+
+  describe('FIELD-relative maxDate', () => {
+    it('parses a FIELD:<key>+N[Y] maxDate token into expiryMaxRelative instead of expiryMaxFixed', () => {
+      const config = extractDateConfig(ROW_EDIT_FIELDS_WITH_RELATIVE_EXPIRY, VALID_EXTRA_ULB_PORTAL_FIELDS);
+      expect(config.expiryMaxRelative).toEqual({ fieldKey: 'dateOfConstitution', sign: 1, amount: 5, unit: 'Y' });
+      expect(config.expiryMaxFixed).toBeUndefined();
+    });
+
+    it('still parses a static ISO maxDate into expiryMaxFixed when there is no FIELD: token', () => {
+      const config = extractDateConfig(VALID_ROW_EDIT_FIELDS, VALID_EXTRA_ULB_PORTAL_FIELDS);
+      expect(config.expiryMaxRelative).toBeUndefined();
+      expect(config.expiryMaxFixed).toEqual(new Date(Date.UTC(2030, 2, 31, 23, 59, 59, 999)));
+    });
+
+    it('throws when the maxDate token references a field other than dateOfConstitution', () => {
+      const fieldsWithUnsupportedReference = ROW_EDIT_FIELDS_WITH_RELATIVE_EXPIRY.map((f) =>
+        f.key === 'dateOfExpiry'
+          ? {
+              ...f,
+              validations: f.validations!.map((v) =>
+                v.name === 'maxDate' ? { ...v, validator: 'FIELD:someOtherField+5Y' } : v,
+              ),
+            }
+          : f,
+      );
+      expect(() => extractDateConfig(fieldsWithUnsupportedReference, VALID_EXTRA_ULB_PORTAL_FIELDS)).toThrow();
+    });
+
+    it('does not apply the FIELD:<key> guard to any other field\'s minDate/maxDate — only dateOfExpiry\'s own maxDate is inspected', () => {
+      // dateOfConstitution's own maxDate validator is set to a FIELD:-shaped string referencing a
+      // different field entirely. It's never parsed as a date bound at all (dateOfConstitution's
+      // upper bound comes from `today` at validation time, not from config), so this must not
+      // throw, and dateOfExpiry's own static maxDate must still resolve normally.
+      const fieldsWithUnrelatedFieldToken = VALID_ROW_EDIT_FIELDS.map((f) =>
+        f.key === 'dateOfConstitution'
+          ? {
+              ...f,
+              validations: f.validations!.map((v) =>
+                v.name === 'maxDate' ? { ...v, validator: 'FIELD:someOtherField+5Y' } : v,
+              ),
+            }
+          : f,
+      );
+
+      expect(() => extractDateConfig(fieldsWithUnrelatedFieldToken, VALID_EXTRA_ULB_PORTAL_FIELDS)).not.toThrow();
+
+      const config = extractDateConfig(fieldsWithUnrelatedFieldToken, VALID_EXTRA_ULB_PORTAL_FIELDS);
+      expect(config.expiryMaxRelative).toBeUndefined();
+      expect(config.expiryMaxFixed).toEqual(new Date(Date.UTC(2030, 2, 31, 23, 59, 59, 999)));
+    });
+  });
+});
+
+describe('ElectedUrbanLocalBodiesValidator', () => {
+  let validator: ElectedUrbanLocalBodiesValidator;
+
+  beforeEach(() => {
+    validator = new ElectedUrbanLocalBodiesValidator();
+  });
+
+  // ─── validateExtraUlbRow ─────────────────────────────────────────────────────
+
+  describe('validateExtraUlbRow', () => {
+    it('returns required error when censusCode is undefined', () => {
+      const errors = validator.validateExtraUlbRow(makeRow({ censusCode: undefined }), TODAY, mockDateConfig);
+      expect(errors.some((e) => e.field === 'censusCode' && e.code === 'required')).toBe(true);
+    });
+
+    it('returns required error when censusCode is blank string', () => {
+      const errors = validator.validateExtraUlbRow(makeRow({ censusCode: '' }), TODAY, mockDateConfig);
+      expect(errors.some((e) => e.field === 'censusCode' && e.code === 'required')).toBe(true);
+    });
+
+    it('returns maxlength error when censusCode exceeds EULB_CENSUS_CODE_MAX_LENGTH', () => {
+      const errors = validator.validateExtraUlbRow(
+        makeRow({ censusCode: OVER_LIMIT_CENSUS_CODE }),
+        TODAY,
+        mockDateConfig,
+      );
+      expect(errors.some((e) => e.field === 'censusCode' && e.code === 'maxlength')).toBe(true);
+    });
+
+    it('returns no censusCode error for a valid census code', () => {
+      const errors = validator.validateExtraUlbRow(makeRow({ censusCode: VALID_CENSUS_CODE }), TODAY, mockDateConfig);
+      expect(errors.some((e) => e.field === 'censusCode')).toBe(false);
+    });
+
+    it('returns required error when ulbName is blank', () => {
+      const errors = validator.validateExtraUlbRow(makeRow({ ulbName: '' }), TODAY, mockDateConfig);
+      expect(errors.some((e) => e.field === 'ulbName' && e.code === 'required')).toBe(true);
+    });
+
+    it('returns maxlength error when ulbName exceeds EULB_ULB_NAME_MAX_LENGTH', () => {
+      const errors = validator.validateExtraUlbRow(makeRow({ ulbName: OVER_LIMIT_ULB_NAME }), TODAY, mockDateConfig);
+      expect(errors.some((e) => e.field === 'ulbName' && e.code === 'maxlength')).toBe(true);
+    });
+
+    it('returns no ulbName error for a valid ULB name', () => {
+      const errors = validator.validateExtraUlbRow(makeRow(), TODAY, mockDateConfig);
+      expect(errors.some((e) => e.field === 'ulbName')).toBe(false);
+    });
+
+    it('returns no errors for a fully valid EXTRA_ULB row', () => {
+      const errors = validator.validateExtraUlbRow(makeRow(), TODAY, mockDateConfig);
+      expect(errors).toHaveLength(0);
+    });
+  });
+
+  // ─── validatePortalUpdateFields — identity fields ───────────────────────────
+
+  describe('validatePortalUpdateFields — identity fields', () => {
+    it('returns required error when censusCode is present but blank', () => {
+      const errors = validator.validatePortalUpdateFields({ censusCode: '' }, TODAY, mockDateConfig);
+      expect(errors.some((e) => e.field === 'censusCode' && e.code === 'required')).toBe(true);
+    });
+
+    it('returns maxlength error when censusCode exceeds limit', () => {
+      const errors = validator.validatePortalUpdateFields(
+        { censusCode: OVER_LIMIT_CENSUS_CODE },
+        TODAY,
+        mockDateConfig,
+      );
+      expect(errors.some((e) => e.field === 'censusCode' && e.code === 'maxlength')).toBe(true);
+    });
+
+    it('returns required error when ulbName is present but blank', () => {
+      const errors = validator.validatePortalUpdateFields({ ulbName: '' }, TODAY, mockDateConfig);
+      expect(errors.some((e) => e.field === 'ulbName' && e.code === 'required')).toBe(true);
+    });
+
+    it('returns maxlength error when ulbName exceeds limit', () => {
+      const errors = validator.validatePortalUpdateFields({ ulbName: OVER_LIMIT_ULB_NAME }, TODAY, mockDateConfig);
+      expect(errors.some((e) => e.field === 'ulbName' && e.code === 'maxlength')).toBe(true);
+    });
+
+    it('returns no identity errors when censusCode and ulbName are absent from DTO', () => {
+      const errors = validator.validatePortalUpdateFields({}, TODAY, mockDateConfig);
+      expect(errors.some((e) => e.field === 'censusCode' || e.field === 'ulbName')).toBe(false);
+    });
+
+    it('returns no errors for valid censusCode and ulbName', () => {
+      const errors = validator.validatePortalUpdateFields(
+        { censusCode: VALID_CENSUS_CODE, ulbName: VALID_ULB_NAME },
+        TODAY,
+        mockDateConfig,
+      );
+      expect(errors.some((e) => e.field === 'censusCode' || e.field === 'ulbName')).toBe(false);
+    });
+
+    it('preserves existing electedBodyStatus / remarks validation unchanged', () => {
+      const errors = validator.validatePortalUpdateFields(
+        { electedBodyStatus: 'INVALID_VALUE', remarks: 'R'.repeat(251) },
+        TODAY,
+        mockDateConfig,
+      );
+      expect(errors.some((e) => e.field === 'electedBodyStatus')).toBe(true);
+      expect(errors.some((e) => e.field === 'remarks')).toBe(true);
+    });
+  });
+
+  // ─── dateOfExpiry FIELD-relative maxDate (dateOfConstitution + 5 years) ─────
+
+  describe('validateExtraUlbRow — dateOfExpiry FIELD-relative maxDate', () => {
+    it('flags dateOfExpiry more than 5 years after dateOfConstitution', () => {
+      const errors = validator.validateExtraUlbRow(
+        makeRow({ electedBodyStatus: 'Constituted', dateOfConstitution: '2024-06-01', dateOfExpiry: '2029-06-02' }),
+        TODAY,
+        mockDateConfigWithRelativeExpiry,
+      );
+      expect(errors.some((e) => e.field === 'dateOfExpiry' && e.code === 'maxDate')).toBe(true);
+    });
+
+    it('accepts dateOfExpiry exactly at dateOfConstitution + 5 years', () => {
+      const errors = validator.validateExtraUlbRow(
+        makeRow({ electedBodyStatus: 'Constituted', dateOfConstitution: '2024-06-01', dateOfExpiry: '2029-06-01' }),
+        TODAY,
+        mockDateConfigWithRelativeExpiry,
+      );
+      expect(errors.some((e) => e.field === 'dateOfExpiry' && e.code === 'maxDate')).toBe(false);
+    });
+
+    it('skips the dateOfExpiry maxDate check (but still requires dateOfConstitution) when dateOfConstitution is missing', () => {
+      const errors = validator.validateExtraUlbRow(
+        makeRow({ electedBodyStatus: 'Constituted', dateOfConstitution: undefined, dateOfExpiry: '2099-01-01' }),
+        TODAY,
+        mockDateConfigWithRelativeExpiry,
+      );
+      expect(errors.some((e) => e.field === 'dateOfExpiry' && e.code === 'maxDate')).toBe(false);
+      expect(errors.some((e) => e.field === 'dateOfConstitution' && e.code === 'required')).toBe(true);
+    });
+
+    // 2024 is a leap year; 2029 is not — Excel's EDATE(29-Feb-2024, 60) clamps to 28-Feb-2029
+    // rather than rolling over to 1-Mar-2029 the way plain setFullYear/setMonth would.
+    it('clamps a leap-day dateOfConstitution + 5Y to 28 Feb (matches Excel EDATE(), not JS rollover)', () => {
+      const atClampedBound = validator.validateExtraUlbRow(
+        makeRow({ electedBodyStatus: 'Constituted', dateOfConstitution: '2024-02-29', dateOfExpiry: '2029-02-28' }),
+        TODAY,
+        mockDateConfigWithRelativeExpiry,
+      );
+      expect(atClampedBound.some((e) => e.field === 'dateOfExpiry' && e.code === 'maxDate')).toBe(false);
+
+      const pastClampedBound = validator.validateExtraUlbRow(
+        makeRow({ electedBodyStatus: 'Constituted', dateOfConstitution: '2024-02-29', dateOfExpiry: '2029-03-01' }),
+        TODAY,
+        mockDateConfigWithRelativeExpiry,
+      );
+      expect(pastClampedBound.some((e) => e.field === 'dateOfExpiry' && e.code === 'maxDate')).toBe(true);
+    });
+  });
+
+  describe('validatePortalUpdateFields — dateOfExpiry FIELD-relative maxDate', () => {
+    it('computes the bound from dto.dateOfConstitution when both fields are in the same PATCH', () => {
+      const errors = validator.validatePortalUpdateFields(
+        { dateOfConstitution: '2024-06-01', dateOfExpiry: '2029-06-02' },
+        TODAY,
+        mockDateConfigWithRelativeExpiry,
+      );
+      expect(errors.some((e) => e.field === 'dateOfExpiry' && e.code === 'maxDate')).toBe(true);
+    });
+
+    it('falls back to effectiveDateOfConstitution when the PATCH updates only dateOfExpiry', () => {
+      const errors = validator.validatePortalUpdateFields(
+        { dateOfExpiry: '2029-06-02' },
+        TODAY,
+        mockDateConfigWithRelativeExpiry,
+        '2024-06-01',
+      );
+      expect(errors.some((e) => e.field === 'dateOfExpiry' && e.code === 'maxDate')).toBe(true);
+    });
+
+    it('accepts dateOfExpiry within 5 years of the effectiveDateOfConstitution fallback', () => {
+      const errors = validator.validatePortalUpdateFields(
+        { dateOfExpiry: '2029-05-31' },
+        TODAY,
+        mockDateConfigWithRelativeExpiry,
+        '2024-06-01',
+      );
+      expect(errors.some((e) => e.field === 'dateOfExpiry' && e.code === 'maxDate')).toBe(false);
+    });
+
+    it('skips the maxDate check when no dateOfConstitution base is available at all', () => {
+      const errors = validator.validatePortalUpdateFields(
+        { dateOfExpiry: '2099-01-01' },
+        TODAY,
+        mockDateConfigWithRelativeExpiry,
+      );
+      expect(errors.some((e) => e.field === 'dateOfExpiry' && e.code === 'maxDate')).toBe(false);
+    });
+  });
+});

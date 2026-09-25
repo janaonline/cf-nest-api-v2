@@ -4,9 +4,13 @@ import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import * as express from 'express';
 import { join } from 'path';
 import { AppModule } from './app.module';
 import basicAuth from 'express-basic-auth';
+import cookieParser from 'cookie-parser';
+import { HttpExceptionFilter } from './common/filters/http-exception.filter';
+import { ResponseTransformInterceptor } from './common/interceptors/response-transform.interceptor';
 
 async function bootstrap() {
   // Create the main NestJS application instance using the root AppModule
@@ -14,11 +18,26 @@ async function bootstrap() {
     logger: process.env.NODE_ENV === 'production' ? ['error', 'warn'] : ['log', 'error', 'warn', 'debug', 'verbose'],
     // logger: false, // disable default logger
   });
+
+  /**
+   * -------------------------------------------------------
+   * Body Parser Limit
+   * -------------------------------------------------------
+   * Overrides Express's default 100kb body size limit.
+   * Set to 200kb to accommodate large import payloads
+   */
+  app.use(express.json({ limit: '200kb' }));
+  app.use(express.urlencoded({ extended: true, limit: '200kb' }));
+
   const configService = app.get(ConfigService);
   const logger = new Logger('MAIN');
 
+  app.use(cookieParser());
+  app.useGlobalFilters(new HttpExceptionFilter());
+  app.useGlobalInterceptors(new ResponseTransformInterceptor());
+
   // Tell Nest where views are stored
-  app.setBaseViewsDir(join(__dirname, '..', 'src/views'));
+  app.setBaseViewsDir(join(__dirname, 'views'));
   app.setViewEngine('hbs');
 
   // Optional: partials/helpers
@@ -99,8 +118,12 @@ async function bootstrap() {
   const corsOptions: CorsOptions = {
     origin: WHITELISTED_DOMAINS,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
+    credentials: true,
     preflightContinue: false,
     optionsSuccessStatus: 204,
+    // Retry-After: exposed so the frontend can read the throttler's exact remaining-seconds value
+    // off a 429 and show a live countdown, instead of a vague "try again later" with no timer.
+    exposedHeaders: ['Content-Disposition', 'Retry-After'],
   };
 
   app.enableCors(corsOptions);

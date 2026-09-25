@@ -2,7 +2,9 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
 import { getQueueToken } from '@nestjs/bullmq';
 import { HttpService } from '@nestjs/axios';
+import { ConfigService } from '@nestjs/config';
 import { DigitizationQueueService } from './digitization-queue.service';
+import { AfsDigitizationService } from '../../afs-digitization.service';
 import { AfsExcelFile } from 'src/schemas/afs/afs-excel-file.schema';
 import { AfsMetric } from 'src/schemas/afs/afs-metrics.schema';
 import { S3Service } from 'src/core/s3/s3.service';
@@ -28,6 +30,7 @@ describe('DigitizationQueueService', () => {
 
     mockAfsExcelFileModel = {
       findByIdAndUpdate: jest.fn().mockResolvedValue({ _id: 'file-1', status: 'queued' }),
+      findOneAndUpdate: jest.fn().mockResolvedValue({ _id: 'file-1', status: 'queued' }),
       create: jest.fn().mockResolvedValue({ _id: 'file-1' }),
       findById: jest.fn().mockResolvedValue({ _id: 'file-1' }),
       updateOne: jest.fn().mockResolvedValue({ acknowledged: true }),
@@ -74,6 +77,18 @@ describe('DigitizationQueueService', () => {
         {
           provide: S3Service,
           useValue: mockS3Service,
+        },
+        {
+          provide: ConfigService,
+          useValue: {
+            get: jest.fn(),
+          },
+        },
+        {
+          provide: AfsDigitizationService,
+          useValue: {
+            getMetricsAfs: jest.fn().mockResolvedValue({ data: {} }),
+          },
         },
       ],
     }).compile();

@@ -1,0 +1,282 @@
+// ─── Condition / visibility ───────────────────────────────────────────────────
+
+export type ConditionOperator = 'equals' | 'notEquals' | 'in' | 'notIn' | 'isNotEmpty' | 'isEmpty';
+export type VisibleWhenMode = 'all' | 'any';
+
+export interface VisibilityCondition {
+  key: string;
+  operator: ConditionOperator;
+  /**
+   * Scalar for equals/notEquals; array for in/notIn.
+   * Omitted for isNotEmpty/isEmpty.
+   * */
+  value?: string | string[] | boolean | number;
+}
+
+export interface VisibleWhen {
+  mode: VisibleWhenMode;
+  conditions: VisibilityCondition[];
+}
+
+// ─── Validators ───────────────────────────────────────────────────────────────
+
+export interface YearRangeValidatorConfig {
+  startYearMin: number;
+  startYearMax: number;
+  endYearMin: number;
+  endYearMax: number;
+  requireEndGreaterThanStart: boolean;
+  allowedDurations: number[];
+  /** If set, the period [startYear, endYear] must include this year */
+  requiredIncludedYear?: number;
+}
+
+export type ValidatorValue = string | number | boolean | YearRangeValidatorConfig | null;
+
+export interface Validator {
+  /** Validator name matching frontend Angular validators: 'required', 'requiredTrue', 'nullValidator',
+   *  'pattern', 'email', 'minlength', 'maxlength', 'min', 'max',
+   *  'minDate', 'maxDate', 'yearRange' */
+  name: string;
+  /** Null for boolean validators (required, requiredTrue, email, nullValidator);
+   *  number for minlength/maxlength/min/max; string for pattern/minDate/maxDate;
+   *  YearRangeValidatorConfig for yearRange */
+  validator: ValidatorValue;
+  message: string;
+}
+
+// ─── Options ─────────────────────────────────────────────────────────────────
+
+export interface FormFieldOption {
+  label: string;
+  id: string;
+}
+
+/** Select fields use string[], radio fields use FormFieldOption[] */
+export type FieldOptions = string[] | FormFieldOption[];
+
+// ─── Appearance / layout / supporting content ─────────────────────────────────
+
+export interface FieldAppearanceConfig {
+  color?: string;
+  variant?: string;
+}
+
+export interface FieldLayoutConfig {
+  variant?: string;
+  labelWidth?: string;
+}
+
+export type SupportingContentTone = 'primary' | 'secondary' | 'success' | 'warning' | 'danger' | 'info' | 'muted';
+
+export interface SupportingContentAction {
+  id: string;
+  label: string;
+  url?: string;
+  icon?: string;
+  tone?: SupportingContentTone;
+  className?: string;
+  iconClassName?: string;
+  variant?: 'link' | 'button';
+  visible?: boolean;
+  disabled?: boolean;
+  loading?: boolean;
+  loadingLabel?: string;
+  /**
+   * Backend-only extension data (e.g. a raw S3 path backing a template-download
+   * action) — never send this to the client as-is. Strip it via
+   * `stripSupportingContentMeta()` (`common/utils/xvi-fc-supporting-content-visibility.util.ts`)
+   * before any field reaches an API response.
+   */
+  meta?: Record<string, unknown>;
+}
+
+export interface SupportingContentBadge {
+  label: string;
+  icon?: string;
+  tone?: SupportingContentTone;
+  className?: string;
+  visible?: boolean;
+}
+
+export interface FieldSupportingContent {
+  type: string;
+  position: string;
+  title?: string;
+  /** Display label for the supporting link/action (alternative to title) */
+  label?: string;
+  description?: string;
+  /** URL for template-download or link-type supporting content */
+  url?: string;
+  layout?: 'inline' | 'stacked';
+  separator?: 'dot' | 'none';
+  actions?: SupportingContentAction[];
+  badges?: SupportingContentBadge[];
+  /** Plain-English fix message shown after badges when the form is invalid. */
+  validationMessage?: string;
+}
+
+// ─── File value shape ─────────────────────────────────────────────────────────
+
+export interface UploadedFileValue {
+  fileName: string;
+  fileUrl: string;
+  fileSize: number | null;
+  mimeType: string;
+  pageCount?: number | null;
+}
+
+// ─── Async lookup / cross-field match ──────────────────────────────────────────
+
+export interface FieldLookupConfig {
+  /** Relative API path; `:value` is replaced with this field's current (validated) value. */
+  endpoint: string;
+  /** Maps response keys (dot-path into the JSON body) to the target field `key` they populate. */
+  populates: Record<string, string>;
+}
+
+/** Drives the frontend's `AutocompleteComponent` (`formFieldType: 'autocomplete'`) — a debounced,
+ *  search-as-you-type remote lookup, as opposed to `FieldLookupConfig` (validates one value and
+ *  patches siblings). Mirrors the frontend's own `FieldRemoteSearchConfig`
+ *  (`shared/dynamic-form/field.interface.ts`) field-for-field. */
+export interface FieldRemoteSearchConfig {
+  /** Relative API path, no `:value` placeholder — the live search term is sent as a query param
+   *  (`searchParam`) instead, alongside `extraParams` and `limit`. */
+  endpoint: string;
+  /** Query param the search text is sent under. Frontend default: `'search'`. */
+  searchParam?: string;
+  /** Extra static query params merged into every request (e.g. state-scoping filters). */
+  extraParams?: Record<string, string | number | boolean>;
+  /** Dot-path into each result item for the option id. Frontend default: `'_id'`. */
+  valueKey?: string;
+  /** Dot-path into each result item for the option's display label. Frontend default: `'name'`. */
+  labelKey?: string;
+  /** Dot-path into the response body where the array of result items lives. Frontend default:
+   *  `'data.data'` (a paginated `{success, data: {data: [...], page, ...}}` envelope). */
+  resultsPath?: string;
+  /** Minimum characters typed before a search fires. Frontend default: `2`. */
+  minLength?: number;
+  /** Debounce window in ms. Frontend default: `300`. */
+  debounceMs?: number;
+  /** Sent as a `limit` query param. Frontend default: `10`. */
+  limit?: number;
+}
+
+// ─── Field config ─────────────────────────────────────────────────────────────
+
+export type FieldType =
+  | 'radio'
+  | 'text'
+  | 'file'
+  | 'date'
+  | 'checkbox'
+  | 'textarea'
+  | 'number'
+  | 'select'
+  /** Single question rendering two related numeric inputs (Actual/Target) sharing one set of
+   *  validators. Value shape: `{ actual: number | null; target: number | null }`. */
+  | 'actualTarget'
+  /** Debounced, search-as-you-type remote lookup — see `remoteSearch`/`FieldRemoteSearchConfig`.
+   *  The control's value is still just the plain selected option id, same as `'select'`. */
+  | 'autocomplete';
+
+export interface FieldConfig {
+  /** Centralized key used by the backend resolver to derive a runtime-contextual folderPath. */
+  folderPathKey?: string;
+  formFieldType: FieldType;
+  key: string;
+  label: string;
+  /** 1-based display order, e.g. the row number shown in a numbered question list/table. */
+  position?: number;
+  /** Cosmetic flag consumed by section/grid renderers to show a required asterisk next to the label.
+   *  Independent of `validations` — a 'required' validator is what's actually enforced. */
+  required?: boolean;
+  /** Default or current field value; hydrated from saved data on GET responses */
+  value?: unknown;
+  /** false → field is never rendered by the frontend */
+  render?: boolean;
+  /** false → field is excluded from frontend payload and backend validation */
+  includeInPayload?: boolean;
+  visibleWhen?: VisibleWhen;
+  /** Controls whether the rendered field is enabled or disabled */
+  enabledWhen?: VisibleWhen;
+  /** Controls whether configured validations should be applied */
+  validateWhen?: VisibleWhen;
+  /** Clears/ignores the field value when enabledWhen evaluates false */
+  clearValueWhenDisabled?: boolean;
+  disabled?: boolean;
+  /** Optional UI hint for disabled state */
+  disabledReason?: string;
+  /** Array of validators matching the frontend Angular validator contract */
+  validations?: Validator[];
+  /** Radio fields: FormFieldOption[]; select fields: string[] */
+  options?: FieldOptions;
+  /** 'select' fields only — renders a multi-select whose control value is an array of chosen
+   *  option ids (e.g. Request Exemption's `reasonForExemption`). Mirrors the frontend's own
+   *  `FieldConfig.multiple` (`shared/dynamic-form/field.interface.ts`). */
+  multiple?: boolean;
+  allowedFileTypes?: string[];
+  maxFileSize?: number;
+  /** For date fields: earliest selectable date as an ISO string, 'TODAY(+-N[DMY])', or
+   *  'FIELD:<siblingKey>(+-N[DMY])' to bound relative to another field's current value
+   *  (e.g. 'FIELD:dateOfConstitution+5Y'). */
+  minDate?: string;
+  /** For date fields: latest selectable date as an ISO string, 'TODAY(+-N[DMY])', or
+   *  'FIELD:<siblingKey>(+-N[DMY])' to bound relative to another field's current value
+   *  (e.g. 'FIELD:dateOfConstitution+5Y'). */
+  maxDate?: string;
+  placeholder?: string;
+  folderPath?: string;
+  layout?: FieldLayoutConfig;
+  appearance?: FieldAppearanceConfig;
+  supportingContent?: FieldSupportingContent[];
+  radioLayout?: 'vertical' | 'horizontal' | 'inline';
+  hideLabel?: boolean;
+  displayInlineLabel?: boolean;
+  showAsterisk?: boolean;
+  decimal?: number;
+  warning?: Validator[];
+  fileViewType?: 'button' | 'dropzone' | 'list';
+  labelHint?: string;
+  hintText?: string;
+  grid?: string;
+  maxLength?: number;
+  /** Card-style rendering hints (prefix/suffix text, description) also reused by 'actualTarget'
+   *  fields for the shared unit suffix (e.g. '%', 'lpcd', 'Hours/day'). */
+  inputCardConfig?: { title?: string; description?: string; prefixText?: string; suffixText?: string };
+  /** Free-form, non-functional annotations (e.g. grouping/reporting metadata) — never read by validation or rendering logic. */
+  meta?: Record<string, unknown>;
+  /** On a valid value, calls `endpoint` and patches sibling fields from the response per `populates`. */
+  lookup?: FieldLookupConfig;
+  /** `formFieldType: 'autocomplete'` fields only — drives the debounced remote search. */
+  remoteSearch?: FieldRemoteSearchConfig;
+  /** This field's value must equal the named sibling field's value (e.g. confirm-account-number). */
+  matchesField?: string;
+  /** Strips non-digit characters live as the user types; pairs with named `validations` entries
+   *  (`hasSpaces`/`hasAlphabets`/`hasSpecialChars`/`tooShort`/`tooLong`) for granular messages. */
+  digitsOnly?: boolean;
+}
+
+// ─── Sectioned / resolved form config ──────────────────────────────────────────
+
+/** Grid width and inline hints for one field's placement within a section. */
+export interface SectionFieldPlacement {
+  key: string;
+  grid: string;
+  /** Per-placement override of the field's own `labelHint`; falls back to the field definition when unset. */
+  labelHint?: string;
+  /** Per-placement override of the field's own `hintText`; falls back to the field definition when unset. */
+  hintText?: string;
+}
+
+/** FieldConfig with a guaranteed non-optional `value` after GET hydration */
+export type HydratedFieldConfig = FieldConfig & { value: unknown };
+
+/** One card-sectioned group of fields on the Register ULB page. */
+export interface SectionLayout {
+  title: string;
+  icon: string;
+  /** Muted text rendered inline next to the section title, e.g. "— will be the first login for this ULB". */
+  subtitle?: string;
+  fields: SectionFieldPlacement[];
+}
