@@ -21,4 +21,8 @@ export interface SfcFormGetResponseData {
   actors: XvifcFormActor[];
   instructions: unknown[];
   meta: { version: number };
+  /** Discretionary Request Exemption status for this state+year's SFC Status (formId 22), if any
+   *  has ever been filed. See SfcStatusService.resolveExemptionStatusForResponse. */
+  exemptionStatus: 'PENDING' | 'APPROVED' | 'REJECTED' | null;
+  exemptionMohuaRemarks: string | null;
 }

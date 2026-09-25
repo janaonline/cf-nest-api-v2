@@ -224,8 +224,8 @@ export class DevolutionFormulaExcelService {
     }
 
     const dbUlbs = dbUlbsRaw as UlbLean[];
-    // Defensive rounding — GrantAllocation is externally written and unconstrained (see
-    // grant-allocation.schema.ts).
+    // Defensive rounding — see CLAUDE.md's "Invariants worth knowing before you change adjacent
+    // code" section.
     const totalMoHUAAllocation = Math.round(grantAlloc.basic + grantAlloc.performance);
 
     // 3. Read and parse Excel from S3
@@ -382,15 +382,9 @@ export class DevolutionFormulaExcelService {
         validationErrors: r.rowErrors,
       }));
 
-    // Atomic version allocation + safe dataset replacement, all inside one Mongo transaction.
-    // Replaces a prior read-then-increment (`currentVersion = existingDoc.activeDatasetVersion ?? 0;
-    // newVersion = currentVersion + 1`) that let two concurrent uploads for the same form compute
-    // the identical datasetVersion and corrupt each other's rows via the {form,datasetVersion,ulbId}
-    // unique index and a manual, version-number-keyed rollback. The $inc below is atomic — two
-    // concurrent requests can never be handed the same datasetVersion — and wrapping every write in
-    // one transaction means an abort undoes all of them, so no manual rollback/cleanup is needed.
-    // Full design + list of everything that depends on activeDatasetVersion (including claim-letter,
-    // outside this module): docs/adr/0001-dataset-versioning.md.
+    // Atomic version allocation + safe dataset replacement, all inside one Mongo transaction — see
+    // docs/adr/0001-dataset-versioning.md for the full design and everything that depends on
+    // activeDatasetVersion, including claim-letter outside this module.
     const formSummaryFieldsBase: Record<string, unknown> = {
       excelFile: normalizedFile,
       excelRowCount,

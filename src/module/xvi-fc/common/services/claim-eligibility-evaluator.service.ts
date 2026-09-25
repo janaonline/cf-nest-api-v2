@@ -7,6 +7,7 @@ import { FormJsonConfigService } from 'src/master/form-json-config/form-json-con
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { Year } from 'src/schemas/year.schema';
 import { YearAccessService } from './year-access.service';
+import { DISCRETIONARY_APPROVED_STATUS, ExemptionResolverService } from './exemption-resolver.service';
 import {
   CLAIM_ELIGIBILITY_EVIDENCE_MAX_SERIALIZED_BYTES,
   type ClaimEligibilityConfig,
@@ -74,6 +75,7 @@ export class ClaimEligibilityEvaluatorService {
     @InjectModel(Year.name) private readonly yearModel: Model<Year>,
     private readonly formJsonConfigService: FormJsonConfigService,
     private readonly yearAccessService: YearAccessService,
+    private readonly exemptionResolverService: ExemptionResolverService,
   ) {}
 
   async evaluate(
@@ -139,6 +141,25 @@ export class ClaimEligibilityEvaluatorService {
       evaluationLevel: config.evaluationLevel,
     };
 
+    // Discretionary (STATE->MoHUA Request Exemption) whole-state exemption - always wins,
+    // regardless of whether a source document exists or what status it's in, since a MoHUA
+    // approval is a later, authoritative decision. No automatic-mechanism check here: Dynamic
+    // Year Access is ULB-scoped (Ulb.yearAccess), never applicable to a whole-state single-
+    // document source like this one. Gated by config.exemption.allowed so a non-exemptable
+    // source pays zero extra query cost.
+    let exemptionId: string | null = null;
+    if (config.exemption?.allowed && sourceFormJson.formId !== undefined) {
+      const exemption = await this.exemptionResolverService.resolveDiscretionary(
+        null,
+        new Types.ObjectId(ctx.designYearId),
+        sourceFormJson.formId,
+        ctx.stateId,
+      );
+      if (exemption?.currentFormStatus === DISCRETIONARY_APPROVED_STATUS) {
+        exemptionId = String(exemption.requestId);
+      }
+    }
+
     if (!doc) {
       const evidence: FormStatusEvidenceV1 = {
         evidenceVersion: 1,
@@ -151,8 +172,9 @@ export class ClaimEligibilityEvaluatorService {
         ...base,
         formDocumentId: null,
         statusAtEvaluation: null,
-        result: 'FAILED',
-        reasonCode: 'SOURCE_FORM_NOT_FOUND',
+        result: exemptionId ? 'EXEMPTED' : 'FAILED',
+        exemptionId,
+        reasonCode: exemptionId ? 'DISCRETIONARY_EXEMPTION_APPROVED' : 'SOURCE_FORM_NOT_FOUND',
         evidence,
       };
     }
@@ -177,8 +199,13 @@ export class ClaimEligibilityEvaluatorService {
       ...base,
       formDocumentId: String(doc['_id']),
       statusAtEvaluation: resolvedFormStatus,
-      result: passed ? 'PASSED' : 'FAILED',
-      reasonCode: passed ? 'FORM_STATUS_ACCEPTED' : `FORM_STATUS_${resolvedFormStatus}_NOT_ACCEPTED`,
+      result: exemptionId ? 'EXEMPTED' : passed ? 'PASSED' : 'FAILED',
+      exemptionId,
+      reasonCode: exemptionId
+        ? 'DISCRETIONARY_EXEMPTION_APPROVED'
+        : passed
+          ? 'FORM_STATUS_ACCEPTED'
+          : `FORM_STATUS_${resolvedFormStatus}_NOT_ACCEPTED`,
       evidence,
     };
   }
@@ -260,17 +287,23 @@ export class ClaimEligibilityEvaluatorService {
       statusByUlbId.set(String(ulbValue as Types.ObjectId), resolveNestedField(doc, source.fields.currentFormStatus));
     }
 
-    // xvi-fc dynamic year access: EXEMPTED bucket, gated behind both config.exemption.allowed
-    // and formJsonConfig.isApplicableForExemption so every non-exemptable form pays zero extra
-    // query cost. Also skipped outright when every expected ULB already has a document - only a
-    // ULB with no document at all can ever be EXEMPTED, so there is nothing to look up.
-    const needsExemptionCheck = ctx.expectedUlbIds.some((ulbId) => !statusByUlbId.has(ulbId));
-    const isExemptByUlbId = needsExemptionCheck ? await this.buildExemptionLookup(sourceFormJson, config, ctx) : null;
+    // Exemption lookup, gated behind config.exemption.allowed so every non-exemptable form pays
+    // zero extra query cost. Automatic stays scoped to ULBs with no document at all (see
+    // buildExemptionLookup's own doc-comment for why); discretionary is checked for every
+    // expected ULB, since an approved MoHUA exemption overrides real data too.
+    const ulbsMissingData = ctx.expectedUlbIds.filter((ulbId) => !statusByUlbId.has(ulbId));
+    const exemptionLookup = await this.buildExemptionLookup(sourceFormJson, config, ctx, ulbsMissingData);
 
     const perUlb = new Map<string, UlbEligibilityBucket>();
     for (const ulbId of ctx.expectedUlbIds) {
       const status = statusByUlbId.get(ulbId);
 
+      // Discretionary (MoHUA-approved) exemption always wins - a later, authoritative decision
+      // that overrides whatever this document's own status says, real data or not.
+      if (exemptionLookup?.discretionary.get(ulbId)) {
+        perUlb.set(ulbId, 'EXEMPTED');
+        continue;
+      }
       // A document with the exempted stub status is always EXEMPTED, regardless of
       // acceptedFormStatuses (no admin needs to remember to add it to every form's list).
       if (status === FORM_STATUS.EXEMPTED_ACKNOWLEDGED) {
@@ -281,9 +314,10 @@ export class ClaimEligibilityEvaluatorService {
         perUlb.set(ulbId, 'ELIGIBLE');
         continue;
       }
-      // Only a ULB with NO document at all can be EXEMPTED this way - a document with any other
-      // real status is always judged on that data, never re-classified.
-      if (status === undefined && isExemptByUlbId?.get(ulbId)) {
+      // Automatic (Dynamic Year Access) golden rule, unchanged: only a ULB with NO document at
+      // all can be EXEMPTED this way - a document with any other real status is always judged on
+      // that data, never re-classified.
+      if (status === undefined && exemptionLookup?.automatic.get(ulbId)) {
         perUlb.set(ulbId, 'EXEMPTED');
         continue;
       }
@@ -294,39 +328,74 @@ export class ClaimEligibilityEvaluatorService {
   }
 
   /**
-   * Bulk, read-only exemption lookup for evaluateUlbBulkFormStatus - one Ulb query for every
-   * expected ULB, then a plain map lookup per ULB, never a second query per ULB. Uses
-   * YearAccessService.peekEntry (never writes) since a claim-eligibility pass over hundreds of
-   * ULBs must not materialize hundreds of yearAccess entries as a side effect. Returns null when
-   * exemption does not apply to this source at all, so callers can skip the whole branch cheaply.
+   * Bulk, read-only exemption lookup shared by evaluateUlbBulkFormStatus and
+   * evaluateUlbBulkRowStatus - checks both real exemption mechanisms, kept as two SEPARATE maps
+   * (not merged) because they have different precedence against a ULB's own real data:
+   * - Automatic (Dynamic Year Access): golden rule, documented as a hard invariant in this
+   *   folder's own CLAUDE.md - "if a real form document already exists for (ulb, year, form),
+   *   none of this automatic mechanism ever touches it". So this block only ever needs to run for
+   *   `ulbIdsMissingData` - one Ulb query for exactly those ULBs, then a plain map lookup per ULB.
+   *   Uses YearAccessService.peekEntry (never writes) since a claim-eligibility pass over
+   *   hundreds of ULBs must not materialize hundreds of yearAccess entries as a side effect.
+   *   Gated by formJsonConfig.isApplicableForExemption - stays a no-op for a formId that was
+   *   never opted into this mechanism, and a no-op entirely when `ulbIdsMissingData` is empty.
+   * - Discretionary (STATE->MoHUA Request Exemption): a later, authoritative human decision -
+   *   overrides a ULB's real data too, not just a missing document. So this block runs for every
+   *   `ctx.expectedUlbIds`, gated only by config.exemption.allowed - independent of
+   *   isApplicableForExemption, since a formId can have a live discretionary reason offered
+   *   without ever being wired into Dynamic Year Access. A formId with no discretionary reason
+   *   offered just gets an empty result back.
+   * Returns null only when this source doesn't opt into exemption at all
+   * (config.exemption.allowed: false), so callers can skip the whole branch cheaply.
    */
   private async buildExemptionLookup(
     sourceFormJson: IFormJson,
     config: ClaimEligibilityConfig,
     ctx: UlbBulkEvaluationContext,
-  ): Promise<Map<string, boolean> | null> {
+    ulbIdsMissingData: string[],
+  ): Promise<{ automatic: Map<string, boolean>; discretionary: Map<string, boolean> } | null> {
     if (!config.exemption?.allowed || sourceFormJson.formId === undefined) return null;
+    const formId = sourceFormJson.formId;
 
-    const formConfig = await this.formJsonConfigService.findByFormId(sourceFormJson.formId);
-    if (!formConfig?.isApplicableForExemption) return null;
-
-    const year = await this.yearModel
-      .findById(ctx.designYearId, { year: 1 })
-      .lean<{ _id: Types.ObjectId; year: string }>()
-      .exec();
-    if (!year) return null;
-
-    const ulbs = await this.ulbModel
-      .find({ _id: { $in: ctx.expectedUlbIds.map((id) => new Types.ObjectId(id)) } }, { startYear: 1, yearAccess: 1 })
-      .lean()
-      .exec();
-
-    const isExemptByUlbId = new Map<string, boolean>();
-    for (const ulb of ulbs) {
-      const entry = await this.yearAccessService.peekEntry(ulb, year);
-      isExemptByUlbId.set(String(ulb._id), entry.yearEnabled && entry.disabledFormIds.includes(sourceFormJson.formId));
+    const automatic = new Map<string, boolean>();
+    if (ulbIdsMissingData.length > 0) {
+      const formConfig = await this.formJsonConfigService.findByFormId(formId);
+      if (formConfig?.isApplicableForExemption) {
+        const year = await this.yearModel
+          .findById(ctx.designYearId, { year: 1 })
+          .lean<{ _id: Types.ObjectId; year: string }>()
+          .exec();
+        if (year) {
+          const ulbs = await this.ulbModel
+            .find(
+              { _id: { $in: ulbIdsMissingData.map((id) => new Types.ObjectId(id)) } },
+              { startYear: 1, yearAccess: 1 },
+            )
+            .lean()
+            .exec();
+          for (const ulb of ulbs) {
+            const entry = await this.yearAccessService.peekEntry(ulb, year);
+            if (entry.yearEnabled && entry.disabledFormIds.includes(formId)) {
+              automatic.set(String(ulb._id), true);
+            }
+          }
+        }
+      }
     }
-    return isExemptByUlbId;
+
+    const discretionary = new Map<string, boolean>();
+    const discretionaryEntries = await this.exemptionResolverService.resolveDiscretionaryBulk(
+      ctx.expectedUlbIds.map((id) => new Types.ObjectId(id)),
+      new Types.ObjectId(ctx.designYearId),
+      formId,
+    );
+    for (const [ulbId, entry] of discretionaryEntries) {
+      if (entry.currentFormStatus === DISCRETIONARY_APPROVED_STATUS) {
+        discretionary.set(ulbId, true);
+      }
+    }
+
+    return { automatic, discretionary };
   }
 
   /** Elected Body / FC Unspent rows: a genuine child-row collection, bucketed via the
@@ -402,15 +471,49 @@ export class ClaimEligibilityEvaluatorService {
       });
     }
 
+    // Automatic stays scoped to ULBs with no row at all (golden rule, see buildExemptionLookup's
+    // own doc-comment); discretionary is checked for every expected ULB below, since an approved
+    // MoHUA exemption overrides a real row too.
+    const ulbsMissingRow = ctx.expectedUlbIds.filter((ulbId) => !valueByUlbId.has(ulbId));
+    const exemptionLookup = await this.buildExemptionLookup(sourceFormJson, config, ctx, ulbsMissingRow);
+
     const perUlb = new Map<string, UlbEligibilityBucket>();
     const rowEvidenceByUlbId = new Map<string, RowEligibilityEvidence>();
     for (const ulbId of ctx.expectedUlbIds) {
       const entry = valueByUlbId.get(ulbId);
-      if (!entry) {
-        perUlb.set(ulbId, rowMatch.defaultWhenNoRow);
-        // No row -> nothing to freeze; callers treat a missing map entry as "no row existed".
+
+      // Discretionary (MoHUA-approved) exemption always wins, regardless of any existing row -
+      // still frozen as evidence (with the real row's fields when one exists) so claim-letter
+      // assembly's buildChildEligibilitySources doesn't silently fall back to the state-level
+      // source's own result/reasonCode for this ULB.
+      if (exemptionLookup?.discretionary.get(ulbId)) {
+        perUlb.set(ulbId, 'EXEMPTED');
+        rowEvidenceByUlbId.set(ulbId, {
+          bucket: 'EXEMPTED',
+          rowDocumentId: entry?.rowDocumentId ?? null,
+          rowStatusAtEvaluation: (entry?.formStatus as FormStatusType | undefined) ?? null,
+          datasetVersion: activeDatasetVersion ?? null,
+        });
         continue;
       }
+
+      if (!entry) {
+        // Automatic (Dynamic Year Access) golden rule, unchanged: only applies when no row
+        // exists at all. Still frozen as evidence (null row fields) for the same assembly reason
+        // as above - only the plain, non-exempted defaultWhenNoRow case has nothing to freeze.
+        const automaticExempt = exemptionLookup?.automatic.get(ulbId) ?? false;
+        perUlb.set(ulbId, automaticExempt ? 'EXEMPTED' : rowMatch.defaultWhenNoRow);
+        if (automaticExempt) {
+          rowEvidenceByUlbId.set(ulbId, {
+            bucket: 'EXEMPTED',
+            rowDocumentId: null,
+            rowStatusAtEvaluation: null,
+            datasetVersion: activeDatasetVersion ?? null,
+          });
+        }
+        continue;
+      }
+
       const bucket = this.bucketRowValue(entry, rowMatch);
       perUlb.set(ulbId, bucket);
       rowEvidenceByUlbId.set(ulbId, {

@@ -47,9 +47,25 @@ src/
 ├── module/xvi-fc/       # 16th Finance Commission forms (state/ULB/MoHUA roles)
 │   ├── ulb/             # annual_accounts (OCR via ANNUAL_ACCOUNT_PROCESSING_QUEUE), bank-account, unspent-balance-disclosure
 │   ├── state/           # sfc-status, elected-urban-local-bodies, devolution-formula, fc-unspent-declaration, gtc, dashboard,
-│   │                    # request-exemption (discretionary STATE→MoHUA exemption requests — one document per
-│   │                    # {ulb, year} (DB-enforced unique index), one data[] entry per requested formId (23/30/31);
-│   │                    # see master/form-json-config/CLAUDE.md's formId registry, formId 34)
+│   │                    # request-exemption (discretionary STATE→MoHUA exemption requests, formId 34 — see
+│   │                    # master/form-json-config/CLAUDE.md's formId registry). Two branches share one collection
+│   │                    # (xvifc_eligibility_exemptions): per-ULB (`ulb` a real ObjectId, one document per
+│   │                    # {ulb,year}, reasons formId 23/30/31) and whole-state (`ulb: null`, one document per
+│   │                    # {state,year}, reasons formId 22 e.g. SFC) — each DB-enforced by its own partial unique
+│   │                    # index (see xvi-fc-eligibility-exemption.schema.ts). One data[] entry per requested formId.
+│   │                    # Before filing (STATE) and again before approving (MoHUA), formId 30/31 check the real
+│   │                    # per-ULB Annual Accounts section's own status isn't already past ULB_EDITABLE_STATUS_IDS;
+│   │                    # formId 22 checks SFC Status's own status the same way against STATE_EDITABLE_STATUS_IDS
+│   │                    # (request-exemption.service.ts's assertTargetFormsEligible/assertTargetStateFormsEligible,
+│   │                    # request-exemption-mohua.service.ts's assertSectionStillEligible) — both
+│   │                    # request-exemption modules directly inject the target schemas' models for this, a small
+│   │                    # deliberate coupling (not routed through XviFcCommonModule) since only these read-only
+│   │                    # eligibility checks need them. formId 23 (Elected Body) is checked too, but on a
+│   │                    # different axis — its row-level domain value (electedBodyStatus) and submission-workflow
+│   │                    # status (rowStatus) are decoupled (see elected-urban-local-bodies/CLAUDE.md), so filing/
+│   │                    # approving is blocked when the ULB's current row is already eligible per Elected Body's
+│   │                    # own claimEligibility.evaluator.config.rowEligibleValues (read live, not hardcoded), not
+│   │                    # when it's merely been submitted.
 │   ├── mohua/           # fc-unspent-declaration and request-exemption review workflows (each a separate module,
 │   │                    # decoupled from its own STATE-side module — mirrors fc-unspent's own split)
 │   ├── side-menu/, cache/, common/ # XviFcCacheService/Interceptor, form-actors, form-status-access helpers,

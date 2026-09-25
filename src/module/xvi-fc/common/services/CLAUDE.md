@@ -17,18 +17,33 @@ everything else.
   `setSeedExemptions`.
 - `expected-ulb-set.service.ts` — claim-letter's expected-ULB-set query; `startYear`, when set, is
   the cutoff instead of `dateOfConstitution`.
-- `claim-eligibility-evaluator.service.ts` — the `EXEMPTED` eligibility bucket.
+- `claim-eligibility-evaluator.service.ts` — the `EXEMPTED` eligibility bucket. Reads both
+  mechanisms via `buildExemptionLookup`, but applies them at **different precedence** against a
+  ULB/state's own real data: automatic keeps this file's Golden rule untouched (only ever applies
+  when nothing real exists yet); discretionary always overrides real data, including an existing
+  row/document, since a MoHUA approval is a later, authoritative decision — this matters for a
+  formId like Elected Body (23), whose filing/approval gate blocks on a different axis than
+  SFC/AFS's: not "already started", but "already eligible" (see root `CLAUDE.md`'s xvi-fc/state
+  bullet) — a ULB whose row already says "Not Constituted" (real, ineligible data) is deliberately
+  still approvable, so a MoHUA-approved exemption for a ULB with real in-progress data is an
+  expected, reachable case, not just a hypothetical.
 - `exemption-resolver.service.ts` — the shared "is this (ulb, formId, year) exempt, and why"
   resolver every read-only display consumer (e.g. the SLB review table, `AnnualAccountsService`'s
-  `listUlbSubmissions`/`resolveExemptionStatusForResponse`) should call instead of re-deriving the
-  doc-exists-or-no-doc-and-exempt check itself. Two independent sources, both read-only:
+  `listUlbSubmissions`/`resolveExemptionStatusForResponse`, `SfcStatusService`'s own
+  `resolveExemptionStatusForResponse`) should call instead of re-deriving the doc-exists-or-no-doc-
+  and-exempt check itself. Two independent sources, both read-only:
   `resolveBulk`/`resolveBulk` wraps `peekEntry` for the AUTOMATIC mechanism (this file's own
   subject); `resolveDiscretionary`/`resolveDiscretionaryBulk` reads `xvifc_eligibility_exemptions`
   directly for the discretionary STATE→MoHUA Request Exemption flow
   (`module/xvi-fc/state/request-exemption` / `module/xvi-fc/mohua/request-exemption`) — a
   genuinely separate mechanism (different collection, different actors, different lifecycle), not
   folded into `Ulb.yearAccess` itself; this service is just the one place both are read from. Never
-  writes to either source.
+  writes to either source. `resolveDiscretionary` also resolves the **whole-state** branch of that
+  same collection (`ulb: null` documents, e.g. SFC Status's formId 22) via a `ulbId: null` overload
+  that additionally requires `stateId` — unlike a real ULB id, `ulb: null` alone isn't unique to one
+  state (every state's whole-state exemption doc for a given year shares it), so the query must be
+  scoped by `state` too in that branch. `resolveDiscretionaryBulk` has no whole-state variant (no
+  caller needs one yet — only ever called with real ULB ids).
 - `../utils/design-year-label.util.ts` — `formatYearLabel`/`parseStartCalendarYear`, the
   `number ⇄ "YYYY-YY"` conversion every piece below relies on.
 - `../constants/xvifc-cycle.constants.ts` — `isWithinXvifcCycle`, the fixed 2026-27…2030-31 award
@@ -143,6 +158,10 @@ it's left as a known gap rather than folded into this fix.
   Accounts' `materializeExemptionStubIfNeeded` does reach into and upgrade such a document in place
   (see "Undoing an exemption" below for why), which looks like it's touching an existing document
   until you know `NOT_STARTED` itself was never real progress to begin with.
+  This golden rule is scoped to the automatic mechanism specifically — `claim-eligibility-
+  evaluator.service.ts`'s read-only tally applies the opposite precedence for the discretionary
+  mechanism (an approved MoHUA exemption there overrides real data too); see that file's own
+  bullet above for why that isn't a contradiction of this one.
 - Once an entry is materialized, `yearEnabled`/`disabledFormIds` are read directly. No code path
   falls back to `dateOfConstitution` or any other condition once `yearAccess[label]` exists — except
   that changing `startYear` or the seed's `disabledFormIds` both wipe the whole map first (see

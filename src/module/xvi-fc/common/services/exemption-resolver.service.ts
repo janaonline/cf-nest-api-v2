@@ -34,7 +34,7 @@ export interface DiscretionaryExemptionEntry {
 
 type LeanExemptionDoc = {
   _id: Types.ObjectId;
-  ulb: Types.ObjectId;
+  ulb: Types.ObjectId | null;
   data: { formId: number; currentFormStatus: number; decidedAt: Date | null; mohuaRemarks: string | null }[];
 };
 
@@ -84,14 +84,35 @@ export class ExemptionResolverService {
    * `{ulb, year, formId}` — used by callers that need to know whether a STATE has ever filed a
    * discretionary exemption request for this form, regardless of its outcome (Pending/Approved/
    * Rejected all return an entry; only "never requested" returns null).
+   *
+   * `ulbId: null` resolves the whole-state branch instead (a `ulb: null` document covering every
+   * ULB in the state) — e.g. SFC Status (formId 22), which has no per-ULB submission at all.
+   * Unlike a ULB id, `ulb: null` alone isn't unique to one state — every state's whole-state
+   * exemption doc for a given year shares it — so `stateId` is required in that case (enforced
+   * by the overload below) to scope the query correctly.
    */
   async resolveDiscretionary(
     ulbId: Types.ObjectId,
     yearId: Types.ObjectId,
     formId: number,
+  ): Promise<DiscretionaryExemptionEntry | null>;
+  async resolveDiscretionary(
+    ulbId: null,
+    yearId: Types.ObjectId,
+    formId: number,
+    stateId: Types.ObjectId,
+  ): Promise<DiscretionaryExemptionEntry | null>;
+  async resolveDiscretionary(
+    ulbId: Types.ObjectId | null,
+    yearId: Types.ObjectId,
+    formId: number,
+    stateId?: Types.ObjectId,
   ): Promise<DiscretionaryExemptionEntry | null> {
+    const filter: Record<string, unknown> = { ulb: ulbId, year: yearId, 'data.formId': formId };
+    if (ulbId === null) filter['state'] = stateId;
+
     const doc = await this.eligibilityExemptionModel
-      .findOne({ ulb: ulbId, year: yearId, 'data.formId': formId }, { ulb: 1, data: 1 })
+      .findOne(filter, { ulb: 1, data: 1 })
       .lean<LeanExemptionDoc>()
       .exec();
     return this.pickEntry(doc, formId);

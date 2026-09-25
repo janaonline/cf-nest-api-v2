@@ -96,4 +96,44 @@ describe('SaveRequestExemptionDto', () => {
       expect(allMessages(errors).join(' ')).toContain('integer number');
     });
   });
+
+  describe('exemptionFor', () => {
+    it('is optional (absent = ULB default, applied server-side in validateAndSanitize)', async () => {
+      const dto = build();
+      expect(dto.data.exemptionFor).toBeUndefined();
+      expect(await validate(dto, PIPE_OPTIONS)).toHaveLength(0);
+    });
+
+    it('accepts "ULB" and "STATE"', async () => {
+      expect(await validate(build({ exemptionFor: 'ULB' }), PIPE_OPTIONS)).toHaveLength(0);
+      expect(await validate(build({ exemptionFor: 'STATE' }), PIPE_OPTIONS)).toHaveLength(0);
+    });
+
+    it('rejects any other value', async () => {
+      const errors = await validate(build({ exemptionFor: 'ADMIN' }), PIPE_OPTIONS);
+      expect(errors.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('reasonForExemptionState', () => {
+    it('coerces each string option id to a number, same as reasonForExemption', async () => {
+      const dto = build({ exemptionFor: 'STATE', reasonForExemptionState: ['22'] });
+      expect(dto.data.reasonForExemptionState).toEqual([22]);
+      expect(await validate(dto, PIPE_OPTIONS)).toHaveLength(0);
+    });
+
+    it('is optional at the DTO layer (enforced as required-when-STATE in the service, not here)', async () => {
+      const dto = build();
+      expect(dto.data.reasonForExemptionState).toBeUndefined();
+      expect(await validate(dto, PIPE_OPTIONS)).toHaveLength(0);
+    });
+
+    it('rejects a non-numeric option id', async () => {
+      const errors = await validate(
+        build({ exemptionFor: 'STATE', reasonForExemptionState: ['abc'] }),
+        PIPE_OPTIONS,
+      );
+      expect(allMessages(errors).join(' ')).toContain('integer number');
+    });
+  });
 });
