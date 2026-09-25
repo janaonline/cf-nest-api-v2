@@ -1,4 +1,4 @@
-﻿import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+﻿import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { FormJsonService } from 'src/master/form-json/form-json.service';
 import { Buffer } from 'exceljs';
@@ -189,7 +189,15 @@ export class SfcStatusService {
     const savedData: FormData = (doc?.data ?? {}) as FormData;
     const folderPathContext: XviFcFolderPathContext = { _id: stateId, designYear, role: 'state' };
     const questions = this.hydrateQuestions(savedData, formJson, folderPathContext);
-    const permissions = buildStateFormPermissions(user, stateId, currentFormStatus);
+    let permissions = buildStateFormPermissions(user, stateId, currentFormStatus);
+    // buildStateFormPermissions only knows currentFormStatus - it has no concept of exemptions
+    // (correctly, since it's shared by every state form, most of which have none). A Pending or
+    // Approved exemption blocks saveDraft/finalSubmit regardless of currentFormStatus
+    // (assertNotBlockedByExemption), so canEdit/canFinalSubmit must reflect that here too, or the
+    // response could advertise an action the next write of that same action would reject.
+    if (exemption.exemptionStatus === 'PENDING' || exemption.exemptionStatus === 'APPROVED') {
+      permissions = { ...permissions, canEdit: false, canFinalSubmit: false };
+    }
     const { actors, stateName } = this.xvifcFormActorsService.buildActorsAndStateName(doc);
 
     const responseData: SfcFormGetResponseData = {
@@ -356,6 +364,15 @@ export class SfcStatusService {
       existing?.data ?? {},
     );
     if (Object.keys(fileErrors).length > 0) throwXviFcValidationError(fileErrors);
+
+    // Re-check right before the write, not just at the top of this method - loadFormQuestions,
+    // the findOne above, and validation/file-normalization are all real awaited steps a
+    // discretionary exemption request could be filed *and* approved within (see
+    // assertNotBlockedByExemption's own doc-comment). Re-running the exact same check here closes
+    // that window down to the gap between this read and the write immediately below, rather than
+    // leaving it open for this method's entire duration.
+    await this.assertNotBlockedByExemption(dto.stateId, dto.yearId);
+
     const toStatus = FORM_STATUS.UNDER_REVIEW_BY_MOHUA;
     const now = new Date();
 
@@ -501,6 +518,24 @@ export class SfcStatusService {
    * straight through both states - this is the only place that blocks them. Once Rejected, SFC
    * Status's real status governs normally again. Mirrors
    * AnnualAccountsService.assertNotBlockedByPendingExemption.
+   *
+   * `finalSubmit` calls this twice - once up front (fail fast, avoid wasted validation work) and
+   * again immediately before its write - since a discretionary exemption could be filed and
+   * approved during the awaited work in between (loadFormQuestions, the existence `findOne`,
+   * validation, file normalization). Neither call reserves anything (still a plain, unlocked read,
+   * same as `RequestExemptionMohuaService.approve`'s own eligibility check), so this narrows the
+   * window rather than closing it outright - accepted as sufficient given approving an exemption
+   * requires a human MoHUA decision, not something that can land inside a single request's
+   * lifetime by accident.
+   *
+   * Throws ConflictException (409), deliberately not ForbiddenException (403): the frontend's
+   * global HTTP interceptor treats *any* 403 as an invalid/expired session and force-logs the user
+   * out - correct for a genuine cross-state access violation (assertStateAccess), but wrong here.
+   * The acknowledgment section is hidden client-side once `formLocked()` is true, but that only
+   * prevents a click from a page that's already current - a tab left open from before the
+   * exemption went Pending/Approved still renders the old, unlocked buttons until reloaded, so a
+   * real authenticated STATE user can still reach this guard in normal use. Same reasoning as
+   * `request-exemption.service.ts`'s own "already has a request for..." conflict.
    */
   private async assertNotBlockedByExemption(stateId: string, yearId: string): Promise<void> {
     const entry = await this.exemptionResolverService.resolveDiscretionary(
@@ -510,12 +545,12 @@ export class SfcStatusService {
       new Types.ObjectId(stateId),
     );
     if (entry?.currentFormStatus === DISCRETIONARY_PENDING_STATUS) {
-      throw new ForbiddenException(
+      throw new ConflictException(
         'This form cannot be edited while a discretionary exemption request for SFC Status is pending MoHUA review.',
       );
     }
     if (entry?.currentFormStatus === DISCRETIONARY_APPROVED_STATUS) {
-      throw new ForbiddenException(
+      throw new ConflictException(
         'SFC Status is exempted per a MoHUA-approved discretionary exemption request; no submission is required.',
       );
     }
