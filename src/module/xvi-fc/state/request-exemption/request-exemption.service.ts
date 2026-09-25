@@ -73,6 +73,7 @@ type ExistingDocLean = {
   year: Types.ObjectId;
   ulb: Types.ObjectId;
   data: ExemptionEntryData[];
+  updatedAt: Date;
 };
 
 type ListRowLean = {
@@ -235,9 +236,16 @@ export class RequestExemptionService {
       session.startTransaction();
 
       if (existingDoc) {
-        await this.model
-          .findOneAndUpdate({ _id: existingDoc._id }, { $set: { data: mergedData, updatedBy: userOid } }, { session })
+        const updated = await this.model
+          .findOneAndUpdate(
+            { _id: existingDoc._id, updatedAt: existingDoc.updatedAt },
+            { $set: { data: mergedData, updatedBy: userOid } },
+            { session },
+          )
           .exec();
+        if (!updated) {
+          throw new ConflictException('This request changed while you were submitting. Reload and try again.');
+        }
         savedId = existingDoc._id;
       } else {
         const created = await this.model.create(
@@ -277,6 +285,9 @@ export class RequestExemptionService {
       await session.commitTransaction();
     } catch (err) {
       await session.abortTransaction();
+      if (this.isDuplicateKeyError(err)) {
+        throw new ConflictException('Another request for this ULB was just filed. Reload and try again.');
+      }
       throw err;
     } finally {
       await session.endSession();
@@ -401,7 +412,7 @@ export class RequestExemptionService {
     return this.model
       .findOne(
         { state: new Types.ObjectId(stateId), year: new Types.ObjectId(yearId), ulb },
-        { state: 1, year: 1, ulb: 1, data: 1 },
+        { state: 1, year: 1, ulb: 1, data: 1, updatedAt: 1 },
       )
       .lean<ExistingDocLean>()
       .exec();
@@ -518,6 +529,11 @@ export class RequestExemptionService {
       supportingDetails,
       supportingFile: supportingFile ?? null,
     };
+  }
+
+  /** True for a MongoDB duplicate-key error (E11000) - the create path's race signal. */
+  private isDuplicateKeyError(err: unknown): boolean {
+    return (err as { code?: number } | null)?.code === 11000;
   }
 
   private buildFormPermissions(user: AuthUser, stateId: string): RequestExemptionPermissions {

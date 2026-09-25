@@ -33,6 +33,7 @@ describe('AnnualAccountOcrProcessor', () => {
 
   const findByIdChain = (value: any) => ({
     select: jest.fn().mockReturnThis(),
+    populate: jest.fn().mockReturnThis(),
     lean: jest.fn().mockReturnThis(),
     exec: jest.fn().mockResolvedValue(value),
   });
@@ -49,7 +50,11 @@ describe('AnnualAccountOcrProcessor', () => {
     };
     uploadHistoryModel = { updateOne: jest.fn().mockResolvedValue({}) };
     ulbModel = {
-      findById: jest.fn().mockReturnValue(findByIdChain({ name: 'Test ULB', slug: 'test-ulb', keywords: 'kw' })),
+      findById: jest
+        .fn()
+        .mockReturnValue(
+          findByIdChain({ name: 'Test ULB', slug: 'test-ulb', keywords: 'kw', state: { name: 'Test State' } }),
+        ),
     };
     s3Service = { getPdfBufferFromS3: jest.fn().mockResolvedValue(Buffer.from('pdf')) };
     ocrApi = {
@@ -104,6 +109,7 @@ describe('AnnualAccountOcrProcessor', () => {
         uploadId: 'upload-1',
         fileName: 'doc-1-upload-1.pdf',
         ulbName: 'Test ULB|test-ulb|kw',
+        state: 'Test State',
       }),
     );
   });

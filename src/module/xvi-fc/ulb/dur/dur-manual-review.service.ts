@@ -1,4 +1,11 @@
-import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, PipelineStage, Types } from 'mongoose';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
@@ -143,6 +150,13 @@ export class DurManualReviewService {
     if (!docSlot.currentUpload.ocrInfo?.isManualReviewRequested) {
       throw new BadRequestException('No manual review has been requested for this document.');
     }
+    // isManualReviewRequested is never reset once set, so without this a second decideManualReview
+    // call (double-click, or a genuine repeat) would silently overwrite the first decision and
+    // create a duplicate manualReviewRequestModel row (its own PENDING-status lookup below would
+    // no longer match after the first call's write).
+    if (docSlot.manualReviewDecision != null) {
+      throw new BadRequestException('This manual review request has already been decided.');
+    }
 
     const deciderName = await resolveDeciderName(this.userModel, user._id);
     const decision = buildDecisionRecord(dto.decision, dto.note, user, ipAddress, userAgent, deciderName);
@@ -153,8 +167,12 @@ export class DurManualReviewService {
       rejectionUpdate['documents.$.postRejectionAttemptsUsed'] = 0;
     }
 
-    await this.durModel.updateOne(
-      { _id: dur._id, 'documents.docId': docId },
+    // $elemMatch (not two separate 'documents.x' filters) so both conditions bind to the same
+    // array element — combined with the in-memory check above, this also closes the race where
+    // two concurrent decideManualReview calls both pass that check before either write lands:
+    // only the first updateOne can still match once manualReviewDecision is no longer null.
+    const updateResult = await this.durModel.updateOne(
+      { _id: dur._id, documents: { $elemMatch: { docId, manualReviewDecision: null } } },
       {
         $set: {
           'documents.$.manualReviewDecision': decision,
@@ -163,6 +181,9 @@ export class DurManualReviewService {
         },
       },
     );
+    if (updateResult.matchedCount === 0) {
+      throw new ConflictException('This manual review request has already been decided.');
+    }
 
     const decidedBy = { userId: new Types.ObjectId(user._id), role: user.role, ipAddress, userAgent };
     const updatedRequest = await this.manualReviewRequestModel.findOneAndUpdate(

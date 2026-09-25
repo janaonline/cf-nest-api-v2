@@ -63,7 +63,7 @@ describe('RequestExemptionMohuaService', () => {
 
     exemptionModel = {
       findById: jest.fn().mockReturnValue(q(pendingDoc(30))),
-      findOneAndUpdate: jest.fn().mockReturnValue(q(null)),
+      findOneAndUpdate: jest.fn().mockReturnValue(q({ _id: requestId })),
     };
     exemptionLogModel = { create: jest.fn().mockResolvedValue([{}]) };
     annualAccountModel = { findOne: jest.fn().mockReturnValue(q(null)) };
@@ -130,7 +130,7 @@ describe('RequestExemptionMohuaService', () => {
         { form_status_id: 1 },
       );
       expect(exemptionModel.findOneAndUpdate).toHaveBeenCalledWith(
-        { _id: requestId, 'data.formId': 30 },
+        { _id: requestId, data: { $elemMatch: { formId: 30, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA } } },
         {
           $set: expect.objectContaining({
             'data.$.currentFormStatus': FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
@@ -145,6 +145,17 @@ describe('RequestExemptionMohuaService', () => {
       );
       expect(session.commitTransaction).toHaveBeenCalled();
       expect(session.abortTransaction).not.toHaveBeenCalled();
+    });
+
+    it('blocks with ConflictException when the entry was already decided by a racing call, without creating a log entry', async () => {
+      exemptionModel.findOneAndUpdate.mockReturnValue(q(null));
+
+      await expect(service.approve(requestId.toString(), 30, mohuaUser, '127.0.0.1', 'jest')).rejects.toThrow(
+        ConflictException,
+      );
+      expect(exemptionLogModel.create).not.toHaveBeenCalled();
+      expect(session.abortTransaction).toHaveBeenCalled();
+      expect(session.commitTransaction).not.toHaveBeenCalled();
     });
 
     it('approves fine when no Annual Accounts section document exists yet at all (nothing to check, nothing to create)', async () => {
@@ -207,7 +218,7 @@ describe('RequestExemptionMohuaService', () => {
       await service.reject(requestId.toString(), 30, 'Missing signature.', mohuaUser, '127.0.0.1', 'jest');
 
       expect(exemptionModel.findOneAndUpdate).toHaveBeenCalledWith(
-        { _id: requestId, 'data.formId': 30 },
+        { _id: requestId, data: { $elemMatch: { formId: 30, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA } } },
         {
           $set: expect.objectContaining({
             'data.$.currentFormStatus': FORM_STATUS.RETURNED_BY_MOHUA,
@@ -222,6 +233,17 @@ describe('RequestExemptionMohuaService', () => {
       );
       expect(annualAccountModel.findOne).not.toHaveBeenCalled();
       expect(session.commitTransaction).toHaveBeenCalled();
+    });
+
+    it('blocks with ConflictException when the entry was already decided by a racing call, without creating a log entry', async () => {
+      exemptionModel.findOneAndUpdate.mockReturnValue(q(null));
+
+      await expect(service.reject(requestId.toString(), 30, 'No.', mohuaUser, '127.0.0.1', 'jest')).rejects.toThrow(
+        ConflictException,
+      );
+      expect(exemptionLogModel.create).not.toHaveBeenCalled();
+      expect(session.abortTransaction).toHaveBeenCalled();
+      expect(session.commitTransaction).not.toHaveBeenCalled();
     });
 
     it('trims mohuaRemarks before persisting', async () => {

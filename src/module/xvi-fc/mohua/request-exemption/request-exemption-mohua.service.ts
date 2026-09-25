@@ -102,9 +102,9 @@ export class RequestExemptionMohuaService {
     try {
       session.startTransaction();
 
-      await this.exemptionModel
+      const updateResult = await this.exemptionModel
         .findOneAndUpdate(
-          { _id: requestOid, 'data.formId': formId },
+          { _id: requestOid, data: { $elemMatch: { formId, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA } } },
           {
             $set: {
               'data.$.currentFormStatus': FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
@@ -117,6 +117,7 @@ export class RequestExemptionMohuaService {
           { session },
         )
         .exec();
+      this.assertUpdateMatched(updateResult);
 
       await this.exemptionLogModel.create(
         [
@@ -192,9 +193,9 @@ export class RequestExemptionMohuaService {
     try {
       session.startTransaction();
 
-      await this.exemptionModel
+      const updateResult = await this.exemptionModel
         .findOneAndUpdate(
-          { _id: requestOid, 'data.formId': formId },
+          { _id: requestOid, data: { $elemMatch: { formId, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA } } },
           {
             $set: {
               'data.$.currentFormStatus': FORM_STATUS.RETURNED_BY_MOHUA,
@@ -207,6 +208,7 @@ export class RequestExemptionMohuaService {
           { session },
         )
         .exec();
+      this.assertUpdateMatched(updateResult);
 
       await this.exemptionLogModel.create(
         [
@@ -242,6 +244,7 @@ export class RequestExemptionMohuaService {
 
   // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+  /** Fast pre-transaction check - not a full race guard on its own, see `assertUpdateMatched`. */
   private assertPending(entry: ExemptionEntryLean): void {
     if (entry.currentFormStatus !== FORM_STATUS.UNDER_REVIEW_BY_MOHUA) {
       // ConflictException (409), not ForbiddenException - same reasoning as the STATE-side
@@ -251,6 +254,17 @@ export class RequestExemptionMohuaService {
       // on any 403, which would be wrong here.
       throw new ConflictException(
         `This entry cannot be decided while its status is ${getFormStatusLabel(entry.currentFormStatus)}.`,
+      );
+    }
+  }
+
+  /** Null means the entry was no longer UNDER_REVIEW_BY_MOHUA when the write ran - raced by
+   *  another decision. Closes the gap assertPending's pre-transaction read can't. */
+  private assertUpdateMatched(updateResult: unknown): void {
+    if (!updateResult) {
+      throw new ConflictException(
+        "This entry's status changed before your decision could be saved (likely already decided " +
+          'by another reviewer). Refresh and try again.',
       );
     }
   }

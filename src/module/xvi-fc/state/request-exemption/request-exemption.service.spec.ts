@@ -129,7 +129,7 @@ describe('RequestExemptionService', () => {
     session = makeSession();
     model = {
       findOne: jest.fn().mockReturnValue(q(null)),
-      findOneAndUpdate: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue(undefined) }),
+      findOneAndUpdate: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue({}) }),
       create: jest.fn(),
       find: jest.fn().mockReturnValue(findChain([])),
     };
@@ -337,8 +337,16 @@ describe('RequestExemptionService', () => {
         decidedAt: new Date('2026-02-01T00:00:00.000Z'),
         mohuaRemarks: 'Please attach the election notice.',
       });
+      const existingUpdatedAt = new Date('2026-01-15T00:00:00.000Z');
       model.findOne.mockReturnValue(
-        q({ _id: requestOid, state: stateOid, year: yearOid, ulb: ulbOid, data: [existingEntry] }),
+        q({
+          _id: requestOid,
+          state: stateOid,
+          year: yearOid,
+          ulb: ulbOid,
+          data: [existingEntry],
+          updatedAt: existingUpdatedAt,
+        }),
       );
 
       const result = await service.finalSubmit(
@@ -349,7 +357,7 @@ describe('RequestExemptionService', () => {
       );
 
       expect(model.findOneAndUpdate).toHaveBeenCalledWith(
-        { _id: requestOid },
+        { _id: requestOid, updatedAt: existingUpdatedAt },
         {
           $set: {
             data: [
@@ -373,8 +381,16 @@ describe('RequestExemptionService', () => {
     it('allows a second, non-overlapping formId onto the same ULB+year document, preserving the existing entry untouched', async () => {
       const requestOid = new Types.ObjectId();
       const existingEntry = entry({ formId: 23 });
+      const existingUpdatedAt = new Date('2026-01-15T00:00:00.000Z');
       model.findOne.mockReturnValue(
-        q({ _id: requestOid, state: stateOid, year: yearOid, ulb: ulbOid, data: [existingEntry] }),
+        q({
+          _id: requestOid,
+          state: stateOid,
+          year: yearOid,
+          ulb: ulbOid,
+          data: [existingEntry],
+          updatedAt: existingUpdatedAt,
+        }),
       );
 
       await service.finalSubmit(
@@ -385,7 +401,7 @@ describe('RequestExemptionService', () => {
       );
 
       expect(model.findOneAndUpdate).toHaveBeenCalledWith(
-        { _id: requestOid },
+        { _id: requestOid, updatedAt: existingUpdatedAt },
         {
           $set: {
             data: [
@@ -520,6 +536,43 @@ describe('RequestExemptionService', () => {
       expect(session.abortTransaction).toHaveBeenCalled();
       expect(session.commitTransaction).not.toHaveBeenCalled();
       expect(session.endSession).toHaveBeenCalled();
+    });
+
+    it('blocks with ConflictException when the document changed since it was read (race with another writer)', async () => {
+      const requestOid = new Types.ObjectId();
+      model.findOne.mockReturnValue(
+        q({
+          _id: requestOid,
+          state: stateOid,
+          year: yearOid,
+          ulb: ulbOid,
+          data: [entry({ formId: 30 })],
+          updatedAt: new Date('2026-01-15T00:00:00.000Z'),
+        }),
+      );
+      model.findOneAndUpdate.mockReturnValue({ exec: jest.fn().mockResolvedValue(null) });
+
+      await expect(
+        service.finalSubmit(
+          makeDto({ data: { ...validData, reasonForExemption: [23] } }),
+          stateReviewer,
+          '127.0.0.1',
+          'jest',
+        ),
+      ).rejects.toThrow(ConflictException);
+      expect(formLogModel.insertMany).not.toHaveBeenCalled();
+      expect(session.abortTransaction).toHaveBeenCalled();
+      expect(session.commitTransaction).not.toHaveBeenCalled();
+    });
+
+    it('blocks with ConflictException, not a raw error, when two first-time submissions for the same ULB race on create', async () => {
+      model.create.mockRejectedValue(Object.assign(new Error('E11000 duplicate key'), { code: 11000 }));
+
+      await expect(service.finalSubmit(makeDto(), stateReviewer, '127.0.0.1', 'jest')).rejects.toThrow(
+        ConflictException,
+      );
+      expect(session.abortTransaction).toHaveBeenCalled();
+      expect(session.commitTransaction).not.toHaveBeenCalled();
     });
   });
 
