@@ -4,7 +4,10 @@ import { Connection, Model, Types } from 'mongoose';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { FORM_STATUS, getFormStatusLabel } from 'src/common/constants/form-status.constants';
-import { ULB_EDITABLE_STATUS_IDS } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
+import {
+  STATE_EDITABLE_STATUS_IDS,
+  ULB_EDITABLE_STATUS_IDS,
+} from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
 import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import { throwXviFcValidationError, xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
 import {
@@ -16,6 +19,12 @@ import {
   XviFcEligibilityExemptionFormLogDocument,
 } from 'src/schemas/xvi-fc/state/xvi-fc-eligibility-exemption-form-log.schema';
 import { XviFcAnnualAccount, XviFcAnnualAccountDocument } from 'src/schemas/xvi-fc/annual-account.schema';
+import {
+  SFC_FORM_ID,
+  SFC_STATUS_FORM_TYPE,
+  XviFcSfcStatus,
+  XviFcSfcStatusDocument,
+} from 'src/schemas/xvi-fc/state/sfc-status.schema';
 import type { RequestExemptionDecideResponseData } from './request-exemption-mohua.types';
 
 type ExemptionEntryLean = { formId: number; currentFormStatus: number };
@@ -23,7 +32,10 @@ type ExemptionDocLean = {
   _id: Types.ObjectId;
   state: Types.ObjectId;
   year: Types.ObjectId;
-  ulb: Types.ObjectId;
+  /** `null` for a whole-state (SFC etc.) request — see `XviFcEligibilityExemption.ulb`'s own
+   *  doc-comment. `assertSectionStillEligible` below branches on `formId` (not on this field) to
+   *  pick which target form to check, so approve/reject pass the whole doc through unconditionally. */
+  ulb: Types.ObjectId | null;
   data: ExemptionEntryLean[];
 };
 
@@ -62,16 +74,19 @@ export class RequestExemptionMohuaService {
     private readonly exemptionLogModel: Model<XviFcEligibilityExemptionFormLogDocument>,
     @InjectModel(XviFcAnnualAccount.name)
     private readonly annualAccountModel: Model<XviFcAnnualAccountDocument>,
+    @InjectModel(XviFcSfcStatus.name)
+    private readonly sfcStatusModel: Model<XviFcSfcStatusDocument>,
     @InjectConnection()
     private readonly connection: Connection,
   ) {}
 
   /**
-   * Approves one `data[]` entry. For formId 30/31 (Audited/Provisional AFS), first does a read-only
-   * eligibility check against the real Annual Accounts section: blocks with a ConflictException if
-   * that section already has real progress beyond what ULB_EDITABLE_STATUS_IDS covers - approving an
-   * exemption for a section the ULB has substantially already submitted would be nonsensical.
-   * Nothing is written to that section either way; only the exemption entry itself changes.
+   * Approves one `data[]` entry. For formId 30/31 (Audited/Provisional AFS) and formId 22 (SFC
+   * Status), first does a read-only eligibility check against the real target form: blocks with a
+   * ConflictException if that form already has real progress beyond what ULB_EDITABLE_STATUS_IDS/
+   * STATE_EDITABLE_STATUS_IDS covers - approving an exemption for a form the ULB/state has
+   * substantially already submitted would be nonsensical. Nothing is written to that form either
+   * way; only the exemption entry itself changes.
    */
   async approve(
     requestId: string,
@@ -93,7 +108,7 @@ export class RequestExemptionMohuaService {
     if (!entry) throw new NotFoundException(`No exemption entry for formId ${formId} on this request.`);
     this.assertPending(entry);
 
-    await this.assertSectionStillEligible(doc.ulb, doc.year, formId);
+    await this.assertSectionStillEligible(doc, formId);
 
     const userOid = new Types.ObjectId(user._id);
     const now = new Date();
@@ -102,9 +117,9 @@ export class RequestExemptionMohuaService {
     try {
       session.startTransaction();
 
-      await this.exemptionModel
+      const updateResult = await this.exemptionModel
         .findOneAndUpdate(
-          { _id: requestOid, 'data.formId': formId },
+          { _id: requestOid, data: { $elemMatch: { formId, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA } } },
           {
             $set: {
               'data.$.currentFormStatus': FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
@@ -117,6 +132,7 @@ export class RequestExemptionMohuaService {
           { session },
         )
         .exec();
+      this.assertUpdateMatched(updateResult);
 
       await this.exemptionLogModel.create(
         [
@@ -192,9 +208,9 @@ export class RequestExemptionMohuaService {
     try {
       session.startTransaction();
 
-      await this.exemptionModel
+      const updateResult = await this.exemptionModel
         .findOneAndUpdate(
-          { _id: requestOid, 'data.formId': formId },
+          { _id: requestOid, data: { $elemMatch: { formId, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA } } },
           {
             $set: {
               'data.$.currentFormStatus': FORM_STATUS.RETURNED_BY_MOHUA,
@@ -207,6 +223,7 @@ export class RequestExemptionMohuaService {
           { session },
         )
         .exec();
+      this.assertUpdateMatched(updateResult);
 
       await this.exemptionLogModel.create(
         [
@@ -242,6 +259,7 @@ export class RequestExemptionMohuaService {
 
   // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+  /** Fast pre-transaction check - not a full race guard on its own, see `assertUpdateMatched`. */
   private assertPending(entry: ExemptionEntryLean): void {
     if (entry.currentFormStatus !== FORM_STATUS.UNDER_REVIEW_BY_MOHUA) {
       // ConflictException (409), not ForbiddenException - same reasoning as the STATE-side
@@ -255,23 +273,58 @@ export class RequestExemptionMohuaService {
     }
   }
 
-  /** Read-only eligibility check for formId 30/31 - blocks approval if the target Annual Accounts
-   *  section already has real progress beyond ULB_EDITABLE_STATUS_IDS. Never reads/writes anything
-   *  for formId 23 (Elected Body), which has no per-ULB document this could ever check. */
-  private async assertSectionStillEligible(ulb: Types.ObjectId, year: Types.ObjectId, formId: number): Promise<void> {
-    const sectionType = AFS_SECTION_TYPE_BY_FORM_ID[formId];
-    if (!sectionType) return;
-
-    const existing = await this.annualAccountModel
-      .findOne({ ulb, design_year: year, sectionType }, { form_status_id: 1 })
-      .lean()
-      .exec();
-    if (existing && !ULB_EDITABLE_STATUS_IDS.includes(existing.form_status_id)) {
+  /** Null means the entry was no longer UNDER_REVIEW_BY_MOHUA when the write ran - raced by
+   *  another decision. Closes the gap assertPending's pre-transaction read can't. */
+  private assertUpdateMatched(updateResult: unknown): void {
+    if (!updateResult) {
       throw new ConflictException(
-        `This ULB's ${AFS_SECTION_LABEL_BY_FORM_ID[formId]} already has real progress (status: ` +
-          `${getFormStatusLabel(existing.form_status_id)}) and cannot be exempted. Reject this request ` +
-          `instead, or ask the state to withdraw it.`,
+        "This entry's status changed before your decision could be saved (likely already decided " +
+          'by another reviewer). Refresh and try again.',
       );
+    }
+  }
+
+  /**
+   * Read-only eligibility check re-run at decide time (filing already checked this once, but time
+   * may pass between filing and decision - see `RequestExemptionService.assertTargetFormsEligible`/
+   * `assertTargetStateFormsEligible`, the same check's filing-time counterparts). Branches on
+   * `formId`, not on `doc.ulb` - formId 30/31 check the real per-ULB Annual Accounts section;
+   * formId 22 checks the real whole-state SFC Status document; formId 23 (Elected Body) has no real
+   * target document at all and is skipped entirely, same as before. Blocks approval (409) if the
+   * target form already has real progress beyond ULB_EDITABLE_STATUS_IDS/STATE_EDITABLE_STATUS_IDS.
+   */
+  private async assertSectionStillEligible(doc: ExemptionDocLean, formId: number): Promise<void> {
+    const sectionType = AFS_SECTION_TYPE_BY_FORM_ID[formId];
+    if (sectionType) {
+      const existing = await this.annualAccountModel
+        .findOne({ ulb: doc.ulb, design_year: doc.year, sectionType }, { form_status_id: 1 })
+        .lean()
+        .exec();
+      if (existing && !ULB_EDITABLE_STATUS_IDS.includes(existing.form_status_id)) {
+        throw new ConflictException(
+          `This ULB's ${AFS_SECTION_LABEL_BY_FORM_ID[formId]} already has real progress (status: ` +
+            `${getFormStatusLabel(existing.form_status_id)}) and cannot be exempted. Reject this request ` +
+            `instead, or ask the state to withdraw it.`,
+        );
+      }
+      return;
+    }
+
+    if (formId === SFC_FORM_ID) {
+      const existing = await this.sfcStatusModel
+        .findOne(
+          { state: doc.state, year: doc.year, formType: SFC_STATUS_FORM_TYPE, isDeleted: false },
+          { currentFormStatus: 1 },
+        )
+        .lean<{ currentFormStatus: number }>()
+        .exec();
+      if (existing && !STATE_EDITABLE_STATUS_IDS.includes(existing.currentFormStatus)) {
+        throw new ConflictException(
+          `This state's SFC Status already has real progress (status: ` +
+            `${getFormStatusLabel(existing.currentFormStatus)}) and cannot be exempted. Reject this request ` +
+            `instead, or ask the state to withdraw it.`,
+        );
+      }
     }
   }
 

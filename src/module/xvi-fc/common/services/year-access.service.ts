@@ -85,7 +85,9 @@ export class YearAccessService {
     if (ulb.startYear == null) return; // nothing to seed without a start year
 
     const entry: UlbYearAccessEntry = { yearEnabled: true, yearId: seedYear._id, disabledFormIds };
-    await this.ulbModel.updateOne({ _id: ulb._id }, { $set: { [`yearAccess.${seedYear.year}`]: entry } });
+    // Replace the whole map - derived years were computed from the old disabledFormIds and never
+    // recompute themselves. Same fix as updateYearAccess's startYear wipe.
+    await this.ulbModel.updateOne({ _id: ulb._id }, { $set: { yearAccess: { [seedYear.year]: entry } } });
   }
 
   private async computeEntry(ulb: UlbAccessInput, year: YearAccessInput): Promise<UlbYearAccessEntry> {

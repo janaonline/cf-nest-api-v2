@@ -14,6 +14,8 @@ describe('AnnualAccountOcrApiService', () => {
     ulbName: 'Test ULB|test-ulb|keyword',
     uploadId: 'upload-42',
     financialYear: '2024-25',
+    auditType: 'AUDITED',
+    state: 'Karnataka',
     ...overrides,
   });
 

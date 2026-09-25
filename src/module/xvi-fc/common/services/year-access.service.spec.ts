@@ -155,7 +155,7 @@ describe('YearAccessService', () => {
 
       expect(ulbModel.updateOne).toHaveBeenCalledWith(
         { _id: ulbId },
-        { $set: { 'yearAccess.2026-27': { yearEnabled: true, yearId: year2627._id, disabledFormIds: [32] } } },
+        { $set: { yearAccess: { '2026-27': { yearEnabled: true, yearId: year2627._id, disabledFormIds: [32] } } } },
       );
     });
 
@@ -165,6 +165,27 @@ describe('YearAccessService', () => {
       await service.setSeedExemptions(ulb, year2627, [32]);
 
       expect(ulbModel.updateOne).not.toHaveBeenCalled();
+    });
+
+    it('replaces the whole map, dropping already-materialized derived years instead of leaving them stale', async () => {
+      const ulb = {
+        _id: ulbId,
+        startYear: 2026,
+        yearAccess: {
+          '2026-27': { yearEnabled: true, yearId: year2627._id, disabledFormIds: [32] },
+          // Materialized earlier under the old seed value - getEntry/peekEntry would otherwise
+          // return this frozen entry forever, even after the seed below changes to [].
+          '2027-28': { yearEnabled: true, yearId: new Types.ObjectId(), disabledFormIds: [32] },
+        },
+      };
+
+      await service.setSeedExemptions(ulb, year2627, []);
+
+      const [, update] = ulbModel.updateOne.mock.calls[0];
+      expect(update.$set.yearAccess).toEqual({
+        '2026-27': { yearEnabled: true, yearId: year2627._id, disabledFormIds: [] },
+      });
+      expect(update.$set.yearAccess).not.toHaveProperty('2027-28');
     });
   });
 });

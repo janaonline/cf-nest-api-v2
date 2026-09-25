@@ -348,7 +348,7 @@ export class StateDashboardService {
       'Provisional Statements',
       'PFMS Bank Account',
       'SLB Form',
-      'DUR Form',
+      'Detailed Utilisation Report',
     ];
     const rows = ulbs.map((ulb) => {
       const id = ulb._id.toString();

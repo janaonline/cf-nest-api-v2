@@ -6,6 +6,10 @@ describe('DurValidationResultWriter', () => {
 
   const durId = '6ab0f9267e9a30b72fae8d4c';
   const docId = 'tiedGrant';
+  const uploadId = 'upload-1';
+  const elemMatchFilter = expect.objectContaining({
+    documents: { $elemMatch: { docId, 'currentUpload.uploadId': uploadId } },
+  });
 
   const findByIdChain = (value: any) => ({
     select: jest.fn().mockReturnThis(),
@@ -24,14 +28,14 @@ describe('DurValidationResultWriter', () => {
   afterEach(() => jest.clearAllMocks());
 
   it('writes PASSED when checks.overall_valid is true', async () => {
-    await writer.writeCompleted(durId, docId, {
+    await writer.writeCompleted(durId, docId, uploadId, {
       job_id: 'dur-job-1',
       status: 'completed',
       result: { checks: { overall_valid: true } as any },
     });
 
     expect(durModel.updateOne).toHaveBeenCalledWith(
-      expect.objectContaining({ 'documents.docId': docId }),
+      elemMatchFilter,
       expect.objectContaining({
         $set: expect.objectContaining({
           'documents.$.processingStatus': 'PASSED',
@@ -42,7 +46,7 @@ describe('DurValidationResultWriter', () => {
   });
 
   it('writes FAILED with failed_checks and extraction notes when checks.overall_valid is false — real API shape', async () => {
-    await writer.writeCompleted(durId, docId, {
+    await writer.writeCompleted(durId, docId, uploadId, {
       job_id: 'dur-job-1',
       status: 'completed',
       result: {
@@ -64,7 +68,7 @@ describe('DurValidationResultWriter', () => {
     });
 
     expect(durModel.updateOne).toHaveBeenCalledWith(
-      expect.objectContaining({ 'documents.docId': docId }),
+      elemMatchFilter,
       expect.objectContaining({
         $set: expect.objectContaining({
           'documents.$.processingStatus': 'FAILED',
@@ -79,10 +83,10 @@ describe('DurValidationResultWriter', () => {
   });
 
   it('writeFailed records a job-level failure reason, distinct from a content-validation failure', async () => {
-    await writer.writeFailed(durId, docId, 'Gemini upload timed out');
+    await writer.writeFailed(durId, docId, uploadId, 'Gemini upload timed out');
 
     expect(durModel.updateOne).toHaveBeenCalledWith(
-      expect.objectContaining({ 'documents.docId': docId }),
+      elemMatchFilter,
       expect.objectContaining({
         $set: expect.objectContaining({
           'documents.$.processingStatus': 'FAILED',
@@ -97,7 +101,7 @@ describe('DurValidationResultWriter', () => {
       findByIdChain({ documents: [{ manualReviewDecision: { status: 'RETURNED' }, postRejectionAttemptsUsed: 2 }] }),
     );
 
-    await writer.writeCompleted(durId, docId, {
+    await writer.writeCompleted(durId, docId, uploadId, {
       job_id: 'dur-job-1',
       status: 'completed',
       result: { checks: { overall_valid: false } as any, failed_checks: [] },
@@ -112,14 +116,14 @@ describe('DurValidationResultWriter', () => {
   });
 
   it('clears manual-review/cooldown state entirely once a document passes', async () => {
-    await writer.writeCompleted(durId, docId, {
+    await writer.writeCompleted(durId, docId, uploadId, {
       job_id: 'dur-job-1',
       status: 'completed',
       result: { checks: { overall_valid: true } as any },
     });
 
     expect(durModel.updateOne).toHaveBeenCalledWith(
-      expect.objectContaining({ 'documents.docId': docId }),
+      elemMatchFilter,
       expect.objectContaining({
         $set: expect.objectContaining({
           'documents.$.manualReviewDecision': null,

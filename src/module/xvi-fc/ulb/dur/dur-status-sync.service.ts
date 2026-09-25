@@ -14,6 +14,7 @@ interface StuckSlot {
   durId: Types.ObjectId;
   docId: XviFcDurDocId;
   jobId: string;
+  uploadId: string;
 }
 
 /**
@@ -88,7 +89,12 @@ export class DurStatusSyncService {
             d.currentUpload.ocrInfo.submittedAt &&
             d.currentUpload.ocrInfo.submittedAt < staleThreshold,
         )
-        .map((d) => ({ durId: dur._id, docId: d.docId as XviFcDurDocId, jobId: d.currentUpload!.ocrInfo.jobId! })),
+        .map((d) => ({
+          durId: dur._id,
+          docId: d.docId as XviFcDurDocId,
+          jobId: d.currentUpload!.ocrInfo.jobId!,
+          uploadId: d.currentUpload!.uploadId,
+        })),
     );
   }
 
@@ -101,9 +107,9 @@ export class DurStatusSyncService {
 
       if (statusNorm === 'completed') {
         const result = await this.durApi.getJobResult(slot.jobId);
-        await this.resultWriter.writeCompleted(durId, slot.docId, result);
+        await this.resultWriter.writeCompleted(durId, slot.docId, slot.uploadId, result);
       } else if (statusNorm === 'failed') {
-        await this.resultWriter.writeFailed(durId, slot.docId, statusResp.error_message ?? statusResp.message);
+        await this.resultWriter.writeFailed(durId, slot.docId, slot.uploadId, statusResp.error_message ?? statusResp.message);
       }
       // Still processing / queued — leave it for the next tick, unless it's crossed the threshold
       // again, in which case this same query picks it up again next time.
@@ -111,7 +117,7 @@ export class DurStatusSyncService {
       const status = (err as { response?: { status?: number }; status?: number })?.response?.status ?? (err as { status?: number })?.status;
       if (status === 404) {
         this.logger.warn(`Validation job ${slot.jobId} not found (404) — marking durId=${durId} docId=${slot.docId} as FAILED`);
-        await this.resultWriter.writeFailed(durId, slot.docId, 'Validation job not found on processing server (404)');
+        await this.resultWriter.writeFailed(durId, slot.docId, slot.uploadId, 'Validation job not found on processing server (404)');
       } else {
         this.logger.error(`Failed to sync DUR validation job ${slot.jobId} (durId=${durId} docId=${slot.docId})`, err);
       }

@@ -2,6 +2,8 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { InternalServerErrorException, NotFoundException } from '@nestjs/common';
 import { FormJsonService } from 'src/master/form-json/form-json.service';
 import {
+  REASON_FIELD_KEY_STATE,
+  REASON_FIELD_KEY_ULB,
   REQUEST_EXEMPTION_FORM_ID,
   REQUEST_EXEMPTION_FORM_TYPE,
 } from 'src/schemas/xvi-fc/state/xvi-fc-eligibility-exemption.schema';
@@ -119,7 +121,7 @@ describe('RequestExemptionFormJsonConfigService', () => {
 
   describe('loadReasonOptions', () => {
     it("extracts and number-converts the 'reasonForExemption' field's options", async () => {
-      const options = await service.loadReasonOptions(yearId);
+      const options = await service.loadReasonOptions(yearId, REASON_FIELD_KEY_ULB);
       expect(options).toEqual([
         { id: 23, label: 'Election / duly constituted ULB exemption' },
         { id: 30, label: 'Audited Financial Statement' },
@@ -140,15 +142,17 @@ describe('RequestExemptionFormJsonConfigService', () => {
         ],
       });
 
-      const options = await service.loadReasonOptions(yearId);
+      const options = await service.loadReasonOptions(yearId, REASON_FIELD_KEY_ULB);
       expect(options).toEqual([{ id: 99, label: 'A brand new next-year reason' }]);
     });
 
-    it('throws InternalServerErrorException when the reasonForExemption field is missing', async () => {
+    it('throws InternalServerErrorException when the reasonForExemption field is missing (required defaults to true)', async () => {
       formJsonService['findActiveByDesignYearAndFormId'] = jest.fn().mockResolvedValue({
         data: [{ fieldTypes: ['RE_MAIN_FORM_FIELDS'], formFieldType: 'autocomplete', key: 'ulb', label: 'ULB' }],
       });
-      await expect(service.loadReasonOptions(yearId)).rejects.toThrow(InternalServerErrorException);
+      await expect(service.loadReasonOptions(yearId, REASON_FIELD_KEY_ULB)).rejects.toThrow(
+        InternalServerErrorException,
+      );
     });
 
     it('throws InternalServerErrorException when its options are missing/malformed', async () => {
@@ -162,7 +166,40 @@ describe('RequestExemptionFormJsonConfigService', () => {
           },
         ],
       });
-      await expect(service.loadReasonOptions(yearId)).rejects.toThrow(InternalServerErrorException);
+      await expect(service.loadReasonOptions(yearId, REASON_FIELD_KEY_ULB)).rejects.toThrow(
+        InternalServerErrorException,
+      );
+    });
+
+    describe('whole-state field key (reasonForExemptionState)', () => {
+      it('extracts its options when present', async () => {
+        formJsonService['findActiveByDesignYearAndFormId'] = jest.fn().mockResolvedValue({
+          data: [
+            ...VALID_RE_FIELDS,
+            {
+              fieldTypes: ['RE_MAIN_FORM_FIELDS'],
+              formFieldType: 'select',
+              key: 'reasonForExemptionState',
+              label: 'Reason for Exemption',
+              options: [{ id: '22', label: 'State Finance Commission extension/compliance' }],
+            },
+          ],
+        });
+
+        const options = await service.loadReasonOptions(yearId, REASON_FIELD_KEY_STATE, false);
+        expect(options).toEqual([{ id: 22, label: 'State Finance Commission extension/compliance' }]);
+      });
+
+      it('returns [] (not a throw) when missing and required=false — lets the backend deploy before the formjsons document gains this field', async () => {
+        const options = await service.loadReasonOptions(yearId, REASON_FIELD_KEY_STATE, false);
+        expect(options).toEqual([]);
+      });
+
+      it('still throws when missing and required is left at its true default', async () => {
+        await expect(service.loadReasonOptions(yearId, REASON_FIELD_KEY_STATE)).rejects.toThrow(
+          InternalServerErrorException,
+        );
+      });
     });
   });
 });

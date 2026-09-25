@@ -13,7 +13,18 @@ import {
   assertCanStateFinalSubmitForm,
 } from '../../common/utils/xvi-fc-form-status-access.util';
 import { assertStateAccess, buildStateFormPermissions } from '../../common/utils/xvi-fc-state-access.util';
+import {
+  assertFreshFormStatus,
+  isMongoDuplicateKeyError,
+  throwXviFcConflictError,
+} from '../../common/utils/xvi-fc-concurrent-write.util';
 import { toObjectIdString } from 'src/common/utils/objectid.util';
+import {
+  DISCRETIONARY_APPROVED_STATUS,
+  DISCRETIONARY_PENDING_STATUS,
+  DISCRETIONARY_REJECTED_STATUS,
+  ExemptionResolverService,
+} from '../../common/services/exemption-resolver.service';
 import {
   SFC_FORM_ID,
   SFC_STATUS_FORM_TYPE,
@@ -122,6 +133,7 @@ export class SfcStatusService {
     private readonly fileInfoNormalizer: FileInfoNormalizerService,
     private readonly excelService: ExcelService,
     private readonly fileTokenService: FileTokenService,
+    private readonly exemptionResolverService: ExemptionResolverService,
   ) {}
 
   /** Returns the SFC Status question config array from the DB for frontend rendering. */
@@ -158,7 +170,10 @@ export class SfcStatusService {
       .lean<SfcStatusLeanDoc>()
       .exec();
 
-    const formQuestions = await this.loadFormQuestions(yearId);
+    const [formQuestions, exemption] = await Promise.all([
+      this.loadFormQuestions(yearId),
+      this.resolveExemptionStatusForResponse(stateId, yearId),
+    ]);
     const designYear = YearIdToLabel[yearId];
     if (!designYear) throw new NotFoundException(`Design year not found for yearId: ${yearId}`);
 
@@ -191,6 +206,7 @@ export class SfcStatusService {
       actors,
       instructions: [],
       meta: { version: 1 },
+      ...exemption,
     };
 
     return xviFcSuccess('SFC Status form fetched.', responseData);
@@ -209,6 +225,7 @@ export class SfcStatusService {
    */
   async saveDraft(dto: SaveSfcStatusDto, user: AuthUser, ip: string, userAgent: string): Promise<XviFcApiResponse> {
     assertStateAccess(user, dto.stateId);
+    await this.assertNotBlockedByExemption(dto.stateId, dto.yearId);
 
     const formQuestions = await this.loadFormQuestions(dto.yearId);
     const result = this.validator.validateDraftAndBuildPayload(formQuestions, dto.data as FormData);
@@ -236,12 +253,15 @@ export class SfcStatusService {
 
       const updated = await this.model
         .findOneAndUpdate(
-          filter,
+          { ...filter, currentFormStatus: existing.currentFormStatus },
           { $set: { data: sanitizedPayload, currentFormStatus: FORM_STATUS.IN_PROGRESS, updatedBy: userOid } },
           { new: true },
         )
         .lean()
         .exec();
+
+      // Filter matched nothing - status changed since it was read (e.g. a concurrent final submit).
+      if (!updated) await this.assertFreshDraftStatus(filter);
 
       await this.createHistoryEntry({
         sfcStatusFormId: existing._id,
@@ -261,17 +281,23 @@ export class SfcStatusService {
       });
     }
 
-    const created = await this.model.create({
-      state: stateOid,
-      year: yearOid,
-      formType: SFC_STATUS_FORM_TYPE,
-      data: sanitizedPayload,
-      currentFormStatus: FORM_STATUS.IN_PROGRESS,
-      createdBy: userOid,
-      updatedBy: userOid,
-      isActive: true,
-      isDeleted: false,
-    });
+    let created: XviFcSfcStatusDocument;
+    try {
+      created = await this.model.create({
+        state: stateOid,
+        year: yearOid,
+        formType: SFC_STATUS_FORM_TYPE,
+        data: sanitizedPayload,
+        currentFormStatus: FORM_STATUS.IN_PROGRESS,
+        createdBy: userOid,
+        updatedBy: userOid,
+        isActive: true,
+        isDeleted: false,
+      });
+    } catch (error) {
+      if (isMongoDuplicateKeyError(error)) throwXviFcConflictError();
+      throw error;
+    }
 
     await this.createHistoryEntry({
       sfcStatusFormId: created._id,
@@ -305,6 +331,7 @@ export class SfcStatusService {
    */
   async finalSubmit(dto: SaveSfcStatusDto, user: AuthUser, ip: string, userAgent: string): Promise<XviFcApiResponse> {
     assertStateAccess(user, dto.stateId);
+    await this.assertNotBlockedByExemption(dto.stateId, dto.yearId);
 
     const formQuestions = await this.loadFormQuestions(dto.yearId);
     const stateOid = new Types.ObjectId(dto.stateId);
@@ -338,7 +365,7 @@ export class SfcStatusService {
     if (existing) {
       const updated = await this.model
         .findOneAndUpdate(
-          { _id: existing._id },
+          { _id: existing._id, currentFormStatus: existing.currentFormStatus },
           {
             $set: {
               data: sanitizedPayload,
@@ -353,22 +380,31 @@ export class SfcStatusService {
         .lean()
         .exec();
 
+      // Filter matched nothing - status changed since it was read (e.g. a second concurrent submit).
+      if (!updated) await this.assertFreshFinalSubmitStatus(filter);
+
       formOid = existing._id;
-      result = (updated ?? {}) as Record<string, unknown>;
+      result = updated as Record<string, unknown>;
     } else {
-      const created = await this.model.create({
-        state: stateOid,
-        year: yearOid,
-        formType: SFC_STATUS_FORM_TYPE,
-        data: sanitizedPayload,
-        currentFormStatus: toStatus,
-        submittedBy: userOid,
-        submittedAt: now,
-        createdBy: userOid,
-        updatedBy: userOid,
-        isActive: true,
-        isDeleted: false,
-      });
+      let created: XviFcSfcStatusDocument;
+      try {
+        created = await this.model.create({
+          state: stateOid,
+          year: yearOid,
+          formType: SFC_STATUS_FORM_TYPE,
+          data: sanitizedPayload,
+          currentFormStatus: toStatus,
+          submittedBy: userOid,
+          submittedAt: now,
+          createdBy: userOid,
+          updatedBy: userOid,
+          isActive: true,
+          isDeleted: false,
+        });
+      } catch (error) {
+        if (isMongoDuplicateKeyError(error)) throwXviFcConflictError();
+        throw error;
+      }
 
       formOid = created._id;
       result = created.toObject() as unknown as Record<string, unknown>;
@@ -429,6 +465,63 @@ export class SfcStatusService {
   // ─── Helpers ─────────────────────────────────────────────────────────────────
 
   /**
+   * Read-only signal for the state page: is a discretionary whole-state Request Exemption
+   * pending or decided for SFC Status, and (for Rejected) why — lets the frontend show a status
+   * banner and render read-only while Pending, instead of only hitting the block on the next
+   * write (assertNotBlockedByExemption). Approved is also surfaced explicitly so the frontend
+   * never has to infer it itself. Mirrors AnnualAccountsService.resolveExemptionStatusForResponse,
+   * but keyed on the whole-state (`ulb: null`) branch instead of a per-ULB, per-section one.
+   */
+  private async resolveExemptionStatusForResponse(
+    stateId: string,
+    yearId: string,
+  ): Promise<{ exemptionStatus: 'PENDING' | 'APPROVED' | 'REJECTED' | null; exemptionMohuaRemarks: string | null }> {
+    const entry = await this.exemptionResolverService.resolveDiscretionary(
+      null,
+      new Types.ObjectId(yearId),
+      SFC_FORM_ID,
+      new Types.ObjectId(stateId),
+    );
+    if (entry?.currentFormStatus === DISCRETIONARY_PENDING_STATUS)
+      return { exemptionStatus: 'PENDING', exemptionMohuaRemarks: null };
+    if (entry?.currentFormStatus === DISCRETIONARY_APPROVED_STATUS)
+      return { exemptionStatus: 'APPROVED', exemptionMohuaRemarks: null };
+    if (entry?.currentFormStatus === DISCRETIONARY_REJECTED_STATUS) {
+      return { exemptionStatus: 'REJECTED', exemptionMohuaRemarks: entry.mohuaRemarks };
+    }
+    return { exemptionStatus: null, exemptionMohuaRemarks: null };
+  }
+
+  /**
+   * Blocks state write actions on SFC Status while a discretionary whole-state Request Exemption
+   * entry for this state+year is UNDER_REVIEW_BY_MOHUA or already SUBMISSION_ACKNOWLEDGED_BY_MOHUA
+   * (Approved) - SFC Status's own real `currentFormStatus` is never touched by either outcome
+   * (RequestExemptionMohuaService deliberately only writes to its own collections), so the ordinary
+   * assertCanStateEditForm/assertCanStateFinalSubmitForm gates would otherwise still allow editing
+   * straight through both states - this is the only place that blocks them. Once Rejected, SFC
+   * Status's real status governs normally again. Mirrors
+   * AnnualAccountsService.assertNotBlockedByPendingExemption.
+   */
+  private async assertNotBlockedByExemption(stateId: string, yearId: string): Promise<void> {
+    const entry = await this.exemptionResolverService.resolveDiscretionary(
+      null,
+      new Types.ObjectId(yearId),
+      SFC_FORM_ID,
+      new Types.ObjectId(stateId),
+    );
+    if (entry?.currentFormStatus === DISCRETIONARY_PENDING_STATUS) {
+      throw new ForbiddenException(
+        'This form cannot be edited while a discretionary exemption request for SFC Status is pending MoHUA review.',
+      );
+    }
+    if (entry?.currentFormStatus === DISCRETIONARY_APPROVED_STATUS) {
+      throw new ForbiddenException(
+        'SFC Status is exempted per a MoHUA-approved discretionary exemption request; no submission is required.',
+      );
+    }
+  }
+
+  /**
    * Merges saved form data onto the question template in one O(n) pass.
    * For each question: uses saved value if the key exists in savedData,
    * otherwise keeps the template default. File-type questions additionally
@@ -463,6 +556,24 @@ export class SfcStatusService {
 
       return { ...question, value };
     });
+  }
+
+  private async assertFreshDraftStatus(filter: Record<string, unknown>): Promise<never> {
+    return assertFreshFormStatus(
+      async () =>
+        (await this.model.findOne(filter, { currentFormStatus: 1 }).lean<{ currentFormStatus?: number }>().exec())
+          ?.currentFormStatus,
+      assertCanStateEditForm,
+    );
+  }
+
+  private async assertFreshFinalSubmitStatus(filter: Record<string, unknown>): Promise<never> {
+    return assertFreshFormStatus(
+      async () =>
+        (await this.model.findOne(filter, { currentFormStatus: 1 }).lean<{ currentFormStatus?: number }>().exec())
+          ?.currentFormStatus,
+      assertCanStateFinalSubmitForm,
+    );
   }
 
   /**

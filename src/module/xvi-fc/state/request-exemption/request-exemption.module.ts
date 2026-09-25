@@ -13,6 +13,7 @@ import {
   XviFcEligibilityExemptionFormLogSchema,
 } from 'src/schemas/xvi-fc/state/xvi-fc-eligibility-exemption-form-log.schema';
 import { XviFcAnnualAccount, XviFcAnnualAccountSchema } from 'src/schemas/xvi-fc/annual-account.schema';
+import { XviFcSfcStatus, XviFcSfcStatusSchema } from 'src/schemas/xvi-fc/state/sfc-status.schema';
 import { RequestExemptionController } from './request-exemption.controller';
 import { RequestExemptionService } from './request-exemption.service';
 import { RequestExemptionFormJsonConfigService } from './services/form-json/request-exemption-form-json.service';
@@ -23,6 +24,7 @@ import { RequestExemptionFormJsonConfigService } from './services/form-json/requ
       { name: XviFcEligibilityExemption.name, schema: XviFcEligibilityExemptionSchema },
       { name: XviFcEligibilityExemptionFormLog.name, schema: XviFcEligibilityExemptionFormLogSchema },
       { name: XviFcAnnualAccount.name, schema: XviFcAnnualAccountSchema },
+      { name: XviFcSfcStatus.name, schema: XviFcSfcStatusSchema },
       { name: State.name, schema: StateSchema },
       { name: Ulb.name, schema: UlbSchema },
     ]),
