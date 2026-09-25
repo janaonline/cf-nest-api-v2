@@ -17,7 +17,15 @@ everything else.
   `setSeedExemptions`.
 - `expected-ulb-set.service.ts` — claim-letter's expected-ULB-set query; `startYear`, when set, is
   the cutoff instead of `dateOfConstitution`.
-- `claim-eligibility-evaluator.service.ts` — the `EXEMPTED` eligibility bucket.
+- `claim-eligibility-evaluator.service.ts` — the `EXEMPTED` eligibility bucket. Reads both
+  mechanisms via `buildExemptionLookup`, but applies them at **different precedence** against a
+  ULB/state's own real data: automatic keeps this file's Golden rule untouched (only ever applies
+  when nothing real exists yet); discretionary always overrides real data, including an existing
+  row/document, since a MoHUA approval is a later, authoritative decision — this matters for a
+  formId like Elected Body (23), where the approval-time gate itself has no "already started" check
+  to block it in the first place (see root `CLAUDE.md`'s xvi-fc/state bullet), so a MoHUA-approved
+  exemption for a ULB with real in-progress data is an expected, reachable case, not just a
+  hypothetical.
 - `exemption-resolver.service.ts` — the shared "is this (ulb, formId, year) exempt, and why"
   resolver every read-only display consumer (e.g. the SLB review table, `AnnualAccountsService`'s
   `listUlbSubmissions`/`resolveExemptionStatusForResponse`, `SfcStatusService`'s own
@@ -149,6 +157,10 @@ it's left as a known gap rather than folded into this fix.
   Accounts' `materializeExemptionStubIfNeeded` does reach into and upgrade such a document in place
   (see "Undoing an exemption" below for why), which looks like it's touching an existing document
   until you know `NOT_STARTED` itself was never real progress to begin with.
+  This golden rule is scoped to the automatic mechanism specifically — `claim-eligibility-
+  evaluator.service.ts`'s read-only tally applies the opposite precedence for the discretionary
+  mechanism (an approved MoHUA exemption there overrides real data too); see that file's own
+  bullet above for why that isn't a contradiction of this one.
 - Once an entry is materialized, `yearEnabled`/`disabledFormIds` are read directly. No code path
   falls back to `dateOfConstitution` or any other condition once `yearAccess[label]` exists — except
   that changing `startYear` or the seed's `disabledFormIds` both wipe the whole map first (see
