@@ -151,7 +151,7 @@ export class AfsDigitizationService {
       return summary;
     }
 
-    const setPayload: Record<string, number> = {};
+    const tasks: { pdfPath: string; url: string }[] = [];
 
     for (const auditType of ANNUAL_ACCOUNT_AUDIT_TYPES) {
       for (const pdfField of ANNUAL_ACCOUNT_PDF_FIELDS) {
@@ -164,26 +164,47 @@ export class AfsDigitizationService {
         }
 
         summary.totalPdfsFound += 1;
-
-        try {
-          const metadata = await this.getPdfMetadata(pdf.url);
-          setPayload[`${pdfPath}.pageCount`] = metadata.pageCount;
-          setPayload[`${pdfPath}.fileSizeBytes`] = metadata.fileSizeBytes;
-          summary.updated += 1;
-        } catch (error) {
-          summary.failed += 1;
-          this.logger.error(
-            `Failed to update annual account PDF metadata for ${annualAccountId} at ${pdfPath}`,
-            error instanceof Error ? error.stack : String(error),
-          );
-        }
+        tasks.push({ pdfPath, url: pdf.url });
       }
     }
 
+    // Fetch PDFs concurrently (up to 12); use allSettled so one failure
+    // doesn't discard successfully fetched PDFs.
+    const results = await Promise.allSettled(tasks.map((task) => this.getPdfMetadata(task.url)));
+
+    const setPayload: Record<string, number> = {};
+    results.forEach((result, i) => {
+      const { pdfPath } = tasks[i];
+      if (result.status === 'fulfilled') {
+        setPayload[`${pdfPath}.pageCount`] = result.value.pageCount;
+        setPayload[`${pdfPath}.fileSizeBytes`] = result.value.fileSizeBytes;
+        summary.updated += 1;
+      } else {
+        summary.failed += 1;
+        this.logger.error(
+          `Failed to update annual account PDF metadata for ${annualAccountId} at ${pdfPath}`,
+          result.reason instanceof Error ? result.reason.stack : String(result.reason),
+        );
+      }
+    });
+
     if (Object.keys(setPayload).length > 0) {
-      await this.annualAccountModel
-        .updateOne({ _id: new Types.ObjectId(annualAccountId) }, { $set: setPayload })
+      // strict: false — prevents Mongoose from dropping unknown $set paths,
+      // which can make updateOne report success without writing anything.
+      const result = await this.annualAccountModel
+        .updateOne({ _id: new Types.ObjectId(annualAccountId) }, { $set: setPayload }, { strict: false })
         .exec();
+
+      if (result.matchedCount > 0 && result.modifiedCount === 0) {
+        // Matched, but nothing changed — metadata wasn't persisted, so don't report success
+        // or repeatedly match the backfill filter.
+        this.logger.warn(
+          `Annual account PDF metadata update for ${annualAccountId} matched but modifiedCount=0 — ` +
+            `treating ${summary.updated} computed update(s) as failed instead of persisted`,
+        );
+        summary.failed += summary.updated;
+        summary.updated = 0;
+      }
     }
 
     this.logger.log(`Annual account PDF metadata update completed for ${annualAccountId}`, summary);
@@ -310,9 +331,11 @@ export class AfsDigitizationService {
   }
 
   private buildAnnualAccountPdfMetadataBackfillFilter(onlyMissing: boolean): FilterQuery<AnnualAccountDataDocument> {
+    // $nin: [null, ''] — exclude both null and empty URLs. $ne: '' treats null as valid,
+    // causing documents with no file to match the backfill forever.
     const pdfUrlFilters = ANNUAL_ACCOUNT_AUDIT_TYPES.flatMap((auditType) =>
       ANNUAL_ACCOUNT_PDF_FIELDS.map((pdfField) => ({
-        [`${auditType}.provisional_data.${pdfField}.pdf.url`]: { $exists: true, $ne: '' },
+        [`${auditType}.provisional_data.${pdfField}.pdf.url`]: { $exists: true, $nin: [null, ''] },
       })),
     );
 
@@ -323,11 +346,11 @@ export class AfsDigitizationService {
     const missingMetadataFilters = ANNUAL_ACCOUNT_AUDIT_TYPES.flatMap((auditType) =>
       ANNUAL_ACCOUNT_PDF_FIELDS.flatMap((pdfField) => [
         {
-          [`${auditType}.provisional_data.${pdfField}.pdf.url`]: { $exists: true, $ne: '' },
+          [`${auditType}.provisional_data.${pdfField}.pdf.url`]: { $exists: true, $nin: [null, ''] },
           [`${auditType}.provisional_data.${pdfField}.pdf.pageCount`]: { $exists: false },
         },
         {
-          [`${auditType}.provisional_data.${pdfField}.pdf.url`]: { $exists: true, $ne: '' },
+          [`${auditType}.provisional_data.${pdfField}.pdf.url`]: { $exists: true, $nin: [null, ''] },
           [`${auditType}.provisional_data.${pdfField}.pdf.fileSizeBytes`]: { $exists: false },
         },
       ]),
