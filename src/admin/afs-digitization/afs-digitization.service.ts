@@ -49,7 +49,7 @@ interface AnnualAccountPdfFile {
   name?: string;
   url?: string;
   pageCount?: number;
-  fileSizeKb?: number;
+  fileSizeBytes?: number;
 }
 
 type AnnualAccountProvisionalData = Partial<Record<AnnualAccountPdfField, { pdf?: AnnualAccountPdfFile }>>;
@@ -60,7 +60,7 @@ type AnnualAccountDataLean = Partial<
 
 interface AnnualAccountPdfMetadata {
   pageCount: number;
-  fileSizeKb: number;
+  fileSizeBytes: number;
 }
 
 export interface AnnualAccountPdfMetadataSummary {
@@ -168,7 +168,7 @@ export class AfsDigitizationService {
         try {
           const metadata = await this.getPdfMetadata(pdf.url);
           setPayload[`${pdfPath}.pageCount`] = metadata.pageCount;
-          setPayload[`${pdfPath}.fileSizeKb`] = metadata.fileSizeKb;
+          setPayload[`${pdfPath}.fileSizeBytes`] = metadata.fileSizeBytes;
           summary.updated += 1;
         } catch (error) {
           summary.failed += 1;
@@ -328,7 +328,7 @@ export class AfsDigitizationService {
         },
         {
           [`${auditType}.provisional_data.${pdfField}.pdf.url`]: { $exists: true, $ne: '' },
-          [`${auditType}.provisional_data.${pdfField}.pdf.fileSizeKb`]: { $exists: false },
+          [`${auditType}.provisional_data.${pdfField}.pdf.fileSizeBytes`]: { $exists: false },
         },
       ]),
     );
@@ -360,7 +360,7 @@ export class AfsDigitizationService {
     const sizeInBytes = contentLength ?? buffer.length;
     return {
       pageCount: await this.s3Service.getPdfPageCountFromBuffer(buffer),
-      fileSizeKb: Math.round((sizeInBytes / 1024) * 100) / 100,
+      fileSizeBytes: sizeInBytes,
     };
   }
 

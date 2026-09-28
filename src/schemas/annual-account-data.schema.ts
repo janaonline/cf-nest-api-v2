@@ -32,7 +32,7 @@ class PdfFile {
   pageCount?: number;
 
   @Prop()
-  fileSizeKb?: number;
+  fileSizeBytes?: number;
 }
 export const PdfFileSchema = SchemaFactory.createForClass(PdfFile);
 
