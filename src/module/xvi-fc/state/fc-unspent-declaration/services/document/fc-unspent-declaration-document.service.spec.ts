@@ -198,7 +198,11 @@ describe('FcUnspentDeclarationDocumentService', () => {
       mockModel.findOne.mockReturnValue(
         q({ _id: formOid, isFcUnspent: true, currentFormStatus: 3, state: { name: 'Andhra Pradesh' } }),
       );
-      mockRowService.getActiveRows.mockResolvedValueOnce([activeRow, { ...activeRow, rowNumber: 2, censusCode: '' }]);
+      mockRowService.getActiveRows.mockResolvedValueOnce([
+        activeRow,
+        { ...activeRow, rowNumber: 2, censusCode: '' },
+        { ...activeRow, rowNumber: 3, censusCode: '', sbCode: '' },
+      ]);
 
       const data = await service.getDocumentData(stateOid.toString(), yearOid.toString(), adminUser);
 
@@ -213,7 +217,16 @@ describe('FcUnspentDeclarationDocumentService', () => {
           previousFcUnspentBalance: 2,
         },
         {
+          // Census Code absent — falls back to SB Code, same as the portal's ulbName/censusCode ?? sbCode display.
           slNo: 2,
+          censusCode: 'SB1',
+          ulbName: 'Alpha ULB',
+          unspentAmount: 4,
+          previousFcUnspentBalance: 2,
+        },
+        {
+          // Both absent — falls back to '-'.
+          slNo: 3,
           censusCode: '-',
           ulbName: 'Alpha ULB',
           unspentAmount: 4,
