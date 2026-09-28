@@ -147,8 +147,8 @@ describe('FcUnspentDeclarationRowService', () => {
       const result = await service.resolveAndValidateRows(
         stateOid,
         [
-          { ulbId: ulbOid1.toString(), unspentAmount: 5 },
-          { ulbId: ulbOid1.toString(), unspentAmount: 7 },
+          { ulbId: ulbOid1.toString(), unspentAmount: 5, previousFcUnspentBalance: 3 },
+          { ulbId: ulbOid1.toString(), unspentAmount: 7, previousFcUnspentBalance: 3 },
         ],
         devolutionForm,
         { requireAtLeastOne: false, thresholdPercent: 10 },
@@ -160,7 +160,7 @@ describe('FcUnspentDeclarationRowService', () => {
       ulbModel['find'] = jest.fn().mockReturnValue(q([]));
       const result = await service.resolveAndValidateRows(
         stateOid,
-        [{ ulbId: ulbOid1.toString(), unspentAmount: 5 }],
+        [{ ulbId: ulbOid1.toString(), unspentAmount: 5, previousFcUnspentBalance: 3 }],
         devolutionForm,
         { requireAtLeastOne: false, thresholdPercent: 10 },
       );
@@ -171,7 +171,7 @@ describe('FcUnspentDeclarationRowService', () => {
       devolutionRowModel['find'] = jest.fn().mockReturnValue(q([]));
       const result = await service.resolveAndValidateRows(
         stateOid,
-        [{ ulbId: ulbOid1.toString(), unspentAmount: 5 }],
+        [{ ulbId: ulbOid1.toString(), unspentAmount: 5, previousFcUnspentBalance: 3 }],
         devolutionForm,
         { requireAtLeastOne: false, thresholdPercent: 10 },
       );
@@ -181,7 +181,7 @@ describe('FcUnspentDeclarationRowService', () => {
     it('rejects a non-positive unspent amount', async () => {
       const result = await service.resolveAndValidateRows(
         stateOid,
-        [{ ulbId: ulbOid1.toString(), unspentAmount: 0 }],
+        [{ ulbId: ulbOid1.toString(), unspentAmount: 0, previousFcUnspentBalance: 3 }],
         devolutionForm,
         { requireAtLeastOne: false, thresholdPercent: 10 },
       );
@@ -191,17 +191,31 @@ describe('FcUnspentDeclarationRowService', () => {
     it('computes allocationPerc/eligibility at full precision for a valid row', async () => {
       const result = await service.resolveAndValidateRows(
         stateOid,
-        [{ ulbId: ulbOid1.toString(), unspentAmount: 5 }],
+        [{ ulbId: ulbOid1.toString(), unspentAmount: 5, previousFcUnspentBalance: 3 }],
         devolutionForm,
         { requireAtLeastOne: false, thresholdPercent: 10 },
       );
       expect(result.rows[0]).toMatchObject({ allocationAmount: 100, allocationPerc: 5, eligibility: true });
     });
 
+    it('passes previousFcUnspentBalance through untouched, with no effect on allocationPerc/eligibility', async () => {
+      const result = await service.resolveAndValidateRows(
+        stateOid,
+        [{ ulbId: ulbOid1.toString(), unspentAmount: 5, previousFcUnspentBalance: 999 }],
+        devolutionForm,
+        { requireAtLeastOne: false, thresholdPercent: 10 },
+      );
+      expect(result.rows[0]).toMatchObject({
+        previousFcUnspentBalance: 999,
+        allocationPerc: 5,
+        eligibility: true,
+      });
+    });
+
     it('populates allocationSource from the resolved Devolution row (devolutionFormId, devolutionRowId, datasetVersion, installment, allocationAmount)', async () => {
       const result = await service.resolveAndValidateRows(
         stateOid,
-        [{ ulbId: ulbOid1.toString(), unspentAmount: 5 }],
+        [{ ulbId: ulbOid1.toString(), unspentAmount: 5, previousFcUnspentBalance: 3 }],
         devolutionForm,
         { requireAtLeastOne: false, thresholdPercent: 10 },
       );
@@ -217,7 +231,7 @@ describe('FcUnspentDeclarationRowService', () => {
     it('computes eligibility at exactly the threshold boundary as eligible', async () => {
       const result = await service.resolveAndValidateRows(
         stateOid,
-        [{ ulbId: ulbOid1.toString(), unspentAmount: 10 }], // 10/100 = 10% == threshold
+        [{ ulbId: ulbOid1.toString(), unspentAmount: 10, previousFcUnspentBalance: 3 }], // 10/100 = 10% == threshold
         devolutionForm,
         { requireAtLeastOne: false, thresholdPercent: 10 },
       );
@@ -228,7 +242,7 @@ describe('FcUnspentDeclarationRowService', () => {
     it('computes eligibility just above the threshold as not eligible (full precision, no rounding)', async () => {
       const result = await service.resolveAndValidateRows(
         stateOid,
-        [{ ulbId: ulbOid1.toString(), unspentAmount: 10.000001 }], // 10.000001% > 10%
+        [{ ulbId: ulbOid1.toString(), unspentAmount: 10.000001, previousFcUnspentBalance: 3 }], // 10.000001% > 10%
         devolutionForm,
         { requireAtLeastOne: false, thresholdPercent: 10 },
       );
@@ -239,7 +253,7 @@ describe('FcUnspentDeclarationRowService', () => {
     it('with thresholdPercent 0, marks a row with any positive unspentAmount as not eligible', async () => {
       const result = await service.resolveAndValidateRows(
         stateOid,
-        [{ ulbId: ulbOid1.toString(), unspentAmount: 0.01 }],
+        [{ ulbId: ulbOid1.toString(), unspentAmount: 0.01, previousFcUnspentBalance: 3 }],
         devolutionForm,
         { requireAtLeastOne: false, thresholdPercent: 0 },
       );
@@ -251,6 +265,7 @@ describe('FcUnspentDeclarationRowService', () => {
       const pollutedRow = {
         ulbId: ulbOid1.toString(),
         unspentAmount: 5,
+        previousFcUnspentBalance: 3,
         allocationAmount: 999999,
         allocationPerc: 0.001,
         eligibility: false,
@@ -259,7 +274,7 @@ describe('FcUnspentDeclarationRowService', () => {
       };
       const result = await service.resolveAndValidateRows(
         stateOid,
-        [pollutedRow as unknown as { ulbId: string; unspentAmount: number }],
+        [pollutedRow as unknown as { ulbId: string; unspentAmount: number; previousFcUnspentBalance: number }],
         devolutionForm,
         { requireAtLeastOne: false, thresholdPercent: 10 },
       );
@@ -280,6 +295,7 @@ describe('FcUnspentDeclarationRowService', () => {
       ulbName: 'Alpha ULB',
       allocationAmount: 100,
       unspentAmount: 5,
+      previousFcUnspentBalance: 3,
       allocationPerc: 5,
       eligibility: true,
       allocationSource: sampleAllocationSource,
@@ -354,6 +370,7 @@ describe('FcUnspentDeclarationRowService', () => {
       ulbName: 'Alpha ULB',
       allocationAmount: 100,
       unspentAmount: 5,
+      previousFcUnspentBalance: 3,
       allocationPerc: 5,
       eligibility: true,
       allocationSource: sampleAllocationSource,
@@ -499,6 +516,7 @@ describe('FcUnspentDeclarationRowService', () => {
               ulbName: 'Alpha ULB',
               allocationAmount: 100,
               unspentAmount: 5,
+              previousFcUnspentBalance: 3,
               allocationPerc: 5,
               eligibility: true,
               allocationSource: sampleAllocationSource,

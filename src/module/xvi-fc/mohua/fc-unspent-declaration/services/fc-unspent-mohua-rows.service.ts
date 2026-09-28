@@ -76,7 +76,7 @@ export class FcUnspentMohuaRowsService {
         .skip(skip)
         .limit(limit)
         .select(
-          'rowNumber ulbId censusCode sbCode ulbName allocationAmount unspentAmount allocationPerc eligibility rowStatus rejectionRemark',
+          'rowNumber ulbId censusCode sbCode ulbName allocationAmount unspentAmount previousFcUnspentBalance allocationPerc eligibility rowStatus rejectionRemark',
         )
         .lean<FcUnspentMohuaRowLean[]>()
         .exec(),
@@ -310,6 +310,7 @@ export class FcUnspentMohuaRowsService {
       ulbName: row.ulbName,
       allocationAmount: row.allocationAmount,
       unspentAmount: row.unspentAmount,
+      previousFcUnspentBalance: row.previousFcUnspentBalance,
       allocationPerc: row.allocationPerc,
       eligibility: row.eligibility,
       rowStatus: row.rowStatus,

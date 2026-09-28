@@ -7,13 +7,13 @@ import {
   Post,
   Query,
   Res,
-  UploadedFile,
-  UseInterceptors,
   UsePipes,
   ValidationPipe,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { ApiBody, ApiConsumes , ApiBearerAuth } from '@nestjs/swagger';
+import { ApiBody, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { YearIdToLabel } from 'src/core/constants/years';
 import { AfsDigitizationService } from './afs-digitization.service';
@@ -79,8 +79,8 @@ export class AfsDigitizationController {
   }
   /**
    * Updates PDF metadata for a specific annual account
-   * @param id 
-   * @returns 
+   * @param id
+   * @returns
    */
   @ApiBearerAuth()
   @Post('annual-account/:id/pdf-metadata')

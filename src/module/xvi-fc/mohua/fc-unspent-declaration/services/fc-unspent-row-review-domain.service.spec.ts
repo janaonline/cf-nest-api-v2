@@ -98,6 +98,7 @@ function makeRow(overrides: Partial<FcUnspentMohuaRowLean> = {}): FcUnspentMohua
     ulbName: 'Alpha ULB',
     allocationAmount: 100,
     unspentAmount: 5,
+    previousFcUnspentBalance: 3,
     allocationPerc: 5,
     eligibility: true,
     rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,

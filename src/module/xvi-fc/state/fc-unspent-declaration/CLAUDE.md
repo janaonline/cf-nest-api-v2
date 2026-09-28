@@ -63,10 +63,13 @@ xvi-fc module), plus `FcUnspentDeclarationService`'s own `resolveDevolutionDepen
 `buildFormPermissions` reused as-is (those two are intentionally not `private` for this reason) —
 and additionally refuses to build the Yes-branch document (400, `fcUnspentDeclaration`
 field, code `noRows`) unless the active row set has at least one row, and refuses either branch
-(400, `_form`, code `branchNotChosen`) until `isFcUnspent` has been answered. Column values come
-straight off already-computed row data (`allocationAmount`/`unspentAmount`/`allocationPerc`/
-`eligibility` are all resolved once at row-save time by `FcUnspentDeclarationRowService` — nothing
-is re-derived for the document). The design-year label is resolved via the existing `YearIdToLabel`
+(400, `_form`, code `branchNotChosen`) until `isFcUnspent` has been answered. The Yes-branch table
+renders `unspentAmount` and `previousFcUnspentBalance` (both converted to Lakhs for display) —
+values come straight off already-validated row data (both are resolved/validated once at
+row-save time by `FcUnspentDeclarationRowService`, nothing is re-derived for the document). The
+row's own `allocationAmount`/`allocationPerc`/`eligibility` fields still exist and are still read
+elsewhere (see "Dependencies" below) but are no longer surfaced in this particular letter, per the
+current MoHUA specimen's table columns. The design-year label is resolved via the existing `YearIdToLabel`
 static map (`src/core/constants/years.ts`), the same mechanism already used throughout this
 module's main service — deliberately *not* elected-urban-local-bodies' `Year`-model DB lookup
 pattern, to stay consistent with this module's own established convention and avoid registering a
@@ -75,6 +78,19 @@ new model in `fc-unspent-declaration.module.ts` purely for this. The "14th"/"15t
 — the same shared, single-source-of-truth helper claim-letter's Annexure 1 also reads from; the
 `*FullLabel` variant is a thin prose wrapper composed over the original, not a second year->FC
 mapping.
+
+### The docx letter mirrors the MoHUA specimen's branch structure
+
+`FcUnspentDeclarationDocxService` renders as `.docx`, not PDF — the state must be able to type over
+the closing signature block in Word before printing and signing. It mirrors the MoHUA specimen
+letter verbatim, including its title heading; the specimen shows the No and Yes options side by
+side (separated by "OR") purely as a reference format, but this renders only whichever one actually
+applies to `data.isFcUnspent`. The title, subject line, and closing paragraph are the same wording
+regardless of branch — only the certifying paragraph (and, on the Yes branch, the table plus its
+trailing sentence) differ. The closing signature block (`[Name]`, `[Designation]`, etc.) is literal,
+non-interpolated text — including its own `[State Name]` — identical to elected-urban-local-bodies'
+signature block; only the certifying paragraph's state name (and, on the Yes branch, the table) are
+filled with real data.
 
 ## Every branch outcome deactivates rows except an actual "Yes"
 

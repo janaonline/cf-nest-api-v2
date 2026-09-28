@@ -43,6 +43,7 @@ export interface FcUnspentUlbRowResponse {
   ulbName: string;
   allocationAmount: number;
   unspentAmount: number;
+  previousFcUnspentBalance: number;
   allocationPerc: number;
   eligibility: boolean;
 }
@@ -56,7 +57,7 @@ export interface FcUnspentDeclarationGetResponseData {
   dependency: FcUnspentDependency;
   actors: XvifcFormActor[];
   questions: HydratedFieldConfig[];
-  /** DB-driven metadata for the 8 ULB row-table columns (ulbId, unspentAmount, censusCode, sbCode, ulbName, allocationAmount, allocationPerc, eligibility). Metadata only — does not replace FcUnspentDeclarationRowService's own row validation. */
+  /** DB-driven metadata for the 9 ULB row-table columns (ulbId, unspentAmount, previousFcUnspentBalance, censusCode, sbCode, ulbName, allocationAmount, allocationPerc, eligibility). Metadata only — does not replace FcUnspentDeclarationRowService's own row validation. */
   rowEditFields: FieldConfig[];
   unspentUlbData: FcUnspentUlbRowResponse[];
 }
@@ -90,6 +91,7 @@ export interface FcUnspentResolvedRow {
   ulbName: string;
   allocationAmount: number;
   unspentAmount: number;
+  previousFcUnspentBalance: number;
   allocationPerc: number;
   eligibility: boolean;
   allocationSource: FcUnspentAllocationSourceInput;
@@ -105,6 +107,7 @@ export interface FcUnspentActiveRowLean {
   ulbName: string;
   allocationAmount: number;
   unspentAmount: number;
+  previousFcUnspentBalance: number;
   allocationPerc: number;
   eligibility: boolean;
   rowStatus: RowReviewStatus | null;
