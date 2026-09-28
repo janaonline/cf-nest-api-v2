@@ -108,7 +108,7 @@ export class FcUnspentDeclarationDocumentService {
 
     const rows: FcUnspentDeclarationDocumentRow[] = activeRows.map((row, index) => ({
       slNo: index + 1,
-      censusCode: row.censusCode || '-',
+      censusCode: row.censusCode || row.sbCode || '-',
       ulbName: row.ulbName,
       unspentAmount: row.unspentAmount,
       previousFcUnspentBalance: row.previousFcUnspentBalance,
