@@ -36,9 +36,8 @@ export interface GtcFormGetResponseData {
   installmentAccess: GtcInstallmentAccess;
 }
 
-/** Response shape for the static-template download endpoint - only meaningful for a design
- *  year/installment whose formJson field carries a well-formed download-template `meta`
- *  (e.g. 2026-27 installment 1). */
+/** Response shape for the static-template download endpoint - see CLAUDE.md's "Static template
+ *  download" section. */
 export interface GtcTemplateResponseData {
   fileName: string;
   mimeType: string;

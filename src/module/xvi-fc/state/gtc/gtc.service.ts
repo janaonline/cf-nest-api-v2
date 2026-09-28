@@ -90,23 +90,12 @@ export class GtcService {
     private readonly s3Service: S3Service,
   ) {}
 
-  /** Returns the GTC question config array from the DB for frontend rendering. */
   async getQuestions(): Promise<XviFcApiResponse<FieldConfig[]>> {
     const questions = await this.loadFormQuestions();
     return xviFcSuccess('GTC questions fetched.', questions);
   }
 
-  /**
-   * Returns the hydrated GTC form for a given state, year, and installment.
-   * Questions are merged with saved data: answered fields use saved values, unanswered fields
-   * use the `value` default from the DB-loaded question config. Returns a fully hydrated
-   * Not Started form when no record exists.
-   *
-   * @param stateId     - ObjectId string of the target state.
-   * @param yearId      - ObjectId string of the target year.
-   * @param installment - 1 or 2.
-   * @param user        - Authenticated user; scope-checked against stateId.
-   */
+  /** Returns a fully hydrated Not Started form when no record exists yet. */
   async getForm(
     stateId: string,
     yearId: string,
@@ -168,12 +157,8 @@ export class GtcService {
     return xviFcSuccess('GTC form fetched.', responseData);
   }
 
-  /**
-   * Saves the GTC form as a draft.
-   * Runs partial validation - absent required fields are allowed; requiredTrue and all format
-   * validators are still enforced on any provided value. Upserts by state + year + installment.
-   * Sets status to IN_PROGRESS.
-   */
+  /** Runs partial validation - absent required fields are allowed, but requiredTrue and format
+   *  validators are still enforced on any provided value. */
   async saveDraft(dto: SaveGtcDto, user: AuthUser, ip: string, userAgent: string): Promise<XviFcApiResponse> {
     assertStateAccess(user, dto.stateId);
 
@@ -269,13 +254,8 @@ export class GtcService {
     });
   }
 
-  /**
-   * Final-submits the GTC form for a given state, year, and installment.
-   * Supports one-shot submit: creates the record if none exists yet. Runs full validation -
-   * all visible required fields must be present and valid. Persists the sanitized visible-field
-   * payload and transitions status to UNDER_REVIEW_BY_MOHUA. Blocked by
-   * `assertCanStateFinalSubmitForm`.
-   */
+  /** Supports one-shot submit - creates the record if none exists yet, without requiring a prior
+   *  draft. */
   async finalSubmit(dto: SaveGtcDto, user: AuthUser, ip: string, userAgent: string): Promise<XviFcApiResponse> {
     assertStateAccess(user, dto.stateId);
 
@@ -379,13 +359,7 @@ export class GtcService {
     });
   }
 
-  /**
-   * Returns a signed download URL for the static GTC template configured on this design
-   * year/installment's formJson (e.g. 2026-27 installment 1's Word template). The template
-   * asset is an admin-uploaded S3 object referenced via a field's `download-template` action
-   * `meta` - never generated on the fly. A year/installment whose formJson has no such field
-   * (every ordinary questionnaire submission) fails with `templateNotConfigured`.
-   */
+  /** See CLAUDE.md's "Static template download" section for the full design. */
   async getTemplate(
     stateId: string,
     yearId: string,
@@ -445,15 +419,9 @@ export class GtcService {
 
   // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-  /**
-   * Merges saved form data onto the question template in one O(n) pass. For each question:
-   * uses saved value if the key exists in savedData, otherwise keeps the template default.
-   * File-type questions additionally have their fileUrl signed with a session-length token
-   * (`FileTokenService.signFileUrlForSession`). Any field carrying a `download-template`
-   * supporting action has that action's visibility set to `canEdit && templateConfigured`, and
-   * `meta` is always stripped before the question leaves this method - `meta` is a backend-only
-   * extension point (the S3 path) that must never reach the client.
-   */
+  /** Merges saved data onto the question template, signs file URLs, and sets download-template
+   *  visibility - see CLAUDE.md's "Static template download" section for why `meta` is always
+   *  stripped before a question leaves this method. */
   private hydrateQuestions(
     savedData: FormData,
     formJson: FormJson,
@@ -496,12 +464,8 @@ export class GtcService {
     });
   }
 
-  /**
-   * Reads the design-year/installment-specific template asset (S3 path/fileName/mimeType) off
-   * a field's `download-template` supporting action `meta` - DB-driven, single source of truth.
-   * Returns `undefined` (not a thrown error) when the action or a well-formed `meta` is absent -
-   * that's the expected state for every ordinary questionnaire submission with no template.
-   */
+  /** Returns `undefined` (not a thrown error) when absent/malformed - the expected state for an
+   *  ordinary questionnaire submission. See CLAUDE.md's "Static template download" section. */
   private resolveTemplateMeta(field: FieldConfig): GtcTemplateAsset | undefined {
     const action = findSupportingAction(field.supportingContent, GTC_ACTION_DOWNLOAD_TEMPLATE);
     const meta = action?.meta;
@@ -553,12 +517,8 @@ export class GtcService {
     });
   }
 
-  /**
-   * TODO: installment 2 has no configured questionnaire yet for any design year - unlock once a
-   * year's formJson.data is authored for installment 2 (see this module's CLAUDE.md). Until then
-   * installment 2 stays locked for every state, same stub pattern as Devolution Formula's
-   * `isInstallment2Unlocked`.
-   */
+  /** TODO: unlock once installment 2's questionnaire is authored - see CLAUDE.md's Known Gaps
+   *  section. */
   private isInstallment2Unlocked(): boolean {
     return false;
   }
@@ -576,11 +536,8 @@ export class GtcService {
     };
   }
 
-  /**
-   * Inserts a history row unless `fromStatus === toStatus` (no-op re-save). The form document
-   * is updated first; if this insert fails, the transition has already persisted - the same
-   * accepted non-transactional tradeoff SFC Status uses (see its CLAUDE.md).
-   */
+  /** No-ops when `fromStatus === toStatus`. See CLAUDE.md's "one tradeoff worth knowing before
+   *  touching writes" section for the non-transactional-write tradeoff. */
   private async createHistoryEntry(entry: GtcHistoryEntryInput): Promise<void> {
     if (entry.fromStatus === entry.toStatus) return;
 
@@ -603,11 +560,8 @@ export class GtcService {
     });
   }
 
-  /**
-   * Fetches GTC form questions via FormJsonService. When a yearId is provided the call hits
-   * the Redis-cached `findActiveByDesignYearAndFormId(yearId, GTC_FORM_ID)` path. When no
-   * yearId is available (getQuestions) it falls back to `findByType(GTC_FORM_TYPE)`.
-   */
+  /** With yearId: Redis-cached `findActiveByDesignYearAndFormId`. Without (getQuestions): falls
+   *  back to `findByType`. */
   private async loadFormQuestions(yearId?: string): Promise<FieldConfig[]> {
     const formJson = yearId
       ? await this.formJsonService.findActiveByDesignYearAndFormId(yearId, GTC_FORM_ID)

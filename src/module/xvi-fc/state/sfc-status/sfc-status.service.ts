@@ -1,4 +1,4 @@
-﻿import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+﻿import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { FormJsonService } from 'src/master/form-json/form-json.service';
 import { Buffer } from 'exceljs';
@@ -19,6 +19,12 @@ import {
   throwXviFcConflictError,
 } from '../../common/utils/xvi-fc-concurrent-write.util';
 import { toObjectIdString } from 'src/common/utils/objectid.util';
+import {
+  DISCRETIONARY_APPROVED_STATUS,
+  DISCRETIONARY_PENDING_STATUS,
+  DISCRETIONARY_REJECTED_STATUS,
+  ExemptionResolverService,
+} from '../../common/services/exemption-resolver.service';
 import {
   SFC_FORM_ID,
   SFC_STATUS_FORM_TYPE,
@@ -127,6 +133,7 @@ export class SfcStatusService {
     private readonly fileInfoNormalizer: FileInfoNormalizerService,
     private readonly excelService: ExcelService,
     private readonly fileTokenService: FileTokenService,
+    private readonly exemptionResolverService: ExemptionResolverService,
   ) {}
 
   /** Returns the SFC Status question config array from the DB for frontend rendering. */
@@ -163,7 +170,10 @@ export class SfcStatusService {
       .lean<SfcStatusLeanDoc>()
       .exec();
 
-    const formQuestions = await this.loadFormQuestions(yearId);
+    const [formQuestions, exemption] = await Promise.all([
+      this.loadFormQuestions(yearId),
+      this.resolveExemptionStatusForResponse(stateId, yearId),
+    ]);
     const designYear = YearIdToLabel[yearId];
     if (!designYear) throw new NotFoundException(`Design year not found for yearId: ${yearId}`);
 
@@ -179,7 +189,15 @@ export class SfcStatusService {
     const savedData: FormData = (doc?.data ?? {}) as FormData;
     const folderPathContext: XviFcFolderPathContext = { _id: stateId, designYear, role: 'state' };
     const questions = this.hydrateQuestions(savedData, formJson, folderPathContext);
-    const permissions = buildStateFormPermissions(user, stateId, currentFormStatus);
+    let permissions = buildStateFormPermissions(user, stateId, currentFormStatus);
+    // buildStateFormPermissions only knows currentFormStatus - it has no concept of exemptions
+    // (correctly, since it's shared by every state form, most of which have none). A Pending or
+    // Approved exemption blocks saveDraft/finalSubmit regardless of currentFormStatus
+    // (assertNotBlockedByExemption), so canEdit/canFinalSubmit must reflect that here too, or the
+    // response could advertise an action the next write of that same action would reject.
+    if (exemption.exemptionStatus === 'PENDING' || exemption.exemptionStatus === 'APPROVED') {
+      permissions = { ...permissions, canEdit: false, canFinalSubmit: false };
+    }
     const { actors, stateName } = this.xvifcFormActorsService.buildActorsAndStateName(doc);
 
     const responseData: SfcFormGetResponseData = {
@@ -196,6 +214,7 @@ export class SfcStatusService {
       actors,
       instructions: [],
       meta: { version: 1 },
+      ...exemption,
     };
 
     return xviFcSuccess('SFC Status form fetched.', responseData);
@@ -214,6 +233,7 @@ export class SfcStatusService {
    */
   async saveDraft(dto: SaveSfcStatusDto, user: AuthUser, ip: string, userAgent: string): Promise<XviFcApiResponse> {
     assertStateAccess(user, dto.stateId);
+    await this.assertNotBlockedByExemption(dto.stateId, dto.yearId);
 
     const formQuestions = await this.loadFormQuestions(dto.yearId);
     const result = this.validator.validateDraftAndBuildPayload(formQuestions, dto.data as FormData);
@@ -319,6 +339,7 @@ export class SfcStatusService {
    */
   async finalSubmit(dto: SaveSfcStatusDto, user: AuthUser, ip: string, userAgent: string): Promise<XviFcApiResponse> {
     assertStateAccess(user, dto.stateId);
+    await this.assertNotBlockedByExemption(dto.stateId, dto.yearId);
 
     const formQuestions = await this.loadFormQuestions(dto.yearId);
     const stateOid = new Types.ObjectId(dto.stateId);
@@ -343,6 +364,15 @@ export class SfcStatusService {
       existing?.data ?? {},
     );
     if (Object.keys(fileErrors).length > 0) throwXviFcValidationError(fileErrors);
+
+    // Re-check right before the write, not just at the top of this method - loadFormQuestions,
+    // the findOne above, and validation/file-normalization are all real awaited steps a
+    // discretionary exemption request could be filed *and* approved within (see
+    // assertNotBlockedByExemption's own doc-comment). Re-running the exact same check here closes
+    // that window down to the gap between this read and the write immediately below, rather than
+    // leaving it open for this method's entire duration.
+    await this.assertNotBlockedByExemption(dto.stateId, dto.yearId);
+
     const toStatus = FORM_STATUS.UNDER_REVIEW_BY_MOHUA;
     const now = new Date();
 
@@ -452,6 +482,58 @@ export class SfcStatusService {
   // ─── Helpers ─────────────────────────────────────────────────────────────────
 
   /**
+   * Read-only exemption signal for the state page (status banner + read-only render while Pending,
+   * ahead of the next write hitting `assertNotBlockedByExemption`). See CLAUDE.md's "Discretionary
+   * whole-state exemption awareness" section.
+   */
+  private async resolveExemptionStatusForResponse(
+    stateId: string,
+    yearId: string,
+  ): Promise<{ exemptionStatus: 'PENDING' | 'APPROVED' | 'REJECTED' | null; exemptionMohuaRemarks: string | null }> {
+    const entry = await this.exemptionResolverService.resolveDiscretionary(
+      null,
+      new Types.ObjectId(yearId),
+      SFC_FORM_ID,
+      new Types.ObjectId(stateId),
+    );
+    if (entry?.currentFormStatus === DISCRETIONARY_PENDING_STATUS)
+      return { exemptionStatus: 'PENDING', exemptionMohuaRemarks: null };
+    if (entry?.currentFormStatus === DISCRETIONARY_APPROVED_STATUS)
+      return { exemptionStatus: 'APPROVED', exemptionMohuaRemarks: null };
+    if (entry?.currentFormStatus === DISCRETIONARY_REJECTED_STATUS) {
+      return { exemptionStatus: 'REJECTED', exemptionMohuaRemarks: entry.mohuaRemarks };
+    }
+    return { exemptionStatus: null, exemptionMohuaRemarks: null };
+  }
+
+  /**
+   * Blocks state writes while SFC Status's discretionary whole-state exemption is Pending/Approved
+   * (neither outcome touches SFC Status's own `currentFormStatus`, so the ordinary status gates
+   * wouldn't otherwise catch this). `finalSubmit` calls this twice to narrow the TOCTOU window
+   * across its awaited validation steps. See CLAUDE.md's "Discretionary whole-state exemption
+   * awareness" section and request-exemption's `docs/adr/0002-eligibility-gating-and-race-window.md`
+   * for the full rationale, incl. the ConflictException-not-ForbiddenException convention.
+   */
+  private async assertNotBlockedByExemption(stateId: string, yearId: string): Promise<void> {
+    const entry = await this.exemptionResolverService.resolveDiscretionary(
+      null,
+      new Types.ObjectId(yearId),
+      SFC_FORM_ID,
+      new Types.ObjectId(stateId),
+    );
+    if (entry?.currentFormStatus === DISCRETIONARY_PENDING_STATUS) {
+      throw new ConflictException(
+        'This form cannot be edited while a discretionary exemption request for SFC Status is pending MoHUA review.',
+      );
+    }
+    if (entry?.currentFormStatus === DISCRETIONARY_APPROVED_STATUS) {
+      throw new ConflictException(
+        'SFC Status is exempted per a MoHUA-approved discretionary exemption request; no submission is required.',
+      );
+    }
+  }
+
+  /**
    * Merges saved form data onto the question template in one O(n) pass.
    * For each question: uses saved value if the key exists in savedData,
    * otherwise keeps the template default. File-type questions additionally
@@ -507,8 +589,8 @@ export class SfcStatusService {
   }
 
   /**
-   * Inserts a history row unless `fromStatus === toStatus` (no-op re-save). The form document is
-   * updated first; if this insert fails, the transition has already persisted.
+   * No-ops when `fromStatus === toStatus`. See CLAUDE.md's "The one tradeoff worth knowing before
+   * touching writes" section for the non-transactional-write tradeoff.
    *
    * @param entry - ip/userAgent are optional (omitted for non-HTTP triggers).
    */

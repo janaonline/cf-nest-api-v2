@@ -5,16 +5,18 @@ import { FileInfo, FileInfoSchema } from 'src/schemas/common/file.schema';
 export const REQUEST_EXEMPTION_FORM_TYPE = 'REQUEST_EXEMPTION';
 export const REQUEST_EXEMPTION_FORM_ID = 34;
 
-/**
- * The formIds a state may request a discretionary exemption for are per-year data, not a compiled
- * constant — see `RequestExemptionFormJsonConfigService.loadReasonOptions`, which reads them from
- * the `formjsons` document (formId 34, field key `reasonForExemption`). Today that set is TS-133's
- * "Requested" conditions (Elected Body / Audited AFS / Provisional AFS). SFC (formId 22) is
- * deliberately excluded: `sfc-status.schema.ts` has no `ulb` field at all (it's a flat {state,
- * year} document, evaluated once for the whole state in `evaluateStateLevelGate`), so it has no
- * per-ULB unit this mechanism could ever exempt. See the request-exemption feature plan for the
- * full reasoning; a state-level gate exemption (SFC or otherwise) is a distinct, deferred feature.
- */
+/** `formjsons` field keys for this form (formId 34) — see `RequestExemptionFormJsonConfigService`,
+ *  which reads each key's live `options` from the `formjsons` document rather than a compiled
+ *  constant, so the offered reasons can grow without a schema change. `EXEMPTION_FOR_FIELD_KEY`
+ *  drives which of the two reason fields applies: `'ULB'` -> `REASON_FIELD_KEY_ULB` (per-ULB
+ *  reasons, e.g. Elected Body/Audited AFS/Provisional AFS — formIds 23/30/31 today), `'STATE'` ->
+ *  `REASON_FIELD_KEY_STATE` (whole-state reasons, e.g. SFC extension/compliance — formId 22
+ *  today). See `XviFcEligibilityExemption.ulb`'s own doc-comment for how the two branches are
+ *  told apart in storage. */
+export const EXEMPTION_FOR_FIELD_KEY = 'exemptionFor';
+export const REASON_FIELD_KEY_ULB = 'reasonForExemption';
+export const REASON_FIELD_KEY_STATE = 'reasonForExemptionState';
+
 export type XviFcEligibilityExemptionDocument = HydratedDocument<XviFcEligibilityExemption>;
 
 /**
@@ -73,10 +75,22 @@ export class XviFcEligibilityExemptionEntry {
 export const XviFcEligibilityExemptionEntrySchema = SchemaFactory.createForClass(XviFcEligibilityExemptionEntry);
 
 /**
- * The discretionary STATE -> MoHUA exemption request ("Request Exemption") — one document per
- * `{ulb, year}` (DB-enforced via a unique index below), holding one `data[]` entry per requested
- * `formId`. A state can still file "Elected Body" one day and, separately, "Audited AFS" the next
- * for the *same* ULB — both live as two entries on the *same* document, not two documents.
+ * The discretionary STATE -> MoHUA exemption request ("Request Exemption"). Two shapes share this
+ * one collection:
+ * - **Per-ULB** (`ulb` a real ObjectId): one document per `{ulb, year}` (DB-enforced by the first
+ *   partial unique index below), holding one `data[]` entry per requested `formId`. A state can
+ *   still file "Elected Body" one day and, separately, "Audited AFS" the next for the *same*
+ *   ULB — both live as two entries on the *same* document, not two documents.
+ * - **Whole-state** (`ulb: null`): one document per `{state, year}` (DB-enforced by the second
+ *   partial unique index below) — the user-facing "Entire State" branch (e.g. SFC extension/
+ *   compliance). Deliberately reuses this same schema/collection rather than a second one: every
+ *   other piece of the lifecycle (status enum, transaction shape, permission model, MoHUA
+ *   approve/reject, the per-formId entry array) is identical between the two, and a later
+ *   "does ULB X inherit its state's whole-state exemption" resolver becomes a single `{$or:
+ *   [{ulb:X},{state:S,ulb:null}]}` query against one collection instead of a two-collection union.
+ *   See `EXEMPTION_FOR_FIELD_KEY`/`REASON_FIELD_KEY_STATE` above for the form-side field that
+ *   drives this branch, and `RequestExemptionService.validateAndSanitize` for the server-side
+ *   enforcement that a whole-state document can only ever carry whole-state-reason formIds.
  * Collection name follows the module's `xvifc_...` convention (`xvifc_annualaccounts`,
  * `xvifc_bankaccounts`, `xvifc_sfc`, etc.).
  */
@@ -92,8 +106,11 @@ export class XviFcEligibilityExemption {
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Year', required: true })
   year!: Types.ObjectId;
 
-  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Ulb', required: true })
-  ulb!: Types.ObjectId;
+  /** `null` = a whole-state request, applying to every ULB in `state` — never absent/undefined on
+   *  a whole-state document (always an explicit `null`), since the second partial unique index
+   *  below keys off exactly that. A real ObjectId = a per-ULB request, as before. */
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Ulb', default: null })
+  ulb!: Types.ObjectId | null;
 
   @Prop({ type: [XviFcEligibilityExemptionEntrySchema], default: [] })
   data!: XviFcEligibilityExemptionEntry[];
@@ -117,9 +134,20 @@ export class XviFcEligibilityExemption {
 export const XviFcEligibilityExemptionSchema = SchemaFactory.createForClass(XviFcEligibilityExemption);
 
 // One document per ULB per design year — the actual DB-enforced guarantee behind "at most one
-// current entry per formId, ever" (see XviFcEligibilityExemptionEntry's own doc-comment).
-XviFcEligibilityExemptionSchema.index({ ulb: 1, year: 1 }, { unique: true });
-// Backs list()'s existing query shape — many ULBs per state+year.
+// current entry per formId, ever" (see XviFcEligibilityExemptionEntry's own doc-comment). Scoped
+// to real-ULB documents only (partialFilterExpression) — same pattern already used for this exact
+// "sometimes-null ref" problem in devolution-formula-row.schema.ts.
+XviFcEligibilityExemptionSchema.index(
+  { ulb: 1, year: 1 },
+  { unique: true, partialFilterExpression: { ulb: { $type: 'objectId' } }, name: 'uniq_ulb_year_exemption' },
+);
+// One whole-state (ulb: null) document per state per design year — the DB-enforced guarantee
+// behind "one entry per state, never duplicated per ULB" for the whole-state branch.
+XviFcEligibilityExemptionSchema.index(
+  { state: 1, year: 1 },
+  { unique: true, partialFilterExpression: { ulb: { $type: 'null' } }, name: 'uniq_state_year_exemption_no_ulb' },
+);
+// Backs list()'s existing query shape — many ULBs (and, now, the whole-state doc) per state+year.
 XviFcEligibilityExemptionSchema.index({ state: 1, year: 1 });
 // Multikey index over the array, forward-looking for the (not yet built) MoHUA review queue.
 XviFcEligibilityExemptionSchema.index({ 'data.currentFormStatus': 1 });

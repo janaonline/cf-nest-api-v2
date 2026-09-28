@@ -271,8 +271,8 @@ export class DevolutionFormulaService {
       installment: dto.installment,
       currentFormStatus: FORM_STATUS.IN_PROGRESS,
       isDraft: true,
-      // Defensive rounding — GrantAllocation is externally written and unconstrained (see
-      // grant-allocation.schema.ts).
+      // Defensive rounding — see CLAUDE.md's "Invariants worth knowing before you change adjacent
+      // code" section.
       totalMoHUAAllocation: Math.round(grantAlloc.basic + grantAlloc.performance),
       grantAllocationRef: grantAlloc._id,
       updatedBy: userOid,

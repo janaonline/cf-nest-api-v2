@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ForbiddenException } from '@nestjs/common';
+import { ConflictException, ForbiddenException } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
 import { getQueueToken } from '@nestjs/bullmq';
 import { Types } from 'mongoose';
@@ -22,6 +22,7 @@ import { ANNUAL_ACCOUNT_PROCESSING_QUEUE } from '../../../../core/constants/queu
 import { UlbEligibilityService } from '../../../ulb-eligibility/ulb-eligibility.service';
 import { FormReturnedNotificationService } from '../../common/reminders/form-returned-notification.service';
 import type { AuthUser } from '../../../auth/auth-user.interface';
+import { Permission } from '../../../auth/enum/roles-xvi-fc.enum';
 
 /** Shape of the second argument passed to Mongoose's updateOne in the tests below. */
 interface MongoUpdateCall {
@@ -199,6 +200,65 @@ describe('AnnualAccountsService', () => {
       );
       expect(result.data.form_status).toBe('NOT_STARTED');
       expect(result.data.documents).toEqual([]);
+    });
+
+    it('getProcessingStatus zeroes canUpload (not other permissions) while a discretionary exemption request is Pending or Approved, leaves it untouched otherwise', async () => {
+      // canUpload only ever applies to a ULB-scoped caller (buildAnnualAccountPermissions gates it
+      // on `user.scope === Scope.ULB`) - the shared ADMIN `user` fixture above always gets
+      // canUpload:false regardless of exemption, which wouldn't demonstrate this fix at all.
+      // permissionOverrides.allow is needed too: getEffectivePermissions currently gives every
+      // ULB-scoped user zero base permissions ("ULB permission matrix is not yet implemented" -
+      // permissions.map.ts) - without the override, canUpload would be false before AND after this
+      // fix, for an unrelated reason, and the test would prove nothing.
+      const ulbUser: AuthUser = {
+        _id: 'ulb-user-1',
+        role: 'ULB-EDITOR',
+        scope: 'ULB',
+        ulb: ULB_ID,
+        permissionOverrides: { allow: [Permission.UPLOAD_DOCUMENTS] },
+      } as AuthUser;
+      mockAnnualAccountModel.findById.mockReturnValue(mockQuery(auditedAnchor));
+      mockUlbModel.findById.mockReturnValue(mockQuery({ name: 'Test ULB', code: 'TU1' }));
+
+      // Baseline: no exemption on record - canUpload reflects the section's own status normally.
+      let result = await service.getProcessingStatus(ACCOUNT_ID, 'auditedData', ulbUser);
+      const baselinePermissions = result.data.permissions;
+      expect(baselinePermissions.canUpload).toBe(true);
+
+      mockExemptionResolverService.resolveDiscretionary.mockResolvedValueOnce({
+        requestId: '507f1f77bcf86cd799439099',
+        currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+        decidedAt: null,
+        mohuaRemarks: null,
+      });
+      result = await service.getProcessingStatus(ACCOUNT_ID, 'auditedData', ulbUser);
+      expect(result.exemptionStatus).toBe('PENDING');
+      // Blocked while Pending, even though the section's own status would otherwise allow it - the
+      // write endpoints would reject an upload right now (assertNotBlockedByPendingExemption), so
+      // the response must not advertise it. Every other permission is untouched (a separate
+      // question from whether the ULB can write to this section).
+      expect(result.data.permissions).toEqual({ ...baselinePermissions, canUpload: false });
+
+      mockExemptionResolverService.resolveDiscretionary.mockResolvedValueOnce({
+        requestId: '507f1f77bcf86cd799439099',
+        currentFormStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+        decidedAt: new Date(),
+        mohuaRemarks: null,
+      });
+      result = await service.getProcessingStatus(ACCOUNT_ID, 'auditedData', ulbUser);
+      expect(result.exemptionStatus).toBe('APPROVED');
+      expect(result.data.permissions).toEqual({ ...baselinePermissions, canUpload: false });
+
+      mockExemptionResolverService.resolveDiscretionary.mockResolvedValueOnce({
+        requestId: '507f1f77bcf86cd799439099',
+        currentFormStatus: FORM_STATUS.RETURNED_BY_MOHUA,
+        decidedAt: new Date(),
+        mohuaRemarks: 'Not eligible',
+      });
+      result = await service.getProcessingStatus(ACCOUNT_ID, 'auditedData', ulbUser);
+      expect(result.exemptionStatus).toBe('REJECTED');
+      // Rejected - the section's real status governs again, unaffected by this override.
+      expect(result.data.permissions).toEqual(baselinePermissions);
     });
 
     it('getDetails returns {annualAccountId, data} for the resolved section, S3 keys stripped', async () => {
@@ -633,7 +693,9 @@ describe('AnnualAccountsService', () => {
         s3Key: `xvi-fc/annual-accounts/${ULB_ID}/${YEAR_ID}/auditedData/auditors-report/upload-1.pdf`,
       };
 
-      await expect(service.confirmUpload(dto as any, baseUser)).rejects.toThrow(/pending MoHUA review/);
+      const result = service.confirmUpload(dto as any, baseUser);
+      await expect(result).rejects.toBeInstanceOf(ConflictException); // 409, not 403 - a 403 would force-log the user out
+      await expect(result).rejects.toThrow(/pending MoHUA review/);
       expect(mockExemptionResolverService.resolveDiscretionary).toHaveBeenCalledWith(
         expect.anything(),
         expect.anything(),
@@ -654,7 +716,9 @@ describe('AnnualAccountsService', () => {
         s3Key: `xvi-fc/annual-accounts/${ULB_ID}/${YEAR_ID}/auditedData/auditors-report/upload-1.pdf`,
       };
 
-      await expect(service.confirmUpload(dto as any, baseUser)).rejects.toThrow(/MoHUA-approved discretionary exemption/);
+      const result = service.confirmUpload(dto as any, baseUser);
+      await expect(result).rejects.toBeInstanceOf(ConflictException);
+      await expect(result).rejects.toThrow(/MoHUA-approved discretionary exemption/);
     });
   });
 
@@ -710,7 +774,9 @@ describe('AnnualAccountsService', () => {
         mohuaRemarks: null,
       });
 
-      await expect(service.submitSection(ACCOUNT_ID, 'auditedData', baseUser)).rejects.toThrow(/pending MoHUA review/);
+      const result = service.submitSection(ACCOUNT_ID, 'auditedData', baseUser);
+      await expect(result).rejects.toBeInstanceOf(ConflictException); // 409, not 403 - a 403 would force-log the user out
+      await expect(result).rejects.toThrow(/pending MoHUA review/);
       expect(mockUlbEligibilityService.assertUlbEligibleForGrantCycle).not.toHaveBeenCalled();
     });
   });
@@ -753,9 +819,9 @@ describe('AnnualAccountsService', () => {
         mohuaRemarks: null,
       });
 
-      await expect(service.removeDocument(ACCOUNT_ID, 'auditedData', 'auditors-report', baseUser)).rejects.toThrow(
-        /pending MoHUA review/,
-      );
+      const result = service.removeDocument(ACCOUNT_ID, 'auditedData', 'auditors-report', baseUser);
+      await expect(result).rejects.toBeInstanceOf(ConflictException); // 409, not 403 - a 403 would force-log the user out
+      await expect(result).rejects.toThrow(/pending MoHUA review/);
       expect(mockAnnualAccountModel.updateOne).not.toHaveBeenCalled();
     });
 

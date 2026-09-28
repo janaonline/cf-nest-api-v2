@@ -7,7 +7,7 @@ export type RequestExemptionTypedFieldConfig = FieldConfig & { fieldTypes: Reque
 
 const VALID_RE_FIELD_TYPES = new Set<string>(['RE_MAIN_FORM_FIELDS']);
 
-/** Filters fields by group and strips fieldTypes before returning FieldConfig[]. */
+/** Also strips the `fieldTypes` prop off each returned field. */
 export function getFieldsByType(
   fields: RequestExemptionTypedFieldConfig[],
   fieldType: RequestExemptionFormJsonFieldType,
@@ -17,7 +17,8 @@ export function getFieldsByType(
     .map(({ fieldTypes: _ft, ...rest }) => rest as FieldConfig);
 }
 
-/** Validates raw formJson.data structure and casts to RequestExemptionTypedFieldConfig[]. Throws ISE on structural errors. */
+/** Enforces: non-empty array; every field has a string `key`; every field has non-empty
+ *  `fieldTypes`, each value one of VALID_RE_FIELD_TYPES. */
 export function validateRequestExemptionFormJsonData(data: unknown): RequestExemptionTypedFieldConfig[] {
   if (!Array.isArray(data) || data.length === 0) {
     throw new InternalServerErrorException('Request Exemption form configuration data is missing or empty.');

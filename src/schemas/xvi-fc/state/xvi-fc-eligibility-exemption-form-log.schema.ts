@@ -29,8 +29,10 @@ export class XviFcEligibilityExemptionFormLog {
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'XviFcEligibilityExemption', required: true })
   requestId!: Types.ObjectId;
 
-  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Ulb', required: true })
-  ulb!: Types.ObjectId;
+  /** `null` for a whole-state request's log rows — mirrors `XviFcEligibilityExemption.ulb`'s own
+   *  nullability; never absent/undefined, always an explicit `null` on those rows. */
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Ulb', default: null })
+  ulb!: Types.ObjectId | null;
 
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Year', required: true })
   year!: Types.ObjectId;

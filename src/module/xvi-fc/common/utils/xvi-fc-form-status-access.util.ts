@@ -13,12 +13,18 @@ const ULB_EDITABLE_STATUSES: Set<number> = new Set([
 
 export const ULB_EDITABLE_STATUS_IDS: readonly number[] = [...ULB_EDITABLE_STATUSES];
 
-/** Statuses in which a STATE user may save, edit, or final-submit a state form. */
+/** Statuses in which a STATE user may save, edit, or final-submit a state form.
+ * Also exported as a plain array (STATE_EDITABLE_STATUS_IDS) for use cases that can't call
+ * canStateEditForm/canStateFinalSubmitForm, such as MongoDB aggregation or cross-collection status
+ * checks (e.g. Request Exemption's whole-state branch checking a target state form's own progress).
+ */
 const STATE_EDITABLE_STATUSES: Set<number> = new Set([
   FORM_STATUS.NOT_STARTED,
   FORM_STATUS.IN_PROGRESS,
   FORM_STATUS.RETURNED_BY_MOHUA,
 ]);
+
+export const STATE_EDITABLE_STATUS_IDS: readonly number[] = [...STATE_EDITABLE_STATUSES];
 
 /**
  * Returns true if a STATE user may open or decide (approve/return) a ULB-submitted form
