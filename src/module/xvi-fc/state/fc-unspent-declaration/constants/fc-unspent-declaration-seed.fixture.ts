@@ -5,7 +5,7 @@ import type { FcUnspentTypedFieldConfig } from '../helpers/fc-unspent-declaratio
  * (design_year/formId/type/isActive/data) — used by this module's spec files as a realistic
  * `FcUnspentTypedFieldConfig[]` satisfying `validateFcUnspentFormJsonData`'s invariants (the 4
  * required main-form keys, `fcDeclaration`'s `download-template` action, `fcUnspentDeclaration`'s
- * `download-declaration` action, all 8 `FC_UNSPENT_ROW_EDIT_FIELDS`-tagged columns).
+ * `download-declaration` action, all 9 `FC_UNSPENT_ROW_EDIT_FIELDS`-tagged columns).
  * Self-contained — mirrors the real `FC_UNSPENT_STATE_FORM_JSON` seed payload's shape but never
  * reads any external file, so tests never depend on anything outside this repo.
  */
@@ -140,6 +140,21 @@ export function loadFcUnspentSeedDocument(): {
           { name: 'required', validator: null, message: 'Unspent amount is required.' },
           { name: 'min', validator: Number.MIN_VALUE, message: 'Unspent amount must be greater than zero.' },
           { name: 'max', validator: 1000, message: 'Unspent amount cannot exceed 1000.' },
+        ],
+      },
+      {
+        fieldTypes: ['FC_UNSPENT_ROW_EDIT_FIELDS'],
+        formFieldType: 'number',
+        key: 'previousFcUnspentBalance',
+        label: 'Previous FC Unspent Balance',
+        validations: [
+          { name: 'required', validator: null, message: 'Previous FC unspent balance is required.' },
+          {
+            name: 'min',
+            validator: Number.MIN_VALUE,
+            message: 'Previous FC unspent balance must be greater than zero.',
+          },
+          { name: 'max', validator: 1000, message: 'Previous FC unspent balance cannot exceed 1000.' },
         ],
       },
       {

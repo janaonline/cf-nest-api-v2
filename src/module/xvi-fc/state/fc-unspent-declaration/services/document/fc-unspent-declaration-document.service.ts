@@ -110,10 +110,8 @@ export class FcUnspentDeclarationDocumentService {
       slNo: index + 1,
       censusCode: row.censusCode || '-',
       ulbName: row.ulbName,
-      allocationAmount: row.allocationAmount,
       unspentAmount: row.unspentAmount,
-      allocationPerc: row.allocationPerc,
-      eligibility: row.eligibility,
+      previousFcUnspentBalance: row.previousFcUnspentBalance,
     }));
 
     return { isFcUnspent: true, stateName, designYearLabel, priorFcCycleLabel, priorFcCycleFullLabel, rows };

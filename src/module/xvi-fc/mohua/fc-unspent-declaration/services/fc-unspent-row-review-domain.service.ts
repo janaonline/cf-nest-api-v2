@@ -28,7 +28,7 @@ import type {
 } from '../types/fc-unspent-mohua-review.types';
 
 const ROW_LEAN_SELECT =
-  'form rowNumber ulbId censusCode sbCode ulbName allocationAmount unspentAmount allocationPerc eligibility rowStatus rejectionRemark';
+  'form rowNumber ulbId censusCode sbCode ulbName allocationAmount unspentAmount previousFcUnspentBalance allocationPerc eligibility rowStatus rejectionRemark';
 
 /**
  * Shared FC Unspent Declaration MoHUA-review domain primitives: parent lookup, row loading,
@@ -141,6 +141,7 @@ export class FcUnspentRowReviewDomainService {
           ulbName: t.row.ulbName,
           allocationAmount: t.row.allocationAmount,
           unspentAmount: t.row.unspentAmount,
+          previousFcUnspentBalance: t.row.previousFcUnspentBalance,
           allocationPerc: t.row.allocationPerc,
           eligibility: t.row.eligibility,
           rowStatus: t.newStatus,
@@ -260,6 +261,7 @@ export class FcUnspentRowReviewDomainService {
       ulbName: row.ulbName,
       allocationAmount: row.allocationAmount,
       unspentAmount: row.unspentAmount,
+      previousFcUnspentBalance: row.previousFcUnspentBalance,
       allocationPerc: row.allocationPerc,
       eligibility: row.eligibility,
       rowStatus: row.rowStatus,

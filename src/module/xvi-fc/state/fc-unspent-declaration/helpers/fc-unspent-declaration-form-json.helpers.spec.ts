@@ -20,11 +20,12 @@ describe('getFcUnspentFieldsByType', () => {
     expect(mainFields.every((f) => !('fieldTypes' in f))).toBe(true);
   });
 
-  it('filters row-edit fields covering all 8 ULB row-table columns', () => {
+  it('filters row-edit fields covering all 9 ULB row-table columns', () => {
     const rowEditFields = getFcUnspentFieldsByType(FC_UNSPENT_STATE_FORM_JSON.data, 'FC_UNSPENT_ROW_EDIT_FIELDS');
     expect(rowEditFields.map((f) => f.key)).toEqual([
       'ulbId',
       'unspentAmount',
+      'previousFcUnspentBalance',
       'censusCode',
       'sbCode',
       'ulbName',

@@ -716,6 +716,7 @@ export class FcUnspentDeclarationService {
       ulbName: row.ulbName,
       allocationAmount: row.allocationAmount,
       unspentAmount: row.unspentAmount,
+      previousFcUnspentBalance: row.previousFcUnspentBalance,
       allocationPerc: row.allocationPerc,
       eligibility: row.eligibility,
     };
@@ -730,6 +731,7 @@ export class FcUnspentDeclarationService {
       ulbName: row.ulbName,
       allocationAmount: row.allocationAmount,
       unspentAmount: row.unspentAmount,
+      previousFcUnspentBalance: row.previousFcUnspentBalance,
       allocationPerc: row.allocationPerc,
       eligibility: row.eligibility,
       rowStatus: row.rowStatus,

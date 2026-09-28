@@ -65,6 +65,12 @@ export class FcUnspentUlbRowSnapshot {
   @Prop({ type: Number, required: true })
   unspentAmount!: number;
 
+  // Whole Rupees only — same @IsInt()/@Min(1) enforcement as unspentAmount on
+  // FcUnspentUlbRowInputDto, and likewise purely informational: it never participates in
+  // allocationPerc/eligibility computation.
+  @Prop({ type: Number, required: true })
+  previousFcUnspentBalance!: number;
+
   @Prop({ type: Number, required: true })
   allocationPerc!: number;
 
@@ -127,6 +133,11 @@ export class XviFcUnspentStateFormRow {
 
   @Prop({ type: Number, required: true })
   unspentAmount!: number;
+
+  // Whole Rupees only — see FcUnspentUlbRowSnapshot above for the full unit note; this is the
+  // live row's own copy.
+  @Prop({ type: Number, required: true })
+  previousFcUnspentBalance!: number;
 
   @Prop({ type: Number, required: true })
   allocationPerc!: number;

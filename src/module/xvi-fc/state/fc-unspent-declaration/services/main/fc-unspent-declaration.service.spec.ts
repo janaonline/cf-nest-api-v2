@@ -82,6 +82,7 @@ const sampleResolvedRow: FcUnspentResolvedRow = {
   ulbName: 'Alpha ULB',
   allocationAmount: 100,
   unspentAmount: 5,
+  previousFcUnspentBalance: 3,
   allocationPerc: 5,
   eligibility: true,
   allocationSource: {
@@ -358,11 +359,21 @@ describe('FcUnspentDeclarationService', () => {
   });
 
   it('GET never queries rows (and returns none) when isFcUnspent is not true, even if the parent form exists — defensive guard against stale active rows from a pre-fix undecided save', async () => {
-    model['findOne'] = jest.fn().mockReturnValue(
-      q({ _id: parentOid, currentFormStatus: FORM_STATUS.IN_PROGRESS, isFcUnspent: null }),
-    );
+    model['findOne'] = jest
+      .fn()
+      .mockReturnValue(q({ _id: parentOid, currentFormStatus: FORM_STATUS.IN_PROGRESS, isFcUnspent: null }));
     rowService['getActiveRows'] = jest.fn().mockResolvedValue([
-      { rowNumber: 1, ulbId: ulbOid1, censusCode: '111', sbCode: 'A1', ulbName: 'Alpha ULB', allocationAmount: 100, unspentAmount: 5, allocationPerc: 5, eligibility: true },
+      {
+        rowNumber: 1,
+        ulbId: ulbOid1,
+        censusCode: '111',
+        sbCode: 'A1',
+        ulbName: 'Alpha ULB',
+        allocationAmount: 100,
+        unspentAmount: 5,
+        allocationPerc: 5,
+        eligibility: true,
+      },
     ]);
 
     const result = await service.getForm(stateOid.toString(), yearOid.toString(), stateUser());
@@ -419,7 +430,7 @@ describe('FcUnspentDeclarationService', () => {
       rowService['resolveAndValidateRows'].mockResolvedValueOnce({ rows: [sampleResolvedRow], errors: {} });
       const dto = baseDto({
         isFcUnspent: true,
-        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5 }],
+        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5, previousFcUnspentBalance: 3 }],
         fcUnspentDeclaration: sampleFcUnspentDeclarationFile,
       });
       await service.saveDraft(dto, stateUser());
@@ -429,7 +440,10 @@ describe('FcUnspentDeclarationService', () => {
     });
 
     it('rejects a No-branch draft carrying unspentUlbData rows', async () => {
-      const dto = baseDto({ isFcUnspent: false, unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5 }] });
+      const dto = baseDto({
+        isFcUnspent: false,
+        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5, previousFcUnspentBalance: 3 }],
+      });
       await expect(service.saveDraft(dto, stateUser())).rejects.toThrow(BadRequestException);
     });
 
@@ -442,7 +456,7 @@ describe('FcUnspentDeclarationService', () => {
       const dto = baseDto({
         isFcUnspent: true,
         checkboxConfirmation: true,
-        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5 }],
+        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5, previousFcUnspentBalance: 3 }],
       });
       await service.saveDraft(dto, stateUser());
 
@@ -467,7 +481,7 @@ describe('FcUnspentDeclarationService', () => {
       rowService['resolveAndValidateRows'].mockResolvedValueOnce({ rows: [sampleResolvedRow], errors: {} });
       const dto = baseDto({
         isFcUnspent: true,
-        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5 }],
+        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5, previousFcUnspentBalance: 3 }],
       });
       await expect(service.saveDraft(dto, stateUser())).resolves.toBeDefined();
     });
@@ -477,7 +491,10 @@ describe('FcUnspentDeclarationService', () => {
         rows: [],
         errors: { 'unspentUlbData.0.ulbId': [{ field: 'unspentUlbData.0.ulbId', code: 'noAllocation', message: 'x' }] },
       });
-      const dto = baseDto({ isFcUnspent: true, unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5 }] });
+      const dto = baseDto({
+        isFcUnspent: true,
+        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5, previousFcUnspentBalance: 3 }],
+      });
       await expect(service.saveDraft(dto, stateUser())).rejects.toThrow(BadRequestException);
     });
 
@@ -529,7 +546,7 @@ describe('FcUnspentDeclarationService', () => {
         service['dynamicFormValidator'] as unknown as { validateDraftAndBuildPayload: (...args: unknown[]) => unknown },
         'validateDraftAndBuildPayload',
       );
-      const rows = [{ ulbId: ulbOid1.toString(), unspentAmount: 5 }];
+      const rows = [{ ulbId: ulbOid1.toString(), unspentAmount: 5, previousFcUnspentBalance: 3 }];
       const dto = baseDto({ isFcUnspent: true, unspentUlbData: rows });
 
       await service.saveDraft(dto, stateUser());
@@ -538,7 +555,7 @@ describe('FcUnspentDeclarationService', () => {
       expect(formDataArg['savedUnspentUlbData']).toEqual(rows);
     });
 
-    it("threads an empty savedUnspentUlbData when no rows are submitted", async () => {
+    it('threads an empty savedUnspentUlbData when no rows are submitted', async () => {
       const validatorSpy = jest.spyOn(
         service['dynamicFormValidator'] as unknown as { validateDraftAndBuildPayload: (...args: unknown[]) => unknown },
         'validateDraftAndBuildPayload',
@@ -593,7 +610,7 @@ describe('FcUnspentDeclarationService', () => {
       const dto = baseDto({
         isFcUnspent: true,
         checkboxConfirmation: true,
-        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 10 }],
+        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 10, previousFcUnspentBalance: 3 }],
         fcUnspentDeclaration: sampleFcUnspentDeclarationFile,
       });
       const result = await service.finalSubmit(dto, stateUser(), '127.0.0.1', 'jest-agent');
@@ -629,7 +646,7 @@ describe('FcUnspentDeclarationService', () => {
         },
         'validateFinalSubmitAndBuildPayload',
       );
-      const rows = [{ ulbId: ulbOid1.toString(), unspentAmount: 10 }];
+      const rows = [{ ulbId: ulbOid1.toString(), unspentAmount: 10, previousFcUnspentBalance: 3 }];
       const dto = baseDto({
         isFcUnspent: true,
         checkboxConfirmation: true,
@@ -651,7 +668,7 @@ describe('FcUnspentDeclarationService', () => {
       const dto = baseDto({
         isFcUnspent: true,
         checkboxConfirmation: true,
-        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5 }],
+        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5, previousFcUnspentBalance: 3 }],
         fcUnspentDeclaration: sampleFcUnspentDeclarationFile,
       });
       await service.finalSubmit(dto, stateUser(), '127.0.0.1', 'jest-agent');
@@ -682,7 +699,7 @@ describe('FcUnspentDeclarationService', () => {
     it('rejects a Yes-branch final submit without checkboxConfirmation', async () => {
       const dto = baseDto({
         isFcUnspent: true,
-        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 10 }],
+        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 10, previousFcUnspentBalance: 3 }],
       });
       await expect(service.finalSubmit(dto, stateUser(), '127.0.0.1', 'jest-agent')).rejects.toThrow(
         BadRequestException,
@@ -694,7 +711,7 @@ describe('FcUnspentDeclarationService', () => {
       const dto = baseDto({
         isFcUnspent: true,
         checkboxConfirmation: true,
-        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 10 }],
+        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 10, previousFcUnspentBalance: 3 }],
       });
       const message = await getValidationErrorMessage(
         service.finalSubmit(dto, stateUser(), '127.0.0.1', 'jest-agent'),
@@ -723,7 +740,7 @@ describe('FcUnspentDeclarationService', () => {
       const dto = baseDto({
         isFcUnspent: true,
         checkboxConfirmation: true,
-        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 10 }],
+        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 10, previousFcUnspentBalance: 3 }],
         fcUnspentDeclaration: sampleFcUnspentDeclarationFile,
       });
       await service.finalSubmit(dto, stateUser(), '127.0.0.1', 'jest-agent');
@@ -741,8 +758,8 @@ describe('FcUnspentDeclarationService', () => {
         isFcUnspent: true,
         checkboxConfirmation: true,
         unspentUlbData: [
-          { ulbId: ulbOid1.toString(), unspentAmount: 5 },
-          { ulbId: ulbOid1.toString(), unspentAmount: 7 },
+          { ulbId: ulbOid1.toString(), unspentAmount: 5, previousFcUnspentBalance: 3 },
+          { ulbId: ulbOid1.toString(), unspentAmount: 7, previousFcUnspentBalance: 3 },
         ],
       });
       await expect(service.finalSubmit(dto, stateUser(), '127.0.0.1', 'jest-agent')).rejects.toThrow(
@@ -763,7 +780,7 @@ describe('FcUnspentDeclarationService', () => {
       const dto = baseDto({
         isFcUnspent: true,
         checkboxConfirmation: true,
-        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 10 }],
+        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 10, previousFcUnspentBalance: 3 }],
         fcUnspentDeclaration: sampleFcUnspentDeclarationFile,
       });
       await service.finalSubmit(dto, stateUser(), '127.0.0.1', 'jest-agent');
@@ -810,7 +827,7 @@ describe('FcUnspentDeclarationService', () => {
       const dto = baseDto({
         isFcUnspent: true,
         checkboxConfirmation: true,
-        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5 }],
+        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5, previousFcUnspentBalance: 3 }],
         fcUnspentDeclaration: sampleFcUnspentDeclarationFile,
       });
       await service.finalSubmit(dto, stateUser(), '10.0.0.5', 'jest-agent/1.0');
@@ -827,7 +844,7 @@ describe('FcUnspentDeclarationService', () => {
       const dto = baseDto({
         isFcUnspent: true,
         checkboxConfirmation: true,
-        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5 }],
+        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5, previousFcUnspentBalance: 3 }],
         fcUnspentDeclaration: sampleFcUnspentDeclarationFile,
       });
       await expect(service.finalSubmit(dto, stateUser(), '127.0.0.1', 'jest-agent')).rejects.toThrow(
@@ -843,7 +860,7 @@ describe('FcUnspentDeclarationService', () => {
       const dto = baseDto({
         isFcUnspent: true,
         checkboxConfirmation: true,
-        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5 }],
+        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5, previousFcUnspentBalance: 3 }],
         fcUnspentDeclaration: sampleFcUnspentDeclarationFile,
       });
       await expect(service.finalSubmit(dto, stateUser(), '127.0.0.1', 'jest-agent')).rejects.toThrow(
@@ -858,7 +875,7 @@ describe('FcUnspentDeclarationService', () => {
       const dto = baseDto({
         isFcUnspent: true,
         checkboxConfirmation: true,
-        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5 }],
+        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5, previousFcUnspentBalance: 3 }],
         fcUnspentDeclaration: sampleFcUnspentDeclarationFile,
       });
       await expect(service.finalSubmit(dto, stateUser(), '127.0.0.1', 'jest-agent')).rejects.toThrow(
@@ -960,11 +977,12 @@ describe('FcUnspentDeclarationService', () => {
   // ─── DB-driven rowEditFields (ULB row-table column metadata) ────────────────
 
   describe('getForm rowEditFields', () => {
-    it('includes rowEditFields in the response with all 8 ULB row-table columns', async () => {
+    it('includes rowEditFields in the response with all 9 ULB row-table columns', async () => {
       const result = await service.getForm(stateOid.toString(), yearOid.toString(), stateUser());
       expect(result.data!.rowEditFields.map((f) => f.key)).toEqual([
         'ulbId',
         'unspentAmount',
+        'previousFcUnspentBalance',
         'censusCode',
         'sbCode',
         'ulbName',
@@ -1009,7 +1027,7 @@ describe('FcUnspentDeclarationService', () => {
       const dto = baseDto({
         isFcUnspent: true,
         checkboxConfirmation: true,
-        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5 }],
+        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5, previousFcUnspentBalance: 3 }],
         fcUnspentDeclaration: sampleFcUnspentDeclarationFile,
       });
       await expect(service.finalSubmit(dto, stateUser(), '127.0.0.1', 'jest-agent')).resolves.toBeDefined();

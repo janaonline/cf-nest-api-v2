@@ -27,6 +27,7 @@ export interface FcUnspentMohuaRowLean {
   ulbName: string;
   allocationAmount: number;
   unspentAmount: number;
+  previousFcUnspentBalance: number;
   allocationPerc: number;
   eligibility: boolean;
   rowStatus: RowReviewStatus | null;
@@ -90,6 +91,7 @@ export interface FcUnspentMohuaRow {
   ulbName: string;
   allocationAmount: number;
   unspentAmount: number;
+  previousFcUnspentBalance: number;
   allocationPerc: number;
   eligibility: boolean;
   rowStatus: RowReviewStatus | null;
