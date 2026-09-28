@@ -18,6 +18,7 @@ import { HttpService } from '@nestjs/axios';
 import { AxiosError } from 'axios';
 import FormData from 'form-data';
 import { YearIdToLabel } from 'src/core/constants/years';
+import { AfsDigitizationService } from '../../afs-digitization.service';
 
 export interface DigitizationResponse {
   data: {
@@ -50,6 +51,7 @@ export class AuditorsReportOcrQueueService {
     private readonly s3Service: S3Service,
     private readonly config: ConfigService,
     private readonly http: HttpService,
+    private readonly afsDigitizationService: AfsDigitizationService,
   ) {}
 
   // digitization.service.ts (as before)
@@ -108,7 +110,7 @@ export class AuditorsReportOcrQueueService {
     try {
       this.logger.log(`Fetching S3 object for digitization: ${job.pdfUrl}`);
       const buffer = await this.s3Service.getPdfBufferFromS3(job.pdfUrl);
-      job.noOfPages = this.s3Service.getPdfPageCountFromBuffer(buffer);
+      job.noOfPages = await this.s3Service.getPdfPageCountFromBuffer(buffer);
       const formData = new FormData();
       formData.append('file', buffer, {
         filename: path.basename(job.pdfUrl),
@@ -295,7 +297,10 @@ export class AuditorsReportOcrQueueService {
       // job.requestId = uuidv4(); // generate a unique request ID for tracking
       job.requestId = `req-${new Date().toISOString().split('T')[0].replace(/-/g, '')}-${uuidv4().substring(0, 6)}`;
 
-      job.noOfPages = this.s3Service.getPdfPageCountFromBuffer(await this.s3Service.getPdfBufferFromS3(job.pdfUrl));
+      job.noOfPages = await this.s3Service.getPdfPageCountFromBuffer(await this.s3Service.getPdfBufferFromS3(job.pdfUrl));
+      // if (job.annualAccountsId) {
+      //   await this.afsDigitizationService.updatePdfMetadataForAnnualAccount(job.annualAccountsId);
+      // }
 
       // mongoose.set('debug', true);
       if (isQueue) {
