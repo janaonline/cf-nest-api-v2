@@ -155,7 +155,10 @@ export class DigitizationQueueService {
     // job.requestId = uuidv4(); // generate a unique request ID for tracking
     job.requestId = `req-${new Date().toISOString().split('T')[0].replace(/-/g, '')}-${uuidv4().substring(0, 6)}`;
 
-    job.noOfPages = this.s3Service.getPdfPageCountFromBuffer(await this.s3Service.getPdfBufferFromS3(job.pdfUrl));
+    job.noOfPages = await this.s3Service.getPdfPageCountFromBuffer(await this.s3Service.getPdfBufferFromS3(job.pdfUrl));
+    // if (job.annualAccountsId) {
+    //   await this.afsDigitizationService.updatePdfMetadataForAnnualAccount(job.annualAccountsId);
+    // }
     // mongoose.set('debug', true);
     if (isQueue) {
       const jobRes = await this.digitizationQueue.add(`digitization-job-${job.ulb}-${job.year}-${job.docType}`, job);
@@ -315,7 +318,7 @@ export class DigitizationQueueService {
 
   async handleDigitizationJob(job: DigitizationJobDto) {
     try {
-      console.log(`Processing digitization job for PDF: ${job.pdfUrl}, requestId: ${job.requestId}`);
+      this.logger.log(`Processing digitization job for PDF: ${job.pdfUrl}, requestId: ${job.requestId}`);
       const digitizeResp = await this.callDigitizationApi(job);
 
       this.logger.log(`Digitization job for ${job.pdfUrl} completed with status `, digitizeResp);
@@ -346,7 +349,7 @@ export class DigitizationQueueService {
       this.logger.log(`Fetching S3 object for digitization: ${job.pdfUrl}`);
       // const buffer = await this.s3Service.getBuffer(job.pdfUrl);
       const buffer = await this.s3Service.getPdfBufferFromS3(job.pdfUrl);
-      job.noOfPages = this.s3Service.getPdfPageCountFromBuffer(buffer);
+      job.noOfPages = await this.s3Service.getPdfPageCountFromBuffer(buffer);
       const formData = new FormData();
       formData.append('file', buffer, {
         filename: path.basename(job.pdfUrl),
