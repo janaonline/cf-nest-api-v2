@@ -149,12 +149,12 @@ export function loadFcUnspentSeedDocument(): {
         label: 'Previous FC Unspent Balance',
         validations: [
           { name: 'required', validator: null, message: 'Previous FC unspent balance is required.' },
+          { name: 'min', validator: 1, message: 'Previous FC unspent balance must be at least ₹1.' },
           {
-            name: 'min',
-            validator: Number.MIN_VALUE,
-            message: 'Previous FC unspent balance must be greater than zero.',
+            name: 'max',
+            validator: 10000000000,
+            message: 'Previous FC unspent balance cannot exceed ₹10,00,00,00,000.',
           },
-          { name: 'max', validator: 1000, message: 'Previous FC unspent balance cannot exceed 1000.' },
         ],
       },
       {
