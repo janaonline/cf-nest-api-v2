@@ -85,10 +85,10 @@ export class AfsDigitizationController {
   @Public() // TEMP: To be removed.
   @ApiBearerAuth()
   @Post('annual-account/:id/pdf-metadata')
-  async updateAnnualAccountPdfMetadata(@Param('id') id: string) {
+  async updateAnnualAccountPdfMetadata(@Param('id') id: string, @Query('forceRefresh') forceRefresh?: string) {
     return {
       status: 'success',
-      data: await this.afsService.updatePdfMetadataForAnnualAccount(id),
+      data: await this.afsService.updatePdfMetadataForAnnualAccount(id, { skipExhausted: forceRefresh !== 'true' }),
     };
   }
 
