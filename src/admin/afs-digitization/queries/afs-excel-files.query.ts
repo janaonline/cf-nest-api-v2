@@ -179,6 +179,7 @@ export const afsQuery = (query: DigitizationReportQueryDto): any[] => {
     ...getUlbsLookupPipeline(query),
     // { $unwind: '$ulbDoc' },
     { $sort: { [query.sortBy || 'ulbDoc.name']: query.sortOrder === 'desc' ? -1 : 1 } },
+    // Apply digitizationStatus filter if provided (after lookup since it depends on joined data)
     ...(!query.digitizationStatus && query.limit
       ? [{ $skip: skip }, ...(query.limit ? [{ $limit: query.limit }] : [])]
       : []), // Pagination
