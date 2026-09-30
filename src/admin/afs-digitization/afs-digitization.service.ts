@@ -73,6 +73,7 @@ export interface AnnualAccountPdfMetadataSummary {
   updated: number;
   skipped: number;
   failed: number;
+  exhausted: number;
 }
 
 export interface AnnualAccountPdfMetadataBackfillOptions {
@@ -135,12 +136,17 @@ export class AfsDigitizationService {
     private readonly s3Service: S3Service,
   ) {}
 
-  async updatePdfMetadataForAnnualAccount(annualAccountId: string): Promise<AnnualAccountPdfMetadataSummary> {
+  async updatePdfMetadataForAnnualAccount(
+    annualAccountId: string,
+    options: { skipExhausted?: boolean } = {},
+  ): Promise<AnnualAccountPdfMetadataSummary> {
+    const skipExhausted = options.skipExhausted ?? true;
     const summary: AnnualAccountPdfMetadataSummary = {
       totalPdfsFound: 0,
       updated: 0,
       skipped: 0,
       failed: 0,
+      exhausted: 0,
     };
 
     if (!Types.ObjectId.isValid(annualAccountId)) {
@@ -168,10 +174,20 @@ export class AfsDigitizationService {
           continue;
         }
 
-        summary.totalPdfsFound += 1;
         // A retry count only carries over if it was tracked against this exact url — a
         // different url (e.g. a re-uploaded replacement file) starts fresh at 0.
         const priorRetryCount = pdf.metadataRetryUrl === pdf.url ? (pdf.metadataRetryCount ?? 0) : 0;
+        const isExhausted =
+          priorRetryCount >= PDF_METADATA_MAX_RETRIES && pdf.pageCount === null && pdf.fileSizeBytes === null;
+
+        if (skipExhausted && isExhausted) {
+          // Already gave up on this exact field twice — don't keep re-fetching a PDF we
+          // know is broken every time this document is touched for some other field.
+          summary.exhausted += 1;
+          continue;
+        }
+
+        summary.totalPdfsFound += 1;
         tasks.push({ pdfPath, url: pdf.url, priorRetryCount });
       }
     }
@@ -186,6 +202,12 @@ export class AfsDigitizationService {
       if (result.status === 'fulfilled') {
         setPayload[`${pdfPath}.pageCount`] = result.value.pageCount;
         setPayload[`${pdfPath}.fileSizeBytes`] = result.value.fileSizeBytes;
+        // Reset so metadataRetryCount tracks *consecutive* failures since the last success —
+        // without this, a stale count from an earlier (already-recovered) failure could make a
+        // later, unrelated single failure look like the 2nd consecutive one and wipe out the
+        // real data just written above with the give-up null sentinel.
+        setPayload[`${pdfPath}.metadataRetryCount`] = 0;
+        setPayload[`${pdfPath}.metadataRetryUrl`] = url;
         summary.updated += 1;
       } else {
         summary.failed += 1;
@@ -254,7 +276,8 @@ export class AfsDigitizationService {
   ): Promise<AnnualAccountPdfMetadataBackfillSummary> {
     const batchSize = this.clampPositiveInteger(options.batchSize, 25, 1, 100);
     const limit = options.limit ? this.clampPositiveInteger(options.limit, 0, 1, 18_000) : undefined;
-    const filter = this.buildAnnualAccountPdfMetadataBackfillFilter(options.onlyMissing ?? true);
+    const onlyMissing = options.onlyMissing ?? true;
+    const filter = this.buildAnnualAccountPdfMetadataBackfillFilter(onlyMissing);
     const matchedDocuments = await this.annualAccountModel.countDocuments(filter).exec();
     const documentsMatched = limit ? Math.min(matchedDocuments, limit) : matchedDocuments;
     const startedAt = Date.now();
@@ -268,6 +291,7 @@ export class AfsDigitizationService {
       updated: 0,
       skipped: 0,
       failed: 0,
+      exhausted: 0,
       elapsedMs: 0,
       averageMsPerDocument: 0,
       estimatedRemainingMs: 0,
@@ -300,11 +324,14 @@ export class AfsDigitizationService {
         summary.documentsProcessed += 1;
 
         try {
-          const docSummary = await this.updatePdfMetadataForAnnualAccount(doc._id.toString());
+          const docSummary = await this.updatePdfMetadataForAnnualAccount(doc._id.toString(), {
+            skipExhausted: onlyMissing,
+          });
           summary.totalPdfsFound += docSummary.totalPdfsFound;
           summary.updated += docSummary.updated;
           summary.skipped += docSummary.skipped;
           summary.failed += docSummary.failed;
+          summary.exhausted += docSummary.exhausted;
 
           if (docSummary.failed > 0) {
             summary.documentsFailed += 1;
