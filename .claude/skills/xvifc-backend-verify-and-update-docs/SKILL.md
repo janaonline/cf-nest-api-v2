@@ -141,7 +141,7 @@ and `gtc`.
    constants — and apply the Comment Style Contract to _every_ comment already there, not just ones
    touched by a recent change. Files with nothing wrong don't need to be touched.
 5. Don't change behavior anywhere in this pass — comments and docs only.
-6. Run the folder's own tests to confirm nothing broke: `npx jest <folder-path>`.
+6. Run the folder's own tests to confirm nothing broke: `npm test -- <folder-path>`.
 7. Before reporting, self-rate each file you touched on its resulting comment style, 0-9. If
    anything is still below 9, fix it or say plainly why it's staying that way — don't report done
    at a lower bar than what was already validated on `request-exemption`/`gtc`.

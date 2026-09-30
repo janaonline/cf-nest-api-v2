@@ -158,6 +158,7 @@ export class FcUnspentDeclarationRowService {
         ulbName: ulb.name,
         allocationAmount,
         unspentAmount: row.unspentAmount,
+        previousFcUnspentBalance: row.previousFcUnspentBalance,
         allocationPerc,
         eligibility,
         allocationSource,
@@ -214,6 +215,7 @@ export class FcUnspentDeclarationRowService {
           ulbName: row.ulbName,
           allocationAmount: row.allocationAmount,
           unspentAmount: row.unspentAmount,
+          previousFcUnspentBalance: row.previousFcUnspentBalance,
           allocationPerc: row.allocationPerc,
           eligibility: row.eligibility,
           allocationSource: row.allocationSource,
@@ -299,6 +301,7 @@ export class FcUnspentDeclarationRowService {
           ulbName: t.row.ulbName,
           allocationAmount: t.row.allocationAmount,
           unspentAmount: t.row.unspentAmount,
+          previousFcUnspentBalance: t.row.previousFcUnspentBalance,
           allocationPerc: t.row.allocationPerc,
           eligibility: t.row.eligibility,
           allocationSource: t.row.allocationSource,
@@ -323,7 +326,7 @@ export class FcUnspentDeclarationRowService {
       .find({ form: formId, isActive: true })
       .sort({ rowNumber: 1, _id: 1 })
       .select(
-        'rowNumber ulbId censusCode sbCode ulbName allocationAmount unspentAmount allocationPerc eligibility rowStatus rejectionRemark allocationSource',
+        'rowNumber ulbId censusCode sbCode ulbName allocationAmount unspentAmount previousFcUnspentBalance allocationPerc eligibility rowStatus rejectionRemark allocationSource',
       );
     if (session) query.session(session);
     return query.lean<FcUnspentActiveRowLean[]>().exec();

@@ -108,12 +108,10 @@ export class FcUnspentDeclarationDocumentService {
 
     const rows: FcUnspentDeclarationDocumentRow[] = activeRows.map((row, index) => ({
       slNo: index + 1,
-      censusCode: row.censusCode || '-',
+      censusCode: row.censusCode || row.sbCode || '-',
       ulbName: row.ulbName,
-      allocationAmount: row.allocationAmount,
       unspentAmount: row.unspentAmount,
-      allocationPerc: row.allocationPerc,
-      eligibility: row.eligibility,
+      previousFcUnspentBalance: row.previousFcUnspentBalance,
     }));
 
     return { isFcUnspent: true, stateName, designYearLabel, priorFcCycleLabel, priorFcCycleFullLabel, rows };

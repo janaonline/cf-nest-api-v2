@@ -64,6 +64,7 @@ function makeRow(overrides: Partial<FcUnspentMohuaRowLean> = {}): FcUnspentMohua
     ulbName: 'Alpha ULB',
     allocationAmount: 100,
     unspentAmount: 5,
+    previousFcUnspentBalance: 3,
     allocationPerc: 5,
     eligibility: true,
     rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
@@ -322,14 +323,18 @@ describe('FcUnspentMohuaReviewService', () => {
     });
 
     it('Yes-branch: blocks when any active row is REJECTED', async () => {
-      domainService['getActiveRows'] = jest.fn().mockResolvedValue([makeRow({ rowStatus: FORM_STATUS.RETURNED_BY_MOHUA })]);
+      domainService['getActiveRows'] = jest
+        .fn()
+        .mockResolvedValue([makeRow({ rowStatus: FORM_STATUS.RETURNED_BY_MOHUA })]);
       await expect(
         service.approveCompleteForm(stateOid.toString(), yearOid.toString(), mohuaUser, '127.0.0.1', 'jest'),
       ).rejects.toThrow(BadRequestException);
     });
 
     it('Yes-branch: blocks when any active row is NEEDS_UPDATE', async () => {
-      domainService['getActiveRows'] = jest.fn().mockResolvedValue([makeRow({ rowStatus: FORM_STATUS.ACTION_REQUIRED })]);
+      domainService['getActiveRows'] = jest
+        .fn()
+        .mockResolvedValue([makeRow({ rowStatus: FORM_STATUS.ACTION_REQUIRED })]);
       await expect(
         service.approveCompleteForm(stateOid.toString(), yearOid.toString(), mohuaUser, '127.0.0.1', 'jest'),
       ).rejects.toThrow(BadRequestException);
@@ -356,7 +361,9 @@ describe('FcUnspentMohuaReviewService', () => {
     });
 
     it('Yes-branch: acknowledges the parent and writes parent history atomically', async () => {
-      domainService['getActiveRows'] = jest.fn().mockResolvedValue([makeRow({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA })]);
+      domainService['getActiveRows'] = jest
+        .fn()
+        .mockResolvedValue([makeRow({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA })]);
 
       await service.approveCompleteForm(stateOid.toString(), yearOid.toString(), mohuaUser, '127.0.0.1', 'jest');
 
@@ -373,7 +380,9 @@ describe('FcUnspentMohuaReviewService', () => {
     });
 
     it('rolls back the transaction when a domain-service call throws', async () => {
-      domainService['getActiveRows'] = jest.fn().mockResolvedValue([makeRow({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA })]);
+      domainService['getActiveRows'] = jest
+        .fn()
+        .mockResolvedValue([makeRow({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA })]);
       domainService['transitionParent'] = jest.fn().mockRejectedValue(new Error('db error'));
 
       await expect(
@@ -435,7 +444,9 @@ describe('FcUnspentMohuaReviewService', () => {
     });
 
     it('Yes-branch: blocks when any active row has already reached ACTIVE', async () => {
-      domainService['getActiveRows'] = jest.fn().mockResolvedValue([makeRow({ rowStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA })]);
+      domainService['getActiveRows'] = jest
+        .fn()
+        .mockResolvedValue([makeRow({ rowStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA })]);
       await expect(
         service.rejectCompleteForm(
           stateOid.toString(),

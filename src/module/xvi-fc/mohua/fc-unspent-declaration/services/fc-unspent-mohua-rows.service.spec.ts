@@ -62,6 +62,7 @@ function makeRow(overrides: Partial<FcUnspentMohuaRowLean> = {}): FcUnspentMohua
     ulbName: 'Alpha ULB',
     allocationAmount: 100,
     unspentAmount: 5,
+    previousFcUnspentBalance: 3,
     allocationPerc: 5,
     eligibility: true,
     rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
@@ -151,7 +152,9 @@ describe('FcUnspentMohuaRowsService', () => {
         { rowStatus: FORM_STATUS.RETURNED_BY_MOHUA } as GetFcUnspentMohuaRowsQueryDto,
         mohuaUser,
       );
-      expect(rowModel['find']).toHaveBeenCalledWith(expect.objectContaining({ rowStatus: FORM_STATUS.RETURNED_BY_MOHUA }));
+      expect(rowModel['find']).toHaveBeenCalledWith(
+        expect.objectContaining({ rowStatus: FORM_STATUS.RETURNED_BY_MOHUA }),
+      );
     });
 
     it('applies an eligibility filter', async () => {
@@ -190,7 +193,10 @@ describe('FcUnspentMohuaRowsService', () => {
       rowModel['find'] = jest
         .fn()
         .mockReturnValue(
-          q([makeRow({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }), makeRow({ rowStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA })]),
+          q([
+            makeRow({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }),
+            makeRow({ rowStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA }),
+          ]),
         );
 
       const result = await service.getRows(
@@ -284,7 +290,9 @@ describe('FcUnspentMohuaRowsService', () => {
 
       const transitionArgs = domainService['transitionRows'].mock.calls[0] as unknown[];
       const transitions = transitionArgs[3] as Array<{ newStatus: string; rejectionRemark: string | null }>;
-      expect(transitions).toEqual([{ row, newStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA, rejectionRemark: null }]);
+      expect(transitions).toEqual([
+        { row, newStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA, rejectionRemark: null },
+      ]);
     });
 
     it('acknowledges the parent atomically when the domain service reports full resolution', async () => {
@@ -393,7 +401,9 @@ describe('FcUnspentMohuaRowsService', () => {
 
       const transitionArgs = domainService['transitionRows'].mock.calls[0] as unknown[];
       const transitions = transitionArgs[3] as Array<{ newStatus: string; rejectionRemark: string }>;
-      expect(transitions).toEqual([{ row, newStatus: FORM_STATUS.RETURNED_BY_MOHUA, rejectionRemark: 'Allocation mismatch.' }]);
+      expect(transitions).toEqual([
+        { row, newStatus: FORM_STATUS.RETURNED_BY_MOHUA, rejectionRemark: 'Allocation mismatch.' },
+      ]);
       expect(domainService['maybeAcknowledgeAfterBulkAction']).not.toHaveBeenCalled();
       expect(result.data!.parentAcknowledged).toBe(false);
     });
