@@ -50,7 +50,12 @@ interface AnnualAccountPdfFile {
   url?: string;
   pageCount?: number;
   fileSizeBytes?: number;
+  metadataRetryCount?: number;
+  metadataRetryUrl?: string;
 }
+
+// After this many failed attempts at the same url, permanently give up on the field (see below).
+const PDF_METADATA_MAX_RETRIES = 2;
 
 type AnnualAccountProvisionalData = Partial<Record<AnnualAccountPdfField, { pdf?: AnnualAccountPdfFile }>>;
 
@@ -151,7 +156,7 @@ export class AfsDigitizationService {
       return summary;
     }
 
-    const tasks: { pdfPath: string; url: string }[] = [];
+    const tasks: { pdfPath: string; url: string; priorRetryCount: number }[] = [];
 
     for (const auditType of ANNUAL_ACCOUNT_AUDIT_TYPES) {
       for (const pdfField of ANNUAL_ACCOUNT_PDF_FIELDS) {
@@ -164,7 +169,10 @@ export class AfsDigitizationService {
         }
 
         summary.totalPdfsFound += 1;
-        tasks.push({ pdfPath, url: pdf.url });
+        // A retry count only carries over if it was tracked against this exact url — a
+        // different url (e.g. a re-uploaded replacement file) starts fresh at 0.
+        const priorRetryCount = pdf.metadataRetryUrl === pdf.url ? (pdf.metadataRetryCount ?? 0) : 0;
+        tasks.push({ pdfPath, url: pdf.url, priorRetryCount });
       }
     }
 
@@ -172,9 +180,9 @@ export class AfsDigitizationService {
     // doesn't discard successfully fetched PDFs.
     const results = await Promise.allSettled(tasks.map((task) => this.getPdfMetadata(task.url)));
 
-    const setPayload: Record<string, number> = {};
+    const setPayload: Record<string, number | string | null> = {};
     results.forEach((result, i) => {
-      const { pdfPath } = tasks[i];
+      const { pdfPath, url, priorRetryCount } = tasks[i];
       if (result.status === 'fulfilled') {
         setPayload[`${pdfPath}.pageCount`] = result.value.pageCount;
         setPayload[`${pdfPath}.fileSizeBytes`] = result.value.fileSizeBytes;
@@ -185,6 +193,23 @@ export class AfsDigitizationService {
           `Failed to update annual account PDF metadata for ${annualAccountId} at ${pdfPath}`,
           result.reason instanceof Error ? result.reason.stack : String(result.reason),
         );
+
+        const newRetryCount = priorRetryCount + 1;
+        setPayload[`${pdfPath}.metadataRetryCount`] = newRetryCount;
+        setPayload[`${pdfPath}.metadataRetryUrl`] = url;
+
+        if (newRetryCount >= PDF_METADATA_MAX_RETRIES) {
+          // Permanently give up on this field: null (not absent) satisfies the backfill
+          // filter's $exists check, so it stops matching "missing" forever — without this,
+          // a permanently-broken PDF (e.g. one pdf-lib can never parse) keeps its whole
+          // document matching onlyMissing indefinitely, redoing all its other fields too.
+          setPayload[`${pdfPath}.pageCount`] = null;
+          setPayload[`${pdfPath}.fileSizeBytes`] = null;
+          this.logger.warn(
+            `Giving up on annual account PDF metadata for ${annualAccountId} at ${pdfPath} after ` +
+              `${newRetryCount} failed attempts at ${url} — marked permanently unavailable.`,
+          );
+        }
       }
     });
 
