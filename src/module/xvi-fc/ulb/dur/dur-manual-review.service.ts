@@ -2,12 +2,15 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  HttpException,
+  HttpStatus,
   Injectable,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, PipelineStage, Types } from 'mongoose';
+import type { Readable } from 'stream';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { User, UserDocument } from 'src/schemas/user/user.schema';
 import { MANUAL_REVIEW_SLA_HOURS } from 'src/schemas/xvi-fc/manual-review-request.schema';
@@ -20,6 +23,14 @@ import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { buildDecisionRecord, resolveDeciderName } from 'src/module/xvi-fc/common/utils/xvi-fc-decision.util';
 import { escapeRegex } from 'src/common/utils/regex.util';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
+import { S3Service } from 'src/core/s3/s3.service';
+import {
+  buildContentDisposition,
+  getContentType,
+  getErrorMessage,
+  isS3NotFoundError,
+  sanitizeFilename,
+} from 'src/module/file/file-response.util';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import {
   MAX_POST_REJECTION_ATTEMPTS,
@@ -30,6 +41,15 @@ import {
 import { ManualReviewDecisionDto } from 'src/module/xvi-fc/ulb/annual_accounts/dto/manual-review-decision.dto';
 import { ManualReviewQueueQueryDto } from 'src/module/xvi-fc/ulb/annual_accounts/dto/manual-review-queue-query.dto';
 import { DurService } from './dur.service';
+
+/** Everything the controller needs to stream a DUR document's file to the client — same shape as
+ *  FileService.PreparedDownload, but resolved by {durId, docId} + a live auth check instead of a
+ *  signed, self-expiring token. */
+export interface DurDocumentDownload {
+  key: string;
+  stream: Readable;
+  headers: { contentType: string; contentDisposition: string };
+}
 
 /**
  * DUR's manual-review workflow — same shape as AnnualAccountManualReviewService, retargeted at
@@ -56,6 +76,7 @@ export class DurManualReviewService {
 
     private readonly durService: DurService,
     private readonly fileTokenService: FileTokenService,
+    private readonly s3Service: S3Service,
   ) {}
 
   // ─── ULB requests manual review of a failed validation ───────────────────────
@@ -318,6 +339,12 @@ export class DurManualReviewService {
     ];
 
     const [result] = await this.durModel.aggregate(pipeline).exec();
+    // fileUrl here is a *marker* the frontend uses to decide whether to show a download control at
+    // all (see ManualReviewQueueRow.fileUrl) — the actual download goes through
+    // getDocumentDownload() below (an authenticated, non-expiring endpoint keyed by
+    // {durId, docId, uploadId}), not this signed, 24-minute-expiry token. Kept as a real signed
+    // URL (rather than a boolean) only for parity with Annual Account rows, which still use it
+    // directly.
     const rows = (result?.data ?? []).map(({ filePath, ...row }: any) => ({
       ...row,
       fileUrl: filePath ? this.fileTokenService.signFileUrl(filePath, 'inline') : null,
@@ -325,5 +352,56 @@ export class DurManualReviewService {
     const total = result?.totalCount?.[0]?.count ?? 0;
 
     return { total, page, pageSize, rows };
+  }
+
+  // ─── ADMIN downloads a document's original uploaded file ────────────────────
+
+  /**
+   * Resolves an authenticated, non-expiring download for one DUR document — unlike a signed
+   * FileTokenService URL (self-contained, expires ~24 minutes after being issued, valid for
+   * anyone who holds it with no live session check), this re-checks the caller's role on every
+   * request and never expires on its own. `uploadId`, when supplied, must match the document's
+   * *current* upload — DUR has no upload-history collection, so once a newer upload replaces
+   * `currentUpload` the old file's S3 key is no longer resolvable through our data model at all;
+   * rather than silently serving whatever the current file happens to be, this rejects so the
+   * caller knows the file they were looking at has since been superseded.
+   */
+  async getDocumentDownload(
+    id: string,
+    docId: XviFcDurDocId,
+    uploadId: string | undefined,
+    user: AuthUser,
+  ): Promise<DurDocumentDownload> {
+    if (user.scope !== Scope.ADMIN) {
+      throw new ForbiddenException('Only ADMIN users may download manual-review documents');
+    }
+
+    const dur = await this.durModel.findById(new Types.ObjectId(id)).lean().exec();
+    if (!dur) throw new NotFoundException('DUR form not found');
+
+    const docSlot = dur.documents.find((d) => d.docId === docId);
+    if (!docSlot?.currentUpload) throw new NotFoundException('Document not found');
+
+    if (uploadId && docSlot.currentUpload.uploadId !== uploadId) {
+      throw new ConflictException(
+        'This document has been replaced by a newer upload since this link was generated.',
+      );
+    }
+
+    const key = docSlot.currentUpload.file.path;
+    const filename = sanitizeFilename(docSlot.currentUpload.file.originalName || 'document.pdf');
+    const contentType = docSlot.currentUpload.file.mimeType || getContentType(filename);
+    const contentDisposition = buildContentDisposition(contentType, filename, 'attachment');
+
+    let stream: Readable;
+    try {
+      stream = await this.s3Service.getObjectStream(key);
+    } catch (err: unknown) {
+      if (isS3NotFoundError(err)) throw new NotFoundException('File not found in storage');
+      this.logger.error(`S3 stream init failed for key "${key}": ${getErrorMessage(err)}`);
+      throw new HttpException('Failed to initiate file download', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+
+    return { key, stream, headers: { contentType, contentDisposition } };
   }
 }

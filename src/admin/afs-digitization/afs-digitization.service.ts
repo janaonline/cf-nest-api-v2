@@ -49,8 +49,13 @@ interface AnnualAccountPdfFile {
   name?: string;
   url?: string;
   pageCount?: number;
-  fileSizeKb?: number;
+  fileSizeBytes?: number;
+  metadataRetryCount?: number;
+  metadataRetryUrl?: string;
 }
+
+// After this many failed attempts at the same url, permanently give up on the field (see below).
+const PDF_METADATA_MAX_RETRIES = 2;
 
 type AnnualAccountProvisionalData = Partial<Record<AnnualAccountPdfField, { pdf?: AnnualAccountPdfFile }>>;
 
@@ -60,7 +65,7 @@ type AnnualAccountDataLean = Partial<
 
 interface AnnualAccountPdfMetadata {
   pageCount: number;
-  fileSizeKb: number;
+  fileSizeBytes: number;
 }
 
 export interface AnnualAccountPdfMetadataSummary {
@@ -68,6 +73,7 @@ export interface AnnualAccountPdfMetadataSummary {
   updated: number;
   skipped: number;
   failed: number;
+  exhausted: number;
 }
 
 export interface AnnualAccountPdfMetadataBackfillOptions {
@@ -130,12 +136,17 @@ export class AfsDigitizationService {
     private readonly s3Service: S3Service,
   ) {}
 
-  async updatePdfMetadataForAnnualAccount(annualAccountId: string): Promise<AnnualAccountPdfMetadataSummary> {
+  async updatePdfMetadataForAnnualAccount(
+    annualAccountId: string,
+    options: { skipExhausted?: boolean } = {},
+  ): Promise<AnnualAccountPdfMetadataSummary> {
+    const skipExhausted = options.skipExhausted ?? true;
     const summary: AnnualAccountPdfMetadataSummary = {
       totalPdfsFound: 0,
       updated: 0,
       skipped: 0,
       failed: 0,
+      exhausted: 0,
     };
 
     if (!Types.ObjectId.isValid(annualAccountId)) {
@@ -151,7 +162,7 @@ export class AfsDigitizationService {
       return summary;
     }
 
-    const setPayload: Record<string, number> = {};
+    const tasks: { pdfPath: string; url: string; priorRetryCount: number }[] = [];
 
     for (const auditType of ANNUAL_ACCOUNT_AUDIT_TYPES) {
       for (const pdfField of ANNUAL_ACCOUNT_PDF_FIELDS) {
@@ -163,27 +174,84 @@ export class AfsDigitizationService {
           continue;
         }
 
-        summary.totalPdfsFound += 1;
+        // A retry count only carries over if it was tracked against this exact url — a
+        // different url (e.g. a re-uploaded replacement file) starts fresh at 0.
+        const priorRetryCount = pdf.metadataRetryUrl === pdf.url ? (pdf.metadataRetryCount ?? 0) : 0;
+        const isExhausted =
+          priorRetryCount >= PDF_METADATA_MAX_RETRIES && pdf.pageCount === null && pdf.fileSizeBytes === null;
 
-        try {
-          const metadata = await this.getPdfMetadata(pdf.url);
-          setPayload[`${pdfPath}.pageCount`] = metadata.pageCount;
-          setPayload[`${pdfPath}.fileSizeKb`] = metadata.fileSizeKb;
-          summary.updated += 1;
-        } catch (error) {
-          summary.failed += 1;
-          this.logger.error(
-            `Failed to update annual account PDF metadata for ${annualAccountId} at ${pdfPath}`,
-            error instanceof Error ? error.stack : String(error),
-          );
+        if (skipExhausted && isExhausted) {
+          // Already gave up on this exact field twice — don't keep re-fetching a PDF we
+          // know is broken every time this document is touched for some other field.
+          summary.exhausted += 1;
+          continue;
         }
+
+        summary.totalPdfsFound += 1;
+        tasks.push({ pdfPath, url: pdf.url, priorRetryCount });
       }
     }
 
+    // Fetch PDFs concurrently (up to 12); use allSettled so one failure
+    // doesn't discard successfully fetched PDFs.
+    const results = await Promise.allSettled(tasks.map((task) => this.getPdfMetadata(task.url)));
+
+    const setPayload: Record<string, number | string | null> = {};
+    results.forEach((result, i) => {
+      const { pdfPath, url, priorRetryCount } = tasks[i];
+      if (result.status === 'fulfilled') {
+        setPayload[`${pdfPath}.pageCount`] = result.value.pageCount;
+        setPayload[`${pdfPath}.fileSizeBytes`] = result.value.fileSizeBytes;
+        // Reset so metadataRetryCount tracks *consecutive* failures since the last success —
+        // without this, a stale count from an earlier (already-recovered) failure could make a
+        // later, unrelated single failure look like the 2nd consecutive one and wipe out the
+        // real data just written above with the give-up null sentinel.
+        setPayload[`${pdfPath}.metadataRetryCount`] = 0;
+        setPayload[`${pdfPath}.metadataRetryUrl`] = url;
+        summary.updated += 1;
+      } else {
+        summary.failed += 1;
+        this.logger.error(
+          `Failed to update annual account PDF metadata for ${annualAccountId} at ${pdfPath}`,
+          result.reason instanceof Error ? result.reason.stack : String(result.reason),
+        );
+
+        const newRetryCount = priorRetryCount + 1;
+        setPayload[`${pdfPath}.metadataRetryCount`] = newRetryCount;
+        setPayload[`${pdfPath}.metadataRetryUrl`] = url;
+
+        if (newRetryCount >= PDF_METADATA_MAX_RETRIES) {
+          // Permanently give up on this field: null (not absent) satisfies the backfill
+          // filter's $exists check, so it stops matching "missing" forever — without this,
+          // a permanently-broken PDF (e.g. one pdf-lib can never parse) keeps its whole
+          // document matching onlyMissing indefinitely, redoing all its other fields too.
+          setPayload[`${pdfPath}.pageCount`] = null;
+          setPayload[`${pdfPath}.fileSizeBytes`] = null;
+          this.logger.warn(
+            `Giving up on annual account PDF metadata for ${annualAccountId} at ${pdfPath} after ` +
+              `${newRetryCount} failed attempts at ${url} — marked permanently unavailable.`,
+          );
+        }
+      }
+    });
+
     if (Object.keys(setPayload).length > 0) {
-      await this.annualAccountModel
-        .updateOne({ _id: new Types.ObjectId(annualAccountId) }, { $set: setPayload })
+      // strict: false — prevents Mongoose from dropping unknown $set paths,
+      // which can make updateOne report success without writing anything.
+      const result = await this.annualAccountModel
+        .updateOne({ _id: new Types.ObjectId(annualAccountId) }, { $set: setPayload }, { strict: false })
         .exec();
+
+      if (result.matchedCount > 0 && result.modifiedCount === 0) {
+        // Matched, but nothing changed — metadata wasn't persisted, so don't report success
+        // or repeatedly match the backfill filter.
+        this.logger.warn(
+          `Annual account PDF metadata update for ${annualAccountId} matched but modifiedCount=0 — ` +
+            `treating ${summary.updated} computed update(s) as failed instead of persisted`,
+        );
+        summary.failed += summary.updated;
+        summary.updated = 0;
+      }
     }
 
     this.logger.log(`Annual account PDF metadata update completed for ${annualAccountId}`, summary);
@@ -208,7 +276,8 @@ export class AfsDigitizationService {
   ): Promise<AnnualAccountPdfMetadataBackfillSummary> {
     const batchSize = this.clampPositiveInteger(options.batchSize, 25, 1, 100);
     const limit = options.limit ? this.clampPositiveInteger(options.limit, 0, 1, 18_000) : undefined;
-    const filter = this.buildAnnualAccountPdfMetadataBackfillFilter(options.onlyMissing ?? true);
+    const onlyMissing = options.onlyMissing ?? true;
+    const filter = this.buildAnnualAccountPdfMetadataBackfillFilter(onlyMissing);
     const matchedDocuments = await this.annualAccountModel.countDocuments(filter).exec();
     const documentsMatched = limit ? Math.min(matchedDocuments, limit) : matchedDocuments;
     const startedAt = Date.now();
@@ -222,6 +291,7 @@ export class AfsDigitizationService {
       updated: 0,
       skipped: 0,
       failed: 0,
+      exhausted: 0,
       elapsedMs: 0,
       averageMsPerDocument: 0,
       estimatedRemainingMs: 0,
@@ -254,11 +324,14 @@ export class AfsDigitizationService {
         summary.documentsProcessed += 1;
 
         try {
-          const docSummary = await this.updatePdfMetadataForAnnualAccount(doc._id.toString());
+          const docSummary = await this.updatePdfMetadataForAnnualAccount(doc._id.toString(), {
+            skipExhausted: onlyMissing,
+          });
           summary.totalPdfsFound += docSummary.totalPdfsFound;
           summary.updated += docSummary.updated;
           summary.skipped += docSummary.skipped;
           summary.failed += docSummary.failed;
+          summary.exhausted += docSummary.exhausted;
 
           if (docSummary.failed > 0) {
             summary.documentsFailed += 1;
@@ -310,9 +383,11 @@ export class AfsDigitizationService {
   }
 
   private buildAnnualAccountPdfMetadataBackfillFilter(onlyMissing: boolean): FilterQuery<AnnualAccountDataDocument> {
+    // $nin: [null, ''] — exclude both null and empty URLs. $ne: '' treats null as valid,
+    // causing documents with no file to match the backfill forever.
     const pdfUrlFilters = ANNUAL_ACCOUNT_AUDIT_TYPES.flatMap((auditType) =>
       ANNUAL_ACCOUNT_PDF_FIELDS.map((pdfField) => ({
-        [`${auditType}.provisional_data.${pdfField}.pdf.url`]: { $exists: true, $ne: '' },
+        [`${auditType}.provisional_data.${pdfField}.pdf.url`]: { $exists: true, $nin: [null, ''] },
       })),
     );
 
@@ -323,12 +398,12 @@ export class AfsDigitizationService {
     const missingMetadataFilters = ANNUAL_ACCOUNT_AUDIT_TYPES.flatMap((auditType) =>
       ANNUAL_ACCOUNT_PDF_FIELDS.flatMap((pdfField) => [
         {
-          [`${auditType}.provisional_data.${pdfField}.pdf.url`]: { $exists: true, $ne: '' },
+          [`${auditType}.provisional_data.${pdfField}.pdf.url`]: { $exists: true, $nin: [null, ''] },
           [`${auditType}.provisional_data.${pdfField}.pdf.pageCount`]: { $exists: false },
         },
         {
-          [`${auditType}.provisional_data.${pdfField}.pdf.url`]: { $exists: true, $ne: '' },
-          [`${auditType}.provisional_data.${pdfField}.pdf.fileSizeKb`]: { $exists: false },
+          [`${auditType}.provisional_data.${pdfField}.pdf.url`]: { $exists: true, $nin: [null, ''] },
+          [`${auditType}.provisional_data.${pdfField}.pdf.fileSizeBytes`]: { $exists: false },
         },
       ]),
     );
@@ -360,7 +435,7 @@ export class AfsDigitizationService {
     const sizeInBytes = contentLength ?? buffer.length;
     return {
       pageCount: await this.s3Service.getPdfPageCountFromBuffer(buffer),
-      fileSizeKb: Math.round((sizeInBytes / 1024) * 100) / 100,
+      fileSizeBytes: sizeInBytes,
     };
   }
 

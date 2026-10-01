@@ -1,6 +1,20 @@
-import { BadRequestException, Body, Controller, Get, HttpCode, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Logger,
+  Param,
+  Post,
+  Query,
+  Req,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation } from '@nestjs/swagger/dist/decorators';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 import { CurrentUser } from 'src/module/auth/decorators/current-user.decorator';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Permission } from 'src/module/auth/enum/roles-xvi-fc.enum';
@@ -8,6 +22,7 @@ import { PermissionGuard } from 'src/module/auth/permission.guard';
 import { RequirePermissions } from 'src/module/auth/require-permissions.decorator';
 import { ParseObjectIdPipe } from 'src/common/pipes/parse-object-id.pipe';
 import { extractIpAndUserAgent } from 'src/module/xvi-fc/common/utils/xvi-fc-request-meta.util';
+import { getErrorMessage, isS3NotFoundError } from 'src/module/file/file-response.util';
 import { ManualReviewDecisionDto } from 'src/module/xvi-fc/ulb/annual_accounts/dto/manual-review-decision.dto';
 import { ManualReviewQueueQueryDto } from 'src/module/xvi-fc/ulb/annual_accounts/dto/manual-review-queue-query.dto';
 import { DUR_DOC_IDS, type XviFcDurDocId } from 'src/schemas/xvi-fc/dur.schema';
@@ -28,6 +43,8 @@ function assertValidDocId(docId: string): asserts docId is XviFcDurDocId {
 @ApiBearerAuth()
 @Controller('xvi-fc/dur')
 export class DurController {
+  private readonly logger = new Logger(DurController.name);
+
   constructor(
     private readonly durService: DurService,
     private readonly manualReviewService: DurManualReviewService,
@@ -164,5 +181,46 @@ export class DurController {
     assertValidDocId(docId);
     const { ipAddress, userAgent } = extractIpAndUserAgent(req);
     return this.manualReviewService.decideManualReview(id, docId, dto, user, ipAddress, userAgent);
+  }
+
+  /**
+   * ADMIN downloads a document's original uploaded file. Deliberately not a signed-URL/token
+   * link — auth is the caller's live session (this route sits behind the same JwtAuthGuard as
+   * every other endpoint here), re-checked on every request, so the link itself never expires
+   * and can't be forwarded/reused outside an authenticated session the way a signed token could.
+   * `uploadId` is optional but should always be sent when available (the manual-review queue row
+   * always has it) — it guards against downloading a file that's since been replaced by a newer
+   * upload; see DurManualReviewService.getDocumentDownload.
+   */
+  @Get(':id/documents/:docId/download')
+  @ApiOperation({ summary: "ADMIN downloads a DUR document's original uploaded file (no expiry, session-authenticated)" })
+  async downloadDocument(
+    @Param('id', ParseObjectIdPipe) id: string,
+    @Param('docId') docId: string,
+    @Query('uploadId') uploadId: string | undefined,
+    @CurrentUser() user: AuthUser,
+    @Res() res: Response,
+  ): Promise<void> {
+    assertValidDocId(docId);
+    const { key, stream, headers } = await this.manualReviewService.getDocumentDownload(id, docId, uploadId, user);
+
+    stream.on('error', (err: unknown) => {
+      this.logger.error(`S3 stream error for key "${key}": ${getErrorMessage(err)}`);
+      if (res.headersSent) {
+        res.destroy();
+        return;
+      }
+      const is404 = isS3NotFoundError(err);
+      res
+        .status(is404 ? HttpStatus.NOT_FOUND : HttpStatus.INTERNAL_SERVER_ERROR)
+        .json({ success: false, message: is404 ? 'File not found' : 'Failed to stream file' });
+    });
+
+    res.setHeader('Content-Type', headers.contentType);
+    res.setHeader('Content-Disposition', headers.contentDisposition);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Cache-Control', 'no-store');
+
+    stream.pipe(res);
   }
 }
