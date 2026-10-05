@@ -32,7 +32,13 @@ class PdfFile {
   pageCount?: number;
 
   @Prop()
-  fileSizeKb?: number;
+  fileSizeBytes?: number;
+
+  @Prop()
+  metadataRetryCount?: number; // consecutive failed pageCount/fileSizeBytes attempts at metadataRetryUrl
+
+  @Prop()
+  metadataRetryUrl?: string; // the url metadataRetryCount is tracked against
 }
 export const PdfFileSchema = SchemaFactory.createForClass(PdfFile);
 

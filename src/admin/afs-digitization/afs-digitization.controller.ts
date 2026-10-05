@@ -82,16 +82,18 @@ export class AfsDigitizationController {
    * @param id
    * @returns
    */
+  @Public() // TEMP: To be removed.
   @ApiBearerAuth()
   @Post('annual-account/:id/pdf-metadata')
-  async updateAnnualAccountPdfMetadata(@Param('id') id: string) {
+  async updateAnnualAccountPdfMetadata(@Param('id') id: string, @Query('forceRefresh') forceRefresh?: string) {
     return {
       status: 'success',
-      data: await this.afsService.updatePdfMetadataForAnnualAccount(id),
+      data: await this.afsService.updatePdfMetadataForAnnualAccount(id, { skipExhausted: forceRefresh !== 'true' }),
     };
   }
 
   @ApiBearerAuth()
+  @Public() // TEMP: To be removed.
   @Get('annual-accounts/pdf-metadata/status')
   async getAnnualAccountPdfMetadataStatus() {
     return {
@@ -104,6 +106,7 @@ export class AfsDigitizationController {
    * Backfills PDF metadata for annual account documents.
    */
   @ApiBearerAuth()
+  @Public() // TEMP: To be removed.
   @Post('annual-accounts/pdf-metadata/backfill')
   async backfillAnnualAccountPdfMetadata(
     @Query('batchSize') batchSize?: string,
