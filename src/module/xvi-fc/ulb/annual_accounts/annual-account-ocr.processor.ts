@@ -18,7 +18,7 @@ import {
   OcrBasicValidation,
 } from './annual-account-ocr-api.service';
 import type { AnnualAccountOcrJobData } from './dto/annual-account-ocr-job.dto';
-import { MAX_POST_REJECTION_ATTEMPTS, POST_REJECTION_COOLDOWN_DAYS } from './annual-account-status-access.util';
+import { MAX_POST_REJECTION_ATTEMPTS, POST_REJECTION_COOLDOWN_HOURS } from './annual-account-status-access.util';
 
 const POLL_INTERVAL_MS = 5_000;
 const MAX_POLLS = 10;
@@ -261,7 +261,7 @@ export class AnnualAccountOcrProcessor extends WorkerHost {
    * regardless of how it got there. A FAIL only counts as a "strike" while a RETURNED manual-review
    * decision is still the live one for this document — an ordinary first-time OCR failure (no
    * rejection yet) must not consume any of the 3 attempts. The moment the strike count reaches
-   * MAX_POST_REJECTION_ATTEMPTS, the document is blocked for POST_REJECTION_COOLDOWN_DAYS right
+   * MAX_POST_REJECTION_ATTEMPTS, the document is blocked for POST_REJECTION_COOLDOWN_HOURS right
    * here — no second manual-review request/rejection round-trip required first. Reads the current
    * docSlot first since Mongo can't conditionally $inc off another field of the same array element
    * in one plain updateOne.
@@ -294,7 +294,7 @@ export class AnnualAccountOcrProcessor extends WorkerHost {
     const update: Record<string, unknown> = { 'documents.$.postRejectionAttemptsUsed': attemptsUsed };
     if (attemptsUsed >= MAX_POST_REJECTION_ATTEMPTS) {
       update['documents.$.uploadBlockedUntil'] = new Date(
-        Date.now() + POST_REJECTION_COOLDOWN_DAYS * 24 * 60 * 60 * 1000,
+        Date.now() + POST_REJECTION_COOLDOWN_HOURS * 60 * 60 * 1000,
       );
     }
     return update;

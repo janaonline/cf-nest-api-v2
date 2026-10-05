@@ -1,4 +1,4 @@
-import { ConflictException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { DurManualReviewService } from './dur-manual-review.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 
@@ -29,6 +29,7 @@ describe('DurManualReviewService.getManualReviewQueue', () => {
       {} as any,
       {} as any,
       mockFileTokenService as any,
+      {} as any,
     );
   });
 
@@ -103,6 +104,7 @@ describe('DurManualReviewService.decideManualReview', () => {
       mockManualReviewRequestModel as any,
       mockDurService as any,
       {} as any,
+      {} as any,
     );
   });
 
@@ -134,6 +136,115 @@ describe('DurManualReviewService.decideManualReview', () => {
     expect(mockDurModel.updateOne).toHaveBeenCalledWith(
       { _id: DUR_ID, documents: { $elemMatch: { docId: 'tiedGrant', manualReviewDecision: null } } },
       expect.objectContaining({ $set: expect.objectContaining({ 'documents.$.processingStatus': 'PASSED' }) }),
+    );
+  });
+});
+
+describe('DurManualReviewService.getDocumentDownload', () => {
+  let service: DurManualReviewService;
+  let mockDurModel: { findById: jest.Mock };
+  let mockS3Service: { getObjectStream: jest.Mock };
+
+  const adminUser: AuthUser = { _id: 'admin-1', role: 'ADMIN', scope: 'ADMIN' } as AuthUser;
+  const stateUser: AuthUser = { _id: 'user-2', role: 'STATE', scope: 'STATE' } as AuthUser;
+
+  const DUR_ID = '507f1f77bcf86cd799439014';
+  const fakeStream = { on: jest.fn(), pipe: jest.fn() };
+
+  const durWithDocSlot = (docSlotOverrides: Record<string, unknown> = {}) => ({
+    _id: DUR_ID,
+    documents: [
+      {
+        docId: 'tiedGrant',
+        currentUpload: {
+          uploadId: 'upload-1',
+          file: { path: 's3/key/tiedGrant.pdf', originalName: 'tiedGrant.pdf', mimeType: 'application/pdf' },
+        },
+        ...docSlotOverrides,
+      },
+    ],
+  });
+
+  beforeEach(() => {
+    mockDurModel = { findById: jest.fn() };
+    mockS3Service = { getObjectStream: jest.fn().mockResolvedValue(fakeStream) };
+
+    service = new DurManualReviewService(
+      mockDurModel as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      mockS3Service as any,
+    );
+  });
+
+  it('rejects non-ADMIN users', async () => {
+    await expect(service.getDocumentDownload(DUR_ID, 'tiedGrant' as any, 'upload-1', stateUser)).rejects.toThrow(
+      ForbiddenException,
+    );
+    expect(mockDurModel.findById).not.toHaveBeenCalled();
+  });
+
+  it('throws NotFoundException when the DUR form does not exist', async () => {
+    mockDurModel.findById.mockReturnValue(mockQuery(null));
+
+    await expect(service.getDocumentDownload(DUR_ID, 'tiedGrant' as any, 'upload-1', adminUser)).rejects.toThrow(
+      NotFoundException,
+    );
+  });
+
+  it('throws NotFoundException when the document slot has no upload', async () => {
+    mockDurModel.findById.mockReturnValue(mockQuery(durWithDocSlot({ currentUpload: null })));
+
+    await expect(service.getDocumentDownload(DUR_ID, 'tiedGrant' as any, 'upload-1', adminUser)).rejects.toThrow(
+      NotFoundException,
+    );
+  });
+
+  it('throws ConflictException when uploadId no longer matches the current upload', async () => {
+    mockDurModel.findById.mockReturnValue(mockQuery(durWithDocSlot()));
+
+    await expect(service.getDocumentDownload(DUR_ID, 'tiedGrant' as any, 'stale-upload', adminUser)).rejects.toThrow(
+      ConflictException,
+    );
+    expect(mockS3Service.getObjectStream).not.toHaveBeenCalled();
+  });
+
+  it('streams the file and builds headers when uploadId matches the current upload', async () => {
+    mockDurModel.findById.mockReturnValue(mockQuery(durWithDocSlot()));
+
+    const result = await service.getDocumentDownload(DUR_ID, 'tiedGrant' as any, 'upload-1', adminUser);
+
+    expect(mockS3Service.getObjectStream).toHaveBeenCalledWith('s3/key/tiedGrant.pdf');
+    expect(result.key).toBe('s3/key/tiedGrant.pdf');
+    expect(result.stream).toBe(fakeStream);
+    expect(result.headers.contentType).toBe('application/pdf');
+    expect(result.headers.contentDisposition).toContain('filename="tiedGrant.pdf"');
+  });
+
+  it('skips the uploadId check when none is supplied', async () => {
+    mockDurModel.findById.mockReturnValue(mockQuery(durWithDocSlot()));
+
+    await expect(service.getDocumentDownload(DUR_ID, 'tiedGrant' as any, undefined, adminUser)).resolves.toBeDefined();
+  });
+
+  it('wraps an S3 "not found" error as NotFoundException', async () => {
+    mockDurModel.findById.mockReturnValue(mockQuery(durWithDocSlot()));
+    mockS3Service.getObjectStream.mockRejectedValue({ name: 'NoSuchKey' });
+
+    await expect(service.getDocumentDownload(DUR_ID, 'tiedGrant' as any, 'upload-1', adminUser)).rejects.toThrow(
+      NotFoundException,
+    );
+  });
+
+  it('wraps any other S3 error as a 500', async () => {
+    mockDurModel.findById.mockReturnValue(mockQuery(durWithDocSlot()));
+    mockS3Service.getObjectStream.mockRejectedValue(new Error('connection reset'));
+
+    await expect(service.getDocumentDownload(DUR_ID, 'tiedGrant' as any, 'upload-1', adminUser)).rejects.toThrow(
+      'Failed to initiate file download',
     );
   });
 });
