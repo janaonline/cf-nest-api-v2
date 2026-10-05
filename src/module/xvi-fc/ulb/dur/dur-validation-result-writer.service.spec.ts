@@ -115,6 +115,78 @@ describe('DurValidationResultWriter', () => {
     expect(set['documents.$.uploadBlockedUntil']).toBeInstanceOf(Date);
   });
 
+  it('starts a fresh batch of attempts once a previous cooldown has already run its course', async () => {
+    // uploadBlockedUntil in the past means the ULB already served out a full lock before this
+    // retry was ever allowed to start — this failure should count as attempt 1 of a new batch,
+    // not attempt 4 of the exhausted one, and the stale lock timestamp should clear.
+    durModel.findOne.mockReturnValue(
+      findByIdChain({
+        documents: [
+          {
+            manualReviewDecision: { status: 'RETURNED' },
+            postRejectionAttemptsUsed: 3,
+            uploadBlockedUntil: new Date(Date.now() - 60_000),
+          },
+        ],
+      }),
+    );
+
+    await writer.writeCompleted(durId, docId, uploadId, {
+      job_id: 'dur-job-1',
+      status: 'completed',
+      result: { checks: { overall_valid: false } as any, failed_checks: [] },
+    });
+
+    const call = durModel.updateOne.mock.calls.find(
+      ([, update]: [unknown, { $set?: Record<string, unknown> }]) => update?.$set?.['documents.$.processingStatus'] !== undefined,
+    );
+    const set = call?.[1]?.$set as Record<string, unknown>;
+    expect(set['documents.$.postRejectionAttemptsUsed']).toBe(1);
+    expect(set['documents.$.uploadBlockedUntil']).toBeNull();
+  });
+
+  it('re-locks only after a full fresh batch of 3 failures, not after the first one post-cooldown', async () => {
+    // Simulates the real sequence: a cooldown already expired (postRejectionAttemptsUsed=3,
+    // uploadBlockedUntil in the past), then three fresh failures in a row — each write's resulting
+    // docSlot state feeds the next findOne, just like reading it back from Mongo would.
+    let docSlot: Record<string, unknown> = {
+      manualReviewDecision: { status: 'RETURNED' },
+      postRejectionAttemptsUsed: 3,
+      uploadBlockedUntil: new Date(Date.now() - 60_000),
+    };
+    const latestSet = () => {
+      const call = durModel.updateOne.mock.calls.at(-1);
+      return (call?.[1] as { $set?: Record<string, unknown> })?.$set as Record<string, unknown>;
+    };
+    const runFailure = async () => {
+      durModel.findOne.mockReturnValue(findByIdChain({ documents: [docSlot] }));
+      await writer.writeCompleted(durId, docId, uploadId, {
+        job_id: 'dur-job-1',
+        status: 'completed',
+        result: { checks: { overall_valid: false } as any, failed_checks: [] },
+      });
+      const set = latestSet();
+      docSlot = {
+        ...docSlot,
+        postRejectionAttemptsUsed: set['documents.$.postRejectionAttemptsUsed'],
+        uploadBlockedUntil: set['documents.$.uploadBlockedUntil'] ?? null,
+      };
+      return set;
+    };
+
+    const first = await runFailure();
+    expect(first['documents.$.postRejectionAttemptsUsed']).toBe(1);
+    expect(first['documents.$.uploadBlockedUntil']).toBeNull();
+
+    const second = await runFailure();
+    expect(second['documents.$.postRejectionAttemptsUsed']).toBe(2);
+    expect(second['documents.$.uploadBlockedUntil']).toBeUndefined(); // not set yet, not cleared again
+
+    const third = await runFailure();
+    expect(third['documents.$.postRejectionAttemptsUsed']).toBe(3);
+    expect(third['documents.$.uploadBlockedUntil']).toBeInstanceOf(Date); // re-locked
+  });
+
   it('clears manual-review/cooldown state entirely once a document passes', async () => {
     await writer.writeCompleted(durId, docId, uploadId, {
       job_id: 'dur-job-1',
