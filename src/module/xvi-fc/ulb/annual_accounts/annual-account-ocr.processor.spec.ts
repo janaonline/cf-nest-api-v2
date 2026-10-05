@@ -251,7 +251,7 @@ describe('AnnualAccountOcrProcessor', () => {
     );
   });
 
-  it('caps the attempt counter at 3 and sets a 7-day uploadBlockedUntil the moment attempts are exhausted', async () => {
+  it('caps the attempt counter at 3 and sets a 24h uploadBlockedUntil the moment attempts are exhausted', async () => {
     annualAccountModel.findOne.mockReturnValue(
       findByIdChain({ documents: [{ manualReviewDecision: { status: 'RETURNED' }, postRejectionAttemptsUsed: 2 }] }),
     );
@@ -269,6 +269,77 @@ describe('AnnualAccountOcrProcessor', () => {
     expect(set['documents.$.postRejectionAttemptsUsed']).toBe(3);
     expect(set['documents.$.uploadBlockedUntil']).toBeInstanceOf(Date);
     expect((set['documents.$.uploadBlockedUntil'] as Date).getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it('starts a fresh batch of attempts once a previous cooldown has already run its course', async () => {
+    // uploadBlockedUntil in the past means the ULB already served out a full lock before this
+    // retry was ever allowed to start — this failure should count as attempt 1 of a new batch,
+    // not attempt 4 of the exhausted one, and the stale lock timestamp should clear.
+    annualAccountModel.findOne.mockReturnValue(
+      findByIdChain({
+        documents: [
+          {
+            manualReviewDecision: { status: 'RETURNED' },
+            postRejectionAttemptsUsed: 3,
+            uploadBlockedUntil: new Date(Date.now() - 60_000),
+          },
+        ],
+      }),
+    );
+    ocrApi.getJobStatus.mockResolvedValue({ job_id: 'ocr-job-1', status: 'failed', message: 'OCR engine error' });
+
+    const processPromise = processor.process(makeJob());
+    await jest.advanceTimersByTimeAsync(5000);
+    await processPromise;
+
+    const call = annualAccountModel.updateOne.mock.calls.find(
+      ([, update]: [unknown, { $set?: Record<string, unknown> }]) =>
+        update?.$set?.['documents.$.processingStatus'] !== undefined,
+    );
+    const set = call?.[1]?.$set as Record<string, unknown>;
+    expect(set['documents.$.postRejectionAttemptsUsed']).toBe(1);
+    expect(set['documents.$.uploadBlockedUntil']).toBeNull();
+  });
+
+  it('re-locks only after a full fresh batch of 3 failures, not after the first one post-cooldown', async () => {
+    let docSlot: Record<string, unknown> = {
+      manualReviewDecision: { status: 'RETURNED' },
+      postRejectionAttemptsUsed: 3,
+      uploadBlockedUntil: new Date(Date.now() - 60_000),
+    };
+    const latestSet = () => {
+      const call = annualAccountModel.updateOne.mock.calls
+        .slice()
+        .reverse()
+        .find(([, update]: [unknown, { $set?: Record<string, unknown> }]) => update?.$set?.['documents.$.processingStatus'] !== undefined);
+      return (call?.[1] as { $set?: Record<string, unknown> })?.$set as Record<string, unknown>;
+    };
+    const runFailure = async () => {
+      annualAccountModel.findOne.mockReturnValue(findByIdChain({ documents: [docSlot] }));
+      ocrApi.getJobStatus.mockResolvedValue({ job_id: 'ocr-job-1', status: 'failed', message: 'OCR engine error' });
+      const processPromise = processor.process(makeJob());
+      await jest.advanceTimersByTimeAsync(5000);
+      await processPromise;
+      const set = latestSet();
+      docSlot = {
+        ...docSlot,
+        postRejectionAttemptsUsed: set['documents.$.postRejectionAttemptsUsed'],
+        uploadBlockedUntil: set['documents.$.uploadBlockedUntil'] ?? null,
+      };
+      return set;
+    };
+
+    const first = await runFailure();
+    expect(first['documents.$.postRejectionAttemptsUsed']).toBe(1);
+    expect(first['documents.$.uploadBlockedUntil']).toBeNull();
+
+    const second = await runFailure();
+    expect(second['documents.$.postRejectionAttemptsUsed']).toBe(2);
+    expect(second['documents.$.uploadBlockedUntil']).toBeUndefined();
+
+    const third = await runFailure();
+    expect(third['documents.$.postRejectionAttemptsUsed']).toBe(3);
+    expect(third['documents.$.uploadBlockedUntil']).toBeInstanceOf(Date);
   });
 
   it('clears the post-rejection state entirely once the document passes', async () => {

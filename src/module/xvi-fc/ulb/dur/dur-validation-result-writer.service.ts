@@ -115,10 +115,20 @@ export class DurValidationResultWriter {
     const docSlot = doc?.documents?.[0];
     if (docSlot?.manualReviewDecision?.status !== 'RETURNED') return {};
 
-    const attemptsUsed = nextPostRejectionAttempts(docSlot.postRejectionAttemptsUsed ?? 0);
+    // A previously-set uploadBlockedUntil can only mean the ULB already served out a full 24h lock
+    // before this retry/re-upload was ever allowed to start (assertCanUlbUpload blocks while one is
+    // still active) — so this failure opens a fresh batch of attempts, not a continuation of the
+    // batch that triggered the old lock. Without this, the ULB would get only one attempt per
+    // cycle after the first lock instead of a full fresh 3.
+    const startingFreshBatch = docSlot.uploadBlockedUntil != null;
+    const attemptsUsed = nextPostRejectionAttempts(startingFreshBatch ? 0 : docSlot.postRejectionAttemptsUsed ?? 0);
     const update: Record<string, unknown> = { 'documents.$.postRejectionAttemptsUsed': attemptsUsed };
     const uploadBlockedUntil = computeUploadBlockedUntil(attemptsUsed);
-    if (uploadBlockedUntil) update['documents.$.uploadBlockedUntil'] = uploadBlockedUntil;
+    if (uploadBlockedUntil) {
+      update['documents.$.uploadBlockedUntil'] = uploadBlockedUntil;
+    } else if (startingFreshBatch) {
+      update['documents.$.uploadBlockedUntil'] = null;
+    }
     return update;
   }
 }
