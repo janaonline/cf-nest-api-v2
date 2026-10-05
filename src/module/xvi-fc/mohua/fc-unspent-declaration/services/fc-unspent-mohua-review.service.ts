@@ -42,12 +42,8 @@ type MohuaFormLeanWithPopulate = XvifcActorSourceDocument & {
   checkboxConfirmation?: boolean;
 };
 
-/**
- * FC Unspent Declaration MoHUA review — form-level concerns: review metadata (GET) and complete-
- * form approve/reject. Row-level concerns (paginated list, bulk approve/reject) live in
- * `FcUnspentMohuaRowsService`. Both delegate row transitions/history/parent-completion to the
- * shared `FcUnspentRowReviewDomainService`.
- */
+/** Form-level MoHUA review concerns: review metadata (GET) and complete-form approve/reject. See
+ *  CLAUDE.md's "Layout" section for how this splits from `FcUnspentMohuaRowsService`. */
 @Injectable()
 export class FcUnspentMohuaReviewService {
   constructor(
@@ -59,12 +55,8 @@ export class FcUnspentMohuaReviewService {
     private readonly fileTokenService: FileTokenService,
   ) {}
 
-  /**
-   * Returns MoHUA review metadata for a state/year FC Unspent Declaration. Never includes the
-   * full row list — that is served by `FcUnspentMohuaRowsService.getRows`. Only forms at
-   * `UNDER_REVIEW_BY_MOHUA` or `SUBMISSION_ACKNOWLEDGED_BY_MOHUA` are viewable; anything earlier
-   * (never yet submitted to MoHUA) 404s.
-   */
+  /** MoHUA review metadata only — no row list (see `FcUnspentMohuaRowsService.getRows`);
+   *  view-gated by `canMohuaViewForm`, 403s otherwise. */
   async getReviewMetadata(
     stateId: string,
     yearId: string,
@@ -132,12 +124,8 @@ export class FcUnspentMohuaReviewService {
     return xviFcSuccess('FC Unspent Declaration MoHUA review metadata fetched.', data);
   }
 
-  /**
-   * Approves the complete form. No-branch: requires the persisted declaration to still exist,
-   * then acknowledges directly (no rows). Yes-branch: requires at least one active row, blocks if
-   * any active row is REJECTED/NEEDS_UPDATE/null, transitions the remaining UPDATE_PENDING rows to
-   * ACTIVE (already-ACTIVE rows untouched, no duplicate history), then acknowledges.
-   */
+  /** See CLAUDE.md's "The complete-form approve/reject branch logic" section for the No/Yes-branch
+   *  rules and blocking conditions. */
   async approveCompleteForm(
     stateId: string,
     yearId: string,
@@ -178,7 +166,9 @@ export class FcUnspentMohuaReviewService {
     }
 
     const blocking = activeRows.filter(
-      (r) => r.rowStatus !== FORM_STATUS.UNDER_REVIEW_BY_MOHUA && r.rowStatus !== FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+      (r) =>
+        r.rowStatus !== FORM_STATUS.UNDER_REVIEW_BY_MOHUA &&
+        r.rowStatus !== FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
     );
     if (blocking.length > 0) {
       throwXviFcValidationError({
@@ -209,7 +199,11 @@ export class FcUnspentMohuaReviewService {
         form._id,
         stateOid,
         yearOid,
-        toApprove.map((row) => ({ row, newStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA, rejectionRemark: null })),
+        toApprove.map((row) => ({
+          row,
+          newStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+          rejectionRemark: null,
+        })),
         userOid,
         ip,
         userAgent,
@@ -243,12 +237,8 @@ export class FcUnspentMohuaReviewService {
     });
   }
 
-  /**
-   * Rejects the complete form (requires a non-empty `mohuaRemarks`). No-branch: returns directly
-   * to RETURNED_BY_MOHUA. Yes-branch: allowed only when no active row has already reached ACTIVE
-   * (to avoid regressing independently-approved rows) — remaining UPDATE_PENDING rows transition
-   * to REJECTED with the same remark; already-REJECTED rows are left untouched (no duplicate history).
-   */
+  /** Requires a non-empty `mohuaRemarks`. See CLAUDE.md's "The complete-form approve/reject branch
+   *  logic" section for the No/Yes-branch rules, including reject's already-approved-rows block. */
   async rejectCompleteForm(
     stateId: string,
     yearId: string,
