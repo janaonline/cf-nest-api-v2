@@ -3,6 +3,7 @@ import { DurValidationResultWriter } from './dur-validation-result-writer.servic
 describe('DurValidationResultWriter', () => {
   let writer: DurValidationResultWriter;
   let durModel: { updateOne: jest.Mock; findOne: jest.Mock };
+  let uploadHistoryModel: { updateOne: jest.Mock };
 
   const durId = '6ab0f9267e9a30b72fae8d4c';
   const docId = 'tiedGrant';
@@ -22,7 +23,8 @@ describe('DurValidationResultWriter', () => {
       updateOne: jest.fn().mockResolvedValue({}),
       findOne: jest.fn().mockReturnValue(findByIdChain(null)),
     };
-    writer = new DurValidationResultWriter(durModel as any);
+    uploadHistoryModel = { updateOne: jest.fn().mockResolvedValue({}) };
+    writer = new DurValidationResultWriter(durModel as any, uploadHistoryModel as any);
   });
 
   afterEach(() => jest.clearAllMocks());
@@ -41,6 +43,12 @@ describe('DurValidationResultWriter', () => {
           'documents.$.processingStatus': 'PASSED',
           'documents.$.currentUpload.ocrInfo.validationStatus': 'PASS',
         }),
+      }),
+    );
+    expect(uploadHistoryModel.updateOne).toHaveBeenCalledWith(
+      { uploadId },
+      expect.objectContaining({
+        $set: expect.objectContaining({ processingStatus: 'PASSED', 'ocrInfo.validationStatus': 'PASS' }),
       }),
     );
   });
@@ -92,6 +100,12 @@ describe('DurValidationResultWriter', () => {
           'documents.$.processingStatus': 'FAILED',
           'documents.$.currentUpload.ocrInfo.validationDetails': 'Gemini upload timed out',
         }),
+      }),
+    );
+    expect(uploadHistoryModel.updateOne).toHaveBeenCalledWith(
+      { uploadId },
+      expect.objectContaining({
+        $set: expect.objectContaining({ processingStatus: 'FAILED', 'ocrInfo.validationDetails': 'Gemini upload timed out' }),
       }),
     );
   });
