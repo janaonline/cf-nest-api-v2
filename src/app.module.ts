@@ -61,7 +61,7 @@ function getQueryCaller(): string {
     ThrottlerModule.forRoot([
       {
         ttl: seconds(60), // time window in seconds
-        limit: 60, // max requests per window
+        limit: 600, // max requests per window TODO: (TEMPORARY: raised from 60 while all clients share the proxy IP; restore once X-Forwarded-For is fixed)
       },
     ]),
     ConfigModule.forRoot({ isGlobal: true, validate: validateEnv }),

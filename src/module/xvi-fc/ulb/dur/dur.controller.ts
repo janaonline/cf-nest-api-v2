@@ -11,6 +11,7 @@ import {
   Query,
   Req,
   Res,
+  StreamableFile,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation } from '@nestjs/swagger/dist/decorators';
@@ -21,6 +22,7 @@ import { Permission } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { PermissionGuard } from 'src/module/auth/permission.guard';
 import { RequirePermissions } from 'src/module/auth/require-permissions.decorator';
 import { ParseObjectIdPipe } from 'src/common/pipes/parse-object-id.pipe';
+import { getTimeStamp } from 'src/shared/utils/date.utils';
 import { extractIpAndUserAgent } from 'src/module/xvi-fc/common/utils/xvi-fc-request-meta.util';
 import { getErrorMessage, isS3NotFoundError } from 'src/module/file/file-response.util';
 import { ManualReviewDecisionDto } from 'src/module/xvi-fc/ulb/annual_accounts/dto/manual-review-decision.dto';
@@ -33,6 +35,8 @@ import { SubmitDurDto } from './dto/submit-dur.dto';
 import { DurDecisionDto } from './dto/dur-decision.dto';
 import { BulkDurDecisionDto } from './dto/bulk-dur-decision.dto';
 import { DurUlbSubmissionsQueryDto } from './dto/dur-ulb-submissions-query.dto';
+import { DurManualReviewHistoryQueryDto } from './dto/dur-manual-review-history-query.dto';
+import { DurManualReviewHistoryStatsQueryDto } from './dto/dur-manual-review-history-stats-query.dto';
 
 function assertValidDocId(docId: string): asserts docId is XviFcDurDocId {
   if (!DUR_DOC_IDS.includes(docId as XviFcDurDocId)) {
@@ -60,6 +64,40 @@ export class DurController {
   @ApiOperation({ summary: "ADMIN's global queue of DUR documents awaiting a manual-review decision, across all ULBs" })
   getManualReviewQueue(@Query() dto: ManualReviewQueueQueryDto, @CurrentUser() user: AuthUser) {
     return this.manualReviewService.getManualReviewQueue(dto, user);
+  }
+
+  @Get('manual-review-history')
+  @ApiOperation({ summary: "ADMIN's paginated audit trail of all DUR manual-review requests (any status), across all ULBs" })
+  listManualReviewRequestHistory(@Query() dto: DurManualReviewHistoryQueryDto, @CurrentUser() user: AuthUser) {
+    return this.manualReviewService.listManualReviewRequestHistory(dto, user);
+  }
+
+  @Get('manual-review-history/stats')
+  @ApiOperation({ summary: "ADMIN's summary counts for the DUR manual-review history page's REQUESTED time-range tabs" })
+  getManualReviewHistoryStats(@Query() dto: DurManualReviewHistoryStatsQueryDto, @CurrentUser() user: AuthUser) {
+    return this.manualReviewService.getManualReviewHistoryStats(dto, user);
+  }
+
+  @Get('manual-review-history/dump')
+  @ApiOperation({ summary: "ADMIN's Excel export of the DUR manual-review history, respecting the same filters as the list" })
+  async dumpManualReviewHistory(
+    @Query() dto: DurManualReviewHistoryQueryDto,
+    @CurrentUser() user: AuthUser,
+  ): Promise<StreamableFile> {
+    const buffer = await this.manualReviewService.dumpManualReviewHistoryToExcel(dto, user);
+    return new StreamableFile(buffer as unknown as Uint8Array, {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      disposition: `attachment; filename="dur-manual-review-history_${getTimeStamp(false)}.xlsx"`,
+    });
+  }
+
+  @Get('manual-review-history/:requestId')
+  @ApiOperation({ summary: 'ADMIN view of a single DUR manual-review request by its own id' })
+  getManualReviewRequestDetail(
+    @Param('requestId', ParseObjectIdPipe) requestId: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.manualReviewService.getManualReviewRequestDetail(requestId, user);
   }
 
   @Get('form-config')
