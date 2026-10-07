@@ -54,6 +54,13 @@ export class XviFcManualReviewRequest {
   @Prop({ type: String, default: null })
   ocrJobId!: string | null;
 
+  /** S3 key of the uploaded file this request was about (currentUpload.file.path), snapshotted at
+   *  request time — lets this collection resolve/stream the exact reviewed file on its own, without
+   *  going back through the annual account document (whose currentUpload may since have been
+   *  replaced by a newer upload). */
+  @Prop({ type: String, default: null })
+  filePath!: string | null;
+
   @Prop({ type: String, enum: ['PENDING', 'APPROVED', 'RETURNED'], required: true, default: 'PENDING' })
   status!: ManualReviewRequestStatus;
 

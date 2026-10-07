@@ -4,6 +4,7 @@ import { BullModule } from '@nestjs/bullmq';
 import { MongooseModule } from '@nestjs/mongoose';
 import { S3Module } from 'src/core/s3/s3.module';
 import { S3Service } from 'src/core/s3/s3.service';
+import { ExcelService } from 'src/services/excel/excel.service';
 import { FormJsonModule } from 'src/master/form-json/form-json.module';
 import { UlbEligibilityModule } from 'src/module/ulb-eligibility/ulb-eligibility.module';
 import { RemindersModule } from 'src/module/xvi-fc/common/reminders/reminders.module';
@@ -23,6 +24,10 @@ import {
   XviFcDurManualReviewRequest,
   XviFcDurManualReviewRequestSchema,
 } from 'src/schemas/xvi-fc/dur-manual-review-request.schema';
+import {
+  XviFcDurUploadHistory,
+  XviFcDurUploadHistorySchema,
+} from 'src/schemas/xvi-fc/dur-upload-history.schema';
 import { DurController } from './dur.controller';
 import { DurService } from './dur.service';
 import { DurManualReviewService } from './dur-manual-review.service';
@@ -48,6 +53,7 @@ import { DurStatusSyncService } from './dur-status-sync.service';
       { name: XviFcDur.name, schema: XviFcDurSchema },
       { name: XviFcDurFormLog.name, schema: XviFcDurFormLogSchema },
       { name: XviFcDurManualReviewRequest.name, schema: XviFcDurManualReviewRequestSchema },
+      { name: XviFcDurUploadHistory.name, schema: XviFcDurUploadHistorySchema },
       { name: Ulb.name, schema: UlbSchema },
       { name: Year.name, schema: YearSchema },
       { name: User.name, schema: UserSchema },
@@ -60,6 +66,7 @@ import { DurStatusSyncService } from './dur-status-sync.service';
     DurService,
     DurManualReviewService,
     S3Service,
+    ExcelService,
     DurValidationApiService,
     DurValidationResultWriter,
     DurValidationProcessor,

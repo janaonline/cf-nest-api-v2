@@ -6,7 +6,6 @@ describe('DurValidationProcessor', () => {
   let processor: DurValidationProcessor;
   let durModel: { updateOne: jest.Mock };
   let ulbModel: { findById: jest.Mock };
-  let s3Service: { getPdfBufferFromS3: jest.Mock };
   let durApi: { submitJob: jest.Mock; getJobStatus: jest.Mock; getJobResult: jest.Mock };
   let resultWriter: { writeCompleted: jest.Mock; writeFailed: jest.Mock };
 
@@ -36,7 +35,6 @@ describe('DurValidationProcessor', () => {
 
     durModel = { updateOne: jest.fn().mockResolvedValue({}) };
     ulbModel = { findById: jest.fn().mockReturnValue(findByIdChain({ name: 'Banga Municipality', slug: 'banga-municipality' })) };
-    s3Service = { getPdfBufferFromS3: jest.fn().mockResolvedValue(Buffer.from('pdf')) };
     durApi = {
       submitJob: jest.fn().mockResolvedValue({ job_id: 'dur-job-1', status: 'queued' }),
       getJobStatus: jest.fn(),
@@ -44,7 +42,7 @@ describe('DurValidationProcessor', () => {
     };
     resultWriter = { writeCompleted: jest.fn().mockResolvedValue(undefined), writeFailed: jest.fn().mockResolvedValue(undefined) };
 
-    processor = new DurValidationProcessor(durModel as any, ulbModel as any, s3Service as any, durApi as any, resultWriter as any);
+    processor = new DurValidationProcessor(durModel as any, ulbModel as any, durApi as any, resultWriter as any);
   });
 
   afterEach(() => {
@@ -56,10 +54,10 @@ describe('DurValidationProcessor', () => {
     ulbModel.findById.mockReturnValue(findByIdChain(null));
 
     await expect(processor.process(makeJob())).rejects.toThrow(`ULB not found: ${ulbId}`);
-    expect(s3Service.getPdfBufferFromS3).not.toHaveBeenCalled();
+    expect(durApi.submitJob).not.toHaveBeenCalled();
   });
 
-  it('submits the job with ulb_name/financial_year/grant_type, no doc_type/upload_id/audit_type fields', async () => {
+  it('submits the job with s3_path/ulb_name/financial_year/grant_type, no doc_type/upload_id/audit_type fields', async () => {
     durApi.getJobStatus.mockResolvedValue({ job_id: 'dur-job-1', status: 'completed' });
     durApi.getJobResult.mockResolvedValue({ job_id: 'dur-job-1', status: 'completed', result: { checks: { overall_valid: true } as any } });
 
@@ -68,8 +66,7 @@ describe('DurValidationProcessor', () => {
     await processPromise;
 
     expect(durApi.submitJob).toHaveBeenCalledWith({
-      pdfBuffer: expect.any(Buffer),
-      fileName: 'tiedGrant-upload-1.pdf',
+      s3Path: 'xvi-fc/dur/file.pdf',
       ulbName: 'Banga Municipality|banga-municipality',
       financialYear: '2026-27',
       grantType: 'tied',
