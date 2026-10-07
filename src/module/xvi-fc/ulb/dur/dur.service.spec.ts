@@ -21,6 +21,7 @@ describe('DurService', () => {
     findByIdAndUpdate: jest.Mock;
     findOne: jest.Mock;
     findOneAndUpdate: jest.Mock;
+    updateOne: jest.Mock;
     deleteOne: jest.Mock;
   };
   let mockFormLogModel: { create: jest.Mock; find: jest.Mock };
@@ -31,6 +32,10 @@ describe('DurService', () => {
   let mockFormReturnedNotification: { notifyReturned: jest.Mock };
   let mockYearAccessService: { isFormExempt: jest.Mock };
   let mockExemptionResolverService: { resolveBulk: jest.Mock };
+  let mockUploadHistoryModel: { create: jest.Mock; updateOne: jest.Mock };
+  let mockS3Service: { headObject: jest.Mock; getPdfBufferFromS3: jest.Mock; getPdfPageCountFromBuffer: jest.Mock };
+  let mockDurQueue: { add: jest.Mock };
+  let mockUlbEligibilityService: { assertUlbEligibleForGrantCycle: jest.Mock };
 
   const ulbId = '507f1f77bcf86cd799439001';
   const stateId = '507f1f77bcf86cd799439002';
@@ -64,6 +69,7 @@ describe('DurService', () => {
       findByIdAndUpdate: jest.fn(),
       findOne: jest.fn().mockReturnValue(mockQuery(null)),
       findOneAndUpdate: jest.fn().mockResolvedValue(undefined),
+      updateOne: jest.fn().mockResolvedValue({ modifiedCount: 1 }),
       deleteOne: jest.fn().mockResolvedValue({ deletedCount: 1 }),
     };
     mockFormLogModel = { create: jest.fn().mockResolvedValue(undefined), find: jest.fn().mockReturnValue(mockQuery([])) };
@@ -78,16 +84,25 @@ describe('DurService', () => {
     mockFormReturnedNotification = { notifyReturned: jest.fn().mockResolvedValue(undefined) };
     mockYearAccessService = { isFormExempt: jest.fn().mockResolvedValue(false) };
     mockExemptionResolverService = { resolveBulk: jest.fn().mockResolvedValue(new Map()) };
+    mockUploadHistoryModel = { create: jest.fn().mockResolvedValue(undefined), updateOne: jest.fn().mockResolvedValue({}) };
+    mockS3Service = {
+      headObject: jest.fn().mockResolvedValue(undefined),
+      getPdfBufferFromS3: jest.fn().mockResolvedValue(Buffer.from('pdf')),
+      getPdfPageCountFromBuffer: jest.fn().mockResolvedValue(3),
+    };
+    mockDurQueue = { add: jest.fn().mockResolvedValue({ id: 'job-1' }) };
+    mockUlbEligibilityService = { assertUlbEligibleForGrantCycle: jest.fn().mockResolvedValue(undefined) };
 
     service = new DurService(
       mockDurModel as any,
       mockFormLogModel as any,
+      mockUploadHistoryModel as any,
       mockUlbModel as any,
       mockYearModel as any,
       mockUserModel as any,
-      {} as any,
-      {} as any,
-      {} as any,
+      mockS3Service as any,
+      mockDurQueue as any,
+      mockUlbEligibilityService as any,
       {} as any,
       mockFormJsonService as any,
       mockFormReturnedNotification as any,
@@ -95,6 +110,139 @@ describe('DurService', () => {
       mockYearAccessService as any,
       mockExemptionResolverService as any,
     );
+  });
+
+  describe('confirmUpload', () => {
+    const ulbUser: AuthUser = {
+      _id: '507f1f77bcf86cd799439093',
+      role: 'ULB',
+      scope: Scope.ULB,
+      ulb: ulbId,
+    } as AuthUser;
+
+    const dto = {
+      uploadId: 'f47ac10b-58cc-4372-a567-0e02b2c3d479',
+      s3Key: `xvi-fc/dur/${ulbId}/${designYearId}/tiedGrant/f47ac10b-58cc-4372-a567-0e02b2c3d479.pdf`,
+      ulbId,
+      stateId,
+      designYearId,
+      docId: 'tiedGrant',
+      financialYear: '2026-27',
+      originalName: 'tied-grant.pdf',
+      fileSize: 204800,
+    };
+
+    const emptyDur = {
+      _id: durId,
+      ulb: ulbId,
+      design_year: designYearId,
+      currentFormStatus: FORM_STATUS.NOT_STARTED,
+      financialYear: null,
+      documents: [
+        { docId: 'tiedGrant', currentUpload: null },
+        { docId: 'untiedGrant', currentUpload: null },
+      ],
+    };
+
+    beforeEach(() => {
+      mockDurModel.findOneAndUpdate.mockReturnValue(mockQuery({ _id: durId }));
+      mockDurModel.findById.mockReturnValue(mockQuery(emptyDur));
+    });
+
+    it('creates a matching upload-history row alongside the document slot update', async () => {
+      await service.confirmUpload(dto as any, ulbUser, '127.0.0.1', 'jest');
+
+      expect(mockUploadHistoryModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          durId,
+          ulb: ulbId,
+          designYear: designYearId,
+          docId: 'tiedGrant',
+          uploadId: dto.uploadId,
+          version: 1,
+          versionLabel: 'v1',
+          processingStatus: 'PROCESSING',
+          file: expect.objectContaining({ path: dto.s3Key, originalName: 'tied-grant.pdf' }),
+        }),
+      );
+    });
+
+    it('enqueues the validation job after confirming the upload', async () => {
+      await service.confirmUpload(dto as any, ulbUser, null, null);
+
+      expect(mockDurQueue.add).toHaveBeenCalledWith(
+        `dur-tiedGrant-${dto.uploadId}`,
+        expect.objectContaining({ uploadId: dto.uploadId, docId: 'tiedGrant' }),
+        expect.anything(),
+      );
+    });
+
+    it('rejects an s3Key that does not match the expected upload path', async () => {
+      await expect(
+        service.confirmUpload(
+          { ...dto, s3Key: 'xvi-fc/dur/some-other-ulb/x/tiedGrant/file.pdf' } as any,
+          ulbUser,
+          null,
+          null,
+        ),
+      ).rejects.toThrow('Invalid s3Key for this upload');
+    });
+  });
+
+  describe('retryUpload', () => {
+    const ulbUser: AuthUser = {
+      _id: '507f1f77bcf86cd799439093',
+      role: 'ULB',
+      scope: Scope.ULB,
+      ulb: ulbId,
+    } as AuthUser;
+
+    const durWithUpload = {
+      _id: durId,
+      ulb: ulbId,
+      design_year: designYearId,
+      financialYear: '2026-27',
+      currentFormStatus: FORM_STATUS.IN_PROGRESS,
+      documents: [
+        {
+          docId: 'tiedGrant',
+          currentUpload: { uploadId: 'upload-1', file: { path: 's3/key/tiedGrant.pdf' } },
+          manualReviewDecision: null,
+          uploadBlockedUntil: null,
+        },
+        { docId: 'untiedGrant', currentUpload: null },
+      ],
+    };
+
+    beforeEach(() => {
+      mockDurModel.findById.mockReturnValue(mockQuery(durWithUpload));
+    });
+
+    it('updates both the document slot and the matching upload-history row in parallel', async () => {
+      await service.retryUpload(durId, 'tiedGrant' as any, ulbUser);
+
+      expect(mockDurModel.updateOne).toHaveBeenCalledWith(
+        { _id: durId, 'documents.docId': 'tiedGrant' },
+        expect.objectContaining({ $set: expect.objectContaining({ 'documents.$.processingStatus': 'PROCESSING' }) }),
+      );
+      expect(mockUploadHistoryModel.updateOne).toHaveBeenCalledWith(
+        { uploadId: 'upload-1' },
+        expect.objectContaining({
+          $set: expect.objectContaining({ processingStatus: 'PROCESSING' }),
+          $inc: { retryValidationCount: 1 },
+        }),
+      );
+    });
+
+    it('enqueues a fresh validation job for the same upload', async () => {
+      await service.retryUpload(durId, 'tiedGrant' as any, ulbUser);
+
+      expect(mockDurQueue.add).toHaveBeenCalledWith(
+        'dur-tiedGrant-upload-1',
+        expect.objectContaining({ uploadId: 'upload-1', s3Key: 's3/key/tiedGrant.pdf' }),
+        expect.anything(),
+      );
+    });
   });
 
   describe('getFormConfig', () => {

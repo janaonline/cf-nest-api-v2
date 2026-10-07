@@ -7,7 +7,7 @@ import {
 import { AnnualAccountFormStatus, DecisionInfo, FORM_STATUS_ID } from '../../../../schemas/xvi-fc/annual-account.schema';
 import {
   MAX_POST_REJECTION_ATTEMPTS,
-  POST_REJECTION_COOLDOWN_DAYS,
+  POST_REJECTION_COOLDOWN_HOURS,
   MANUAL_REVIEW_SUPPORT_EMAIL,
   UPLOAD_BLOCKED_MESSAGE,
   isUploadBlocked,
@@ -19,7 +19,7 @@ import {
 // common/utils/manual-review-cooldown.util.ts (DUR reuses the same policy directly from there).
 export {
   MAX_POST_REJECTION_ATTEMPTS,
-  POST_REJECTION_COOLDOWN_DAYS,
+  POST_REJECTION_COOLDOWN_HOURS,
   MANUAL_REVIEW_SUPPORT_EMAIL,
   UPLOAD_BLOCKED_MESSAGE,
   isUploadBlocked,
