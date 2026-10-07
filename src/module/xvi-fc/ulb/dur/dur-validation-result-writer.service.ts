@@ -2,6 +2,10 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { XviFcDur, XviFcDurDocument } from 'src/schemas/xvi-fc/dur.schema';
+import {
+  XviFcDurUploadHistory,
+  XviFcDurUploadHistoryDocument,
+} from 'src/schemas/xvi-fc/dur-upload-history.schema';
 import { nextPostRejectionAttempts, computeUploadBlockedUntil } from 'src/common/utils/manual-review-cooldown.util';
 import type { DurJobResultResponse } from './dur-validation-api.service';
 
@@ -25,6 +29,9 @@ export class DurValidationResultWriter {
   constructor(
     @InjectModel(XviFcDur.name)
     private readonly durModel: Model<XviFcDurDocument>,
+
+    @InjectModel(XviFcDurUploadHistory.name)
+    private readonly uploadHistoryModel: Model<XviFcDurUploadHistoryDocument>,
   ) {}
 
   async writeCompleted(durId: string, docId: string, uploadId: string, resp: DurJobResultResponse): Promise<void> {
@@ -40,20 +47,35 @@ export class DurValidationResultWriter {
 
     const postRejectionUpdate = await this.computePostRejectionUpdate(durId, docId, uploadId, processingStatus);
 
-    const result = await this.durModel.updateOne(
-      { _id: new Types.ObjectId(durId), documents: { $elemMatch: { docId, 'currentUpload.uploadId': uploadId } } },
-      {
-        $set: {
-          'documents.$.processingStatus': processingStatus,
-          'documents.$.currentUpload.ocrInfo.status': 'completed',
-          'documents.$.currentUpload.ocrInfo.completedAt': completedAt,
-          'documents.$.currentUpload.ocrInfo.validationStatus': overallValid ? 'PASS' : 'FAIL',
-          'documents.$.currentUpload.ocrInfo.validationDetails': validationDetails,
-          'documents.$.currentUpload.ocrInfo.failedChecks': failedChecks,
-          ...postRejectionUpdate,
+    const [result] = await Promise.all([
+      this.durModel.updateOne(
+        { _id: new Types.ObjectId(durId), documents: { $elemMatch: { docId, 'currentUpload.uploadId': uploadId } } },
+        {
+          $set: {
+            'documents.$.processingStatus': processingStatus,
+            'documents.$.currentUpload.ocrInfo.status': 'completed',
+            'documents.$.currentUpload.ocrInfo.completedAt': completedAt,
+            'documents.$.currentUpload.ocrInfo.validationStatus': overallValid ? 'PASS' : 'FAIL',
+            'documents.$.currentUpload.ocrInfo.validationDetails': validationDetails,
+            'documents.$.currentUpload.ocrInfo.failedChecks': failedChecks,
+            ...postRejectionUpdate,
+          },
         },
-      },
-    );
+      ),
+      this.uploadHistoryModel.updateOne(
+        { uploadId },
+        {
+          $set: {
+            processingStatus,
+            'ocrInfo.status': 'completed',
+            'ocrInfo.completedAt': completedAt,
+            'ocrInfo.validationStatus': overallValid ? 'PASS' : 'FAIL',
+            'ocrInfo.validationDetails': validationDetails,
+            'ocrInfo.failedChecks': failedChecks,
+          },
+        },
+      ),
+    ]);
     this.logStaleResultIfUnmatched(result.matchedCount, durId, docId, uploadId);
   }
 
@@ -63,18 +85,31 @@ export class DurValidationResultWriter {
 
     const postRejectionUpdate = await this.computePostRejectionUpdate(durId, docId, uploadId, 'FAILED');
 
-    const result = await this.durModel.updateOne(
-      { _id: new Types.ObjectId(durId), documents: { $elemMatch: { docId, 'currentUpload.uploadId': uploadId } } },
-      {
-        $set: {
-          'documents.$.processingStatus': 'FAILED',
-          'documents.$.currentUpload.ocrInfo.status': 'failed',
-          'documents.$.currentUpload.ocrInfo.completedAt': completedAt,
-          'documents.$.currentUpload.ocrInfo.validationDetails': reason ?? 'DUR validation job failed',
-          ...postRejectionUpdate,
+    const [result] = await Promise.all([
+      this.durModel.updateOne(
+        { _id: new Types.ObjectId(durId), documents: { $elemMatch: { docId, 'currentUpload.uploadId': uploadId } } },
+        {
+          $set: {
+            'documents.$.processingStatus': 'FAILED',
+            'documents.$.currentUpload.ocrInfo.status': 'failed',
+            'documents.$.currentUpload.ocrInfo.completedAt': completedAt,
+            'documents.$.currentUpload.ocrInfo.validationDetails': reason ?? 'DUR validation job failed',
+            ...postRejectionUpdate,
+          },
         },
-      },
-    );
+      ),
+      this.uploadHistoryModel.updateOne(
+        { uploadId },
+        {
+          $set: {
+            processingStatus: 'FAILED',
+            'ocrInfo.status': 'failed',
+            'ocrInfo.completedAt': completedAt,
+            'ocrInfo.validationDetails': reason ?? 'DUR validation job failed',
+          },
+        },
+      ),
+    ]);
     this.logStaleResultIfUnmatched(result.matchedCount, durId, docId, uploadId);
   }
 
@@ -115,10 +150,20 @@ export class DurValidationResultWriter {
     const docSlot = doc?.documents?.[0];
     if (docSlot?.manualReviewDecision?.status !== 'RETURNED') return {};
 
-    const attemptsUsed = nextPostRejectionAttempts(docSlot.postRejectionAttemptsUsed ?? 0);
+    // A previously-set uploadBlockedUntil can only mean the ULB already served out a full 24h lock
+    // before this retry/re-upload was ever allowed to start (assertCanUlbUpload blocks while one is
+    // still active) — so this failure opens a fresh batch of attempts, not a continuation of the
+    // batch that triggered the old lock. Without this, the ULB would get only one attempt per
+    // cycle after the first lock instead of a full fresh 3.
+    const startingFreshBatch = docSlot.uploadBlockedUntil != null;
+    const attemptsUsed = nextPostRejectionAttempts(startingFreshBatch ? 0 : docSlot.postRejectionAttemptsUsed ?? 0);
     const update: Record<string, unknown> = { 'documents.$.postRejectionAttemptsUsed': attemptsUsed };
     const uploadBlockedUntil = computeUploadBlockedUntil(attemptsUsed);
-    if (uploadBlockedUntil) update['documents.$.uploadBlockedUntil'] = uploadBlockedUntil;
+    if (uploadBlockedUntil) {
+      update['documents.$.uploadBlockedUntil'] = uploadBlockedUntil;
+    } else if (startingFreshBatch) {
+      update['documents.$.uploadBlockedUntil'] = null;
+    }
     return update;
   }
 }

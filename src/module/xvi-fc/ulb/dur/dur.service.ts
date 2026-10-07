@@ -23,6 +23,10 @@ import { YearAccessService, type UlbAccessInput } from 'src/module/xvi-fc/common
 import { ExemptionResolverService, type ExemptionResolution } from 'src/module/xvi-fc/common/services/exemption-resolver.service';
 import { XviFcDur, XviFcDurDocument, DUR_DOC_IDS, type XviFcDurDocId } from 'src/schemas/xvi-fc/dur.schema';
 import { XviFcDurFormLog, XviFcDurFormLogDocument } from 'src/schemas/xvi-fc/dur-form-log.schema';
+import {
+  XviFcDurUploadHistory,
+  XviFcDurUploadHistoryDocument,
+} from 'src/schemas/xvi-fc/dur-upload-history.schema';
 import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 import { CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE } from 'src/module/ulb-eligibility/ulb-eligibility.constants';
 import { DUR_VALIDATION_QUEUE } from 'src/core/constants/queues';
@@ -83,6 +87,9 @@ export class DurService {
 
     @InjectModel(XviFcDurFormLog.name)
     private readonly formLogModel: Model<XviFcDurFormLogDocument>,
+
+    @InjectModel(XviFcDurUploadHistory.name)
+    private readonly uploadHistoryModel: Model<XviFcDurUploadHistoryDocument>,
 
     @InjectModel(Ulb.name)
     private readonly ulbModel: Model<UlbDocument>,
@@ -313,6 +320,23 @@ export class DurService {
       },
     );
 
+    await this.uploadHistoryModel.create({
+      durId: dur._id,
+      ulb: dur.ulb,
+      designYear: dur.design_year,
+      docId: dto.docId,
+      uploadId: currentUpload.uploadId,
+      version: currentUpload.version,
+      versionLabel: currentUpload.versionLabel,
+      file: currentUpload.file,
+      processingStatus: 'PROCESSING',
+      ocrInfo: currentUpload.ocrInfo,
+      userInfo: currentUpload.userInfo,
+      uploadedAt: currentUpload.uploadedAt,
+      retryValidationCount: 0,
+      retryValidationAt: null,
+    });
+
     await this.enqueueValidationJob({
       uploadId: dto.uploadId,
       durId,
@@ -339,16 +363,25 @@ export class DurService {
     if (!docSlot?.currentUpload) throw new NotFoundException('No upload found for this document');
 
     const retryAt = new Date();
-    await this.durModel.updateOne(
-      { _id: dur._id, 'documents.docId': docId },
-      {
-        $set: {
-          'documents.$.processingStatus': 'PROCESSING',
-          'documents.$.currentUpload.retryValidationAt': retryAt,
+    await Promise.all([
+      this.durModel.updateOne(
+        { _id: dur._id, 'documents.docId': docId },
+        {
+          $set: {
+            'documents.$.processingStatus': 'PROCESSING',
+            'documents.$.currentUpload.retryValidationAt': retryAt,
+          },
+          $inc: { 'documents.$.currentUpload.retryValidationCount': 1 },
         },
-        $inc: { 'documents.$.currentUpload.retryValidationCount': 1 },
-      },
-    );
+      ),
+      this.uploadHistoryModel.updateOne(
+        { uploadId: docSlot.currentUpload.uploadId },
+        {
+          $set: { processingStatus: 'PROCESSING', retryValidationAt: retryAt },
+          $inc: { retryValidationCount: 1 },
+        },
+      ),
+    ]);
 
     await this.enqueueValidationJob({
       uploadId: docSlot.currentUpload.uploadId,
