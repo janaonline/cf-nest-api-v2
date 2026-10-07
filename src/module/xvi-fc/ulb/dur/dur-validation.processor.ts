@@ -4,7 +4,6 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Job } from 'bullmq';
 import { Model, Types } from 'mongoose';
 import { DUR_VALIDATION_QUEUE } from 'src/core/constants/queues';
-import { S3Service } from 'src/core/s3/s3.service';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { XviFcDur, XviFcDurDocument } from 'src/schemas/xvi-fc/dur.schema';
 import { DurValidationApiService } from './dur-validation-api.service';
@@ -33,7 +32,6 @@ export class DurValidationProcessor extends WorkerHost {
     @InjectModel(Ulb.name)
     private readonly ulbModel: Model<UlbDocument>,
 
-    private readonly s3Service: S3Service,
     private readonly durApi: DurValidationApiService,
     private readonly resultWriter: DurValidationResultWriter,
   ) {
@@ -55,11 +53,8 @@ export class DurValidationProcessor extends WorkerHost {
     // re-throw: BullMQ would otherwise retry a call that's very likely to hang the same way again,
     // just delaying the ULB's "Retry"/"Request Manual Review" options further.
     try {
-      const pdfBuffer = await this.s3Service.getPdfBufferFromS3(s3Key);
-
       const submitResp = await this.durApi.submitJob({
-        pdfBuffer,
-        fileName: `${docId}-${uploadId}.pdf`,
+        s3Path: s3Key,
         ulbName,
         financialYear,
         grantType: DUR_DOC_ID_TO_GRANT_TYPE[docId],

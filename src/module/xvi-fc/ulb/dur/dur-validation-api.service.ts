@@ -15,10 +15,14 @@ export type DurGrantType = 'tied' | 'untied';
  * `grant_type` ('tied'/'untied') added 2026-09-22 — the API's payload contract changed to require
  * it alongside financial_year (confirmed via a fresh network capture), so the extracted document
  * can be checked against the grant type it was uploaded for, not just the year.
+ *
+ * Switched from uploading the PDF binary to sending `s3_path` (the vendor fetches the file itself)
+ * 2026-10-07 — confirmed via a fresh network capture that the API now accepts this shape, which
+ * saves us downloading the file into memory here just to immediately re-upload it. DUR only —
+ * Annual Account's ocr-validation API is a separate contract, untouched by this.
  */
 export interface DurSubmitJobDto {
-  pdfBuffer: Buffer;
-  fileName: string;
+  s3Path: string;
   ulbName: string;
   financialYear: string;
   grantType: DurGrantType;
@@ -127,17 +131,17 @@ export class DurValidationApiService {
   }
 
   async submitJob(dto: DurSubmitJobDto): Promise<DurSubmitResponse> {
-    const { pdfBuffer, fileName, ulbName, financialYear, grantType } = dto;
+    const { s3Path, ulbName, financialYear, grantType } = dto;
     const model = this.config.get<string>('DUR_VALIDATION_MODEL', DEFAULT_DUR_VALIDATION_MODEL);
 
     const form = new FormData();
-    form.append('file', pdfBuffer, { filename: fileName, contentType: 'application/pdf' });
+    form.append('s3_path', s3Path);
     form.append('ulb_name', ulbName);
     form.append('financial_year', financialYear);
     form.append('grant_type', grantType);
     form.append('model', model);
 
-    this.logger.log(`Submitting DUR validation job — fileName=${fileName} model=${model}`);
+    this.logger.log(`Submitting DUR validation job — s3Path=${s3Path} model=${model}`);
 
     return firstValueFrom(
       this.http
