@@ -75,7 +75,11 @@ export function resolveDisposition(contentType: string, requested?: unknown): Fi
  */
 export function buildContentDisposition(contentType: string, fileName: string, requested?: unknown): string {
   const disposition = resolveDisposition(contentType, requested);
-  const safeFileName = fileName.replace(/"/g, "'");
+  // Node's http module rejects header values containing anything outside tab/printable-ASCII/Latin-1
+  // (throws "Invalid character in header content") — the legacy field must be stripped to that range,
+  // not just have its quotes escaped. filename*= (RFC 5987, below) carries the real name; encodeURIComponent
+  // output is always ASCII, so it never needs this treatment.
+  const safeFileName = fileName.replace(/"/g, "'").replace(/[^\x20-\x7e]/g, '_');
   const encodedFileName = encodeURIComponent(fileName);
   return `${disposition}; filename="${safeFileName}"; filename*=UTF-8''${encodedFileName}`;
 }

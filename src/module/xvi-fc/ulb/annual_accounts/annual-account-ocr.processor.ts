@@ -18,7 +18,7 @@ import {
   OcrBasicValidation,
 } from './annual-account-ocr-api.service';
 import type { AnnualAccountOcrJobData } from './dto/annual-account-ocr-job.dto';
-import { MAX_POST_REJECTION_ATTEMPTS, POST_REJECTION_COOLDOWN_DAYS } from './annual-account-status-access.util';
+import { MAX_POST_REJECTION_ATTEMPTS, POST_REJECTION_COOLDOWN_HOURS } from './annual-account-status-access.util';
 
 const POLL_INTERVAL_MS = 5_000;
 const MAX_POLLS = 10;
@@ -261,10 +261,15 @@ export class AnnualAccountOcrProcessor extends WorkerHost {
    * regardless of how it got there. A FAIL only counts as a "strike" while a RETURNED manual-review
    * decision is still the live one for this document — an ordinary first-time OCR failure (no
    * rejection yet) must not consume any of the 3 attempts. The moment the strike count reaches
-   * MAX_POST_REJECTION_ATTEMPTS, the document is blocked for POST_REJECTION_COOLDOWN_DAYS right
-   * here — no second manual-review request/rejection round-trip required first. Reads the current
-   * docSlot first since Mongo can't conditionally $inc off another field of the same array element
-   * in one plain updateOne.
+   * MAX_POST_REJECTION_ATTEMPTS, the document is blocked for POST_REJECTION_COOLDOWN_HOURS right
+   * here — no second manual-review request/rejection round-trip required first. Once that cooldown
+   * has run its course, the *next* strike starts a brand-new batch of MAX_POST_REJECTION_ATTEMPTS
+   * rather than continuing the exhausted one — a lingering uploadBlockedUntil is the signal that a
+   * cooldown already completed, since the upload couldn't have reached here while it was still
+   * active. So the ULB cycle repeats indefinitely: fail x N → cooldown → fresh fail x N → cooldown →
+   * ... with "Request Manual Review" re-offered at the end of every batch, same as the first time.
+   * Reads the current docSlot first since Mongo can't conditionally $inc off another field of the
+   * same array element in one plain updateOne.
    */
   private async computePostRejectionUpdate(
     targetDocId: Types.ObjectId,
@@ -290,12 +295,20 @@ export class AnnualAccountOcrProcessor extends WorkerHost {
     const docSlot = doc?.documents?.[0];
     if (docSlot?.manualReviewDecision?.status !== 'RETURNED') return {};
 
-    const attemptsUsed = Math.min((docSlot.postRejectionAttemptsUsed ?? 0) + 1, MAX_POST_REJECTION_ATTEMPTS);
+    // A previously-set uploadBlockedUntil can only mean the ULB already served out a full cooldown
+    // before this retry/re-upload was ever allowed to start (the upload-blocked guard rejects while
+    // one is still active) — so this failure opens a fresh batch of attempts, not a continuation of
+    // the batch that triggered the old lock. Without this, the ULB would get only one attempt per
+    // cycle after the first lock instead of a full fresh MAX_POST_REJECTION_ATTEMPTS.
+    const startingFreshBatch = docSlot.uploadBlockedUntil != null;
+    const attemptsUsed = Math.min((startingFreshBatch ? 0 : docSlot.postRejectionAttemptsUsed ?? 0) + 1, MAX_POST_REJECTION_ATTEMPTS);
     const update: Record<string, unknown> = { 'documents.$.postRejectionAttemptsUsed': attemptsUsed };
     if (attemptsUsed >= MAX_POST_REJECTION_ATTEMPTS) {
       update['documents.$.uploadBlockedUntil'] = new Date(
-        Date.now() + POST_REJECTION_COOLDOWN_DAYS * 24 * 60 * 60 * 1000,
+        Date.now() + POST_REJECTION_COOLDOWN_HOURS * 60 * 60 * 1000,
       );
+    } else if (startingFreshBatch) {
+      update['documents.$.uploadBlockedUntil'] = null;
     }
     return update;
   }
