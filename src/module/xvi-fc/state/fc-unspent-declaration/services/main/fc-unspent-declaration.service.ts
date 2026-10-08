@@ -110,10 +110,8 @@ export class FcUnspentDeclarationService {
   ) {}
 
   /**
-   * Returns the hydrated FC Unspent Declaration form for a given state and year.
-   * Never includes the full ULB options list — that is served by the separate
-   * lazy /ulb-options endpoint. Active rows are loaded from the row collection —
-   * the parent document no longer stores them.
+   * Never includes the full ULB options list — served by the separate lazy /ulb-options endpoint.
+   * Active rows are loaded from the row collection; the parent document no longer stores them.
    */
   async getForm(
     stateId: string,
@@ -149,8 +147,7 @@ export class FcUnspentDeclarationService {
       throw new InternalServerErrorException('FC_UNSPENT_ROW_EDIT_FIELDS group is empty in form configuration.');
     }
     const savedData: FormData = {};
-    // Stored/validated as a strict boolean (see save DTO), but the radio control and its
-    // visibleWhen conditions operate in the 'yes'/'no' string domain — convert for display only.
+    // Stored as a strict boolean (see save DTO); converted to 'yes'/'no' only for the radio's visibleWhen domain.
     if (doc?.isFcUnspent !== undefined) {
       savedData['isFcUnspent'] = doc.isFcUnspent === true ? 'yes' : doc.isFcUnspent === false ? 'no' : null;
     }
@@ -182,9 +179,8 @@ export class FcUnspentDeclarationService {
   }
 
   /**
-   * Saves the FC Unspent Declaration form as a draft. Allowed statuses:
-   * NOT_STARTED, IN_PROGRESS, RETURNED_BY_MOHUA. Never creates parent or row
-   * history. Parent and row writes happen in one Mongo transaction.
+   * Allowed only from NOT_STARTED/IN_PROGRESS/RETURNED_BY_MOHUA (assertCanStateEditForm). Never
+   * writes history — only finalSubmit does; parent + row writes commit in one transaction here.
    */
   async saveDraft(dto: SaveFcUnspentDeclarationDto, user: AuthUser): Promise<XviFcApiResponse> {
     assertStateAccess(user, dto.stateId);
@@ -266,8 +262,7 @@ export class FcUnspentDeclarationService {
         if (errors.length > 0) throwXviFcValidationError({ fcDeclaration: errors });
         fcDeclaration = file;
       }
-      // Switching to No clears any stale Yes-branch upload — it can never toggle back to
-      // visible/relevant without the state re-answering Yes and re-uploading.
+      // Switching to No clears any stale Yes-branch upload; only re-answering Yes restores it.
       fcUnspentDeclaration = null;
     } else if (isYes) {
       branch = 'yes';
@@ -333,8 +328,8 @@ export class FcUnspentDeclarationService {
           session,
         );
       } else {
-        // Both 'no' and 'undecided' mean no active disclosed rows;
-        // clear stale rows from a prior Yes branch.
+        // 'no' and 'undecided' both deactivate rows — see CLAUDE.md's "Every branch outcome
+        // deactivates rows except an actual Yes" section.
         await this.rowService.deactivateAllRows(updatedParent._id, userOid, session);
       }
 
@@ -354,10 +349,9 @@ export class FcUnspentDeclarationService {
   }
 
   /**
-   * Final-submits the FC Unspent Declaration form. Requires Devolution Formula
-   * Installment 1 to be UNDER_REVIEW_BY_MOHUA with an active dataset. Parent
-   * transition, row upserts/deactivation, row-history, and parent history are all
-   * committed atomically within one Mongo transaction.
+   * Requires Devolution Formula Installment 1 to have an active dataset and be under PMU or
+   * MoHUA review (see resolveDevolutionDependency). Parent transition, rows, row-history, and
+   * parent history all commit atomically in one transaction.
    */
   async finalSubmit(
     dto: SaveFcUnspentDeclarationDto,
@@ -434,10 +428,8 @@ export class FcUnspentDeclarationService {
           ],
         });
       }
-      // Final submit always requires the declaration reference in the payload (even when
-      // unchanged, so the same-path case can be detected below) — omitted/null is rejected
-      // rather than silently falling back to `existing`, which would risk clearing a
-      // previously stored file if a client ever sends an explicit null.
+      // Required even when unchanged (never falls back to `existing`) — see CLAUDE.md's
+      // "Invariants worth knowing" section.
       if (dto.data.fcDeclaration === undefined || dto.data.fcDeclaration === null) {
         throwXviFcValidationError({
           fcDeclaration: [{ field: 'fcDeclaration', code: 'required', message: 'Signed declaration is required.' }],
@@ -476,7 +468,7 @@ export class FcUnspentDeclarationService {
       finalFcDeclaration = null;
       finalCheckboxConfirmation = true;
 
-      // Same "always required, no silent fallback to existing" rule as the No branch above.
+      // Same rule as the No branch above.
       if (dto.data.fcUnspentDeclaration === undefined || dto.data.fcUnspentDeclaration === null) {
         throwXviFcValidationError({
           fcUnspentDeclaration: [
@@ -501,7 +493,7 @@ export class FcUnspentDeclarationService {
     }
 
     const now = new Date();
-    const toStatus = FORM_STATUS.UNDER_REVIEW_BY_MOHUA;
+    const toStatus = FORM_STATUS.UNDER_REVIEW_BY_PMU;
     const newAuditRevision = (existing?.auditRevision ?? 0) + 1;
 
     const setDoc: Record<string, unknown> = {
@@ -541,7 +533,7 @@ export class FcUnspentDeclarationService {
           yearOid,
           resolvedRows,
           userOid,
-          FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+          FORM_STATUS.UNDER_REVIEW_BY_PMU,
           session,
         );
         await this.rowService.insertRowHistory(
@@ -556,8 +548,8 @@ export class FcUnspentDeclarationService {
         );
       }
 
-      // Defensive — assertCanStateFinalSubmitForm above already guarantees a real transition, but
-      // skip explicitly rather than relying solely on that upstream guard.
+      // Defensive: skip explicitly even though assertCanStateFinalSubmitForm above already
+      // guarantees a real transition.
       if (fromStatus !== toStatus) {
         const activeRows = await this.rowService.getActiveRows(parentId, session);
         const snapshot = activeRows.map((row) => this.mapRowToSnapshot(row));
@@ -604,13 +596,10 @@ export class FcUnspentDeclarationService {
   // ─── Devolution dependency ──────────────────────────────────────────────────
 
   /**
-   * Resolves the ULB-wise Allocation (Installment 1) dependency for a state/year and
-   * derives the dependency block + permission gates. Called identically by GET,
-   * save-draft, final-submit, and (not `private` for this reason) the document-generation
-   * service's own gating, so all four never diverge.
+   * Not `private` — reused by GET/saveDraft/finalSubmit and the document service (see CLAUDE.md).
+   * Reads devolution-formula's activeDatasetVersion invariant from outside that module — see
+   * devolution-formula/docs/adr/0001-dataset-versioning.md before changing either side.
    */
-  // Reads devolution-formula's activeDatasetVersion invariant from outside that module — see
-  // devolution-formula/docs/adr/0001-dataset-versioning.md before changing either side of this.
   async resolveDevolutionDependency(
     stateOid: Types.ObjectId,
     yearOid: Types.ObjectId,
@@ -639,7 +628,12 @@ export class FcUnspentDeclarationService {
       };
     }
 
-    if (devolutionStatus === FORM_STATUS.UNDER_REVIEW_BY_MOHUA) {
+    // Devolution's own PMU pre-screen stage counts as "ready" too — see CLAUDE.md's
+    // "Dependencies" section.
+    if (
+      devolutionStatus === FORM_STATUS.UNDER_REVIEW_BY_PMU ||
+      devolutionStatus === FORM_STATUS.UNDER_REVIEW_BY_MOHUA
+    ) {
       return {
         dependency: {
           devolutionStatus,
@@ -654,7 +648,7 @@ export class FcUnspentDeclarationService {
       };
     }
 
-    if (devolutionStatus === FORM_STATUS.RETURNED_BY_MOHUA) {
+    if (devolutionStatus === FORM_STATUS.RETURNED_BY_MOHUA || devolutionStatus === FORM_STATUS.RETURNED_BY_PMU) {
       return {
         dependency: {
           devolutionStatus,
@@ -795,12 +789,9 @@ export class FcUnspentDeclarationService {
   }
 
   /**
-   * Toggles a download action's `visible` flag on its owning file question, keeping its paired
-   * `description` in sync via the shared applyActionVisibility helper — that description only
-   * makes sense alongside the action, so it must not linger once the action is hidden. Never
-   * mutates formJson — this is a per-response hydration derived from `canEdit`; it is never
-   * written back to the DB. Shared by both `fcDeclaration` (No branch) and `fcUnspentDeclaration`
-   * (Yes branch), keyed by whichever action id belongs to that question.
+   * Keeps the action's paired `description` block in sync with its own `visible` flag (via
+   * applyActionVisibility) — a hidden action's description must not linger. Hydration-only,
+   * never written back to formJson. Shared by both `fcDeclaration` and `fcUnspentDeclaration`.
    */
   private hydrateDeclarationTemplateAction(
     question: HydratedFieldConfig,
@@ -816,13 +807,9 @@ export class FcUnspentDeclarationService {
   }
 
   /**
-   * Removes the `isFcUnspent` info supportingContent block entirely when the form is
-   * read-only, rather than merely blanking its description — an empty-string
-   * description still leaves the block object in the array, which renders as an
-   * empty box on the frontend. Unlike DevolutionFormulaService's excel supportingContent
-   * (whose block also carries actions/badges that must stay present with their own
-   * `visible` flags), this info block carries nothing else worth keeping when hidden,
-   * so it is dropped outright. Never mutates formJson.
+   * Drops the `isFcUnspent` info block entirely when read-only, rather than blanking its
+   * description — an empty description still renders as an empty box on the frontend. Never
+   * mutates formJson.
    */
   private hydrateIsFcUnspentSupportingContent(question: HydratedFieldConfig, canEdit: boolean): HydratedFieldConfig {
     if (!question.supportingContent) return question;
@@ -834,11 +821,8 @@ export class FcUnspentDeclarationService {
   }
 
   /**
-   * Never persisted — GET-only signed URL for the stored raw S3-relative path. Signed
-   * `inline` so the uploaded declaration opens in a new tab (matches sfc-status and
-   * other "view your uploaded file" links) rather than force-downloading — unlike the
-   * generated-declaration download routes (`services/document/`), which are genuine
-   * downloads and stay on `StreamableFile`'s `attachment` disposition.
+   * GET-only signed URL, never persisted. Signed `inline` (opens in a new tab, like sfc-status) —
+   * unlike the generated-declaration downloads in `services/document/`, which use `attachment`.
    */
   private signStorageFileUrl(path: string): string {
     try {

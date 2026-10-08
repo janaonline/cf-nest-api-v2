@@ -10,6 +10,7 @@ import type { DfParsedExcelRow } from './validators/devolution-formula.validator
 import { DevolutionFormulaForm } from 'src/schemas/xvi-fc/state/devolution-formula-form.schema';
 import { DevolutionFormulaRow } from 'src/schemas/xvi-fc/state/devolution-formula-row.schema';
 import { DevolutionFormulaFormHistory } from 'src/schemas/xvi-fc/state/devolution-formula-form-history.schema';
+import { ClaimLetterUlbLock } from 'src/schemas/xvi-fc/state/claim-letter-ulb-lock.schema';
 import { GrantAllocation } from 'src/schemas/xvi-fc/grant-allocation.schema';
 import { Ulb } from 'src/schemas/ulb.schema';
 import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
@@ -120,6 +121,8 @@ const mockRowModel = {
 };
 
 const mockHistoryModel = { create: jest.fn().mockResolvedValue(undefined) };
+
+const mockClaimLetterUlbLockModel = { findOne: jest.fn().mockReturnValue(q(null)) };
 
 const mockGrantAllocationModel = { findOne: jest.fn() };
 const mockUlbModel = { countDocuments: jest.fn() };
@@ -1940,7 +1943,7 @@ describe('DevolutionFormulaService', () => {
       expect(mockHistoryModel.create).not.toHaveBeenCalled();
     });
 
-    it('finalSubmit logs a FINAL_SUBMIT history row (IN_PROGRESS → UNDER_REVIEW_BY_MOHUA) with a row-data snapshot', async () => {
+    it('finalSubmit logs a FINAL_SUBMIT history row (IN_PROGRESS → UNDER_REVIEW_BY_PMU) with a row-data snapshot', async () => {
       mockUlbModel.countDocuments.mockResolvedValue(50);
       mockFormModel.findOne.mockReturnValue(q({ ...mockFormInProgress, excelRowCount: 50, newUlbCount: 0 }));
       mockRowModel.findOne.mockReturnValue(q(null));
@@ -1986,7 +1989,7 @@ describe('DevolutionFormulaService', () => {
         expect.objectContaining({
           devolutionFormulaForm: formOid,
           fromStatus: FORM_STATUS.IN_PROGRESS,
-          toStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+          toStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU,
           ip: '5.6.7.8',
           userAgent: 'jest-agent-2',
           snapshot: [
@@ -2134,6 +2137,7 @@ describe('DevolutionFormulaRowService', () => {
         DevolutionFormulaValidator,
         { provide: getModelToken(DevolutionFormulaForm.name), useValue: mockFormModel },
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: mockRowModel },
+        { provide: getModelToken(ClaimLetterUlbLock.name), useValue: mockClaimLetterUlbLockModel },
         { provide: ExcelService, useValue: { generateExcel: jest.fn() } },
         { provide: DfFormJsonConfigService, useValue: mockDfFormJsonConfig },
         { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
@@ -2222,6 +2226,144 @@ describe('DevolutionFormulaRowService', () => {
         adminUser,
       ),
     ).rejects.toThrow();
+  });
+
+  // ─── Claim-lock enforcement (PMU Review feature's Devolution-only edit-lock) ──────────────
+
+  describe('claim-lock enforcement', () => {
+    function mockSuccessfulEditChain() {
+      mockFormModel.findOne.mockReturnValue(q(mockFormInProgress));
+      mockRowModel.findOne.mockReturnValue(q(mockRow));
+      mockRowModel.findByIdAndUpdate.mockReturnValue(q(mockRow));
+      mockRowModel.find.mockReturnValue(q([{ totalGrantAllocation: 500_000 }]));
+      mockRowModel.countDocuments.mockReturnValueOnce(q(1)).mockReturnValueOnce(q(1)).mockReturnValueOnce(q(1));
+      mockFormModel.findById
+        .mockReturnValueOnce(q({ totalMoHUAAllocation: 500_000, excelRowCount: 1 }))
+        .mockReturnValueOnce(q({ ...mockFormInProgress, totalAllocatedSum: 500_000 }));
+      mockFormModel.findByIdAndUpdate.mockReturnValue(q(null));
+    }
+
+    it('blocks the edit with ConflictException when the ULB has an active claim lock', async () => {
+      // Throws before reaching recalculateFormSummary, so (unlike mockSuccessfulEditChain) only
+      // the mocks on the path up to the lock check are set up here — anything queued via
+      // mockReturnValueOnce but never consumed would otherwise leak into the next test, since
+      // these mock objects are shared module-level consts, not recreated per test.
+      mockFormModel.findOne.mockReturnValue(q(mockFormInProgress));
+      mockRowModel.findOne.mockReturnValue(q(mockRow));
+      mockClaimLetterUlbLockModel.findOne.mockReturnValue(q({ _id: new Types.ObjectId(), lockState: 'ACTIVE' }));
+
+      await expect(
+        service.updateRow(
+          stateOid.toString(),
+          YEAR_ID,
+          1,
+          rowOid.toString(),
+          { devolutionFormula: 'newFormula' },
+          adminUser,
+        ),
+      ).rejects.toThrow('locked in an active claim letter');
+
+      expect(mockRowModel.findByIdAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('queries the lock by state/year/installment/ulbId and lockState ACTIVE', async () => {
+      mockSuccessfulEditChain();
+      mockClaimLetterUlbLockModel.findOne.mockReturnValue(q(null));
+
+      await service.updateRow(
+        stateOid.toString(),
+        YEAR_ID,
+        1,
+        rowOid.toString(),
+        { devolutionFormula: 'newFormula' },
+        adminUser,
+      );
+
+      expect(mockClaimLetterUlbLockModel.findOne).toHaveBeenCalledWith({
+        state: stateOid,
+        year: yearOid,
+        installment: 1,
+        ulbId: ulbOid,
+        lockState: 'ACTIVE',
+      });
+    });
+
+    it('allows the edit through when no active lock exists for the ULB', async () => {
+      mockSuccessfulEditChain();
+      mockClaimLetterUlbLockModel.findOne.mockReturnValue(q(null));
+
+      await expect(
+        service.updateRow(
+          stateOid.toString(),
+          YEAR_ID,
+          1,
+          rowOid.toString(),
+          { devolutionFormula: 'newFormula' },
+          adminUser,
+        ),
+      ).resolves.toBeDefined();
+
+      expect(mockRowModel.findByIdAndUpdate).toHaveBeenCalled();
+    });
+
+    it('skips the lock check entirely for a row with no ulbId (unmatched-to-registry row)', async () => {
+      const rowWithNoUlb = { ...mockRow, ulbId: null };
+      mockFormModel.findOne.mockReturnValue(q(mockFormInProgress));
+      mockRowModel.findOne.mockReturnValue(q(rowWithNoUlb));
+      mockRowModel.findByIdAndUpdate.mockReturnValue(q({ ...rowWithNoUlb, validationStatus: 'INVALID' }));
+      mockRowModel.find.mockReturnValue(q([]));
+      mockRowModel.countDocuments.mockReturnValueOnce(q(1)).mockReturnValueOnce(q(0)).mockReturnValueOnce(q(1));
+      mockFormModel.findById
+        .mockReturnValueOnce(q({ totalMoHUAAllocation: 500_000, excelRowCount: 1 }))
+        .mockReturnValueOnce(q({ ...mockFormInProgress, totalAllocatedSum: 0, errorRowCount: 1 }));
+      mockFormModel.findByIdAndUpdate.mockReturnValue(q(null));
+
+      await service.updateRow(
+        stateOid.toString(),
+        YEAR_ID,
+        1,
+        rowOid.toString(),
+        { devolutionFormula: 'newFormula' },
+        adminUser,
+      );
+
+      expect(mockClaimLetterUlbLockModel.findOne).not.toHaveBeenCalled();
+    });
+  });
+
+  // ─── recalculateFormSummary reconciliation (locked + editable rows) ──────────────────────
+
+  describe('recalculateFormSummary reconciliation', () => {
+    it('sums a locked row’s frozen value together with a freshly edited row’s new value', async () => {
+      mockFormModel.findOne.mockReturnValue(q(mockFormInProgress));
+      mockRowModel.findOne.mockReturnValue(q(mockRow));
+      mockRowModel.findByIdAndUpdate.mockReturnValue(q(mockRow));
+      // Two active VALID rows: one untouched by this edit (e.g. locked by a claim and never
+      // reaches updateRow at all), one freshly edited — recalculateFormSummary's query doesn't
+      // distinguish them, so both land in the sum exactly as persisted.
+      mockRowModel.find.mockReturnValue(q([{ totalGrantAllocation: 300_000 }, { totalGrantAllocation: 500_000 }]));
+      mockRowModel.countDocuments.mockReturnValueOnce(q(2)).mockReturnValueOnce(q(2)).mockReturnValueOnce(q(2));
+      mockFormModel.findById
+        .mockReturnValueOnce(q({ totalMoHUAAllocation: 800_000, excelRowCount: 2 }))
+        .mockReturnValueOnce(q({ ...mockFormInProgress, totalAllocatedSum: 800_000 }));
+      mockFormModel.findByIdAndUpdate.mockReturnValue(q(null));
+      mockClaimLetterUlbLockModel.findOne.mockReturnValue(q(null));
+
+      await service.updateRow(
+        stateOid.toString(),
+        YEAR_ID,
+        1,
+        rowOid.toString(),
+        { devolutionFormula: 'updated-formula' },
+        adminUser,
+      );
+
+      const formUpdateArg = (mockFormModel.findByIdAndUpdate.mock.calls as unknown[][][])[0][1] as {
+        $set: { totalAllocatedSum: number; validationStatus: string };
+      };
+      expect(formUpdateArg.$set.totalAllocatedSum).toBe(800_000);
+      expect(formUpdateArg.$set.validationStatus).toBe('VALID');
+    });
   });
 });
 

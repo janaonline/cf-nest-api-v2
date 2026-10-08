@@ -22,6 +22,7 @@ import { assertStateAccess, buildStateFormPermissions } from 'src/module/xvi-fc/
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
 import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
 import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
+import { FormQuestionHydratorService } from 'src/module/xvi-fc/common/services/form-question-hydrator.service';
 import { keyByFieldKey, requireField } from 'src/module/xvi-fc/common/utils/xvi-fc-field-lookup.util';
 import { deriveFileValidationOptions } from 'src/module/xvi-fc/common/utils/xvi-fc-file-constraint.util';
 import { buildUlbReconciliationBadges } from 'src/module/xvi-fc/common/utils/xvi-fc-ulb-reconciliation-badges.util';
@@ -36,7 +37,7 @@ import type {
   HydratedFieldConfig,
 } from 'src/module/xvi-fc/common/types/field-config.type';
 import {
-  buildXviFcFolderPath,
+  resolveXviFcFolderPathsInFormJson,
   type XviFcFolderPathContext,
 } from 'src/module/xvi-fc/common/folder-paths/xvi-fc-folder-path.resolver';
 import { YearIdToLabel } from 'src/core/constants/years';
@@ -92,9 +93,7 @@ function toExcelDateExpr(dateVal: string): string {
   return `DATE(${d.getUTCFullYear()},${d.getUTCMonth() + 1},${d.getUTCDate()})`;
 }
 
-/** Builds a per-row Excel formula expression for a FIELD-relative bound (e.g. dateOfConstitution
- *  + 5 years), referencing that sibling column's own cell for the given row. `EDATE` shifts by
- *  whole months, so Y/M units use it directly; D uses plain cell arithmetic. */
+/** `EDATE()` shifts by whole months, so Y/M units use it directly; D falls back to plain cell arithmetic. */
 function buildRelativeExcelExpr(cellRef: string, offset: EulbDateOffsetBoundary): string {
   const delta = offset.amount * offset.sign;
   switch (offset.unit) {
@@ -107,9 +106,8 @@ function buildRelativeExcelExpr(cellRef: string, offset: EulbDateOffsetBoundary)
   }
 }
 
-/** Human-readable description of a FIELD-relative bound for Excel prompt text, e.g.
- *  "5 years after Date on which the elected body is in place" (Excel data-validation prompts are
- *  static text shown before entry, so unlike the formula itself this can't be computed per row.) */
+/** Static prompt text — Excel prompts can't be computed per row like the formula itself. See
+ *  CLAUDE.md's "dateOfExpiry's maxDate" section. */
 function describeRelativeOffset(offset: EulbDateOffsetBoundary, fieldLabel: string): string {
   const unitWord = offset.unit === 'D' ? 'day' : offset.unit === 'M' ? 'month' : 'year';
   const plural = offset.amount === 1 ? '' : 's';
@@ -117,9 +115,8 @@ function describeRelativeOffset(offset: EulbDateOffsetBoundary, fieldLabel: stri
   return `${offset.amount} ${unitWord}${plural} ${direction} ${fieldLabel}`;
 }
 
-/** Converts a stored date (Date object or ISO string) to a Date for ExcelJS to serialize as a date
- *  serial, or '' for empty/invalid values. Returning a Date keeps ISNUMBER() checks in the
- *  validation formula satisfied; returning '' leaves the cell blank. */
+/** Returns a Date (not a string) so ISNUMBER() in the validation formula still passes; '' for
+ *  empty/invalid leaves the cell blank. */
 function dateToTemplateValue(val: Date | string | undefined | null): Date | string {
   if (!val) return '';
   if (val instanceof Date) return isNaN(val.getTime()) ? '' : val;
@@ -186,13 +183,11 @@ export class ElectedUrbanLocalBodiesService {
     private readonly fileInfoNormalizer: FileInfoNormalizerService,
     private readonly eulbFormJsonConfig: EulbFormJsonConfigService,
     private readonly ulbEligibilityService: UlbEligibilityService,
+    private readonly formQuestionHydrator: FormQuestionHydratorService,
   ) {}
 
-  /**
-   * Returns the Elected Urban Local Bodies question config for frontend rendering.
-   * Loads EULB_MAIN_FORM_FIELDS from the DB-backed form config (Redis-cached).
-   * The electedBodyExcelFile question receives default (no-form) supporting actions.
-   */
+  /** electedBodyExcelFile gets default (no-form) supporting actions here — there's no form doc yet
+   *  to compute real permissions/state from. */
   async getQuestions(): Promise<XviFcApiResponse<HydratedFieldConfig[]>> {
     const fields = await this.eulbFormJsonConfig.loadFields();
     const mainFormFields = getFieldsByType(fields, 'EULB_MAIN_FORM_FIELDS');
@@ -209,18 +204,8 @@ export class ElectedUrbanLocalBodiesService {
     return xviFcSuccess('Elected Urban Local Bodies questions fetched.', questions as HydratedFieldConfig[]);
   }
 
-  /**
-   * Returns the hydrated EULB form for a given state and year.
-   * Merges saved field values with TEMP_QUESTIONS defaults. Signs file URLs.
-   * Returns a default Not Started form when no record exists yet.
-   *
-   * `ulbCount` is hydrated as a read-only, backend-owned field computed from the active
-   * ULB registry. The client-provided value is ignored.
-   *
-   * @param stateId - ObjectId string of the target state.
-   * @param yearId  - ObjectId string of the target year.
-   * @param user    - Authenticated user; scope-checked against stateId.
-   */
+  /** `ulbCount` is hydrated as a read-only, backend-owned field from the active ULB registry — the
+   *  client-provided value is ignored. Returns a default Not Started form when no record exists yet. */
   async getForm(stateId: string, yearId: string, user: AuthUser): Promise<XviFcApiResponse<EulbFormGetResponseData>> {
     assertStateAccess(user, stateId);
 
@@ -281,8 +266,8 @@ export class ElectedUrbanLocalBodiesService {
     const { actors, stateName } = this.xvifcFormActorsService.buildActorsAndStateName(doc);
     const validationSummary = this.buildValidationSummary(doc);
 
-    // Only computed once the form has actually been submitted (UNDER_REVIEW_BY_MOHUA or later) —
-    // avoids a needless aggregation query on every pre-submission page load. `null` beforehand.
+    // Only computed post-submission (UNDER_REVIEW_BY_MOHUA+) — avoids a needless aggregation query
+    // on every pre-submission page load.
     let statusSummary: EulbStatusSummary | null = null;
     if (doc && currentFormStatus >= FORM_STATUS.UNDER_REVIEW_BY_MOHUA) {
       const electedBodyStatuses = deriveElectedBodyStatuses(rowEditFields);
@@ -317,14 +302,8 @@ export class ElectedUrbanLocalBodiesService {
     return xviFcSuccess('Elected Urban Local Bodies form fetched.', responseData);
   }
 
-  /**
-   * Generates an Excel template for the EULB data collection.
-   *
-   * The template always represents the current active ULB registry for the state — every
-   * persisted row is registry-backed, so no separate "excluded row" case applies here.
-   * When an active dataset exists, saved row values are overlaid onto the matching registry ULB.
-   * No blank padding rows are added beyond the active registry count.
-   */
+  /** Every row is registry-backed (no separate "excluded row" case here); saved values are
+   *  overlaid onto the matching registry ULB when an active dataset exists. */
   async getTemplate(stateId: string, yearId: string, user: AuthUser): Promise<Buffer> {
     assertStateAccess(user, stateId);
 
@@ -366,7 +345,6 @@ export class ElectedUrbanLocalBodiesService {
     let rows: EulbTemplateRow[];
 
     if (activeVersion > 0 && formDoc) {
-      // Load saved rows for the active dataset version — every row is registry-backed.
       const savedDbRows = await this.rowModel
         .find({
           form: formDoc._id as Types.ObjectId,
@@ -377,13 +355,11 @@ export class ElectedUrbanLocalBodiesService {
         .lean()
         .exec();
 
-      // Build overlay map keyed by ulbId string for O(1) lookup.
       const savedRowByUlbId = new Map<string, (typeof savedDbRows)[number]>();
       for (const r of savedDbRows) {
         if (r.ulbId) savedRowByUlbId.set(r.ulbId.toString(), r);
       }
 
-      // Iterate active registry; overlay saved values when a match exists.
       rows = activeUlbs.map((u) => {
         const saved = savedRowByUlbId.get(u._id.toString());
         const censusCode = String(u['censusCode'] ?? u['sbCode'] ?? '');
@@ -397,7 +373,6 @@ export class ElectedUrbanLocalBodiesService {
         };
       });
     } else {
-      // No active dataset — one blank row per active registry ULB.
       rows = activeUlbs.map((u: Record<string, unknown>) => ({
         censusCode: (u['censusCode'] as string | null) || (u['sbCode'] as string | null) || '',
         ulbName: u['name'] as string,
@@ -417,12 +392,8 @@ export class ElectedUrbanLocalBodiesService {
     );
   }
 
-  /**
-   * Exports only the latest active EULB row dataset for the given state/year.
-   * Uses the form's activeDatasetVersion and loads a flat row projection only:
-   * histories, raw upload data, post-submission batches, and old dataset versions
-   * are deliberately excluded.
-   */
+  /** Deliberately excludes histories, raw uploads, post-submission batches, and old dataset
+   *  versions — only the active version's flat row projection. */
   async dumpToExcel(stateId: string, yearId: string, user: AuthUser): Promise<Buffer> {
     assertStateAccess(user, stateId);
 
@@ -472,17 +443,8 @@ export class ElectedUrbanLocalBodiesService {
     );
   }
 
-  /**
-   * Saves the EULB form as a draft.
-   * `ulbCount` is computed server-side from the active ULB registry — the client-submitted
-   * value is ignored. Partial validation runs; absent required fields are allowed (except
-   * requiredTrue checkboxes). Upserts the main form document. Does not touch rows.
-   *
-   * @param dto       - Payload with stateId, yearId, and partial form data.
-   * @param user      - Authenticated user; must have EDIT_STATE_FORMS permission.
-   * @param ip        - Client IP, stamped onto the history entry when status changes.
-   * @param userAgent - Same, for the User-Agent header.
-   */
+  /** Partial validation only — absent required fields are allowed (except requiredTrue checkboxes).
+   *  Upserts the main form document; does not touch rows. */
   async saveDraft(
     dto: SaveElectedUrbanLocalBodiesDraftDto,
     user: AuthUser,
@@ -645,21 +607,10 @@ export class ElectedUrbanLocalBodiesService {
     });
   }
 
-  /**
-   * Final-submits the EULB form.
-   * `ulbCount` is computed server-side; the client-submitted value is ignored.
-   * Runs full form-level validation then enforces all Excel row-level pre-conditions:
-   * validationStatus VALID, zero errors, zero missing DB ULBs, zero extra ULB rows,
-   * and Excel row count matching the computed active ULB count.
-   * Transitions status to UNDER_REVIEW_BY_MOHUA. devolution-formula's Installment-1 gate reads
-   * this status from outside this module (see devolution-formula/CLAUDE.md) — changing when/how
-   * this transition happens has a blast radius there too.
-   *
-   * @param dto       - Payload with stateId, yearId, and complete form data.
-   * @param user      - Authenticated user; must have FINAL_SUBMIT_STATE_FORMS permission.
-   * @param ip        - Client IP, stamped onto the history entry written inside this transaction.
-   * @param userAgent - Same, for the User-Agent header.
-   */
+  /** Enforces all Excel row-level pre-conditions (validated, zero error/missing/extra rows, row
+   *  count matches the computed active ULB count) before transitioning to UNDER_REVIEW_BY_PMU — see
+   *  CLAUDE.md's "finalSubmit's old coupling with devolution-formula is gone" section and
+   *  pmu/elected-urban-local-bodies/CLAUDE.md for the PMU hand-off. */
   async finalSubmit(
     dto: FinalSubmitElectedUrbanLocalBodiesDto,
     user: AuthUser,
@@ -887,7 +838,7 @@ export class ElectedUrbanLocalBodiesService {
       );
     }
 
-    const toStatus = FORM_STATUS.UNDER_REVIEW_BY_MOHUA;
+    const toStatus = FORM_STATUS.UNDER_REVIEW_BY_PMU;
     const now = new Date();
 
     const fieldUpdates: Record<string, unknown> = {
@@ -906,7 +857,7 @@ export class ElectedUrbanLocalBodiesService {
 
     // Two collections are written together here (parent + rows), so this needs the same
     // transactional guarantee finalSubmit already has in fc-unspent-declaration.service.ts —
-    // a crash between the two writes must never leave the form UNDER_REVIEW_BY_MOHUA while
+    // a crash between the two writes must never leave the form UNDER_REVIEW_BY_PMU while
     // its rows are still `null`.
     const session = await this.model.db.startSession();
     let updated: EulbFormLeanDoc | null = null;
@@ -921,7 +872,7 @@ export class ElectedUrbanLocalBodiesService {
       await this.rowModel
         .updateMany(
           { form: existing._id, datasetVersion: activeDatasetVersion, isActive: true },
-          { $set: { rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA } },
+          { $set: { rowStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU } },
           { session },
         )
         .exec();
@@ -990,12 +941,9 @@ export class ElectedUrbanLocalBodiesService {
 
   // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-  /**
-   * Inserts a history row unless `fromStatus === toStatus` (no-op re-save). Best-effort,
-   * non-transactional — a failure here must not fail saveDraft. Mirrors sfc-status.service.ts's
-   * update-then-log pattern. `finalSubmit` doesn't use this — it writes its own entry inside its
-   * transaction so a failure there aborts the submit instead of being swallowed.
-   */
+  /** No-op on `fromStatus === toStatus`. Best-effort, non-transactional — a failure here doesn't
+   *  fail saveDraft (mirrors sfc-status.service.ts's update-then-log pattern). `finalSubmit` writes
+   *  its own entry inside its transaction instead, so a failure there aborts the submit. */
   private async recordFormHistory(entry: {
     formId: Types.ObjectId;
     state: Types.ObjectId;
@@ -1025,18 +973,9 @@ export class ElectedUrbanLocalBodiesService {
     }
   }
 
-  /**
-   * Merges saved form data onto TEMP_QUESTIONS in one O(n) pass.
-   * File-type questions have their fileUrl signed with a session-length token
-   * (`FileTokenService.signFileUrlForSession`).
-   * The electedBodyExcelFile question receives backend-driven supporting actions based on the form doc.
-   * The ulbCount question is overridden with the backend-computed active ULB count (read-only).
-   *
-   * @param savedData              - Key-value pairs extracted from the stored form document's top-level fields.
-   * @param doc                    - Lean form document used to compute supporting action/badge visibility.
-   * @param yearId                 - Design year ObjectId string (for building Register ULB URL).
-   * @param computedActiveUlbCount - Active ULB count from the registry (server-side authoritative value).
-   */
+  /** Delegates the core merge/file-signing to the shared `FormQuestionHydratorService`, then layers
+   *  EULB-specific overrides: `ulbCount` gets the backend-computed active count, and
+   *  `electedBodyExcelFile` gets its form-driven supportingContent (actions/badges). */
   private hydrateQuestions(
     questions: FieldConfig[],
     savedData: FormData,
@@ -1046,60 +985,27 @@ export class ElectedUrbanLocalBodiesService {
     computedActiveUlbCount: number,
     folderPathContext?: XviFcFolderPathContext,
   ): HydratedFieldConfig[] {
-    return questions.map((question) => {
-      if (question.key === 'ulbCount') {
-        return { ...question, value: computedActiveUlbCount } as HydratedFieldConfig;
+    const coreHydrated = this.formQuestionHydrator.hydrate(questions, savedData);
+    const withFolderPaths = folderPathContext
+      ? resolveXviFcFolderPathsInFormJson(coreHydrated, folderPathContext)
+      : coreHydrated;
+
+    return withFolderPaths.map((hydrated) => {
+      if (hydrated.key === 'ulbCount') {
+        return { ...hydrated, value: computedActiveUlbCount };
       }
-
-      const rawValue = Object.prototype.hasOwnProperty.call(savedData, question.key)
-        ? savedData[question.key]
-        : question.value;
-
-      let value = rawValue;
-      if (question.formFieldType === 'file') {
-        const resolvedFolderPath =
-          question.folderPathKey && folderPathContext
-            ? buildXviFcFolderPath(question.folderPathKey, folderPathContext)
-            : question.folderPath;
-
-        const fileVal = rawValue as FileInfo | null | undefined;
-        const hydrated = this.fileInfoNormalizer.hydrateFileInfoForResponse(fileVal ?? null, (p) =>
-          this.fileTokenService.signFileUrlForSession(p),
-        );
-        if (hydrated) value = hydrated;
-
-        if (question.key === 'electedBodyExcelFile') {
-          return {
-            ...question,
-            folderPath: resolvedFolderPath,
-            value,
-            supportingContent: this.buildElectedBodyFileSupportingContent(doc, permissions, yearId),
-          };
-        }
-        return { ...question, folderPath: resolvedFolderPath, value };
-      }
-
-      if (question.key === 'electedBodyExcelFile') {
+      if (hydrated.key === 'electedBodyExcelFile') {
         return {
-          ...question,
-          value,
+          ...hydrated,
           supportingContent: this.buildElectedBodyFileSupportingContent(doc, permissions, yearId),
         };
       }
-
-      return { ...question, value };
+      return hydrated;
     });
   }
 
-  /**
-   * Builds the backend-driven `actions` supporting content item for the electedBodyExcelFile question.
-   * Action and badge visibility is derived from the current form document state.
-   * When doc is null (no form record yet), only the download-template action is visible.
-   * The Register ULB action is shown when the user can edit and extra ULB rows exist.
-   *
-   * @param doc     - Lean form document; null when no record exists yet.
-   * @param yearId  - Design year ObjectId string; used to build the Register ULB URL.
-   */
+  /** Action/badge visibility is derived entirely from the current form doc's stored counts/status
+   *  — only download-template shows when `doc` is null (no form record yet). */
   private buildElectedBodyFileSupportingContent(
     doc: EulbFormLeanDoc | null,
     permissions: EulbFormPermissions,
@@ -1200,12 +1106,6 @@ export class ElectedUrbanLocalBodiesService {
     ];
   }
 
-  /**
-   * Extracts the Excel validation summary fields from a stored form document.
-   * Returns zero/NOT_VALIDATED defaults when no doc exists.
-   *
-   * @param doc - Lean form document; may be null when no record exists yet.
-   */
   private buildValidationSummary(doc: EulbFormLeanDoc | null): EulbValidationSummary {
     return {
       dbUlbCount: doc?.dbUlbCount ?? 0,
@@ -1221,10 +1121,7 @@ export class ElectedUrbanLocalBodiesService {
     };
   }
 
-  /**
-   * Builds ExcelJS data validations for the EULB template, derived entirely from EULB_ROW_EDIT_FIELDS.
-   * Returns an empty array when rowCount is 0 so generateExcel skips validation application.
-   */
+  /** Returns an empty array when rowCount is 0, so generateExcel skips validation application. */
   private buildTemplateValidations(rowEditFields: FieldConfig[], rowCount: number): ExcelColumnValidation[] {
     if (rowCount === 0) return [];
 
@@ -1240,10 +1137,8 @@ export class ElectedUrbanLocalBodiesService {
 
     const expiryMinVal = expiryField.minDate!;
     const expiryMaxVal = expiryField.validations?.find((v) => v.name === 'maxDate')?.validator as string;
-    // dateOfExpiry's maxDate may be a fixed ISO date (toExcelDateExpr handles it directly, same as
-    // the other three bounds) or a 'FIELD:<key>+-N[DMY]' token (e.g. dateOfConstitution + 5 years)
-    // — that one needs a per-row formula referencing the constitution column's own cell, so it's
-    // built separately below rather than as a shared constant.
+    // See CLAUDE.md's "dateOfExpiry's maxDate" section for why this one bound needs a per-row
+    // formula instead of a shared constant like the other three.
     const expiryMaxRelative = parseFieldRelativeBoundary(expiryMaxVal);
 
     const maxLength = remarksField.validations?.find((v) => v.name === 'maxlength')?.validator as number;

@@ -28,6 +28,9 @@ export class XviFcSfcStatus {
   @Prop({ type: Number, default: FORM_STATUS.NOT_STARTED })
   currentFormStatus!: number;
 
+  @Prop({ type: String, default: null })
+  pmuRemarks?: string | null;
+
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User' })
   submittedBy?: Types.ObjectId;
 

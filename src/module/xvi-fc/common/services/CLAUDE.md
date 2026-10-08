@@ -1,10 +1,13 @@
 # Dynamic Year Access
 
-Scope: this file documents Dynamic Year Access only — `YearAccessService`, `Ulb.startYear`/
-`Ulb.yearAccess`, and the three other services in this folder that consume them
-(`ExpectedUlbSetService`, `ClaimEligibilityEvaluatorService`, `ExemptionResolverService`). `file-info-normalizer.service.ts`,
-`file-url-normalizer.service.ts`, and `xvifc-form-actors.service.ts` are unrelated utilities that
-happen to sit in the same directory and aren't covered here.
+Scope: this file has two independent sections. "Dynamic Year Access" (below) covers
+`YearAccessService`, `Ulb.startYear`/`Ulb.yearAccess`, and the three other services in this folder
+that consume them (`ExpectedUlbSetService`, `ClaimEligibilityEvaluatorService`,
+`ExemptionResolverService`). "PMU Review shared mechanics" (near the end of this file) covers
+`StateFormPmuReviewHelper`/`PmuRowReviewHelper` and the PMU-specific reviewer-access/permissions
+utils. `file-info-normalizer.service.ts`, `file-url-normalizer.service.ts`,
+`form-question-hydrator.service.ts`, and `xvifc-form-actors.service.ts` are unrelated utilities that
+happen to sit in the same directory and aren't covered by either section.
 
 Replaces the old module's hardcoded `Ulb.access_20xx` boolean fields (six fixed years, decoded by
 string-matching the label, whole-year-only). Two admin-set facts on `Ulb`, both optional and
@@ -248,3 +251,60 @@ materialize/revalidate methods, since a bulk-list revalidation is read-only and 
 `docs/adr/0001-dynamic-year-access-design.md` in this folder — the alternatives that were considered
 and rejected (inferring newness from `dateOfConstitution`, a separate `noPriorDataFormIds` field, a
 `Map`-typed sub-schema, hand-maintained per-year entries) and what's deliberately deferred.
+
+# PMU Review shared mechanics
+
+Unrelated to Dynamic Year Access above — see the "Scope" note at the top of this file. Backs the 5
+`pmu/<feature>/` review modules (`sfc-status`, `gtc`, `devolution-formula`,
+`elected-urban-local-bodies`, `fc-unspent-declaration`); each module's own nested
+`pmu/<feature>/CLAUDE.md` already names these by file and points here instead of duplicating the
+rationale.
+
+- **`state-form-pmu-review.helper.ts` (`StateFormPmuReviewHelper`)** — the complete-form
+  approve/reject mechanics all 5 modules call: `transitionForm` (`$set` + `findOneAndUpdate`,
+  throwing `NotFoundException` if the form vanished mid-request) and `writeHistoryIfChanged` (skips
+  the history insert entirely when `fromStatus === toStatus`). Modeled on
+  `FcUnspentPmuRowReviewDomainService.transitionParent`/`insertParentHistory` plus SFC's/GTC's own
+  duplicated `createHistoryEntry` — all three already followed this shape, just copy-pasted per
+  form, before being collapsed into one helper. Deliberately agnostic of per-form shape: field
+  names, the history snapshot payload, and the remarks field all stay in the caller's
+  `setFields`/`buildDocument`. Row-level mechanics (bulk transitions, row history) have no
+  equivalent here — see `PmuRowReviewHelper`.
+- **`pmu-row-review.helper.ts` (`PmuRowReviewHelper`)** — row-bulk mechanics for the 2 row-bearing
+  PMU modules (Elected Urban Local Bodies, FC Unspent Declaration — the only forms with per-row
+  review): `getActiveRows`, `loadActiveRowsByIds`, `filterNotInStatus`, `transitionRows` (one
+  `bulkWrite` + one `insertMany`, skipped entirely when every requested transition is already a
+  no-op), `countActiveRowsNotYetApproved`, and `getRowSummary`. Extracted from
+  `ElectedUrbanLocalBodiesPmuRowReviewDomainService` and `FcUnspentPmuRowReviewDomainService`, which
+  were ~70% structurally identical. Deliberately excludes `findForm`/`transitionParent`/
+  `insertParentHistory`/`maybeApproveAfterBulkAction` — an adversarial design review confirmed those
+  carry real per-form differences (FC Unspent's `auditRevision` bookkeeping and richer history
+  snapshot vs Elected Body's simpler one), not accidental duplication. A sibling to
+  `StateFormPmuReviewHelper`, not an extension of it.
+- **`xvi-fc-reviewer-access.util.ts`** (`hasReviewerAccess`/`assertReviewerAccess`,
+  `assertPmuReviewerAccess`) and **`xvi-fc-reviewer-permissions.util.ts`**
+  (`buildReviewerFormPermissions`, `buildPmuReviewerFormPermissions`) — the reviewer-scope gate and
+  the permissions-object builder, both parameterized by `Scope`/status-gates rather than one
+  function per reviewer role, so a future reviewer stage (beyond PMU) needs no new function, only a
+  new call site passing its own scope, permissions, and status gates.
+- **`PMU_REVIEWABLE_STATUSES`** (`xvi-fc-form-status-access.util.ts`) — wider than the mutate gate:
+  PMU keeps read-only visibility into a form even after it moves on to MoHUA (PMU approval has no
+  status of its own; it lands directly on `UNDER_REVIEW_BY_MOHUA`). Includes `RETURNED_BY_PMU`
+  (fixed in passing — it was missing, which would have 403'd PMU viewing a form immediately after
+  rejecting it) and `NOT_STARTED`/`IN_PROGRESS` (this same constant doubles as the cross-state
+  worklist's own `$in` visibility filter in every module's `getWorklist()`, so PMU can see states
+  that haven't reached its queue yet instead of the Form Status filter always showing zero rows for
+  them). Safe to widen this way because `canPmuMutateForm`/`assertCanPmuMutateForm` is a separate,
+  still `UNDER_REVIEW_BY_PMU`-only gate — broader view access never implies broader mutate access.
+- **`STATE_EDITABLE_STATUSES`** (`xvi-fc-form-status-access.util.ts`) includes `RETURNED_BY_PMU`
+  alongside the legacy `RETURNED_BY_MOHUA`: all 5 state forms now route through a PMU reviewer
+  before MoHUA, and a PMU rejection must send the state back into edit/resubmit mode the same way a
+  MoHUA rejection always has, or the form would be permanently stuck. Mirrors `ULB_EDITABLE_STATUSES`
+  already coexisting on two "returned" stages for the same reason.
+
+Consumers: all 5 `pmu/<feature>/` modules call `StateFormPmuReviewHelper`; only
+`elected-urban-local-bodies` and `fc-unspent-declaration` call `PmuRowReviewHelper`.
+
+No ADRs for this section — no concurrency/locking/idempotency machinery lives here beyond what's
+described above; see each `pmu/<feature>/CLAUDE.md`'s own "No ADRs" note for why the per-module
+write pattern itself doesn't need one either.

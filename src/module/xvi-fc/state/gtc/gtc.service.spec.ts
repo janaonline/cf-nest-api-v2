@@ -12,6 +12,7 @@ import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { S3Service } from 'src/core/s3/s3.service';
 import { FileUrlNormalizerService } from '../../common/services/file-url-normalizer.service';
 import { FileInfoNormalizerService } from '../../common/services/file-info-normalizer.service';
+import { FormQuestionHydratorService } from '../../common/services/form-question-hydrator.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { FORM_STATUS, FormHistoryAction } from 'src/common/constants/form-status.constants';
@@ -162,6 +163,7 @@ describe('GtcService', () => {
         { provide: S3Service, useValue: s3Service },
         { provide: FileUrlNormalizerService, useValue: { toRawStoragePath: jest.fn((v: string) => v) } },
         FileInfoNormalizerService,
+        FormQuestionHydratorService,
       ],
     }).compile();
 
@@ -309,7 +311,7 @@ describe('GtcService', () => {
       );
     });
 
-    it('writes a FINAL_SUBMIT history row (NOT_STARTED → UNDER_REVIEW_BY_MOHUA)', async () => {
+    it('writes a FINAL_SUBMIT history row (NOT_STARTED → UNDER_REVIEW_BY_PMU)', async () => {
       formModel['create'] = jest.fn().mockResolvedValue(mockFormDoc);
 
       await service.finalSubmit(validDto, adminUser, '127.0.0.1', 'jest');
@@ -318,7 +320,11 @@ describe('GtcService', () => {
         expect.objectContaining({
           action: FormHistoryAction.FINAL_SUBMIT,
           fromStatus: FORM_STATUS.NOT_STARTED,
-          toStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+          toStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU,
+          // Data-loss gap fix (PMU Review feature) - metadata now snapshots the submitted
+          // payload, so a PMU reject -> State resubmit cycle has somewhere for old values to
+          // survive. Previously always undefined (see gtc/CLAUDE.md pre-fix history).
+          metadata: { i2GtcFile: null },
         }),
       );
     });

@@ -38,6 +38,7 @@ import {
 import { DynamicFormValidationService } from '../../common/dynamic-form-validation/dynamic-form-validation.service';
 import { XvifcFormActorsService } from '../../common/services/xvifc-form-actors.service';
 import { FileInfoNormalizerService } from '../../common/services/file-info-normalizer.service';
+import { FormQuestionHydratorService } from '../../common/services/form-question-hydrator.service';
 import { FileInfo } from '../../../../schemas/common/file.schema';
 
 import type {
@@ -50,7 +51,7 @@ import { XviFcApiResponse } from '../../common/response/xvi-fc-api-response';
 import { throwXviFcValidationError, xviFcSuccess } from '../../common/response/xvi-fc-response.util';
 import type { FormFieldOption } from '../../common/types/field-config.type';
 import {
-  buildXviFcFolderPath,
+  resolveXviFcFolderPathsInFormJson,
   type XviFcFolderPathContext,
 } from '../../common/folder-paths/xvi-fc-folder-path.resolver';
 import { YearIdToLabel } from 'src/core/constants/years';
@@ -134,25 +135,15 @@ export class SfcStatusService {
     private readonly excelService: ExcelService,
     private readonly fileTokenService: FileTokenService,
     private readonly exemptionResolverService: ExemptionResolverService,
+    private readonly formQuestionHydrator: FormQuestionHydratorService,
   ) {}
 
-  /** Returns the SFC Status question config array from the DB for frontend rendering. */
   async getQuestions(): Promise<XviFcApiResponse<FieldConfig[]>> {
     const questions = await this.loadFormQuestions();
     return xviFcSuccess('SFC Status questions fetched.', questions);
   }
 
-  /**
-   * Returns the hydrated SFC Status form for a given state and year.
-   * Questions are merged with saved data: answered fields use saved values,
-   * unanswered fields use the `value` default from the DB-loaded question config.
-   * Returns a fully hydrated Not Started form when no record exists.
-   * One DB query + one O(n) pass — no extra queries.
-   *
-   * @param stateId - ObjectId string of the target state.
-   * @param yearId  - ObjectId string of the target year.
-   * @param user    - Authenticated user; scope-checked against stateId.
-   */
+  /** Returns a fully hydrated Not Started form when no record exists. */
   async getForm(stateId: string, yearId: string, user: AuthUser): Promise<XviFcApiResponse<SfcFormGetResponseData>> {
     assertStateAccess(user, stateId);
 
@@ -190,11 +181,8 @@ export class SfcStatusService {
     const folderPathContext: XviFcFolderPathContext = { _id: stateId, designYear, role: 'state' };
     const questions = this.hydrateQuestions(savedData, formJson, folderPathContext);
     let permissions = buildStateFormPermissions(user, stateId, currentFormStatus);
-    // buildStateFormPermissions only knows currentFormStatus - it has no concept of exemptions
-    // (correctly, since it's shared by every state form, most of which have none). A Pending or
-    // Approved exemption blocks saveDraft/finalSubmit regardless of currentFormStatus
-    // (assertNotBlockedByExemption), so canEdit/canFinalSubmit must reflect that here too, or the
-    // response could advertise an action the next write of that same action would reject.
+    // buildStateFormPermissions has no concept of exemptions - see CLAUDE.md's "Discretionary
+    // whole-state exemption awareness" section for why this override is needed here.
     if (exemption.exemptionStatus === 'PENDING' || exemption.exemptionStatus === 'APPROVED') {
       permissions = { ...permissions, canEdit: false, canFinalSubmit: false };
     }
@@ -220,17 +208,8 @@ export class SfcStatusService {
     return xviFcSuccess('SFC Status form fetched.', responseData);
   }
 
-  /**
-   * Saves the SFC Status form as a draft.
-   * Runs partial validation — absent required fields are allowed; requiredTrue and all
-   * format validators (pattern, yearRange, etc.) are still enforced on any provided value.
-   * Upserts by state + year + formType. Sets status to IN_PROGRESS.
-   *
-   * @param dto       - Payload with stateId, yearId, and form data.
-   * @param user      - Authenticated user; must have EDIT_STATE_FORMS permission.
-   * @param ip        - Client IP stored in history.
-   * @param userAgent - User-Agent header stored in history.
-   */
+  /** Runs partial validation - absent required fields are allowed, but requiredTrue and format
+   *  validators are still enforced on any provided value. */
   async saveDraft(dto: SaveSfcStatusDto, user: AuthUser, ip: string, userAgent: string): Promise<XviFcApiResponse> {
     assertStateAccess(user, dto.stateId);
     await this.assertNotBlockedByExemption(dto.stateId, dto.yearId);
@@ -281,6 +260,7 @@ export class SfcStatusService {
         changedBy: userOid,
         ip,
         userAgent,
+        metadata: sanitizedPayload,
       });
 
       return xviFcSuccess('SFC Status form saved as draft.', {
@@ -317,6 +297,7 @@ export class SfcStatusService {
       changedBy: userOid,
       ip,
       userAgent,
+      metadata: sanitizedPayload,
     });
 
     return xviFcSuccess('SFC Status form saved as draft.', {
@@ -325,18 +306,8 @@ export class SfcStatusService {
     });
   }
 
-  /**
-   * Final-submits the SFC Status form for a given state and year.
-   * Supports one-shot submit: creates the record if none exists yet.
-   * Runs full validation — all visible required fields must be present and valid.
-   * Persists the sanitized visible-field payload and transitions status to
-   * SUBMISSION_ACKNOWLEDGED_BY_MOHUA. Blocked by `assertCanStateFinalSubmitForm`.
-   *
-   * @param dto       - Payload with stateId, yearId, and form data.
-   * @param user      - Authenticated user; must have FINAL_SUBMIT_STATE_FORMS permission.
-   * @param ip        - Client IP stored in history.
-   * @param userAgent - User-Agent header stored in history.
-   */
+  /** Supports one-shot submit - creates the record if none exists yet. Now routes to
+   *  UNDER_REVIEW_BY_PMU rather than MoHUA directly - see pmu/sfc-status/CLAUDE.md for that stage. */
   async finalSubmit(dto: SaveSfcStatusDto, user: AuthUser, ip: string, userAgent: string): Promise<XviFcApiResponse> {
     assertStateAccess(user, dto.stateId);
     await this.assertNotBlockedByExemption(dto.stateId, dto.yearId);
@@ -365,15 +336,11 @@ export class SfcStatusService {
     );
     if (Object.keys(fileErrors).length > 0) throwXviFcValidationError(fileErrors);
 
-    // Re-check right before the write, not just at the top of this method - loadFormQuestions,
-    // the findOne above, and validation/file-normalization are all real awaited steps a
-    // discretionary exemption request could be filed *and* approved within (see
-    // assertNotBlockedByExemption's own doc-comment). Re-running the exact same check here closes
-    // that window down to the gap between this read and the write immediately below, rather than
-    // leaving it open for this method's entire duration.
+    // Re-checked right before the write to narrow the TOCTOU window - see request-exemption's
+    // docs/adr/0002-eligibility-gating-and-race-window.md ("SFC finalSubmit race window").
     await this.assertNotBlockedByExemption(dto.stateId, dto.yearId);
 
-    const toStatus = FORM_STATUS.UNDER_REVIEW_BY_MOHUA;
+    const toStatus = FORM_STATUS.UNDER_REVIEW_BY_PMU;
     const now = new Date();
 
     let formOid: Types.ObjectId;
@@ -437,6 +404,7 @@ export class SfcStatusService {
       changedBy: userOid,
       ip,
       userAgent,
+      metadata: sanitizedPayload,
     });
 
     return xviFcSuccess('SFC Status form submitted successfully.', {
@@ -445,15 +413,6 @@ export class SfcStatusService {
     });
   }
 
-  /**
-   * Exports all SFC Status records as an Excel workbook buffer.
-   * ADMIN scope exports all records; STATE scope is restricted to the user's own state.
-   * Optional filters (stateId, yearId, status) narrow the result set further.
-   *
-   * @param filters   - Optional stateId / yearId / status query params.
-   * @param user      - Authenticated user; used for scope enforcement.
-   * @returns ExcelJS buffer ready to stream as an `.xlsx` download.
-   */
   async dumpToExcel(filters: SfcStatusDumpFilters, user: AuthUser): Promise<Buffer> {
     const resolvedFilters = this.resolveDumpFilters(filters, user);
 
@@ -506,14 +465,8 @@ export class SfcStatusService {
     return { exemptionStatus: null, exemptionMohuaRemarks: null };
   }
 
-  /**
-   * Blocks state writes while SFC Status's discretionary whole-state exemption is Pending/Approved
-   * (neither outcome touches SFC Status's own `currentFormStatus`, so the ordinary status gates
-   * wouldn't otherwise catch this). `finalSubmit` calls this twice to narrow the TOCTOU window
-   * across its awaited validation steps. See CLAUDE.md's "Discretionary whole-state exemption
-   * awareness" section and request-exemption's `docs/adr/0002-eligibility-gating-and-race-window.md`
-   * for the full rationale, incl. the ConflictException-not-ForbiddenException convention.
-   */
+  /** See CLAUDE.md's "Discretionary whole-state exemption awareness" section and request-exemption's
+   *  docs/adr/0002-eligibility-gating-and-race-window.md for the full rationale. */
   private async assertNotBlockedByExemption(stateId: string, yearId: string): Promise<void> {
     const entry = await this.exemptionResolverService.resolveDiscretionary(
       null,
@@ -533,41 +486,17 @@ export class SfcStatusService {
     }
   }
 
-  /**
-   * Merges saved form data onto the question template in one O(n) pass.
-   * For each question: uses saved value if the key exists in savedData,
-   * otherwise keeps the template default. File-type questions additionally
-   * have their fileUrl signed with a session-length token
-   * (`FileTokenService.signFileUrlForSession`).
-   *
-   * @param savedData - Key-value pairs from the stored document's `data` field.
-   * @param formJson  - Form template carrying the question config array.
-   */
+  /** Merges saved data onto the question template and signs file-type answers via the shared
+   *  `FormQuestionHydratorService` core (also used by PMU's review GET), then overrides each file
+   *  question's `folderPath` to the upload-target path - needed only for this State-side edit view;
+   *  a read-only reviewer never shows an upload control. */
   private hydrateQuestions(
     savedData: FormData,
     formJson: FormJson,
     folderPathContext?: XviFcFolderPathContext,
   ): HydratedFieldConfig[] {
-    return formJson.data.map((question) => {
-      const value = Object.prototype.hasOwnProperty.call(savedData, question.key)
-        ? savedData[question.key]
-        : question.value;
-
-      if (question.formFieldType === 'file') {
-        const resolvedFolderPath =
-          question.folderPathKey && folderPathContext
-            ? buildXviFcFolderPath(question.folderPathKey, folderPathContext)
-            : question.folderPath;
-
-        const fileVal = value as FileInfo | null | undefined;
-        const hydrated = this.fileInfoNormalizer.hydrateFileInfoForResponse(fileVal ?? null, (p) =>
-          this.fileTokenService.signFileUrlForSession(p),
-        );
-        return { ...question, folderPath: resolvedFolderPath, value: hydrated ?? value };
-      }
-
-      return { ...question, value };
-    });
+    const hydrated = this.formQuestionHydrator.hydrate(formJson.data, savedData);
+    return folderPathContext ? resolveXviFcFolderPathsInFormJson(hydrated, folderPathContext) : hydrated;
   }
 
   private async assertFreshDraftStatus(filter: Record<string, unknown>): Promise<never> {
@@ -588,12 +517,8 @@ export class SfcStatusService {
     );
   }
 
-  /**
-   * No-ops when `fromStatus === toStatus`. See CLAUDE.md's "The one tradeoff worth knowing before
-   * touching writes" section for the non-transactional-write tradeoff.
-   *
-   * @param entry - ip/userAgent are optional (omitted for non-HTTP triggers).
-   */
+  /** No-ops when `fromStatus === toStatus`. See CLAUDE.md's "The one tradeoff worth knowing before
+   *  touching writes" section for the non-transactional-write tradeoff. */
   private async createHistoryEntry(entry: SfcHistoryEntryInput): Promise<void> {
     if (entry.fromStatus === entry.toStatus) return;
 
@@ -617,12 +542,6 @@ export class SfcStatusService {
 
   // ─── Dump helpers ────────────────────────────────────────────────────────────
 
-  /**
-   * Enforces scope rules for the dump endpoint and merges any implicit state filter.
-   * ADMIN: filters applied as-is.
-   * STATE: stateId in filters must match the user's own state (or is forced to it).
-   * Any other scope: ForbiddenException.
-   */
   private resolveDumpFilters(filters: SfcStatusDumpFilters, user: AuthUser): SfcStatusDumpFilters {
     if (user.scope === Scope.ADMIN) return filters;
 
@@ -640,7 +559,6 @@ export class SfcStatusService {
     throw new ForbiddenException('Access denied');
   }
 
-  /** Flattens a populated SFC Status document into a single Excel row object. */
   private buildDumpRow(
     doc: SfcStatusDumpRecord,
     radioLabelMap: Record<string, Record<string, string>>,
@@ -698,13 +616,9 @@ export class SfcStatusService {
     };
   }
 
-  /**
-   * Extracts the four file sub-fields from a canonical FileInfo value.
-   * The path is signed into a download URL with a 1-week expiry via FileTokenService.
-   * Column keys/labels/units are unchanged from the legacy dump contract; only the
-   * source fields read (canonical FileInfo instead of the old fileName/fileUrl/fileSize
-   * shape) have changed. Returns empty strings for absent or malformed values.
-   */
+  /** Signs the path into a 1-week download URL. Column shape is unchanged from the legacy dump
+   *  contract; only the source (canonical FileInfo vs. the old fileName/fileUrl/fileSize fields)
+   *  has changed. */
   private extractFileColumns(value: unknown): {
     fileName: string;
     fileUrl: string;
@@ -725,13 +639,8 @@ export class SfcStatusService {
     };
   }
 
-  /**
-   * Fetches SFC form questions via FormJsonService.
-   * When a yearId is provided the call hits the Redis-cached
-   * `findActiveByDesignYearAndFormId(yearId, SFC_FORM_ID)` path.
-   * When no yearId is available (getQuestions, dumpToExcel) it falls back to
-   * `findByType('SFC')` which queries `{ type, isActive: true }`.
-   */
+  /** With yearId: Redis-cached findActiveByDesignYearAndFormId. Without (getQuestions,
+   *  dumpToExcel): falls back to findByType('SFC'). */
   private async loadFormQuestions(yearId?: string): Promise<FieldConfig[]> {
     const formJson = yearId
       ? await this.formJsonService.findActiveByDesignYearAndFormId(yearId, SFC_FORM_ID)
@@ -740,7 +649,6 @@ export class SfcStatusService {
     return formJson.data;
   }
 
-  /** Builds a radio option id → label map from a questions array. */
   private buildRadioLabelMap(questions: FieldConfig[]): Record<string, Record<string, string>> {
     return Object.fromEntries(
       questions
@@ -749,13 +657,11 @@ export class SfcStatusService {
     );
   }
 
-  /** Resolves a stored radio option id to its display label; falls back to the raw value if not found. */
   private radioVal(map: Record<string, Record<string, string>>, key: string, value: unknown): string {
     if (typeof value !== 'string' || !value) return '';
     return map[key]?.[value] ?? value;
   }
 
-  /** Coerces any scalar form-data value to a string for Excel output. */
   private strVal(value: unknown): string {
     if (value === undefined || value === null) return '';
     if (typeof value === 'string') return value;
@@ -763,10 +669,7 @@ export class SfcStatusService {
     return '';
   }
 
-  /**
-   * Derives the numeric duration from an `awardPeriod` string (e.g. `'2026-2031'` → `'5'`).
-   * Returns an empty string when the format is not `YYYY-YYYY`.
-   */
+  /** e.g. '2026-2031' → '5'. Empty string when the format isn't YYYY-YYYY. */
   private deriveAwardPeriodDuration(awardPeriod: string): string {
     const m = /^(\d{4})-(\d{4})$/.exec(awardPeriod);
     if (!m) return '';

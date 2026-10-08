@@ -210,11 +210,15 @@ function makeRow(overrides: Partial<TestEulbRow> = {}): TestEulbRow {
 // ─── canViewPostSubmissionUpdate ──────────────────────────────────────────────
 
 describe('canViewPostSubmissionUpdate', () => {
-  it('returns true for UNDER_REVIEW_BY_MOHUA (5)', () => {
+  it('returns true for UNDER_REVIEW_BY_PMU (13) — PMU Review feature’s new reviewer stage', () => {
+    expect(canViewPostSubmissionUpdate(FORM_STATUS.UNDER_REVIEW_BY_PMU)).toBe(true);
+  });
+
+  it('returns true for UNDER_REVIEW_BY_MOHUA (5) — kept for documents already in flight at deploy time', () => {
     expect(canViewPostSubmissionUpdate(FORM_STATUS.UNDER_REVIEW_BY_MOHUA)).toBe(true);
   });
 
-  it('returns true for SUBMISSION_ACKNOWLEDGED_BY_MOHUA (7)', () => {
+  it('returns true for SUBMISSION_ACKNOWLEDGED_BY_MOHUA (7) — kept for documents already in flight at deploy time', () => {
     expect(canViewPostSubmissionUpdate(FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA)).toBe(true);
   });
 
@@ -225,6 +229,7 @@ describe('canViewPostSubmissionUpdate', () => {
     FORM_STATUS.UNDER_REVIEW_BY_STATE,
     FORM_STATUS.RETURNED_BY_STATE,
     FORM_STATUS.RETURNED_BY_MOHUA,
+    FORM_STATUS.RETURNED_BY_PMU,
   ])('returns false for status %i', (status) => {
     expect(canViewPostSubmissionUpdate(status)).toBe(false);
   });
@@ -274,11 +279,15 @@ describe('buildEligibleRowCondition', () => {
     expect(hasExempt).toBe(false);
   });
 
-  it('POST_SUBMISSION_UPDATE_ALLOWED_STATUSES contains exactly status 5 and 7', () => {
+  it('POST_SUBMISSION_UPDATE_ALLOWED_STATUSES contains exactly the PMU status plus the legacy MoHUA statuses (PMU Review feature)', () => {
     expect([...POST_SUBMISSION_UPDATE_ALLOWED_STATUSES]).toEqual(
-      expect.arrayContaining([FORM_STATUS.UNDER_REVIEW_BY_MOHUA, FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA]),
+      expect.arrayContaining([
+        FORM_STATUS.UNDER_REVIEW_BY_PMU,
+        FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+        FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+      ]),
     );
-    expect(POST_SUBMISSION_UPDATE_ALLOWED_STATUSES).toHaveLength(2);
+    expect(POST_SUBMISSION_UPDATE_ALLOWED_STATUSES).toHaveLength(3);
   });
 });
 

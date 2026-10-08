@@ -19,13 +19,13 @@ import {
 import {
   applyActionVisibility,
   findSupportingAction,
-  stripSupportingContentMeta,
 } from '../../common/utils/xvi-fc-supporting-content-visibility.util';
 import { XviFcGtc, XviFcGtcDocument } from '../../../../schemas/xvi-fc/state/gtc-form.schema';
 import { XviFcGtcHistory, XviFcGtcHistoryDocument } from '../../../../schemas/xvi-fc/state/gtc-form-history.schema';
 import { DynamicFormValidationService } from '../../common/dynamic-form-validation/dynamic-form-validation.service';
 import { XvifcFormActorsService } from '../../common/services/xvifc-form-actors.service';
 import { FileInfoNormalizerService } from '../../common/services/file-info-normalizer.service';
+import { FormQuestionHydratorService } from '../../common/services/form-question-hydrator.service';
 import { FileInfo } from '../../../../schemas/common/file.schema';
 
 import type {
@@ -37,7 +37,7 @@ import type {
 import { XviFcApiResponse } from '../../common/response/xvi-fc-api-response';
 import { throwXviFcValidationError, xviFcSuccess } from '../../common/response/xvi-fc-response.util';
 import {
-  buildXviFcFolderPath,
+  resolveXviFcFolderPathsInFormJson,
   type XviFcFolderPathContext,
 } from '../../common/folder-paths/xvi-fc-folder-path.resolver';
 import { YearIdToLabel } from 'src/core/constants/years';
@@ -88,6 +88,7 @@ export class GtcService {
     private readonly fileInfoNormalizer: FileInfoNormalizerService,
     private readonly fileTokenService: FileTokenService,
     private readonly s3Service: S3Service,
+    private readonly formQuestionHydrator: FormQuestionHydratorService,
   ) {}
 
   async getQuestions(): Promise<XviFcApiResponse<FieldConfig[]>> {
@@ -209,6 +210,7 @@ export class GtcService {
         changedBy: userOid,
         ip,
         userAgent,
+        metadata: sanitizedPayload,
       });
 
       return xviFcSuccess('GTC form saved as draft.', {
@@ -246,6 +248,7 @@ export class GtcService {
       changedBy: userOid,
       ip,
       userAgent,
+      metadata: sanitizedPayload,
     });
 
     return xviFcSuccess('GTC form saved as draft.', {
@@ -286,7 +289,7 @@ export class GtcService {
       existing?.data ?? {},
     );
     if (Object.keys(fileErrors).length > 0) throwXviFcValidationError(fileErrors);
-    const toStatus = FORM_STATUS.UNDER_REVIEW_BY_MOHUA;
+    const toStatus = FORM_STATUS.UNDER_REVIEW_BY_PMU;
     const now = new Date();
 
     let formOid: Types.ObjectId;
@@ -351,6 +354,7 @@ export class GtcService {
       changedBy: userOid,
       ip,
       userAgent,
+      metadata: sanitizedPayload,
     });
 
     return xviFcSuccess('GTC form submitted successfully.', {
@@ -419,48 +423,31 @@ export class GtcService {
 
   // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-  /** Merges saved data onto the question template, signs file URLs, and sets download-template
-   *  visibility - see CLAUDE.md's "Static template download" section for why `meta` is always
-   *  stripped before a question leaves this method. */
+  /** Layers GTC's canEdit-gated download-template visibility on the shared hydrator core; reads
+   *  `resolveTemplateMeta` off the pre-hydration question since hydration strips `meta` - see
+   *  CLAUDE.md's "Static template download" section. */
   private hydrateQuestions(
     savedData: FormData,
     formJson: FormJson,
     canEdit: boolean,
     folderPathContext?: XviFcFolderPathContext,
   ): HydratedFieldConfig[] {
-    return formJson.data.map((question) => {
-      const value = Object.prototype.hasOwnProperty.call(savedData, question.key)
-        ? savedData[question.key]
-        : question.value;
+    const coreHydrated = this.formQuestionHydrator.hydrate(formJson.data, savedData);
+    const withFolderPaths = folderPathContext
+      ? resolveXviFcFolderPathsInFormJson(coreHydrated, folderPathContext)
+      : coreHydrated;
 
-      let hydrated: HydratedFieldConfig;
+    return withFolderPaths.map((hydrated, i) => {
+      const question = formJson.data[i];
+      if (!findSupportingAction(hydrated.supportingContent, GTC_ACTION_DOWNLOAD_TEMPLATE)) return hydrated;
 
-      if (question.formFieldType === 'file') {
-        const resolvedFolderPath =
-          question.folderPathKey && folderPathContext
-            ? buildXviFcFolderPath(question.folderPathKey, folderPathContext)
-            : question.folderPath;
-
-        const fileVal = value as FileInfo | null | undefined;
-        const hydratedFile = this.fileInfoNormalizer.hydrateFileInfoForResponse(fileVal ?? null, (p) =>
-          this.fileTokenService.signFileUrlForSession(p),
-        );
-        hydrated = { ...question, folderPath: resolvedFolderPath, value: hydratedFile ?? value };
-      } else {
-        hydrated = { ...question, value };
-      }
-
-      if (findSupportingAction(hydrated.supportingContent, GTC_ACTION_DOWNLOAD_TEMPLATE)) {
-        const templateConfigured = !!this.resolveTemplateMeta(question);
-        hydrated = {
-          ...hydrated,
-          supportingContent: applyActionVisibility(hydrated.supportingContent, {
-            [GTC_ACTION_DOWNLOAD_TEMPLATE]: canEdit && templateConfigured,
-          }),
-        };
-      }
-
-      return { ...hydrated, supportingContent: stripSupportingContentMeta(hydrated.supportingContent) };
+      const templateConfigured = !!this.resolveTemplateMeta(question);
+      return {
+        ...hydrated,
+        supportingContent: applyActionVisibility(hydrated.supportingContent, {
+          [GTC_ACTION_DOWNLOAD_TEMPLATE]: canEdit && templateConfigured,
+        }),
+      };
     });
   }
 

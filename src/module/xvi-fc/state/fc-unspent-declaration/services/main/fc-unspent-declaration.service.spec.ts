@@ -179,7 +179,10 @@ describe('FcUnspentDeclarationService', () => {
       create: jest.fn().mockResolvedValue([{ _id: new Types.ObjectId() }]),
     };
     devolutionFormModel = {
-      findOne: jest.fn().mockReturnValue(q(makeDevolutionForm(FORM_STATUS.UNDER_REVIEW_BY_MOHUA))),
+      // PMU Review feature: Devolution's own finalSubmit now lands on UNDER_REVIEW_BY_PMU, not
+      // UNDER_REVIEW_BY_MOHUA directly — this default must match that for every test below that
+      // doesn't override it to still exercise a "Devolution dependency satisfied" scenario.
+      findOne: jest.fn().mockReturnValue(q(makeDevolutionForm(FORM_STATUS.UNDER_REVIEW_BY_PMU))),
     };
     rowService = {
       resolveAndValidateRows: jest.fn().mockResolvedValue({ rows: [], errors: {} }),
@@ -259,10 +262,10 @@ describe('FcUnspentDeclarationService', () => {
   // ─── Devolution dependency ──────────────────────────────────────────────────
 
   describe('devolution dependency', () => {
-    it('grants full access when Devolution is UNDER_REVIEW_BY_MOHUA with an active dataset', async () => {
+    it('grants full access when Devolution is UNDER_REVIEW_BY_PMU with an active dataset', async () => {
       const result = await service.getForm(stateOid.toString(), yearOid.toString(), stateUser());
       expect(result.data!.dependency).toEqual({
-        devolutionStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+        devolutionStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU,
         devolutionDatasetExists: true,
         editableDueToDevolutionReturn: false,
         blockingMessage: null,
@@ -272,13 +275,35 @@ describe('FcUnspentDeclarationService', () => {
       expect(result.data!.permissions.canFinalSubmit).toBe(true);
     });
 
-    it('allows draft save but blocks final submit when Devolution is RETURNED_BY_MOHUA', async () => {
-      devolutionFormModel['findOne'] = jest.fn().mockReturnValue(q(makeDevolutionForm(FORM_STATUS.RETURNED_BY_MOHUA)));
+    it('also grants full access when Devolution has advanced to UNDER_REVIEW_BY_MOHUA — PMU approving Devolution must not regress FC Unspent', async () => {
+      devolutionFormModel['findOne'] = jest
+        .fn()
+        .mockReturnValue(q(makeDevolutionForm(FORM_STATUS.UNDER_REVIEW_BY_MOHUA)));
+      const result = await service.getForm(stateOid.toString(), yearOid.toString(), stateUser());
+      expect(result.data!.dependency).toEqual({
+        devolutionStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+        devolutionDatasetExists: true,
+        editableDueToDevolutionReturn: false,
+        blockingMessage: null,
+      });
+      expect(result.data!.permissions.canFinalSubmit).toBe(true);
+    });
+
+    it('allows draft save but blocks final submit when Devolution is RETURNED_BY_PMU', async () => {
+      devolutionFormModel['findOne'] = jest.fn().mockReturnValue(q(makeDevolutionForm(FORM_STATUS.RETURNED_BY_PMU)));
       const result = await service.getForm(stateOid.toString(), yearOid.toString(), stateUser());
       expect(result.data!.dependency.editableDueToDevolutionReturn).toBe(true);
       expect(result.data!.dependency.blockingMessage).not.toBeNull();
       expect(result.data!.permissions.canEdit).toBe(true);
       expect(result.data!.permissions.canSaveDraft).toBe(true);
+      expect(result.data!.permissions.canFinalSubmit).toBe(false);
+    });
+
+    it('allows draft save but blocks final submit when Devolution is RETURNED_BY_MOHUA (legacy in-flight documents from before the PMU Review feature)', async () => {
+      devolutionFormModel['findOne'] = jest.fn().mockReturnValue(q(makeDevolutionForm(FORM_STATUS.RETURNED_BY_MOHUA)));
+      const result = await service.getForm(stateOid.toString(), yearOid.toString(), stateUser());
+      expect(result.data!.dependency.editableDueToDevolutionReturn).toBe(true);
+      expect(result.data!.dependency.blockingMessage).not.toBeNull();
       expect(result.data!.permissions.canFinalSubmit).toBe(false);
     });
 
@@ -297,7 +322,7 @@ describe('FcUnspentDeclarationService', () => {
     it('locks the entire form when Devolution exists but has no active dataset version', async () => {
       devolutionFormModel['findOne'] = jest
         .fn()
-        .mockReturnValue(q(makeDevolutionForm(FORM_STATUS.UNDER_REVIEW_BY_MOHUA, 0)));
+        .mockReturnValue(q(makeDevolutionForm(FORM_STATUS.UNDER_REVIEW_BY_PMU, 0)));
       const result = await service.getForm(stateOid.toString(), yearOid.toString(), stateUser());
       expect(result.data!.permissions.canEdit).toBe(false);
     });
@@ -504,10 +529,10 @@ describe('FcUnspentDeclarationService', () => {
       await expect(service.saveDraft(dto, stateUser())).rejects.toThrow(BadRequestException);
     });
 
-    it('rejects draft save when the form is already UNDER_REVIEW_BY_MOHUA (not editable)', async () => {
+    it('rejects draft save when the form is already UNDER_REVIEW_BY_PMU (not editable)', async () => {
       model['findOne'] = jest
         .fn()
-        .mockReturnValue(q({ _id: parentOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }));
+        .mockReturnValue(q({ _id: parentOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU }));
       const dto = baseDto({ isFcUnspent: false });
       await expect(service.saveDraft(dto, stateUser())).rejects.toThrow(ForbiddenException);
     });
@@ -583,7 +608,7 @@ describe('FcUnspentDeclarationService', () => {
         },
       });
       const result = await service.finalSubmit(dto, stateUser(), '127.0.0.1', 'jest-agent');
-      expect(result.data).toMatchObject({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA });
+      expect(result.data).toMatchObject({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU });
       expect(rowService['deactivateAllRows']).toHaveBeenCalledWith(parentOid, userOid, mockSession);
       expect(mockSession.commitTransaction).toHaveBeenCalled();
     });
@@ -601,7 +626,7 @@ describe('FcUnspentDeclarationService', () => {
         {
           rowId: new Types.ObjectId(),
           previousStatus: null,
-          currentStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+          currentStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU,
           row: { ...sampleResolvedRow, rowNumber: 1 },
         },
       ];
@@ -615,14 +640,14 @@ describe('FcUnspentDeclarationService', () => {
       });
       const result = await service.finalSubmit(dto, stateUser(), '127.0.0.1', 'jest-agent');
 
-      expect(result.data).toMatchObject({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA });
+      expect(result.data).toMatchObject({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU });
       expect(rowService['applyRows']).toHaveBeenCalledWith(
         parentOid,
         stateOid,
         yearOid,
         [sampleResolvedRow],
         userOid,
-        FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+        FORM_STATUS.UNDER_REVIEW_BY_PMU,
         mockSession,
       );
       expect(rowService['insertRowHistory']).toHaveBeenCalledWith(
@@ -789,7 +814,7 @@ describe('FcUnspentDeclarationService', () => {
       expect(historyArg.unspentUlbData[0]).toMatchObject({ rowNumber: 1, allocationPerc: 10, eligibility: true });
     });
 
-    it('rejects when Devolution is not UNDER_REVIEW_BY_MOHUA at final submit time', async () => {
+    it('rejects when Devolution is not ready (RETURNED_BY_MOHUA — legacy in-flight) at final submit time', async () => {
       devolutionFormModel['findOne'] = jest.fn().mockReturnValue(q(makeDevolutionForm(FORM_STATUS.RETURNED_BY_MOHUA)));
       const dto = baseDto({
         isFcUnspent: false,
@@ -800,10 +825,10 @@ describe('FcUnspentDeclarationService', () => {
       );
     });
 
-    it('blocks re-submission once the form is already UNDER_REVIEW_BY_MOHUA or ACKNOWLEDGED (terminal gate)', async () => {
+    it('blocks re-submission once the form is already UNDER_REVIEW_BY_PMU or ACKNOWLEDGED (terminal gate)', async () => {
       model['findOne'] = jest
         .fn()
-        .mockReturnValue(q({ _id: parentOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }));
+        .mockReturnValue(q({ _id: parentOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU }));
       const dto = baseDto({
         isFcUnspent: false,
         fcDeclaration: { originalName: 'd.pdf', path: 'd.pdf', mimeType: 'application/pdf', sizeKb: 10 },
@@ -836,7 +861,7 @@ describe('FcUnspentDeclarationService', () => {
       expect(historyArg.userAgent).toBe('jest-agent/1.0');
       expect(historyArg.auditRevision).toBe(3);
       expect(historyArg.fromStatus).toBe(FORM_STATUS.NOT_STARTED);
-      expect(historyArg.toStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
+      expect(historyArg.toStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_PMU);
     });
 
     it('rolls back the transaction if the parent-history insert fails', async () => {
@@ -1129,7 +1154,7 @@ describe('FcUnspentDeclarationService', () => {
     });
 
     it('is hidden on GET when the form is read-only (canEdit false)', async () => {
-      model['findOne'] = jest.fn().mockReturnValue(q({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }));
+      model['findOne'] = jest.fn().mockReturnValue(q({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU }));
       const result = await service.getForm(stateOid.toString(), yearOid.toString(), stateUser());
       const fcDeclaration = result.data!.questions.find((q) => q.key === 'fcDeclaration')!;
       const actionsBlock = fcDeclaration.supportingContent!.find((b) => b.type === 'actions')!;
@@ -1148,7 +1173,7 @@ describe('FcUnspentDeclarationService', () => {
     });
 
     it('clears the actions block description when the form is read-only (canEdit false), not just the action', async () => {
-      model['findOne'] = jest.fn().mockReturnValue(q({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }));
+      model['findOne'] = jest.fn().mockReturnValue(q({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU }));
       const result = await service.getForm(stateOid.toString(), yearOid.toString(), stateUser());
       const fcDeclaration = result.data!.questions.find((q) => q.key === 'fcDeclaration')!;
       const actionsBlock = fcDeclaration.supportingContent!.find((b) => b.type === 'actions')!;
@@ -1167,7 +1192,7 @@ describe('FcUnspentDeclarationService', () => {
     });
 
     it('is hidden on GET for fcUnspentDeclaration when the form is read-only (canEdit false)', async () => {
-      model['findOne'] = jest.fn().mockReturnValue(q({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }));
+      model['findOne'] = jest.fn().mockReturnValue(q({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU }));
       const result = await service.getForm(stateOid.toString(), yearOid.toString(), stateUser());
       const fcUnspentDeclaration = result.data!.questions.find((q) => q.key === 'fcUnspentDeclaration')!;
       const actionsBlock = fcUnspentDeclaration.supportingContent!.find((b) => b.type === 'actions')!;
@@ -1194,7 +1219,7 @@ describe('FcUnspentDeclarationService', () => {
     });
 
     it('removes the info block entirely on GET when the form is read-only (canEdit false) — not just blanks its description, since a present-but-empty block still renders an empty box', async () => {
-      model['findOne'] = jest.fn().mockReturnValue(q({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }));
+      model['findOne'] = jest.fn().mockReturnValue(q({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU }));
       const result = await service.getForm(stateOid.toString(), yearOid.toString(), stateUser());
       const isFcUnspent = result.data!.questions.find((q) => q.key === 'isFcUnspent')!;
       const infoBlock = isFcUnspent.supportingContent?.find((b) => b.type === 'info');
@@ -1202,7 +1227,7 @@ describe('FcUnspentDeclarationService', () => {
     });
 
     it('never mutates formJson — GET never writes to the database', async () => {
-      model['findOne'] = jest.fn().mockReturnValue(q({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }));
+      model['findOne'] = jest.fn().mockReturnValue(q({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU }));
       await service.getForm(stateOid.toString(), yearOid.toString(), stateUser());
       expect(model['findOneAndUpdate']).not.toHaveBeenCalled();
     });

@@ -55,6 +55,9 @@ export class XviFcUnspentStateForm {
   @Prop({ type: String, default: null })
   mohuaRemarks?: string | null;
 
+  @Prop({ type: String, default: null })
+  pmuRemarks?: string | null;
+
   /**
    * Stored for audit only; GET always re-derives applicableFc from the current year -> FC mapping, preventing stale data from becoming authoritative
    */

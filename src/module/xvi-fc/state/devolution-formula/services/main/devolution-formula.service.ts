@@ -377,13 +377,11 @@ export class DevolutionFormulaService {
     const validation = this.dynamicFormValidator.validateFinalSubmitAndBuildPayload(dfMainFields, formData);
     if (!validation.isValid) throwXviFcValidationError(validation.errors);
 
-    // Prerequisite gate for installment 2
     if (dto.installment === 2) {
       this.checkInstallment2Prereq();
     }
 
-    // Grant allocation must still exist, and its total must match what was validated.
-    // Also compute the current active ULB count to validate row count consistency.
+    // Re-check: allocation total and active ULB count can both drift after the last validation.
     const finalSubmitEligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC');
     const [currentAlloc, computedActiveUlbCount] = await Promise.all([
       this.resolveGrantAllocation(stateOid, yearOid),
@@ -418,8 +416,7 @@ export class DevolutionFormulaService {
       });
     }
 
-    // Specific, actionable gates — checked before the generic notValid gate below so the
-    // user is shown precisely what to fix rather than a generic "not valid" message.
+    // Checked before the generic notValid gate below, so the user sees precisely what to fix.
     const excelFileBlockingErrors: DfRowError[] = [];
 
     const persistedNewUlbCount = form.newUlbCount ?? 0;
@@ -482,8 +479,11 @@ export class DevolutionFormulaService {
       });
     }
 
+    // PMU now reviews before MoHUA — see pmu/devolution-formula/CLAUDE.md for that hand-off.
+    const toStatus = FORM_STATUS.UNDER_REVIEW_BY_PMU;
+
     const finalSubmitSet: Record<string, unknown> = {
-      currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+      currentFormStatus: toStatus,
       isDraft: false,
       submittedAt: new Date(),
       submittedBy: userOid,
@@ -509,10 +509,9 @@ export class DevolutionFormulaService {
       );
     }
 
-    // Snapshot rows now — Excel re-upload hard-deletes the previous version's rows (see
-    // docs/adr/0001-dataset-versioning.md), so this is the only surviving record of what was submitted.
+    // Snapshot rows now — see CLAUDE.md's "Form status history log" section for why.
     let submittedRowsSnapshot: Record<string, unknown>[] | null = null;
-    if (fromStatus !== FORM_STATUS.UNDER_REVIEW_BY_MOHUA && activeVersion > 0) {
+    if (fromStatus !== toStatus && activeVersion > 0) {
       const activeRows = await this.rowModel
         .find({ form: form._id, datasetVersion: activeVersion, isActive: true })
         .sort({ rowNumber: 1 })
@@ -540,7 +539,7 @@ export class DevolutionFormulaService {
       year: yearOid,
       action: FormHistoryAction.FINAL_SUBMIT,
       fromStatus,
-      toStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+      toStatus,
       changedBy: userOid,
       ip,
       userAgent,
@@ -552,8 +551,8 @@ export class DevolutionFormulaService {
     );
 
     return xviFcSuccess('ULB-wise Allocation submitted successfully.', {
-      currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
-      currentFormStatusLabel: getFormStatusLabel(FORM_STATUS.UNDER_REVIEW_BY_MOHUA),
+      currentFormStatus: toStatus,
+      currentFormStatusLabel: getFormStatusLabel(toStatus),
     });
   }
 
@@ -615,11 +614,7 @@ export class DevolutionFormulaService {
 
   // ─── Private helpers ──────────────────────────────────────────────────────
 
-  /**
-   * Inserts a history row unless `fromStatus === toStatus` (no-op re-save). Best-effort,
-   * non-transactional — a failure here must not fail saveDraft/finalSubmit. Mirrors
-   * sfc-status.service.ts's update-then-log pattern.
-   */
+  /** Best-effort, non-transactional — see CLAUDE.md's "Form status history log" section. */
   private async recordFormHistory(entry: {
     formId: Types.ObjectId;
     state: Types.ObjectId;
@@ -772,8 +767,7 @@ export class DevolutionFormulaService {
     const totalMoHUAAllocation = doc?.totalMoHUAAllocation ?? 0;
     const totalAllocatedSum = doc?.totalAllocatedSum ?? 0;
     const liveAllocatedAmount = grantAllocationSummary?.total ?? totalMoHUAAllocation;
-    // Exact match (within float-noise epsilon), not a forgiving tolerance — every rupee of
-    // totalMoHUAAllocation must be accounted for; see devolution-formula-tolerance.helpers.ts.
+    // Backstop equality, not a forgiving tolerance — see devolution-formula-tolerance.helpers.ts.
     const allocationBalanced = amountsAreEqual(totalAllocatedSum, totalMoHUAAllocation);
     const validationStatus = doc?.validationStatus;
     const newUlbCount = doc?.newUlbCount ?? 0;
@@ -974,11 +968,7 @@ export class DevolutionFormulaService {
     });
   }
 
-  /**
-   * TODO: unlock once wired to claim-letter — should query for at least one Installment 1 claim
-   * batch acknowledged by MoHUA (claim-letter's `ClaimLetterBatch` model, which now exists, but
-   * nothing in this module reads it yet). Until then Installment 2 stays locked for every state.
-   */
+  // TODO: unlock once wired to claim-letter's acknowledgment status — see CLAUDE.md's "Known gaps".
   private isInstallment2Unlocked(): boolean {
     return false;
   }
