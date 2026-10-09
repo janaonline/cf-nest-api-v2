@@ -26,7 +26,11 @@ everything else.
   SFC/AFS's: not "already started", but "already eligible" (see root `CLAUDE.md`'s xvi-fc/state
   bullet) — a ULB whose row already says "Not Constituted" (real, ineligible data) is deliberately
   still approvable, so a MoHUA-approved exemption for a ULB with real in-progress data is an
-  expected, reachable case, not just a hypothetical.
+  expected, reachable case, not just a hypothetical. Separately, its FORM_STATUS query-building
+  (`evaluateFormStatus`/`evaluateUlbBulkFormStatus`) only filters by the current design year when
+  `claimEligibility.yearScope` is `'CURRENT_DESIGN_YEAR'` — skipped for `'SUBMISSION_PERIOD_SINGLETON'`
+  sources (e.g. Bank Account, see its `ONCE_EVER` bullet below), since that source's one document
+  isn't scoped to any particular design year.
 - `exemption-resolver.service.ts` — the shared "is this (ulb, formId, year) exempt, and why"
   resolver every read-only display consumer (e.g. the SLB review table, `AnnualAccountsService`'s
   `listUlbSubmissions`/`resolveExemptionStatusForResponse`, `SfcStatusService`'s own
