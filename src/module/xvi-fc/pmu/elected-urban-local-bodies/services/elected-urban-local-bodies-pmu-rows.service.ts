@@ -5,6 +5,7 @@ import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Permission } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
 import { FORM_STATUS, getFormStatusLabel } from 'src/common/constants/form-status.constants';
+import { escapeRegex } from 'src/common/utils/regex.util';
 import {
   assertCanPmuMutateForm,
   canPmuMutateForm,
@@ -68,7 +69,7 @@ export class ElectedUrbanLocalBodiesPmuRowsService {
       isActive: true,
     };
     if (query.search) {
-      const regex = new RegExp(query.search, 'i');
+      const regex = new RegExp(escapeRegex(query.search), 'i');
       baseFilter['$or'] = [{ ulbName: regex }, { censusCode: regex }];
     }
 

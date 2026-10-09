@@ -149,6 +149,24 @@ describe('LineItemsLegendService', () => {
       expect(result.total).toBe(1);
       expect(result.page).toBe(1);
     });
+
+    it('escapes regex metacharacters in the search term instead of passing them through raw', async () => {
+      mockLegendModel.find.mockReturnValue({
+        sort: jest.fn().mockReturnValue({
+          skip: jest
+            .fn()
+            .mockReturnValue({ limit: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue([]) }) }),
+        }),
+      });
+      mockLegendModel.countDocuments.mockResolvedValue(0);
+
+      await service.listLegends({ templateVersion: '2026.1', page: 1, limit: 50, search: 'Tax (Revenue)' });
+
+      const expectedRegex = /Tax \(Revenue\)/i;
+      expect(mockLegendModel.find).toHaveBeenCalledWith(
+        expect.objectContaining({ $or: [{ nmamCode: expectedRegex }, { name: expectedRegex }] }),
+      );
+    });
   });
 
   describe('createLegend', () => {

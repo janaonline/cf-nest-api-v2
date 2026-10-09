@@ -5,6 +5,7 @@ import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Permission } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
 import { FORM_STATUS, getFormStatusLabel } from 'src/common/constants/form-status.constants';
+import { escapeRegex } from 'src/common/utils/regex.util';
 import {
   assertCanPmuMutateForm,
   canPmuMutateForm,
@@ -65,7 +66,7 @@ export class FcUnspentPmuRowsService {
     const baseFilter: FilterQuery<XviFcUnspentStateFormRowDocument> = { form: form._id, isActive: true };
     if (query.eligibility !== undefined) baseFilter['eligibility'] = query.eligibility;
     if (query.search) {
-      const regex = new RegExp(query.search, 'i');
+      const regex = new RegExp(escapeRegex(query.search), 'i');
       baseFilter['$and'] = [{ $or: [{ ulbName: regex }, { censusCode: regex }, { sbCode: regex }] }];
     }
 

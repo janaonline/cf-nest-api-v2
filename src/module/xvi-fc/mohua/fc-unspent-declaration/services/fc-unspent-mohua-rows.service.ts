@@ -5,6 +5,7 @@ import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
 import { FORM_STATUS, getFormStatusLabel } from 'src/common/constants/form-status.constants';
+import { escapeRegex } from 'src/common/utils/regex.util';
 import {
   assertCanMohuaMutateForm,
   canMohuaMutateForm,
@@ -63,7 +64,7 @@ export class FcUnspentMohuaRowsService {
     if (query.rowStatus) filter['rowStatus'] = query.rowStatus;
     if (query.eligibility !== undefined) filter['eligibility'] = query.eligibility;
     if (query.search) {
-      const regex = new RegExp(query.search, 'i');
+      const regex = new RegExp(escapeRegex(query.search), 'i');
       filter['$and'] = [{ $or: [{ ulbName: regex }, { censusCode: regex }, { sbCode: regex }] }];
     }
 

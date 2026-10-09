@@ -202,6 +202,21 @@ describe('ElectedUrbanLocalBodiesPmuRowsService', () => {
       expect(filterArg['$or']).toBeDefined();
     });
 
+    it('escapes regex metacharacters in the search term instead of passing them through raw', async () => {
+      await service.getRows(
+        stateOid.toString(),
+        yearOid.toString(),
+        { search: 'Alpha (Ward 1)' } as GetEulbPmuRowsQueryDto,
+        pmuUser,
+      );
+      const filterArg = (rowModel['find'].mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      const orClause = filterArg['$or'] as Array<{ ulbName: RegExp }>;
+      // An unescaped '(' would make this an invalid/differently-behaving regex; escaped, it matches
+      // the literal parenthesis.
+      expect(orClause[0].ulbName.test('Alpha (Ward 1) ULB')).toBe(true);
+      expect(orClause[0].ulbName.source).toContain('\\(Ward');
+    });
+
     it('paginates via page/limit and returns pagination meta', async () => {
       rowModel['countDocuments'] = jest.fn().mockReturnValue(q(37));
       const result = await service.getRows(
