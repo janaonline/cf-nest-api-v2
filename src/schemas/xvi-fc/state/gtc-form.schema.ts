@@ -5,14 +5,8 @@ import { GTC_INSTALLMENTS, type GtcInstallment } from 'src/module/xvi-fc/state/g
 
 export type XviFcGtcDocument = HydratedDocument<XviFcGtc>;
 
-/**
- * Grant Transfer Certificate - one document per (state, year, installment). Form-level, no
- * rows, same shape as XviFcSfcStatus (a single `data: Mixed` bag holding whatever the design
- * year's formJson.data[] asks for) plus DevolutionFormulaForm's installment scoping. This is why
- * the schema never needs a migration when a year's questionnaire grows from one file field
- * (2026-27 installment 1) to a full text/number/file questionnaire (every later submission) -
- * only the formJson document changes, not this schema.
- */
+/** Form-level, no rows — one document per (state, year, installment). See gtc/CLAUDE.md's "Why
+ *  form-level + installment is a new combination" section for the full rationale. */
 @Schema({
   collection: 'xvifc_gtc',
   timestamps: true,
@@ -33,6 +27,9 @@ export class XviFcGtc {
 
   @Prop({ type: Number, default: FORM_STATUS.NOT_STARTED })
   currentFormStatus!: number;
+
+  @Prop({ type: String, default: null })
+  pmuRemarks?: string | null;
 
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User' })
   submittedBy?: Types.ObjectId;

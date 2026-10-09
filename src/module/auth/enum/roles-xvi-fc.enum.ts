@@ -5,6 +5,8 @@ export enum UserRole {
   STATE = 'STATE',
   MoHUA = 'MoHUA',
   ADMIN = 'ADMIN',
+  // Must equal Role.XVIFC_PMU exactly — 'PMU' is a different, unrelated Fiscal Rankings role.
+  PMU = 'XVIFC_PMU',
 }
 
 export enum Scope {
@@ -12,6 +14,7 @@ export enum Scope {
   STATE = 'STATE',
   MOHUA = 'MOHUA',
   ADMIN = 'ADMIN',
+  PMU = 'PMU',
 }
 
 export enum AccessLevel {
@@ -50,6 +53,10 @@ export enum Permission {
   APPROVE_STATE_SUBMISSIONS = 'APPROVE_STATE_SUBMISSIONS',
   ISSUE_OFFICE_MEMORANDUM = 'ISSUE_OFFICE_MEMORANDUM',
   FINAL_SUBMIT_TO_DOE = 'FINAL_SUBMIT_TO_DOE',
+
+  // PMU actions (PMU Review feature) — mirrors the MoHUA pair above, one stage earlier
+  REVIEW_STATE_SUBMISSIONS_PMU = 'REVIEW_STATE_SUBMISSIONS_PMU',
+  APPROVE_STATE_SUBMISSIONS_PMU = 'APPROVE_STATE_SUBMISSIONS_PMU',
 
   // User management
   MANAGE_USERS = 'MANAGE_USERS',

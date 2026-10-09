@@ -227,7 +227,7 @@ describe('extractDateConfig', () => {
       expect(() => extractDateConfig(fieldsWithUnsupportedReference, VALID_EXTRA_ULB_PORTAL_FIELDS)).toThrow();
     });
 
-    it('does not apply the FIELD:<key> guard to any other field\'s minDate/maxDate — only dateOfExpiry\'s own maxDate is inspected', () => {
+    it("does not apply the FIELD:<key> guard to any other field's minDate/maxDate — only dateOfExpiry's own maxDate is inspected", () => {
       // dateOfConstitution's own maxDate validator is set to a FIELD:-shaped string referencing a
       // different field entirely. It's never parsed as a date bound at all (dateOfConstitution's
       // upper bound comes from `today` at validation time, not from config), so this must not

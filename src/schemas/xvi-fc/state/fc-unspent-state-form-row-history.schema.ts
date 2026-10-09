@@ -37,8 +37,10 @@ export class XviFcUnspentStateFormRowHistory {
   @Prop({ type: Number, enum: ROW_REVIEW_STATUS_VALUES, required: true })
   currentStatus!: RowReviewStatus;
 
-  @Prop({ type: FcUnspentUlbRowSnapshotSchema, required: true })
-  snapshot!: FcUnspentUlbRowSnapshot;
+  /** Null for a pure PMU/MoHUA review decision (no data-edit capability exists at this layer) —
+   *  non-null only for the STATE-written entry from `finalSubmit`. */
+  @Prop({ type: FcUnspentUlbRowSnapshotSchema, default: null })
+  snapshot!: FcUnspentUlbRowSnapshot | null;
 
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
   createdBy!: Types.ObjectId;

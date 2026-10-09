@@ -35,7 +35,7 @@ export const FcUnspentAllocationSourceSchema = SchemaFactory.createForClass(FcUn
 /**
  * Reusable "row content" shape — the ULB/allocation/eligibility fields shared by the
  * live row document and every snapshot that embeds a point-in-time copy of it
- * (row-history's `snapshot`, parent-history's `unspentUlbData[]`). Defined once here
+ * (row-history's `snapshot`, parent-history's `snapshot[]`). Defined once here
  * to avoid duplicating the same field list across three schemas.
  */
 @Schema({ _id: false })

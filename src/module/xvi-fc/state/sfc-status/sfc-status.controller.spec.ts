@@ -81,9 +81,7 @@ describe('SfcStatusController', () => {
     });
 
     it('retains the VIEW_STATUS_REPORTS permission', () => {
-      expect(Reflect.getMetadata(REQUIRED_PERMISSIONS_KEY, controller.dump)).toEqual([
-        Permission.VIEW_STATUS_REPORTS,
-      ]);
+      expect(Reflect.getMetadata(REQUIRED_PERMISSIONS_KEY, controller.dump)).toEqual([Permission.VIEW_STATUS_REPORTS]);
     });
   });
 
@@ -95,9 +93,7 @@ describe('SfcStatusController', () => {
   });
 
   it('getForm retains the VIEW_STATE_FORMS permission', () => {
-    expect(Reflect.getMetadata(REQUIRED_PERMISSIONS_KEY, controller.getForm)).toEqual([
-      Permission.VIEW_STATE_FORMS,
-    ]);
+    expect(Reflect.getMetadata(REQUIRED_PERMISSIONS_KEY, controller.getForm)).toEqual([Permission.VIEW_STATE_FORMS]);
   });
 
   // ─── POST save-draft ──────────────────────────────────────────────────────

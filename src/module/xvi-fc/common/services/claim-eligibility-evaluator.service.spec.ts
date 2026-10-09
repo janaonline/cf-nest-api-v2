@@ -125,6 +125,21 @@ describe('ClaimEligibilityEvaluatorService', () => {
     expect(query['installment']).toBe(1);
   });
 
+  it('omits the design-year filter for a SUBMISSION_PERIOD_SINGLETON source (e.g. Bank Account)', async () => {
+    findOne.mockResolvedValue({ _id: new Types.ObjectId(), currentFormStatus: 5 });
+    const singletonConfig: ClaimEligibilityConfig = { ...devolutionConfig, yearScope: 'SUBMISSION_PERIOD_SINGLETON' };
+
+    await service.evaluate(sourceFormJson({ claimEligibility: singletonConfig }), {
+      stateId,
+      designYearId,
+      installment: 1,
+    });
+
+    const [query] = findOne.mock.calls[0] as [Record<string, unknown>];
+    expect(query).not.toHaveProperty('year');
+    expect(query['state']).toBe(stateId);
+  });
+
   it('returns PASSED when the resolved form status is in acceptedFormStatuses', async () => {
     const formDocId = new Types.ObjectId();
     findOne.mockResolvedValue({ _id: formDocId, currentFormStatus: 5 });
@@ -364,6 +379,39 @@ describe('ClaimEligibilityEvaluatorService', () => {
       const [query] = byCollection['xvifc_slb_forms'].find.mock.calls[0] as [Record<string, unknown>];
       const ulbFilter = query['ulb'] as { $in: Types.ObjectId[] };
       expect(ulbFilter.$in.map((id) => id.toString())).toEqual(expectedUlbIds);
+    });
+
+    it('FORM_STATUS bulk: filters by design year for the default CURRENT_DESIGN_YEAR scope', async () => {
+      mockCollection('xvifc_slb_forms', []);
+      const doc = sourceFormJson({ formId: 32, type: 'SLB', claimEligibility: slbConfig });
+
+      await service.evaluateUlbBulk(doc, { stateId, designYearId, expectedUlbIds });
+
+      const [query] = byCollection['xvifc_slb_forms'].find.mock.calls[0] as [Record<string, unknown>];
+      expect((query['year'] as Types.ObjectId).toString()).toBe(designYearId);
+    });
+
+    it('FORM_STATUS bulk: omits the design-year filter and still matches a ULB submitted in an earlier design year, for a SUBMISSION_PERIOD_SINGLETON source (e.g. Bank Account)', async () => {
+      const earlierDesignYearId = new Types.ObjectId();
+      mockCollection('xvifc_bankaccounts', [
+        { ulb: new Types.ObjectId(ulbA), currentFormStatus: 5, designYear: earlierDesignYearId },
+      ]);
+      const singletonConfig: ClaimEligibilityConfig = {
+        ...slbConfig,
+        yearScope: 'SUBMISSION_PERIOD_SINGLETON',
+        acceptedFormStatuses: [5, 7, 8],
+        source: {
+          collection: 'xvifc_bankaccounts',
+          fields: { designYear: 'designYear', ulb: 'ulb', currentFormStatus: 'currentFormStatus' },
+        },
+      };
+      const doc = sourceFormJson({ formId: 33, type: 'BANK_ACCOUNT', claimEligibility: singletonConfig });
+
+      const { perUlb } = await service.evaluateUlbBulk(doc, { stateId, designYearId, expectedUlbIds: [ulbA] });
+
+      expect(perUlb.get(ulbA)).toBe('ELIGIBLE');
+      const [query] = byCollection['xvifc_bankaccounts'].find.mock.calls[0] as [Record<string, unknown>];
+      expect(query).not.toHaveProperty('designYear');
     });
 
     describe('xvi-fc dynamic year access - EXEMPTED bucket', () => {

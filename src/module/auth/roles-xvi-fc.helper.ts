@@ -34,8 +34,14 @@ export function parseUserRole(
     case UserRole.ADMIN:
       return { scope: Scope.ADMIN, accessLevel: AccessLevel.ADMIN };
 
+    case UserRole.PMU:
+      return {
+        scope: Scope.PMU,
+        accessLevel: SUBROLE_TO_ACCESS_LEVEL[xviFcSubrole ?? ''] ?? AccessLevel.VIEWER,
+      };
+
     default:
-      // Non-XVI-FC role (e.g. PMU, USER, XVIFC_STATE) — skip scope mapping.
+      // Non-XVI-FC role (e.g. USER, XVIFC_STATE) — skip scope mapping.
       return null;
   }
 }
