@@ -104,7 +104,7 @@ export class SlbService {
   /**
    * Returns the hydrated SLB form for a given ULB and year.
    * ULB users may only fetch their own ULB's form; STATE users may fetch any ULB within
-   * their own state (read-only); ADMIN may fetch any ULB.
+   * their own state (read-only); MOHUA may fetch any ULB (read-only, never writes); ADMIN may fetch any ULB.
    */
   async getForm(ulbId: string, yearId: string, user: AuthUser): Promise<XviFcApiResponse<SlbFormGetResponseData>> {
     const effectiveUlbId = await this.resolveEffectiveUlbId(user, ulbId);
@@ -127,9 +127,10 @@ export class SlbService {
 
     // xvi-fc dynamic year access: no record yet - if this ULB is exempted, materialize a stub
     // instead of showing a blank form. Never touches an existing record (see `if (!doc)` above).
+    // MoHUA only views: both of these can write (create or delete a stub), so they never run for it.
     if (!doc) {
-      doc = await this.materializeExemptionStubIfNeeded(ulbOid, yearOid, user);
-    } else if (doc.isExemptionStub) {
+      if (user.scope !== Scope.MOHUA) doc = await this.materializeExemptionStubIfNeeded(ulbOid, yearOid, user);
+    } else if (doc.isExemptionStub && user.scope !== Scope.MOHUA) {
       // Existing doc is a stub - an admin may have since undone the exemption. Re-check live state.
       doc = await this.revalidateExemptionStubIfNeeded(doc, ulbOid, yearOid);
     }
@@ -212,6 +213,7 @@ export class SlbService {
 
     const created = await this.model.create({
       ulb: ulbOid,
+      state: await this.resolveUlbState(ulbOid),
       year: yearOid,
       formType: SLB_FORM_TYPE,
       data: sanitizedPayload,
@@ -283,6 +285,7 @@ export class SlbService {
     } else {
       const created = await this.model.create({
         ulb: ulbOid,
+        state: await this.resolveUlbState(ulbOid),
         year: yearOid,
         formType: SLB_FORM_TYPE,
         data: sanitizedPayload,
@@ -467,7 +470,7 @@ export class SlbService {
     yearOid: Types.ObjectId,
     user: AuthUser,
   ): Promise<SlbFormLeanDoc | null> {
-    const ulb = await this.ulbModel.findById(ulbOid, { startYear: 1, yearAccess: 1 }).lean().exec();
+    const ulb = await this.ulbModel.findById(ulbOid, { startYear: 1, yearAccess: 1, state: 1 }).lean().exec();
     if (!ulb) return null;
 
     const year = await this.yearModel
@@ -484,6 +487,7 @@ export class SlbService {
       { ulb: ulbOid, year: yearOid, formType: SLB_FORM_TYPE },
       {
         $setOnInsert: {
+          state: ulb.state,
           data: {},
           currentFormStatus: FORM_STATUS.EXEMPTED_ACKNOWLEDGED,
           isExemptionStub: true,
@@ -655,7 +659,7 @@ export class SlbService {
       return userUlbId;
     }
 
-    if (user.scope === Scope.STATE || user.scope === Scope.ADMIN) {
+    if (user.scope === Scope.STATE || user.scope === Scope.ADMIN || user.scope === Scope.MOHUA) {
       if (!normalizedRequestedUlbId) {
         throw new BadRequestException('ulbId is required.');
       }
@@ -669,13 +673,21 @@ export class SlbService {
     if (user.scope === Scope.ADMIN) return true;
     if (user.scope === Scope.ULB) return this.isOwnUlb(user, ulbId);
     // STATE access is verified asynchronously in assertCanReadSlb; assume checked by caller.
-    return user.scope === Scope.STATE;
+    return user.scope === Scope.STATE || user.scope === Scope.MOHUA;
   }
 
   async assertCanReadSlb(user: AuthUser, ulbId: string): Promise<void> {
     this.assertValidUlbId(ulbId);
 
     if (user.scope === Scope.ADMIN) return;
+
+    // MoHUA is a central role (not scoped to a state) and only ever views the SLB form.
+    if (user.scope === Scope.MOHUA) {
+      if (!getEffectivePermissions(user).includes(Permission.VIEW_STATUS_REPORTS)) {
+        throw new ForbiddenException('You do not have permission to view SLB forms.');
+      }
+      return;
+    }
 
     if (user.scope === Scope.ULB) {
       if (!this.isOwnUlb(user, ulbId)) {
@@ -726,6 +738,13 @@ export class SlbService {
     }
 
     throw new ForbiddenException('Access denied.');
+  }
+
+  /** The state a new SLB document is stamped with — taken from the ULB, never from the request. */
+  private async resolveUlbState(ulbOid: Types.ObjectId): Promise<Types.ObjectId> {
+    const ulb = await this.ulbModel.findById(ulbOid, { state: 1 }).lean<{ state?: Types.ObjectId }>().exec();
+    if (!ulb?.state) throw new NotFoundException('ULB or its state not found.');
+    return ulb.state;
   }
 
   private assertValidUlbId(ulbId: string): void {

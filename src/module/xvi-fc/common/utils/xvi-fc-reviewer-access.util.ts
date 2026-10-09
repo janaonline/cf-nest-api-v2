@@ -29,3 +29,14 @@ export const PMU_REVIEWER_FORBIDDEN_MESSAGE = 'Only PMU or admin users may revie
 export function assertPmuReviewerAccess(user: AuthUser): void {
   assertReviewerAccess(user, Scope.PMU, PMU_REVIEWER_FORBIDDEN_MESSAGE);
 }
+
+export const PMU_VIEWER_FORBIDDEN_MESSAGE = 'Only PMU, MoHUA or admin users may view state submissions under review.';
+
+/**
+ * Read-only access to PMU review data: PMU and admin as for `assertPmuReviewerAccess`, plus MoHUA,
+ * which only views these forms (it never approves or returns them). Used only by the review-metadata
+ * and rows GETs — worklists, approve/reject and bulk row actions keep `assertPmuReviewerAccess`.
+ */
+export function assertPmuOrMohuaViewerAccess(user: AuthUser): void {
+  if (user.scope !== Scope.MOHUA) assertReviewerAccess(user, Scope.PMU, PMU_VIEWER_FORBIDDEN_MESSAGE);
+}

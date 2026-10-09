@@ -5,11 +5,15 @@ import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Permission } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
 import { FORM_STATUS, getFormStatusLabel } from 'src/common/constants/form-status.constants';
+import { escapeRegex } from 'src/common/utils/regex.util';
 import {
   assertCanPmuMutateForm,
   canPmuMutateForm,
 } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
-import { assertPmuReviewerAccess } from 'src/module/xvi-fc/common/utils/xvi-fc-reviewer-access.util';
+import {
+  assertPmuOrMohuaViewerAccess,
+  assertPmuReviewerAccess,
+} from 'src/module/xvi-fc/common/utils/xvi-fc-reviewer-access.util';
 import { YearIdToLabel } from 'src/core/constants/years';
 import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import { throwXviFcValidationError, xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
@@ -53,7 +57,7 @@ export class FcUnspentPmuRowsService {
     query: GetFcUnspentPmuRowsQueryDto,
     user: AuthUser,
   ): Promise<XviFcApiResponse<FcUnspentPmuRowsData>> {
-    assertPmuReviewerAccess(user);
+    assertPmuOrMohuaViewerAccess(user);
 
     const form = await this.domainService.findForm(stateId, yearId);
     if (!form) throw new NotFoundException('FC Unspent Declaration form not found for this state and year.');
@@ -65,7 +69,7 @@ export class FcUnspentPmuRowsService {
     const baseFilter: FilterQuery<XviFcUnspentStateFormRowDocument> = { form: form._id, isActive: true };
     if (query.eligibility !== undefined) baseFilter['eligibility'] = query.eligibility;
     if (query.search) {
-      const regex = new RegExp(query.search, 'i');
+      const regex = new RegExp(escapeRegex(query.search), 'i');
       baseFilter['$and'] = [{ $or: [{ ulbName: regex }, { censusCode: regex }, { sbCode: regex }] }];
     }
 

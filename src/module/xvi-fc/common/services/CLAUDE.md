@@ -298,6 +298,12 @@ rationale.
   the permissions-object builder, both parameterized by `Scope`/status-gates rather than one
   function per reviewer role, so a future reviewer stage (beyond PMU) needs no new function, only a
   new call site passing its own scope, permissions, and status gates.
+  - **MoHUA read-only access.** MoHUA views the same PMU review pages (never approves/returns): every
+    MoHUA subrole holds `REVIEW_STATE_SUBMISSIONS_PMU` (the GET gate) but never
+    `APPROVE_STATE_SUBMISSIONS_PMU`, and the review-metadata + rows GETs call
+    `assertPmuOrMohuaViewerAccess` (PMU, MoHUA, ADMIN) while worklists, approve/reject and bulk row
+    actions keep the PMU-only `assertPmuReviewerAccess`. MoHUA's `canApproveForm`/`canRejectForm`/row
+    flags therefore always come back false, and it sees the same statuses as PMU (`canPmuViewForm`).
 - **`PMU_REVIEWABLE_STATUSES`** (`xvi-fc-form-status-access.util.ts`) — wider than the mutate gate:
   PMU keeps read-only visibility into a form even after it moves on to MoHUA (PMU approval has no
   status of its own; it lands directly on `UNDER_REVIEW_BY_MOHUA`). Includes `RETURNED_BY_PMU`

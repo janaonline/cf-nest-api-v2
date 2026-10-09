@@ -191,6 +191,17 @@ describe('ElectedUrbanLocalBodiesPmuRowReviewDomainService', () => {
       expect(filter['_id']).toEqual({ $nin: [excludedId] });
       expect(filter['$or']).toEqual([{ ulbName: expect.any(RegExp) }, { censusCode: expect.any(RegExp) }]);
     });
+
+    it('escapes regex metacharacters in the search term instead of passing them through raw', async () => {
+      rowModel['find'] = jest.fn().mockReturnValue(q([]));
+
+      await service.loadActiveRowsBySelectAllMatching(formOid, 1, FORM_STATUS.UNDER_REVIEW_BY_PMU, 'Alpha (Ward 1)');
+
+      const filter = rowModel['find'].mock.calls[0][0] as Record<string, unknown>;
+      const orClause = filter['$or'] as Array<{ ulbName: RegExp }>;
+      expect(orClause[0].ulbName.test('Alpha (Ward 1) ULB')).toBe(true);
+      expect(orClause[0].ulbName.source).toContain('\\(Ward');
+    });
   });
 
   describe('filterNotInStatus', () => {
