@@ -13,5 +13,5 @@ export interface SfcHistoryEntryInput {
   ip?: string;
   userAgent?: string;
   remarks?: string;
-  metadata?: Record<string, unknown>;
+  data?: Record<string, unknown>;
 }

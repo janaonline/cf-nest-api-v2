@@ -30,14 +30,9 @@ import type {
 const ROW_LEAN_SELECT =
   'form rowNumber ulbId censusCode sbCode ulbName allocationAmount unspentAmount previousFcUnspentBalance allocationPerc eligibility rowStatus rejectionRemark';
 
-/**
- * Shared FC Unspent Declaration MoHUA-review domain primitives: parent lookup, row loading,
- * row-status transitions + immutable row history, the "is the Yes-branch form fully resolved"
- * completion check, and parent transition + parent-history insertion. Used by both the row-level
- * bulk approve/reject flow and the complete-form approve/reject flow so the two never diverge —
- * and reserved as the single integration point for a later claim-acknowledgement hook (not
- * implemented in this phase).
- */
+/** Shared MoHUA-review domain primitives used by both the row-level and complete-form approve/
+ *  reject flows so the two never diverge. See CLAUDE.md's "Layout" section for the full list of
+ *  what lives here and the reserved future integration point. */
 @Injectable()
 export class FcUnspentRowReviewDomainService {
   constructor(
@@ -95,13 +90,9 @@ export class FcUnspentRowReviewDomainService {
     return rows.filter((r) => (r.rowStatus ?? null) !== expectedStatus);
   }
 
-  /**
-   * Transitions the given rows to their target status (with the corresponding rejectionRemark, or
-   * `null` to clear it) via one `bulkWrite`, and inserts one immutable row-history entry per row via
-   * one `insertMany`. Must run inside the caller's Mongo transaction session. Defensively re-filters
-   * to rows whose `rowStatus` actually differs from `t.newStatus`, so a caller that forgets to
-   * pre-filter can't write a same-status no-op entry.
-   */
+  /** One bulkWrite + one insertMany; must run inside the caller's Mongo transaction session. See
+   *  CLAUDE.md's "transitionRows' defensive re-filter..." section for why it re-filters before
+   *  writing. */
   async transitionRows(
     formId: Types.ObjectId,
     stateOid: Types.ObjectId,
@@ -234,11 +225,8 @@ export class FcUnspentRowReviewDomainService {
     return updated;
   }
 
-  /**
-   * Inserts one parent-history entry, snapshotting the form's current active rows. No-op when
-   * `fromStatus === toStatus` — defensive, since a future caller might not gate on a real
-   * transition the way every current one does (via `assertCanMohuaMutateForm`).
-   */
+  /** Inserts one parent-history entry, snapshotting the form's current active rows. See CLAUDE.md's
+   *  "transitionRows' defensive re-filter..." section for why this no-ops on `fromStatus === toStatus`. */
   async insertParentHistory(
     form: FcUnspentMohuaFormLean,
     fromStatus: number,
@@ -249,24 +237,9 @@ export class FcUnspentRowReviewDomainService {
     ip: string | null,
     userAgent: string | null,
     session: ClientSession,
+    remarks?: string | null,
   ): Promise<void> {
     if (fromStatus === toStatus) return;
-
-    const activeRows = await this.getActiveRows(form._id, session);
-    const snapshot = activeRows.map((row) => ({
-      rowNumber: row.rowNumber,
-      ulbId: row.ulbId,
-      censusCode: row.censusCode,
-      sbCode: row.sbCode,
-      ulbName: row.ulbName,
-      allocationAmount: row.allocationAmount,
-      unspentAmount: row.unspentAmount,
-      previousFcUnspentBalance: row.previousFcUnspentBalance,
-      allocationPerc: row.allocationPerc,
-      eligibility: row.eligibility,
-      rowStatus: row.rowStatus,
-      rejectionRemark: row.rejectionRemark ?? null,
-    }));
 
     await this.historyModel.create(
       [
@@ -278,10 +251,14 @@ export class FcUnspentRowReviewDomainService {
           toStatus,
           auditRevision: newAuditRevision,
           applicableFc,
-          isFcUnspent: form.isFcUnspent,
-          fcDeclaration: form.fcDeclaration ?? null,
-          unspentUlbData: snapshot,
-          checkboxConfirmation: form.checkboxConfirmation,
+          data: {
+            isFcUnspent: form.isFcUnspent,
+            fcDeclaration: form.fcDeclaration ?? null,
+            fcUnspentDeclaration: form.fcUnspentDeclaration ?? null,
+            checkboxConfirmation: form.checkboxConfirmation,
+          },
+          snapshot: [],
+          remarks: remarks ?? undefined,
           changedBy: userOid,
           changedAt: new Date(),
           ip,
@@ -292,13 +269,8 @@ export class FcUnspentRowReviewDomainService {
     );
   }
 
-  /**
-   * After a row-level bulk action, acknowledges the Yes-branch parent only when every active row
-   * is now `ACTIVE`. Rows left `UPDATE_PENDING`/`REJECTED`/`NEEDS_UPDATE`/`null` keep the parent at
-   * `UNDER_REVIEW_BY_MOHUA` — including a form with any `REJECTED` row, which can never
-   * auto-acknowledge this way (nor via complete-form approval, which also blocks on a `REJECTED`
-   * row) until a future state-correction/resubmission phase clears it. Atomic with the session.
-   */
+  /** Atomic with the session. See CLAUDE.md's "Row-level bulk review and the auto-acknowledge
+   *  rule" section for exactly when this does (and permanently doesn't) acknowledge the parent. */
   async maybeAcknowledgeAfterBulkAction(
     form: FcUnspentMohuaFormLean,
     applicableFc: string,
@@ -317,6 +289,7 @@ export class FcUnspentRowReviewDomainService {
     const newAuditRevision = form.auditRevision + 1;
 
     await this.transitionParent(form._id, toStatus, undefined, newAuditRevision, userOid, session);
+    // No `remarks` arg: this is an auto-acknowledge, not an explicit single-reason action.
     await this.insertParentHistory(
       form,
       fromStatus,

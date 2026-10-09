@@ -64,8 +64,9 @@ function resolveNestedField(doc: Record<string, unknown>, path: string): unknown
  * parent checks"); any other configured `evaluator.type` throws loudly rather than silently
  * passing every ULB. No `formId === 24` (or any other formId) branching anywhere in this file —
  * the source collection/field mapping and installment scoping come entirely from the passed-in
- * `sourceFormJson.claimEligibility` config, so wiring in a second FORM_STATUS-shaped source (e.g.
- * SFC) later is pure configuration.
+ * `sourceFormJson.claimEligibility` config — SFC, Elected Body, FC Unspent, and GTC are already
+ * wired onto this same evaluator alongside Devolution, each via its own `formjsons` document, no
+ * code change needed here.
  */
 @Injectable()
 export class ClaimEligibilityEvaluatorService {
@@ -113,9 +114,8 @@ export class ClaimEligibilityEvaluatorService {
       );
     }
 
-    const query: Record<string, unknown> = {
-      [source.fields.designYear]: new Types.ObjectId(ctx.designYearId),
-    };
+    const query: Record<string, unknown> = {};
+    if (this.filtersByDesignYear(config)) query[source.fields.designYear] = new Types.ObjectId(ctx.designYearId);
     if (source.fields.state) query[source.fields.state] = ctx.stateId;
     if (source.fields.ulb && ctx.ulbId) query[source.fields.ulb] = ctx.ulbId;
 
@@ -265,12 +265,12 @@ export class ClaimEligibilityEvaluatorService {
     }
 
     const query: Record<string, unknown> = {
-      [source.fields.designYear]: new Types.ObjectId(ctx.designYearId),
       // Bounds the read to exactly the ULBs this evaluation cares about — the only narrowing
       // available at all for sources with no `source.fields.state` mapping (e.g. SLB, whose
       // schema has no state field), and a further narrowing on top of `state` for the rest.
       [source.fields.ulb]: { $in: ctx.expectedUlbIds.map((id) => new Types.ObjectId(id)) },
     };
+    if (this.filtersByDesignYear(config)) query[source.fields.designYear] = new Types.ObjectId(ctx.designYearId);
     if (source.fields.state) query[source.fields.state] = ctx.stateId;
 
     const docs = await this.connection
@@ -542,6 +542,13 @@ export class ClaimEligibilityEvaluatorService {
     if (rowMatch.rowExemptedValues?.some((v) => v === entry.value)) return 'EXEMPTED';
     if (rowMatch.rowEligibleValues.some((v) => v === entry.value)) return 'ELIGIBLE';
     return 'INELIGIBLE';
+  }
+
+  /** False only for a SUBMISSION_PERIOD_SINGLETON source (e.g. Bank Account) — submitted once,
+   *  reused across every design year, so filtering by ctx.designYearId would miss a ULB/state that
+   *  submitted in an earlier year. Mirrors BankAccountService's own {ulb}-only ONCE_EVER lookup. */
+  private filtersByDesignYear(config: ClaimEligibilityConfig): boolean {
+    return config.yearScope !== 'SUBMISSION_PERIOD_SINGLETON';
   }
 
   private tallyBuckets(perUlb: Map<string, UlbEligibilityBucket>): UlbEligibilityTally {

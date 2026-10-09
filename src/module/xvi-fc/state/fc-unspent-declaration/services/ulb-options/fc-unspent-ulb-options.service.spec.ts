@@ -109,7 +109,7 @@ describe('FcUnspentUlbOptionsService', () => {
       state: stateOid,
       year: yearOid,
       installment: 1,
-      currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+      currentFormStatus: { $in: [FORM_STATUS.UNDER_REVIEW_BY_PMU, FORM_STATUS.UNDER_REVIEW_BY_MOHUA] },
     });
   });
 

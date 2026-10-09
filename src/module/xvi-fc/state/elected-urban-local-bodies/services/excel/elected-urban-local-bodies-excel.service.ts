@@ -10,6 +10,7 @@ import { FileTokenService } from 'src/core/file-token/file-token.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Permission } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
+import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import { assertStateAccess } from 'src/module/xvi-fc/common/utils/xvi-fc-state-access.util';
 import { assertCanStateEditForm } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
 import {
@@ -127,6 +128,8 @@ export class ElectedUrbanLocalBodiesExcelService {
         .exec(),
     ]);
     const dbUlbs = dbUlbsRaw as UlbLean[];
+
+    if (existing) await this.assertNoLockedRows(existing._id, existing.activeDatasetVersion ?? 0);
 
     const excelFormJsonFields = await this.eulbFormJsonConfig.loadFields(dto.yearId);
     const excelMainFields = getFieldsByType(excelFormJsonFields, 'EULB_MAIN_FORM_FIELDS');
@@ -503,6 +506,7 @@ export class ElectedUrbanLocalBodiesExcelService {
     }
 
     assertCanStateEditForm(form.currentFormStatus);
+    await this.assertNoLockedRows(form._id, form.activeDatasetVersion ?? 0);
 
     // Case A: active rows already exist — revalidate in place
     if (form.activeDatasetVersion > 0) {
@@ -691,6 +695,33 @@ export class ElectedUrbanLocalBodiesExcelService {
   }
 
   // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+  /**
+   * Once PMU has approved at least one row (`UNDER_REVIEW_BY_MOHUA`), this form's Excel can no
+   * longer be wholesale re-uploaded or revalidated-in-place — both mechanisms replace/rewrite the
+   * entire active dataset version with no per-row concept, which would silently clobber or delete an
+   * already-approved row's data. Further editing of a mixed-outcome submission must go through the
+   * single-row `ElectedUrbanLocalBodiesRowService.updateRow` PATCH instead, which enforces the same
+   * per-row lock via `assertCanStateEditRow`. No-op until the first approval — a pre-review or
+   * fully-rejected form's reupload/revalidate behavior is unchanged.
+   */
+  private async assertNoLockedRows(formId: Types.ObjectId, datasetVersion: number): Promise<void> {
+    const hasLockedRows = await this.rowModel
+      .exists({ form: formId, datasetVersion, isActive: true, rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA })
+      .exec();
+    if (hasLockedRows) {
+      throwXviFcValidationError({
+        electedBodyExcelFile: [
+          {
+            field: 'electedBodyExcelFile',
+            code: 'rowsLocked',
+            message:
+              'One or more rows have already been approved. Edit the remaining row(s) individually instead of re-uploading the file.',
+          },
+        ],
+      });
+    }
+  }
 
   /**
    * Re-parses the uploaded Excel from its stored S3 path, creates a new row dataset,

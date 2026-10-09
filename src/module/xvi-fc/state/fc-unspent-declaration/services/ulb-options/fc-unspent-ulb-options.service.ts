@@ -46,13 +46,10 @@ export class FcUnspentUlbOptionsService {
   ) {}
 
   /**
-   * Lazy, paginated, State-scoped ULB options for the "Yes" branch row picker.
-   * Allocation source: the active Installment-1 Devolution Formula dataset, only
-   * while that form is UNDER_REVIEW_BY_MOHUA. Returns an empty page (not an error)
-   * when no such Devolution form exists yet, so the dropdown never hard-fails.
-   *
-   * Scopes the aggregation by devolution-formula's activeDatasetVersion from outside that module —
-   * see devolution-formula/docs/adr/0001-dataset-versioning.md.
+   * Lazy, paginated, State-scoped ULB options for the "Yes" branch picker, sourced from the active
+   * Installment-1 Devolution Formula dataset while that form is under PMU or MoHUA review (see
+   * CLAUDE.md's "Dependencies" section). Returns an empty page, not an error, when no such
+   * Devolution form exists yet, so the dropdown never hard-fails.
    */
   async getOptions(
     stateId: string,
@@ -73,7 +70,7 @@ export class FcUnspentUlbOptionsService {
         state: stateOid,
         year: yearOid,
         installment: FC_UNSPENT_DEVOLUTION_INSTALLMENT,
-        currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+        currentFormStatus: { $in: [FORM_STATUS.UNDER_REVIEW_BY_PMU, FORM_STATUS.UNDER_REVIEW_BY_MOHUA] },
       })
       .select('_id activeDatasetVersion')
       .lean<{ _id: Types.ObjectId; activeDatasetVersion: number }>()

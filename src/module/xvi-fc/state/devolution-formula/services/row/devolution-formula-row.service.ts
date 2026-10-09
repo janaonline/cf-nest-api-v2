@@ -1,4 +1,4 @@
-import { Injectable, InternalServerErrorException, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, InternalServerErrorException, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model, Types } from 'mongoose';
 import type ExcelJS from 'exceljs';
@@ -18,6 +18,7 @@ import {
   DevolutionFormulaRow,
   DevolutionFormulaRowDocument,
 } from 'src/schemas/xvi-fc/state/devolution-formula-row.schema';
+import { ClaimLetterUlbLock, ClaimLetterUlbLockDocument } from 'src/schemas/xvi-fc/state/claim-letter-ulb-lock.schema';
 import {
   DF_ERROR_EXCEL_HEADERS,
   DF_PAGINATION_DEFAULT_LIMIT,
@@ -47,6 +48,8 @@ export class DevolutionFormulaRowService {
     private readonly formModel: Model<DevolutionFormulaFormDocument>,
     @InjectModel(DevolutionFormulaRow.name)
     private readonly rowModel: Model<DevolutionFormulaRowDocument>,
+    @InjectModel(ClaimLetterUlbLock.name)
+    private readonly claimLetterUlbLockModel: Model<ClaimLetterUlbLockDocument>,
     private readonly dfValidator: DevolutionFormulaValidator,
     private readonly excelService: ExcelService,
     private readonly dfFormJsonConfig: DfFormJsonConfigService,
@@ -172,9 +175,8 @@ export class DevolutionFormulaRowService {
     if (!row) {
       throw new NotFoundException('Row not found in the active dataset.');
     }
-    // Defense-in-depth for rows created before this filter existed — new rows for ineligible
-    // ULBs are already rejected at Excel-ingestion time, but an already-existing row could
-    // otherwise still be edited here.
+    // Defense-in-depth: ineligible ULBs are rejected at ingestion, but a row created before this
+    // filter existed could otherwise still be edited here.
     if (row.ulbId) {
       await this.ulbEligibilityService.assertUlbEligibleForGrantCycle(
         row.ulbId,
@@ -183,11 +185,15 @@ export class DevolutionFormulaRowService {
       );
     }
 
-    this.assertNoActiveClaimLockForUlb(row.ulbId ? new Types.ObjectId(String(row.ulbId)) : null, yearId, installment);
+    await this.assertNoActiveClaimLockForUlb(
+      stateId,
+      yearId,
+      installment,
+      row.ulbId ? new Types.ObjectId(String(row.ulbId)) : null,
+    );
 
     const maxFormulaLength = await this.resolveMaxFormulaLength(yearId);
 
-    // Validate the editable fields
     const fieldErrors = this.dfValidator.validatePortalRowEdit(dto, installment, maxFormulaLength, {
       totalMoHUAAllocation: (formDoc['totalMoHUAAllocation'] as number | undefined) ?? undefined,
     });
@@ -196,7 +202,6 @@ export class DevolutionFormulaRowService {
       throwXviFcValidationError(errorMap);
     }
 
-    // Apply updates (only provided fields)
     const updatedFields: Partial<{
       totalGrantAllocation: number;
       installment1Amount: number;
@@ -210,7 +215,6 @@ export class DevolutionFormulaRowService {
     if (dto.installment2Amount !== undefined) updatedFields.installment2Amount = dto.installment2Amount;
     if (dto.devolutionFormula !== undefined) updatedFields.devolutionFormula = dto.devolutionFormula;
 
-    // Re-validate the row with merged values
     const mergedValues = {
       totalGrantAllocation: updatedFields.totalGrantAllocation ?? row.totalGrantAllocation,
       installment1Amount: updatedFields.installment1Amount ?? row.installment1Amount,
@@ -252,14 +256,12 @@ export class DevolutionFormulaRowService {
       .lean()
       .exec();
 
-    // Recalculate parent form totals
     await this.recalculateFormSummary(
       formDoc['_id'] as Types.ObjectId,
       formDoc['activeDatasetVersion'] as number,
       new Types.ObjectId(user._id),
     );
 
-    // Fetch updated form for summary
     const updatedForm = await this.formModel
       .findById(formDoc['_id'] as Types.ObjectId)
       .lean<DfFormLeanDoc>()
@@ -312,7 +314,7 @@ export class DevolutionFormulaRowService {
     const activeVersion = (formDoc['activeDatasetVersion'] as number) ?? 0;
     const userOid = new Types.ObjectId(user._id);
 
-    // Deactivate active rows and fire-and-forget deletion
+    // Rows are already hidden via isActive:false, so the physical delete can run fire-and-forget.
     if (activeVersion > 0) {
       await this.rowModel
         .updateMany({ form: formId, datasetVersion: activeVersion }, { $set: { isActive: false } })
@@ -462,14 +464,10 @@ export class DevolutionFormulaRowService {
       .exec();
     const totalMoHUAAllocation = ((formDoc as Record<string, unknown> | null)?.['totalMoHUAAllocation'] as number) ?? 0;
     const missingUlbCount = ((formDoc as Record<string, unknown> | null)?.['missingUlbCount'] as number) ?? 0;
-    // Exact match (within float-noise epsilon), not a forgiving tolerance — every rupee of
-    // totalMoHUAAllocation must be accounted for; see devolution-formula-tolerance.helpers.ts.
+    // Backstop equality, not a forgiving tolerance — see devolution-formula-tolerance.helpers.ts.
     const allocationBalanced = amountsAreEqual(totalAllocatedSum, totalMoHUAAllocation);
-    // Row edits can't introduce a *new* missing ULB or duplicate (only a fresh Excel parse via
-    // validateExcel/revalidateExcel can), so this never recomputes missingUlbCount/duplicateUlbCount
-    // itself — it only reads back the persisted missingUlbCount so a still-outstanding gap isn't
-    // silently overwritten to VALID by a routine row edit (mirrors EULB's recalculateFormSummary,
-    // which includes missingDbUlbCount === 0 in the same way).
+    // missingUlbCount here is read-back only, never recomputed — see CLAUDE.md's "Invariants
+    // worth knowing before you change adjacent code" section.
     const validationStatus = errorRowCount === 0 && missingUlbCount === 0 && allocationBalanced ? 'VALID' : 'INVALID';
 
     await this.formModel
@@ -480,13 +478,34 @@ export class DevolutionFormulaRowService {
       .exec();
   }
 
-  // TODO: wire up to claim-letter's ClaimLetterUlbLock model (exists now, just not read here) —
-  // should throw if the ULB has an active claim letter lock for this year+installment.
-  private assertNoActiveClaimLockForUlb(
-    _ulbId: Types.ObjectId | null,
-    _yearId: string,
-    _installment: DfInstallment,
-  ): void {
-    // Still a no-op — see TODO above.
+  /**
+   * Devolution's own per-ULB edit lock — see CLAUDE.md's "Row-level claim-lock enforcement (PMU
+   * Review feature)" section.
+   */
+  private async assertNoActiveClaimLockForUlb(
+    stateId: string,
+    yearId: string,
+    installment: DfInstallment,
+    ulbId: Types.ObjectId | null,
+  ): Promise<void> {
+    if (!ulbId) return;
+
+    const activeLock = await this.claimLetterUlbLockModel
+      .findOne({
+        state: new Types.ObjectId(stateId),
+        year: new Types.ObjectId(yearId),
+        installment,
+        ulbId,
+        lockState: 'ACTIVE',
+      })
+      .select('_id')
+      .lean()
+      .exec();
+
+    if (activeLock) {
+      throw new ConflictException(
+        'This ULB is locked in an active claim letter for this installment and cannot be edited.',
+      );
+    }
   }
 }

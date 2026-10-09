@@ -708,10 +708,7 @@ describe('RequestExemptionService', () => {
 
       await service.finalSubmit(makeDto({ data: dataWithoutExemptionFor }), stateReviewer, '127.0.0.1', 'jest');
 
-      expect(model.create).toHaveBeenCalledWith(
-        [expect.objectContaining({ ulb: ulbOid })],
-        { session },
-      );
+      expect(model.create).toHaveBeenCalledWith([expect.objectContaining({ ulb: ulbOid })], { session });
     });
 
     describe('whole-state branch (exemptionFor: STATE)', () => {

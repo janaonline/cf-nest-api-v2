@@ -8,8 +8,13 @@ Formula's allocation data. No ADR of its own — see "Dependencies" below for wh
 
 - `services/main/fc-unspent-declaration.service.ts` — form-level orchestration: get form, save
   draft, final submit. Owns the two real transactions in this module (`saveDraft`/`finalSubmit`,
-  each atomically writing parent + rows + history) — both self-contained to this file, no ADR
-  needed for them (single call site each, nothing external depends on the transaction mechanics).
+  each atomically writing parent + rows) — both self-contained to this file, no ADR needed for them
+  (single call site each, nothing external depends on the transaction mechanics). History is written
+  differently per method: `finalSubmit` writes its own full-snapshot entry inside its transaction
+  (a failure there aborts the submit); `saveDraft` writes a lightweight, best-effort entry
+  (`recordDraftHistory`) after its transaction commits, mirroring
+  `elected-urban-local-bodies.service.ts`'s own `recordFormHistory` discipline — a failure there
+  never fails the draft save.
 - `services/rows/fc-unspent-declaration-row.service.ts` — per-ULB row resolution/validation,
   including the `eligibility` computation (see "Dependencies"). The threshold percent it compares
   against is not a constant baked into this file — it's resolved per design year by
@@ -113,6 +118,11 @@ third no-op branch.
   in line with every other state-form amount for full consistency. `allocationPerc` is a ratio
   (`unspentAmount / allocationAmount * 100`) and is unaffected by the unit — computed unrounded, see
   `FcUnspentDeclarationRowService`.
+- `finalSubmit` requires the active branch's declaration file reference (`fcDeclaration` for No,
+  `fcUnspentDeclaration` for Yes) explicitly in every submission payload — omitted/null is rejected
+  rather than silently falling back to the previously stored file. This keeps an explicit null
+  meaningful (never a silent no-op) and gives `FileInfoNormalizerService` the raw payload value it
+  needs to tell a genuine re-upload from the unchanged-file case.
 
 ## Dependencies
 
@@ -122,6 +132,15 @@ this module reads `activeDatasetVersion` at 3 call sites (main service's
 gate editability and resolve per-ULB allocation amounts. See
 `devolution-formula/docs/adr/0001-dataset-versioning.md` (this module is listed there as a
 consumer) before changing anything on either side of these reads.
+
+`resolveDevolutionDependency`'s own "is Devolution ready" check treats devolution-formula's status,
+not just its dataset: `UNDER_REVIEW_BY_PMU` counts the same as `UNDER_REVIEW_BY_MOHUA` (both
+"ready" — Devolution Formula got its own PMU pre-screen stage, see
+`pmu/devolution-formula/CLAUDE.md`), and `RETURNED_BY_PMU` counts the same as `RETURNED_BY_MOHUA`
+(both "editable due to return"). Neither pairing is a regression from the other. This module's own
+PMU review stage (`UNDER_REVIEW_BY_PMU`/`RETURNED_BY_PMU` on *this* module's forms, gating
+`finalSubmit`'s own target status) is a separate, unrelated concept — see
+`pmu/fc-unspent-declaration/CLAUDE.md`.
 
 **Outbound — this module's `eligibility` field is read externally, generically:** claim-letter's
 ULB-bulk eligibility evaluation reads the per-row `eligibility` boolean computed by

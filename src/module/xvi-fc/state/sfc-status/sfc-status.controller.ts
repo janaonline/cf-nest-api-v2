@@ -92,7 +92,7 @@ export class SfcStatusController {
   @ApiOperation({
     summary: 'Final submit SFC Status form',
     description:
-      'Final-submits the SFC Status form for the given state and year. Supports direct submit without an existing draft, runs full validation, upserts the sanitized visible payload, and transitions status to `SUBMISSION_ACKNOWLEDGED_BY_MOHUA`. Submission is controlled by the centralized status gate and state-level access rules.',
+      'Final-submits the SFC Status form for the given state and year. Supports direct submit without an existing draft, runs full validation, upserts the sanitized visible payload, and transitions status to `UNDER_REVIEW_BY_PMU` (PMU Review feature). Submission is controlled by the centralized status gate and state-level access rules.',
   })
   @ApiBody({ type: SaveSfcStatusDto })
   @Post('final-submit')

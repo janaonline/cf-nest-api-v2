@@ -4,10 +4,13 @@ import { DynamicFormValidationService } from './dynamic-form-validation/dynamic-
 import { XvifcFormActorsService } from './services/xvifc-form-actors.service';
 import { FileUrlNormalizerService } from './services/file-url-normalizer.service';
 import { FileInfoNormalizerService } from './services/file-info-normalizer.service';
+import { FormQuestionHydratorService } from './services/form-question-hydrator.service';
 import { ExpectedUlbSetService } from './services/expected-ulb-set.service';
 import { ClaimEligibilityEvaluatorService } from './services/claim-eligibility-evaluator.service';
 import { YearAccessService } from './services/year-access.service';
 import { ExemptionResolverService } from './services/exemption-resolver.service';
+import { StateFormPmuReviewHelper } from './services/state-form-pmu-review.helper';
+import { PmuRowReviewHelper } from './services/pmu-row-review.helper';
 import { Ulb, UlbSchema } from 'src/schemas/ulb.schema';
 import { Year, YearSchema } from 'src/schemas/year.schema';
 import { UlbEligibilityModule } from 'src/module/ulb-eligibility/ulb-eligibility.module';
@@ -32,20 +35,26 @@ import {
     XvifcFormActorsService,
     FileUrlNormalizerService,
     FileInfoNormalizerService,
+    FormQuestionHydratorService,
     ExpectedUlbSetService,
     ClaimEligibilityEvaluatorService,
     YearAccessService,
     ExemptionResolverService,
+    StateFormPmuReviewHelper,
+    PmuRowReviewHelper,
   ],
   exports: [
     DynamicFormValidationService,
     XvifcFormActorsService,
     FileUrlNormalizerService,
     FileInfoNormalizerService,
+    FormQuestionHydratorService,
     ExpectedUlbSetService,
     ClaimEligibilityEvaluatorService,
     YearAccessService,
     ExemptionResolverService,
+    StateFormPmuReviewHelper,
+    PmuRowReviewHelper,
   ],
 })
 export class XviFcCommonModule {}

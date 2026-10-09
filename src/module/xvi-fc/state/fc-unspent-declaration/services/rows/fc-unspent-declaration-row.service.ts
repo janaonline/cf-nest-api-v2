@@ -1,7 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { AnyBulkWriteOperation, ClientSession, Model, Types } from 'mongoose';
+import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import type { RowReviewStatus } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
+import { canStateEditRow } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
 import {
   XviFcUnspentStateFormRow,
   XviFcUnspentStateFormRowDocument,
@@ -189,11 +191,14 @@ export class FcUnspentDeclarationRowService {
     userOid: Types.ObjectId,
     targetRowStatus: RowReviewStatus | undefined,
     session: ClientSession,
-  ): Promise<{ transitions: FcUnspentRowStatusTransition[] }> {
+  ): Promise<{ transitions: FcUnspentRowStatusTransition[]; preservedLockedRows: string[] }> {
     const ulbOids = resolvedRows.map((r) => r.ulbId);
 
+    // Always loaded (not just on finalSubmit) — saveDraft needs the same lock protection as
+    // finalSubmit: a row PMU has already approved must never be overwritten by either path, since
+    // the client's submitted array routinely resends every row, including untouched approved ones.
     const existingRows =
-      targetRowStatus !== undefined && ulbOids.length > 0
+      ulbOids.length > 0
         ? await this.rowModel
             .find({ form: formId, ulbId: { $in: ulbOids } })
             .select('_id ulbId rowStatus')
@@ -203,9 +208,21 @@ export class FcUnspentDeclarationRowService {
         : [];
     const existingByUlbId = new Map(existingRows.map((r) => [String(r.ulbId), r]));
     const transitions: FcUnspentRowStatusTransition[] = [];
+    const preservedLockedRows: string[] = [];
 
-    if (resolvedRows.length > 0) {
-      const bulkOps: AnyBulkWriteOperation<XviFcUnspentStateFormRowDocument>[] = resolvedRows.map((row, i) => {
+    // Rows PMU has already approved are dropped from the bulk write entirely — content,
+    // rejectionRemark, and rowStatus all stay exactly as stored, regardless of what the client
+    // submitted for that ulbId. This is what lets a resubmission fix only the rejected rows without
+    // being able to (even accidentally) touch already-approved ones.
+    const editableRows = resolvedRows.filter((row) => {
+      const existing = existingByUlbId.get(String(row.ulbId));
+      const locked = existing !== undefined && !canStateEditRow(existing.rowStatus);
+      if (locked) preservedLockedRows.push(String(row.ulbId));
+      return !locked;
+    });
+
+    if (editableRows.length > 0) {
+      const bulkOps: AnyBulkWriteOperation<XviFcUnspentStateFormRowDocument>[] = editableRows.map((row, i) => {
         const setFields: Record<string, unknown> = {
           state: stateOid,
           year: yearOid,
@@ -245,7 +262,7 @@ export class FcUnspentDeclarationRowService {
       if (targetRowStatus !== undefined) {
         const upsertedIds = (bulkResult.upsertedIds ?? {}) as Record<number, Types.ObjectId>;
 
-        resolvedRows.forEach((row, i) => {
+        editableRows.forEach((row, i) => {
           const existing = existingByUlbId.get(String(row.ulbId));
           const previousStatus = existing?.rowStatus ?? null;
           if (previousStatus === targetRowStatus) return; // no-op — unchanged, skip history
@@ -262,7 +279,7 @@ export class FcUnspentDeclarationRowService {
     }
 
     await this.deactivateOmittedRows(formId, ulbOids, userOid, session);
-    return { transitions };
+    return { transitions, preservedLockedRows };
   }
 
   /** Deactivates every active row for a form (No-branch / branch switch). No rowStatus change, no history. */
@@ -332,6 +349,9 @@ export class FcUnspentDeclarationRowService {
     return query.lean<FcUnspentActiveRowLean[]>().exec();
   }
 
+  /** A row PMU has already approved must never be deactivated just because a resubmission's
+   *  payload omitted it — the array-diff contract means an omission here is expected to be
+   *  read as "not touching this row," never as "remove it." */
   private async deactivateOmittedRows(
     formId: Types.ObjectId,
     submittedUlbIds: Types.ObjectId[],
@@ -340,7 +360,12 @@ export class FcUnspentDeclarationRowService {
   ): Promise<void> {
     await this.rowModel
       .updateMany(
-        { form: formId, isActive: true, ulbId: { $nin: submittedUlbIds } },
+        {
+          form: formId,
+          isActive: true,
+          ulbId: { $nin: submittedUlbIds },
+          rowStatus: { $nin: [FORM_STATUS.UNDER_REVIEW_BY_MOHUA, FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA] },
+        },
         { $set: { isActive: false, updatedBy: userOid } },
         { session },
       )

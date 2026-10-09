@@ -134,6 +134,9 @@ export class ElectedUrbanLocalBodiesForm {
   @Prop({ type: Number, default: FORM_STATUS.NOT_STARTED })
   currentFormStatus!: number;
 
+  @Prop({ type: String, default: null })
+  pmuRemarks?: string | null;
+
   @Prop({ type: Boolean, default: true })
   isDraft!: boolean;
 

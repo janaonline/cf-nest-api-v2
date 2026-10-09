@@ -51,7 +51,11 @@ per-ULB version — see `common/services/CLAUDE.md`'s `ExemptionResolverService`
 
 - `getForm` calls the private `resolveExemptionStatusForResponse(stateId, yearId)` and returns
   `exemptionStatus: 'PENDING' | 'APPROVED' | 'REJECTED' | null` + `exemptionMohuaRemarks` alongside
-  the hydrated form.
+  the hydrated form. It also forces `permissions.canEdit`/`canFinalSubmit` to `false` when
+  `exemptionStatus` is `PENDING` or `APPROVED` — `buildStateFormPermissions` is shared by every
+  state form and has no concept of exemptions, so without this override the response would
+  advertise an action the next write of that same action would reject via
+  `assertNotBlockedByExemption`.
 - `saveDraft` and `finalSubmit` both call the private `assertNotBlockedByExemption(stateId, yearId)`
   right after `assertStateAccess`, before any DB read — throws `ConflictException` (409, not 403 —
   see request-exemption's `docs/adr/0002-eligibility-gating-and-race-window.md`) while the exemption

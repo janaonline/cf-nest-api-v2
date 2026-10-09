@@ -1,5 +1,6 @@
 import { ForbiddenException } from '@nestjs/common';
 import { FORM_STATUS, getFormStatusLabel } from 'src/common/constants/form-status.constants';
+import type { RowReviewStatus } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
 
 /** Statuses in which a ULB user may save or edit a ULB form.
  * Also exported as a plain array (ULB_EDITABLE_STATUS_IDS) for use cases that can't call canUlbEditForm, such as MongoDB aggregation or cross-collection status checks.
@@ -17,11 +18,16 @@ export const ULB_EDITABLE_STATUS_IDS: readonly number[] = [...ULB_EDITABLE_STATU
  * Also exported as a plain array (STATE_EDITABLE_STATUS_IDS) for use cases that can't call
  * canStateEditForm/canStateFinalSubmitForm, such as MongoDB aggregation or cross-collection status
  * checks (e.g. Request Exemption's whole-state branch checking a target state form's own progress).
+ *
+ * Includes `RETURNED_BY_PMU` alongside the legacy `RETURNED_BY_MOHUA` (PMU Review feature) — a PMU
+ * rejection must send the state back into edit/resubmit mode the same way a MoHUA rejection always
+ * has. Rationale: see common/services/CLAUDE.md's "PMU Review shared mechanics" section.
  */
 const STATE_EDITABLE_STATUSES: Set<number> = new Set([
   FORM_STATUS.NOT_STARTED,
   FORM_STATUS.IN_PROGRESS,
   FORM_STATUS.RETURNED_BY_MOHUA,
+  FORM_STATUS.RETURNED_BY_PMU,
 ]);
 
 export const STATE_EDITABLE_STATUS_IDS: readonly number[] = [...STATE_EDITABLE_STATUSES];
@@ -144,8 +150,72 @@ export function assertCanMohuaMutateForm(status: number): void {
   }
 }
 
-/** Statuses in which the post-submission update page is available. */
+/** Statuses in which a PMU user may view a form's review page (PMU Review feature); deliberately
+ *  wider than `PMU_REVIEWABLE_STATUSES`'s mutate-gate counterpart below, and doubles as the
+ *  cross-state worklist's own `$in` visibility filter. Full rationale: see
+ *  common/services/CLAUDE.md's "PMU Review shared mechanics" section. */
+export const PMU_REVIEWABLE_STATUSES: readonly number[] = [
+  FORM_STATUS.UNDER_REVIEW_BY_PMU,
+  FORM_STATUS.RETURNED_BY_PMU,
+  FORM_STATUS.NOT_STARTED,
+  FORM_STATUS.IN_PROGRESS,
+  FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+  FORM_STATUS.RETURNED_BY_MOHUA,
+  FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+];
+
+const PMU_REVIEWABLE_STATUS_SET = new Set(PMU_REVIEWABLE_STATUSES);
+
+export function canPmuViewForm(status: number): boolean {
+  return PMU_REVIEWABLE_STATUS_SET.has(status);
+}
+
+/**
+ * Only `UNDER_REVIEW_BY_PMU` is mutable — once approved, the form is settled for this stage.
+ * Deliberately separate from `canMohuaMutateForm` above, which is shared with Annual Accounts' own,
+ * unrelated MoHUA review and must keep its existing meaning.
+ */
+export function canPmuMutateForm(status: number): boolean {
+  return status === FORM_STATUS.UNDER_REVIEW_BY_PMU;
+}
+
+export function assertCanPmuMutateForm(status: number): void {
+  if (!canPmuMutateForm(status)) {
+    throw new ForbiddenException(`Form cannot be reviewed when status is ${getFormStatusLabel(status)}.`);
+  }
+}
+
+/**
+ * Row-level counterpart to `STATE_EDITABLE_STATUSES`, for forms with per-ULB PMU row review
+ * (Elected Urban Local Bodies, FC Unspent Declaration). A row is editable by the State only while it
+ * hasn't yet been approved — `null` (pre-submission), `RETURNED_BY_PMU`, or `RETURNED_BY_MOHUA`. Once
+ * a row reaches `UNDER_REVIEW_BY_PMU` (decision pending) or any approved-adjacent status
+ * (`UNDER_REVIEW_BY_MOHUA`/`SUBMISSION_ACKNOWLEDGED_BY_MOHUA`), it is permanently locked from State
+ * edits at this stage — this is what lets the State resume editing only the rejected rows of a mixed
+ * PMU review outcome without being able to touch already-approved ones.
+ */
+const STATE_EDITABLE_ROW_STATUSES: Set<RowReviewStatus | null> = new Set([
+  null,
+  FORM_STATUS.RETURNED_BY_PMU,
+  FORM_STATUS.RETURNED_BY_MOHUA,
+]);
+
+export function canStateEditRow(rowStatus: RowReviewStatus | null | undefined): boolean {
+  return STATE_EDITABLE_ROW_STATUSES.has(rowStatus ?? null);
+}
+
+export function assertCanStateEditRow(rowStatus: RowReviewStatus | null | undefined): void {
+  if (!canStateEditRow(rowStatus)) {
+    throw new ForbiddenException('This row has already been approved and cannot be edited.');
+  }
+}
+
+/** Statuses in which the post-submission update page is available. Sole consumer today is Elected
+ *  Body (PMU Review feature retargeted its `finalSubmit` to land on `UNDER_REVIEW_BY_PMU` instead
+ *  of `UNDER_REVIEW_BY_MOHUA` — without adding the PMU status here, this page would become
+ *  unreachable the moment a form leaves draft). */
 export const POST_SUBMISSION_UPDATE_ALLOWED_STATUSES: readonly number[] = [
+  FORM_STATUS.UNDER_REVIEW_BY_PMU,
   FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
   FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
 ];
