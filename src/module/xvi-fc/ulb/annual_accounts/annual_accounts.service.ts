@@ -533,9 +533,12 @@ export class AnnualAccountsService implements OnModuleInit {
     // on `!doc` alone would miss the placeholder case entirely. revalidate runs whenever a document
     // already exists, to catch an admin having since undone the exemption; it independently no-ops
     // when neither section is a stale stub. Both re-fetch/re-derive from a fresh read afterward.
-    await this.materializeExemptionStubIfNeeded(ulbId, designYearId, user);
-    if (doc) {
-      await this.revalidateExemptionStubIfNeeded(doc, ulbId, designYearId);
+    // MoHUA only views: both of these can write (create, reset or delete a stub), so they never run for it.
+    if (user.scope !== Scope.MOHUA) {
+      await this.materializeExemptionStubIfNeeded(ulbId, designYearId, user);
+      if (doc) {
+        await this.revalidateExemptionStubIfNeeded(doc, ulbId, designYearId);
+      }
     }
     doc = await this.annualAccountModel
       .findOne({

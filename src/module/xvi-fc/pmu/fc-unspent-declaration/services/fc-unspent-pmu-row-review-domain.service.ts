@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { ClientSession, Model, Types } from 'mongoose';
 import type { RowReviewStatus } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
+import { escapeRegex } from 'src/common/utils/regex.util';
 import { StateFormPmuReviewHelper } from 'src/module/xvi-fc/common/services/state-form-pmu-review.helper';
 import { PmuRowReviewHelper, resolveSettledFormStatus } from 'src/module/xvi-fc/common/services/pmu-row-review.helper';
 import {
@@ -113,7 +114,7 @@ export class FcUnspentPmuRowReviewDomainService {
       excludeRowIds,
       select: ROW_LEAN_SELECT,
       buildSearchFilter: (s) => {
-        const regex = new RegExp(s, 'i');
+        const regex = new RegExp(escapeRegex(s), 'i');
         return { $or: [{ ulbName: regex }, { censusCode: regex }, { sbCode: regex }] };
       },
     });

@@ -5,11 +5,15 @@ import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Permission } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
 import { FORM_STATUS, getFormStatusLabel } from 'src/common/constants/form-status.constants';
+import { escapeRegex } from 'src/common/utils/regex.util';
 import {
   assertCanPmuMutateForm,
   canPmuMutateForm,
 } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
-import { assertPmuReviewerAccess } from 'src/module/xvi-fc/common/utils/xvi-fc-reviewer-access.util';
+import {
+  assertPmuOrMohuaViewerAccess,
+  assertPmuReviewerAccess,
+} from 'src/module/xvi-fc/common/utils/xvi-fc-reviewer-access.util';
 import { throwXviFcValidationError, xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
 import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import {
@@ -53,7 +57,7 @@ export class ElectedUrbanLocalBodiesPmuRowsService {
     query: GetEulbPmuRowsQueryDto,
     user: AuthUser,
   ): Promise<XviFcApiResponse<EulbPmuRowsData>> {
-    assertPmuReviewerAccess(user);
+    assertPmuOrMohuaViewerAccess(user);
 
     const form = await this.domainService.findForm(stateId, yearId);
     if (!form) throw new NotFoundException('Elected Urban Local Bodies form not found for this state and year.');
@@ -68,7 +72,7 @@ export class ElectedUrbanLocalBodiesPmuRowsService {
       isActive: true,
     };
     if (query.search) {
-      const regex = new RegExp(query.search, 'i');
+      const regex = new RegExp(escapeRegex(query.search), 'i');
       baseFilter['$or'] = [{ ulbName: regex }, { censusCode: regex }];
     }
 

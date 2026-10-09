@@ -29,6 +29,9 @@ npm run migrate:xvifc-in-progress-since  # Backfill inProgressSince on pre-exist
 npm run migrate:xvifc-upload-block-24h   # TS-933: shortens already-active 7-day upload blocks to 24h from the
                                           # 3rd failed attempt (Annual Accounts + DUR; scripts/shorten-upload-block-to-24h.ts).
                                           # Re-runnable; `-- --dry-run` counts without writing
+npm run migrate:xvifc-slb-state            # Backfills the new required `state` on existing xvifc_slb_forms docs from
+                                          # their ULB (scripts/backfill-slb-state.ts). Re-runnable; `-- --dry-run` counts
+                                          # and lists unresolvable (orphan) docs without writing
 ```
 
 ## Architecture
@@ -69,7 +72,17 @@ src/
 │   │                    # approving is blocked when the ULB's current row is already eligible per Elected Body's
 │   │                    # own claimEligibility.evaluator.config.rowEligibleValues (read live, not hardcoded), not
 │   │                    # when it's merely been submitted.
-│   ├── mohua/           # fc-unspent-declaration and request-exemption review workflows (each a separate module,
+│   ├── mohua/           # overview (read-only cross-state endpoint: GET xvi-fc/mohua/overview/:yearId — every state's
+│   │                    # stage derived from its 5 state-condition forms' currentFormStatus + allocation (basic + performance) +
+│   │                    # expected-ULB count; MOHUA/ADMIN scope only, never cached) plus the per-state
+│   │                    # GET xvi-fc/mohua/state/:stateId/:yearId (allocation, the 5 condition forms, per-form ULB
+│   │                    # submission counts), the state's paginated ULB list GET xvi-fc/mohua/state/:stateId/:yearId/ulbs (search,
+│   │                    # sort by ULB name/allocation, allocation from the Devolution Formula active dataset, per-form
+│   │                    # submitted flags), and one ULB's form statuses GET xvi-fc/mohua/ulb/:ulbId/:yearId/forms (status
+│   │                    # text + `submitted`; the "submitted" rule — MOHUA_OVERVIEW_ULB_SUBMITTED_STATUSES, SLB at 8/12 only —
+│   │                    # lives only there, never in the UI). MoHUA also READS the PMU review GETs (view-only, see
+│   │                    # common/services/CLAUDE.md) and the per-ULB SLB / bank-account GETs (no stub writes for MOHUA), and
+│   │                    # fc-unspent-declaration and request-exemption review workflows (each a separate module,
 │   │                    # decoupled from its own STATE-side module — mirrors fc-unspent's own split)
 │   ├── side-menu/, cache/, common/ # XviFcCacheService/Interceptor, form-actors, form-status-access helpers,
 │   │                     # YearAccessService (dynamic year access/exemption for new ULBs - see below) shared

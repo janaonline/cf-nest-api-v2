@@ -13,7 +13,7 @@ import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibilit
 import { YearAccessService } from 'src/module/xvi-fc/common/services/year-access.service';
 import { ExemptionResolverService } from 'src/module/xvi-fc/common/services/exemption-resolver.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
-import { AccessLevel, Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
+import { AccessLevel, Permission, Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import type { SaveSlbDto } from './dto/save-slb.dto';
 
@@ -52,6 +52,16 @@ const stateUser = (state: Types.ObjectId): AuthUser =>
     _id: new Types.ObjectId().toString(),
     scope: Scope.STATE,
     state,
+  }) as unknown as AuthUser;
+
+// MoHUA viewer: holds VIEW_STATUS_REPORTS, which is what the SLB read check requires.
+const mohuaUser = (permissionDeny: Permission[] = []): AuthUser =>
+  ({
+    _id: new Types.ObjectId().toString(),
+    role: 'MoHUA',
+    scope: Scope.MOHUA,
+    xviFcSubrole: 'viewer',
+    ...(permissionDeny.length ? { permissionOverrides: { allow: [], deny: permissionDeny } } : {}),
   }) as unknown as AuthUser;
 
 const adminUser: AuthUser = {
@@ -190,11 +200,28 @@ describe('SlbService', () => {
     it('requires an explicit ulbId for ADMIN users', async () => {
       await expect(service.resolveEffectiveUlbId(adminUser)).rejects.toThrow(BadRequestException);
     });
+
+    it('lets MOHUA name any ULB, and requires one', async () => {
+      await expect(service.resolveEffectiveUlbId(mohuaUser(), otherUlbOid.toString())).resolves.toBe(
+        otherUlbOid.toString(),
+      );
+      await expect(service.resolveEffectiveUlbId(mohuaUser())).rejects.toThrow(BadRequestException);
+    });
   });
 
   describe('assertCanReadSlb', () => {
     it('allows a STATE user to read a ULB within their own state', async () => {
       await expect(service.assertCanReadSlb(stateUser(stateOid), ulbOid.toString())).resolves.toBeUndefined();
+    });
+
+    it('allows a MOHUA user to read any ULB (read-only, not state-scoped)', async () => {
+      await expect(service.assertCanReadSlb(mohuaUser(), otherUlbOid.toString())).resolves.toBeUndefined();
+    });
+
+    it('rejects a MOHUA user whose view permission has been denied', async () => {
+      await expect(
+        service.assertCanReadSlb(mohuaUser([Permission.VIEW_STATUS_REPORTS]), ulbOid.toString()),
+      ).rejects.toThrow(ForbiddenException);
     });
 
     it('rejects a STATE user reading a ULB outside their own state', async () => {

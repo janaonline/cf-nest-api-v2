@@ -891,9 +891,9 @@ export class BankAccountService {
       return normalizedRequestedUlbId;
     }
 
-    if (user.scope === Scope.ADMIN) {
+    if (user.scope === Scope.ADMIN || user.scope === Scope.MOHUA) {
       if (!normalizedRequestedUlbId) {
-        throw new BadRequestException('ulbId is required for ADMIN users.');
+        throw new BadRequestException('ulbId is required for ADMIN and MoHUA users.');
       }
       return normalizedRequestedUlbId;
     }
@@ -905,6 +905,14 @@ export class BankAccountService {
     this.assertValidUlbId(ulbId);
 
     if (user.scope === Scope.ADMIN) return;
+
+    // MoHUA is a central role (not scoped to a state) and only ever views the bank account.
+    if (user.scope === Scope.MOHUA) {
+      if (!getEffectivePermissions(user).includes(Permission.VIEW_STATUS_REPORTS)) {
+        throw new ForbiddenException('You do not have permission to view bank account forms.');
+      }
+      return;
+    }
 
     if (user.scope === Scope.ULB) {
       const userUlbId = toObjectIdString(user.ulb);
