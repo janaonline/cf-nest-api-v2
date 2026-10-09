@@ -63,10 +63,10 @@ describe('FcUnspentDeclarationController', () => {
     expect(ulbOptionsService['getOptions']).toHaveBeenCalledWith(stateId, yearId, query, user);
   });
 
-  it('POST save-draft delegates to FcUnspentDeclarationService.saveDraft (no ip/userAgent — no history on draft)', async () => {
+  it('POST save-draft delegates to FcUnspentDeclarationService.saveDraft with ip/userAgent', async () => {
     const dto = { stateId, yearId, data: { isFcUnspent: false } } as unknown as SaveFcUnspentDeclarationDto;
-    await controller.saveDraft(dto, user);
-    expect(mainService['saveDraft']).toHaveBeenCalledWith(dto, user);
+    await controller.saveDraft(dto, user, '127.0.0.1', 'jest-agent');
+    expect(mainService['saveDraft']).toHaveBeenCalledWith(dto, user, '127.0.0.1', 'jest-agent');
   });
 
   it('POST final-submit delegates to FcUnspentDeclarationService.finalSubmit with ip/userAgent', async () => {

@@ -317,9 +317,9 @@ describe('FcUnspentDeclarationRowService', () => {
       expect(ops[0].updateOne.upsert).toBe(true);
     });
 
-    it('does not pre-fetch existing rowStatus (no transition detection needed)', async () => {
+    it('still pre-fetches existing rowStatus on draft save — the row-lock check applies to saveDraft too, not just finalSubmit', async () => {
       await service.applyRows(formOid, stateOid, yearOid, [resolvedRow], userOid, undefined, mockSession);
-      expect(rowModel['find']).not.toHaveBeenCalled();
+      expect(rowModel['find']).toHaveBeenCalledWith({ form: formOid, ulbId: { $in: [ulbOid1] } });
     });
 
     it('persists allocationSource in $set on every upsert', async () => {
@@ -331,7 +331,12 @@ describe('FcUnspentDeclarationRowService', () => {
     it('deactivates rows omitted from the submission', async () => {
       await service.applyRows(formOid, stateOid, yearOid, [resolvedRow], userOid, undefined, mockSession);
       const [filter, update] = getUpdateManyArgs(rowModel['updateMany']);
-      expect(filter).toEqual({ form: formOid, isActive: true, ulbId: { $nin: [ulbOid1] } });
+      expect(filter).toEqual({
+        form: formOid,
+        isActive: true,
+        ulbId: { $nin: [ulbOid1] },
+        rowStatus: { $nin: [FORM_STATUS.UNDER_REVIEW_BY_MOHUA, FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA] },
+      });
       expect(update.$set).toMatchObject({ isActive: false });
     });
 
@@ -480,6 +485,119 @@ describe('FcUnspentDeclarationRowService', () => {
       );
 
       expect(transitions).toEqual([]);
+    });
+  });
+
+  describe('applyRows — row-level edit lock (mixed-approval deadlock fix)', () => {
+    const lockedRowId = new Types.ObjectId();
+    const unlockedRowId = new Types.ObjectId();
+
+    const lockedRow: FcUnspentResolvedRow = {
+      ulbId: ulbOid1,
+      censusCode: '111',
+      sbCode: 'A1',
+      ulbName: 'Alpha ULB (locked, approved by PMU)',
+      allocationAmount: 999,
+      unspentAmount: 999,
+      previousFcUnspentBalance: 999,
+      allocationPerc: 99,
+      eligibility: true,
+      allocationSource: sampleAllocationSource,
+    };
+    const unlockedRow: FcUnspentResolvedRow = {
+      ulbId: ulbOid2,
+      censusCode: '222',
+      sbCode: 'B2',
+      ulbName: 'Beta ULB (rejected, editable)',
+      allocationAmount: 50,
+      unspentAmount: 10,
+      previousFcUnspentBalance: 2,
+      allocationPerc: 20,
+      eligibility: true,
+      allocationSource: sampleAllocationSource,
+    };
+
+    function setExistingRows(): void {
+      rowModel['find'] = jest.fn().mockReturnValue(
+        q([
+          { _id: lockedRowId, ulbId: ulbOid1, rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA },
+          { _id: unlockedRowId, ulbId: ulbOid2, rowStatus: FORM_STATUS.RETURNED_BY_PMU },
+        ]),
+      );
+    }
+
+    it('drops an already-approved row from the bulk write entirely, regardless of what the client resubmitted, and reports it as preserved', async () => {
+      setExistingRows();
+
+      const { preservedLockedRows } = await service.applyRows(
+        formOid,
+        stateOid,
+        yearOid,
+        [lockedRow, unlockedRow],
+        userOid,
+        FORM_STATUS.UNDER_REVIEW_BY_PMU,
+        mockSession,
+      );
+
+      const ops = getBulkOps(rowModel['bulkWrite']);
+      expect(ops).toHaveLength(1);
+      expect(ops[0].updateOne.filter).toEqual({ form: formOid, ulbId: ulbOid2 });
+      expect(preservedLockedRows).toEqual([String(ulbOid1)]);
+    });
+
+    it('never records a transition or history entry for a locked row that was skipped', async () => {
+      setExistingRows();
+
+      const { transitions } = await service.applyRows(
+        formOid,
+        stateOid,
+        yearOid,
+        [lockedRow, unlockedRow],
+        userOid,
+        FORM_STATUS.UNDER_REVIEW_BY_PMU,
+        mockSession,
+      );
+
+      expect(transitions).toHaveLength(1);
+      expect(transitions[0].rowId).toEqual(unlockedRowId);
+    });
+
+    it('still deactivates omitted rows and respects the lock there too (deactivateOmittedRows filter)', async () => {
+      setExistingRows();
+
+      await service.applyRows(
+        formOid,
+        stateOid,
+        yearOid,
+        [lockedRow, unlockedRow],
+        userOid,
+        FORM_STATUS.UNDER_REVIEW_BY_PMU,
+        mockSession,
+      );
+
+      const [filter] = getUpdateManyArgs(rowModel['updateMany']);
+      expect(filter).toMatchObject({
+        rowStatus: { $nin: [FORM_STATUS.UNDER_REVIEW_BY_MOHUA, FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA] },
+      });
+    });
+
+    it('applies the same lock protection on draft save (targetRowStatus undefined), not just final submit', async () => {
+      setExistingRows();
+
+      const { preservedLockedRows } = await service.applyRows(
+        formOid,
+        stateOid,
+        yearOid,
+        [lockedRow, unlockedRow],
+        userOid,
+        undefined,
+        mockSession,
+      );
+
+      const ops = getBulkOps(rowModel['bulkWrite']);
+      expect(ops).toHaveLength(1);
+      expect(ops[0].updateOne.filter).toEqual({ form: formOid, ulbId: ulbOid2 });
+      expect(preservedLockedRows).toEqual([String(ulbOid1)]);
     });
   });
 

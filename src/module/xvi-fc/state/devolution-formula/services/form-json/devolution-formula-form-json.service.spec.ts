@@ -85,7 +85,7 @@ describe('DfFormJsonConfigService', () => {
   it('throws when a field is missing a key', async () => {
     const withoutKey = [{ fieldTypes: ['DF_MAIN_FORM_FIELDS'] }];
     formJsonService['findActiveByDesignYearAndFormId'] = jest.fn().mockResolvedValue({ data: withoutKey });
-    await expect(service.loadFields(yearId)).rejects.toThrow("DF form field is missing a key.");
+    await expect(service.loadFields(yearId)).rejects.toThrow('DF form field is missing a key.');
   });
 
   it('throws when a field is missing fieldTypes', async () => {

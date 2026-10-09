@@ -52,14 +52,18 @@ meant to remove.
 ## Row-level review status (`rowStatus`)
 
 Each `ElectedUrbanLocalBodiesRow` has a `rowStatus` field (`null` pre-submission, set to
-`FORM_STATUS.UNDER_REVIEW_BY_MOHUA` on `finalSubmit` for every active row in the current dataset
+`FORM_STATUS.UNDER_REVIEW_BY_PMU` on `finalSubmit` for every active row in the current dataset
 version), mirroring FC Unspent Declaration's row-review pattern — both draw from the shared
 `RowReviewStatus`/`ROW_REVIEW_STATUS_VALUES` in
 `src/module/xvi-fc/common/constants/row-review-status.constants.ts`, a restricted subset of
-`FORM_STATUS`. Unlike FC Unspent, **no MoHUA-side per-row review exists yet for EULB** — there's no
-row approve/reject endpoint, so `rowStatus` only ever reaches `UNDER_REVIEW_BY_MOHUA` today and
-never advances further. The `post-submission-update` correction workflow does not read or write
-`rowStatus`.
+`FORM_STATUS`. **PMU Review feature**: a new PMU reviewer now sits ahead of MoHUA — see
+`src/module/xvi-fc/pmu/elected-urban-local-bodies/` for the row approve/reject endpoints
+(`rowStatus` advances `UNDER_REVIEW_BY_PMU` → `UNDER_REVIEW_BY_MOHUA`/`RETURNED_BY_PMU` — PMU has no
+status of its own once approved, so an approved row lands directly on the same status MoHUA's own
+review would use). No MoHUA-side per-row review exists for EULB (there's still no MoHUA review
+module for this form — PMU approval alone gates claim eligibility, same as the other 4 state
+forms); `rowStatus` never advances past `UNDER_REVIEW_BY_MOHUA`/`RETURNED_BY_PMU` today. The
+`post-submission-update` correction workflow does not read or write `rowStatus`.
 
 This decoupling (a row's domain value `electedBodyStatus` can be real and final well before
 `rowStatus`/the form's own `currentFormStatus` ever leaves draft) is exactly why
@@ -67,6 +71,16 @@ This decoupling (a row's domain value `electedBodyStatus` can be real and final 
 (`assertElectedBodyRowNotAlreadyEligible` in both) checks `electedBodyStatus` against the live
 `rowEligibleValues` config, not `rowStatus`/`currentFormStatus` the way SFC/AFS's gates do — see
 root `CLAUDE.md`'s xvi-fc/state bullet.
+
+## finalSubmit's old coupling with devolution-formula is gone
+
+`finalSubmit` transitions `currentFormStatus` to `UNDER_REVIEW_BY_PMU` (renamed from
+`UNDER_REVIEW_BY_MOHUA` for the PMU Review feature — see pmu/elected-urban-local-bodies/CLAUDE.md
+for the PMU hand-off). Before that feature, `devolution-formula` read this status externally as an
+Installment-1 prerequisite gate; that gate was removed independently of this rename, so the two
+forms no longer depend on each other. `devolution-formula.service.spec.ts` carries a regression
+test ("finalSubmit succeeds for installment 1 with no Elected Body (EULB) prerequisite required")
+guarding against the gate silently coming back.
 
 ## Form status history log
 
@@ -81,8 +95,9 @@ that leaves the form `IN_PROGRESS` writes nothing. `saveDraft` writes it as a se
 non-transactional, best-effort call (a failure is caught/logged, never fails the save); `finalSubmit`
 writes it *inside* the same transaction as its parent/row updates, so a failure there aborts the
 whole submit. Unlike devolution-formula, EULB's Excel-upload service never touches
-`currentFormStatus` (confirmed — no equivalent gap there). No MoHUA workflow exists yet, so only
-`CREATE_DRAFT`/`FINAL_SUBMIT` are ever logged.
+`currentFormStatus` (confirmed — no equivalent gap there). `CREATE_DRAFT`/`FINAL_SUBMIT` are logged
+here (by the State side); `PMU_APPROVE`/`PMU_REJECT` are logged by the separate PMU reviewer module
+(`src/module/xvi-fc/pmu/elected-urban-local-bodies/`) via the shared `StateFormPmuReviewHelper`.
 
 `snapshot` is populated on `FINAL_SUBMIT` with the active dataset version's row content, fetched
 inside the same transaction — because the Excel-upload transaction *hard-deletes* the previous

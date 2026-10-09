@@ -129,10 +129,7 @@ describe('SaveRequestExemptionDto', () => {
     });
 
     it('rejects a non-numeric option id', async () => {
-      const errors = await validate(
-        build({ exemptionFor: 'STATE', reasonForExemptionState: ['abc'] }),
-        PIPE_OPTIONS,
-      );
+      const errors = await validate(build({ exemptionFor: 'STATE', reasonForExemptionState: ['abc'] }), PIPE_OPTIONS);
       expect(allMessages(errors).join(' ')).toContain('integer number');
     });
   });

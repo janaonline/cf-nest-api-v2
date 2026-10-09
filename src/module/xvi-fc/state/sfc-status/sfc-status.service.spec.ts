@@ -12,6 +12,7 @@ import { ExcelService } from 'src/services/excel/excel.service';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { FileUrlNormalizerService } from '../../common/services/file-url-normalizer.service';
 import { FileInfoNormalizerService } from '../../common/services/file-info-normalizer.service';
+import { FormQuestionHydratorService } from '../../common/services/form-question-hydrator.service';
 import { ExemptionResolverService } from '../../common/services/exemption-resolver.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
@@ -147,6 +148,7 @@ describe('SfcStatusService', () => {
         },
         { provide: FileUrlNormalizerService, useValue: { toRawStoragePath: jest.fn((v: string) => v) } },
         FileInfoNormalizerService,
+        FormQuestionHydratorService,
         { provide: ExemptionResolverService, useValue: mockExemptionResolverService },
       ],
     }).compile();
@@ -357,7 +359,7 @@ describe('SfcStatusService', () => {
       expect(errors).toHaveProperty('checkboxConfirmation');
     });
 
-    it('writes a FINAL_SUBMIT history row (NOT_STARTED → UNDER_REVIEW_BY_MOHUA)', async () => {
+    it('writes a FINAL_SUBMIT history row (NOT_STARTED → UNDER_REVIEW_BY_PMU)', async () => {
       formModel['create'] = jest.fn().mockResolvedValue(mockFormDoc);
 
       await service.finalSubmit(validDto, adminUser, '127.0.0.1', 'jest');
@@ -366,7 +368,12 @@ describe('SfcStatusService', () => {
         expect.objectContaining({
           action: FormHistoryAction.FINAL_SUBMIT,
           fromStatus: FORM_STATUS.NOT_STARTED,
-          toStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+          toStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU,
+          // Data-loss gap fix (PMU Review feature) - data now snapshots the submitted
+          // payload, so a PMU reject -> State resubmit cycle has somewhere for old values to
+          // survive. Previously always undefined (see sfc-status/CLAUDE.md pre-fix history).
+          // Renamed from `metadata` for cross-form consistency.
+          data: { sfcStatus: 'active' },
         }),
       );
     });
@@ -603,14 +610,12 @@ describe('SfcStatusService', () => {
       // Clear on the first check (top of the method); approved by the time the second check runs
       // right before the write - simulating a discretionary exemption filed *and* approved during
       // this call's own awaited work (loadFormQuestions/findOne/validation/normalization).
-      mockExemptionResolverService.resolveDiscretionary
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce({
-          requestId: new Types.ObjectId(),
-          currentFormStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
-          decidedAt: new Date(),
-          mohuaRemarks: null,
-        });
+      mockExemptionResolverService.resolveDiscretionary.mockResolvedValueOnce(null).mockResolvedValueOnce({
+        requestId: new Types.ObjectId(),
+        currentFormStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+        decidedAt: new Date(),
+        mohuaRemarks: null,
+      });
 
       const result = service.finalSubmit(validDto, adminUser, '127.0.0.1', 'jest');
       await expect(result).rejects.toBeInstanceOf(ConflictException);

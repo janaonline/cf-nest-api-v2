@@ -46,6 +46,9 @@ export interface FcUnspentUlbRowResponse {
   previousFcUnspentBalance: number;
   allocationPerc: number;
   eligibility: boolean;
+  /** Drives the State-side row edit lock (`canStateEditRow`) — a row PMU has approved
+   *  (`UNDER_REVIEW_BY_MOHUA`+) must render read-only even while the rest of the form is editable. */
+  rowStatus: RowReviewStatus | null;
 }
 
 export interface FcUnspentDeclarationGetResponseData {

@@ -86,7 +86,7 @@ export class GtcController {
   @ApiOperation({
     summary: 'Final submit GTC form',
     description:
-      'Final-submits the GTC form for the given state, year, and installment. Supports direct submit without an existing draft, runs full validation, and transitions status to UNDER_REVIEW_BY_MOHUA.',
+      'Final-submits the GTC form for the given state, year, and installment. Supports direct submit without an existing draft, runs full validation, and transitions status to UNDER_REVIEW_BY_PMU (PMU Review feature).',
   })
   @ApiBody({ type: SaveGtcDto })
   @Post('final-submit')

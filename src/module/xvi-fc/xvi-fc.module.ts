@@ -31,6 +31,11 @@ import { SlbForm, SlbFormSchema } from '../../schemas/xvi-fc/ulb/slb-form.schema
 import { XviFcDur, XviFcDurSchema } from '../../schemas/xvi-fc/dur.schema';
 import { FcUnspentDeclarationModule } from './state/fc-unspent-declaration/fc-unspent-declaration.module';
 import { FcUnspentMohuaReviewModule } from './mohua/fc-unspent-declaration/fc-unspent-mohua-review.module';
+import { FcUnspentPmuReviewModule } from './pmu/fc-unspent-declaration/fc-unspent-pmu-review.module';
+import { ElectedUrbanLocalBodiesPmuReviewModule } from './pmu/elected-urban-local-bodies/elected-urban-local-bodies-pmu-review.module';
+import { SfcStatusPmuReviewModule } from './pmu/sfc-status/sfc-status-pmu-review.module';
+import { GtcPmuReviewModule } from './pmu/gtc/gtc-pmu-review.module';
+import { DevolutionFormulaPmuReviewModule } from './pmu/devolution-formula/devolution-formula-pmu-review.module';
 import { StateDashboardModule } from './state/dashboard/state-dashboard.module';
 import { SlbModule } from './ulb/slb/slb.module';
 import { ClaimLetterModule } from './state/claim-letter/claim-letter.module';
@@ -68,6 +73,11 @@ import { XviFcCommonModule } from './common/xvi-fc-common.module';
     forwardRef(() => DevolutionFormulaModule),
     FcUnspentDeclarationModule,
     FcUnspentMohuaReviewModule,
+    FcUnspentPmuReviewModule,
+    ElectedUrbanLocalBodiesPmuReviewModule,
+    SfcStatusPmuReviewModule,
+    GtcPmuReviewModule,
+    DevolutionFormulaPmuReviewModule,
     StateDashboardModule,
     SlbModule,
     ClaimLetterModule,

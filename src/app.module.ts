@@ -63,7 +63,7 @@ function getQueryCaller(): string {
     ThrottlerModule.forRoot([
       {
         ttl: seconds(60), // time window in seconds
-        limit: 60, // max requests per window
+        limit: 60, // max requests per window, per client IP
       },
     ]),
     ConfigModule.forRoot({ isGlobal: true, validate: validateEnv }),

@@ -15,6 +15,9 @@ export const FORM_STATUS = {
   ACTION_REQUIRED: 11,
   /** Terminal, no-owner. Set automatically when a form is exempted for a genuinely new ULB (xvi-fc dynamic year access) - never a manual ULB/STATE/MoHUA action. Docs: src/module/xvi-fc/common/services/CLAUDE.md. */
   EXEMPTED_ACKNOWLEDGED: 12,
+  /** PMU review stage for state-level forms */
+  UNDER_REVIEW_BY_PMU: 13,
+  RETURNED_BY_PMU: 14,
 } as const;
 
 export type FormStatusType = (typeof FORM_STATUS)[keyof typeof FORM_STATUS];
@@ -24,6 +27,11 @@ export enum FormHistoryAction {
   CREATE_DRAFT = 'CREATE_DRAFT',
   UPDATE_DRAFT = 'UPDATE_DRAFT',
   FINAL_SUBMIT = 'FINAL_SUBMIT',
+  /** PMU reviewer actions on a state-level form (PMU Review feature) */
+  PMU_APPROVE = 'PMU_APPROVE',
+  PMU_REJECT = 'PMU_REJECT',
+  /** State edited and resubmitted a PMU-rejected row, reopening PMU review */
+  ROW_RESUBMIT = 'ROW_RESUBMIT',
 }
 
 export const FORM_STATUS_LABELS: Readonly<Record<FormStatusType, string>> = {
@@ -40,6 +48,8 @@ export const FORM_STATUS_LABELS: Readonly<Record<FormStatusType, string>> = {
   [FORM_STATUS.UNDO]: 'Undo',
   [FORM_STATUS.ACTION_REQUIRED]: 'Action Required',
   [FORM_STATUS.EXEMPTED_ACKNOWLEDGED]: 'Exempted',
+  [FORM_STATUS.UNDER_REVIEW_BY_PMU]: 'Under Review by PMU',
+  [FORM_STATUS.RETURNED_BY_PMU]: 'Returned by PMU',
 };
 
 /**
@@ -91,6 +101,10 @@ export function getDefaultOwnerForStatus(status: number): string | null {
     case FORM_STATUS.UNDER_REVIEW_BY_MOHUA:
       return 'MoHUA';
     case FORM_STATUS.APPROVED_BY_STATE:
+      return 'STATE';
+    case FORM_STATUS.UNDER_REVIEW_BY_PMU:
+      return 'PMU';
+    case FORM_STATUS.RETURNED_BY_PMU:
       return 'STATE';
     case FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA:
     case FORM_STATUS.NO_STATUS:

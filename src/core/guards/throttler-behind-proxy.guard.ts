@@ -6,10 +6,17 @@ export class ThrottlerBehindProxyGuard extends ThrottlerGuard {
   private readonly logger = new Logger(ThrottlerBehindProxyGuard.name);
 
   protected async getTracker(req: Record<string, any>): Promise<string> {
-    const forwarded = req.headers['x-forwarded-for'] as string | undefined;
-    const clientIp = forwarded ? forwarded.split(',')[0].trim() : req.ip;
-    // this.logger.debug(`req.ip=${req.ip} | x-forwarded-for=${forwarded ?? 'none'} | tracker=${clientIp}`);
-    return clientIp;
+    // const forwarded = req.headers['x-forwarded-for'] as string | undefined;
+    // const clientIp = forwarded ? forwarded.split(',')[0].trim() : req.ip;
+    // // this.logger.debug(`req.ip=${req.ip} | x-forwarded-for=${forwarded ?? 'none'} | tracker=${clientIp}`);
+    // return clientIp;
+    // req.ip honours `trust proxy` (main.ts), so only the hop our own proxy appended is trusted.
+    // Reading the raw x-forwarded-for header instead would let clients spoof their bucket.
+    const tracker = req.ip ?? req.socket?.remoteAddress ?? 'unknown';
+    this.logger.debug(
+      `tracker=${tracker} | req.ip=${req.ip} | x-forwarded-for=${req.headers?.['x-forwarded-for'] ?? 'none'} | x-real-ip=${req.headers?.['x-real-ip'] ?? 'none'} | ${req.method} ${req.originalUrl ?? req.url}`,
+    );
+    return tracker;
   }
 
   // Plain HttpException (not ThrottlerException) — that class forces its message through a

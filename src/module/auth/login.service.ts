@@ -135,7 +135,7 @@ export class LoginService {
           `${user.role} user not allowed login State Dashboard, Please login with State Dashboard user id.`,
         );
       }
-      if (![Role.XVIFC_STATE, Role.XVIFC, Role.ULB].includes(user.role) && dto.type === 'XVIFC') {
+      if (![Role.XVIFC_STATE, Role.XVIFC, Role.ULB, Role.XVIFC_PMU].includes(user.role) && dto.type === 'XVIFC') {
         throw new ForbiddenException(`${user.role} user not allowed XVIFC login, Please login with XVIFC user id.`);
       }
       if (user.role === Role.XVIFC_STATE && (dto.type === '15thFC' || dto.type === 'fiscalRankings')) {

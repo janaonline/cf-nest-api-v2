@@ -10,8 +10,14 @@ import { FilterQuery, Model, Types } from 'mongoose';
 import { ExcelService, RowHeader } from 'src/services/excel/excel.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { escapeRegex } from 'src/common/utils/regex.util';
-import { assertCanStateEditForm } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
+import { FORM_STATUS, FormHistoryAction } from 'src/common/constants/form-status.constants';
+import {
+  assertCanStateEditForm,
+  assertCanStateEditRow,
+  canStateEditForm,
+} from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
 import { assertStateAccess } from 'src/module/xvi-fc/common/utils/xvi-fc-state-access.util';
+import { PmuRowReviewHelper } from 'src/module/xvi-fc/common/services/pmu-row-review.helper';
 import {
   throwXviFcValidationErrorWithData,
   xviFcSuccess,
@@ -23,9 +29,17 @@ import {
   EulbFormDocument,
 } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
 import {
+  ElectedUrbanLocalBodiesFormHistory,
+  EulbFormHistoryDocument,
+} from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form-history.schema';
+import {
   ElectedUrbanLocalBodiesRow,
   EulbRowDocument,
 } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
+import {
+  ElectedUrbanLocalBodiesRowHistory,
+  EulbRowHistoryDocument,
+} from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row-history.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 import { CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE } from 'src/module/ulb-eligibility/ulb-eligibility.constants';
@@ -61,14 +75,19 @@ export class ElectedUrbanLocalBodiesRowService {
   constructor(
     @InjectModel(ElectedUrbanLocalBodiesForm.name)
     private readonly formModel: Model<EulbFormDocument>,
+    @InjectModel(ElectedUrbanLocalBodiesFormHistory.name)
+    private readonly historyModel: Model<EulbFormHistoryDocument>,
     @InjectModel(ElectedUrbanLocalBodiesRow.name)
     private readonly rowModel: Model<EulbRowDocument>,
+    @InjectModel(ElectedUrbanLocalBodiesRowHistory.name)
+    private readonly rowHistoryModel: Model<EulbRowHistoryDocument>,
     @InjectModel(Ulb.name)
     private readonly ulbModel: Model<UlbDocument>,
     private readonly eulbValidator: ElectedUrbanLocalBodiesValidator,
     private readonly excelService: ExcelService,
     private readonly eulbFormJsonConfig: EulbFormJsonConfigService,
     private readonly ulbEligibilityService: UlbEligibilityService,
+    private readonly pmuRowReviewHelper: PmuRowReviewHelper,
   ) {}
 
   async getRows(
@@ -113,11 +132,21 @@ export class ElectedUrbanLocalBodiesRowService {
     rowId: string,
     dto: UpdateElectedUrbanLocalBodiesRowDto,
     user: AuthUser,
+    ip: string,
+    userAgent: string,
   ): Promise<XviFcApiResponse> {
     assertStateAccess(user, stateId);
 
     const formDoc = await this.findFormOrThrow(stateId, yearId);
-    assertCanStateEditForm(formDoc.currentFormStatus);
+    // Form-level gate is relaxed to also allow UNDER_REVIEW_BY_PMU here — once row-level PMU review
+    // produces a mix of approved/rejected rows, individual rejected rows must stay editable even
+    // while the form itself is mid-cycle (another row still pending, or this very save is what
+    // reopens PMU review). `assertCanStateEditRow` below, keyed on THIS row's own status, is the
+    // real authority; the form-level check only still blocks edits once the form has moved
+    // definitively past PMU review (MoHUA stage or terminal).
+    if (!canStateEditForm(formDoc.currentFormStatus) && formDoc.currentFormStatus !== FORM_STATUS.UNDER_REVIEW_BY_PMU) {
+      assertCanStateEditForm(formDoc.currentFormStatus);
+    }
 
     const activeVersion = formDoc.activeDatasetVersion ?? 0;
     const userOid = new Types.ObjectId(user._id);
@@ -130,6 +159,7 @@ export class ElectedUrbanLocalBodiesRowService {
     if (!row) {
       throw new NotFoundException('Row not found in the active dataset.');
     }
+    assertCanStateEditRow(row.rowStatus);
     // Defense-in-depth for rows created before this filter existed — new rows for ineligible
     // ULBs are already rejected at Excel-ingestion time (see elected-urban-local-bodies-row.service
     // extra-ULB validation), but an already-existing row could otherwise still be edited here.
@@ -232,9 +262,86 @@ export class ElectedUrbanLocalBodiesRowService {
     updateFields['validationStatus'] = newErrors.length === 0 ? 'VALID' : 'INVALID';
     updateFields['validationErrors'] = newErrors;
 
+    // A rejected row being saved is a resubmission: it reopens PMU review for this row specifically
+    // (rowStatus -> UNDER_REVIEW_BY_PMU, rejectionRemark cleared) and, if the form itself had already
+    // settled at RETURNED_BY_PMU, reopens the form too — with no PMU action required. Both the row
+    // transition (+ its row-history entry, via the same `PmuRowReviewHelper.transitionRows` PMU's own
+    // actions use) and the parent flip (+ its ROW_RESUBMIT form-history entry) commit atomically with
+    // the content edit above, so a crash can never leave content updated but the status stale.
+    const isResubmit = row.rowStatus === FORM_STATUS.RETURNED_BY_PMU;
+    const stateOid = new Types.ObjectId(stateId);
+    const yearOid = new Types.ObjectId(yearId);
+
     let updatedRow: typeof row | null;
     try {
-      updatedRow = await this.rowModel.findByIdAndUpdate(row._id, { $set: updateFields }, { new: true }).lean().exec();
+      if (!isResubmit) {
+        updatedRow = await this.rowModel
+          .findByIdAndUpdate(row._id, { $set: updateFields }, { new: true })
+          .lean()
+          .exec();
+      } else {
+        const session = await this.rowModel.db.startSession();
+        try {
+          session.startTransaction();
+
+          updatedRow = await this.rowModel
+            .findByIdAndUpdate(row._id, { $set: updateFields }, { new: true, session })
+            .lean()
+            .exec();
+
+          await this.pmuRowReviewHelper.transitionRows<EulbRowDocument, EulbRowHistoryDocument, typeof row>({
+            rowModel: this.rowModel,
+            rowHistoryModel: this.rowHistoryModel,
+            formId: formDoc._id,
+            stateOid,
+            yearOid,
+            transitions: [{ row, newStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU, rejectionRemark: null }],
+            userOid,
+            ip,
+            userAgent,
+            session,
+          });
+          if (updatedRow) {
+            updatedRow.rowStatus = FORM_STATUS.UNDER_REVIEW_BY_PMU;
+            updatedRow.rejectionRemark = null;
+          }
+
+          if (formDoc.currentFormStatus !== FORM_STATUS.UNDER_REVIEW_BY_PMU) {
+            const fromStatus = formDoc.currentFormStatus;
+            await this.formModel
+              .findByIdAndUpdate(
+                formDoc._id,
+                { $set: { currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU, updatedBy: userOid } },
+                { session },
+              )
+              .exec();
+            await this.historyModel.create(
+              [
+                {
+                  eulbForm: formDoc._id,
+                  state: stateOid,
+                  year: yearOid,
+                  action: FormHistoryAction.ROW_RESUBMIT,
+                  fromStatus,
+                  toStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU,
+                  changedBy: userOid,
+                  ip,
+                  userAgent,
+                  snapshot: null,
+                },
+              ],
+              { session },
+            );
+          }
+
+          await session.commitTransaction();
+        } catch (err) {
+          await session.abortTransaction();
+          throw err;
+        } finally {
+          await session.endSession();
+        }
+      }
     } catch (err: unknown) {
       if (isMongoDuplicateKeyError(err)) {
         throwXviFcValidationErrorWithData(

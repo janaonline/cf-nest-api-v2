@@ -1,10 +1,13 @@
 # Dynamic Year Access
 
-Scope: this file documents Dynamic Year Access only — `YearAccessService`, `Ulb.startYear`/
-`Ulb.yearAccess`, and the three other services in this folder that consume them
-(`ExpectedUlbSetService`, `ClaimEligibilityEvaluatorService`, `ExemptionResolverService`). `file-info-normalizer.service.ts`,
-`file-url-normalizer.service.ts`, and `xvifc-form-actors.service.ts` are unrelated utilities that
-happen to sit in the same directory and aren't covered here.
+Scope: this file has two independent sections. "Dynamic Year Access" (below) covers
+`YearAccessService`, `Ulb.startYear`/`Ulb.yearAccess`, and the three other services in this folder
+that consume them (`ExpectedUlbSetService`, `ClaimEligibilityEvaluatorService`,
+`ExemptionResolverService`). "PMU Review shared mechanics" (near the end of this file) covers
+`StateFormPmuReviewHelper`/`PmuRowReviewHelper` and the PMU-specific reviewer-access/permissions
+utils. `file-info-normalizer.service.ts`, `file-url-normalizer.service.ts`,
+`form-question-hydrator.service.ts`, and `xvifc-form-actors.service.ts` are unrelated utilities that
+happen to sit in the same directory and aren't covered by either section.
 
 Replaces the old module's hardcoded `Ulb.access_20xx` boolean fields (six fixed years, decoded by
 string-matching the label, whole-year-only). Two admin-set facts on `Ulb`, both optional and
@@ -248,3 +251,110 @@ materialize/revalidate methods, since a bulk-list revalidation is read-only and 
 `docs/adr/0001-dynamic-year-access-design.md` in this folder — the alternatives that were considered
 and rejected (inferring newness from `dateOfConstitution`, a separate `noPriorDataFormIds` field, a
 `Map`-typed sub-schema, hand-maintained per-year entries) and what's deliberately deferred.
+
+# PMU Review shared mechanics
+
+Unrelated to Dynamic Year Access above — see the "Scope" note at the top of this file. Backs the 5
+`pmu/<feature>/` review modules (`sfc-status`, `gtc`, `devolution-formula`,
+`elected-urban-local-bodies`, `fc-unspent-declaration`); each module's own nested
+`pmu/<feature>/CLAUDE.md` already names these by file and points here instead of duplicating the
+rationale.
+
+- **`state-form-pmu-review.helper.ts` (`StateFormPmuReviewHelper`)** — the complete-form
+  approve/reject mechanics all 5 modules call: `transitionForm` (`$set` + `findOneAndUpdate`,
+  throwing `NotFoundException` if the form vanished mid-request) and `writeHistoryIfChanged` (skips
+  the history insert entirely when `fromStatus === toStatus`). Modeled on
+  `FcUnspentPmuRowReviewDomainService.transitionParent`/`insertParentHistory` plus SFC's/GTC's own
+  duplicated `createHistoryEntry` — all three already followed this shape, just copy-pasted per
+  form, before being collapsed into one helper. Deliberately agnostic of per-form shape: field
+  names, the history snapshot payload, and the remarks field all stay in the caller's
+  `setFields`/`buildDocument`. Row-level mechanics (bulk transitions, row history) have no
+  equivalent here — see `PmuRowReviewHelper`.
+- **`pmu-row-review.helper.ts` (`PmuRowReviewHelper`)** — row-bulk mechanics for the 2 row-bearing
+  PMU modules (Elected Urban Local Bodies, FC Unspent Declaration — the only forms with per-row
+  review): `getActiveRows`, `loadActiveRowsByIds`, `loadActiveRowsBySelectAllMatching`,
+  `filterNotInStatus`, `transitionRows` (one `bulkWrite` + one `insertMany`, skipped entirely when
+  every requested transition is already a no-op), `countActiveRowsNotYetApproved`, and
+  `getRowSummary`. Extracted from `ElectedUrbanLocalBodiesPmuRowReviewDomainService` and
+  `FcUnspentPmuRowReviewDomainService`, which were ~70% structurally identical. Deliberately
+  excludes `findForm`/`transitionParent`/`insertParentHistory`/`maybeApproveAfterBulkAction` — an
+  adversarial design review confirmed those carry real per-form differences (FC Unspent's
+  `auditRevision` bookkeeping and richer history snapshot vs Elected Body's simpler one), not
+  accidental duplication. A sibling to `StateFormPmuReviewHelper`, not an extension of it.
+  - **`loadActiveRowsBySelectAllMatching`** resolves a bulk approve/reject's "select all N rows
+    matching this filter" mode at execution time — re-running the same filter `getRows()` uses
+    (minus any manually-excluded ids), scoped to the status the action requires — instead of the
+    frontend enumerating every matching row id across pages first. This is the production-grade
+    pattern used at scale (Gmail/GitHub/Linear-style "select all matching," not a client-side id
+    loop): `BulkApprovePmuRowsDto`/`BulkRejectPmuRowsDto` accept *either* an explicit `rowIds`/`rows`
+    array (capped at 1000 — deliberately not the shared `BulkIdsList()` convention's 500, since this
+    domain's confirmed worst case is 800 ULBs in one state) *or* a `selectAllMatching` filter plus an
+    optional `excludeRowIds` array, enforced mutually-exclusive in each `*-pmu-rows.service.ts`'s own
+    `assertExactlyOneSelectionMode`. `selectAllMatching` has no array to cap at all — one bulk write
+    regardless of how many rows match.
+- **`xvi-fc-reviewer-access.util.ts`** (`hasReviewerAccess`/`assertReviewerAccess`,
+  `assertPmuReviewerAccess`) and **`xvi-fc-reviewer-permissions.util.ts`**
+  (`buildReviewerFormPermissions`, `buildPmuReviewerFormPermissions`) — the reviewer-scope gate and
+  the permissions-object builder, both parameterized by `Scope`/status-gates rather than one
+  function per reviewer role, so a future reviewer stage (beyond PMU) needs no new function, only a
+  new call site passing its own scope, permissions, and status gates.
+- **`PMU_REVIEWABLE_STATUSES`** (`xvi-fc-form-status-access.util.ts`) — wider than the mutate gate:
+  PMU keeps read-only visibility into a form even after it moves on to MoHUA (PMU approval has no
+  status of its own; it lands directly on `UNDER_REVIEW_BY_MOHUA`). Includes `RETURNED_BY_PMU`
+  (fixed in passing — it was missing, which would have 403'd PMU viewing a form immediately after
+  rejecting it) and `NOT_STARTED`/`IN_PROGRESS` (this same constant doubles as the cross-state
+  worklist's own `$in` visibility filter in every module's `getWorklist()`, so PMU can see states
+  that haven't reached its queue yet instead of the Form Status filter always showing zero rows for
+  them). Safe to widen this way because `canPmuMutateForm`/`assertCanPmuMutateForm` is a separate,
+  still `UNDER_REVIEW_BY_PMU`-only gate — broader view access never implies broader mutate access.
+- **`STATE_EDITABLE_STATUSES`** (`xvi-fc-form-status-access.util.ts`) includes `RETURNED_BY_PMU`
+  alongside the legacy `RETURNED_BY_MOHUA`: all 5 state forms now route through a PMU reviewer
+  before MoHUA, and a PMU rejection must send the state back into edit/resubmit mode the same way a
+  MoHUA rejection always has, or the form would be permanently stuck. Mirrors `ULB_EDITABLE_STATUSES`
+  already coexisting on two "returned" stages for the same reason.
+
+Consumers: all 5 `pmu/<feature>/` modules call `StateFormPmuReviewHelper`; `elected-urban-local-bodies`
+and `fc-unspent-declaration` call `PmuRowReviewHelper` for row-level mechanics; `fc-unspent-declaration`'s
+MoHUA reviewer (`mohua/fc-unspent-declaration/`) hand-rolls its own copy of the same row/parent
+write shape rather than calling `PmuRowReviewHelper` directly (pre-dates the extraction), but follows
+the same snapshot rule below.
+
+## Only snapshot data when it could actually have changed
+
+Every history/log collection that carries a data snapshot alongside a status change follows one
+rule: **populate the snapshot only at the point the underlying data could genuinely become
+unrecoverable** (a destructive Excel re-upload replacing the prior dataset version's rows), never
+on a pure status transition. `devolution-formula`'s form history established this first; PMU/MoHUA
+review for the other forms has no data-edit capability at all (`transitionRows`/`transition`/
+`insertParentHistory` only ever carry `rowId`/status/remark — never field edits), so for every PMU
+or MoHUA approve/reject:
+
+- `StateFormPmuReviewHelper.writeHistoryIfChanged` callers (`gtc`, `sfc-status`) omit `data`
+  entirely rather than re-copying `form.data`, which never changes at this layer.
+- `PmuRowReviewHelper.transitionRows`'s optional `buildSnapshot` hook is now wired up by both
+  `elected-urban-local-bodies`/`fc-unspent-declaration`'s **PMU** domain services, capturing each
+  row's post-transition fields (including `rejectionRemark`) into row-history so a rejection's
+  reason survives a later reject→edit→resubmit cycle. `elected-urban-local-bodies`'s own **State**-
+  side resubmit call (`state/elected-urban-local-bodies/.../row.service.ts`, reopening a rejected row
+  for review) still omits it — writes `snapshot: null` — since that's a separate, narrower call site
+  outside this logging pass; revisit if resubmit's own row-history entry should capture the row's
+  post-edit content too.
+- `insertParentHistory` (PMU, both row-bearing forms, and fc-unspent-declaration's MoHUA copy)
+  writes `snapshot: null`/`[]` instead of re-fetching and re-copying every active row — the real
+  row-data snapshot already lives on that form's `FINAL_SUBMIT` entry in the same collection.
+  `elected-urban-local-bodies` leaves `data` to its schema default here (PMU/MoHUA actions don't
+  touch form content); `fc-unspent-declaration`'s PMU/MoHUA copy is the one exception that DOES
+  resnapshot `data` on every approve/reject — pre-existing behavior, kept as-is rather than changed
+  to match the other forms (see that service's own `insertParentHistory` docblock).
+
+**Elected Urban Local Bodies has no STATE-side row-history writer at all** — after this rule,
+*every* row in `xvifc_elected_ulb_row_logs` has `snapshot: null`. Data isn't lost (the parent
+`xvifc_elected_ulb_form_logs`'s `FINAL_SUBMIT` entry still has every row), but recovering one row's
+data means reading that parent collection's snapshot array, not this one — see
+`pmu/elected-urban-local-bodies/CLAUDE.md`. `fc-unspent-declaration`'s row-history collection stays
+asymmetric: its STATE-side `finalSubmit` (`FcUnspentDeclarationRowService.insertRowHistory`) still
+writes a real, non-null snapshot, since that *is* the point where row data can change.
+
+No ADRs for this section — no concurrency/locking/idempotency machinery lives here beyond what's
+described above; see each `pmu/<feature>/CLAUDE.md`'s own "No ADRs" note for why the per-module
+write pattern itself doesn't need one either.

@@ -64,8 +64,9 @@ function resolveNestedField(doc: Record<string, unknown>, path: string): unknown
  * parent checks"); any other configured `evaluator.type` throws loudly rather than silently
  * passing every ULB. No `formId === 24` (or any other formId) branching anywhere in this file —
  * the source collection/field mapping and installment scoping come entirely from the passed-in
- * `sourceFormJson.claimEligibility` config, so wiring in a second FORM_STATUS-shaped source (e.g.
- * SFC) later is pure configuration.
+ * `sourceFormJson.claimEligibility` config — SFC, Elected Body, FC Unspent, and GTC are already
+ * wired onto this same evaluator alongside Devolution, each via its own `formjsons` document, no
+ * code change needed here.
  */
 @Injectable()
 export class ClaimEligibilityEvaluatorService {

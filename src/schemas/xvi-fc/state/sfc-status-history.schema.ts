@@ -44,8 +44,10 @@ export class XviFcSfcStatusHistory {
   @Prop({ type: String })
   remarks?: string;
 
+  // Form-level field snapshot — named `data` for consistency with every other xvi-fc form's
+  // history schema (was `metadata`; the live form's own content field is already `data`).
   @Prop({ type: MongooseSchema.Types.Mixed })
-  metadata?: Record<string, unknown>;
+  data?: Record<string, unknown>;
 
   @Prop({ type: Boolean, default: true })
   isActive!: boolean;

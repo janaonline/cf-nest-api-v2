@@ -32,11 +32,9 @@ import type {
   FcUnspentMohuaRowsData,
 } from '../types/fc-unspent-mohua-review.types';
 
-/**
- * FC Unspent Declaration MoHUA review — row-level concerns: the paginated row list and the two
- * bulk row-decision endpoints. Row transitions/history/parent-completion are delegated to
- * `FcUnspentRowReviewDomainService`, shared with the complete-form approve/reject flow.
- */
+/** Row-level MoHUA review concerns: the paginated row list and the two bulk row-decision
+ *  endpoints. See CLAUDE.md's "Layout" section for how this splits from
+ *  `FcUnspentMohuaReviewService`. */
 @Injectable()
 export class FcUnspentMohuaRowsService {
   constructor(
@@ -93,10 +91,8 @@ export class FcUnspentMohuaRowsService {
     return xviFcSuccess('FC Unspent Declaration rows fetched.', data, { page, limit, total });
   }
 
-  /**
-   * Bulk-approves the given row IDs (must currently be UPDATE_PENDING). Acknowledges the Yes-branch
-   * parent atomically if this transition leaves every active row ACTIVE.
-   */
+  /** See CLAUDE.md's "Row-level bulk review and the auto-acknowledge rule" section for the
+   *  pending-status requirement and when this acknowledges the parent. */
   async bulkApproveRows(
     dto: BulkApproveFcUnspentRowsDto,
     user: AuthUser,
@@ -191,10 +187,8 @@ export class FcUnspentMohuaRowsService {
     });
   }
 
-  /**
-   * Bulk-rejects the given rows (each with its own required remark; rows must currently be
-   * UPDATE_PENDING). Never acknowledges the parent — rejection can only ever keep it under review.
-   */
+  /** Each row needs its own required remark. See CLAUDE.md's "Row-level bulk review and the
+   *  auto-acknowledge rule" section — rejection never acknowledges the parent. */
   async bulkRejectRows(
     dto: BulkRejectFcUnspentRowsDto,
     user: AuthUser,

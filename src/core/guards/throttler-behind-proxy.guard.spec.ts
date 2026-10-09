@@ -18,10 +18,10 @@ describe('ThrottlerBehindProxyGuard', () => {
   });
 
   describe('getTracker', () => {
-    it('should use the first IP from x-forwarded-for header when present', async () => {
+    it('should use req.ip (resolved by express trust proxy) and ignore a raw x-forwarded-for header', async () => {
       const req = {
-        headers: { 'x-forwarded-for': '203.0.113.10, 70.41.3.18, 150.172.238.178' },
-        ip: '127.0.0.1',
+        headers: { 'x-forwarded-for': '1.2.3.4' },
+        ip: '203.0.113.10',
       };
 
       const tracker = await (guard as any).getTracker(req);
@@ -29,22 +29,8 @@ describe('ThrottlerBehindProxyGuard', () => {
       expect(tracker).toBe('203.0.113.10');
     });
 
-    it('should trim whitespace around the extracted forwarded IP', async () => {
-      const req = {
-        headers: { 'x-forwarded-for': '  203.0.113.10  , 70.41.3.18' },
-        ip: '127.0.0.1',
-      };
-
-      const tracker = await (guard as any).getTracker(req);
-
-      expect(tracker).toBe('203.0.113.10');
-    });
-
-    it('should fall back to req.ip when x-forwarded-for header is missing', async () => {
-      const req = {
-        headers: {},
-        ip: '127.0.0.1',
-      };
+    it('should fall back to the socket address when req.ip is missing', async () => {
+      const req = { headers: {}, socket: { remoteAddress: '127.0.0.1' } };
 
       const tracker = await (guard as any).getTracker(req);
 

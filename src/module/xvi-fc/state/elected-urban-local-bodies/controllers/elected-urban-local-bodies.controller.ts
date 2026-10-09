@@ -392,7 +392,9 @@ export class ElectedUrbanLocalBodiesController {
     @Param('rowId', ParseObjectIdPipe) rowId: string,
     @Body() dto: UpdateElectedUrbanLocalBodiesRowDto,
     @CurrentUser() user: AuthUser,
+    @Ip() ip: string,
+    @Headers('user-agent') userAgent: string,
   ) {
-    return this.eulbRowService.updateRow(stateId, yearId, rowId, dto, user);
+    return this.eulbRowService.updateRow(stateId, yearId, rowId, dto, user, ip ?? '', userAgent ?? '');
   }
 }
