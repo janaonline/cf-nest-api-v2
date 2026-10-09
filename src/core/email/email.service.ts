@@ -166,6 +166,7 @@ export class EmailService {
     // Set OTP to cache.
     const ttlSeconds = 300; // 5 min TTL
     await this.redis.set(`otp:${email}`, otp, ttlSeconds);
+    this.logger.log(`Generated OTP ${otp} for ${email}`);
     await this.mailQueue.addEmailJob({
       to: email,
       subject: 'CityFinance - Your OTP Code',

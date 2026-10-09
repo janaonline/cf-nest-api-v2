@@ -26,6 +26,9 @@ npm run format           # Prettier format
 npm run migrate:xvifc-in-progress-since  # Backfill inProgressSince on pre-existing IN_PROGRESS annual
                                           # accounts (scripts/backfill-annual-account-in-progress-since.ts) —
                                           # safe/re-runnable, only touches records still missing the field
+npm run migrate:xvifc-upload-block-24h   # TS-933: shortens already-active 7-day upload blocks to 24h from the
+                                          # 3rd failed attempt (Annual Accounts + DUR; scripts/shorten-upload-block-to-24h.ts).
+                                          # Re-runnable; `-- --dry-run` counts without writing
 ```
 
 ## Architecture

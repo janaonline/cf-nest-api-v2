@@ -33,6 +33,8 @@ import { CommunicationModule } from './module/communication/communication.module
 import { NotificationsModule } from './module/notifications/notifications.module';
 import { UlbModule } from './master/ulb/ulb.module';
 import { StateModule } from './master/state/state.module';
+import { XvFcReviewModule } from './module/xv-fc/xv-fc-review/ulb/xv-fc-review.module';
+import { XvFcReviewAdminModule } from './module/xv-fc/xv-fc-review/admin/xv-fc-review-admin.module';
 import { DigitizationDbModule } from './core/database/digitization-db.module';
 /** Fails app startup before Mongoose ever attempts a connection if MONGO_URI/MONGO_DB_NAME are
  *  missing or blank — MongooseModule.forRootAsync below would otherwise pass `undefined` through
@@ -128,15 +130,17 @@ function getQueryCaller(): string {
     NotificationsModule,
     UlbModule,
     StateModule,
+    XvFcReviewModule,
+    XvFcReviewAdminModule,
     DataCollectionModule,
   ],
   controllers: [AppController],
   providers: [
     AppService,
-    {
-      provide: APP_GUARD,
-      useClass: ThrottlerBehindProxyGuard,
-    },
+    // {
+    //   provide: APP_GUARD,
+    //   useClass: ThrottlerBehindProxyGuard,
+    // },
   ],
 })
 export class AppModule implements NestModule {
