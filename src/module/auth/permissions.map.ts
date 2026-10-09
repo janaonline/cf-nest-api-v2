@@ -45,10 +45,14 @@ export const XVIFC_STATE_PERMISSIONS: Record<XviFcSubrole, Permission[]> = {
 
 // ─── XVI-FC MoHUA subrole permissions ─────────────────────────────────────────
 
+// REVIEW_STATE_SUBMISSIONS_PMU gives every MoHUA subrole READ access to the PMU review GETs (state forms, view only).
+// Approve/reject need APPROVE_STATE_SUBMISSIONS_PMU, which MoHUA never holds, so its review permissions
+// come back canApprove/canReject = false.
 export const XVIFC_MOHUA_PERMISSIONS: Record<XviFcSubrole, Permission[]> = {
   admin: [
     Permission.VIEW_STATUS_REPORTS,
     Permission.VIEW_DASHBOARDS,
+    Permission.REVIEW_STATE_SUBMISSIONS_PMU,
     Permission.REVIEW_STATE_SUBMISSIONS,
     Permission.SEND_REMINDERS_TO_STATES,
     Permission.REQUEST_INFO_FROM_STATES,
@@ -64,11 +68,12 @@ export const XVIFC_MOHUA_PERMISSIONS: Record<XviFcSubrole, Permission[]> = {
   reviewer: [
     Permission.VIEW_STATUS_REPORTS,
     Permission.VIEW_DASHBOARDS,
+    Permission.REVIEW_STATE_SUBMISSIONS_PMU,
     Permission.REVIEW_STATE_SUBMISSIONS,
     Permission.SEND_REMINDERS_TO_STATES,
     Permission.REQUEST_INFO_FROM_STATES,
   ],
-  viewer: [Permission.VIEW_STATUS_REPORTS, Permission.VIEW_DASHBOARDS],
+  viewer: [Permission.VIEW_STATUS_REPORTS, Permission.VIEW_DASHBOARDS, Permission.REVIEW_STATE_SUBMISSIONS_PMU],
 };
 
 // ─── XVI-FC PMU subrole permissions (PMU Review feature) ──────────────────────

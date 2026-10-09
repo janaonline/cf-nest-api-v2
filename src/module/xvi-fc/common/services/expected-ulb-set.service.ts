@@ -41,31 +41,11 @@ export class ExpectedUlbSetService {
     const year = await this.yearModel.findById(designYearId).select('year').lean<LeanYear>().exec();
     if (!year) throw new NotFoundException(`Year ${designYearId} not found`);
 
-    const cutoff = resolveDesignYearApplicabilityCutoff(year.year);
-    const yearStartCalendarYear = parseStartCalendarYear(year.year);
     // Delegates the {state, isActive, ulbType-not-excluded} filter to the shared eligibility
     const eligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateId, 'XVIFC');
 
     const docs = await this.ulbModel
-      .find({
-        ...eligibleUlbFilter,
-        // XVI-FC dynamic year access — examples (design year "2027-28" -> yearStartCalendarYear = 2027):
-        //   - Existing ULB, startYear not set, dateOfConstitution = 2005-04-01 (<= cutoff)
-        //       -> included (branch 2: constituted well before this design year).
-        //   - Old ULB record, startYear not set, dateOfConstitution = null (never captured)
-        //       -> included (branch 2: missing data defaults to include, never excludes).
-        //   - New ULB, startYear = 2029, dateOfConstitution = 2029-06-01
-        //       -> excluded from "2027-28" (branch 1: 2029 > 2027, ULB didn't exist yet for this year).
-        //   - Same new ULB (startYear = 2029), queried for design year "2029-30" (yearStartCalendarYear = 2029)
-        //       -> included (branch 1: 2029 <= 2029, this is its first participating year).
-        //   - ULB has both startYear and dateOfConstitution set
-        //       -> startYear always wins; dateOfConstitution is ignored (branches are mutually
-        //          exclusive on startYear being null vs. not null).
-        $or: [
-          { startYear: { $ne: null, $lte: yearStartCalendarYear } },
-          { startYear: null, $or: [{ dateOfConstitution: null }, { dateOfConstitution: { $lte: cutoff } }] },
-        ],
-      })
+      .find({ ...eligibleUlbFilter, ...this.applicabilityFilter(year.year) })
       .select('name censusCode sbCode')
       .lean<LeanUlb[]>()
       .exec();
@@ -77,5 +57,53 @@ export class ExpectedUlbSetService {
       censusCode: d.censusCode ?? null,
       sbCode: d.sbCode ?? null,
     }));
+  }
+
+  /** Expected-ULB ids for every state at once — one grouped query instead of `resolve()` per state. */
+  async idsByState(designYearId: string): Promise<Map<string, string[]>> {
+    const year = await this.yearModel.findById(designYearId).select('year').lean<LeanYear>().exec();
+    if (!year) throw new NotFoundException(`Year ${designYearId} not found`);
+
+    const ineligibleUlbTypeIds = await this.ulbEligibilityService.getIneligibleUlbTypeIds('XVIFC');
+    const rows = await this.ulbModel
+      .aggregate<{ _id: Types.ObjectId; ids: Types.ObjectId[] }>([
+        {
+          $match: {
+            isActive: true,
+            ...(ineligibleUlbTypeIds.length ? { ulbType: { $nin: ineligibleUlbTypeIds } } : {}),
+            ...this.applicabilityFilter(year.year),
+          },
+        },
+        { $group: { _id: '$state', ids: { $push: '$_id' } } },
+      ])
+      .exec();
+
+    return new Map(rows.map((row) => [String(row._id), row.ids.map(String)]));
+  }
+
+  /**
+   * Design-year applicability clause shared by `resolve()` and `idsByState()`.
+   * XVI-FC dynamic year access — examples (design year "2027-28" -> yearStartCalendarYear = 2027):
+   *   - Existing ULB, startYear not set, dateOfConstitution = 2005-04-01 (<= cutoff)
+   *       -> included (branch 2: constituted well before this design year).
+   *   - Old ULB record, startYear not set, dateOfConstitution = null (never captured)
+   *       -> included (branch 2: missing data defaults to include, never excludes).
+   *   - New ULB, startYear = 2029, dateOfConstitution = 2029-06-01
+   *       -> excluded from "2027-28" (branch 1: 2029 > 2027, ULB didn't exist yet for this year).
+   *   - Same new ULB (startYear = 2029), queried for design year "2029-30" (yearStartCalendarYear = 2029)
+   *       -> included (branch 1: 2029 <= 2029, this is its first participating year).
+   *   - ULB has both startYear and dateOfConstitution set
+   *       -> startYear always wins; dateOfConstitution is ignored (branches are mutually
+   *          exclusive on startYear being null vs. not null).
+   */
+  private applicabilityFilter(designYearLabel: string) {
+    const cutoff = resolveDesignYearApplicabilityCutoff(designYearLabel);
+    const yearStartCalendarYear = parseStartCalendarYear(designYearLabel);
+    return {
+      $or: [
+        { startYear: { $ne: null, $lte: yearStartCalendarYear } },
+        { startYear: null, $or: [{ dateOfConstitution: null }, { dateOfConstitution: { $lte: cutoff } }] },
+      ],
+    };
   }
 }

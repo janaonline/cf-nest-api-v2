@@ -461,9 +461,10 @@ export class DurService {
 
     // xvi-fc dynamic year access: no record yet - if this ULB is exempted, materialize a stub
     // instead of showing a blank form. Never touches an existing record (see `if (!dur)` above).
+    // MoHUA only views: both of these can write (create or delete a stub), so they never run for it.
     if (!dur) {
-      dur = await this.materializeExemptionStubIfNeeded(ulbId, designYearId, user);
-    } else if (dur.isExemptionStub) {
+      if (user.scope !== Scope.MOHUA) dur = await this.materializeExemptionStubIfNeeded(ulbId, designYearId, user);
+    } else if (dur.isExemptionStub && user.scope !== Scope.MOHUA) {
       // Existing doc is a stub - an admin may have since undone the exemption. Re-check live state.
       dur = await this.revalidateExemptionStubIfNeeded(dur, ulbId, designYearId);
     }

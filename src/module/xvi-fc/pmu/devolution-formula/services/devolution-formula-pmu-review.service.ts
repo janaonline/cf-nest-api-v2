@@ -4,7 +4,10 @@ import { Model, Types } from 'mongoose';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { FORM_STATUS, FormHistoryAction, getFormStatusLabel } from 'src/common/constants/form-status.constants';
 import { assertCanPmuMutateForm, canPmuViewForm } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
-import { assertPmuReviewerAccess } from 'src/module/xvi-fc/common/utils/xvi-fc-reviewer-access.util';
+import {
+  assertPmuOrMohuaViewerAccess,
+  assertPmuReviewerAccess,
+} from 'src/module/xvi-fc/common/utils/xvi-fc-reviewer-access.util';
 import { buildPmuReviewerFormPermissions } from 'src/module/xvi-fc/common/utils/xvi-fc-reviewer-permissions.util';
 import { buildPmuWorklistRows } from 'src/module/xvi-fc/common/utils/pmu-worklist.util';
 import { StateFormPmuReviewHelper } from 'src/module/xvi-fc/common/services/state-form-pmu-review.helper';
@@ -113,7 +116,7 @@ export class DevolutionFormulaPmuReviewService {
     installment: DfInstallment,
     user: AuthUser,
   ): Promise<XviFcApiResponse<DevolutionFormulaPmuReviewData>> {
-    assertPmuReviewerAccess(user);
+    assertPmuOrMohuaViewerAccess(user);
 
     const stateOid = new Types.ObjectId(stateId);
     const yearOid = new Types.ObjectId(yearId);
@@ -181,7 +184,7 @@ export class DevolutionFormulaPmuReviewService {
     query: GetDevolutionFormulaPmuRowsQueryDto,
     user: AuthUser,
   ): Promise<XviFcApiResponse<DevolutionFormulaPmuRowsData>> {
-    assertPmuReviewerAccess(user);
+    assertPmuOrMohuaViewerAccess(user);
 
     const form = await this.findForm(stateId, yearId, installment);
     if (!form) throw new NotFoundException('ULB-wise Allocation form not found for this state, year, and installment.');

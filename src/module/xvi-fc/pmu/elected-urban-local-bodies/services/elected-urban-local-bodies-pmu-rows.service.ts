@@ -10,7 +10,10 @@ import {
   assertCanPmuMutateForm,
   canPmuMutateForm,
 } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
-import { assertPmuReviewerAccess } from 'src/module/xvi-fc/common/utils/xvi-fc-reviewer-access.util';
+import {
+  assertPmuOrMohuaViewerAccess,
+  assertPmuReviewerAccess,
+} from 'src/module/xvi-fc/common/utils/xvi-fc-reviewer-access.util';
 import { throwXviFcValidationError, xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
 import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import {
@@ -54,7 +57,7 @@ export class ElectedUrbanLocalBodiesPmuRowsService {
     query: GetEulbPmuRowsQueryDto,
     user: AuthUser,
   ): Promise<XviFcApiResponse<EulbPmuRowsData>> {
-    assertPmuReviewerAccess(user);
+    assertPmuOrMohuaViewerAccess(user);
 
     const form = await this.domainService.findForm(stateId, yearId);
     if (!form) throw new NotFoundException('Elected Urban Local Bodies form not found for this state and year.');
