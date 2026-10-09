@@ -62,6 +62,15 @@ the same guard at the parent level (no-op when `fromStatus === toStatus`) — de
 every current caller already gates via `assertCanMohuaMutateForm` before reaching it, but kept in
 case a future caller doesn't.
 
+Row history carries a per-row field snapshot (not null — captures `rejectionRemark` too, so a reason
+survives a later reject→edit→resubmit cycle); parent history writes `snapshot: []` (a MoHUA review
+decision never edits row data, and the real row-data snapshot already lives on State's own
+`FINAL_SUBMIT` entry in the same collection) but DOES resnapshot `data` (pre-existing behavior, kept
+as-is — mirrors the PMU domain service's own choice); see `common/services/CLAUDE.md`'s "Only
+snapshot data when it could actually have changed". This service hand-rolls its own copy of
+`PmuRowReviewHelper`'s mechanics (pre-dates that extraction) rather than calling it directly, but
+follows the same rule.
+
 ## Known gaps
 
 - **No optimistic-concurrency check on the row/parent status write itself.** Both

@@ -56,6 +56,12 @@ logged by the State side, `PMU_APPROVE`/`PMU_REJECT` by this module).
   `ElectedUrbanLocalBodiesFormHistory` entry per parent transition (skipped when the transition is a
   no-op). Never touches the row's own domain data (`electedBodyStatus`, `dateOfConstitution`,
   `dateOfExpiry`, `remarks`, etc.) or `activeDatasetVersion` — those stay exclusively State-owned.
+  **Both history writes' `snapshot` field is always `null` here** — a PMU review decision never
+  edits row data, so there's nothing new to capture (see common/services/CLAUDE.md's "Only snapshot
+  data when it could actually have changed"). Because this module has no STATE-side row-history
+  writer of its own, every row in `xvifc_elected_ulb_row_logs` ends up with `snapshot: null` — to
+  recover a specific row's data, read the parent `xvifc_elected_ulb_form_logs`'s `FINAL_SUBMIT`
+  entry's snapshot array instead (keyed by `rowNumber`/`ulbId`), not this collection.
 - **Reads**: active rows scoped to the form's `activeDatasetVersion` (Excel re-upload hard-deletes
   prior versions' rows — see that CLAUDE's dataset-versioning ADR — so an unscoped query would risk
   resurrecting stale rows); `EulbFormJsonConfigService`/`getFieldsByType` for the review page's field
@@ -72,11 +78,10 @@ logged by the State side, `PMU_APPROVE`/`PMU_REJECT` by this module).
 The domain service does not hand-roll bulk-write/history mechanics — it calls into
 `PmuRowReviewHelper` and `StateFormPmuReviewHelper` (`xvi-fc/common/services/`), the same two
 helpers every other PMU reviewer (gtc, sfc-status, devolution-formula, fc-unspent-declaration) calls
-into. What's genuinely EULB-specific and stays in this folder's own domain service: the
-`datasetVersion` scoping threaded through every row query/count, and the row/parent history
-snapshot's field shape (`electedBodyStatus`/`dateOfConstitution`/`dateOfExpiry`/`remarks`, vs. FC
-Unspent's `allocationAmount`/`eligibility`-shaped snapshot). EULB rows also have no `eligibility`
-flag, so unlike FC Unspent's row summary there's no eligible/ineligible split in
+into, and omits `PmuRowReviewHelper.transitionRows`' optional `buildSnapshot` hook entirely (see
+"Reads vs. writes" above). What's genuinely EULB-specific and stays in this folder's own domain
+service: the `datasetVersion` scoping threaded through every row query/count. EULB rows also have no
+`eligibility` flag, so unlike FC Unspent's row summary there's no eligible/ineligible split in
 `getRowSummary`/`EulbPmuRowSummary`.
 
 ## Worklist: left-join and synthesized `NOT_STARTED`
@@ -85,7 +90,10 @@ flag, so unlike FC Unspent's row summary there's no eligible/ineligible split in
 `master/state`'s own `findAll()` uses) left-joined against whatever EULB document exists for it this
 year; a state with no document yet gets a synthesized `NOT_STARTED` row via
 `doc?.currentFormStatus ?? FORM_STATUS.NOT_STARTED` — already how every state-side service treats a
-missing document, so it can't mean anything else here.
+missing document, so it can't mean anything else here. `buildPmuWorklistRows` also applies
+`stateId`/`status` filtering, `sortBy`/`sortDir` sorting, and `page`/`limit` pagination to the
+resulting row list (`common/utils/pmu-worklist.util.ts` — see its own doc comment); this module
+doesn't re-implement any of that.
 
 ## GET route declaration order
 

@@ -19,6 +19,9 @@ row access" below).
   PMU-owned collection of its own — see "No side-channel collection" below.
 - `services/devolution-formula-pmu-review.service.ts` — all business logic.
 - `types/devolution-formula-pmu-review.types.ts` — response-shape interfaces.
+- `constants/devolution-formula-pmu-review.constants.ts` — pagination defaults/cap for the row list.
+- `dto/get-devolution-formula-pmu-rows-query.dto.ts` — row-list query params (`page`/`limit` only;
+  unlike EULB/FC Unspent this read-only row list has no `search`/`rowStatus` filter).
 
 ## No side-channel collection — this module writes directly to the State's own documents
 
@@ -59,14 +62,24 @@ internal pre-screen stage, not a status-bearing stage in its own right once it s
 form document (if any) exists for each pair this year; a missing pair gets a synthesized
 `NOT_STARTED` row (`buildPmuWorklistRows`, shared with every other PMU reviewer). This is the same
 `doc?.currentFormStatus ?? FORM_STATUS.NOT_STARTED` convention every state-side service already
-uses for a missing document, so `NOT_STARTED` here can't mean anything else.
+uses for a missing document, so `NOT_STARTED` here can't mean anything else. That same shared
+function also applies `stateId`/`status` filtering, `sortBy`/`sortDir` sorting, and `page`/`limit`
+pagination to the resulting row list — since this module is installment-scoped, one state's 2
+installment rows can straddle a page boundary (see `pmu-worklist.util.ts`'s own doc comment).
 
 ## Read-only row access
 
 `getRows` lists the active dataset version's rows (`datasetVersion: form.activeDatasetVersion ??
-0, isActive: true`, capped at 200) purely so PMU isn't approving/rejecting the ULB-wise figures
-blind — unlike SFC's/GTC's PMU reviewers, this form carries no `data` snapshot on the form document
-itself, so there's nothing else to show. **PMU never mutates row data** — no per-row approve/
+0, isActive: true`), genuinely paginated (`page`/`limit`, `skip`+`limit`+`countDocuments` — see
+`constants/devolution-formula-pmu-review.constants.ts` for the default/max page size, the same
+shape as every other PMU row list) purely so PMU isn't approving/rejecting the ULB-wise figures
+blind — unlike SFC's/GTC's PMU reviewers, this form carries no per-row `data` snapshot on the form
+document itself. `getReviewMetadata` does still return a small `questions` array (the 3
+`DF_MAIN_FORM_FIELDS` summary fields — `ulbCount`/`excelFile`/`checkboxConfirmation`: the
+live-computed active-ULB count, the uploaded allocation Excel, and the submission certification,
+same hydration mechanism EULB's own PMU reviewer uses — `checkboxConfirmation` was previously
+omitted here by mistake, always reading as unchecked regardless of what State submitted), not the
+full per-row field list. **PMU never mutates row data** — no per-row approve/
 reject/edit exists on this side, unlike `elected-urban-local-bodies`'s/`fc-unspent-declaration`'s
 PMU reviewers, which do have a row-level domain service. The per-ULB claim-lock mechanism
 (`assertNoActiveClaimLockForUlb`, see `state/devolution-formula/CLAUDE.md`'s "Row-level claim-lock

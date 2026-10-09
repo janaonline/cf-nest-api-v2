@@ -12,6 +12,7 @@ import { GetEulbPmuRowsQueryDto } from './dto/get-eulb-pmu-rows-query.dto';
 import { BulkApprovePmuRowsDto } from 'src/module/xvi-fc/common/dto/bulk-approve-pmu-rows.dto';
 import { BulkRejectPmuRowsDto } from 'src/module/xvi-fc/common/dto/bulk-reject-pmu-rows.dto';
 import { RejectPmuFormDto } from 'src/module/xvi-fc/common/dto/reject-pmu-form.dto';
+import { GetPmuWorklistQueryDto } from 'src/module/xvi-fc/common/dto/get-pmu-worklist-query.dto';
 
 /** PMU-side review for Elected Urban Local Bodies (PMU Review feature) — a new stage ahead of
  *  MoHUA. No MoHUA review module exists for this form, so unlike FC Unspent's PMU reviewer this
@@ -55,11 +56,21 @@ export class ElectedUrbanLocalBodiesPmuReviewController {
 
   // Must stay registered before `getReview` — see CLAUDE.md's "GET route declaration order" section.
   @ApiOperation({ summary: 'Get Elected Urban Local Bodies PMU worklist across states for a year' })
+  @ApiQuery({ name: 'stateId', required: false })
+  @ApiQuery({ name: 'status', required: false })
+  @ApiQuery({ name: 'sortBy', required: false })
+  @ApiQuery({ name: 'sortDir', required: false })
+  @ApiQuery({ name: 'page', required: false })
+  @ApiQuery({ name: 'limit', required: false })
   @Get('worklist/:yearId')
   @UseGuards(PermissionGuard)
   @RequirePermissions(Permission.REVIEW_STATE_SUBMISSIONS_PMU)
-  getWorklist(@Param('yearId', ParseObjectIdPipe) yearId: string, @CurrentUser() user: AuthUser) {
-    return this.reviewService.getWorklist(yearId, user);
+  getWorklist(
+    @Param('yearId', ParseObjectIdPipe) yearId: string,
+    @Query() query: GetPmuWorklistQueryDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.reviewService.getWorklist(yearId, query, user);
   }
 
   @ApiOperation({ summary: 'Get Elected Urban Local Bodies PMU review metadata' })
@@ -78,7 +89,9 @@ export class ElectedUrbanLocalBodiesPmuReviewController {
   @ApiQuery({ name: 'search', required: false })
   @ApiQuery({ name: 'page', required: false })
   @ApiQuery({ name: 'limit', required: false })
-  @ApiQuery({ name: 'rowStatus', required: false })
+  @ApiQuery({ name: 'rowStatus', required: false, description: 'Single value or comma-separated list' })
+  @ApiQuery({ name: 'sortBy', required: false, enum: ['ulbName', 'rowStatus'] })
+  @ApiQuery({ name: 'sortDir', required: false, enum: ['asc', 'desc'] })
   @Get(':stateId/:yearId/rows')
   @UseGuards(PermissionGuard)
   @RequirePermissions(Permission.REVIEW_STATE_SUBMISSIONS_PMU)

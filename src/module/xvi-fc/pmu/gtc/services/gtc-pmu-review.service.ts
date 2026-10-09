@@ -7,6 +7,7 @@ import { assertCanPmuMutateForm, canPmuViewForm } from 'src/module/xvi-fc/common
 import { assertPmuReviewerAccess } from 'src/module/xvi-fc/common/utils/xvi-fc-reviewer-access.util';
 import { buildPmuReviewerFormPermissions } from 'src/module/xvi-fc/common/utils/xvi-fc-reviewer-permissions.util';
 import { buildPmuWorklistRows } from 'src/module/xvi-fc/common/utils/pmu-worklist.util';
+import type { GetPmuWorklistQueryDto } from 'src/module/xvi-fc/common/dto/get-pmu-worklist-query.dto';
 import { StateFormPmuReviewHelper } from 'src/module/xvi-fc/common/services/state-form-pmu-review.helper';
 import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
 import { FormQuestionHydratorService } from 'src/module/xvi-fc/common/services/form-question-hydrator.service';
@@ -58,17 +59,27 @@ export class GtcPmuReviewService {
   /** See `buildPmuWorklistRows` (`common/utils/pmu-worklist.util.ts`) for the cross-state/
    *  installment join and `NOT_STARTED`-synthesis logic — shared verbatim by all 5 PMU review
    *  services. */
-  async getWorklist(yearId: string, user: AuthUser): Promise<XviFcApiResponse<PmuWorklistData>> {
+  async getWorklist(
+    yearId: string,
+    query: GetPmuWorklistQueryDto,
+    user: AuthUser,
+  ): Promise<XviFcApiResponse<PmuWorklistData>> {
     assertPmuReviewerAccess(user);
 
-    const rows = await buildPmuWorklistRows({
+    const { rows, page, limit, total } = await buildPmuWorklistRows({
       stateModel: this.stateModel,
       formModel: this.formModel,
       yearId,
       installments: GTC_INSTALLMENTS,
+      stateId: query.stateId,
+      status: query.status,
+      sortBy: query.sortBy,
+      sortDir: query.sortDir,
+      page: query.page,
+      limit: query.limit,
     });
 
-    return xviFcSuccess('GTC PMU worklist fetched.', { rows });
+    return xviFcSuccess('GTC PMU worklist fetched.', { rows }, { page, limit, total });
   }
 
   async getReviewMetadata(
@@ -246,7 +257,6 @@ export class GtcPmuReviewService {
         ip,
         userAgent,
         remarks: pmuRemarks,
-        metadata: form.data,
       }),
     });
   }

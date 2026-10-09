@@ -369,10 +369,11 @@ describe('SfcStatusService', () => {
           action: FormHistoryAction.FINAL_SUBMIT,
           fromStatus: FORM_STATUS.NOT_STARTED,
           toStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU,
-          // Data-loss gap fix (PMU Review feature) - metadata now snapshots the submitted
+          // Data-loss gap fix (PMU Review feature) - data now snapshots the submitted
           // payload, so a PMU reject -> State resubmit cycle has somewhere for old values to
           // survive. Previously always undefined (see sfc-status/CLAUDE.md pre-fix history).
-          metadata: { sfcStatus: 'active' },
+          // Renamed from `metadata` for cross-form consistency.
+          data: { sfcStatus: 'active' },
         }),
       );
     });

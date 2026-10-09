@@ -237,24 +237,9 @@ export class FcUnspentRowReviewDomainService {
     ip: string | null,
     userAgent: string | null,
     session: ClientSession,
+    remarks?: string | null,
   ): Promise<void> {
     if (fromStatus === toStatus) return;
-
-    const activeRows = await this.getActiveRows(form._id, session);
-    const snapshot = activeRows.map((row) => ({
-      rowNumber: row.rowNumber,
-      ulbId: row.ulbId,
-      censusCode: row.censusCode,
-      sbCode: row.sbCode,
-      ulbName: row.ulbName,
-      allocationAmount: row.allocationAmount,
-      unspentAmount: row.unspentAmount,
-      previousFcUnspentBalance: row.previousFcUnspentBalance,
-      allocationPerc: row.allocationPerc,
-      eligibility: row.eligibility,
-      rowStatus: row.rowStatus,
-      rejectionRemark: row.rejectionRemark ?? null,
-    }));
 
     await this.historyModel.create(
       [
@@ -266,10 +251,14 @@ export class FcUnspentRowReviewDomainService {
           toStatus,
           auditRevision: newAuditRevision,
           applicableFc,
-          isFcUnspent: form.isFcUnspent,
-          fcDeclaration: form.fcDeclaration ?? null,
-          unspentUlbData: snapshot,
-          checkboxConfirmation: form.checkboxConfirmation,
+          data: {
+            isFcUnspent: form.isFcUnspent,
+            fcDeclaration: form.fcDeclaration ?? null,
+            fcUnspentDeclaration: form.fcUnspentDeclaration ?? null,
+            checkboxConfirmation: form.checkboxConfirmation,
+          },
+          snapshot: [],
+          remarks: remarks ?? undefined,
           changedBy: userOid,
           changedAt: new Date(),
           ip,
@@ -300,6 +289,7 @@ export class FcUnspentRowReviewDomainService {
     const newAuditRevision = form.auditRevision + 1;
 
     await this.transitionParent(form._id, toStatus, undefined, newAuditRevision, userOid, session);
+    // No `remarks` arg: this is an auto-acknowledge, not an explicit single-reason action.
     await this.insertParentHistory(
       form,
       fromStatus,

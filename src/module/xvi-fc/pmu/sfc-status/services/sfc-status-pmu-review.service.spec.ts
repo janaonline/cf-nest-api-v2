@@ -128,11 +128,11 @@ describe('SfcStatusPmuReviewService', () => {
 
   describe('getWorklist', () => {
     it('blocks a STATE user', async () => {
-      await expect(service.getWorklist(yearOid.toString(), stateUser)).rejects.toThrow(ForbiddenException);
+      await expect(service.getWorklist(yearOid.toString(), {}, stateUser)).rejects.toThrow(ForbiddenException);
     });
 
     it('returns the real status/label for an active+published state with a document', async () => {
-      const result = await service.getWorklist(yearOid.toString(), pmuUser);
+      const result = await service.getWorklist(yearOid.toString(), {}, pmuUser);
       expect(result.data!.rows).toEqual([
         {
           stateId: stateOid.toString(),
@@ -147,7 +147,7 @@ describe('SfcStatusPmuReviewService', () => {
     it('synthesizes a Not Started row, updatedAt null, for an active+published state with no document at all', async () => {
       const otherStateOid = new Types.ObjectId();
       stateModel.find.mockReturnValue(qState([{ _id: otherStateOid, name: 'Kerala' }]));
-      const result = await service.getWorklist(yearOid.toString(), pmuUser);
+      const result = await service.getWorklist(yearOid.toString(), {}, pmuUser);
       expect(result.data!.rows).toEqual([
         {
           stateId: otherStateOid.toString(),
@@ -160,12 +160,12 @@ describe('SfcStatusPmuReviewService', () => {
     });
 
     it('queries the State collection filtered to isActive+isPublish+isUT:false, sorted by name', async () => {
-      await service.getWorklist(yearOid.toString(), pmuUser);
+      await service.getWorklist(yearOid.toString(), {}, pmuUser);
       expect(stateModel.find).toHaveBeenCalledWith({ isActive: true, isPublish: true, isUT: false }, { name: 1 });
     });
 
     it('no longer filters the form query by status — every existing document is left-joined regardless of status', async () => {
-      await service.getWorklist(yearOid.toString(), pmuUser);
+      await service.getWorklist(yearOid.toString(), {}, pmuUser);
       const filter = formModel['find'].mock.calls[0][0] as Record<string, unknown>;
       expect(filter).not.toHaveProperty('currentFormStatus');
     });
@@ -259,7 +259,6 @@ describe('SfcStatusPmuReviewService', () => {
             action: FormHistoryAction.PMU_APPROVE,
             fromStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU,
             toStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
-            metadata: { sfcStatus: 'active' },
           }),
         ],
         undefined,
@@ -328,7 +327,6 @@ describe('SfcStatusPmuReviewService', () => {
             action: FormHistoryAction.PMU_REJECT,
             toStatus: FORM_STATUS.RETURNED_BY_PMU,
             remarks: 'Fix this.',
-            metadata: { sfcStatus: 'active' },
           }),
         ],
         undefined,

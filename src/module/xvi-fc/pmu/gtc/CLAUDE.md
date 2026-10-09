@@ -35,6 +35,9 @@ Flat, same shape as `state/gtc` itself:
 - Both transitions are two separate, non-transactional writes (a form update, then a history insert
   that no-ops when `fromStatus === toStatus`) - identical to `state/gtc`'s own convention; see
   `../../state/gtc/CLAUDE.md`'s "The one tradeoff worth knowing before touching writes".
+- The history insert omits `data` entirely (never re-copies `form.data`, which neither action
+  touches) - see `common/services/CLAUDE.md`'s "Only snapshot data when it could actually have
+  changed".
 
 ## Not connected to GTC's installment-2 unlock gap
 
@@ -67,7 +70,9 @@ PMU controller makes the same call for its own installment param.
 - Shared PMU infrastructure (common to all 5 PMU review services): `StateFormPmuReviewHelper` (the
   transition + history-write primitives), `buildPmuWorklistRows`
   (`common/utils/pmu-worklist.util.ts` - the cross-state/installment join and `NOT_STARTED`
-  synthesis), `assertPmuReviewerAccess`/`canPmuViewForm`/`assertCanPmuMutateForm`
+  synthesis, plus that same function's `stateId`/`status`/`sortBy`/`sortDir`/`page`/`limit`
+  filtering, sorting, and pagination of the resulting row list - see its own doc comment),
+  `assertPmuReviewerAccess`/`canPmuViewForm`/`assertCanPmuMutateForm`
   (`common/utils/xvi-fc-reviewer-access.util.ts`, `xvi-fc-form-status-access.util.ts`),
   `buildPmuReviewerFormPermissions`, `XvifcFormActorsService`, `FormQuestionHydratorService`,
   `FormJsonService`.

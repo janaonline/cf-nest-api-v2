@@ -126,9 +126,9 @@ describe('ElectedUrbanLocalBodiesPmuReviewService', () => {
       transitionRows: jest.fn().mockResolvedValue(undefined),
       transitionParent: jest.fn().mockResolvedValue(undefined),
       insertParentHistory: jest.fn().mockResolvedValue(undefined),
-      maybeApproveAfterBulkAction: jest
+      maybeSettleAfterBulkAction: jest
         .fn()
-        .mockResolvedValue({ approved: true, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }),
+        .mockResolvedValue({ settled: true, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -191,11 +191,11 @@ describe('ElectedUrbanLocalBodiesPmuReviewService', () => {
 
   describe('getWorklist', () => {
     it('blocks a STATE user', async () => {
-      await expect(service.getWorklist(yearOid.toString(), stateUser)).rejects.toThrow(ForbiddenException);
+      await expect(service.getWorklist(yearOid.toString(), {}, stateUser)).rejects.toThrow(ForbiddenException);
     });
 
     it('returns the real status/label for an active+published state with a document', async () => {
-      const result = await service.getWorklist(yearOid.toString(), pmuUser);
+      const result = await service.getWorklist(yearOid.toString(), {}, pmuUser);
       expect(result.data!.rows).toEqual([
         {
           stateId: stateOid.toString(),
@@ -210,7 +210,7 @@ describe('ElectedUrbanLocalBodiesPmuReviewService', () => {
     it('synthesizes a Not Started row, updatedAt null, for an active+published state with no document at all', async () => {
       const otherStateOid = new Types.ObjectId();
       stateModel.find.mockReturnValue(qState([{ _id: otherStateOid, name: 'Kerala' }]));
-      const result = await service.getWorklist(yearOid.toString(), pmuUser);
+      const result = await service.getWorklist(yearOid.toString(), {}, pmuUser);
       expect(result.data!.rows).toEqual([
         {
           stateId: otherStateOid.toString(),
@@ -223,12 +223,12 @@ describe('ElectedUrbanLocalBodiesPmuReviewService', () => {
     });
 
     it('queries the State collection filtered to isActive+isPublish+isUT:false, sorted by name', async () => {
-      await service.getWorklist(yearOid.toString(), pmuUser);
+      await service.getWorklist(yearOid.toString(), {}, pmuUser);
       expect(stateModel.find).toHaveBeenCalledWith({ isActive: true, isPublish: true, isUT: false }, { name: 1 });
     });
 
     it('no longer filters the form query by status — every existing document is left-joined regardless of status', async () => {
-      await service.getWorklist(yearOid.toString(), pmuUser);
+      await service.getWorklist(yearOid.toString(), {}, pmuUser);
       const filter = formModel['find'].mock.calls[0][0] as Record<string, unknown>;
       expect(filter).not.toHaveProperty('currentFormStatus');
     });
@@ -396,7 +396,7 @@ describe('ElectedUrbanLocalBodiesPmuReviewService', () => {
       expect(transitions[0].row._id).toEqual(pending._id);
     });
 
-    it('settles the parent via maybeApproveAfterBulkAction atomically', async () => {
+    it('settles the parent via maybeSettleAfterBulkAction atomically', async () => {
       domainService['getActiveRows'] = jest
         .fn()
         .mockResolvedValue([makeRow({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU })]);
@@ -409,7 +409,7 @@ describe('ElectedUrbanLocalBodiesPmuReviewService', () => {
         'jest',
       );
 
-      expect(domainService['maybeApproveAfterBulkAction']).toHaveBeenCalledWith(
+      expect(domainService['maybeSettleAfterBulkAction']).toHaveBeenCalledWith(
         expect.objectContaining({ _id: formOid }),
         userOid,
         '127.0.0.1',
@@ -424,7 +424,7 @@ describe('ElectedUrbanLocalBodiesPmuReviewService', () => {
       domainService['getActiveRows'] = jest
         .fn()
         .mockResolvedValue([makeRow({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU })]);
-      domainService['maybeApproveAfterBulkAction'] = jest.fn().mockRejectedValue(new Error('db error'));
+      domainService['maybeSettleAfterBulkAction'] = jest.fn().mockRejectedValue(new Error('db error'));
 
       await expect(
         service.approveCompleteForm(stateOid.toString(), yearOid.toString(), pmuUser, '127.0.0.1', 'jest'),
@@ -514,6 +514,7 @@ describe('ElectedUrbanLocalBodiesPmuReviewService', () => {
         '127.0.0.1',
         'jest',
         mockSession,
+        'Fix this.',
       );
       expect(result.data!.currentFormStatus).toBe(FORM_STATUS.RETURNED_BY_PMU);
     });

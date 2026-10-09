@@ -132,11 +132,11 @@ describe('GtcPmuReviewService', () => {
 
   describe('getWorklist', () => {
     it('blocks a STATE user', async () => {
-      await expect(service.getWorklist(yearOid.toString(), stateUser)).rejects.toThrow(ForbiddenException);
+      await expect(service.getWorklist(yearOid.toString(), {}, stateUser)).rejects.toThrow(ForbiddenException);
     });
 
     it('returns the real status for the existing installment and synthesizes Not Started for the missing one', async () => {
-      const result = await service.getWorklist(yearOid.toString(), pmuUser);
+      const result = await service.getWorklist(yearOid.toString(), {}, pmuUser);
       expect(result.data!.rows).toEqual([
         {
           stateId: stateOid.toString(),
@@ -159,7 +159,7 @@ describe('GtcPmuReviewService', () => {
 
     it('synthesizes both installments as Not Started for an active+published state with no document at all', async () => {
       formModel['find'] = jest.fn().mockReturnValue(q([]));
-      const result = await service.getWorklist(yearOid.toString(), pmuUser);
+      const result = await service.getWorklist(yearOid.toString(), {}, pmuUser);
       expect(result.data!.rows).toEqual([
         {
           stateId: stateOid.toString(),
@@ -181,12 +181,12 @@ describe('GtcPmuReviewService', () => {
     });
 
     it('queries the State collection filtered to isActive+isPublish+isUT:false, sorted by name', async () => {
-      await service.getWorklist(yearOid.toString(), pmuUser);
+      await service.getWorklist(yearOid.toString(), {}, pmuUser);
       expect(stateModel.find).toHaveBeenCalledWith({ isActive: true, isPublish: true, isUT: false }, { name: 1 });
     });
 
     it('no longer filters the form query by status or installment', async () => {
-      await service.getWorklist(yearOid.toString(), pmuUser);
+      await service.getWorklist(yearOid.toString(), {}, pmuUser);
       const filter = formModel['find'].mock.calls[0][0] as Record<string, unknown>;
       expect(filter).not.toHaveProperty('currentFormStatus');
       expect(filter).not.toHaveProperty('installment');
@@ -268,7 +268,6 @@ describe('GtcPmuReviewService', () => {
             action: FormHistoryAction.PMU_APPROVE,
             installment: 1,
             toStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
-            metadata: { i2GtcFile: null },
           }),
         ],
         undefined,

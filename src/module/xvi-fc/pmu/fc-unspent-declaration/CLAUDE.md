@@ -33,6 +33,10 @@ declaration`'s own form/row/history collections directly.
   `common/dto/bulk-approve-pmu-rows.dto.ts` / `bulk-reject-pmu-rows.dto.ts` / `reject-pmu-form.dto.ts`,
   used identically by every row-bearing PMU review controller (unlike MoHUA's module, which still
   has its own form-specific copies of these).
+- `constants/fc-unspent-pmu-review.constants.ts` — this module's own pagination defaults/cap for the
+  row list. Deliberately **not** the State/MoHUA-shared `FC_UNSPENT_PAGINATION_MAX_LIMIT` (also used
+  by the STATE-side ULB-options picker) — a PMU-only cap here can change without touching either of
+  those unrelated callers.
 
 ## PMU vs MoHUA: two distinct, sequential stages, not duplicates
 
@@ -62,7 +66,10 @@ different statuses and MoHUA's own module was deliberately left unmodified:
   `threshold: 10` — it predates this hydration and was deliberately left as-is.
 - **This module alone has a cross-state worklist endpoint** (`getWorklist`, `GET worklist/:yearId`) —
   MoHUA's module has none. Built from the shared `buildPmuWorklistRows()` (`common/utils/pmu-
-  worklist.util.ts`), the same cross-state join every other PMU review feature uses.
+  worklist.util.ts`), the same cross-state join every other PMU review feature uses — including that
+  function's own `stateId`/`status`/`sortBy`/`sortDir`/`page`/`limit` filtering, sorting, and
+  pagination of the synthesized row list (see its own doc comment for why that happens after the
+  join rather than on the state/form queries themselves).
 - Permissions are on an entirely separate axis: `Scope.PMU` / `REVIEW_STATE_SUBMISSIONS_PMU` /
   `APPROVE_STATE_SUBMISSIONS_PMU`, vs MoHUA's `Scope.MOHUA` / `REVIEW_STATE_SUBMISSIONS` /
   `APPROVE_STATE_SUBMISSIONS` — a PMU user has no implicit MoHUA access or vice versa.
@@ -109,7 +116,13 @@ two Known gaps above.
 **Reads/writes `state/fc-unspent-declaration`'s own collections directly** (no PMU-specific schema):
 the same `XviFcUnspentStateForm`/`...FormHistory`/`...FormRow`/`...FormRowHistory` models State and
 MoHUA already register. This module adds a new write path (PMU's own status transitions) onto those
-same documents — not a separate dataset.
+same documents — not a separate dataset. Row history carries a per-row field snapshot (not null — see
+`buildSnapshot` in `FcUnspentPmuRowReviewDomainService.transitionRows`, which captures `rejectionRemark`
+so a reason survives a later reject→edit→resubmit cycle); parent history writes `snapshot: []` (a PMU
+review decision never edits row data, and the real row-data snapshot already lives on State's own
+`FINAL_SUBMIT` entry in the same collection) but DOES resnapshot `data` (pre-existing behavior, kept
+as-is — see `insertParentHistory`'s own docblock for why this diverges from the other 4 xvi-fc forms);
+see `common/services/CLAUDE.md`'s "Only snapshot data when it could actually have changed".
 
 **Relies on `state/fc-unspent-declaration`'s `finalSubmit`** landing Yes-branch forms/rows on
 `UNDER_REVIEW_BY_PMU` rather than `UNDER_REVIEW_BY_MOHUA` — see "PMU vs MoHUA" above. If that routing

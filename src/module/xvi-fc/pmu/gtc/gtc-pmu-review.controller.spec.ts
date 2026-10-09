@@ -37,8 +37,9 @@ describe('GtcPmuReviewController', () => {
   });
 
   it('GET worklist/:yearId delegates to GtcPmuReviewService.getWorklist', async () => {
-    await controller.getWorklist(yearId, user);
-    expect(reviewService['getWorklist']).toHaveBeenCalledWith(yearId, user);
+    const query = { page: 1, limit: 20 };
+    await controller.getWorklist(yearId, query, user);
+    expect(reviewService['getWorklist']).toHaveBeenCalledWith(yearId, query, user);
   });
 
   it('GET :stateId/:yearId/:installment delegates with the parsed installment', async () => {

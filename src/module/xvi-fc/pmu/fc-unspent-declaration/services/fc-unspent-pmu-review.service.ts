@@ -7,6 +7,7 @@ import { assertCanPmuMutateForm, canPmuViewForm } from 'src/module/xvi-fc/common
 import { assertPmuReviewerAccess } from 'src/module/xvi-fc/common/utils/xvi-fc-reviewer-access.util';
 import { buildPmuReviewerFormPermissions } from 'src/module/xvi-fc/common/utils/xvi-fc-reviewer-permissions.util';
 import { buildPmuWorklistRows } from 'src/module/xvi-fc/common/utils/pmu-worklist.util';
+import type { GetPmuWorklistQueryDto } from 'src/module/xvi-fc/common/dto/get-pmu-worklist-query.dto';
 import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
 import type { XvifcActorSourceDocument } from 'src/module/xvi-fc/common/types/xvifc-form-actors.type';
 import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
@@ -67,17 +68,27 @@ export class FcUnspentPmuReviewService {
    *  shared `buildPmuWorklistRows()` (see that function's own docblock). Declared before
    *  `getReviewMetadata` for the same controller route-ordering reason — see CLAUDE.md's "Layout"
    *  section. */
-  async getWorklist(yearId: string, user: AuthUser): Promise<XviFcApiResponse<PmuWorklistData>> {
+  async getWorklist(
+    yearId: string,
+    query: GetPmuWorklistQueryDto,
+    user: AuthUser,
+  ): Promise<XviFcApiResponse<PmuWorklistData>> {
     assertPmuReviewerAccess(user);
 
-    const rows = await buildPmuWorklistRows({
+    const { rows, page, limit, total } = await buildPmuWorklistRows({
       stateModel: this.stateModel,
       formModel: this.formModel,
       yearId,
       extraFormFilter: { formType: FC_UNSPENT_STATE_FORM_TYPE, isDeleted: false },
+      stateId: query.stateId,
+      status: query.status,
+      sortBy: query.sortBy,
+      sortDir: query.sortDir,
+      page: query.page,
+      limit: query.limit,
     });
 
-    return xviFcSuccess('FC Unspent Declaration PMU worklist fetched.', { rows });
+    return xviFcSuccess('FC Unspent Declaration PMU worklist fetched.', { rows }, { page, limit, total });
   }
 
   /** PMU review metadata only — no row list (see `FcUnspentPmuRowsService.getRows`); view-gated by
@@ -351,6 +362,7 @@ export class FcUnspentPmuReviewService {
         ip,
         userAgent,
         session,
+        trimmedRemarks,
       );
 
       await session.commitTransaction();

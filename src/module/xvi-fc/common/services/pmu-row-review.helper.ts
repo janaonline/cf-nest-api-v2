@@ -23,6 +23,17 @@ export interface LoadActiveRowsByIdsParams<TRowDoc> extends GetActiveRowsParams<
   rowIds: Types.ObjectId[];
 }
 
+export interface LoadActiveRowsBySelectAllMatchingParams<TRowDoc> extends GetActiveRowsParams<TRowDoc> {
+  /** Bulk actions only ever target rows still awaiting that action — not a free-form filter. */
+  requiredStatus: RowReviewStatus;
+  excludeRowIds?: Types.ObjectId[];
+  search?: string;
+  /** Builds the form-specific $or search clause using the same fields as getRows().
+Searchable fields vary by form and are provided by the caller.
+Skipped when search is absent. */
+  buildSearchFilter: (search: string) => Record<string, unknown>;
+}
+
 export interface RowTransition<TRow extends PmuRowBase> {
   row: TRow;
   newStatus: RowReviewStatus;
@@ -42,18 +53,28 @@ export interface TransitionPmuRowsParams<TRowDoc, THistoryDoc, TRow extends PmuR
   session: ClientSession;
   /** Builds the row-history document's `snapshot` payload — field names/values are form-specific
    *  (Elected Urban Local Bodies' electedBodyStatus/dateOfConstitution vs FC Unspent's
-   *  allocationAmount/eligibility). Only invoked for rows whose status is actually changing. */
-  buildSnapshot: (row: TRow, newStatus: RowReviewStatus, rejectionRemark: string | null) => Record<string, unknown>;
+   *  allocationAmount/eligibility). Omit for a pure review decision (no data-edit capability exists
+   *  at this layer — see common/services/CLAUDE.md's "PMU Review shared mechanics"); `snapshot` is
+   *  written `null` when omitted. */
+  buildSnapshot?: (row: TRow, newStatus: RowReviewStatus, rejectionRemark: string | null) => Record<string, unknown>;
 }
 
-export interface CountActiveRowsNotYetApprovedParams<TRowDoc> {
+export interface GetRowStatusTallyParams<TRowDoc> {
   rowModel: Model<TRowDoc>;
   formId: Types.ObjectId;
   datasetVersion?: number;
-  /** Defaults to UNDER_REVIEW_BY_MOHUA — PMU's universal approval target for both row-bearing
-   *  forms today (PMU has no status of its own once approved). */
-  approvedStatus?: number;
   session?: ClientSession;
+}
+
+/** Three-way split of a form's active rows by where each stands in the PMU review stage. */
+export interface RowStatusTally {
+  /** Still `UNDER_REVIEW_BY_PMU` — PMU hasn't decided this row yet. */
+  pending: number;
+  /** `UNDER_REVIEW_BY_MOHUA` — PMU has no terminal status of its own, so an approved row lands
+   *  directly here. */
+  approved: number;
+  /** `RETURNED_BY_PMU`. */
+  rejected: number;
 }
 
 export interface GetRowSummaryParams<TRowDoc> {
@@ -61,6 +82,19 @@ export interface GetRowSummaryParams<TRowDoc> {
   formId: Types.ObjectId;
   datasetVersion?: number;
   includeEligibilitySplit?: boolean;
+}
+
+/**
+ * Pure function (no DB access, trivially unit-testable): decides the settled form-level outcome from
+ * a row-status tally, or `null` when row review isn't complete yet. A rejected row and an approved
+ * row can coexist — the mixed outcome resolves to `RETURNED_BY_PMU`, the same target a fully-rejected
+ * outcome already used, since both mean "the State has at least one row to act on." This is what lets
+ * row review settle after *either* a bulk-approve or a bulk-reject call, instead of only ever being
+ * reachable via an all-rows-approved bulk-approve the way the old count-based check required.
+ */
+export function resolveSettledFormStatus(tally: RowStatusTally): number | null {
+  if (tally.pending > 0) return null;
+  return tally.rejected > 0 ? FORM_STATUS.RETURNED_BY_PMU : FORM_STATUS.UNDER_REVIEW_BY_MOHUA;
 }
 
 /**
@@ -99,6 +133,31 @@ export class PmuRowReviewHelper {
     return { rows, missingIds };
   }
 
+  /**
+   * Resolves "select all matching" into concrete rows at execution time — the production-grade
+   * alternative to a client enumerating every row id across pages. Always scoped to
+   * `requiredStatus` (bulk actions only ever target rows still awaiting that action) and
+   * `isActive`, minus any manually-excluded rows, using the same search filter `getRows()` already
+   * applies. No pagination here — every matching row is resolved in one query, since the whole
+   * point is a single bulk write regardless of how many rows match.
+   */
+  async loadActiveRowsBySelectAllMatching<TRowDoc, TRow>(
+    params: LoadActiveRowsBySelectAllMatchingParams<TRowDoc>,
+  ): Promise<TRow[]> {
+    const filter: Record<string, unknown> = {
+      form: params.formId,
+      isActive: true,
+      rowStatus: params.requiredStatus,
+    };
+    if (params.datasetVersion !== undefined) filter['datasetVersion'] = params.datasetVersion;
+    if (params.excludeRowIds?.length) filter['_id'] = { $nin: params.excludeRowIds };
+    if (params.search) Object.assign(filter, params.buildSearchFilter(params.search));
+
+    const query = params.rowModel.find(filter as FilterQuery<TRowDoc>).select(params.select);
+    if (params.session) query.session(params.session);
+    return query.lean<TRow[]>().exec();
+  }
+
   /** Rows among the given set whose current `rowStatus` isn't `expectedStatus`. */
   filterNotInStatus<TRow extends PmuRowBase>(rows: TRow[], expectedStatus: RowReviewStatus): TRow[] {
     return rows.filter((r) => (r.rowStatus ?? null) !== expectedStatus);
@@ -128,7 +187,7 @@ export class PmuRowReviewHelper {
         year: params.yearOid,
         previousStatus: t.row.rowStatus ?? null,
         currentStatus: t.newStatus,
-        snapshot: params.buildSnapshot(t.row, t.newStatus, t.rejectionRemark),
+        snapshot: params.buildSnapshot ? params.buildSnapshot(t.row, t.newStatus, t.rejectionRemark) : null,
         createdBy: params.userOid,
         updatedBy: params.userOid,
         ipAddress: params.ip,
@@ -138,18 +197,29 @@ export class PmuRowReviewHelper {
     );
   }
 
-  async countActiveRowsNotYetApproved<TRowDoc>(params: CountActiveRowsNotYetApprovedParams<TRowDoc>): Promise<number> {
-    const filter = {
-      form: params.formId,
-      isActive: true,
-      rowStatus: { $ne: params.approvedStatus ?? FORM_STATUS.UNDER_REVIEW_BY_MOHUA },
-    } as FilterQuery<TRowDoc>;
+  /**
+   * Tallies a form's active rows by PMU review stage — the basis for deciding whether row review
+   * has *completed* (zero `pending`) and, if so, what the form-level outcome is (see
+   * `resolveSettledFormStatus`). Replaces the old `countActiveRowsNotYetApproved`, which only ever
+   * asked "how many rows aren't approved yet" — a question that can never reach zero once any row
+   * is rejected, which was the deadlock this tally exists to fix.
+   */
+  async getRowStatusTally<TRowDoc>(params: GetRowStatusTallyParams<TRowDoc>): Promise<RowStatusTally> {
+    const filter = { form: params.formId, isActive: true } as FilterQuery<TRowDoc>;
     if (params.datasetVersion !== undefined) {
       (filter as Record<string, unknown>)['datasetVersion'] = params.datasetVersion;
     }
-    const query = params.rowModel.countDocuments(filter);
+    const query = params.rowModel.find(filter).select('rowStatus');
     if (params.session) query.session(params.session);
-    return query.exec();
+    const rows = await query.lean<{ rowStatus: RowReviewStatus | null }[]>().exec();
+
+    const tally: RowStatusTally = { pending: 0, approved: 0, rejected: 0 };
+    for (const row of rows) {
+      if (row.rowStatus === FORM_STATUS.UNDER_REVIEW_BY_PMU) tally.pending += 1;
+      else if (row.rowStatus === FORM_STATUS.RETURNED_BY_PMU) tally.rejected += 1;
+      else if (row.rowStatus === FORM_STATUS.UNDER_REVIEW_BY_MOHUA) tally.approved += 1;
+    }
+    return tally;
   }
 
   /** Row-status counts across all active rows for a form, optionally with an eligible/ineligible

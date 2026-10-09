@@ -30,6 +30,8 @@ export enum FormHistoryAction {
   /** PMU reviewer actions on a state-level form (PMU Review feature) */
   PMU_APPROVE = 'PMU_APPROVE',
   PMU_REJECT = 'PMU_REJECT',
+  /** State edited and resubmitted a PMU-rejected row, reopening PMU review */
+  ROW_RESUBMIT = 'ROW_RESUBMIT',
 }
 
 export const FORM_STATUS_LABELS: Readonly<Record<FormStatusType, string>> = {

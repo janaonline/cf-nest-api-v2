@@ -8,8 +8,13 @@ Formula's allocation data. No ADR of its own — see "Dependencies" below for wh
 
 - `services/main/fc-unspent-declaration.service.ts` — form-level orchestration: get form, save
   draft, final submit. Owns the two real transactions in this module (`saveDraft`/`finalSubmit`,
-  each atomically writing parent + rows + history) — both self-contained to this file, no ADR
-  needed for them (single call site each, nothing external depends on the transaction mechanics).
+  each atomically writing parent + rows) — both self-contained to this file, no ADR needed for them
+  (single call site each, nothing external depends on the transaction mechanics). History is written
+  differently per method: `finalSubmit` writes its own full-snapshot entry inside its transaction
+  (a failure there aborts the submit); `saveDraft` writes a lightweight, best-effort entry
+  (`recordDraftHistory`) after its transaction commits, mirroring
+  `elected-urban-local-bodies.service.ts`'s own `recordFormHistory` discipline — a failure there
+  never fails the draft save.
 - `services/rows/fc-unspent-declaration-row.service.ts` — per-ULB row resolution/validation,
   including the `eligibility` computation (see "Dependencies"). The threshold percent it compares
   against is not a constant baked into this file — it's resolved per design year by

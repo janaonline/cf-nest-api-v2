@@ -9,6 +9,11 @@ import { buildPmuReviewerFormPermissions } from 'src/module/xvi-fc/common/utils/
 import { buildPmuWorklistRows } from 'src/module/xvi-fc/common/utils/pmu-worklist.util';
 import { StateFormPmuReviewHelper } from 'src/module/xvi-fc/common/services/state-form-pmu-review.helper';
 import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
+import { FormQuestionHydratorService } from 'src/module/xvi-fc/common/services/form-question-hydrator.service';
+import { DfFormJsonConfigService } from 'src/module/xvi-fc/state/devolution-formula/services/form-json/devolution-formula-form-json.service';
+import { getDfFieldsByType } from 'src/module/xvi-fc/state/devolution-formula/helpers/devolution-formula-form-json.helpers';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
+import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import type { XvifcActorSourceDocument } from 'src/module/xvi-fc/common/types/xvifc-form-actors.type';
 import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import { throwXviFcValidationError, xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
@@ -28,6 +33,12 @@ import {
   DF_INSTALLMENTS,
   type DfInstallment,
 } from 'src/module/xvi-fc/state/devolution-formula/constants/devolution-formula.constants';
+import {
+  DF_PMU_PAGINATION_DEFAULT_LIMIT,
+  DF_PMU_PAGINATION_DEFAULT_PAGE,
+} from '../constants/devolution-formula-pmu-review.constants';
+import type { GetDevolutionFormulaPmuRowsQueryDto } from '../dto/get-devolution-formula-pmu-rows-query.dto';
+import type { GetPmuWorklistQueryDto } from 'src/module/xvi-fc/common/dto/get-pmu-worklist-query.dto';
 import type {
   DevolutionFormulaPmuFormLean,
   DevolutionFormulaPmuReviewData,
@@ -43,6 +54,8 @@ type PmuFormLeanWithPopulate = XvifcActorSourceDocument & {
   state?: Types.ObjectId | { _id?: Types.ObjectId; name?: string };
   currentFormStatus?: number;
   pmuRemarks?: string | null;
+  excelFile?: unknown;
+  checkboxConfirmation?: boolean;
 };
 
 /**
@@ -61,22 +74,37 @@ export class DevolutionFormulaPmuReviewService {
     private readonly rowModel: Model<DevolutionFormulaRowDocument>,
     @InjectModel(State.name)
     private readonly stateModel: Model<StateDocument>,
+    @InjectModel(Ulb.name)
+    private readonly ulbModel: Model<UlbDocument>,
     private readonly pmuReviewHelper: StateFormPmuReviewHelper,
     private readonly xvifcFormActorsService: XvifcFormActorsService,
+    private readonly formQuestionHydrator: FormQuestionHydratorService,
+    private readonly dfFormJsonConfig: DfFormJsonConfigService,
+    private readonly ulbEligibilityService: UlbEligibilityService,
   ) {}
 
   /** Cross-state PMU worklist — see CLAUDE.md's "Worklist synthesis" section. */
-  async getWorklist(yearId: string, user: AuthUser): Promise<XviFcApiResponse<PmuWorklistData>> {
+  async getWorklist(
+    yearId: string,
+    query: GetPmuWorklistQueryDto,
+    user: AuthUser,
+  ): Promise<XviFcApiResponse<PmuWorklistData>> {
     assertPmuReviewerAccess(user);
 
-    const rows = await buildPmuWorklistRows({
+    const { rows, page, limit, total } = await buildPmuWorklistRows({
       stateModel: this.stateModel,
       formModel: this.formModel,
       yearId,
       installments: DF_INSTALLMENTS,
+      stateId: query.stateId,
+      status: query.status,
+      sortBy: query.sortBy,
+      sortDir: query.sortDir,
+      page: query.page,
+      limit: query.limit,
     });
 
-    return xviFcSuccess('ULB-wise Allocation PMU worklist fetched.', { rows });
+    return xviFcSuccess('ULB-wise Allocation PMU worklist fetched.', { rows }, { page, limit, total });
   }
 
   async getReviewMetadata(
@@ -113,6 +141,21 @@ export class DevolutionFormulaPmuReviewService {
     const { actors, stateName } = this.xvifcFormActorsService.buildActorsAndStateName(doc);
     const permissions = buildPmuReviewerFormPermissions(user, currentFormStatus);
 
+    const fields = await this.dfFormJsonConfig.loadFields(yearId);
+    const mainFormFields = getDfFieldsByType(fields, 'DF_MAIN_FORM_FIELDS');
+
+    const savedData: Record<string, unknown> = {};
+    if (doc.excelFile !== undefined) savedData['excelFile'] = doc.excelFile;
+    if (doc.checkboxConfirmation !== undefined) savedData['checkboxConfirmation'] = doc.checkboxConfirmation;
+
+    // State-wide, not installment-scoped — matches the State-side field, which doesn't vary by
+    // installment either.
+    const eligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC');
+    const computedActiveUlbCount = await this.ulbModel.countDocuments(eligibleUlbFilter);
+
+    const coreHydrated = this.formQuestionHydrator.hydrate(mainFormFields, savedData);
+    const questions = coreHydrated.map((q) => (q.key === 'ulbCount' ? { ...q, value: computedActiveUlbCount } : q));
+
     const data: DevolutionFormulaPmuReviewData = {
       formId: String(doc._id),
       stateId,
@@ -122,6 +165,7 @@ export class DevolutionFormulaPmuReviewService {
       currentFormStatus,
       currentFormStatusLabel: getFormStatusLabel(currentFormStatus),
       pmuRemarks: doc.pmuRemarks ?? null,
+      questions,
       permissions,
       actors,
     };
@@ -134,6 +178,7 @@ export class DevolutionFormulaPmuReviewService {
     stateId: string,
     yearId: string,
     installment: DfInstallment,
+    query: GetDevolutionFormulaPmuRowsQueryDto,
     user: AuthUser,
   ): Promise<XviFcApiResponse<DevolutionFormulaPmuRowsData>> {
     assertPmuReviewerAccess(user);
@@ -146,17 +191,26 @@ export class DevolutionFormulaPmuReviewService {
       );
     }
 
-    const rows = await this.rowModel
-      .find({ form: form._id, datasetVersion: form.activeDatasetVersion ?? 0, isActive: true })
-      .sort({ rowNumber: 1 })
-      .select(
-        'rowNumber censusCode ulbName totalGrantAllocation installment1Amount installment2Amount devolutionFormula',
-      )
-      .limit(200)
-      .lean<DevolutionFormulaPmuRow[]>()
-      .exec();
+    const page = query.page ?? DF_PMU_PAGINATION_DEFAULT_PAGE;
+    const limit = query.limit ?? DF_PMU_PAGINATION_DEFAULT_LIMIT;
+    const skip = (page - 1) * limit;
+    const filter = { form: form._id, datasetVersion: form.activeDatasetVersion ?? 0, isActive: true };
 
-    return xviFcSuccess('ULB-wise Allocation rows fetched.', { rows });
+    const [rows, total] = await Promise.all([
+      this.rowModel
+        .find(filter)
+        .sort({ rowNumber: 1 })
+        .skip(skip)
+        .limit(limit)
+        .select(
+          'rowNumber censusCode ulbName totalGrantAllocation installment1Amount installment2Amount devolutionFormula',
+        )
+        .lean<DevolutionFormulaPmuRow[]>()
+        .exec(),
+      this.rowModel.countDocuments(filter).exec(),
+    ]);
+
+    return xviFcSuccess('ULB-wise Allocation rows fetched.', { rows }, { page, limit, total });
   }
 
   async approveCompleteForm(

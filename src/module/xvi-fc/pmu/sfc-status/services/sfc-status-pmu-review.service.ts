@@ -7,6 +7,7 @@ import { assertCanPmuMutateForm, canPmuViewForm } from 'src/module/xvi-fc/common
 import { assertPmuReviewerAccess } from 'src/module/xvi-fc/common/utils/xvi-fc-reviewer-access.util';
 import { buildPmuReviewerFormPermissions } from 'src/module/xvi-fc/common/utils/xvi-fc-reviewer-permissions.util';
 import { buildPmuWorklistRows } from 'src/module/xvi-fc/common/utils/pmu-worklist.util';
+import type { GetPmuWorklistQueryDto } from 'src/module/xvi-fc/common/dto/get-pmu-worklist-query.dto';
 import { StateFormPmuReviewHelper } from 'src/module/xvi-fc/common/services/state-form-pmu-review.helper';
 import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
 import { FormQuestionHydratorService } from 'src/module/xvi-fc/common/services/form-question-hydrator.service';
@@ -62,17 +63,27 @@ export class SfcStatusPmuReviewService {
   /** Cross-state PMU worklist for a year — see `buildPmuWorklistRows` for the join/synthesis
    *  logic. Must stay declared before `getReviewMetadata` — see CLAUDE.md's "Route ordering"
    *  section. */
-  async getWorklist(yearId: string, user: AuthUser): Promise<XviFcApiResponse<PmuWorklistData>> {
+  async getWorklist(
+    yearId: string,
+    query: GetPmuWorklistQueryDto,
+    user: AuthUser,
+  ): Promise<XviFcApiResponse<PmuWorklistData>> {
     assertPmuReviewerAccess(user);
 
-    const rows = await buildPmuWorklistRows({
+    const { rows, page, limit, total } = await buildPmuWorklistRows({
       stateModel: this.stateModel,
       formModel: this.formModel,
       yearId,
       extraFormFilter: { formType: SFC_STATUS_FORM_TYPE },
+      stateId: query.stateId,
+      status: query.status,
+      sortBy: query.sortBy,
+      sortDir: query.sortDir,
+      page: query.page,
+      limit: query.limit,
     });
 
-    return xviFcSuccess('SFC Status PMU worklist fetched.', { rows });
+    return xviFcSuccess('SFC Status PMU worklist fetched.', { rows }, { page, limit, total });
   }
 
   async getReviewMetadata(
@@ -245,7 +256,6 @@ export class SfcStatusPmuReviewService {
         ip,
         userAgent,
         remarks: pmuRemarks,
-        metadata: form.data,
       }),
     });
   }

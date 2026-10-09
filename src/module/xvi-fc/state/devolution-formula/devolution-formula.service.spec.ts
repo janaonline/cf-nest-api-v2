@@ -122,6 +122,12 @@ const mockRowModel = {
 
 const mockHistoryModel = { create: jest.fn().mockResolvedValue(undefined) };
 
+/** Reads the single doc argument from the first `historyModel.create(doc)` call. */
+function getHistoryCreateArg(mockFn: jest.Mock): { data: Record<string, unknown> } {
+  const calls = mockFn.mock.calls as unknown as Array<[{ data: Record<string, unknown> }]>;
+  return calls[0][0];
+}
+
 const mockClaimLetterUlbLockModel = { findOne: jest.fn().mockReturnValue(q(null)) };
 
 const mockGrantAllocationModel = { findOne: jest.fn() };
@@ -2002,6 +2008,12 @@ describe('DevolutionFormulaService', () => {
           ],
         }),
       );
+      const historyArg = getHistoryCreateArg(mockHistoryModel.create);
+      expect(historyArg.data).toMatchObject({
+        checkboxConfirmation: true,
+        ulbCount: 50,
+      });
+      expect((historyArg.data['excelFile'] as { originalName?: string } | null)?.originalName).toBe('f.xlsx');
     });
 
     it('does not let a history-write failure surface as a saveDraft failure', async () => {

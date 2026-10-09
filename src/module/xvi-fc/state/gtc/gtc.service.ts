@@ -210,7 +210,7 @@ export class GtcService {
         changedBy: userOid,
         ip,
         userAgent,
-        metadata: sanitizedPayload,
+        data: sanitizedPayload,
       });
 
       return xviFcSuccess('GTC form saved as draft.', {
@@ -248,7 +248,7 @@ export class GtcService {
       changedBy: userOid,
       ip,
       userAgent,
-      metadata: sanitizedPayload,
+      data: sanitizedPayload,
     });
 
     return xviFcSuccess('GTC form saved as draft.', {
@@ -354,7 +354,7 @@ export class GtcService {
       changedBy: userOid,
       ip,
       userAgent,
-      metadata: sanitizedPayload,
+      data: sanitizedPayload,
     });
 
     return xviFcSuccess('GTC form submitted successfully.', {
@@ -541,7 +541,7 @@ export class GtcService {
       ip: entry.ip,
       userAgent: entry.userAgent,
       remarks: entry.remarks,
-      metadata: entry.metadata,
+      data: entry.data,
       isActive: true,
       isDeleted: false,
     });

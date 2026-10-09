@@ -1,5 +1,5 @@
-import { Body, Controller, Get, Headers, Ip, Param, Post, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiBody, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Body, Controller, Get, Headers, Ip, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { ApiBearerAuth, ApiBody, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { PermissionGuard } from 'src/module/auth/permission.guard';
 import { RequirePermissions } from 'src/module/auth/require-permissions.decorator';
 import { Permission } from 'src/module/auth/enum/roles-xvi-fc.enum';
@@ -13,6 +13,8 @@ import {
 } from 'src/module/xvi-fc/state/devolution-formula/constants/devolution-formula.constants';
 import { DevolutionFormulaPmuReviewService } from './services/devolution-formula-pmu-review.service';
 import { RejectPmuFormDto } from 'src/module/xvi-fc/common/dto/reject-pmu-form.dto';
+import { GetDevolutionFormulaPmuRowsQueryDto } from './dto/get-devolution-formula-pmu-rows-query.dto';
+import { GetPmuWorklistQueryDto } from 'src/module/xvi-fc/common/dto/get-pmu-worklist-query.dto';
 
 /** PMU-side review for Devolution Formula — form-level only, whole-form reject only, never
  *  per-ULB (see CLAUDE.md's "Read-only row access"), installment-scoped. No MoHUA review module
@@ -26,11 +28,21 @@ export class DevolutionFormulaPmuReviewController {
   // Declared before `getReview` for consistency with the other PMU controllers, though there's no
   // actual collision risk here — `getReview`'s route is 3-segment vs this route's 2-segment.
   @ApiOperation({ summary: 'Get Devolution Formula PMU worklist across states for a year' })
+  @ApiQuery({ name: 'stateId', required: false })
+  @ApiQuery({ name: 'status', required: false })
+  @ApiQuery({ name: 'sortBy', required: false })
+  @ApiQuery({ name: 'sortDir', required: false })
+  @ApiQuery({ name: 'page', required: false })
+  @ApiQuery({ name: 'limit', required: false })
   @Get('worklist/:yearId')
   @UseGuards(PermissionGuard)
   @RequirePermissions(Permission.REVIEW_STATE_SUBMISSIONS_PMU)
-  getWorklist(@Param('yearId', ParseObjectIdPipe) yearId: string, @CurrentUser() user: AuthUser) {
-    return this.reviewService.getWorklist(yearId, user);
+  getWorklist(
+    @Param('yearId', ParseObjectIdPipe) yearId: string,
+    @Query() query: GetPmuWorklistQueryDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.reviewService.getWorklist(yearId, query, user);
   }
 
   @ApiOperation({ summary: 'Get Devolution Formula PMU review metadata' })
@@ -46,7 +58,9 @@ export class DevolutionFormulaPmuReviewController {
     return this.reviewService.getReviewMetadata(stateId, yearId, this.parseInstallment(installment), user);
   }
 
-  @ApiOperation({ summary: 'Get ULB-wise Allocation rows for PMU review (read-only)' })
+  @ApiOperation({ summary: 'Get paginated ULB-wise Allocation rows for PMU review (read-only)' })
+  @ApiQuery({ name: 'page', required: false })
+  @ApiQuery({ name: 'limit', required: false })
   @Get(':stateId/:yearId/:installment/rows')
   @UseGuards(PermissionGuard)
   @RequirePermissions(Permission.REVIEW_STATE_SUBMISSIONS_PMU)
@@ -54,9 +68,10 @@ export class DevolutionFormulaPmuReviewController {
     @Param('stateId', ParseObjectIdPipe) stateId: string,
     @Param('yearId', ParseObjectIdPipe) yearId: string,
     @Param('installment') installment: string,
+    @Query() query: GetDevolutionFormulaPmuRowsQueryDto,
     @CurrentUser() user: AuthUser,
   ) {
-    return this.reviewService.getRows(stateId, yearId, this.parseInstallment(installment), user);
+    return this.reviewService.getRows(stateId, yearId, this.parseInstallment(installment), query, user);
   }
 
   @ApiOperation({ summary: 'Approve the Devolution Formula form' })

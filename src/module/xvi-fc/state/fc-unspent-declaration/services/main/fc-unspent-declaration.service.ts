@@ -1,4 +1,4 @@
-import { Injectable, InternalServerErrorException, NotFoundException } from '@nestjs/common';
+import { Injectable, InternalServerErrorException, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
@@ -94,6 +94,8 @@ type FcUnspentExistingLean = {
 
 @Injectable()
 export class FcUnspentDeclarationService {
+  private readonly logger = new Logger(FcUnspentDeclarationService.name);
+
   constructor(
     @InjectModel(XviFcUnspentStateForm.name)
     private readonly model: Model<XviFcUnspentStateFormDocument>,
@@ -179,10 +181,18 @@ export class FcUnspentDeclarationService {
   }
 
   /**
-   * Allowed only from NOT_STARTED/IN_PROGRESS/RETURNED_BY_MOHUA (assertCanStateEditForm). Never
-   * writes history — only finalSubmit does; parent + row writes commit in one transaction here.
+   * Allowed only from NOT_STARTED/IN_PROGRESS/RETURNED_BY_MOHUA (assertCanStateEditForm). Parent +
+   * row writes commit in one transaction here; a lightweight, best-effort history entry (status
+   * transition only, no data snapshot — see `recordDraftHistory`) is written after that transaction
+   * commits. `finalSubmit`'s own richer, full-snapshot entry (inside its own transaction) is separate
+   * and unaffected.
    */
-  async saveDraft(dto: SaveFcUnspentDeclarationDto, user: AuthUser): Promise<XviFcApiResponse> {
+  async saveDraft(
+    dto: SaveFcUnspentDeclarationDto,
+    user: AuthUser,
+    ip: string,
+    userAgent: string,
+  ): Promise<XviFcApiResponse> {
     assertStateAccess(user, dto.stateId);
 
     const stateOid = new Types.ObjectId(dto.stateId);
@@ -306,6 +316,7 @@ export class FcUnspentDeclarationService {
 
     const session = await this.model.db.startSession();
     let updatedParent: XviFcUnspentStateFormDocument;
+    let preservedLockedRows: string[] = [];
     try {
       session.startTransaction();
 
@@ -318,7 +329,7 @@ export class FcUnspentDeclarationService {
         .exec();
 
       if (branch === 'yes') {
-        await this.rowService.applyRows(
+        const result = await this.rowService.applyRows(
           updatedParent._id,
           stateOid,
           yearOid,
@@ -327,6 +338,7 @@ export class FcUnspentDeclarationService {
           undefined,
           session,
         );
+        preservedLockedRows = result.preservedLockedRows;
       } else {
         // 'no' and 'undecided' both deactivate rows — see CLAUDE.md's "Every branch outcome
         // deactivates rows except an actual Yes" section.
@@ -341,11 +353,58 @@ export class FcUnspentDeclarationService {
       await session.endSession();
     }
 
+    await this.recordDraftHistory({
+      formId: updatedParent._id,
+      state: stateOid,
+      year: yearOid,
+      fromStatus,
+      toStatus: FORM_STATUS.IN_PROGRESS,
+      auditRevision: existing?.auditRevision ?? 0,
+      changedBy: userOid,
+      ip,
+      userAgent,
+    });
+
     return xviFcSuccess('FC Unspent Declaration saved as draft.', {
       _id: String(updatedParent._id),
       currentFormStatus: updatedParent.currentFormStatus,
       currentFormStatusLabel: getFormStatusLabel(updatedParent.currentFormStatus),
+      preservedLockedRows,
     });
+  }
+
+  /** No-op on `fromStatus === toStatus`. Best-effort, non-transactional — a failure here doesn't
+   *  fail `saveDraft` (mirrors `elected-urban-local-bodies.service.ts`'s own `recordFormHistory`).
+   *  Deliberately bare — every other schema field (`isFcUnspent`/`fcDeclaration`/
+   *  `fcUnspentDeclaration`/`unspentUlbData`/`checkboxConfirmation`) is left to its schema default,
+   *  which is what distinguishes a draft-save entry from `finalSubmit`'s own fully-populated one. */
+  private async recordDraftHistory(entry: {
+    formId: Types.ObjectId;
+    state: Types.ObjectId;
+    year: Types.ObjectId;
+    fromStatus: number;
+    toStatus: number;
+    auditRevision: number;
+    changedBy: Types.ObjectId;
+    ip?: string;
+    userAgent?: string;
+  }): Promise<void> {
+    if (entry.fromStatus === entry.toStatus) return;
+    try {
+      await this.historyModel.create({
+        fcUnspentForm: entry.formId,
+        state: entry.state,
+        year: entry.year,
+        fromStatus: entry.fromStatus,
+        toStatus: entry.toStatus,
+        auditRevision: entry.auditRevision,
+        changedBy: entry.changedBy,
+        ip: entry.ip,
+        userAgent: entry.userAgent,
+      });
+    } catch (err) {
+      this.logger.error('Failed to write FC Unspent Declaration draft form history', err);
+    }
   }
 
   /**
@@ -511,6 +570,7 @@ export class FcUnspentDeclarationService {
     if (finalFcUnspentDeclaration !== undefined) setDoc['fcUnspentDeclaration'] = finalFcUnspentDeclaration;
 
     const session = await this.model.db.startSession();
+    let preservedLockedRows: string[] = [];
     try {
       session.startTransaction();
 
@@ -527,7 +587,7 @@ export class FcUnspentDeclarationService {
       if (isNo) {
         await this.rowService.deactivateAllRows(parentId, userOid, session);
       } else {
-        const { transitions } = await this.rowService.applyRows(
+        const { transitions, preservedLockedRows: preserved } = await this.rowService.applyRows(
           parentId,
           stateOid,
           yearOid,
@@ -536,6 +596,7 @@ export class FcUnspentDeclarationService {
           FORM_STATUS.UNDER_REVIEW_BY_PMU,
           session,
         );
+        preservedLockedRows = preserved;
         await this.rowService.insertRowHistory(
           parentId,
           stateOid,
@@ -564,11 +625,13 @@ export class FcUnspentDeclarationService {
               toStatus,
               auditRevision: newAuditRevision,
               applicableFc,
-              isFcUnspent: updatedParent.isFcUnspent,
-              fcDeclaration: updatedParent.fcDeclaration ?? null,
-              fcUnspentDeclaration: updatedParent.fcUnspentDeclaration ?? null,
-              unspentUlbData: snapshot,
-              checkboxConfirmation: updatedParent.checkboxConfirmation,
+              data: {
+                isFcUnspent: updatedParent.isFcUnspent,
+                fcDeclaration: updatedParent.fcDeclaration ?? null,
+                fcUnspentDeclaration: updatedParent.fcUnspentDeclaration ?? null,
+                checkboxConfirmation: updatedParent.checkboxConfirmation,
+              },
+              snapshot,
               changedBy: userOid,
               changedAt: now,
               ip,
@@ -590,6 +653,7 @@ export class FcUnspentDeclarationService {
     return xviFcSuccess('FC Unspent Declaration submitted successfully.', {
       currentFormStatus: toStatus,
       currentFormStatusLabel: getFormStatusLabel(toStatus),
+      preservedLockedRows,
     });
   }
 
@@ -713,6 +777,7 @@ export class FcUnspentDeclarationService {
       previousFcUnspentBalance: row.previousFcUnspentBalance,
       allocationPerc: row.allocationPerc,
       eligibility: row.eligibility,
+      rowStatus: row.rowStatus,
     };
   }
 

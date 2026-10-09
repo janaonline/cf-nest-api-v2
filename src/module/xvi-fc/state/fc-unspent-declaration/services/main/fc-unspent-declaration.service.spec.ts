@@ -122,7 +122,8 @@ interface TestHistoryArg {
   auditRevision: number;
   fromStatus: number;
   toStatus: number;
-  unspentUlbData: Array<{ rowNumber: number; allocationPerc: number; eligibility: boolean }>;
+  data?: Record<string, unknown> | null;
+  snapshot: Array<{ rowNumber: number; allocationPerc: number; eligibility: boolean }>;
 }
 
 /** Reads the history snapshot from the first `historyModel.create([...])` call. */
@@ -436,7 +437,7 @@ describe('FcUnspentDeclarationService', () => {
           sizeKb: 100,
         },
       });
-      await service.saveDraft(dto, stateUser());
+      await service.saveDraft(dto, stateUser(), '127.0.0.1', 'jest');
       const setArg = getSetArg(model['findOneAndUpdate']);
       expect(setArg.fcDeclaration?.path).toContain('declaration.pdf');
       expect(setArg.currentFormStatus).toBe(FORM_STATUS.IN_PROGRESS);
@@ -446,7 +447,7 @@ describe('FcUnspentDeclarationService', () => {
 
     it('clears fcUnspentDeclaration when saving a No-branch draft, even if none was provided', async () => {
       const dto = baseDto({ isFcUnspent: false });
-      await service.saveDraft(dto, stateUser());
+      await service.saveDraft(dto, stateUser(), '127.0.0.1', 'jest');
       const setArg = getSetArg(model['findOneAndUpdate']);
       expect(setArg.fcUnspentDeclaration).toBeNull();
     });
@@ -458,7 +459,7 @@ describe('FcUnspentDeclarationService', () => {
         unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5, previousFcUnspentBalance: 3 }],
         fcUnspentDeclaration: sampleFcUnspentDeclarationFile,
       });
-      await service.saveDraft(dto, stateUser());
+      await service.saveDraft(dto, stateUser(), '127.0.0.1', 'jest');
       const setArg = getSetArg(model['findOneAndUpdate']);
       expect(setArg.fcUnspentDeclaration?.path).toContain('unspent-declaration.pdf');
       expect(setArg.fcDeclaration).toBeNull();
@@ -469,7 +470,7 @@ describe('FcUnspentDeclarationService', () => {
         isFcUnspent: false,
         unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5, previousFcUnspentBalance: 3 }],
       });
-      await expect(service.saveDraft(dto, stateUser())).rejects.toThrow(BadRequestException);
+      await expect(service.saveDraft(dto, stateUser(), '127.0.0.1', 'jest')).rejects.toThrow(BadRequestException);
     });
 
     it('resolves partial Yes-branch rows via the row service and applies them in draft mode (rowStatus untouched)', async () => {
@@ -483,7 +484,7 @@ describe('FcUnspentDeclarationService', () => {
         checkboxConfirmation: true,
         unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5, previousFcUnspentBalance: 3 }],
       });
-      await service.saveDraft(dto, stateUser());
+      await service.saveDraft(dto, stateUser(), '127.0.0.1', 'jest');
 
       expect(rowService['resolveAndValidateRows']).toHaveBeenCalledWith(
         stateOid,
@@ -508,7 +509,7 @@ describe('FcUnspentDeclarationService', () => {
         isFcUnspent: true,
         unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5, previousFcUnspentBalance: 3 }],
       });
-      await expect(service.saveDraft(dto, stateUser())).resolves.toBeDefined();
+      await expect(service.saveDraft(dto, stateUser(), '127.0.0.1', 'jest')).resolves.toBeDefined();
     });
 
     it('propagates row-service validation errors (e.g. missing/non-positive allocation) as a 400', async () => {
@@ -520,13 +521,13 @@ describe('FcUnspentDeclarationService', () => {
         isFcUnspent: true,
         unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5, previousFcUnspentBalance: 3 }],
       });
-      await expect(service.saveDraft(dto, stateUser())).rejects.toThrow(BadRequestException);
+      await expect(service.saveDraft(dto, stateUser(), '127.0.0.1', 'jest')).rejects.toThrow(BadRequestException);
     });
 
     it('is blocked when Devolution is missing (form locked)', async () => {
       devolutionFormModel['findOne'] = jest.fn().mockReturnValue(q(null));
       const dto = baseDto({ isFcUnspent: false });
-      await expect(service.saveDraft(dto, stateUser())).rejects.toThrow(BadRequestException);
+      await expect(service.saveDraft(dto, stateUser(), '127.0.0.1', 'jest')).rejects.toThrow(BadRequestException);
     });
 
     it('rejects draft save when the form is already UNDER_REVIEW_BY_PMU (not editable)', async () => {
@@ -534,13 +535,13 @@ describe('FcUnspentDeclarationService', () => {
         .fn()
         .mockReturnValue(q({ _id: parentOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU }));
       const dto = baseDto({ isFcUnspent: false });
-      await expect(service.saveDraft(dto, stateUser())).rejects.toThrow(ForbiddenException);
+      await expect(service.saveDraft(dto, stateUser(), '127.0.0.1', 'jest')).rejects.toThrow(ForbiddenException);
     });
 
     it('rolls back the transaction if a row-service write fails during draft save', async () => {
       rowService['deactivateAllRows'] = jest.fn().mockRejectedValue(new Error('row write failed'));
       const dto = baseDto({ isFcUnspent: false });
-      await expect(service.saveDraft(dto, stateUser())).rejects.toThrow('row write failed');
+      await expect(service.saveDraft(dto, stateUser(), '127.0.0.1', 'jest')).rejects.toThrow('row write failed');
       expect(mockSession.abortTransaction).toHaveBeenCalled();
       expect(mockSession.commitTransaction).not.toHaveBeenCalled();
     });
@@ -549,7 +550,7 @@ describe('FcUnspentDeclarationService', () => {
 
     it('deactivates the active row set when isFcUnspent is saved as undecided (omitted), not just No — previously only No did this, leaving stale active rows from a prior Yes branch', async () => {
       const dto = baseDto({}); // isFcUnspent omitted -> branch === 'undecided'
-      await service.saveDraft(dto, stateUser());
+      await service.saveDraft(dto, stateUser(), '127.0.0.1', 'jest');
 
       expect(rowService['deactivateAllRows']).toHaveBeenCalledWith(parentOid, userOid, mockSession);
       expect(rowService['applyRows']).not.toHaveBeenCalled();
@@ -557,7 +558,7 @@ describe('FcUnspentDeclarationService', () => {
 
     it('deactivates the active row set when isFcUnspent is saved as null after previously being answered', async () => {
       const dto = baseDto({ isFcUnspent: null as unknown as boolean });
-      await service.saveDraft(dto, stateUser());
+      await service.saveDraft(dto, stateUser(), '127.0.0.1', 'jest');
 
       expect(rowService['deactivateAllRows']).toHaveBeenCalledWith(parentOid, userOid, mockSession);
       expect(rowService['applyRows']).not.toHaveBeenCalled();
@@ -574,7 +575,7 @@ describe('FcUnspentDeclarationService', () => {
       const rows = [{ ulbId: ulbOid1.toString(), unspentAmount: 5, previousFcUnspentBalance: 3 }];
       const dto = baseDto({ isFcUnspent: true, unspentUlbData: rows });
 
-      await service.saveDraft(dto, stateUser());
+      await service.saveDraft(dto, stateUser(), '127.0.0.1', 'jest');
 
       const formDataArg = validatorSpy.mock.calls[0][1] as Record<string, unknown>;
       expect(formDataArg['savedUnspentUlbData']).toEqual(rows);
@@ -587,10 +588,64 @@ describe('FcUnspentDeclarationService', () => {
       );
       const dto = baseDto({ isFcUnspent: true });
 
-      await service.saveDraft(dto, stateUser());
+      await service.saveDraft(dto, stateUser(), '127.0.0.1', 'jest');
 
       const formDataArg = validatorSpy.mock.calls[0][1] as Record<string, unknown>;
       expect(formDataArg['savedUnspentUlbData']).toEqual([]);
+    });
+
+    // ── Draft-save history logging ──────────────────────────────────────────────
+
+    it('writes a lightweight history entry on first draft save (NOT_STARTED -> IN_PROGRESS)', async () => {
+      const dto = baseDto({ isFcUnspent: false });
+      await service.saveDraft(dto, stateUser(), '127.0.0.1', 'jest');
+
+      expect(historyModel['create']).toHaveBeenCalledWith(
+        expect.objectContaining({
+          fcUnspentForm: parentOid,
+          state: stateOid,
+          year: yearOid,
+          fromStatus: FORM_STATUS.NOT_STARTED,
+          toStatus: FORM_STATUS.IN_PROGRESS,
+          auditRevision: 0,
+          changedBy: userOid,
+          ip: '127.0.0.1',
+          userAgent: 'jest',
+        }),
+      );
+    });
+
+    it('writes a lightweight history entry when resuming after a PMU rejection (RETURNED_BY_PMU -> IN_PROGRESS)', async () => {
+      model['findOne'] = jest
+        .fn()
+        .mockReturnValue(q({ _id: parentOid, currentFormStatus: FORM_STATUS.RETURNED_BY_PMU, auditRevision: 2 }));
+      const dto = baseDto({ isFcUnspent: false });
+      await service.saveDraft(dto, stateUser(), '127.0.0.1', 'jest');
+
+      expect(historyModel['create']).toHaveBeenCalledWith(
+        expect.objectContaining({
+          fromStatus: FORM_STATUS.RETURNED_BY_PMU,
+          toStatus: FORM_STATUS.IN_PROGRESS,
+          auditRevision: 2,
+        }),
+      );
+    });
+
+    it('does not write a history entry re-saving a draft already IN_PROGRESS (no-op transition)', async () => {
+      model['findOne'] = jest
+        .fn()
+        .mockReturnValue(q({ _id: parentOid, currentFormStatus: FORM_STATUS.IN_PROGRESS, auditRevision: 0 }));
+      const dto = baseDto({ isFcUnspent: false });
+      await service.saveDraft(dto, stateUser(), '127.0.0.1', 'jest');
+
+      expect(historyModel['create']).not.toHaveBeenCalled();
+    });
+
+    it('does not fail saveDraft when the history write itself fails', async () => {
+      historyModel['create'] = jest.fn().mockRejectedValue(new Error('history insert failed'));
+      const dto = baseDto({ isFcUnspent: false });
+
+      await expect(service.saveDraft(dto, stateUser(), '127.0.0.1', 'jest')).resolves.toBeDefined();
     });
   });
 
@@ -811,7 +866,37 @@ describe('FcUnspentDeclarationService', () => {
       await service.finalSubmit(dto, stateUser(), '127.0.0.1', 'jest-agent');
 
       const historyArg = getHistoryArg(historyModel['create']);
-      expect(historyArg.unspentUlbData[0]).toMatchObject({ rowNumber: 1, allocationPerc: 10, eligibility: true });
+      expect(historyArg.snapshot[0]).toMatchObject({ rowNumber: 1, allocationPerc: 10, eligibility: true });
+    });
+
+    it("captures the form-level fields into the history entry's data object", async () => {
+      rowService['resolveAndValidateRows'].mockResolvedValueOnce({ rows: [sampleResolvedRow], errors: {} });
+      rowService['getActiveRows'].mockResolvedValueOnce([{ rowNumber: 1, ...sampleResolvedRow }]);
+      model['findOneAndUpdate'] = jest.fn().mockReturnValue(
+        q({
+          _id: parentOid,
+          currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU,
+          isFcUnspent: true,
+          fcDeclaration: null,
+          fcUnspentDeclaration: { path: 'state/unspent-declaration.pdf' },
+          checkboxConfirmation: true,
+        }),
+      );
+
+      const dto = baseDto({
+        isFcUnspent: true,
+        checkboxConfirmation: true,
+        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 10, previousFcUnspentBalance: 3 }],
+        fcUnspentDeclaration: sampleFcUnspentDeclarationFile,
+      });
+      await service.finalSubmit(dto, stateUser(), '127.0.0.1', 'jest-agent');
+
+      const historyArg = getHistoryArg(historyModel['create']);
+      expect(historyArg.data).toMatchObject({
+        isFcUnspent: true,
+        checkboxConfirmation: true,
+        fcUnspentDeclaration: { path: 'state/unspent-declaration.pdf' },
+      });
     });
 
     it('rejects when Devolution is not ready (RETURNED_BY_MOHUA — legacy in-flight) at final submit time', async () => {
@@ -924,7 +1009,7 @@ describe('FcUnspentDeclarationService', () => {
           sizeKb: 100,
         },
       });
-      await expect(service.saveDraft(dto, stateUser())).rejects.toThrow(BadRequestException);
+      await expect(service.saveDraft(dto, stateUser(), '127.0.0.1', 'jest')).rejects.toThrow(BadRequestException);
     });
 
     it('rejects a non-PDF MIME type', async () => {
@@ -932,7 +1017,7 @@ describe('FcUnspentDeclarationService', () => {
         isFcUnspent: false,
         fcDeclaration: { originalName: 'declaration.pdf', path: 'declaration.pdf', mimeType: 'image/png', sizeKb: 100 },
       });
-      await expect(service.saveDraft(dto, stateUser())).rejects.toThrow(BadRequestException);
+      await expect(service.saveDraft(dto, stateUser(), '127.0.0.1', 'jest')).rejects.toThrow(BadRequestException);
     });
 
     it('rejects a file over 5MB', async () => {
@@ -945,7 +1030,7 @@ describe('FcUnspentDeclarationService', () => {
           sizeKb: 6 * 1024,
         },
       });
-      await expect(service.saveDraft(dto, stateUser())).rejects.toThrow(BadRequestException);
+      await expect(service.saveDraft(dto, stateUser(), '127.0.0.1', 'jest')).rejects.toThrow(BadRequestException);
     });
 
     it('preserves stored timestamps when the same declaration path is resubmitted (final submit)', async () => {
@@ -1044,7 +1129,7 @@ describe('FcUnspentDeclarationService', () => {
 
     it('saveDraft still succeeds when formJson.data includes the 8 row-tagged fields (they must not reach the dynamic validator)', async () => {
       const dto = baseDto({ isFcUnspent: false });
-      await expect(service.saveDraft(dto, stateUser())).resolves.toBeDefined();
+      await expect(service.saveDraft(dto, stateUser(), '127.0.0.1', 'jest')).resolves.toBeDefined();
     });
 
     it('finalSubmit still succeeds when formJson.data includes the 8 row-tagged fields (they must not reach the dynamic validator)', async () => {
@@ -1091,7 +1176,7 @@ describe('FcUnspentDeclarationService', () => {
     });
 
     it('loads questions via FcUnspentDeclarationFormJsonService.loadFormConfig for saveDraft, keyed by dto.yearId', async () => {
-      await service.saveDraft(baseDto({ isFcUnspent: null }), stateUser());
+      await service.saveDraft(baseDto({ isFcUnspent: null }), stateUser(), '127.0.0.1', 'jest');
       expect(formJsonConfigService['loadFormConfig']).toHaveBeenCalledWith(yearOid.toString());
     });
 
@@ -1124,7 +1209,9 @@ describe('FcUnspentDeclarationService', () => {
       formJsonConfigService['loadFormConfig'] = jest
         .fn()
         .mockRejectedValue(new NotFoundException('FormJson not found'));
-      await expect(service.saveDraft(baseDto({ isFcUnspent: null }), stateUser())).rejects.toThrow(NotFoundException);
+      await expect(service.saveDraft(baseDto({ isFcUnspent: null }), stateUser(), '127.0.0.1', 'jest')).rejects.toThrow(
+        NotFoundException,
+      );
     });
 
     it('never imports the in-code question constant as a runtime fallback', () => {

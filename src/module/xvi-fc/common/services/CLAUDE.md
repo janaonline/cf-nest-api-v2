@@ -272,15 +272,26 @@ rationale.
   equivalent here — see `PmuRowReviewHelper`.
 - **`pmu-row-review.helper.ts` (`PmuRowReviewHelper`)** — row-bulk mechanics for the 2 row-bearing
   PMU modules (Elected Urban Local Bodies, FC Unspent Declaration — the only forms with per-row
-  review): `getActiveRows`, `loadActiveRowsByIds`, `filterNotInStatus`, `transitionRows` (one
-  `bulkWrite` + one `insertMany`, skipped entirely when every requested transition is already a
-  no-op), `countActiveRowsNotYetApproved`, and `getRowSummary`. Extracted from
-  `ElectedUrbanLocalBodiesPmuRowReviewDomainService` and `FcUnspentPmuRowReviewDomainService`, which
-  were ~70% structurally identical. Deliberately excludes `findForm`/`transitionParent`/
-  `insertParentHistory`/`maybeApproveAfterBulkAction` — an adversarial design review confirmed those
-  carry real per-form differences (FC Unspent's `auditRevision` bookkeeping and richer history
-  snapshot vs Elected Body's simpler one), not accidental duplication. A sibling to
-  `StateFormPmuReviewHelper`, not an extension of it.
+  review): `getActiveRows`, `loadActiveRowsByIds`, `loadActiveRowsBySelectAllMatching`,
+  `filterNotInStatus`, `transitionRows` (one `bulkWrite` + one `insertMany`, skipped entirely when
+  every requested transition is already a no-op), `countActiveRowsNotYetApproved`, and
+  `getRowSummary`. Extracted from `ElectedUrbanLocalBodiesPmuRowReviewDomainService` and
+  `FcUnspentPmuRowReviewDomainService`, which were ~70% structurally identical. Deliberately
+  excludes `findForm`/`transitionParent`/`insertParentHistory`/`maybeApproveAfterBulkAction` — an
+  adversarial design review confirmed those carry real per-form differences (FC Unspent's
+  `auditRevision` bookkeeping and richer history snapshot vs Elected Body's simpler one), not
+  accidental duplication. A sibling to `StateFormPmuReviewHelper`, not an extension of it.
+  - **`loadActiveRowsBySelectAllMatching`** resolves a bulk approve/reject's "select all N rows
+    matching this filter" mode at execution time — re-running the same filter `getRows()` uses
+    (minus any manually-excluded ids), scoped to the status the action requires — instead of the
+    frontend enumerating every matching row id across pages first. This is the production-grade
+    pattern used at scale (Gmail/GitHub/Linear-style "select all matching," not a client-side id
+    loop): `BulkApprovePmuRowsDto`/`BulkRejectPmuRowsDto` accept *either* an explicit `rowIds`/`rows`
+    array (capped at 1000 — deliberately not the shared `BulkIdsList()` convention's 500, since this
+    domain's confirmed worst case is 800 ULBs in one state) *or* a `selectAllMatching` filter plus an
+    optional `excludeRowIds` array, enforced mutually-exclusive in each `*-pmu-rows.service.ts`'s own
+    `assertExactlyOneSelectionMode`. `selectAllMatching` has no array to cap at all — one bulk write
+    regardless of how many rows match.
 - **`xvi-fc-reviewer-access.util.ts`** (`hasReviewerAccess`/`assertReviewerAccess`,
   `assertPmuReviewerAccess`) and **`xvi-fc-reviewer-permissions.util.ts`**
   (`buildReviewerFormPermissions`, `buildPmuReviewerFormPermissions`) — the reviewer-scope gate and
@@ -302,8 +313,47 @@ rationale.
   MoHUA rejection always has, or the form would be permanently stuck. Mirrors `ULB_EDITABLE_STATUSES`
   already coexisting on two "returned" stages for the same reason.
 
-Consumers: all 5 `pmu/<feature>/` modules call `StateFormPmuReviewHelper`; only
-`elected-urban-local-bodies` and `fc-unspent-declaration` call `PmuRowReviewHelper`.
+Consumers: all 5 `pmu/<feature>/` modules call `StateFormPmuReviewHelper`; `elected-urban-local-bodies`
+and `fc-unspent-declaration` call `PmuRowReviewHelper` for row-level mechanics; `fc-unspent-declaration`'s
+MoHUA reviewer (`mohua/fc-unspent-declaration/`) hand-rolls its own copy of the same row/parent
+write shape rather than calling `PmuRowReviewHelper` directly (pre-dates the extraction), but follows
+the same snapshot rule below.
+
+## Only snapshot data when it could actually have changed
+
+Every history/log collection that carries a data snapshot alongside a status change follows one
+rule: **populate the snapshot only at the point the underlying data could genuinely become
+unrecoverable** (a destructive Excel re-upload replacing the prior dataset version's rows), never
+on a pure status transition. `devolution-formula`'s form history established this first; PMU/MoHUA
+review for the other forms has no data-edit capability at all (`transitionRows`/`transition`/
+`insertParentHistory` only ever carry `rowId`/status/remark — never field edits), so for every PMU
+or MoHUA approve/reject:
+
+- `StateFormPmuReviewHelper.writeHistoryIfChanged` callers (`gtc`, `sfc-status`) omit `data`
+  entirely rather than re-copying `form.data`, which never changes at this layer.
+- `PmuRowReviewHelper.transitionRows`'s optional `buildSnapshot` hook is now wired up by both
+  `elected-urban-local-bodies`/`fc-unspent-declaration`'s **PMU** domain services, capturing each
+  row's post-transition fields (including `rejectionRemark`) into row-history so a rejection's
+  reason survives a later reject→edit→resubmit cycle. `elected-urban-local-bodies`'s own **State**-
+  side resubmit call (`state/elected-urban-local-bodies/.../row.service.ts`, reopening a rejected row
+  for review) still omits it — writes `snapshot: null` — since that's a separate, narrower call site
+  outside this logging pass; revisit if resubmit's own row-history entry should capture the row's
+  post-edit content too.
+- `insertParentHistory` (PMU, both row-bearing forms, and fc-unspent-declaration's MoHUA copy)
+  writes `snapshot: null`/`[]` instead of re-fetching and re-copying every active row — the real
+  row-data snapshot already lives on that form's `FINAL_SUBMIT` entry in the same collection.
+  `elected-urban-local-bodies` leaves `data` to its schema default here (PMU/MoHUA actions don't
+  touch form content); `fc-unspent-declaration`'s PMU/MoHUA copy is the one exception that DOES
+  resnapshot `data` on every approve/reject — pre-existing behavior, kept as-is rather than changed
+  to match the other forms (see that service's own `insertParentHistory` docblock).
+
+**Elected Urban Local Bodies has no STATE-side row-history writer at all** — after this rule,
+*every* row in `xvifc_elected_ulb_row_logs` has `snapshot: null`. Data isn't lost (the parent
+`xvifc_elected_ulb_form_logs`'s `FINAL_SUBMIT` entry still has every row), but recovering one row's
+data means reading that parent collection's snapshot array, not this one — see
+`pmu/elected-urban-local-bodies/CLAUDE.md`. `fc-unspent-declaration`'s row-history collection stays
+asymmetric: its STATE-side `finalSubmit` (`FcUnspentDeclarationRowService.insertRowHistory`) still
+writes a real, non-null snapshot, since that *is* the point where row data can change.
 
 No ADRs for this section — no concurrency/locking/idempotency machinery lives here beyond what's
 described above; see each `pmu/<feature>/CLAUDE.md`'s own "No ADRs" note for why the per-module

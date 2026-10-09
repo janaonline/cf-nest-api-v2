@@ -315,6 +315,7 @@ export class FcUnspentMohuaReviewService {
         ip,
         userAgent,
         session,
+        trimmedRemarks,
       );
 
       await session.commitTransaction();

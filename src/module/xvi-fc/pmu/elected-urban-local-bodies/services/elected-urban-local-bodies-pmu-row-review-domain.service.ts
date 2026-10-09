@@ -4,7 +4,7 @@ import { ClientSession, Model, Types } from 'mongoose';
 import { FORM_STATUS, FormHistoryAction } from 'src/common/constants/form-status.constants';
 import type { RowReviewStatus } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
 import { StateFormPmuReviewHelper } from 'src/module/xvi-fc/common/services/state-form-pmu-review.helper';
-import { PmuRowReviewHelper } from 'src/module/xvi-fc/common/services/pmu-row-review.helper';
+import { PmuRowReviewHelper, resolveSettledFormStatus } from 'src/module/xvi-fc/common/services/pmu-row-review.helper';
 import {
   ElectedUrbanLocalBodiesForm,
   EULB_FORM_TYPE,
@@ -102,13 +102,41 @@ export class ElectedUrbanLocalBodiesPmuRowReviewDomainService {
     });
   }
 
+  /** Resolves a "select all matching" bulk action into concrete rows — see
+   *  `PmuRowReviewHelper.loadActiveRowsBySelectAllMatching`'s own docblock. Searches the same
+   *  `ulbName`/`censusCode` fields `getRows()` does. */
+  async loadActiveRowsBySelectAllMatching(
+    formId: Types.ObjectId,
+    datasetVersion: number,
+    requiredStatus: RowReviewStatus,
+    search?: string,
+    excludeRowIds?: Types.ObjectId[],
+  ): Promise<EulbPmuRowLean[]> {
+    return this.pmuRowReviewHelper.loadActiveRowsBySelectAllMatching<EulbRowDocument, EulbPmuRowLean>({
+      rowModel: this.rowModel,
+      formId,
+      datasetVersion,
+      requiredStatus,
+      search,
+      excludeRowIds,
+      select: ROW_LEAN_SELECT,
+      buildSearchFilter: (s) => {
+        const regex = new RegExp(s, 'i');
+        return { $or: [{ ulbName: regex }, { censusCode: regex }] };
+      },
+    });
+  }
+
   /** Rows among the given set whose current `rowStatus` isn't `expectedStatus`. */
   filterNotInStatus(rows: EulbPmuRowLean[], expectedStatus: RowReviewStatus): EulbPmuRowLean[] {
     return this.pmuRowReviewHelper.filterNotInStatus(rows, expectedStatus);
   }
 
-  /** One bulkWrite + one insertMany; must run inside the caller's Mongo transaction session. The
-   *  row-history snapshot shape stays here (form-specific), not in the shared helper. */
+  /** One bulkWrite + one insertMany; must run inside the caller's Mongo transaction session.
+   *  Captures each row's post-transition field values (including `rejectionRemark`) into
+   *  row-history via `buildSnapshot`, so a rejection's reason survives a later
+   *  reject→edit→resubmit cycle even though the live row's own `rejectionRemark` gets
+   *  overwritten each time. */
   async transitionRows(
     formId: Types.ObjectId,
     stateOid: Types.ObjectId,
@@ -132,13 +160,13 @@ export class ElectedUrbanLocalBodiesPmuRowReviewDomainService {
       session,
       buildSnapshot: (row, newStatus, rejectionRemark) => ({
         rowNumber: row.rowNumber,
-        ulbId: row.ulbId,
-        censusCode: row.censusCode,
+        ulbId: row.ulbId ?? null,
+        censusCode: row.censusCode ?? null,
         ulbName: row.ulbName,
-        electedBodyStatus: row.electedBodyStatus,
-        dateOfConstitution: row.dateOfConstitution,
-        dateOfExpiry: row.dateOfExpiry,
-        remarks: row.remarks,
+        electedBodyStatus: row.electedBodyStatus ?? null,
+        dateOfConstitution: row.dateOfConstitution ?? null,
+        dateOfExpiry: row.dateOfExpiry ?? null,
+        remarks: row.remarks ?? null,
         datasetVersion: row.datasetVersion,
         rowStatus: newStatus,
         rejectionRemark,
@@ -146,15 +174,10 @@ export class ElectedUrbanLocalBodiesPmuRowReviewDomainService {
     });
   }
 
-  /** Count of active rows (in the active dataset version) whose `rowStatus` isn't yet
-   *  `UNDER_REVIEW_BY_MOHUA` (PMU's approval target — PMU has no status of its own once approved)
-   *  — zero means the form is fully resolved at the PMU stage. */
-  async countActiveRowsNotYetApproved(
-    formId: Types.ObjectId,
-    datasetVersion: number,
-    session?: ClientSession,
-  ): Promise<number> {
-    return this.pmuRowReviewHelper.countActiveRowsNotYetApproved<EulbRowDocument>({
+  /** Tallies active rows (in the active dataset version) by PMU review stage — see
+   *  `PmuRowReviewHelper.getRowStatusTally`'s own docblock. */
+  async getRowStatusTally(formId: Types.ObjectId, datasetVersion: number, session?: ClientSession) {
+    return this.pmuRowReviewHelper.getRowStatusTally<EulbRowDocument>({
       rowModel: this.rowModel,
       formId,
       datasetVersion,
@@ -194,9 +217,12 @@ export class ElectedUrbanLocalBodiesPmuRowReviewDomainService {
     });
   }
 
-  /** Inserts one parent-history entry, snapshotting the form's active dataset version's active
-   *  rows — delegates the no-op-skip-then-create guard to the shared Phase 4 helper; the row
-   *  snapshot fetch only runs when a history entry will actually be written. */
+  /** Inserts one parent-history entry — delegates the no-op-skip-then-create guard to the shared
+   *  Phase 4 helper. `snapshot`/`data` are left null: a PMU approve/reject never edits form/row
+   *  data, and the real snapshot already lives on the FINAL_SUBMIT entry in this same collection —
+   *  see common/services/CLAUDE.md's "PMU Review shared mechanics". `remarks` is optional and
+   *  trailing so every existing positional call site keeps compiling; only a single-explicit
+   *  reject (one unambiguous reason) passes it — see `maybeSettleAfterBulkAction`'s own call. */
   async insertParentHistory(
     form: EulbPmuFormLean,
     fromStatus: number,
@@ -206,75 +232,59 @@ export class ElectedUrbanLocalBodiesPmuRowReviewDomainService {
     ip: string | null,
     userAgent: string | null,
     session: ClientSession,
+    remarks?: string | null,
   ): Promise<void> {
     await this.pmuReviewHelper.writeHistoryIfChanged<EulbFormHistoryDocument>({
       historyModel: this.historyModel,
       fromStatus,
       toStatus,
       session,
-      buildDocument: async () => {
-        const activeRows = await this.getActiveRows(form._id, form.activeDatasetVersion, session);
-        const snapshot = activeRows.map((row) => ({
-          rowNumber: row.rowNumber,
-          ulbId: row.ulbId,
-          censusCode: row.censusCode,
-          ulbName: row.ulbName,
-          electedBodyStatus: row.electedBodyStatus,
-          dateOfConstitution: row.dateOfConstitution,
-          dateOfExpiry: row.dateOfExpiry,
-          remarks: row.remarks,
-          datasetVersion: row.datasetVersion,
-          rowStatus: row.rowStatus,
-          rejectionRemark: row.rejectionRemark ?? null,
-        }));
-
-        return {
-          eulbForm: form._id,
-          state: form.state,
-          year: form.year,
-          action,
-          fromStatus,
-          toStatus,
-          changedBy: userOid,
-          changedAt: new Date(),
-          ip,
-          userAgent,
-          snapshot,
-        };
-      },
+      buildDocument: () => ({
+        eulbForm: form._id,
+        state: form.state,
+        year: form.year,
+        action,
+        fromStatus,
+        toStatus,
+        changedBy: userOid,
+        changedAt: new Date(),
+        ip,
+        userAgent,
+        snapshot: null,
+        remarks: remarks ?? undefined,
+      }),
     });
   }
 
-  /** Atomic with the session — settles the parent at `UNDER_REVIEW_BY_MOHUA` once every active row
-   *  (in the active dataset version) is individually approved (PMU has no status of its own once
-   *  approved). Mirrors `FcUnspentPmuRowReviewDomainService.maybeApproveAfterBulkAction`. */
-  async maybeApproveAfterBulkAction(
+  /** Atomic with the session — settles the parent the instant every active row (in the active
+   *  dataset version) has a PMU decision, whether that decision was reached via a bulk-approve or a
+   *  bulk-reject call. `UNDER_REVIEW_BY_MOHUA` when every row was approved; `RETURNED_BY_PMU` when at
+   *  least one row was rejected (fully-rejected and mixed outcomes both resolve here — see
+   *  `resolveSettledFormStatus`). The `FormHistoryAction` tag follows the outcome, not which bulk
+   *  action triggered the call, since it has always meant "the fromStatus→toStatus kind," not "which
+   *  button was clicked." Mirrors `FcUnspentPmuRowReviewDomainService.maybeSettleAfterBulkAction`. */
+  async maybeSettleAfterBulkAction(
     form: EulbPmuFormLean,
     userOid: Types.ObjectId,
     ip: string | null,
     userAgent: string | null,
     session: ClientSession,
-  ): Promise<{ approved: boolean; currentFormStatus: number }> {
-    const remaining = await this.countActiveRowsNotYetApproved(form._id, form.activeDatasetVersion, session);
-    if (remaining > 0) {
-      return { approved: false, currentFormStatus: form.currentFormStatus };
+  ): Promise<{ settled: boolean; currentFormStatus: number }> {
+    const tally = await this.getRowStatusTally(form._id, form.activeDatasetVersion, session);
+    const toStatus = resolveSettledFormStatus(tally);
+    if (toStatus === null) {
+      return { settled: false, currentFormStatus: form.currentFormStatus };
     }
 
     const fromStatus = form.currentFormStatus;
-    const toStatus = FORM_STATUS.UNDER_REVIEW_BY_MOHUA;
+    const action =
+      toStatus === FORM_STATUS.RETURNED_BY_PMU ? FormHistoryAction.PMU_REJECT : FormHistoryAction.PMU_APPROVE;
 
     await this.transitionParent(form._id, toStatus, undefined, userOid, session);
-    await this.insertParentHistory(
-      form,
-      fromStatus,
-      toStatus,
-      FormHistoryAction.PMU_APPROVE,
-      userOid,
-      ip,
-      userAgent,
-      session,
-    );
+    // No `remarks` arg: a bulk reject can carry one shared remark or a distinct remark per row, so
+    // there's no single value that correctly represents "the" reason for this derived transition.
+    await this.insertParentHistory(form, fromStatus, toStatus, action, userOid, ip, userAgent, session);
 
-    return { approved: true, currentFormStatus: toStatus };
+    return { settled: true, currentFormStatus: toStatus };
   }
 }

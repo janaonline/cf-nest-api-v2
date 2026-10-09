@@ -26,6 +26,7 @@ import { BulkApprovePmuRowsDto } from 'src/module/xvi-fc/common/dto/bulk-approve
 import { BulkRejectPmuRowsDto } from 'src/module/xvi-fc/common/dto/bulk-reject-pmu-rows.dto';
 import type {
   EulbPmuBulkActionData,
+  EulbPmuFormLean,
   EulbPmuRow,
   EulbPmuRowLean,
   EulbPmuRowsData,
@@ -61,21 +62,35 @@ export class ElectedUrbanLocalBodiesPmuRowsService {
     const limit = query.limit ?? EULB_PMU_PAGINATION_DEFAULT_LIMIT;
     const skip = (page - 1) * limit;
 
-    const filter: FilterQuery<EulbRowDocument> = {
+    const baseFilter: FilterQuery<EulbRowDocument> = {
       form: form._id,
       datasetVersion: form.activeDatasetVersion,
       isActive: true,
     };
-    if (query.rowStatus) filter['rowStatus'] = query.rowStatus;
     if (query.search) {
       const regex = new RegExp(query.search, 'i');
-      filter['$or'] = [{ ulbName: regex }, { censusCode: regex }];
+      baseFilter['$or'] = [{ ulbName: regex }, { censusCode: regex }];
     }
 
-    const [rawRows, total] = await Promise.all([
+    const filter: FilterQuery<EulbRowDocument> = { ...baseFilter };
+    if (query.rowStatus?.length) {
+      filter['rowStatus'] = query.rowStatus.length === 1 ? query.rowStatus[0] : { $in: query.rowStatus };
+    }
+
+    // Always `UNDER_REVIEW_BY_PMU`, independent of `query.rowStatus` — what "select all matching"
+    // resolves to server-side (`PmuRowReviewHelper.loadActiveRowsBySelectAllMatching`), as opposed
+    // to `total` (every row matching the search, regardless of status).
+    const pendingFilter: FilterQuery<EulbRowDocument> = { ...baseFilter, rowStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU };
+
+    // Allowlisted — only 'ulbName'/'rowStatus' are ever offered as sortable columns in the UI.
+    // Defaults to the original row order when neither is given.
+    const sortField = query.sortBy ?? 'rowNumber';
+    const sortDir = query.sortDir === 'desc' ? -1 : 1;
+
+    const [rawRows, total, pendingTotal] = await Promise.all([
       this.rowModel
         .find(filter)
-        .sort({ rowNumber: 1 })
+        .sort({ [sortField]: sortDir })
         .skip(skip)
         .limit(limit)
         .select(
@@ -84,6 +99,7 @@ export class ElectedUrbanLocalBodiesPmuRowsService {
         .lean<EulbPmuRowLean[]>()
         .exec(),
       this.rowModel.countDocuments(filter).exec(),
+      this.rowModel.countDocuments(pendingFilter).exec(),
     ]);
 
     const canReview =
@@ -93,7 +109,7 @@ export class ElectedUrbanLocalBodiesPmuRowsService {
     const rows: EulbPmuRow[] = rawRows.map((row) => this.mapRowToResponse(row, canReview));
 
     const data: EulbPmuRowsData = { rows };
-    return xviFcSuccess('Elected Urban Local Bodies rows fetched.', data, { page, limit, total });
+    return xviFcSuccess('Elected Urban Local Bodies rows fetched.', data, { page, limit, total, pendingTotal });
   }
 
   /** Pending-status requirement and auto-approve rule mirror `FcUnspentPmuRowsService.bulkApproveRows`. */
@@ -104,35 +120,21 @@ export class ElectedUrbanLocalBodiesPmuRowsService {
     userAgent: string,
   ): Promise<XviFcApiResponse<EulbPmuBulkActionData>> {
     assertPmuReviewerAccess(user);
+    this.assertExactlyOneSelectionMode(dto.rowIds, dto.selectAllMatching, 'rowIds');
 
     const form = await this.domainService.findForm(dto.stateId, dto.yearId);
     if (!form) throw new NotFoundException('Elected Urban Local Bodies form not found for this state and year.');
     assertCanPmuMutateForm(form.currentFormStatus);
 
-    const rowOids = dto.rowIds.map((id) => new Types.ObjectId(id));
-    const { rows, missingIds } = await this.domainService.loadActiveRowsByIds(
-      form._id,
-      form.activeDatasetVersion,
-      rowOids,
-    );
-    if (missingIds.length > 0) {
-      throwXviFcValidationError({
-        rowIds: [{ field: 'rowIds', code: 'notFound', message: 'One or more row IDs were not found on this form.' }],
-      });
-    }
-
-    const notPending = this.domainService.filterNotInStatus(rows, FORM_STATUS.UNDER_REVIEW_BY_PMU);
-    if (notPending.length > 0) {
-      throwXviFcValidationError({
-        rowIds: [
-          {
-            field: 'rowIds',
-            code: 'notPending',
-            message: 'One or more selected rows are not awaiting review (already decided or not yet submitted).',
-          },
-        ],
-      });
-    }
+    const rows = dto.selectAllMatching
+      ? await this.domainService.loadActiveRowsBySelectAllMatching(
+          form._id,
+          form.activeDatasetVersion,
+          FORM_STATUS.UNDER_REVIEW_BY_PMU,
+          dto.selectAllMatching.search,
+          (dto.excludeRowIds ?? []).map((id) => new Types.ObjectId(id)),
+        )
+      : await this.resolveExplicitRows(form, dto.rowIds!, 'rowIds');
 
     const stateOid = new Types.ObjectId(dto.stateId);
     const yearOid = new Types.ObjectId(dto.yearId);
@@ -155,8 +157,8 @@ export class ElectedUrbanLocalBodiesPmuRowsService {
         session,
       );
 
-      const result = await this.domainService.maybeApproveAfterBulkAction(form, userOid, ip, userAgent, session);
-      approved = result.approved;
+      const result = await this.domainService.maybeSettleAfterBulkAction(form, userOid, ip, userAgent, session);
+      approved = result.settled && result.currentFormStatus === FORM_STATUS.UNDER_REVIEW_BY_MOHUA;
       currentFormStatus = result.currentFormStatus;
 
       await session.commitTransaction();
@@ -187,63 +189,62 @@ export class ElectedUrbanLocalBodiesPmuRowsService {
     userAgent: string,
   ): Promise<XviFcApiResponse<EulbPmuBulkActionData>> {
     assertPmuReviewerAccess(user);
+    this.assertExactlyOneSelectionMode(dto.rows, dto.selectAllMatching, 'rows');
 
-    const rowIds = dto.rows.map((r) => r.rowId);
-    if (new Set(rowIds).size !== rowIds.length) {
-      throwXviFcValidationError({
-        rows: [{ field: 'rows', code: 'duplicateRowId', message: 'Duplicate row IDs are not allowed.' }],
-      });
-    }
-
-    const remarkErrors: { field?: string; code?: string; message: string }[] = [];
-    dto.rows.forEach((r, i) => {
-      if (!r.rejectionRemark?.trim()) {
-        remarkErrors.push({
-          field: `rows.${i}.rejectionRemark`,
-          code: 'required',
-          message: 'A rejection remark is required for every selected row.',
-        });
-      }
-    });
-    if (remarkErrors.length > 0) {
-      throwXviFcValidationError({ 'rows.rejectionRemark': remarkErrors });
-    }
+    let rows: EulbPmuRowLean[];
+    let remarkByRowId: Map<string, string>;
 
     const form = await this.domainService.findForm(dto.stateId, dto.yearId);
     if (!form) throw new NotFoundException('Elected Urban Local Bodies form not found for this state and year.');
     assertCanPmuMutateForm(form.currentFormStatus);
 
-    const rowOids = rowIds.map((id) => new Types.ObjectId(id));
-    const { rows, missingIds } = await this.domainService.loadActiveRowsByIds(
-      form._id,
-      form.activeDatasetVersion,
-      rowOids,
-    );
-    if (missingIds.length > 0) {
-      throwXviFcValidationError({
-        rows: [{ field: 'rows', code: 'notFound', message: 'One or more row IDs were not found on this form.' }],
+    if (dto.selectAllMatching) {
+      if (!dto.rejectionRemark?.trim()) {
+        throwXviFcValidationError({
+          rejectionRemark: [{ field: 'rejectionRemark', code: 'required', message: 'A rejection remark is required.' }],
+        });
+      }
+      rows = await this.domainService.loadActiveRowsBySelectAllMatching(
+        form._id,
+        form.activeDatasetVersion,
+        FORM_STATUS.UNDER_REVIEW_BY_PMU,
+        dto.selectAllMatching.search,
+        (dto.excludeRowIds ?? []).map((id) => new Types.ObjectId(id)),
+      );
+      const sharedRemark = dto.rejectionRemark.trim();
+      remarkByRowId = new Map(rows.map((row) => [String(row._id), sharedRemark]));
+    } else {
+      const rowIds = dto.rows!.map((r) => r.rowId);
+      if (new Set(rowIds).size !== rowIds.length) {
+        throwXviFcValidationError({
+          rows: [{ field: 'rows', code: 'duplicateRowId', message: 'Duplicate row IDs are not allowed.' }],
+        });
+      }
+
+      const remarkErrors: { field?: string; code?: string; message: string }[] = [];
+      dto.rows!.forEach((r, i) => {
+        if (!r.rejectionRemark?.trim()) {
+          remarkErrors.push({
+            field: `rows.${i}.rejectionRemark`,
+            code: 'required',
+            message: 'A rejection remark is required for every selected row.',
+          });
+        }
       });
+      if (remarkErrors.length > 0) {
+        throwXviFcValidationError({ 'rows.rejectionRemark': remarkErrors });
+      }
+
+      rows = await this.resolveExplicitRows(form, rowIds, 'rows');
+      remarkByRowId = new Map(dto.rows!.map((r) => [r.rowId, r.rejectionRemark.trim()]));
     }
 
-    const notPending = this.domainService.filterNotInStatus(rows, FORM_STATUS.UNDER_REVIEW_BY_PMU);
-    if (notPending.length > 0) {
-      throwXviFcValidationError({
-        rows: [
-          {
-            field: 'rows',
-            code: 'notPending',
-            message: 'One or more selected rows are not awaiting review (already decided or not yet submitted).',
-          },
-        ],
-      });
-    }
-
-    const remarkByRowId = new Map(dto.rows.map((r) => [r.rowId, r.rejectionRemark.trim()]));
     const stateOid = new Types.ObjectId(dto.stateId);
     const yearOid = new Types.ObjectId(dto.yearId);
     const userOid = new Types.ObjectId(user._id);
 
     const session = await this.rowModel.db.startSession();
+    let currentFormStatus = form.currentFormStatus;
     try {
       session.startTransaction();
 
@@ -262,6 +263,12 @@ export class ElectedUrbanLocalBodiesPmuRowsService {
         session,
       );
 
+      // A reject can also *complete* row review — e.g. the last still-pending row, with earlier
+      // rows already approved — in which case the form must settle just as readily as an approve
+      // completing it does. See `maybeSettleAfterBulkAction`'s own docblock.
+      const result = await this.domainService.maybeSettleAfterBulkAction(form, userOid, ip, userAgent, session);
+      currentFormStatus = result.currentFormStatus;
+
       await session.commitTransaction();
     } catch (err) {
       await session.abortTransaction();
@@ -275,13 +282,72 @@ export class ElectedUrbanLocalBodiesPmuRowsService {
     return xviFcSuccess('Selected rows rejected.', {
       updatedRowCount: rows.length,
       rowSummary,
-      currentFormStatus: form.currentFormStatus,
-      currentFormStatusLabel: getFormStatusLabel(form.currentFormStatus),
+      currentFormStatus,
+      currentFormStatusLabel: getFormStatusLabel(currentFormStatus),
       parentAcknowledged: false,
     });
   }
 
   // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+  /** Exactly one of the explicit-array field or `selectAllMatching` must be given — see
+   *  `BulkApprovePmuRowsDto`'s own docblock for why both exist. */
+  private assertExactlyOneSelectionMode(
+    explicit: unknown[] | undefined,
+    selectAllMatching: unknown,
+    explicitFieldName: 'rowIds' | 'rows',
+  ): void {
+    const hasExplicit = !!explicit;
+    const hasSelectAllMatching = !!selectAllMatching;
+    if (hasExplicit === hasSelectAllMatching) {
+      throwXviFcValidationError({
+        [explicitFieldName]: [
+          {
+            field: explicitFieldName,
+            code: 'invalidSelection',
+            message: `Provide exactly one of '${explicitFieldName}' or 'selectAllMatching'.`,
+          },
+        ],
+      });
+    }
+  }
+
+  /** Resolves the explicit-array selection mode: loads rows by id, validates none are missing or
+   *  already decided. Shared by both bulk endpoints' non-`selectAllMatching` branch. */
+  private async resolveExplicitRows(
+    form: EulbPmuFormLean,
+    rowIds: string[],
+    fieldName: 'rowIds' | 'rows',
+  ): Promise<EulbPmuRowLean[]> {
+    const rowOids = rowIds.map((id) => new Types.ObjectId(id));
+    const { rows, missingIds } = await this.domainService.loadActiveRowsByIds(
+      form._id,
+      form.activeDatasetVersion,
+      rowOids,
+    );
+    if (missingIds.length > 0) {
+      throwXviFcValidationError({
+        [fieldName]: [
+          { field: fieldName, code: 'notFound', message: 'One or more row IDs were not found on this form.' },
+        ],
+      });
+    }
+
+    const notPending = this.domainService.filterNotInStatus(rows, FORM_STATUS.UNDER_REVIEW_BY_PMU);
+    if (notPending.length > 0) {
+      throwXviFcValidationError({
+        [fieldName]: [
+          {
+            field: fieldName,
+            code: 'notPending',
+            message: 'One or more selected rows are not awaiting review (already decided or not yet submitted).',
+          },
+        ],
+      });
+    }
+
+    return rows;
+  }
 
   private mapRowToResponse(row: EulbPmuRowLean, canReview: boolean): EulbPmuRow {
     const isPending = row.rowStatus === FORM_STATUS.UNDER_REVIEW_BY_PMU;

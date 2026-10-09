@@ -38,8 +38,9 @@ describe('DevolutionFormulaPmuReviewController', () => {
   });
 
   it('GET worklist/:yearId delegates to DevolutionFormulaPmuReviewService.getWorklist', async () => {
-    await controller.getWorklist(yearId, user);
-    expect(reviewService['getWorklist']).toHaveBeenCalledWith(yearId, user);
+    const query = { page: 1, limit: 20 };
+    await controller.getWorklist(yearId, query, user);
+    expect(reviewService['getWorklist']).toHaveBeenCalledWith(yearId, query, user);
   });
 
   it('GET :stateId/:yearId/:installment delegates with the parsed installment', async () => {
@@ -51,9 +52,10 @@ describe('DevolutionFormulaPmuReviewController', () => {
     expect(() => controller.getReview(stateId, yearId, '3', user)).toThrow(BadRequestException);
   });
 
-  it('GET :stateId/:yearId/:installment/rows delegates with the parsed installment', async () => {
-    await controller.getRows(stateId, yearId, '2', user);
-    expect(reviewService['getRows']).toHaveBeenCalledWith(stateId, yearId, 2, user);
+  it('GET :stateId/:yearId/:installment/rows delegates with the parsed installment and query', async () => {
+    const query = { page: 2, limit: 10 };
+    await controller.getRows(stateId, yearId, '2', query, user);
+    expect(reviewService['getRows']).toHaveBeenCalledWith(stateId, yearId, 2, query, user);
   });
 
   it('POST :stateId/:yearId/:installment/approve delegates with the parsed installment', async () => {

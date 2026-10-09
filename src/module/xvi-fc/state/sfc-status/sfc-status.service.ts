@@ -260,7 +260,7 @@ export class SfcStatusService {
         changedBy: userOid,
         ip,
         userAgent,
-        metadata: sanitizedPayload,
+        data: sanitizedPayload,
       });
 
       return xviFcSuccess('SFC Status form saved as draft.', {
@@ -297,7 +297,7 @@ export class SfcStatusService {
       changedBy: userOid,
       ip,
       userAgent,
-      metadata: sanitizedPayload,
+      data: sanitizedPayload,
     });
 
     return xviFcSuccess('SFC Status form saved as draft.', {
@@ -404,7 +404,7 @@ export class SfcStatusService {
       changedBy: userOid,
       ip,
       userAgent,
-      metadata: sanitizedPayload,
+      data: sanitizedPayload,
     });
 
     return xviFcSuccess('SFC Status form submitted successfully.', {
@@ -534,7 +534,7 @@ export class SfcStatusService {
       ip: entry.ip,
       userAgent: entry.userAgent,
       remarks: entry.remarks,
-      metadata: entry.metadata,
+      data: entry.data,
       isActive: true,
       isDeleted: false,
     });

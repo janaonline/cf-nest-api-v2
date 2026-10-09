@@ -87,11 +87,12 @@ describe('ElectedUrbanLocalBodiesPmuRowsService', () => {
     domainService = {
       findForm: jest.fn().mockResolvedValue(makeForm()),
       loadActiveRowsByIds: jest.fn().mockResolvedValue({ rows: [], missingIds: [] }),
+      loadActiveRowsBySelectAllMatching: jest.fn().mockResolvedValue([]),
       filterNotInStatus: jest.fn().mockReturnValue([]),
       transitionRows: jest.fn().mockResolvedValue(undefined),
-      maybeApproveAfterBulkAction: jest
+      maybeSettleAfterBulkAction: jest
         .fn()
-        .mockResolvedValue({ approved: false, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU }),
+        .mockResolvedValue({ settled: false, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU }),
       getRowSummary: jest
         .fn()
         .mockResolvedValue({ total: 0, active: 0, updatePending: 0, rejected: 0, needsUpdate: 0 }),
@@ -135,16 +136,59 @@ describe('ElectedUrbanLocalBodiesPmuRowsService', () => {
       );
     });
 
-    it('applies a rowStatus filter', async () => {
+    it('applies a single-value rowStatus filter', async () => {
       await service.getRows(
         stateOid.toString(),
         yearOid.toString(),
-        { rowStatus: FORM_STATUS.RETURNED_BY_PMU } as GetEulbPmuRowsQueryDto,
+        { rowStatus: [FORM_STATUS.RETURNED_BY_PMU] } as GetEulbPmuRowsQueryDto,
         pmuUser,
       );
       expect(rowModel['find']).toHaveBeenCalledWith(
         expect.objectContaining({ rowStatus: FORM_STATUS.RETURNED_BY_PMU }),
       );
+    });
+
+    it('applies a multi-value rowStatus filter via $in (the "Approved" status-filter bucket)', async () => {
+      await service.getRows(
+        stateOid.toString(),
+        yearOid.toString(),
+        {
+          rowStatus: [
+            FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+            FORM_STATUS.RETURNED_BY_MOHUA,
+            FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+          ],
+        } as GetEulbPmuRowsQueryDto,
+        pmuUser,
+      );
+      expect(rowModel['find']).toHaveBeenCalledWith(
+        expect.objectContaining({
+          rowStatus: {
+            $in: [
+              FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+              FORM_STATUS.RETURNED_BY_MOHUA,
+              FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+            ],
+          },
+        }),
+      );
+    });
+
+    it('sorts by the requested field and direction', async () => {
+      await service.getRows(
+        stateOid.toString(),
+        yearOid.toString(),
+        { sortBy: 'ulbName', sortDir: 'desc' } as GetEulbPmuRowsQueryDto,
+        pmuUser,
+      );
+      const chain = rowModel['find']() as { sort: jest.Mock };
+      expect(chain.sort).toHaveBeenCalledWith({ ulbName: -1 });
+    });
+
+    it('defaults to sorting by rowNumber ascending when no sort is requested', async () => {
+      await service.getRows(stateOid.toString(), yearOid.toString(), {} as GetEulbPmuRowsQueryDto, pmuUser);
+      const chain = rowModel['find']() as { sort: jest.Mock };
+      expect(chain.sort).toHaveBeenCalledWith({ rowNumber: 1 });
     });
 
     it('applies a search filter over ulbName/censusCode', async () => {
@@ -166,7 +210,7 @@ describe('ElectedUrbanLocalBodiesPmuRowsService', () => {
         { page: 2, limit: 10 } as GetEulbPmuRowsQueryDto,
         pmuUser,
       );
-      expect(result.meta).toEqual({ page: 2, limit: 10, total: 37 });
+      expect(result.meta).toEqual({ page: 2, limit: 10, total: 37, pendingTotal: 37 });
     });
 
     it('sets row permissions.canApprove/canReject true only for PENDING rows on a mutable form', async () => {
@@ -274,9 +318,9 @@ describe('ElectedUrbanLocalBodiesPmuRowsService', () => {
     it('approves the parent atomically when the domain service reports full resolution', async () => {
       const row = makeRow({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU });
       domainService['loadActiveRowsByIds'] = jest.fn().mockResolvedValue({ rows: [row], missingIds: [] });
-      domainService['maybeApproveAfterBulkAction'] = jest
+      domainService['maybeSettleAfterBulkAction'] = jest
         .fn()
-        .mockResolvedValue({ approved: true, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA });
+        .mockResolvedValue({ settled: true, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA });
 
       const result = await service.bulkApproveRows(approveDto([row._id.toString()]), pmuUser, '127.0.0.1', 'jest');
 
@@ -306,6 +350,61 @@ describe('ElectedUrbanLocalBodiesPmuRowsService', () => {
 
       expect(mockSession.abortTransaction).toHaveBeenCalled();
       expect(mockSession.commitTransaction).not.toHaveBeenCalled();
+    });
+
+    it('rejects when both rowIds and selectAllMatching are given', async () => {
+      await expect(
+        service.bulkApproveRows(
+          {
+            stateId: stateOid.toString(),
+            yearId: yearOid.toString(),
+            rowIds: [new Types.ObjectId().toString()],
+            selectAllMatching: {},
+          },
+          pmuUser,
+          '127.0.0.1',
+          'jest',
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects when neither rowIds nor selectAllMatching are given', async () => {
+      await expect(
+        service.bulkApproveRows(
+          { stateId: stateOid.toString(), yearId: yearOid.toString() },
+          pmuUser,
+          '127.0.0.1',
+          'jest',
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('selectAllMatching: resolves rows by filter instead of an explicit id list, excluding excludeRowIds', async () => {
+      const row = makeRow({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU });
+      domainService['loadActiveRowsBySelectAllMatching'] = jest.fn().mockResolvedValue([row]);
+      const excludedId = new Types.ObjectId().toString();
+
+      const result = await service.bulkApproveRows(
+        {
+          stateId: stateOid.toString(),
+          yearId: yearOid.toString(),
+          selectAllMatching: { search: 'Alpha' },
+          excludeRowIds: [excludedId],
+        },
+        pmuUser,
+        '127.0.0.1',
+        'jest',
+      );
+
+      expect(domainService['loadActiveRowsByIds']).not.toHaveBeenCalled();
+      expect(domainService['loadActiveRowsBySelectAllMatching']).toHaveBeenCalledWith(
+        formOid,
+        1,
+        FORM_STATUS.UNDER_REVIEW_BY_PMU,
+        'Alpha',
+        [new Types.ObjectId(excludedId)],
+      );
+      expect(result.data!.updatedRowCount).toBe(1);
     });
   });
 
@@ -363,7 +462,7 @@ describe('ElectedUrbanLocalBodiesPmuRowsService', () => {
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('transitions selected rows to REJECTED, each with its own remark, and never approves the parent', async () => {
+    it('transitions selected rows to REJECTED, each with its own remark', async () => {
       const row = makeRow({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU });
       domainService['loadActiveRowsByIds'] = jest.fn().mockResolvedValue({ rows: [row], missingIds: [] });
       domainService['filterNotInStatus'] = jest.fn().mockReturnValue([]);
@@ -380,11 +479,10 @@ describe('ElectedUrbanLocalBodiesPmuRowsService', () => {
       expect(transitions).toEqual([
         { row, newStatus: FORM_STATUS.RETURNED_BY_PMU, rejectionRemark: 'Dates inconsistent with registry.' },
       ]);
-      expect(domainService['maybeApproveAfterBulkAction']).not.toHaveBeenCalled();
       expect(result.data!.parentAcknowledged).toBe(false);
     });
 
-    it('does not change the parent status', async () => {
+    it('keeps the parent status unchanged when rows remain unresolved', async () => {
       const row = makeRow({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU });
       domainService['loadActiveRowsByIds'] = jest.fn().mockResolvedValue({ rows: [row], missingIds: [] });
 
@@ -395,7 +493,27 @@ describe('ElectedUrbanLocalBodiesPmuRowsService', () => {
         'jest',
       );
 
+      expect(domainService['maybeSettleAfterBulkAction']).toHaveBeenCalled();
       expect(result.data!.currentFormStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_PMU);
+      expect(result.data!.parentAcknowledged).toBe(false);
+    });
+
+    it('settles the form at RETURNED_BY_PMU when this rejection completes row review (the mixed-outcome deadlock fix)', async () => {
+      const row = makeRow({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU });
+      domainService['loadActiveRowsByIds'] = jest.fn().mockResolvedValue({ rows: [row], missingIds: [] });
+      domainService['maybeSettleAfterBulkAction'] = jest
+        .fn()
+        .mockResolvedValue({ settled: true, currentFormStatus: FORM_STATUS.RETURNED_BY_PMU });
+
+      const result = await service.bulkRejectRows(
+        rejectDto([{ rowId: row._id.toString(), rejectionRemark: 'x' }]),
+        pmuUser,
+        '127.0.0.1',
+        'jest',
+      );
+
+      expect(result.data!.currentFormStatus).toBe(FORM_STATUS.RETURNED_BY_PMU);
+      expect(result.data!.parentAcknowledged).toBe(false);
     });
 
     it('rolls back the transaction when a domain-service call throws', async () => {
@@ -413,6 +531,56 @@ describe('ElectedUrbanLocalBodiesPmuRowsService', () => {
       ).rejects.toThrow('db error');
 
       expect(mockSession.abortTransaction).toHaveBeenCalled();
+    });
+
+    it('rejects when both rows and selectAllMatching are given', async () => {
+      await expect(
+        service.bulkRejectRows(
+          { ...rejectDto(), selectAllMatching: {}, rejectionRemark: 'x' },
+          pmuUser,
+          '127.0.0.1',
+          'jest',
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('selectAllMatching: requires a shared rejectionRemark', async () => {
+      await expect(
+        service.bulkRejectRows(
+          { stateId: stateOid.toString(), yearId: yearOid.toString(), selectAllMatching: {} },
+          pmuUser,
+          '127.0.0.1',
+          'jest',
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('selectAllMatching: resolves rows by filter and applies the one shared remark to every row', async () => {
+      const row = makeRow({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU });
+      domainService['loadActiveRowsBySelectAllMatching'] = jest.fn().mockResolvedValue([row]);
+
+      await service.bulkRejectRows(
+        {
+          stateId: stateOid.toString(),
+          yearId: yearOid.toString(),
+          selectAllMatching: { search: 'Alpha' },
+          rejectionRemark: 'Bulk rejected — figures under review.',
+        },
+        pmuUser,
+        '127.0.0.1',
+        'jest',
+      );
+
+      expect(domainService['loadActiveRowsByIds']).not.toHaveBeenCalled();
+      const transitionArgs = domainService['transitionRows'].mock.calls[0] as unknown[];
+      const transitions = transitionArgs[3] as Array<{ rejectionRemark: string }>;
+      expect(transitions).toEqual([
+        {
+          row,
+          newStatus: FORM_STATUS.RETURNED_BY_PMU,
+          rejectionRemark: 'Bulk rejected — figures under review.',
+        },
+      ]);
     });
   });
 });

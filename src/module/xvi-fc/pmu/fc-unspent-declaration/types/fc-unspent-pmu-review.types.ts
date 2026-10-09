@@ -15,6 +15,7 @@ export interface FcUnspentPmuFormLean {
   currentFormStatus: number;
   isFcUnspent: boolean | null;
   fcDeclaration: unknown;
+  fcUnspentDeclaration: unknown;
   checkboxConfirmation: boolean;
   auditRevision: number;
 }

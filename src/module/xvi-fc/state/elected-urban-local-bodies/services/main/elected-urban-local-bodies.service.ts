@@ -869,9 +869,18 @@ export class ElectedUrbanLocalBodiesService {
         .lean<EulbFormLeanDoc>()
         .exec();
 
+      // Filtered (not unconditional) so a row PMU has already approved can never be pulled back to
+      // UNDER_REVIEW_BY_PMU by a submit — defense-in-depth alongside the Excel-reupload lock guard
+      // (elected-urban-local-bodies-excel.service.ts) and updateRow's per-row gate, both of which
+      // already prevent reaching finalSubmit with a locked row in the submitted dataset at all.
       await this.rowModel
         .updateMany(
-          { form: existing._id, datasetVersion: activeDatasetVersion, isActive: true },
+          {
+            form: existing._id,
+            datasetVersion: activeDatasetVersion,
+            isActive: true,
+            rowStatus: { $in: [null, FORM_STATUS.RETURNED_BY_PMU, FORM_STATUS.RETURNED_BY_MOHUA] },
+          },
           { $set: { rowStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU } },
           { session },
         )
@@ -919,6 +928,12 @@ export class ElectedUrbanLocalBodiesService {
               ip,
               userAgent,
               snapshot: submittedRowsSnapshot,
+              data: {
+                ulbCount: updated?.ulbCount ?? null,
+                electedBodyExcelFile: updated?.electedBodyExcelFile ?? null,
+                signedElectedbodyFile: updated?.signedElectedbodyFile ?? null,
+                checkboxConfirmation: updated?.checkboxConfirmation ?? null,
+              },
             },
           ],
           { session },

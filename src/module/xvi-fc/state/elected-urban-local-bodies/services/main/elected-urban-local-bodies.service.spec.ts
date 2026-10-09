@@ -1888,12 +1888,17 @@ describe('ElectedUrbanLocalBodiesService', () => {
       expect(caught).toBeDefined();
     });
 
-    it('bulk-updates active rows in the current dataset version to rowStatus UNDER_REVIEW_BY_PMU, in the same transaction as the parent update', async () => {
+    it('bulk-updates active, not-yet-locked rows in the current dataset version to rowStatus UNDER_REVIEW_BY_PMU, in the same transaction as the parent update', async () => {
       await service.finalSubmit(baseDto, adminUser, '', '');
 
       expect(mockFormModel.db.startSession).toHaveBeenCalled();
       expect(mockRowModel.updateMany).toHaveBeenCalledWith(
-        { form: formOid, datasetVersion: baseFormDoc.activeDatasetVersion, isActive: true },
+        {
+          form: formOid,
+          datasetVersion: baseFormDoc.activeDatasetVersion,
+          isActive: true,
+          rowStatus: { $in: [null, FORM_STATUS.RETURNED_BY_PMU, FORM_STATUS.RETURNED_BY_MOHUA] },
+        },
         { $set: { rowStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU } },
         { session: mockSession },
       );
@@ -1947,6 +1952,35 @@ describe('ElectedUrbanLocalBodiesService', () => {
                 electedBodyStatus: 'Constituted',
               }),
             ],
+          }),
+        ],
+        { session: mockSession },
+      );
+    });
+
+    it("captures the form-level fields into the history entry's data object", async () => {
+      mockFormModel.findOneAndUpdate.mockReturnValue(
+        q({
+          ...baseFormDoc,
+          currentFormStatus: 3,
+          ulbCount: 3,
+          electedBodyExcelFile: { originalName: 'test.xlsx', path: 'state/test.xlsx' },
+          signedElectedbodyFile: { originalName: 'signed.pdf', path: 'state/signed.pdf' },
+          checkboxConfirmation: true,
+        }),
+      );
+
+      await service.finalSubmit(baseDto, adminUser, '', '');
+
+      expect(mockHistoryModel.create).toHaveBeenCalledWith(
+        [
+          expect.objectContaining({
+            data: {
+              ulbCount: 3,
+              electedBodyExcelFile: { originalName: 'test.xlsx', path: 'state/test.xlsx' },
+              signedElectedbodyFile: { originalName: 'signed.pdf', path: 'state/signed.pdf' },
+              checkboxConfirmation: true,
+            },
           }),
         ],
         { session: mockSession },

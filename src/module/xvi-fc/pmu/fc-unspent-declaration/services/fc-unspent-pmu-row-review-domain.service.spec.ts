@@ -35,7 +35,7 @@ interface TestRowHistoryDoc {
   form: Types.ObjectId;
   previousStatus: unknown;
   currentStatus: unknown;
-  snapshot: Record<string, unknown>;
+  snapshot: Record<string, unknown> | null;
 }
 
 function getInsertManyDocs(mockFn: jest.Mock): TestRowHistoryDoc[] {
@@ -58,7 +58,9 @@ interface TestHistoryDoc {
   fromStatus: number;
   toStatus: number;
   auditRevision: number;
-  unspentUlbData: Array<{ rowNumber: number; rowStatus: unknown; rejectionRemark: unknown }>;
+  data: Record<string, unknown> | null;
+  snapshot: Array<{ rowNumber: number; rowStatus: unknown; rejectionRemark: unknown }>;
+  remarks?: string;
 }
 
 function getHistoryCreateArg(mockFn: jest.Mock): TestHistoryDoc {
@@ -83,6 +85,7 @@ function makeForm(overrides: Partial<FcUnspentPmuFormLean> = {}): FcUnspentPmuFo
     currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU,
     isFcUnspent: true,
     fcDeclaration: null,
+    fcUnspentDeclaration: null,
     checkboxConfirmation: true,
     auditRevision: 1,
     ...overrides,
@@ -169,6 +172,36 @@ describe('FcUnspentPmuRowReviewDomainService', () => {
     });
   });
 
+  describe('loadActiveRowsBySelectAllMatching', () => {
+    it('filters by form, isActive, and the required status — no datasetVersion, no search/exclusions given', async () => {
+      rowModel['find'] = jest.fn().mockReturnValue(q([makeRow()]));
+
+      const rows = await service.loadActiveRowsBySelectAllMatching(formOid, FORM_STATUS.UNDER_REVIEW_BY_PMU);
+
+      expect(rows).toHaveLength(1);
+      expect(rowModel['find']).toHaveBeenCalledWith({
+        form: formOid,
+        isActive: true,
+        rowStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU,
+      });
+    });
+
+    it('excludes manually-unchecked rows via $nin and applies the ulbName/censusCode/sbCode search filter', async () => {
+      rowModel['find'] = jest.fn().mockReturnValue(q([]));
+      const excludedId = new Types.ObjectId();
+
+      await service.loadActiveRowsBySelectAllMatching(formOid, FORM_STATUS.UNDER_REVIEW_BY_PMU, 'Alpha', [excludedId]);
+
+      const filter = rowModel['find'].mock.calls[0][0] as Record<string, unknown>;
+      expect(filter['_id']).toEqual({ $nin: [excludedId] });
+      expect(filter['$or']).toEqual([
+        { ulbName: expect.any(RegExp) },
+        { censusCode: expect.any(RegExp) },
+        { sbCode: expect.any(RegExp) },
+      ]);
+    });
+  });
+
   describe('filterNotInStatus', () => {
     it('returns rows whose rowStatus does not match the expected value', () => {
       const pending = makeRow({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU });
@@ -225,7 +258,7 @@ describe('FcUnspentPmuRowReviewDomainService', () => {
       expect(ops[0].updateOne.update.$set['rejectionRemark']).toBe('Allocation mismatch.');
     });
 
-    it('inserts one immutable row-history entry per transition with previous/current status and snapshot', async () => {
+    it('inserts one immutable row-history entry per transition with previous/current status and a field snapshot', async () => {
       const row = makeRow({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU });
       await service.transitionRows(
         formOid,
@@ -245,11 +278,40 @@ describe('FcUnspentPmuRowReviewDomainService', () => {
         form: formOid,
         previousStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU,
         currentStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
-        snapshot: expect.objectContaining({
-          rowNumber: 1,
+        snapshot: {
+          rowNumber: row.rowNumber,
+          ulbId: row.ulbId,
+          censusCode: row.censusCode,
+          sbCode: row.sbCode,
+          ulbName: row.ulbName,
+          allocationAmount: row.allocationAmount,
+          unspentAmount: row.unspentAmount,
+          previousFcUnspentBalance: row.previousFcUnspentBalance,
+          allocationPerc: row.allocationPerc,
+          eligibility: row.eligibility,
           rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
           rejectionRemark: null,
-        }) as Record<string, unknown>,
+        },
+      });
+    });
+
+    it('captures the rejection remark in the row-history snapshot so it survives a later edit', async () => {
+      const row = makeRow({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU });
+      await service.transitionRows(
+        formOid,
+        stateOid,
+        yearOid,
+        [{ row, newStatus: FORM_STATUS.RETURNED_BY_PMU, rejectionRemark: 'Allocation mismatch.' }],
+        userOid,
+        '127.0.0.1',
+        'jest-agent',
+        mockSession,
+      );
+
+      const docs = getInsertManyDocs(rowHistoryModel['insertMany']);
+      expect(docs[0]['snapshot']).toMatchObject({
+        rowStatus: FORM_STATUS.RETURNED_BY_PMU,
+        rejectionRemark: 'Allocation mismatch.',
       });
     });
 
@@ -299,16 +361,21 @@ describe('FcUnspentPmuRowReviewDomainService', () => {
     });
   });
 
-  describe('countActiveRowsNotYetApproved', () => {
-    it('counts active rows whose rowStatus is not UNDER_REVIEW_BY_MOHUA', async () => {
-      rowModel['countDocuments'] = jest.fn().mockReturnValue(q(2));
-      const count = await service.countActiveRowsNotYetApproved(formOid);
-      expect(rowModel['countDocuments']).toHaveBeenCalledWith({
-        form: formOid,
-        isActive: true,
-        rowStatus: { $ne: FORM_STATUS.UNDER_REVIEW_BY_MOHUA },
-      });
-      expect(count).toBe(2);
+  describe('getRowStatusTally', () => {
+    it('tallies active rows by PMU review stage', async () => {
+      rowModel['find'] = jest
+        .fn()
+        .mockReturnValue(
+          q([
+            { rowStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU },
+            { rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA },
+            { rowStatus: FORM_STATUS.RETURNED_BY_PMU },
+            { rowStatus: FORM_STATUS.RETURNED_BY_PMU },
+          ]),
+        );
+      const tally = await service.getRowStatusTally(formOid);
+      expect(rowModel['find']).toHaveBeenCalledWith({ form: formOid, isActive: true });
+      expect(tally).toEqual({ pending: 1, approved: 1, rejected: 2 });
     });
   });
 
@@ -364,11 +431,7 @@ describe('FcUnspentPmuRowReviewDomainService', () => {
   });
 
   describe('insertParentHistory', () => {
-    it('builds the unspentUlbData snapshot from current active rows, including rowStatus/rejectionRemark', async () => {
-      rowModel['find'] = jest
-        .fn()
-        .mockReturnValue(q([{ ...makeRow(), rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA, rejectionRemark: null }]));
-
+    it('writes an empty snapshot and a resnapshotted data object — a PMU review decision never edits row data, no row fetch needed', async () => {
       await service.insertParentHistory(
         makeForm(),
         FORM_STATUS.UNDER_REVIEW_BY_PMU,
@@ -384,11 +447,14 @@ describe('FcUnspentPmuRowReviewDomainService', () => {
       const historyArg = getHistoryCreateArg(historyModel['create']);
       expect(historyArg.fromStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_PMU);
       expect(historyArg.toStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
-      expect(historyArg.unspentUlbData[0]).toMatchObject({
-        rowNumber: 1,
-        rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
-        rejectionRemark: null,
+      expect(historyArg.snapshot).toEqual([]);
+      expect(historyArg.data).toEqual({
+        isFcUnspent: true,
+        fcDeclaration: null,
+        fcUnspentDeclaration: null,
+        checkboxConfirmation: true,
       });
+      expect(rowModel['find']).not.toHaveBeenCalled();
     });
 
     it('is a no-op when fromStatus equals toStatus', async () => {
@@ -407,29 +473,87 @@ describe('FcUnspentPmuRowReviewDomainService', () => {
       expect(historyModel['create']).not.toHaveBeenCalled();
       expect(rowModel['find']).not.toHaveBeenCalled();
     });
+
+    it('writes the rejection remark into history when passed', async () => {
+      await service.insertParentHistory(
+        makeForm(),
+        FORM_STATUS.UNDER_REVIEW_BY_PMU,
+        FORM_STATUS.RETURNED_BY_PMU,
+        2,
+        '14TH_FC',
+        userOid,
+        '127.0.0.1',
+        'jest-agent',
+        mockSession,
+        'Allocation mismatch.',
+      );
+
+      const historyArg = getHistoryCreateArg(historyModel['create']);
+      expect(historyArg.remarks).toBe('Allocation mismatch.');
+    });
+
+    it('omits remarks when not passed (auto-settle path)', async () => {
+      await service.insertParentHistory(
+        makeForm(),
+        FORM_STATUS.UNDER_REVIEW_BY_PMU,
+        FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+        2,
+        '14TH_FC',
+        userOid,
+        '127.0.0.1',
+        'jest-agent',
+        mockSession,
+      );
+
+      const historyArg = getHistoryCreateArg(historyModel['create']);
+      expect(historyArg.remarks).toBeUndefined();
+    });
   });
 
-  describe('maybeApproveAfterBulkAction', () => {
-    it('does not approve when rows remain not-yet-approved', async () => {
-      rowModel['countDocuments'] = jest.fn().mockReturnValue(q(1));
+  describe('maybeSettleAfterBulkAction', () => {
+    it('does not settle while a row is still pending', async () => {
+      rowModel['find'] = jest.fn().mockReturnValue(q([{ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU }]));
 
-      const result = await service.maybeApproveAfterBulkAction(makeForm(), '14TH_FC', userOid, null, null, mockSession);
+      const result = await service.maybeSettleAfterBulkAction(makeForm(), '14TH_FC', userOid, null, null, mockSession);
 
-      expect(result.approved).toBe(false);
+      expect(result.settled).toBe(false);
       expect(formModel['findOneAndUpdate']).not.toHaveBeenCalled();
     });
 
-    it('approves and writes parent history when every active row is approved', async () => {
-      rowModel['countDocuments'] = jest.fn().mockReturnValue(q(0));
-      rowModel['find'] = jest.fn().mockReturnValue(q([]));
+    it('settles at UNDER_REVIEW_BY_MOHUA when every active row is approved', async () => {
+      rowModel['find'] = jest.fn().mockReturnValue(q([{ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }]));
 
-      const result = await service.maybeApproveAfterBulkAction(makeForm(), '14TH_FC', userOid, null, null, mockSession);
+      const result = await service.maybeSettleAfterBulkAction(makeForm(), '14TH_FC', userOid, null, null, mockSession);
 
-      expect(result.approved).toBe(true);
+      expect(result.settled).toBe(true);
       expect(result.currentFormStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
       const setArg = getFindOneAndUpdateSetArg(formModel['findOneAndUpdate']);
       expect(setArg.currentFormStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
       expect(historyModel['create']).toHaveBeenCalled();
+    });
+
+    it('settles at RETURNED_BY_PMU on a mixed outcome (some approved, some rejected)', async () => {
+      rowModel['find'] = jest
+        .fn()
+        .mockReturnValue(
+          q([{ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }, { rowStatus: FORM_STATUS.RETURNED_BY_PMU }]),
+        );
+
+      const result = await service.maybeSettleAfterBulkAction(makeForm(), '14TH_FC', userOid, null, null, mockSession);
+
+      expect(result.settled).toBe(true);
+      expect(result.currentFormStatus).toBe(FORM_STATUS.RETURNED_BY_PMU);
+      const setArg = getFindOneAndUpdateSetArg(formModel['findOneAndUpdate']);
+      expect(setArg.currentFormStatus).toBe(FORM_STATUS.RETURNED_BY_PMU);
+    });
+
+    it('settles at RETURNED_BY_PMU when every active row is rejected', async () => {
+      rowModel['find'] = jest.fn().mockReturnValue(q([{ rowStatus: FORM_STATUS.RETURNED_BY_PMU }]));
+
+      const result = await service.maybeSettleAfterBulkAction(makeForm(), '14TH_FC', userOid, null, null, mockSession);
+
+      expect(result.settled).toBe(true);
+      expect(result.currentFormStatus).toBe(FORM_STATUS.RETURNED_BY_PMU);
     });
   });
 });

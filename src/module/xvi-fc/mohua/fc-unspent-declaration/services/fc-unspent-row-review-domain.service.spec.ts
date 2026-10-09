@@ -33,7 +33,7 @@ interface TestRowHistoryDoc {
   form: Types.ObjectId;
   previousStatus: unknown;
   currentStatus: unknown;
-  snapshot: Record<string, unknown>;
+  snapshot: Record<string, unknown> | null;
 }
 
 function getInsertManyDocs(mockFn: jest.Mock): TestRowHistoryDoc[] {
@@ -56,7 +56,9 @@ interface TestHistoryDoc {
   fromStatus: number;
   toStatus: number;
   auditRevision: number;
-  unspentUlbData: Array<{ rowNumber: number; rowStatus: unknown; rejectionRemark: unknown }>;
+  data: Record<string, unknown> | null;
+  snapshot: Array<{ rowNumber: number; rowStatus: unknown; rejectionRemark: unknown }>;
+  remarks?: string;
 }
 
 function getHistoryCreateArg(mockFn: jest.Mock): TestHistoryDoc {
@@ -81,6 +83,7 @@ function makeForm(overrides: Partial<FcUnspentMohuaFormLean> = {}): FcUnspentMoh
     currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
     isFcUnspent: true,
     fcDeclaration: null,
+    fcUnspentDeclaration: null,
     checkboxConfirmation: true,
     auditRevision: 1,
     ...overrides,
@@ -221,7 +224,7 @@ describe('FcUnspentRowReviewDomainService', () => {
       expect(ops[0].updateOne.update.$set['rejectionRemark']).toBe('Allocation mismatch.');
     });
 
-    it('inserts one immutable row-history entry per transition with previous/current status and snapshot', async () => {
+    it('inserts one immutable row-history entry per transition with previous/current status and a field snapshot', async () => {
       const row = makeRow({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA });
       await service.transitionRows(
         formOid,
@@ -241,11 +244,40 @@ describe('FcUnspentRowReviewDomainService', () => {
         form: formOid,
         previousStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
         currentStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
-        snapshot: expect.objectContaining({
-          rowNumber: 1,
+        snapshot: {
+          rowNumber: row.rowNumber,
+          ulbId: row.ulbId,
+          censusCode: row.censusCode,
+          sbCode: row.sbCode,
+          ulbName: row.ulbName,
+          allocationAmount: row.allocationAmount,
+          unspentAmount: row.unspentAmount,
+          previousFcUnspentBalance: row.previousFcUnspentBalance,
+          allocationPerc: row.allocationPerc,
+          eligibility: row.eligibility,
           rowStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
           rejectionRemark: null,
-        }) as Record<string, unknown>,
+        },
+      });
+    });
+
+    it('captures the rejection remark in the row-history snapshot so it survives a later edit', async () => {
+      const row = makeRow({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA });
+      await service.transitionRows(
+        formOid,
+        stateOid,
+        yearOid,
+        [{ row, newStatus: FORM_STATUS.RETURNED_BY_MOHUA, rejectionRemark: 'Allocation mismatch.' }],
+        userOid,
+        '127.0.0.1',
+        'jest-agent',
+        mockSession,
+      );
+
+      const docs = getInsertManyDocs(rowHistoryModel['insertMany']);
+      expect(docs[0]['snapshot']).toMatchObject({
+        rowStatus: FORM_STATUS.RETURNED_BY_MOHUA,
+        rejectionRemark: 'Allocation mismatch.',
       });
     });
 
@@ -367,13 +399,7 @@ describe('FcUnspentRowReviewDomainService', () => {
   });
 
   describe('insertParentHistory', () => {
-    it('builds the unspentUlbData snapshot from current active rows, including rowStatus/rejectionRemark', async () => {
-      rowModel['find'] = jest
-        .fn()
-        .mockReturnValue(
-          q([{ ...makeRow(), rowStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA, rejectionRemark: null }]),
-        );
-
+    it('writes an empty snapshot and a resnapshotted data object — a MoHUA review decision never edits row data, no row fetch needed', async () => {
       await service.insertParentHistory(
         makeForm(),
         FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
@@ -389,11 +415,14 @@ describe('FcUnspentRowReviewDomainService', () => {
       const historyArg = getHistoryCreateArg(historyModel['create']);
       expect(historyArg.fromStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
       expect(historyArg.toStatus).toBe(FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA);
-      expect(historyArg.unspentUlbData[0]).toMatchObject({
-        rowNumber: 1,
-        rowStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
-        rejectionRemark: null,
+      expect(historyArg.snapshot).toEqual([]);
+      expect(historyArg.data).toEqual({
+        isFcUnspent: true,
+        fcDeclaration: null,
+        fcUnspentDeclaration: null,
+        checkboxConfirmation: true,
       });
+      expect(rowModel['find']).not.toHaveBeenCalled();
     });
 
     it('is a no-op when fromStatus equals toStatus', async () => {
@@ -411,6 +440,41 @@ describe('FcUnspentRowReviewDomainService', () => {
 
       expect(historyModel['create']).not.toHaveBeenCalled();
       expect(rowModel['find']).not.toHaveBeenCalled();
+    });
+
+    it('writes the rejection remark into history when passed', async () => {
+      await service.insertParentHistory(
+        makeForm(),
+        FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+        FORM_STATUS.RETURNED_BY_MOHUA,
+        2,
+        '14TH_FC',
+        userOid,
+        '127.0.0.1',
+        'jest-agent',
+        mockSession,
+        'Allocation mismatch.',
+      );
+
+      const historyArg = getHistoryCreateArg(historyModel['create']);
+      expect(historyArg.remarks).toBe('Allocation mismatch.');
+    });
+
+    it('omits remarks when not passed (auto-acknowledge path)', async () => {
+      await service.insertParentHistory(
+        makeForm(),
+        FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+        FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+        2,
+        '14TH_FC',
+        userOid,
+        '127.0.0.1',
+        'jest-agent',
+        mockSession,
+      );
+
+      const historyArg = getHistoryCreateArg(historyModel['create']);
+      expect(historyArg.remarks).toBeUndefined();
     });
   });
 

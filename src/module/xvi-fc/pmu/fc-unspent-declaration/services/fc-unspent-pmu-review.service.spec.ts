@@ -204,11 +204,11 @@ describe('FcUnspentPmuReviewService', () => {
 
   describe('getWorklist', () => {
     it('blocks a STATE user', async () => {
-      await expect(service.getWorklist(yearOid.toString(), stateUser)).rejects.toThrow(ForbiddenException);
+      await expect(service.getWorklist(yearOid.toString(), {}, stateUser)).rejects.toThrow(ForbiddenException);
     });
 
     it('returns the real status/label for an active+published state with a document', async () => {
-      const result = await service.getWorklist(yearOid.toString(), pmuUser);
+      const result = await service.getWorklist(yearOid.toString(), {}, pmuUser);
       expect(result.data!.rows).toEqual([
         {
           stateId: stateOid.toString(),
@@ -223,7 +223,7 @@ describe('FcUnspentPmuReviewService', () => {
     it('synthesizes a Not Started row, updatedAt null, for an active+published state with no document at all', async () => {
       const otherStateOid = new Types.ObjectId();
       stateModel.find.mockReturnValue(qState([{ _id: otherStateOid, name: 'Kerala' }]));
-      const result = await service.getWorklist(yearOid.toString(), pmuUser);
+      const result = await service.getWorklist(yearOid.toString(), {}, pmuUser);
       expect(result.data!.rows).toEqual([
         {
           stateId: otherStateOid.toString(),
@@ -236,12 +236,12 @@ describe('FcUnspentPmuReviewService', () => {
     });
 
     it('queries the State collection filtered to isActive+isPublish+isUT:false, sorted by name', async () => {
-      await service.getWorklist(yearOid.toString(), pmuUser);
+      await service.getWorklist(yearOid.toString(), {}, pmuUser);
       expect(stateModel.find).toHaveBeenCalledWith({ isActive: true, isPublish: true, isUT: false }, { name: 1 });
     });
 
     it('keeps the isDeleted:false filter, but no longer filters the form query by status', async () => {
-      await service.getWorklist(yearOid.toString(), pmuUser);
+      await service.getWorklist(yearOid.toString(), {}, pmuUser);
       const filter = formModel['find'].mock.calls[0][0] as Record<string, unknown>;
       expect(filter).toMatchObject({ isDeleted: false });
       expect(filter).not.toHaveProperty('currentFormStatus');

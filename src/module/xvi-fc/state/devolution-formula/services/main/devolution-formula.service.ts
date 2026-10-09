@@ -544,6 +544,7 @@ export class DevolutionFormulaService {
       ip,
       userAgent,
       snapshot: submittedRowsSnapshot,
+      data: { ...formData, ulbCount: computedActiveUlbCount },
     });
 
     this.logger.log(
@@ -626,6 +627,7 @@ export class DevolutionFormulaService {
     ip?: string;
     userAgent?: string;
     snapshot?: Record<string, unknown>[] | null;
+    data?: Record<string, unknown> | null;
   }): Promise<void> {
     if (entry.fromStatus === entry.toStatus) return;
     try {
@@ -640,6 +642,7 @@ export class DevolutionFormulaService {
         ip: entry.ip,
         userAgent: entry.userAgent,
         snapshot: entry.snapshot ?? null,
+        data: entry.data ?? null,
       });
     } catch (err) {
       this.logger.error('Failed to write Devolution Formula form history', err);

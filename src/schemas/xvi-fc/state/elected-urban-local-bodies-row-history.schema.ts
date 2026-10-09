@@ -64,8 +64,10 @@ export class ElectedUrbanLocalBodiesRowHistory {
   @Prop({ type: Number, enum: ROW_REVIEW_STATUS_VALUES, required: true })
   currentStatus!: RowReviewStatus;
 
-  @Prop({ type: EulbRowHistorySnapshotSchema, required: true })
-  snapshot!: EulbRowHistorySnapshot;
+  /** Null for a pure PMU/MoHUA review decision (no data-edit capability exists at this layer) — see
+   *  pmu/elected-urban-local-bodies/CLAUDE.md's "Row snapshot is null for review-only transitions". */
+  @Prop({ type: EulbRowHistorySnapshotSchema, default: null })
+  snapshot!: EulbRowHistorySnapshot | null;
 
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
   createdBy!: Types.ObjectId;

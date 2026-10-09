@@ -55,6 +55,9 @@ PMU review controller in `xvi-fc`.
   to `currentFormStatus`.
 - Both mutating endpoints are gated by `assertCanPmuMutateForm`, which only allows
   `UNDER_REVIEW_BY_PMU` — approve/reject can't be called twice or out of sequence.
+- The history insert omits `data` entirely (never re-copies `form.data`, which neither action
+  touches) - see `common/services/CLAUDE.md`'s "Only snapshot data when it could actually have
+  changed".
 
 ## No ADRs for this module
 
@@ -72,8 +75,8 @@ in this folder is load-bearing enough to warrant a `docs/adr/`.
   (`xvifc_sfc`) and `XviFcSfcStatusHistory` (`xvifc_sfc_logs`) collections directly, via its own
   model registrations (not an import of `state/sfc-status`'s module).
 - Writes only `currentFormStatus`, `updatedBy`, and (on reject) `pmuRemarks` via `$set`. Never
-  writes `data` — the state's form payload — itself; only reads it, to snapshot into the history
-  entry's `metadata`.
+  writes or re-snapshots `data` — the state's form payload — at all; only reads it to surface in
+  the GET review response (see the "history insert omits `data`" bullet above).
 - Any change to `XviFcSfcStatus`'s field names/shape in `state/sfc-status` directly affects this
   service's `$set`/`.select()` field lists and the `PmuFormLeanWithPopulate`/`SfcStatusPmuFormLean`
   types here — there's no separate migration path to forget, but also no independence to rely on.

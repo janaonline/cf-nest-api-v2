@@ -7,6 +7,7 @@ import { assertCanPmuMutateForm, canPmuViewForm } from 'src/module/xvi-fc/common
 import { assertPmuReviewerAccess } from 'src/module/xvi-fc/common/utils/xvi-fc-reviewer-access.util';
 import { buildPmuReviewerFormPermissions } from 'src/module/xvi-fc/common/utils/xvi-fc-reviewer-permissions.util';
 import { buildPmuWorklistRows } from 'src/module/xvi-fc/common/utils/pmu-worklist.util';
+import type { GetPmuWorklistQueryDto } from 'src/module/xvi-fc/common/dto/get-pmu-worklist-query.dto';
 import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
 import { FormQuestionHydratorService } from 'src/module/xvi-fc/common/services/form-question-hydrator.service';
 import { EulbFormJsonConfigService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/form-json/elected-urban-local-bodies-form-json.service';
@@ -65,17 +66,27 @@ export class ElectedUrbanLocalBodiesPmuReviewService {
   /** Cross-state worklist: every active+published state left-joined against its EULB document (if
    *  any) for the year, with a synthesized `NOT_STARTED` row where none exists yet — see CLAUDE.md's
    *  "Worklist: left-join and synthesized NOT_STARTED" section. */
-  async getWorklist(yearId: string, user: AuthUser): Promise<XviFcApiResponse<PmuWorklistData>> {
+  async getWorklist(
+    yearId: string,
+    query: GetPmuWorklistQueryDto,
+    user: AuthUser,
+  ): Promise<XviFcApiResponse<PmuWorklistData>> {
     assertPmuReviewerAccess(user);
 
-    const rows = await buildPmuWorklistRows({
+    const { rows, page, limit, total } = await buildPmuWorklistRows({
       stateModel: this.stateModel,
       formModel: this.formModel,
       yearId,
       extraFormFilter: { formType: EULB_FORM_TYPE },
+      stateId: query.stateId,
+      status: query.status,
+      sortBy: query.sortBy,
+      sortDir: query.sortDir,
+      page: query.page,
+      limit: query.limit,
     });
 
-    return xviFcSuccess('Elected Urban Local Bodies PMU worklist fetched.', { rows });
+    return xviFcSuccess('Elected Urban Local Bodies PMU worklist fetched.', { rows }, { page, limit, total });
   }
 
   /** PMU review metadata only — no row list (see `ElectedUrbanLocalBodiesPmuRowsService.getRows`);
@@ -210,7 +221,7 @@ export class ElectedUrbanLocalBodiesPmuReviewService {
         session,
       );
 
-      const result = await this.domainService.maybeApproveAfterBulkAction(form, userOid, ip, userAgent, session);
+      const result = await this.domainService.maybeSettleAfterBulkAction(form, userOid, ip, userAgent, session);
       currentFormStatus = result.currentFormStatus;
 
       await session.commitTransaction();
@@ -297,6 +308,7 @@ export class ElectedUrbanLocalBodiesPmuReviewService {
         ip,
         userAgent,
         session,
+        trimmedRemarks,
       );
 
       await session.commitTransaction();

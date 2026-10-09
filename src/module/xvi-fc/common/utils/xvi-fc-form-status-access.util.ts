@@ -1,5 +1,6 @@
 import { ForbiddenException } from '@nestjs/common';
 import { FORM_STATUS, getFormStatusLabel } from 'src/common/constants/form-status.constants';
+import type { RowReviewStatus } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
 
 /** Statuses in which a ULB user may save or edit a ULB form.
  * Also exported as a plain array (ULB_EDITABLE_STATUS_IDS) for use cases that can't call canUlbEditForm, such as MongoDB aggregation or cross-collection status checks.
@@ -181,6 +182,31 @@ export function canPmuMutateForm(status: number): boolean {
 export function assertCanPmuMutateForm(status: number): void {
   if (!canPmuMutateForm(status)) {
     throw new ForbiddenException(`Form cannot be reviewed when status is ${getFormStatusLabel(status)}.`);
+  }
+}
+
+/**
+ * Row-level counterpart to `STATE_EDITABLE_STATUSES`, for forms with per-ULB PMU row review
+ * (Elected Urban Local Bodies, FC Unspent Declaration). A row is editable by the State only while it
+ * hasn't yet been approved — `null` (pre-submission), `RETURNED_BY_PMU`, or `RETURNED_BY_MOHUA`. Once
+ * a row reaches `UNDER_REVIEW_BY_PMU` (decision pending) or any approved-adjacent status
+ * (`UNDER_REVIEW_BY_MOHUA`/`SUBMISSION_ACKNOWLEDGED_BY_MOHUA`), it is permanently locked from State
+ * edits at this stage — this is what lets the State resume editing only the rejected rows of a mixed
+ * PMU review outcome without being able to touch already-approved ones.
+ */
+const STATE_EDITABLE_ROW_STATUSES: Set<RowReviewStatus | null> = new Set([
+  null,
+  FORM_STATUS.RETURNED_BY_PMU,
+  FORM_STATUS.RETURNED_BY_MOHUA,
+]);
+
+export function canStateEditRow(rowStatus: RowReviewStatus | null | undefined): boolean {
+  return STATE_EDITABLE_ROW_STATUSES.has(rowStatus ?? null);
+}
+
+export function assertCanStateEditRow(rowStatus: RowReviewStatus | null | undefined): void {
+  if (!canStateEditRow(rowStatus)) {
+    throw new ForbiddenException('This row has already been approved and cannot be edited.');
   }
 }
 
