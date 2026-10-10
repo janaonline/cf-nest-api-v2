@@ -46,6 +46,7 @@ export interface EulbFormGetResponseData {
   statusSummary: EulbStatusSummary | null;
   instructions: unknown[];
   meta: { version: number };
+  pmuRemarks: string | null;
 }
 
 /** One row-level error entry surfaced in the validate-excel response and the error Excel column. */
@@ -224,9 +225,11 @@ export interface EulbFormLeanDoc {
   state?: unknown;
   createdBy?: unknown;
   updatedBy?: unknown;
+  stateUpdatedBy?: unknown;
   submittedBy?: unknown;
   createdAt?: Date;
   updatedAt?: Date;
+  stateUpdatedAt?: Date;
   submittedAt?: Date;
   currentFormStatus?: number;
   ulbCount?: number;
@@ -244,4 +247,5 @@ export interface EulbFormLeanDoc {
   errorRowCount?: number;
   validationStatus?: EulbValidationStatus;
   activeDatasetVersion?: number;
+  pmuRemarks?: string | null;
 }

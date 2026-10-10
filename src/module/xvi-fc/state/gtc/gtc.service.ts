@@ -58,12 +58,15 @@ type GtcLeanDoc = {
   state?: Types.ObjectId | PopulatedNameRef;
   createdBy?: Types.ObjectId | PopulatedNameRef;
   updatedBy?: Types.ObjectId | PopulatedNameRef;
+  stateUpdatedBy?: Types.ObjectId | PopulatedNameRef;
+  stateUpdatedAt?: Date;
   submittedBy?: Types.ObjectId | PopulatedNameRef;
   createdAt?: Date;
   updatedAt?: Date;
   submittedAt?: Date;
   currentFormStatus?: number;
   data?: unknown;
+  pmuRemarks?: string | null;
 };
 
 /** Static template asset resolved off a field's `download-template` supporting action `meta`. */
@@ -115,6 +118,7 @@ export class GtcService {
       .populate('state', 'name')
       .populate('createdBy', 'name')
       .populate('updatedBy', 'name')
+      .populate('stateUpdatedBy', 'name')
       .populate('submittedBy', 'name')
       .lean<GtcLeanDoc>()
       .exec();
@@ -153,6 +157,7 @@ export class GtcService {
       actors,
       instructions: [],
       installmentAccess: this.buildInstallmentAccess(),
+      pmuRemarks: doc?.pmuRemarks ?? null,
     };
 
     return xviFcSuccess('GTC form fetched.', responseData);
@@ -190,7 +195,15 @@ export class GtcService {
       const updated = await this.model
         .findOneAndUpdate(
           { ...filter, currentFormStatus: existing.currentFormStatus },
-          { $set: { data: sanitizedPayload, currentFormStatus: FORM_STATUS.IN_PROGRESS, updatedBy: userOid } },
+          {
+            $set: {
+              data: sanitizedPayload,
+              currentFormStatus: FORM_STATUS.IN_PROGRESS,
+              updatedBy: userOid,
+              stateUpdatedBy: userOid,
+              stateUpdatedAt: new Date(),
+            },
+          },
           { new: true },
         )
         .lean()
@@ -210,11 +223,15 @@ export class GtcService {
         changedBy: userOid,
         ip,
         userAgent,
-        data: sanitizedPayload,
       });
 
+      const {
+        updatedBy: _updatedBy,
+        updatedAt: _updatedAt,
+        ...updatedWithoutAuditFields
+      } = updated as Record<string, unknown>;
       return xviFcSuccess('GTC form saved as draft.', {
-        ...updated,
+        ...updatedWithoutAuditFields,
         currentFormStatusLabel: getFormStatusLabel(FORM_STATUS.IN_PROGRESS),
       });
     }
@@ -229,6 +246,8 @@ export class GtcService {
         currentFormStatus: FORM_STATUS.IN_PROGRESS,
         createdBy: userOid,
         updatedBy: userOid,
+        stateUpdatedBy: userOid,
+        stateUpdatedAt: new Date(),
         isActive: true,
         isDeleted: false,
       });
@@ -248,11 +267,15 @@ export class GtcService {
       changedBy: userOid,
       ip,
       userAgent,
-      data: sanitizedPayload,
     });
 
+    const {
+      updatedBy: _updatedBy,
+      updatedAt: _updatedAt,
+      ...createdWithoutAuditFields
+    } = created.toObject() as Record<string, unknown>;
     return xviFcSuccess('GTC form saved as draft.', {
-      ...created.toObject(),
+      ...createdWithoutAuditFields,
       currentFormStatusLabel: getFormStatusLabel(FORM_STATUS.IN_PROGRESS),
     });
   }
@@ -306,6 +329,8 @@ export class GtcService {
               submittedBy: userOid,
               submittedAt: now,
               updatedBy: userOid,
+              stateUpdatedBy: userOid,
+              stateUpdatedAt: now,
             },
           },
           { new: true },
@@ -331,6 +356,8 @@ export class GtcService {
           submittedAt: now,
           createdBy: userOid,
           updatedBy: userOid,
+          stateUpdatedBy: userOid,
+          stateUpdatedAt: now,
           isActive: true,
           isDeleted: false,
         });
@@ -357,8 +384,9 @@ export class GtcService {
       data: sanitizedPayload,
     });
 
+    const { updatedBy: _updatedBy, updatedAt: _updatedAt, ...resultWithoutAuditFields } = result;
     return xviFcSuccess('GTC form submitted successfully.', {
-      ...result,
+      ...resultWithoutAuditFields,
       currentFormStatusLabel: getFormStatusLabel(toStatus),
     });
   }

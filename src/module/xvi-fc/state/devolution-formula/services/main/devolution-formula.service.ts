@@ -139,6 +139,7 @@ export class DevolutionFormulaService {
       .populate('state', 'name')
       .populate('createdBy', 'name')
       .populate('updatedBy', 'name')
+      .populate('stateUpdatedBy', 'name')
       .populate('submittedBy', 'name')
       .lean<DfFormLeanDoc>()
       .exec();
@@ -206,6 +207,8 @@ export class DevolutionFormulaService {
       rowEditFields,
       installmentAccess,
       meta: { version: 1 },
+      pmuRemarks: doc?.pmuRemarks ?? null,
+      mohuaRemarks: doc?.mohuaRemarks ?? null,
     };
 
     return xviFcSuccess('ULB-wise Allocation form fetched.', responseData);
@@ -276,6 +279,8 @@ export class DevolutionFormulaService {
       totalMoHUAAllocation: Math.round(grantAlloc.basic + grantAlloc.performance),
       grantAllocationRef: grantAlloc._id,
       updatedBy: userOid,
+      stateUpdatedBy: userOid,
+      stateUpdatedAt: new Date(),
       ulbCount: computedActiveUlbCount,
     };
 
@@ -482,12 +487,15 @@ export class DevolutionFormulaService {
     // PMU now reviews before MoHUA — see pmu/devolution-formula/CLAUDE.md for that hand-off.
     const toStatus = FORM_STATUS.UNDER_REVIEW_BY_PMU;
 
+    const now = new Date();
     const finalSubmitSet: Record<string, unknown> = {
       currentFormStatus: toStatus,
       isDraft: false,
-      submittedAt: new Date(),
+      submittedAt: now,
       submittedBy: userOid,
       updatedBy: userOid,
+      stateUpdatedBy: userOid,
+      stateUpdatedAt: now,
       checkboxConfirmation: dto.data.checkboxConfirmation,
       ulbCount: computedActiveUlbCount,
     };

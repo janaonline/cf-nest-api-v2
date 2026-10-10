@@ -311,7 +311,14 @@ export class ElectedUrbanLocalBodiesRowService {
             await this.formModel
               .findByIdAndUpdate(
                 formDoc._id,
-                { $set: { currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU, updatedBy: userOid } },
+                {
+                  $set: {
+                    currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU,
+                    updatedBy: userOid,
+                    stateUpdatedBy: userOid,
+                    stateUpdatedAt: new Date(),
+                  },
+                },
                 { session },
               )
               .exec();
@@ -489,6 +496,8 @@ export class ElectedUrbanLocalBodiesRowService {
         validationStatus: 'NOT_VALIDATED',
         excludedRows: [],
         updatedBy: userOid,
+        stateUpdatedBy: userOid,
+        stateUpdatedAt: new Date(),
       },
     });
 

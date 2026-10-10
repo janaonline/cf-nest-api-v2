@@ -111,6 +111,7 @@ export class FcUnspentPmuReviewService {
       .populate('state', 'name')
       .populate('createdBy', 'name')
       .populate('updatedBy', 'name')
+      .populate('stateUpdatedBy', 'name')
       .populate('submittedBy', 'name')
       .lean<PmuFormLeanWithPopulate>()
       .exec();

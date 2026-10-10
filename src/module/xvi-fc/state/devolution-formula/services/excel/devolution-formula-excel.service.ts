@@ -400,6 +400,8 @@ export class DevolutionFormulaExcelService {
       lastExcelUploadedAt: new Date(),
       lastExcelUploadedBy: userOid,
       updatedBy: userOid,
+      stateUpdatedBy: userOid,
+      stateUpdatedAt: new Date(),
       currentFormStatus: FORM_STATUS.IN_PROGRESS,
     };
 
@@ -699,6 +701,8 @@ export class DevolutionFormulaExcelService {
             duplicateUlbCount,
             validationStatus: formValidationStatus,
             updatedBy: userOid,
+            stateUpdatedBy: userOid,
+            stateUpdatedAt: new Date(),
           },
           ...(formValidationStatus === 'VALID' && { $unset: { errorExcelFile: 1 } }),
         })

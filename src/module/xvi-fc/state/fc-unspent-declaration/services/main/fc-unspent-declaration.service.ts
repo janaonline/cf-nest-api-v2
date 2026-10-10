@@ -82,6 +82,8 @@ type FcUnspentLeanDoc = XvifcActorSourceDocument & {
   fcDeclaration?: FileInfo | null;
   fcUnspentDeclaration?: FileInfo | null;
   checkboxConfirmation?: boolean;
+  pmuRemarks?: string | null;
+  mohuaRemarks?: string | null;
 };
 
 type FcUnspentExistingLean = {
@@ -133,6 +135,7 @@ export class FcUnspentDeclarationService {
       .populate('state', 'name')
       .populate('createdBy', 'name')
       .populate('updatedBy', 'name')
+      .populate('stateUpdatedBy', 'name')
       .populate('submittedBy', 'name')
       .lean<FcUnspentLeanDoc>()
       .exec();
@@ -175,6 +178,8 @@ export class FcUnspentDeclarationService {
       questions,
       rowEditFields,
       unspentUlbData,
+      pmuRemarks: doc?.pmuRemarks ?? null,
+      mohuaRemarks: doc?.mohuaRemarks ?? null,
     };
 
     return xviFcSuccess('FC Unspent Declaration form fetched.', responseData);
@@ -310,6 +315,8 @@ export class FcUnspentDeclarationService {
       currentFormStatus: FORM_STATUS.IN_PROGRESS,
       isDraft: true,
       updatedBy: userOid,
+      stateUpdatedBy: userOid,
+      stateUpdatedAt: new Date(),
     };
     if (fcDeclaration !== undefined) setDoc['fcDeclaration'] = fcDeclaration;
     if (fcUnspentDeclaration !== undefined) setDoc['fcUnspentDeclaration'] = fcUnspentDeclaration;
@@ -564,6 +571,8 @@ export class FcUnspentDeclarationService {
       submittedBy: userOid,
       submittedAt: now,
       updatedBy: userOid,
+      stateUpdatedBy: userOid,
+      stateUpdatedAt: now,
       auditRevision: newAuditRevision,
     };
     if (finalFcDeclaration !== undefined) setDoc['fcDeclaration'] = finalFcDeclaration;

@@ -25,4 +25,5 @@ export interface SfcFormGetResponseData {
    *  has ever been filed. See SfcStatusService.resolveExemptionStatusForResponse. */
   exemptionStatus: 'PENDING' | 'APPROVED' | 'REJECTED' | null;
   exemptionMohuaRemarks: string | null;
+  pmuRemarks: string | null;
 }
