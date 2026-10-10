@@ -7,11 +7,12 @@ import { State, StateDocument } from 'src/schemas/state.schema';
 export class StateService {
   constructor(@InjectModel(State.name) private readonly stateModel: Model<StateDocument>) {}
 
-  /** Lists active, published states for populating a State select/filter. */
-  findAll() {
+  /** Lists active, published states for populating a State select/filter. `excludeUT` additionally
+   *  drops Union Territories.*/
+  findAll(excludeUT?: boolean) {
     return this.stateModel
       .find(
-        { isActive: true, isPublish: true },
+        { isActive: true, isPublish: true, ...(excludeUT ? { isUT: false } : {}) },
         { name: 1, slug: 1, code: 1, regionalName: 1, censusCode: 1 },
       )
       .sort({ name: 1 })
