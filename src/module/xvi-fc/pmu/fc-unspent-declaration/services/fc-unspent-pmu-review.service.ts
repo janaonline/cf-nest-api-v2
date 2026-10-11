@@ -75,7 +75,7 @@ export class FcUnspentPmuReviewService {
   ): Promise<XviFcApiResponse<PmuWorklistData>> {
     assertPmuReviewerAccess(user);
 
-    const { rows, page, limit, total } = await buildPmuWorklistRows({
+    const { rows, summary, page, limit, total } = await buildPmuWorklistRows({
       stateModel: this.stateModel,
       formModel: this.formModel,
       yearId,
@@ -88,7 +88,7 @@ export class FcUnspentPmuReviewService {
       limit: query.limit,
     });
 
-    return xviFcSuccess('FC Unspent Declaration PMU worklist fetched.', { rows }, { page, limit, total });
+    return xviFcSuccess('FC Unspent Declaration PMU worklist fetched.', { rows, summary }, { page, limit, total });
   }
 
   /** PMU review metadata only — no row list (see `FcUnspentPmuRowsService.getRows`); view-gated by
