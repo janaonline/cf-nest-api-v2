@@ -44,6 +44,7 @@ import { RequestExemptionMohuaModule } from './mohua/request-exemption/request-e
 import { UlbEligibilityModule } from '../ulb-eligibility/ulb-eligibility.module';
 import { RemindersModule } from './common/reminders/reminders.module';
 import { XviFcCommonModule } from './common/xvi-fc-common.module';
+import { StateFormHistoryModule } from './common/form-history/state-form-history.module';
 
 @Module({
   imports: [
@@ -86,6 +87,7 @@ import { XviFcCommonModule } from './common/xvi-fc-common.module';
     UlbEligibilityModule,
     RemindersModule,
     XviFcCommonModule,
+    StateFormHistoryModule,
   ],
   controllers: [XviFcController],
   providers: [XviFcService, XviFcCacheService, XviFcCacheInterceptor],
