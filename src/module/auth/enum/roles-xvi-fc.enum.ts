@@ -7,6 +7,8 @@ export enum UserRole {
   ADMIN = 'ADMIN',
   // Must equal Role.XVIFC_PMU exactly — 'PMU' is a different, unrelated Fiscal Rankings role.
   PMU = 'XVIFC_PMU',
+  // Must equal Role.XVIFC_DOE exactly.
+  DOE = 'XVIFC_DOE',
 }
 
 export enum Scope {
@@ -15,6 +17,7 @@ export enum Scope {
   MOHUA = 'MOHUA',
   ADMIN = 'ADMIN',
   PMU = 'PMU',
+  DOE = 'DOE',
 }
 
 export enum AccessLevel {

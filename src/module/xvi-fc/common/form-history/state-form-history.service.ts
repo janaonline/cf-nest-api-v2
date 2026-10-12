@@ -13,6 +13,7 @@ import { XviFcUnspentStateFormHistory } from 'src/schemas/xvi-fc/state/fc-unspen
 import { throwXviFcValidationError, xviFcSuccess } from '../response/xvi-fc-response.util';
 import type { XviFcApiResponse } from '../response/xvi-fc-api-response';
 import { hasReviewerAccess } from '../utils/xvi-fc-reviewer-access.util';
+import { isMohuaViewScope } from '../utils/xvi-fc-scope.util';
 import {
   STATE_FORM_HISTORY_DEFAULT_PAGE_SIZE,
   STATE_FORM_HISTORY_MAX_PAGE_SIZE,
@@ -126,8 +127,9 @@ export class StateFormHistoryService {
     user: AuthUser,
     paging: { limit?: number; cursor?: string } = {},
   ): Promise<XviFcApiResponse<StateFormHistoryData>> {
-    if (!hasReviewerAccess(user, Scope.PMU) && !hasReviewerAccess(user, Scope.MOHUA)) {
-      throw new ForbiddenException('Only PMU, MoHUA or admin users may view form history.');
+    // Read-only history: PMU, MoHUA and DoE (which only views these forms) or admin.
+    if (!hasReviewerAccess(user, Scope.PMU) && !hasReviewerAccess(user, Scope.MOHUA) && !isMohuaViewScope(user)) {
+      throw new ForbiddenException('Only PMU, MoHUA, DoE or admin users may view form history.');
     }
 
     const config = this.configs[form];

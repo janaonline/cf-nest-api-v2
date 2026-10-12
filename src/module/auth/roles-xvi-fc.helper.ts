@@ -40,6 +40,12 @@ export function parseUserRole(
         accessLevel: SUBROLE_TO_ACCESS_LEVEL[xviFcSubrole ?? ''] ?? AccessLevel.VIEWER,
       };
 
+    case UserRole.DOE:
+      return {
+        scope: Scope.DOE,
+        accessLevel: SUBROLE_TO_ACCESS_LEVEL[xviFcSubrole ?? ''] ?? AccessLevel.VIEWER,
+      };
+
     default:
       // Non-XVI-FC role (e.g. USER, XVIFC_STATE) — skip scope mapping.
       return null;
