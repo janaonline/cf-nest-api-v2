@@ -263,6 +263,13 @@ describe('SfcStatusService', () => {
       );
     });
 
+    it('does not log form data on a draft save — only FINAL_SUBMIT snapshots data, matching every other xvi-fc form', async () => {
+      await service.saveDraft(validDto, adminUser, '127.0.0.1', 'jest');
+
+      const calls = historyModel['create'].mock.calls as unknown as Array<[Record<string, unknown>]>;
+      expect(calls[0][0]['data']).toBeUndefined();
+    });
+
     it('writes no history row when the form is already IN_PROGRESS (no real status change)', async () => {
       formModel['findOne'] = jest
         .fn()

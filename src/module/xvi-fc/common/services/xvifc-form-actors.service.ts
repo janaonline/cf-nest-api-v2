@@ -34,8 +34,8 @@ export class XvifcFormActorsService {
       {
         action: 'Updated by',
         designation: 'State DMA Officer',
-        by: getPopulatedName(doc?.updatedBy) ?? null,
-        date: toIsoStringOrNull(doc?.updatedAt),
+        by: getPopulatedName(doc?.stateUpdatedBy) ?? getPopulatedName(doc?.updatedBy) ?? null,
+        date: toIsoStringOrNull(doc?.stateUpdatedAt) ?? toIsoStringOrNull(doc?.updatedAt),
       },
       {
         action: 'Submitted by',

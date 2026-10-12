@@ -7,6 +7,7 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  MaxLength,
   ValidateNested,
 } from 'class-validator';
 import { SelectAllMatchingPmuRowsDto } from './select-all-matching-pmu-rows.dto';
@@ -17,6 +18,7 @@ export class PmuRowRejectionDto {
 
   @IsString()
   @IsNotEmpty()
+  @MaxLength(1000, { message: 'Remarks must not exceed 1000 characters.' })
   rejectionRemark!: string;
 }
 
@@ -57,5 +59,6 @@ export class BulkRejectPmuRowsDto {
   @IsOptional()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(1000, { message: 'Remarks must not exceed 1000 characters.' })
   rejectionRemark?: string;
 }

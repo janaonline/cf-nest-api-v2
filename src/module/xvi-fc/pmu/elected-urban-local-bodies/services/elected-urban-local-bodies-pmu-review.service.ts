@@ -76,7 +76,7 @@ export class ElectedUrbanLocalBodiesPmuReviewService {
   ): Promise<XviFcApiResponse<PmuWorklistData>> {
     assertPmuReviewerAccess(user);
 
-    const { rows, page, limit, total } = await buildPmuWorklistRows({
+    const { rows, summary, page, limit, total } = await buildPmuWorklistRows({
       stateModel: this.stateModel,
       formModel: this.formModel,
       yearId,
@@ -89,7 +89,7 @@ export class ElectedUrbanLocalBodiesPmuReviewService {
       limit: query.limit,
     });
 
-    return xviFcSuccess('Elected Urban Local Bodies PMU worklist fetched.', { rows }, { page, limit, total });
+    return xviFcSuccess('Elected Urban Local Bodies PMU worklist fetched.', { rows, summary }, { page, limit, total });
   }
 
   /** PMU review metadata only — no row list (see `ElectedUrbanLocalBodiesPmuRowsService.getRows`);
@@ -109,6 +109,7 @@ export class ElectedUrbanLocalBodiesPmuReviewService {
       .populate('state', 'name')
       .populate('createdBy', 'name')
       .populate('updatedBy', 'name')
+      .populate('stateUpdatedBy', 'name')
       .populate('submittedBy', 'name')
       .lean<PmuFormLeanWithPopulate>()
       .exec();

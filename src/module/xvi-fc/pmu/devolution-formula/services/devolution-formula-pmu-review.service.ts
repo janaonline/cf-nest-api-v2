@@ -94,12 +94,13 @@ export class DevolutionFormulaPmuReviewService {
   ): Promise<XviFcApiResponse<PmuWorklistData>> {
     assertPmuReviewerAccess(user);
 
-    const { rows, page, limit, total } = await buildPmuWorklistRows({
+    const { rows, summary, page, limit, total } = await buildPmuWorklistRows({
       stateModel: this.stateModel,
       formModel: this.formModel,
       yearId,
       installments: DF_INSTALLMENTS,
       stateId: query.stateId,
+      installment: query.installment,
       status: query.status,
       sortBy: query.sortBy,
       sortDir: query.sortDir,
@@ -107,7 +108,7 @@ export class DevolutionFormulaPmuReviewService {
       limit: query.limit,
     });
 
-    return xviFcSuccess('ULB-wise Allocation PMU worklist fetched.', { rows }, { page, limit, total });
+    return xviFcSuccess('ULB-wise Allocation PMU worklist fetched.', { rows, summary }, { page, limit, total });
   }
 
   async getReviewMetadata(
@@ -126,6 +127,7 @@ export class DevolutionFormulaPmuReviewService {
       .populate('state', 'name')
       .populate('createdBy', 'name')
       .populate('updatedBy', 'name')
+      .populate('stateUpdatedBy', 'name')
       .populate('submittedBy', 'name')
       .lean<PmuFormLeanWithPopulate>()
       .exec();

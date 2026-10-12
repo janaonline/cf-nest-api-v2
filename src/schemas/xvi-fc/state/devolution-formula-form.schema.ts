@@ -140,6 +140,12 @@ export class DevolutionFormulaForm {
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
   updatedBy!: Types.ObjectId;
 
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', default: null })
+  stateUpdatedBy?: Types.ObjectId | null;
+
+  @Prop({ type: Date, default: null })
+  stateUpdatedAt?: Date | null;
+
   @Prop({ type: Number, default: 0 })
   ulbCount!: number;
 

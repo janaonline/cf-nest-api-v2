@@ -523,7 +523,7 @@ export class RequestExemptionService {
     if (eligibleValues.includes(row.electedBodyStatus)) {
       throw new ConflictException(
         `This ULB's Elected Body status is already "${row.electedBodyStatus}" - ` +
-          `${reasonLabelById.get(EULB_FORM_ID) ?? 'Election / duly constituted ULB exemption'} can only be ` +
+          `${reasonLabelById.get(EULB_FORM_ID) ?? 'Election / ULB constitution status'} can only be ` +
           `requested when the ULB's current status doesn't already meet the requirement.`,
       );
     }

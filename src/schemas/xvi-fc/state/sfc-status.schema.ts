@@ -43,6 +43,12 @@ export class XviFcSfcStatus {
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
   updatedBy!: Types.ObjectId;
 
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', default: null })
+  stateUpdatedBy?: Types.ObjectId | null;
+
+  @Prop({ type: Date, default: null })
+  stateUpdatedAt?: Date | null;
+
   @Prop({ type: Boolean, default: true })
   isActive!: boolean;
 

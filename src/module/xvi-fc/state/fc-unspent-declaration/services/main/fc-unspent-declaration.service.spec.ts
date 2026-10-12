@@ -27,6 +27,7 @@ import { loadFcUnspentSeedDocument } from '../../constants/fc-unspent-declaratio
 import type { SaveFcUnspentDeclarationDto } from '../../dto/save-fc-unspent-declaration.dto';
 import type { FcUnspentResolvedRow } from '../../types/fc-unspent-declaration.types';
 import { FcUnspentDeclarationFormJsonService } from '../form-json/fc-unspent-declaration-form-json.service';
+import type { FcUnspentPolicy } from '../../helpers/fc-unspent-policy.helpers';
 import { FcUnspentDeclarationRowService } from '../rows/fc-unspent-declaration-row.service';
 import { FcUnspentDeclarationService } from './fc-unspent-declaration.service';
 
@@ -66,6 +67,18 @@ const stateUser = (state: Types.ObjectId = stateOid): AuthUser =>
 function makeDevolutionForm(status: number, activeDatasetVersion = 1) {
   return { _id: devolutionFormOid, currentFormStatus: status, activeDatasetVersion };
 }
+
+/** Devolution-linked, percent-of-allocation policy: what every pre-existing (linked) test below assumes. */
+const LINKED_POLICY: FcUnspentPolicy = {
+  devolutionLinked: true,
+  eligibilityRule: { type: 'MAX_PERCENT_OF_ALLOCATION', thresholdPercent: 10 },
+};
+
+/** 14th FC years: independent of Devolution, any unspent balance makes a ULB ineligible. */
+const INDEPENDENT_POLICY: FcUnspentPolicy = {
+  devolutionLinked: false,
+  eligibilityRule: { type: 'NO_UNSPENT_ALLOWED' },
+};
 
 function baseDto(data: Partial<SaveFcUnspentDeclarationDto['data']> = {}): SaveFcUnspentDeclarationDto {
   return {
@@ -193,7 +206,9 @@ describe('FcUnspentDeclarationService', () => {
       getActiveRows: jest.fn().mockResolvedValue([]),
     };
     formJsonConfigService = {
-      loadFormConfig: jest.fn().mockResolvedValue({ fields: FC_UNSPENT_STATE_FORM_JSON.data, thresholdPercent: 10 }),
+      loadFormConfig: jest
+        .fn()
+        .mockResolvedValue({ fields: FC_UNSPENT_STATE_FORM_JSON.data, thresholdPercent: 10, policy: LINKED_POLICY }),
       loadFields: jest.fn().mockResolvedValue(FC_UNSPENT_STATE_FORM_JSON.data),
     };
 
@@ -261,6 +276,73 @@ describe('FcUnspentDeclarationService', () => {
   });
 
   // ─── Devolution dependency ──────────────────────────────────────────────────
+
+  describe('independent of Devolution (policy.devolutionLinked = false, 14th FC years)', () => {
+    beforeEach(() => {
+      formJsonConfigService['loadFormConfig'] = jest.fn().mockResolvedValue({
+        fields: FC_UNSPENT_STATE_FORM_JSON.data,
+        thresholdPercent: 0,
+        policy: INDEPENDENT_POLICY,
+      });
+      // No Devolution form or dataset exists at all: today this would lock the whole form.
+      devolutionFormModel['findOne'] = jest.fn().mockReturnValue(q(null));
+    });
+
+    it('GET opens every gate, shows no blocking message, and never queries Devolution', async () => {
+      const result = await service.getForm(stateOid.toString(), yearOid.toString(), stateUser());
+      expect(devolutionFormModel['findOne']).not.toHaveBeenCalled();
+      expect(result.data!.dependency).toEqual({
+        devolutionStatus: null,
+        devolutionDatasetExists: false,
+        editableDueToDevolutionReturn: false,
+        blockingMessage: null,
+      });
+      expect(result.data!.permissions).toEqual({
+        canView: true,
+        canEdit: true,
+        canSaveDraft: true,
+        canFinalSubmit: true,
+      });
+    });
+
+    it('GET tells the client the policy so it can hide allocation columns and word the rule', async () => {
+      const result = await service.getForm(stateOid.toString(), yearOid.toString(), stateUser());
+      expect(result.data!.policy).toEqual(INDEPENDENT_POLICY);
+    });
+
+    it('saveDraft is not blocked and passes the policy (and no Devolution form) to the row service', async () => {
+      const dto = baseDto({
+        isFcUnspent: true,
+        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5, previousFcUnspentBalance: 3 }],
+      });
+      await service.saveDraft(dto, stateUser(), '127.0.0.1', 'jest');
+
+      expect(devolutionFormModel['findOne']).not.toHaveBeenCalled();
+      expect(rowService['resolveAndValidateRows']).toHaveBeenCalledWith(stateOid, dto.data.unspentUlbData, null, {
+        requireAtLeastOne: false,
+        requireCompleteRows: false,
+        policy: INDEPENDENT_POLICY,
+      });
+    });
+
+    it('finalSubmit is not blocked and passes the policy (and no Devolution form) to the row service', async () => {
+      rowService['resolveAndValidateRows'].mockResolvedValueOnce({ rows: [sampleResolvedRow], errors: {} });
+      const dto = baseDto({
+        isFcUnspent: true,
+        checkboxConfirmation: true,
+        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: 5, previousFcUnspentBalance: 3 }],
+        fcUnspentDeclaration: sampleFcUnspentDeclarationFile,
+      });
+      await service.finalSubmit(dto, stateUser(), '127.0.0.1', 'jest-agent');
+
+      expect(devolutionFormModel['findOne']).not.toHaveBeenCalled();
+      expect(rowService['resolveAndValidateRows']).toHaveBeenCalledWith(stateOid, dto.data.unspentUlbData, null, {
+        requireAtLeastOne: true,
+        requireCompleteRows: true,
+        policy: INDEPENDENT_POLICY,
+      });
+    });
+  });
 
   describe('devolution dependency', () => {
     it('grants full access when Devolution is UNDER_REVIEW_BY_PMU with an active dataset', async () => {
@@ -411,7 +493,7 @@ describe('FcUnspentDeclarationService', () => {
   it('GET sources threshold from FcUnspentDeclarationFormJsonService.loadFormConfig, keyed by yearId (single fetch, no separate lookup)', async () => {
     formJsonConfigService['loadFormConfig'] = jest
       .fn()
-      .mockResolvedValue({ fields: FC_UNSPENT_STATE_FORM_JSON.data, thresholdPercent: 0 });
+      .mockResolvedValue({ fields: FC_UNSPENT_STATE_FORM_JSON.data, thresholdPercent: 0, policy: LINKED_POLICY });
     const result = await service.getForm(stateOid.toString(), yearOid.toString(), stateUser());
     expect(formJsonConfigService['loadFormConfig']).toHaveBeenCalledWith(yearOid.toString());
     expect(formJsonConfigService['loadFormConfig']).toHaveBeenCalledTimes(1);
@@ -490,7 +572,7 @@ describe('FcUnspentDeclarationService', () => {
         stateOid,
         dto.data.unspentUlbData,
         expect.objectContaining({ _id: devolutionFormOid }),
-        { requireAtLeastOne: false, thresholdPercent: 10 },
+        { requireAtLeastOne: false, requireCompleteRows: false, policy: LINKED_POLICY },
       );
       expect(rowService['applyRows']).toHaveBeenCalledWith(
         parentOid,
@@ -499,6 +581,33 @@ describe('FcUnspentDeclarationService', () => {
         [sampleResolvedRow],
         userOid,
         undefined, // draft mode — never forces rowStatus
+        mockSession,
+      );
+    });
+
+    it('saves a Yes-branch draft whose ULB rows have no amounts yet, so the selection survives the save', async () => {
+      const ulbOnlyRow = { ...sampleResolvedRow, unspentAmount: null, previousFcUnspentBalance: null };
+      rowService['resolveAndValidateRows'].mockResolvedValueOnce({ rows: [ulbOnlyRow], errors: {} });
+      const dto = baseDto({
+        isFcUnspent: true,
+        unspentUlbData: [{ ulbId: ulbOid1.toString(), unspentAmount: null, previousFcUnspentBalance: null }],
+      });
+
+      await expect(service.saveDraft(dto, stateUser(), '127.0.0.1', 'jest')).resolves.toBeDefined();
+
+      expect(rowService['resolveAndValidateRows']).toHaveBeenCalledWith(
+        stateOid,
+        dto.data.unspentUlbData,
+        expect.anything(),
+        expect.objectContaining({ requireCompleteRows: false }),
+      );
+      expect(rowService['applyRows']).toHaveBeenCalledWith(
+        parentOid,
+        stateOid,
+        yearOid,
+        [ulbOnlyRow],
+        userOid,
+        undefined,
         mockSession,
       );
     });
@@ -740,10 +849,10 @@ describe('FcUnspentDeclarationService', () => {
       expect(formDataArg['savedUnspentUlbData']).toEqual(rows);
     });
 
-    it('final submit sources thresholdPercent from FcUnspentDeclarationFormJsonService.loadFormConfig (single fetch) and passes it to the row service', async () => {
+    it('final submit sources the policy from FcUnspentDeclarationFormJsonService.loadFormConfig (single fetch) and passes it to the row service', async () => {
       formJsonConfigService['loadFormConfig'] = jest
         .fn()
-        .mockResolvedValue({ fields: FC_UNSPENT_STATE_FORM_JSON.data, thresholdPercent: 0 });
+        .mockResolvedValue({ fields: FC_UNSPENT_STATE_FORM_JSON.data, thresholdPercent: 0, policy: LINKED_POLICY });
       rowService['resolveAndValidateRows'].mockResolvedValueOnce({ rows: [sampleResolvedRow], errors: {} });
       const dto = baseDto({
         isFcUnspent: true,
@@ -759,7 +868,7 @@ describe('FcUnspentDeclarationService', () => {
         stateOid,
         dto.data.unspentUlbData,
         expect.objectContaining({ _id: devolutionFormOid }),
-        { requireAtLeastOne: true, thresholdPercent: 0 },
+        { requireAtLeastOne: true, requireCompleteRows: true, policy: LINKED_POLICY },
       );
     });
 
@@ -1121,6 +1230,7 @@ describe('FcUnspentDeclarationService', () => {
       formJsonConfigService['loadFormConfig'] = jest.fn().mockResolvedValue({
         fields: FC_UNSPENT_STATE_FORM_JSON.data.filter((f) => f.fieldTypes[0] !== 'FC_UNSPENT_ROW_EDIT_FIELDS'),
         thresholdPercent: 10,
+        policy: LINKED_POLICY,
       });
       await expect(service.getForm(stateOid.toString(), yearOid.toString(), stateUser())).rejects.toThrow(
         'FC_UNSPENT_ROW_EDIT_FIELDS group is empty in form configuration.',

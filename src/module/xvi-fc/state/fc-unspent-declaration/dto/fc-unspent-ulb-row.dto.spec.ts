@@ -27,9 +27,35 @@ describe('FcUnspentUlbRowInputDto', () => {
     expect(await validate(build(), PIPE_OPTIONS)).toHaveLength(0);
   });
 
-  it('rejects a missing previousFcUnspentBalance', async () => {
-    const dto = build({ previousFcUnspentBalance: undefined });
-    const errors = await validate(dto, PIPE_OPTIONS);
+  // Draft saves keep a selected ULB before its figures are entered; completeness is enforced on final
+  // submit by FcUnspentDeclarationRowService, not by this DTO.
+  it('accepts a ULB-only row (both amounts null)', async () => {
+    const dto = build({ unspentAmount: null, previousFcUnspentBalance: null });
+    expect(await validate(dto, PIPE_OPTIONS)).toHaveLength(0);
+  });
+
+  it('accepts a ULB-only row (both amounts omitted)', async () => {
+    const dto = build({ unspentAmount: undefined, previousFcUnspentBalance: undefined });
+    expect(await validate(dto, PIPE_OPTIONS)).toHaveLength(0);
+  });
+
+  it('accepts a partial row (only one amount entered)', async () => {
+    expect(await validate(build({ previousFcUnspentBalance: null }), PIPE_OPTIONS)).toHaveLength(0);
+    expect(await validate(build({ unspentAmount: null }), PIPE_OPTIONS)).toHaveLength(0);
+  });
+
+  it('still rejects a missing ulbId', async () => {
+    const errors = await validate(build({ ulbId: undefined }), PIPE_OPTIONS);
+    expect(allMessages(errors).length).toBeGreaterThan(0);
+  });
+
+  it('rejects a zero unspentAmount (must be at least 1 when provided)', async () => {
+    const errors = await validate(build({ unspentAmount: 0 }), PIPE_OPTIONS);
+    expect(allMessages(errors).length).toBeGreaterThan(0);
+  });
+
+  it('rejects a decimal unspentAmount (whole Rupees only)', async () => {
+    const errors = await validate(build({ unspentAmount: 1.5 }), PIPE_OPTIONS);
     expect(allMessages(errors).length).toBeGreaterThan(0);
   });
 
