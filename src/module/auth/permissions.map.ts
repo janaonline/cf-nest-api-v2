@@ -91,7 +91,33 @@ export const XVIFC_PMU_PERMISSIONS: Record<XviFcSubrole, Permission[]> = {
     Permission.DELETE_MANAGED_USER,
   ],
   reviewer: [Permission.VIEW_STATUS_REPORTS, Permission.VIEW_DASHBOARDS, Permission.REVIEW_STATE_SUBMISSIONS_PMU],
-  viewer: [Permission.VIEW_STATUS_REPORTS, Permission.VIEW_DASHBOARDS],
+  // REVIEW_STATE_SUBMISSIONS_PMU is the read gate for the PMU review GETs — a viewer may open the forms but
+  // never decide them (approve/reject need APPROVE_STATE_SUBMISSIONS_PMU, held by admin only).
+  viewer: [Permission.VIEW_STATUS_REPORTS, Permission.VIEW_DASHBOARDS, Permission.REVIEW_STATE_SUBMISSIONS_PMU],
+};
+
+// ─── XVI-FC DoE subrole permissions (read-only copy of the MoHUA dashboard) ───
+
+// Every DoE subrole is view-only. REVIEW_STATE_SUBMISSIONS_PMU is only the read gate for the read-only form
+// screens (same as MoHUA) — DoE never holds an approve/decide permission, and DoeReadOnlyGuard rejects every
+// non-GET request for DoE except team management and its own profile (see doe-read-only.guard.ts).
+const DOE_VIEW_PERMISSIONS: Permission[] = [
+  Permission.VIEW_STATUS_REPORTS,
+  Permission.VIEW_DASHBOARDS,
+  Permission.REVIEW_STATE_SUBMISSIONS_PMU,
+];
+
+export const XVIFC_DOE_PERMISSIONS: Record<XviFcSubrole, Permission[]> = {
+  admin: [
+    ...DOE_VIEW_PERMISSIONS,
+    Permission.MANAGE_USERS,
+    Permission.VIEW_MANAGED_USERS,
+    Permission.CREATE_MANAGED_USER,
+    Permission.UPDATE_MANAGED_USER,
+    Permission.DELETE_MANAGED_USER,
+  ],
+  reviewer: DOE_VIEW_PERMISSIONS,
+  viewer: DOE_VIEW_PERMISSIONS,
 };
 
 /**
@@ -100,9 +126,10 @@ export const XVIFC_PMU_PERMISSIONS: Record<XviFcSubrole, Permission[]> = {
  * 2. STATE role  → XVIFC_STATE_PERMISSIONS[xviFcSubrole] (defaults to 'viewer' when unset).
  * 3. MoHUA role  → XVIFC_MOHUA_PERMISSIONS[xviFcSubrole] (defaults to 'viewer' when unset).
  * 4. PMU role    → XVIFC_PMU_PERMISSIONS[xviFcSubrole] (defaults to 'viewer' when unset).
- * 5. ULB role    → pending; returns [] until XVIFC_ULB_PERMISSIONS is implemented.
- * 6. Other roles → no permissions (guard blocks the request).
- * 7. Union permissionOverrides.allow, subtract permissionOverrides.deny.
+ * 5. DoE role    → XVIFC_DOE_PERMISSIONS[xviFcSubrole] (defaults to 'viewer' when unset).
+ * 6. ULB role    → pending; returns [] until XVIFC_ULB_PERMISSIONS is implemented.
+ * 7. Other roles → no permissions (guard blocks the request).
+ * 8. Union permissionOverrides.allow, subtract permissionOverrides.deny.
  */
 export function getEffectivePermissions(user: {
   role: UserRole | string;
@@ -125,6 +152,8 @@ export function getEffectivePermissions(user: {
     base = XVIFC_MOHUA_PERMISSIONS[subrole] ?? XVIFC_MOHUA_PERMISSIONS.viewer;
   } else if (user.role === UserRole.PMU || user.scope === Scope.PMU) {
     base = XVIFC_PMU_PERMISSIONS[subrole] ?? XVIFC_PMU_PERMISSIONS.viewer;
+  } else if (user.role === UserRole.DOE || user.scope === Scope.DOE) {
+    base = XVIFC_DOE_PERMISSIONS[subrole] ?? XVIFC_DOE_PERMISSIONS.viewer;
   } else {
     // ULB permission matrix is not yet implemented — ULB users carry no permissions until added.
     base = [];

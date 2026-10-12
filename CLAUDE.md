@@ -32,6 +32,11 @@ npm run migrate:xvifc-upload-block-24h   # TS-933: shortens already-active 7-day
 npm run migrate:xvifc-slb-state            # Backfills the new required `state` on existing xvifc_slb_forms docs from
                                           # their ULB (scripts/backfill-slb-state.ts). Re-runnable; `-- --dry-run` counts
                                           # and lists unresolvable (orphan) docs without writing
+npm run seed:xvifc-pmu-doe-menu           # Gives the XVIFC_PMU and DOE roles their sidebar rows (Overview, Profile > People
+                                          # and Roles, Support) for every MoHUA menu year (scripts/seed-xvifc-pmu-doe-menu.ts).
+                                          # Idempotent; `-- --dry-run` reports, `-- --year <id>` limits to one year. The side
+                                          # menu is cached with no TTL, so afterwards run DELETE xvi-fc/admin/cache/side-menu.
+                                          # Run it only once the UI with the matching routes is deployed
 ```
 
 ## Architecture
@@ -74,7 +79,8 @@ src/
 │   │                    # when it's merely been submitted.
 │   ├── mohua/           # overview (read-only cross-state endpoint: GET xvi-fc/mohua/overview/:yearId — every state's
 │   │                    # stage derived from its 5 state-condition forms' currentFormStatus + allocation (basic + performance) +
-│   │                    # expected-ULB count; MOHUA/ADMIN scope only, never cached) plus the per-state
+│   │                    # expected-ULB count; MOHUA/DOE (read-only)/ADMIN scope only, never cached — every dashboard read
+│   │                    # check goes through `isMohuaViewScope` (common/utils/xvi-fc-scope.util.ts)) plus the per-state
 │   │                    # GET xvi-fc/mohua/state/:stateId/:yearId (allocation, the 5 condition forms, per-form ULB
 │   │                    # submission counts), the state's paginated ULB list GET xvi-fc/mohua/state/:stateId/:yearId/ulbs (search,
 │   │                    # sort by ULB name/allocation, allocation from the Devolution Formula active dataset, per-form
@@ -113,7 +119,11 @@ src/
 │   │                            # `XVIFC_REMINDER_CRONS_ENABLED` and has no `send-*-now` endpoint. Never
 │   │                            # throws — a notification failure must not fail the underlying decision.
 │   └── xvi-fc.module.ts # composition root importing the feature modules above
-├── users/               # User CRUD with repository pattern
+├── users/               # User CRUD with repository pattern. The three national teams — MoHUA, PMU (`XVIFC_PMU`) and DoE
+│                        # (`XVIFC_DOE`) — share one set of team-management methods (list / invite / re-role / transfer
+│                        # Submitter / remove) parameterised by a `TeamConfig` in users.service.ts; the controller exposes
+│                        # `mohua-members`, `pmu-members`, `doe-members` (+ `invite-*-member`, `*-permission-matrix`).
+│                        # PMU/DoE matrices are generated from permissions.map.ts so they cannot drift from what is enforced
 ├── admin/
 │   ├── afs-digitization/ # AFS file processing with BullMQ queues
 │   └── ulb-types/       # ADMIN-only CRUD for the `ulbtypes` reference-data collection (in particular
@@ -162,6 +172,8 @@ When defining models that belong to the digitization DB, use `MongooseModule.for
 
 `RolesGuard` reads `@Roles()` metadata; if no metadata is set the route is accessible to any authenticated user.
 
+**DoE (`XVIFC_DOE`, scope `DOE`) is a read-only copy of the MoHUA dashboard.** Its permission table (`XVIFC_DOE_PERMISSIONS`) holds only view permissions — plus `REVIEW_STATE_SUBMISSIONS_PMU`, which is just the read gate for the read-only form screens — and the admin (Submitter) additionally manages the DoE team. Because ~50 write endpoints have no decorator-level role check and rely on service-side checks, `DoeReadOnlyGuard` (registered right after `JwtAuthGuard`, `auth/guards/doe-read-only.guard.ts`) rejects every non-GET request from a DoE user except an explicit allowlist (own session/profile/notifications, DoE team management) — this also covers the unguarded `POST file/signed-url`. A new endpoint that a DoE user must be able to *write* has to be added to that allowlist; one a DoE user must *read* needs `isMohuaViewScope` wherever MoHUA's read is allowed (and wherever MoHUA's read skips an exemption-stub write).
+
 ### Response Shape
 
 `ResponseTransformInterceptor` wraps every response:
@@ -200,7 +212,7 @@ Registered in `AppModule` and available everywhere:
   instances, e.g. `UlbEligibilityService`'s reference-data cache)
 - `ThrottlerModule` (60 req / 60s window; override per-route with `@Throttle()`)
 - `RedisModule` (global, inject `RedisService` to access the ioredis client)
-- `APP_GUARD`: `JwtAuthGuard` then `ThrottlerGuard` (order matters)
+- `APP_GUARD`: `JwtAuthGuard`, then `DoeReadOnlyGuard`, then `ThrottlerGuard` (order matters — the DoE guard reads `request.user`)
 - `APP_INTERCEPTOR`: `ResponseTransformInterceptor`
 - `APP_FILTER`: `HttpExceptionFilter`
 

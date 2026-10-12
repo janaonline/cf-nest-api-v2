@@ -12,6 +12,7 @@ import {
   canUlbEditForm,
 } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
 import { resolveStateScopeFilter } from 'src/module/xvi-fc/common/utils/xvi-fc-scope-filter.util';
+import { isMohuaViewScope } from 'src/module/xvi-fc/common/utils/xvi-fc-scope.util';
 import { toObjectIdString } from 'src/common/utils/objectid.util';
 import { escapeRegex } from 'src/common/utils/regex.util';
 import { S3Service } from 'src/core/s3/s3.service';
@@ -461,10 +462,10 @@ export class DurService {
 
     // xvi-fc dynamic year access: no record yet - if this ULB is exempted, materialize a stub
     // instead of showing a blank form. Never touches an existing record (see `if (!dur)` above).
-    // MoHUA only views: both of these can write (create or delete a stub), so they never run for it.
+    // MoHUA and DoE only view: both of these can write (create or delete a stub), so they never run for them.
     if (!dur) {
-      if (user.scope !== Scope.MOHUA) dur = await this.materializeExemptionStubIfNeeded(ulbId, designYearId, user);
-    } else if (dur.isExemptionStub && user.scope !== Scope.MOHUA) {
+      if (!isMohuaViewScope(user)) dur = await this.materializeExemptionStubIfNeeded(ulbId, designYearId, user);
+    } else if (dur.isExemptionStub && !isMohuaViewScope(user)) {
       // Existing doc is a stub - an admin may have since undone the exemption. Re-check live state.
       dur = await this.revalidateExemptionStubIfNeeded(dur, ulbId, designYearId);
     }
