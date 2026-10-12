@@ -51,6 +51,13 @@ export const MOHUA_OVERVIEW_SLB_SUBMITTED_STATUSES: ReadonlySet<number> = new Se
 /** The five state conditions the Overview tracks are the 1st instalment's. */
 export const MOHUA_OVERVIEW_INSTALMENT = 1;
 
+/**
+ * Codes of states that exist only for testing (the "TEST STATE" record is present in every environment, prod
+ * included, with XVI-FC access switched on so test State users can log in). They never appear in the overview.
+ * Excluded here rather than by flipping `accessToXVFC`, which the login also reads and would lock those users out.
+ */
+export const MOHUA_OVERVIEW_EXCLUDED_STATE_CODES: readonly string[] = ['TSS'];
+
 export const RUPEES_PER_CRORE = 10_000_000;
 
 // TODO: hard-coded national figures (in crore) — no source collection holds them yet. Replace once

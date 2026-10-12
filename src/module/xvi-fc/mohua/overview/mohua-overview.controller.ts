@@ -7,6 +7,7 @@ import { PermissionGuard } from 'src/module/auth/permission.guard';
 import { RequirePermissions } from 'src/module/auth/require-permissions.decorator';
 import { ParseObjectIdPipe } from 'src/common/pipes/parse-object-id.pipe';
 import { xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
+import { isMohuaViewScope } from 'src/module/xvi-fc/common/utils/xvi-fc-scope.util';
 import { MohuaOverviewService } from './mohua-overview.service';
 
 @ApiTags('XVI-FC - MoHUA Overview')
@@ -20,8 +21,8 @@ export class MohuaOverviewController {
   @UseGuards(PermissionGuard)
   @RequirePermissions(Permission.VIEW_STATUS_REPORTS)
   async getOverview(@Param('yearId', ParseObjectIdPipe) yearId: string, @CurrentUser() user: AuthUser) {
-    // STATE users also hold VIEW_STATUS_REPORTS, but this view spans every state — MoHUA/ADMIN only.
-    if (user.scope !== Scope.MOHUA && user.scope !== Scope.ADMIN) {
+    // STATE users also hold VIEW_STATUS_REPORTS, but this view spans every state — MoHUA/DoE (read-only)/ADMIN only.
+    if (!isMohuaViewScope(user) && user.scope !== Scope.ADMIN) {
       throw new ForbiddenException('Access denied');
     }
     return xviFcSuccess('MoHUA overview fetched.', await this.overviewService.getOverview(yearId));

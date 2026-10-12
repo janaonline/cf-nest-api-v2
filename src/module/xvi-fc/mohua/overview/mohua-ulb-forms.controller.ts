@@ -7,6 +7,7 @@ import { PermissionGuard } from 'src/module/auth/permission.guard';
 import { RequirePermissions } from 'src/module/auth/require-permissions.decorator';
 import { ParseObjectIdPipe } from 'src/common/pipes/parse-object-id.pipe';
 import { xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
+import { isMohuaViewScope } from 'src/module/xvi-fc/common/utils/xvi-fc-scope.util';
 import { MohuaUlbFormsService } from './mohua-ulb-forms.service';
 
 @ApiTags('XVI-FC - MoHUA ULB Forms')
@@ -24,8 +25,8 @@ export class MohuaUlbFormsController {
     @Param('yearId', ParseObjectIdPipe) yearId: string,
     @CurrentUser() user: AuthUser,
   ) {
-    // STATE users also hold VIEW_STATUS_REPORTS, but this view reads any ULB — MoHUA/ADMIN only.
-    if (user.scope !== Scope.MOHUA && user.scope !== Scope.ADMIN) {
+    // STATE users also hold VIEW_STATUS_REPORTS, but this view reads any ULB — MoHUA/DoE (read-only)/ADMIN only.
+    if (!isMohuaViewScope(user) && user.scope !== Scope.ADMIN) {
       throw new ForbiddenException('Access denied');
     }
     return xviFcSuccess('MoHUA ULB forms fetched.', await this.ulbFormsService.get(ulbId, yearId));

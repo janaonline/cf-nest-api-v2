@@ -31,6 +31,7 @@ import {
 import { toObjectIdString } from 'src/common/utils/objectid.util';
 import { escapeRegex } from 'src/common/utils/regex.util';
 import { resolveStateScopeFilter } from 'src/module/xvi-fc/common/utils/xvi-fc-scope-filter.util';
+import { isMohuaViewScope } from 'src/module/xvi-fc/common/utils/xvi-fc-scope.util';
 import {
   canStateReviewForm,
   canStateUndoFormApproval,
@@ -891,9 +892,9 @@ export class BankAccountService {
       return normalizedRequestedUlbId;
     }
 
-    if (user.scope === Scope.ADMIN || user.scope === Scope.MOHUA) {
+    if (user.scope === Scope.ADMIN || isMohuaViewScope(user)) {
       if (!normalizedRequestedUlbId) {
-        throw new BadRequestException('ulbId is required for ADMIN and MoHUA users.');
+        throw new BadRequestException('ulbId is required for ADMIN, MoHUA and DoE users.');
       }
       return normalizedRequestedUlbId;
     }
@@ -906,8 +907,8 @@ export class BankAccountService {
 
     if (user.scope === Scope.ADMIN) return;
 
-    // MoHUA is a central role (not scoped to a state) and only ever views the bank account.
-    if (user.scope === Scope.MOHUA) {
+    // MoHUA and DoE are central roles (not scoped to a state) and only ever view the bank account.
+    if (isMohuaViewScope(user)) {
       if (!getEffectivePermissions(user).includes(Permission.VIEW_STATUS_REPORTS)) {
         throw new ForbiddenException('You do not have permission to view bank account forms.');
       }

@@ -1,6 +1,7 @@
 import { ForbiddenException } from '@nestjs/common';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
+import { isMohuaViewScope } from './xvi-fc-scope.util';
 
 /**
  * ADMIN bypasses every reviewer scope, same as it bypasses state scope in `hasStateAccess`.
@@ -30,13 +31,14 @@ export function assertPmuReviewerAccess(user: AuthUser): void {
   assertReviewerAccess(user, Scope.PMU, PMU_REVIEWER_FORBIDDEN_MESSAGE);
 }
 
-export const PMU_VIEWER_FORBIDDEN_MESSAGE = 'Only PMU, MoHUA or admin users may view state submissions under review.';
+export const PMU_VIEWER_FORBIDDEN_MESSAGE =
+  'Only PMU, MoHUA, DoE or admin users may view state submissions under review.';
 
 /**
- * Read-only access to PMU review data: PMU and admin as for `assertPmuReviewerAccess`, plus MoHUA,
- * which only views these forms (it never approves or returns them). Used only by the review-metadata
+ * Read-only access to PMU review data: PMU and admin as for `assertPmuReviewerAccess`, plus MoHUA and DoE,
+ * which only view these forms (they never approve or return them). Used only by the review-metadata
  * and rows GETs — worklists, approve/reject and bulk row actions keep `assertPmuReviewerAccess`.
  */
 export function assertPmuOrMohuaViewerAccess(user: AuthUser): void {
-  if (user.scope !== Scope.MOHUA) assertReviewerAccess(user, Scope.PMU, PMU_VIEWER_FORBIDDEN_MESSAGE);
+  if (!isMohuaViewScope(user)) assertReviewerAccess(user, Scope.PMU, PMU_VIEWER_FORBIDDEN_MESSAGE);
 }
