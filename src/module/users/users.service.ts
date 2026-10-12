@@ -21,7 +21,11 @@ import { State, StateDocument } from 'src/schemas/state.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { Permission, Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { Role } from 'src/module/auth/enum/role.enum';
-import { getEffectivePermissions } from 'src/module/auth/permissions.map';
+import {
+  XVIFC_DOE_PERMISSIONS,
+  XVIFC_PMU_PERMISSIONS,
+  getEffectivePermissions,
+} from 'src/module/auth/permissions.map';
 import { UpdateProfileContactsDto } from './dto/update-profile-contacts.dto';
 import { ProfileContactsResponseDto } from './dto/profile-contacts-response.dto';
 import { InviteStateMemberDto } from './dto/invite-state-member.dto';
@@ -177,6 +181,70 @@ const MOHUA_MATRIX: PermissionMatrixRow[] = [
   { label: 'Manage team', permissionKey: Permission.MANAGE_USERS, admin: true, reviewer: false, viewer: false },
 ];
 
+/**
+ * Display rows derived from the real permission table, so the matrix shown on the "People and Roles" page
+ * can never drift from what the API actually enforces (the hand-written STATE/MoHUA matrices above can).
+ */
+function buildPermissionMatrix(
+  table: Record<'admin' | 'reviewer' | 'viewer', Permission[]>,
+  rows: { label: string; permissionKey: Permission }[],
+): PermissionMatrixRow[] {
+  return rows.map(({ label, permissionKey }) => ({
+    label,
+    permissionKey,
+    admin: table.admin.includes(permissionKey),
+    reviewer: table.reviewer.includes(permissionKey),
+    viewer: table.viewer.includes(permissionKey),
+  }));
+}
+
+const PMU_MATRIX = buildPermissionMatrix(XVIFC_PMU_PERMISSIONS, [
+  { label: 'View status and reports', permissionKey: Permission.VIEW_STATUS_REPORTS },
+  { label: 'View dashboards', permissionKey: Permission.VIEW_DASHBOARDS },
+  { label: 'View state submissions', permissionKey: Permission.REVIEW_STATE_SUBMISSIONS_PMU },
+  { label: 'Approve / return state submissions', permissionKey: Permission.APPROVE_STATE_SUBMISSIONS_PMU },
+  { label: 'Manage team', permissionKey: Permission.MANAGE_USERS },
+]);
+
+const DOE_MATRIX = buildPermissionMatrix(XVIFC_DOE_PERMISSIONS, [
+  { label: 'View status and reports', permissionKey: Permission.VIEW_STATUS_REPORTS },
+  { label: 'View dashboards', permissionKey: Permission.VIEW_DASHBOARDS },
+  { label: 'View state submissions (read-only)', permissionKey: Permission.REVIEW_STATE_SUBMISSIONS_PMU },
+  { label: 'Manage team', permissionKey: Permission.MANAGE_USERS },
+]);
+
+// ─── Central teams (MoHUA, PMU, DoE) ────────────────────────────────────────
+
+/** What differs between the national teams that share the team-management methods below. */
+interface TeamConfig {
+  /** The `role` stored on every member of this team. */
+  role: Role;
+  /** Short name used in error messages and the invite subject, e.g. "MoHUA". */
+  label: string;
+  /** Full organisation name shown in the invite email. */
+  orgName: string;
+  inviteTemplate: string;
+}
+
+const MOHUA_TEAM: TeamConfig = {
+  role: Role.MoHUA,
+  label: 'MoHUA',
+  orgName: 'Ministry of Housing and Urban Affairs (MoHUA)',
+  inviteTemplate: './mohua-member-invite',
+};
+const PMU_TEAM: TeamConfig = {
+  role: Role.XVIFC_PMU,
+  label: 'PMU',
+  orgName: 'Programme Management Unit (PMU)',
+  inviteTemplate: './xvifc-team-invite',
+};
+const DOE_TEAM: TeamConfig = {
+  role: Role.XVIFC_DOE,
+  label: 'DoE',
+  orgName: 'Department of Expenditure (DoE)',
+  inviteTemplate: './xvifc-team-invite',
+};
+
 // ─── Service ─────────────────────────────────────────────────────────────────
 
 @Injectable()
@@ -218,7 +286,13 @@ export class UsersService {
    * recipient category in email-reminders.service.ts) — parseUserRole() (roles-xvi-fc.helper.ts)
    * has no case for them and returns scope=null, so they never consult xviFcSubrole at all.
    */
-  private static readonly SUBROLE_AWARE_ROLES: ReadonlySet<Role> = new Set([Role.STATE, Role.ULB, Role.MoHUA]);
+  private static readonly SUBROLE_AWARE_ROLES: ReadonlySet<Role> = new Set([
+    Role.STATE,
+    Role.ULB,
+    Role.MoHUA,
+    Role.XVIFC_PMU,
+    Role.XVIFC_DOE,
+  ]);
 
   private static readonly ADMIN_SUBROLE_TO_XVIFC_SUBROLE: Record<AdminSubRole, 'admin' | 'reviewer' | 'viewer'> = {
     ADMIN: 'admin',
@@ -1140,13 +1214,68 @@ export class UsersService {
     }));
   }
 
-  async getMohuaMembers(requester: AuthUser): Promise<StateMemberResponseDto[]> {
-    if ((requester.role as string) !== Role.MoHUA) {
-      throw new ForbiddenException('Only MoHUA team members can view this list');
+  // ─── Central team management (MoHUA, PMU, DoE) ─────────────────────────────
+  // The three national teams have no state/ULB split and identical rules: the Submitter (xviFcSubrole
+  // 'admin') invites, re-roles, hands over to and removes Reviewers/Viewers. One set of methods serves all
+  // three, parameterised by a TeamConfig; MoHUA's public methods keep their original names and messages.
+
+  getMohuaMembers(requester: AuthUser): Promise<StateMemberResponseDto[]> {
+    return this.getTeamMembers(MOHUA_TEAM, requester);
+  }
+  getPmuMembers(requester: AuthUser): Promise<StateMemberResponseDto[]> {
+    return this.getTeamMembers(PMU_TEAM, requester);
+  }
+  getDoeMembers(requester: AuthUser): Promise<StateMemberResponseDto[]> {
+    return this.getTeamMembers(DOE_TEAM, requester);
+  }
+
+  inviteMohuaMember(dto: InviteMohuaMemberDto, requester: AuthUser): Promise<StateMemberResponseDto> {
+    return this.inviteTeamMember(MOHUA_TEAM, dto, requester);
+  }
+  invitePmuMember(dto: InviteMohuaMemberDto, requester: AuthUser): Promise<StateMemberResponseDto> {
+    return this.inviteTeamMember(PMU_TEAM, dto, requester);
+  }
+  inviteDoeMember(dto: InviteMohuaMemberDto, requester: AuthUser): Promise<StateMemberResponseDto> {
+    return this.inviteTeamMember(DOE_TEAM, dto, requester);
+  }
+
+  updateMohuaMemberSubrole(id: string, dto: UpdateXviFcSubroleDto, requester: AuthUser): Promise<{ message: string }> {
+    return this.updateTeamMemberSubrole(MOHUA_TEAM, id, dto, requester);
+  }
+  updatePmuMemberSubrole(id: string, dto: UpdateXviFcSubroleDto, requester: AuthUser): Promise<{ message: string }> {
+    return this.updateTeamMemberSubrole(PMU_TEAM, id, dto, requester);
+  }
+  updateDoeMemberSubrole(id: string, dto: UpdateXviFcSubroleDto, requester: AuthUser): Promise<{ message: string }> {
+    return this.updateTeamMemberSubrole(DOE_TEAM, id, dto, requester);
+  }
+
+  transferMohuaSubmitter(dto: TransferSubmitterDto, requester: AuthUser): Promise<{ message: string }> {
+    return this.transferTeamSubmitter(MOHUA_TEAM, dto, requester);
+  }
+  transferPmuSubmitter(dto: TransferSubmitterDto, requester: AuthUser): Promise<{ message: string }> {
+    return this.transferTeamSubmitter(PMU_TEAM, dto, requester);
+  }
+  transferDoeSubmitter(dto: TransferSubmitterDto, requester: AuthUser): Promise<{ message: string }> {
+    return this.transferTeamSubmitter(DOE_TEAM, dto, requester);
+  }
+
+  softDeleteMohuaMember(id: string, requester: AuthUser): Promise<{ message: string }> {
+    return this.softDeleteTeamMember(MOHUA_TEAM, id, requester);
+  }
+  softDeletePmuMember(id: string, requester: AuthUser): Promise<{ message: string }> {
+    return this.softDeleteTeamMember(PMU_TEAM, id, requester);
+  }
+  softDeleteDoeMember(id: string, requester: AuthUser): Promise<{ message: string }> {
+    return this.softDeleteTeamMember(DOE_TEAM, id, requester);
+  }
+
+  private async getTeamMembers(team: TeamConfig, requester: AuthUser): Promise<StateMemberResponseDto[]> {
+    if ((requester.role as string) !== team.role) {
+      throw new ForbiddenException(`Only ${team.label} team members can view this list`);
     }
 
     const users = await this.userModel
-      .find({ role: Role.MoHUA, isXviFcdeleted: { $ne: true }, isDeleted: false })
+      .find({ role: team.role, isXviFcdeleted: { $ne: true }, isDeleted: false })
       .select('_id name mobile email designation xviFcSubrole isActive isXVIFCProfileVerified lastLoginAt')
       .lean()
       .exec();
@@ -1163,9 +1292,13 @@ export class UsersService {
     }));
   }
 
-  async inviteMohuaMember(dto: InviteMohuaMemberDto, requester: AuthUser): Promise<StateMemberResponseDto> {
-    if ((requester.role as string) !== Role.MoHUA || requester.xviFcSubrole !== 'admin') {
-      throw new ForbiddenException('Only the MoHUA Submitter can invite new members');
+  private async inviteTeamMember(
+    team: TeamConfig,
+    dto: InviteMohuaMemberDto,
+    requester: AuthUser,
+  ): Promise<StateMemberResponseDto> {
+    if ((requester.role as string) !== team.role || requester.xviFcSubrole !== 'admin') {
+      throw new ForbiddenException(`Only the ${team.label} Submitter can invite new members`);
     }
 
     await this.assertInviteEmailIsDeliverable(dto.email);
@@ -1204,7 +1337,7 @@ export class UsersService {
         );
       }
 
-      return this.createFreshMohuaMember(dto, xviFcSubrole, requester);
+      return this.createFreshTeamMember(team, dto, xviFcSubrole, requester);
     }
 
     if (action === 'restore') {
@@ -1215,7 +1348,7 @@ export class UsersService {
 
       if (!toRestore) {
         // Already restored by another request — create fresh
-        return this.createFreshMohuaMember(dto, xviFcSubrole, requester);
+        return this.createFreshTeamMember(team, dto, xviFcSubrole, requester);
       }
 
       const placeholderPassword = this.generatePlaceholderPassword();
@@ -1229,7 +1362,7 @@ export class UsersService {
               name: dto.name,
               mobile: dto.mobile,
               designation: dto.designation,
-              role: Role.MoHUA,
+              role: team.role,
               xviFcSubrole,
               isXviFcdeleted: false,
               isDeleted: false,
@@ -1265,14 +1398,15 @@ export class UsersService {
         );
       }
 
-      await this.queueMohuaInviteEmail(dto, requester);
-      return this.toMohuaMemberDto(restored, dto);
+      await this.queueTeamInviteEmail(team, dto, requester);
+      return this.toTeamMemberDto(restored, dto);
     }
 
     throw new BadRequestException('Invalid action');
   }
 
-  private async createFreshMohuaMember(
+  private async createFreshTeamMember(
+    team: TeamConfig,
     dto: InviteMohuaMemberDto,
     xviFcSubrole: 'reviewer' | 'viewer',
     requester: AuthUser,
@@ -1285,7 +1419,7 @@ export class UsersService {
       email: dto.email,
       mobile: dto.mobile,
       designation: dto.designation,
-      role: Role.MoHUA,
+      role: team.role,
       xviFcSubrole,
       createdBy: new Types.ObjectId(String(requester._id)),
       status: 'APPROVED',
@@ -1299,33 +1433,35 @@ export class UsersService {
       isNewUser: true,
     });
 
-    await this.queueMohuaInviteEmail(dto, requester);
-    return this.toMohuaMemberDto(created, dto);
+    await this.queueTeamInviteEmail(team, dto, requester);
+    return this.toTeamMemberDto(created, dto);
   }
 
-  private async queueMohuaInviteEmail(dto: InviteMohuaMemberDto, requester: AuthUser): Promise<void> {
+  private async queueTeamInviteEmail(team: TeamConfig, dto: InviteMohuaMemberDto, requester: AuthUser): Promise<void> {
     const { loginUrl, resetPasswordUrl } = buildPortalAuthUrls(this.configService, PORTAL_INVITE_LOGIN_TYPE);
     this.emailQueueService
       .addEmailJob({
         to: dto.email,
-        subject: 'You have been invited to the XVI Finance Commission Portal (MoHUA)',
-        templateName: './mohua-member-invite',
+        subject: `You have been invited to the XVI Finance Commission Portal (${team.label})`,
+        templateName: team.inviteTemplate,
         mailData: {
           name: dto.name,
           email: dto.email,
           mobile: dto.mobile,
           role: dto.subRole === 'EDITOR' ? 'Reviewer' : 'Viewer',
-          invitedBy: String(requester['name'] ?? 'MoHUA Submitter'),
+          invitedBy: String(requester['name'] ?? `${team.label} Submitter`),
+          teamLabel: team.label,
+          teamName: team.orgName,
           loginUrl,
           resetPasswordUrl,
         },
       })
       .catch((err: unknown) => {
-        this.logger.error(`Failed to queue MoHUA member invite email to ${dto.email}:`, err);
+        this.logger.error(`Failed to queue ${team.label} member invite email to ${dto.email}:`, err);
       });
   }
 
-  private toMohuaMemberDto(user: { _id: unknown }, dto: InviteMohuaMemberDto): StateMemberResponseDto {
+  private toTeamMemberDto(user: { _id: unknown }, dto: InviteMohuaMemberDto): StateMemberResponseDto {
     return {
       _id: String(user._id),
       name: dto.name,
@@ -1339,15 +1475,16 @@ export class UsersService {
     };
   }
 
-  async updateMohuaMemberSubrole(
+  private async updateTeamMemberSubrole(
+    team: TeamConfig,
     targetUserId: string,
     dto: UpdateXviFcSubroleDto,
     requester: AuthUser,
   ): Promise<{ message: string }> {
     if (!Types.ObjectId.isValid(targetUserId)) throw new BadRequestException('Invalid user ID');
 
-    if ((requester.role as string) !== Role.MoHUA || requester.xviFcSubrole !== 'admin') {
-      throw new ForbiddenException('Only the MoHUA Submitter can change member roles');
+    if ((requester.role as string) !== team.role || requester.xviFcSubrole !== 'admin') {
+      throw new ForbiddenException(`Only the ${team.label} Submitter can change member roles`);
     }
 
     const targetUser = await this.userModel
@@ -1357,8 +1494,8 @@ export class UsersService {
       .exec();
 
     if (!targetUser) throw new NotFoundException('User not found');
-    if ((targetUser.role as string) !== Role.MoHUA) {
-      throw new BadRequestException('Sub-role updates are only supported for MoHUA users');
+    if ((targetUser.role as string) !== team.role) {
+      throw new BadRequestException(`Sub-role updates are only supported for ${team.label} users`);
     }
     if (targetUser.xviFcSubrole === 'admin') {
       throw new BadRequestException(
@@ -1372,11 +1509,15 @@ export class UsersService {
     return { message: 'Sub-role updated successfully' };
   }
 
-  async transferMohuaSubmitter(dto: TransferSubmitterDto, requester: AuthUser): Promise<{ message: string }> {
+  private async transferTeamSubmitter(
+    team: TeamConfig,
+    dto: TransferSubmitterDto,
+    requester: AuthUser,
+  ): Promise<{ message: string }> {
     if (!Types.ObjectId.isValid(dto.toUserId)) throw new BadRequestException('Invalid toUserId');
 
-    if ((requester.role as string) !== Role.MoHUA || requester.xviFcSubrole !== 'admin') {
-      throw new ForbiddenException('Only the MoHUA Submitter can transfer ownership');
+    if ((requester.role as string) !== team.role || requester.xviFcSubrole !== 'admin') {
+      throw new ForbiddenException(`Only the ${team.label} Submitter can transfer ownership`);
     }
 
     const newOwner = await this.userModel
@@ -1386,11 +1527,11 @@ export class UsersService {
       .exec();
 
     if (!newOwner) throw new NotFoundException('Target user not found');
-    if ((newOwner.role as string) !== Role.MoHUA) {
-      throw new BadRequestException('Target must be a MoHUA user');
+    if ((newOwner.role as string) !== team.role) {
+      throw new BadRequestException(`Target must be a ${team.label} user`);
     }
     if (newOwner.xviFcSubrole === 'admin') {
-      throw new BadRequestException('Target is already the MoHUA Submitter');
+      throw new BadRequestException(`Target is already the ${team.label} Submitter`);
     }
     if (!(newOwner as Record<string, unknown>)['isXVIFCProfileVerified']) {
       throw new BadRequestException(
@@ -1410,11 +1551,15 @@ export class UsersService {
     return { message: 'Ownership transferred successfully. You are now an Editor.' };
   }
 
-  async softDeleteMohuaMember(targetUserId: string, requester: AuthUser): Promise<{ message: string }> {
+  private async softDeleteTeamMember(
+    team: TeamConfig,
+    targetUserId: string,
+    requester: AuthUser,
+  ): Promise<{ message: string }> {
     if (!Types.ObjectId.isValid(targetUserId)) throw new BadRequestException('Invalid user ID');
 
-    if ((requester.role as string) !== Role.MoHUA || requester.xviFcSubrole !== 'admin') {
-      throw new ForbiddenException('Only the MoHUA Submitter can remove members');
+    if ((requester.role as string) !== team.role || requester.xviFcSubrole !== 'admin') {
+      throw new ForbiddenException(`Only the ${team.label} Submitter can remove members`);
     }
 
     if (targetUserId === String(requester._id)) {
@@ -1428,8 +1573,8 @@ export class UsersService {
       .exec();
 
     if (!targetUser) throw new NotFoundException('User not found');
-    if ((targetUser.role as string) !== Role.MoHUA) {
-      throw new BadRequestException('Can only remove MoHUA team members');
+    if ((targetUser.role as string) !== team.role) {
+      throw new BadRequestException(`Can only remove ${team.label} team members`);
     }
     if (targetUser.xviFcSubrole === 'admin') {
       throw new BadRequestException('Cannot remove the Submitter. Transfer ownership first.');
@@ -1477,6 +1622,14 @@ export class UsersService {
 
   getMohuaPermissionMatrix(): PermissionMatrixRow[] {
     return MOHUA_MATRIX;
+  }
+
+  getPmuPermissionMatrix(): PermissionMatrixRow[] {
+    return PMU_MATRIX;
+  }
+
+  getDoePermissionMatrix(): PermissionMatrixRow[] {
+    return DOE_MATRIX;
   }
 
   /**

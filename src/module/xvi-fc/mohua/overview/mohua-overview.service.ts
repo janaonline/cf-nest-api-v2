@@ -9,6 +9,7 @@ import { MohuaOverviewUlbProgressService } from './mohua-overview-ulb-progress.s
 import { MohuaStateConditionsService } from './mohua-state-conditions.service';
 import {
   MOHUA_OVERVIEW_ANNUAL_ALLOCATION_CRORE,
+  MOHUA_OVERVIEW_EXCLUDED_STATE_CODES,
   MOHUA_OVERVIEW_INSTALMENT_1_CRORE,
   MOHUA_OVERVIEW_STAGE,
 } from './mohua-overview.constants';
@@ -19,7 +20,7 @@ type LeanState = { _id: Types.ObjectId; name: string; code: string; slug?: strin
 type LeanAllocation = { stateId: Types.ObjectId; basic: number; performance: number };
 
 /**
- * Cross-state overview for MoHUA: every active state (union territories excluded) with its five condition-form statuses,
+ * Cross-state overview for MoHUA: every active state (union territories and test states excluded) with its five condition-form statuses,
  * allocation (basic + performance) and expected-ULB count, merged from the `states` collection.
  */
 @Injectable()
@@ -39,7 +40,12 @@ export class MohuaOverviewService {
 
     const [states, allocations, ulbIdsByState, submittedUlbs] = await Promise.all([
       this.stateModel
-        .find({ isActive: true, isUT: { $ne: true }, accessToXVFC: { $ne: false } })
+        .find({
+          isActive: true,
+          isUT: { $ne: true },
+          accessToXVFC: { $ne: false },
+          code: { $nin: MOHUA_OVERVIEW_EXCLUDED_STATE_CODES },
+        })
         .select('name code slug')
         .sort({ name: 1 })
         .lean<LeanState[]>()

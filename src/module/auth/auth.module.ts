@@ -20,6 +20,7 @@ import { OtpService } from './otp.service';
 import { VisitSessionService } from './visit-session.service';
 import { RolesGuard } from './guards/roles.guard';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { DoeReadOnlyGuard } from './guards/doe-read-only.guard';
 import { JwtRefreshGuard } from './guards/jwt-refresh.guard';
 import { RecaptchaMiddleware } from './middleware/recaptcha.middleware';
 import { JwtStrategy } from './strategies/jwt.strategy';
@@ -63,6 +64,11 @@ import { JwtRefreshStrategy } from './strategies/jwt-refresh.strategy';
     {
       provide: APP_GUARD,
       useClass: JwtAuthGuard,
+    },
+    // Must stay directly after JwtAuthGuard: it reads request.user, which JwtAuthGuard sets.
+    {
+      provide: APP_GUARD,
+      useClass: DoeReadOnlyGuard,
     },
   ],
 })
