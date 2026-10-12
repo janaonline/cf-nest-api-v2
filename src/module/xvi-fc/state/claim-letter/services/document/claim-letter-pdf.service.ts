@@ -186,7 +186,7 @@ export class ClaimLetterPdfService {
         'Urban Local Body',
         `${data.priorFcCycleLabel} Unspent (Rs.)`,
         '16th FC Allocation (Rs.)',
-        'Eligible (<10%)',
+        'Eligible',
       ],
       rows: data.annexure1Rows.map((row) => [
         String(row.slNo),

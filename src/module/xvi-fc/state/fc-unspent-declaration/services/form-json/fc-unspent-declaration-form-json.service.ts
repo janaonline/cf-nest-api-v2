@@ -1,18 +1,26 @@
 import { Injectable } from '@nestjs/common';
+import { YearIdToLabel } from 'src/core/constants/years';
 import { FormJsonService } from 'src/master/form-json/form-json.service';
 import {
-  FC_UNSPENT_ELIGIBILITY_THRESHOLD_META_KEY,
-  FC_UNSPENT_ELIGIBILITY_THRESHOLD_PERCENT,
+  FC_UNSPENT_APPLICABLE_FC_BY_YEAR_LABEL,
   FC_UNSPENT_FORM_ID,
 } from '../../constants/fc-unspent-declaration.constants';
 import {
   FcUnspentTypedFieldConfig,
   validateFcUnspentFormJsonData,
 } from '../../helpers/fc-unspent-declaration-form-json.helpers';
+import {
+  FcUnspentPolicy,
+  policyThresholdPercent,
+  resolveFcUnspentPolicy,
+} from '../../helpers/fc-unspent-policy.helpers';
 
 export interface FcUnspentFormConfig {
   fields: FcUnspentTypedFieldConfig[];
+  /** The percent threshold clients display: the percent-of-allocation rule's own, otherwise 0. */
   thresholdPercent: number;
+  /** Per-design-year rules: whether the form is linked to Devolution, and how eligibility is decided. */
+  policy: FcUnspentPolicy;
 }
 
 @Injectable()
@@ -21,14 +29,16 @@ export class FcUnspentDeclarationFormJsonService {
 
   /**
    * Loads the FC Unspent Declaration form-json document for a design year exactly once
-   * (Redis-cached, same path as SFC/EULB/DF) and returns both the validated field config and the
-   * eligibility threshold derived from it.
+   * (Redis-cached, same path as SFC/EULB/DF) and returns the validated field config plus the
+   * year's policy (FC-cycle defaults overridden by `formJson.meta`, see `resolveFcUnspentPolicy`).
    */
   async loadFormConfig(yearId: string): Promise<FcUnspentFormConfig> {
     const formJson = await this.formJsonService.findActiveByDesignYearAndFormId(yearId, FC_UNSPENT_FORM_ID);
+    const policy = this.resolvePolicy(yearId, formJson.meta);
     return {
       fields: validateFcUnspentFormJsonData(formJson.data),
-      thresholdPercent: this.resolveThresholdPercent(formJson.meta),
+      thresholdPercent: policyThresholdPercent(policy),
+      policy,
     };
   }
 
@@ -38,12 +48,13 @@ export class FcUnspentDeclarationFormJsonService {
   }
 
   /**
-   * DB-driven eligibility threshold override at `formJson.meta.eligibilityThresholdPercent`,
-   * falling back to FC_UNSPENT_ELIGIBILITY_THRESHOLD_PERCENT when absent or not a valid
-   * non-negative number.
+   * Year -> FC cycle through the existing map, then the policy for that cycle. Every caller already
+   * resolves the cycle (and 404s on an unmapped year) before loading config, so the 14th-FC fallback
+   * here, the same one `resolvePriorFcCycleLabel` uses, is only a safety net.
    */
-  private resolveThresholdPercent(meta: Record<string, unknown> | undefined): number {
-    const raw = meta?.[FC_UNSPENT_ELIGIBILITY_THRESHOLD_META_KEY];
-    return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 ? raw : FC_UNSPENT_ELIGIBILITY_THRESHOLD_PERCENT;
+  private resolvePolicy(yearId: string, meta: Record<string, unknown> | undefined): FcUnspentPolicy {
+    const designYear = YearIdToLabel[yearId];
+    const applicableFc = (designYear && FC_UNSPENT_APPLICABLE_FC_BY_YEAR_LABEL[designYear]) || '14TH_FC';
+    return resolveFcUnspentPolicy(applicableFc, meta);
   }
 }

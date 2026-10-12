@@ -29,10 +29,10 @@ export interface FcUnspentPmuRowLean {
   censusCode: string;
   sbCode: string;
   ulbName: string;
-  allocationAmount: number;
+  allocationAmount: number | null;
   unspentAmount: number;
   previousFcUnspentBalance: number;
-  allocationPerc: number;
+  allocationPerc: number | null;
   eligibility: boolean;
   rowStatus: RowReviewStatus | null;
   /** May be `undefined` on rows inserted via the State module's bulkWrite upsert (schema defaults
@@ -85,10 +85,10 @@ export interface FcUnspentPmuRow {
   censusCode: string | null;
   sbCode: string | null;
   ulbName: string;
-  allocationAmount: number;
+  allocationAmount: number | null;
   unspentAmount: number;
   previousFcUnspentBalance: number;
-  allocationPerc: number;
+  allocationPerc: number | null;
   eligibility: boolean;
   rowStatus: RowReviewStatus | null;
   rejectionRemark: string | null;

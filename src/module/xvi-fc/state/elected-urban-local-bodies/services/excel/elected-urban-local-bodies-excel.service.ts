@@ -333,6 +333,8 @@ export class ElectedUrbanLocalBodiesExcelService {
       lastExcelUploadedAt: new Date(),
       lastExcelUploadedBy: userOid,
       updatedBy: userOid,
+      stateUpdatedBy: userOid,
+      stateUpdatedAt: new Date(),
     };
     // Omit when unchanged (rather than `electedBodyExcelFile: undefined`) so Mongoose's
     // FileInfo `timestamps` option doesn't re-stamp the stored subdocument.
@@ -661,6 +663,8 @@ export class ElectedUrbanLocalBodiesExcelService {
               errorRowCount,
               validationStatus,
               updatedBy: userOid,
+              stateUpdatedBy: userOid,
+              stateUpdatedAt: new Date(),
             },
           })
           .lean()
@@ -882,6 +886,8 @@ export class ElectedUrbanLocalBodiesExcelService {
               validationStatus,
               excludedRows,
               updatedBy: userOid,
+              stateUpdatedBy: userOid,
+              stateUpdatedAt: new Date(),
             },
           },
           { new: true, session },

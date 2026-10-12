@@ -74,12 +74,15 @@ type SfcStatusLeanDoc = {
   state?: Types.ObjectId | PopulatedNameRef;
   createdBy?: Types.ObjectId | PopulatedNameRef;
   updatedBy?: Types.ObjectId | PopulatedNameRef;
+  stateUpdatedBy?: Types.ObjectId | PopulatedNameRef;
+  stateUpdatedAt?: Date;
   submittedBy?: Types.ObjectId | PopulatedNameRef;
   createdAt?: Date;
   updatedAt?: Date;
   submittedAt?: Date;
   currentFormStatus?: number;
   data?: unknown;
+  pmuRemarks?: string | null;
 };
 
 const SFC_DUMP_HEADERS: RowHeader[] = [
@@ -157,6 +160,7 @@ export class SfcStatusService {
       .populate('state', 'name')
       .populate('createdBy', 'name')
       .populate('updatedBy', 'name')
+      .populate('stateUpdatedBy', 'name')
       .populate('submittedBy', 'name')
       .lean<SfcStatusLeanDoc>()
       .exec();
@@ -202,6 +206,7 @@ export class SfcStatusService {
       actors,
       instructions: [],
       meta: { version: 1 },
+      pmuRemarks: doc?.pmuRemarks ?? null,
       ...exemption,
     };
 
@@ -241,7 +246,15 @@ export class SfcStatusService {
       const updated = await this.model
         .findOneAndUpdate(
           { ...filter, currentFormStatus: existing.currentFormStatus },
-          { $set: { data: sanitizedPayload, currentFormStatus: FORM_STATUS.IN_PROGRESS, updatedBy: userOid } },
+          {
+            $set: {
+              data: sanitizedPayload,
+              currentFormStatus: FORM_STATUS.IN_PROGRESS,
+              updatedBy: userOid,
+              stateUpdatedBy: userOid,
+              stateUpdatedAt: new Date(),
+            },
+          },
           { new: true },
         )
         .lean()
@@ -260,11 +273,15 @@ export class SfcStatusService {
         changedBy: userOid,
         ip,
         userAgent,
-        data: sanitizedPayload,
       });
 
+      const {
+        updatedBy: _updatedBy,
+        updatedAt: _updatedAt,
+        ...updatedWithoutAuditFields
+      } = updated as Record<string, unknown>;
       return xviFcSuccess('SFC Status form saved as draft.', {
-        ...updated,
+        ...updatedWithoutAuditFields,
         currentFormStatusLabel: getFormStatusLabel(FORM_STATUS.IN_PROGRESS),
       });
     }
@@ -279,6 +296,8 @@ export class SfcStatusService {
         currentFormStatus: FORM_STATUS.IN_PROGRESS,
         createdBy: userOid,
         updatedBy: userOid,
+        stateUpdatedBy: userOid,
+        stateUpdatedAt: new Date(),
         isActive: true,
         isDeleted: false,
       });
@@ -297,11 +316,15 @@ export class SfcStatusService {
       changedBy: userOid,
       ip,
       userAgent,
-      data: sanitizedPayload,
     });
 
+    const {
+      updatedBy: _updatedBy,
+      updatedAt: _updatedAt,
+      ...createdWithoutAuditFields
+    } = created.toObject() as Record<string, unknown>;
     return xviFcSuccess('SFC Status form saved as draft.', {
-      ...created.toObject(),
+      ...createdWithoutAuditFields,
       currentFormStatusLabel: getFormStatusLabel(FORM_STATUS.IN_PROGRESS),
     });
   }
@@ -357,6 +380,8 @@ export class SfcStatusService {
               submittedBy: userOid,
               submittedAt: now,
               updatedBy: userOid,
+              stateUpdatedBy: userOid,
+              stateUpdatedAt: now,
             },
           },
           { new: true },
@@ -382,6 +407,8 @@ export class SfcStatusService {
           submittedAt: now,
           createdBy: userOid,
           updatedBy: userOid,
+          stateUpdatedBy: userOid,
+          stateUpdatedAt: now,
           isActive: true,
           isDeleted: false,
         });
@@ -407,8 +434,9 @@ export class SfcStatusService {
       data: sanitizedPayload,
     });
 
+    const { updatedBy: _updatedBy, updatedAt: _updatedAt, ...resultWithoutAuditFields } = result;
     return xviFcSuccess('SFC Status form submitted successfully.', {
-      ...result,
+      ...resultWithoutAuditFields,
       currentFormStatusLabel: getFormStatusLabel(toStatus),
     });
   }

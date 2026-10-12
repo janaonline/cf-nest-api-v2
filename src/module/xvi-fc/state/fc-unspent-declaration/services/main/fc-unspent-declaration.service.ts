@@ -71,6 +71,7 @@ import { SaveFcUnspentDeclarationDto } from '../../dto/save-fc-unspent-declarati
 import { FcUnspentDeclarationRowService } from '../rows/fc-unspent-declaration-row.service';
 import { FcUnspentDeclarationFormJsonService } from '../form-json/fc-unspent-declaration-form-json.service';
 import { getFcUnspentFieldsByType } from '../../helpers/fc-unspent-declaration-form-json.helpers';
+import type { FcUnspentPolicy } from '../../helpers/fc-unspent-policy.helpers';
 
 type PopulatedNameRef = { _id?: Types.ObjectId; name?: string };
 
@@ -82,6 +83,8 @@ type FcUnspentLeanDoc = XvifcActorSourceDocument & {
   fcDeclaration?: FileInfo | null;
   fcUnspentDeclaration?: FileInfo | null;
   checkboxConfirmation?: boolean;
+  pmuRemarks?: string | null;
+  mohuaRemarks?: string | null;
 };
 
 type FcUnspentExistingLean = {
@@ -133,16 +136,21 @@ export class FcUnspentDeclarationService {
       .populate('state', 'name')
       .populate('createdBy', 'name')
       .populate('updatedBy', 'name')
+      .populate('stateUpdatedBy', 'name')
       .populate('submittedBy', 'name')
       .lean<FcUnspentLeanDoc>()
       .exec();
 
     const currentFormStatus = doc?.currentFormStatus ?? FORM_STATUS.NOT_STARTED;
-    const gates = await this.resolveDevolutionDependency(stateOid, yearOid);
+    const {
+      fields: allFields,
+      thresholdPercent: threshold,
+      policy,
+    } = await this.formJsonConfigService.loadFormConfig(yearId);
+    const gates = await this.resolveDevolutionDependency(stateOid, yearOid, policy);
     const permissions = this.buildFormPermissions(user, stateId, currentFormStatus, gates);
     const { actors, stateName } = this.xvifcFormActorsService.buildActorsAndStateName(doc);
 
-    const { fields: allFields, thresholdPercent: threshold } = await this.formJsonConfigService.loadFormConfig(yearId);
     const questionsConfig = getFcUnspentFieldsByType(allFields, 'FC_UNSPENT_MAIN_FORM_FIELDS');
     const rowEditFields = getFcUnspentFieldsByType(allFields, 'FC_UNSPENT_ROW_EDIT_FIELDS');
     if (rowEditFields.length === 0) {
@@ -168,6 +176,7 @@ export class FcUnspentDeclarationService {
       stateName,
       applicableFc,
       threshold,
+      policy: { devolutionLinked: policy.devolutionLinked, eligibilityRule: policy.eligibilityRule },
       currentFormStatus,
       permissions,
       dependency: gates.dependency,
@@ -175,6 +184,8 @@ export class FcUnspentDeclarationService {
       questions,
       rowEditFields,
       unspentUlbData,
+      pmuRemarks: doc?.pmuRemarks ?? null,
+      mohuaRemarks: doc?.mohuaRemarks ?? null,
     };
 
     return xviFcSuccess('FC Unspent Declaration form fetched.', responseData);
@@ -211,7 +222,8 @@ export class FcUnspentDeclarationService {
     const fromStatus = existing?.currentFormStatus ?? FORM_STATUS.NOT_STARTED;
     assertCanStateEditForm(fromStatus);
 
-    const gates = await this.resolveDevolutionDependency(stateOid, yearOid);
+    const { fields: allFields, policy } = await this.formJsonConfigService.loadFormConfig(dto.yearId);
+    const gates = await this.resolveDevolutionDependency(stateOid, yearOid, policy);
     if (!gates.canSaveDraftGate) {
       throwXviFcValidationError({
         _form: [
@@ -223,7 +235,6 @@ export class FcUnspentDeclarationService {
       });
     }
 
-    const { fields: allFields, thresholdPercent } = await this.formJsonConfigService.loadFormConfig(dto.yearId);
     const questions = getFcUnspentFieldsByType(allFields, 'FC_UNSPENT_MAIN_FORM_FIELDS');
     const validatorData: FormData = {
       isFcUnspent: dto.data.isFcUnspent ?? null,
@@ -281,7 +292,8 @@ export class FcUnspentDeclarationService {
         stateOid,
         rowsInput,
         gates.devolutionForm,
-        { requireAtLeastOne: false, thresholdPercent },
+        // A draft keeps selected ULBs even before their figures are entered; final submit requires them.
+        { requireAtLeastOne: false, requireCompleteRows: false, policy },
       );
       if (Object.keys(errors).length > 0) throwXviFcValidationError(errors);
       resolvedRows = builtRows;
@@ -310,6 +322,8 @@ export class FcUnspentDeclarationService {
       currentFormStatus: FORM_STATUS.IN_PROGRESS,
       isDraft: true,
       updatedBy: userOid,
+      stateUpdatedBy: userOid,
+      stateUpdatedAt: new Date(),
     };
     if (fcDeclaration !== undefined) setDoc['fcDeclaration'] = fcDeclaration;
     if (fcUnspentDeclaration !== undefined) setDoc['fcUnspentDeclaration'] = fcUnspentDeclaration;
@@ -436,7 +450,8 @@ export class FcUnspentDeclarationService {
     const fromStatus = existing?.currentFormStatus ?? FORM_STATUS.NOT_STARTED;
     assertCanStateFinalSubmitForm(fromStatus);
 
-    const gates = await this.resolveDevolutionDependency(stateOid, yearOid);
+    const { fields: allFields, policy } = await this.formJsonConfigService.loadFormConfig(dto.yearId);
+    const gates = await this.resolveDevolutionDependency(stateOid, yearOid, policy);
     if (!gates.canFinalSubmitGate) {
       throwXviFcValidationError({
         _form: [
@@ -448,7 +463,6 @@ export class FcUnspentDeclarationService {
       });
     }
 
-    const { fields: allFields, thresholdPercent } = await this.formJsonConfigService.loadFormConfig(dto.yearId);
     const questions = getFcUnspentFieldsByType(allFields, 'FC_UNSPENT_MAIN_FORM_FIELDS');
     const validatorData: FormData = {
       isFcUnspent: dto.data.isFcUnspent ?? null,
@@ -520,7 +534,7 @@ export class FcUnspentDeclarationService {
         stateOid,
         rowsInput,
         gates.devolutionForm,
-        { requireAtLeastOne: true, thresholdPercent },
+        { requireAtLeastOne: true, requireCompleteRows: true, policy },
       );
       if (Object.keys(errors).length > 0) throwXviFcValidationError(errors);
       resolvedRows = builtRows;
@@ -564,6 +578,8 @@ export class FcUnspentDeclarationService {
       submittedBy: userOid,
       submittedAt: now,
       updatedBy: userOid,
+      stateUpdatedBy: userOid,
+      stateUpdatedAt: now,
       auditRevision: newAuditRevision,
     };
     if (finalFcDeclaration !== undefined) setDoc['fcDeclaration'] = finalFcDeclaration;
@@ -663,11 +679,31 @@ export class FcUnspentDeclarationService {
    * Not `private` — reused by GET/saveDraft/finalSubmit and the document service (see CLAUDE.md).
    * Reads devolution-formula's activeDatasetVersion invariant from outside that module — see
    * devolution-formula/docs/adr/0001-dataset-versioning.md before changing either side.
+   *
+   * When the design year's `policy` is not Devolution-linked (14th FC years), the form is independent
+   * of Devolution: every gate is open and Devolution is not even queried. The linked path below is
+   * unchanged.
    */
   async resolveDevolutionDependency(
     stateOid: Types.ObjectId,
     yearOid: Types.ObjectId,
+    policy: FcUnspentPolicy,
   ): Promise<FcUnspentDependencyGates> {
+    if (!policy.devolutionLinked) {
+      return {
+        dependency: {
+          devolutionStatus: null,
+          devolutionDatasetExists: false,
+          editableDueToDevolutionReturn: false,
+          blockingMessage: null,
+        },
+        canEditGate: true,
+        canSaveDraftGate: true,
+        canFinalSubmitGate: true,
+        devolutionForm: null,
+      };
+    }
+
     const devolutionForm = await this.devolutionFormModel
       .findOne({ state: stateOid, year: yearOid, installment: FC_UNSPENT_DEVOLUTION_INSTALLMENT })
       .select('_id currentFormStatus activeDatasetVersion')

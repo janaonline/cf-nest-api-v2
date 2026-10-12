@@ -237,6 +237,7 @@ export class ElectedUrbanLocalBodiesService {
         .populate('state', 'name')
         .populate('createdBy', 'name')
         .populate('updatedBy', 'name')
+        .populate('stateUpdatedBy', 'name')
         .populate('submittedBy', 'name')
         .lean<EulbFormLeanDoc>()
         .exec(),
@@ -297,6 +298,7 @@ export class ElectedUrbanLocalBodiesService {
       statusSummary,
       instructions: [],
       meta: { version: 1 },
+      pmuRemarks: doc?.pmuRemarks ?? null,
     };
 
     return xviFcSuccess('Elected Urban Local Bodies form fetched.', responseData);
@@ -541,6 +543,8 @@ export class ElectedUrbanLocalBodiesService {
     const fieldUpdates: Record<string, unknown> = {
       currentFormStatus: FORM_STATUS.IN_PROGRESS,
       updatedBy: userOid,
+      stateUpdatedBy: userOid,
+      stateUpdatedAt: new Date(),
       ulbCount: activeUlbCount,
     };
     if (normalizedExcelFile !== undefined) {
@@ -571,8 +575,13 @@ export class ElectedUrbanLocalBodiesService {
         userAgent,
       });
 
+      const {
+        updatedBy: _updatedBy,
+        updatedAt: _updatedAt,
+        ...updatedWithoutAuditFields
+      } = updated as Record<string, unknown>;
       return xviFcSuccess('Elected Urban Local Bodies form saved as draft.', {
-        ...updated,
+        ...updatedWithoutAuditFields,
         currentFormStatusLabel: getFormStatusLabel(FORM_STATUS.IN_PROGRESS),
       });
     }
@@ -601,8 +610,13 @@ export class ElectedUrbanLocalBodiesService {
       userAgent,
     });
 
+    const {
+      updatedBy: _updatedBy,
+      updatedAt: _updatedAt,
+      ...createdWithoutAuditFields
+    } = created.toObject() as Record<string, unknown>;
     return xviFcSuccess('Elected Urban Local Bodies form saved as draft.', {
-      ...created.toObject(),
+      ...createdWithoutAuditFields,
       currentFormStatusLabel: getFormStatusLabel(FORM_STATUS.IN_PROGRESS),
     });
   }
@@ -846,6 +860,8 @@ export class ElectedUrbanLocalBodiesService {
       submittedBy: userOid,
       submittedAt: now,
       updatedBy: userOid,
+      stateUpdatedBy: userOid,
+      stateUpdatedAt: now,
       isDraft: false,
       ulbCount: activeUlbCount,
       checkboxConfirmation: dto.data.checkboxConfirmation,
@@ -948,8 +964,13 @@ export class ElectedUrbanLocalBodiesService {
       await session.endSession();
     }
 
+    const {
+      updatedBy: _updatedBy,
+      updatedAt: _updatedAt,
+      ...updatedWithoutAuditFields
+    } = (updated ?? {}) as Record<string, unknown>;
     return xviFcSuccess('Elected Urban Local Bodies form submitted successfully.', {
-      ...updated,
+      ...updatedWithoutAuditFields,
       currentFormStatusLabel: getFormStatusLabel(toStatus),
     });
   }

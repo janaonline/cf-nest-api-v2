@@ -337,6 +337,8 @@ export class DevolutionFormulaRowService {
           duplicateUlbCount: 0,
           totalAllocatedSum: 0,
           updatedBy: userOid,
+          stateUpdatedBy: userOid,
+          stateUpdatedAt: new Date(),
         },
       })
       .exec();

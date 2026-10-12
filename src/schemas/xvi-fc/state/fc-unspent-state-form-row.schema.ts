@@ -59,20 +59,24 @@ export class FcUnspentUlbRowSnapshot {
   // unconverted from DevolutionFormulaRow, unspentAmount is validated @IsInt() on
   // FcUnspentUlbRowInputDto. allocationPerc is a ratio (unspentAmount/allocationAmount * 100)
   // and is unaffected by the unit — computed unrounded, see FcUnspentDeclarationRowService.
-  @Prop({ type: Number, required: true })
-  allocationAmount!: number;
+  // `null` when the design year's FC Unspent policy is not Devolution-linked (14th FC years): there is
+  // no allocation to snapshot.
+  @Prop({ type: Number, default: null })
+  allocationAmount!: number | null;
 
-  @Prop({ type: Number, required: true })
-  unspentAmount!: number;
+  // `null` while a draft row has not had its figures entered yet; both are always set once the form is
+  // submitted (final submit requires them).
+  @Prop({ type: Number, default: null })
+  unspentAmount!: number | null;
 
   // Whole Rupees only — same @IsInt()/@Min(1) enforcement as unspentAmount on
-  // FcUnspentUlbRowInputDto, and likewise purely informational: it never participates in
-  // allocationPerc/eligibility computation.
-  @Prop({ type: Number, required: true })
-  previousFcUnspentBalance!: number;
+  // FcUnspentUlbRowInputDto. It never participates in allocationPerc; under the NO_UNSPENT_ALLOWED
+  // eligibility rule (14th FC years) any balance here also makes the ULB ineligible.
+  @Prop({ type: Number, default: null })
+  previousFcUnspentBalance!: number | null;
 
-  @Prop({ type: Number, required: true })
-  allocationPerc!: number;
+  @Prop({ type: Number, default: null })
+  allocationPerc!: number | null;
 
   @Prop({ type: Boolean, required: true })
   eligibility!: boolean;
@@ -128,19 +132,23 @@ export class XviFcUnspentStateFormRow {
 
   // allocationAmount/unspentAmount are whole Rupees only — see FcUnspentUlbRowSnapshot above
   // for the full unit note; this is the live row's own copy.
-  @Prop({ type: Number, required: true })
-  allocationAmount!: number;
+  // `null` when the design year's FC Unspent policy is not Devolution-linked (14th FC years): there is
+  // no allocation to snapshot.
+  @Prop({ type: Number, default: null })
+  allocationAmount!: number | null;
 
-  @Prop({ type: Number, required: true })
-  unspentAmount!: number;
+  // `null` while a draft row has not had its figures entered yet; both are always set once the form is
+  // submitted (final submit requires them).
+  @Prop({ type: Number, default: null })
+  unspentAmount!: number | null;
 
   // Whole Rupees only — see FcUnspentUlbRowSnapshot above for the full unit note; this is the
   // live row's own copy.
-  @Prop({ type: Number, required: true })
-  previousFcUnspentBalance!: number;
+  @Prop({ type: Number, default: null })
+  previousFcUnspentBalance!: number | null;
 
-  @Prop({ type: Number, required: true })
-  allocationPerc!: number;
+  @Prop({ type: Number, default: null })
+  allocationPerc!: number | null;
 
   @Prop({ type: Boolean, required: true })
   eligibility!: boolean;
