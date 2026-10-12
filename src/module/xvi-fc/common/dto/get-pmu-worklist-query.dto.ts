@@ -1,5 +1,6 @@
 import { Type } from 'class-transformer';
 import { IsIn, IsInt, IsMongoId, IsOptional, IsString, Max, Min } from 'class-validator';
+import { STATE_FORM_HISTORY_INSTALLMENTS } from '../form-history/state-form-history.constants';
 import { PMU_WORKLIST_PAGINATION_MAX_LIMIT } from '../constants/pmu-worklist-pagination.constants';
 
 /** Shared by all 5 PMU modules' `GET worklist/:yearId` — filters/sorts/paginates the cross-state
@@ -9,6 +10,13 @@ export class GetPmuWorklistQueryDto {
   @IsOptional()
   @IsMongoId()
   stateId?: string;
+
+  /** Only honoured by the installment-scoped modules (GTC, Devolution Formula); ignored by the others. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @IsIn(STATE_FORM_HISTORY_INSTALLMENTS)
+  installment?: number;
 
   @IsOptional()
   @Type(() => Number)

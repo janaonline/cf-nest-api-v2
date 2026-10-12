@@ -73,7 +73,7 @@ export class SfcStatusPmuReviewService {
   ): Promise<XviFcApiResponse<PmuWorklistData>> {
     assertPmuReviewerAccess(user);
 
-    const { rows, page, limit, total } = await buildPmuWorklistRows({
+    const { rows, summary, page, limit, total } = await buildPmuWorklistRows({
       stateModel: this.stateModel,
       formModel: this.formModel,
       yearId,
@@ -86,7 +86,7 @@ export class SfcStatusPmuReviewService {
       limit: query.limit,
     });
 
-    return xviFcSuccess('SFC Status PMU worklist fetched.', { rows }, { page, limit, total });
+    return xviFcSuccess('SFC Status PMU worklist fetched.', { rows, summary }, { page, limit, total });
   }
 
   async getReviewMetadata(
@@ -104,6 +104,7 @@ export class SfcStatusPmuReviewService {
       .populate('state', 'name')
       .populate('createdBy', 'name')
       .populate('updatedBy', 'name')
+      .populate('stateUpdatedBy', 'name')
       .populate('submittedBy', 'name')
       .lean<PmuFormLeanWithPopulate>()
       .exec();

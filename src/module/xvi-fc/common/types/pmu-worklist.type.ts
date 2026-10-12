@@ -15,6 +15,24 @@ export interface PmuWorklistRow {
   installment?: 1 | 2;
 }
 
+/** Raw counts for the overview cards above the worklist, over every record in scope (selected form,
+ *  state filter, installment filter) and independent of the Form Status filter and of paging.
+ *  Percentages and sub-text are the client's job. Role-neutral: any reviewer table can reuse it. */
+export interface PmuWorklistSummary {
+  /** N: records in scope. One per state, or one per state per installment when an installment-scoped
+   *  form is queried without an `installment` filter. */
+  total: number;
+  /** Distinct states in scope, so a client can show "N / statesInScope per state". */
+  statesInScope: number;
+  /** `total` minus every record whose status is anything other than Not Started. */
+  notStarted: number;
+  inProgress: number;
+  underReview: { mohua: number; pmu: number };
+  returned: { mohua: number; pmu: number };
+  acknowledged: number;
+}
+
 export interface PmuWorklistData {
   rows: PmuWorklistRow[];
+  summary: PmuWorklistSummary;
 }

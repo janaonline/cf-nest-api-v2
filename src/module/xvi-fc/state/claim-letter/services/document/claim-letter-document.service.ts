@@ -27,7 +27,7 @@ import type {
   ClaimLetterDocumentData,
 } from '../../types/claim-letter.types';
 
-/** Formjson criterion `type` Annexure 1's "Eligible (<10%)" column is specifically about — that
+/** Formjson criterion `type` Annexure 1's "Eligible" column is specifically about — that
  *  annexure *is* the FC-disclosure check, so it stays tied to this one named criterion by design.
  *  Annexure 2, by contrast, is a general checklist and is built dynamically from whichever criteria
  *  are currently enabled — see `ClaimLetterUlbLevelEligibility.criteriaColumns`, never a hardcoded
@@ -90,7 +90,7 @@ export class ClaimLetterDocumentService {
     }));
     const totalClaimAmount = sumAmountsExactly(rows.map((r) => r.claimAmount));
 
-    // Both annexures read the same per-ULB failed-criteria set — Annexure 1's "Eligible (<10%)" and
+    // Both annexures read the same per-ULB failed-criteria set — Annexure 1's "Eligible" and
     // Annexure 2's "FC Disclosure" both trace back to the one FC_UNSPENT_STATE criterion; no reason
     // to compute the threshold check twice with two different formulas.
     const annexure1Rows: ClaimLetterDocumentAnnexure1Row[] = rows.map((row, index) => {
@@ -174,10 +174,11 @@ export class ClaimLetterDocumentService {
     const rows = await this.unspentRowModel
       .find({ form: form._id, ulbId: { $in: ulbIds.map((id) => new Types.ObjectId(id)) }, isActive: true })
       .select('ulbId unspentAmount')
-      .lean<{ ulbId: Types.ObjectId; unspentAmount: number }[]>()
+      .lean<{ ulbId: Types.ObjectId; unspentAmount: number | null }[]>()
       .exec();
 
-    return new Map(rows.map((r) => [String(r.ulbId), r.unspentAmount]));
+    // `null` only exists on a draft row that was never finalised (final submit requires the figure).
+    return new Map(rows.map((r) => [String(r.ulbId), r.unspentAmount ?? 0]));
   }
 
   private buildSubjectLine(

@@ -29,15 +29,24 @@ describe('StateController', () => {
     const states = [{ name: 'Andhra Pradesh', slug: 'andhra-pradesh', code: 'AP' }];
     stateService.findAll.mockResolvedValue(states);
 
-    const result = await controller.findAll();
+    const result = await controller.findAll({});
 
-    expect(stateService.findAll).toHaveBeenCalledWith();
+    expect(stateService.findAll).toHaveBeenCalledWith(undefined);
     expect(result).toBe(states);
+  });
+
+  it('forwards excludeUT to the service when set', async () => {
+    const states = [{ name: 'Andhra Pradesh', slug: 'andhra-pradesh', code: 'AP' }];
+    stateService.findAll.mockResolvedValue(states);
+
+    await controller.findAll({ excludeUT: true });
+
+    expect(stateService.findAll).toHaveBeenCalledWith(true);
   });
 
   it('propagates errors thrown by the service', async () => {
     stateService.findAll.mockRejectedValue(new Error('db down'));
 
-    await expect(controller.findAll()).rejects.toThrow('db down');
+    await expect(controller.findAll({})).rejects.toThrow('db down');
   });
 });

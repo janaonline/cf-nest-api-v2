@@ -76,6 +76,12 @@ export class XviFcUnspentStateForm {
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
   updatedBy!: Types.ObjectId;
 
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', default: null })
+  stateUpdatedBy?: Types.ObjectId | null;
+
+  @Prop({ type: Date, default: null })
+  stateUpdatedAt?: Date | null;
+
   /** Incremented only on final submit (not on draft saves). */
   @Prop({ type: Number, default: 0 })
   auditRevision!: number;

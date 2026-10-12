@@ -4,6 +4,7 @@ import type { FieldConfig } from 'src/module/xvi-fc/common/types/field-config.ty
 import type { XvifcFormActor } from 'src/module/xvi-fc/common/types/xvifc-form-actors.type';
 import type { ApplicableFc } from 'src/schemas/xvi-fc/state/fc-unspent-state-form.schema';
 import type { RowReviewStatus } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
+import type { FcUnspentEligibilityRule } from '../helpers/fc-unspent-policy.helpers';
 
 export interface FcUnspentPermissions {
   canView: boolean;
@@ -41,20 +42,31 @@ export interface FcUnspentUlbRowResponse {
   censusCode: string | null;
   sbCode: string | null;
   ulbName: string;
-  allocationAmount: number;
-  unspentAmount: number;
-  previousFcUnspentBalance: number;
-  allocationPerc: number;
+  /** `null` when the design year's policy is not Devolution-linked. */
+  allocationAmount: number | null;
+  /** `null` while a draft row has not had this figure entered yet; always set once the form is submitted. */
+  unspentAmount: number | null;
+  previousFcUnspentBalance: number | null;
+  /** `null` when the design year's policy is not Devolution-linked. */
+  allocationPerc: number | null;
   eligibility: boolean;
   /** Drives the State-side row edit lock (`canStateEditRow`) — a row PMU has approved
    *  (`UNDER_REVIEW_BY_MOHUA`+) must render read-only even while the rest of the form is editable. */
   rowStatus: RowReviewStatus | null;
 }
 
+/** Client-facing slice of the design year's FC Unspent policy: just what the UI needs to hide allocation
+ *  columns and word the eligibility rule. The backend stays the only place the rules are evaluated. */
+export interface FcUnspentPolicyResponse {
+  devolutionLinked: boolean;
+  eligibilityRule: FcUnspentEligibilityRule;
+}
+
 export interface FcUnspentDeclarationGetResponseData {
   stateName: string;
   applicableFc: ApplicableFc;
   threshold: number;
+  policy: FcUnspentPolicyResponse;
   currentFormStatus: number;
   permissions: FcUnspentPermissions;
   dependency: FcUnspentDependency;
@@ -63,6 +75,8 @@ export interface FcUnspentDeclarationGetResponseData {
   /** DB-driven metadata for the 9 ULB row-table columns (ulbId, unspentAmount, previousFcUnspentBalance, censusCode, sbCode, ulbName, allocationAmount, allocationPerc, eligibility). Metadata only — does not replace FcUnspentDeclarationRowService's own row validation. */
   rowEditFields: FieldConfig[];
   unspentUlbData: FcUnspentUlbRowResponse[];
+  pmuRemarks: string | null;
+  mohuaRemarks: string | null;
 }
 
 export interface FcUnspentUlbOption {
@@ -70,7 +84,8 @@ export interface FcUnspentUlbOption {
   censusCode: string | null;
   sbCode: string | null;
   ulbName: string;
-  allocationAmount: number;
+  /** `null` when the design year's policy is not Devolution-linked (ULBs come from the registry). */
+  allocationAmount: number | null;
 }
 
 /**
@@ -92,12 +107,16 @@ export interface FcUnspentResolvedRow {
   censusCode: string;
   sbCode: string;
   ulbName: string;
-  allocationAmount: number;
-  unspentAmount: number;
-  previousFcUnspentBalance: number;
-  allocationPerc: number;
+  /** `null` when the design year's policy is not Devolution-linked. */
+  allocationAmount: number | null;
+  /** `null` while a draft row has not had this figure entered yet; always set once the form is submitted. */
+  unspentAmount: number | null;
+  previousFcUnspentBalance: number | null;
+  /** `null` when the design year's policy is not Devolution-linked. */
+  allocationPerc: number | null;
   eligibility: boolean;
-  allocationSource: FcUnspentAllocationSourceInput;
+  /** `null` when the design year's policy is not Devolution-linked. */
+  allocationSource: FcUnspentAllocationSourceInput | null;
 }
 
 /** Lean projection of an active row document, used to build both the GET response and history snapshots. */
@@ -108,10 +127,11 @@ export interface FcUnspentActiveRowLean {
   censusCode: string;
   sbCode: string;
   ulbName: string;
-  allocationAmount: number;
-  unspentAmount: number;
-  previousFcUnspentBalance: number;
-  allocationPerc: number;
+  allocationAmount: number | null;
+  /** `null` while a draft row has not had this figure entered yet; always set once the form is submitted. */
+  unspentAmount: number | null;
+  previousFcUnspentBalance: number | null;
+  allocationPerc: number | null;
   eligibility: boolean;
   rowStatus: RowReviewStatus | null;
   /**

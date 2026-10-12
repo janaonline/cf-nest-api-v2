@@ -10,7 +10,7 @@ import {
 import { RequestExemptionFormJsonConfigService } from './request-exemption-form-json.service';
 
 const REASON_OPTIONS_FIXTURE = [
-  { id: '23', label: 'Election / duly constituted ULB exemption' },
+  { id: '23', label: 'Election / ULB constitution status' },
   { id: '30', label: 'Audited Financial Statement' },
   { id: '31', label: 'Provisional Financial Statement' },
 ];
@@ -123,7 +123,7 @@ describe('RequestExemptionFormJsonConfigService', () => {
     it("extracts and number-converts the 'reasonForExemption' field's options", async () => {
       const options = await service.loadReasonOptions(yearId, REASON_FIELD_KEY_ULB);
       expect(options).toEqual([
-        { id: 23, label: 'Election / duly constituted ULB exemption' },
+        { id: 23, label: 'Election / ULB constitution status' },
         { id: 30, label: 'Audited Financial Statement' },
         { id: 31, label: 'Provisional Financial Statement' },
       ]);
@@ -181,13 +181,13 @@ describe('RequestExemptionFormJsonConfigService', () => {
               formFieldType: 'select',
               key: 'reasonForExemptionState',
               label: 'Reason for Exemption',
-              options: [{ id: '22', label: 'State Finance Commission extension/compliance' }],
+              options: [{ id: '22', label: 'Non-fulfilment of State Finance Commission requirements' }],
             },
           ],
         });
 
         const options = await service.loadReasonOptions(yearId, REASON_FIELD_KEY_STATE, false);
-        expect(options).toEqual([{ id: 22, label: 'State Finance Commission extension/compliance' }]);
+        expect(options).toEqual([{ id: 22, label: 'Non-fulfilment of State Finance Commission requirements' }]);
       });
 
       it('returns [] (not a throw) when missing and required=false — lets the backend deploy before the formjsons document gains this field', async () => {

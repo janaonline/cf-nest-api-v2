@@ -1,8 +1,10 @@
+import { Logger } from '@nestjs/common';
 import type { FilterQuery, Model, Types } from 'mongoose';
 import { Types as MongooseTypes } from 'mongoose';
 import { FORM_STATUS, getFormStatusLabel } from 'src/common/constants/form-status.constants';
 import { State, StateDocument } from 'src/schemas/state.schema';
-import type { PmuWorklistRow } from '../types/pmu-worklist.type';
+import type { PmuWorklistRow, PmuWorklistSummary } from '../types/pmu-worklist.type';
+import { isPmuWorklistSummaryBalanced, summarizePmuWorklist } from './pmu-worklist-summary.util';
 import {
   PMU_WORKLIST_PAGINATION_DEFAULT_LIMIT,
   PMU_WORKLIST_PAGINATION_DEFAULT_PAGE,
@@ -30,6 +32,9 @@ export interface BuildPmuWorklistRowsParams<TFormDoc> {
    *  docblock below for why filtering/sorting/paging all happen here rather than on the state/form
    *  queries. */
   stateId?: string;
+  /** Narrows an installment-scoped form (GTC, Devolution Formula) to one installment; ignored when
+   *  `installments` is not set. Applied before the summary, so the cards reflect the same scope. */
+  installment?: number;
   status?: number;
   sortBy?: string;
   sortDir?: 'asc' | 'desc';
@@ -39,6 +44,8 @@ export interface BuildPmuWorklistRowsParams<TFormDoc> {
 
 export interface PmuWorklistRowsResult {
   rows: PmuWorklistRow[];
+  /** Counts for the overview cards: computed before the `status` filter and before paging. */
+  summary: PmuWorklistSummary;
   page: number;
   limit: number;
   total: number;
@@ -58,6 +65,8 @@ export interface PmuWorklistRowsResult {
  * count depending which module you called. One state's installment rows can straddle a page
  * boundary as a result — nothing is dropped or duplicated, a reviewer paging through sees every row.
  */
+const logger = new Logger('buildPmuWorklistRows');
+
 export async function buildPmuWorklistRows<TFormDoc>(
   params: BuildPmuWorklistRowsParams<TFormDoc>,
 ): Promise<PmuWorklistRowsResult> {
@@ -111,6 +120,19 @@ export async function buildPmuWorklistRows<TFormDoc>(
   }
 
   if (params.stateId) rows = rows.filter((r) => r.stateId === params.stateId);
+  if (params.installments && params.installment !== undefined) {
+    rows = rows.filter((r) => r.installment === params.installment);
+  }
+
+  // Cards describe the whole scope (form + state + installment), so they must be taken before the
+  // Form Status filter narrows `rows` and before paging slices it.
+  const summary = summarizePmuWorklist(rows);
+  if (process.env['NODE_ENV'] !== 'production' && !isPmuWorklistSummaryBalanced(summary)) {
+    logger.warn(
+      `PMU worklist summary does not add up to N (an unmapped status or duplicate records): ${JSON.stringify(summary)}`,
+    );
+  }
+
   if (params.status !== undefined) rows = rows.filter((r) => r.currentFormStatus === params.status);
 
   if (params.sortBy) {
@@ -133,5 +155,5 @@ export async function buildPmuWorklistRows<TFormDoc>(
   const limit = params.limit ?? PMU_WORKLIST_PAGINATION_DEFAULT_LIMIT;
   const skip = (page - 1) * limit;
 
-  return { rows: rows.slice(skip, skip + limit), page, limit, total };
+  return { rows: rows.slice(skip, skip + limit), summary, page, limit, total };
 }

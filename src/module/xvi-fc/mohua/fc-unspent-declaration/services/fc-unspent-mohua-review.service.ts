@@ -75,6 +75,7 @@ export class FcUnspentMohuaReviewService {
       .populate('state', 'name')
       .populate('createdBy', 'name')
       .populate('updatedBy', 'name')
+      .populate('stateUpdatedBy', 'name')
       .populate('submittedBy', 'name')
       .lean<MohuaFormLeanWithPopulate>()
       .exec();
