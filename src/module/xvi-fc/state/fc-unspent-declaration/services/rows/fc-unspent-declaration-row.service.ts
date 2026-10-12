@@ -20,6 +20,8 @@ import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 import type { XviFcValidationErrorMap } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import type { FcUnspentUlbRowInputDto } from '../../dto/fc-unspent-ulb-row.dto';
+import { evaluateRowEligibility, type FcUnspentPolicy } from '../../helpers/fc-unspent-policy.helpers';
+import { hasUlbIdentityCode } from '../../helpers/fc-unspent-ulb-code.helpers';
 import type {
   FcUnspentActiveRowLean,
   FcUnspentAllocationSourceInput,
@@ -63,16 +65,24 @@ export class FcUnspentDeclarationRowService {
   ) {}
 
   /**
-   * Resolves each proposed ULB row against the active Ulb registry and the current
-   * Devolution Formula Installment-1 allocation, rejecting duplicates and computing
-   * allocationPerc/eligibility server-side. Used by both draft save (partial, may be
-   * empty) and final submit (requireAtLeastOne).
+   * Resolves each proposed ULB row against the active Ulb registry, rejecting duplicates and
+   * computing eligibility server-side from the design year's `policy`. Used by both draft save
+   * (partial, may be empty) and final submit (requireAtLeastOne).
+   *
+   * A draft keeps a selected ULB even before its figures are entered: a `null` amount is accepted and the
+   * row is stored incomplete (never eligible, no allocation percent). `requireCompleteRows` (final submit)
+   * instead rejects any row missing either amount with a `required` error on that row's field.
+   *
+   * When `policy.devolutionLinked`, each row is also resolved against the current Devolution Formula
+   * Installment-1 allocation (a ULB without a positive allocation is rejected) and `allocationPerc` is
+   * computed. Otherwise the form is independent of Devolution: no allocation is looked up, and the
+   * allocation fields stay `null`.
    */
   async resolveAndValidateRows(
     stateOid: Types.ObjectId,
     rows: FcUnspentUlbRowInputDto[],
     devolutionForm: FcUnspentDevolutionFormLean | null,
-    opts: { requireAtLeastOne: boolean; thresholdPercent: number },
+    opts: { requireAtLeastOne: boolean; requireCompleteRows?: boolean; policy: FcUnspentPolicy },
   ): Promise<{ rows: FcUnspentResolvedRow[]; errors: XviFcValidationErrorMap }> {
     const errors: XviFcValidationErrorMap = {};
 
@@ -109,7 +119,7 @@ export class FcUnspentDeclarationRowService {
         .select('name censusCode sbCode')
         .lean()
         .exec(),
-      devolutionForm
+      opts.policy.devolutionLinked && devolutionForm
         ? this.resolveAllocationsForUlbIds(devolutionForm._id, devolutionForm.activeDatasetVersion, ulbOids)
         : Promise.resolve(new Map<string, FcUnspentAllocationSourceInput>()),
     ]);
@@ -126,9 +136,21 @@ export class FcUnspentDeclarationRowService {
         return;
       }
 
-      const allocationSource = allocationMap.get(row.ulbId);
-      const allocationAmount = allocationSource?.allocationAmount ?? 0;
-      if (!allocationSource || allocationAmount <= 0) {
+      if (!hasUlbIdentityCode(ulb)) {
+        errors[`${path}.ulbId`] = [
+          {
+            field: `${path}.ulbId`,
+            code: 'ulbCodeMissing',
+            message: 'This ULB has no census code or SB code on record, so it cannot be saved.',
+          },
+        ];
+        return;
+      }
+
+      const linked = opts.policy.devolutionLinked;
+      const allocationSource = linked ? (allocationMap.get(row.ulbId) ?? null) : null;
+      const allocationAmount = allocationSource?.allocationAmount ?? null;
+      if (linked && (!allocationSource || allocationAmount === null || allocationAmount <= 0)) {
         errors[`${path}.ulbId`] = [
           {
             field: `${path}.ulbId`,
@@ -139,7 +161,25 @@ export class FcUnspentDeclarationRowService {
         return;
       }
 
-      if (!(row.unspentAmount > 0)) {
+      // `undefined` (omitted) is normalised to `null` so a single "not entered yet" value reaches storage.
+      const unspentAmount = row.unspentAmount ?? null;
+      const previousFcUnspentBalance = row.previousFcUnspentBalance ?? null;
+
+      if (opts.requireCompleteRows) {
+        const required: [string, string, number | null][] = [
+          ['unspentAmount', 'Unspent amount is required.', unspentAmount],
+          ['previousFcUnspentBalance', 'Previous FC unspent balance is required.', previousFcUnspentBalance],
+        ];
+        let incomplete = false;
+        for (const [key, message, value] of required) {
+          if (value !== null) continue;
+          errors[`${path}.${key}`] = [{ field: `${path}.${key}`, code: 'required', message }];
+          incomplete = true;
+        }
+        if (incomplete) return;
+      }
+
+      if (unspentAmount !== null && !(unspentAmount > 0)) {
         errors[`${path}.unspentAmount`] = [
           {
             field: `${path}.unspentAmount`,
@@ -150,8 +190,13 @@ export class FcUnspentDeclarationRowService {
         return;
       }
 
-      const allocationPerc = (row.unspentAmount / allocationAmount) * 100;
-      const eligibility = allocationPerc <= opts.thresholdPercent;
+      const allocationPerc =
+        allocationAmount !== null && unspentAmount !== null ? (unspentAmount / allocationAmount) * 100 : null;
+      const eligibility = evaluateRowEligibility(
+        opts.policy.eligibilityRule,
+        { unspentAmount, previousFcUnspentBalance },
+        allocationPerc,
+      );
 
       builtRows.push({
         ulbId: new Types.ObjectId(row.ulbId),
@@ -159,8 +204,8 @@ export class FcUnspentDeclarationRowService {
         sbCode: ulb.sbCode ?? '',
         ulbName: ulb.name,
         allocationAmount,
-        unspentAmount: row.unspentAmount,
-        previousFcUnspentBalance: row.previousFcUnspentBalance,
+        unspentAmount,
+        previousFcUnspentBalance,
         allocationPerc,
         eligibility,
         allocationSource,

@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model, PipelineStage, Types } from 'mongoose';
+import { FilterQuery, Model, PipelineStage, Types } from 'mongoose';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { assertStateAccess } from 'src/module/xvi-fc/common/utils/xvi-fc-state-access.util';
 import { escapeRegex } from 'src/common/utils/regex.util';
@@ -23,7 +23,9 @@ import {
   FC_UNSPENT_PAGINATION_DEFAULT_PAGE,
 } from '../../constants/fc-unspent-declaration.constants';
 import type { GetFcUnspentUlbOptionsQueryDto } from '../../dto/get-fc-unspent-ulb-options-query.dto';
+import { ulbIdentityCodeCondition } from '../../helpers/fc-unspent-ulb-code.helpers';
 import type { FcUnspentUlbOption } from '../../types/fc-unspent-declaration.types';
+import { FcUnspentDeclarationFormJsonService } from '../form-json/fc-unspent-declaration-form-json.service';
 
 type FcUnspentUlbOptionAggregationRow = {
   ulbId: Types.ObjectId;
@@ -43,13 +45,18 @@ export class FcUnspentUlbOptionsService {
     @InjectModel(Ulb.name)
     private readonly ulbModel: Model<UlbDocument>,
     private readonly ulbEligibilityService: UlbEligibilityService,
+    private readonly formJsonConfigService: FcUnspentDeclarationFormJsonService,
   ) {}
 
   /**
-   * Lazy, paginated, State-scoped ULB options for the "Yes" branch picker, sourced from the active
-   * Installment-1 Devolution Formula dataset while that form is under PMU or MoHUA review (see
-   * CLAUDE.md's "Dependencies" section). Returns an empty page, not an error, when no such
-   * Devolution form exists yet, so the dropdown never hard-fails.
+   * Lazy, paginated, State-scoped ULB options for the "Yes" branch picker.
+   *
+   * Devolution-linked design years: sourced from the active Installment-1 Devolution Formula dataset
+   * while that form is under PMU or MoHUA review (see CLAUDE.md's "Dependencies" section). Returns an
+   * empty page, not an error, when no such Devolution form exists yet, so the dropdown never hard-fails.
+   *
+   * Independent design years (14th FC): sourced straight from the ULB registry (active, XVI-FC-eligible
+   * ULBs of the state), with no allocation.
    */
   async getOptions(
     stateId: string,
@@ -64,6 +71,11 @@ export class FcUnspentUlbOptionsService {
     const page = query.page ?? FC_UNSPENT_PAGINATION_DEFAULT_PAGE;
     const limit = query.limit ?? FC_UNSPENT_PAGINATION_DEFAULT_LIMIT;
     const skip = (page - 1) * limit;
+
+    const { policy } = await this.formJsonConfigService.loadFormConfig(yearId);
+    if (!policy.devolutionLinked) {
+      return this.getRegistryOptions(stateOid, query, { page, limit, skip });
+    }
 
     const devolutionForm = await this.devolutionFormModel
       .findOne({
@@ -114,6 +126,8 @@ export class FcUnspentUlbOptionsService {
       },
       // Inner-join semantics: drops rows whose ULB is inactive, ineligible, or belongs to another state.
       { $unwind: '$ulb' },
+      // Same validity rule the save enforces: a ULB without a census/SB code can't be saved, so isn't offered.
+      { $match: ulbIdentityCodeCondition('ulb.') },
     ];
 
     if (query.search) {
@@ -161,5 +175,46 @@ export class FcUnspentUlbOptionsService {
     }));
 
     return xviFcSuccess('ULB options fetched.', options, { page, limit, total });
+  }
+
+  /** Independent-of-Devolution source: the state's active, XVI-FC-eligible ULBs from the registry. */
+  private async getRegistryOptions(
+    stateOid: Types.ObjectId,
+    query: GetFcUnspentUlbOptionsQueryDto,
+    paging: { page: number; limit: number; skip: number },
+  ): Promise<XviFcApiResponse<FcUnspentUlbOption[]>> {
+    // Only ULBs with a census/SB code are valid rows (same rule the save enforces). `$and` keeps that
+    // code condition and the search `$or` from overwriting each other.
+    const conditions: FilterQuery<UlbDocument>[] = [ulbIdentityCodeCondition()];
+    if (query.search) {
+      const regex = new RegExp(escapeRegex(query.search), 'i');
+      conditions.push({ $or: [{ censusCode: regex }, { sbCode: regex }, { name: regex }] });
+    }
+    const filter: FilterQuery<UlbDocument> = {
+      ...(await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC')),
+      $and: conditions,
+    };
+
+    const [ulbs, total] = await Promise.all([
+      this.ulbModel
+        .find(filter)
+        .select('name censusCode sbCode')
+        .sort({ name: 1, _id: 1 })
+        .skip(paging.skip)
+        .limit(paging.limit)
+        .lean<Array<{ _id: Types.ObjectId; name: string; censusCode?: string; sbCode?: string }>>()
+        .exec(),
+      this.ulbModel.countDocuments(filter).exec(),
+    ]);
+
+    const options: FcUnspentUlbOption[] = ulbs.map((u) => ({
+      ulbId: String(u._id),
+      censusCode: u.censusCode || null,
+      sbCode: u.sbCode || null,
+      ulbName: u.name,
+      allocationAmount: null,
+    }));
+
+    return xviFcSuccess('ULB options fetched.', options, { page: paging.page, limit: paging.limit, total });
   }
 }

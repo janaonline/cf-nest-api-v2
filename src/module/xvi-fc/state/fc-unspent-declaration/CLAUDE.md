@@ -1,8 +1,8 @@
 # FC Unspent Declaration
 
 State-facing feature: a per (state, year) form where a State declares, per ULB, whether it has an
-unspent FC grant balance and (if so) the amount — gated on and cross-checked against Devolution
-Formula's allocation data. No ADR of its own — see "Dependencies" below for why.
+unspent FC grant balance and (if so) the amount — gated on and (for Devolution-linked design years) cross-checked against Devolution
+Formula's allocation data. See "Per-design-year policy" below. No ADR of its own — see "Dependencies" below for why.
 
 ## Layout
 
@@ -48,11 +48,14 @@ conflate them:
   succeeds this count matches what actually persists). `getForm` mirrors the same "isFcUnspent must
   be true" gate on its own row fetch. The frontend mirrors the same key as a synthetic
   (non-`FieldConfig`) `FormControl`, added in `fc-unspent-declaration.component.ts`'s
-  `createFormControls()` from the `savedUnspentUlbData` signal — deliberately *not* the live
-  `unspentUlbData` FormArray, since the gate must react to saved/authoritative data, not in-progress
-  edits. Because hiding the whole field also hides its own in-field "save your changes" message, the
-  component adds a separate save-prompt banner (`fc-unspent-declaration-save-prompt`) specifically
-  for the case where the field is hidden for having zero saved rows.
+  `bindPickedUlbsControl()` and kept in step with the ULBs currently picked in the table, so the field
+  (and its download action) appears as soon as a ULB is picked rather than only after a first save. This
+  is safe because the download action itself saves the draft first when the screen holds unsaved
+  branch/ULB changes ("Save & download": `requestDeclarationDownload()`), and the backend's draft/final
+  validators already derive the same key from the rows in the request. (It used to mirror only
+  already-saved rows, with a separate `fc-unspent-declaration-save-prompt` alert filling the gap while the
+  field was hidden; that alert is gone — a persistent save-status strip in the sticky action bar replaces
+  it.)
 
 Deliberately two fields rather than one dual-purpose field: every other branch-conditional file
 field in this form's formjson (and elsewhere in xvi-fc) uses strict single-branch `visibleWhen` +
@@ -118,11 +121,55 @@ third no-op branch.
   in line with every other state-form amount for full consistency. `allocationPerc` is a ratio
   (`unspentAmount / allocationAmount * 100`) and is unaffected by the unit — computed unrounded, see
   `FcUnspentDeclarationRowService`.
+- A ULB row's two amounts (`unspentAmount`, `previousFcUnspentBalance`) are **nullable in a draft and
+  required on final submit**. `FcUnspentUlbRowInputDto` accepts `null`/omitted (a provided value must
+  still be a whole number >= 1), so `saveDraft` keeps a selected ULB before its figures are entered —
+  previously the whole row was dropped client-side and the API required both, so the selection was lost on
+  save. `FcUnspentDeclarationRowService.resolveAndValidateRows` enforces completeness only when called
+  with `requireCompleteRows: true` (`finalSubmit`), returning a `required` error on the missing field of
+  that row. An incomplete draft row is stored with `null` amounts, `allocationPerc` null (unless an unspent
+  amount and a Devolution allocation both exist) and `eligibility: false` (`evaluateRowEligibility` never
+  returns true for a row with a `null` figure); final submit recomputes it. Because of that, a `null`
+  amount can only exist on a form that was never finally submitted — PMU/MoHUA review, the claim letter and
+  the snapshot history only ever see complete rows. The declaration document refuses to generate while
+  any active row is incomplete (400, `fcUnspentDeclaration`, code `incompleteRows`).
+- Only valid ULBs are saved: a row's ULB must exist in the state's active, XVI-FC-eligible registry
+  (`ulbNotFound`) **and** have a census code or an SB code on record (`ulbCodeMissing`, see
+  `helpers/fc-unspent-ulb-code.helpers.ts`). A bad row fails the whole request with a row-level error
+  (nothing is silently dropped). The ULB picker applies the same code condition, so it never offers a ULB
+  the save would reject.
 - `finalSubmit` requires the active branch's declaration file reference (`fcDeclaration` for No,
   `fcUnspentDeclaration` for Yes) explicitly in every submission payload — omitted/null is rejected
   rather than silently falling back to the previously stored file. This keeps an explicit null
   meaningful (never a silent no-op) and gives `FileInfoNormalizerService` the raw payload value it
   needs to tell a genuine re-upload from the unchanged-file case.
+
+## Per-design-year policy (Devolution link and eligibility rule)
+
+Whether this form depends on Devolution Formula, and how a ULB row's `eligibility` is decided, is one
+small object resolved per design year — `FcUnspentPolicy` (`helpers/fc-unspent-policy.helpers.ts`):
+
+- `devolutionLinked` — `true`: edit/save/submit/document are gated on Devolution Installment 1
+  (`resolveDevolutionDependency`), the ULB picker is sourced from its dataset, and each row snapshots
+  `allocationAmount`/`allocationPerc`/`allocationSource`. `false`: fully independent — every gate is open,
+  Devolution is not queried, the picker lists the state's active XVI-FC-eligible ULBs from the registry, and
+  the three allocation fields are `null`.
+- `eligibilityRule` — `NO_UNSPENT_ALLOWED` (eligible only when BOTH the applicable-FC unspent and the
+  previous unspent balance are zero; for now every other combination is ineligible, per the product truth
+  table) or `MAX_PERCENT_OF_ALLOCATION` (the original `unspent / allocation * 100 <= thresholdPercent`).
+
+Defaults are keyed by the FC cycle, not the year (`FC_UNSPENT_POLICY_DEFAULTS_BY_FC`; the year -> cycle map
+is still `FC_UNSPENT_APPLICABLE_FC_BY_YEAR_LABEL`): 14th FC (2026-27, 2027-28) = independent +
+`NO_UNSPENT_ALLOWED`; 15th FC (2028-29 onward) = today's linked percent rule, deliberately unchanged until the
+business confirms the Years 3-5 rules. A design year can override either part through
+`formJson.meta.unspentPolicy` (`{ devolutionLinked, eligibilityRule }`); the legacy
+`meta.eligibilityThresholdPercent` still feeds the percent rule. `loadFormConfig()` returns the resolved
+`policy`, callers load it BEFORE resolving gates, and GET exposes it to the UI as `policy`. Claim Letter is
+unchanged: it still reads the row's boolean `eligibility` through its `formjsons.claimEligibility` config.
+
+Row validation note: `unspentAmount` and `previousFcUnspentBalance` are still both required and `>= 1` on a
+saved row, so under `NO_UNSPENT_ALLOWED` every saved row is ineligible. A row where one balance is zero
+cannot be saved today; relaxing that is a separate product decision.
 
 ## Dependencies
 

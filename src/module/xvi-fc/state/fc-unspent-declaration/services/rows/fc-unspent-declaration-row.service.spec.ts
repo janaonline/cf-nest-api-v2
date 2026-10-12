@@ -9,6 +9,19 @@ import { Ulb } from 'src/schemas/ulb.schema';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import type { FcUnspentDevolutionFormLean, FcUnspentResolvedRow } from '../../types/fc-unspent-declaration.types';
 import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
+import type { FcUnspentPolicy } from '../../helpers/fc-unspent-policy.helpers';
+
+/** Devolution-linked, percent-of-allocation policy with the given threshold: the original behaviour. */
+const linkedPolicy = (thresholdPercent: number): FcUnspentPolicy => ({
+  devolutionLinked: true,
+  eligibilityRule: { type: 'MAX_PERCENT_OF_ALLOCATION', thresholdPercent },
+});
+
+/** 14th FC years: independent of Devolution; any unspent balance makes a ULB ineligible. */
+const INDEPENDENT_POLICY: FcUnspentPolicy = {
+  devolutionLinked: false,
+  eligibilityRule: { type: 'NO_UNSPENT_ALLOWED' },
+};
 
 /** Creates a chainable Mongoose Query-like mock that resolves to `value`. */
 function q<T>(value: T) {
@@ -129,7 +142,7 @@ describe('FcUnspentDeclarationRowService', () => {
     it('requires at least one row when requireAtLeastOne is true', async () => {
       const result = await service.resolveAndValidateRows(stateOid, [], devolutionForm, {
         requireAtLeastOne: true,
-        thresholdPercent: 10,
+        policy: linkedPolicy(10),
       });
       expect(result.errors['unspentUlbData']).toBeDefined();
     });
@@ -137,7 +150,7 @@ describe('FcUnspentDeclarationRowService', () => {
     it('allows zero rows when requireAtLeastOne is false', async () => {
       const result = await service.resolveAndValidateRows(stateOid, [], devolutionForm, {
         requireAtLeastOne: false,
-        thresholdPercent: 10,
+        policy: linkedPolicy(10),
       });
       expect(result.rows).toEqual([]);
       expect(Object.keys(result.errors)).toHaveLength(0);
@@ -151,7 +164,7 @@ describe('FcUnspentDeclarationRowService', () => {
           { ulbId: ulbOid1.toString(), unspentAmount: 7, previousFcUnspentBalance: 3 },
         ],
         devolutionForm,
-        { requireAtLeastOne: false, thresholdPercent: 10 },
+        { requireAtLeastOne: false, policy: linkedPolicy(10) },
       );
       expect(result.errors['unspentUlbData']?.[0].code).toBe('duplicateUlb');
     });
@@ -162,7 +175,7 @@ describe('FcUnspentDeclarationRowService', () => {
         stateOid,
         [{ ulbId: ulbOid1.toString(), unspentAmount: 5, previousFcUnspentBalance: 3 }],
         devolutionForm,
-        { requireAtLeastOne: false, thresholdPercent: 10 },
+        { requireAtLeastOne: false, policy: linkedPolicy(10) },
       );
       expect(result.errors['unspentUlbData.0.ulbId']?.[0].code).toBe('ulbNotFound');
     });
@@ -173,7 +186,7 @@ describe('FcUnspentDeclarationRowService', () => {
         stateOid,
         [{ ulbId: ulbOid1.toString(), unspentAmount: 5, previousFcUnspentBalance: 3 }],
         devolutionForm,
-        { requireAtLeastOne: false, thresholdPercent: 10 },
+        { requireAtLeastOne: false, policy: linkedPolicy(10) },
       );
       expect(result.errors['unspentUlbData.0.ulbId']?.[0].code).toBe('noAllocation');
     });
@@ -183,7 +196,7 @@ describe('FcUnspentDeclarationRowService', () => {
         stateOid,
         [{ ulbId: ulbOid1.toString(), unspentAmount: 0, previousFcUnspentBalance: 3 }],
         devolutionForm,
-        { requireAtLeastOne: false, thresholdPercent: 10 },
+        { requireAtLeastOne: false, policy: linkedPolicy(10) },
       );
       expect(result.errors['unspentUlbData.0.unspentAmount']?.[0].code).toBe('invalidAmount');
     });
@@ -193,7 +206,7 @@ describe('FcUnspentDeclarationRowService', () => {
         stateOid,
         [{ ulbId: ulbOid1.toString(), unspentAmount: 5, previousFcUnspentBalance: 3 }],
         devolutionForm,
-        { requireAtLeastOne: false, thresholdPercent: 10 },
+        { requireAtLeastOne: false, policy: linkedPolicy(10) },
       );
       expect(result.rows[0]).toMatchObject({ allocationAmount: 100, allocationPerc: 5, eligibility: true });
     });
@@ -203,7 +216,7 @@ describe('FcUnspentDeclarationRowService', () => {
         stateOid,
         [{ ulbId: ulbOid1.toString(), unspentAmount: 5, previousFcUnspentBalance: 999 }],
         devolutionForm,
-        { requireAtLeastOne: false, thresholdPercent: 10 },
+        { requireAtLeastOne: false, policy: linkedPolicy(10) },
       );
       expect(result.rows[0]).toMatchObject({
         previousFcUnspentBalance: 999,
@@ -217,7 +230,7 @@ describe('FcUnspentDeclarationRowService', () => {
         stateOid,
         [{ ulbId: ulbOid1.toString(), unspentAmount: 5, previousFcUnspentBalance: 3 }],
         devolutionForm,
-        { requireAtLeastOne: false, thresholdPercent: 10 },
+        { requireAtLeastOne: false, policy: linkedPolicy(10) },
       );
       expect(result.rows[0].allocationSource).toEqual({
         devolutionFormId: devolutionFormOid,
@@ -233,7 +246,7 @@ describe('FcUnspentDeclarationRowService', () => {
         stateOid,
         [{ ulbId: ulbOid1.toString(), unspentAmount: 10, previousFcUnspentBalance: 3 }], // 10/100 = 10% == threshold
         devolutionForm,
-        { requireAtLeastOne: false, thresholdPercent: 10 },
+        { requireAtLeastOne: false, policy: linkedPolicy(10) },
       );
       expect(result.rows[0].allocationPerc).toBe(10);
       expect(result.rows[0].eligibility).toBe(true);
@@ -244,7 +257,7 @@ describe('FcUnspentDeclarationRowService', () => {
         stateOid,
         [{ ulbId: ulbOid1.toString(), unspentAmount: 10.000001, previousFcUnspentBalance: 3 }], // 10.000001% > 10%
         devolutionForm,
-        { requireAtLeastOne: false, thresholdPercent: 10 },
+        { requireAtLeastOne: false, policy: linkedPolicy(10) },
       );
       expect(result.rows[0].allocationPerc).toBeCloseTo(10.000001, 6);
       expect(result.rows[0].eligibility).toBe(false);
@@ -255,7 +268,7 @@ describe('FcUnspentDeclarationRowService', () => {
         stateOid,
         [{ ulbId: ulbOid1.toString(), unspentAmount: 0.01, previousFcUnspentBalance: 3 }],
         devolutionForm,
-        { requireAtLeastOne: false, thresholdPercent: 0 },
+        { requireAtLeastOne: false, policy: linkedPolicy(0) },
       );
       expect(result.rows[0].allocationPerc).toBeGreaterThan(0);
       expect(result.rows[0].eligibility).toBe(false);
@@ -276,7 +289,7 @@ describe('FcUnspentDeclarationRowService', () => {
         stateOid,
         [pollutedRow as unknown as { ulbId: string; unspentAmount: number; previousFcUnspentBalance: number }],
         devolutionForm,
-        { requireAtLeastOne: false, thresholdPercent: 10 },
+        { requireAtLeastOne: false, policy: linkedPolicy(10) },
       );
       const row = result.rows[0];
       expect(row.allocationAmount).toBe(100); // from DevolutionFormulaRow, not the client
@@ -284,6 +297,232 @@ describe('FcUnspentDeclarationRowService', () => {
       expect(row.censusCode).toBe('111');
       expect(row.allocationPerc).toBe(5);
       expect(row.eligibility).toBe(true);
+    });
+  });
+
+  describe('resolveAndValidateRows - independent of Devolution (14th FC policy)', () => {
+    const row = (unspentAmount: number, previousFcUnspentBalance: number) => ({
+      ulbId: ulbOid1.toString(),
+      unspentAmount,
+      previousFcUnspentBalance,
+    });
+
+    it('needs no Devolution form and never looks up an allocation', async () => {
+      const result = await service.resolveAndValidateRows(stateOid, [row(5, 3)], null, {
+        requireAtLeastOne: true,
+        policy: INDEPENDENT_POLICY,
+      });
+
+      expect(Object.keys(result.errors)).toHaveLength(0);
+      expect(devolutionRowModel['find']).not.toHaveBeenCalled();
+      expect(result.rows).toHaveLength(1);
+    });
+
+    it('does not reject a ULB for having no Devolution allocation, and leaves the allocation fields null', async () => {
+      const result = await service.resolveAndValidateRows(stateOid, [row(5, 3)], devolutionForm, {
+        requireAtLeastOne: false,
+        policy: INDEPENDENT_POLICY,
+      });
+
+      expect(result.errors['unspentUlbData.0.ulbId']).toBeUndefined();
+      expect(result.rows[0]).toMatchObject({
+        ulbName: 'Alpha ULB',
+        unspentAmount: 5,
+        previousFcUnspentBalance: 3,
+        allocationAmount: null,
+        allocationPerc: null,
+        allocationSource: null,
+      });
+    });
+
+    it('marks any ULB reporting unspent balance as ineligible', async () => {
+      const result = await service.resolveAndValidateRows(stateOid, [row(5, 3)], null, {
+        requireAtLeastOne: false,
+        policy: INDEPENDENT_POLICY,
+      });
+      expect(result.rows[0].eligibility).toBe(false);
+    });
+
+    it('stays ineligible for a tiny unspent amount (no percentage threshold is involved)', async () => {
+      const result = await service.resolveAndValidateRows(stateOid, [row(1, 1)], null, {
+        requireAtLeastOne: false,
+        policy: INDEPENDENT_POLICY,
+      });
+      expect(result.rows[0].eligibility).toBe(false);
+    });
+
+    it('still validates the ULB itself (unknown or inactive ULB) and the unspent amount', async () => {
+      ulbModel['find'] = jest.fn().mockReturnValue(q([]));
+      const unknownUlb = await service.resolveAndValidateRows(stateOid, [row(5, 3)], null, {
+        requireAtLeastOne: false,
+        policy: INDEPENDENT_POLICY,
+      });
+      expect(unknownUlb.errors['unspentUlbData.0.ulbId']?.[0].code).toBe('ulbNotFound');
+
+      ulbModel['find'] = jest
+        .fn()
+        .mockReturnValue(q([{ _id: ulbOid1, name: 'Alpha ULB', censusCode: '111', sbCode: 'A1' }]));
+      const zeroUnspent = await service.resolveAndValidateRows(stateOid, [row(0, 3)], null, {
+        requireAtLeastOne: false,
+        policy: INDEPENDENT_POLICY,
+      });
+      expect(zeroUnspent.errors['unspentUlbData.0.unspentAmount']?.[0].code).toBe('invalidAmount');
+    });
+
+    it('still rejects duplicate ULB rows and still enforces requireAtLeastOne', async () => {
+      const duplicate = await service.resolveAndValidateRows(stateOid, [row(5, 3), row(7, 3)], null, {
+        requireAtLeastOne: false,
+        policy: INDEPENDENT_POLICY,
+      });
+      expect(duplicate.errors['unspentUlbData']?.[0].code).toBe('duplicateUlb');
+
+      const none = await service.resolveAndValidateRows(stateOid, [], null, {
+        requireAtLeastOne: true,
+        policy: INDEPENDENT_POLICY,
+      });
+      expect(none.errors['unspentUlbData']).toBeDefined();
+    });
+  });
+
+  describe('resolveAndValidateRows - draft keeps ULBs without amounts; final submit requires them', () => {
+    const ulbOnly = { ulbId: ulbOid1.toString(), unspentAmount: null, previousFcUnspentBalance: null };
+
+    it('keeps a ULB-only row on a draft: amounts stay null, never eligible, no allocation percent, no error', async () => {
+      for (const policy of [INDEPENDENT_POLICY, linkedPolicy(10)]) {
+        const result = await service.resolveAndValidateRows(stateOid, [ulbOnly], devolutionForm, {
+          requireAtLeastOne: false,
+          requireCompleteRows: false,
+          policy,
+        });
+
+        expect(Object.keys(result.errors)).toHaveLength(0);
+        expect(result.rows).toHaveLength(1);
+        expect(result.rows[0]).toMatchObject({
+          ulbName: 'Alpha ULB',
+          unspentAmount: null,
+          previousFcUnspentBalance: null,
+          allocationPerc: null,
+          eligibility: false,
+        });
+      }
+    });
+
+    it('treats omitted amounts like null, and keeps a partially filled row (one amount only)', async () => {
+      const omitted = await service.resolveAndValidateRows(stateOid, [{ ulbId: ulbOid1.toString() }], null, {
+        requireAtLeastOne: false,
+        policy: INDEPENDENT_POLICY,
+      });
+      expect(omitted.rows[0]).toMatchObject({ unspentAmount: null, previousFcUnspentBalance: null });
+
+      const partial = await service.resolveAndValidateRows(
+        stateOid,
+        [{ ulbId: ulbOid1.toString(), unspentAmount: 5, previousFcUnspentBalance: null }],
+        devolutionForm,
+        { requireAtLeastOne: false, policy: linkedPolicy(10) },
+      );
+      expect(partial.rows[0]).toMatchObject({ unspentAmount: 5, previousFcUnspentBalance: null, eligibility: false });
+      // The percent is still shown for an entered unspent amount; eligibility waits for the full row.
+      expect(partial.rows[0].allocationPerc).toBe(5);
+    });
+
+    it('rejects a ULB-only row on final submit with a required error on each missing field of that row', async () => {
+      const result = await service.resolveAndValidateRows(stateOid, [ulbOnly], devolutionForm, {
+        requireAtLeastOne: true,
+        requireCompleteRows: true,
+        policy: INDEPENDENT_POLICY,
+      });
+
+      expect(result.rows).toHaveLength(0);
+      expect(result.errors['unspentUlbData.0.unspentAmount']?.[0]).toMatchObject({
+        code: 'required',
+        message: 'Unspent amount is required.',
+      });
+      expect(result.errors['unspentUlbData.0.previousFcUnspentBalance']?.[0]).toMatchObject({
+        code: 'required',
+        message: 'Previous FC unspent balance is required.',
+      });
+    });
+
+    it('on final submit only flags the field that is missing, and accepts a complete row', async () => {
+      const missingPrevious = await service.resolveAndValidateRows(
+        stateOid,
+        [{ ulbId: ulbOid1.toString(), unspentAmount: 5, previousFcUnspentBalance: null }],
+        null,
+        { requireAtLeastOne: true, requireCompleteRows: true, policy: INDEPENDENT_POLICY },
+      );
+      expect(Object.keys(missingPrevious.errors)).toEqual(['unspentUlbData.0.previousFcUnspentBalance']);
+
+      const complete = await service.resolveAndValidateRows(
+        stateOid,
+        [{ ulbId: ulbOid1.toString(), unspentAmount: 5, previousFcUnspentBalance: 3 }],
+        null,
+        { requireAtLeastOne: true, requireCompleteRows: true, policy: INDEPENDENT_POLICY },
+      );
+      expect(Object.keys(complete.errors)).toHaveLength(0);
+      expect(complete.rows[0]).toMatchObject({ unspentAmount: 5, previousFcUnspentBalance: 3 });
+    });
+
+    it('still rejects a non-positive amount that IS provided, even on a draft', async () => {
+      const result = await service.resolveAndValidateRows(
+        stateOid,
+        [{ ulbId: ulbOid1.toString(), unspentAmount: 0, previousFcUnspentBalance: null }],
+        null,
+        { requireAtLeastOne: false, policy: INDEPENDENT_POLICY },
+      );
+      expect(result.errors['unspentUlbData.0.unspentAmount']?.[0].code).toBe('invalidAmount');
+    });
+  });
+
+  describe('resolveAndValidateRows - only valid ULBs are saved (census/SB code on record)', () => {
+    const draft = { requireAtLeastOne: false, policy: INDEPENDENT_POLICY };
+    const row = { ulbId: ulbOid1.toString(), unspentAmount: null, previousFcUnspentBalance: null };
+
+    it.each([
+      ['no census code and no SB code', { censusCode: '', sbCode: '' }],
+      ['codes missing entirely', {}],
+      ['codes that are only whitespace', { censusCode: '  ', sbCode: ' ' }],
+    ])('rejects a ULB with %s, on that row ulbId, and saves nothing from the request', async (_label, codes) => {
+      ulbModel['find'] = jest.fn().mockReturnValue(q([{ _id: ulbOid1, name: 'Alpha ULB', ...codes }]));
+
+      const result = await service.resolveAndValidateRows(stateOid, [row], null, draft);
+
+      expect(result.errors['unspentUlbData.0.ulbId']?.[0]).toMatchObject({ code: 'ulbCodeMissing' });
+      expect(result.rows).toHaveLength(0);
+    });
+
+    it('accepts a ULB that has only a census code, or only an SB code', async () => {
+      for (const codes of [
+        { censusCode: '111', sbCode: '' },
+        { censusCode: '', sbCode: 'A1' },
+      ]) {
+        ulbModel['find'] = jest.fn().mockReturnValue(q([{ _id: ulbOid1, name: 'Alpha ULB', ...codes }]));
+        const result = await service.resolveAndValidateRows(stateOid, [row], null, draft);
+        expect(Object.keys(result.errors)).toHaveLength(0);
+        expect(result.rows).toHaveLength(1);
+      }
+    });
+
+    it('still reports a ULB that is not in the registry at all as ulbNotFound (not as missing code)', async () => {
+      ulbModel['find'] = jest.fn().mockReturnValue(q([]));
+      const result = await service.resolveAndValidateRows(stateOid, [row], null, draft);
+      expect(result.errors['unspentUlbData.0.ulbId']?.[0].code).toBe('ulbNotFound');
+    });
+
+    it('reports every invalid row by its own index when valid and invalid ULBs are mixed', async () => {
+      ulbModel['find'] = jest.fn().mockReturnValue(
+        q([
+          { _id: ulbOid1, name: 'Alpha ULB', censusCode: '111', sbCode: 'A1' },
+          { _id: ulbOid2, name: 'No Code ULB', censusCode: '', sbCode: '' },
+        ]),
+      );
+      const result = await service.resolveAndValidateRows(
+        stateOid,
+        [row, { ulbId: ulbOid2.toString(), unspentAmount: null, previousFcUnspentBalance: null }],
+        null,
+        draft,
+      );
+      expect(result.errors['unspentUlbData.0.ulbId']).toBeUndefined();
+      expect(result.errors['unspentUlbData.1.ulbId']?.[0].code).toBe('ulbCodeMissing');
     });
   });
 

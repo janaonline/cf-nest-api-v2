@@ -24,12 +24,12 @@ import { SaveRequestExemptionDto } from './dto/save-request-exemption.dto';
 import { RequestExemptionFormJsonConfigService } from './services/form-json/request-exemption-form-json.service';
 
 const REASON_OPTIONS_FIXTURE = [
-  { id: 23, label: 'Election / duly constituted ULB exemption' },
+  { id: 23, label: 'Election / ULB constitution status' },
   { id: 30, label: 'Audited Financial Statement' },
   { id: 31, label: 'Provisional Financial Statement' },
 ];
 
-const STATE_REASON_OPTIONS_FIXTURE = [{ id: 22, label: 'State Finance Commission extension/compliance' }];
+const STATE_REASON_OPTIONS_FIXTURE = [{ id: 22, label: 'Non-fulfilment of State Finance Commission requirements' }];
 
 /** `loadReasonOptions` is called once per field key (`REASON_FIELD_KEY_ULB` /
  *  `REASON_FIELD_KEY_STATE`) in every method that reads it — a plain `mockResolvedValue` can't
@@ -960,7 +960,7 @@ describe('RequestExemptionService', () => {
           requestId: String(requestOid),
           formId: 23,
           ulb: { _id: ulbOid.toString(), name: 'Agra', censusCode: null },
-          reasonForExemptionLabel: 'Election / duly constituted ULB exemption',
+          reasonForExemptionLabel: 'Election / ULB constitution status',
           currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
         }),
       ]);
