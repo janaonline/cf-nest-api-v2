@@ -1,6 +1,8 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
+import ExcelJS from 'exceljs';
 import { Model, Types } from 'mongoose';
+import { getTimeStamp } from 'src/shared/utils/date.utils';
 import { State } from 'src/schemas/state.schema';
 import { DevolutionFormulaForm } from 'src/schemas/xvi-fc/state/devolution-formula-form.schema';
 import { DevolutionFormulaRow } from 'src/schemas/xvi-fc/state/devolution-formula-row.schema';
@@ -9,10 +11,20 @@ import {
   EULB_FORM_TYPE,
 } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
 import { ElectedUrbanLocalBodiesRow } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
+import {
+  FC_UNSPENT_STATE_FORM_TYPE,
+  XviFcUnspentStateForm,
+} from 'src/schemas/xvi-fc/state/fc-unspent-state-form.schema';
+import { XviFcUnspentStateFormRow } from 'src/schemas/xvi-fc/state/fc-unspent-state-form-row.schema';
 import { ExpectedUlbSetService, type ExpectedUlb } from 'src/module/xvi-fc/common/services/expected-ulb-set.service';
 import { DF_FORM_TYPE } from 'src/module/xvi-fc/state/devolution-formula/constants/devolution-formula.constants';
 import { MohuaOverviewUlbProgressService } from './mohua-overview-ulb-progress.service';
-import { MOHUA_OVERVIEW_INSTALMENT, MOHUA_STATE_ULBS_DEFAULT_LIMIT } from './mohua-overview.constants';
+import {
+  MOHUA_OVERVIEW_INSTALMENT,
+  MOHUA_STATE_ULBS_DEFAULT_LIMIT,
+  MOHUA_STATE_ULBS_EXPORT_NOT_SUBMITTED,
+  MOHUA_STATE_ULBS_EXPORT_SUBMITTED,
+} from './mohua-overview.constants';
 import { toCrore } from './mohua-overview.util';
 import type { GetMohuaStateUlbsQueryDto } from './mohua-state-ulbs-query.dto';
 import type { MohuaStateUlbRow, MohuaStateUlbs } from './mohua-state-ulbs.types';
@@ -20,6 +32,7 @@ import type { MohuaStateUlbRow, MohuaStateUlbs } from './mohua-state-ulbs.types'
 type LeanForm = { _id: Types.ObjectId; activeDatasetVersion?: number };
 type LeanAllocationRow = { ulbId?: Types.ObjectId | null; totalGrantAllocation?: number };
 type LeanElectedBodyRow = { ulbId?: Types.ObjectId; electedBodyStatus?: string };
+type LeanUnspentRow = { ulbId?: Types.ObjectId; unspentAmount?: number | null };
 
 /** ULB-wise progress for one state: the state's expected ULBs with allocation, elected body and per-form submission. */
 @Injectable()
@@ -32,6 +45,8 @@ export class MohuaStateUlbsService {
     private readonly electedBodyFormModel: Model<ElectedUrbanLocalBodiesForm>,
     @InjectModel(ElectedUrbanLocalBodiesRow.name)
     private readonly electedBodyRowModel: Model<ElectedUrbanLocalBodiesRow>,
+    @InjectModel(XviFcUnspentStateForm.name) private readonly unspentFormModel: Model<XviFcUnspentStateForm>,
+    @InjectModel(XviFcUnspentStateFormRow.name) private readonly unspentRowModel: Model<XviFcUnspentStateFormRow>,
     private readonly expectedUlbSetService: ExpectedUlbSetService,
     private readonly ulbProgressService: MohuaOverviewUlbProgressService,
   ) {}
@@ -41,9 +56,89 @@ export class MohuaStateUlbsService {
       throw new NotFoundException(`State ${stateId} not found`);
     }
 
+    const sorted = await this.resolveRows(stateId, yearId, query);
+
+    const limit = query.limit ?? MOHUA_STATE_ULBS_DEFAULT_LIMIT;
+    const totalPages = Math.max(1, Math.ceil(sorted.length / limit));
+    const page = Math.min(query.page ?? 1, totalPages);
+
+    return {
+      items: sorted.slice((page - 1) * limit, page * limit),
+      pagination: { page, limit, total: sorted.length, totalPages },
+    };
+  }
+
+  /**
+   * The table as an Excel file: every ULB the table would list for the same search and sort (all pages, no paging),
+   * with each form as "Submitted" / "Not submitted" instead of the table's tick and cross.
+   */
+  async exportToExcel(
+    stateId: string,
+    yearId: string,
+    query: GetMohuaStateUlbsQueryDto,
+  ): Promise<{ buffer: ExcelJS.Buffer; fileName: string }> {
+    const state = await this.stateModel
+      .findById(new Types.ObjectId(stateId))
+      .select('name')
+      .lean<{ name: string }>()
+      .exec();
+    if (!state) throw new NotFoundException(`State ${stateId} not found`);
+
+    const rows = await this.resolveRows(stateId, yearId, query);
+    const status = (submitted: boolean) =>
+      submitted ? MOHUA_STATE_ULBS_EXPORT_SUBMITTED : MOHUA_STATE_ULBS_EXPORT_NOT_SUBMITTED;
+
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('ULB-wise progress');
+    sheet.columns = [
+      { header: 'ULB Name', key: 'name', width: 44 },
+      { header: 'Census Code', key: 'censusCode', width: 14 },
+      { header: 'Allocation (₹ cr)', key: 'allocation', width: 18, style: { numFmt: '0.00' } },
+      { header: 'Unspent Balance (₹ cr)', key: 'unspentAmount', width: 22, style: { numFmt: '0.00' } },
+      { header: 'Elected Body', key: 'electedBody', width: 18 },
+      { header: 'Audited', key: 'audited', width: 16 },
+      { header: 'Provisional', key: 'unaudited', width: 16 },
+      { header: 'PFMS', key: 'pfms', width: 16 },
+      { header: 'SLB', key: 'slb', width: 16 },
+      { header: 'DUR', key: 'dur', width: 16 },
+    ];
+    sheet.getRow(1).font = { bold: true };
+    sheet.views = [{ state: 'frozen', ySplit: 1 }];
+    sheet.addRows(
+      rows.map((row) => ({
+        name: row.name,
+        censusCode: row.censusCode ?? '',
+        allocation: row.allocation,
+        unspentAmount: row.unspentAmount,
+        electedBody: row.electedBody ?? '',
+        audited: status(row.forms.audited),
+        unaudited: status(row.forms.unaudited),
+        pfms: status(row.forms.pfms),
+        slb: status(row.forms.slb),
+        dur: status(row.forms.dur),
+      })),
+    );
+
+    const slug = state.name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '');
+    return {
+      buffer: await workbook.xlsx.writeBuffer(),
+      fileName: `${slug || 'state'}-ulb-progress_${getTimeStamp(false)}.xlsx`,
+    };
+  }
+
+  /** The state's ULBs after search and sort — every page. Shared by the table (which then pages it) and the export. */
+  private async resolveRows(
+    stateId: string,
+    yearId: string,
+    query: GetMohuaStateUlbsQueryDto,
+  ): Promise<MohuaStateUlbRow[]> {
     const expectedUlbs = await this.expectedUlbSetService.resolve(stateId, yearId);
-    const [allocationByUlb, electedBodyByUlb, submitted] = await Promise.all([
+    const [allocationByUlb, unspentByUlb, electedBodyByUlb, submitted] = await Promise.all([
       this.loadAllocations(stateId, yearId),
+      this.loadUnspentAmounts(stateId, yearId),
       this.loadElectedBodies(stateId, yearId),
       this.ulbProgressService.loadSubmittedUlbIdsByForm(
         yearId,
@@ -57,6 +152,7 @@ export class MohuaStateUlbsService {
         name: ulb.name,
         censusCode: ulb.censusCode ?? ulb.sbCode ?? null,
         allocation: allocationByUlb.has(ulb.ulbId) ? toCrore(allocationByUlb.get(ulb.ulbId)!) : null,
+        unspentAmount: unspentByUlb.has(ulb.ulbId) ? toCrore(unspentByUlb.get(ulb.ulbId)!) : null,
         electedBody: electedBodyByUlb.get(ulb.ulbId) ?? null,
         forms: {
           audited: submitted.audited.has(ulb.ulbId),
@@ -69,16 +165,7 @@ export class MohuaStateUlbsService {
     );
 
     const matching = this.search(rows, expectedUlbs, query.search);
-    const sorted = this.sort(matching, query.sortBy ?? 'ulbName', query.sortDir ?? 'asc');
-
-    const limit = query.limit ?? MOHUA_STATE_ULBS_DEFAULT_LIMIT;
-    const totalPages = Math.max(1, Math.ceil(sorted.length / limit));
-    const page = Math.min(query.page ?? 1, totalPages);
-
-    return {
-      items: sorted.slice((page - 1) * limit, page * limit),
-      pagination: { page, limit, total: sorted.length, totalPages },
-    };
+    return this.sort(matching, query.sortBy ?? 'ulbName', query.sortDir ?? 'asc');
   }
 
   /** ulbId -> the ULB's total grant allocation (rupees) from the state's instalment-1 Devolution Formula active dataset. */
@@ -108,6 +195,37 @@ export class MohuaStateUlbsService {
           (row): row is Required<LeanAllocationRow> => !!row.ulbId && typeof row.totalGrantAllocation === 'number',
         )
         .map((row) => [String(row.ulbId), row.totalGrantAllocation]),
+    );
+  }
+
+  /**
+   * ulbId -> the ULB's FC Unspent balance (rupees) from the state's FC Unspent declaration for the year: the form is found
+   * by state and year, then its active rows by ULB. A ULB with no row, or a draft row whose figure is not entered yet
+   * (`unspentAmount: null`), is left out.
+   */
+  private async loadUnspentAmounts(stateId: string, yearId: string): Promise<Map<string, number>> {
+    const form = await this.unspentFormModel
+      .findOne({
+        state: new Types.ObjectId(stateId),
+        year: new Types.ObjectId(yearId),
+        formType: FC_UNSPENT_STATE_FORM_TYPE,
+        isDeleted: false,
+      })
+      .select('_id')
+      .lean<{ _id: Types.ObjectId }>()
+      .exec();
+    if (!form) return new Map();
+
+    const rows = await this.unspentRowModel
+      .find({ form: form._id, isActive: true, ulbId: { $ne: null } })
+      .select('ulbId unspentAmount')
+      .lean<LeanUnspentRow[]>()
+      .exec();
+
+    return new Map(
+      rows
+        .filter((row): row is Required<LeanUnspentRow> & { unspentAmount: number } => !!row.ulbId && typeof row.unspentAmount === 'number')
+        .map((row) => [String(row.ulbId), row.unspentAmount]),
     );
   }
 

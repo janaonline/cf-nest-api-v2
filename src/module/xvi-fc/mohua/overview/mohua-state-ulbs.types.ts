@@ -4,6 +4,8 @@ export interface MohuaStateUlbRow {
   censusCode: string | null;
   /** Total grant allocation in crore (Devolution Formula, instalment 1); null when the state has not uploaded one. */
   allocation: number | null;
+  /** The ULB's FC Unspent balance in crore (the state's FC Unspent declaration); null when there is no row or no figure yet. */
+  unspentAmount: number | null;
   /** The elected-body status as uploaded by the state; null when there is no row. */
   electedBody: string | null;
   /** Whether the ULB has submitted each form to the State (same rule as the State detail rings). */

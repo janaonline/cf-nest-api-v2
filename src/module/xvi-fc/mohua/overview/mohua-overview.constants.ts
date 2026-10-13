@@ -90,5 +90,9 @@ export const MOHUA_STATE_DETAIL_ULB_FORMS = [
 ] as const;
 
 export const MOHUA_STATE_ULBS_DEFAULT_LIMIT = 15;
+
+/** What the ULB-wise Excel export prints where the table shows a tick or a cross for a form. */
+export const MOHUA_STATE_ULBS_EXPORT_SUBMITTED = 'Submitted';
+export const MOHUA_STATE_ULBS_EXPORT_NOT_SUBMITTED = 'Not submitted';
 /** The biggest state has about 800 ULBs; one page never needs more than this. */
 export const MOHUA_STATE_ULBS_MAX_LIMIT = 100;
