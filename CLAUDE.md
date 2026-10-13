@@ -83,8 +83,10 @@ src/
 │   │                    # check goes through `isMohuaViewScope` (common/utils/xvi-fc-scope.util.ts)) plus the per-state
 │   │                    # GET xvi-fc/mohua/state/:stateId/:yearId (allocation, the 5 condition forms, per-form ULB
 │   │                    # submission counts), the state's paginated ULB list GET xvi-fc/mohua/state/:stateId/:yearId/ulbs (search,
-│   │                    # sort by ULB name/allocation, allocation from the Devolution Formula active dataset, per-form
-│   │                    # submitted flags), and one ULB's form statuses GET xvi-fc/mohua/ulb/:ulbId/:yearId/forms (status
+│   │                    # sort by ULB name/allocation, allocation from the Devolution Formula active dataset, unspent balance
+│   │                    # (`unspentAmount`, crore) from the state's FC Unspent declaration rows, per-form
+│   │                    # submitted flags; GET .../ulbs/export returns the same table as an Excel file — same search/sort, every
+│   │                    # page, each form as "Submitted" / "Not submitted"), and one ULB's form statuses GET xvi-fc/mohua/ulb/:ulbId/:yearId/forms (status
 │   │                    # text + `submitted`; the "submitted" rule — MOHUA_OVERVIEW_ULB_SUBMITTED_STATUSES, SLB at 8/12 only —
 │   │                    # lives only there, never in the UI). MoHUA also READS the PMU review GETs (view-only, see
 │   │                    # common/services/CLAUDE.md) and the per-ULB SLB / bank-account GETs (no stub writes for MOHUA), and
