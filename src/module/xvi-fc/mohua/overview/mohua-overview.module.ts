@@ -15,6 +15,10 @@ import {
   XviFcUnspentStateForm,
   XviFcUnspentStateFormSchema,
 } from 'src/schemas/xvi-fc/state/fc-unspent-state-form.schema';
+import {
+  XviFcUnspentStateFormRow,
+  XviFcUnspentStateFormRowSchema,
+} from 'src/schemas/xvi-fc/state/fc-unspent-state-form-row.schema';
 import { XviFcGtc, XviFcGtcSchema } from 'src/schemas/xvi-fc/state/gtc-form.schema';
 import { XviFcSfcStatus, XviFcSfcStatusSchema } from 'src/schemas/xvi-fc/state/sfc-status.schema';
 import {
@@ -51,6 +55,7 @@ import { MohuaOverviewUlbProgressService } from './mohua-overview-ulb-progress.s
       { name: ElectedUrbanLocalBodiesForm.name, schema: ElectedUrbanLocalBodiesFormSchema },
       { name: DevolutionFormulaForm.name, schema: DevolutionFormulaFormSchema },
       { name: XviFcUnspentStateForm.name, schema: XviFcUnspentStateFormSchema },
+      { name: XviFcUnspentStateFormRow.name, schema: XviFcUnspentStateFormRowSchema },
       { name: XviFcGtc.name, schema: XviFcGtcSchema },
       { name: DevolutionFormulaRow.name, schema: DevolutionFormulaRowSchema },
       { name: ElectedUrbanLocalBodiesRow.name, schema: ElectedUrbanLocalBodiesRowSchema },

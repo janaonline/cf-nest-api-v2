@@ -1,4 +1,4 @@
-import { Controller, ForbiddenException, Get, Param, Query, UseGuards } from '@nestjs/common';
+import { Controller, ForbiddenException, Get, Param, Query, StreamableFile, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from 'src/module/auth/decorators/current-user.decorator';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
@@ -46,6 +46,26 @@ export class MohuaStateDetailController {
   ) {
     this.assertMohuaScope(user);
     return xviFcSuccess('MoHUA state ULBs fetched.', await this.stateUlbsService.list(stateId, yearId, query));
+  }
+
+  @ApiOperation({
+    summary: "The ULB-wise progress table as an Excel file: the same ULBs for the same search/sort, every page, with each form as Submitted / Not submitted",
+  })
+  @Get(':stateId/:yearId/ulbs/export')
+  @UseGuards(PermissionGuard)
+  @RequirePermissions(Permission.VIEW_STATUS_REPORTS)
+  async exportStateUlbs(
+    @Param('stateId', ParseObjectIdPipe) stateId: string,
+    @Param('yearId', ParseObjectIdPipe) yearId: string,
+    @Query() query: GetMohuaStateUlbsQueryDto,
+    @CurrentUser() user: AuthUser,
+  ): Promise<StreamableFile> {
+    this.assertMohuaScope(user);
+    const { buffer, fileName } = await this.stateUlbsService.exportToExcel(stateId, yearId, query);
+    return new StreamableFile(new Uint8Array(buffer as ArrayBuffer), {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      disposition: `attachment; filename="${fileName}"`,
+    });
   }
 
   /** STATE users also hold VIEW_STATUS_REPORTS, but these views read any state — MoHUA/DoE (read-only)/ADMIN only. */
