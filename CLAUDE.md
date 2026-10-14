@@ -32,7 +32,10 @@ npm run migrate:xvifc-upload-block-24h   # TS-933: shortens already-active 7-day
 npm run migrate:xvifc-slb-state            # Backfills the new required `state` on existing xvifc_slb_forms docs from
                                           # their ULB (scripts/backfill-slb-state.ts). Re-runnable; `-- --dry-run` counts
                                           # and lists unresolvable (orphan) docs without writing
-npm run seed:xvifc-pmu-doe-menu           # Gives the XVIFC_PMU and DOE roles their sidebar rows (Overview, Profile > People
+npm run migrate:pmu-role-rename           # One-off: renames role XVIFC_PMU -> MOHUA_PMU in users + sidemenus
+                                          # (scripts/migrate-pmu-role-rename.ts). Re-runnable; `-- --dry-run` counts.
+                                          # Afterwards clear the side-menu cache (both role keys); PMU users must log in again
+npm run seed:xvifc-pmu-doe-menu           # Gives the MOHUA_PMU and DOE roles their sidebar rows (Overview, Profile > People
                                           # and Roles, Support) for every MoHUA menu year (scripts/seed-xvifc-pmu-doe-menu.ts).
                                           # Idempotent; `-- --dry-run` reports, `-- --year <id>` limits to one year. The side
                                           # menu is cached with no TTL, so afterwards run DELETE xvi-fc/admin/cache/side-menu.
@@ -121,7 +124,7 @@ src/
 │   │                            # `XVIFC_REMINDER_CRONS_ENABLED` and has no `send-*-now` endpoint. Never
 │   │                            # throws — a notification failure must not fail the underlying decision.
 │   └── xvi-fc.module.ts # composition root importing the feature modules above
-├── users/               # User CRUD with repository pattern. The three national teams — MoHUA, PMU (`XVIFC_PMU`) and DoE
+├── users/               # User CRUD with repository pattern. The three national teams — MoHUA, PMU (`MOHUA_PMU`) and DoE
 │                        # (`XVIFC_DOE`) — share one set of team-management methods (list / invite / re-role / transfer
 │                        # Submitter / remove) parameterised by a `TeamConfig` in users.service.ts; the controller exposes
 │                        # `mohua-members`, `pmu-members`, `doe-members` (+ `invite-*-member`, `*-permission-matrix`).

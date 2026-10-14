@@ -92,7 +92,7 @@ export type UserRole =
   | 'AFS_ADMIN'
   | 'XVIFC'
   | 'PMU'
-  | 'XVIFC_PMU'
+  | 'MOHUA_PMU'
   | 'XVIFC_DOE'
   | 'AAINA';
 

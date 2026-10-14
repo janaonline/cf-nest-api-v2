@@ -5,8 +5,8 @@ export enum UserRole {
   STATE = 'STATE',
   MoHUA = 'MoHUA',
   ADMIN = 'ADMIN',
-  // Must equal Role.XVIFC_PMU exactly — 'PMU' is a different, unrelated Fiscal Rankings role.
-  PMU = 'XVIFC_PMU',
+  // Must equal Role.MOHUA_PMU exactly — 'PMU' is a different, unrelated Fiscal Rankings role.
+  PMU = 'MOHUA_PMU',
   // Must equal Role.XVIFC_DOE exactly.
   DOE = 'XVIFC_DOE',
 }

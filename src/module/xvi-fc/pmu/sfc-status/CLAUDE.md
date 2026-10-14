@@ -2,7 +2,7 @@
 
 PMU-side review of the State-submitted SFC Status form (see `state/sfc-status/CLAUDE.md` — read
 that first for the form itself). Form-level only: approve/reject the one document per (state,
-year), no rows, no installments. PMU is an internal pre-screen before MoHUA (`XVIFC_PMU` role, see
+year), no rows, no installments. PMU is an internal pre-screen before MoHUA (`MOHUA_PMU` role, see
 `auth/enum/role.enum.ts`), not a status-bearing stage of its own: approving lands the form directly
 on `UNDER_REVIEW_BY_MOHUA` rather than some PMU-specific "approved" status. No `mohua/sfc-status`
 module exists yet to receive that handoff — same situation as `pmu/elected-urban-local-bodies`.
