@@ -17,3 +17,10 @@ export const DOC_TYPE_MAP: Record<string, string> = {
  * confirmUpload marks these PASSED immediately instead of enqueuing an OCR job.
  */
 export const NO_OCR_DOC_IDS = new Set<string>(['notes-to-accounts']);
+
+/**
+ * Server-side mirror of the UI's `minPages` rule for the Auditor's Report, enforced in
+ * confirmUpload so a client that skips or fails open on the browser check can't get through.
+ */
+export const AUDITORS_REPORT_DOC_ID = 'auditors-report';
+export const AUDITORS_REPORT_MIN_PAGES = 2;

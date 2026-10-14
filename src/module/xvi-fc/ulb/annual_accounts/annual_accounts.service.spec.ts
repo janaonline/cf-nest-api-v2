@@ -88,6 +88,7 @@ describe('AnnualAccountsService', () => {
     };
     mockUserModel = {
       findOne: jest.fn().mockReturnValue(mockQuery(null)),
+      findById: jest.fn().mockReturnValue(mockQuery({ name: 'Reviewer' })),
     };
     mockS3Service = {
       headObject: jest.fn().mockResolvedValue(undefined),
@@ -608,6 +609,32 @@ describe('AnnualAccountsService', () => {
 
       expect(result.processingStatus).toBe('PROCESSING');
       expect(mockOcrQueue.add).toHaveBeenCalled();
+    });
+
+    it("rejects a 1-page Auditor's Report before writing any history or enqueuing OCR", async () => {
+      mockS3Service.getPdfPageCountFromBuffer.mockResolvedValueOnce(1);
+      const dto = {
+        ...baseDto,
+        docId: 'auditors-report',
+        s3Key: `xvi-fc/annual-accounts/${ULB_ID}/${YEAR_ID}/auditedData/auditors-report/upload-1.pdf`,
+      };
+
+      await expect(service.confirmUpload(dto as any, baseUser)).rejects.toThrow(
+        'This document must contain at least 2 pages.',
+      );
+      expect(mockUploadHistoryModel.create as jest.Mock).not.toHaveBeenCalled();
+      expect(mockOcrQueue.add).not.toHaveBeenCalled();
+    });
+
+    it('does not apply the 2-page minimum to other documents', async () => {
+      mockS3Service.getPdfPageCountFromBuffer.mockResolvedValueOnce(1);
+      const dto = {
+        ...baseDto,
+        docId: 'notes-to-accounts',
+        s3Key: `xvi-fc/annual-accounts/${ULB_ID}/${YEAR_ID}/auditedData/notes-to-accounts/upload-1.pdf`,
+      };
+
+      await expect(service.confirmUpload(dto as any, baseUser)).resolves.toBeDefined();
     });
 
     it('rejects a docId that is neither OCR-mapped nor a known no-OCR document', async () => {
