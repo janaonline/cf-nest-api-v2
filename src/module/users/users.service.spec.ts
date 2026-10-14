@@ -266,7 +266,7 @@ describe('UsersService', () => {
 
   describe('PMU / DoE team management', () => {
     const dto = { name: 'A', email: 'a@b.com', mobile: '9999999999', designation: 'Officer', subRole: 'VIEWER' as const };
-    const pmuAdmin = () => makeMohuaAdmin({ role: Role.XVIFC_PMU });
+    const pmuAdmin = () => makeMohuaAdmin({ role: Role.MOHUA_PMU });
     const doeAdmin = () => makeMohuaAdmin({ role: Role.XVIFC_DOE });
 
     it('lists the roster only for a member of that team', async () => {

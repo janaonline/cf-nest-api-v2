@@ -2,7 +2,7 @@
 
 PMU-side review for the ULB-wise Allocation form filed in `state/devolution-formula` — a separate
 module, decoupled from the State-side one (same split as every other PMU reviewer). `PMU`
-(`XVIFC_PMU` permission group, `src/module/auth/enum/role.enum.ts`) is the actor that reviews a
+(`MOHUA_PMU` permission group, `src/module/auth/enum/role.enum.ts`) is the actor that reviews a
 State's submission before it reaches MoHUA — see that enum's own comment for the role's place in
 the pipeline. This reviewer is form-level only: whole-form approve/reject, installment-scoped, plus
 a read-only ULB-row listing so PMU isn't deciding blind. It never mutates row data (see "Read-only

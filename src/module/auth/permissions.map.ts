@@ -78,7 +78,7 @@ export const XVIFC_MOHUA_PERMISSIONS: Record<XviFcSubrole, Permission[]> = {
 
 // ─── XVI-FC PMU subrole permissions (PMU Review feature) ──────────────────────
 
-export const XVIFC_PMU_PERMISSIONS: Record<XviFcSubrole, Permission[]> = {
+export const MOHUA_PMU_PERMISSIONS: Record<XviFcSubrole, Permission[]> = {
   admin: [
     Permission.VIEW_STATUS_REPORTS,
     Permission.VIEW_DASHBOARDS,
@@ -125,7 +125,7 @@ export const XVIFC_DOE_PERMISSIONS: Record<XviFcSubrole, Permission[]> = {
  * 1. ADMIN role  → all permissions.
  * 2. STATE role  → XVIFC_STATE_PERMISSIONS[xviFcSubrole] (defaults to 'viewer' when unset).
  * 3. MoHUA role  → XVIFC_MOHUA_PERMISSIONS[xviFcSubrole] (defaults to 'viewer' when unset).
- * 4. PMU role    → XVIFC_PMU_PERMISSIONS[xviFcSubrole] (defaults to 'viewer' when unset).
+ * 4. PMU role    → MOHUA_PMU_PERMISSIONS[xviFcSubrole] (defaults to 'viewer' when unset).
  * 5. DoE role    → XVIFC_DOE_PERMISSIONS[xviFcSubrole] (defaults to 'viewer' when unset).
  * 6. ULB role    → pending; returns [] until XVIFC_ULB_PERMISSIONS is implemented.
  * 7. Other roles → no permissions (guard blocks the request).
@@ -151,7 +151,7 @@ export function getEffectivePermissions(user: {
   } else if (user.role === UserRole.MoHUA || user.scope === Scope.MOHUA) {
     base = XVIFC_MOHUA_PERMISSIONS[subrole] ?? XVIFC_MOHUA_PERMISSIONS.viewer;
   } else if (user.role === UserRole.PMU || user.scope === Scope.PMU) {
-    base = XVIFC_PMU_PERMISSIONS[subrole] ?? XVIFC_PMU_PERMISSIONS.viewer;
+    base = MOHUA_PMU_PERMISSIONS[subrole] ?? MOHUA_PMU_PERMISSIONS.viewer;
   } else if (user.role === UserRole.DOE || user.scope === Scope.DOE) {
     base = XVIFC_DOE_PERMISSIONS[subrole] ?? XVIFC_DOE_PERMISSIONS.viewer;
   } else {

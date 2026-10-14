@@ -23,7 +23,7 @@ import { Permission, Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.e
 import { Role } from 'src/module/auth/enum/role.enum';
 import {
   XVIFC_DOE_PERMISSIONS,
-  XVIFC_PMU_PERMISSIONS,
+  MOHUA_PMU_PERMISSIONS,
   getEffectivePermissions,
 } from 'src/module/auth/permissions.map';
 import { UpdateProfileContactsDto } from './dto/update-profile-contacts.dto';
@@ -198,7 +198,7 @@ function buildPermissionMatrix(
   }));
 }
 
-const PMU_MATRIX = buildPermissionMatrix(XVIFC_PMU_PERMISSIONS, [
+const PMU_MATRIX = buildPermissionMatrix(MOHUA_PMU_PERMISSIONS, [
   { label: 'View status and reports', permissionKey: Permission.VIEW_STATUS_REPORTS },
   { label: 'View dashboards', permissionKey: Permission.VIEW_DASHBOARDS },
   { label: 'View state submissions', permissionKey: Permission.REVIEW_STATE_SUBMISSIONS_PMU },
@@ -233,7 +233,7 @@ const MOHUA_TEAM: TeamConfig = {
   inviteTemplate: './mohua-member-invite',
 };
 const PMU_TEAM: TeamConfig = {
-  role: Role.XVIFC_PMU,
+  role: Role.MOHUA_PMU,
   label: 'PMU',
   orgName: 'Programme Management Unit (PMU)',
   inviteTemplate: './xvifc-team-invite',
@@ -290,7 +290,7 @@ export class UsersService {
     Role.STATE,
     Role.ULB,
     Role.MoHUA,
-    Role.XVIFC_PMU,
+    Role.MOHUA_PMU,
     Role.XVIFC_DOE,
   ]);
 
