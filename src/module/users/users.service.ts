@@ -245,6 +245,9 @@ const DOE_TEAM: TeamConfig = {
   inviteTemplate: './xvifc-team-invite',
 };
 
+/** Teams whose members may read each other's member list (People and Roles shows both). */
+const MOHUA_PMU_SHARED_ROLES: string[] = [MOHUA_TEAM.role, PMU_TEAM.role];
+
 // ─── Service ─────────────────────────────────────────────────────────────────
 
 @Injectable()
@@ -1270,7 +1273,10 @@ export class UsersService {
   }
 
   private async getTeamMembers(team: TeamConfig, requester: AuthUser): Promise<StateMemberResponseDto[]> {
-    if ((requester.role as string) !== team.role) {
+    const requesterRole = requester.role as string;
+    // MoHUA and PMU staff see each other's team (read-only — every write stays Submitter-of-own-team).
+    const sharedWithMohuaPmu = MOHUA_PMU_SHARED_ROLES.includes(requesterRole) && MOHUA_PMU_SHARED_ROLES.includes(team.role);
+    if (requesterRole !== team.role && !sharedWithMohuaPmu) {
       throw new ForbiddenException(`Only ${team.label} team members can view this list`);
     }
 

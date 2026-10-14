@@ -276,6 +276,14 @@ describe('UsersService', () => {
       await expect(service.getDoeMembers(makeMohuaAdmin())).rejects.toThrow(ForbiddenException);
     });
 
+    it("lets MoHUA and PMU read each other's roster, but never DoE's", async () => {
+      mockUserModel.exec.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+      await expect(service.getPmuMembers(makeMohuaAdmin())).resolves.toEqual([]);
+      await expect(service.getMohuaMembers(pmuAdmin())).resolves.toEqual([]);
+      await expect(service.getDoeMembers(pmuAdmin())).rejects.toThrow(ForbiddenException);
+      await expect(service.getMohuaMembers(doeAdmin())).rejects.toThrow(ForbiddenException);
+    });
+
     it("keeps one team's Submitter out of another team's invite", async () => {
       await expect(service.invitePmuMember(dto, makeMohuaAdmin())).rejects.toThrow(ForbiddenException);
       await expect(service.inviteDoeMember(dto, pmuAdmin())).rejects.toThrow(ForbiddenException);
@@ -310,9 +318,10 @@ describe('UsersService', () => {
       const pmu = service.getPmuPermissionMatrix();
       expect(pmu.find((r) => r.label === 'Approve / return state submissions')).toMatchObject({
         admin: true,
-        reviewer: false,
+        reviewer: true,
         viewer: false,
       });
+      expect(pmu.find((r) => r.label === 'Manage team')).toMatchObject({ admin: true, reviewer: false, viewer: false });
       expect(pmu.find((r) => r.label === 'View state submissions')).toMatchObject({ viewer: true });
     });
   });

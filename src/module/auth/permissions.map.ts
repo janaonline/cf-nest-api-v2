@@ -90,9 +90,15 @@ export const MOHUA_PMU_PERMISSIONS: Record<XviFcSubrole, Permission[]> = {
     Permission.UPDATE_MANAGED_USER,
     Permission.DELETE_MANAGED_USER,
   ],
-  reviewer: [Permission.VIEW_STATUS_REPORTS, Permission.VIEW_DASHBOARDS, Permission.REVIEW_STATE_SUBMISSIONS_PMU],
+  // The reviewer (Editor) decides state submissions like the admin, but cannot manage the team.
+  reviewer: [
+    Permission.VIEW_STATUS_REPORTS,
+    Permission.VIEW_DASHBOARDS,
+    Permission.REVIEW_STATE_SUBMISSIONS_PMU,
+    Permission.APPROVE_STATE_SUBMISSIONS_PMU,
+  ],
   // REVIEW_STATE_SUBMISSIONS_PMU is the read gate for the PMU review GETs — a viewer may open the forms but
-  // never decide them (approve/reject need APPROVE_STATE_SUBMISSIONS_PMU, held by admin only).
+  // never decide them (approve/reject need APPROVE_STATE_SUBMISSIONS_PMU, held by admin and reviewer).
   viewer: [Permission.VIEW_STATUS_REPORTS, Permission.VIEW_DASHBOARDS, Permission.REVIEW_STATE_SUBMISSIONS_PMU],
 };
 
