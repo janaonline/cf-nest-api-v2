@@ -124,6 +124,10 @@ export class LoginService {
       }
     }
 
+    if ((dto.type === '16thFC' || dto.type === 'XVIFC') && user.isXviFcdeleted) {
+      throw new ForbiddenException('Your access to the XVI-FC portal has been removed. Please contact your administrator.');
+    }
+
     if (dto.type) {
       if ([Role.PMU, Role.AAINA].includes(user.role) && dto.type === '15thFC') {
         throw new ForbiddenException(
