@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   Logger,
@@ -53,7 +54,12 @@ import {
   DocumentActionGateDocument,
   XviFcDocumentActionGate,
 } from '../../../../schemas/xvi-fc/document-action-gate.schema';
-import { DOC_TYPE_MAP, NO_OCR_DOC_IDS } from './constants/doc-type-map.constant';
+import {
+  AUDITORS_REPORT_DOC_ID,
+  AUDITORS_REPORT_MIN_PAGES,
+  DOC_TYPE_MAP,
+  NO_OCR_DOC_IDS,
+} from './constants/doc-type-map.constant';
 import { UploadDocumentDto } from './dto/upload-document.dto';
 import { PresignUploadDto } from './dto/presign-upload.dto';
 import { ConfirmUploadDto } from './dto/confirm-upload.dto';
@@ -69,6 +75,7 @@ import { ANNUAL_ACCOUNT_PROCESSING_QUEUE } from '../../../../core/constants/queu
 import { canUlbEditForm, canUlbSubmitForm } from '../../common/utils/xvi-fc-form-status-access.util';
 import { escapeRegex } from 'src/common/utils/regex.util';
 import { resolveStateScopeFilter } from 'src/module/xvi-fc/common/utils/xvi-fc-scope-filter.util';
+import { isMohuaViewScope } from 'src/module/xvi-fc/common/utils/xvi-fc-scope.util';
 import {
   buildDecisionRecord,
   resolveDeciderName,
@@ -270,6 +277,9 @@ export class AnnualAccountsService implements OnModuleInit {
     const sha256 = createHash('sha256').update(pdfBuffer).digest('hex');
     const sizeKb = Math.round((dto.fileSize / 1024) * 100) / 100;
     const pages = await this.s3Service.getPdfPageCountFromBuffer(pdfBuffer);
+    if (dto.docId === AUDITORS_REPORT_DOC_ID && pages < AUDITORS_REPORT_MIN_PAGES) {
+      throw new BadRequestException(`This document must contain at least ${AUDITORS_REPORT_MIN_PAGES} pages.`);
+    }
 
     // Always the 'audited' anchor document's id, regardless of which section is being
     // uploaded to — see resolveSectionDocument for why every external annualAccountId is
@@ -532,9 +542,12 @@ export class AnnualAccountsService implements OnModuleInit {
     // on `!doc` alone would miss the placeholder case entirely. revalidate runs whenever a document
     // already exists, to catch an admin having since undone the exemption; it independently no-ops
     // when neither section is a stale stub. Both re-fetch/re-derive from a fresh read afterward.
-    await this.materializeExemptionStubIfNeeded(ulbId, designYearId, user);
-    if (doc) {
-      await this.revalidateExemptionStubIfNeeded(doc, ulbId, designYearId);
+    // MoHUA and DoE only view: both of these can write (create, reset or delete a stub), so they never run for them.
+    if (!isMohuaViewScope(user)) {
+      await this.materializeExemptionStubIfNeeded(ulbId, designYearId, user);
+      if (doc) {
+        await this.revalidateExemptionStubIfNeeded(doc, ulbId, designYearId);
+      }
     }
     doc = await this.annualAccountModel
       .findOne({
@@ -1167,11 +1180,22 @@ export class AnnualAccountsService implements OnModuleInit {
       this.resolveExemptionStatusForResponse(anchor.ulb, anchor.design_year, section),
     ]);
 
+    const data = buildSectionStatus(sectionDoc);
+    // buildAnnualAccountPermissions only knows the section's own status - it has no concept of
+    // exemptions. A Pending or Approved exemption blocks the ULB's own write actions
+    // (confirmUpload/submitSection/removal - assertNotBlockedByPendingExemption) regardless of
+    // section status, so canUpload must reflect that here too. STATE/MoHUA review permissions
+    // (canReview/canApprove/canMohuaReview/...) are untouched - a separate question from whether
+    // the ULB can write to a section, not addressed by this exemption.
+    if (exemption.exemptionStatus === 'PENDING' || exemption.exemptionStatus === 'APPROVED') {
+      data.permissions = { ...data.permissions, canUpload: false };
+    }
+
     return {
       annualAccountId: anchor._id,
       ulbName: ulb?.name ?? null,
       ulbCode: ulb?.code ?? null,
-      data: buildSectionStatus(sectionDoc),
+      data,
       ...exemption,
     };
   }
@@ -1731,6 +1755,12 @@ export class AnnualAccountsService implements OnModuleInit {
    * that case; the ULB regains access the moment this entry leaves UNDER_REVIEW_BY_MOHUA/APPROVED.
    * Public so AnnualAccountManualReviewService.requestManualReview (a ULB action with no existing
    * section-status gate at all today) can reuse it too.
+   *
+   * Throws ConflictException (409), deliberately not ForbiddenException (403): the frontend's
+   * global HTTP interceptor treats *any* 403 as an invalid/expired session and force-logs the user
+   * out - correct for a genuine access violation, but wrong here, same reasoning as
+   * `SfcStatusService.assertNotBlockedByExemption` (this method's own mirror) and
+   * `request-exemption.service.ts`'s "already has a request for..." conflict.
    */
   async assertNotBlockedByPendingExemption(
     ulb: Types.ObjectId,
@@ -1739,12 +1769,12 @@ export class AnnualAccountsService implements OnModuleInit {
   ): Promise<void> {
     const entry = await this.exemptionResolverService.resolveDiscretionary(ulb, designYear, SECTION_FORM_IDS[section]);
     if (entry?.currentFormStatus === DISCRETIONARY_PENDING_STATUS) {
-      throw new ForbiddenException(
+      throw new ConflictException(
         `This section cannot be edited while a discretionary exemption request for ${SECTION_LABELS[section]} is pending MoHUA review.`,
       );
     }
     if (entry?.currentFormStatus === DISCRETIONARY_APPROVED_STATUS) {
-      throw new ForbiddenException(
+      throw new ConflictException(
         `This section is exempted per a MoHUA-approved discretionary exemption request for ${SECTION_LABELS[section]}; no submission is required.`,
       );
     }

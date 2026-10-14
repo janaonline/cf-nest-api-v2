@@ -127,7 +127,8 @@ export interface ClaimLetterUlbLevelEligibility {
  * kept as two deliberately separate methods: the gate answers "can this State claim at all,"
  * allocation resolution answers "how much, per ULB." Neither branches on a hardcoded formId — the
  * gate loops generically over whatever `formjsons` documents have an enabled `claimEligibility`
- * config for this design year (today: length 1, Devolution's own entry).
+ * config for this design year (as of 2026-09-28: SFC, Devolution, Elected Body, FC Unspent, GTC —
+ * a live count, not a fixed list).
  */
 @Injectable()
 export class ClaimLetterEligibilityService {

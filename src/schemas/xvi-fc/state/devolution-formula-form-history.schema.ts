@@ -50,6 +50,10 @@ export class DevolutionFormulaFormHistory {
   @Prop({ type: MongooseSchema.Types.Mixed, default: null })
   snapshot?: Record<string, unknown>[] | null;
 
+  // Form-level field snapshot, populated only on FINAL_SUBMIT — same rationale as `snapshot` above.
+  @Prop({ type: MongooseSchema.Types.Mixed, default: null })
+  data?: Record<string, unknown> | null;
+
   @Prop({ type: Boolean, default: true })
   isActive!: boolean;
 

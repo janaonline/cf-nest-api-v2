@@ -65,5 +65,18 @@ describe('StateService', () => {
 
       await expect(service.findAll()).rejects.toThrow('connection lost');
     });
+
+    it('additionally excludes Union Territories when excludeUT is true', async () => {
+      const lean = jest.fn().mockResolvedValue([]);
+      const sort = jest.fn().mockReturnValue({ lean });
+      stateModel.find.mockReturnValue({ sort });
+
+      await service.findAll(true);
+
+      expect(stateModel.find).toHaveBeenCalledWith(
+        { isActive: true, isPublish: true, isUT: false },
+        { name: 1, slug: 1, code: 1, regionalName: 1, censusCode: 1 },
+      );
+    });
   });
 });

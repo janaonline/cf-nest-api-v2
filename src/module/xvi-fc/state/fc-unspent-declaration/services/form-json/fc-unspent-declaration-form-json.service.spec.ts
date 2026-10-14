@@ -164,6 +164,32 @@ describe('FcUnspentDeclarationFormJsonService', () => {
     });
   });
 
+  describe('policy', () => {
+    it('2026-27 (14th FC) resolves to the independent, no-unspent-allowed policy with the seeded payload', async () => {
+      const config = await service.loadFormConfig(yearId);
+      expect(config.policy).toEqual({ devolutionLinked: false, eligibilityRule: { type: 'NO_UNSPENT_ALLOWED' } });
+    });
+
+    it('meta.unspentPolicy overrides the FC-cycle default for the year', async () => {
+      formJsonService['findActiveByDesignYearAndFormId'] = jest.fn().mockResolvedValue({
+        ...FC_UNSPENT_STATE_FORM_JSON,
+        meta: {
+          eligibilityThresholdPercent: 0,
+          unspentPolicy: {
+            devolutionLinked: true,
+            eligibilityRule: { type: 'MAX_PERCENT_OF_ALLOCATION', thresholdPercent: 10 },
+          },
+        },
+      });
+      const config = await service.loadFormConfig(yearId);
+      expect(config.policy).toEqual({
+        devolutionLinked: true,
+        eligibilityRule: { type: 'MAX_PERCENT_OF_ALLOCATION', thresholdPercent: 10 },
+      });
+      expect(config.thresholdPercent).toBe(10);
+    });
+  });
+
   it('loadFields fetches the form-json document exactly once (delegates to loadFormConfig, no duplicate fetch)', async () => {
     await service.loadFields(yearId);
     expect(formJsonService['findActiveByDesignYearAndFormId']).toHaveBeenCalledTimes(1);

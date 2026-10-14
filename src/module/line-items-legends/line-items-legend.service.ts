@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, Injectable, Logger, NotFoundExc
 import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model } from 'mongoose';
 import { RedisService } from 'src/core/services/redis/redis.service';
+import { escapeRegex } from 'src/common/utils/regex.util';
 import { CreateLineItemsLegendDto } from './dto/create-line-items-legend.dto';
 import { FinancialDataTemplateQueryDto } from './dto/financial-data-template-query.dto';
 import { ImportLineItemsTemplateDto } from './dto/import-line-items-template.dto';
@@ -117,7 +118,10 @@ export class LineItemsLegendService {
     if (parentCode !== undefined) filter['parentCode'] = parentCode;
     if (level !== undefined) filter['level'] = level;
     if (isActive !== undefined) filter['isActive'] = isActive;
-    if (search) filter['$or'] = [{ nmamCode: new RegExp(search, 'i') }, { name: new RegExp(search, 'i') }];
+    if (search) {
+      const regex = new RegExp(escapeRegex(search), 'i');
+      filter['$or'] = [{ nmamCode: regex }, { name: regex }];
+    }
 
     const skip = (page - 1) * limit;
     const [data, total] = await Promise.all([

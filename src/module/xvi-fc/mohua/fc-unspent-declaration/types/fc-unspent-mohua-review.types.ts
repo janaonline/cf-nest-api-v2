@@ -12,6 +12,7 @@ export interface FcUnspentMohuaFormLean {
   currentFormStatus: number;
   isFcUnspent: boolean | null;
   fcDeclaration: unknown;
+  fcUnspentDeclaration: unknown;
   checkboxConfirmation: boolean;
   auditRevision: number;
 }
@@ -25,9 +26,10 @@ export interface FcUnspentMohuaRowLean {
   censusCode: string;
   sbCode: string;
   ulbName: string;
-  allocationAmount: number;
+  allocationAmount: number | null;
   unspentAmount: number;
-  allocationPerc: number;
+  previousFcUnspentBalance: number;
+  allocationPerc: number | null;
   eligibility: boolean;
   rowStatus: RowReviewStatus | null;
   /** May be `undefined` on rows inserted via the State module's bulkWrite upsert (schema defaults
@@ -88,9 +90,10 @@ export interface FcUnspentMohuaRow {
   censusCode: string | null;
   sbCode: string | null;
   ulbName: string;
-  allocationAmount: number;
+  allocationAmount: number | null;
   unspentAmount: number;
-  allocationPerc: number;
+  previousFcUnspentBalance: number;
+  allocationPerc: number | null;
   eligibility: boolean;
   rowStatus: RowReviewStatus | null;
   rejectionRemark: string | null;

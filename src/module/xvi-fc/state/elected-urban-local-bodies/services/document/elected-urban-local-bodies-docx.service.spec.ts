@@ -101,7 +101,7 @@ describe('ElectedUrbanLocalBodiesDocxService', () => {
     expect(xml).toMatch(/<w:u\b/);
   });
 
-  it('opens with the EULB-specific addressee block, not the shared MoHUA one', async () => {
+  it('opens with the shared MoHUA addressee block (also used by fc-unspent-declaration)', async () => {
     documentService.getDocumentData.mockResolvedValue(buildDocumentData(1));
     const result = await service.generateElectedBodiesListDocument(stateId, yearId, user);
     const xml = await extractDocumentXml(result.buffer);

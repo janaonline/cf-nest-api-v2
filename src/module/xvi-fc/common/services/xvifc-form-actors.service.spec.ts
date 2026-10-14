@@ -105,5 +105,33 @@ describe('XvifcFormActorsService', () => {
       const { actors } = service.buildActorsAndStateName(doc);
       expect(actors.map((a) => a.date)).toEqual([null, null, null]);
     });
+
+    it('"Updated by" prefers stateUpdatedBy/stateUpdatedAt over the generic updatedBy/updatedAt — a PMU/MoHUA review action must never surface as the State\'s own last update', () => {
+      const doc: XvifcActorSourceDocument = {
+        updatedBy: { name: 'PMU Reviewer' },
+        updatedAt: new Date('2026-02-01T00:00:00.000Z'),
+        stateUpdatedBy: { name: 'State Officer' },
+        stateUpdatedAt: new Date('2026-01-15T00:00:00.000Z'),
+      };
+
+      const { actors } = service.buildActorsAndStateName(doc);
+      const updatedByActor = actors.find((a) => a.action === 'Updated by');
+
+      expect(updatedByActor?.by).toBe('State Officer');
+      expect(updatedByActor?.date).toBe('2026-01-15T00:00:00.000Z');
+    });
+
+    it('"Updated by" falls back to the generic updatedBy/updatedAt when stateUpdatedBy/stateUpdatedAt is absent (documents saved before this field existed)', () => {
+      const doc: XvifcActorSourceDocument = {
+        updatedBy: { name: 'Legacy Updater' },
+        updatedAt: new Date('2026-02-01T00:00:00.000Z'),
+      };
+
+      const { actors } = service.buildActorsAndStateName(doc);
+      const updatedByActor = actors.find((a) => a.action === 'Updated by');
+
+      expect(updatedByActor?.by).toBe('Legacy Updater');
+      expect(updatedByActor?.date).toBe('2026-02-01T00:00:00.000Z');
+    });
   });
 });

@@ -118,9 +118,7 @@ describe('StateDashboardController', () => {
       const headers = result.getHeaders();
       expect(result).toBeInstanceOf(StreamableFile);
       expect(headers.type).toBe('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-      expect(headers.disposition).toBe(
-        'attachment; filename="andhra_pradesh_all_ulb_submissions_13_07_2026.xlsx"',
-      );
+      expect(headers.disposition).toBe('attachment; filename="andhra_pradesh_all_ulb_submissions_13_07_2026.xlsx"');
     });
 
     it('retains the REVIEW_ULB_SUBMISSIONS permission decorator', () => {

@@ -168,6 +168,33 @@ describe('ExemptionResolverService', () => {
         mohuaRemarks: 'Missing signature',
       });
     });
+
+    it('resolves the whole-state branch (ulb: null) scoped by stateId, e.g. for SFC Status (formId 22)', async () => {
+      const stateId = new Types.ObjectId();
+      const requestId = new Types.ObjectId();
+      eligibilityExemptionModel.findOne.mockReturnValue(
+        q({
+          _id: requestId,
+          ulb: null,
+          data: [
+            { formId: 22, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA, decidedAt: null, mohuaRemarks: null },
+          ],
+        }),
+      );
+
+      const result = await service.resolveDiscretionary(null, year2627._id, 22, stateId);
+
+      expect(result).toEqual({
+        requestId,
+        currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+        decidedAt: null,
+        mohuaRemarks: null,
+      });
+      expect(eligibilityExemptionModel.findOne).toHaveBeenCalledWith(
+        { ulb: null, year: year2627._id, 'data.formId': 22, state: stateId },
+        { ulb: 1, data: 1 },
+      );
+    });
   });
 
   describe('resolveDiscretionaryBulk', () => {

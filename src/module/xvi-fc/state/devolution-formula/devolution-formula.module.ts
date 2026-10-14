@@ -20,6 +20,7 @@ import {
 } from 'src/schemas/xvi-fc/state/devolution-formula-form-history.schema';
 import { Ulb, UlbSchema } from 'src/schemas/ulb.schema';
 import { GrantAllocation, GrantAllocationSchema } from 'src/schemas/xvi-fc/grant-allocation.schema';
+import { ClaimLetterUlbLock, ClaimLetterUlbLockSchema } from 'src/schemas/xvi-fc/state/claim-letter-ulb-lock.schema';
 import { DevolutionFormulaController } from './devolution-formula.controller';
 import { DevolutionFormulaService } from './services/main/devolution-formula.service';
 import { DevolutionFormulaExcelService } from './services/excel/devolution-formula-excel.service';
@@ -35,6 +36,7 @@ import { UlbEligibilityModule } from 'src/module/ulb-eligibility/ulb-eligibility
       { name: DevolutionFormulaFormHistory.name, schema: DevolutionFormulaFormHistorySchema },
       { name: Ulb.name, schema: UlbSchema },
       { name: GrantAllocation.name, schema: GrantAllocationSchema },
+      { name: ClaimLetterUlbLock.name, schema: ClaimLetterUlbLockSchema },
     ]),
     XviFcCommonModule,
     FormJsonModule,

@@ -5,6 +5,7 @@ import { ConfigService } from '@nestjs/config';
 import { MongoServerError } from 'mongodb';
 import { Types } from 'mongoose';
 import * as XLSX from 'xlsx';
+import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import { ElectedUrbanLocalBodiesExcelService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/excel/elected-urban-local-bodies-excel.service';
 import { ElectedUrbanLocalBodiesForm } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
 import { ElectedUrbanLocalBodiesRow } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
@@ -232,6 +233,7 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
         sort: jest.fn().mockReturnValue({ lean: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue([]) }) }),
       }),
       bulkWrite: jest.fn().mockResolvedValue({}),
+      exists: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue(null) }),
     };
 
     mockSession = buildMockSession();
@@ -493,8 +495,8 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
       );
 
       const { response } = await catchBadRequest(() => service.validateExcel(makeDto(), adminUser));
-      const dataErrors = (response.data as { validationErrors?: EulbRowValidationError[] } | undefined)
-        ?.validationErrors ?? [];
+      const dataErrors =
+        (response.data as { validationErrors?: EulbRowValidationError[] } | undefined)?.validationErrors ?? [];
 
       expect(dataErrors.some((e) => e.field === 'censusCode' && e.code === 'unknownUlb')).toBe(true);
     });
@@ -520,8 +522,8 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
       expect(docs).toHaveLength(0);
 
       // The row is still fully reported — just never written as a row.
-      const dataErrors = (response.data as { validationErrors?: EulbRowValidationError[] } | undefined)
-        ?.validationErrors ?? [];
+      const dataErrors =
+        (response.data as { validationErrors?: EulbRowValidationError[] } | undefined)?.validationErrors ?? [];
       expect(dataErrors.some((e) => e.field === 'censusCode' && e.code === 'unknownUlb')).toBe(true);
     });
 
@@ -637,8 +639,8 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
 
     it('includes unknownUlb and ulbName required errors in exception data', async () => {
       const { response } = await catchBadRequest(() => service.validateExcel(makeDto(), adminUser));
-      const dataErrors = (response.data as { validationErrors?: EulbRowValidationError[] } | undefined)
-        ?.validationErrors ?? [];
+      const dataErrors =
+        (response.data as { validationErrors?: EulbRowValidationError[] } | undefined)?.validationErrors ?? [];
 
       expect(dataErrors.some((e) => e.field === 'censusCode' && e.code === 'unknownUlb')).toBe(true);
       expect(dataErrors.some((e) => e.field === 'ulbName' && e.code === 'required')).toBe(true);
@@ -673,8 +675,8 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
 
     it('includes required errors for both censusCode and ulbName in exception data', async () => {
       const { response } = await catchBadRequest(() => service.validateExcel(makeDto(), adminUser));
-      const dataErrors = (response.data as { validationErrors?: EulbRowValidationError[] } | undefined)
-        ?.validationErrors ?? [];
+      const dataErrors =
+        (response.data as { validationErrors?: EulbRowValidationError[] } | undefined)?.validationErrors ?? [];
 
       expect(dataErrors.some((e) => e.field === 'ulbName' && e.code === 'required')).toBe(true);
       expect(dataErrors.some((e) => e.field === 'censusCode' && e.code === 'required')).toBe(true);
@@ -878,8 +880,8 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
       const [docs] = rowModel.insertMany.mock.calls[0] as [Record<string, unknown>[]];
       expect(docs).toHaveLength(0);
 
-      const dataErrors = (response.data as { validationErrors?: EulbRowValidationError[] } | undefined)
-        ?.validationErrors ?? [];
+      const dataErrors =
+        (response.data as { validationErrors?: EulbRowValidationError[] } | undefined)?.validationErrors ?? [];
       // First row: unmatched → unknownUlb
       expect(dataErrors.some((e) => e.rowNumber === 1 && e.code === 'unknownUlb')).toBe(true);
       // Second row: unmatched AND duplicate → both errors
@@ -924,6 +926,26 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
   // ─── existing dataset replacement ─────────────────────────────────────────
 
   describe('existing dataset replacement', () => {
+    it('blocks the reupload with rowsLocked once any row has been approved by PMU (mixed-approval deadlock fix)', async () => {
+      formModel.findOne = jest.fn().mockReturnValue({
+        lean: () => ({ exec: () => Promise.resolve({ _id: formOid, activeDatasetVersion: 3, currentFormStatus: 14 }) }),
+      });
+      rowModel.exists = jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue({ _id: new Types.ObjectId() }) });
+
+      const { response } = await catchBadRequest(() => service.validateExcel(makeDto(), adminUser));
+
+      expect(response.errors?.['electedBodyExcelFile']).toEqual(
+        expect.arrayContaining([expect.objectContaining({ code: 'rowsLocked' })]),
+      );
+      expect(rowModel.exists).toHaveBeenCalledWith({
+        form: formOid,
+        datasetVersion: 3,
+        isActive: true,
+        rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+      });
+      expect(formModel.findOneAndUpdate).not.toHaveBeenCalled();
+    });
+
     it('deactivates previous active rows before inserting the new active dataset', async () => {
       formModel.findOne = jest.fn().mockReturnValue({
         lean: () => ({ exec: () => Promise.resolve({ _id: formOid, activeDatasetVersion: 3, currentFormStatus: 1 }) }),
@@ -1218,6 +1240,7 @@ describe('ElectedUrbanLocalBodiesExcelService — revalidateExcel', () => {
       insertMany: jest.fn().mockResolvedValue([]),
       deleteMany: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue({ deletedCount: 0 }) }),
       updateMany: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue({ modifiedCount: 0 }) }),
+      exists: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue(null) }),
     };
 
     mockSession = buildMockSession();
@@ -1283,6 +1306,24 @@ describe('ElectedUrbanLocalBodiesExcelService — revalidateExcel', () => {
   // ─── Case A: active rows exist — in-place revalidation ───────────────────
 
   describe('Case A — in-place revalidation of existing rows', () => {
+    it('blocks revalidation with rowsLocked once any row has been approved by PMU (mixed-approval deadlock fix)', async () => {
+      formModel.findOne = jest.fn().mockReturnValue({
+        lean: () => ({ exec: () => Promise.resolve({ ...baseFormDoc, currentFormStatus: 14 }) }),
+      });
+      rowModel.exists = jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue({ _id: new Types.ObjectId() }) });
+
+      await expect(service.revalidateExcel(stateOid.toString(), yearOid.toString(), adminUser)).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(rowModel.exists).toHaveBeenCalledWith({
+        form: formOid,
+        datasetVersion: baseFormDoc.activeDatasetVersion,
+        isActive: true,
+        rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+      });
+      expect(rowModel.find).not.toHaveBeenCalled();
+    });
+
     it('returns 200 VALID when all stored rows are DB_ULB and fully match active registry', async () => {
       formModel.findOne = jest.fn().mockReturnValue({
         lean: () => ({ exec: () => Promise.resolve(baseFormDoc) }),

@@ -19,13 +19,13 @@ import {
 import {
   applyActionVisibility,
   findSupportingAction,
-  stripSupportingContentMeta,
 } from '../../common/utils/xvi-fc-supporting-content-visibility.util';
 import { XviFcGtc, XviFcGtcDocument } from '../../../../schemas/xvi-fc/state/gtc-form.schema';
 import { XviFcGtcHistory, XviFcGtcHistoryDocument } from '../../../../schemas/xvi-fc/state/gtc-form-history.schema';
 import { DynamicFormValidationService } from '../../common/dynamic-form-validation/dynamic-form-validation.service';
 import { XvifcFormActorsService } from '../../common/services/xvifc-form-actors.service';
 import { FileInfoNormalizerService } from '../../common/services/file-info-normalizer.service';
+import { FormQuestionHydratorService } from '../../common/services/form-question-hydrator.service';
 import { FileInfo } from '../../../../schemas/common/file.schema';
 
 import type {
@@ -37,7 +37,7 @@ import type {
 import { XviFcApiResponse } from '../../common/response/xvi-fc-api-response';
 import { throwXviFcValidationError, xviFcSuccess } from '../../common/response/xvi-fc-response.util';
 import {
-  buildXviFcFolderPath,
+  resolveXviFcFolderPathsInFormJson,
   type XviFcFolderPathContext,
 } from '../../common/folder-paths/xvi-fc-folder-path.resolver';
 import { YearIdToLabel } from 'src/core/constants/years';
@@ -58,12 +58,15 @@ type GtcLeanDoc = {
   state?: Types.ObjectId | PopulatedNameRef;
   createdBy?: Types.ObjectId | PopulatedNameRef;
   updatedBy?: Types.ObjectId | PopulatedNameRef;
+  stateUpdatedBy?: Types.ObjectId | PopulatedNameRef;
+  stateUpdatedAt?: Date;
   submittedBy?: Types.ObjectId | PopulatedNameRef;
   createdAt?: Date;
   updatedAt?: Date;
   submittedAt?: Date;
   currentFormStatus?: number;
   data?: unknown;
+  pmuRemarks?: string | null;
 };
 
 /** Static template asset resolved off a field's `download-template` supporting action `meta`. */
@@ -88,25 +91,15 @@ export class GtcService {
     private readonly fileInfoNormalizer: FileInfoNormalizerService,
     private readonly fileTokenService: FileTokenService,
     private readonly s3Service: S3Service,
+    private readonly formQuestionHydrator: FormQuestionHydratorService,
   ) {}
 
-  /** Returns the GTC question config array from the DB for frontend rendering. */
   async getQuestions(): Promise<XviFcApiResponse<FieldConfig[]>> {
     const questions = await this.loadFormQuestions();
     return xviFcSuccess('GTC questions fetched.', questions);
   }
 
-  /**
-   * Returns the hydrated GTC form for a given state, year, and installment.
-   * Questions are merged with saved data: answered fields use saved values, unanswered fields
-   * use the `value` default from the DB-loaded question config. Returns a fully hydrated
-   * Not Started form when no record exists.
-   *
-   * @param stateId     - ObjectId string of the target state.
-   * @param yearId      - ObjectId string of the target year.
-   * @param installment - 1 or 2.
-   * @param user        - Authenticated user; scope-checked against stateId.
-   */
+  /** Returns a fully hydrated Not Started form when no record exists yet. */
   async getForm(
     stateId: string,
     yearId: string,
@@ -125,6 +118,7 @@ export class GtcService {
       .populate('state', 'name')
       .populate('createdBy', 'name')
       .populate('updatedBy', 'name')
+      .populate('stateUpdatedBy', 'name')
       .populate('submittedBy', 'name')
       .lean<GtcLeanDoc>()
       .exec();
@@ -163,17 +157,14 @@ export class GtcService {
       actors,
       instructions: [],
       installmentAccess: this.buildInstallmentAccess(),
+      pmuRemarks: doc?.pmuRemarks ?? null,
     };
 
     return xviFcSuccess('GTC form fetched.', responseData);
   }
 
-  /**
-   * Saves the GTC form as a draft.
-   * Runs partial validation - absent required fields are allowed; requiredTrue and all format
-   * validators are still enforced on any provided value. Upserts by state + year + installment.
-   * Sets status to IN_PROGRESS.
-   */
+  /** Runs partial validation - absent required fields are allowed, but requiredTrue and format
+   *  validators are still enforced on any provided value. */
   async saveDraft(dto: SaveGtcDto, user: AuthUser, ip: string, userAgent: string): Promise<XviFcApiResponse> {
     assertStateAccess(user, dto.stateId);
 
@@ -204,7 +195,15 @@ export class GtcService {
       const updated = await this.model
         .findOneAndUpdate(
           { ...filter, currentFormStatus: existing.currentFormStatus },
-          { $set: { data: sanitizedPayload, currentFormStatus: FORM_STATUS.IN_PROGRESS, updatedBy: userOid } },
+          {
+            $set: {
+              data: sanitizedPayload,
+              currentFormStatus: FORM_STATUS.IN_PROGRESS,
+              updatedBy: userOid,
+              stateUpdatedBy: userOid,
+              stateUpdatedAt: new Date(),
+            },
+          },
           { new: true },
         )
         .lean()
@@ -226,8 +225,13 @@ export class GtcService {
         userAgent,
       });
 
+      const {
+        updatedBy: _updatedBy,
+        updatedAt: _updatedAt,
+        ...updatedWithoutAuditFields
+      } = updated as Record<string, unknown>;
       return xviFcSuccess('GTC form saved as draft.', {
-        ...updated,
+        ...updatedWithoutAuditFields,
         currentFormStatusLabel: getFormStatusLabel(FORM_STATUS.IN_PROGRESS),
       });
     }
@@ -242,6 +246,8 @@ export class GtcService {
         currentFormStatus: FORM_STATUS.IN_PROGRESS,
         createdBy: userOid,
         updatedBy: userOid,
+        stateUpdatedBy: userOid,
+        stateUpdatedAt: new Date(),
         isActive: true,
         isDeleted: false,
       });
@@ -263,19 +269,19 @@ export class GtcService {
       userAgent,
     });
 
+    const {
+      updatedBy: _updatedBy,
+      updatedAt: _updatedAt,
+      ...createdWithoutAuditFields
+    } = created.toObject() as Record<string, unknown>;
     return xviFcSuccess('GTC form saved as draft.', {
-      ...created.toObject(),
+      ...createdWithoutAuditFields,
       currentFormStatusLabel: getFormStatusLabel(FORM_STATUS.IN_PROGRESS),
     });
   }
 
-  /**
-   * Final-submits the GTC form for a given state, year, and installment.
-   * Supports one-shot submit: creates the record if none exists yet. Runs full validation -
-   * all visible required fields must be present and valid. Persists the sanitized visible-field
-   * payload and transitions status to UNDER_REVIEW_BY_MOHUA. Blocked by
-   * `assertCanStateFinalSubmitForm`.
-   */
+  /** Supports one-shot submit - creates the record if none exists yet, without requiring a prior
+   *  draft. */
   async finalSubmit(dto: SaveGtcDto, user: AuthUser, ip: string, userAgent: string): Promise<XviFcApiResponse> {
     assertStateAccess(user, dto.stateId);
 
@@ -306,7 +312,7 @@ export class GtcService {
       existing?.data ?? {},
     );
     if (Object.keys(fileErrors).length > 0) throwXviFcValidationError(fileErrors);
-    const toStatus = FORM_STATUS.UNDER_REVIEW_BY_MOHUA;
+    const toStatus = FORM_STATUS.UNDER_REVIEW_BY_PMU;
     const now = new Date();
 
     let formOid: Types.ObjectId;
@@ -323,6 +329,8 @@ export class GtcService {
               submittedBy: userOid,
               submittedAt: now,
               updatedBy: userOid,
+              stateUpdatedBy: userOid,
+              stateUpdatedAt: now,
             },
           },
           { new: true },
@@ -348,6 +356,8 @@ export class GtcService {
           submittedAt: now,
           createdBy: userOid,
           updatedBy: userOid,
+          stateUpdatedBy: userOid,
+          stateUpdatedAt: now,
           isActive: true,
           isDeleted: false,
         });
@@ -371,21 +381,17 @@ export class GtcService {
       changedBy: userOid,
       ip,
       userAgent,
+      data: sanitizedPayload,
     });
 
+    const { updatedBy: _updatedBy, updatedAt: _updatedAt, ...resultWithoutAuditFields } = result;
     return xviFcSuccess('GTC form submitted successfully.', {
-      ...result,
+      ...resultWithoutAuditFields,
       currentFormStatusLabel: getFormStatusLabel(toStatus),
     });
   }
 
-  /**
-   * Returns a signed download URL for the static GTC template configured on this design
-   * year/installment's formJson (e.g. 2026-27 installment 1's Word template). The template
-   * asset is an admin-uploaded S3 object referenced via a field's `download-template` action
-   * `meta` - never generated on the fly. A year/installment whose formJson has no such field
-   * (every ordinary questionnaire submission) fails with `templateNotConfigured`.
-   */
+  /** See CLAUDE.md's "Static template download" section for the full design. */
   async getTemplate(
     stateId: string,
     yearId: string,
@@ -445,63 +451,36 @@ export class GtcService {
 
   // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-  /**
-   * Merges saved form data onto the question template in one O(n) pass. For each question:
-   * uses saved value if the key exists in savedData, otherwise keeps the template default.
-   * File-type questions additionally have their fileUrl signed with a session-length token
-   * (`FileTokenService.signFileUrlForSession`). Any field carrying a `download-template`
-   * supporting action has that action's visibility set to `canEdit && templateConfigured`, and
-   * `meta` is always stripped before the question leaves this method - `meta` is a backend-only
-   * extension point (the S3 path) that must never reach the client.
-   */
+  /** Layers GTC's canEdit-gated download-template visibility on the shared hydrator core; reads
+   *  `resolveTemplateMeta` off the pre-hydration question since hydration strips `meta` - see
+   *  CLAUDE.md's "Static template download" section. */
   private hydrateQuestions(
     savedData: FormData,
     formJson: FormJson,
     canEdit: boolean,
     folderPathContext?: XviFcFolderPathContext,
   ): HydratedFieldConfig[] {
-    return formJson.data.map((question) => {
-      const value = Object.prototype.hasOwnProperty.call(savedData, question.key)
-        ? savedData[question.key]
-        : question.value;
+    const coreHydrated = this.formQuestionHydrator.hydrate(formJson.data, savedData);
+    const withFolderPaths = folderPathContext
+      ? resolveXviFcFolderPathsInFormJson(coreHydrated, folderPathContext)
+      : coreHydrated;
 
-      let hydrated: HydratedFieldConfig;
+    return withFolderPaths.map((hydrated, i) => {
+      const question = formJson.data[i];
+      if (!findSupportingAction(hydrated.supportingContent, GTC_ACTION_DOWNLOAD_TEMPLATE)) return hydrated;
 
-      if (question.formFieldType === 'file') {
-        const resolvedFolderPath =
-          question.folderPathKey && folderPathContext
-            ? buildXviFcFolderPath(question.folderPathKey, folderPathContext)
-            : question.folderPath;
-
-        const fileVal = value as FileInfo | null | undefined;
-        const hydratedFile = this.fileInfoNormalizer.hydrateFileInfoForResponse(fileVal ?? null, (p) =>
-          this.fileTokenService.signFileUrlForSession(p),
-        );
-        hydrated = { ...question, folderPath: resolvedFolderPath, value: hydratedFile ?? value };
-      } else {
-        hydrated = { ...question, value };
-      }
-
-      if (findSupportingAction(hydrated.supportingContent, GTC_ACTION_DOWNLOAD_TEMPLATE)) {
-        const templateConfigured = !!this.resolveTemplateMeta(question);
-        hydrated = {
-          ...hydrated,
-          supportingContent: applyActionVisibility(hydrated.supportingContent, {
-            [GTC_ACTION_DOWNLOAD_TEMPLATE]: canEdit && templateConfigured,
-          }),
-        };
-      }
-
-      return { ...hydrated, supportingContent: stripSupportingContentMeta(hydrated.supportingContent) };
+      const templateConfigured = !!this.resolveTemplateMeta(question);
+      return {
+        ...hydrated,
+        supportingContent: applyActionVisibility(hydrated.supportingContent, {
+          [GTC_ACTION_DOWNLOAD_TEMPLATE]: canEdit && templateConfigured,
+        }),
+      };
     });
   }
 
-  /**
-   * Reads the design-year/installment-specific template asset (S3 path/fileName/mimeType) off
-   * a field's `download-template` supporting action `meta` - DB-driven, single source of truth.
-   * Returns `undefined` (not a thrown error) when the action or a well-formed `meta` is absent -
-   * that's the expected state for every ordinary questionnaire submission with no template.
-   */
+  /** Returns `undefined` (not a thrown error) when absent/malformed - the expected state for an
+   *  ordinary questionnaire submission. See CLAUDE.md's "Static template download" section. */
   private resolveTemplateMeta(field: FieldConfig): GtcTemplateAsset | undefined {
     const action = findSupportingAction(field.supportingContent, GTC_ACTION_DOWNLOAD_TEMPLATE);
     const meta = action?.meta;
@@ -553,12 +532,8 @@ export class GtcService {
     });
   }
 
-  /**
-   * TODO: installment 2 has no configured questionnaire yet for any design year - unlock once a
-   * year's formJson.data is authored for installment 2 (see this module's CLAUDE.md). Until then
-   * installment 2 stays locked for every state, same stub pattern as Devolution Formula's
-   * `isInstallment2Unlocked`.
-   */
+  /** TODO: unlock once installment 2's questionnaire is authored - see CLAUDE.md's Known Gaps
+   *  section. */
   private isInstallment2Unlocked(): boolean {
     return false;
   }
@@ -576,11 +551,8 @@ export class GtcService {
     };
   }
 
-  /**
-   * Inserts a history row unless `fromStatus === toStatus` (no-op re-save). The form document
-   * is updated first; if this insert fails, the transition has already persisted - the same
-   * accepted non-transactional tradeoff SFC Status uses (see its CLAUDE.md).
-   */
+  /** No-ops when `fromStatus === toStatus`. See CLAUDE.md's "one tradeoff worth knowing before
+   *  touching writes" section for the non-transactional-write tradeoff. */
   private async createHistoryEntry(entry: GtcHistoryEntryInput): Promise<void> {
     if (entry.fromStatus === entry.toStatus) return;
 
@@ -597,17 +569,14 @@ export class GtcService {
       ip: entry.ip,
       userAgent: entry.userAgent,
       remarks: entry.remarks,
-      metadata: entry.metadata,
+      data: entry.data,
       isActive: true,
       isDeleted: false,
     });
   }
 
-  /**
-   * Fetches GTC form questions via FormJsonService. When a yearId is provided the call hits
-   * the Redis-cached `findActiveByDesignYearAndFormId(yearId, GTC_FORM_ID)` path. When no
-   * yearId is available (getQuestions) it falls back to `findByType(GTC_FORM_TYPE)`.
-   */
+  /** With yearId: Redis-cached `findActiveByDesignYearAndFormId`. Without (getQuestions): falls
+   *  back to `findByType`. */
   private async loadFormQuestions(yearId?: string): Promise<FieldConfig[]> {
     const formJson = yearId
       ? await this.formJsonService.findActiveByDesignYearAndFormId(yearId, GTC_FORM_ID)
