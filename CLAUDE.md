@@ -84,6 +84,13 @@ src/
 │   │                            # `XVIFC_REMINDER_CRONS_ENABLED` and has no `send-*-now` endpoint. Never
 │   │                            # throws — a notification failure must not fail the underlying decision.
 │   └── xvi-fc.module.ts # composition root importing the feature modules above
+├── module/forum/        # 16th FC discussion forum (migrated from the standalone cf-next-forum Next.js app):
+│                        # threads/comments/likes/bookmarks/categories under `/api/v2/forum/*`, ADMIN moderation
+│                        # under `/api/v2/forum/admin/*`. Uses the shared JWT auth (no login of its own); schemas
+│                        # live in schemas/forum/. Data is in its own database `FORUM_DB_NAME` (default `forum_db`,
+│                        # same server, connection `forum_db` via `ForumDbModule`/`useDb`); users stay in the main
+│                        # DB. Collections keep the old standalone-app names (threads, comments, ...), so existing
+│                        # forum_db data is read in place. The 3 canonical categories are upserted on boot.
 ├── users/               # User CRUD with repository pattern
 ├── admin/
 │   ├── afs-digitization/ # AFS file processing with BullMQ queues
