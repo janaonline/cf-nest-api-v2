@@ -23,7 +23,7 @@ import { Permission, Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.e
 import { Role } from 'src/module/auth/enum/role.enum';
 import {
   XVIFC_DOE_PERMISSIONS,
-  XVIFC_PMU_PERMISSIONS,
+  MOHUA_PMU_PERMISSIONS,
   getEffectivePermissions,
 } from 'src/module/auth/permissions.map';
 import { UpdateProfileContactsDto } from './dto/update-profile-contacts.dto';
@@ -198,7 +198,7 @@ function buildPermissionMatrix(
   }));
 }
 
-const PMU_MATRIX = buildPermissionMatrix(XVIFC_PMU_PERMISSIONS, [
+const PMU_MATRIX = buildPermissionMatrix(MOHUA_PMU_PERMISSIONS, [
   { label: 'View status and reports', permissionKey: Permission.VIEW_STATUS_REPORTS },
   { label: 'View dashboards', permissionKey: Permission.VIEW_DASHBOARDS },
   { label: 'View state submissions', permissionKey: Permission.REVIEW_STATE_SUBMISSIONS_PMU },
@@ -233,7 +233,7 @@ const MOHUA_TEAM: TeamConfig = {
   inviteTemplate: './mohua-member-invite',
 };
 const PMU_TEAM: TeamConfig = {
-  role: Role.XVIFC_PMU,
+  role: Role.MOHUA_PMU,
   label: 'PMU',
   orgName: 'Programme Management Unit (PMU)',
   inviteTemplate: './xvifc-team-invite',
@@ -244,6 +244,9 @@ const DOE_TEAM: TeamConfig = {
   orgName: 'Department of Expenditure (DoE)',
   inviteTemplate: './xvifc-team-invite',
 };
+
+/** Teams whose members may read each other's member list (People and Roles shows both). */
+const MOHUA_PMU_SHARED_ROLES: string[] = [MOHUA_TEAM.role, PMU_TEAM.role];
 
 // ─── Service ─────────────────────────────────────────────────────────────────
 
@@ -290,7 +293,7 @@ export class UsersService {
     Role.STATE,
     Role.ULB,
     Role.MoHUA,
-    Role.XVIFC_PMU,
+    Role.MOHUA_PMU,
     Role.XVIFC_DOE,
   ]);
 
@@ -1270,7 +1273,10 @@ export class UsersService {
   }
 
   private async getTeamMembers(team: TeamConfig, requester: AuthUser): Promise<StateMemberResponseDto[]> {
-    if ((requester.role as string) !== team.role) {
+    const requesterRole = requester.role as string;
+    // MoHUA and PMU staff see each other's team (read-only — every write stays Submitter-of-own-team).
+    const sharedWithMohuaPmu = MOHUA_PMU_SHARED_ROLES.includes(requesterRole) && MOHUA_PMU_SHARED_ROLES.includes(team.role);
+    if (requesterRole !== team.role && !sharedWithMohuaPmu) {
       throw new ForbiddenException(`Only ${team.label} team members can view this list`);
     }
 

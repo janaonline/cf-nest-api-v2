@@ -53,12 +53,21 @@ describe('XVI-FC permission tables', () => {
       expect(perms).not.toContain(Permission.APPROVE_STATE_SUBMISSIONS_PMU);
     });
 
-    it('lets only the admin approve or return state submissions', () => {
-      expect(getEffectivePermissions({ role: UserRole.PMU, xviFcSubrole: 'admin' })).toContain(
+    it('lets the admin and the reviewer approve or return state submissions, but not the viewer', () => {
+      for (const sub of ['admin', 'reviewer']) {
+        expect(getEffectivePermissions({ role: UserRole.PMU, xviFcSubrole: sub })).toContain(
+          Permission.APPROVE_STATE_SUBMISSIONS_PMU,
+        );
+      }
+      expect(getEffectivePermissions({ role: UserRole.PMU, xviFcSubrole: 'viewer' })).not.toContain(
         Permission.APPROVE_STATE_SUBMISSIONS_PMU,
       );
+    });
+
+    it('lets only the admin manage the PMU team', () => {
+      expect(getEffectivePermissions({ role: UserRole.PMU, xviFcSubrole: 'admin' })).toContain(Permission.MANAGE_USERS);
       expect(getEffectivePermissions({ role: UserRole.PMU, xviFcSubrole: 'reviewer' })).not.toContain(
-        Permission.APPROVE_STATE_SUBMISSIONS_PMU,
+        Permission.MANAGE_USERS,
       );
     });
   });

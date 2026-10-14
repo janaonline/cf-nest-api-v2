@@ -12,7 +12,7 @@ export enum Role {
   XVIFC = 'XVIFC',
   PMU = 'PMU',
   /** PMU Review feature (xvi-fc module) — reviews state-level forms before MoHUA. */
-  XVIFC_PMU = 'XVIFC_PMU',
+  MOHUA_PMU = 'MOHUA_PMU',
   /** Department of Expenditure (xvi-fc module) — a read-only copy of the MoHUA dashboard. */
   XVIFC_DOE = 'XVIFC_DOE',
   AAINA = 'AAINA',
