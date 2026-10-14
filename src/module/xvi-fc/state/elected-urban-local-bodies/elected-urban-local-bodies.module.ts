@@ -18,6 +18,10 @@ import {
   ElectedUrbanLocalBodiesFormHistory,
   ElectedUrbanLocalBodiesFormHistorySchema,
 } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form-history.schema';
+import {
+  ElectedUrbanLocalBodiesRowHistory,
+  ElectedUrbanLocalBodiesRowHistorySchema,
+} from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row-history.schema';
 import { Ulb, UlbSchema } from 'src/schemas/ulb.schema';
 import { Year, YearSchema } from 'src/schemas/year.schema';
 import { ElectedUrbanLocalBodiesController } from 'src/module/xvi-fc/state/elected-urban-local-bodies/controllers/elected-urban-local-bodies.controller';
@@ -36,6 +40,7 @@ import { UlbEligibilityModule } from 'src/module/ulb-eligibility/ulb-eligibility
       { name: ElectedUrbanLocalBodiesForm.name, schema: ElectedUrbanLocalBodiesFormSchema },
       { name: ElectedUrbanLocalBodiesRow.name, schema: ElectedUrbanLocalBodiesRowSchema },
       { name: ElectedUrbanLocalBodiesFormHistory.name, schema: ElectedUrbanLocalBodiesFormHistorySchema },
+      { name: ElectedUrbanLocalBodiesRowHistory.name, schema: ElectedUrbanLocalBodiesRowHistorySchema },
       { name: Ulb.name, schema: UlbSchema },
       { name: Year.name, schema: YearSchema },
     ]),

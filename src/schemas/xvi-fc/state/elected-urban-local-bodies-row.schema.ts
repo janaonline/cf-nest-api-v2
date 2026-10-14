@@ -124,6 +124,15 @@ export class ElectedUrbanLocalBodiesRow {
   @Prop({ type: Number, enum: [...ROW_REVIEW_STATUS_VALUES, null], default: null })
   rowStatus!: RowReviewStatus | null;
 
+  /**
+   * PMU's reason for rejecting this row. Set whenever rowStatus transitions to
+   * FORM_STATUS.RETURNED_BY_PMU; cleared on approval/resubmit. Previously read/written throughout
+   * pmu/elected-urban-local-bodies but never declared here — Mongoose's default strict mode
+   * silently dropped it from every bulkWrite $set, so it never actually persisted.
+   */
+  @Prop({ type: String, default: null })
+  rejectionRemark?: string | null;
+
   @Prop({ type: MongooseSchema.Types.Mixed })
   rawExcelData?: Record<string, unknown>;
 
@@ -151,6 +160,9 @@ export const ElectedUrbanLocalBodiesRowSchema = SchemaFactory.createForClass(Ele
 
 // Primary query + sort: covers all getRows queries filtered by form+datasetVersion and sorted INVALID-first
 ElectedUrbanLocalBodiesRowSchema.index({ form: 1, datasetVersion: 1, validationStatus: 1, rowNumber: 1 });
+// PMU review's own getRows filters by isActive, not validationStatus — same shape DevolutionFormulaRow
+// already indexes for its own PMU review query.
+ElectedUrbanLocalBodiesRowSchema.index({ form: 1, datasetVersion: 1, isActive: 1, rowNumber: 1 });
 // ULB deduplication check used during validate/revalidate
 ElectedUrbanLocalBodiesRowSchema.index({ state: 1, year: 1, ulbId: 1 });
 // Claim-letter eligibility bulk read (evaluateUlbBulkRowStatus) — filters by isActive+datasetVersion

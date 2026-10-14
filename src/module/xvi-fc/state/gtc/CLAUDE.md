@@ -98,6 +98,14 @@ malformed `meta` - the expected, legitimate state for every ordinary questionnai
 `getTemplate` turns that into a `templateNotConfigured` validation error only when the caller
 actually asked for a template on a design year/installment that isn't configured for one.
 
+`GtcService.hydrateQuestions` (used by `getForm`) layers one more State-editor-only concern on
+top: the `download-template` action's visibility is gated by `canEdit`, so a locked/submitted
+form hides the download link. It applies this after calling the shared
+`FormQuestionHydratorService.hydrate` core, which only merges data, signs files, and strips
+`meta` - identical for every caller, including PMU's review GET (see `pmu/gtc/CLAUDE.md`). Because
+the core already strips `meta` from its output, `resolveTemplateMeta` is always called against the
+original pre-hydration question (`formJson.data[i]`, matched by index), never the hydrated copy.
+
 ## Claim eligibility
 
 Wired entirely through `formJson.claimEligibility` - no GTC-specific code exists in

@@ -11,6 +11,10 @@ export enum Role {
   AFS_ADMIN = 'AFS_ADMIN',
   XVIFC = 'XVIFC',
   PMU = 'PMU',
+  /** PMU Review feature (xvi-fc module) — reviews state-level forms before MoHUA. */
+  MOHUA_PMU = 'MOHUA_PMU',
+  /** Department of Expenditure (xvi-fc module) — a read-only copy of the MoHUA dashboard. */
+  XVIFC_DOE = 'XVIFC_DOE',
   AAINA = 'AAINA',
   ULB_EDITOR = 'ULB-EDITOR',
   ULB_VIEWER = 'ULB-VIEWER',

@@ -18,7 +18,7 @@ export class FormJsonConfig {
   @Prop({ type: Number, required: true, unique: true, index: true })
   formId!: number;
 
-  /** Whether a genuinely new ULB can be exempted from this form via noPriorDataFormIds/yearAccess. */
+  /** Whether a genuinely new ULB can be exempted from this form via yearAccess.disabledFormIds. */
   @Prop({ type: Boolean, default: false })
   isApplicableForExemption!: boolean;
 

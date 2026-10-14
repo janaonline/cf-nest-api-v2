@@ -31,14 +31,21 @@ import { SlbForm, SlbFormSchema } from '../../schemas/xvi-fc/ulb/slb-form.schema
 import { XviFcDur, XviFcDurSchema } from '../../schemas/xvi-fc/dur.schema';
 import { FcUnspentDeclarationModule } from './state/fc-unspent-declaration/fc-unspent-declaration.module';
 import { FcUnspentMohuaReviewModule } from './mohua/fc-unspent-declaration/fc-unspent-mohua-review.module';
+import { FcUnspentPmuReviewModule } from './pmu/fc-unspent-declaration/fc-unspent-pmu-review.module';
+import { ElectedUrbanLocalBodiesPmuReviewModule } from './pmu/elected-urban-local-bodies/elected-urban-local-bodies-pmu-review.module';
+import { SfcStatusPmuReviewModule } from './pmu/sfc-status/sfc-status-pmu-review.module';
+import { GtcPmuReviewModule } from './pmu/gtc/gtc-pmu-review.module';
+import { DevolutionFormulaPmuReviewModule } from './pmu/devolution-formula/devolution-formula-pmu-review.module';
 import { StateDashboardModule } from './state/dashboard/state-dashboard.module';
 import { SlbModule } from './ulb/slb/slb.module';
 import { ClaimLetterModule } from './state/claim-letter/claim-letter.module';
 import { RequestExemptionModule } from './state/request-exemption/request-exemption.module';
 import { RequestExemptionMohuaModule } from './mohua/request-exemption/request-exemption-mohua.module';
+import { MohuaOverviewModule } from './mohua/overview/mohua-overview.module';
 import { UlbEligibilityModule } from '../ulb-eligibility/ulb-eligibility.module';
 import { RemindersModule } from './common/reminders/reminders.module';
 import { XviFcCommonModule } from './common/xvi-fc-common.module';
+import { StateFormHistoryModule } from './common/form-history/state-form-history.module';
 
 @Module({
   imports: [
@@ -68,14 +75,21 @@ import { XviFcCommonModule } from './common/xvi-fc-common.module';
     forwardRef(() => DevolutionFormulaModule),
     FcUnspentDeclarationModule,
     FcUnspentMohuaReviewModule,
+    FcUnspentPmuReviewModule,
+    ElectedUrbanLocalBodiesPmuReviewModule,
+    SfcStatusPmuReviewModule,
+    GtcPmuReviewModule,
+    DevolutionFormulaPmuReviewModule,
     StateDashboardModule,
     SlbModule,
     ClaimLetterModule,
     RequestExemptionModule,
     RequestExemptionMohuaModule,
+    MohuaOverviewModule,
     UlbEligibilityModule,
     RemindersModule,
     XviFcCommonModule,
+    StateFormHistoryModule,
   ],
   controllers: [XviFcController],
   providers: [XviFcService, XviFcCacheService, XviFcCacheInterceptor],

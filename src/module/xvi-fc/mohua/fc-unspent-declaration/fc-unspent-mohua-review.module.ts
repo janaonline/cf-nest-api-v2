@@ -22,14 +22,8 @@ import { FcUnspentMohuaReviewService } from './services/fc-unspent-mohua-review.
 import { FcUnspentMohuaRowsService } from './services/fc-unspent-mohua-rows.service';
 import { FcUnspentRowReviewDomainService } from './services/fc-unspent-row-review-domain.service';
 
-/**
- * MoHUA-side review for FC Unspent Declaration — a separate module from the State-side
- * `FcUnspentDeclarationModule`, decoupled deliberately (no cross-module dependency either way) so
- * neither perspective forces the other to change. Registers the same four schemas the State
- * module owns; Mongoose model bindings are per-module, not exclusive, so both modules reading/
- * writing the same collections is the established pattern already used for cross-referenced
- * schemas elsewhere in xvi-fc.
- */
+/** MoHUA-side review for FC Unspent Declaration, decoupled from the State-side module. See
+ *  CLAUDE.md's intro and "Layout" section for why and what each file here owns. */
 @Module({
   imports: [
     MongooseModule.forFeature([

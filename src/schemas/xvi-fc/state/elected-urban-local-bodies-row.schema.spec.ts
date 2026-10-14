@@ -47,6 +47,22 @@ describe('ElectedUrbanLocalBodiesRowSchema — ulbName must be storable when bla
   });
 });
 
+describe('ElectedUrbanLocalBodiesRowSchema — rejectionRemark must be declared', () => {
+  // Regression test for a confirmed data-loss bug: rejectionRemark was read/written throughout
+  // pmu/elected-urban-local-bodies but never declared on this schema. Under Mongoose's default
+  // strict mode, an undeclared path in a bulkWrite $set is silently dropped before reaching Mongo —
+  // so the value never actually persisted. Guards against the field being removed again.
+
+  it('declares rejectionRemark as a schema path', () => {
+    expect(ElectedUrbanLocalBodiesRowSchema.path('rejectionRemark')).toBeDefined();
+  });
+
+  it('defaults rejectionRemark to null', () => {
+    const path = ElectedUrbanLocalBodiesRowSchema.path('rejectionRemark') as unknown as { defaultValue: unknown };
+    expect(path.defaultValue).toBeNull();
+  });
+});
+
 describe('ElectedUrbanLocalBodiesRowSchema indexes', () => {
   it('defines the unique partial index for active census codes in a design year', () => {
     const indexes = ElectedUrbanLocalBodiesRowSchema.indexes() as Array<

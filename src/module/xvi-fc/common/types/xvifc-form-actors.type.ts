@@ -7,6 +7,8 @@ export interface XvifcActorSourceDocument {
   createdAt?: Date;
   updatedAt?: Date;
   submittedAt?: Date;
+  stateUpdatedBy?: unknown;
+  stateUpdatedAt?: Date;
 }
 
 export interface XvifcFormActor {

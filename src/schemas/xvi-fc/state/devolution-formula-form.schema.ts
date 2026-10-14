@@ -140,16 +140,24 @@ export class DevolutionFormulaForm {
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
   updatedBy!: Types.ObjectId;
 
-  // Form fields
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', default: null })
+  stateUpdatedBy?: Types.ObjectId | null;
+
+  @Prop({ type: Date, default: null })
+  stateUpdatedAt?: Date | null;
+
   @Prop({ type: Number, default: 0 })
   ulbCount!: number;
 
   @Prop({ type: Boolean, default: false })
   checkboxConfirmation!: boolean;
 
-  // MoHUA feedback
+  // Reviewer remarks
   @Prop({ type: String, default: null })
   mohuaRemarks?: string | null;
+
+  @Prop({ type: String, default: null })
+  pmuRemarks?: string | null;
 
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'DevolutionFormulaForm', default: null })
   previousVersionId?: Types.ObjectId | null;

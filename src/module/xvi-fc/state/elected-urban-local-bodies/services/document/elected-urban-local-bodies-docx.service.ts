@@ -14,6 +14,7 @@ import {
 } from 'docx';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { buildXviFcDownloadFileName } from 'src/shared/utils/xvi-fc-download-file-name.util';
+import { buildMohuaLetterAddressBlock } from 'src/module/xvi-fc/common/utils/xvi-fc-letter-address-block.util';
 import { formatXviFcDate } from 'src/module/xvi-fc/common/utils/xvi-fc-date-format.util';
 import { ElectedUrbanLocalBodiesDocumentService } from './elected-urban-local-bodies-document.service';
 import type {
@@ -65,10 +66,9 @@ function dataCell(text: string, widthPct: number): TableCell {
  * closing signature block in Word before printing and signing, so the output has to be an
  * editable document, not a flattened PDF.
  *
- * The addressee block is intentionally NOT the shared `buildMohuaLetterAddressBlock()` util (see
- * `xvi-fc-letter-address-block.util.ts`) — EULB's specimen uses different addressee text than
- * `fc-unspent-declaration`'s letter, so it's forked locally in `buildAddressBlock()` rather than
- * risking a shared-util change leaking into that sibling's own, differently-worded letter.
+ * The addressee block uses the shared `buildMohuaLetterAddressBlock()` util (see
+ * `xvi-fc-letter-address-block.util.ts`) — also used by `fc-unspent-declaration-docx.service.ts`,
+ * since both specimens now use identical addressee text.
  *
  * The closing signature block (`[Name]`, `[Designation]`, etc.) is written as literal,
  * non-interpolated text — including its own `[State Name]` — by design; only the intro
@@ -141,14 +141,7 @@ export class ElectedUrbanLocalBodiesDocxService {
 
   private buildAddressBlock(): Paragraph[] {
     return [
-      new Paragraph({ text: 'To,' }),
-      new Paragraph({ text: 'The Deputy Secretary' }),
-      new Paragraph({ text: 'Finance Commission Cell' }),
-      new Paragraph({ text: 'Department of Urban Development' }),
-      new Paragraph({ text: 'Ministry of Housing and Urban Affairs' }),
-      new Paragraph({ text: 'Government of India' }),
-      new Paragraph({ text: 'Sankalp Bhawan, New Delhi' }),
-      new Paragraph({ text: '' }),
+      ...buildMohuaLetterAddressBlock(),
       new Paragraph({
         children: [
           new TextRun({

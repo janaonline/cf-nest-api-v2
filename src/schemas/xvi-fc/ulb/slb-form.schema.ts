@@ -16,6 +16,9 @@ export class SlbForm {
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Ulb', required: true })
   ulb!: Types.ObjectId;
 
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'State', required: true })
+  state!: Types.ObjectId;
+
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Year', required: true })
   year!: Types.ObjectId;
 
@@ -62,4 +65,4 @@ export const SlbFormSchema = SchemaFactory.createForClass(SlbForm);
 
 SlbFormSchema.index({ ulb: 1, year: 1, formType: 1 }, { unique: true });
 SlbFormSchema.index({ year: 1, ulb: 1 });
-// TODO: Add state _id
+SlbFormSchema.index({ state: 1, year: 1 });

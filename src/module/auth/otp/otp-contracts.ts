@@ -92,6 +92,8 @@ export type UserRole =
   | 'AFS_ADMIN'
   | 'XVIFC'
   | 'PMU'
+  | 'MOHUA_PMU'
+  | 'XVIFC_DOE'
   | 'AAINA';
 
 export type UserStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'NA';

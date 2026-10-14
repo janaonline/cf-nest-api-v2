@@ -19,6 +19,7 @@ import {
 } from 'src/module/xvi-fc/state/fc-unspent-declaration/helpers/fc-unspent-declaration-cycle.helpers';
 import { FcUnspentDeclarationService } from 'src/module/xvi-fc/state/fc-unspent-declaration/services/main/fc-unspent-declaration.service';
 import { FcUnspentDeclarationRowService } from 'src/module/xvi-fc/state/fc-unspent-declaration/services/rows/fc-unspent-declaration-row.service';
+import { FcUnspentDeclarationFormJsonService } from 'src/module/xvi-fc/state/fc-unspent-declaration/services/form-json/fc-unspent-declaration-form-json.service';
 import type {
   FcUnspentDeclarationDocumentData,
   FcUnspentDeclarationDocumentRow,
@@ -48,6 +49,7 @@ export class FcUnspentDeclarationDocumentService {
     private readonly mainService: FcUnspentDeclarationService,
     private readonly rowService: FcUnspentDeclarationRowService,
     private readonly xvifcFormActorsService: XvifcFormActorsService,
+    private readonly formJsonConfigService: FcUnspentDeclarationFormJsonService,
   ) {}
 
   async getDocumentData(stateId: string, yearId: string, user: AuthUser): Promise<FcUnspentDeclarationDocumentData> {
@@ -67,7 +69,8 @@ export class FcUnspentDeclarationDocumentService {
       .exec();
 
     const currentFormStatus = doc?.currentFormStatus ?? FORM_STATUS.NOT_STARTED;
-    const gates = await this.mainService.resolveDevolutionDependency(stateOid, yearOid);
+    const { policy } = await this.formJsonConfigService.loadFormConfig(yearId);
+    const gates = await this.mainService.resolveDevolutionDependency(stateOid, yearOid, policy);
     const permissions = this.mainService.buildFormPermissions(user, stateId, currentFormStatus, gates);
     if (!permissions.canEdit) {
       throw new ForbiddenException(`Form cannot be edited when status is ${getFormStatusLabel(currentFormStatus)}.`);
@@ -106,15 +109,34 @@ export class FcUnspentDeclarationDocumentService {
       });
     }
 
-    const rows: FcUnspentDeclarationDocumentRow[] = activeRows.map((row, index) => ({
-      slNo: index + 1,
-      censusCode: row.censusCode || '-',
-      ulbName: row.ulbName,
-      allocationAmount: row.allocationAmount,
-      unspentAmount: row.unspentAmount,
-      allocationPerc: row.allocationPerc,
-      eligibility: row.eligibility,
-    }));
+    // Drafts can save ULBs with empty amounts, but the declaration table requires both amounts for every ULB.
+    const rows: FcUnspentDeclarationDocumentRow[] = [];
+    let hasIncompleteRow = false;
+    activeRows.forEach((row, index) => {
+      if (row.unspentAmount === null || row.previousFcUnspentBalance === null) {
+        hasIncompleteRow = true;
+        return;
+      }
+      rows.push({
+        slNo: index + 1,
+        censusCode: row.censusCode || row.sbCode || '-',
+        ulbName: row.ulbName,
+        unspentAmount: row.unspentAmount,
+        previousFcUnspentBalance: row.previousFcUnspentBalance,
+      });
+    });
+    if (hasIncompleteRow) {
+      throwXviFcValidationError({
+        fcUnspentDeclaration: [
+          {
+            field: 'fcUnspentDeclaration',
+            code: 'incompleteRows',
+            message:
+              'Enter the unspent and previous balances for every ULB and save your draft before downloading the declaration.',
+          },
+        ],
+      });
+    }
 
     return { isFcUnspent: true, stateName, designYearLabel, priorFcCycleLabel, priorFcCycleFullLabel, rows };
   }

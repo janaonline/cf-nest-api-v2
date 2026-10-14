@@ -13,6 +13,7 @@ import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-f
 import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
 import { FileUrlNormalizerService } from 'src/module/xvi-fc/common/services/file-url-normalizer.service';
 import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
+import { FormQuestionHydratorService } from 'src/module/xvi-fc/common/services/form-question-hydrator.service';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { ConfigService } from '@nestjs/config';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
@@ -360,6 +361,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           { provide: ConfigService, useValue: null },
           { provide: FileUrlNormalizerService, useValue: null },
           { provide: FileInfoNormalizerService, useValue: null },
+          { provide: FormQuestionHydratorService, useValue: null },
           { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
         ],
       }).compile();
@@ -719,6 +721,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           { provide: ConfigService, useValue: null },
           { provide: FileUrlNormalizerService, useValue: null },
           { provide: FileInfoNormalizerService, useValue: null },
+          { provide: FormQuestionHydratorService, useValue: null },
           { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
         ],
       }).compile();
@@ -850,6 +853,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           { provide: FileTokenService, useValue: mockFileTokenService },
           { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
           FileInfoNormalizerService,
+          FormQuestionHydratorService,
           { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
         ],
       }).compile();
@@ -1290,6 +1294,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           { provide: ConfigService, useValue: null },
           { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
           FileInfoNormalizerService,
+          FormQuestionHydratorService,
           { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
         ],
       }).compile();
@@ -1663,6 +1668,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           { provide: ConfigService, useValue: null },
           { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
           FileInfoNormalizerService,
+          FormQuestionHydratorService,
           { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
         ],
       }).compile();
@@ -1758,6 +1764,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           { provide: ConfigService, useValue: null },
           { provide: FileUrlNormalizerService, useValue: mockFileUrlNormalizer },
           FileInfoNormalizerService,
+          FormQuestionHydratorService,
           { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
         ],
       }).compile();
@@ -1881,13 +1888,18 @@ describe('ElectedUrbanLocalBodiesService', () => {
       expect(caught).toBeDefined();
     });
 
-    it('bulk-updates active rows in the current dataset version to rowStatus UNDER_REVIEW_BY_MOHUA, in the same transaction as the parent update', async () => {
+    it('bulk-updates active, not-yet-locked rows in the current dataset version to rowStatus UNDER_REVIEW_BY_PMU, in the same transaction as the parent update', async () => {
       await service.finalSubmit(baseDto, adminUser, '', '');
 
       expect(mockFormModel.db.startSession).toHaveBeenCalled();
       expect(mockRowModel.updateMany).toHaveBeenCalledWith(
-        { form: formOid, datasetVersion: baseFormDoc.activeDatasetVersion, isActive: true },
-        { $set: { rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA } },
+        {
+          form: formOid,
+          datasetVersion: baseFormDoc.activeDatasetVersion,
+          isActive: true,
+          rowStatus: { $in: [null, FORM_STATUS.RETURNED_BY_PMU, FORM_STATUS.RETURNED_BY_MOHUA] },
+        },
+        { $set: { rowStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU } },
         { session: mockSession },
       );
       expect(mockSession.commitTransaction).toHaveBeenCalled();
@@ -1929,7 +1941,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           expect.objectContaining({
             eulbForm: formOid,
             fromStatus: FORM_STATUS.IN_PROGRESS,
-            toStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+            toStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU,
             ip: '9.9.9.9',
             userAgent: 'jest-final-agent',
             snapshot: [
@@ -1940,6 +1952,35 @@ describe('ElectedUrbanLocalBodiesService', () => {
                 electedBodyStatus: 'Constituted',
               }),
             ],
+          }),
+        ],
+        { session: mockSession },
+      );
+    });
+
+    it("captures the form-level fields into the history entry's data object", async () => {
+      mockFormModel.findOneAndUpdate.mockReturnValue(
+        q({
+          ...baseFormDoc,
+          currentFormStatus: 3,
+          ulbCount: 3,
+          electedBodyExcelFile: { originalName: 'test.xlsx', path: 'state/test.xlsx' },
+          signedElectedbodyFile: { originalName: 'signed.pdf', path: 'state/signed.pdf' },
+          checkboxConfirmation: true,
+        }),
+      );
+
+      await service.finalSubmit(baseDto, adminUser, '', '');
+
+      expect(mockHistoryModel.create).toHaveBeenCalledWith(
+        [
+          expect.objectContaining({
+            data: {
+              ulbCount: 3,
+              electedBodyExcelFile: { originalName: 'test.xlsx', path: 'state/test.xlsx' },
+              signedElectedbodyFile: { originalName: 'signed.pdf', path: 'state/signed.pdf' },
+              checkboxConfirmation: true,
+            },
           }),
         ],
         { session: mockSession },

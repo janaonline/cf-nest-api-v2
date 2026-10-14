@@ -930,8 +930,16 @@ describe('StateDashboardService', () => {
       it('prevents false eligibility when all four available forms are completed', async () => {
         annualAccountModel.find.mockReturnValue(
           queryResult([
-            { ulb: activeUlbIds[0], sectionType: 'audited', form_status_id: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA },
-            { ulb: activeUlbIds[0], sectionType: 'unaudited', form_status_id: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA },
+            {
+              ulb: activeUlbIds[0],
+              sectionType: 'audited',
+              form_status_id: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+            },
+            {
+              ulb: activeUlbIds[0],
+              sectionType: 'unaudited',
+              form_status_id: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+            },
           ]),
         );
         bankAccountModel.find.mockReturnValue(
@@ -1367,8 +1375,16 @@ describe('StateDashboardService', () => {
       it('keeps the first claim letter locked when four forms are acknowledged but SLB is missing', async () => {
         annualAccountModel.find.mockReturnValue(
           queryResult([
-            { ulb: activeUlbIds[0], sectionType: 'audited', form_status_id: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA },
-            { ulb: activeUlbIds[0], sectionType: 'unaudited', form_status_id: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA },
+            {
+              ulb: activeUlbIds[0],
+              sectionType: 'audited',
+              form_status_id: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+            },
+            {
+              ulb: activeUlbIds[0],
+              sectionType: 'unaudited',
+              form_status_id: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+            },
           ]),
         );
         bankAccountModel.find.mockReturnValue(
@@ -1870,9 +1886,7 @@ describe('StateDashboardService', () => {
         queryResult([{ ulb: ulbA, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }]),
       );
       slbFormModel.find.mockReturnValue(queryResult([]));
-      durModel.find.mockReturnValue(
-        queryResult([{ ulb: ulbA, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_STATE }]),
-      );
+      durModel.find.mockReturnValue(queryResult([{ ulb: ulbA, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_STATE }]));
 
       const { buffer, fileName } = await service.exportAllFormsCsv(
         { designYearId: yearId },
@@ -1923,7 +1937,7 @@ describe('StateDashboardService', () => {
       ]);
     });
 
-    it('scopes the ULB list to the requesting STATE user\'s own state', async () => {
+    it("scopes the ULB list to the requesting STATE user's own state", async () => {
       annualAccountModel.find.mockReturnValue(queryResult([]));
       bankAccountModel.find.mockReturnValue(queryResult([]));
       slbFormModel.find.mockReturnValue(queryResult([]));
@@ -1971,7 +1985,10 @@ describe('StateDashboardService', () => {
         'SLB Form',
         'Detailed Utilisation Report',
       ]);
-      expect((sheet.getRow(7).values as unknown[]).slice(1, 3)).toEqual(['Achalpur Municipal Council', 'Database State Name']);
+      expect((sheet.getRow(7).values as unknown[]).slice(1, 3)).toEqual([
+        'Achalpur Municipal Council',
+        'Database State Name',
+      ]);
       expect((sheet.getRow(8).values as unknown[]).slice(1, 3)).toEqual(['Beta Nagar Panchayat', 'Neighbouring State']);
     });
   });

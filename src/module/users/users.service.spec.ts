@@ -262,6 +262,70 @@ describe('UsersService', () => {
     });
   });
 
+  // ─── PMU and DoE teams share the MoHUA team logic (one set of methods, parameterised by team) ───
+
+  describe('PMU / DoE team management', () => {
+    const dto = { name: 'A', email: 'a@b.com', mobile: '9999999999', designation: 'Officer', subRole: 'VIEWER' as const };
+    const pmuAdmin = () => makeMohuaAdmin({ role: Role.MOHUA_PMU });
+    const doeAdmin = () => makeMohuaAdmin({ role: Role.XVIFC_DOE });
+
+    it('lists the roster only for a member of that team', async () => {
+      mockUserModel.exec.mockResolvedValueOnce([]);
+      await expect(service.getDoeMembers(doeAdmin())).resolves.toEqual([]);
+      await expect(service.getPmuMembers(doeAdmin())).rejects.toThrow(ForbiddenException);
+      await expect(service.getDoeMembers(makeMohuaAdmin())).rejects.toThrow(ForbiddenException);
+    });
+
+    it("lets MoHUA and PMU read each other's roster, but never DoE's", async () => {
+      mockUserModel.exec.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+      await expect(service.getPmuMembers(makeMohuaAdmin())).resolves.toEqual([]);
+      await expect(service.getMohuaMembers(pmuAdmin())).resolves.toEqual([]);
+      await expect(service.getDoeMembers(pmuAdmin())).rejects.toThrow(ForbiddenException);
+      await expect(service.getMohuaMembers(doeAdmin())).rejects.toThrow(ForbiddenException);
+    });
+
+    it("keeps one team's Submitter out of another team's invite", async () => {
+      await expect(service.invitePmuMember(dto, makeMohuaAdmin())).rejects.toThrow(ForbiddenException);
+      await expect(service.inviteDoeMember(dto, pmuAdmin())).rejects.toThrow(ForbiddenException);
+      await expect(service.inviteDoeMember(dto, makeMohuaAdmin({ role: Role.XVIFC_DOE, xviFcSubrole: 'viewer' }))).rejects.toThrow(
+        ForbiddenException,
+      );
+      expect(mockEmailDomainValidation.domainHasMxRecord).not.toHaveBeenCalled();
+    });
+
+    it('restore: puts a removed member back into the DoE team with the DoE role', async () => {
+      const removedDoc = { _id: new Types.ObjectId(TARGET_USER_ID), email: dto.email, role: Role.XVIFC_DOE };
+      mockUserModel.exec
+        .mockResolvedValueOnce(null) // no active user with this email
+        .mockResolvedValueOnce(removedDoc) // toRestore lookup
+        .mockResolvedValueOnce(removedDoc); // findByIdAndUpdate result
+      mockUserModel.exists.mockResolvedValue(null);
+
+      await service.inviteDoeMember({ ...dto, action: 'restore' as const }, doeAdmin());
+
+      expect(mockUserModel.findByIdAndUpdate).toHaveBeenCalledWith(
+        removedDoc._id,
+        expect.objectContaining({ $set: expect.objectContaining({ role: Role.XVIFC_DOE, isDeleted: false }) }),
+        expect.any(Object),
+      );
+    });
+
+    it('builds each matrix from the real permission table', () => {
+      const doe = service.getDoePermissionMatrix();
+      expect(doe.find((r) => r.label === 'Manage team')).toMatchObject({ admin: true, reviewer: false, viewer: false });
+      expect(doe.every((r) => r.viewer === (r.label !== 'Manage team'))).toBe(true);
+
+      const pmu = service.getPmuPermissionMatrix();
+      expect(pmu.find((r) => r.label === 'Approve / return state submissions')).toMatchObject({
+        admin: true,
+        reviewer: true,
+        viewer: false,
+      });
+      expect(pmu.find((r) => r.label === 'Manage team')).toMatchObject({ admin: true, reviewer: false, viewer: false });
+      expect(pmu.find((r) => r.label === 'View state submissions')).toMatchObject({ viewer: true });
+    });
+  });
+
   describe('inviteStateMember()', () => {
     const dto = { name: 'A', email: 'a@b.com', mobile: '9999999999', designation: 'Officer', subRole: 'VIEWER' as const };
 

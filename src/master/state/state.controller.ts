@@ -1,6 +1,7 @@
-import { Controller, Get, UseGuards } from '@nestjs/common';
+import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { RolesGuard } from 'src/module/auth/guards/roles.guard';
+import { QueryStateDto } from './dto/query-state.dto';
 import { StateService } from './state.service';
 
 @ApiTags('Master - State')
@@ -12,7 +13,7 @@ export class StateController {
 
   @Get()
   @ApiOperation({ summary: 'List active, published states for populating a State select/filter.' })
-  findAll() {
-    return this.stateService.findAll();
+  findAll(@Query() query: QueryStateDto) {
+    return this.stateService.findAll(query.excludeUT);
   }
 }

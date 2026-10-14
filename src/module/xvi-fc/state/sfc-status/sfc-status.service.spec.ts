@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
-import { BadRequestException, ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { Types } from 'mongoose';
 import { SfcStatusService } from './sfc-status.service';
 import { XviFcSfcStatus } from '../../../../schemas/xvi-fc/state/sfc-status.schema';
@@ -12,8 +12,10 @@ import { ExcelService } from 'src/services/excel/excel.service';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { FileUrlNormalizerService } from '../../common/services/file-url-normalizer.service';
 import { FileInfoNormalizerService } from '../../common/services/file-info-normalizer.service';
+import { FormQuestionHydratorService } from '../../common/services/form-question-hydrator.service';
+import { ExemptionResolverService } from '../../common/services/exemption-resolver.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
-import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
+import { Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { FORM_STATUS, FormHistoryAction } from 'src/common/constants/form-status.constants';
 import type { XviFcValidationErrorMap } from '../../common/response/xvi-fc-api-response';
 import type { SaveSfcStatusDto } from './dto/save-sfc-status.dto';
@@ -40,6 +42,17 @@ const docOid = new Types.ObjectId();
 
 const adminUser: AuthUser = {
   _id: new Types.ObjectId().toString(),
+  scope: Scope.ADMIN,
+  state: null,
+} as unknown as AuthUser;
+
+// adminUser above has no `role`, so getEffectivePermissions gives it none of the edit/final-submit
+// permissions buildStateFormPermissions checks for - fine for tests that only exercise
+// assertStateAccess, but useless for asserting a *real* canEdit/canFinalSubmit:true baseline.
+// This one has role: UserRole.ADMIN, which does grant every Permission.
+const fullyPermissionedAdminUser: AuthUser = {
+  _id: new Types.ObjectId().toString(),
+  role: UserRole.ADMIN,
   scope: Scope.ADMIN,
   state: null,
 } as unknown as AuthUser;
@@ -82,6 +95,7 @@ describe('SfcStatusService', () => {
   let historyModel: Record<string, jest.Mock>;
   let formJsonService: Partial<FormJsonService>;
   let validator: Partial<DynamicFormValidationService>;
+  let mockExemptionResolverService: { resolveDiscretionary: jest.Mock };
 
   beforeEach(async () => {
     formModel = {
@@ -108,6 +122,9 @@ describe('SfcStatusService', () => {
         sanitizedPayload: { sfcStatus: 'active' },
       }),
     };
+    mockExemptionResolverService = {
+      resolveDiscretionary: jest.fn().mockResolvedValue(null), // default: no exemption on record
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -131,6 +148,8 @@ describe('SfcStatusService', () => {
         },
         { provide: FileUrlNormalizerService, useValue: { toRawStoragePath: jest.fn((v: string) => v) } },
         FileInfoNormalizerService,
+        FormQuestionHydratorService,
+        { provide: ExemptionResolverService, useValue: mockExemptionResolverService },
       ],
     }).compile();
 
@@ -244,6 +263,13 @@ describe('SfcStatusService', () => {
       );
     });
 
+    it('does not log form data on a draft save — only FINAL_SUBMIT snapshots data, matching every other xvi-fc form', async () => {
+      await service.saveDraft(validDto, adminUser, '127.0.0.1', 'jest');
+
+      const calls = historyModel['create'].mock.calls as unknown as Array<[Record<string, unknown>]>;
+      expect(calls[0][0]['data']).toBeUndefined();
+    });
+
     it('writes no history row when the form is already IN_PROGRESS (no real status change)', async () => {
       formModel['findOne'] = jest
         .fn()
@@ -340,7 +366,7 @@ describe('SfcStatusService', () => {
       expect(errors).toHaveProperty('checkboxConfirmation');
     });
 
-    it('writes a FINAL_SUBMIT history row (NOT_STARTED → UNDER_REVIEW_BY_MOHUA)', async () => {
+    it('writes a FINAL_SUBMIT history row (NOT_STARTED → UNDER_REVIEW_BY_PMU)', async () => {
       formModel['create'] = jest.fn().mockResolvedValue(mockFormDoc);
 
       await service.finalSubmit(validDto, adminUser, '127.0.0.1', 'jest');
@@ -349,7 +375,12 @@ describe('SfcStatusService', () => {
         expect.objectContaining({
           action: FormHistoryAction.FINAL_SUBMIT,
           fromStatus: FORM_STATUS.NOT_STARTED,
-          toStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+          toStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU,
+          // Data-loss gap fix (PMU Review feature) - data now snapshots the submitted
+          // payload, so a PMU reject -> State resubmit cycle has somewhere for old values to
+          // survive. Previously always undefined (see sfc-status/CLAUDE.md pre-fix history).
+          // Renamed from `metadata` for cross-form consistency.
+          data: { sfcStatus: 'active' },
         }),
       );
     });
@@ -455,6 +486,150 @@ describe('SfcStatusService', () => {
       const fileValue = fileQ!['value'] as { path: string; pageCount?: number | null };
       expect(fileValue.pageCount).toBe(7);
       expect(fileValue.path).not.toBe('state/sfc/sfc-report.pdf'); // re-signed, not the raw path
+    });
+
+    it('surfaces PENDING/APPROVED/REJECTED discretionary exemption status alongside mohuaRemarks, and zeroes canEdit/canFinalSubmit only while Pending/Approved', async () => {
+      formModel['findOne'] = jest.fn().mockReturnValue(q(mockFormDoc)); // currentFormStatus: IN_PROGRESS - naturally editable
+
+      mockExemptionResolverService.resolveDiscretionary.mockResolvedValueOnce({
+        requestId: new Types.ObjectId(),
+        currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+        decidedAt: null,
+        mohuaRemarks: null,
+      });
+      let result = await service.getForm(stateOid.toString(), yearOid.toString(), fullyPermissionedAdminUser);
+      expect(result.data).toMatchObject({ exemptionStatus: 'PENDING', exemptionMohuaRemarks: null });
+      expect(mockExemptionResolverService.resolveDiscretionary).toHaveBeenCalledWith(
+        null,
+        expect.any(Types.ObjectId),
+        22,
+        expect.any(Types.ObjectId),
+      );
+      // Blocked while Pending, even though the form's own status (IN_PROGRESS) is editable - the
+      // write endpoints would reject both actions right now (assertNotBlockedByExemption), so the
+      // response must not advertise them.
+      expect(result.data?.permissions).toMatchObject({ canEdit: false, canFinalSubmit: false });
+
+      mockExemptionResolverService.resolveDiscretionary.mockResolvedValueOnce({
+        requestId: new Types.ObjectId(),
+        currentFormStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+        decidedAt: new Date(),
+        mohuaRemarks: null,
+      });
+      result = await service.getForm(stateOid.toString(), yearOid.toString(), fullyPermissionedAdminUser);
+      expect(result.data).toMatchObject({ exemptionStatus: 'APPROVED', exemptionMohuaRemarks: null });
+      expect(result.data?.permissions).toMatchObject({ canEdit: false, canFinalSubmit: false });
+
+      mockExemptionResolverService.resolveDiscretionary.mockResolvedValueOnce({
+        requestId: new Types.ObjectId(),
+        currentFormStatus: FORM_STATUS.RETURNED_BY_MOHUA,
+        decidedAt: new Date(),
+        mohuaRemarks: 'Not eligible',
+      });
+      result = await service.getForm(stateOid.toString(), yearOid.toString(), fullyPermissionedAdminUser);
+      expect(result.data).toMatchObject({ exemptionStatus: 'REJECTED', exemptionMohuaRemarks: 'Not eligible' });
+      // Rejected - the form's real (editable) status governs again, unaffected by this override.
+      expect(result.data?.permissions).toMatchObject({ canEdit: true, canFinalSubmit: true });
+    });
+
+    it('returns exemptionStatus:null when no discretionary request has ever been filed, permissions unaffected', async () => {
+      formModel['findOne'] = jest.fn().mockReturnValue(q(mockFormDoc));
+      const result = await service.getForm(stateOid.toString(), yearOid.toString(), fullyPermissionedAdminUser);
+      expect(result.data).toMatchObject({ exemptionStatus: null, exemptionMohuaRemarks: null });
+      expect(result.data?.permissions).toMatchObject({ canEdit: true, canFinalSubmit: true });
+    });
+  });
+
+  // ─── discretionary exemption write-side guard ───────────────────────────────
+
+  describe('write-side exemption guard (saveDraft / finalSubmit)', () => {
+    it('saveDraft is blocked (409, not 403 - a 403 would force-log the user out) while a discretionary exemption request is pending MoHUA review', async () => {
+      mockExemptionResolverService.resolveDiscretionary.mockResolvedValue({
+        requestId: new Types.ObjectId(),
+        currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+        decidedAt: null,
+        mohuaRemarks: null,
+      });
+
+      const result = service.saveDraft(validDto, adminUser, '127.0.0.1', 'jest');
+      await expect(result).rejects.toBeInstanceOf(ConflictException);
+      await expect(result).rejects.toThrow(/pending MoHUA review/);
+      expect(formModel['findOneAndUpdate']).not.toHaveBeenCalled();
+      expect(formModel['create']).not.toHaveBeenCalled();
+    });
+
+    it('saveDraft is blocked (409, not 403) while a discretionary exemption request is MoHUA-approved', async () => {
+      mockExemptionResolverService.resolveDiscretionary.mockResolvedValue({
+        requestId: new Types.ObjectId(),
+        currentFormStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+        decidedAt: new Date(),
+        mohuaRemarks: null,
+      });
+
+      const result = service.saveDraft(validDto, adminUser, '127.0.0.1', 'jest');
+      await expect(result).rejects.toBeInstanceOf(ConflictException);
+      await expect(result).rejects.toThrow(/no submission is required/);
+    });
+
+    it('saveDraft proceeds normally once the discretionary request has been rejected', async () => {
+      mockExemptionResolverService.resolveDiscretionary.mockResolvedValue({
+        requestId: new Types.ObjectId(),
+        currentFormStatus: FORM_STATUS.RETURNED_BY_MOHUA,
+        decidedAt: new Date(),
+        mohuaRemarks: 'No longer applicable',
+      });
+
+      const result = await service.saveDraft(validDto, adminUser, '127.0.0.1', 'jest');
+      expect(result.success).toBe(true);
+    });
+
+    it('finalSubmit is blocked (409, not 403) while a discretionary exemption request is pending MoHUA review', async () => {
+      formModel['findOne'] = jest.fn().mockReturnValue(q(null));
+      mockExemptionResolverService.resolveDiscretionary.mockResolvedValue({
+        requestId: new Types.ObjectId(),
+        currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+        decidedAt: null,
+        mohuaRemarks: null,
+      });
+
+      const result = service.finalSubmit(validDto, adminUser, '127.0.0.1', 'jest');
+      await expect(result).rejects.toBeInstanceOf(ConflictException);
+      await expect(result).rejects.toThrow(/pending MoHUA review/);
+    });
+
+    it('finalSubmit is blocked (409, not 403) while a discretionary exemption request is MoHUA-approved', async () => {
+      formModel['findOne'] = jest.fn().mockReturnValue(q(null));
+      mockExemptionResolverService.resolveDiscretionary.mockResolvedValue({
+        requestId: new Types.ObjectId(),
+        currentFormStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+        decidedAt: new Date(),
+        mohuaRemarks: null,
+      });
+
+      const result = service.finalSubmit(validDto, adminUser, '127.0.0.1', 'jest');
+      await expect(result).rejects.toBeInstanceOf(ConflictException);
+      await expect(result).rejects.toThrow(/no submission is required/);
+    });
+
+    it('finalSubmit re-checks right before the write and blocks (409) an exemption approved mid-flight (not just at the top of the method)', async () => {
+      formModel['findOne'] = jest.fn().mockReturnValue(q(null));
+      formModel['create'] = jest.fn().mockResolvedValue(mockFormDoc);
+      // Clear on the first check (top of the method); approved by the time the second check runs
+      // right before the write - simulating a discretionary exemption filed *and* approved during
+      // this call's own awaited work (loadFormQuestions/findOne/validation/normalization).
+      mockExemptionResolverService.resolveDiscretionary.mockResolvedValueOnce(null).mockResolvedValueOnce({
+        requestId: new Types.ObjectId(),
+        currentFormStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+        decidedAt: new Date(),
+        mohuaRemarks: null,
+      });
+
+      const result = service.finalSubmit(validDto, adminUser, '127.0.0.1', 'jest');
+      await expect(result).rejects.toBeInstanceOf(ConflictException);
+      await expect(result).rejects.toThrow(/no submission is required/);
+      expect(mockExemptionResolverService.resolveDiscretionary).toHaveBeenCalledTimes(2);
+      expect(formModel['create']).not.toHaveBeenCalled();
+      expect(formModel['findOneAndUpdate']).not.toHaveBeenCalled();
     });
   });
 });
