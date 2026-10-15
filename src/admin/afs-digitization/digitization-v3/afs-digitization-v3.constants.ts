@@ -30,6 +30,20 @@ export const V3_DOC_TYPES: string[] = Object.values(DocumentType).filter(
 /** Upper bound for a single enqueue-by-filter call. */
 export const MAX_ENQUEUE_BATCH = 10000;
 
+/** What is kept in Mongo from a finished FastAPI job: a summary plus pointers, never the extraction itself. */
+export interface DigitizationV3Result {
+  /** FastAPI job id; the full result and the Excel are fetched from FastAPI by this id */
+  jobId: string;
+  /** FastAPI's Excel S3 key */
+  excelKey?: string;
+  noOfPages?: number;
+  processingMs?: number;
+  detectedDocTypes: string[];
+  segments: { docType: string; startPage: number; endPage: number; title?: string; isDuplicate: boolean }[];
+  isConsolidated: boolean;
+  isMismatch: boolean;
+}
+
 export interface AfsDigitizationV3JobData {
   annualAccountsId?: string;
   ulb: string;

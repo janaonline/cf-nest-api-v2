@@ -5,14 +5,15 @@ import { Queue } from 'bullmq';
 import { Model, Types } from 'mongoose';
 import { AFS_DIGITIZATION_V3_QUEUE } from 'src/core/constants/queues';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
-import { AfsDigitizationV3, AfsExcelFile, AfsExcelFileDocument } from 'src/schemas/afs/afs-excel-file.schema';
-import { DigitizationV3Statuses } from 'src/schemas/afs/enums';
+import { AfsExcelFile, AfsExcelFileDocument } from 'src/schemas/afs/afs-excel-file.schema';
+import { DigitizationStatuses, DigitizationV3Statuses } from 'src/schemas/afs/enums';
+import { QueueStatus } from 'src/schemas/queue.schema';
 import { AnnualAccountData, AnnualAccountDataDocument } from 'src/schemas/annual-account-data.schema';
 import { State, StateDocument } from 'src/schemas/state.schema';
 import { DOC_TYPES } from '../constants/docTypes';
 import { AfsDigitizationV3QueryDto } from '../dto/afs-digitization-v3-query.dto';
 import { getUlbsLookupPipeline } from '../queries/afs-excel-files.query';
-import { AfsDigitizationV3JobData, V3_DOC_TYPES, MAX_ENQUEUE_BATCH } from './afs-digitization-v3.constants';
+import { AfsDigitizationV3JobData, DigitizationV3Result, V3_DOC_TYPES, MAX_ENQUEUE_BATCH } from './afs-digitization-v3.constants';
 
 /** One ULB for the selected year / audit type / doc type, with its uploaded PDF (if any). */
 interface UlbRow {
@@ -25,7 +26,29 @@ interface UlbRow {
   pdfUrl: string | null;
 }
 
-type V3Record = Partial<AfsDigitizationV3> | undefined;
+/** What the page needs to know about a ULB's v3 digitization, derived from ulbFile (never the heavy data). */
+interface V3View {
+  status: DigitizationV3Statuses;
+  detectedDocTypes: string[];
+  segments: { docType: string; startPage: number; endPage: number; title?: string; isDuplicate?: boolean }[];
+  isConsolidated: boolean;
+  isMismatch: boolean;
+  error?: string;
+}
+
+type V3Record = V3View | undefined;
+
+/** Only these ulbFile fields are read for the list: small, and no data[]. */
+const ULB_FILE_PROJECTION = {
+  ulb: 1,
+  'ulbFile.digitizationStatus': 1,
+  'ulbFile.digitizationMsg': 1,
+  'ulbFile.queue.status': 1,
+  'ulbFile.detectedDocTypes': 1,
+  'ulbFile.segments': 1,
+  'ulbFile.isConsolidated': 1,
+  'ulbFile.isMismatch': 1,
+};
 
 export interface DigitizationV3Metrics {
   total: number;
@@ -178,8 +201,11 @@ export class AfsDigitizationV3Service {
   }
 
   /**
-   * Atomically moves a record to `queued`. Returns false if it is already queued, processing or digitized.
-   * Upserts so files that were never digitized (no afs_xl_files record yet) can be digitized too.
+   * Atomically moves the ULB's file to `queued`. Returns false if it is already queued, or already digitized by v3.
+   * Upserts so ULBs that were never digitized (no afs_xl_files record yet) can be queued too.
+   *
+   * Only dotted `ulbFile.*` paths are written, so nothing else in the item is overwritten, and without
+   * defaults no empty `data[]` is created.
    */
   private async claim(data: AfsDigitizationV3JobData): Promise<boolean> {
     const key = this.recordKey(data);
@@ -187,9 +213,11 @@ export class AfsDigitizationV3Service {
       await this.afsExcelFileModel.findOneAndUpdate(
         {
           ...key,
-          'digitizationV3.status': {
-            $nin: [DigitizationV3Statuses.QUEUED, DigitizationV3Statuses.PROCESSING, DigitizationV3Statuses.DIGITIZED],
-          },
+          $nor: [
+            { 'ulbFile.digitizationStatus': DigitizationStatuses.QUEUED },
+            // `detectedDocTypes` exists only on items v3 has digitized
+            { 'ulbFile.digitizationStatus': DigitizationStatuses.DIGITIZED, 'ulbFile.detectedDocTypes': { $exists: true } },
+          ],
         },
         {
           $setOnInsert: {
@@ -197,25 +225,25 @@ export class AfsDigitizationV3Service {
             ...(data.annualAccountsId && { annualAccountsId: new Types.ObjectId(data.annualAccountsId) }),
           },
           $set: {
-            digitizationV3: {
-              status: DigitizationV3Statuses.QUEUED,
-              pdfUrl: data.pdfUrl,
-              uploadedBy: 'ULB',
-              expectedDocType: data.docType,
-              detectedDocTypes: [],
-              segments: [],
-              isConsolidated: false,
-              isMismatch: false,
-              queuedAt: new Date(),
-            },
+            'ulbFile.digitizationStatus': DigitizationStatuses.QUEUED,
+            'ulbFile.uploadedBy': 'ULB',
+            'ulbFile.pdfUrl': data.pdfUrl,
+            'ulbFile.queue': { status: QueueStatus.QUEUED, progress: 0, createdAt: new Date(), attemptsMade: 0 },
+          },
+          // A re-run starts clean
+          $unset: {
+            'ulbFile.digitizationMsg': '',
+            'ulbFile.detectedDocTypes': '',
+            'ulbFile.segments': '',
+            'ulbFile.isConsolidated': '',
+            'ulbFile.isMismatch': '',
           },
         },
-        // No defaults: inserting ulbFile / afsFile defaults would change the record's digitization filters.
         { upsert: true, new: true, setDefaultsOnInsert: false },
       );
       return true;
     } catch (error: any) {
-      // Unique index {ulb, year, auditType, docType}: record exists but its status did not match the filter.
+      // Unique index {ulb, year, auditType, docType}: the record exists but does not match the filter above.
       if (error?.code === 11000) return false;
       throw error;
     }
@@ -224,47 +252,58 @@ export class AfsDigitizationV3Service {
   async markProcessing(data: AfsDigitizationV3JobData, bullJobId?: string) {
     await this.afsExcelFileModel.updateOne(this.recordKey(data), {
       $set: {
-        'digitizationV3.status': DigitizationV3Statuses.PROCESSING,
-        'digitizationV3.bullJobId': bullJobId,
-        'digitizationV3.error': null,
+        'ulbFile.queue.status': QueueStatus.PROCESSING,
+        'ulbFile.queue.processedOn': new Date(),
+        ...(bullJobId && { 'ulbFile.queue.jobId': bullJobId }),
       },
+      $unset: { 'ulbFile.digitizationMsg': '' },
     });
   }
 
-  async markDigitized(data: AfsDigitizationV3JobData, result: Record<string, unknown>) {
+  async markDigitized(data: AfsDigitizationV3JobData, result: DigitizationV3Result) {
     await this.afsExcelFileModel.updateOne(this.recordKey(data), {
       $set: {
-        digitizationV3: {
-          ...result,
-          status: DigitizationV3Statuses.DIGITIZED,
-          pdfUrl: data.pdfUrl,
-          uploadedBy: 'ULB',
-          expectedDocType: data.docType,
-          digitizedAt: new Date(),
-        },
+        'ulbFile.digitizationStatus': DigitizationStatuses.DIGITIZED,
+        // FastAPI job id; the full extraction and the Excel stay in FastAPI and are fetched by this id
+        'ulbFile.requestId': result.jobId,
+        'ulbFile.detectedDocTypes': result.detectedDocTypes,
+        'ulbFile.segments': result.segments,
+        'ulbFile.isConsolidated': result.isConsolidated,
+        'ulbFile.isMismatch': result.isMismatch,
+        'ulbFile.queue.status': QueueStatus.COMPLETED,
+        'ulbFile.queue.progress': 100,
+        'ulbFile.queue.finishedOn': new Date(),
+        ...(result.excelKey && { 'ulbFile.excelUrl': result.excelKey }),
+        ...(result.noOfPages != null && { 'ulbFile.noOfPages': result.noOfPages }),
+        ...(result.processingMs != null && { 'ulbFile.totalProcessingTimeMs': result.processingMs }),
       },
+      $unset: { 'ulbFile.digitizationMsg': '' },
     });
   }
 
   async markFailed(data: AfsDigitizationV3JobData, error: string) {
+    const message = error.slice(0, 1000);
     await this.afsExcelFileModel.updateOne(this.recordKey(data), {
       $set: {
-        'digitizationV3.status': DigitizationV3Statuses.FAILED,
-        'digitizationV3.error': error.slice(0, 1000),
+        'ulbFile.digitizationStatus': DigitizationStatuses.FAILED,
+        'ulbFile.digitizationMsg': message,
+        'ulbFile.queue.status': QueueStatus.FAILED,
+        'ulbFile.queue.failedReason': message,
+        'ulbFile.queue.finishedOn': new Date(),
       },
     });
   }
 
-  /** Put the record back to `queued` between BullMQ retries so it is not shown as failed. */
+  /** Put the file back to `queued` between BullMQ retries so it is not shown as failed. */
   async markRetrying(data: AfsDigitizationV3JobData, error: string) {
     await this.afsExcelFileModel.updateOne(this.recordKey(data), {
       $set: {
-        'digitizationV3.status': DigitizationV3Statuses.QUEUED,
-        'digitizationV3.error': error.slice(0, 1000),
+        'ulbFile.digitizationStatus': DigitizationStatuses.QUEUED,
+        'ulbFile.digitizationMsg': error.slice(0, 1000),
+        'ulbFile.queue.status': QueueStatus.QUEUED,
       },
     });
   }
-
   // ---------------------------------------------------------------------------
   // Helpers
   // ---------------------------------------------------------------------------
@@ -325,15 +364,15 @@ export class AfsDigitizationV3Service {
       .filter((u) => u.stateId && stateNames.has(u.stateId.toString()))
       .map((u) => ({ ...u, stateName: stateNames.get(u.stateId.toString()) as string, pdfUrl: u.pdfUrl || null }));
 
-    // Only the small digitizationV3 subdocument is read, never ulbFile / afsFile (those hold the big `data`).
+    // Only a few small ulbFile fields are read (see ULB_FILE_PROJECTION), never the big `data`.
     const existing = await this.afsExcelFileModel
       .find(
         { ulb: { $in: rows.map((r) => r.ulb) }, year: yearId, auditType, docType: query.docType },
-        { ulb: 1, digitizationV3: 1 },
+        ULB_FILE_PROJECTION,
       )
       .lean()
       .exec();
-    const records = new Map<string, V3Record>(existing.map((r) => [r.ulb.toString(), r.digitizationV3]));
+    const records = new Map<string, V3Record>(existing.map((r) => [r.ulb.toString(), this.toView(r.ulbFile)]));
 
     return { rows, records };
   }
@@ -381,6 +420,39 @@ export class AfsDigitizationV3Service {
     return true;
   }
 
+  /**
+   * Maps a stored `ulbFile` to what the page shows. A file the old flow digitized has no `detectedDocTypes`,
+   * so its contents are unknown and it counts as not digitized for v3 (it can be queued).
+   */
+  private toView(item?: {
+    digitizationStatus?: string;
+    digitizationMsg?: string;
+    queue?: { status?: string };
+    detectedDocTypes?: string[];
+    segments?: V3View['segments'];
+    isConsolidated?: boolean;
+    isMismatch?: boolean;
+  }): V3Record {
+    if (!item) return undefined;
+
+    let status = DigitizationV3Statuses.NOT_DIGITIZED;
+    if (item.digitizationStatus === DigitizationStatuses.QUEUED) {
+      status = item.queue?.status === QueueStatus.PROCESSING ? DigitizationV3Statuses.PROCESSING : DigitizationV3Statuses.QUEUED;
+    } else if (item.digitizationStatus === DigitizationStatuses.DIGITIZED && Array.isArray(item.detectedDocTypes)) {
+      status = DigitizationV3Statuses.DIGITIZED;
+    } else if (item.digitizationStatus === DigitizationStatuses.FAILED) {
+      status = DigitizationV3Statuses.FAILED;
+    }
+
+    return {
+      status,
+      detectedDocTypes: item.detectedDocTypes ?? [],
+      segments: item.segments ?? [],
+      isConsolidated: !!item.isConsolidated,
+      isMismatch: !!item.isMismatch,
+      error: item.digitizationMsg,
+    };
+  }
   private shapeRow(row: UlbRow, docType: string, record: V3Record) {
     return {
       _id: row._id,

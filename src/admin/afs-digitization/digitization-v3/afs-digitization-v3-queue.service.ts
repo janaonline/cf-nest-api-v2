@@ -10,6 +10,7 @@ import { YearIdToLabel } from 'src/core/constants/years';
 import { AfsDigitizationV3Service } from './afs-digitization-v3.service';
 import {
   AfsDigitizationV3JobData,
+  DigitizationV3Result,
   FASTAPI_TO_NEST_DOC_TYPE,
   NEST_TO_FASTAPI_DOC_TYPE,
   UNKNOWN_DOC_TYPE,
@@ -46,7 +47,12 @@ interface FastApiJobResult {
   status: string;
   message?: string;
   error_message?: string | null;
-  result?: { document_classification?: FastApiDocumentClassification | null; error_messages?: string[] } | null;
+  result?: {
+    document_classification?: FastApiDocumentClassification | null;
+    excel_s3_key?: string | null;
+    processing_time_seconds?: number | null;
+    error_messages?: string[];
+  } | null;
 }
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
@@ -54,8 +60,9 @@ const DEFAULT_POLL_INTERVAL_MS = 5_000;
 const DEFAULT_MAX_WAIT_MS = 20 * 60_000;
 
 /**
- * Sends one PDF to FastAPI v3 `/afs-digitization/jobs`, waits for it, and writes the
- * digitizationV3 from the response into the `afs_xl_files` record.
+ * Sends one PDF to FastAPI v3 `/afs-digitization/jobs`, waits for it, and stores a summary of the result
+ * (status, doc types, page ranges, flags, Excel key) on the ULB's `ulbFile` in `afs_xl_files`.
+ * The full extraction stays in FastAPI.
  */
 @Injectable()
 export class AfsDigitizationV3QueueService {
@@ -77,11 +84,11 @@ export class AfsDigitizationV3QueueService {
       await this.waitForCompletion(fastApiJobId);
       const result = await this.fetchResult(fastApiJobId);
 
-      const digitizationV3 = this.buildDigitizationV3(data, result);
-      await this.digitizationV3Service.markDigitized(data, { ...digitizationV3, jobId: fastApiJobId });
+      const summary = this.buildResult(data, fastApiJobId, result);
+      await this.digitizationV3Service.markDigitized(data, summary);
       this.logger.log(
-        `Digitized ulb ${data.ulb} ${data.docType}: detected=[${digitizationV3.detectedDocTypes}] ` +
-          `consolidated=${digitizationV3.isConsolidated} mismatch=${digitizationV3.isMismatch}`,
+        `Digitized ulb ${data.ulb} ${data.docType}: detected=[${summary.detectedDocTypes}] ` +
+          `consolidated=${summary.isConsolidated} mismatch=${summary.isMismatch}`,
       );
     } catch (error) {
       const message = this.describeError(error);
@@ -122,7 +129,7 @@ export class AfsDigitizationV3QueueService {
     const yearLabel = YearIdToLabel[data.year];
     if (yearLabel) form.append('financial_year', yearLabel);
     if (data.ulbName) form.append('ulb_name', data.ulbName);
-    // Only the digitizationV3 is needed here; skip the other Gemini passes to save cost.
+    // Keep the classification; skip the validation and arithmetic cross-checks to save Gemini cost.
     form.append('enable_document_classification', 'true');
     form.append('enable_validation', 'false');
     form.append('enable_arithmetic_validation', 'false');
@@ -188,11 +195,11 @@ export class AfsDigitizationV3QueueService {
   // Mapping
   // ---------------------------------------------------------------------------
 
-  private buildDigitizationV3(data: AfsDigitizationV3JobData, result: FastApiJobResult) {
+  private buildResult(data: AfsDigitizationV3JobData, jobId: string, result: FastApiJobResult): DigitizationV3Result {
     const cls = result.result?.document_classification;
     if (!cls) {
       const reason = result.result?.error_messages?.join('; ') || result.error_message || 'no document_classification';
-      throw new Error(`FastAPI returned no digitizationV3: ${reason}`);
+      throw new Error(`FastAPI returned no document classification: ${reason}`);
     }
 
     const toNest = (t: string) => FASTAPI_TO_NEST_DOC_TYPE[t] ?? UNKNOWN_DOC_TYPE;
@@ -208,13 +215,16 @@ export class AfsDigitizationV3QueueService {
     const source = cls.document_types?.length ? cls.document_types.map(toNest) : segments.map((s) => s.docType);
     const detectedDocTypes = [...new Set(source)].filter((t) => t !== UNKNOWN_DOC_TYPE);
 
+    const seconds = result.result?.processing_time_seconds;
     return {
+      jobId,
+      excelKey: result.result?.excel_s3_key ?? undefined,
+      noOfPages: cls.page_count || undefined,
+      processingMs: seconds != null ? Math.round(seconds * 1000) : undefined,
       detectedDocTypes,
       segments,
       isConsolidated: detectedDocTypes.length > 1,
       isMismatch: !detectedDocTypes.includes(data.docType),
-      noOfPages: cls.page_count,
-      summary: cls.summary ?? undefined,
     };
   }
 
