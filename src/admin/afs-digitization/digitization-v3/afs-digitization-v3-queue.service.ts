@@ -1,5 +1,5 @@
 import { HttpService } from '@nestjs/axios';
-import { Injectable, Logger } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AxiosError } from 'axios';
 import { Job, UnrecoverableError } from 'bullmq';
@@ -42,7 +42,43 @@ interface FastApiJobStatus {
   status: 'queued' | 'processing' | 'completed' | 'failed';
   progress_step?: string | null;
   error_message?: string | null;
+  // The rest is only used for the job log
+  filename?: string;
+  ocr_engine?: string;
+  gemini_model?: string;
+  page_count?: number | null;
+  detected_document_type?: string | null;
+  multiple_documents_detected?: boolean | null;
+  ocr_cost_usd?: number | null;
+  created_at?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  message?: string;
 }
+
+/** What the "view log" dialog shows for a FastAPI job. */
+export interface AfsDigitizationJobLog {
+  afsDigitizationJobId: string;
+  status: string;
+  progressStep: string | null;
+  message: string | null;
+  errorMessage: string | null;
+  /** Non-fatal problems the job recorded (e.g. a skipped step, a failed Excel upload) */
+  warnings: string[];
+  filename: string | null;
+  ocrEngine: string | null;
+  geminiModel: string | null;
+  pageCount: number | null;
+  detectedDocumentType: string | null;
+  multipleDocumentsDetected: boolean | null;
+  ocrCostUsd: number | null;
+  createdAt: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+}
+
+/** FastAPI job ids are uuid4 hex. Checked before the id is put into a URL. */
+const AFS_DIGITIZATION_JOB_ID = /^[0-9a-f]{32}$/i;
 
 interface FastApiJobResult {
   status: string;
@@ -107,6 +143,52 @@ export class AfsDigitizationV3QueueService {
       if (isLastAttempt) await this.digitizationV3Service.markFailed(data, message);
       else await this.digitizationV3Service.markRetrying(data, message);
       throw error;
+    }
+  }
+
+  /** The FastAPI side of one job, for the page's "view log" dialog. */
+  async getJobLog(afsDigitizationJobId: string): Promise<AfsDigitizationJobLog> {
+    if (!AFS_DIGITIZATION_JOB_ID.test(afsDigitizationJobId)) {
+      throw new BadRequestException('afsDigitizationJobId must be a 32 character hex id');
+    }
+
+    const timeout = this.requestTimeout();
+    try {
+      const [status, result] = await Promise.all([
+        firstValueFrom(
+          this.http.get<FastApiJobStatus>(`${this.baseUrl()}/jobs/${afsDigitizationJobId}/status`, { timeout }),
+        ),
+        // The result only adds the warnings; a log without them is still useful, so its failure is ignored
+        firstValueFrom(
+          this.http.get<FastApiJobResult>(`${this.baseUrl()}/jobs/${afsDigitizationJobId}/result`, { timeout }),
+        ).catch(() => null),
+      ]);
+
+      const s = status.data;
+      return {
+        afsDigitizationJobId: s.job_id,
+        status: s.status,
+        progressStep: s.progress_step ?? null,
+        message: s.message ?? null,
+        errorMessage: s.error_message ?? null,
+        warnings: result?.data?.result?.error_messages ?? [],
+        filename: s.filename ?? null,
+        ocrEngine: s.ocr_engine ?? null,
+        geminiModel: s.gemini_model ?? null,
+        pageCount: s.page_count ?? null,
+        detectedDocumentType: s.detected_document_type ?? null,
+        multipleDocumentsDetected: s.multiple_documents_detected ?? null,
+        ocrCostUsd: s.ocr_cost_usd ?? null,
+        createdAt: s.created_at ?? null,
+        startedAt: s.started_at ?? null,
+        completedAt: s.completed_at ?? null,
+      };
+    } catch (error) {
+      if ((error as AxiosError)?.response?.status === 404) {
+        throw new NotFoundException(`No FastAPI job ${afsDigitizationJobId}`);
+      }
+      this.logger.error(`Could not read the log of FastAPI job ${afsDigitizationJobId}: ${this.describeError(error)}`);
+      throw new BadGatewayException(`Could not read the job log from FastAPI: ${this.describeError(error)}`);
     }
   }
 
