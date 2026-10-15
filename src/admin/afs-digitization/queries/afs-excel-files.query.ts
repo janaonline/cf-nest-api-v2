@@ -71,6 +71,7 @@ function getAfsLookupPipeline(query: DigitizationReportQueryDto) {
               updatedAt: 1,
               ulbFile: 1,
               afsFile: 1,
+              digitizationV3: 1,
               // drop data fields
               // 'ulbFile.data': 0,
               // 'afsFile.data': 0,
@@ -105,7 +106,7 @@ function getStateLookup() {
   ];
 }
 
-function getUlbsLookupPipeline(query: DigitizationReportQueryDto) {
+export function getUlbsLookupPipeline(query: DigitizationReportQueryDto) {
   const stateObjectIds =
     query.stateId && query.stateId.length > 0 ? query.stateId.map((id) => new Types.ObjectId(id)) : undefined;
   const populationRange = buildPopulationMatch(query.populationCategory || '');

@@ -2,9 +2,85 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types, Schema as MongooseSchema } from 'mongoose';
 import { Queue, QueueSchema } from '../queue.schema';
-import { DigitizationStatuses, UploadedBy, AuditType } from './enums';
+import { DigitizationV3Statuses, DigitizationStatuses, UploadedBy, AuditType } from './enums';
 
 export type AfsExcelFileDocument = HydratedDocument<AfsExcelFile>;
+
+@Schema({ _id: false })
+export class AfsDigitizationV3Segment {
+  @Prop({ type: String })
+  docType: string; // nest doc type key, e.g. "bal_sheet"; "unknown" when FastAPI could not identify it
+
+  @Prop({ type: Number })
+  startPage: number;
+
+  @Prop({ type: Number })
+  endPage: number;
+
+  @Prop({ type: String })
+  title?: string;
+
+  @Prop({ type: Boolean, default: false })
+  isDuplicate: boolean;
+}
+
+const AfsDigitizationV3SegmentSchema = SchemaFactory.createForClass(AfsDigitizationV3Segment);
+
+@Schema({ _id: false })
+export class AfsDigitizationV3 {
+  @Prop({ type: String, enum: Object.values(DigitizationV3Statuses), default: DigitizationV3Statuses.NOT_DIGITIZED })
+  status: DigitizationV3Statuses;
+
+  // FastAPI v3 afs-digitization job that produced this digitizationV3
+  @Prop({ type: String })
+  jobId?: string;
+
+  @Prop({ type: String })
+  bullJobId?: string;
+
+  // The PDF that was digitized (S3 key / url as stored on the annual account)
+  @Prop({ type: String })
+  pdfUrl?: string;
+
+  @Prop({ type: String })
+  uploadedBy?: string;
+
+  // Doc type the file was uploaded as (afs_xl_files.docType)
+  @Prop({ type: String })
+  expectedDocType?: string;
+
+  // Distinct doc types actually present in the file
+  @Prop({ type: [String], default: [] })
+  detectedDocTypes: string[];
+
+  @Prop({ type: [AfsDigitizationV3SegmentSchema], default: [] })
+  segments: AfsDigitizationV3Segment[];
+
+  // True when more than one distinct doc type is present
+  @Prop({ type: Boolean, default: false })
+  isConsolidated: boolean;
+
+  // True when expectedDocType is not among detectedDocTypes
+  @Prop({ type: Boolean, default: false })
+  isMismatch: boolean;
+
+  @Prop({ type: Number })
+  noOfPages?: number;
+
+  @Prop({ type: String })
+  summary?: string;
+
+  @Prop({ type: String })
+  error?: string;
+
+  @Prop({ type: Date })
+  queuedAt?: Date;
+
+  @Prop({ type: Date })
+  digitizedAt?: Date;
+}
+
+const AfsDigitizationV3Schema = SchemaFactory.createForClass(AfsDigitizationV3);
 
 // @Schema({ _id: false })
 // export class AfsExcelFileQueue {
@@ -117,6 +193,11 @@ export class AfsExcelFile {
 
   @Prop({ type: AfsExcelFileItemSchema })
   afsFile: AfsExcelFileItem;
+
+  // Kept at record level (not inside ulbFile/afsFile) so writing it never creates a
+  // file item and never changes the record's digitizationStatus filters.
+  @Prop({ type: AfsDigitizationV3Schema })
+  digitizationV3?: AfsDigitizationV3;
 }
 
 export const AfsExcelFileSchema = SchemaFactory.createForClass(AfsExcelFile);
@@ -128,3 +209,4 @@ AfsExcelFileSchema.index({ 'ulbFile.requestId': 1 });
 AfsExcelFileSchema.index({ 'afsFile.requestId': 1 });
 AfsExcelFileSchema.index({ 'ulbFile.queue.status': 1 });
 AfsExcelFileSchema.index({ 'afsFile.queue.status': 1 });
+AfsExcelFileSchema.index({ 'digitizationV3.status': 1 });

@@ -1,0 +1,399 @@
+import { InjectQueue } from '@nestjs/bullmq';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { InjectModel } from '@nestjs/mongoose';
+import { Queue } from 'bullmq';
+import { Model, Types } from 'mongoose';
+import { AFS_DIGITIZATION_V3_QUEUE } from 'src/core/constants/queues';
+import { FileTokenService } from 'src/core/file-token/file-token.service';
+import { AfsDigitizationV3, AfsExcelFile, AfsExcelFileDocument } from 'src/schemas/afs/afs-excel-file.schema';
+import { DigitizationV3Statuses } from 'src/schemas/afs/enums';
+import { AnnualAccountData, AnnualAccountDataDocument } from 'src/schemas/annual-account-data.schema';
+import { State, StateDocument } from 'src/schemas/state.schema';
+import { DOC_TYPES } from '../constants/docTypes';
+import { AfsDigitizationV3QueryDto } from '../dto/afs-digitization-v3-query.dto';
+import { getUlbsLookupPipeline } from '../queries/afs-excel-files.query';
+import { AfsDigitizationV3JobData, V3_DOC_TYPES, MAX_ENQUEUE_BATCH } from './afs-digitization-v3.constants';
+
+/** One ULB for the selected year / audit type / doc type, with its uploaded PDF (if any). */
+interface UlbRow {
+  _id: Types.ObjectId;
+  ulb: Types.ObjectId;
+  ulbName: string;
+  ulbCode?: string;
+  stateId: Types.ObjectId;
+  stateName: string;
+  pdfUrl: string | null;
+}
+
+type V3Record = Partial<AfsDigitizationV3> | undefined;
+
+export interface DigitizationV3Metrics {
+  total: number;
+  withPdf: number;
+  notDigitized: number;
+  queued: number;
+  processing: number;
+  digitized: number;
+  failed: number;
+  consolidated: number;
+  mismatch: number;
+}
+
+@Injectable()
+export class AfsDigitizationV3Service {
+  private readonly logger = new Logger(AfsDigitizationV3Service.name);
+
+  constructor(
+    @InjectQueue(AFS_DIGITIZATION_V3_QUEUE)
+    private readonly digitizationV3Queue: Queue<AfsDigitizationV3JobData>,
+    @InjectModel(AnnualAccountData.name)
+    private readonly annualAccountModel: Model<AnnualAccountDataDocument>,
+    @InjectModel(AfsExcelFile.name)
+    private readonly afsExcelFileModel: Model<AfsExcelFileDocument>,
+    @InjectModel(State.name)
+    private readonly stateModel: Model<StateDocument>,
+    private readonly fileTokenService: FileTokenService,
+  ) {}
+
+  // ---------------------------------------------------------------------------
+  // Listing
+  // ---------------------------------------------------------------------------
+
+  /**
+   * One page of ULBs plus the card counts. Cards cover the whole selection; the page honours the
+   * digitization filters.
+   */
+  async list(query: AfsDigitizationV3QueryDto) {
+    this.assertSupported(query);
+    const page = query.page > 0 ? query.page : 1;
+    const limit = query.limit > 0 ? query.limit : 100;
+
+    const { rows, records } = await this.loadSelection(query);
+    const metrics = this.computeMetrics(rows, records);
+
+    const matching = rows.filter((row) => this.matchesFilters(records.get(row.ulb.toString()), query));
+    const data = matching
+      .slice((page - 1) * limit, page * limit)
+      .map((row) => this.shapeRow(row, query.docType, records.get(row.ulb.toString())));
+
+    return { success: true, data, totalCount: matching.length, metrics };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Queueing
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Applies the filter once on the server and queues every matching file.
+   * Files with no PDF, or already queued / processing / digitized, are skipped.
+   */
+  async enqueueByFilter(query: AfsDigitizationV3QueryDto) {
+    this.assertSupported(query);
+
+    const { rows, records } = await this.loadSelection(query);
+    const matching = rows
+      .filter((row) => this.matchesFilters(records.get(row.ulb.toString()), query))
+      .slice(0, MAX_ENQUEUE_BATCH);
+
+    const summary = {
+      matched: matching.length,
+      queued: 0,
+      skippedNoPdf: 0,
+      skippedAlreadyQueued: 0,
+      skippedAlreadyDigitized: 0,
+      failedToQueue: 0,
+    };
+    if (matching.length === MAX_ENQUEUE_BATCH) {
+      this.logger.warn(`Enqueue-by-filter hit the ${MAX_ENQUEUE_BATCH} row cap; narrow the filter and run again`);
+    }
+
+    for (const row of matching) {
+      if (!row.pdfUrl) {
+        summary.skippedNoPdf++;
+        continue;
+      }
+
+      const current = records.get(row.ulb.toString())?.status;
+      if (current === DigitizationV3Statuses.DIGITIZED) {
+        summary.skippedAlreadyDigitized++;
+        continue;
+      }
+      if (current === DigitizationV3Statuses.QUEUED || current === DigitizationV3Statuses.PROCESSING) {
+        summary.skippedAlreadyQueued++;
+        continue;
+      }
+
+      const data: AfsDigitizationV3JobData = {
+        annualAccountsId: row._id.toString(),
+        ulb: row.ulb.toString(),
+        year: query.yearId,
+        auditType: query.auditType as string,
+        docType: query.docType,
+        pdfUrl: row.pdfUrl,
+        ulbName: row.ulbName,
+      };
+
+      const claimed = await this.claim(data);
+      if (!claimed) {
+        // Another request queued it between our read and this write.
+        summary.skippedAlreadyQueued++;
+        continue;
+      }
+
+      try {
+        await this.digitizationV3Queue.add(`digitize-v3-${data.ulb}-${data.year}-${data.docType}`, data, {
+          // Same file can never be in the queue twice; cleared on finish so it can be retried later.
+          jobId: `digitize-v3-${data.ulb}-${data.year}-${data.auditType}-${data.docType}`,
+          attempts: 2,
+          backoff: { type: 'exponential', delay: 30_000 },
+          removeOnComplete: true,
+          removeOnFail: true,
+        });
+        summary.queued++;
+      } catch (error) {
+        summary.failedToQueue++;
+        this.logger.error(
+          `Failed to add digitization v3 job for ulb ${data.ulb}`,
+          error instanceof Error ? error.stack : String(error),
+        );
+        await this.markFailed(data, 'Could not add the job to the queue');
+      }
+    }
+
+    this.logger.log(`AFS digitization v3 enqueue-by-filter: ${JSON.stringify(summary)}`);
+    return { success: true, ...summary };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Writes used by the queue service
+  // ---------------------------------------------------------------------------
+
+  private recordKey(data: AfsDigitizationV3JobData) {
+    return {
+      ulb: new Types.ObjectId(data.ulb),
+      year: new Types.ObjectId(data.year),
+      auditType: data.auditType,
+      docType: data.docType,
+    };
+  }
+
+  /**
+   * Atomically moves a record to `queued`. Returns false if it is already queued, processing or digitized.
+   * Upserts so files that were never digitized (no afs_xl_files record yet) can be digitized too.
+   */
+  private async claim(data: AfsDigitizationV3JobData): Promise<boolean> {
+    const key = this.recordKey(data);
+    try {
+      await this.afsExcelFileModel.findOneAndUpdate(
+        {
+          ...key,
+          'digitizationV3.status': {
+            $nin: [DigitizationV3Statuses.QUEUED, DigitizationV3Statuses.PROCESSING, DigitizationV3Statuses.DIGITIZED],
+          },
+        },
+        {
+          $setOnInsert: {
+            ...key,
+            ...(data.annualAccountsId && { annualAccountsId: new Types.ObjectId(data.annualAccountsId) }),
+          },
+          $set: {
+            digitizationV3: {
+              status: DigitizationV3Statuses.QUEUED,
+              pdfUrl: data.pdfUrl,
+              uploadedBy: 'ULB',
+              expectedDocType: data.docType,
+              detectedDocTypes: [],
+              segments: [],
+              isConsolidated: false,
+              isMismatch: false,
+              queuedAt: new Date(),
+            },
+          },
+        },
+        // No defaults: inserting ulbFile / afsFile defaults would change the record's digitization filters.
+        { upsert: true, new: true, setDefaultsOnInsert: false },
+      );
+      return true;
+    } catch (error: any) {
+      // Unique index {ulb, year, auditType, docType}: record exists but its status did not match the filter.
+      if (error?.code === 11000) return false;
+      throw error;
+    }
+  }
+
+  async markProcessing(data: AfsDigitizationV3JobData, bullJobId?: string) {
+    await this.afsExcelFileModel.updateOne(this.recordKey(data), {
+      $set: {
+        'digitizationV3.status': DigitizationV3Statuses.PROCESSING,
+        'digitizationV3.bullJobId': bullJobId,
+        'digitizationV3.error': null,
+      },
+    });
+  }
+
+  async markDigitized(data: AfsDigitizationV3JobData, result: Record<string, unknown>) {
+    await this.afsExcelFileModel.updateOne(this.recordKey(data), {
+      $set: {
+        digitizationV3: {
+          ...result,
+          status: DigitizationV3Statuses.DIGITIZED,
+          pdfUrl: data.pdfUrl,
+          uploadedBy: 'ULB',
+          expectedDocType: data.docType,
+          digitizedAt: new Date(),
+        },
+      },
+    });
+  }
+
+  async markFailed(data: AfsDigitizationV3JobData, error: string) {
+    await this.afsExcelFileModel.updateOne(this.recordKey(data), {
+      $set: {
+        'digitizationV3.status': DigitizationV3Statuses.FAILED,
+        'digitizationV3.error': error.slice(0, 1000),
+      },
+    });
+  }
+
+  /** Put the record back to `queued` between BullMQ retries so it is not shown as failed. */
+  async markRetrying(data: AfsDigitizationV3JobData, error: string) {
+    await this.afsExcelFileModel.updateOne(this.recordKey(data), {
+      $set: {
+        'digitizationV3.status': DigitizationV3Statuses.QUEUED,
+        'digitizationV3.error': error.slice(0, 1000),
+      },
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Helpers
+  // ---------------------------------------------------------------------------
+
+  private assertSupported(query: AfsDigitizationV3QueryDto) {
+    if (!query.auditType) throw new BadRequestException('auditType is required');
+    if (!V3_DOC_TYPES.includes(query.docType)) {
+      throw new BadRequestException(`docType must be one of: ${V3_DOC_TYPES.join(', ')}`);
+    }
+  }
+
+  /**
+   * Loads every ULB in the selection plus its existing digitization v3 record, with three cheap reads
+   * (ULBs with their PDF, the matching states, the existing records) and no per-ULB join into afs_xl_files.
+   */
+  private async loadSelection(query: AfsDigitizationV3QueryDto) {
+    const yearId = new Types.ObjectId(query.yearId);
+    const ulbIds = query.ulbId?.length ? query.ulbId.map((id) => new Types.ObjectId(id)) : undefined;
+    const auditType = query.auditType as string;
+
+    // docType and auditType are validated enums, so they are safe to use in a field path.
+    const ulbs = await this.annualAccountModel
+      .aggregate<Omit<UlbRow, 'stateName'>>([
+        { $match: { [`${auditType}.year`]: yearId, ...(ulbIds && { ulb: { $in: ulbIds } }) } },
+        {
+          $project: {
+            _id: 1,
+            ulb: 1,
+            pdfUrl: `$${auditType}.provisional_data.${query.docType}.pdf.url`,
+          },
+        },
+        // State / population filters, same as the AFS dashboard
+        ...getUlbsLookupPipeline(query),
+        {
+          $project: {
+            ulb: 1,
+            pdfUrl: 1,
+            ulbName: '$ulbDoc.name',
+            ulbCode: '$ulbDoc.code',
+            stateId: '$ulbDoc.state',
+          },
+        },
+        { $sort: { ulbName: 1 } },
+      ])
+      .exec();
+
+    // The dashboard only lists ULBs whose state is active and published
+    const stateIds = [...new Set(ulbs.map((u) => u.stateId?.toString()).filter(Boolean))].map(
+      (id) => new Types.ObjectId(id),
+    );
+    const states = await this.stateModel
+      .find({ _id: { $in: stateIds }, isActive: true, isPublish: true }, { name: 1 })
+      .lean()
+      .exec();
+    const stateNames = new Map(states.map((s) => [s._id.toString(), s.name as string]));
+
+    const rows: UlbRow[] = ulbs
+      .filter((u) => u.stateId && stateNames.has(u.stateId.toString()))
+      .map((u) => ({ ...u, stateName: stateNames.get(u.stateId.toString()) as string, pdfUrl: u.pdfUrl || null }));
+
+    // Only the small digitizationV3 subdocument is read, never ulbFile / afsFile (those hold the big `data`).
+    const existing = await this.afsExcelFileModel
+      .find(
+        { ulb: { $in: rows.map((r) => r.ulb) }, year: yearId, auditType, docType: query.docType },
+        { ulb: 1, digitizationV3: 1 },
+      )
+      .lean()
+      .exec();
+    const records = new Map<string, V3Record>(existing.map((r) => [r.ulb.toString(), r.digitizationV3]));
+
+    return { rows, records };
+  }
+
+  private computeMetrics(rows: UlbRow[], records: Map<string, V3Record>): DigitizationV3Metrics {
+    const metrics: DigitizationV3Metrics = {
+      total: rows.length,
+      withPdf: 0,
+      notDigitized: 0,
+      queued: 0,
+      processing: 0,
+      digitized: 0,
+      failed: 0,
+      consolidated: 0,
+      mismatch: 0,
+    };
+    const byStatus: Record<DigitizationV3Statuses, keyof DigitizationV3Metrics> = {
+      [DigitizationV3Statuses.NOT_DIGITIZED]: 'notDigitized',
+      [DigitizationV3Statuses.QUEUED]: 'queued',
+      [DigitizationV3Statuses.PROCESSING]: 'processing',
+      [DigitizationV3Statuses.DIGITIZED]: 'digitized',
+      [DigitizationV3Statuses.FAILED]: 'failed',
+    };
+
+    for (const row of rows) {
+      if (row.pdfUrl) metrics.withPdf++;
+      const record = records.get(row.ulb.toString());
+      metrics[byStatus[record?.status ?? DigitizationV3Statuses.NOT_DIGITIZED]]++;
+      if (record?.isConsolidated) metrics.consolidated++;
+      if (record?.isMismatch) metrics.mismatch++;
+    }
+    return metrics;
+  }
+
+  /** "Single type" and "matches" only make sense once a file has been digitized, so they require that. */
+  private matchesFilters(record: V3Record, query: AfsDigitizationV3QueryDto): boolean {
+    const status = record?.status ?? DigitizationV3Statuses.NOT_DIGITIZED;
+    const isDigitized = status === DigitizationV3Statuses.DIGITIZED;
+
+    if (query.digitizationV3Status && status !== query.digitizationV3Status) return false;
+    if (query.isConsolidated === true && !record?.isConsolidated) return false;
+    if (query.isConsolidated === false && !(isDigitized && !record?.isConsolidated)) return false;
+    if (query.isMismatch === true && !record?.isMismatch) return false;
+    if (query.isMismatch === false && !(isDigitized && !record?.isMismatch)) return false;
+    return true;
+  }
+
+  private shapeRow(row: UlbRow, docType: string, record: V3Record) {
+    return {
+      _id: row._id,
+      ulb: row.ulb,
+      ulbName: row.ulbName,
+      ulbCode: row.ulbCode,
+      stateId: row.stateId,
+      stateName: row.stateName,
+      docType,
+      docTypeLabel: DOC_TYPES[docType as keyof typeof DOC_TYPES],
+      pdfUrl: row.pdfUrl,
+      pdfUrlSigned: row.pdfUrl ? this.fileTokenService.signFileUrl(row.pdfUrl) : null,
+      digitizationV3: record ?? { status: DigitizationV3Statuses.NOT_DIGITIZED },
+    };
+  }
+}
