@@ -5,10 +5,10 @@ import { DigitizationReportQueryDto } from './digitization-report-query.dto';
 
 /**
  * Same ULB / state / year / docType / auditType filters as the AFS dashboard, plus
- * filters on the digitizationV3 result written by the digitizationV3 queue.
+ * filters on the v3 digitization result written by the AFS digitization v3 queue.
  */
 export class AfsDigitizationV3QueryDto extends DigitizationReportQueryDto {
-  @ApiPropertyOptional({ description: 'Filter by digitizationV3 status', enum: DigitizationV3Statuses })
+  @ApiPropertyOptional({ description: 'Filter by v3 digitization status', enum: DigitizationV3Statuses })
   @IsOptional()
   @IsEnum(DigitizationV3Statuses)
   digitizationV3Status?: DigitizationV3Statuses;

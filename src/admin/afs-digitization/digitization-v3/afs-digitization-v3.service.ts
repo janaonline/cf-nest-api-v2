@@ -493,7 +493,7 @@ export class AfsDigitizationV3Service {
       pdfPageCount: row.pdfPageCount,
       pdfSizeBytes: row.pdfSizeBytes,
       pdfUrlSigned: row.pdfUrl ? this.fileTokenService.signFileUrl(row.pdfUrl) : null,
-      digitizationV3: record ?? { status: DigitizationV3Statuses.NOT_DIGITIZED },
+      digitization: record ?? { status: DigitizationV3Statuses.NOT_DIGITIZED },
     };
   }
 }
