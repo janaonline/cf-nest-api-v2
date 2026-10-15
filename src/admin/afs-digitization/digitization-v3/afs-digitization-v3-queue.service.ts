@@ -82,12 +82,13 @@ export class AfsDigitizationV3QueueService {
     try {
       await this.digitizationV3Service.markProcessing(data, job.id);
 
-      const fastApiJobId = await this.submit(data);
-      this.logger.log(`AFS digitization v3 job ${job.id} submitted to FastAPI as ${fastApiJobId}`);
-      await this.waitForCompletion(fastApiJobId);
-      const result = await this.fetchResult(fastApiJobId);
+      const afsDigitizationJobId = await this.submit(data);
+      await this.digitizationV3Service.markSubmitted(data, afsDigitizationJobId);
+      this.logger.log(`AFS digitization v3 job ${job.id} submitted to FastAPI as ${afsDigitizationJobId}`);
+      await this.waitForCompletion(afsDigitizationJobId);
+      const result = await this.fetchResult(afsDigitizationJobId);
 
-      const summary = this.buildResult(data, fastApiJobId, result);
+      const summary = this.buildResult(data, afsDigitizationJobId, result);
       // Keep FastAPI's Excel key only if it is in the bucket this API serves files from
       const { excelKey, warning } = this.resolveExcel(data, summary.excelKey, result.result?.excel_s3_bucket);
       await this.digitizationV3Service.markDigitized(data, { ...summary, excelKey, warning });
@@ -151,7 +152,7 @@ export class AfsDigitizationV3QueueService {
     return created.job_id;
   }
 
-  private async waitForCompletion(fastApiJobId: string): Promise<void> {
+  private async waitForCompletion(afsDigitizationJobId: string): Promise<void> {
     const pollMs = Number(this.config.get('AFS_DIGITIZATION_V3_POLL_INTERVAL_MS')) || DEFAULT_POLL_INTERVAL_MS;
     const maxWaitMs = Number(this.config.get('AFS_DIGITIZATION_V3_MAX_WAIT_MS')) || DEFAULT_MAX_WAIT_MS;
     const deadline = Date.now() + maxWaitMs;
@@ -160,23 +161,23 @@ export class AfsDigitizationV3QueueService {
       await sleep(pollMs);
       const status = await this.request<FastApiJobStatus>(() =>
         firstValueFrom(
-          this.http.get<FastApiJobStatus>(`${this.baseUrl()}/jobs/${fastApiJobId}/status`, {
+          this.http.get<FastApiJobStatus>(`${this.baseUrl()}/jobs/${afsDigitizationJobId}/status`, {
             timeout: this.requestTimeout(),
           }),
         ),
       );
       if (status.status === 'completed') return;
       if (status.status === 'failed') {
-        throw new Error(`FastAPI job ${fastApiJobId} failed: ${status.error_message ?? 'unknown error'}`);
+        throw new Error(`FastAPI job ${afsDigitizationJobId} failed: ${status.error_message ?? 'unknown error'}`);
       }
     }
-    throw new Error(`FastAPI job ${fastApiJobId} did not finish within ${Math.round(maxWaitMs / 1000)}s`);
+    throw new Error(`FastAPI job ${afsDigitizationJobId} did not finish within ${Math.round(maxWaitMs / 1000)}s`);
   }
 
-  private fetchResult(fastApiJobId: string): Promise<FastApiJobResult> {
+  private fetchResult(afsDigitizationJobId: string): Promise<FastApiJobResult> {
     return this.request<FastApiJobResult>(() =>
       firstValueFrom(
-        this.http.get<FastApiJobResult>(`${this.baseUrl()}/jobs/${fastApiJobId}/result`, {
+        this.http.get<FastApiJobResult>(`${this.baseUrl()}/jobs/${afsDigitizationJobId}/result`, {
           timeout: this.requestTimeout(),
         }),
       ),

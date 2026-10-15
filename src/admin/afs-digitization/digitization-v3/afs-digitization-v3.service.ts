@@ -39,6 +39,8 @@ interface V3View {
   noOfPages?: number;
   /** Key of the digitized Excel in our bucket */
   excelUrl?: string;
+  /** FastAPI job id (`job_id` from `POST /afs-digitization/jobs`) */
+  jobId?: string;
   error?: string;
 }
 
@@ -56,6 +58,7 @@ const ULB_FILE_PROJECTION = {
   'ulbFile.isMismatch': 1,
   'ulbFile.noOfPages': 1,
   'ulbFile.excelUrl': 1,
+  'ulbFile.requestId': 1,
 };
 
 export interface DigitizationV3Metrics {
@@ -268,6 +271,16 @@ export class AfsDigitizationV3Service {
     });
   }
 
+  /**
+   * Saves the FastAPI job id (`job_id` from `POST /afs-digitization/jobs`) as soon as FastAPI accepts the job,
+   * so a running or failed job can still be traced in FastAPI.
+   */
+  async markSubmitted(data: AfsDigitizationV3JobData, afsDigitizationJobId: string) {
+    await this.afsExcelFileModel.updateOne(this.recordKey(data), {
+      $set: { 'ulbFile.requestId': afsDigitizationJobId },
+    });
+  }
+
   async markDigitized(data: AfsDigitizationV3JobData, result: DigitizationV3Result) {
     await this.afsExcelFileModel.updateOne(this.recordKey(data), {
       $set: {
@@ -454,6 +467,7 @@ export class AfsDigitizationV3Service {
     isMismatch?: boolean;
     noOfPages?: number;
     excelUrl?: string;
+    requestId?: string;
   }): V3Record {
     if (!item) return undefined;
 
@@ -474,6 +488,7 @@ export class AfsDigitizationV3Service {
       isMismatch: !!item.isMismatch,
       noOfPages: item.noOfPages,
       excelUrl: item.excelUrl || undefined,
+      jobId: item.requestId || undefined,
       error: item.digitizationMsg,
     };
   }
