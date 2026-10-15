@@ -4,15 +4,18 @@ import { BadRequestException, ForbiddenException, NotFoundException } from '@nes
 import { Types } from 'mongoose';
 import { ElectedUrbanLocalBodiesRowService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/row/elected-urban-local-bodies-row.service';
 import { ElectedUrbanLocalBodiesForm } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
+import { ElectedUrbanLocalBodiesFormHistory } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form-history.schema';
 import { ElectedUrbanLocalBodiesRow } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
+import { ElectedUrbanLocalBodiesRowHistory } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row-history.schema';
 import { Ulb } from 'src/schemas/ulb.schema';
+import { PmuRowReviewHelper } from 'src/module/xvi-fc/common/services/pmu-row-review.helper';
 import { ElectedUrbanLocalBodiesValidator } from 'src/module/xvi-fc/state/elected-urban-local-bodies/validators/elected-urban-local-bodies.validator';
 import { EulbFormJsonConfigService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/form-json/elected-urban-local-bodies-form-json.service';
 import type { EulbTypedFieldConfig } from 'src/module/xvi-fc/state/elected-urban-local-bodies/helpers/elected-urban-local-bodies-form-json.helpers';
 import { ExcelService } from 'src/services/excel/excel.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
-import { FORM_STATUS } from 'src/common/constants/form-status.constants';
+import { FORM_STATUS, FormHistoryAction } from 'src/common/constants/form-status.constants';
 import type { XviFcValidationErrorMap } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 
@@ -170,23 +173,38 @@ const mockEulbFormJsonConfigService = {
 describe('ElectedUrbanLocalBodiesRowService', () => {
   let service: ElectedUrbanLocalBodiesRowService;
   let formModel: Record<string, jest.Mock>;
+  let historyModel: Record<string, jest.Mock>;
   let rowModel: Record<string, jest.Mock>;
+  let rowHistoryModel: Record<string, jest.Mock>;
   let validator: ElectedUrbanLocalBodiesValidator;
   let excelService: { generateExcel: jest.Mock };
+  let mockSession: Record<string, jest.Mock>;
 
   beforeEach(async () => {
+    mockSession = {
+      startTransaction: jest.fn(),
+      commitTransaction: jest.fn().mockResolvedValue(undefined),
+      abortTransaction: jest.fn().mockResolvedValue(undefined),
+      endSession: jest.fn().mockResolvedValue(undefined),
+    };
+
     formModel = {
       findOne: jest.fn().mockReturnValue(q(mockForm)),
       findById: jest.fn().mockReturnValue(q(mockForm)),
       findByIdAndUpdate: jest.fn().mockReturnValue(q(mockForm)),
+      db: { startSession: jest.fn().mockResolvedValue(mockSession) } as unknown as Record<string, jest.Mock>,
     };
+    historyModel = { create: jest.fn().mockResolvedValue([{}]) };
     rowModel = {
       findOne: jest.fn().mockReturnValue(q(mockRow)),
       findByIdAndUpdate: jest.fn().mockReturnValue(q(updatedRow)),
       find: jest.fn().mockReturnValue(q([])),
       countDocuments: jest.fn().mockReturnValue(q(0)),
       deleteMany: jest.fn().mockReturnValue(q({ deletedCount: 0 })),
+      bulkWrite: jest.fn().mockResolvedValue({ upsertedIds: {} }),
+      db: { startSession: jest.fn().mockResolvedValue(mockSession) } as unknown as Record<string, jest.Mock>,
     };
+    rowHistoryModel = { insertMany: jest.fn().mockResolvedValue([]) };
     const ulbModel = { findById: jest.fn().mockReturnValue(q(null)) };
     const mockValidator = {
       validatePortalUpdateFields: jest.fn().mockReturnValue([]),
@@ -201,12 +219,15 @@ describe('ElectedUrbanLocalBodiesRowService', () => {
       providers: [
         ElectedUrbanLocalBodiesRowService,
         { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: formModel },
+        { provide: getModelToken(ElectedUrbanLocalBodiesFormHistory.name), useValue: historyModel },
         { provide: getModelToken(ElectedUrbanLocalBodiesRow.name), useValue: rowModel },
+        { provide: getModelToken(ElectedUrbanLocalBodiesRowHistory.name), useValue: rowHistoryModel },
         { provide: getModelToken(Ulb.name), useValue: ulbModel },
         { provide: ElectedUrbanLocalBodiesValidator, useValue: mockValidator },
         { provide: ExcelService, useValue: excelService },
         { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
         { provide: UlbEligibilityService, useValue: ulbEligibilityService },
+        PmuRowReviewHelper,
       ],
     }).compile();
 
@@ -224,6 +245,8 @@ describe('ElectedUrbanLocalBodiesRowService', () => {
         rowOid.toString(),
         { electedBodyStatus: 'Not Constituted' },
         adminUser,
+        '127.0.0.1',
+        'jest',
       );
       expect(result).toMatchObject({
         success: true,
@@ -238,14 +261,14 @@ describe('ElectedUrbanLocalBodiesRowService', () => {
     it('throws ForbiddenException for a state user accessing a different state', async () => {
       const wrongStateUser = stateUser(new Types.ObjectId()); // different from stateOid
       await expect(
-        service.updateRow(stateOid.toString(), yearOid.toString(), rowOid.toString(), {}, wrongStateUser),
+        service.updateRow(stateOid.toString(), yearOid.toString(), rowOid.toString(), {}, wrongStateUser, '127.0.0.1', 'jest'),
       ).rejects.toThrow(ForbiddenException);
     });
 
     it('throws NotFoundException when the row does not exist', async () => {
       rowModel['findOne'] = jest.fn().mockReturnValue(q(null));
       await expect(
-        service.updateRow(stateOid.toString(), yearOid.toString(), rowOid.toString(), {}, adminUser),
+        service.updateRow(stateOid.toString(), yearOid.toString(), rowOid.toString(), {}, adminUser, '127.0.0.1', 'jest'),
       ).rejects.toThrow(NotFoundException);
     });
 
@@ -266,6 +289,8 @@ describe('ElectedUrbanLocalBodiesRowService', () => {
           rowOid.toString(),
           { electedBodyStatus: 'INVALID' },
           adminUser,
+          '127.0.0.1',
+          'jest',
         );
       } catch (e) {
         caught = e;
@@ -301,6 +326,8 @@ describe('ElectedUrbanLocalBodiesRowService', () => {
           rowOid.toString(),
           { electedBodyStatus: 'INVALID' },
           adminUser,
+          '127.0.0.1',
+          'jest',
         );
       } catch (e) {
         caught = e;
@@ -327,6 +354,8 @@ describe('ElectedUrbanLocalBodiesRowService', () => {
         rowOid.toString(),
         { censusCode: 'IGNORED', ulbName: 'Ignored Name', electedBodyStatus: 'Not Constituted' },
         adminUser,
+        '127.0.0.1',
+        'jest',
       );
       const setArg = rowModel['findByIdAndUpdate'].mock.calls[0][1].$set as Record<string, unknown>;
       expect(setArg).not.toHaveProperty('censusCode');
@@ -341,7 +370,7 @@ describe('ElectedUrbanLocalBodiesRowService', () => {
 
       let caught: unknown;
       try {
-        await service.updateRow(stateOid.toString(), yearOid.toString(), rowOid.toString(), {}, adminUser);
+        await service.updateRow(stateOid.toString(), yearOid.toString(), rowOid.toString(), {}, adminUser, '127.0.0.1', 'jest');
       } catch (e) {
         caught = e;
       }
@@ -374,6 +403,8 @@ describe('ElectedUrbanLocalBodiesRowService', () => {
           rowOid.toString(),
           { remarks: 'trigger write' },
           adminUser,
+          '127.0.0.1',
+          'jest',
         );
       } catch (e) {
         caught = e;
@@ -384,6 +415,106 @@ describe('ElectedUrbanLocalBodiesRowService', () => {
       const errMap = response['errors'] as XviFcValidationErrorMap;
       expect(errMap).toHaveProperty('censusCode');
       expect(errMap['censusCode'][0]).toMatchObject({ code: 'duplicate' });
+    });
+  });
+
+  // ─── updateRow — row-level edit lock + resubmit (mixed-approval deadlock fix) ──────────────
+
+  describe('updateRow — row lock and resubmit', () => {
+    it('403s when the row has already been approved by PMU, even though the form itself is editable', async () => {
+      rowModel['findOne'] = jest.fn().mockReturnValue(q({ ...mockRow, rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }));
+
+      await expect(
+        service.updateRow(stateOid.toString(), yearOid.toString(), rowOid.toString(), {}, adminUser, '127.0.0.1', 'jest'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(rowModel['findByIdAndUpdate']).not.toHaveBeenCalled();
+    });
+
+    it('allows editing a rejected row even while the form itself is still UNDER_REVIEW_BY_PMU (another row still pending)', async () => {
+      formModel['findOne'] = jest.fn().mockReturnValue(q({ ...mockForm, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU }));
+      rowModel['findOne'] = jest.fn().mockReturnValue(q({ ...mockRow, rowStatus: FORM_STATUS.RETURNED_BY_PMU }));
+      rowModel['findByIdAndUpdate'] = jest
+        .fn()
+        .mockReturnValue(q({ ...updatedRow, rowStatus: FORM_STATUS.RETURNED_BY_PMU }));
+
+      await service.updateRow(
+        stateOid.toString(),
+        yearOid.toString(),
+        rowOid.toString(),
+        { electedBodyStatus: 'Not Constituted' },
+        adminUser,
+        '127.0.0.1',
+        'jest',
+      );
+
+      expect(rowHistoryModel['insertMany']).toHaveBeenCalled();
+      // Form was already UNDER_REVIEW_BY_PMU — no parent-status flip/history needed (fromStatus ===
+      // toStatus); formModel.findByIdAndUpdate is still called once, but only by the unconditional
+      // recalculateFormSummary at the end of updateRow, never with a currentFormStatus field.
+      const parentUpdateCalls = formModel['findByIdAndUpdate'].mock.calls as Array<[unknown, { $set: Record<string, unknown> }]>;
+      expect(parentUpdateCalls.every(([, update]) => !('currentFormStatus' in update.$set))).toBe(true);
+      expect(historyModel['create']).not.toHaveBeenCalled();
+    });
+
+    it('edits and resubmits a rejected row in one action: row flips to UNDER_REVIEW_BY_PMU with history, and reopens the form (RETURNED_BY_PMU -> UNDER_REVIEW_BY_PMU) with a ROW_RESUBMIT entry', async () => {
+      rowModel['findOne'] = jest.fn().mockReturnValue(q({ ...mockRow, rowStatus: FORM_STATUS.RETURNED_BY_PMU }));
+      rowModel['findByIdAndUpdate'] = jest
+        .fn()
+        .mockReturnValue(q({ ...updatedRow, rowStatus: FORM_STATUS.RETURNED_BY_PMU }));
+      // form currentFormStatus defaults to IN_PROGRESS in mockForm — override to the settled outcome
+      // this scenario starts from.
+      formModel['findOne'] = jest.fn().mockReturnValue(q({ ...mockForm, currentFormStatus: FORM_STATUS.RETURNED_BY_PMU }));
+
+      const result = await service.updateRow(
+        stateOid.toString(),
+        yearOid.toString(),
+        rowOid.toString(),
+        { electedBodyStatus: 'Not Constituted' },
+        adminUser,
+        '127.0.0.1',
+        'jest',
+      );
+
+      const rowHistoryDocs = rowHistoryModel['insertMany'].mock.calls[0][0] as Array<{
+        previousStatus: number;
+        currentStatus: number;
+      }>;
+      expect(rowHistoryDocs[0]).toMatchObject({
+        previousStatus: FORM_STATUS.RETURNED_BY_PMU,
+        currentStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU,
+      });
+
+      const parentSetArg = formModel['findByIdAndUpdate'].mock.calls[0][1].$set as Record<string, unknown>;
+      expect(parentSetArg).toMatchObject({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU });
+
+      const historyDocs = historyModel['create'].mock.calls[0][0] as Array<{
+        action: string;
+        fromStatus: number;
+        toStatus: number;
+      }>;
+      expect(historyDocs[0]).toMatchObject({
+        action: FormHistoryAction.ROW_RESUBMIT,
+        fromStatus: FORM_STATUS.RETURNED_BY_PMU,
+        toStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU,
+      });
+
+      expect(mockSession.commitTransaction).toHaveBeenCalled();
+      expect((result.data as { row: { rowStatus: number } }).row.rowStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_PMU);
+    });
+
+    it('rolls back the transaction if the row-history/parent writes fail mid-resubmit', async () => {
+      rowModel['findOne'] = jest.fn().mockReturnValue(q({ ...mockRow, rowStatus: FORM_STATUS.RETURNED_BY_PMU }));
+      rowModel['findByIdAndUpdate'] = jest
+        .fn()
+        .mockReturnValue(q({ ...updatedRow, rowStatus: FORM_STATUS.RETURNED_BY_PMU }));
+      rowModel['bulkWrite'] = jest.fn().mockRejectedValue(new Error('db error'));
+
+      await expect(
+        service.updateRow(stateOid.toString(), yearOid.toString(), rowOid.toString(), {}, adminUser, '127.0.0.1', 'jest'),
+      ).rejects.toThrow();
+
+      expect(mockSession.abortTransaction).toHaveBeenCalled();
+      expect(mockSession.commitTransaction).not.toHaveBeenCalled();
     });
   });
 

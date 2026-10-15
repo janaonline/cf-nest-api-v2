@@ -165,6 +165,100 @@ export class UsersController {
     return this.usersService.softDeleteMohuaMember(id, user);
   }
 
+  // ── PMU team (same rules as MoHUA; Submitter-only writes are enforced in the service) ──
+
+  @ApiBearerAuth()
+  @Get('pmu-permission-matrix')
+  @ApiOperation({ summary: 'Get permission matrix rows for the PMU scope' })
+  getPmuPermissionMatrix() {
+    return this.usersService.getPmuPermissionMatrix();
+  }
+
+  @ApiBearerAuth()
+  @Get('pmu-members')
+  @ApiOperation({ summary: 'List all PMU team members' })
+  @ApiOkResponse({ type: [StateMemberResponseDto] })
+  getPmuMembers(@CurrentUser() user: AuthUser): Promise<StateMemberResponseDto[]> {
+    return this.usersService.getPmuMembers(user);
+  }
+
+  @ApiBearerAuth()
+  @Post('invite-pmu-member')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Invite a new PMU member (reviewer or viewer) to the PMU team' })
+  @ApiOkResponse({ type: StateMemberResponseDto })
+  invitePmuMember(@Body() dto: InviteMohuaMemberDto, @CurrentUser() user: AuthUser): Promise<StateMemberResponseDto> {
+    return this.usersService.invitePmuMember(dto, user);
+  }
+
+  @ApiBearerAuth()
+  @Post('pmu-members/transfer-submitter')
+  @ApiOperation({ summary: 'Transfer the PMU Submitter role to a reviewer or viewer in the PMU team' })
+  transferPmuSubmitter(@Body() dto: TransferSubmitterDto, @CurrentUser() user: AuthUser) {
+    return this.usersService.transferPmuSubmitter(dto, user);
+  }
+
+  @ApiBearerAuth()
+  @Patch('pmu-members/:id/sub-role')
+  @ApiOperation({ summary: 'Update xviFcSubrole for a PMU user (EDITOR → reviewer, VIEWER → viewer)' })
+  updatePmuMemberSubrole(@Param('id') id: string, @Body() dto: UpdateXviFcSubroleDto, @CurrentUser() user: AuthUser) {
+    return this.usersService.updatePmuMemberSubrole(id, dto, user);
+  }
+
+  @ApiBearerAuth()
+  @Delete('pmu-members/:id')
+  @ApiOperation({ summary: 'Remove a PMU team member (Submitter only; cannot remove self or other Submitter)' })
+  softDeletePmuMember(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.usersService.softDeletePmuMember(id, user);
+  }
+
+  // ── DoE team (same rules as MoHUA). DoE accounts are otherwise read-only — see DoeReadOnlyGuard. ──
+
+  @ApiBearerAuth()
+  @Get('doe-permission-matrix')
+  @ApiOperation({ summary: 'Get permission matrix rows for the DoE scope' })
+  getDoePermissionMatrix() {
+    return this.usersService.getDoePermissionMatrix();
+  }
+
+  @ApiBearerAuth()
+  @Get('doe-members')
+  @ApiOperation({ summary: 'List all DoE team members' })
+  @ApiOkResponse({ type: [StateMemberResponseDto] })
+  getDoeMembers(@CurrentUser() user: AuthUser): Promise<StateMemberResponseDto[]> {
+    return this.usersService.getDoeMembers(user);
+  }
+
+  @ApiBearerAuth()
+  @Post('invite-doe-member')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Invite a new DoE member (reviewer or viewer) to the DoE team' })
+  @ApiOkResponse({ type: StateMemberResponseDto })
+  inviteDoeMember(@Body() dto: InviteMohuaMemberDto, @CurrentUser() user: AuthUser): Promise<StateMemberResponseDto> {
+    return this.usersService.inviteDoeMember(dto, user);
+  }
+
+  @ApiBearerAuth()
+  @Post('doe-members/transfer-submitter')
+  @ApiOperation({ summary: 'Transfer the DoE Submitter role to a reviewer or viewer in the DoE team' })
+  transferDoeSubmitter(@Body() dto: TransferSubmitterDto, @CurrentUser() user: AuthUser) {
+    return this.usersService.transferDoeSubmitter(dto, user);
+  }
+
+  @ApiBearerAuth()
+  @Patch('doe-members/:id/sub-role')
+  @ApiOperation({ summary: 'Update xviFcSubrole for a DoE user (EDITOR → reviewer, VIEWER → viewer)' })
+  updateDoeMemberSubrole(@Param('id') id: string, @Body() dto: UpdateXviFcSubroleDto, @CurrentUser() user: AuthUser) {
+    return this.usersService.updateDoeMemberSubrole(id, dto, user);
+  }
+
+  @ApiBearerAuth()
+  @Delete('doe-members/:id')
+  @ApiOperation({ summary: 'Remove a DoE team member (Submitter only; cannot remove self or other Submitter)' })
+  softDeleteDoeMember(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.usersService.softDeleteDoeMember(id, user);
+  }
+
   @ApiBearerAuth()
   @Get(':id/profile-contacts')
   @ApiOperation({ summary: 'Get commissioner and nodal officer contact fields for a ULB user' })

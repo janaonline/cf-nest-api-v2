@@ -124,6 +124,10 @@ export class LoginService {
       }
     }
 
+    if ((dto.type === '16thFC' || dto.type === 'XVIFC') && user.isXviFcdeleted) {
+      throw new ForbiddenException('Your access to the XVI-FC portal has been removed. Please contact your administrator.');
+    }
+
     if (dto.type) {
       if ([Role.PMU, Role.AAINA].includes(user.role) && dto.type === '15thFC') {
         throw new ForbiddenException(
@@ -135,7 +139,10 @@ export class LoginService {
           `${user.role} user not allowed login State Dashboard, Please login with State Dashboard user id.`,
         );
       }
-      if (![Role.XVIFC_STATE, Role.XVIFC, Role.ULB].includes(user.role) && dto.type === 'XVIFC') {
+      if (
+        ![Role.XVIFC_STATE, Role.XVIFC, Role.ULB, Role.MOHUA_PMU, Role.XVIFC_DOE].includes(user.role) &&
+        dto.type === 'XVIFC'
+      ) {
         throw new ForbiddenException(`${user.role} user not allowed XVIFC login, Please login with XVIFC user id.`);
       }
       if (user.role === Role.XVIFC_STATE && (dto.type === '15thFC' || dto.type === 'fiscalRankings')) {

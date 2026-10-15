@@ -5,6 +5,7 @@ import { Types } from 'mongoose';
 import { DevolutionFormulaRowService } from 'src/module/xvi-fc/state/devolution-formula/services/row/devolution-formula-row.service';
 import { DevolutionFormulaForm } from 'src/schemas/xvi-fc/state/devolution-formula-form.schema';
 import { DevolutionFormulaRow } from 'src/schemas/xvi-fc/state/devolution-formula-row.schema';
+import { ClaimLetterUlbLock } from 'src/schemas/xvi-fc/state/claim-letter-ulb-lock.schema';
 import { DevolutionFormulaValidator } from 'src/module/xvi-fc/state/devolution-formula/validators/devolution-formula.validator';
 import { DfFormJsonConfigService } from 'src/module/xvi-fc/state/devolution-formula/services/form-json/devolution-formula-form-json.service';
 import { ExcelService } from 'src/services/excel/excel.service';
@@ -82,6 +83,7 @@ describe('DevolutionFormulaRowService', () => {
   let service: DevolutionFormulaRowService;
   let formModel: Record<string, jest.Mock>;
   let rowModel: Record<string, jest.Mock>;
+  let claimLetterUlbLockModel: Record<string, jest.Mock>;
   let excelService: { generateExcel: jest.Mock };
 
   beforeEach(async () => {
@@ -95,12 +97,14 @@ describe('DevolutionFormulaRowService', () => {
       deleteMany: jest.fn().mockReturnValue(q({ deletedCount: 0 })),
     };
     excelService = { generateExcel: jest.fn().mockResolvedValue(new ArrayBuffer(0)) };
+    claimLetterUlbLockModel = { findOne: jest.fn().mockReturnValue(q(null)) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         DevolutionFormulaRowService,
         { provide: getModelToken(DevolutionFormulaForm.name), useValue: formModel },
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: rowModel },
+        { provide: getModelToken(ClaimLetterUlbLock.name), useValue: claimLetterUlbLockModel },
         {
           provide: DevolutionFormulaValidator,
           useValue: {

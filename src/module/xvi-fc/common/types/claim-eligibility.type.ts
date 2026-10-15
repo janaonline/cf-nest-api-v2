@@ -4,6 +4,9 @@ import { FormStatusType } from 'src/common/constants/form-status.constants';
 
 export type ClaimEligibilityOwnerLevel = 'STATE' | 'ULB';
 export type ClaimEligibilityEvaluationLevel = 'FORM' | 'ROW' | 'FORM_AND_ROW';
+/** 'SUBMISSION_PERIOD_SINGLETON' (e.g. Bank Account, ONCE_EVER) makes
+ *  `ClaimEligibilitySourceFieldMapping.designYear` informational only — `ClaimEligibilityEvaluatorService`
+ *  skips filtering by it, since the one source document isn't scoped to any particular design year. */
 export type ClaimEligibilityYearScope = 'CURRENT_DESIGN_YEAR' | 'SUBMISSION_PERIOD_SINGLETON';
 export type ClaimEligibilityInstallment = 1 | 2;
 

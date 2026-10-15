@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsIn, IsNumber, IsOptional, IsString, Min } from 'class-validator';
+import { IsIn, IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
 import {
   DF_PAGINATION_DEFAULT_LIMIT,
   DF_PAGINATION_DEFAULT_PAGE,
@@ -17,6 +17,7 @@ export class RowsQueryDevolutionFormulaDto {
   @Type(() => Number)
   @IsNumber()
   @Min(1)
+  @Max(DF_PAGINATION_MAX_LIMIT)
   limit?: number = DF_PAGINATION_DEFAULT_LIMIT;
 
   @IsOptional()

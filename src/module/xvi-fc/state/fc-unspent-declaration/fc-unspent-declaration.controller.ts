@@ -27,8 +27,13 @@ export class FcUnspentDeclarationController {
   @Post('save-draft')
   @UseGuards(PermissionGuard)
   @RequirePermissions(Permission.EDIT_STATE_FORMS)
-  saveDraft(@Body() dto: SaveFcUnspentDeclarationDto, @CurrentUser() user: AuthUser) {
-    return this.fcUnspentDeclarationService.saveDraft(dto, user);
+  saveDraft(
+    @Body() dto: SaveFcUnspentDeclarationDto,
+    @CurrentUser() user: AuthUser,
+    @Ip() ip: string,
+    @Headers('user-agent') userAgent: string,
+  ) {
+    return this.fcUnspentDeclarationService.saveDraft(dto, user, ip ?? '', userAgent ?? '');
   }
 
   @ApiOperation({ summary: 'Final submit FC Unspent Declaration form' })

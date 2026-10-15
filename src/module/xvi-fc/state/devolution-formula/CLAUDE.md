@@ -85,11 +85,41 @@ submitted. `null` on `CREATE_DRAFT`.
   `services/main/devolution-formula.service.ts`, and the equivalent in
   `services/excel/devolution-formula-excel.service.ts`) so this codebase's own invariant holds
   regardless of what that external source stores.
+- `recalculateFormSummary` (`services/row/devolution-formula-row.service.ts`, runs after every
+  portal row edit) never recomputes `missingUlbCount`/`duplicateUlbCount` itself — only a fresh
+  Excel parse (`validateExcel`/`revalidateExcel`) can introduce or clear those. It reads back the
+  persisted `missingUlbCount` and factors it into `validationStatus`, so a routine row edit can't
+  silently flip the form to `VALID` while a still-outstanding missing-ULB gap exists (mirrors
+  `elected-urban-local-bodies`'s equivalent, which includes its own `missingDbUlbCount === 0` check
+  the same way).
+
+## Row-level claim-lock enforcement (PMU Review feature)
+
+`assertNoActiveClaimLockForUlb` (`services/row/devolution-formula-row.service.ts`) queries
+`ClaimLetterUlbLock` directly (`{state, year, installment, ulbId, lockState: 'ACTIVE'}`) and throws
+`ConflictException` — the only call site is `updateRow`'s single-portal-row-edit path. This is
+Devolution's own edit-lock mechanism (not a new `FORM_STATUS`): a ULB claimed in an active claim
+letter can't have its allocation figures edited out from under that claim, but the whole form's own
+`currentFormStatus` is never touched by claim activity (see the root PMU Review plan's Part F for
+why this mechanism is Devolution-specific — SFC/GTC have no per-ULB data to lock, and Elected
+Body/FC Unspent gate per-ULB edits via their own row `rowStatus` instead once Feature 2's
+claim-driven write-back lands).
+
+`recalculateFormSummary` needed no change for this: it sums whatever is currently persisted
+per-row regardless of lock status, so a locked row's frozen values and an edited row's new values
+both land in `totalAllocatedSum` the same way they always did — the lock only blocks the edit
+itself, not the reconciliation read.
+
+**Known gap, not fixed here (deliberately out of scope for this check)**: this lock is enforced
+only against `updateRow`'s single-row portal edit. A full Excel re-upload
+(`DevolutionFormulaExcelService.validateExcel`/`revalidateExcel`) hard-deletes and recreates every
+row in the new dataset version (see the ADR above) — including a locked ULB's row — with no lock
+check of its own. A State could still displace a locked ULB's allocation data via a full
+Excel re-upload while a claim letter holds it. Flagged, not fixed: wiring the Excel-upload path to
+the same lock check is a larger, separately-scoped change (it touches the ADR-governed
+dataset-versioning transaction), not a stub-implementation task.
 
 ## Known gaps (tracked as TODOs in code, not implemented here)
 
 - Installment 2 is unconditionally locked pending real integration with claim-letter's
   acknowledgment status (`isInstallment2Unlocked` in `services/main/devolution-formula.service.ts`).
-- Row-level claim-lock enforcement is a no-op stub (`assertNoActiveClaimLockForUlb` in
-  `services/row/devolution-formula-row.service.ts`) — the `claim-letter` module it depends on now
-  exists but this hasn't been wired up to it yet.

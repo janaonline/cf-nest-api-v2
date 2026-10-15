@@ -32,10 +32,8 @@ function buildYesBranchData(rowCount: number): FcUnspentDeclarationDocumentData 
       slNo: i + 1,
       censusCode: `C00${i + 1}`,
       ulbName: `Sample ULB ${i + 1}`,
-      allocationAmount: 100 + i,
-      unspentAmount: 4 + i,
-      allocationPerc: 4 + i,
-      eligibility: i % 2 === 0,
+      unspentAmount: 400000 + i,
+      previousFcUnspentBalance: 200000 + i,
     })),
   };
 }
@@ -46,6 +44,15 @@ async function extractDocumentXml(buffer: Buffer): Promise<string> {
   const zip = await JSZip.loadAsync(buffer);
   const file = zip.file('word/document.xml');
   if (!file) throw new Error('word/document.xml missing from generated docx');
+  return file.async('text');
+}
+
+/** The `Document`-level default font/size lands in word/styles.xml's <w:docDefaults>, not
+ *  word/document.xml — separate extraction helper for that file. */
+async function extractStylesXml(buffer: Buffer): Promise<string> {
+  const zip = await JSZip.loadAsync(buffer);
+  const file = zip.file('word/styles.xml');
+  if (!file) throw new Error('word/styles.xml missing from generated docx');
   return file.async('text');
 }
 
@@ -92,11 +99,52 @@ describe('FcUnspentDeclarationDocxService', () => {
     const result = await service.generateDeclarationDocument(stateId, yearId, user);
     const xml = await extractDocumentXml(result.buffer);
 
-    expect(xml).toContain('Economic Advisor/ Deputy Secretary (Finance Commission Cell)');
-    expect(xml).toContain('Sankalp Bhawan, GPOA-2, Pt. Ravi Shankar Shukla Lane,');
-    expect(xml).toContain('Kasturba Gandhi Marg, New Delhi-110001');
+    expect(xml).toContain('The Deputy Secretary');
+    expect(xml).toContain('Finance Commission Cell');
+    expect(xml).toContain('Department of Urban Development');
+    expect(xml).toContain('Government of India');
+    expect(xml).toContain('Sankalp Bhawan, New Delhi');
+    expect(xml).not.toContain('Economic Advisor/ Deputy Secretary (Finance Commission Cell)');
+    expect(xml).not.toContain('Sankalp Bhawan, GPOA-2, Pt. Ravi Shankar Shukla Lane,');
+    expect(xml).not.toContain('Kasturba Gandhi Marg, New Delhi-110001');
     expect(xml).not.toContain('The Director,');
     expect(xml).not.toContain('AMRUT-IIB');
+  });
+
+  it('renders the title heading, bold/underlined/centered, dynamic on the FC cycle label', async () => {
+    documentService.getDocumentData.mockResolvedValue(buildNoBranchData());
+    const result = await service.generateDeclarationDocument(stateId, yearId, user);
+    const xml = await extractDocumentXml(result.buffer);
+
+    expect(xml).toContain(
+      'Format of Letter to be submitted by the State reg. Unspent Balance of 14th Finance Commission and Previous Finance Commissions',
+    );
+    expect(xml).toContain('w:jc w:val="center"');
+    expect(xml).toMatch(/<w:u\b/);
+  });
+
+  it('sets Times New Roman 12pt as the document default font', async () => {
+    documentService.getDocumentData.mockResolvedValue(buildNoBranchData());
+    const result = await service.generateDeclarationDocument(stateId, yearId, user);
+    const stylesXml = await extractStylesXml(result.buffer);
+
+    expect(stylesXml).toContain('Times New Roman');
+    expect(stylesXml).toContain('w:sz w:val="24"');
+  });
+
+  it('renders the new dynamic subject line and "Sir," salutation, not the old wording', async () => {
+    documentService.getDocumentData.mockResolvedValue(buildNoBranchData());
+    const result = await service.generateDeclarationDocument(stateId, yearId, user);
+    const xml = await extractDocumentXml(result.buffer);
+
+    // The XML serializer escapes the apostrophe as &apos;.
+    expect(xml).toContain(
+      'Subject: Declaration regarding 14th Finance Commission and previous Finance Commissions&apos; unspent ' +
+        'balance with Urban Local Bodies in the State of Andhra Pradesh -reg.',
+    );
+    expect(xml).toContain('Sir,');
+    expect(xml).not.toContain('Respected Sir/Madam,');
+    expect(xml).not.toContain('Declaration regarding nil');
   });
 
   it('builds the CF_{StateName}_fc-unspent-declaration-no_{YearLabel}.docx filename on the No branch', async () => {
@@ -112,74 +160,57 @@ describe('FcUnspentDeclarationDocxService', () => {
   });
 
   describe('No branch', () => {
-    it('interpolates the real state name and FC cycle label into the intro paragraph, no table', async () => {
+    it('bolds only "NO" and interpolates the real state name and FC cycle label, no table', async () => {
       documentService.getDocumentData.mockResolvedValue(buildNoBranchData());
       const result = await service.generateDeclarationDocument(stateId, yearId, user);
       const xml = await extractDocumentXml(result.buffer);
 
-      expect(xml).toContain('no Urban Local Body in the State of Andhra Pradesh holds any unspent balance');
-      expect(xml).toContain('14th Finance Commission');
-      expect(xml).toContain('Accordingly, ULB-wise data on 14th Finance Commission unspent balance is not applicable');
-      // No table -> no header cell text.
-      expect(xml).not.toContain('CENSUS ID');
-    });
-
-    it('uses the "This declaration is being submitted" closing wording verbatim from the reference PDF', async () => {
-      documentService.getDocumentData.mockResolvedValue(buildNoBranchData());
-      const result = await service.generateDeclarationDocument(stateId, yearId, user);
-      const xml = await extractDocumentXml(result.buffer);
-
+      expect(xml).toContain('This is to certify that,');
       expect(xml).toContain(
-        'This declaration is being submitted for consideration of the first installment claim for FY 2026-27',
+        'Urban Local Body in the State of Andhra Pradesh has any unspent balance under the 14th Finance Commission ' +
+          'grants and any previous Finance Commission grants.',
       );
+      expect(xml).toContain('>NO<');
+      // The old preamble/trailing sentences are gone in the new specimen wording.
+      expect(xml).not.toContain('as per the records available with the State Government');
+      expect(xml).not.toContain('Accordingly, ULB-wise data');
+      // No table -> no header cell text.
+      expect(xml).not.toContain('Census ID');
     });
   });
 
   describe('Yes branch', () => {
-    it('interpolates the real state name into the intro paragraph and renders the table', async () => {
+    it('interpolates the real state name and renders the 5-column table with Lakhs-formatted amounts', async () => {
       documentService.getDocumentData.mockResolvedValue(buildYesBranchData(2));
       const result = await service.generateDeclarationDocument(stateId, yearId, user);
       const xml = await extractDocumentXml(result.buffer);
 
-      expect(xml).toContain('the following Urban Local Bodies in the State of Andhra Pradesh hold unspent balance');
-      expect(xml).toContain('CENSUS ID');
-      expect(xml).toContain('16TH FC ALLOCATION');
-      expect(xml).toContain('14TH FC UNSPENT');
-      expect(xml).toContain('% OF ALLOC.');
-      expect(xml).toContain('ELIGIBLE?');
+      expect(xml).toContain('This is to certify that,');
+      expect(xml).toContain('Following Urban Local Bodies in the State of Andhra Pradesh has unspent balance under');
+      expect(xml).toContain('ULB Name');
+      expect(xml).toContain('Census ID');
+      expect(xml).toContain('14th FC unspent balance (in Lakhs)');
+      expect(xml).toContain('Previous FC unspent balance (in Lakhs)');
+      expect(xml).not.toContain('16TH FC ALLOCATION');
+      expect(xml).not.toContain('% OF ALLOC.');
+      expect(xml).not.toContain('ELIGIBLE?');
       expect(xml).toContain('Sample ULB 1');
       expect(xml).toContain('Sample ULB 2');
+      expect(xml).toContain('The above-mentioned ULBs may be excluded from the list of eligible ULBs.');
     });
 
-    it('renders Yes/No for the eligibility column, not true/false', async () => {
-      documentService.getDocumentData.mockResolvedValue(buildYesBranchData(2));
-      const result = await service.generateDeclarationDocument(stateId, yearId, user);
-      const xml = await extractDocumentXml(result.buffer);
-
-      expect(xml).toContain('>Yes<');
-      expect(xml).toContain('>No<');
-      expect(xml).not.toMatch(/>true</);
-      expect(xml).not.toMatch(/>false</);
-    });
-
-    it('formats money fields as whole-Rupee amounts with a ₹ prefix, no decimals', async () => {
+    it('formats unspent-balance fields in Lakhs, not whole Rupees', async () => {
       documentService.getDocumentData.mockResolvedValue(buildYesBranchData(1));
       const result = await service.generateDeclarationDocument(stateId, yearId, user);
       const xml = await extractDocumentXml(result.buffer);
 
-      expect(xml).toContain('₹100');
-      expect(xml).toContain('₹4');
+      // Row 1: unspentAmount 400000 -> 4.00 Lakhs; previousFcUnspentBalance 200000 -> 2.00 Lakhs.
+      expect(xml).toContain('4.00');
+      expect(xml).toContain('2.00');
+      expect(xml).not.toContain('₹');
     });
 
-    it('uses the "This is submitted for the consideration" closing wording verbatim from the reference PDF', async () => {
-      documentService.getDocumentData.mockResolvedValue(buildYesBranchData(1));
-      const result = await service.generateDeclarationDocument(stateId, yearId, user);
-      const xml = await extractDocumentXml(result.buffer);
-
-      expect(xml).toContain('This is submitted for the consideration of the first installment claim for FY 2026-27');
-    });
-
-    it('uses the dynamic FC cycle label in the table header, not a hardcoded "14TH FC"', async () => {
+    it('uses the dynamic FC cycle label in the table header, not a hardcoded "14th FC"', async () => {
       const data = buildYesBranchData(1);
       const withDifferentCycle = {
         ...data,
@@ -190,12 +221,28 @@ describe('FcUnspentDeclarationDocxService', () => {
       const result = await service.generateDeclarationDocument(stateId, yearId, user);
       const xml = await extractDocumentXml(result.buffer);
 
-      expect(xml).toContain('15TH FC UNSPENT');
-      expect(xml).not.toContain('14TH FC UNSPENT');
+      expect(xml).toContain('15th FC unspent balance (in Lakhs)');
+      expect(xml).not.toContain('14th FC unspent balance (in Lakhs)');
     });
   });
 
-  it('renders the closing signature block as literal, non-interpolated placeholder text — including its own "[State Name]"', async () => {
+  it('uses the same "2." numbered closing wording on both branches', async () => {
+    documentService.getDocumentData.mockResolvedValueOnce(buildNoBranchData());
+    const no = await service.generateDeclarationDocument(stateId, yearId, user);
+    const noXml = await extractDocumentXml(no.buffer);
+    expect(noXml).toContain(
+      '2. This is submitted for the consideration of the claim of first installment for FY 2026-27 under the 16th Finance Commission grants.',
+    );
+
+    documentService.getDocumentData.mockResolvedValueOnce(buildYesBranchData(1));
+    const yes = await service.generateDeclarationDocument(stateId, yearId, user);
+    const yesXml = await extractDocumentXml(yes.buffer);
+    expect(yesXml).toContain(
+      '2. This is submitted for the consideration of the claim of first installment for FY 2026-27 under the 16th Finance Commission grants.',
+    );
+  });
+
+  it('renders the closing signature block as literal, non-interpolated, right-aligned placeholder text — including its own "[State Name]"', async () => {
     documentService.getDocumentData.mockResolvedValue(buildNoBranchData());
     const result = await service.generateDeclarationDocument(stateId, yearId, user);
     const xml = await extractDocumentXml(result.buffer);
@@ -210,6 +257,7 @@ describe('FcUnspentDeclarationDocxService', () => {
     // The intro paragraph's real state name must never leak into the signature block's own
     // "[State Name]" placeholder.
     expect(xml).not.toContain('Government of Andhra Pradesh');
+    expect(xml).toContain('w:jc w:val="right"');
   });
 
   it('never emits an em dash anywhere in the generated document', async () => {
@@ -218,15 +266,5 @@ describe('FcUnspentDeclarationDocxService', () => {
     const xml = await extractDocumentXml(result.buffer);
 
     expect(xml).not.toContain('—');
-  });
-
-  it('bolds the subject line', async () => {
-    documentService.getDocumentData.mockResolvedValue(buildNoBranchData());
-    const result = await service.generateDeclarationDocument(stateId, yearId, user);
-    const xml = await extractDocumentXml(result.buffer);
-
-    expect(xml).toContain(
-      'Subject: Declaration regarding nil 14th Finance Commission unspent balance with Urban Local Bodies',
-    );
   });
 });

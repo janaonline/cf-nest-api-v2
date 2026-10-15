@@ -6,6 +6,7 @@ import { FcUnspentDeclarationDocumentService } from './fc-unspent-declaration-do
 import { FcUnspentDeclarationService } from 'src/module/xvi-fc/state/fc-unspent-declaration/services/main/fc-unspent-declaration.service';
 import { FcUnspentDeclarationRowService } from 'src/module/xvi-fc/state/fc-unspent-declaration/services/rows/fc-unspent-declaration-row.service';
 import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
+import { FcUnspentDeclarationFormJsonService } from 'src/module/xvi-fc/state/fc-unspent-declaration/services/form-json/fc-unspent-declaration-form-json.service';
 import { XviFcUnspentStateForm } from 'src/schemas/xvi-fc/state/fc-unspent-state-form.schema';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { AccessLevel, Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
@@ -55,6 +56,7 @@ const activeRow = {
   ulbName: 'Alpha ULB',
   allocationAmount: 100,
   unspentAmount: 4,
+  previousFcUnspentBalance: 2,
   allocationPerc: 4,
   eligibility: true,
   rowStatus: null,
@@ -69,6 +71,7 @@ describe('FcUnspentDeclarationDocumentService', () => {
   };
   let mockRowService: { getActiveRows: jest.Mock };
   let mockActorsService: { buildActorsAndStateName: jest.Mock };
+  let mockFormJsonService: { loadFormConfig: jest.Mock };
 
   beforeEach(async () => {
     mockModel = { findOne: jest.fn() };
@@ -86,9 +89,18 @@ describe('FcUnspentDeclarationDocumentService', () => {
       buildActorsAndStateName: jest.fn().mockReturnValue({ actors: [], stateName: 'Andhra Pradesh' }),
     };
 
+    mockFormJsonService = {
+      loadFormConfig: jest.fn().mockResolvedValue({
+        fields: [],
+        thresholdPercent: 0,
+        policy: { devolutionLinked: false, eligibilityRule: { type: 'NO_UNSPENT_ALLOWED' } },
+      }),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         FcUnspentDeclarationDocumentService,
+        { provide: FcUnspentDeclarationFormJsonService, useValue: mockFormJsonService },
         { provide: getModelToken(XviFcUnspentStateForm.name), useValue: mockModel },
         { provide: FcUnspentDeclarationService, useValue: mockMainService },
         { provide: FcUnspentDeclarationRowService, useValue: mockRowService },
@@ -156,6 +168,22 @@ describe('FcUnspentDeclarationDocumentService', () => {
     );
   });
 
+  describe('Devolution gate', () => {
+    it('resolves the design year policy and hands it to the Devolution gate (an independent year needs no Devolution form)', async () => {
+      mockModel.findOne.mockReturnValue(
+        q({ _id: formOid, isFcUnspent: false, currentFormStatus: 3, state: { name: 'Andhra Pradesh' } }),
+      );
+
+      await service.getDocumentData(stateOid.toString(), yearOid.toString(), adminUser);
+
+      expect(mockFormJsonService.loadFormConfig).toHaveBeenCalledWith(yearOid.toString());
+      expect(mockMainService.resolveDevolutionDependency).toHaveBeenCalledWith(stateOid, yearOid, {
+        devolutionLinked: false,
+        eligibilityRule: { type: 'NO_UNSPENT_ALLOWED' },
+      });
+    });
+  });
+
   describe('No branch', () => {
     it('returns isFcUnspent false with stateName and FC cycle labels, never touching rows', async () => {
       mockModel.findOne.mockReturnValue(
@@ -193,11 +221,36 @@ describe('FcUnspentDeclarationDocumentService', () => {
       );
     });
 
+    it.each([
+      ['both amounts', { unspentAmount: null, previousFcUnspentBalance: null }],
+      ['the unspent amount', { unspentAmount: null }],
+      ['the previous balance', { previousFcUnspentBalance: null }],
+    ])('rejects with code incompleteRows when a draft ULB row is still missing %s', async (_label, missing) => {
+      mockModel.findOne.mockReturnValue(q({ _id: formOid, isFcUnspent: true, currentFormStatus: 3 }));
+      mockRowService.getActiveRows.mockResolvedValueOnce([activeRow, { ...activeRow, rowNumber: 2, ...missing }]);
+
+      let caught: BadRequestException | undefined;
+      try {
+        await service.getDocumentData(stateOid.toString(), yearOid.toString(), adminUser);
+      } catch (e) {
+        caught = e as BadRequestException;
+      }
+      expect(caught).toBeInstanceOf(BadRequestException);
+      const response = caught!.getResponse() as { errors: Record<string, Array<{ code: string }>> };
+      expect(response.errors['fcUnspentDeclaration']).toEqual(
+        expect.arrayContaining([expect.objectContaining({ code: 'incompleteRows' })]),
+      );
+    });
+
     it('maps active rows into the document rows shape, 1-indexed by slNo', async () => {
       mockModel.findOne.mockReturnValue(
         q({ _id: formOid, isFcUnspent: true, currentFormStatus: 3, state: { name: 'Andhra Pradesh' } }),
       );
-      mockRowService.getActiveRows.mockResolvedValueOnce([activeRow, { ...activeRow, rowNumber: 2, censusCode: '' }]);
+      mockRowService.getActiveRows.mockResolvedValueOnce([
+        activeRow,
+        { ...activeRow, rowNumber: 2, censusCode: '' },
+        { ...activeRow, rowNumber: 3, censusCode: '', sbCode: '' },
+      ]);
 
       const data = await service.getDocumentData(stateOid.toString(), yearOid.toString(), adminUser);
 
@@ -208,19 +261,24 @@ describe('FcUnspentDeclarationDocumentService', () => {
           slNo: 1,
           censusCode: 'C001',
           ulbName: 'Alpha ULB',
-          allocationAmount: 100,
           unspentAmount: 4,
-          allocationPerc: 4,
-          eligibility: true,
+          previousFcUnspentBalance: 2,
         },
         {
+          // Census Code absent — falls back to SB Code, same as the portal's ulbName/censusCode ?? sbCode display.
           slNo: 2,
+          censusCode: 'SB1',
+          ulbName: 'Alpha ULB',
+          unspentAmount: 4,
+          previousFcUnspentBalance: 2,
+        },
+        {
+          // Both absent — falls back to '-'.
+          slNo: 3,
           censusCode: '-',
           ulbName: 'Alpha ULB',
-          allocationAmount: 100,
           unspentAmount: 4,
-          allocationPerc: 4,
-          eligibility: true,
+          previousFcUnspentBalance: 2,
         },
       ]);
       expect(mockRowService.getActiveRows).toHaveBeenCalledWith(formOid);

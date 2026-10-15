@@ -8,7 +8,14 @@ import { FORM_STATUS, getFormStatusLabel } from '../constants/form-status.consta
 const ALLOWED_TRANSITIONS: Record<number, number[]> = {
   [FORM_STATUS.NO_STATUS]: [FORM_STATUS.NOT_STARTED, FORM_STATUS.IN_PROGRESS],
   [FORM_STATUS.NOT_STARTED]: [FORM_STATUS.IN_PROGRESS],
-  [FORM_STATUS.IN_PROGRESS]: [FORM_STATUS.IN_PROGRESS, FORM_STATUS.UNDER_REVIEW_BY_STATE],
+  // UNDER_REVIEW_BY_STATE is the ULB-forms track's own next stage (ULB -> State review);
+  // UNDER_REVIEW_BY_PMU is the state-forms track's (State -> PMU review, PMU Review feature).
+  // Each form only ever calls this with the one target its own track uses.
+  [FORM_STATUS.IN_PROGRESS]: [
+    FORM_STATUS.IN_PROGRESS,
+    FORM_STATUS.UNDER_REVIEW_BY_STATE,
+    FORM_STATUS.UNDER_REVIEW_BY_PMU,
+  ],
   // State approval now lands on APPROVED_BY_STATE (8) first, not straight to MOHUA review —
   // see APPROVED_BY_STATE's own entry below for what follows.
   [FORM_STATUS.UNDER_REVIEW_BY_STATE]: [FORM_STATUS.RETURNED_BY_STATE, FORM_STATUS.APPROVED_BY_STATE],
@@ -21,6 +28,11 @@ const ALLOWED_TRANSITIONS: Record<number, number[]> = {
   // feature confirms every form for this ULB+year is here too, move on to AWAITING_CLAIM_LETTER.
   [FORM_STATUS.APPROVED_BY_STATE]: [FORM_STATUS.UNDER_REVIEW_BY_STATE, FORM_STATUS.AWAITING_CLAIM_LETTER],
   [FORM_STATUS.AWAITING_CLAIM_LETTER]: [FORM_STATUS.UNDER_REVIEW_BY_MOHUA],
+  // PMU Review feature (state-level forms only). PMU is an internal pre-screen for MoHUA, not a
+  // status-bearing stage of its own once approved — approval lands directly on
+  // UNDER_REVIEW_BY_MOHUA, the same status the form would have reached without a PMU stage at all.
+  [FORM_STATUS.UNDER_REVIEW_BY_PMU]: [FORM_STATUS.RETURNED_BY_PMU, FORM_STATUS.UNDER_REVIEW_BY_MOHUA],
+  [FORM_STATUS.RETURNED_BY_PMU]: [FORM_STATUS.IN_PROGRESS, FORM_STATUS.UNDER_REVIEW_BY_PMU],
 };
 
 /**

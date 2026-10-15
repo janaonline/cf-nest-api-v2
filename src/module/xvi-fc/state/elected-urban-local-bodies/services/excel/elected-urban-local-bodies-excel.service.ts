@@ -10,6 +10,7 @@ import { FileTokenService } from 'src/core/file-token/file-token.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Permission } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
+import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import { assertStateAccess } from 'src/module/xvi-fc/common/utils/xvi-fc-state-access.util';
 import { assertCanStateEditForm } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
 import {
@@ -115,8 +116,8 @@ export class ElectedUrbanLocalBodiesExcelService {
     const userOid = new Types.ObjectId(user._id);
 
     // 1. Load active, XVI-FC-eligible DB ULBs + check for existing form in parallel (no mutual
-    // dependency). Must use the same eligibility filter as getTemplate()'s registry query, or a
-    // state's Excel upload will spuriously fail the row-count match check.
+    // dependency). See CLAUDE.md's "Every active-ULB-count call site must use the same eligibility
+    // filter".
     const formFilter = { state: stateOid, year: yearOid, formType: EULB_FORM_TYPE };
     const eligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC');
     const [dbUlbsRaw, existing] = await Promise.all([
@@ -127,6 +128,8 @@ export class ElectedUrbanLocalBodiesExcelService {
         .exec(),
     ]);
     const dbUlbs = dbUlbsRaw as UlbLean[];
+
+    if (existing) await this.assertNoLockedRows(existing._id, existing.activeDatasetVersion ?? 0);
 
     const excelFormJsonFields = await this.eulbFormJsonConfig.loadFields(dto.yearId);
     const excelMainFields = getFieldsByType(excelFormJsonFields, 'EULB_MAIN_FORM_FIELDS');
@@ -330,6 +333,8 @@ export class ElectedUrbanLocalBodiesExcelService {
       lastExcelUploadedAt: new Date(),
       lastExcelUploadedBy: userOid,
       updatedBy: userOid,
+      stateUpdatedBy: userOid,
+      stateUpdatedAt: new Date(),
     };
     // Omit when unchanged (rather than `electedBodyExcelFile: undefined`) so Mongoose's
     // FileInfo `timestamps` option doesn't re-stamp the stored subdocument.
@@ -503,6 +508,7 @@ export class ElectedUrbanLocalBodiesExcelService {
     }
 
     assertCanStateEditForm(form.currentFormStatus);
+    await this.assertNoLockedRows(form._id, form.activeDatasetVersion ?? 0);
 
     // Case A: active rows already exist — revalidate in place
     if (form.activeDatasetVersion > 0) {
@@ -514,9 +520,10 @@ export class ElectedUrbanLocalBodiesExcelService {
 
       if (rows.length > 0) {
         // Load active, XVI-FC-eligible registry ULBs for revalidation; derive count from the find
-        // result. Must match getTemplate()'s registry filter or row-count checks will mismatch.
-        // TODO: dateOfConstitution has no validation rule defined/implemented yet — same gap as
-        // elected-urban-local-bodies.service.ts's getTemplate (identical TODO, not yet scoped).
+        // result. Must use the same filter as every other active-ULB-count call site (see
+        // CLAUDE.md's "Every active-ULB-count call site must use the same eligibility filter").
+        // TODO: dateOfConstitution's maxDate is hardcoded to today, not read from config — see
+        // CLAUDE.md's "Known gaps". Not yet scoped.
         const dbUlbs = (await this.ulbModel
           .find(await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC'))
           .select('_id name censusCode sbCode')
@@ -656,6 +663,8 @@ export class ElectedUrbanLocalBodiesExcelService {
               errorRowCount,
               validationStatus,
               updatedBy: userOid,
+              stateUpdatedBy: userOid,
+              stateUpdatedAt: new Date(),
             },
           })
           .lean()
@@ -692,6 +701,33 @@ export class ElectedUrbanLocalBodiesExcelService {
   // ─── Helpers ─────────────────────────────────────────────────────────────────
 
   /**
+   * Once PMU has approved at least one row (`UNDER_REVIEW_BY_MOHUA`), this form's Excel can no
+   * longer be wholesale re-uploaded or revalidated-in-place — both mechanisms replace/rewrite the
+   * entire active dataset version with no per-row concept, which would silently clobber or delete an
+   * already-approved row's data. Further editing of a mixed-outcome submission must go through the
+   * single-row `ElectedUrbanLocalBodiesRowService.updateRow` PATCH instead, which enforces the same
+   * per-row lock via `assertCanStateEditRow`. No-op until the first approval — a pre-review or
+   * fully-rejected form's reupload/revalidate behavior is unchanged.
+   */
+  private async assertNoLockedRows(formId: Types.ObjectId, datasetVersion: number): Promise<void> {
+    const hasLockedRows = await this.rowModel
+      .exists({ form: formId, datasetVersion, isActive: true, rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA })
+      .exec();
+    if (hasLockedRows) {
+      throwXviFcValidationError({
+        electedBodyExcelFile: [
+          {
+            field: 'electedBodyExcelFile',
+            code: 'rowsLocked',
+            message:
+              'One or more rows have already been approved. Edit the remaining row(s) individually instead of re-uploading the file.',
+          },
+        ],
+      });
+    }
+  }
+
+  /**
    * Re-parses the uploaded Excel from its stored S3 path, creates a new row dataset,
    * and updates the form summary. Used when Case A revalidation is unavailable.
    * The client-submitted ulbCount is ignored; active ULB count is derived from the find result.
@@ -705,7 +741,7 @@ export class ElectedUrbanLocalBodiesExcelService {
     yearId: string,
   ): Promise<XviFcApiResponse<EulbRevalidateExcelResponseData>> {
     // Load active, XVI-FC-eligible registry ULBs; derive count from the find result — no extra
-    // query. Must match getTemplate()'s registry filter or row-count checks will mismatch.
+    // query. See CLAUDE.md's "Every active-ULB-count call site must use the same eligibility filter".
     const dbUlbs = (await this.ulbModel
       .find(await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC'))
       .select('_id name censusCode sbCode')
@@ -850,6 +886,8 @@ export class ElectedUrbanLocalBodiesExcelService {
               validationStatus,
               excludedRows,
               updatedBy: userOid,
+              stateUpdatedBy: userOid,
+              stateUpdatedAt: new Date(),
             },
           },
           { new: true, session },

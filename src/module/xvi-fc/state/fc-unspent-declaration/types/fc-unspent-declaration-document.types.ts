@@ -3,10 +3,11 @@ export interface FcUnspentDeclarationDocumentRow {
   slNo: number;
   censusCode: string;
   ulbName: string;
-  allocationAmount: number;
+  /** Whole Rupees — rendered in the table converted to Lakhs. */
   unspentAmount: number;
-  allocationPerc: number;
-  eligibility: boolean;
+  /** Whole Rupees — rendered in the table converted to Lakhs. Already existed on
+   *  `XviFcUnspentStateFormRow` before this document surfaced it. */
+  previousFcUnspentBalance: number;
 }
 
 interface FcUnspentDeclarationDocumentDataBase {

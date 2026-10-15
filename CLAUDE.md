@@ -29,6 +29,17 @@ npm run migrate:xvifc-in-progress-since  # Backfill inProgressSince on pre-exist
 npm run migrate:xvifc-upload-block-24h   # TS-933: shortens already-active 7-day upload blocks to 24h from the
                                           # 3rd failed attempt (Annual Accounts + DUR; scripts/shorten-upload-block-to-24h.ts).
                                           # Re-runnable; `-- --dry-run` counts without writing
+npm run migrate:xvifc-slb-state            # Backfills the new required `state` on existing xvifc_slb_forms docs from
+                                          # their ULB (scripts/backfill-slb-state.ts). Re-runnable; `-- --dry-run` counts
+                                          # and lists unresolvable (orphan) docs without writing
+npm run migrate:pmu-role-rename           # One-off: renames role XVIFC_PMU -> MOHUA_PMU in users + sidemenus
+                                          # (scripts/migrate-pmu-role-rename.ts). Re-runnable; `-- --dry-run` counts.
+                                          # Afterwards clear the side-menu cache (both role keys); PMU users must log in again
+npm run seed:xvifc-pmu-doe-menu           # Gives the MOHUA_PMU and DOE roles their sidebar rows (Overview, Profile > People
+                                          # and Roles, Support) for every MoHUA menu year (scripts/seed-xvifc-pmu-doe-menu.ts).
+                                          # Idempotent; `-- --dry-run` reports, `-- --year <id>` limits to one year. The side
+                                          # menu is cached with no TTL, so afterwards run DELETE xvi-fc/admin/cache/side-menu.
+                                          # Run it only once the UI with the matching routes is deployed
 ```
 
 ## Architecture
@@ -50,10 +61,39 @@ src/
 ├── module/xvi-fc/       # 16th Finance Commission forms (state/ULB/MoHUA roles)
 │   ├── ulb/             # annual_accounts (OCR via ANNUAL_ACCOUNT_PROCESSING_QUEUE), bank-account, unspent-balance-disclosure
 │   ├── state/           # sfc-status, elected-urban-local-bodies, devolution-formula, fc-unspent-declaration, gtc, dashboard,
-│   │                    # request-exemption (discretionary STATE→MoHUA exemption requests — one document per
-│   │                    # {ulb, year} (DB-enforced unique index), one data[] entry per requested formId (23/30/31);
-│   │                    # see master/form-json-config/CLAUDE.md's formId registry, formId 34)
-│   ├── mohua/           # fc-unspent-declaration and request-exemption review workflows (each a separate module,
+│   │                    # request-exemption (discretionary STATE→MoHUA exemption requests, formId 34 — see
+│   │                    # master/form-json-config/CLAUDE.md's formId registry). Two branches share one collection
+│   │                    # (xvifc_eligibility_exemptions): per-ULB (`ulb` a real ObjectId, one document per
+│   │                    # {ulb,year}, reasons formId 23/30/31) and whole-state (`ulb: null`, one document per
+│   │                    # {state,year}, reasons formId 22 e.g. SFC) — each DB-enforced by its own partial unique
+│   │                    # index (see xvi-fc-eligibility-exemption.schema.ts). One data[] entry per requested formId.
+│   │                    # Before filing (STATE) and again before approving (MoHUA), formId 30/31 check the real
+│   │                    # per-ULB Annual Accounts section's own status isn't already past ULB_EDITABLE_STATUS_IDS;
+│   │                    # formId 22 checks SFC Status's own status the same way against STATE_EDITABLE_STATUS_IDS
+│   │                    # (request-exemption.service.ts's assertTargetFormsEligible/assertTargetStateFormsEligible,
+│   │                    # request-exemption-mohua.service.ts's assertSectionStillEligible) — both
+│   │                    # request-exemption modules directly inject the target schemas' models for this, a small
+│   │                    # deliberate coupling (not routed through XviFcCommonModule) since only these read-only
+│   │                    # eligibility checks need them. formId 23 (Elected Body) is checked too, but on a
+│   │                    # different axis — its row-level domain value (electedBodyStatus) and submission-workflow
+│   │                    # status (rowStatus) are decoupled (see elected-urban-local-bodies/CLAUDE.md), so filing/
+│   │                    # approving is blocked when the ULB's current row is already eligible per Elected Body's
+│   │                    # own claimEligibility.evaluator.config.rowEligibleValues (read live, not hardcoded), not
+│   │                    # when it's merely been submitted.
+│   ├── mohua/           # overview (read-only cross-state endpoint: GET xvi-fc/mohua/overview/:yearId — every state's
+│   │                    # stage derived from its 5 state-condition forms' currentFormStatus + allocation (basic + performance) +
+│   │                    # expected-ULB count; MOHUA/DOE (read-only)/ADMIN scope only, never cached — every dashboard read
+│   │                    # check goes through `isMohuaViewScope` (common/utils/xvi-fc-scope.util.ts)) plus the per-state
+│   │                    # GET xvi-fc/mohua/state/:stateId/:yearId (allocation, the 5 condition forms, per-form ULB
+│   │                    # submission counts), the state's paginated ULB list GET xvi-fc/mohua/state/:stateId/:yearId/ulbs (search,
+│   │                    # sort by ULB name/allocation, allocation from the Devolution Formula active dataset, unspent balance
+│   │                    # (`unspentAmount`, crore) from the state's FC Unspent declaration rows, per-form
+│   │                    # submitted flags; GET .../ulbs/export returns the same table as an Excel file — same search/sort, every
+│   │                    # page, each form as "Submitted" / "Not submitted"), and one ULB's form statuses GET xvi-fc/mohua/ulb/:ulbId/:yearId/forms (status
+│   │                    # text + `submitted`; the "submitted" rule — MOHUA_OVERVIEW_ULB_SUBMITTED_STATUSES, SLB at 8/12 only —
+│   │                    # lives only there, never in the UI). MoHUA also READS the PMU review GETs (view-only, see
+│   │                    # common/services/CLAUDE.md) and the per-ULB SLB / bank-account GETs (no stub writes for MOHUA), and
+│   │                    # fc-unspent-declaration and request-exemption review workflows (each a separate module,
 │   │                    # decoupled from its own STATE-side module — mirrors fc-unspent's own split)
 │   ├── side-menu/, cache/, common/ # XviFcCacheService/Interceptor, form-actors, form-status-access helpers,
 │   │                     # YearAccessService (dynamic year access/exemption for new ULBs - see below) shared
@@ -84,7 +124,11 @@ src/
 │   │                            # `XVIFC_REMINDER_CRONS_ENABLED` and has no `send-*-now` endpoint. Never
 │   │                            # throws — a notification failure must not fail the underlying decision.
 │   └── xvi-fc.module.ts # composition root importing the feature modules above
-├── users/               # User CRUD with repository pattern
+├── users/               # User CRUD with repository pattern. The three national teams — MoHUA, PMU (`MOHUA_PMU`) and DoE
+│                        # (`XVIFC_DOE`) — share one set of team-management methods (list / invite / re-role / transfer
+│                        # Submitter / remove) parameterised by a `TeamConfig` in users.service.ts; the controller exposes
+│                        # `mohua-members`, `pmu-members`, `doe-members` (+ `invite-*-member`, `*-permission-matrix`).
+│                        # PMU/DoE matrices are generated from permissions.map.ts so they cannot drift from what is enforced
 ├── admin/
 │   ├── afs-digitization/ # AFS file processing with BullMQ queues
 │   └── ulb-types/       # ADMIN-only CRUD for the `ulbtypes` reference-data collection (in particular
@@ -133,6 +177,8 @@ When defining models that belong to the digitization DB, use `MongooseModule.for
 
 `RolesGuard` reads `@Roles()` metadata; if no metadata is set the route is accessible to any authenticated user.
 
+**DoE (`XVIFC_DOE`, scope `DOE`) is a read-only copy of the MoHUA dashboard.** Its permission table (`XVIFC_DOE_PERMISSIONS`) holds only view permissions — plus `REVIEW_STATE_SUBMISSIONS_PMU`, which is just the read gate for the read-only form screens — and the admin (Submitter) additionally manages the DoE team. Because ~50 write endpoints have no decorator-level role check and rely on service-side checks, `DoeReadOnlyGuard` (registered right after `JwtAuthGuard`, `auth/guards/doe-read-only.guard.ts`) rejects every non-GET request from a DoE user except an explicit allowlist (own session/profile/notifications, DoE team management) — this also covers the unguarded `POST file/signed-url`. A new endpoint that a DoE user must be able to *write* has to be added to that allowlist; one a DoE user must *read* needs `isMohuaViewScope` wherever MoHUA's read is allowed (and wherever MoHUA's read skips an exemption-stub write).
+
 ### Response Shape
 
 `ResponseTransformInterceptor` wraps every response:
@@ -171,7 +217,7 @@ Registered in `AppModule` and available everywhere:
   instances, e.g. `UlbEligibilityService`'s reference-data cache)
 - `ThrottlerModule` (60 req / 60s window; override per-route with `@Throttle()`)
 - `RedisModule` (global, inject `RedisService` to access the ioredis client)
-- `APP_GUARD`: `JwtAuthGuard` then `ThrottlerGuard` (order matters)
+- `APP_GUARD`: `JwtAuthGuard`, then `DoeReadOnlyGuard`, then `ThrottlerGuard` (order matters — the DoE guard reads `request.user`)
 - `APP_INTERCEPTOR`: `ResponseTransformInterceptor`
 - `APP_FILTER`: `HttpExceptionFilter`
 
