@@ -24,6 +24,9 @@ interface UlbRow {
   stateId: Types.ObjectId;
   stateName: string;
   pdfUrl: string | null;
+  /** From the annual account's PDF metadata; null until that has been backfilled for the file */
+  pdfPageCount: number | null;
+  pdfSizeBytes: number | null;
 }
 
 /** What the page needs to know about a ULB's v3 digitization, derived from ulbFile (never the heavy data). */
@@ -33,6 +36,10 @@ interface V3View {
   segments: { docType: string; startPage: number; endPage: number; title?: string; isDuplicate?: boolean }[];
   isConsolidated: boolean;
   isMismatch: boolean;
+  noOfPages?: number;
+  /** FastAPI job id; the Excel is downloaded from FastAPI by this id */
+  jobId?: string;
+  hasExcel: boolean;
   error?: string;
 }
 
@@ -48,6 +55,9 @@ const ULB_FILE_PROJECTION = {
   'ulbFile.segments': 1,
   'ulbFile.isConsolidated': 1,
   'ulbFile.isMismatch': 1,
+  'ulbFile.noOfPages': 1,
+  'ulbFile.requestId': 1,
+  'ulbFile.excelUrl': 1,
 };
 
 export interface DigitizationV3Metrics {
@@ -333,6 +343,8 @@ export class AfsDigitizationV3Service {
             _id: 1,
             ulb: 1,
             pdfUrl: `$${auditType}.provisional_data.${query.docType}.pdf.url`,
+            pdfPageCount: `$${auditType}.provisional_data.${query.docType}.pdf.pageCount`,
+            pdfSizeBytes: `$${auditType}.provisional_data.${query.docType}.pdf.fileSizeBytes`,
           },
         },
         // State / population filters, same as the AFS dashboard
@@ -341,6 +353,8 @@ export class AfsDigitizationV3Service {
           $project: {
             ulb: 1,
             pdfUrl: 1,
+            pdfPageCount: 1,
+            pdfSizeBytes: 1,
             ulbName: '$ulbDoc.name',
             ulbCode: '$ulbDoc.code',
             stateId: '$ulbDoc.state',
@@ -362,7 +376,13 @@ export class AfsDigitizationV3Service {
 
     const rows: UlbRow[] = ulbs
       .filter((u) => u.stateId && stateNames.has(u.stateId.toString()))
-      .map((u) => ({ ...u, stateName: stateNames.get(u.stateId.toString()) as string, pdfUrl: u.pdfUrl || null }));
+      .map((u) => ({
+        ...u,
+        stateName: stateNames.get(u.stateId.toString()) as string,
+        pdfUrl: u.pdfUrl || null,
+        pdfPageCount: u.pdfPageCount ?? null,
+        pdfSizeBytes: u.pdfSizeBytes ?? null,
+      }));
 
     // Only a few small ulbFile fields are read (see ULB_FILE_PROJECTION), never the big `data`.
     const existing = await this.afsExcelFileModel
@@ -432,6 +452,9 @@ export class AfsDigitizationV3Service {
     segments?: V3View['segments'];
     isConsolidated?: boolean;
     isMismatch?: boolean;
+    noOfPages?: number;
+    requestId?: string;
+    excelUrl?: string;
   }): V3Record {
     if (!item) return undefined;
 
@@ -450,6 +473,9 @@ export class AfsDigitizationV3Service {
       segments: item.segments ?? [],
       isConsolidated: !!item.isConsolidated,
       isMismatch: !!item.isMismatch,
+      noOfPages: item.noOfPages,
+      jobId: item.requestId,
+      hasExcel: !!item.excelUrl,
       error: item.digitizationMsg,
     };
   }
@@ -464,6 +490,8 @@ export class AfsDigitizationV3Service {
       docType,
       docTypeLabel: DOC_TYPES[docType as keyof typeof DOC_TYPES],
       pdfUrl: row.pdfUrl,
+      pdfPageCount: row.pdfPageCount,
+      pdfSizeBytes: row.pdfSizeBytes,
       pdfUrlSigned: row.pdfUrl ? this.fileTokenService.signFileUrl(row.pdfUrl) : null,
       digitizationV3: record ?? { status: DigitizationV3Statuses.NOT_DIGITIZED },
     };
