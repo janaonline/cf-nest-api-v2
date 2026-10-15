@@ -37,9 +37,8 @@ interface V3View {
   isConsolidated: boolean;
   isMismatch: boolean;
   noOfPages?: number;
-  /** FastAPI job id; the Excel is downloaded from FastAPI by this id */
-  jobId?: string;
-  hasExcel: boolean;
+  /** Key of the digitized Excel in our bucket */
+  excelUrl?: string;
   error?: string;
 }
 
@@ -56,7 +55,6 @@ const ULB_FILE_PROJECTION = {
   'ulbFile.isConsolidated': 1,
   'ulbFile.isMismatch': 1,
   'ulbFile.noOfPages': 1,
-  'ulbFile.requestId': 1,
   'ulbFile.excelUrl': 1,
 };
 
@@ -286,8 +284,10 @@ export class AfsDigitizationV3Service {
         ...(result.excelKey && { 'ulbFile.excelUrl': result.excelKey }),
         ...(result.noOfPages != null && { 'ulbFile.noOfPages': result.noOfPages }),
         ...(result.processingMs != null && { 'ulbFile.totalProcessingTimeMs': result.processingMs }),
+        // Non-fatal problem (e.g. Excel copy failed): shown on the row, status stays digitized
+        ...(result.warning && { 'ulbFile.digitizationMsg': result.warning }),
       },
-      $unset: { 'ulbFile.digitizationMsg': '' },
+      ...(!result.warning && { $unset: { 'ulbFile.digitizationMsg': '' } }),
     });
   }
 
@@ -453,7 +453,6 @@ export class AfsDigitizationV3Service {
     isConsolidated?: boolean;
     isMismatch?: boolean;
     noOfPages?: number;
-    requestId?: string;
     excelUrl?: string;
   }): V3Record {
     if (!item) return undefined;
@@ -474,12 +473,13 @@ export class AfsDigitizationV3Service {
       isConsolidated: !!item.isConsolidated,
       isMismatch: !!item.isMismatch,
       noOfPages: item.noOfPages,
-      jobId: item.requestId,
-      hasExcel: !!item.excelUrl,
+      excelUrl: item.excelUrl || undefined,
       error: item.digitizationMsg,
     };
   }
+
   private shapeRow(row: UlbRow, docType: string, record: V3Record) {
+    const excelUrl = record?.status === DigitizationV3Statuses.DIGITIZED ? record.excelUrl : undefined;
     return {
       _id: row._id,
       ulb: row.ulb,
@@ -493,6 +493,9 @@ export class AfsDigitizationV3Service {
       pdfPageCount: row.pdfPageCount,
       pdfSizeBytes: row.pdfSizeBytes,
       pdfUrlSigned: row.pdfUrl ? this.fileTokenService.signFileUrl(row.pdfUrl) : null,
+      // Same as the PDF: a signed link served by this API. Only for files v3 has digitized.
+      excelUrl: excelUrl ?? null,
+      excelUrlSigned: excelUrl ? this.fileTokenService.signFileUrl(excelUrl) : null,
       digitization: record ?? { status: DigitizationV3Statuses.NOT_DIGITIZED },
     };
   }

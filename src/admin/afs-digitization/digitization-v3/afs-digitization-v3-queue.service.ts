@@ -7,6 +7,7 @@ import FormData from 'form-data';
 import { setTimeout as sleep } from 'timers/promises';
 import { firstValueFrom } from 'rxjs';
 import { YearIdToLabel } from 'src/core/constants/years';
+import { S3Service } from 'src/core/s3/s3.service';
 import { AfsDigitizationV3Service } from './afs-digitization-v3.service';
 import {
   AfsDigitizationV3JobData,
@@ -50,6 +51,7 @@ interface FastApiJobResult {
   result?: {
     document_classification?: FastApiDocumentClassification | null;
     excel_s3_key?: string | null;
+    excel_s3_bucket?: string | null;
     processing_time_seconds?: number | null;
     error_messages?: string[];
   } | null;
@@ -71,6 +73,7 @@ export class AfsDigitizationV3QueueService {
   constructor(
     private readonly http: HttpService,
     private readonly config: ConfigService,
+    private readonly s3Service: S3Service,
     private readonly digitizationV3Service: AfsDigitizationV3Service,
   ) {}
 
@@ -85,7 +88,9 @@ export class AfsDigitizationV3QueueService {
       const result = await this.fetchResult(fastApiJobId);
 
       const summary = this.buildResult(data, fastApiJobId, result);
-      await this.digitizationV3Service.markDigitized(data, summary);
+      // Keep FastAPI's Excel key only if it is in the bucket this API serves files from
+      const { excelKey, warning } = this.resolveExcel(data, summary.excelKey, result.result?.excel_s3_bucket);
+      await this.digitizationV3Service.markDigitized(data, { ...summary, excelKey, warning });
       this.logger.log(
         `Digitized ulb ${data.ulb} ${data.docType}: detected=[${summary.detectedDocTypes}] ` +
           `consolidated=${summary.isConsolidated} mismatch=${summary.isMismatch}`,
@@ -226,6 +231,27 @@ export class AfsDigitizationV3QueueService {
       isConsolidated: detectedDocTypes.length > 1,
       isMismatch: !detectedDocTypes.includes(data.docType),
     };
+  }
+
+  /**
+   * FastAPI stores the workbook in the CityFinance bucket (`S3_BUCKET_CF`), which is the bucket this API
+   * serves signed links from, so the key can be used as it is. Nothing is copied. If FastAPI reports a
+   * different bucket (or none, i.e. an older FastAPI), the key would not resolve here, so it is not stored.
+   * The job itself still succeeds: re-running it would repeat the paid Gemini work.
+   */
+  private resolveExcel(
+    data: AfsDigitizationV3JobData,
+    key?: string,
+    bucket?: string | null,
+  ): { excelKey?: string; warning?: string } {
+    if (!key) return {};
+    if (bucket && bucket === this.s3Service.bucket) return { excelKey: key };
+
+    const reason = bucket
+      ? `FastAPI stored the Excel in bucket "${bucket}", but this API serves "${this.s3Service.bucket}"`
+      : 'FastAPI did not report which bucket holds the Excel';
+    this.logger.error(`Excel not linked for ulb ${data.ulb} ${data.docType}: ${reason} (key ${key})`);
+    return { warning: `Digitized, but the Excel is not available: ${reason}.` };
   }
 
   private describeError(error: unknown): string {

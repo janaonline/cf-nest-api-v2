@@ -34,8 +34,10 @@ export const MAX_ENQUEUE_BATCH = 10000;
 export interface DigitizationV3Result {
   /** FastAPI job id; the full result and the Excel are fetched from FastAPI by this id */
   jobId: string;
-  /** FastAPI's Excel S3 key */
+  /** Key of the Excel in the CityFinance bucket (FastAPI writes it there), so it can be signed like the PDF */
   excelKey?: string;
+  /** Set when the job succeeded but something non-fatal went wrong, e.g. the Excel is in another bucket */
+  warning?: string;
   noOfPages?: number;
   processingMs?: number;
   detectedDocTypes: string[];
