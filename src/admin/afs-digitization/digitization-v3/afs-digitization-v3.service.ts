@@ -13,7 +13,12 @@ import { State, StateDocument } from 'src/schemas/state.schema';
 import { DOC_TYPES } from '../constants/docTypes';
 import { AfsDigitizationV3QueryDto } from '../dto/afs-digitization-v3-query.dto';
 import { getUlbsLookupPipeline } from '../queries/afs-excel-files.query';
-import { AfsDigitizationV3JobData, DigitizationV3Result, V3_DOC_TYPES, MAX_ENQUEUE_BATCH } from './afs-digitization-v3.constants';
+import {
+  AfsDigitizationV3JobData,
+  DigitizationV3Result,
+  V3_DOC_TYPES,
+  MAX_ENQUEUE_BATCH,
+} from './afs-digitization-v3.constants';
 
 /** One ULB for the selected year / audit type / doc type, with its uploaded PDF (if any). */
 interface UlbRow {
@@ -176,12 +181,14 @@ export class AfsDigitizationV3Service {
 
       try {
         await this.digitizationV3Queue.add(`digitize-v3-${data.ulb}-${data.year}-${data.docType}`, data, {
-          // Same file can never be in the queue twice; cleared on finish so it can be retried later.
-          jobId: `digitize-v3-${data.ulb}-${data.year}-${data.auditType}-${data.docType}`,
+          // Unique per request, so a finished job that is still kept never blocks queuing the same file again.
+          // Queuing a file twice at once is prevented by the atomic claim above, not by this id.
+          jobId: `digitize-v3-${data.ulb}-${data.year}-${data.auditType}-${data.docType}-${Date.now()}`,
           attempts: 2,
           backoff: { type: 'exponential', delay: 30_000 },
-          removeOnComplete: true,
-          removeOnFail: true,
+          // Finished jobs stay visible in Bull Board for a while, then are trimmed so Redis does not grow.
+          removeOnComplete: { age: 24 * 60 * 60, count: 10000 },
+          removeOnFail: { age: 7 * 24 * 60 * 60, count: 10000 },
         });
         summary.queued++;
       } catch (error) {
@@ -227,7 +234,10 @@ export class AfsDigitizationV3Service {
           $nor: [
             { 'ulbFile.digitizationStatus': DigitizationStatuses.QUEUED },
             // `detectedDocTypes` exists only on items v3 has digitized
-            { 'ulbFile.digitizationStatus': DigitizationStatuses.DIGITIZED, 'ulbFile.detectedDocTypes': { $exists: true } },
+            {
+              'ulbFile.digitizationStatus': DigitizationStatuses.DIGITIZED,
+              'ulbFile.detectedDocTypes': { $exists: true },
+            },
           ],
         },
         {
@@ -473,7 +483,10 @@ export class AfsDigitizationV3Service {
 
     let status = DigitizationV3Statuses.NOT_DIGITIZED;
     if (item.digitizationStatus === DigitizationStatuses.QUEUED) {
-      status = item.queue?.status === QueueStatus.PROCESSING ? DigitizationV3Statuses.PROCESSING : DigitizationV3Statuses.QUEUED;
+      status =
+        item.queue?.status === QueueStatus.PROCESSING
+          ? DigitizationV3Statuses.PROCESSING
+          : DigitizationV3Statuses.QUEUED;
     } else if (item.digitizationStatus === DigitizationStatuses.DIGITIZED && Array.isArray(item.detectedDocTypes)) {
       status = DigitizationV3Statuses.DIGITIZED;
     } else if (item.digitizationStatus === DigitizationStatuses.FAILED) {
