@@ -54,7 +54,12 @@ import {
   DocumentActionGateDocument,
   XviFcDocumentActionGate,
 } from '../../../../schemas/xvi-fc/document-action-gate.schema';
-import { DOC_TYPE_MAP, NO_OCR_DOC_IDS } from './constants/doc-type-map.constant';
+import {
+  AUDITORS_REPORT_DOC_ID,
+  AUDITORS_REPORT_MIN_PAGES,
+  DOC_TYPE_MAP,
+  NO_OCR_DOC_IDS,
+} from './constants/doc-type-map.constant';
 import { UploadDocumentDto } from './dto/upload-document.dto';
 import { PresignUploadDto } from './dto/presign-upload.dto';
 import { ConfirmUploadDto } from './dto/confirm-upload.dto';
@@ -272,6 +277,9 @@ export class AnnualAccountsService implements OnModuleInit {
     const sha256 = createHash('sha256').update(pdfBuffer).digest('hex');
     const sizeKb = Math.round((dto.fileSize / 1024) * 100) / 100;
     const pages = await this.s3Service.getPdfPageCountFromBuffer(pdfBuffer);
+    if (dto.docId === AUDITORS_REPORT_DOC_ID && pages < AUDITORS_REPORT_MIN_PAGES) {
+      throw new BadRequestException(`This document must contain at least ${AUDITORS_REPORT_MIN_PAGES} pages.`);
+    }
 
     // Always the 'audited' anchor document's id, regardless of which section is being
     // uploaded to — see resolveSectionDocument for why every external annualAccountId is
