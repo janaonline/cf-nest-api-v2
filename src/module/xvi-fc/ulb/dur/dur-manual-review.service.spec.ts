@@ -146,6 +146,7 @@ describe('DurManualReviewService.getDocumentDownload', () => {
   let service: DurManualReviewService;
   let mockDurModel: { findById: jest.Mock };
   let mockUploadHistoryModel: { findOne: jest.Mock };
+  let mockManualReviewRequestModel: { findOne: jest.Mock };
   let mockS3Service: { getObjectStream: jest.Mock };
 
   const adminUser: AuthUser = { _id: 'admin-1', role: 'ADMIN', scope: 'ADMIN' } as AuthUser;
@@ -166,13 +167,14 @@ describe('DurManualReviewService.getDocumentDownload', () => {
   beforeEach(() => {
     mockDurModel = { findById: jest.fn() };
     mockUploadHistoryModel = { findOne: jest.fn().mockReturnValue(mockQuery(uploadRecord)) };
+    mockManualReviewRequestModel = { findOne: jest.fn().mockReturnValue(mockQuery(null)) };
     mockS3Service = { getObjectStream: jest.fn().mockResolvedValue(fakeStream) };
 
     service = new DurManualReviewService(
       mockDurModel as any,
       {} as any,
       {} as any,
-      {} as any,
+      mockManualReviewRequestModel as any,
       mockUploadHistoryModel as any,
       {} as any,
       {} as any,
@@ -230,6 +232,30 @@ describe('DurManualReviewService.getDocumentDownload', () => {
 
     expect(mockS3Service.getObjectStream).toHaveBeenCalledWith('s3/key/live-fallback.pdf');
     expect(result.key).toBe('s3/key/live-fallback.pdf');
+  });
+
+  it("uses the manual-review request's own filePath for a superseded pre-history upload", async () => {
+    mockUploadHistoryModel.findOne.mockReturnValue(mockQuery(null));
+    mockManualReviewRequestModel.findOne.mockReturnValue(mockQuery({ filePath: 'custom/prefix/other-name.pdf' }));
+    mockDurModel.findById.mockReturnValueOnce(mockQuery(durWithDocSlot()));
+
+    const result = await service.getDocumentDownload(DUR_ID, 'tiedGrant' as any, 'old-upload', adminUser);
+
+    expect(result.key).toBe('custom/prefix/other-name.pdf');
+    expect(mockDurModel.findById).toHaveBeenCalledTimes(1);
+  });
+
+  it('derives the S3 key only when the request has no filePath either', async () => {
+    mockUploadHistoryModel.findOne.mockReturnValue(mockQuery(null));
+    mockManualReviewRequestModel.findOne.mockReturnValue(mockQuery({ filePath: null }));
+    mockDurModel.findById
+      .mockReturnValueOnce(mockQuery(durWithDocSlot())) // loadDocSlot: live upload is 'upload-1', not 'old-upload'
+      .mockReturnValueOnce(mockQuery({ ulb: 'ulb-1', design_year: 'year-1' }));
+
+    const result = await service.getDocumentDownload(DUR_ID, 'tiedGrant' as any, 'old-upload', adminUser);
+
+    expect(result.key).toBe('xvi-fc/dur/ulb-1/year-1/tiedGrant/old-upload.pdf');
+    expect(mockS3Service.getObjectStream).toHaveBeenCalledWith('xvi-fc/dur/ulb-1/year-1/tiedGrant/old-upload.pdf');
   });
 
   it('resolves a past (superseded) upload directly by uploadId, without touching the live DUR document', async () => {
