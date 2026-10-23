@@ -146,6 +146,7 @@ describe('DurManualReviewService.getDocumentDownload', () => {
   let service: DurManualReviewService;
   let mockDurModel: { findById: jest.Mock };
   let mockUploadHistoryModel: { findOne: jest.Mock };
+  let mockManualReviewRequestModel: { exists: jest.Mock };
   let mockS3Service: { getObjectStream: jest.Mock };
 
   const adminUser: AuthUser = { _id: 'admin-1', role: 'ADMIN', scope: 'ADMIN' } as AuthUser;
@@ -166,13 +167,14 @@ describe('DurManualReviewService.getDocumentDownload', () => {
   beforeEach(() => {
     mockDurModel = { findById: jest.fn() };
     mockUploadHistoryModel = { findOne: jest.fn().mockReturnValue(mockQuery(uploadRecord)) };
+    mockManualReviewRequestModel = { exists: jest.fn().mockReturnValue(mockQuery(null)) };
     mockS3Service = { getObjectStream: jest.fn().mockResolvedValue(fakeStream) };
 
     service = new DurManualReviewService(
       mockDurModel as any,
       {} as any,
       {} as any,
-      {} as any,
+      mockManualReviewRequestModel as any,
       mockUploadHistoryModel as any,
       {} as any,
       {} as any,
@@ -230,6 +232,19 @@ describe('DurManualReviewService.getDocumentDownload', () => {
 
     expect(mockS3Service.getObjectStream).toHaveBeenCalledWith('s3/key/live-fallback.pdf');
     expect(result.key).toBe('s3/key/live-fallback.pdf');
+  });
+
+  it('derives the S3 key for a superseded pre-history upload that a manual-review request references', async () => {
+    mockUploadHistoryModel.findOne.mockReturnValue(mockQuery(null));
+    mockManualReviewRequestModel.exists.mockReturnValue(mockQuery({ _id: 'req-1' }));
+    mockDurModel.findById
+      .mockReturnValueOnce(mockQuery(durWithDocSlot())) // loadDocSlot: live upload is 'upload-1', not 'old-upload'
+      .mockReturnValueOnce(mockQuery({ ulb: 'ulb-1', design_year: 'year-1' }));
+
+    const result = await service.getDocumentDownload(DUR_ID, 'tiedGrant' as any, 'old-upload', adminUser);
+
+    expect(result.key).toBe('xvi-fc/dur/ulb-1/year-1/tiedGrant/old-upload.pdf');
+    expect(mockS3Service.getObjectStream).toHaveBeenCalledWith('xvi-fc/dur/ulb-1/year-1/tiedGrant/old-upload.pdf');
   });
 
   it('resolves a past (superseded) upload directly by uploadId, without touching the live DUR document', async () => {
