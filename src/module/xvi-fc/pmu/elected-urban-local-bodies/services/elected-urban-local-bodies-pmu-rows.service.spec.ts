@@ -12,6 +12,9 @@ import type { GetEulbPmuRowsQueryDto } from '../dto/get-eulb-pmu-rows-query.dto'
 import type { BulkApprovePmuRowsDto } from 'src/module/xvi-fc/common/dto/bulk-approve-pmu-rows.dto';
 import type { BulkRejectPmuRowsDto } from 'src/module/xvi-fc/common/dto/bulk-reject-pmu-rows.dto';
 import type { EulbPmuFormLean, EulbPmuRowLean } from '../types/elected-urban-local-bodies-pmu-review.types';
+import { FormReturnedNotificationService } from 'src/module/xvi-fc/common/reminders/form-returned-notification.service';
+
+const mockFormReturnedNotification = { notifyStateFormReturned: jest.fn().mockResolvedValue(undefined) };
 
 function q<T>(value: T) {
   const chain: Record<string, unknown> = {};
@@ -100,6 +103,7 @@ describe('ElectedUrbanLocalBodiesPmuRowsService', () => {
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
+        { provide: FormReturnedNotificationService, useValue: mockFormReturnedNotification },
         ElectedUrbanLocalBodiesPmuRowsService,
         { provide: getModelToken(ElectedUrbanLocalBodiesRow.name), useValue: rowModel },
         { provide: ElectedUrbanLocalBodiesPmuRowReviewDomainService, useValue: domainService },

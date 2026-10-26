@@ -11,10 +11,13 @@ import { YearAccessService } from './services/year-access.service';
 import { ExemptionResolverService } from './services/exemption-resolver.service';
 import { StateFormPmuReviewHelper } from './services/state-form-pmu-review.helper';
 import { PmuRowReviewHelper } from './services/pmu-row-review.helper';
+import { PmuUndoEligibilityService } from './services/pmu-undo-eligibility.service';
+import { ClaimLetterUlbLock, ClaimLetterUlbLockSchema } from 'src/schemas/xvi-fc/state/claim-letter-ulb-lock.schema';
 import { Ulb, UlbSchema } from 'src/schemas/ulb.schema';
 import { Year, YearSchema } from 'src/schemas/year.schema';
 import { UlbEligibilityModule } from 'src/module/ulb-eligibility/ulb-eligibility.module';
 import { FormJsonConfigModule } from 'src/master/form-json-config/form-json-config.module';
+import { RemindersModule } from './reminders/reminders.module';
 import {
   XviFcEligibilityExemption,
   XviFcEligibilityExemptionSchema,
@@ -26,9 +29,11 @@ import {
       { name: Ulb.name, schema: UlbSchema },
       { name: Year.name, schema: YearSchema },
       { name: XviFcEligibilityExemption.name, schema: XviFcEligibilityExemptionSchema },
+      { name: ClaimLetterUlbLock.name, schema: ClaimLetterUlbLockSchema },
     ]),
     UlbEligibilityModule,
     FormJsonConfigModule,
+    RemindersModule,
   ],
   providers: [
     DynamicFormValidationService,
@@ -42,6 +47,7 @@ import {
     ExemptionResolverService,
     StateFormPmuReviewHelper,
     PmuRowReviewHelper,
+    PmuUndoEligibilityService,
   ],
   exports: [
     DynamicFormValidationService,
@@ -55,6 +61,9 @@ import {
     ExemptionResolverService,
     StateFormPmuReviewHelper,
     PmuRowReviewHelper,
+    PmuUndoEligibilityService,
+    // Re-exported so every PMU/MoHUA review module can inject FormReturnedNotificationService.
+    RemindersModule,
   ],
 })
 export class XviFcCommonModule {}

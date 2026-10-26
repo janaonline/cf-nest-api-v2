@@ -10,9 +10,87 @@ import { interpolate } from 'src/core/utils/interpolate.util';
 import { Role } from 'src/module/auth/enum/role.enum';
 import { User, UserDocument } from 'src/schemas/user/user.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
+import { State, StateDocument } from 'src/schemas/state.schema';
 import { PORTAL_INVITE_LOGIN_TYPE, buildPortalAuthUrls } from 'src/core/utils/portal-urls.util';
 
 const TEMPLATE_SLUG = 'form-returned-notification';
+const STATE_TEMPLATE_SLUG = 'state-form-returned-notification';
+
+const STATE_DEFAULT_SUBJECT = 'Action Required: Your XVI-FC {{formName}} Was Returned for Correction';
+
+// Deliberately never names the reviewer (PMU or MoHUA) — State users only ever see "returned for
+// correction" in the app, so the email matches.
+const STATE_DEFAULT_BODY = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Your XVI-FC Form Was Returned</title>
+  <style>
+    body { margin: 0; padding: 0; background-color: #f4f6f9; font-family: Arial, sans-serif; }
+    .wrapper { max-width: 600px; margin: 40px auto; background: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    .header { background-color: #b3261e; padding: 28px 32px; text-align: center; }
+    .header-title { color: #ffffff; font-size: 18px; font-weight: bold; }
+    .body { padding: 32px; color: #333333; font-size: 15px; line-height: 1.6; }
+    .body h2 { font-size: 20px; color: #b3261e; margin-bottom: 8px; }
+    .info-box { background: #fdecea; border-left: 4px solid #b3261e; border-radius: 4px; padding: 14px 18px; margin: 20px 0; font-size: 14px; }
+    .info-box p { margin: 4px 0; }
+    .info-box strong { color: #b3261e; }
+    .reason-box { background: #fff8e1; border-left: 4px solid #e0a800; border-radius: 4px; padding: 14px 18px; margin: 20px 0; font-size: 14px; }
+    .cta { text-align: center; margin: 28px 0; }
+    .cta a { background-color: #0f4c81; color: #ffffff; text-decoration: none; padding: 13px 32px; border-radius: 6px; font-size: 15px; font-weight: bold; display: inline-block; }
+    .note { font-size: 13px; color: #777777; margin-top: 24px; background: #f4f6f9; border-radius: 4px; padding: 12px 16px; }
+    .footer { background: #f4f6f9; text-align: center; padding: 18px 32px; font-size: 12px; color: #999999; }
+    .divider { border: none; border-top: 1px solid #eeeeee; margin: 24px 0; }
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    <div class="header">
+      <div class="header-title">XVI Finance Commission — CityFinance Portal</div>
+    </div>
+
+    <div class="body">
+      <h2>Your Form Was Returned for Correction</h2>
+      <p>Dear Sir / Madam,</p>
+      <p>
+        The XVI-FC <strong>{{formName}}</strong> form for <strong>{{stateName}}</strong> has been
+        <strong>returned for correction</strong> and needs your attention.
+      </p>
+
+      <div class="info-box">
+        <p><strong>State:</strong> {{stateName}}</p>
+        <p><strong>Form:</strong> {{formName}}</p>
+        <p><strong>Status:</strong> Returned for correction</p>
+      </div>
+
+      {{returnReasonBlock}}
+
+      <p>
+        Please log in to City Finance, review the comments, make the required changes and re-submit the
+        form so the review can continue.
+      </p>
+
+      <div class="cta">
+        <a href="{{loginLink}}" target="_blank">Login &amp; Resubmit</a>
+      </div>
+
+      <hr class="divider" />
+
+      <div class="note">
+        <strong>Note:</strong> If this form has already been corrected and resubmitted, please disregard
+        this email — it is sent automatically when the form is returned.
+      </div>
+    </div>
+
+    <div class="footer">
+      &copy; CityFinance &mdash; Ministry of Housing and Urban Affairs, Government of India
+    </div>
+  </div>
+</body>
+</html>
+`.trim();
 
 const DEFAULT_SUBJECT = 'Action Required: Your XVI-FC {{formName}} Submission Was Returned by the State';
 
@@ -106,6 +184,9 @@ const DEFAULT_BODY = `
  * resubmit". Shared across both `annual_accounts.service.ts` and `bank-account.service.ts` since
  * both forms use the same RETURNED_BY_STATE status and the same Nodal Officer recipient.
  *
+ * Also hosts `notifyStateFormReturned`: the State-facing counterpart, fired when PMU (or MoHUA, for
+ * FC Unspent) returns one of the five State forms — every verified State user gets one email.
+ *
  * Deliberately never throws — a notification failure (missing template, no Nodal Officer, queue
  * error) must never fail the underlying approve/return decision it's reporting on.
  */
@@ -120,23 +201,97 @@ export class FormReturnedNotificationService {
     private readonly emailTemplates: EmailTemplatesService,
     private readonly emailQueue: EmailQueueService,
     private readonly config: ConfigService,
+    @InjectModel(State.name) private readonly stateModel: Model<StateDocument>,
   ) {}
 
-  // ─── Seed default template (idempotent — mirrors the other reminder services) ──────────────
+  // ─── Seed default templates (idempotent — mirrors the other reminder services) ─────────────
 
   async seedTemplate(): Promise<{ created: boolean; message: string }> {
-    const existing = await this.templateModel.findOne({ slug: TEMPLATE_SLUG }).exec();
-    if (existing) return { created: false, message: 'Form returned notification template already exists' };
+    const [ulbCreated, stateCreated] = await Promise.all([
+      this.seedOne(TEMPLATE_SLUG, 'Form Returned Notification', DEFAULT_SUBJECT, DEFAULT_BODY),
+      this.seedOne(STATE_TEMPLATE_SLUG, 'State Form Returned Notification', STATE_DEFAULT_SUBJECT, STATE_DEFAULT_BODY),
+    ]);
+    const created = ulbCreated || stateCreated;
+    return {
+      created,
+      message: created
+        ? 'Form returned notification template(s) created successfully'
+        : 'Form returned notification templates already exist',
+    };
+  }
 
-    await this.templateModel.create({
-      name: 'Form Returned Notification',
-      slug: TEMPLATE_SLUG,
-      subject: DEFAULT_SUBJECT,
-      body: DEFAULT_BODY,
-      isActive: true,
-    });
-    this.logger.log('Form returned notification template seeded');
-    return { created: true, message: 'Form returned notification template created successfully' };
+  private async seedOne(slug: string, name: string, subject: string, body: string): Promise<boolean> {
+    const existing = await this.templateModel.findOne({ slug }).exec();
+    if (existing) return false;
+    await this.templateModel.create({ name, slug, subject, body, isActive: true });
+    this.logger.log(`Email template seeded: ${slug}`);
+    return true;
+  }
+
+  /**
+   * Notifies every verified State user of `stateId` that `formName` was returned for correction
+   * (by PMU or MoHUA — the email never says which). `remarks` is the reviewer's single form-level
+   * remark when there is one; omit it (null) for a row-level return, whose remarks live per row.
+   * Best-effort and never throws, like `notifyReturned` — the caller's decision has already been
+   * committed by the time this runs.
+   */
+  async notifyStateFormReturned(params: {
+    stateId: Types.ObjectId;
+    formName: string;
+    remarks: string | null;
+  }): Promise<void> {
+    const { stateId, formName, remarks } = params;
+    try {
+      const template = await this.emailTemplates.findBySlug(STATE_TEMPLATE_SLUG);
+
+      // Same recipient rule as the weekly state summary: every verified State user, any subrole.
+      const recipients = await this.userModel
+        .find({
+          state: stateId,
+          role: Role.STATE,
+          xviFcSubrole: { $in: ['admin', 'reviewer', 'viewer'] },
+          isActive: true,
+          isDeleted: false,
+          isXVIFCProfileVerified: true,
+          email: { $exists: true, $nin: ['', null] },
+        })
+        .select('email')
+        .lean()
+        .exec();
+
+      if (!recipients.length) {
+        this.logger.warn(
+          `No verified State users found for state ${stateId.toString()} — skipping ${formName} return notification`,
+        );
+        return;
+      }
+
+      const state = await this.stateModel.findById(stateId).select('name').lean().exec();
+      const { loginUrl } = buildPortalAuthUrls(this.config, PORTAL_INVITE_LOGIN_TYPE);
+
+      const variables: Record<string, string> = {
+        stateName: escapeHtml(state?.name ?? 'your State'),
+        formName,
+        returnReasonBlock: remarks
+          ? `<div class="reason-box"><p><strong>Reviewer's remarks:</strong> ${escapeHtml(remarks)}</p></div>`
+          : '',
+        loginLink: loginUrl,
+      };
+
+      const subject = interpolate(template.subject, variables);
+      const html = interpolate(template.body, variables);
+      for (const recipient of recipients) {
+        await this.emailQueue.addEmailJob({ to: recipient.email as string, subject, html });
+      }
+
+      this.logger.log(
+        `State return notification queued for state ${stateId.toString()} (${formName}) → ${recipients.length} recipient(s)`,
+      );
+    } catch (err) {
+      this.logger.warn(
+        `Failed to send State return notification for state ${stateId.toString()} (${formName}): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   /**

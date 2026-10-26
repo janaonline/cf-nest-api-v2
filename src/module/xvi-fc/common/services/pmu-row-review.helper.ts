@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
-import type { AnyBulkWriteOperation, ClientSession, FilterQuery, Model, Types } from 'mongoose';
+import type { AnyBulkWriteOperation, ClientSession, Document, FilterQuery, Model, Types } from 'mongoose';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
-import type { RowReviewStatus } from '../constants/row-review-status.constants';
+import type { RowHistoryStatus, RowReviewStatus } from '../constants/row-review-status.constants';
 import type { PmuRowSummaryCore, PmuRowSummaryWithEligibility } from '../types/pmu-row-summary.type';
 
 interface PmuRowBase {
@@ -56,7 +56,22 @@ export interface TransitionPmuRowsParams<TRowDoc, THistoryDoc, TRow extends PmuR
    *  allocationAmount/eligibility). Omit for a pure review decision (no data-edit capability exists
    *  at this layer — see common/services/CLAUDE.md's "PMU Review shared mechanics"); `snapshot` is
    *  written `null` when omitted. */
-  buildSnapshot?: (row: TRow, newStatus: RowReviewStatus, rejectionRemark: string | null) => Record<string, unknown>;
+  buildSnapshot?: (row: TRow, newStatus: RowHistoryStatus, rejectionRemark: string | null) => Record<string, unknown>;
+}
+
+export interface UndoPmuRowsParams<TRowDoc, THistoryDoc, TRow extends PmuRowBase & { rejectionRemark?: string | null }> {
+  rowModel: Model<TRowDoc>;
+  rowHistoryModel: Model<THistoryDoc>;
+  formId: Types.ObjectId;
+  stateOid: Types.ObjectId;
+  yearOid: Types.ObjectId;
+  /** The active rows PMU had decided (status 5 or 14) — each is reopened to `UNDER_REVIEW_BY_PMU`. */
+  rows: TRow[];
+  userOid: Types.ObjectId;
+  ip: string | null;
+  userAgent: string | null;
+  session: ClientSession;
+  buildSnapshot?: TransitionPmuRowsParams<TRowDoc, THistoryDoc, TRow>['buildSnapshot'];
 }
 
 export interface GetRowStatusTallyParams<TRowDoc> {
@@ -177,7 +192,7 @@ export class PmuRowReviewHelper {
         update: { $set: { rowStatus: t.newStatus, rejectionRemark: t.rejectionRemark, updatedBy: params.userOid } },
       },
     })) as unknown as AnyBulkWriteOperation<TRowDoc>[];
-    await params.rowModel.bulkWrite(bulkOps, { session: params.session });
+    await params.rowModel.bulkWrite(bulkOps as never, { session: params.session });
 
     await params.rowHistoryModel.insertMany(
       real.map((t) => ({
@@ -195,6 +210,65 @@ export class PmuRowReviewHelper {
       })),
       { session: params.session },
     );
+  }
+
+  /**
+   * Reopens every given row to `UNDER_REVIEW_BY_PMU` and clears its rejection remark — the row half of
+   * a PMU undo. Each row writes the same two history entries as the form (`5|14 -> 10 -> 13`), the
+   * first still carrying the remark being cleared so the reason survives in history. The bulk write is
+   * conditional on each row's current status, so a row someone else already moved is left alone; the
+   * caller compares the returned count with `rows.length` and aborts its transaction on a mismatch.
+   * Must run inside the caller's Mongo transaction session.
+   */
+  async undoRows<TRowDoc extends Document, THistoryDoc, TRow extends PmuRowBase & { rejectionRemark?: string | null }>(
+    params: UndoPmuRowsParams<TRowDoc, THistoryDoc, TRow>,
+  ): Promise<number> {
+    if (params.rows.length === 0) return 0;
+
+    const bulkOps = params.rows.map((row) => ({
+      updateOne: {
+        filter: { _id: row._id, rowStatus: row.rowStatus },
+        update: {
+          $set: { rowStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU, rejectionRemark: null, updatedBy: params.userOid },
+        },
+      },
+    })) as unknown as AnyBulkWriteOperation<TRowDoc>[];
+    const result = await params.rowModel.bulkWrite(bulkOps as never, { session: params.session });
+
+    const now = Date.now();
+    const base = {
+      form: params.formId,
+      state: params.stateOid,
+      year: params.yearOid,
+      createdBy: params.userOid,
+      updatedBy: params.userOid,
+      ipAddress: params.ip,
+      userAgent: params.userAgent,
+    };
+    // 1 ms apart so `createdAt` keeps the pair in order, as for the form-level entries.
+    const history = params.rows.flatMap((row) => [
+      {
+        ...base,
+        row: row._id,
+        previousStatus: row.rowStatus ?? null,
+        currentStatus: FORM_STATUS.UNDO,
+        snapshot: params.buildSnapshot ? params.buildSnapshot(row, FORM_STATUS.UNDO, row.rejectionRemark ?? null) : null,
+        createdAt: new Date(now),
+      },
+      {
+        ...base,
+        row: row._id,
+        previousStatus: FORM_STATUS.UNDO,
+        currentStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU,
+        snapshot: params.buildSnapshot
+          ? params.buildSnapshot(row, FORM_STATUS.UNDER_REVIEW_BY_PMU, null)
+          : null,
+        createdAt: new Date(now + 1),
+      },
+    ]);
+    await params.rowHistoryModel.insertMany(history, { session: params.session });
+
+    return result.modifiedCount;
   }
 
   /**

@@ -14,6 +14,7 @@ import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-
 import type { XvifcActorSourceDocument } from 'src/module/xvi-fc/common/types/xvifc-form-actors.type';
 import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
+import { FormReturnedNotificationService } from 'src/module/xvi-fc/common/reminders/form-returned-notification.service';
 import type { FileInfo } from 'src/schemas/common/file.schema';
 import { YearIdToLabel } from 'src/core/constants/years';
 import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
@@ -53,6 +54,7 @@ export class FcUnspentMohuaReviewService {
     private readonly xvifcFormActorsService: XvifcFormActorsService,
     private readonly fileInfoNormalizer: FileInfoNormalizerService,
     private readonly fileTokenService: FileTokenService,
+    private readonly formReturnedNotification: FormReturnedNotificationService,
   ) {}
 
   /** MoHUA review metadata only — no row list (see `FcUnspentMohuaRowsService.getRows`);
@@ -326,6 +328,12 @@ export class FcUnspentMohuaReviewService {
     } finally {
       await session.endSession();
     }
+
+    void this.formReturnedNotification.notifyStateFormReturned({
+      stateId: stateOid,
+      formName: 'FC Unspent Declaration',
+      remarks: trimmedRemarks,
+    });
 
     return xviFcSuccess('FC Unspent Declaration form rejected.', {
       currentFormStatus: toStatus,

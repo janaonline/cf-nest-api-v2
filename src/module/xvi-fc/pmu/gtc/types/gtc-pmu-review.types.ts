@@ -13,6 +13,7 @@ export interface GtcPmuFormLean {
   installment: GtcInstallment;
   currentFormStatus: number;
   data?: Record<string, unknown>;
+  pmuRemarks?: string | null;
 }
 
 export type GtcPmuReviewPermissions = PmuReviewPermissions;
