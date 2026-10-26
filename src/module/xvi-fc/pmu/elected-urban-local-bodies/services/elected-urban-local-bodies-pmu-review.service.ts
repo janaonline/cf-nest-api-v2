@@ -3,7 +3,10 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { FORM_STATUS, FormHistoryAction, getFormStatusLabel } from 'src/common/constants/form-status.constants';
-import { assertCanPmuMutateForm, canPmuViewForm } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
+import {
+  assertCanPmuMutateForm,
+  canPmuViewForm,
+} from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
 import {
   assertPmuOrMohuaViewerAccess,
   assertPmuReviewerAccess,
@@ -13,6 +16,8 @@ import { buildPmuWorklistRows } from 'src/module/xvi-fc/common/utils/pmu-worklis
 import type { GetPmuWorklistQueryDto } from 'src/module/xvi-fc/common/dto/get-pmu-worklist-query.dto';
 import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
 import { FormQuestionHydratorService } from 'src/module/xvi-fc/common/services/form-question-hydrator.service';
+import { FormReturnedNotificationService } from 'src/module/xvi-fc/common/reminders/form-returned-notification.service';
+import { PmuUndoEligibilityService } from 'src/module/xvi-fc/common/services/pmu-undo-eligibility.service';
 import { EulbFormJsonConfigService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/form-json/elected-urban-local-bodies-form-json.service';
 import { getFieldsByType } from 'src/module/xvi-fc/state/elected-urban-local-bodies/helpers/elected-urban-local-bodies-form-json.helpers';
 import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
@@ -64,6 +69,8 @@ export class ElectedUrbanLocalBodiesPmuReviewService {
     private readonly formQuestionHydrator: FormQuestionHydratorService,
     private readonly eulbFormJsonConfig: EulbFormJsonConfigService,
     private readonly ulbEligibilityService: UlbEligibilityService,
+    private readonly formReturnedNotification: FormReturnedNotificationService,
+    private readonly undoEligibility: PmuUndoEligibilityService,
   ) {}
 
   /** Cross-state worklist: every active+published state left-joined against its EULB document (if
@@ -128,6 +135,7 @@ export class ElectedUrbanLocalBodiesPmuReviewService {
     const { actors, stateName } = this.xvifcFormActorsService.buildActorsAndStateName(doc);
     const rowSummary = await this.domainService.getRowSummary(doc._id, doc.activeDatasetVersion ?? 0);
     const permissions = buildPmuReviewerFormPermissions(user, currentFormStatus, { includeRowReview: true });
+    permissions.canUndo = await this.undoEligibility.canUndo(user, currentFormStatus, stateOid, yearOid);
 
     const fields = await this.eulbFormJsonConfig.loadFields(yearId);
     const mainFormFields = getFieldsByType(fields, 'EULB_MAIN_FORM_FIELDS');
@@ -322,6 +330,12 @@ export class ElectedUrbanLocalBodiesPmuReviewService {
     } finally {
       await session.endSession();
     }
+
+    void this.formReturnedNotification.notifyStateFormReturned({
+      stateId: stateOid,
+      formName: 'Elected Body Status',
+      remarks: trimmedRemarks,
+    });
 
     return xviFcSuccess('Elected Urban Local Bodies form rejected.', {
       currentFormStatus: toStatus,

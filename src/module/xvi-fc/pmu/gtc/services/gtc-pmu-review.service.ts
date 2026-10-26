@@ -3,7 +3,11 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { FORM_STATUS, FormHistoryAction, getFormStatusLabel } from 'src/common/constants/form-status.constants';
-import { assertCanPmuMutateForm, canPmuViewForm } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
+import {
+  assertCanPmuMutateForm,
+  canPmuViewForm,
+} from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
+import { PmuUndoEligibilityService } from 'src/module/xvi-fc/common/services/pmu-undo-eligibility.service';
 import {
   assertPmuOrMohuaViewerAccess,
   assertPmuReviewerAccess,
@@ -15,6 +19,7 @@ import { StateFormPmuReviewHelper } from 'src/module/xvi-fc/common/services/stat
 import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
 import { FormQuestionHydratorService } from 'src/module/xvi-fc/common/services/form-question-hydrator.service';
 import { FormJsonService } from 'src/master/form-json/form-json.service';
+import { FormReturnedNotificationService } from 'src/module/xvi-fc/common/reminders/form-returned-notification.service';
 import type { XvifcActorSourceDocument } from 'src/module/xvi-fc/common/types/xvifc-form-actors.type';
 import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import { throwXviFcValidationError, xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
@@ -57,6 +62,8 @@ export class GtcPmuReviewService {
     private readonly xvifcFormActorsService: XvifcFormActorsService,
     private readonly formQuestionHydrator: FormQuestionHydratorService,
     private readonly formJsonService: FormJsonService,
+    private readonly formReturnedNotification: FormReturnedNotificationService,
+    private readonly undoEligibility: PmuUndoEligibilityService,
   ) {}
 
   /** See `buildPmuWorklistRows` (`common/utils/pmu-worklist.util.ts`) for the cross-state/
@@ -120,6 +127,7 @@ export class GtcPmuReviewService {
 
     const { actors, stateName } = this.xvifcFormActorsService.buildActorsAndStateName(doc);
     const permissions = buildPmuReviewerFormPermissions(user, currentFormStatus);
+    permissions.canUndo = await this.undoEligibility.canUndo(user, currentFormStatus, stateOid, yearOid);
 
     const formJson = await this.formJsonService.findActiveByDesignYearAndFormId(yearId, GTC_FORM_ID);
     if (!formJson.data?.length) throw new NotFoundException('GTC form configuration not found');
@@ -207,18 +215,25 @@ export class GtcPmuReviewService {
       userAgent,
     );
 
+    void this.formReturnedNotification.notifyStateFormReturned({
+      stateId: new Types.ObjectId(stateId),
+      formName: 'Grant Transfer Certificate',
+      remarks: trimmedRemarks,
+    });
+
     return xviFcSuccess('GTC form rejected.', {
       currentFormStatus: toStatus,
       currentFormStatusLabel: getFormStatusLabel(toStatus),
     });
   }
 
+
   // ─── Helpers ─────────────────────────────────────────────────────────────────
 
   private async findForm(stateId: string, yearId: string, installment: GtcInstallment): Promise<GtcPmuFormLean | null> {
     return this.formModel
       .findOne({ state: new Types.ObjectId(stateId), year: new Types.ObjectId(yearId), installment })
-      .select('state year installment currentFormStatus data')
+      .select('state year installment currentFormStatus data pmuRemarks')
       .lean<GtcPmuFormLean>()
       .exec();
   }

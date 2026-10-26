@@ -384,8 +384,9 @@ export class DurManualReviewService {
    *
    * Uploads made before this collection existed have no history row, so a miss there falls back
    * to the live document's `currentUpload` — the only place an older upload's file info can still
-   * live — but only when the requested uploadId is still the current one; a pre-migration upload
-   * that's since been superseded by a newer one has nowhere left to be recovered from and 404s.
+   * live — when the requested uploadId is still the current one. A pre-migration upload that's since
+   * been superseded resolves through the manual-review request that references it (its `filePath`
+   * snapshot, else the derived S3 key), and 404s if no such request exists.
    */
   async getDocumentDownload(
     id: string,
@@ -427,19 +428,26 @@ export class DurManualReviewService {
       if (slot?.currentUpload?.uploadId === resolvedUploadId) file = slot.currentUpload.file;
     }
     if (!file) {
-      // Superseded pre-history upload: no DB row left, but the S3 key is deterministic. Only derived
-      // for an uploadId that a manual-review request on this exact form/doc actually references, so
-      // an admin can't probe arbitrary keys.
+      // Superseded pre-history upload: resolve via the manual-review request that references it —
+      // its own `filePath` snapshot first, else the S3 key layout (confirmUpload only enforces the
+      // prefix, so this is a last resort). Scoped to a request on this exact form/doc/upload so an
+      // admin can't probe arbitrary keys.
       const durObjectId = new Types.ObjectId(id);
-      const requested = await this.manualReviewRequestModel
-        .exists({ durId: durObjectId, docId, uploadId: resolvedUploadId })
+      const request = await this.manualReviewRequestModel
+        .findOne({ durId: durObjectId, docId, uploadId: resolvedUploadId })
+        .select('filePath')
+        .lean()
         .exec();
-      const dur = requested ? await this.durModel.findById(durObjectId).select('ulb design_year').lean().exec() : null;
-      if (dur) {
-        file = {
-          path: `xvi-fc/dur/${dur.ulb}/${dur.design_year}/${docId}/${resolvedUploadId}.pdf`,
-          mimeType: 'application/pdf',
-        };
+      if (request?.filePath) {
+        file = { path: request.filePath, mimeType: 'application/pdf' };
+      } else if (request) {
+        const dur = await this.durModel.findById(durObjectId).select('ulb design_year').lean().exec();
+        if (dur) {
+          file = {
+            path: `xvi-fc/dur/${dur.ulb}/${dur.design_year}/${docId}/${resolvedUploadId}.pdf`,
+            mimeType: 'application/pdf',
+          };
+        }
       }
     }
     if (!file) throw new NotFoundException('Upload not found');
@@ -527,6 +535,7 @@ export class DurManualReviewService {
           filePath: {
             $ifNull: [
               '$uploadHistory.file.path',
+              '$filePath', // the request's own snapshot, taken at request time
               '$liveUpload.file.path',
               {
                 $concat: [
