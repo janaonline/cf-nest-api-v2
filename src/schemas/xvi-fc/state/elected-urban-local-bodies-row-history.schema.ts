@@ -1,7 +1,9 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
-import { ROW_REVIEW_STATUS_VALUES } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
-import type { RowReviewStatus } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
+import {
+  ROW_HISTORY_STATUS_VALUES,
+} from 'src/module/xvi-fc/common/constants/row-review-status.constants';
+import type { RowHistoryStatus } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
 
 export type EulbRowHistoryDocument = HydratedDocument<ElectedUrbanLocalBodiesRowHistory>;
 
@@ -18,7 +20,7 @@ export interface EulbRowHistorySnapshot {
   dateOfExpiry: Date | string | null;
   remarks: string | null;
   datasetVersion: number;
-  rowStatus: RowReviewStatus | null;
+  rowStatus: RowHistoryStatus | null;
   rejectionRemark: string | null;
 }
 
@@ -33,7 +35,7 @@ class EulbRowHistorySnapshotSubdoc {
   @Prop({ type: MongooseSchema.Types.Mixed, default: null }) dateOfExpiry!: Date | string | null;
   @Prop({ type: String, default: null }) remarks!: string | null;
   @Prop({ type: Number, required: true }) datasetVersion!: number;
-  @Prop({ type: Number, enum: [...ROW_REVIEW_STATUS_VALUES, null], default: null }) rowStatus!: RowReviewStatus | null;
+  @Prop({ type: Number, enum: [...ROW_HISTORY_STATUS_VALUES, null], default: null }) rowStatus!: RowHistoryStatus | null;
   @Prop({ type: String, default: null }) rejectionRemark!: string | null;
 }
 const EulbRowHistorySnapshotSchema = SchemaFactory.createForClass(EulbRowHistorySnapshotSubdoc);
@@ -58,11 +60,11 @@ export class ElectedUrbanLocalBodiesRowHistory {
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Year', required: true })
   year!: Types.ObjectId;
 
-  @Prop({ type: Number, enum: [...ROW_REVIEW_STATUS_VALUES, null], default: null })
-  previousStatus!: RowReviewStatus | null;
+  @Prop({ type: Number, enum: [...ROW_HISTORY_STATUS_VALUES, null], default: null })
+  previousStatus!: RowHistoryStatus | null;
 
-  @Prop({ type: Number, enum: ROW_REVIEW_STATUS_VALUES, required: true })
-  currentStatus!: RowReviewStatus;
+  @Prop({ type: Number, enum: ROW_HISTORY_STATUS_VALUES, required: true })
+  currentStatus!: RowHistoryStatus;
 
   /** Null for a pure PMU/MoHUA review decision (no data-edit capability exists at this layer) — see
    *  pmu/elected-urban-local-bodies/CLAUDE.md's "Row snapshot is null for review-only transitions". */

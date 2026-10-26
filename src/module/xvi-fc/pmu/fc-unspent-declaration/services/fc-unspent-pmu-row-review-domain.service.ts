@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { ClientSession, Model, Types } from 'mongoose';
-import type { RowReviewStatus } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
+import type { RowHistoryStatus, RowReviewStatus } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
 import { escapeRegex } from 'src/common/utils/regex.util';
 import { StateFormPmuReviewHelper } from 'src/module/xvi-fc/common/services/state-form-pmu-review.helper';
 import { PmuRowReviewHelper, resolveSettledFormStatus } from 'src/module/xvi-fc/common/services/pmu-row-review.helper';
@@ -29,8 +29,33 @@ import type {
   FcUnspentPmuRowTransitionRequest,
 } from '../types/fc-unspent-pmu-review.types';
 
-const ROW_LEAN_SELECT =
+export const ROW_LEAN_SELECT =
   'form rowNumber ulbId censusCode sbCode ulbName allocationAmount unspentAmount previousFcUnspentBalance allocationPerc eligibility rowStatus rejectionRemark';
+
+/** A row-history entry's `snapshot` — the row's post-transition values (including `rejectionRemark`) so a
+ *  rejection's reason survives a later reject→edit→resubmit cycle. Shared by review decisions and the
+ *  undo module so the two can't drift. `allocationSource` isn't in `ROW_LEAN_SELECT` and is left to its
+ *  schema default (null) — it's only meaningful for the STATE's own FINAL_SUBMIT entry. */
+export function buildFcUnspentRowSnapshot(
+  row: FcUnspentPmuRowLean,
+  newStatus: RowHistoryStatus,
+  rejectionRemark: string | null,
+): Record<string, unknown> {
+  return {
+    rowNumber: row.rowNumber,
+    ulbId: row.ulbId,
+    censusCode: row.censusCode,
+    sbCode: row.sbCode,
+    ulbName: row.ulbName,
+    allocationAmount: row.allocationAmount,
+    unspentAmount: row.unspentAmount,
+    previousFcUnspentBalance: row.previousFcUnspentBalance,
+    allocationPerc: row.allocationPerc,
+    eligibility: row.eligibility,
+    rowStatus: newStatus,
+    rejectionRemark,
+  };
+}
 
 /**
  * Shared PMU-review domain primitives used by both the row-level and complete-form approve/reject
@@ -156,20 +181,7 @@ export class FcUnspentPmuRowReviewDomainService {
       ip,
       userAgent,
       session,
-      buildSnapshot: (row, newStatus, rejectionRemark) => ({
-        rowNumber: row.rowNumber,
-        ulbId: row.ulbId,
-        censusCode: row.censusCode,
-        sbCode: row.sbCode,
-        ulbName: row.ulbName,
-        allocationAmount: row.allocationAmount,
-        unspentAmount: row.unspentAmount,
-        previousFcUnspentBalance: row.previousFcUnspentBalance,
-        allocationPerc: row.allocationPerc,
-        eligibility: row.eligibility,
-        rowStatus: newStatus,
-        rejectionRemark,
-      }),
+      buildSnapshot: buildFcUnspentRowSnapshot,
     });
   }
 

@@ -36,7 +36,9 @@ import { ElectedUrbanLocalBodiesPmuReviewModule } from './pmu/elected-urban-loca
 import { SfcStatusPmuReviewModule } from './pmu/sfc-status/sfc-status-pmu-review.module';
 import { GtcPmuReviewModule } from './pmu/gtc/gtc-pmu-review.module';
 import { DevolutionFormulaPmuReviewModule } from './pmu/devolution-formula/devolution-formula-pmu-review.module';
+import { PmuUndoModule } from './pmu/undo/pmu-undo.module';
 import { StateDashboardModule } from './state/dashboard/state-dashboard.module';
+import { StateNotificationsModule } from './state/notifications/state-notifications.module';
 import { SlbModule } from './ulb/slb/slb.module';
 import { ClaimLetterModule } from './state/claim-letter/claim-letter.module';
 import { RequestExemptionModule } from './state/request-exemption/request-exemption.module';
@@ -80,7 +82,9 @@ import { StateFormHistoryModule } from './common/form-history/state-form-history
     SfcStatusPmuReviewModule,
     GtcPmuReviewModule,
     DevolutionFormulaPmuReviewModule,
+    PmuUndoModule,
     StateDashboardModule,
+    StateNotificationsModule,
     SlbModule,
     ClaimLetterModule,
     RequestExemptionModule,
