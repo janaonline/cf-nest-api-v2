@@ -384,8 +384,9 @@ export class DurManualReviewService {
    *
    * Uploads made before this collection existed have no history row, so a miss there falls back
    * to the live document's `currentUpload` — the only place an older upload's file info can still
-   * live — but only when the requested uploadId is still the current one; a pre-migration upload
-   * that's since been superseded by a newer one has nowhere left to be recovered from and 404s.
+   * live — when the requested uploadId is still the current one. A pre-migration upload that's since
+   * been superseded resolves through the manual-review request that references it (its `filePath`
+   * snapshot, else the derived S3 key), and 404s if no such request exists.
    */
   async getDocumentDownload(
     id: string,
@@ -421,10 +422,33 @@ export class DurManualReviewService {
       .lean()
       .exec();
 
-    let file = uploadRecord?.file;
+    let file: { path: string; originalName?: string | null; mimeType?: string | null } | undefined = uploadRecord?.file;
     if (!file) {
       const slot = await loadDocSlot();
       if (slot?.currentUpload?.uploadId === resolvedUploadId) file = slot.currentUpload.file;
+    }
+    if (!file) {
+      // Superseded pre-history upload: resolve via the manual-review request that references it —
+      // its own `filePath` snapshot first, else the S3 key layout (confirmUpload only enforces the
+      // prefix, so this is a last resort). Scoped to a request on this exact form/doc/upload so an
+      // admin can't probe arbitrary keys.
+      const durObjectId = new Types.ObjectId(id);
+      const request = await this.manualReviewRequestModel
+        .findOne({ durId: durObjectId, docId, uploadId: resolvedUploadId })
+        .select('filePath')
+        .lean()
+        .exec();
+      if (request?.filePath) {
+        file = { path: request.filePath, mimeType: 'application/pdf' };
+      } else if (request) {
+        const dur = await this.durModel.findById(durObjectId).select('ulb design_year').lean().exec();
+        if (dur) {
+          file = {
+            path: `xvi-fc/dur/${dur.ulb}/${dur.design_year}/${docId}/${resolvedUploadId}.pdf`,
+            mimeType: 'application/pdf',
+          };
+        }
+      }
     }
     if (!file) throw new NotFoundException('Upload not found');
 
@@ -472,18 +496,72 @@ export class DurManualReviewService {
         },
       },
       { $addFields: { uploadHistory: { $arrayElemAt: ['$uploadHistory', 0] } } },
+      // Requests raised before xvifc_dur_upload_history existed have no history row — fall back to
+      // the live form's currentUpload (only when it's still that same upload), then, for
+      // superseded uploads, to the S3 key itself (its layout is fixed: see DurService.confirmUpload).
+      { $lookup: { from: 'xvifc_dur_forms', localField: 'durId', foreignField: '_id', as: 'durDoc' } },
+      {
+        $addFields: {
+          liveUpload: {
+            $let: {
+              vars: {
+                d: {
+                  $first: {
+                    $filter: {
+                      input: { $ifNull: [{ $arrayElemAt: ['$durDoc.documents', 0] }, []] },
+                      as: 'd',
+                      cond: {
+                        $and: [
+                          { $eq: ['$$d.docId', '$docId'] },
+                          { $eq: ['$$d.currentUpload.uploadId', '$uploadId'] },
+                        ],
+                      },
+                    },
+                  },
+                },
+              },
+              in: '$$d.currentUpload',
+            },
+          },
+        },
+      },
       {
         $addFields: {
           ulbName: '$ulbDoc.name',
           ulbCode: '$ulbDoc.code',
           stateName: '$stateDoc.name',
           year: '$yearDoc.year',
-          fileName: '$uploadHistory.file.originalName',
-          filePath: '$uploadHistory.file.path',
-          sizeKb: '$uploadHistory.file.sizeKb',
-          validationStatus: '$uploadHistory.ocrInfo.validationStatus',
-          validationDetails: '$uploadHistory.ocrInfo.validationDetails',
-          failedChecks: { $ifNull: ['$uploadHistory.ocrInfo.failedChecks', []] },
+          fileName: { $ifNull: ['$uploadHistory.file.originalName', '$liveUpload.file.originalName'] },
+          filePath: {
+            $ifNull: [
+              '$uploadHistory.file.path',
+              '$filePath', // the request's own snapshot, taken at request time
+              '$liveUpload.file.path',
+              {
+                $concat: [
+                  'xvi-fc/dur/',
+                  { $toString: '$ulb' },
+                  '/',
+                  { $toString: '$designYear' },
+                  '/',
+                  '$docId',
+                  '/',
+                  '$uploadId',
+                  '.pdf',
+                ],
+              },
+            ],
+          },
+          sizeKb: { $ifNull: ['$uploadHistory.file.sizeKb', '$liveUpload.file.sizeKb'] },
+          validationStatus: {
+            $ifNull: ['$uploadHistory.ocrInfo.validationStatus', '$liveUpload.ocrInfo.validationStatus'],
+          },
+          validationDetails: {
+            $ifNull: ['$uploadHistory.ocrInfo.validationDetails', '$liveUpload.ocrInfo.validationDetails'],
+          },
+          failedChecks: {
+            $ifNull: ['$uploadHistory.ocrInfo.failedChecks', '$liveUpload.ocrInfo.failedChecks', []],
+          },
           // Breach is derived here, never stored — see MANUAL_REVIEW_SLA_HOURS' doc comment.
           isBreached: { $lt: ['$dueAt', { $ifNull: ['$decidedAt', '$$NOW'] }] },
         },
