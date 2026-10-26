@@ -423,31 +423,33 @@ export class DurManualReviewService {
       .exec();
 
     let file: { path: string; originalName?: string | null; mimeType?: string | null } | undefined = uploadRecord?.file;
+    // Not in history (superseded pre-history upload): the manual-review request that references this
+    // exact form/doc/upload is checked BEFORE the live slot — after a decided request a re-upload can
+    // replace currentUpload with a different path under the same uploadId. Scoped so an admin can't
+    // probe arbitrary keys.
+    const durObjectId = new Types.ObjectId(id);
+    const request = file
+      ? null
+      : await this.manualReviewRequestModel
+          .findOne({ durId: durObjectId, docId, uploadId: resolvedUploadId })
+          .select('filePath')
+          .lean()
+          .exec();
+    if (!file && request?.filePath) {
+      file = { path: request.filePath, mimeType: 'application/pdf' };
+    }
     if (!file) {
       const slot = await loadDocSlot();
       if (slot?.currentUpload?.uploadId === resolvedUploadId) file = slot.currentUpload.file;
     }
-    if (!file) {
-      // Superseded pre-history upload: resolve via the manual-review request that references it —
-      // its own `filePath` snapshot first, else the S3 key layout (confirmUpload only enforces the
-      // prefix, so this is a last resort). Scoped to a request on this exact form/doc/upload so an
-      // admin can't probe arbitrary keys.
-      const durObjectId = new Types.ObjectId(id);
-      const request = await this.manualReviewRequestModel
-        .findOne({ durId: durObjectId, docId, uploadId: resolvedUploadId })
-        .select('filePath')
-        .lean()
-        .exec();
-      if (request?.filePath) {
-        file = { path: request.filePath, mimeType: 'application/pdf' };
-      } else if (request) {
-        const dur = await this.durModel.findById(durObjectId).select('ulb design_year').lean().exec();
-        if (dur) {
-          file = {
-            path: `xvi-fc/dur/${dur.ulb}/${dur.design_year}/${docId}/${resolvedUploadId}.pdf`,
-            mimeType: 'application/pdf',
-          };
-        }
+    if (!file && request) {
+      // Last resort: the S3 key layout (confirmUpload only enforces the prefix).
+      const dur = await this.durModel.findById(durObjectId).select('ulb design_year').lean().exec();
+      if (dur) {
+        file = {
+          path: `xvi-fc/dur/${dur.ulb}/${dur.design_year}/${docId}/${resolvedUploadId}.pdf`,
+          mimeType: 'application/pdf',
+        };
       }
     }
     if (!file) throw new NotFoundException('Upload not found');
