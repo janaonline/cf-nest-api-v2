@@ -39,6 +39,7 @@ import { isWithinXvifcCycle, hasDesignYearStarted } from './common/constants/xvi
 import { ExemptionResolverService } from './common/services/exemption-resolver.service';
 import { FormJsonConfigService } from '../../master/form-json-config/form-json-config.service';
 import type { SubmissionScope } from '../../schemas/form-json-config.schema';
+import { UlbStateConditionsService } from './ulb-state-conditions.service';
 import { BANK_ACCOUNT_FORM_ID } from './ulb/bank-account/constants/bank-account-form.constants';
 
 @Injectable()
@@ -68,6 +69,7 @@ export class XviFcService {
     private readonly sideMenuService: SideMenuService,
     private readonly exemptionResolverService: ExemptionResolverService,
     private readonly formJsonConfigService: FormJsonConfigService,
+    private readonly ulbStateConditionsService: UlbStateConditionsService,
   ) {}
 
   async getStateWiseData(stateId: string, requester: AuthUser): Promise<StateWiseResponseDto> {
@@ -225,11 +227,15 @@ export class XviFcService {
     return { yearLabel: year.year };
   }
 
-  async getFormStatus(ulbId: string, designYearId: string) {
+  async getFormStatus(ulbId: string, designYearId: string, user: AuthUser) {
+    // A ULB user may only read its own ULB — this response now carries State-filed figures for that ULB.
+    if (user.scope === Scope.ULB && toObjectIdString(user.ulb) !== ulbId) {
+      throw new ForbiddenException('Access denied');
+    }
     const ulb = new Types.ObjectId(ulbId);
     const designYear = new Types.ObjectId(designYearId);
 
-    const [annualAccounts, disclosure, bankAccountByYear, slbForm, bankFormConfig, durForm] = await Promise.all([
+    const [annualAccounts, disclosure, bankAccountByYear, slbForm, bankFormConfig, durForm, ulbDoc] = await Promise.all([
       this.annualAccountModel
         .find({ ulb, design_year: designYear })
         .select('sectionType form_status form_status_id')
@@ -244,7 +250,12 @@ export class XviFcService {
         .exec(),
       this.formJsonConfigService.findByFormId(BANK_ACCOUNT_FORM_ID),
       this.durModel.findOne({ ulb, design_year: designYear }).select('currentFormStatus').lean().exec(),
+      this.ulbModel.findById(ulb).select('state').lean().exec(),
     ]);
+
+    const stateConditions = ulbDoc?.state
+      ? await this.ulbStateConditionsService.resolve(new Types.ObjectId(String(ulbDoc.state)), ulb, designYear)
+      : null;
 
     // ONCE_EVER (Bank Account's actual scope): the record can live in an earlier design year than
     // the one being requested here. Mirrors BankAccountService.getBankAccount's own ONCE_EVER
@@ -300,6 +311,8 @@ export class XviFcService {
         form_status: getFormStatusKey(durStatus),
         form_status_id: durStatus,
       },
+      // What the State filed for this ULB; each entry is `visible: false` until its form is under MoHUA review.
+      stateConditions,
     };
   }
 
