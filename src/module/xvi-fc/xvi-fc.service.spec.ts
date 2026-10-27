@@ -626,7 +626,8 @@ describe('XviFcService', () => {
           form_status: 'UNDER_REVIEW_BY_STATE',
           form_status_id: FORM_STATUS.UNDER_REVIEW_BY_STATE,
         });
-        expect(mockUlbModel.findById).not.toHaveBeenCalled();
+        // Only the State lookup for stateConditions — no second ULB read for the exemption check.
+        expect(mockUlbModel.findById).toHaveBeenCalledTimes(1);
         expect(mockExemptionResolverService.resolveBulk).not.toHaveBeenCalled();
       });
 
