@@ -48,6 +48,17 @@ export const MOHUA_OVERVIEW_SLB_SUBMITTED_STATUSES: ReadonlySet<number> = new Se
   FORM_STATUS.EXEMPTED_ACKNOWLEDGED,
 ]);
 
+/**
+ * In the state's ULB table, the State-filed columns (allocation, unspent balance, elected body) show a
+ * ULB's value from the moment the State form is with PMU, through MoHUA's review, to acknowledgement;
+ * at any other status (not started, in progress, returned) the cell reads "--".
+ */
+export const MOHUA_STATE_ULBS_VISIBLE_STATE_FORM_STATUSES: ReadonlySet<number> = new Set<FormStatusType>([
+  FORM_STATUS.UNDER_REVIEW_BY_PMU,
+  FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+  FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+]);
+
 /** The five state conditions the Overview tracks are the 1st instalment's. */
 export const MOHUA_OVERVIEW_INSTALMENT = 1;
 
