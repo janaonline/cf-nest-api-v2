@@ -70,7 +70,10 @@ export class AfsDigitizationV3Processor extends WorkerHost implements OnApplicat
         this.logger.log(`AFS digitization v3 worker paused: outside run window ${window.label}`);
       }
     } catch (error) {
-      this.logger.error('Could not apply the AFS digitization v3 run window', error instanceof Error ? error.stack : String(error));
+      this.logger.error(
+        'Could not apply the AFS digitization v3 run window',
+        error instanceof Error ? error.stack : String(error),
+      );
     }
   }
 
@@ -93,7 +96,12 @@ export class AfsDigitizationV3Processor extends WorkerHost implements OnApplicat
 
   /** Minutes since midnight in the window's timezone; a window like 22:00-06:00 wraps past midnight. */
   private isOpen({ start, end, timeZone }: RunWindow): boolean {
-    const parts = new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date());
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone,
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(new Date());
     const hour = Number(parts.find((p) => p.type === 'hour')?.value);
     const minute = Number(parts.find((p) => p.type === 'minute')?.value);
     const now = hour * 60 + minute;

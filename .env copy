@@ -2,42 +2,106 @@ NODE_ENV=development
 #NODE_ENV=production
 
 PORT=3000
-
+# API base URL (with /api/v2/) and UI origin used when building links
 BASE_URL=https://dev.cityfinance.in/api/v2/
+CLIENT_URL=http://localhost:4200
+# Hostnames allowed by CORS (comma-separated)
+WHITELISTED_DOMAINS=
+# Base URL of the FastAPI v3 service (including /api/v3); falls back to BASE_URL
+API_BASE_URL_V3=http://localhost:8001/api/v3
+
+# Swagger/admin basic auth
+ADMIN_USER=
+ADMIN_PASSWORD=
 
 # MongoDB connection
-
 MONGO_URI=mongodb://localhost:27017/perfect_dev-25-06-03
+MONGO_DB_NAME=
+# Secondary Mongo connection
+MONGO_URI_2=
+# Digitization database name
+DIGITIZATION_DB_NAME=
 
 # AWS S3
-
 AWS_REGION="ap-south-1"
-
 AWS_ACCESS_KEY_ID=""
 AWS_SECRET_ACCESS_KEY=""
 AWS_BUCKET_NAME="jana-cityfinance-live"
+AWS_BUCKET=
+AWS_DIGITIZATION_BUCKET_NAME=
+# Public base URL for stored files
+AWS_STORAGE_URL=
 
 # Mail (using AWS SES)
-
 SES_AWS_ACCESS_KEY_ID=""
 SES_AWS_SECRET_ACCESS_KEY=""
 
 # If using SES API instead:
-
 MAIL_FROM="CityFinance <data@cityfinance.in>"
 
 # SMTP CREDENTIALS
-
 MAIL_HOST=sandbox.smtp.mailtrap.io
 MAIL_PORT=2525
 MAIL_USER=
 MAIL_PASS=
 
+# Email recipients / reminders
+TEST_RECIPIENT_EMAIL=
+USER_FEEDBACKS_TO_EMAILS=
+CRON_EMAIL_BCC=
+MANUAL_REVIEW_NOTIFY_EMAIL=
+XVIFC_REMINDER_CRONS_ENABLED=false
+
 # Redis
-
 REDIS_URL=redis://localhost:6379
+# Alternative to REDIS_URL
+# REDIS_HOST=localhost
+# REDIS_PORT=6379
+# REDIS_PASSWORD=
 
+# Auth / JWT
 JWT_SECRET=
+JWT_EXPIRES_IN=
+JWT_REFRESH_SECRET=
+JWT_REFRESH_EXPIRES_IN=
+REFRESH_COOKIE_NAME=
+REFRESH_COOKIE_MAX_AGE_MS=
+# Data-collection integration JWT (falls back to JWT_SECRET)
+DATA_COLLECTION_JWT_SECRET=
+DATA_COLLECTION_JWT_EXPIRES_IN_SECONDS=
+API_CLIENT_SECRET_SALT_ROUNDS=10
+# Login audit
+HOSTNAME=
+USER_IDENTITY=
 
+# OTP (MSG91)
+MSG91_AUTH_KEY=
+MSG91_SENDER_ID=
+TEMPLATE_ID=
+OTP_FORCE_REAL_DELIVERY=false
+
+# reCAPTCHA
+RECAPTCHA_SECRET_KEY=
+RECAPTCHA_MIN_SCORE=0.5
+RECAPTCHA_SKIP_DEV=false
+
+# Bank account encryption (XVI-FC)
+BANK_ACCOUNT_ENCRYPTION_KEY=
+BANK_ACCOUNT_HASH_SECRET=
+
+# DUR validation
+DUR_VALIDATION_MODEL=
+
+# AFS digitization (legacy queues)
+DIGITIZATION_API_URL=
+
+# AFS digitization v3
+AFS_DIGITIZATION_V3_URL=
 AFS_DIGITIZATION_V3_DRY_RUN=true
-AFS_DIGITIZATION_V3_DRY_RUN_DELAY_MS=200 # optional: fake per-job work time
+# optional: fake per-job work time
+AFS_DIGITIZATION_V3_DRY_RUN_DELAY_MS=200
+AFS_DIGITIZATION_V3_CONCURRENCY=
+AFS_DIGITIZATION_V3_RUN_WINDOW=
+AFS_DIGITIZATION_V3_TIMEOUT_MS=
+AFS_DIGITIZATION_V3_POLL_INTERVAL_MS=
+AFS_DIGITIZATION_V3_MAX_WAIT_MS=
