@@ -63,7 +63,7 @@ src/
 │   │                    # `GET xvi-fc/form-status/:ulbId/:yearId` also returns `stateConditions` — the State-filed SFC answer, Elected
 │   │                    # Body status, FC Unspent balance and ULB-wise allocation for that one ULB (`ulb-state-conditions.service.ts`). Each
 │   │                    # entry is `visible: false` with no value until its State form is in `ULB_VISIBLE_STATE_FORM_STATUSES` (currently
-│   │                    # only 5, Under Review by MoHUA); a ULB user may only read its own ULB
+│   │                    # 13, 5 and 7 — PMU review, MoHUA review, acknowledged); a ULB user may only read its own ULB
 │   ├── state/           # sfc-status, elected-urban-local-bodies, devolution-formula, fc-unspent-declaration, gtc, dashboard,
 │   │                    # notifications (read-only feed for the State navbar bell + sidebar dots: the 5 State
 │   │                    # forms' raw status via MohuaStateConditionsService + a count of ULB forms awaiting

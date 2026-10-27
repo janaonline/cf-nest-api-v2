@@ -53,8 +53,12 @@ describe('UlbStateConditionsService', () => {
     );
   });
 
-  it('shows data from status 5 (Under Review by MoHUA) only', () => {
-    expect(ULB_VISIBLE_STATE_FORM_STATUSES).toEqual([FORM_STATUS.UNDER_REVIEW_BY_MOHUA]);
+  it('shows data at 13 (Under Review by PMU), 5 (Under Review by MoHUA) and 7 (Acknowledged) only', () => {
+    expect(ULB_VISIBLE_STATE_FORM_STATUSES).toEqual([
+      FORM_STATUS.UNDER_REVIEW_BY_PMU,
+      FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+      FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+    ]);
   });
 
   it('is not visible, and reads no rows, when no State form exists yet', async () => {
@@ -68,7 +72,7 @@ describe('UlbStateConditionsService', () => {
     expect(unspentRow.findOne).not.toHaveBeenCalled();
   });
 
-  it.each([FORM_STATUS.IN_PROGRESS, FORM_STATUS.UNDER_REVIEW_BY_PMU, FORM_STATUS.RETURNED_BY_PMU])(
+  it.each([FORM_STATUS.IN_PROGRESS, FORM_STATUS.RETURNED_BY_PMU, FORM_STATUS.AWAITING_CLAIM_LETTER])(
     'withholds every value while the form is at status %i',
     async (status) => {
       sfcModel.findOne.mockReturnValue(q({ currentFormStatus: status, data: { isActiveSfc: 'yes' } }));
@@ -82,6 +86,20 @@ describe('UlbStateConditionsService', () => {
       expect(ebRow.findOne).not.toHaveBeenCalled();
       expect(dfRow.findOne).not.toHaveBeenCalled();
       expect(unspentRow.findOne).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([FORM_STATUS.UNDER_REVIEW_BY_PMU, FORM_STATUS.UNDER_REVIEW_BY_MOHUA, FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA])(
+    'is visible at status %i',
+    async (status) => {
+      sfcModel.findOne.mockReturnValue(q({ currentFormStatus: status, data: { isActiveSfc: 'yes' } }));
+      ebForm.findOne.mockReturnValue(form(status));
+      dfForm.findOne.mockReturnValue(form(status));
+      unspentForm.findOne.mockReturnValue(form(status));
+
+      const result = await service.resolve(stateId, ulbId, yearId);
+
+      expect(Object.values(result).every((c) => c.visible)).toBe(true);
     },
   );
 
