@@ -52,21 +52,34 @@ export class MohuaOverviewUlbProgressService {
     return (await this.loadSubmittedUlbIdsByForm(yearId, ulbIds)).all;
   }
 
-  /** `ulbIds` limits the read to those ULBs; omit it to read every ULB for the year. */
-  async loadSubmittedUlbIdsByForm(yearId: string, ulbIds?: string[]): Promise<SubmittedUlbIdsByForm> {
+  /**
+   * `ulbIds` limits the read to those ULBs; omit it to read every ULB for the year. `submittedStatuses`
+   * replaces the default "submitted" rule for every form (SLB included) for a caller that counts differently.
+   */
+  async loadSubmittedUlbIdsByForm(
+    yearId: string,
+    ulbIds?: string[],
+    submittedStatuses?: ReadonlySet<number>,
+  ): Promise<SubmittedUlbIdsByForm> {
     const { annualAccounts, durs, slbs, bankAccounts } = await this.loadRecords(yearId, ulbIds);
 
     const audited = this.submittedUlbs(
       annualAccounts.filter((a) => a.sectionType === 'audited'),
       (a) => a.form_status_id,
+      submittedStatuses,
     );
     const unaudited = this.submittedUlbs(
       annualAccounts.filter((a) => a.sectionType === 'unaudited'),
       (a) => a.form_status_id,
+      submittedStatuses,
     );
-    const dur = this.submittedUlbs(durs, (d) => d.currentFormStatus);
-    const slb = this.submittedUlbs(slbs, (s) => s.currentFormStatus, MOHUA_OVERVIEW_SLB_SUBMITTED_STATUSES);
-    const pfms = this.submittedUlbs(bankAccounts, (b) => b.currentFormStatus);
+    const dur = this.submittedUlbs(durs, (d) => d.currentFormStatus, submittedStatuses);
+    const slb = this.submittedUlbs(
+      slbs,
+      (s) => s.currentFormStatus,
+      submittedStatuses ?? MOHUA_OVERVIEW_SLB_SUBMITTED_STATUSES,
+    );
+    const pfms = this.submittedUlbs(bankAccounts, (b) => b.currentFormStatus, submittedStatuses);
 
     const all = new Set([...audited].filter((id) => unaudited.has(id) && dur.has(id) && slb.has(id) && pfms.has(id)));
     return { audited, unaudited, dur, slb, pfms, all };
