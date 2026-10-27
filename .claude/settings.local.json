@@ -13,7 +13,15 @@
       "Edit(/.claude/skills/xvifc-backend-scope-a-feature/**)",
       "Edit(/.claude/skills/xvifc-backend-verify-and-update-docs/**)",
       "Bash(npm test *)",
-      "Bash(awk '{print $1}')"
+      "Bash(awk '{print $1}')",
+      "mcp__jira__getJiraIssue",
+      "mcp__jira__getTransitionsForJiraIssue",
+      "mcp__jira__lookupJiraAccountId",
+      "mcp__jira__editJiraIssue",
+      "mcp__jira__addWorklogToJiraIssue",
+      "mcp__jira__addCommentToJiraIssue",
+      "mcp__jira__transitionJiraIssue",
+      "Bash(cd \"/c/Users/Kushal MP/Desktop/cityfinance/cityfinance-ng-ui-v2/src/app/features/xvi-fc-module/ulb-module/overview\"; sed -i \"s/expect\\(component.ulbOverviewData\\(\\)?.totalAllocation\\).toContain\\('Allocation will be displayed'\\);/expect\\(String\\(component.ulbOverviewData\\(\\)?.totalAllocation\\)\\).toContain\\('Allocation will be displayed'\\);/\" overview.component.spec.ts; grep -c \"String\\(component.ulbOverviewData\" overview.component.spec.ts)"
     ]
   }
 }

@@ -21,11 +21,15 @@ import { MOHUA_OVERVIEW_INSTALMENT } from './mohua/overview/mohua-overview.const
 
 /**
  * State-form statuses at which the State's data is shown to its ULBs. Deliberately one list: widening
- * it (e.g. adding SUBMISSION_ACKNOWLEDGED_BY_MOHUA) is the only change needed. Until a form reaches
- * one of these the ULB keeps seeing "Awaiting State Upload", so a draft or a PMU-returned value never
- * reaches the browser.
+ * it is the only change needed. Until a form reaches
+ * one of these (with PMU, under MoHUA review, or acknowledged) the ULB keeps seeing "Awaiting State
+ * Upload", so a draft or a PMU-returned value never reaches the browser.
  */
-export const ULB_VISIBLE_STATE_FORM_STATUSES: readonly number[] = [FORM_STATUS.UNDER_REVIEW_BY_MOHUA];
+export const ULB_VISIBLE_STATE_FORM_STATUSES: readonly number[] = [
+  FORM_STATUS.UNDER_REVIEW_BY_PMU,
+  FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+  FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+];
 
 /** One State-supplied condition as the ULB sees it. `value`/`amount` are null unless `visible`. */
 export interface UlbStateCondition {
