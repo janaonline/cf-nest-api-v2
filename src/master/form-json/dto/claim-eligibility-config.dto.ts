@@ -8,7 +8,11 @@ import {
   IsObject,
   IsOptional,
   IsString,
+  Validate,
   ValidateNested,
+  ValidatorConstraint,
+  ValidatorConstraintInterface,
+  ValidationArguments,
 } from 'class-validator';
 import type {
   ClaimEligibilityEvaluationLevel,
@@ -69,10 +73,30 @@ export class ClaimEligibilitySourceFieldMappingDto {
   datasetVersion?: string;
 }
 
+/** Plain equality only: no `$` keys and only string, number or boolean values, so `match` can never
+ *  carry a Mongo operator into the evaluator's query. */
+@ValidatorConstraint({ name: 'isEqualityMatch', async: false })
+class IsEqualityMatchConstraint implements ValidatorConstraintInterface {
+  validate(value: unknown): boolean {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+    return Object.entries(value).every(
+      ([key, v]) => key.length > 0 && !key.startsWith('$') && ['string', 'number', 'boolean'].includes(typeof v),
+    );
+  }
+
+  defaultMessage(args: ValidationArguments): string {
+    return `${args.property} must map field names (no "$" prefix) to string, number or boolean values`;
+  }
+}
+
 export class ClaimEligibilitySourceDto {
   @IsOptional()
   @IsString()
   collection?: string;
+
+  @IsOptional()
+  @Validate(IsEqualityMatchConstraint)
+  match?: Record<string, string | number | boolean>;
 
   @IsOptional()
   @IsString()

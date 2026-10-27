@@ -48,6 +48,9 @@ export interface ClaimEligibilitySourceFieldMapping {
 
 export interface ClaimEligibilitySource {
   collection?: string;
+  /** Fixed equality conditions added to every query on `collection`, for forms that share it
+   *  (e.g. Annual Accounts: `{ sectionType: 'audited' }` for formId 30, `'unaudited'` for 31). */
+  match?: Record<string, string | number | boolean>;
   parentCollection?: string;
   rowCollection?: string;
   fields?: ClaimEligibilitySourceFieldMapping;

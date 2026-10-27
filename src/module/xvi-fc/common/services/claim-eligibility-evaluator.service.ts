@@ -47,7 +47,7 @@ interface RowMatchValues {
   rowDocumentId: string;
 }
 
-/** Reads a possibly-dotted field path off a plain object (e.g. `'auditedData.form_status_id'`) —
+/** Reads a possibly-dotted field path off a plain object (e.g. `'stateDecision.status'`) —
  *  a flat path behaves identically to today's plain bracket-notation lookup. */
 function resolveNestedField(doc: Record<string, unknown>, path: string): unknown {
   return path
@@ -114,7 +114,7 @@ export class ClaimEligibilityEvaluatorService {
       );
     }
 
-    const query: Record<string, unknown> = {};
+    const query: Record<string, unknown> = { ...source.match };
     if (this.filtersByDesignYear(config)) query[source.fields.designYear] = new Types.ObjectId(ctx.designYearId);
     if (source.fields.state) query[source.fields.state] = ctx.stateId;
     if (source.fields.ulb && ctx.ulbId) query[source.fields.ulb] = ctx.ulbId;
@@ -181,8 +181,7 @@ export class ClaimEligibilityEvaluatorService {
 
     // Cast, not narrowed: this value comes from an external collection at runtime and can't be
     // statically guaranteed to be one of FormStatusType's literal members. Resolved via
-    // `resolveNestedField` (not plain bracket-notation) so a dotted path like
-    // `auditedData.form_status_id` works the same as a flat one.
+    // `resolveNestedField` (not plain bracket-notation) so a dotted path works the same as a flat one.
     const resolvedFormStatus = resolveNestedField(doc, source.fields.currentFormStatus) as FormStatusType;
     const passed = acceptedFormStatuses.includes(resolvedFormStatus);
 
@@ -247,8 +246,9 @@ export class ClaimEligibilityEvaluatorService {
     );
   }
 
-  /** SLB, Annual Accounts (Provisional/Audited): one flat document per ULB, bucketed against
-   *  `acceptedFormStatuses` — same matching semantics as `evaluateFormStatus`, just bulk and
+  /** SLB, Annual Accounts (Provisional/Audited): one flat document per ULB (per section for Annual
+   *  Accounts, picked by `source.match`), bucketed against `acceptedFormStatuses` — same
+   *  matching semantics as `evaluateFormStatus`, just bulk and
    *  ULB-scoped instead of one state-scoped document. A ULB with no document at all has nothing
    *  to accept, so it can't be eligible — no configurable default, unlike the row-collection case
    *  below, since there's no equivalent "absence isn't a problem" scenario here. */
@@ -265,6 +265,7 @@ export class ClaimEligibilityEvaluatorService {
     }
 
     const query: Record<string, unknown> = {
+      ...source.match,
       // Bounds the read to exactly the ULBs this evaluation cares about — the only narrowing
       // available at all for sources with no `source.fields.state` mapping (e.g. SLB, whose
       // schema has no state field), and a further narrowing on top of `state` for the rest.
