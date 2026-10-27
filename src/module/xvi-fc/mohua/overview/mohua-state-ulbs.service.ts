@@ -24,12 +24,17 @@ import {
   MOHUA_STATE_ULBS_DEFAULT_LIMIT,
   MOHUA_STATE_ULBS_EXPORT_NOT_SUBMITTED,
   MOHUA_STATE_ULBS_EXPORT_SUBMITTED,
+  MOHUA_STATE_ULBS_VISIBLE_STATE_FORM_STATUSES,
 } from './mohua-overview.constants';
 import { toCrore } from './mohua-overview.util';
 import type { GetMohuaStateUlbsQueryDto } from './mohua-state-ulbs-query.dto';
 import type { MohuaStateUlbRow, MohuaStateUlbs } from './mohua-state-ulbs.types';
 
-type LeanForm = { _id: Types.ObjectId; activeDatasetVersion?: number };
+type LeanForm = { _id: Types.ObjectId; currentFormStatus?: number; activeDatasetVersion?: number };
+
+/** True when the state's form is far enough along for its per-ULB values to be shown in this table. */
+const isVisible = (form: LeanForm | null): form is LeanForm =>
+  !!form && MOHUA_STATE_ULBS_VISIBLE_STATE_FORM_STATUSES.has(form.currentFormStatus ?? -1);
 type LeanAllocationRow = { ulbId?: Types.ObjectId | null; totalGrantAllocation?: number };
 type LeanElectedBodyRow = { ulbId?: Types.ObjectId; electedBodyStatus?: string };
 type LeanUnspentRow = { ulbId?: Types.ObjectId; unspentAmount?: number | null };
@@ -178,10 +183,10 @@ export class MohuaStateUlbsService {
         formType: DF_FORM_TYPE,
         isActive: true,
       })
-      .select('_id activeDatasetVersion')
+      .select('_id currentFormStatus activeDatasetVersion')
       .lean<LeanForm>()
       .exec();
-    if (!form) return new Map();
+    if (!isVisible(form)) return new Map();
 
     const rows = await this.devolutionRowModel
       .find({ form: form._id, datasetVersion: form.activeDatasetVersion ?? 0, isActive: true, ulbId: { $ne: null } })
@@ -211,10 +216,10 @@ export class MohuaStateUlbsService {
         formType: FC_UNSPENT_STATE_FORM_TYPE,
         isDeleted: false,
       })
-      .select('_id')
-      .lean<{ _id: Types.ObjectId }>()
+      .select('_id currentFormStatus')
+      .lean<LeanForm>()
       .exec();
-    if (!form) return new Map();
+    if (!isVisible(form)) return new Map();
 
     const rows = await this.unspentRowModel
       .find({ form: form._id, isActive: true, ulbId: { $ne: null } })
@@ -239,10 +244,10 @@ export class MohuaStateUlbsService {
         isActive: true,
         isDeleted: { $ne: true },
       })
-      .select('_id activeDatasetVersion')
+      .select('_id currentFormStatus activeDatasetVersion')
       .lean<LeanForm>()
       .exec();
-    if (!form) return new Map();
+    if (!isVisible(form)) return new Map();
 
     const rows = await this.electedBodyRowModel
       .find({ form: form._id, datasetVersion: form.activeDatasetVersion ?? 0, isActive: true, ulbId: { $ne: null } })
