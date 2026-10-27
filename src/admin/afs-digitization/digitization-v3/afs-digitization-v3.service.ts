@@ -1,5 +1,6 @@
 import { InjectQueue } from '@nestjs/bullmq';
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Queue } from 'bullmq';
 import { Model, Types } from 'mongoose';
@@ -92,6 +93,7 @@ export class AfsDigitizationV3Service {
     @InjectModel(State.name)
     private readonly stateModel: Model<StateDocument>,
     private readonly fileTokenService: FileTokenService,
+    private readonly config: ConfigService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -146,6 +148,9 @@ export class AfsDigitizationV3Service {
       this.logger.warn(`Enqueue-by-filter hit the ${MAX_ENQUEUE_BATCH} row cap; narrow the filter and run again`);
     }
 
+    // Dry run (load testing): keep failed jobs in Redis so they show in the queue; they are removed with the variable
+    const dryRun = Number(this.config.get('AFS_DIGITIZATION_V3_DRY_RUN_DELAY_MS')) > 0;
+
     for (const row of matching) {
       if (!row.pdfUrl) {
         summary.skippedNoPdf++;
@@ -180,15 +185,19 @@ export class AfsDigitizationV3Service {
       }
 
       try {
+        const jobId = `digitize-v3-${data.ulb}-${data.year}-${data.auditType}-${data.docType}`;
+        // A finished job kept in Redis would make `add` a silent no-op for this id and leave the file stuck as queued
+        const finished = await this.digitizationV3Queue.getJob(jobId);
+        if (finished && ['completed', 'failed'].includes(await finished.getState())) await finished.remove();
+
         await this.digitizationV3Queue.add(`digitize-v3-${data.ulb}-${data.year}-${data.docType}`, data, {
-          // Unique per request, so a finished job that is still kept never blocks queuing the same file again.
-          // Queuing a file twice at once is prevented by the atomic claim above, not by this id.
-          jobId: `digitize-v3-${data.ulb}-${data.year}-${data.auditType}-${data.docType}-${Date.now()}`,
+          // Same file can never be in the queue twice; a finished job with this id is removed above so it can be retried.
+          jobId,
           attempts: 2,
           backoff: { type: 'exponential', delay: 30_000 },
-          // Finished jobs stay visible in Bull Board for a while, then are trimmed so Redis does not grow.
-          removeOnComplete: { age: 24 * 60 * 60, count: 10000 },
-          removeOnFail: { age: 7 * 24 * 60 * 60, count: 10000 },
+          // Kept for a while so they can be inspected; age is in seconds
+          removeOnComplete: { age: 2 * 24 * 60 * 60 },
+          removeOnFail: { age: 20 * 24 * 60 * 60 },
         });
         summary.queued++;
       } catch (error) {
