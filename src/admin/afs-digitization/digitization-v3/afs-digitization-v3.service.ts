@@ -1,5 +1,6 @@
 import { InjectQueue } from '@nestjs/bullmq';
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Queue } from 'bullmq';
 import { Model, Types } from 'mongoose';
@@ -13,7 +14,12 @@ import { State, StateDocument } from 'src/schemas/state.schema';
 import { DOC_TYPES } from '../constants/docTypes';
 import { AfsDigitizationV3QueryDto } from '../dto/afs-digitization-v3-query.dto';
 import { getUlbsLookupPipeline } from '../queries/afs-excel-files.query';
-import { AfsDigitizationV3JobData, DigitizationV3Result, V3_DOC_TYPES, MAX_ENQUEUE_BATCH } from './afs-digitization-v3.constants';
+import {
+  AfsDigitizationV3JobData,
+  DigitizationV3Result,
+  V3_DOC_TYPES,
+  MAX_ENQUEUE_BATCH,
+} from './afs-digitization-v3.constants';
 
 /** One ULB for the selected year / audit type / doc type, with its uploaded PDF (if any). */
 interface UlbRow {
@@ -87,6 +93,7 @@ export class AfsDigitizationV3Service {
     @InjectModel(State.name)
     private readonly stateModel: Model<StateDocument>,
     private readonly fileTokenService: FileTokenService,
+    private readonly config: ConfigService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -141,6 +148,9 @@ export class AfsDigitizationV3Service {
       this.logger.warn(`Enqueue-by-filter hit the ${MAX_ENQUEUE_BATCH} row cap; narrow the filter and run again`);
     }
 
+    // Dry run (load testing): keep failed jobs in Redis so they show in the queue; they are removed with the variable
+    const dryRun = Number(this.config.get('AFS_DIGITIZATION_V3_DRY_RUN_DELAY_MS')) > 0;
+
     for (const row of matching) {
       if (!row.pdfUrl) {
         summary.skippedNoPdf++;
@@ -175,13 +185,19 @@ export class AfsDigitizationV3Service {
       }
 
       try {
+        const jobId = `digitize-v3-${data.ulb}-${data.year}-${data.auditType}-${data.docType}`;
+        // A finished job kept in Redis would make `add` a silent no-op for this id and leave the file stuck as queued
+        const finished = await this.digitizationV3Queue.getJob(jobId);
+        if (finished && ['completed', 'failed'].includes(await finished.getState())) await finished.remove();
+
         await this.digitizationV3Queue.add(`digitize-v3-${data.ulb}-${data.year}-${data.docType}`, data, {
-          // Same file can never be in the queue twice; cleared on finish so it can be retried later.
-          jobId: `digitize-v3-${data.ulb}-${data.year}-${data.auditType}-${data.docType}`,
+          // Same file can never be in the queue twice; a finished job with this id is removed above so it can be retried.
+          jobId,
           attempts: 2,
           backoff: { type: 'exponential', delay: 30_000 },
-          removeOnComplete: true,
-          removeOnFail: true,
+          // Kept for a while so they can be inspected; age is in seconds
+          removeOnComplete: { age: 2 * 24 * 60 * 60 },
+          removeOnFail: { age: 20 * 24 * 60 * 60 },
         });
         summary.queued++;
       } catch (error) {
@@ -227,7 +243,10 @@ export class AfsDigitizationV3Service {
           $nor: [
             { 'ulbFile.digitizationStatus': DigitizationStatuses.QUEUED },
             // `detectedDocTypes` exists only on items v3 has digitized
-            { 'ulbFile.digitizationStatus': DigitizationStatuses.DIGITIZED, 'ulbFile.detectedDocTypes': { $exists: true } },
+            {
+              'ulbFile.digitizationStatus': DigitizationStatuses.DIGITIZED,
+              'ulbFile.detectedDocTypes': { $exists: true },
+            },
           ],
         },
         {
@@ -473,7 +492,10 @@ export class AfsDigitizationV3Service {
 
     let status = DigitizationV3Statuses.NOT_DIGITIZED;
     if (item.digitizationStatus === DigitizationStatuses.QUEUED) {
-      status = item.queue?.status === QueueStatus.PROCESSING ? DigitizationV3Statuses.PROCESSING : DigitizationV3Statuses.QUEUED;
+      status =
+        item.queue?.status === QueueStatus.PROCESSING
+          ? DigitizationV3Statuses.PROCESSING
+          : DigitizationV3Statuses.QUEUED;
     } else if (item.digitizationStatus === DigitizationStatuses.DIGITIZED && Array.isArray(item.detectedDocTypes)) {
       status = DigitizationV3Statuses.DIGITIZED;
     } else if (item.digitizationStatus === DigitizationStatuses.FAILED) {

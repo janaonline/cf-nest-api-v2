@@ -120,10 +120,7 @@ export class AfsDigitizationV3QueueService {
 
       // Load-testing switch: skip FastAPI and Textract / Gemini cost, but still mark the file failed with a clear message
       const dryRunDelayMs = this.dryRunDelayMs();
-      if (dryRunDelayMs > 0) {
-        await this.simulateDryRun(data, dryRunDelayMs, job.id);
-        return;
-      }
+      if (dryRunDelayMs > 0) await this.simulateDryRun(dryRunDelayMs);
 
       const afsDigitizationJobId = await this.submit(data);
       await this.digitizationV3Service.markSubmitted(data, afsDigitizationJobId);
@@ -210,18 +207,13 @@ export class AfsDigitizationV3QueueService {
   }
 
   /**
-   * Skips FastAPI (no Textract / Gemini cost) after a fake delay. The file is marked failed with a clear message
-   * instead of digitized, so no fake result is stored and it can be queued again once the variable is removed.
+   * Skips FastAPI (no Textract / Gemini cost) after a fake delay, then fails the job without retries. handleJob's
+   * catch marks the file failed with this message, so no fake result is stored and it can be queued again once
+   * the variable is removed.
    */
-  private async simulateDryRun(data: AfsDigitizationV3JobData, delayMs: number, jobId?: string): Promise<void> {
+  private async simulateDryRun(delayMs: number): Promise<never> {
     await sleep(delayMs);
-    await this.digitizationV3Service.markFailed(
-      data,
-      'Dry run: digitization is disabled (AFS_DIGITIZATION_V3_DRY_RUN_DELAY_MS)',
-    );
-    this.logger.warn(
-      `AFS digitization v3 job ${jobId} dry run for ulb ${data.ulb} ${data.docType}; FastAPI not called`,
-    );
+    throw new UnrecoverableError('Dry run: digitization is disabled (AFS_DIGITIZATION_V3_DRY_RUN_DELAY_MS)');
   }
 
   private baseUrl(): string {
