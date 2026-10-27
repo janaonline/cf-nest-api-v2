@@ -364,3 +364,25 @@ writes a real, non-null snapshot, since that *is* the point where row data can c
 No ADRs for this section — no concurrency/locking/idempotency machinery lives here beyond what's
 described above; see each `pmu/<feature>/CLAUDE.md`'s own "No ADRs" note for why the per-module
 write pattern itself doesn't need one either.
+
+## Undoing a PMU decision (`undoDecision`, all 5 `pmu/<feature>/` modules)
+
+PMU can reverse its own approve (`UNDER_REVIEW_BY_MOHUA`, 5) or return (`RETURNED_BY_PMU`, 14) back to
+`UNDER_REVIEW_BY_PMU` (13) via the single `POST xvi-fc/pmu/undo` (body `{ type, stateId, yearId, installment? }`; all of the logic lives in `pmu/undo/`: `PmuUndoService` for the three whole-form reviewers, `PmuUndoRowFormsService` for Elected Body / FC Unspent — the five `pmu/<feature>/` review services only report `permissions.canUndo`). Same permission as
+approve/reject (`APPROVE_STATE_SUBMISSIONS_PMU`); review metadata exposes the result as `permissions.canUndo`.
+
+- **When it's allowed** (`PmuUndoEligibilityService`): status is exactly 5 or 14; the caller can approve as PMU;
+  and **no document exists in `xvifc_claim_letter_ulb_locks` for that state + year** (any installment, ACTIVE or
+  ACKNOWLEDGED) — a lock means a claim letter was built on these statuses. Abandoning a draft releases its locks,
+  so "no lock" is "no claim letter in use". 14 stops being undoable on its own once the State edits (a draft save
+  sets status 2). FC Unspent additionally refuses once MoHUA has decided any row (acknowledged/returned).
+- **Writes**: status back to 13 and `pmuRemarks` cleared; row forms (Elected Body, FC Unspent) reopen *every* active
+  row at 5/14 to 13 with `rejectionRemark` cleared — PMU re-reviews all of them. The form write is conditional on the
+  expected status (`StateFormPmuReviewHelper.transitionForm`'s `expectedStatus`) so a concurrent decision gets a 409
+  instead of being overwritten; row forms run in one transaction and abort if any row moved.
+- **Logging** (`writeUndoHistory` / `PmuRowReviewHelper.undoRows`): two entries, `5|14 -> 10 (UNDO) -> 13`, action
+  `PMU_UNDO`, on the form history and — per row — the row history. Status 10 is a log-only marker, as on the ULB
+  forms; the row-history schemas therefore accept `ROW_HISTORY_STATUS_VALUES` (live row statuses + UNDO) while live
+  rows still use `ROW_REVIEW_STATUS_VALUES`. The second entry is stamped 1 ms later so `changedAt` ordering holds;
+  the remark being cleared rides on the first entry so the reason survives in history.
+- No email is sent on undo (the State's "returned" email already went out; the bell clears by itself).

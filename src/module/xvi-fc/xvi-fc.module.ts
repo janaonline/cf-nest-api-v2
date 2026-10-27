@@ -2,6 +2,7 @@ import { Module, forwardRef } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { XviFcController } from './xvi-fc.controller';
 import { XviFcService } from './xvi-fc.service';
+import { UlbStateConditionsService } from './ulb-state-conditions.service';
 import { AnnualAccountsModule } from './ulb/annual_accounts/annual_accounts.module';
 import { DurModule } from './ulb/dur/dur.module';
 import { SfcStatusModule } from './state/sfc-status/sfc-status.module';
@@ -29,6 +30,31 @@ import { DevolutionFormulaModule } from './state/devolution-formula/devolution-f
 import { XviFcBankAccount, XviFcBankAccountSchema } from '../../schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
 import { SlbForm, SlbFormSchema } from '../../schemas/xvi-fc/ulb/slb-form.schema';
 import { XviFcDur, XviFcDurSchema } from '../../schemas/xvi-fc/dur.schema';
+import { XviFcSfcStatus, XviFcSfcStatusSchema } from '../../schemas/xvi-fc/state/sfc-status.schema';
+import {
+  ElectedUrbanLocalBodiesForm,
+  ElectedUrbanLocalBodiesFormSchema,
+} from '../../schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
+import {
+  ElectedUrbanLocalBodiesRow,
+  ElectedUrbanLocalBodiesRowSchema,
+} from '../../schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
+import {
+  DevolutionFormulaForm,
+  DevolutionFormulaFormSchema,
+} from '../../schemas/xvi-fc/state/devolution-formula-form.schema';
+import {
+  DevolutionFormulaRow,
+  DevolutionFormulaRowSchema,
+} from '../../schemas/xvi-fc/state/devolution-formula-row.schema';
+import {
+  XviFcUnspentStateForm,
+  XviFcUnspentStateFormSchema,
+} from '../../schemas/xvi-fc/state/fc-unspent-state-form.schema';
+import {
+  XviFcUnspentStateFormRow,
+  XviFcUnspentStateFormRowSchema,
+} from '../../schemas/xvi-fc/state/fc-unspent-state-form-row.schema';
 import { FcUnspentDeclarationModule } from './state/fc-unspent-declaration/fc-unspent-declaration.module';
 import { FcUnspentMohuaReviewModule } from './mohua/fc-unspent-declaration/fc-unspent-mohua-review.module';
 import { FcUnspentPmuReviewModule } from './pmu/fc-unspent-declaration/fc-unspent-pmu-review.module';
@@ -36,7 +62,9 @@ import { ElectedUrbanLocalBodiesPmuReviewModule } from './pmu/elected-urban-loca
 import { SfcStatusPmuReviewModule } from './pmu/sfc-status/sfc-status-pmu-review.module';
 import { GtcPmuReviewModule } from './pmu/gtc/gtc-pmu-review.module';
 import { DevolutionFormulaPmuReviewModule } from './pmu/devolution-formula/devolution-formula-pmu-review.module';
+import { PmuUndoModule } from './pmu/undo/pmu-undo.module';
 import { StateDashboardModule } from './state/dashboard/state-dashboard.module';
+import { StateNotificationsModule } from './state/notifications/state-notifications.module';
 import { SlbModule } from './ulb/slb/slb.module';
 import { ClaimLetterModule } from './state/claim-letter/claim-letter.module';
 import { RequestExemptionModule } from './state/request-exemption/request-exemption.module';
@@ -60,6 +88,13 @@ import { StateFormHistoryModule } from './common/form-history/state-form-history
       { name: XviFcBankAccount.name, schema: XviFcBankAccountSchema },
       { name: SlbForm.name, schema: SlbFormSchema },
       { name: XviFcDur.name, schema: XviFcDurSchema },
+      { name: XviFcSfcStatus.name, schema: XviFcSfcStatusSchema },
+      { name: ElectedUrbanLocalBodiesForm.name, schema: ElectedUrbanLocalBodiesFormSchema },
+      { name: ElectedUrbanLocalBodiesRow.name, schema: ElectedUrbanLocalBodiesRowSchema },
+      { name: DevolutionFormulaForm.name, schema: DevolutionFormulaFormSchema },
+      { name: DevolutionFormulaRow.name, schema: DevolutionFormulaRowSchema },
+      { name: XviFcUnspentStateForm.name, schema: XviFcUnspentStateFormSchema },
+      { name: XviFcUnspentStateFormRow.name, schema: XviFcUnspentStateFormRowSchema },
     ]),
     AnnualAccountsModule,
     DurModule,
@@ -80,7 +115,9 @@ import { StateFormHistoryModule } from './common/form-history/state-form-history
     SfcStatusPmuReviewModule,
     GtcPmuReviewModule,
     DevolutionFormulaPmuReviewModule,
+    PmuUndoModule,
     StateDashboardModule,
+    StateNotificationsModule,
     SlbModule,
     ClaimLetterModule,
     RequestExemptionModule,
@@ -92,7 +129,7 @@ import { StateFormHistoryModule } from './common/form-history/state-form-history
     StateFormHistoryModule,
   ],
   controllers: [XviFcController],
-  providers: [XviFcService, XviFcCacheService, XviFcCacheInterceptor],
+  providers: [XviFcService, UlbStateConditionsService, XviFcCacheService, XviFcCacheInterceptor],
   exports: [XviFcService, XviFcCacheService, XviFcCacheInterceptor],
 })
 export class XviFcModule {}

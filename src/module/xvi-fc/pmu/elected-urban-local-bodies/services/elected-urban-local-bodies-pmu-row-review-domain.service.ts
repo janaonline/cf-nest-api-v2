@@ -3,7 +3,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { ClientSession, Model, Types } from 'mongoose';
 import { FORM_STATUS, FormHistoryAction } from 'src/common/constants/form-status.constants';
 import { escapeRegex } from 'src/common/utils/regex.util';
-import type { RowReviewStatus } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
+import type { RowHistoryStatus, RowReviewStatus } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
 import { StateFormPmuReviewHelper } from 'src/module/xvi-fc/common/services/state-form-pmu-review.helper';
 import { PmuRowReviewHelper, resolveSettledFormStatus } from 'src/module/xvi-fc/common/services/pmu-row-review.helper';
 import {
@@ -30,8 +30,30 @@ import type {
   EulbPmuRowTransitionRequest,
 } from '../types/elected-urban-local-bodies-pmu-review.types';
 
-const ROW_LEAN_SELECT =
+export const ROW_LEAN_SELECT =
   'form datasetVersion rowNumber ulbId censusCode ulbName electedBodyStatus dateOfConstitution dateOfExpiry remarks rowStatus rejectionRemark';
+
+/** A row-history entry's `snapshot` — the row's post-transition values. Shared by review decisions and
+ *  the undo module so the two can't drift. */
+export function buildEulbRowSnapshot(
+  row: EulbPmuRowLean,
+  newStatus: RowHistoryStatus,
+  rejectionRemark: string | null,
+): Record<string, unknown> {
+  return {
+    rowNumber: row.rowNumber,
+    ulbId: row.ulbId ?? null,
+    censusCode: row.censusCode ?? null,
+    ulbName: row.ulbName,
+    electedBodyStatus: row.electedBodyStatus ?? null,
+    dateOfConstitution: row.dateOfConstitution ?? null,
+    dateOfExpiry: row.dateOfExpiry ?? null,
+    remarks: row.remarks ?? null,
+    datasetVersion: row.datasetVersion,
+    rowStatus: newStatus,
+    rejectionRemark,
+  };
+}
 
 /**
  * Shared PMU-review domain primitives used by both the row-level and complete-form approve/reject
@@ -159,19 +181,7 @@ export class ElectedUrbanLocalBodiesPmuRowReviewDomainService {
       ip,
       userAgent,
       session,
-      buildSnapshot: (row, newStatus, rejectionRemark) => ({
-        rowNumber: row.rowNumber,
-        ulbId: row.ulbId ?? null,
-        censusCode: row.censusCode ?? null,
-        ulbName: row.ulbName,
-        electedBodyStatus: row.electedBodyStatus ?? null,
-        dateOfConstitution: row.dateOfConstitution ?? null,
-        dateOfExpiry: row.dateOfExpiry ?? null,
-        remarks: row.remarks ?? null,
-        datasetVersion: row.datasetVersion,
-        rowStatus: newStatus,
-        rejectionRemark,
-      }),
+      buildSnapshot: buildEulbRowSnapshot,
     });
   }
 

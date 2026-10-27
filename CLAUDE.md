@@ -60,7 +60,14 @@ src/
 │                        # an inline error, so changing it means updating both sides together
 ├── module/xvi-fc/       # 16th Finance Commission forms (state/ULB/MoHUA roles)
 │   ├── ulb/             # annual_accounts (OCR via ANNUAL_ACCOUNT_PROCESSING_QUEUE), bank-account, unspent-balance-disclosure
+│   │                    # `GET xvi-fc/form-status/:ulbId/:yearId` also returns `stateConditions` — the State-filed SFC answer, Elected
+│   │                    # Body status, FC Unspent balance and ULB-wise allocation for that one ULB (`ulb-state-conditions.service.ts`). Each
+│   │                    # entry is `visible: false` with no value until its State form is in `ULB_VISIBLE_STATE_FORM_STATUSES` (currently
+│   │                    # 13, 5 and 7 — PMU review, MoHUA review, acknowledged); a ULB user may only read its own ULB
 │   ├── state/           # sfc-status, elected-urban-local-bodies, devolution-formula, fc-unspent-declaration, gtc, dashboard,
+│   │                    # notifications (read-only feed for the State navbar bell + sidebar dots: the 5 State
+│   │                    # forms' raw status via MohuaStateConditionsService + a count of ULB forms awaiting
+│   │                    # State review; stateless, nothing stored),
 │   │                    # request-exemption (discretionary STATE→MoHUA exemption requests, formId 34 — see
 │   │                    # master/form-json-config/CLAUDE.md's formId registry). Two branches share one collection
 │   │                    # (xvifc_eligibility_exemptions): per-ULB (`ulb` a real ObjectId, one document per
@@ -123,6 +130,15 @@ src/
 │   │                            # from `decideSection`/`decideBankAccount`), so it is NOT gated by
 │   │                            # `XVIFC_REMINDER_CRONS_ENABLED` and has no `send-*-now` endpoint. Never
 │   │                            # throws — a notification failure must not fail the underlying decision.
+│   │                            # The same service's `notifyStateFormReturned` (second template, slug
+│   │                            # `state-form-returned-notification`, also auto-seeded) emails every
+│   │                            # verified STATE user of a state when PMU returns one of the 5 State forms
+│   │                            # (SFC, Elected Body, ULB-wise Allocation, FC Unspent, GTC) or MoHUA returns
+│   │                            # FC Unspent. Fires once per return event, after the write: whole-form
+│   │                            # reject (with the remark), or the moment row review settles a row-bearing
+│   │                            # form to RETURNED_BY_PMU (no remark — those live per row). The copy never
+│   │                            # names PMU/MoHUA. Reached via `XviFcCommonModule`, which re-exports
+│   │                            # `RemindersModule`.
 │   └── xvi-fc.module.ts # composition root importing the feature modules above
 ├── users/               # User CRUD with repository pattern. The three national teams — MoHUA, PMU (`MOHUA_PMU`) and DoE
 │                        # (`XVIFC_DOE`) — share one set of team-management methods (list / invite / re-role / transfer
