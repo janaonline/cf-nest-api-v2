@@ -3,7 +3,14 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { FORM_STATUS, getFormStatusLabel } from 'src/common/constants/form-status.constants';
-import { assertCanPmuMutateForm, canPmuViewForm } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
+import {
+  assertCanPmuMutateForm,
+  canPmuViewForm,
+} from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
+import {
+  MOHUA_DECIDED_ROW_STATUSES,
+  PmuUndoEligibilityService,
+} from 'src/module/xvi-fc/common/services/pmu-undo-eligibility.service';
 import {
   assertPmuOrMohuaViewerAccess,
   assertPmuReviewerAccess,
@@ -15,6 +22,7 @@ import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-
 import type { XvifcActorSourceDocument } from 'src/module/xvi-fc/common/types/xvifc-form-actors.type';
 import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
 import { FormQuestionHydratorService } from 'src/module/xvi-fc/common/services/form-question-hydrator.service';
+import { FormReturnedNotificationService } from 'src/module/xvi-fc/common/reminders/form-returned-notification.service';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import type { FileInfo } from 'src/schemas/common/file.schema';
 import { YearIdToLabel } from 'src/core/constants/years';
@@ -38,7 +46,7 @@ import type {
 import type { PmuWorklistData } from 'src/module/xvi-fc/common/types/pmu-worklist.type';
 import { State, StateDocument } from 'src/schemas/state.schema';
 
-type PmuFormLeanWithPopulate = XvifcActorSourceDocument & {
+type PmuFormLeanWithPopulate =XvifcActorSourceDocument & {
   _id: Types.ObjectId;
   state?: Types.ObjectId | { _id?: Types.ObjectId; name?: string };
   currentFormStatus?: number;
@@ -65,6 +73,8 @@ export class FcUnspentPmuReviewService {
     private readonly fileTokenService: FileTokenService,
     private readonly formQuestionHydrator: FormQuestionHydratorService,
     private readonly formJsonConfigService: FcUnspentDeclarationFormJsonService,
+    private readonly formReturnedNotification: FormReturnedNotificationService,
+    private readonly undoEligibility: PmuUndoEligibilityService,
   ) {}
 
   /** Cross-state worklist backing the PMU worklist page — join/NOT_STARTED mechanics live in the
@@ -142,6 +152,9 @@ export class FcUnspentPmuReviewService {
     );
 
     const permissions = buildPmuReviewerFormPermissions(user, currentFormStatus, { includeRowReview: true });
+    permissions.canUndo =
+      (await this.undoEligibility.canUndo(user, currentFormStatus, stateOid, yearOid)) &&
+      !(await this.hasMohuaDecidedRows(doc._id, doc.isFcUnspent === true));
 
     const { fields: allFields, thresholdPercent: threshold } = await this.formJsonConfigService.loadFormConfig(yearId);
     const questionsConfig = getFcUnspentFieldsByType(allFields, 'FC_UNSPENT_MAIN_FORM_FIELDS');
@@ -377,13 +390,27 @@ export class FcUnspentPmuReviewService {
       await session.endSession();
     }
 
+    void this.formReturnedNotification.notifyStateFormReturned({
+      stateId: stateOid,
+      formName: 'FC Unspent Declaration',
+      remarks: trimmedRemarks,
+    });
+
     return xviFcSuccess('FC Unspent Declaration form rejected.', {
       currentFormStatus: toStatus,
       currentFormStatusLabel: getFormStatusLabel(toStatus),
     });
   }
 
+
   // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+  /** True when MoHUA has already acknowledged or returned any active row — the case undo must refuse. */
+  private async hasMohuaDecidedRows(formId: Types.ObjectId, isYesBranch: boolean): Promise<boolean> {
+    if (!isYesBranch) return false;
+    const rows = await this.domainService.getActiveRows(formId);
+    return rows.some((r) => MOHUA_DECIDED_ROW_STATUSES.includes(r.rowStatus as number));
+  }
 
   private async approveDirectly(
     form: FcUnspentPmuFormLean,

@@ -12,6 +12,9 @@ import type { GetFcUnspentPmuRowsQueryDto } from '../dto/get-fc-unspent-pmu-rows
 import type { BulkApprovePmuRowsDto } from 'src/module/xvi-fc/common/dto/bulk-approve-pmu-rows.dto';
 import type { BulkRejectPmuRowsDto } from 'src/module/xvi-fc/common/dto/bulk-reject-pmu-rows.dto';
 import type { FcUnspentPmuFormLean, FcUnspentPmuRowLean } from '../types/fc-unspent-pmu-review.types';
+import { FormReturnedNotificationService } from 'src/module/xvi-fc/common/reminders/form-returned-notification.service';
+
+const mockFormReturnedNotification = { notifyStateFormReturned: jest.fn().mockResolvedValue(undefined) };
 
 function q<T>(value: T) {
   const chain: Record<string, unknown> = {};
@@ -112,6 +115,7 @@ describe('FcUnspentPmuRowsService', () => {
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
+        { provide: FormReturnedNotificationService, useValue: mockFormReturnedNotification },
         FcUnspentPmuRowsService,
         { provide: getModelToken(XviFcUnspentStateFormRow.name), useValue: rowModel },
         { provide: FcUnspentPmuRowReviewDomainService, useValue: domainService },

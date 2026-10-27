@@ -3,7 +3,11 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { FORM_STATUS, FormHistoryAction, getFormStatusLabel } from 'src/common/constants/form-status.constants';
-import { assertCanPmuMutateForm, canPmuViewForm } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
+import {
+  assertCanPmuMutateForm,
+  canPmuViewForm,
+} from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
+import { PmuUndoEligibilityService } from 'src/module/xvi-fc/common/services/pmu-undo-eligibility.service';
 import {
   assertPmuOrMohuaViewerAccess,
   assertPmuReviewerAccess,
@@ -13,6 +17,7 @@ import { buildPmuWorklistRows } from 'src/module/xvi-fc/common/utils/pmu-worklis
 import { StateFormPmuReviewHelper } from 'src/module/xvi-fc/common/services/state-form-pmu-review.helper';
 import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
 import { FormQuestionHydratorService } from 'src/module/xvi-fc/common/services/form-question-hydrator.service';
+import { FormReturnedNotificationService } from 'src/module/xvi-fc/common/reminders/form-returned-notification.service';
 import { DfFormJsonConfigService } from 'src/module/xvi-fc/state/devolution-formula/services/form-json/devolution-formula-form-json.service';
 import { getDfFieldsByType } from 'src/module/xvi-fc/state/devolution-formula/helpers/devolution-formula-form-json.helpers';
 import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
@@ -84,6 +89,8 @@ export class DevolutionFormulaPmuReviewService {
     private readonly formQuestionHydrator: FormQuestionHydratorService,
     private readonly dfFormJsonConfig: DfFormJsonConfigService,
     private readonly ulbEligibilityService: UlbEligibilityService,
+    private readonly formReturnedNotification: FormReturnedNotificationService,
+    private readonly undoEligibility: PmuUndoEligibilityService,
   ) {}
 
   /** Cross-state PMU worklist — see CLAUDE.md's "Worklist synthesis" section. */
@@ -145,6 +152,7 @@ export class DevolutionFormulaPmuReviewService {
 
     const { actors, stateName } = this.xvifcFormActorsService.buildActorsAndStateName(doc);
     const permissions = buildPmuReviewerFormPermissions(user, currentFormStatus);
+    permissions.canUndo = await this.undoEligibility.canUndo(user, currentFormStatus, stateOid, yearOid);
 
     const fields = await this.dfFormJsonConfig.loadFields(yearId);
     const mainFormFields = getDfFieldsByType(fields, 'DF_MAIN_FORM_FIELDS');
@@ -283,11 +291,18 @@ export class DevolutionFormulaPmuReviewService {
       userAgent,
     );
 
+    void this.formReturnedNotification.notifyStateFormReturned({
+      stateId: new Types.ObjectId(stateId),
+      formName: 'ULB-wise Allocation',
+      remarks: trimmedRemarks,
+    });
+
     return xviFcSuccess('ULB-wise Allocation form rejected.', {
       currentFormStatus: toStatus,
       currentFormStatusLabel: getFormStatusLabel(toStatus),
     });
   }
+
 
   // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -298,7 +313,7 @@ export class DevolutionFormulaPmuReviewService {
   ): Promise<DevolutionFormulaPmuFormLean | null> {
     return this.formModel
       .findOne({ state: new Types.ObjectId(stateId), year: new Types.ObjectId(yearId), installment })
-      .select('state year installment currentFormStatus activeDatasetVersion')
+      .select('state year installment currentFormStatus activeDatasetVersion pmuRemarks')
       .lean<DevolutionFormulaPmuFormLean>()
       .exec();
   }
