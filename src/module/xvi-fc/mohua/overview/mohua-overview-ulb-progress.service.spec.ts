@@ -55,27 +55,6 @@ describe('MohuaOverviewUlbProgressService.loadFullySubmittedUlbIds', () => {
     expect([...done]).toEqual([String(ulbA)]);
   });
 
-  it('applies a caller-supplied status set to every form, including SLB', async () => {
-    const service = build({
-      annual: [
-        { ulb: ulbA, sectionType: 'audited', form_status_id: APPROVED_BY_STATE },
-        { ulb: ulbA, sectionType: 'unaudited', form_status_id: UNDER_REVIEW_BY_STATE },
-        { ulb: ulbB, sectionType: 'audited', form_status_id: UNDER_REVIEW_BY_STATE },
-      ],
-      dur: [{ ulb: ulbA, currentFormStatus: APPROVED_BY_STATE }],
-      slb: [{ ulb: ulbA, currentFormStatus: APPROVED_BY_STATE }],
-      bank: [{ ulb: ulbA, currentFormStatus: UNDER_REVIEW_BY_MOHUA }],
-    });
-
-    const result = await service.loadSubmittedUlbIdsByForm(yearId, undefined, new Set([APPROVED_BY_STATE]));
-
-    expect([...result.audited]).toEqual([String(ulbA)]); // B's 3 no longer counts
-    expect(result.unaudited.size).toBe(0);
-    expect([...result.dur]).toEqual([String(ulbA)]);
-    expect([...result.slb]).toEqual([String(ulbA)]);
-    expect(result.pfms.size).toBe(0);
-  });
-
   it('counts SLB only at Approved by State (8), not at an earlier status', async () => {
     const service = build({
       annual: [

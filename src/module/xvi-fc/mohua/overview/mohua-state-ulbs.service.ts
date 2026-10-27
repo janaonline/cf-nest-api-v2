@@ -24,7 +24,6 @@ import {
   MOHUA_STATE_ULBS_DEFAULT_LIMIT,
   MOHUA_STATE_ULBS_EXPORT_NOT_SUBMITTED,
   MOHUA_STATE_ULBS_EXPORT_SUBMITTED,
-  MOHUA_STATE_ULBS_ULB_FORM_TICK_STATUSES,
   MOHUA_STATE_ULBS_VISIBLE_STATE_FORM_STATUSES,
 } from './mohua-overview.constants';
 import { toCrore } from './mohua-overview.util';
@@ -149,7 +148,6 @@ export class MohuaStateUlbsService {
       this.ulbProgressService.loadSubmittedUlbIdsByForm(
         yearId,
         expectedUlbs.map((ulb) => ulb.ulbId),
-        MOHUA_STATE_ULBS_ULB_FORM_TICK_STATUSES,
       ),
     ]);
 

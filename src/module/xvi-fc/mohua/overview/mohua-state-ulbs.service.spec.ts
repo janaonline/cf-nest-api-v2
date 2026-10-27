@@ -1,7 +1,6 @@
 import ExcelJS from 'exceljs';
 import { Types } from 'mongoose';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
-import { MOHUA_STATE_ULBS_ULB_FORM_TICK_STATUSES } from './mohua-overview.constants';
 import { MohuaStateUlbsService } from './mohua-state-ulbs.service';
 
 /** Mongoose-style chain: find()/findOne().select().lean().exec() resolving to `value`. */
@@ -28,7 +27,7 @@ describe('MohuaStateUlbsService.list', () => {
   let loadSubmitted: jest.Mock;
   let unspentFormFind: jest.Mock;
 
-  // The State forms' status; the three State-filed columns only show at Under Review by MoHUA (5).
+  // The State forms' status; the three State-filed columns show at 13 (PMU), 5 (MoHUA) and 7 (acknowledged).
   const build = (formStatus: number = FORM_STATUS.UNDER_REVIEW_BY_MOHUA) => {
     const formId = new Types.ObjectId();
     const service = new MohuaStateUlbsService(
@@ -110,15 +109,20 @@ describe('MohuaStateUlbsService.list', () => {
   it("reads form submissions only for this state's ULBs", async () => {
     await build().list(stateId, yearId, {});
 
-    expect(loadSubmitted).toHaveBeenCalledWith(
-      yearId,
-      [a.ulbId, b.ulbId, c.ulbId, d.ulbId],
-      MOHUA_STATE_ULBS_ULB_FORM_TICK_STATUSES,
-    );
-    expect([...MOHUA_STATE_ULBS_ULB_FORM_TICK_STATUSES]).toEqual([FORM_STATUS.APPROVED_BY_STATE]);
+    expect(loadSubmitted).toHaveBeenCalledWith(yearId, [a.ulbId, b.ulbId, c.ulbId, d.ulbId]);
   });
 
-  it.each([FORM_STATUS.IN_PROGRESS, FORM_STATUS.UNDER_REVIEW_BY_PMU, FORM_STATUS.RETURNED_BY_PMU, FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA])(
+  it.each([FORM_STATUS.UNDER_REVIEW_BY_PMU, FORM_STATUS.UNDER_REVIEW_BY_MOHUA, FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA])(
+    'shows allocation, unspent balance and elected body while the State forms are at status %i',
+    async (status) => {
+      const { items } = await build(status).list(stateId, yearId, {});
+      const anantapur = items.find((row) => row.name === 'Anantapur')!;
+
+      expect(anantapur).toMatchObject({ allocation: 2.5, unspentAmount: 1.25, electedBody: 'Constituted' });
+    },
+  );
+
+  it.each([FORM_STATUS.IN_PROGRESS, FORM_STATUS.RETURNED_BY_PMU, FORM_STATUS.AWAITING_CLAIM_LETTER])(
     'shows no allocation, unspent balance or elected body while the State forms are at status %i',
     async (status) => {
       const { items } = await build(status).list(stateId, yearId, {});
