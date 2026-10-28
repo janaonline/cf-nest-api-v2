@@ -15,16 +15,12 @@ import {
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { buildXviFcDownloadFileName } from 'src/shared/utils/xvi-fc-download-file-name.util';
 import { buildMohuaLetterAddressBlock } from 'src/module/xvi-fc/common/utils/xvi-fc-letter-address-block.util';
+import { XVI_FC_DOCX_BODY_RUN, XVI_FC_DOCX_TABLE_RUN } from 'src/module/xvi-fc/common/utils/xvi-fc-docx-style.util';
 import { FcUnspentDeclarationDocumentService } from './fc-unspent-declaration-document.service';
 import type {
   FcUnspentDeclarationDocumentData,
   FcUnspentDeclarationDocumentRow,
 } from 'src/module/xvi-fc/state/fc-unspent-declaration/types/fc-unspent-declaration-document.types';
-
-/** Times New Roman 12pt (size is in half-points) — matches the MoHUA specimen letter's font. Set as
- *  the `Document`-level default below, and repeated explicitly on table-cell runs as a defensive
- *  fallback since Word's built-in Table Grid style can override inherited run properties. */
-const DOC_FONT = { font: 'Times New Roman', size: 24 };
 
 /** Percentage column widths, in the same left-to-right order as the rendered table: '#', ULB Name,
  *  Census ID, {priorFcCycleLabel} unspent balance, Previous FC unspent balance. Sums to 100. */
@@ -45,9 +41,13 @@ function formatLakhs(rupees: number): string {
   return (rupees / 100000).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-function cellText(text: string, opts: { bold?: boolean } = {}): Paragraph {
+type Align = (typeof AlignmentType)[keyof typeof AlignmentType];
+
+/** Table runs set the font explicitly: Word's Table Grid style can override inherited run properties. */
+function cellText(text: string, opts: { bold?: boolean; alignment?: Align } = {}): Paragraph {
   return new Paragraph({
-    children: [new TextRun({ text: text || '-', bold: opts.bold, ...DOC_FONT })],
+    alignment: opts.alignment,
+    children: [new TextRun({ text: text || '-', bold: opts.bold, ...XVI_FC_DOCX_TABLE_RUN })],
   });
 }
 
@@ -55,14 +55,14 @@ function headerCell(text: string, widthPct: number): TableCell {
   return new TableCell({
     width: { size: widthPct, type: WidthType.PERCENTAGE },
     shading: { fill: 'F2F2F2' },
-    children: [cellText(text, { bold: true })],
+    children: [cellText(text, { bold: true, alignment: AlignmentType.CENTER })],
   });
 }
 
-function dataCell(text: string, widthPct: number): TableCell {
+function dataCell(text: string, widthPct: number, alignment?: Align): TableCell {
   return new TableCell({
     width: { size: widthPct, type: WidthType.PERCENTAGE },
-    children: [cellText(text)],
+    children: [cellText(text, { alignment })],
   });
 }
 
@@ -99,14 +99,13 @@ export class FcUnspentDeclarationDocxService {
     return new Document({
       styles: {
         default: {
-          document: { run: DOC_FONT },
+          document: { run: XVI_FC_DOCX_BODY_RUN },
         },
       },
       sections: [
         {
           properties: {},
           children: [
-            ...this.buildTitle(data),
             ...this.buildAddressBlock(data),
             ...this.buildCertification(data),
             ...this.buildClosingParagraph(data),
@@ -116,27 +115,6 @@ export class FcUnspentDeclarationDocxService {
         },
       ],
     });
-  }
-
-  /** Verbatim heading from the MoHUA specimen letter this mirrors — bold, underlined, centered.
-   *  Dynamic on `priorFcCycleFullLabel` so it stays correct once the applicable cycle shifts from
-   *  14th to 15th FC (see resolvePriorFcCycleFullLabel). */
-  private buildTitle(data: FcUnspentDeclarationDocumentData): Paragraph[] {
-    return [
-      new Paragraph({
-        alignment: AlignmentType.CENTER,
-        children: [
-          new TextRun({
-            text:
-              'Format of Letter to be submitted by the State reg. Unspent Balance of ' +
-              `${data.priorFcCycleFullLabel} and Previous Finance Commissions`,
-            bold: true,
-            underline: {},
-          }),
-        ],
-      }),
-      new Paragraph({ text: '' }),
-    ];
   }
 
   /** Address block, subject line, and salutation — common to both branches; the subject line no
@@ -155,7 +133,7 @@ export class FcUnspentDeclarationDocxService {
         ],
       }),
       new Paragraph({ text: '' }),
-      new Paragraph({ text: 'Sir,' }),
+      new Paragraph({ text: 'Sir/Madam,' }),
       new Paragraph({ text: '' }),
     ];
   }
@@ -220,8 +198,8 @@ export class FcUnspentDeclarationDocxService {
             dataCell(String(row.slNo), COLUMN_WIDTHS_PCT[0]),
             dataCell(row.ulbName, COLUMN_WIDTHS_PCT[1]),
             dataCell(row.censusCode, COLUMN_WIDTHS_PCT[2]),
-            dataCell(formatLakhs(row.unspentAmount), COLUMN_WIDTHS_PCT[3]),
-            dataCell(formatLakhs(row.previousFcUnspentBalance), COLUMN_WIDTHS_PCT[4]),
+            dataCell(formatLakhs(row.unspentAmount), COLUMN_WIDTHS_PCT[3], AlignmentType.RIGHT),
+            dataCell(formatLakhs(row.previousFcUnspentBalance), COLUMN_WIDTHS_PCT[4], AlignmentType.RIGHT),
           ],
         }),
     );

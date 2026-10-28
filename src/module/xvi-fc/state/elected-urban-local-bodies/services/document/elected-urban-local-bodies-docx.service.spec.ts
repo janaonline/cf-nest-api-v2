@@ -53,6 +53,18 @@ async function extractStylesXml(buffer: Buffer): Promise<string> {
   return file.async('text');
 }
 
+/** The first text run in the body, i.e. where the letter starts. */
+function firstBodyText(xml: string): string | undefined {
+  return /<w:body>[\s\S]*?<w:t\b[^>]*>([^<]*)<\/w:t>/.exec(xml)?.[1];
+}
+
+/** Cells (raw XML) of the table's header row and first data row. */
+function headerAndFirstRowCells(xml: string): [string[], string[]] {
+  const [header = '', first = ''] = xml.match(/<w:tr>[\s\S]*?<\/w:tr>/g) ?? [];
+  const cells = (row: string) => row.match(/<w:tc>[\s\S]*?<\/w:tc>/g) ?? [];
+  return [cells(header), cells(first)];
+}
+
 describe('ElectedUrbanLocalBodiesDocxService', () => {
   let service: ElectedUrbanLocalBodiesDocxService;
   let documentService: { getDocumentData: jest.Mock };
@@ -91,14 +103,13 @@ describe('ElectedUrbanLocalBodiesDocxService', () => {
     expect(result.buffer.subarray(0, 2).toString('utf8')).toBe('PK');
   });
 
-  it('renders the title heading, bold/underlined/centered, above the address block', async () => {
+  it('starts at the addressee, without the specimen heading', async () => {
     documentService.getDocumentData.mockResolvedValue(buildDocumentData(1));
     const result = await service.generateElectedBodiesListDocument(stateId, yearId, user);
     const xml = await extractDocumentXml(result.buffer);
 
-    expect(xml).toContain('Format of Letter to be Submitted by the State reg. Elected Bodies Status');
-    expect(xml).toContain('w:jc w:val="center"');
-    expect(xml).toMatch(/<w:u\b/);
+    expect(xml).not.toContain('Format of Letter');
+    expect(firstBodyText(xml)).toBe('To,');
   });
 
   it('opens with the shared MoHUA addressee block (also used by fc-unspent-declaration)', async () => {
@@ -118,13 +129,14 @@ describe('ElectedUrbanLocalBodiesDocxService', () => {
     expect(xml).not.toContain('AMRUT-IIB');
   });
 
-  it('renders the new subject line and "Sir," salutation, not the old wording', async () => {
+  it('renders the new subject line and "Sir/Madam," salutation, not the old wording', async () => {
     documentService.getDocumentData.mockResolvedValue(buildDocumentData(1));
     const result = await service.generateElectedBodiesListDocument(stateId, yearId, user);
     const xml = await extractDocumentXml(result.buffer);
 
     expect(xml).toContain('Subject: Declaration in respect of Elected Body Status of Urban Local Bodies -reg.');
-    expect(xml).toContain('Sir,');
+    expect(xml).toContain('>Sir/Madam,<');
+    expect(xml).not.toContain('>Sir,<');
     expect(xml).not.toContain('Declaration regarding Elected Body Status of Urban Local Bodies');
     expect(xml).not.toContain('Respected Sir/Madam,');
   });
@@ -201,6 +213,24 @@ describe('ElectedUrbanLocalBodiesDocxService', () => {
 
     expect(stylesXml).toContain('Times New Roman');
     expect(stylesXml).toContain('w:sz w:val="24"');
+  });
+
+  it('uses 11pt in table cells', async () => {
+    documentService.getDocumentData.mockResolvedValue(buildDocumentData(1));
+    const result = await service.generateElectedBodiesListDocument(stateId, yearId, user);
+    const xml = await extractDocumentXml(result.buffer);
+
+    expect(xml).toMatch(/<w:tc>[\s\S]*?<w:sz w:val="22"\/>/);
+  });
+
+  it('centres the table header cells, not the data cells', async () => {
+    documentService.getDocumentData.mockResolvedValue(buildDocumentData(1));
+    const result = await service.generateElectedBodiesListDocument(stateId, yearId, user);
+    const [header, first] = headerAndFirstRowCells(await extractDocumentXml(result.buffer));
+
+    expect(header).toHaveLength(7);
+    expect(header.every((cell) => cell.includes('w:jc w:val="center"'))).toBe(true);
+    expect(first.some((cell) => cell.includes('w:jc w:val="center"'))).toBe(false);
   });
 
   it('never emits an em dash anywhere in the generated document', async () => {
