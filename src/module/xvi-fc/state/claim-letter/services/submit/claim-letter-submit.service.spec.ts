@@ -9,7 +9,7 @@ import { ClaimLetterBatch } from 'src/schemas/xvi-fc/state/claim-letter-batch.sc
 import { ClaimLetterBatchUlb } from 'src/schemas/xvi-fc/state/claim-letter-batch-ulb.schema';
 import { ClaimLetterActiveBatchService } from '../active-batch/claim-letter-active-batch.service';
 import { ClaimLetterEligibilityService } from '../eligibility/claim-letter-eligibility.service';
-import { ClaimLetterFinalPdfService } from '../final-pdf/claim-letter-final-pdf.service';
+import { ClaimLetterFinalPdfService, FINAL_PDF_OUTDATED } from '../final-pdf/claim-letter-final-pdf.service';
 import { ClaimLetterHistoryService } from '../history/claim-letter-history.service';
 import { ClaimLetterLetterDetailsService } from '../letter-details/claim-letter-letter-details.service';
 import { ClaimLetterSubmitService } from './claim-letter-submit.service';
@@ -114,6 +114,7 @@ describe('ClaimLetterSubmitService', () => {
       ulbCount: 1,
       isAbandoned: false,
       signedClaimFile: { path: 'x/signed.pdf' },
+      finalClaimPdf: { sourceKey: 'reviewed-key' },
       financialSummary,
       createdAt: new Date(),
     };
@@ -177,6 +178,7 @@ describe('ClaimLetterSubmitService', () => {
       expect(filter['$or']).toEqual([{ editLockToken: null }, { editLockAcquiredAt: { $lt: expect.any(Date) } }]);
       // Pinned as read, so a re-upload or letter-details save in between cannot slip in.
       expect(filter['signedClaimFile.path']).toBe('x/signed.pdf');
+      expect(filter['finalClaimPdf.sourceKey']).toBe('reviewed-key');
       expect(filter['isAbandoned']).toBe(false);
       expect(filter['letterDetailsUpdatedAt']).toBeNull();
       expect(letterDetailsService.assertComplete).toHaveBeenCalledWith(
@@ -290,6 +292,18 @@ describe('ClaimLetterSubmitService', () => {
       );
 
       await expect(service.submit('x', stateUser, 'reviewed-key')).rejects.toThrow(/changed while submitting/);
+    });
+
+    it('refuses with FINAL_PDF_OUTDATED when an older merge replaced the reviewed PDF after the key check', async () => {
+      batchModel.findOne.mockReturnValue(q(readyParent));
+      batchModel.findOneAndUpdate.mockReturnValue(q(null));
+      batchModel.findById.mockReturnValue(q({ ...readyParent, finalClaimPdf: { sourceKey: 'older-key' } }));
+
+      const err = await service.submit('x', stateUser, 'reviewed-key').catch((e: ConflictException) => e);
+
+      expect(err).toBeInstanceOf(ConflictException);
+      expect((err as ConflictException).getResponse()).toMatchObject({ code: FINAL_PDF_OUTDATED });
+      expect(historyService.recordTransition).not.toHaveBeenCalled();
     });
 
     describe('final-batch completeness (batchNumber === CLAIM_LETTER_MAX_BATCH_NUMBER)', () => {

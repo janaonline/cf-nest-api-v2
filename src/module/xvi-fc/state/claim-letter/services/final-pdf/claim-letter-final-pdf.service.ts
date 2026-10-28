@@ -37,6 +37,14 @@ export const FINAL_PDF_INCOMPLETE = 'FINAL_PDF_INCOMPLETE';
 
 const SOURCE_KEY_VERSION = 'claim-letter-final-pdf:v1';
 
+/** Submit's 409 when the final PDF the State reviewed is no longer the current one. */
+export function finalPdfOutdatedError(): ConflictException {
+  return new ConflictException({
+    message: 'The documents changed after you reviewed the final PDF. Review the updated PDF and submit again.',
+    code: FINAL_PDF_OUTDATED,
+  });
+}
+
 /** pdf-lib ships ES5 classes, so `instanceof EncryptedPDFError` is false at runtime; match its text. */
 function isEncryptedPdfError(err: unknown): boolean {
   return err instanceof EncryptedPDFError || (err instanceof Error && /is encrypted/i.test(err.message));
@@ -140,10 +148,7 @@ export class ClaimLetterFinalPdfService {
     }
     const currentKey = this.computeSourceKey(sources);
     if (currentKey === reviewedKey && parent.finalClaimPdf?.sourceKey === currentKey) return;
-    throw new ConflictException({
-      message: 'The documents changed after you reviewed the final PDF. Review the updated PDF and submit again.',
-      code: FINAL_PDF_OUTDATED,
-    });
+    throw finalPdfOutdatedError();
   }
 
   // ─── Private ────────────────────────────────────────────────────────────
@@ -284,6 +289,13 @@ export class ClaimLetterFinalPdfService {
     config: ClaimEligibilityConfig,
   ): Promise<string | null> {
     const { collection, fields } = config.source;
+    // A State's letter must never enclose another State's or a ULB's document.
+    if (config.ownerLevel !== 'STATE' || !fields?.state) {
+      this.logger.warn(
+        `Claim letter merge document "${document.label}": formId ${document.formId} source is not State-scoped; skipped.`,
+      );
+      return null;
+    }
     const projection = Object.fromEntries(
       document.fileKeys.flatMap((k) => [
         [k, 1],

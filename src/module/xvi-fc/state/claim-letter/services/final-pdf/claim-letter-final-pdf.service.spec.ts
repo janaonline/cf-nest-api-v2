@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   HttpException,
+  Logger,
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
@@ -58,6 +59,7 @@ function eligibilitySource(formId: number, collection: string, displayLabel: str
     formId,
     claimEligibility: {
       enabled: true,
+      ownerLevel: 'STATE',
       yearScope: 'CURRENT_DESIGN_YEAR',
       displayLabel,
       source: { collection, fields: SOURCE_FIELDS },
@@ -209,6 +211,29 @@ describe('ClaimLetterFinalPdfService', () => {
 
     expect(data!.missing).toEqual(['Copy of GTC', 'Other Supporting Documents (ATR)']);
     expect(findOneCalls.map((c) => c.collection)).not.toContain('xvifc_gtc');
+  });
+
+  it('skips a source that is not State-scoped, so a ULB or another State is never enclosed', async () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const [sfc, eb, unspent, gtc] = ELIGIBILITY_SOURCES;
+    const ulbOwned = { ...gtc, claimEligibility: { ...gtc.claimEligibility, ownerLevel: 'ULB' } };
+    const noStateField = {
+      ...eb,
+      claimEligibility: {
+        ...eb.claimEligibility,
+        source: { collection: 'xvifc_elected_ulb_forms', fields: { designYear: 'year' } },
+      },
+    };
+    formJsonService.findEnabledClaimEligibilitySources.mockResolvedValue([sfc, noStateField, unspent, ulbOwned]);
+
+    const { data } = await service.getFinalPdf(claimLetterId, user);
+
+    expect(data!.missingRequired).toEqual(['Copy of Elected Body', 'Copy of GTC']);
+    const collections = findOneCalls.map((c) => c.collection);
+    expect(collections).not.toContain('xvifc_gtc');
+    expect(collections).not.toContain('xvifc_elected_ulb_forms');
+    expect(warn).toHaveBeenCalledTimes(2);
+    warn.mockRestore();
   });
 
   it('shares one merge between concurrent first requests', async () => {
