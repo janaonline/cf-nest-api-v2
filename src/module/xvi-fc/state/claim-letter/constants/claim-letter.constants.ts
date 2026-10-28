@@ -17,6 +17,9 @@ export const CLAIM_LETTER_CHILD_INSERT_CHUNK_SIZE = 200;
 /** Same 20MB ceiling as other xvi-fc PDF uploads. */
 export const CLAIM_LETTER_SIGNED_FILE_MAX_SIZE_KB = 20 * 1024;
 
+/** 409 for any action on an abandoned batch (preview, .docx, signed-file upload, submit). */
+export const CLAIM_LETTER_ABANDONED_MESSAGE = 'This claim batch was abandoned.';
+
 /** Generous so no live build is taken for stale; tune from production p99 build time (ADR 0002). */
 export const CLAIM_LETTER_STALE_BUILD_THRESHOLD_MINUTES = 30;
 

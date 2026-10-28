@@ -143,6 +143,12 @@ Unspent Declaration, ATR), merged with `pdf-lib`.
   single row applies to a whole State.
 - Submit's checks all run before its transaction and are listed in ADR 0003; the update filter also
   pins `signedClaimFile.path` and `letterDetailsUpdatedAt` as read.
+- Abandon only sets `isAbandoned` (the status stays `IN_PROGRESS`) and releases the locks, so every
+  path that acts on a batch checks the flag itself: preview, .docx, signed-file upload and submit
+  reply 409 `CLAIM_LETTER_ABANDONED_MESSAGE`, and the one-active-batch rule ignores an abandoned
+  batch (ADR 0004).
+- An edit never frees a removed ULB before it succeeds: validation first, added locks next, removed
+  locks released in the final write's transaction (ADR 0002).
 
 ## Known gaps
 

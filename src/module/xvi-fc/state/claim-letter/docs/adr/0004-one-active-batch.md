@@ -37,7 +37,10 @@ abandoning the active batch is how a State unblocks the next one.
 
 The whole rule lives in `ClaimLetterActiveBatchService` (one indexed query on the
 `{ state, year, installment, currentFormStatus }` prefix, oldest first, limit 1). No other file
-decides which batch is active.
+decides which batch is active. The rule only orders batches that are themselves active: an
+abandoned or finished batch is never "blocked" (no lookup, no block reason), the same for the detail
+page, the history list and every guard. An abandoned batch is refused on its own terms instead (409
+"This claim batch was abandoned." for preview, .docx, signed-file upload and submit).
 
 ## Consequences
 

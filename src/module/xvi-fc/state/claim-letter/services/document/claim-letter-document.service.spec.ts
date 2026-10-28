@@ -508,6 +508,13 @@ describe('ClaimLetterDocumentService', () => {
       await expect(service.loadParent(claimLetterId, stateUser)).rejects.toThrow(ConflictException);
     });
 
+    it('refuses an abandoned batch before the active-batch check', async () => {
+      batchModel.findOne.mockReturnValue(q({ ...parent, isAbandoned: true }));
+      await expect(service.getDocument(claimLetterId, stateUser)).rejects.toThrow('This claim batch was abandoned.');
+      await expect(service.loadParent(claimLetterId, stateUser)).rejects.toThrow(ConflictException);
+      expect(activeBatch.assertActive).not.toHaveBeenCalled();
+    });
+
     it("forbids another State's user", async () => {
       const other = { ...stateUser, state: new Types.ObjectId().toString() } as AuthUser;
       await expect(service.getDocument(claimLetterId, other)).rejects.toThrow(ForbiddenException);

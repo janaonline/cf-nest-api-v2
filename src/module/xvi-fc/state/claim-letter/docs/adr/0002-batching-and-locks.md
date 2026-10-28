@@ -20,16 +20,25 @@ duplicate-key error on `batchModel.create()` is always a **fresh, live conflict*
 requests committing around the same time - never a stale leftover (see below), because
 `allocateBatchNumber` re-reads free slots inside the very same transaction immediately beforehand.
 
-**ULB locking.** Creating or updating a draft inserts one lock document per selected ULB, in the
-same transaction as the batch-slot reservation (create) or as its own transaction (update's lock
-diff) - all-or-nothing. A duplicate-key failure on any lock means that ULB is already locked
-elsewhere; the whole reservation aborts rather than partially locking.
+**ULB locking.** Creating a draft inserts one lock document per selected ULB, in the same
+transaction as the batch-slot reservation - all-or-nothing. A duplicate-key failure on any lock
+means that ULB is already locked elsewhere; the whole reservation aborts rather than partially
+locking.
+
+Updating a draft validates the new selection in memory first, so a rejected edit writes no lock.
+It then locks only the added ULBs (their own all-or-nothing transaction) and releases the removed
+ULBs' locks only in the same transaction as the final draft write. A removed ULB is therefore never
+free while the edit can still fail, so no other batch can take it mid-edit. A failure after the
+added locks deletes just those (the removed ones were never released) and only then releases the
+edit lock, so another edit of the same draft never sees half-done locks.
 
 **Stale `BUILDING` row recovery.** A process crash between the two transactions of `createDraft`
 (reserve slot+locks, then build+finalize) leaves a `BUILDING` parent with no way to ever reach
 `READY`. Two mechanisms reclaim it, sharing one delete routine
-(`helpers/claim-letter-build-cleanup.helpers.ts#deleteBuildingParentArtifacts`) so they can't drift
-from each other:
+(`helpers/claim-letter-build-cleanup.helpers.ts#deleteBuildingParentArtifacts`, also a failed
+build's own rollback) so they can't drift from each other. The routine deletes the parent first,
+filtered on `BUILDING`, and touches its children and locks only if that delete matched: a build that
+finished just as cleanup ran keeps its children and locks.
 - **Reactive, inline** (`ClaimLetterAssemblyService.reclaimBlockingStaleBuilds`) - the moment a
   *new* request actually conflicts with the stale row's slot or ULBs, it gets exactly one
   reclaim-and-retry attempt before surfacing a normal conflict. This is why

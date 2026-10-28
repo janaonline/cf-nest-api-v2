@@ -10,14 +10,21 @@ export interface ClaimLetterBuildCleanupModels {
 }
 
 /** Deletes a BUILDING parent with its children and own-buildRequestId locks (never by business key);
- *  the caller owns the transaction. Shared by both stale-build reclaim paths (ADR 0002). */
+ *  the caller owns the transaction. Shared by both stale-build reclaim paths and a failed build's own
+ *  rollback (ADR 0002). The parent goes first: if it is no longer BUILDING (a build that finished in
+ *  the meantime), its children and locks are left alone. Returns whether the parent was deleted. */
 export async function deleteBuildingParentArtifacts(
   models: ClaimLetterBuildCleanupModels,
   parentId: Types.ObjectId,
   buildRequestId: string,
   session: ClientSession,
-): Promise<void> {
+): Promise<boolean> {
+  const { deletedCount } = await models.batchModel.deleteOne(
+    { _id: parentId, assemblyStatus: 'BUILDING' },
+    { session },
+  );
+  if (deletedCount === 0) return false;
   await models.batchUlbModel.deleteMany({ claimLetter: parentId }, { session });
   await models.lockModel.deleteMany({ claimLetter: parentId, buildRequestId }, { session });
-  await models.batchModel.deleteOne({ _id: parentId, assemblyStatus: 'BUILDING' }, { session });
+  return true;
 }

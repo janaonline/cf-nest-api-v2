@@ -37,7 +37,8 @@ It is **never** written for:
   `SIGNED_FILE_REMOVAL_NOT_CONFIRMED` otherwise, so the UI can warn first). An unchanged save never
   clears it.
 
-**Submit preconditions**, checked before its transaction: signed file present; letter details
+**Submit preconditions**, checked before its transaction: not abandoned (409; abandon keeps
+`IN_PROGRESS`, so the filter also requires `isAbandoned: false`); signed file present; letter details
 complete (formjson-required fields); this is the active batch (ADR 0004); fresh State gate and
 per-ULB eligibility of every batch ULB (failing ULBs named); every non-optional enclosure in
 `meta.mergeDocuments` present (400 `FINAL_PDF_INCOMPLETE`); and the `finalPdfSourceKey` the State

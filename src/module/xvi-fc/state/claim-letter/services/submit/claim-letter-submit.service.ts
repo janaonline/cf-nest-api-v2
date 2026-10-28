@@ -21,6 +21,7 @@ import {
   ClaimLetterBatchUlbDocument,
 } from 'src/schemas/xvi-fc/state/claim-letter-batch-ulb.schema';
 import {
+  CLAIM_LETTER_ABANDONED_MESSAGE,
   CLAIM_LETTER_EDIT_LOCK_LEASE_MINUTES,
   CLAIM_LETTER_MAX_BATCH_NUMBER,
 } from '../../constants/claim-letter.constants';
@@ -41,6 +42,7 @@ type SubmitBatch = {
   batchNumber: ClaimLetterBatchNumber;
   version: number;
   currentFormStatus: number;
+  isAbandoned: boolean;
   signedClaimFile?: FileInfo | null;
   finalClaimPdf?: ClaimLetterFinalPdf | null;
   letterDetails?: Record<string, unknown>;
@@ -84,6 +86,8 @@ export class ClaimLetterSubmitService {
     if (parent.currentFormStatus === FORM_STATUS.UNDER_REVIEW_BY_MOHUA) {
       return xviFcSuccess('Claim letter already submitted to MoHUA.', mapClaimLetterBatchDocToSummary(parent, user));
     }
+    // Abandon keeps IN_PROGRESS and has already released the locks, so the flag is checked on its own.
+    if (parent.isAbandoned) throw new ConflictException(CLAIM_LETTER_ABANDONED_MESSAGE);
     if (parent.currentFormStatus !== FORM_STATUS.IN_PROGRESS) {
       throw new ConflictException(
         `Claim letter cannot be submitted when status is ${getFormStatusLabel(parent.currentFormStatus)}.`,
@@ -115,6 +119,7 @@ export class ClaimLetterSubmitService {
           {
             _id: claimLetterId,
             currentFormStatus: FORM_STATUS.IN_PROGRESS,
+            isAbandoned: false,
             // Pinned as read: a re-upload or letter-details save in between makes this a conflict.
             'signedClaimFile.path': signedFile.path,
             letterDetailsUpdatedAt: parent.letterDetailsUpdatedAt ?? null,

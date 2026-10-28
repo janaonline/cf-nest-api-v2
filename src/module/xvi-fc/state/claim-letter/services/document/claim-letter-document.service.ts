@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -36,6 +36,7 @@ import {
   XviFcSfcStatusDocument,
 } from 'src/schemas/xvi-fc/state/sfc-status.schema';
 import {
+  CLAIM_LETTER_ABANDONED_MESSAGE,
   CLAIM_LETTER_DETAIL_PLACEHOLDERS,
   CLAIM_LETTER_DOCUMENT_CACHE_CHUNK_ROWS,
   CLAIM_LETTER_DOCUMENT_CACHE_TTL_SECONDS,
@@ -91,6 +92,8 @@ export interface ClaimLetterDocumentParent {
   installment: 1 | 2;
   batchNumber: number;
   revision: number;
+  currentFormStatus: number;
+  isAbandoned: boolean;
   letterDetails?: Record<string, unknown>;
 }
 
@@ -184,11 +187,12 @@ export class ClaimLetterDocumentService {
   async loadParent(claimLetterId: string, user: AuthUser): Promise<ClaimLetterDocumentParent> {
     const parent = await this.batchModel
       .findOne({ _id: claimLetterId, assemblyStatus: 'READY' })
-      .select('state year installment batchNumber revision letterDetails')
+      .select('state year installment batchNumber revision currentFormStatus isAbandoned letterDetails')
       .lean<ClaimLetterDocumentParent>()
       .exec();
     if (!parent) throw new NotFoundException(`Claim letter ${claimLetterId} not found`);
     assertStateAccess(user, String(parent.state));
+    if (parent.isAbandoned) throw new ConflictException(CLAIM_LETTER_ABANDONED_MESSAGE);
     await this.activeBatchService.assertActive(parent);
     return parent;
   }

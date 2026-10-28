@@ -25,6 +25,14 @@ interface BatchScope {
   installment: number;
 }
 
+/** A batch's own state decides whether the rule applies to it at all. */
+interface BatchStatus {
+  currentFormStatus: number;
+  isAbandoned: boolean;
+}
+
+type GuardedBatch = BatchScope & BatchStatus & { _id: Types.ObjectId | string };
+
 /** The only place that decides the active batch, so the rule can be lifted later (ADR 0004). */
 @Injectable()
 export class ClaimLetterActiveBatchService {
@@ -48,23 +56,20 @@ export class ClaimLetterActiveBatchService {
       .exec();
   }
 
-  /** The batch number blocking this batch, or null when this batch may proceed. */
-  async resolveBlockingBatchNumber(batch: BatchScope & { _id: Types.ObjectId | string }): Promise<number | null> {
-    const active = await this.resolveActiveBatch(batch);
-    return active && String(active._id) !== String(batch._id) ? active.batchNumber : null;
+  /** The batch number blocking this batch, or null when it may proceed. An abandoned or finished batch
+   *  is never blocked: the rule only orders batches that are themselves active. */
+  async resolveBlockingBatchNumber(batch: GuardedBatch): Promise<number | null> {
+    if (!this.isActive(batch)) return null;
+    return this.blockingBatchNumberFor(batch, await this.resolveActiveBatch(batch));
   }
 
   /** For listings: `active` is the State/year/installment's active batch, already resolved. */
-  blockingBatchNumberFor(
-    batch: { _id: unknown; currentFormStatus: number; isAbandoned: boolean },
-    active: ClaimLetterActiveBatch | null,
-  ): number | null {
-    const isActiveStatus = ACTIVE_STATUSES.includes(batch.currentFormStatus) && !batch.isAbandoned;
-    return active && isActiveStatus && String(active._id) !== String(batch._id) ? active.batchNumber : null;
+  blockingBatchNumberFor(batch: BatchStatus & { _id: unknown }, active: ClaimLetterActiveBatch | null): number | null {
+    return active && this.isActive(batch) && String(active._id) !== String(batch._id) ? active.batchNumber : null;
   }
 
   /** 409 when another batch of the same State/year/installment is the active one. */
-  async assertActive(batch: BatchScope & { _id: Types.ObjectId | string }): Promise<void> {
+  async assertActive(batch: GuardedBatch): Promise<void> {
     const blocking = await this.resolveBlockingBatchNumber(batch);
     if (blocking !== null) throw this.blockedError(blocking);
   }
@@ -80,6 +85,10 @@ export class ClaimLetterActiveBatchService {
       `Only one claim batch can be processed at a time. Batch ${batchNumber} is still in progress or under ` +
       'MoHUA review.'
     );
+  }
+
+  private isActive(batch: BatchStatus): boolean {
+    return ACTIVE_STATUSES.includes(batch.currentFormStatus) && !batch.isAbandoned;
   }
 
   private blockedError(batchNumber: number): ConflictException {

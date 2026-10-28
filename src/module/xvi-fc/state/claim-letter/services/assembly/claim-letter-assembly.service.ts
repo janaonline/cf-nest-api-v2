@@ -1051,19 +1051,20 @@ export class ClaimLetterAssemblyService {
     const addedUlbIds = ulbIds.filter((id) => !currentUlbIdSet.has(id));
     const removedUlbIds = [...currentUlbIdSet].filter((id) => !requestedUlbIdSet.has(id));
 
+    // Validated before any write, so a rejection changes no lock and no child. Only the added ULBs
+    // are locked here; the removed ones keep their locks until the final write (ADR 0002).
+    let prepared: PreparedChildren;
     try {
-      await this.diffLocks(parent, addedUlbIds, removedUlbIds, stateOid, yearOid, installment);
+      prepared = await this.prepareChildren(parent, selections, userOid, stateOid, yearOid, installment);
+      await this.addLocks(parent, addedUlbIds, stateOid, yearOid, installment);
     } catch (err) {
-      // diffLocks rolled back its own transaction; only the edit lock needs releasing.
+      // addLocks rolled back its own transaction; only the edit lock is held.
       await this.releaseEditLock(parent._id, editToken);
       throw err;
     }
 
     try {
-      // Children are deleted and rebuilt (only frozen versions are immutable, ADR 0002). Validated in
-      // memory first, so a rejection never touches the existing rows.
-      const prepared = await this.prepareChildren(parent, selections, userOid, stateOid, yearOid, installment);
-
+      // Children are deleted and rebuilt (only frozen versions are immutable, ADR 0002).
       await this.batchUlbModel.deleteMany({ claimLetter: parent._id });
       try {
         await this.persistChildren(prepared.children);
@@ -1076,7 +1077,15 @@ export class ClaimLetterAssemblyService {
       const built = await this.finishBuildResult(parent, prepared, stateOid, yearOid, installment);
 
       try {
-        return await this.verifyAndFinalizeUpdate(parent, built, stateOid, yearOid, installment, editToken);
+        return await this.verifyAndFinalizeUpdate(
+          parent,
+          built,
+          removedUlbIds,
+          stateOid,
+          yearOid,
+          installment,
+          editToken,
+        );
       } catch (err) {
         // Persisted but unconfirmed: put the previous, still-valid set back.
         await this.batchUlbModel.deleteMany({ claimLetter: parent._id });
@@ -1084,16 +1093,12 @@ export class ClaimLetterAssemblyService {
         throw err;
       }
     } catch (err) {
-      await this.releaseEditLock(parent._id, editToken);
-      await this.compensateUpdateFailure(
-        parent._id,
-        addedUlbIds,
-        removedUlbIds,
-        stateOid,
-        yearOid,
-        installment,
-        parent.buildRequestId,
-      );
+      // Undo while still holding the edit lock, so another edit never sees the half-done locks.
+      try {
+        await this.releaseAddedLocks(parent._id, addedUlbIds);
+      } finally {
+        await this.releaseEditLock(parent._id, editToken);
+      }
       throw err;
     }
   }
@@ -1137,49 +1142,37 @@ export class ClaimLetterAssemblyService {
     );
   }
 
-  private async diffLocks(
+  /** Locks the added ULBs, all or none. Removed ULBs are released at finalize, not here. */
+  private async addLocks(
     parent: ClaimLetterBatchDocument,
     addedUlbIds: string[],
-    removedUlbIds: string[],
     stateOid: Types.ObjectId,
     yearOid: Types.ObjectId,
     installment: number,
   ): Promise<void> {
-    if (addedUlbIds.length === 0 && removedUlbIds.length === 0) return;
+    if (addedUlbIds.length === 0) return;
 
     const session = await this.connection.startSession();
     try {
       session.startTransaction();
-
-      if (removedUlbIds.length > 0) {
-        await this.lockModel.deleteMany(
-          { claimLetter: parent._id, ulbId: { $in: removedUlbIds.map((id) => new Types.ObjectId(id)) } },
-          { session },
+      try {
+        await this.lockModel.insertMany(
+          [...addedUlbIds].sort().map((ulbId) => ({
+            state: stateOid,
+            year: yearOid,
+            installment,
+            ulbId: new Types.ObjectId(ulbId),
+            claimLetter: parent._id,
+            buildRequestId: parent.buildRequestId,
+          })),
+          { session, ordered: true },
         );
-      }
-
-      if (addedUlbIds.length > 0) {
-        const sortedAdded = [...addedUlbIds].sort();
-        try {
-          await this.lockModel.insertMany(
-            sortedAdded.map((ulbId) => ({
-              state: stateOid,
-              year: yearOid,
-              installment,
-              ulbId: new Types.ObjectId(ulbId),
-              claimLetter: parent._id,
-              buildRequestId: parent.buildRequestId,
-            })),
-            { session, ordered: true },
-          );
-        } catch (err) {
-          if (this.isDuplicateKeyError(err)) {
-            throw new ConflictException('One or more selected ULBs are already locked in another active claim.');
-          }
-          throw err;
+      } catch (err) {
+        if (this.isDuplicateKeyError(err)) {
+          throw new ConflictException('One or more selected ULBs are already locked in another active claim.');
         }
+        throw err;
       }
-
       await session.commitTransaction();
     } catch (err) {
       await session.abortTransaction();
@@ -1189,57 +1182,22 @@ export class ClaimLetterAssemblyService {
     }
   }
 
-  /** Reverses a committed lock diff when the subsequent child rebuild/finalize fails. */
-  private async compensateUpdateFailure(
-    parentId: Types.ObjectId,
-    addedUlbIds: string[],
-    removedUlbIds: string[],
-    stateOid: Types.ObjectId,
-    yearOid: Types.ObjectId,
-    installment: number,
-    buildRequestId: string,
-  ): Promise<void> {
-    if (addedUlbIds.length === 0 && removedUlbIds.length === 0) return;
-
+  /** Undoes addLocks after a failed edit. The removed ULBs' locks were never released. */
+  private async releaseAddedLocks(parentId: Types.ObjectId, addedUlbIds: string[]): Promise<void> {
+    if (addedUlbIds.length === 0) return;
     this.logger.warn(
-      `Compensating a failed claim-letter update for ${String(parentId)} — reverting lock diff ` +
-        `(added=${addedUlbIds.length}, removed=${removedUlbIds.length}).`,
+      `Releasing ${addedUlbIds.length} added lock(s) after a failed claim-letter update for ${String(parentId)}.`,
     );
-
-    const session = await this.connection.startSession();
-    try {
-      session.startTransaction();
-      if (addedUlbIds.length > 0) {
-        await this.lockModel.deleteMany(
-          { claimLetter: parentId, ulbId: { $in: addedUlbIds.map((id) => new Types.ObjectId(id)) } },
-          { session },
-        );
-      }
-      if (removedUlbIds.length > 0) {
-        await this.lockModel.insertMany(
-          removedUlbIds.map((ulbId) => ({
-            state: stateOid,
-            year: yearOid,
-            installment,
-            ulbId: new Types.ObjectId(ulbId),
-            claimLetter: parentId,
-            buildRequestId,
-          })),
-          { session, ordered: true },
-        );
-      }
-      await session.commitTransaction();
-    } catch (err) {
-      await session.abortTransaction();
-      throw err;
-    } finally {
-      await session.endSession();
-    }
+    await this.lockModel.deleteMany({
+      claimLetter: parentId,
+      ulbId: { $in: addedUlbIds.map((id) => new Types.ObjectId(id)) },
+    });
   }
 
   private async verifyAndFinalizeUpdate(
     parent: ClaimLetterBatchDocument,
     built: BuildResult,
+    removedUlbIds: string[],
     stateOid: Types.ObjectId,
     yearOid: Types.ObjectId,
     installment: number,
@@ -1254,35 +1212,52 @@ export class ClaimLetterAssemblyService {
       parent.buildRequestId,
     );
 
-    // The edit token stands in for the revision guard (abandon and submit refuse while it is held)
-    // and is cleared in the same write. No history row: edits are not transitions (ADR 0003).
-    const updated = await this.batchModel
-      .findOneAndUpdate(
-        { _id: parent._id, currentFormStatus: FORM_STATUS.IN_PROGRESS, editLockToken: editToken },
-        {
-          $set: {
-            ulbCount: built.requestedUlbIds.length,
-            financialSummary: built.financialSummary,
-            contentHash,
-            contentHashVersion: CLAIM_LETTER_CONTENT_HASH_VERSION,
-            stateEligibilitySources: built.stateEligibilitySources,
-            editLockToken: null,
-            editLockAcquiredAt: null,
-            // The uploaded signed letter no longer matches the edited ULBs (ADR 0003).
-            signedClaimFile: null,
+    // The draft write and the release of the removed ULBs' locks commit together, so a removed ULB
+    // is never free while the edit can still fail (ADR 0002). The edit token stands in for the
+    // revision guard (abandon and submit refuse while it is held) and is cleared in the same write.
+    // No history row: edits are not transitions (ADR 0003).
+    const session = await this.connection.startSession();
+    try {
+      session.startTransaction();
+      const updated = await this.batchModel
+        .findOneAndUpdate(
+          { _id: parent._id, currentFormStatus: FORM_STATUS.IN_PROGRESS, editLockToken: editToken },
+          {
+            $set: {
+              ulbCount: built.requestedUlbIds.length,
+              financialSummary: built.financialSummary,
+              contentHash,
+              contentHashVersion: CLAIM_LETTER_CONTENT_HASH_VERSION,
+              stateEligibilitySources: built.stateEligibilitySources,
+              editLockToken: null,
+              editLockAcquiredAt: null,
+              // The uploaded signed letter no longer matches the edited ULBs (ADR 0003).
+              signedClaimFile: null,
+            },
+            $inc: { revision: 1 },
           },
-          $inc: { revision: 1 },
-        },
-        { new: true },
-      )
-      .lean<Record<string, unknown> | null>()
-      .exec();
-
-    if (!updated) {
-      // Only if the lease expired mid-update and another edit took the lock, or after a manual DB change.
-      throw new ConflictException('This draft was changed by someone else. Please refresh and retry.');
+          { new: true, session },
+        )
+        .lean<Record<string, unknown> | null>()
+        .exec();
+      if (!updated) {
+        // Only if the lease expired mid-update and another edit took the lock, or after a manual DB change.
+        throw new ConflictException('This draft was changed by someone else. Please refresh and retry.');
+      }
+      if (removedUlbIds.length > 0) {
+        await this.lockModel.deleteMany(
+          { claimLetter: parent._id, ulbId: { $in: removedUlbIds.map((id) => new Types.ObjectId(id)) } },
+          { session },
+        );
+      }
+      await session.commitTransaction();
+      return updated;
+    } catch (err) {
+      await session.abortTransaction();
+      throw err;
+    } finally {
+      await session.endSession();
     }
-    return updated;
   }
 
   // ─── POST .../abandon (docs/adr/0002-batching-and-locks.md) ─────────────────
@@ -1630,9 +1605,12 @@ export class ClaimLetterAssemblyService {
     const session = await this.connection.startSession();
     try {
       session.startTransaction();
-      await this.batchUlbModel.deleteMany({ claimLetter: parentId }, { session });
-      await this.lockModel.deleteMany({ claimLetter: parentId, buildRequestId }, { session });
-      await this.batchModel.deleteOne({ _id: parentId, assemblyStatus: 'BUILDING' }, { session });
+      await deleteBuildingParentArtifacts(
+        { batchModel: this.batchModel, batchUlbModel: this.batchUlbModel, lockModel: this.lockModel },
+        parentId,
+        buildRequestId,
+        session,
+      );
       await session.commitTransaction();
     } catch (err) {
       await session.abortTransaction();

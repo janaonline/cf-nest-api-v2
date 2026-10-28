@@ -267,7 +267,6 @@ describe('ClaimLetterService', () => {
         standaloneCriteria: [{ displayLabel: 'SLB', displayDescription: 'SLB...', tally }],
         rowTalliesByFormId: new Map(),
         perUlbFailedCriteria: new Map(),
-        criteriaColumns: [],
       });
 
       const result = await service.getEligibilitySummary(stateId.toString(), yearId.toString(), 1, stateUser);
@@ -309,7 +308,6 @@ describe('ClaimLetterService', () => {
         standaloneCriteria: [],
         rowTalliesByFormId: new Map([[23, eulbTally]]),
         perUlbFailedCriteria: new Map(),
-        criteriaColumns: [],
       });
 
       const result = await service.getEligibilitySummary(stateId.toString(), yearId.toString(), 1, stateUser);
@@ -804,6 +802,12 @@ describe('ClaimLetterService', () => {
 
       expect(result.data?.blockedByBatchNumber).toBe(1);
       expect(result.data?.blockedReason).toMatch(/Batch 1/);
+      // The guard gets the batch's own status, so an abandoned or finished batch is never blocked.
+      const [guarded] = activeBatchService.resolveBlockingBatchNumber.mock.calls[0] as [
+        { currentFormStatus: unknown; isAbandoned: unknown },
+      ];
+      expect(typeof guarded.currentFormStatus).toBe('number');
+      expect(guarded.isAbandoned).toBe(false);
       expect(result.data?.permissions.canFinalSubmit).toBe(false);
       // Signed, but the final claim letter is not offered while another batch is active.
       expect(result.data?.finalClaimLetterStage).toBeNull();
@@ -926,6 +930,14 @@ describe('ClaimLetterService', () => {
       await expect(service.uploadSignedFile('x', fileRef, stateUser)).rejects.toThrow(ConflictException);
     });
 
+    it('refuses an abandoned batch, which abandon leaves IN_PROGRESS', async () => {
+      batchModel.findOne.mockReturnValue(q({ _id: 'x', state: stateId, currentFormStatus: 2, isAbandoned: true }));
+      await expect(service.uploadSignedFile('x', fileRef, stateUser)).rejects.toThrow(
+        'This claim batch was abandoned.',
+      );
+      expect(batchModel.findOneAndUpdate).not.toHaveBeenCalled();
+    });
+
     it('throws BadRequestException when the normalizer reports validation errors', async () => {
       batchModel.findOne.mockReturnValue(q({ _id: 'x', state: stateId, currentFormStatus: 2 }));
       fileInfoNormalizer.normalizeInboundFileInfo.mockReturnValue({
@@ -979,7 +991,7 @@ describe('ClaimLetterService', () => {
 
       expect(result.data?.hasSignedFile).toBe(true);
       const [filter] = batchModel.findOneAndUpdate.mock.calls[0] as [Record<string, unknown>];
-      expect(filter).toMatchObject({ _id: 'x', currentFormStatus: 2 });
+      expect(filter).toMatchObject({ _id: 'x', currentFormStatus: 2, isAbandoned: false });
     });
 
     it('throws ConflictException when the guarded update matches nothing (concurrent status change)', async () => {

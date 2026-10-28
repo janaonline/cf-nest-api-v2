@@ -98,8 +98,6 @@ export interface ClaimLetterUlbLevelEligibility {
   rowTalliesByFormId: Map<number, UlbEligibilityTally>;
   /** The criteria each ULB is INELIGIBLE on, so the picker can name the blocking form. */
   perUlbFailedCriteria: Map<string, ClaimLetterFailedCriterion[]>;
-  /** Every enabled ULB-bulk criterion, pass or fail. */
-  criteriaColumns: ClaimLetterFailedCriterion[];
   /** FORM_AND_ROW row evidence by formId, then ulbId; assembly snapshots it on each child. Not cached:
    *  always empty from the `*ForDisplay` methods. */
   rowEvidenceByFormId: Map<number, Map<string, RowEligibilityEvidence>>;
@@ -201,7 +199,6 @@ export class ClaimLetterEligibilityService {
       standaloneCriteria: full.standaloneCriteria,
       rowTalliesByFormId: full.rowTalliesByFormId,
       perUlbFailedCriteria: new Map([...full.perUlbFailedCriteria].filter(([id]) => subset.has(id))),
-      criteriaColumns: full.criteriaColumns,
       rowEvidenceByFormId: new Map(),
       perCriterion: [],
     };
@@ -214,7 +211,6 @@ export class ClaimLetterEligibilityService {
       standaloneCriteria: value.standaloneCriteria,
       rowTalliesByFormId: [...value.rowTalliesByFormId.entries()],
       perUlbFailedCriteria: [...value.perUlbFailedCriteria.entries()],
-      criteriaColumns: value.criteriaColumns,
     });
   }
 
@@ -224,14 +220,12 @@ export class ClaimLetterEligibilityService {
       standaloneCriteria: UlbCriterionSummary[];
       rowTalliesByFormId: [number, UlbEligibilityTally][];
       perUlbFailedCriteria: [string, ClaimLetterFailedCriterion[]][];
-      criteriaColumns: ClaimLetterFailedCriterion[];
     };
     return {
       perUlbEligible: new Map(parsed.perUlbEligible),
       standaloneCriteria: parsed.standaloneCriteria,
       rowTalliesByFormId: new Map(parsed.rowTalliesByFormId),
       perUlbFailedCriteria: new Map(parsed.perUlbFailedCriteria),
-      criteriaColumns: parsed.criteriaColumns,
       rowEvidenceByFormId: new Map(),
       perCriterion: [],
     };
@@ -285,7 +279,6 @@ export class ClaimLetterEligibilityService {
     const standaloneCriteria: UlbCriterionSummary[] = [];
     const rowTalliesByFormId = new Map<number, UlbEligibilityTally>();
     const rowEvidenceByFormId = new Map<number, Map<string, RowEligibilityEvidence>>();
-    const criteriaColumns: ClaimLetterFailedCriterion[] = [];
     const perCriterion: ClaimLetterCriterionDetail[] = [];
 
     for (const { doc, perUlb, tally, rowEvidenceByUlbId, approvedExemptionUlbIds } of results) {
@@ -293,7 +286,6 @@ export class ClaimLetterEligibilityService {
       const label = config.displayLabel ?? doc.type ?? 'Form';
       const shortLabel = config.shortLabel ?? label;
       const failedCriterion: ClaimLetterFailedCriterion = { type: doc.type ?? '', label, shortLabel };
-      criteriaColumns.push(failedCriterion);
       perCriterion.push({
         formId: doc.formId ?? 0,
         type: doc.type ?? '',
@@ -335,7 +327,6 @@ export class ClaimLetterEligibilityService {
       standaloneCriteria,
       rowTalliesByFormId,
       perUlbFailedCriteria,
-      criteriaColumns,
       rowEvidenceByFormId,
       perCriterion,
     };
@@ -420,44 +411,6 @@ export class ClaimLetterEligibilityService {
     return result;
   }
 
-  /** Claimed total over READY, non-abandoned batches in `statuses`, optionally excluding one batch. */
-  async computeClaimedAmountByStatuses(
-    stateId: string,
-    designYearId: string,
-    installment: number,
-    statuses: number[],
-    excludeClaimLetterId?: string,
-  ): Promise<number> {
-    const stateOid = new Types.ObjectId(stateId);
-    const yearOid = new Types.ObjectId(designYearId);
-
-    const matchingParents = await this.batchModel
-      .find({
-        state: stateOid,
-        year: yearOid,
-        installment,
-        currentFormStatus: { $in: statuses },
-        isAbandoned: false,
-        assemblyStatus: 'READY',
-        ...(excludeClaimLetterId ? { _id: { $ne: new Types.ObjectId(excludeClaimLetterId) } } : {}),
-      })
-      .select('_id')
-      .lean<{ _id: Types.ObjectId }[]>()
-      .exec();
-    if (matchingParents.length === 0) return 0;
-
-    const result = await this.batchUlbModel
-      .aggregate<{
-        _id: null;
-        total: number;
-      }>([
-        { $match: { claimLetter: { $in: matchingParents.map((p) => p._id) } } },
-        { $group: { _id: null, total: { $sum: '$claimedAmount' } } },
-      ])
-      .exec();
-    return result[0]?.total ?? 0;
-  }
-
   /** The three status totals from one find and one aggregate. Abandoned and BUILDING batches are
    *  excluded, since drafts can be either. */
   private async computeClaimedAmountsByStatusBuckets(
@@ -515,12 +468,6 @@ export class ClaimLetterEligibilityService {
     }
 
     return result;
-  }
-
-  async computeTotalAlreadyAcknowledged(stateId: string, designYearId: string, installment: number): Promise<number> {
-    return this.computeClaimedAmountByStatuses(stateId, designYearId, installment, [
-      FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
-    ]);
   }
 
   /** The claimed and available fields for an already summed allocation. `excludeClaimLetterId` keeps

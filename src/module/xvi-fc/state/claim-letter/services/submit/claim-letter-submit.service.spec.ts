@@ -143,6 +143,12 @@ describe('ClaimLetterSubmitService', () => {
       await expect(service.submit('x', stateUser, 'reviewed-key')).rejects.toThrow(ConflictException);
     });
 
+    it('refuses an abandoned batch, which abandon leaves IN_PROGRESS', async () => {
+      batchModel.findOne.mockReturnValue(q({ ...readyParent, isAbandoned: true }));
+      await expect(service.submit('x', stateUser, 'reviewed-key')).rejects.toThrow('This claim batch was abandoned.');
+      expect(connection.startSession).not.toHaveBeenCalled();
+    });
+
     it('throws BadRequestException when no signed file has been uploaded', async () => {
       batchModel.findOne.mockReturnValue(q({ ...readyParent, signedClaimFile: null }));
       await expect(service.submit('x', stateUser, 'reviewed-key')).rejects.toThrow(BadRequestException);
@@ -171,6 +177,7 @@ describe('ClaimLetterSubmitService', () => {
       expect(filter['$or']).toEqual([{ editLockToken: null }, { editLockAcquiredAt: { $lt: expect.any(Date) } }]);
       // Pinned as read, so a re-upload or letter-details save in between cannot slip in.
       expect(filter['signedClaimFile.path']).toBe('x/signed.pdf');
+      expect(filter['isAbandoned']).toBe(false);
       expect(filter['letterDetailsUpdatedAt']).toBeNull();
       expect(letterDetailsService.assertComplete).toHaveBeenCalledWith(
         { year: yearId, letterDetails: undefined },

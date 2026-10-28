@@ -23,6 +23,7 @@ import {
 } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
 import { State, StateDocument } from 'src/schemas/state.schema';
 import {
+  CLAIM_LETTER_ABANDONED_MESSAGE,
   CLAIM_LETTER_ACTION_PREVIEW_TEMPLATE,
   CLAIM_LETTER_MAX_BATCH_NUMBER,
   CLAIM_LETTER_PAGINATION_DEFAULT_LIMIT,
@@ -230,6 +231,8 @@ export class ClaimLetterService {
     if (!parent) throw new NotFoundException(`Claim letter ${claimLetterId} not found`);
     assertStateAccess(user, toObjectIdString(parent['state']) ?? '');
 
+    // Abandon keeps IN_PROGRESS, so the flag is checked on its own.
+    if (parent['isAbandoned']) throw new ConflictException(CLAIM_LETTER_ABANDONED_MESSAGE);
     if (parent['currentFormStatus'] !== FORM_STATUS.IN_PROGRESS) {
       throw new ConflictException(
         `Signed file cannot be uploaded when status is ${getFormStatusLabel(parent['currentFormStatus'] as number)}.`,
@@ -252,7 +255,7 @@ export class ClaimLetterService {
 
     const updated = await this.batchModel
       .findOneAndUpdate(
-        { _id: claimLetterId, currentFormStatus: FORM_STATUS.IN_PROGRESS },
+        { _id: claimLetterId, currentFormStatus: FORM_STATUS.IN_PROGRESS, isAbandoned: false },
         { $set: { signedClaimFile: file, updatedBy: new Types.ObjectId(user._id) } },
         { new: true },
       )
@@ -281,6 +284,8 @@ export class ClaimLetterService {
         state: doc['state'] as Types.ObjectId,
         year: doc['year'] as Types.ObjectId,
         installment: doc['installment'] as number,
+        currentFormStatus: doc['currentFormStatus'] as number,
+        isAbandoned: doc['isAbandoned'] === true,
       }),
     ]);
     summary.blockedByBatchNumber = blockedBy;
