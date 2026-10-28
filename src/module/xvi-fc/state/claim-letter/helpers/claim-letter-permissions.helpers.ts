@@ -3,41 +3,24 @@ import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Permission } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
 
-/** Authoritative UI gates for a claim letter — the frontend must read these directly, never infer
- *  `canEdit`/`canFinalSubmit` from `currentFormStatus`/`isAbandoned` locally (matches the
- *  convention documented on `FcUnspentPermissions` and implemented by `sfc-status`'s
- *  `buildFormPermissions`). */
+/** Authoritative UI gates: the frontend reads these, never re-derives them from status. */
 export interface ClaimLetterPermissions {
   canView: boolean;
   canEdit: boolean;
   canFinalSubmit: boolean;
 }
 
-/**
- * Returns true if a claim letter batch in the given status may be edited (ULB selections changed,
- * abandoned, signed file uploaded). Narrower than the generic `canStateEditForm` in
- * `xvi-fc/common/utils/xvi-fc-form-status-access.util.ts` (which also allows `RETURNED_BY_MOHUA` —
- * claim-letter has no such re-edit path; a returned/superseded claim only ever gets a brand new
- * version via `createNewVersion`, per ADR 0003) and additionally accounts for `isAbandoned`, which
- * that generic util has no concept of.
- */
+/** Narrower than the shared canStateEditForm: no RETURNED_BY_MOHUA re-edit (a returned claim gets a
+ *  new version, ADR 0003), and an abandoned batch is never editable. */
 export function canEditClaimLetter(status: number, isAbandoned: boolean): boolean {
   return status === FORM_STATUS.IN_PROGRESS && !isAbandoned;
 }
 
-/** Same gate as `canEditClaimLetter` today — submit and edit/save share the same allowed status. */
 export function canFinalSubmitClaimLetter(status: number, isAbandoned: boolean): boolean {
   return canEditClaimLetter(status, isAbandoned);
 }
 
-/**
- * Builds the `permissions` object attached to every `ClaimLetterBatchSummary` response.
- *
- * Callers must already have verified state access (every current call site does, via
- * `assertStateAccess`/`hasStateAccess`, before reaching this) — access is deliberately not
- * re-checked here, unlike `sfc-status`'s `buildFormPermissions` which folds a `hasAccess` check in
- * because it's called from more places that don't all pre-assert it the same way.
- */
+/** Callers have already asserted state access, so it is not re-checked here. */
 export function buildClaimLetterPermissions(
   user: AuthUser,
   status: number,

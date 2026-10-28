@@ -9,14 +9,8 @@ export interface ClaimLetterBuildCleanupModels {
   lockModel: Model<ClaimLetterUlbLockDocument>;
 }
 
-/**
- * Deletes a BUILDING parent's children, its own-buildRequestId locks, and the parent itself.
- * Caller owns the session/transaction boundary (start/commit/abort/end) — this only issues the 3
- * deletes against the given session. Scoped by claimLetter + buildRequestId, never the bare
- * business key, per ClaimLetterUlbLockSchema's own release-path invariant. Shared by
- * ClaimLetterRecoveryService's scheduled sweep and ClaimLetterAssemblyService's inline
- * reclaim-on-conflict path so neither service needs to depend on the other.
- */
+/** Deletes a BUILDING parent with its children and own-buildRequestId locks (never by business key);
+ *  the caller owns the transaction. Shared by both stale-build reclaim paths (ADR 0002). */
 export async function deleteBuildingParentArtifacts(
   models: ClaimLetterBuildCleanupModels,
   parentId: Types.ObjectId,

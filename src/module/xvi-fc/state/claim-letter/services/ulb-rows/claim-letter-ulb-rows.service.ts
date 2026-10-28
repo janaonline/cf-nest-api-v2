@@ -39,7 +39,7 @@ interface ClaimLetterBatchUlbRaw {
   differencePercentageBasisPoints: number;
 }
 
-/** Selected-ULBs table for a claim — mirrors the FC Unspent Yes-branch table shape. */
+/** Selected-ULBs table for a claim; same shape as the FC Unspent Yes-branch table. */
 @Injectable()
 export class ClaimLetterUlbRowsService {
   constructor(
@@ -91,14 +91,8 @@ export class ClaimLetterUlbRowsService {
     return filter;
   }
 
-  /**
-   * Fetches one page of the batch's ULB rows plus the state gate and per-ULB criteria, re-verified at read
-   * time rather than trusted from the frozen snapshot alone (a ULB's Devolution/eligibility status
-   * may have changed after being added but before final submit). This is a display-only read (the
-   * `eligible` flag only drives a client-side warning badge — actual save/submit authorization is
-   * independently, always-freshly re-verified server-side in ClaimLetterAssemblyService), so the
-   * cached `*ForDisplay` variants are safe here.
-   */
+  /** Re-checks eligibility on read, since it can change after a ULB is added. Display-only (a warning
+   *  badge), so the cached variants are fine; save and submit re-check fresh. */
   private async fetchRowsWithEligibility(
     parent: Pick<ClaimLetterBatchParent, 'state' | 'year' | 'installment'>,
     filter: FilterQuery<ClaimLetterBatchUlbDocument>,
@@ -117,9 +111,7 @@ export class ClaimLetterUlbRowsService {
       ),
     ]);
 
-    // Extended re-verification to the per-ULB criteria (SLB, Annual Accounts, Elected Body/FC
-    // Unspent rows) — only needs a verdict for the ULBs actually fetched above, not the full
-    // state's expected set.
+    // Verdicts for this page's ULBs only.
     const rowUlbIds = rawRows.map((r) => String(r.ulbId));
     const ulbLevelEligibility = await this.eligibilityService.resolveUlbLevelEligibilityForDisplay(
       String(parent.state),

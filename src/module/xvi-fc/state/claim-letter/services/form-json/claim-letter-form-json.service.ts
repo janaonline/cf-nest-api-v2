@@ -47,14 +47,8 @@ export class ClaimLetterFormJsonService {
 
   constructor(private readonly formJsonService: FormJsonService) {}
 
-  /**
-   * Loads Claim Letter's own form-json document (formId CLAIM_LETTER_FORM_ID) for a design year
-   * exactly once and returns both the field config and the variance band derived from it. Callers
-   * that need both must use this rather than chaining a separate variance lookup — that would fetch
-   * the same document twice per request. Missing/unseeded is expected before the payload is pushed
-   * (same as the old `loadQuestions`), so it degrades to empty questions + default variance with a
-   * logged warning rather than throwing.
-   */
+  /** One fetch of formjson 26, with everything derived from it; never fetch it again for another part.
+   *  An unseeded year logs a warning and returns defaults. */
   async loadFormConfig(yearId: string): Promise<ClaimLetterFormConfig> {
     try {
       const formJson = await this.formJsonService.findActiveByDesignYearAndFormId(yearId, CLAIM_LETTER_FORM_ID);

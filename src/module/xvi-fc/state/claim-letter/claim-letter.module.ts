@@ -54,8 +54,7 @@ import { FormJsonModule } from 'src/master/form-json/form-json.module';
       { name: ClaimLetterBatchUlb.name, schema: ClaimLetterBatchUlbSchema },
       { name: ClaimLetterUlbLock.name, schema: ClaimLetterUlbLockSchema },
       { name: ClaimLetterBatchHistory.name, schema: ClaimLetterBatchHistorySchema },
-      // Read-only cross-references — this module never writes to Devolution Formula, Ulb, State,
-      // Year, User, or FC Unspent Declaration.
+      // Read-only: this module never writes to the collections below.
       { name: DevolutionFormulaForm.name, schema: DevolutionFormulaFormSchema },
       { name: DevolutionFormulaRow.name, schema: DevolutionFormulaRowSchema },
       { name: Ulb.name, schema: UlbSchema },

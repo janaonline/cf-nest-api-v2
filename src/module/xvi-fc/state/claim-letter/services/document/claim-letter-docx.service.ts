@@ -78,11 +78,7 @@ interface ParaOptions {
   size?: number;
 }
 
-/**
- * Renders `ClaimLetterDocumentService`'s letter model as an A4 .docx: portrait covering letter,
- * landscape annexure, highlighted `< >` placeholders. Layout ported from the approved Phase 0 v3
- * sample; all text comes from the model.
- */
+/** Renders the letter model as an A4 .docx in the approved Phase 0 v3 layout; all text comes from the model. */
 @Injectable()
 export class ClaimLetterDocxService {
   constructor(

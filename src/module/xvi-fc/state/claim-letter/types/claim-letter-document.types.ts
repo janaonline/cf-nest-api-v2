@@ -1,13 +1,14 @@
-/** One run of letter text. A '\n' inside `text` is a line break. `placeholder` marks a highlighted
- *  `< >` the State still has to fill. `field` is the letter-detail key of a slot (filled or blank), so
- *  the portal can draw an input there; `lead` prints before a filled slot value only. `hint` is
- *  portal-only help for a placeholder filled elsewhere. */
+/** One run of letter text; a '\n' inside `text` is a line break. */
 export interface ClaimLetterRun {
   text: string;
   bold?: boolean;
+  /** A highlighted `< >` the State still has to fill. */
   placeholder?: boolean;
+  /** Letter-detail key of a slot, filled or blank, where the portal draws an input. */
   field?: string;
+  /** Printed before a filled slot value only. */
   lead?: string;
+  /** Portal-only help for a placeholder filled elsewhere. */
   hint?: string;
 }
 

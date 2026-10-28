@@ -43,15 +43,10 @@ import type {
   ClaimLetterEligibilitySummary,
 } from '../../types/claim-letter.types';
 
-/** Loose shape for .lean() query results — real field-level typing lives on the schema itself. */
 type LeanClaimLetterBatch = Record<string, unknown>;
 
-/**
- * Orchestrates the State-facing claim-letter read paths (eligibility summary, single-claim
- * detail, and the "list my claim letters" history view), plus the signed-file upload. Submit lives
- * in ClaimLetterSubmitService; lock/child-touching mutations (create/update/abandon) in
- * ClaimLetterAssemblyService.
- */
+/** State read paths (eligibility summary, claim context, detail, history) and the signed-file upload.
+ *  Submit is in ClaimLetterSubmitService; create, edit and abandon in ClaimLetterAssemblyService. */
 @Injectable()
 export class ClaimLetterService {
   private readonly logger = new Logger(ClaimLetterService.name);
@@ -77,10 +72,7 @@ export class ClaimLetterService {
   ): Promise<XviFcApiResponse<ClaimLetterEligibilitySummary>> {
     assertStateAccess(user, stateId);
     assertInstallmentSupported(installment);
-    // expectedUlbSetService.resolve() runs concurrently with the other independent branches below
-    // (only ulbLevelEligibility/remainingUlbIds need its result); each chains off it via .then()
-    // instead of the whole request waiting on it first, and reuses the result instead of letting
-    // resolveUlbLevelEligibilityForDisplay re-resolve the same full set internally on a cache miss.
+    // Only two branches need the expected ULBs, so they chain off this promise instead of waiting first.
     const expectedUlbsPromise = this.expectedUlbSetService.resolve(stateId, yearId);
 
     const [
@@ -122,15 +114,10 @@ export class ClaimLetterService {
     const expectedUlbIds = expectedUlbs.map((u) => u.ulbId);
     const { batchSlotsUsed, nextBatchNumber } = batchSlotInfo;
 
-    // Resolved once, reused both on the summary field below and to interpolate any
-    // `{{priorFcCycleLabel}}` placeholder in DB-authored checklist copy (see interpolateTemplateTokens).
     const priorFcCycleLabel = resolvePriorFcCycleLabel(YearIdToLabel[yearId] ?? '');
     const tokens = { priorFcCycleLabel };
 
-    // Elected Body / FC Unspent: fold their row-level tally into the same checklist line as the
-    // state's own form-submission status, rather than a second, separate entry for one requirement.
-    // Also substitutes any `{{token}}` placeholder (e.g. `{{priorFcCycleLabel}}`) DB-authored
-    // checklistSummary/displayDescription copy may contain — generic, not per-formType.
+    // FORM_AND_ROW sources show their ULB tally on their own checklist line; DB copy gets its {{tokens}} filled.
     const sourcesWithUlbBreakdown = gate.sources.map((source) => {
       const ulbBreakdown = ulbLevelEligibility.rowTalliesByFormId.get(source.formId);
       return {
@@ -165,13 +152,7 @@ export class ClaimLetterService {
     return xviFcSuccess('Claim letter eligibility summary fetched.', summary);
   }
 
-  /**
-   * Lean sibling of `getEligibilitySummary` for the create/edit claim-letter page — that page only
-   * ever reads `financialOverview`/`nextBatchNumber`/`batchSlotsMax`/`batchSlotsUsed`/
-   * `expectedUlbCount`/`remainingUlbCount` (never `stateLevelGate`/`ulbLevelCriteria`/
-   * `ulbReadiness`), so this skips `evaluateStateLevelGate`/`resolveUlbLevelEligibility` entirely
-   * rather than computing and discarding them on every create/edit page load.
-   */
+  /** For the create/edit page: skips the gate and ULB-level evaluation that page never shows. */
   async getClaimContext(
     stateId: string,
     yearId: string,
@@ -215,8 +196,6 @@ export class ClaimLetterService {
     return xviFcSuccess('Claim letter context fetched.', context);
   }
 
-  /** Shared by `getEligibilitySummary` and `getClaimContext` — how many of this state/year/
-   *  installment's 3 batch slots are already used, and which slot a new draft would occupy next. */
   private async resolveBatchSlotInfo(
     stateId: string,
     yearId: string,
@@ -238,8 +217,7 @@ export class ClaimLetterService {
     return { batchSlotsUsed: usedBatchNumbers.size, nextBatchNumber };
   }
 
-  /** Persists `signedClaimFile` — writable only while IN_PROGRESS, no history write (not a
-   *  workflow transition — docs/adr/0003-workflow-transitions.md). */
+  /** Only while IN_PROGRESS; not a workflow transition, so no history row (ADR 0003). */
   async uploadSignedFile(
     claimLetterId: string,
     fileRef: XviFcFileRefDto,
@@ -268,7 +246,7 @@ export class ClaimLetterService {
     }
 
     if (file === undefined) {
-      // Same file re-uploaded — no persistence change (see FileInfoNormalizerService).
+      // Same file re-uploaded: nothing to save (FileInfoNormalizerService).
       return xviFcSuccess('Signed claim letter file unchanged.', mapClaimLetterBatchDocToSummary(parent, user));
     }
 
@@ -334,12 +312,8 @@ export class ClaimLetterService {
     return stateDoc?.name ?? '';
   }
 
-  /**
-   * Adds the "Letter details & Preview" action to `signedClaimFile`'s supporting content. It opens
-   * the letter preview with inline boxes for the details, which also downloads the .docx. Shown only while
-   * the batch is editable (same `canEdit` gating as the elected-body / devolution file actions),
-   * has ULBs to put in a letter and is not blocked by another active batch (whose reason is shown).
-   */
+  /** The "Letter details & Preview" action on signedClaimFile: shown while editable with ULBs; a
+   *  blocked batch shows the block reason instead. */
   private applySignedFileSupportingContent(
     questions: FieldConfig[],
     doc: LeanClaimLetterBatch,
@@ -375,13 +349,7 @@ export class ClaimLetterService {
     field.supportingContent = [supportingContent];
   }
 
-  /**
-   * `loadQuestions()` always returns the static formjsons *template* — its `value` is the blank
-   * shape seeded at formjsons-authoring time, never the actual uploaded file — so the "View" link
-   * in the read-only file widget had nothing to point at even after a real upload. Overlays the
-   * persisted `signedClaimFile` here, mapped to the canonical `UploadedFileMetadata` shape the
-   * frontend's `app-file` component expects.
-   */
+  /** The formjson field's value is the blank seed, so the uploaded file is overlaid for the "View" link. */
   private applySignedFileValue(questions: FieldConfig[], signedFile: unknown): void {
     if (!signedFile || typeof signedFile !== 'object') return;
 

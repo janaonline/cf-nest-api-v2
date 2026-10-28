@@ -66,11 +66,7 @@ export class ClaimLetterSubmitService {
     private readonly batchUlbModel: Model<ClaimLetterBatchUlbDocument>,
   ) {}
 
-  /**
-   * Requires a signed file; idempotent on retry (an already-submitted claim returns its current
-   * state, docs/adr/0001-idempotent-retry.md). Recorded as a workflow transition
-   * (docs/adr/0003-workflow-transitions.md).
-   */
+  /** Idempotent on retry (ADR 0001); the checks before the transaction are listed in ADR 0003. */
   async submit(
     claimLetterId: string,
     user: AuthUser,
@@ -122,8 +118,7 @@ export class ClaimLetterSubmitService {
             // Pinned as read: a re-upload or letter-details save in between makes this a conflict.
             'signedClaimFile.path': signedFile.path,
             letterDetailsUpdatedAt: parent.letterDetailsUpdatedAt ?? null,
-            // Self-expiring lease, same as ClaimLetterAssemblyService's updateDraftRaw/abandonDraftRaw
-            // - a stale lock (crash mid-update, never cleared) never permanently blocks submit either.
+            // Same self-expiring edit-lock lease as ClaimLetterAssemblyService.
             $or: [{ editLockToken: null }, { editLockAcquiredAt: { $lt: this.editLockStaleBefore() } }],
           },
           {
@@ -188,10 +183,7 @@ export class ClaimLetterSubmitService {
     );
   }
 
-  /**
-   * Submit re-checks fresh eligibility (ADR 0003): the letter is built live, so the State gate and every
-   * batch ULB must still pass at the moment of submission. Never the display cache.
-   */
+  /** Fresh, never the display cache: the letter is built live, so it must still hold at submit. */
   private async assertBatchStillEligible(scope: {
     _id: Types.ObjectId;
     state: Types.ObjectId;
@@ -233,14 +225,8 @@ export class ClaimLetterSubmitService {
     );
   }
 
-  /**
-   * Batch `CLAIM_LETTER_MAX_BATCH_NUMBER` is the state's last chance to claim any ULB for this
-   * installment — nothing else stops an ULB left out of every batch from being permanently
-   * stranded once it submits. Deliberately checked against every expected ULB not yet locked into
-   * *any* batch (`resolveRemainingUlbIds`), not just the ones currently eligible: an ineligible ULB
-   * could still resolve its eligibility later, and this rejection is what keeps that possibility
-   * open by refusing to close out the claim cycle while it's still unresolved.
-   */
+  /** The last batch slot is the State's last chance this installment: refuse it while any expected ULB
+   *  is in no batch, eligible or not, so none is stranded. */
   private async assertFinalBatchIsComplete(stateId: string, yearId: string, installment: number): Promise<void> {
     const expectedUlbs = await this.expectedUlbSetService.resolve(stateId, yearId);
     const remainingUlbIds = await this.eligibilityService.resolveRemainingUlbIds(
@@ -263,7 +249,7 @@ export class ClaimLetterSubmitService {
     );
   }
 
-  /** Self-expiring lease check for `editLockToken`; mirrors `ClaimLetterAssemblyService`'s. */
+  /** Mirrors ClaimLetterAssemblyService's lease cutoff. */
   private editLockStaleBefore(): Date {
     return new Date(Date.now() - CLAIM_LETTER_EDIT_LOCK_LEASE_MINUTES * 60_000);
   }
