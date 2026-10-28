@@ -6,6 +6,28 @@ import { DigitizationStatuses, UploadedBy, AuditType } from './enums';
 
 export type AfsExcelFileDocument = HydratedDocument<AfsExcelFile>;
 
+@Schema({ _id: false })
+export class AfsDigitizationV3Segment {
+  @Prop({ type: String })
+  docType: string; // nest doc type key, e.g. "bal_sheet"; "unknown" when FastAPI could not identify it
+
+  @Prop({ type: Number })
+  startPage: number;
+
+  @Prop({ type: Number })
+  endPage: number;
+
+  @Prop({ type: String })
+  title?: string;
+
+  @Prop({ type: Boolean, default: false })
+  isDuplicate: boolean;
+}
+
+const AfsDigitizationV3SegmentSchema = SchemaFactory.createForClass(AfsDigitizationV3Segment);
+
+
+
 // @Schema({ _id: false })
 // export class AfsExcelFileQueue {
 //   @Prop({ type: String })
@@ -80,9 +102,27 @@ export class AfsExcelFileItem {
   @Prop({ type: [MongooseSchema.Types.Mixed], default: [] })
   data: any[];
 
+  // ---- AFS digitization v3 (summary only; the full extraction stays in FastAPI) ----
+  // default: undefined keeps these absent on items that were not digitized by v3.
+
+  // Distinct doc types actually present in the PDF
+  @Prop({ type: [String], default: undefined })
+  detectedDocTypes?: string[];
+
+  // Page range for each doc type found
+  @Prop({ type: [AfsDigitizationV3SegmentSchema], default: undefined })
+  segments?: AfsDigitizationV3Segment[];
+
+  // True when more than one distinct doc type is present
+  @Prop({ type: Boolean })
+  isConsolidated?: boolean;
+
+  // True when the uploaded doc type (record docType) is not among detectedDocTypes
+  @Prop({ type: Boolean })
+  isMismatch?: boolean;
+
   @Prop({ type: QueueSchema })
-  queue: Queue;
-}
+  queue: Queue;}
 
 const AfsExcelFileItemSchema = SchemaFactory.createForClass(AfsExcelFileItem);
 
@@ -117,6 +157,7 @@ export class AfsExcelFile {
 
   @Prop({ type: AfsExcelFileItemSchema })
   afsFile: AfsExcelFileItem;
+
 }
 
 export const AfsExcelFileSchema = SchemaFactory.createForClass(AfsExcelFile);
