@@ -29,7 +29,7 @@ import { mapClaimLetterBatchDocToSummary } from '../../helpers/claim-letter-summ
 import type { ClaimLetterBatchSummary } from '../../types/claim-letter.types';
 import { ClaimLetterActiveBatchService } from '../active-batch/claim-letter-active-batch.service';
 import { ClaimLetterEligibilityService } from '../eligibility/claim-letter-eligibility.service';
-import { ClaimLetterFinalPdfService } from '../final-pdf/claim-letter-final-pdf.service';
+import { ClaimLetterFinalPdfService, finalPdfOutdatedError } from '../final-pdf/claim-letter-final-pdf.service';
 import { ClaimLetterHistoryService } from '../history/claim-letter-history.service';
 import { ClaimLetterLetterDetailsService } from '../letter-details/claim-letter-letter-details.service';
 
@@ -123,6 +123,8 @@ export class ClaimLetterSubmitService {
             // Pinned as read: a re-upload or letter-details save in between makes this a conflict.
             'signedClaimFile.path': signedFile.path,
             letterDetailsUpdatedAt: parent.letterDetailsUpdatedAt ?? null,
+            // A slower, older merge finishing after the key check must not be submitted.
+            'finalClaimPdf.sourceKey': finalPdfSourceKey,
             // Same self-expiring edit-lock lease as ClaimLetterAssemblyService.
             $or: [{ editLockToken: null }, { editLockAcquiredAt: { $lt: this.editLockStaleBefore() } }],
           },
@@ -151,7 +153,7 @@ export class ClaimLetterSubmitService {
             fromStatus: FORM_STATUS.IN_PROGRESS,
             toStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
             actionSource: 'DIRECT_STATE_REVIEW',
-            // Both exist: the filter pinned the signed file and the key check needs the cached PDF.
+            // Both exist: the filter pinned both.
             submittedFiles: { signedClaimFile: updated.signedClaimFile!, finalClaimPdf: updated.finalClaimPdf! },
             changedBy: userOid,
             requestId: randomUUID(),
@@ -182,6 +184,14 @@ export class ClaimLetterSubmitService {
     }
     if (current?.editLockToken && this.isEditLockActive(current.editLockAcquiredAt)) {
       throw new ConflictException('Claim letter is currently being edited. Please retry in a moment.');
+    }
+    // Still a draft, but an older merge replaced the reviewed one: the page reloads the final PDF.
+    if (
+      current?.currentFormStatus === FORM_STATUS.IN_PROGRESS &&
+      !current.isAbandoned &&
+      current.finalClaimPdf?.sourceKey !== finalPdfSourceKey
+    ) {
+      throw finalPdfOutdatedError();
     }
     throw new ConflictException(
       'The claim letter, its signed file or its letter details changed while submitting. Please reload and try again.',

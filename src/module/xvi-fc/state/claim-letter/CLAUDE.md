@@ -109,7 +109,8 @@ Unspent Declaration, ATR), merged with `pdf-lib`.
 - Each entry is only `{ label, formId, fileKeys, optional? }`: the document is found through that
   form's enabled `claimEligibility.source`, with the same query the eligibility check runs
   (`common/utils/claim-eligibility-source-query.util.ts`), so a new enclosure is a formjson change. A
-  form without an enabled source is listed as not included.
+  form without an enabled source, or whose source is not `ownerLevel: 'STATE'` with `fields.state`, is
+  listed as not included, so another State's or a ULB's file is never merged.
 - Cached on the batch as `finalClaimPdf` under a SHA-256 key of the ordered labels and upload paths. A
   re-upload always has a new path, so the key is the change detector; nothing rebuilds otherwise.
   Concurrent requests for the same batch and key share one merge (per process).
@@ -118,7 +119,8 @@ Unspent Declaration, ATR), merged with `pdf-lib`.
   unreadable one is a 422 naming the form to fix.
 - Both GETs need only VIEW_STATE_FORMS; a viewer may trigger a build, since it is only a cache. A
   submitted batch serves its stored copy, with no rebuild and no active-batch guard.
-- Submit sends the key the page showed and gets 409 `FINAL_PDF_OUTDATED` when it is stale. The
+- Submit sends the key the page showed and gets 409 `FINAL_PDF_OUTDATED` when it is stale, also
+  when an older merge replaced the reviewed one after the check (the update filter pins the key). The
   summary's `finalClaimLetterStage` (DRAFT / SUBMITTED / null) tells the UI which copy to show.
 - Scanned ink signatures only: a merge breaks a digital signature.
 
@@ -142,7 +144,7 @@ Unspent Declaration, ATR), merged with `pdf-lib`.
   `stateEligibilitySources` stays form-level (`rowDocumentId` / `rowStatusAtEvaluation` null), since no
   single row applies to a whole State.
 - Submit's checks all run before its transaction and are listed in ADR 0003; the update filter also
-  pins `signedClaimFile.path` and `letterDetailsUpdatedAt` as read.
+  pins `signedClaimFile.path`, `letterDetailsUpdatedAt` and `finalClaimPdf.sourceKey` as read.
 - Abandon only sets `isAbandoned` (the status stays `IN_PROGRESS`) and releases the locks, so every
   path that acts on a batch checks the flag itself: preview, .docx, signed-file upload and submit
   reply 409 `CLAIM_LETTER_ABANDONED_MESSAGE`, and the one-active-batch rule ignores an abandoned

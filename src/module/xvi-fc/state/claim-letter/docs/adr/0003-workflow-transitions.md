@@ -44,8 +44,9 @@ per-ULB eligibility of every batch ULB (failing ULBs named); every non-optional 
 `meta.mergeDocuments` present (400 `FINAL_PDF_INCOMPLETE`); and the `finalPdfSourceKey` the State
 reviewed still matches the current merge sources (409 `FINAL_PDF_OUTDATED`); and, for the last batch
 slot (`CLAIM_LETTER_MAX_BATCH_NUMBER`), no expected ULB left out of every batch. The update filter also
-pins `signedClaimFile.path` and `letterDetailsUpdatedAt` as read, so a re-upload or letter-details
-save racing the submit makes it fail instead of submitting content nobody reviewed. The submitted
+pins `signedClaimFile.path`, `letterDetailsUpdatedAt` and `finalClaimPdf.sourceKey` as read, so a
+re-upload, a letter-details save or an older merge finishing late makes it fail (the last one as 409
+`FINAL_PDF_OUTDATED`) instead of submitting content nobody reviewed. The submitted
 batch keeps both `signedClaimFile` and `finalClaimPdf`; the final claim letter is the submission
 artifact, and the final-PDF endpoints keep serving it (never rebuilt) after submit.
 
