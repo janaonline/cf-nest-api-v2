@@ -204,39 +204,4 @@ describe('ClaimLetterUlbRowsService', () => {
       { 'ulbSnapshot.sbCode': expect.any(RegExp) },
     ]);
   });
-
-  describe('getAllUlbRows', () => {
-    it('fetches every row unpaginated (no skip/limit) and returns parent + ulbLevelEligibility alongside rows', async () => {
-      batchModel.findOne.mockReturnValue(
-        q({ _id: claimLetterId, state: stateId, year: yearId, installment: 1, batchNumber: 1, ulbCount: 1 }),
-      );
-      const ulbId = new Types.ObjectId();
-      const rowQuery = q([
-        {
-          ulbId,
-          ulbSnapshot: { name: 'Test ULB', censusCode: '111', sbCode: 'SB-1' },
-          allocatedAmount: 1,
-          claimedAmount: 1,
-          differencePercentageBasisPoints: 0,
-        },
-      ]);
-      batchUlbModel.find.mockReturnValue(rowQuery);
-      const ulbLevelEligibility = { perUlbEligible: new Map([[String(ulbId), true]]), perUlbFailedCriteria: new Map() };
-      eligibilityService.resolveUlbLevelEligibilityForDisplay.mockResolvedValue(ulbLevelEligibility);
-
-      const result = await service.getAllUlbRows(claimLetterId, stateUser);
-
-      expect(rowQuery.skip).not.toHaveBeenCalled();
-      expect(rowQuery.limit).not.toHaveBeenCalled();
-      expect(result.parent).toMatchObject({ batchNumber: 1, ulbCount: 1 });
-      expect(result.rows).toHaveLength(1);
-      expect(result.rows[0]).toMatchObject({ ulbId: String(ulbId), eligible: true });
-      expect(result.ulbLevelEligibility).toBe(ulbLevelEligibility);
-    });
-
-    it('throws NotFoundException when no READY claim matches the id', async () => {
-      batchModel.findOne.mockReturnValue(q(null));
-      await expect(service.getAllUlbRows(claimLetterId, stateUser)).rejects.toThrow(NotFoundException);
-    });
-  });
 });

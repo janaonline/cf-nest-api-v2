@@ -78,7 +78,13 @@ export interface RowEligibilityEvidence {
   rowStatusAtEvaluation: FormStatusType | null;
   /** Elected Body's dataset-versioned rows; null for FC Unspent (no dataset-versioning concept). */
   datasetVersion: number | null;
+  /** The row's `rowStatusField` value as stored (e.g. "Constituted"); null when there is no row. */
+  rowValue: RowFieldValue;
+  /** Whether the row cleared `rowAcceptedFormStatuses`; null when there is no row or no such check. */
+  rowAccepted: boolean | null;
 }
+
+export type RowFieldValue = string | number | boolean | null;
 
 /**
  * Config shape for the 'ROW_STATUS_AND_FIELDS' evaluator, read out of the free-form
@@ -140,6 +146,11 @@ export interface ClaimEligibilityConfig {
    *  Optional; falls back to `displayLabel` when unset, so an unconfigured source still renders a
    *  meaningful (if longer) header rather than blank. */
   shortLabel?: string;
+  /** Column header for this criterion in the claim letter's annexure tables (e.g. "Audited Accounts
+   *  submitted"). Optional; falls back to `displayLabel`. */
+  letterColumnLabel?: string;
+  /** Column order in the claim letter's annexure tables (ascending; unset sorts last, then formId). */
+  displayOrder?: number;
   /** Relative frontend route for this criterion's "View" action (e.g. '../sfc-status').
    *  Frontend falls back to '../requirements' (self-link) when unset. */
   checklistRoute?: string;

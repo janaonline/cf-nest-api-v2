@@ -14,7 +14,8 @@ edit changes content, not workflow position.
 
 A history row (`ClaimLetterHistoryService.recordTransition`) is written **only** for these, in V1:
 - Draft creation (`null` → `IN_PROGRESS`, in `ClaimLetterAssemblyService.createDraftRaw`).
-- Submit (`IN_PROGRESS` → `UNDER_REVIEW_BY_MOHUA`, in `ClaimLetterService.submit`).
+- Submit (`IN_PROGRESS` → `UNDER_REVIEW_BY_MOHUA`, in `ClaimLetterSubmitService.submit`). Its row also
+  records `submittedFiles`: the signed letter as uploaded and the final claim letter (`finalClaimPdf`).
 - Abandon (`IN_PROGRESS` → `IN_PROGRESS`, a same-status transition recorded purely for audit
   purposes, in `ClaimLetterAssemblyService.abandonDraftRaw`).
 
@@ -24,6 +25,27 @@ It is **never** written for:
   commits (see ADR 0002's edit-lock lease) — nothing else can have changed `currentFormStatus`
   while that token is held, since abandon/submit both refuse to act while it's set.
 - `uploadSignedFile` — attaches a file, doesn't move the workflow.
+- `PATCH .../letter-details` (`ClaimLetterLetterDetailsService.save`) - the State's letter text,
+  not workflow position.
+- `GET .../final-pdf` (`ClaimLetterFinalPdfService`) - builds and caches a derived file
+  (`finalClaimPdf`) on the batch.
+
+**The signed letter is cleared, without a history row, when what it signed changes:**
+- A ULB edit (`verifyAndFinalizeUpdate`) sets `signedClaimFile: null` with the revision bump. A save
+  with the same ULBs and amounts is a no-op (no rebuild, no revision bump), so it keeps the file.
+- A letter-details change does the same, but only with `confirmSignedFileRemoval: true` (409
+  `SIGNED_FILE_REMOVAL_NOT_CONFIRMED` otherwise, so the UI can warn first). An unchanged save never
+  clears it.
+
+**Submit preconditions**, checked before its transaction: signed file present; letter details
+complete (formjson-required fields); this is the active batch (ADR 0004); fresh State gate and
+per-ULB eligibility of every batch ULB (failing ULBs named); every non-optional enclosure in
+`meta.mergeDocuments` present (400 `FINAL_PDF_INCOMPLETE`); and the `finalPdfSourceKey` the State
+reviewed still matches the current merge sources (409 `FINAL_PDF_OUTDATED`). The update filter also
+pins `signedClaimFile.path` and `letterDetailsUpdatedAt` as read, so a re-upload or letter-details
+save racing the submit makes it fail instead of submitting content nobody reviewed. The submitted
+batch keeps both `signedClaimFile` and `finalClaimPdf`; the final claim letter is the submission
+artifact, and the final-PDF endpoints keep serving it (never rebuilt) after submit.
 
 Every history write happens **inside the same DB transaction as the status change it records** — a
 transition and its audit row can never diverge (one committing without the other landing).

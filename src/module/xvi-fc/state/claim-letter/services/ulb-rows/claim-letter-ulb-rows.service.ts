@@ -66,31 +66,6 @@ export class ClaimLetterUlbRowsService {
     return xviFcSuccess('Claim letter ULBs fetched.', rows, { page, limit, total });
   }
 
-  /**
-   * Unpaginated sibling of `getUlbs()` for callers that need every ULB in the batch at once (e.g.
-   * `ClaimLetterDocumentService` — a letter must list every recommended ULB, not one UI page of
-   * them). Deliberately bypasses `CLAIM_LETTER_PAGINATION_MAX_LIMIT`, which exists to bound HTTP
-   * query params, not internal service-to-service calls. Also returns the resolved
-   * `ulbLevelEligibility` (not just the merged `eligible` flag baked into each row) so callers that
-   * need per-criterion detail — e.g. Annexure 2's AFS/Provisional/FC-Disclosure/Elected-Body
-   * checkmarks — don't have to re-resolve it a second time.
-   */
-  async getAllUlbRows(
-    claimLetterId: string,
-    user: AuthUser,
-  ): Promise<{
-    parent: ClaimLetterBatchParent;
-    rows: ClaimLetterUlbRow[];
-    ulbLevelEligibility: ClaimLetterUlbLevelEligibility;
-  }> {
-    const parent = await this.loadParentWithAccess(claimLetterId, user);
-    const filter = this.buildSearchFilter(parent._id);
-
-    const { rows, ulbLevelEligibility } = await this.fetchRowsWithEligibility(parent, filter);
-
-    return { parent, rows, ulbLevelEligibility };
-  }
-
   private async loadParentWithAccess(claimLetterId: string, user: AuthUser): Promise<ClaimLetterBatchParent> {
     const parent = await this.batchModel
       .findOne({ _id: claimLetterId, assemblyStatus: 'READY' })
@@ -117,8 +92,7 @@ export class ClaimLetterUlbRowsService {
   }
 
   /**
-   * Shared by `getUlbs()` (paginated) and `getAllUlbRows()` (unpaginated, `pagination` omitted) —
-   * fetches the batch's ULB rows plus the state gate and per-ULB criteria, re-verified at read
+   * Fetches one page of the batch's ULB rows plus the state gate and per-ULB criteria, re-verified at read
    * time rather than trusted from the frozen snapshot alone (a ULB's Devolution/eligibility status
    * may have changed after being added but before final submit). This is a display-only read (the
    * `eligible` flag only drives a client-side warning badge — actual save/submit authorization is

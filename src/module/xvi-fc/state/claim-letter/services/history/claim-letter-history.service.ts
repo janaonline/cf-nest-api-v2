@@ -5,6 +5,7 @@ import {
   ClaimLetterBatchHistory,
   ClaimLetterBatchHistoryDocument,
   ClaimLetterHistoryActionSource,
+  ClaimLetterSubmittedFiles,
 } from 'src/schemas/xvi-fc/state/claim-letter-batch-history.schema';
 import type {
   ClaimLetterBatchNumber,
@@ -22,6 +23,8 @@ export interface RecordClaimLetterTransitionInput {
   toStatus: number;
   actionSource: ClaimLetterHistoryActionSource;
   reason?: string | null;
+  /** Submit only. */
+  submittedFiles?: ClaimLetterSubmittedFiles | null;
   changedBy: Types.ObjectId;
   requestId: string;
   ipAddress?: string | null;
@@ -55,6 +58,7 @@ export class ClaimLetterHistoryService {
           toStatus: input.toStatus,
           actionSource: input.actionSource,
           reason: input.reason ?? null,
+          submittedFiles: input.submittedFiles ?? null,
           changedBy: input.changedBy,
           requestId: input.requestId,
           ipAddress: input.ipAddress ?? null,

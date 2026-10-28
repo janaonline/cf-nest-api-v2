@@ -41,6 +41,7 @@ import {
 import { ClaimLetterEligibilityService, DevolutionAllocation } from '../eligibility/claim-letter-eligibility.service';
 import { ClaimLetterHistoryService } from '../history/claim-letter-history.service';
 import { ClaimLetterFormJsonService } from '../form-json/claim-letter-form-json.service';
+import { ClaimLetterActiveBatchService } from '../active-batch/claim-letter-active-batch.service';
 import { mapClaimLetterBatchDocToSummary } from '../../helpers/claim-letter-summary.helpers';
 import type { ClaimLetterBatchSummary } from '../../types/claim-letter.types';
 
@@ -48,6 +49,14 @@ export interface ClaimLetterUlbSelectionInput {
   ulbId: string;
   /** Whole Rupees (no decimals) — the client's natural input unit, and also this service's storage unit. */
   claimedAmount: number;
+}
+
+/** Same ULBs with the same claimed amounts as the current rows (order ignored; duplicates are
+ *  rejected before this runs). */
+function sameSelections(selections: ClaimLetterUlbSelectionInput[], children: Record<string, unknown>[]): boolean {
+  if (selections.length !== children.length) return false;
+  const claimed = new Map(children.map((c) => [String(c['ulbId']), c['claimedAmount']]));
+  return selections.every((s) => claimed.get(s.ulbId) === s.claimedAmount);
 }
 
 export interface CreateClaimLetterDraftInput {
@@ -138,6 +147,7 @@ export class ClaimLetterAssemblyService {
     private readonly eligibilityService: ClaimLetterEligibilityService,
     private readonly historyService: ClaimLetterHistoryService,
     private readonly formJsonConfigService: ClaimLetterFormJsonService,
+    private readonly activeBatchService: ClaimLetterActiveBatchService,
   ) {}
 
   /** Thin public wrapper so every claim-letter mutating endpoint returns the same mapped
@@ -167,6 +177,8 @@ export class ClaimLetterAssemblyService {
       const idempotent = await this.checkIdempotentRetry(input.buildRequestId, stateOid);
       if (idempotent) return idempotent;
     }
+    // Best-effort (ADR 0004): the preview / download / submit guards are the hard rule.
+    await this.activeBatchService.assertCanCreate({ state: stateOid, year: yearOid, installment: input.installment });
 
     const parent = await this.reserveBatchSlotAndLocks(
       stateOid,
@@ -1098,6 +1110,15 @@ export class ClaimLetterAssemblyService {
       .find({ claimLetter: parent._id })
       .lean<Record<string, unknown>[]>()
       .exec();
+
+    // Nothing changed: keep the draft, its revision and the uploaded signed letter as they are.
+    if (sameSelections(selections, currentChildren)) {
+      await this.releaseEditLock(parent._id, editToken);
+      const current = await this.batchModel.findById(parent._id).lean<Record<string, unknown> | null>().exec();
+      if (!current) throw new NotFoundException(`Claim letter ${claimLetterId} not found`);
+      return current;
+    }
+
     const currentUlbIdSet = new Set(currentChildren.map((c) => String(c['ulbId'])));
     const requestedUlbIdSet = new Set(ulbIds);
     const addedUlbIds = ulbIds.filter((id) => !currentUlbIdSet.has(id));
@@ -1162,7 +1183,7 @@ export class ClaimLetterAssemblyService {
 
   /** Differentiates *why* the upfront edit-lock claim in `updateDraftRaw` failed to match, so the
    *  caller gets a precise error instead of one generic conflict — mirrors the re-fetch pattern
-   *  `ClaimLetterService.submit()` already uses for its own concurrent-change resolution. */
+   *  `ClaimLetterSubmitService.submit()` already uses for its own concurrent-change resolution. */
   private async buildUpdateClaimConflictError(
     claimLetterId: string,
     expectedRevision: number,
@@ -1340,6 +1361,8 @@ export class ClaimLetterAssemblyService {
             stateEligibilitySources: built.stateEligibilitySources,
             editLockToken: null,
             editLockAcquiredAt: null,
+            // The uploaded signed letter no longer matches the edited ULBs (ADR 0003).
+            signedClaimFile: null,
           },
           $inc: { revision: 1 },
         },

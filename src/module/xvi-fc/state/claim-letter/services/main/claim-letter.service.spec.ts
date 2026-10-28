@@ -1,11 +1,12 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
-import { getConnectionToken, getModelToken } from '@nestjs/mongoose';
+import { getModelToken } from '@nestjs/mongoose';
 import { Types } from 'mongoose';
 import { ClaimLetterService } from './claim-letter.service';
 import { ClaimLetterEligibilityService } from '../eligibility/claim-letter-eligibility.service';
-import { ClaimLetterHistoryService } from '../history/claim-letter-history.service';
 import { ClaimLetterFormJsonService } from '../form-json/claim-letter-form-json.service';
+import { ClaimLetterLetterDetailsService } from '../letter-details/claim-letter-letter-details.service';
+import { ClaimLetterActiveBatchService } from '../active-batch/claim-letter-active-batch.service';
 import { ExpectedUlbSetService } from 'src/module/xvi-fc/common/services/expected-ulb-set.service';
 import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
 import { ClaimLetterBatch } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
@@ -42,18 +43,20 @@ describe('ClaimLetterService', () => {
     getFinancialOverview: jest.Mock;
     resolveUlbLevelEligibilityForDisplay: jest.Mock;
     resolveRemainingUlbIds: jest.Mock;
+    evaluateStateLevelGate: jest.Mock;
+    resolveUlbLevelEligibility: jest.Mock;
   };
   let expectedUlbSetService: { resolve: jest.Mock };
-  let historyService: { recordTransition: jest.Mock };
   let fileInfoNormalizer: { normalizeInboundFileInfo: jest.Mock };
   let formJsonConfigService: { loadFormConfig: jest.Mock; loadVarianceConfig: jest.Mock };
-  let session: {
-    startTransaction: jest.Mock;
-    commitTransaction: jest.Mock;
-    abortTransaction: jest.Mock;
-    endSession: jest.Mock;
+  let letterDetailsService: { evaluate: jest.Mock; assertComplete: jest.Mock };
+  let activeBatchService: {
+    resolveActiveBatch: jest.Mock;
+    resolveBlockingBatchNumber: jest.Mock;
+    assertActive: jest.Mock;
+    blockingBatchNumberFor: jest.Mock;
+    blockedReason: jest.Mock;
   };
-  let connection: { startSession: jest.Mock };
   let batchModel: {
     findOne: jest.Mock;
     find: jest.Mock;
@@ -77,13 +80,16 @@ describe('ClaimLetterService', () => {
     eligibilityService = {
       evaluateStateLevelGateForDisplay: jest.fn(),
       getFinancialOverview: jest.fn().mockResolvedValue({ totalInstallmentAllocation: 0, totalAlreadyAcknowledged: 0 }),
-      resolveUlbLevelEligibilityForDisplay: jest
-        .fn()
-        .mockResolvedValue({ perUlbEligible: new Map(), standaloneCriteria: [], rowTalliesByFormId: new Map() }),
+      resolveUlbLevelEligibilityForDisplay: jest.fn().mockResolvedValue({
+        perUlbEligible: new Map(),
+        standaloneCriteria: [],
+        rowTalliesByFormId: new Map(),
+      }),
       resolveRemainingUlbIds: jest.fn().mockResolvedValue([]),
+      evaluateStateLevelGate: jest.fn().mockResolvedValue({ passed: true, sources: [] }),
+      resolveUlbLevelEligibility: jest.fn().mockResolvedValue({ perUlbEligible: new Map() }),
     };
     expectedUlbSetService = { resolve: jest.fn() };
-    historyService = { recordTransition: jest.fn().mockResolvedValue(undefined) };
     fileInfoNormalizer = {
       normalizeInboundFileInfo: jest.fn().mockReturnValue({
         file: {
@@ -101,16 +107,20 @@ describe('ClaimLetterService', () => {
     formJsonConfigService = {
       loadFormConfig: jest
         .fn()
-        .mockResolvedValue({ questions: [], varianceLowerPercent: 90, varianceUpperPercent: 110 }),
+        .mockResolvedValue({ questions: [], varianceLowerPercent: 90, varianceUpperPercent: 110, letterQuestions: [] }),
       loadVarianceConfig: jest.fn().mockResolvedValue({ lowerPercent: 90, upperPercent: 110 }),
     };
-    session = {
-      startTransaction: jest.fn(),
-      commitTransaction: jest.fn().mockResolvedValue(undefined),
-      abortTransaction: jest.fn().mockResolvedValue(undefined),
-      endSession: jest.fn().mockResolvedValue(undefined),
+    letterDetailsService = {
+      evaluate: jest.fn().mockReturnValue({ isComplete: true, missingFields: [] }),
+      assertComplete: jest.fn().mockResolvedValue(undefined),
     };
-    connection = { startSession: jest.fn().mockResolvedValue(session) };
+    activeBatchService = {
+      resolveActiveBatch: jest.fn().mockResolvedValue(null),
+      resolveBlockingBatchNumber: jest.fn().mockResolvedValue(null),
+      assertActive: jest.fn().mockResolvedValue(undefined),
+      blockingBatchNumberFor: jest.fn().mockReturnValue(null),
+      blockedReason: jest.fn((n: number) => `Batch ${n} is still in progress or under MoHUA review.`),
+    };
     batchModel = {
       findOne: jest.fn(),
       find: jest.fn().mockReturnValue(q([])),
@@ -125,10 +135,10 @@ describe('ClaimLetterService', () => {
         ClaimLetterService,
         { provide: ClaimLetterEligibilityService, useValue: eligibilityService },
         { provide: ExpectedUlbSetService, useValue: expectedUlbSetService },
-        { provide: ClaimLetterHistoryService, useValue: historyService },
         { provide: FileInfoNormalizerService, useValue: fileInfoNormalizer },
         { provide: ClaimLetterFormJsonService, useValue: formJsonConfigService },
-        { provide: getConnectionToken(), useValue: connection },
+        { provide: ClaimLetterLetterDetailsService, useValue: letterDetailsService },
+        { provide: ClaimLetterActiveBatchService, useValue: activeBatchService },
         { provide: getModelToken(ClaimLetterBatch.name), useValue: batchModel },
         { provide: getModelToken(State.name), useValue: stateModel },
       ],
@@ -177,6 +187,7 @@ describe('ClaimLetterService', () => {
         ulbLevelCriteria: [],
         ulbReadiness: { eligible: 2, total: 2 },
         remainingUlbCount: 0,
+        activeBatchNumber: null,
       });
     });
 
@@ -255,6 +266,8 @@ describe('ClaimLetterService', () => {
         perUlbEligible: new Map(),
         standaloneCriteria: [{ displayLabel: 'SLB', displayDescription: 'SLB...', tally }],
         rowTalliesByFormId: new Map(),
+        perUlbFailedCriteria: new Map(),
+        criteriaColumns: [],
       });
 
       const result = await service.getEligibilitySummary(stateId.toString(), yearId.toString(), 1, stateUser);
@@ -295,6 +308,8 @@ describe('ClaimLetterService', () => {
         perUlbEligible: new Map(),
         standaloneCriteria: [],
         rowTalliesByFormId: new Map([[23, eulbTally]]),
+        perUlbFailedCriteria: new Map(),
+        criteriaColumns: [],
       });
 
       const result = await service.getEligibilitySummary(stateId.toString(), yearId.toString(), 1, stateUser);
@@ -373,6 +388,7 @@ describe('ClaimLetterService', () => {
         varianceUpperPercent: 110,
         // stateUser has no xviFcSubrole set — defaults to 'viewer', which lacks PREPARE_GRANT_LETTERS.
         canCreate: false,
+        createBlockedReason: null,
       });
     });
 
@@ -383,6 +399,17 @@ describe('ClaimLetterService', () => {
       const result = await service.getClaimContext(stateId.toString(), yearId.toString(), 1, reviewerUser);
 
       expect(result.data?.canCreate).toBe(true);
+    });
+
+    it('turns canCreate off with a reason while another batch is active', async () => {
+      expectedUlbSetService.resolve.mockResolvedValue([]);
+      activeBatchService.resolveActiveBatch.mockResolvedValue({ _id: new Types.ObjectId(), batchNumber: 1 });
+      const reviewerUser: AuthUser = { ...stateUser, xviFcSubrole: 'reviewer' };
+
+      const result = await service.getClaimContext(stateId.toString(), yearId.toString(), 1, reviewerUser);
+
+      expect(result.data?.canCreate).toBe(false);
+      expect(result.data?.createBlockedReason).toMatch(/Batch 1/);
     });
 
     it('sources the variance band from ClaimLetterFormJsonService, keyed by yearId', async () => {
@@ -492,6 +519,7 @@ describe('ClaimLetterService', () => {
         questions: [signedFileField],
         varianceLowerPercent: 90,
         varianceUpperPercent: 110,
+        letterQuestions: [],
       });
 
       const result = await service.getDetail(claimLetterId.toString(), stateUser);
@@ -538,6 +566,7 @@ describe('ClaimLetterService', () => {
         questions: [signedFileField],
         varianceLowerPercent: 90,
         varianceUpperPercent: 110,
+        letterQuestions: [],
       });
 
       const result = await service.getDetail(claimLetterId.toString(), stateUser);
@@ -580,6 +609,7 @@ describe('ClaimLetterService', () => {
         questions: [signedFileField],
         varianceLowerPercent: 90,
         varianceUpperPercent: 110,
+        letterQuestions: [],
       });
 
       const result = await service.getDetail(claimLetterId.toString(), stateUser);
@@ -593,7 +623,7 @@ describe('ClaimLetterService', () => {
       });
     });
 
-    it('adds Preview/Download Template actions to signedClaimFile when the batch has ULBs and the user can edit', async () => {
+    it('adds the Letter details & Preview action to signedClaimFile when the batch has ULBs and the user can edit', async () => {
       const claimLetterId = new Types.ObjectId();
       const signedFileField = { key: 'signedClaimFile', formFieldType: 'file' };
       batchModel.findOne.mockReturnValue(
@@ -617,6 +647,7 @@ describe('ClaimLetterService', () => {
         questions: [signedFileField],
         varianceLowerPercent: 90,
         varianceUpperPercent: 110,
+        letterQuestions: [],
       });
 
       // stateUser defaults to the 'viewer' xviFcSubrole (no PREPARE_GRANT_LETTERS) — these actions
@@ -626,16 +657,15 @@ describe('ClaimLetterService', () => {
 
       const supportingContent = result.data?.questions?.[0]?.supportingContent?.[0];
       expect(supportingContent?.description).toBe(
-        'Preview or download the claim letter for this batch, then upload the signed copy below.',
+        'Fill in the letter details, preview and download the claim letter, then upload the signed copy below.',
       );
       const actions = supportingContent?.actions ?? [];
       expect(actions).toEqual([
-        expect.objectContaining({ id: 'preview-template', label: 'Preview Template', visible: true }),
-        expect.objectContaining({ id: 'download-template', label: 'Download Template', visible: true }),
+        expect.objectContaining({ id: 'preview-template', label: 'Letter details & Preview', visible: true }),
       ]);
     });
 
-    it('marks Preview/Download Template actions not visible when the batch has ULBs but the user cannot edit', async () => {
+    it('marks the Letter details & Preview action not visible when the batch has ULBs but the user cannot edit', async () => {
       const claimLetterId = new Types.ObjectId();
       const signedFileField = { key: 'signedClaimFile', formFieldType: 'file' };
       batchModel.findOne.mockReturnValue(
@@ -659,6 +689,7 @@ describe('ClaimLetterService', () => {
         questions: [signedFileField],
         varianceLowerPercent: 90,
         varianceUpperPercent: 110,
+        letterQuestions: [],
       });
 
       // stateUser defaults to the 'viewer' xviFcSubrole — no PREPARE_GRANT_LETTERS, so canEdit is false.
@@ -670,7 +701,7 @@ describe('ClaimLetterService', () => {
       expect(actions.every((a) => a.visible === false)).toBe(true);
     });
 
-    it('marks Preview/Download Template actions not visible when the batch has no ULBs', async () => {
+    it('marks the Letter details & Preview action not visible when the batch has no ULBs', async () => {
       const claimLetterId = new Types.ObjectId();
       const signedFileField = { key: 'signedClaimFile', formFieldType: 'file' };
       batchModel.findOne.mockReturnValue(
@@ -694,12 +725,91 @@ describe('ClaimLetterService', () => {
         questions: [signedFileField],
         varianceLowerPercent: 90,
         varianceUpperPercent: 110,
+        letterQuestions: [],
       });
 
       const result = await service.getDetail(claimLetterId.toString(), stateUser);
 
       const actions = result.data?.questions?.[0]?.supportingContent?.[0]?.actions ?? [];
       expect(actions.every((a) => a.visible === false)).toBe(true);
+    });
+
+    it('hides letter-detail questions (served by letter-details) and reports letterDetailsComplete', async () => {
+      const signedFileField = { key: 'signedClaimFile', formFieldType: 'file' };
+      const letterNoField = { key: 'letterNo', formFieldType: 'text' };
+      batchModel.findOne.mockReturnValue(
+        q({
+          _id: new Types.ObjectId(),
+          state: stateId,
+          year: yearId,
+          installment: 1,
+          batchNumber: 1,
+          version: 1,
+          revision: 0,
+          currentFormStatus: 2,
+          assemblyStatus: 'READY',
+          ulbCount: 1,
+          isAbandoned: false,
+          financialSummary,
+          letterDetails: { letterNo: 'A/1' },
+          createdAt: new Date(),
+        }),
+      );
+      const formConfig = {
+        questions: [signedFileField, letterNoField],
+        varianceLowerPercent: 90,
+        varianceUpperPercent: 110,
+        letterQuestions: [letterNoField],
+      };
+      formJsonConfigService.loadFormConfig.mockResolvedValue(formConfig);
+      letterDetailsService.evaluate.mockReturnValue({ isComplete: false, missingFields: ['ATR date'] });
+
+      const result = await service.getDetail(new Types.ObjectId().toString(), stateUser);
+
+      expect(result.data?.questions?.map((f) => f.key)).toEqual(['signedClaimFile']);
+      expect(result.data?.letterDetailsComplete).toBe(false);
+      expect(letterDetailsService.evaluate).toHaveBeenCalledWith({ letterNo: 'A/1' }, formConfig);
+    });
+
+    it('reports the blocking batch, turns off final submit and hides the letter action with the reason', async () => {
+      const signedFileField = { key: 'signedClaimFile', formFieldType: 'file' };
+      batchModel.findOne.mockReturnValue(
+        q({
+          _id: new Types.ObjectId(),
+          state: stateId,
+          year: yearId,
+          installment: 1,
+          batchNumber: 2,
+          version: 1,
+          revision: 0,
+          currentFormStatus: 2,
+          assemblyStatus: 'READY',
+          ulbCount: 3,
+          isAbandoned: false,
+          signedClaimFile: { path: 'x/signed.pdf' },
+          financialSummary,
+          createdAt: new Date(),
+        }),
+      );
+      formJsonConfigService.loadFormConfig.mockResolvedValue({
+        questions: [signedFileField],
+        varianceLowerPercent: 90,
+        varianceUpperPercent: 110,
+        letterQuestions: [],
+      });
+      activeBatchService.resolveBlockingBatchNumber.mockResolvedValue(1);
+      const adminUser: AuthUser = { ...stateUser, xviFcSubrole: 'admin' };
+
+      const result = await service.getDetail(new Types.ObjectId().toString(), adminUser);
+
+      expect(result.data?.blockedByBatchNumber).toBe(1);
+      expect(result.data?.blockedReason).toMatch(/Batch 1/);
+      expect(result.data?.permissions.canFinalSubmit).toBe(false);
+      // Signed, but the final claim letter is not offered while another batch is active.
+      expect(result.data?.finalClaimLetterStage).toBeNull();
+      const content = result.data?.questions?.[0]?.supportingContent?.[0];
+      expect(content?.description).toMatch(/Batch 1/);
+      expect(content?.actions?.every((a) => a.visible === false)).toBe(true);
     });
 
     it('degrades to an empty questions list (not a 500) when the formjsons entry is not yet seeded', async () => {
@@ -725,6 +835,7 @@ describe('ClaimLetterService', () => {
         questions: [],
         varianceLowerPercent: 90,
         varianceUpperPercent: 110,
+        letterQuestions: [],
       });
 
       const result = await service.getDetail(claimLetterId.toString(), stateUser);
@@ -844,7 +955,6 @@ describe('ClaimLetterService', () => {
 
       expect(result.message).toMatch(/unchanged/i);
       expect(batchModel.findOneAndUpdate).not.toHaveBeenCalled();
-      expect(historyService.recordTransition).not.toHaveBeenCalled();
     });
 
     it('persists the normalized file, returns the updated summary, and never writes history (file upload is not a workflow transition — docs/adr/0003-workflow-transitions.md)', async () => {
@@ -870,162 +980,12 @@ describe('ClaimLetterService', () => {
       expect(result.data?.hasSignedFile).toBe(true);
       const [filter] = batchModel.findOneAndUpdate.mock.calls[0] as [Record<string, unknown>];
       expect(filter).toMatchObject({ _id: 'x', currentFormStatus: 2 });
-      expect(historyService.recordTransition).not.toHaveBeenCalled();
-      expect(connection.startSession).not.toHaveBeenCalled();
     });
 
     it('throws ConflictException when the guarded update matches nothing (concurrent status change)', async () => {
       batchModel.findOne.mockReturnValue(q({ _id: 'x', state: stateId, currentFormStatus: 2 }));
       batchModel.findOneAndUpdate.mockReturnValue(q(null));
       await expect(service.uploadSignedFile('x', fileRef, stateUser)).rejects.toThrow(ConflictException);
-    });
-  });
-
-  describe('submit', () => {
-    const readyParent = {
-      _id: 'x',
-      state: stateId,
-      year: yearId,
-      installment: 1,
-      batchNumber: 1,
-      version: 1,
-      currentFormStatus: 2,
-      ulbCount: 1,
-      isAbandoned: false,
-      signedClaimFile: { path: 'x/signed.pdf' },
-      financialSummary,
-      createdAt: new Date(),
-    };
-
-    it('throws NotFoundException when no READY claim matches the id', async () => {
-      batchModel.findOne.mockReturnValue(q(null));
-      await expect(service.submit('x', stateUser)).rejects.toThrow(NotFoundException);
-    });
-
-    it('throws ForbiddenException when the claim belongs to a different state', async () => {
-      batchModel.findOne.mockReturnValue(q({ ...readyParent, state: new Types.ObjectId() }));
-      await expect(service.submit('x', stateUser)).rejects.toThrow(ForbiddenException);
-    });
-
-    it('is idempotent: returns the current state without re-transitioning when already submitted', async () => {
-      batchModel.findOne.mockReturnValue(q({ ...readyParent, currentFormStatus: 5 }));
-
-      const result = await service.submit('x', stateUser);
-
-      expect(result.message).toMatch(/already submitted/i);
-      expect(connection.startSession).not.toHaveBeenCalled();
-      expect(historyService.recordTransition).not.toHaveBeenCalled();
-    });
-
-    it('throws ConflictException when status is neither IN_PROGRESS nor UNDER_REVIEW_BY_MOHUA', async () => {
-      batchModel.findOne.mockReturnValue(q({ ...readyParent, currentFormStatus: 6 }));
-      await expect(service.submit('x', stateUser)).rejects.toThrow(ConflictException);
-    });
-
-    it('throws BadRequestException when no signed file has been uploaded', async () => {
-      batchModel.findOne.mockReturnValue(q({ ...readyParent, signedClaimFile: null }));
-      await expect(service.submit('x', stateUser)).rejects.toThrow(BadRequestException);
-    });
-
-    it('transitions to UNDER_REVIEW_BY_MOHUA and records history inside one transaction', async () => {
-      batchModel.findOne.mockReturnValue(q(readyParent));
-      batchModel.findOneAndUpdate.mockReturnValue(q({ ...readyParent, currentFormStatus: 5 }));
-
-      const result = await service.submit('x', stateUser, '127.0.0.1', 'jest-agent');
-
-      expect(result.data?.currentFormStatus).toBe(5);
-      expect(historyService.recordTransition).toHaveBeenCalledWith(
-        expect.objectContaining({ fromStatus: 2, toStatus: 5, actionSource: 'DIRECT_STATE_REVIEW' }),
-        session,
-      );
-      expect(session.commitTransaction).toHaveBeenCalled();
-
-      const [filter] = batchModel.findOneAndUpdate.mock.calls[0] as [Record<string, unknown>];
-      expect(filter['$or']).toEqual([{ editLockToken: null }, { editLockAcquiredAt: { $lt: expect.any(Date) } }]);
-    });
-
-    it('treats a concurrent race as idempotent if the doc is already UNDER_REVIEW_BY_MOHUA', async () => {
-      batchModel.findOne.mockReturnValue(q(readyParent));
-      batchModel.findOneAndUpdate.mockReturnValue(q(null));
-      batchModel.findById.mockReturnValue(q({ ...readyParent, currentFormStatus: 5 }));
-
-      const result = await service.submit('x', stateUser);
-
-      expect(result.message).toMatch(/already submitted/i);
-      expect(historyService.recordTransition).not.toHaveBeenCalled();
-    });
-
-    it('throws ConflictException on a genuine race with no idempotent resolution', async () => {
-      batchModel.findOne.mockReturnValue(q(readyParent));
-      batchModel.findOneAndUpdate.mockReturnValue(q(null));
-      batchModel.findById.mockReturnValue(q({ ...readyParent, currentFormStatus: 6 }));
-
-      await expect(service.submit('x', stateUser)).rejects.toThrow(ConflictException);
-    });
-
-    it('throws a specific ConflictException when an updateDraft call is currently mid-rebuild', async () => {
-      batchModel.findOne.mockReturnValue(q(readyParent));
-      // The atomic submit guard now also requires the edit lock to be absent/expired — simulate a
-      // real DB rejecting the match because an update currently holds a *fresh* (unexpired) lock.
-      batchModel.findOneAndUpdate.mockReturnValue(q(null));
-      batchModel.findById.mockReturnValue(
-        q({ ...readyParent, editLockToken: 'some-update-token', editLockAcquiredAt: new Date() }),
-      );
-
-      await expect(service.submit('x', stateUser)).rejects.toThrow(/currently being edited/i);
-    });
-
-    it('treats an expired edit lock as unclaimed and falls through to the generic conflict message', async () => {
-      batchModel.findOne.mockReturnValue(q(readyParent));
-      batchModel.findOneAndUpdate.mockReturnValue(q(null));
-      batchModel.findById.mockReturnValue(
-        q({
-          ...readyParent,
-          editLockToken: 'some-stale-token',
-          editLockAcquiredAt: new Date(Date.now() - 60 * 60_000),
-        }),
-      );
-
-      await expect(service.submit('x', stateUser)).rejects.toThrow('Claim letter status changed. Please retry.');
-    });
-
-    describe('final-batch completeness (batchNumber === CLAIM_LETTER_MAX_BATCH_NUMBER)', () => {
-      const finalBatchParent = { ...readyParent, batchNumber: 3 };
-
-      it('rejects submission with a BadRequestException naming the still-unclaimed ULBs', async () => {
-        batchModel.findOne.mockReturnValue(q(finalBatchParent));
-        expectedUlbSetService.resolve.mockResolvedValue([
-          { ulbId: 'ulb-1', name: 'Alpha ULB' },
-          { ulbId: 'ulb-2', name: 'Beta ULB' },
-        ]);
-        eligibilityService.resolveRemainingUlbIds.mockResolvedValue(['ulb-2']);
-
-        await expect(service.submit('x', stateUser)).rejects.toThrow(BadRequestException);
-        await expect(service.submit('x', stateUser)).rejects.toThrow(/Beta ULB/);
-        expect(connection.startSession).not.toHaveBeenCalled();
-      });
-
-      it('allows submission once no ULBs remain unclaimed', async () => {
-        batchModel.findOne.mockReturnValue(q(finalBatchParent));
-        batchModel.findOneAndUpdate.mockReturnValue(q({ ...finalBatchParent, currentFormStatus: 5 }));
-        expectedUlbSetService.resolve.mockResolvedValue([{ ulbId: 'ulb-1', name: 'Alpha ULB' }]);
-        eligibilityService.resolveRemainingUlbIds.mockResolvedValue([]);
-
-        const result = await service.submit('x', stateUser);
-
-        expect(result.data?.currentFormStatus).toBe(5);
-      });
-
-      it('does not run the completeness check for a non-final batch (batchNumber 2)', async () => {
-        batchModel.findOne.mockReturnValue(q({ ...readyParent, batchNumber: 2 }));
-        batchModel.findOneAndUpdate.mockReturnValue(q({ ...readyParent, batchNumber: 2, currentFormStatus: 5 }));
-
-        const result = await service.submit('x', stateUser);
-
-        expect(result.data?.currentFormStatus).toBe(5);
-        expect(expectedUlbSetService.resolve).not.toHaveBeenCalled();
-        expect(eligibilityService.resolveRemainingUlbIds).not.toHaveBeenCalled();
-      });
     });
   });
 });

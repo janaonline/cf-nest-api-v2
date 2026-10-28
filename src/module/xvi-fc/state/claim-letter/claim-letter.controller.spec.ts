@@ -11,7 +11,10 @@ import { ClaimLetterUlbOptionsService } from './services/ulb-options/claim-lette
 import { ClaimLetterUlbRowsService } from './services/ulb-rows/claim-letter-ulb-rows.service';
 import { ClaimLetterAssemblyService } from './services/assembly/claim-letter-assembly.service';
 import { ClaimLetterDocumentService } from './services/document/claim-letter-document.service';
-import { ClaimLetterPdfService } from './services/document/claim-letter-pdf.service';
+import { ClaimLetterDocxService } from './services/document/claim-letter-docx.service';
+import { ClaimLetterLetterDetailsService } from './services/letter-details/claim-letter-letter-details.service';
+import { ClaimLetterFinalPdfService } from './services/final-pdf/claim-letter-final-pdf.service';
+import { ClaimLetterSubmitService } from './services/submit/claim-letter-submit.service';
 
 /** Reads permission metadata off the class prototype — avoids extracting an unbound instance
  *  method (the decorator attaches metadata to the prototype function itself either way). */
@@ -37,7 +40,10 @@ describe('ClaimLetterController', () => {
   let ulbRowsService: Record<string, jest.Mock>;
   let assemblyService: Record<string, jest.Mock>;
   let documentService: Record<string, jest.Mock>;
-  let pdfService: Record<string, jest.Mock>;
+  let docxService: Record<string, jest.Mock>;
+  let letterDetailsService: Record<string, jest.Mock>;
+  let finalPdfService: Record<string, jest.Mock>;
+  let submitService: Record<string, jest.Mock>;
 
   beforeEach(async () => {
     claimLetterService = {
@@ -45,8 +51,8 @@ describe('ClaimLetterController', () => {
       getDetail: jest.fn().mockResolvedValue({ success: true }),
       listHistory: jest.fn().mockResolvedValue({ success: true, data: [] }),
       uploadSignedFile: jest.fn().mockResolvedValue({ success: true }),
-      submit: jest.fn().mockResolvedValue({ success: true }),
     };
+    submitService = { submit: jest.fn().mockResolvedValue({ success: true }) };
     ulbOptionsService = { getOptions: jest.fn().mockResolvedValue({ success: true, data: [] }) };
     ulbRowsService = { getUlbs: jest.fn().mockResolvedValue({ success: true, data: [] }) };
     assemblyService = {
@@ -54,11 +60,24 @@ describe('ClaimLetterController', () => {
       updateDraft: jest.fn().mockResolvedValue({ success: true }),
       abandonDraft: jest.fn().mockResolvedValue({ success: true }),
     };
-    documentService = { getDocumentData: jest.fn().mockResolvedValue({ success: true }) };
-    pdfService = {
-      generateDocumentPdf: jest
+    documentService = {
+      getDocument: jest.fn().mockResolvedValue({ success: true }),
+      getDocumentUlbs: jest.fn().mockResolvedValue({ success: true, data: [] }),
+      loadParent: jest.fn().mockResolvedValue({ _id: claimLetterId }),
+    };
+    docxService = {
+      generateForDownload: jest
         .fn()
-        .mockResolvedValue({ buffer: Buffer.from('pdf-bytes'), fileName: 'claim-letter-CL-AP-1-1.pdf' }),
+        .mockResolvedValue({ buffer: Buffer.from('docx-bytes'), fileName: 'claim-letter-CL-AP-1-1.docx' }),
+    };
+    finalPdfService = {
+      getFinalPdf: jest.fn().mockResolvedValue({ success: true }),
+      getFinalPdfFile: jest.fn().mockResolvedValue({ buffer: Buffer.from('%PDF'), fileName: 'final.pdf' }),
+    };
+    letterDetailsService = {
+      get: jest.fn().mockResolvedValue({ success: true }),
+      save: jest.fn().mockResolvedValue({ success: true }),
+      assertComplete: jest.fn().mockResolvedValue(undefined),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -69,7 +88,10 @@ describe('ClaimLetterController', () => {
         { provide: ClaimLetterUlbRowsService, useValue: ulbRowsService },
         { provide: ClaimLetterAssemblyService, useValue: assemblyService },
         { provide: ClaimLetterDocumentService, useValue: documentService },
-        { provide: ClaimLetterPdfService, useValue: pdfService },
+        { provide: ClaimLetterDocxService, useValue: docxService },
+        { provide: ClaimLetterLetterDetailsService, useValue: letterDetailsService },
+        { provide: ClaimLetterFinalPdfService, useValue: finalPdfService },
+        { provide: ClaimLetterSubmitService, useValue: submitService },
       ],
     }).compile();
 
@@ -130,9 +152,9 @@ describe('ClaimLetterController', () => {
     expect(requiredPermissions('uploadSignedFile')).toEqual([Permission.PREPARE_GRANT_LETTERS]);
   });
 
-  it('POST :claimLetterId/submit delegates to ClaimLetterService.submit with ip/userAgent', async () => {
-    await controller.submit(claimLetterId, user, '127.0.0.1', 'jest-agent');
-    expect(claimLetterService['submit']).toHaveBeenCalledWith(claimLetterId, user, '127.0.0.1', 'jest-agent');
+  it('POST :claimLetterId/submit delegates to ClaimLetterSubmitService.submit with ip/userAgent', async () => {
+    await controller.submit(claimLetterId, { finalPdfSourceKey: 'key-1' }, user, '127.0.0.1', 'jest-agent');
+    expect(submitService['submit']).toHaveBeenCalledWith(claimLetterId, user, 'key-1', '127.0.0.1', 'jest-agent');
     expect(requiredPermissions('submit')).toEqual([Permission.FINAL_SUBMIT_TO_MOHUA]);
   });
 
@@ -156,19 +178,47 @@ describe('ClaimLetterController', () => {
     expect(requiredPermissions('getUlbs')).toEqual([Permission.VIEW_STATE_FORMS]);
   });
 
-  it('GET :claimLetterId/document delegates to ClaimLetterDocumentService.getDocumentData', async () => {
+  it('GET :claimLetterId/document delegates to ClaimLetterDocumentService.getDocument', async () => {
     await controller.getDocument(claimLetterId, user);
-    expect(documentService['getDocumentData']).toHaveBeenCalledWith(claimLetterId, user);
+    expect(documentService['getDocument']).toHaveBeenCalledWith(claimLetterId, user);
     expect(requiredPermissions('getDocument')).toEqual([Permission.VIEW_STATE_FORMS]);
   });
 
-  it('GET :claimLetterId/document/pdf returns a StreamableFile built from ClaimLetterPdfService', async () => {
-    const result = await controller.getDocumentPdf(claimLetterId, user);
+  it('GET :claimLetterId/document/ulbs passes the list and page (default 1)', async () => {
+    await controller.getDocumentUlbs(claimLetterId, { list: 'INELIGIBLE' }, user);
+    expect(documentService['getDocumentUlbs']).toHaveBeenCalledWith(claimLetterId, 'INELIGIBLE', 1, user);
+    expect(requiredPermissions('getDocumentUlbs')).toEqual([Permission.VIEW_STATE_FORMS]);
+  });
 
-    expect(pdfService['generateDocumentPdf']).toHaveBeenCalledWith(claimLetterId, user);
+  it('GET :claimLetterId/document/docx streams the .docx the service builds for the user', async () => {
+    const result = await controller.getDocumentDocx(claimLetterId, user);
+
+    expect(docxService['generateForDownload']).toHaveBeenCalledWith(claimLetterId, user);
     expect(result).toBeInstanceOf(StreamableFile);
-    expect(result.options.type).toBe('application/pdf');
-    expect(result.options.disposition).toBe('attachment; filename="claim-letter-CL-AP-1-1.pdf"');
-    expect(requiredPermissions('getDocumentPdf')).toEqual([Permission.VIEW_STATE_FORMS]);
+    expect(result.options.type).toBe('application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    expect(result.options.disposition).toBe('attachment; filename="claim-letter-CL-AP-1-1.docx"');
+    expect(requiredPermissions('getDocumentDocx')).toEqual([Permission.VIEW_STATE_FORMS]);
+  });
+
+  it('GET and PATCH :claimLetterId/letter-details delegate with their permissions', async () => {
+    await controller.getLetterDetails(claimLetterId, user);
+    expect(letterDetailsService['get']).toHaveBeenCalledWith(claimLetterId, user);
+    expect(requiredPermissions('getLetterDetails')).toEqual([Permission.VIEW_STATE_FORMS]);
+
+    const dto = { data: { letterNo: 'A/1' }, confirmSignedFileRemoval: true };
+    await controller.saveLetterDetails(claimLetterId, dto, user);
+    expect(letterDetailsService['save']).toHaveBeenCalledWith(claimLetterId, dto, user);
+    expect(requiredPermissions('saveLetterDetails')).toEqual([Permission.PREPARE_GRANT_LETTERS]);
+  });
+  it('GET :claimLetterId/final-pdf and /file need VIEW_STATE_FORMS and stream the PDF', async () => {
+    await controller.getFinalPdf(claimLetterId, user);
+    expect(finalPdfService['getFinalPdf']).toHaveBeenCalledWith(claimLetterId, user);
+    expect(requiredPermissions('getFinalPdf')).toEqual([Permission.VIEW_STATE_FORMS]);
+
+    const file = await controller.getFinalPdfFile(claimLetterId, user);
+    expect(file).toBeInstanceOf(StreamableFile);
+    expect(file.options.type).toBe('application/pdf');
+    expect(file.options.disposition).toBe('attachment; filename="final.pdf"');
+    expect(requiredPermissions('getFinalPdfFile')).toEqual([Permission.VIEW_STATE_FORMS]);
   });
 });

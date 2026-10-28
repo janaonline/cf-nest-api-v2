@@ -8,6 +8,8 @@ import {
   IsObject,
   IsOptional,
   IsString,
+  MaxLength,
+  Min,
   Validate,
   ValidateNested,
   ValidatorConstraint,
@@ -172,6 +174,16 @@ export class ClaimEligibilityConfigDto {
   @IsOptional()
   @IsString()
   shortLabel?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  letterColumnLabel?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  displayOrder?: number;
 
   @IsOptional()
   @IsString()

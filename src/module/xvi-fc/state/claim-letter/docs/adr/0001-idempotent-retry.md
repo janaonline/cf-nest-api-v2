@@ -30,7 +30,7 @@ would get that other state's claim batch back, bypassing the access-control chec
 `stateId`. This is a security property, not just a correctness one — any change to this lookup must
 preserve the combined scope.
 
-**Submit (`ClaimLetterService.submit`) — natural idempotency, no client key needed.**
+**Submit (`ClaimLetterSubmitService.submit`) — natural idempotency, no client key needed.**
 If the claim is already `UNDER_REVIEW_BY_MOHUA`, `submit` returns the current state instead of
 throwing. This covers the case where the original submit's response was lost in transit but the
 transition had already committed server-side — the client's retry just observes the already-true

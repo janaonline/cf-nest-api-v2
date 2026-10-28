@@ -1,7 +1,6 @@
-import { randomUUID } from 'crypto';
 import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { InjectConnection, InjectModel } from '@nestjs/mongoose';
-import { Connection, FilterQuery, Model, Types } from 'mongoose';
+import { InjectModel } from '@nestjs/mongoose';
+import { FilterQuery, Model, Types } from 'mongoose';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Permission } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
@@ -24,9 +23,7 @@ import {
 } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
 import { State, StateDocument } from 'src/schemas/state.schema';
 import {
-  CLAIM_LETTER_ACTION_DOWNLOAD_TEMPLATE,
   CLAIM_LETTER_ACTION_PREVIEW_TEMPLATE,
-  CLAIM_LETTER_EDIT_LOCK_LEASE_MINUTES,
   CLAIM_LETTER_MAX_BATCH_NUMBER,
   CLAIM_LETTER_PAGINATION_DEFAULT_LIMIT,
   CLAIM_LETTER_PAGINATION_DEFAULT_PAGE,
@@ -36,8 +33,9 @@ import { assertInstallmentSupported } from '../../helpers/claim-letter-installme
 import { mapClaimLetterBatchDocToSummary } from '../../helpers/claim-letter-summary.helpers';
 import type { ClaimLetterPermissions } from '../../helpers/claim-letter-permissions.helpers';
 import { ClaimLetterEligibilityService } from '../eligibility/claim-letter-eligibility.service';
-import { ClaimLetterHistoryService } from '../history/claim-letter-history.service';
 import { ClaimLetterFormJsonService } from '../form-json/claim-letter-form-json.service';
+import { ClaimLetterLetterDetailsService } from '../letter-details/claim-letter-letter-details.service';
+import { ClaimLetterActiveBatchService } from '../active-batch/claim-letter-active-batch.service';
 import type { GetClaimLetterHistoryQueryDto } from '../../dto/get-claim-letter-history-query.dto';
 import type {
   ClaimLetterBatchSummary,
@@ -50,9 +48,9 @@ type LeanClaimLetterBatch = Record<string, unknown>;
 
 /**
  * Orchestrates the State-facing claim-letter read paths (eligibility summary, single-claim
- * detail, and the "list my claim letters" history view), plus the two parent-only mutations that
- * don't touch locks/children (signed-file upload, submit). Lock/child-touching mutations
- * (create/update/abandon) live in ClaimLetterAssemblyService.
+ * detail, and the "list my claim letters" history view), plus the signed-file upload. Submit lives
+ * in ClaimLetterSubmitService; lock/child-touching mutations (create/update/abandon) in
+ * ClaimLetterAssemblyService.
  */
 @Injectable()
 export class ClaimLetterService {
@@ -61,10 +59,10 @@ export class ClaimLetterService {
   constructor(
     private readonly eligibilityService: ClaimLetterEligibilityService,
     private readonly expectedUlbSetService: ExpectedUlbSetService,
-    private readonly historyService: ClaimLetterHistoryService,
     private readonly fileInfoNormalizer: FileInfoNormalizerService,
     private readonly formJsonConfigService: ClaimLetterFormJsonService,
-    @InjectConnection() private readonly connection: Connection,
+    private readonly letterDetailsService: ClaimLetterLetterDetailsService,
+    private readonly activeBatchService: ClaimLetterActiveBatchService,
     @InjectModel(ClaimLetterBatch.name)
     private readonly batchModel: Model<ClaimLetterBatchDocument>,
     @InjectModel(State.name)
@@ -85,32 +83,41 @@ export class ClaimLetterService {
     // resolveUlbLevelEligibilityForDisplay re-resolve the same full set internally on a cache miss.
     const expectedUlbsPromise = this.expectedUlbSetService.resolve(stateId, yearId);
 
-    const [expectedUlbs, gate, ulbLevelEligibility, batchSlotInfo, financialOverview, remainingUlbIds, stateName] =
-      await Promise.all([
-        expectedUlbsPromise,
-        this.eligibilityService.evaluateStateLevelGateForDisplay(stateId, yearId, installment),
-        expectedUlbsPromise.then((ulbs) => {
-          const ids = ulbs.map((u) => u.ulbId);
-          return this.eligibilityService.resolveUlbLevelEligibilityForDisplay(
-            stateId,
-            yearId,
-            installment as 1 | 2,
-            ids,
-            ids,
-          );
-        }),
-        this.resolveBatchSlotInfo(stateId, yearId, installment),
-        this.eligibilityService.getFinancialOverview(stateId, yearId, installment as 1 | 2),
-        expectedUlbsPromise.then((ulbs) =>
-          this.eligibilityService.resolveRemainingUlbIds(
-            stateId,
-            yearId,
-            installment,
-            ulbs.map((u) => u.ulbId),
-          ),
+    const [
+      expectedUlbs,
+      gate,
+      ulbLevelEligibility,
+      batchSlotInfo,
+      financialOverview,
+      remainingUlbIds,
+      stateName,
+      activeBatch,
+    ] = await Promise.all([
+      expectedUlbsPromise,
+      this.eligibilityService.evaluateStateLevelGateForDisplay(stateId, yearId, installment),
+      expectedUlbsPromise.then((ulbs) => {
+        const ids = ulbs.map((u) => u.ulbId);
+        return this.eligibilityService.resolveUlbLevelEligibilityForDisplay(
+          stateId,
+          yearId,
+          installment as 1 | 2,
+          ids,
+          ids,
+        );
+      }),
+      this.resolveBatchSlotInfo(stateId, yearId, installment),
+      this.eligibilityService.getFinancialOverview(stateId, yearId, installment as 1 | 2),
+      expectedUlbsPromise.then((ulbs) =>
+        this.eligibilityService.resolveRemainingUlbIds(
+          stateId,
+          yearId,
+          installment,
+          ulbs.map((u) => u.ulbId),
         ),
-        this.resolveStateName(stateId),
-      ]);
+      ),
+      this.resolveStateName(stateId),
+      this.activeBatchService.resolveActiveBatch({ state: stateId, year: yearId, installment }),
+    ]);
 
     const expectedUlbIds = expectedUlbs.map((u) => u.ulbId);
     const { batchSlotsUsed, nextBatchNumber } = batchSlotInfo;
@@ -152,6 +159,7 @@ export class ClaimLetterService {
       ulbLevelCriteria: ulbLevelEligibility.standaloneCriteria,
       ulbReadiness,
       remainingUlbCount: remainingUlbIds.length,
+      activeBatchNumber: activeBatch?.batchNumber ?? null,
     };
 
     return xviFcSuccess('Claim letter eligibility summary fetched.', summary);
@@ -173,12 +181,13 @@ export class ClaimLetterService {
     assertStateAccess(user, stateId);
     assertInstallmentSupported(installment);
 
-    const [expectedUlbs, batchSlotInfo, financialOverview, varianceConfig, stateName] = await Promise.all([
+    const [expectedUlbs, batchSlotInfo, financialOverview, varianceConfig, stateName, activeBatch] = await Promise.all([
       this.expectedUlbSetService.resolve(stateId, yearId),
       this.resolveBatchSlotInfo(stateId, yearId, installment),
       this.eligibilityService.getFinancialOverview(stateId, yearId, installment as 1 | 2),
       this.formJsonConfigService.loadVarianceConfig(yearId),
       this.resolveStateName(stateId),
+      this.activeBatchService.resolveActiveBatch({ state: stateId, year: yearId, installment }),
     ]);
 
     const expectedUlbIds = expectedUlbs.map((u) => u.ulbId);
@@ -199,7 +208,8 @@ export class ClaimLetterService {
       remainingUlbCount: remainingUlbIds.length,
       varianceLowerPercent: varianceConfig.lowerPercent,
       varianceUpperPercent: varianceConfig.upperPercent,
-      canCreate: getEffectivePermissions(user).includes(Permission.PREPARE_GRANT_LETTERS),
+      canCreate: !activeBatch && getEffectivePermissions(user).includes(Permission.PREPARE_GRANT_LETTERS),
+      createBlockedReason: activeBatch ? this.activeBatchService.blockedReason(activeBatch.batchNumber) : null,
     };
 
     return xviFcSuccess('Claim letter context fetched.', context);
@@ -275,147 +285,6 @@ export class ClaimLetterService {
     return xviFcSuccess('Signed claim letter uploaded.', mapClaimLetterBatchDocToSummary(updated, user));
   }
 
-  /**
-   * `IN_PROGRESS -> UNDER_REVIEW_BY_MOHUA` — requires a signed file, idempotent on retry (an
-   * already-submitted claim returns its current state rather than erroring — see
-   * docs/adr/0001-idempotent-retry.md). Recorded as a workflow transition
-   * (docs/adr/0003-workflow-transitions.md).
-   */
-  async submit(
-    claimLetterId: string,
-    user: AuthUser,
-    ip?: string,
-    userAgent?: string,
-  ): Promise<XviFcApiResponse<ClaimLetterBatchSummary>> {
-    const parent = await this.batchModel
-      .findOne({ _id: claimLetterId, assemblyStatus: 'READY' })
-      .lean<LeanClaimLetterBatch>()
-      .exec();
-    if (!parent) throw new NotFoundException(`Claim letter ${claimLetterId} not found`);
-    assertStateAccess(user, toObjectIdString(parent['state']) ?? '');
-
-    if (parent['currentFormStatus'] === FORM_STATUS.UNDER_REVIEW_BY_MOHUA) {
-      return xviFcSuccess('Claim letter already submitted to MoHUA.', mapClaimLetterBatchDocToSummary(parent, user));
-    }
-    if (parent['currentFormStatus'] !== FORM_STATUS.IN_PROGRESS) {
-      throw new ConflictException(
-        `Claim letter cannot be submitted when status is ${getFormStatusLabel(parent['currentFormStatus'] as number)}.`,
-      );
-    }
-    if (!parent['signedClaimFile']) {
-      throw new BadRequestException('A signed claim letter file must be uploaded before submitting.');
-    }
-
-    if (parent['batchNumber'] === CLAIM_LETTER_MAX_BATCH_NUMBER) {
-      await this.assertFinalBatchIsComplete(
-        toObjectIdString(parent['state']) ?? '',
-        toObjectIdString(parent['year']) ?? '',
-        parent['installment'] as number,
-      );
-    }
-
-    const userOid = new Types.ObjectId(user._id);
-    const session = await this.connection.startSession();
-    let updated: LeanClaimLetterBatch | null = null;
-    try {
-      session.startTransaction();
-
-      updated = await this.batchModel
-        .findOneAndUpdate(
-          {
-            _id: claimLetterId,
-            currentFormStatus: FORM_STATUS.IN_PROGRESS,
-            // Self-expiring lease, same as ClaimLetterAssemblyService's updateDraftRaw/abandonDraftRaw
-            // — a stale lock (crash mid-update, never cleared) never permanently blocks submit either.
-            $or: [{ editLockToken: null }, { editLockAcquiredAt: { $lt: this.editLockStaleBefore() } }],
-          },
-          {
-            $set: {
-              currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
-              submittedAt: new Date(),
-              submittedBy: userOid,
-              updatedBy: userOid,
-            },
-          },
-          { new: true, session },
-        )
-        .lean<LeanClaimLetterBatch | null>()
-        .exec();
-
-      if (updated) {
-        await this.historyService.recordTransition(
-          {
-            claimLetter: updated['_id'] as Types.ObjectId,
-            state: updated['state'] as Types.ObjectId,
-            year: updated['year'] as Types.ObjectId,
-            installment: updated['installment'] as 1 | 2,
-            batchNumber: updated['batchNumber'] as 1 | 2 | 3,
-            version: updated['version'] as number,
-            fromStatus: FORM_STATUS.IN_PROGRESS,
-            toStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
-            actionSource: 'DIRECT_STATE_REVIEW',
-            changedBy: userOid,
-            requestId: randomUUID(),
-            ipAddress: ip ?? null,
-            userAgent: userAgent ?? null,
-          },
-          session,
-        );
-      }
-
-      await session.commitTransaction();
-    } catch (err) {
-      await session.abortTransaction();
-      throw err;
-    } finally {
-      await session.endSession();
-    }
-
-    if (updated)
-      return xviFcSuccess('Claim letter submitted to MoHUA.', mapClaimLetterBatchDocToSummary(updated, user));
-
-    // Concurrent status change (or an in-flight `updateDraft`) between our initial read and the
-    // guarded update.
-    const current = await this.batchModel.findById(claimLetterId).lean<LeanClaimLetterBatch | null>().exec();
-    if (current?.['currentFormStatus'] === FORM_STATUS.UNDER_REVIEW_BY_MOHUA) {
-      return xviFcSuccess('Claim letter already submitted to MoHUA.', mapClaimLetterBatchDocToSummary(current, user));
-    }
-    if (current?.['editLockToken'] && this.isEditLockActive(current['editLockAcquiredAt'])) {
-      throw new ConflictException('Claim letter is currently being edited. Please retry in a moment.');
-    }
-    throw new ConflictException('Claim letter status changed. Please retry.');
-  }
-
-  /**
-   * Batch `CLAIM_LETTER_MAX_BATCH_NUMBER` is the state's last chance to claim any ULB for this
-   * installment — nothing else stops an ULB left out of every batch from being permanently
-   * stranded once it submits. Deliberately checked against every expected ULB not yet locked into
-   * *any* batch (`resolveRemainingUlbIds`), not just the ones currently eligible: an ineligible ULB
-   * could still resolve its eligibility later, and this rejection is what keeps that possibility
-   * open by refusing to close out the claim cycle while it's still unresolved.
-   */
-  private async assertFinalBatchIsComplete(stateId: string, yearId: string, installment: number): Promise<void> {
-    const expectedUlbs = await this.expectedUlbSetService.resolve(stateId, yearId);
-    const remainingUlbIds = await this.eligibilityService.resolveRemainingUlbIds(
-      stateId,
-      yearId,
-      installment,
-      expectedUlbs.map((u) => u.ulbId),
-    );
-    if (remainingUlbIds.length === 0) return;
-
-    const remainingUlbIdSet = new Set(remainingUlbIds);
-    const remainingNames = expectedUlbs.filter((u) => remainingUlbIdSet.has(u.ulbId)).map((u) => u.name);
-    const shown = remainingNames.slice(0, 10);
-    const suffix = remainingNames.length > shown.length ? ` and ${remainingNames.length - shown.length} more` : '';
-
-    throw new BadRequestException(
-      `This is the final claim batch (Batch ${CLAIM_LETTER_MAX_BATCH_NUMBER} of ${CLAIM_LETTER_MAX_BATCH_NUMBER}) — ` +
-        `${remainingNames.length} ULB(s) are not yet included in any batch and must be added before this batch can ` +
-        `be submitted: ${shown.join(', ')}${suffix}.`,
-    );
-  }
-
   async getDetail(claimLetterId: string, user: AuthUser): Promise<XviFcApiResponse<ClaimLetterBatchSummary>> {
     const doc = await this.batchModel
       .findOne({ _id: claimLetterId, assemblyStatus: 'READY' })
@@ -426,16 +295,35 @@ export class ClaimLetterService {
     assertStateAccess(user, toObjectIdString(doc['state']) ?? '');
 
     const summary = mapClaimLetterBatchDocToSummary(doc, user);
-    const [formConfig, stateName] = await Promise.all([
+    const [formConfig, stateName, blockedBy] = await Promise.all([
       this.formJsonConfigService.loadFormConfig(toObjectIdString(doc['year']) ?? ''),
       this.resolveStateName(toObjectIdString(doc['state']) ?? ''),
+      this.activeBatchService.resolveBlockingBatchNumber({
+        _id: doc['_id'] as Types.ObjectId,
+        state: doc['state'] as Types.ObjectId,
+        year: doc['year'] as Types.ObjectId,
+        installment: doc['installment'] as number,
+      }),
     ]);
-    summary.questions = formConfig.questions;
+    summary.blockedByBatchNumber = blockedBy;
+    summary.blockedReason = blockedBy === null ? null : this.activeBatchService.blockedReason(blockedBy);
+    if (blockedBy !== null) {
+      summary.permissions = { ...summary.permissions, canFinalSubmit: false };
+      // The final-PDF endpoints refuse a blocked draft (ADR 0004).
+      if (summary.finalClaimLetterStage === 'DRAFT') summary.finalClaimLetterStage = null;
+    }
+    // Letter-detail questions are served by GET :claimLetterId/letter-details.
+    const letterKeys = new Set(formConfig.letterQuestions.map((q) => q.key));
+    summary.questions = formConfig.questions.filter((q) => !letterKeys.has(q.key));
     summary.varianceLowerPercent = formConfig.varianceLowerPercent;
     summary.varianceUpperPercent = formConfig.varianceUpperPercent;
     summary.stateName = stateName;
+    summary.letterDetailsComplete = this.letterDetailsService.evaluate(
+      (doc['letterDetails'] as Record<string, unknown> | undefined) ?? {},
+      formConfig,
+    ).isComplete;
     this.applySignedFileValue(summary.questions, doc['signedClaimFile']);
-    this.applySignedFileSupportingContent(summary.questions, doc, summary.permissions);
+    this.applySignedFileSupportingContent(summary.questions, doc, summary.permissions, summary.blockedReason);
 
     return xviFcSuccess('Claim letter fetched.', summary);
   }
@@ -447,45 +335,38 @@ export class ClaimLetterService {
   }
 
   /**
-   * Adds the "Preview Template"/"Download Template" actions to `signedClaimFile`'s supporting
-   * content — both are non-mutating reads (no backend file path to hide via `meta`), but only
-   * meaningful once the batch is actually editable (matches the `canEdit`-gated
-   * visible/description pattern in `elected-urban-local-bodies.service.ts`'s
-   * `buildElectedBodyFileSupportingContent` and `devolution-formula.service.ts`'s
-   * `buildExcelFileSupportingContent` — a read-only viewer gets no supporting actions here either).
-   * Also still gated on the batch actually having ULBs to put in a letter. The frontend fetches the
-   * document data itself via `GET :claimLetterId/document` when either is clicked.
+   * Adds the "Letter details & Preview" action to `signedClaimFile`'s supporting content. It opens
+   * the letter preview with inline boxes for the details, which also downloads the .docx. Shown only while
+   * the batch is editable (same `canEdit` gating as the elected-body / devolution file actions),
+   * has ULBs to put in a letter and is not blocked by another active batch (whose reason is shown).
    */
   private applySignedFileSupportingContent(
     questions: FieldConfig[],
     doc: LeanClaimLetterBatch,
     permissions: ClaimLetterPermissions,
+    blockedReason?: string | null,
   ): void {
     const field = questions.find((q) => q.key === 'signedClaimFile');
     if (!field) return;
 
     const hasUlbs = ((doc['ulbCount'] as number) ?? 0) > 0;
-    const showActions = permissions.canEdit && hasUlbs;
+    const editable = permissions.canEdit && hasUlbs;
+    const showActions = editable && !blockedReason;
     const supportingContent: FieldSupportingContent = {
       type: 'actions',
       position: 'before',
       layout: 'inline',
       separator: 'dot',
       description: showActions
-        ? 'Preview or download the claim letter for this batch, then upload the signed copy below.'
-        : '',
+        ? 'Fill in the letter details, preview and download the claim letter, then upload the signed copy below.'
+        : editable && blockedReason
+          ? blockedReason
+          : '',
       actions: [
         {
           id: CLAIM_LETTER_ACTION_PREVIEW_TEMPLATE,
-          label: 'Preview Template',
-          icon: 'bi bi-eye',
-          tone: 'primary',
-          visible: showActions,
-        },
-        {
-          id: CLAIM_LETTER_ACTION_DOWNLOAD_TEMPLATE,
-          label: 'Download Template',
-          icon: 'bi bi-file-earmark-arrow-down',
+          label: 'Letter details & Preview',
+          icon: 'bi bi-pencil-square',
           tone: 'primary',
           visible: showActions,
         },
@@ -546,22 +427,33 @@ export class ClaimLetterService {
       this.batchModel.countDocuments(filter).exec(),
     ]);
 
+    // One active-batch lookup per installment on the page (at most two), in parallel.
+    const installments = [...new Set(docs.map((d) => d['installment'] as number))];
+    const actives = await Promise.all(
+      installments.map((installment) =>
+        this.activeBatchService.resolveActiveBatch({ state: stateId, year: yearId, installment }),
+      ),
+    );
+    const activeByInstallment = new Map(installments.map((inst, i) => [inst, actives[i]]));
+
     return xviFcSuccess(
       'Claim letters fetched.',
-      docs.map((d) => mapClaimLetterBatchDocToSummary(d, user)),
+      docs.map((d) => {
+        const summary = mapClaimLetterBatchDocToSummary(d, user);
+        const blockedBy = this.activeBatchService.blockingBatchNumberFor(
+          {
+            _id: d['_id'],
+            currentFormStatus: d['currentFormStatus'] as number,
+            isAbandoned: d['isAbandoned'] as boolean,
+          },
+          activeByInstallment.get(d['installment'] as number) ?? null,
+        );
+        summary.blockedByBatchNumber = blockedBy;
+        summary.blockedReason = blockedBy === null ? null : this.activeBatchService.blockedReason(blockedBy);
+        if (blockedBy !== null && summary.finalClaimLetterStage === 'DRAFT') summary.finalClaimLetterStage = null;
+        return summary;
+      }),
       { page, limit, total },
     );
-  }
-
-  /** Self-expiring lease check for `editLockToken` — mirrors
-   *  `ClaimLetterAssemblyService.editLockStaleBefore`/`isEditLockActive` (duplicated rather than
-   *  shared, matching this file's existing `hasStateAccess`/`assertStateAccess` precedent). */
-  private editLockStaleBefore(): Date {
-    return new Date(Date.now() - CLAIM_LETTER_EDIT_LOCK_LEASE_MINUTES * 60_000);
-  }
-
-  private isEditLockActive(acquiredAt: unknown): boolean {
-    if (!acquiredAt) return false;
-    return new Date(acquiredAt as string | Date) >= this.editLockStaleBefore();
   }
 }

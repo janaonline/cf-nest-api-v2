@@ -721,7 +721,7 @@ describe('ClaimEligibilityEvaluatorService', () => {
         );
         const doc = sourceFormJson({ formId: 23, type: 'ELECTED_BODY', claimEligibility: exemptElectedBodyRowConfig });
 
-        const { perUlb, tally, rowEvidenceByUlbId } = await service.evaluateUlbBulk(doc, {
+        const { perUlb, tally, rowEvidenceByUlbId, approvedExemptionUlbIds } = await service.evaluateUlbBulk(doc, {
           stateId,
           designYearId,
           expectedUlbIds: [ulbA],
@@ -730,13 +730,16 @@ describe('ClaimEligibilityEvaluatorService', () => {
         // A later, authoritative MoHUA decision overrides the real (but now moot) row data.
         expect(perUlb.get(ulbA)).toBe('EXEMPTED');
         expect(tally).toEqual({ eligible: 0, ineligible: 0, exempted: 1, total: 1 });
+        expect(approvedExemptionUlbIds).toEqual(new Set([ulbA]));
         // Still frozen as evidence (with the real row's own fields) so claim-letter assembly
         // doesn't fall back to the state-level source's own result for this ULB.
-        expect(rowEvidenceByUlbId.get(ulbA)).toEqual({
+        expect(rowEvidenceByUlbId?.get(ulbA)).toEqual({
           bucket: 'EXEMPTED',
           rowDocumentId: expect.any(String),
           rowStatusAtEvaluation: null,
           datasetVersion: null, // mockCollection's findOne always resolves null; unrelated to this test
+          rowValue: 'Not Constituted',
+          rowAccepted: null, // no rowFormStatusField configured
         });
       });
 
@@ -770,18 +773,22 @@ describe('ClaimEligibilityEvaluatorService', () => {
         yearAccessService.peekEntry.mockResolvedValue({ yearEnabled: true, yearId: designYearId, disabledFormIds: [23] });
         const doc = sourceFormJson({ formId: 23, type: 'ELECTED_BODY', claimEligibility: exemptElectedBodyRowConfig });
 
-        const { perUlb, rowEvidenceByUlbId } = await service.evaluateUlbBulk(doc, {
+        const { perUlb, rowEvidenceByUlbId, approvedExemptionUlbIds } = await service.evaluateUlbBulk(doc, {
           stateId,
           designYearId,
           expectedUlbIds: [ulbA],
         });
 
         expect(perUlb.get(ulbA)).toBe('EXEMPTED');
-        expect(rowEvidenceByUlbId.get(ulbA)).toEqual({
+        // Automatic exemptions are not "requested" ones, so the claim letter shows them as Yes.
+        expect(approvedExemptionUlbIds.size).toBe(0);
+        expect(rowEvidenceByUlbId?.get(ulbA)).toEqual({
           bucket: 'EXEMPTED',
           rowDocumentId: null,
           rowStatusAtEvaluation: null,
           datasetVersion: null, // mockCollection's findOne always resolves null; unrelated to this test
+          rowValue: null,
+          rowAccepted: null,
         });
       });
 
@@ -1031,6 +1038,8 @@ describe('ClaimEligibilityEvaluatorService', () => {
           rowDocumentId: rowId.toString(),
           rowStatusAtEvaluation: 7,
           datasetVersion: null,
+          rowValue: true,
+          rowAccepted: true,
         });
       });
 
@@ -1071,7 +1080,37 @@ describe('ClaimEligibilityEvaluatorService', () => {
           rowDocumentId: rowId.toString(),
           rowStatusAtEvaluation: 5,
           datasetVersion: 4,
+          rowValue: 'Constituted',
+          rowAccepted: true,
         });
+      });
+
+      it('marks a row not yet accepted (rowAccepted false) but keeps its value for display', async () => {
+        mockCollection('xvifc_elected_ulb_forms', [{ activeDatasetVersion: 1 }]);
+        mockCollection('xvifc_elected_ulb_rows', [
+          { ulbId: new Types.ObjectId(ulbA), electedBodyStatus: 'Constituted', rowStatus: 2 },
+        ]);
+        const configWithFormStatus: ClaimEligibilityConfig = {
+          ...electedBodyRowConfig,
+          evaluator: {
+            type: 'ROW_STATUS_AND_FIELDS',
+            config: {
+              ...(electedBodyRowConfig.evaluator.config as Record<string, unknown>),
+              rowFormStatusField: 'rowStatus',
+              rowAcceptedFormStatuses: [5, 7],
+            },
+          },
+        };
+        const doc = sourceFormJson({ formId: 23, type: 'ELECTED_BODY', claimEligibility: configWithFormStatus });
+
+        const { perUlb, rowEvidenceByUlbId } = await service.evaluateUlbBulk(doc, {
+          stateId,
+          designYearId,
+          expectedUlbIds: [ulbA],
+        });
+
+        expect(perUlb.get(ulbA)).toBe('INELIGIBLE');
+        expect(rowEvidenceByUlbId?.get(ulbA)).toMatchObject({ rowValue: 'Constituted', rowAccepted: false });
       });
 
       it('has no entry for a ULB with no row at all (defaultWhenNoRow applied — nothing to freeze)', async () => {
@@ -1095,6 +1134,7 @@ describe('ClaimEligibilityEvaluatorService', () => {
         const result = await service.evaluateUlbBulk(doc, { stateId, designYearId, expectedUlbIds: [ulbA] });
 
         expect(result.rowEvidenceByUlbId).toBeUndefined();
+        expect(result.approvedExemptionUlbIds).toEqual(new Set());
       });
     });
   });

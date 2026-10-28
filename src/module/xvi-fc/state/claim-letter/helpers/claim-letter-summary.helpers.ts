@@ -1,7 +1,11 @@
-import { getFormStatusLabel } from 'src/common/constants/form-status.constants';
+import { FORM_STATUS, getFormStatusLabel } from 'src/common/constants/form-status.constants';
 import { toObjectIdString } from 'src/common/utils/objectid.util';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
-import type { ClaimLetterBatchSummary, ClaimLetterFinancialSummaryDisplay } from '../types/claim-letter.types';
+import type {
+  ClaimLetterBatchSummary,
+  ClaimLetterFinalStage,
+  ClaimLetterFinancialSummaryDisplay,
+} from '../types/claim-letter.types';
 import { buildClaimLetterPermissions } from './claim-letter-permissions.helpers';
 
 /**
@@ -31,6 +35,7 @@ export function mapClaimLetterBatchDocToSummary(doc: Record<string, unknown>, us
     ulbCount: doc['ulbCount'] as number,
     isAbandoned,
     hasSignedFile: !!doc['signedClaimFile'],
+    finalClaimLetterStage: resolveFinalClaimLetterStage(doc, currentFormStatus, isAbandoned),
     // Already whole Rupees (no decimals) in storage — a direct passthrough, no unit conversion needed.
     // `totalClaimInProgress`/`totalClaimInDraft`/`availableToClaim` are defaulted defensively:
     // reads here go through `.lean()`, which skips Mongoose schema defaults, so a batch saved
@@ -50,4 +55,16 @@ export function mapClaimLetterBatchDocToSummary(doc: Record<string, unknown>, us
     createdAt: doc['createdAt'] as Date,
     permissions: buildClaimLetterPermissions(user, currentFormStatus, isAbandoned),
   };
+}
+
+/** Same rule as `ClaimLetterFinalPdfService`: a submitted batch keeps its copy; a draft merges once signed. */
+function resolveFinalClaimLetterStage(
+  doc: Record<string, unknown>,
+  currentFormStatus: number,
+  isAbandoned: boolean,
+): ClaimLetterFinalStage | null {
+  if (doc['submittedAt'] && currentFormStatus !== FORM_STATUS.IN_PROGRESS) {
+    return doc['finalClaimPdf'] ? 'SUBMITTED' : null;
+  }
+  return currentFormStatus === FORM_STATUS.IN_PROGRESS && !isAbandoned && doc['signedClaimFile'] ? 'DRAFT' : null;
 }

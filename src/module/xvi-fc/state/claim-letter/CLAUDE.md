@@ -6,7 +6,7 @@ supports Installment 1 only.
 
 ## Before changing anything here, read the relevant ADR
 
-The three decisions below are referenced from multiple files each — read the linked ADR before
+The decisions below are referenced from multiple files each - read the linked ADR before
 touching code that cites it, not just the local comment:
 
 - [docs/adr/0001-idempotent-retry.md](docs/adr/0001-idempotent-retry.md) — client-retry safety for
@@ -15,6 +15,8 @@ touching code that cites it, not just the local comment:
   cap, per-ULB locking, and stale-`BUILDING`-row recovery.
 - [docs/adr/0003-workflow-transitions.md](docs/adr/0003-workflow-transitions.md) — which mutations
   write history, and why edits/uploads don't.
+- [docs/adr/0004-one-active-batch.md](docs/adr/0004-one-active-batch.md) - one claim batch in
+  progress per State/year/installment, and why lifting it brings back stale letters.
 
 ## Layout
 
@@ -26,28 +28,63 @@ touching code that cites it, not just the local comment:
 - `services/recovery/` — hourly stale-`BUILDING` cleanup (cron) + read-only reconciliation report.
 - `services/history/` — the only writer of `ClaimLetterBatchHistory`; see ADR 0003 for what counts
   as a transition worth recording.
-- `services/main/claim-letter.service.ts` — read paths + the two parent-only mutations (signed-file
-  upload, submit) that don't touch locks/children.
-- `services/document/claim-letter-document.service.ts` — assembles the claim letter document
-  (Covering Letter + Annexure 1 FC Disclosures + Annexure 2 City Conditions) consumed by the
-  frontend's Preview Template dialog and Download Template PDF — read-only, built on top of
-  `ClaimLetterUlbRowsService.getAllUlbRows()` rather than re-querying `ClaimLetterBatchUlb` directly.
-- `services/document/claim-letter-pdf.service.ts` (+ `claim-letter-pdf-layout.helpers.ts`) —
-  renders that same document into an actual PDF, server-side, via `GET :claimLetterId/document/pdf`
-  (`StreamableFile`). Uses `pdfkit`, not `pdfmake` — Download Template used to build the PDF in the
-  browser with `pdfmake`, which needs `'unsafe-eval'` in `script-src` and breaks under a strict CSP;
-  `pdfkit` has built-in text wrapping and no such requirement. `pdfkit` has no table primitive of
-  its own, so the one hand-rolled `drawTable` helper (fixed S.No./ULB columns + N dynamic trailing
-  columns, header re-drawn on page overflow) is reused across all 3 sections — do not duplicate it
-  per section.
+- `services/main/claim-letter.service.ts` — read paths + the signed-file upload (parent-only, no
+  locks/children).
+- `services/submit/claim-letter-submit.service.ts` - submit (`IN_PROGRESS -> UNDER_REVIEW_BY_MOHUA`)
+  and its pre-transaction checks (fresh eligibility, final-batch completeness, edit-lock lease).
+- `services/document/claim-letter-document.service.ts` - builds the claim letter as a display-ready
+  model (`types/claim-letter-document.types.ts`: paragraphs of runs, `placeholder` runs for blank
+  State fields) shared by the portal preview and the .docx, so the two can never disagree: the
+  frontend renders the backend's text verbatim. Rows C-K and both annexure lists use fresh
+  `resolveUlbLevelEligibility` over the State's expected ULB set (denominator = State total); that
+  heavy part is cached in Redis per `revision` for 5 minutes as a `meta` key (everything but the
+  rows) plus 100-row chunks per list, so opening the letter parses no rows and a 20-row preview page
+  parses one chunk. Chunks are written first and live 30s longer than `meta`; concurrent cache misses
+  share one build (per process). Keys expire on their own (a revision bump starts new ones). The
+  .docx and Submit always evaluate fresh. Letter details and SFC values (row B) change without a
+  revision bump, so they are merged per request.
+- `services/document/claim-letter-docx.service.ts` - renders that model to an A4 .docx (`docx`
+  npm): portrait covering letter, landscape annexure, yellow-highlighted placeholders. Layout
+  ported from the approved Phase 0 samples; column widths come from the column `kind`. Always
+  built fresh (never from the preview cache). `generateForDownload` checks the mandatory letter
+  details first, so every download path has that gate. pdfkit is no longer used in this module.
+- `services/letter-details/claim-letter-letter-details.service.ts` - the State-entered letter
+  details (`letterDetails` on the batch). Fields, labels, validations and required flags are
+  formjson-driven (formId 26 `meta.letterDetailKeys`, a flat list); the portal edits them inline in
+  the letter preview, where each slot run carries its key in `field`. Any subset of keys is saved
+  with `DynamicFormValidationService` (draft mode) plus type / option / strict-date checks; `evaluate`
+  and `assertComplete` run final-mode validation for Download and Submit. A change that would remove
+  an uploaded signed letter needs `confirmSignedFileRemoval` (409 `SIGNED_FILE_REMOVAL_NOT_CONFIRMED`
+  otherwise); concurrent saves are caught by pinning `letterDetailsUpdatedAt` (409
+  `LETTER_DETAILS_CHANGED`). `previous` is the State's latest saved details from another batch,
+  minus `meta.letterDetailSkipPrefill` keys, for the UI's prefill button.
+- `services/final-pdf/claim-letter-final-pdf.service.ts` - the final claim letter, the copy that
+  goes to MoHUA: the signed letter followed by `meta.mergeDocuments` (Elected Body, GTC, Unspent
+  Declaration, ATR). Each entry is only `{ label, formId, fileKeys, optional? }`: the document is
+  found through that form's enabled `claimEligibility.source`, with the same query the eligibility
+  check runs (`common/utils/claim-eligibility-source-query.util.ts`), so a new enclosure is a
+  formjson change; a form without an enabled source is listed as not included. Merged with
+  `pdf-lib` and cached on the batch as `finalClaimPdf` under a
+  SHA-256 key of the ordered labels and upload paths (a re-upload always has a new path, so the key
+  is the change detector; no rebuild otherwise). Concurrent requests for the same batch and key
+  share one merge (per API process). Missing documents are listed; a missing non-`optional` one is
+  in `missingRequired` (read from formjson on every request, never stored) and blocks Submit (400
+  `FINAL_PDF_INCOMPLETE`, naming the document and its form). Unreadable ones are a 422 naming the
+  form to fix. Both GETs need only VIEW_STATE_FORMS (any State user who can open
+  the claim; a viewer may trigger a build, it is only a cache). A submitted batch serves its stored
+  copy: no rebuild and no active-batch guard. Submit sends the key the page showed and gets 409
+  `FINAL_PDF_OUTDATED` when stale. The summary's `finalClaimLetterStage` (DRAFT / SUBMITTED / null)
+  tells the UI which copy to show. Scanned ink signatures only: a merge breaks a digital signature.
+- `services/active-batch/claim-letter-active-batch.service.ts` - the one-active-batch guard
+  (ADR 0004), used by the document, letter-details, final-PDF and submit paths and by create.
 - `services/form-json/claim-letter-form-json.service.ts` — this feature's own `formjsons` document
-  (formId `CLAIM_LETTER_FORM_ID`): `signedClaimFile` field config plus the claimed-vs-allocated
+  (formId `CLAIM_LETTER_FORM_ID`): `signedClaimFile` field config, the claimed-vs-allocated
   variance band (`meta.varianceLowerPercent`/`varianceUpperPercent`, falling back to
   `CLAIM_LETTER_VARIANCE_LOWER_PERCENT`/`UPPER_PERCENT` in `helpers/claim-letter-financial.helpers.ts`
-  when unset). `loadFormConfig` fetches the document exactly once per caller and derives both —
-  `getDetail`/`getClaimContext` (main service) and `prepareChildren` (assembly service, via the
-  `loadVarianceConfig` wrapper) each call it once per request; never chain a second independent
-  fetch for the other half of the same document.
+  when unset), the letter-detail keys / skip-prefill keys, and the merge documents. Invalid entries
+  are logged and skipped; no valid key means letter details are "not configured" (Download and
+  Submit blocked). `loadFormConfig` fetches the document exactly once per caller and derives all of
+  it - never chain a second independent fetch for another part of the same document.
 - `helpers/` — pure functions (financial rounding, content hashing, summary mapping). No I/O.
 
 ## Invariants worth knowing before you change adjacent code
@@ -71,13 +108,28 @@ touching code that cites it, not just the local comment:
   cross-multiplies instead of dividing to stay exact without introducing a float division.
 - The eligibility service's cached `*ForDisplay` methods are for read-only UI paths only — never
   call them from the assembly/mutation pipeline.
-- Annexure 2's ("City Conditions") criteria columns are never hardcoded — they come from
-  `ClaimLetterUlbLevelEligibility.criteriaColumns` (one entry per currently-enabled ULB-bulk
-  criterion, regardless of pass/fail), itself derived from whatever `formjsons` documents have an
-  enabled `claimEligibility` config. Adding/removing an eligibility criterion is a data change
-  (a formjson doc), never a code change here or in the two frontend renderers — do not reintroduce
-  named `CRITERION_TYPE_*` constants for Annexure 2 (Annexure 1's `eligible` column is the one
-  deliberate exception, since that annexure *is* specifically the FC-disclosure check).
+- The annexure's condition columns are never hardcoded - they come from
+  `ClaimLetterUlbLevelEligibility.perCriterion` (one entry per enabled ULB-bulk criterion, sorted by
+  `claimEligibility.displayOrder`, headed by `claimEligibility.letterColumnLabel`). Adding or removing
+  a criterion is a formjson change. Two deliberate named exceptions: the 14th FC column prints the
+  unspent amount (`FC_UNSPENT_STATE`), and compliance rows C-I map to criterion `type`s through the
+  one `CLAIM_LETTER_ROW_CRITERIA` constant (the letter's rows are fixed text; a mapped criterion that
+  is not enabled prints "Not applicable").
+- Annexure cells, first match wins: MoHUA-approved discretionary exemption -> "Exemption requested";
+  14th FC -> unspent amount in lakh or "Nil"; row-level criteria -> the row value as entered
+  (+ " (pending review)" while not accepted), or "Yes" (exempt) / "Not submitted" without a row;
+  others -> Yes / No (`helpers/claim-letter-letter.helpers.ts` `buildAnnexureCell`).
+- Letter details: only the fields the OM uses are required (row A b and c, row B ATR date - set in
+  formjson, not code); optional fields keep their length / format rules when filled and print a
+  highlighted `< >` placeholder when blank. A key printed in the letter needs one slot in the
+  document service (`CLAIM_LETTER_DETAIL_PLACEHOLDERS`); a key removed from formjson simply prints
+  its placeholder.
+- Submit runs, before its transaction: signed file present, letter details complete, this is the
+  active batch (ADR 0004), fresh State gate + per-ULB eligibility of every batch ULB, every required
+  enclosure present, and the reviewed final-PDF key still current. The update filter also pins `signedClaimFile.path` and
+  `letterDetailsUpdatedAt` as read.
+- Dates the State picks are stored as UTC-midnight ISO strings and printed "07 Oct 2026" with UTC
+  getters (fixed month names, no locale); the as-on stamp is IST ("07 Oct 2026, 14:30").
 - Each child's `eligibilitySources` is populated with real per-ULB evidence for `FORM_AND_ROW`
   sources (Elected Body, FC Unspent) — one snapshot per source, built in `prepareChildren` by
   merging that source's state-level result (`evaluateStateLevelGate`) with this ULB's row evidence

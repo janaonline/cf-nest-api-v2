@@ -5,8 +5,10 @@ import { FilterQuery, Model, Types } from 'mongoose';
 import { ClaimEligibilityEvaluatorService } from 'src/module/xvi-fc/common/services/claim-eligibility-evaluator.service';
 import { ExpectedUlbSetService } from 'src/module/xvi-fc/common/services/expected-ulb-set.service';
 import type {
+  ClaimEligibilityEvaluationLevel,
   EligibilityEvaluationResult,
   RowEligibilityEvidence,
+  UlbEligibilityBucket,
   UlbEligibilityTally,
 } from 'src/module/xvi-fc/common/types/claim-eligibility.type';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
@@ -84,6 +86,21 @@ export interface ClaimLetterFailedCriterion {
   shortLabel: string;
 }
 
+/** One ULB-bulk criterion with every ULB's bucket, for the claim letter's annexure tables. */
+export interface ClaimLetterCriterionDetail {
+  formId: number;
+  type: string;
+  label: string;
+  /** `letterColumnLabel ?? displayLabel ?? type`. */
+  letterColumnLabel: string;
+  displayOrder: number | null;
+  evaluationLevel: ClaimEligibilityEvaluationLevel;
+  buckets: Map<string, UlbEligibilityBucket>;
+  /** FORM_AND_ROW criteria only (empty otherwise). */
+  rowEvidence: Map<string, RowEligibilityEvidence>;
+  approvedExemptionUlbIds: Set<string>;
+}
+
 export interface ClaimLetterUlbLevelEligibility {
   /** Merged verdict across every ULB-bulk-evaluable criterion (SLB, Annual Accounts x2, Elected
    *  Body row, FC Unspent row) — a ULB must be ELIGIBLE or EXEMPTED on every one, not INELIGIBLE
@@ -120,6 +137,9 @@ export interface ClaimLetterUlbLevelEligibility {
    *  state-wide would bloat the Redis payload for no benefit). Only the assembly pipeline, which
    *  always calls this method directly (never `*ForDisplay`), needs it. */
   rowEvidenceByFormId: Map<number, Map<string, RowEligibilityEvidence>>;
+  /** Every criterion with its per-ULB buckets, sorted by `displayOrder` then `formId`. Like
+   *  `rowEvidenceByFormId`, not part of the cached `*ForDisplay` shape (always empty there). */
+  perCriterion: ClaimLetterCriterionDetail[];
 }
 
 /**
@@ -242,6 +262,7 @@ export class ClaimLetterEligibilityService {
       // Display-only path (this method is only called from resolveUlbLevelEligibilityForDisplay) —
       // never populated here, see the field's own docblock.
       rowEvidenceByFormId: new Map(),
+      perCriterion: [],
     };
   }
 
@@ -273,6 +294,7 @@ export class ClaimLetterEligibilityService {
       perUlbFailedCriteria: new Map(parsed.perUlbFailedCriteria),
       criteriaColumns: parsed.criteriaColumns,
       rowEvidenceByFormId: new Map(),
+      perCriterion: [],
     };
   }
 
@@ -336,14 +358,26 @@ export class ClaimLetterEligibilityService {
     const rowTalliesByFormId = new Map<number, UlbEligibilityTally>();
     const rowEvidenceByFormId = new Map<number, Map<string, RowEligibilityEvidence>>();
     const criteriaColumns: ClaimLetterFailedCriterion[] = [];
+    const perCriterion: ClaimLetterCriterionDetail[] = [];
 
-    for (const { doc, perUlb, tally, rowEvidenceByUlbId } of results) {
+    for (const { doc, perUlb, tally, rowEvidenceByUlbId, approvedExemptionUlbIds } of results) {
       const config = doc.claimEligibility!;
       const label = config.displayLabel ?? doc.type ?? 'Form';
       const shortLabel = config.shortLabel ?? label;
       const failedCriterion: ClaimLetterFailedCriterion = { type: doc.type ?? '', label, shortLabel };
       // One entry per source, regardless of pass/fail — see the field's own docblock.
       criteriaColumns.push(failedCriterion);
+      perCriterion.push({
+        formId: doc.formId ?? 0,
+        type: doc.type ?? '',
+        label,
+        letterColumnLabel: config.letterColumnLabel ?? label,
+        displayOrder: config.displayOrder ?? null,
+        evaluationLevel: config.evaluationLevel,
+        buckets: perUlb,
+        rowEvidence: rowEvidenceByUlbId ?? new Map<string, RowEligibilityEvidence>(),
+        approvedExemptionUlbIds,
+      });
 
       for (const [ulbId, bucket] of perUlb) {
         if (bucket !== 'INELIGIBLE') continue;
@@ -365,6 +399,10 @@ export class ClaimLetterEligibilityService {
       }
     }
 
+    // Unset displayOrder sorts last (Infinity - Infinity is NaN, so formId breaks the tie).
+    const order = (c: ClaimLetterCriterionDetail) => c.displayOrder ?? Infinity;
+    perCriterion.sort((a, b) => order(a) - order(b) || a.formId - b.formId);
+
     return {
       perUlbEligible,
       standaloneCriteria,
@@ -372,6 +410,7 @@ export class ClaimLetterEligibilityService {
       perUlbFailedCriteria,
       criteriaColumns,
       rowEvidenceByFormId,
+      perCriterion,
     };
   }
 
@@ -406,7 +445,7 @@ export class ClaimLetterEligibilityService {
    * eligibility (`perUlbEligible`): an ULB that's ineligible right now (e.g. hasn't submitted SLB
    * yet) could still become eligible later, and if the final batch submits while it sits
    * unresolved it's stranded for the rest of the installment. So "remaining" here means "not yet
-   * claimed," full stop — used to block submission of the final batch (`ClaimLetterService.submit`)
+   * claimed," full stop — used to block submission of the final batch (`ClaimLetterSubmitService.submit`)
    * and to drive the FE's proactive "N ULBs must be in your final batch" warning.
    */
   async resolveRemainingUlbIds(

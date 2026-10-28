@@ -371,6 +371,59 @@ describe('ClaimLetterEligibilityService', () => {
       expect(result.rowEvidenceByFormId.get(23)).toEqual(new Map());
     });
 
+    it('lists perCriterion by displayOrder (unset last) with buckets, row evidence and approved exemptions', async () => {
+      formJsonService.findEnabledClaimEligibilitySources.mockResolvedValue([
+        ulbOwnedSource({
+          claimEligibility: { ...ulbOwnedSource().claimEligibility!, displayLabel: 'SLB', displayOrder: 5 },
+        }),
+        formAndRowSource({
+          claimEligibility: {
+            ...formAndRowSource().claimEligibility!,
+            letterColumnLabel: 'Election Status',
+            displayOrder: 1,
+          },
+        }),
+        devolutionSource(), // STATE/FORM only - not a ULB-bulk criterion
+      ]);
+      const slbBuckets = new Map([[ulbA, 'INELIGIBLE' as const]]);
+      const ebEvidence = new Map([
+        [
+          ulbA,
+          {
+            bucket: 'ELIGIBLE' as const,
+            rowDocumentId: 'row-1',
+            rowStatusAtEvaluation: 7,
+            datasetVersion: 1,
+            rowValue: '6th Schedule',
+            rowAccepted: true,
+          },
+        ],
+      ]);
+      evaluatorService.evaluateUlbBulk
+        .mockResolvedValueOnce({
+          perUlb: slbBuckets,
+          tally: { eligible: 0, ineligible: 1, exempted: 0, total: 1 },
+          approvedExemptionUlbIds: new Set(),
+        })
+        .mockResolvedValueOnce({
+          perUlb: new Map([[ulbA, 'ELIGIBLE']]),
+          tally: { eligible: 1, ineligible: 0, exempted: 0, total: 1 },
+          rowEvidenceByUlbId: ebEvidence,
+          approvedExemptionUlbIds: new Set([ulbA]),
+        });
+
+      const result = await service.resolveUlbLevelEligibility(stateId, designYearId, 1, [ulbA]);
+
+      expect(result.perCriterion.map((c) => [c.formId, c.letterColumnLabel, c.displayOrder])).toEqual([
+        [23, 'Election Status', 1],
+        [32, 'SLB', 5], // falls back to displayLabel
+      ]);
+      expect(result.perCriterion[0].rowEvidence).toBe(ebEvidence);
+      expect(result.perCriterion[0].approvedExemptionUlbIds).toEqual(new Set([ulbA]));
+      expect(result.perCriterion[1].buckets).toBe(slbBuckets);
+      expect(result.perCriterion[1].rowEvidence).toEqual(new Map());
+    });
+
     it('every expected ULB defaults to eligible when there are no qualifying sources at all', async () => {
       formJsonService.findEnabledClaimEligibilitySources.mockResolvedValue([devolutionSource()]); // STATE/FORM only
 
