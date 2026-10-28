@@ -41,13 +41,22 @@ import {
 import { ClaimLetterEligibilityService, DevolutionAllocation } from '../eligibility/claim-letter-eligibility.service';
 import { ClaimLetterHistoryService } from '../history/claim-letter-history.service';
 import { ClaimLetterFormJsonService } from '../form-json/claim-letter-form-json.service';
+import { ClaimLetterActiveBatchService } from '../active-batch/claim-letter-active-batch.service';
 import { mapClaimLetterBatchDocToSummary } from '../../helpers/claim-letter-summary.helpers';
 import type { ClaimLetterBatchSummary } from '../../types/claim-letter.types';
 
 export interface ClaimLetterUlbSelectionInput {
   ulbId: string;
-  /** Whole Rupees (no decimals) — the client's natural input unit, and also this service's storage unit. */
+  /** Whole Rupees. */
   claimedAmount: number;
+}
+
+/** Same ULBs with the same claimed amounts as the current rows (order ignored; duplicates are
+ *  rejected before this runs). */
+function sameSelections(selections: ClaimLetterUlbSelectionInput[], children: Record<string, unknown>[]): boolean {
+  if (selections.length !== children.length) return false;
+  const claimed = new Map(children.map((c) => [String(c['ulbId']), c['claimedAmount']]));
+  return selections.every((s) => claimed.get(s.ulbId) === s.claimedAmount);
 }
 
 export interface CreateClaimLetterDraftInput {
@@ -55,7 +64,7 @@ export interface CreateClaimLetterDraftInput {
   yearId: string;
   installment: number;
   ulbSelections: ClaimLetterUlbSelectionInput[];
-  /** Client-suppliable idempotency key; a fresh one is generated when omitted. */
+  /** The DTO's `idempotencyKey`; generated when omitted (ADR 0001). */
   buildRequestId?: string;
   user: AuthUser;
 }
@@ -88,9 +97,7 @@ interface BuildResult {
   };
 }
 
-/** The in-memory, not-yet-persisted result of `prepareChildren` — every business-rule check
- *  (gate, per-ULB eligibility, variance) has already passed by the time this exists, so a caller
- *  holding one of these knows nothing destructive needs to happen for validation to fail. */
+/** Validated but not yet persisted: every business-rule check has already passed. */
 interface PreparedChildren {
   requestedUlbIds: string[];
   children: BuiltChild[];
@@ -99,24 +106,12 @@ interface PreparedChildren {
   allocationByUlbId: Map<string, DevolutionAllocation>;
 }
 
-/**
- * File-private control-flow marker distinguishing a conflict that might be a reclaimable stale
- * `BUILDING` row from one that's proven fresh, live contention — see
- * docs/adr/0002-batching-and-locks.md for the full reservation/reclaim design this supports.
- */
+/** A conflict that may be a reclaimable stale BUILDING row, unlike live contention (ADR 0002). */
 class ReclaimableConflictException extends ConflictException {}
 
-/**
- * The claim-letter creation pipeline — the most concurrency-sensitive piece of this feature, since
- * a State's legally binding grant claim must never let two drafts double-claim the same ULB or the
- * same batch slot. See docs/adr/0002-batching-and-locks.md for the reservation/reclaim design;
- * docs/adr/0001-idempotent-retry.md for retry safety. Structured in 4 stages:
- *   1-2. One short transaction: allocate a batch number + acquire all ULB locks, all-or-nothing.
- *   3.   Chunked, non-transactional child assembly (scales to 700+ ULBs without one giant transaction).
- *   4.   Revalidate against live data, verify, and finalize BUILDING -> READY with an
- *        expected-state filter; any failure from here compensates by deleting the BUILDING
- *        parent/children and releasing only this build's own locks.
- */
+/** Creates, edits and abandons batches; writes locks and children (recovery's stale-build cleanup only
+ *  deletes them, through the shared helper). Build stages, the drift re-check and rollback:
+ *  docs/adr/0002-batching-and-locks.md; retries: docs/adr/0001-idempotent-retry.md. */
 @Injectable()
 export class ClaimLetterAssemblyService {
   private readonly logger = new Logger(ClaimLetterAssemblyService.name);
@@ -138,11 +133,10 @@ export class ClaimLetterAssemblyService {
     private readonly eligibilityService: ClaimLetterEligibilityService,
     private readonly historyService: ClaimLetterHistoryService,
     private readonly formJsonConfigService: ClaimLetterFormJsonService,
+    private readonly activeBatchService: ClaimLetterActiveBatchService,
   ) {}
 
-  /** Thin public wrapper so every claim-letter mutating endpoint returns the same mapped
-   *  `ClaimLetterBatchSummary` shape `ClaimLetterService`'s own endpoints do — the internal
-   *  pipeline below is unchanged and still deals in raw documents throughout. */
+  /** Public methods return the mapped summary; the `*Raw` pipeline works on raw documents. */
   async createDraft(input: CreateClaimLetterDraftInput): Promise<ClaimLetterBatchSummary> {
     const raw = await this.createDraftRaw(input);
     return mapClaimLetterBatchDocToSummary(raw, input.user);
@@ -167,6 +161,8 @@ export class ClaimLetterAssemblyService {
       const idempotent = await this.checkIdempotentRetry(input.buildRequestId, stateOid);
       if (idempotent) return idempotent;
     }
+    // Best-effort (ADR 0004): the preview / download / submit guards are the hard rule.
+    await this.activeBatchService.assertCanCreate({ state: stateOid, year: yearOid, installment: input.installment });
 
     const parent = await this.reserveBatchSlotAndLocks(
       stateOid,
@@ -195,11 +191,7 @@ export class ClaimLetterAssemblyService {
 
   // ─── Idempotent retry (docs/adr/0001-idempotent-retry.md) ───────────────────
 
-  /** Scoped by `state` as well as `buildRequestId` — `buildRequestId` is client-suppliable and
-   *  only unique at the DB level across *all* states, so without this a caller who (accidentally
-   *  or otherwise) reuses another state's idempotency key would get that other state's claim
-   *  batch back, bypassing `assertStateAccess` (which only validates the URL's `stateId`, not the
-   *  state of whatever document this lookup resolves to). */
+  /** Scoped by state too: the key is client-supplied, so alone it could return another State's batch (ADR 0001). */
   private async checkIdempotentRetry(
     buildRequestId: string,
     stateOid: Types.ObjectId,
@@ -214,12 +206,8 @@ export class ClaimLetterAssemblyService {
 
   // ─── Steps 1-2: allocate batch number + acquire all locks (docs/adr/0002-batching-and-locks.md) ───
 
-  /** Thin orchestrator around a single reservation attempt — gives a stale `BUILDING` row exactly
-   *  one chance to be reclaimed inline before surfacing the standard conflict to the caller,
-   *  instead of making every future request to that slot/ULB wait for the hourly cron. Lives here
-   *  (not inside the attempt itself) because MongoDB aborts the whole transaction on a write
-   *  conflict — there's no way to catch a duplicate-key error and keep using the same session to
-   *  delete-and-retry, so the retry has to be a fresh call, with its own fresh session. */
+  /** One reclaim-and-retry on a reclaimable conflict, in a fresh session: MongoDB aborts the whole
+   *  transaction on a write conflict, so the failed session cannot retry. */
   private async reserveBatchSlotAndLocks(
     stateOid: Types.ObjectId,
     yearOid: Types.ObjectId,
@@ -240,9 +228,8 @@ export class ClaimLetterAssemblyService {
     } catch (err) {
       if (!(err instanceof ReclaimableConflictException)) throw err;
       const reclaimed = await this.reclaimBlockingStaleBuilds(stateOid, yearOid, installment, ulbIds);
-      if (!reclaimed) throw err; // Nothing reclaimable — a genuinely live conflict, not staleness.
-      // Exactly one retry: whatever this throws (including a fresh conflict, if someone else won
-      // the just-freed resource first) propagates as final and is never caught again.
+      if (!reclaimed) throw err; // Nothing stale: a live conflict.
+      // Exactly one retry; whatever it throws is final.
       return this.attemptReserveBatchSlotAndLocks(stateOid, yearOid, installment, ulbIds, buildRequestId, userOid);
     }
   }
@@ -298,8 +285,7 @@ export class ClaimLetterAssemblyService {
         );
       } catch (err) {
         if (this.isDuplicateKeyError(err)) {
-          // Always fresh, live contention (see ReclaimableConflictException's doc comment) — a
-          // plain ConflictException here is correct, not a candidate for reclaim-and-retry.
+          // Live contention: the slot scan ran in this same transaction (ADR 0002).
           throw new ConflictException('This claim batch slot was just taken by another request. Please retry.');
         }
         throw err;
@@ -355,20 +341,14 @@ export class ClaimLetterAssemblyService {
     for (const candidate of [1, 2, 3] as const) {
       if (!usedSet.has(candidate)) return candidate;
     }
-    // Unlike the create()-duplicate-key case above, this fires before any write is attempted and
-    // is deterministic given unchanged state — if a stale BUILDING row occupies a slot, every
-    // retry re-reads the same 3 "used" slots and throws this exact rejection again. Reclaimable.
+    // Reclaimable: a stale BUILDING row holding a slot would fail every retry the same way.
     throw new ReclaimableConflictException(
       `All ${CLAIM_LETTER_MAX_BATCH_NUMBER} claim slots are already in use for this installment.`,
     );
   }
 
-  /** Looks for a BUILDING row blocking either dimension of the reservation that just failed —
-   *  the occupied batch slots and the requested ULBs' lock owners, together, in one pass, since
-   *  only one retry is allowed and fixing just the dimension that happened to trip first could
-   *  still leave the retry dead on the other. Reuses the exact staleness predicate the hourly cron
-   *  already uses; a parent that's READY, or BUILDING but still within the threshold (someone
-   *  else's real in-flight build), is never touched. Returns whether anything was reclaimed. */
+  /** Checks slot holders and ULB lock owners in one pass, since only one retry follows. Same staleness
+   *  rule as the hourly sweep; returns whether anything was reclaimed. */
   private async reclaimBlockingStaleBuilds(
     stateOid: Types.ObjectId,
     yearOid: Types.ObjectId,
@@ -415,10 +395,7 @@ export class ClaimLetterAssemblyService {
     return true;
   }
 
-  /** Session-owning wrapper around the same delete body the hourly cron uses
-   *  (`deleteBuildingParentArtifacts`) — deleting 0 matching rows is a normal, successful result,
-   *  never an error, so this is safe even if a concurrent request reclaims the same stale parent
-   *  at the same time (whichever commits first wins; the other's deletes just match nothing). */
+  /** Deleting nothing is success, so two requests reclaiming the same row at once is safe. */
   private async reclaimStaleBuildArtifacts(parentId: Types.ObjectId, buildRequestId: string): Promise<void> {
     const session = await this.connection.startSession();
     try {
@@ -453,9 +430,7 @@ export class ClaimLetterAssemblyService {
     return this.finishBuildResult(parent, prepared, stateOid, yearOid, installment);
   }
 
-  /** Fetches sources, validates every selection, and builds the child documents in memory —
-   *  throws before anything is written, so a business-rule rejection (ineligible ULB, variance
-   *  violation, state gate failure) never has a destructive side effect. */
+  /** Validates every selection in memory and throws before any write, so a rejection never deletes anything. */
   private async prepareChildren(
     parent: ClaimLetterBatchDocument,
     selections: ClaimLetterUlbSelectionInput[],
@@ -475,17 +450,13 @@ export class ClaimLetterAssemblyService {
       throw new BadRequestException(`State is not eligible to claim: ${reason}`);
     }
 
-    // Both deferred until the gate is confirmed passing — resolveUlbLevelEligibility is the
-    // heaviest of this method's fetches (a bulk find per ULB-bulk-evaluable source), entirely
-    // wasted when the state isn't eligible at all; resolveUlbSnapshots was already sequenced after
-    // the gate check, so it now simply runs alongside the other post-gate fetch instead of before it.
+    // Only after the gate passes: ULB-level eligibility is the heaviest fetch here.
     const [ulbSnapshotById, ulbLevelEligibility] = await Promise.all([
       this.resolveUlbSnapshots(
         selections.map((s) => s.ulbId),
         stateOid,
       ),
-      // Re-verified here too, not just at picker time — a ULB's SLB/Annual Accounts/Elected
-      // Body/FC Unspent status can change between being picked and the draft being saved.
+      // Re-checked, not trusted from the picker: eligibility can change in between.
       this.eligibilityService.resolveUlbLevelEligibility(
         String(stateOid),
         String(yearOid),
@@ -494,9 +465,7 @@ export class ClaimLetterAssemblyService {
       ),
     ]);
 
-    // Every enabled FORM_AND_ROW source is guaranteed PASSED/EXEMPTED here (gate.passed already
-    // asserted true above) — the filter mirrors the identical one used for stateEligibilitySources
-    // below, purely for self-documentation/defensiveness.
+    // Always PASSED/EXEMPTED once the gate passed; the result filter is defensive.
     const formAndRowSources = gate.sources.filter(
       (s) => s.evaluationLevel === 'FORM_AND_ROW' && (s.result === 'PASSED' || s.result === 'EXEMPTED'),
     );
@@ -507,8 +476,7 @@ export class ClaimLetterAssemblyService {
     for (const selection of selections) {
       const ulb = ulbSnapshotById.get(selection.ulbId);
       const allocation = allocationByUlbId.get(selection.ulbId);
-      // Prefer a human-meaningful identifier for error reporting over the raw Mongo id — falls
-      // back to the submitted ulbId only when no snapshot resolved at all (unknown/inactive ULB).
+      // Census / SB code in the error where known; the raw id only for an unknown or inactive ULB.
       const identifier = ulb?.censusCode ?? ulb?.sbCode ?? selection.ulbId;
       if (!ulb || !allocation) {
         invalid.push(identifier);
@@ -571,9 +539,7 @@ export class ClaimLetterAssemblyService {
     };
   }
 
-  /** Chunked, non-transactional insert (scales to 700+ ULBs without one giant transaction) —
-   *  everything that could reject the selection on business grounds has already happened in
-   *  `prepareChildren`, so a failure here is an infra-level write failure, not a validation one. */
+  /** Chunked, outside a transaction (ADR 0002); validation is done, so a failure here is infrastructure. */
   private async persistChildren(children: BuiltChild[]): Promise<void> {
     for (let i = 0; i < children.length; i += CLAIM_LETTER_CHILD_INSERT_CHUNK_SIZE) {
       const chunk = children.slice(i, i + CLAIM_LETTER_CHILD_INSERT_CHUNK_SIZE);
@@ -584,9 +550,7 @@ export class ClaimLetterAssemblyService {
     }
   }
 
-  /** Re-inserts a previously deleted snapshot verbatim (same `_id`s and all other fields) — the
-   *  safety net `updateDraftRaw` falls back on when persisting or verifying the new child set
-   *  fails after the old set has already been deleted. */
+  /** Re-inserts deleted children verbatim (same `_id`s) when an update fails after the delete. */
   private async restoreChildren(snapshot: Record<string, unknown>[]): Promise<void> {
     for (let i = 0; i < snapshot.length; i += CLAIM_LETTER_CHILD_INSERT_CHUNK_SIZE) {
       const chunk = snapshot.slice(i, i + CLAIM_LETTER_CHILD_INSERT_CHUNK_SIZE);
@@ -606,10 +570,7 @@ export class ClaimLetterAssemblyService {
   ): Promise<BuildResult> {
     const { children, allocationByUlbId } = prepared;
     const totalInstallmentAllocation = sumAmountsExactly([...allocationByUlbId.values()].map((a) => a.allocatedAmount));
-    // Self-excludes `parent._id` so this batch's own claim (still counted separately below via
-    // `currentSelectedClaim`) never nets out of totalClaimInProgress/totalClaimInDraft twice —
-    // correct regardless of whether `parent` is currently a fresh draft or an existing one being
-    // re-saved (it's always excluded from whichever status bucket it currently occupies).
+    // Excludes this batch, whose claim is counted once, in currentSelectedClaim.
     const { totalAlreadyAcknowledged, totalClaimInProgress, totalClaimInDraft, availableToClaim } =
       await this.eligibilityService.getClaimStatusBreakdown(
         String(stateOid),
@@ -634,8 +595,7 @@ export class ClaimLetterAssemblyService {
         availableToClaim,
         selectedAllocation,
         currentSelectedClaim,
-        // = availableToClaim − currentSelectedClaim — accounts for other concurrent batches
-        // (draft/under-review), not just this state's already-acknowledged claims.
+        // Net of other drafts and batches under review too, not only acknowledged ones.
         remainingIfAcknowledged: sumAmountsExactly([availableToClaim, -currentSelectedClaim]),
       },
     };
@@ -704,12 +664,8 @@ export class ClaimLetterAssemblyService {
     return map;
   }
 
-  /**
-   * Only ever called on PASSED/EXEMPTED results (a FAILED result would have already blocked the
-   * whole draft in buildChildren) — formDocumentId/statusAtEvaluation are null only on FAILED
-   * results (see FormStatusEvidenceV1), so a null here means a real bug upstream, not a case to
-   * silently paper over with a fabricated ObjectId.
-   */
+  /** Only PASSED/EXEMPTED results get here, and those always have formDocumentId; a missing one is an
+   *  upstream bug, so this fails rather than inventing an id. */
   private toEligibilitySourceSnapshot(result: EligibilityEvaluationResult): Record<string, unknown> {
     if (!result.formDocumentId) {
       throw new ConflictException('Cannot snapshot an eligibility result with no source document. Please retry.');
@@ -732,15 +688,8 @@ export class ClaimLetterAssemblyService {
     };
   }
 
-  /**
-   * One `eligibilitySources` entry per FORM_AND_ROW source, for one specific ULB — merges that
-   * source's already-resolved state-level fields (formId/formJsonId/ruleVersion/formType/
-   * formDocumentId/statusAtEvaluation/evidence, identical for every ULB in this batch) with this
-   * ULB's own row evidence (rowDocumentId/rowStatusAtEvaluation/datasetVersion), both already
-   * in memory from `prepareChildren`'s fetches — no query here. A ULB with no row evidence entry
-   * hit `defaultWhenNoRow` (no row existed) — still gets a PASSED snapshot (it must have, or
-   * `perUlbEligible` would have already rejected it), just with null row fields.
-   */
+  /** Per FORM_AND_ROW source: its State-level result plus this ULB's row evidence, both already in
+   *  memory. No evidence means the source's no-row default passed the ULB. */
   private buildChildEligibilitySources(
     ulbId: string,
     formAndRowSources: EligibilityEvaluationResult[],
@@ -764,8 +713,7 @@ export class ClaimLetterAssemblyService {
 
   // ─── Step 4: revalidate, verify, finalize (docs/adr/0002-batching-and-locks.md) ──────────────
 
-  /** Shared by all three finalize paths (create/update/version-regen) — revalidates against
-   *  live data, verifies persisted children match the build, and computes the content hash. */
+  /** Shared by the create, update and new-version finalize paths. */
   private async verifyPersistedChildren(
     parent: ClaimLetterBatchDocument,
     built: BuildResult,
@@ -1050,9 +998,7 @@ export class ClaimLetterAssemblyService {
       throw new BadRequestException('Duplicate ULB selected — each ULB may appear only once.');
     }
 
-    // Access control is checked against a plain read, decoupled from the atomic claim below, so an
-    // unauthorized caller always gets a 403 rather than having it masked by a 409 from the claim
-    // filter not matching.
+    // Plain read first, so an unauthorized caller gets 403 rather than a 409 from the claim filter.
     const existing = await this.batchModel
       .findOne({ _id: claimLetterId, assemblyStatus: 'READY' })
       .lean<Record<string, unknown> | null>()
@@ -1060,11 +1006,8 @@ export class ClaimLetterAssemblyService {
     if (!existing) throw new NotFoundException(`Claim letter ${claimLetterId} not found`);
     assertStateAccess(user, String(existing['state']));
 
-    // Claimed atomically alongside the currentFormStatus/revision check — this is what closes the
-    // race where two concurrent PATCHes both pass a plain in-memory revision check and then
-    // interleave their delete/insert against the same child rows. Only the request that wins this
-    // claim may proceed past this point; released on every path below (success or failure) so a
-    // failed/aborted update never blocks future edits to this draft.
+    // Edit lock taken atomically with the status / revision check, so two concurrent PATCHes cannot
+    // interleave their child rebuilds. Released on every path below.
     const editToken = randomUUID();
     const parent = await this.batchModel
       .findOneAndUpdate(
@@ -1073,9 +1016,7 @@ export class ClaimLetterAssemblyService {
           assemblyStatus: 'READY',
           currentFormStatus: FORM_STATUS.IN_PROGRESS,
           revision: expectedRevision,
-          // Self-expiring lease, not a permanent lock — a claim older than the lease is treated as
-          // unclaimed right here, inline, rather than needing a separate cleanup job to release it
-          // after a crash (see CLAIM_LETTER_EDIT_LOCK_LEASE_MINUTES).
+          // Self-expiring lease: an expired lock counts as free (ADR 0002).
           $or: [{ editLockToken: null }, { editLockAcquiredAt: { $lt: this.editLockStaleBefore() } }],
         },
         { $set: { editLockToken: editToken, editLockAcquiredAt: new Date() } },
@@ -1091,45 +1032,44 @@ export class ClaimLetterAssemblyService {
     const installment = parent.installment;
     const userOid = new Types.ObjectId(user._id);
 
-    // Snapshotted in FULL (not just ulbId) — this is what gets restored, verbatim, if anything
-    // below fails after the destructive delete, so the draft never ends up with fewer children
-    // than either the old or new valid set.
+    // Full documents: restored verbatim if anything below fails after the delete.
     const currentChildren = await this.batchUlbModel
       .find({ claimLetter: parent._id })
       .lean<Record<string, unknown>[]>()
       .exec();
+
+    // Nothing changed: keep the draft, its revision and the uploaded signed letter as they are.
+    if (sameSelections(selections, currentChildren)) {
+      await this.releaseEditLock(parent._id, editToken);
+      const current = await this.batchModel.findById(parent._id).lean<Record<string, unknown> | null>().exec();
+      if (!current) throw new NotFoundException(`Claim letter ${claimLetterId} not found`);
+      return current;
+    }
+
     const currentUlbIdSet = new Set(currentChildren.map((c) => String(c['ulbId'])));
     const requestedUlbIdSet = new Set(ulbIds);
     const addedUlbIds = ulbIds.filter((id) => !currentUlbIdSet.has(id));
     const removedUlbIds = [...currentUlbIdSet].filter((id) => !requestedUlbIdSet.has(id));
 
+    // Validated before any write, so a rejection changes no lock and no child. Only the added ULBs
+    // are locked here; the removed ones keep their locks until the final write (ADR 0002).
+    let prepared: PreparedChildren;
     try {
-      await this.diffLocks(parent, addedUlbIds, removedUlbIds, stateOid, yearOid, installment);
+      prepared = await this.prepareChildren(parent, selections, userOid, stateOid, yearOid, installment);
+      await this.addLocks(parent, addedUlbIds, stateOid, yearOid, installment);
     } catch (err) {
-      // diffLocks's own transaction already rolled back atomically — nothing to compensate there,
-      // but we still hold the edit-lock claim and must release it.
+      // addLocks rolled back its own transaction; only the edit lock is held.
       await this.releaseEditLock(parent._id, editToken);
       throw err;
     }
 
     try {
-      // Children aren't required to preserve document identity across an edit (only frozen claim
-      // *versions* are immutable — docs/adr/0002-batching-and-locks.md) — delete-and-rebuild the
-      // full set is simpler and safer than a true per-field diff, and also sidesteps a
-      // duplicate-key collision that reusing a retained ULB's existing child document would
-      // otherwise risk.
-      //
-      // Validate the full new child set in memory FIRST — a business-rule rejection (ineligible
-      // ULB, variance violation, state gate failure) throws here, before anything destructive
-      // happens, so the existing rows are never touched.
-      const prepared = await this.prepareChildren(parent, selections, userOid, stateOid, yearOid, installment);
-
+      // Children are deleted and rebuilt (only frozen versions are immutable, ADR 0002).
       await this.batchUlbModel.deleteMany({ claimLetter: parent._id });
       try {
         await this.persistChildren(prepared.children);
       } catch (err) {
-        // The new set failed to persist after the old one was already deleted — restore the old
-        // set rather than leaving the draft with fewer children than either valid set.
+        // Restore the old set rather than leave the draft short of children.
         await this.restoreChildren(currentChildren);
         throw err;
       }
@@ -1137,32 +1077,33 @@ export class ClaimLetterAssemblyService {
       const built = await this.finishBuildResult(parent, prepared, stateOid, yearOid, installment);
 
       try {
-        return await this.verifyAndFinalizeUpdate(parent, built, stateOid, yearOid, installment, editToken);
+        return await this.verifyAndFinalizeUpdate(
+          parent,
+          built,
+          removedUlbIds,
+          stateOid,
+          yearOid,
+          installment,
+          editToken,
+        );
       } catch (err) {
-        // The new set is persisted but unconfirmed (drift/mismatch/lock race) — wipe it and
-        // restore the previous, still-valid set rather than leaving the unconfirmed one in place.
+        // Persisted but unconfirmed: put the previous, still-valid set back.
         await this.batchUlbModel.deleteMany({ claimLetter: parent._id });
         await this.restoreChildren(currentChildren);
         throw err;
       }
     } catch (err) {
-      await this.releaseEditLock(parent._id, editToken);
-      await this.compensateUpdateFailure(
-        parent._id,
-        addedUlbIds,
-        removedUlbIds,
-        stateOid,
-        yearOid,
-        installment,
-        parent.buildRequestId,
-      );
+      // Undo while still holding the edit lock, so another edit never sees the half-done locks.
+      try {
+        await this.releaseAddedLocks(parent._id, addedUlbIds);
+      } finally {
+        await this.releaseEditLock(parent._id, editToken);
+      }
       throw err;
     }
   }
 
-  /** Differentiates *why* the upfront edit-lock claim in `updateDraftRaw` failed to match, so the
-   *  caller gets a precise error instead of one generic conflict — mirrors the re-fetch pattern
-   *  `ClaimLetterService.submit()` already uses for its own concurrent-change resolution. */
+  /** Re-reads the batch to say why the edit-lock claim did not match. */
   private async buildUpdateClaimConflictError(
     claimLetterId: string,
     expectedRevision: number,
@@ -1183,10 +1124,7 @@ export class ClaimLetterAssemblyService {
     return new ConflictException('This draft was changed by someone else. Please refresh and retry.');
   }
 
-  /** Everything that reads `editLockToken` treats a claim past its lease as unclaimed, inline —
-   *  no separate cleanup job releases it. Query-side callers use `editLockStaleBefore()` directly
-   *  in a `$or`; in-memory callers (re-fetch/conflict-resolution paths, working off a `.lean()`
-   *  doc) use this instead. */
+  /** Lease cutoff: a lock taken before this is free. Queries use it directly; lean docs use isEditLockActive. */
   private editLockStaleBefore(): Date {
     return new Date(Date.now() - CLAIM_LETTER_EDIT_LOCK_LEASE_MINUTES * 60_000);
   }
@@ -1196,9 +1134,7 @@ export class ClaimLetterAssemblyService {
     return new Date(acquiredAt as string | Date) >= this.editLockStaleBefore();
   }
 
-  /** Releases the `updateDraftRaw` edit-lock claim — guarded by the exact token so a call here
-   *  can never clear a *different*, later claim (e.g. one the stale-lock recovery job already
-   *  reissued). Safe/idempotent to call even if the claim was never actually held. */
+  /** Token-guarded, so it never clears a later edit's lock (one taken after this lease expired). */
   private async releaseEditLock(parentId: Types.ObjectId, editToken: string): Promise<void> {
     await this.batchModel.updateOne(
       { _id: parentId, editLockToken: editToken },
@@ -1206,49 +1142,37 @@ export class ClaimLetterAssemblyService {
     );
   }
 
-  private async diffLocks(
+  /** Locks the added ULBs, all or none. Removed ULBs are released at finalize, not here. */
+  private async addLocks(
     parent: ClaimLetterBatchDocument,
     addedUlbIds: string[],
-    removedUlbIds: string[],
     stateOid: Types.ObjectId,
     yearOid: Types.ObjectId,
     installment: number,
   ): Promise<void> {
-    if (addedUlbIds.length === 0 && removedUlbIds.length === 0) return;
+    if (addedUlbIds.length === 0) return;
 
     const session = await this.connection.startSession();
     try {
       session.startTransaction();
-
-      if (removedUlbIds.length > 0) {
-        await this.lockModel.deleteMany(
-          { claimLetter: parent._id, ulbId: { $in: removedUlbIds.map((id) => new Types.ObjectId(id)) } },
-          { session },
+      try {
+        await this.lockModel.insertMany(
+          [...addedUlbIds].sort().map((ulbId) => ({
+            state: stateOid,
+            year: yearOid,
+            installment,
+            ulbId: new Types.ObjectId(ulbId),
+            claimLetter: parent._id,
+            buildRequestId: parent.buildRequestId,
+          })),
+          { session, ordered: true },
         );
-      }
-
-      if (addedUlbIds.length > 0) {
-        const sortedAdded = [...addedUlbIds].sort();
-        try {
-          await this.lockModel.insertMany(
-            sortedAdded.map((ulbId) => ({
-              state: stateOid,
-              year: yearOid,
-              installment,
-              ulbId: new Types.ObjectId(ulbId),
-              claimLetter: parent._id,
-              buildRequestId: parent.buildRequestId,
-            })),
-            { session, ordered: true },
-          );
-        } catch (err) {
-          if (this.isDuplicateKeyError(err)) {
-            throw new ConflictException('One or more selected ULBs are already locked in another active claim.');
-          }
-          throw err;
+      } catch (err) {
+        if (this.isDuplicateKeyError(err)) {
+          throw new ConflictException('One or more selected ULBs are already locked in another active claim.');
         }
+        throw err;
       }
-
       await session.commitTransaction();
     } catch (err) {
       await session.abortTransaction();
@@ -1258,57 +1182,22 @@ export class ClaimLetterAssemblyService {
     }
   }
 
-  /** Reverses a committed lock diff when the subsequent child rebuild/finalize fails. */
-  private async compensateUpdateFailure(
-    parentId: Types.ObjectId,
-    addedUlbIds: string[],
-    removedUlbIds: string[],
-    stateOid: Types.ObjectId,
-    yearOid: Types.ObjectId,
-    installment: number,
-    buildRequestId: string,
-  ): Promise<void> {
-    if (addedUlbIds.length === 0 && removedUlbIds.length === 0) return;
-
+  /** Undoes addLocks after a failed edit. The removed ULBs' locks were never released. */
+  private async releaseAddedLocks(parentId: Types.ObjectId, addedUlbIds: string[]): Promise<void> {
+    if (addedUlbIds.length === 0) return;
     this.logger.warn(
-      `Compensating a failed claim-letter update for ${String(parentId)} — reverting lock diff ` +
-        `(added=${addedUlbIds.length}, removed=${removedUlbIds.length}).`,
+      `Releasing ${addedUlbIds.length} added lock(s) after a failed claim-letter update for ${String(parentId)}.`,
     );
-
-    const session = await this.connection.startSession();
-    try {
-      session.startTransaction();
-      if (addedUlbIds.length > 0) {
-        await this.lockModel.deleteMany(
-          { claimLetter: parentId, ulbId: { $in: addedUlbIds.map((id) => new Types.ObjectId(id)) } },
-          { session },
-        );
-      }
-      if (removedUlbIds.length > 0) {
-        await this.lockModel.insertMany(
-          removedUlbIds.map((ulbId) => ({
-            state: stateOid,
-            year: yearOid,
-            installment,
-            ulbId: new Types.ObjectId(ulbId),
-            claimLetter: parentId,
-            buildRequestId,
-          })),
-          { session, ordered: true },
-        );
-      }
-      await session.commitTransaction();
-    } catch (err) {
-      await session.abortTransaction();
-      throw err;
-    } finally {
-      await session.endSession();
-    }
+    await this.lockModel.deleteMany({
+      claimLetter: parentId,
+      ulbId: { $in: addedUlbIds.map((id) => new Types.ObjectId(id)) },
+    });
   }
 
   private async verifyAndFinalizeUpdate(
     parent: ClaimLetterBatchDocument,
     built: BuildResult,
+    removedUlbIds: string[],
     stateOid: Types.ObjectId,
     yearOid: Types.ObjectId,
     installment: number,
@@ -1323,37 +1212,52 @@ export class ClaimLetterAssemblyService {
       parent.buildRequestId,
     );
 
-    // Guarded by the edit-lock token rather than `revision` directly — nothing else can have
-    // changed `currentFormStatus`/`revision` while we hold this token (abandon/submit both refuse
-    // to act while it's set), so this is strictly equivalent to the old revision-guard but also
-    // clears the lock atomically in the same write. No history write here — draft edits are not
-    // workflow transitions (docs/adr/0003-workflow-transitions.md).
-    const updated = await this.batchModel
-      .findOneAndUpdate(
-        { _id: parent._id, currentFormStatus: FORM_STATUS.IN_PROGRESS, editLockToken: editToken },
-        {
-          $set: {
-            ulbCount: built.requestedUlbIds.length,
-            financialSummary: built.financialSummary,
-            contentHash,
-            contentHashVersion: CLAIM_LETTER_CONTENT_HASH_VERSION,
-            stateEligibilitySources: built.stateEligibilitySources,
-            editLockToken: null,
-            editLockAcquiredAt: null,
+    // The draft write and the release of the removed ULBs' locks commit together, so a removed ULB
+    // is never free while the edit can still fail (ADR 0002). The edit token stands in for the
+    // revision guard (abandon and submit refuse while it is held) and is cleared in the same write.
+    // No history row: edits are not transitions (ADR 0003).
+    const session = await this.connection.startSession();
+    try {
+      session.startTransaction();
+      const updated = await this.batchModel
+        .findOneAndUpdate(
+          { _id: parent._id, currentFormStatus: FORM_STATUS.IN_PROGRESS, editLockToken: editToken },
+          {
+            $set: {
+              ulbCount: built.requestedUlbIds.length,
+              financialSummary: built.financialSummary,
+              contentHash,
+              contentHashVersion: CLAIM_LETTER_CONTENT_HASH_VERSION,
+              stateEligibilitySources: built.stateEligibilitySources,
+              editLockToken: null,
+              editLockAcquiredAt: null,
+              // The uploaded signed letter no longer matches the edited ULBs (ADR 0003).
+              signedClaimFile: null,
+            },
+            $inc: { revision: 1 },
           },
-          $inc: { revision: 1 },
-        },
-        { new: true },
-      )
-      .lean<Record<string, unknown> | null>()
-      .exec();
-
-    if (!updated) {
-      // Should be unreachable while we hold editToken (nothing else can clear/change it), but kept
-      // as a defensive guard against manual DB intervention or a stale-lock reclaim racing us.
-      throw new ConflictException('This draft was changed by someone else. Please refresh and retry.');
+          { new: true, session },
+        )
+        .lean<Record<string, unknown> | null>()
+        .exec();
+      if (!updated) {
+        // Only if the lease expired mid-update and another edit took the lock, or after a manual DB change.
+        throw new ConflictException('This draft was changed by someone else. Please refresh and retry.');
+      }
+      if (removedUlbIds.length > 0) {
+        await this.lockModel.deleteMany(
+          { claimLetter: parent._id, ulbId: { $in: removedUlbIds.map((id) => new Types.ObjectId(id)) } },
+          { session },
+        );
+      }
+      await session.commitTransaction();
+      return updated;
+    } catch (err) {
+      await session.abortTransaction();
+      throw err;
+    } finally {
+      await session.endSession();
     }
-    return updated;
   }
 
   // ─── POST .../abandon (docs/adr/0002-batching-and-locks.md) ─────────────────
@@ -1381,17 +1285,14 @@ export class ClaimLetterAssemblyService {
     try {
       session.startTransaction();
 
-      // Guard the update FIRST — only touch locks/history once we know the abandon actually
-      // applies, so a concurrent status change never leaves released locks with no matching
-      // status transition.
+      // Status first: locks and history change only once the abandon is known to apply.
       updated = await this.batchModel
         .findOneAndUpdate(
           {
             _id: claimLetterId,
             currentFormStatus: FORM_STATUS.IN_PROGRESS,
             isAbandoned: false,
-            // Same self-expiring lease as updateDraftRaw's claim — a stale lock never permanently
-            // blocks abandon either.
+            // Same self-expiring lease as updateDraftRaw.
             $or: [{ editLockToken: null }, { editLockAcquiredAt: { $lt: this.editLockStaleBefore() } }],
           },
           { $set: { isAbandoned: true, abandonedAt: new Date(), abandonedBy: new Types.ObjectId(user._id) } },
@@ -1432,8 +1333,7 @@ export class ClaimLetterAssemblyService {
 
     if (updated) return updated;
 
-    // findOneAndUpdate matched nothing — a concurrent request changed status/isAbandoned first,
-    // or an updateDraft call is currently mid-rebuild and holds the edit lock.
+    // Matched nothing: a concurrent status change, or an updateDraft holding the edit lock.
     const current = await this.batchModel.findById(claimLetterId).lean<Record<string, unknown> | null>().exec();
     if (current?.['isAbandoned']) return current;
     if (current?.['editLockToken'] && this.isEditLockActive(current['editLockAcquiredAt'])) {
@@ -1442,15 +1342,10 @@ export class ClaimLetterAssemblyService {
     throw new ConflictException('Draft could not be abandoned. Please retry.');
   }
 
-  // ─── Version regeneration — mechanism only, no State-facing endpoint in V1 (docs/adr/0003-workflow-transitions.md) ───
+  // ─── Version regeneration - mechanism only, no caller in V1 (docs/adr/0003-workflow-transitions.md) ───
 
-  /**
-   * Built ahead of the future MoHUA-rejection flow (out of scope for V1) that will call this.
-   * Carries forward the previous version's own ULB/amount selections but re-runs the full
-   * build pipeline (fresh eligibility evaluation, fresh locks, fresh children) rather than
-   * copying or mutating the previous version's documents — a superseded version stays exactly
-   * as it was (see docs/adr/0002-batching-and-locks.md's immutability note).
-   */
+  /** For the future MoHUA-rejection flow: rebuilds the previous version's selections through the full
+   *  pipeline and never modifies the previous version (ADR 0002). */
   async createNewVersion(previousClaimId: string, reason: string, user: AuthUser): Promise<Record<string, unknown>> {
     const previous = await this.batchModel
       .findOne({ _id: previousClaimId, assemblyStatus: 'READY' })
@@ -1520,11 +1415,8 @@ export class ClaimLetterAssemblyService {
     }
   }
 
-  /** Same all-or-nothing pattern as `reserveBatchSlotAndLocks`
-   *  (docs/adr/0002-batching-and-locks.md), but for an explicit {batchNumber, version} pair
-   *  instead of allocating the next free batch slot. A concurrent
-   *  regeneration attempt racing for the same version hits the same unique index and gets a
-   *  clear conflict to retry against — no auto-retry, matching the create-draft precedent. */
+  /** Like attemptReserveBatchSlotAndLocks for a given {batchNumber, version}; a racing regeneration
+   *  hits the unique index and gets a conflict, with no reclaim-and-retry. */
   private async reserveVersionSlotAndLocks(
     stateOid: Types.ObjectId,
     yearOid: Types.ObjectId,
@@ -1661,9 +1553,7 @@ export class ClaimLetterAssemblyService {
         return this.resolveAlreadyFinalized(parent._id);
       }
 
-      // Atomically link predecessor -> successor — `supersedes` was already set on the new
-      // parent at creation time (identity data, not workflow state); `supersededBy` on the old
-      // parent is only set once the new version is provably finalized, in the same transaction.
+      // `supersedes` was set at creation; `supersededBy` only now, once the new version is final.
       await this.batchModel.updateOne({ _id: previousId }, { $set: { supersededBy: parent._id } }, { session });
 
       await this.historyService.recordTransition(
@@ -1694,10 +1584,9 @@ export class ClaimLetterAssemblyService {
     }
   }
 
-  // ─── Acknowledgement lock transition — mechanism only, no caller in V1 (docs/adr/0003-workflow-transitions.md) ───
+  // ─── Acknowledgement lock transition - mechanism only, no caller in V1 (docs/adr/0003-workflow-transitions.md) ───
 
-  /** Permanent database-level guarantee against a second acknowledged claim for the same
-   *  State/year/installment/ULB — scoped by `claimLetter`, never the bare business key. */
+  /** Scoped by `claimLetter`, never the bare business key. */
   async acknowledgeLocks(claimLetterId: string | Types.ObjectId, session?: ClientSession): Promise<void> {
     const claimLetter = typeof claimLetterId === 'string' ? new Types.ObjectId(claimLetterId) : claimLetterId;
     await this.lockModel.updateMany(
@@ -1716,9 +1605,12 @@ export class ClaimLetterAssemblyService {
     const session = await this.connection.startSession();
     try {
       session.startTransaction();
-      await this.batchUlbModel.deleteMany({ claimLetter: parentId }, { session });
-      await this.lockModel.deleteMany({ claimLetter: parentId, buildRequestId }, { session });
-      await this.batchModel.deleteOne({ _id: parentId, assemblyStatus: 'BUILDING' }, { session });
+      await deleteBuildingParentArtifacts(
+        { batchModel: this.batchModel, batchUlbModel: this.batchUlbModel, lockModel: this.lockModel },
+        parentId,
+        buildRequestId,
+        session,
+      );
       await session.commitTransaction();
     } catch (err) {
       await session.abortTransaction();

@@ -127,6 +127,27 @@ describe('ClaimEligibilityConfigDto', () => {
     expect(await validate(build(), PIPE_OPTIONS)).toHaveLength(0);
   });
 
+  describe('source.match', () => {
+    const annualAccountsSource = (match: unknown) => ({
+      collection: 'xvifc_annualaccounts',
+      match,
+      fields: { designYear: 'design_year', state: 'state', ulb: 'ulb', currentFormStatus: 'form_status_id' },
+    });
+
+    it('accepts and preserves plain equality values', async () => {
+      const dto = build({ source: annualAccountsSource({ sectionType: 'audited' }) });
+      expect(await validate(dto, PIPE_OPTIONS)).toHaveLength(0);
+      expect(dto.source.match).toEqual({ sectionType: 'audited' });
+    });
+
+    it('rejects a match that could carry a Mongo operator', async () => {
+      for (const match of [{ $where: 'sleep(1000)' }, { sectionType: { $ne: null } }, ['audited'], 'audited']) {
+        const errors = await validate(build({ source: annualAccountsSource(match) }), PIPE_OPTIONS);
+        expect(allMessages(errors).join(' ')).toContain('match');
+      }
+    });
+  });
+
   it('accepts optional dependentActions when provided as a valid array', async () => {
     const errors = await validate(
       build({ dependentActions: [{ action: 'MARK_DEPENDENT_ROWS_NEEDS_UPDATE' }] }),

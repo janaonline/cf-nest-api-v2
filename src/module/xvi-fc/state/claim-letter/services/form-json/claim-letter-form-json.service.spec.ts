@@ -75,12 +75,89 @@ describe('ClaimLetterFormJsonService', () => {
         questions: [],
         varianceLowerPercent: CLAIM_LETTER_VARIANCE_LOWER_PERCENT,
         varianceUpperPercent: CLAIM_LETTER_VARIANCE_UPPER_PERCENT,
+        letterQuestions: [],
+        letterSkipPrefill: new Set(),
+        letterConfigured: false,
+        mergeDocuments: [],
       });
     });
 
     it('propagates non-NotFoundException errors', async () => {
       formJsonService['findActiveByDesignYearAndFormId'] = jest.fn().mockRejectedValue(new Error('db down'));
       await expect(service.loadFormConfig(yearId)).rejects.toThrow('db down');
+    });
+  });
+
+  describe('letter-detail keys (meta.letterDetailKeys)', () => {
+    const letterNo = { key: 'letterNo', formFieldType: 'text', label: 'Letter No.' };
+    const letterDate = { key: 'letterDate', formFieldType: 'date', label: 'Letter date' };
+    const atrDate = { key: 'sfcAtrDate', formFieldType: 'date', label: 'ATR date' };
+
+    function withMeta(meta: Record<string, unknown>) {
+      formJsonService['findActiveByDesignYearAndFormId'] = jest.fn().mockResolvedValue({
+        ...CLAIM_LETTER_FORM_JSON,
+        data: [...CLAIM_LETTER_FORM_JSON.data, letterNo, letterDate, atrDate],
+        meta,
+      });
+    }
+
+    it('resolves the letter questions in key order and reads the skip-prefill keys', async () => {
+      withMeta({
+        letterDetailKeys: ['sfcAtrDate', 'letterNo', 'letterDate'],
+        letterDetailSkipPrefill: ['letterNo', 'letterDate'],
+      });
+
+      const config = await service.loadFormConfig(yearId);
+
+      expect(config.letterConfigured).toBe(true);
+      expect(config.letterQuestions.map((q) => q.key)).toEqual(['sfcAtrDate', 'letterNo', 'letterDate']);
+      expect(config.letterSkipPrefill).toEqual(new Set(['letterNo', 'letterDate']));
+    });
+
+    it('skips unknown, duplicate, reserved and non-string keys', async () => {
+      withMeta({ letterDetailKeys: ['letterNo', 'unknownKey', 'signedClaimFile', 'letterNo', 7, 'sfcAtrDate'] });
+
+      const config = await service.loadFormConfig(yearId);
+
+      expect(config.letterQuestions.map((q) => q.key)).toEqual(['letterNo', 'sfcAtrDate']);
+    });
+
+    it.each([
+      ['no meta at all', undefined],
+      ['letterDetailKeys not an array', { letterDetailKeys: 'oops' }],
+      ['only invalid keys', { letterDetailKeys: ['nope'] }],
+      ['only the old letterDetailSteps', { letterDetailSteps: [{ title: 'X', keys: ['letterNo'] }] }],
+    ])('is not configured with %s', async (_label, meta) => {
+      formJsonService['findActiveByDesignYearAndFormId'] = jest
+        .fn()
+        .mockResolvedValue({ ...CLAIM_LETTER_FORM_JSON, meta });
+      const config = await service.loadFormConfig(yearId);
+      expect(config.letterConfigured).toBe(false);
+      expect(config.letterQuestions).toEqual([]);
+    });
+  });
+
+  describe('merge documents (meta.mergeDocuments)', () => {
+    it('keeps valid entries in order and skips incomplete ones', async () => {
+      formJsonService['findActiveByDesignYearAndFormId'] = jest.fn().mockResolvedValue({
+        ...CLAIM_LETTER_FORM_JSON,
+        meta: {
+          mergeDocuments: [
+            { label: 'Copy of Elected Body', formId: 23, fileKeys: ['signedElectedbodyFile'] },
+            { label: '', formId: 35, fileKeys: ['i2GtcFile'] }, // no label
+            { label: 'Copy of GTC', formId: '35', fileKeys: ['i2GtcFile'] }, // formId not a number
+            { label: 'ATR', formId: 22, fileKeys: [] }, // no file keys
+            { label: 'Other Supporting Documents (ATR)', formId: 22, fileKeys: ['atrReport'], optional: true },
+          ],
+        },
+      });
+
+      const config = await service.loadFormConfig(yearId);
+
+      expect(config.mergeDocuments).toEqual([
+        { label: 'Copy of Elected Body', formId: 23, fileKeys: ['signedElectedbodyFile'], optional: false },
+        { label: 'Other Supporting Documents (ATR)', formId: 22, fileKeys: ['atrReport'], optional: true },
+      ]);
     });
   });
 

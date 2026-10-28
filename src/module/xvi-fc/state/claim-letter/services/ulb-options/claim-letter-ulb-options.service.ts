@@ -14,13 +14,8 @@ import { ClaimLetterEligibilityService } from '../eligibility/claim-letter-eligi
 import type { GetClaimLetterUlbOptionsQueryDto } from '../../dto/get-claim-letter-ulb-options-query.dto';
 import type { ClaimLetterUlbOption } from '../../types/claim-letter.types';
 
-/**
- * ULB picker for the claim-letter select dialog — deliberately does NOT reuse FC Unspent's
- * `ulb-options` filtering semantics (that endpoint inner-joins to only ULBs that already have an
- * allocation row, so ineligible ULBs are simply absent). Here every expected ULB is returned,
- * annotated `eligible`/`ineligibleReasonCode`, sorted eligible-first, so the dialog can render
- * ineligible rows visible-but-disabled.
- */
+/** Every expected ULB, flagged and sorted eligible-first, so the dialog shows ineligible rows disabled
+ *  (FC Unspent's picker omits them instead). */
 @Injectable()
 export class ClaimLetterUlbOptionsService {
   constructor(
@@ -38,12 +33,7 @@ export class ClaimLetterUlbOptionsService {
     assertStateAccess(user, stateId);
     assertInstallmentSupported(installment);
 
-    // Display-only read (this dialog never authorizes a build) — cached, so repeated searches/
-    // filters/page-flips within one picker session don't each recompute eligibility from scratch.
-    // expectedUlbSetService.resolve() runs concurrently with the other independent branches
-    // (none of them need expectedUlbIds); resolveUlbLevelEligibilityForDisplay chains off it
-    // instead of the whole request waiting on it first, and reuses the result instead of letting
-    // that method re-resolve the same full set internally on a cache miss.
+    // Display-only, so the cached eligibility is fine; create re-checks fresh.
     const expectedUlbsPromise = this.expectedUlbSetService.resolve(stateId, yearId);
     const [expectedUlbs, gate, allocationByUlbId, lockedElsewhereUlbIds, ulbLevelEligibility] = await Promise.all([
       expectedUlbsPromise,
@@ -94,8 +84,7 @@ export class ClaimLetterUlbOptionsService {
     });
 
     if (query.search) {
-      // Linear regex scan over the already-in-memory expected-ULB list — fine at today's per-state
-      // ULB counts; revisit if a state's expected-ULB set grows large enough to make this a real cost.
+      // In-memory scan; fine at current per-State ULB counts.
       const regex = new RegExp(escapeRegex(query.search), 'i');
       options = options.filter(
         (o) =>
@@ -106,7 +95,6 @@ export class ClaimLetterUlbOptionsService {
     if (query.eligibilityFilter === 'ELIGIBLE') options = options.filter((o) => o.eligible);
     else if (query.eligibilityFilter === 'INELIGIBLE') options = options.filter((o) => !o.eligible);
 
-    // Eligible-first, then alphabetical — lets a State scan straight to the ULBs it can actually pick.
     options.sort((a, b) => {
       if (a.eligible !== b.eligible) return a.eligible ? -1 : 1;
       return a.ulbName.localeCompare(b.ulbName);

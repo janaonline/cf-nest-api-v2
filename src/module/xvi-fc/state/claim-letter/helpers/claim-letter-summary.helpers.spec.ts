@@ -48,6 +48,29 @@ function mockUser(overrides: Partial<AuthUser> = {}): AuthUser {
 }
 
 describe('mapClaimLetterBatchDocToSummary', () => {
+  describe('finalClaimLetterStage', () => {
+    const signed = { signedClaimFile: { path: 'x/signed.pdf' } };
+    const finalClaimPdf = { file: { path: 'final/x.pdf' }, sourceKey: 'k' };
+
+    it('is DRAFT for an in-progress batch with a signed letter, null before the upload', () => {
+      expect(mapClaimLetterBatchDocToSummary(batchDoc(signed), mockUser()).finalClaimLetterStage).toBe('DRAFT');
+      expect(mapClaimLetterBatchDocToSummary(batchDoc(), mockUser()).finalClaimLetterStage).toBeNull();
+    });
+
+    it('is null for an abandoned draft', () => {
+      const doc = batchDoc({ ...signed, isAbandoned: true });
+      expect(mapClaimLetterBatchDocToSummary(doc, mockUser()).finalClaimLetterStage).toBeNull();
+    });
+
+    it('is SUBMITTED once submitted with a stored copy, null when none was stored', () => {
+      const submitted = { ...signed, currentFormStatus: 5, submittedAt: new Date() };
+      expect(
+        mapClaimLetterBatchDocToSummary(batchDoc({ ...submitted, finalClaimPdf }), mockUser()).finalClaimLetterStage,
+      ).toBe('SUBMITTED');
+      expect(mapClaimLetterBatchDocToSummary(batchDoc(submitted), mockUser()).finalClaimLetterStage).toBeNull();
+    });
+  });
+
   it('labels an active draft from its raw currentFormStatus', () => {
     const summary = mapClaimLetterBatchDocToSummary(batchDoc({ currentFormStatus: 2, isAbandoned: false }), mockUser());
     expect(summary.currentFormStatusLabel).toBe('In Progress');

@@ -1,20 +1,15 @@
-import { getFormStatusLabel } from 'src/common/constants/form-status.constants';
+import { FORM_STATUS, getFormStatusLabel } from 'src/common/constants/form-status.constants';
 import { toObjectIdString } from 'src/common/utils/objectid.util';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
-import type { ClaimLetterBatchSummary, ClaimLetterFinancialSummaryDisplay } from '../types/claim-letter.types';
+import type {
+  ClaimLetterBatchSummary,
+  ClaimLetterFinalStage,
+  ClaimLetterFinancialSummaryDisplay,
+} from '../types/claim-letter.types';
 import { buildClaimLetterPermissions } from './claim-letter-permissions.helpers';
 
-/**
- * Shared mapper from a raw `ClaimLetterBatch` lean/full document to the display-ready
- * `ClaimLetterBatchSummary` shape — reused by every endpoint that returns a claim letter
- * (`ClaimLetterService.getDetail/listHistory/uploadSignedFile/submit` and
- * `ClaimLetterAssemblyService.createDraft/updateDraft/abandonDraft`) so a client can treat all of
- * them uniformly instead of some returning a raw Mongoose document and others a mapped summary.
- *
- * `user` drives `permissions` (see `buildClaimLetterPermissions`) — every call site already calls
- * `assertStateAccess(user, stateId)` before reaching this, so state access itself is not
- * re-checked here.
- */
+/** The one batch-to-summary mapper, so every endpoint returns the same shape. Callers have already
+ *  asserted state access. */
 export function mapClaimLetterBatchDocToSummary(doc: Record<string, unknown>, user: AuthUser): ClaimLetterBatchSummary {
   const currentFormStatus = doc['currentFormStatus'] as number;
   const isAbandoned = doc['isAbandoned'] as boolean;
@@ -24,18 +19,14 @@ export function mapClaimLetterBatchDocToSummary(doc: Record<string, unknown>, us
     batchNumber: doc['batchNumber'] as 1 | 2 | 3,
     version: doc['version'] as number,
     currentFormStatus,
-    // Abandonment never transitions `currentFormStatus` itself (it's an orthogonal "this draft is
-    // dead" flag, not a workflow state) — override the label here so it doesn't read as still-active.
+    // Abandon is a flag and leaves currentFormStatus as is, so the label is overridden.
     currentFormStatusLabel: isAbandoned ? 'Abandoned' : getFormStatusLabel(currentFormStatus),
     assemblyStatus: doc['assemblyStatus'] as 'BUILDING' | 'READY',
     ulbCount: doc['ulbCount'] as number,
     isAbandoned,
     hasSignedFile: !!doc['signedClaimFile'],
-    // Already whole Rupees (no decimals) in storage — a direct passthrough, no unit conversion needed.
-    // `totalClaimInProgress`/`totalClaimInDraft`/`availableToClaim` are defaulted defensively:
-    // reads here go through `.lean()`, which skips Mongoose schema defaults, so a batch saved
-    // before these fields existed would otherwise come back with them `undefined` (not `0`) until
-    // it's next saved via createDraft/updateDraft.
+    finalClaimLetterStage: resolveFinalClaimLetterStage(doc, currentFormStatus, isAbandoned),
+    // .lean() skips schema defaults, so batches saved before these fields existed read undefined.
     financialSummary: {
       ...(doc['financialSummary'] as ClaimLetterFinancialSummaryDisplay),
       totalClaimInProgress: (doc['financialSummary'] as ClaimLetterFinancialSummaryDisplay)?.totalClaimInProgress ?? 0,
@@ -50,4 +41,16 @@ export function mapClaimLetterBatchDocToSummary(doc: Record<string, unknown>, us
     createdAt: doc['createdAt'] as Date,
     permissions: buildClaimLetterPermissions(user, currentFormStatus, isAbandoned),
   };
+}
+
+/** Same rule as `ClaimLetterFinalPdfService`: a submitted batch keeps its copy; a draft merges once signed. */
+function resolveFinalClaimLetterStage(
+  doc: Record<string, unknown>,
+  currentFormStatus: number,
+  isAbandoned: boolean,
+): ClaimLetterFinalStage | null {
+  if (doc['submittedAt'] && currentFormStatus !== FORM_STATUS.IN_PROGRESS) {
+    return doc['finalClaimPdf'] ? 'SUBMITTED' : null;
+  }
+  return currentFormStatus === FORM_STATUS.IN_PROGRESS && !isAbandoned && doc['signedClaimFile'] ? 'DRAFT' : null;
 }

@@ -30,7 +30,9 @@ everything else.
   bullet) — a ULB whose row already says "Not Constituted" (real, ineligible data) is deliberately
   still approvable, so a MoHUA-approved exemption for a ULB with real in-progress data is an
   expected, reachable case, not just a hypothetical. Separately, its FORM_STATUS query-building
-  (`evaluateFormStatus`/`evaluateUlbBulkFormStatus`) only filters by the current design year when
+  (`evaluateFormStatus`/`evaluateUlbBulkFormStatus`; the single-document query is
+  `common/utils/claim-eligibility-source-query.util.ts`, shared with the claim letter's final PDF so
+  both read the same document) only filters by the current design year when
   `claimEligibility.yearScope` is `'CURRENT_DESIGN_YEAR'` — skipped for `'SUBMISSION_PERIOD_SINGLETON'`
   sources (e.g. Bank Account, see its `ONCE_EVER` bullet below), since that source's one document
   isn't scoped to any particular design year.

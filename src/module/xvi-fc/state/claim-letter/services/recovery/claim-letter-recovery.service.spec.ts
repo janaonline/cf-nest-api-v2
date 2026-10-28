@@ -96,7 +96,7 @@ describe('ClaimLetterRecoveryService', () => {
     connection = { startSession: jest.fn().mockResolvedValue(session) };
     batchModel = {
       find: jest.fn().mockReturnValue(q([])),
-      deleteOne: jest.fn().mockResolvedValue(undefined),
+      deleteOne: jest.fn().mockResolvedValue({ deletedCount: 1 }),
     };
     batchUlbModel = {
       find: jest.fn().mockReturnValue(q([])),
