@@ -5,8 +5,10 @@ import { FilterQuery, Model, Types } from 'mongoose';
 import { ClaimEligibilityEvaluatorService } from 'src/module/xvi-fc/common/services/claim-eligibility-evaluator.service';
 import { ExpectedUlbSetService } from 'src/module/xvi-fc/common/services/expected-ulb-set.service';
 import type {
+  ClaimEligibilityEvaluationLevel,
   EligibilityEvaluationResult,
   RowEligibilityEvidence,
+  UlbEligibilityBucket,
   UlbEligibilityTally,
 } from 'src/module/xvi-fc/common/types/claim-eligibility.type';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
@@ -34,7 +36,7 @@ export interface ClaimLetterStateLevelGate {
 }
 
 export interface DevolutionAllocation {
-  /** Whole Rupees (no decimals), read directly from Devolution's own stored value — no unit conversion. */
+  /** Whole Rupees, as Devolution stores it. */
   allocatedAmount: number;
   formDocumentId: string;
   rowDocumentId: string;
@@ -42,17 +44,13 @@ export interface DevolutionAllocation {
 }
 
 export interface ClaimLetterFinancialOverview {
-  /** State-wide installment pool — sum of every ULB's allocation, independent of any one batch. */
   totalInstallmentAllocation: number;
-  /** Sum already claimed across this state/year/installment's other MoHUA-acknowledged batches. */
+  /** Claimed in MoHUA-acknowledged batches. */
   totalAlreadyAcknowledged: number;
-  /** Sum claimed across other batches currently UNDER_REVIEW_BY_MOHUA (excludes the batch named by
-   *  `excludeClaimLetterId`, if any, so a batch never nets against its own claim twice). */
+  /** Claimed in batches under MoHUA review (not drafts). */
   totalClaimInProgress: number;
-  /** Sum claimed across other non-abandoned, READY batches still IN_PROGRESS (draft) — same
-   *  self-exclusion as `totalClaimInProgress`. */
   totalClaimInDraft: number;
-  /** totalInstallmentAllocation − totalAlreadyAcknowledged − totalClaimInProgress − totalClaimInDraft. */
+  /** Allocation minus the three claimed totals. */
   availableToClaim: number;
 }
 
@@ -69,71 +67,52 @@ export interface UlbCriterionSummary {
   tally: UlbEligibilityTally;
 }
 
-/** One ULB-bulk criterion a ULB failed — `type` is the formjson doc's stable machine key (e.g.
- *  `UPLOAD_CONFIG_AUDITED`), `label` is its display copy (e.g. "Audited Accounts"). Callers that
- *  need to test identity (e.g. "did this ULB fail the AFS criterion") should compare `type`, never
- *  `label` — display copy can change independent of the criterion's identity.
- *
- *  Reused (not just for failures — see `ClaimLetterUlbLevelEligibility.criteriaColumns`) as the
- *  canonical per-source shape wherever a ULB-bulk criterion needs to be identified and labelled,
- *  regardless of pass/fail. `shortLabel` is always populated (`config.shortLabel ?? label`), unlike
- *  the config's own optional field, so callers never need their own fallback. */
+/** A ULB-bulk criterion's identity and labels. Compare `type`, never `label`: display copy changes. */
 export interface ClaimLetterFailedCriterion {
   type: string;
   label: string;
   shortLabel: string;
 }
 
+/** One ULB-bulk criterion with every ULB's bucket, for the claim letter's annexure tables. */
+export interface ClaimLetterCriterionDetail {
+  formId: number;
+  type: string;
+  label: string;
+  /** `letterColumnLabel ?? displayLabel ?? type`. */
+  letterColumnLabel: string;
+  displayOrder: number | null;
+  evaluationLevel: ClaimEligibilityEvaluationLevel;
+  buckets: Map<string, UlbEligibilityBucket>;
+  /** FORM_AND_ROW criteria only (empty otherwise). */
+  rowEvidence: Map<string, RowEligibilityEvidence>;
+  approvedExemptionUlbIds: Set<string>;
+}
+
 export interface ClaimLetterUlbLevelEligibility {
-  /** Merged verdict across every ULB-bulk-evaluable criterion (SLB, Annual Accounts x2, Elected
-   *  Body row, FC Unspent row) — a ULB must be ELIGIBLE or EXEMPTED on every one, not INELIGIBLE
-   *  on any, to end up `true` here. Consumed by the picker/getUlbs/buildChildren. */
+  /** False when any ULB-bulk criterion has the ULB INELIGIBLE. */
   perUlbEligible: Map<string, boolean>;
-  /** Tallies for criteria with no state-level checklist line of their own (SLB, Provisional,
-   *  Audited) — there's no state action to gate on, so these surface as a separate informational
-   *  block rather than a pass/fail line. */
+  /** Tallies for ULB-owned criteria, which have no State checklist line of their own. */
   standaloneCriteria: UlbCriterionSummary[];
-  /** Tallies for criteria that DO already have a state-level line (Elected Body, FC Unspent),
-   *  keyed by `formId` so the caller can merge each into that line's own `ulbBreakdown` rather
-   *  than rendering a second, separate entry for the same requirement. */
+  /** Tallies for State-owned FORM_AND_ROW criteria, merged into that criterion's checklist line. */
   rowTalliesByFormId: Map<number, UlbEligibilityTally>;
-  /** Every ULB-bulk criterion a ULB was bucketed INELIGIBLE on — e.g. `[{type: 'SLB', label:
-   *  'Service Level Benchmarks (SLB)'}]` — so callers (the ULB-options picker) can tell the State
-   *  specifically *which* form is blocking a given ULB instead of a single generic reason code, and
-   *  callers needing identity rather than display copy (e.g. the claim-letter document builder's
-   *  Annexure 2) can test `type` directly against `criteriaColumns` below. A ULB with no entry here
-   *  (or an empty array) failed no ULB-bulk criterion. */
+  /** The criteria each ULB is INELIGIBLE on, so the picker can name the blocking form. */
   perUlbFailedCriteria: Map<string, ClaimLetterFailedCriterion[]>;
-  /** The canonical list of every enabled ULB-bulk criterion for this state/year/installment, one
-   *  entry per source *regardless of pass/fail* — unlike `perUlbFailedCriteria`, which only ever
-   *  lists a criterion where at least one ULB actually failed it. This is what makes a dynamic
-   *  column set (the claim-letter document builder's Annexure 2 city-conditions table) stable and
-   *  complete: it always lists every active criterion, not just whichever ones happened to fail for
-   *  someone in a given batch. A new/removed enabled criterion changes this list with no code
-   *  change on either side. */
-  criteriaColumns: ClaimLetterFailedCriterion[];
-  /** Per-ULB row evidence (rowDocumentId, resolved rowStatus/datasetVersion, bucket) for
-   *  FORM_AND_ROW criteria, keyed by formId then ulbId — lets `ClaimLetterAssemblyService` build
-   *  each child's frozen `eligibilitySources` entry by reusing this same bulk fetch, no re-query.
-   *  NOT part of the cached `*ForDisplay` shape — see `resolveUlbLevelEligibilityForDisplay`, which
-   *  strips this before caching (no display consumer reads it, and caching a rowDocumentId per ULB
-   *  state-wide would bloat the Redis payload for no benefit). Only the assembly pipeline, which
-   *  always calls this method directly (never `*ForDisplay`), needs it. */
+  /** FORM_AND_ROW row evidence by formId, then ulbId; assembly snapshots it on each child. Not cached:
+   *  always empty from the `*ForDisplay` methods. */
   rowEvidenceByFormId: Map<number, Map<string, RowEligibilityEvidence>>;
+  /** Every criterion with its per-ULB buckets, sorted by displayOrder then formId (the letter's
+   *  columns). Not cached, like rowEvidenceByFormId. */
+  perCriterion: ClaimLetterCriterionDetail[];
 }
 
 /**
- * Evaluates the State-level claim eligibility gate and resolves Devolution allocation amounts —
- * kept as two deliberately separate methods: the gate answers "can this State claim at all,"
- * allocation resolution answers "how much, per ULB." Neither branches on a hardcoded formId — the
- * gate loops generically over whatever `formjsons` documents have an enabled `claimEligibility`
- * config for this design year (as of 2026-09-28: SFC, Devolution, Elected Body, FC Unspent, GTC —
- * a live count, not a fixed list).
+ * The State-level gate, per-ULB criteria, Devolution allocations and claimed totals. Generic over
+ * every formjson with an enabled `claimEligibility` for the design year; no formId is hardcoded.
  */
 @Injectable()
 export class ClaimLetterEligibilityService {
-  /** How long `*ForDisplay` results may be served stale — long enough to cover a typical ULB-picker
-   *  search/filter/page session, short enough that real eligibility drift surfaces promptly. */
+  /** Covers one ULB-picker session; short enough that real changes show promptly. */
   private static readonly DISPLAY_CACHE_TTL_SECONDS = 30;
 
   /** Namespaces cache keys per environment; dev and stg share the same Redis instance. */
@@ -167,13 +146,8 @@ export class ClaimLetterEligibilityService {
     return `claimLetterEligibility:${this.env}:ulbLevel:${stateId}:${designYearId}:${installment}`;
   }
 
-  /**
-   * Cached, up to `DISPLAY_CACHE_TTL_SECONDS` stale — for read-only DISPLAY consumers only
-   * (`eligibility-summary`, the ULB picker, the ULB-rows table). The claim-letter build/finalize
-   * pipeline (`ClaimLetterAssemblyService`) is an authorization decision, not a display, and must
-   * never read this cache — it calls `evaluateStateLevelGate` directly instead, so a state can
-   * never build a claim against stale eligibility and `assertNoDrift`'s re-check stays meaningful.
-   */
+  /** Cached; read-only display paths only. Create, edit, submit and the letter evaluate fresh, so no
+   *  decision ever rests on stale eligibility. */
   async evaluateStateLevelGateForDisplay(
     stateId: string,
     designYearId: string,
@@ -188,25 +162,14 @@ export class ClaimLetterEligibilityService {
     return result;
   }
 
-  /**
-   * Same display-only caveat as `evaluateStateLevelGateForDisplay` — never call from the
-   * build/finalize pipeline. Always evaluates (and caches) the FULL expected-ULB-set result for
-   * `{stateId, designYearId, installment}` regardless of how many ULBs the caller asked about, then
-   * narrows it down to `expectedUlbIds` — lets every read-only caller share one cached computation,
-   * whether it wants the whole state (the picker, `eligibility-summary`) or a page/selection subset
-   * (the ULB-rows table). `standaloneCriteria`/`rowTalliesByFormId` are state-wide tallies and are
-   * returned unnarrowed — no caller reads them for a subset today.
-   */
+  /** Display-only, like evaluateStateLevelGateForDisplay. Caches the whole State's result, so every
+   *  caller shares it, then narrows the per-ULB maps to `expectedUlbIds`. */
   async resolveUlbLevelEligibilityForDisplay(
     stateId: string,
     designYearId: string,
     installment: 1 | 2,
     expectedUlbIds: string[],
-    /** Pass only when the caller has already resolved the FULL state-wide expected-ULB set (not a
-     *  subset) via ExpectedUlbSetService this request — skips the redundant re-fetch below on a
-     *  cache miss. Omit when the caller only holds a subset (e.g. one page of ULB-rows); this then
-     *  resolves the true full set itself so the shared cache always reflects the complete state,
-     *  never a partial view. */
+    /** The full State expected set, when the caller already has it (saves a fetch on a miss). */
     fullExpectedUlbIds?: string[],
   ): Promise<ClaimLetterUlbLevelEligibility> {
     const key = this.getUlbLevelCacheKey(stateId, designYearId, installment);
@@ -236,25 +199,18 @@ export class ClaimLetterEligibilityService {
       standaloneCriteria: full.standaloneCriteria,
       rowTalliesByFormId: full.rowTalliesByFormId,
       perUlbFailedCriteria: new Map([...full.perUlbFailedCriteria].filter(([id]) => subset.has(id))),
-      // State-wide, like standaloneCriteria/rowTalliesByFormId above — the column set doesn't vary
-      // by which ULB subset is being displayed, so it's never narrowed.
-      criteriaColumns: full.criteriaColumns,
-      // Display-only path (this method is only called from resolveUlbLevelEligibilityForDisplay) —
-      // never populated here, see the field's own docblock.
       rowEvidenceByFormId: new Map(),
+      perCriterion: [],
     };
   }
 
-  /** Maps aren't JSON-serializable directly — round-tripped as arrays of entries instead.
-   *  `rowEvidenceByFormId` is deliberately omitted — display never reads it, and caching a
-   *  rowDocumentId per ULB state-wide would bloat the payload for no benefit (see its docblock). */
+  /** Maps as entry arrays; rowEvidenceByFormId and perCriterion are left out (display never reads them). */
   private serializeUlbLevelEligibility(value: ClaimLetterUlbLevelEligibility): string {
     return JSON.stringify({
       perUlbEligible: [...value.perUlbEligible.entries()],
       standaloneCriteria: value.standaloneCriteria,
       rowTalliesByFormId: [...value.rowTalliesByFormId.entries()],
       perUlbFailedCriteria: [...value.perUlbFailedCriteria.entries()],
-      criteriaColumns: value.criteriaColumns,
     });
   }
 
@@ -264,15 +220,14 @@ export class ClaimLetterEligibilityService {
       standaloneCriteria: UlbCriterionSummary[];
       rowTalliesByFormId: [number, UlbEligibilityTally][];
       perUlbFailedCriteria: [string, ClaimLetterFailedCriterion[]][];
-      criteriaColumns: ClaimLetterFailedCriterion[];
     };
     return {
       perUlbEligible: new Map(parsed.perUlbEligible),
       standaloneCriteria: parsed.standaloneCriteria,
       rowTalliesByFormId: new Map(parsed.rowTalliesByFormId),
       perUlbFailedCriteria: new Map(parsed.perUlbFailedCriteria),
-      criteriaColumns: parsed.criteriaColumns,
       rowEvidenceByFormId: new Map(),
+      perCriterion: [],
     };
   }
 
@@ -296,19 +251,8 @@ export class ClaimLetterEligibilityService {
     return { sources, passed: sources.every((s) => s.result !== 'FAILED') };
   }
 
-  /**
-   * Runs every enabled ULB-bulk-evaluable source for this design year/installment (SLB, Annual
-   * Accounts x2, Elected Body row, FC Unspent row) and merges the results into one per-ULB
-   * verdict, plus two differently-shaped tally lists depending on whether the criterion already
-   * has a state-level checklist line to attach to (see `ClaimLetterUlbLevelEligibility`'s own
-   * field docs). `expectedUlbIds` is a parameter, not re-derived here, since callers
-   * (`getEligibilitySummary`, the ULB-options/rows services)
-   * already resolve `ExpectedUlbSetService` themselves for other reasons — avoids a duplicate query.
-   *
-   * A source qualifies for ULB-bulk evaluation when either `ownerLevel === 'ULB'` (SLB, Annual
-   * Accounts — no state action to gate on at all) or `evaluationLevel === 'FORM_AND_ROW'` (Elected
-   * Body, FC Unspent — state-owned for the pass/fail line, but still carries a row-level tally).
-   */
+  /** Merges every enabled ULB-bulk source (ULB-owned, or State-owned FORM_AND_ROW with per-ULB rows)
+   *  into one verdict per ULB. Callers pass the ULB ids because they have already resolved them. */
   async resolveUlbLevelEligibility(
     stateId: string,
     designYearId: string,
@@ -335,15 +279,24 @@ export class ClaimLetterEligibilityService {
     const standaloneCriteria: UlbCriterionSummary[] = [];
     const rowTalliesByFormId = new Map<number, UlbEligibilityTally>();
     const rowEvidenceByFormId = new Map<number, Map<string, RowEligibilityEvidence>>();
-    const criteriaColumns: ClaimLetterFailedCriterion[] = [];
+    const perCriterion: ClaimLetterCriterionDetail[] = [];
 
-    for (const { doc, perUlb, tally, rowEvidenceByUlbId } of results) {
+    for (const { doc, perUlb, tally, rowEvidenceByUlbId, approvedExemptionUlbIds } of results) {
       const config = doc.claimEligibility!;
       const label = config.displayLabel ?? doc.type ?? 'Form';
       const shortLabel = config.shortLabel ?? label;
       const failedCriterion: ClaimLetterFailedCriterion = { type: doc.type ?? '', label, shortLabel };
-      // One entry per source, regardless of pass/fail — see the field's own docblock.
-      criteriaColumns.push(failedCriterion);
+      perCriterion.push({
+        formId: doc.formId ?? 0,
+        type: doc.type ?? '',
+        label,
+        letterColumnLabel: config.letterColumnLabel ?? label,
+        displayOrder: config.displayOrder ?? null,
+        evaluationLevel: config.evaluationLevel,
+        buckets: perUlb,
+        rowEvidence: rowEvidenceByUlbId ?? new Map<string, RowEligibilityEvidence>(),
+        approvedExemptionUlbIds,
+      });
 
       for (const [ulbId, bucket] of perUlb) {
         if (bucket !== 'INELIGIBLE') continue;
@@ -365,24 +318,22 @@ export class ClaimLetterEligibilityService {
       }
     }
 
+    // Unset displayOrder sorts last (Infinity - Infinity is NaN, so formId breaks the tie).
+    const order = (c: ClaimLetterCriterionDetail) => c.displayOrder ?? Infinity;
+    perCriterion.sort((a, b) => order(a) - order(b) || a.formId - b.formId);
+
     return {
       perUlbEligible,
       standaloneCriteria,
       rowTalliesByFormId,
       perUlbFailedCriteria,
-      criteriaColumns,
       rowEvidenceByFormId,
+      perCriterion,
     };
   }
 
-  /**
-   * Every ULB currently locked (`ACTIVE` or `ACKNOWLEDGED`) into *some* claim-letter batch for this
-   * state/year/installment — the authoritative "already claimed" set, shared by the ULB-options
-   * picker (which excludes a specific batch via `excludeClaimLetterId` so that batch's own picks
-   * still read as normal, pickable rows) and the final-batch completeness check (which omits
-   * `excludeClaimLetterId` entirely, so a batch's own already-drafted ULBs correctly count as
-   * claimed rather than remaining).
-   */
+  /** ULBs locked in any batch. The picker excludes its own batch, so its picks stay selectable; the
+   *  remaining-ULB count does not. */
   async resolveClaimedUlbIds(
     stateId: string,
     designYearId: string,
@@ -401,14 +352,8 @@ export class ClaimLetterEligibilityService {
     return new Set(locks.map((l) => String(l.ulbId)));
   }
 
-  /**
-   * Expected ULBs not yet locked into any batch — deliberately does NOT filter by current
-   * eligibility (`perUlbEligible`): an ULB that's ineligible right now (e.g. hasn't submitted SLB
-   * yet) could still become eligible later, and if the final batch submits while it sits
-   * unresolved it's stranded for the rest of the installment. So "remaining" here means "not yet
-   * claimed," full stop — used to block submission of the final batch (`ClaimLetterService.submit`)
-   * and to drive the FE's proactive "N ULBs must be in your final batch" warning.
-   */
+  /** Expected ULBs in no batch, eligible or not: an ineligible ULB may still qualify before the final
+   *  batch closes the installment. */
   async resolveRemainingUlbIds(
     stateId: string,
     designYearId: string,
@@ -419,19 +364,8 @@ export class ClaimLetterEligibilityService {
     return expectedUlbIds.filter((id) => !claimedUlbIds.has(id));
   }
 
-  /**
-   * Bulk-resolves each ULB's Installment-1 Devolution allocation — plain data resolution, never
-   * routed through the evaluator dispatcher (that dispatcher is for pass/fail eligibility checks,
-   * not amount lookups). Reads whatever Devolution form exists for
-   * this State/year/installment regardless of its current status (the eligibility *gate* above is
-   * what decides whether that status is acceptable) so the picker can still show last-known
-   * figures even while Devolution is temporarily returned.
-   *
-   * Depends on devolution-formula's dataset-versioning invariant — filters rows by
-   * `datasetVersion: form.activeDatasetVersion` below, so this is only correct as long as that
-   * invariant holds. See `devolution-formula/docs/adr/0001-dataset-versioning.md` (this method is
-   * listed there as an external consumer) before changing anything on either side of this read.
-   */
+  /** Reads regardless of Devolution status (the gate judges it), so figures still show while the form
+   *  is returned. Relies on devolution-formula/docs/adr/0001-dataset-versioning.md. */
   async resolveDevolutionAllocations(
     stateId: string,
     designYearId: string,
@@ -449,8 +383,6 @@ export class ClaimLetterEligibilityService {
     const result = new Map<string, DevolutionAllocation>();
     if (!form) return result;
 
-    // Which row-level field holds this installment's amount — resolved dynamically so this stays
-    // correct once Installment 2 claims are enabled, rather than always reading installment1Amount.
     const installmentAmountField = installment === 1 ? 'installment1Amount' : 'installment2Amount';
 
     const rows = await this.devolutionRowModel
@@ -479,60 +411,8 @@ export class ClaimLetterEligibilityService {
     return result;
   }
 
-  /**
-   * Sum of `claimedAmount` across every ULB-child of this state/year/installment's batches whose
-   * `currentFormStatus` is in `statuses` — generalized from the original acknowledged-only query so
-   * "already claimed" (status 7), "claim in progress" (status 5), and "claim in draft" (status 2)
-   * can all share one implementation instead of three drifting copies. `excludeClaimLetterId` omits
-   * one specific batch from the sum — used when a specific batch is in view, so it never nets
-   * against its own claim twice (once via this bucket, once via its own `currentSelectedClaim`).
-   * `isAbandoned`/`assemblyStatus` filters matter here in a way they didn't for the old
-   * acknowledged-only query: a status-7 batch is never abandoned or mid-build in practice, but
-   * status 2/5 batches genuinely can be either, and must be excluded to stay correct.
-   */
-  async computeClaimedAmountByStatuses(
-    stateId: string,
-    designYearId: string,
-    installment: number,
-    statuses: number[],
-    excludeClaimLetterId?: string,
-  ): Promise<number> {
-    const stateOid = new Types.ObjectId(stateId);
-    const yearOid = new Types.ObjectId(designYearId);
-
-    const matchingParents = await this.batchModel
-      .find({
-        state: stateOid,
-        year: yearOid,
-        installment,
-        currentFormStatus: { $in: statuses },
-        isAbandoned: false,
-        assemblyStatus: 'READY',
-        ...(excludeClaimLetterId ? { _id: { $ne: new Types.ObjectId(excludeClaimLetterId) } } : {}),
-      })
-      .select('_id')
-      .lean<{ _id: Types.ObjectId }[]>()
-      .exec();
-    if (matchingParents.length === 0) return 0;
-
-    const result = await this.batchUlbModel
-      .aggregate<{
-        _id: null;
-        total: number;
-      }>([
-        { $match: { claimLetter: { $in: matchingParents.map((p) => p._id) } } },
-        { $group: { _id: null, total: { $sum: '$claimedAmount' } } },
-      ])
-      .exec();
-    return result[0]?.total ?? 0;
-  }
-
-  /**
-   * Same three totals `getClaimStatusBreakdown` needs (acknowledged/in-review/in-draft), but in one
-   * `find` + one `aggregate` instead of three of each — the three `computeClaimedAmountByStatuses`
-   * calls it used to make differ only in which status they match and which parent IDs they sum
-   * over, so both collapse into a single query apiece once results are bucketed by status in JS.
-   */
+  /** The three status totals from one find and one aggregate. Abandoned and BUILDING batches are
+   *  excluded, since drafts can be either. */
   private async computeClaimedAmountsByStatusBuckets(
     stateId: string,
     designYearId: string,
@@ -590,24 +470,8 @@ export class ClaimLetterEligibilityService {
     return result;
   }
 
-  /**
-   * Sum of `claimedAmount` across every ULB-child of this state/year/installment's OTHER
-   * claim-letter batches that have already reached `SUBMISSION_ACKNOWLEDGED_BY_MOHUA` — moved here
-   * (out of `ClaimLetterAssemblyService`) so both the build pipeline and the read-only
-   * eligibility-summary endpoint share one query instead of risking drift between two copies.
-   */
-  async computeTotalAlreadyAcknowledged(stateId: string, designYearId: string, installment: number): Promise<number> {
-    return this.computeClaimedAmountByStatuses(stateId, designYearId, installment, [
-      FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
-    ]);
-  }
-
-  /**
-   * The four claimed/available fields of `ClaimLetterFinancialOverview`, given an already-resolved
-   * `totalInstallmentAllocation` (callers already have it from `resolveDevolutionAllocations`, so it
-   * isn't re-derived here). `excludeClaimLetterId` is threaded through to all three status buckets —
-   * see `computeClaimedAmountByStatuses` for why that matters when a specific batch is in view.
-   */
+  /** The claimed and available fields for an already summed allocation. `excludeClaimLetterId` keeps
+   *  a batch from counting its own claim twice. */
   async getClaimStatusBreakdown(
     stateId: string,
     designYearId: string,
@@ -631,15 +495,7 @@ export class ClaimLetterEligibilityService {
     };
   }
 
-  /**
-   * State-wide financial context, independent of any one batch — the full picture of where this
-   * state/year/installment's claimable pool stands (plan: claim-letter summary placement). Used by
-   * the "Generate Claim Letter" list page and the "New Claim Letter" create page, both of which call
-   * this via `eligibility-summary` rather than reading a batch's own (possibly stale, or entirely
-   * absent) embedded snapshot. `excludeClaimLetterId` is only passed by `buildChildren()`, which
-   * already has a parent `_id` to exclude itself with; the two read-only pages above call this
-   * without it, since there's no "self" to exclude yet.
-   */
+  /** State-wide figures for the eligibility summary and claim context, not any batch's own snapshot. */
   async getFinancialOverview(
     stateId: string,
     designYearId: string,

@@ -39,7 +39,7 @@ interface ClaimLetterBatchUlbRaw {
   differencePercentageBasisPoints: number;
 }
 
-/** Selected-ULBs table for a claim — mirrors the FC Unspent Yes-branch table shape. */
+/** Selected-ULBs table for a claim; same shape as the FC Unspent Yes-branch table. */
 @Injectable()
 export class ClaimLetterUlbRowsService {
   constructor(
@@ -64,31 +64,6 @@ export class ClaimLetterUlbRowsService {
     const { rows, total } = await this.fetchRowsWithEligibility(parent, filter, { skip: (page - 1) * limit, limit });
 
     return xviFcSuccess('Claim letter ULBs fetched.', rows, { page, limit, total });
-  }
-
-  /**
-   * Unpaginated sibling of `getUlbs()` for callers that need every ULB in the batch at once (e.g.
-   * `ClaimLetterDocumentService` — a letter must list every recommended ULB, not one UI page of
-   * them). Deliberately bypasses `CLAIM_LETTER_PAGINATION_MAX_LIMIT`, which exists to bound HTTP
-   * query params, not internal service-to-service calls. Also returns the resolved
-   * `ulbLevelEligibility` (not just the merged `eligible` flag baked into each row) so callers that
-   * need per-criterion detail — e.g. Annexure 2's AFS/Provisional/FC-Disclosure/Elected-Body
-   * checkmarks — don't have to re-resolve it a second time.
-   */
-  async getAllUlbRows(
-    claimLetterId: string,
-    user: AuthUser,
-  ): Promise<{
-    parent: ClaimLetterBatchParent;
-    rows: ClaimLetterUlbRow[];
-    ulbLevelEligibility: ClaimLetterUlbLevelEligibility;
-  }> {
-    const parent = await this.loadParentWithAccess(claimLetterId, user);
-    const filter = this.buildSearchFilter(parent._id);
-
-    const { rows, ulbLevelEligibility } = await this.fetchRowsWithEligibility(parent, filter);
-
-    return { parent, rows, ulbLevelEligibility };
   }
 
   private async loadParentWithAccess(claimLetterId: string, user: AuthUser): Promise<ClaimLetterBatchParent> {
@@ -116,15 +91,8 @@ export class ClaimLetterUlbRowsService {
     return filter;
   }
 
-  /**
-   * Shared by `getUlbs()` (paginated) and `getAllUlbRows()` (unpaginated, `pagination` omitted) —
-   * fetches the batch's ULB rows plus the state gate and per-ULB criteria, re-verified at read
-   * time rather than trusted from the frozen snapshot alone (a ULB's Devolution/eligibility status
-   * may have changed after being added but before final submit). This is a display-only read (the
-   * `eligible` flag only drives a client-side warning badge — actual save/submit authorization is
-   * independently, always-freshly re-verified server-side in ClaimLetterAssemblyService), so the
-   * cached `*ForDisplay` variants are safe here.
-   */
+  /** Re-checks eligibility on read, since it can change after a ULB is added. Display-only (a warning
+   *  badge), so the cached variants are fine; save and submit re-check fresh. */
   private async fetchRowsWithEligibility(
     parent: Pick<ClaimLetterBatchParent, 'state' | 'year' | 'installment'>,
     filter: FilterQuery<ClaimLetterBatchUlbDocument>,
@@ -143,9 +111,7 @@ export class ClaimLetterUlbRowsService {
       ),
     ]);
 
-    // Extended re-verification to the per-ULB criteria (SLB, Annual Accounts, Elected Body/FC
-    // Unspent rows) — only needs a verdict for the ULBs actually fetched above, not the full
-    // state's expected set.
+    // Verdicts for this page's ULBs only.
     const rowUlbIds = rawRows.map((r) => String(r.ulbId));
     const ulbLevelEligibility = await this.eligibilityService.resolveUlbLevelEligibilityForDisplay(
       String(parent.state),

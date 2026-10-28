@@ -5,6 +5,7 @@ import {
   ClaimLetterBatchHistory,
   ClaimLetterBatchHistoryDocument,
   ClaimLetterHistoryActionSource,
+  ClaimLetterSubmittedFiles,
 } from 'src/schemas/xvi-fc/state/claim-letter-batch-history.schema';
 import type {
   ClaimLetterBatchNumber,
@@ -22,18 +23,16 @@ export interface RecordClaimLetterTransitionInput {
   toStatus: number;
   actionSource: ClaimLetterHistoryActionSource;
   reason?: string | null;
+  /** Submit only. */
+  submittedFiles?: ClaimLetterSubmittedFiles | null;
   changedBy: Types.ObjectId;
   requestId: string;
   ipAddress?: string | null;
   userAgent?: string | null;
 }
 
-/**
- * Writes claim-letter status-transition history — only on committed transitions (create draft,
- * submit, abandon in V1), never for draft edits or file uploads. Always called inside the same
- * transaction as the status change it records. See docs/adr/0003-workflow-transitions.md for
- * which mutations qualify and why.
- */
+/** Transition history, written in the same transaction as the status change; which mutations
+ *  qualify is docs/adr/0003-workflow-transitions.md. */
 @Injectable()
 export class ClaimLetterHistoryService {
   constructor(
@@ -55,6 +54,7 @@ export class ClaimLetterHistoryService {
           toStatus: input.toStatus,
           actionSource: input.actionSource,
           reason: input.reason ?? null,
+          submittedFiles: input.submittedFiles ?? null,
           changedBy: input.changedBy,
           requestId: input.requestId,
           ipAddress: input.ipAddress ?? null,

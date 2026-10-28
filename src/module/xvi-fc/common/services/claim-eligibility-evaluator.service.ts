@@ -15,9 +15,14 @@ import {
   type EligibilityEvaluationResult,
   type FormStatusEvidenceV1,
   type RowEligibilityEvidence,
+  type RowFieldValue,
   type UlbEligibilityBucket,
   type UlbEligibilityTally,
 } from 'src/module/xvi-fc/common/types/claim-eligibility.type';
+import {
+  buildClaimSourceQuery,
+  claimSourceFiltersByDesignYear,
+} from 'src/module/xvi-fc/common/utils/claim-eligibility-source-query.util';
 
 export interface ClaimEligibilityEvaluationContext {
   stateId: Types.ObjectId;
@@ -47,7 +52,7 @@ interface RowMatchValues {
   rowDocumentId: string;
 }
 
-/** Reads a possibly-dotted field path off a plain object (e.g. `'auditedData.form_status_id'`) —
+/** Reads a possibly-dotted field path off a plain object (e.g. `'stateDecision.status'`) —
  *  a flat path behaves identically to today's plain bracket-notation lookup. */
 function resolveNestedField(doc: Record<string, unknown>, path: string): unknown {
   return path
@@ -56,6 +61,10 @@ function resolveNestedField(doc: Record<string, unknown>, path: string): unknown
       (acc, key) => (acc && typeof acc === 'object' ? (acc as Record<string, unknown>)[key] : undefined),
       doc,
     );
+}
+
+function toRowFieldValue(value: unknown): RowFieldValue {
+  return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' ? value : null;
 }
 
 /**
@@ -114,15 +123,8 @@ export class ClaimEligibilityEvaluatorService {
       );
     }
 
-    const query: Record<string, unknown> = {};
-    if (this.filtersByDesignYear(config)) query[source.fields.designYear] = new Types.ObjectId(ctx.designYearId);
-    if (source.fields.state) query[source.fields.state] = ctx.stateId;
+    const query = buildClaimSourceQuery(config, ctx);
     if (source.fields.ulb && ctx.ulbId) query[source.fields.ulb] = ctx.ulbId;
-
-    // Devolution's installment scoping travels through the free-form evaluator config bag —
-    // brain §7.2's source.fields mapping has no dedicated `installment` key.
-    const installmentField = config.evaluator.config?.['installmentField'];
-    if (typeof installmentField === 'string') query[installmentField] = ctx.installment;
 
     const doc = await this.connection.collection(source.collection).findOne(query);
     const evaluatedAt = new Date().toISOString();
@@ -181,8 +183,7 @@ export class ClaimEligibilityEvaluatorService {
 
     // Cast, not narrowed: this value comes from an external collection at runtime and can't be
     // statically guaranteed to be one of FormStatusType's literal members. Resolved via
-    // `resolveNestedField` (not plain bracket-notation) so a dotted path like
-    // `auditedData.form_status_id` works the same as a flat one.
+    // `resolveNestedField` (not plain bracket-notation) so a dotted path works the same as a flat one.
     const resolvedFormStatus = resolveNestedField(doc, source.fields.currentFormStatus) as FormStatusType;
     const passed = acceptedFormStatuses.includes(resolvedFormStatus);
 
@@ -232,6 +233,9 @@ export class ClaimEligibilityEvaluatorService {
     /** Only set by the row-collection path (`evaluateUlbBulkRowStatus`) — undefined for
      *  ownerLevel:'ULB' flat-document sources (SLB, Annual Accounts), which have no row concept. */
     rowEvidenceByUlbId?: Map<string, RowEligibilityEvidence>;
+    /** ULBs with a MoHUA-approved discretionary exemption for this form (the claim letter prints
+     *  these as "Exemption requested"); automatic exemptions are not included. */
+    approvedExemptionUlbIds: Set<string>;
   }> {
     const config = sourceFormJson.claimEligibility;
     if (!config?.enabled) {
@@ -247,15 +251,20 @@ export class ClaimEligibilityEvaluatorService {
     );
   }
 
-  /** SLB, Annual Accounts (Provisional/Audited): one flat document per ULB, bucketed against
-   *  `acceptedFormStatuses` — same matching semantics as `evaluateFormStatus`, just bulk and
+  /** SLB, Annual Accounts (Provisional/Audited): one flat document per ULB (per section for Annual
+   *  Accounts, picked by `source.match`), bucketed against `acceptedFormStatuses` — same
+   *  matching semantics as `evaluateFormStatus`, just bulk and
    *  ULB-scoped instead of one state-scoped document. A ULB with no document at all has nothing
    *  to accept, so it can't be eligible — no configurable default, unlike the row-collection case
    *  below, since there's no equivalent "absence isn't a problem" scenario here. */
   private async evaluateUlbBulkFormStatus(
     sourceFormJson: IFormJson,
     ctx: UlbBulkEvaluationContext,
-  ): Promise<{ perUlb: Map<string, UlbEligibilityBucket>; tally: UlbEligibilityTally }> {
+  ): Promise<{
+    perUlb: Map<string, UlbEligibilityBucket>;
+    tally: UlbEligibilityTally;
+    approvedExemptionUlbIds: Set<string>;
+  }> {
     const config = sourceFormJson.claimEligibility!;
     const { source } = config;
     if (!source.collection || !source.fields?.ulb) {
@@ -265,6 +274,7 @@ export class ClaimEligibilityEvaluatorService {
     }
 
     const query: Record<string, unknown> = {
+      ...source.match,
       // Bounds the read to exactly the ULBs this evaluation cares about — the only narrowing
       // available at all for sources with no `source.fields.state` mapping (e.g. SLB, whose
       // schema has no state field), and a further narrowing on top of `state` for the rest.
@@ -324,7 +334,11 @@ export class ClaimEligibilityEvaluatorService {
       perUlb.set(ulbId, 'INELIGIBLE');
     }
 
-    return { perUlb, tally: this.tallyBuckets(perUlb) };
+    return { perUlb, tally: this.tallyBuckets(perUlb), approvedExemptionUlbIds: this.approvedIds(exemptionLookup) };
+  }
+
+  private approvedIds(lookup: { discretionary: Map<string, boolean> } | null): Set<string> {
+    return new Set(lookup ? lookup.discretionary.keys() : []);
   }
 
   /**
@@ -411,6 +425,7 @@ export class ClaimEligibilityEvaluatorService {
     perUlb: Map<string, UlbEligibilityBucket>;
     tally: UlbEligibilityTally;
     rowEvidenceByUlbId: Map<string, RowEligibilityEvidence>;
+    approvedExemptionUlbIds: Set<string>;
   }> {
     const config = sourceFormJson.claimEligibility!;
     const { source } = config;
@@ -493,6 +508,8 @@ export class ClaimEligibilityEvaluatorService {
           rowDocumentId: entry?.rowDocumentId ?? null,
           rowStatusAtEvaluation: (entry?.formStatus as FormStatusType | undefined) ?? null,
           datasetVersion: activeDatasetVersion ?? null,
+          rowValue: entry ? toRowFieldValue(entry.value) : null,
+          rowAccepted: entry ? this.isRowAccepted(entry, rowMatch) : null,
         });
         continue;
       }
@@ -509,6 +526,8 @@ export class ClaimEligibilityEvaluatorService {
             rowDocumentId: null,
             rowStatusAtEvaluation: null,
             datasetVersion: activeDatasetVersion ?? null,
+            rowValue: null,
+            rowAccepted: null,
           });
         }
         continue;
@@ -521,10 +540,23 @@ export class ClaimEligibilityEvaluatorService {
         rowDocumentId: entry.rowDocumentId,
         rowStatusAtEvaluation: (entry.formStatus as FormStatusType | undefined) ?? null,
         datasetVersion: activeDatasetVersion ?? null,
+        rowValue: toRowFieldValue(entry.value),
+        rowAccepted: this.isRowAccepted(entry, rowMatch),
       });
     }
 
-    return { perUlb, tally: this.tallyBuckets(perUlb), rowEvidenceByUlbId };
+    return {
+      perUlb,
+      tally: this.tallyBuckets(perUlb),
+      rowEvidenceByUlbId,
+      approvedExemptionUlbIds: this.approvedIds(exemptionLookup),
+    };
+  }
+
+  /** Null when the source has no row-status check configured. */
+  private isRowAccepted(entry: RowMatchValues, rowMatch: ClaimEligibilityRowMatchConfig): boolean | null {
+    if (!rowMatch.rowFormStatusField || !rowMatch.rowAcceptedFormStatuses) return null;
+    return rowMatch.rowAcceptedFormStatuses.includes(entry.formStatus as FormStatusType);
   }
 
   /**
@@ -536,19 +568,15 @@ export class ClaimEligibilityEvaluatorService {
    * existed — every source that hasn't opted in keeps its current behavior exactly.
    */
   private bucketRowValue(entry: RowMatchValues, rowMatch: ClaimEligibilityRowMatchConfig): UlbEligibilityBucket {
-    if (rowMatch.rowFormStatusField && rowMatch.rowAcceptedFormStatuses) {
-      if (!rowMatch.rowAcceptedFormStatuses.includes(entry.formStatus as FormStatusType)) return 'INELIGIBLE';
-    }
+    if (this.isRowAccepted(entry, rowMatch) === false) return 'INELIGIBLE';
     if (rowMatch.rowExemptedValues?.some((v) => v === entry.value)) return 'EXEMPTED';
     if (rowMatch.rowEligibleValues.some((v) => v === entry.value)) return 'ELIGIBLE';
     return 'INELIGIBLE';
   }
 
-  /** False only for a SUBMISSION_PERIOD_SINGLETON source (e.g. Bank Account) — submitted once,
-   *  reused across every design year, so filtering by ctx.designYearId would miss a ULB/state that
-   *  submitted in an earlier year. Mirrors BankAccountService's own {ulb}-only ONCE_EVER lookup. */
+  /** Mirrors BankAccountService's own {ulb}-only ONCE_EVER lookup. */
   private filtersByDesignYear(config: ClaimEligibilityConfig): boolean {
-    return config.yearScope !== 'SUBMISSION_PERIOD_SINGLETON';
+    return claimSourceFiltersByDesignYear(config);
   }
 
   private tallyBuckets(perUlb: Map<string, UlbEligibilityBucket>): UlbEligibilityTally {

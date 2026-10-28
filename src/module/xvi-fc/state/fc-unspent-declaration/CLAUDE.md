@@ -91,10 +91,10 @@ mapping.
 
 `FcUnspentDeclarationDocxService` renders as `.docx`, not PDF — the state must be able to type over
 the closing signature block in Word before printing and signing. It mirrors the MoHUA specimen
-letter verbatim, including its title heading; the specimen shows the No and Yes options side by
-side (separated by "OR") purely as a reference format, but this renders only whichever one actually
-applies to `data.isFcUnspent`. The title, subject line, and closing paragraph are the same wording
-regardless of branch — only the certifying paragraph (and, on the Yes branch, the table plus its
+letter, except the specimen's "Format of Letter ..." heading: the letter starts at "To,". The specimen
+shows the No and Yes options side by side (separated by "OR") purely as a reference format, but this
+renders only whichever one actually applies to `data.isFcUnspent`. The subject line, salutation and
+closing paragraph are the same wording regardless of branch — only the certifying paragraph (and, on the Yes branch, the table plus its
 trailing sentence) differ. The closing signature block (`[Name]`, `[Designation]`, etc.) is literal,
 non-interpolated text — including its own `[State Name]` — identical to elected-urban-local-bodies'
 signature block; only the certifying paragraph's state name (and, on the Yes branch, the table) are

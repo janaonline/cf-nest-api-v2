@@ -55,6 +55,31 @@ export class ClaimLetterFinancialSummary {
 
 export const ClaimLetterFinancialSummarySchema = SchemaFactory.createForClass(ClaimLetterFinancialSummary);
 
+/** The signed letter merged with its supporting documents, cached until any input changes. */
+@Schema({ _id: false })
+export class ClaimLetterFinalPdf {
+  @Prop({ type: FileInfoSchema, required: true })
+  file!: FileInfo;
+
+  // SHA-256 over the ordered input labels and upload paths; a new upload changes it.
+  @Prop({ type: String, required: true })
+  sourceKey!: string;
+
+  @Prop({ type: [String], default: [] })
+  included!: string[];
+
+  @Prop({ type: [String], default: [] })
+  missing!: string[];
+
+  @Prop({ type: Number, default: null })
+  pageCount!: number | null;
+
+  @Prop({ type: Date, required: true })
+  builtAt!: Date;
+}
+
+export const ClaimLetterFinalPdfSchema = SchemaFactory.createForClass(ClaimLetterFinalPdf);
+
 /**
  * Parent claim document (brain §14.2) — one immutable version of one logical batch slot per
  * State/year/installment. `assemblyStatus` is an internal build guard, not a workflow status;
@@ -179,6 +204,22 @@ export class ClaimLetterBatch {
 
   @Prop({ type: Date, default: null })
   abandonedAt?: Date | null;
+
+  // State-entered letter details (keys from formjson `meta.letterDetailKeys`). No default, never
+  // written as null: reads use `?? {}`, saves `$set` the whole merged object.
+  @Prop({ type: MongooseSchema.Types.Mixed })
+  letterDetails?: Record<string, unknown>;
+
+  @Prop({ type: Date, default: null })
+  letterDetailsUpdatedAt?: Date | null;
+
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', default: null })
+  letterDetailsUpdatedBy?: Types.ObjectId | null;
+
+  // The final claim letter (signed letter + enclosures), cached until an upload changes; the
+  // submitted batch keeps it.
+  @Prop({ type: ClaimLetterFinalPdfSchema, default: null })
+  finalClaimPdf?: ClaimLetterFinalPdf | null;
 
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', default: null })
   abandonedBy?: Types.ObjectId | null;

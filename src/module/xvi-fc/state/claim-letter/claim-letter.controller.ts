@@ -25,7 +25,13 @@ import { ClaimLetterUlbOptionsService } from './services/ulb-options/claim-lette
 import { ClaimLetterUlbRowsService } from './services/ulb-rows/claim-letter-ulb-rows.service';
 import { ClaimLetterAssemblyService } from './services/assembly/claim-letter-assembly.service';
 import { ClaimLetterDocumentService } from './services/document/claim-letter-document.service';
-import { ClaimLetterPdfService } from './services/document/claim-letter-pdf.service';
+import { ClaimLetterDocxService } from './services/document/claim-letter-docx.service';
+import { ClaimLetterLetterDetailsService } from './services/letter-details/claim-letter-letter-details.service';
+import { GetClaimLetterDocumentUlbsQueryDto } from './dto/get-claim-letter-document-ulbs-query.dto';
+import { SaveClaimLetterLetterDetailsDto } from './dto/save-claim-letter-letter-details.dto';
+import { SubmitClaimLetterDto } from './dto/submit-claim-letter.dto';
+import { ClaimLetterFinalPdfService } from './services/final-pdf/claim-letter-final-pdf.service';
+import { ClaimLetterSubmitService } from './services/submit/claim-letter-submit.service';
 import { GetClaimLetterUlbOptionsQueryDto } from './dto/get-claim-letter-ulb-options-query.dto';
 import { GetClaimLetterUlbRowsQueryDto } from './dto/get-claim-letter-ulb-rows-query.dto';
 import { GetClaimLetterHistoryQueryDto } from './dto/get-claim-letter-history-query.dto';
@@ -42,7 +48,10 @@ export class ClaimLetterController {
     private readonly ulbRowsService: ClaimLetterUlbRowsService,
     private readonly assemblyService: ClaimLetterAssemblyService,
     private readonly documentService: ClaimLetterDocumentService,
-    private readonly pdfService: ClaimLetterPdfService,
+    private readonly docxService: ClaimLetterDocxService,
+    private readonly letterDetailsService: ClaimLetterLetterDetailsService,
+    private readonly finalPdfService: ClaimLetterFinalPdfService,
+    private readonly submitService: ClaimLetterSubmitService,
   ) {}
 
   @ApiOperation({ summary: 'Get claim eligibility summary (state-level gate, expected ULBs, batch-slot usage)' })
@@ -153,17 +162,44 @@ export class ClaimLetterController {
     return this.claimLetterService.uploadSignedFile(claimLetterId, fileRef, user);
   }
 
-  @ApiOperation({ summary: 'Submit the claim letter to MoHUA' })
+  @ApiOperation({ summary: 'Submit the claim letter to MoHUA (with the reviewed final PDF key)' })
+  @ApiBody({ type: SubmitClaimLetterDto })
   @Post(':claimLetterId/submit')
   @UseGuards(PermissionGuard)
   @RequirePermissions(Permission.FINAL_SUBMIT_TO_MOHUA)
   submit(
     @Param('claimLetterId', ParseObjectIdPipe) claimLetterId: string,
+    @Body() dto: SubmitClaimLetterDto,
     @CurrentUser() user: AuthUser,
     @Ip() ip: string,
     @Headers('user-agent') userAgent: string,
   ) {
-    return this.claimLetterService.submit(claimLetterId, user, ip, userAgent);
+    return this.submitService.submit(claimLetterId, user, dto.finalPdfSourceKey, ip, userAgent);
+  }
+
+  @ApiOperation({
+    summary: 'Final claim letter: a draft builds (or reuses) the merged PDF; a submitted batch returns its copy',
+  })
+  @Get(':claimLetterId/final-pdf')
+  @UseGuards(PermissionGuard)
+  @RequirePermissions(Permission.VIEW_STATE_FORMS)
+  getFinalPdf(@Param('claimLetterId', ParseObjectIdPipe) claimLetterId: string, @CurrentUser() user: AuthUser) {
+    return this.finalPdfService.getFinalPdf(claimLetterId, user);
+  }
+
+  @ApiOperation({ summary: 'Download the final claim letter (merged PDF)' })
+  @Get(':claimLetterId/final-pdf/file')
+  @UseGuards(PermissionGuard)
+  @RequirePermissions(Permission.VIEW_STATE_FORMS)
+  async getFinalPdfFile(
+    @Param('claimLetterId', ParseObjectIdPipe) claimLetterId: string,
+    @CurrentUser() user: AuthUser,
+  ): Promise<StreamableFile> {
+    const { buffer, fileName } = await this.finalPdfService.getFinalPdfFile(claimLetterId, user);
+    return new StreamableFile(buffer as unknown as Uint8Array, {
+      type: 'application/pdf',
+      disposition: `attachment; filename="${fileName}"`,
+    });
   }
 
   @ApiOperation({ summary: "List the State's claim letters (batch/version/status history)" })
@@ -205,32 +241,60 @@ export class ClaimLetterController {
     return this.ulbRowsService.getUlbs(claimLetterId, query, user);
   }
 
-  @ApiOperation({
-    summary:
-      'Get the claim letter document (covering letter + Annexure 1 FC Disclosures + Annexure 2 City Conditions) for Preview Template / Download Template',
-  })
+  @ApiOperation({ summary: 'Get the claim letter for preview (covering letter + annexure, without ULB rows)' })
   @Get(':claimLetterId/document')
   @UseGuards(PermissionGuard)
   @RequirePermissions(Permission.VIEW_STATE_FORMS)
   getDocument(@Param('claimLetterId', ParseObjectIdPipe) claimLetterId: string, @CurrentUser() user: AuthUser) {
-    return this.documentService.getDocumentData(claimLetterId, user);
+    return this.documentService.getDocument(claimLetterId, user);
   }
 
-  @ApiOperation({
-    summary: 'Download the claim letter document (same content as GET :claimLetterId/document) as a PDF',
-  })
-  @Get(':claimLetterId/document/pdf')
+  @ApiOperation({ summary: 'Get one page (20 rows) of an annexure ULB list for the letter preview' })
+  @Get(':claimLetterId/document/ulbs')
   @UseGuards(PermissionGuard)
   @RequirePermissions(Permission.VIEW_STATE_FORMS)
-  async getDocumentPdf(
+  getDocumentUlbs(
+    @Param('claimLetterId', ParseObjectIdPipe) claimLetterId: string,
+    @Query() query: GetClaimLetterDocumentUlbsQueryDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.documentService.getDocumentUlbs(claimLetterId, query.list, query.page ?? 1, user);
+  }
+
+  @ApiOperation({ summary: 'Download the claim letter as .docx (needs the mandatory letter details)' })
+  @Get(':claimLetterId/document/docx')
+  @UseGuards(PermissionGuard)
+  @RequirePermissions(Permission.VIEW_STATE_FORMS)
+  async getDocumentDocx(
     @Param('claimLetterId', ParseObjectIdPipe) claimLetterId: string,
     @CurrentUser() user: AuthUser,
   ): Promise<StreamableFile> {
-    const { buffer, fileName } = await this.pdfService.generateDocumentPdf(claimLetterId, user);
+    const { buffer, fileName } = await this.docxService.generateForDownload(claimLetterId, user);
     return new StreamableFile(buffer as unknown as Uint8Array, {
-      type: 'application/pdf',
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       disposition: `attachment; filename="${fileName}"`,
     });
+  }
+
+  @ApiOperation({ summary: 'Get the letter-detail fields, saved values and the previous-batch prefill' })
+  @Get(':claimLetterId/letter-details')
+  @UseGuards(PermissionGuard)
+  @RequirePermissions(Permission.VIEW_STATE_FORMS)
+  getLetterDetails(@Param('claimLetterId', ParseObjectIdPipe) claimLetterId: string, @CurrentUser() user: AuthUser) {
+    return this.letterDetailsService.get(claimLetterId, user);
+  }
+
+  @ApiOperation({ summary: 'Save changed letter details (autosave from the letter editor)' })
+  @ApiBody({ type: SaveClaimLetterLetterDetailsDto })
+  @Patch(':claimLetterId/letter-details')
+  @UseGuards(PermissionGuard)
+  @RequirePermissions(Permission.PREPARE_GRANT_LETTERS)
+  saveLetterDetails(
+    @Param('claimLetterId', ParseObjectIdPipe) claimLetterId: string,
+    @Body() dto: SaveClaimLetterLetterDetailsDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.letterDetailsService.save(claimLetterId, dto, user);
   }
 
   // ─── Private helpers ─────────────────────────────────────────────────────

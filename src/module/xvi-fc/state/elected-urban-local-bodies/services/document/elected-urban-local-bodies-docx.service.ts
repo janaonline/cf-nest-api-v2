@@ -16,13 +16,12 @@ import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { buildXviFcDownloadFileName } from 'src/shared/utils/xvi-fc-download-file-name.util';
 import { buildMohuaLetterAddressBlock } from 'src/module/xvi-fc/common/utils/xvi-fc-letter-address-block.util';
 import { formatXviFcDate } from 'src/module/xvi-fc/common/utils/xvi-fc-date-format.util';
+import { XVI_FC_DOCX_BODY_RUN, XVI_FC_DOCX_TABLE_RUN } from 'src/module/xvi-fc/common/utils/xvi-fc-docx-style.util';
 import { ElectedUrbanLocalBodiesDocumentService } from './elected-urban-local-bodies-document.service';
 import type {
   EulbListDocumentData,
   EulbListDocumentRow,
 } from 'src/module/xvi-fc/state/elected-urban-local-bodies/types/elected-urban-local-bodies-document.types';
-
-const DOC_FONT = { font: 'Times New Roman', size: 24 };
 
 /** Percentage column widths, in the same left-to-right order as the rendered table: '#' plus the
  *  6 form-json-labelled columns. Sums to 100. */
@@ -37,9 +36,12 @@ const TABLE_BORDER: ITableBordersOptions = {
   insideVertical: { style: BorderStyle.SINGLE, size: 4, color: '999999' },
 };
 
-function cellText(text: string, opts: { bold?: boolean } = {}): Paragraph {
+type Align = (typeof AlignmentType)[keyof typeof AlignmentType];
+
+function cellText(text: string, opts: { bold?: boolean; alignment?: Align } = {}): Paragraph {
   return new Paragraph({
-    children: [new TextRun({ text: text || '-', bold: opts.bold, ...DOC_FONT })],
+    alignment: opts.alignment,
+    children: [new TextRun({ text: text || '-', bold: opts.bold, ...XVI_FC_DOCX_TABLE_RUN })],
   });
 }
 
@@ -47,7 +49,7 @@ function headerCell(text: string, widthPct: number): TableCell {
   return new TableCell({
     width: { size: widthPct, type: WidthType.PERCENTAGE },
     shading: { fill: 'F2F2F2' },
-    children: [cellText(text, { bold: true })],
+    children: [cellText(text, { bold: true, alignment: AlignmentType.CENTER })],
   });
 }
 
@@ -101,14 +103,13 @@ export class ElectedUrbanLocalBodiesDocxService {
     return new Document({
       styles: {
         default: {
-          document: { run: DOC_FONT },
+          document: { run: XVI_FC_DOCX_BODY_RUN },
         },
       },
       sections: [
         {
           properties: {},
           children: [
-            ...this.buildTitle(),
             ...this.buildAddressBlock(),
             ...this.buildSubjectAndIntro(data),
             this.buildTable(data),
@@ -120,23 +121,6 @@ export class ElectedUrbanLocalBodiesDocxService {
         },
       ],
     });
-  }
-
-  /** Verbatim heading from the MoHUA specimen letter this mirrors — bold, underlined, centered. */
-  private buildTitle(): Paragraph[] {
-    return [
-      new Paragraph({
-        alignment: AlignmentType.CENTER,
-        children: [
-          new TextRun({
-            text: 'Format of Letter to be Submitted by the State reg. Elected Bodies Status',
-            bold: true,
-            underline: {},
-          }),
-        ],
-      }),
-      new Paragraph({ text: '' }),
-    ];
   }
 
   private buildAddressBlock(): Paragraph[] {
@@ -151,7 +135,7 @@ export class ElectedUrbanLocalBodiesDocxService {
         ],
       }),
       new Paragraph({ text: '' }),
-      new Paragraph({ text: 'Sir,' }),
+      new Paragraph({ text: 'Sir/Madam,' }),
       new Paragraph({ text: '' }),
     ];
   }

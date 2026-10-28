@@ -1,6 +1,12 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
-import type { ClaimLetterBatchNumber, ClaimLetterInstallment } from './claim-letter-batch.schema';
+import { FileInfo, FileInfoSchema } from 'src/schemas/common/file.schema';
+import {
+  ClaimLetterFinalPdf,
+  ClaimLetterFinalPdfSchema,
+  type ClaimLetterBatchNumber,
+  type ClaimLetterInstallment,
+} from './claim-letter-batch.schema';
 
 /**
  * Brain §16.5's action-source vocabulary. Only 'DIRECT_STATE_REVIEW' is written in V1 (create
@@ -39,6 +45,18 @@ export class ClaimLetterRejectedSourceRef {
 }
 
 export const ClaimLetterRejectedSourceRefSchema = SchemaFactory.createForClass(ClaimLetterRejectedSourceRef);
+
+/** What a submission sent: the signed letter as uploaded and the final claim letter (the merged PDF). */
+@Schema({ _id: false })
+export class ClaimLetterSubmittedFiles {
+  @Prop({ type: FileInfoSchema, required: true })
+  signedClaimFile!: FileInfo;
+
+  @Prop({ type: ClaimLetterFinalPdfSchema, required: true })
+  finalClaimPdf!: ClaimLetterFinalPdf;
+}
+
+export const ClaimLetterSubmittedFilesSchema = SchemaFactory.createForClass(ClaimLetterSubmittedFiles);
 
 /**
  * Parent status-transition history (brain §14.10) — written only on committed transitions (plan
@@ -93,6 +111,10 @@ export class ClaimLetterBatchHistory {
 
   @Prop({ type: [ClaimLetterRejectedSourceRefSchema], default: [] })
   rejectedSourceRefs!: ClaimLetterRejectedSourceRef[];
+
+  // Set only on the submit transition.
+  @Prop({ type: ClaimLetterSubmittedFilesSchema, default: null })
+  submittedFiles?: ClaimLetterSubmittedFiles | null;
 
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
   changedBy!: Types.ObjectId;
