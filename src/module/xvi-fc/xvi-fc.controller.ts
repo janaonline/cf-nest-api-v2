@@ -33,8 +33,12 @@ export class XviFcController {
   @Get('sidebar/:role')
   @UseGuards(PermissionGuard)
   // @RequirePermissions(Permission.VIEW_STATUS_REPORTS)
-  async getSideMenu(@Param('role') role: MenuRole, @Query('yearId') yearId: string): Promise<SideMenuResponseDto> {
-    return this.xviFcService.getSideMenu(role, yearId);
+  async getSideMenu(
+    @Param('role') role: MenuRole,
+    @Query('yearId') yearId: string,
+    @CurrentUser() user: AuthUser,
+  ): Promise<SideMenuResponseDto> {
+    return this.xviFcService.getSideMenu(role, yearId, user);
   }
 
   @ApiBearerAuth()

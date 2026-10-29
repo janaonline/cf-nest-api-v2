@@ -7,6 +7,7 @@ import { PassportModule } from '@nestjs/passport';
 import { EmailQueueModule } from 'src/core/queue/email-queue/email-queue.module';
 import { RedisModule } from 'src/core/services/redis/redis.module';
 import { State, StateSchema } from 'src/schemas/state.schema';
+import { Adc, AdcSchema } from 'src/schemas/adc.schema';
 import { Ulb, UlbSchema } from 'src/schemas/ulb.schema';
 import { Year, YearSchema } from 'src/schemas/year.schema';
 import { VisitSession, VisitSessionSchema } from 'src/schemas/visit-session.schema';
@@ -21,6 +22,7 @@ import { VisitSessionService } from './visit-session.service';
 import { RolesGuard } from './guards/roles.guard';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { DoeReadOnlyGuard } from './guards/doe-read-only.guard';
+import { AdcAccessGuard } from './guards/adc-access.guard';
 import { JwtRefreshGuard } from './guards/jwt-refresh.guard';
 import { RecaptchaMiddleware } from './middleware/recaptcha.middleware';
 import { JwtStrategy } from './strategies/jwt.strategy';
@@ -43,6 +45,7 @@ import { JwtRefreshStrategy } from './strategies/jwt-refresh.strategy';
     }),
     MongooseModule.forFeature([
       { name: State.name, schema: StateSchema },
+      { name: Adc.name, schema: AdcSchema },
       { name: Ulb.name, schema: UlbSchema },
       { name: Year.name, schema: YearSchema },
       { name: VisitSession.name, schema: VisitSessionSchema },
@@ -69,6 +72,11 @@ import { JwtRefreshStrategy } from './strategies/jwt-refresh.strategy';
     {
       provide: APP_GUARD,
       useClass: DoeReadOnlyGuard,
+    },
+    // Also reads request.user — keep it after JwtAuthGuard.
+    {
+      provide: APP_GUARD,
+      useClass: AdcAccessGuard,
     },
   ],
 })

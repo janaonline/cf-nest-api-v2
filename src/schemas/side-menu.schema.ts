@@ -3,7 +3,7 @@ import { HydratedDocument, Types } from 'mongoose';
 
 export type SideMenuDocument = HydratedDocument<SideMenu>;
 
-export type MenuRole = 'ULB' | 'STATE' | 'MOHUA' | 'DOE' | 'ADMIN' | 'MOHUA_PMU';
+export type MenuRole = 'ULB' | 'STATE' | 'MOHUA' | 'DOE' | 'ADMIN' | 'MOHUA_PMU' | 'STATE_ADC';
 export type MenuItemType = 'header' | 'separator' | 'item' | 'group';
 export type MenuSection = 'top' | 'bottom';
 

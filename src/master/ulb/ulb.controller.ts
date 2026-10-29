@@ -6,6 +6,7 @@ import { Roles } from 'src/module/auth/decorators/roles.decorator';
 import { RolesGuard } from 'src/module/auth/guards/roles.guard';
 import { Role } from 'src/module/auth/enum/role.enum';
 import type { IAuthUser } from 'src/common/interfaces/auth-user.interface';
+import { AssignUlbAdcDto } from './dto/assign-ulb-adc.dto';
 import { CreateUlbDto } from './dto/create-ulb.dto';
 import { QueryUlbDto } from './dto/query-ulb.dto';
 import { RejectUlbDto } from './dto/reject-ulb.dto';
@@ -25,7 +26,8 @@ export class UlbController {
   @ApiOperation({
     summary:
       'Create a ULB (ADMIN or STATE). ADMIN submissions are auto-approved; STATE submissions are scoped to ' +
-      "the requester's own state and start PENDING until an ADMIN approves them.",
+      "the requester's own state and start PENDING until an ADMIN approves them. An ADC user's ULB is also " +
+      'stamped with their ADC.',
   })
   create(@Body() createUlbDto: CreateUlbDto, @CurrentUser() user: IAuthUser) {
     return this.ulbService.create(createUlbDto, user);
@@ -68,8 +70,8 @@ export class UlbController {
   @Roles([Role.ADMIN, Role.STATE])
   @ApiOperation({
     summary:
-      "Update a ULB. ADMIN may edit any ULB. STATE may only edit their own state's REJECTED ULB, " +
-      'which resets it back to PENDING for re-review.',
+      "Update a ULB. ADMIN may edit any ULB. STATE may only edit their own state's REJECTED ULB that has no ADC; " +
+      "an ADC user only their own ADC's REJECTED ULB (not a viewer). Either resets it back to PENDING for re-review.",
   })
   update(
     @Param('id', ParseObjectIdPipe) id: string,
@@ -77,6 +79,17 @@ export class UlbController {
     @CurrentUser() user: IAuthUser,
   ) {
     return this.ulbService.update(id, updateUlbDto, user);
+  }
+
+  @Patch(':id/adc')
+  @Roles([Role.ADMIN])
+  @ApiOperation({
+    summary:
+      'Assign a ULB to an Autonomous District Council, or move it back to the State DMA with adcId null ' +
+      '(ADMIN only). Review access follows the ULB\'s current ADC.',
+  })
+  assignAdc(@Param('id', ParseObjectIdPipe) id: string, @Body() dto: AssignUlbAdcDto) {
+    return this.ulbService.assignAdc(id, dto.adcId);
   }
 
   @Patch(':id/approve')

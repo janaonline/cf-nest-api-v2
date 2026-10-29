@@ -83,14 +83,14 @@ describe('XviFcController', () => {
   describe('getSideMenu', () => {
     it('should call service with role and yearId and return result', async () => {
       service.getSideMenu.mockResolvedValue(mockSideMenu as any);
-      const result = await controller.getSideMenu('ULB', 'year1');
-      expect(service.getSideMenu).toHaveBeenCalledWith('ULB', 'year1');
+      const result = await controller.getSideMenu('ULB', 'year1', mockUser);
+      expect(service.getSideMenu).toHaveBeenCalledWith('ULB', 'year1', mockUser);
       expect(result).toEqual(mockSideMenu);
     });
 
     it('should propagate NotFoundException for unknown role', async () => {
       service.getSideMenu.mockRejectedValue(new NotFoundException('No menu found'));
-      await expect(controller.getSideMenu('UNKNOWN' as any, 'year1')).rejects.toThrow(NotFoundException);
+      await expect(controller.getSideMenu('UNKNOWN' as any, 'year1', mockUser)).rejects.toThrow(NotFoundException);
     });
   });
 

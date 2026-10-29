@@ -15,6 +15,7 @@ import {
   XviFcDocumentActionGateSchema,
 } from 'src/schemas/xvi-fc/document-action-gate.schema';
 import { Ulb, UlbSchema } from 'src/schemas/ulb.schema';
+import { Adc, AdcSchema } from 'src/schemas/adc.schema';
 import { Year, YearSchema } from 'src/schemas/year.schema';
 import { User, UserSchema } from 'src/schemas/user/user.schema';
 import { XviFcCommonModule } from 'src/module/xvi-fc/common/xvi-fc-common.module';
@@ -55,6 +56,7 @@ import { DurStatusSyncService } from './dur-status-sync.service';
       { name: XviFcDurManualReviewRequest.name, schema: XviFcDurManualReviewRequestSchema },
       { name: XviFcDurUploadHistory.name, schema: XviFcDurUploadHistorySchema },
       { name: Ulb.name, schema: UlbSchema },
+      { name: Adc.name, schema: AdcSchema },
       { name: Year.name, schema: YearSchema },
       { name: User.name, schema: UserSchema },
       { name: XviFcDocumentActionGate.name, schema: XviFcDocumentActionGateSchema },

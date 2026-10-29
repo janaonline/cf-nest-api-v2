@@ -21,6 +21,16 @@ import type { AdminSubRole } from './create-user.dto';
  * (the exact bug class found in the MoHUA/STATE cross-role restore issue earlier).
  */
 export class AdminUpdateUserDto {
+  @ApiProperty({
+    required: false,
+    description:
+      "Not changeable: a user's ADC is fixed when they are created. Sending a different ADC is a 400; " +
+      'echoing the current one (null for a non-ADC user) is ignored.',
+  })
+  @IsOptional()
+  @IsMongoId()
+  adcId?: string;
+
   @ApiProperty({ required: false })
   @IsOptional()
   @IsString()

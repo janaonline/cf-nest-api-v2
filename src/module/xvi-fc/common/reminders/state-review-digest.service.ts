@@ -193,9 +193,12 @@ export class StateReviewDigestService {
   }
 
   async sendDueDigests(): Promise<void> {
+    // ADC-owned ULBs are reviewed by their ADC, not the State DMA, so the State is not nagged about them
+    // (an ADC digest is a follow-up).
+    const adcUlbIds = await this.ulbModel.distinct('_id', { adc: { $ne: null } });
     const [annualAccountDocs, bankAccountDocs] = await Promise.all([
-      this.findDueAnnualAccounts(),
-      this.findDueBankAccounts(),
+      this.findDueAnnualAccounts(adcUlbIds),
+      this.findDueBankAccounts(adcUlbIds),
     ]);
     const allRows = this.toQualifyingRows([...annualAccountDocs, ...bankAccountDocs]);
     if (!allRows.length) return;
@@ -224,11 +227,12 @@ export class StateReviewDigestService {
   }
 
   // now >= (lastReminderSentAt ?? declaredAt) + INTERVAL_DAYS
-  private findDueAnnualAccounts(): Promise<XviFcAnnualAccountDocument[]> {
+  private findDueAnnualAccounts(excludeUlbIds: Types.ObjectId[]): Promise<XviFcAnnualAccountDocument[]> {
     return this.annualAccountModel
       .find({
         form_status_id: FORM_STATUS_ID[AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE],
         declaredAt: { $ne: null },
+        ulb: { $nin: excludeUlbIds },
         $expr: {
           $gte: [new Date(), { $add: [{ $ifNull: ['$lastReminderSentAt', '$declaredAt'] }, INTERVAL_DAYS * DAY_MS] }],
         },
@@ -237,11 +241,12 @@ export class StateReviewDigestService {
   }
 
   // now >= (lastReminderSentAt ?? submittedAt) + INTERVAL_DAYS
-  private findDueBankAccounts(): Promise<XviFcBankAccountDocument[]> {
+  private findDueBankAccounts(excludeUlbIds: Types.ObjectId[]): Promise<XviFcBankAccountDocument[]> {
     return this.bankAccountModel
       .find({
         currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_STATE,
         submittedAt: { $ne: null },
+        ulb: { $nin: excludeUlbIds },
         $expr: {
           $gte: [new Date(), { $add: [{ $ifNull: ['$lastReminderSentAt', '$submittedAt'] }, INTERVAL_DAYS * DAY_MS] }],
         },
@@ -298,6 +303,7 @@ export class StateReviewDigestService {
       .find({
         state: new Types.ObjectId(stateId),
         role: Role.STATE,
+        adc: null, // State DMA users only — ADC users get no State emails
         xviFcSubrole: { $in: ['admin', 'reviewer', 'viewer'] },
         isActive: true,
         isDeleted: false,

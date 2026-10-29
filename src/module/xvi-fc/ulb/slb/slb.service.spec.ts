@@ -5,6 +5,7 @@ import { Types } from 'mongoose';
 import { SlbService } from './slb.service';
 import { SlbForm } from 'src/schemas/xvi-fc/ulb/slb-form.schema';
 import { Ulb } from 'src/schemas/ulb.schema';
+import { Adc } from 'src/schemas/adc.schema';
 import { Year } from 'src/schemas/year.schema';
 import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-form-validation/dynamic-form-validation.service';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
@@ -162,6 +163,7 @@ describe('SlbService', () => {
         SlbService,
         { provide: getModelToken(SlbForm.name), useValue: formModel },
         { provide: getModelToken(Ulb.name), useValue: ulbModel },
+        { provide: getModelToken(Adc.name), useValue: { find: jest.fn(), findById: jest.fn(), exists: jest.fn() } },
         { provide: DynamicFormValidationService, useValue: validator },
         { provide: FileTokenService, useValue: { signFileUrl: jest.fn((u: string) => `signed::${u}`) } },
         { provide: SlbFormJsonConfigService, useValue: slbFormJsonConfig },
@@ -222,6 +224,18 @@ describe('SlbService', () => {
       await expect(
         service.assertCanReadSlb(mohuaUser([Permission.VIEW_STATUS_REPORTS]), ulbOid.toString()),
       ).rejects.toThrow(ForbiddenException);
+    });
+
+    it("lets an ADC user read only their own ADC's ULB, while the State can read any ULB of its state", async () => {
+      const adcOid = new Types.ObjectId();
+      const adcReviewer = { ...stateUser(stateOid), adc: adcOid.toString() } as AuthUser;
+
+      ulbModel.findById.mockReturnValue(q({ _id: ulbOid, state: stateOid, adc: adcOid }));
+      await expect(service.assertCanReadSlb(adcReviewer, ulbOid.toString())).resolves.toBeUndefined();
+      await expect(service.assertCanReadSlb(stateUser(stateOid), ulbOid.toString())).resolves.toBeUndefined();
+
+      ulbModel.findById.mockReturnValue(q({ _id: ulbOid, state: stateOid, adc: new Types.ObjectId() }));
+      await expect(service.assertCanReadSlb(adcReviewer, ulbOid.toString())).rejects.toThrow(ForbiddenException);
     });
 
     it('rejects a STATE user reading a ULB outside their own state', async () => {
@@ -475,7 +489,8 @@ describe('SlbService', () => {
 
       expect(ulbModel.aggregate).toHaveBeenCalled();
       expect(result.data.total).toBe(1);
-      expect(result.data.rows).toEqual([row]);
+      // SLB has no approve/return step, so no row is reviewable whoever the caller is.
+      expect(result.data.rows).toEqual([{ ...row, adcName: null, canReview: false }]);
       expect(result.data.counts[FORM_STATUS.IN_PROGRESS]).toBe(1);
       expect(result.data.counts[FORM_STATUS.NOT_STARTED]).toBe(0);
     });
@@ -495,6 +510,16 @@ describe('SlbService', () => {
 
       const pipeline = ulbModel.aggregate.mock.calls[0][0];
       expect(pipeline[0].$match.state).toEqual(stateOid);
+    });
+
+    it('adds the ADC to the $match stage for an ADC user, and never for a State user', async () => {
+      const adcOid = new Types.ObjectId();
+      await service.listUlbSlbForms(baseDto, { ...stateReviewer(stateOid), adc: adcOid.toString() } as AuthUser);
+      expect(ulbModel.aggregate.mock.calls[0][0][0].$match.adc).toEqual(adcOid);
+
+      ulbModel.aggregate.mockClear();
+      await service.listUlbSlbForms(baseDto, stateReviewer(stateOid));
+      expect(ulbModel.aggregate.mock.calls[0][0][0].$match.adc).toBeUndefined();
     });
 
     it('allows ADMIN without a state filter unless one is passed', async () => {
@@ -547,6 +572,7 @@ describe('SlbService', () => {
           SlbService,
           { provide: getModelToken(SlbForm.name), useValue: formModel },
           { provide: getModelToken(Ulb.name), useValue: ulbModel },
+          { provide: getModelToken(Adc.name), useValue: { find: jest.fn(), findById: jest.fn(), exists: jest.fn() } },
           { provide: DynamicFormValidationService, useValue: validator },
           { provide: FileTokenService, useValue: { signFileUrl: jest.fn((u: string) => `signed::${u}`) } },
           { provide: SlbFormJsonConfigService, useValue: slbFormJsonConfig },
