@@ -36,6 +36,7 @@ describe('DurService', () => {
   let mockS3Service: { headObject: jest.Mock; getPdfBufferFromS3: jest.Mock; getPdfPageCountFromBuffer: jest.Mock };
   let mockDurQueue: { add: jest.Mock };
   let mockUlbEligibilityService: { assertUlbEligibleForGrantCycle: jest.Mock };
+  let mockAdcModel: { find: jest.Mock };
 
   const ulbId = '507f1f77bcf86cd799439001';
   const stateId = '507f1f77bcf86cd799439002';
@@ -92,6 +93,7 @@ describe('DurService', () => {
     };
     mockDurQueue = { add: jest.fn().mockResolvedValue({ id: 'job-1' }) };
     mockUlbEligibilityService = { assertUlbEligibleForGrantCycle: jest.fn().mockResolvedValue(undefined) };
+    mockAdcModel = { find: jest.fn().mockReturnValue(mockQuery([])) };
 
     service = new DurService(
       mockDurModel as any,
@@ -109,6 +111,7 @@ describe('DurService', () => {
       { signFileUrl: jest.fn().mockReturnValue('https://signed.example.com/file.pdf') } as any,
       mockYearAccessService as any,
       mockExemptionResolverService as any,
+      mockAdcModel as any,
     );
   });
 
