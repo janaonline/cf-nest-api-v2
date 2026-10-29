@@ -48,8 +48,8 @@ sequenceDiagram
    two admins, cannot queue the same file twice. If adding to Redis fails, the file is marked `failed` straight away so it
    is not stuck as queued.
 3. **Process.** The worker calls FastAPI `POST /afs-digitization/jobs` with the file's stored path as `s3_path`.
-   FastAPI reads the PDF from the CityFinance bucket itself; Nest never downloads or uploads the PDF. Classification is on;
-   the Gemini validation and arithmetic checks are off to save cost.
+   FastAPI reads the PDF from the CityFinance bucket itself; Nest never downloads or uploads the PDF. Classification, the Gemini
+   accuracy validation and the arithmetic validation are all on.
 4. **Wait.** FastAPI runs the job as a background task. The worker polls its status until it is `completed` or `failed`.
 5. **Save.** Nest reads the result and writes a summary to Mongo. The full extraction stays in FastAPI.
 

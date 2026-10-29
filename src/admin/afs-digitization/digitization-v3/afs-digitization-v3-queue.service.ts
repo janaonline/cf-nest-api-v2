@@ -237,10 +237,10 @@ export class AfsDigitizationV3QueueService {
     const yearLabel = YearIdToLabel[data.year];
     if (yearLabel) form.append('financial_year', yearLabel);
     if (data.ulbName) form.append('ulb_name', data.ulbName);
-    // Keep the classification; skip the validation and arithmetic cross-checks to save Gemini cost.
+    // Run classification plus the Gemini accuracy (cross-check) and arithmetic validations.
     form.append('enable_document_classification', 'true');
-    form.append('enable_validation', 'false');
-    form.append('enable_arithmetic_validation', 'false');
+    form.append('enable_validation', 'true');
+    form.append('enable_arithmetic_validation', 'true');
 
     const created = await this.request<FastApiJobCreated>(() =>
       firstValueFrom(
