@@ -98,7 +98,7 @@ export class ClaimLetterSubmitService {
       throw new BadRequestException('A signed claim letter file must be uploaded before submitting.');
     }
     await this.letterDetailsService.assertComplete(
-      { year: parent.year, letterDetails: parent.letterDetails },
+      { state: parent.state, year: parent.year, letterDetails: parent.letterDetails },
       'submitting',
     );
     await this.activeBatchService.assertActive(parent);

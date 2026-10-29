@@ -62,10 +62,21 @@ export interface ClaimEligibilitySource {
 
 export type UlbEligibilityBucket = 'ELIGIBLE' | 'INELIGIBLE' | 'EXEMPTED';
 
+/** How an EXEMPTED result came about; claim snapshots record it. */
+export const CLAIM_EXEMPTION_KINDS = [
+  'DISCRETIONARY_ULB',
+  'DISCRETIONARY_STATE',
+  'AUTO_NEW_ULB_NO_DOCUMENT',
+  'AUTO_NEW_ULB_STUB',
+] as const;
+export type ClaimExemptionKind = (typeof CLAIM_EXEMPTION_KINDS)[number];
+
 export interface UlbEligibilityTally {
   eligible: number;
   ineligible: number;
   exempted: number;
+  /** Of `exempted`, those resting on a discretionary request still under MoHUA review. */
+  exemptedUnderReview: number;
   total: number;
 }
 
@@ -82,6 +93,22 @@ export interface RowEligibilityEvidence {
   rowValue: RowFieldValue;
   /** Whether the row cleared `rowAcceptedFormStatuses`; null when there is no row or no such check. */
   rowAccepted: boolean | null;
+  /** The discretionary request (id, status 5 under review / 7 approved) an EXEMPTED bucket rests
+   *  on; null otherwise. */
+  exemptionId: string | null;
+  exemptionStatus: number | null;
+  exemptionKind: ClaimExemptionKind | null;
+}
+
+/** One ULB's evidence for a ULB-owned form source (SLB, Annual Accounts, PFMS, DUR), from the same
+ *  bulk query as its bucket, so claim assembly can freeze it without re-querying. */
+export interface FormEligibilityEvidence {
+  bucket: UlbEligibilityBucket;
+  formDocumentId: string | null;
+  statusAtEvaluation: FormStatusType | null;
+  exemptionId: string | null;
+  exemptionStatus: number | null;
+  exemptionKind: ClaimExemptionKind | null;
 }
 
 export type RowFieldValue = string | number | boolean | null;
@@ -226,8 +253,8 @@ export interface EligibilityEvaluationResult {
   ownerLevel: ClaimEligibilityOwnerLevel;
   evaluationLevel: ClaimEligibilityEvaluationLevel;
 
-  // Nullable (not optional): null represents the legitimate "source form document doesn't exist
-  // yet" case, only ever seen in a FAILED result — never frozen into a claim snapshot.
+  // Nullable (not optional): null when the source form document doesn't exist yet. That is a
+  // FAILED result, or EXEMPTED by an Entire State exemption (frozen into a snapshot without a document).
   formDocumentId: string | null;
   rowDocumentId?: string | null;
 
@@ -238,6 +265,9 @@ export interface EligibilityEvaluationResult {
 
   result: ClaimEligibilityResult;
   exemptionId?: string | null;
+  /** The discretionary request status (5 under review, 7 approved) behind an EXEMPTED result. */
+  exemptionStatus?: number | null;
+  exemptionKind?: ClaimExemptionKind | null;
   reasonCode: string;
 
   evidence: ClaimEligibilityEvidence;
@@ -260,16 +290,20 @@ export interface ClaimEligibilitySourceSnapshot {
   ruleVersion: number;
   formType: string;
 
-  formDocumentId: string;
+  /** Null only for an EXEMPTED source with no document (e.g. an Entire State SFC exemption). */
+  formDocumentId: string | null;
   rowDocumentId?: string | null;
 
-  statusAtEvaluation: FormStatusType;
+  statusAtEvaluation: FormStatusType | null;
   rowStatusAtEvaluation?: FormStatusType | null;
   revision?: number | null;
   datasetVersion?: number | null;
 
   result: ClaimEligibilitySnapshotResult;
   exemptionId?: string | null;
+  /** The discretionary request status relied on (5 under review, 7 approved); null otherwise. */
+  exemptionStatusAtEvaluation?: number | null;
+  exemptionKind?: ClaimExemptionKind | null;
   reasonCode: string;
 
   evidence: ClaimEligibilityEvidence;

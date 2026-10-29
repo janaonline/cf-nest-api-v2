@@ -182,7 +182,7 @@ describe('ClaimLetterSubmitService', () => {
       expect(filter['isAbandoned']).toBe(false);
       expect(filter['letterDetailsUpdatedAt']).toBeNull();
       expect(letterDetailsService.assertComplete).toHaveBeenCalledWith(
-        { year: yearId, letterDetails: undefined },
+        { state: stateId, year: yearId, letterDetails: undefined },
         'submitting',
       );
     });

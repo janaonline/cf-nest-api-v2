@@ -6,6 +6,7 @@ import { Types } from 'mongoose';
 import { RedisService } from 'src/core/services/redis/redis.service';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
+import { ExemptionResolverService } from 'src/module/xvi-fc/common/services/exemption-resolver.service';
 import { ExpectedUlbSetService } from 'src/module/xvi-fc/common/services/expected-ulb-set.service';
 import { ClaimLetterBatch } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
 import { ClaimLetterBatchUlb } from 'src/schemas/xvi-fc/state/claim-letter-batch-ulb.schema';
@@ -62,6 +63,7 @@ describe('ClaimLetterDocumentService', () => {
   let service: ClaimLetterDocumentService;
   let eligibility: { resolveUlbLevelEligibility: jest.Mock; resolveDevolutionAllocations: jest.Mock };
   let redis: { get: jest.Mock; set: jest.Mock };
+  let exemptionResolver: { resolveDiscretionary: jest.Mock };
   let batchModel: { findOne: jest.Mock };
   let sfcModel: { findOne: jest.Mock };
   let activeBatch: { assertActive: jest.Mock };
@@ -72,7 +74,7 @@ describe('ClaimLetterDocumentService', () => {
     letterColumnLabel: string,
     evaluationLevel: 'FORM' | 'FORM_AND_ROW',
     buckets: [string, string][],
-    extra: { rowEvidence?: [string, Record<string, unknown>][]; approved?: string[] } = {},
+    extra: { rowEvidence?: [string, Record<string, unknown>][]; exemptions?: [string, number][] } = {},
   ) {
     return {
       formId,
@@ -83,7 +85,7 @@ describe('ClaimLetterDocumentService', () => {
       evaluationLevel,
       buckets: new Map(buckets),
       rowEvidence: new Map(extra.rowEvidence ?? []),
-      approvedExemptionUlbIds: new Set(extra.approved ?? []),
+      discretionaryExemptions: new Map(extra.exemptions ?? []),
     };
   }
 
@@ -94,6 +96,7 @@ describe('ClaimLetterDocumentService', () => {
     datasetVersion: 1,
     rowValue,
     rowAccepted,
+    exemptionStatus: null,
   });
 
   beforeEach(async () => {
@@ -117,6 +120,7 @@ describe('ClaimLetterDocumentService', () => {
     batchModel = { findOne: jest.fn(() => q(parent)) };
     sfcModel = { findOne: jest.fn(() => q({ data: { whichAwardPeriod: '6th SFC', awardPeriod: '2026-2031' } })) };
     redis = { get: jest.fn().mockResolvedValue(null), set: jest.fn().mockResolvedValue(undefined) };
+    exemptionResolver = { resolveDiscretionary: jest.fn().mockResolvedValue(null) };
     activeBatch = { assertActive: jest.fn().mockResolvedValue(undefined) };
     eligibility = {
       resolveUlbLevelEligibility: jest.fn().mockResolvedValue({
@@ -157,7 +161,7 @@ describe('ClaimLetterDocumentService', () => {
               [ulbC, 'ELIGIBLE'],
               [ulbD, 'ELIGIBLE'],
             ],
-            { approved: [ulbB] },
+            { exemptions: [[ulbB, 5]] },
           ),
           criterion(5, 'SLB', '28 SLB published', 'FORM', [
             [ulbA, 'ELIGIBLE'],
@@ -176,7 +180,7 @@ describe('ClaimLetterDocumentService', () => {
               [ulbC, 'INELIGIBLE'],
               [ulbD, 'ELIGIBLE'],
             ],
-            { approved: [ulbB] },
+            { exemptions: [[ulbB, 7]] },
           ),
         ],
       }),
@@ -208,6 +212,7 @@ describe('ClaimLetterDocumentService', () => {
           useValue: { loadFormConfig: jest.fn().mockResolvedValue({ letterQuestions }) },
         },
         { provide: RedisService, useValue: redis },
+        { provide: ExemptionResolverService, useValue: exemptionResolver },
         { provide: ClaimLetterActiveBatchService, useValue: activeBatch },
         { provide: ConfigService, useValue: { get: () => 'test' } },
         { provide: getModelToken(ClaimLetterBatch.name), useValue: batchModel },
@@ -331,6 +336,35 @@ describe('ClaimLetterDocumentService', () => {
       );
     });
 
+    it('row B prints the Entire State SFC exemption, with no SFC details or ATR date, while it counts', async () => {
+      const entry = (currentFormStatus: number) => ({
+        requestId: new Types.ObjectId(),
+        currentFormStatus,
+        decidedAt: null,
+        mohuaRemarks: null,
+      });
+      exemptionResolver.resolveDiscretionary.mockResolvedValue(entry(5));
+      const underReview = (await service.getDocument(claimLetterId, stateUser)).data!.letter.compliance[1];
+      expect(underReview.status.map(text)).toEqual([
+        'State has requested exemption from this condition; the request is under MoHUA review.',
+      ]);
+      expect(underReview.status[0].runs.some((r) => r.field || r.placeholder)).toBe(false);
+      expect(exemptionResolver.resolveDiscretionary).toHaveBeenCalledWith(
+        null,
+        expect.any(Types.ObjectId),
+        22,
+        expect.any(Types.ObjectId),
+      );
+
+      exemptionResolver.resolveDiscretionary.mockResolvedValue(entry(7));
+      const approved = (await service.getDocument(claimLetterId, stateUser)).data!.letter.compliance[1];
+      expect(approved.status.map(text)).toEqual(['State has been exempted from this condition by MoHUA.']);
+
+      exemptionResolver.resolveDiscretionary.mockResolvedValue(entry(6));
+      const rejected = (await service.getDocument(claimLetterId, stateUser)).data!.letter.compliance[1];
+      expect(text(rejected.status[0])).toMatch(/^State has constituted its 6th SFC/);
+    });
+
     it('row B shows placeholders when the SFC form has no values', async () => {
       sfcModel.findOne.mockReturnValue(q(null));
       const { data } = await service.getDocument(claimLetterId, stateUser);
@@ -394,7 +428,7 @@ describe('ClaimLetterDocumentService', () => {
 
       expect(eligible.data!.map((r) => r.cells)).toEqual([
         ['1', 'ULB A', '6th Schedule', 'Yes', 'Yes', '3.25', '617.28', '617.28'],
-        ['2', 'ULB B', 'Constituted', 'Exemption requested', 'Yes', 'Nil (Exemption requested)', '22.84', '22.84'],
+        ['2', 'ULB B', 'Constituted', 'Exemption requested', 'Yes', 'Nil (Exempted)', '22.84', '22.84'],
       ]);
       expect(ineligible.data!.map((r) => r.cells)).toEqual([
         ['1', 'ULB C', 'Constituted (pending review)', 'Yes', 'No', '18.50', '-', '-'],

@@ -6,7 +6,9 @@ import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { RedisService } from 'src/core/services/redis/redis.service';
 import { xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
 import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
+import { ExemptionResolverService } from 'src/module/xvi-fc/common/services/exemption-resolver.service';
 import { ExpectedUlbSetService } from 'src/module/xvi-fc/common/services/expected-ulb-set.service';
+import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import type { FieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
 import { assertStateAccess } from 'src/module/xvi-fc/common/utils/xvi-fc-state-access.util';
 import {
@@ -46,6 +48,7 @@ import {
   type ClaimLetterDetailKey,
 } from '../../constants/claim-letter.constants';
 import { buildClaimLetterRefNo, sumAmountsExactly } from '../../helpers/claim-letter-financial.helpers';
+import { resolveSfcExemptionStatus } from '../../helpers/claim-letter-sfc-exemption.helpers';
 import {
   b,
   buildAnnexureCell,
@@ -121,6 +124,9 @@ const CHUNK_TTL_GRACE_SECONDS = 30;
 interface SfcLetterValues {
   whichAwardPeriod: string | null;
   awardPeriod: string | null;
+  /** The Entire State SFC exemption when it counts (5 under MoHUA review, 7 approved); Row B then
+   *  prints it instead of the SFC details. */
+  exemptionStatus: number | null;
 }
 
 const SFC_HINT = 'Comes from the SFC form';
@@ -147,6 +153,7 @@ export class ClaimLetterDocumentService {
     private readonly formJsonConfigService: ClaimLetterFormJsonService,
     private readonly activeBatchService: ClaimLetterActiveBatchService,
     private readonly redis: RedisService,
+    private readonly exemptionResolver: ExemptionResolverService,
     config: ConfigService,
     @InjectModel(ClaimLetterBatch.name) private readonly batchModel: Model<ClaimLetterBatchDocument>,
     @InjectModel(ClaimLetterBatchUlb.name) private readonly batchUlbModel: Model<ClaimLetterBatchUlbDocument>,
@@ -473,17 +480,22 @@ export class ClaimLetterDocumentService {
   // ─── Light part: letter details, SFC, fixed text ──────────────────────────
 
   private async loadLightInputs(parent: ClaimLetterDocumentParent) {
-    const [sfc, formConfig] = await Promise.all([
+    const [sfc, formConfig, sfcExemptionStatus] = await Promise.all([
       this.sfcModel
         .findOne({ state: parent.state, year: parent.year, formType: SFC_STATUS_FORM_TYPE, isDeleted: { $ne: true } })
         .select('data.whichAwardPeriod data.awardPeriod')
         .lean<{ data?: { whichAwardPeriod?: unknown; awardPeriod?: unknown } } | null>()
         .exec(),
       this.formJsonConfigService.loadFormConfig(String(parent.year)),
+      resolveSfcExemptionStatus(this.exemptionResolver, parent.state, parent.year),
     ]);
     const text = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : null);
     return {
-      sfc: { whichAwardPeriod: text(sfc?.data?.whichAwardPeriod), awardPeriod: text(sfc?.data?.awardPeriod) },
+      sfc: {
+        whichAwardPeriod: text(sfc?.data?.whichAwardPeriod),
+        awardPeriod: text(sfc?.data?.awardPeriod),
+        exemptionStatus: sfcExemptionStatus,
+      },
       questions: new Map(formConfig.letterQuestions.map((q) => [q.key, q])),
     };
   }
@@ -550,15 +562,23 @@ export class ClaimLetterDocumentService {
         ]),
       ],
       status: [
-        para([
-          t('State has constituted its '),
-          sfc.whichAwardPeriod ? t(sfc.whichAwardPeriod) : { ...ph('<nth SFC>'), hint: SFC_HINT },
-          t(' and submitted the ATR on its recommendations vide dt. '),
-          slot('sfcAtrDate'),
-          t('. The recommendations of SFC are applicable till FY '),
-          sfc.awardPeriod ? t(sfc.awardPeriod) : { ...ph('<award period>'), hint: SFC_HINT },
-          t('.'),
-        ]),
+        sfc.exemptionStatus === null
+          ? para([
+              t('State has constituted its '),
+              sfc.whichAwardPeriod ? t(sfc.whichAwardPeriod) : { ...ph('<nth SFC>'), hint: SFC_HINT },
+              t(' and submitted the ATR on its recommendations vide dt. '),
+              slot('sfcAtrDate'),
+              t('. The recommendations of SFC are applicable till FY '),
+              sfc.awardPeriod ? t(sfc.awardPeriod) : { ...ph('<award period>'), hint: SFC_HINT },
+              t('.'),
+            ])
+          : para([
+              t(
+                sfc.exemptionStatus === FORM_STATUS.UNDER_REVIEW_BY_MOHUA
+                  ? 'State has requested exemption from this condition; the request is under MoHUA review.'
+                  : 'State has been exempted from this condition by MoHUA.',
+              ),
+            ]),
       ],
     };
 

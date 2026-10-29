@@ -104,7 +104,8 @@ export class ClaimLetterBatchUlb {
   @Prop({ type: [ClaimLetterEligibilitySourceSnapshotSchema], default: [] })
   eligibilitySources!: ClaimLetterEligibilitySourceSnapshot[];
 
-  // Always [] in V1 — eligibility exemptions are a separate parked feature (plan Context).
+  /** The ULB's own discretionary exemption requests (`xvifc_eligibility_exemptions`) its
+   *  eligibilitySources relied on. */
   @Prop({ type: [MongooseSchema.Types.ObjectId], default: [] })
   appliedExemptionIds!: Types.ObjectId[];
 
