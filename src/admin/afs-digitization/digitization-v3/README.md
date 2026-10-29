@@ -125,8 +125,17 @@ of joining every ULB to `afs_xl_files`. Only a few small `ulbFile` fields are re
 ### `POST /enqueue-by-filter`
 
 Same body as `/list`. Queues every match. Send `ulbId` to queue only specific rows (this is how **Queue Selected** works).
-Returns `{ matched, queued, skippedNoPdf, skippedAlreadyQueued, skippedAlreadyDigitized, failedToQueue }`.
+Returns `{ matched, queued, skippedNoPdf, skippedDuplicate, skippedAlreadyQueued, skippedAlreadyDigitized, failedToQueue }`.
 Capped at 10,000 files per call (`MAX_ENQUEUE_BATCH`).
+
+**Duplicates.** A slot whose PDF is the same file as an earlier slot of the same ULB, year and audit type is flagged on
+`annualaccountdatas` (`<auditType>.provisional_data.<slot>.pdf.isDuplicate` and `.duplicateOfDocType`) by
+`POST /afs-digitization/annual-accounts/duplicates/backfill` (`limit`, `onlyMissing`; by default only PDFs not
+checked yet, `onlyMissing=false` recomputes all; run the PDF-metadata backfill first). Same file = same url, or same
+`fileSizeBytes` and `pageCount`; a slot without that metadata never matches. Slot order is `bal_sheet`,
+`bal_sheet_schedules`, `inc_exp`, `inc_exp_schedules`, `cash_flow`; the first is the original. Duplicates are skipped here
+(`skippedDuplicate`), and in `/list` a duplicate row follows its original's status, Excel and segments, carries
+`isDuplicate` and `duplicateOfDocType`, and is counted in `metrics.duplicate`.
 
 ### `GET /jobs/:afsDigitizationJobId/log`
 
