@@ -74,7 +74,19 @@ import { getEffectivePermissions } from '../../../auth/permissions.map';
 import { ANNUAL_ACCOUNT_PROCESSING_QUEUE } from '../../../../core/constants/queues';
 import { canUlbEditForm, canUlbSubmitForm } from '../../common/utils/xvi-fc-form-status-access.util';
 import { escapeRegex } from 'src/common/utils/regex.util';
-import { resolveStateScopeFilter } from 'src/module/xvi-fc/common/utils/xvi-fc-scope-filter.util';
+import {
+  resolveAdcScopeFilter,
+  resolveStateScopeFilter,
+} from 'src/module/xvi-fc/common/utils/xvi-fc-scope-filter.util';
+import {
+  canDecideUlb,
+  canViewUlb,
+  hasUlbDecideAccess,
+  loadUlbOwnership,
+  type UlbOwnership,
+} from 'src/module/xvi-fc/common/utils/xvi-fc-state-access.util';
+import { attachAdcOwnership } from 'src/module/xvi-fc/common/utils/xvi-fc-adc-rows.util';
+import { Adc, AdcDocument } from 'src/schemas/adc.schema';
 import { isMohuaViewScope } from 'src/module/xvi-fc/common/utils/xvi-fc-scope.util';
 import {
   buildDecisionRecord,
@@ -144,6 +156,8 @@ interface UlbSubmissionRow {
   enteredReviewAt: Date | null;
   annualAccountId: Types.ObjectId | null;
   hasManualReviewRequests: boolean;
+  /** The ULB's owning ADC (null = the State DMA reviews it). */
+  adcId: Types.ObjectId | null;
 }
 
 interface UlbSubmissionsFacetResult {
@@ -177,6 +191,9 @@ export class AnnualAccountsService implements OnModuleInit {
 
     @InjectModel(XviFcDocumentActionGate.name)
     private readonly actionGateModel: Model<DocumentActionGateDocument>,
+
+    @InjectModel(Adc.name)
+    private readonly adcModel: Model<AdcDocument>,
 
     private readonly s3Service: S3Service,
 
@@ -785,9 +802,11 @@ export class AnnualAccountsService implements OnModuleInit {
     }
 
     const stateId = resolveStateScopeFilter(user, dto.stateId);
+    const adcId = resolveAdcScopeFilter(user);
 
     const matchStage: Record<string, unknown> = { isActive: true };
     if (stateId) matchStage.state = stateId;
+    if (adcId) matchStage.adc = adcId;
     if (dto.search?.trim()) {
       const regex = new RegExp(escapeRegex(dto.search.trim()), 'i');
       matchStage.$or = [{ name: regex }, { code: regex }];
@@ -989,6 +1008,7 @@ export class AnnualAccountsService implements OnModuleInit {
               enteredReviewAt: 1,
               annualAccountId: { $ifNull: ['$anchorAccount._id', null] },
               hasManualReviewRequests: 1,
+              adcId: { $ifNull: ['$adc', null] },
             },
           },
         ],
@@ -1000,7 +1020,7 @@ export class AnnualAccountsService implements OnModuleInit {
     });
 
     const [result] = await this.ulbModel.aggregate<UlbSubmissionsFacetResult>(pipeline).exec();
-    const rows = result?.data ?? [];
+    const rows = await attachAdcOwnership(result?.data ?? [], user, this.adcModel);
     const total = result?.totalCount?.[0]?.count ?? 0;
 
     // EXEMPTED_ACKNOWLEDGED itself never appears as a `formStatus` bucket anymore - the overlay
@@ -1059,9 +1079,10 @@ export class AnnualAccountsService implements OnModuleInit {
 
   async getProcessingStatus(id: string, section: AnnualAccountSectionKey, user: AuthUser) {
     const { anchor, sectionDoc } = await this.resolveSectionDocument(id, section);
-    await this.validateViewAccess(anchor, user);
+    const owner = await this.validateViewAccess(anchor, user);
 
-    const hasStateAccess = await this.hasStateAccessToUlb(user, anchor.ulb);
+    // Drives canReview/canApprove/canUndoApproval — the owner (ADC, or the State for a ULB with no ADC) only.
+    const hasStateAccess = owner ? canDecideUlb(user, owner) : await this.hasDecideAccessToUlb(user, anchor.ulb);
 
     // Batch-fetch startedAt for every currently-PROCESSING document in this section, so a
     // long-stuck upload (e.g. the worker died mid-job on a server restart) can be flagged stale
@@ -1639,7 +1660,7 @@ export class AnnualAccountsService implements OnModuleInit {
     user: AuthUser,
     sectionStatus: AnnualAccountFormStatus,
   ): Promise<void> {
-    const hasAccess = await this.hasStateAccessToUlb(user, doc.ulb);
+    const hasAccess = await this.hasDecideAccessToUlb(user, doc.ulb);
     if (!hasAccess) {
       throw new ForbiddenException('Access denied');
     }
@@ -1731,7 +1752,7 @@ export class AnnualAccountsService implements OnModuleInit {
    * hold APPROVE_ULB_SUBMISSIONS, and the section must currently be under review.
    */
   private async assertCanDecide(doc: any, user: AuthUser, sectionStatus: AnnualAccountFormStatus): Promise<void> {
-    const hasAccess = await this.hasStateAccessToUlb(user, doc.ulb);
+    const hasAccess = await this.hasDecideAccessToUlb(user, doc.ulb);
     if (!hasAccess) {
       throw new ForbiddenException('Access denied');
     }
@@ -2143,33 +2164,29 @@ export class AnnualAccountsService implements OnModuleInit {
    * ULB users may only view their own ULB's account. STATE users may only view ULBs
    * belonging to their own state. ADMIN and MOHUA are unrestricted, matching prior behavior.
    *
-   * Not private — also called by AnnualAccountManualReviewService.
+   * Not private — also called by AnnualAccountManualReviewService. Returns the ULB ownership it loaded (STATE
+   * scope only) so a caller can reuse it instead of re-querying.
    */
-  async validateViewAccess(doc: any, user: AuthUser): Promise<void> {
+  async validateViewAccess(doc: any, user: AuthUser): Promise<UlbOwnership | null> {
     if (user.scope === Scope.ULB) {
       if (doc.ulb?.toString() !== user.ulb?.toString()) {
         throw new ForbiddenException('Access denied');
       }
-      return;
+      return null;
     }
     if (user.scope === Scope.STATE) {
-      const hasAccess = await this.hasStateAccessToUlb(user, doc.ulb);
-      if (!hasAccess) {
+      const ulb = await loadUlbOwnership(this.ulbModel, doc.ulb);
+      if (!ulb || !canViewUlb(user, ulb)) {
         throw new ForbiddenException('Access denied');
       }
+      return ulb;
     }
+    return null;
   }
 
-  /** Returns true when the given STATE (or ADMIN) user may act on the ULB's account. */
-  private async hasStateAccessToUlb(user: AuthUser, ulbId: unknown): Promise<boolean> {
-    if (user.scope === Scope.ADMIN) return true;
-    if (user.scope !== Scope.STATE) return false;
-    const ulb = await this.ulbModel
-      .findById(ulbId as Types.ObjectId)
-      .select('state')
-      .lean()
-      .exec();
-    return !!ulb && ulb.state?.toString() === user.state?.toString();
+  /** The owner decides (approve/return/undo): an ADC user for their own ADC's ULBs, the State for ULBs with no ADC. */
+  private hasDecideAccessToUlb(user: AuthUser, ulbId: unknown): Promise<boolean> {
+    return hasUlbDecideAccess(user, this.ulbModel, ulbId);
   }
 
   /**

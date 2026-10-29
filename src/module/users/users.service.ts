@@ -22,6 +22,7 @@ import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { Permission, Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { Role } from 'src/module/auth/enum/role.enum';
 import {
+  XVIFC_ADC_PERMISSIONS,
   XVIFC_DOE_PERMISSIONS,
   MOHUA_PMU_PERMISSIONS,
   getEffectivePermissions,
@@ -38,7 +39,9 @@ import { UpdateXviFcSubroleDto } from './dto/update-xvi-fc-subrole.dto';
 import { TransferSubmitterDto } from './dto/transfer-submitter.dto';
 import { CreateUserDto, type AdminSubRole } from './dto/create-user.dto';
 import { AdminUpdateUserDto } from './dto/admin-update-user.dto';
-import { objectIdToString } from 'src/common/utils/objectid.util';
+import { objectIdToString, toObjectIdString } from 'src/common/utils/objectid.util';
+import { Adc, AdcDocument } from 'src/schemas/adc.schema';
+import { isAdcUser } from 'src/module/auth/roles-xvi-fc.helper';
 import { EmailDomainValidationService } from 'src/core/email-domain-validation/email-domain-validation.service';
 import type { XviFcValidationErrorMap } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 
@@ -206,6 +209,17 @@ const PMU_MATRIX = buildPermissionMatrix(MOHUA_PMU_PERMISSIONS, [
   { label: 'Manage team', permissionKey: Permission.MANAGE_USERS },
 ]);
 
+// The ADC admin's team management is an `xviFcSubrole === 'admin'` check in the service, not a permission
+// (an ADC user must never hold MANAGE_USERS), so that row is display-only.
+const ADC_MATRIX: PermissionMatrixRow[] = [
+  ...buildPermissionMatrix(XVIFC_ADC_PERMISSIONS, [
+    { label: 'View status and reports', permissionKey: Permission.VIEW_STATUS_REPORTS },
+    { label: 'View ULB form submissions', permissionKey: Permission.REVIEW_ULB_SUBMISSIONS },
+    { label: 'Approve / return ULB submissions', permissionKey: Permission.APPROVE_ULB_SUBMISSIONS },
+  ]),
+  { label: 'Manage ADC team', permissionKey: Permission.MANAGE_USERS, admin: true, reviewer: false, viewer: false },
+];
+
 const DOE_MATRIX = buildPermissionMatrix(XVIFC_DOE_PERMISSIONS, [
   { label: 'View status and reports', permissionKey: Permission.VIEW_STATUS_REPORTS },
   { label: 'View dashboards', permissionKey: Permission.VIEW_DASHBOARDS },
@@ -260,6 +274,7 @@ export class UsersService {
     @InjectModel(User.name) private userModel: Model<User>,
     @InjectModel(State.name) private stateModel: Model<StateDocument>,
     @InjectModel(Ulb.name) private ulbModel: Model<UlbDocument>,
+    @InjectModel(Adc.name) private adcModel: Model<AdcDocument>,
     private readonly redisService: RedisService,
     private readonly emailQueueService: EmailQueueService,
     private readonly configService: ConfigService,
@@ -387,40 +402,70 @@ export class UsersService {
       );
     }
 
-    const { stateObjectId, ulbObjectId, xviFcSubrole } = await this.resolveRoleScoping(dto.role, dto.subRole, {
+    const scoping = await this.resolveRoleScoping(dto.role, dto.subRole, {
       stateId: dto.stateId,
       ulbId: dto.ulbId,
     });
+    const { stateObjectId, ulbObjectId } = scoping;
+    let xviFcSubrole = scoping.xviFcSubrole;
+
+    // ADC user: a STATE-role user scoped to one Autonomous District Council.
+    let adcObjectId: Types.ObjectId | null = null;
+    if (dto.adcId) {
+      if (dto.role !== Role.STATE) throw new BadRequestException('adcId is only applicable for the STATE role');
+      if (!dto.subRole) throw new BadRequestException('subRole is required for an ADC user');
+      const adc = await this.adcModel.findById(dto.adcId).select('state isActive').lean().exec();
+      if (!adc) throw new NotFoundException('ADC not found');
+      if (!adc.isActive) throw new BadRequestException('This ADC is not active');
+      if (toObjectIdString(adc.state) !== dto.stateId) {
+        throw new BadRequestException('The ADC does not belong to the given state');
+      }
+      adcObjectId = adc._id;
+
+      // Exactly one admin per ADC: the first user becomes it automatically; a second admin is refused.
+      const hasAdmin = await this.userModel.exists({ ...this.activeAdcMemberFilter(adc._id), xviFcSubrole: 'admin' });
+      if (!hasAdmin) {
+        xviFcSubrole = 'admin';
+      } else if (xviFcSubrole === 'admin') {
+        throw new HttpException(
+          { code: 'ADC_ADMIN_EXISTS', message: 'This ADC already has an admin. Use a transfer to change it.' },
+          HttpStatus.CONFLICT,
+        );
+      }
+    }
 
     const placeholderPassword = this.generatePlaceholderPassword();
     const hashedPassword = await bcrypt.hash(placeholderPassword, 12);
 
-    const created = await this.userModel.create({
-      name: dto.name,
-      email: dto.email,
-      mobile: dto.mobile,
-      designation: dto.designation,
-      address: dto.address ?? '',
-      departmentName: dto.departmentName ?? '',
-      departmentEmail: dto.departmentEmail ?? '',
-      departmentContactNumber: dto.departmentContactNumber ?? '',
-      role: dto.role,
-      xviFcSubrole,
-      state: stateObjectId,
-      ulb: ulbObjectId,
-      isNodalOfficer: dto.isNodalOfficer ?? false,
-      createdBy: new Types.ObjectId(String(requester._id)),
-      status: 'APPROVED',
-      isXVIFCProfileVerified: false,
-      isEmailVerified: true,
-      isActive: true,
-      isDeleted: false,
-      isXviFcdeleted: false,
-      isLocked: false,
-      loginAttempts: 0,
-      password: hashedPassword,
-      isNewUser: true,
-    });
+    const created = await this.withAdcAdminGuard(() =>
+      this.userModel.create({
+        name: dto.name,
+        email: dto.email,
+        mobile: dto.mobile,
+        designation: dto.designation,
+        address: dto.address ?? '',
+        departmentName: dto.departmentName ?? '',
+        departmentEmail: dto.departmentEmail ?? '',
+        departmentContactNumber: dto.departmentContactNumber ?? '',
+        role: dto.role,
+        xviFcSubrole,
+        state: stateObjectId,
+        adc: adcObjectId,
+        ulb: ulbObjectId,
+        isNodalOfficer: dto.isNodalOfficer ?? false,
+        createdBy: new Types.ObjectId(String(requester._id)),
+        status: 'APPROVED',
+        isXVIFCProfileVerified: false,
+        isEmailVerified: true,
+        isActive: true,
+        isDeleted: false,
+        isXviFcdeleted: false,
+        isLocked: false,
+        loginAttempts: 0,
+        password: hashedPassword,
+        isNewUser: true,
+      }),
+    );
 
     return this.toAdminUserResponse(created);
   }
@@ -438,10 +483,36 @@ export class UsersService {
 
     const targetUser = await this.userModel
       .findOne({ _id: targetUserId, isDeleted: false })
-      .select('role state ulb xviFcSubrole email mobile')
+      .select('role state ulb xviFcSubrole email mobile adc')
       .lean()
       .exec();
     if (!targetUser) throw new NotFoundException('User not found');
+
+    // Echoing the current ADC (null for a normal user) is a no-op; only an actual change is refused.
+    if (dto.adcId !== undefined && toObjectIdString(dto.adcId) !== toObjectIdString(targetUser.adc)) {
+      throw new BadRequestException("A user's ADC cannot be changed. Remove the user and invite them again.");
+    }
+
+    // An ADC user's ADC (and so its state and role) is fixed once created — remove and re-invite to move them.
+    if (targetUser.adc) {
+      const stateChanges =
+        dto.stateId !== undefined && dto.stateId !== objectIdToString(targetUser.state as Types.ObjectId | null);
+      if ((dto.role !== undefined && dto.role !== targetUser.role) || stateChanges) {
+        throw new BadRequestException("An ADC user's role and state cannot be changed");
+      }
+      if (dto.subRole === 'ADMIN' && targetUser.xviFcSubrole !== 'admin') {
+        const adminExists = await this.userModel.exists({
+          ...this.activeAdcMemberFilter(targetUser.adc as Types.ObjectId),
+          xviFcSubrole: 'admin',
+        });
+        if (adminExists) {
+          throw new HttpException(
+            { code: 'ADC_ADMIN_EXISTS', message: 'This ADC already has an admin. Use a transfer to change it.' },
+            HttpStatus.CONFLICT,
+          );
+        }
+      }
+    }
 
     if (dto.email || dto.mobile) {
       const duplicate = await this.userModel
@@ -499,7 +570,9 @@ export class UsersService {
       $set.ulb = ulbObjectId;
     }
 
-    const updated = await this.userModel.findByIdAndUpdate(targetUserId, { $set }, { new: true }).lean().exec();
+    const updated = await this.withAdcAdminGuard(() =>
+      this.userModel.findByIdAndUpdate(targetUserId, { $set }, { new: true }).lean().exec(),
+    );
     if (!updated) throw new NotFoundException('User not found');
 
     return this.toAdminUserResponse(updated);
@@ -599,12 +672,34 @@ export class UsersService {
 
   async inviteStateMember(dto: InviteStateMemberDto, requester: AuthUser): Promise<StateMemberResponseDto> {
     if (!requester.state) throw new ForbiddenException('No state scope on this account');
+    // Only a State DMA admin (Submitter) invites State members — not an ADC user, and not a reviewer/viewer.
+    if (requester.scope !== Scope.STATE || isAdcUser(requester) || requester.xviFcSubrole !== 'admin') {
+      throw new ForbiddenException('Only the State admin can invite team members');
+    }
 
+    const stateId = new Types.ObjectId(String(requester.state));
+    const xviFcSubrole: 'reviewer' | 'viewer' = dto.subRole === 'EDITOR' ? 'reviewer' : 'viewer';
+    return this.inviteScopedMember(dto, requester, { stateId, adc: null, xviFcSubrole });
+  }
+
+  /**
+   * Shared invite/restore flow for a State DMA team member (`adc: null`) and an ADC team member (`adc` set):
+   * the only differences are the `adc` stamped on the user, the subrole (the caller works it out) and the
+   * invite email's wording.
+   */
+  private async inviteScopedMember(
+    dto: InviteStateMemberDto,
+    requester: AuthUser,
+    scope: {
+      stateId: Types.ObjectId;
+      adc: { _id: Types.ObjectId; name: string } | null;
+      xviFcSubrole: 'admin' | 'reviewer' | 'viewer';
+    },
+  ): Promise<StateMemberResponseDto> {
+    const { stateId, adc, xviFcSubrole } = scope;
     await this.assertInviteEmailIsDeliverable(dto.email);
 
     const action = dto.action ?? 'invite';
-    const stateId = new Types.ObjectId(String(requester.state));
-    const xviFcSubrole: 'reviewer' | 'viewer' = dto.subRole === 'EDITOR' ? 'reviewer' : 'viewer';
 
     // Guard: email belongs to a fully active XVI-FC member (not XVI-FC removed)
     const activeUser = await this.userModel
@@ -624,11 +719,12 @@ export class UsersService {
       // Email is never scrambled in the new flow, so we match directly on the email field.
       const removedUser = await this.userModel
         .findOne({ email: dto.email, isDeleted: true, isXviFcdeleted: true })
-        .select('name designation')
+        .select('name designation adc')
         .lean()
         .exec();
 
       if (removedUser) {
+        this.assertRemovedUserInSameAdcTeam(removedUser, adc);
         throw new HttpException(
           {
             code: 'EMAIL_XVIFC_REMOVED',
@@ -639,7 +735,7 @@ export class UsersService {
         );
       }
 
-      return this.createFreshStateMember(dto, stateId, xviFcSubrole, requester);
+      return this.createFreshStateMember(dto, scope, requester);
     }
 
     if (action === 'restore') {
@@ -650,39 +746,43 @@ export class UsersService {
 
       if (!toRestore) {
         // Already restored by another request — create fresh
-        return this.createFreshStateMember(dto, stateId, xviFcSubrole, requester);
+        return this.createFreshStateMember(dto, scope, requester);
       }
+      this.assertRemovedUserInSameAdcTeam(toRestore, adc);
 
       const placeholderPassword = this.generatePlaceholderPassword();
       const hashedPassword = await bcrypt.hash(placeholderPassword, 12);
 
-      const restored = await this.userModel
-        .findByIdAndUpdate(
-          toRestore._id,
-          {
-            $set: {
-              name: dto.name,
-              mobile: dto.mobile,
-              designation: dto.designation,
-              role: Role.STATE,
-              xviFcSubrole,
-              state: stateId,
-              isXviFcdeleted: false,
-              isDeleted: false,
-              createdBy: new Types.ObjectId(String(requester._id)),
-              isActive: true,
-              isXVIFCProfileVerified: false,
-              password: hashedPassword,
-              isNewUser: true,
-              refreshTokenHash: null,
-              loginAttempts: 0,
-              isLocked: false,
+      const restored = await this.withAdcAdminGuard(() =>
+        this.userModel
+          .findByIdAndUpdate(
+            toRestore._id,
+            {
+              $set: {
+                name: dto.name,
+                mobile: dto.mobile,
+                designation: dto.designation,
+                role: Role.STATE,
+                xviFcSubrole,
+                state: stateId,
+                adc: adc?._id ?? null,
+                isXviFcdeleted: false,
+                isDeleted: false,
+                createdBy: new Types.ObjectId(String(requester._id)),
+                isActive: true,
+                isXVIFCProfileVerified: false,
+                password: hashedPassword,
+                isNewUser: true,
+                refreshTokenHash: null,
+                loginAttempts: 0,
+                isLocked: false,
+              },
             },
-          },
-          { new: true },
-        )
-        .lean()
-        .exec();
+            { new: true },
+          )
+          .lean()
+          .exec(),
+      );
 
       if (!restored) throw new NotFoundException('User to restore could not be found');
 
@@ -701,7 +801,7 @@ export class UsersService {
         );
       }
 
-      await this.queueInviteEmail(dto, stateId, requester);
+      await this.queueInviteEmail(dto, scope);
       return this.toStateMemberDto(restored, dto);
     }
 
@@ -738,46 +838,74 @@ export class UsersService {
 
   private async createFreshStateMember(
     dto: InviteStateMemberDto,
-    stateId: Types.ObjectId,
-    xviFcSubrole: 'reviewer' | 'viewer',
+    scope: {
+      stateId: Types.ObjectId;
+      adc: { _id: Types.ObjectId; name: string } | null;
+      xviFcSubrole: 'admin' | 'reviewer' | 'viewer';
+    },
     requester: AuthUser,
   ): Promise<StateMemberResponseDto> {
+    const { stateId, adc, xviFcSubrole } = scope;
     const placeholderPassword = this.generatePlaceholderPassword();
     const hashedPassword = await bcrypt.hash(placeholderPassword, 12);
 
-    const created = await this.userModel.create({
-      name: dto.name,
-      email: dto.email,
-      mobile: dto.mobile,
-      designation: dto.designation,
-      role: Role.STATE,
-      xviFcSubrole,
-      state: stateId,
-      createdBy: new Types.ObjectId(String(requester._id)),
-      status: 'APPROVED',
-      isXVIFCProfileVerified: false,
-      isEmailVerified: true,
-      isActive: true,
-      isDeleted: false,
-      isLocked: false,
-      loginAttempts: 0,
-      password: hashedPassword,
-      isNewUser: true,
-      isRegistered: false,
-      isVerified2223: false,
-      isNodalOfficer: false,
-    });
+    const created = await this.withAdcAdminGuard(() =>
+      this.userModel.create({
+        name: dto.name,
+        email: dto.email,
+        mobile: dto.mobile,
+        designation: dto.designation,
+        role: Role.STATE,
+        xviFcSubrole,
+        state: stateId,
+        adc: adc?._id ?? null,
+        createdBy: new Types.ObjectId(String(requester._id)),
+        status: 'APPROVED',
+        isXVIFCProfileVerified: false,
+        isEmailVerified: true,
+        isActive: true,
+        isDeleted: false,
+        isLocked: false,
+        loginAttempts: 0,
+        password: hashedPassword,
+        isNewUser: true,
+        isRegistered: false,
+        isVerified2223: false,
+        isNodalOfficer: false,
+      }),
+    );
 
-    await this.queueInviteEmail(dto, stateId, requester);
+    await this.queueInviteEmail(dto, scope);
     return this.toStateMemberDto(created, dto);
+  }
+
+  /**
+   * Invite/restore never moves a removed user across an ADC boundary (ADC ↔ State team, or between ADCs): the
+   * restore would silently change their `adc`, and the invite conflict would reveal who they are to another team.
+   * Both teams being non-ADC (`adc` null on both) is the pre-existing State path and passes unchanged.
+   */
+  private assertRemovedUserInSameAdcTeam(removed: { adc?: unknown }, adc: { _id: Types.ObjectId } | null): void {
+    if (toObjectIdString(removed.adc) !== toObjectIdString(adc?._id)) {
+      throw new HttpException(
+        {
+          code: 'EMAIL_REMOVED_OTHER_TEAM',
+          message: 'This email belongs to a member removed from another team. Ask the platform admin to re-add them.',
+        },
+        HttpStatus.CONFLICT,
+      );
+    }
   }
 
   private async queueInviteEmail(
     dto: InviteStateMemberDto,
-    stateId: Types.ObjectId,
-    requester: AuthUser,
+    scope: {
+      stateId: Types.ObjectId;
+      adc: { _id: Types.ObjectId; name: string } | null;
+      xviFcSubrole: 'admin' | 'reviewer' | 'viewer';
+    },
   ): Promise<void> {
-    const stateDoc = await this.stateModel.findById(stateId).select('name').lean().exec();
+    const stateDoc = await this.stateModel.findById(scope.stateId).select('name').lean().exec();
+    const roleLabel = { admin: 'Admin', reviewer: 'Reviewer', viewer: 'Viewer' }[scope.xviFcSubrole];
     const { loginUrl, resetPasswordUrl } = buildPortalAuthUrls(this.configService);
     this.emailQueueService
       .addEmailJob({
@@ -788,9 +916,11 @@ export class UsersService {
           name: dto.name,
           email: dto.email,
           mobile: dto.mobile,
-          role: dto.subRole === 'EDITOR' ? 'Reviewer' : 'Viewer',
+          role: roleLabel,
           stateName: stateDoc?.name ?? 'your state',
-          invitedBy: 'State Administrator',
+          // Set only for an ADC invite: the template then words the email for the ADC team.
+          adcName: scope.adc?.name ?? null,
+          invitedBy: scope.adc ? 'ADC Administrator' : 'State Administrator',
           loginUrl,
           resetPasswordUrl,
         },
@@ -839,13 +969,17 @@ export class UsersService {
       throw new BadRequestException('Invalid user ID');
     }
 
+    // ADC users never hold or get permission overrides — their reach is fixed by XVIFC_ADC_PERMISSIONS.
+    if (isAdcUser(requester)) throw new ForbiddenException('ADC users cannot manage permission overrides');
+
     const targetUser = await this.userModel
       .findOne({ _id: targetUserId, isDeleted: false })
-      .select('role ulb state xviFcSubrole')
+      .select('role ulb state xviFcSubrole adc')
       .lean()
       .exec();
 
     if (!targetUser) throw new NotFoundException('User not found');
+    if (targetUser.adc) throw new BadRequestException('Permission overrides are not supported for ADC users');
 
     // @RequirePermissions(Permission.MANAGE_USERS) on the route only proves the requester holds
     // that permission somewhere — it says nothing about *whose* users they may manage. Without
@@ -890,16 +1024,43 @@ export class UsersService {
     };
   }
 
+  /**
+   * The caller must be the State DMA admin (Submitter) — not an ADC user, not a reviewer/viewer — and the target
+   * a plain State member (no ADC) of the caller's own state. Closes the previously unchecked
+   * `PATCH users/:id/sub-role` and `DELETE users/:id`.
+   */
+  private assertStateAdminOverStateMember(
+    requester: AuthUser,
+    target: { role?: unknown; state?: unknown; adc?: unknown },
+  ): void {
+    if (requester.scope !== Scope.STATE || isAdcUser(requester) || requester.xviFcSubrole !== 'admin') {
+      throw new ForbiddenException('Only the State admin can manage team members');
+    }
+    if ((target.role as string) !== UserRole.STATE || target.adc) {
+      throw new ForbiddenException('You can only manage State team members');
+    }
+    const requesterStateId = toObjectIdString(requester.state);
+    if (!requesterStateId || requesterStateId !== toObjectIdString(target.state)) {
+      throw new ForbiddenException('You can only manage members of your own state');
+    }
+  }
+
   async softDeleteStateUser(targetUserId: string, requester: AuthUser): Promise<{ message: string }> {
     if (!Types.ObjectId.isValid(targetUserId)) throw new BadRequestException('Invalid user ID');
 
     const targetUser = await this.userModel
       .findOne({ _id: targetUserId, isDeleted: false })
-      .select('role ulb state xviFcSubrole email')
+      .select('role ulb state xviFcSubrole email adc')
       .lean()
       .exec();
 
     if (!targetUser) throw new NotFoundException('User not found');
+
+    // Platform ADMIN keeps full reach. Otherwise only the State admin (not an ADC user) may remove a STATE member,
+    // and only one in their own state that is not an ADC user (the ADC admin removes those, see removeAdcMember).
+    if (requester.scope !== Scope.ADMIN) {
+      this.assertStateAdminOverStateMember(requester, targetUser);
+    }
 
     // STATE users are removed from the whole platform (isDeleted: true), not just XVI-FC —
     // email is preserved (not tombstoned) so the same email can be re-invited/restored later.
@@ -966,7 +1127,7 @@ export class UsersService {
 
     const targetUser = await this.userModel
       .findOne({ _id: targetUserId, isDeleted: false })
-      .select('role ulb state xviFcSubrole')
+      .select('role ulb state xviFcSubrole adc')
       .lean()
       .exec();
 
@@ -974,6 +1135,12 @@ export class UsersService {
 
     if ((targetUser.role as string) !== UserRole.STATE) {
       throw new BadRequestException('Sub-role updates are only supported for STATE users');
+    }
+    if (requester.scope !== Scope.ADMIN) {
+      this.assertStateAdminOverStateMember(requester, targetUser);
+      if (targetUser.xviFcSubrole === 'admin') {
+        throw new BadRequestException('The Admin level can only change through a transfer');
+      }
     }
 
     const newSubrole = UsersService.DISPLAY_TO_XVIFC_SUBROLE[dto.subRole];
@@ -985,18 +1152,18 @@ export class UsersService {
   async transferSubmitter(dto: TransferSubmitterDto, requester: AuthUser): Promise<{ message: string }> {
     if (!Types.ObjectId.isValid(dto.toUserId)) throw new BadRequestException('Invalid toUserId');
 
-    if (requester.role !== UserRole.STATE || requester.xviFcSubrole !== 'admin') {
+    if (requester.role !== UserRole.STATE || requester.xviFcSubrole !== 'admin' || isAdcUser(requester)) {
       throw new ForbiddenException('Only the STATE admin (submitter) can transfer ownership');
     }
 
     const newOwner = await this.userModel
       .findOne({ _id: dto.toUserId, isDeleted: false })
-      .select('role state xviFcSubrole isXVIFCProfileVerified')
+      .select('role state xviFcSubrole isXVIFCProfileVerified adc')
       .lean()
       .exec();
 
     if (!newOwner) throw new NotFoundException('Target user not found');
-    if ((newOwner.role as string) !== UserRole.STATE) {
+    if ((newOwner.role as string) !== UserRole.STATE || newOwner.adc) {
       throw new BadRequestException('Target must be a STATE user');
     }
     if (newOwner.xviFcSubrole === 'admin') {
@@ -1078,7 +1245,7 @@ export class UsersService {
     const targetUser = await this.userModel
       .findOne({ _id: userId, isDeleted: false })
       .select(
-        'ulb state isNodalOfficer xviFcSubrole email commissionerEmail accountantEmail isXVIFCProfileVerified isXviFcEmailVerified',
+        'ulb state adc isNodalOfficer xviFcSubrole email commissionerEmail accountantEmail isXVIFCProfileVerified isXviFcEmailVerified',
       )
       .lean()
       .exec();
@@ -1130,8 +1297,9 @@ export class UsersService {
     // When a STATE user verifies their profile, derive and stamp their own xviFcSubrole
     // in the same write — assignXviFcSubrolesByState skips already-verified users so
     // without this the verifying user's subrole would never be set.
+    // ADC users are skipped: their subrole is set at invite, not derived from isNodalOfficer.
     const isStateProfileVerify =
-      isSelfUpdate && !isUlbScope && update['isXVIFCProfileVerified'] === true && targetUser.state;
+      isSelfUpdate && !isUlbScope && update['isXVIFCProfileVerified'] === true && targetUser.state && !targetUser.adc;
 
     // Only derive subrole if one has not been manually assigned already
     if (isStateProfileVerify && !(targetUser as Record<string, unknown>)['xviFcSubrole']) {
@@ -1166,6 +1334,8 @@ export class UsersService {
       state: stateId,
       isDeleted: false,
       role: { $in: UsersService.XVIFC_STATE_ROLES },
+      // ADC users are never auto-assigned by the nodal-officer rule (null matches a missing field too).
+      adc: null,
       // $ne: true catches false, null, and undefined (legacy docs that predate the field)
       isXVIFCProfileVerified: { $ne: true },
       // Only initialise subrole for users who don't have one yet — never overwrite manual assignments
@@ -1197,6 +1367,8 @@ export class UsersService {
       .find({
         state: new Types.ObjectId(stateId),
         role: UserRole.STATE,
+        // ADC users belong to their ADC's team (getAdcMembers), never to the State team list.
+        adc: null,
         isDeleted: false,
         isXviFcdeleted: { $ne: true },
       })
@@ -1204,7 +1376,11 @@ export class UsersService {
       .lean()
       .exec();
 
-    return users.map((u) => ({
+    return users.map((u) => this.toMemberListItem(u));
+  }
+
+  private toMemberListItem(u: Record<string, any>): StateMemberResponseDto {
+    return {
       _id: String(u._id),
       name: u.name,
       mobile: u.mobile ?? '',
@@ -1212,9 +1388,228 @@ export class UsersService {
       designation: u.designation ?? '',
       subRole: UsersService.XVIFC_TO_SUB_ROLE[u.xviFcSubrole as string] ?? 'VIEWER',
       isActive: u.isActive ?? false,
-      isXVIFCProfileVerified: (u as Record<string, unknown>).isXVIFCProfileVerified === true,
+      isXVIFCProfileVerified: u.isXVIFCProfileVerified === true,
       lastActive: u.lastLoginAt ? (u.lastLoginAt as Date).toISOString() : null,
-    }));
+    };
+  }
+
+  // ─── ADC team management ─────────────────────────────────────────────────────
+  // Each Autonomous District Council has its own team of STATE-role users with `adc` set. There is exactly
+  // one admin (Submitter) per ADC: the first user invited becomes it automatically. The State DMA admin
+  // manages every ADC of their state; an ADC admin manages their own. ADC users never appear in the State
+  // team list, the State Submitter transfer or permission overrides.
+
+  /**
+   * Resolves which ADC team a caller is operating on, and whether they may change it.
+   * - ADC user: their own ADC (`adcId` ignored); may manage only as the ADC admin.
+   * - State DMA user: `adcId` is required and must be an ADC of their state; may manage only as the State admin.
+   * - Anyone else: 403.
+   */
+  private async resolveAdcTeamScope(
+    requester: AuthUser,
+    adcId?: string,
+  ): Promise<{
+    adc: { _id: Types.ObjectId; name: string; state: Types.ObjectId; isActive: boolean };
+    canManage: boolean;
+  }> {
+    if (requester.scope !== Scope.STATE) throw new ForbiddenException('Only State or ADC users can access ADC teams');
+
+    let resolvedAdcId: string;
+    if (isAdcUser(requester)) {
+      resolvedAdcId = String(requester.adc);
+    } else {
+      if (!adcId || !Types.ObjectId.isValid(adcId)) throw new BadRequestException('adcId is required');
+      resolvedAdcId = adcId;
+    }
+
+    const adc = await this.adcModel
+      .findById(resolvedAdcId)
+      .select('name state isActive')
+      .lean<{ _id: Types.ObjectId; name: string; state: Types.ObjectId; isActive: boolean }>()
+      .exec();
+    if (!adc) throw new NotFoundException('ADC not found');
+    if (!isAdcUser(requester) && toObjectIdString(adc.state) !== toObjectIdString(requester.state)) {
+      throw new ForbiddenException('You can only manage ADCs of your own state');
+    }
+
+    return { adc, canManage: requester.xviFcSubrole === 'admin' };
+  }
+
+  private assertCanManageAdcTeam(scope: { canManage: boolean }): void {
+    if (!scope.canManage) throw new ForbiddenException('Only the admin can manage the ADC team');
+  }
+
+  /** A deactivated ADC's team is frozen: no invites, level changes or transfers. Listing and removal still work. */
+  private assertAdcActive(scope: { adc: { isActive: boolean } }): void {
+    if (!scope.adc.isActive) throw new BadRequestException('This ADC is not active');
+  }
+
+  private activeAdcMemberFilter(adcId: Types.ObjectId) {
+    return { role: UserRole.STATE, adc: adcId, isDeleted: false, isXviFcdeleted: { $ne: true } };
+  }
+
+  /**
+   * Runs a user write and turns a hit on the `uniq_active_adc_admin` index (users.schema.ts) into the same 409 the
+   * up-front check gives — the race where two requests both saw "no admin yet". Any other error is rethrown as is.
+   */
+  private async withAdcAdminGuard<T>(write: () => Promise<T>): Promise<T> {
+    try {
+      return await write();
+    } catch (err) {
+      const e = err as { code?: number; keyPattern?: Record<string, unknown> };
+      if (e?.code === 11000 && e.keyPattern?.adc) {
+        throw new HttpException(
+          { code: 'ADC_ADMIN_EXISTS', message: 'This ADC already has an admin. Use a transfer to change it.' },
+          HttpStatus.CONFLICT,
+        );
+      }
+      throw err;
+    }
+  }
+
+  async getAdcMembers(requester: AuthUser, adcId?: string): Promise<StateMemberResponseDto[]> {
+    const { adc } = await this.resolveAdcTeamScope(requester, adcId);
+    const users = await this.userModel
+      .find(this.activeAdcMemberFilter(adc._id))
+      .select('_id name mobile email designation xviFcSubrole isActive isXVIFCProfileVerified lastLoginAt')
+      .lean()
+      .exec();
+    return users.map((u) => this.toMemberListItem(u));
+  }
+
+  async inviteAdcMember(
+    dto: InviteStateMemberDto,
+    requester: AuthUser,
+    adcId?: string,
+  ): Promise<StateMemberResponseDto> {
+    const scope = await this.resolveAdcTeamScope(requester, adcId);
+    this.assertCanManageAdcTeam(scope);
+    this.assertAdcActive(scope);
+
+    // One admin per ADC: the first user invited to an ADC with no admin becomes it; later invites pick a level.
+    const hasAdmin = await this.userModel.exists({
+      ...this.activeAdcMemberFilter(scope.adc._id),
+      xviFcSubrole: 'admin',
+    });
+    const xviFcSubrole: 'admin' | 'reviewer' | 'viewer' = !hasAdmin
+      ? 'admin'
+      : dto.subRole === 'EDITOR'
+        ? 'reviewer'
+        : 'viewer';
+
+    return this.inviteScopedMember(dto, requester, {
+      stateId: scope.adc.state,
+      adc: { _id: scope.adc._id, name: scope.adc.name },
+      xviFcSubrole,
+    });
+  }
+
+  async updateAdcMemberSubrole(
+    targetUserId: string,
+    dto: UpdateXviFcSubroleDto,
+    requester: AuthUser,
+    adcId?: string,
+  ): Promise<{ message: string }> {
+    if (!Types.ObjectId.isValid(targetUserId)) throw new BadRequestException('Invalid user ID');
+    const scope = await this.resolveAdcTeamScope(requester, adcId);
+    this.assertCanManageAdcTeam(scope);
+    this.assertAdcActive(scope);
+
+    const target = await this.userModel
+      .findOne({ _id: targetUserId, ...this.activeAdcMemberFilter(scope.adc._id) })
+      .select('xviFcSubrole')
+      .lean()
+      .exec();
+    if (!target) throw new NotFoundException('Member not found in this ADC');
+    if (target.xviFcSubrole === 'admin') {
+      throw new BadRequestException('The Admin level can only change through a transfer');
+    }
+
+    await this.userModel
+      .findByIdAndUpdate(targetUserId, { $set: { xviFcSubrole: UsersService.DISPLAY_TO_XVIFC_SUBROLE[dto.subRole] } })
+      .exec();
+    return { message: 'Sub-role updated successfully' };
+  }
+
+  async removeAdcMember(targetUserId: string, requester: AuthUser, adcId?: string): Promise<{ message: string }> {
+    if (!Types.ObjectId.isValid(targetUserId)) throw new BadRequestException('Invalid user ID');
+    const scope = await this.resolveAdcTeamScope(requester, adcId);
+    this.assertCanManageAdcTeam(scope);
+
+    const target = await this.userModel
+      .findOne({ _id: targetUserId, ...this.activeAdcMemberFilter(scope.adc._id) })
+      .select('xviFcSubrole')
+      .lean()
+      .exec();
+    if (!target) throw new NotFoundException('Member not found in this ADC');
+    if (target.xviFcSubrole === 'admin') {
+      throw new BadRequestException('Cannot remove the Admin. Transfer ownership first.');
+    }
+    if (targetUserId === String(requester._id)) {
+      throw new BadRequestException('You cannot remove yourself from the team');
+    }
+
+    // Same removal as a State member: off the whole platform, email kept so it can be re-invited/restored.
+    await this.userModel.findByIdAndUpdate(targetUserId, { $set: { isXviFcdeleted: true, isDeleted: true } }).exec();
+    return { message: 'Member removed from the XVI-FC portal' };
+  }
+
+  /**
+   * Hands the ADC's Submitter (admin) level to another member: the ADC's current admin is demoted to reviewer,
+   * then the new owner is promoted — demote first because `uniq_active_adc_admin` refuses a second admin even
+   * for a moment; a failed promotion re-promotes the old admin. Both the ADC admin (themselves) and the State
+   * DMA admin (on the ADC's behalf) may do it.
+   */
+  async transferAdcSubmitter(
+    dto: TransferSubmitterDto,
+    requester: AuthUser,
+    adcId?: string,
+  ): Promise<{ message: string }> {
+    if (!Types.ObjectId.isValid(dto.toUserId)) throw new BadRequestException('Invalid toUserId');
+    const scope = await this.resolveAdcTeamScope(requester, adcId);
+    this.assertCanManageAdcTeam(scope);
+    this.assertAdcActive(scope);
+
+    const newOwner = await this.userModel
+      .findOne({ _id: dto.toUserId, ...this.activeAdcMemberFilter(scope.adc._id) })
+      .select('xviFcSubrole isXVIFCProfileVerified')
+      .lean()
+      .exec();
+    if (!newOwner) throw new NotFoundException('Member not found in this ADC');
+    if (newOwner.xviFcSubrole === 'admin') throw new BadRequestException('Target is already the ADC admin');
+    if (!newOwner.isXVIFCProfileVerified) {
+      throw new BadRequestException(
+        'Ownership can only be transferred to an active member who has completed profile verification',
+      );
+    }
+
+    const currentAdmin = await this.userModel
+      .findOne({ ...this.activeAdcMemberFilter(scope.adc._id), xviFcSubrole: 'admin' })
+      .select('_id')
+      .lean()
+      .exec();
+
+    if (currentAdmin) {
+      await this.userModel.findByIdAndUpdate(currentAdmin._id, { $set: { xviFcSubrole: 'reviewer' } }).exec();
+    }
+    try {
+      await this.withAdcAdminGuard(() =>
+        this.userModel.findByIdAndUpdate(dto.toUserId, { $set: { xviFcSubrole: 'admin' } }).exec(),
+      );
+    } catch (err) {
+      // Roll back the demotion so the ADC is never left without an admin.
+      if (currentAdmin) {
+        await this.userModel.findByIdAndUpdate(currentAdmin._id, { $set: { xviFcSubrole: 'admin' } }).exec();
+      }
+      throw err;
+    }
+
+    return { message: 'ADC admin transferred successfully' };
+  }
+
+  /** Permission matrix for the ADC People and Roles page — generated from XVIFC_ADC_PERMISSIONS so it can't drift. */
+  getAdcPermissionMatrix(): PermissionMatrixRow[] {
+    return ADC_MATRIX;
   }
 
   // ─── Central team management (MoHUA, PMU, DoE) ─────────────────────────────

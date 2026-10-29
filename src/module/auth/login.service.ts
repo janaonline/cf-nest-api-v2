@@ -5,6 +5,7 @@ import * as bcrypt from 'bcrypt';
 import type { Response } from 'express';
 import { Model } from 'mongoose';
 import { State, StateDocument } from 'src/schemas/state.schema';
+import { Adc, AdcDocument } from 'src/schemas/adc.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { Year, YearDocument } from 'src/schemas/year.schema';
 import { Role } from './enum/role.enum';
@@ -28,6 +29,7 @@ export class LoginService {
     @InjectModel(State.name) private readonly stateModel: Model<StateDocument>,
     @InjectModel(Ulb.name) private readonly ulbModel: Model<UlbDocument>,
     @InjectModel(Year.name) private readonly yearModel: Model<YearDocument>,
+    @InjectModel(Adc.name) private readonly adcModel: Model<AdcDocument>,
   ) {}
 
   private static readonly MOBILE_RE = /^[6-9]\d{9}$/;
@@ -197,9 +199,10 @@ export class LoginService {
     this.authService.setRefreshCookie(res, tokens.refreshToken);
 
     const allYears = await this.getActiveYears();
+    const adc = user.adc ? await this.adcModel.findById(user.adc).exec() : null;
     return {
       token: tokens.accessToken,
-      user: buildUserResponsePayload(user, state, ulb),
+      user: buildUserResponsePayload(user, state, ulb, adc),
       allYears,
     };
   }

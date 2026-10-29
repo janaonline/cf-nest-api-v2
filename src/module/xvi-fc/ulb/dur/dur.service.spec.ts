@@ -282,8 +282,62 @@ describe('DurService', () => {
       mockUlbModel.findById.mockReturnValue(mockQuery({ state: 'other-state' }));
 
       await expect(service.decideDur(durId, { decision: 'APPROVED' }, stateUser)).rejects.toThrow(
-        'You can only decide DUR forms within your own state',
+        'You can only decide DUR forms of ULBs you review',
       );
+    });
+
+    describe('ADC ownership', () => {
+      const adcId = '507f1f77bcf86cd799439aaa';
+      const otherAdcId = '507f1f77bcf86cd799439bbb';
+      const adcUser: AuthUser = { ...stateUser, adc: adcId, xviFcSubrole: 'reviewer' } as AuthUser;
+
+      it('refuses the State user deciding a form of an ADC-owned ULB — the ADC decides, the State is view-only', async () => {
+        mockDurModel.findById.mockReturnValue(mockQuery(baseDur));
+        mockUlbModel.findById.mockReturnValue(mockQuery({ state: stateId, adc: adcId }));
+
+        await expect(service.decideDur(durId, { decision: 'APPROVED' }, stateUser)).rejects.toThrow(
+          'You can only decide DUR forms of ULBs you review',
+        );
+        expect(mockDurModel.findByIdAndUpdate).not.toHaveBeenCalled();
+      });
+
+      it("lets the ADC user decide a form of their own ADC's ULB", async () => {
+        mockDurModel.findById.mockReturnValue(mockQuery(baseDur));
+        mockUlbModel.findById.mockReturnValue(mockQuery({ state: stateId, adc: adcId }));
+        mockDurModel.findByIdAndUpdate.mockReturnValue(
+          mockQuery({ _id: durId, currentFormStatus: FORM_STATUS.APPROVED_BY_STATE, currentFormStatusLabel: 'Approved By State' }),
+        );
+
+        const result = await service.decideDur(durId, { decision: 'APPROVED' }, adcUser);
+
+        expect(result.data.currentFormStatus).toBe(FORM_STATUS.APPROVED_BY_STATE);
+      });
+
+      it("refuses the ADC user on another ADC's ULB and on a ULB with no ADC", async () => {
+        mockDurModel.findById.mockReturnValue(mockQuery(baseDur));
+
+        mockUlbModel.findById.mockReturnValue(mockQuery({ state: stateId, adc: otherAdcId }));
+        await expect(service.decideDur(durId, { decision: 'APPROVED' }, adcUser)).rejects.toThrow(
+          'You can only decide DUR forms of ULBs you review',
+        );
+
+        mockUlbModel.findById.mockReturnValue(mockQuery({ state: stateId, adc: null }));
+        await expect(service.decideDur(durId, { decision: 'APPROVED' }, adcUser)).rejects.toThrow(
+          'You can only decide DUR forms of ULBs you review',
+        );
+        expect(mockDurModel.findByIdAndUpdate).not.toHaveBeenCalled();
+      });
+
+      it("refuses the ADC user reading another ADC's ULB, but lets the State read an ADC-owned one", async () => {
+        mockUlbModel.findById.mockReturnValue(mockQuery({ state: stateId, adc: otherAdcId }));
+        await expect(service.validateViewAccess({ ulb: ulbId as any }, adcUser)).rejects.toThrow('Access denied');
+
+        mockUlbModel.findById.mockReturnValue(mockQuery({ state: stateId, adc: adcId }));
+        await expect(service.validateViewAccess({ ulb: ulbId as any }, stateUser)).resolves.toEqual({
+          state: stateId,
+          adc: adcId,
+        });
+      });
     });
 
     it('rejects deciding a form that is not UNDER_REVIEW_BY_STATE', async () => {
@@ -508,7 +562,7 @@ describe('DurService', () => {
       const result = await service.listUlbSubmissions({ designYearId, page: 1, pageSize: 20 }, stateUser);
 
       expect(result.data.total).toBe(1);
-      expect(result.data.rows).toEqual([row]);
+      expect(result.data.rows).toEqual([{ ...row, adcName: null, canReview: true }]);
     });
 
     it('includes an EXEMPTED_ACKNOWLEDGED fallback for a documentless-but-exempt ULB in the aggregation pipeline', async () => {

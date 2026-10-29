@@ -16,6 +16,7 @@ import type { IAuthUser } from 'src/common/interfaces/auth-user.interface';
 import { Role } from 'src/module/auth/enum/role.enum';
 import { State } from 'src/schemas/state.schema';
 import { Ulb } from 'src/schemas/ulb.schema';
+import { Adc } from 'src/schemas/adc.schema';
 import { User } from 'src/schemas/user/user.schema';
 import { SlbForm } from 'src/schemas/xvi-fc/ulb/slb-form.schema';
 import { XviFcDur } from 'src/schemas/xvi-fc/dur.schema';
@@ -53,6 +54,7 @@ describe('UlbService', () => {
     aggregate: jest.Mock;
     db?: unknown;
   };
+  let adcModel: { find: jest.Mock; findById: jest.Mock; exists: jest.Mock };
   let stateModel: { findById: jest.Mock; find: jest.Mock };
   let userModel: { create: jest.Mock; findOne: jest.Mock; find: jest.Mock; findById: jest.Mock };
   let formJsonService: { findByType: jest.Mock };
@@ -92,6 +94,7 @@ describe('UlbService', () => {
       exists: jest.fn(),
       aggregate: jest.fn().mockResolvedValue([]),
     };
+    adcModel = { find: jest.fn(), findById: jest.fn(), exists: jest.fn() };
     stateModel = { findById: jest.fn(), find: jest.fn() };
     mockStates(stateModel, []);
     userModel = {
@@ -128,6 +131,7 @@ describe('UlbService', () => {
       providers: [
         UlbService,
         { provide: getModelToken(Ulb.name), useValue: ulbModel },
+        { provide: getModelToken(Adc.name), useValue: adcModel },
         { provide: getModelToken(State.name), useValue: stateModel },
         { provide: getModelToken(User.name), useValue: userModel },
         { provide: getModelToken(Year.name), useValue: yearModel },
@@ -1092,6 +1096,257 @@ describe('UlbService', () => {
 
       const [, updateArg] = ulbModel.findByIdAndUpdate.mock.calls[0] as [string, { $set: Record<string, unknown> }];
       expect(updateArg.$set.gazetteNotificationFile).toBe(derivedFile);
+    });
+  });
+
+  describe('ADC (Autonomous District Council) ownership', () => {
+    const adcId = new Types.ObjectId().toString();
+    const otherAdcId = new Types.ObjectId().toString();
+    const adcUser: IAuthUser = { ...stateUser, adc: adcId, xviFcSubrole: 'reviewer' };
+    const adcViewer: IAuthUser = { ...adcUser, xviFcSubrole: 'viewer' };
+    const lean = (value: unknown) => ({ select: jest.fn().mockReturnThis(), lean: jest.fn().mockResolvedValue(value) });
+
+    beforeEach(() => {
+      // attachLookupNames resolves state and ULB-type names for the rows findAll/assignAdc return
+      stateModel.find = jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue([]) });
+      ulbModel.db = {
+        collection: jest.fn().mockReturnValue({
+          find: jest.fn().mockReturnValue({ toArray: jest.fn().mockResolvedValue([]) }),
+        }),
+      };
+    });
+
+    describe('create', () => {
+      const validPayload = (extra: Record<string, unknown> = {}) =>
+        dynamicFormValidation.validateFinalSubmitAndBuildPayload.mockReturnValue({
+          isValid: true,
+          errors: {},
+          sanitizedPayload: { code: 'AS001', name: 'Test ADC ULB', ulbType: ulbTypeId, ...extra },
+        });
+
+      it("stamps an ADC user's ULB with their ADC and own state, PENDING and inactive, with no exemptions set", async () => {
+        validPayload({ state: new Types.ObjectId().toString(), adc: otherAdcId });
+        ulbModel.create.mockResolvedValue({ toObject: () => ({ code: 'AS001' }) });
+
+        await service.create({ data: {} }, adcUser);
+
+        const [patch] = ulbModel.create.mock.calls[0] as [Record<string, unknown>];
+        expect(String(patch.adc)).toBe(adcId);
+        expect(String(patch.state)).toBe(stateId);
+        expect(patch.isActive).toBe(false);
+        expect((patch.approval as { status: string }).status).toBe('PENDING');
+        expect(patch.startYear).toBeUndefined();
+        expect(patch.yearAccess).toBeUndefined();
+        expect(yearAccessService.setSeedExemptions).not.toHaveBeenCalled();
+      });
+
+      it("leaves a State DMA user's ULB with no ADC, and ignores an adc in the payload", async () => {
+        validPayload({ adc: otherAdcId });
+        ulbModel.create.mockResolvedValue({ toObject: () => ({ code: 'AS001' }) });
+
+        await service.create({ data: {} }, stateUser);
+
+        const [patch] = ulbModel.create.mock.calls[0] as [Record<string, unknown>];
+        expect(patch.adc).toBeUndefined();
+      });
+
+      it('ignores an adc in the payload for an ADMIN too — ownership is set through assignAdc only', async () => {
+        validPayload({ state: stateId, adc: otherAdcId });
+        ulbModel.create.mockResolvedValue({ toObject: () => ({ code: 'AS001' }) });
+
+        await service.create({ data: {} }, adminUser);
+
+        const [patch] = ulbModel.create.mock.calls[0] as [Record<string, unknown>];
+        expect(patch.adc).toBeUndefined();
+      });
+
+      it('refuses an ADC viewer', async () => {
+        await expect(service.create({ data: {} }, adcViewer)).rejects.toThrow(ForbiddenException);
+        expect(ulbModel.create).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('update', () => {
+      const existing = (extra: Record<string, unknown> = {}) => ({
+        _id: 'x',
+        state: stateId,
+        approval: { status: 'REJECTED' },
+        ...extra,
+      });
+
+      it("lets an ADC reviewer resubmit their own ADC's rejected ULB, and strips state/adc from the patch", async () => {
+        ulbModel.findById.mockReturnValue({ lean: jest.fn().mockResolvedValue(existing({ adc: adcId })) });
+        dynamicFormValidation.validateDraftAndBuildPayload.mockReturnValue({
+          isValid: true,
+          errors: {},
+          sanitizedPayload: { name: 'Fixed Name', state: new Types.ObjectId().toString(), adc: otherAdcId },
+        });
+        ulbModel.findByIdAndUpdate.mockReturnValue({ lean: jest.fn().mockResolvedValue({ _id: 'x' }) });
+
+        await service.update(new Types.ObjectId().toString(), { data: {} }, adcUser);
+
+        const [, updateArg] = ulbModel.findByIdAndUpdate.mock.calls[0] as [string, { $set: Record<string, unknown> }];
+        expect(updateArg.$set.state).toBeUndefined();
+        expect(updateArg.$set.adc).toBeUndefined();
+        expect((updateArg.$set.approval as { status: string }).status).toBe('PENDING');
+      });
+
+      it.each([
+        ['an ADC viewer', adcViewer, { adc: adcId }],
+        ["an ADC user editing another ADC's ULB", adcUser, { adc: otherAdcId }],
+        ['an ADC user editing a ULB that has no ADC', adcUser, {}],
+        ['a State user editing an ADC-owned ULB', stateUser, { adc: adcId }],
+      ])('refuses %s', async (_label, user, extra) => {
+        ulbModel.findById.mockReturnValue({ lean: jest.fn().mockResolvedValue(existing(extra)) });
+        await expect(service.update(new Types.ObjectId().toString(), { data: {} }, user)).rejects.toThrow(
+          ForbiddenException,
+        );
+        expect(dynamicFormValidation.validateDraftAndBuildPayload).not.toHaveBeenCalled();
+      });
+
+      const adminPatch = (sanitizedPayload: Record<string, unknown>) => {
+        dynamicFormValidation.validateDraftAndBuildPayload.mockReturnValue({
+          isValid: true,
+          errors: {},
+          sanitizedPayload,
+        });
+        ulbModel.findByIdAndUpdate.mockReturnValue({ lean: jest.fn().mockResolvedValue({ _id: 'x' }) });
+      };
+
+      it('refuses an ADMIN moving an ADC-owned ULB to another state, which would orphan it', async () => {
+        ulbModel.findById.mockReturnValue({ lean: jest.fn().mockResolvedValue(existing({ adc: adcId })) });
+        adminPatch({ state: new Types.ObjectId().toString() });
+
+        await expect(service.update(new Types.ObjectId().toString(), { data: {} }, adminUser)).rejects.toThrow(
+          'Remove it from the ADC before moving it to another state',
+        );
+        expect(ulbModel.findByIdAndUpdate).not.toHaveBeenCalled();
+      });
+
+      it('lets an ADMIN edit an ADC-owned ULB that stays in its state, and strips any adc from the patch', async () => {
+        ulbModel.findById.mockReturnValue({ lean: jest.fn().mockResolvedValue(existing({ adc: adcId })) });
+        adminPatch({ name: 'Renamed', state: stateId, adc: otherAdcId });
+
+        await service.update(new Types.ObjectId().toString(), { data: {} }, adminUser);
+
+        const [, updateArg] = ulbModel.findByIdAndUpdate.mock.calls[0] as [string, { $set: Record<string, unknown> }];
+        expect(updateArg.$set.adc).toBeUndefined();
+        expect(updateArg.$set.name).toBe('Renamed');
+      });
+
+      it('still lets an ADMIN move a ULB with no ADC to another state', async () => {
+        const newStateId = new Types.ObjectId().toString();
+        ulbModel.findById.mockReturnValue({ lean: jest.fn().mockResolvedValue(existing()) });
+        adminPatch({ state: newStateId });
+
+        await service.update(new Types.ObjectId().toString(), { data: {} }, adminUser);
+
+        const [, updateArg] = ulbModel.findByIdAndUpdate.mock.calls[0] as [string, { $set: Record<string, unknown> }];
+        expect(String(updateArg.$set.state)).toBe(newStateId);
+      });
+    });
+
+    describe('findAll', () => {
+      it("restricts an ADC user to their own ADC's ULBs and populates the ADC name on each row", async () => {
+        const row = {
+          _id: new Types.ObjectId(),
+          name: 'ADC ULB',
+          state: new Types.ObjectId(stateId),
+          ulbType: new Types.ObjectId(ulbTypeId),
+          adc: new Types.ObjectId(adcId),
+        };
+        const find = jest.fn().mockReturnValue({
+          sort: jest.fn().mockReturnThis(),
+          skip: jest.fn().mockReturnThis(),
+          limit: jest.fn().mockReturnThis(),
+          lean: jest.fn().mockResolvedValue([row]),
+        });
+        ulbModel.find = find;
+        ulbModel.countDocuments.mockResolvedValue(1);
+        adcModel.find.mockReturnValue({ lean: jest.fn().mockResolvedValue([{ _id: adcId, name: 'Test ADC' }]) });
+
+        const result = await service.findAll({ page: 1, limit: 10 }, adcUser);
+
+        const [filter] = find.mock.calls[0] as [{ state: Types.ObjectId; adc: Types.ObjectId }];
+        expect(filter.state.toString()).toBe(stateId);
+        expect(filter.adc.toString()).toBe(adcId);
+        expect(result.data[0].adc).toEqual({ _id: row.adc, name: 'Test ADC' });
+      });
+
+      it('shows a State DMA user every ULB of the state, ADC-owned or not', async () => {
+        const find = jest.fn().mockReturnValue({
+          sort: jest.fn().mockReturnThis(),
+          skip: jest.fn().mockReturnThis(),
+          limit: jest.fn().mockReturnThis(),
+          lean: jest.fn().mockResolvedValue([]),
+        });
+        ulbModel.find = find;
+        ulbModel.countDocuments.mockResolvedValue(0);
+
+        await service.findAll({ page: 1, limit: 10 }, stateUser);
+
+        const [filter] = find.mock.calls[0] as [Record<string, unknown>];
+        expect(filter.adc).toBeUndefined();
+      });
+    });
+
+    describe('assignAdc', () => {
+      const ulbId = new Types.ObjectId().toString();
+      const withUlb = () => ulbModel.findById.mockReturnValue(lean({ state: new Types.ObjectId(stateId) }));
+      const updated = {
+        _id: ulbId,
+        name: 'U',
+        state: new Types.ObjectId(stateId),
+        ulbType: new Types.ObjectId(ulbTypeId),
+        adc: new Types.ObjectId(adcId),
+      };
+
+      beforeEach(() => {
+        ulbModel.findByIdAndUpdate.mockReturnValue({ lean: jest.fn().mockResolvedValue(updated) });
+        adcModel.find.mockReturnValue({ lean: jest.fn().mockResolvedValue([{ _id: adcId, name: 'Test ADC' }]) });
+      });
+
+      it("sets the ULB's ADC", async () => {
+        withUlb();
+        adcModel.findById.mockReturnValue(lean({ state: new Types.ObjectId(stateId), isActive: true }));
+
+        await service.assignAdc(ulbId, adcId);
+
+        const [, update] = ulbModel.findByIdAndUpdate.mock.calls[0] as [string, { $set: { adc: Types.ObjectId } }];
+        expect(update.$set.adc.toString()).toBe(adcId);
+      });
+
+      it('moves the ULB back to the State DMA with null', async () => {
+        withUlb();
+        ulbModel.findByIdAndUpdate.mockReturnValue({ lean: jest.fn().mockResolvedValue({ ...updated, adc: null }) });
+
+        await service.assignAdc(ulbId, null);
+
+        const [, update] = ulbModel.findByIdAndUpdate.mock.calls[0] as [string, { $set: { adc: null } }];
+        expect(update.$set.adc).toBeNull();
+        expect(adcModel.findById).not.toHaveBeenCalled();
+      });
+
+      it('rejects an ADC of another state, an inactive ADC, an unknown ADC and a missing adcId', async () => {
+        withUlb();
+        adcModel.findById.mockReturnValueOnce(lean({ state: new Types.ObjectId(), isActive: true }));
+        await expect(service.assignAdc(ulbId, adcId)).rejects.toThrow(BadRequestException);
+
+        adcModel.findById.mockReturnValueOnce(lean({ state: new Types.ObjectId(stateId), isActive: false }));
+        await expect(service.assignAdc(ulbId, adcId)).rejects.toThrow(BadRequestException);
+
+        adcModel.findById.mockReturnValueOnce(lean(null));
+        await expect(service.assignAdc(ulbId, adcId)).rejects.toThrow(BadRequestException);
+
+        await expect(service.assignAdc(ulbId, undefined)).rejects.toThrow(BadRequestException);
+        expect(ulbModel.findByIdAndUpdate).not.toHaveBeenCalled();
+      });
+
+      it('404s for an unknown ULB and 400s for an invalid id', async () => {
+        ulbModel.findById.mockReturnValue(lean(null));
+        await expect(service.assignAdc(ulbId, adcId)).rejects.toThrow(NotFoundException);
+        await expect(service.assignAdc('not-an-id', adcId)).rejects.toThrow(BadRequestException);
+      });
     });
   });
 

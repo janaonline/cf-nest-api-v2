@@ -147,6 +147,8 @@ src/
 │                        # Submitter / remove) parameterised by a `TeamConfig` in users.service.ts; the controller exposes
 │                        # `mohua-members`, `pmu-members`, `doe-members` (+ `invite-*-member`, `*-permission-matrix`).
 │                        # PMU/DoE matrices are generated from permissions.map.ts so they cannot drift from what is enforced
+│                        # ADC (Assam Autonomous District Council) teams: `adc-members`, `invite-adc-member`, `adc-permission-matrix` (see Authorization)
+├── master/adc/          # GET master/adc (ADMIN: any/one state; State DMA: own state) — the ADC picker; ADCs themselves are inserted into `adcs` directly in the DB, not via an API
 ├── admin/
 │   ├── afs-digitization/ # AFS file processing with BullMQ queues
 │   └── ulb-types/       # ADMIN-only CRUD for the `ulbtypes` reference-data collection (in particular
@@ -197,6 +199,8 @@ When defining models that belong to the digitization DB, use `MongooseModule.for
 
 **DoE (`XVIFC_DOE`, scope `DOE`) is a read-only copy of the MoHUA dashboard.** Its permission table (`XVIFC_DOE_PERMISSIONS`) holds only view permissions — plus `REVIEW_STATE_SUBMISSIONS_PMU`, which is just the read gate for the read-only form screens — and the admin (Submitter) additionally manages the DoE team. Because ~50 write endpoints have no decorator-level role check and rely on service-side checks, `DoeReadOnlyGuard` (registered right after `JwtAuthGuard`, `auth/guards/doe-read-only.guard.ts`) rejects every non-GET request from a DoE user except an explicit allowlist (own session/profile/notifications, DoE team management) — this also covers the unguarded `POST file/signed-url`. A new endpoint that a DoE user must be able to *write* has to be added to that allowlist; one a DoE user must *read* needs `isMohuaViewScope` wherever MoHUA's read is allowed (and wherever MoHUA's read skips an exemption-stub write).
 
+**ADC users (Assam Autonomous District Councils) are not a role** — they are `Role.STATE` users with `users.adc` set (an ObjectId into the `adcs` collection; `null` = a normal State DMA user). A ULB belongs to an ADC through `ulbs.adc` (set by an ADMIN via `PATCH master/ulb/:id/adc`, or stamped from the ADC user who registers it). `isAdcUser(user)` (`auth/roles-xvi-fc.helper.ts`) is the single test; `getEffectivePermissions` gives an ADC user the small `XVIFC_ADC_PERMISSIONS` table (review/approve ULB submissions only) and ignores `permissionOverrides`. Four layers keep them in their lane: (1) every State-form route already needs a State-form permission, so it denies them; (2) `AdcAccessGuard` (`auth/guards/adc-access.guard.ts`, registered after `DoeReadOnlyGuard`) denies an ADC user *every* route — GETs included — that is not on its allowlist, so **a route an ADC page needs must be added to that allowlist**; (3) per-ULB ownership goes through `canViewUlb` / `canDecideUlb` (`module/xvi-fc/common/utils/xvi-fc-state-access.util.ts`) plus `resolveAdcScopeFilter` on every `state/ulb-submissions` list — access follows the ULB's *current* `adc`, checked live, and the State DMA is view-only on an ADC-owned ULB (the list rows carry `adcName` and a per-row `canReview`); (4) any query that audiences "State users" by `role: STATE` adds `adc: null` (reminder crons, `getStateMembers`, subrole auto-assignment), and the weekly State summary's "Under state review" / "Review delayed" counts leave out ADC-owned ULBs. Each ADC has exactly one admin (the first user invited) — DB-enforced by the partial unique index `uniq_active_adc_admin` on `users` (an E11000 maps to `409 ADC_ADMIN_EXISTS`; `transferAdcSubmitter` demotes before it promotes) — managed by the State admin via `users/*adc-*` routes (`?adcId=`) or by the ADC admin for their own. An inactive ADC's team is frozen (no invite / level change / transfer; list and remove still work), and invite/restore never moves a removed user across an ADC boundary (`409 EMAIL_REMOVED_OTHER_TEAM`). The sidebar for an ADC user is always served as menu role `STATE_ADC` regardless of the URL. There is no seed script: the `adcs` rows and the `STATE_ADC` sidebar rows (copies of the STATE rows) are inserted with hand-run DB queries, after which `DELETE xvi-fc/admin/cache/side-menu` must run. The State sidebar has no "ADC Teams" entry — the State DMA's ADC Teams page is opened from a button on People and Roles, which the UI shows only when `GET master/adc` returns an ADC.
+
 ### Response Shape
 
 `ResponseTransformInterceptor` wraps every response:
@@ -235,7 +239,7 @@ Registered in `AppModule` and available everywhere:
   instances, e.g. `UlbEligibilityService`'s reference-data cache)
 - `ThrottlerModule` (60 req / 60s window; override per-route with `@Throttle()`)
 - `RedisModule` (global, inject `RedisService` to access the ioredis client)
-- `APP_GUARD`: `JwtAuthGuard`, then `DoeReadOnlyGuard`, then `ThrottlerGuard` (order matters — the DoE guard reads `request.user`)
+- `APP_GUARD`: `JwtAuthGuard`, then `DoeReadOnlyGuard`, then `AdcAccessGuard`, then `ThrottlerGuard` (order matters — the DoE and ADC guards read `request.user`)
 - `APP_INTERCEPTOR`: `ResponseTransformInterceptor`
 - `APP_FILTER`: `HttpExceptionFilter`
 
