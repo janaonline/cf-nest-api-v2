@@ -234,6 +234,7 @@ export class AfsDigitizationV3QueueService {
     const form = new FormData();
     form.append('s3_path', data.pdfUrl);
     form.append('doc_type', fastApiDocType);
+    form.append('source', '15thfc');
     const yearLabel = YearIdToLabel[data.year];
     if (yearLabel) form.append('financial_year', yearLabel);
     if (data.ulbName) form.append('ulb_name', data.ulbName);
