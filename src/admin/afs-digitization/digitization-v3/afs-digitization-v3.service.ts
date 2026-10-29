@@ -1,3 +1,4 @@
+import { randomBytes } from 'crypto';
 import { InjectQueue } from '@nestjs/bullmq';
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -141,7 +142,12 @@ export class AfsDigitizationV3Service {
       .filter((row) => this.matchesFilters(records.get(row.ulb.toString()), query))
       .slice(0, MAX_ENQUEUE_BATCH);
 
+    // One number per call, e.g. 20261029-153012-a1b2: groups this run's jobs in FastAPI
+    const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 14);
+    const batchId = `${stamp.slice(0, 8)}-${stamp.slice(8)}-${randomBytes(2).toString('hex')}`;
+
     const summary = {
+      batchId,
       matched: matching.length,
       queued: 0,
       skippedNoPdf: 0,
@@ -187,6 +193,7 @@ export class AfsDigitizationV3Service {
         docType: query.docType,
         pdfUrl: row.pdfUrl,
         ulbName: row.ulbName,
+        batchId,
       };
 
       const claimed = await this.claim(data);
@@ -270,6 +277,7 @@ export class AfsDigitizationV3Service {
             'ulbFile.digitizationStatus': DigitizationStatuses.QUEUED,
             'ulbFile.uploadedBy': 'ULB',
             'ulbFile.pdfUrl': data.pdfUrl,
+            ...(data.batchId && { 'ulbFile.batchId': data.batchId }),
             'ulbFile.queue': { status: QueueStatus.QUEUED, progress: 0, createdAt: new Date(), attemptsMade: 0 },
           },
           // A re-run starts clean
