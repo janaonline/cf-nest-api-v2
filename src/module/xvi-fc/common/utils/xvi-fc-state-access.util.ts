@@ -1,7 +1,10 @@
 import { ForbiddenException } from '@nestjs/common';
+import type { Model, Types } from 'mongoose';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
+import type { UlbDocument } from 'src/schemas/ulb.schema';
 import { Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
+import { isAdcUser } from 'src/module/auth/roles-xvi-fc.helper';
 import { toObjectIdString } from 'src/common/utils/objectid.util';
 import { canStateEditForm, canStateFinalSubmitForm } from './xvi-fc-form-status-access.util';
 
@@ -26,6 +29,67 @@ export function assertStateAccess(user: AuthUser, stateId: string): void {
       user.scope === Scope.STATE ? 'You can only access your own state data' : 'Access denied',
     );
   }
+}
+
+export interface UlbOwnership {
+  state?: unknown;
+  adc?: unknown;
+}
+
+/**
+ * Per-ULB view access for the STATE scope. ADMIN sees everything; a State user sees every ULB in their state
+ * (ADC-owned ones read-only); an ADC user sees only the ULBs owned by their own ADC.
+ * Compares the ULB's *current* `adc` every time, so reassigning a ULB moves access immediately.
+ */
+export function canViewUlb(user: AuthUser, ulb: UlbOwnership): boolean {
+  if (user.scope === Scope.ADMIN) return true;
+  if (user.scope !== Scope.STATE) return false;
+  const userStateId = toObjectIdString(user.state);
+  if (!userStateId || userStateId !== toObjectIdString(ulb.state)) return false;
+  return isAdcUser(user) ? toObjectIdString(user.adc) === toObjectIdString(ulb.adc) : true;
+}
+
+/**
+ * Per-ULB decision access (approve / return / undo, bulk included): the ULB's owner decides. An ADC user decides
+ * only their own ADC's ULBs; a plain State user decides only the ULBs that have no ADC (ADC-owned ones are
+ * view-only for the State, so it never re-reviews them).
+ */
+export function canDecideUlb(user: AuthUser, ulb: UlbOwnership): boolean {
+  if (user.scope === Scope.ADMIN) return true;
+  if (user.scope !== Scope.STATE) return false;
+  const userStateId = toObjectIdString(user.state);
+  if (!userStateId || userStateId !== toObjectIdString(ulb.state)) return false;
+  const ulbAdcId = toObjectIdString(ulb.adc);
+  return isAdcUser(user) ? !!ulbAdcId && ulbAdcId === toObjectIdString(user.adc) : !ulbAdcId;
+}
+
+/** Loads just the two fields canViewUlb / canDecideUlb read; null when the ULB does not exist. */
+export function loadUlbOwnership(ulbModel: Model<UlbDocument>, ulbId: unknown): Promise<UlbOwnership | null> {
+  return ulbModel
+    .findById(ulbId as Types.ObjectId)
+    .select('state adc')
+    .lean<UlbOwnership>()
+    .exec();
+}
+
+/** canViewUlb against the ULB's stored ownership. ADMIN needs no lookup; any non-STATE scope is false. */
+export async function hasUlbViewAccess(user: AuthUser, ulbModel: Model<UlbDocument>, ulbId: unknown): Promise<boolean> {
+  if (user.scope === Scope.ADMIN) return true;
+  if (user.scope !== Scope.STATE) return false;
+  const ulb = await loadUlbOwnership(ulbModel, ulbId);
+  return !!ulb && canViewUlb(user, ulb);
+}
+
+/** canDecideUlb against the ULB's stored ownership. ADMIN needs no lookup; any non-STATE scope is false. */
+export async function hasUlbDecideAccess(
+  user: AuthUser,
+  ulbModel: Model<UlbDocument>,
+  ulbId: unknown,
+): Promise<boolean> {
+  if (user.scope === Scope.ADMIN) return true;
+  if (user.scope !== Scope.STATE) return false;
+  const ulb = await loadUlbOwnership(ulbModel, ulbId);
+  return !!ulb && canDecideUlb(user, ulb);
 }
 
 export interface StateFormPermissions {

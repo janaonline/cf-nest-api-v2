@@ -180,6 +180,8 @@ export class UsersRepository {
       state: new Types.ObjectId(String(stateId)),
       isDeleted: false,
       role: { $in: ['STATE'] },
+      // ADC users are never auto-assigned by the nodal-officer rule (null matches a missing field too).
+      adc: null,
       isXVIFCProfileVerified: { $ne: true },
       // Only initialise subrole for users who don't have one yet — never overwrite manual assignments
       xviFcSubrole: { $in: [null, ''] },

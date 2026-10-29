@@ -27,6 +27,7 @@ import { XviFcDur, XviFcDurDocument } from '../../schemas/xvi-fc/dur.schema';
 import { StateWiseResponseDto } from './dto/state-wise-response.dto';
 import { buildGetStateWiseDataPipeline } from './queries/get-state-wise-data.query';
 import { SideMenuResponseDto } from './dto/side-menu.dto';
+import { isAdcUser } from 'src/module/auth/roles-xvi-fc.helper';
 import { Year, YearDocument } from '../../schemas/year.schema';
 import { Ulb, UlbDocument } from '../../schemas/ulb.schema';
 import { State, StateDocument } from '../../schemas/state.schema';
@@ -106,8 +107,9 @@ export class XviFcService {
     return { ...data, tableData, totalAllocation };
   }
 
-  getSideMenu(role: MenuRole, yearId: string): Promise<SideMenuResponseDto> {
-    return this.sideMenuService.getSideMenu(role, yearId);
+  /** `role` is only a hint: an ADC user is always served the ADC menu (`STATE_ADC`), whatever role they ask for. */
+  getSideMenu(role: MenuRole, yearId: string, user: AuthUser): Promise<SideMenuResponseDto> {
+    return this.sideMenuService.getSideMenu(isAdcUser(user) ? 'STATE_ADC' : role, yearId);
   }
 
   async clearPageCache(user: AuthUser, pattern?: string): Promise<{ message: string }> {

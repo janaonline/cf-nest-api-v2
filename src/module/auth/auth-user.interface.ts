@@ -11,6 +11,8 @@ export interface AuthUser {
   xviFcSubrole?: XviFcSubrole | null;
   ulb?: Types.ObjectId | string | null;
   state?: Types.ObjectId | string | null;
+  // Set for an ADC user (role STATE scoped to one Autonomous District Council); null for a normal State user.
+  adc?: Types.ObjectId | string | null;
   isActive?: boolean;
   sessionId?: string;
   exp?: number;

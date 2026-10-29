@@ -19,6 +19,7 @@ import { FormJsonService } from 'src/master/form-json/form-json.service';
 import { FormJsonConfigService } from 'src/master/form-json-config/form-json-config.service';
 import type { CommonFile, FileInfo } from 'src/schemas/common/file.schema';
 import { State, StateDocument } from 'src/schemas/state.schema';
+import { Adc, AdcDocument } from 'src/schemas/adc.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { User, UserDocument } from 'src/schemas/user/user.schema';
 import { Year } from 'src/schemas/year.schema';
@@ -50,6 +51,9 @@ import { UpdateUlbYearAccessDto } from './dto/update-ulb-year-access.dto';
 
 const OBJECT_ID_FIELDS = new Set(['state', 'ulbType', 'UA']);
 
+/** The owning ADC as the ULB lists return it (populated), not the raw ObjectId stored on the document. */
+type UlbAdcRef = { _id: Types.ObjectId; name: string };
+
 // Annual Accounts' own two exemptable formIds - see annual_accounts.service.ts's own
 // SECTION_FORM_IDS (private to that file; kept as a small local copy here rather than exported,
 // consistent with this codebase's existing convention for small formId lookup tables).
@@ -63,6 +67,7 @@ export class UlbService {
   constructor(
     @InjectModel(Ulb.name) private readonly ulbModel: Model<UlbDocument>,
     @InjectModel(State.name) private readonly stateModel: Model<StateDocument>,
+    @InjectModel(Adc.name) private readonly adcModel: Model<AdcDocument>,
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
     @InjectModel(Year.name) private readonly yearModel: Model<Year>,
     @InjectModel(SlbForm.name) private readonly slbModel: Model<SlbFormDocument>,
@@ -345,7 +350,15 @@ export class UlbService {
     } as T;
   }
 
+  /** ADC viewers (xviFcSubrole 'viewer') are read-only: they may not register or edit a ULB. */
+  private assertAdcUserCanWrite(user: IAuthUser): void {
+    if (user.role === Role.STATE && user.adc && user.xviFcSubrole === 'viewer') {
+      throw new ForbiddenException('Viewers cannot register or edit ULBs.');
+    }
+  }
+
   async create(dto: CreateUlbDto, user: IAuthUser): Promise<Ulb> {
+    this.assertAdcUserCanWrite(user);
     const fields = await this.loadFields();
     const data = { ...dto.data };
 
@@ -379,12 +392,18 @@ export class UlbService {
       patch.sbCode = await this.generateSbCode();
     }
 
+    // Ownership is never taken from the payload: only the ADC user's own ADC (below) or an ADMIN's
+    // Assign ADC action (assignAdc) sets it.
+    delete patch.adc;
+
     let stateId: Types.ObjectId;
     if (user.role === Role.STATE) {
       // A STATE user can only submit ULBs for their own state; the submitted state (if any) is ignored.
       if (!user.state) throw new ForbiddenException('Your account has no state assigned.');
       stateId = new Types.ObjectId(String(user.state));
       patch.state = stateId;
+      // A ULB an ADC user registers belongs to that ADC; a State DMA's belongs to no ADC.
+      if (user.adc) patch.adc = new Types.ObjectId(String(user.adc));
       patch.approval = { status: 'PENDING', submittedBy: new Types.ObjectId(user._id) };
       patch.isActive = false;
     } else {
@@ -645,7 +664,12 @@ export class UlbService {
     query: QueryUlbDto,
     user: IAuthUser,
   ): Promise<{
-    data: (Ulb & { stateName: string; ulbTypeName: string; isExistingUser: boolean })[];
+    data: (Omit<Ulb, 'adc'> & {
+      adc: UlbAdcRef | null;
+      stateName: string;
+      ulbTypeName: string;
+      isExistingUser: boolean;
+    })[];
     page: number;
     limit: number;
     total: number;
@@ -672,6 +696,8 @@ export class UlbService {
       // STATE users only ever see ULBs (of any approval status) that belong to their own state.
       if (!user.state) throw new ForbiddenException('Your account has no state assigned.');
       filter.state = new Types.ObjectId(String(user.state));
+      // An ADC user sees only their own ADC's ULBs; the State DMA sees every ULB in the state (ADC ones read-only).
+      if (user.adc) filter.adc = new Types.ObjectId(String(user.adc));
     } else if (query.state) {
       filter.state = new Types.ObjectId(query.state);
     }
@@ -708,18 +734,24 @@ export class UlbService {
    *  can render them directly without a separate client-side lookup call. */
   private async attachLookupNames<T extends Ulb>(
     ulbs: T[],
-  ): Promise<(T & { stateName: string; ulbTypeName: string })[]> {
+  ): Promise<(Omit<T, 'adc'> & { adc: UlbAdcRef | null; stateName: string; ulbTypeName: string })[]> {
     if (ulbs.length === 0) return [];
 
     const stateIds = [...new Set(ulbs.map((ulb) => String(ulb.state)).filter(Boolean))];
     const ulbTypeIds = [...new Set(ulbs.map((ulb) => String(ulb.ulbType)).filter(Boolean))];
+    const adcIds = [...new Set(ulbs.map((ulb) => (ulb.adc ? String(ulb.adc) : '')).filter(Boolean))];
 
     type LookupDoc = { _id: Types.ObjectId; name: string };
 
-    const [states, ulbTypes] = await Promise.all([
+    const [states, adcs, ulbTypes] = await Promise.all([
       stateIds.length
         ? this.stateModel
             .find({ _id: { $in: stateIds.map((id) => new Types.ObjectId(id)) } }, { name: 1 })
+            .lean<LookupDoc[]>()
+        : Promise.resolve<LookupDoc[]>([]),
+      adcIds.length
+        ? this.adcModel
+            .find({ _id: { $in: adcIds.map((id) => new Types.ObjectId(id)) } }, { name: 1 })
             .lean<LookupDoc[]>()
         : Promise.resolve<LookupDoc[]>([]),
       ulbTypeIds.length
@@ -732,9 +764,12 @@ export class UlbService {
 
     const stateNameById = new Map(states.map((s) => [String(s._id), s.name]));
     const ulbTypeNameById = new Map(ulbTypes.map((t) => [String(t._id), t.name]));
+    const adcNameById = new Map(adcs.map((a) => [String(a._id), a.name]));
 
     return ulbs.map((ulb) => ({
       ...ulb,
+      // Populated as { _id, name } so the lists can show the owning ADC without a second lookup.
+      adc: ulb.adc ? { _id: ulb.adc, name: adcNameById.get(String(ulb.adc)) ?? '' } : null,
       stateName: stateNameById.get(String(ulb.state)) ?? '',
       ulbTypeName: ulbTypeNameById.get(String(ulb.ulbType)) ?? '',
     }));
@@ -910,8 +945,19 @@ export class UlbService {
     if (!existing) throw new NotFoundException('ULB not found');
 
     if (user.role === Role.STATE) {
+      this.assertAdcUserCanWrite(user);
       if (!user.state || String(existing.state) !== String(user.state)) {
         throw new ForbiddenException('You can only edit ULBs in your own state.');
+      }
+      // Only the owner resubmits: an ADC user their own ADC's ULB, the State DMA a ULB that has no ADC.
+      const ownerAdc = existing.adc ? String(existing.adc) : null;
+      const callerAdc = user.adc ? String(user.adc) : null;
+      if (ownerAdc !== callerAdc) {
+        throw new ForbiddenException(
+          callerAdc
+            ? 'You can only edit ULBs of your own ADC.'
+            : 'This ULB belongs to an ADC and can only be edited by it.',
+        );
       }
       if (existing.approval?.status !== 'REJECTED') {
         throw new ForbiddenException('You can only edit a rejected ULB submission.');
@@ -947,7 +993,19 @@ export class UlbService {
     }
 
     if (user.role === Role.STATE) {
+      // A State-scope caller can never move a ULB between states or ADCs, only resubmit it.
+      delete patch.state;
+      delete patch.adc;
       patch.approval = { status: 'PENDING', submittedBy: new Types.ObjectId(user._id) };
+    } else {
+      // Ownership only changes through assignAdc, which checks the ADC is in the ULB's state. Moving an
+      // ADC-owned ULB to another state here would leave it pointing at the old state's ADC, reviewable by no one.
+      delete patch.adc;
+      if (existing.adc && patch.state && String(patch.state) !== String(existing.state)) {
+        throw new BadRequestException(
+          'This ULB belongs to an ADC. Remove it from the ADC before moving it to another state.',
+        );
+      }
     }
 
     try {
@@ -966,6 +1024,38 @@ export class UlbService {
       }
       throw error;
     }
+  }
+
+  /**
+   * Sets which ADC owns a ULB, or null to move it back to the State DMA (ADMIN only — enforced by RolesGuard
+   * at the controller). Allowed at any approval status. Review access follows the ULB's *current* `adc`,
+   * so pending forms (and undo rights) move to the new owner immediately.
+   */
+  async assignAdc(id: string, adcId: string | null | undefined): Promise<Ulb> {
+    if (!Types.ObjectId.isValid(id)) throw new BadRequestException('Invalid ULB id');
+    if (adcId === undefined) throw new BadRequestException('adcId is required (use null to remove the ADC).');
+
+    const ulb = await this.ulbModel.findById(id).select('state').lean<{ state: Types.ObjectId }>();
+    if (!ulb) throw new NotFoundException('ULB not found');
+
+    if (adcId !== null) {
+      const adc = await this.adcModel
+        .findById(adcId)
+        .select('state isActive')
+        .lean<{ state: Types.ObjectId; isActive: boolean }>();
+      if (!adc) throw new BadRequestException('ADC not found.');
+      if (!adc.isActive) throw new BadRequestException('This ADC is not active.');
+      if (String(adc.state) !== String(ulb.state)) {
+        throw new BadRequestException('An ADC can only own ULBs of its own state.');
+      }
+    }
+
+    const updated = await this.ulbModel
+      .findByIdAndUpdate(id, { $set: { adc: adcId === null ? null : new Types.ObjectId(adcId) } }, { new: true })
+      .lean<Ulb>();
+    if (!updated) throw new NotFoundException('ULB not found');
+    const [withNames] = await this.attachLookupNames([this.withApprovalDefaults(updated)]);
+    return withNames as unknown as Ulb;
   }
 
   async remove(id: string): Promise<{ message: string }> {

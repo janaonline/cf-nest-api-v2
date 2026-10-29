@@ -33,6 +33,7 @@ import { CommunicationModule } from './module/communication/communication.module
 import { NotificationsModule } from './module/notifications/notifications.module';
 import { UlbModule } from './master/ulb/ulb.module';
 import { StateModule } from './master/state/state.module';
+import { AdcModule } from './master/adc/adc.module';
 import { DigitizationDbModule } from './core/database/digitization-db.module';
 import { XvFcReviewModule } from './module/xv-fc/xv-fc-review/ulb/xv-fc-review.module';
 import { XvFcReviewAdminModule } from './module/xv-fc/xv-fc-review/admin/xv-fc-review-admin.module';
@@ -131,6 +132,7 @@ function getQueryCaller(): string {
     NotificationsModule,
     UlbModule,
     StateModule,
+    AdcModule,
     XvFcReviewModule,
     XvFcReviewAdminModule,
     PropertyTaxModule,
