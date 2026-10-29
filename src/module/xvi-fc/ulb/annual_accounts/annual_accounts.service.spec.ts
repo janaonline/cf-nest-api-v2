@@ -9,6 +9,7 @@ import { XviFcAnnualAccountUploadHistory } from '../../../../schemas/xvi-fc/annu
 import { XviFcAnnualAccountFormLog } from '../../../../schemas/xvi-fc/annual-account-form-log.schema';
 import { XviFcDocumentActionGate } from '../../../../schemas/xvi-fc/document-action-gate.schema';
 import { Ulb } from '../../../../schemas/ulb.schema';
+import { Adc } from '../../../../schemas/adc.schema';
 import { Year } from '../../../../schemas/year.schema';
 import { User } from '../../../../schemas/user/user.schema';
 import { ExemptionResolverService } from '../../common/services/exemption-resolver.service';
@@ -137,6 +138,7 @@ describe('AnnualAccountsService', () => {
         { provide: getModelToken(XviFcAnnualAccountUploadHistory.name), useValue: mockUploadHistoryModel },
         { provide: getModelToken(XviFcAnnualAccountFormLog.name), useValue: mockFormLogModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+        { provide: getModelToken(Adc.name), useValue: { find: jest.fn(), findById: jest.fn(), exists: jest.fn() } },
         { provide: getModelToken(Year.name), useValue: mockYearModel },
         { provide: getModelToken(User.name), useValue: mockUserModel },
         { provide: getModelToken(XviFcDocumentActionGate.name), useValue: mockActionGateModel },
@@ -1050,7 +1052,7 @@ describe('AnnualAccountsService', () => {
 
       expect(mockUlbModel.aggregate).toHaveBeenCalled();
       expect(result.total).toBe(1);
-      expect(result.rows).toEqual([row]);
+      expect(result.rows).toEqual([{ ...row, adcName: null, canReview: true }]);
       expect(result.counts.IN_PROGRESS).toBe(1);
       expect(result.counts.NOT_STARTED).toBe(0);
       // Synthetic exemption-overlay buckets are always present, even when nothing landed in them.

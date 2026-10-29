@@ -33,6 +33,7 @@ import { CommunicationModule } from './module/communication/communication.module
 import { NotificationsModule } from './module/notifications/notifications.module';
 import { UlbModule } from './master/ulb/ulb.module';
 import { StateModule } from './master/state/state.module';
+import { AdcModule } from './master/adc/adc.module';
 import { DigitizationDbModule } from './core/database/digitization-db.module';
 /** Fails app startup before Mongoose ever attempts a connection if MONGO_URI/MONGO_DB_NAME are
  *  missing or blank — MongooseModule.forRootAsync below would otherwise pass `undefined` through
@@ -128,6 +129,7 @@ function getQueryCaller(): string {
     NotificationsModule,
     UlbModule,
     StateModule,
+    AdcModule,
     DataCollectionModule,
   ],
   controllers: [AppController],

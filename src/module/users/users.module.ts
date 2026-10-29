@@ -4,6 +4,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { User, UserSchema } from 'src/schemas/user/user.schema';
 import { Ulb, UlbSchema } from 'src/schemas/ulb.schema';
 import { State, StateSchema } from 'src/schemas/state.schema';
+import { Adc, AdcSchema } from 'src/schemas/adc.schema';
 import { EmailQueueModule } from 'src/core/queue/email-queue/email-queue.module';
 import { UsersController } from './users.controller';
 import { UsersRepository } from './users.repository';
@@ -16,6 +17,7 @@ import { UsersService } from './users.service';
       { name: User.name, schema: UserSchema },
       { name: Ulb.name, schema: UlbSchema },
       { name: State.name, schema: StateSchema },
+      { name: Adc.name, schema: AdcSchema },
     ]),
     EmailQueueModule,
   ],

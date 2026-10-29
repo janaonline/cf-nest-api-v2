@@ -57,6 +57,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
       xviFcSubrole: user.xviFcSubrole ?? null,
       ulb: user.ulb,
       state: user.state,
+      adc: user.adc ? String(user.adc) : null,
       isActive: user.isActive,
       sessionId: payload.sessionId,
       exp: payload.exp,

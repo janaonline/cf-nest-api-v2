@@ -173,6 +173,11 @@ export class User extends Document {
   xviFcSubrole!: 'admin' | 'reviewer' | 'viewer' | null;
   // ── END NEW test
 
+  // ADC (Autonomous District Council) membership. null = a normal State user; set = an ADC user, who is
+  // still role STATE but is scoped to the ULBs owned by this ADC (see isAdcUser in roles-xvi-fc.helper.ts).
+  @Prop({ type: Types.ObjectId, ref: 'Adc', default: null, index: true })
+  adc!: Types.ObjectId | null;
+
   @Prop({ type: Boolean, default: false })
   isNewUser!: boolean;
 
@@ -199,3 +204,16 @@ export class User extends Document {
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);
+
+// One admin per ADC, enforced by the DB so two concurrent invites can't both create one (users.service maps
+// the E11000 to ADC_ADMIN_EXISTS). Partial: only active ADC admins are indexed, so no other user is affected,
+// and every removal path sets isDeleted: true. The key includes xviFcSubrole so it never clashes with the
+// plain `adc` index above.
+UserSchema.index(
+  { adc: 1, xviFcSubrole: 1 },
+  {
+    name: 'uniq_active_adc_admin',
+    unique: true,
+    partialFilterExpression: { adc: { $type: 'objectId' }, xviFcSubrole: 'admin', isDeleted: false },
+  },
+);

@@ -8,6 +8,7 @@ import { UsersService } from './users.service';
 import { User } from 'src/schemas/user/user.schema';
 import { State } from 'src/schemas/state.schema';
 import { Ulb } from 'src/schemas/ulb.schema';
+import { Adc } from 'src/schemas/adc.schema';
 import { RedisService } from 'src/core/services/redis/redis.service';
 import { EmailQueueService } from 'src/core/queue/email-queue/email-queue.service';
 import { EmailDomainValidationService } from 'src/core/email-domain-validation/email-domain-validation.service';
@@ -72,6 +73,7 @@ describe('UsersService', () => {
         { provide: getModelToken(User.name), useValue: mockUserModel },
         { provide: getModelToken(State.name), useValue: mockStateModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+        { provide: getModelToken(Adc.name), useValue: { find: jest.fn(), findById: jest.fn(), exists: jest.fn() } },
         { provide: RedisService, useValue: mockRedisService },
         { provide: EmailQueueService, useValue: mockEmailQueueService },
         { provide: ConfigService, useValue: mockConfigService },
@@ -489,7 +491,7 @@ describe('UsersService', () => {
 
   describe('softDeleteStateUser()', () => {
     it('marks a non-admin STATE user as removed from XVI-FC and from the whole platform', async () => {
-      const targetDoc = makeUserDoc({ role: Role.STATE, xviFcSubrole: 'reviewer' });
+      const targetDoc = makeUserDoc({ role: Role.STATE, xviFcSubrole: 'reviewer', state: new Types.ObjectId(STATE_ID) });
       mockUserModel.exec.mockResolvedValueOnce(targetDoc).mockResolvedValueOnce(undefined);
 
       const result = await service.softDeleteStateUser(TARGET_USER_ID, makeStateAdmin());
@@ -501,7 +503,7 @@ describe('UsersService', () => {
     });
 
     it('throws 400 when trying to remove the STATE admin', async () => {
-      const targetDoc = makeUserDoc({ role: Role.STATE, xviFcSubrole: 'admin' });
+      const targetDoc = makeUserDoc({ role: Role.STATE, xviFcSubrole: 'admin', state: new Types.ObjectId(STATE_ID) });
       mockUserModel.exec.mockResolvedValueOnce(targetDoc);
 
       await expect(service.softDeleteStateUser(TARGET_USER_ID, makeStateAdmin())).rejects.toThrow(

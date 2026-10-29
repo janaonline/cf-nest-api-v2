@@ -134,6 +134,11 @@ export class Ulb {
   @Prop({ type: Types.ObjectId, ref: 'State', required: true })
   state: Types.ObjectId;
 
+  // Owning Autonomous District Council (Assam). null = the State DMA reviews this ULB's forms.
+  // Set by the platform Admin ("Assign ADC") or stamped from the ADC user who registers the ULB.
+  @Prop({ type: Types.ObjectId, ref: 'Adc', default: null })
+  adc: Types.ObjectId | null;
+
   @Prop({
     type: {
       lat: { type: String, default: '0.0' },
@@ -229,3 +234,4 @@ export const UlbSchema = SchemaFactory.createForClass(Ulb);
 
 UlbSchema.index({ state: 1, isActive: 1 });
 UlbSchema.index({ state: 1, 'approval.status': 1 });
+UlbSchema.index({ state: 1, adc: 1 });
