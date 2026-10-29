@@ -16,6 +16,8 @@ Each decision below is cited from several files; read the ADR, not just the loca
   write history, when the signed letter is cleared, and the submit preconditions.
 - [docs/adr/0004-one-active-batch.md](docs/adr/0004-one-active-batch.md) - one batch in progress per
   State/year/installment, and why lifting it brings back stale letters.
+- [docs/adr/0005-exemptions-under-review.md](docs/adr/0005-exemptions-under-review.md) - an exemption
+  request under MoHUA review or approved counts; how the claim follows a later decision.
 
 ## Layout
 
@@ -55,7 +57,8 @@ Each decision below is cited from several files; read the ADR, not just the loca
   fetch for another part of the same document.
 - `helpers/` - pure functions (amount arithmetic, content hash, summary mapping, permissions, letter
   text and annexure cells), except `claim-letter-build-cleanup.helpers.ts`, the delete shared by both
-  stale-build reclaim paths.
+  stale-build reclaim paths, and `claim-letter-sfc-exemption.helpers.ts`, the Entire State SFC
+  exemption read shared by Row B and the letter details (ADR 0005).
 - `constants/`, `types/`, `dto/` - limits and letter constants, response shapes, request validation.
 
 ## The letter
@@ -71,7 +74,8 @@ two can never disagree; the frontend renders the backend's text verbatim.
   20-row page parses one chunk. Chunks are written first and live 30s longer than `meta`; concurrent
   misses share one build (per process). Keys expire on their own, and a revision bump starts new ones.
 - Letter details and the SFC values (row B) change without a revision bump, so they are merged per
-  request, never cached. The .docx and Submit always evaluate fresh.
+  request, never cached. The .docx and Submit always evaluate fresh. While the State's Entire State SFC
+  exemption counts, Row B prints the exemption instead (ADR 0005).
 - Annexure condition columns are never hardcoded: one per enabled ULB-bulk criterion
   (`ClaimLetterUlbLevelEligibility.perCriterion`, sorted by `claimEligibility.displayOrder`, headed by
   `claimEligibility.letterColumnLabel`), so adding or removing a criterion is a formjson change. Two
@@ -79,7 +83,8 @@ two can never disagree; the frontend renders the backend's text verbatim.
   to criterion types through `CLAIM_LETTER_ROW_CRITERIA` (the rows are fixed text; a mapped criterion
   that is not enabled prints "Not applicable").
 - Cell text is decided only in `buildAnnexureCell` (`helpers/claim-letter-letter.helpers.ts`), whose
-  comment lists the rules.
+  comment lists the rules. A discretionary exemption prints "Exemption requested" while under MoHUA
+  review and "Exempted" once approved (ADR 0005).
 - Dates the State picks are stored as UTC-midnight ISO strings and printed "07 Oct 2026" with UTC
   getters (fixed month names, no locale); the as-on stamp is IST ("07 Oct 2026, 14:30").
 
@@ -87,7 +92,8 @@ two can never disagree; the frontend renders the backend's text verbatim.
 
 Stored as `letterDetails` on the batch. Fields, labels, validations and required flags all come from
 formjson 26 (`meta.letterDetailKeys`, a flat list): only the fields the OM needs are required (row A
-b and c, row B ATR date), and optional fields keep their length / format rules when filled. The
+b and c, row B ATR date; the ATR date is left out while the State's SFC exemption counts, see
+`letterQuestionsFor`), and optional fields keep their length / format rules when filled. The
 portal edits them inline in the preview, where each slot run carries its key in `field`.
 
 - A save takes any subset of keys: `DynamicFormValidationService` in draft mode, plus type, option and
@@ -138,11 +144,15 @@ Unspent Declaration, ATR), merged with `pdf-lib`.
   summed ₹2.08 off); whole numbers make that drift impossible. `helpers/claim-letter-financial.helpers.ts`
   does all amount arithmetic with plain integers; the variance band cross-multiplies instead of
   dividing so it stays exact.
-- Each child's `eligibilitySources` holds one snapshot per `FORM_AND_ROW` source (Elected Body, FC
-  Unspent): the source's State-level result plus this ULB's row evidence
-  (`ClaimLetterUlbLevelEligibility.rowEvidenceByFormId`), both already fetched. The parent's
-  `stateEligibilitySources` stays form-level (`rowDocumentId` / `rowStatusAtEvaluation` null), since no
-  single row applies to a whole State.
+- Each child's `eligibilitySources` holds one snapshot per ULB condition, all already fetched: each
+  `FORM_AND_ROW` source (Elected Body, FC Unspent) as its State-level result plus this ULB's row
+  evidence (`rowEvidenceByFormId`), and each ULB-owned form (`perCriterion[].formEvidence`). The
+  parent's `stateEligibilitySources` stays form-level (`rowDocumentId` / `rowStatusAtEvaluation`
+  null), since no single row applies to a whole State. Every entry stores `exemptionKind`,
+  `exemptionId` and `exemptionStatusAtEvaluation`; only an EXEMPTED entry may lack a source document;
+  `appliedExemptionIds` is the child's own requests (ADR 0005).
+- Exemption notes (`perUlbExemptionNotes`: under review, or rejected and now failing) feed the ULB row
+  badges and the detail summary's `exemptionUnderReviewUlbCount`; they are display-only.
 - Submit's checks all run before its transaction and are listed in ADR 0003; the update filter also
   pins `signedClaimFile.path`, `letterDetailsUpdatedAt` and `finalClaimPdf.sourceKey` as read.
 - Abandon only sets `isAbandoned` (the status stays `IN_PROGRESS`) and releases the locks, so every

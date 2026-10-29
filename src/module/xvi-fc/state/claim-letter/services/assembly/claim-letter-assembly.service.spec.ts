@@ -200,7 +200,7 @@ describe('ClaimLetterAssemblyService', () => {
     eligibilityService = {
       evaluateStateLevelGate: jest.fn().mockResolvedValue({ sources: [], passed: true }),
       resolveDevolutionAllocations: jest.fn().mockResolvedValue(new Map([[ulbAId.toString(), allocation]])),
-      resolveUlbLevelEligibility: jest.fn().mockResolvedValue({ perUlbEligible: new Map() }),
+      resolveUlbLevelEligibility: jest.fn().mockResolvedValue({ perUlbEligible: new Map(), perCriterion: [] }),
       getClaimStatusBreakdown: jest.fn().mockResolvedValue({
         totalAlreadyAcknowledged: 0,
         totalClaimInProgress: 0,
@@ -515,6 +515,7 @@ describe('ClaimLetterAssemblyService', () => {
 
   it('throws BadRequestException and rolls back when a selected ULB fails a new per-ULB criterion (SLB, Annual Accounts, etc.)', async () => {
     eligibilityService.resolveUlbLevelEligibility.mockResolvedValue({
+      perCriterion: [],
       perUlbEligible: new Map([[ulbAId.toString(), false]]),
     });
 
@@ -621,6 +622,7 @@ describe('ClaimLetterAssemblyService', () => {
     };
     eligibilityService.evaluateStateLevelGate.mockResolvedValue({ sources: [electedBodySource], passed: true });
     eligibilityService.resolveUlbLevelEligibility.mockResolvedValue({
+      perCriterion: [],
       perUlbEligible: new Map([[ulbAId.toString(), true]]),
       rowEvidenceByFormId: new Map([
         [
@@ -684,6 +686,7 @@ describe('ClaimLetterAssemblyService', () => {
     };
     eligibilityService.evaluateStateLevelGate.mockResolvedValue({ sources: [electedBodySource], passed: true });
     eligibilityService.resolveUlbLevelEligibility.mockResolvedValue({
+      perCriterion: [],
       perUlbEligible: new Map([[ulbAId.toString(), true]]),
       rowEvidenceByFormId: new Map([[23, new Map()]]), // no entry for ulbA — defaultWhenNoRow applied
     });
@@ -701,6 +704,226 @@ describe('ClaimLetterAssemblyService', () => {
       result: 'PASSED',
       reasonCode: 'ROW_DEFAULT_NO_ROW',
     });
+  });
+
+  it('freezes an Entire State exemption without a source document, with the exemption status', async () => {
+    const exemptionId = new Types.ObjectId();
+    const sfcSource = {
+      formId: 22,
+      formJsonId: new Types.ObjectId().toString(),
+      ruleVersion: 1,
+      formType: 'SFC_STATUS',
+      ownerLevel: 'STATE',
+      evaluationLevel: 'FORM',
+      formDocumentId: null,
+      statusAtEvaluation: null,
+      result: 'EXEMPTED',
+      exemptionId: exemptionId.toString(),
+      exemptionStatus: 5,
+      reasonCode: 'DISCRETIONARY_EXEMPTION_PENDING',
+      evidence: {
+        evidenceVersion: 1,
+        resolvedFormStatus: null,
+        acceptedFormStatuses: [5, 7],
+        sourceFormDocumentId: null,
+        evaluatedAt: new Date().toISOString(),
+      },
+    };
+    eligibilityService.evaluateStateLevelGate.mockResolvedValue({ sources: [sfcSource], passed: true });
+
+    await service.createDraft(baseInput());
+
+    const [, update] = batchModel.findOneAndUpdate.mock.calls[0] as [
+      unknown,
+      { $set: { stateEligibilitySources: Record<string, unknown>[] } },
+    ];
+    expect(update.$set.stateEligibilitySources[0]).toMatchObject({
+      formId: 22,
+      formDocumentId: null,
+      statusAtEvaluation: null,
+      result: 'EXEMPTED',
+      exemptionId,
+      exemptionStatusAtEvaluation: 5,
+    });
+  });
+
+  it("freezes a ULB's exemption status from its row evidence on a FORM_AND_ROW entry", async () => {
+    const electedBodyFormDocId = new Types.ObjectId();
+    const electedBodySource = {
+      formId: 23,
+      formJsonId: new Types.ObjectId().toString(),
+      ruleVersion: 1,
+      formType: 'ELECTED_BODY',
+      ownerLevel: 'STATE',
+      evaluationLevel: 'FORM_AND_ROW',
+      formDocumentId: electedBodyFormDocId.toString(),
+      statusAtEvaluation: 7,
+      result: 'PASSED',
+      reasonCode: 'FORM_STATUS_ACCEPTED',
+      evidence: {
+        evidenceVersion: 1,
+        resolvedFormStatus: 7,
+        acceptedFormStatuses: [5, 7],
+        sourceFormDocumentId: electedBodyFormDocId.toString(),
+        evaluatedAt: new Date().toISOString(),
+      },
+    };
+    eligibilityService.evaluateStateLevelGate.mockResolvedValue({ sources: [electedBodySource], passed: true });
+    eligibilityService.resolveUlbLevelEligibility.mockResolvedValue({
+      perCriterion: [],
+      perUlbEligible: new Map([[ulbAId.toString(), true]]),
+      rowEvidenceByFormId: new Map([
+        [
+          23,
+          new Map([
+            [
+              ulbAId.toString(),
+              {
+                bucket: 'EXEMPTED',
+                rowDocumentId: null,
+                rowStatusAtEvaluation: null,
+                datasetVersion: 4,
+                rowValue: null,
+                rowAccepted: null,
+                exemptionStatus: 5,
+              },
+            ],
+          ]),
+        ],
+      ]),
+    });
+
+    await service.createDraft(baseInput());
+
+    const [ops] = batchUlbModel.bulkWrite.mock.calls[0] as [
+      Array<{ insertOne: { document: Record<string, unknown> } }>,
+    ];
+    const eligibilitySources = ops[0].insertOne.document['eligibilitySources'] as Record<string, unknown>[];
+    expect(eligibilitySources[0]).toMatchObject({
+      formDocumentId: electedBodyFormDocId,
+      result: 'EXEMPTED',
+      reasonCode: 'ROW_EXEMPTED',
+      exemptionStatusAtEvaluation: 5,
+    });
+  });
+
+  it('records every ULB condition on the child, each with the exemption it relied on', async () => {
+    const electedBodyFormDocId = new Types.ObjectId();
+    const auditedDocId = new Types.ObjectId();
+    const slbDocId = new Types.ObjectId();
+    // One request document per ULB holds every formId, so Elected Body and Audited share an id.
+    const requestId = new Types.ObjectId();
+    const electedBodySource = {
+      formId: 23,
+      formJsonId: new Types.ObjectId().toString(),
+      ruleVersion: 1,
+      formType: 'ELECTED_BODY',
+      ownerLevel: 'STATE',
+      evaluationLevel: 'FORM_AND_ROW',
+      formDocumentId: electedBodyFormDocId.toString(),
+      statusAtEvaluation: 7,
+      result: 'PASSED',
+      reasonCode: 'FORM_STATUS_ACCEPTED',
+      evidence: {
+        evidenceVersion: 1,
+        resolvedFormStatus: 7,
+        acceptedFormStatuses: [5, 7],
+        sourceFormDocumentId: electedBodyFormDocId.toString(),
+        evaluatedAt: new Date().toISOString(),
+      },
+    };
+    const ulbCriterion = (formId: number, type: string, evidence: Record<string, unknown>) => ({
+      formId,
+      type,
+      formJsonId: new Types.ObjectId().toString(),
+      ruleVersion: 2,
+      ownerLevel: 'ULB',
+      evaluationLevel: 'FORM',
+      acceptedFormStatuses: [5, 7, 8],
+      formEvidence: new Map([[ulbAId.toString(), evidence]]),
+    });
+    eligibilityService.evaluateStateLevelGate.mockResolvedValue({ sources: [electedBodySource], passed: true });
+    eligibilityService.resolveUlbLevelEligibility.mockResolvedValue({
+      perUlbEligible: new Map([[ulbAId.toString(), true]]),
+      rowEvidenceByFormId: new Map([
+        [
+          23,
+          new Map([
+            [
+              ulbAId.toString(),
+              {
+                bucket: 'EXEMPTED',
+                rowDocumentId: null,
+                rowStatusAtEvaluation: null,
+                datasetVersion: 1,
+                rowValue: 'Not Constituted',
+                rowAccepted: true,
+                exemptionId: requestId.toString(),
+                exemptionStatus: 5,
+                exemptionKind: 'DISCRETIONARY_ULB',
+              },
+            ],
+          ]),
+        ],
+      ]),
+      perCriterion: [
+        ulbCriterion(30, 'UPLOAD_CONFIG_AUDITED', {
+          bucket: 'EXEMPTED',
+          formDocumentId: auditedDocId.toString(),
+          statusAtEvaluation: 1,
+          exemptionId: requestId.toString(),
+          exemptionStatus: 5,
+          exemptionKind: 'DISCRETIONARY_ULB',
+        }),
+        ulbCriterion(32, 'SLB', {
+          bucket: 'ELIGIBLE',
+          formDocumentId: slbDocId.toString(),
+          statusAtEvaluation: 8,
+          exemptionId: null,
+          exemptionStatus: null,
+          exemptionKind: null,
+        }),
+      ],
+    });
+
+    await service.createDraft(baseInput());
+
+    const [ops] = batchUlbModel.bulkWrite.mock.calls[0] as [
+      Array<{ insertOne: { document: Record<string, unknown> } }>,
+    ];
+    const child = ops[0].insertOne.document;
+    const sources = child['eligibilitySources'] as Record<string, unknown>[];
+    expect(sources.map((s) => s['formId'])).toEqual([23, 30, 32]);
+    expect(sources[0]).toMatchObject({
+      result: 'EXEMPTED',
+      exemptionId: requestId,
+      exemptionStatusAtEvaluation: 5,
+      exemptionKind: 'DISCRETIONARY_ULB',
+    });
+    expect(sources[1]).toMatchObject({
+      formType: 'UPLOAD_CONFIG_AUDITED',
+      formDocumentId: auditedDocId,
+      statusAtEvaluation: 1,
+      ruleVersion: 2,
+      result: 'EXEMPTED',
+      exemptionId: requestId,
+      exemptionStatusAtEvaluation: 5,
+      exemptionKind: 'DISCRETIONARY_ULB',
+      reasonCode: 'DISCRETIONARY_EXEMPTION_PENDING',
+      evidence: {
+        resolvedFormStatus: 1,
+        acceptedFormStatuses: [5, 7, 8],
+        sourceFormDocumentId: auditedDocId.toString(),
+      },
+    });
+    expect(sources[2]).toMatchObject({
+      formDocumentId: slbDocId,
+      result: 'PASSED',
+      exemptionId: null,
+      exemptionKind: null,
+      reasonCode: 'FORM_STATUS_ACCEPTED',
+    });
+    expect(child['appliedExemptionIds']).toEqual([requestId]);
   });
 
   it('recovers cleanly when a chunk insert fails mid-flight (does not leave the parent READY)', async () => {
@@ -1041,6 +1264,7 @@ describe('ClaimLetterAssemblyService', () => {
       batchUlbModel.find.mockReturnValue(q([persistedChild({ ulbId: ulbAId, claimedAmount: 95 })]));
       lockModel.find.mockReturnValue(q([{ ulbId: ulbAId }]));
       eligibilityService.resolveUlbLevelEligibility.mockResolvedValue({
+        perCriterion: [],
         perUlbEligible: new Map([[ulbAId.toString(), false]]),
       });
 

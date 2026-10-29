@@ -58,6 +58,10 @@ export const CLAIM_LETTER_DETAIL_PLACEHOLDERS = {
 
 export type ClaimLetterDetailKey = keyof typeof CLAIM_LETTER_DETAIL_PLACEHOLDERS;
 
+/** Row B's ATR date: left out of the letter details while the State's Entire State SFC exemption
+ *  counts, since Row B then prints the exemption instead (ADR 0005). */
+export const CLAIM_LETTER_SFC_ATR_DATE_KEY: ClaimLetterDetailKey = 'sfcAtrDate';
+
 /** Compliance rows C-I and the eligibility criterion `type` each one counts. Row G counts ULBs
  *  with an unspent balance, not ULBs meeting the condition. */
 export const CLAIM_LETTER_ROW_CRITERIA = {
