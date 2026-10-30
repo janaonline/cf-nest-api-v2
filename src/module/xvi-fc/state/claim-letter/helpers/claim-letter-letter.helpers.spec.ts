@@ -21,10 +21,15 @@ function criterion(overrides: Partial<ClaimLetterCriterionDetail>): ClaimLetterC
     label: 'SLB',
     letterColumnLabel: 'SLB',
     displayOrder: null,
+    formJsonId: 'form-json-1',
+    ruleVersion: 1,
+    ownerLevel: 'ULB',
     evaluationLevel: 'FORM',
+    acceptedFormStatuses: [],
     buckets: new Map(),
     rowEvidence: new Map(),
-    approvedExemptionUlbIds: new Set(),
+    formEvidence: new Map(),
+    discretionaryExemptions: new Map(),
     ...overrides,
   };
 }
@@ -36,6 +41,9 @@ const row = (rowValue: string, rowAccepted: boolean | null) => ({
   datasetVersion: 1,
   rowValue,
   rowAccepted,
+  exemptionId: null,
+  exemptionStatus: null,
+  exemptionKind: null,
 });
 
 describe('claim letter letter helpers', () => {
@@ -118,18 +126,27 @@ describe('claim letter letter helpers', () => {
   describe('buildAnnexureCell (first match wins)', () => {
     const ulb = 'u1';
 
-    it('1. a MoHUA-approved exemption prints "Exemption requested"', () => {
-      const c = criterion({ buckets: new Map([[ulb, 'EXEMPTED']]), approvedExemptionUlbIds: new Set([ulb]) });
-      expect(buildAnnexureCell(c, ulb, 0)).toBe('Exemption requested');
+    it('1. an exemption prints "Exemption requested" under MoHUA review and "Exempted" once approved', () => {
+      const exempted = (status: number) =>
+        criterion({ buckets: new Map([[ulb, 'EXEMPTED']]), discretionaryExemptions: new Map([[ulb, status]]) });
+      expect(buildAnnexureCell(exempted(5), ulb, 0)).toBe('Exemption requested');
+      expect(buildAnnexureCell(exempted(7), ulb, 0)).toBe('Exempted');
     });
 
-    it('2. the 14th FC column prints the unspent amount (or Nil), with the exemption note when approved', () => {
+    it('1. a rejected exemption prints the real result instead', () => {
+      const c = criterion({ buckets: new Map([[ulb, 'INELIGIBLE']]), discretionaryExemptions: new Map([[ulb, 6]]) });
+      expect(buildAnnexureCell(c, ulb, 0)).toBe('No');
+    });
+
+    it('2. the 14th FC column prints the unspent amount (or Nil), with the exemption note', () => {
       const fc = criterion({ type: 'FC_UNSPENT_STATE', evaluationLevel: 'FORM_AND_ROW' });
       expect(buildAnnexureCell(fc, ulb, 1850000)).toBe('18.50');
       expect(buildAnnexureCell(fc, ulb, 0)).toBe('Nil');
       expect(buildAnnexureCell(fc, ulb, 300)).toBe('0.00');
-      const approved = criterion({ ...fc, approvedExemptionUlbIds: new Set([ulb]) });
-      expect(buildAnnexureCell(approved, ulb, 1850000)).toBe('18.50 (Exemption requested)');
+      const underReview = criterion({ ...fc, discretionaryExemptions: new Map([[ulb, 5]]) });
+      expect(buildAnnexureCell(underReview, ulb, 1850000)).toBe('18.50 (Exemption requested)');
+      const approved = criterion({ ...fc, discretionaryExemptions: new Map([[ulb, 7]]) });
+      expect(buildAnnexureCell(approved, ulb, 0)).toBe('Nil (Exempted)');
     });
 
     it('3. a row-level criterion prints the value as entered, flagged while pending review', () => {

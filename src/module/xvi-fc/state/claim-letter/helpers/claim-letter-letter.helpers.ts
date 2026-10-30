@@ -1,3 +1,4 @@
+import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import type { FieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
 import { formatRupeesInLakh } from 'src/module/xvi-fc/common/utils/xvi-fc-amount-format.util';
 import type { ClaimLetterCriterionDetail } from '../services/eligibility/claim-letter-eligibility.service';
@@ -5,6 +6,7 @@ import type { ClaimLetterColumn, ClaimLetterParagraph, ClaimLetterRun } from '..
 
 export const FC_UNSPENT_CRITERION_TYPE = 'FC_UNSPENT_STATE';
 const EXEMPTION_REQUESTED = 'Exemption requested';
+const EXEMPTED = 'Exempted';
 const IST_OFFSET_MS = 330 * 60 * 1000;
 const NBSP = ' ';
 
@@ -129,21 +131,29 @@ export function criterionColumn(criterion: ClaimLetterCriterionDetail): ClaimLet
 export const TIED_COLUMN: ClaimLetterColumn = { header: `Tied grant Allocation (₹${NBSP}lakh)`, kind: 'amount' };
 export const UNTIED_COLUMN: ClaimLetterColumn = { header: `Untied grant allocation (₹${NBSP}lakh)`, kind: 'amount' };
 
+/** A discretionary exemption's cell text: under MoHUA review or approved; null for none or rejected. */
+function discretionaryExemptionText(status: number | undefined): string | null {
+  if (status === FORM_STATUS.UNDER_REVIEW_BY_MOHUA) return EXEMPTION_REQUESTED;
+  if (status === FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA) return EXEMPTED;
+  return null;
+}
+
 /**
  * One annexure cell, first match wins:
- * 1. MoHUA-approved exemption: "Exemption requested" (14th FC: amount + " (Exemption requested)").
+ * 1. Discretionary exemption: "Exemption requested" under MoHUA review, "Exempted" once approved
+ *    (14th FC: amount + " (Exemption requested)" or " (Exempted)").
  * 2. 14th FC: unspent amount in lakh if above 0, else "Nil".
  * 3. Row-level criterion with a row: the value as entered, + " (pending review)" if not accepted.
  * 4. Row-level criterion without a row: "Yes" when exempt, else "Not submitted".
  * 5. Others: ELIGIBLE / EXEMPTED "Yes", INELIGIBLE "No".
  */
 export function buildAnnexureCell(criterion: ClaimLetterCriterionDetail, ulbId: string, unspentRupees: number): string {
-  const approved = criterion.approvedExemptionUlbIds.has(ulbId);
+  const exemption = discretionaryExemptionText(criterion.discretionaryExemptions.get(ulbId));
   if (criterion.type === FC_UNSPENT_CRITERION_TYPE) {
     const amount = unspentRupees > 0 ? formatRupeesInLakh(unspentRupees) : 'Nil';
-    return approved ? `${amount} (${EXEMPTION_REQUESTED})` : amount;
+    return exemption ? `${amount} (${exemption})` : amount;
   }
-  if (approved) return EXEMPTION_REQUESTED;
+  if (exemption) return exemption;
 
   const bucket = criterion.buckets.get(ulbId);
   if (criterion.evaluationLevel === 'FORM_AND_ROW') {

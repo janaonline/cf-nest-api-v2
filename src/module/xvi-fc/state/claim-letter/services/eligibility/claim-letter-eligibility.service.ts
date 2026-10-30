@@ -4,14 +4,20 @@ import { ConfigService } from '@nestjs/config';
 import { FilterQuery, Model, Types } from 'mongoose';
 import { ClaimEligibilityEvaluatorService } from 'src/module/xvi-fc/common/services/claim-eligibility-evaluator.service';
 import { ExpectedUlbSetService } from 'src/module/xvi-fc/common/services/expected-ulb-set.service';
+import {
+  DISCRETIONARY_PENDING_STATUS,
+  DISCRETIONARY_REJECTED_STATUS,
+} from 'src/module/xvi-fc/common/services/exemption-resolver.service';
 import type {
   ClaimEligibilityEvaluationLevel,
+  ClaimEligibilityOwnerLevel,
   EligibilityEvaluationResult,
+  FormEligibilityEvidence,
   RowEligibilityEvidence,
   UlbEligibilityBucket,
   UlbEligibilityTally,
 } from 'src/module/xvi-fc/common/types/claim-eligibility.type';
-import { FORM_STATUS } from 'src/common/constants/form-status.constants';
+import { FORM_STATUS, type FormStatusType } from 'src/common/constants/form-status.constants';
 import { RedisService } from 'src/core/services/redis/redis.service';
 import { ClaimLetterBatch, ClaimLetterBatchDocument } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
 import {
@@ -74,6 +80,13 @@ export interface ClaimLetterFailedCriterion {
   shortLabel: string;
 }
 
+/** A discretionary exemption worth flagging on a ULB's row: one under MoHUA review (it counts), or a
+ *  rejected one the ULB now fails on. `label` is the criterion's short label. */
+export interface ClaimLetterExemptionNote {
+  label: string;
+  status: 'UNDER_REVIEW' | 'REJECTED';
+}
+
 /** One ULB-bulk criterion with every ULB's bucket, for the claim letter's annexure tables. */
 export interface ClaimLetterCriterionDetail {
   formId: number;
@@ -82,11 +95,18 @@ export interface ClaimLetterCriterionDetail {
   /** `letterColumnLabel ?? displayLabel ?? type`. */
   letterColumnLabel: string;
   displayOrder: number | null;
+  formJsonId: string;
+  ruleVersion: number;
+  ownerLevel: ClaimEligibilityOwnerLevel;
   evaluationLevel: ClaimEligibilityEvaluationLevel;
+  acceptedFormStatuses: FormStatusType[];
   buckets: Map<string, UlbEligibilityBucket>;
   /** FORM_AND_ROW criteria only (empty otherwise). */
   rowEvidence: Map<string, RowEligibilityEvidence>;
-  approvedExemptionUlbIds: Set<string>;
+  /** ULB-owned criteria only (empty otherwise): each ULB's document and exemption, for the snapshot. */
+  formEvidence: Map<string, FormEligibilityEvidence>;
+  /** Discretionary request status by ULB: 5 under review, 6 rejected, 7 approved. */
+  discretionaryExemptions: Map<string, number>;
 }
 
 export interface ClaimLetterUlbLevelEligibility {
@@ -98,6 +118,8 @@ export interface ClaimLetterUlbLevelEligibility {
   rowTalliesByFormId: Map<number, UlbEligibilityTally>;
   /** The criteria each ULB is INELIGIBLE on, so the picker can name the blocking form. */
   perUlbFailedCriteria: Map<string, ClaimLetterFailedCriterion[]>;
+  /** Exemptions under review or rejected, by ULB, for the row badges. */
+  perUlbExemptionNotes: Map<string, ClaimLetterExemptionNote[]>;
   /** FORM_AND_ROW row evidence by formId, then ulbId; assembly snapshots it on each child. Not cached:
    *  always empty from the `*ForDisplay` methods. */
   rowEvidenceByFormId: Map<number, Map<string, RowEligibilityEvidence>>;
@@ -117,6 +139,9 @@ export class ClaimLetterEligibilityService {
 
   /** Namespaces cache keys per environment; dev and stg share the same Redis instance. */
   private readonly env: string;
+  /** One display build per cache key at a time (this process), so requests made together on a cold
+   *  cache (the detail page loads the claim and its ULB rows at once) share one State-wide build. */
+  private readonly displayBuilds = new Map<string, Promise<unknown>>();
 
   constructor(
     private readonly formJsonService: FormJsonService,
@@ -157,9 +182,11 @@ export class ClaimLetterEligibilityService {
     const cached = await this.redis.get(key);
     if (cached !== null) return JSON.parse(cached) as ClaimLetterStateLevelGate;
 
-    const result = await this.evaluateStateLevelGate(stateId, designYearId, installment);
-    await this.redis.set(key, JSON.stringify(result), ClaimLetterEligibilityService.DISPLAY_CACHE_TTL_SECONDS);
-    return result;
+    return this.shareDisplayBuild(key, async () => {
+      const result = await this.evaluateStateLevelGate(stateId, designYearId, installment);
+      await this.redis.set(key, JSON.stringify(result), ClaimLetterEligibilityService.DISPLAY_CACHE_TTL_SECONDS);
+      return result;
+    });
   }
 
   /** Display-only, like evaluateStateLevelGateForDisplay. Caches the whole State's result, so every
@@ -178,15 +205,50 @@ export class ClaimLetterEligibilityService {
       return this.narrowUlbLevelEligibility(this.deserializeUlbLevelEligibility(cached), expectedUlbIds);
     }
 
-    const allExpectedUlbIds =
-      fullExpectedUlbIds ?? (await this.expectedUlbSetService.resolve(stateId, designYearId)).map((u) => u.ulbId);
-    const full = await this.resolveUlbLevelEligibility(stateId, designYearId, installment, allExpectedUlbIds);
-    await this.redis.set(
-      key,
-      this.serializeUlbLevelEligibility(full),
-      ClaimLetterEligibilityService.DISPLAY_CACHE_TTL_SECONDS,
-    );
+    const full = await this.shareDisplayBuild(key, async () => {
+      const allExpectedUlbIds =
+        fullExpectedUlbIds ?? (await this.expectedUlbSetService.resolve(stateId, designYearId)).map((u) => u.ulbId);
+      const built = await this.resolveUlbLevelEligibility(stateId, designYearId, installment, allExpectedUlbIds);
+      await this.redis.set(
+        key,
+        this.serializeUlbLevelEligibility(built),
+        ClaimLetterEligibilityService.DISPLAY_CACHE_TTL_SECONDS,
+      );
+      return built;
+    });
     return this.narrowUlbLevelEligibility(full, expectedUlbIds);
+  }
+
+  private shareDisplayBuild<T>(key: string, build: () => Promise<T>): Promise<T> {
+    let pending = this.displayBuilds.get(key) as Promise<T> | undefined;
+    if (!pending) {
+      pending = build().finally(() => this.displayBuilds.delete(key));
+      this.displayBuilds.set(key, pending);
+    }
+    return pending;
+  }
+
+  /** This batch's ULBs relying on an exemption still under MoHUA review. Display only (cached). */
+  async countBatchUlbsWithExemptionUnderReview(
+    claimLetterId: Types.ObjectId,
+    stateId: string,
+    designYearId: string,
+    installment: 1 | 2,
+  ): Promise<number> {
+    const children = await this.batchUlbModel
+      .find({ claimLetter: claimLetterId })
+      .select('ulbId')
+      .lean<{ ulbId: Types.ObjectId }[]>()
+      .exec();
+    if (children.length === 0) return 0;
+    const ulbIds = children.map((c) => String(c.ulbId));
+    const { perUlbExemptionNotes } = await this.resolveUlbLevelEligibilityForDisplay(
+      stateId,
+      designYearId,
+      installment,
+      ulbIds,
+    );
+    return ulbIds.filter((id) => perUlbExemptionNotes.get(id)?.some((n) => n.status === 'UNDER_REVIEW')).length;
   }
 
   private narrowUlbLevelEligibility(
@@ -199,6 +261,7 @@ export class ClaimLetterEligibilityService {
       standaloneCriteria: full.standaloneCriteria,
       rowTalliesByFormId: full.rowTalliesByFormId,
       perUlbFailedCriteria: new Map([...full.perUlbFailedCriteria].filter(([id]) => subset.has(id))),
+      perUlbExemptionNotes: new Map([...full.perUlbExemptionNotes].filter(([id]) => subset.has(id))),
       rowEvidenceByFormId: new Map(),
       perCriterion: [],
     };
@@ -211,6 +274,7 @@ export class ClaimLetterEligibilityService {
       standaloneCriteria: value.standaloneCriteria,
       rowTalliesByFormId: [...value.rowTalliesByFormId.entries()],
       perUlbFailedCriteria: [...value.perUlbFailedCriteria.entries()],
+      perUlbExemptionNotes: [...value.perUlbExemptionNotes.entries()],
     });
   }
 
@@ -220,12 +284,15 @@ export class ClaimLetterEligibilityService {
       standaloneCriteria: UlbCriterionSummary[];
       rowTalliesByFormId: [number, UlbEligibilityTally][];
       perUlbFailedCriteria: [string, ClaimLetterFailedCriterion[]][];
+      /** Absent in an entry cached before this field existed (30-second TTL). */
+      perUlbExemptionNotes?: [string, ClaimLetterExemptionNote[]][];
     };
     return {
       perUlbEligible: new Map(parsed.perUlbEligible),
       standaloneCriteria: parsed.standaloneCriteria,
       rowTalliesByFormId: new Map(parsed.rowTalliesByFormId),
       perUlbFailedCriteria: new Map(parsed.perUlbFailedCriteria),
+      perUlbExemptionNotes: new Map(parsed.perUlbExemptionNotes ?? []),
       rowEvidenceByFormId: new Map(),
       perCriterion: [],
     };
@@ -276,12 +343,20 @@ export class ClaimLetterEligibilityService {
 
     const perUlbEligible = new Map<string, boolean>(expectedUlbIds.map((id) => [id, true]));
     const perUlbFailedCriteria = new Map<string, ClaimLetterFailedCriterion[]>();
+    const perUlbExemptionNotes = new Map<string, ClaimLetterExemptionNote[]>();
     const standaloneCriteria: UlbCriterionSummary[] = [];
     const rowTalliesByFormId = new Map<number, UlbEligibilityTally>();
     const rowEvidenceByFormId = new Map<number, Map<string, RowEligibilityEvidence>>();
     const perCriterion: ClaimLetterCriterionDetail[] = [];
 
-    for (const { doc, perUlb, tally, rowEvidenceByUlbId, approvedExemptionUlbIds } of results) {
+    for (const {
+      doc,
+      perUlb,
+      tally,
+      rowEvidenceByUlbId,
+      formEvidenceByUlbId,
+      discretionaryExemptionStatusByUlbId,
+    } of results) {
       const config = doc.claimEligibility!;
       const label = config.displayLabel ?? doc.type ?? 'Form';
       const shortLabel = config.shortLabel ?? label;
@@ -292,10 +367,15 @@ export class ClaimLetterEligibilityService {
         label,
         letterColumnLabel: config.letterColumnLabel ?? label,
         displayOrder: config.displayOrder ?? null,
+        formJsonId: String(doc._id),
+        ruleVersion: config.ruleVersion,
+        ownerLevel: config.ownerLevel,
         evaluationLevel: config.evaluationLevel,
+        acceptedFormStatuses: config.acceptedFormStatuses,
         buckets: perUlb,
         rowEvidence: rowEvidenceByUlbId ?? new Map<string, RowEligibilityEvidence>(),
-        approvedExemptionUlbIds,
+        formEvidence: formEvidenceByUlbId ?? new Map<string, FormEligibilityEvidence>(),
+        discretionaryExemptions: discretionaryExemptionStatusByUlbId,
       });
 
       for (const [ulbId, bucket] of perUlb) {
@@ -304,6 +384,21 @@ export class ClaimLetterEligibilityService {
         const failed = perUlbFailedCriteria.get(ulbId);
         if (failed) failed.push(failedCriterion);
         else perUlbFailedCriteria.set(ulbId, [failedCriterion]);
+      }
+
+      for (const [ulbId, status] of discretionaryExemptionStatusByUlbId) {
+        const bucket = perUlb.get(ulbId);
+        const noteStatus =
+          status === DISCRETIONARY_PENDING_STATUS && bucket === 'EXEMPTED'
+            ? 'UNDER_REVIEW'
+            : status === DISCRETIONARY_REJECTED_STATUS && bucket === 'INELIGIBLE'
+              ? 'REJECTED'
+              : null;
+        if (!noteStatus) continue;
+        const note: ClaimLetterExemptionNote = { label: shortLabel, status: noteStatus };
+        const notes = perUlbExemptionNotes.get(ulbId);
+        if (notes) notes.push(note);
+        else perUlbExemptionNotes.set(ulbId, [note]);
       }
 
       if (config.ownerLevel === 'ULB') {
@@ -327,6 +422,7 @@ export class ClaimLetterEligibilityService {
       standaloneCriteria,
       rowTalliesByFormId,
       perUlbFailedCriteria,
+      perUlbExemptionNotes,
       rowEvidenceByFormId,
       perCriterion,
     };

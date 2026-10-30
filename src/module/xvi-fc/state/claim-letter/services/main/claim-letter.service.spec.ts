@@ -45,11 +45,17 @@ describe('ClaimLetterService', () => {
     resolveRemainingUlbIds: jest.Mock;
     evaluateStateLevelGate: jest.Mock;
     resolveUlbLevelEligibility: jest.Mock;
+    countBatchUlbsWithExemptionUnderReview: jest.Mock;
   };
   let expectedUlbSetService: { resolve: jest.Mock };
   let fileInfoNormalizer: { normalizeInboundFileInfo: jest.Mock };
   let formJsonConfigService: { loadFormConfig: jest.Mock; loadVarianceConfig: jest.Mock };
-  let letterDetailsService: { evaluate: jest.Mock; assertComplete: jest.Mock };
+  let letterDetailsService: {
+    evaluate: jest.Mock;
+    assertComplete: jest.Mock;
+    isSfcExempted: jest.Mock;
+    letterQuestionsFor: jest.Mock;
+  };
   let activeBatchService: {
     resolveActiveBatch: jest.Mock;
     resolveBlockingBatchNumber: jest.Mock;
@@ -78,7 +84,7 @@ describe('ClaimLetterService', () => {
 
   beforeEach(async () => {
     eligibilityService = {
-      evaluateStateLevelGateForDisplay: jest.fn(),
+      evaluateStateLevelGateForDisplay: jest.fn().mockResolvedValue({ passed: true, sources: [] }),
       getFinancialOverview: jest.fn().mockResolvedValue({ totalInstallmentAllocation: 0, totalAlreadyAcknowledged: 0 }),
       resolveUlbLevelEligibilityForDisplay: jest.fn().mockResolvedValue({
         perUlbEligible: new Map(),
@@ -88,6 +94,7 @@ describe('ClaimLetterService', () => {
       resolveRemainingUlbIds: jest.fn().mockResolvedValue([]),
       evaluateStateLevelGate: jest.fn().mockResolvedValue({ passed: true, sources: [] }),
       resolveUlbLevelEligibility: jest.fn().mockResolvedValue({ perUlbEligible: new Map() }),
+      countBatchUlbsWithExemptionUnderReview: jest.fn().mockResolvedValue(0),
     };
     expectedUlbSetService = { resolve: jest.fn() };
     fileInfoNormalizer = {
@@ -113,6 +120,8 @@ describe('ClaimLetterService', () => {
     letterDetailsService = {
       evaluate: jest.fn().mockReturnValue({ isComplete: true, missingFields: [] }),
       assertComplete: jest.fn().mockResolvedValue(undefined),
+      isSfcExempted: jest.fn().mockResolvedValue(false),
+      letterQuestionsFor: jest.fn().mockReturnValue([]),
     };
     activeBatchService = {
       resolveActiveBatch: jest.fn().mockResolvedValue(null),
@@ -493,6 +502,85 @@ describe('ClaimLetterService', () => {
       });
     });
 
+    it('names the State forms whose Entire State exemption is still under MoHUA review', async () => {
+      const claimLetterId = new Types.ObjectId();
+      batchModel.findOne.mockReturnValue(
+        q({
+          _id: claimLetterId,
+          state: stateId,
+          year: yearId,
+          installment: 1,
+          batchNumber: 1,
+          version: 1,
+          currentFormStatus: 2,
+          assemblyStatus: 'READY',
+          ulbCount: 5,
+          isAbandoned: false,
+          financialSummary,
+          createdAt: new Date(),
+        }),
+      );
+      eligibilityService.evaluateStateLevelGateForDisplay.mockResolvedValue({
+        passed: true,
+        sources: [
+          {
+            formType: 'SFC_STATUS',
+            displayLabel: 'State Finance Commission (SFC)',
+            result: 'EXEMPTED',
+            exemptionStatus: 5,
+          },
+          { formType: 'GTC', displayLabel: 'Grant Transfer Certificate', result: 'EXEMPTED', exemptionStatus: 7 },
+          { formType: 'DEVOLUTION_FORMULA', result: 'PASSED' },
+        ],
+      });
+      letterDetailsService.isSfcExempted.mockResolvedValue(true);
+
+      const { data } = await service.getDetail(claimLetterId.toString(), stateUser);
+
+      expect(data!.stateExemptionsUnderReview).toEqual(['State Finance Commission (SFC)']);
+      // Completeness is judged on this State's letter questions (no ATR date while SFC is exempted).
+      const [, sfcExempted] = letterDetailsService.letterQuestionsFor.mock.calls[0] as [unknown, boolean];
+      expect(sfcExempted).toBe(true);
+    });
+
+    it('counts the draft ULBs that rely on an exemption under MoHUA review, and skips it once submitted', async () => {
+      const claimLetterId = new Types.ObjectId();
+      const doc = {
+        _id: claimLetterId,
+        state: stateId,
+        year: yearId,
+        installment: 1,
+        batchNumber: 1,
+        version: 1,
+        currentFormStatus: 2,
+        assemblyStatus: 'READY',
+        ulbCount: 5,
+        isAbandoned: false,
+        financialSummary,
+        createdAt: new Date(),
+      };
+      batchModel.findOne.mockReturnValue(q(doc));
+      eligibilityService.countBatchUlbsWithExemptionUnderReview.mockResolvedValue(2);
+
+      const draft = await service.getDetail(claimLetterId.toString(), stateUser);
+
+      expect(draft.data!.exemptionUnderReviewUlbCount).toBe(2);
+      expect(eligibilityService.countBatchUlbsWithExemptionUnderReview).toHaveBeenCalledWith(
+        claimLetterId,
+        String(stateId),
+        String(yearId),
+        1,
+      );
+
+      eligibilityService.countBatchUlbsWithExemptionUnderReview.mockClear();
+      batchModel.findOne.mockReturnValue(q({ ...doc, currentFormStatus: 5 }));
+
+      const submitted = await service.getDetail(claimLetterId.toString(), stateUser);
+
+      expect(submitted.data!.exemptionUnderReviewUlbCount).toBe(0);
+      expect(eligibilityService.countBatchUlbsWithExemptionUnderReview).not.toHaveBeenCalled();
+    });
+
     it('attaches questions from the Claim Letter formjsons entry for the claim year', async () => {
       const claimLetterId = new Types.ObjectId();
       const signedFileField = { key: 'signedClaimFile', formFieldType: 'file' };
@@ -761,12 +849,13 @@ describe('ClaimLetterService', () => {
       };
       formJsonConfigService.loadFormConfig.mockResolvedValue(formConfig);
       letterDetailsService.evaluate.mockReturnValue({ isComplete: false, missingFields: ['ATR date'] });
+      letterDetailsService.letterQuestionsFor.mockReturnValue([letterNoField]);
 
       const result = await service.getDetail(new Types.ObjectId().toString(), stateUser);
 
       expect(result.data?.questions?.map((f) => f.key)).toEqual(['signedClaimFile']);
       expect(result.data?.letterDetailsComplete).toBe(false);
-      expect(letterDetailsService.evaluate).toHaveBeenCalledWith({ letterNo: 'A/1' }, formConfig);
+      expect(letterDetailsService.evaluate).toHaveBeenCalledWith({ letterNo: 'A/1' }, formConfig, [letterNoField]);
     });
 
     it('reports the blocking batch, turns off final submit and hides the letter action with the reason', async () => {
