@@ -21,9 +21,14 @@ function criterion(overrides: Partial<ClaimLetterCriterionDetail>): ClaimLetterC
     label: 'SLB',
     letterColumnLabel: 'SLB',
     displayOrder: null,
+    formJsonId: 'form-json-1',
+    ruleVersion: 1,
+    ownerLevel: 'ULB',
     evaluationLevel: 'FORM',
+    acceptedFormStatuses: [],
     buckets: new Map(),
     rowEvidence: new Map(),
+    formEvidence: new Map(),
     discretionaryExemptions: new Map(),
     ...overrides,
   };
@@ -36,7 +41,9 @@ const row = (rowValue: string, rowAccepted: boolean | null) => ({
   datasetVersion: 1,
   rowValue,
   rowAccepted,
+  exemptionId: null,
   exemptionStatus: null,
+  exemptionKind: null,
 });
 
 describe('claim letter letter helpers', () => {
