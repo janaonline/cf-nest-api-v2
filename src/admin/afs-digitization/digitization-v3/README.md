@@ -48,8 +48,8 @@ sequenceDiagram
    two admins, cannot queue the same file twice. If adding to Redis fails, the file is marked `failed` straight away so it
    is not stuck as queued.
 3. **Process.** The worker calls FastAPI `POST /afs-digitization/jobs` with the file's stored path as `s3_path`.
-   FastAPI reads the PDF from the CityFinance bucket itself; Nest never downloads or uploads the PDF. Classification is on;
-   the Gemini validation and arithmetic checks are off to save cost.
+   FastAPI reads the PDF from the CityFinance bucket itself; Nest never downloads or uploads the PDF. Classification, the Gemini
+   accuracy validation and the arithmetic validation are all on.
 4. **Wait.** FastAPI runs the job as a background task. The worker polls its status until it is `completed` or `failed`.
 5. **Save.** Nest reads the result and writes a summary to Mongo. The full extraction stays in FastAPI.
 
@@ -125,8 +125,17 @@ of joining every ULB to `afs_xl_files`. Only a few small `ulbFile` fields are re
 ### `POST /enqueue-by-filter`
 
 Same body as `/list`. Queues every match. Send `ulbId` to queue only specific rows (this is how **Queue Selected** works).
-Returns `{ matched, queued, skippedNoPdf, skippedAlreadyQueued, skippedAlreadyDigitized, failedToQueue }`.
+Returns `{ matched, queued, skippedNoPdf, skippedDuplicate, skippedAlreadyQueued, skippedAlreadyDigitized, failedToQueue }`.
 Capped at 10,000 files per call (`MAX_ENQUEUE_BATCH`).
+
+**Duplicates.** A slot whose PDF is the same file as an earlier slot of the same ULB, year and audit type is flagged on
+`annualaccountdatas` (`<auditType>.provisional_data.<slot>.pdf.isDuplicate` and `.duplicateOfDocType`) by
+`POST /afs-digitization/annual-accounts/duplicates/backfill` (`limit`, `onlyMissing`; by default only PDFs not
+checked yet, `onlyMissing=false` recomputes all; run the PDF-metadata backfill first). Same file = same url, or same
+`fileSizeBytes` and `pageCount`; a slot without that metadata never matches. Slot order is `bal_sheet`,
+`bal_sheet_schedules`, `inc_exp`, `inc_exp_schedules`, `cash_flow`; the first is the original. Duplicates are skipped here
+(`skippedDuplicate`), and in `/list` a duplicate row follows its original's status, Excel and segments, carries
+`isDuplicate` and `duplicateOfDocType`, and is counted in `metrics.duplicate`.
 
 ### `GET /jobs/:afsDigitizationJobId/log`
 

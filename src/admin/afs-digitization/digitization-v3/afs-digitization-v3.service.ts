@@ -1,3 +1,4 @@
+import { randomBytes } from 'crypto';
 import { InjectQueue } from '@nestjs/bullmq';
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -33,6 +34,9 @@ interface UlbRow {
   /** From the annual account's PDF metadata; null until that has been backfilled for the file */
   pdfPageCount: number | null;
   pdfSizeBytes: number | null;
+  /** Same file as an earlier slot (set by the annual-account duplicates backfill): not queued, follows that slot */
+  isDuplicate: boolean;
+  duplicateOfDocType?: string;
 }
 
 /** What the page needs to know about a ULB's v3 digitization, derived from ulbFile (never the heavy data). */
@@ -77,6 +81,8 @@ export interface DigitizationV3Metrics {
   failed: number;
   consolidated: number;
   mismatch: number;
+  /** Files that are the same PDF as an earlier slot (also counted under their original's status) */
+  duplicate: number;
 }
 
 @Injectable()
@@ -136,10 +142,16 @@ export class AfsDigitizationV3Service {
       .filter((row) => this.matchesFilters(records.get(row.ulb.toString()), query))
       .slice(0, MAX_ENQUEUE_BATCH);
 
+    // One number per call, e.g. 20261029-153012-a1b2: groups this run's jobs in FastAPI
+    const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 14);
+    const batchId = `${stamp.slice(0, 8)}-${stamp.slice(8)}-${randomBytes(2).toString('hex')}`;
+
     const summary = {
+      batchId,
       matched: matching.length,
       queued: 0,
       skippedNoPdf: 0,
+      skippedDuplicate: 0,
       skippedAlreadyQueued: 0,
       skippedAlreadyDigitized: 0,
       failedToQueue: 0,
@@ -154,6 +166,12 @@ export class AfsDigitizationV3Service {
     for (const row of matching) {
       if (!row.pdfUrl) {
         summary.skippedNoPdf++;
+        continue;
+      }
+
+      // Same PDF as an earlier slot: that slot is digitized once and this one follows its result
+      if (row.isDuplicate) {
+        summary.skippedDuplicate++;
         continue;
       }
 
@@ -175,6 +193,7 @@ export class AfsDigitizationV3Service {
         docType: query.docType,
         pdfUrl: row.pdfUrl,
         ulbName: row.ulbName,
+        batchId,
       };
 
       const claimed = await this.claim(data);
@@ -258,6 +277,7 @@ export class AfsDigitizationV3Service {
             'ulbFile.digitizationStatus': DigitizationStatuses.QUEUED,
             'ulbFile.uploadedBy': 'ULB',
             'ulbFile.pdfUrl': data.pdfUrl,
+            ...(data.batchId && { 'ulbFile.batchId': data.batchId }),
             'ulbFile.queue': { status: QueueStatus.QUEUED, progress: 0, createdAt: new Date(), attemptsMade: 0 },
           },
           // A re-run starts clean
@@ -368,7 +388,12 @@ export class AfsDigitizationV3Service {
 
     // docType and auditType are validated enums, so they are safe to use in a field path.
     const ulbs = await this.annualAccountModel
-      .aggregate<Omit<UlbRow, 'stateName'>>([
+      .aggregate<
+        Omit<UlbRow, 'stateName' | 'isDuplicate' | 'duplicateOfDocType'> & {
+          pdfIsDuplicate?: boolean;
+          pdfDuplicateOf?: string;
+        }
+      >([
         { $match: { [`${auditType}.year`]: yearId, ...(ulbIds && { ulb: { $in: ulbIds } }) } },
         {
           $project: {
@@ -377,6 +402,8 @@ export class AfsDigitizationV3Service {
             pdfUrl: `$${auditType}.provisional_data.${query.docType}.pdf.url`,
             pdfPageCount: `$${auditType}.provisional_data.${query.docType}.pdf.pageCount`,
             pdfSizeBytes: `$${auditType}.provisional_data.${query.docType}.pdf.fileSizeBytes`,
+            pdfIsDuplicate: `$${auditType}.provisional_data.${query.docType}.pdf.isDuplicate`,
+            pdfDuplicateOf: `$${auditType}.provisional_data.${query.docType}.pdf.duplicateOfDocType`,
           },
         },
         // State / population filters, same as the AFS dashboard
@@ -387,6 +414,8 @@ export class AfsDigitizationV3Service {
             pdfUrl: 1,
             pdfPageCount: 1,
             pdfSizeBytes: 1,
+            pdfIsDuplicate: 1,
+            pdfDuplicateOf: 1,
             ulbName: '$ulbDoc.name',
             ulbCode: '$ulbDoc.code',
             stateId: '$ulbDoc.state',
@@ -408,8 +437,10 @@ export class AfsDigitizationV3Service {
 
     const rows: UlbRow[] = ulbs
       .filter((u) => u.stateId && stateNames.has(u.stateId.toString()))
-      .map((u) => ({
+      .map(({ pdfIsDuplicate, pdfDuplicateOf, ...u }) => ({
         ...u,
+        isDuplicate: pdfIsDuplicate === true && !!u.pdfUrl,
+        duplicateOfDocType: pdfIsDuplicate === true && u.pdfUrl ? pdfDuplicateOf : undefined,
         stateName: stateNames.get(u.stateId.toString()) as string,
         pdfUrl: u.pdfUrl || null,
         pdfPageCount: u.pdfPageCount ?? null,
@@ -425,8 +456,42 @@ export class AfsDigitizationV3Service {
       .lean()
       .exec();
     const records = new Map<string, V3Record>(existing.map((r) => [r.ulb.toString(), this.toView(r.ulbFile)]));
+    await this.followOriginals(rows, records, yearId, auditType);
 
     return { rows, records };
+  }
+
+  /**
+   * A duplicate is never digitized itself, so its status and results follow its original's record (same ULB, year and
+   * audit type, in the slot named by `duplicateOfDocType`).
+   */
+  private async followOriginals(
+    rows: UlbRow[],
+    records: Map<string, V3Record>,
+    yearId: Types.ObjectId,
+    auditType: string,
+  ) {
+    const duplicates = rows.filter((row) => row.isDuplicate && row.duplicateOfDocType);
+    if (!duplicates.length) return;
+
+    const originals = await this.afsExcelFileModel
+      .find(
+        {
+          ulb: { $in: duplicates.map((row) => row.ulb) },
+          year: yearId,
+          auditType,
+          docType: { $in: [...new Set(duplicates.map((row) => row.duplicateOfDocType as string))] },
+        },
+        { ...ULB_FILE_PROJECTION, docType: 1 },
+      )
+      .lean()
+      .exec();
+    const originalViews = new Map(originals.map((r) => [`${r.ulb}|${r.docType}`, this.toView(r.ulbFile)]));
+
+    for (const row of duplicates) {
+      const original = originalViews.get(`${row.ulb}|${row.duplicateOfDocType}`);
+      records.set(row.ulb.toString(), original ?? ({ status: DigitizationV3Statuses.NOT_DIGITIZED } as V3View));
+    }
   }
 
   private computeMetrics(rows: UlbRow[], records: Map<string, V3Record>): DigitizationV3Metrics {
@@ -440,6 +505,7 @@ export class AfsDigitizationV3Service {
       failed: 0,
       consolidated: 0,
       mismatch: 0,
+      duplicate: 0,
     };
     const byStatus: Record<DigitizationV3Statuses, keyof DigitizationV3Metrics> = {
       [DigitizationV3Statuses.NOT_DIGITIZED]: 'notDigitized',
@@ -455,6 +521,7 @@ export class AfsDigitizationV3Service {
       metrics[byStatus[record?.status ?? DigitizationV3Statuses.NOT_DIGITIZED]]++;
       if (record?.isConsolidated) metrics.consolidated++;
       if (record?.isMismatch) metrics.mismatch++;
+      if (row.isDuplicate) metrics.duplicate++;
     }
     return metrics;
   }
@@ -529,6 +596,8 @@ export class AfsDigitizationV3Service {
       pdfUrl: row.pdfUrl,
       pdfPageCount: row.pdfPageCount,
       pdfSizeBytes: row.pdfSizeBytes,
+      isDuplicate: row.isDuplicate,
+      duplicateOfDocType: row.duplicateOfDocType ?? null,
       pdfUrlSigned: row.pdfUrl ? this.fileTokenService.signFileUrl(row.pdfUrl) : null,
       // Same as the PDF: a signed link served by this API. Only for files v3 has digitized.
       excelUrl: excelUrl ?? null,
