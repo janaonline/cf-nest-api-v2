@@ -419,7 +419,6 @@ describe('ClaimLetterEligibilityService', () => {
         .mockResolvedValueOnce({
           perUlb: new Map([[ulbA, 'ELIGIBLE']]),
           tally: { eligible: 1, ineligible: 0, exempted: 0, total: 1 },
-          discretionaryExemptionStatusByUlbId: new Map(),
           rowEvidenceByUlbId: ebEvidence,
           discretionaryExemptionStatusByUlbId: new Map([[ulbA, 7]]),
         });
