@@ -54,4 +54,6 @@ export interface AfsDigitizationV3JobData {
   docType: string;
   pdfUrl: string;
   ulbName?: string;
+  /** Shared by every file queued in one enqueue-by-filter call; sent to FastAPI as `batch_id` */
+  batchId?: string;
 }

@@ -1,9 +1,11 @@
 import {
   Body,
   Controller,
+  DefaultValuePipe,
   Get,
   Logger,
   Param,
+  ParseBoolPipe,
   Post,
   Query,
   Res,
@@ -13,7 +15,7 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { ApiBody, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
+import { ApiBody, ApiBearerAuth, ApiConsumes, ApiQuery } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { YearIdToLabel } from 'src/core/constants/years';
 import { AfsDigitizationService } from './afs-digitization.service';
@@ -121,6 +123,56 @@ export class AfsDigitizationController {
         onlyMissing: onlyMissing === undefined ? true : onlyMissing !== 'false',
       }),
     };
+  }
+
+  /**
+   * Marks `isDuplicate` / `duplicateOfDocType` on annual account PDFs that are the same file as an earlier slot.
+   * Run after the PDF-metadata backfill. `onlyMissing=false` recomputes every document.
+   */
+  @ApiBearerAuth()
+  @ApiQuery({
+    name: 'onlyMissing',
+    required: false,
+    type: Boolean,
+    default: true,
+    description: 'true: only PDFs not checked yet. false: recompute every document.',
+  })
+  @Public() // TEMP: To be removed.
+  @Post('annual-accounts/duplicates/backfill')
+  async backfillAnnualAccountDuplicates(
+    @Query('limit') limit?: string,
+    @Query('onlyMissing', new DefaultValuePipe(true), ParseBoolPipe) onlyMissing: boolean = true,
+  ) {
+    return {
+      status: 'success',
+      data: await this.afsService.backfillDuplicatesForAnnualAccounts({
+        limit: limit ? Number(limit) : undefined,
+        onlyMissing,
+      }),
+    };
+  }
+
+  /**
+   * Excel of all annual accounts: each slot as pageCount_size, the stored isDuplicate / duplicateOf flags and the unique
+   * doc counts. `yearId` and `auditType` are optional; omit both to export every year and audit type.
+   */
+  @ApiBearerAuth()
+  @Public() // TEMP: To be removed.
+  @ApiQuery({ name: 'yearId', required: false })
+  @ApiQuery({ name: 'auditType', required: false, enum: ['audited', 'unAudited'] })
+  @Get('annual-accounts/duplicates/export')
+  async exportAnnualAccountDuplicates(
+    @Res() res: Response,
+    @Query('yearId') yearId?: string,
+    @Query('auditType') auditType?: string,
+  ) {
+    const buffer = await this.afsDumpService.exportAnnualAccountDuplicates({ yearId, auditType });
+
+    const filename = `annual-accounts-duplicates-${yearId ? (YearIdToLabel[yearId] ?? yearId) : 'all-years'}-${auditType ?? 'all'}-${new Date().toISOString().split('T')[0]}.xlsx`;
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+    return res.send(buffer);
   }
 
   @Get('dump/afs-excel')
