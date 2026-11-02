@@ -34,9 +34,11 @@ describe('ClaimLetterUlbOptionsService', () => {
     eligibilityService = {
       evaluateStateLevelGateForDisplay: jest.fn(),
       resolveDevolutionAllocations: jest.fn(),
-      resolveUlbLevelEligibilityForDisplay: jest
-        .fn()
-        .mockResolvedValue({ perUlbEligible: new Map(), perUlbFailedCriteria: new Map() }),
+      resolveUlbLevelEligibilityForDisplay: jest.fn().mockResolvedValue({
+        perUlbEligible: new Map(),
+        perUlbFailedCriteria: new Map(),
+        perUlbExemptionNotes: new Map(),
+      }),
       resolveClaimedUlbIds: jest.fn().mockResolvedValue(new Set()),
     };
 
@@ -97,6 +99,24 @@ describe('ClaimLetterUlbOptionsService', () => {
     expect(result.data![0]).toMatchObject({ eligible: true, ineligibleReasonCode: null, allocationAmount: 1 });
   });
 
+  it("carries each ULB's exemption notes (under MoHUA review or rejected) for the row badges", async () => {
+    expectedUlbSetService.resolve.mockResolvedValue([ulbA]);
+    eligibilityService.evaluateStateLevelGateForDisplay.mockResolvedValue(passedGate());
+    eligibilityService.resolveDevolutionAllocations.mockResolvedValue(
+      new Map([[ulbA.ulbId, { allocatedAmount: 1, formDocumentId: 'f', rowDocumentId: 'r', datasetVersion: 1 }]]),
+    );
+    const notes = [{ label: 'Audited Accounts', status: 'UNDER_REVIEW' }];
+    eligibilityService.resolveUlbLevelEligibilityForDisplay.mockResolvedValue({
+      perUlbEligible: new Map([[ulbA.ulbId, true]]),
+      perUlbFailedCriteria: new Map(),
+      perUlbExemptionNotes: new Map([[ulbA.ulbId, notes]]),
+    });
+
+    const result = await service.getOptions(stateId, yearId, 1, {}, stateUser);
+
+    expect(result.data![0]).toMatchObject({ eligible: true, exemptionNotes: notes });
+  });
+
   it('marks an otherwise-eligible ULB ineligible when locked by a different claim', async () => {
     expectedUlbSetService.resolve.mockResolvedValue([ulbA]);
     eligibilityService.evaluateStateLevelGateForDisplay.mockResolvedValue(passedGate());
@@ -119,6 +139,7 @@ describe('ClaimLetterUlbOptionsService', () => {
     eligibilityService.resolveUlbLevelEligibilityForDisplay.mockResolvedValue({
       perUlbEligible: new Map([[ulbA.ulbId, false]]),
       perUlbFailedCriteria: new Map(),
+      perUlbExemptionNotes: new Map(),
     });
 
     const result = await service.getOptions(stateId, yearId, 1, {}, stateUser);
@@ -146,6 +167,7 @@ describe('ClaimLetterUlbOptionsService', () => {
           ],
         ],
       ]),
+      perUlbExemptionNotes: new Map(),
     });
 
     const result = await service.getOptions(stateId, yearId, 1, {}, stateUser);

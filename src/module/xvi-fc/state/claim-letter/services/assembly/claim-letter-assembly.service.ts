@@ -16,6 +16,7 @@ import { Year } from 'src/schemas/year.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import type {
   EligibilityEvaluationResult,
+  FormEligibilityEvidence,
   RowEligibilityEvidence,
 } from 'src/module/xvi-fc/common/types/claim-eligibility.type';
 import {
@@ -38,7 +39,11 @@ import {
   computeClaimLetterContentHash,
   CLAIM_LETTER_CONTENT_HASH_VERSION,
 } from '../../helpers/claim-letter-content-hash.helpers';
-import { ClaimLetterEligibilityService, DevolutionAllocation } from '../eligibility/claim-letter-eligibility.service';
+import {
+  type ClaimLetterCriterionDetail,
+  ClaimLetterEligibilityService,
+  DevolutionAllocation,
+} from '../eligibility/claim-letter-eligibility.service';
 import { ClaimLetterHistoryService } from '../history/claim-letter-history.service';
 import { ClaimLetterFormJsonService } from '../form-json/claim-letter-form-json.service';
 import { ClaimLetterActiveBatchService } from '../active-batch/claim-letter-active-batch.service';
@@ -108,6 +113,22 @@ interface PreparedChildren {
 
 /** A conflict that may be a reclaimable stale BUILDING row, unlike live contention (ADR 0002). */
 class ReclaimableConflictException extends ConflictException {}
+
+/** Why a ULB-owned form passed, for its snapshot entry. */
+function ulbFormReasonCode(evidence: FormEligibilityEvidence | undefined): string {
+  switch (evidence?.exemptionKind) {
+    case 'DISCRETIONARY_ULB':
+      return evidence.exemptionStatus === FORM_STATUS.UNDER_REVIEW_BY_MOHUA
+        ? 'DISCRETIONARY_EXEMPTION_PENDING'
+        : 'DISCRETIONARY_EXEMPTION_APPROVED';
+    case 'AUTO_NEW_ULB_STUB':
+      return 'EXEMPTED_ACKNOWLEDGED';
+    case 'AUTO_NEW_ULB_NO_DOCUMENT':
+      return 'AUTOMATIC_EXEMPTION_NO_DOCUMENT';
+    default:
+      return 'FORM_STATUS_ACCEPTED';
+  }
+}
 
 /** Creates, edits and abandons batches; writes locks and children (recovery's stale-build cleanup only
  *  deletes them, through the shared helper). Build stages, the drift re-check and rollback:
@@ -470,6 +491,8 @@ export class ClaimLetterAssemblyService {
       (s) => s.evaluationLevel === 'FORM_AND_ROW' && (s.result === 'PASSED' || s.result === 'EXEMPTED'),
     );
 
+    const ulbFormCriteria = ulbLevelEligibility.perCriterion.filter((c) => c.ownerLevel === 'ULB');
+    const evaluatedAt = new Date().toISOString();
     const invalid: string[] = [];
     const children: BuiltChild[] = [];
 
@@ -503,6 +526,8 @@ export class ClaimLetterAssemblyService {
         selection.ulbId,
         formAndRowSources,
         ulbLevelEligibility.rowEvidenceByFormId,
+        ulbFormCriteria,
+        evaluatedAt,
       );
 
       children.push({
@@ -637,7 +662,7 @@ export class ClaimLetterAssemblyService {
         installment,
       },
       eligibilitySources,
-      appliedExemptionIds: [],
+      appliedExemptionIds: this.appliedExemptionIds(eligibilitySources),
       createdBy: userOid,
       updatedBy: userOid,
     };
@@ -664,10 +689,11 @@ export class ClaimLetterAssemblyService {
     return map;
   }
 
-  /** Only PASSED/EXEMPTED results get here, and those always have formDocumentId; a missing one is an
-   *  upstream bug, so this fails rather than inventing an id. */
+  /** Only PASSED/EXEMPTED results get here. PASSED always has its document, so a missing one is an
+   *  upstream bug and this fails rather than inventing an id; EXEMPTED may have none (an Entire State
+   *  exemption for a form never started). */
   private toEligibilitySourceSnapshot(result: EligibilityEvaluationResult): Record<string, unknown> {
-    if (!result.formDocumentId) {
+    if (!result.formDocumentId && result.result !== 'EXEMPTED') {
       throw new ConflictException('Cannot snapshot an eligibility result with no source document. Please retry.');
     }
     return {
@@ -675,7 +701,7 @@ export class ClaimLetterAssemblyService {
       formJsonId: new Types.ObjectId(result.formJsonId),
       ruleVersion: result.ruleVersion,
       formType: result.formType,
-      formDocumentId: new Types.ObjectId(result.formDocumentId),
+      formDocumentId: result.formDocumentId ? new Types.ObjectId(result.formDocumentId) : null,
       rowDocumentId: result.rowDocumentId ? new Types.ObjectId(result.rowDocumentId) : null,
       statusAtEvaluation: result.statusAtEvaluation,
       rowStatusAtEvaluation: result.rowStatusAtEvaluation ?? null,
@@ -683,19 +709,34 @@ export class ClaimLetterAssemblyService {
       datasetVersion: result.datasetVersion ?? null,
       result: result.result,
       exemptionId: result.exemptionId ? new Types.ObjectId(result.exemptionId) : null,
+      exemptionStatusAtEvaluation: result.exemptionStatus ?? null,
+      exemptionKind: result.exemptionKind ?? null,
       reasonCode: result.reasonCode,
       evidence: result.evidence,
     };
   }
 
-  /** Per FORM_AND_ROW source: its State-level result plus this ULB's row evidence, both already in
-   *  memory. No evidence means the source's no-row default passed the ULB. */
+  /** The ULB's own discretionary requests among its entries, once each (one request holds every formId). */
+  private appliedExemptionIds(eligibilitySources: Record<string, unknown>[]): Types.ObjectId[] {
+    const ids = new Map<string, Types.ObjectId>();
+    for (const source of eligibilitySources) {
+      const id = source['exemptionId'] as Types.ObjectId | null;
+      if (id && source['exemptionKind'] === 'DISCRETIONARY_ULB') ids.set(String(id), id);
+    }
+    return [...ids.values()];
+  }
+
+  /** One entry per ULB condition, all already in memory: each FORM_AND_ROW source's State-level
+   *  result plus this ULB's row evidence (no evidence means the no-row default passed the ULB), and
+   *  each ULB-owned form with this ULB's document and exemption. */
   private buildChildEligibilitySources(
     ulbId: string,
     formAndRowSources: EligibilityEvaluationResult[],
     rowEvidenceByFormId: Map<number, Map<string, RowEligibilityEvidence>>,
+    ulbFormCriteria: ClaimLetterCriterionDetail[],
+    evaluatedAt: string,
   ): Record<string, unknown>[] {
-    return formAndRowSources.map((source) => {
+    const rowEntries = formAndRowSources.map((source) => {
       const evidence = rowEvidenceByFormId.get(source.formId)?.get(ulbId);
       const merged: EligibilityEvaluationResult = evidence
         ? {
@@ -704,11 +745,44 @@ export class ClaimLetterAssemblyService {
             rowStatusAtEvaluation: evidence.rowStatusAtEvaluation,
             datasetVersion: evidence.datasetVersion,
             result: evidence.bucket === 'EXEMPTED' ? 'EXEMPTED' : 'PASSED',
+            exemptionId: evidence.exemptionId,
+            exemptionStatus: evidence.exemptionStatus,
+            exemptionKind: evidence.exemptionKind,
             reasonCode: evidence.bucket === 'EXEMPTED' ? 'ROW_EXEMPTED' : 'ROW_STATUS_ACCEPTED',
           }
         : { ...source, rowDocumentId: null, rowStatusAtEvaluation: null, reasonCode: 'ROW_DEFAULT_NO_ROW' };
       return this.toEligibilitySourceSnapshot(merged);
     });
+    const formEntries = ulbFormCriteria.map((criterion) => {
+      const evidence = criterion.formEvidence.get(ulbId);
+      const formDocumentId = evidence?.formDocumentId ?? null;
+      const statusAtEvaluation = evidence?.statusAtEvaluation ?? null;
+      return this.toEligibilitySourceSnapshot({
+        formId: criterion.formId,
+        formJsonId: criterion.formJsonId,
+        ruleVersion: criterion.ruleVersion,
+        formType: criterion.type,
+        ownerLevel: criterion.ownerLevel,
+        evaluationLevel: criterion.evaluationLevel,
+        formDocumentId,
+        statusAtEvaluation,
+        // Only eligible ULBs get here, so a missing or failing entry is an upstream bug: snapshotting
+        // a PASSED without a document throws.
+        result: evidence?.bucket === 'EXEMPTED' ? 'EXEMPTED' : 'PASSED',
+        exemptionId: evidence?.exemptionId ?? null,
+        exemptionStatus: evidence?.exemptionStatus ?? null,
+        exemptionKind: evidence?.exemptionKind ?? null,
+        reasonCode: ulbFormReasonCode(evidence),
+        evidence: {
+          evidenceVersion: 1,
+          resolvedFormStatus: statusAtEvaluation,
+          acceptedFormStatuses: criterion.acceptedFormStatuses,
+          sourceFormDocumentId: formDocumentId,
+          evaluatedAt,
+        },
+      });
+    });
+    return [...rowEntries, ...formEntries];
   }
 
   // ─── Step 4: revalidate, verify, finalize (docs/adr/0002-batching-and-locks.md) ──────────────

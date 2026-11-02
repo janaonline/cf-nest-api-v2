@@ -157,3 +157,8 @@ export class ExemptionResolverService {
 export const DISCRETIONARY_PENDING_STATUS = FORM_STATUS.UNDER_REVIEW_BY_MOHUA;
 export const DISCRETIONARY_APPROVED_STATUS = FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA;
 export const DISCRETIONARY_REJECTED_STATUS = FORM_STATUS.RETURNED_BY_MOHUA;
+/** What a claim counts as exempt: a request under MoHUA review or approved, never a rejected one. */
+export const DISCRETIONARY_COUNTED_STATUSES: readonly number[] = [
+  DISCRETIONARY_PENDING_STATUS,
+  DISCRETIONARY_APPROVED_STATUS,
+];

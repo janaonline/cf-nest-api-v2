@@ -80,6 +80,7 @@ export class ClaimLetterUlbOptionsService {
         eligible: ineligibleReasonCode === null,
         ineligibleReasonCode,
         ineligibleReasonDetail,
+        exemptionNotes: ulbLevelEligibility.perUlbExemptionNotes.get(ulb.ulbId) ?? [],
       };
     });
 

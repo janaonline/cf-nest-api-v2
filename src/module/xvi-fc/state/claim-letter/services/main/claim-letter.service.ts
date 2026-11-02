@@ -276,18 +276,38 @@ export class ClaimLetterService {
     assertStateAccess(user, toObjectIdString(doc['state']) ?? '');
 
     const summary = mapClaimLetterBatchDocToSummary(doc, user);
-    const [formConfig, stateName, blockedBy] = await Promise.all([
-      this.formJsonConfigService.loadFormConfig(toObjectIdString(doc['year']) ?? ''),
-      this.resolveStateName(toObjectIdString(doc['state']) ?? ''),
-      this.activeBatchService.resolveBlockingBatchNumber({
-        _id: doc['_id'] as Types.ObjectId,
-        state: doc['state'] as Types.ObjectId,
-        year: doc['year'] as Types.ObjectId,
-        installment: doc['installment'] as number,
-        currentFormStatus: doc['currentFormStatus'] as number,
-        isAbandoned: doc['isAbandoned'] === true,
-      }),
-    ]);
+    const isDraft = doc['currentFormStatus'] === FORM_STATUS.IN_PROGRESS && doc['isAbandoned'] !== true;
+    const stateId = toObjectIdString(doc['state']) ?? '';
+    const yearId = toObjectIdString(doc['year']) ?? '';
+    const installment = doc['installment'] as 1 | 2;
+    const [formConfig, stateName, blockedBy, exemptionUnderReviewUlbCount, stateExemptionsUnderReview, sfcExempted] =
+      await Promise.all([
+        this.formJsonConfigService.loadFormConfig(toObjectIdString(doc['year']) ?? ''),
+        this.resolveStateName(toObjectIdString(doc['state']) ?? ''),
+        this.activeBatchService.resolveBlockingBatchNumber({
+          _id: doc['_id'] as Types.ObjectId,
+          state: doc['state'] as Types.ObjectId,
+          year: doc['year'] as Types.ObjectId,
+          installment: doc['installment'] as number,
+          currentFormStatus: doc['currentFormStatus'] as number,
+          isAbandoned: doc['isAbandoned'] === true,
+        }),
+        isDraft
+          ? this.eligibilityService.countBatchUlbsWithExemptionUnderReview(
+              doc['_id'] as Types.ObjectId,
+              stateId,
+              yearId,
+              installment,
+            )
+          : Promise.resolve(0),
+        isDraft ? this.resolveStateExemptionsUnderReview(stateId, yearId, installment) : Promise.resolve([]),
+        this.letterDetailsService.isSfcExempted({
+          state: doc['state'] as Types.ObjectId,
+          year: doc['year'] as Types.ObjectId,
+        }),
+      ]);
+    summary.exemptionUnderReviewUlbCount = exemptionUnderReviewUlbCount;
+    summary.stateExemptionsUnderReview = stateExemptionsUnderReview;
     summary.blockedByBatchNumber = blockedBy;
     summary.blockedReason = blockedBy === null ? null : this.activeBatchService.blockedReason(blockedBy);
     if (blockedBy !== null) {
@@ -304,11 +324,24 @@ export class ClaimLetterService {
     summary.letterDetailsComplete = this.letterDetailsService.evaluate(
       (doc['letterDetails'] as Record<string, unknown> | undefined) ?? {},
       formConfig,
+      this.letterDetailsService.letterQuestionsFor(formConfig, sfcExempted),
     ).isComplete;
     this.applySignedFileValue(summary.questions, doc['signedClaimFile']);
     this.applySignedFileSupportingContent(summary.questions, doc, summary.permissions, summary.blockedReason);
 
     return xviFcSuccess('Claim letter fetched.', summary);
+  }
+
+  /** State forms whose Entire State exemption request is still under MoHUA review (Submit warning). */
+  private async resolveStateExemptionsUnderReview(
+    stateId: string,
+    yearId: string,
+    installment: 1 | 2,
+  ): Promise<string[]> {
+    const gate = await this.eligibilityService.evaluateStateLevelGateForDisplay(stateId, yearId, installment);
+    return gate.sources
+      .filter((s) => s.exemptionStatus === FORM_STATUS.UNDER_REVIEW_BY_MOHUA)
+      .map((s) => s.displayLabel ?? s.formType);
   }
 
   private async resolveStateName(stateId: string): Promise<string> {

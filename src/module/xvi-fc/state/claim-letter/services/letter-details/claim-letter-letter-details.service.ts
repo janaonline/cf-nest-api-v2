@@ -8,6 +8,7 @@ import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-f
 import type { XviFcValidationErrorMap } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import { throwXviFcValidationError, xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
 import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
+import { ExemptionResolverService } from 'src/module/xvi-fc/common/services/exemption-resolver.service';
 import { FormQuestionHydratorService } from 'src/module/xvi-fc/common/services/form-question-hydrator.service';
 import type {
   FieldConfig,
@@ -16,7 +17,9 @@ import type {
 } from 'src/module/xvi-fc/common/types/field-config.type';
 import { assertStateAccess } from 'src/module/xvi-fc/common/utils/xvi-fc-state-access.util';
 import { ClaimLetterBatch, ClaimLetterBatchDocument } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
+import { CLAIM_LETTER_SFC_ATR_DATE_KEY } from '../../constants/claim-letter.constants';
 import { buildClaimLetterPermissions, canEditClaimLetter } from '../../helpers/claim-letter-permissions.helpers';
+import { resolveSfcExemptionStatus } from '../../helpers/claim-letter-sfc-exemption.helpers';
 import type { SaveClaimLetterLetterDetailsDto } from '../../dto/save-claim-letter-letter-details.dto';
 import { ClaimLetterFormJsonService, type ClaimLetterFormConfig } from '../form-json/claim-letter-form-json.service';
 import { ClaimLetterActiveBatchService } from '../active-batch/claim-letter-active-batch.service';
@@ -78,22 +81,25 @@ export class ClaimLetterLetterDetailsService {
     private readonly validation: DynamicFormValidationService,
     private readonly hydrator: FormQuestionHydratorService,
     private readonly activeBatchService: ClaimLetterActiveBatchService,
+    private readonly exemptionResolver: ExemptionResolverService,
     @InjectModel(ClaimLetterBatch.name) private readonly batchModel: Model<ClaimLetterBatchDocument>,
   ) {}
 
   async get(claimLetterId: string, user: AuthUser): Promise<XviFcApiResponse<ClaimLetterLetterDetailsView>> {
     const parent = await this.loadParent(claimLetterId, user);
-    const [formConfig, previous, blockedBy] = await Promise.all([
+    const [formConfig, previous, blockedBy, sfcExempted] = await Promise.all([
       this.formJsonConfigService.loadFormConfig(String(parent.year)),
       this.findPrevious(parent),
       this.activeBatchService.resolveBlockingBatchNumber(parent),
+      this.isSfcExempted(parent),
     ]);
     const saved = parent.letterDetails ?? {};
     const canEdit = buildClaimLetterPermissions(user, parent.currentFormStatus, parent.isAbandoned).canEdit;
+    const questions = this.letterQuestionsFor(formConfig, sfcExempted);
 
     const view: ClaimLetterLetterDetailsView = {
-      ...this.toState(parent, saved, formConfig),
-      fields: this.hydrator.hydrate(formConfig.letterQuestions, saved),
+      ...this.toState(parent, saved, formConfig, questions),
+      fields: this.hydrator.hydrate(questions, saved),
       canEdit: canEdit && blockedBy === null,
       previous: previous && this.toPrevious(previous, formConfig),
     };
@@ -112,8 +118,12 @@ export class ClaimLetterLetterDetailsService {
       );
     }
     await this.activeBatchService.assertActive(parent);
-    const formConfig = await this.formJsonConfigService.loadFormConfig(String(parent.year));
+    const [formConfig, sfcExempted] = await Promise.all([
+      this.formJsonConfigService.loadFormConfig(String(parent.year)),
+      this.isSfcExempted(parent),
+    ]);
     if (!formConfig.letterConfigured) this.throwNotConfigured();
+    const questions = this.letterQuestionsFor(formConfig, sfcExempted);
 
     const questionByKey = new Map(formConfig.letterQuestions.map((q) => [q.key, q]));
     const sentQuestions = Object.keys(dto.data)
@@ -136,7 +146,7 @@ export class ClaimLetterLetterDetailsService {
     const hasSignedFile = !!parent.signedClaimFile;
     if (!changed) {
       return xviFcSuccess('Claim letter details unchanged.', {
-        ...this.toState(parent, saved, formConfig),
+        ...this.toState(parent, saved, formConfig, questions),
         signedFileRemoved: false,
       });
     }
@@ -176,31 +186,50 @@ export class ClaimLetterLetterDetailsService {
     if (!updated) await this.throwSaveConflict(claimLetterId);
 
     return xviFcSuccess('Claim letter details saved.', {
-      ...this.toState(updated!, merged, formConfig),
+      ...this.toState(updated!, merged, formConfig, questions),
       signedFileRemoved: hasSignedFile,
     });
   }
 
+  /** True while the State's Entire State SFC exemption counts (Row B prints it, no ATR date). */
+  isSfcExempted(parent: { state: Types.ObjectId; year: Types.ObjectId }): Promise<boolean> {
+    return resolveSfcExemptionStatus(this.exemptionResolver, parent.state, parent.year).then((s) => s !== null);
+  }
+
+  /** This State's letter questions: without the ATR date while its SFC exemption counts. */
+  letterQuestionsFor(formConfig: ClaimLetterFormConfig, sfcExempted: boolean): FieldConfig[] {
+    if (!sfcExempted) return formConfig.letterQuestions;
+    return formConfig.letterQuestions.filter((q) => q.key !== CLAIM_LETTER_SFC_ATR_DATE_KEY);
+  }
+
   /** Mandatory fields present and every saved value valid; not configured = incomplete. */
-  evaluate(saved: LetterValues, formConfig: ClaimLetterFormConfig): ClaimLetterLetterDetailsEvaluation {
+  evaluate(
+    saved: LetterValues,
+    formConfig: ClaimLetterFormConfig,
+    questions: FieldConfig[],
+  ): ClaimLetterLetterDetailsEvaluation {
     if (!formConfig.letterConfigured) return { isComplete: false, missingFields: [] };
-    const { errors } = this.validation.validateFinalSubmitAndBuildPayload(formConfig.letterQuestions, saved);
-    const labelByKey = new Map(formConfig.letterQuestions.map((q) => [q.key, q.label]));
+    const { errors } = this.validation.validateFinalSubmitAndBuildPayload(questions, saved);
+    const labelByKey = new Map(questions.map((q) => [q.key, q.label]));
     const keys = Object.keys(errors);
     return { isComplete: keys.length === 0, missingFields: keys.map((key) => labelByKey.get(key) ?? key) };
   }
 
   /** Download and Submit gate: 400 naming the fields to complete, errors keyed by field. */
-  async assertComplete(parent: { year: Types.ObjectId; letterDetails?: LetterValues }, action: string): Promise<void> {
-    const formConfig = await this.formJsonConfigService.loadFormConfig(String(parent.year));
+  async assertComplete(
+    parent: { state: Types.ObjectId; year: Types.ObjectId; letterDetails?: LetterValues },
+    action: string,
+  ): Promise<void> {
+    const [formConfig, sfcExempted] = await Promise.all([
+      this.formJsonConfigService.loadFormConfig(String(parent.year)),
+      this.isSfcExempted(parent),
+    ]);
     if (!formConfig.letterConfigured) this.throwNotConfigured();
-    const { errors } = this.validation.validateFinalSubmitAndBuildPayload(
-      formConfig.letterQuestions,
-      parent.letterDetails ?? {},
-    );
+    const questions = this.letterQuestionsFor(formConfig, sfcExempted);
+    const { errors } = this.validation.validateFinalSubmitAndBuildPayload(questions, parent.letterDetails ?? {});
     const keys = Object.keys(errors);
     if (keys.length === 0) return;
-    const labelByKey = new Map(formConfig.letterQuestions.map((q) => [q.key, q.label]));
+    const labelByKey = new Map(questions.map((q) => [q.key, q.label]));
     throw new BadRequestException({
       message: `Complete the letter details before ${action}: ${keys.map((k) => labelByKey.get(k) ?? k).join(', ')}.`,
       code: LETTER_DETAILS_INCOMPLETE,
@@ -225,10 +254,11 @@ export class ClaimLetterLetterDetailsService {
     parent: LetterDetailsParent,
     values: LetterValues,
     formConfig: ClaimLetterFormConfig,
+    questions: FieldConfig[],
   ): ClaimLetterLetterDetailsState {
     return {
       values,
-      ...this.evaluate(values, formConfig),
+      ...this.evaluate(values, formConfig, questions),
       hasSignedFile: !!parent.signedClaimFile,
       letterDetailsUpdatedAt: parent.letterDetailsUpdatedAt
         ? new Date(parent.letterDetailsUpdatedAt).toISOString()

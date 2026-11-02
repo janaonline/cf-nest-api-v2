@@ -24,7 +24,8 @@ everything else.
   mechanisms via `buildExemptionLookup`, but applies them at **different precedence** against a
   ULB/state's own real data: automatic keeps this file's Golden rule untouched (only ever applies
   when nothing real exists yet); discretionary always overrides real data, including an existing
-  row/document, since a MoHUA approval is a later, authoritative decision — this matters for a
+  row/document, while the request is under MoHUA review or approved (`DISCRETIONARY_COUNTED_STATUSES`;
+  a rejected one counts for nothing, see claim-letter ADR 0005) — this matters for a
   formId like Elected Body (23), whose filing/approval gate blocks on a different axis than
   SFC/AFS's: not "already started", but "already eligible" (see root `CLAUDE.md`'s xvi-fc/state
   bullet) — a ULB whose row already says "Not Constituted" (real, ineligible data) is deliberately
@@ -169,7 +170,7 @@ it's left as a known gap rather than folded into this fix.
   until you know `NOT_STARTED` itself was never real progress to begin with.
   This golden rule is scoped to the automatic mechanism specifically — `claim-eligibility-
   evaluator.service.ts`'s read-only tally applies the opposite precedence for the discretionary
-  mechanism (an approved MoHUA exemption there overrides real data too); see that file's own
+  mechanism (a MoHUA exemption under review or approved there overrides real data too); see that file's own
   bullet above for why that isn't a contradiction of this one.
 - Once an entry is materialized, `yearEnabled`/`disabledFormIds` are read directly. No code path
   falls back to `dateOfConstitution` or any other condition once `yearAccess[label]` exists — except

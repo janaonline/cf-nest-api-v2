@@ -49,7 +49,9 @@ describe('ClaimLetterUlbRowsService', () => {
   beforeEach(async () => {
     eligibilityService = {
       evaluateStateLevelGateForDisplay: jest.fn().mockResolvedValue({ sources: [], passed: true }),
-      resolveUlbLevelEligibilityForDisplay: jest.fn().mockResolvedValue({ perUlbEligible: new Map() }),
+      resolveUlbLevelEligibilityForDisplay: jest
+        .fn()
+        .mockResolvedValue({ perUlbEligible: new Map(), perUlbExemptionNotes: new Map() }),
     };
     batchModel = { findOne: jest.fn() };
     batchUlbModel = {
@@ -111,6 +113,7 @@ describe('ClaimLetterUlbRowsService', () => {
       claimAmount: 1.05,
       differencePercentage: 5,
       eligible: true,
+      exemptionNotes: [],
     });
   });
 
@@ -174,13 +177,16 @@ describe('ClaimLetterUlbRowsService', () => {
         },
       ]),
     );
+    const notes = [{ label: 'Audited Accounts', status: 'REJECTED' }];
     eligibilityService.resolveUlbLevelEligibilityForDisplay.mockResolvedValue({
       perUlbEligible: new Map([[String(ulbId), false]]),
+      perUlbExemptionNotes: new Map([[String(ulbId), notes]]),
     });
 
     const result = await service.getUlbs(claimLetterId, {}, stateUser);
 
     expect(result.data![0].eligible).toBe(false);
+    expect(result.data![0].exemptionNotes).toEqual(notes);
     expect(eligibilityService.resolveUlbLevelEligibilityForDisplay).toHaveBeenCalledWith(
       String(stateId),
       String(yearId),

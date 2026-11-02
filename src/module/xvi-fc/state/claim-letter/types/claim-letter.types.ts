@@ -9,7 +9,10 @@ import type {
 } from 'src/module/xvi-fc/common/types/claim-eligibility.type';
 import type { FieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
 import type { PriorFcCycleLabel } from 'src/module/xvi-fc/state/fc-unspent-declaration/helpers/fc-unspent-declaration-cycle.helpers';
-import type { ClaimLetterFinancialOverview } from '../services/eligibility/claim-letter-eligibility.service';
+import type {
+  ClaimLetterExemptionNote,
+  ClaimLetterFinancialOverview,
+} from '../services/eligibility/claim-letter-eligibility.service';
 import type { ClaimLetterPermissions } from '../helpers/claim-letter-permissions.helpers';
 
 /** Display-ready ULB-options picker row (matches the FC Unspent picker-dialog UX). */
@@ -24,6 +27,8 @@ export interface ClaimLetterUlbOption {
   ineligibleReasonCode: string | null;
   /** Names the failing form(s); only for ULB_LEVEL_ELIGIBILITY_CRITERIA_NOT_MET, else null. */
   ineligibleReasonDetail: string | null;
+  /** Exemptions under MoHUA review or rejected (row badges). */
+  exemptionNotes: ClaimLetterExemptionNote[];
 }
 
 /** Display-ready selected-ULB table row (matches the FC Unspent Yes-branch table). */
@@ -36,6 +41,8 @@ export interface ClaimLetterUlbRow {
   claimAmount: number;
   differencePercentage: number;
   eligible: boolean;
+  /** Exemptions under MoHUA review or rejected (row badges). */
+  exemptionNotes: ClaimLetterExemptionNote[];
 }
 
 /** Whole Rupees, as stored. */
@@ -143,6 +150,12 @@ export interface ClaimLetterBatchSummary {
   varianceUpperPercent?: number;
   /** getDetail only: mandatory letter details saved and valid (Submit needs them). */
   letterDetailsComplete?: boolean;
+  /** getDetail only: ULBs in this draft relying on an exemption still under MoHUA review (Submit
+   *  confirm); 0 once it is no longer a draft. */
+  exemptionUnderReviewUlbCount?: number;
+  /** getDetail only: State forms whose Entire State exemption request is still under MoHUA review
+   *  (Submit confirm); empty once it is no longer a draft. */
+  stateExemptionsUnderReview?: string[];
   /** Another batch is active (ADR 0004): preview, download, letter details and submit are blocked.
    *  Populated by `getDetail` and `listHistory`. */
   blockedByBatchNumber?: number | null;

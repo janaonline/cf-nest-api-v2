@@ -7,6 +7,7 @@ import type { FieldConfig } from 'src/module/xvi-fc/common/types/field-config.ty
 import type { ClaimLetterFormConfig, ClaimLetterFormJsonService } from '../form-json/claim-letter-form-json.service';
 import type { FormQuestionHydratorService } from 'src/module/xvi-fc/common/services/form-question-hydrator.service';
 import type { ClaimLetterActiveBatchService } from '../active-batch/claim-letter-active-batch.service';
+import type { ExemptionResolverService } from 'src/module/xvi-fc/common/services/exemption-resolver.service';
 import {
   ClaimLetterLetterDetailsService,
   LETTER_DETAILS_CHANGED,
@@ -90,6 +91,7 @@ describe('ClaimLetterLetterDetailsService', () => {
   let batchModel: { findOne: jest.Mock; findOneAndUpdate: jest.Mock; findById: jest.Mock };
   let formJson: { loadFormConfig: jest.Mock };
   let activeBatch: { resolveBlockingBatchNumber: jest.Mock; assertActive: jest.Mock };
+  let exemptionResolver: { resolveDiscretionary: jest.Mock };
   let service: ClaimLetterLetterDetailsService;
 
   beforeEach(() => {
@@ -115,6 +117,7 @@ describe('ClaimLetterLetterDetailsService', () => {
       resolveBlockingBatchNumber: jest.fn().mockResolvedValue(null),
       assertActive: jest.fn().mockResolvedValue(undefined),
     };
+    exemptionResolver = { resolveDiscretionary: jest.fn().mockResolvedValue(null) };
     const hydrator = {
       hydrate: (questions: FieldConfig[], saved: Record<string, unknown>) =>
         questions.map((f) => ({ ...f, value: saved[f.key] })),
@@ -124,6 +127,7 @@ describe('ClaimLetterLetterDetailsService', () => {
       new DynamicFormValidationService({} as never),
       hydrator as unknown as FormQuestionHydratorService,
       activeBatch as unknown as ClaimLetterActiveBatchService,
+      exemptionResolver as unknown as ExemptionResolverService,
       batchModel as never,
     );
   });
@@ -354,7 +358,36 @@ describe('ClaimLetterLetterDetailsService', () => {
     it('treats a missing configuration as incomplete', async () => {
       formJson.loadFormConfig.mockResolvedValue(formConfig({ letterConfigured: false }));
       await expect(service.assertComplete(parent as never, 'submitting')).rejects.toThrow(/not configured/);
-      expect(service.evaluate({}, formConfig({ letterConfigured: false })).isComplete).toBe(false);
+      expect(service.evaluate({}, formConfig({ letterConfigured: false }), []).isComplete).toBe(false);
+    });
+  });
+
+  describe('Entire State SFC exemption', () => {
+    const entry = (currentFormStatus: number) => ({
+      requestId: new Types.ObjectId(),
+      currentFormStatus,
+      decidedAt: null,
+      mohuaRemarks: null,
+    });
+
+    beforeEach(() => exemptionResolver.resolveDiscretionary.mockResolvedValue(entry(5)));
+
+    it('leaves the ATR date out of the fields and the completeness check while it counts', async () => {
+      const { data } = await service.get(claimLetterId, editor);
+
+      expect(data!.fields.map((f) => f.key)).not.toContain('sfcAtrDate');
+      expect(data!.isComplete).toBe(true);
+      expect(data!.missingFields).toEqual([]);
+      expect(exemptionResolver.resolveDiscretionary).toHaveBeenCalledWith(null, parent['year'], 22, stateOid);
+    });
+
+    it('lets Download and Submit through without an ATR date', async () => {
+      await expect(service.assertComplete(parent as never, 'downloading')).resolves.toBeUndefined();
+    });
+
+    it('still asks for the ATR date once MoHUA rejects the request', async () => {
+      exemptionResolver.resolveDiscretionary.mockResolvedValue(entry(6));
+      await expect(service.assertComplete(parent as never, 'downloading')).rejects.toThrow('ATR date');
     });
   });
 });
