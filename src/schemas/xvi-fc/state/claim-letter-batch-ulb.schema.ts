@@ -45,6 +45,45 @@ export class ClaimLetterDevolutionSource {
 
 export const ClaimLetterDevolutionSourceSchema = SchemaFactory.createForClass(ClaimLetterDevolutionSource);
 
+/** Only a return is marked: an unmarked ULB counts as fine, so an "approved" mark would change nothing. */
+export type ClaimLetterSoDecisionStatus = 'RETURNED';
+
+/**
+ * The SO's return mark on one ULB while the letter is under SO review (15). Nothing moves when it is set: the
+ * letter's Return for correction reopens the marked ULBs' picked forms and rows, each with this remark.
+ */
+@Schema({ _id: false })
+export class ClaimLetterSoDecision {
+  @Prop({ type: String, enum: ['RETURNED'], required: true })
+  status!: ClaimLetterSoDecisionStatus;
+
+  /** The ULB's own forms to reopen (Annual Accounts, SLB, Bank Account, DUR). */
+  @Prop({ type: [Number], default: [] })
+  ulbFormIds!: number[];
+
+  /** State forms whose row for this ULB is reopened (Elected Body, Devolution, FC Unspent). */
+  @Prop({ type: [Number], default: [] })
+  rowFormIds!: number[];
+
+  /**
+   * An "Eligible via exemption" ULB: the forms whose discretionary exemption (still under MoHUA review) the letter's
+   * return rejects, with this remark. Its other pending exemptions are left alone.
+   */
+  @Prop({ type: [Number], default: [] })
+  rejectExemptionFormIds!: number[];
+
+  @Prop({ type: String, default: null })
+  remark!: string | null;
+
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
+  decidedBy!: Types.ObjectId;
+
+  @Prop({ type: Date, required: true })
+  decidedAt!: Date;
+}
+
+export const ClaimLetterSoDecisionSchema = SchemaFactory.createForClass(ClaimLetterSoDecision);
+
 /**
  * Immutable per-ULB claim child (brain §14.4) — one document per ULB per claim version. Never
  * reused by a later version (plan §7.6); a new version always creates fresh children. Money
@@ -108,6 +147,10 @@ export class ClaimLetterBatchUlb {
    *  eligibilitySources relied on. */
   @Prop({ type: [MongooseSchema.Types.ObjectId], default: [] })
   appliedExemptionIds!: Types.ObjectId[];
+
+  /** The SO's return mark during SO review; the one field that changes after creation. null = not marked. */
+  @Prop({ type: ClaimLetterSoDecisionSchema, default: null })
+  soDecision?: ClaimLetterSoDecision | null;
 
   @Prop({ type: Number, default: 0 })
   revision!: number;

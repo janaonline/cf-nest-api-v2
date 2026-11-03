@@ -66,7 +66,7 @@ export interface FcUnspentPmuReviewData {
   currentFormStatus: number;
   currentFormStatusLabel: string;
   /** Set on PMU reject, never cleared until the next transition overwrites it. */
-  pmuRemarks: string | null;
+  rejectionRemarks: string | null;
   threshold: number;
   questions: HydratedFieldConfig[];
   rowSummary: FcUnspentPmuRowSummary;

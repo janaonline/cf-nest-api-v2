@@ -36,7 +36,32 @@ Each decision below is cited from several files; read the ADR, not just the loca
 - `services/ulb-options/` - the ULB picker: every expected ULB with its ineligibility reason,
   eligible first.
 - `services/ulb-rows/` - the batch's selected-ULB table, with a display-only eligibility re-check.
-- `services/submit/` - submit (`IN_PROGRESS -> UNDER_REVIEW_BY_MOHUA`) and its checks (ADR 0003).
+- `services/submit/` - submit (`IN_PROGRESS -> UNDER_REVIEW_BY_SO`, 15: the MoHUA Section Officer reviews it
+  first) and its checks (ADR 0003).
+- `services/form-status/` - `ClaimLetterFormStatusService`, called by the SO's approve (mohua/claim-letters): in the
+  caller's transaction it moves the letter's forms to 5. State forms (and the selected ULBs' Elected Body / FC Unspent rows, plus their Devolution
+  rows: `rowStatus` is null until this move, then 5)  come from the
+  evidence frozen on the letter, from 15; each selected ULB's forms (Annual Accounts, Bank Account, SLB, DUR) are found
+  live from 8 through the enabled ULB-level form-json sources, so a letter built before a ULB form became a condition
+  still moves it (a ULB the letter recorded as exempt for a form is skipped). One conditional `updateMany` per
+  collection. The forms the evidence relied on are also the claim lock guard: if one changed after submit (e.g. a
+  State undo of a ULB approval) the whole approval is refused (409). It writes the status only - the letter's own
+  history is the audit trail, the forms' history collections get no row.
+  `returnFormsForCorrection` is the SO's return (mohua/claim-letters `return`): only what the SO marked goes to 16
+  (Returned for Correction), everything else keeps its status. The SO marks each ULB first (its `soDecision` on the
+  claim ULB row); the return takes each RETURNED ULB with its own picks and remark, plus the State-wide forms (SFC,
+  GTC) with the State remark. For a row form (Elected Body, FC Unspent, Devolution) picked for a ULB, that ULB's row
+  goes to 16 with its remark (`rejectionRemark`), and the form has to move with it because a row is only
+  State-editable while its form is (the form's own `rejectionRemarks` is the State remark, or a pointer to the rows).
+  An "Eligible via exemption" ULB is returned through its exemptions instead (`soDecision.rejectExemptionFormIds`,
+  rejected by the MoHUA service before this writer runs; see ADR 0005), so it reaches this writer with nothing to
+  reopen. A RETURNED ULB's picked form goes 8 -> 16 with that ULB's `mohuaDecision` note; Annual Accounts also marks every State-approved document's `stateDecision` RETURNED
+  with the SO's note (an approved document can't be re-uploaded), so the ULB sees Re-upload and must re-upload each
+  before resubmitting, exactly as after a State return. The fix goes back through PMU (13) / the State (3). Devolution's final submit clears its
+  rows' 16 back to null (no PMU row review there). The returned letter itself is closed: status 16 plus
+  `isAbandoned: true`, so its batch slot and ULB locks are free and the State builds a new letter; MoHUA still lists
+  it, and the State summary labels it by status, not "Abandoned". Each reopened form or row is in the history row's
+  `rejectedSourceRefs`.
 - `services/active-batch/` - the one-active-batch rule (ADR 0004); no other file decides it.
 - `services/history/` - the only writer of `ClaimLetterBatchHistory` (ADR 0003).
 - `services/recovery/` - the hourly stale-`BUILDING` cleanup (cron) and `detectAnomalies`, a

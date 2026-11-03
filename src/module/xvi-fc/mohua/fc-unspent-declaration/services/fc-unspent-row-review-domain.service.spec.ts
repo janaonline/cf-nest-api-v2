@@ -44,7 +44,7 @@ function getInsertManyDocs(mockFn: jest.Mock): TestRowHistoryDoc[] {
 interface TestSetArg {
   currentFormStatus?: number;
   auditRevision?: number;
-  mohuaRemarks?: string | null;
+  rejectionRemarks?: string | null;
 }
 
 function getFindOneAndUpdateSetArg(mockFn: jest.Mock): TestSetArg {
@@ -381,10 +381,10 @@ describe('FcUnspentRowReviewDomainService', () => {
         currentFormStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
         auditRevision: 3,
       });
-      expect(setArg.mohuaRemarks).toBeUndefined();
+      expect(setArg.rejectionRemarks).toBeUndefined();
     });
 
-    it('sets mohuaRemarks when provided', async () => {
+    it('sets rejectionRemarks when provided', async () => {
       await service.transitionParent(
         formOid,
         FORM_STATUS.RETURNED_BY_MOHUA,
@@ -394,7 +394,7 @@ describe('FcUnspentRowReviewDomainService', () => {
         mockSession,
       );
       const setArg = getFindOneAndUpdateSetArg(formModel['findOneAndUpdate']);
-      expect(setArg.mohuaRemarks).toBe('Please fix row 3.');
+      expect(setArg.rejectionRemarks).toBe('Please fix row 3.');
     });
   });
 

@@ -279,15 +279,16 @@ describe('buildEligibleRowCondition', () => {
     expect(hasExempt).toBe(false);
   });
 
-  it('POST_SUBMISSION_UPDATE_ALLOWED_STATUSES contains exactly the PMU status plus the legacy MoHUA statuses (PMU Review feature)', () => {
+  it('POST_SUBMISSION_UPDATE_ALLOWED_STATUSES contains exactly the PMU and SO statuses plus the legacy MoHUA statuses', () => {
     expect([...POST_SUBMISSION_UPDATE_ALLOWED_STATUSES]).toEqual(
       expect.arrayContaining([
         FORM_STATUS.UNDER_REVIEW_BY_PMU,
+        FORM_STATUS.UNDER_REVIEW_BY_SO,
         FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
         FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
       ]),
     );
-    expect(POST_SUBMISSION_UPDATE_ALLOWED_STATUSES).toHaveLength(3);
+    expect(POST_SUBMISSION_UPDATE_ALLOWED_STATUSES).toHaveLength(4);
   });
 });
 

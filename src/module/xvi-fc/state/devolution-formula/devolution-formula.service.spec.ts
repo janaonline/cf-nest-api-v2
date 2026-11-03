@@ -118,6 +118,8 @@ const mockRowModel = {
   findByIdAndUpdate: jest.fn(),
   countDocuments: jest.fn(),
   aggregate: jest.fn(),
+  // finalSubmit clears rows the SO returned (16) back to unset.
+  updateMany: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue({ modifiedCount: 0 }) }),
 };
 
 const mockHistoryModel = { create: jest.fn().mockResolvedValue(undefined) };

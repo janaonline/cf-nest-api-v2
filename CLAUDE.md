@@ -35,11 +35,28 @@ npm run migrate:xvifc-slb-state            # Backfills the new required `state` 
 npm run migrate:pmu-role-rename           # One-off: renames role XVIFC_PMU -> MOHUA_PMU in users + sidemenus
                                           # (scripts/migrate-pmu-role-rename.ts). Re-runnable; `-- --dry-run` counts.
                                           # Afterwards clear the side-menu cache (both role keys); PMU users must log in again
+npm run migrate:xvifc-so-claim-statuses   # SO review stage: sets claimEligibility.acceptedFormStatuses to [15,5,7] on the five State
+                                          # forms (22/23/24/25/35), adds 15 to rowAcceptedFormStatuses on 23/25, and fixes SLB (32) to
+                                          # [8,5,7] (scripts/update-xvifc-claim-eligibility-statuses-for-so.ts). Re-runnable; then clears
+                                          # the no-TTL FormJson cache (`formJson:<NODE_ENV>:*`). `-- --dry-run` reports only,
+                                          # `-- --no-cache-clear` skips the cache step
+npm run migrate:xvifc-so-action-gates     # Adds 16 (RETURNED_BY_SO) next to 4 in the ULB document gates of `xvifc_action_gates`
+                                          # (upload/reupload/retry/delete), so a form the SO returned shows the same buttons as one
+                                          # the State returned (scripts/add-xvifc-returned-by-so-action-gates.ts). Re-runnable;
+                                          # `-- --dry-run` lists only. No cache to clear
+npm run migrate:xvifc-rejection-remarks   # Renames the 5 State forms' return reason to `rejectionRemarks` (SFC, Elected Body,
+                                          # Devolution, FC Unspent, GTC): moves `pmuRemarks` and, on Devolution/FC Unspent,
+                                          # `mohuaRemarks` into it, then unsets both (scripts/migrate-xvifc-rejection-remarks.ts).
+                                          # Run it with the deploy that renames the field. Re-runnable; `-- --dry-run` counts only
 npm run seed:xvifc-pmu-doe-menu           # Gives the MOHUA_PMU and DOE roles their sidebar rows (Overview, Profile > People
                                           # and Roles, Support) for every MoHUA menu year (scripts/seed-xvifc-pmu-doe-menu.ts).
                                           # Idempotent; `-- --dry-run` reports, `-- --year <id>` limits to one year. The side
                                           # menu is cached with no TTL, so afterwards run DELETE xvi-fc/admin/cache/side-menu.
                                           # Run it only once the UI with the matching routes is deployed
+npm run seed:xvifc-mohua-claims-menu      # Adds a "Grant Management" group (after Profile) with "Claims & Submissions" to the MoHUA sidebar for every MoHUA
+                                          # menu year (scripts/seed-xvifc-mohua-claims-menu.ts). Idempotent; `-- --dry-run` reports,
+                                          # `-- --year <id>` limits to one year. Clear the no-TTL side-menu cache afterwards
+                                          # (DELETE xvi-fc/admin/cache/side-menu) and run it only once the UI route is deployed
 ```
 
 ## Architecture
@@ -100,6 +117,26 @@ src/
 │   │                    # common/services/CLAUDE.md) and the per-ULB SLB / bank-account GETs (no stub writes for MOHUA), and
 │   │                    # fc-unspent-declaration and request-exemption review workflows (each a separate module,
 │   │                    # decoupled from its own STATE-side module — mirrors fc-unspent's own split)
+│   │                    # claim-letters (read-only Claims & Submissions screens: GET xvi-fc/mohua/claim-letters/:yearId/:installment — every
+│   │                    # state's first-claim status, installment allocation (half of basic + performance from grantAllocation) and amount claimed; .../state/:stateId/:yearId/:installment — one
+│   │                    # state's letters; .../letter/:id and .../letter/:id/ulbs. Lists letters at status 15 (under SO review), 16 (returned by the SO),
+│   │                    # 5 (under MoHUA review), 6 (returned by MoHUA) and 7 (acknowledged, read-only) that are READY, not abandoned and not superseded — MOHUA_CLAIM_LETTERS_LISTED_STATUSES;
+│   │                    # each letter row carries its `batchNumber` (1, 2, 3... — no cap). A state's letters response also carries a
+│   │                    # `summary` band (ULBs claimed/pending, ULBs per status, amount claimed, balance) that reuses the State-side
+│   │                    # ClaimLetterEligibilityService (status buckets, ULB locks); a returned letter's amount is not "claimed". MoHUA/DoE/ADMIN only; the State-side
+│   │                    # claim-letter reads are State/ADMIN only, so MoHUA has its own module. POST .../letter/:id/approve (MoHUA admin = the Section Officer: APPROVE_STATE_SUBMISSIONS) is the SO step: it moves a
+│   │                    # letter under SO review (UNDER_REVIEW_BY_SO, 15) to UNDER_REVIEW_BY_MOHUA (5) and logs it in one transaction,
+│   │                    # pinned on the status + `revision` the page showed. It also moves the letter's State/ULB forms (and rows) to 5
+│   │                    # in the same transaction (ClaimLetterFormStatusService, which refuses if a form changed since submit).
+│   │                    # POST .../letter/:id/return is the SO's return (15 -> 16): the letter closes (also flagged isAbandoned, so its
+│   │                    # batch slot and ULB locks are freed and the State builds a new letter; MoHUA still lists it) and only what
+│   │                    # the SO marked goes to 16. The SO first marks the ULBs to return (PUT .../letter/:id/ulb/:ulbId/decision:
+│   │                    # RETURNED with that ULB's forms, Elected Body / FC Unspent / Devolution rows and remark, or PENDING to clear;
+│   │                    # there is no approved mark - an unmarked ULB counts as fine; an "Eligible via exemption" ULB is marked only
+│   │                    # through `rejectExemptionFormIds`, its own discretionary exemptions still at 5), saved as
+│   │                    # `soDecision` on the claim ULB row; approve is refused while any ULB is RETURNED, and the return body carries
+│   │                    # only the State-wide items (claim letter, SFC, GTC) (see state/claim-letter/CLAUDE.md). MoHUA's final 5 -> 7 and its return (6) are not built yet. The State's claim-letter submit now lands on 15. Status 16 is
+│   │                    # RETURNED_BY_SO (shown as "Returned for Correction"); see CLAIM_LETTER_APPROVED_STATUSES (7))
 │   ├── side-menu/, cache/, common/ # XviFcCacheService/Interceptor, form-actors, form-status-access helpers,
 │   │                     # YearAccessService (dynamic year access/exemption for new ULBs - see below) shared
 │   │                     # across sub-features

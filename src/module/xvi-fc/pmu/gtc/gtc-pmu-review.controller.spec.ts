@@ -64,7 +64,15 @@ describe('GtcPmuReviewController', () => {
   });
 
   it('POST :stateId/:yearId/:installment/reject delegates with the parsed installment', async () => {
-    await controller.rejectForm(stateId, yearId, '1', { pmuRemarks: 'Please redo.' }, user, '127.0.0.1', 'jest-agent');
+    await controller.rejectForm(
+      stateId,
+      yearId,
+      '1',
+      { rejectionRemarks: 'Please redo.' },
+      user,
+      '127.0.0.1',
+      'jest-agent',
+    );
     expect(reviewService['rejectCompleteForm']).toHaveBeenCalledWith(
       stateId,
       yearId,

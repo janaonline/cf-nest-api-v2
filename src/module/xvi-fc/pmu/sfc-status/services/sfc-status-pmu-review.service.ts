@@ -46,7 +46,7 @@ type PmuFormLeanWithPopulate = XvifcActorSourceDocument & {
   state?: Types.ObjectId | { _id?: Types.ObjectId; name?: string };
   currentFormStatus?: number;
   data?: Record<string, unknown>;
-  pmuRemarks?: string | null;
+  rejectionRemarks?: string | null;
 };
 
 /**
@@ -142,7 +142,7 @@ export class SfcStatusPmuReviewService {
       yearId,
       currentFormStatus,
       currentFormStatusLabel: getFormStatusLabel(currentFormStatus),
-      pmuRemarks: doc.pmuRemarks ?? null,
+      rejectionRemarks: doc.rejectionRemarks ?? null,
       questions,
       permissions,
       actors,
@@ -167,7 +167,7 @@ export class SfcStatusPmuReviewService {
     const userOid = new Types.ObjectId(user._id);
     const fromStatus = form.currentFormStatus;
     // No PMU-specific "approved" status — see CLAUDE.md's "Status handling" section.
-    const toStatus = FORM_STATUS.UNDER_REVIEW_BY_MOHUA;
+    const toStatus = FORM_STATUS.UNDER_REVIEW_BY_SO;
 
     await this.transition(form, fromStatus, toStatus, undefined, FormHistoryAction.PMU_APPROVE, userOid, ip, userAgent);
 
@@ -180,17 +180,17 @@ export class SfcStatusPmuReviewService {
   async rejectCompleteForm(
     stateId: string,
     yearId: string,
-    pmuRemarks: string,
+    rejectionRemarks: string,
     user: AuthUser,
     ip: string,
     userAgent: string,
   ): Promise<XviFcApiResponse<SfcStatusPmuSubmitData>> {
     assertPmuReviewerAccess(user);
 
-    const trimmedRemarks = pmuRemarks?.trim();
+    const trimmedRemarks = rejectionRemarks?.trim();
     if (!trimmedRemarks) {
       throwXviFcValidationError({
-        pmuRemarks: [{ field: 'pmuRemarks', code: 'required', message: 'A rejection remark is required.' }],
+        rejectionRemarks: [{ field: 'rejectionRemarks', code: 'required', message: 'A rejection remark is required.' }],
       });
     }
 
@@ -243,14 +243,14 @@ export class SfcStatusPmuReviewService {
     form: SfcStatusPmuFormLean,
     fromStatus: number,
     toStatus: number,
-    pmuRemarks: string | undefined,
+    rejectionRemarks: string | undefined,
     action: FormHistoryAction,
     userOid: Types.ObjectId,
     ip: string,
     userAgent: string,
   ): Promise<void> {
     const setFields: Record<string, unknown> = { currentFormStatus: toStatus, updatedBy: userOid };
-    if (pmuRemarks !== undefined) setFields['pmuRemarks'] = pmuRemarks;
+    if (rejectionRemarks !== undefined) setFields['rejectionRemarks'] = rejectionRemarks;
 
     await this.pmuReviewHelper.transitionForm<XviFcSfcStatusDocument>({
       formModel: this.formModel,
@@ -274,7 +274,7 @@ export class SfcStatusPmuReviewService {
         changedAt: new Date(),
         ip,
         userAgent,
-        remarks: pmuRemarks,
+        remarks: rejectionRemarks,
       }),
     });
   }

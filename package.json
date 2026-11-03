@@ -22,7 +22,11 @@
     "migrate:xvifc-in-progress-since": "ts-node -r tsconfig-paths/register --skip-project scripts/backfill-annual-account-in-progress-since.ts",
     "migrate:xvifc-upload-block-24h": "ts-node -r tsconfig-paths/register scripts/shorten-upload-block-to-24h.ts",
     "migrate:xvifc-slb-state": "ts-node -r tsconfig-paths/register scripts/backfill-slb-state.ts",
-    "migrate:pmu-role-rename": "ts-node -r tsconfig-paths/register scripts/migrate-pmu-role-rename.ts"
+    "migrate:xvifc-so-claim-statuses": "ts-node -r tsconfig-paths/register scripts/update-xvifc-claim-eligibility-statuses-for-so.ts",
+    "migrate:xvifc-so-action-gates": "ts-node -r tsconfig-paths/register scripts/add-xvifc-returned-by-so-action-gates.ts",
+    "migrate:xvifc-rejection-remarks": "ts-node -r tsconfig-paths/register scripts/migrate-xvifc-rejection-remarks.ts",
+    "migrate:pmu-role-rename": "ts-node -r tsconfig-paths/register scripts/migrate-pmu-role-rename.ts",
+    "seed:xvifc-mohua-claims-menu": "ts-node -r tsconfig-paths/register scripts/seed-xvifc-mohua-claims-menu.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.896.0",
