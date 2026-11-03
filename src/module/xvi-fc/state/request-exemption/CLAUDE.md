@@ -109,9 +109,11 @@ large enough for an `$unwind` aggregation to be worth the complexity.
   named `ulb` in `finalSubmit`. The ULB dropdown itself is meant to be sourced from the shared,
   eligibility-filtered `XviFcUlbOptionsService` (`common/xvi-fc-ulb-options.controller.ts`,
   `GET xvi-fc/ulb-options?stateId=...&yearId=...`) rather than this module having any ULB-listing
-  logic of its own — but as of this writing, `formjsons`' formId 34 `ulb` field still points at the
-  old, unfiltered `master/ulb` endpoint; the `finalSubmit` guard above is the only thing actually
-  enforcing eligibility/state-ownership until that `formjsons` data change ships.
+  logic of its own. Formid 34's `ulb` field is pointed at it (`resultsPath: "data"`,
+  `valueKey: "ulbId"`) in `xvifc-payload-28102026.json`; the frontend page merges `stateId`/`yearId`
+  into `remoteSearch.extraParams` at render time, since `formjsons` config is static. Until that
+  payload is pushed to an environment, its live `formjsons` still points at the unfiltered
+  `master/ulb`, and the `finalSubmit` guard above is the only enforcement there.
 
 **Outbound** (what depends on this module's state from outside):
 - `SfcStatusService` (`state/sfc-status/`) — blocks `finalSubmit` on a Pending/Approved SFC exemption
