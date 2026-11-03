@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model, Types } from 'mongoose';
+import { Model, PipelineStage, Types } from 'mongoose';
 import { EmailTemplatesService } from 'src/admin/email-templates/email-templates.service';
 import { EmailTemplate, EmailTemplateDocument } from 'src/schemas/email-template.schema';
 import { EmailQueueService } from 'src/core/queue/email-queue/email-queue.service';
@@ -14,6 +14,7 @@ import { State, StateDocument } from 'src/schemas/state.schema';
 import { PORTAL_INVITE_LOGIN_TYPE, buildPortalAuthUrls } from 'src/core/utils/portal-urls.util';
 import { AnnualAccountFormStatus, FORM_STATUS_ID, XviFcAnnualAccount, XviFcAnnualAccountDocument } from 'src/schemas/xvi-fc/annual-account.schema';
 import { remindersCronsEnabled, REMINDER_CRON_REPLY_TO } from 'src/common/utils/reminder-cron-gate.util';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 
 const TEMPLATE_SLUG = 'weekly-state-summary';
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -115,6 +116,7 @@ export class WeeklyStateSummaryService {
     private readonly emailTemplates: EmailTemplatesService,
     private readonly emailQueue: EmailQueueService,
     private readonly config: ConfigService,
+    private readonly ulbEligibilityService: UlbEligibilityService,
   ) {}
 
   // ─── Seed default template (idempotent — mirrors the other reminder services' seedTemplate) ──
@@ -231,8 +233,15 @@ export class WeeklyStateSummaryService {
    * since a ULB only ever has one live/current-cycle record in a non-terminal status at a time.
    */
   private async countByStatus(stateId: Types.ObjectId): Promise<StatusCounts> {
-    const pipeline = [
-      { $match: { state: stateId, isActive: true } },
+    const ineligibleUlbTypeIds = await this.ulbEligibilityService.getIneligibleUlbTypeIds('XVIFC');
+    const pipeline: PipelineStage[] = [
+      {
+        $match: {
+          state: stateId,
+          isActive: true,
+          ...(ineligibleUlbTypeIds.length ? { ulbType: { $nin: ineligibleUlbTypeIds } } : {}),
+        },
+      },
       {
         $lookup: {
           from: 'xvifc_annualaccounts',
@@ -282,15 +291,18 @@ export class WeeklyStateSummaryService {
   }
 
   /**
-   * Same date-math pattern as StateReviewDigestService.findDueAnnualAccounts, threshold=10 days. Leaves out
-   * ADC-owned ULBs: their ADC reviews them, so the State can't act on the delay.
+   * Same date-math pattern as StateReviewDigestService.findDueAnnualAccounts, threshold=10 days.
+   * Scoped like countByStatus's "under state review": XVIFC-eligible ULBs only, and no ADC-owned
+   * ULBs (their ADC reviews them, so the State can't act on the delay).
    */
   private async countReviewDelayed(stateId: Types.ObjectId): Promise<number> {
-    const adcUlbIds = await this.ulbModel.distinct('_id', { state: stateId, adc: { $ne: null } });
+    const eligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateId, 'XVIFC');
+    const stateOwnedUlbIds = await this.ulbModel.distinct('_id', { ...eligibleUlbFilter, adc: null }).exec();
+
     return this.annualAccountModel
       .countDocuments({
         state: stateId,
-        ulb: { $nin: adcUlbIds },
+        ulb: { $in: stateOwnedUlbIds },
         sectionType: 'audited',
         form_status_id: FORM_STATUS_ID[AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE],
         declaredAt: { $ne: null },

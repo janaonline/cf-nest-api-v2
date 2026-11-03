@@ -700,7 +700,11 @@ export class BankAccountService {
     const stateId = resolveStateScopeFilter(user, dto.stateId);
     const adcId = resolveAdcScopeFilter(user);
 
-    const matchStage: Record<string, unknown> = { isActive: true };
+    const ineligibleUlbTypeIds = await this.ulbEligibilityService.getIneligibleUlbTypeIds('XVIFC');
+    const matchStage: Record<string, unknown> = {
+      isActive: true,
+      ...(ineligibleUlbTypeIds.length ? { ulbType: { $nin: ineligibleUlbTypeIds } } : {}),
+    };
     if (stateId) matchStage.state = stateId;
     if (adcId) matchStage.adc = adcId;
     if (dto.search?.trim()) {
