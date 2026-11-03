@@ -139,7 +139,7 @@ src/
 │   │                    # RETURNED_BY_SO (shown as "Returned for Correction"); see CLAIM_LETTER_APPROVED_STATUSES (7))
 │   ├── side-menu/, cache/, common/ # XviFcCacheService/Interceptor, form-actors, form-status-access helpers,
 │   │                     # YearAccessService (dynamic year access/exemption for new ULBs - see below),
-│   │                     # XviFcUlbOptionsService/Controller (GET xvi-fc/ulb-options/:stateId/:yearId - a
+│   │                     # XviFcUlbOptionsService/Controller (GET xvi-fc/ulb-options?stateId=&yearId= - a
 │   │                     # generic, eligibility-filtered "pick a ULB" source for any feature with no
 │   │                     # per-ULB business logic to attach; a feature needing that attaches it gets its
 │   │                     # own dedicated ulb-options service instead, e.g. claim-letter/fc-unspent-declaration)
