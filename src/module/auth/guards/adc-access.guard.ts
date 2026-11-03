@@ -36,6 +36,8 @@ const ALLOWED_ROUTES: readonly AllowedRoute[] = [
   { method: 'GET', path: new RegExp(`^/xvi-fc/sidebar/${ID}$`) },
   { method: 'GET', path: /^\/xvi-fc\/years$/ },
   { method: 'GET', path: /^\/xvi-fc\/support-hours$/ },
+  // Navbar bell. TODO: scope its response for ADC users (no State forms, own-ADC count) before release.
+  { method: 'GET', path: new RegExp(`^/xvi-fc/state/${ID}/${ID}/notifications$`) },
 
   // ULB Forms Review — lists
   { method: 'GET', path: new RegExp(`^/xvi-fc/${FORM}/state/ulb-submissions$`) },
