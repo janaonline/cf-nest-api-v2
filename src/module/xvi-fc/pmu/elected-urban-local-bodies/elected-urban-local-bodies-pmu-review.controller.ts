@@ -131,6 +131,6 @@ export class ElectedUrbanLocalBodiesPmuReviewController {
     @Ip() ip: string,
     @Headers('user-agent') userAgent: string,
   ) {
-    return this.reviewService.rejectCompleteForm(stateId, yearId, dto.pmuRemarks, user, ip, userAgent);
+    return this.reviewService.rejectCompleteForm(stateId, yearId, dto.rejectionRemarks, user, ip, userAgent);
   }
 }

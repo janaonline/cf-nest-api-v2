@@ -140,8 +140,9 @@ export class ElectedUrbanLocalBodiesForm {
   @Prop({ type: Number, default: FORM_STATUS.NOT_STARTED })
   currentFormStatus!: number;
 
+  /** The latest return's reason, from whoever returned it last (PMU, the SO or MoHUA). */
   @Prop({ type: String, default: null })
-  pmuRemarks?: string | null;
+  rejectionRemarks?: string | null;
 
   @Prop({ type: Boolean, default: true })
   isDraft!: boolean;

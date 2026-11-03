@@ -574,7 +574,13 @@ describe('FcUnspentDeclarationRowService', () => {
         form: formOid,
         isActive: true,
         ulbId: { $nin: [ulbOid1] },
-        rowStatus: { $nin: [FORM_STATUS.UNDER_REVIEW_BY_MOHUA, FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA] },
+        rowStatus: {
+          $nin: [
+            FORM_STATUS.UNDER_REVIEW_BY_SO,
+            FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+            FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+          ],
+        },
       });
       expect(update.$set).toMatchObject({ isActive: false });
     });
@@ -816,7 +822,13 @@ describe('FcUnspentDeclarationRowService', () => {
 
       const [filter] = getUpdateManyArgs(rowModel['updateMany']);
       expect(filter).toMatchObject({
-        rowStatus: { $nin: [FORM_STATUS.UNDER_REVIEW_BY_MOHUA, FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA] },
+        rowStatus: {
+          $nin: [
+            FORM_STATUS.UNDER_REVIEW_BY_SO,
+            FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+            FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+          ],
+        },
       });
     });
 

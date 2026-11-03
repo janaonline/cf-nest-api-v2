@@ -10,6 +10,7 @@ const ULB_EDITABLE_STATUSES: Set<number> = new Set([
   FORM_STATUS.IN_PROGRESS,
   FORM_STATUS.RETURNED_BY_STATE,
   FORM_STATUS.RETURNED_BY_MOHUA,
+  FORM_STATUS.RETURNED_BY_SO,
 ]);
 
 export const ULB_EDITABLE_STATUS_IDS: readonly number[] = [...ULB_EDITABLE_STATUSES];
@@ -22,12 +23,14 @@ export const ULB_EDITABLE_STATUS_IDS: readonly number[] = [...ULB_EDITABLE_STATU
  * Includes `RETURNED_BY_PMU` alongside the legacy `RETURNED_BY_MOHUA` (PMU Review feature) — a PMU
  * rejection must send the state back into edit/resubmit mode the same way a MoHUA rejection always
  * has. Rationale: see common/services/CLAUDE.md's "PMU Review shared mechanics" section.
+ * Also includes `RETURNED_BY_SO`: a claim letter the SO returned sends its State forms back for correction.
  */
 const STATE_EDITABLE_STATUSES: Set<number> = new Set([
   FORM_STATUS.NOT_STARTED,
   FORM_STATUS.IN_PROGRESS,
   FORM_STATUS.RETURNED_BY_MOHUA,
   FORM_STATUS.RETURNED_BY_PMU,
+  FORM_STATUS.RETURNED_BY_SO,
 ]);
 
 export const STATE_EDITABLE_STATUS_IDS: readonly number[] = [...STATE_EDITABLE_STATUSES];
@@ -120,6 +123,7 @@ export function assertCanStateFinalSubmitForm(status: number): void {
 
 /** Statuses in which a MoHUA user may view a form's review page (read-only once acknowledged). */
 export const MOHUA_REVIEWABLE_STATUSES: readonly number[] = [
+  FORM_STATUS.UNDER_REVIEW_BY_SO,
   FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
   FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
 ];
@@ -159,6 +163,8 @@ export const PMU_REVIEWABLE_STATUSES: readonly number[] = [
   FORM_STATUS.RETURNED_BY_PMU,
   FORM_STATUS.NOT_STARTED,
   FORM_STATUS.IN_PROGRESS,
+  FORM_STATUS.UNDER_REVIEW_BY_SO,
+  FORM_STATUS.RETURNED_BY_SO,
   FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
   FORM_STATUS.RETURNED_BY_MOHUA,
   FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
@@ -203,7 +209,7 @@ export function assertCanPmuUndoForm(status: number): void {
 /**
  * Row-level counterpart to `STATE_EDITABLE_STATUSES`, for forms with per-ULB PMU row review
  * (Elected Urban Local Bodies, FC Unspent Declaration). A row is editable by the State only while it
- * hasn't yet been approved — `null` (pre-submission), `RETURNED_BY_PMU`, or `RETURNED_BY_MOHUA`. Once
+ * hasn't yet been approved — `null` (pre-submission), `RETURNED_BY_PMU`, `RETURNED_BY_MOHUA` or `RETURNED_BY_SO`. Once
  * a row reaches `UNDER_REVIEW_BY_PMU` (decision pending) or any approved-adjacent status
  * (`UNDER_REVIEW_BY_MOHUA`/`SUBMISSION_ACKNOWLEDGED_BY_MOHUA`), it is permanently locked from State
  * edits at this stage — this is what lets the State resume editing only the rejected rows of a mixed
@@ -213,6 +219,7 @@ const STATE_EDITABLE_ROW_STATUSES: Set<RowReviewStatus | null> = new Set([
   null,
   FORM_STATUS.RETURNED_BY_PMU,
   FORM_STATUS.RETURNED_BY_MOHUA,
+  FORM_STATUS.RETURNED_BY_SO,
 ]);
 
 export function canStateEditRow(rowStatus: RowReviewStatus | null | undefined): boolean {
@@ -231,6 +238,7 @@ export function assertCanStateEditRow(rowStatus: RowReviewStatus | null | undefi
  *  unreachable the moment a form leaves draft). */
 export const POST_SUBMISSION_UPDATE_ALLOWED_STATUSES: readonly number[] = [
   FORM_STATUS.UNDER_REVIEW_BY_PMU,
+  FORM_STATUS.UNDER_REVIEW_BY_SO,
   FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
   FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
 ];

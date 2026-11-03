@@ -61,7 +61,7 @@ type PmuFormLeanWithPopulate = XvifcActorSourceDocument & {
   _id: Types.ObjectId;
   state?: Types.ObjectId | { _id?: Types.ObjectId; name?: string };
   currentFormStatus?: number;
-  pmuRemarks?: string | null;
+  rejectionRemarks?: string | null;
   excelFile?: unknown;
   checkboxConfirmation?: boolean;
 };
@@ -177,7 +177,7 @@ export class DevolutionFormulaPmuReviewService {
       installment,
       currentFormStatus,
       currentFormStatusLabel: getFormStatusLabel(currentFormStatus),
-      pmuRemarks: doc.pmuRemarks ?? null,
+      rejectionRemarks: doc.rejectionRemarks ?? null,
       questions,
       permissions,
       actors,
@@ -243,8 +243,8 @@ export class DevolutionFormulaPmuReviewService {
     const userOid = new Types.ObjectId(user._id);
     const fromStatus = form.currentFormStatus;
     // No status of its own once approved — see CLAUDE.md's "Approve lands directly on
-    // UNDER_REVIEW_BY_MOHUA" section.
-    const toStatus = FORM_STATUS.UNDER_REVIEW_BY_MOHUA;
+    // UNDER_REVIEW_BY_SO" section.
+    const toStatus = FORM_STATUS.UNDER_REVIEW_BY_SO;
 
     await this.transition(form, fromStatus, toStatus, undefined, FormHistoryAction.PMU_APPROVE, userOid, ip, userAgent);
 
@@ -258,17 +258,17 @@ export class DevolutionFormulaPmuReviewService {
     stateId: string,
     yearId: string,
     installment: DfInstallment,
-    pmuRemarks: string,
+    rejectionRemarks: string,
     user: AuthUser,
     ip: string,
     userAgent: string,
   ): Promise<XviFcApiResponse<DevolutionFormulaPmuSubmitData>> {
     assertPmuReviewerAccess(user);
 
-    const trimmedRemarks = pmuRemarks?.trim();
+    const trimmedRemarks = rejectionRemarks?.trim();
     if (!trimmedRemarks) {
       throwXviFcValidationError({
-        pmuRemarks: [{ field: 'pmuRemarks', code: 'required', message: 'A rejection remark is required.' }],
+        rejectionRemarks: [{ field: 'rejectionRemarks', code: 'required', message: 'A rejection remark is required.' }],
       });
     }
 
@@ -324,14 +324,14 @@ export class DevolutionFormulaPmuReviewService {
     form: DevolutionFormulaPmuFormLean,
     fromStatus: number,
     toStatus: number,
-    pmuRemarks: string | undefined,
+    rejectionRemarks: string | undefined,
     action: FormHistoryAction,
     userOid: Types.ObjectId,
     ip: string,
     userAgent: string,
   ): Promise<void> {
     const setFields: Record<string, unknown> = { currentFormStatus: toStatus, updatedBy: userOid };
-    if (pmuRemarks !== undefined) setFields['pmuRemarks'] = pmuRemarks;
+    if (rejectionRemarks !== undefined) setFields['rejectionRemarks'] = rejectionRemarks;
 
     await this.pmuReviewHelper.transitionForm<DevolutionFormulaFormDocument>({
       formModel: this.formModel,
@@ -355,7 +355,7 @@ export class DevolutionFormulaPmuReviewService {
         changedAt: new Date(),
         ip,
         userAgent,
-        remarks: pmuRemarks,
+        remarks: rejectionRemarks,
       }),
     });
   }

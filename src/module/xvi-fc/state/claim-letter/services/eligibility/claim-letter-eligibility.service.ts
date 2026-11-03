@@ -521,6 +521,7 @@ export class ClaimLetterEligibilityService {
     type Bucket = 'totalAlreadyAcknowledged' | 'totalClaimInProgress' | 'totalClaimInDraft';
     const statusToBucket: Record<number, Bucket> = {
       [FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA]: 'totalAlreadyAcknowledged',
+      [FORM_STATUS.UNDER_REVIEW_BY_SO]: 'totalClaimInProgress',
       [FORM_STATUS.UNDER_REVIEW_BY_MOHUA]: 'totalClaimInProgress',
       [FORM_STATUS.IN_PROGRESS]: 'totalClaimInDraft',
     };

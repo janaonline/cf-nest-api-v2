@@ -2,7 +2,6 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectConnection, InjectModel } from '@nestjs/mongoose';
 import { Connection, Model, Types } from 'mongoose';
-import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import { S3Service } from 'src/core/s3/s3.service';
 import { ClaimLetterBatch, ClaimLetterBatchDocument } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
 import {
@@ -11,6 +10,7 @@ import {
 } from 'src/schemas/xvi-fc/state/claim-letter-batch-ulb.schema';
 import { ClaimLetterUlbLock, ClaimLetterUlbLockDocument } from 'src/schemas/xvi-fc/state/claim-letter-ulb-lock.schema';
 import {
+  CLAIM_LETTER_APPROVED_STATUSES,
   CLAIM_LETTER_EDIT_LOCK_LEASE_MINUTES,
   CLAIM_LETTER_STALE_BUILD_THRESHOLD_MINUTES,
 } from '../../constants/claim-letter.constants';
@@ -209,7 +209,7 @@ export class ClaimLetterRecoveryService {
     const statusByClaim = new Map(claims.map((c) => [String(c._id), c.currentFormStatus]));
 
     return ackLocks
-      .filter((l) => statusByClaim.get(String(l.claimLetter)) !== FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA)
+      .filter((l) => !CLAIM_LETTER_APPROVED_STATUSES.includes(statusByClaim.get(String(l.claimLetter)) ?? -1))
       .map((l) => ({ lockId: String(l._id), claimLetterId: String(l.claimLetter) }));
   }
 
@@ -217,7 +217,7 @@ export class ClaimLetterRecoveryService {
     ClaimLetterReconciliationReport['terminalClaimsWithoutAcknowledgedLock']
   > {
     const terminalClaims = await this.batchModel
-      .find({ currentFormStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA, isAbandoned: false })
+      .find({ currentFormStatus: { $in: CLAIM_LETTER_APPROVED_STATUSES }, isAbandoned: false })
       .select('_id')
       .lean<{ _id: Types.ObjectId }[]>()
       .exec();

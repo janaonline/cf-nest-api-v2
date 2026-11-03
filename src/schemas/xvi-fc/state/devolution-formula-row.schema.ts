@@ -1,5 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
+import { ROW_REVIEW_STATUS_VALUES } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
+import type { RowReviewStatus } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
 import type { DfInstallment } from 'src/module/xvi-fc/state/devolution-formula/constants/devolution-formula.constants';
 
 export type DevolutionFormulaRowDocument = HydratedDocument<DevolutionFormulaRow>;
@@ -82,6 +84,13 @@ export class DevolutionFormulaRow {
 
   @Prop({ type: MongooseSchema.Types.Mixed })
   rawExcelData?: Record<string, unknown>;
+
+  /**
+   * Set by the claim letter flow only, never by PMU (Devolution has no row review): `UNDER_REVIEW_BY_MOHUA` once the
+   * SO approves a claim letter holding this row's ULB. `null` until then.
+   */
+  @Prop({ type: Number, enum: [...ROW_REVIEW_STATUS_VALUES, null], default: null })
+  rowStatus!: RowReviewStatus | null;
 
   @Prop({ type: Boolean, default: true })
   isActive!: boolean;

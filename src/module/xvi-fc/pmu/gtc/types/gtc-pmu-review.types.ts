@@ -27,7 +27,7 @@ export interface GtcPmuReviewData {
   currentFormStatus: number;
   currentFormStatusLabel: string;
   /** Set on PMU reject, never cleared until the next transition overwrites it. */
-  pmuRemarks: string | null;
+  rejectionRemarks: string | null;
   questions: HydratedFieldConfig[];
   permissions: GtcPmuReviewPermissions;
   actors: XvifcFormActor[];

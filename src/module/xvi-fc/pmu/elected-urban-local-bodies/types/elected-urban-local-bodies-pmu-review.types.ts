@@ -54,7 +54,7 @@ export interface EulbPmuReviewData {
   currentFormStatus: number;
   currentFormStatusLabel: string;
   /** Set on PMU reject, never cleared until the next transition overwrites it. */
-  pmuRemarks: string | null;
+  rejectionRemarks: string | null;
   questions: HydratedFieldConfig[];
   rowSummary: EulbPmuRowSummary;
   /** Excel upload's validation status — needed by the frontend to bridge the synthetic

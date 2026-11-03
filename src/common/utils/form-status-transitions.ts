@@ -15,6 +15,8 @@ const ALLOWED_TRANSITIONS: Record<number, number[]> = {
     FORM_STATUS.IN_PROGRESS,
     FORM_STATUS.UNDER_REVIEW_BY_STATE,
     FORM_STATUS.UNDER_REVIEW_BY_PMU,
+    // A claim letter's submit goes to the SO first.
+    FORM_STATUS.UNDER_REVIEW_BY_SO,
   ],
   // State approval now lands on APPROVED_BY_STATE (8) first, not straight to MOHUA review —
   // see APPROVED_BY_STATE's own entry below for what follows.
@@ -23,15 +25,32 @@ const ALLOWED_TRANSITIONS: Record<number, number[]> = {
   [FORM_STATUS.UNDER_REVIEW_BY_MOHUA]: [FORM_STATUS.RETURNED_BY_MOHUA, FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA],
   [FORM_STATUS.RETURNED_BY_MOHUA]: [FORM_STATUS.IN_PROGRESS, FORM_STATUS.UNDER_REVIEW_BY_STATE],
   [FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA]: [],
+  // SO review (claim letters, State forms after PMU, and ULB forms from 8). Approving moves on to
+  // MoHUA review (5); returning lands on 16. A form at 16 resubmits to PMU (State forms) or the
+  // State (ULB forms), the same way the other returned statuses do.
+  [FORM_STATUS.UNDER_REVIEW_BY_SO]: [FORM_STATUS.UNDER_REVIEW_BY_MOHUA, FORM_STATUS.RETURNED_BY_SO],
+  [FORM_STATUS.RETURNED_BY_SO]: [
+    FORM_STATUS.IN_PROGRESS,
+    FORM_STATUS.UNDER_REVIEW_BY_PMU,
+    FORM_STATUS.UNDER_REVIEW_BY_STATE,
+  ],
   // STATE may undo their own approval (lands straight back on 3 — status 10 is a log-only
   // marker, the live document is never actually set to it) or, once the Generate Claim Letter
   // feature confirms every form for this ULB+year is here too, move on to AWAITING_CLAIM_LETTER.
-  [FORM_STATUS.APPROVED_BY_STATE]: [FORM_STATUS.UNDER_REVIEW_BY_STATE, FORM_STATUS.AWAITING_CLAIM_LETTER],
+  // The SO's approval of a claim letter also moves its ULB forms from here to MoHUA review (5),
+  // and the SO's return to 16.
+  [FORM_STATUS.APPROVED_BY_STATE]: [
+    FORM_STATUS.UNDER_REVIEW_BY_STATE,
+    FORM_STATUS.AWAITING_CLAIM_LETTER,
+    FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+    FORM_STATUS.RETURNED_BY_SO,
+  ],
   [FORM_STATUS.AWAITING_CLAIM_LETTER]: [FORM_STATUS.UNDER_REVIEW_BY_MOHUA],
   // PMU Review feature (state-level forms only). PMU is an internal pre-screen for MoHUA, not a
   // status-bearing stage of its own once approved — approval lands directly on
   // UNDER_REVIEW_BY_MOHUA, the same status the form would have reached without a PMU stage at all.
-  [FORM_STATUS.UNDER_REVIEW_BY_PMU]: [FORM_STATUS.RETURNED_BY_PMU, FORM_STATUS.UNDER_REVIEW_BY_MOHUA],
+  // PMU approval lands on UNDER_REVIEW_BY_SO (15), where the form waits for a claim letter.
+  [FORM_STATUS.UNDER_REVIEW_BY_PMU]: [FORM_STATUS.RETURNED_BY_PMU, FORM_STATUS.UNDER_REVIEW_BY_SO],
   [FORM_STATUS.RETURNED_BY_PMU]: [FORM_STATUS.IN_PROGRESS, FORM_STATUS.UNDER_REVIEW_BY_PMU],
 };
 

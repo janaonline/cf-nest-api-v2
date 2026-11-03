@@ -45,7 +45,7 @@ function getInsertManyDocs(mockFn: jest.Mock): TestRowHistoryDoc[] {
 
 interface TestSetArg {
   currentFormStatus?: number;
-  pmuRemarks?: string | null;
+  rejectionRemarks?: string | null;
 }
 
 function getFindOneAndUpdateSetArg(mockFn: jest.Mock): TestSetArg {
@@ -207,7 +207,7 @@ describe('ElectedUrbanLocalBodiesPmuRowReviewDomainService', () => {
   describe('filterNotInStatus', () => {
     it('returns rows whose rowStatus does not match the expected value', () => {
       const pending = makeRow({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU });
-      const active = makeRow({ _id: new Types.ObjectId(), rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA });
+      const active = makeRow({ _id: new Types.ObjectId(), rowStatus: FORM_STATUS.UNDER_REVIEW_BY_SO });
 
       const result = service.filterNotInStatus([pending, active], FORM_STATUS.UNDER_REVIEW_BY_PMU);
 
@@ -228,7 +228,7 @@ describe('ElectedUrbanLocalBodiesPmuRowReviewDomainService', () => {
         formOid,
         stateOid,
         yearOid,
-        [{ row, newStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA, rejectionRemark: null }],
+        [{ row, newStatus: FORM_STATUS.UNDER_REVIEW_BY_SO, rejectionRemark: null }],
         userOid,
         null,
         null,
@@ -238,7 +238,7 @@ describe('ElectedUrbanLocalBodiesPmuRowReviewDomainService', () => {
       const ops = getBulkOps(rowModel['bulkWrite']);
       expect(ops[0].updateOne.filter).toEqual({ _id: row._id });
       expect(ops[0].updateOne.update.$set).toMatchObject({
-        rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+        rowStatus: FORM_STATUS.UNDER_REVIEW_BY_SO,
         rejectionRemark: null,
       });
     });
@@ -266,7 +266,7 @@ describe('ElectedUrbanLocalBodiesPmuRowReviewDomainService', () => {
         formOid,
         stateOid,
         yearOid,
-        [{ row, newStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA, rejectionRemark: null }],
+        [{ row, newStatus: FORM_STATUS.UNDER_REVIEW_BY_SO, rejectionRemark: null }],
         userOid,
         '127.0.0.1',
         'jest-agent',
@@ -279,7 +279,7 @@ describe('ElectedUrbanLocalBodiesPmuRowReviewDomainService', () => {
         row: row._id,
         form: formOid,
         previousStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU,
-        currentStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+        currentStatus: FORM_STATUS.UNDER_REVIEW_BY_SO,
         snapshot: {
           rowNumber: row.rowNumber,
           ulbId: row.ulbId,
@@ -290,7 +290,7 @@ describe('ElectedUrbanLocalBodiesPmuRowReviewDomainService', () => {
           dateOfExpiry: row.dateOfExpiry,
           remarks: row.remarks,
           datasetVersion: row.datasetVersion,
-          rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+          rowStatus: FORM_STATUS.UNDER_REVIEW_BY_SO,
           rejectionRemark: null,
         },
       });
@@ -317,7 +317,7 @@ describe('ElectedUrbanLocalBodiesPmuRowReviewDomainService', () => {
     });
 
     it('filters out a transition whose row is already at the target status — no bulk update, no history entry for it', async () => {
-      const alreadyApprovedRow = makeRow({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA });
+      const alreadyApprovedRow = makeRow({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_SO });
       const pendingRow = makeRow({ _id: new Types.ObjectId(), rowStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU });
 
       await service.transitionRows(
@@ -325,8 +325,8 @@ describe('ElectedUrbanLocalBodiesPmuRowReviewDomainService', () => {
         stateOid,
         yearOid,
         [
-          { row: alreadyApprovedRow, newStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA, rejectionRemark: null },
-          { row: pendingRow, newStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA, rejectionRemark: null },
+          { row: alreadyApprovedRow, newStatus: FORM_STATUS.UNDER_REVIEW_BY_SO, rejectionRemark: null },
+          { row: pendingRow, newStatus: FORM_STATUS.UNDER_REVIEW_BY_SO, rejectionRemark: null },
         ],
         userOid,
         null,
@@ -344,13 +344,13 @@ describe('ElectedUrbanLocalBodiesPmuRowReviewDomainService', () => {
     });
 
     it('is a no-op when every transition is already at its target status', async () => {
-      const alreadyApprovedRow = makeRow({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA });
+      const alreadyApprovedRow = makeRow({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_SO });
 
       await service.transitionRows(
         formOid,
         stateOid,
         yearOid,
-        [{ row: alreadyApprovedRow, newStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA, rejectionRemark: null }],
+        [{ row: alreadyApprovedRow, newStatus: FORM_STATUS.UNDER_REVIEW_BY_SO, rejectionRemark: null }],
         userOid,
         null,
         null,
@@ -369,7 +369,7 @@ describe('ElectedUrbanLocalBodiesPmuRowReviewDomainService', () => {
         .mockReturnValue(
           q([
             { rowStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU },
-            { rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA },
+            { rowStatus: FORM_STATUS.UNDER_REVIEW_BY_SO },
             { rowStatus: FORM_STATUS.RETURNED_BY_PMU },
             { rowStatus: FORM_STATUS.RETURNED_BY_PMU },
           ]),
@@ -386,7 +386,7 @@ describe('ElectedUrbanLocalBodiesPmuRowReviewDomainService', () => {
         .fn()
         .mockReturnValue(
           q([
-            { rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA },
+            { rowStatus: FORM_STATUS.UNDER_REVIEW_BY_SO },
             { rowStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU },
             { rowStatus: FORM_STATUS.RETURNED_BY_PMU },
             { rowStatus: FORM_STATUS.ACTION_REQUIRED },
@@ -408,16 +408,16 @@ describe('ElectedUrbanLocalBodiesPmuRowReviewDomainService', () => {
 
   describe('transitionParent', () => {
     it('sets currentFormStatus via the shared StateFormPmuReviewHelper', async () => {
-      await service.transitionParent(formOid, FORM_STATUS.UNDER_REVIEW_BY_MOHUA, undefined, userOid, mockSession);
+      await service.transitionParent(formOid, FORM_STATUS.UNDER_REVIEW_BY_SO, undefined, userOid, mockSession);
       const setArg = getFindOneAndUpdateSetArg(formModel['findOneAndUpdate']);
-      expect(setArg).toMatchObject({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA });
-      expect(setArg.pmuRemarks).toBeUndefined();
+      expect(setArg).toMatchObject({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_SO });
+      expect(setArg.rejectionRemarks).toBeUndefined();
     });
 
-    it('sets pmuRemarks when provided', async () => {
+    it('sets rejectionRemarks when provided', async () => {
       await service.transitionParent(formOid, FORM_STATUS.RETURNED_BY_PMU, 'Please fix row 3.', userOid, mockSession);
       const setArg = getFindOneAndUpdateSetArg(formModel['findOneAndUpdate']);
-      expect(setArg.pmuRemarks).toBe('Please fix row 3.');
+      expect(setArg.rejectionRemarks).toBe('Please fix row 3.');
     });
   });
 
@@ -426,7 +426,7 @@ describe('ElectedUrbanLocalBodiesPmuRowReviewDomainService', () => {
       await service.insertParentHistory(
         makeForm(),
         FORM_STATUS.UNDER_REVIEW_BY_PMU,
-        FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+        FORM_STATUS.UNDER_REVIEW_BY_SO,
         FormHistoryAction.PMU_APPROVE,
         userOid,
         '127.0.0.1',
@@ -437,7 +437,7 @@ describe('ElectedUrbanLocalBodiesPmuRowReviewDomainService', () => {
       const historyArg = getHistoryCreateArg(historyModel['create']);
       expect(historyArg.action).toBe(FormHistoryAction.PMU_APPROVE);
       expect(historyArg.fromStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_PMU);
-      expect(historyArg.toStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
+      expect(historyArg.toStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_SO);
       expect(historyArg.snapshot).toBeNull();
       expect(rowModel['find']).not.toHaveBeenCalled();
     });
@@ -479,7 +479,7 @@ describe('ElectedUrbanLocalBodiesPmuRowReviewDomainService', () => {
       await service.insertParentHistory(
         makeForm(),
         FORM_STATUS.UNDER_REVIEW_BY_PMU,
-        FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+        FORM_STATUS.UNDER_REVIEW_BY_SO,
         FormHistoryAction.PMU_APPROVE,
         userOid,
         '127.0.0.1',
@@ -502,19 +502,19 @@ describe('ElectedUrbanLocalBodiesPmuRowReviewDomainService', () => {
       expect(formModel['findOneAndUpdate']).not.toHaveBeenCalled();
     });
 
-    it('settles at UNDER_REVIEW_BY_MOHUA and writes PMU_APPROVE when every active row is approved', async () => {
+    it('settles at UNDER_REVIEW_BY_SO and writes PMU_APPROVE when every active row is approved', async () => {
       rowModel['find'] = jest
         .fn()
         .mockReturnValue(
-          q([{ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }, { rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }]),
+          q([{ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_SO }, { rowStatus: FORM_STATUS.UNDER_REVIEW_BY_SO }]),
         );
 
       const result = await service.maybeSettleAfterBulkAction(makeForm(), userOid, null, null, mockSession);
 
       expect(result.settled).toBe(true);
-      expect(result.currentFormStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
+      expect(result.currentFormStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_SO);
       const setArg = getFindOneAndUpdateSetArg(formModel['findOneAndUpdate']);
-      expect(setArg.currentFormStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
+      expect(setArg.currentFormStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_SO);
       const historyArg = getHistoryCreateArg(historyModel['create']);
       expect(historyArg.action).toBe(FormHistoryAction.PMU_APPROVE);
     });
@@ -523,7 +523,7 @@ describe('ElectedUrbanLocalBodiesPmuRowReviewDomainService', () => {
       rowModel['find'] = jest
         .fn()
         .mockReturnValue(
-          q([{ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }, { rowStatus: FORM_STATUS.RETURNED_BY_PMU }]),
+          q([{ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_SO }, { rowStatus: FORM_STATUS.RETURNED_BY_PMU }]),
         );
 
       const result = await service.maybeSettleAfterBulkAction(makeForm(), userOid, null, null, mockSession);
