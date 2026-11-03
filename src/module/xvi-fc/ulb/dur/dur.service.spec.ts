@@ -35,7 +35,7 @@ describe('DurService', () => {
   let mockUploadHistoryModel: { create: jest.Mock; updateOne: jest.Mock };
   let mockS3Service: { headObject: jest.Mock; getPdfBufferFromS3: jest.Mock; getPdfPageCountFromBuffer: jest.Mock };
   let mockDurQueue: { add: jest.Mock };
-  let mockUlbEligibilityService: { assertUlbEligibleForGrantCycle: jest.Mock };
+  let mockUlbEligibilityService: { assertUlbEligibleForGrantCycle: jest.Mock; getIneligibleUlbTypeIds: jest.Mock };
   let mockAdcModel: { find: jest.Mock };
 
   const ulbId = '507f1f77bcf86cd799439001';
@@ -92,7 +92,10 @@ describe('DurService', () => {
       getPdfPageCountFromBuffer: jest.fn().mockResolvedValue(3),
     };
     mockDurQueue = { add: jest.fn().mockResolvedValue({ id: 'job-1' }) };
-    mockUlbEligibilityService = { assertUlbEligibleForGrantCycle: jest.fn().mockResolvedValue(undefined) };
+    mockUlbEligibilityService = {
+      assertUlbEligibleForGrantCycle: jest.fn().mockResolvedValue(undefined),
+      getIneligibleUlbTypeIds: jest.fn().mockResolvedValue([]),
+    };
     mockAdcModel = { find: jest.fn().mockReturnValue(mockQuery([])) };
 
     service = new DurService(
@@ -607,6 +610,16 @@ describe('DurService', () => {
         ],
       });
       expect(trueBranch).toBe('$dur.currentFormStatus');
+    });
+
+    it('excludes XVIFC-ineligible ULB types (e.g. Cantonment Boards) from the $match stage', async () => {
+      const cantonmentTypeId = 'type-cantonment';
+      mockUlbEligibilityService.getIneligibleUlbTypeIds.mockResolvedValue([cantonmentTypeId]);
+
+      await service.listUlbSubmissions({ designYearId, page: 1, pageSize: 20 }, stateUser);
+
+      const pipeline = mockUlbModel.aggregate.mock.calls[0][0];
+      expect(pipeline[0].$match.ulbType).toEqual({ $nin: [cantonmentTypeId] });
     });
 
     it('skips the exemption lookup entirely when the design year is not found', async () => {
