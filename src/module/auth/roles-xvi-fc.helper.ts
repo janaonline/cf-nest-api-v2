@@ -8,6 +8,14 @@ const SUBROLE_TO_ACCESS_LEVEL: Record<string, AccessLevel> = {
   viewer: AccessLevel.VIEWER,
 };
 
+/**
+ * ADC (Autonomous District Council) users are not a separate role: they are STATE-scope users with `adc` set.
+ * `adc: null` is a normal State user.
+ */
+export function isAdcUser(user: { scope?: Scope | null; adc?: unknown } | null | undefined): boolean {
+  return user?.scope === Scope.STATE && !!user.adc;
+}
+
 export function parseUserRole(
   role: UserRole,
   xviFcSubrole?: string | null,

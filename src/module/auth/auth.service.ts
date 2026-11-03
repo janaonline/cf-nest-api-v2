@@ -13,6 +13,7 @@ import { RedisService } from 'src/core/services/redis/redis.service';
 import { UserDocument } from 'src/schemas/user/user.schema';
 import { LoginHistory, LoginType } from 'src/schemas/user/login-history.schema';
 import { State, StateDocument } from 'src/schemas/state.schema';
+import { Adc, AdcDocument } from 'src/schemas/adc.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { UsersRepository } from 'src/module/users/users.repository';
 import { RegisterDto } from './dto/register.dto';
@@ -43,6 +44,7 @@ export class AuthService {
     @InjectModel(LoginHistory.name) private readonly loginHistoryModel: Model<LoginHistory>,
     @InjectModel(State.name) private readonly stateModel: Model<StateDocument>,
     @InjectModel(Ulb.name) private readonly ulbModel: Model<UlbDocument>,
+    @InjectModel(Adc.name) private readonly adcModel: Model<AdcDocument>,
   ) {}
 
   async getUserById(id: string) {
@@ -84,7 +86,9 @@ export class AuthService {
     const state = user.state ? await this.stateModel.findById(user.state).exec() : null;
     const ulb = user.role === Role.ULB ? await this.ulbModel.findOne({ _id: user.ulb }).exec() : null;
 
-    return { token: tokens.accessToken, user: buildUserResponsePayload(user, state, ulb) };
+    const adc = user.adc ? await this.adcModel.findById(user.adc).exec() : null;
+
+    return { token: tokens.accessToken, user: buildUserResponsePayload(user, state, ulb, adc) };
   }
   // TODO: to be removed
   // async register(dto: RegisterDto): Promise<Record<string, unknown>> {
@@ -124,7 +128,8 @@ export class AuthService {
       isNodalOfficer?: boolean;
       role?: string;
       xviFcSubrole?: string | null;
-    }>(userId, 'state isNodalOfficer role xviFcSubrole');
+      adc?: unknown;
+    }>(userId, 'state isNodalOfficer role xviFcSubrole adc');
 
     const profileUpdate: Record<string, unknown> = {
       isNewUser: false,
@@ -136,8 +141,9 @@ export class AuthService {
       ...(profile?.designation && { designation: profile.designation }),
     };
 
-    // Only derive subrole if one has not been manually assigned already
-    if (user?.role === 'STATE' && user.state && !user.xviFcSubrole) {
+    // Only derive subrole if one has not been manually assigned already. ADC users always get theirs at invite
+    // (the first one is the ADC's admin), so the nodal-officer rule never applies to them.
+    if (user?.role === 'STATE' && user.state && !user.adc && !user.xviFcSubrole) {
       profileUpdate['xviFcSubrole'] = user.isNodalOfficer ? 'admin' : 'reviewer';
     }
 

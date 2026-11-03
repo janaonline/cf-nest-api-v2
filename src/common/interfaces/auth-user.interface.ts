@@ -12,6 +12,9 @@ export interface IAuthUser {
   ulb?: string;
   /** ObjectId string — present only for Role.STATE users */
   state?: string;
+  /** ObjectId string — set only for an ADC user (a Role.STATE user scoped to one Autonomous District Council) */
+  adc?: string | null;
+  xviFcSubrole?: 'admin' | 'reviewer' | 'viewer' | null;
   isActive?: boolean;
   jti?: string;
   exp?: number;

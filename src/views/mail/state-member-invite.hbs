@@ -29,7 +29,7 @@
     </div>
 
     <div class="body">
-      <h2>You have been invited to join your state team</h2>
+      <h2>{{#if adcName}}You have been invited to join your ADC team{{else}}You have been invited to join your state team{{/if}}</h2>
       <p>Hello <strong>{{name}}</strong>,</p>
       <p>
         <strong>{{invitedBy}}</strong> from <strong>{{stateName}}</strong> has added you as a team member
@@ -41,6 +41,7 @@
         <p><strong>Mobile:</strong> {{mobile}}</p>
         <p><strong>Role:</strong> {{role}}</p>
         <p><strong>State:</strong> {{stateName}}</p>
+        {{#if adcName}}<p><strong>ADC:</strong> {{adcName}}</p>{{/if}}
       </div>
 
       <p>

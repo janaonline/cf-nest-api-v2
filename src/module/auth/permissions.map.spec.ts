@@ -71,4 +71,54 @@ describe('XVI-FC permission tables', () => {
       );
     });
   });
+
+  describe('ADC (STATE role with an ADC)', () => {
+    const adc = 'adc-1';
+    const permsOf = (xviFcSubrole: string, extra: object = {}) =>
+      getEffectivePermissions({ role: UserRole.STATE, xviFcSubrole, adc, ...extra });
+
+    it('lets the admin and the reviewer review and approve ULB submissions', () => {
+      for (const sub of ['admin', 'reviewer']) {
+        const perms = permsOf(sub);
+        expect(perms).toContain(Permission.REVIEW_ULB_SUBMISSIONS);
+        expect(perms).toContain(Permission.APPROVE_ULB_SUBMISSIONS);
+      }
+    });
+
+    it('lets the viewer read the review lists but never approve', () => {
+      const perms = permsOf('viewer');
+      expect(perms).toContain(Permission.REVIEW_ULB_SUBMISSIONS);
+      expect(perms).not.toContain(Permission.APPROVE_ULB_SUBMISSIONS);
+    });
+
+    it('never grants a State-form, claim-letter, exemption or user-management permission', () => {
+      const forbidden = [
+        Permission.VIEW_STATE_FORMS,
+        Permission.EDIT_STATE_FORMS,
+        Permission.FINAL_SUBMIT_STATE_FORMS,
+        Permission.PREPARE_GRANT_LETTERS,
+        Permission.RECOMMEND_EXEMPTIONS,
+        Permission.FINAL_SUBMIT_TO_MOHUA,
+        Permission.VIEW_DASHBOARDS,
+        Permission.MANAGE_USERS,
+      ];
+      for (const sub of ['admin', 'reviewer', 'viewer']) {
+        const perms = permsOf(sub);
+        for (const p of forbidden) expect(perms).not.toContain(p);
+      }
+    });
+
+    it('ignores permission overrides, so they cannot widen an ADC user into State forms', () => {
+      const perms = permsOf('reviewer', {
+        permissionOverrides: { allow: [Permission.EDIT_STATE_FORMS], deny: [Permission.APPROVE_ULB_SUBMISSIONS] },
+      });
+      expect(perms).not.toContain(Permission.EDIT_STATE_FORMS);
+      expect(perms).toContain(Permission.APPROVE_ULB_SUBMISSIONS);
+    });
+
+    it('leaves a plain State user (adc null) on the State table', () => {
+      const perms = getEffectivePermissions({ role: UserRole.STATE, xviFcSubrole: 'reviewer', adc: null });
+      expect(perms).toContain(Permission.EDIT_STATE_FORMS);
+    });
+  });
 });

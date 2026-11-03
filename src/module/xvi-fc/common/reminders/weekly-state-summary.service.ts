@@ -170,6 +170,7 @@ export class WeeklyStateSummaryService {
       .find({
         state: stateId,
         role: Role.STATE,
+        adc: null, // State DMA users only — ADC users get no State emails
         xviFcSubrole: { $in: ['admin', 'reviewer', 'viewer'] },
         isActive: true,
         isDeleted: false,
@@ -252,27 +253,44 @@ export class WeeklyStateSummaryService {
           formStatusId: { $ifNull: ['$account.form_status_id', FORM_STATUS_ID[AnnualAccountFormStatus.NOT_STARTED]] },
         },
       },
-      { $group: { _id: '$formStatusId', count: { $sum: 1 } } },
+      // `isAdc` is kept apart only so "Under state review" can leave out ADC-owned ULBs, which their ADC
+      // reviews; every other count stays state-wide (the State still files their Claim Letter).
+      {
+        $group: {
+          _id: { status: '$formStatusId', isAdc: { $gt: [{ $ifNull: ['$adc', null] }, null] } },
+          count: { $sum: 1 },
+        },
+      },
     ];
 
-    const rows = await this.ulbModel.aggregate<{ _id: number; count: number }>(pipeline).exec();
-    const byId = new Map(rows.map((r) => [r._id, r.count]));
+    const rows = await this.ulbModel
+      .aggregate<{ _id: { status: number; isAdc: boolean }; count: number }>(pipeline)
+      .exec();
+    const countOf = (status: number, stateOwnedOnly = false) =>
+      rows
+        .filter((r) => r._id.status === status && !(stateOwnedOnly && r._id.isAdc))
+        .reduce((sum, r) => sum + r.count, 0);
     const total = rows.reduce((sum, r) => sum + r.count, 0);
 
     return {
       total,
-      notStarted: byId.get(FORM_STATUS_ID[AnnualAccountFormStatus.NOT_STARTED]) ?? 0,
-      underStateReview: byId.get(FORM_STATUS_ID[AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE]) ?? 0,
-      readyForClaim: byId.get(FORM_STATUS_ID[AnnualAccountFormStatus.APPROVED_BY_STATE]) ?? 0,
-      forwardedToMohua: byId.get(FORM_STATUS_ID[AnnualAccountFormStatus.UNDER_REVIEW_BY_MOHUA]) ?? 0,
+      notStarted: countOf(FORM_STATUS_ID[AnnualAccountFormStatus.NOT_STARTED]),
+      underStateReview: countOf(FORM_STATUS_ID[AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE], true),
+      readyForClaim: countOf(FORM_STATUS_ID[AnnualAccountFormStatus.APPROVED_BY_STATE]),
+      forwardedToMohua: countOf(FORM_STATUS_ID[AnnualAccountFormStatus.UNDER_REVIEW_BY_MOHUA]),
     };
   }
 
-  /** Same date-math pattern as StateReviewDigestService.findDueAnnualAccounts, threshold=10 days. */
-  private countReviewDelayed(stateId: Types.ObjectId): Promise<number> {
+  /**
+   * Same date-math pattern as StateReviewDigestService.findDueAnnualAccounts, threshold=10 days. Leaves out
+   * ADC-owned ULBs: their ADC reviews them, so the State can't act on the delay.
+   */
+  private async countReviewDelayed(stateId: Types.ObjectId): Promise<number> {
+    const adcUlbIds = await this.ulbModel.distinct('_id', { state: stateId, adc: { $ne: null } });
     return this.annualAccountModel
       .countDocuments({
         state: stateId,
+        ulb: { $nin: adcUlbIds },
         sectionType: 'audited',
         form_status_id: FORM_STATUS_ID[AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE],
         declaredAt: { $ne: null },

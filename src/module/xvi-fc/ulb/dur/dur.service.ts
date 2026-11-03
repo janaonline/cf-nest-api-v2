@@ -11,7 +11,20 @@ import {
   canStateUndoFormApproval,
   canUlbEditForm,
 } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
-import { resolveStateScopeFilter } from 'src/module/xvi-fc/common/utils/xvi-fc-scope-filter.util';
+import {
+  resolveAdcScopeFilter,
+  resolveStateScopeFilter,
+} from 'src/module/xvi-fc/common/utils/xvi-fc-scope-filter.util';
+import {
+  canDecideUlb,
+  canViewUlb,
+  hasUlbDecideAccess,
+  hasUlbViewAccess,
+  loadUlbOwnership,
+  type UlbOwnership,
+} from 'src/module/xvi-fc/common/utils/xvi-fc-state-access.util';
+import { attachAdcOwnership } from 'src/module/xvi-fc/common/utils/xvi-fc-adc-rows.util';
+import { Adc, AdcDocument } from 'src/schemas/adc.schema';
 import { isMohuaViewScope } from 'src/module/xvi-fc/common/utils/xvi-fc-scope.util';
 import { toObjectIdString } from 'src/common/utils/objectid.util';
 import { escapeRegex } from 'src/common/utils/regex.util';
@@ -70,6 +83,8 @@ interface DurSubmissionRow {
    *  identical field on AnnualAccountsService/BankAccountService's own submission rows. */
   enteredReviewAt: Date | null;
   durId: Types.ObjectId | null;
+  /** The ULB's owning ADC (null = the State DMA reviews it). */
+  adcId: Types.ObjectId | null;
 }
 
 interface DurSubmissionsFacetResult {
@@ -119,6 +134,9 @@ export class DurService {
     private readonly yearAccessService: YearAccessService,
 
     private readonly exemptionResolverService: ExemptionResolverService,
+
+    @InjectModel(Adc.name)
+    private readonly adcModel: Model<AdcDocument>,
   ) {}
 
   /** Signs a document's stored S3 key into a short-lived, inline-viewable download URL — same
@@ -145,17 +163,24 @@ export class DurService {
 
   // ─── Access checks ─────────────────────────────────────────────────────────
 
-  async validateViewAccess(doc: { ulb: Types.ObjectId }, user: AuthUser): Promise<void> {
+  /** Returns the ULB ownership it loaded (STATE scope only) so a caller can reuse it instead of re-querying. */
+  async validateViewAccess(doc: { ulb: Types.ObjectId }, user: AuthUser): Promise<UlbOwnership | null> {
     if (user.scope === Scope.ULB) {
       if (doc.ulb?.toString() !== user.ulb?.toString()) throw new ForbiddenException('Access denied');
-      return;
+      return null;
     }
     if (user.scope === Scope.STATE) {
-      const ulb = await this.ulbModel.findById(doc.ulb).select('state').lean().exec();
-      if (!ulb || ulb.state?.toString() !== user.state?.toString()) {
+      const ulb = await loadUlbOwnership(this.ulbModel, doc.ulb);
+      if (!ulb || !canViewUlb(user, ulb)) {
         throw new ForbiddenException('Access denied');
       }
+      return ulb;
     }
+    return null;
+  }
+
+  private hasDecideAccessToUlb(user: AuthUser, ulbId: Types.ObjectId): Promise<boolean> {
+    return hasUlbDecideAccess(user, this.ulbModel, ulbId);
   }
 
   private async validateUploadPermission(user: AuthUser, ulbId: string): Promise<void> {
@@ -402,7 +427,8 @@ export class DurService {
   async getProcessingStatus(id: string, user: AuthUser) {
     const dur = await this.durModel.findById(new Types.ObjectId(id)).lean().exec();
     if (!dur) throw new NotFoundException('DUR form not found');
-    await this.validateViewAccess(dur, user);
+    const owner = await this.validateViewAccess(dur, user);
+    const canDecide = owner ? canDecideUlb(user, owner) : await this.hasDecideAccessToUlb(user, dur.ulb);
 
     return {
       id: dur._id.toString(),
@@ -411,7 +437,7 @@ export class DurService {
       declaredAt: dur.declaredAt,
       stateDecision: dur.stateDecision,
       mohuaDecision: dur.mohuaDecision,
-      permissions: this.buildDurPermissions(user, dur.currentFormStatus),
+      permissions: this.buildDurPermissions(user, dur.currentFormStatus, canDecide),
       documents: dur.documents.map((d) => ({
         docId: d.docId,
         label: DUR_DOC_LABELS[d.docId as 'tiedGrant' | 'untiedGrant'],
@@ -435,8 +461,12 @@ export class DurService {
   /** Mirrors BankAccountService.buildBankAccountPermissions — status-aware capability flags for
    *  the STATE reviewer UI, computed here so both ULB and STATE callers of getProcessingStatus
    *  get one shared response shape (ULB simply ignores the fields it doesn't use). */
-  private buildDurPermissions(user: AuthUser, status: FormStatusType): DurPermissions {
-    const hasStateAccess = user.scope === Scope.STATE || user.scope === Scope.ADMIN;
+  private buildDurPermissions(
+    user: AuthUser,
+    status: FormStatusType,
+    /** The ULB's owner may decide (canDecideUlb) — a State user viewing an ADC-owned ULB may not. */
+    hasStateAccess: boolean,
+  ): DurPermissions {
     const perms = getEffectivePermissions(user);
     const reviewable = canStateReviewForm(status);
     const undoable = canStateUndoFormApproval(status);
@@ -745,13 +775,8 @@ export class DurService {
     if (user.scope !== Scope.STATE && user.scope !== Scope.ADMIN) {
       throw new ForbiddenException('Only STATE or ADMIN users may decide DUR forms');
     }
-    if (user.scope === Scope.STATE) {
-      const userStateId = toObjectIdString(user.state);
-      const ulb = await this.ulbModel.findById(record.ulb, 'state').lean().exec();
-      const ulbStateId = toObjectIdString(ulb?.state);
-      if (!userStateId || !ulbStateId || userStateId !== ulbStateId) {
-        throw new ForbiddenException('You can only decide DUR forms within your own state');
-      }
+    if (user.scope === Scope.STATE && !(await this.hasDecideAccessToUlb(user, record.ulb))) {
+      throw new ForbiddenException('You can only decide DUR forms of ULBs you review');
     }
     const perms = getEffectivePermissions(user);
     if (!perms.includes(Permission.APPROVE_ULB_SUBMISSIONS)) {
@@ -771,13 +796,8 @@ export class DurService {
     if (user.scope !== Scope.STATE && user.scope !== Scope.ADMIN) {
       throw new ForbiddenException('Only STATE or ADMIN users may undo DUR decisions');
     }
-    if (user.scope === Scope.STATE) {
-      const userStateId = toObjectIdString(user.state);
-      const ulb = await this.ulbModel.findById(record.ulb, 'state').lean().exec();
-      const ulbStateId = toObjectIdString(ulb?.state);
-      if (!userStateId || !ulbStateId || userStateId !== ulbStateId) {
-        throw new ForbiddenException('You can only decide DUR forms within your own state');
-      }
+    if (user.scope === Scope.STATE && !(await this.hasDecideAccessToUlb(user, record.ulb))) {
+      throw new ForbiddenException('You can only decide DUR forms of ULBs you review');
     }
     const perms = getEffectivePermissions(user);
     if (!perms.includes(Permission.APPROVE_ULB_SUBMISSIONS)) {
@@ -838,9 +858,11 @@ export class DurService {
     }
 
     const stateId = resolveStateScopeFilter(user, dto.stateId);
+    const adcId = resolveAdcScopeFilter(user);
 
     const matchStage: Record<string, unknown> = { isActive: true };
     if (stateId) matchStage.state = stateId;
+    if (adcId) matchStage.adc = adcId;
     if (dto.search?.trim()) {
       const regex = new RegExp(escapeRegex(dto.search.trim()), 'i');
       matchStage.$or = [{ name: regex }, { code: regex }];
@@ -931,6 +953,7 @@ export class DurService {
               lastUpdatedAt: 1,
               enteredReviewAt: 1,
               durId: { $ifNull: ['$dur._id', null] },
+              adcId: { $ifNull: ['$adc', null] },
             },
           },
         ],
@@ -940,7 +963,7 @@ export class DurService {
     });
 
     const [result] = await this.ulbModel.aggregate<DurSubmissionsFacetResult>(pipeline).exec();
-    const rows = result?.data ?? [];
+    const rows = await attachAdcOwnership(result?.data ?? [], user, this.adcModel);
     const total = result?.totalCount?.[0]?.count ?? 0;
 
     const counts = Object.fromEntries(
@@ -994,11 +1017,8 @@ export class DurService {
       if (!perms.includes(Permission.REVIEW_ULB_SUBMISSIONS)) {
         throw new ForbiddenException('You do not have permission to review ULB submissions');
       }
-      const userStateId = toObjectIdString(user.state);
-      const ulb = await this.ulbModel.findById(record.ulb, 'state').lean().exec();
-      const ulbStateId = toObjectIdString(ulb?.state);
-      if (!userStateId || !ulbStateId || userStateId !== ulbStateId) {
-        throw new ForbiddenException('You can only view DUR forms within your own state');
+      if (!(await hasUlbViewAccess(user, this.ulbModel, record.ulb))) {
+        throw new ForbiddenException('You can only view DUR forms of ULBs you have access to');
       }
       return;
     }

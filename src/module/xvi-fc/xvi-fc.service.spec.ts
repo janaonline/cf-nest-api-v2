@@ -390,12 +390,13 @@ describe('XviFcService', () => {
     // The actual query/tree-building/caching logic lives in SideMenuService now (see
     // side-menu.service.spec.ts) — this just confirms XviFcService delegates to it unchanged.
     const yearId = new Types.ObjectId().toString();
+    const ulbUser = { _id: 'u', role: 'ULB', scope: Scope.ULB } as AuthUser;
 
     it('delegates to sideMenuService.getSideMenu with the same role and yearId', async () => {
       const expected = { topModel: [], bottomModel: [] };
       mockSideMenuService.getSideMenu.mockResolvedValue(expected);
 
-      const result = await service.getSideMenu('ULB', yearId);
+      const result = await service.getSideMenu('ULB', yearId, ulbUser);
 
       expect(mockSideMenuService.getSideMenu).toHaveBeenCalledWith('ULB', yearId);
       expect(result).toBe(expected);
@@ -403,7 +404,31 @@ describe('XviFcService', () => {
 
     it('propagates errors from sideMenuService.getSideMenu (e.g. NotFoundException)', async () => {
       mockSideMenuService.getSideMenu.mockRejectedValue(new NotFoundException('No menu configured for role X'));
-      await expect(service.getSideMenu('UNKNOWN' as any, yearId)).rejects.toThrow(NotFoundException);
+      await expect(service.getSideMenu('UNKNOWN' as any, yearId, ulbUser)).rejects.toThrow(NotFoundException);
+    });
+
+    describe('ADC (Autonomous District Council)', () => {
+      const stateId = new Types.ObjectId().toString();
+      const adcUser = { _id: 'c', role: 'STATE', scope: Scope.STATE, state: stateId, adc: 'adc-1' } as AuthUser;
+      const stateUser = { _id: 's', role: 'STATE', scope: Scope.STATE, state: stateId, adc: null } as AuthUser;
+
+      it('always serves an ADC user the ADC menu, whatever role the URL asked for', async () => {
+        const adcMenu = { topModel: [{ label: 'ULB Forms Review' }], bottomModel: [] };
+        mockSideMenuService.getSideMenu.mockResolvedValue(adcMenu);
+
+        for (const role of ['STATE', 'ULB', 'MOHUA'] as const) {
+          await expect(service.getSideMenu(role, yearId, adcUser)).resolves.toBe(adcMenu);
+          expect(mockSideMenuService.getSideMenu).toHaveBeenLastCalledWith('STATE_ADC', yearId);
+        }
+      });
+
+      it('serves a State DMA user the STATE menu as is', async () => {
+        const stateMenu = { topModel: [{ label: 'Overview', featureKey: 'overview' }], bottomModel: [] };
+        mockSideMenuService.getSideMenu.mockResolvedValue(stateMenu);
+
+        await expect(service.getSideMenu('STATE', yearId, stateUser)).resolves.toBe(stateMenu);
+        expect(mockSideMenuService.getSideMenu).toHaveBeenCalledWith('STATE', yearId);
+      });
     });
   });
 

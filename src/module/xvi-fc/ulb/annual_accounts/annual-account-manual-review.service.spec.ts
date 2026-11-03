@@ -9,6 +9,7 @@ import { XviFcAnnualAccountFormLog } from '../../../../schemas/xvi-fc/annual-acc
 import { XviFcDocumentActionGate } from '../../../../schemas/xvi-fc/document-action-gate.schema';
 import { XviFcManualReviewRequest } from '../../../../schemas/xvi-fc/manual-review-request.schema';
 import { Ulb } from '../../../../schemas/ulb.schema';
+import { Adc } from '../../../../schemas/adc.schema';
 import { Year } from '../../../../schemas/year.schema';
 import { User } from '../../../../schemas/user/user.schema';
 import { ExemptionResolverService } from '../../common/services/exemption-resolver.service';
@@ -164,6 +165,7 @@ describe('AnnualAccountManualReviewService', () => {
         { provide: getModelToken(XviFcAnnualAccountUploadHistory.name), useValue: mockUploadHistoryModel },
         { provide: getModelToken(XviFcAnnualAccountFormLog.name), useValue: mockFormLogModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+        { provide: getModelToken(Adc.name), useValue: { find: jest.fn(), findById: jest.fn(), exists: jest.fn() } },
         { provide: getModelToken(Year.name), useValue: mockYearModel },
         { provide: getModelToken(User.name), useValue: mockUserModel },
         { provide: getModelToken(XviFcDocumentActionGate.name), useValue: mockActionGateModel },

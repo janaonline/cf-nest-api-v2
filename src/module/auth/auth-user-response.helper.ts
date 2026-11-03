@@ -1,4 +1,5 @@
 import { UserDocument } from 'src/schemas/user/user.schema';
+import { AdcDocument } from 'src/schemas/adc.schema';
 import { StateDocument } from 'src/schemas/state.schema';
 import { UlbDocument } from 'src/schemas/ulb.schema';
 import { Role } from './enum/role.enum';
@@ -16,6 +17,7 @@ export function buildUserResponsePayload(
   user: UserDocument,
   state: StateDocument | null,
   ulb: UlbDocument | null,
+  adc: AdcDocument | null = null,
 ): Record<string, unknown> {
   const parsedRole = parseUserRole(
     user.role as unknown as Parameters<typeof parseUserRole>[0],
@@ -36,6 +38,9 @@ export function buildUserResponsePayload(
     state: user.state,
     stateName: state?.name ?? null,
     designation: user.designation,
+    // ADC users are role STATE with `adc` set; null for everyone else.
+    adc: user.adc ?? null,
+    adcName: adc?.name ?? null,
     ulb: user.ulb,
     ulbCode: user.role === Role.ULB ? (ulb?.code ?? '') : '',
     stateCode: user.role === Role.STATE || user.role === Role.ULB ? (state?.code ?? '') : '',

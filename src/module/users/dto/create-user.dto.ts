@@ -71,6 +71,17 @@ export class CreateUserDto {
   @IsMongoId()
   stateId?: string;
 
+  @ApiProperty({
+    required: false,
+    description:
+      'Makes this STATE user an ADC (Autonomous District Council) user. Only with role STATE + stateId; the ADC ' +
+      'must be active and in that state, and subRole is required. Immutable afterwards. The first user of an ADC ' +
+      'with no admin becomes its admin; asking for ADMIN when one exists is a 409.',
+  })
+  @IsOptional()
+  @IsMongoId()
+  adcId?: string;
+
   @ApiProperty({ required: false, description: 'Required when role is a ULB-family role.' })
   @IsOptional()
   @IsMongoId()

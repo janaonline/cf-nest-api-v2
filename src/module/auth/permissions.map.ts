@@ -126,9 +126,24 @@ export const XVIFC_DOE_PERMISSIONS: Record<XviFcSubrole, Permission[]> = {
   viewer: DOE_VIEW_PERMISSIONS,
 };
 
+// ─── XVI-FC ADC subrole permissions (Assam Autonomous District Councils) ──────
+
+// An ADC user is a STATE-role user with `adc` set. Only the two ULB-review capabilities are granted, so every
+// State-form / claim-letter / exemption route (which all need another permission) denies an ADC user.
+// REVIEW_ULB_SUBMISSIONS is the read gate for the review lists — the viewer holds it but never
+// APPROVE_ULB_SUBMISSIONS. Registering/editing a ULB is checked in the service (not a permission), and
+// team management is `xviFcSubrole === 'admin'` checked in users.service.ts — never MANAGE_USERS, which
+// would open the side-menu CRUD.
+export const XVIFC_ADC_PERMISSIONS: Record<XviFcSubrole, Permission[]> = {
+  admin: [Permission.VIEW_STATUS_REPORTS, Permission.REVIEW_ULB_SUBMISSIONS, Permission.APPROVE_ULB_SUBMISSIONS],
+  reviewer: [Permission.VIEW_STATUS_REPORTS, Permission.REVIEW_ULB_SUBMISSIONS, Permission.APPROVE_ULB_SUBMISSIONS],
+  viewer: [Permission.VIEW_STATUS_REPORTS, Permission.REVIEW_ULB_SUBMISSIONS],
+};
+
 /**
  * Derives the effective permission set for a user:
  * 1. ADMIN role  → all permissions.
+ * 1a. ADC user (STATE role with `adc` set) → XVIFC_ADC_PERMISSIONS[xviFcSubrole]; overrides are NOT applied.
  * 2. STATE role  → XVIFC_STATE_PERMISSIONS[xviFcSubrole] (defaults to 'viewer' when unset).
  * 3. MoHUA role  → XVIFC_MOHUA_PERMISSIONS[xviFcSubrole] (defaults to 'viewer' when unset).
  * 4. PMU role    → MOHUA_PMU_PERMISSIONS[xviFcSubrole] (defaults to 'viewer' when unset).
@@ -141,6 +156,7 @@ export function getEffectivePermissions(user: {
   role: UserRole | string;
   scope?: Scope | null;
   xviFcSubrole?: string | null;
+  adc?: unknown;
   permissionOverrides?: {
     allow?: Permission[];
     deny?: Permission[];
@@ -152,6 +168,9 @@ export function getEffectivePermissions(user: {
 
   if (user.role === UserRole.ADMIN) {
     base = Object.values(Permission);
+  } else if ((user.role === UserRole.STATE || user.scope === Scope.STATE) && user.adc) {
+    // Overrides can't widen an ADC user's reach (e.g. into State forms), so return before applying them.
+    return [...(XVIFC_ADC_PERMISSIONS[subrole] ?? XVIFC_ADC_PERMISSIONS.viewer)];
   } else if (user.role === UserRole.STATE || user.scope === Scope.STATE) {
     base = XVIFC_STATE_PERMISSIONS[subrole] ?? XVIFC_STATE_PERMISSIONS.viewer;
   } else if (user.role === UserRole.MoHUA || user.scope === Scope.MOHUA) {

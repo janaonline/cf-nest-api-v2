@@ -7,7 +7,10 @@ import { toObjectIdString } from 'src/common/utils/objectid.util';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
-import { resolveStateScopeFilter } from 'src/module/xvi-fc/common/utils/xvi-fc-scope-filter.util';
+import {
+  resolveAdcScopeFilter,
+  resolveStateScopeFilter,
+} from 'src/module/xvi-fc/common/utils/xvi-fc-scope-filter.util';
 import { State, type StateDocument } from 'src/schemas/state.schema';
 import { Ulb, type UlbDocument } from 'src/schemas/ulb.schema';
 import { Year, type YearDocument } from 'src/schemas/year.schema';
@@ -255,6 +258,8 @@ export class StateDashboardService {
 
     const ulbMatch: Record<string, unknown> = { isActive: true };
     if (stateId) ulbMatch.state = stateId;
+    const adcId = resolveAdcScopeFilter(user);
+    if (adcId) ulbMatch.adc = adcId;
 
     const [ulbs, stateDoc, yearDoc] = await Promise.all([
       this.ulbModel

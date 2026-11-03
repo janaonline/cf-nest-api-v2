@@ -9,6 +9,7 @@ import {
   XviFcBankAccountFormLogSchema,
 } from 'src/schemas/xvi-fc/ulb/xvi-fc-bank-account-form-log.schema';
 import { Ulb, UlbSchema } from 'src/schemas/ulb.schema';
+import { Adc, AdcSchema } from 'src/schemas/adc.schema';
 import { User, UserSchema } from 'src/schemas/user/user.schema';
 import { Year, YearSchema } from 'src/schemas/year.schema';
 import { S3Module } from 'src/core/s3/s3.module';
@@ -32,6 +33,7 @@ import { BankAccountService } from './bank-account.service';
         schema: XviFcBankAccountFormLogSchema,
       },
       { name: Ulb.name, schema: UlbSchema },
+      { name: Adc.name, schema: AdcSchema },
       { name: User.name, schema: UserSchema },
       { name: Year.name, schema: YearSchema },
     ]),

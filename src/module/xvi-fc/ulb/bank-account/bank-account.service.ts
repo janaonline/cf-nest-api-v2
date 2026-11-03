@@ -30,7 +30,20 @@ import {
 } from 'src/schemas/xvi-fc/ulb/xvi-fc-bank-account-form-log.schema';
 import { toObjectIdString } from 'src/common/utils/objectid.util';
 import { escapeRegex } from 'src/common/utils/regex.util';
-import { resolveStateScopeFilter } from 'src/module/xvi-fc/common/utils/xvi-fc-scope-filter.util';
+import {
+  resolveAdcScopeFilter,
+  resolveStateScopeFilter,
+} from 'src/module/xvi-fc/common/utils/xvi-fc-scope-filter.util';
+import {
+  canDecideUlb,
+  canViewUlb,
+  hasUlbDecideAccess,
+  hasUlbViewAccess,
+  loadUlbOwnership,
+  type UlbOwnership,
+} from 'src/module/xvi-fc/common/utils/xvi-fc-state-access.util';
+import { attachAdcOwnership } from 'src/module/xvi-fc/common/utils/xvi-fc-adc-rows.util';
+import { Adc, AdcDocument } from 'src/schemas/adc.schema';
 import { isMohuaViewScope } from 'src/module/xvi-fc/common/utils/xvi-fc-scope.util';
 import {
   canStateReviewForm,
@@ -86,6 +99,8 @@ interface BankAccountSubmissionRow {
    *  field on AnnualAccountsService's UlbSubmissionRow for the full rationale. */
   enteredReviewAt: Date | null;
   bankAccountId: Types.ObjectId | null;
+  /** The ULB's owning ADC (null = the State DMA reviews it). */
+  adcId: Types.ObjectId | null;
 }
 
 interface BankAccountSubmissionsFacetResult {
@@ -124,6 +139,8 @@ export class BankAccountService {
     private readonly formJsonService: FormJsonService,
     private readonly formJsonConfigService: FormJsonConfigService,
     private readonly formReturnedNotification: FormReturnedNotificationService,
+    @InjectModel(Adc.name)
+    private readonly adcModel: Model<AdcDocument>,
   ) {}
 
   /** Signs a proof-file S3 key into a short-lived, inline-viewable download URL. */
@@ -155,7 +172,7 @@ export class BankAccountService {
     >
   > {
     const ulbId = await this.resolveEffectiveUlbId(user, query.ulbId);
-    await this.assertCanReadBankAccount(user, ulbId);
+    const owner = await this.checkReadAccess(user, ulbId);
 
     // XVI-FC dynamic year access: ONCE_EVER forms are submitted once and reused across all years.
     // Resolve by ULB only; the existing submission is the single source of truth for every year.
@@ -169,7 +186,8 @@ export class BankAccountService {
     const record = await this.bankAccountModel.findOne(filter).lean().exec();
 
     const status = record?.currentFormStatus ?? FORM_STATUS.NOT_STARTED;
-    const permissions = this.buildBankAccountPermissions(user, status);
+    const canDecide = owner ? canDecideUlb(user, owner) : await this.hasDecideAccessToUlb(user, ulbId);
+    const permissions = this.buildBankAccountPermissions(user, status, canDecide);
 
     const belongsToDifferentYear =
       !!record && submissionScope === 'ONCE_EVER' && String(record.designYear) !== query.yearId;
@@ -224,9 +242,12 @@ export class BankAccountService {
   }
 
   /** Mirrors Annual Accounts' buildAnnualAccountPermissions — status-aware capability flags for the STATE reviewer UI. */
-  private buildBankAccountPermissions(user: AuthUser, status: FormStatusType): BankAccountPermissions {
-    // assertCanReadBankAccount already confirmed state-match for STATE scope by the time this runs.
-    const hasStateAccess = user.scope === Scope.STATE || user.scope === Scope.ADMIN;
+  private buildBankAccountPermissions(
+    user: AuthUser,
+    status: FormStatusType,
+    /** The ULB's owner may decide (canDecideUlb) — a State user viewing an ADC-owned ULB may not. */
+    hasStateAccess: boolean,
+  ): BankAccountPermissions {
     const perms = getEffectivePermissions(user);
     const reviewable = canStateReviewForm(status);
     const undoable = canStateUndoFormApproval(status);
@@ -236,6 +257,10 @@ export class BankAccountService {
       canApprove: hasStateAccess && perms.includes(Permission.APPROVE_ULB_SUBMISSIONS) && reviewable,
       canUndoApproval: hasStateAccess && perms.includes(Permission.APPROVE_ULB_SUBMISSIONS) && undoable,
     };
+  }
+
+  private hasDecideAccessToUlb(user: AuthUser, ulbId: Types.ObjectId | string): Promise<boolean> {
+    return hasUlbDecideAccess(user, this.ulbModel, ulbId);
   }
 
   async submitBankAccount(
@@ -494,13 +519,8 @@ export class BankAccountService {
     if (user.scope !== Scope.STATE && user.scope !== Scope.ADMIN) {
       throw new ForbiddenException('Only STATE or ADMIN users may undo bank account decisions');
     }
-    if (user.scope === Scope.STATE) {
-      const userStateId = toObjectIdString(user.state);
-      const ulb = await this.ulbModel.findById(record.ulb, 'state').lean().exec();
-      const ulbStateId = toObjectIdString(ulb?.state);
-      if (!userStateId || !ulbStateId || userStateId !== ulbStateId) {
-        throw new ForbiddenException('You can only decide bank account forms within your own state');
-      }
+    if (user.scope === Scope.STATE && !(await this.hasDecideAccessToUlb(user, record.ulb))) {
+      throw new ForbiddenException('You can only decide bank account forms of ULBs you review');
     }
     const perms = getEffectivePermissions(user);
     if (!perms.includes(Permission.APPROVE_ULB_SUBMISSIONS)) {
@@ -614,11 +634,8 @@ export class BankAccountService {
       if (!perms.includes(Permission.REVIEW_ULB_SUBMISSIONS)) {
         throw new ForbiddenException('You do not have permission to review ULB submissions');
       }
-      const userStateId = toObjectIdString(user.state);
-      const ulb = await this.ulbModel.findById(record.ulb, 'state').lean().exec();
-      const ulbStateId = toObjectIdString(ulb?.state);
-      if (!userStateId || !ulbStateId || userStateId !== ulbStateId) {
-        throw new ForbiddenException('You can only view bank account forms within your own state');
+      if (!(await hasUlbViewAccess(user, this.ulbModel, record.ulb))) {
+        throw new ForbiddenException('You can only view bank account forms of ULBs you have access to');
       }
       return;
     }
@@ -681,9 +698,11 @@ export class BankAccountService {
     }
 
     const stateId = resolveStateScopeFilter(user, dto.stateId);
+    const adcId = resolveAdcScopeFilter(user);
 
     const matchStage: Record<string, unknown> = { isActive: true };
     if (stateId) matchStage.state = stateId;
+    if (adcId) matchStage.adc = adcId;
     if (dto.search?.trim()) {
       const regex = new RegExp(escapeRegex(dto.search.trim()), 'i');
       matchStage.$or = [{ name: regex }, { code: regex }];
@@ -755,6 +774,7 @@ export class BankAccountService {
               lastUpdatedAt: 1,
               enteredReviewAt: 1,
               bankAccountId: { $ifNull: ['$bankAccount._id', null] },
+              adcId: { $ifNull: ['$adc', null] },
             },
           },
         ],
@@ -764,7 +784,7 @@ export class BankAccountService {
     });
 
     const [result] = await this.ulbModel.aggregate<BankAccountSubmissionsFacetResult>(pipeline).exec();
-    const rows = result?.data ?? [];
+    const rows = await attachAdcOwnership(result?.data ?? [], user, this.adcModel);
     const total = result?.totalCount?.[0]?.count ?? 0;
 
     const counts = Object.fromEntries(
@@ -789,13 +809,8 @@ export class BankAccountService {
     if (user.scope !== Scope.STATE && user.scope !== Scope.ADMIN) {
       throw new ForbiddenException('Only STATE or ADMIN users may decide bank account forms');
     }
-    if (user.scope === Scope.STATE) {
-      const userStateId = toObjectIdString(user.state);
-      const ulb = await this.ulbModel.findById(record.ulb, 'state').lean().exec();
-      const ulbStateId = toObjectIdString(ulb?.state);
-      if (!userStateId || !ulbStateId || userStateId !== ulbStateId) {
-        throw new ForbiddenException('You can only decide bank account forms within your own state');
-      }
+    if (user.scope === Scope.STATE && !(await this.hasDecideAccessToUlb(user, record.ulb))) {
+      throw new ForbiddenException('You can only decide bank account forms of ULBs you review');
     }
     const perms = getEffectivePermissions(user);
     if (!perms.includes(Permission.APPROVE_ULB_SUBMISSIONS)) {
@@ -903,16 +918,21 @@ export class BankAccountService {
   }
 
   async assertCanReadBankAccount(user: AuthUser, ulbId: string): Promise<void> {
+    await this.checkReadAccess(user, ulbId);
+  }
+
+  /** assertCanReadBankAccount that also returns the ULB ownership it loaded (STATE scope only), for reuse. */
+  private async checkReadAccess(user: AuthUser, ulbId: string): Promise<UlbOwnership | null> {
     this.assertValidUlbId(ulbId);
 
-    if (user.scope === Scope.ADMIN) return;
+    if (user.scope === Scope.ADMIN) return null;
 
     // MoHUA and DoE are central roles (not scoped to a state) and only ever view the bank account.
     if (isMohuaViewScope(user)) {
       if (!getEffectivePermissions(user).includes(Permission.VIEW_STATUS_REPORTS)) {
         throw new ForbiddenException('You do not have permission to view bank account forms.');
       }
-      return;
+      return null;
     }
 
     if (user.scope === Scope.ULB) {
@@ -920,7 +940,7 @@ export class BankAccountService {
       if (!userUlbId || userUlbId !== ulbId) {
         throw new ForbiddenException('You can only access your own ULB bank account form.');
       }
-      return;
+      return null;
     }
 
     if (user.scope === Scope.STATE) {
@@ -929,12 +949,11 @@ export class BankAccountService {
         throw new ForbiddenException('Your account is not mapped to any state.');
       }
 
-      const ulb = await this.ulbModel.findById(ulbId, 'state').lean().exec();
-      const ulbStateId = toObjectIdString(ulb?.state);
-      if (!ulbStateId || ulbStateId !== userStateId) {
-        throw new ForbiddenException('You can only access ULB bank account forms within your own state.');
+      const ulb = await loadUlbOwnership(this.ulbModel, ulbId);
+      if (!ulb || !canViewUlb(user, ulb)) {
+        throw new ForbiddenException('You can only access ULB bank account forms you have access to.');
       }
-      return;
+      return ulb;
     }
 
     throw new ForbiddenException('Access denied.');

@@ -6,7 +6,13 @@ import { AccessLevel, Permission, Scope } from 'src/module/auth/enum/roles-xvi-f
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
 import { FORM_STATUS, getFormStatusLabel, type FormStatusType } from 'src/common/constants/form-status.constants';
 import { escapeRegex } from 'src/common/utils/regex.util';
-import { resolveStateScopeFilter } from 'src/module/xvi-fc/common/utils/xvi-fc-scope-filter.util';
+import {
+  resolveAdcScopeFilter,
+  resolveStateScopeFilter,
+} from 'src/module/xvi-fc/common/utils/xvi-fc-scope-filter.util';
+import { hasUlbViewAccess } from 'src/module/xvi-fc/common/utils/xvi-fc-state-access.util';
+import { attachAdcOwnership } from 'src/module/xvi-fc/common/utils/xvi-fc-adc-rows.util';
+import { Adc, AdcDocument } from 'src/schemas/adc.schema';
 import { isMohuaViewScope } from 'src/module/xvi-fc/common/utils/xvi-fc-scope.util';
 import {
   assertCanUlbEditForm,
@@ -55,6 +61,8 @@ interface SlbSubmissionRow {
   formStatus: FormStatusType;
   lastUpdatedAt: Date | null;
   slbFormId: Types.ObjectId | null;
+  /** The ULB's owning ADC (null = the State DMA reviews it). */
+  adcId: Types.ObjectId | null;
 }
 
 interface SlbSubmissionsFacetResult {
@@ -88,6 +96,8 @@ export class SlbService {
     private readonly ulbModel: Model<UlbDocument>,
     @InjectModel(Year.name)
     private readonly yearModel: Model<Year>,
+    @InjectModel(Adc.name)
+    private readonly adcModel: Model<AdcDocument>,
     private readonly validator: DynamicFormValidationService,
     private readonly fileTokenService: FileTokenService,
     private readonly slbFormJsonConfig: SlbFormJsonConfigService,
@@ -339,9 +349,11 @@ export class SlbService {
     }
 
     const stateId = resolveStateScopeFilter(user, dto.stateId);
+    const adcId = resolveAdcScopeFilter(user);
 
     const matchStage: Record<string, unknown> = { isActive: true };
     if (stateId) matchStage.state = stateId;
+    if (adcId) matchStage.adc = adcId;
     if (dto.search?.trim()) {
       const regex = new RegExp(escapeRegex(dto.search.trim()), 'i');
       matchStage.$or = [{ name: regex }, { code: regex }];
@@ -435,6 +447,7 @@ export class SlbService {
               formStatus: 1,
               lastUpdatedAt: 1,
               slbFormId: { $ifNull: ['$slbForm._id', null] },
+              adcId: { $ifNull: ['$adc', null] },
             },
           },
         ],
@@ -444,7 +457,8 @@ export class SlbService {
     });
 
     const [result] = await this.ulbModel.aggregate<SlbSubmissionsFacetResult>(pipeline).exec();
-    const rows = result?.data ?? [];
+    // SLB has no approve/return step, so no row is ever reviewable.
+    const rows = await attachAdcOwnership(result?.data ?? [], user, this.adcModel, { decidable: false });
     const total = result?.totalCount?.[0]?.count ?? 0;
 
     const counts = Object.fromEntries(
@@ -703,10 +717,8 @@ export class SlbService {
         throw new ForbiddenException('Your account is not mapped to any state.');
       }
 
-      const ulb = await this.ulbModel.findById(ulbId, 'state').lean().exec();
-      const ulbStateId = toObjectIdString(ulb?.state);
-      if (!ulbStateId || ulbStateId !== userStateId) {
-        throw new ForbiddenException('You can only access ULB SLB forms within your own state.');
+      if (!(await hasUlbViewAccess(user, this.ulbModel, ulbId))) {
+        throw new ForbiddenException('You can only access ULB SLB forms you have access to.');
       }
       return;
     }

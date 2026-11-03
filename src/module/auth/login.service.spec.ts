@@ -12,6 +12,7 @@ import * as bcrypt from 'bcrypt';
 import { Response } from 'express';
 import { State } from 'src/schemas/state.schema';
 import { Ulb } from 'src/schemas/ulb.schema';
+import { Adc } from 'src/schemas/adc.schema';
 import { Year } from 'src/schemas/year.schema';
 import { UsersRepository } from 'src/module/users/users.repository';
 import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
@@ -104,6 +105,7 @@ describe('LoginService', () => {
         { provide: ConfigService, useValue: mockConfigService },
         { provide: getModelToken(State.name), useValue: mockStateModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+        { provide: getModelToken(Adc.name), useValue: { find: jest.fn(), findById: jest.fn(), exists: jest.fn() } },
         { provide: getModelToken(Year.name), useValue: mockYearModel },
       ],
     }).compile();

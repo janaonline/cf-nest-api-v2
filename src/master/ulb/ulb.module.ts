@@ -5,6 +5,7 @@ import { FormJsonModule } from 'src/master/form-json/form-json.module';
 import { FormJsonConfigModule } from 'src/master/form-json-config/form-json-config.module';
 import { XviFcCommonModule } from 'src/module/xvi-fc/common/xvi-fc-common.module';
 import { State, StateSchema } from 'src/schemas/state.schema';
+import { Adc, AdcSchema } from 'src/schemas/adc.schema';
 import { Ulb, UlbSchema } from 'src/schemas/ulb.schema';
 import { User, UserSchema } from 'src/schemas/user/user.schema';
 import { Year, YearSchema } from 'src/schemas/year.schema';
@@ -19,6 +20,7 @@ import { UlbService } from './ulb.service';
     MongooseModule.forFeature([
       { name: Ulb.name, schema: UlbSchema },
       { name: State.name, schema: StateSchema },
+      { name: Adc.name, schema: AdcSchema },
       { name: User.name, schema: UserSchema },
       { name: Year.name, schema: YearSchema },
       { name: SlbForm.name, schema: SlbFormSchema },
