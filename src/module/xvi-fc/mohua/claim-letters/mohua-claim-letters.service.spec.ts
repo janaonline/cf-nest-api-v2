@@ -17,16 +17,19 @@ const tripura = { _id: new Types.ObjectId(), name: 'Tripura', code: 'TR' };
 const kerala = { _id: new Types.ObjectId(), name: 'Kerala', code: 'KL' };
 const batchId = new Types.ObjectId();
 
+/** A mongoose write mock's call, `(filter, update)`, as the service makes it. */
+type WriteCall = [Record<string, unknown>, { $set: Record<string, unknown>; $inc?: Record<string, unknown> }];
+
 describe('MohuaClaimLettersService', () => {
   let stateModel: { find: jest.Mock; findById: jest.Mock };
   let yearModel: { findById: jest.Mock };
-  let batchModel: { find: jest.Mock; findOne: jest.Mock; findOneAndUpdate: jest.Mock };
+  let batchModel: { find: jest.Mock; findOne: jest.Mock; findOneAndUpdate: jest.Mock<unknown, WriteCall> };
   let batchUlbModel: {
     find: jest.Mock;
     findOne: jest.Mock;
-    countDocuments: jest.Mock;
+    countDocuments: jest.Mock<Promise<number>, [Record<string, unknown>]>;
     exists: jest.Mock;
-    updateOne: jest.Mock;
+    updateOne: jest.Mock<unknown, WriteCall>;
   };
   let exemptionModel: { find: jest.Mock };
   let exemptionService: { approve: jest.Mock; reject: jest.Mock };
@@ -37,7 +40,12 @@ describe('MohuaClaimLettersService', () => {
   let expectedUlbs: { resolve: jest.Mock };
   let formStatus: { moveFormsToMohuaReview: jest.Mock; returnFormsForCorrection: jest.Mock };
   let history: { recordTransition: jest.Mock; findLatestRejection: jest.Mock };
-  let session: { startTransaction: jest.Mock; commitTransaction: jest.Mock; abortTransaction: jest.Mock; endSession: jest.Mock };
+  let session: {
+    startTransaction: jest.Mock;
+    commitTransaction: jest.Mock;
+    abortTransaction: jest.Mock;
+    endSession: jest.Mock;
+  };
   let connection: { startSession: jest.Mock };
   let service: MohuaClaimLettersService;
 
@@ -67,13 +75,13 @@ describe('MohuaClaimLettersService', () => {
     batchModel = {
       find: jest.fn().mockReturnValue(q([])),
       findOne: jest.fn().mockReturnValue(q(batch())),
-      findOneAndUpdate: jest.fn().mockReturnValue(q({ _id: batchId })),
+      findOneAndUpdate: jest.fn<unknown, WriteCall>().mockReturnValue(q({ _id: batchId })),
     };
     batchUlbModel = {
       find: jest.fn().mockReturnValue(q([])),
-      countDocuments: jest.fn().mockResolvedValue(0),
+      countDocuments: jest.fn<Promise<number>, [Record<string, unknown>]>().mockResolvedValue(0),
       exists: jest.fn().mockResolvedValue(null),
-      updateOne: jest.fn().mockReturnValue(q({ matchedCount: 1 })),
+      updateOne: jest.fn<unknown, WriteCall>().mockReturnValue(q({ matchedCount: 1 })),
       findOne: jest.fn().mockReturnValue(q({ ulbId: new Types.ObjectId(), eligibilitySources: [] })),
     };
     grantAllocationModel = { find: jest.fn().mockReturnValue(q([])) };
@@ -416,7 +424,13 @@ describe('MohuaClaimLettersService', () => {
         changedAt: new Date(),
         rejectedSourceRefs: [
           { formId: 30, formDocumentId: new Types.ObjectId(), rowDocumentId: null, ulbId: returned.ulbId, remark: 'r' },
-          { formId: 23, formDocumentId: new Types.ObjectId(), rowDocumentId: new Types.ObjectId(), ulbId: returned.ulbId, remark: 'r' },
+          {
+            formId: 23,
+            formDocumentId: new Types.ObjectId(),
+            rowDocumentId: new Types.ObjectId(),
+            ulbId: returned.ulbId,
+            remark: 'r',
+          },
         ],
       });
 
@@ -428,7 +442,12 @@ describe('MohuaClaimLettersService', () => {
   });
 
   describe('approve', () => {
-    const approver = { _id: new Types.ObjectId().toString(), role: 'MoHUA', scope: 'MOHUA', accessLevel: null } as never;
+    const approver = {
+      _id: new Types.ObjectId().toString(),
+      role: 'MoHUA',
+      scope: 'MOHUA',
+      accessLevel: null,
+    } as never;
 
     beforeEach(() => {
       batchModel.findOne.mockReturnValue(q(batch({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_SO })));
@@ -579,14 +598,20 @@ describe('MohuaClaimLettersService', () => {
     });
 
     it('closes the letter (16, slot freed), releases its locks, reopens each marked ULB and the picked State items, in one transaction', async () => {
-      const reopened = [{ formId: 22, formDocumentId: new Types.ObjectId(), rowDocumentId: null, ulbId: null, remark: 'x' }];
+      const reopened = [
+        { formId: 22, formDocumentId: new Types.ObjectId(), rowDocumentId: null, ulbId: null, remark: 'x' },
+      ];
       formStatus.returnFormsForCorrection.mockResolvedValue(reopened);
 
       await service.returnForCorrection(String(batchId), dto(), so, '1.2.3.4', 'jest');
 
       expect(batchUlbModel.find).toHaveBeenCalledWith({ claimLetter: batchId, 'soDecision.status': 'RETURNED' });
       const [filter, update] = batchModel.findOneAndUpdate.mock.calls[0];
-      expect(filter).toMatchObject({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_SO, revision: 3, isAbandoned: false });
+      expect(filter).toMatchObject({
+        currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_SO,
+        revision: 3,
+        isAbandoned: false,
+      });
       expect(update.$set).toMatchObject({
         currentFormStatus: FORM_STATUS.RETURNED_BY_SO,
         isAbandoned: true,
@@ -603,7 +628,7 @@ describe('MohuaClaimLettersService', () => {
               ulbFormIds: [33],
               rowFormIds: [23],
               remark: 'Wrong IFSC',
-              decision: expect.objectContaining({ status: 'RETURNED', note: 'Wrong IFSC' }),
+              decision: expect.objectContaining({ status: 'RETURNED', note: 'Wrong IFSC' }) as unknown,
             },
           ],
           stateFormIds: [22],
@@ -712,7 +737,8 @@ describe('MohuaClaimLettersService', () => {
 
       await service.approve(String(batchId), 3, undefined, so, '1.2.3.4', 'jest');
 
-      expect(exemptionService.approve).toHaveBeenCalledOnceWith(String(exemptionId), 23, so, '1.2.3.4', 'jest');
+      expect(exemptionService.approve).toHaveBeenCalledTimes(1);
+      expect(exemptionService.approve).toHaveBeenCalledWith(String(exemptionId), 23, so, '1.2.3.4', 'jest');
       expect(exemptionService.approve.mock.invocationCallOrder[0]).toBeLessThan(
         connection.startSession.mock.invocationCallOrder[0],
       );
@@ -730,7 +756,13 @@ describe('MohuaClaimLettersService', () => {
     describe('returning the letter', () => {
       const marked = () => ({
         ...exemptChild(),
-        soDecision: { status: 'RETURNED', ulbFormIds: [], rowFormIds: [], rejectExemptionFormIds: [23], remark: 'No election' },
+        soDecision: {
+          status: 'RETURNED',
+          ulbFormIds: [],
+          rowFormIds: [],
+          rejectExemptionFormIds: [23],
+          remark: 'No election',
+        },
       });
       const dto = { expectedRevision: 3, stateFormIds: [] } as never;
 
@@ -741,12 +773,18 @@ describe('MohuaClaimLettersService', () => {
 
         await service.returnForCorrection(String(batchId), dto, so, '1.2.3.4', 'jest');
 
-        expect(exemptionService.reject).toHaveBeenCalledOnceWith(String(exemptionId), 23, 'No election', so, '1.2.3.4', 'jest');
+        expect(exemptionService.reject).toHaveBeenCalledTimes(1);
+        expect(exemptionService.reject).toHaveBeenCalledWith(
+          String(exemptionId),
+          23,
+          'No election',
+          so,
+          '1.2.3.4',
+          'jest',
+        );
         expect(history.recordTransition).toHaveBeenCalledWith(
           expect.objectContaining({
-            rejectedSourceRefs: [
-              { formId: 23, formDocumentId, rowDocumentId: null, ulbId, remark: 'No election' },
-            ],
+            rejectedSourceRefs: [{ formId: 23, formDocumentId, rowDocumentId: null, ulbId, remark: 'No election' }],
           }),
           session,
         );

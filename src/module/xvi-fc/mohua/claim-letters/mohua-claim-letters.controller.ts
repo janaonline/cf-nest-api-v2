@@ -69,7 +69,7 @@ export class MohuaClaimLettersController {
 
   @ApiOperation({
     summary:
-      "SO return of a claim letter under SO review: the letter goes to Returned for Correction and closes (its batch slot and ULB locks are freed); only the ULBs marked RETURNED (their picked forms and rows) and the State-wide items in the body reopen",
+      'SO return of a claim letter under SO review: the letter goes to Returned for Correction and closes (its batch slot and ULB locks are freed); only the ULBs marked RETURNED (their picked forms and rows) and the State-wide items in the body reopen',
   })
   @Post('letter/:claimLetterId/return')
   @RequirePermissions(Permission.APPROVE_STATE_SUBMISSIONS)

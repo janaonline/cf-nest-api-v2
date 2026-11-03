@@ -1102,7 +1102,10 @@ describe('ClaimLetterAssemblyService', () => {
         revision: 0,
       });
       // Self-expiring lease, not a bare null check — a stale claim must be reclaimable inline.
-      expect(claimFilter['$or']).toEqual([{ editLockToken: null }, { editLockAcquiredAt: { $lt: expect.any(Date) } }]);
+      expect(claimFilter['$or']).toEqual([
+        { editLockToken: null },
+        { editLockAcquiredAt: { $lt: expect.any(Date) as unknown } },
+      ]);
       expect(typeof claimUpdate.$set['editLockToken']).toBe('string');
     });
 
@@ -1137,7 +1140,7 @@ describe('ClaimLetterAssemblyService', () => {
 
     const editLockReleased = () =>
       expect(batchModel.updateOne).toHaveBeenCalledWith(
-        { _id: parentId, editLockToken: expect.any(String) },
+        { _id: parentId, editLockToken: expect.any(String) as unknown },
         { $set: { editLockToken: null, editLockAcquiredAt: null } },
       );
 
@@ -1313,7 +1316,7 @@ describe('ClaimLetterAssemblyService', () => {
       expect(batchModel.findOneAndUpdate).toHaveBeenCalledTimes(1); // the edit-lock claim only
       expect(batchUlbModel.deleteMany).not.toHaveBeenCalled();
       expect(batchModel.updateOne).toHaveBeenCalledWith(
-        { _id: parentId, editLockToken: expect.any(String) },
+        { _id: parentId, editLockToken: expect.any(String) as unknown },
         { $set: { editLockToken: null, editLockAcquiredAt: null } },
       );
     });
@@ -1448,7 +1451,10 @@ describe('ClaimLetterAssemblyService', () => {
 
       expect(result).toMatchObject({ isAbandoned: true });
       const [filter] = batchModel.findOneAndUpdate.mock.calls[0] as [Record<string, unknown>];
-      expect(filter['$or']).toEqual([{ editLockToken: null }, { editLockAcquiredAt: { $lt: expect.any(Date) } }]);
+      expect(filter['$or']).toEqual([
+        { editLockToken: null },
+        { editLockAcquiredAt: { $lt: expect.any(Date) as unknown } },
+      ]);
     });
   });
 

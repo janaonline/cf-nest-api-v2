@@ -82,6 +82,11 @@ describe('mapClaimLetterBatchDocToSummary', () => {
     expect(summary.currentFormStatus).toBe(2);
   });
 
+  it('keeps "Returned for Correction" for a letter the SO returned, though the return also flags it abandoned', () => {
+    const summary = mapClaimLetterBatchDocToSummary(batchDoc({ currentFormStatus: 16, isAbandoned: true }), mockUser());
+    expect(summary.currentFormStatusLabel).toBe('Returned for Correction');
+  });
+
   it('labels an abandoned draft "Abandoned" regardless of which currentFormStatus it was abandoned from', () => {
     const summary = mapClaimLetterBatchDocToSummary(batchDoc({ currentFormStatus: 5, isAbandoned: true }), mockUser());
     expect(summary.currentFormStatusLabel).toBe('Abandoned');

@@ -320,7 +320,9 @@ export class ClaimLetterFormStatusService {
       if (!FORM_TARGETS[formId]) continue;
       const source = passedSource(formId);
       if (!source?.formDocumentId) {
-        throw new BadRequestException(`Form ${formId} was not submitted as part of this claim letter (exempted), so it cannot be returned.`);
+        throw new BadRequestException(
+          `Form ${formId} was not submitted as part of this claim letter (exempted), so it cannot be returned.`,
+        );
       }
       await returnStateForm(formId, source.formDocumentId, selection.stateRemark);
     }
@@ -365,10 +367,16 @@ export class ClaimLetterFormStatusService {
         }
       }
       const formIds = [...new Set(withUlbForms.flatMap((r) => r.ulbFormIds))];
-      const live = await this.findWaitingUlbForms(letter, withUlbForms.map((r) => r.ulbId), formIds, session);
+      const live = await this.findWaitingUlbForms(
+        letter,
+        withUlbForms.map((r) => r.ulbId),
+        formIds,
+        session,
+      );
       for (const form of live) {
         const ulbReturn = returnByUlb.get(String(form.ulbId));
-        if (!ulbReturn?.ulbFormIds.includes(form.formId) || exempt.has(`${String(form.ulbId)}:${form.formId}`)) continue;
+        if (!ulbReturn?.ulbFormIds.includes(form.formId) || exempt.has(`${String(form.ulbId)}:${form.formId}`))
+          continue;
         const count = await this.updateStatus(
           form.target.collection,
           form.target.statusField,
@@ -450,7 +458,12 @@ export class ClaimLetterFormStatusService {
         .toArray();
       for (const doc of docs) {
         if (doc[target.statusField] !== FORM_STATUS.APPROVED_BY_STATE) continue;
-        found.push({ formId, target, id: doc['_id'] as Types.ObjectId, ulbId: doc[source.fields.ulb] as Types.ObjectId });
+        found.push({
+          formId,
+          target,
+          id: doc['_id'] as Types.ObjectId,
+          ulbId: doc[source.fields.ulb] as Types.ObjectId,
+        });
       }
     }
     return found;

@@ -5,6 +5,13 @@ import { ClaimLetterFormStatusService } from './claim-letter-form-status.service
 
 const oid = () => new Types.ObjectId();
 
+/** One `collection(...).updateMany(filter, update, options)` call, as the service makes it. */
+type UpdateManyCall = [
+  { _id: { $in: Types.ObjectId[] }; [field: string]: unknown },
+  { $set: Record<string, unknown> },
+  { session?: unknown; arrayFilters?: unknown[] }?,
+];
+
 describe('ClaimLetterFormStatusService', () => {
   const claimLetterId = oid();
   const userOid = oid();
@@ -12,7 +19,7 @@ describe('ClaimLetterFormStatusService', () => {
   const stateId = oid();
   const yearId = oid();
 
-  let updateMany: jest.Mock;
+  let updateMany: jest.Mock<Promise<{ modifiedCount: number }>, UpdateManyCall>;
   let countDocuments: jest.Mock;
   let collections: string[];
   let service: ClaimLetterFormStatusService;
@@ -43,8 +50,7 @@ describe('ClaimLetterFormStatusService', () => {
         select: () => ({
           session: () => ({
             lean: () => ({
-              exec: () =>
-                Promise.resolve({ state: stateId, year: yearId, stateEligibilitySources: parentSources }),
+              exec: () => Promise.resolve({ state: stateId, year: yearId, stateEligibilitySources: parentSources }),
             }),
           }),
         }),
@@ -87,11 +93,9 @@ describe('ClaimLetterFormStatusService', () => {
     children = [];
     findDocs = {};
     enabledSources = [];
-    updateMany = jest
-      .fn()
-      .mockImplementation((filter: { _id: { $in: unknown[] } }) =>
-        Promise.resolve({ modifiedCount: filter._id.$in.length }),
-      );
+    updateMany = jest.fn<Promise<{ modifiedCount: number }>, UpdateManyCall>((filter) =>
+      Promise.resolve({ modifiedCount: filter._id.$in.length }),
+    );
     build();
   });
 
@@ -166,7 +170,10 @@ describe('ClaimLetterFormStatusService', () => {
       { session },
     );
     const rowCall = updateMany.mock.calls.find(([f]) => 'rowStatus' in f);
-    expect(rowCall?.[0]).toEqual({ _id: { $in: [rowA, rowB] }, rowStatus: { $in: [null, FORM_STATUS.UNDER_REVIEW_BY_SO] } });
+    expect(rowCall?.[0]).toEqual({
+      _id: { $in: [rowA, rowB] },
+      rowStatus: { $in: [null, FORM_STATUS.UNDER_REVIEW_BY_SO] },
+    });
     expect(rowCall?.[1].$set).toMatchObject({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA });
     expect(summary.moved[24]).toBe(1 + 2);
   });
@@ -340,7 +347,7 @@ describe('ClaimLetterFormStatusService', () => {
       ]);
     });
 
-    it("gives a row form a pointer to its rows as its reason when the SO wrote nothing for the State", async () => {
+    it('gives a row form a pointer to its rows as its reason when the SO wrote nothing for the State', async () => {
       const form = oid();
       parentSources = [{ formId: 23, result: 'PASSED', formDocumentId: form }];
       withChildren([{ formId: 23, result: 'PASSED', formDocumentId: form, rowDocumentId: oid() }]);
@@ -364,7 +371,10 @@ describe('ClaimLetterFormStatusService', () => {
           formId: 33,
           claimEligibility: {
             yearScope: 'SUBMISSION_PERIOD_SINGLETON',
-            source: { collection: 'xvifc_bankaccounts', fields: { ulb: 'ulb', currentFormStatus: 'currentFormStatus' } },
+            source: {
+              collection: 'xvifc_bankaccounts',
+              fields: { ulb: 'ulb', currentFormStatus: 'currentFormStatus' },
+            },
           },
         },
       ];

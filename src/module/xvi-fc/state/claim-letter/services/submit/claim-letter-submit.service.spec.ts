@@ -175,7 +175,10 @@ describe('ClaimLetterSubmitService', () => {
       expect(session.commitTransaction).toHaveBeenCalled();
 
       const [filter] = batchModel.findOneAndUpdate.mock.calls[0] as [Record<string, unknown>];
-      expect(filter['$or']).toEqual([{ editLockToken: null }, { editLockAcquiredAt: { $lt: expect.any(Date) } }]);
+      expect(filter['$or']).toEqual([
+        { editLockToken: null },
+        { editLockAcquiredAt: { $lt: expect.any(Date) as unknown } },
+      ]);
       // Pinned as read, so a re-upload or letter-details save in between cannot slip in.
       expect(filter['signedClaimFile.path']).toBe('x/signed.pdf');
       expect(filter['finalClaimPdf.sourceKey']).toBe('reviewed-key');

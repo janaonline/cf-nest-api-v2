@@ -34,7 +34,9 @@ async function main() {
   const rows = await gates.find(filter).project({ action: 1, formId: 1, docKey: 1, statusIds: 1 }).toArray();
   console.log(`${rows.length} ULB gate row(s) missing ${RETURNED_BY_SO}`);
   for (const row of rows) {
-    console.log(`  ${String(row._id)}  action=${row.action}  formId=${row.formId}  statusIds=${JSON.stringify(row.statusIds)}`);
+    console.log(
+      `  ${String(row._id)}  action=${row.action}  formId=${row.formId}  statusIds=${JSON.stringify(row.statusIds)}`,
+    );
   }
 
   if (dryRun) {

@@ -253,11 +253,13 @@ describe('ElectedUrbanLocalBodiesPmuReviewService', () => {
     });
 
     it('surfaces a previously-stored rejectionRemarks (e.g. while RETURNED_BY_PMU), null when absent', async () => {
-      formModel['findOne'] = jest
-        .fn()
-        .mockReturnValue(
-          q({ _id: formOid, currentFormStatus: FORM_STATUS.RETURNED_BY_PMU, rejectionRemarks: 'Please redo section 2.' }),
-        );
+      formModel['findOne'] = jest.fn().mockReturnValue(
+        q({
+          _id: formOid,
+          currentFormStatus: FORM_STATUS.RETURNED_BY_PMU,
+          rejectionRemarks: 'Please redo section 2.',
+        }),
+      );
       const result = await service.getReviewMetadata(stateOid.toString(), yearOid.toString(), pmuUser);
       expect(result.data!.rejectionRemarks).toBe('Please redo section 2.');
 
