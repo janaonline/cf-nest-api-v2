@@ -33,6 +33,7 @@ describe('AdcAccessGuard', () => {
     ['GET', '/api/v2/auth/me'],
     ['GET', '/api/v2/xvi-fc/sidebar/STATE'],
     ['GET', '/api/v2/xvi-fc/years'],
+    ['GET', '/api/v2/xvi-fc/state/abc/y/notifications'],
     ['GET', '/api/v2/xvi-fc/annual-account/state/ulb-submissions'],
     ['GET', '/api/v2/xvi-fc/bank-account/state/ulb-submissions'],
     ['GET', '/api/v2/xvi-fc/dur/state/ulb-submissions'],
@@ -62,6 +63,8 @@ describe('AdcAccessGuard', () => {
     // State forms, claim letter, State dashboard/overview
     ['GET', '/api/v2/xvi-fc/state/abc/y/dashboard'],
     ['GET', '/api/v2/xvi-fc/state/abc'],
+    ['GET', '/api/v2/xvi-fc/state/abc/notifications'],
+    ['POST', '/api/v2/xvi-fc/state/abc/y/notifications'],
     ['GET', '/api/v2/xvi-fc/state-info/abc'],
     ['GET', '/api/v2/xvi-fc/state/claim-letter/abc'],
     ['POST', '/api/v2/xvi-fc/state/sfc-status/abc/final-submit'],
