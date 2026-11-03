@@ -128,7 +128,7 @@ describe('ElectedUrbanLocalBodiesPmuReviewService', () => {
       insertParentHistory: jest.fn().mockResolvedValue(undefined),
       maybeSettleAfterBulkAction: jest
         .fn()
-        .mockResolvedValue({ settled: true, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }),
+        .mockResolvedValue({ settled: true, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_SO }),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -252,20 +252,20 @@ describe('ElectedUrbanLocalBodiesPmuReviewService', () => {
       expect(result.data!.permissions.canRejectForm).toBe(false);
     });
 
-    it('surfaces a previously-stored pmuRemarks (e.g. while RETURNED_BY_PMU), null when absent', async () => {
+    it('surfaces a previously-stored rejectionRemarks (e.g. while RETURNED_BY_PMU), null when absent', async () => {
       formModel['findOne'] = jest
         .fn()
         .mockReturnValue(
-          q({ _id: formOid, currentFormStatus: FORM_STATUS.RETURNED_BY_PMU, pmuRemarks: 'Please redo section 2.' }),
+          q({ _id: formOid, currentFormStatus: FORM_STATUS.RETURNED_BY_PMU, rejectionRemarks: 'Please redo section 2.' }),
         );
       const result = await service.getReviewMetadata(stateOid.toString(), yearOid.toString(), pmuUser);
-      expect(result.data!.pmuRemarks).toBe('Please redo section 2.');
+      expect(result.data!.rejectionRemarks).toBe('Please redo section 2.');
 
       formModel['findOne'] = jest
         .fn()
         .mockReturnValue(q({ _id: formOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU }));
       const result2 = await service.getReviewMetadata(stateOid.toString(), yearOid.toString(), pmuUser);
-      expect(result2.data!.pmuRemarks).toBeNull();
+      expect(result2.data!.rejectionRemarks).toBeNull();
     });
 
     it('surfaces the stored validationStatus, falling back to NOT_VALIDATED when absent', async () => {
@@ -288,10 +288,10 @@ describe('ElectedUrbanLocalBodiesPmuReviewService', () => {
       formModel['findOne'] = jest
         .fn()
         .mockReturnValue(
-          q({ _id: formOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA, activeDatasetVersion: 1 }),
+          q({ _id: formOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_SO, activeDatasetVersion: 1 }),
         );
       const result = await service.getReviewMetadata(stateOid.toString(), yearOid.toString(), pmuUser);
-      expect(result.data!.currentFormStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
+      expect(result.data!.currentFormStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_SO);
     });
 
     it('fetches the row summary from the domain service', async () => {
@@ -332,7 +332,7 @@ describe('ElectedUrbanLocalBodiesPmuReviewService', () => {
       formModel['findOne'] = jest
         .fn()
         .mockReturnValue(
-          q({ _id: formOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA, activeDatasetVersion: 1 }),
+          q({ _id: formOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_SO, activeDatasetVersion: 1 }),
         );
       const result = await service.getReviewMetadata(stateOid.toString(), yearOid.toString(), pmuUser);
       expect(result.data!.permissions.canView).toBe(true);
@@ -354,7 +354,7 @@ describe('ElectedUrbanLocalBodiesPmuReviewService', () => {
     it('blocks mutation when the form is not UNDER_REVIEW_BY_PMU (approved terminal gate)', async () => {
       domainService['findForm'] = jest
         .fn()
-        .mockResolvedValue(makeForm({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }));
+        .mockResolvedValue(makeForm({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_SO }));
       await expect(
         service.approveCompleteForm(stateOid.toString(), yearOid.toString(), pmuUser, '127.0.0.1', 'jest'),
       ).rejects.toThrow(ForbiddenException);
@@ -385,7 +385,7 @@ describe('ElectedUrbanLocalBodiesPmuReviewService', () => {
 
     it('transitions only PENDING rows to APPROVED, leaves already-APPROVED rows untouched', async () => {
       const pending = makeRow({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU });
-      const approved = makeRow({ _id: new Types.ObjectId(), rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA });
+      const approved = makeRow({ _id: new Types.ObjectId(), rowStatus: FORM_STATUS.UNDER_REVIEW_BY_SO });
       domainService['getActiveRows'] = jest.fn().mockResolvedValue([pending, approved]);
 
       await service.approveCompleteForm(stateOid.toString(), yearOid.toString(), pmuUser, '127.0.0.1', 'jest');
@@ -417,7 +417,7 @@ describe('ElectedUrbanLocalBodiesPmuReviewService', () => {
         mockSession,
       );
       expect(mockSession.commitTransaction).toHaveBeenCalled();
-      expect(result.data!.currentFormStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
+      expect(result.data!.currentFormStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_SO);
     });
 
     it('rolls back the transaction when a domain-service call throws', async () => {
@@ -439,7 +439,7 @@ describe('ElectedUrbanLocalBodiesPmuReviewService', () => {
   // ─── rejectCompleteForm ─────────────────────────────────────────────────────
 
   describe('rejectCompleteForm', () => {
-    it('requires a non-empty pmuRemarks', async () => {
+    it('requires a non-empty rejectionRemarks', async () => {
       await expect(
         service.rejectCompleteForm(stateOid.toString(), yearOid.toString(), '   ', pmuUser, '127.0.0.1', 'jest'),
       ).rejects.toThrow(BadRequestException);
@@ -448,7 +448,7 @@ describe('ElectedUrbanLocalBodiesPmuReviewService', () => {
     it('blocks mutation when the form is already approved', async () => {
       domainService['findForm'] = jest
         .fn()
-        .mockResolvedValue(makeForm({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }));
+        .mockResolvedValue(makeForm({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_SO }));
       await expect(
         service.rejectCompleteForm(stateOid.toString(), yearOid.toString(), 'Fix this.', pmuUser, '127.0.0.1', 'jest'),
       ).rejects.toThrow(ForbiddenException);
@@ -457,7 +457,7 @@ describe('ElectedUrbanLocalBodiesPmuReviewService', () => {
     it('blocks when any active row has already been approved', async () => {
       domainService['getActiveRows'] = jest
         .fn()
-        .mockResolvedValue([makeRow({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA })]);
+        .mockResolvedValue([makeRow({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_SO })]);
       await expect(
         service.rejectCompleteForm(stateOid.toString(), yearOid.toString(), 'Fix this.', pmuUser, '127.0.0.1', 'jest'),
       ).rejects.toThrow(BadRequestException);

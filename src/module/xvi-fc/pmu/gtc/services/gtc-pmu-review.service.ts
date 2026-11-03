@@ -34,7 +34,7 @@ type PmuFormLeanWithPopulate = XvifcActorSourceDocument & {
   state?: Types.ObjectId | { _id?: Types.ObjectId; name?: string };
   currentFormStatus?: number;
   data?: Record<string, unknown>;
-  pmuRemarks?: string | null;
+  rejectionRemarks?: string | null;
 };
 
 /**
@@ -133,7 +133,7 @@ export class GtcPmuReviewService {
       installment,
       currentFormStatus,
       currentFormStatusLabel: getFormStatusLabel(currentFormStatus),
-      pmuRemarks: doc.pmuRemarks ?? null,
+      rejectionRemarks: doc.rejectionRemarks ?? null,
       questions,
       permissions,
       actors,
@@ -159,8 +159,8 @@ export class GtcPmuReviewService {
     const userOid = new Types.ObjectId(user._id);
     const fromStatus = form.currentFormStatus;
     // PMU is an internal pre-screen for MoHUA, not a status-bearing stage of its own once
-    // approved — the form lands directly on UNDER_REVIEW_BY_MOHUA.
-    const toStatus = FORM_STATUS.UNDER_REVIEW_BY_MOHUA;
+    // approved — the form lands on UNDER_REVIEW_BY_SO (15), ready for a claim letter.
+    const toStatus = FORM_STATUS.UNDER_REVIEW_BY_SO;
 
     await this.transition(form, fromStatus, toStatus, undefined, FormHistoryAction.PMU_APPROVE, userOid, ip, userAgent);
 
@@ -174,17 +174,17 @@ export class GtcPmuReviewService {
     stateId: string,
     yearId: string,
     installment: GtcInstallment,
-    pmuRemarks: string,
+    rejectionRemarks: string,
     user: AuthUser,
     ip: string,
     userAgent: string,
   ): Promise<XviFcApiResponse<GtcPmuSubmitData>> {
     assertPmuReviewerAccess(user);
 
-    const trimmedRemarks = pmuRemarks?.trim();
+    const trimmedRemarks = rejectionRemarks?.trim();
     if (!trimmedRemarks) {
       throwXviFcValidationError({
-        pmuRemarks: [{ field: 'pmuRemarks', code: 'required', message: 'A rejection remark is required.' }],
+        rejectionRemarks: [{ field: 'rejectionRemarks', code: 'required', message: 'A rejection remark is required.' }],
       });
     }
 
@@ -229,14 +229,14 @@ export class GtcPmuReviewService {
     form: GtcPmuFormLean,
     fromStatus: number,
     toStatus: number,
-    pmuRemarks: string | undefined,
+    rejectionRemarks: string | undefined,
     action: FormHistoryAction,
     userOid: Types.ObjectId,
     ip: string,
     userAgent: string,
   ): Promise<void> {
     const setFields: Record<string, unknown> = { currentFormStatus: toStatus, updatedBy: userOid };
-    if (pmuRemarks !== undefined) setFields['pmuRemarks'] = pmuRemarks;
+    if (rejectionRemarks !== undefined) setFields['rejectionRemarks'] = rejectionRemarks;
 
     await this.pmuReviewHelper.transitionForm<XviFcGtcDocument>({
       formModel: this.formModel,
@@ -261,7 +261,7 @@ export class GtcPmuReviewService {
         changedAt: new Date(),
         ip,
         userAgent,
-        remarks: pmuRemarks,
+        remarks: rejectionRemarks,
       }),
     });
   }

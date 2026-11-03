@@ -86,7 +86,7 @@ describe('FcUnspentPmuReviewController', () => {
   });
 
   it('POST :stateId/:yearId/reject delegates to FcUnspentPmuReviewService.rejectCompleteForm', async () => {
-    await controller.rejectForm(stateId, yearId, { pmuRemarks: 'Please redo.' }, user, '127.0.0.1', 'jest-agent');
+    await controller.rejectForm(stateId, yearId, { rejectionRemarks: 'Please redo.' }, user, '127.0.0.1', 'jest-agent');
     expect(reviewService['rejectCompleteForm']).toHaveBeenCalledWith(
       stateId,
       yearId,

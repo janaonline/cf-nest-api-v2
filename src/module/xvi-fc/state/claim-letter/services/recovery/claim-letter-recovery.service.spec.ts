@@ -45,8 +45,9 @@ function applyBatchFilter(claims: ClaimFixture[], filter: Record<string, unknown
     const idSet = new Set(idIn.map((id) => id.toString()));
     return claims.filter((c) => idSet.has(c._id.toString()));
   }
-  if (filter['currentFormStatus'] === FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA) {
-    return claims.filter((c) => c.currentFormStatus === FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA && !c.isAbandoned);
+  const statusIn = (filter['currentFormStatus'] as { $in?: number[] } | undefined)?.$in;
+  if (statusIn) {
+    return claims.filter((c) => statusIn.includes(c.currentFormStatus) && !c.isAbandoned);
   }
   if (filter['assemblyStatus'] === 'READY') {
     return claims.filter((c) => c.assemblyStatus === 'READY');

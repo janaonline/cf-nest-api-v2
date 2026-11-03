@@ -19,8 +19,10 @@ export function mapClaimLetterBatchDocToSummary(doc: Record<string, unknown>, us
     batchNumber: doc['batchNumber'] as 1 | 2 | 3,
     version: doc['version'] as number,
     currentFormStatus,
-    // Abandon is a flag and leaves currentFormStatus as is, so the label is overridden.
-    currentFormStatusLabel: isAbandoned ? 'Abandoned' : getFormStatusLabel(currentFormStatus),
+    // Abandon is a flag and leaves the draft at IN_PROGRESS, so the label is overridden. An SO return also sets the flag
+    // (it frees the batch slot) but keeps its own status, Returned for Correction.
+    currentFormStatusLabel:
+      isAbandoned && currentFormStatus === FORM_STATUS.IN_PROGRESS ? 'Abandoned' : getFormStatusLabel(currentFormStatus),
     assemblyStatus: doc['assemblyStatus'] as 'BUILDING' | 'READY',
     ulbCount: doc['ulbCount'] as number,
     isAbandoned,
@@ -39,6 +41,7 @@ export function mapClaimLetterBatchDocToSummary(doc: Record<string, unknown>, us
     supersedes: toObjectIdString(doc['supersedes']),
     supersededBy: toObjectIdString(doc['supersededBy']),
     createdAt: doc['createdAt'] as Date,
+    mohuaRemarks: (doc['mohuaRemarks'] as string | null | undefined) ?? null,
     permissions: buildClaimLetterPermissions(user, currentFormStatus, isAbandoned),
   };
 }

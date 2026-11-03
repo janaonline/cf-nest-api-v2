@@ -39,7 +39,7 @@ type PmuFormLeanWithPopulate = XvifcActorSourceDocument & {
   checkboxConfirmation?: boolean;
   electedBodyExcelFile?: unknown;
   signedElectedbodyFile?: unknown;
-  pmuRemarks?: string | null;
+  rejectionRemarks?: string | null;
   validationStatus?: EulbValidationStatus;
 };
 
@@ -153,7 +153,7 @@ export class ElectedUrbanLocalBodiesPmuReviewService {
       yearId,
       currentFormStatus,
       currentFormStatusLabel: getFormStatusLabel(currentFormStatus),
-      pmuRemarks: doc.pmuRemarks ?? null,
+      rejectionRemarks: doc.rejectionRemarks ?? null,
       questions,
       rowSummary,
       permissions,
@@ -165,7 +165,7 @@ export class ElectedUrbanLocalBodiesPmuReviewService {
   }
 
   /** Approves every currently-pending row and, once none remain pending/rejected/needing-update,
-   *  settles the parent at `UNDER_REVIEW_BY_MOHUA` in the same transaction — mirrors FC Unspent's
+   *  settles the parent at `UNDER_REVIEW_BY_SO` in the same transaction — mirrors FC Unspent's
    *  `approveCompleteForm` for the Yes-branch case. PMU has no status of its own once approved;
    *  rows and parent alike land on the same status MoHUA's own review already uses. */
   async approveCompleteForm(
@@ -189,7 +189,10 @@ export class ElectedUrbanLocalBodiesPmuReviewService {
     }
 
     const blocking = activeRows.filter(
-      (r) => r.rowStatus !== FORM_STATUS.UNDER_REVIEW_BY_PMU && r.rowStatus !== FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+      (r) =>
+        r.rowStatus !== FORM_STATUS.UNDER_REVIEW_BY_PMU &&
+        r.rowStatus !== FORM_STATUS.UNDER_REVIEW_BY_SO &&
+        r.rowStatus !== FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
     );
     if (blocking.length > 0) {
       throwXviFcValidationError({
@@ -218,7 +221,7 @@ export class ElectedUrbanLocalBodiesPmuReviewService {
         form._id,
         stateOid,
         yearOid,
-        toApprove.map((row) => ({ row, newStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA, rejectionRemark: null })),
+        toApprove.map((row) => ({ row, newStatus: FORM_STATUS.UNDER_REVIEW_BY_SO, rejectionRemark: null })),
         userOid,
         ip,
         userAgent,
@@ -242,22 +245,22 @@ export class ElectedUrbanLocalBodiesPmuReviewService {
     });
   }
 
-  /** Requires a non-empty `pmuRemarks`. Blocks if any row has already been individually approved —
+  /** Requires a non-empty `rejectionRemarks`. Blocks if any row has already been individually approved —
    *  mirrors FC Unspent's `rejectCompleteForm`. */
   async rejectCompleteForm(
     stateId: string,
     yearId: string,
-    pmuRemarks: string,
+    rejectionRemarks: string,
     user: AuthUser,
     ip: string,
     userAgent: string,
   ): Promise<XviFcApiResponse<EulbPmuSubmitData>> {
     assertPmuReviewerAccess(user);
 
-    const trimmedRemarks = pmuRemarks?.trim();
+    const trimmedRemarks = rejectionRemarks?.trim();
     if (!trimmedRemarks) {
       throwXviFcValidationError({
-        pmuRemarks: [{ field: 'pmuRemarks', code: 'required', message: 'A rejection remark is required.' }],
+        rejectionRemarks: [{ field: 'rejectionRemarks', code: 'required', message: 'A rejection remark is required.' }],
       });
     }
 
@@ -266,7 +269,9 @@ export class ElectedUrbanLocalBodiesPmuReviewService {
     assertCanPmuMutateForm(form.currentFormStatus);
 
     const activeRows = await this.domainService.getActiveRows(form._id, form.activeDatasetVersion);
-    const alreadyActive = activeRows.filter((r) => r.rowStatus === FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
+    const alreadyActive = activeRows.filter(
+      (r) => r.rowStatus === FORM_STATUS.UNDER_REVIEW_BY_SO || r.rowStatus === FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+    );
     if (alreadyActive.length > 0) {
       throwXviFcValidationError({
         _form: [

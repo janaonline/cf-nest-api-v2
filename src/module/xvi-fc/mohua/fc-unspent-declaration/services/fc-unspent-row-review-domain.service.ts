@@ -202,11 +202,11 @@ export class FcUnspentRowReviewDomainService {
     return summary;
   }
 
-  /** Sets the parent's `currentFormStatus` (+ optional `mohuaRemarks`) to an explicit new audit revision. */
+  /** Sets the parent's `currentFormStatus` (+ optional `rejectionRemarks`) to an explicit new audit revision. */
   async transitionParent(
     formId: Types.ObjectId,
     toStatus: number,
-    mohuaRemarks: string | null | undefined,
+    rejectionRemarks: string | null | undefined,
     newAuditRevision: number,
     userOid: Types.ObjectId,
     session: ClientSession,
@@ -216,7 +216,7 @@ export class FcUnspentRowReviewDomainService {
       auditRevision: newAuditRevision,
       updatedBy: userOid,
     };
-    if (mohuaRemarks !== undefined) setDoc['mohuaRemarks'] = mohuaRemarks;
+    if (rejectionRemarks !== undefined) setDoc['rejectionRemarks'] = rejectionRemarks;
 
     const updated = await this.formModel
       .findOneAndUpdate({ _id: formId }, { $set: setDoc }, { new: true, session })

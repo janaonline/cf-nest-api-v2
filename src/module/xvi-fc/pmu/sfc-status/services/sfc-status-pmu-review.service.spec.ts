@@ -65,7 +65,7 @@ describe('SfcStatusPmuReviewService', () => {
       ),
       findOneAndUpdate: jest
         .fn()
-        .mockReturnValue(q({ _id: formOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA })),
+        .mockReturnValue(q({ _id: formOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_SO })),
       find: jest.fn().mockReturnValue(
         q([
           {
@@ -187,28 +187,28 @@ describe('SfcStatusPmuReviewService', () => {
       expect(result.data!.permissions.canRejectForm).toBe(false);
     });
 
-    it('surfaces a previously-stored pmuRemarks (e.g. while RETURNED_BY_PMU), null when absent', async () => {
+    it('surfaces a previously-stored rejectionRemarks (e.g. while RETURNED_BY_PMU), null when absent', async () => {
       formModel['findOne'] = jest
         .fn()
         .mockReturnValue(
-          q({ _id: formOid, currentFormStatus: FORM_STATUS.RETURNED_BY_PMU, pmuRemarks: 'Please redo section 2.' }),
+          q({ _id: formOid, currentFormStatus: FORM_STATUS.RETURNED_BY_PMU, rejectionRemarks: 'Please redo section 2.' }),
         );
       const result = await service.getReviewMetadata(stateOid.toString(), yearOid.toString(), pmuUser);
-      expect(result.data!.pmuRemarks).toBe('Please redo section 2.');
+      expect(result.data!.rejectionRemarks).toBe('Please redo section 2.');
 
       formModel['findOne'] = jest
         .fn()
         .mockReturnValue(q({ _id: formOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU }));
       const result2 = await service.getReviewMetadata(stateOid.toString(), yearOid.toString(), pmuUser);
-      expect(result2.data!.pmuRemarks).toBeNull();
+      expect(result2.data!.rejectionRemarks).toBeNull();
     });
 
-    it('remains viewable once approved (PMU has no status of its own — lands on UNDER_REVIEW_BY_MOHUA)', async () => {
+    it('remains viewable once approved (PMU has no status of its own — lands on UNDER_REVIEW_BY_SO)', async () => {
       formModel['findOne'] = jest
         .fn()
-        .mockReturnValue(q({ _id: formOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }));
+        .mockReturnValue(q({ _id: formOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_SO }));
       const result = await service.getReviewMetadata(stateOid.toString(), yearOid.toString(), pmuUser);
-      expect(result.data!.currentFormStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
+      expect(result.data!.currentFormStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_SO);
     });
 
     it('grants canApproveForm/canRejectForm only for an admin-subrole PMU user on a mutable form', async () => {
@@ -238,17 +238,17 @@ describe('SfcStatusPmuReviewService', () => {
     it('blocks mutation when the form is not UNDER_REVIEW_BY_PMU', async () => {
       formModel['findOne'] = jest
         .fn()
-        .mockReturnValue(q({ _id: formOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }));
+        .mockReturnValue(q({ _id: formOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_SO }));
       await expect(
         service.approveCompleteForm(stateOid.toString(), yearOid.toString(), pmuUser, '127.0.0.1', 'jest'),
       ).rejects.toThrow(ForbiddenException);
     });
 
-    it('transitions the form to UNDER_REVIEW_BY_MOHUA via findOneAndUpdate', async () => {
+    it('transitions the form to UNDER_REVIEW_BY_SO via findOneAndUpdate', async () => {
       await service.approveCompleteForm(stateOid.toString(), yearOid.toString(), pmuUser, '127.0.0.1', 'jest');
       const call = formModel['findOneAndUpdate'].mock.calls[0] as unknown[];
       const setArg = (call[1] as { $set: Record<string, unknown> }).$set;
-      expect(setArg['currentFormStatus']).toBe(FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
+      expect(setArg['currentFormStatus']).toBe(FORM_STATUS.UNDER_REVIEW_BY_SO);
     });
 
     it('writes a PMU_APPROVE history row snapshotting the form data, non-transactionally', async () => {
@@ -258,7 +258,7 @@ describe('SfcStatusPmuReviewService', () => {
           expect.objectContaining({
             action: FormHistoryAction.PMU_APPROVE,
             fromStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU,
-            toStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+            toStatus: FORM_STATUS.UNDER_REVIEW_BY_SO,
           }),
         ],
         undefined,
@@ -273,12 +273,12 @@ describe('SfcStatusPmuReviewService', () => {
         '127.0.0.1',
         'jest',
       );
-      expect(result.data!.currentFormStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
+      expect(result.data!.currentFormStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_SO);
     });
   });
 
   describe('rejectCompleteForm', () => {
-    it('requires a non-empty pmuRemarks', async () => {
+    it('requires a non-empty rejectionRemarks', async () => {
       await expect(
         service.rejectCompleteForm(stateOid.toString(), yearOid.toString(), '   ', pmuUser, '127.0.0.1', 'jest'),
       ).rejects.toThrow(BadRequestException);
@@ -287,13 +287,13 @@ describe('SfcStatusPmuReviewService', () => {
     it('blocks mutation when the form is already approved', async () => {
       formModel['findOne'] = jest
         .fn()
-        .mockReturnValue(q({ _id: formOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }));
+        .mockReturnValue(q({ _id: formOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_SO }));
       await expect(
         service.rejectCompleteForm(stateOid.toString(), yearOid.toString(), 'Fix this.', pmuUser, '127.0.0.1', 'jest'),
       ).rejects.toThrow(ForbiddenException);
     });
 
-    it('transitions to RETURNED_BY_PMU and stores pmuRemarks', async () => {
+    it('transitions to RETURNED_BY_PMU and stores rejectionRemarks', async () => {
       const result = await service.rejectCompleteForm(
         stateOid.toString(),
         yearOid.toString(),
@@ -307,7 +307,7 @@ describe('SfcStatusPmuReviewService', () => {
       const setArg = (call[1] as { $set: Record<string, unknown> }).$set;
       expect(setArg).toMatchObject({
         currentFormStatus: FORM_STATUS.RETURNED_BY_PMU,
-        pmuRemarks: 'Please redo the figures.',
+        rejectionRemarks: 'Please redo the figures.',
       });
       expect(result.data!.currentFormStatus).toBe(FORM_STATUS.RETURNED_BY_PMU);
     });

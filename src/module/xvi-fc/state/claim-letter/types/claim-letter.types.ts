@@ -140,6 +140,8 @@ export interface ClaimLetterBatchSummary {
   supersedes: string | null;
   supersededBy: string | null;
   createdAt: Date;
+  /** The SO's (or MoHUA's) remark when the letter was returned; null otherwise. */
+  mohuaRemarks: string | null;
   /** getDetail only: formjson 26 fields except the letter details (GET .../letter-details has those). */
   questions?: FieldConfig[];
   /** getDetail only. */

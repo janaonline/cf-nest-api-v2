@@ -197,17 +197,17 @@ export class ElectedUrbanLocalBodiesPmuRowReviewDomainService {
     });
   }
 
-  /** Sets the parent's `currentFormStatus` (+ optional `pmuRemarks`) — delegates the mechanical
+  /** Sets the parent's `currentFormStatus` (+ optional `rejectionRemarks`) — delegates the mechanical
    *  $set/NotFoundException guard to the shared Phase 4 helper. */
   async transitionParent(
     formId: Types.ObjectId,
     toStatus: number,
-    pmuRemarks: string | null | undefined,
+    rejectionRemarks: string | null | undefined,
     userOid: Types.ObjectId,
     session: ClientSession,
   ): Promise<EulbFormDocument> {
     const setFields: Record<string, unknown> = { currentFormStatus: toStatus, updatedBy: userOid };
-    if (pmuRemarks !== undefined) setFields['pmuRemarks'] = pmuRemarks;
+    if (rejectionRemarks !== undefined) setFields['rejectionRemarks'] = rejectionRemarks;
 
     return this.pmuReviewHelper.transitionForm<EulbFormDocument>({
       formModel: this.formModel,
@@ -259,7 +259,7 @@ export class ElectedUrbanLocalBodiesPmuRowReviewDomainService {
 
   /** Atomic with the session — settles the parent the instant every active row (in the active
    *  dataset version) has a PMU decision, whether that decision was reached via a bulk-approve or a
-   *  bulk-reject call. `UNDER_REVIEW_BY_MOHUA` when every row was approved; `RETURNED_BY_PMU` when at
+   *  bulk-reject call. `UNDER_REVIEW_BY_SO` when every row was approved; `RETURNED_BY_PMU` when at
    *  least one row was rejected (fully-rejected and mixed outcomes both resolve here — see
    *  `resolveSettledFormStatus`). The `FormHistoryAction` tag follows the outcome, not which bulk
    *  action triggered the call, since it has always meant "the fromStatus→toStatus kind," not "which

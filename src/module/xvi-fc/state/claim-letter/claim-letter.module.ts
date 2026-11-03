@@ -45,6 +45,7 @@ import { ClaimLetterLetterDetailsService } from './services/letter-details/claim
 import { ClaimLetterActiveBatchService } from './services/active-batch/claim-letter-active-batch.service';
 import { ClaimLetterFinalPdfService } from './services/final-pdf/claim-letter-final-pdf.service';
 import { ClaimLetterSubmitService } from './services/submit/claim-letter-submit.service';
+import { ClaimLetterFormStatusService } from './services/form-status/claim-letter-form-status.service';
 import { FormJsonModule } from 'src/master/form-json/form-json.module';
 
 @Module({
@@ -83,9 +84,16 @@ import { FormJsonModule } from 'src/master/form-json/form-json.module';
     ClaimLetterActiveBatchService,
     ClaimLetterFinalPdfService,
     ClaimLetterSubmitService,
+    ClaimLetterFormStatusService,
     ClaimLetterFormJsonService,
     S3Service,
   ],
-  exports: [ClaimLetterService],
+  exports: [
+    ClaimLetterService,
+    ClaimLetterEligibilityService,
+    ClaimLetterAssemblyService,
+    ClaimLetterHistoryService,
+    ClaimLetterFormStatusService,
+  ],
 })
 export class ClaimLetterModule {}

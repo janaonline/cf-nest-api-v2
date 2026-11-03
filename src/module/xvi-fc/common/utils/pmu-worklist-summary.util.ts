@@ -31,12 +31,15 @@ export function summarizePmuWorklist(
       case FORM_STATUS.IN_PROGRESS:
         inProgress++;
         break;
+      // The MoHUA side of the review includes the SO stage (15): PMU approved, MoHUA's side has it now.
+      case FORM_STATUS.UNDER_REVIEW_BY_SO:
       case FORM_STATUS.UNDER_REVIEW_BY_MOHUA:
         underReviewMohua++;
         break;
       case FORM_STATUS.UNDER_REVIEW_BY_PMU:
         underReviewPmu++;
         break;
+      case FORM_STATUS.RETURNED_BY_SO:
       case FORM_STATUS.RETURNED_BY_MOHUA:
         returnedMohua++;
         break;

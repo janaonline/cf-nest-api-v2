@@ -409,7 +409,13 @@ export class FcUnspentDeclarationRowService {
           form: formId,
           isActive: true,
           ulbId: { $nin: submittedUlbIds },
-          rowStatus: { $nin: [FORM_STATUS.UNDER_REVIEW_BY_MOHUA, FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA] },
+          rowStatus: {
+            $nin: [
+              FORM_STATUS.UNDER_REVIEW_BY_SO,
+              FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+              FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+            ],
+          },
         },
         { $set: { isActive: false, updatedBy: userOid } },
         { session },

@@ -36,6 +36,13 @@ describe('state-form-history.util', () => {
       expect(deriveActorRole(FORM_STATUS.IN_PROGRESS, FORM_STATUS.UNDER_REVIEW_BY_MOHUA)).toBe('State');
     });
 
+    it('attributes the SO stage: 15 is a PMU approval, 5 from 15 and a return to 16 are MoHUA', () => {
+      expect(deriveActorRole(FORM_STATUS.UNDER_REVIEW_BY_PMU, FORM_STATUS.UNDER_REVIEW_BY_SO)).toBe('PMU');
+      expect(deriveActorRole(FORM_STATUS.UNDER_REVIEW_BY_SO, FORM_STATUS.UNDER_REVIEW_BY_MOHUA)).toBe('MoHUA');
+      expect(deriveActorRole(FORM_STATUS.UNDER_REVIEW_BY_SO, FORM_STATUS.RETURNED_BY_SO)).toBe('MoHUA');
+      expect(isReturnedStatus(FORM_STATUS.RETURNED_BY_SO)).toBe(true);
+    });
+
     it('defaults to State for drafts and submissions', () => {
       expect(deriveActorRole(undefined, FORM_STATUS.IN_PROGRESS)).toBe('State');
       expect(deriveActorRole(FORM_STATUS.IN_PROGRESS, FORM_STATUS.UNDER_REVIEW_BY_PMU)).toBe('State');

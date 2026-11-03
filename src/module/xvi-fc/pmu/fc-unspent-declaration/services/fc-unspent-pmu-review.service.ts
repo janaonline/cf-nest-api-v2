@@ -46,7 +46,7 @@ type PmuFormLeanWithPopulate = XvifcActorSourceDocument & {
   fcDeclaration?: FileInfo | null;
   fcUnspentDeclaration?: FileInfo | null;
   checkboxConfirmation?: boolean;
-  pmuRemarks?: string | null;
+  rejectionRemarks?: string | null;
 };
 
 /** Form-level PMU review concerns: review metadata (GET) and complete-form approve/reject. See
@@ -169,7 +169,7 @@ export class FcUnspentPmuReviewService {
       checkboxConfirmation: doc.checkboxConfirmation ?? false,
       currentFormStatus,
       currentFormStatusLabel: getFormStatusLabel(currentFormStatus),
-      pmuRemarks: doc.pmuRemarks ?? null,
+      rejectionRemarks: doc.rejectionRemarks ?? null,
       threshold,
       questions,
       rowSummary,
@@ -222,7 +222,10 @@ export class FcUnspentPmuReviewService {
     }
 
     const blocking = activeRows.filter(
-      (r) => r.rowStatus !== FORM_STATUS.UNDER_REVIEW_BY_PMU && r.rowStatus !== FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+      (r) =>
+        r.rowStatus !== FORM_STATUS.UNDER_REVIEW_BY_PMU &&
+        r.rowStatus !== FORM_STATUS.UNDER_REVIEW_BY_SO &&
+        r.rowStatus !== FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
     );
     if (blocking.length > 0) {
       throwXviFcValidationError({
@@ -243,7 +246,7 @@ export class FcUnspentPmuReviewService {
     const userOid = new Types.ObjectId(user._id);
     const fromStatus = form.currentFormStatus;
     // PMU has no status of its own once approved — see CLAUDE.md's "PMU vs MoHUA" section.
-    const toStatus = FORM_STATUS.UNDER_REVIEW_BY_MOHUA;
+    const toStatus = FORM_STATUS.UNDER_REVIEW_BY_SO;
     const newAuditRevision = form.auditRevision + 1;
 
     const session = await this.formModel.db.startSession();
@@ -254,7 +257,7 @@ export class FcUnspentPmuReviewService {
         form._id,
         stateOid,
         yearOid,
-        toApprove.map((row) => ({ row, newStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA, rejectionRemark: null })),
+        toApprove.map((row) => ({ row, newStatus: FORM_STATUS.UNDER_REVIEW_BY_SO, rejectionRemark: null })),
         userOid,
         ip,
         userAgent,
@@ -288,22 +291,22 @@ export class FcUnspentPmuReviewService {
     });
   }
 
-  /** Requires a non-empty `pmuRemarks`. See CLAUDE.md's "The complete-form approve/reject branch
+  /** Requires a non-empty `rejectionRemarks`. See CLAUDE.md's "The complete-form approve/reject branch
    *  logic" section for the already-approved-rows block. */
   async rejectCompleteForm(
     stateId: string,
     yearId: string,
-    pmuRemarks: string,
+    rejectionRemarks: string,
     user: AuthUser,
     ip: string,
     userAgent: string,
   ): Promise<XviFcApiResponse<FcUnspentPmuSubmitData>> {
     assertPmuReviewerAccess(user);
 
-    const trimmedRemarks = pmuRemarks?.trim();
+    const trimmedRemarks = rejectionRemarks?.trim();
     if (!trimmedRemarks) {
       throwXviFcValidationError({
-        pmuRemarks: [{ field: 'pmuRemarks', code: 'required', message: 'A rejection remark is required.' }],
+        rejectionRemarks: [{ field: 'rejectionRemarks', code: 'required', message: 'A rejection remark is required.' }],
       });
     }
 
@@ -325,7 +328,9 @@ export class FcUnspentPmuReviewService {
     let toReject: Awaited<ReturnType<FcUnspentPmuRowReviewDomainService['getActiveRows']>> = [];
     if (form.isFcUnspent === true) {
       const activeRows = await this.domainService.getActiveRows(form._id);
-      const alreadyActive = activeRows.filter((r) => r.rowStatus === FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
+      const alreadyActive = activeRows.filter(
+        (r) => r.rowStatus === FORM_STATUS.UNDER_REVIEW_BY_SO || r.rowStatus === FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+      );
       if (alreadyActive.length > 0) {
         throwXviFcValidationError({
           _form: [
@@ -395,7 +400,7 @@ export class FcUnspentPmuReviewService {
     const userOid = new Types.ObjectId(user._id);
     const fromStatus = form.currentFormStatus;
     // PMU has no status of its own once approved — see CLAUDE.md's "PMU vs MoHUA" section.
-    const toStatus = FORM_STATUS.UNDER_REVIEW_BY_MOHUA;
+    const toStatus = FORM_STATUS.UNDER_REVIEW_BY_SO;
     const newAuditRevision = form.auditRevision + 1;
 
     const session = await this.formModel.db.startSession();

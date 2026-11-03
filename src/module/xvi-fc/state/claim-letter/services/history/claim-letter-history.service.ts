@@ -5,6 +5,7 @@ import {
   ClaimLetterBatchHistory,
   ClaimLetterBatchHistoryDocument,
   ClaimLetterHistoryActionSource,
+  ClaimLetterRejectedSourceRef,
   ClaimLetterSubmittedFiles,
 } from 'src/schemas/xvi-fc/state/claim-letter-batch-history.schema';
 import type {
@@ -25,6 +26,8 @@ export interface RecordClaimLetterTransitionInput {
   reason?: string | null;
   /** Submit only. */
   submittedFiles?: ClaimLetterSubmittedFiles | null;
+  /** SO return only: each form or row it reopened, with the SO's remark. */
+  rejectedSourceRefs?: ClaimLetterRejectedSourceRef[];
   changedBy: Types.ObjectId;
   requestId: string;
   ipAddress?: string | null;
@@ -55,6 +58,7 @@ export class ClaimLetterHistoryService {
           actionSource: input.actionSource,
           reason: input.reason ?? null,
           submittedFiles: input.submittedFiles ?? null,
+          rejectedSourceRefs: input.rejectedSourceRefs ?? [],
           changedBy: input.changedBy,
           requestId: input.requestId,
           ipAddress: input.ipAddress ?? null,
@@ -64,4 +68,22 @@ export class ClaimLetterHistoryService {
       { session: session ?? null },
     );
   }
+
+  /** The letter's latest return (SO or MoHUA): its remark, what it reopened and who did it (name populated). */
+  async findLatestRejection(claimLetter: Types.ObjectId): Promise<ClaimLetterRejection | null> {
+    return this.historyModel
+      .findOne({ claimLetter, actionSource: 'CLAIM_LETTER_REJECTION' })
+      .sort({ changedAt: -1 })
+      .select('reason rejectedSourceRefs changedBy changedAt')
+      .populate<{ changedBy: { name?: string } | null }>('changedBy', 'name')
+      .lean<ClaimLetterRejection>()
+      .exec();
+  }
+}
+
+export interface ClaimLetterRejection {
+  reason?: string | null;
+  rejectedSourceRefs: ClaimLetterRejectedSourceRef[];
+  changedBy: { name?: string } | null;
+  changedAt: Date;
 }

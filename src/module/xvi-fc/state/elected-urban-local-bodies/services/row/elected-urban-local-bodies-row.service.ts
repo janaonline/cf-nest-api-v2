@@ -268,7 +268,7 @@ export class ElectedUrbanLocalBodiesRowService {
     // transition (+ its row-history entry, via the same `PmuRowReviewHelper.transitionRows` PMU's own
     // actions use) and the parent flip (+ its ROW_RESUBMIT form-history entry) commit atomically with
     // the content edit above, so a crash can never leave content updated but the status stale.
-    const isResubmit = row.rowStatus === FORM_STATUS.RETURNED_BY_PMU;
+    const isResubmit = row.rowStatus === FORM_STATUS.RETURNED_BY_PMU || row.rowStatus === FORM_STATUS.RETURNED_BY_SO;
     const stateOid = new Types.ObjectId(stateId);
     const yearOid = new Types.ObjectId(yearId);
 

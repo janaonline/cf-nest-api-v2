@@ -309,7 +309,7 @@ rationale.
     flags therefore always come back false, and it sees the same statuses as PMU (`canPmuViewForm`).
 - **`PMU_REVIEWABLE_STATUSES`** (`xvi-fc-form-status-access.util.ts`) — wider than the mutate gate:
   PMU keeps read-only visibility into a form even after it moves on to MoHUA (PMU approval has no
-  status of its own; it lands directly on `UNDER_REVIEW_BY_MOHUA`). Includes `RETURNED_BY_PMU`
+  status of its own; it lands on `UNDER_REVIEW_BY_SO` (15), where the form waits for a claim letter; the SO's approval of the letter then moves it to `UNDER_REVIEW_BY_MOHUA`). Includes `RETURNED_BY_PMU`
   (fixed in passing — it was missing, which would have 403'd PMU viewing a form immediately after
   rejecting it) and `NOT_STARTED`/`IN_PROGRESS` (this same constant doubles as the cross-state
   worklist's own `$in` visibility filter in every module's `getWorklist()`, so PMU can see states
@@ -317,7 +317,7 @@ rationale.
   them). Safe to widen this way because `canPmuMutateForm`/`assertCanPmuMutateForm` is a separate,
   still `UNDER_REVIEW_BY_PMU`-only gate — broader view access never implies broader mutate access.
 - **`STATE_EDITABLE_STATUSES`** (`xvi-fc-form-status-access.util.ts`) includes `RETURNED_BY_PMU`
-  alongside the legacy `RETURNED_BY_MOHUA`: all 5 state forms now route through a PMU reviewer
+  alongside the legacy `RETURNED_BY_MOHUA` (and `RETURNED_BY_SO`, 16: a claim letter the SO returned reopens its State forms for correction, resubmitted back to PMU): all 5 state forms now route through a PMU reviewer
   before MoHUA, and a PMU rejection must send the state back into edit/resubmit mode the same way a
   MoHUA rejection always has, or the form would be permanently stuck. Mirrors `ULB_EDITABLE_STATUSES`
   already coexisting on two "returned" stages for the same reason.

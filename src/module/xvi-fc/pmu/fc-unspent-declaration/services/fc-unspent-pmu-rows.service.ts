@@ -164,7 +164,7 @@ export class FcUnspentPmuRowsService {
         form._id,
         stateOid,
         yearOid,
-        rows.map((row) => ({ row, newStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA, rejectionRemark: null })),
+        rows.map((row) => ({ row, newStatus: FORM_STATUS.UNDER_REVIEW_BY_SO, rejectionRemark: null })),
         userOid,
         ip,
         userAgent,
@@ -179,7 +179,7 @@ export class FcUnspentPmuRowsService {
         userAgent,
         session,
       );
-      approved = result.settled && result.currentFormStatus === FORM_STATUS.UNDER_REVIEW_BY_MOHUA;
+      approved = result.settled && result.currentFormStatus === FORM_STATUS.UNDER_REVIEW_BY_SO;
       currentFormStatus = result.currentFormStatus;
 
       await session.commitTransaction();

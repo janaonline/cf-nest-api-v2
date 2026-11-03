@@ -264,31 +264,31 @@ describe('FcUnspentPmuReviewService', () => {
       expect(result.data!.permissions.canRejectForm).toBe(false);
     });
 
-    it('surfaces a previously-stored pmuRemarks (e.g. while RETURNED_BY_PMU), null when absent', async () => {
+    it('surfaces a previously-stored rejectionRemarks (e.g. while RETURNED_BY_PMU), null when absent', async () => {
       formModel['findOne'] = jest.fn().mockReturnValue(
         q({
           _id: formOid,
           currentFormStatus: FORM_STATUS.RETURNED_BY_PMU,
           isFcUnspent: true,
-          pmuRemarks: 'Please redo section 2.',
+          rejectionRemarks: 'Please redo section 2.',
         }),
       );
       const result = await service.getReviewMetadata(stateOid.toString(), yearOid.toString(), pmuUser);
-      expect(result.data!.pmuRemarks).toBe('Please redo section 2.');
+      expect(result.data!.rejectionRemarks).toBe('Please redo section 2.');
 
       formModel['findOne'] = jest
         .fn()
         .mockReturnValue(q({ _id: formOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU, isFcUnspent: true }));
       const result2 = await service.getReviewMetadata(stateOid.toString(), yearOid.toString(), pmuUser);
-      expect(result2.data!.pmuRemarks).toBeNull();
+      expect(result2.data!.rejectionRemarks).toBeNull();
     });
 
     it('remains viewable once approved', async () => {
       formModel['findOne'] = jest
         .fn()
-        .mockReturnValue(q({ _id: formOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA, isFcUnspent: true }));
+        .mockReturnValue(q({ _id: formOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_SO, isFcUnspent: true }));
       const result = await service.getReviewMetadata(stateOid.toString(), yearOid.toString(), pmuUser);
-      expect(result.data!.currentFormStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
+      expect(result.data!.currentFormStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_SO);
     });
 
     it('returns a zero row summary for a No-branch form', async () => {
@@ -350,7 +350,7 @@ describe('FcUnspentPmuReviewService', () => {
     it('withholds mutation permissions once the form is approved (settled terminal state for this stage)', async () => {
       formModel['findOne'] = jest
         .fn()
-        .mockReturnValue(q({ _id: formOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA, isFcUnspent: true }));
+        .mockReturnValue(q({ _id: formOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_SO, isFcUnspent: true }));
       const result = await service.getReviewMetadata(stateOid.toString(), yearOid.toString(), pmuUser);
       expect(result.data!.permissions.canView).toBe(true);
       expect(result.data!.permissions.canApproveForm).toBe(false);
@@ -384,7 +384,7 @@ describe('FcUnspentPmuReviewService', () => {
     it('blocks mutation when the form is not UNDER_REVIEW_BY_PMU (approved terminal gate)', async () => {
       domainService['findForm'] = jest
         .fn()
-        .mockResolvedValue(makeForm({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }));
+        .mockResolvedValue(makeForm({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_SO }));
       await expect(
         service.approveCompleteForm(stateOid.toString(), yearOid.toString(), pmuUser, '127.0.0.1', 'jest'),
       ).rejects.toThrow(ForbiddenException);
@@ -413,7 +413,7 @@ describe('FcUnspentPmuReviewService', () => {
       expect(domainService['transitionRows']).not.toHaveBeenCalled();
       expect(domainService['transitionParent']).toHaveBeenCalledWith(
         formOid,
-        FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+        FORM_STATUS.UNDER_REVIEW_BY_SO,
         undefined,
         2,
         userOid,
@@ -421,7 +421,7 @@ describe('FcUnspentPmuReviewService', () => {
       );
       expect(domainService['insertParentHistory']).toHaveBeenCalled();
       expect(mockSession.commitTransaction).toHaveBeenCalled();
-      expect(result.data!.currentFormStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
+      expect(result.data!.currentFormStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_SO);
     });
 
     it('Yes-branch: blocks when there are zero active rows', async () => {
@@ -458,7 +458,7 @@ describe('FcUnspentPmuReviewService', () => {
 
     it('Yes-branch: transitions only PENDING rows to APPROVED, leaves already-APPROVED rows untouched', async () => {
       const pending = makeRow({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU });
-      const approved = makeRow({ _id: new Types.ObjectId(), rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA });
+      const approved = makeRow({ _id: new Types.ObjectId(), rowStatus: FORM_STATUS.UNDER_REVIEW_BY_SO });
       domainService['getActiveRows'] = jest.fn().mockResolvedValue([pending, approved]);
 
       await service.approveCompleteForm(stateOid.toString(), yearOid.toString(), pmuUser, '127.0.0.1', 'jest');
@@ -478,7 +478,7 @@ describe('FcUnspentPmuReviewService', () => {
 
       expect(domainService['transitionParent']).toHaveBeenCalledWith(
         formOid,
-        FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+        FORM_STATUS.UNDER_REVIEW_BY_SO,
         undefined,
         2,
         userOid,
@@ -507,7 +507,7 @@ describe('FcUnspentPmuReviewService', () => {
   // ─── rejectCompleteForm ─────────────────────────────────────────────────────
 
   describe('rejectCompleteForm', () => {
-    it('requires a non-empty pmuRemarks', async () => {
+    it('requires a non-empty rejectionRemarks', async () => {
       await expect(
         service.rejectCompleteForm(stateOid.toString(), yearOid.toString(), '   ', pmuUser, '127.0.0.1', 'jest'),
       ).rejects.toThrow(BadRequestException);
@@ -516,13 +516,13 @@ describe('FcUnspentPmuReviewService', () => {
     it('blocks mutation when the form is already approved', async () => {
       domainService['findForm'] = jest
         .fn()
-        .mockResolvedValue(makeForm({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }));
+        .mockResolvedValue(makeForm({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_SO }));
       await expect(
         service.rejectCompleteForm(stateOid.toString(), yearOid.toString(), 'Fix this.', pmuUser, '127.0.0.1', 'jest'),
       ).rejects.toThrow(ForbiddenException);
     });
 
-    it('No-branch: returns to RETURNED_BY_PMU and stores pmuRemarks', async () => {
+    it('No-branch: returns to RETURNED_BY_PMU and stores rejectionRemarks', async () => {
       domainService['findForm'] = jest.fn().mockResolvedValue(makeForm({ isFcUnspent: false }));
 
       const result = await service.rejectCompleteForm(
@@ -548,7 +548,7 @@ describe('FcUnspentPmuReviewService', () => {
     it('Yes-branch: blocks when any active row has already been approved', async () => {
       domainService['getActiveRows'] = jest
         .fn()
-        .mockResolvedValue([makeRow({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA })]);
+        .mockResolvedValue([makeRow({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_SO })]);
       await expect(
         service.rejectCompleteForm(stateOid.toString(), yearOid.toString(), 'Fix this.', pmuUser, '127.0.0.1', 'jest'),
       ).rejects.toThrow(BadRequestException);

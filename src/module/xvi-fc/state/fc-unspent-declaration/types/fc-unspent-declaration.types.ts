@@ -75,8 +75,7 @@ export interface FcUnspentDeclarationGetResponseData {
   /** DB-driven metadata for the 9 ULB row-table columns (ulbId, unspentAmount, previousFcUnspentBalance, censusCode, sbCode, ulbName, allocationAmount, allocationPerc, eligibility). Metadata only — does not replace FcUnspentDeclarationRowService's own row validation. */
   rowEditFields: FieldConfig[];
   unspentUlbData: FcUnspentUlbRowResponse[];
-  pmuRemarks: string | null;
-  mohuaRemarks: string | null;
+  rejectionRemarks: string | null;
 }
 
 export interface FcUnspentUlbOption {

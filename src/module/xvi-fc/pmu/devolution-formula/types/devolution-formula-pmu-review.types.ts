@@ -26,7 +26,7 @@ export interface DevolutionFormulaPmuReviewData {
   currentFormStatus: number;
   currentFormStatusLabel: string;
   /** Set on PMU reject, never cleared until the next transition overwrites it. */
-  pmuRemarks: string | null;
+  rejectionRemarks: string | null;
   /** The 3 `DF_MAIN_FORM_FIELDS` summary fields (`ulbCount`, `excelFile`, `checkboxConfirmation`)
    *  — not the per-ULB row data, which stays reviewed via the read-only rows table (see CLAUDE.md's
    *  "Read-only row access" section). `ulbCount`'s value is always the live-computed count, same as

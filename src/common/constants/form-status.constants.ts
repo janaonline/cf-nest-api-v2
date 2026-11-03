@@ -18,6 +18,14 @@ export const FORM_STATUS = {
   /** PMU review stage for state-level forms */
   UNDER_REVIEW_BY_PMU: 13,
   RETURNED_BY_PMU: 14,
+  /**
+   * MoHUA Section Officer (SO) review. State forms land here when PMU approves (ready for a claim letter);
+   * a claim letter lands here when the State submits it. The SO approving the letter moves the letter and its
+   * forms on to 5.
+   */
+  UNDER_REVIEW_BY_SO: 15,
+  /** The SO returned the claim letter. Its State and ULB forms both land here; shown to users as "Returned for Correction". */
+  RETURNED_BY_SO: 16,
 } as const;
 
 export type FormStatusType = (typeof FORM_STATUS)[keyof typeof FORM_STATUS];
@@ -50,6 +58,8 @@ export const FORM_STATUS_LABELS: Readonly<Record<FormStatusType, string>> = {
   [FORM_STATUS.EXEMPTED_ACKNOWLEDGED]: 'Exempted',
   [FORM_STATUS.UNDER_REVIEW_BY_PMU]: 'Under Review by PMU',
   [FORM_STATUS.RETURNED_BY_PMU]: 'Returned by PMU',
+  [FORM_STATUS.UNDER_REVIEW_BY_SO]: 'Under Review by SO',
+  [FORM_STATUS.RETURNED_BY_SO]: 'Returned for Correction',
 };
 
 /**
@@ -99,6 +109,7 @@ export function getDefaultOwnerForStatus(status: number): string | null {
     case FORM_STATUS.UNDER_REVIEW_BY_STATE:
       return 'STATE';
     case FORM_STATUS.UNDER_REVIEW_BY_MOHUA:
+    case FORM_STATUS.UNDER_REVIEW_BY_SO:
       return 'MoHUA';
     case FORM_STATUS.APPROVED_BY_STATE:
       return 'STATE';
@@ -106,7 +117,9 @@ export function getDefaultOwnerForStatus(status: number): string | null {
       return 'PMU';
     case FORM_STATUS.RETURNED_BY_PMU:
       return 'STATE';
+    // RETURNED_BY_SO: State and ULB forms both land here, so no single owner fits.
     case FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA:
+    case FORM_STATUS.RETURNED_BY_SO:
     case FORM_STATUS.NO_STATUS:
     case FORM_STATUS.AWAITING_CLAIM_LETTER:
     case FORM_STATUS.UNDO:

@@ -701,7 +701,7 @@ export class ElectedUrbanLocalBodiesExcelService {
   // ─── Helpers ─────────────────────────────────────────────────────────────────
 
   /**
-   * Once PMU has approved at least one row (`UNDER_REVIEW_BY_MOHUA`), this form's Excel can no
+   * Once PMU has approved at least one row (`UNDER_REVIEW_BY_SO`, or `UNDER_REVIEW_BY_MOHUA` once a claim letter moves it on), this form's Excel can no
    * longer be wholesale re-uploaded or revalidated-in-place — both mechanisms replace/rewrite the
    * entire active dataset version with no per-row concept, which would silently clobber or delete an
    * already-approved row's data. Further editing of a mixed-outcome submission must go through the
@@ -711,7 +711,12 @@ export class ElectedUrbanLocalBodiesExcelService {
    */
   private async assertNoLockedRows(formId: Types.ObjectId, datasetVersion: number): Promise<void> {
     const hasLockedRows = await this.rowModel
-      .exists({ form: formId, datasetVersion, isActive: true, rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA })
+      .exists({
+        form: formId,
+        datasetVersion,
+        isActive: true,
+        rowStatus: { $in: [FORM_STATUS.UNDER_REVIEW_BY_SO, FORM_STATUS.UNDER_REVIEW_BY_MOHUA] },
+      })
       .exec();
     if (hasLockedRows) {
       throwXviFcValidationError({

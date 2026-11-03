@@ -60,8 +60,7 @@ export interface DfFormGetResponseData {
   rowEditFields: FieldConfig[];
   installmentAccess: DfInstallmentAccess;
   meta: { version: number };
-  pmuRemarks: string | null;
-  mohuaRemarks: string | null;
+  rejectionRemarks: string | null;
 }
 
 export interface DfRowError {
@@ -121,8 +120,7 @@ export interface DfFormLeanDoc {
   errorExcelFile?: FileInfo;
   checkboxConfirmation?: boolean;
   ulbCount?: number;
-  mohuaRemarks?: string | null;
-  pmuRemarks?: string | null;
+  rejectionRemarks?: string | null;
 }
 
 export interface DfDumpRow {

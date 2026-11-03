@@ -70,8 +70,8 @@ export interface GetRowStatusTallyParams<TRowDoc> {
 export interface RowStatusTally {
   /** Still `UNDER_REVIEW_BY_PMU` — PMU hasn't decided this row yet. */
   pending: number;
-  /** `UNDER_REVIEW_BY_MOHUA` — PMU has no terminal status of its own, so an approved row lands
-   *  directly here. */
+  /** `UNDER_REVIEW_BY_SO` (or `UNDER_REVIEW_BY_MOHUA` for rows PMU approved before the SO stage existed) —
+   *  PMU has no terminal status of its own, so an approved row lands directly here. */
   approved: number;
   /** `RETURNED_BY_PMU`. */
   rejected: number;
@@ -94,7 +94,7 @@ export interface GetRowSummaryParams<TRowDoc> {
  */
 export function resolveSettledFormStatus(tally: RowStatusTally): number | null {
   if (tally.pending > 0) return null;
-  return tally.rejected > 0 ? FORM_STATUS.RETURNED_BY_PMU : FORM_STATUS.UNDER_REVIEW_BY_MOHUA;
+  return tally.rejected > 0 ? FORM_STATUS.RETURNED_BY_PMU : FORM_STATUS.UNDER_REVIEW_BY_SO;
 }
 
 /**
@@ -217,7 +217,12 @@ export class PmuRowReviewHelper {
     for (const row of rows) {
       if (row.rowStatus === FORM_STATUS.UNDER_REVIEW_BY_PMU) tally.pending += 1;
       else if (row.rowStatus === FORM_STATUS.RETURNED_BY_PMU) tally.rejected += 1;
-      else if (row.rowStatus === FORM_STATUS.UNDER_REVIEW_BY_MOHUA) tally.approved += 1;
+      else if (
+        row.rowStatus === FORM_STATUS.UNDER_REVIEW_BY_SO ||
+        row.rowStatus === FORM_STATUS.UNDER_REVIEW_BY_MOHUA
+      ) {
+        tally.approved += 1;
+      }
     }
     return tally;
   }
@@ -263,6 +268,7 @@ export class PmuRowReviewHelper {
         else summary.ineligible += 1;
       }
       switch (row.rowStatus) {
+        case FORM_STATUS.UNDER_REVIEW_BY_SO:
         case FORM_STATUS.UNDER_REVIEW_BY_MOHUA:
           summary.active += 1;
           break;

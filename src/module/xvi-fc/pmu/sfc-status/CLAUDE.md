@@ -43,11 +43,11 @@ PMU review controller in `xvi-fc`.
 
 - Approve: `UNDER_REVIEW_BY_PMU` → `UNDER_REVIEW_BY_MOHUA` directly (no PMU "approved" status —
   see the purpose paragraph above).
-- Reject: `UNDER_REVIEW_BY_PMU` → `RETURNED_BY_PMU`, with `pmuRemarks` set from the request body.
+- Reject: `UNDER_REVIEW_BY_PMU` → `RETURNED_BY_PMU`, with `rejectionRemarks` set from the request body.
   `form-status.constants.ts`'s `getActorForStatus` maps `RETURNED_BY_PMU` to `'STATE'`, confirming
   the state is expected to act on it next (this module doesn't re-verify the state-side edit gate
   itself — that's `state/sfc-status`'s own `assertCanStateEditForm`).
-- `pmuRemarks` is only ever set by `rejectCompleteForm`'s `$set`; nothing in this module clears it
+- `rejectionRemarks` is only ever set by `rejectCompleteForm`'s `$set`; nothing in this module clears it
   on a later approve, so a form that was once rejected and later approved will still carry the
   stale remark in storage even though the UI/worklist no longer surfaces it as the active reason
   (current status has moved past `RETURNED_BY_PMU`). Not treated as a bug here — same
@@ -74,7 +74,7 @@ in this folder is load-bearing enough to warrant a `docs/adr/`.
   subfolders) — this module reads *and writes* `state/sfc-status`'s own `XviFcSfcStatus`
   (`xvifc_sfc`) and `XviFcSfcStatusHistory` (`xvifc_sfc_logs`) collections directly, via its own
   model registrations (not an import of `state/sfc-status`'s module).
-- Writes only `currentFormStatus`, `updatedBy`, and (on reject) `pmuRemarks` via `$set`. Never
+- Writes only `currentFormStatus`, `updatedBy`, and (on reject) `rejectionRemarks` via `$set`. Never
   writes or re-snapshots `data` — the state's form payload — at all; only reads it to surface in
   the GET review response (see the "history insert omits `data`" bullet above).
 - Any change to `XviFcSfcStatus`'s field names/shape in `state/sfc-status` directly affects this
