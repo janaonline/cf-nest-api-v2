@@ -315,6 +315,13 @@ describe('ClaimLetterDocumentService', () => {
       });
     });
 
+    it('opens the body in the first person, on behalf of the State', async () => {
+      const { data } = await service.getDocument(claimLetterId, stateUser);
+      expect(text(data!.letter.body[0])).toMatch(
+        /^I am directed on behalf of the State to submit herewith the claim of the Government of /,
+      );
+    });
+
     it('builds the claim amount in lakh and words from the batch claims', async () => {
       const { data } = await service.getDocument(claimLetterId, stateUser);
       expect(text(data!.letter.body[1])).toContain('₹1,296.00 lakh (Rupees Twelve Crore Ninety-Six Lakh only)');
