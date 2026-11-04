@@ -8,8 +8,9 @@ export class GetClaimLetterUlbOptionsQueryDto {
   search?: string;
 
   @IsOptional()
-  @IsIn(['ELIGIBLE', 'INELIGIBLE'])
-  eligibilityFilter?: 'ELIGIBLE' | 'INELIGIBLE';
+  // INELIGIBLE leaves out ULBs in another batch; IN_OTHER_BATCH lists only them.
+  @IsIn(['ELIGIBLE', 'INELIGIBLE', 'IN_OTHER_BATCH'])
+  eligibilityFilter?: 'ELIGIBLE' | 'INELIGIBLE' | 'IN_OTHER_BATCH';
 
   // Excludes this draft's own locks from the "locked elsewhere" filter, so a draft's already-
   // selected ULBs still show as eligible/selectable.
