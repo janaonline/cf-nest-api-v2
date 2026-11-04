@@ -33,8 +33,9 @@ Each decision below is cited from several files; read the ADR, not just the loca
   and the letter always evaluate fresh.
 - `services/main/claim-letter.service.ts` - read paths (eligibility summary, claim context, detail,
   history) and the signed-file upload.
-- `services/ulb-options/` - the ULB picker: every expected ULB with its ineligibility reason,
-  eligible first.
+- `services/ulb-options/` - the ULB picker: every expected ULB with its ineligibility reason. A ULB
+  locked in another batch carries that batch's number (`claimedInBatch`), whatever its eligibility;
+  order is eligible, ineligible, then in another batch.
 - `services/ulb-rows/` - the batch's selected-ULB table, with a display-only eligibility re-check.
 - `services/submit/` - submit (`IN_PROGRESS -> UNDER_REVIEW_BY_MOHUA`) and its checks (ADR 0003).
 - `services/active-batch/` - the one-active-batch rule (ADR 0004); no other file decides it.
@@ -87,6 +88,9 @@ two can never disagree; the frontend renders the backend's text verbatim.
   review and "Exempted" once approved (ADR 0005).
 - Dates the State picks are stored as UTC-midnight ISO strings and printed "07 Oct 2026" with UTC
   getters (fixed month names, no locale); the as-on stamp is IST ("07 Oct 2026, 14:30").
+- Names: each one names the State, FY, installment and batch. `fileBaseName` is
+  `CF_TR_2026-27_1-1`, the printed Ref No `CL/TR/2026-27/1-1`, and the .docx, the final PDF download
+  and its stored `originalName` `CF_Tripura_Claim-letter-1-1_2026-27`.
 
 ## Letter details
 

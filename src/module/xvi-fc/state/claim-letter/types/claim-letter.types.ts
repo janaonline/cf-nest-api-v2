@@ -10,6 +10,7 @@ import type {
 import type { FieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
 import type { PriorFcCycleLabel } from 'src/module/xvi-fc/state/fc-unspent-declaration/helpers/fc-unspent-declaration-cycle.helpers';
 import type {
+  ClaimLetterClaimedBatch,
   ClaimLetterExemptionNote,
   ClaimLetterFinancialOverview,
 } from '../services/eligibility/claim-letter-eligibility.service';
@@ -29,6 +30,8 @@ export interface ClaimLetterUlbOption {
   ineligibleReasonDetail: string | null;
   /** Exemptions under MoHUA review or rejected (row badges). */
   exemptionNotes: ClaimLetterExemptionNote[];
+  /** Set when the ULB is locked in another batch (reason ALREADY_LOCKED_IN_ANOTHER_CLAIM). */
+  claimedInBatch: ClaimLetterClaimedBatch | null;
 }
 
 /** Display-ready selected-ULB table row (matches the FC Unspent Yes-branch table). */

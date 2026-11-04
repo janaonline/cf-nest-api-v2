@@ -187,6 +187,12 @@ describe('ClaimLetterFinalPdfService', () => {
     expect(savedFinalPdf()).toMatchObject({ sourceKey: data!.sourceKey, pageCount: 7 });
   });
 
+  it('stores the merged copy under the same name as the download', async () => {
+    const { data } = await service.getFinalPdf(claimLetterId, user);
+
+    expect((savedFinalPdf()['file'] as { originalName: string }).originalName).toBe(data!.fileName);
+  });
+
   it("finds each document through its form's claimEligibility source, GTC by installment, falling back across file keys", async () => {
     await service.getFinalPdf(claimLetterId, user);
 
