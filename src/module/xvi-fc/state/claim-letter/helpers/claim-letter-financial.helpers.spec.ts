@@ -110,8 +110,9 @@ describe('amountsAreEqual', () => {
 });
 
 describe('buildClaimLetterFileBaseName', () => {
-  it('formats as CF_<statecode>_<designyear>_<installment>', () => {
-    expect(buildClaimLetterFileBaseName('KA', '2026-27', 1)).toBe('CF_KA_2026-27_1');
+  it('formats as CF_<statecode>_<designyear>_<installment>-<batchnumber>', () => {
+    expect(buildClaimLetterFileBaseName('KA', '2026-27', 1, 1)).toBe('CF_KA_2026-27_1-1');
+    expect(buildClaimLetterFileBaseName('KA', '2026-27', 1, 3)).toBe('CF_KA_2026-27_1-3');
   });
 });
 

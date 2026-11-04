@@ -8,6 +8,7 @@ import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Permission, Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
 import { resolveStateScopeFilter } from 'src/module/xvi-fc/common/utils/xvi-fc-scope-filter.util';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 import { State, type StateDocument } from 'src/schemas/state.schema';
 import { Ulb, type UlbDocument } from 'src/schemas/ulb.schema';
 import { Year, type YearDocument } from 'src/schemas/year.schema';
@@ -179,6 +180,7 @@ export class StateDashboardService {
     private readonly slbFormModel: Model<SlbFormDocument>,
     @InjectModel(XviFcDur.name)
     private readonly durModel: Model<XviFcDurDocument>,
+    private readonly ulbEligibilityService: UlbEligibilityService,
   ) {}
 
   async getDashboard(params: GetStateDashboardParamsDto, user: AuthUser): Promise<StateDashboardApiResponse> {
@@ -237,8 +239,8 @@ export class StateDashboardService {
   /**
    * Combined "every ULB × every ULB-facing form" Excel workbook — one row per ULB with its status
    * on each of Audited/Provisional Annual Account, PFMS Bank Account, and SLB, for the "Export
-   * Data" button on the Review ULB Submissions page. Always the full, unfiltered ULB list for the
-   * state/year — unlike the per-form exports it replaces, this ignores the page's own
+   * Data" button on the Review ULB Submissions page. Always the full, XVIFC-eligible ULB list for
+   * the state/year — unlike the per-form exports it replaces, this ignores the page's own
    * form/bucket/search state.
    */
   async exportAllFormsCsv(dto: ExportAllFormsQueryDto, user: AuthUser): Promise<{ fileName: string; buffer: Buffer }> {
@@ -253,7 +255,11 @@ export class StateDashboardService {
     const stateId = resolveStateScopeFilter(user, dto.stateId);
     const yearObjectId = new Types.ObjectId(dto.designYearId);
 
-    const ulbMatch: Record<string, unknown> = { isActive: true };
+    const ineligibleUlbTypeIds = await this.ulbEligibilityService.getIneligibleUlbTypeIds('XVIFC');
+    const ulbMatch: Record<string, unknown> = {
+      isActive: true,
+      ...(ineligibleUlbTypeIds.length ? { ulbType: { $nin: ineligibleUlbTypeIds } } : {}),
+    };
     if (stateId) ulbMatch.state = stateId;
 
     const [ulbs, stateDoc, yearDoc] = await Promise.all([
@@ -560,8 +566,13 @@ export class StateDashboardService {
   }
 
   private async loadActiveUlbIds(stateId: string): Promise<string[]> {
+    const ineligibleUlbTypeIds = await this.ulbEligibilityService.getIneligibleUlbTypeIds('XVIFC');
     const records = await this.ulbModel
-      .find({ state: new Types.ObjectId(stateId), isActive: true })
+      .find({
+        state: new Types.ObjectId(stateId),
+        isActive: true,
+        ...(ineligibleUlbTypeIds.length ? { ulbType: { $nin: ineligibleUlbTypeIds } } : {}),
+      })
       .select({ _id: 1 })
       .lean<ActiveUlbRecord[]>()
       .exec();

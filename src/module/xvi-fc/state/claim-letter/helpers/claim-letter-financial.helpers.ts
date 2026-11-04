@@ -38,9 +38,15 @@ export function amountsAreEqual(a: number, b: number): boolean {
   return a === b;
 }
 
-/** File base name format: `CF_<statecode>_<designyear>_<installmentno>`. */
-export function buildClaimLetterFileBaseName(stateCode: string, designYearLabel: string, installment: 1 | 2): string {
-  return `CF_${stateCode}_${designYearLabel}_${installment}`;
+/** `CF_<statecode>_<designyear>_<installment>-<batchnumber>`, the same `1-1` as the Ref No and the
+ *  download names, so each batch has its own name. */
+export function buildClaimLetterFileBaseName(
+  stateCode: string,
+  designYearLabel: string,
+  installment: 1 | 2,
+  batchNumber: number,
+): string {
+  return `CF_${stateCode}_${designYearLabel}_${installment}-${batchNumber}`;
 }
 
 /** `CL/<statecode>/<designyear>/<installment>-<batchnumber>`: built from the batch's unique key, so

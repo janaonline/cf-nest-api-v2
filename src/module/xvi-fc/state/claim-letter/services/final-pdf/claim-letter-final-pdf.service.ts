@@ -219,13 +219,14 @@ export class ClaimLetterFinalPdfService {
     sourceKey: string,
   ): Promise<{ finalPdf: ClaimLetterFinalPdf; bytes: Buffer }> {
     const present = sources.filter((s): s is FinalPdfSource & { path: string } => s.path !== null);
-    const { bytes, pageCount } = await this.merge(present);
+    const [{ bytes, pageCount }, originalName] = await Promise.all([this.merge(present), this.fileName(parent)]);
     const s3Key = `state/claim-letter-final-pdfs/${String(parent._id)}/${sourceKey.slice(0, 16)}.pdf`;
     await this.s3Service.uploadPrivate(s3Key, bytes, 'application/pdf');
 
     const now = new Date();
     const file: FileInfo = {
-      originalName: `claim-letter-final-batch-${parent.batchNumber}.pdf`,
+      // The download name, so the stored copy names the State, FY, installment and batch too.
+      originalName,
       name: '',
       path: s3Key,
       mimeType: 'application/pdf',

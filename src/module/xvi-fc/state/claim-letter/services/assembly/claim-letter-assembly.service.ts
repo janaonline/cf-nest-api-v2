@@ -283,6 +283,7 @@ export class ClaimLetterAssemblyService {
         (stateDoc as { code: string }).code,
         yearDoc.year,
         installment as 1 | 2,
+        batchNumber,
       );
 
       let parent: ClaimLetterBatchDocument;
@@ -1520,6 +1521,7 @@ export class ClaimLetterAssemblyService {
         (stateDoc as { code: string }).code,
         yearDoc.year,
         installment as 1 | 2,
+        batchNumber,
       );
 
       let parent: ClaimLetterBatchDocument;

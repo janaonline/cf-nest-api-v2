@@ -87,7 +87,7 @@ export class ClaimLetterController {
 
   @ApiOperation({ summary: 'Get paginated/searchable ULB options for the claim-letter select dialog' })
   @ApiQuery({ name: 'search', required: false })
-  @ApiQuery({ name: 'eligibilityFilter', required: false, enum: ['ELIGIBLE', 'INELIGIBLE'] })
+  @ApiQuery({ name: 'eligibilityFilter', required: false, enum: ['ELIGIBLE', 'INELIGIBLE', 'IN_OTHER_BATCH'] })
   @ApiQuery({ name: 'claimLetterId', required: false })
   @ApiQuery({ name: 'page', required: false })
   @ApiQuery({ name: 'limit', required: false })
