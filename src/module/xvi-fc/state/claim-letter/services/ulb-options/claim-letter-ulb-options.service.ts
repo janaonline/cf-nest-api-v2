@@ -14,8 +14,8 @@ import { ClaimLetterEligibilityService } from '../eligibility/claim-letter-eligi
 import type { GetClaimLetterUlbOptionsQueryDto } from '../../dto/get-claim-letter-ulb-options-query.dto';
 import type { ClaimLetterUlbOption } from '../../types/claim-letter.types';
 
-/** Every expected ULB, flagged and sorted eligible-first, so the dialog shows ineligible rows disabled
- *  (FC Unspent's picker omits them instead). */
+/** Every expected ULB, sorted eligible, ineligible, then in another batch, so the dialog shows the
+ *  last two disabled (FC Unspent's picker omits them instead). */
 @Injectable()
 export class ClaimLetterUlbOptionsService {
   constructor(
@@ -35,11 +35,12 @@ export class ClaimLetterUlbOptionsService {
 
     // Display-only, so the cached eligibility is fine; create re-checks fresh.
     const expectedUlbsPromise = this.expectedUlbSetService.resolve(stateId, yearId);
-    const [expectedUlbs, gate, allocationByUlbId, lockedElsewhereUlbIds, ulbLevelEligibility] = await Promise.all([
+    const [expectedUlbs, gate, allocationByUlbId, claimedBatchByUlbId, ulbLevelEligibility] = await Promise.all([
       expectedUlbsPromise,
       this.eligibilityService.evaluateStateLevelGateForDisplay(stateId, yearId, installment),
       this.eligibilityService.resolveDevolutionAllocations(stateId, yearId, installment),
-      this.resolveLockedElsewhereUlbIds(stateId, yearId, installment, query.claimLetterId),
+      // Leaves out this draft's own locks, so its picks stay selectable.
+      this.eligibilityService.resolveClaimedUlbBatches(stateId, yearId, installment, query.claimLetterId),
       expectedUlbsPromise.then((ulbs) => {
         const ids = ulbs.map((u) => u.ulbId);
         return this.eligibilityService.resolveUlbLevelEligibilityForDisplay(
@@ -56,14 +57,15 @@ export class ClaimLetterUlbOptionsService {
 
     let options: ClaimLetterUlbOption[] = expectedUlbs.map((ulb) => {
       const allocation = allocationByUlbId.get(ulb.ulbId);
-      const alreadyLocked = lockedElsewhereUlbIds.has(ulb.ulbId);
+      const claimedInBatch = claimedBatchByUlbId.get(ulb.ulbId) ?? null;
       const passesUlbLevelCriteria = ulbLevelEligibility.perUlbEligible.get(ulb.ulbId) ?? true;
 
+      // A claimed ULB stays claimed whatever its eligibility, so that reason comes first.
       let ineligibleReasonCode: string | null = null;
       let ineligibleReasonDetail: string | null = null;
-      if (!gate.passed) ineligibleReasonCode = stateGateFailureReason;
+      if (claimedInBatch) ineligibleReasonCode = 'ALREADY_LOCKED_IN_ANOTHER_CLAIM';
+      else if (!gate.passed) ineligibleReasonCode = stateGateFailureReason;
       else if (!allocation) ineligibleReasonCode = 'NO_DEVOLUTION_ALLOCATION';
-      else if (alreadyLocked) ineligibleReasonCode = 'ALREADY_LOCKED_IN_ANOTHER_CLAIM';
       else if (!passesUlbLevelCriteria) {
         ineligibleReasonCode = 'ULB_LEVEL_ELIGIBILITY_CRITERIA_NOT_MET';
         const failedCriteria = ulbLevelEligibility.perUlbFailedCriteria.get(ulb.ulbId) ?? [];
@@ -81,6 +83,7 @@ export class ClaimLetterUlbOptionsService {
         ineligibleReasonCode,
         ineligibleReasonDetail,
         exemptionNotes: ulbLevelEligibility.perUlbExemptionNotes.get(ulb.ulbId) ?? [],
+        claimedInBatch,
       };
     });
 
@@ -94,12 +97,11 @@ export class ClaimLetterUlbOptionsService {
     }
 
     if (query.eligibilityFilter === 'ELIGIBLE') options = options.filter((o) => o.eligible);
-    else if (query.eligibilityFilter === 'INELIGIBLE') options = options.filter((o) => !o.eligible);
+    else if (query.eligibilityFilter === 'INELIGIBLE')
+      options = options.filter((o) => !o.eligible && !o.claimedInBatch);
+    else if (query.eligibilityFilter === 'IN_OTHER_BATCH') options = options.filter((o) => o.claimedInBatch !== null);
 
-    options.sort((a, b) => {
-      if (a.eligible !== b.eligible) return a.eligible ? -1 : 1;
-      return a.ulbName.localeCompare(b.ulbName);
-    });
+    options.sort((a, b) => sortGroup(a) - sortGroup(b) || a.ulbName.localeCompare(b.ulbName));
 
     const page = query.page ?? CLAIM_LETTER_PAGINATION_DEFAULT_PAGE;
     const limit = query.limit ?? CLAIM_LETTER_PAGINATION_DEFAULT_LIMIT;
@@ -108,13 +110,10 @@ export class ClaimLetterUlbOptionsService {
 
     return xviFcSuccess('ULB options fetched.', paged, { page, limit, total });
   }
+}
 
-  private resolveLockedElsewhereUlbIds(
-    stateId: string,
-    yearId: string,
-    installment: number,
-    excludeClaimLetterId?: string,
-  ): Promise<Set<string>> {
-    return this.eligibilityService.resolveClaimedUlbIds(stateId, yearId, installment, excludeClaimLetterId);
-  }
+/** Eligible 0, ineligible 1, in another batch 2. */
+function sortGroup(option: ClaimLetterUlbOption): number {
+  if (option.eligible) return 0;
+  return option.claimedInBatch ? 2 : 1;
 }

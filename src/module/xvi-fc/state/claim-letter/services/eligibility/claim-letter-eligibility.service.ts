@@ -87,6 +87,11 @@ export interface ClaimLetterExemptionNote {
   status: 'UNDER_REVIEW' | 'REJECTED';
 }
 
+/** The batch a ULB is locked in; null only when that batch could not be read. */
+export interface ClaimLetterClaimedBatch {
+  batchNumber: number | null;
+}
+
 /** One ULB-bulk criterion with every ULB's bucket, for the claim letter's annexure tables. */
 export interface ClaimLetterCriterionDetail {
   formId: number;
@@ -436,6 +441,50 @@ export class ClaimLetterEligibilityService {
     installment: number,
     excludeClaimLetterId?: string,
   ): Promise<Set<string>> {
+    const locks = await this.ulbLockModel
+      .find(this.claimedLockFilter(stateId, designYearId, installment, excludeClaimLetterId))
+      .select('ulbId')
+      .lean<{ ulbId: Types.ObjectId }[]>()
+      .exec();
+    return new Set(locks.map((l) => String(l.ulbId)));
+  }
+
+  /** Same locks as `resolveClaimedUlbIds`, each with its batch number, for the picker. */
+  async resolveClaimedUlbBatches(
+    stateId: string,
+    designYearId: string,
+    installment: number,
+    excludeClaimLetterId?: string,
+  ): Promise<Map<string, ClaimLetterClaimedBatch>> {
+    const locks = await this.ulbLockModel
+      .find(this.claimedLockFilter(stateId, designYearId, installment, excludeClaimLetterId))
+      .select('ulbId claimLetter')
+      .lean<{ ulbId: Types.ObjectId; claimLetter: Types.ObjectId }[]>()
+      .exec();
+    const result = new Map<string, ClaimLetterClaimedBatch>();
+    if (!locks.length) return result;
+
+    // At most 3 batches per State, year and installment.
+    const batchIds = [...new Set(locks.map((l) => String(l.claimLetter)))];
+    const batches = await this.batchModel
+      .find({ _id: { $in: batchIds.map((id) => new Types.ObjectId(id)) } })
+      .select('batchNumber')
+      .lean<{ _id: Types.ObjectId; batchNumber: number }[]>()
+      .exec();
+    const batchNumberById = new Map(batches.map((b) => [String(b._id), b.batchNumber]));
+
+    for (const lock of locks) {
+      result.set(String(lock.ulbId), { batchNumber: batchNumberById.get(String(lock.claimLetter)) ?? null });
+    }
+    return result;
+  }
+
+  private claimedLockFilter(
+    stateId: string,
+    designYearId: string,
+    installment: number,
+    excludeClaimLetterId?: string,
+  ): FilterQuery<ClaimLetterUlbLockDocument> {
     const filter: FilterQuery<ClaimLetterUlbLockDocument> = {
       state: new Types.ObjectId(stateId),
       year: new Types.ObjectId(designYearId),
@@ -443,9 +492,7 @@ export class ClaimLetterEligibilityService {
       lockState: { $in: ['ACTIVE', 'ACKNOWLEDGED'] },
     };
     if (excludeClaimLetterId) filter.claimLetter = { $ne: new Types.ObjectId(excludeClaimLetterId) };
-
-    const locks = await this.ulbLockModel.find(filter).select('ulbId').lean<{ ulbId: Types.ObjectId }[]>().exec();
-    return new Set(locks.map((l) => String(l.ulbId)));
+    return filter;
   }
 
   /** Expected ULBs in no batch, eligible or not: an ineligible ULB may still qualify before the final

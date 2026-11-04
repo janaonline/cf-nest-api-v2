@@ -843,6 +843,69 @@ describe('ClaimLetterEligibilityService', () => {
     });
   });
 
+  describe('resolveClaimedUlbBatches', () => {
+    it('maps each locked ULB to its batch number in two queries', async () => {
+      const ulbA = new Types.ObjectId();
+      const ulbB = new Types.ObjectId();
+      const ulbC = new Types.ObjectId();
+      const batch1 = new Types.ObjectId();
+      const batch2 = new Types.ObjectId();
+      ulbLockModel.find.mockReturnValue(
+        q([
+          { ulbId: ulbA, claimLetter: batch1 },
+          { ulbId: ulbB, claimLetter: batch1 },
+          { ulbId: ulbC, claimLetter: batch2 },
+        ]),
+      );
+      batchModel.find.mockReturnValue(
+        q([
+          { _id: batch1, batchNumber: 1 },
+          { _id: batch2, batchNumber: 2 },
+        ]),
+      );
+
+      const result = await service.resolveClaimedUlbBatches(stateId, designYearId, 1);
+
+      expect(result).toEqual(
+        new Map([
+          [String(ulbA), { batchNumber: 1 }],
+          [String(ulbB), { batchNumber: 1 }],
+          [String(ulbC), { batchNumber: 2 }],
+        ]),
+      );
+      expect(ulbLockModel.find).toHaveBeenCalledTimes(1);
+      expect(batchModel.find).toHaveBeenCalledTimes(1);
+      const [batchFilter] = batchModel.find.mock.calls[0] as [{ _id: { $in: Types.ObjectId[] } }];
+      expect(batchFilter._id.$in.map(String)).toEqual([String(batch1), String(batch2)]);
+    });
+
+    it('excludes the given claim letter id, as resolveClaimedUlbIds does', async () => {
+      const excludeId = new Types.ObjectId().toString();
+
+      await service.resolveClaimedUlbBatches(stateId, designYearId, 1, excludeId);
+
+      const [filter] = ulbLockModel.find.mock.calls[0] as [Record<string, unknown>];
+      expect(filter['lockState']).toEqual({ $in: ['ACTIVE', 'ACKNOWLEDGED'] });
+      expect(filter['claimLetter']).toEqual({ $ne: new Types.ObjectId(excludeId) });
+    });
+
+    it('skips the batch query when nothing is locked', async () => {
+      const result = await service.resolveClaimedUlbBatches(stateId, designYearId, 1);
+
+      expect(result.size).toBe(0);
+      expect(batchModel.find).not.toHaveBeenCalled();
+    });
+
+    it('keeps a locked ULB with a null batch number when its batch cannot be read', async () => {
+      const ulbA = new Types.ObjectId();
+      ulbLockModel.find.mockReturnValue(q([{ ulbId: ulbA, claimLetter: new Types.ObjectId() }]));
+
+      const result = await service.resolveClaimedUlbBatches(stateId, designYearId, 1);
+
+      expect(result.get(String(ulbA))).toEqual({ batchNumber: null });
+    });
+  });
+
   describe('resolveRemainingUlbIds', () => {
     it('returns expected ULBs that have no ACTIVE/ACKNOWLEDGED lock yet, regardless of eligibility', async () => {
       const claimed = new Types.ObjectId();

@@ -13,7 +13,7 @@ function buildValidDoc(overrides: Record<string, unknown> = {}) {
     batchNumber: 1,
     version: 1,
     buildRequestId: 'build-1',
-    fileBaseName: 'CF_KA_2026-27_1',
+    fileBaseName: 'CF_KA_2026-27_1-1',
     createdBy: new Types.ObjectId(),
     updatedBy: new Types.ObjectId(),
     ...overrides,
