@@ -55,7 +55,7 @@ describe('AnnualAccountsService', () => {
   let mockS3Service: Record<string, jest.Mock>;
   let mockActionGateModel: { find: jest.Mock };
   let mockFileTokenService: { signFileUrl: jest.Mock };
-  let mockUlbEligibilityService: { assertUlbEligibleForGrantCycle: jest.Mock };
+  let mockUlbEligibilityService: { assertUlbEligibleForGrantCycle: jest.Mock; getIneligibleUlbTypeIds: jest.Mock };
   let mockFormReturnedNotification: { notifyReturned: jest.Mock };
   let mockYearModel: { findById: jest.Mock };
   let mockExemptionResolverService: { resolveBulk: jest.Mock; resolveDiscretionaryBulk: jest.Mock; resolveDiscretionary: jest.Mock };
@@ -115,6 +115,7 @@ describe('AnnualAccountsService', () => {
     };
     mockUlbEligibilityService = {
       assertUlbEligibleForGrantCycle: jest.fn().mockResolvedValue(undefined),
+      getIneligibleUlbTypeIds: jest.fn().mockResolvedValue([]),
     };
     mockFormReturnedNotification = {
       notifyReturned: jest.fn().mockResolvedValue(undefined),
@@ -1060,6 +1061,16 @@ describe('AnnualAccountsService', () => {
       expect(result.counts.EXEMPTION_REJECTED).toBe(0);
       expect(result.counts.EXEMPTION_APPROVED).toBe(0);
       expect(result.counts.AUTO_EXEMPTED).toBe(0);
+    });
+
+    it('excludes XVIFC-ineligible ULB types (e.g. Cantonment Boards) from the $match stage', async () => {
+      const cantonmentTypeId = new Types.ObjectId();
+      mockUlbEligibilityService.getIneligibleUlbTypeIds.mockResolvedValue([cantonmentTypeId]);
+
+      await service.listUlbSubmissions(baseDto, adminUser);
+
+      const pipeline = mockUlbModel.aggregate.mock.calls[0][0];
+      expect(pipeline[0].$match.ulbType).toEqual({ $nin: [cantonmentTypeId] });
     });
 
     it('resolves the automatic-exemption candidate set with the section formId (30 for auditedData)', async () => {

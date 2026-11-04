@@ -82,6 +82,13 @@ large enough for an `$unwind` aggregation to be worth the complexity.
   all relevant copies the day a new formId needs a real-progress check.
 - Every exemption-block response is a `ConflictException` (409), never `ForbiddenException` (403) — see
   ADR 0002.
+- `finalSubmit`'s ULB branch checks the named `ulb` against `UlbEligibilityService.getEligibleUlbFilter(dto.stateId,
+  'XVIFC')` (via `ulbModel.exists`) right after `validateAndSanitize` resolves it, before the document is read or
+  written and before any target-form-progress check — defense-in-depth against a crafted request naming a
+  ULB that's ineligible (e.g. a Cantonment Board), inactive, or simply belongs to another state, bypassing the
+  dropdown's own (separately eligibility-filtered, state-scoped) options. Throws the shared `ForbiddenException`
+  (403, not 409) — this one is a genuine access violation, not a reachable business conflict for a real user
+  going through the UI.
 
 ## Known gaps
 
@@ -98,6 +105,15 @@ large enough for an `$unwind` aggregation to be worth the complexity.
   formId 23) — drives `assertElectedBodyRowNotAlreadyEligible`.
 - `XviFcAnnualAccount` (Audited/Provisional AFS section status) and `XviFcSfcStatus` (SFC Status) —
   drive the "real progress" checks in `assertTargetFormsEligible`/`assertTargetStateFormsEligible`.
+- `UlbEligibilityService` (`module/ulb-eligibility/`) — the state-scoped eligibility guard on the
+  named `ulb` in `finalSubmit`. The ULB dropdown itself is meant to be sourced from the shared,
+  eligibility-filtered `XviFcUlbOptionsService` (`common/xvi-fc-ulb-options.controller.ts`,
+  `GET xvi-fc/ulb-options?stateId=...&yearId=...`) rather than this module having any ULB-listing
+  logic of its own. Formid 34's `ulb` field is pointed at it (`resultsPath: "data"`,
+  `valueKey: "ulbId"`) in `xvifc-payload-28102026.json`; the frontend page merges `stateId`/`yearId`
+  into `remoteSearch.extraParams` at render time, since `formjsons` config is static. Until that
+  payload is pushed to an environment, its live `formjsons` still points at the unfiltered
+  `master/ulb`, and the `finalSubmit` guard above is the only enforcement there.
 
 **Outbound** (what depends on this module's state from outside):
 - `SfcStatusService` (`state/sfc-status/`) — blocks `finalSubmit` on a Pending/Approved SFC exemption

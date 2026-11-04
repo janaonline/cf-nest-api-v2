@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { FormJsonModule } from 'src/master/form-json/form-json.module';
+import { UlbEligibilityModule } from 'src/module/ulb-eligibility/ulb-eligibility.module';
 import { XviFcCommonModule } from 'src/module/xvi-fc/common/xvi-fc-common.module';
 import { State, StateSchema } from 'src/schemas/state.schema';
 import { Ulb, UlbSchema } from 'src/schemas/ulb.schema';
@@ -40,6 +41,7 @@ import { RequestExemptionFormJsonConfigService } from './services/form-json/requ
     ]),
     XviFcCommonModule,
     FormJsonModule,
+    UlbEligibilityModule,
   ],
   controllers: [RequestExemptionController],
   providers: [RequestExemptionService, RequestExemptionFormJsonConfigService],
