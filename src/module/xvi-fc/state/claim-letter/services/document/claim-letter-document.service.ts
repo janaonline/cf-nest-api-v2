@@ -631,8 +631,8 @@ export class ClaimLetterDocumentService {
       body: [
         para([
           t(
-            `The undersigned is directed to submit herewith the claim of the Government of ${state} for the release of ` +
-              `${instalment} installment grants to Urban Local Bodies (ULBs) under the recommendations of the Sixteenth ` +
+            `I am directed on behalf of the State to submit herewith the claim of the Government of ${state} for the ` +
+              `release of ${instalment} installment grants to Urban Local Bodies (ULBs) under the recommendations of the Sixteenth ` +
               `Finance Commission for FY ${fy}, in accordance with the applicable Operational Guidelines issued by the ` +
               'Department of Expenditure, Ministry of Finance.',
           ),
