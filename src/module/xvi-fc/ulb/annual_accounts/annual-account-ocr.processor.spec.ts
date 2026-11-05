@@ -1,5 +1,6 @@
 import { Types } from 'mongoose';
 import { AnnualAccountOcrProcessor } from './annual-account-ocr.processor';
+import { AnnualAccountOcrResultWriter } from './annual-account-ocr-result.writer';
 import type { AnnualAccountOcrJobData } from './dto/annual-account-ocr-job.dto';
 
 describe('AnnualAccountOcrProcessor', () => {
@@ -69,6 +70,8 @@ describe('AnnualAccountOcrProcessor', () => {
       ulbModel as any,
       s3Service as any,
       ocrApi as any,
+      // The real writer over the same mocked models, so these tests keep asserting the final writes.
+      new AnnualAccountOcrResultWriter(annualAccountModel as any, uploadHistoryModel as any),
     );
   });
 
@@ -396,12 +399,12 @@ describe('AnnualAccountOcrProcessor', () => {
     ocrApi.getJobStatus.mockResolvedValue({ job_id: 'ocr-job-1', status: 'processing' });
 
     const processPromise = processor.process(makeJob());
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 36; i++) {
       await jest.advanceTimersByTimeAsync(5000);
     }
     await processPromise;
 
-    expect(ocrApi.getJobStatus).toHaveBeenCalledTimes(10);
+    expect(ocrApi.getJobStatus).toHaveBeenCalledTimes(36);
     expect(ocrApi.getJobResult).not.toHaveBeenCalled();
     // No terminal write — only the initial "active" update and the post-submit ocrInfo update happened
     // (no progress_step was ever returned, so the in-loop progress update never fired).
