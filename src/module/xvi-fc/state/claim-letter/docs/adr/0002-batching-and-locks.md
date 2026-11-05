@@ -20,10 +20,12 @@ duplicate-key error on `batchModel.create()` is always a **fresh, live conflict*
 requests committing around the same time - never a stale leftover (see below), because
 `allocateBatchNumber` re-reads free slots inside the very same transaction immediately beforehand.
 
-**ULB locking.** Creating a draft inserts one lock document per selected ULB, in the same
-transaction as the batch-slot reservation - all-or-nothing. A duplicate-key failure on any lock
-means that ULB is already locked elsewhere; the whole reservation aborts rather than partially
-locking.
+**ULB locking.** Creating a draft first validates the selection in memory, as an edit does, so a
+refused create reserves no slot and no lock. It then inserts one lock document per selected ULB, in
+the same transaction as the batch-slot reservation - all-or-nothing. A duplicate-key failure (or a
+WriteConflict with another open transaction) on any lock means that ULB is already locked
+elsewhere; the whole reservation aborts rather than partially locking. The drift re-check below
+still guards the gap between validation and the build.
 
 Updating a draft validates the new selection in memory first, so a rejected edit writes no lock.
 It then locks only the added ULBs (their own all-or-nothing transaction) and releases the removed
@@ -45,7 +47,9 @@ finished just as cleanup ran keeps its children and locks.
   `ReclaimableConflictException` exists as a distinct exception type from a plain
   `ConflictException`: it's how the orchestrator (`reserveBatchSlotAndLocks`) tells "this conflict
   might be a reclaimable stale row" apart from "this is fresh, live contention" (the
-  `batchModel.create()` duplicate-key case above), which is never worth a reclaim attempt.
+  `batchModel.create()` duplicate-key case above), which is never worth a reclaim attempt. A lock
+  conflict (`UlbLockConflictException`) is a plain conflict elsewhere; only this orchestrator also
+  treats it as reclaimable, since a stale row's locks block the same way.
 - **Proactive, scheduled** (`ClaimLetterRecoveryService.runScheduledStaleBuildCleanup`, hourly
   cron) - a backstop for rows nobody happens to contend with, so a crashed build's resources aren't
   held forever just because no one else asks for that exact slot/ULBs again.

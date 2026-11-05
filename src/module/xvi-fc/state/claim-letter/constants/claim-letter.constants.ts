@@ -11,6 +11,9 @@ export const CLAIM_LETTER_PAGINATION_DEFAULT_PAGE = 1;
 export const CLAIM_LETTER_PAGINATION_DEFAULT_LIMIT = 20;
 export const CLAIM_LETTER_PAGINATION_MAX_LIMIT = 100;
 
+/** Most ULBs one batch holds, and one ULB-picker load returns; above any State's ULB count. */
+export const CLAIM_LETTER_MAX_ULBS = 1000;
+
 /** Children are inserted in chunks, outside a transaction (docs/adr/0002-batching-and-locks.md). */
 export const CLAIM_LETTER_CHILD_INSERT_CHUNK_SIZE = 200;
 

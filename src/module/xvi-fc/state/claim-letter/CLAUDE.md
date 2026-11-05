@@ -37,8 +37,12 @@ Each decision below is cited from several files; read the ADR, not just the loca
   history) and the signed-file upload.
 - `services/ulb-options/` - the ULB picker: every expected ULB with its ineligibility reason. A ULB
   locked in another batch carries that batch's number (`claimedInBatch`), whatever its eligibility;
-  order is eligible, ineligible, then in another batch.
+  order is eligible, ineligible, then in another batch. `limit` goes up to `CLAIM_LETTER_MAX_ULBS`
+  (1000), so the page loads every ULB in one call and searches, pages and selects locally.
 - `services/ulb-rows/` - the batch's selected-ULB table, with a display-only eligibility re-check.
+  `limit` goes up to `CLAIM_LETTER_MAX_ULBS`, so the page loads a whole batch in one call. Each row
+  carries `stateGatePassed`, so the page can tell a State-level failure (no ULB can be claimed) from
+  ULBs it could remove.
 - `services/submit/` - submit (`IN_PROGRESS -> UNDER_REVIEW_BY_MOHUA`) and its checks (ADR 0003).
 - `services/active-batch/` - the one-active-batch rule (ADR 0004); no other file decides it.
 - `services/history/` - the only writer of `ClaimLetterBatchHistory` (ADR 0003).
@@ -173,6 +177,15 @@ Unspent Declaration, ATR), merged with `pdf-lib`.
   code, the `/abandon` route and the `isAbandoned` field keep "abandon".
 - An edit never frees a removed ULB before it succeeds: validation first, added locks next, removed
   locks released in the final write's transaction (ADR 0002).
+- A create or edit that refuses selected ULBs (400 ineligible or bad amount, 409 locked by another
+  claim) sends `code: CLAIM_LETTER_ULBS_REJECTED` and `errors` keyed `ulbSelections.<index>.<field>`,
+  so the page marks those rows and offers to drop them. Both validate before taking any lock; the
+  400 also names rows another claim locks, so one "Remove" clears both kinds. The message counts the
+  rows and names at most five codes (`ineligibleUlbsMessage`). Lock owners are read only on these
+  failure paths (`lockedRows`), so a save that succeeds runs no extra query, and a failed lookup
+  keeps the original error.
+- A create retried with the same `idempotencyKey` returns the batch it built, or 409 while that
+  build is still running (ADR 0001); the page reuses the key when it re-sends the same selection.
 
 ## Known gaps
 

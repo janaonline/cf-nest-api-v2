@@ -40,6 +40,7 @@ import {
   CLAIM_LETTER_CONTENT_HASH_VERSION,
 } from '../../helpers/claim-letter-content-hash.helpers';
 import {
+  type ClaimLetterClaimedBatch,
   type ClaimLetterCriterionDetail,
   ClaimLetterEligibilityService,
   DevolutionAllocation,
@@ -48,6 +49,12 @@ import { ClaimLetterHistoryService } from '../history/claim-letter-history.servi
 import { ClaimLetterFormJsonService } from '../form-json/claim-letter-form-json.service';
 import { ClaimLetterActiveBatchService } from '../active-batch/claim-letter-active-batch.service';
 import { mapClaimLetterBatchDocToSummary } from '../../helpers/claim-letter-summary.helpers';
+import {
+  buildRejectedUlbsBody,
+  type ClaimLetterRejectedUlb,
+  ineligibleUlbsMessage,
+  lockedUlbsMessage,
+} from '../../helpers/claim-letter-rejected-ulbs.helpers';
 import type { ClaimLetterBatchSummary } from '../../types/claim-letter.types';
 
 export interface ClaimLetterUlbSelectionInput {
@@ -116,6 +123,15 @@ interface PreparedChildren {
 
 /** A conflict that may be a reclaimable stale BUILDING row, unlike live contention (ADR 0002). */
 class ReclaimableConflictException extends ConflictException {}
+
+/** A selected ULB is locked by another claim; named per row (namedLockConflict) before it leaves. Not a
+ *  ReclaimableConflictException: only create's reserve step may reclaim on it, and it says so itself. */
+class UlbLockConflictException extends ConflictException {}
+
+/** WriteConflict: another open transaction wrote the same key first. */
+const MONGO_WRITE_CONFLICT_CODE = 112;
+
+const ULB_LOCK_CONFLICT_MESSAGE = 'One or more selected ULBs are already locked in another active claim.';
 
 /** Why a ULB-owned form passed, for its snapshot entry. */
 function ulbFormReasonCode(evidence: FormEligibilityEvidence | undefined): string {
@@ -188,6 +204,10 @@ export class ClaimLetterAssemblyService {
     // Best-effort (ADR 0004): the preview / download / submit guards are the hard rule.
     await this.activeBatchService.assertCanCreate({ state: stateOid, year: yearOid, installment: input.installment });
 
+    // Validated before reserving, like update: a refused create holds no slot or lock meanwhile, and
+    // one refusal names the locked rows too.
+    const prepared = await this.prepareChildren(input.ulbSelections, userOid, stateOid, yearOid, input.installment, {});
+
     const parent = await this.reserveBatchSlotAndLocks(
       stateOid,
       yearOid,
@@ -198,14 +218,7 @@ export class ClaimLetterAssemblyService {
     );
 
     try {
-      const built = await this.buildChildren(
-        parent,
-        input.ulbSelections,
-        userOid,
-        stateOid,
-        yearOid,
-        input.installment,
-      );
+      const built = await this.persistPrepared(parent, prepared, stateOid, yearOid, input.installment);
       return await this.verifyAndFinalize(parent, built, stateOid, yearOid, input.installment, userOid, buildRequestId);
     } catch (err) {
       await this.abortBuild(parent._id, buildRequestId);
@@ -223,9 +236,8 @@ export class ClaimLetterAssemblyService {
     const existing = await this.batchModel.findOne({ buildRequestId, state: stateOid }).lean().exec();
     if (!existing) return null;
     if (existing.assemblyStatus === 'READY') return existing;
-    throw new ConflictException(
-      'A build with this idempotency key is already in progress or failed. Retry with a new key.',
-    );
+    // Shown to the user: the page re-sends the same key when it retries the same selection.
+    throw new ConflictException('This claim letter is still being created. Please wait a moment, then try again.');
   }
 
   // ─── Steps 1-2: allocate batch number + acquire all locks (docs/adr/0002-batching-and-locks.md) ───
@@ -250,12 +262,79 @@ export class ClaimLetterAssemblyService {
         userOid,
       );
     } catch (err) {
-      if (!(err instanceof ReclaimableConflictException)) throw err;
+      // A lock conflict may be a stale build's lock too, so it is reclaimable here.
+      if (!(err instanceof ReclaimableConflictException || err instanceof UlbLockConflictException)) throw err;
       const reclaimed = await this.reclaimBlockingStaleBuilds(stateOid, yearOid, installment, ulbIds);
-      if (!reclaimed) throw err; // Nothing stale: a live conflict.
+      // Nothing stale: a live conflict.
+      if (!reclaimed) throw await this.namedLockConflict(err, ulbIds, stateOid, yearOid, installment);
       // Exactly one retry; whatever it throws is final.
-      return this.attemptReserveBatchSlotAndLocks(stateOid, yearOid, installment, ulbIds, buildRequestId, userOid);
+      try {
+        return await this.attemptReserveBatchSlotAndLocks(
+          stateOid,
+          yearOid,
+          installment,
+          ulbIds,
+          buildRequestId,
+          userOid,
+        );
+      } catch (retryErr) {
+        throw await this.namedLockConflict(retryErr, ulbIds, stateOid, yearOid, installment);
+      }
     }
+  }
+
+  /** A ULB lock conflict as a 409 naming each request row another claim holds, so the page can mark
+   *  and drop them; any other error, or a lock released meanwhile, comes back unchanged. Runs only
+   *  after a failed write, so a save that succeeds pays nothing. */
+  private async namedLockConflict(
+    err: unknown,
+    ulbIds: string[],
+    stateOid: Types.ObjectId,
+    yearOid: Types.ObjectId,
+    installment: number,
+    excludeClaimLetterId?: string,
+  ): Promise<unknown> {
+    if (!(err instanceof UlbLockConflictException)) return err;
+    const rejected = await this.lockedRows(ulbIds, stateOid, yearOid, installment, excludeClaimLetterId);
+    if (!rejected.length) return err;
+    return new ConflictException(buildRejectedUlbsBody(lockedUlbsMessage(rejected.length), rejected));
+  }
+
+  /** Request rows another claim holds a lock on. Only ever called on a failure path, so a failed
+   *  lookup gives none rather than replacing the error being reported. */
+  private async lockedRows(
+    ulbIds: readonly string[],
+    stateOid: Types.ObjectId,
+    yearOid: Types.ObjectId,
+    installment: number,
+    excludeClaimLetterId?: string,
+  ): Promise<ClaimLetterRejectedUlb[]> {
+    let claimed: Map<string, ClaimLetterClaimedBatch>;
+    try {
+      claimed = await this.eligibilityService.resolveClaimedUlbBatches(
+        String(stateOid),
+        String(yearOid),
+        installment,
+        excludeClaimLetterId,
+      );
+    } catch (lookupErr) {
+      this.logger.warn(`Could not name the locked ULBs: ${String(lookupErr)}`);
+      return [];
+    }
+    const rejected: ClaimLetterRejectedUlb[] = [];
+    ulbIds.forEach((ulbId, index) => {
+      const batch = claimed.get(ulbId);
+      if (!batch) return;
+      rejected.push({
+        index,
+        field: 'ulbId',
+        code: 'IN_ANOTHER_CLAIM',
+        message: batch.batchNumber
+          ? `Already in Claim Batch #${batch.batchNumber}.`
+          : 'Already in another claim batch.',
+      });
+    });
+    return rejected;
   }
 
   private async attemptReserveBatchSlotAndLocks(
@@ -309,7 +388,7 @@ export class ClaimLetterAssemblyService {
           { session },
         );
       } catch (err) {
-        if (this.isDuplicateKeyError(err)) {
+        if (this.isInsertConflict(err)) {
           // Live contention: the slot scan ran in this same transaction (ADR 0002).
           throw new ConflictException('This claim batch slot was just taken by another request. Please retry.');
         }
@@ -331,11 +410,7 @@ export class ClaimLetterAssemblyService {
           { session, ordered: true },
         );
       } catch (err) {
-        if (this.isDuplicateKeyError(err)) {
-          throw new ReclaimableConflictException(
-            'One or more selected ULBs are already locked in another active claim.',
-          );
-        }
+        if (this.isInsertConflict(err)) throw new UlbLockConflictException(ULB_LOCK_CONFLICT_MESSAGE);
         throw err;
       }
 
@@ -450,19 +525,49 @@ export class ClaimLetterAssemblyService {
     yearOid: Types.ObjectId,
     installment: number,
   ): Promise<BuildResult> {
-    const prepared = await this.prepareChildren(parent, selections, userOid, stateOid, yearOid, installment);
-    await this.persistChildren(prepared.children);
-    return this.finishBuildResult(parent, prepared, stateOid, yearOid, installment);
+    const prepared = await this.prepareChildren(selections, userOid, stateOid, yearOid, installment);
+    return this.persistPrepared(parent, prepared, stateOid, yearOid, installment);
   }
 
-  /** Validates every selection in memory and throws before any write, so a rejection never deletes anything. */
-  private async prepareChildren(
+  /** Stamps the reserved parent onto validated children, writes them, and totals the result. */
+  private async persistPrepared(
     parent: ClaimLetterBatchDocument,
+    prepared: PreparedChildren,
+    stateOid: Types.ObjectId,
+    yearOid: Types.ObjectId,
+    installment: number,
+  ): Promise<BuildResult> {
+    const stamped = this.stampParent(prepared, parent);
+    await this.persistChildren(stamped.children);
+    return this.finishBuildResult(parent, stamped, stateOid, yearOid, installment);
+  }
+
+  /** Fills the parent fields `buildChildDocument` leaves null; spreading keeps their key order. */
+  private stampParent(prepared: PreparedChildren, parent: ClaimLetterBatchDocument): PreparedChildren {
+    return {
+      ...prepared,
+      children: prepared.children.map((child) => ({
+        ulbId: child.ulbId,
+        document: {
+          ...child.document,
+          claimLetter: parent._id,
+          batchNumber: parent.batchNumber,
+          version: parent.version,
+        },
+      })),
+    };
+  }
+
+  /** Validates every selection in memory and throws before any write, so a rejection never deletes
+   *  anything. Needs no parent, so create can run it before reserving (`stampParent` adds it after).
+   *  With `lockScope`, a refusal also names the rows another claim (not `excludeClaimLetterId`) locks. */
+  private async prepareChildren(
     selections: ClaimLetterUlbSelectionInput[],
     userOid: Types.ObjectId,
     stateOid: Types.ObjectId,
     yearOid: Types.ObjectId,
     installment: number,
+    lockScope?: { excludeClaimLetterId?: string },
   ): Promise<PreparedChildren> {
     const [gate, allocationByUlbId, claimAmountConfig] = await Promise.all([
       this.eligibilityService.evaluateStateLevelGate(String(stateOid), String(yearOid), installment as 1 | 2),
@@ -498,19 +603,17 @@ export class ClaimLetterAssemblyService {
     const ulbFormCriteria = ulbLevelEligibility.perCriterion.filter((c) => c.ownerLevel === 'ULB');
     const evaluatedAt = new Date().toISOString();
     const invalid: string[] = [];
+    const rejected: ClaimLetterRejectedUlb[] = [];
     const children: BuiltChild[] = [];
 
-    for (const selection of selections) {
+    for (const [index, selection] of selections.entries()) {
       const ulb = ulbSnapshotById.get(selection.ulbId);
       const allocation = allocationByUlbId.get(selection.ulbId);
       // Census / SB code in the error where known; the raw id only for an unknown or inactive ULB.
       const identifier = ulb?.censusCode ?? ulb?.sbCode ?? selection.ulbId;
-      if (!ulb || !allocation) {
+      if (!ulb || !allocation || !(ulbLevelEligibility.perUlbEligible.get(selection.ulbId) ?? true)) {
         invalid.push(identifier);
-        continue;
-      }
-      if (!(ulbLevelEligibility.perUlbEligible.get(selection.ulbId) ?? true)) {
-        invalid.push(identifier);
+        rejected.push({ index, field: 'ulbId', code: 'INELIGIBLE', message: 'This ULB is no longer eligible.' });
         continue;
       }
       const claimedAmount = resolveClaimedAmount(
@@ -520,6 +623,12 @@ export class ClaimLetterAssemblyService {
       );
       if (claimedAmount === null) {
         invalid.push(identifier);
+        rejected.push({
+          index,
+          field: 'claimedAmount',
+          code: 'INVALID_CLAIMED_AMOUNT',
+          message: 'This claim amount is not allowed for this ULB.',
+        });
         continue;
       }
 
@@ -534,7 +643,6 @@ export class ClaimLetterAssemblyService {
       children.push({
         ulbId: selection.ulbId,
         document: this.buildChildDocument(
-          parent,
           selection.ulbId,
           ulb,
           allocation,
@@ -549,8 +657,22 @@ export class ClaimLetterAssemblyService {
     }
 
     if (invalid.length > 0) {
+      // Failure path only: one refusal names the locked rows too, so one "Remove" clears both kinds.
+      const locked = lockScope
+        ? await this.lockedRows(
+            selections.map((s) => s.ulbId),
+            stateOid,
+            yearOid,
+            installment,
+            lockScope.excludeClaimLetterId,
+          )
+        : [];
+      const message = ineligibleUlbsMessage(invalid);
       throw new BadRequestException(
-        `The following ULBs are ineligible or have an invalid claimed amount: ${invalid.join(', ')}`,
+        buildRejectedUlbsBody(locked.length ? `${message} ${lockedUlbsMessage(locked.length)}` : message, [
+          ...rejected,
+          ...locked,
+        ]),
       );
     }
 
@@ -627,8 +749,8 @@ export class ClaimLetterAssemblyService {
     };
   }
 
+  /** The parent's fields stay null until `stampParent`, which runs before any write. */
   private buildChildDocument(
-    parent: ClaimLetterBatchDocument,
     ulbId: string,
     ulb: ClaimLetterUlbSnapshotLookup,
     allocation: DevolutionAllocation,
@@ -640,12 +762,12 @@ export class ClaimLetterAssemblyService {
     eligibilitySources: Record<string, unknown>[],
   ): Record<string, unknown> {
     return {
-      claimLetter: parent._id,
+      claimLetter: null,
       state: stateOid,
       year: yearOid,
       installment,
-      batchNumber: parent.batchNumber,
-      version: parent.version,
+      batchNumber: null,
+      version: null,
       ulbId: new Types.ObjectId(ulbId),
       ulbSnapshot: { name: ulb.name, censusCode: ulb.censusCode, sbCode: ulb.sbCode },
       allocatedAmount: allocation.allocatedAmount,
@@ -1130,12 +1252,17 @@ export class ClaimLetterAssemblyService {
     // are locked here; the removed ones keep their locks until the final write (ADR 0002).
     let prepared: PreparedChildren;
     try {
-      prepared = await this.prepareChildren(parent, selections, userOid, stateOid, yearOid, installment);
+      prepared = this.stampParent(
+        await this.prepareChildren(selections, userOid, stateOid, yearOid, installment, {
+          excludeClaimLetterId: String(parent._id),
+        }),
+        parent,
+      );
       await this.addLocks(parent, addedUlbIds, stateOid, yearOid, installment);
     } catch (err) {
       // addLocks rolled back its own transaction; only the edit lock is held.
       await this.releaseEditLock(parent._id, editToken);
-      throw err;
+      throw await this.namedLockConflict(err, ulbIds, stateOid, yearOid, installment, String(parent._id));
     }
 
     try {
@@ -1243,9 +1370,7 @@ export class ClaimLetterAssemblyService {
           { session, ordered: true },
         );
       } catch (err) {
-        if (this.isDuplicateKeyError(err)) {
-          throw new ConflictException('One or more selected ULBs are already locked in another active claim.');
-        }
+        if (this.isInsertConflict(err)) throw new UlbLockConflictException(ULB_LOCK_CONFLICT_MESSAGE);
         throw err;
       }
       await session.commitTransaction();
@@ -1550,7 +1675,7 @@ export class ClaimLetterAssemblyService {
           { session },
         );
       } catch (err) {
-        if (this.isDuplicateKeyError(err)) {
+        if (this.isInsertConflict(err)) {
           throw new ConflictException(
             'This claim was already regenerated into a newer version by another request. Please retry against the current version.',
           );
@@ -1572,9 +1697,7 @@ export class ClaimLetterAssemblyService {
           { session, ordered: true },
         );
       } catch (err) {
-        if (this.isDuplicateKeyError(err)) {
-          throw new ConflictException('One or more selected ULBs are already locked in another active claim.');
-        }
+        if (this.isInsertConflict(err)) throw new ConflictException(ULB_LOCK_CONFLICT_MESSAGE);
         throw err;
       }
 
@@ -1709,5 +1832,12 @@ export class ClaimLetterAssemblyService {
     if (code === 11000) return true;
     const writeErrors = (err as { writeErrors?: Array<{ code?: unknown }> }).writeErrors;
     return Array.isArray(writeErrors) && writeErrors.some((w) => w.code === 11000);
+  }
+
+  /** A unique-key clash on insert: a duplicate of a committed key, or (inside a transaction) a
+   *  WriteConflict with another transaction still open on the same key. Either is contention, not a 500. */
+  private isInsertConflict(err: unknown): boolean {
+    if (this.isDuplicateKeyError(err)) return true;
+    return typeof err === 'object' && err !== null && (err as { code?: unknown }).code === MONGO_WRITE_CONFLICT_CODE;
   }
 }

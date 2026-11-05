@@ -44,6 +44,9 @@ export interface ClaimLetterUlbRow {
   claimAmount: number;
   differencePercentage: number;
   eligible: boolean;
+  /** The State-level gate, the same on every row; when false, every row is ineligible for a reason
+   *  that removing ULBs cannot fix. */
+  stateGatePassed: boolean;
   /** Exemptions under MoHUA review or rejected (row badges). */
   exemptionNotes: ClaimLetterExemptionNote[];
 }
