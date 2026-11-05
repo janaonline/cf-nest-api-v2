@@ -32,7 +32,7 @@ import {
   buildClaimLetterFileBaseName,
   computeDifferenceAmount,
   computeDifferencePercentageBasisPoints,
-  isClaimedAmountWithinVariance,
+  resolveClaimedAmount,
   sumAmountsExactly,
 } from '../../helpers/claim-letter-financial.helpers';
 import {
@@ -52,16 +52,19 @@ import type { ClaimLetterBatchSummary } from '../../types/claim-letter.types';
 
 export interface ClaimLetterUlbSelectionInput {
   ulbId: string;
-  /** Whole Rupees. */
-  claimedAmount: number;
+  /** Whole Rupees; omitted while the claim-amount switch is off (resolveClaimedAmount). */
+  claimedAmount?: number;
 }
 
 /** Same ULBs with the same claimed amounts as the current rows (order ignored; duplicates are
- *  rejected before this runs). */
+ *  rejected before this runs). A selection without an amount stands for the row's allocation. */
 function sameSelections(selections: ClaimLetterUlbSelectionInput[], children: Record<string, unknown>[]): boolean {
   if (selections.length !== children.length) return false;
-  const claimed = new Map(children.map((c) => [String(c['ulbId']), c['claimedAmount']]));
-  return selections.every((s) => claimed.get(s.ulbId) === s.claimedAmount);
+  const childByUlbId = new Map(children.map((c) => [String(c['ulbId']), c]));
+  return selections.every((s) => {
+    const child = childByUlbId.get(s.ulbId);
+    return !!child && child['claimedAmount'] === (s.claimedAmount ?? child['allocatedAmount']);
+  });
 }
 
 export interface CreateClaimLetterDraftInput {
@@ -461,10 +464,10 @@ export class ClaimLetterAssemblyService {
     yearOid: Types.ObjectId,
     installment: number,
   ): Promise<PreparedChildren> {
-    const [gate, allocationByUlbId, varianceConfig] = await Promise.all([
+    const [gate, allocationByUlbId, claimAmountConfig] = await Promise.all([
       this.eligibilityService.evaluateStateLevelGate(String(stateOid), String(yearOid), installment as 1 | 2),
       this.eligibilityService.resolveDevolutionAllocations(String(stateOid), String(yearOid), installment as 1 | 2),
-      this.formJsonConfigService.loadVarianceConfig(String(yearOid)),
+      this.formJsonConfigService.loadClaimAmountConfig(String(yearOid)),
     ]);
 
     if (!gate.passed) {
@@ -510,15 +513,12 @@ export class ClaimLetterAssemblyService {
         invalid.push(identifier);
         continue;
       }
-      const claimedAmount = selection.claimedAmount;
-      if (
-        !isClaimedAmountWithinVariance(
-          allocation.allocatedAmount,
-          claimedAmount,
-          varianceConfig.lowerPercent,
-          varianceConfig.upperPercent,
-        )
-      ) {
+      const claimedAmount = resolveClaimedAmount(
+        allocation.allocatedAmount,
+        selection.claimedAmount,
+        claimAmountConfig,
+      );
+      if (claimedAmount === null) {
         invalid.push(identifier);
         continue;
       }
@@ -1443,17 +1443,22 @@ export class ClaimLetterAssemblyService {
     const previousId = previous['_id'] as Types.ObjectId;
     const userOid = new Types.ObjectId(user._id);
 
-    const previousChildren = await this.batchUlbModel
-      .find({ claimLetter: previousId })
-      .select('ulbId claimedAmount')
-      .lean<{ ulbId: Types.ObjectId; claimedAmount: number }[]>()
-      .exec();
+    const [previousChildren, claimAmountConfig] = await Promise.all([
+      this.batchUlbModel
+        .find({ claimLetter: previousId })
+        .select('ulbId claimedAmount')
+        .lean<{ ulbId: Types.ObjectId; claimedAmount: number }[]>()
+        .exec(),
+      this.formJsonConfigService.loadClaimAmountConfig(String(yearOid)),
+    ]);
     if (previousChildren.length === 0) {
       throw new ConflictException('Previous claim version has no ULBs to carry forward.');
     }
+    // Switch off: no amount, so the new version takes the current allocation instead of being
+    // rejected for an allocation that changed since.
     const selections: ClaimLetterUlbSelectionInput[] = previousChildren.map((c) => ({
       ulbId: String(c.ulbId),
-      claimedAmount: c.claimedAmount,
+      ...(claimAmountConfig.editable ? { claimedAmount: c.claimedAmount } : {}),
     }));
 
     const buildRequestId = randomUUID();

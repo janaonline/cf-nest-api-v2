@@ -85,6 +85,7 @@ export class ClaimLetterService {
       remainingUlbIds,
       stateName,
       activeBatch,
+      claimAmountConfig,
     ] = await Promise.all([
       expectedUlbsPromise,
       this.eligibilityService.evaluateStateLevelGateForDisplay(stateId, yearId, installment),
@@ -110,6 +111,7 @@ export class ClaimLetterService {
       ),
       this.resolveStateName(stateId),
       this.activeBatchService.resolveActiveBatch({ state: stateId, year: yearId, installment }),
+      this.formJsonConfigService.loadClaimAmountConfig(yearId),
     ]);
 
     const expectedUlbIds = expectedUlbs.map((u) => u.ulbId);
@@ -148,6 +150,7 @@ export class ClaimLetterService {
       ulbReadiness,
       remainingUlbCount: remainingUlbIds.length,
       activeBatchNumber: activeBatch?.batchNumber ?? null,
+      claimAmountEditable: claimAmountConfig.editable,
     };
 
     return xviFcSuccess('Claim letter eligibility summary fetched.', summary);
@@ -163,14 +166,15 @@ export class ClaimLetterService {
     assertStateAccess(user, stateId);
     assertInstallmentSupported(installment);
 
-    const [expectedUlbs, batchSlotInfo, financialOverview, varianceConfig, stateName, activeBatch] = await Promise.all([
-      this.expectedUlbSetService.resolve(stateId, yearId),
-      this.resolveBatchSlotInfo(stateId, yearId, installment),
-      this.eligibilityService.getFinancialOverview(stateId, yearId, installment as 1 | 2),
-      this.formJsonConfigService.loadVarianceConfig(yearId),
-      this.resolveStateName(stateId),
-      this.activeBatchService.resolveActiveBatch({ state: stateId, year: yearId, installment }),
-    ]);
+    const [expectedUlbs, batchSlotInfo, financialOverview, claimAmountConfig, stateName, activeBatch] =
+      await Promise.all([
+        this.expectedUlbSetService.resolve(stateId, yearId),
+        this.resolveBatchSlotInfo(stateId, yearId, installment),
+        this.eligibilityService.getFinancialOverview(stateId, yearId, installment as 1 | 2),
+        this.formJsonConfigService.loadClaimAmountConfig(yearId),
+        this.resolveStateName(stateId),
+        this.activeBatchService.resolveActiveBatch({ state: stateId, year: yearId, installment }),
+      ]);
 
     const expectedUlbIds = expectedUlbs.map((u) => u.ulbId);
     const remainingUlbIds = await this.eligibilityService.resolveRemainingUlbIds(
@@ -188,8 +192,9 @@ export class ClaimLetterService {
       nextBatchNumber: batchSlotInfo.nextBatchNumber,
       financialOverview,
       remainingUlbCount: remainingUlbIds.length,
-      varianceLowerPercent: varianceConfig.lowerPercent,
-      varianceUpperPercent: varianceConfig.upperPercent,
+      claimAmountEditable: claimAmountConfig.editable,
+      varianceLowerPercent: claimAmountConfig.lowerPercent,
+      varianceUpperPercent: claimAmountConfig.upperPercent,
       canCreate: !activeBatch && getEffectivePermissions(user).includes(Permission.PREPARE_GRANT_LETTERS),
       createBlockedReason: activeBatch ? this.activeBatchService.blockedReason(activeBatch.batchNumber) : null,
     };
@@ -318,6 +323,7 @@ export class ClaimLetterService {
     // Letter-detail questions are served by GET :claimLetterId/letter-details.
     const letterKeys = new Set(formConfig.letterQuestions.map((q) => q.key));
     summary.questions = formConfig.questions.filter((q) => !letterKeys.has(q.key));
+    summary.claimAmountEditable = formConfig.claimAmountEditable;
     summary.varianceLowerPercent = formConfig.varianceLowerPercent;
     summary.varianceUpperPercent = formConfig.varianceUpperPercent;
     summary.stateName = stateName;

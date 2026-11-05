@@ -18,6 +18,8 @@ Each decision below is cited from several files; read the ADR, not just the loca
   State/year/installment, and why lifting it brings back stale letters.
 - [docs/adr/0005-exemptions-under-review.md](docs/adr/0005-exemptions-under-review.md) - an exemption
   request under MoHUA review or approved counts; how the claim follows a later decision.
+- [docs/adr/0006-claim-amount-switch.md](docs/adr/0006-claim-amount-switch.md) - the claim is the
+  allocation unless formjson 26 `meta.claimAmountEditable` is on, and how to turn it back on.
 
 ## Layout
 
@@ -51,8 +53,9 @@ Each decision below is cited from several files; read the ADR, not just the loca
 - `services/letter-details/` - the State-entered letter details (see "Letter details").
 - `services/final-pdf/` - the final claim letter that goes to MoHUA (see "Final claim letter").
 - `services/form-json/` - this feature's own formjson (formId 26, `CLAIM_LETTER_FORM_ID`): the
-  `signedClaimFile` field, the claimed-vs-allocated band (`meta.varianceLowerPercent` /
-  `varianceUpperPercent`, else `CLAIM_LETTER_VARIANCE_*_PERCENT`), `meta.letterDetailKeys`,
+  `signedClaimFile` field, the claim-amount switch `meta.claimAmountEditable` (off unless `true`; ADR
+  0006) with its claimed-vs-allocated band (`meta.varianceLowerPercent` / `varianceUpperPercent`, else
+  `CLAIM_LETTER_VARIANCE_*_PERCENT`, used only while the switch is on), `meta.letterDetailKeys`,
   `meta.letterDetailSkipPrefill` and `meta.mergeDocuments`. Invalid entries are logged and skipped.
   `loadFormConfig` fetches the document once per call and derives all of it; never add a second
   fetch for another part of the same document.
@@ -141,6 +144,10 @@ Unspent Declaration, ATR), merged with `pdf-lib`.
   (ADR 0002).
 - A frozen claim version is immutable: `createNewVersion` builds a new parent rather than mutating a
   READY one (ADR 0002, ADR 0003).
+- The claimed amount is decided only in `resolveClaimedAmount` (ADR 0006). Switch off (the default):
+  the request may omit `claimedAmount`, the server stores the allocation, and a different amount is
+  rejected, so every child has `claimedAmount === allocatedAmount` and zero difference. Switch on: the
+  request's amount, within the band.
 - Money is whole Rupees throughout, like every other xvi-fc form; `claimedAmount` is `@IsInt()`. The
   feature went Crore decimals -> whole Rupees -> Rupees with decimals -> whole Rupees, all before
   launch, so no stored-data migration exists. Decimals were dropped because splitting an allocation

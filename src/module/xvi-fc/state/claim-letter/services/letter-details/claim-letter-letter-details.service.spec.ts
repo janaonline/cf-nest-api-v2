@@ -65,6 +65,7 @@ function formConfig(overrides: Partial<ClaimLetterFormConfig> = {}): ClaimLetter
   const letterQuestions = Object.values(QUESTIONS);
   return {
     questions: letterQuestions,
+    claimAmountEditable: false,
     varianceLowerPercent: 90,
     varianceUpperPercent: 110,
     letterQuestions,

@@ -99,6 +99,8 @@ export interface ClaimLetterEligibilitySummary {
   remainingUlbCount: number;
   /** The one active batch (ADR 0004); null when a new claim can start. */
   activeBatchNumber: number | null;
+  /** formjson 26 `meta.claimAmountEditable`; off means each ULB's claim is its allocation (ADR 0006). */
+  claimAmountEditable: boolean;
 }
 
 /** Lean sibling of ClaimLetterEligibilitySummary for the create/edit page (no gate or ULB-level evaluation). */
@@ -110,7 +112,10 @@ export interface ClaimLetterClaimContext {
   nextBatchNumber: ClaimLetterBatchNumber | null;
   financialOverview: ClaimLetterFinancialOverview;
   remainingUlbCount: number;
-  /** Claimed-vs-allocated band from formjson meta, with code fallbacks (ClaimLetterFormJsonService). */
+  /** As in ClaimLetterEligibilitySummary. */
+  claimAmountEditable: boolean;
+  /** Claimed-vs-allocated band from formjson meta, with code fallbacks (ClaimLetterFormJsonService);
+   *  applies only while claimAmountEditable is on. */
   varianceLowerPercent: number;
   varianceUpperPercent: number;
   /** PREPARE_GRANT_LETTERS and no active batch; stands in for permissions.canEdit before a batch exists. */
@@ -147,6 +152,8 @@ export interface ClaimLetterBatchSummary {
   questions?: FieldConfig[];
   /** getDetail only. */
   stateName?: string;
+  /** getDetail only: as in ClaimLetterClaimContext. */
+  claimAmountEditable?: boolean;
   /** getDetail only: the claimed-vs-allocated band, as in ClaimLetterClaimContext. */
   varianceLowerPercent?: number;
   /** getDetail only. */

@@ -88,7 +88,7 @@ describe('ClaimLetterAssemblyService', () => {
     getClaimStatusBreakdown: jest.Mock;
   };
   let historyService: { recordTransition: jest.Mock };
-  let formJsonConfigService: { loadVarianceConfig: jest.Mock };
+  let formJsonConfigService: { loadClaimAmountConfig: jest.Mock };
   let activeBatchService: { assertCanCreate: jest.Mock };
 
   const allocation = {
@@ -209,8 +209,9 @@ describe('ClaimLetterAssemblyService', () => {
       }),
     };
     historyService = { recordTransition: jest.fn().mockResolvedValue(undefined) };
+    // The production default: switch off, so the claim is the allocation.
     formJsonConfigService = {
-      loadVarianceConfig: jest.fn().mockResolvedValue({ lowerPercent: 90, upperPercent: 110 }),
+      loadClaimAmountConfig: jest.fn().mockResolvedValue({ editable: false, lowerPercent: 90, upperPercent: 110 }),
     };
 
     activeBatchService = { assertCanCreate: jest.fn().mockResolvedValue(undefined) };
@@ -523,13 +524,6 @@ describe('ClaimLetterAssemblyService', () => {
     expect(batchModel.deleteOne).toHaveBeenCalled();
   });
 
-  it('throws BadRequestException and rolls back when a claimed amount is outside the ±10% band', async () => {
-    await expect(
-      service.createDraft(baseInput({ ulbSelections: [{ ulbId: ulbAId.toString(), claimedAmount: 200 }] })),
-    ).rejects.toThrow(BadRequestException);
-    expect(batchModel.deleteOne).toHaveBeenCalled();
-  });
-
   it('identifies an invalid ULB by censusCode in the error message, not its raw Mongo id', async () => {
     let thrown: BadRequestException | undefined;
     try {
@@ -541,19 +535,89 @@ describe('ClaimLetterAssemblyService', () => {
     expect(thrown?.message).not.toContain(ulbAId.toString());
   });
 
-  it('fetches the variance band via ClaimLetterFormJsonService exactly once per prepareChildren invocation', async () => {
+  it('fetches the claim-amount config via ClaimLetterFormJsonService exactly once per prepareChildren invocation', async () => {
     await service.createDraft(baseInput());
-    expect(formJsonConfigService.loadVarianceConfig).toHaveBeenCalledTimes(1);
-    expect(formJsonConfigService.loadVarianceConfig).toHaveBeenCalledWith(yearId.toString());
+    expect(formJsonConfigService.loadClaimAmountConfig).toHaveBeenCalledTimes(1);
+    expect(formJsonConfigService.loadClaimAmountConfig).toHaveBeenCalledWith(yearId.toString());
   });
 
-  it('gates against a configured non-default variance band rather than the hardcoded 90/110', async () => {
-    formJsonConfigService.loadVarianceConfig.mockResolvedValue({ lowerPercent: 100, upperPercent: 100 });
+  describe('claim-amount switch off (claim = allocation)', () => {
+    function insertedChild(): Record<string, unknown> {
+      const [ops] = batchUlbModel.bulkWrite.mock.calls[0] as [{ insertOne: { document: Record<string, unknown> } }[]];
+      return ops[0].insertOne.document;
+    }
 
-    // allocation is 100; a claim of 105 is within the default 90-110 band but outside a 100-100 band.
-    await expect(
-      service.createDraft(baseInput({ ulbSelections: [{ ulbId: ulbAId.toString(), claimedAmount: 105 }] })),
-    ).rejects.toThrow(BadRequestException);
+    it('stores the allocation as the claim, with zero difference, when no amount is sent', async () => {
+      await service.createDraft(baseInput({ ulbSelections: [{ ulbId: ulbAId.toString() }] }));
+
+      expect(insertedChild()).toEqual(
+        expect.objectContaining({
+          allocatedAmount: 100,
+          claimedAmount: 100,
+          differenceAmount: 0,
+          differencePercentageBasisPoints: 0,
+        }),
+      );
+    });
+
+    it('accepts a sent amount equal to the allocation', async () => {
+      await service.createDraft(baseInput());
+      expect(insertedChild()['claimedAmount']).toBe(100);
+    });
+
+    it('rejects a sent amount that differs from the allocation, even inside the old ±10% band', async () => {
+      await expect(
+        service.createDraft(baseInput({ ulbSelections: [{ ulbId: ulbAId.toString(), claimedAmount: 105 }] })),
+      ).rejects.toThrow(/111/);
+      expect(batchUlbModel.bulkWrite).not.toHaveBeenCalled();
+      expect(batchModel.deleteOne).toHaveBeenCalled();
+    });
+  });
+
+  describe('claim-amount switch on (editable within the band)', () => {
+    beforeEach(() => {
+      formJsonConfigService.loadClaimAmountConfig.mockResolvedValue({
+        editable: true,
+        lowerPercent: 90,
+        upperPercent: 110,
+      });
+    });
+
+    it('stores a sent amount inside the band', async () => {
+      batchUlbModel.find.mockReturnValue(q([persistedChild({ claimedAmount: 105 })]));
+      await service.createDraft(baseInput({ ulbSelections: [{ ulbId: ulbAId.toString(), claimedAmount: 105 }] }));
+
+      const [ops] = batchUlbModel.bulkWrite.mock.calls[0] as [{ insertOne: { document: Record<string, unknown> } }[]];
+      expect(ops[0].insertOne.document).toEqual(
+        expect.objectContaining({ claimedAmount: 105, differenceAmount: 5, differencePercentageBasisPoints: 500 }),
+      );
+    });
+
+    it('throws BadRequestException and rolls back when a claimed amount is outside the ±10% band', async () => {
+      await expect(
+        service.createDraft(baseInput({ ulbSelections: [{ ulbId: ulbAId.toString(), claimedAmount: 200 }] })),
+      ).rejects.toThrow(BadRequestException);
+      expect(batchModel.deleteOne).toHaveBeenCalled();
+    });
+
+    it('rejects a selection without an amount', async () => {
+      await expect(service.createDraft(baseInput({ ulbSelections: [{ ulbId: ulbAId.toString() }] }))).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('gates against a configured non-default variance band rather than the hardcoded 90/110', async () => {
+      formJsonConfigService.loadClaimAmountConfig.mockResolvedValue({
+        editable: true,
+        lowerPercent: 100,
+        upperPercent: 100,
+      });
+
+      // allocation is 100; a claim of 105 is within the default 90-110 band but outside a 100-100 band.
+      await expect(
+        service.createDraft(baseInput({ ulbSelections: [{ ulbId: ulbAId.toString(), claimedAmount: 105 }] })),
+      ).rejects.toThrow(BadRequestException);
+    });
   });
 
   it('inserts children in chunks, never one giant array (chunk-boundary correctness)', async () => {
@@ -1188,7 +1252,7 @@ describe('ClaimLetterAssemblyService', () => {
       batchModel.findOneAndUpdate.mockReturnValueOnce(q(parentDoc()));
       batchUlbModel.find.mockReturnValue(q([{ ulbId: ulbAId }]));
 
-      // Allocation 100 with a 90-110% band: 500 is outside it.
+      // Allocation 100: 500 is not the allocation (switch off), and outside 90-110% too.
       await expect(
         service.updateDraft(parentId.toString(), [{ ulbId: ulbBId.toString(), claimedAmount: 500 }], 0, stateUser),
       ).rejects.toThrow(BadRequestException);
@@ -1316,6 +1380,31 @@ describe('ClaimLetterAssemblyService', () => {
         { _id: parentId, editLockToken: expect.any(String) },
         { $set: { editLockToken: null, editLockAcquiredAt: null } },
       );
+    });
+
+    it('treats the same ULBs without amounts as unchanged when each stored claim is its allocation', async () => {
+      batchModel.findOne.mockReturnValue(q(parentDoc()));
+      batchModel.findOneAndUpdate.mockReturnValueOnce(q(parentDoc()));
+      batchUlbModel.find.mockReturnValue(q([persistedChild({ ulbId: ulbAId })]));
+      batchModel.findById.mockReturnValue(q(parentDoc()));
+
+      const result = await service.updateDraft(parentId.toString(), [{ ulbId: ulbAId.toString() }], 0, stateUser);
+
+      expect(result).toMatchObject({ revision: 0 });
+      expect(batchModel.findOneAndUpdate).toHaveBeenCalledTimes(1);
+      expect(batchUlbModel.deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('does not treat a different sent amount as unchanged; it is rejected while the switch is off', async () => {
+      batchModel.findOne.mockReturnValue(q(parentDoc()));
+      batchModel.findOneAndUpdate.mockReturnValueOnce(q(parentDoc()));
+      batchUlbModel.find.mockReturnValue(q([persistedChild({ ulbId: ulbAId })]));
+      lockModel.find.mockReturnValue(q([{ ulbId: ulbAId }]));
+
+      await expect(
+        service.updateDraft(parentId.toString(), [{ ulbId: ulbAId.toString(), claimedAmount: 105 }], 0, stateUser),
+      ).rejects.toThrow(BadRequestException);
+      expect(batchUlbModel.deleteMany).not.toHaveBeenCalled();
     });
 
     it('restores the previous children when post-persist verification fails', async () => {
@@ -1537,6 +1626,30 @@ describe('ClaimLetterAssemblyService', () => {
         session,
       );
       expect(session.commitTransaction).toHaveBeenCalled();
+    });
+
+    it.each([
+      ['off: takes the current allocation, not the old claim', false, 100],
+      ['on: carries the old claim forward', true, 95],
+    ])('with the claim-amount switch %s', async (_label, editable, expectedClaim) => {
+      formJsonConfigService.loadClaimAmountConfig.mockResolvedValue({ editable, lowerPercent: 90, upperPercent: 110 });
+      batchModel.findOne.mockReturnValue(q(previousParentDoc()));
+      batchModel.create.mockResolvedValue([{ _id: newParentId, batchNumber: 1, version: 2 }]);
+      // The previous version claimed 95; the allocation is now 100.
+      batchUlbModel.find
+        .mockReturnValueOnce(q([{ ulbId: ulbAId, claimedAmount: 95 }]))
+        .mockReturnValueOnce(
+          q([persistedChild({ claimLetter: newParentId, version: 2, claimedAmount: expectedClaim })]),
+        );
+      lockModel.find.mockReturnValue(q([{ ulbId: ulbAId }]));
+      batchModel.findOneAndUpdate.mockReturnValue(
+        q({ _id: newParentId, assemblyStatus: 'READY', batchNumber: 1, version: 2, supersedes: parentId }),
+      );
+
+      await service.createNewVersion(parentId.toString(), 'reason', stateUser);
+
+      const [ops] = batchUlbModel.bulkWrite.mock.calls[0] as [{ insertOne: { document: Record<string, unknown> } }[]];
+      expect(ops[0].insertOne.document['claimedAmount']).toBe(expectedClaim);
     });
 
     it('surfaces a clear conflict when the {batchNumber,version} slot was already regenerated by a concurrent request', async () => {

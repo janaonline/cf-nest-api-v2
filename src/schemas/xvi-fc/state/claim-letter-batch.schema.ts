@@ -17,7 +17,8 @@ export type ClaimLetterBatchDocument = HydratedDocument<ClaimLetterBatch>;
  * All monetary fields are whole Rupees (no decimals), matching Devolution's own storage
  * convention (and every other xvi-fc form) — no unit conversion at any boundary, stored and
  * returned as-is. See claim-letter-financial.helpers.ts for the exact-integer comparison/sum
- * helpers used on these fields (the ±10% variance boundary, financial-totals cross-checks).
+ * helpers used on these fields (the claimed amount rule, financial-totals cross-checks). While the
+ * claim-amount switch is off (ADR 0006), every claim equals its allocation.
  */
 @Schema({ _id: false })
 export class ClaimLetterFinancialSummary {
@@ -30,7 +31,7 @@ export class ClaimLetterFinancialSummary {
   // Sum claimed across this state/year/installment's OTHER batches at UNDER_REVIEW_BY_MOHUA /
   // IN_PROGRESS respectively, self-excluding this batch — persisted (not just computed transiently)
   // so the frontend can live-recompute `remainingIfAcknowledged`-equivalent values as the user edits
-  // claim amounts, without needing a fresh server round-trip on every keystroke.
+  // the batch's ULBs (and claim amounts, while the switch is on), without a server round-trip each time.
   @Prop({ type: Number, default: 0 })
   totalClaimInProgress!: number;
 
