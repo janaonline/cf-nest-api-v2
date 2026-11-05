@@ -1352,7 +1352,7 @@ export class ClaimLetterAssemblyService {
 
     if (parent['isAbandoned']) return parent;
     if (parent['currentFormStatus'] !== FORM_STATUS.IN_PROGRESS) {
-      throw new ConflictException('Draft cannot be abandoned unless it is IN_PROGRESS.');
+      throw new ConflictException('Only an in-progress draft can be discarded.');
     }
 
     const session = await this.connection.startSession();
@@ -1414,7 +1414,7 @@ export class ClaimLetterAssemblyService {
     if (current?.['editLockToken'] && this.isEditLockActive(current['editLockAcquiredAt'])) {
       throw new ConflictException('This draft is currently being edited. Please retry in a moment.');
     }
-    throw new ConflictException('Draft could not be abandoned. Please retry.');
+    throw new ConflictException('Draft could not be discarded. Please retry.');
   }
 
   // ─── Version regeneration - mechanism only, no caller in V1 (docs/adr/0003-workflow-transitions.md) ───
@@ -1429,7 +1429,7 @@ export class ClaimLetterAssemblyService {
     if (!previous) throw new NotFoundException(`Claim letter ${previousClaimId} not found`);
     assertStateAccess(user, String(previous['state']));
     if (previous['isAbandoned']) {
-      throw new ConflictException('Cannot regenerate a version for an abandoned draft.');
+      throw new ConflictException('Cannot regenerate a version for a discarded draft.');
     }
     if (isTerminalStatus(previous['currentFormStatus'] as number)) {
       throw new ConflictException('Cannot regenerate a version for a claim that has reached a terminal status.');

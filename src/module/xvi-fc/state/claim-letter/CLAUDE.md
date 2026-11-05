@@ -169,7 +169,8 @@ Unspent Declaration, ATR), merged with `pdf-lib`.
 - Abandon only sets `isAbandoned` (the status stays `IN_PROGRESS`) and releases the locks, so every
   path that acts on a batch checks the flag itself: preview, .docx, signed-file upload and submit
   reply 409 `CLAIM_LETTER_ABANDONED_MESSAGE`, and the one-active-batch rule ignores an abandoned
-  batch (ADR 0004).
+  batch (ADR 0004). Users see it as "Discard" (button, messages, the "Discarded" status label);
+  code, the `/abandon` route and the `isAbandoned` field keep "abandon".
 - An edit never frees a removed ULB before it succeeds: validation first, added locks next, removed
   locks released in the final write's transaction (ADR 0002).
 

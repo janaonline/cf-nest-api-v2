@@ -339,7 +339,7 @@ describe('ClaimLetterDocumentService', () => {
       ]);
       expect(text(rowB.status[0])).toBe(
         'State has constituted its 6th SFC and submitted the ATR on its recommendations vide dt. 14 Mar 2026. ' +
-          'The recommendations of SFC are applicable till FY 2026-2031.',
+          'The recommendations of the SFC are applicable for the period FY 2026-31.',
       );
     });
 
@@ -389,16 +389,19 @@ describe('ClaimLetterDocumentService', () => {
       const byKey = Object.fromEntries(data!.letter.compliance.map((r) => [r.key, r.status.map(text)]));
 
       expect(byKey['C.']).toEqual([
-        '2/4 (50%)',
+        '2 out of 4 (50%)',
         '',
         'Out of the total 2 ULBs in this proposal, 1 ULB falls within areas covered under the Sixth Schedule of the Constitution and is exempt from this condition.',
       ]);
-      expect(byKey['D.']).toEqual(['2/4 (50%)']);
+      expect(byKey['D.']).toEqual(['2 out of 4 (50%)']);
       expect(byKey['E.']).toEqual(['Not applicable']);
-      expect(byKey['G.']).toEqual(['1/4 (25%)']);
-      expect(byKey['H.']).toEqual(['2/4 (50%)']);
-      expect(byKey['J.']).toEqual(['1/4 (25%)', '(list of ineligible ULBs has been attached for record)']);
-      expect(byKey['K.']).toEqual(['2/4 (50%)', '(list of eligible ULBs may be perused)']);
+      expect(byKey['G.']).toEqual(['1 out of 4 (25%)']);
+      expect(byKey['H.']).toEqual(['2 out of 4 (50%)']);
+      expect(byKey['J.']).toEqual(['1 out of 4 (25%).', '(The list of ineligible ULBs is enclosed for record.)']);
+      expect(byKey['K.']).toEqual(['2 out of 4 (50%).', '(The list of eligible ULBs is enclosed for reference.)']);
+      const conditions = Object.fromEntries(data!.letter.compliance.map((r) => [r.key, r.condition.map(text)]));
+      expect(conditions['J.']).toEqual(['Total number of ineligible ULBs']);
+      expect(conditions['K.']).toEqual(['Resultant total number of eligible ULBs in the proposal']);
       expect(data!.counts).toMatchObject({ stateUlbTotal: 4, proposalUlbs: 2, ineligibleStateWide: 1 });
     });
 
@@ -551,7 +554,7 @@ describe('ClaimLetterDocumentService', () => {
 
     it('refuses an abandoned batch before the active-batch check', async () => {
       batchModel.findOne.mockReturnValue(q({ ...parent, isAbandoned: true }));
-      await expect(service.getDocument(claimLetterId, stateUser)).rejects.toThrow('This claim batch was abandoned.');
+      await expect(service.getDocument(claimLetterId, stateUser)).rejects.toThrow('This claim batch was discarded.');
       await expect(service.loadParent(claimLetterId, stateUser)).rejects.toThrow(ConflictException);
       expect(activeBatch.assertActive).not.toHaveBeenCalled();
     });

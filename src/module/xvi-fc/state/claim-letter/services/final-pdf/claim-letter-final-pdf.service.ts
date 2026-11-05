@@ -173,7 +173,7 @@ export class ClaimLetterFinalPdfService {
     if (parent.currentFormStatus !== FORM_STATUS.IN_PROGRESS || parent.isAbandoned) {
       throw new ConflictException(
         parent.isAbandoned
-          ? 'This claim letter was abandoned.'
+          ? 'This claim letter was discarded.'
           : `The final claim letter is not available (status is ${getFormStatusLabel(parent.currentFormStatus)}).`,
       );
     }

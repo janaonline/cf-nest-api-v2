@@ -29,7 +29,7 @@ export function formatPercent(part: number, total: number): string {
 }
 
 export function formatFraction(part: number, total: number): string {
-  return `${part}/${total} (${formatPercent(part, total)}%)`;
+  return `${part} out of ${total} (${formatPercent(part, total)}%)`;
 }
 
 export function formatFractionOrNil(part: number, total: number): string {
@@ -44,6 +44,12 @@ export function plural(n: number, one: string, many: string): string {
 export function shiftFinancialYear(fyLabel: string, offset: number): string {
   const start = Number(fyLabel.slice(0, 4)) + offset;
   return `${start}-${String((start + 1) % 100).padStart(2, '0')}`;
+}
+
+/** "2026-2032" -> "2026-32"; any other text is returned as is. */
+export function formatAwardPeriod(period: string): string {
+  const m = /^(\d{4})-(\d{4})$/.exec(period);
+  return m ? `${m[1]}-${m[2].slice(2)}` : period;
 }
 
 export function ordinal(n: number): string {

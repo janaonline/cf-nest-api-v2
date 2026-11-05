@@ -1031,7 +1031,7 @@ describe('ClaimLetterService', () => {
     it('refuses an abandoned batch, which abandon leaves IN_PROGRESS', async () => {
       batchModel.findOne.mockReturnValue(q({ _id: 'x', state: stateId, currentFormStatus: 2, isAbandoned: true }));
       await expect(service.uploadSignedFile('x', fileRef, stateUser)).rejects.toThrow(
-        'This claim batch was abandoned.',
+        'This claim batch was discarded.',
       );
       expect(batchModel.findOneAndUpdate).not.toHaveBeenCalled();
     });

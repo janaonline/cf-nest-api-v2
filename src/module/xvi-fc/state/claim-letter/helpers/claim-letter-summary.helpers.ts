@@ -20,7 +20,7 @@ export function mapClaimLetterBatchDocToSummary(doc: Record<string, unknown>, us
     version: doc['version'] as number,
     currentFormStatus,
     // Abandon is a flag and leaves currentFormStatus as is, so the label is overridden.
-    currentFormStatusLabel: isAbandoned ? 'Abandoned' : getFormStatusLabel(currentFormStatus),
+    currentFormStatusLabel: isAbandoned ? 'Discarded' : getFormStatusLabel(currentFormStatus),
     assemblyStatus: doc['assemblyStatus'] as 'BUILDING' | 'READY',
     ulbCount: doc['ulbCount'] as number,
     isAbandoned,

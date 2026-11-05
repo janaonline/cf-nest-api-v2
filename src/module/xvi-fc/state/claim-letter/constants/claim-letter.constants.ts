@@ -18,7 +18,7 @@ export const CLAIM_LETTER_CHILD_INSERT_CHUNK_SIZE = 200;
 export const CLAIM_LETTER_SIGNED_FILE_MAX_SIZE_KB = 20 * 1024;
 
 /** 409 for any action on an abandoned batch (preview, .docx, signed-file upload, submit). */
-export const CLAIM_LETTER_ABANDONED_MESSAGE = 'This claim batch was abandoned.';
+export const CLAIM_LETTER_ABANDONED_MESSAGE = 'This claim batch was discarded.';
 
 /** Generous so no live build is taken for stale; tune from production p99 build time (ADR 0002). */
 export const CLAIM_LETTER_STALE_BUILD_THRESHOLD_MINUTES = 30;

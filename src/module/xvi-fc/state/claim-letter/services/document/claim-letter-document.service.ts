@@ -54,6 +54,7 @@ import {
   buildAnnexureCell,
   criterionColumn,
   FC_UNSPENT_CRITERION_TYPE,
+  formatAwardPeriod,
   formatDetailValue,
   formatFraction,
   formatFractionOrNil,
@@ -443,17 +444,17 @@ export class ClaimLetterDocumentService {
         condition: [para([b('Total number of ineligible ULBs')])],
         status: j
           ? [
-              para([b(String(j)), t(`/${total} (${formatPercent(j, total)}%)`)]),
-              para([b('(list of ineligible ULBs has been attached for record)')]),
+              para([b(String(j)), t(` out of ${total} (${formatPercent(j, total)}%).`)]),
+              para([b('(The list of ineligible ULBs is enclosed for record.)')]),
             ]
           : [para([t('Nil')])],
       },
       {
         key: 'K.',
-        condition: [para([b('Resultantly, total number of eligible ULBs in this proposal')])],
+        condition: [para([b('Resultant total number of eligible ULBs in the proposal')])],
         status: [
-          para([t(formatFraction(counts.eligibleInProposal, total))]),
-          para([b('(list of eligible ULBs may be perused)')]),
+          para([t(`${formatFraction(counts.eligibleInProposal, total)}.`)]),
+          para([b('(The list of eligible ULBs is enclosed for reference.)')]),
         ],
       },
     ];
@@ -568,8 +569,8 @@ export class ClaimLetterDocumentService {
               sfc.whichAwardPeriod ? t(sfc.whichAwardPeriod) : { ...ph('<nth SFC>'), hint: SFC_HINT },
               t(' and submitted the ATR on its recommendations vide dt. '),
               slot('sfcAtrDate'),
-              t('. The recommendations of SFC are applicable till FY '),
-              sfc.awardPeriod ? t(sfc.awardPeriod) : { ...ph('<award period>'), hint: SFC_HINT },
+              t('. The recommendations of the SFC are applicable for the period FY '),
+              sfc.awardPeriod ? t(formatAwardPeriod(sfc.awardPeriod)) : { ...ph('<award period>'), hint: SFC_HINT },
               t('.'),
             ])
           : para([
