@@ -118,6 +118,10 @@ export class AfsDigitizationV3QueueService {
     try {
       await this.digitizationV3Service.markProcessing(data, job.id);
 
+      // Load-testing switch: skip FastAPI and Textract / Gemini cost, but still mark the file failed with a clear message
+      const dryRunDelayMs = this.dryRunDelayMs();
+      if (dryRunDelayMs > 0) await this.simulateDryRun(dryRunDelayMs);
+
       const afsDigitizationJobId = await this.submit(data);
       await this.digitizationV3Service.markSubmitted(data, afsDigitizationJobId);
       this.logger.log(`AFS digitization v3 job ${job.id} submitted to FastAPI as ${afsDigitizationJobId}`);
@@ -196,6 +200,22 @@ export class AfsDigitizationV3QueueService {
   // FastAPI calls
   // ---------------------------------------------------------------------------
 
+  /** Load-testing switch: dry run is on only when AFS_DIGITIZATION_V3_DRY_RUN_DELAY_MS is set and greater than 0. */
+  private dryRunDelayMs(): number {
+    const delay = Number(this.config.get('AFS_DIGITIZATION_V3_DRY_RUN_DELAY_MS'));
+    return Number.isFinite(delay) && delay > 0 ? delay : 0;
+  }
+
+  /**
+   * Skips FastAPI (no Textract / Gemini cost) after a fake delay, then fails the job without retries. handleJob's
+   * catch marks the file failed with this message, so no fake result is stored and it can be queued again once
+   * the variable is removed.
+   */
+  private async simulateDryRun(delayMs: number): Promise<never> {
+    await sleep(delayMs);
+    throw new UnrecoverableError('Dry run: digitization is disabled (AFS_DIGITIZATION_V3_DRY_RUN_DELAY_MS)');
+  }
+
   private baseUrl(): string {
     const url = this.config.get<string>('AFS_DIGITIZATION_V3_URL');
     if (!url) throw new UnrecoverableError('AFS_DIGITIZATION_V3_URL is not configured');
@@ -214,13 +234,15 @@ export class AfsDigitizationV3QueueService {
     const form = new FormData();
     form.append('s3_path', data.pdfUrl);
     form.append('doc_type', fastApiDocType);
+    form.append('source', '15thfc');
+    if (data.batchId) form.append('batch_id', data.batchId);
     const yearLabel = YearIdToLabel[data.year];
     if (yearLabel) form.append('financial_year', yearLabel);
     if (data.ulbName) form.append('ulb_name', data.ulbName);
-    // Keep the classification; skip the validation and arithmetic cross-checks to save Gemini cost.
+    // Run classification plus the Gemini accuracy (cross-check) and arithmetic validations.
     form.append('enable_document_classification', 'true');
-    form.append('enable_validation', 'false');
-    form.append('enable_arithmetic_validation', 'false');
+    form.append('enable_validation', 'true');
+    form.append('enable_arithmetic_validation', 'true');
 
     const created = await this.request<FastApiJobCreated>(() =>
       firstValueFrom(

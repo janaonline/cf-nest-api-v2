@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { FilterQuery, Model, Types } from 'mongoose';
+import { AnyBulkWriteOperation, FilterQuery, Model, Types } from 'mongoose';
 import { ConfigService } from '@nestjs/config';
 import * as XLSX from 'xlsx';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
@@ -17,6 +17,7 @@ import { State, StateDocument } from 'src/schemas/state.schema';
 import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { Year, YearDocument } from 'src/schemas/year.schema';
 import { documentTypes } from './constants/docTypes';
+import { DUPLICATE_SLOT_ORDER, findDuplicateSlots } from './helpers/afs-duplicate.helper';
 import { AuditorReportDto } from './dto/auditor-report.dto';
 import { DigitizationReportQueryDto } from './dto/digitization-report-query.dto';
 import { AfsFile, AfsFileList, AfsFileReport, AuditorReport, IAfsExcelFile } from './dto/interface';
@@ -52,6 +53,8 @@ interface AnnualAccountPdfFile {
   fileSizeBytes?: number;
   metadataRetryCount?: number;
   metadataRetryUrl?: string;
+  isDuplicate?: boolean;
+  duplicateOfDocType?: string;
 }
 
 // After this many failed attempts at the same url, permanently give up on the field (see below).
@@ -91,6 +94,28 @@ export interface AnnualAccountPdfMetadataBackfillSummary extends AnnualAccountPd
   averageMsPerDocument: number;
   estimatedRemainingMs: number;
   estimatedCompletionAt: Date | null;
+}
+
+/** Documents read and written per round by the duplicates backfill */
+const DUPLICATE_BACKFILL_BATCH_SIZE = 200;
+
+export interface AnnualAccountDuplicateBackfillOptions {
+  limit?: number;
+  onlyMissing?: boolean;
+}
+
+export interface AnnualAccountDuplicateBackfillSummary {
+  documentsMatched: number;
+  documentsProcessed: number;
+  documentsUpdated: number;
+  documentsFailed: number;
+  /** Duplicate slots seen (already marked or newly marked) */
+  duplicatesFound: number;
+  /** Slots newly marked as a duplicate, or whose original changed */
+  marked: number;
+  /** Slots that were marked before and no longer are */
+  cleared: number;
+  elapsedMs: number;
 }
 
 export interface AnnualAccountPdfMetadataBackfillStatus {
@@ -409,6 +434,160 @@ export class AfsDigitizationService {
     );
 
     return { $or: missingMetadataFilters };
+  }
+
+  /**
+   * Marks `isDuplicate` / `duplicateOfDocType` on each slot's `pdf` in annualaccountdatas when that slot holds the same
+   * file as an earlier slot of the same audit type (see `findDuplicateSlots`). Uses the file size and page count stored
+   * by the PDF-metadata backfill, so run that first. No S3 calls: it only reads and writes Mongo.
+   *
+   * Every checked slot gets an explicit `isDuplicate` (true or false), so `onlyMissing` (default) only visits documents
+   * with a PDF that has not been checked yet. A replaced file loses its flag with the rest of its `pdf` object, which
+   * brings the document back into the next run. Pass `onlyMissing=false` to recompute everything.
+   */
+  async backfillDuplicatesForAnnualAccounts(
+    options: AnnualAccountDuplicateBackfillOptions = {},
+  ): Promise<AnnualAccountDuplicateBackfillSummary> {
+    const batchSize = DUPLICATE_BACKFILL_BATCH_SIZE;
+    const limit = options.limit ? this.clampPositiveInteger(options.limit, 0, 1, 50_000) : undefined;
+    const onlyMissing = options.onlyMissing ?? true;
+    const filter = this.buildAnnualAccountDuplicateBackfillFilter(onlyMissing);
+    const matchedDocuments = await this.annualAccountModel.countDocuments(filter).exec();
+    const startedAt = Date.now();
+
+    const summary: AnnualAccountDuplicateBackfillSummary = {
+      documentsMatched: limit ? Math.min(matchedDocuments, limit) : matchedDocuments,
+      documentsProcessed: 0,
+      documentsUpdated: 0,
+      documentsFailed: 0,
+      duplicatesFound: 0,
+      marked: 0,
+      cleared: 0,
+      elapsedMs: 0,
+    };
+
+    const projection: Record<string, 1> = { _id: 1 };
+    for (const auditType of ANNUAL_ACCOUNT_AUDIT_TYPES) {
+      for (const slot of DUPLICATE_SLOT_ORDER) projection[`${auditType}.provisional_data.${slot}.pdf`] = 1;
+    }
+
+    let lastId: Types.ObjectId | undefined;
+
+    while (!limit || summary.documentsProcessed < limit) {
+      const currentBatchSize = limit ? Math.min(batchSize, limit - summary.documentsProcessed) : batchSize;
+      const docs = await this.annualAccountModel
+        .find({ ...filter, ...(lastId ? { _id: { $gt: lastId } } : {}) }, projection)
+        .sort({ _id: 1 })
+        .limit(currentBatchSize)
+        .lean<(AnnualAccountDataLean & { _id: Types.ObjectId })[]>()
+        .exec();
+
+      if (docs.length === 0) break;
+
+      const ops: AnyBulkWriteOperation<AnnualAccountDataDocument>[] = [];
+      for (const doc of docs) {
+        lastId = doc._id;
+        summary.documentsProcessed += 1;
+
+        try {
+          const update = this.buildDuplicateUpdate(doc, summary);
+          if (update) ops.push({ updateOne: { filter: { _id: doc._id }, update } });
+        } catch (error) {
+          summary.documentsFailed += 1;
+          this.logger.error(
+            `Failed annual account duplicate check for ${doc._id.toString()}`,
+            error instanceof Error ? error.stack : String(error),
+          );
+        }
+      }
+
+      if (ops.length > 0) {
+        try {
+          await this.annualAccountModel.bulkWrite(ops, { ordered: false });
+          summary.documentsUpdated += ops.length;
+        } catch (error) {
+          summary.documentsFailed += ops.length;
+          this.logger.error(
+            `Failed annual account duplicate backfill write of ${ops.length} documents`,
+            error instanceof Error ? error.stack : String(error),
+          );
+          // The same documents would match again, so stop rather than loop
+          break;
+        }
+      }
+
+      summary.elapsedMs = Date.now() - startedAt;
+      this.logger.log(`Annual account duplicate backfill progress`, {
+        processed: summary.documentsProcessed,
+        matched: summary.documentsMatched,
+        updated: summary.documentsUpdated,
+        elapsedMs: summary.elapsedMs,
+      });
+    }
+
+    summary.elapsedMs = Date.now() - startedAt;
+    this.logger.log(`Annual account duplicate backfill completed`, summary);
+    return summary;
+  }
+
+  /** The `$set` / `$unset` that brings one document's duplicate flags up to date, or null when nothing changes. */
+  private buildDuplicateUpdate(
+    doc: AnnualAccountDataLean,
+    summary: AnnualAccountDuplicateBackfillSummary,
+  ): { $set?: Record<string, boolean | string>; $unset?: Record<string, ''> } | null {
+    const $set: Record<string, boolean | string> = {};
+    const $unset: Record<string, ''> = {};
+
+    for (const auditType of ANNUAL_ACCOUNT_AUDIT_TYPES) {
+      const provisional = doc[auditType]?.provisional_data;
+      const pdfs: Partial<Record<string, AnnualAccountPdfFile>> = {};
+      for (const slot of DUPLICATE_SLOT_ORDER) pdfs[slot] = provisional?.[slot]?.pdf;
+      const duplicates = findDuplicateSlots(pdfs);
+
+      for (const slot of DUPLICATE_SLOT_ORDER) {
+        const pdf = pdfs[slot];
+        if (!pdf) continue;
+        const path = `${auditType}.provisional_data.${slot}.pdf`;
+
+        if (!pdf.url?.trim()) {
+          // No file in this slot any more: drop a flag left from the file that was here before
+          if (pdf.isDuplicate !== undefined) {
+            $unset[`${path}.isDuplicate`] = '';
+            $unset[`${path}.duplicateOfDocType`] = '';
+          }
+          continue;
+        }
+
+        const original = duplicates.get(slot);
+        if (original) summary.duplicatesFound += 1;
+
+        if (pdf.isDuplicate === !!original && pdf.duplicateOfDocType === original) continue;
+
+        $set[`${path}.isDuplicate`] = !!original;
+        if (original) {
+          $set[`${path}.duplicateOfDocType`] = original;
+          summary.marked += 1;
+        } else {
+          $unset[`${path}.duplicateOfDocType`] = '';
+          if (pdf.isDuplicate) summary.cleared += 1;
+        }
+      }
+    }
+
+    const hasSet = Object.keys($set).length > 0;
+    const hasUnset = Object.keys($unset).length > 0;
+    if (!hasSet && !hasUnset) return null;
+    return { ...(hasSet && { $set }), ...(hasUnset && { $unset }) };
+  }
+
+  private buildAnnualAccountDuplicateBackfillFilter(onlyMissing: boolean): FilterQuery<AnnualAccountDataDocument> {
+    const slotFilters = ANNUAL_ACCOUNT_AUDIT_TYPES.flatMap((auditType) =>
+      DUPLICATE_SLOT_ORDER.map((slot) => ({
+        [`${auditType}.provisional_data.${slot}.pdf.url`]: { $exists: true, $nin: [null, ''] },
+        ...(onlyMissing && { [`${auditType}.provisional_data.${slot}.pdf.isDuplicate`]: { $exists: false } }),
+      })),
+    );
+    return { $or: slotFilters };
   }
 
   private clampPositiveInteger(value: number | undefined, fallback: number, min: number, max: number): number {

@@ -5,11 +5,11 @@ Admin feature that sends ULB financial-statement PDFs to the FastAPI v3 digitiza
 
 Ticket: TS-1073. Spans three repos:
 
-| Repo | What lives there |
-| --- | --- |
-| `cf-nest-api-v2` (this one) | API, BullMQ queue and worker, Mongo writes. Code in this folder |
-| `cf-fastapi-v3` | The digitization itself (OCR, Gemini classification, Excel). `app/routers/afs_digitization/` |
-| `cityfinance-ng-ui-v2` | The admin page, `src/app/admin/afs-digitization-v3/`, route `/afs-digitization-v3` |
+| Repo                        | What lives there                                                                             |
+| --------------------------- | -------------------------------------------------------------------------------------------- |
+| `cf-nest-api-v2` (this one) | API, BullMQ queue and worker, Mongo writes. Code in this folder                              |
+| `cf-fastapi-v3`             | The digitization itself (OCR, Gemini classification, Excel). `app/routers/afs_digitization/` |
+| `cityfinance-ng-ui-v2`      | The admin page, `src/app/admin/afs-digitization-v3/`, route `/afs-digitization-v3`           |
 
 ## How it works
 
@@ -48,8 +48,8 @@ sequenceDiagram
    two admins, cannot queue the same file twice. If adding to Redis fails, the file is marked `failed` straight away so it
    is not stuck as queued.
 3. **Process.** The worker calls FastAPI `POST /afs-digitization/jobs` with the file's stored path as `s3_path`.
-   FastAPI reads the PDF from the CityFinance bucket itself; Nest never downloads or uploads the PDF. Classification is on;
-   the Gemini validation and arithmetic checks are off to save cost.
+   FastAPI reads the PDF from the CityFinance bucket itself; Nest never downloads or uploads the PDF. Classification, the Gemini
+   accuracy validation and the arithmetic validation are all on.
 4. **Wait.** FastAPI runs the job as a background task. The worker polls its status until it is `completed` or `failed`.
 5. **Save.** Nest reads the result and writes a summary to Mongo. The full extraction stays in FastAPI.
 
@@ -58,18 +58,18 @@ sequenceDiagram
 Stored on `afs_xl_files.ulbFile` (the ULB's PDF). One record per `{ulb, year, auditType, docType}`
 (unique index). Only `ulbFile.*` paths are written, so nothing else in the record is overwritten.
 
-| Field | Meaning |
-| --- | --- |
-| `digitizationStatus` | `queued`, `digitized` or `failed` (existing enum) |
-| `queue.status` | `queued`, `processing`, `completed` or `failed`; separates queued from processing |
-| `queue.failedReason`, `digitizationMsg` | Why it failed, or a non-fatal warning (e.g. Excel not linked) |
-| `requestId` | **FastAPI job id** (`afsDigitizationJobId`). Saved as soon as FastAPI accepts the job, so running and failed jobs can be traced. Indexed |
-| `excelUrl` | Key of the digitized Excel in the CityFinance bucket |
-| `pdfUrl`, `noOfPages`, `totalProcessingTimeMs` | Source PDF and job facts |
-| `detectedDocTypes` | Distinct doc types actually present in the PDF |
-| `segments` | Page range per type: `{docType, startPage, endPage, title?, isDuplicate}` |
-| `isConsolidated` | More than one distinct type is present |
-| `isMismatch` | The uploaded type (`docType` on the record) is **not** among `detectedDocTypes` |
+| Field                                          | Meaning                                                                                                                                  |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `digitizationStatus`                           | `queued`, `digitized` or `failed` (existing enum)                                                                                        |
+| `queue.status`                                 | `queued`, `processing`, `completed` or `failed`; separates queued from processing                                                        |
+| `queue.failedReason`, `digitizationMsg`        | Why it failed, or a non-fatal warning (e.g. Excel not linked)                                                                            |
+| `requestId`                                    | **FastAPI job id** (`afsDigitizationJobId`). Saved as soon as FastAPI accepts the job, so running and failed jobs can be traced. Indexed |
+| `excelUrl`                                     | Key of the digitized Excel in the CityFinance bucket                                                                                     |
+| `pdfUrl`, `noOfPages`, `totalProcessingTimeMs` | Source PDF and job facts                                                                                                                 |
+| `detectedDocTypes`                             | Distinct doc types actually present in the PDF                                                                                           |
+| `segments`                                     | Page range per type: `{docType, startPage, endPage, title?, isDuplicate}`                                                                |
+| `isConsolidated`                               | More than one distinct type is present                                                                                                   |
+| `isMismatch`                                   | The uploaded type (`docType` on the record) is **not** among `detectedDocTypes`                                                          |
 
 Rules worth knowing:
 
@@ -84,13 +84,13 @@ Rules worth knowing:
 
 Doc type mapping (`afs-digitization-v3.constants.ts`):
 
-| Nest `docType` | FastAPI |
-| --- | --- |
-| `bal_sheet` | `BALANCE_SHEET` |
-| `bal_sheet_schedules` | `BALANCE_SHEET_SCHEDULE` |
-| `inc_exp` | `INCOME_EXPENDITURE` |
-| `inc_exp_schedules` | `INCOME_EXPENDITURE_SCHEDULE` |
-| `cash_flow` | `CASH_FLOW` |
+| Nest `docType`        | FastAPI                       |
+| --------------------- | ----------------------------- |
+| `bal_sheet`           | `BALANCE_SHEET`               |
+| `bal_sheet_schedules` | `BALANCE_SHEET_SCHEDULE`      |
+| `inc_exp`             | `INCOME_EXPENDITURE`          |
+| `inc_exp_schedules`   | `INCOME_EXPENDITURE_SCHEDULE` |
+| `cash_flow`           | `CASH_FLOW`                   |
 
 `auditor_report` is not supported here (it lives in `afs_auditors_report`); the API returns 400 for it.
 
@@ -104,13 +104,13 @@ return `success` themselves or the client gets a doubly wrapped body.
 
 One page of ULBs plus the card counts. Body (`AfsDigitizationV3QueryDto`, extends the AFS dashboard query):
 
-| Field | Notes |
-| --- | --- |
-| `yearId`, `auditType`, `docType` | Required. `docType` must not be `auditor_report` |
-| `stateId[]`, `ulbId[]`, `populationCategory` | Same as the AFS dashboard |
-| `digitizationV3Status` | `not-digitized`, `queued`, `processing`, `digitized`, `failed` |
-| `isConsolidated`, `isMismatch` | `true` filters as you expect. `false` returns only files that are digitized and not consolidated / not mismatched |
-| `page`, `limit` | 1-based page, default limit 100 |
+| Field                                        | Notes                                                                                                             |
+| -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `yearId`, `auditType`, `docType`             | Required. `docType` must not be `auditor_report`                                                                  |
+| `stateId[]`, `ulbId[]`, `populationCategory` | Same as the AFS dashboard                                                                                         |
+| `digitizationV3Status`                       | `not-digitized`, `queued`, `processing`, `digitized`, `failed`                                                    |
+| `isConsolidated`, `isMismatch`               | `true` filters as you expect. `false` returns only files that are digitized and not consolidated / not mismatched |
+| `page`, `limit`                              | 1-based page, default limit 100                                                                                   |
 
 Response: `{ success, data[], totalCount, metrics }`. `metrics` covers the whole selection (ignoring the status, consolidated
 and mismatch filters): `total, withPdf, notDigitized, queued, processing, digitized, failed, consolidated, mismatch`.
@@ -125,8 +125,38 @@ of joining every ULB to `afs_xl_files`. Only a few small `ulbFile` fields are re
 ### `POST /enqueue-by-filter`
 
 Same body as `/list`. Queues every match. Send `ulbId` to queue only specific rows (this is how **Queue Selected** works).
-Returns `{ matched, queued, skippedNoPdf, skippedAlreadyQueued, skippedAlreadyDigitized, failedToQueue }`.
+Returns `{ matched, queued, skippedNoPdf, skippedDuplicate, skippedAlreadyQueued, skippedAlreadyDigitized, failedToQueue }`.
 Capped at 10,000 files per call (`MAX_ENQUEUE_BATCH`).
+
+**Duplicates.** A slot whose PDF is the same file as an earlier slot of the same ULB, year and audit type is flagged on
+`annualaccountdatas` (`<auditType>.provisional_data.<slot>.pdf.isDuplicate` and `.duplicateOfDocType`) by
+`POST /afs-digitization/annual-accounts/duplicates/backfill` (`limit`, `onlyMissing`; by default only PDFs not
+checked yet, `onlyMissing=false` recomputes all; run the PDF-metadata backfill first). Same file = same url, or same
+`fileSizeBytes` and `pageCount`; a slot without that metadata never matches. Slot order is `bal_sheet`,
+`bal_sheet_schedules`, `inc_exp`, `inc_exp_schedules`, `cash_flow`; the first is the original. Duplicates are skipped here
+(`skippedDuplicate`), and in `/list` a duplicate row follows its original's status, Excel and segments, carries
+`isDuplicate` and `duplicateOfDocType`, and is counted in `metrics.duplicate`.
+
+### `GET /metrics` and `POST /metrics/rebuild`
+
+The overall cards (`total`, `totalPages`, `digitized`, `queued`, `processing`, `failed`) across every year, audit type and doc
+type, read from `afs_metrics`. `digitized` / `queued` / `processing` / `failed` come from the live row (`docType: 'v3'`:
+`digitizedFiles`, `queuedFiles`, `processingFiles`, `failedFiles`). `total` is the unique-files baseline (below); until that
+row exists it falls back to the live row's `totalFiles`, the files that have entered the pipeline. The per-selection
+`metrics` in `/list` is separate and does count all ULBs.
+
+**Uniqueness baseline** (`docType: 'v3-uniqueness'`: `totalFiles`, `totalPages`, `byYear`, `byAuditType`). Per ULB, year and
+audit type, the five statement PDFs minus the ones that are the same file as an earlier slot (`findDuplicateSlots`, same rule
+as the duplicate flags); auditor reports are excluded, and only 2019-20 to 2024-25 are counted. It is a snapshot: seeded in
+the background at startup if missing, and refreshed with `POST /metrics/rebuild-uniqueness` (reads every annual account).
+The same row also holds `breakdown`: one entry per year, doc type, state and audit type that has a PDF, with the unique `files` and
+`pages` and the `duplicates` left out (state comes from the ULB; `Unknown` if the ULB has none). `GET /metrics/breakdown` returns
+those rows, optionally narrowed with `year`, `docType`, `state` and `auditType` query params, plus the summed files / pages / duplicates.
+It matches the `AA_PDF_Uniqueness_Check` sheet's "Unique docs (without AR)" / "Unique page count (without AR)" columns.
+
+The counters move by `$inc` in `claim` and the `mark*` writes, using the record's previous status (same rules as `toView`).
+A counter failure is logged and never fails the job. On startup the row is seeded from `afs_xl_files` if it is missing.
+`POST /metrics/rebuild` recounts everything and overwrites the row; use it if the numbers drift.
 
 ### `GET /jobs/:afsDigitizationJobId/log`
 
@@ -136,14 +166,14 @@ This is the job record, not a step-by-step history. FastAPI keeps only the curre
 
 ## Queue (Redis and BullMQ)
 
-| Setting | Value |
-| --- | --- |
-| Queue name | `afsDigitizationV3` (`AFS_DIGITIZATION_V3_QUEUE`) |
-| Redis | `REDIS_URL`; keys prefixed `appq:` (or `BULL_QUEUE_PREFIX`). Set up once in `app.module.ts` |
-| Worker | `AfsDigitizationV3Processor`, in the Nest process, concurrency **3** |
-| Attempts | 2, exponential backoff starting at 30 s |
-| Retention | Completed jobs kept 24 h (max 1000), failed kept 7 days (max 1000) |
-| Job id | `digitize-v3-<ulb>-<year>-<auditType>-<docType>-<timestamp>`. Unique per request, so a kept finished job never blocks a re-queue |
+| Setting    | Value                                                                                                                            |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Queue name | `afsDigitizationV3` (`AFS_DIGITIZATION_V3_QUEUE`)                                                                                |
+| Redis      | `REDIS_URL`; keys prefixed `appq:` (or `BULL_QUEUE_PREFIX`). Set up once in `app.module.ts`                                      |
+| Worker     | `AfsDigitizationV3Processor`, in the Nest process, concurrency **3**                                                             |
+| Attempts   | 2, exponential backoff starting at 30 s                                                                                          |
+| Retention  | Completed jobs kept 24 h (max 1000), failed kept 7 days (max 1000)                                                               |
+| Job id     | `digitize-v3-<ulb>-<year>-<auditType>-<docType>-<timestamp>`. Unique per request, so a kept finished job never blocks a re-queue |
 
 Redis holds only the queue. The status the page shows comes from Mongo, never from Redis.
 
@@ -194,14 +224,14 @@ Route `/afs-digitization-v3` (`authGuard`; no nav menu entry). Table styled like
 
 Nest `.env`:
 
-| Variable | Purpose |
-| --- | --- |
-| `AFS_DIGITIZATION_V3_URL` | FastAPI base, without `/afs-digitization` (e.g. `https://dev.cityfinance.in/api/v3`, or `http://localhost:8000` locally). Required |
-| `AFS_DIGITIZATION_V3_TIMEOUT_MS` | Per-request timeout, default 120000 |
-| `AFS_DIGITIZATION_V3_POLL_INTERVAL_MS` | Status poll interval, default 5000 |
-| `AFS_DIGITIZATION_V3_MAX_WAIT_MS` | Give up waiting for one job after this, default 1200000 (20 min) |
-| `REDIS_URL`, `BULL_QUEUE_PREFIX` | Redis connection and key prefix |
-| `AWS_BUCKET_NAME` | Bucket Nest signs files from; must equal FastAPI's `S3_BUCKET_CF` |
+| Variable                               | Purpose                                                                                                                            |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `AFS_DIGITIZATION_V3_URL`              | FastAPI base, without `/afs-digitization` (e.g. `https://dev.cityfinance.in/api/v3`, or `http://localhost:8000` locally). Required |
+| `AFS_DIGITIZATION_V3_TIMEOUT_MS`       | Per-request timeout, default 120000                                                                                                |
+| `AFS_DIGITIZATION_V3_POLL_INTERVAL_MS` | Status poll interval, default 5000                                                                                                 |
+| `AFS_DIGITIZATION_V3_MAX_WAIT_MS`      | Give up waiting for one job after this, default 1200000 (20 min)                                                                   |
+| `REDIS_URL`, `BULL_QUEUE_PREFIX`       | Redis connection and key prefix                                                                                                    |
+| `AWS_BUCKET_NAME`                      | Bucket Nest signs files from; must equal FastAPI's `S3_BUCKET_CF`                                                                  |
 
 FastAPI: `S3_BUCKET_CF` (see `app/routers/afs_digitization/README.md`).
 
@@ -209,14 +239,14 @@ Deploy FastAPI before Nest. Against an older FastAPI the bucket is not reported 
 
 ## Troubleshooting
 
-| Symptom | Likely cause |
-| --- | --- |
-| Job fails at once with a FastAPI 4xx error | `pdfUrl` is not in FastAPI's `S3_BUCKET_CF` (bucket mismatch), or it is not a PDF |
-| Digitized but no Excel icon | Bucket mismatch: read the status tooltip. Or the file was digitized before the Excel moved to `S3_BUCKET_CF`; re-queue it |
-| File stuck as `queued` | Redis was cleared, or Nest was down. Re-queue is skipped while Mongo says `queued`; reset `ulbFile.digitizationStatus` by hand |
-| Nothing in Bull Board | Finished jobs are kept 24 h / 7 d. Look in the Completed and Failed tabs, and check the prefix |
-| `View log` shows 404 | FastAPI has no job with that id (different FastAPI instance or database) |
-| Page count / size empty | PDF-metadata backfill has not run for that file (`POST /afs-digitization/annual-accounts/pdf-metadata/backfill`) |
+| Symptom                                    | Likely cause                                                                                                                   |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| Job fails at once with a FastAPI 4xx error | `pdfUrl` is not in FastAPI's `S3_BUCKET_CF` (bucket mismatch), or it is not a PDF                                              |
+| Digitized but no Excel icon                | Bucket mismatch: read the status tooltip. Or the file was digitized before the Excel moved to `S3_BUCKET_CF`; re-queue it      |
+| File stuck as `queued`                     | Redis was cleared, or Nest was down. Re-queue is skipped while Mongo says `queued`; reset `ulbFile.digitizationStatus` by hand |
+| Nothing in Bull Board                      | Finished jobs are kept 24 h / 7 d. Look in the Completed and Failed tabs, and check the prefix                                 |
+| `View log` shows 404                       | FastAPI has no job with that id (different FastAPI instance or database)                                                       |
+| Page count / size empty                    | PDF-metadata backfill has not run for that file (`POST /afs-digitization/annual-accounts/pdf-metadata/backfill`)               |
 
 Redis check:
 
@@ -236,14 +266,14 @@ redis-cli -u "$REDIS_URL" get appq:afsDigitizationV3:id        # jobs ever added
 
 ## Files
 
-| File | Role |
-| --- | --- |
-| `afs-digitization-v3.controller.ts` | The three endpoints |
-| `afs-digitization-v3.service.ts` | List, enqueue-by-filter, and all Mongo writes (claim, processing, digitized, failed) |
-| `afs-digitization-v3-queue.service.ts` | Calls FastAPI, polls, maps the result, job log |
-| `afs-digitization-v3.processor.ts` | BullMQ worker (concurrency 3) |
-| `afs-digitization-v3.constants.ts` | Doc type maps, job and result types, limits |
-| `../dto/afs-digitization-v3-query.dto.ts` | Request body |
-| `src/schemas/afs/afs-excel-file.schema.ts` | `ulbFile` fields |
-| `src/schemas/afs/enums.ts` | `DigitizationV3Statuses` |
-| `src/core/constants/queues.ts` | Queue name |
+| File                                       | Role                                                                                 |
+| ------------------------------------------ | ------------------------------------------------------------------------------------ |
+| `afs-digitization-v3.controller.ts`        | The three endpoints                                                                  |
+| `afs-digitization-v3.service.ts`           | List, enqueue-by-filter, and all Mongo writes (claim, processing, digitized, failed) |
+| `afs-digitization-v3-queue.service.ts`     | Calls FastAPI, polls, maps the result, job log                                       |
+| `afs-digitization-v3.processor.ts`         | BullMQ worker (concurrency 3)                                                        |
+| `afs-digitization-v3.constants.ts`         | Doc type maps, job and result types, limits                                          |
+| `../dto/afs-digitization-v3-query.dto.ts`  | Request body                                                                         |
+| `src/schemas/afs/afs-excel-file.schema.ts` | `ulbFile` fields                                                                     |
+| `src/schemas/afs/enums.ts`                 | `DigitizationV3Statuses`                                                             |
+| `src/core/constants/queues.ts`             | Queue name                                                                           |
