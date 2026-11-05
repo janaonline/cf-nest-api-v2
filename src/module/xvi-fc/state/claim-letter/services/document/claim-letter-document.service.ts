@@ -133,7 +133,12 @@ interface SfcLetterValues {
 const SFC_HINT = 'Comes from the SFC form';
 
 const LIST_TEXT: Record<ClaimLetterListKey, Pick<ClaimLetterListMeta, 'heading' | 'subheading'>> = {
-  ELIGIBLE: { heading: '1. List of Eligible ULBs', subheading: 'ULBs in this proposal.' },
+  ELIGIBLE: {
+    heading: '1. List of Eligible ULBs',
+    subheading:
+      'The table below lists eligible ULBs included in the current claim batch. ' +
+      'Other eligible ULBs may be included in subsequent claims.',
+  },
   INELIGIBLE: {
     heading: '2. List of Ineligible ULBs',
     subheading: 'All ULBs of the State not yet eligible, for record.',

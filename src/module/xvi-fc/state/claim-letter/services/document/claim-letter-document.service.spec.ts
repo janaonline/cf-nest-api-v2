@@ -432,6 +432,16 @@ describe('ClaimLetterDocumentService', () => {
       ]);
     });
 
+    it('notes above the eligible list that other eligible ULBs may come in later claims', async () => {
+      const { data } = await service.getDocument(claimLetterId, stateUser);
+      expect(data!.annexure.lists[0]).toMatchObject({
+        key: 'ELIGIBLE',
+        subheading:
+          'The table below lists eligible ULBs included in the current claim batch. ' +
+          'Other eligible ULBs may be included in subsequent claims.',
+      });
+    });
+
     it('lists this proposal A-Z and State-wide ineligible ULBs with the cell rules applied', async () => {
       const eligible = await service.getDocumentUlbs(claimLetterId, 'ELIGIBLE', 1, stateUser);
       const ineligible = await service.getDocumentUlbs(claimLetterId, 'INELIGIBLE', 1, stateUser);
