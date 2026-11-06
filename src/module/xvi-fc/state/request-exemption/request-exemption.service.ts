@@ -1,4 +1,4 @@
-import { ConflictException, Injectable } from '@nestjs/common';
+import { ConflictException, ForbiddenException, Injectable } from '@nestjs/common';
 import { InjectConnection, InjectModel } from '@nestjs/mongoose';
 import { Connection, Model, Types } from 'mongoose';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
@@ -46,6 +46,8 @@ import {
 } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
 import { EULB_FORM_ID } from 'src/module/xvi-fc/state/elected-urban-local-bodies/constants/elected-urban-local-bodies.constants';
 import { FormJsonService } from 'src/master/form-json/form-json.service';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
+import { CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE } from 'src/module/ulb-eligibility/ulb-eligibility.constants';
 import type { ClaimEligibilityRowMatchConfig } from 'src/module/xvi-fc/common/types/claim-eligibility.type';
 import { getFieldsByType } from './helpers/request-exemption-form-json.helpers';
 import { RequestExemptionFormJsonConfigService } from './services/form-json/request-exemption-form-json.service';
@@ -124,6 +126,7 @@ export class RequestExemptionService {
     private readonly fileInfoNormalizer: FileInfoNormalizerService,
     private readonly formJsonConfig: RequestExemptionFormJsonConfigService,
     private readonly formJsonService: FormJsonService,
+    private readonly ulbEligibilityService: UlbEligibilityService,
   ) {}
 
   /**
@@ -201,6 +204,15 @@ export class RequestExemptionService {
       ulbReasonOptions.map((option) => option.id),
       stateReasonOptions.map((option) => option.id),
     );
+
+    if (sanitized.ulb) {
+      const eligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(dto.stateId, 'XVIFC');
+      const exists = await this.ulbModel.exists({ ...eligibleUlbFilter, _id: sanitized.ulb });
+      if (!exists) {
+        throw new ForbiddenException(CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE);
+      }
+    }
+
     const existingDoc = await this.resolveExistingDocument(dto.stateId, dto.yearId, sanitized.ulb);
 
     const existingByFormId = new Map((existingDoc?.data ?? []).map((entry) => [entry.formId, entry]));

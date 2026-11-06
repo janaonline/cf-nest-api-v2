@@ -6,84 +6,193 @@ supports Installment 1 only.
 
 ## Before changing anything here, read the relevant ADR
 
-The three decisions below are referenced from multiple files each — read the linked ADR before
-touching code that cites it, not just the local comment:
+Each decision below is cited from several files; read the ADR, not just the local comment:
 
-- [docs/adr/0001-idempotent-retry.md](docs/adr/0001-idempotent-retry.md) — client-retry safety for
-  `createDraft`/`submit`.
-- [docs/adr/0002-batching-and-locks.md](docs/adr/0002-batching-and-locks.md) — the 3-batch-slot
-  cap, per-ULB locking, and stale-`BUILDING`-row recovery.
-- [docs/adr/0003-workflow-transitions.md](docs/adr/0003-workflow-transitions.md) — which mutations
-  write history, and why edits/uploads don't.
+- [docs/adr/0001-idempotent-retry.md](docs/adr/0001-idempotent-retry.md) - retry safety for create,
+  edit and submit, and the concurrency model of each later mutation.
+- [docs/adr/0002-batching-and-locks.md](docs/adr/0002-batching-and-locks.md) - the 3 batch slots,
+  per-ULB locks, the build stages, stale-`BUILDING` recovery and the edit-lock lease.
+- [docs/adr/0003-workflow-transitions.md](docs/adr/0003-workflow-transitions.md) - which mutations
+  write history, when the signed letter is cleared, and the submit preconditions.
+- [docs/adr/0004-one-active-batch.md](docs/adr/0004-one-active-batch.md) - one batch in progress per
+  State/year/installment, and why lifting it brings back stale letters.
+- [docs/adr/0005-exemptions-under-review.md](docs/adr/0005-exemptions-under-review.md) - an exemption
+  request under MoHUA review or approved counts; how the claim follows a later decision.
+- [docs/adr/0006-claim-amount-switch.md](docs/adr/0006-claim-amount-switch.md) - the claim is the
+  allocation unless formjson 26 `meta.claimAmountEditable` is on, and how to turn it back on.
 
 ## Layout
 
-- `services/assembly/` — the only place that creates/updates/abandons a batch (locks + children +
-  status). Everything else is read-only or touches only the parent document.
-- `services/eligibility/` — State-level gate + per-ULB criteria + Devolution allocation resolution.
-  Has cached `*ForDisplay` variants for read-only UI consumers; the assembly pipeline never uses
-  them (see the service's own doc comment on `evaluateStateLevelGateForDisplay`).
-- `services/recovery/` — hourly stale-`BUILDING` cleanup (cron) + read-only reconciliation report.
-- `services/history/` — the only writer of `ClaimLetterBatchHistory`; see ADR 0003 for what counts
-  as a transition worth recording.
-- `services/main/claim-letter.service.ts` — read paths + the two parent-only mutations (signed-file
-  upload, submit) that don't touch locks/children.
-- `services/document/claim-letter-document.service.ts` — assembles the claim letter document
-  (Covering Letter + Annexure 1 FC Disclosures + Annexure 2 City Conditions) consumed by the
-  frontend's Preview Template dialog and Download Template PDF — read-only, built on top of
-  `ClaimLetterUlbRowsService.getAllUlbRows()` rather than re-querying `ClaimLetterBatchUlb` directly.
-- `services/document/claim-letter-pdf.service.ts` (+ `claim-letter-pdf-layout.helpers.ts`) —
-  renders that same document into an actual PDF, server-side, via `GET :claimLetterId/document/pdf`
-  (`StreamableFile`). Uses `pdfkit`, not `pdfmake` — Download Template used to build the PDF in the
-  browser with `pdfmake`, which needs `'unsafe-eval'` in `script-src` and breaks under a strict CSP;
-  `pdfkit` has built-in text wrapping and no such requirement. `pdfkit` has no table primitive of
-  its own, so the one hand-rolled `drawTable` helper (fixed S.No./ULB columns + N dynamic trailing
-  columns, header re-drawn on page overflow) is reused across all 3 sections — do not duplicate it
-  per section.
-- `services/form-json/claim-letter-form-json.service.ts` — this feature's own `formjsons` document
-  (formId `CLAIM_LETTER_FORM_ID`): `signedClaimFile` field config plus the claimed-vs-allocated
-  variance band (`meta.varianceLowerPercent`/`varianceUpperPercent`, falling back to
-  `CLAIM_LETTER_VARIANCE_LOWER_PERCENT`/`UPPER_PERCENT` in `helpers/claim-letter-financial.helpers.ts`
-  when unset). `loadFormConfig` fetches the document exactly once per caller and derives both —
-  `getDetail`/`getClaimContext` (main service) and `prepareChildren` (assembly service, via the
-  `loadVarianceConfig` wrapper) each call it once per request; never chain a second independent
-  fetch for the other half of the same document.
-- `helpers/` — pure functions (financial rounding, content hashing, summary mapping). No I/O.
+- `claim-letter.controller.ts` - every route under `xvi-fc/state/claim-letter`. Reads need
+  VIEW_STATE_FORMS; create, edit, abandon, signed-file upload and letter-details save need
+  PREPARE_GRANT_LETTERS; submit needs FINAL_SUBMIT_TO_MOHUA.
+- `services/assembly/` - writes a batch's locks and children: create, edit and abandon, plus
+  `createNewVersion` and `acknowledgeLocks` (no caller in V1). The only other writer is the recovery
+  cleanup, which deletes a stale `BUILDING` batch with its children and locks through the same
+  shared helper. Everything else only reads, or writes the parent document alone.
+- `services/eligibility/` - the State-level gate, per-ULB criteria, Devolution allocations and claimed
+  totals. Its cached `*ForDisplay` methods serve read-only display paths only; create, edit, submit
+  and the letter always evaluate fresh.
+- `services/main/claim-letter.service.ts` - read paths (eligibility summary, claim context, detail,
+  history) and the signed-file upload.
+- `services/ulb-options/` - the ULB picker: every expected ULB with its ineligibility reason. A ULB
+  locked in another batch carries that batch's number (`claimedInBatch`), whatever its eligibility;
+  order is eligible, ineligible, then in another batch. `limit` goes up to `CLAIM_LETTER_MAX_ULBS`
+  (1000), so the page loads every ULB in one call and searches, pages and selects locally.
+- `services/ulb-rows/` - the batch's selected-ULB table, with a display-only eligibility re-check.
+  `limit` goes up to `CLAIM_LETTER_MAX_ULBS`, so the page loads a whole batch in one call. Each row
+  carries `stateGatePassed`, so the page can tell a State-level failure (no ULB can be claimed) from
+  ULBs it could remove.
+- `services/submit/` - submit (`IN_PROGRESS -> UNDER_REVIEW_BY_MOHUA`) and its checks (ADR 0003).
+- `services/active-batch/` - the one-active-batch rule (ADR 0004); no other file decides it.
+- `services/history/` - the only writer of `ClaimLetterBatchHistory` (ADR 0003).
+- `services/recovery/` - the hourly stale-`BUILDING` cleanup (cron) and `detectAnomalies`, a
+  read-only report.
+- `services/document/claim-letter-document.service.ts` - the letter as a display-ready model (see
+  "The letter").
+- `services/document/claim-letter-docx.service.ts` - renders that model to an A4 .docx (`docx` npm):
+  portrait covering letter, landscape annexure, yellow-highlighted placeholders, column widths from
+  the column `kind`. Always built fresh, never from the preview cache; `generateForDownload` checks
+  the mandatory letter details first, so every download path has that gate.
+- `services/letter-details/` - the State-entered letter details (see "Letter details").
+- `services/final-pdf/` - the final claim letter that goes to MoHUA (see "Final claim letter").
+- `services/form-json/` - this feature's own formjson (formId 26, `CLAIM_LETTER_FORM_ID`): the
+  `signedClaimFile` field, the claim-amount switch `meta.claimAmountEditable` (off unless `true`; ADR
+  0006) with its claimed-vs-allocated band (`meta.varianceLowerPercent` / `varianceUpperPercent`, else
+  `CLAIM_LETTER_VARIANCE_*_PERCENT`, used only while the switch is on), `meta.letterDetailKeys`,
+  `meta.letterDetailSkipPrefill` and `meta.mergeDocuments`. Invalid entries are logged and skipped.
+  `loadFormConfig` fetches the document once per call and derives all of it; never add a second
+  fetch for another part of the same document.
+- `helpers/` - pure functions (amount arithmetic, content hash, summary mapping, permissions, letter
+  text and annexure cells), except `claim-letter-build-cleanup.helpers.ts`, the delete shared by both
+  stale-build reclaim paths, and `claim-letter-sfc-exemption.helpers.ts`, the Entire State SFC
+  exemption read shared by Row B and the letter details (ADR 0005).
+- `constants/`, `types/`, `dto/` - limits and letter constants, response shapes, request validation.
+
+## The letter
+
+`ClaimLetterDocumentService` builds one model (`types/claim-letter-document.types.ts`: paragraphs of
+runs, `placeholder` runs for blank State fields) for both the portal preview and the .docx, so the
+two can never disagree; the frontend renders the backend's text verbatim.
+
+- Rows C-K and both annexure lists come from a fresh `resolveUlbLevelEligibility` over the State's
+  expected ULBs plus the batch's own; the State total is every row's denominator.
+- Each list ends with a Total row (`ClaimLetterListMeta.totalCells`): the Tied and Untied sums of
+  the ULBs in that table only, from exact rupees rounded once, so it can differ from a hand-add of
+  the rounded rows by a few hundredths of a lakh.
+- Preview cache: that heavy part is kept in Redis per `revision` for 5 minutes, as a `meta` key
+  (everything but the rows) plus 100-row chunks per list, so opening the letter parses no rows and a
+  20-row page parses one chunk. Chunks are written first and live 30s longer than `meta`; concurrent
+  misses share one build (per process). Keys expire on their own, and a revision bump starts new ones.
+- Letter details and the SFC values (row B) change without a revision bump, so they are merged per
+  request, never cached. The .docx and Submit always evaluate fresh. While the State's Entire State SFC
+  exemption counts, Row B prints the exemption instead (ADR 0005).
+- Annexure condition columns are never hardcoded: one per enabled ULB-bulk criterion
+  (`ClaimLetterUlbLevelEligibility.perCriterion`, sorted by `claimEligibility.displayOrder`, headed by
+  `claimEligibility.letterColumnLabel`), so adding or removing a criterion is a formjson change. Two
+  named exceptions: the 14th FC column prints the unspent amount (`FC_UNSPENT_STATE`), and rows C-I map
+  to criterion types through `CLAIM_LETTER_ROW_CRITERIA` (the rows are fixed text; a mapped criterion
+  that is not enabled prints "Not applicable").
+- Cell text is decided only in `buildAnnexureCell` (`helpers/claim-letter-letter.helpers.ts`), whose
+  comment lists the rules. A discretionary exemption prints "Exemption requested" while under MoHUA
+  review and "Exempted" once approved (ADR 0005).
+- Dates the State picks are stored as UTC-midnight ISO strings and printed "07 Oct 2026" with UTC
+  getters (fixed month names, no locale); the as-on stamp is IST ("07 Oct 2026, 14:30").
+- Names: each one names the State, FY, installment and batch. `fileBaseName` is
+  `CF_TR_2026-27_1-1`, the printed Ref No `CL/TR/2026-27/1-1`, and the .docx, the final PDF download
+  and its stored `originalName` `CF_Tripura_Claim-letter-1-1_2026-27`.
+
+## Letter details
+
+Stored as `letterDetails` on the batch. Fields, labels, validations and required flags all come from
+formjson 26 (`meta.letterDetailKeys`, a flat list): only the fields the OM needs are required (row A
+b and c, row B ATR date; the ATR date is left out while the State's SFC exemption counts, see
+`letterQuestionsFor`), and optional fields keep their length / format rules when filled. The
+portal edits them inline in the preview, where each slot run carries its key in `field`.
+
+- A save takes any subset of keys: `DynamicFormValidationService` in draft mode, plus type, option and
+  strict-date checks. `evaluate` and `assertComplete` run final-mode validation for Download and
+  Submit; no valid key configured means "not configured", which blocks both.
+- A change that would remove an uploaded signed letter needs `confirmSignedFileRemoval` (else 409
+  `SIGNED_FILE_REMOVAL_NOT_CONFIRMED`); concurrent saves fail on the pinned `letterDetailsUpdatedAt`
+  (409 `LETTER_DETAILS_CHANGED`).
+- `previous` is the State's latest saved details from another batch, minus the
+  `meta.letterDetailSkipPrefill` keys, for the UI's prefill button.
+- A key printed in the letter needs an entry in `CLAIM_LETTER_DETAIL_PLACEHOLDERS` and a slot in the
+  document service; a key removed from formjson keeps printing its placeholder.
+
+## Final claim letter
+
+The copy that goes to MoHUA: the signed letter followed by `meta.mergeDocuments` (Elected Body, GTC,
+Unspent Declaration, ATR), merged with `pdf-lib`.
+
+- Each entry is only `{ label, formId, fileKeys, optional? }`: the document is found through that
+  form's enabled `claimEligibility.source`, with the same query the eligibility check runs
+  (`common/utils/claim-eligibility-source-query.util.ts`), so a new enclosure is a formjson change. A
+  form without an enabled source, or whose source is not `ownerLevel: 'STATE'` with `fields.state`, is
+  listed as not included, so another State's or a ULB's file is never merged.
+- Cached on the batch as `finalClaimPdf` under a SHA-256 key of the ordered labels and upload paths. A
+  re-upload always has a new path, so the key is the change detector; nothing rebuilds otherwise.
+  Concurrent requests for the same batch and key share one merge (per process).
+- A missing non-`optional` document is in `missingRequired` (read from formjson on every request,
+  never stored) and blocks Submit (400 `FINAL_PDF_INCOMPLETE`, naming the document and its form). An
+  unreadable one is a 422 naming the form to fix.
+- Both GETs need only VIEW_STATE_FORMS; a viewer may trigger a build, since it is only a cache. A
+  submitted batch serves its stored copy, with no rebuild and no active-batch guard.
+- Submit sends the key the page showed and gets 409 `FINAL_PDF_OUTDATED` when it is stale, also
+  when an older merge replaced the reviewed one after the check (the update filter pins the key). The
+  summary's `finalClaimLetterStage` (DRAFT / SUBMITTED / null) tells the UI which copy to show.
+- Scanned ink signatures only: a merge breaks a digital signature.
 
 ## Invariants worth knowing before you change adjacent code
 
-- At most `CLAIM_LETTER_MAX_BATCH_NUMBER` (3) non-abandoned batches per (state, year, installment) —
-  DB-enforced, not just application-checked (ADR 0002).
-- A frozen claim *version* is immutable — `createNewVersion` builds a new parent rather than
-  mutating an existing READY one (ADR 0002, ADR 0003).
-- Money is stored as whole Rupees (no decimals) throughout this feature, matching every other
-  xvi-fc form — `claimedAmount`/`allocatedAmount` are `@IsInt()`/validator-enforced, not just
-  conventionally whole. This feature has gone Crore-denominated decimals → briefly whole-Rupee
-  integers → Rupees with unbounded decimal places → whole-Rupee integers again (current), all
-  converted before production launch, so no stored-data migration exists for any of them. The
-  decimal-precision attempt was abandoned because a proportional split of a total allocation across
-  many ULBs (Devolution Formula) essentially never divides evenly, and letting amounts carry
-  decimals let real sums drift from the target total by whole rupees, not just float noise (a real
-  state's allocation total summed its rows ₹2.08 off) — whole numbers make that drift structurally
-  impossible instead of tolerating it. `helpers/claim-letter-financial.helpers.ts` centralizes the
-  amount arithmetic (sum/diff/variance-check); since every input is a whole Rupee, plain
-  integer arithmetic is exact with no scaling needed, except the ±10% variance boundary, which
-  cross-multiplies instead of dividing to stay exact without introducing a float division.
-- The eligibility service's cached `*ForDisplay` methods are for read-only UI paths only — never
-  call them from the assembly/mutation pipeline.
-- Annexure 2's ("City Conditions") criteria columns are never hardcoded — they come from
-  `ClaimLetterUlbLevelEligibility.criteriaColumns` (one entry per currently-enabled ULB-bulk
-  criterion, regardless of pass/fail), itself derived from whatever `formjsons` documents have an
-  enabled `claimEligibility` config. Adding/removing an eligibility criterion is a data change
-  (a formjson doc), never a code change here or in the two frontend renderers — do not reintroduce
-  named `CRITERION_TYPE_*` constants for Annexure 2 (Annexure 1's `eligible` column is the one
-  deliberate exception, since that annexure *is* specifically the FC-disclosure check).
-- Each child's `eligibilitySources` is populated with real per-ULB evidence for `FORM_AND_ROW`
-  sources (Elected Body, FC Unspent) — one snapshot per source, built in `prepareChildren` by
-  merging that source's state-level result (`evaluateStateLevelGate`) with this ULB's row evidence
-  (`ClaimLetterUlbLevelEligibility.rowEvidenceByFormId`, from `resolveUlbLevelEligibility`) — no
-  extra query, both are already fetched. The parent's `stateEligibilitySources` stays form-status-only
-  by design (`rowDocumentId`/`rowStatusAtEvaluation` are correctly `null` there — no single row
-  applies to a whole state). `resolveUlbLevelEligibility` in `prepareChildren` is deliberately
-  deferred until after the state gate passes (it's the heaviest of the method's fetches — a bulk
-  find per ULB-bulk-evaluable source — and entirely wasted on a gate failure).
+- At most `CLAIM_LETTER_MAX_BATCH_NUMBER` (3) logical batches per (state, year, installment), and
+  each ULB locked into one batch; both are enforced by unique indexes, not just application checks
+  (ADR 0002).
+- A frozen claim version is immutable: `createNewVersion` builds a new parent rather than mutating a
+  READY one (ADR 0002, ADR 0003).
+- The claimed amount is decided only in `resolveClaimedAmount` (ADR 0006). Switch off (the default):
+  the request may omit `claimedAmount`, the server stores the allocation, and a different amount is
+  rejected, so every child has `claimedAmount === allocatedAmount` and zero difference. Switch on: the
+  request's amount, within the band.
+- Money is whole Rupees throughout, like every other xvi-fc form; `claimedAmount` is `@IsInt()`. The
+  feature went Crore decimals -> whole Rupees -> Rupees with decimals -> whole Rupees, all before
+  launch, so no stored-data migration exists. Decimals were dropped because splitting an allocation
+  across many ULBs never divides evenly and real sums drifted from the target total (one State's rows
+  summed ₹2.08 off); whole numbers make that drift impossible. `helpers/claim-letter-financial.helpers.ts`
+  does all amount arithmetic with plain integers; the variance band cross-multiplies instead of
+  dividing so it stays exact.
+- Each child's `eligibilitySources` holds one snapshot per ULB condition, all already fetched: each
+  `FORM_AND_ROW` source (Elected Body, FC Unspent) as its State-level result plus this ULB's row
+  evidence (`rowEvidenceByFormId`), and each ULB-owned form (`perCriterion[].formEvidence`). The
+  parent's `stateEligibilitySources` stays form-level (`rowDocumentId` / `rowStatusAtEvaluation`
+  null), since no single row applies to a whole State. Every entry stores `exemptionKind`,
+  `exemptionId` and `exemptionStatusAtEvaluation`; only an EXEMPTED entry may lack a source document;
+  `appliedExemptionIds` is the child's own requests (ADR 0005).
+- Exemption notes (`perUlbExemptionNotes`: under review, or rejected and now failing) feed the ULB row
+  badges and the detail summary's `exemptionUnderReviewUlbCount`; they are display-only.
+- Submit's checks all run before its transaction and are listed in ADR 0003; the update filter also
+  pins `signedClaimFile.path`, `letterDetailsUpdatedAt` and `finalClaimPdf.sourceKey` as read.
+- Abandon only sets `isAbandoned` (the status stays `IN_PROGRESS`) and releases the locks, so every
+  path that acts on a batch checks the flag itself: preview, .docx, signed-file upload and submit
+  reply 409 `CLAIM_LETTER_ABANDONED_MESSAGE`, and the one-active-batch rule ignores an abandoned
+  batch (ADR 0004). Users see it as "Discard" (button, messages, the "Discarded" status label);
+  code, the `/abandon` route and the `isAbandoned` field keep "abandon".
+- An edit never frees a removed ULB before it succeeds: validation first, added locks next, removed
+  locks released in the final write's transaction (ADR 0002).
+- A create or edit that refuses selected ULBs (400 ineligible or bad amount, 409 locked by another
+  claim) sends `code: CLAIM_LETTER_ULBS_REJECTED` and `errors` keyed `ulbSelections.<index>.<field>`,
+  so the page marks those rows and offers to drop them. Both validate before taking any lock; the
+  400 also names rows another claim locks, so one "Remove" clears both kinds. The message counts the
+  rows and names at most five codes (`ineligibleUlbsMessage`). Lock owners are read only on these
+  failure paths (`lockedRows`), so a save that succeeds runs no extra query, and a failed lookup
+  keeps the original error.
+- A create retried with the same `idempotencyKey` returns the batch it built, or 409 while that
+  build is still running (ADR 0001); the page reuses the key when it re-sends the same selection.
+
+## Known gaps
+
+- Installment 2 is rejected on every path (`assertInstallmentSupported`).
+- `createNewVersion` and `acknowledgeLocks` wait for the MoHUA rejection and approval steps (ADR 0003);
+  until approval exists, a submitted batch stays active and blocks the next one (ADR 0004).
+- `detectAnomalies` has no route or schedule; it is only callable from code.

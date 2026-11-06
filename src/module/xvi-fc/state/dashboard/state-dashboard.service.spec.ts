@@ -24,6 +24,7 @@ import { XviFcUnspentBalanceDisclosure } from 'src/schemas/xvi-fc/unspent-balanc
 import { XviFcBankAccount } from 'src/schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
 import { SlbForm } from 'src/schemas/xvi-fc/ulb/slb-form.schema';
 import { XviFcDur } from 'src/schemas/xvi-fc/dur.schema';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 import {
   STATE_DASHBOARD_AMOUNT_UNIT,
   STATE_DASHBOARD_CLAIM_LETTER_KEY,
@@ -129,6 +130,7 @@ describe('StateDashboardService', () => {
   const unspentBalanceModel = { find: jest.fn() };
   const slbFormModel = { find: jest.fn() };
   const durModel = { find: jest.fn() };
+  const ulbEligibilityService = { getIneligibleUlbTypeIds: jest.fn().mockResolvedValue([]) };
 
   let service: StateDashboardService;
 
@@ -219,6 +221,7 @@ describe('StateDashboardService', () => {
     unspentBalanceModel.find.mockReturnValue(queryResult([]));
     slbFormModel.find.mockReturnValue(queryResult([]));
     durModel.find.mockReturnValue(queryResult([]));
+    ulbEligibilityService.getIneligibleUlbTypeIds.mockResolvedValue([]);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -235,6 +238,7 @@ describe('StateDashboardService', () => {
         { provide: getModelToken(XviFcUnspentBalanceDisclosure.name), useValue: unspentBalanceModel },
         { provide: getModelToken(SlbForm.name), useValue: slbFormModel },
         { provide: getModelToken(XviFcDur.name), useValue: durModel },
+        { provide: UlbEligibilityService, useValue: ulbEligibilityService },
       ],
     }).compile();
 
@@ -788,6 +792,19 @@ describe('StateDashboardService', () => {
         expect(annualAccountModel.find).not.toHaveBeenCalled();
         expect(bankAccountModel.find).not.toHaveBeenCalled();
         expect(unspentBalanceModel.find).not.toHaveBeenCalled();
+      });
+
+      it('excludes XVIFC-ineligible ULB types (e.g. Cantonment Boards) from the active-ULB query', async () => {
+        const cantonmentTypeId = new Types.ObjectId();
+        ulbEligibilityService.getIneligibleUlbTypeIds.mockResolvedValue([cantonmentTypeId]);
+
+        await fetchDashboard();
+
+        expect(ulbModel.find).toHaveBeenCalledWith({
+          state: new Types.ObjectId(stateId),
+          isActive: true,
+          ulbType: { $nin: [cantonmentTypeId] },
+        });
       });
     });
 
@@ -1946,6 +1963,23 @@ describe('StateDashboardService', () => {
       await service.exportAllFormsCsv({ designYearId: yearId }, makeUser({ xviFcSubrole: 'admin' }));
 
       expect(ulbModel.find).toHaveBeenCalledWith({ isActive: true, state: new Types.ObjectId(stateId) });
+    });
+
+    it('excludes XVIFC-ineligible ULB types (e.g. Cantonment Boards) from the export', async () => {
+      const cantonmentTypeId = new Types.ObjectId();
+      ulbEligibilityService.getIneligibleUlbTypeIds.mockResolvedValue([cantonmentTypeId]);
+      annualAccountModel.find.mockReturnValue(queryResult([]));
+      bankAccountModel.find.mockReturnValue(queryResult([]));
+      slbFormModel.find.mockReturnValue(queryResult([]));
+      durModel.find.mockReturnValue(queryResult([]));
+
+      await service.exportAllFormsCsv({ designYearId: yearId }, makeUser({ xviFcSubrole: 'admin' }));
+
+      expect(ulbModel.find).toHaveBeenCalledWith({
+        isActive: true,
+        state: new Types.ObjectId(stateId),
+        ulbType: { $nin: [cantonmentTypeId] },
+      });
     });
 
     it('adds a per-row State column identifying each ULB when an ADMIN omits stateId (all-states export)', async () => {

@@ -30,7 +30,7 @@ describe('BankAccountService scope enforcement', () => {
   let userModel: { findById: jest.Mock };
   let yearModel: { findById: jest.Mock };
   let fileTokenService: { signFileUrl: jest.Mock };
-  let ulbEligibilityService: { assertUlbEligibleForGrantCycle: jest.Mock };
+  let ulbEligibilityService: { assertUlbEligibleForGrantCycle: jest.Mock; getIneligibleUlbTypeIds: jest.Mock };
   let formJsonService: { findActiveByDesignYearAndFormId: jest.Mock };
   let formJsonConfigService: { findByFormId: jest.Mock };
   let formReturnedNotification: { notifyReturned: jest.Mock };
@@ -111,6 +111,7 @@ describe('BankAccountService scope enforcement', () => {
     };
     ulbEligibilityService = {
       assertUlbEligibleForGrantCycle: jest.fn().mockResolvedValue(undefined),
+      getIneligibleUlbTypeIds: jest.fn().mockResolvedValue([]),
     };
     formJsonService = {
       findActiveByDesignYearAndFormId: jest.fn(),
@@ -585,6 +586,17 @@ describe('BankAccountService scope enforcement', () => {
       expect(lookupStage.$lookup.pipeline[0].$match.$expr).toEqual({
         $and: [{ $eq: ['$ulb', '$$ulbId'] }, { $eq: ['$designYear', new Types.ObjectId(baseDto.designYearId)] }],
       });
+    });
+
+    it('excludes XVIFC-ineligible ULB types (e.g. Cantonment Boards) from the $match stage', async () => {
+      const cantonmentTypeId = new Types.ObjectId();
+      ulbEligibilityService.getIneligibleUlbTypeIds.mockResolvedValue([cantonmentTypeId]);
+      ulbModel.aggregate.mockReturnValue(q([{ data: [], totalCount: [], counts: [] }]));
+
+      await service.listUlbBankAccounts(baseDto, stateReviewer(stateId));
+
+      const matchStage = lastPipeline().find((stage) => '$match' in stage) as { $match: { ulbType?: unknown } };
+      expect(matchStage.$match.ulbType).toEqual({ $nin: [cantonmentTypeId] });
     });
   });
 

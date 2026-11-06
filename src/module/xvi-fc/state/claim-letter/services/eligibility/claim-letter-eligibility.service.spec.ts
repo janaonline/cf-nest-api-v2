@@ -226,6 +226,7 @@ describe('ClaimLetterEligibilityService', () => {
       evaluatorService.evaluateUlbBulk.mockResolvedValue({
         perUlb: new Map([[ulbA, 'ELIGIBLE']]),
         tally: { eligible: 1, ineligible: 0, exempted: 0, total: 1 },
+        discretionaryExemptionStatusByUlbId: new Map(),
       });
 
       await service.resolveUlbLevelEligibility(stateId, designYearId, 1, [ulbA]);
@@ -242,6 +243,7 @@ describe('ClaimLetterEligibilityService', () => {
             [ulbB, 'INELIGIBLE'],
           ]),
           tally: { eligible: 1, ineligible: 1, exempted: 0, total: 2 },
+          discretionaryExemptionStatusByUlbId: new Map(),
         })
         .mockResolvedValueOnce({
           perUlb: new Map([
@@ -249,6 +251,7 @@ describe('ClaimLetterEligibilityService', () => {
             [ulbB, 'ELIGIBLE'],
           ]),
           tally: { eligible: 1, ineligible: 0, exempted: 1, total: 2 },
+          discretionaryExemptionStatusByUlbId: new Map(),
         });
 
       const result = await service.resolveUlbLevelEligibility(stateId, designYearId, 1, [ulbA, ulbB]);
@@ -270,6 +273,7 @@ describe('ClaimLetterEligibilityService', () => {
             [ulbC, 'INELIGIBLE'],
           ]),
           tally: { eligible: 1, ineligible: 2, exempted: 0, total: 3 },
+          discretionaryExemptionStatusByUlbId: new Map(),
         })
         .mockResolvedValueOnce({
           // formAndRowSource (ELECTED_BODY, no displayLabel set) — only ulbB fails this one.
@@ -279,6 +283,7 @@ describe('ClaimLetterEligibilityService', () => {
             [ulbC, 'INELIGIBLE'],
           ]),
           tally: { eligible: 1, ineligible: 2, exempted: 0, total: 3 },
+          discretionaryExemptionStatusByUlbId: new Map(),
         });
 
       const result = await service.resolveUlbLevelEligibility(stateId, designYearId, 1, [ulbA, ulbB, ulbC]);
@@ -293,7 +298,7 @@ describe('ClaimLetterEligibilityService', () => {
       ]);
     });
 
-    it('populates criteriaColumns with one entry per enabled source regardless of pass/fail, shortLabel falling back to label when unset', async () => {
+    it('names each failed criterion by type and label, shortLabel falling back to label when unset', async () => {
       formJsonService.findEnabledClaimEligibilitySources.mockResolvedValue([
         ulbOwnedSource({
           claimEligibility: { ...ulbOwnedSource().claimEligibility!, displayLabel: 'SLB', shortLabel: 'SLB' },
@@ -305,18 +310,18 @@ describe('ClaimLetterEligibilityService', () => {
           // Nobody fails SLB in this batch...
           perUlb: new Map([[ulbA, 'ELIGIBLE']]),
           tally: { eligible: 1, ineligible: 0, exempted: 0, total: 1 },
+          discretionaryExemptionStatusByUlbId: new Map(),
         })
         .mockResolvedValueOnce({
           perUlb: new Map([[ulbA, 'INELIGIBLE']]),
           tally: { eligible: 0, ineligible: 1, exempted: 0, total: 1 },
+          discretionaryExemptionStatusByUlbId: new Map(),
         });
 
       const result = await service.resolveUlbLevelEligibility(stateId, designYearId, 1, [ulbA]);
 
-      // ...yet SLB still appears as a column: criteriaColumns lists every enabled source, not just
-      // the ones somebody actually failed (perUlbFailedCriteria would omit SLB here).
-      expect(result.criteriaColumns).toEqual([
-        { type: 'SLB', label: 'SLB', shortLabel: 'SLB' },
+      // ...so only the failed source is named for the ULB.
+      expect(result.perUlbFailedCriteria.get(ulbA)).toEqual([
         { type: 'ELECTED_BODY', label: 'ELECTED_BODY', shortLabel: 'ELECTED_BODY' },
       ]);
     });
@@ -326,8 +331,8 @@ describe('ClaimLetterEligibilityService', () => {
       const slbTally = { eligible: 5, ineligible: 2, exempted: 0, total: 7 };
       const eulbTally = { eligible: 10, ineligible: 3, exempted: 1, total: 14 };
       evaluatorService.evaluateUlbBulk
-        .mockResolvedValueOnce({ perUlb: new Map(), tally: slbTally })
-        .mockResolvedValueOnce({ perUlb: new Map(), tally: eulbTally });
+        .mockResolvedValueOnce({ perUlb: new Map(), tally: slbTally, discretionaryExemptionStatusByUlbId: new Map() })
+        .mockResolvedValueOnce({ perUlb: new Map(), tally: eulbTally, discretionaryExemptionStatusByUlbId: new Map() });
 
       const result = await service.resolveUlbLevelEligibility(stateId, designYearId, 1, [ulbA]);
 
@@ -344,11 +349,16 @@ describe('ClaimLetterEligibilityService', () => {
       ]);
       evaluatorService.evaluateUlbBulk
         // SLB (ownerLevel: 'ULB') — flat-document source, no rowEvidenceByUlbId at all.
-        .mockResolvedValueOnce({ perUlb: new Map(), tally: { eligible: 0, ineligible: 0, exempted: 0, total: 0 } })
+        .mockResolvedValueOnce({
+          perUlb: new Map(),
+          tally: { eligible: 0, ineligible: 0, exempted: 0, total: 0 },
+          discretionaryExemptionStatusByUlbId: new Map(),
+        })
         // Elected Body (FORM_AND_ROW) — row-collection source, carries rowEvidenceByUlbId.
         .mockResolvedValueOnce({
           perUlb: new Map(),
           tally: { eligible: 1, ineligible: 0, exempted: 0, total: 1 },
+          discretionaryExemptionStatusByUlbId: new Map(),
           rowEvidenceByUlbId: rowEvidence,
         });
 
@@ -364,11 +374,97 @@ describe('ClaimLetterEligibilityService', () => {
       evaluatorService.evaluateUlbBulk.mockResolvedValue({
         perUlb: new Map(),
         tally: { eligible: 0, ineligible: 0, exempted: 0, total: 0 },
+        discretionaryExemptionStatusByUlbId: new Map(),
       });
 
       const result = await service.resolveUlbLevelEligibility(stateId, designYearId, 1, [ulbA]);
 
       expect(result.rowEvidenceByFormId.get(23)).toEqual(new Map());
+    });
+
+    it('lists perCriterion by displayOrder (unset last) with buckets, row evidence and exemption statuses', async () => {
+      formJsonService.findEnabledClaimEligibilitySources.mockResolvedValue([
+        ulbOwnedSource({
+          claimEligibility: { ...ulbOwnedSource().claimEligibility!, displayLabel: 'SLB', displayOrder: 5 },
+        }),
+        formAndRowSource({
+          claimEligibility: {
+            ...formAndRowSource().claimEligibility!,
+            letterColumnLabel: 'Election Status',
+            displayOrder: 1,
+          },
+        }),
+        devolutionSource(), // STATE/FORM only - not a ULB-bulk criterion
+      ]);
+      const slbBuckets = new Map([[ulbA, 'INELIGIBLE' as const]]);
+      const ebEvidence = new Map([
+        [
+          ulbA,
+          {
+            bucket: 'ELIGIBLE' as const,
+            rowDocumentId: 'row-1',
+            rowStatusAtEvaluation: 7,
+            datasetVersion: 1,
+            rowValue: '6th Schedule',
+            rowAccepted: true,
+          },
+        ],
+      ]);
+      evaluatorService.evaluateUlbBulk
+        .mockResolvedValueOnce({
+          perUlb: slbBuckets,
+          tally: { eligible: 0, ineligible: 1, exempted: 0, total: 1 },
+          discretionaryExemptionStatusByUlbId: new Map(),
+        })
+        .mockResolvedValueOnce({
+          perUlb: new Map([[ulbA, 'ELIGIBLE']]),
+          tally: { eligible: 1, ineligible: 0, exempted: 0, total: 1 },
+          rowEvidenceByUlbId: ebEvidence,
+          discretionaryExemptionStatusByUlbId: new Map([[ulbA, 7]]),
+        });
+
+      const result = await service.resolveUlbLevelEligibility(stateId, designYearId, 1, [ulbA]);
+
+      expect(result.perCriterion.map((c) => [c.formId, c.letterColumnLabel, c.displayOrder])).toEqual([
+        [23, 'Election Status', 1],
+        [32, 'SLB', 5], // falls back to displayLabel
+      ]);
+      expect(result.perCriterion[0].rowEvidence).toBe(ebEvidence);
+      expect(result.perCriterion[0].discretionaryExemptions).toEqual(new Map([[ulbA, 7]]));
+      expect(result.perCriterion[1].buckets).toBe(slbBuckets);
+      expect(result.perCriterion[1].rowEvidence).toEqual(new Map());
+    });
+
+    it('notes an exemption under MoHUA review on an exempted ULB and a rejected one on a failing ULB', async () => {
+      const ulbD = new Types.ObjectId().toString();
+      formJsonService.findEnabledClaimEligibilitySources.mockResolvedValue([ulbOwnedSource()]);
+      evaluatorService.evaluateUlbBulk.mockResolvedValue({
+        perUlb: new Map([
+          [ulbA, 'EXEMPTED'],
+          [ulbB, 'INELIGIBLE'],
+          [ulbC, 'EXEMPTED'],
+          [ulbD, 'ELIGIBLE'],
+        ]),
+        tally: { eligible: 1, ineligible: 1, exempted: 2, exemptedUnderReview: 1, total: 4 },
+        // A under review, B rejected, C approved, D rejected but has since met the condition.
+        discretionaryExemptionStatusByUlbId: new Map([
+          [ulbA, 5],
+          [ulbB, 6],
+          [ulbC, 7],
+          [ulbD, 6],
+        ]),
+      });
+
+      const result = await service.resolveUlbLevelEligibility(stateId, designYearId, 1, [ulbA, ulbB, ulbC, ulbD]);
+
+      expect(result.perUlbExemptionNotes).toEqual(
+        new Map([
+          [ulbA, [{ label: 'SLB', status: 'UNDER_REVIEW' }]],
+          [ulbB, [{ label: 'SLB', status: 'REJECTED' }]],
+        ]),
+      );
+      expect(result.perUlbEligible.get(ulbA)).toBe(true);
+      expect(result.perUlbEligible.get(ulbB)).toBe(false);
     });
 
     it('every expected ULB defaults to eligible when there are no qualifying sources at all', async () => {
@@ -422,7 +518,6 @@ describe('ClaimLetterEligibilityService', () => {
         standaloneCriteria: [],
         rowTalliesByFormId: [],
         perUlbFailedCriteria: [[ulbB, [{ type: 'SLB', label: 'SLB', shortLabel: 'SLB' }]]],
-        criteriaColumns: [{ type: 'SLB', label: 'SLB', shortLabel: 'SLB' }],
       };
       redis.get.mockResolvedValue(JSON.stringify(cached));
 
@@ -430,10 +525,33 @@ describe('ClaimLetterEligibilityService', () => {
 
       expect(result.perUlbEligible).toEqual(new Map([[ulbA, true]]));
       expect(result.perUlbFailedCriteria.size).toBe(0);
+      // Cached before exemption notes existed: read as none.
+      expect(result.perUlbExemptionNotes.size).toBe(0);
       expect(expectedUlbSetService.resolve).not.toHaveBeenCalled();
       expect(formJsonService.findEnabledClaimEligibilitySources).not.toHaveBeenCalled();
-      // State-wide, like standaloneCriteria/rowTalliesByFormId — never narrowed to the subset.
-      expect(result.criteriaColumns).toEqual([{ type: 'SLB', label: 'SLB', shortLabel: 'SLB' }]);
+    });
+
+    it('keeps exemption notes in the cache and narrows them to the requested ULBs', async () => {
+      const cached = {
+        perUlbEligible: [
+          [ulbA, true],
+          [ulbB, false],
+        ],
+        standaloneCriteria: [],
+        rowTalliesByFormId: [],
+        perUlbFailedCriteria: [],
+        perUlbExemptionNotes: [
+          [ulbA, [{ label: 'Audited Accounts', status: 'UNDER_REVIEW' }]],
+          [ulbB, [{ label: 'Audited Accounts', status: 'REJECTED' }]],
+        ],
+      };
+      redis.get.mockResolvedValue(JSON.stringify(cached));
+
+      const result = await service.resolveUlbLevelEligibilityForDisplay(stateId, designYearId, 1, [ulbA]);
+
+      expect(result.perUlbExemptionNotes).toEqual(
+        new Map([[ulbA, [{ label: 'Audited Accounts', status: 'UNDER_REVIEW' }]]]),
+      );
     });
 
     it('computes and caches the FULL expected-ULB-set result on a cache miss, then narrows to the caller-requested subset', async () => {
@@ -454,6 +572,7 @@ describe('ClaimLetterEligibilityService', () => {
           [ulbB, 'INELIGIBLE'],
         ]),
         tally: { eligible: 1, ineligible: 1, exempted: 0, total: 2 },
+        discretionaryExemptionStatusByUlbId: new Map(),
       });
 
       const result = await service.resolveUlbLevelEligibilityForDisplay(stateId, designYearId, 1, [ulbA]);
@@ -464,12 +583,6 @@ describe('ClaimLetterEligibilityService', () => {
       // The returned result is narrowed down to just what this caller asked about.
       expect(result.perUlbEligible).toEqual(new Map([[ulbA, true]]));
       expect(redis.set).toHaveBeenCalled();
-      // criteriaColumns is computed and serialized on the miss path too, not just present on a hit.
-      expect(result.criteriaColumns).toEqual([{ type: 'SLB', label: 'SLB', shortLabel: 'SLB' }]);
-      const [, cachedPayload] = redis.set.mock.calls[0] as [string, string];
-      expect((JSON.parse(cachedPayload) as { criteriaColumns: unknown }).criteriaColumns).toEqual([
-        { type: 'SLB', label: 'SLB', shortLabel: 'SLB' },
-      ]);
     });
 
     it('uses the caller-supplied fullExpectedUlbIds on a cache miss instead of re-resolving the full set', async () => {
@@ -486,6 +599,7 @@ describe('ClaimLetterEligibilityService', () => {
           [ulbB, 'INELIGIBLE'],
         ]),
         tally: { eligible: 1, ineligible: 1, exempted: 0, total: 2 },
+        discretionaryExemptionStatusByUlbId: new Map(),
       });
 
       const result = await service.resolveUlbLevelEligibilityForDisplay(stateId, designYearId, 1, [ulbA], [ulbA, ulbB]);
@@ -512,6 +626,7 @@ describe('ClaimLetterEligibilityService', () => {
       evaluatorService.evaluateUlbBulk.mockResolvedValue({
         perUlb: new Map([[ulbA, 'ELIGIBLE']]),
         tally: { eligible: 1, ineligible: 0, exempted: 0, total: 1 },
+        discretionaryExemptionStatusByUlbId: new Map(),
         rowEvidenceByUlbId: new Map([
           [
             ulbA,
@@ -583,79 +698,6 @@ describe('ClaimLetterEligibilityService', () => {
       expect(filter['installment2Amount']).toEqual({ $gt: 0 });
       expect(filter['installment1Amount']).toBeUndefined();
       expect(result.get(String(ulbId))?.allocatedAmount).toBe(7.25);
-    });
-  });
-
-  describe('computeTotalAlreadyAcknowledged', () => {
-    it('returns 0 without querying children when no batch has been acknowledged yet', async () => {
-      batchModel.find.mockReturnValue(q([]));
-
-      const total = await service.computeTotalAlreadyAcknowledged(stateId, designYearId, 1);
-
-      expect(total).toBe(0);
-      expect(batchUlbModel.aggregate).not.toHaveBeenCalled();
-    });
-
-    it('sums claimedAmount across every child of the acknowledged parents', async () => {
-      const parentId = new Types.ObjectId();
-      batchModel.find.mockReturnValue(q([{ _id: parentId }]));
-      batchUlbModel.aggregate.mockReturnValue({ exec: jest.fn().mockResolvedValue([{ _id: null, total: 42.5 }]) });
-
-      const total = await service.computeTotalAlreadyAcknowledged(stateId, designYearId, 1);
-
-      expect(total).toBe(42.5);
-      const [pipeline] = batchUlbModel.aggregate.mock.calls[0] as [Record<string, unknown>[]];
-      expect(pipeline[0]).toEqual({ $match: { claimLetter: { $in: [parentId] } } });
-    });
-
-    it('scopes the acknowledged-parent lookup to this state/year/installment and the acknowledged status', async () => {
-      batchModel.find.mockReturnValue(q([]));
-
-      await service.computeTotalAlreadyAcknowledged(stateId, designYearId, 1);
-
-      const [filter] = batchModel.find.mock.calls[0] as [Record<string, unknown>];
-      expect(filter['state']).toEqual(new Types.ObjectId(stateId));
-      expect(filter['year']).toEqual(new Types.ObjectId(designYearId));
-      expect(filter['installment']).toBe(1);
-      expect(filter['currentFormStatus']).toEqual({ $in: [FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA] });
-      expect(filter['isAbandoned']).toBe(false);
-      expect(filter['assemblyStatus']).toBe('READY');
-      expect(filter['_id']).toBeUndefined();
-    });
-  });
-
-  describe('computeClaimedAmountByStatuses', () => {
-    it('matches on any status in the given list', async () => {
-      batchModel.find.mockReturnValue(q([]));
-
-      await service.computeClaimedAmountByStatuses(stateId, designYearId, 1, [
-        FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
-        FORM_STATUS.IN_PROGRESS,
-      ]);
-
-      const [filter] = batchModel.find.mock.calls[0] as [Record<string, unknown>];
-      expect(filter['currentFormStatus']).toEqual({
-        $in: [FORM_STATUS.UNDER_REVIEW_BY_MOHUA, FORM_STATUS.IN_PROGRESS],
-      });
-    });
-
-    it('excludes the given claim letter id from the matched parents when provided', async () => {
-      batchModel.find.mockReturnValue(q([]));
-      const excludeId = new Types.ObjectId().toString();
-
-      await service.computeClaimedAmountByStatuses(stateId, designYearId, 1, [FORM_STATUS.IN_PROGRESS], excludeId);
-
-      const [filter] = batchModel.find.mock.calls[0] as [Record<string, unknown>];
-      expect(filter['_id']).toEqual({ $ne: new Types.ObjectId(excludeId) });
-    });
-
-    it('omits the _id exclusion filter entirely when no id is given', async () => {
-      batchModel.find.mockReturnValue(q([]));
-
-      await service.computeClaimedAmountByStatuses(stateId, designYearId, 1, [FORM_STATUS.IN_PROGRESS]);
-
-      const [filter] = batchModel.find.mock.calls[0] as [Record<string, unknown>];
-      expect(filter['_id']).toBeUndefined();
     });
   });
 
@@ -801,6 +843,69 @@ describe('ClaimLetterEligibilityService', () => {
     });
   });
 
+  describe('resolveClaimedUlbBatches', () => {
+    it('maps each locked ULB to its batch number in two queries', async () => {
+      const ulbA = new Types.ObjectId();
+      const ulbB = new Types.ObjectId();
+      const ulbC = new Types.ObjectId();
+      const batch1 = new Types.ObjectId();
+      const batch2 = new Types.ObjectId();
+      ulbLockModel.find.mockReturnValue(
+        q([
+          { ulbId: ulbA, claimLetter: batch1 },
+          { ulbId: ulbB, claimLetter: batch1 },
+          { ulbId: ulbC, claimLetter: batch2 },
+        ]),
+      );
+      batchModel.find.mockReturnValue(
+        q([
+          { _id: batch1, batchNumber: 1 },
+          { _id: batch2, batchNumber: 2 },
+        ]),
+      );
+
+      const result = await service.resolveClaimedUlbBatches(stateId, designYearId, 1);
+
+      expect(result).toEqual(
+        new Map([
+          [String(ulbA), { batchNumber: 1 }],
+          [String(ulbB), { batchNumber: 1 }],
+          [String(ulbC), { batchNumber: 2 }],
+        ]),
+      );
+      expect(ulbLockModel.find).toHaveBeenCalledTimes(1);
+      expect(batchModel.find).toHaveBeenCalledTimes(1);
+      const [batchFilter] = batchModel.find.mock.calls[0] as [{ _id: { $in: Types.ObjectId[] } }];
+      expect(batchFilter._id.$in.map(String)).toEqual([String(batch1), String(batch2)]);
+    });
+
+    it('excludes the given claim letter id, as resolveClaimedUlbIds does', async () => {
+      const excludeId = new Types.ObjectId().toString();
+
+      await service.resolveClaimedUlbBatches(stateId, designYearId, 1, excludeId);
+
+      const [filter] = ulbLockModel.find.mock.calls[0] as [Record<string, unknown>];
+      expect(filter['lockState']).toEqual({ $in: ['ACTIVE', 'ACKNOWLEDGED'] });
+      expect(filter['claimLetter']).toEqual({ $ne: new Types.ObjectId(excludeId) });
+    });
+
+    it('skips the batch query when nothing is locked', async () => {
+      const result = await service.resolveClaimedUlbBatches(stateId, designYearId, 1);
+
+      expect(result.size).toBe(0);
+      expect(batchModel.find).not.toHaveBeenCalled();
+    });
+
+    it('keeps a locked ULB with a null batch number when its batch cannot be read', async () => {
+      const ulbA = new Types.ObjectId();
+      ulbLockModel.find.mockReturnValue(q([{ ulbId: ulbA, claimLetter: new Types.ObjectId() }]));
+
+      const result = await service.resolveClaimedUlbBatches(stateId, designYearId, 1);
+
+      expect(result.get(String(ulbA))).toEqual({ batchNumber: null });
+    });
+  });
+
   describe('resolveRemainingUlbIds', () => {
     it('returns expected ULBs that have no ACTIVE/ACKNOWLEDGED lock yet, regardless of eligibility', async () => {
       const claimed = new Types.ObjectId();
@@ -831,6 +936,46 @@ describe('ClaimLetterEligibilityService', () => {
       const result = await service.resolveRemainingUlbIds(stateId, designYearId, 1, [String(ulbA)]);
 
       expect(result).toEqual([]);
+    });
+  });
+
+  describe('countBatchUlbsWithExemptionUnderReview', () => {
+    const claimLetterId = new Types.ObjectId();
+    const ulbA = new Types.ObjectId();
+    const ulbB = new Types.ObjectId();
+
+    it("counts the batch's ULBs that rely on an exemption still under MoHUA review", async () => {
+      const find = jest.fn().mockReturnValue(q([{ ulbId: ulbA }, { ulbId: ulbB }]));
+      Object.assign(batchUlbModel, { find });
+      redis.get.mockResolvedValue(
+        JSON.stringify({
+          perUlbEligible: [
+            [String(ulbA), true],
+            [String(ulbB), false],
+          ],
+          standaloneCriteria: [],
+          rowTalliesByFormId: [],
+          perUlbFailedCriteria: [],
+          perUlbExemptionNotes: [
+            [String(ulbA), [{ label: 'Audited Accounts', status: 'UNDER_REVIEW' }]],
+            [String(ulbB), [{ label: 'Audited Accounts', status: 'REJECTED' }]],
+          ],
+        }),
+      );
+
+      const count = await service.countBatchUlbsWithExemptionUnderReview(claimLetterId, stateId, designYearId, 1);
+
+      expect(count).toBe(1);
+      expect(find).toHaveBeenCalledWith({ claimLetter: claimLetterId });
+    });
+
+    it('is 0 for a batch without ULBs, with no eligibility read', async () => {
+      Object.assign(batchUlbModel, { find: jest.fn().mockReturnValue(q([])) });
+
+      const count = await service.countBatchUlbsWithExemptionUnderReview(claimLetterId, stateId, designYearId, 1);
+
+      expect(count).toBe(0);
+      expect(redis.get).not.toHaveBeenCalled();
     });
   });
 });

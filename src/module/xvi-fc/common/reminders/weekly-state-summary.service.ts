@@ -14,6 +14,7 @@ import { State, StateDocument } from 'src/schemas/state.schema';
 import { PORTAL_INVITE_LOGIN_TYPE, buildPortalAuthUrls } from 'src/core/utils/portal-urls.util';
 import { AnnualAccountFormStatus, FORM_STATUS_ID, XviFcAnnualAccount, XviFcAnnualAccountDocument } from 'src/schemas/xvi-fc/annual-account.schema';
 import { remindersCronsEnabled, REMINDER_CRON_REPLY_TO } from 'src/common/utils/reminder-cron-gate.util';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 
 const TEMPLATE_SLUG = 'weekly-state-summary';
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -115,6 +116,7 @@ export class WeeklyStateSummaryService {
     private readonly emailTemplates: EmailTemplatesService,
     private readonly emailQueue: EmailQueueService,
     private readonly config: ConfigService,
+    private readonly ulbEligibilityService: UlbEligibilityService,
   ) {}
 
   // ─── Seed default template (idempotent — mirrors the other reminder services' seedTemplate) ──
@@ -230,8 +232,15 @@ export class WeeklyStateSummaryService {
    * since a ULB only ever has one live/current-cycle record in a non-terminal status at a time.
    */
   private async countByStatus(stateId: Types.ObjectId): Promise<StatusCounts> {
+    const ineligibleUlbTypeIds = await this.ulbEligibilityService.getIneligibleUlbTypeIds('XVIFC');
     const pipeline = [
-      { $match: { state: stateId, isActive: true } },
+      {
+        $match: {
+          state: stateId,
+          isActive: true,
+          ...(ineligibleUlbTypeIds.length ? { ulbType: { $nin: ineligibleUlbTypeIds } } : {}),
+        },
+      },
       {
         $lookup: {
           from: 'xvifc_annualaccounts',
@@ -268,11 +277,19 @@ export class WeeklyStateSummaryService {
     };
   }
 
-  /** Same date-math pattern as StateReviewDigestService.findDueAnnualAccounts, threshold=10 days. */
-  private countReviewDelayed(stateId: Types.ObjectId): Promise<number> {
+  /**
+   * Same date-math pattern as StateReviewDigestService.findDueAnnualAccounts, threshold=10 days.
+   * Scoped to the same eligible-ULB set as countByStatus - otherwise an ineligible/inactive ULB's
+   * delayed record could push this past countByStatus's (filtered) "under state review" total.
+   */
+  private async countReviewDelayed(stateId: Types.ObjectId): Promise<number> {
+    const eligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateId, 'XVIFC');
+    const eligibleUlbIds = await this.ulbModel.distinct('_id', eligibleUlbFilter).exec();
+
     return this.annualAccountModel
       .countDocuments({
         state: stateId,
+        ulb: { $in: eligibleUlbIds },
         sectionType: 'audited',
         form_status_id: FORM_STATUS_ID[AnnualAccountFormStatus.UNDER_REVIEW_BY_STATE],
         declaredAt: { $ne: null },
