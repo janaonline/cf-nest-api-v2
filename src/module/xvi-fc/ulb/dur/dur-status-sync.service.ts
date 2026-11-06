@@ -24,11 +24,6 @@ interface StuckSlot {
  * forever — nothing ever writes PASSED/FAILED, so the frontend's status poll finds nothing new
  * on every tick and appears to loop indefinitely (it isn't broken; the backend just never
  * finishes the job).
- *
- * Deliberately NOT modeled on AnnualAccountStatusSyncService's exact query shape — that service
- * still references a pre-refactor field path (`[section].documents.docId`) that no longer matches
- * XviFcAnnualAccount's current flat schema, so it doesn't actually match anything today. Built
- * fresh against DUR's real, current schema instead of copying that bug forward.
  */
 @Injectable()
 export class DurStatusSyncService {
