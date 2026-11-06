@@ -35,6 +35,8 @@ import { UlbModule } from './master/ulb/ulb.module';
 import { StateModule } from './master/state/state.module';
 import { AdcModule } from './master/adc/adc.module';
 import { DigitizationDbModule } from './core/database/digitization-db.module';
+import { ForumDbModule } from './core/database/forum-db.module';
+import { ForumModule } from './module/forum/forum.module';
 import { XvFcReviewModule } from './module/xv-fc/xv-fc-review/ulb/xv-fc-review.module';
 import { XvFcReviewAdminModule } from './module/xv-fc/xv-fc-review/admin/xv-fc-review-admin.module';
 import { PropertyTaxModule } from './module/property-tax/property-tax.module';
@@ -111,6 +113,7 @@ function getQueryCaller(): string {
     // digitization_db shares the same physical connection as the default one above
     // (same server, different db name) via Connection#useDb — see DigitizationDbModule.
     DigitizationDbModule,
+    ForumDbModule,
     UsersModule,
     ResourcesSectionModule,
     NodeMailerModule,
@@ -137,6 +140,7 @@ function getQueryCaller(): string {
     XvFcReviewAdminModule,
     PropertyTaxModule,
     DataCollectionModule,
+    ForumModule,
   ],
   controllers: [AppController],
   providers: [

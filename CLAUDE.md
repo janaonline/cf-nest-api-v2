@@ -195,6 +195,14 @@ src/
 │                        # PMU/DoE matrices are generated from permissions.map.ts so they cannot drift from what is enforced
 │                        # ADC (Assam Autonomous District Council) teams: `adc-members`, `invite-adc-member`, `adc-permission-matrix` (see Authorization)
 ├── master/adc/          # GET master/adc (ADMIN: any/one state; State DMA: own state) — the ADC picker; ADCs themselves are inserted into `adcs` directly in the DB, not via an API
+├── module/forum/        # 16th FC discussion forum (migrated from the standalone cf-next-forum Next.js app):
+│                        # threads/comments/likes/bookmarks/categories under `/api/v2/forum/*`, ADMIN moderation
+│                        # under `/api/v2/forum/admin/*`. Uses the shared JWT auth (no login of its own); schemas
+│                        # live in schemas/forum/. Data is in its own database `FORUM_DB_NAME` (default `forum_db`,
+│                        # same server, connection `forum_db` via `ForumDbModule`/`useDb`); users stay in the main
+│                        # DB. Collections keep the old standalone-app names (threads, comments, ...), so existing
+│                        # forum_db data is read in place. The 3 canonical categories are upserted on boot.
+├── users/               # User CRUD with repository pattern
 ├── admin/
 │   ├── afs-digitization/ # AFS file processing with BullMQ queues
 │   └── ulb-types/       # ADMIN-only CRUD for the `ulbtypes` reference-data collection (in particular
