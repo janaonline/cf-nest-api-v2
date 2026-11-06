@@ -143,7 +143,11 @@ export class ClaimLetterDocxService {
         this.para({ runs: [{ text: list.subheading }] }, { after: 80, keepNext: true }),
       );
       const rows = doc.rowsByList[list.key];
-      out.push(rows.length ? this.ulbTable(doc.annexure.columns, rows) : this.para({ runs: [{ text: 'Nil' }] }));
+      out.push(
+        rows.length
+          ? this.ulbTable(doc.annexure.columns, rows, list.totalCells)
+          : this.para({ runs: [{ text: 'Nil' }] }),
+      );
     });
     return out;
   }
@@ -164,13 +168,17 @@ export class ClaimLetterDocxService {
     );
   }
 
-  private ulbTable(columns: ClaimLetterColumn[], rows: ClaimLetterAnnexureRow[]): Table {
+  /** The ULB rows, then a bold Total row. */
+  private ulbTable(columns: ClaimLetterColumn[], rows: ClaimLetterAnnexureRow[], totalCells: string[]): Table {
     const widths = perMilleWidths(LANDSCAPE_WIDTH, claimLetterColumnShares(columns));
     const aligns = columns.map((c) => ALIGN[CLAIM_LETTER_COLUMN_ALIGN[c.kind]]);
     return this.table(
       widths,
       columns.map((c, i) => this.cell([{ runs: [{ text: c.header, bold: true }] }], widths[i], AlignmentType.CENTER)),
-      rows.map((r) => r.cells.map((text, i) => this.cell([{ runs: [{ text }] }], widths[i], aligns[i]))),
+      [
+        ...rows.map((r) => r.cells.map((text, i) => this.cell([{ runs: [{ text }] }], widths[i], aligns[i]))),
+        totalCells.map((text, i) => this.cell([{ runs: [{ text, bold: true }] }], widths[i], aligns[i])),
+      ],
     );
   }
 

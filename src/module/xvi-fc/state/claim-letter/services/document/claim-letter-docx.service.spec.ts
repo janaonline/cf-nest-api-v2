@@ -54,8 +54,20 @@ function fullDocument(): ClaimLetterFullDocument {
         { header: 'Untied grant allocation (₹ lakh)', kind: 'amount' },
       ],
       lists: [
-        { key: 'ELIGIBLE', heading: '1. List of Eligible ULBs', subheading: 'ULBs in this proposal.', total: 1 },
-        { key: 'INELIGIBLE', heading: '2. List of Ineligible ULBs', subheading: 'All ULBs, for record.', total: 0 },
+        {
+          key: 'ELIGIBLE',
+          heading: '1. List of Eligible ULBs',
+          subheading: 'ULBs in this proposal.',
+          total: 1,
+          totalCells: ['', 'Total', '', '', '', '617.28', '617.28'],
+        },
+        {
+          key: 'INELIGIBLE',
+          heading: '2. List of Ineligible ULBs',
+          subheading: 'All ULBs, for record.',
+          total: 0,
+          totalCells: ['', 'Total', '', '', '', '-', '-'],
+        },
       ],
     },
     counts: {
@@ -164,6 +176,17 @@ describe('ClaimLetterDocxService', () => {
 
     expect(xml).toContain('<w:t xml:space="preserve"> dated 18 Sep 2026</w:t>');
     expect(xml.match(/ dated /g)).toHaveLength(1);
+  });
+
+  it('ends a listed table with a bold Total row, and prints none for an empty list', async () => {
+    const xml = await documentXml(service, fullDocument());
+    const tables = [...xml.matchAll(/<w:tbl>([\s\S]*?)<\/w:tbl>/g)].map((m) => m[1]);
+    const annexureRows = [...tables[1].matchAll(/<w:tr[ >][\s\S]*?<\/w:tr>/g)].map((m) => m[0]);
+
+    expect(tables).toHaveLength(2); // the compliance table and the one listed table; "Nil" for the other
+    expect(annexureRows).toHaveLength(3); // header, ULB A, Total
+    expect(annexureRows[2]).toMatch(/<w:b\/>[\s\S]*?<w:t[^>]*>Total<\/w:t>/);
+    expect(annexureRows[2]).toContain('617.28');
   });
 
   it('has no enclosure list after the annexure', async () => {

@@ -29,7 +29,7 @@ export function formatPercent(part: number, total: number): string {
 }
 
 export function formatFraction(part: number, total: number): string {
-  return `${part}/${total} (${formatPercent(part, total)}%)`;
+  return `${part} out of ${total} (${formatPercent(part, total)}%)`;
 }
 
 export function formatFractionOrNil(part: number, total: number): string {
@@ -46,8 +46,24 @@ export function shiftFinancialYear(fyLabel: string, offset: number): string {
   return `${start}-${String((start + 1) % 100).padStart(2, '0')}`;
 }
 
+/** "2026-2032" -> "2026-32"; any other text is returned as is. */
+export function formatAwardPeriod(period: string): string {
+  const m = /^(\d{4})-(\d{4})$/.exec(period);
+  return m ? `${m[1]}-${m[2].slice(2)}` : period;
+}
+
 export function ordinal(n: number): string {
   return n === 1 ? '1st' : n === 2 ? '2nd' : n === 3 ? '3rd' : `${n}th`;
+}
+
+const ORDINAL_WORDS = ['First', 'Second', 'Third', 'Fourth', 'Fifth', 'Sixth', 'Seventh', 'Eighth', 'Ninth', 'Tenth'];
+
+/** The SFC form's "6th SFC" as Row B spells it: "Sixth State Finance Commission (SFC)"; any other text
+ *  is returned as is. */
+export function describeSfc(whichAwardPeriod: string): string {
+  const m = /^(\d+)(?:st|nd|rd|th)\s*SFC$/i.exec(whichAwardPeriod.trim());
+  const word = m ? ORDINAL_WORDS[Number(m[1]) - 1] : undefined;
+  return word ? `${word} State Finance Commission (SFC)` : whichAwardPeriod;
 }
 
 /** GTC rule: installment 1 of FY Y certifies the 2nd installment of FY Y-1. */

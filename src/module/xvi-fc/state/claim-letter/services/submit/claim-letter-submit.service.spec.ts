@@ -146,7 +146,7 @@ describe('ClaimLetterSubmitService', () => {
 
     it('refuses an abandoned batch, which abandon leaves IN_PROGRESS', async () => {
       batchModel.findOne.mockReturnValue(q({ ...readyParent, isAbandoned: true }));
-      await expect(service.submit('x', stateUser, 'reviewed-key')).rejects.toThrow('This claim batch was abandoned.');
+      await expect(service.submit('x', stateUser, 'reviewed-key')).rejects.toThrow('This claim batch was discarded.');
       expect(connection.startSession).not.toHaveBeenCalled();
     });
 

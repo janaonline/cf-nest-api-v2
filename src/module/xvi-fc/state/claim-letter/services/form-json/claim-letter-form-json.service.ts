@@ -3,14 +3,19 @@ import { FormJsonService } from 'src/master/form-json/form-json.service';
 import type { FieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
 import { CLAIM_LETTER_FORM_ID } from '../../constants/claim-letter.constants';
 import {
+  CLAIM_LETTER_CLAIM_AMOUNT_EDITABLE_META_KEY,
   CLAIM_LETTER_VARIANCE_LOWER_META_KEY,
   CLAIM_LETTER_VARIANCE_LOWER_PERCENT,
   CLAIM_LETTER_VARIANCE_UPPER_META_KEY,
   CLAIM_LETTER_VARIANCE_UPPER_PERCENT,
+  type ClaimLetterClaimAmountConfig,
 } from '../../helpers/claim-letter-financial.helpers';
 
 export interface ClaimLetterFormConfig {
   questions: FieldConfig[];
+  /** `meta.claimAmountEditable === true` only; off means the claim is the allocation (ADR 0006). */
+  claimAmountEditable: boolean;
+  /** The band; applies only while `claimAmountEditable` is on. */
   varianceLowerPercent: number;
   varianceUpperPercent: number;
   /** Letter-detail questions in `meta.letterDetailKeys` order; empty when not configured. */
@@ -29,11 +34,6 @@ export interface ClaimLetterMergeDocument {
   formId: number;
   fileKeys: string[];
   optional: boolean;
-}
-
-export interface ClaimLetterVarianceConfig {
-  lowerPercent: number;
-  upperPercent: number;
 }
 
 const LETTER_KEYS_META_KEY = 'letterDetailKeys';
@@ -56,6 +56,7 @@ export class ClaimLetterFormJsonService {
       const letterQuestions = this.resolveLetterQuestions(questions, formJson.meta);
       return {
         questions,
+        claimAmountEditable: formJson.meta?.[CLAIM_LETTER_CLAIM_AMOUNT_EDITABLE_META_KEY] === true,
         varianceLowerPercent: this.resolvePercent(
           formJson.meta,
           CLAIM_LETTER_VARIANCE_LOWER_META_KEY,
@@ -76,6 +77,7 @@ export class ClaimLetterFormJsonService {
         this.logger.warn(`Claim Letter formjsons (formId ${CLAIM_LETTER_FORM_ID}) not seeded for year ${yearId}.`);
         return {
           questions: [],
+          claimAmountEditable: false,
           varianceLowerPercent: CLAIM_LETTER_VARIANCE_LOWER_PERCENT,
           varianceUpperPercent: CLAIM_LETTER_VARIANCE_UPPER_PERCENT,
           letterQuestions: [],
@@ -88,10 +90,10 @@ export class ClaimLetterFormJsonService {
     }
   }
 
-  /** Convenience wrapper over loadFormConfig for callers that only need the variance band. */
-  async loadVarianceConfig(yearId: string): Promise<ClaimLetterVarianceConfig> {
-    const { varianceLowerPercent, varianceUpperPercent } = await this.loadFormConfig(yearId);
-    return { lowerPercent: varianceLowerPercent, upperPercent: varianceUpperPercent };
+  /** Convenience wrapper over loadFormConfig for callers that only need the claim-amount switch and band. */
+  async loadClaimAmountConfig(yearId: string): Promise<ClaimLetterClaimAmountConfig> {
+    const { claimAmountEditable, varianceLowerPercent, varianceUpperPercent } = await this.loadFormConfig(yearId);
+    return { editable: claimAmountEditable, lowerPercent: varianceLowerPercent, upperPercent: varianceUpperPercent };
   }
 
   private resolvePercent(meta: Record<string, unknown> | undefined, key: string, fallback: number): number {

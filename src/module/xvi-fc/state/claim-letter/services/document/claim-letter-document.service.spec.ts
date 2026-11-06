@@ -338,8 +338,9 @@ describe('ClaimLetterDocumentService', () => {
         'c) Not applicable',
       ]);
       expect(text(rowB.status[0])).toBe(
-        'State has constituted its 6th SFC and submitted the ATR on its recommendations vide dt. 14 Mar 2026. ' +
-          'The recommendations of SFC are applicable till FY 2026-2031.',
+        'The State has constituted its Sixth State Finance Commission (SFC) and submitted the Action Taken Report ' +
+          '(ATR) on its recommendations, dated 14 Mar 2026. ' +
+          'The recommendations of the SFC are applicable for the period FY 2026-31.',
       );
     });
 
@@ -353,7 +354,7 @@ describe('ClaimLetterDocumentService', () => {
       exemptionResolver.resolveDiscretionary.mockResolvedValue(entry(5));
       const underReview = (await service.getDocument(claimLetterId, stateUser)).data!.letter.compliance[1];
       expect(underReview.status.map(text)).toEqual([
-        'State has requested exemption from this condition; the request is under MoHUA review.',
+        'The State has requested exemption from this condition; the request is under MoHUA review.',
       ]);
       expect(underReview.status[0].runs.some((r) => r.field || r.placeholder)).toBe(false);
       expect(exemptionResolver.resolveDiscretionary).toHaveBeenCalledWith(
@@ -365,17 +366,20 @@ describe('ClaimLetterDocumentService', () => {
 
       exemptionResolver.resolveDiscretionary.mockResolvedValue(entry(7));
       const approved = (await service.getDocument(claimLetterId, stateUser)).data!.letter.compliance[1];
-      expect(approved.status.map(text)).toEqual(['State has been exempted from this condition by MoHUA.']);
+      expect(approved.status.map(text)).toEqual(['The State has been exempted from this condition by MoHUA.']);
 
       exemptionResolver.resolveDiscretionary.mockResolvedValue(entry(6));
       const rejected = (await service.getDocument(claimLetterId, stateUser)).data!.letter.compliance[1];
-      expect(text(rejected.status[0])).toMatch(/^State has constituted its 6th SFC/);
+      expect(text(rejected.status[0])).toMatch(/^The State has constituted its Sixth State Finance Commission \(SFC\)/);
     });
 
     it('row B shows placeholders when the SFC form has no values', async () => {
       sfcModel.findOne.mockReturnValue(q(null));
       const { data } = await service.getDocument(claimLetterId, stateUser);
-      expect(placeholders(data!.letter.compliance[1].status[0])).toEqual(['<nth SFC>', '<award period>']);
+      expect(placeholders(data!.letter.compliance[1].status[0])).toEqual([
+        '<nth State Finance Commission (SFC)>',
+        '<award period>',
+      ]);
       expect(data!.letter.compliance[1].status[0].runs.filter((r) => r.placeholder).map((r) => r.hint)).toEqual([
         'Comes from the SFC form',
         'Comes from the SFC form',
@@ -389,16 +393,19 @@ describe('ClaimLetterDocumentService', () => {
       const byKey = Object.fromEntries(data!.letter.compliance.map((r) => [r.key, r.status.map(text)]));
 
       expect(byKey['C.']).toEqual([
-        '2/4 (50%)',
+        '2 out of 4 (50%)',
         '',
         'Out of the total 2 ULBs in this proposal, 1 ULB falls within areas covered under the Sixth Schedule of the Constitution and is exempt from this condition.',
       ]);
-      expect(byKey['D.']).toEqual(['2/4 (50%)']);
+      expect(byKey['D.']).toEqual(['2 out of 4 (50%)']);
       expect(byKey['E.']).toEqual(['Not applicable']);
-      expect(byKey['G.']).toEqual(['1/4 (25%)']);
-      expect(byKey['H.']).toEqual(['2/4 (50%)']);
-      expect(byKey['J.']).toEqual(['1/4 (25%)', '(list of ineligible ULBs has been attached for record)']);
-      expect(byKey['K.']).toEqual(['2/4 (50%)', '(list of eligible ULBs may be perused)']);
+      expect(byKey['G.']).toEqual(['1 out of 4 (25%)']);
+      expect(byKey['H.']).toEqual(['2 out of 4 (50%)']);
+      expect(byKey['J.']).toEqual(['1 out of 4 (25%).', '(The list of ineligible ULBs is enclosed for record.)']);
+      expect(byKey['K.']).toEqual(['2 out of 4 (50%).', '(The list of eligible ULBs is enclosed for reference.)']);
+      const conditions = Object.fromEntries(data!.letter.compliance.map((r) => [r.key, r.condition.map(text)]));
+      expect(conditions['J.']).toEqual(['Total number of ineligible ULBs']);
+      expect(conditions['K.']).toEqual(['Resultant total number of eligible ULBs in the proposal']);
       expect(data!.counts).toMatchObject({ stateUlbTotal: 4, proposalUlbs: 2, ineligibleStateWide: 1 });
     });
 
@@ -429,6 +436,16 @@ describe('ClaimLetterDocumentService', () => {
       ]);
     });
 
+    it('notes above the eligible list that other eligible ULBs may come in later claims', async () => {
+      const { data } = await service.getDocument(claimLetterId, stateUser);
+      expect(data!.annexure.lists[0]).toMatchObject({
+        key: 'ELIGIBLE',
+        subheading:
+          'The table below lists eligible ULBs included in the current claim batch. ' +
+          'Other eligible ULBs may be included in subsequent claims.',
+      });
+    });
+
     it('lists this proposal A-Z and State-wide ineligible ULBs with the cell rules applied', async () => {
       const eligible = await service.getDocumentUlbs(claimLetterId, 'ELIGIBLE', 1, stateUser);
       const ineligible = await service.getDocumentUlbs(claimLetterId, 'INELIGIBLE', 1, stateUser);
@@ -441,6 +458,31 @@ describe('ClaimLetterDocumentService', () => {
         ['1', 'ULB C', 'Constituted (pending review)', 'Yes', 'No', '18.50', '-', '-'],
       ]);
       expect(ineligible.meta).toEqual({ page: 1, limit: 20, total: 1 });
+    });
+
+    it("ends each list with the Tied / Untied totals of that table's rows only", async () => {
+      const { data } = await service.getDocument(claimLetterId, stateUser);
+      const [eligible, ineligible] = data!.annexure.lists;
+
+      // ULB A 617.28 + ULB B 22.84; ULB C (ineligible) has no allocation, so its table has none to add.
+      expect(eligible.totalCells).toEqual(['', 'Total', '', '', '', '', '640.12', '640.12']);
+      expect(ineligible.totalCells).toEqual(['', 'Total', '', '', '', '', '-', '-']);
+    });
+
+    it('totals the exact allocations, rounded once, not the rounded rows', async () => {
+      eligibility.resolveDevolutionAllocations.mockResolvedValue(
+        new Map([
+          [ulbA, { allocatedAmount: 1000 }],
+          [ulbB, { allocatedAmount: 1000 }],
+        ]),
+      );
+
+      const { data } = await service.getDocument(claimLetterId, stateUser);
+      const rows = await service.getDocumentUlbs(claimLetterId, 'ELIGIBLE', 1, stateUser);
+
+      // Each row prints 0.005 lakh as 0.01, but the two together are 0.01 lakh, not 0.02.
+      expect(rows.data!.map((r) => r.cells.slice(-1)[0])).toEqual(['0.01', '0.01']);
+      expect(data!.annexure.lists[0].totalCells.slice(-2)).toEqual(['0.01', '0.01']);
     });
 
     describe('preview cache', () => {
@@ -551,7 +593,7 @@ describe('ClaimLetterDocumentService', () => {
 
     it('refuses an abandoned batch before the active-batch check', async () => {
       batchModel.findOne.mockReturnValue(q({ ...parent, isAbandoned: true }));
-      await expect(service.getDocument(claimLetterId, stateUser)).rejects.toThrow('This claim batch was abandoned.');
+      await expect(service.getDocument(claimLetterId, stateUser)).rejects.toThrow('This claim batch was discarded.');
       await expect(service.loadParent(claimLetterId, stateUser)).rejects.toThrow(ConflictException);
       expect(activeBatch.assertActive).not.toHaveBeenCalled();
     });

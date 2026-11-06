@@ -5,6 +5,7 @@ import {
   computeDifferenceAmount,
   computeDifferencePercentageBasisPoints,
   isClaimedAmountWithinVariance,
+  resolveClaimedAmount,
   sumAmountsExactly,
 } from './claim-letter-financial.helpers';
 
@@ -44,6 +45,36 @@ describe('isClaimedAmountWithinVariance', () => {
     expect(isClaimedAmountWithinVariance(100, 100, 100, 100)).toBe(true);
     expect(isClaimedAmountWithinVariance(100, 99, 100, 100)).toBe(false);
     expect(isClaimedAmountWithinVariance(100, 101, 100, 100)).toBe(false);
+  });
+});
+
+describe('resolveClaimedAmount', () => {
+  const allocated = 100_000;
+
+  describe('switch off (claim = allocation)', () => {
+    const config = { editable: false, lowerPercent: 90, upperPercent: 110 };
+
+    it.each([
+      ['no requested amount', undefined, allocated],
+      ['the allocation itself', allocated, allocated],
+      ['an amount inside the band', 105_000, null],
+      ['an amount outside the band', 200_000, null],
+    ])('%s', (_label, requested, expected) => {
+      expect(resolveClaimedAmount(allocated, requested, config)).toBe(expected);
+    });
+  });
+
+  describe('switch on (editable within the band)', () => {
+    const config = { editable: true, lowerPercent: 90, upperPercent: 110 };
+
+    it.each([
+      ['no requested amount', undefined, null],
+      ['an amount inside the band', 105_000, 105_000],
+      ['the band edge', 90_000, 90_000],
+      ['an amount outside the band', 110_001, null],
+    ])('%s', (_label, requested, expected) => {
+      expect(resolveClaimedAmount(allocated, requested, config)).toBe(expected);
+    });
   });
 });
 
