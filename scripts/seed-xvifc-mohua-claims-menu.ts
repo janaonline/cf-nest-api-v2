@@ -27,8 +27,10 @@ async function main() {
   const uri = process.env.MONGO_URI;
   if (!uri) throw new Error('MONGO_URI is not set');
   const dryRun = process.argv.includes('--dry-run');
-  const yearArg = process.argv.includes('--year') ? process.argv[process.argv.indexOf('--year') + 1] : undefined;
-  if (yearArg && !mongoose.isValidObjectId(yearArg)) throw new Error(`--year "${yearArg}" is not a valid id`);
+  const yearFlag = process.argv.includes('--year');
+  const yearArg = yearFlag ? process.argv[process.argv.indexOf('--year') + 1] : undefined;
+  // A bare `--year` must fail, not silently write to every year.
+  if (yearFlag && !mongoose.isValidObjectId(yearArg)) throw new Error(`--year "${yearArg ?? ''}" is not a valid id`);
 
   await mongoose.connect(uri, { dbName: process.env.MONGO_DB_NAME });
   const menu = mongoose.connection.db!.collection(COLLECTION);

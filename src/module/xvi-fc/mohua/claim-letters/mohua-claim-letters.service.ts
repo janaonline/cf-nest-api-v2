@@ -23,6 +23,8 @@ import { buildDecisionRecord } from 'src/module/xvi-fc/common/utils/xvi-fc-decis
 import { XviFcEligibilityExemption } from 'src/schemas/xvi-fc/state/xvi-fc-eligibility-exemption.schema';
 import type { ClaimLetterReturnedSource } from 'src/module/xvi-fc/state/claim-letter/services/form-status/claim-letter-form-status.service';
 import { RequestExemptionMohuaService } from '../request-exemption/request-exemption-mohua.service';
+import { OmUlb } from 'src/schemas/xvi-fc/mohua/om-ulb.schema';
+import { copyClaimLetterUlbsToOm } from '../om/om-ulbs.helper';
 import type { ReturnMohuaClaimLetterDto } from './mohua-claim-letters-return.dto';
 import type { DecideMohuaClaimLetterUlbDto } from './mohua-claim-letters-ulb-decision.dto';
 import { GrantAllocation } from 'src/schemas/xvi-fc/grant-allocation.schema';
@@ -86,6 +88,7 @@ type LeanBatch = {
   currentFormStatus: number;
   financialSummary?: { currentSelectedClaim?: number };
   signedClaimFile?: { originalName?: string; name?: string; path?: string; sizeKb?: number } | null;
+  finalClaimPdf?: { file?: { originalName?: string; name?: string; path?: string; sizeKb?: number } | null } | null;
 };
 
 /**
@@ -109,6 +112,7 @@ export class MohuaClaimLettersService {
     @InjectConnection() private readonly connection: Connection,
     @InjectModel(XviFcEligibilityExemption.name) private readonly exemptionModel: Model<XviFcEligibilityExemption>,
     private readonly exemptionService: RequestExemptionMohuaService,
+    @InjectModel(OmUlb.name) private readonly omUlbModel: Model<OmUlb>,
   ) {}
 
   /**
@@ -353,6 +357,8 @@ export class MohuaClaimLettersService {
         },
         session,
       );
+      // The verified letter's ULBs now wait for its Office Memorandum (mohua/om).
+      await copyClaimLetterUlbsToOm(this.batchUlbModel, this.omUlbModel, claimLetterOid, session);
 
       await session.commitTransaction();
     } catch (err) {
@@ -560,7 +566,8 @@ export class MohuaClaimLettersService {
         : Promise.resolve([]),
     ]);
 
-    const file = batch.signedClaimFile;
+    // The final claim letter PDF (the letter with its annexures merged); older letters fall back to the uploaded signed copy.
+    const file = batch.finalClaimPdf?.file?.path ? batch.finalClaimPdf.file : batch.signedClaimFile;
     return {
       id: String(batch._id),
       revision: batch.revision ?? 0,
@@ -823,7 +830,7 @@ export class MohuaClaimLettersService {
     const batch = await this.batchModel
       .findOne(this.listedFilter({ _id: new Types.ObjectId(claimLetterId) }))
       .select(
-        'state year installment fileBaseName batchNumber revision submittedAt ulbCount currentFormStatus financialSummary.currentSelectedClaim signedClaimFile',
+        'state year installment fileBaseName batchNumber revision submittedAt ulbCount currentFormStatus financialSummary.currentSelectedClaim signedClaimFile finalClaimPdf.file',
       )
       .lean<LeanBatch>()
       .exec();

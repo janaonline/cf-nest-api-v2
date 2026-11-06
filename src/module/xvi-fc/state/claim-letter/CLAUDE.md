@@ -82,7 +82,7 @@ Each decision below is cited from several files; read the ADR, not just the loca
   `loadFormConfig` fetches the document once per call and derives all of it; never add a second
   fetch for another part of the same document.
 - `helpers/` - pure functions (amount arithmetic, content hash, summary mapping, permissions, letter
-  text and annexure cells), except `claim-letter-build-cleanup.helpers.ts`, the delete shared by both
+  text and annexure cells, annexure column widths and alignment - also used by the MoHUA OM's PDF), except `claim-letter-build-cleanup.helpers.ts`, the delete shared by both
   stale-build reclaim paths, and `claim-letter-sfc-exemption.helpers.ts`, the Entire State SFC
   exemption read shared by Row B and the letter details (ADR 0005).
 - `constants/`, `types/`, `dto/` - limits and letter constants, response shapes, request validation.
