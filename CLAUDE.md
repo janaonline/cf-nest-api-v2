@@ -57,6 +57,10 @@ npm run seed:xvifc-mohua-claims-menu      # Adds a "Grant Management" group (aft
                                           # menu year (scripts/seed-xvifc-mohua-claims-menu.ts). Idempotent; `-- --dry-run` reports,
                                           # `-- --year <id>` limits to one year. Clear the no-TTL side-menu cache afterwards
                                           # (DELETE xvi-fc/admin/cache/side-menu) and run it only once the UI route is deployed
+npm run seed:xvifc-mohua-om-menu          # Adds an "OM Generation" group (after Grant Management) with "Generate OM" and "OM Generation
+                                          # History" to the MoHUA sidebar for every MoHUA menu year (scripts/seed-xvifc-mohua-om-menu.ts).
+                                          # Idempotent; `-- --dry-run` reports, `-- --year <id>` limits to one year. Clear the no-TTL
+                                          # side-menu cache afterwards and run it only once the UI routes are deployed
 ```
 
 ## Architecture
@@ -137,6 +141,11 @@ src/
 │   │                    # `soDecision` on the claim ULB row; approve is refused while any ULB is RETURNED, and the return body carries
 │   │                    # only the State-wide items (claim letter, SFC, GTC) (see state/claim-letter/CLAUDE.md). MoHUA's final 5 -> 7 and its return (6) are not built yet. The State's claim-letter submit now lands on 15. Status 16 is
 │   │                    # RETURNED_BY_SO (shown as "Returned for Correction"); see CLAIM_LETTER_APPROVED_STATUSES (7))
+│   │                    # om (Office Memorandum, one per claim letter the SO verified: GET xvi-fc/mohua/om/:yearId/:installment lists
+│   │                    # States and their verified letters; .../letter/:id/document + PATCH .../draft (the "No." and "Dated" boxes);
+│   │                    # POST .../letter/:id/generate numbers it OM/<STATE>/<FY>/<n>, freezes its content and returns one PDF: the OM, the claim letter's ULB lists (frozen with the OM), then the
+│   │                    # claim letter's annexures from its frozen final PDF; GET :omId/pdf; PUT :omId/signed-file (PDF, 5 MB); GET history/:yearId/:installment. The SO's approve copies
+│   │                    # the letter's ULBs into xvifc_om_ulbs; rows A-K come from the claim letter's own document — see mohua/om/CLAUDE.md)
 │   ├── side-menu/, cache/, common/ # XviFcCacheService/Interceptor, form-actors, form-status-access helpers,
 │   │                     # YearAccessService (dynamic year access/exemption for new ULBs - see below),
 │   │                     # XviFcUlbOptionsService/Controller (GET xvi-fc/ulb-options?stateId=&yearId= - a

@@ -31,6 +31,7 @@ import type {
   ClaimLetterParagraph,
   ClaimLetterRun,
 } from '../../types/claim-letter-document.types';
+import { CLAIM_LETTER_COLUMN_ALIGN, claimLetterColumnShares } from '../../helpers/claim-letter-annexure-columns.helpers';
 import { printedText } from '../../helpers/claim-letter-letter.helpers';
 import { ClaimLetterLetterDetailsService } from '../letter-details/claim-letter-letter-details.service';
 import { ClaimLetterDocumentService, type ClaimLetterDocumentParent } from './claim-letter-document.service';
@@ -53,20 +54,10 @@ const TABLE_BORDERS = {
   insideVertical: BORDER,
 };
 
-/** Per-mille column shares (approved v3 sample); Yes/No columns share what is left. */
-const COLUMN_SHARE: Record<Exclude<ClaimLetterColumnKind, 'yesNo'>, number> = {
-  serial: 35,
-  name: 140,
-  value: 95,
-  amount: 100,
-};
-const ALLOCATION_SHARE = 95; // Tied and Untied (the last two columns)
-const COLUMN_ALIGN: Record<ClaimLetterColumnKind, Align> = {
-  serial: AlignmentType.CENTER,
-  name: AlignmentType.LEFT,
-  value: AlignmentType.CENTER,
-  yesNo: AlignmentType.CENTER,
-  amount: AlignmentType.RIGHT,
+const ALIGN: Record<(typeof CLAIM_LETTER_COLUMN_ALIGN)[ClaimLetterColumnKind], Align> = {
+  left: AlignmentType.LEFT,
+  center: AlignmentType.CENTER,
+  right: AlignmentType.RIGHT,
 };
 
 interface ParaOptions {
@@ -174,8 +165,8 @@ export class ClaimLetterDocxService {
   }
 
   private ulbTable(columns: ClaimLetterColumn[], rows: ClaimLetterAnnexureRow[]): Table {
-    const widths = perMilleWidths(LANDSCAPE_WIDTH, columnShares(columns));
-    const aligns = columns.map((c) => COLUMN_ALIGN[c.kind]);
+    const widths = perMilleWidths(LANDSCAPE_WIDTH, claimLetterColumnShares(columns));
+    const aligns = columns.map((c) => ALIGN[CLAIM_LETTER_COLUMN_ALIGN[c.kind]]);
     return this.table(
       widths,
       columns.map((c, i) => this.cell([{ runs: [{ text: c.header, bold: true }] }], widths[i], AlignmentType.CENTER)),
@@ -245,19 +236,6 @@ function textRuns(run: ClaimLetterRun, size: number): TextRun[] {
         break: i > 0 ? 1 : undefined,
       }),
   );
-}
-
-/** Fixed shares per column kind; Yes/No columns split the rest equally (or it goes to the name). */
-function columnShares(columns: ClaimLetterColumn[]): number[] {
-  const last = columns.length - 1;
-  const shares = columns.map((c, i) =>
-    c.kind === 'yesNo' ? 0 : i >= last - 1 && c.kind === 'amount' ? ALLOCATION_SHARE : COLUMN_SHARE[c.kind],
-  );
-  const yesNoCount = columns.filter((c) => c.kind === 'yesNo').length;
-  const rest = 1000 - shares.reduce((a, s) => a + s, 0);
-  if (yesNoCount === 0) return shares;
-  const each = Math.floor(rest / yesNoCount);
-  return columns.map((c, i) => (c.kind === 'yesNo' ? each : shares[i]));
 }
 
 /** Splits `total` twips by per-mille shares; the rounding remainder goes to column 1 (ULB name). */

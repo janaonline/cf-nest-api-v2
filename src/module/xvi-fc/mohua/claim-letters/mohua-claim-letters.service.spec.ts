@@ -7,7 +7,7 @@ import { MohuaClaimLettersService } from './mohua-claim-letters.service';
 /** Mongoose chain: every builder returns the chain, `.exec()` resolves `result`. */
 function q<T>(result: T) {
   const chain: Record<string, unknown> = {};
-  for (const m of ['select', 'sort', 'skip', 'limit', 'lean']) chain[m] = jest.fn().mockReturnValue(chain);
+  for (const m of ['select', 'sort', 'skip', 'limit', 'lean', 'session']) chain[m] = jest.fn().mockReturnValue(chain);
   chain['exec'] = jest.fn().mockResolvedValue(result);
   return chain;
 }
@@ -33,6 +33,7 @@ describe('MohuaClaimLettersService', () => {
   };
   let exemptionModel: { find: jest.Mock };
   let exemptionService: { approve: jest.Mock; reject: jest.Mock };
+  let omUlbModel: { countDocuments: jest.Mock; insertMany: jest.Mock };
   let grantAllocationModel: { find: jest.Mock };
   let lockModel: { deleteMany: jest.Mock };
   let fileTokens: { signFileUrlForSession: jest.Mock };
@@ -118,6 +119,10 @@ describe('MohuaClaimLettersService', () => {
       approve: jest.fn().mockResolvedValue(undefined),
       reject: jest.fn().mockResolvedValue(undefined),
     };
+    omUlbModel = {
+      countDocuments: jest.fn().mockReturnValue({ session: jest.fn().mockResolvedValue(0) }),
+      insertMany: jest.fn().mockResolvedValue([]),
+    };
 
     service = new MohuaClaimLettersService(
       stateModel as never,
@@ -134,6 +139,7 @@ describe('MohuaClaimLettersService', () => {
       connection as never,
       exemptionModel as never,
       exemptionService as never,
+      omUlbModel as never,
     );
   });
 
@@ -482,6 +488,27 @@ describe('MohuaClaimLettersService', () => {
       expect(session.commitTransaction).toHaveBeenCalled();
       expect(session.endSession).toHaveBeenCalled();
       expect(result.id).toBe(String(batchId));
+    });
+
+    it("copies the verified letter's ULBs into the OM rows, in the approval's transaction", async () => {
+      const child = {
+        _id: new Types.ObjectId(),
+        state: tripura._id,
+        year: new Types.ObjectId(yearId),
+        installment: 1,
+        ulbId: new Types.ObjectId(),
+        ulbSnapshot: { name: 'Khowai' },
+        allocatedAmount: 30,
+        claimedAmount: 30,
+      };
+      batchUlbModel.find.mockReturnValue(q([child]));
+
+      await service.approve(String(batchId), 3, undefined, approver);
+
+      expect(omUlbModel.insertMany).toHaveBeenCalledWith(
+        [expect.objectContaining({ claimLetter: batchId, claimLetterUlb: child._id, ulbId: child.ulbId, om: null })],
+        { session },
+      );
     });
 
     it('refuses, and writes nothing, when the letter changed since the page loaded', async () => {

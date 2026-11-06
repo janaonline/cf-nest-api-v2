@@ -94,6 +94,8 @@ import { FormJsonModule } from 'src/master/form-json/form-json.module';
     ClaimLetterAssemblyService,
     ClaimLetterHistoryService,
     ClaimLetterFormStatusService,
+    // The MoHUA OM reuses the letter's rows A-K.
+    ClaimLetterDocumentService,
   ],
 })
 export class ClaimLetterModule {}

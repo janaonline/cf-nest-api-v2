@@ -26,7 +26,8 @@
     "migrate:xvifc-so-action-gates": "ts-node -r tsconfig-paths/register scripts/add-xvifc-returned-by-so-action-gates.ts",
     "migrate:xvifc-rejection-remarks": "ts-node -r tsconfig-paths/register scripts/migrate-xvifc-rejection-remarks.ts",
     "migrate:pmu-role-rename": "ts-node -r tsconfig-paths/register scripts/migrate-pmu-role-rename.ts",
-    "seed:xvifc-mohua-claims-menu": "ts-node -r tsconfig-paths/register scripts/seed-xvifc-mohua-claims-menu.ts"
+    "seed:xvifc-mohua-claims-menu": "ts-node -r tsconfig-paths/register scripts/seed-xvifc-mohua-claims-menu.ts",
+    "seed:xvifc-mohua-om-menu": "ts-node -r tsconfig-paths/register scripts/seed-xvifc-mohua-om-menu.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.896.0",
