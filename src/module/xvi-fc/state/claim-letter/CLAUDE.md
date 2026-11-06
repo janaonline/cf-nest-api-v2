@@ -18,6 +18,8 @@ Each decision below is cited from several files; read the ADR, not just the loca
   State/year/installment, and why lifting it brings back stale letters.
 - [docs/adr/0005-exemptions-under-review.md](docs/adr/0005-exemptions-under-review.md) - an exemption
   request under MoHUA review or approved counts; how the claim follows a later decision.
+- [docs/adr/0006-claim-amount-switch.md](docs/adr/0006-claim-amount-switch.md) - the claim is the
+  allocation unless formjson 26 `meta.claimAmountEditable` is on, and how to turn it back on.
 
 ## Layout
 
@@ -35,8 +37,12 @@ Each decision below is cited from several files; read the ADR, not just the loca
   history) and the signed-file upload.
 - `services/ulb-options/` - the ULB picker: every expected ULB with its ineligibility reason. A ULB
   locked in another batch carries that batch's number (`claimedInBatch`), whatever its eligibility;
-  order is eligible, ineligible, then in another batch.
+  order is eligible, ineligible, then in another batch. `limit` goes up to `CLAIM_LETTER_MAX_ULBS`
+  (1000), so the page loads every ULB in one call and searches, pages and selects locally.
 - `services/ulb-rows/` - the batch's selected-ULB table, with a display-only eligibility re-check.
+  `limit` goes up to `CLAIM_LETTER_MAX_ULBS`, so the page loads a whole batch in one call. Each row
+  carries `stateGatePassed`, so the page can tell a State-level failure (no ULB can be claimed) from
+  ULBs it could remove.
 - `services/submit/` - submit (`IN_PROGRESS -> UNDER_REVIEW_BY_SO`, 15: the MoHUA Section Officer reviews it
   first) and its checks (ADR 0003).
 - `services/form-status/` - `ClaimLetterFormStatusService`, called by the SO's approve (mohua/claim-letters): in the
@@ -61,7 +67,7 @@ Each decision below is cited from several files; read the ADR, not just the loca
   before resubmitting, exactly as after a State return. The fix goes back through PMU (13) / the State (3). Devolution's final submit clears its
   rows' 16 back to null (no PMU row review there). The returned letter itself is closed: status 16 plus
   `isAbandoned: true`, so its batch slot and ULB locks are free and the State builds a new letter; MoHUA still lists
-  it, and the State summary labels it by status, not "Abandoned". Each reopened form or row is in the history row's
+  it, and the State summary labels it by status, not "Discarded". Each reopened form or row is in the history row's
   `rejectedSourceRefs`.
 - `services/active-batch/` - the one-active-batch rule (ADR 0004); no other file decides it.
 - `services/history/` - the only writer of `ClaimLetterBatchHistory` (ADR 0003).
@@ -76,8 +82,9 @@ Each decision below is cited from several files; read the ADR, not just the loca
 - `services/letter-details/` - the State-entered letter details (see "Letter details").
 - `services/final-pdf/` - the final claim letter that goes to MoHUA (see "Final claim letter").
 - `services/form-json/` - this feature's own formjson (formId 26, `CLAIM_LETTER_FORM_ID`): the
-  `signedClaimFile` field, the claimed-vs-allocated band (`meta.varianceLowerPercent` /
-  `varianceUpperPercent`, else `CLAIM_LETTER_VARIANCE_*_PERCENT`), `meta.letterDetailKeys`,
+  `signedClaimFile` field, the claim-amount switch `meta.claimAmountEditable` (off unless `true`; ADR
+  0006) with its claimed-vs-allocated band (`meta.varianceLowerPercent` / `varianceUpperPercent`, else
+  `CLAIM_LETTER_VARIANCE_*_PERCENT`, used only while the switch is on), `meta.letterDetailKeys`,
   `meta.letterDetailSkipPrefill` and `meta.mergeDocuments`. Invalid entries are logged and skipped.
   `loadFormConfig` fetches the document once per call and derives all of it; never add a second
   fetch for another part of the same document.
@@ -95,6 +102,9 @@ two can never disagree; the frontend renders the backend's text verbatim.
 
 - Rows C-K and both annexure lists come from a fresh `resolveUlbLevelEligibility` over the State's
   expected ULBs plus the batch's own; the State total is every row's denominator.
+- Each list ends with a Total row (`ClaimLetterListMeta.totalCells`): the Tied and Untied sums of
+  the ULBs in that table only, from exact rupees rounded once, so it can differ from a hand-add of
+  the rounded rows by a few hundredths of a lakh.
 - Preview cache: that heavy part is kept in Redis per `revision` for 5 minutes, as a `meta` key
   (everything but the rows) plus 100-row chunks per list, so opening the letter parses no rows and a
   20-row page parses one chunk. Chunks are written first and live 30s longer than `meta`; concurrent
@@ -166,6 +176,10 @@ Unspent Declaration, ATR), merged with `pdf-lib`.
   (ADR 0002).
 - A frozen claim version is immutable: `createNewVersion` builds a new parent rather than mutating a
   READY one (ADR 0002, ADR 0003).
+- The claimed amount is decided only in `resolveClaimedAmount` (ADR 0006). Switch off (the default):
+  the request may omit `claimedAmount`, the server stores the allocation, and a different amount is
+  rejected, so every child has `claimedAmount === allocatedAmount` and zero difference. Switch on: the
+  request's amount, within the band.
 - Money is whole Rupees throughout, like every other xvi-fc form; `claimedAmount` is `@IsInt()`. The
   feature went Crore decimals -> whole Rupees -> Rupees with decimals -> whole Rupees, all before
   launch, so no stored-data migration exists. Decimals were dropped because splitting an allocation
@@ -187,9 +201,19 @@ Unspent Declaration, ATR), merged with `pdf-lib`.
 - Abandon only sets `isAbandoned` (the status stays `IN_PROGRESS`) and releases the locks, so every
   path that acts on a batch checks the flag itself: preview, .docx, signed-file upload and submit
   reply 409 `CLAIM_LETTER_ABANDONED_MESSAGE`, and the one-active-batch rule ignores an abandoned
-  batch (ADR 0004).
+  batch (ADR 0004). Users see it as "Discard" (button, messages, the "Discarded" status label);
+  code, the `/abandon` route and the `isAbandoned` field keep "abandon".
 - An edit never frees a removed ULB before it succeeds: validation first, added locks next, removed
   locks released in the final write's transaction (ADR 0002).
+- A create or edit that refuses selected ULBs (400 ineligible or bad amount, 409 locked by another
+  claim) sends `code: CLAIM_LETTER_ULBS_REJECTED` and `errors` keyed `ulbSelections.<index>.<field>`,
+  so the page marks those rows and offers to drop them. Both validate before taking any lock; the
+  400 also names rows another claim locks, so one "Remove" clears both kinds. The message counts the
+  rows and names at most five codes (`ineligibleUlbsMessage`). Lock owners are read only on these
+  failure paths (`lockedRows`), so a save that succeeds runs no extra query, and a failed lookup
+  keeps the original error.
+- A create retried with the same `idempotencyKey` returns the batch it built, or 409 while that
+  build is still running (ADR 0001); the page reuses the key when it re-sends the same selection.
 
 ## Known gaps
 

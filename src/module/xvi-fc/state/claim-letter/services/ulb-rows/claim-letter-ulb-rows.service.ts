@@ -129,6 +129,7 @@ export class ClaimLetterUlbRowsService {
       claimAmount: r.claimedAmount,
       differencePercentage: r.differencePercentageBasisPoints / 100,
       eligible: gate.passed && (ulbLevelEligibility.perUlbEligible.get(String(r.ulbId)) ?? true),
+      stateGatePassed: gate.passed,
       exemptionNotes: ulbLevelEligibility.perUlbExemptionNotes.get(String(r.ulbId)) ?? [],
     }));
 

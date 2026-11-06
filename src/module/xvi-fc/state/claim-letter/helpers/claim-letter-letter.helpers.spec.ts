@@ -1,6 +1,8 @@
 import type { ClaimLetterCriterionDetail } from '../services/eligibility/claim-letter-eligibility.service';
 import {
   buildAnnexureCell,
+  describeSfc,
+  formatAwardPeriod,
   formatDetailValue,
   formatFraction,
   formatFractionOrNil,
@@ -59,9 +61,18 @@ describe('claim letter letter helpers', () => {
   });
 
   it('formats fractions and Nil', () => {
-    expect(formatFraction(10, 60)).toBe('10/60 (16.7%)');
+    expect(formatFraction(10, 60)).toBe('10 out of 60 (16.7%)');
     expect(formatFractionOrNil(0, 60)).toBe('Nil');
-    expect(formatFractionOrNil(4, 60)).toBe('4/60 (6.7%)');
+    expect(formatFractionOrNil(4, 60)).toBe('4 out of 60 (6.7%)');
+  });
+
+  it.each([
+    ['2026-2032', '2026-32'],
+    ['2025-2031', '2025-31'],
+    ['2026-27', '2026-27'],
+    ['2026 to 2031', '2026 to 2031'],
+  ])('formatAwardPeriod(%s) = %s', (period, expected) => {
+    expect(formatAwardPeriod(period)).toBe(expected);
   });
 
   it('shifts financial years and labels the previous installment', () => {
@@ -192,5 +203,19 @@ describe('claim letter letter helpers', () => {
         'No',
       ]);
     });
+  });
+});
+
+describe('describeSfc', () => {
+  it("spells the SFC form's options out in words", () => {
+    expect(describeSfc('6th SFC')).toBe('Sixth State Finance Commission (SFC)');
+    expect(describeSfc('1st SFC')).toBe('First State Finance Commission (SFC)');
+    expect(describeSfc('3rd SFC')).toBe('Third State Finance Commission (SFC)');
+    expect(describeSfc('8th SFC')).toBe('Eighth State Finance Commission (SFC)');
+  });
+
+  it('prints any other value as stored', () => {
+    expect(describeSfc('11th SFC')).toBe('11th SFC');
+    expect(describeSfc('Sixth SFC')).toBe('Sixth SFC');
   });
 });

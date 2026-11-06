@@ -40,8 +40,28 @@ describe('ClaimLetterFormJsonService', () => {
       expect(formJsonService['findActiveByDesignYearAndFormId']).toHaveBeenCalledWith(yearId, CLAIM_LETTER_FORM_ID);
       expect(formJsonService['findActiveByDesignYearAndFormId']).toHaveBeenCalledTimes(1);
       expect(config.questions).toEqual(CLAIM_LETTER_FORM_JSON.data);
+      expect(config.claimAmountEditable).toBe(false);
       expect(config.varianceLowerPercent).toBe(CLAIM_LETTER_VARIANCE_LOWER_PERCENT);
       expect(config.varianceUpperPercent).toBe(CLAIM_LETTER_VARIANCE_UPPER_PERCENT);
+    });
+
+    it('turns the claim-amount switch on only for meta.claimAmountEditable === true', async () => {
+      formJsonService['findActiveByDesignYearAndFormId'] = jest
+        .fn()
+        .mockResolvedValue({ ...CLAIM_LETTER_FORM_JSON, meta: { claimAmountEditable: true } });
+      expect((await service.loadFormConfig(yearId)).claimAmountEditable).toBe(true);
+    });
+
+    it.each([
+      ['the string "true"', 'true'],
+      ['1', 1],
+      ['false', false],
+      ['null', null],
+    ])('keeps the claim-amount switch off when meta.claimAmountEditable is %s', async (_label, value) => {
+      formJsonService['findActiveByDesignYearAndFormId'] = jest
+        .fn()
+        .mockResolvedValue({ ...CLAIM_LETTER_FORM_JSON, meta: { claimAmountEditable: value } });
+      expect((await service.loadFormConfig(yearId)).claimAmountEditable).toBe(false);
     });
 
     it('returns the configured meta.varianceLowerPercent/varianceUpperPercent override', async () => {
@@ -73,6 +93,7 @@ describe('ClaimLetterFormJsonService', () => {
       const config = await service.loadFormConfig(yearId);
       expect(config).toEqual({
         questions: [],
+        claimAmountEditable: false,
         varianceLowerPercent: CLAIM_LETTER_VARIANCE_LOWER_PERCENT,
         varianceUpperPercent: CLAIM_LETTER_VARIANCE_UPPER_PERCENT,
         letterQuestions: [],
@@ -161,23 +182,24 @@ describe('ClaimLetterFormJsonService', () => {
     });
   });
 
-  describe('loadVarianceConfig', () => {
-    it('fetches the form-json document exactly once and returns only the variance band', async () => {
+  describe('loadClaimAmountConfig', () => {
+    it('fetches the form-json document exactly once and returns only the switch and the band', async () => {
       formJsonService['findActiveByDesignYearAndFormId'] = jest.fn().mockResolvedValue({
         ...CLAIM_LETTER_FORM_JSON,
-        meta: { varianceLowerPercent: 85, varianceUpperPercent: 115 },
+        meta: { claimAmountEditable: true, varianceLowerPercent: 85, varianceUpperPercent: 115 },
       });
-      const variance = await service.loadVarianceConfig(yearId);
+      const config = await service.loadClaimAmountConfig(yearId);
       expect(formJsonService['findActiveByDesignYearAndFormId']).toHaveBeenCalledTimes(1);
-      expect(variance).toEqual({ lowerPercent: 85, upperPercent: 115 });
+      expect(config).toEqual({ editable: true, lowerPercent: 85, upperPercent: 115 });
     });
 
-    it('degrades gracefully to default variance when no active document exists', async () => {
+    it('degrades gracefully to switch off and the default band when no active document exists', async () => {
       formJsonService['findActiveByDesignYearAndFormId'] = jest
         .fn()
         .mockRejectedValue(new NotFoundException('not found'));
-      const variance = await service.loadVarianceConfig(yearId);
-      expect(variance).toEqual({
+      const config = await service.loadClaimAmountConfig(yearId);
+      expect(config).toEqual({
+        editable: false,
         lowerPercent: CLAIM_LETTER_VARIANCE_LOWER_PERCENT,
         upperPercent: CLAIM_LETTER_VARIANCE_UPPER_PERCENT,
       });

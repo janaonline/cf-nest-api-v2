@@ -76,9 +76,9 @@ describe('mapClaimLetterBatchDocToSummary', () => {
     expect(summary.currentFormStatusLabel).toBe('In Progress');
   });
 
-  it('labels an abandoned draft "Abandoned" even though currentFormStatus is still IN_PROGRESS', () => {
+  it('labels an abandoned draft "Discarded" even though currentFormStatus is still IN_PROGRESS', () => {
     const summary = mapClaimLetterBatchDocToSummary(batchDoc({ currentFormStatus: 2, isAbandoned: true }), mockUser());
-    expect(summary.currentFormStatusLabel).toBe('Abandoned');
+    expect(summary.currentFormStatusLabel).toBe('Discarded');
     expect(summary.currentFormStatus).toBe(2);
   });
 
@@ -87,9 +87,9 @@ describe('mapClaimLetterBatchDocToSummary', () => {
     expect(summary.currentFormStatusLabel).toBe('Returned for Correction');
   });
 
-  it('labels an abandoned draft "Abandoned" regardless of which currentFormStatus it was abandoned from', () => {
+  it('labels an abandoned draft "Discarded" regardless of which currentFormStatus it was abandoned from', () => {
     const summary = mapClaimLetterBatchDocToSummary(batchDoc({ currentFormStatus: 5, isAbandoned: true }), mockUser());
-    expect(summary.currentFormStatusLabel).toBe('Abandoned');
+    expect(summary.currentFormStatusLabel).toBe('Discarded');
   });
 
   it('defaults totalClaimInProgress/totalClaimInDraft/availableToClaim to 0 for a pre-existing document that predates these fields', () => {

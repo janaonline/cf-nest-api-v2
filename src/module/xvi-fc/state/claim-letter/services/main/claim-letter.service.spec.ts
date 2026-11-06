@@ -49,7 +49,7 @@ describe('ClaimLetterService', () => {
   };
   let expectedUlbSetService: { resolve: jest.Mock };
   let fileInfoNormalizer: { normalizeInboundFileInfo: jest.Mock };
-  let formJsonConfigService: { loadFormConfig: jest.Mock; loadVarianceConfig: jest.Mock };
+  let formJsonConfigService: { loadFormConfig: jest.Mock; loadClaimAmountConfig: jest.Mock };
   let letterDetailsService: {
     evaluate: jest.Mock;
     assertComplete: jest.Mock;
@@ -115,7 +115,7 @@ describe('ClaimLetterService', () => {
       loadFormConfig: jest
         .fn()
         .mockResolvedValue({ questions: [], varianceLowerPercent: 90, varianceUpperPercent: 110, letterQuestions: [] }),
-      loadVarianceConfig: jest.fn().mockResolvedValue({ lowerPercent: 90, upperPercent: 110 }),
+      loadClaimAmountConfig: jest.fn().mockResolvedValue({ editable: false, lowerPercent: 90, upperPercent: 110 }),
     };
     letterDetailsService = {
       evaluate: jest.fn().mockReturnValue({ isComplete: true, missingFields: [] }),
@@ -197,6 +197,7 @@ describe('ClaimLetterService', () => {
         ulbReadiness: { eligible: 2, total: 2 },
         remainingUlbCount: 0,
         activeBatchNumber: null,
+        claimAmountEditable: false,
       });
     });
 
@@ -391,6 +392,7 @@ describe('ClaimLetterService', () => {
           availableToClaim: 20,
         },
         remainingUlbCount: 1,
+        claimAmountEditable: false,
         varianceLowerPercent: 90,
         varianceUpperPercent: 110,
         // stateUser has no xviFcSubrole set — defaults to 'viewer', which lacks PREPARE_GRANT_LETTERS.
@@ -419,13 +421,18 @@ describe('ClaimLetterService', () => {
       expect(result.data?.createBlockedReason).toMatch(/Batch 1/);
     });
 
-    it('sources the variance band from ClaimLetterFormJsonService, keyed by yearId', async () => {
+    it('sources the claim-amount switch and band from ClaimLetterFormJsonService, keyed by yearId', async () => {
       expectedUlbSetService.resolve.mockResolvedValue([]);
-      formJsonConfigService.loadVarianceConfig.mockResolvedValue({ lowerPercent: 80, upperPercent: 120 });
+      formJsonConfigService.loadClaimAmountConfig.mockResolvedValue({
+        editable: true,
+        lowerPercent: 80,
+        upperPercent: 120,
+      });
 
       const result = await service.getClaimContext(stateId.toString(), yearId.toString(), 1, stateUser);
 
-      expect(formJsonConfigService.loadVarianceConfig).toHaveBeenCalledWith(yearId.toString());
+      expect(formJsonConfigService.loadClaimAmountConfig).toHaveBeenCalledWith(yearId.toString());
+      expect(result.data?.claimAmountEditable).toBe(true);
       expect(result.data?.varianceLowerPercent).toBe(80);
       expect(result.data?.varianceUpperPercent).toBe(120);
     });
@@ -603,6 +610,7 @@ describe('ClaimLetterService', () => {
       );
       formJsonConfigService.loadFormConfig.mockResolvedValue({
         questions: [signedFileField],
+        claimAmountEditable: true,
         varianceLowerPercent: 90,
         varianceUpperPercent: 110,
         letterQuestions: [],
@@ -613,6 +621,7 @@ describe('ClaimLetterService', () => {
       expect(formJsonConfigService.loadFormConfig).toHaveBeenCalledWith(yearId.toString());
       expect(formJsonConfigService.loadFormConfig).toHaveBeenCalledTimes(1);
       expect(result.data?.questions).toEqual([signedFileField]);
+      expect(result.data?.claimAmountEditable).toBe(true);
       expect(result.data?.varianceLowerPercent).toBe(90);
       expect(result.data?.varianceUpperPercent).toBe(110);
     });
@@ -1022,7 +1031,7 @@ describe('ClaimLetterService', () => {
     it('refuses an abandoned batch, which abandon leaves IN_PROGRESS', async () => {
       batchModel.findOne.mockReturnValue(q({ _id: 'x', state: stateId, currentFormStatus: 2, isAbandoned: true }));
       await expect(service.uploadSignedFile('x', fileRef, stateUser)).rejects.toThrow(
-        'This claim batch was abandoned.',
+        'This claim batch was discarded.',
       );
       expect(batchModel.findOneAndUpdate).not.toHaveBeenCalled();
     });
