@@ -1,17 +1,22 @@
+import { randomBytes } from 'crypto';
 import { InjectQueue } from '@nestjs/bullmq';
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Queue } from 'bullmq';
-import { Model, Types } from 'mongoose';
+import { Model, Types, UpdateQuery } from 'mongoose';
 import { AFS_DIGITIZATION_V3_QUEUE } from 'src/core/constants/queues';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { AfsExcelFile, AfsExcelFileDocument } from 'src/schemas/afs/afs-excel-file.schema';
+import { AfsMetric, AfsMetricDocument } from 'src/schemas/afs/afs-metrics.schema';
 import { DigitizationStatuses, DigitizationV3Statuses } from 'src/schemas/afs/enums';
 import { QueueStatus } from 'src/schemas/queue.schema';
 import { AnnualAccountData, AnnualAccountDataDocument } from 'src/schemas/annual-account-data.schema';
 import { State, StateDocument } from 'src/schemas/state.schema';
+import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
+import { YearIdToLabel } from 'src/core/constants/years';
 import { DOC_TYPES } from '../constants/docTypes';
+import { DUPLICATE_SLOT_ORDER, DuplicateCheckPdf, findDuplicateSlots } from '../helpers/afs-duplicate.helper';
 import { AfsDigitizationV3QueryDto } from '../dto/afs-digitization-v3-query.dto';
 import { getUlbsLookupPipeline } from '../queries/afs-excel-files.query';
 import {
@@ -33,6 +38,9 @@ interface UlbRow {
   /** From the annual account's PDF metadata; null until that has been backfilled for the file */
   pdfPageCount: number | null;
   pdfSizeBytes: number | null;
+  /** Same file as an earlier slot (set by the annual-account duplicates backfill): not queued, follows that slot */
+  isDuplicate: boolean;
+  duplicateOfDocType?: string;
 }
 
 /** What the page needs to know about a ULB's v3 digitization, derived from ulbFile (never the heavy data). */
@@ -77,10 +85,55 @@ export interface DigitizationV3Metrics {
   failed: number;
   consolidated: number;
   mismatch: number;
+  /** Files that are the same PDF as an earlier slot (also counted under their original's status) */
+  duplicate: number;
+}
+
+/** `afs_metrics` row holding the overall v3 counters (the v2 flow uses 'all' / 'auditor_report') */
+const V3_METRICS_DOC_TYPE = 'v3';
+
+/**
+ * `afs_metrics` row holding the baseline: how many unique files (and pages) v3 has to digitize. Kept apart from the
+ * live row because that one moves by $inc and is overwritten by `rebuildMetrics`.
+ */
+const V3_UNIQUENESS_DOC_TYPE = 'v3-uniqueness';
+
+/** Years the baseline covers */
+const UNIQUENESS_YEARS = ['2019-20', '2020-21', '2021-22', '2022-23', '2023-24', '2024-25'];
+const UNIQUENESS_AUDIT_TYPES = ['audited', 'unAudited'] as const;
+
+const METRIC_FIELD: Partial<Record<DigitizationV3Statuses, string>> = {
+  [DigitizationV3Statuses.QUEUED]: 'queuedFiles',
+  [DigitizationV3Statuses.PROCESSING]: 'processingFiles',
+  [DigitizationV3Statuses.DIGITIZED]: 'digitizedFiles',
+  [DigitizationV3Statuses.FAILED]: 'failedFiles',
+};
+
+/** Unique files / pages (and duplicates skipped) for one year, doc type, state and audit type */
+interface UniquenessCell {
+  year: string;
+  docType: string;
+  state: string;
+  auditType: string;
+  files: number;
+  pages: number;
+  duplicates: number;
+}
+
+export interface DigitizationV3OverallMetrics {
+  /** Unique files to digitize (the uniqueness baseline); falls back to files that entered the pipeline until it is built */
+  total: number;
+  /** Pages in those unique files; null until the baseline is built */
+  totalPages: number | null;
+  digitized: number;
+  queued: number;
+  processing: number;
+  failed: number;
+  updatedAt: Date | null;
 }
 
 @Injectable()
-export class AfsDigitizationV3Service {
+export class AfsDigitizationV3Service implements OnModuleInit {
   private readonly logger = new Logger(AfsDigitizationV3Service.name);
 
   constructor(
@@ -90,8 +143,12 @@ export class AfsDigitizationV3Service {
     private readonly annualAccountModel: Model<AnnualAccountDataDocument>,
     @InjectModel(AfsExcelFile.name)
     private readonly afsExcelFileModel: Model<AfsExcelFileDocument>,
+    @InjectModel(AfsMetric.name)
+    private readonly afsMetricModel: Model<AfsMetricDocument>,
     @InjectModel(State.name)
     private readonly stateModel: Model<StateDocument>,
+    @InjectModel(Ulb.name)
+    private readonly ulbModel: Model<UlbDocument>,
     private readonly fileTokenService: FileTokenService,
     private readonly config: ConfigService,
   ) {}
@@ -136,10 +193,16 @@ export class AfsDigitizationV3Service {
       .filter((row) => this.matchesFilters(records.get(row.ulb.toString()), query))
       .slice(0, MAX_ENQUEUE_BATCH);
 
+    // One number per call, e.g. 20261029-153012-a1b2: groups this run's jobs in FastAPI
+    const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 14);
+    const batchId = `${stamp.slice(0, 8)}-${stamp.slice(8)}-${randomBytes(2).toString('hex')}`;
+
     const summary = {
+      batchId,
       matched: matching.length,
       queued: 0,
       skippedNoPdf: 0,
+      skippedDuplicate: 0,
       skippedAlreadyQueued: 0,
       skippedAlreadyDigitized: 0,
       failedToQueue: 0,
@@ -154,6 +217,12 @@ export class AfsDigitizationV3Service {
     for (const row of matching) {
       if (!row.pdfUrl) {
         summary.skippedNoPdf++;
+        continue;
+      }
+
+      // Same PDF as an earlier slot: that slot is digitized once and this one follows its result
+      if (row.isDuplicate) {
+        summary.skippedDuplicate++;
         continue;
       }
 
@@ -175,6 +244,7 @@ export class AfsDigitizationV3Service {
         docType: query.docType,
         pdfUrl: row.pdfUrl,
         ulbName: row.ulbName,
+        batchId,
       };
 
       const claimed = await this.claim(data);
@@ -237,40 +307,46 @@ export class AfsDigitizationV3Service {
   private async claim(data: AfsDigitizationV3JobData): Promise<boolean> {
     const key = this.recordKey(data);
     try {
-      await this.afsExcelFileModel.findOneAndUpdate(
-        {
-          ...key,
-          $nor: [
-            { 'ulbFile.digitizationStatus': DigitizationStatuses.QUEUED },
-            // `detectedDocTypes` exists only on items v3 has digitized
-            {
-              'ulbFile.digitizationStatus': DigitizationStatuses.DIGITIZED,
-              'ulbFile.detectedDocTypes': { $exists: true },
-            },
-          ],
-        },
-        {
-          $setOnInsert: {
+      const previous = await this.afsExcelFileModel
+        .findOneAndUpdate(
+          {
             ...key,
-            ...(data.annualAccountsId && { annualAccountsId: new Types.ObjectId(data.annualAccountsId) }),
+            $nor: [
+              { 'ulbFile.digitizationStatus': DigitizationStatuses.QUEUED },
+              // `detectedDocTypes` exists only on items v3 has digitized
+              {
+                'ulbFile.digitizationStatus': DigitizationStatuses.DIGITIZED,
+                'ulbFile.detectedDocTypes': { $exists: true },
+              },
+            ],
           },
-          $set: {
-            'ulbFile.digitizationStatus': DigitizationStatuses.QUEUED,
-            'ulbFile.uploadedBy': 'ULB',
-            'ulbFile.pdfUrl': data.pdfUrl,
-            'ulbFile.queue': { status: QueueStatus.QUEUED, progress: 0, createdAt: new Date(), attemptsMade: 0 },
+          {
+            $setOnInsert: {
+              ...key,
+              ...(data.annualAccountsId && { annualAccountsId: new Types.ObjectId(data.annualAccountsId) }),
+            },
+            $set: {
+              'ulbFile.digitizationStatus': DigitizationStatuses.QUEUED,
+              'ulbFile.uploadedBy': 'ULB',
+              'ulbFile.pdfUrl': data.pdfUrl,
+              ...(data.batchId && { 'ulbFile.batchId': data.batchId }),
+              'ulbFile.queue': { status: QueueStatus.QUEUED, progress: 0, createdAt: new Date(), attemptsMade: 0 },
+            },
+            // A re-run starts clean
+            $unset: {
+              'ulbFile.digitizationMsg': '',
+              'ulbFile.detectedDocTypes': '',
+              'ulbFile.segments': '',
+              'ulbFile.isConsolidated': '',
+              'ulbFile.isMismatch': '',
+            },
           },
-          // A re-run starts clean
-          $unset: {
-            'ulbFile.digitizationMsg': '',
-            'ulbFile.detectedDocTypes': '',
-            'ulbFile.segments': '',
-            'ulbFile.isConsolidated': '',
-            'ulbFile.isMismatch': '',
-          },
-        },
-        { upsert: true, new: true, setDefaultsOnInsert: false },
-      );
+          // new: false returns the record as it was (null when inserted), so the counters know what it moved from
+          { upsert: true, new: false, setDefaultsOnInsert: false, projection: ULB_FILE_PROJECTION },
+        )
+        .lean()
+        .exec();
+      await this.recordTransition(this.statusOf(previous), DigitizationV3Statuses.QUEUED);
       return true;
     } catch (error: any) {
       // Unique index {ulb, year, auditType, docType}: the record exists but does not match the filter above.
@@ -280,14 +356,18 @@ export class AfsDigitizationV3Service {
   }
 
   async markProcessing(data: AfsDigitizationV3JobData, bullJobId?: string) {
-    await this.afsExcelFileModel.updateOne(this.recordKey(data), {
-      $set: {
-        'ulbFile.queue.status': QueueStatus.PROCESSING,
-        'ulbFile.queue.processedOn': new Date(),
-        ...(bullJobId && { 'ulbFile.queue.jobId': bullJobId }),
+    await this.updateAndTrack(
+      data,
+      {
+        $set: {
+          'ulbFile.queue.status': QueueStatus.PROCESSING,
+          'ulbFile.queue.processedOn': new Date(),
+          ...(bullJobId && { 'ulbFile.queue.jobId': bullJobId }),
+        },
+        $unset: { 'ulbFile.digitizationMsg': '' },
       },
-      $unset: { 'ulbFile.digitizationMsg': '' },
-    });
+      DigitizationV3Statuses.PROCESSING,
+    );
   }
 
   /**
@@ -301,50 +381,330 @@ export class AfsDigitizationV3Service {
   }
 
   async markDigitized(data: AfsDigitizationV3JobData, result: DigitizationV3Result) {
-    await this.afsExcelFileModel.updateOne(this.recordKey(data), {
-      $set: {
-        'ulbFile.digitizationStatus': DigitizationStatuses.DIGITIZED,
-        // FastAPI job id; the full extraction and the Excel stay in FastAPI and are fetched by this id
-        'ulbFile.requestId': result.jobId,
-        'ulbFile.detectedDocTypes': result.detectedDocTypes,
-        'ulbFile.segments': result.segments,
-        'ulbFile.isConsolidated': result.isConsolidated,
-        'ulbFile.isMismatch': result.isMismatch,
-        'ulbFile.queue.status': QueueStatus.COMPLETED,
-        'ulbFile.queue.progress': 100,
-        'ulbFile.queue.finishedOn': new Date(),
-        ...(result.excelKey && { 'ulbFile.excelUrl': result.excelKey }),
-        ...(result.noOfPages != null && { 'ulbFile.noOfPages': result.noOfPages }),
-        ...(result.processingMs != null && { 'ulbFile.totalProcessingTimeMs': result.processingMs }),
-        // Non-fatal problem (e.g. Excel copy failed): shown on the row, status stays digitized
-        ...(result.warning && { 'ulbFile.digitizationMsg': result.warning }),
+    await this.updateAndTrack(
+      data,
+      {
+        $set: {
+          'ulbFile.digitizationStatus': DigitizationStatuses.DIGITIZED,
+          // FastAPI job id; the full extraction and the Excel stay in FastAPI and are fetched by this id
+          'ulbFile.requestId': result.jobId,
+          'ulbFile.detectedDocTypes': result.detectedDocTypes,
+          'ulbFile.segments': result.segments,
+          'ulbFile.isConsolidated': result.isConsolidated,
+          'ulbFile.isMismatch': result.isMismatch,
+          'ulbFile.queue.status': QueueStatus.COMPLETED,
+          'ulbFile.queue.progress': 100,
+          'ulbFile.queue.finishedOn': new Date(),
+          ...(result.excelKey && { 'ulbFile.excelUrl': result.excelKey }),
+          ...(result.noOfPages != null && { 'ulbFile.noOfPages': result.noOfPages }),
+          ...(result.processingMs != null && { 'ulbFile.totalProcessingTimeMs': result.processingMs }),
+          // Non-fatal problem (e.g. Excel copy failed): shown on the row, status stays digitized
+          ...(result.warning && { 'ulbFile.digitizationMsg': result.warning }),
+        },
+        ...(!result.warning && { $unset: { 'ulbFile.digitizationMsg': '' } }),
       },
-      ...(!result.warning && { $unset: { 'ulbFile.digitizationMsg': '' } }),
-    });
+      DigitizationV3Statuses.DIGITIZED,
+    );
   }
 
   async markFailed(data: AfsDigitizationV3JobData, error: string) {
     const message = error.slice(0, 1000);
-    await this.afsExcelFileModel.updateOne(this.recordKey(data), {
-      $set: {
-        'ulbFile.digitizationStatus': DigitizationStatuses.FAILED,
-        'ulbFile.digitizationMsg': message,
-        'ulbFile.queue.status': QueueStatus.FAILED,
-        'ulbFile.queue.failedReason': message,
-        'ulbFile.queue.finishedOn': new Date(),
+    await this.updateAndTrack(
+      data,
+      {
+        $set: {
+          'ulbFile.digitizationStatus': DigitizationStatuses.FAILED,
+          'ulbFile.digitizationMsg': message,
+          'ulbFile.queue.status': QueueStatus.FAILED,
+          'ulbFile.queue.failedReason': message,
+          'ulbFile.queue.finishedOn': new Date(),
+        },
       },
-    });
+      DigitizationV3Statuses.FAILED,
+    );
   }
 
   /** Put the file back to `queued` between BullMQ retries so it is not shown as failed. */
   async markRetrying(data: AfsDigitizationV3JobData, error: string) {
-    await this.afsExcelFileModel.updateOne(this.recordKey(data), {
-      $set: {
-        'ulbFile.digitizationStatus': DigitizationStatuses.QUEUED,
-        'ulbFile.digitizationMsg': error.slice(0, 1000),
-        'ulbFile.queue.status': QueueStatus.QUEUED,
+    await this.updateAndTrack(
+      data,
+      {
+        $set: {
+          'ulbFile.digitizationStatus': DigitizationStatuses.QUEUED,
+          'ulbFile.digitizationMsg': error.slice(0, 1000),
+          'ulbFile.queue.status': QueueStatus.QUEUED,
+        },
       },
-    });
+      DigitizationV3Statuses.QUEUED,
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Overall counters (afs_metrics, docType 'v3')
+  // ---------------------------------------------------------------------------
+
+  /** Seeds the counters from the existing records the first time, so a deploy does not start at zero. */
+  async onModuleInit() {
+    try {
+      if (!(await this.afsMetricModel.exists({ docType: V3_METRICS_DOC_TYPE }))) await this.rebuildMetrics();
+    } catch (error) {
+      this.logger.error(
+        'Could not seed the digitization v3 counters',
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
+
+    // Reads every annual account, so it runs in the background and never delays startup
+    void this.afsMetricModel
+      .exists({ docType: V3_UNIQUENESS_DOC_TYPE })
+      .then((found) => (found ? undefined : this.rebuildUniqueness()))
+      .catch((error) =>
+        this.logger.error(
+          'Could not seed the digitization v3 uniqueness baseline',
+          error instanceof Error ? error.stack : String(error),
+        ),
+      );
+  }
+
+  /**
+   * Counts the unique files (and their pages) v3 has to digitize: per ULB, year and audit type, the five statement PDFs
+   * minus the ones that are the same file as an earlier slot (`findDuplicateSlots`). Auditor reports are left out.
+   * Overwrites the `v3-uniqueness` row, so it can be re-run any time to refresh it.
+   */
+  async rebuildUniqueness() {
+    const projection: Record<string, 1> = { ulb: 1 };
+    for (const auditType of UNIQUENESS_AUDIT_TYPES) {
+      projection[`${auditType}.year`] = 1;
+      for (const slot of DUPLICATE_SLOT_ORDER) {
+        for (const field of ['url', 'fileSizeBytes', 'pageCount']) {
+          projection[`${auditType}.provisional_data.${slot}.pdf.${field}`] = 1;
+        }
+      }
+    }
+
+    const yearLabels = new Set(UNIQUENESS_YEARS);
+    const tally = () => ({ files: 0, pages: 0 });
+    const byYear: Record<string, { files: number; pages: number }> = {};
+    const byAuditType: Record<string, { files: number; pages: number }> = {};
+    const total = tally();
+    let combos = 0;
+
+    // ULB -> state name, so every file can be counted under its state
+    const [ulbs, states] = await Promise.all([
+      this.ulbModel.find({}, { state: 1 }).lean().exec(),
+      this.stateModel.find({}, { name: 1 }).lean().exec(),
+    ]);
+    const stateNameById = new Map(states.map((s) => [s._id.toString(), s.name as string]));
+    const stateByUlb = new Map(
+      ulbs.map((u) => [u._id.toString(), stateNameById.get(u.state?.toString()) ?? 'Unknown']),
+    );
+
+    // year | docType | state | auditType -> counts. Only combinations that have at least one PDF are kept.
+    const cells = new Map<string, UniquenessCell>();
+
+    const cursor = this.annualAccountModel.find({}, projection).lean().cursor();
+    for await (const account of cursor) {
+      const state = stateByUlb.get((account as any).ulb?.toString()) ?? 'Unknown';
+      for (const auditType of UNIQUENESS_AUDIT_TYPES) {
+        const item = (account as any)[auditType];
+        const yearLabel = YearIdToLabel[item?.year?.toString()];
+        if (!yearLabel || !yearLabels.has(yearLabel)) continue;
+
+        const pdfs: Record<string, DuplicateCheckPdf | undefined> = {};
+        for (const slot of DUPLICATE_SLOT_ORDER) pdfs[slot] = item.provisional_data?.[slot]?.pdf;
+        const duplicates = findDuplicateSlots(pdfs);
+
+        let files = 0;
+        let pages = 0;
+        for (const slot of DUPLICATE_SLOT_ORDER) {
+          if (!pdfs[slot]?.url?.trim()) continue;
+          const key = `${yearLabel}|${slot}|${state}|${auditType}`;
+          const cell = cells.get(key) ?? {
+            year: yearLabel,
+            docType: slot,
+            state,
+            auditType,
+            files: 0,
+            pages: 0,
+            duplicates: 0,
+          };
+          cells.set(key, cell);
+
+          if (duplicates.has(slot)) {
+            cell.duplicates++;
+            continue;
+          }
+          const slotPages = pdfs[slot]?.pageCount ?? 0;
+          cell.files++;
+          cell.pages += slotPages;
+          files++;
+          pages += slotPages;
+        }
+        if (!files) continue;
+
+        combos++;
+        total.files += files;
+        total.pages += pages;
+        const year = (byYear[yearLabel] ??= tally());
+        year.files += files;
+        year.pages += pages;
+        const audit = (byAuditType[auditType] ??= tally());
+        audit.files += files;
+        audit.pages += pages;
+      }
+    }
+
+    // Cells that only held duplicates still carry their duplicate count
+    const breakdown = [...cells.values()].sort(
+      (a, b) =>
+        a.year.localeCompare(b.year) ||
+        a.docType.localeCompare(b.docType) ||
+        a.state.localeCompare(b.state) ||
+        a.auditType.localeCompare(b.auditType),
+    );
+
+    await this.afsMetricModel.updateOne(
+      { docType: V3_UNIQUENESS_DOC_TYPE },
+      { $set: { totalFiles: total.files, totalPages: total.pages, byYear, byAuditType, breakdown } },
+      { upsert: true, runValidators: true },
+    );
+    this.logger.log(
+      `AFS digitization v3 uniqueness baseline: ${total.files} unique files, ${total.pages} pages ` +
+        `across ${combos} ULB/year/audit-type combinations, ${breakdown.length} breakdown rows`,
+    );
+    return { ...total, combinations: combos, byYear, byAuditType, breakdown };
+  }
+
+  /** Overall cards: every file that has entered the v3 pipeline, across all years and doc types. */
+  async getMetrics(): Promise<DigitizationV3OverallMetrics> {
+    const [doc, baseline] = await Promise.all([
+      this.afsMetricModel.findOne({ docType: V3_METRICS_DOC_TYPE }).lean().exec(),
+      this.afsMetricModel.findOne({ docType: V3_UNIQUENESS_DOC_TYPE }).lean().exec(),
+    ]);
+    // $inc can dip below zero only if a counter drifted; never show that
+    const n = (value?: number) => Math.max(value ?? 0, 0);
+    return {
+      total: n(baseline ? baseline.totalFiles : doc?.totalFiles),
+      totalPages: baseline ? n(baseline.totalPages) : null,
+      digitized: n(doc?.digitizedFiles),
+      queued: n(doc?.queuedFiles),
+      processing: n(doc?.processingFiles),
+      failed: n(doc?.failedFiles),
+      updatedAt: (doc as { updatedAt?: Date } | null)?.updatedAt ?? null,
+    };
+  }
+
+  /** The year / doc type / state / audit type baseline rows, optionally narrowed by any of those four. */
+  async getUniquenessBreakdown(filter: { year?: string; docType?: string; state?: string; auditType?: string }) {
+    const row = await this.afsMetricModel.findOne({ docType: V3_UNIQUENESS_DOC_TYPE }, { breakdown: 1 }).lean().exec();
+    const rows = (row?.breakdown ?? []).filter(
+      (r) =>
+        (!filter.year || r.year === filter.year) &&
+        (!filter.docType || r.docType === filter.docType) &&
+        (!filter.state || r.state === filter.state) &&
+        (!filter.auditType || r.auditType === filter.auditType),
+    );
+    return {
+      rows,
+      files: rows.reduce((sum, r) => sum + r.files, 0),
+      pages: rows.reduce((sum, r) => sum + r.pages, 0),
+      duplicates: rows.reduce((sum, r) => sum + r.duplicates, 0),
+    };
+  }
+
+  /** Recounts every record (same status rules as `toView`) and overwrites the counters. Fixes any drift. */
+  async rebuildMetrics(): Promise<DigitizationV3OverallMetrics> {
+    const status = '$ulbFile.digitizationStatus';
+    const rows = await this.afsExcelFileModel
+      .aggregate<{ _id: DigitizationV3Statuses; n: number }>([
+        { $match: { 'ulbFile.digitizationStatus': { $in: Object.values(DigitizationStatuses) } } },
+        {
+          $project: {
+            s: {
+              $switch: {
+                branches: [
+                  {
+                    case: {
+                      $and: [
+                        { $eq: [status, DigitizationStatuses.QUEUED] },
+                        { $eq: ['$ulbFile.queue.status', QueueStatus.PROCESSING] },
+                      ],
+                    },
+                    then: DigitizationV3Statuses.PROCESSING,
+                  },
+                  { case: { $eq: [status, DigitizationStatuses.QUEUED] }, then: DigitizationV3Statuses.QUEUED },
+                  {
+                    case: {
+                      $and: [
+                        { $eq: [status, DigitizationStatuses.DIGITIZED] },
+                        { $isArray: '$ulbFile.detectedDocTypes' },
+                      ],
+                    },
+                    then: DigitizationV3Statuses.DIGITIZED,
+                  },
+                  { case: { $eq: [status, DigitizationStatuses.FAILED] }, then: DigitizationV3Statuses.FAILED },
+                ],
+                default: null,
+              },
+            },
+          },
+        },
+        { $match: { s: { $ne: null } } },
+        { $group: { _id: '$s', n: { $sum: 1 } } },
+      ])
+      .exec();
+
+    const count = (s: DigitizationV3Statuses) => rows.find((r) => r._id === s)?.n ?? 0;
+    const set = {
+      queuedFiles: count(DigitizationV3Statuses.QUEUED),
+      processingFiles: count(DigitizationV3Statuses.PROCESSING),
+      digitizedFiles: count(DigitizationV3Statuses.DIGITIZED),
+      failedFiles: count(DigitizationV3Statuses.FAILED),
+      totalFiles: rows.reduce((sum, r) => sum + r.n, 0),
+    };
+    await this.afsMetricModel.updateOne(
+      { docType: V3_METRICS_DOC_TYPE },
+      { $set: set },
+      { upsert: true, runValidators: true },
+    );
+    this.logger.log(`AFS digitization v3 counters rebuilt: ${JSON.stringify(set)}`);
+    return this.getMetrics();
+  }
+
+  private statusOf(record?: { ulbFile?: any } | null) {
+    return this.toView(record?.ulbFile)?.status ?? DigitizationV3Statuses.NOT_DIGITIZED;
+  }
+
+  /** Applies `update` and moves one count from the file's previous status to `next`. */
+  private async updateAndTrack(
+    data: AfsDigitizationV3JobData,
+    update: UpdateQuery<AfsExcelFileDocument>,
+    next: DigitizationV3Statuses,
+  ) {
+    const previous = await this.afsExcelFileModel
+      .findOneAndUpdate(this.recordKey(data), update, { new: false, projection: ULB_FILE_PROJECTION })
+      .lean()
+      .exec();
+    await this.recordTransition(this.statusOf(previous), next);
+  }
+
+  /** A counter problem must never fail or retry a digitization job, so it is logged and swallowed. */
+  private async recordTransition(previous: DigitizationV3Statuses, next: DigitizationV3Statuses) {
+    if (previous === next) return;
+    try {
+      const inc: Record<string, number> = {};
+      const from = METRIC_FIELD[previous];
+      if (from) inc[from] = -1;
+      else inc.totalFiles = 1; // not tracked before: it has just entered the pipeline
+      const to = METRIC_FIELD[next];
+      if (to) inc[to] = 1;
+      await this.afsMetricModel.updateOne({ docType: V3_METRICS_DOC_TYPE }, { $inc: inc }, { upsert: true });
+    } catch (error) {
+      this.logger.error(
+        `Could not update the digitization v3 counters (${previous} -> ${next})`,
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
   }
   // ---------------------------------------------------------------------------
   // Helpers
@@ -368,7 +728,12 @@ export class AfsDigitizationV3Service {
 
     // docType and auditType are validated enums, so they are safe to use in a field path.
     const ulbs = await this.annualAccountModel
-      .aggregate<Omit<UlbRow, 'stateName'>>([
+      .aggregate<
+        Omit<UlbRow, 'stateName' | 'isDuplicate' | 'duplicateOfDocType'> & {
+          pdfIsDuplicate?: boolean;
+          pdfDuplicateOf?: string;
+        }
+      >([
         { $match: { [`${auditType}.year`]: yearId, ...(ulbIds && { ulb: { $in: ulbIds } }) } },
         {
           $project: {
@@ -377,6 +742,8 @@ export class AfsDigitizationV3Service {
             pdfUrl: `$${auditType}.provisional_data.${query.docType}.pdf.url`,
             pdfPageCount: `$${auditType}.provisional_data.${query.docType}.pdf.pageCount`,
             pdfSizeBytes: `$${auditType}.provisional_data.${query.docType}.pdf.fileSizeBytes`,
+            pdfIsDuplicate: `$${auditType}.provisional_data.${query.docType}.pdf.isDuplicate`,
+            pdfDuplicateOf: `$${auditType}.provisional_data.${query.docType}.pdf.duplicateOfDocType`,
           },
         },
         // State / population filters, same as the AFS dashboard
@@ -387,6 +754,8 @@ export class AfsDigitizationV3Service {
             pdfUrl: 1,
             pdfPageCount: 1,
             pdfSizeBytes: 1,
+            pdfIsDuplicate: 1,
+            pdfDuplicateOf: 1,
             ulbName: '$ulbDoc.name',
             ulbCode: '$ulbDoc.code',
             stateId: '$ulbDoc.state',
@@ -408,8 +777,10 @@ export class AfsDigitizationV3Service {
 
     const rows: UlbRow[] = ulbs
       .filter((u) => u.stateId && stateNames.has(u.stateId.toString()))
-      .map((u) => ({
+      .map(({ pdfIsDuplicate, pdfDuplicateOf, ...u }) => ({
         ...u,
+        isDuplicate: pdfIsDuplicate === true && !!u.pdfUrl,
+        duplicateOfDocType: pdfIsDuplicate === true && u.pdfUrl ? pdfDuplicateOf : undefined,
         stateName: stateNames.get(u.stateId.toString()) as string,
         pdfUrl: u.pdfUrl || null,
         pdfPageCount: u.pdfPageCount ?? null,
@@ -425,8 +796,42 @@ export class AfsDigitizationV3Service {
       .lean()
       .exec();
     const records = new Map<string, V3Record>(existing.map((r) => [r.ulb.toString(), this.toView(r.ulbFile)]));
+    await this.followOriginals(rows, records, yearId, auditType);
 
     return { rows, records };
+  }
+
+  /**
+   * A duplicate is never digitized itself, so its status and results follow its original's record (same ULB, year and
+   * audit type, in the slot named by `duplicateOfDocType`).
+   */
+  private async followOriginals(
+    rows: UlbRow[],
+    records: Map<string, V3Record>,
+    yearId: Types.ObjectId,
+    auditType: string,
+  ) {
+    const duplicates = rows.filter((row) => row.isDuplicate && row.duplicateOfDocType);
+    if (!duplicates.length) return;
+
+    const originals = await this.afsExcelFileModel
+      .find(
+        {
+          ulb: { $in: duplicates.map((row) => row.ulb) },
+          year: yearId,
+          auditType,
+          docType: { $in: [...new Set(duplicates.map((row) => row.duplicateOfDocType as string))] },
+        },
+        { ...ULB_FILE_PROJECTION, docType: 1 },
+      )
+      .lean()
+      .exec();
+    const originalViews = new Map(originals.map((r) => [`${r.ulb}|${r.docType}`, this.toView(r.ulbFile)]));
+
+    for (const row of duplicates) {
+      const original = originalViews.get(`${row.ulb}|${row.duplicateOfDocType}`);
+      records.set(row.ulb.toString(), original ?? ({ status: DigitizationV3Statuses.NOT_DIGITIZED } as V3View));
+    }
   }
 
   private computeMetrics(rows: UlbRow[], records: Map<string, V3Record>): DigitizationV3Metrics {
@@ -440,6 +845,7 @@ export class AfsDigitizationV3Service {
       failed: 0,
       consolidated: 0,
       mismatch: 0,
+      duplicate: 0,
     };
     const byStatus: Record<DigitizationV3Statuses, keyof DigitizationV3Metrics> = {
       [DigitizationV3Statuses.NOT_DIGITIZED]: 'notDigitized',
@@ -455,6 +861,7 @@ export class AfsDigitizationV3Service {
       metrics[byStatus[record?.status ?? DigitizationV3Statuses.NOT_DIGITIZED]]++;
       if (record?.isConsolidated) metrics.consolidated++;
       if (record?.isMismatch) metrics.mismatch++;
+      if (row.isDuplicate) metrics.duplicate++;
     }
     return metrics;
   }
@@ -529,6 +936,8 @@ export class AfsDigitizationV3Service {
       pdfUrl: row.pdfUrl,
       pdfPageCount: row.pdfPageCount,
       pdfSizeBytes: row.pdfSizeBytes,
+      isDuplicate: row.isDuplicate,
+      duplicateOfDocType: row.duplicateOfDocType ?? null,
       pdfUrlSigned: row.pdfUrl ? this.fileTokenService.signFileUrl(row.pdfUrl) : null,
       // Same as the PDF: a signed link served by this API. Only for files v3 has digitized.
       excelUrl: excelUrl ?? null,

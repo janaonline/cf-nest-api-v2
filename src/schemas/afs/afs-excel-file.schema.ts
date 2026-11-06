@@ -77,6 +77,10 @@ export class AfsExcelFileItem {
   @Prop({ type: String })
   requestId: string;
 
+  /** Enqueue run this file was queued in (digitization v3); also sent to FastAPI as `batch_id` */
+  @Prop({ type: String })
+  batchId?: string;
+
   @Prop({ type: Date, default: Date.now })
   createdAt: Date;
 

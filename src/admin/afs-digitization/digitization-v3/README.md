@@ -48,8 +48,8 @@ sequenceDiagram
    two admins, cannot queue the same file twice. If adding to Redis fails, the file is marked `failed` straight away so it
    is not stuck as queued.
 3. **Process.** The worker calls FastAPI `POST /afs-digitization/jobs` with the file's stored path as `s3_path`.
-   FastAPI reads the PDF from the CityFinance bucket itself; Nest never downloads or uploads the PDF. Classification is on;
-   the Gemini validation and arithmetic checks are off to save cost.
+   FastAPI reads the PDF from the CityFinance bucket itself; Nest never downloads or uploads the PDF. Classification, the Gemini
+   accuracy validation and the arithmetic validation are all on.
 4. **Wait.** FastAPI runs the job as a background task. The worker polls its status until it is `completed` or `failed`.
 5. **Save.** Nest reads the result and writes a summary to Mongo. The full extraction stays in FastAPI.
 
@@ -125,8 +125,38 @@ of joining every ULB to `afs_xl_files`. Only a few small `ulbFile` fields are re
 ### `POST /enqueue-by-filter`
 
 Same body as `/list`. Queues every match. Send `ulbId` to queue only specific rows (this is how **Queue Selected** works).
-Returns `{ matched, queued, skippedNoPdf, skippedAlreadyQueued, skippedAlreadyDigitized, failedToQueue }`.
+Returns `{ matched, queued, skippedNoPdf, skippedDuplicate, skippedAlreadyQueued, skippedAlreadyDigitized, failedToQueue }`.
 Capped at 10,000 files per call (`MAX_ENQUEUE_BATCH`).
+
+**Duplicates.** A slot whose PDF is the same file as an earlier slot of the same ULB, year and audit type is flagged on
+`annualaccountdatas` (`<auditType>.provisional_data.<slot>.pdf.isDuplicate` and `.duplicateOfDocType`) by
+`POST /afs-digitization/annual-accounts/duplicates/backfill` (`limit`, `onlyMissing`; by default only PDFs not
+checked yet, `onlyMissing=false` recomputes all; run the PDF-metadata backfill first). Same file = same url, or same
+`fileSizeBytes` and `pageCount`; a slot without that metadata never matches. Slot order is `bal_sheet`,
+`bal_sheet_schedules`, `inc_exp`, `inc_exp_schedules`, `cash_flow`; the first is the original. Duplicates are skipped here
+(`skippedDuplicate`), and in `/list` a duplicate row follows its original's status, Excel and segments, carries
+`isDuplicate` and `duplicateOfDocType`, and is counted in `metrics.duplicate`.
+
+### `GET /metrics` and `POST /metrics/rebuild`
+
+The overall cards (`total`, `totalPages`, `digitized`, `queued`, `processing`, `failed`) across every year, audit type and doc
+type, read from `afs_metrics`. `digitized` / `queued` / `processing` / `failed` come from the live row (`docType: 'v3'`:
+`digitizedFiles`, `queuedFiles`, `processingFiles`, `failedFiles`). `total` is the unique-files baseline (below); until that
+row exists it falls back to the live row's `totalFiles`, the files that have entered the pipeline. The per-selection
+`metrics` in `/list` is separate and does count all ULBs.
+
+**Uniqueness baseline** (`docType: 'v3-uniqueness'`: `totalFiles`, `totalPages`, `byYear`, `byAuditType`). Per ULB, year and
+audit type, the five statement PDFs minus the ones that are the same file as an earlier slot (`findDuplicateSlots`, same rule
+as the duplicate flags); auditor reports are excluded, and only 2019-20 to 2024-25 are counted. It is a snapshot: seeded in
+the background at startup if missing, and refreshed with `POST /metrics/rebuild-uniqueness` (reads every annual account).
+The same row also holds `breakdown`: one entry per year, doc type, state and audit type that has a PDF, with the unique `files` and
+`pages` and the `duplicates` left out (state comes from the ULB; `Unknown` if the ULB has none). `GET /metrics/breakdown` returns
+those rows, optionally narrowed with `year`, `docType`, `state` and `auditType` query params, plus the summed files / pages / duplicates.
+It matches the `AA_PDF_Uniqueness_Check` sheet's "Unique docs (without AR)" / "Unique page count (without AR)" columns.
+
+The counters move by `$inc` in `claim` and the `mark*` writes, using the record's previous status (same rules as `toView`).
+A counter failure is logged and never fails the job. On startup the row is seeded from `afs_xl_files` if it is missing.
+`POST /metrics/rebuild` recounts everything and overwrites the row; use it if the numbers drift.
 
 ### `GET /jobs/:afsDigitizationJobId/log`
 
