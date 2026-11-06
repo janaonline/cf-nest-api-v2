@@ -12,6 +12,7 @@ import {
   XviFcEligibilityExemption,
   XviFcEligibilityExemptionSchema,
 } from 'src/schemas/xvi-fc/state/xvi-fc-eligibility-exemption.schema';
+import { OmUlb, OmUlbSchema } from 'src/schemas/xvi-fc/mohua/om-ulb.schema';
 import { RequestExemptionMohuaModule } from '../request-exemption/request-exemption-mohua.module';
 import { MohuaClaimLettersController } from './mohua-claim-letters.controller';
 import { MohuaClaimLettersService } from './mohua-claim-letters.service';
@@ -27,6 +28,7 @@ import { MohuaClaimLettersService } from './mohua-claim-letters.service';
       { name: ClaimLetterUlbLock.name, schema: ClaimLetterUlbLockSchema },
       { name: GrantAllocation.name, schema: GrantAllocationSchema },
       { name: XviFcEligibilityExemption.name, schema: XviFcEligibilityExemptionSchema },
+      { name: OmUlb.name, schema: OmUlbSchema },
     ]),
     XviFcCommonModule,
     ClaimLetterModule,

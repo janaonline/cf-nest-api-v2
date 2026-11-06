@@ -71,6 +71,7 @@ import { RequestExemptionModule } from './state/request-exemption/request-exempt
 import { RequestExemptionMohuaModule } from './mohua/request-exemption/request-exemption-mohua.module';
 import { MohuaOverviewModule } from './mohua/overview/mohua-overview.module';
 import { MohuaClaimLettersModule } from './mohua/claim-letters/mohua-claim-letters.module';
+import { MohuaOmModule } from './mohua/om/om.module';
 import { UlbEligibilityModule } from '../ulb-eligibility/ulb-eligibility.module';
 import { RemindersModule } from './common/reminders/reminders.module';
 import { XviFcCommonModule } from './common/xvi-fc-common.module';
@@ -125,6 +126,7 @@ import { StateFormHistoryModule } from './common/form-history/state-form-history
     RequestExemptionMohuaModule,
     MohuaOverviewModule,
     MohuaClaimLettersModule,
+    MohuaOmModule,
     UlbEligibilityModule,
     RemindersModule,
     XviFcCommonModule,
