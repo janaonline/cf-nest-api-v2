@@ -56,6 +56,16 @@ export function ordinal(n: number): string {
   return n === 1 ? '1st' : n === 2 ? '2nd' : n === 3 ? '3rd' : `${n}th`;
 }
 
+const ORDINAL_WORDS = ['First', 'Second', 'Third', 'Fourth', 'Fifth', 'Sixth', 'Seventh', 'Eighth', 'Ninth', 'Tenth'];
+
+/** The SFC form's "6th SFC" as Row B spells it: "Sixth State Finance Commission (SFC)"; any other text
+ *  is returned as is. */
+export function describeSfc(whichAwardPeriod: string): string {
+  const m = /^(\d+)(?:st|nd|rd|th)\s*SFC$/i.exec(whichAwardPeriod.trim());
+  const word = m ? ORDINAL_WORDS[Number(m[1]) - 1] : undefined;
+  return word ? `${word} State Finance Commission (SFC)` : whichAwardPeriod;
+}
+
 /** GTC rule: installment 1 of FY Y certifies the 2nd installment of FY Y-1. */
 export function previousInstallmentLabel(installment: 1 | 2, fyLabel: string): string {
   return installment === 1

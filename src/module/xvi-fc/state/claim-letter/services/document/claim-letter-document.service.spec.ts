@@ -338,7 +338,8 @@ describe('ClaimLetterDocumentService', () => {
         'c) Not applicable',
       ]);
       expect(text(rowB.status[0])).toBe(
-        'State has constituted its 6th SFC and submitted the ATR on its recommendations vide dt. 14 Mar 2026. ' +
+        'The State has constituted its Sixth State Finance Commission (SFC) and submitted the Action Taken Report ' +
+          '(ATR) on its recommendations, dated 14 Mar 2026. ' +
           'The recommendations of the SFC are applicable for the period FY 2026-31.',
       );
     });
@@ -353,7 +354,7 @@ describe('ClaimLetterDocumentService', () => {
       exemptionResolver.resolveDiscretionary.mockResolvedValue(entry(5));
       const underReview = (await service.getDocument(claimLetterId, stateUser)).data!.letter.compliance[1];
       expect(underReview.status.map(text)).toEqual([
-        'State has requested exemption from this condition; the request is under MoHUA review.',
+        'The State has requested exemption from this condition; the request is under MoHUA review.',
       ]);
       expect(underReview.status[0].runs.some((r) => r.field || r.placeholder)).toBe(false);
       expect(exemptionResolver.resolveDiscretionary).toHaveBeenCalledWith(
@@ -365,17 +366,20 @@ describe('ClaimLetterDocumentService', () => {
 
       exemptionResolver.resolveDiscretionary.mockResolvedValue(entry(7));
       const approved = (await service.getDocument(claimLetterId, stateUser)).data!.letter.compliance[1];
-      expect(approved.status.map(text)).toEqual(['State has been exempted from this condition by MoHUA.']);
+      expect(approved.status.map(text)).toEqual(['The State has been exempted from this condition by MoHUA.']);
 
       exemptionResolver.resolveDiscretionary.mockResolvedValue(entry(6));
       const rejected = (await service.getDocument(claimLetterId, stateUser)).data!.letter.compliance[1];
-      expect(text(rejected.status[0])).toMatch(/^State has constituted its 6th SFC/);
+      expect(text(rejected.status[0])).toMatch(/^The State has constituted its Sixth State Finance Commission \(SFC\)/);
     });
 
     it('row B shows placeholders when the SFC form has no values', async () => {
       sfcModel.findOne.mockReturnValue(q(null));
       const { data } = await service.getDocument(claimLetterId, stateUser);
-      expect(placeholders(data!.letter.compliance[1].status[0])).toEqual(['<nth SFC>', '<award period>']);
+      expect(placeholders(data!.letter.compliance[1].status[0])).toEqual([
+        '<nth State Finance Commission (SFC)>',
+        '<award period>',
+      ]);
       expect(data!.letter.compliance[1].status[0].runs.filter((r) => r.placeholder).map((r) => r.hint)).toEqual([
         'Comes from the SFC form',
         'Comes from the SFC form',
@@ -454,6 +458,31 @@ describe('ClaimLetterDocumentService', () => {
         ['1', 'ULB C', 'Constituted (pending review)', 'Yes', 'No', '18.50', '-', '-'],
       ]);
       expect(ineligible.meta).toEqual({ page: 1, limit: 20, total: 1 });
+    });
+
+    it("ends each list with the Tied / Untied totals of that table's rows only", async () => {
+      const { data } = await service.getDocument(claimLetterId, stateUser);
+      const [eligible, ineligible] = data!.annexure.lists;
+
+      // ULB A 617.28 + ULB B 22.84; ULB C (ineligible) has no allocation, so its table has none to add.
+      expect(eligible.totalCells).toEqual(['', 'Total', '', '', '', '', '640.12', '640.12']);
+      expect(ineligible.totalCells).toEqual(['', 'Total', '', '', '', '', '-', '-']);
+    });
+
+    it('totals the exact allocations, rounded once, not the rounded rows', async () => {
+      eligibility.resolveDevolutionAllocations.mockResolvedValue(
+        new Map([
+          [ulbA, { allocatedAmount: 1000 }],
+          [ulbB, { allocatedAmount: 1000 }],
+        ]),
+      );
+
+      const { data } = await service.getDocument(claimLetterId, stateUser);
+      const rows = await service.getDocumentUlbs(claimLetterId, 'ELIGIBLE', 1, stateUser);
+
+      // Each row prints 0.005 lakh as 0.01, but the two together are 0.01 lakh, not 0.02.
+      expect(rows.data!.map((r) => r.cells.slice(-1)[0])).toEqual(['0.01', '0.01']);
+      expect(data!.annexure.lists[0].totalCells.slice(-2)).toEqual(['0.01', '0.01']);
     });
 
     describe('preview cache', () => {

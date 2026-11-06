@@ -35,8 +35,8 @@ refuses naming it.
 
 **The letter says which.** Annexure cells print "Exemption requested" (under review) or "Exempted"
 (approved); rows C-I count both as met. While the Entire State SFC exemption counts, Row B prints
-"State has requested exemption from this condition; the request is under MoHUA review." or "State
-has been exempted from this condition by MoHUA." instead of the SFC details, and the ATR date leaves
+"The State has requested exemption from this condition; the request is under MoHUA review." or "The
+State has been exempted from this condition by MoHUA." instead of the SFC details, and the ATR date leaves
 the letter details (not shown, not required for Download or Submit). A rejection brings both back.
 
 **The snapshot records what was relied on.** Each child's `eligibilitySources` holds one entry per

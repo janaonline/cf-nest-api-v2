@@ -1,6 +1,7 @@
 import type { ClaimLetterCriterionDetail } from '../services/eligibility/claim-letter-eligibility.service';
 import {
   buildAnnexureCell,
+  describeSfc,
   formatAwardPeriod,
   formatDetailValue,
   formatFraction,
@@ -202,5 +203,19 @@ describe('claim letter letter helpers', () => {
         'No',
       ]);
     });
+  });
+});
+
+describe('describeSfc', () => {
+  it("spells the SFC form's options out in words", () => {
+    expect(describeSfc('6th SFC')).toBe('Sixth State Finance Commission (SFC)');
+    expect(describeSfc('1st SFC')).toBe('First State Finance Commission (SFC)');
+    expect(describeSfc('3rd SFC')).toBe('Third State Finance Commission (SFC)');
+    expect(describeSfc('8th SFC')).toBe('Eighth State Finance Commission (SFC)');
+  });
+
+  it('prints any other value as stored', () => {
+    expect(describeSfc('11th SFC')).toBe('11th SFC');
+    expect(describeSfc('Sixth SFC')).toBe('Sixth SFC');
   });
 });

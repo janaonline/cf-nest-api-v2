@@ -77,6 +77,9 @@ two can never disagree; the frontend renders the backend's text verbatim.
 
 - Rows C-K and both annexure lists come from a fresh `resolveUlbLevelEligibility` over the State's
   expected ULBs plus the batch's own; the State total is every row's denominator.
+- Each list ends with a Total row (`ClaimLetterListMeta.totalCells`): the Tied and Untied sums of
+  the ULBs in that table only, from exact rupees rounded once, so it can differ from a hand-add of
+  the rounded rows by a few hundredths of a lakh.
 - Preview cache: that heavy part is kept in Redis per `revision` for 5 minutes, as a `meta` key
   (everything but the rows) plus 100-row chunks per list, so opening the letter parses no rows and a
   20-row page parses one chunk. Chunks are written first and live 30s longer than `meta`; concurrent

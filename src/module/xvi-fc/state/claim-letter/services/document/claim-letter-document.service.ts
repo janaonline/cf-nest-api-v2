@@ -53,6 +53,7 @@ import {
   b,
   buildAnnexureCell,
   criterionColumn,
+  describeSfc,
   FC_UNSPENT_CRITERION_TYPE,
   formatAwardPeriod,
   formatDetailValue,
@@ -345,6 +346,16 @@ export class ClaimLetterDocumentService {
       ELIGIBLE: proposal.map((p, i) => toRow(i + 1, p.ulbId, p.name)),
       INELIGIBLE: ineligible.map((u, i) => toRow(i + 1, u.ulbId, u.name)),
     };
+    // Only the rows in that list's table count. Exact rupees, halved and rounded once, so the total can
+    // differ from a hand-add of the rounded rows by a few hundredths.
+    const totalCells = (rows: readonly ClaimLetterAnnexureRow[]): string[] => {
+      const amounts = rows.flatMap((r) => {
+        const amount = allocations.get(r.ulbId)?.allocatedAmount;
+        return amount === undefined ? [] : [amount];
+      });
+      const half = amounts.length ? formatHalfRupeesInLakh(sumAmountsExactly(amounts)) : '-';
+      return ['', 'Total', ...criteria.map(() => ''), half, half];
+    };
 
     // Counts over this proposal; the State total (expected set) is every row's denominator.
     const total = expected.length;
@@ -384,6 +395,7 @@ export class ClaimLetterDocumentService {
         key,
         ...LIST_TEXT[key],
         total: rowsByList[key].length,
+        totalCells: totalCells(rowsByList[key]),
       })),
       rowsByList,
       counts,
@@ -570,9 +582,11 @@ export class ClaimLetterDocumentService {
       status: [
         sfc.exemptionStatus === null
           ? para([
-              t('State has constituted its '),
-              sfc.whichAwardPeriod ? t(sfc.whichAwardPeriod) : { ...ph('<nth SFC>'), hint: SFC_HINT },
-              t(' and submitted the ATR on its recommendations vide dt. '),
+              t('The State has constituted its '),
+              sfc.whichAwardPeriod
+                ? t(describeSfc(sfc.whichAwardPeriod))
+                : { ...ph('<nth State Finance Commission (SFC)>'), hint: SFC_HINT },
+              t(' and submitted the Action Taken Report (ATR) on its recommendations, dated '),
               slot('sfcAtrDate'),
               t('. The recommendations of the SFC are applicable for the period FY '),
               sfc.awardPeriod ? t(formatAwardPeriod(sfc.awardPeriod)) : { ...ph('<award period>'), hint: SFC_HINT },
@@ -581,8 +595,8 @@ export class ClaimLetterDocumentService {
           : para([
               t(
                 sfc.exemptionStatus === FORM_STATUS.UNDER_REVIEW_BY_MOHUA
-                  ? 'State has requested exemption from this condition; the request is under MoHUA review.'
-                  : 'State has been exempted from this condition by MoHUA.',
+                  ? 'The State has requested exemption from this condition; the request is under MoHUA review.'
+                  : 'The State has been exempted from this condition by MoHUA.',
               ),
             ]),
       ],
