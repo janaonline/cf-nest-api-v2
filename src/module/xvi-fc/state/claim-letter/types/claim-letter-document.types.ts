@@ -64,6 +64,9 @@ export interface ClaimLetterListMeta {
   heading: string;
   subheading: string;
   total: number;
+  /** The table's last row, in `columns` order: "Total" under ULB Name and the Tied / Untied sums of
+   *  this list's rows, blank elsewhere. */
+  totalCells: string[];
 }
 
 export interface ClaimLetterAnnexure {
