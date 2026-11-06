@@ -158,8 +158,8 @@ Runtime item counts are:
 | Claimed amount       | Controlled fallback `0`                                                                                            |
 | Devolution task      | `DevolutionFormulaForm` / `xvifc_devolution_forms`                                                        |
 | State conditions     | `XviFcSfcStatus` / `xvifc_sfc` and `ElectedUrbanLocalBodiesForm` / `xvifc_elected_ulb_forms` |
-| Annual Accounts      | `XviFcAnnualAccount` / `xvifc_annualaccount_datas.auditedData.form_status_id`                                      |
-| Provisional Accounts | `XviFcAnnualAccount` / `xvifc_annualaccount_datas.unauditedData.form_status_id`                                    |
+| Annual Accounts      | `XviFcAnnualAccount` / `xvifc_annualaccounts` (`sectionType: 'audited'`) `.form_status_id`                         |
+| Provisional Accounts | `XviFcAnnualAccount` / `xvifc_annualaccounts` (`sectionType: 'unaudited'`) `.form_status_id`                       |
 | PFMS                 | `XviFcBankAccount` / `xvi_fc_bank_accounts.currentFormStatus`                                                      |
 | FC Unspent Balance   | `XviFcUnspentBalanceDisclosure` / `xvi_fc_unspent_balance_disclosures.formStatus`                                  |
 | SLB                  | No executable source                                                                                               |

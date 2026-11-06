@@ -1,6 +1,6 @@
 import { Type } from 'class-transformer';
 import { IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
-import { CLAIM_LETTER_PAGINATION_MAX_LIMIT } from '../constants/claim-letter.constants';
+import { CLAIM_LETTER_MAX_ULBS } from '../constants/claim-letter.constants';
 
 export class GetClaimLetterUlbRowsQueryDto {
   @IsOptional()
@@ -17,6 +17,7 @@ export class GetClaimLetterUlbRowsQueryDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  @Max(CLAIM_LETTER_PAGINATION_MAX_LIMIT)
+  // The detail page loads a whole batch in one call (eligibility here reads the cached build).
+  @Max(CLAIM_LETTER_MAX_ULBS)
   limit?: number;
 }

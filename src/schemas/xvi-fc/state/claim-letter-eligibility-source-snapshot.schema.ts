@@ -1,8 +1,10 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Schema as MongooseSchema, Types } from 'mongoose';
-import type {
-  ClaimEligibilityEvidence,
-  ClaimEligibilitySnapshotResult,
+import {
+  CLAIM_EXEMPTION_KINDS,
+  type ClaimEligibilityEvidence,
+  type ClaimEligibilitySnapshotResult,
+  type ClaimExemptionKind,
 } from 'src/module/xvi-fc/common/types/claim-eligibility.type';
 
 /**
@@ -26,14 +28,17 @@ export class ClaimLetterEligibilitySourceSnapshot {
   @Prop({ type: String, required: true })
   formType!: string;
 
-  @Prop({ type: MongooseSchema.Types.ObjectId, required: true })
-  formDocumentId!: Types.ObjectId;
+  /** Null only for an EXEMPTED source with no document (an Entire State exemption for a form never
+   *  started). */
+  @Prop({ type: MongooseSchema.Types.ObjectId, default: null })
+  formDocumentId!: Types.ObjectId | null;
 
   @Prop({ type: MongooseSchema.Types.ObjectId, default: null })
   rowDocumentId?: Types.ObjectId | null;
 
-  @Prop({ type: Number, required: true })
-  statusAtEvaluation!: number;
+  /** Null with `formDocumentId`. */
+  @Prop({ type: Number, default: null })
+  statusAtEvaluation!: number | null;
 
   @Prop({ type: Number, default: null })
   rowStatusAtEvaluation?: number | null;
@@ -49,6 +54,14 @@ export class ClaimLetterEligibilitySourceSnapshot {
 
   @Prop({ type: MongooseSchema.Types.ObjectId, default: null })
   exemptionId?: Types.ObjectId | null;
+
+  /** The discretionary request status relied on: 5 under MoHUA review, 7 approved; null otherwise. */
+  @Prop({ type: Number, default: null })
+  exemptionStatusAtEvaluation?: number | null;
+
+  /** How an EXEMPTED result came about; null for PASSED. */
+  @Prop({ type: String, enum: [...CLAIM_EXEMPTION_KINDS, null], default: null })
+  exemptionKind?: ClaimExemptionKind | null;
 
   @Prop({ type: String, required: true })
   reasonCode!: string;

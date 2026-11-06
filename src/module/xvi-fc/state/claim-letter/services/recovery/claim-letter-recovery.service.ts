@@ -45,34 +45,8 @@ export interface ClaimLetterReconciliationReport {
   }>;
 }
 
-/**
- * See docs/adr/0002-batching-and-locks.md for the stale-`BUILDING`-row recovery design this
- * implements. `cleanupStaleBuilds` also runs on its own schedule (`runScheduledStaleBuildCleanup`
- * below), and remains directly callable (script/admin endpoint) too — same method either way, no
- * controller route in V1. Two distinct responsibilities kept separate on purpose:
- * `cleanupStaleBuilds` is the only *automatic* remediation (deletes genuinely stale BUILDING
- * parents, mirroring ClaimLetterAssemblyService's own compensating-rollback pattern);
- * `detectAnomalies` is report-only and never mutates — a submitted/acknowledged claim is exactly
- * the data this whole design exists to protect, so anything beyond stale-BUILDING cleanup is
- * surfaced for manual review only.
- *
- * This cron is now a *backstop-of-a-backstop* for the BUILDING case: `ClaimLetterAssemblyService`
- * also reclaims a stale BUILDING parent inline, the moment a later request actually conflicts with
- * the slot/ULBs it's sitting on (see `reclaimBlockingStaleBuilds` there, which shares this
- * service's own delete logic via `deleteBuildingParentArtifacts`). That inline path only fires on
- * contention, though — if a crashed build's slot/ULBs are never requested again by anyone, nothing
- * reclaims them reactively, so this hourly sweep remains the only mechanism that guarantees a dead
- * row doesn't sit forever. Unlike `updateDraft`'s edit-lock claim (below), a stale BUILDING row
- * isn't self-contained to one draft — it occupies a shared, scarce resource (1-of-3 batch slots,
- * specific ULBs) that any other future request might need, which is why this cron could not simply
- * be removed the way the edit-lock's was.
- *
- * `updateDraft`'s edit-lock claim (`ClaimLetterAssemblyService`'s `editLockToken`) deliberately has
- * no cron/cleanup counterpart here — it's a self-expiring lease (`CLAIM_LETTER_EDIT_LOCK_LEASE_MINUTES`),
- * checked inline by every guard that reads it, so a stale claim un-sticks itself the moment anyone
- * next acts on that claim. `detectAnomalies`'s `staleEditLocksWithChildCountMismatch` still reports
- * on it here, but only as a diagnostic — nothing in this service needs to *release* that lock.
- */
+/** Stale-build cleanup, the backstop for builds nobody contends for (ADR 0002), and `detectAnomalies`,
+ *  a report that never writes: anything beyond a stale build is for manual review. */
 @Injectable()
 export class ClaimLetterRecoveryService {
   private readonly logger = new Logger(ClaimLetterRecoveryService.name);
@@ -90,21 +64,7 @@ export class ClaimLetterRecoveryService {
 
   // ─── Automatic remediation ───────────────────────────────────────────────────
 
-  /**
-   * Without this, a crash/restart mid-assembly (between `ClaimLetterAssemblyService`'s two
-   * transactions) leaves a `BUILDING` parent and its ULB locks stuck forever — `cleanupStaleBuilds`
-   * existed to fix exactly that but, before this, was never actually invoked by anything in
-   * production (no cron, no admin route, no script). Runs hourly against the 30-minute staleness
-   * threshold, so worst case a stuck build's locks/batch-slot are freed within ~90 minutes of the
-   * crash if nothing else claims them sooner — this only ever needs to catch a rare process crash
-   * mid-`createDraft` (the sole reachable path that can leave a doc stuck `BUILDING`), not a
-   * time-sensitive condition, so an hourly sweep is deliberately relaxed rather than matched to any
-   * other job's cadence. In practice this ~90-minute worst case is now rare even for a crash: the
-   * common case (someone else's request conflicts with the exact stale slot/ULBs) self-heals
-   * immediately via `ClaimLetterAssemblyService.reclaimBlockingStaleBuilds` — this sweep only ends
-   * up being the thing that actually cleans a row up when nobody happens to request that same
-   * slot/those same ULBs again.
-   */
+  /** Hourly against the 30-minute threshold: an uncontended crashed build is freed within about 90 minutes. */
   @Cron(CronExpression.EVERY_HOUR)
   async runScheduledStaleBuildCleanup(): Promise<void> {
     try {
@@ -141,10 +101,6 @@ export class ClaimLetterRecoveryService {
     return { cleanedCount: claimLetterIds.length, claimLetterIds };
   }
 
-  /** Never touches ACKNOWLEDGED locks or READY/submitted claims — scoped to exactly one
-   *  BUILDING parent and the locks owned by its own buildRequestId. Delete body is
-   *  shared with ClaimLetterAssemblyService's inline reclaim-on-conflict path — see
-   *  deleteBuildingParentArtifacts's own doc comment. */
   private async cleanupOneStaleBuild(parentId: Types.ObjectId, buildRequestId: string): Promise<void> {
     const session = await this.connection.startSession();
     try {
@@ -419,16 +375,8 @@ export class ClaimLetterRecoveryService {
     return result;
   }
 
-  /**
-   * Flags only the *concerning* subset of stale edit locks — ones where the persisted child count
-   * doesn't match `ulbCount`, meaning the interrupted `updateDraft` crashed mid delete/insert
-   * rather than before touching children at all. The lock itself already self-clears the moment
-   * anyone next acts on that claim (see `CLAIM_LETTER_EDIT_LOCK_LEASE_MINUTES`); a genuine count
-   * mismatch is what still needs a human to reconcile from history, so it's surfaced here rather
-   * than auto-repaired. Deliberately ignores `detectAnomalies`'s `staleThresholdMinutes` param —
-   * that's sized for the BUILDING-cleanup case (a multi-stage assembly), a different concept from
-   * this lock's own lease duration (a single delete+insert rebuild).
-   */
+  /** Expired edit locks whose child count is off (a crash mid-rebuild), for manual repair. Uses the
+   *  lease, not the build threshold. */
   private async findStaleEditLocksWithChildCountMismatch(): Promise<
     ClaimLetterReconciliationReport['staleEditLocksWithChildCountMismatch']
   > {

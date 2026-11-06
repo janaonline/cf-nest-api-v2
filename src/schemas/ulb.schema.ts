@@ -93,7 +93,7 @@ export class Ulb {
   @Prop({ type: Boolean, default: false })
   isActive: boolean;
 
-  @Prop({ type: Boolean, default: false })
+  @Prop({ type: Boolean, default: true })
   isPublish: boolean;
 
   @Prop({ type: Boolean, default: false })

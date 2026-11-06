@@ -98,8 +98,12 @@ src/
 │   │                    # fc-unspent-declaration and request-exemption review workflows (each a separate module,
 │   │                    # decoupled from its own STATE-side module — mirrors fc-unspent's own split)
 │   ├── side-menu/, cache/, common/ # XviFcCacheService/Interceptor, form-actors, form-status-access helpers,
-│   │                     # YearAccessService (dynamic year access/exemption for new ULBs - see below) shared
-│   │                     # across sub-features
+│   │                     # YearAccessService (dynamic year access/exemption for new ULBs - see below),
+│   │                     # XviFcUlbOptionsService/Controller (GET xvi-fc/ulb-options?stateId=&yearId= - a
+│   │                     # generic, eligibility-filtered "pick a ULB" source for any feature with no
+│   │                     # per-ULB business logic to attach; a feature needing that attaches it gets its
+│   │                     # own dedicated ulb-options service instead, e.g. claim-letter/fc-unspent-declaration)
+│   │                     # shared across sub-features
 │   │   └── common/reminders/    # Dwell-time reminder crons (daily 9AM IST): ULB Nodal Officer nudge for
 │   │                            # Annual Accounts stuck IN_PROGRESS (every 3 days), STATE digest (HTML
 │   │                            # table + PDF attachment) for Annual Account/Bank Account forms stuck

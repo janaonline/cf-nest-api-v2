@@ -57,10 +57,21 @@ describe('ClaimLetterHistoryService', () => {
     expect(options.session).toBe(session);
   });
 
-  it('defaults optional fields (reason, ipAddress, userAgent) to null', async () => {
+  it('defaults optional fields (reason, submittedFiles, ipAddress, userAgent) to null', async () => {
     await service.recordTransition(baseInput);
 
     const [docs] = historyModel.create.mock.calls[0] as [Record<string, unknown>[]];
-    expect(docs[0]).toMatchObject({ reason: null, ipAddress: null, userAgent: null });
+    expect(docs[0]).toMatchObject({ reason: null, submittedFiles: null, ipAddress: null, userAgent: null });
+  });
+
+  it('writes the submitted files as given', async () => {
+    const submittedFiles = {
+      signedClaimFile: { path: 'x/signed.pdf' },
+      finalClaimPdf: { file: { path: 'final/x.pdf' }, sourceKey: 'k' },
+    } as never;
+    await service.recordTransition({ ...baseInput, fromStatus: 2 as never, toStatus: 5, submittedFiles });
+
+    const [docs] = historyModel.create.mock.calls[0] as [Record<string, unknown>[]];
+    expect(docs[0]['submittedFiles']).toBe(submittedFiles);
   });
 });

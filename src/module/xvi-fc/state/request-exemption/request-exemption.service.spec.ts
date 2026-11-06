@@ -19,6 +19,7 @@ import { XviFcSfcStatus } from 'src/schemas/xvi-fc/state/sfc-status.schema';
 import { ElectedUrbanLocalBodiesForm } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
 import { ElectedUrbanLocalBodiesRow } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
 import { FormJsonService } from 'src/master/form-json/form-json.service';
+import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 import { RequestExemptionService } from './request-exemption.service';
 import { SaveRequestExemptionDto } from './dto/save-request-exemption.dto';
 import { RequestExemptionFormJsonConfigService } from './services/form-json/request-exemption-form-json.service';
@@ -147,7 +148,7 @@ describe('RequestExemptionService', () => {
   let model: { findOne: jest.Mock; findOneAndUpdate: jest.Mock; create: jest.Mock; find: jest.Mock };
   let formLogModel: { insertMany: jest.Mock };
   let stateModel: { findById: jest.Mock };
-  let ulbModel: { find: jest.Mock };
+  let ulbModel: { find: jest.Mock; exists: jest.Mock };
   let annualAccountModel: { find: jest.Mock };
   let sfcStatusModel: { findOne: jest.Mock };
   let electedBodyFormModel: { findOne: jest.Mock };
@@ -155,6 +156,7 @@ describe('RequestExemptionService', () => {
   let fileInfoNormalizer: { normalizeInboundFileInfo: jest.Mock };
   let formJsonConfig: { loadFields: jest.Mock; loadReasonOptions: jest.Mock };
   let formJsonService: { findActiveByDesignYearAndFormId: jest.Mock };
+  let ulbEligibilityService: { getEligibleUlbFilter: jest.Mock };
   let connection: { startSession: jest.Mock };
   let session: ReturnType<typeof makeSession>;
 
@@ -172,8 +174,11 @@ describe('RequestExemptionService', () => {
     stateModel = {
       findById: jest.fn().mockReturnValue(q({ name: 'Test State' })),
     };
+    // exists() resolves truthy by default - no existing test exercises a cross-state/ineligible ULB.
+    // The dedicated describe block below overrides this to exercise the guard's blocking path.
     ulbModel = {
       find: jest.fn().mockReturnValue(q([])),
+      exists: jest.fn().mockResolvedValue({ _id: new Types.ObjectId() }),
     };
     // Empty by default - no existing Annual Accounts section documents means every formId 30/31
     // reason is eligible (no-document = NOT_STARTED-equivalent). Individual tests override this to
@@ -211,6 +216,13 @@ describe('RequestExemptionService', () => {
     connection = {
       startSession: jest.fn().mockResolvedValue(session),
     };
+    ulbEligibilityService = {
+      getEligibleUlbFilter: jest
+        .fn()
+        .mockImplementation((stateId: string) =>
+          Promise.resolve({ state: new Types.ObjectId(stateId), isActive: true }),
+        ),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -227,6 +239,7 @@ describe('RequestExemptionService', () => {
         { provide: FileInfoNormalizerService, useValue: fileInfoNormalizer },
         { provide: RequestExemptionFormJsonConfigService, useValue: formJsonConfig },
         { provide: FormJsonService, useValue: formJsonService },
+        { provide: UlbEligibilityService, useValue: ulbEligibilityService },
       ],
     }).compile();
 
@@ -577,6 +590,47 @@ describe('RequestExemptionService', () => {
       );
 
       expect(annualAccountModel.find).not.toHaveBeenCalled();
+    });
+
+    describe('ULB grant-cycle eligibility and state ownership (Cantonment Board / cross-state exclusion)', () => {
+      it("checks the named ULB against the caller's state eligibility filter before filing", async () => {
+        model.create.mockResolvedValue([{ _id: new Types.ObjectId() }]);
+
+        await service.finalSubmit(makeDto(), stateReviewer, '127.0.0.1', 'jest');
+
+        expect(ulbEligibilityService.getEligibleUlbFilter).toHaveBeenCalledWith(stateOid.toString(), 'XVIFC');
+        expect(ulbModel.exists).toHaveBeenCalledWith(
+          expect.objectContaining({ state: stateOid, isActive: true, _id: ulbOid }),
+        );
+      });
+
+      it('rejects filing for a Cantonment Board (or any other XVIFC-ineligible) ULB', async () => {
+        ulbModel.exists.mockResolvedValue(null);
+
+        await expect(service.finalSubmit(makeDto(), stateReviewer, '127.0.0.1', 'jest')).rejects.toThrow(
+          ForbiddenException,
+        );
+        expect(model.create).not.toHaveBeenCalled();
+      });
+
+      it("rejects filing for a ULB that's eligible but belongs to another state", async () => {
+        // getEligibleUlbFilter is state-scoped, so a cross-state ulb simply never matches the filter -
+        // exists() correctly returns null the same way it would for an ineligible-type ULB.
+        ulbModel.exists.mockResolvedValue(null);
+
+        await expect(service.finalSubmit(makeDto(), stateReviewer, '127.0.0.1', 'jest')).rejects.toThrow(
+          ForbiddenException,
+        );
+        expect(model.create).not.toHaveBeenCalled();
+      });
+
+      it('skips the check entirely on the whole-state branch (no ulb to check)', async () => {
+        model.create.mockResolvedValue([{ _id: new Types.ObjectId() }]);
+
+        await service.finalSubmit(makeDto({ data: validStateData }), stateReviewer, '127.0.0.1', 'jest');
+
+        expect(ulbModel.exists).not.toHaveBeenCalled();
+      });
     });
 
     describe('target row eligibility (formId 23 / Elected Body)', () => {

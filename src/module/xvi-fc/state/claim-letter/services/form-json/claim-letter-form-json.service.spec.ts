@@ -40,8 +40,28 @@ describe('ClaimLetterFormJsonService', () => {
       expect(formJsonService['findActiveByDesignYearAndFormId']).toHaveBeenCalledWith(yearId, CLAIM_LETTER_FORM_ID);
       expect(formJsonService['findActiveByDesignYearAndFormId']).toHaveBeenCalledTimes(1);
       expect(config.questions).toEqual(CLAIM_LETTER_FORM_JSON.data);
+      expect(config.claimAmountEditable).toBe(false);
       expect(config.varianceLowerPercent).toBe(CLAIM_LETTER_VARIANCE_LOWER_PERCENT);
       expect(config.varianceUpperPercent).toBe(CLAIM_LETTER_VARIANCE_UPPER_PERCENT);
+    });
+
+    it('turns the claim-amount switch on only for meta.claimAmountEditable === true', async () => {
+      formJsonService['findActiveByDesignYearAndFormId'] = jest
+        .fn()
+        .mockResolvedValue({ ...CLAIM_LETTER_FORM_JSON, meta: { claimAmountEditable: true } });
+      expect((await service.loadFormConfig(yearId)).claimAmountEditable).toBe(true);
+    });
+
+    it.each([
+      ['the string "true"', 'true'],
+      ['1', 1],
+      ['false', false],
+      ['null', null],
+    ])('keeps the claim-amount switch off when meta.claimAmountEditable is %s', async (_label, value) => {
+      formJsonService['findActiveByDesignYearAndFormId'] = jest
+        .fn()
+        .mockResolvedValue({ ...CLAIM_LETTER_FORM_JSON, meta: { claimAmountEditable: value } });
+      expect((await service.loadFormConfig(yearId)).claimAmountEditable).toBe(false);
     });
 
     it('returns the configured meta.varianceLowerPercent/varianceUpperPercent override', async () => {
@@ -73,8 +93,13 @@ describe('ClaimLetterFormJsonService', () => {
       const config = await service.loadFormConfig(yearId);
       expect(config).toEqual({
         questions: [],
+        claimAmountEditable: false,
         varianceLowerPercent: CLAIM_LETTER_VARIANCE_LOWER_PERCENT,
         varianceUpperPercent: CLAIM_LETTER_VARIANCE_UPPER_PERCENT,
+        letterQuestions: [],
+        letterSkipPrefill: new Set(),
+        letterConfigured: false,
+        mergeDocuments: [],
       });
     });
 
@@ -84,23 +109,97 @@ describe('ClaimLetterFormJsonService', () => {
     });
   });
 
-  describe('loadVarianceConfig', () => {
-    it('fetches the form-json document exactly once and returns only the variance band', async () => {
+  describe('letter-detail keys (meta.letterDetailKeys)', () => {
+    const letterNo = { key: 'letterNo', formFieldType: 'text', label: 'Letter No.' };
+    const letterDate = { key: 'letterDate', formFieldType: 'date', label: 'Letter date' };
+    const atrDate = { key: 'sfcAtrDate', formFieldType: 'date', label: 'ATR date' };
+
+    function withMeta(meta: Record<string, unknown>) {
       formJsonService['findActiveByDesignYearAndFormId'] = jest.fn().mockResolvedValue({
         ...CLAIM_LETTER_FORM_JSON,
-        meta: { varianceLowerPercent: 85, varianceUpperPercent: 115 },
+        data: [...CLAIM_LETTER_FORM_JSON.data, letterNo, letterDate, atrDate],
+        meta,
       });
-      const variance = await service.loadVarianceConfig(yearId);
-      expect(formJsonService['findActiveByDesignYearAndFormId']).toHaveBeenCalledTimes(1);
-      expect(variance).toEqual({ lowerPercent: 85, upperPercent: 115 });
+    }
+
+    it('resolves the letter questions in key order and reads the skip-prefill keys', async () => {
+      withMeta({
+        letterDetailKeys: ['sfcAtrDate', 'letterNo', 'letterDate'],
+        letterDetailSkipPrefill: ['letterNo', 'letterDate'],
+      });
+
+      const config = await service.loadFormConfig(yearId);
+
+      expect(config.letterConfigured).toBe(true);
+      expect(config.letterQuestions.map((q) => q.key)).toEqual(['sfcAtrDate', 'letterNo', 'letterDate']);
+      expect(config.letterSkipPrefill).toEqual(new Set(['letterNo', 'letterDate']));
     });
 
-    it('degrades gracefully to default variance when no active document exists', async () => {
+    it('skips unknown, duplicate, reserved and non-string keys', async () => {
+      withMeta({ letterDetailKeys: ['letterNo', 'unknownKey', 'signedClaimFile', 'letterNo', 7, 'sfcAtrDate'] });
+
+      const config = await service.loadFormConfig(yearId);
+
+      expect(config.letterQuestions.map((q) => q.key)).toEqual(['letterNo', 'sfcAtrDate']);
+    });
+
+    it.each([
+      ['no meta at all', undefined],
+      ['letterDetailKeys not an array', { letterDetailKeys: 'oops' }],
+      ['only invalid keys', { letterDetailKeys: ['nope'] }],
+      ['only the old letterDetailSteps', { letterDetailSteps: [{ title: 'X', keys: ['letterNo'] }] }],
+    ])('is not configured with %s', async (_label, meta) => {
+      formJsonService['findActiveByDesignYearAndFormId'] = jest
+        .fn()
+        .mockResolvedValue({ ...CLAIM_LETTER_FORM_JSON, meta });
+      const config = await service.loadFormConfig(yearId);
+      expect(config.letterConfigured).toBe(false);
+      expect(config.letterQuestions).toEqual([]);
+    });
+  });
+
+  describe('merge documents (meta.mergeDocuments)', () => {
+    it('keeps valid entries in order and skips incomplete ones', async () => {
+      formJsonService['findActiveByDesignYearAndFormId'] = jest.fn().mockResolvedValue({
+        ...CLAIM_LETTER_FORM_JSON,
+        meta: {
+          mergeDocuments: [
+            { label: 'Copy of Elected Body', formId: 23, fileKeys: ['signedElectedbodyFile'] },
+            { label: '', formId: 35, fileKeys: ['i2GtcFile'] }, // no label
+            { label: 'Copy of GTC', formId: '35', fileKeys: ['i2GtcFile'] }, // formId not a number
+            { label: 'ATR', formId: 22, fileKeys: [] }, // no file keys
+            { label: 'Other Supporting Documents (ATR)', formId: 22, fileKeys: ['atrReport'], optional: true },
+          ],
+        },
+      });
+
+      const config = await service.loadFormConfig(yearId);
+
+      expect(config.mergeDocuments).toEqual([
+        { label: 'Copy of Elected Body', formId: 23, fileKeys: ['signedElectedbodyFile'], optional: false },
+        { label: 'Other Supporting Documents (ATR)', formId: 22, fileKeys: ['atrReport'], optional: true },
+      ]);
+    });
+  });
+
+  describe('loadClaimAmountConfig', () => {
+    it('fetches the form-json document exactly once and returns only the switch and the band', async () => {
+      formJsonService['findActiveByDesignYearAndFormId'] = jest.fn().mockResolvedValue({
+        ...CLAIM_LETTER_FORM_JSON,
+        meta: { claimAmountEditable: true, varianceLowerPercent: 85, varianceUpperPercent: 115 },
+      });
+      const config = await service.loadClaimAmountConfig(yearId);
+      expect(formJsonService['findActiveByDesignYearAndFormId']).toHaveBeenCalledTimes(1);
+      expect(config).toEqual({ editable: true, lowerPercent: 85, upperPercent: 115 });
+    });
+
+    it('degrades gracefully to switch off and the default band when no active document exists', async () => {
       formJsonService['findActiveByDesignYearAndFormId'] = jest
         .fn()
         .mockRejectedValue(new NotFoundException('not found'));
-      const variance = await service.loadVarianceConfig(yearId);
-      expect(variance).toEqual({
+      const config = await service.loadClaimAmountConfig(yearId);
+      expect(config).toEqual({
+        editable: false,
         lowerPercent: CLAIM_LETTER_VARIANCE_LOWER_PERCENT,
         upperPercent: CLAIM_LETTER_VARIANCE_UPPER_PERCENT,
       });
