@@ -113,6 +113,7 @@ describe('ClaimLetterUlbRowsService', () => {
       claimAmount: 1.05,
       differencePercentage: 5,
       eligible: true,
+      stateGatePassed: true,
       exemptionNotes: [],
     });
   });
@@ -159,6 +160,7 @@ describe('ClaimLetterUlbRowsService', () => {
     const result = await service.getUlbs(claimLetterId, {}, stateUser);
 
     expect(result.data![0].eligible).toBe(false);
+    expect(result.data![0].stateGatePassed).toBe(false);
   });
 
   it('reflects a failed per-ULB criterion (SLB, Annual Accounts, etc.) as eligible: false even when the state gate passes', async () => {

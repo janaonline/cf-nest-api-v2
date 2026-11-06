@@ -387,4 +387,25 @@ describe('ClaimLetterUlbOptionsService', () => {
     expect(result.data).toHaveLength(1);
     expect(result.meta).toEqual({ page: 1, limit: 1, total: 2 });
   });
+
+  /** The picker's one load: every ULB of an 800-ULB State, then the first 1000 of a larger one. */
+  it.each([
+    [800, 800],
+    [1001, 1000],
+  ])('returns %i ULBs at limit=1000 as %i rows, with the full total', async (count, returned) => {
+    const ulbs = Array.from({ length: count }, (_, i) => ({
+      ulbId: new Types.ObjectId().toString(),
+      name: `ULB ${String(i).padStart(4, '0')}`,
+      censusCode: String(i),
+      sbCode: null,
+    }));
+    expectedUlbSetService.resolve.mockResolvedValue(ulbs);
+    eligibilityService.evaluateStateLevelGateForDisplay.mockResolvedValue(passedGate());
+    eligibilityService.resolveDevolutionAllocations.mockResolvedValue(new Map());
+
+    const result = await service.getOptions(stateId, yearId, 1, { page: 1, limit: 1000 }, stateUser);
+
+    expect(result.data).toHaveLength(returned);
+    expect(result.meta).toEqual({ page: 1, limit: 1000, total: count });
+  });
 });

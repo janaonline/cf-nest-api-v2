@@ -1,6 +1,6 @@
 import { Type } from 'class-transformer';
 import { IsIn, IsInt, IsMongoId, IsOptional, IsString, Max, Min } from 'class-validator';
-import { CLAIM_LETTER_PAGINATION_MAX_LIMIT } from '../constants/claim-letter.constants';
+import { CLAIM_LETTER_MAX_ULBS } from '../constants/claim-letter.constants';
 
 export class GetClaimLetterUlbOptionsQueryDto {
   @IsOptional()
@@ -28,6 +28,7 @@ export class GetClaimLetterUlbOptionsQueryDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  @Max(CLAIM_LETTER_PAGINATION_MAX_LIMIT)
+  // The picker loads every ULB of the State in one call, then searches and pages locally.
+  @Max(CLAIM_LETTER_MAX_ULBS)
   limit?: number;
 }

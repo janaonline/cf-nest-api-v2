@@ -1,11 +1,12 @@
 import { Type } from 'class-transformer';
 import { ArrayMaxSize, ArrayMinSize, IsArray, IsInt, Min, ValidateNested } from 'class-validator';
+import { CLAIM_LETTER_MAX_ULBS } from '../constants/claim-letter.constants';
 import { ClaimLetterUlbSelectionDto } from './claim-letter-ulb-selection.dto';
 
 export class UpdateClaimLetterDraftDto {
   @IsArray()
   @ArrayMinSize(1)
-  @ArrayMaxSize(1000)
+  @ArrayMaxSize(CLAIM_LETTER_MAX_ULBS)
   @ValidateNested({ each: true })
   @Type(() => ClaimLetterUlbSelectionDto)
   ulbSelections!: ClaimLetterUlbSelectionDto[];

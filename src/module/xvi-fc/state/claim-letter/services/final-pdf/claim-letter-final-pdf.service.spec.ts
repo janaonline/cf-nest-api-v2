@@ -337,7 +337,7 @@ describe('ClaimLetterFinalPdfService', () => {
 
     parent['currentFormStatus'] = 2;
     parent['isAbandoned'] = true;
-    await expect(service.getFinalPdf(claimLetterId, user)).rejects.toThrow('This claim letter was abandoned.');
+    await expect(service.getFinalPdf(claimLetterId, user)).rejects.toThrow('This claim letter was discarded.');
 
     parent['isAbandoned'] = false;
     activeBatch.assertActive.mockRejectedValue(new ConflictException('Batch 1 is still in progress'));

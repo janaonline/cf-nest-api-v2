@@ -10,6 +10,16 @@ export const CLAIM_LETTER_VARIANCE_UPPER_PERCENT = 110;
 export const CLAIM_LETTER_VARIANCE_LOWER_META_KEY = 'varianceLowerPercent';
 export const CLAIM_LETTER_VARIANCE_UPPER_META_KEY = 'varianceUpperPercent';
 
+/** `meta.claimAmountEditable === true` lets the State enter a claim within the band; otherwise the
+ *  claim is the allocation (ADR 0006). */
+export const CLAIM_LETTER_CLAIM_AMOUNT_EDITABLE_META_KEY = 'claimAmountEditable';
+
+export interface ClaimLetterClaimAmountConfig {
+  editable: boolean;
+  lowerPercent: number;
+  upperPercent: number;
+}
+
 /** Cross-multiplies instead of dividing, so the check stays exact; the percents must be whole numbers. */
 export function isClaimedAmountWithinVariance(
   allocatedAmount: number,
@@ -18,6 +28,22 @@ export function isClaimedAmountWithinVariance(
   upperPercent: number,
 ): boolean {
   return claimedAmount * 100 >= allocatedAmount * lowerPercent && claimedAmount * 100 <= allocatedAmount * upperPercent;
+}
+
+/** The amount to store, or null when the request must be rejected. Switch off: the allocation, and a
+ *  different requested amount is rejected. Switch on: the requested amount, within the band. */
+export function resolveClaimedAmount(
+  allocatedAmount: number,
+  requestedAmount: number | undefined,
+  config: ClaimLetterClaimAmountConfig,
+): number | null {
+  if (!config.editable) {
+    return requestedAmount === undefined || requestedAmount === allocatedAmount ? allocatedAmount : null;
+  }
+  if (requestedAmount === undefined) return null;
+  return isClaimedAmountWithinVariance(allocatedAmount, requestedAmount, config.lowerPercent, config.upperPercent)
+    ? requestedAmount
+    : null;
 }
 
 export function computeDifferenceAmount(allocatedAmount: number, claimedAmount: number): number {

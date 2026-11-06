@@ -16,6 +16,9 @@ export const CLAIM_LETTER_PAGINATION_DEFAULT_PAGE = 1;
 export const CLAIM_LETTER_PAGINATION_DEFAULT_LIMIT = 20;
 export const CLAIM_LETTER_PAGINATION_MAX_LIMIT = 100;
 
+/** Most ULBs one batch holds, and one ULB-picker load returns; above any State's ULB count. */
+export const CLAIM_LETTER_MAX_ULBS = 1000;
+
 /** Children are inserted in chunks, outside a transaction (docs/adr/0002-batching-and-locks.md). */
 export const CLAIM_LETTER_CHILD_INSERT_CHUNK_SIZE = 200;
 
@@ -23,7 +26,7 @@ export const CLAIM_LETTER_CHILD_INSERT_CHUNK_SIZE = 200;
 export const CLAIM_LETTER_SIGNED_FILE_MAX_SIZE_KB = 20 * 1024;
 
 /** 409 for any action on an abandoned batch (preview, .docx, signed-file upload, submit). */
-export const CLAIM_LETTER_ABANDONED_MESSAGE = 'This claim batch was abandoned.';
+export const CLAIM_LETTER_ABANDONED_MESSAGE = 'This claim batch was discarded.';
 
 /** Generous so no live build is taken for stale; tune from production p99 build time (ADR 0002). */
 export const CLAIM_LETTER_STALE_BUILD_THRESHOLD_MINUTES = 30;

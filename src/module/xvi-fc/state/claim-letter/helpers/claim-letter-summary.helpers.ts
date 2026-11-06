@@ -19,11 +19,11 @@ export function mapClaimLetterBatchDocToSummary(doc: Record<string, unknown>, us
     batchNumber: doc['batchNumber'] as 1 | 2 | 3,
     version: doc['version'] as number,
     currentFormStatus,
-    // Abandon is a flag that leaves the status as it was, so the label is overridden. An SO return also sets the flag
-    // (it frees the batch slot) but keeps its own label, Returned for Correction.
+    // Abandon (shown as "Discarded") is a flag that leaves the status as it was, so the label is overridden. An SO
+    // return also sets the flag (it frees the batch slot) but keeps its own label, Returned for Correction.
     currentFormStatusLabel:
       isAbandoned && currentFormStatus !== FORM_STATUS.RETURNED_BY_SO
-        ? 'Abandoned'
+        ? 'Discarded'
         : getFormStatusLabel(currentFormStatus),
     assemblyStatus: doc['assemblyStatus'] as 'BUILDING' | 'READY',
     ulbCount: doc['ulbCount'] as number,

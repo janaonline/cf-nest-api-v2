@@ -141,7 +141,7 @@ export class ClaimLetterController {
     return this.assemblyService.updateDraft(claimLetterId, dto.ulbSelections, dto.expectedRevision, user);
   }
 
-  @ApiOperation({ summary: 'Abandon a claim-letter draft, releasing its locked ULBs' })
+  @ApiOperation({ summary: 'Discard a claim-letter draft, releasing its locked ULBs' })
   @Post(':claimLetterId/abandon')
   @UseGuards(PermissionGuard)
   @RequirePermissions(Permission.PREPARE_GRANT_LETTERS)
