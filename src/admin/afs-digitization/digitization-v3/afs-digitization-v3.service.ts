@@ -75,6 +75,7 @@ const ULB_FILE_PROJECTION = {
   'ulbFile.noOfPages': 1,
   'ulbFile.excelUrl': 1,
   'ulbFile.requestId': 1,
+  'ulbFile.version': 1,
   'ulbFile.createdAt': 1,
 };
 
@@ -905,6 +906,7 @@ export class AfsDigitizationV3Service implements OnModuleInit {
     noOfPages?: number;
     excelUrl?: string;
     requestId?: string;
+    version?: string;
     createdAt?: Date;
   }): V3Record {
     if (!item) return undefined;
@@ -912,11 +914,13 @@ export class AfsDigitizationV3Service implements OnModuleInit {
     let status = DigitizationV3Statuses.NOT_DIGITIZED;
     // Legacy = digitized before the cutoff. `createdAt` is set once, so a v3 re-run of an old record keeps its old date:
     // `detectedDocTypes` (written only by v3) rules those out.
+    // A failed old-flow file has no `detectedDocTypes` either, but v3 stamps `version` on every job it submits, so
+    // a failed file without one (and created before the cutoff) is the old flow's: its request id is not a FastAPI job.
     const isLegacy =
-      item.digitizationStatus === DigitizationStatuses.DIGITIZED &&
-      !Array.isArray(item.detectedDocTypes) &&
       !!item.createdAt &&
-      new Date(item.createdAt) < LEGACY_CUTOFF;
+      new Date(item.createdAt) < LEGACY_CUTOFF &&
+      ((item.digitizationStatus === DigitizationStatuses.DIGITIZED && !Array.isArray(item.detectedDocTypes)) ||
+        (item.digitizationStatus === DigitizationStatuses.FAILED && !item.version));
     if (item.digitizationStatus === DigitizationStatuses.QUEUED) {
       status =
         item.queue?.status === QueueStatus.PROCESSING
@@ -948,7 +952,8 @@ export class AfsDigitizationV3Service implements OnModuleInit {
    * and the counters are not skewed.
    */
   private displayStatus(record: V3Record): DigitizationV3Statuses {
-    if (record?.isLegacy) return DigitizationV3Statuses.DIGITIZED;
+    // A failed old-flow file is also `isLegacy` (for its log), but it keeps showing as failed
+    if (record?.isLegacy && record.status !== DigitizationV3Statuses.FAILED) return DigitizationV3Statuses.DIGITIZED;
     return record?.status ?? DigitizationV3Statuses.NOT_DIGITIZED;
   }
 
